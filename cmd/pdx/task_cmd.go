@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
@@ -35,10 +34,6 @@ const taskUsage = "usage: pdx task add --to <ref> --subject <s> [--brief-file <f
 // so a test can lower it: the field limits keep a valid task far below the
 // peers text limit.
 var taskMessageMaxBytes = ipeers.MaxTextBytes
-
-// taskIDShape is the light check of a --blocked-by id: <6 hex>-<positive
-// int>. The daemon is the authority on whether it names a task.
-var taskIDShape = regexp.MustCompile(`^[0-9a-f]{6}-[1-9][0-9]*$`)
 
 func runTask(args []string) {
 	os.Exit(runTaskCmd(context.Background(), args, os.Getenv, os.Stdout, os.Stderr))
@@ -103,12 +98,26 @@ func (c taskCall) oneID(fs *flag.FlagSet, args []string) (id string, ok bool) {
 	switch {
 	case err != nil:
 		taskUsageErr(c.stderr, err.Error())
-	case len(pos) != 1 || strings.TrimSpace(pos[0]) == "":
+	case len(pos) != 1:
 		taskUsageErr(c.stderr, "需要剛好一個 <id>")
+	case !validTaskID(pos[0]):
+		taskUsageErr(c.stderr, badTaskID("<id>", pos[0]))
 	default:
 		return pos[0], true
 	}
 	return "", false
+}
+
+// validTaskID is the shape check of a task id, the daemon's own syntax rule
+// (team.ParseTaskIDSyntax). Whether it names a task of the caller's team is
+// the daemon's to say.
+func validTaskID(id string) bool {
+	_, _, ok := team.ParseTaskIDSyntax(id)
+	return ok
+}
+
+func badTaskID(field, id string) string {
+	return fmt.Sprintf("%s %q 不是任務 id（<6 位小寫十六進位>-<序號>，例如 8f2c0f-3）", field, id)
 }
 
 func taskPath(id string) string { return "/api/team/tasks/" + url.PathEscape(id) }
@@ -160,8 +169,8 @@ func (c taskCall) add(args []string) int {
 		return taskUsageErr(c.stderr, "--done-when: "+err.Error())
 	}
 	for _, id := range blockedBy {
-		if !taskIDShape.MatchString(id) {
-			return taskUsageErr(c.stderr, fmt.Sprintf("--blocked-by %q 不是任務 id（<6 位小寫十六進位>-<序號>，例如 8f2c0f-3）", id))
+		if !validTaskID(id) {
+			return taskUsageErr(c.stderr, badTaskID("--blocked-by", id))
 		}
 	}
 	if set["brief-file"] {
@@ -196,7 +205,7 @@ func (c taskCall) add(args []string) int {
 	if !ok {
 		return ExitError
 	}
-	return c.notify(client, inbox, task, compact, "created", *asJSON)
+	return c.notify(client, inbox, *cfgPath, task, compact, "created", *asJSON)
 }
 
 // reassign implements `pdx task reassign <id> --to <ref>`: the daemon moves
@@ -226,7 +235,7 @@ func (c taskCall) reassign(args []string) int {
 	if !ok {
 		return ExitError
 	}
-	return c.notify(client, inbox, task, compact, "reassigned", *asJSON)
+	return c.notify(client, inbox, *cfgPath, task, compact, "reassigned", *asJSON)
 }
 
 // setStatus implements start, done and delete. A replay would answer
@@ -263,16 +272,19 @@ func (c taskCall) setStatus(verb string, to team.TaskStatus, args []string) int 
 // notify sends task's owner the down message and prints the result. The task
 // is already stored, so a failed send is exit 1 with the task's JSON on
 // stdout and the manual command on stderr, never a rollback.
-func (c taskCall) notify(client *daemonclient.Client, inbox string, task team.Task, compact, verb string, asJSON bool) int {
+func (c taskCall) notify(client *daemonclient.Client, inbox, cfgPath string, task team.Task, compact, verb string, asJSON bool) int {
 	detail, code := sendTaskMessage(c.ctx, client, inbox, task)
 	if code != "" {
 		fmt.Fprintln(c.stdout, compact)
-		addr := sanitizeCell(task.Owner.Address)
-		if addr == "" {
-			addr = "<owner address>"
+		id, reason, cmd := sanitizeCell(task.ID), sanitizeCell(detail), taskResendCommand(task.Owner.Address, task.ID, cfgPath)
+		if task.Owner.Address == "" {
+			// No address to put in a command: say so, and keep the placeholder
+			// in single quotes so that pasting the line as it is cannot redirect.
+			fmt.Fprintf(c.stderr, "pdx task: 任務 %s 已存下，但這個 owner 的地址不明、訊息沒送出（%s）；請先用 pdx team 查到 owner 的地址，再執行下面的命令（把 <ADDRESS> 自行替換成它）：%s %s\n",
+				id, reason, cmd, sanitizeCell(code))
+			return ExitError
 		}
-		fmt.Fprintf(c.stderr, "pdx task: 任務 %s 已存下，但給 owner 的訊息沒送出（%s）；請手動送：pdx msg send %s \"$(pdx task show %s --message)\" %s\n",
-			sanitizeCell(task.ID), sanitizeCell(detail), addr, sanitizeCell(task.ID), sanitizeCell(code))
+		fmt.Fprintf(c.stderr, "pdx task: 任務 %s 已存下，但給 owner 的訊息沒送出（%s）；請手動送：%s %s\n", id, reason, cmd, sanitizeCell(code))
 		return ExitError
 	}
 	if asJSON {
@@ -299,4 +311,27 @@ func sendTaskMessage(ctx context.Context, client *daemonclient.Client, inbox str
 		return briefErr(err)
 	}
 	return "", ""
+}
+
+// shellQuote is s as one POSIX shell word: single quotes around it, an
+// embedded single quote written '\” (close, an escaped quote, reopen).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// taskResendCommand is the command that sends a task's down message by hand.
+// Every argument is single-quoted. --config goes to both halves when the
+// failed command had one (`pdx msg send` takes --config as well). With no
+// address the placeholder <ADDRESS> stands in, quoted, for the reader to
+// replace. Text is sanitised first: it is printed to a terminal.
+func taskResendCommand(address, id, cfgPath string) string {
+	if address == "" {
+		address = "<ADDRESS>"
+	}
+	cfg := ""
+	if cfgPath != "" {
+		cfg = "--config " + shellQuote(sanitizeCell(cfgPath)) + " "
+	}
+	return "pdx msg send " + cfg + shellQuote(sanitizeCell(address)) +
+		" \"$(pdx task show " + cfg + shellQuote(sanitizeCell(id)) + " --message)\""
 }

@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -156,7 +160,51 @@ func (f *fakeTaskDaemon) count() int {
 // keep-alive (so a dropped connection is seen as one).
 func driveTask(t *testing.T, d http.Handler, args ...string) (int, string, string) {
 	t.Helper()
-	return driveTeamCmdWith(t, runTaskCmd, d, leadEnv(), []daemonclient.Option{leadClockOpt(), leadNoKeepAlive()}, args...)
+	code, stdout, stderr, _ := driveTaskCfg(t, d, "", args...)
+	return code, stdout, stderr
+}
+
+// driveTaskCfg is driveTask with the config file's directory and name chosen
+// by the test (cfgDir "" is a plain temp dir); it also returns the config
+// path it passed as --config.
+func driveTaskCfg(t *testing.T, d http.Handler, cfgDir string, args ...string) (int, string, string, string) {
+	t.Helper()
+	srv := httptest.NewServer(d)
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "admin-tok")
+	if cfgDir != "" {
+		b, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfgPath = filepath.Join(cfgDir, "config.toml")
+		if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	code := runTaskCmd(context.Background(), append(append([]string{}, args...), "--config", cfgPath), leadEnv(), &stdout, &stderr,
+		leadClockOpt(), leadNoKeepAlive())
+	return code, stdout.String(), stderr.String(), cfgPath
+}
+
+// resendCommand is the manual command of a failed send in stderr: from "pdx
+// msg send" to just before the trailing API code.
+func resendCommand(t *testing.T, stderr string) string {
+	t.Helper()
+	start, end := strings.Index(stderr, "pdx msg send"), strings.LastIndex(stderr, " ")
+	if start < 0 || end < start {
+		t.Fatalf("no manual command in %q", stderr)
+	}
+	return stderr[start:end]
+}
+
+// shellSyntaxOK is `sh -n -c cmd`: the syntax check alone, nothing runs.
+func shellSyntaxOK(cmd string) error {
+	return exec.Command("sh", "-n", "-c", cmd).Run()
 }
 
 func fastBrief(t *testing.T) {
@@ -257,7 +305,7 @@ func TestTaskAdd_SendFailures(t *testing.T) {
 		"no_answer":          {sendMode: func(int) string { return "hold" }},
 		"daemon_unavailable": {sendMode: func(int) string { return "drop" }},
 	} {
-		exit, stdout, stderr := driveTask(t, d, "add", "--to", fakeOwnerRef, "--subject", "S")
+		exit, stdout, stderr, cfg := driveTaskCfg(t, d, "", "add", "--to", fakeOwnerRef, "--subject", "S")
 		if exit != ExitError || len(d.sendReq) != 1 || len(d.createReq) != 1 {
 			t.Errorf("%s: code=%d sends=%d creates=%d", code, exit, len(d.sendReq), len(d.createReq))
 		}
@@ -266,8 +314,16 @@ func TestTaskAdd_SendFailures(t *testing.T) {
 			t.Errorf("%s: stdout = %q, want the task JSON", code, stdout)
 		}
 		if strings.Count(stderr, "\n") != 1 || !strings.HasPrefix(stderr, "pdx task: ") ||
-			!strings.Contains(stderr, `pdx msg send mlab/_m1m1m1 "$(pdx task show 8f2c0f-3 --message)"`) || lastToken(stderr) != code {
+			lastToken(stderr) != code {
 			t.Errorf("%s: stderr = %q", code, stderr)
+		}
+		// The command, verbatim: every argument single-quoted, --config on both.
+		want := "pdx msg send --config '" + cfg + "' 'mlab/_m1m1m1' \"$(pdx task show --config '" + cfg + "' '8f2c0f-3' --message)\""
+		if got := resendCommand(t, stderr); got != want {
+			t.Errorf("%s: manual command\n got %s\nwant %s", code, got, want)
+		}
+		if err := shellSyntaxOK(want); err != nil {
+			t.Errorf("%s: the manual command fails sh -n: %v", code, err)
 		}
 	}
 }
@@ -289,11 +345,101 @@ func TestTaskReassign_SendFailure(t *testing.T) {
 
 	fastBrief(t)
 	d = &fakeTaskDaemon{send: answer{status: http.StatusServiceUnavailable, body: ipeers.APIError{Error: "not_ready", Detail: "retry"}}}
-	code, stdout, stderr = driveTask(t, d, "reassign", fakeTaskID, "--to", "_n2n2n2")
+	code, stdout, stderr, cfg := driveTaskCfg(t, d, "", "reassign", fakeTaskID, "--to", "_n2n2n2")
 	var task team.Task
+	want := "pdx msg send --config '" + cfg + "' 'mlab/_n2n2n2' \"$(pdx task show --config '" + cfg + "' '8f2c0f-3' --message)\""
 	if code != ExitError || json.Unmarshal([]byte(stdout), &task) != nil || task.Owner.Ref != "_n2n2n2" ||
-		!strings.Contains(stderr, `pdx msg send mlab/_n2n2n2 "$(pdx task show 8f2c0f-3 --message)"`) || lastToken(stderr) != "not_ready" {
+		resendCommand(t, stderr) != want || lastToken(stderr) != "not_ready" {
 		t.Errorf("failed send: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+// A config path with a space and a single quote reaches both halves of the
+// manual command as one shell word each, and the line still parses.
+func TestTaskAdd_SendFailureQuotesTheConfigPath(t *testing.T) {
+	fastBrief(t)
+	dir := filepath.Join(t.TempDir(), "it's a dir")
+	d := &fakeTaskDaemon{send: answer{status: http.StatusServiceUnavailable, body: ipeers.APIError{Error: "not_ready", Detail: "retry"}}}
+	code, _, stderr, cfg := driveTaskCfg(t, d, dir, "add", "--to", fakeOwnerRef, "--subject", "S")
+	if code != ExitError {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	quoted := "'" + strings.ReplaceAll(cfg, "'", `'\''`) + "'"
+	cmd := resendCommand(t, stderr)
+	if n := strings.Count(cmd, "--config "+quoted); n != 2 {
+		t.Errorf("the quoted --config appears %d times in %s, want 2 (msg send and task show)", n, cmd)
+	}
+	if err := shellSyntaxOK(cmd); err != nil {
+		t.Errorf("%s fails sh -n: %v", cmd, err)
+	}
+}
+
+// An owner address the daemon did not give: no command that looks runnable.
+// The placeholder stays in single quotes, so pasting it as it is is a syntax
+// check away from harmless, never a redirection.
+func TestTaskAdd_SendFailureWithoutAnAddress(t *testing.T) {
+	d := &fakeTaskDaemon{create: func(req team.CreateTaskRequest) answer {
+		task := fakeTask(fakeTaskID, team.TaskPending, req.Subject)
+		task.Owner.Address = ""
+		return answer{status: http.StatusCreated, body: task}
+	}}
+	code, stdout, stderr, cfg := driveTaskCfg(t, d, "", "add", "--to", fakeOwnerRef, "--subject", "S")
+	var task team.Task
+	if code != ExitError || len(d.sendReq) != 0 || json.Unmarshal([]byte(stdout), &task) != nil || task.ID != fakeTaskID || lastToken(stderr) != "no_address" {
+		t.Fatalf("code=%d sends=%d stdout=%q stderr=%q", code, len(d.sendReq), stdout, stderr)
+	}
+	for _, want := range []string{"地址不明", "pdx team", "<ADDRESS>", "自行替換"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want %q", stderr, want)
+		}
+	}
+	cmd := resendCommand(t, stderr)
+	if want := "pdx msg send --config '" + cfg + "' '<ADDRESS>' \"$(pdx task show --config '" + cfg + "' '8f2c0f-3' --message)\""; cmd != want {
+		t.Errorf("command\n got %s\nwant %s", cmd, want)
+	}
+	if err := shellSyntaxOK(cmd); err != nil {
+		t.Errorf("%s fails sh -n: %v", cmd, err)
+	}
+	// sh -n cannot tell the unquoted placeholder apart (it parses as two
+	// redirections), so the quoting is pinned by the exact text above and by
+	// this: the one `<ADDRESS>` in the command is inside single quotes.
+	if strings.Count(cmd, "<ADDRESS>") != 1 || !strings.Contains(cmd, "'<ADDRESS>'") {
+		t.Errorf("the placeholder is not one single-quoted word: %s", cmd)
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"":          `''`,
+		"abc":       `'abc'`,
+		"a b":       `'a b'`,
+		"it's":      `'it'\''s'`,
+		"'":         `''\'''`,
+		"a\nb":      "'a\nb'",
+		"$HOME":     `'$HOME'`,
+		"`id`":      "'`id`'",
+		"$(id)":     `'$(id)'`,
+		`a"b\c`:     `'a"b\c'`,
+		"<ADDRESS>": `'<ADDRESS>'`,
+	} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
+		}
+		// The shell reads it back as the one word it was.
+		out, err := exec.Command("sh", "-c", "printf %s "+shellQuote(in)).Output()
+		if err != nil || string(out) != in {
+			t.Errorf("sh reads shellQuote(%q) as %q (%v)", in, out, err)
+		}
+	}
+}
+
+// The command without a config: no --config on either half.
+func TestTaskResendCommand(t *testing.T) {
+	if got, want := taskResendCommand("mlab/_m1m1m1", "8f2c0f-3", ""), `pdx msg send 'mlab/_m1m1m1' "$(pdx task show '8f2c0f-3' --message)"`; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+	if got := taskResendCommand("a'b", "8f2c0f-3", ""); got != `pdx msg send 'a'\''b' "$(pdx task show '8f2c0f-3' --message)"` {
+		t.Errorf("got %s", got)
 	}
 }
 
@@ -415,6 +561,42 @@ func TestTask_UsageErrorsExit2(t *testing.T) {
 		if code != ExitUsage || stdout != "" || !strings.HasPrefix(stderr, "pdx task: ") || !strings.Contains(stderr, "usage: pdx task") || d.count() != 0 {
 			t.Errorf("%s: code=%d stdout=%q stderr=%q requests=%d", name, code, stdout, stderr, d.count())
 		}
+	}
+}
+
+// A task id that cannot be one is exit 2, naming the field, before the config
+// is read or the daemon asked: the five commands that take an id, and
+// --blocked-by, which takes the same ids.
+func TestTaskCmd_BadIDsAreExit2WithZeroRequests(t *testing.T) {
+	bad := []string{"garbage", "x-1", "deadbe-0", "deadbe-01", "deadbe--1", "deadbe-+1", "-1", "+1", "DEADBE-1", "deadbe-1 ",
+		"deadbe-99999999999999999999", "deadbe-9223372036854775808", ""}
+	for _, id := range bad {
+		for name, args := range map[string][]string{
+			"show":       {"show", id},
+			"start":      {"start", id},
+			"done":       {"done", id},
+			"delete":     {"delete", id},
+			"reassign":   {"reassign", id, "--to", fakeOwnerRef},
+			"blocked-by": {"add", "--to", fakeOwnerRef, "--subject", "S", "--blocked-by", id},
+		} {
+			d := &fakeTaskDaemon{}
+			code, stdout, stderr := driveTask(t, d, args...)
+			if code != ExitUsage || stdout != "" || !strings.HasPrefix(stderr, "pdx task: ") || d.count() != 0 {
+				t.Errorf("%s %q: code=%d stdout=%q stderr=%q requests=%d", name, id, code, stdout, stderr, d.count())
+			}
+		}
+	}
+	// The fields are named.
+	if _, _, stderr := driveTask(t, &fakeTaskDaemon{}, "start", "garbage"); !strings.Contains(stderr, "<id>") {
+		t.Errorf("stderr = %q does not name <id>", stderr)
+	}
+	if _, _, stderr := driveTask(t, &fakeTaskDaemon{}, "add", "--to", "x", "--subject", "S", "--blocked-by", "garbage"); !strings.Contains(stderr, "--blocked-by") {
+		t.Errorf("stderr = %q does not name --blocked-by", stderr)
+	}
+	// A good id still goes through.
+	d := &fakeTaskDaemon{}
+	if code, _, stderr := driveTask(t, d, "start", "deadbe-12"); code != ExitOK || len(d.statusReq) != 1 || d.statusReq[0].id != "deadbe-12" {
+		t.Errorf("a good id: code=%d stderr=%q", code, stderr)
 	}
 }
 

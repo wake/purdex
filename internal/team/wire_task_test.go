@@ -77,6 +77,41 @@ func TestParseTaskID_RoundTripsAndRejectsAnotherTeam(t *testing.T) {
 	}
 }
 
+// The syntax of a display id needs no team id: six lower-case hex chars, a
+// dash, a positive decimal seq without sign or leading zero that fits an int.
+func TestParseTaskIDSyntax_Table(t *testing.T) {
+	cases := []struct {
+		id         string
+		wantPrefix string
+		wantSeq    int
+		wantOK     bool
+	}{
+		{"3f2a9c-1", "3f2a9c", 1, true},
+		{"deadbe-2147483647", "deadbe", 2147483647, true},
+		{"3F2A9C-1", "", 0, false},
+		{"3f2a9g-1", "", 0, false}, // not hex
+		{"3f2a9-1", "", 0, false},  // five chars
+		{"3f2a9c0-1", "", 0, false},
+		{"3f2a9c-0", "", 0, false},
+		{"3f2a9c-01", "", 0, false},
+		{"3f2a9c-+1", "", 0, false},
+		{"3f2a9c--1", "", 0, false},
+		{"3f2a9c-1 ", "", 0, false},
+		{"3f2a9c-1\n", "", 0, false},
+		{"3f2a9c-", "", 0, false},
+		{"garbage", "", 0, false},
+		{"x-1", "", 0, false},
+		{"", "", 0, false},
+		{"3f2a9c-99999999999999999999", "", 0, false},
+	}
+	for _, c := range cases {
+		prefix, seq, ok := ParseTaskIDSyntax(c.id)
+		if ok != c.wantOK || prefix != c.wantPrefix || seq != c.wantSeq {
+			t.Errorf("ParseTaskIDSyntax(%q) = (%q, %d, %v), want (%q, %d, %v)", c.id, prefix, seq, ok, c.wantPrefix, c.wantSeq, c.wantOK)
+		}
+	}
+}
+
 func TestValidTaskSubject_PeerSafeText(t *testing.T) {
 	ok := []string{"x", "fix the thing", strings.Repeat("a", 80), strings.Repeat("字", 80)}
 	for _, s := range ok {
