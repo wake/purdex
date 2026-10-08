@@ -69,7 +69,11 @@ type Module struct {
 	// read error logged, so a corrupt value logs once, not every tick.
 	unattended    hostconfig.UnattendedStore
 	unattendedErr string
-	titles        TitleMover
+	// notAutoApproved (under createMu) is, per open row the daemon could
+	// not approve, the reason last logged (autoApprove): a refusal retried
+	// every tick logs once. A sweep forgets the rows no longer open.
+	notAutoApproved map[string]string
+	titles          TitleMover
 	// usage is the agent module's per-session statusline reading; begin
 	// copies model_id / effort from it into the self_relay payload (the mod
 	// sends neither). Nil when the agent module is absent: both stay "".

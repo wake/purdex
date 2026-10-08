@@ -171,8 +171,9 @@ func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.
 // autoApprove is the daemon's approve of an open AutoApprovable row (U23):
 // approve with the decider unattended and unattendedGrant. approved says it
 // won as approved; open that the row is still open — refused by a rule (a
-// lead's origin became a member) or a failure — for the next sweep.
-// Caller holds createMu.
+// lead's origin became a member) or a failure — for the next sweep. A row
+// it cannot approve is logged once per reason (notAutoApproved), not once
+// per tick. Caller holds createMu.
 func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 	g, err := unattendedGrant(a)
 	if err == nil && m.beforeAutoApprove != nil {
@@ -190,13 +191,25 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 			m.logf("[team] approval %s cancelled at its auto-approve: origin %s is a member of a live team", a.ID, a.Origin.Ref)
 			return false, false
 		default:
+			delete(m.notAutoApproved, a.ID)
 			m.logf("[team] approval %s approved by unattended (origin %s)%s", a.ID, a.Origin.Ref, teamNote(after))
 			return true, false
 		}
 	}
-	m.logf("[team] approval %s not auto-approved: %v", a.ID, err)
+	if m.notAutoApproved[a.ID] != err.Error() {
+		if m.notAutoApproved == nil {
+			m.notAutoApproved = map[string]string{}
+		}
+		m.notAutoApproved[a.ID] = err.Error()
+		m.logf("[team] approval %s not auto-approved: %v", a.ID, err)
+	}
 	return false, true
 }
+
+// sweepTick is sweepUnattended's why for the tick's reconciliation, whose
+// summary line is logged only when it approved something (a row a rule
+// refuses is retried every second).
+const sweepTick = "tick"
 
 // sweepUnattended approves every open AutoApprovable row, oldest first
 // (D-U23-3; hook kinds are left open): at switch-on (PU-1c), every tick
@@ -209,17 +222,26 @@ func (m *Module) sweepUnattended(why string) (approved, pending int) {
 		m.logf("[team] unattended sweep (%s): %v", why, err)
 		return 0, 0
 	}
+	seen := map[string]bool{}
 	for _, a := range open {
 		if !team.AutoApprovable(a.Kind) {
 			continue
 		}
+		seen[a.ID] = true
 		if ok, still := m.autoApprove(a); ok {
 			approved++
 		} else if still {
 			pending++
 		}
 	}
-	m.logf("[team] unattended sweep (%s): approved %d, still open %d", why, approved, pending)
+	for id := range m.notAutoApproved {
+		if !seen[id] {
+			delete(m.notAutoApproved, id)
+		}
+	}
+	if why != sweepTick || approved > 0 {
+		m.logf("[team] unattended sweep (%s): approved %d, still open %d", why, approved, pending)
+	}
 	return approved, pending
 }
 
@@ -237,6 +259,6 @@ func (m *Module) reconcileUnattended(open []team.Approval) {
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 	if !m.stopping() && m.unattendedOn() {
-		m.sweepUnattended("tick")
+		m.sweepUnattended(sweepTick)
 	}
 }

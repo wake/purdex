@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -226,6 +227,29 @@ func TestRelayBegin_UnattendedMemberPausedOrOffRaisesNothing(t *testing.T) {
 	}
 }
 
+// logs captures the module's log lines.
+func (f *fixture) logs() func() []string {
+	var mu sync.Mutex
+	var lines []string
+	f.m.logf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	return func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), lines...) }
+}
+
+// countLines is how many lines hold sub.
+func countLines(lines []string, sub string) int {
+	n := 0
+	for _, l := range lines {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
+}
+
 // sweep runs the switch-on sweep as its caller does: under createMu.
 func (f *fixture) sweep() (int, int) {
 	f.m.createMu.Lock()
@@ -347,6 +371,59 @@ func TestTick_UnattendedOffApprovesNothing(t *testing.T) {
 	f.m.tick()
 	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
 		t.Fatalf("state %s, want open", a.State)
+	}
+}
+
+// Rule 6: a row a rule refuses (its origin became a member) stays open,
+// and the refusal is logged once, not once per tick; a tick that approved
+// nothing logs no summary. Once the row is approved and closed its entry
+// goes, so a later refusal of the same id would log again. Mutation
+// gates: drop the per-row set → red (three lines); log the tick's summary
+// always → red.
+func TestTick_RuleRefusalLogsOnce(t *testing.T) {
+	f := newFixture(t)
+	logs := f.logs()
+	f.create(uid(1))
+	f.makeMember("sid-1")
+	f.unatt.set(true)
+	for range 3 {
+		f.m.tick()
+	}
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("state %s, want open", a.State)
+	}
+	if n := countLines(logs(), "not auto-approved"); n != 1 {
+		t.Fatalf("%d refusal lines in %q, want 1", n, logs())
+	}
+	if n := countLines(logs(), "unattended sweep (tick)"); n != 0 {
+		t.Fatalf("%d tick summaries in %q, want 0", n, logs())
+	}
+}
+
+// The per-row set forgets a row once it is no longer open (here it was
+// cancelled), at the next sweep: it does not grow with every refused row
+// of the daemon's life.
+func TestTick_RefusalSetForgetsClosedRows(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.makeMember("sid-1")
+	f.unatt.set(true)
+	f.m.tick()
+	if _, ok := f.m.notAutoApproved[uid(1)]; !ok {
+		t.Fatal("the refusal was not remembered")
+	}
+	f.unatt.set(false)
+	relay := f.begin("sid-2") // an open row that keeps the next tick sweeping
+	if code, body := f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil); code != http.StatusOK {
+		t.Fatalf("cancel: %d %s", code, body)
+	}
+	f.unatt.set(true)
+	f.m.tick()
+	if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateApproved {
+		t.Fatalf("relay row %s, want approved", a.State)
+	}
+	if len(f.m.notAutoApproved) != 0 {
+		t.Fatalf("set = %v, want empty", f.m.notAutoApproved)
 	}
 }
 
