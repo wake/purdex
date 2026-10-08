@@ -38,7 +38,8 @@
 //
 // This file is the plugin's one hooks module (hooks/hooks.json names a single
 // path); it also registers ask.js, the AskUserQuestion 分流 (P8a-2), and
-// events.js, the event reporter (interface U1 spec §6.5), and imports prompts.js, the copy of the daemon's relay prompts generated from
+// events.js, the event reporter (interface U1 spec §6.5), and imports
+// prompts.js, the copy of the daemon's relay prompts generated from
 // internal/team/relay_prompts.go (P9a): the fixed head and tail of each
 // prompt, and the built-in bodies.
 
