@@ -150,11 +150,44 @@ func TestStop_BackgroundSymbol(t *testing.T) {
 		child := seedChildFrame(t, m, "%5", "cc", 300, "t300", root.FrameID)
 		req := EventRequest{TmuxPaneID: "%5", SenderPID: child.PID, SenderStartTime: child.ProcessStartTime, AgentType: "cc",
 			RawEvent: json.RawMessage(`{"background_tasks":[{"id":"t","type":"monitor","status":"running"}]}`)}
-		m.noteHookBackground(req, agentpkg.LifecycleStop)
+		m.noteHookBackground(req, agentpkg.LifecycleStop, time.Now().UnixNano())
 		if n := hookBackgroundEntries(m); n != 0 {
 			t.Fatalf("a child frame's Stop recorded %d entries", n)
 		}
 	})
+}
+
+// Two hooks of one process can be applied out of order: a Stop that was
+// stamped before a SessionStart may reach the symbol after the SessionStart
+// cleared it. The late Stop belongs to the old conversation, so it must not
+// write its symbol into the new one (U1-2a-4 F3); a Stop stamped after the
+// SessionStart still counts.
+func TestStop_BackgroundLateStopDoesNotRevive(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	sendBody(t, m, hookBgSessionStart("startup"))
+	frameID := findCCFrameRow(t, m).FrameID
+	stopReq := func(task string) EventRequest {
+		return EventRequest{TmuxPaneID: "%5", SenderPID: 200, SenderStartTime: hookBgStart, AgentType: "cc",
+			RawEvent: json.RawMessage(`{"background_tasks":[{"id":"t","type":"` + task + `","status":"running"}]}`)}
+	}
+
+	// The Stop is stamped, then its applyFrameEvent finishes and it pauses;
+	// the SessionStart (stamped later) completes first and clears.
+	oldStopTs := time.Now().UnixNano()
+	sendBody(t, m, hookBgSessionStart("clear"))
+	m.noteHookBackground(stopReq("monitor"), agentpkg.LifecycleStop, oldStopTs)
+	if n := hookBackgroundEntries(m); n != 0 {
+		t.Fatalf("a Stop stamped before the SessionStart wrote %d entries into the new session", n)
+	}
+
+	// The normal order still sets it, and the clear does not stick.
+	m.noteHookBackground(stopReq("monitor"), agentpkg.LifecycleStop, time.Now().UnixNano())
+	m.modMu.Lock()
+	got := m.hookBackground[frameID]
+	m.modMu.Unlock()
+	if got != lights.BackgroundMonitor {
+		t.Fatalf("a Stop stamped after the SessionStart: symbol %q, want monitor", got)
+	}
 }
 
 // An older CC sends neither field, and a payload may be anything: no symbol,
@@ -174,7 +207,7 @@ func TestStop_BackgroundYieldsToLiveMod(t *testing.T) {
 	m, clk := overlayModule(t)
 	frame := seedIdentityFrame(t, m, "%5", "cc", 200, hookBgStart, 10, modSID1, "/w")
 	m.core = &core.Core{Events: core.NewEventsBroadcaster()}
-	m.setHookBackground(frame.FrameID, lights.BackgroundMonitor)
+	m.setHookBackground(frame.FrameID, lights.BackgroundMonitor, time.Now().UnixNano())
 
 	if got := paneProjection(t, m, "%5"); got.Background != string(lights.BackgroundMonitor) || got.Source != SourceHook {
 		t.Fatalf("no stream: background %q source %q, want the hook symbol from the hook", got.Background, got.Source)

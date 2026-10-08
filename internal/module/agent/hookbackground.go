@@ -38,14 +38,20 @@ func hookBackgroundOf(raw json.RawMessage) lights.Background {
 	return lights.BackgroundKind(p.Tasks, len(p.Crons))
 }
 
-// setHookBackground records frameID's symbol; the empty symbol removes the
-// entry.
-func (m *Module) setHookBackground(frameID string, b lights.Background) {
+// setHookBackground records frameID's symbol from the Stop stamped ts; the
+// empty symbol removes the entry. A Stop stamped at or before the frame's last
+// SessionStart (hookBgClearedAt) is refused: hooks of one process are applied
+// out of order now and then, and a Stop from the old conversation must not
+// write its symbol back into the new one.
+func (m *Module) setHookBackground(frameID string, b lights.Background, ts int64) {
 	if frameID == "" {
 		return
 	}
 	m.modMu.Lock()
 	defer m.modMu.Unlock()
+	if cleared, ok := m.hookBgClearedAt[frameID]; ok && ts <= cleared {
+		return
+	}
 	if b == "" {
 		delete(m.hookBackground, frameID)
 		return
@@ -56,13 +62,33 @@ func (m *Module) setHookBackground(frameID string, b lights.Background) {
 	m.hookBackground[frameID] = b
 }
 
-// forgetHookBackground drops frameID's symbol (a no-op without one).
+// clearHookBackground is a SessionStart stamped ts: drop frameID's symbol and
+// remember the stamp so an older Stop cannot set it again. The stamp only
+// moves forward.
+func (m *Module) clearHookBackground(frameID string, ts int64) {
+	if frameID == "" {
+		return
+	}
+	m.modMu.Lock()
+	defer m.modMu.Unlock()
+	delete(m.hookBackground, frameID)
+	if m.hookBgClearedAt == nil {
+		m.hookBgClearedAt = make(map[string]int64)
+	}
+	if ts > m.hookBgClearedAt[frameID] {
+		m.hookBgClearedAt[frameID] = ts
+	}
+}
+
+// forgetHookBackground drops everything kept for frameID — the symbol and the
+// SessionStart stamp — because the frame is gone (a no-op without any).
 func (m *Module) forgetHookBackground(frameID string) {
 	if frameID == "" {
 		return
 	}
 	m.modMu.Lock()
 	delete(m.hookBackground, frameID)
+	delete(m.hookBgClearedAt, frameID)
 	m.modMu.Unlock()
 }
 
@@ -73,7 +99,7 @@ func (m *Module) forgetHookBackground(frameID string) {
 // its parent's id. Call it after applyFrameEvent and before the projection
 // the event emits is built, so that projection carries the new symbol. Holds
 // no lock; takes modMu only inside the setters.
-func (m *Module) noteHookBackground(req EventRequest, lifecycle agentpkg.LifecycleEventKind) {
+func (m *Module) noteHookBackground(req EventRequest, lifecycle agentpkg.LifecycleEventKind, ts int64) {
 	if req.AgentType != "cc" || m.frames == nil {
 		return
 	}
@@ -85,8 +111,8 @@ func (m *Module) noteHookBackground(req EventRequest, lifecycle agentpkg.Lifecyc
 		return
 	}
 	if lifecycle == agentpkg.LifecycleSessionStart {
-		m.forgetHookBackground(frame.FrameID)
+		m.clearHookBackground(frame.FrameID, ts)
 		return
 	}
-	m.setHookBackground(frame.FrameID, hookBackgroundOf(req.RawEvent))
+	m.setHookBackground(frame.FrameID, hookBackgroundOf(req.RawEvent), ts)
 }

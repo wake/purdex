@@ -39,6 +39,9 @@ type modLights struct {
 	// (hookbackground.go): what a Stop hook reported, shown while no live
 	// stream drives the pane. Under modMu.
 	hookBackground map[string]lights.Background
+	// hookBgClearedAt is the broadcast stamp of each frame's last
+	// SessionStart: a Stop stamped at or before it cannot set the symbol.
+	hookBgClearedAt map[string]int64
 
 	// modOverlayOn is the overlay switch. It is on exactly while the re-emit
 	// worker runs (startModLights turns it on once the worker is in its loop,
@@ -81,7 +84,8 @@ func newModLights() modLights {
 		modLiveSeen: make(map[string]bool),
 		modTick:     modTickDefault,
 
-		hookBackground: make(map[string]lights.Background),
+		hookBackground:  make(map[string]lights.Background),
+		hookBgClearedAt: make(map[string]int64),
 	}
 }
 
