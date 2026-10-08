@@ -65,6 +65,28 @@ func TestStopFailure_SubagentKeepsMainStatus(t *testing.T) {
 	}
 }
 
+// A subagent's StopFailure that finds no frame for its sender (a late hook
+// after SessionEnd or the sweep) must not bring the frame back, and nothing
+// goes on the wire.
+func TestStopFailure_SubagentWithoutFrameDoesNotResurrect(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+
+	sendBody(t, m, stopFailureBody("agent-X"))
+
+	frames, err := m.frames.ListByPane("%5")
+	if err != nil {
+		t.Fatalf("ListByPane: %v", err)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frames = %+v, want none", frames)
+	}
+	if msgs := drainBroadcasts(sub, 150*time.Millisecond); len(msgs) != 0 {
+		t.Fatalf("broadcasts = %+v, want none", msgs)
+	}
+}
+
 // Without an agent_id the failure is the main agent's: still error.
 func TestStopFailure_MainAgentStillTurnsError(t *testing.T) {
 	m := delegationModuleWithRealCCProvider(t)

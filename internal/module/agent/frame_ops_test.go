@@ -5211,16 +5211,18 @@ func TestStopFailure_FrameAbsentBeforePreCheck(t *testing.T) {
 	if meta.Reason == "native_subagent_detached_on_stop_failure" {
 		t.Fatalf("Reason = %q, want non-detach for deleted frame", meta.Reason)
 	}
-	// The payload names a subagent, so whatever frame the generic path
-	// recreates for the sender is not an error frame (U1-2a-4).
+	// The payload names a subagent, so with no sender frame and no proxy ref
+	// to detach there is nothing to update: it is skipped and must not
+	// resurrect a frame (U1-2a-4 review F1).
+	if meta.Decision != "skipped" {
+		t.Fatalf("Decision = %q, want skipped (meta=%+v)", meta.Decision, meta)
+	}
 	frames, lerr := m.frames.ListByPane(pane)
 	if lerr != nil {
 		t.Fatalf("ListByPane: %v", lerr)
 	}
-	for _, f := range frames {
-		if f.Status == agentpkg.StatusError {
-			t.Fatalf("frame %s status = error after a subagent StopFailure with no main frame", f.FrameID)
-		}
+	if len(frames) != 0 {
+		t.Fatalf("frames = %+v, want none: a subagent StopFailure must not create the sender's frame", frames)
 	}
 }
 

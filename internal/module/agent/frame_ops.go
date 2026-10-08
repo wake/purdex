@@ -656,6 +656,20 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 					After:         ownerAfterMap,
 				}, perr
 			}
+			// A subagent's StopFailure (agent_id set) that reaches here has
+			// no frame of its own (frame == nil in this body) and no proxy
+			// ref to detach: nothing to update. The generic path below
+			// would create the sender's frame, resurrecting one a SessionEnd
+			// or the sweep already removed, so it is skipped (U1-2a-4 F1).
+			if isSubagentStopFailure(lifecycle, result) {
+				projection, perr := m.projectPane(req.TmuxPaneID)
+				return projection, FrameTraceMeta{
+					Decision: "skipped",
+					Reason:   reasonSubagentStopFailureNoFrame,
+					Before:   map[string]any{},
+					After:    map[string]any{},
+				}, perr
+			}
 			// No matching ref — fall through to generic post-switch path
 			// so legacy behavior (no frame mutation, projection refresh)
 			// stays observable.
@@ -1431,6 +1445,22 @@ func strFromDetail(detail map[string]any, key string) string {
 		return v
 	}
 	return ""
+}
+
+// reasonSubagentStopFailureNoFrame is the skipped trace reason of a subagent's
+// StopFailure whose sender has no frame and no proxy ref to detach; the
+// handler ends such a request without projecting or emitting.
+const reasonSubagentStopFailureNoFrame = "subagent_stop_failure_without_frame"
+
+// isSubagentStopFailure reports whether the event is a StopFailure that names
+// a subagent (non-empty payload agent_id): that subagent's failure, never the
+// main agent's.
+func isSubagentStopFailure(lifecycle agentpkg.LifecycleEventKind, result agentpkg.DeriveResult) bool {
+	if lifecycle != agentpkg.LifecycleStopFailure {
+		return false
+	}
+	id, _ := result.Detail["agent_id"].(string)
+	return id != ""
 }
 
 func (m *Module) projectionForSession(sessionName string) (*SessionProjection, error) {

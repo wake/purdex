@@ -386,10 +386,8 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// but carries no status for the session, so the in-memory write below and
 	// the error guard treat it as status-less. applyFrameEvent applies the
 	// same rule to the stored frame.
-	if lifecycle == agentpkg.LifecycleStopFailure {
-		if id, _ := result.Detail["agent_id"].(string); id != "" {
-			result.Status = ""
-		}
+	if isSubagentStopFailure(lifecycle, result) {
+		result.Status = ""
 	}
 
 	// Error guard: when the SENDER'S frame is in error, only whitelisted events
@@ -562,6 +560,16 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// finding (PR #801).
 	if frameMeta.Decision == "skipped" && frameMeta.Reason == "pre_tool_without_proxy_parent" {
 		trace.Finish("completed", "pre_tool_without_proxy_parent_skipped")
+		traceFinished = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		return
+	}
+	// A subagent's StopFailure with no sender frame and nothing to detach
+	// changed nothing: no projection, no legacy-row cleanup, no frame on the
+	// wire (U1-2a-4 F1).
+	if frameMeta.Decision == "skipped" && frameMeta.Reason == reasonSubagentStopFailureNoFrame {
+		trace.Finish("completed", "subagent_stop_failure_without_frame_skipped")
 		traceFinished = true
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
