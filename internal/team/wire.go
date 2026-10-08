@@ -71,12 +71,17 @@ type LeadPayload struct {
 	Reason     string   `json:"reason"`
 	MaxMembers int      `json:"max_members"` // normalised: 0→3, cap 8
 	Roots      []string `json:"roots"`       // normalised: absolute, Clean; default [origin.Cwd]
+	TeamName   string   `json:"team_name"`   // normalised (NormaliseTeamName); always present, "" = none
 }
 
 // Grant is what the user approved (edited in the dialog). P4 turns it into a team.
 type Grant struct {
 	MaxMembers int      `json:"max_members"`
 	Roots      []string `json:"roots"`
+	// TeamName is the approved name. In a decide body nil (key absent) keeps the
+	// requested name and "" clears it (D-N3); a served grant always carries it
+	// once this version has decided the approval.
+	TeamName *string `json:"team_name,omitempty"`
 }
 
 // Client is the audit label of whoever decided (spec §6.5). Addr is set by the daemon from RemoteAddr.
@@ -112,8 +117,9 @@ type CreateApprovalRequest struct {
 	Reason      string   `json:"reason"`
 	MaxMembers  int      `json:"max_members,omitempty"`
 	Roots       []string `json:"roots,omitempty"`
-	WaitS       int      `json:"wait_s,omitempty"` // 0→540, cap 600
-	Target      string   `json:"target,omitempty"` // adopt only: the target as `pdx adopt` takes it (ref or address)
+	TeamName    string   `json:"team_name,omitempty"` // lead only, optional (D-N1)
+	WaitS       int      `json:"wait_s,omitempty"`    // 0→540, cap 600
+	Target      string   `json:"target,omitempty"`    // adopt only: the target as `pdx adopt` takes it (ref or address)
 }
 
 // DecideRequest is POST /api/team/approvals/{id}/decide.

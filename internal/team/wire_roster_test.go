@@ -23,7 +23,7 @@ func TestWireRoster_JSONShapes(t *testing.T) {
 		{"empty roster", Roster{}, `{"teams":[]}`},
 		{"empty event", RosterEventValue{Op: "snapshot"}, `{"op":"snapshot","teams":[]}`},
 		{"team without members", TeamRoster{ID: "t", HostID: "h", CreatedAt: 5, Lead: RosterSession{SessionID: "s", Ref: "_abc123", Address: "a/_abc123"}},
-			`{"id":"t","host_id":"h","created_at":5,"lead":{"session_id":"s","ref":"_abc123","address":"a/_abc123","live":false},"members":[]}`},
+			`{"id":"t","host_id":"h","team_name":"","created_at":5,"lead":{"session_id":"s","ref":"_abc123","address":"a/_abc123","live":false},"members":[]}`},
 	} {
 		raw, err := json.Marshal(c.v)
 		if err != nil {
@@ -57,7 +57,7 @@ func TestWireRoster_JSONShapes(t *testing.T) {
 	}
 
 	full := Roster{Teams: []TeamRoster{{
-		ID: "t", HostID: "h", CreatedAt: 5,
+		ID: "t", HostID: "h", TeamName: "build", CreatedAt: 5,
 		Lead: RosterSession{SessionID: "s0", Ref: "_lead01", Address: "a/lead", Title: "lead", Name: "n0", TmuxSession: "main", Live: true},
 		Members: []RosterMember{{
 			RosterSession: RosterSession{SessionID: "s1", Ref: "_mem001", Address: "a/_mem001", TmuxSession: "tm-0123456789", Live: true},
@@ -73,7 +73,7 @@ func TestWireRoster_JSONShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]any{"op": "changed", "teams": []any{map[string]any{
-		"id": "t", "host_id": "h", "created_at": 5.0,
+		"id": "t", "host_id": "h", "team_name": "build", "created_at": 5.0,
 		"lead": map[string]any{"session_id": "s0", "ref": "_lead01", "address": "a/lead", "title": "lead", "name": "n0", "tmux_session": "main", "live": true},
 		"members": []any{map[string]any{
 			"session_id": "s1", "ref": "_mem001", "address": "a/_mem001", "tmux_session": "tm-0123456789", "live": true,
