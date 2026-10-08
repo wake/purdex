@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func TestTeamTable_TaskAndLastColumns(t *testing.T) {
 	base := fakeView()
 	mk := func(i int, task *team.MemberTask, lastAt int64) team.Member {
 		m := base.Members[0]
-		m.Ref = "_r" + strings.Repeat(string(rune('a'+i)), 5)
+		m.Ref = fmt.Sprintf("_r%s", strings.Repeat(string(rune('a'+i)), 5))
 		m.Address = "mlab/" + m.Ref
 		m.Title = "t"
 		m.Task, m.LastAt = task, lastAt
@@ -50,7 +51,7 @@ func TestTeamTable_TaskAndLastColumns(t *testing.T) {
 	for i, want := range [][2]string{
 		{"8f2c0f-2 in_progress build the thing", "12m"},
 		{"8f2c0f-3 pending " + strings.Repeat("a", 29) + "…", "45s"},
-		{"8f2c0f-4 pending " + strings.Repeat("長", 29) + "…", "3h"},
+		{"8f2c0f-4 pending " + strings.Repeat("長", 14) + "…", "3h"},
 		{"8f2c0f-5 in_progress " + exact30, "2d"},
 		{`8f2c0f-6 in_progress esc\x1b[31m!`, "-"},
 		{"-", "-"},

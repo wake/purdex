@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/google/uuid"
@@ -513,8 +512,7 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 	if v.Team.TeamName != "" {
 		fmt.Fprintf(stdout, "team: %s\n", sanitizeCell(v.Team.TeamName))
 	}
-	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ADDRESS\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tTASK\tLAST\tCWD\tTMUX")
+	rows := [][]string{strings.Split("ADDRESS\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tTASK\tLAST\tCWD\tTMUX", "\t")}
 	for _, m := range v.Members {
 		pct, model, effort := "", "", ""
 		if c := m.Context; c != nil {
@@ -527,12 +525,12 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		if u, ok := shares[m.SessionID]; ok {
 			cpu, mem = fmt.Sprintf("%.0f%%", u.CPU), fmt.Sprintf("%.0f%%", u.Mem)
 		}
-		// TASK: "<id> <status> <subject>", the subject cut to 30 runes; LAST:
+		// TASK: "<id> <status> <subject>", the subject cut to 30 display columns; LAST:
 		// how long ago. Both "-" for a member with no task, or a daemon that
 		// predates the fields.
 		task, last := "", ""
 		if mt := m.Task; mt != nil {
-			task = sanitizeCell(mt.ID) + " " + sanitizeCell(string(mt.Status)) + " " + cutRunes(sanitizeCell(mt.Subject), teamTaskSubjectRunes)
+			task = sanitizeCell(mt.ID) + " " + sanitizeCell(string(mt.Status)) + " " + cutWidth(sanitizeCell(mt.Subject), teamTaskSubjectRunes)
 		}
 		if m.LastAt != 0 {
 			last = taskAge(m.LastAt)
@@ -543,11 +541,8 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 				cells[i] = "-"
 			}
 		}
-		fmt.Fprintln(tw, strings.Join(cells, "\t"))
+		rows = append(rows, cells)
 	}
-	if err := tw.Flush(); err != nil {
-		fmt.Fprintf(stderr, "pdx team: %v\n", err)
-		return ExitError
-	}
+	alignRows(stdout, rows, 2)
 	return ExitOK
 }
