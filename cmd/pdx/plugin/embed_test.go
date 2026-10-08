@@ -33,6 +33,9 @@ func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	if !strings.Contains(string(reg), "import { registerEvents } from './events.js'") || !strings.Contains(string(reg), "registerEvents(on)") {
 		t.Error("register.js does not import and register ./events.js")
 	}
+	if !strings.Contains(string(reg), "import { registerLease } from './lease.js'") || !strings.Contains(string(reg), "registerLease(on)") {
+		t.Error("register.js does not import and register ./lease.js")
+	}
 	b, err := fs.ReadFile(f, ".claude-plugin/plugin.json")
 	if err != nil {
 		t.Fatal(err)
@@ -60,10 +63,10 @@ type registration struct {
 // one it reads — on('<event>', …) or on?.('<event>', …) with a quoted literal as the whole
 // first argument, its arguments on any line — or one that cannot register anything: a
 // function's parameter, a property key, the two calls that hand `on` to the other files
-// (registerAsk(on), registerEvents(on), whose files are scanned too). Anything else (an
+// (registerAsk(on), registerEvents(on), registerLease(on), whose files are scanned too). Anything else (an
 // alias, `on` passed elsewhere, a variable or template event name) is an error.
 var (
-	handsOnTo   = regexp.MustCompile(`(?:^|[^\w$.])(?:registerAsk|registerEvents)\s*\(\s*$`)
+	handsOnTo   = regexp.MustCompile(`(?:^|[^\w$.])(?:registerAsk|registerEvents|registerLease)\s*\(\s*$`)
 	onParameter = regexp.MustCompile(`(?:^|[^\w$.])function\s*\*?\s*[\w$]*\s*\(\s*$`)
 )
 
@@ -105,11 +108,11 @@ func scanRegistrations(file, src string) (regs []registration, problems []string
 				regs = append(regs, r)
 			}
 		case next < len(code) && code[next] == ')' && (handsOnTo.MatchString(code[:at]) || onParameter.MatchString(code[:at])):
-			// registerAsk(on) / registerEvents(on), or function register(on)
+			// registerAsk(on) / registerEvents(on) / registerLease(on), or function register(on)
 		case next < len(code) && code[next] == ':' && prev >= 0 && (code[prev] == '{' || code[prev] == ','):
 			// a property key: { on: … }
 		default:
-			problems = append(problems, where(at)+": `on` is used other than in on('<event>', …), registerAsk(on) or registerEvents(on) (an alias, an argument, a parameter of an arrow, …): the guard cannot follow it, so call on('<event>', …) directly")
+			problems = append(problems, where(at)+": `on` is used other than in on('<event>', …), registerAsk(on), registerEvents(on) or registerLease(on) (an alias, an argument, a parameter of an arrow, …): the guard cannot follow it, so call on('<event>', …) directly")
 		}
 	}
 	return regs, problems
@@ -382,6 +385,7 @@ func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
 		{"hooks/events.js", "turn.complete", "{ turnId: /^/ }"},
 		{"hooks/register.js", "turn.complete", ""},
 		{"hooks/ask.js", "tool.call", "{ tool: 'AskUserQuestion' }"},
+		{"hooks/lease.js", "tool.call", "{ tool: 'Bash' }"},
 	} {
 		found := false
 		for _, r := range regs {
@@ -469,10 +473,22 @@ func TestScanRegistrations_FailsClosed(t *testing.T) {
 	}
 	// What the mod itself does with `on` passes: registerAsk(on), registerEvents(on), a
 	// function's parameter, a property key, a property access.
-	ok := "export function register(on) {\n  registerAsk(on)\n  registerEvents( on )\n  on('tool.call', { tool: 'Bash' }, h)\n}\nconst label = { on: 'x', off: 'y' }[k]\n$.ui.on('x', h)\nconst json = once + on_ + $on\n"
+	ok := "export function register(on) {\n  registerAsk(on)\n  registerEvents( on )\n  registerLease(on)\n  on('tool.call', { tool: 'Bash' }, h)\n}\nconst label = { on: 'x', off: 'y' }[k]\n$.ui.on('x', h)\nconst json = once + on_ + $on\n"
 	regs, problems := scanRegistrations("a.js", ok)
 	if len(problems) > 0 || len(regs) != 1 || regs[0] != (registration{"a.js", "tool.call", "{ tool: 'Bash' }"}) {
 		t.Errorf("scan = %+v, problems %q; want the one registration and no problem", regs, problems)
+	}
+}
+
+// registerLease(on) is allowed like the other two, and a typo of it still fails closed.
+func TestScanRegistrations_AllowsRegisterLease(t *testing.T) {
+	regs, problems := scanRegistrations("a.js", "export function register(on) {\n  registerLease(on)\n}\n")
+	if len(problems) > 0 || len(regs) != 0 {
+		t.Errorf("scan = %+v, problems %q; want nothing registered and no problem", regs, problems)
+	}
+	_, problems = scanRegistrations("a.js", "export function register(on) {\n  registerLeas(on)\n}\n")
+	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "used other than") {
+		t.Errorf("a registerLeas(on) typo must fail closed, problems = %q", problems)
 	}
 }
 

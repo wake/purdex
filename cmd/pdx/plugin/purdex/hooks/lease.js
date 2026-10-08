@@ -1,9 +1,9 @@
 // Purdex mod — host resource lease, the classifier (host-resource-lease plan Task 2.1, spec D-7, R7, R8).
 //
-// Pure functions: they read a Bash command string and say whether it is a heavy command (a full test run, a
-// build, a lint of everything) and of which kind, and rewrite a full vitest run to cap its workers. Nothing here
-// touches the engine ($), so it runs, and is tested, as plain code. The hook that uses them is registerLease
-// (P2-2); until then this file is not imported.
+// The classifier is pure functions: they read a Bash command string and say whether it is a heavy command (a
+// full test run, a build, a lint of everything) and of which kind, and rewrite a full vitest run to cap its
+// workers. Nothing in them touches the engine ($), so they run, and are tested, as plain code. The hook that
+// uses them, registerLease, is at the end of the file.
 //
 // Fail open everywhere: a command that cannot be parsed, or that merely might be heavy, is not intercepted.
 // Splitting is shell-aware only as far as it needs to be: quotes and backslashes, the separators
@@ -361,4 +361,137 @@ function rewriteAt(command, depth) {
   let out = command
   for (const e of edits.sort((a, b) => b.at - a.at)) out = out.slice(0, e.at) + e.text + out.slice(e.end)
   return { command: out, changed: true }
+}
+
+// ---- the hook (host-resource-lease plan Task 2.2) ----
+//
+// registerLease puts a heavy foreground Bash call through the host's lease: it asks `pdx lease acquire`
+// (which waits up to the daemon's deadline), runs the command, and releases by client id when the call
+// ends, whatever happened. Everything fails open: a daemon that is down, an answer that is not JSON, a
+// throw before the command ran — the command runs, unchanged except for the worker cap.
+//
+// `$` is used only in the top-level functions below (M-U1-2); the handler hands it straight on.
+
+const ACQUIRE_TIMEOUT_MS = 600_000 // $.process.run's cap; the daemon's own deadline is at most 590 s
+const RELEASE_TIMEOUT_MS = 5_000
+const PRE_MS = 3_000 // pdx.json and the session id: a read that has not answered by then is a failed one
+const WAIT_NOTE_MS = 1_000 // a wait shorter than this is not worth telling the model about
+const HEX = '0123456789abcdef'
+
+const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
+const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
+
+function log($, text) {
+  try {
+    const p = $.ui.log('pdx-lease: ' + text, { to: 'debug' })
+    if (p && typeof p.catch === 'function') p.catch(() => {})
+  } catch {}
+}
+
+// bounded runs one engine read and gives its answer, or undefined when it rejects or has not answered
+// within PRE_MS: the hook must reach next(e) whatever those reads do, so the command is never held by them.
+async function bounded($, read) {
+  const cap = Promise.resolve().then(() => $.clock.sleep(PRE_MS)).then(() => undefined, () => undefined)
+  return Promise.race([Promise.resolve().then(read).catch(() => undefined), cap])
+}
+
+// leaseConfig reads pdx.json beside VERSION as ask.js does: the binary to run and the installing
+// daemon's config. Absent — as under `claude plugin test` — it is `pdx` from PATH and its default config.
+async function leaseConfig($) {
+  const cfg = parse(await bounded($, () => $.fs.read($.plugin.root + '/pdx.json')))
+  return {
+    bin: isObject(cfg) && typeof cfg.pdx === 'string' && cfg.pdx ? cfg.pdx : 'pdx',
+    config: isObject(cfg) && typeof cfg.config === 'string' ? cfg.config : '',
+  }
+}
+
+// newClientId is a lower-case UUID v4 from Web Crypto; '' when the environment has none (the hook then
+// releases by the id acquire returned).
+function newClientId() {
+  const c = globalThis.crypto
+  if (!c || typeof c.getRandomValues !== 'function') return ''
+  const b = new Uint8Array(16)
+  c.getRandomValues(b)
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = Array.from(b, (x) => HEX[x >> 4] + HEX[x & 15]).join('')
+  return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20)
+}
+
+// readAcquire is the one JSON line `pdx lease acquire` prints, or null for anything else (a non-zero exit,
+// junk). The answer is read even when the lease was fail-open: that says so itself.
+function readAcquire(r) {
+  if (!r || r.exitCode !== 0) return null
+  const o = parse(String(r.stdout || '').trim())
+  return isObject(o) ? o : null
+}
+
+// leaseNotes is what the model is told, in Chinese, one line each and only what applies.
+function leaseNotes(rewritten, command, answer) {
+  const notes = []
+  if (rewritten) notes.push('Purdex mod 把 --maxWorkers=3 加進這個指令（主機資源規則 R7），實際執行的是：' + command)
+  if (answer && !answer.fail_open) {
+    const ms = Number(answer.waited_ms) || 0
+    if (answer.overrun) notes.push('等滿 ' + Math.round(ms / 60000) + ' 分鐘超量放行，已記錄')
+    else if (ms >= WAIT_NOTE_MS) {
+      const load = Number(answer.host_measured) > 0 ? '（負載 ' + answer.host_measured + '/100）' : ''
+      notes.push('這個指令先等了 ' + Math.round(ms / 1000) + ' 秒主機資源' + load + '，不是卡住，不要重試')
+    }
+  }
+  return notes
+}
+
+// release gives the lease back by client id (or by id when there was none), 5 s, errors swallowed: a
+// grant whose answer was lost is released too, and a client id the daemon never saw answers `none`.
+async function releaseLease($, cfg, clientId, answer) {
+  const target = clientId ? ['--client-id', clientId] : answer && typeof answer.id === 'string' && answer.id ? [answer.id] : null
+  if (!target) return
+  try {
+    await $.process.run([cfg.bin, 'lease', 'release', ...target, ...(cfg.config ? ['--config', cfg.config] : [])], { timeoutMs: RELEASE_TIMEOUT_MS })
+  } catch (err) {
+    log($, 'release failed: ' + (err && err.message ? err.message : String(err)))
+  }
+}
+
+// leaseCall is one Bash call. A call that is not heavy, runs in the background (R8) or is already wrapped
+// in `pdx lease` goes straight on.
+async function leaseCall($, e, next) {
+  if (e.run_in_background === true) return next(e)
+  const c = classify(e.command)
+  if (!c) return next(e)
+  let command = e.command
+  let rewritten = false
+  if (c.needsMaxWorkers) {
+    const w = rewriteMaxWorkers(command)
+    if (w.changed) { command = w.command; rewritten = true }
+  }
+  const cfg = await leaseConfig($)
+  const sid = await bounded($, () => $.session.id()) // this call's: a /clear or a resume is picked up by the next one
+  if (typeof sid !== 'string' || !sid) {
+    // Without a session the lease cannot be asked for: the command runs, with the cap if it was given one.
+    log($, 'no session id, the command runs without a lease')
+    const r = await next(rewritten ? { ...e, command } : e)
+    const notes = leaseNotes(rewritten, command, null)
+    return notes.length ? { ...r, context: [...(r.context ?? []), ...notes] } : r
+  }
+  const clientId = newClientId()
+  let answer = null
+  try {
+    try {
+      answer = readAcquire(await $.process.run([cfg.bin, 'lease', 'acquire', '--kind', c.kind, '--session', sid,
+        '--tool-use', String(e.tool_use_id || ''), ...(clientId ? ['--client-id', clientId] : []),
+        ...(cfg.config ? ['--config', cfg.config] : [])], { timeoutMs: ACQUIRE_TIMEOUT_MS }))
+    } catch (err) {
+      log($, 'acquire failed, the command runs: ' + (err && err.message ? err.message : String(err)))
+    }
+    const r = await next(rewritten ? { ...e, command } : e)
+    const notes = leaseNotes(rewritten, command, answer)
+    return notes.length ? { ...r, context: [...(r.context ?? []), ...notes] } : r
+  } finally {
+    await releaseLease($, cfg, clientId, answer)
+  }
+}
+
+export function registerLease(on) {
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => leaseCall($, e, next)).catch(($, e, next) => next(e))
 }
