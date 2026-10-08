@@ -38,11 +38,15 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 	}
 
 	var items []convmodel.Item
+	// The row's uuid names its first text or thinking item, `<uuid>#<n>` the
+	// n-th further one; a step is named by its tool_use id and takes no slot.
+	named := 0
 	next := func() string {
-		if len(items) == 0 {
+		named++
+		if named == 1 {
 			return l.uuid
 		}
-		return fmt.Sprintf("%s#%d", l.uuid, len(items))
+		return fmt.Sprintf("%s#%d", l.uuid, named-1)
 	}
 	for _, b := range blocks {
 		switch b.typ {
@@ -64,16 +68,18 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 				ID: next(), At: l.at, Text: text, Truncated: cut, DurationMS: dur,
 			}})
 		case "tool_use":
-			n.skip("step:deferred") // steps arrive in U1-4c
+			if it, ok := n.newStep(b, items, l.at); ok {
+				items = append(items, it)
+			}
 		default:
 			n.skipDyn("block:" + b.typ)
 		}
 	}
 	// Turn bookkeeping belongs to the row, not to the items it produced: a
-	// tool_use row (its step arrives in U1-4c) is a main-thread assistant
-	// row too, and decides the API-error state and the model in use. A row
-	// that shows nothing does not open a turn of its own (the model in use
-	// above still counts).
+	// tool_use row whose step was dropped (no id, a repeated id) is still a
+	// main-thread assistant row, and decides the API-error state and the
+	// model in use. A row that shows nothing does not open a turn of its own
+	// (the model in use above still counts).
 	if len(items) == 0 && len(n.turns) == 0 {
 		return
 	}
@@ -83,6 +89,9 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 	tr.apiErr = nil // the turn's last assistant row is a reply, not an error
 	n.modelChanged(ti, model, l.at, off)
 	for _, it := range items {
+		if it.Step != nil {
+			n.openStep(tr, it.Step)
+		}
 		n.upsert(tr.t.ID, it, off)
 	}
 	n.attribute(ti, l.at)
