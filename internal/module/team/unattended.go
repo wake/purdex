@@ -166,3 +166,54 @@ func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.
 	m.announceClosed(after, nil)
 	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: claimed, RequestID: after.ID})
 }
+
+// autoApprove is the daemon's approve of an open AutoApprovable row (U23):
+// approve with the decider unattended and unattendedGrant. approved says it
+// won as approved; open that the row is still open — refused by a rule (a
+// lead's origin became a member) or a failure — for the next sweep.
+// Caller holds createMu.
+func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
+	g, err := unattendedGrant(a)
+	if err == nil {
+		var after team.Approval
+		var won, memberCancelled bool
+		after, won, memberCancelled, err = m.approve(a, daemonClose(m.now(), g))
+		switch {
+		case err != nil: // logged below
+		case !won: // closed first by a click, a cancel or the sweeper
+			return false, false
+		case memberCancelled:
+			m.logf("[team] approval %s cancelled at its auto-approve: origin %s is a member of a live team", a.ID, a.Origin.Ref)
+			return false, false
+		default:
+			m.logf("[team] approval %s approved by unattended (origin %s)%s", a.ID, a.Origin.Ref, teamNote(after))
+			return true, false
+		}
+	}
+	m.logf("[team] approval %s not auto-approved: %v", a.ID, err)
+	return false, true
+}
+
+// sweepUnattended approves every open AutoApprovable row, oldest first
+// (D-U23-3; hook kinds are left open): at switch-on (PU-1c). pending
+// counts the ones still open (decision 5: PU-1b3's tick tries them again).
+// Caller holds createMu and has read the switch on.
+func (m *Module) sweepUnattended(why string) (approved, pending int) {
+	open, err := m.store.ListOpen()
+	if err != nil {
+		m.logf("[team] unattended sweep (%s): %v", why, err)
+		return 0, 0
+	}
+	for _, a := range open {
+		if !team.AutoApprovable(a.Kind) {
+			continue
+		}
+		if ok, still := m.autoApprove(a); ok {
+			approved++
+		} else if still {
+			pending++
+		}
+	}
+	m.logf("[team] unattended sweep (%s): approved %d, still open %d", why, approved, pending)
+	return approved, pending
+}

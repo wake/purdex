@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"sync"
@@ -222,5 +223,121 @@ func TestRelayBegin_UnattendedMemberPausedOrOffRaisesNothing(t *testing.T) {
 	}
 	if ops := f.opsOf(); len(ops) != 0 {
 		t.Fatalf("events = %v, want none", ops)
+	}
+}
+
+// sweep runs the switch-on sweep as its caller does: under createMu.
+func (f *fixture) sweep() (int, int) {
+	f.m.createMu.Lock()
+	defer f.m.createMu.Unlock()
+	return f.m.sweepUnattended("switch on")
+}
+
+// Rule 1 / Review focus 4: the switch is read under createMu. A create
+// paused just before createMu while a switch-on (fake store on + the sweep
+// under createMu: the PUT route is PU-1c's) completes sees the switch on
+// when it goes on: never committed open, no opened. Mutation gate: read
+// the switch before taking createMu → red.
+func TestCreate_SwitchOnRacesCreateNeverOpen(t *testing.T) {
+	f := newFixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	f.m.beforeCreateLock = func() { close(entered); <-release }
+	done := make(chan team.Approval)
+	go func() {
+		_, body := f.do(http.MethodPost, "/api/team/approvals", f.createReq(uid(1)))
+		var a team.Approval
+		_ = json.Unmarshal(body, &a)
+		done <- a
+	}()
+	<-entered
+	f.m.createMu.Lock()
+	f.unatt.set(true)
+	f.m.sweepUnattended("switch on")
+	f.m.createMu.Unlock()
+	close(release)
+	if a := <-done; a.State != team.StateApproved {
+		t.Fatalf("state %s, want approved", a.State)
+	}
+	if ops := f.opsOf(); !reflect.DeepEqual(ops, []string{"closed"}) {
+		t.Fatalf("events = %v, want [closed]", ops)
+	}
+}
+
+// U25 / D-U24-7 (decision 22): every daemon approval of a lead request
+// grants min(requested, 3) members — unspecified counts as 3 — with the
+// requested roots; at create and through the switch-on sweep (the tick's
+// path is PU-1b3's) share unattendedGrant. Mutation gate: return the payload's
+// max_members uncapped → red (rows 5 and 8).
+func TestUnattendedLeadGrant_IsMinOfRequestAndThree(t *testing.T) {
+	paths := map[string]func(f *fixture){
+		"create": func(f *fixture) { f.unatt.set(true); f.create(uid(1)) },
+		"sweep":  func(f *fixture) { f.create(uid(1)); f.unatt.set(true); f.sweep() },
+	}
+	for _, c := range []struct{ asked, want int }{{0, 3}, {1, 1}, {2, 2}, {3, 3}, {5, 3}, {8, 3}} {
+		for name, run := range paths {
+			t.Run(fmt.Sprintf("%s/%d", name, c.asked), func(t *testing.T) {
+				f := newFixture(t)
+				f.createReqEdit = func(r *team.CreateApprovalRequest) { r.MaxMembers, r.Roots = c.asked, []string{"/w/a"} }
+				run(f)
+				f.assertTeamGrant("sid-1", c.want, []string{"/w/a"})
+			})
+		}
+	}
+}
+
+// D-U23-3, rule 5: the switch-on sweep approves the open lead and
+// self_relay rows by unattended and leaves both hook kinds open. Mutation
+// gate: AutoApprovable includes hook_ask → red.
+func TestSweepUnattended_ApprovesOpenLeadAndSelfRelayLeavesHookKinds(t *testing.T) {
+	f := newFixture(t)
+	lead := f.create(uid(1))
+	relay := f.begin("sid-2")
+	ask, perm := f.askBegin("tu-1"), f.askBeginPermission("tu-2")
+	f.unatt.set(true)
+	if approved, pending := f.sweep(); approved != 2 || pending != 0 {
+		t.Fatalf("sweep = (%d, %d), want (2, 0)", approved, pending)
+	}
+	for _, id := range []string{lead.ID, relay.RequestID} {
+		a, _, _ := f.m.store.Get(id)
+		assertDecidedByUnattended(t, a, f.clock.Load())
+	}
+	for _, id := range []string{ask, perm} {
+		if a, _, _ := f.m.store.Get(id); a.State != team.StateOpen {
+			t.Fatalf("hook row %s is %s, want open", id, a.State)
+		}
+	}
+	if f.op(relay.Op.ID).State != team.RelayClaimed {
+		t.Fatal("the self relay's op was not claimed")
+	}
+}
+
+// Rule 9: a click and the daemon race on the CAS; exactly one wins and one
+// closed is broadcast. A losing click answers 409 already_decided carrying
+// the row decided by unattended.
+func TestDecide_RacesUnattendedOneWins(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.events()
+	f.unatt.set(true)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); f.sweep() }()
+	code, body := f.decide(uid(1), "approve")
+	wg.Wait()
+	a, _, _ := f.m.store.Get(uid(1))
+	switch code {
+	case http.StatusOK:
+		if a.DecidedBy == nil || a.DecidedBy.Kind != "app" {
+			t.Fatalf("click won but the row is decided by %+v", a.DecidedBy)
+		}
+	case http.StatusConflict:
+		if e := decodeErr(t, body); e.Error != team.ErrAlreadyDecided || e.Approval == nil || e.Approval.DecidedBy.Kind != team.ClientKindUnattended {
+			t.Fatalf("click lost: %s", body)
+		}
+	default:
+		t.Fatalf("decide: %d %s", code, body)
+	}
+	if ops := f.opsOf(); !reflect.DeepEqual(ops, []string{"closed"}) {
+		t.Fatalf("events = %v, want one closed", ops)
 	}
 }
