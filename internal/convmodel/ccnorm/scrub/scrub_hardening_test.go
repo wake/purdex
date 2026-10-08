@@ -40,6 +40,18 @@ func TestScrub_IdNamedFieldStillRedacted(t *testing.T) {
 	}
 }
 
+// A structural-looking id that carries a credential is not an id.
+func TestScrub_StructuralIdWithEmbeddedCredentialRedacted(t *testing.T) {
+	m := one(t, `{"type":"assistant","uuid":"`+rowUUID+`","message":{"model":"m","content":[
+		{"type":"tool_use","id":"toolu_01ABCDEFGHIJKLMNOPQRSTUV","name":"X","input":{"id":"toolu_AKIAIOSFODNN7EXAMPLE","uuid":"req_ghp_abcdefghijklmnop"}}]}}`)
+	in := m["message"].(map[string]any)["content"].([]any)[0].(map[string]any)["input"].(map[string]any)
+	for k, v := range in {
+		if s, _ := v.(string); strings.Contains(s, "AKIA") || strings.Contains(s, "ghp_") {
+			t.Errorf("input.%s = %q kept a credential", k, s)
+		}
+	}
+}
+
 func TestScrub_UrlSafeAndSlashSplitTokensRedacted(t *testing.T) {
 	secrets := []string{
 		"AbCd1234efGh5678IjKl9012/mnOp3456qrSt7890UvWx1234",                 // std base64 split by "/" into pieces under 32 characters

@@ -402,12 +402,14 @@ var (
 	reHome      = regexp.MustCompile("/(?:Users|home)/[^/\\s\"'`<>\\\\]+")
 	reEncHome   = regexp.MustCompile(`-Users-[A-Za-z0-9._]+`)
 	reTailnet   = regexp.MustCompile(`100\.64\.\d{1,3}\.\d{1,3}`)
+	// private (RFC 1918) addresses
+	rePrivateIP = regexp.MustCompile(`(?:^|[^\d.])(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}`)
 	// credential prefixes, in any letter case
 	reBearer = regexp.MustCompile("(?i)\\bBearer(?:\\s+[^\\s\"'`]*)?")
 	reSK     = regexp.MustCompile(`(?i)(^|[^A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}`)
-	reGH     = regexp.MustCompile(`(?i)\bgh[pousr]_[A-Za-z0-9_]*`)
-	reSlack  = regexp.MustCompile(`(?i)\bxox[a-z]-[A-Za-z0-9\-]*`)
-	reAWS    = regexp.MustCompile(`(?i)\bAKIA[0-9A-Z]{16}`)
+	reGH     = regexp.MustCompile(`(?i)gh[pousr]_[A-Za-z0-9_]*`)
+	reSlack  = regexp.MustCompile(`(?i)xox[a-z]-[A-Za-z0-9\-]*`)
+	reAWS    = regexp.MustCompile(`(?i)AKIA[0-9A-Z]{16}`)
 
 	// a run of the base64 alphabets (standard and URL-safe, with padding):
 	// a candidate for LooksLikeToken
@@ -573,13 +575,20 @@ var idKeys = map[string]bool{"uuid": true, "tool_use_id": true, "id": true, "age
 
 var reStructuralID = regexp.MustCompile(`^(?:(?:toolu|msg|req)_[A-Za-z0-9]+|a[0-9a-f]{16}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$`)
 
+// hasCredential reports whether s holds a credential-prefixed value, which a
+// structural-looking id must not smuggle past the redaction rules
+// (toolu_AKIA...).
+func hasCredential(s string) bool {
+	return reBearer.MatchString(s) || reSK.MatchString(s) || reGH.MatchString(s) || reSlack.MatchString(s) || reAWS.MatchString(s)
+}
+
 func structuralID(s string) bool { return reUUIDExact.MatchString(s) || reStructuralID.MatchString(s) }
 
 // deep rewrites every string under v (json.Number and the rest as they are).
 func (rw *rewriter) deep(v any, key string) any {
 	switch x := v.(type) {
 	case string:
-		if idKeys[key] && structuralID(x) {
+		if idKeys[key] && structuralID(x) && !hasCredential(x) {
 			return x
 		}
 		return rw.str(x)
@@ -684,6 +693,13 @@ func (rw *rewriter) str(s string) string {
 		s = re.ReplaceAllString(s, "user")
 	}
 	s = reTailnet.ReplaceAllString(s, "192.0.2.1")
+	s = rePrivateIP.ReplaceAllStringFunc(s, func(m string) string {
+		// the pattern may have taken one character before the address
+		if c := m[0]; c < '0' || c > '9' {
+			return string(c) + "192.0.2.1"
+		}
+		return "192.0.2.1"
+	})
 	s = reBearer.ReplaceAllString(s, "[redacted-auth]")
 	s = reSK.ReplaceAllString(s, "${1}[redacted-key]")
 	s = reGH.ReplaceAllString(s, "[redacted-token]")

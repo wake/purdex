@@ -247,15 +247,15 @@ func TestScrub_SecretsEmailsAndAddresses(t *testing.T) {
 	in := "mail wake@protype.tw or a.b+c@sub.example.org; ip 100.64.0.2 and 100.64.12.200; " +
 		"Authorization: Bearer abc.def-123_456 ok; key sk-ant-api03-ABCDEFGHIJKLMNOP1234; " +
 		"gh ghp_abcdefghijklmnopqrstuvwxyz0123456789 and gho_AbCdEf123456; slack xoxb-1234-5678-abcd; aws AKIAIOSFODNN7EXAMPLE; " +
-		"keep task-notification and mask-like and disk-usage and 192.168.1.5"
+		"keep task-notification and mask-like and disk-usage and 192.168.1.5 and 10.0.0.7"
 	m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote(in)+`}}`)
 	got := m["message"].(map[string]any)["content"].(string)
-	for _, bad := range []string{"@protype", "@sub.example", "100.64.", "Bearer ", "sk-ant", "ghp_", "gho_", "xoxb", "AKIA"} {
+	for _, bad := range []string{"@protype", "@sub.example", "100.64.", "Bearer ", "sk-ant", "ghp_", "gho_", "xoxb", "AKIA", "192.168.1.5", "10.0.0.7"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("%q survived in %q", bad, got)
 		}
 	}
-	for _, keep := range []string{"task-notification", "mask-like", "disk-usage", "192.168.1.5"} {
+	for _, keep := range []string{"task-notification", "mask-like", "disk-usage"} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("%q was rewritten in %q", keep, got)
 		}

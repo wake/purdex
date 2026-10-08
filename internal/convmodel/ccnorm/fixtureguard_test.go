@@ -192,10 +192,12 @@ var privatePatterns = []struct {
 	{"temp folder", regexp.MustCompile(`/var/folders`)},
 	{"tailnet address", regexp.MustCompile(`100\.64\.`)},
 	{"e-mail address", regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}`)},
-	{"bearer token", regexp.MustCompile(`Bearer `)},
-	{"sk- key", regexp.MustCompile(`(^|[^A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}`)},
-	{"GitHub token", regexp.MustCompile(`gh[po]_`)},
-	{"Slack token", regexp.MustCompile(`xox[a-z]-`)},
+	{"private network address", regexp.MustCompile(`(?:^|[^\d.])(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}`)},
+	{"bearer token", regexp.MustCompile(`(?i)\bBearer `)},
+	{"sk- key", regexp.MustCompile(`(?i)(^|[^A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}`)},
+	{"GitHub token", regexp.MustCompile(`(?i)gh[pousr]_`)},
+	{"Slack token", regexp.MustCompile(`(?i)xox[a-z]-`)},
+	{"AWS access key", regexp.MustCompile(`(?i)AKIA[0-9A-Z]{16}`)},
 	// encoded forms of the recording machine's paths (a dir under
 	// .claude/projects, a /private/tmp/claude-N scratch path)
 	{"claude scratch dir name", regexp.MustCompile(`claude-[0-9]{3}`)},
@@ -247,7 +249,9 @@ var peerPatterns = []struct {
 		}},
 }
 
-var imageData = regexp.MustCompile(`"data":\s*"[A-Za-z0-9+/=]*"`)
+// only the scrubber's stand-in image payload is exempt from the scan, never an
+// arbitrary "data" member
+var imageData = regexp.MustCompile(`"data":\s*"` + regexp.QuoteMeta(scrub.TinyPNG) + `"`)
 
 // TestFixtures_NoPrivateData: no fixture file (inputs, expected, facts,
 // READMEs; MANIFEST for the patterns but not the token rule, it holds hashes)
