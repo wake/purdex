@@ -17,8 +17,13 @@ type LeaseTree struct {
 	// Root is the holder pid of a process-scope lease (the tree includes it),
 	// or the session's agent pid of a session-new lease (the tree is what
 	// started under it, never the agent itself).
-	Root     int
-	Baseline []BaselineEntry // session-new only
+	Root int
+	// RootStartMS is when the root process started, unix milliseconds (the
+	// row's holder_start, second precision), or 0 when it is not known. A
+	// root whose pid is in the table with another start time is a reused pid,
+	// not the holder (codex attack on P1-2b-2a).
+	RootStartMS int64
+	Baseline    []BaselineEntry // session-new only
 }
 
 // LeaseUsage is what one lease's tree uses right now.
@@ -26,10 +31,21 @@ type LeaseUsage struct {
 	Procs    int     // processes in the tree
 	Pcpu     float64 // percent of one core, this lease's share
 	RSSBytes uint64  // this lease's share
-	// Use is the larger of CPU (Pcpu / ncpu) and memory (RSS / host memory),
-	// in host percent and not rounded: the unit of D-1 and of
-	// SessionUse.Use, as a float so that a share of a share keeps its size.
+	// CPU and Mem are the two components of Use in host percent (Pcpu / ncpu
+	// and RSS / host memory). They add up across leases; Use does not: the
+	// larger of two components is not additive, so a sum of Use over leases
+	// can exceed what the leases really use. Anything that subtracts the
+	// leases from the host (D-2's unleased) has to add CPU and Mem up
+	// separately and take the larger afterwards.
+	CPU, Mem float64
+	// Use is the larger of CPU and Mem, in host percent and not rounded: the
+	// unit of D-1 and of SessionUse.Use, as a float so that a share of a
+	// share keeps its size. For display and per-lease charge, not for sums.
 	Use float64
+	// Unverified means the root pid is in the table but with a start time that
+	// differs from the holder's: the pid was reused. Nothing was measured, and
+	// the tree is empty without the lease having vanished.
+	Unverified bool
 	// Empty means the tree has no process: a process-scope root that is not
 	// in the table, or a session-new lease with nothing new under its agent.
 	Empty bool
@@ -68,8 +84,13 @@ func ComputeLeaseUse(procs []Proc, leases []LeaseTree, startMS func(pid int) (in
 	}
 
 	trees := make([][]int, len(leases))
+	unverified := make([]bool, len(leases))
 	covers := make(map[int]int, len(byPID))
 	for i, l := range leases {
+		if rootReused(l, byPID, startMS) {
+			unverified[i] = true
+			continue
+		}
 		trees[i] = leaseTree(l, byPID, children, startMS)
 		for _, pid := range trees[i] {
 			covers[pid]++
@@ -77,7 +98,7 @@ func ComputeLeaseUse(procs []Proc, leases []LeaseTree, startMS func(pid int) (in
 	}
 
 	for i, l := range leases {
-		u := LeaseUsage{Procs: len(trees[i]), Empty: len(trees[i]) == 0}
+		u := LeaseUsage{Procs: len(trees[i]), Empty: len(trees[i]) == 0 && !unverified[i], Unverified: unverified[i]}
 		var rss float64
 		for _, pid := range trees[i] {
 			share := float64(covers[pid])
@@ -92,10 +113,26 @@ func ComputeLeaseUse(procs []Proc, leases []LeaseTree, startMS func(pid int) (in
 		if memBytes > 0 {
 			mem = rss * 100 / float64(memBytes)
 		}
+		u.CPU, u.Mem = cpu, mem
 		u.Use = math.Max(cpu, mem)
 		out[l.ID] = u
 	}
 	return out
+}
+
+// rootReused says whether the root pid is in the table as a different process
+// than the holder: both start times are known and differ at second precision.
+// Anything unknown (no expected start, no table start) is not reused: the
+// lease is measured, as the sweeper treats such a holder as alive.
+func rootReused(l LeaseTree, byPID map[int]Proc, startMS func(int) (int64, bool)) bool {
+	if l.RootStartMS == 0 || startMS == nil {
+		return false
+	}
+	if _, ok := byPID[l.Root]; !ok {
+		return false
+	}
+	got, ok := startMS(l.Root)
+	return ok && got/1000 != l.RootStartMS/1000
 }
 
 // leaseTree lists the pids of one lease's tree.

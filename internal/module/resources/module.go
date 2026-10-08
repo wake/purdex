@@ -101,7 +101,7 @@ type Module struct {
 	// and lastProcs' writer are the sampler goroutine's own. lastProcs is the
 	// process list of the last good sample, shared read-only.
 	useMu       sync.Mutex
-	leaseUse    map[string]float64
+	leaseUse    map[string]resources.LeaseUsage
 	useAt       map[string]time.Time
 	measureNote string
 	lastProcs   atomic.Pointer[[]resources.Proc]

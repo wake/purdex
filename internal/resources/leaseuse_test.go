@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -42,6 +43,85 @@ func TestComputeLeaseUse_UseIsTheLargerOfCPUAndMem(t *testing.T) {
 	}
 	if u := ComputeLeaseUse(procs, []LeaseTree{{ID: "a", Scope: ScopeProcess, Root: 100}}, nil, 0, 0)["a"]; u.Use != 0 || u.Procs != 1 {
 		t.Fatalf("no ncpu/mem: %+v, want Use 0 and the process still counted", u)
+	}
+}
+
+// Codex attack (high): the larger of two components is not additive. A lease
+// that burns CPU and one that fills memory each report their own maximum, and
+// a host figure that is itself a maximum cannot be reduced by the sum of
+// those. The components do add up, so a caller can subtract them one by one.
+func TestComputeLeaseUse_ComponentsAddUpWhereUseDoesNot(t *testing.T) {
+	procs := []Proc{
+		{PID: 100, PPID: 1, Pcpu: 400},         // 40 % of 10 cores, no memory
+		{PID: 200, PPID: 1, RSSBytes: 6 * gib}, // 37.5 % of 16 GiB, no cpu
+	}
+	got := ComputeLeaseUse(procs, []LeaseTree{
+		{ID: "cpu", Scope: ScopeProcess, Root: 100},
+		{ID: "mem", Scope: ScopeProcess, Root: 200},
+	}, nil, 10, 16*gib)
+	if !near(got["cpu"].CPU, 40) || !near(got["cpu"].Mem, 0) || !near(got["mem"].CPU, 0) || !near(got["mem"].Mem, 37.5) {
+		t.Fatalf("components = %+v", got)
+	}
+	if !near(got["cpu"].Use, 40) || !near(got["mem"].Use, 37.5) {
+		t.Fatalf("Use = %v / %v", got["cpu"].Use, got["mem"].Use)
+	}
+	// What the two leases really take of the host: 40 % cpu, 37.5 % memory.
+	// The sum of Use (77.5) is larger than the host's own maximum (40).
+	if sumUse := got["cpu"].Use + got["mem"].Use; sumUse <= math.Max(got["cpu"].CPU+got["mem"].CPU, got["cpu"].Mem+got["mem"].Mem) {
+		t.Fatalf("sum of Use %v should exceed the larger summed component: the test no longer shows the problem", sumUse)
+	}
+}
+
+// Codex attack (high): a root pid that is in the table with another start time
+// is a reused pid. Its new owner and that owner's children are not the
+// lease's, so nothing is measured for it. An unknown start on either side
+// measures as before.
+func TestComputeLeaseUse_ReusedRootIsUnverifiedNotMeasured(t *testing.T) {
+	procs := []Proc{
+		{PID: 100, PPID: 1, Pcpu: 900, RSSBytes: 8 * gib}, // an unrelated hog that got the pid
+		{PID: 101, PPID: 100, Pcpu: 100, RSSBytes: gib},
+	}
+	holder := int64(5_000_000)
+	lease := LeaseTree{ID: "a", Scope: ScopeProcess, Root: 100, RootStartMS: holder}
+
+	reused := ComputeLeaseUse(procs, []LeaseTree{lease}, startsOf(map[int]int64{100: holder + 90_000}), 10, 16*gib)["a"]
+	if !reused.Unverified || reused.Empty || reused.Procs != 0 || reused.Use != 0 {
+		t.Fatalf("reused root = %+v, want unverified, not empty, nothing measured", reused)
+	}
+	same := ComputeLeaseUse(procs, []LeaseTree{lease}, startsOf(map[int]int64{100: holder + 400}), 10, 16*gib)["a"]
+	if same.Unverified || same.Procs != 2 {
+		t.Fatalf("same second = %+v, want measured (start times compare to the second)", same)
+	}
+	unknownTable := ComputeLeaseUse(procs, []LeaseTree{lease}, startsOf(nil), 10, 16*gib)["a"]
+	if unknownTable.Unverified || unknownTable.Procs != 2 {
+		t.Fatalf("no start in the table = %+v, want measured", unknownTable)
+	}
+	lease.RootStartMS = 0
+	unknownHolder := ComputeLeaseUse(procs, []LeaseTree{lease}, startsOf(map[int]int64{100: holder}), 10, 16*gib)["a"]
+	if unknownHolder.Unverified || unknownHolder.Procs != 2 {
+		t.Fatalf("no expected start = %+v, want measured", unknownHolder)
+	}
+}
+
+// Baselines only grow: the later lease's baseline holds everything that ran at
+// its grant. So a process that started between two grants is the earlier
+// lease's alone (the later one did not exist yet), and one that started after
+// both is split. Splitting a "combined new tree" in two would hand the later
+// lease a process that was already running when it was granted.
+func TestComputeLeaseUse_LaterLeaseDoesNotInheritWhatStartedBeforeItsGrant(t *testing.T) {
+	procs := []Proc{
+		{PID: 50, PPID: 1},
+		{PID: 60, PPID: 50, Pcpu: 100}, // under the session before either grant
+		{PID: 70, PPID: 50, Pcpu: 200}, // started between the grants: only A can own it
+		{PID: 80, PPID: 50, Pcpu: 400}, // started after both grants
+	}
+	starts := map[int]int64{60: 6000, 70: 7000}
+	a := LeaseTree{ID: "a", Scope: ScopeSessionNew, Root: 50, Baseline: []BaselineEntry{{PID: 60, StartMS: 6000}}}
+	b := LeaseTree{ID: "b", Scope: ScopeSessionNew, Root: 50, Baseline: []BaselineEntry{{PID: 60, StartMS: 6000}, {PID: 70, StartMS: 7000}}}
+	got := ComputeLeaseUse(procs, []LeaseTree{a, b}, startsOf(starts), 10, 16*gib)
+	// pcpu: A = 200 + 400/2, B = 400/2.
+	if !near(got["a"].Pcpu, 400) || !near(got["b"].Pcpu, 200) {
+		t.Fatalf("a = %v, b = %v pcpu, want 400 and 200", got["a"].Pcpu, got["b"].Pcpu)
 	}
 }
 

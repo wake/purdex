@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/resources"
 )
 
@@ -44,17 +45,32 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 
 	trees := make([]resources.LeaseTree, len(held))
 	for i, r := range held {
-		trees[i] = resources.LeaseTree{ID: r.ID, Scope: r.Scope, Root: r.HolderPID, Baseline: parseBaseline(r.Baseline)}
+		trees[i] = resources.LeaseTree{
+			ID: r.ID, Scope: r.Scope, Root: r.HolderPID, RootStartMS: holderStartMS(r.HolderStart),
+			Baseline: parseBaseline(r.Baseline),
+		}
 	}
 	usage := resources.ComputeLeaseUse(procs, trees, viewStartMS(view), raw.NCPU, raw.MemBytes)
 
 	halfLife := m.settings().HalfLife()
 	now := m.now()
-	latest := make(map[string]float64, len(held))
+	prev := m.leaseUseSnapshot()
+	latest := make(map[string]resources.LeaseUsage, len(held))
 	lastAt := make(map[string]time.Time, len(held))
 	for _, r := range held {
 		u := usage[r.ID]
-		latest[r.ID] = u.Use
+		if u.Unverified {
+			// Its pid is another process now (the sweeper ends the lease as
+			// holder_gone): nothing is measured, and the figures it had stay.
+			if p, ok := prev[r.ID]; ok {
+				latest[r.ID] = p
+			}
+			if at, ok := m.useAt[r.ID]; ok {
+				lastAt[r.ID] = at
+			}
+			continue
+		}
+		latest[r.ID] = u
 		lastAt[r.ID] = now
 
 		first := r.Samples == 0
@@ -76,6 +92,16 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 	}
 	m.setLeaseUse(latest)
 	m.useAt = lastAt
+}
+
+// holderStartMS reads a row's holder_start (the registry's text, second
+// precision) as unix milliseconds; 0 when it is empty or does not parse.
+func holderStartMS(s string) int64 {
+	t, err := ipeers.ParseProcStart(s)
+	if err != nil || t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
 }
 
 // viewStartMS gives a pid's start time in unix milliseconds from a process
@@ -118,19 +144,21 @@ func (m *Module) noteMeasure(problem string) {
 	m.measureNote = problem
 }
 
-func (m *Module) setLeaseUse(use map[string]float64) {
+func (m *Module) setLeaseUse(use map[string]resources.LeaseUsage) {
 	m.useMu.Lock()
 	m.leaseUse = use
 	m.useMu.Unlock()
 }
 
-// leaseUseSnapshot is the latest raw measured use of each held lease, host
-// percent (not the average): the LeaseUse input of the admission pass. The
-// caller gets its own copy.
-func (m *Module) leaseUseSnapshot() map[string]float64 {
+// leaseUseSnapshot is the latest raw measurement of each held lease (not the
+// average): the LeaseUse input of the admission pass. Use is each lease's own
+// figure; to take the leases off the host, add CPU and Mem up over the leases
+// separately (Use is a maximum and does not add up). The caller gets its own
+// copy.
+func (m *Module) leaseUseSnapshot() map[string]resources.LeaseUsage {
 	m.useMu.Lock()
 	defer m.useMu.Unlock()
-	out := make(map[string]float64, len(m.leaseUse))
+	out := make(map[string]resources.LeaseUsage, len(m.leaseUse))
 	maps.Copy(out, m.leaseUse)
 	return out
 }

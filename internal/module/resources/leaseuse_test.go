@@ -3,7 +3,6 @@ package resourcesmod
 import (
 	"context"
 	"encoding/json"
-	"maps"
 	"math"
 	"testing"
 	"time"
@@ -50,7 +49,7 @@ func (f *useFix) measure(procs []resources.Proc) {
 // advance moves the clock.
 func (f *useFix) advance(d time.Duration) { f.clock.ms.Add(d.Milliseconds()) }
 
-func (f *useFix) use(id string) float64 { return f.m.leaseUseSnapshot()[id] }
+func (f *useFix) use(id string) float64 { return f.m.leaseUseSnapshot()[id].Use }
 
 // cpuProc is a process that uses pct host percent of cpu on the 10-core host
 // and no memory.
@@ -332,9 +331,9 @@ func TestLeaseUse_SnapshotIsACopy(t *testing.T) {
 	f.heldLease("a", resources.ScopeProcess, 100)
 	f.measure([]resources.Proc{cpuProc(100, 1, 10)})
 	got := f.m.leaseUseSnapshot()
-	got["a"] = 99
-	got["zzz"] = 1
-	if again := f.m.leaseUseSnapshot(); !maps.Equal(again, map[string]float64{"a": 10}) {
+	got["a"] = resources.LeaseUsage{Use: 99}
+	got["zzz"] = resources.LeaseUsage{Use: 1}
+	if again := f.m.leaseUseSnapshot(); len(again) != 1 || again["a"].Use != 10 {
 		t.Fatalf("snapshot = %v after the caller edited its copy", again)
 	}
 	if empty := newUseFix(t).m.leaseUseSnapshot(); empty == nil || len(empty) != 0 {
