@@ -105,6 +105,11 @@ const KINDS: [string, string | null][] = [
   ["cat <<'END X'\ndata\nEND X\nnpx vitest run", 'test-full'],
   ["cat <<\"E E\"\nnpx vitest run\nE E", null],
   ['# npx vitest run\nls', null],
+  // a quoted heredoc's body and a comment hold no substitution that runs (the real edit scripts are full of backticks)
+  ["python3 - <<'EOF'\ns = 'run `go test ./...` here'\nEOF", null],
+  ['ls # $(npx vitest run)', null],
+  ["cat <<'EOF'\n$(go vet ./...)\nEOF\necho $(go vet ./...)", 'lint-full'],
+  ['cat <<EOF\n$(go vet ./...)\nEOF', 'lint-full'],
   ['ls # ; npx vitest run', null],
   ['echo a#b && npx vitest run', 'test-full'],
 ]

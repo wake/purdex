@@ -24,7 +24,8 @@ function scan(cmd) {
   let cur = null // {text, start, end, redirect}
   let quote = ''
   let background = false
-  const heredocs = [] // {delim, strip} awaiting the next newline
+  const heredocs = [] // {delim, strip, quoted} awaiting the next newline
+  const masks = [] // [from, to) of text that is data (a quoted heredoc's body, a comment): substitutions() must not read it
 
   const endWord = (i) => {
     if (cur) {
@@ -67,6 +68,7 @@ function scan(cmd) {
     if (c === '\n') {
       endSegment(i)
       for (const h of heredocs.splice(0)) {
+        const from = i + 1
         // the body: lines up to one that is the delimiter; none of it is a command
         for (;;) {
           const nl = cmd.indexOf('\n', i + 1)
@@ -74,11 +76,17 @@ function scan(cmd) {
           i = nl < 0 ? cmd.length : nl
           if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delim || nl < 0) break
         }
+        if (h.quoted) masks.push([from, i])
       }
       continue
     }
     if (c === ';') { endSegment(i); continue }
-    if (c === '#' && !cur) { while (i + 1 < cmd.length && cmd[i + 1] !== '\n') i++; continue }
+    if (c === '#' && !cur) {
+      const from = i
+      while (i + 1 < cmd.length && cmd[i + 1] !== '\n') i++
+      masks.push([from, i + 1])
+      continue
+    }
     if (c === '>' || c === '<') {
       // an unquoted redirection ends the word before it (`run>out`), but keeps a file descriptor
       // (`2>`) and the operator it is building (`>>`, `<<`)
@@ -89,16 +97,17 @@ function scan(cmd) {
         if (strip) j++
         while (cmd[j] === ' ' || cmd[j] === '\t') j++
         let delim = ''
+        let quoted = false
         // a shell word: quotes group (and keep their spaces), a backslash escapes, the rest ends at a separator
         for (let q = ''; j < cmd.length; j++) {
           const d = cmd[j]
           if (q) { if (d === q) q = ''; else delim += d; continue }
-          if (d === "'" || d === '"') { q = d; continue }
-          if (d === '\\' && j + 1 < cmd.length) { delim += cmd[++j]; continue }
+          if (d === "'" || d === '"') { q = d; quoted = true; continue }
+          if (d === '\\' && j + 1 < cmd.length) { delim += cmd[++j]; quoted = true; continue }
           if (' \t\n;|&()<>'.includes(d)) break
           delim += d
         }
-        heredocs.push({ delim, strip })
+        heredocs.push({ delim, strip, quoted })
       }
       push(c, i)
       cur.redirect = true
@@ -124,6 +133,10 @@ function scan(cmd) {
   if (quote !== '') return null
   endSegment(cmd.length)
   if (background) return null
+  // a copy of the command with the data spans blanked, the same length, for the substitution search
+  let masked = cmd
+  for (const [a, b] of masks) masked = masked.slice(0, a) + ' '.repeat(b - a) + masked.slice(b)
+  segments.masked = masked
   return segments
 }
 
@@ -292,7 +305,7 @@ function classifyKind(cmd, depth) {
     if (k && k !== 'wrapped' && (best === null || ORDER.indexOf(k) < ORDER.indexOf(best))) best = k
   }
   for (const s of segs) consider(kindOf(commandOf(s), depth))
-  if (depth < 3) for (const inner of substitutions(cmd)) consider(classifyKind(inner, depth + 1))
+  if (depth < 3) for (const inner of substitutions(segs.masked)) consider(classifyKind(inner, depth + 1))
   return best
 }
 
