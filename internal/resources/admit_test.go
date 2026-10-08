@@ -52,7 +52,7 @@ func TestAdmit_Table(t *testing.T) {
 	for name, c := range map[string]struct {
 		host    HostUse
 		leases  []Lease
-		use     map[string]float64
+		use     map[string]LeaseUsage
 		waiters []Waiter
 		want    string
 	}{
@@ -105,7 +105,7 @@ func TestAdmit_DecisionRecordsTheState(t *testing.T) {
 	s := DefaultSettings()
 	host := HostUse{Measured: 69, Load1: 6.9, NCPU: 10, Mem: 40}
 	leases := []Lease{lease("a", 35, time.Hour, 20, 5)}
-	use := map[string]float64{"a": 25}
+	use := map[string]LeaseUsage{"a": {CPU: 25, Use: 25}}
 	fresh := Waiter{ID: "w1", Weight: 35, EnqueuedAt: t0, Fresh: true}
 	old := Waiter{ID: "w2", Weight: 10, EnqueuedAt: t0.Add(-4 * time.Second)}
 	gs := Admit(host, leases, use, []Waiter{fresh, old}, t0, s)
@@ -131,7 +131,7 @@ func TestAdmit_DecisionRecordsTheState(t *testing.T) {
 // made it wait.
 func TestAdmit_WouldWaitR2WhileR9Grants(t *testing.T) {
 	s := DefaultSettings()
-	gs := Admit(HostUse{Measured: 80}, []Lease{lease("a", 35, time.Hour, 20, 5)}, map[string]float64{"a": 20},
+	gs := Admit(HostUse{Measured: 80}, []Lease{lease("a", 35, time.Hour, 20, 5)}, map[string]LeaseUsage{"a": {CPU: 20, Use: 20}},
 		[]Waiter{{ID: "w", Weight: 35, EnqueuedAt: t0, Fresh: true}}, t0, s)
 	if len(gs) != 1 || !gs[0].WouldWaitR2 || gs[0].Unleased != 60 {
 		t.Fatalf("grants = %+v", gs)
@@ -141,7 +141,7 @@ func TestAdmit_WouldWaitR2WhileR9Grants(t *testing.T) {
 func TestAdmit_UnleasedNeverNegativeAndUnavailableHost(t *testing.T) {
 	s := DefaultSettings()
 	// leaseUse above the host figure: unleased is 0, not negative.
-	gs := Admit(HostUse{Measured: 10}, []Lease{lease("a", 35, time.Hour, 30, 5)}, map[string]float64{"a": 30},
+	gs := Admit(HostUse{Measured: 10}, []Lease{lease("a", 35, time.Hour, 30, 5)}, map[string]LeaseUsage{"a": {CPU: 30, Use: 30}},
 		[]Waiter{waiter("w", 10)}, t0, s)
 	if len(gs) != 1 || gs[0].Unleased != 0 {
 		t.Errorf("unleased = %+v", gs)
@@ -149,5 +149,42 @@ func TestAdmit_UnleasedNeverNegativeAndUnavailableHost(t *testing.T) {
 	// An unavailable sample is an all-zero HostUse: leases still queue against each other.
 	if gs := Admit(HostUse{}, []Lease{lease("a", 60, time.Hour, 60, 5)}, nil, []Waiter{waiter("w", 45)}, t0, s); len(gs) != 0 {
 		t.Errorf("an unavailable host must not let 60 + 45 through: %+v", gs)
+	}
+}
+
+// Two leases that stress different resources do not add up by their Use:
+// 30 % CPU and 30 % memory leave host.Measured 30 unexplained by neither.
+func TestAdmit_UnleasedAddsCPUAndMemSeparately(t *testing.T) {
+	s := DefaultSettings()
+	leases := []Lease{lease("a", 35, time.Hour, 30, 5), lease("b", 35, time.Hour, 30, 5)}
+	use := map[string]LeaseUsage{"a": {CPU: 30, Use: 30}, "b": {Mem: 30, Use: 30}}
+	gs := Admit(HostUse{Measured: 40}, leases, use, []Waiter{waiter("w", 10)}, t0, s)
+	if len(gs) != 1 || gs[0].Unleased != 10 { // 40 − max(30, 30), not 40 − 60 -> 0
+		t.Fatalf("grants = %+v", gs)
+	}
+}
+
+// A total that is mathematically exactly 100 fits, whatever the float sum says,
+// for R9 and for the pre-R9 comparison alike.
+func TestAdmit_ExactCapacityFits(t *testing.T) {
+	s := DefaultSettings()
+	long := time.Hour
+	// Charges 0.2 + 64.4 + 15.4 = 80, plus 20 is 100 (summed in float it is 100.00000000000001).
+	leases := []Lease{lease("a", 1, long, 0.2, 5), lease("b", 100, long, 64.4, 5), lease("c", 30, long, 15.4, 5)}
+	s.FloorPct = intp(0)
+	gs := Admit(HostUse{}, leases, nil, []Waiter{waiter("w", 20)}, t0, s)
+	if len(gs) != 1 || gs[0].WouldWaitR2 {
+		t.Fatalf("grants = %+v", gs)
+	}
+}
+
+// A waiter that fits when its deadline arrives is granted by the ordinary
+// rule: not an overrun (the count means "let through although it did not fit").
+func TestAdmit_FitAtDeadlineIsNotAnOverrun(t *testing.T) {
+	s := DefaultSettings()
+	w := Waiter{ID: "w", Weight: 35, EnqueuedAt: t0.Add(-time.Minute), Deadline: t0}
+	gs := Admit(HostUse{}, nil, nil, []Waiter{w}, t0, s)
+	if len(gs) != 1 || gs[0].Overrun || gs[0].Path != PathWaited {
+		t.Fatalf("grants = %+v", gs)
 	}
 }

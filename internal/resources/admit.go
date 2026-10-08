@@ -7,6 +7,10 @@ import (
 // Admission (spec D-2, R9): pure functions. The caller reads the store, the
 // host figures and the clock; nothing here does I/O.
 
+// capEpsilon absorbs float noise in the sums (EWMA charges are fractions): a
+// total that is mathematically exactly Capacity must fit.
+const capEpsilon = 1e-9
+
 // Decision paths (D-8.1).
 const (
 	PathImmediate = "immediate" // granted by the pass that first saw the request
@@ -79,36 +83,40 @@ func Charge(l Lease, now time.Time, s Settings) float64 {
 // (D-2). A waiter of weight w is granted when Σ charge + w ≤ Capacity and the
 // host is not full; a waiter heavier than Capacity when no lease is active
 // (and the host is not full); a waiter whose Deadline has passed is granted
-// whatever the state, as an overrun (R6). A waiter that does not fit is
+// whatever the state (R6). The grant is flagged Overrun only when it did not
+// fit: a waiter that fits at its deadline is granted by the ordinary rule, so
+// the overrun count means "let through although the rule said wait". A waiter that does not fit is
 // skipped and a later, lighter one may still fit (D-3). Each grant is added to
 // the sum for the rest of the walk, and counts as an active lease for the
 // oversize rule, so two oversize requests are never granted together.
 //
-// leaseUse is each held lease's latest raw measured use (host percent);
-// unleased = host.Measured − Σ leaseUse[leases], never below 0, is only
-// recorded. A host sample that is unavailable arrives as an all-zero HostUse
+// leaseUse is each held lease's latest raw measurement (CPU and Mem, host
+// percent; a lease's Use is a maximum and does not add up). Unleased =
+// host.Measured − max(Σ CPU, Σ Mem) over the held leases, never below 0, is
+// only recorded. A host sample that is unavailable arrives as an all-zero HostUse
 // (not full, nothing measured): the leases then queue against each other and
 // deadlines still overrun.
-func Admit(host HostUse, leases []Lease, leaseUse map[string]float64, waiters []Waiter, now time.Time, s Settings) []Grant {
+func Admit(host HostUse, leases []Lease, leaseUse map[string]LeaseUsage, waiters []Waiter, now time.Time, s Settings) []Grant {
 	sum := 0.0
-	var leased float64
+	var cpu, mem float64
 	for _, l := range leases {
 		sum += Charge(l, now, s)
-		leased += leaseUse[l.ID]
+		cpu += leaseUse[l.ID].CPU
+		mem += leaseUse[l.ID].Mem
 	}
-	unleased := max(0, float64(host.Measured)-leased)
+	unleased := max(0, float64(host.Measured)-max(cpu, mem))
 	active := len(leases)
 
 	var out []Grant
 	for _, w := range waiters {
 		weight := float64(w.Weight)
 		oversize := w.Weight > Capacity
-		fits := !host.Full && ((!oversize && sum+weight <= Capacity) || (oversize && active == 0))
+		fits := !host.Full && ((!oversize && sum+weight <= Capacity+capEpsilon) || (oversize && active == 0))
 		overrun := !w.Deadline.IsZero() && !now.Before(w.Deadline)
 		if !fits && !overrun {
 			continue
 		}
-		fitsR2 := (!oversize && sum+unleased+weight <= Capacity) || (oversize && active == 0)
+		fitsR2 := (!oversize && sum+unleased+weight <= Capacity+capEpsilon) || (oversize && active == 0)
 		path := PathWaited
 		switch {
 		case !fits:
