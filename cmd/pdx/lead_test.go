@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -400,6 +401,9 @@ func TestRunLeadCmd_UsageErrorsExit2BeforeConfig(t *testing.T) {
 		{"wait over cap", []string{"request", "--reason", "x", "--wait", "11m"}},
 		{"unknown flag", []string{"request", "--reason", "x", "--bogus"}},
 		{"leftover positional", []string{"request", "--reason", "x", "extra"}},
+		{"name over 64 bytes", []string{"request", "--reason", "x", "--name", strings.Repeat("a", 65)}},
+		{"name with a control character", []string{"request", "--reason", "x", "--name", "a\x07b"}},
+		{"name with an ideographic space", []string{"request", "--reason", "x", "--name", "a　b"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -509,6 +513,65 @@ func TestRunLeadCmd_DefaultsLeaveMaxMembersAndRootsToDaemon(t *testing.T) {
 		if len(creates) != 1 || creates[0].MaxMembers != 0 || creates[0].Roots != nil {
 			t.Errorf("%v: create body = %+v, want max_members 0 and no roots", args, creates)
 		}
+	}
+}
+
+// D-N2: --name is trimmed and sent as team_name; no --name (or a blank one)
+// leaves the key out of the body altogether (omitempty, D-N1).
+func TestRunLeadCmd_NameReachesTheRequestBody(t *testing.T) {
+	for _, tc := range []struct {
+		args    []string
+		want    string
+		wantKey bool
+	}{
+		{[]string{"--reason", "r", "--name", "  驗收 team  "}, "驗收 team", true},
+		{[]string{"--reason", "r", "--name", strings.Repeat("a", 64)}, strings.Repeat("a", 64), true},
+		{[]string{"--reason", "r", "--name", "   "}, "", false},
+		{[]string{"--reason", "r"}, "", false},
+	} {
+		var body []byte
+		d := newFakeTeamDaemon(team.Approval{State: team.StateApproved, Grant: &team.Grant{MaxMembers: 3}})
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == "/api/team/approvals" {
+				body, _ = io.ReadAll(r.Body)
+				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
+			d.ServeHTTP(w, r)
+		})
+		if code, _, stderr := driveLead(t, context.Background(), h, tc.args...); code != ExitOK {
+			t.Fatalf("%v: code=%d stderr=%q", tc.args, code, stderr)
+		}
+		creates, _, _, _ := d.snapshot()
+		if len(creates) != 1 || creates[0].TeamName != tc.want {
+			t.Errorf("%v: team_name = %+v, want %q", tc.args, creates, tc.want)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(body, &raw); err != nil {
+			t.Fatalf("%v: body %q: %v", tc.args, body, err)
+		}
+		if _, has := raw["team_name"]; has != tc.wantKey {
+			t.Errorf("%v: body %s has team_name = %v, want %v", tc.args, body, has, tc.wantKey)
+		}
+	}
+}
+
+// An invalid --name is refused as a usage error (exit 2) before any HTTP
+// call, with the same usage line as the other bad flags.
+func TestRunLeadCmd_InvalidNameExits2BeforeAnyHTTPCall(t *testing.T) {
+	d := newFakeTeamDaemon(team.Approval{State: team.StateApproved})
+	code, stdout, stderr := driveLead(t, context.Background(), d, "--reason", "r", "--name", strings.Repeat("a", 65))
+	if code != ExitUsage || stdout != "" || !strings.Contains(stderr, "--name") || !strings.Contains(stderr, "usage: pdx lead request") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	creates, polls, deletes, auths := d.snapshot()
+	if len(creates)+len(polls)+len(deletes)+len(auths) != 0 {
+		t.Errorf("daemon saw creates=%v polls=%v deletes=%v auths=%v, want nothing", creates, polls, deletes, auths)
+	}
+}
+
+func TestLeadUsage_MentionsName(t *testing.T) {
+	if !strings.Contains(leadUsage, "[--name <team name>]") {
+		t.Errorf("leadUsage = %q, want [--name <team name>]", leadUsage)
 	}
 }
 
@@ -626,6 +689,26 @@ func TestRunLeadCmd_ApprovedWithoutGrantFallsBackToPayload(t *testing.T) {
 	code, stdout, _ := driveLead(t, context.Background(), d, "--reason", "r")
 	if code != ExitOK || !strings.Contains(stdout, `"max_members":3`) || !strings.Contains(stdout, `"/w"`) {
 		t.Fatalf("code=%d stdout=%q", code, stdout)
+	}
+}
+
+// The older-daemon fallback (no grant on the closed approval) carries the
+// requested name too, so the printed grant is the same shape.
+func TestRunLeadCmd_ApprovedWithoutGrantFallsBackToPayloadWithName(t *testing.T) {
+	payload, _ := json.Marshal(team.LeadPayload{Reason: "r", MaxMembers: 3, TeamName: "驗收 team"})
+	d := newFakeTeamDaemon(team.Approval{State: team.StateApproved, Payload: payload})
+	code, stdout, _ := driveLead(t, context.Background(), d, "--reason", "r", "--name", "驗收 team")
+	var out struct {
+		Grant team.Grant `json:"grant"`
+	}
+	if code != ExitOK || json.Unmarshal([]byte(stdout), &out) != nil || out.Grant.TeamName == nil || *out.Grant.TeamName != "驗收 team" {
+		t.Fatalf("code=%d stdout=%q", code, stdout)
+	}
+	// No name in the payload: the grant carries no team_name key.
+	payload, _ = json.Marshal(team.LeadPayload{Reason: "r", MaxMembers: 3})
+	d = newFakeTeamDaemon(team.Approval{State: team.StateApproved, Payload: payload})
+	if _, stdout, _ := driveLead(t, context.Background(), d, "--reason", "r"); strings.Contains(stdout, "team_name") {
+		t.Errorf("stdout = %q, want no team_name key", stdout)
 	}
 }
 

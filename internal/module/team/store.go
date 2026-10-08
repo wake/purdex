@@ -117,6 +117,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (usage): %w", err)
 	}
+	if err := migrateTeamName(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (team name): %w", err)
+	}
 	return &Store{db: db}, nil
 }
 

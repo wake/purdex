@@ -50,14 +50,21 @@ func leadGrantOf(a team.Approval) (team.Grant, error) {
 	if err := json.Unmarshal(a.Payload, &p); err != nil {
 		return team.Grant{}, fmt.Errorf("lead row %s: decode payload: %w", a.ID, err)
 	}
-	return team.Grant{MaxMembers: p.MaxMembers, Roots: p.Roots}, nil
+	name := p.TeamName // a copy: the grant owns its pointer
+	return team.Grant{MaxMembers: p.MaxMembers, Roots: p.Roots, TeamName: &name}, nil
 }
 
 // leadTeamOf is the team a lead row's approval creates (spec §7.1); its id
-// is the request's id (plan v3 deviation 1).
+// is the request's id (plan v3 deviation 1). The team's current name starts
+// as the grant's approved one (D-N5); a grant without a name (nil: a
+// caller that never went through leadGrantOf) is an unnamed team.
 func leadTeamOf(a team.Approval, g team.Grant, at int64) team.Team {
+	name := ""
+	if g.TeamName != nil {
+		name = *g.TeamName
+	}
 	return team.Team{ID: a.ID, HostID: a.HostID, LeadSessionID: a.Origin.SessionID, LeadRef: a.Origin.Ref,
-		Grant: g, RequestID: a.ID, CreatedAt: at}
+		TeamName: name, Grant: g, RequestID: a.ID, CreatedAt: at}
 }
 
 // teamNote is the decision log line's suffix for an approval that created
@@ -66,7 +73,11 @@ func teamNote(a team.Approval) string {
 	if a.Kind != team.KindLead || a.State != team.StateApproved || a.Grant == nil {
 		return ""
 	}
-	return fmt.Sprintf("; team %s created (max_members %d, roots %v)", a.ID, a.Grant.MaxMembers, a.Grant.Roots)
+	name := ""
+	if a.Grant.TeamName != nil && *a.Grant.TeamName != "" {
+		name = fmt.Sprintf(" %q", *a.Grant.TeamName)
+	}
+	return fmt.Sprintf("; team %s%s created (max_members %d, roots %v)", a.ID, name, a.Grant.MaxMembers, a.Grant.Roots)
 }
 
 // afterApproved runs once for every close that won as approved, on every

@@ -141,6 +141,7 @@ func isCanonicalUUIDv4(s string) bool {
 type Team struct {
 	ID            string `json:"id"`
 	HostID        string `json:"host_id"`
+	TeamName      string `json:"team_name"`       // the team's current name; always present, "" = none
 	LeadSessionID string `json:"lead_session_id"` // follows the lead through its relays (§8.4)
 	LeadRef       string `json:"lead_ref"`        // "_xxxxxx", moves with LeadSessionID
 	Grant         Grant  `json:"grant"`

@@ -77,7 +77,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 	alias, _ := m.selfHost()
 	out := team.Roster{Teams: make([]team.TeamRoster, 0, len(teams))}
 	for i, t := range teams {
-		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, CreatedAt: t.CreatedAt,
+		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, TeamName: t.TeamName, CreatedAt: t.CreatedAt,
 			Lead: m.rosterLead(t.Team, origins, alias, t.leadUsage), Members: []team.RosterMember{}}
 		for _, mr := range active[i] {
 			s := rosterSession(origins, mr.SessionID, func() team.RosterSession {
