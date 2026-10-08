@@ -62,4 +62,63 @@ describe('useMultiHostEventWs team.unattended', () => {
     expect(useUnattendedStore.getState().byHost[HOST]?.state).toEqual(on)
     view.unmount()
   })
+
+  // A frame is bound to the host identity its connection was made for (PU-2a review). Between a host-store change
+  // and the effect that closes the old socket, unattended-support.ts has already forgotten the entry; a frame still
+  // queued on the old socket must not rebuild it (support 'yes', the old daemon's switch).
+  const snapshotOff = { op: 'snapshot', state: { on: false, since: 0, changed_at: 0 } }
+  const changedOn = { op: 'changed', state: { on: true, since: 9_000, changed_at: 9_000 } }
+
+  it('after a re-point, a frame queued on the old socket does not write; the new connection\'s frames do', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    const old = sockets[0]
+    act(() => { old.emit(frame(snapshotOff)) })
+    expect(useUnattendedStore.getState().byHost[HOST]).toBeDefined()
+    act(() => {
+      useHostStore.setState((s) => ({ hosts: { ...s.hosts, [HOST]: { ...s.hosts[HOST], ip: '5.6.7.8' } } }))
+      useUnattendedStore.getState().forgetHost(HOST) // what unattended-support.ts does on the same store change
+      old.emit(frame(changedOn)) // before the effect closes the old socket
+    })
+    expect(useUnattendedStore.getState().byHost[HOST]).toBeUndefined()
+    await waitFor(() => expect(sockets).toHaveLength(2))
+    act(() => { sockets[1].emit(frame(snapshotOff)) })
+    expect(useUnattendedStore.getState().byHost[HOST]).toEqual({ support: 'yes', state: snapshotOff.state })
+    view.unmount()
+  })
+
+  it('after a removal, a frame queued on the old socket does not write', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    const old = sockets[0]
+    act(() => { old.emit(frame(snapshotOff)) })
+    act(() => {
+      useHostStore.setState({ hosts: {}, hostOrder: [] })
+      useUnattendedStore.getState().forgetHost(HOST)
+      old.emit(frame(changedOn))
+    })
+    expect(useUnattendedStore.getState().byHost[HOST]).toBeUndefined()
+    act(() => { old.emit(frame(changedOn)) }) // and after the effect closed it
+    expect(useUnattendedStore.getState().byHost[HOST]).toBeUndefined()
+    view.unmount()
+  })
+
+  it('removed and added again under the same id: the old connection\'s frames do not write, the new one\'s do', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    const old = sockets[0]
+    const config = useHostStore.getState().hosts[HOST]
+    act(() => { old.emit(frame(snapshotOff)) })
+    act(() => {
+      useHostStore.setState({ hosts: {}, hostOrder: [] })
+      useUnattendedStore.getState().forgetHost(HOST)
+    })
+    act(() => { useHostStore.setState({ hosts: { [HOST]: config }, hostOrder: [HOST] }) })
+    await waitFor(() => expect(sockets).toHaveLength(2))
+    act(() => { old.emit(frame(changedOn)) })
+    expect(useUnattendedStore.getState().byHost[HOST]).toBeUndefined()
+    act(() => { sockets[1].emit(frame(snapshotOff)) })
+    expect(useUnattendedStore.getState().byHost[HOST]).toEqual({ support: 'yes', state: snapshotOff.state })
+    view.unmount()
+  })
 })
