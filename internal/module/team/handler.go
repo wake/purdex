@@ -435,6 +435,16 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 				}
 				g.Roots = roots
 			}
+			// D-N3: an absent key keeps the requested name (an older App
+			// never wipes it); present, "" clears it.
+			if req.Grant.TeamName != nil {
+				name, err := team.NormaliseTeamName(*req.Grant.TeamName)
+				if err != nil {
+					m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "team_name: "+err.Error(), nil)
+					return
+				}
+				g.TeamName = &name
+			}
 		}
 		grant = &g
 	}
