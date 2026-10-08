@@ -96,6 +96,16 @@ type Module struct {
 	lastPrune   time.Time
 	viewFailing bool
 
+	// Per-lease use (leaseuse.go). leaseUse is the latest raw measured use of
+	// each held lease in host percent, guarded by useMu; useAt, measureNote
+	// and lastProcs' writer are the sampler goroutine's own. lastProcs is the
+	// process list of the last good sample, shared read-only.
+	useMu       sync.Mutex
+	leaseUse    map[string]resources.LeaseUsage
+	useAt       map[string]time.Time
+	measureNote string
+	lastProcs   atomic.Pointer[[]resources.Proc]
+
 	// runCtx ends when Stop is called; it is made in New so that a Stop
 	// before Start still keeps a later Start from running.
 	runCtx    context.Context
