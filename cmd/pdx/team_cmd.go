@@ -496,6 +496,11 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 	if quiet, _, ok := teamSetup("team", *cfgPath, getenv, io.Discard, clientOpts); ok {
 		shares = teamHostShares(ctx, quiet)
 	}
+	// D-N9: the team's name, when it has one, on a line of its own above the
+	// table; sanitised like a table cell, since it is printed into a terminal.
+	if v.Team.TeamName != "" {
+		fmt.Fprintf(stdout, "team: %s\n", sanitizeCell(v.Team.TeamName))
+	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ADDRESS\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tCWD\tTMUX")
 	for _, m := range v.Members {

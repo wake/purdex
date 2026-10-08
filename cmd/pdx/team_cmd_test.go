@@ -608,6 +608,34 @@ func TestTeamCmd_TableShowsModelAndEffort(t *testing.T) {
 	}
 }
 
+// D-N9: a named team prints `team: <name>` on its own line above the table;
+// an unnamed one prints nothing extra. The name goes through the same
+// sanitising the table cells use.
+func TestTeamCmd_TeamNameLineAboveTheTable(t *testing.T) {
+	v := fakeView()
+	v.Team.TeamName = "驗收 team"
+	d := &fakeTeamCmdDaemon{view: answer{body: v}}
+	code, stdout, stderr := driveTeamCmd(t, runTeamCmd, d)
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	if code != ExitOK || len(lines) != 4 || lines[0] != "team: 驗收 team" || !strings.HasPrefix(lines[1], "ADDRESS") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	v.Team.TeamName = "a\x1b[31mb"
+	d = &fakeTeamCmdDaemon{view: answer{body: v}}
+	_, stdout, _ = driveTeamCmd(t, runTeamCmd, d)
+	if first := strings.SplitN(stdout, "\n", 2)[0]; first != `team: a\x1b[31mb` || strings.ContainsRune(stdout, 0x1b) {
+		t.Errorf("first line = %q, want the escaped name and no raw ESC in %q", first, stdout)
+	}
+
+	// No name: the output starts with the table header, as before.
+	d = &fakeTeamCmdDaemon{view: answer{body: fakeView()}}
+	_, stdout, _ = driveTeamCmd(t, runTeamCmd, d)
+	if strings.Contains(stdout, "team:") || !strings.HasPrefix(stdout, "ADDRESS") {
+		t.Errorf("unnamed team: stdout = %q, want the table alone", stdout)
+	}
+}
+
 // --json prints the daemon's view as is, one line; not_lead is exit 13; a
 // stray argument is exit 2.
 func TestTeamCmd_JSONAndNotLead(t *testing.T) {
@@ -617,6 +645,15 @@ func TestTeamCmd_JSONAndNotLead(t *testing.T) {
 	if code != ExitOK || strings.Count(stdout, "\n") != 1 || json.Unmarshal([]byte(stdout), &v) != nil ||
 		len(v.Members) != 2 || v.Members[0].Context.ModelID != "claude-sonnet-4-5" || v.Members[1].Model != "opus" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	// --json is the daemon's view whatever the name: no `team:` line, the name
+	// rides in team.team_name as is.
+	named := fakeView()
+	named.Team.TeamName = "驗收 team"
+	d = &fakeTeamCmdDaemon{view: answer{body: named}}
+	code, stdout, stderr = driveTeamCmd(t, runTeamCmd, d, "--json")
+	if code != ExitOK || strings.Contains(stdout, "team: ") || json.Unmarshal([]byte(stdout), &v) != nil || v.Team.TeamName != "驗收 team" {
+		t.Errorf("named --json: code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	d = &fakeTeamCmdDaemon{view: answer{status: http.StatusConflict, body: team.APIError{Error: team.ErrNotLead}}}
 	if code, stdout, stderr := driveTeamCmd(t, runTeamCmd, d); code != ExitRefused || stdout != "" || lastToken(stderr) != team.ErrNotLead {
