@@ -2052,5 +2052,16 @@
   "approval.dialog.minimize": "Minimize",
   "approval.pill.label": "{{count}} pending · {{countdown}}",
   "approval.pill.restore": "{{label}}. Click to restore the approval dialog",
-  "approval.pill.announce": "New approval request: {{count}} pending"
+  "approval.pill.announce": "New approval request: {{count}} pending",
+  "unattended.button_off": "Unattended mode: off",
+  "unattended.button_on": "Unattended mode: on",
+  "unattended.button_partial": "Unattended mode: partial",
+  "unattended.on_label": "Unattended",
+  "unattended.tooltip.off": "Unattended mode is off. Press to approve lead and relay requests automatically on every shown host",
+  "unattended.tooltip.on": "Unattended mode is on: lead and relay requests are approved automatically. Press to turn it off",
+  "unattended.tooltip.partial_off": "Off: {{hosts}}",
+  "unattended.tooltip.partial_unreachable": "Unreachable: {{hosts}}",
+  "unattended.tooltip.partial_unsupported": "Daemon too old: {{hosts}}",
+  "unattended.tooltip.none": "No host is shown on this workbench",
+  "unattended.toast.failed": "Could not switch unattended mode: {{hosts}}"
 }
