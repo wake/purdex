@@ -148,13 +148,21 @@ func (m *Module) takeModDirty(now time.Time) map[string]string {
 
 // emitSessionState re-sends sessionName's light when it is not the one
 // already on the wire. It never invents a clear: a session with no frame
-// (the hook SessionEnd or the sweep owns that) is left alone. It holds no
-// lock while it reads the projection or emits; the comparison with
-// lastEmittedLights and the state sync happen under m.mu.
+// (the hook SessionEnd or the sweep owns that) is left alone.
+//
+// The whole read-compare-send runs under emitMu, so a hook emit cannot go
+// out between the projection read and the send: the worker never sends a
+// projection older than the baseline it compares with, and the baseline is
+// recorded only for a frame that went out. emitMu is taken with no other
+// lock held; the projection read, the session code lookup and the broadcast
+// hold nothing else, and m.mu is taken briefly for the baseline.
 func (m *Module) emitSessionState(sessionName, rawEvent string, detail map[string]any) {
 	if m.core == nil || m.core.Events == nil {
 		return
 	}
+	m.emitMu.Lock()
+	defer m.emitMu.Unlock()
+
 	p, err := m.projectionForSession(sessionName)
 	if err != nil || p == nil || p.TopFrame == nil || p.EffectiveStatus() == agentpkg.StatusClear {
 		return
@@ -167,15 +175,18 @@ func (m *Module) emitSessionState(sessionName, rawEvent string, detail map[strin
 	d := lightsDigestOf(p, n)
 
 	m.mu.Lock()
-	if prev, ok := m.lastEmittedLights[sessionName]; ok && prev == d {
-		m.mu.Unlock()
+	prev, ok := m.lastEmittedLights[sessionName]
+	m.mu.Unlock()
+	if ok && prev == d {
 		return
 	}
+	if !m.emitNormalizedToCode(code, n) {
+		return
+	}
+	m.mu.Lock()
 	m.lastEmittedLights[sessionName] = d
 	syncProjectionState(m.currentStatus, m.subagents, sessionName, p)
 	m.mu.Unlock()
-
-	m.emitNormalizedToCode(code, n)
 }
 
 // startModWorker launches the worker and returns once it is in its loop, so

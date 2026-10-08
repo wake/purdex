@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -299,9 +298,7 @@ func (m *Module) broadcastProxyCanonicalized(reference store.Frame) {
 		return
 	}
 	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_canonicalized", nowFn().UnixNano(), agentpkg.DeriveResult{})
-	payload, _ := json.Marshal(normalized)
-	m.core.Events.Broadcast(code, "hook", string(payload))
-	m.recordEmittedLights(sessionName, projection, normalized)
+	m.emitRecorded(code, sessionName, projection, normalized)
 }
 
 // findCanonicalAncestor walks descendant's PPID chain looking for a
@@ -472,9 +469,7 @@ func (m *Module) broadcastProxyPruned(reference store.Frame) {
 		return
 	}
 	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_pruned", nowFn().UnixNano(), agentpkg.DeriveResult{})
-	payload, _ := json.Marshal(normalized)
-	m.core.Events.Broadcast(code, "hook", string(payload))
-	m.recordEmittedLights(sessionName, projection, normalized)
+	m.emitRecorded(code, sessionName, projection, normalized)
 }
 
 // clearFrame is the eager delete path used for pid_dead / pid_reused sweeps
@@ -582,8 +577,6 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit)
 	}
 	normalized := buildProjectionNormalized(freshProjection, frame.AgentType, "sweep:"+reason, nowFn().UnixNano(), agentpkg.DeriveResult{Status: agentpkg.StatusClear})
 	attachExit(&normalized, exit)
-	payload, _ := json.Marshal(normalized)
-	m.core.Events.Broadcast(code, "hook", string(payload))
-	m.recordEmittedLights(sessionName, freshProjection, normalized)
+	m.emitRecorded(code, sessionName, freshProjection, normalized)
 	return cleanupErr
 }

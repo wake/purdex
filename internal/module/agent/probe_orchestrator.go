@@ -273,7 +273,7 @@ func (args probeGuardArgs) effectivePostGraceWindow() time.Duration {
 //  4. Final critical section: m.mu Lock → StaleCheck re-check + ErrorGuard +
 //     transition gate; mutate currentStatus on pass.
 //  5. Broadcast: setProjectionTopStatus + buildProjectionNormalized +
-//     broadcastToSession (with NormalizedEvent fallback when the projection
+//     broadcastRecorded (with NormalizedEvent fallback when the projection
 //     is unavailable).
 //
 // Returns applied=true iff step 4 mutated currentStatus and step 5 broadcast
@@ -395,8 +395,7 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 	}
 	if projection, err := m.setProjectionTopStatus(args.Session, newStatus); err == nil && projection != nil {
 		normalized := buildProjectionNormalized(projection, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{})
-		m.broadcastToSession(args.Session, normalized)
-		m.recordEmittedLights(args.Session, projection, normalized)
+		m.broadcastRecorded(args.Session, projection, normalized)
 		return true, newStatus
 	}
 	// Fallback when the projection is unavailable (e.g. frames row removed
@@ -408,7 +407,7 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 		RawEventName: args.Reason,
 		BroadcastTs:  time.Now().UnixNano(),
 	}
-	m.broadcastToSession(args.Session, normalized)
+	m.broadcastRecorded(args.Session, nil, normalized)
 	return true, newStatus
 }
 

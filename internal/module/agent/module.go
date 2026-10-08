@@ -56,6 +56,9 @@ type Module struct {
 	// frame sent for it (hook, probe, sweep or mod worker). The mod worker
 	// emits only when its fresh digest differs. Protected by m.mu.
 	lastEmittedLights map[string]lightsDigest
+	// emitMu orders "broadcast a light frame and record its baseline" (see
+	// modemit.go). Total lock order: emitMu → mu → modMu.
+	emitMu sync.Mutex
 
 	// W6-3 P1-T4: ProbeIntent dispatcher state. activeProbeIntents and
 	// probeIntentGen are protected by m.mu (same mutex as activeWatchers).
