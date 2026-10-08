@@ -139,6 +139,9 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	m.stateMu.Lock()
 	got, created, err := m.store.Create(row)
 	m.stateMu.Unlock()
+	if err == nil && created {
+		m.requestEvent() // a new waiter shows in the queue
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "create lease: "+err.Error())
 		return

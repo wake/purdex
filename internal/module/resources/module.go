@@ -111,6 +111,9 @@ type Module struct {
 	// uses them (for the leases' charge) instead of reading the settings store
 	// per request.
 	lastSettings atomic.Pointer[resources.Settings]
+	// evSig carries requestEvent's signal to the publisher goroutine
+	// (events.go); capacity 1, so any number of requests are one.
+	evSig chan struct{}
 	// skipPass makes admissionPass a no-op (a test seam).
 	skipPass    bool
 	lastPrune   time.Time
@@ -149,6 +152,7 @@ func New() *Module {
 		runCtx:       runCtx,
 		stopRun:      stopRun,
 		gen:          make(chan struct{}),
+		evSig:        make(chan struct{}, 1),
 		sweepEvery:   sweepInterval,
 	}
 }
@@ -161,6 +165,7 @@ func (m *Module) wake() {
 	defer m.genMu.Unlock()
 	close(m.gen)
 	m.gen = make(chan struct{})
+	m.requestEvent() // a grant or an end is worth an event
 }
 
 // genChan is the channel the next wake closes. A poller takes it before it
@@ -187,6 +192,9 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.openStore(c)
 	m.findSettings(c)
+	if c.Events != nil {
+		c.Events.OnSubscribe(m.sendEventSnapshot)
+	}
 	if m.roots != nil {
 		return nil
 	}
@@ -267,6 +275,8 @@ func (m *Module) Start(context.Context) error {
 		m.wg.Add(1)
 		go m.runSweeper(m.runCtx) // after the boot reconcile and the sampler
 	}
+	m.wg.Add(1)
+	go m.runEvents(m.runCtx)
 	return nil
 }
 

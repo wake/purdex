@@ -130,6 +130,8 @@ func (m *Module) sweepLeases(now time.Time, set resources.Settings, view procVie
 			reason = resources.EndHolderGone
 		case now.Sub(time.UnixMilli(r.GrantedAt)) >= maxHold:
 			reason = resources.EndExpired
+		case vanished(r, now, set):
+			reason = resources.EndVanished
 		}
 		if reason == "" {
 			continue
@@ -226,4 +228,18 @@ func (m *Module) passIfWaiting(ctx context.Context) {
 		return
 	}
 	m.admissionPass(ctx, "")
+}
+
+// emptySamplesToVanish is how many samples in a row a session-new lease's
+// tracked tree must have been empty before the lease counts as vanished.
+const emptySamplesToVanish = 2
+
+// vanished is the rule that catches a mod that crashed between acquire and
+// release (spec D-4, plan Task 1.5): a session-new lease past its warmup whose
+// tracked tree was empty for two samples in a row. It can end only a lease
+// with nothing running under it; while a process of the command exists the
+// count is back at 0. A process-scope lease is judged by its holder alone.
+func vanished(r leaseRow, now time.Time, set resources.Settings) bool {
+	return r.Scope == resources.ScopeSessionNew && r.EmptySamples >= emptySamplesToVanish &&
+		now.Sub(time.UnixMilli(r.GrantedAt)) >= set.Warmup()
 }
