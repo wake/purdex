@@ -53,6 +53,17 @@ type hookEdge struct {
 // as at or after the hook: a tie goes to the mod.
 func (e hookEdge) atMs() time.Time { return e.at.Truncate(time.Millisecond) }
 
+// markAt is a stream's StatusEventAt as the edge's readers see it at now. A mark
+// later than the clock was left by a wall clock that has since gone back (the
+// next mod event starts it over, lights.StreamState.Apply); until then it counts
+// as zero, so it cannot hold an edge down.
+func markAt(statusEventAt, now time.Time) time.Time {
+	if statusEventAt.After(now) {
+		return time.Time{}
+	}
+	return statusEventAt
+}
+
 // setHookEdge records frameID's edge unless a newer one is already there
 // (hooks of one process are applied out of order now and then), the frame's
 // last SessionStart arrived at or after the hook (hookEdgeClearedAt: a Stop of
@@ -72,7 +83,7 @@ func (m *Module) setHookEdge(frameID string, e hookEdge) {
 	if cur, ok := m.hookEdge[frameID]; ok && cur.at.After(e.at) {
 		return
 	}
-	if st := m.modStreams[m.modBySID[e.sid]]; st != nil && st.SID == e.sid && !st.StatusEventAt.Before(e.atMs()) {
+	if st := m.modStreams[m.modBySID[e.sid]]; st != nil && st.SID == e.sid && !markAt(st.StatusEventAt, m.modClock()).Before(e.atMs()) {
 		return
 	}
 	if m.hookEdge == nil {
@@ -156,7 +167,7 @@ func (m *Module) noteHookEdge(req EventRequest, lifecycle agentpkg.LifecycleEven
 // event that moved the stream's light happened (statusEventAt; a tie in the
 // same millisecond goes to the mod, see atMs), and it has not run out.
 func (e hookEdge) wins(sid string, statusEventAt, now time.Time) bool {
-	return e.sid == sid && e.atMs().After(statusEventAt) && now.Sub(e.at) < hookEdgeTTL
+	return e.sid == sid && e.atMs().After(markAt(statusEventAt, now)) && now.Sub(e.at) < hookEdgeTTL
 }
 
 // expireHookEdgesLocked drops the edges that ran out by now and marks their
@@ -181,7 +192,7 @@ func (m *Module) expireHookEdgesLocked(now time.Time, dirty map[string]string) {
 // arrived, leaves the edge in charge. The light's status may be the same, but
 // its source changes from hook to mod and the SPA is told. modMu must be held.
 func (m *Module) edgeSupersededLocked(sid string, prev, cur, now time.Time) bool {
-	if !cur.After(prev) {
+	if !cur.After(markAt(prev, now)) {
 		return false
 	}
 	for _, e := range m.hookEdge {
