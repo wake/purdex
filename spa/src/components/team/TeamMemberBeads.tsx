@@ -2,7 +2,7 @@
 //
 // One bead per member: the bot icon with its light (optionally the host badge), no name — the name is
 // the tooltip. A member with no tab is a faded bead. Click opens or switches; drag reorders within the team.
-import { useCallback } from 'react'
+import { useCallback, type ReactNode } from 'react'
 import type { TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { useMemberDrag } from './useMemberDrag'
@@ -15,9 +15,11 @@ interface Props {
   withHost: boolean
   onOpen: (sessionId: string) => void
   onReorder: (sessionIds: string[]) => void
+  /** Drawn before the first bead (e.g. the ⎿ hook that hangs the row under the lead). */
+  prefix?: ReactNode
 }
 
-export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost, onOpen, onReorder }: Props) {
+export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost, onOpen, onReorder, prefix }: Props) {
   const order = members.map((m) => m.sessionId)
   const reorder = useCallback((ids: string[]) => onReorder(ids), [onReorder])
   const { propsFor, over, draggingId } = useMemberDrag(teamKey, order, reorder, 'x')
@@ -25,9 +27,9 @@ export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost
   return (
     <div
       data-testid="team-beads"
-      className="flex flex-wrap items-center gap-0.5 ml-[26px] mr-2 mb-0.5 pl-1.5 border-l-2"
-      style={{ borderColor: color }}
+      className="flex flex-wrap items-center gap-0.5 ml-[24px] mr-2 mb-0.5"
     >
+      {prefix}
       {members.map((m) => {
         const isActive = m.tabId !== null && m.tabId === activeTabId
         const ins = over?.id === m.sessionId ? (over.after ? 'after' : 'before') : null

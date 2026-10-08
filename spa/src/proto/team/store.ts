@@ -11,6 +11,7 @@ import { compositeKey } from '../../lib/composite-key'
 import { createTab } from '../../types/tab'
 import type { ModelFamily } from '../../components/team/model-family'
 import type { TeamPanelLayout } from '../../components/team/TeamPanel'
+import type { TeamGroupStyle, TeamSidebarStyle } from '../../components/team/team-display'
 
 export interface ProtoSeat {
   sessionId: string
@@ -27,6 +28,8 @@ export interface ProtoSeat {
 
 export interface ProtoTeam {
   key: string
+  /** team_name: "" when the team has none (the label falls back to the lead's title). */
+  name: string
   color: number
   leadId: string
   order: string[]
@@ -41,6 +44,10 @@ interface ProtoState {
   panelMode: Record<string, 'full' | 'line'>
   beadHost: boolean
   layout: TeamPanelLayout
+  groupStyle: TeamGroupStyle
+  sidebarStyle: TeamSidebarStyle
+  /** Prototype switch: hide every team name, to see the fallback. */
+  namesOff: boolean
   target: string | null
   log: string
   spawnN: number
@@ -58,6 +65,9 @@ export const useProtoTeam = create<ProtoState>()(() => ({
   panelMode: loadPanelModes(),
   beadHost: false,
   layout: 'a',
+  groupStyle: 'tint',
+  sidebarStyle: 'hook',
+  namesOff: false,
   target: null,
   log: '',
   spawnN: 0,
@@ -304,14 +314,14 @@ export function becomeLead(sessionId: string) {
   const member: ProtoSeat = { sessionId: memberId, title: 'nexen-docs', hostId: seat.hostId, code: `${seat.code}-m1`, model: 'sonnet', effort: 'low', ctx: 0, teamKey: key, role: 'member', alive: true }
   set((s) => ({
     seats: { ...s.seats, [sessionId]: { ...seat, teamKey: key, role: 'lead' }, [memberId]: member },
-    teams: { ...s.teams, [key]: { key, color, leadId: sessionId, order: [memberId], collapsed: false, ghostWs: null } },
+    teams: { ...s.teams, [key]: { key, name: '燈號', color, leadId: sessionId, order: [memberId], collapsed: false, ghostWs: null } },
     panelMode: { ...s.panelMode, [key]: 'full' },
   }))
   const ck = compositeKey(member.hostId, member.code)
   useAgentStore.setState((s) => ({ agentTypes: { ...s.agentTypes, [ck]: 'cc' }, statuses: { ...s.statuses, [ck]: 'running' } }))
   const tab = tabOfSeat(seat)
   if (tab) selectTab(tab)
-  say(`${seat.title} 成為 lead 並 spawn 了 nexen-docs：自動配到另一個 team 色（規則 13）；面板預設展開（規則 17）。`)
+  say(`${seat.title} 成為 lead（team 名「燈號」）並 spawn 了 nexen-docs：自動配到另一個 team 色（規則 13）；面板預設展開（規則 17）。`)
 }
 
 /** Next / previous tab in the active workspace's top order, skipping members of a collapsed group (rule 8). */
@@ -320,4 +330,11 @@ export function stepTab(dir: 1 | -1, visible: string[]) {
   const active = useTabStore.getState().activeTabId
   const i = Math.max(0, visible.indexOf(active ?? ''))
   selectTab(visible[(i + dir + visible.length) % visible.length])
+}
+
+/** The label a team shows: its name, or the lead's title when it has none (or names are switched off). */
+export function teamLabel(team: ProtoTeam): { label: string; unnamed: boolean } {
+  const name = useProtoTeam.getState().namesOff ? '' : team.name.trim()
+  if (name) return { label: name, unnamed: false }
+  return { label: useProtoTeam.getState().seats[team.leadId]?.title ?? 'team', unnamed: true }
 }

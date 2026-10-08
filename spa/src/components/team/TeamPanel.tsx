@@ -24,7 +24,9 @@ export type TeamPanelLayout = 'a' | 'b' | 'c'
 interface Props {
   teamKey: string
   color: string
+  /** Team name, or the fallback label when the team has none. */
   name: string
+  unnamed?: boolean
   lead: TeamPanelSeat
   members: TeamPanelSeat[]
   activeTabId: string | null
@@ -44,7 +46,7 @@ export function TeamPanel(props: Props) {
       data-testid="team-panel"
       data-mode={mode}
       className="absolute top-0 right-3 z-20 rounded-b-lg border border-t-0 border-border-default bg-surface-elevated shadow-xl text-xs text-text-primary overflow-hidden"
-      style={{ width: mode === 'full' ? 300 : undefined }}
+      style={{ width: mode === 'full' ? 312 : undefined }}
     >
       <div className="h-[3px]" style={{ background: color }} />
       {mode === 'full' ? <FullPanel {...props} /> : <LinePanel {...props} />}
@@ -52,24 +54,30 @@ export function TeamPanel(props: Props) {
   )
 }
 
-function Header({ color, name, count, children }: { color: string; name: string; count?: number; children: React.ReactNode }) {
+function Header({ color, name, unnamed, count, children }: { color: string; name: string; unnamed?: boolean; count?: number; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 px-2.5 py-1.5">
-      <span className="w-2.5 h-2.5 rounded-[3px] flex-shrink-0" style={{ background: color }} />
-      <span className="font-semibold truncate">{name}</span>
+    <div className="flex items-center gap-2 px-2.5 py-2">
+      <span
+        data-testid="team-panel-name"
+        className={`px-1.5 rounded text-[11px] font-semibold leading-[18px] truncate ${unnamed ? 'italic opacity-80' : ''}`}
+        style={{ background: color, color: '#14141f' }}
+        title={unnamed ? `${name}（team 沒有名字，暫用 lead 的標題）` : name}
+      >
+        {name}
+      </span>
       {count !== undefined && <span className="text-text-muted whitespace-nowrap">· {count} members</span>}
       {children}
     </div>
   )
 }
 
-function FullPanel({ teamKey, color, name, lead, members, activeTabId, layout, onSetMode, onOpen, onReorder }: Props) {
+function FullPanel({ teamKey, color, name, unnamed, lead, members, activeTabId, layout, onSetMode, onOpen, onReorder }: Props) {
   const order = members.map((m) => m.sessionId)
   const reorder = useCallback((ids: string[]) => onReorder(ids), [onReorder])
   const { propsFor, over, draggingId } = useMemberDrag(teamKey, order, reorder, 'y')
   return (
     <>
-      <Header color={color} name={name} count={members.length}>
+      <Header color={color} name={name} unnamed={unnamed} count={members.length}>
         <button
           type="button"
           data-testid="team-panel-to-line"
@@ -80,7 +88,7 @@ function FullPanel({ teamKey, color, name, lead, members, activeTabId, layout, o
           <CaretUp size={11} />
         </button>
       </Header>
-      <div className="border-t border-border-subtle py-1 max-h-[60vh] overflow-y-auto">
+      <div className="border-t border-border-subtle py-1.5 flex flex-col gap-1 max-h-[60vh] overflow-y-auto">
         <PanelRow seat={lead} color={color} layout={layout} isActive={lead.tabId !== null && lead.tabId === activeTabId} onOpen={onOpen} />
         {members.map((m) => (
           <PanelRow
@@ -126,7 +134,7 @@ function PanelRow({ seat, color, layout, isActive, onOpen, drag, insert, draggin
       onClick={() => onOpen(seat.sessionId)}
       onKeyDown={(e) => { if (e.key === 'Enter') onOpen(seat.sessionId) }}
       {...drag}
-      className={`group relative mx-1 px-2 py-1 rounded-md cursor-pointer transition-colors ${
+      className={`group relative mx-1.5 px-2 py-2 rounded-md cursor-pointer transition-colors ${
         isActive ? 'bg-surface-active text-white' : 'hover:bg-surface-hover'
       } ${dragging ? 'opacity-30' : ''}`}
     >
@@ -145,7 +153,7 @@ function PanelRow({ seat, color, layout, isActive, onOpen, drag, insert, draggin
         {layout === 'c' && <span title={`${modelText} · context ${ctxText}`}><ContextRing pct={seat.ctx} model={seat.model} size={20} /></span>}
       </div>
       {/* Line 2 */}
-      <div className={`flex items-center gap-1.5 pl-[26px] mt-0.5 text-[11px] text-text-muted min-w-0 ${unopened ? 'opacity-70' : ''}`}>
+      <div className={`flex items-center gap-1.5 pl-[26px] mt-1.5 text-[11px] leading-[16px] text-text-muted min-w-0 ${unopened ? 'opacity-70' : ''}`}>
         {layout === 'a' && (
           <>
             <span className="flex items-center gap-1 flex-shrink-0 text-text-secondary"><ModelIcon model={seat.model} />{modelText}</span>
@@ -166,10 +174,10 @@ function PanelRow({ seat, color, layout, isActive, onOpen, drag, insert, draggin
   )
 }
 
-function LinePanel({ color, name, lead, members, activeTabId, onSetMode, onOpen }: Props) {
+function LinePanel({ color, name, unnamed, lead, members, activeTabId, onSetMode, onOpen }: Props) {
   const seats = [lead, ...members]
   return (
-    <Header color={color} name={name}>
+    <Header color={color} name={name} unnamed={unnamed}>
       <div className="flex items-center gap-0.5">
         {seats.map((s, i) => {
           const isActive = s.tabId !== null && s.tabId === activeTabId

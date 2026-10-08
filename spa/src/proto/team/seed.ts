@@ -74,7 +74,7 @@ export function seed() {
 
   useProtoTeam.setState({
     seats,
-    teams: { t1: { key: 't1', color: 0, leadId: 'lead', order: ['m1', 'm2', 'm3'], collapsed: false, ghostWs: null } },
+    teams: { t1: { key: 't1', name: '介面線', color: 0, leadId: 'lead', order: ['m1', 'm2', 'm3'], collapsed: false, ghostWs: null } },
     target: 'm3',
     spawnN: 0,
     log: '初始：lead purdex-1f 帶 3 個 member；purdex-team-view 和 purdex-interface-language-review 已開分頁（後者存放順序在 pdx.log 後面，畫面上仍接在群組裡），purdex-lint 沒開。',

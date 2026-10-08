@@ -3,14 +3,13 @@
 // Closing the lead tab closes the group's tabs; the sessions keep running. The sidebar keeps a faded lead
 // row (and its beads) as the way back: clicking it reopens the lead tab, and the group comes back.
 import type { TeamDisplay, TeamGhostLead } from './team-display'
-import { TeamMemberBeads } from './TeamMemberBeads'
+import { TeamSidebarBlock } from './TeamSidebarBlock'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 
 export function TeamGhostLeadRow({ ghost, team }: { ghost: TeamGhostLead; team: TeamDisplay }) {
-  const { lead, color, teamKey, members } = ghost
+  const { lead, color, teamKey, members, label, unnamed } = ghost
   return (
-    <div data-testid="team-ghost-lead" className="relative flex flex-col gap-0.5">
-      <span className="absolute left-[6px] top-1 h-[18px] w-[3px] rounded opacity-50" style={{ background: color }} />
+    <TeamSidebarBlock team={team} teamKey={teamKey} color={color} label={label} unnamed={unnamed} collapsed={false} members={members} ghost>
       <div
         role="button"
         tabIndex={0}
@@ -26,15 +25,6 @@ export function TeamGhostLeadRow({ ghost, team }: { ghost: TeamGhostLead; team: 
         <span className="flex-1 truncate italic">{lead.title}</span>
         <span className="text-[10px] flex-shrink-0">未開</span>
       </div>
-      <TeamMemberBeads
-        teamKey={teamKey}
-        color={color}
-        members={members}
-        activeTabId={team.activeTabId}
-        withHost={team.beadHost}
-        onOpen={(sid) => team.onOpenSeat(teamKey, sid)}
-        onReorder={(ids) => team.onReorderMembers(teamKey, ids)}
-      />
-    </div>
+    </TeamSidebarBlock>
   )
 }

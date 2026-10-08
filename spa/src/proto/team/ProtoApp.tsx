@@ -12,7 +12,7 @@ import { TeamDisplayContext, teamColor, type TeamDisplay, type TeamSeatView, typ
 import { TeamPanel, type TeamPanelSeat } from '../../components/team/TeamPanel'
 import {
   useProtoTeam, tabOfSeat, seatOfTab, liveMembers, selectTab, openSeat, closeTab, toggleCollapse,
-  reorderMembers, setPanelMode, say, type ProtoSeat, type ProtoTeam,
+  reorderMembers, setPanelMode, say, teamLabel, type ProtoSeat, type ProtoTeam,
 } from './store'
 import { FakeTerminal } from './FakeTerminal'
 import { ProtoControls } from './ProtoControls'
@@ -70,29 +70,33 @@ export function ProtoApp() {
     for (const team of Object.values(proto.teams)) {
       const block = shown.filter((x) => x.team === team)
       const hidden = arranged.filter((x) => x.team === team && x.role === 'member').length - block.filter((x) => x.role === 'member').length
+      const { label, unnamed } = teamLabel(team)
       block.forEach((x, i) => marks.set(x.id, {
-        teamKey: team.key, color: teamColor(team.color), role: x.role!, first: i === 0, last: i === block.length - 1, collapsed: team.collapsed, hiddenCount: hidden,
+        teamKey: team.key, color: teamColor(team.color), label, unnamed, role: x.role!, style: proto.groupStyle,
+        first: i === 0, last: i === block.length - 1, collapsed: team.collapsed, hiddenCount: hidden,
       }))
     }
     const hidden = new Set<string>()
-    const beads = new Map<string, { teamKey: string; color: string; members: TeamSeatView[] }>()
+    const beads = new Map<string, { teamKey: string; color: string; label: string; unnamed: boolean; collapsed: boolean; members: TeamSeatView[] }>()
     for (const team of Object.values(proto.teams)) {
       const leadTab = tabOfSeat(proto.seats[team.leadId])
       if (!leadTab) continue
       const leadWs = workspaces.find((w) => w.tabs.includes(leadTab))
       const members = liveMembers(team).map((m) => seatView(m, 'member'))
       for (const m of members) if (m.tabId && leadWs?.tabs.includes(m.tabId)) hidden.add(m.tabId)
-      beads.set(leadTab, { teamKey: team.key, color: teamColor(team.color), members })
+      beads.set(leadTab, { teamKey: team.key, color: teamColor(team.color), ...teamLabel(team), collapsed: team.collapsed, members })
     }
     return {
       activeTabId,
       beadHost: proto.beadHost,
+      groupStyle: proto.groupStyle,
+      sidebarStyle: proto.sidebarStyle,
       tabMark: (id) => marks.get(id) ?? null,
       sidebarHidden: (id) => hidden.has(id),
       sidebarBeads: (id) => beads.get(id) ?? null,
       ghostLeads: (wsId): TeamGhostLead[] => Object.values(proto.teams)
         .filter((t) => t.ghostWs !== null && t.ghostWs === wsId && !tabOfSeat(proto.seats[t.leadId]))
-        .map((t) => ({ teamKey: t.key, color: teamColor(t.color), lead: seatView(proto.seats[t.leadId], 'lead'), members: liveMembers(t).map((m) => seatView(m, 'member')) })),
+        .map((t) => ({ teamKey: t.key, color: teamColor(t.color), ...teamLabel(t), lead: seatView(proto.seats[t.leadId], 'lead'), members: liveMembers(t).map((m) => seatView(m, 'member')) })),
       onToggleCollapse: toggleCollapse,
       onOpenSeat: (teamKey, sid) => openSeat(teamKey, sid),
       onReorderMembers: reorderMembers,
@@ -181,7 +185,8 @@ export function ProtoApp() {
                 <TeamPanel
                   teamKey={activeTeam.key}
                   color={teamColor(activeTeam.color)}
-                  name={proto.seats[activeTeam.leadId].title}
+                  name={teamLabel(activeTeam).label}
+                  unnamed={teamLabel(activeTeam).unnamed}
                   lead={seatView(proto.seats[activeTeam.leadId], 'lead')}
                   members={liveMembers(activeTeam).map((m) => seatView(m, 'member'))}
                   activeTabId={activeTabId}

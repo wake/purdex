@@ -3,7 +3,7 @@ import type { Tab } from '../../../types/tab'
 import { InlineTab } from './InlineTab'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useTeamDisplay } from '../../../components/team/team-display'
-import { TeamMemberBeads } from '../../../components/team/TeamMemberBeads'
+import { TeamSidebarBlock } from '../../../components/team/TeamSidebarBlock'
 import { TeamGhostLeadRow } from '../../../components/team/TeamGhostLeadRow'
 
 interface Props {
@@ -63,19 +63,18 @@ export function InlineTabList({
           const beads = team?.sidebarBeads(id)
           if (!team || !beads) return row
           return (
-            <div key={id} data-testid="team-lead-block" className="relative flex flex-col gap-0.5">
-              <span className="absolute left-[6px] top-1 h-[18px] w-[3px] rounded" style={{ background: beads.color }} />
+            <TeamSidebarBlock
+              key={id}
+              team={team}
+              teamKey={beads.teamKey}
+              color={beads.color}
+              label={beads.label}
+              unnamed={beads.unnamed}
+              collapsed={beads.collapsed}
+              members={beads.members}
+            >
               {row}
-              <TeamMemberBeads
-                teamKey={beads.teamKey}
-                color={beads.color}
-                members={beads.members}
-                activeTabId={team.activeTabId}
-                withHost={team.beadHost}
-                onOpen={(sid) => team.onOpenSeat(beads.teamKey, sid)}
-                onReorder={(ids) => team.onReorderMembers(beads.teamKey, ids)}
-              />
-            </div>
+            </TeamSidebarBlock>
           )
         })}
         {team && ghosts.map((g) => (

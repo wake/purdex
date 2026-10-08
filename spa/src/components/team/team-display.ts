@@ -24,16 +24,30 @@ export interface TeamSeatView {
   tabId: string | null
 }
 
+/**
+ * How a group is drawn on the TabBar (the user compares these). Every style starts the group with the
+ * team-name label; they differ in how the group's tabs are tied to it.
+ */
+export type TeamGroupStyle = 'tint' | 'frame' | 'topbar' | 'plate' | 'label'
+
+/** How the sidebar shows that the beads hang under the lead (no left border line). */
+export type TeamSidebarStyle = 'hook' | 'plusminus' | 'chevron'
+
 /** How one tab sits in a group on the TabBar. */
 export interface TeamTabMark {
   teamKey: string
   color: string
+  /** What the group label says: the team name, or the fallback when the team has none. */
+  label: string
+  /** The team has no name of its own (the label is a fallback). */
+  unnamed: boolean
   role: 'lead' | 'member'
-  /** First / last visible tab of the group (the group underline is rounded at its ends). */
+  style: TeamGroupStyle
+  /** First / last visible tab of the group. */
   first: boolean
   last: boolean
   collapsed: boolean
-  /** Member tabs hidden by the collapse (only meaningful on the lead). */
+  /** Member tabs hidden by the collapse (shown on the label). */
   hiddenCount: number
 }
 
@@ -41,19 +55,23 @@ export interface TeamTabMark {
 export interface TeamGhostLead {
   teamKey: string
   color: string
+  label: string
+  unnamed: boolean
   lead: TeamSeatView
   members: TeamSeatView[]
 }
 
 export interface TeamDisplay {
   activeTabId: string | null
-  /** Show the host badge next to each bead. */
+  /** Show the host badge next to each bead (a user setting). */
   beadHost: boolean
+  groupStyle: TeamGroupStyle
+  sidebarStyle: TeamSidebarStyle
   tabMark: (tabId: string) => TeamTabMark | null
   /** Member tabs folded into the bead row (their lead row is in the same list). */
   sidebarHidden: (tabId: string) => boolean
   /** Beads under a lead row, in team order. */
-  sidebarBeads: (tabId: string) => { teamKey: string; color: string; members: TeamSeatView[] } | null
+  sidebarBeads: (tabId: string) => { teamKey: string; color: string; label: string; unnamed: boolean; collapsed: boolean; members: TeamSeatView[] } | null
   ghostLeads: (workspaceId: string | null) => TeamGhostLead[]
   onToggleCollapse: (teamKey: string) => void
   onOpenSeat: (teamKey: string, sessionId: string) => void

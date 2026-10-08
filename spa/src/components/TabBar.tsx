@@ -6,7 +6,8 @@ import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
-import { useTeamDisplay } from './team/team-display'
+import { useTeamDisplay, type TeamTabMark } from './team/team-display'
+import { TeamGroupLabel, TeamTabGroupFrame } from './team/TeamTabGroup'
 
 interface Props {
   tabs: Tab[]
@@ -33,6 +34,17 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
   const pinnedIds = useMemo(() => pinnedTabs.map((t) => t.id), [pinnedTabs])
   const normalIds = useMemo(() => normalTabs.map((t) => t.id), [normalTabs])
+  // Consecutive tabs of one team form a group (team display); every other tab is its own segment.
+  const segments = useMemo(() => {
+    const out: { mark: TeamTabMark | null; tabs: Tab[] }[] = []
+    for (const tab of normalTabs) {
+      const mark = team?.tabMark(tab.id) ?? null
+      const last = out[out.length - 1]
+      if (mark && last?.mark && last.mark.teamKey === mark.teamKey) last.tabs.push(tab)
+      else out.push({ mark, tabs: [tab] })
+    }
+    return out
+  }, [normalTabs, team])
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
   const pinnedZoneRef = useRef<HTMLDivElement>(null)
   const normalTabsRef = useRef<HTMLDivElement>(null)
@@ -135,23 +147,39 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
             <div ref={normalTabsRef} className="flex items-center h-full flex-1 min-w-0" style={{ maxWidth: 'max-content' }}>
               <SortableContext items={normalIds} strategy={horizontalListSortingStrategy}>
-                {normalTabs.map((tab, i) => (
-                  <Fragment key={tab.id}>
-                    {i > 0 && <TabSeparator show={shouldShowSeparator(normalTabs[i - 1], tab)} />}
-                    <SortableTab
-                      tab={tab}
-                      isActive={tab.id === activeTabId}
-                      group={team?.tabMark(tab.id) ?? undefined}
-                      onToggleGroup={team?.onToggleCollapse}
-                      onSelect={onSelectTab}
-                      onClose={onCloseTab}
-                      onMiddleClick={onMiddleClick}
-                      onContextMenu={onContextMenu}
-                      onRename={onRenameTab}
-                      onHover={setHoveredTabId}
-                    />
-                  </Fragment>
-                ))}
+                {segments.map((seg, si) => {
+                  const renderTab = (tab: Tab, i: number, list: Tab[]) => (
+                    <Fragment key={tab.id}>
+                      {i > 0 && <TabSeparator show={shouldShowSeparator(list[i - 1], tab)} />}
+                      <SortableTab
+                        tab={tab}
+                        isActive={tab.id === activeTabId}
+                        group={team?.tabMark(tab.id) ?? undefined}
+                        onSelect={onSelectTab}
+                        onClose={onCloseTab}
+                        onMiddleClick={onMiddleClick}
+                        onContextMenu={onContextMenu}
+                        onRename={onRenameTab}
+                        onHover={setHoveredTabId}
+                      />
+                    </Fragment>
+                  )
+                  const lead = seg.tabs[0]
+                  const groupMark = seg.mark && team ? team.tabMark(lead.id) : null
+                  return (
+                    <Fragment key={groupMark ? `g-${groupMark.teamKey}` : seg.tabs[0].id}>
+                      {si > 0 && <TabSeparator show={!groupMark && !segments[si - 1].mark && shouldShowSeparator(segments[si - 1].tabs[segments[si - 1].tabs.length - 1], lead)} />}
+                      {groupMark ? (
+                        <TeamTabGroupFrame mark={groupMark}>
+                          <TeamGroupLabel mark={groupMark} onToggle={team?.onToggleCollapse} />
+                          {seg.tabs.map((tab, i) => renderTab(tab, i, seg.tabs))}
+                        </TeamTabGroupFrame>
+                      ) : (
+                        seg.tabs.map((tab, i) => renderTab(tab, i, seg.tabs))
+                      )}
+                    </Fragment>
+                  )
+                })}
               </SortableContext>
             </div>
             {/* Trailing separator + add button (outside SortableContext, inside scroll) */}
