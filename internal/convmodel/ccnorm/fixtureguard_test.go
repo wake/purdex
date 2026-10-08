@@ -52,100 +52,132 @@ type factOutput struct {
 	Truncated  bool   `json:"truncated"`
 }
 
-func loadFacts(t *testing.T, c manifestCase) facts {
+func loadFactsFile(t *testing.T, rel string) facts {
 	t.Helper()
 	var f facts
-	dec := json.NewDecoder(bytes.NewReader(readFile(t, c.Facts)))
+	dec := json.NewDecoder(bytes.NewReader(readFile(t, rel)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&f); err != nil {
-		t.Fatalf("%s: %v", c.Facts, err)
+		t.Fatalf("%s: %v", rel, err)
 	}
 	return f
 }
 
+func loadFacts(t *testing.T, c manifestCase) facts { return loadFactsFile(t, c.Facts) }
+
 // TestFacts is the independent oracle: the hand-written facts against the
-// normalizer, without expected.json in between.
+// normalizer, without expected.json in between. A case's children/<id>.facts.json
+// are checked the same way against NormalizeSubagent.
 func TestFacts(t *testing.T) {
 	for _, c := range loadManifest(t).Cases {
 		t.Run(c.Name, func(t *testing.T) {
 			f := loadFacts(t, c)
 			conv := normalize(t, readFile(t, c.Input), f.Live)
-			if len(conv.Turns) != f.Turns || len(f.PerTurn) != f.Turns {
-				t.Fatalf("turns: normalizer %d, facts.turns %d, facts.per_turn %d", len(conv.Turns), f.Turns, len(f.PerTurn))
-			}
-			var steps []convmodel.Step
-			for i, tr := range conv.Turns {
-				want := f.PerTurn[i]
-				src := ""
-				for _, it := range tr.Items {
+			checkFacts(t, f, conv.Turns, false)
+		})
+		for _, ch := range c.Children {
+			t.Run(c.Name+"/child-"+ch.AgentID, func(t *testing.T) {
+				f := loadFactsFile(t, ch.Facts)
+				items, _, err := ccnorm.NormalizeSubagent(bytes.NewReader(readFile(t, ch.Input)), ch.AgentID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tr := convmodel.Turn{Items: items}
+				for _, it := range items {
 					if it.User != nil {
-						src = string(it.User.Source)
+						tr.ID = it.User.ID
 						break
 					}
 				}
-				errKind := ""
-				if tr.Error != nil {
-					errKind = tr.Error.Kind
-				}
-				got := factTurn{tr.ID, string(tr.Outcome), src, errKind}
-				if got != want {
-					t.Errorf("turn %d: normalizer %+v, facts %+v", i, got, want)
-				}
-				for _, it := range tr.Items {
-					if it.Step != nil {
-						steps = append(steps, *it.Step)
-					}
-				}
+				checkFacts(t, f, []convmodel.Turn{tr}, true)
+			})
+		}
+	}
+}
+
+// checkFacts compares facts with the turns the normalizer built. A child file
+// is one pseudo-turn that has no outcome of its own (and is always read as
+// live), so for a child (isChild) per_turn.outcome and live are not checked;
+// per_turn.id is the id of its first user item.
+func checkFacts(t *testing.T, f facts, turns []convmodel.Turn, isChild bool) {
+	t.Helper()
+	if len(turns) != f.Turns || len(f.PerTurn) != f.Turns {
+		t.Fatalf("turns: normalizer %d, facts.turns %d, facts.per_turn %d", len(turns), f.Turns, len(f.PerTurn))
+	}
+	var steps []convmodel.Step
+	for i, tr := range turns {
+		want := f.PerTurn[i]
+		if isChild {
+			want.Outcome = ""
+		}
+		src := ""
+		for _, it := range tr.Items {
+			if it.User != nil {
+				src = string(it.User.Source)
+				break
 			}
-			if len(steps) != len(f.Steps) {
-				t.Errorf("steps: normalizer %d, facts list %d (facts must list every step)", len(steps), len(f.Steps))
+		}
+		errKind := ""
+		if tr.Error != nil {
+			errKind = tr.Error.Kind
+		}
+		got := factTurn{tr.ID, string(tr.Outcome), src, errKind}
+		if got != want {
+			t.Errorf("turn %d: normalizer %+v, facts %+v", i, got, want)
+		}
+		for _, it := range tr.Items {
+			if it.Step != nil {
+				steps = append(steps, *it.Step)
 			}
-			byID := map[string]convmodel.Step{}
-			for _, s := range steps {
-				byID[s.ID] = s
-			}
-			for i, want := range f.Steps {
-				if i < len(steps) && steps[i].ID != want.ID {
-					t.Errorf("step %d: normalizer %s, facts %s (order is the order of appearance)", i, steps[i].ID, want.ID)
-				}
-				s, ok := byID[want.ID]
-				if !ok {
-					t.Errorf("facts step %s does not exist", want.ID)
-					continue
-				}
-				if got := (factStep{s.ID, string(s.Kind), string(s.Status), s.Denial}); got != want {
-					t.Errorf("step %s: normalizer %+v, facts %+v", want.ID, got, want)
-				}
-			}
-			listed := map[string]factOutput{}
-			for _, o := range f.Outputs {
-				listed[o.Step] = o
-			}
-			for _, s := range steps {
-				o := s.Output
-				if o == nil || !o.Truncated {
-					continue
-				}
-				want, ok := listed[s.ID]
-				if !ok {
-					t.Errorf("step %s has a truncated output that facts.outputs does not list", s.ID)
-					continue
-				}
-				if got := (factOutput{s.ID, o.TotalLines, o.TotalBytes, string(o.Keep), o.Truncated}); got != want {
-					t.Errorf("output of %s: normalizer %+v, facts %+v", s.ID, got, want)
-				}
-			}
-			for _, want := range f.Outputs {
-				s, ok := byID[want.Step]
-				if !ok || s.Output == nil {
-					t.Errorf("facts output %s: no such step output", want.Step)
-				} else if !want.Truncated && s.Output.Truncated {
-					t.Errorf("facts output %s says not truncated", want.Step)
-				} else if !want.Truncated && (s.Output.TotalLines != want.TotalLines || s.Output.TotalBytes != want.TotalBytes) {
-					t.Errorf("output of %s: totals %d/%d, facts %d/%d", want.Step, s.Output.TotalLines, s.Output.TotalBytes, want.TotalLines, want.TotalBytes)
-				}
-			}
-		})
+		}
+	}
+	if len(steps) != len(f.Steps) {
+		t.Errorf("steps: normalizer %d, facts list %d (facts must list every step)", len(steps), len(f.Steps))
+	}
+	byID := map[string]convmodel.Step{}
+	for _, s := range steps {
+		byID[s.ID] = s
+	}
+	for i, want := range f.Steps {
+		if i < len(steps) && steps[i].ID != want.ID {
+			t.Errorf("step %d: normalizer %s, facts %s (order is the order of appearance)", i, steps[i].ID, want.ID)
+		}
+		s, ok := byID[want.ID]
+		if !ok {
+			t.Errorf("facts step %s does not exist", want.ID)
+			continue
+		}
+		if got := (factStep{s.ID, string(s.Kind), string(s.Status), s.Denial}); got != want {
+			t.Errorf("step %s: normalizer %+v, facts %+v", want.ID, got, want)
+		}
+	}
+	listed := map[string]factOutput{}
+	for _, o := range f.Outputs {
+		listed[o.Step] = o
+	}
+	for _, s := range steps {
+		o := s.Output
+		if o == nil || !o.Truncated {
+			continue
+		}
+		want, ok := listed[s.ID]
+		if !ok {
+			t.Errorf("step %s has a truncated output that facts.outputs does not list", s.ID)
+			continue
+		}
+		if got := (factOutput{s.ID, o.TotalLines, o.TotalBytes, string(o.Keep), o.Truncated}); got != want {
+			t.Errorf("output of %s: normalizer %+v, facts %+v", s.ID, got, want)
+		}
+	}
+	for _, want := range f.Outputs {
+		s, ok := byID[want.Step]
+		if !ok || s.Output == nil {
+			t.Errorf("facts output %s: no such step output", want.Step)
+		} else if !want.Truncated && s.Output.Truncated {
+			t.Errorf("facts output %s says not truncated", want.Step)
+		} else if !want.Truncated && (s.Output.TotalLines != want.TotalLines || s.Output.TotalBytes != want.TotalBytes) {
+			t.Errorf("output of %s: totals %d/%d, facts %d/%d", want.Step, s.Output.TotalLines, s.Output.TotalBytes, want.TotalLines, want.TotalBytes)
+		}
 	}
 }
 
@@ -164,14 +196,66 @@ var privatePatterns = []struct {
 	{"sk- key", regexp.MustCompile(`(^|[^A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}`)},
 	{"GitHub token", regexp.MustCompile(`gh[po]_`)},
 	{"Slack token", regexp.MustCompile(`xox[a-z]-`)},
+	// encoded forms of the recording machine's paths (a dir under
+	// .claude/projects, a /private/tmp/claude-N scratch path)
+	{"claude scratch dir name", regexp.MustCompile(`claude-[0-9]{3}`)},
+	{"encoded workspace path", regexp.MustCompile(`-Workspace-`)},
+	{"encoded project dir", regexp.MustCompile(`user-purdex-`)},
+}
+
+var (
+	reGuardUUID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+	neutralDir  = ".claude/projects/" + scrub.FixtureProjectDir
+)
+
+// peerPatterns are private-data patterns that have one allowed fixture form:
+// a pdx peer address is fine as <host>/fixture-peer, a peer socket as
+// uds:/work/tmp/cc-socks/1.sock (what the scrubber writes).
+var peerPatterns = []struct {
+	name  string
+	re    *regexp.Regexp
+	allow func(match string) bool
+}{
+	{"pdx peer address", regexp.MustCompile(`\b(mlab|air26|air19|air-2026|air-2019)/[A-Za-z0-9_-]+`),
+		func(m string) bool { return m[strings.IndexByte(m, '/')+1:] == scrub.FixturePeer }},
+	{"peer socket path", regexp.MustCompile("uds:[^\\s\"'`<>\\\\]*/[0-9]+\\.sock"),
+		func(m string) bool { return m == scrub.FixtureSocket }},
+	// an MCP tool name names a server of the recording host's setup; only the
+	// neutral mcp__server__… (or a bare mcp__server) is fine
+	{"mcp server name", regexp.MustCompile(`mcp__[A-Za-z0-9_*-]+`),
+		func(m string) bool {
+			server, _, _ := strings.Cut(strings.TrimPrefix(m, "mcp__"), "__")
+			return server == scrub.FixtureMcpServer
+		}},
+	// the server column of a /context table row names it too
+	{"mcp server column", regexp.MustCompile(`mcp__[A-Za-z0-9_*-]+ \| [A-Za-z0-9_-]+ \|`),
+		func(m string) bool { return strings.HasSuffix(m, " | "+scrub.FixtureMcpServer+" |") }},
+	// a path under .claude/projects names the recorded project dir and
+	// session: only the neutral dir and the fixture session id are fine
+	{".claude/projects path", regexp.MustCompile(`\.claude/projects/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._/-]*)?`),
+		func(m string) bool {
+			head, rest, _ := strings.Cut(strings.TrimPrefix(m, ".claude/projects/"), "/")
+			if ".claude/projects/"+head != neutralDir {
+				return false
+			}
+			for _, id := range reGuardUUID.FindAllString(rest, -1) {
+				if id != scrub.FixtureSessionID {
+					return false
+				}
+			}
+			return true
+		}},
 }
 
 var imageData = regexp.MustCompile(`"data":\s*"[A-Za-z0-9+/=]*"`)
 
 // TestFixtures_NoPrivateData: no fixture file (inputs, expected, facts,
 // READMEs; MANIFEST for the patterns but not the token rule, it holds hashes)
-// carries a home path, a tailnet address, an e-mail address, a secret-shaped
-// string or a 32+ character token outside image data.
+// carries a home path, a tailnet address, an e-mail address, a pdx peer
+// address or peer socket path (other than the scrubbed forms), a
+// secret-shaped string or a 32+ character token outside image data, an
+// mcp__ name whose server is not `server`, or a .claude/projects path other
+// than the neutral one.
 func TestFixtures_NoPrivateData(t *testing.T) {
 	checked := 0
 	err := filepath.WalkDir(fixtureRoot, func(path string, d fs.DirEntry, err error) error {
@@ -189,6 +273,14 @@ func TestFixtures_NoPrivateData(t *testing.T) {
 				t.Errorf("%s contains a %s: …%s…", path, p.name, snippet(text, loc))
 			}
 		}
+		for _, p := range peerPatterns {
+			for _, loc := range p.re.FindAllStringIndex(text, -1) {
+				if !p.allow(text[loc[0]:loc[1]]) {
+					t.Errorf("%s contains a %s: …%s…", path, p.name, snippet(text, loc))
+					break
+				}
+			}
+		}
 		if filepath.Base(path) != "MANIFEST.json" {
 			for _, run := range scrub.TokenRun().FindAllStringIndex(text, -1) {
 				if scrub.LooksLikeToken(text[run[0]:run[1]]) {
@@ -203,6 +295,94 @@ func TestFixtures_NoPrivateData(t *testing.T) {
 	}
 	if checked < 4 {
 		t.Fatalf("only %d fixture files found under %s", checked, fixtureRoot)
+	}
+}
+
+// A /context listing in a local-command stdout names the recording host's
+// plugins, skills and mcp servers; the scrubber omits long ones, and no fixture
+// input may carry what is left of such a listing.
+func TestFixtures_NoEnvironmentListingInLocalCommandOutput(t *testing.T) {
+	var strs func(v any, out *[]string)
+	strs = func(v any, out *[]string) {
+		switch x := v.(type) {
+		case string:
+			*out = append(*out, x)
+		case map[string]any:
+			for _, e := range x {
+				strs(e, out)
+			}
+		case []any:
+			for _, e := range x {
+				strs(e, out)
+			}
+		}
+	}
+	inputs, rowsSeen := 0, 0
+	err := filepath.WalkDir(fixtureRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Base(path) != "input.jsonl" {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		inputs++
+		for n, line := range strings.Split(string(b), "\n") {
+			if !strings.Contains(line, "local-command-stdout") {
+				continue
+			}
+			var row any
+			if json.Unmarshal([]byte(line), &row) != nil {
+				t.Errorf("%s:%d is not JSON", path, n+1)
+				continue
+			}
+			var all []string
+			strs(row, &all)
+			for _, s := range all {
+				if !strings.Contains(s, "<local-command-stdout>") {
+					continue
+				}
+				rowsSeen++
+				for _, bad := range []string{"Plugin (", "mcp__"} {
+					if strings.Contains(s, bad) {
+						t.Errorf("%s:%d local-command stdout contains %q: %.80q", path, n+1, bad, s)
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inputs < 4 || rowsSeen == 0 {
+		t.Fatalf("looked at %d inputs and %d local-command stdout texts; the guard checks nothing", inputs, rowsSeen)
+	}
+}
+
+// A /context expansion can also arrive as a plain isMeta user row; no fixture
+// input may list the recording host's plugins anywhere.
+func TestFixtures_NoPluginListingAnywhere(t *testing.T) {
+	inputs := 0
+	err := filepath.WalkDir(fixtureRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Base(path) != "input.jsonl" {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		inputs++
+		if i := strings.Index(string(b), "Plugin ("); i >= 0 {
+			t.Errorf("%s contains a plugin listing: %.80q", path, string(b)[i:])
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inputs < 4 {
+		t.Fatalf("looked at %d inputs; the guard checks nothing", inputs)
 	}
 }
 

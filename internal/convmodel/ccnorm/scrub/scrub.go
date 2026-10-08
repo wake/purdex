@@ -8,7 +8,16 @@
 // What is rewritten, in this order, in every kept string:
 //
 //   - the recorded cwd and session ids → /work/fixture and FixtureSessionID
+//   - pdx peer addresses <host>/<name> (host mlab, air26, air19, air-2026,
+//     air-2019) → <host>/fixture-peer; uds:<path>/<digits>.sock →
+//     uds:/work/tmp/cc-socks/1.sock
 //   - e-mail addresses → user@example.com
+//   - .claude/projects/<encoded dir>/… → .claude/projects/-work-fixture/…, any
+//     uuid after it → FixtureSessionID (the encoded dir names the recording
+//     machine, project and session)
+//   - mcp__<server>__<tool> → mcp__server__tool (the server names are the
+//     recording host's setup); a bare mcp__<server> → mcp__server; the
+//     server cell of a /context table row "| mcp__… | <server> | n |" → server
 //   - paths: the home directory, /Users/<name>, /home/<name> → /work;
 //     /private/tmp/claude-N/<project dir>, /private/tmp, /tmp,
 //     /var/folders/xx/yyy/T → /work/tmp
@@ -16,6 +25,9 @@
 //   - 100.64.x.y (tailnet) → 192.0.2.1
 //   - Bearer tokens, sk-/ghp_/gho_/xox keys, AWS key ids and any run of 32 or
 //     more base64/hex characters mixing letters and digits → [redacted-…]
+//
+// A local-command stdout (<local-command-stdout>…</local-command-stdout>)
+// longer than 1 KiB is replaced whole by a fixed text; shorter ones stay.
 //
 // Image data is replaced by a tiny valid PNG (so a recorded placeholder's
 // `bytes` becomes small; the case README says so).
@@ -41,6 +53,18 @@ const (
 	FixtureCwd       = "/work/fixture"
 	FixtureSessionID = "00000000-0000-4000-8000-000000000001"
 	FixtureBranch    = "main"
+
+	// FixtureProjectDir stands in for the encoded directory under
+	// .claude/projects; FixtureMcpServer / FixtureMcpTool for the segments of
+	// every mcp__<server>__<tool> name.
+	FixtureProjectDir = "-work-fixture"
+	FixtureMcpServer  = "server"
+	FixtureMcpTool    = "tool"
+
+	// FixturePeer is the name part of every pdx peer address, FixtureSocket
+	// the form of every uds: peer socket.
+	FixturePeer   = "fixture-peer"
+	FixtureSocket = "uds:/work/tmp/cc-socks/1.sock"
 
 	// TinyPNG is a 1x1 PNG, the stand-in for every image's base64 data.
 	TinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -240,6 +264,13 @@ func keepValue(v any, path string, ix *index, rw *rewriter, key string) (any, bo
 // ---- string rewriting -----------------------------------------------------
 
 var (
+	rePdxAddr  = regexp.MustCompile(`\b(mlab|air26|air19|air-2026|air-2019)/[A-Za-z0-9_-]+`)
+	reUDS      = regexp.MustCompile("uds:[^\\s\"'`<>\\\\]*/[0-9]+\\.sock")
+	reProjects = regexp.MustCompile(`\.claude/projects/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._/-]*)?`)
+	reUUID     = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+	reMcp      = regexp.MustCompile(`mcp__[A-Za-z0-9_*-]+`)
+	// a /context table row: | mcp__server__tool | <server> | <tokens> |
+	reMcpRow    = regexp.MustCompile(`(mcp__server__tool \| )[A-Za-z0-9_-]+( \|)`)
 	reEmail     = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}`)
 	reClaudeTmp = regexp.MustCompile("(?:/private)?/tmp/claude-[0-9]+/[^/\\s\"'`<>\\\\]+")
 	reVarTmp    = regexp.MustCompile("(?:/private)?/var/folders/[^/\\s\"'`<>\\\\]+/[^/\\s\"'`<>\\\\]+/[A-Za-z0-9]")
@@ -360,9 +391,67 @@ func (rw *rewriter) deep(v any, key string) any {
 	return v
 }
 
+// neutralProjectsPath rewrites one .claude/projects/<dir>[/rest] match.
+func neutralProjectsPath(m string) string {
+	rest := strings.TrimPrefix(m, ".claude/projects/")
+	tail := ""
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		tail = reUUID.ReplaceAllString(rest[i:], FixtureSessionID)
+	}
+	return ".claude/projects/" + FixtureProjectDir + tail
+}
+
+// neutralMcpName rewrites one mcp__… name: the server is whatever precedes
+// the first "__" after the prefix (a server name has single underscores
+// only), the tool whatever follows.
+func neutralMcpName(m string) string {
+	if i := strings.Index(strings.TrimPrefix(m, "mcp__"), "__"); i > 0 {
+		return "mcp__" + FixtureMcpServer + "__" + FixtureMcpTool
+	}
+	return "mcp__" + FixtureMcpServer
+}
+
+// OmittedLocalCommandOutput replaces every local-command stdout longer than
+// MaxLocalCommandOutput bytes: a /context listing names the recording host's
+// installed plugins, skills and mcp servers. Row structure and ids stay.
+const (
+	OmittedLocalCommandOutput = "<local-command-stdout>[output omitted by scrubber]</local-command-stdout>"
+	MaxLocalCommandOutput     = 1024
+)
+
+// omitLocalCommandOutput reports whether s is a whole <local-command-stdout>
+// element (ANSI colours and all) past the limit.
+func omitLocalCommandOutput(s string) bool {
+	if len(s) <= MaxLocalCommandOutput {
+		return false
+	}
+	t := strings.TrimSpace(s)
+	return strings.HasPrefix(t, "<local-command-stdout>") && strings.HasSuffix(t, "</local-command-stdout>")
+}
+
+// OmittedContextUsage replaces a /context expansion (the isMeta user row's
+// markdown dump) past MaxLocalCommandOutput bytes: it lists the same host
+// plugins and skills as the local-command form.
+const OmittedContextUsage = "## Context Usage\n[output omitted by scrubber]"
+
+func omitContextUsage(s string) bool {
+	return len(s) > MaxLocalCommandOutput && strings.HasPrefix(s, "## Context Usage")
+}
+
 func (rw *rewriter) str(s string) string {
+	if omitLocalCommandOutput(s) {
+		return OmittedLocalCommandOutput
+	}
+	if omitContextUsage(s) {
+		return OmittedContextUsage
+	}
 	s = rw.exact.Replace(s)
+	s = reUDS.ReplaceAllString(s, FixtureSocket)
+	s = rePdxAddr.ReplaceAllString(s, "${1}/"+FixturePeer)
 	s = reEmail.ReplaceAllString(s, "user@example.com")
+	s = reProjects.ReplaceAllStringFunc(s, neutralProjectsPath)
+	s = reMcp.ReplaceAllStringFunc(s, neutralMcpName)
+	s = reMcpRow.ReplaceAllString(s, "${1}"+FixtureMcpServer+"${2}")
 	s = reClaudeTmp.ReplaceAllString(s, "/work/tmp")
 	s = reVarTmp.ReplaceAllString(s, "/work/tmp")
 	for i := 0; i < 3; i++ { // adjacent matches share their delimiter

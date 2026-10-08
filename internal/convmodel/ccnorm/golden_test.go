@@ -20,7 +20,8 @@ import (
 
 // -update rewrites expected.json of every case directory on disk and rebuilds
 // MANIFEST.json (see testdata/conversation/v1/README.md, "Adding a case").
-// facts.json is never touched: it is the hand-written oracle.
+// facts.json and children/*.facts.json are never touched: they are the
+// hand-written oracle.
 var update = flag.Bool("update", false, "rewrite expected.json files and MANIFEST.json under testdata/conversation/v1")
 
 var fixtureRoot = filepath.Join("..", "..", "..", "testdata", "conversation", "v1")
@@ -51,15 +52,14 @@ type hashes struct {
 }
 
 // manifestChild is a subagent file of a case: children/<agent id>.input.jsonl
-// normalized with NormalizeSubagent. Apps ignore it (daemon test data).
+// normalized with NormalizeSubagent, with its hand-written facts. Apps fetch
+// expected and facts, never the input.
 type manifestChild struct {
 	AgentID  string `json:"agent_id"`
 	Input    string `json:"input"`
 	Expected string `json:"expected"`
-	SHA256   struct {
-		Input    string `json:"input"`
-		Expected string `json:"expected"`
-	} `json:"sha256"`
+	Facts    string `json:"facts"`
+	SHA256   hashes `json:"sha256"`
 }
 
 func readFile(t *testing.T, rel string) []byte {
@@ -201,8 +201,13 @@ func updateFixtures(t *testing.T) {
 			kin := readFile(t, dir+"/children/"+id+".input.jsonl")
 			kexp := subagentExpected(t, kin, id)
 			writeFile(t, dir+"/children/"+id+".expected.json", kexp)
-			ch := manifestChild{AgentID: id, Input: dir + "/children/" + id + ".input.jsonl", Expected: dir + "/children/" + id + ".expected.json"}
-			ch.SHA256.Input, ch.SHA256.Expected = sum(kin), sum(kexp)
+			ch := manifestChild{AgentID: id, Input: dir + "/children/" + id + ".input.jsonl",
+				Expected: dir + "/children/" + id + ".expected.json", Facts: dir + "/children/" + id + ".facts.json"}
+			kfacts, err := os.ReadFile(filepath.Join(fixtureRoot, filepath.FromSlash(ch.Facts)))
+			if err != nil {
+				t.Fatalf("%s: %v (hand-write it before running -update)", ch.Facts, err)
+			}
+			ch.SHA256 = hashes{sum(kin), sum(kexp), sum(kfacts)}
 			c.Children = append(c.Children, ch)
 		}
 		m.Cases = append(m.Cases, c)
@@ -288,12 +293,23 @@ func TestManifest_Sha256Match(t *testing.T) {
 				t.Errorf("%s: sha256 of %s is %s, MANIFEST says %s (run -update after changing a file)", c.Name, h.what, got, h.want)
 			}
 		}
+		listedKids := map[string]bool{}
 		for _, ch := range c.Children {
-			if got := sum(readFile(t, ch.Input)); got != ch.SHA256.Input {
-				t.Errorf("%s: sha256 of %s differs from MANIFEST", c.Name, ch.Input)
+			listedKids[ch.Facts] = true
+			for _, h := range []struct{ path, want string }{
+				{ch.Input, ch.SHA256.Input}, {ch.Expected, ch.SHA256.Expected}, {ch.Facts, ch.SHA256.Facts},
+			} {
+				if h.path == "" {
+					t.Errorf("%s: child %s has an empty path in MANIFEST (run -update)", c.Name, ch.AgentID)
+				} else if got := sum(readFile(t, h.path)); got != h.want {
+					t.Errorf("%s: sha256 of %s differs from MANIFEST (run -update after changing a file)", c.Name, h.path)
+				}
 			}
-			if got := sum(readFile(t, ch.Expected)); got != ch.SHA256.Expected {
-				t.Errorf("%s: sha256 of %s differs from MANIFEST", c.Name, ch.Expected)
+		}
+		onDisk, _ := filepath.Glob(filepath.Join(fixtureRoot, casesDir, c.Name, "children", "*.facts.json"))
+		for _, f := range onDisk {
+			if rel := casesDir + "/" + c.Name + "/children/" + filepath.Base(f); !listedKids[rel] {
+				t.Errorf("%s is not in the MANIFEST children of %s (run -update)", rel, c.Name)
 			}
 		}
 	}

@@ -188,6 +188,45 @@ func TestScrub_Paths(t *testing.T) {
 	}
 }
 
+func TestScrub_McpToolNamesNeutralized(t *testing.T) {
+	cases := map[string]string{
+		"mcp__ploom__issue_get":                                                  "mcp__server__tool",
+		"mcp__outline-protype__create_attachment":                                "mcp__server__tool",
+		"mcp__claude_ai_Claude_Docs__batch":                                      "mcp__server__tool",
+		"mcp__plugin_context7_context7__authenticate":                            "mcp__server__tool",
+		"mcp__server__tool":                                                      "mcp__server__tool",
+		"allow mcp__ploom__* and mcp__invoiceplane":                              "allow mcp__server__tool and mcp__server",
+		"\x1b[38;5;246mmcp__google-sheets__list_spreadsheets\x1b[39m (3 tokens)": "\x1b[38;5;246mmcp__server__tool\x1b[39m (3 tokens)",
+		"├ mcp__ploom__whoami: 1\n├ mcp__ploom__label_list: 2":                   "├ mcp__server__tool: 1\n├ mcp__server__tool: 2",
+		"no mention of the protocol":                                             "no mention of the protocol",
+		"| mcp__outline-protype__fetch | outline-protype | 326 |\n| mcp__ploom__whoami | ploom | 1k |": "| mcp__server__tool | server | 326 |\n| mcp__server__tool | server | 1k |",
+	}
+	for in, want := range cases {
+		m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote(in)+`}}`)
+		if got := m["message"].(map[string]any)["content"]; got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestScrub_ClaudeProjectsPathNeutralized(t *testing.T) {
+	const u1 = "d85ca294-842a-41d3-b6b9-84526b2b7d0a"
+	cases := map[string]string{
+		"/Users/wake/.claude/projects/-private-tmp-claude-501--Users-wake-Workspace-wake-purdex-" + u1 + "-scratchpad/" + u1 + ".jsonl": "/work/.claude/projects/-work-fixture/" + FixtureSessionID + ".jsonl",
+		"read /Users/wake/.claude/projects/-Users-wake-Workspace-x/" + u1 + "/subagents/agent-a1.jsonl now":                             "read /work/.claude/projects/-work-fixture/" + FixtureSessionID + "/subagents/agent-a1.jsonl now",
+		"at ~/.claude/projects/-tmp-p/memory/MEMORY.md":                                                                                 "at ~/.claude/projects/-work-fixture/memory/MEMORY.md",
+		"/work/.claude/projects/-work-fixture/" + FixtureSessionID + ".jsonl":                                                           "/work/.claude/projects/-work-fixture/" + FixtureSessionID + ".jsonl",
+		"uuid " + u1 + " outside any path is not a project path":                                                                        "uuid " + u1 + " outside any path is not a project path",
+	}
+	for in, want := range cases {
+		m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote(in)+`}}`)
+		got := m["message"].(map[string]any)["content"]
+		if got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestScrub_UsernameIsAWholeWord(t *testing.T) {
 	m := one(t, `{"type":"user","uuid":"u","message":{"content":"wake and awake, wake-iphone, 這是wake的"}}`)
 	got := m["message"].(map[string]any)["content"]
@@ -209,6 +248,51 @@ func TestScrub_SecretsEmailsAndAddresses(t *testing.T) {
 		}
 	}
 	for _, keep := range []string{"task-notification", "mask-like", "disk-usage", "192.168.1.5"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("%q was rewritten in %q", keep, got)
+		}
+	}
+}
+
+func TestScrub_PdxAddressRewritten(t *testing.T) {
+	in := "from mlab/purdex-75-6c and air26/purdex-b0-q3, air19/_q34psn, air-2026/x_y and air-2019/z; " +
+		"quoted \"mlab/purdex-b0-q3\" and (mlab/purdex-b0-q3). keep mlabs/foo, notmlab/foo and amlab/x and air26 alone"
+	m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote(in)+`}}`)
+	got := m["message"].(map[string]any)["content"].(string)
+	for _, bad := range []string{"purdex-75", "purdex-b0", "_q34psn", "x_y", "air-2019/z"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("%q survived in %q", bad, got)
+		}
+	}
+	for _, want := range []string{"from mlab/fixture-peer and", "air26/fixture-peer,", "air19/fixture-peer,", "air-2026/fixture-peer and", "air-2019/fixture-peer;", `"mlab/fixture-peer"`, "(mlab/fixture-peer)."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q missing from %q", want, got)
+		}
+	}
+	for _, keep := range []string{"mlabs/foo", "notmlab/foo", "amlab/x", "air26 alone"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("%q was rewritten in %q", keep, got)
+		}
+	}
+}
+
+func TestScrub_UdsSocketPathRewritten(t *testing.T) {
+	in := `<peer from="uds:/private/tmp/claude-501/-Users-wake-proj/cc-socks/55982.sock" x=1> and uds:/tmp/cc-socks/7.sock; ` +
+		`escaped from=\"uds:/Users/wake/.claude/socks/12345.sock\" end; keep uds:notasocket and /work/tmp/cc-socks/9.sock`
+	m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote(in)+`}}`)
+	got := m["message"].(map[string]any)["content"].(string)
+	for _, bad := range []string{"55982", "12345", "claude-501", "wake", "7.sock"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("%q survived in %q", bad, got)
+		}
+	}
+	if n := strings.Count(got, "uds:/work/tmp/cc-socks/1.sock"); n != 3 {
+		t.Errorf("%d rewritten sockets in %q, want 3", n, got)
+	}
+	if !strings.Contains(got, `from=\"uds:/work/tmp/cc-socks/1.sock\" end`) {
+		t.Errorf("the escaped quotes around the socket were disturbed: %q", got)
+	}
+	for _, keep := range []string{"uds:notasocket", " /work/tmp/cc-socks/9.sock"} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("%q was rewritten in %q", keep, got)
 		}
@@ -324,6 +408,89 @@ func TestScrub_ReportCountsWhatItDropped(t *testing.T) {
 	}
 	if rep.Rows != 4 || rep.Kept != 1 || rep.Dropped["type:last-prompt"] != 2 || rep.Dropped["not_json"] != 1 {
 		t.Errorf("report = %+v", rep)
+	}
+}
+
+const omittedStdout = "<local-command-stdout>[output omitted by scrubber]</local-command-stdout>"
+
+// A /context listing names the recording host's plugins and skills; any
+// local-command output past 1 KiB is replaced whole.
+func TestScrub_LongLocalCommandOutputOmitted(t *testing.T) {
+	body := "\x1b[1mContext Usage\x1b[22m\n" + strings.Repeat("Plugin (figma): figma-skill 12 tokens\n", 60)
+	long := "<local-command-stdout> " + body + "</local-command-stdout>"
+	if len(long) <= 1024 {
+		t.Fatalf("test text is only %d bytes", len(long))
+	}
+	sys := one(t, `{"type":"system","subtype":"local_command","uuid":"s1","content":`+quote(long)+`}`)
+	if got := sys["content"]; got != omittedStdout {
+		t.Errorf("system content = %.120q", got)
+	}
+	usr := one(t, `{"type":"user","uuid":"u1","message":{"content":`+quote(long)+`}}`)
+	if got := usr["message"].(map[string]any)["content"]; got != omittedStdout {
+		t.Errorf("user content = %.120q", got)
+	}
+	if usr["uuid"] != "u1" || sys["uuid"] != "s1" {
+		t.Error("row ids changed")
+	}
+	// idempotent: the replacement is itself short and stays
+	again := one(t, `{"type":"system","subtype":"local_command","uuid":"s1","content":`+quote(omittedStdout)+`}`)
+	if again["content"] != omittedStdout {
+		t.Errorf("replacement not stable: %v", again["content"])
+	}
+}
+
+func TestScrub_ShortLocalCommandOutputKept(t *testing.T) {
+	for _, s := range []string{
+		"<local-command-stdout>Set model to Sonnet 5.5</local-command-stdout>",
+		"<local-command-stdout>\x1b[2mSession usage: 12 tokens\x1b[22m</local-command-stdout>",
+		"<local-command-stdout>" + strings.Repeat("x", 1024-len("<local-command-stdout></local-command-stdout>")) + "</local-command-stdout>",
+	} {
+		if len(s) > 1024 {
+			t.Fatalf("test text is %d bytes", len(s))
+		}
+		m := one(t, `{"type":"system","subtype":"local_command","uuid":"s","content":`+quote(s)+`}`)
+		if m["content"] != s {
+			t.Errorf("short stdout changed: %.80q", m["content"])
+		}
+	}
+	// long text that is not local-command output is not touched
+	other := strings.Repeat("plain prose ", 200)
+	m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote(other)+`}}`)
+	if m["message"].(map[string]any)["content"] != other {
+		t.Error("ordinary long text changed")
+	}
+}
+
+// A /context dump reaches the model as an isMeta user row: markdown, not a
+// local-command element, but it lists the host's plugins and skills all the same.
+func TestScrub_ContextUsageDumpOmitted(t *testing.T) {
+	long := "## Context Usage\n" + strings.Repeat("- Plugin (figma): figma-skill 12 tokens\n", 60)
+	if len(long) <= 1024 {
+		t.Fatalf("test text is only %d bytes", len(long))
+	}
+	m := one(t, `{"type":"user","uuid":"u1","isMeta":true,"message":{"content":`+quote(long)+`}}`)
+	if got := m["message"].(map[string]any)["content"]; got != OmittedContextUsage {
+		t.Errorf("content = %.120q", got)
+	}
+	if m["uuid"] != "u1" {
+		t.Error("row id changed")
+	}
+	if OmittedContextUsage != "## Context Usage\n[output omitted by scrubber]" {
+		t.Errorf("OmittedContextUsage = %q", OmittedContextUsage)
+	}
+	// idempotent: the replacement is itself short and stays
+	again := one(t, `{"type":"user","uuid":"u1","isMeta":true,"message":{"content":`+quote(OmittedContextUsage)+`}}`)
+	if again["message"].(map[string]any)["content"] != OmittedContextUsage {
+		t.Errorf("replacement not stable: %v", again["message"])
+	}
+	// a short string with the same heading stays; so does ordinary long text
+	short := "## Context Usage\nsmall"
+	other := "## Notes\n" + strings.Repeat("plain prose ", 200)
+	for _, s := range []string{short, other} {
+		m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote(s)+`}}`)
+		if m["message"].(map[string]any)["content"] != s {
+			t.Errorf("text changed: %.60q", s)
+		}
 	}
 }
 
