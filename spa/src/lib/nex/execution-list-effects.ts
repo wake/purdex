@@ -4,6 +4,7 @@
 // guards that decide whether a list answer may still be committed. Where
 // the rendered cache lives is the caller's business (`useExecutionListStore`),
 // reached through the small `ListSink`.
+import { findSuspects, statusDigest, type Suspect } from './delta-reconcile'
 import { commitWalk, normalizeDelta, putOverlay, type Overlay } from './execution-overlay'
 import { listAllExecutions, DELTA_PAGE_LIMIT, LIST_MAX_PAGES, LIST_PAGE_LIMIT } from './list-all-executions'
 import { openNexSse, type NexSseHandle, type NexSseStatus } from './nex-sse'
@@ -15,6 +16,10 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 
 /** Trailing debounce applied to an SSE-triggered refetch (spec §4.4.3). */
 export const LIST_REFRESH_DEBOUNCE_MS = 500
+/** The SPA safety reconcile period in delta mode (#1866 §4.5 item 5). */
+export const SAFETY_RECONCILE_MS = 120_000
+/** How long a suspect waits for a delta that explains it, once the stream has caught up with its page (§4.5). */
+export const SUSPECT_GRACE_MS = 1_500
 
 /**
  * The only kinds the site stream is asked for (`?kind=`): those whose commit
@@ -106,6 +111,8 @@ export interface HostListCache {
    * row) and by every committed reconcile; the archived query keys on it (§4.7).
    */
   archivedRevision?: number
+  /** (Optional; absent reads as 0.) Safety-reconcile suspects that no delta explained (#1866 §4.5): the SPA side lost an update. Separate from the daemon's counters. */
+  spaMismatchTotal?: number
 }
 
 /** Per-host capability (§4.1): `delta` once the host's first hello arrives; sticky until the fingerprint changes. */
@@ -144,7 +151,13 @@ interface HostListRuntime {
   overlay: Overlay | null
   debounce: ReturnType<typeof setTimeout> | null
   fetchToken: number
+  /** The 120 s safety reconcile (§4.5); only while a delta host has a subscriber. */
+  safetyTimer: ReturnType<typeof setInterval> | null
+  /** Differences the last safety reconcile found, waiting for the delta stream to explain them (§8 R3-1). */
+  suspects: PendingSuspect[]
 }
+
+interface PendingSuspect extends Suspect { timer: ReturnType<typeof setTimeout> | null }
 
 export interface ExecutionListEffects {
   subscribe: (hostId: string) => () => void
@@ -183,7 +196,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
   const runtimeOf = (hostId: string): HostListRuntime => {
     let rt = runtimes.get(hostId)
     if (!rt) {
-      rt = { subscribers: new Set(), generation: 0, sse: null, reserved: false, deltaCap: 'unknown', baseline: null, overlay: null, debounce: null, fetchToken: 0 }
+      rt = { subscribers: new Set(), generation: 0, sse: null, reserved: false, deltaCap: 'unknown', baseline: null, overlay: null, debounce: null, fetchToken: 0, safetyTimer: null, suspects: [] }
       runtimes.set(hostId, rt)
     }
     return rt
@@ -201,7 +214,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     sink.set((byHost) => (byHost[hostId] ? byHost : { ...byHost, [hostId]: emptyListCache() }))
 
   /** A one-shot walk of the list (§4.2). In `delta` mode it is versioned and deltas that arrive meanwhile are overlaid. */
-  function fetchAll(hostId: string): void {
+  function fetchAll(hostId: string, safety = false): void {
     const rt = runtimeOf(hostId)
     const generation = rt.generation
     const token = ++rt.fetchToken
@@ -236,16 +249,84 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
         const committed = overlay
           ? commitWalk(items, result.pages, overlay)
           : { items, vers: Object.fromEntries(items.map((i) => [i.id, 0])) }
+        // The safety reconcile compares the walk with the cache BEFORE the commit repairs it (§4.5).
+        const found = safety && delta && result.epoch !== undefined && sink.get()[hostId]
+          ? findSuspects(sink.get()[hostId], items, result.pages, overlay)
+          : []
         patchCache(hostId, (c) => ({
           ...c, items: committed.items, rowVers: committed.vers, phase: 'ready', error: null, truncated, complete,
           refreshRevision: c.refreshRevision + 1, archivedRevision: (c.archivedRevision ?? 0) + 1,
         }))
+        if (found.length > 0) registerSuspects(hostId, rt, found)
       })
       .catch((err: unknown) => {
         if (!stillCurrent()) return
         patchCache(hostId, (c) => ({ ...c, phase: 'error', error: errorText(err), refreshRevision: c.refreshRevision + 1 }))
       })
       .finally(endWalk)
+  }
+
+  function cancelSuspects(rt: HostListRuntime): void {
+    for (const s of rt.suspects) if (s.timer) clearTimeout(s.timer)
+    rt.suspects = []
+  }
+
+  function registerSuspects(hostId: string, rt: HostListRuntime, found: Suspect[]): void {
+    // An id the new walk reconsidered replaces its older, still pending suspect.
+    const ids = new Set(found.map((f) => f.id))
+    rt.suspects = rt.suspects.filter((s) => {
+      if (!ids.has(s.id)) return true
+      if (s.timer) clearTimeout(s.timer)
+      return false
+    })
+    for (const f of found) rt.suspects.push({ ...f, timer: null })
+    armSuspects(hostId, rt)
+  }
+
+  /**
+   * A suspect is judged only once the stream has delivered every delta up to its page's high-water mark (a late
+   * socket write of an older delta must not be counted as a loss, §8 R3-1); then it gets the grace.
+   */
+  function armSuspects(hostId: string, rt: HostListRuntime): void {
+    if (!rt.baseline) return
+    for (const s of rt.suspects) {
+      if (s.timer || rt.baseline.last < s.H) continue
+      s.timer = setTimeout(() => {
+        rt.suspects = rt.suspects.filter((x) => x !== s)
+        const total = (sink.get()[hostId]?.spaMismatchTotal ?? 0) + 1
+        patchCache(hostId, (c) => ({ ...c, spaMismatchTotal: total }))
+        console.warn('nex-delta: spa mismatch', { hostId, id: s.id, field: s.field, cached: s.cached, fetched: s.fetched, total })
+      }, SUSPECT_GRACE_MS)
+    }
+  }
+
+  /** A delta that arrived for a pending suspect explains it: newer than the page, or the very state the page listed. */
+  function observeDelta(rt: HostListRuntime, d: NexDelta): void {
+    if (rt.suspects.length === 0) return
+    const digest = statusDigest(normalizeDelta(d.ver, d.row).row)
+    rt.suspects = rt.suspects.filter((s) => {
+      if (s.id !== d.id) return true
+      if (d.ver <= s.V && !(d.bseq <= s.H && digest === s.listDigest)) return true
+      if (s.timer) clearTimeout(s.timer)
+      return false
+    })
+  }
+
+  function stopSafety(rt: HostListRuntime): void {
+    if (rt.safetyTimer) clearInterval(rt.safetyTimer)
+    rt.safetyTimer = null
+    cancelSuspects(rt)
+  }
+
+  /** The 120 s reconcile: delta mode, a subscriber, a visible document, no walk already in flight (§4.5). */
+  function armSafety(hostId: string, rt: HostListRuntime): void {
+    if (rt.safetyTimer || rt.deltaCap !== 'delta' || rt.subscribers.size === 0) return
+    rt.safetyTimer = setInterval(() => {
+      if (rt.deltaCap !== 'delta' || rt.subscribers.size === 0 || !infoReady(hostId)) return
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      if (rt.overlay) return
+      fetchAll(hostId, true)
+    }, SAFETY_RECONCILE_MS)
   }
 
   /** Stop the legacy stream and give its lane back (a hello, or a close). */
@@ -267,6 +348,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     const rt = runtimeOf(hostId)
     rt.generation += 1
     rt.overlay = null
+    stopSafety(rt)
     dropLegacyStream(rt, hostId)
     if (dropCache) {
       // Another daemon, or the host is gone: whatever it announced does not carry over (§4.1).
@@ -284,8 +366,10 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     ensureCache(hostId)
     if (rt.sse || !infoReady(hostId)) return
     // A delta host has no lane and no stream: the host-events stream carries its changes (§4.1).
-    if (rt.deltaCap === 'delta') fetchAll(hostId)
-    else if (openLegacyStream(hostId)) fetchAll(hostId)
+    if (rt.deltaCap === 'delta') {
+      fetchAll(hostId)
+      armSafety(hostId, rt)
+    } else if (openLegacyStream(hostId)) fetchAll(hostId)
   }
 
   /** Reserve the lane and open the site-wide SSE (§4.2). False when the stream is already dead on arrival. */
@@ -378,9 +462,11 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     const rt = runtimeOf(hostId)
     rt.deltaCap = 'delta'
     rt.baseline = { epoch: hello.epoch, last: hello.bseq }
+    cancelSuspects(rt) // the reconcile this hello triggers re-evaluates
     dropLegacyStream(rt, hostId)
     // Every hello reconciles when anything is subscribed: deltas may have been missed while disconnected.
     if (rt.subscribers.size > 0 && infoReady(hostId)) fetchAll(hostId)
+    armSafety(hostId, rt)
   }
 
   const applyDelta = (hostId: string, d: NexDelta): void => {
@@ -389,10 +475,13 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     if (d.epoch !== rt.baseline.epoch) return
     if (d.bseq !== rt.baseline.last + 1) {
       rt.baseline.last = d.bseq
+      cancelSuspects(rt)
       if (rt.subscribers.size > 0) fetchAll(hostId)
       return
     }
     rt.baseline.last = d.bseq
+    observeDelta(rt, d)
+    armSuspects(hostId, rt)
     const entry = normalizeDelta(d.ver, d.row)
     if (rt.overlay) putOverlay(rt.overlay, d.id, entry)
     const membership = d.row === null || d.row.archived === true
@@ -418,6 +507,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
   const resetForTests = (): void => {
     for (const rt of runtimes.values()) {
       if (rt.debounce) clearTimeout(rt.debounce)
+      stopSafety(rt)
     }
     runtimes.clear()
     nextToken = 1
