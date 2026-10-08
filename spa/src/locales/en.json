@@ -2030,6 +2030,7 @@
   "approval.dialog.reason": "Reason",
   "approval.dialog.deadline": "Time left",
   "approval.dialog.max_members": "Max members (1–8)",
+  "approval.dialog.max_members_requested": "lead asked for {{n}}",
   "approval.dialog.max_members_range": "Enter a whole number from 1 to {{max}}",
   "approval.dialog.roots": "Allowed roots (one per line)",
   "approval.dialog.roots_required": "At least one root is required",

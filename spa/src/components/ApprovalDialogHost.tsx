@@ -19,7 +19,7 @@
 // Tab trap and the focus guard are off, and the keyboard goes back to where it was before the dialog took it. Only a
 // click restores it (the pill, or the approval notification); a new request never does. `minimized` is per window and
 // not persisted (useApprovalStore).
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowsClockwise, ArrowsInSimple } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useHostStore } from '../stores/useHostStore'
@@ -27,7 +27,7 @@ import { useUndoToast } from '../stores/useUndoToast'
 import { approvalKey, selectCurrent, selectOpenCount, useApprovalStore, type ApprovalEntry, type Decision } from '../stores/useApprovalStore'
 import { ApprovalPill } from './ApprovalPill'
 import { hostLabel, useHostLook } from '../lib/host-look'
-import { leadPayloadOf, selfRelayPayloadOf, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { submitDecision } from '../lib/team/approval-decide'
@@ -71,7 +71,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const isSelfRelay = approval.kind === 'self_relay'
   const payload = leadPayloadOf(approval)
   const relay = selfRelayPayloadOf(approval)
-  const [maxMembers, setMaxMembers] = useState(String(payload.max_members))
+  const [maxMembers, setMaxMembers] = useState(String(DEFAULT_MAX_MEMBERS)) // U25: always 3; the lead's request is only named beside the field
   const [rootsText, setRootsText] = useState(payload.roots.join('\n'))
   // 「這個 session 不再詢問」 (spec §8.7 (a)): applied with the decision, whichever it is.
   const [noMoreAsking, setNoMoreAsking] = useState(false)
@@ -174,6 +174,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
 
   const members =maxMembers.trim() === '' ? NaN : Number(maxMembers)
   const membersOk = Number.isInteger(members) && members >= 1 && members <= MAX_MAX_MEMBERS
+  const membersErrorId = useId()
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
   // A self relay carries no grant (U13a: one click); only the lead kind validates its fields.
@@ -309,12 +310,17 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                   value={maxMembers}
                   disabled={locked}
                   onChange={(e) => setMaxMembers(e.target.value)}
+                  aria-invalid={membersOk ? undefined : true}
+                  aria-describedby={membersOk ? undefined : membersErrorId}
                   data-testid="approval-max-members"
                   className={`w-16 ${fieldClass}`}
                 />
+                {payload.max_members !== DEFAULT_MAX_MEMBERS && (
+                  <span data-testid="approval-max-members-requested">{t('approval.dialog.max_members_requested', { n: payload.max_members })}</span>
+                )}
               </label>
               {!membersOk && (
-                <p data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
+                <p id={membersErrorId} role="alert" data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
               )}
               <label className="mt-2 block text-xs text-text-secondary">
                 {t('approval.dialog.roots')}
