@@ -84,6 +84,29 @@ func (m *Module) runModRound(now time.Time) {
 	}
 	slices.Sort(sids)
 
+	// redirty puts a sid back for the next round: its panes could not be
+	// resolved or its projection could not be read (tmux stuck), nothing was
+	// sent and the baseline is untouched.
+	redirty := func(sid, why string) {
+		m.modMu.Lock()
+		if _, ok := m.modDirty[sid]; !ok {
+			m.markDirtyLocked(sid, why)
+		}
+		m.modMu.Unlock()
+	}
+
+	// Pane -> session names come from one bounded batch call (a per-pane
+	// lookup has no deadline and would hang the worker, and its shutdown, on a
+	// stuck tmux). A timed-out call retries every sid next round.
+	snap, err := m.takePaneSnapshot()
+	if err != nil {
+		for _, sid := range sids {
+			redirty(sid, dirty[sid])
+		}
+		return
+	}
+	nameOf := m.paneNameFunc(snap)
+
 	type target struct{ sid, session, why string }
 	var targets []target
 	seen := make(map[string]bool)
@@ -93,7 +116,7 @@ func (m *Module) runModRound(now time.Time) {
 			continue
 		}
 		for _, f := range roots {
-			name := m.paneSessionName(f.PaneID)
+			name := nameOf(f.PaneID)
 			if name == "" || seen[name] {
 				continue
 			}
@@ -102,16 +125,9 @@ func (m *Module) runModRound(now time.Time) {
 		}
 	}
 	for _, t := range targets {
-		if !m.emitSessionState(t.session, "mod", map[string]any{"mod_event": t.why}) {
-			continue
+		if m.emitSessionState(t.session, "mod", map[string]any{"mod_event": t.why}) {
+			redirty(t.sid, t.why)
 		}
-		// The projection could not be read (tmux stuck): the sid goes back on
-		// the dirty list and the next round tries again.
-		m.modMu.Lock()
-		if _, ok := m.modDirty[t.sid]; !ok {
-			m.markDirtyLocked(t.sid, t.why)
-		}
-		m.modMu.Unlock()
 	}
 }
 
