@@ -5,8 +5,8 @@
 // the rendered cache lives is the caller's business (`useExecutionListStore`),
 // reached through the small `ListSink`.
 import { findSuspects, statusDigest, type Suspect } from './delta-reconcile'
-import { commitWalk, normalizeDelta, putOverlay, type Overlay } from './execution-overlay'
-import { listAllExecutions, DELTA_PAGE_LIMIT, LIST_MAX_PAGES, LIST_PAGE_LIMIT } from './list-all-executions'
+import { commitWalk, coveringPage, normalizeDelta, putOverlay, type Overlay } from './execution-overlay'
+import { listAllExecutions, DELTA_PAGE_LIMIT, LIST_MAX_PAGES, LIST_PAGE_LIMIT, type WalkPage } from './list-all-executions'
 import { openNexSse, type NexSseHandle, type NexSseStatus } from './nex-sse'
 import { fingerprintOf } from './nex-host-effects'
 import { subscriptionSlots } from './subscription-slots'
@@ -113,6 +113,8 @@ export interface HostListCache {
   archivedRevision?: number
   /** (Optional; absent reads as 0.) Safety-reconcile suspects that no delta explained (#1866 §4.5): the SPA side lost an update. Separate from the daemon's counters. */
   spaMismatchTotal?: number
+  /** (Optional.) The last committed walk's pages: an id absent from the walk is still floored by its covering page's ver (#1963). */
+  walkPages?: WalkPage[]
 }
 
 /** Per-host capability (§4.1): `delta` once the host's first hello arrives; sticky until the fingerprint changes. */
@@ -254,7 +256,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
           ? findSuspects(sink.get()[hostId], items, result.pages, overlay)
           : []
         patchCache(hostId, (c) => ({
-          ...c, items: committed.items, rowVers: committed.vers, phase: 'ready', error: null, truncated, complete,
+          ...c, items: committed.items, rowVers: committed.vers, walkPages: result.pages, phase: 'ready', error: null, truncated, complete,
           refreshRevision: c.refreshRevision + 1, archivedRevision: (c.archivedRevision ?? 0) + 1,
         }))
         if (found.length > 0) registerSuspects(hostId, rt, found)
@@ -487,7 +489,8 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     const membership = d.row === null || d.row.archived === true
       || d.cause.includes('execution.archived') || d.cause.includes('execution.unarchived')
     patchCache(hostId, (c) => {
-      const known = c.rowVers?.[d.id]
+      // A cached row's ver, else the page that read this id's range: a stale upsert must not bring back what the walk omitted (#1963).
+      const known = c.rowVers?.[d.id] ?? coveringPage(c.walkPages ?? [], d.id)?.ver
       if (known !== undefined && d.ver <= known) return membership ? { ...c, archivedRevision: (c.archivedRevision ?? 0) + 1 } : c
       const rest = c.items.filter((i) => i.id !== d.id)
       const items = entry.row === null
