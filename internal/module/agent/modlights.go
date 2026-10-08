@@ -113,6 +113,26 @@ func (m *Module) startModLights() {
 	m.modCancel = m.modReg.Subscribe(m.onModEvent)
 	m.startModWorker()
 	m.modOverlayOn.Store(true)
+	m.remarkModSIDsDirty()
+}
+
+// remarkModSIDsDirty marks every sid with a stream dirty again and kicks the
+// worker. Events that arrived between the subscription and the overlay going
+// on may have been consumed by a round that still saw the overlay off; their
+// panes are showing the hook light and nothing else would re-send them.
+func (m *Module) remarkModSIDsDirty() {
+	m.modMu.Lock()
+	for sid := range m.modBySID {
+		if _, ok := m.modDirty[sid]; !ok {
+			m.markDirtyLocked(sid, modEventLive)
+		}
+	}
+	clear(m.modLiveSeen)
+	m.modMu.Unlock()
+	select {
+	case m.modKick <- struct{}{}:
+	default:
+	}
 }
 
 // stopModLights undoes startModLights in the opposite order: the overlay
