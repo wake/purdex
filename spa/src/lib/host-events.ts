@@ -5,6 +5,7 @@ export interface HostEvent {
     | 'handoff'
     | 'relay'
     | 'hook'
+    | 'agent.snapshot'
     | 'sessions'
     | 'tmux'
     | 'agent.status'
