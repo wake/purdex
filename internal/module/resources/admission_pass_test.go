@@ -287,20 +287,32 @@ func TestPass_SessionNewBaselineWrittenWithTheGrant(t *testing.T) {
 	}
 }
 
-// With the process table unreadable the baseline is empty (the lease is
-// charged its whole tree: the conservative side), and the grant still happens.
-func TestPass_SessionNewWithUnreadableTableGetsAnEmptyBaseline(t *testing.T) {
+// With the process table unreadable the baseline is unknown (NULL, measured
+// as the whole tree: spec D-5 fails open), not an empty list, and the grant
+// still happens at once; once the table can be read again the next session-new
+// lease gets a real baseline.
+func TestPass_SessionNewWithUnreadableTableGetsAnUnknownBaseline(t *testing.T) {
 	f := newPassFix(t, resources.ModeLease)
 	f.snapErr = context.DeadlineExceeded
 	procs := []resources.Proc{{PID: 501, PPID: 500}}
 	f.m.lastProcs.Store(&procs)
-	r := baseRow("s", "c-s")
-	r.Scope, r.HolderPID = resources.ScopeSessionNew, 500
-	r.CreatedAt, r.DeadlineAt, r.LeaseUntil = f.nowMS()-1000, f.nowMS()+300000, f.nowMS()+30000
-	mustCreate(t, f.m.store, r)
-	f.m.admissionPass(context.Background(), "s")
-	if got := f.row("s"); got.State != "held" || got.Baseline != "[]" {
-		t.Errorf("row = %+v", got)
+	mk := func(id string) {
+		r := baseRow(id, "c-"+id)
+		r.Scope, r.HolderPID, r.Weight = resources.ScopeSessionNew, 500, 5
+		r.CreatedAt, r.DeadlineAt, r.LeaseUntil = f.nowMS()-1000, f.nowMS()+300000, f.nowMS()+30000
+		mustCreate(t, f.m.store, r)
+	}
+	mk("s1")
+	f.m.admissionPass(context.Background(), "s1")
+	if got := f.row("s1"); got.State != "held" || got.Baseline != "" {
+		t.Errorf("unreadable: %+v", got)
+	}
+	f.snapErr = nil
+	f.alive(501, time.Date(2026, 10, 9, 11, 0, 0, 0, time.UTC))
+	mk("s2")
+	f.m.admissionPass(context.Background(), "s2")
+	if got := f.row("s2"); got.State != "held" || got.Baseline == "" || got.Baseline == "[]" {
+		t.Errorf("readable again: %+v", got)
 	}
 }
 
@@ -387,5 +399,71 @@ func TestPass_SessionNewArrivingLateGetsItsBaselineFirst(t *testing.T) {
 	got := f.row("late")
 	if got.State != "held" || got.Baseline == "" || got.Baseline == "[]" {
 		t.Fatalf("row = %+v: granted without its baseline, or not at all", got)
+	}
+}
+
+// Advise: a request that lease mode would have queued does not take capacity
+// from the counterfactual of the next. Held 80; waiters 30 then 10: lease mode
+// keeps the 30 back and lets the 10 through.
+func TestPass_AdviseCounterfactualIgnoresWhatLeaseWouldHaveQueued(t *testing.T) {
+	f := newPassFix(t, resources.ModeAdvise)
+	f.held("h", 99, "", f.nowMS()-60000)
+	f.m.store.db.Exec(`UPDATE resource_leases SET weight = 80, samples = 5, ewma = 80 WHERE id = 'h'`)
+	f.queue("w1-thirty", 30, 5*time.Minute)
+	f.queue("w2-ten", 10, 5*time.Minute)
+	f.m.admissionPass(context.Background(), "")
+	if r := f.row("w1-thirty"); !r.WouldWait {
+		t.Errorf("thirty: %+v", r)
+	}
+	if r := f.row("w2-ten"); r.WouldWait {
+		t.Errorf("ten was marked would_wait because the thirty it was not behind in lease mode took capacity: %+v", r)
+	}
+	// What advise did on the host is still recorded: ten saw thirty's weight.
+	if d := f.dec("w2-ten"); d.sumCharge != 110 {
+		t.Errorf("ten's decision sum = %v, want 110 (80 + the 30 advise let in)", d.sumCharge)
+	}
+}
+
+// A late-arriving session-new request that would fit holds the queue behind
+// it for one round: a process-scope request that arrived after it does not
+// take the capacity first.
+func TestPass_LateSessionNewIsNotOvertaken(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	once := false
+	f.m.beforeLockHook = func() {
+		if once {
+			return
+		}
+		once = true
+		a := baseRow("a", "c-a")
+		a.Scope, a.HolderPID, a.Weight = resources.ScopeSessionNew, 500, 60
+		a.CreatedAt, a.DeadlineAt, a.LeaseUntil = f.nowMS()-2000, f.nowMS()+300000, f.nowMS()+30000
+		mustCreate(t, f.m.store, a)
+		b := baseRow("b", "c-b")
+		b.Weight = 60
+		b.CreatedAt, b.DeadlineAt, b.LeaseUntil = f.nowMS()-1000, f.nowMS()+300000, f.nowMS()+30000
+		mustCreate(t, f.m.store, b)
+	}
+	f.alive(501, time.Date(2026, 10, 9, 11, 0, 0, 0, time.UTC))
+	procs := []resources.Proc{{PID: 501, PPID: 500}}
+	f.m.lastProcs.Store(&procs)
+	f.m.admissionPass(context.Background(), "")
+	if f.state("a") != "held" || f.state("b") != "waiting" {
+		t.Fatalf("a=%s b=%s: b overtook a", f.state("a"), f.state("b"))
+	}
+}
+
+// A waiter whose lease ran out (nobody polls it) is the sweeper's to abandon,
+// never the pass's to grant, even past its deadline.
+func TestPass_NeverGrantsAnAbandonedWaiter(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	r := f.queue("gone", 35, -time.Second) // past its deadline too
+	if _, err := f.m.store.db.Exec(`UPDATE resource_leases SET lease_until = ? WHERE id = ?`, f.nowMS()-1, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.queue("live", 35, 5*time.Minute)
+	f.m.admissionPass(context.Background(), "")
+	if f.state("gone") != "waiting" || f.state("live") != "held" {
+		t.Fatalf("gone=%s live=%s", f.state("gone"), f.state("live"))
 	}
 }

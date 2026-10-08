@@ -101,6 +101,9 @@ type Module struct {
 	// beforeLockHook runs between the unlocked baseline work and the locked
 	// part of a round: a seam for a request that arrives in between.
 	beforeLockHook func()
+	// baselineFailing: the "no baseline" problem has been logged (the unlocked part
+	// of the pass runs on the sampler and the sweeper goroutine).
+	baselineFailing atomic.Bool
 	// skipPass makes admissionPass a no-op (a test seam).
 	skipPass    bool
 	lastPrune   time.Time

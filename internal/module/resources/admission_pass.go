@@ -45,7 +45,7 @@ func (m *Module) admissionPass(ctx context.Context, fresh string) passResult {
 	// another writer, or a session-new waiter that arrived after the baselines
 	// were worked out. Two rounds at most; the next trigger finishes the rest.
 	for round := 0; round < 2; round++ {
-		baselines := m.baselinesForLikelyGrants(ctx, set, fresh)
+		baselines := m.baselinesForWaiting(ctx)
 		if m.beforeLockHook != nil {
 			m.beforeLockHook()
 		}
@@ -70,15 +70,25 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		m.passHook()
 	}
 	now := m.now()
-	// A session-new waiter whose baseline is not ready is left for the next
-	// round rather than granted without one.
-	var ready []leaseRow
+	// A waiter nobody polls any more (its lease ran out) is the sweeper's to
+	// end as abandoned; granting it would hold capacity for a client that left.
+	live := waiting[:0:0]
 	for _, w := range waiting {
-		if w.Scope == resources.ScopeSessionNew && !m.baselineReady(w, baselines) {
-			again = true
-			continue
+		if w.LeaseUntil > now.UnixMilli() {
+			live = append(live, w)
 		}
-		ready = append(ready, w)
+	}
+	waiting = live
+	// A session-new waiter that arrived after the baselines were worked out has
+	// none yet. It is not granted without one, and nobody behind it is
+	// planned either (they would overtake it, which FIFO does not allow while
+	// it may fit): the queue is cut there and another round follows.
+	ready := waiting
+	for i, w := range waiting {
+		if w.Scope == resources.ScopeSessionNew && !m.baselineReady(w, baselines) {
+			ready, again = waiting[:i], true
+			break
+		}
 	}
 	for _, pg := range m.plan(set, held, ready, fresh, now) {
 		w := pg.row
@@ -102,7 +112,9 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 }
 
 // baselineReady says whether a session-new waiter can be granted: its
-// baseline was worked out (possibly empty: a session with nothing under it).
+// baseline was worked out. An entry may be "" (unknown: the process table
+// could not be read; spec D-5 fails open, so the lease is granted and charged
+// its whole tree), "[]" (a session with nothing under it) or a list.
 func (m *Module) baselineReady(w leaseRow, baselines map[string]string) bool {
 	_, ok := baselines[w.ID]
 	return ok
@@ -146,22 +158,38 @@ func (m *Module) plan(set resources.Settings, held, waiting []leaseRow, fresh st
 		byID[w.ID] = w
 		waiters[i] = resources.Waiter{ID: w.ID, Weight: w.Weight, EnqueuedAt: time.UnixMilli(w.CreatedAt),
 			Deadline: time.UnixMilli(w.DeadlineAt), Fresh: w.ID == fresh}
-		if set.Mode == resources.ModeAdvise {
-			waiters[i].Deadline = now // every one passes; Overrun then means "lease mode would have waited"
-		}
 	}
 	use := m.leaseUseSnapshot()
 	var out []plannedGrant
+	if set.Mode != resources.ModeAdvise {
+		for _, g := range resources.Admit(host, leases, use, waiters, now, set) {
+			out = append(out, plannedGrant{row: byID[g.ID], grant: g})
+		}
+		return out
+	}
+	// Advise: what lease mode would have done is worked out on its own, from
+	// the real deadlines, and says only whether each request would have been
+	// held back. Every request is then granted at once, and the decision
+	// recorded is the one the pass really makes: a second Admit in which every
+	// deadline has passed, so each grant counts in the sum of the next, as it
+	// does on the host. A request that lease mode would have queued therefore
+	// does not take capacity from the counterfactual of a later one.
+	lease := map[string]resources.Grant{}
+	for _, g := range resources.Admit(host, leases, use, waiters, now, set) {
+		lease[g.ID] = g
+	}
+	for i := range waiters {
+		waiters[i].Deadline = now
+	}
 	for _, g := range resources.Admit(host, leases, use, waiters, now, set) {
 		pg := plannedGrant{row: byID[g.ID], grant: g}
-		if set.Mode == resources.ModeAdvise {
-			pg.wouldWait = g.Overrun
-			pg.grant.Overrun = false
-			if pg.grant.Path == resources.PathOverrun {
-				pg.grant.Path = resources.PathWaited
-				if g.ID == fresh {
-					pg.grant.Path = resources.PathImmediate
-				}
+		l, fits := lease[g.ID]
+		pg.wouldWait = !fits || l.Overrun
+		pg.grant.Overrun = false
+		if pg.grant.Path == resources.PathOverrun {
+			pg.grant.Path = resources.PathWaited
+			if g.ID == fresh {
+				pg.grant.Path = resources.PathImmediate
 			}
 		}
 		out = append(out, pg)
@@ -179,19 +207,20 @@ func (m *Module) admitHost() resources.HostUse {
 	return resources.HostUse{}
 }
 
-// baselinesForLikelyGrants works out, outside the lock, the baseline of every
-// session-new waiter an unlocked dry run says will be granted. The map holds
-// "" for a waiter whose tree could not be read (granted with no baseline: it
-// is then charged its whole tree, the conservative side).
-func (m *Module) baselinesForLikelyGrants(ctx context.Context, set resources.Settings, fresh string) map[string]string {
-	held, waiting, ok := m.readPassRows()
-	if !ok {
+// baselinesForWaiting works out, outside the lock, the baseline of every
+// session-new waiter (all of them, not a prediction of the ones to be granted:
+// a prediction that differs from the locked plan would cut the queue at a
+// waiter that has none). The process table is read only when there is one.
+func (m *Module) baselinesForWaiting(ctx context.Context) map[string]string {
+	waiting, err := m.store.Waiting()
+	if err != nil {
+		m.logf("[resources] admission: list waiting leases: %v", err)
 		return nil
 	}
 	var want []leaseRow
-	for _, pg := range m.plan(set, held, waiting, fresh, m.now()) {
-		if pg.row.Scope == resources.ScopeSessionNew {
-			want = append(want, pg.row)
+	for _, w := range waiting {
+		if w.Scope == resources.ScopeSessionNew {
+			want = append(want, w)
 		}
 	}
 	if len(want) == 0 {
@@ -213,9 +242,18 @@ func (m *Module) captureBaselines(ctx context.Context, rows []leaseRow) map[stri
 		procs = *p
 	}
 	view, err := m.readView(ctx)
-	if err != nil {
-		view = nil
+	if err != nil || m.lastProcs.Load() == nil {
+		// Unknown, not empty: "" is stored as NULL and measured as the whole
+		// tree (spec D-5: fail open, on the high side).
+		if !m.baselineFailing.Swap(true) {
+			m.logf("[resources] admission: no baseline for session-new leases (process table or sample unavailable): %v", err)
+		}
+		for _, r := range rows {
+			out[r.ID] = ""
+		}
+		return out
 	}
+	m.baselineFailing.Store(false)
 	children := make(map[int][]int, len(procs))
 	for _, p := range procs {
 		children[p.PPID] = append(children[p.PPID], p.PID)
@@ -224,7 +262,7 @@ func (m *Module) captureBaselines(ctx context.Context, rows []leaseRow) map[stri
 		entries := []resources.BaselineEntry{}
 		seen := map[int]bool{r.HolderPID: true}
 		queue := []int{r.HolderPID}
-		for len(queue) > 0 && view != nil {
+		for len(queue) > 0 {
 			pid := queue[0]
 			queue = queue[1:]
 			for _, c := range children[pid] {
