@@ -27,6 +27,7 @@ import { UNATTENDED_EVENT_TYPE } from '../lib/team/types'
 import { handleRosterEvent } from '../lib/team/roster-ws'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
 import { connectionKey } from '../lib/host-connection-key'
+import { decideHookFrame, parseAgentSnapshot, type HookCursor } from '../lib/agent-lights/hook-cursor'
 
 /**
  * The operation lock's observer (#1309 + #1310 spec §3.1): every tree rewriter —
@@ -122,10 +123,39 @@ export function useMultiHostEventWs() {
       // `nex=v1` opts this connection in to the execution hello / delta frames (#1866 §3.5); the ticket is added next to it.
       const wsUrlObj = new URL(hostWsUrl(hostId, '/ws/host-events'))
       wsUrlObj.searchParams.set(NEX_OPT_IN.key, NEX_OPT_IN.value)
+      // `agent=v2` opts in to the complete `agent.snapshot` frame and the `(epoch, seq)` hook cursor (U1-3b, spec §7).
+      wsUrlObj.searchParams.set('agent', 'v2')
       const wsUrl = wsUrlObj.toString()
       const baseUrl = useHostStore.getState().getDaemonBase(hostId)
 
       const connRef: { current: EventConnection | undefined } = { current: undefined }
+
+      // The hook cursor of THIS connection (runtime only; shares nothing with the `nex.*` cursor). null until the
+      // connection's `agent.snapshot` is applied; reset on open, close and resync. `resyncing` lets a resync run
+      // once per connection: after it, every frame of the retired socket is dropped by host-events.ts's epoch.
+      let hookCursor: HookCursor = null
+      let resyncing = false
+      // A gap or a foreign epoch on a live frame: retire the socket NOW, exactly as the health check's success
+      // branch does (no asynchronous health check in between), and reconnect for a fresh snapshot.
+      const resyncHookStream = () => {
+        if (resyncing || !connRef.current) return
+        resyncing = true
+        hookCursor = null
+        connectionClosed(hostId)
+        closeAttachGate(hostId)
+        useHostStore.getState().setRuntime(hostId, { status: 'reconnecting', attachReady: false })
+        connRef.current.reconnect()
+      }
+      // The second provenance trigger (spec §5.4), and the one v2 lacked: the first probe of a pre-deploy session
+      // runs before any event has filled the frame's `session_id`, gets `found: false`, and nothing else would ever
+      // ask again — the session list has not changed and the pane is not re-attached. The hook stream is exactly
+      // the signal that the daemon now knows more than it did. AFTER the store write, not before: a broadcast that
+      // itself writes the record leaves the pane ineligible, so it costs no request.
+      const probeProvenanceOf = (session: string) => {
+        for (const { sessionCode, tmuxInstance } of provenanceBindings(hostId, session)) {
+          probeSessionProvenance(hostId, sessionCode, tmuxInstance)
+        }
+      }
 
       const statusMap: Record<HealthResult['daemon'], HostRuntime['status']> = {
         connected: 'connected',
@@ -169,24 +199,29 @@ export function useMultiHostEventWs() {
             handleSessionsFrame(hostId, event)
             return
           }
+          if (event.type === 'agent.snapshot') {
+            // The host's complete agent list (`session` is ""): replaces what this host's codes held, then opens the
+            // cursor at the snapshot's high-water seq. A malformed one is dropped without a reconnect (a daemon bug:
+            // the lights of this host hold until the next connection).
+            try {
+              const snap = parseAgentSnapshot(JSON.parse(event.value))
+              if (!snap) return
+              useAgentStore.getState().applyAgentSnapshot(hostId, snap.sessions)
+              hookCursor = { epoch: snap.epoch, last: snap.seq }
+              for (const entry of snap.sessions) probeProvenanceOf(entry.session)
+            } catch { /* ignore */ }
+            return
+          }
           if (event.type === 'hook') {
             try {
               const hookData = JSON.parse(event.value)
+              const decision = decideHookFrame(hookCursor, hookData ?? {})
+              if (decision === 'resync') { resyncHookStream(); return }
+              if (decision === 'drop') return
+              if (decision === 'apply') hookCursor = { epoch: hookData.epoch, last: hookData.seq }
               // the transition rule (U1-3): a daemon hook frame is news only when the status really changed
               useAgentStore.getState().applyHookEvent(hostId, event.session, hookData)
-              // The second provenance trigger (spec §5.4), and the one v2
-              // lacked: the first probe of a pre-deploy session runs before any
-              // event has filled the frame's `session_id`, gets `found: false`,
-              // and nothing else would ever ask again — the session list has
-              // not changed and the pane is not re-attached. The hook stream is
-              // exactly the signal that the daemon now knows more than it did.
-              //
-              // AFTER `applyHookEvent`, not before: a broadcast that
-              // itself writes the record leaves the pane ineligible, so it
-              // costs no request.
-              for (const { sessionCode, tmuxInstance } of provenanceBindings(hostId, event.session)) {
-                probeSessionProvenance(hostId, sessionCode, tmuxInstance)
-              }
+              probeProvenanceOf(event.session)
             } catch { /* ignore */ }
           }
           if (event.type === 'tmux') {
@@ -267,6 +302,7 @@ export function useMultiHostEventWs() {
         },
         // onClose — trigger SM health check (no auto-reconnect)
         () => {
+          hookCursor = null
           // `conn` moves BEFORE the gate closes, in this same synchronous
           // callback (#1255 SPA spec §3.3, codex #5): whoever sees the gate
           // closed also sees a connection generation no fetch was sent on.
@@ -278,6 +314,8 @@ export function useMultiHostEventWs() {
         },
         // onOpen
         () => {
+          hookCursor = null
+          resyncing = false
           connectionOpened(hostId)
           useHostStore.getState().setRuntime(hostId, {
             status: 'connected',
