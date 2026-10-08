@@ -592,3 +592,36 @@ func TestSweepUnattended_OverdueMemberRelayIsLeftToTheSweeper(t *testing.T) {
 		t.Fatalf("op %s, want %s", st, team.RelayAwaitingApproval)
 	}
 }
+
+// Review (PU-1b3) M2: the refusal set forgets a closed row at the next
+// tick even when nothing AutoApprovable is open any more — no open row at
+// all, or only a hook row — so it cannot grow for the daemon's life.
+// Mutation gate: drop the tick's forget when it does not sweep → red.
+func TestTick_RefusalSetForgetsClosedRowsWithNothingToSweep(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		open func(f *fixture)
+	}{
+		{"nothing open", func(*fixture) {}},
+		{"only a hook row", func(f *fixture) { f.askBegin("tu-1") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.create(uid(1))
+			f.makeMember("sid-1")
+			f.unatt.set(true)
+			f.m.tick()
+			if _, ok := f.m.notAutoApproved[uid(1)]; !ok {
+				t.Fatal("the refusal was not remembered")
+			}
+			if code, body := f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil); code != http.StatusOK {
+				t.Fatalf("cancel: %d %s", code, body)
+			}
+			c.open(f)
+			f.m.tick()
+			if len(f.m.notAutoApproved) != 0 {
+				t.Fatalf("set = %v, want empty", f.m.notAutoApproved)
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,9 +72,12 @@ type Module struct {
 	unattendedErr string
 	// notAutoApproved (under createMu) is, per open row the daemon could
 	// not approve, the reason last logged (autoApprove): a refusal retried
-	// every tick logs once. A sweep forgets the rows no longer open.
-	notAutoApproved map[string]string
-	titles          TitleMover
+	// every tick logs once. A sweep, and every tick while it is not empty,
+	// forgets the rows no longer open. notAutoApprovedN is its size, which
+	// the tick reads without createMu (rememberRefusal / forgetRefusal).
+	notAutoApproved  map[string]string
+	notAutoApprovedN atomic.Int64
+	titles           TitleMover
 	// usage is the agent module's per-session statusline reading; begin
 	// copies model_id / effort from it into the self_relay payload (the mod
 	// sends neither). Nil when the agent module is absent: both stay "".

@@ -199,19 +199,48 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 			m.logf("[team] approval %s cancelled at its auto-approve: origin %s is a member of a live team", a.ID, a.Origin.Ref)
 			return false, false
 		default:
-			delete(m.notAutoApproved, a.ID)
+			m.forgetRefusal(a.ID)
 			m.logf("[team] approval %s approved by unattended (origin %s)%s", a.ID, a.Origin.Ref, teamNote(after))
 			return true, false
 		}
 	}
 	if m.notAutoApproved[a.ID] != err.Error() {
-		if m.notAutoApproved == nil {
-			m.notAutoApproved = map[string]string{}
-		}
-		m.notAutoApproved[a.ID] = err.Error()
+		m.rememberRefusal(a.ID, err.Error())
 		m.logf("[team] approval %s not auto-approved: %v", a.ID, err)
 	}
 	return false, true
+}
+
+// rememberRefusal records reason as the one logged for open row id, and
+// forgetRefusal drops it; both republish the set's size
+// (notAutoApprovedN) for the tick's check without createMu. Caller holds
+// createMu.
+func (m *Module) rememberRefusal(id, reason string) {
+	if m.notAutoApproved == nil {
+		m.notAutoApproved = map[string]string{}
+	}
+	m.notAutoApproved[id] = reason
+	m.notAutoApprovedN.Store(int64(len(m.notAutoApproved)))
+}
+
+func (m *Module) forgetRefusal(id string) {
+	delete(m.notAutoApproved, id)
+	m.notAutoApprovedN.Store(int64(len(m.notAutoApproved)))
+}
+
+// forgetClosedRefusals forgets every refusal whose row is not in open, a
+// list read under createMu: that row closed, and a closed row never
+// reopens. Caller holds createMu.
+func (m *Module) forgetClosedRefusals(open []team.Approval) {
+	ids := make(map[string]bool, len(open))
+	for _, a := range open {
+		ids[a.ID] = true
+	}
+	for id := range m.notAutoApproved {
+		if !ids[id] {
+			m.forgetRefusal(id)
+		}
+	}
 }
 
 // sweepTick is sweepUnattended's why for the tick's reconciliation, whose
@@ -230,23 +259,17 @@ func (m *Module) sweepUnattended(why string) (approved, pending int) {
 		m.logf("[team] unattended sweep (%s): %v", why, err)
 		return 0, 0
 	}
-	seen := map[string]bool{}
 	for _, a := range open {
 		if !team.AutoApprovable(a.Kind) {
 			continue
 		}
-		seen[a.ID] = true
 		if ok, still := m.autoApprove(a); ok {
 			approved++
 		} else if still {
 			pending++
 		}
 	}
-	for id := range m.notAutoApproved {
-		if !seen[id] {
-			delete(m.notAutoApproved, id)
-		}
-	}
+	m.forgetClosedRefusals(open)
 	if why != sweepTick || approved > 0 {
 		m.logf("[team] unattended sweep (%s): approved %d, still open %d", why, approved, pending)
 	}
@@ -260,13 +283,27 @@ func (m *Module) sweepUnattended(why string) (approved, pending int) {
 // the tick's own list, read before its closes: it only says whether a
 // sweep is worth createMu; the sweep re-reads what is still open. The
 // switch is read under createMu, as every caller of unattendedOn does.
+// A tick that does not sweep — nothing AutoApprovable open (none open at
+// all, too), or the switch off — still forgets the refusals of rows closed
+// since (review M2), against a list re-read under createMu; it takes
+// createMu for that only while some refusal is remembered.
 func (m *Module) reconcileUnattended(open []team.Approval) {
-	if !slices.ContainsFunc(open, func(a team.Approval) bool { return team.AutoApprovable(a.Kind) }) {
+	sweep := slices.ContainsFunc(open, func(a team.Approval) bool { return team.AutoApprovable(a.Kind) })
+	if !sweep && m.notAutoApprovedN.Load() == 0 {
 		return
 	}
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
-	if !m.stopping() && m.unattendedOn() {
-		m.sweepUnattended(sweepTick)
+	if sweep && !m.stopping() && m.unattendedOn() {
+		m.sweepUnattended(sweepTick) // forgets the closed rows' refusals too
+		return
 	}
+	if len(m.notAutoApproved) == 0 {
+		return
+	}
+	still, err := m.store.ListOpen()
+	if err != nil { // the next tick tries again; the tick's own read logs a failing store
+		return
+	}
+	m.forgetClosedRefusals(still)
 }

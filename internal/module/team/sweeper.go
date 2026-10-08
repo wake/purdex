@@ -66,6 +66,7 @@ func (m *Module) tick() {
 		return
 	}
 	if len(open) == 0 {
+		m.reconcileUnattended(open) // forgets refusals of rows closed since
 		return
 	}
 	if m.afterListOpen != nil {
