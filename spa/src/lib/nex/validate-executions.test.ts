@@ -182,3 +182,17 @@ describe('sanitizeExecutionsPage nextCursor', () => {
     expect(sanitizeExecutionsPage({ items: {}, next_cursor: 'x' }).nextCursor).toBe('')
   })
 })
+
+describe('sanitizeExecutionsPage pdx stamp (#1866)', () => {
+  const page = (pdx: unknown) => ({ items: [], next_cursor: '', ...(pdx === undefined ? {} : { pdx }) })
+  it('keeps a valid stamp', () => {
+    expect(sanitizeExecutionsPage(page({ epoch: 'ab12', ver: 7, bseq: 3 })).pdx).toEqual({ epoch: 'ab12', ver: 7, bseq: 3 })
+  })
+  it('a missing bseq reads as 0', () => {
+    expect(sanitizeExecutionsPage(page({ epoch: 'ab12', ver: 7 })).pdx).toEqual({ epoch: 'ab12', ver: 7, bseq: 0 })
+  })
+  it.each([undefined, null, 'x', [], {}, { epoch: '', ver: 1 }, { epoch: 'a', ver: -1 }, { epoch: 'a', ver: 1.5 }, { epoch: 'a', ver: '1' }, { epoch: 5, ver: 1 }])(
+    'a missing or malformed stamp (%j) is simply absent', (pdx) => {
+      expect('pdx' in sanitizeExecutionsPage(page(pdx))).toBe(false)
+    })
+})

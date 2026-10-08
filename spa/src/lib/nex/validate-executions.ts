@@ -15,7 +15,12 @@ export interface SanitizedExecutionsPage {
   nextCursor: string
   /** `true` only when the page itself was not `{ items: [...] }`; such a page is never a valid last page. */
   malformed: boolean
+  /** The daemon's `pdx` stamp (#1866 §3.4) when present and well-formed; absent otherwise. */
+  pdx?: PageStamp
 }
+
+/** `{epoch, ver, bseq}`: which counter, this page's read order in it, and the broadcast high-water mark at that read. */
+export interface PageStamp { epoch: string; ver: number; bseq: number }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
@@ -116,6 +121,11 @@ export function sanitizeSummaryRollup(raw: unknown): ExecutionSummary {
   return out
 }
 
+function stampOf(v: unknown): PageStamp | undefined {
+  if (!isRecord(v) || typeof v.epoch !== 'string' || v.epoch === '' || !isCount(v.ver)) return undefined
+  return { epoch: v.epoch, ver: v.ver, bseq: isCount(v.bseq) ? v.bseq : 0 }
+}
+
 /** Never throws: a page that is not `{ items: [...] }` is an empty list with `dropped: 1`. */
 export function sanitizeExecutionsPage(raw: unknown): SanitizedExecutionsPage {
   if (!isRecord(raw) || !Array.isArray(raw.items)) return { items: [], dropped: 1, nextCursor: '', malformed: true }
@@ -126,5 +136,6 @@ export function sanitizeExecutionsPage(raw: unknown): SanitizedExecutionsPage {
     if (row) items.push(row)
     else dropped += 1
   }
-  return { items, dropped, nextCursor: typeof raw.next_cursor === 'string' ? raw.next_cursor : '', malformed: false }
+  const pdx = stampOf(raw.pdx)
+  return { items, dropped, nextCursor: typeof raw.next_cursor === 'string' ? raw.next_cursor : '', malformed: false, ...(pdx ? { pdx } : {}) }
 }

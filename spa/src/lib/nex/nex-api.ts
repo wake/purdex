@@ -90,6 +90,8 @@ export interface ListExecutionsOptions {
   sessionId?: string
   /** Exact-match label filters, sent as `label.<key>=<value>`. */
   labels?: Record<string, string>
+  /** Ask the daemon to answer a busy read slot with 503 `nex_busy` instead of an unstamped page (#1866 §3.4). */
+  pdxRetry?: boolean
 }
 
 export function listExecutions(hostId: string, opts: ListExecutionsOptions = {}): Promise<ExecutionsPage> {
@@ -99,6 +101,7 @@ export function listExecutions(hostId: string, opts: ListExecutionsOptions = {})
   if (opts.cursor) q.set('cursor', opts.cursor)
   if (opts.limit) q.set('limit', String(opts.limit))
   if (opts.sessionId) q.set('session_id', opts.sessionId)
+  if (opts.pdxRetry) q.set('pdx', 'retry')
   // By key in code-unit order, as `.sort()` orders the keys alone.
   const labels = Object.entries(opts.labels ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   for (const [k, v] of labels) q.set(`label.${k}`, v)

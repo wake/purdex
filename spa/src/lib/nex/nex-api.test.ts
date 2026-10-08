@@ -72,6 +72,14 @@ describe('nex-api', () => {
     expect(testGlobal.fetch.mock.calls[0][0]).toBe('http://100.64.0.2:7860/api/nex/v1/executions')
   })
 
+  it('listExecutions asks for pdx=retry only when told to (#1866 R3-3)', async () => {
+    testGlobal.fetch.mockImplementation(async () => json({ items: [], next_cursor: '' }))
+    await listExecutions(hostId, { limit: 5 })
+    expect(testGlobal.fetch.mock.calls[0][0]).not.toContain('pdx')
+    await listExecutions(hostId, { limit: 5, pdxRetry: true })
+    expect(new URL(testGlobal.fetch.mock.calls[1][0]).searchParams.get('pdx')).toBe('retry')
+  })
+
   it('fetchExecutionEvents passes after/limit and encodes the id', async () => {
     testGlobal.fetch.mockResolvedValueOnce(json({ items: [], next_cursor: 0 }))
     await fetchExecutionEvents(hostId, 'exc a', { after: 41, limit: 500 })
