@@ -101,6 +101,8 @@ export function handleApprovalEvent(hostId: string, value: unknown): void {
     if (store.applyOpened(hostId, ev.approval)) notifyApprovalOpened(hostId, ev.approval)
     return
   }
-  // closed: the dialog closes everywhere; only a decision made elsewhere is announced.
-  if (store.applyClosed(hostId, ev.approval) === 'elsewhere') toastClosed(hostId, ev.approval)
+  // closed: the dialog closes everywhere; only a decision made elsewhere is announced — and not one the daemon made by
+  // itself while 無人值守模式 was on (U23, D-U23-6): no one acted, and the ▾ list is where the person reviews those.
+  const outcome = store.applyClosed(hostId, ev.approval)
+  if (outcome === 'elsewhere' && ev.approval.decided_by?.kind !== 'unattended') toastClosed(hostId, ev.approval)
 }
