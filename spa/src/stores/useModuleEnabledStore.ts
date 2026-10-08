@@ -90,10 +90,18 @@ export const useModuleEnabledStore = create<ModuleEnabledState>()(
       resetAll: () => set({ enabled: {} }),
 
       captureBaseline: (snapshot) => {
-        // First-call wins — subsequent calls are no-ops so HMR re-runs of
-        // `registerBuiltinModules()` don't overwrite the session baseline.
-        if (get().baseline !== null) return
-        set({ baseline: { ...snapshot } })
+        // First value per module wins — HMR re-runs of `registerBuiltinModules()`
+        // must not overwrite the session baseline. A module that first shows up
+        // in a later call (added by HMR) is appended, so toggling it counts as
+        // a pending change too.
+        const { baseline } = get()
+        if (baseline === null) {
+          set({ baseline: { ...snapshot } })
+          return
+        }
+        const added = Object.keys(snapshot).filter((id) => !(id in baseline))
+        if (added.length === 0) return
+        set({ baseline: { ...baseline, ...Object.fromEntries(added.map((id) => [id, snapshot[id]])) } })
       },
 
       isEnabled: (moduleId) => isModuleEnabledIn(get().enabled, moduleId),
