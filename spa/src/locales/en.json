@@ -2064,5 +2064,12 @@
   "unattended.tooltip.partial_unreachable": "Unreachable: {{hosts}}",
   "unattended.tooltip.partial_unsupported": "Daemon too old: {{hosts}}",
   "unattended.tooltip.none": "No host is shown on this workbench",
-  "unattended.toast.failed": "Could not switch unattended mode: {{hosts}}"
+  "unattended.toast.failed": "Could not switch unattended mode: {{hosts}}",
+  "unattended.list": "Approved while away",
+  "unattended.panel.title": "Approved while away",
+  "unattended.panel.empty": "Nothing was approved automatically since it was last turned on",
+  "unattended.panel.since": "Since {{time}}",
+  "unattended.panel.row": "{{host}}: {{session}} · {{kind}} · {{time}}",
+  "unattended.panel.more": "Show more",
+  "unattended.panel.host_failed": "{{host}}: could not be read ({{code}})"
 }
