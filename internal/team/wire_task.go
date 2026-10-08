@@ -112,24 +112,45 @@ func TaskDisplayID(teamID string, seq int) string {
 // when the prefix is this team's and the seq is a positive decimal without
 // sign, leading zeros or whitespace.
 func ParseTaskID(id, teamID string) (seq int, ok bool) {
-	prefix := taskTeamPrefix(teamID)
-	if prefix == "" || !strings.HasPrefix(id, prefix+"-") {
+	prefix, seq, ok := ParseTaskIDSyntax(id)
+	if !ok || prefix != taskTeamPrefix(teamID) {
 		return 0, false
 	}
-	digits := id[len(prefix)+1:]
-	if digits == "" || digits[0] == '0' {
-		return 0, false
+	return seq, true
+}
+
+// taskPrefixLen is the length of a display id's team prefix.
+const taskPrefixLen = 6
+
+// ParseTaskIDSyntax checks the shape of a display id without any team id:
+// six lower-case hex chars, a dash, and a seq that is a positive decimal
+// without sign, leading zero or whitespace and fits an int. The CLI uses it to
+// refuse a malformed id before asking the daemon; whether the id names a task
+// of the caller's team is the daemon's to say (ParseTaskID).
+func ParseTaskIDSyntax(id string) (prefix string, seq int, ok bool) {
+	if len(id) < taskPrefixLen+2 || id[taskPrefixLen] != '-' {
+		return "", 0, false
+	}
+	prefix = id[:taskPrefixLen]
+	for i := 0; i < len(prefix); i++ {
+		if c := prefix[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return "", 0, false
+		}
+	}
+	digits := id[taskPrefixLen+1:]
+	if digits[0] == '0' {
+		return "", 0, false
 	}
 	for i := 0; i < len(digits); i++ {
 		if digits[i] < '0' || digits[i] > '9' {
-			return 0, false
+			return "", 0, false
 		}
 	}
 	n, err := strconv.Atoi(digits)
 	if err != nil || n <= 0 {
-		return 0, false
+		return "", 0, false
 	}
-	return n, true
+	return prefix, n, true
 }
 
 // firstControl returns the first control character (C0, DEL or C1) of s that

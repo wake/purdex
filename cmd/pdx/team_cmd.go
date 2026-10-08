@@ -76,6 +76,14 @@ var teamRefusalCodes = map[string]bool{
 	team.ErrCwdOutsideGrant: true,
 	team.ErrNotYourMember:   true,
 	team.ErrRelayOpen:       true,
+	// The task routes' refusals (plan T-1c).
+	team.ErrNotMember:         true,
+	team.ErrTaskNotFound:      true,
+	team.ErrNotTaskOwner:      true,
+	team.ErrBadTaskTransition: true,
+	team.ErrBlockedByUnknown:  true,
+	team.ErrBlockedByCycle:    true,
+	team.ErrOwnerNotActive:    true,
 }
 
 // spawnNewID mints the spawn op id, the idempotency key of every POST of
