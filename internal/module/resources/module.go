@@ -70,6 +70,32 @@ type Module struct {
 	settingsFailing bool // a run of settings read failures is under way and has been logged
 	listFailing     bool // the lease listing is failing and has been logged
 
+	// stateMu is the one serialization boundary of the lease rows: every
+	// read-decide-write on them (the sweeper's ends today; the admission pass,
+	// create, delete and the per-tick use update later) holds it from the read
+	// to the last write, so no transition lands between the rows a decision was
+	// made on and the writes that follow (plan Task 1.5, review #4). The writes
+	// under it are single statements, and a long poll never holds it while it
+	// waits.
+	stateMu sync.Mutex
+	// gen is the generation channel: wake closes it and installs a fresh one on
+	// every state transition, so a poller that took genChan before it read the
+	// rows is woken by any change after that read. genMu guards the swap only.
+	genMu sync.Mutex
+	gen   chan struct{}
+
+	// Sweeper state (sweeper.go), touched by the sweeper goroutine or a test
+	// calling sweepOnce, under stateMu. sweepView replaces the process table
+	// the holders are judged against (a seam: a populated ProcessSnapshot
+	// cannot be built outside package agent; nil reads procSnapshot);
+	// sweepHook runs before each end the sweeper attempts, for tests to race a
+	// writer in.
+	sweepEvery  time.Duration
+	sweepView   func(ctx context.Context) (procView, error)
+	sweepHook   func(r leaseRow)
+	lastPrune   time.Time
+	viewFailing bool
+
 	// runCtx ends when Stop is called; it is made in New so that a Stop
 	// before Start still keeps a later Start from running.
 	runCtx    context.Context
@@ -92,7 +118,27 @@ func New() *Module {
 		procSnapshot: iagent.SnapshotProcesses,
 		runCtx:       runCtx,
 		stopRun:      stopRun,
+		gen:          make(chan struct{}),
+		sweepEvery:   sweepInterval,
 	}
+}
+
+// wake tells every poller holding the current generation channel that a lease
+// row changed state: it closes the channel and installs a fresh one. A writer
+// calls it after the write, normally still under stateMu.
+func (m *Module) wake() {
+	m.genMu.Lock()
+	defer m.genMu.Unlock()
+	close(m.gen)
+	m.gen = make(chan struct{})
+}
+
+// genChan is the channel the next wake closes. A poller takes it before it
+// reads the rows, so a change after that read cannot be missed.
+func (m *Module) genChan() <-chan struct{} {
+	m.genMu.Lock()
+	defer m.genMu.Unlock()
+	return m.gen
 }
 
 func (m *Module) Name() string           { return "resources" }
@@ -168,8 +214,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/resources", m.handleGet)
 }
 
-// Start runs the boot reconcile, then launches the sampler goroutine: one
-// tick at once, then one per interval, until Stop.
+// Start runs the boot reconcile, then launches the sampler goroutine (one
+// tick at once, then one per interval) and the lease sweeper, until Stop.
 func (m *Module) Start(context.Context) error {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
@@ -183,6 +229,10 @@ func (m *Module) Start(context.Context) error {
 	m.boot() // before the sampler: its first tick sees the reconciled rows
 	m.wg.Add(1)
 	go m.run(m.runCtx)
+	if m.store != nil {
+		m.wg.Add(1)
+		go m.runSweeper(m.runCtx) // after the boot reconcile and the sampler
+	}
 	return nil
 }
 
