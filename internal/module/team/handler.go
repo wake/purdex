@@ -170,6 +170,9 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// cancels stopCtx under the same lock, so a create that passed the
 	// entry check before Stop ran still sees stopping here and writes
 	// nothing (no row, no event).
+	if m.beforeCreateLock != nil {
+		m.beforeCreateLock()
+	}
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 	if m.stopping() {
@@ -224,10 +227,15 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := m.now()
-	stored, _, inserted, err := m.store.Create(team.Approval{
+	row := team.Approval{
 		ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
 		CreatedAt: now, DeadlineAt: now + int64(waitS)*1000, LeaseUntil: now + team.LeaseS*1000,
-	}, hash)
+	}
+	if m.unattendedOn() { // under createMu: a switch-on's sweep is never behind this read
+		m.createApprovedLead(w, row, hash)
+		return
+	}
+	stored, _, inserted, err := m.store.Create(row, hash)
 	if err != nil {
 		m.logf("[team] create %s: %v", req.ID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
