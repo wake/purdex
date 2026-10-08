@@ -54,4 +54,14 @@ type NormalizedEvent struct {
 	Background string `json:"background"`
 	// Source says what decided Status: "mod" (a live mod stream) or "hook".
 	Source string `json:"source"`
+	// Epoch and Seq order the `hook` frames of one daemon process (plan
+	// U1-2b-2): Epoch is the daemon's boot id (suffixed "-n" after the n-th
+	// counter rotation), Seq counts every hook frame the daemon has
+	// broadcast, from 1, across all sessions. A client that sees a Seq other
+	// than the last plus one has lost a frame. Always on the wire (never
+	// omitted; a frame that did not come from the emit slot, such as a
+	// subscribe-time replay, carries "" and 0): the nex.* lesson is that an
+	// omitempty counter hides the first frame.
+	Epoch string `json:"epoch"`
+	Seq   uint64 `json:"seq"`
 }

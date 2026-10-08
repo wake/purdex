@@ -53,8 +53,13 @@ func (m *Module) handleNonTmuxEvent(w http.ResponseWriter, req EventRequest, tra
 		return
 	}
 	code := NonTmuxAgentCode(req.SessionID)
-	normalized := buildProjectionNormalized(nil, req.AgentType, req.PurdexName, time.Now().UnixNano(), result)
-	m.emitNormalizedToCode(code, normalized)
+	// No pane, so no projection: the slot is entered with an empty session
+	// name and the frame comes from the derive result alone.
+	var normalized agentpkg.NormalizedEvent
+	m.emitSession(kindNonTmux, code, "", func(*SessionProjection) (agentpkg.NormalizedEvent, bool) {
+		normalized = buildProjectionNormalized(nil, req.AgentType, req.PurdexName, time.Now().UnixNano(), result)
+		return normalized, true
+	})
 	if isDevMode() {
 		log.Printf("[broadcast] session=%s non_tmux=true raw_event_name=%s", code, normalized.RawEventName)
 	}

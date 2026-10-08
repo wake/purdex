@@ -513,17 +513,33 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 				m.manageActivityWatch(req.TmuxSession, projection.TopFrame.AgentType, projection.EffectiveStatus())
 			}
 		}
+		// The frame is built inside the emit slot from the projection read
+		// there; the one read above only stands in for the trace when the slot
+		// sends nothing. The slot's read still needs a top frame: the pane may
+		// have been torn down since, and a detail-only event must not
+		// resurrect it.
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
-		dropForeignModel(&normalized, req, projection)
-		emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)
+		noFrame := false
+		emitDecision, emitReason := m.emitHookSession(req, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
+			if p == nil || p.TopFrame == nil {
+				noFrame = true
+				return agentpkg.NormalizedEvent{}, false
+			}
+			normalized = buildProjectionNormalized(p, req.AgentType, req.PurdexName, broadcastTs, result)
+			dropForeignModel(&normalized, req, p)
+			return normalized, true
+		})
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if isDevMode() {
 			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s detail_only=true",
 				req.TmuxSession, m.hasSubscribers(), emitDecision, emitReason, normalized.RawEventName, trace.ChainID())
 		}
-		if emitDecision == "broadcasted" {
+		switch {
+		case emitDecision == "broadcasted":
 			trace.Finish("completed", "detail_only_broadcasted")
-		} else {
+		case noFrame:
+			trace.Finish("completed", "detail_only_no_frame")
+		default:
 			trace.Finish("completed", "detail_only_emit_skipped")
 		}
 		traceFinished = true
@@ -636,12 +652,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 			return
 		}
-		m.mu.Lock()
-		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
-		m.mu.Unlock()
+		// Built, synced and sent inside the emit slot; the frame built from
+		// the earlier read is the trace's stand-in when the slot sends nothing.
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
-		dropForeignModel(&normalized, req, projection)
-		emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)
+		emitDecision, emitReason := m.emitHookSession(req, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
+			normalized = buildProjectionNormalized(p, req.AgentType, req.PurdexName, broadcastTs, result)
+			dropForeignModel(&normalized, req, p)
+			return normalized, true
+		})
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if isDevMode() {
 			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
@@ -705,15 +723,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 	}
 
-	// Build and broadcast normalized event
+	// Build and broadcast normalized event. The frame is built inside the emit
+	// slot from the projection read there (the projection above serves the
+	// trace, the activity watcher and the stand-in frame below); a read that
+	// fails in the slot degrades to status clear when the SessionEnd claimed
+	// its frame, exactly like a read that failed above.
 	normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
-	dropForeignModel(&normalized, req, projection)
-	// Rebuild-record envelope (spec §4.3.1). applyFrameEvent grants it only
-	// when the mutation outcome confirmed the sender kept its own top-level
-	// frame; nil means no envelope. The outer normalized.AgentType keeps its
-	// existing meaning (the session projection winner) — the two identities
-	// coexist and never mix.
-	attachProvenance(&normalized, frameMeta)
 	// Conversation entity (spec §4.3, D3): a granted SessionStart is the
 	// moment "S is in a terminal" becomes true; subscribers (the nex module's
 	// manual-resume handler) run off the hook path.
@@ -727,18 +742,29 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		frameMeta.Provenance.SessionID != "" && frameMeta.IdentityRecorded {
 		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance))
 	}
-	// Exit envelope (agent-last-state spec §1): granted only when a
-	// SessionEnd deleted the sender's own root frame.
-	attachExit(&normalized, frameMeta.Exit)
-	if degraded {
-		normalized.Status = string(agentpkg.StatusClear)
-	}
-	if !degraded {
-		m.mu.Lock()
-		syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
-		m.mu.Unlock()
-	}
-	emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)
+	emitDecision, emitReason := m.emitHookSessionWith(req, func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
+		if readErr != nil {
+			if frameMeta.Exit == nil {
+				return agentpkg.NormalizedEvent{}, false
+			}
+			logAfterClaim("projectionForSession (emit slot)", frameMeta.FrameID, readErr)
+		}
+		normalized = buildProjectionNormalized(p, req.AgentType, req.PurdexName, broadcastTs, result)
+		dropForeignModel(&normalized, req, p)
+		// Rebuild-record envelope (spec §4.3.1). applyFrameEvent grants it
+		// only when the mutation outcome confirmed the sender kept its own
+		// top-level frame; nil means no envelope. The outer
+		// normalized.AgentType keeps its existing meaning (the session
+		// projection winner) — the two identities coexist and never mix.
+		attachProvenance(&normalized, frameMeta)
+		// Exit envelope (agent-last-state spec §1): granted only when a
+		// SessionEnd deleted the sender's own root frame.
+		attachExit(&normalized, frameMeta.Exit)
+		if degraded || readErr != nil {
+			normalized.Status = string(agentpkg.StatusClear)
+		}
+		return normalized, true
+	})
 	trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 	if isDevMode() {
 		log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
@@ -814,32 +840,6 @@ func dropForeignModel(n *agentpkg.NormalizedEvent, req EventRequest, representat
 	if representative.PaneID != req.TmuxPaneID {
 		n.Model = ""
 	}
-}
-
-// emitHookToSession routes a hook-derived normalized event to its WS code.
-// Prefers req.TmuxSessionID (immutable, pure-function resolution) over
-// req.TmuxSession (cache-backed, racy across kill+recreate). Returns the
-// (decision, reason) tuple the trace pipeline annotates onto the chain;
-// the reason value carries the resolution path label so operators can grep
-// daemon logs and confirm hook clients have migrated to the ID payload.
-// It records no baseline (it has no projection to describe the frame with):
-// the handler uses emitHookRecorded.
-func (m *Module) emitHookToSession(req EventRequest, normalized agentpkg.NormalizedEvent) (string, string) {
-	return m.emitHookRecorded(req, nil, normalized)
-}
-
-// emitNormalizedToCode is the shared bottom half of every broadcast path:
-// marshals the normalized event JSON and pushes it onto the events bus.
-// Callers MUST resolve the session code first; this helper makes no
-// assumptions about how it was obtained. False when there is no bus to put
-// it on.
-func (m *Module) emitNormalizedToCode(code string, normalized agentpkg.NormalizedEvent) bool {
-	if m.core == nil || m.core.Events == nil {
-		return false
-	}
-	payload, _ := json.Marshal(normalized)
-	m.core.Events.Broadcast(code, "hook", string(payload))
-	return true
 }
 
 // hookSessionCodePath labels which resolution branch produced the session

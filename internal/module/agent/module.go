@@ -56,9 +56,10 @@ type Module struct {
 	// frame sent for it (hook, probe, sweep or mod worker). The mod worker
 	// emits only when its fresh digest differs. Protected by m.mu.
 	lastEmittedLights map[string]lightsDigest
-	// emitMu orders "broadcast a light frame and record its baseline" (see
-	// modemit.go). Total lock order: emitMu → mu → modMu.
-	emitMu sync.Mutex
+	// emit is the hook emit slot (hookemitter.go): every hook frame is read,
+	// built, stamped and broadcast inside emit.mu. Total lock order:
+	// emit.mu → mu → modMu.
+	emit hookEmitter
 
 	// W6-3 P1-T4: ProbeIntent dispatcher state. activeProbeIntents and
 	// probeIntentGen are protected by m.mu (same mutex as activeWatchers).
@@ -610,7 +611,7 @@ func (m *Module) replayFromDB() {
 // sendFrameSnapshot sends one replay frame per session that has a frame
 // projection and returns those sessions' names. Reading the projections,
 // sending, syncing the in-memory state and seeding the baseline are one
-// critical section under emitMu: the mod worker (and every hook emit) is
+// critical section under emit.mu: the mod worker (and every hook emit) is
 // either wholly before it, in which case the snapshot reads what they sent,
 // or wholly after it, in which case their frame follows the snapshot's on
 // this connection. A snapshot sent outside the lock could land after a newer
@@ -619,8 +620,9 @@ func (m *Module) replayFromDB() {
 // stays outside.
 func (m *Module) sendFrameSnapshot(sub *core.EventSubscriber) map[string]struct{} {
 	projectedSessions := make(map[string]struct{})
-	m.emitMu.Lock()
-	defer m.emitMu.Unlock()
+	m.emit.mu.Lock()
+	defer m.emit.mu.Unlock()
+	defer m.emit.end(m.emit.begin(), "", kindSnapshot)
 	projections, err := m.liveSessionProjections()
 	if err != nil {
 		log.Printf("[agent] snapshot frames: %v", err)
