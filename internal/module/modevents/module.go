@@ -1,8 +1,9 @@
 // Package modeventsmod mounts the mod event channel (internal/modevents)
 // in the daemon: it publishes the stream registry in the core
 // ServiceRegistry, listens on <data_dir>/mod.sock with the channel's own
-// HTTP server, and evicts old streams on a ticker. A channel that cannot
-// listen is reported, never fatal.
+// HTTP server, evicts old streams on a ticker, and serves the read API on
+// the daemon's TCP mux (api.go). A channel that cannot listen is
+// reported, never fatal.
 package modeventsmod
 
 import (
@@ -31,6 +32,7 @@ type Module struct {
 	path string
 
 	logf func(string, ...any)
+	now  func() time.Time // the registry's clock
 
 	mu     sync.Mutex
 	status modevents.Status
@@ -47,7 +49,7 @@ type Module struct {
 }
 
 // New returns the module; Init creates its registry.
-func New() *Module { return &Module{logf: log.Printf} }
+func New() *Module { return &Module{logf: log.Printf, now: time.Now} }
 
 func (m *Module) Name() string           { return ServiceName }
 func (m *Module) Dependencies() []string { return nil }
@@ -56,7 +58,7 @@ func (m *Module) Dependencies() []string { return nil }
 // socket path from the data dir: the resolved path Listen binds at, which
 // pdx.json names too. Whether it fits is Listen's call.
 func (m *Module) Init(c *core.Core) error {
-	m.reg = modevents.NewRegistry(time.Now)
+	m.reg = modevents.NewRegistry(m.now)
 	c.Registry.Register(ServiceName, m.reg)
 	c.CfgMu.RLock()
 	dataDir := c.Cfg.DataDir
@@ -65,9 +67,13 @@ func (m *Module) Init(c *core.Core) error {
 	return nil
 }
 
-// RegisterRoutes adds nothing to the daemon's TCP mux: the channel has its
-// own server on the socket.
-func (m *Module) RegisterRoutes(*http.ServeMux) {}
+// RegisterRoutes adds the read API (spec §6.6) to the daemon's TCP mux,
+// behind its TokenAuth like every /api route. The channel's ingest has
+// its own server on the socket.
+func (m *Module) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/mod/streams", m.handleStreams)
+	mux.HandleFunc("GET /api/mod/streams/{stream}/events", m.handleEvents)
+}
 
 // Start listens and serves the channel, and starts the eviction ticker.
 // It never fails: a channel that cannot listen is logged and reported by
