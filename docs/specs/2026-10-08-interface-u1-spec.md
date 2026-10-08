@@ -236,6 +236,8 @@ Scope: the model's Go types and their JSON form; a normalizer from a Claude Code
 
 **Wire form.** JSON, `snake_case`, times as **integer milliseconds since the epoch**, optional fields omitted when empty. Items are one array with a `type` discriminator.
 
+Additive evolution only: later versions may add item types, fields and enum values (source, kind, status, denial, system.kind, outcome); they never rename or remove one. Clients ignore an unknown item type (skip the item) and treat an unknown enum value as unknown, never failing the whole document. (The Go decoder follows the same rule: an unknown `type` decodes to an `Item` whose `Type` is the raw string and whose variants are all nil, without an error; `Validate` and `Marshal` only constrain what the daemon itself produces.)
+
 ```
 Conversation { key{host_id, provider, session_id}, backend, provider, title, status,
                capabilities, usage?, turns[] }
@@ -246,7 +248,7 @@ Turn         { id, index, started_at, ended_at?, outcome: done|interrupted|faile
 item user        { id, at, text, truncated?, source, from?{kind, name?}, images?[{media_type, bytes}],
                    client_msg_id? }
 item agent_text  { id, at, markdown, truncated?, streaming? }
-item thinking    { id, at, text?, duration_ms? }
+item thinking    { id, at, text?, truncated?, duration_ms? }
 item step        { id, at, kind, tool, status: running|done|failed|denied, denial?, summary,
                    started_at, duration_ms?, input, input_truncated?, input_partial?,
                    output?{text, total_lines, total_bytes, truncated, keep: head|tail, images?[…]},
@@ -309,7 +311,7 @@ User text keeps `[Image #n]` markers; image blocks become `images[{media_type, b
 
 **Capabilities from the transcript** (U1-4's part; U1-8 completes the object): `source: "transcript"`, `text_streaming: "message"`, `thinking: "duration"`, `subagent: "partial"`. Every other capability is **omitted** — [D §13]: an undeclared capability is unsupported (some, like `send` and `interrupt`, have no `none` value) — and listed in `reasons` with `not_wired` (fail-closed). A missing `capabilities` object (not an incomplete one) means "still loading".
 
-**Golden fixtures (v1).** Directory `testdata/conversation/v1/` at the repo root (Go ignores `testdata`): `MANIFEST.json` `{version, cases[{name, source: "cc-transcript", cc_version, description, input, expected, sha256{input, expected}}]}`; per case `cc-transcript/<name>/input.jsonl` (scrubbed) + `expected.json` (`{"conversation": <wire form above>, "live": bool}`, pretty-printed, stable key order) + `facts.json` (hand-written, never regenerated: turn count, each turn's id / outcome / user source, each step's id / kind / status / denial, output totals and `keep`) + `README.md` (how it was recorded, what it covers). The daemon test normalizes `input.jsonl` and compares with `expected.json` (`-update` regenerates); a second test checks `facts.json` against the normalizer independently of `expected.json`; the Apps decode `expected.json` into their model and pin the copy by `MANIFEST.json` sha256 at a named commit. A guard test fails when a fixture contains a home path, a tailnet address, an e-mail address or a secret-shaped string. `mod-events/<name>/` is reserved for U1-5.
+**Golden fixtures (v1).** Directory `testdata/conversation/v1/` at the repo root (Go ignores `testdata`): `MANIFEST.json` `{version, cases[{name, source: "cc-transcript", cc_version, description, input, expected, sha256{input, expected, facts}}]}`; per case `cc-transcript/<name>/input.jsonl` (scrubbed) + `expected.json` (`{"conversation": <wire form above>, "live": bool}`, pretty-printed, stable key order) + `facts.json` (hand-written, never regenerated: turn count, each turn's id / outcome / user source, each step's id / kind / status / denial, output totals and `keep`) + `README.md` (how it was recorded, what it covers). The daemon test normalizes `input.jsonl` and compares with `expected.json` (`-update` regenerates); a second test checks `facts.json` against the normalizer independently of `expected.json`; the Apps fetch only `MANIFEST.json`, `expected.json` and `facts.json` (never `input.jsonl`, which is the daemon's test input), decode `expected.json` into their model and pin the copy by `MANIFEST.json` sha256 at a named commit. A guard test fails when a fixture contains a home path, a tailnet address, an e-mail address or a secret-shaped string. `mod-events/<name>/` is reserved for U1-5.
 
 ## 9. Current-state map (for U1-2 / U1-3 planning)
 

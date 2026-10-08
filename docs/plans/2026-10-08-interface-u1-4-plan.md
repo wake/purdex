@@ -57,6 +57,8 @@ Files: `internal/convmodel/{model.go, item.go, json.go, capabilities.go}` + test
 - Times: `int64` ms. Optional scalars as pointers or `omitempty`; `ended_at` pointer (0 is a valid time in tests).
 - Offsets for U1-6: `Turn.Offset`, `Item` offset kept in an unexported side field or `json:"-"`; never on the wire.
 
+Compatibility (spec §8.1 "Wire form", additive evolution): `Item.UnmarshalJSON` on an unknown `type` returns an `Item` with `Type` = the raw string and every variant nil, no error; `Validate` and `MarshalJSON` apply only to what the daemon produces. Test `TestItemJSON_UnknownTypeDecodesWithoutError` (also an unknown enum value decodes); `MarshalRejectsZeroOrTwoVariants` applies to known types only.
+
 Tests: `TestItemJSON_RoundTripEveryType`, `TestItemJSON_FlatShapeHasTypeDiscriminator` (golden string for one item of each type), `TestItemJSON_MarshalRejectsZeroOrTwoVariants`, `TestConversationJSON_OmitsEmptyOptionals` (no `client_msg_id`, `streaming`, `input_partial`, `children`, `usage.context` keys when empty), `TestConversationJSON_OffsetsNotOnWire`, `TestTimesAreIntegerMillis`.
 Mutation gates: drop `omitempty` on `client_msg_id` → `OmitsEmptyOptionals` red; marshal the variant under a nested key → `FlatShape` red.
 
@@ -149,7 +151,7 @@ Mutation gates (each turns `TestStatus_Matrix` red): map `toolDenialKind: interr
 
 ## U1-4d — golden fixtures v1
 
-Files: `testdata/conversation/v1/{MANIFEST.json, README.md, cc-transcript/<case>/{input.jsonl, expected.json, facts.json, README.md}}`, `internal/convmodel/ccnorm/golden_test.go`, `internal/convmodel/ccnorm/fixtureguard_test.go`, `internal/convmodel/ccnorm/cmd/scrubfixture/main.go` (a `go run` tool, not built into `pdx`).
+Files: `testdata/conversation/v1/{MANIFEST.json, README.md, cc-transcript/<case>/{input.jsonl, expected.json, facts.json, README.md}}` (the top-level README tells the Apps to fetch only `MANIFEST.json`, `expected.json` and `facts.json`, never `input.jsonl`), `internal/convmodel/ccnorm/golden_test.go`, `internal/convmodel/ccnorm/fixtureguard_test.go`, `internal/convmodel/ccnorm/cmd/scrubfixture/main.go` (a `go run` tool, not built into `pdx`).
 
 ### Scrubber
 
@@ -163,7 +165,7 @@ Recorded on mlab in a throwaway tmux session (`claude --model sonnet` in a scrat
 ### Tests
 
 - `TestGolden` — for each MANIFEST case: feed `input.jsonl`, then `SetLive(false)` when the case says `"live": false`, then `Conversation()`, compare with `expected.json` byte-for-byte after canonical encoding; `go test ./internal/convmodel/ccnorm -run TestGolden -update` rewrites `expected.json` and the MANIFEST sha256s. `Validate()` must pass for every case.
-- `TestManifest_Sha256Match` — the MANIFEST hashes equal the files (what the Apps pin).
+- `TestManifest_Sha256Match` — the MANIFEST hashes (`input`, `expected`, `facts`) equal the three files (what the Apps pin; iOS pins `facts.json` too).
 - `TestFixtures_NoPrivateData` — no fixture file contains `/Users/`, `/private/tmp/claude-`, `100.64.`, an e-mail address, `Bearer `, `sk-`, `ghp_`, or a 32+ char hex/base64 token outside image data and uuids.
 - `TestFacts` — the **independent oracle**: for each case, `facts.json` is written by hand from reading the input (by the recorder, checked by a second reader in review) and is never touched by `-update`. It lists the turn count; per turn id, outcome and user source; per step id, kind, status, denial; per truncated output, `total_lines`, `total_bytes`, `keep`. The test asserts them against the normalizer directly, so a shared wrong premise in the code and `expected.json` still fails here.
 - `TestScrubber_KeepsEveryReadField` — for each iOS sample, the set of (row type, field path) the normalizer reads (`rawLine` and the decoders, listed in one table the test shares with the decoder) is identical before and after scrubbing; the scrubber's own unit tests cover each rewrite.
@@ -223,7 +225,8 @@ testdata/conversation/v1/
                        "source": "cc-transcript", "cc_version": "2.1.292",
                        "description": "…", "input": "cc-transcript/ios-f2b-queue-interrupt/input.jsonl",
                        "expected": "cc-transcript/ios-f2b-queue-interrupt/expected.json",
-                       "sha256": {"input": "…", "expected": "…"}}]}
+                       "facts": "cc-transcript/ios-f2b-queue-interrupt/facts.json",
+                       "sha256": {"input": "…", "expected": "…", "facts": "…"}}]}
   README.md          how to consume: decode expected.json; pin by commit + sha256
   cc-transcript/<case>/input.jsonl     scrubbed CC transcript (daemon test input only)
   cc-transcript/<case>/expected.json   {"live": false, "conversation": { …wire form, spec §8.1… }}
