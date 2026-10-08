@@ -201,6 +201,18 @@ describe('suspects', () => {
     expect(mismatches()).toBe(0)
   })
 
+  it('G1: a later clean safety walk clears the suspects the earlier one left waiting', async () => {
+    await ready()
+    vi.mocked(api.listExecutions).mockResolvedValue(page(9, [row('a', { state: 'idle' })], 2))
+    await advance(SAFETY_MS) // suspect a, waiting for bseq 2
+    vi.mocked(api.listExecutions).mockResolvedValue(page(12, [row('a', { state: 'idle' })], 2)) // now clean
+    await advance(SAFETY_MS)
+    store().applyDelta(A, delta(1, 'b', 3, row('b')))
+    store().applyDelta(A, delta(2, 'c', 4, row('c')))
+    await advance(GRACE_MS * 3)
+    expect(mismatches()).toBe(0)
+  })
+
   it('a row only on one side is a suspect; the commit repairs it', async () => {
     await ready()
     vi.mocked(api.listExecutions).mockResolvedValue(page(9, [row('a', { state: 'running' }), row('n')]))

@@ -259,6 +259,8 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
           ...c, items: committed.items, rowVers: committed.vers, walkPages: result.pages, phase: 'ready', error: null, truncated, complete,
           refreshRevision: c.refreshRevision + 1, archivedRevision: (c.archivedRevision ?? 0) + 1,
         }))
+        // A successful safety walk supersedes whatever the previous one left waiting, clean or not (it re-evaluated them).
+        if (safety && delta && result.epoch !== undefined) cancelSuspects(rt)
         if (found.length > 0) registerSuspects(hostId, rt, found)
       })
       .catch((err: unknown) => {
