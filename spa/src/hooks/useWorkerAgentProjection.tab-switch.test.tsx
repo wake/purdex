@@ -197,7 +197,7 @@ beforeEach(() => {
     return { close: s.close }
   })
   vi.mocked(list.listAllExecutions).mockReset().mockImplementation(async () =>
-    ({ items: rows.map((r) => ({ ...r })), dropped: 0, truncated, stuck: false, stuckPage: null }))
+    ({ items: rows.map((r) => ({ ...r })), pages: [], dropped: 0, truncated, stuck: false, stuckPage: null }))
   vi.mocked(api.getExecution).mockReset().mockImplementation(async () => ({ ...paneSummary }))
   vi.mocked(api.attachObserve).mockReset().mockResolvedValue({ mode: 'observe', stream_url: PANE_URL, cursor: 0, state: 'idle' } as never)
   vi.mocked(api.fetchExecutionEvents).mockReset().mockResolvedValue({ items: [], next_cursor: 0 })

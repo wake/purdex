@@ -7,7 +7,7 @@
 // shell and the two watchers; the connection lifecycle and commit guards
 // live in `lib/nex/execution-list-effects.ts`.
 import { create } from 'zustand'
-import { createExecutionListEffects, type HostListCaches } from '../lib/nex/execution-list-effects'
+import { createExecutionListEffects, type HostListCaches, type NexDelta, type NexHello } from '../lib/nex/execution-list-effects'
 import { hostFingerprint } from '../lib/nex/nex-host-reducer'
 import { isNexReady } from '../components/hosts/nex/nex-ready'
 import { useHostStore } from './useHostStore'
@@ -23,6 +23,10 @@ interface ExecutionListState {
   refetch: (hostId: string) => void
   /** Host removed: close, drop rows and cursor, forget the entry. Subscriber tokens survive for an undo. */
   clearHost: (hostId: string) => void
+  /** A host-events hello (#1866 §4.1). Nothing calls it until PR2b routes the stream. */
+  onHello: (hostId: string, hello: NexHello) => void
+  /** A host-events delta (#1866 §4.4). Nothing calls it until PR2b routes the stream. */
+  applyDelta: (hostId: string, delta: NexDelta) => void
 }
 
 const effects = createExecutionListEffects({
@@ -39,6 +43,8 @@ export const useExecutionListStore = create<ExecutionListState>()(() => ({
   subscribe: (hostId) => effects.subscribe(hostId),
   refetch: (hostId) => effects.refetch(hostId),
   clearHost: (hostId) => effects.clearHost(hostId),
+  onHello: (hostId, hello) => effects.onHello(hostId, hello),
+  applyDelta: (hostId, delta) => effects.applyDelta(hostId, delta),
 }))
 
 /**
