@@ -104,4 +104,5 @@ var readers = map[string]func(json.RawMessage) readout{
 	KeyQuickReplies:    readQuickReplies,
 	KeyRelay:           readRelay,
 	KeyTeam:            readTeam,
+	KeyResources:       readResources,
 }
