@@ -2,11 +2,13 @@ package peers
 
 import (
 	"context"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/peers/execpeers"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -186,6 +188,21 @@ func entryNameCandidates(entries []ipeers.Entry, proxyPIDs map[int]bool, lineage
 			sid: e.SessionID, ref: ipeers.RefID(e.SessionID),
 			registryName: e.Name, previousRefs: lineage[e.SessionID],
 		})
+	}
+	return out
+}
+
+// execNameCandidates is one candidate per execution: no registry name of its
+// own (a live process's entry brings one, merged by session id), and its cwd
+// basename, the base an execution falls back on last.
+func execNameCandidates(rows []execpeers.Row, lineage map[string][]string) []nameCandidate {
+	out := make([]nameCandidate, 0, len(rows))
+	for _, r := range rows {
+		c := nameCandidate{sid: r.SessionID, ref: ipeers.RefID(r.SessionID), previousRefs: lineage[r.SessionID]}
+		if r.Cwd != "" {
+			c.dirBase = filepath.Base(r.Cwd)
+		}
+		out = append(out, c)
 	}
 	return out
 }

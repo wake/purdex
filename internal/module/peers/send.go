@@ -82,7 +82,7 @@ func registryNameSuggestion(rows []ipeers.PeerRecord, session, alias string) str
 	seen := map[string]bool{}
 	var addrs []string
 	for _, r := range rows {
-		if isLiveCC(r) && r.Agent.PeerName == session && ipeers.RoutableName(r.Name) && !seen[r.Name] {
+		if ipeers.NameAddressable(r) && r.Agent.PeerName == session && ipeers.RoutableName(r.Name) && !seen[r.Name] {
 			seen[r.Name] = true
 			addrs = append(addrs, alias+"/"+r.Name)
 		}
@@ -192,7 +192,10 @@ func findOrigin(records []ipeers.PeerRecord, inbox string) (rec ipeers.PeerRecor
 			continue
 		}
 		candidate = true
-		if a.Type == "cc" && rec.Deliverable {
+		// An execution row that took over this inbox's live entry (peer
+		// mailbox spec §4.1) is the running execution itself: an origin,
+		// though nothing is delivered to it over a socket.
+		if a.Type == "cc" && (rec.Deliverable || rec.RowKind == ipeers.RowKindExecution) {
 			return rec, true, true
 		}
 	}
@@ -364,9 +367,10 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	if isLocal {
 		rows = local.Peers
 		rsnap = ipeers.ResolveSnapshot{
-			Partial:            local.Partial,
-			RegistryIncomplete: len(local.UnknownRegistryFiles) > 0,
-			LineageUnavailable: local.LineageUnavailable,
+			Partial:               local.Partial,
+			RegistryIncomplete:    len(local.UnknownRegistryFiles) > 0,
+			LineageUnavailable:    local.LineageUnavailable,
+			ExecutionsUnavailable: local.ExecutionsUnavailable,
 		}
 	} else {
 		remoteRefused := func(text string) {
@@ -410,9 +414,10 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = normalizeRemoteRows(env.Peers, targetAlias, targetHostID, env.AddressVersion)
 		rsnap = ipeers.ResolveSnapshot{
-			Partial:            env.Partial,
-			RegistryIncomplete: len(env.UnknownRegistryFiles) > 0,
-			LineageUnavailable: env.LineageUnavailable,
+			Partial:               env.Partial,
+			RegistryIncomplete:    len(env.UnknownRegistryFiles) > 0,
+			LineageUnavailable:    env.LineageUnavailable,
+			ExecutionsUnavailable: env.ExecutionsUnavailable,
 		}
 	}
 

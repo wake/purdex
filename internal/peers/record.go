@@ -1,6 +1,22 @@
 package peers
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/wake/purdex/internal/peers/execpeers"
+)
+
+// RowKindExecution is an execution row's RowKind (peer mailbox spec §4.1):
+// one per live Nexen execution, addressable even while it sleeps.
+const RowKindExecution = "execution"
+
+// The reasons an execution row is not deliverable. ReasonMailboxNotWired is
+// temporary: it stands until the mailbox last hop lands (plan P4b), which
+// changes executionDeliverable alone.
+const (
+	ReasonMailboxDisabled = "mailbox_disabled"
+	ReasonMailboxNotWired = "mailbox_not_wired"
+)
 
 // SessionSummary is one tmux session as the daemon's inventory describes it.
 type SessionSummary struct {
@@ -48,7 +64,12 @@ type PeerRecord struct {
 	Host    string `json:"host"`
 	HostID  string `json:"host_id"`
 	Address string `json:"address"`
-	RowKind string `json:"row_kind"` // session | entry
+	RowKind string `json:"row_kind"` // session | entry | execution
+	// ExecutionID and ExecState are an execution row's (RowKind
+	// "execution"): its Nexen execution and that execution's state, idle |
+	// running | queued. Absent on every other row.
+	ExecutionID string `json:"execution_id,omitempty"`
+	ExecState   string `json:"exec_state,omitempty"`
 	// Ref is the sessionId-derived disambiguator, "_q34psn"; "" when the row
 	// has no cc agent. It is the one part of an address that cannot drift, and
 	// what Resolve falls back to when a name does.
@@ -89,7 +110,7 @@ type PeerRecord struct {
 	Cwd         string     `json:"cwd,omitempty"`
 	Agent       *AgentInfo `json:"agent"` // always present, null when none
 	Deliverable bool       `json:"deliverable"`
-	Reason      string     `json:"reason"` // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous
+	Reason      string     `json:"reason"` // always present: "" | no_agent | not_cc | inbox_dead | proxy | ambiguous | mailbox_disabled | mailbox_not_wired
 }
 
 // WireAddress renders r's from.address: the bare Ref, or "" when the row has
@@ -152,6 +173,11 @@ type BuildInput struct {
 	// mailbox spec §3.2). Build puts it on the row pinned to that session's
 	// live entry; a session absent here gets the ref-form address.
 	VirtualNames map[string]string
+	// Executions are the live executions the nex module lists (peer mailbox
+	// spec §4.1), each becoming an execution row; MailboxEnabled is whether
+	// that engine accepts peer messages.
+	Executions     []execpeers.Row
+	MailboxEnabled bool
 }
 
 // Build joins sessions, owners and registry entries into PeerRecords. It is
@@ -181,6 +207,7 @@ func Build(in BuildInput) []PeerRecord {
 
 	entryRecords := buildEntryRecords(in, consumed)
 	records = append(records, entryRecords...)
+	records = foldExecutions(in, records)
 
 	// Context usage is keyed by CC session id, which every cc Agent carries
 	// (full entry info and the owner-only fallback alike), so the lookup is
@@ -202,6 +229,92 @@ func Build(in BuildInput) []PeerRecord {
 	}
 
 	return records
+}
+
+// foldExecutions adds one row per execution and keeps one row per session id
+// (peer mailbox spec §4.1): a tmux session row > an execution row > any other
+// row. It runs over EVERY row by Agent.SessionID, not over entry rows only:
+// the execution's live entry may already have been consumed by a session row,
+// and that session row is exactly the one that must win.
+//
+//   - A session row carrying an execution's session id suppresses the
+//     execution row: the conversation was taken back to a terminal, and the
+//     execution is on its way out.
+//   - Any other cc row carrying it (the execution's own live process, an
+//     entry row) is dropped, and its live identity moves onto the execution
+//     row, which from then on stands for that process too — so a running
+//     execution is still found as the origin of its own `pdx msg send`.
+//
+// ExecPeers.Rows fails closed on two executions sharing a session id, so
+// keeping the first here is only a guard that one sid never gets two rows.
+func foldExecutions(in BuildInput, records []PeerRecord) []PeerRecord {
+	if len(in.Executions) == 0 {
+		return records
+	}
+	execs := make(map[string]*PeerRecord, len(in.Executions))
+	var order []string
+	for _, x := range in.Executions {
+		if x.SessionID == "" || execs[x.SessionID] != nil {
+			continue
+		}
+		rec := executionRecord(in, x)
+		execs[x.SessionID] = &rec
+		order = append(order, x.SessionID)
+	}
+	suppressed := map[string]bool{}
+	out := make([]PeerRecord, 0, len(records)+len(order))
+	for _, r := range records {
+		var x *PeerRecord
+		if r.Agent != nil && r.Agent.Type == "cc" {
+			x = execs[r.Agent.SessionID]
+		}
+		switch {
+		case x == nil:
+			out = append(out, r)
+		case r.RowKind == "session":
+			suppressed[r.Agent.SessionID] = true
+			out = append(out, r)
+		default:
+			e, a := r.Agent, x.Agent
+			a.PID, a.ProcStart, a.Inbox = e.PID, e.ProcStart, e.Inbox
+			a.PeerName, a.Status, a.Version = e.PeerName, e.Status, e.Version
+		}
+	}
+	for _, sid := range order {
+		if !suppressed[sid] {
+			out = append(out, *execs[sid])
+		}
+	}
+	return out
+}
+
+// executionRecord is x's row before folding: addressed like any conversation
+// (applyIdentity, by its virtual name else its ref), and titled by the title
+// the conversation set, else Nexen's (TitleSource stays "": the conversation
+// did not set it).
+func executionRecord(in BuildInput, x execpeers.Row) PeerRecord {
+	rec := PeerRecord{
+		Host: in.Alias, HostID: in.HostID, RowKind: RowKindExecution,
+		ExecutionID: x.ExecutionID, ExecState: x.State, Cwd: x.Cwd,
+		Agent: &AgentInfo{Type: "cc", SessionID: x.SessionID, PID: x.PID},
+	}
+	rec.Deliverable, rec.Reason = executionDeliverable(in.MailboxEnabled)
+	applyIdentity(&rec, in.Alias, in.Titles[x.SessionID], RefID(x.SessionID), in.VirtualNames[x.SessionID])
+	if rec.Title == "" {
+		rec.Title = x.Title
+	}
+	return rec
+}
+
+// executionDeliverable is the one place an execution row's deliverability is
+// decided. Spec §4.1: deliverable exactly when the engine's mailbox is on. The
+// mailbox last hop is not wired yet (plan P4b), so for now no execution row is
+// deliverable: P4b turns the second return into (true, "").
+func executionDeliverable(mailboxEnabled bool) (bool, string) {
+	if !mailboxEnabled {
+		return false, ReasonMailboxDisabled
+	}
+	return false, ReasonMailboxNotWired
 }
 
 // preferCwd sets rec.Cwd to the first non-empty candidate: the CC session's

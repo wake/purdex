@@ -47,6 +47,12 @@ type ResolveSnapshot struct {
 	// the tmux-name tier or be reported as gone (lead-team-relay spec §8.4).
 	RegistryIncomplete bool
 	LineageUnavailable bool
+	// ExecutionsUnavailable is the envelope's executions_unavailable flag:
+	// the execution list could not be read, so the snapshot has no execution
+	// rows (peer mailbox spec §4.1). Any miss is ErrResolveNotReady under it
+	// — the address may be an execution's — and never falls through to the
+	// bare tmux-name tier.
+	ExecutionsUnavailable bool
 }
 
 // ErrLegacyCC is returned (wrapped under ErrNotFound) by Resolve for the
@@ -124,7 +130,7 @@ func (e *AmbiguousError) Error() string {
 // head alone would keep every retired v3 address routable.
 //
 // Tiers 1 to 3 see only rows whose Agent is a real registry entry (Type "cc",
-// PID != 0). Proxy rows and owner-fallback rows (inbox_dead / ambiguous:
+// PID != 0), and execution rows (NameAddressable). Proxy rows and owner-fallback rows (inbox_dead / ambiguous:
 // Agent.PID == 0, no entry behind them) are excluded — spec §3.3 makes a row
 // whose holder is not live inert, neither resolving nor blocking, and this is
 // how that rule reaches resolution.
@@ -242,7 +248,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		// a name carried by no row with this ref is refused below, never
 		// delivered.
 		rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-			return hasLiveEntry(r) && RoutableName(r.Name) &&
+			return NameAddressable(r) && RoutableName(r.Name) &&
 				r.Ref == ref && r.Name == typedName
 		})
 		if errors.Is(err, ErrNotFound) && !liveRefOwned(records, ref) {
@@ -254,7 +260,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 			// consulted, and the pair falls through to the mismatch answer
 			// below (the typed name is not the live owner's).
 			rec, err = resolveTier(records, session, func(r PeerRecord) bool {
-				return hasLiveEntry(r) && RoutableName(r.Name) &&
+				return NameAddressable(r) && RoutableName(r.Name) &&
 					hasPreviousRef(r, ref) && r.Name == typedName
 			})
 		}
@@ -316,7 +322,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		// not win a tier, because it could never have produced the address
 		// being typed.
 		rec, err := resolveTier(records, session, func(r PeerRecord) bool {
-			return hasLiveEntry(r) && RoutableName(r.Name) && r.Name == head
+			return NameAddressable(r) && RoutableName(r.Name) && r.Name == head
 		})
 		if err == nil && snap.RegistryIncomplete {
 			// One hit, but a registry file for an alive pid could not be
@@ -338,7 +344,7 @@ func Resolve(records []PeerRecord, session string, snap ResolveSnapshot) (PeerRe
 		}
 	}
 
-	if snap.Partial {
+	if snap.Partial || snap.ExecutionsUnavailable {
 		return PeerRecord{}, ErrResolveNotReady
 	}
 	// Tier 4: bare tmux session name, complete inventory only.
@@ -386,7 +392,7 @@ func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (Pee
 		return PeerRecord{}, ErrNotFound
 	}
 	rec, err := resolveTier(records, ref, func(r PeerRecord) bool {
-		return hasLiveEntry(r) && r.Ref == ref
+		return NameAddressable(r) && r.Ref == ref
 	})
 	if errors.Is(err, ErrNotFound) {
 		// The lineage tier (lead-team-relay spec §8.4): a ref no live row
@@ -396,13 +402,13 @@ func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (Pee
 		// tmux name (tier 4) is decided by the caller after this returns.
 		// Two rows listing the same old ref is an ambiguity, not a guess.
 		rec, err = resolveTier(records, ref, func(r PeerRecord) bool {
-			return hasLiveEntry(r) && hasPreviousRef(r, ref)
+			return NameAddressable(r) && hasPreviousRef(r, ref)
 		})
 	}
 	if err == nil && snap.RegistryIncomplete {
 		return PeerRecord{}, ErrResolveNotReady
 	}
-	if errors.Is(err, ErrNotFound) && (snap.Partial || snap.LineageUnavailable) {
+	if errors.Is(err, ErrNotFound) && (snap.Partial || snap.LineageUnavailable || snap.ExecutionsUnavailable) {
 		return PeerRecord{}, ErrResolveNotReady
 	}
 	return rec, err
@@ -413,7 +419,7 @@ func resolveRefHead(records []PeerRecord, ref string, snap ResolveSnapshot) (Pee
 // condition under which the lineage tier must not be consulted at all.
 func liveRefOwned(records []PeerRecord, ref string) bool {
 	for _, r := range records {
-		if hasLiveEntry(r) && r.Ref == ref {
+		if NameAddressable(r) && r.Ref == ref {
 			return true
 		}
 	}
@@ -437,6 +443,15 @@ func hasPreviousRef(r PeerRecord, ref string) bool {
 // another Type; neither may decide tier 1.
 func hasLiveEntry(r PeerRecord) bool {
 	return r.Agent != nil && r.Agent.Type == "cc" && r.Agent.PID != 0
+}
+
+// NameAddressable reports whether r may be reached by its name or its ref:
+// a row carrying a live cc entry (hasLiveEntry), or an execution row (peer
+// mailbox spec §4.1), which stays reachable while its execution sleeps with
+// no process behind it — its last hop is the execution's mailbox, not a
+// socket.
+func NameAddressable(r PeerRecord) bool {
+	return hasLiveEntry(r) || (r.RowKind == RowKindExecution && r.Agent != nil && r.Agent.Type == "cc")
 }
 
 // hasStaleVersionRows reports whether records came from a daemon predating
