@@ -5,15 +5,16 @@ import { UP_TO_END, type WalkPage } from './list-all-executions'
 import type { ExecutionSummary } from './types'
 
 /** A delta as stored: an upsert `{ver, row}` or a tombstone `{ver, null}`. */
-export interface OverlayEntry { ver: number; row: ExecutionSummary | null }
+/** `bseq` is the broadcast number of the delta that made the entry; the safety reconcile uses it as evidence (§8 R3-1). */
+export interface OverlayEntry { ver: number; row: ExecutionSummary | null; bseq?: number }
 export type Overlay = Map<string, OverlayEntry>
 
 /**
  * The one normalization: the store holds non-archived rows only, so a delta whose row is `null` or has
  * `archived: true` is a tombstone. An archived upsert can therefore never reach the overlay as a row.
  */
-export function normalizeDelta(ver: number, row: ExecutionSummary | null): OverlayEntry {
-  return { ver, row: row === null || row.archived === true ? null : row }
+export function normalizeDelta(ver: number, row: ExecutionSummary | null, bseq?: number): OverlayEntry {
+  return { ver, row: row === null || row.archived === true ? null : row, ...(bseq !== undefined ? { bseq } : {}) }
 }
 
 /** A later (higher ver) entry replaces an earlier one for the same id. */

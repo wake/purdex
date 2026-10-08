@@ -153,6 +153,18 @@ describe('execution list: delta capability, versioned walks, overlay (#1866 PR2a
       expect(ids()).toEqual(['a', 'b'])
     })
 
+    it('#1963: a stale upsert for an id the walk dropped is rejected by the covering page ver; a newer one is accepted', async () => {
+      vi.mocked(api.listExecutions).mockReset()
+        .mockResolvedValueOnce(stamped(10, ['a'], 'b')).mockResolvedValueOnce(stamped(20, ['c']))
+      await ready()
+      store().applyDelta(A, delta(1, 'b', 9, row('b')))  // b sorts in page 1 (ver 10): older than the page that omitted it
+      store().applyDelta(A, delta(2, 'd', 19, row('d'))) // d is covered by the final page (ver 20)
+      expect(ids()).toEqual(['a', 'c'])
+      store().applyDelta(A, delta(3, 'b', 11, row('b')))
+      store().applyDelta(A, delta(4, 'd', 21, row('d')))
+      expect(ids()).toEqual(['a', 'b', 'c', 'd'])
+    })
+
     it('archivedRevision moves only for archive-membership deltas and committed reconciles', async () => {
       await ready()
       const rev = () => cache().archivedRevision ?? 0
