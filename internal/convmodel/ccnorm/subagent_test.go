@@ -92,6 +92,29 @@ func TestNormalizeSubagent_BriefIsTheFirstPromptOnly(t *testing.T) {
 	}
 }
 
+func TestNormalizeSubagent_RowWithoutAgentIDSkipped(t *testing.T) {
+	a := func(o ...opt) []opt { return append([]opt{sidechain(), with("agentId", agentX)}, o...) }
+	file := joinLines(
+		userRow("s0", 1, "brief", a()...),
+		assistantText("a2", 2, "evil", sidechain()), // no agentId
+		assistantText("s1", 3, "fine", a()...),
+	)
+	items, st := NormalizeSubagent(bytes.NewReader(file), agentX)
+	for _, it := range items {
+		if itemID(it) == "a2" {
+			t.Errorf("the row without an agentId is in the story: %q", sig(it))
+		}
+	}
+	if len(items) != 2 || st.Skipped["agent:missing"] != 1 || st.Skipped["agent:other"] != 0 {
+		t.Errorf("items %d, Skipped = %v", len(items), st.Skipped)
+	}
+	// without an agent id to match, nothing is filtered
+	items, _ = NormalizeSubagent(bytes.NewReader(file), "")
+	if len(items) != 3 {
+		t.Errorf("no filter: %d items", len(items))
+	}
+}
+
 func TestNormalizeSubagent_StepsOpenWhileTheFileEndsMidTool(t *testing.T) {
 	// the file is read as live: a tool still running has no result yet
 	a := func(o ...opt) []opt { return append([]opt{sidechain(), with("agentId", agentX)}, o...) }

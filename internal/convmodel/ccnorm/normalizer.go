@@ -199,8 +199,12 @@ func (n *Normalizer) row(off int64, line []byte) {
 		return
 	}
 	if n.sub && n.subAgent != "" {
-		// rows of another agent do not belong to this file's story
-		if id := l.str(l.AgentID); id != "" && id != n.subAgent {
+		// only rows that name this agent belong to this file's story
+		switch id := l.str(l.AgentID); {
+		case id == "":
+			n.skip("agent:missing")
+			return
+		case id != n.subAgent:
 			n.skip("agent:other")
 			return
 		}
