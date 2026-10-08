@@ -123,3 +123,20 @@ describe('submitDecision → gotoRequester (U22 (a))', () => {
     }
   })
 })
+
+// U23 (unattended spec D-U23-6; plan PU-2b, ruling 36): "no toast" covers only a close nobody pressed (the WS `closed`
+// of a daemon approval). A person's own approve or deny that loses to the daemon still hears who decided.
+describe('submitDecision: a click that loses to the unattended daemon', () => {
+  it.each<Decision>(['approve', 'deny'])('409 already_decided with decided_by unattended (%s) closes the dialog and toasts who decided', async (decision) => {
+    const a = approval('lead')
+    useApprovalStore.getState().applyOpened(H, a)
+    const lost = approval('lead', { state: 'approved', decided_by: { kind: 'unattended', label: '無人值守模式' }, decided_at: 5 })
+    mockedDecide.mockRejectedValueOnce(new ApprovalApiError(409, 'already_decided', '', lost))
+
+    await expect(submitDecision(H, a, decision)).resolves.toBe('decided_elsewhere')
+
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 無人值守模式 核准')
+    expect(mockedGoto).not.toHaveBeenCalled()
+  })
+})
