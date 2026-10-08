@@ -12,6 +12,11 @@ import (
 // would otherwise keep it listed for the life of the daemon.
 const nonTmuxLastTTL = 2 * time.Hour
 
+// nonTmuxLastMax caps the table: the code comes from the hook payload, so a
+// flood of distinct session ids must not grow the daemon without bound. Past
+// the cap the entry with the oldest last frame goes.
+const nonTmuxLastMax = 1024
+
 // nonTmuxEntry is the last frame the slot sent for one non-tmux code and when
 // it was sent.
 type nonTmuxEntry struct {
@@ -39,6 +44,15 @@ func (m *Module) noteNonTmuxLocked(code string, n agentpkg.NormalizedEvent) {
 	}
 	if m.nonTmuxLast == nil {
 		m.nonTmuxLast = make(map[string]nonTmuxEntry)
+	}
+	if _, known := m.nonTmuxLast[code]; !known && len(m.nonTmuxLast) >= nonTmuxLastMax {
+		oldest, oldestAt := "", now
+		for c, e := range m.nonTmuxLast {
+			if oldest == "" || e.at.Before(oldestAt) {
+				oldest, oldestAt = c, e.at
+			}
+		}
+		delete(m.nonTmuxLast, oldest)
 	}
 	m.nonTmuxLast[code] = nonTmuxEntry{event: n, at: now}
 }

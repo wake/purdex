@@ -132,3 +132,21 @@ func TestNonTmuxLast_ExpiresAfterTwoHours(t *testing.T) {
 		t.Fatalf("new is missing: %+v", got)
 	}
 }
+
+// The table is bounded: past nonTmuxLastMax distinct codes the oldest goes.
+func TestNonTmuxLast_CapEvictsOldest(t *testing.T) {
+	m, _, now := nonTmuxLastModule(t)
+	n := agentpkg.NormalizedEvent{Status: string(agentpkg.StatusIdle)}
+	m.emit.mu.Lock()
+	for i := 0; i < nonTmuxLastMax+5; i++ {
+		*now = now.Add(time.Second)
+		m.noteNonTmuxLocked(fmt.Sprintf("cc-%d", i), n)
+	}
+	size := len(m.nonTmuxLast)
+	_, oldest := m.nonTmuxLast["cc-0"]
+	_, newest := m.nonTmuxLast[fmt.Sprintf("cc-%d", nonTmuxLastMax+4)]
+	m.emit.mu.Unlock()
+	if size != nonTmuxLastMax || oldest || !newest {
+		t.Fatalf("size=%d oldestKept=%v newestKept=%v, want %d/false/true", size, oldest, newest, nonTmuxLastMax)
+	}
+}
