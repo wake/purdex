@@ -23,14 +23,14 @@ Common rules:
 
 ## Lead rulings (2026-10-09, purdex-88)
 
-1. **One unread rule for the hook channel; the worker projection keeps its own.** `handleNormalizedEvent` stays as it is for `useWorkerAgentProjection` (it deliberately dispatches same-status events: a new pending request while already `waiting`, a new turn — `useWorkerAgentProjection.ts` `signatureOf` ~:303). Daemon `hook` frames (live and snapshot) go through new actions with the **transition rule**: unread is set only when the code's previous status is **known and different** and the new status is actionable and not visible (rule table below). This covers the six U1-3 notes and replaces the replay stopgap (`useAgentStore.ts` ~:298).
+1. **One unread rule for the hook channel; the worker projection keeps its own.** `handleNormalizedEvent` stays as it is for `useWorkerAgentProjection` (it deliberately dispatches same-status events: a new pending request while already `waiting`, a new turn — `useWorkerAgentProjection.ts` `signatureOf` ~:303). Daemon `hook` frames (live and snapshot) go through new actions with the **transition rule**: unread is set only when the code's previous status is **known and different** and the new status is actionable and not visible (rule table below). This covers the six U1-3 notes and replaces the replay stopgap (`useAgentStore.ts` ~:298). **Known limit (plan review #3):** a terminal session that is already `waiting` and gets another ask sends no new frame (the daemon pins this, `internal/module/agent/modworker_test.go` ~:93–112), so a second question while still waiting does not re-mark unread — as before U1-3. Fixing it needs a daemon signal (an ask id on the frame, like the worker's `request_id`) → follow-up issue, not U1-3.
 2. **Snapshot unread = the same transition rule** (refines §7 "replayed state never sets unread"): a snapshot entry never marks a code the SPA had no status for, or whose status is unchanged — the reconnect flood (§12.1 #11) stays fixed — but a status that changed while the SPA was disconnected (running → idle) is a real transition the person has not seen and marks unread, as today's stopgap already does. The plan PR rewrites the §7 sentence.
 3. **Legacy frames.** A `hook` frame whose `value` has neither `epoch` nor `seq` comes from a daemon before alpha.611 (e.g. air26): it is applied immediately with the transition rule (no cursor, no snapshot). A daemon at exactly alpha.611 (stamps `seq`, sends no `agent.snapshot`) is not supported — its lights would freeze until an upgrade; 611 ran only on mlab and is superseded (documented, no fallback timer).
 4. **What a snapshot replaces.** The host's codes listed in the snapshot are applied; a code of that host that is **absent** from the snapshot is cleared exactly like a `clear` frame (`clearSession`) **only if** the store holds a status or a `lastEvents` entry for it **and** its code does not start with `exec-` (execution panes are owned by the worker projection, not by the daemon's hook frames; daemon hook codes are a 6-char tmux code or `cc-<session_id>`, `internal/module/agent/nontmux.go:18`). A plain shell session (OSC title only, no agent) is untouched.
 5. **Background symbol** is read from `lastEvents[key].background` — no new store map (host-lifecycle's snapshot/restore of `lastEvents` already carries it). Absent or `""` = none.
-6. **Tab aggregation (N5)**: a tab's light is the highest priority over every agent pane of its layout (error > waiting > running > idle); unread and "awaiting approval" are OR over panes; agent icon, subagent dots come from the **representative pane** (highest priority; tie → the primary pane, then layout leaf order); the corner symbol is the highest background across panes (workflow > monitor > schedule), mirroring the daemon's per-tmux-session rule (U1-2b-1). Workspace indicators count over the same pane set.
+6. **Tab aggregation (N5)**: a tab's light is the highest priority over every agent pane of its layout (error > waiting > running > idle); unread and "awaiting approval" (the hand) are OR over panes; subagent dots come from the **representative pane** (highest priority; tie → the primary pane, then layout leaf order); the corner symbol is the highest background across panes (workflow > monitor > schedule), mirroring the daemon's per-tmux-session rule (U1-2b-1). **The tab's icon and title stay the primary pane's** (they are the tab's identity; an icon from another pane next to the primary pane's title would mismatch) — N5 aggregates the light, not the identity. Workspace indicators count over the same pane set, one count per tab.
 7. **Corner symbol tooltip** names the one kind shown. The design doc's "hover lists all three" needs the daemon to send every active kind (today `background` is one value) → follow-up issue (daemon `background_kinds` + SPA tooltip), not U1-3.
-8. **A gap or a foreign epoch on a live frame → resync** through the same path a health-check recovery takes (rule below); the hook frames until the new connection's snapshot are dropped. The `nex.*` cursor is untouched; the two families never share state.
+8. **A gap or a foreign epoch on a live frame → resync**: the socket is retired **synchronously**, exactly as the health check's success branch does it (rule below), not after an asynchronous health check; the hook frames until the new connection's snapshot are dropped. The `nex.*` cursor is untouched; the two families never share state.
 
 ---
 
@@ -113,7 +113,7 @@ Files: new `spa/src/lib/agent-lights/hook-cursor.ts` (+ test), `spa/src/hooks/us
 | otherwise | `apply`, and the caller sets `cursor.last = seq` |
 
 - `parseAgentSnapshot(value)`: `{epoch: non-empty string, seq: non-negative safe integer, sessions: array of {session: non-empty string, event: object}}`; anything else → `null` + `console.warn`, the frame is dropped and the cursor stays `null` (a daemon bug; lights for that host hold until the next connection — no reconnect loop). A valid snapshot → `applyAgentSnapshot(hostId, sessions)`, then `cursor = {epoch, last: seq}`, then the provenance probes for each entry's session (the loop that follows a `hook` frame today). A second snapshot on one connection is applied the same way.
-- `hook` branch: `legacy` and `apply` → `applyHookEvent` (+ probes); `drop` → nothing; `resync` → **once per connection**: cursor `null`, then the recovery path — `connectionClosed(hostId)`, runtime `reconnecting`, `sm.trigger()` (the health check's success callback supersedes the socket with `reconnectWithTicket`, ~:146); a flag blocks a second resync until the next `onOpen`. Frames that keep arriving on the old socket are dropped (`cursor === null`), and the superseded socket's queued frames are already ignored (`host-events.ts` `socketEpoch`).
+- `hook` branch: `legacy` and `apply` → `applyHookEvent` (+ probes); `drop` → nothing; `resync` → **once per connection**, synchronously, the same steps as the health check's success branch (`useMultiHostEventWs.ts` ~:137–151) so the old socket is retired before anything else of it is processed (plan review #1): cursor `null` → `connectionClosed(hostId)` → `closeAttachGate(hostId)` → runtime `reconnecting` → `connRef.current.reconnect()` (supersedes the socket at once — `socketEpoch` moves, `host-events.ts` ~:123 — and connects with a ticket from the connection's own ticket getter, ~:290; verify that path fetches a fresh ticket). A flag blocks a second resync until the next `onOpen`. Every later frame of the old socket, of **any** type (`sessions`, `hook`, `approval.request`, …), is dropped by `socketEpoch`; no `sm.trigger()` / health check in between.
 - The `agent.snapshot` frame has `session: ""`; it is dispatched by `type` before any session-based branch.
 
 ### Tests
@@ -124,7 +124,8 @@ Files: new `spa/src/lib/agent-lights/hook-cursor.ts` (+ test), `spa/src/hooks/us
 - `URL carries agent=v2 and nex=v1`.
 - `hook frames before the snapshot are dropped` (a frame with `seq` arrives first, then the snapshot; the store reflects only the snapshot).
 - `snapshot then contiguous frames apply in order`; `a duplicate seq is dropped`.
-- `a gap triggers exactly one resync and nothing until the next snapshot` (two gaps in a row → one `sm.trigger`; frames after the gap not applied; after a new `onOpen` + snapshot, frames apply again).
+- `a gap triggers exactly one resync and nothing until the next snapshot` (two gaps in a row → one `reconnect`; frames after the gap not applied; after a new `onOpen` + snapshot, frames apply again).
+- `resync retires the old socket at once`: after the gap, a `sessions` frame and an `approval.request` frame queued on the old socket are not applied, the attach gate is closed, `connectionClosed` ran before the new socket opened, no health check was awaited.
 - `a foreign epoch on a live frame resyncs`.
 - `a legacy daemon (no epoch / seq, no snapshot) keeps working` (frames apply, transition rule).
 - `onClose resets the cursor` (frames after a reconnect wait for the new snapshot).
@@ -132,35 +133,37 @@ Files: new `spa/src/lib/agent-lights/hook-cursor.ts` (+ test), `spa/src/hooks/us
 - `empty snapshot clears the host's agent codes` (`sessions: []`, `seq: 0`).
 - `nex cursor untouched` (an `nex.execution` delta still applies across a hook resync).
 
-Mutation gates: apply frames while `cursor === null` → "before the snapshot" red; ignore the gap → "gap triggers exactly one resync" red; resync on every gap frame → same test red (count); reset nothing on `onClose` → "onClose resets" red; share the cursor with `nex` → "nex cursor untouched" red.
+Mutation gates: apply frames while `cursor === null` → "before the snapshot" red; ignore the gap → "gap triggers exactly one resync" red; resync on every gap frame → same test red (count); resync through `sm.trigger()` instead of the synchronous retire → "resync retires the old socket at once" red; reset nothing on `onClose` → "onClose resets" red; share the cursor with `nex` → "nex cursor untouched" red.
 
 ---
 
 ## U1-3c — render: all panes and the corner symbol
 
-Files: new `spa/src/lib/agent-lights/tab-aggregate.ts` (+ test), `spa/src/hooks/useTabDisplay.ts`, `spa/src/hooks/useSessionAgentIndicator.ts`, new `spa/src/components/BackgroundSymbol.tsx` (+ test), `spa/src/components/TabIcon.tsx`, `spa/src/features/workspace/workspace-indicators.ts`, tests.
+Files: new `spa/src/lib/agent-lights/tab-aggregate.ts` (+ test), new `spa/src/lib/agent-lights/status-rank.ts`, `spa/src/hooks/useTabDisplay.ts`, `spa/src/hooks/useSessionAgentIndicator.ts`, new `spa/src/components/BackgroundSymbol.tsx` (+ test), `spa/src/components/TabIcon.tsx`, `spa/src/components/SortableTab.tsx`, `spa/src/features/workspace/lib/renderInlineTabIcon.tsx` (it draws its own dot / iconDot / badge DOM, not `TabIcon`), `spa/src/features/workspace/components/InlineTab.tsx`, `spa/src/features/workspace/workspace-indicators.ts`, `spa/src/features/workspace/useWorkspaceIndicators.ts`, tests. If the PR passes 800 lines, split: c-1 aggregation + workspace, c-2 corner symbol on every surface.
 
 ### Aggregation
 
-- `tabAgentKeys(layout): string[]` — every leaf of the layout (`pane-tree.ts` `collectLeaves` ~:218) mapped through `paneAgentKey` (~:122) to a composite key, **primary pane first**, then leaf order, de-duplicated (two panes on one session code count once).
+- `tabAgentPanes(layout): {key: string, hostId: string, executionId?: string}[]` — every leaf of the layout (`pane-tree.ts` `collectLeaves` ~:218) mapped through `paneAgentKey` (~:122) to a composite key, keeping the execution id for an execution pane, **primary pane first**, then leaf order, de-duplicated by key (two panes on one session code count once).
 - Pure `aggregateTabAgents(keys, {statuses, unread, subagents, agentTypes, lastEvents}, awaitingByKey)` → `{status, isUnread, isAwaitingApproval, repKey, background}` per ruling 6. Rank: error 4 > waiting 3 > running 2 > idle 1 > none 0 — **one shared rank** used by this and by `workspace-indicators.ts` `STATUS_PRIORITY` (~:19, same order; move it to `lib/agent-lights/status-rank.ts`, keep `aggregateStatus` behaviour).
-- `useTabDisplay` (~:52, primary pane only today) and `useSessionAgentIndicator` take the key list; selectors return primitives / a shallow-compared tuple (`useShallow`) so a frame for an unrelated session does not re-render every tab. The existing awaiting-approval source (worker pending request) is evaluated per pane key and OR-ed.
-- `getWorkspaceCompositeKeys` (`workspace-indicators.ts`, primary pane today) uses `tabAgentKeys` for every tab; `unreadCount` stays "tabs with unread" (a tab with two unread panes counts once).
+- `useTabDisplay` (~:52, primary pane only today) and `useSessionAgentIndicator` take the pane list for the **light** fields (status, unread, dots, background); `IconComponent`, title and every other identity field stay the primary pane's (ruling 6). Selectors return primitives / a shallow-compared tuple (`useShallow`) so a frame for an unrelated session does not re-render every tab.
+- **Awaiting approval over panes (plan review #4).** Today the hand comes from the primary execution pane's `statusSummary` (`useTabDisplay.ts` ~:88–121: the list row, else the live summary only while the host's list is truncated). Extract that choice into a pure `workerStatusSummary(listState, liveState, hostId, executionId)` and add one selector per store that answers "is any execution pane of this tab awaiting" with `isAwaitingApproval` over every execution pane from `tabAgentPanes` (no hooks in a loop; one subscription per store, boolean result). The primary pane's `statusSummary` keeps feeding the title / icon as today.
+- `getWorkspaceCompositeKeys` (`workspace-indicators.ts`, primary pane today) becomes per tab (`tabId → keys` from `tabAgentPanes`); `useWorkspaceIndicators.ts` (~:20, today `compositeKeys.reduce` per key) counts **tabs** with any unread pane (plan review #2); `aggregatedStatus` takes the highest over all keys.
 
 ### Corner symbol (N6)
 
 - `BackgroundSymbol({kind})`: Phosphor `TreeStructure` (workflow) / `Eye` (monitor) / `Clock` (schedule); static (no animation); colour = the icon's `currentColor`; size small relative to the 16 px icon box (start at 8 px, tune by screenshot); `title` / `aria-label` names the kind: 「Workflow 執行中」／「Monitor 監看中」／「排程喚醒」(follow the SPA's existing string mechanism for tab tooltips).
 - `TabIcon` gets `background?: BackgroundKind`. Placement: **top-left of the agent icon** in the badge (default) style and in `iconDot` (on the icon, not the dot); **top-left of the dot** in the `dot` style; **not rendered** when lights are off (`icon` style, including the awaiting-approval exception). The main light, unread pip (top-right) and error diamond are unchanged; subagent dots stay where they are — if the symbol collides with the dots' arc (badge mode parks it at `left: -4`), the PR shows both options in screenshots and the lead picks.
-- Inline tabs (`renderInlineTabIcon`) and `SortableTab` pass the same field.
+- **Every tab surface (plan review #5):** `SortableTab` passes `background` to `TabIcon`; `renderInlineTabIcon` (its own dot / iconDot / badge DOM) renders `BackgroundSymbol` with the same placement rules, fed by `InlineTab` from `useTabDisplay`.
 
 ### Tests
 
 `tab-aggregate.test.ts`: `older waiting pane beats newer running pane`, `error beats waiting`, `tie → primary pane`, `unread is OR`, `awaiting is OR and forces waiting`, `background highest across panes`, `rep pane gives icon and dots`, `a split pane with the only agent represents the tab` (primary pane is a shell), `duplicate session code counted once`.
-`useTabDisplay.test.ts`: the aggregate wired through (split tab with two agent panes); `an event for another session does not re-render the tab` (render counter).
+`useTabDisplay.test.ts`: the aggregate wired through (split tab with two agent panes); `icon and title stay the primary pane's when another pane represents the light`; `primary tmux pane + secondary execution pane pending → hand shown` and a cross-host variant (the execution pane on another host); `an event for another session does not re-render the tab` (render counter).
 `BackgroundSymbol.test.tsx` / `TabIcon.test.tsx`: the three icons; none for `undefined`; hidden in `icon` style (also with `awaitingApproval`); top-left in badge / `iconDot` (on the icon) / `dot`; no animation class.
-`workspace-indicators` tests: a split tab's second pane counts; unread counted per tab.
+`workspace-indicators` / `useWorkspaceIndicators` tests: a split tab's second pane counts; `two unread panes in one tab count 1`.
+`renderInlineTabIcon.test.tsx` / `InlineTab` / `SortableTab`: the symbol reaches every surface in each style; hidden with lights off.
 
-Mutation gates: primary pane only → "older waiting pane beats" and "split pane with the only agent" red; background from the rep pane only → "background highest across panes" red; symbol rendered with lights off → hidden test red.
+Mutation gates: primary pane only → "older waiting pane beats" and "split pane with the only agent" red; background from the rep pane only → "background highest across panes" red; symbol rendered with lights off → hidden test red; count unread per pane → "two unread panes in one tab count 1" red; hand from the primary pane only → "secondary execution pane pending" red; drop `background` in `renderInlineTabIcon` → the inline surface test red.
 
 **Screenshot gate (before review):** `playwright cli` against the worktree's dev server, light and dark theme, active and inactive tab: 3 styles × {no dots, 3 dots} × {workflow, monitor, schedule}, plus a split tab. Saved in the member's scratchpad; the lead reviews them and shows the person before c merges (user-visible design).
 
@@ -181,5 +184,19 @@ Results and screenshots go into the PR / kickoff memory.
 ## Out of scope / follow-ups
 
 - Hover listing every active background kind (needs daemon `background_kinds`) — issue (ruling 7).
+- A new ask while a terminal session is already waiting re-marking unread (needs a daemon ask id) — issue (ruling 1, plan review #3).
 - Multi-pane dots merge (spec §7 known limit) — unchanged.
 - iOS (U2) consumes the same `agent=v2` contract; nothing here is App-specific beyond rendering.
+
+## Plan review fold-in (codex `task-mv011ksx-4bhaqd`, 2026-10-09)
+
+| # | Sev / conf | Finding | Disposition |
+|---|---|---|---|
+| 1 | important 0.98 | resync via `sm.trigger()` leaves the old socket live (sessions / approval frames, gate open) until the async health check | Accepted: synchronous retire = the health check's success branch (`connectionClosed` → `closeAttachGate` → `reconnect()`), test + gate (U1-3b) |
+| 2 | important 0.99 | workspace unread would count panes, not tabs; `useWorkspaceIndicators.ts` not in the file list | Accepted: per-tab keys, count tabs, test + gate (U1-3c) |
+| 3 | important 0.97 | a second ask while already waiting sends no frame → no re-unread | Accepted as a known limit (unchanged from today; needs a daemon ask id) → follow-up issue (ruling 1) |
+| 4 | important 0.96 | the hand comes from the primary execution pane's summary; no wiring for other panes | Accepted: `workerStatusSummary` extracted, one boolean selector per store over every execution pane, tests incl. cross-host (U1-3c) |
+| 5 | important 0.99 | `renderInlineTabIcon` / `InlineTab` / `SortableTab` missing | Accepted: files, tests, gate (U1-3c) |
+| 6 | important 0.94 | `dot` style placement at the dot deviates from N6 | **Rejected with evidence**: the user-approved design doc `docs/pages/interface-language.html` §12.2 (v0.5, 10-08) says 「燈號關閉（icon 樣式）時不顯示；只有點、沒有圖示的樣式（dot）畫在點的左上角」 — the spec's N6 row had dropped that clause; it is amended in this PR to match the design doc |
+
+Lead change while folding in: the tab's icon and title stay the primary pane's (ruling 6); only the light, unread, hand, dots and corner symbol aggregate.
