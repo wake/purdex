@@ -163,7 +163,7 @@ describe('selectTeamViews — which tab shows a seat', () => {
       // pane t1 was cached as "old-name", the host now calls that code "renamed"; t2's code is not in the list at all
       tabs: [tab('t1', leaf('h1', 'old-name', { sessionCode: 'c1' })), tab('t2', leaf('h1', 'a-tm', { sessionCode: 'gone' }))],
       workspaces: [ws('w1', ['t1', 't2'])],
-      sessionsByHost: { h1: [{ code: 'c1', name: 'renamed', cwd: '', mode: 'terminal' }] },
+      sessionsByHost: { h1: [{ code: 'c1', name: 'renamed' }] },
     }))
     expect(v.lead.tabId).toBe('t1')
     expect(v.members[0].tabId).toBe('t2')
