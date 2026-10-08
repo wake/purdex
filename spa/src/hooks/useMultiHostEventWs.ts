@@ -19,6 +19,8 @@ import { hostWsUrl, fetchWsTicket } from '../lib/host-api'
 import { checkHealth, type HealthResult } from '../lib/host-connection'
 import { ConnectionStateMachine } from '../lib/connection-state-machine'
 import { handleWorkerExited } from '../lib/nex/worker-exited-event'
+import { dispatchNexHostEvent, NEX_OPT_IN } from '../lib/nex/nex-host-events'
+import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { handleApprovalEvent } from '../lib/team/approval-ws'
 
 /**
@@ -128,7 +130,10 @@ export function useMultiHostEventWs() {
       }
 
       // Create new SM + WS for this host
-      const wsUrl = hostWsUrl(hostId, '/ws/host-events')
+      // `nex=v1` opts this connection in to the execution hello / delta frames (#1866 §3.5); the ticket is added next to it.
+      const wsUrlObj = new URL(hostWsUrl(hostId, '/ws/host-events'))
+      wsUrlObj.searchParams.set(NEX_OPT_IN.key, NEX_OPT_IN.value)
+      const wsUrl = wsUrlObj.toString()
       const baseUrl = useHostStore.getState().getDaemonBase(hostId)
 
       const connRef: { current: EventConnection | undefined } = { current: undefined }
@@ -205,6 +210,7 @@ export function useMultiHostEventWs() {
             dispatchBackupWsEvent(hostId, event)
             return
           }
+          if (dispatchNexHostEvent(hostId, event, useExecutionListStore.getState())) return
           if (event.type === 'profile') {
             // Profile section change (spec §4.6). Own writes are NOT filtered
             // here or in the helper — the sync driver decides what "own" means.

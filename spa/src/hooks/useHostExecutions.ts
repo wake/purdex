@@ -16,6 +16,8 @@ export interface HostExecutions {
   refetch: () => void
   /** Bumped by the store on every completed refresh attempt (success or failure); key follow-up queries on it. */
   refreshRevision: number
+  /** Bumped by an archive-membership delta and by every committed reconcile (#1866 §4.7); the archived query keys on it. */
+  archivedRevision: number
 }
 
 export interface HostExecutionsOptions {
@@ -42,5 +44,6 @@ export function useHostExecutions(hostId: string, { enabled = true }: HostExecut
     truncated: cache?.truncated ?? false,
     refetch,
     refreshRevision: cache?.refreshRevision ?? 0,
+    archivedRevision: cache?.archivedRevision ?? 0,
   }
 }
