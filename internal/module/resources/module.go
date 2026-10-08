@@ -84,6 +84,18 @@ type Module struct {
 	genMu sync.Mutex
 	gen   chan struct{}
 
+	// Sweeper state (sweeper.go), touched by the sweeper goroutine or a test
+	// calling sweepOnce, under stateMu. sweepView replaces the process table
+	// the holders are judged against (a seam: a populated ProcessSnapshot
+	// cannot be built outside package agent; nil reads procSnapshot);
+	// sweepHook runs before each end the sweeper attempts, for tests to race a
+	// writer in.
+	sweepEvery  time.Duration
+	sweepView   func(ctx context.Context) (procView, error)
+	sweepHook   func(r leaseRow)
+	lastPrune   time.Time
+	viewFailing bool
+
 	// runCtx ends when Stop is called; it is made in New so that a Stop
 	// before Start still keeps a later Start from running.
 	runCtx    context.Context
@@ -107,6 +119,7 @@ func New() *Module {
 		runCtx:       runCtx,
 		stopRun:      stopRun,
 		gen:          make(chan struct{}),
+		sweepEvery:   sweepInterval,
 	}
 }
 
@@ -201,8 +214,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/resources", m.handleGet)
 }
 
-// Start runs the boot reconcile, then launches the sampler goroutine: one
-// tick at once, then one per interval, until Stop.
+// Start runs the boot reconcile, then launches the sampler goroutine (one
+// tick at once, then one per interval) and the lease sweeper, until Stop.
 func (m *Module) Start(context.Context) error {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
@@ -216,6 +229,10 @@ func (m *Module) Start(context.Context) error {
 	m.boot() // before the sampler: its first tick sees the reconciled rows
 	m.wg.Add(1)
 	go m.run(m.runCtx)
+	if m.store != nil {
+		m.wg.Add(1)
+		go m.runSweeper(m.runCtx) // after the boot reconcile and the sampler
+	}
 	return nil
 }
 
