@@ -10,7 +10,7 @@ import (
 // pay resolveSessionCode (LookupCodeByName / ListSessions) for a code it drops.
 // -----------------------------------------------------------------------------
 
-// referenceSelect is the pre-change selection, kept verbatim as the oracle: it
+// referenceSelect is the oracle for the name step: the same selection rule, but it
 // resolves names through resolvePaneSession (which still returns name+code).
 func referenceSelect(m *Module, sessionName string, projections []SessionProjection) *SessionProjection {
 	var selected *SessionProjection
@@ -19,7 +19,7 @@ func referenceSelect(m *Module, sessionName string, projections []SessionProject
 		if name != sessionName {
 			continue
 		}
-		if selected == nil || projectionSortGreater(projections[i], *selected) {
+		if selected == nil || projectionRankGreater(projections[i], *selected) {
 			projection := projections[i]
 			selected = &projection
 		}

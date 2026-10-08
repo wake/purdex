@@ -1496,15 +1496,16 @@ func (m *Module) selectSessionProjection(sessionName string, projections []Sessi
 	return m.selectSessionProjectionBy(sessionName, projections, m.paneSessionName)
 }
 
-// selectSessionProjectionBy picks the best projection whose pane resolves to
-// sessionName, using nameOf for the pane→session-name step.
+// selectSessionProjectionBy picks the representative projection of the tmux
+// session sessionName (spec 7): the pane whose effective light ranks highest
+// (projectionRankGreater), using nameOf for the pane→session-name step.
 func (m *Module) selectSessionProjectionBy(sessionName string, projections []SessionProjection, nameOf func(paneID string) string) *SessionProjection {
 	var selected *SessionProjection
 	for i := range projections {
 		if nameOf(projections[i].PaneID) != sessionName {
 			continue
 		}
-		if selected == nil || projectionSortGreater(projections[i], *selected) {
+		if selected == nil || projectionRankGreater(projections[i], *selected) {
 			projection := projections[i]
 			selected = &projection
 		}
@@ -1533,7 +1534,7 @@ func (m *Module) liveSessionProjections() ([]namedProjection, error) {
 			continue
 		}
 		current, ok := selected[sessionName]
-		if !ok || projectionSortGreater(projection, current.Projection) {
+		if !ok || projectionRankGreater(projection, current.Projection) {
 			selected[sessionName] = namedProjection{
 				SessionName: sessionName,
 				SessionCode: sessionCode,
@@ -1553,12 +1554,35 @@ func (m *Module) liveSessionProjections() ([]namedProjection, error) {
 	return out, nil
 }
 
-func projectionSortGreater(candidate, current SessionProjection) bool {
+// projectionRank orders a pane's effective light for the session's
+// representative pane (spec 7): error > waiting > running > idle > clear.
+func projectionRank(p SessionProjection) int {
+	switch p.EffectiveStatus() {
+	case agentpkg.StatusError:
+		return 4
+	case agentpkg.StatusWaiting:
+		return 3
+	case agentpkg.StatusRunning:
+		return 2
+	case agentpkg.StatusIdle:
+		return 1
+	}
+	return 0
+}
+
+// projectionRankGreater reports whether candidate should represent its tmux
+// session instead of current: the higher-ranked effective status (after the
+// mod overlay) wins, then the later TopFrame.StartedAt, then the larger
+// FrameID so the choice is deterministic.
+func projectionRankGreater(candidate, current SessionProjection) bool {
 	if candidate.TopFrame == nil {
 		return false
 	}
 	if current.TopFrame == nil {
 		return true
+	}
+	if cr, rr := projectionRank(candidate), projectionRank(current); cr != rr {
+		return cr > rr
 	}
 	if candidate.TopFrame.StartedAt != current.TopFrame.StartedAt {
 		return candidate.TopFrame.StartedAt > current.TopFrame.StartedAt

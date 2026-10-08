@@ -442,6 +442,9 @@ func TestSendSnapshot_OpencodeLegacyEventName_SkipAndCleanup(t *testing.T) {
 	}
 }
 
+// TestSendSnapshot_CollapsesMultiplePanesInSession: two panes of one tmux
+// session collapse into one snapshot frame, carried by the highest-priority
+// pane (a waiting cc started earlier beats a running codex started later).
 func TestSendSnapshot_CollapsesMultiplePanesInSession(t *testing.T) {
 	m := newTestModule(t)
 	fakeTmux := tmux.NewFakeExecutor()
@@ -455,7 +458,7 @@ func TestSendSnapshot_CollapsesMultiplePanesInSession(t *testing.T) {
 		PID:              200,
 		PPID:             100,
 		ProcessStartTime: "A",
-		Status:           agentpkg.StatusIdle,
+		Status:           agentpkg.StatusWaiting,
 		StartedAt:        10,
 		LastSeenAt:       10,
 		Verified:         true,
@@ -503,8 +506,8 @@ func TestSendSnapshot_CollapsesMultiplePanesInSession(t *testing.T) {
 		if env.Session != "work-code" {
 			t.Fatalf("session = %q, want work-code", env.Session)
 		}
-		if !strings.Contains(env.Value, `"agent_type":"codex"`) || !strings.Contains(env.Value, `"status":"running"`) {
-			t.Fatalf("snapshot value = %s, want codex running", env.Value)
+		if !strings.Contains(env.Value, `"agent_type":"cc"`) || !strings.Contains(env.Value, `"status":"waiting"`) {
+			t.Fatalf("snapshot value = %s, want cc waiting", env.Value)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for snapshot")
