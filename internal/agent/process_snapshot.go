@@ -100,6 +100,21 @@ func (s *ProcessSnapshot) StartTime(pid int) (string, error) {
 	return e.lstart, nil
 }
 
+// Start is pid's start time as the snapshot parsed it, the same instant Read
+// reports as StartTime but without reading any arguments: no argv read, so no
+// ps fork for non-ASCII argv or another user's process. The error is the
+// entry's startErr where the text did not parse.
+func (s *ProcessSnapshot) Start(pid int) (time.Time, error) {
+	e, err := s.entry(pid)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if e.startErr != nil {
+		return time.Time{}, e.startErr
+	}
+	return e.start, nil
+}
+
 func (s *ProcessSnapshot) PPID(pid int) (int, error) {
 	e, err := s.entry(pid)
 	if err != nil {
