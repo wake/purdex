@@ -394,6 +394,18 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 			args.Session, args.AgentType, newStatus, args.Reason)
 	}
 	if projection, err := m.setProjectionTopStatus(args.Session, newStatus); err == nil && projection != nil {
+		if projection.Source == SourceMod {
+			// The mod took over between the gate and the write (the write
+			// cannot be undone): the frame we would send is the mod's
+			// light, not the probe's, so leave it to the worker.
+			m.mu.Lock()
+			syncProjectionState(m.currentStatus, m.subagents, args.Session, projection)
+			m.mu.Unlock()
+			if args.OnDrop != nil {
+				args.OnDrop("mod-live-late")
+			}
+			return false, ""
+		}
 		normalized := buildProjectionNormalized(projection, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{})
 		m.broadcastRecorded(args.Session, projection, normalized)
 		return true, newStatus
