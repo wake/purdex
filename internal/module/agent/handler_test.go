@@ -530,9 +530,27 @@ func TestHandleEvent_RejectedHookDoesNotOverwriteSession(t *testing.T) {
 	}
 }
 
+// seedErrorFrame stores the sender's own frame (pane %5) in error:
+// since U1-2a-4 the error guard reads the sender's frame, not the session
+// view.
+func seedErrorFrame(t *testing.T, m *Module, agentType string, pid int) store.Frame {
+	t.Helper()
+	f, err := m.frames.Upsert(store.Frame{
+		PaneID: "%5", AgentType: agentType, PID: pid, PPID: 1, ProcessStartTime: "Sun Apr 20 01:30:00 2026",
+		Status: agentpkg.StatusError, StartedAt: 10, LastSeenAt: 10, Verified: true,
+	})
+	if err != nil {
+		t.Fatalf("seed error frame: %v", err)
+	}
+	return f
+}
+
+// The guard is per pane (U1-2a-4): the sender's frame is in error, so an event
+// outside the whitelist cannot touch it. (TestErrorGuard_* cover the cross-pane
+// cases.)
 func TestHandleEvent_ErrorGuardBlocksFrameMutation(t *testing.T) {
 	m := newTestModule(t)
-	m.currentStatus["work"] = agentpkg.StatusError
+	seeded := seedErrorFrame(t, m, "cc", 36649)
 	m.registry.Register(&fakeAgentProvider{
 		typeName: "cc",
 		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
@@ -554,8 +572,8 @@ func TestHandleEvent_ErrorGuardBlocksFrameMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByPane: %v", err)
 	}
-	if len(frames) != 0 {
-		t.Fatalf("frame count = %d, want 0", len(frames))
+	if len(frames) != 1 || frames[0].Status != agentpkg.StatusError || frames[0].LastSeenAt != seeded.LastSeenAt {
+		t.Fatalf("frames = %+v, want the one seeded error frame untouched", frames)
 	}
 }
 
@@ -606,7 +624,7 @@ func TestHandleEvent_OpenCodeSessionEndClearsErrorState(t *testing.T) {
 
 func TestHandleEvent_OpenCodeStopDoesNotClearError(t *testing.T) {
 	m := newTestModule(t)
-	m.currentStatus["work"] = agentpkg.StatusError
+	seeded := seedErrorFrame(t, m, "opencode", 200)
 	m.registry.Register(&fakeAgentProvider{
 		typeName: "opencode",
 		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
@@ -624,15 +642,12 @@ func TestHandleEvent_OpenCodeStopDoesNotClearError(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	if got := m.currentStatus["work"]; got != agentpkg.StatusError {
-		t.Fatalf("currentStatus = %q, want error", got)
-	}
 	frames, err := m.frames.ListByPane("%5")
 	if err != nil {
 		t.Fatalf("ListByPane: %v", err)
 	}
-	if len(frames) != 0 {
-		t.Fatalf("frame count = %d, want 0", len(frames))
+	if len(frames) != 1 || frames[0].Status != agentpkg.StatusError || frames[0].LastSeenAt != seeded.LastSeenAt {
+		t.Fatalf("frames = %+v, want the one seeded error frame untouched (opencode Stop does not clear error)", frames)
 	}
 }
 

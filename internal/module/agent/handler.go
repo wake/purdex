@@ -392,12 +392,13 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Error guard: when in error state, only whitelisted events can clear it
+	// Error guard: when the SENDER'S frame is in error, only whitelisted events
+	// can clear it. It reads the pane's own frame, not the session-level
+	// status, so another pane's error (or the mod's, which the session view
+	// carries) never blocks this pane's events (U1-2a-4). A sender with no
+	// frame is not guarded.
 	if result.Valid && result.Status != "" && result.Status != agentpkg.StatusError {
-		m.mu.Lock()
-		current := m.currentStatus[req.TmuxSession]
-		m.mu.Unlock()
-		if current == agentpkg.StatusError {
+		if m.senderFrameInError(req) {
 			canClear := lifecycle == agentpkg.LifecycleUserPromptSubmit || lifecycle == agentpkg.LifecycleSessionStart
 			// SessionEnd carries StatusClear and unconditionally tears down
 			// session state — it must always pass the error guard or the
@@ -743,6 +744,21 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// senderFrameInError reports whether the sender's own frame is in error. A
+// missing frame, a missing store or a failed read all say no: the guard only
+// ever holds a state it can see, and a hook must not be dropped on a guess.
+func (m *Module) senderFrameInError(req EventRequest) bool {
+	if m.frames == nil {
+		return false
+	}
+	frame, err := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+	if err != nil {
+		log.Printf("[handler] error guard frame lookup: %v", err)
+		return false
+	}
+	return frame != nil && frame.Status == agentpkg.StatusError
 }
 
 // hasSubscribers reports whether the events broadcaster has any connected
