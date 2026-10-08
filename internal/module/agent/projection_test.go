@@ -2,9 +2,11 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/modevents"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -678,5 +680,154 @@ func TestLiveFrameProjections_PreservesFrameOnLookupError(t *testing.T) {
 	}
 	if len(frames) != 1 {
 		t.Fatalf("frame count = %d, want 1", len(frames))
+	}
+}
+
+// ---- U1-2b-1: the per-tmux-session representative pane ----
+
+// rankPane is a hand-built projection for the selection rule alone: status is
+// both the frame's and the effective one (no overlay), bg the pane's own
+// background symbol.
+func rankPane(pane, frameID string, status agentpkg.Status, startedAt int64, bg string) SessionProjection {
+	return SessionProjection{
+		PaneID:     pane,
+		TopFrame:   &store.Frame{FrameID: frameID, PaneID: pane, AgentType: "cc", Status: status, StartedAt: startedAt},
+		Subagents:  []agentpkg.SubagentRef{},
+		Status:     status,
+		Source:     SourceHook,
+		Background: bg,
+	}
+}
+
+func selectWork(m *Module, projections []SessionProjection) *SessionProjection {
+	return m.selectSessionProjectionBy("work", projections, func(string) string { return "work" })
+}
+
+// TestSelectSession_HighestPriorityPaneWins: spec 7 - the session shows its
+// most urgent pane, not the most recently started one.
+func TestSelectSession_HighestPriorityPaneWins(t *testing.T) {
+	m := newTestModule(t)
+	got := selectWork(m, []SessionProjection{
+		rankPane("%5", "f-old", agentpkg.StatusWaiting, 10, ""),
+		rankPane("%6", "f-new", agentpkg.StatusRunning, 20, ""),
+	})
+	if got == nil || got.PaneID != "%5" || got.EffectiveStatus() != agentpkg.StatusWaiting {
+		t.Fatalf("selected %+v, want the older waiting pane %%5", got)
+	}
+}
+
+// TestSelectSession_ErrorBeatsWaiting also pins the rest of the order:
+// waiting > running > idle > clear.
+func TestSelectSession_ErrorBeatsWaiting(t *testing.T) {
+	m := newTestModule(t)
+	order := []agentpkg.Status{agentpkg.StatusError, agentpkg.StatusWaiting, agentpkg.StatusRunning, agentpkg.StatusIdle, agentpkg.StatusClear}
+	for i, want := range order {
+		// every lower-ranked pane is newer, so only the rank can make `want` win
+		var ps []SessionProjection
+		for j := i; j < len(order); j++ {
+			ps = append(ps, rankPane(fmt.Sprintf("%%%d", j), fmt.Sprintf("f%d", j), order[j], int64(10+j), ""))
+		}
+		got := selectWork(m, ps)
+		if got == nil || got.EffectiveStatus() != want {
+			t.Fatalf("among %v selected %+v, want %s", order[i:], got, want)
+		}
+	}
+}
+
+// TestSelectSession_TieFallsBackToLatestStart: equal rank - the newer start
+// wins; equal start - the larger frame id (deterministic).
+func TestSelectSession_TieFallsBackToLatestStart(t *testing.T) {
+	m := newTestModule(t)
+	got := selectWork(m, []SessionProjection{
+		rankPane("%5", "f-a", agentpkg.StatusRunning, 10, ""),
+		rankPane("%6", "f-b", agentpkg.StatusRunning, 20, ""),
+	})
+	if got == nil || got.PaneID != "%6" {
+		t.Fatalf("same rank: selected %+v, want the newer pane %%6", got)
+	}
+	got = selectWork(m, []SessionProjection{
+		rankPane("%6", "f-b", agentpkg.StatusIdle, 20, ""),
+		rankPane("%5", "f-a", agentpkg.StatusIdle, 20, ""),
+		rankPane("%7", "f-c", agentpkg.StatusIdle, 20, ""),
+	})
+	if got == nil || got.PaneID != "%7" {
+		t.Fatalf("same rank and start: selected %+v, want the largest frame id (%%7)", got)
+	}
+}
+
+// seedRankPane seeds one verified frame of a pane with the given hook status.
+func seedRankPane(t *testing.T, m *Module, pane string, pid int, status agentpkg.Status, startedAt int64, sid string) store.Frame {
+	t.Helper()
+	f, err := m.frames.Upsert(store.Frame{
+		PaneID: pane, AgentType: "cc", PID: pid, PPID: 1, ProcessStartTime: fmt.Sprintf("s%d", pid),
+		Status: status, StartedAt: startedAt, LastSeenAt: startedAt, Verified: true, SessionID: sid, Cwd: "/w",
+	})
+	if err != nil {
+		t.Fatalf("seed %s: %v", pane, err)
+	}
+	return f
+}
+
+// TestSelectSession_ModOverlayDecidesRank: the rank is the effective status.
+// Pane A's frame says idle but its live mod stream says waiting; pane B's
+// frame says running and has no mod: A represents the session.
+func TestSelectSession_ModOverlayDecidesRank(t *testing.T) {
+	m, _ := overlayModule(t)
+	fakeTmux := tmux.NewFakeExecutor()
+	fakeTmux.SetPaneSessionName("%5", "work")
+	fakeTmux.SetPaneSessionName("%6", "work")
+	m.tmux = fakeTmux
+	seedRankPane(t, m, "%5", 501, agentpkg.StatusIdle, 10, modSID1)
+	seedRankPane(t, m, "%6", 502, agentpkg.StatusRunning, 20, modSID2)
+	feedMod(m, modStrm, modStart, modTurnStart,
+		modEv(modSID1, modevents.TypeToolCheck, `{"tool_use_id":"t1","decision":"ask"}`))
+
+	projections, err := m.liveFrameProjections()
+	if err != nil || len(projections) != 2 {
+		t.Fatalf("liveFrameProjections: %v (n=%d)", err, len(projections))
+	}
+	got := m.selectSessionProjection("work", projections)
+	if got == nil || got.PaneID != "%5" || got.EffectiveStatus() != agentpkg.StatusWaiting || got.Source != SourceMod {
+		t.Fatalf("selected %+v, want pane %%5 waiting from the mod", got)
+	}
+}
+
+// TestSelectSession_BackgroundIsHighestAcrossPanes: the representative pane
+// has no background, another pane runs a workflow - the session shows the
+// workflow; the dots, agent type and source stay the representative pane's.
+func TestSelectSession_BackgroundIsHighestAcrossPanes(t *testing.T) {
+	m := newTestModule(t)
+	rep := rankPane("%5", "f-rep", agentpkg.StatusWaiting, 10, "")
+	rep.Subagents = []agentpkg.SubagentRef{{ID: "dot-rep", Type: "cc"}}
+	other := rankPane("%6", "f-other", agentpkg.StatusIdle, 20, "workflow")
+	other.Subagents = []agentpkg.SubagentRef{{ID: "dot-other", Type: "cc"}}
+	third := rankPane("%7", "f-third", agentpkg.StatusIdle, 30, "schedule")
+	in := []SessionProjection{rep, other, third}
+
+	got := selectWork(m, in)
+	if got == nil || got.PaneID != "%5" {
+		t.Fatalf("selected %+v, want the waiting pane %%5", got)
+	}
+	if got.Background != "workflow" {
+		t.Fatalf("background = %q, want workflow (highest across panes)", got.Background)
+	}
+	if len(got.Subagents) != 1 || got.Subagents[0].ID != "dot-rep" || got.Source != SourceHook || got.TopFrame.AgentType != "cc" {
+		t.Fatalf("dots/source/type must stay the representative pane's, got %+v", got)
+	}
+	if in[0].Background != "" {
+		t.Fatalf("the input slice was mutated: %+v", in[0])
+	}
+
+	// workflow > monitor > schedule > none
+	for _, c := range []struct{ a, b, want string }{
+		{"", "schedule", "schedule"}, {"schedule", "monitor", "monitor"}, {"monitor", "workflow", "workflow"}, {"workflow", "", "workflow"}, {"", "", ""},
+	} {
+		got := selectWork(m, []SessionProjection{
+			rankPane("%5", "f1", agentpkg.StatusRunning, 20, c.a),
+			rankPane("%6", "f2", agentpkg.StatusIdle, 10, c.b),
+		})
+		if got.Background != c.want {
+			t.Errorf("backgrounds %q + %q: got %q, want %q", c.a, c.b, got.Background, c.want)
+		}
 	}
 }

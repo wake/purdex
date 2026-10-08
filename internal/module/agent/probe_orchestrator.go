@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"database/sql"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -209,6 +211,10 @@ func (o *probeOrchestrator) makeCallback(session, agentType string) probe.Screen
 
 // probeGuardArgs is the input contract for applyProbeGuards. Caller fills:
 //   - Session / AgentType: identity used by the dev log + downstream broadcast
+//   - PaneID: the pane the detector is bound to (ProbeIntent callers). Set,
+//     the transition is guarded by and written to that pane's own frame and
+//     the session's light is re-aggregated afterwards (applyPaneProbe); empty
+//     (the pane-less ScreenChange watcher) keeps the session-level path.
 //   - Reason: rawEventName placed on the broadcast NormalizedEvent
 //     (ScreenChange path: "probe:activity"; ProbeIntent path: e.g.
 //     "probe-intent:process_dead")
@@ -241,6 +247,7 @@ func (o *probeOrchestrator) makeCallback(session, agentType string) probe.Screen
 //     semantics — the legacy interpretScreenEvent path takes this default.
 type probeGuardArgs struct {
 	Session            string
+	PaneID             string
 	AgentType          string
 	Reason             string
 	Signal             agentpkg.Signal
@@ -343,6 +350,13 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 		return false, ""
 	}
 
+	// A detector bound to a pane (the ProbeIntent path) acts on that pane
+	// alone; only the pane-less legacy path below goes through the session's
+	// representative pane.
+	if args.PaneID != "" {
+		return applyPaneProbe(m, args, newStatus)
+	}
+
 	// Mod gate (lights v2): while the session's representative pane takes
 	// its light from a live mod stream, the probe has nothing to recover —
 	// the stream is the better observer. Read before the final critical
@@ -420,6 +434,104 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 		BroadcastTs:  time.Now().UnixNano(),
 	}
 	m.broadcastRecorded(args.Session, nil, normalized)
+	return true, newStatus
+}
+
+// applyPaneProbe is steps 3b-5 of applyProbeGuards for a detector bound to
+// args.PaneID (U1-2b-1: the session's representative pane is the highest-
+// priority one, so it is not necessarily the pane the detector watches):
+//
+//   - the mod gate, the error guard and the same-status transition gate read
+//     that pane's own effective light, never the session's;
+//   - the transition is written to that pane's top frame (no frame: dropped);
+//   - the session's light is then re-aggregated from the fresh projections
+//     and emitted, so the probe's status is never laid over another pane.
+func applyPaneProbe(m *Module, args probeGuardArgs, newStatus agentpkg.Status) (bool, agentpkg.Status) {
+	drop := func(reason string) (bool, agentpkg.Status) {
+		if args.OnDrop != nil {
+			args.OnDrop(reason)
+		}
+		return false, ""
+	}
+
+	// Mod gate: while this pane's light comes from a live mod stream the
+	// probe has nothing to recover - the stream is the better observer.
+	p, err := m.projectPane(args.PaneID)
+	if err != nil || p == nil || p.TopFrame == nil {
+		return drop("pane-no-frame")
+	}
+	if p.Source == SourceMod {
+		return drop("mod-live")
+	}
+
+	// Test-only seam: see applyProbeGuards.
+	if hook := interruptBeforeFinalLockFn; hook != nil {
+		hook(args.Session)
+	}
+
+	// Final critical section: atomic re-check + error guard + transition
+	// gate, all on the pane's own state (m.mu then modMu, the lock order).
+	m.mu.Lock()
+	if args.StaleCheck == nil || !args.StaleCheck(m) {
+		m.mu.Unlock()
+		return drop("stale-callback")
+	}
+	p, err = m.projectPane(args.PaneID)
+	if err != nil || p == nil || p.TopFrame == nil {
+		m.mu.Unlock()
+		return drop("pane-no-frame")
+	}
+	cur := p.EffectiveStatus()
+	switch {
+	case p.Source == SourceMod:
+		m.mu.Unlock()
+		return drop("mod-live")
+	case cur == agentpkg.StatusError:
+		m.mu.Unlock()
+		return drop("error-guard")
+	case cur == newStatus:
+		m.mu.Unlock()
+		return drop("transition-gate")
+	}
+	frameID := p.TopFrame.FrameID
+	m.mu.Unlock()
+
+	agentpkg.MetricProbeScreenEvent.Add(1)
+	if isDevMode() {
+		log.Printf("[probe] status session=%s pane=%s agent=%s status=%s reason=%s",
+			args.Session, args.PaneID, args.AgentType, newStatus, args.Reason)
+	}
+	// Narrow update only (#632 R7): see setProjectionTopStatus.
+	if err := m.frames.UpdateStatusAndLastSeen(frameID, newStatus, time.Now().UnixNano()); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return drop("pane-no-frame")
+		}
+		log.Printf("[probe] write session=%s pane=%s: %v", args.Session, args.PaneID, err)
+		return drop("write-failed")
+	}
+
+	rep, err := m.projectionForSession(args.Session)
+	if err == nil && rep != nil {
+		m.mu.Lock()
+		syncProjectionState(m.currentStatus, m.subagents, args.Session, rep)
+		m.mu.Unlock()
+		if rep.Source == SourceMod && rep.PaneID == args.PaneID {
+			// The mod took over this pane between the gate and the write
+			// (the write cannot be undone): leave the frame to the worker.
+			return drop("mod-live-late")
+		}
+		normalized := buildProjectionNormalized(rep, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{})
+		m.broadcastRecorded(args.Session, rep, normalized)
+		return true, newStatus
+	}
+	// The session's projection is unavailable (frames removed concurrently):
+	// send the minimal event so clients still see the change.
+	m.broadcastRecorded(args.Session, nil, agentpkg.NormalizedEvent{
+		AgentType:    args.AgentType,
+		Status:       string(newStatus),
+		RawEventName: args.Reason,
+		BroadcastTs:  time.Now().UnixNano(),
+	})
 	return true, newStatus
 }
 

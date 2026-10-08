@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/lights"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -1496,18 +1497,27 @@ func (m *Module) selectSessionProjection(sessionName string, projections []Sessi
 	return m.selectSessionProjectionBy(sessionName, projections, m.paneSessionName)
 }
 
-// selectSessionProjectionBy picks the best projection whose pane resolves to
-// sessionName, using nameOf for the pane→session-name step.
+// selectSessionProjectionBy picks the representative projection of the tmux
+// session sessionName (spec 7): the pane whose effective light ranks highest
+// (projectionRankGreater), using nameOf for the pane→session-name step. The
+// returned copy's Background is the highest across all the session's panes;
+// everything else (dots, agent type, model, source, status) is the
+// representative pane's.
 func (m *Module) selectSessionProjectionBy(sessionName string, projections []SessionProjection, nameOf func(paneID string) string) *SessionProjection {
 	var selected *SessionProjection
+	background := ""
 	for i := range projections {
 		if nameOf(projections[i].PaneID) != sessionName {
 			continue
 		}
-		if selected == nil || projectionSortGreater(projections[i], *selected) {
+		background = higherBackground(background, projections[i].Background)
+		if selected == nil || projectionRankGreater(projections[i], *selected) {
 			projection := projections[i]
 			selected = &projection
 		}
+	}
+	if selected != nil {
+		selected.Background = background
 	}
 	return selected
 }
@@ -1527,13 +1537,15 @@ func (m *Module) liveSessionProjections() ([]namedProjection, error) {
 		return nil, nil
 	}
 	selected := make(map[string]namedProjection)
+	background := make(map[string]string) // the highest across all of a session's panes
 	for _, projection := range projections {
 		sessionName, sessionCode := m.resolvePaneSession(projection.PaneID)
 		if sessionName == "" {
 			continue
 		}
+		background[sessionName] = higherBackground(background[sessionName], projection.Background)
 		current, ok := selected[sessionName]
-		if !ok || projectionSortGreater(projection, current.Projection) {
+		if !ok || projectionRankGreater(projection, current.Projection) {
 			selected[sessionName] = namedProjection{
 				SessionName: sessionName,
 				SessionCode: sessionCode,
@@ -1548,17 +1560,63 @@ func (m *Module) liveSessionProjections() ([]namedProjection, error) {
 	sort.Strings(sessionNames)
 	out := make([]namedProjection, 0, len(sessionNames))
 	for _, sessionName := range sessionNames {
-		out = append(out, selected[sessionName])
+		np := selected[sessionName]
+		np.Projection.Background = background[sessionName] // np is a copy
+		out = append(out, np)
 	}
 	return out, nil
 }
 
-func projectionSortGreater(candidate, current SessionProjection) bool {
+// projectionRank orders a pane's effective light for the session's
+// representative pane (spec 7): error > waiting > running > idle > clear.
+func projectionRank(p SessionProjection) int {
+	switch p.EffectiveStatus() {
+	case agentpkg.StatusError:
+		return 4
+	case agentpkg.StatusWaiting:
+		return 3
+	case agentpkg.StatusRunning:
+		return 2
+	case agentpkg.StatusIdle:
+		return 1
+	}
+	return 0
+}
+
+// higherBackground is the higher-priority of two background symbols:
+// workflow > monitor > schedule > none.
+func higherBackground(a, b string) string {
+	if backgroundRank(b) > backgroundRank(a) {
+		return b
+	}
+	return a
+}
+
+func backgroundRank(b string) int {
+	switch lights.Background(b) {
+	case lights.BackgroundWorkflow:
+		return 3
+	case lights.BackgroundMonitor:
+		return 2
+	case lights.BackgroundSchedule:
+		return 1
+	}
+	return 0
+}
+
+// projectionRankGreater reports whether candidate should represent its tmux
+// session instead of current: the higher-ranked effective status (after the
+// mod overlay) wins, then the later TopFrame.StartedAt, then the larger
+// FrameID so the choice is deterministic.
+func projectionRankGreater(candidate, current SessionProjection) bool {
 	if candidate.TopFrame == nil {
 		return false
 	}
 	if current.TopFrame == nil {
 		return true
+	}
+	if cr, rr := projectionRank(candidate), projectionRank(current); cr != rr {
+		return cr > rr
 	}
 	if candidate.TopFrame.StartedAt != current.TopFrame.StartedAt {
 		return candidate.TopFrame.StartedAt > current.TopFrame.StartedAt
