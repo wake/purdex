@@ -29,6 +29,7 @@ import (
 
 const leaseUsage = "usage: pdx lease ls [--json] [--config <path>]\n" +
 	"       pdx lease acquire (--kind <k> | --weight <n>) [--wait 5m] [--session <sid>] [--tool-use <id>] [--holder-pid <pid>] [--holder-start <text>] [--client-id <uuid>] [--config <path>]\n" +
+	"       pdx lease run (--kind <k> | --weight <n>) [--wait 5m] [--client-id <uuid>] [--config <path>] -- <command…>\n" +
 	"       pdx lease release (<id> | --client-id <uuid>) [--json] [--config <path>]\n" +
 	"       (acquire holds for --holder-pid, default the parent of pdx: a bare acquire in a subshell or $(…) names a process that exits at once. Give --holder-pid a long-lived pid, or use pdx lease run.)"
 
@@ -43,10 +44,20 @@ const (
 	pressureCritical = 4
 )
 
+// runSignals are the signals that end a lease command: SIGINT and SIGTERM, and
+// for `run`, whose terminal may close under it, SIGHUP as well.
+func runSignals(args []string) []os.Signal {
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if len(args) > 0 && args[0] == "run" {
+		sigs = append(sigs, syscall.SIGHUP)
+	}
+	return sigs
+}
+
 func runLease(args []string) {
 	// SIGINT and SIGTERM cancel ctx: acquire turns that into a DELETE and exit
 	// 12 (as `pdx lead`).
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), runSignals(args)...)
 	defer stop()
 	os.Exit(runLeaseCmd(ctx, args, os.Getenv, os.Stdout, os.Stderr))
 }
@@ -61,6 +72,8 @@ func runLeaseCmd(ctx context.Context, args []string, getenv func(string) string,
 			return runLeaseAcquire(ctx, args[1:], stdout, stderr, clientOpts)
 		case "release":
 			return runLeaseRelease(ctx, args[1:], stdout, stderr, clientOpts)
+		case "run":
+			return runLeaseRun(ctx, args[1:], stdout, stderr, clientOpts)
 		}
 	}
 	msg := "需要一個子指令"
@@ -76,6 +89,12 @@ func leaseClient(cmd, cfgPath string, stderr io.Writer, clientOpts []daemonclien
 	return leaseClientT(cmd, cfgPath, stderr, leaseAttemptTimeout, clientOpts)
 }
 
+// leaseGrace is how long a lease command keeps trying a daemon that does not
+// answer. It is shorter than the client's 30 s: the pool is advice, and a
+// command that waits half a minute for advice before it runs has made the
+// advice a cost (spec D-5).
+const leaseGrace = 5 * time.Second
+
 // leaseClientT is leaseClient with the per-attempt timeout chosen.
 func leaseClientT(cmd, cfgPath string, stderr io.Writer, attempt time.Duration, clientOpts []daemonclient.Option) (*daemonclient.Client, bool) {
 	cfg, err := config.Load(cfgPath)
@@ -84,7 +103,7 @@ func leaseClientT(cmd, cfgPath string, stderr io.Writer, attempt time.Duration, 
 		return nil, false
 	}
 	base := fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port)
-	opts := append([]daemonclient.Option{daemonclient.WithStderr(stderr), daemonclient.WithAttemptTimeout(attempt)}, clientOpts...)
+	opts := append([]daemonclient.Option{daemonclient.WithStderr(stderr), daemonclient.WithAttemptTimeout(attempt), daemonclient.WithGrace(leaseGrace)}, clientOpts...)
 	return daemonclient.New(base, cfg.Token, opts...), true
 }
 
@@ -180,7 +199,79 @@ func printLeaseTable(stdout, stderr io.Writer, snap resources.Snapshot) int {
 		fmt.Fprintf(stderr, "pdx lease: %v\n", err)
 		return ExitError
 	}
+	if err := printLeaseSections(stdout, snap); err != nil {
+		fmt.Fprintf(stderr, "pdx lease: %v\n", err)
+		return ExitError
+	}
 	return ExitOK
+}
+
+// leaseNow is the clock of the age columns (a test seam).
+var leaseNow = time.Now
+
+// shortSeconds is a duration in seconds as 37s, 5m or 2h.
+func shortSeconds(n int64) string {
+	switch {
+	case n < 60:
+		return fmt.Sprintf("%ds", max(n, 0))
+	case n < 3600:
+		return fmt.Sprintf("%dm", n/60)
+	}
+	return fmt.Sprintf("%dh", n/3600)
+}
+
+// printLeaseSections writes the lease half of `pdx lease ls`: HOLDERS (what is
+// held), WAITERS (the queue) and RECENT (the last ended, an overrun marked
+// 超量: spec R6), each only when it has rows.
+func printLeaseSections(w io.Writer, snap resources.Snapshot) error {
+	cell := func(s string) string {
+		if s = sanitizeCell(s); s == "" {
+			return "-"
+		}
+		return s
+	}
+	if len(snap.Leases) > 0 {
+		rows := [][]string{{"HOLDERS", "SESSION", "KIND", "WEIGHT", "CHARGE", "USE", "AGE"}}
+		for _, l := range snap.Leases {
+			age := shortSeconds(l.AgeS)
+			if l.Overrun {
+				age += " 超量"
+			}
+			rows = append(rows, []string{"", cell(shortSession(l.SessionID)), cell(l.Kind), fmt.Sprint(l.Weight),
+				fmt.Sprintf("%.0f", l.Charge), fmt.Sprintf("%.0f%%", l.Use), age})
+		}
+		fmt.Fprintln(w)
+		if err := alignRows(w, rows, 2); err != nil {
+			return err
+		}
+	}
+	if len(snap.Waiters) > 0 {
+		rows := [][]string{{"WAITERS", "SESSION", "KIND", "WEIGHT", "WAITED", "DEADLINE IN"}}
+		for _, q := range snap.Waiters {
+			rows = append(rows, []string{fmt.Sprintf("#%d", q.Position), cell(shortSession(q.SessionID)), cell(q.Kind),
+				fmt.Sprint(q.Weight), shortSeconds(q.WaitedS), shortSeconds(q.DeadlineInS)})
+		}
+		fmt.Fprintln(w)
+		if err := alignRows(w, rows, 2); err != nil {
+			return err
+		}
+	}
+	if len(snap.Recent) > 0 {
+		rows := [][]string{{"RECENT", "SESSION", "KIND", "WEIGHT", "ENDED", "REASON", "WAITED"}}
+		for _, e := range snap.Recent {
+			reason := cell(e.EndReason)
+			if e.Overrun {
+				reason += " 超量"
+			}
+			rows = append(rows, []string{"", cell(shortSession(e.SessionID)), cell(e.Kind), fmt.Sprint(e.Weight),
+				shortSeconds(int64(leaseNow().Sub(e.EndedAt).Seconds())) + " ago", reason, shortSeconds(e.WaitedMS / 1000)})
+		}
+		fmt.Fprintln(w)
+		if err := alignRows(w, rows, 2); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func pressureName(level int) string {
