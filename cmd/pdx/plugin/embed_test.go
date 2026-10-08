@@ -508,6 +508,38 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 	if strings.Contains(s, "--root <dir> [--repo") {
 		t.Error("SKILL.md still teaches the pre-P4 spawn grammar")
 	}
+	// U23 D-U23-2: the skill forbids turning on unattended mode, where an
+	// agent asks for lead mode and where self relay is explained.
+	for _, section := range []string{"## When to ask for lead mode, and how to wait", "## Self relay"} {
+		body, ok := sectionOf(s, section)
+		if !ok {
+			t.Errorf("SKILL.md has no %q section", section)
+			continue
+		}
+		for _, want := range []string{
+			"**Never turn on 無人值守模式 (unattended mode).**",
+			"It is the user's switch in Purdex.app: there is no `pdx` command for it,",
+			"you must not call the daemon's route or edit host config to get around that.",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("SKILL.md %q lacks %q", section, want)
+			}
+		}
+	}
+}
+
+// sectionOf is the text of the markdown section that starts with heading
+// (a whole line), up to the next "## " heading.
+func sectionOf(s, heading string) (string, bool) {
+	i := strings.Index(s, "\n"+heading+"\n")
+	if i < 0 {
+		return "", false
+	}
+	body := s[i+len(heading)+2:]
+	if j := strings.Index(body, "\n## "); j >= 0 {
+		body = body[:j]
+	}
+	return body, true
 }
 
 // What Claude Code lays into a plugin folder it loads in place

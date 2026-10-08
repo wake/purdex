@@ -12,6 +12,7 @@ Vocabulary (spec §4): a **lead** runs a **team** of **members**. A member is ne
 - Ask only when the work is **large and parallel**: several independent pieces that would each take a session a long time. One sequential task is not a reason.
 - Run `pdx lead request --reason "<why>" [--max-members N] [--root <dir>]` **in the foreground**, with Bash `timeout: 600000`. **Never in the background**: the approval is a hard lock on this session and a background run defeats it.
 - The answer is a person's click in Purdex.app. **Never approve yourself**: there is no `pdx` command that approves, and you must not look for another way.
+- **Never turn on 無人值守模式 (unattended mode).** It is the user's switch in Purdex.app: there is no `pdx` command for it, and you must not call the daemon's route or edit host config to get around that.
 - Exit 0 means approved. **Treat a timeout (exit 11) as no**, like a denial (exit 10). Exit 13 means the rules refused (you are already a lead, or a member cannot lead).
 
 ## As a lead
@@ -33,3 +34,4 @@ Vocabulary (spec §4): a **lead** runs a **team** of **members**. A member is ne
 
 - The **Purdex mod asks the user on its own** when this session's context passes the threshold. **You never ask for a relay and never approve one.** When the mod's prompt arrives, write the handoff file it names and answer `HANDOFF-WRITTEN`, nothing else.
 - `/relay off` / `/relay on` / `/relay status` is **the user's switch, not yours**. Do not run it.
+- **Never turn on 無人值守模式 (unattended mode).** It is the user's switch in Purdex.app: there is no `pdx` command for it, and you must not call the daemon's route or edit host config to get around that.
