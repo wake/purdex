@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.0-alpha.607] - 2026-10-09
+
+> 動 daemon、CLI 和 SPA：**要部署 daemon**（`bin/pdx` 一起換新）；這版 mod 沒有改，不必重跑 `pdx setup`；主 checkout 快轉後 SPA 就生效；Electron 不必更新。使用者看得到的有三項：**燈號改由 Claude Code 外掛的即時事件驅動**（燈號 v2 上線）、`pdx team` 多了 CPU／記憶體欄、移除主機時會一併清掉它的核准框。其餘是底層，還沒有新畫面。
+
+### Changed：燈號 v2 上線 — 介面語言 U1-2（#1990）
+
+- 燈號改以 Claude Code 外掛（mod）回報的即時事件為準，hook 推算的燈號退居後備。例如在終端機核准權限時，黃燈會立刻撤掉，不必等下一個事件。
+- daemon 重啟、App 重新連線後，同樣的狀態不會再送一次，所以不會憑空冒出未讀。
+- 外掛接手某個 session 之後，舊的探測不會再把燈號蓋回去。
+
+### Added：主機資源量測 — 資源租約 P0（#1999、#2003）
+
+- daemon 每 5 秒量一次主機負載（1 分鐘平均負載、記憶體）和每個 session 的行程樹用量，提供 `GET /api/resources`。
+- `pdx team` 多 CPU、MEM 兩欄，顯示每個 member 目前的用量；`pdx lease ls` 列出主機數字與各 session 的用量。這一版**只量測**，不攔任何指令、也不排隊。
+- 平台不支援或讀取失敗時，主機數字標成不可用；`pdx team` 照常顯示，不會印錯誤。
+
+### Fixed
+
+- 移除主機，或主機的 IP／port 改變時，會清掉它留下的核准框；送到一半的決定不會落到新主機上（#1998，#1978）。
+
+### Internal
+
+- App 端的 team 名冊資料層（每台主機的 roster store、`teamOfTab` 等查詢），給之後的 team 介面用；目前沒有畫面使用（#1996、#1997）。
+- 對話模型：Claude Code 對話紀錄轉換器的核心（之後 iOS 與 Mac App 指揮台共用），目前不在任何執行路徑上（#2000）。
+
+### Docs
+
+- 派工／回報規格 T 的 spec 與 plan（#2004）。
+
 ## [1.0.0-alpha.606] - 2026-10-09
 
 > 動 daemon、mod 和 SPA：**要部署 daemon，也要重跑 `pdx setup --agent cc`**（mod 換版）；主 checkout 快轉後 SPA 即生效；Electron 不必更新。使用者看得到的是**標題列的「無人值守」開關**與它的期間清單、daemon 重啟後燈號不再全數變未讀；其餘是底層（team 名冊、燈號 v2 的 daemon 前半、對話模型型別），還沒有新畫面。
