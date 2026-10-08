@@ -60,6 +60,10 @@ type UnattendedView struct {
 	NextBefore int64      `json:"next_before,omitempty"` // the next page's cursor: a decided_at
 	Swept      int        `json:"swept,omitempty"`       // PUT only: open requests the switch-on approved
 	Pending    int        `json:"pending,omitempty"`     // PUT only: auto-approvable requests still open after the sweep
+	// ListFailed (PUT only): the write took effect — the state above is
+	// what is stored — but the list could not be read, so Approved is
+	// empty and says nothing; the client GETs the list.
+	ListFailed bool `json:"list_failed,omitempty"`
 }
 
 // MarshalJSON writes an empty page as approved:[]: the App replaces its

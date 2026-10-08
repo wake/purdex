@@ -312,6 +312,44 @@ func TestUnattendedPut_ChangedClosesASubscriberThatCannotTakeIt(t *testing.T) {
 	}
 }
 
+// A PUT whose write took effect answers 200 even when the list cannot be
+// read: the state, the counts, approved [] and list_failed, so the App
+// knows the switch is set and GETs the list; changed is sent. The same PUT
+// again is 200 with nothing changed and nothing broadcast. GET, which
+// writes nothing, still answers 500. Mutation gate: answer 500 when the
+// PUT's list fails → red.
+func TestUnattendedPut_ListFailureAfterTheWriteIs200(t *testing.T) {
+	f := newFixture(t)
+	hc := f.realUnattended()
+	logs := f.logs()
+	f.create(uid(1))
+	f.streamOf()
+	f.m.store.beforeListAutoApproved = func() error { return errors.New("disk I/O error") }
+	v := f.switchTo(true)
+	if !v.On || v.Since != f.clock.Load() || v.Swept != 1 || v.Pending != 0 || !v.ListFailed || v.Approved == nil || len(v.Approved) != 0 || v.Truncated {
+		t.Fatalf("view = %+v, want on, swept 1, approved [], list_failed", v)
+	}
+	if st, err := hc.Unattended(); err != nil || !st.On {
+		t.Fatalf("stored = %+v (%v), want on", st, err)
+	}
+	if ops, _ := f.streamOf(); !reflect.DeepEqual(ops, []string{"approval.request closed", "team.unattended changed"}) {
+		t.Fatalf("events = %v, want the sweep's closed, then changed", ops)
+	}
+	if n := countLines(logs(), "[team] unattended list: list auto-approved: disk I/O error"); n != 1 {
+		t.Fatalf("list failure lines = %d in %q, want 1", n, logs())
+	}
+
+	if again := f.switchTo(true); !again.On || again.Swept != 0 || !again.ListFailed {
+		t.Fatalf("same PUT again = %+v, want on, nothing swept, list_failed", again)
+	}
+	if ops, _ := f.streamOf(); len(ops) != 0 {
+		t.Fatalf("events after an unchanged PUT = %v, want none", ops)
+	}
+	if code, _, raw := f.getUnattended(""); code != http.StatusInternalServerError || decodeErr(t, raw).Error != errStorage {
+		t.Fatalf("GET with a failing list = %d %s, want 500 %s", code, raw, errStorage)
+	}
+}
+
 // The switch's route answers 503 once the module is stopping, writing
 // nothing.
 func TestUnattendedPut_StoppingIs503(t *testing.T) {

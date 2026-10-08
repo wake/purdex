@@ -35,7 +35,12 @@ func (m *Module) handleUnattendedGet(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "the unattended switch could not be read; see the daemon log", nil)
 		return
 	}
-	m.writeUnattendedView(w, team.UnattendedView{UnattendedState: st}, before, int(min(limit, team.UnattendedPageMax)))
+	v := team.UnattendedView{UnattendedState: st}
+	if err := m.fillUnattendedPage(&v, before, int(min(limit, team.UnattendedPageMax))); err != nil {
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	m.writeJSON(w, http.StatusOK, v)
 }
 
 // positiveParam reads a query value that, when present, must be a
@@ -48,20 +53,20 @@ func positiveParam(s string, present bool, def int64) (int64, bool) {
 	return n, err == nil && n > 0
 }
 
-// writeUnattendedView fills v's page from team.db (before 0 = the newest)
-// and answers 200, or 500 when the page cannot be read.
-func (m *Module) writeUnattendedView(w http.ResponseWriter, v team.UnattendedView, before int64, limit int) {
+// fillUnattendedPage fills v's page from team.db (before 0 = the newest).
+// A page that cannot be read is logged and returned as the error, v's
+// page left empty.
+func (m *Module) fillUnattendedPage(v *team.UnattendedView, before int64, limit int) error {
 	rows, truncated, err := m.store.ListAutoApproved(v.Since, before, limit)
 	if err != nil {
 		m.logf("[team] unattended list: %v", err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-		return
+		return err
 	}
 	v.Approved, v.Truncated = rows, truncated
 	if truncated {
 		v.NextBefore = rows[len(rows)-1].DecidedAt
 	}
-	m.writeJSON(w, http.StatusOK, v)
+	return nil
 }
 
 // handleUnattendedPut is PUT /api/team/unattended {on, client}: the App
@@ -116,7 +121,14 @@ func (m *Module) handleUnattendedPut(w http.ResponseWriter, r *http.Request) {
 	if changed {
 		m.logf("[team] unattended %s by app %q from %s (swept %d, pending %d)", onOff(st.On), client.Label, client.Addr, swept, pending)
 	}
-	m.writeUnattendedView(w, team.UnattendedView{UnattendedState: st, Swept: swept, Pending: pending}, 0, team.UnattendedPageDefault)
+	// The write took effect: a list that cannot be read must not turn that
+	// into a 500 the App could not tell from a failed write. It answers
+	// 200 with approved [] and list_failed, and GETs the list.
+	v := team.UnattendedView{UnattendedState: st, Swept: swept, Pending: pending}
+	if m.fillUnattendedPage(&v, 0, team.UnattendedPageDefault) != nil {
+		v.ListFailed = true
+	}
+	m.writeJSON(w, http.StatusOK, v)
 }
 
 func onOff(on bool) string {

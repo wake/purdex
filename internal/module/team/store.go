@@ -36,6 +36,10 @@ type Store struct {
 	// (tests: nothing outside the transaction sees the open row). nil in
 	// production.
 	afterApprovedInsert func(tx *sql.Tx) error
+	// beforeListAutoApproved, when set, runs as ListAutoApproved starts
+	// (since > 0); an error fails the list there (tests). nil in
+	// production.
+	beforeListAutoApproved func() error
 }
 
 // OpenStore opens (or creates) team.db at path. ":memory:" is for tests.
