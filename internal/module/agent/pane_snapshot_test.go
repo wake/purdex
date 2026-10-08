@@ -324,8 +324,8 @@ func TestProjectionRead_BatchTimeoutDoesNotFallBackPerPane(t *testing.T) {
 	t.Cleanup(func() { paneSnapshotTimeout = orig })
 	f.m.tmux = stuckBatchTmux{f.tx}
 	start := time.Now()
-	if _, err := f.m.liveSessionProjections(); err != nil {
-		t.Fatal(err)
+	if _, err := f.m.liveSessionProjections(); !errors.Is(err, errPaneSnapshotTimeout) {
+		t.Fatalf("read after a batch timeout: err = %v, want errPaneSnapshotTimeout", err)
 	}
 	if d := time.Since(start); d > 500*time.Millisecond {
 		t.Fatalf("read took %v after a batch timeout, want about the timeout", d)

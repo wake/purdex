@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sync/atomic"
 	"time"
@@ -21,8 +22,11 @@ import (
 // paneSnapshotTimeout bounds the one batch call. A call that merely fails falls
 // back to the per-pane lookups; one that runs out of time does not (tmux is
 // stuck, per-pane calls have no deadline and would hold the emit slot for as
-// long as tmux stays stuck): the read proceeds as if tmux knew no pane. A var
-// so tests can shorten it.
+// long as tmux stays stuck): the read FAILS (errPaneSnapshotTimeout). It must
+// not carry on with an empty snapshot: no pane would resolve to a session, the
+// projection would be nil and the caller would broadcast a clear (#717) for a
+// session that is only unreadable. A failed read broadcasts nothing and leaves
+// the baseline alone. A var so tests can shorten it.
 var paneSnapshotTimeout = 2 * time.Second
 
 // batchFailLogEvery is how often a failing batch call is logged: every read
@@ -36,7 +40,10 @@ var (
 	batchFailSuppressed atomic.Int64
 )
 
-var errPaneNotListed = errors.New("pane not in tmux listing")
+var (
+	errPaneNotListed       = errors.New("pane not in tmux listing")
+	errPaneSnapshotTimeout = errors.New("pane snapshot timed out")
+)
 
 // paneSnapshot is one successful batch answer. A nil *paneSnapshot means "no
 // snapshot": every lookup then asks tmux about the one pane, as before.
@@ -45,11 +52,11 @@ type paneSnapshot struct {
 	panes map[string]tmux.PanePlacement
 }
 
-// takePaneSnapshot makes the batch call. nil when there is no tmux, or the
-// call failed (logged at most once per batchFailLogEvery).
-func (m *Module) takePaneSnapshot() *paneSnapshot {
+// takePaneSnapshot makes the batch call. (nil, nil) when there is no tmux, or
+// the call failed (logged at most once per batchFailLogEvery).
+func (m *Module) takePaneSnapshot() (*paneSnapshot, error) {
 	if m == nil || m.tmux == nil {
-		return nil
+		return nil, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), paneSnapshotTimeout)
 	defer cancel()
@@ -58,11 +65,11 @@ func (m *Module) takePaneSnapshot() *paneSnapshot {
 		timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
 		logBatchFailure(err, timedOut)
 		if timedOut {
-			return &paneSnapshot{m: m, panes: map[string]tmux.PanePlacement{}}
+			return nil, fmt.Errorf("%w: %v", errPaneSnapshotTimeout, err)
 		}
-		return nil
+		return nil, nil
 	}
-	return &paneSnapshot{m: m, panes: panes}
+	return &paneSnapshot{m: m, panes: panes}, nil
 }
 
 func logBatchFailure(err error, timedOut bool) {
@@ -78,7 +85,7 @@ func logBatchFailure(err error, timedOut bool) {
 	}
 	action := "reading panes one by one"
 	if timedOut {
-		action = "treating every pane as unknown (no per-pane retry)"
+		action = "failing the read (no per-pane retry)"
 	}
 	log.Printf("[agent] pane snapshot unavailable, %s (%d similar reads since the last report): %v",
 		action, batchFailSuppressed.Swap(0), err)

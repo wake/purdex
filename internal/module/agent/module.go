@@ -732,7 +732,10 @@ func (m *Module) liveFrameProjectionsWithSnapshot() ([]SessionProjection, *paneS
 	if len(frames) == 0 {
 		return nil, nil, nil
 	}
-	snap := m.takePaneSnapshot()
+	snap, err := m.takePaneSnapshot()
+	if err != nil {
+		return nil, nil, err
+	}
 	frames = m.filterProjectionFrames(frames, snap)
 	projections := BuildSessionProjections(frames)
 	m.applyModOverlay(projections)
