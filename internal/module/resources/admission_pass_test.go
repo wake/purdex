@@ -467,3 +467,16 @@ func TestPass_NeverGrantsAnAbandonedWaiter(t *testing.T) {
 		t.Fatalf("gone=%s live=%s", f.state("gone"), f.state("live"))
 	}
 }
+
+// The snapshot's lease list carries what admission counts (the weight through
+// the warmup) and the latest measured use.
+func TestSnapshot_LeaseChargeAndUse(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.held("h", 99, "", f.nowMS()-5000) // 5 s old: inside the 20 s warmup
+	f.m.setLeaseUse(map[string]resources.LeaseUsage{"h": {CPU: 12, Use: 12}})
+	snap := f.m.current()
+	f.m.addLeases(&snap)
+	if len(snap.Leases) != 1 || snap.Leases[0].Charge != 35 || snap.Leases[0].Use != 12 {
+		t.Fatalf("leases = %+v", snap.Leases)
+	}
+}

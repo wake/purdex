@@ -16,7 +16,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -25,7 +27,9 @@ import (
 	"github.com/wake/purdex/internal/resources"
 )
 
-const leaseUsage = "usage: pdx lease ls [--json] [--config <path>]"
+const leaseUsage = "usage: pdx lease ls [--json] [--config <path>]\n" +
+	"       pdx lease acquire (--kind <k> | --weight <n>) [--wait 5m] [--session <sid>] [--tool-use <id>] [--holder-pid <pid>] [--holder-start <text>] [--client-id <uuid>] [--config <path>]\n" +
+	"       pdx lease release (<id> | --client-id <uuid>) [--json] [--config <path>]"
 
 // leaseAttemptTimeout bounds one request to the daemon; a snapshot is a read
 // of memory, so a daemon slower than this is not answering.
@@ -39,31 +43,47 @@ const (
 )
 
 func runLease(args []string) {
-	os.Exit(runLeaseCmd(context.Background(), args, os.Getenv, os.Stdout, os.Stderr))
+	// SIGINT and SIGTERM cancel ctx: acquire turns that into a DELETE and exit
+	// 12 (as `pdx lead`).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	os.Exit(runLeaseCmd(ctx, args, os.Getenv, os.Stdout, os.Stderr))
 }
 
 // runLeaseCmd dispatches `pdx lease <verb>`.
 func runLeaseCmd(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, clientOpts ...daemonclient.Option) int {
-	if len(args) == 0 || args[0] != "ls" {
-		msg := "需要一個子指令"
-		if len(args) > 0 {
-			msg = fmt.Sprintf("unknown subcommand %q", args[0])
+	if len(args) > 0 {
+		switch args[0] {
+		case "ls":
+			return runLeaseLs(ctx, args[1:], stdout, stderr, clientOpts)
+		case "acquire":
+			return runLeaseAcquire(ctx, args[1:], stdout, stderr, clientOpts)
+		case "release":
+			return runLeaseRelease(ctx, args[1:], stdout, stderr, clientOpts)
 		}
-		fmt.Fprintf(stderr, "pdx lease: %s\n%s\n", msg, leaseUsage)
-		return ExitUsage
 	}
-	return runLeaseLs(ctx, args[1:], stdout, stderr, clientOpts)
+	msg := "需要一個子指令"
+	if len(args) > 0 {
+		msg = fmt.Sprintf("unknown subcommand %q", args[0])
+	}
+	fmt.Fprintf(stderr, "pdx lease: %s\n%s\n", msg, leaseUsage)
+	return ExitUsage
 }
 
 // leaseClient builds the daemon client from the config, with no inbox.
 func leaseClient(cmd, cfgPath string, stderr io.Writer, clientOpts []daemonclient.Option) (*daemonclient.Client, bool) {
+	return leaseClientT(cmd, cfgPath, stderr, leaseAttemptTimeout, clientOpts)
+}
+
+// leaseClientT is leaseClient with the per-attempt timeout chosen.
+func leaseClientT(cmd, cfgPath string, stderr io.Writer, attempt time.Duration, clientOpts []daemonclient.Option) (*daemonclient.Client, bool) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx %s: %v\n", cmd, err)
 		return nil, false
 	}
 	base := fmt.Sprintf("http://%s:%d", resolveDaemonHost(cfg.Bind), cfg.Port)
-	opts := append([]daemonclient.Option{daemonclient.WithStderr(stderr), daemonclient.WithAttemptTimeout(leaseAttemptTimeout)}, clientOpts...)
+	opts := append([]daemonclient.Option{daemonclient.WithStderr(stderr), daemonclient.WithAttemptTimeout(attempt)}, clientOpts...)
 	return daemonclient.New(base, cfg.Token, opts...), true
 }
 

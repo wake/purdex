@@ -33,8 +33,9 @@ const recentWindow = time.Hour
 // one statement (store.Listing), so the lists are one view of the rows. A read failure leaves the lists
 // out (logged once per run of failures): the host figures stand on their own.
 //
-// There is no per-lease measurement yet (P1-2b): a held lease is charged its
-// full weight and its use reads 0.
+// Charge is what admission counts the lease for (Charge: its weight through
+// the warmup, then its average, never below the floor); Use is the latest raw
+// measurement of its tree, host percent, 0 until the first one.
 func (m *Module) addLeases(snap *resources.Snapshot) {
 	if m.store == nil {
 		return
@@ -46,9 +47,13 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 		return
 	}
 	nowMs := nowT.UnixMilli()
+	set := m.settings()
+	use := m.leaseUseSnapshot()
 	for _, a := range active {
+		charge := resources.Charge(resources.Lease{ID: a.ID, Weight: a.Weight, GrantedAt: time.UnixMilli(a.GrantedAt),
+			Measured: a.EWMA, Samples: a.Samples}, nowT, set)
 		snap.Leases = append(snap.Leases, resources.LeaseView{
-			ID: a.ID, Kind: a.Kind, Weight: a.Weight, Charge: float64(a.Weight),
+			ID: a.ID, Kind: a.Kind, Weight: a.Weight, Charge: charge, Use: use[a.ID].Use,
 			SessionID: a.SessionID, AgeS: max(0, (nowMs-a.GrantedAt)/1000), Overrun: a.Overrun,
 		})
 	}
