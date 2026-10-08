@@ -196,7 +196,7 @@ U1-5 merge hook: mod items will carry the same ids (row `uuid` from `session.app
 
 ## Measurements during implementation
 
-- **M-U1-4-a restart marker** (4b): resume a throwaway session (`claude --resume <sid>`) and restart one; record which rows appear at the restart (`session_context`, `environment`, …). Confirmed → `resumed` from the transcript (spec §8.1 updated in 4b); not reliable → `resumed` stays mod-only (U1-5) and the fixture coverage test exempts it.
+- **M-U1-4-a restart marker** (4b): resume a throwaway session (`claude --resume <sid>`) and restart one; record which rows appear at the restart (`session_context`, `environment`, …). Confirmed → `resumed` from the transcript (spec §8.1 updated in 4b); not reliable → `resumed` stays mod-only (U1-5) and the fixture coverage test exempts it. **Status (lead ruling 2026-10-09): not measured in 4b; `resumed` is mod-only and U1-5 handles it; the 4d coverage test exempts it.**
 - **M-U1-4-b `/compact` and local commands** (4d recording): confirm the `compact_boundary` / `isCompactSummary` / `local_command` shapes against M-U1-7 (one compaction seen in the census).
 
 ## Lead rulings (behavior rules beyond [D §14]) — all approved as proposed, purdex-88-b8, 2026-10-08
