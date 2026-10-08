@@ -3,9 +3,11 @@ package resourcesmod
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -127,6 +129,9 @@ func TestSettings_ReadFailureFailsOpenAndLogsOnce(t *testing.T) {
 	}
 }
 
+// Codex attack (medium): the served snapshot is the last tick's, whole. The
+// mode, available and reason come from one tick, so a setting changed between
+// two ticks cannot produce "mode off, available true".
 func TestSettings_ModeShowsInSnapshot(t *testing.T) {
 	set := &fakeSettings{}
 	m, _ := initedModule(t, t.TempDir(), set, idleSampler())
@@ -136,15 +141,18 @@ func TestSettings_ModeShowsInSnapshot(t *testing.T) {
 		if got := m.latest.Load().Mode; got != mode {
 			t.Fatalf("published mode = %q, want %q", got, mode)
 		}
-		// The handler re-reads the setting, so it is current between ticks.
-		other := resources.ModeAdvise
-		if mode == other {
-			other = resources.ModeLease
+		// The setting changes after the tick: the answer stays the tick's.
+		set.set(resources.Settings{Mode: resources.ModeOff})
+		snap, _ := getResources(t, m, "")
+		if snap.Mode != mode || !snap.Available || snap.Reason != "" {
+			t.Fatalf("served %q available=%v reason=%q between ticks, want the last tick's %q available", snap.Mode, snap.Available, snap.Reason, mode)
 		}
-		set.set(resources.Settings{Mode: other})
-		if snap, _ := getResources(t, m, ""); snap.Mode != other {
-			t.Fatalf("served mode = %q, want %q (the setting changed after the tick)", snap.Mode, other)
-		}
+	}
+	// The next tick applies off, as one whole state.
+	m.tick(context.Background())
+	snap, _ := getResources(t, m, "")
+	if snap.Mode != resources.ModeOff || snap.Available || snap.Reason != resources.ReasonOff {
+		t.Fatalf("after the tick: mode=%q available=%v reason=%q, want off / unavailable / off", snap.Mode, snap.Available, snap.Reason)
 	}
 }
 
@@ -204,7 +212,7 @@ func TestSettings_OffWorksWithoutDB(t *testing.T) {
 	}
 }
 
-func TestModule_StopJoinsAndClosesDB(t *testing.T) {
+func TestModule_StopJoinsAndCloseClosesDB(t *testing.T) {
 	m, _ := initedModule(t, t.TempDir(), &fakeSettings{}, idleSampler())
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -216,17 +224,29 @@ func TestModule_StopJoinsAndClosesDB(t *testing.T) {
 	if err := m.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.store.db.Ping(); err == nil {
-		t.Fatal("Stop left resources.db open")
+	// Stop runs before the HTTP server drains (shutdown.go: StopModules,
+	// srv.Shutdown, CloseModules), so a request still in flight needs the
+	// database: it is closed by Close, not by Stop (codex R1 + attack).
+	if err := m.store.db.Ping(); err != nil {
+		t.Fatalf("Stop closed resources.db under in-flight requests: %v", err)
 	}
 	if err := m.Stop(context.Background()); err != nil {
 		t.Fatalf("a second Stop must be a no-op, got %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.store.db.Ping(); err == nil {
+		t.Fatal("Close left resources.db open")
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("a second Close must be a no-op, got %v", err)
 	}
 }
 
 // A sampler that ignores its context keeps the loop running past Stop's
 // deadline; the database must stay open until the loop is joined.
-func TestModule_StopWaitsForTheLoopBeforeClosingDB(t *testing.T) {
+func TestModule_StopWaitsForTheLoopAndCloseClosesDB(t *testing.T) {
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
@@ -257,7 +277,70 @@ func TestModule_StopWaitsForTheLoopBeforeClosingDB(t *testing.T) {
 	if err := m.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.store.db.Ping(); err == nil {
-		t.Fatal("the db stayed open after the loop was joined")
+		t.Fatal("the db stayed open after Close")
+	}
+}
+
+// Codex attack (medium): the dedupe key is the run of failures, not the error
+// text. A reader whose failure text changes on every call (a timestamp, a
+// SQLite detail) must still log once, and the way back once.
+func TestSettings_ChangingFailureTextLogsOnce(t *testing.T) {
+	set := &fakeSettings{}
+	set.set(resources.Settings{Mode: resources.ModeLease})
+	var n atomic.Int64
+	set.errFn = func() error { return fmt.Errorf("decode failure #%d", n.Add(1)) }
+	m, logs := initedModule(t, t.TempDir(), set, idleSampler())
+	for i := 0; i < 5; i++ {
+		m.tick(context.Background())
+		getResources(t, m, "")
+	}
+	if got := logs.count("cannot read the resources setting"); got != 1 {
+		t.Fatalf("a failure run logged %d times, want 1: %v", got, logs.lines)
+	}
+	set.set(resources.Settings{Mode: resources.ModeLease})
+	m.tick(context.Background())
+	getResources(t, m, "")
+	if got := logs.count("readable again"); got != 1 {
+		t.Fatalf("recovery logged %d times, want 1: %v", got, logs.lines)
+	}
+	// A second run of failures logs again, once.
+	set.errFn = func() error { return fmt.Errorf("decode failure #%d", n.Add(1)) }
+	m.tick(context.Background())
+	m.tick(context.Background())
+	if got := logs.count("cannot read the resources setting"); got != 2 {
+		t.Fatalf("two runs of failures logged %d times, want 2: %v", got, logs.lines)
+	}
+}
+
+// Codex attack (medium): after Stop the module is finished. A Start that
+// "succeeds" without a sampler would leave a daemon that serves a frozen
+// snapshot, so it says so instead.
+func TestModule_StartAfterStopFails(t *testing.T) {
+	m, _ := initedModule(t, t.TempDir(), &fakeSettings{}, idleSampler())
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background()); err == nil {
+		t.Fatal("Start after Stop must fail, not pretend to run")
+	}
+}
+
+func TestModule_StartAfterStopBeforeStartFails(t *testing.T) {
+	m, _ := initedModule(t, t.TempDir(), &fakeSettings{}, idleSampler())
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background()); err == nil {
+		t.Fatal("Start after a Stop that came first must fail")
+	}
+	if m.latest.Load() != nil {
+		t.Fatal("a refused Start must not sample")
 	}
 }

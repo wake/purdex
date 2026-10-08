@@ -2,9 +2,11 @@ package resourcesmod
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -298,6 +300,65 @@ func TestStore_Retention(t *testing.T) {
 		if _, ok, _ := s.Get(id); !ok {
 			t.Fatalf("%s must survive", id)
 		}
+	}
+}
+
+// Codex attack (high): the lists /api/resources shows are one view. A writer
+// keeps creating rows and moving each waiting -> held -> ended while Listing
+// runs. Every row created before a call must be in exactly one of its three
+// lists; three separate queries lose a row granted between the first two, or
+// show an ended one in two lists.
+func TestStore_ListingIsOneConsistentView(t *testing.T) {
+	s := newTestStore(t)
+	const total = 120
+	var created atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < total; i++ {
+			id := fmt.Sprintf("r%d", i)
+			if _, _, err := s.Create(baseRow(id, "c"+id)); err != nil {
+				return
+			}
+			created.Add(1)
+			_, _ = s.Grant(id, int64(2000+i), false, false)
+			_, _ = s.End(id, resources.EndReleased, int64(3000+i))
+		}
+	}()
+
+	polls := 0
+	for finished := false; !finished; {
+		select {
+		case <-done:
+			finished = true // one last poll after the writer is done
+		default:
+		}
+		polls++
+		before := int(created.Load())
+		active, waiting, recent, err := s.Listing(1_000_000, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := int(created.Load())
+		seen := map[string]int{}
+		for _, list := range [][]leaseRow{active, waiting, recent} {
+			for _, r := range list {
+				seen[r.ID]++
+			}
+		}
+		for id, c := range seen {
+			if c != 1 {
+				t.Fatalf("poll %d: %s is in %d lists", polls, id, c)
+			}
+		}
+		// The writer may have created one more row than it has counted yet.
+		if len(seen) < before || len(seen) > after+1 {
+			t.Fatalf("poll %d: %d rows listed, but %d existed before the call and %d after (active %d waiting %d recent %d)",
+				polls, len(seen), before, after, len(active), len(waiting), len(recent))
+		}
+	}
+	if polls < 10 {
+		t.Fatalf("only %d polls overlapped the writer: the test did not exercise anything", polls)
 	}
 }
 

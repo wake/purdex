@@ -12,9 +12,10 @@ import (
 // It never samples (hot-path rule): before the first tick ends it answers
 // available = false, reason = warming_up.
 func (m *Module) handleGet(w http.ResponseWriter, r *http.Request) {
+	// The snapshot is the last tick's, whole: mode, available and reason come
+	// from one tick, so they cannot contradict each other. A changed setting
+	// shows from the next tick (at most one interval later).
 	snap := m.current()
-	// The mode is the setting as of now, not as of the last tick.
-	snap.Mode = m.settings().Mode
 	m.addLeases(&snap)
 	if sid := r.URL.Query().Get("session"); sid != "" {
 		snap = onlySession(snap, sid)
@@ -29,8 +30,7 @@ const recentWindow = time.Hour
 
 // addLeases fills the snapshot copy with the held leases, the queue (with
 // positions) and the last ended leases, from resources.db. Three reads, not
-// one transaction: nothing writes the rows yet, and once the admission code
-// does it will take its own lock around this. A read failure leaves the lists
+// one statement (store.Listing), so the lists are one view of the rows. A read failure leaves the lists
 // out (logged once per run of failures): the host figures stand on their own.
 //
 // There is no per-lease measurement yet (P1-2b): a held lease is charged its
@@ -39,15 +39,8 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 	if m.store == nil {
 		return
 	}
-	active, err := m.store.Active()
-	var waiting, ended []leaseRow
-	if err == nil {
-		waiting, err = m.store.Waiting()
-	}
 	nowT := m.now()
-	if err == nil {
-		ended, err = m.store.Recent(resources.RecentLimit, nowT.Add(-recentWindow).UnixMilli())
-	}
+	active, waiting, ended, err := m.store.Listing(resources.RecentLimit, nowT.Add(-recentWindow).UnixMilli())
 	m.noteList(err)
 	if err != nil {
 		return

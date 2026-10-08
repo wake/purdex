@@ -83,6 +83,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 func TestModule_ImplementsCoreModule(t *testing.T) {
 	var _ core.Module = (*Module)(nil)
+	var _ core.Closer = (*Module)(nil) // CloseModules runs after the HTTP server is down
 	m := New()
 	if m.Name() != "resources" {
 		t.Fatalf("name = %q", m.Name())

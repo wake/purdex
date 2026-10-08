@@ -16,10 +16,10 @@ func (m *Module) settings() resources.Settings {
 	}
 	s, err := m.settingsSrc.ResourcesSettings()
 	if err != nil {
-		m.noteSettings(err.Error())
+		m.noteSettings(err)
 		return measure
 	}
-	m.noteSettings("")
+	m.noteSettings(nil)
 	s = s.Effective()
 	if m.store == nil && (s.Mode == resources.ModeAdvise || s.Mode == resources.ModeLease) {
 		s.Mode = resources.ModeMeasure
@@ -27,20 +27,23 @@ func (m *Module) settings() resources.Settings {
 	return s
 }
 
-// noteSettings logs a settings problem when it changes, and the return to
-// normal; the sampler tick and every GET call settings, so it must not log
-// per call.
-func (m *Module) noteSettings(problem string) {
+// noteSettings logs a settings problem when a run of failures starts, and the
+// return to normal when it ends; the sampler tick and the lease routes call
+// settings, so it must not log per call. The key is the run, not the error
+// text: a reader whose message changes on every call (a timestamp, a SQLite
+// detail) still logs once. The log call is under the lock so the two lines of
+// a run cannot come out in the wrong order.
+func (m *Module) noteSettings(err error) {
 	m.noteMu.Lock()
-	changed := problem != m.settingsNote
-	m.settingsNote = problem
-	m.noteMu.Unlock()
-	if !changed {
+	defer m.noteMu.Unlock()
+	failing := err != nil
+	if failing == m.settingsFailing {
 		return
 	}
-	if problem == "" {
-		m.logf("[resources] settings readable again")
+	m.settingsFailing = failing
+	if failing {
+		m.logf("[resources] cannot read the resources setting, treating it as mode measure: %v", err)
 	} else {
-		m.logf("[resources] cannot read the resources setting, treating it as mode measure: %s", problem)
+		m.logf("[resources] settings readable again")
 	}
 }

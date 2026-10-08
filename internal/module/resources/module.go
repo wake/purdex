@@ -10,6 +10,7 @@ package resourcesmod
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -63,11 +64,11 @@ type Module struct {
 	// store is resources.db; nil when it could not be opened (or there is no
 	// data dir), and the module then runs measure-only. settingsSrc is the
 	// hostconfig module's reader; nil reads as mode measure.
-	store        *leaseStore
-	settingsSrc  resources.SettingsReader
-	noteMu       sync.Mutex
-	settingsNote string // the settings problem last logged, so a standing one logs once
-	listFailing  bool   // the lease listing is failing and has been logged
+	store           *leaseStore
+	settingsSrc     resources.SettingsReader
+	noteMu          sync.Mutex
+	settingsFailing bool // a run of settings read failures is under way and has been logged
+	listFailing     bool // the lease listing is failing and has been logged
 
 	// runCtx ends when Stop is called; it is made in New so that a Stop
 	// before Start still keeps a later Start from running.
@@ -76,6 +77,7 @@ type Module struct {
 	wg        sync.WaitGroup
 	startMu   sync.Mutex
 	started   bool
+	stopped   bool // Stop was called: the module cannot be started again
 	closeOnce sync.Once
 }
 
@@ -171,6 +173,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 func (m *Module) Start(context.Context) error {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
+	if m.stopped {
+		return errStopped
+	}
 	if m.started {
 		return nil
 	}
@@ -181,10 +186,20 @@ func (m *Module) Start(context.Context) error {
 	return nil
 }
 
-// Stop cancels the loop, waits for the goroutine as far as ctx (the shared
-// shutdown budget) allows, and only then closes the database. It may be called
-// again after a timeout and finishes the job; it is idempotent.
+// errStopped is what Start answers after Stop: a stopped module is finished,
+// and a Start that returned nil would leave a daemon serving a frozen snapshot.
+var errStopped = errors.New("resources module: Start after Stop")
+
+// Stop cancels the loop and waits for the goroutine as far as ctx (the shared
+// shutdown budget) allows. It leaves resources.db open: the daemon stops
+// modules before the HTTP server drains (cmd/pdx/shutdown.go), so a request
+// still in flight needs the database; Close, which runs after the server is
+// down, closes it. Stop may be called again after a timeout and finishes the
+// job; it is idempotent, and it also keeps a later Start from running.
 func (m *Module) Stop(ctx context.Context) error {
+	m.startMu.Lock()
+	m.stopped = true
+	m.startMu.Unlock()
 	m.stopRun()
 	done := make(chan struct{})
 	go func() {
@@ -193,15 +208,18 @@ func (m *Module) Stop(ctx context.Context) error {
 	}()
 	select {
 	case <-done:
-		m.closeStore()
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-// closeStore closes resources.db once, after the loop has been joined.
-func (m *Module) closeStore() {
+// Close closes resources.db once. The daemon calls it after the HTTP server
+// has shut down (core.Closer); the loop was joined by Stop, and a Close that
+// comes first stops it too, so it never closes the database under a sampler.
+func (m *Module) Close() error {
+	m.stopRun()
+	m.wg.Wait()
 	m.closeOnce.Do(func() {
 		if m.store == nil {
 			return
@@ -210,4 +228,5 @@ func (m *Module) closeStore() {
 			m.logf("[resources] close resources.db: %v", err)
 		}
 	})
+	return nil
 }

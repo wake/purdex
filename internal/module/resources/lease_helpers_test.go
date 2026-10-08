@@ -29,11 +29,17 @@ type fakeSettings struct {
 	mu  sync.Mutex
 	s   resources.Settings
 	err error
+	// errFn, when set, makes every read fail with whatever it returns, so a
+	// failure can carry text that changes from call to call.
+	errFn func() error
 }
 
 func (f *fakeSettings) ResourcesSettings() (resources.Settings, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.errFn != nil {
+		return resources.Settings{}, f.errFn()
+	}
 	if f.err != nil {
 		return resources.Settings{}, f.err
 	}
@@ -42,7 +48,7 @@ func (f *fakeSettings) ResourcesSettings() (resources.Settings, error) {
 
 func (f *fakeSettings) set(s resources.Settings) {
 	f.mu.Lock()
-	f.s, f.err = s, nil
+	f.s, f.err, f.errFn = s, nil, nil
 	f.mu.Unlock()
 }
 
@@ -99,7 +105,10 @@ func initedModule(t *testing.T, dir string, set *fakeSettings, sampler resources
 	if err := m.Init(c); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	t.Cleanup(func() { _ = m.Stop(context.Background()) })
+	t.Cleanup(func() {
+		_ = m.Stop(context.Background())
+		_ = m.Close()
+	})
 	return m, logs
 }
 
