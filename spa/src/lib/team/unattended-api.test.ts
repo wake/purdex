@@ -95,11 +95,45 @@ describe('unattended-api', () => {
       expect(err.code).toBe('bad_response')
     })
 
-    it('a null or missing `approved` is an empty page; a row that is not an approval is skipped', async () => {
-      testGlobal.fetch.mockResolvedValueOnce(json(view({ approved: null })))
-      expect((await getUnattended(hostId)).approved).toEqual([])
-      testGlobal.fetch.mockResolvedValueOnce(json(view({ approved: [row('a1', 2_000), { id: 'x' }] })))
-      expect((await getUnattended(hostId)).approved.map((a) => a.id)).toEqual(['a1'])
+    // The whole envelope is the trust boundary (PU-2a review): a broken one is `bad_response`, never an empty page.
+    const { approved: _a, ...withoutApproved } = view()
+    const { truncated: _t, ...withoutTruncated } = view()
+    it.each([
+      ['approved is null', view({ approved: null })],
+      ['approved is missing', withoutApproved],
+      ['approved is an object', view({ approved: {} })],
+      ['truncated is missing', withoutTruncated],
+      ['truncated is a string', view({ truncated: 'true' })],
+      ['truncated is true without next_before', view({ truncated: true })],
+      ['next_before is 0', view({ truncated: true, next_before: 0 })],
+      ['next_before is negative', view({ truncated: true, next_before: -5 })],
+      ['next_before is a string', view({ truncated: true, next_before: '2000' })],
+      ['next_before is 0 on a last page', view({ next_before: 0 })],
+      ['swept is negative', view({ swept: -1 })],
+      ['swept is a string', view({ swept: '2' })],
+      ['pending is negative', view({ pending: -1 })],
+      ['pending is null', view({ pending: null })],
+      ['list_failed is a string', view({ list_failed: 'yes' })],
+      ['a lead row is malformed', view({ approved: [row('a1', 2_000), { ...row('a0', 1_500), origin: null }] })],
+      ['a self_relay row is malformed', view({ approved: [{ ...row('a1', 2_000), kind: 'self_relay', created_at: 'x' }] })],
+      ['a row has no kind', view({ approved: [row('a1', 2_000), { id: 'x' }] })],
+      ['a row is not a record', view({ approved: [row('a1', 2_000), 'a0'] })],
+    ])('an answer where %s is `bad_response`, not a page', async (_what, body) => {
+      testGlobal.fetch.mockResolvedValueOnce(json(body))
+      expect((await rejection(getUnattended(hostId))).code).toBe('bad_response')
+    })
+
+    it('a row of a kind this build does not know (a later daemon\'s) is skipped, the page still shown', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(view({ approved: [row('a2', 3_000), { ...row('a1', 2_000), kind: 'adopt' }] })))
+      expect((await getUnattended(hostId)).approved.map((a) => a.id)).toEqual(['a2'])
+    })
+
+    it('an empty last page is a valid answer', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(view({ approved: [] })))
+      const v = await getUnattended(hostId)
+      expect(v.approved).toEqual([])
+      expect(v.truncated).toBe(false)
+      expect(v.next_before).toBeUndefined()
     })
 
     it('an unconfigured host is refused before any request (`host_removed`)', async () => {

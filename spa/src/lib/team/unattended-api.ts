@@ -4,11 +4,11 @@
 // errors as the approval routes (`send`, approval-api.ts): pinned to a configured host, a plain-text 404 — an older
 // daemon without the route — is code `unsupported`.
 //
-// The answer is a trust boundary like the WS frame: a state that is not the wire shape is rejected (`bad_response`),
-// never read as "off"; a row that is not an approval (or is a later daemon's kind) is skipped, the page still shown.
+// The answer is a trust boundary like the WS frame: an envelope that is not the wire shape is rejected
+// (`bad_response`), never read as "off" or as an empty page; only a row of a later daemon's kind is skipped.
 import { ApprovalApiError, send } from './approval-api'
 import { clientDescriptor } from './client-label'
-import { isApproval, isUnattendedState, type UnattendedView } from './types'
+import { isApproval, isUnattendedState, isUnknownKindRow, type Approval, type UnattendedState, type UnattendedView } from './types'
 
 export const UNATTENDED_PATH = '/api/team/unattended'
 
@@ -19,12 +19,48 @@ export interface UnattendedPageQuery {
   limit?: number
 }
 
-/** A 200's body as a view; a state that is not the wire shape is `bad_response`. */
+const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const isCount = (v: unknown): v is number => isFiniteNumber(v) && v >= 0
+const isCursor = (v: unknown): v is number => isFiniteNumber(v) && v > 0
+
+function badResponse(what: string): never {
+  throw new ApprovalApiError(200, 'bad_response', `the unattended view is not the wire shape: ${what}`)
+}
+
+/**
+ * A 200's body as a view, checked whole (PU-2a review): the state, `approved` an array, `truncated` a boolean,
+ * `next_before` a positive number (required when truncated), `swept` / `pending` non-negative numbers and
+ * `list_failed` a boolean when present. Anything else is `bad_response` — a broken answer is never an empty page.
+ * A row of a kind this build does not know is skipped; a malformed row of a known kind (or of no kind) is
+ * `bad_response`, so no approval goes missing from the list silently.
+ */
 function viewOf(raw: unknown): UnattendedView {
-  if (!isUnattendedState(raw)) throw new ApprovalApiError(200, 'bad_response', 'the unattended state is not the wire shape')
-  const r = raw as Partial<UnattendedView> & Record<string, unknown>
-  const approved = Array.isArray(r.approved) ? r.approved.filter(isApproval) : []
-  return { ...r, approved, truncated: r.truncated === true } as UnattendedView
+  if (!isUnattendedState(raw)) badResponse('state')
+  const r = raw as UnattendedState & Record<string, unknown>
+  if (!Array.isArray(r.approved)) badResponse('approved is not an array')
+  if (typeof r.truncated !== 'boolean') badResponse('truncated is not a boolean')
+  if (r.next_before !== undefined ? !isCursor(r.next_before) : r.truncated) badResponse('next_before')
+  if (r.swept !== undefined && !isCount(r.swept)) badResponse('swept')
+  if (r.pending !== undefined && !isCount(r.pending)) badResponse('pending')
+  if (r.list_failed !== undefined && typeof r.list_failed !== 'boolean') badResponse('list_failed')
+  const approved: Approval[] = []
+  for (const [i, a] of r.approved.entries()) {
+    if (isUnknownKindRow(a)) continue // a later daemon's kind: not ours to show, not malformed
+    if (!isApproval(a)) badResponse(`approved[${i}]`)
+    approved.push(a)
+  }
+  return {
+    on: r.on,
+    since: r.since,
+    changed_at: r.changed_at,
+    ...(r.changed_by !== undefined ? { changed_by: r.changed_by } : {}),
+    approved,
+    truncated: r.truncated,
+    ...(r.next_before !== undefined ? { next_before: r.next_before as number } : {}),
+    ...(r.swept !== undefined ? { swept: r.swept as number } : {}),
+    ...(r.pending !== undefined ? { pending: r.pending as number } : {}),
+    ...(r.list_failed !== undefined ? { list_failed: r.list_failed as boolean } : {}),
+  }
 }
 
 /** `GET /api/team/unattended`: the switch and one page of what the daemon approved since its last switch-on. */
