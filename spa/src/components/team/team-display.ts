@@ -31,6 +31,7 @@ export interface TeamSeatView {
 export type TeamGroupStyle = 'label' | 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule' | 'combo' | 'tint' | 'frame' | 'topbar' | 'plate'
   | 'corner-tr' | 'corner-br' | 'corner-tr-icon' | 'corner-br-icon'
   | 'badge-icon' | 'badge-disc' | 'edge-arc' | 'edge-short'
+  | 'shadow-top' | 'shadow-bottom' | 'shadow-diag'
 
 /** The low-key cues a group style turns on (the older four styles use none of them). */
 export type TeamGroupCue = 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule'
@@ -72,6 +73,15 @@ export type TeamEdgeWidth = 1.5 | 2
 export function groupEdge(style: TeamGroupStyle): 'arc' | 'short' | null {
   return style === 'edge-arc' ? 'arc' : style === 'edge-short' ? 'short' : null
 }
+
+/** The team-colored shadow styles: the shadow falls above, below, or toward the bottom-right of a group tab. */
+export function groupShadow(style: TeamGroupStyle): 'top' | 'bottom' | 'diag' | null {
+  return style === 'shadow-top' ? 'top' : style === 'shadow-bottom' ? 'bottom' : style === 'shadow-diag' ? 'diag' : null
+}
+
+/** Shadow strength (blur + alpha) and scope (every tab of the group, or only its last tab). */
+export type TeamShadowStrength = 'soft' | 'medium' | 'strong'
+export type TeamShadowScope = 'all' | 'last'
 
 /** Where the hook's top starts: exactly at the lead highlight's lower edge, or fused into the highlight. */
 export type TeamHookTop = 'below' | 'blend'
@@ -134,6 +144,8 @@ export interface TeamDisplay {
   edgeWidth: TeamEdgeWidth
   bookmarkCut: TeamBookmarkCut
   bookmarkPos: TeamBookmarkPos
+  shadowStrength: TeamShadowStrength
+  shadowScope: TeamShadowScope
   openMark: TeamOpenMark
   tabMark: (tabId: string) => TeamTabMark | null
   /** Member tabs folded into the bead row (their lead row is in the same list). */

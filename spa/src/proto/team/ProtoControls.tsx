@@ -46,7 +46,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
   const [open, setOpen] = useState(true)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const theme = useThemeStore((s) => s.activeThemeId)
-  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, hookTop, cornerSize, badgeIcon, edgeWidth, bookmarkCut, bookmarkPos, openMark, namesOff, target, log } = useProtoTeam()
+  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, hookTop, cornerSize, badgeIcon, edgeWidth, bookmarkCut, bookmarkPos, shadowStrength, shadowScope, openMark, namesOff, target, log } = useProtoTeam()
   const members = Object.values(seats).filter((s) => s.role === 'member' && s.alive && s.teamKey)
   const tgt = target ? seats[target] : null
   const tgtTab = tgt ? tabOfSeat(tgt) : null
@@ -63,7 +63,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
     <div data-testid="proto-controls" className="fixed right-3 bottom-3 z-50 w-[min(380px,calc(100vw-24px))] max-h-[48vh] overflow-y-auto rounded-xl border border-border-default bg-surface-elevated shadow-2xl p-3 text-xs flex flex-col gap-2">
       <div className="flex items-center">
         <span className="font-semibold">原型控制</span>
-        <span className="ml-2 text-text-muted">team 介面 · 第五版 e</span>
+        <span className="ml-2 text-text-muted">team 介面 · 第五版 f</span>
         <button type="button" onClick={() => setOpen(false)} className="ml-auto text-text-muted hover:text-text-primary cursor-pointer">收起</button>
       </div>
       <Seg label="分頁位置" value={tabPosition} options={[['top', '上方'], ['left', '左側'], ['both', '兩側']]} onChange={(v) => useLayoutStore.getState().setTabPosition(v)} />
@@ -74,7 +74,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
       </div>
       <div className="text-[10.5px] text-text-muted font-semibold pt-0.5">比較用（之後定一種）</div>
       <Seg label="群組樣式" value={groupStyle} options={[['label', '只有標籤'], ['dot', '色點（對照）'], ['endcap', '收尾刻度'], ['gap', '間距分群'], ['sepcolor', '色分隔線'], ['rule', '細線'], ['combo', '色點＋間距＋收尾']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
-      <Seg label="斜角" value={groupStyle} options={[['corner-tr', '右上斜角'], ['corner-br', '右下斜角'], ['corner-tr-icon', '右上＋圖示'], ['corner-br-icon', '右下＋圖示'], ['badge-icon', '轉角徽章・純圖示'], ['badge-disc', '轉角徽章・圓底'], ['edge-arc', '右邊線・弧邊'], ['edge-short', '右邊線・短邊（對照）']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
+      <Seg label="斜角" value={groupStyle} options={[['corner-tr', '右上斜角'], ['corner-br', '右下斜角'], ['corner-tr-icon', '右上＋圖示'], ['corner-br-icon', '右下＋圖示'], ['badge-icon', '轉角徽章・純圖示'], ['badge-disc', '轉角徽章・圓底'], ['edge-arc', '右邊線・弧邊'], ['edge-short', '右邊線・短邊（對照）'], ['shadow-top', '帶色陰影・上'], ['shadow-bottom', '帶色陰影・下'], ['shadow-diag', '帶色陰影・斜向']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
       <Seg label="斜角大小" value={cornerSize} options={[['sm', '小'], ['md', '中（預設）'], ['lg', '大']]} onChange={(v) => useProtoTeam.setState({ cornerSize: v })} />
       <Seg label="徽章圖示" value={badgeIcon} options={[['bookmark', '書籤（預設）'], ['users', '人群'], ['hexagon', '六角'], ['diamond', '菱形'], ['dot', '實心點'], ['letter', '首字'], ['user', '舊：人形']]} onChange={(v) => useProtoTeam.setState({ badgeIcon: v })} />
       {groupStyle === 'badge-icon' && badgeIcon === 'bookmark' && (
@@ -84,6 +84,12 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         </>
       )}
       <Seg label="邊線粗細" value={String(edgeWidth)} options={[['1.5', '1.5px'], ['2', '2px（預設）']]} onChange={(v) => useProtoTeam.setState({ edgeWidth: v === '1.5' ? 1.5 : 2 })} />
+      {groupStyle.startsWith('shadow-') && (
+        <>
+          <Seg label="陰影強度" value={shadowStrength} options={[['soft', '柔'], ['medium', '中（預設）'], ['strong', '強']]} onChange={(v) => useProtoTeam.setState({ shadowStrength: v })} />
+          <Seg label="陰影範圍" value={shadowScope} options={[['all', '整組每個分頁'], ['last', '只最後一個分頁']]} onChange={(v) => useProtoTeam.setState({ shadowScope: v })} />
+        </>
+      )}
       <Seg label="舊群組" value={groupStyle} options={[['tint', '淡色底'], ['frame', '外框'], ['topbar', '頂端色條'], ['plate', '共用底板']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
       <Seg label="收起樣式" value={collapseStyle} options={[['users', '新：人群圖示＋燈點'], ['sign', '舊：符號＋「N 個收起」']]} onChange={(v) => useProtoTeam.setState({ collapseStyle: v })} />
       <Seg label="掛勾" value={hookStyle} options={[['thin', '細線圓角'], ['bold', '加粗'], ['rail', '樹狀刻度'], ['glyph', '⎿ 字元']]} onChange={(v) => useProtoTeam.setState({ hookStyle: v })} />

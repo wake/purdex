@@ -8,7 +8,7 @@
 // The older styles: an outline ("frame"), one shared tinted plate ("plate"); "tint" / "topbar" decorate the tabs.
 import type { CSSProperties, ReactNode } from 'react'
 import { User, UsersThree, BookmarkSimple, Hexagon, Diamond, Circle } from '@phosphor-icons/react'
-import { groupBadge, groupCorner, groupEdge, groupHasCue, useTeamDisplay, type TeamBadgeIcon, type TeamCornerSize, type TeamTabMark } from './team-display'
+import { groupBadge, groupCorner, groupEdge, groupHasCue, groupShadow, useTeamDisplay, type TeamBadgeIcon, type TeamCornerSize, type TeamShadowStrength, type TeamTabMark } from './team-display'
 
 /** Dark text on the pastel team colors, in both themes. */
 const LABEL_FG = '#14141f'
@@ -111,6 +111,11 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
       </span>
     )
   }
+  const shadow = groupShadow(mark.style)
+  if (shadow) {
+    if ((display?.shadowScope ?? 'all') === 'last' && !mark.last) return null
+    return <TeamTabShadow mark={mark} dir={shadow} strength={display?.shadowStrength ?? 'medium'} />
+  }
   const edge = groupEdge(mark.style)
   if (edge) {
     // Only the group's last tab draws it, as the closing bracket of the whole group.
@@ -162,6 +167,36 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
         />
       )}
     </span>
+  )
+}
+
+/** Shadow look per strength: alpha (percent of team color), blur, offset, inset depth. */
+const SHADOW_PX: Record<TeamShadowStrength, { alpha: number; blur: number; off: number; inset: number }> = {
+  soft: { alpha: 40, blur: 6, off: 2, inset: 3 },
+  medium: { alpha: 65, blur: 8, off: 3, inset: 5 },
+  strong: { alpha: 95, blur: 11, off: 4, inset: 8 },
+}
+
+/**
+ * A team-colored shadow on a tab (the "shadow-*" group styles). The TabBar scroller clips vertically (about 2px above a
+ * tab, 6px below), so an outer shadow alone would be cut: each shadow is an outer part (what fits) plus an inset part on the
+ * same side that always shows inside the tab. An overlay span, so the tab's own background and active highlight stay as they are.
+ */
+function TeamTabShadow({ mark, dir, strength }: { mark: TeamTabMark; dir: 'top' | 'bottom' | 'diag'; strength: TeamShadowStrength }) {
+  const { alpha, blur, off, inset } = SHADOW_PX[strength]
+  const col = `color-mix(in srgb, ${mark.color} ${alpha}%, transparent)`
+  const [ox, oy] = dir === 'top' ? [0, -off] : dir === 'bottom' ? [0, off] : [off, off]
+  const k = inset / off
+  const boxShadow = [`${ox}px ${oy}px ${blur}px ${col}`, `inset ${-ox * k}px ${-oy * k}px ${inset + 2}px ${-Math.round(inset * 0.7)}px ${col}`].join(', ')
+  return (
+    <span
+      data-testid="team-tab-shadow"
+      data-shadow={dir}
+      data-shadow-strength={strength}
+      aria-hidden="true"
+      className="absolute inset-0 pointer-events-none z-10"
+      style={{ borderRadius: 6, boxShadow }}
+    />
   )
 }
 

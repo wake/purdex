@@ -99,6 +99,8 @@ export function ProtoApp() {
       edgeWidth: proto.edgeWidth,
       bookmarkCut: proto.bookmarkCut,
       bookmarkPos: proto.bookmarkPos,
+      shadowStrength: proto.shadowStrength,
+      shadowScope: proto.shadowScope,
       openMark: proto.openMark,
       tabMark: (id) => marks.get(id) ?? null,
       sidebarHidden: (id) => hidden.has(id),
