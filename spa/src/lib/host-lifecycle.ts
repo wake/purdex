@@ -12,6 +12,7 @@ import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { pinnedLeaseRelease } from './nex/nex-api'
 import { usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
+import { useApprovalStore } from '../stores/useApprovalStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { wireIdOfHost } from './profile/host-identity'
 import { reresolveRestoredHost, rewriteHostRefs, scheduleHostReresolve } from './host-reresolve'
@@ -369,7 +370,8 @@ function hostIdentity(h: HostConfig | undefined): string {
 
 /**
  * Drop a host's cached peer rows and cwd readings whenever its daemon identity
- * changes (peer-info-panel spec §3.1).
+ * changes (peer-info-panel spec §3.1) — and, by the same rule, its open approval
+ * requests (#1978).
  *
  * A peer address names a process on one machine, so keeping the cache across a
  * re-point would show one daemon's peers under another's name — and the address
@@ -392,6 +394,9 @@ export function startPeerCacheInvalidation(): () => void {
       if (after && hostIdentity(prev.hosts[hostId]) === hostIdentity(after)) continue
       usePeerStore.getState().forgetHost(hostId)
       useSessionCwdStore.getState().forgetHost(hostId)
+      // An approval request is the old daemon's too (#1978): the dialog, the pill and the restart guard would keep
+      // showing it for a host that is gone or now another daemon. The new connection's snapshot fills it again.
+      useApprovalStore.getState().forgetHost(hostId)
     }
   })
 }
