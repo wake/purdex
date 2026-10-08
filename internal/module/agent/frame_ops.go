@@ -2100,6 +2100,7 @@ func (m *Module) reconcileCreatedFrameAsProxy(stored store.Frame, req EventReque
 	}
 	if deleted {
 		m.forgetHookBackground(stored.FrameID)
+		m.forgetHookEdge(stored.FrameID)
 	}
 	if !deleted {
 		// Partial state: parent has the proxy ref, self still
@@ -2284,6 +2285,7 @@ func (m *Module) canonicalizeDescendantsAfterUpsert(self store.Frame, broadcastT
 		}
 		if deleted {
 			m.forgetHookBackground(candidate.FrameID)
+			m.forgetHookEdge(candidate.FrameID)
 		}
 		if !deleted {
 			// Partial state: proxy attached on self + candidate row

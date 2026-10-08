@@ -115,6 +115,7 @@ func (m *Module) takeModDirty(now time.Time) map[string]string {
 	m.evictModStreamsLocked(now)
 	dirty := m.modDirty
 	m.modDirty = make(map[string]string)
+	m.expireHookEdgesLocked(now, dirty)
 	if m.modLiveSeen == nil {
 		m.modLiveSeen = make(map[string]bool)
 	}

@@ -539,6 +539,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// Keep the hook-sourced background symbol in step before the projection
 	// this event emits is built (a Stop sets it, a SessionStart clears it).
 	m.noteHookBackground(req, lifecycle, broadcastTs)
+	m.noteHookEdge(req, lifecycle, result, frameMeta)
 	if isDevMode() {
 		log.Printf("[handler] frame_apply session=%s frame_id=%s lifecycle=%s decision=%s chain_id=%s",
 			req.TmuxSession, frameMeta.FrameID, req.PurdexName, frameMeta.Decision, trace.ChainID())
