@@ -1167,8 +1167,9 @@ func (m *Module) projectPane(paneID string) (*SessionProjection, error) {
 		return nil, err
 	}
 	frames = m.filterPaneOwnedProjectionFrames(paneID, frames)
-	projection := buildPaneProjection(paneID, frames)
-	return &projection, nil
+	projections := []SessionProjection{buildPaneProjection(paneID, frames)}
+	m.applyModOverlay(projections)
+	return &projections[0], nil
 }
 
 func (m *Module) filterProjectionFrames(frames []store.Frame) []store.Frame {
@@ -1369,7 +1370,7 @@ func syncProjectionState(currentStatus map[string]agentpkg.Status, subagents map
 		delete(subagents, tmuxSession)
 		return
 	}
-	currentStatus[tmuxSession] = projection.TopFrame.Status
+	currentStatus[tmuxSession] = projection.EffectiveStatus()
 	subagents[tmuxSession] = append([]agentpkg.SubagentRef(nil), projection.Subagents...)
 }
 
@@ -1382,6 +1383,7 @@ func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType,
 		RawEventName: eventName,
 		BroadcastTs:  broadcastTs,
 		Detail:       result.Detail,
+		Source:       SourceHook,
 	}
 	if projection == nil {
 		// Issue #717: when no projection exists for this session, "no top
@@ -1401,7 +1403,11 @@ func buildProjectionNormalized(projection *SessionProjection, fallbackAgentType,
 		return normalized
 	}
 	normalized.AgentType = projection.TopFrame.AgentType
-	normalized.Status = string(projection.TopFrame.Status)
+	normalized.Status = string(projection.EffectiveStatus())
+	if projection.Source != "" {
+		normalized.Source = projection.Source
+	}
+	normalized.Background = projection.Background
 	return normalized
 }
 

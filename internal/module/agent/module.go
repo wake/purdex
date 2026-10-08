@@ -688,7 +688,9 @@ func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
 		return nil, nil
 	}
 	frames = m.filterProjectionFrames(frames)
-	return BuildSessionProjections(frames), nil
+	projections := BuildSessionProjections(frames)
+	m.applyModOverlay(projections)
+	return projections, nil
 }
 
 // replayProjectionCache memoises, for ONE replayStatus round, the live frame
