@@ -43,6 +43,8 @@ export interface TeamRoster {
   created_at: number
   /** The team's current name; '' = unnamed (also what a daemon that predates names yields — see `parseRosterEvent`). */
   team_name: string
+  /** The team's short label (explicit or derived by the daemon); '' = none, also what a daemon that predates labels yields. */
+  team_label: string
   lead: RosterSession
   members: RosterMember[]
 }
@@ -100,5 +102,5 @@ export function parseRosterEvent(value: unknown): RosterEventValue | string {
   if (!teams.every(isTeamRoster)) return `${op}: a team is not the wire shape`
   // The guard stays tolerant of a missing `team_name` (a daemon that predates names), so give the field its
   // declared type here instead of handing the parsed objects back as-is.
-  return { op, teams: (teams as TeamRoster[]).map((t) => ({ ...t, team_name: typeof t.team_name === 'string' ? t.team_name : '' })) }
+  return { op, teams: (teams as TeamRoster[]).map((t) => ({ ...t, team_name: typeof t.team_name === 'string' ? t.team_name : '', team_label: typeof t.team_label === 'string' ? t.team_label : '' })) }
 }

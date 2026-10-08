@@ -32,7 +32,7 @@ class FakeSocket {
 let sockets: FakeSocket[] = []
 
 const team = (id: string): TeamRoster => ({
-  id, host_id: 'd', created_at: 1, team_name: '',
+  id, host_id: 'd', created_at: 1, team_name: '', team_label: '',
   lead: { session_id: `L${id}`, ref: '_aaaaaa', address: 'h/a', live: true },
   members: [],
 })

@@ -13,7 +13,7 @@ const mem = (id: string, joined: number, tmux?: string, extra: Partial<RosterSes
   ...sess(id, tmux, extra), state: 'active', origin: 'spawned', joined_at: joined,
 })
 const team = (id: string, lead: RosterSession, members: RosterMember[] = [], createdAt = 100): TeamRoster => ({
-  id, host_id: 'daemon', created_at: createdAt, team_name: '', lead, members,
+  id, host_id: 'daemon', created_at: createdAt, team_name: '', team_label: '', lead, members,
 })
 
 let paneSeq = 0

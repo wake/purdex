@@ -27,6 +27,8 @@ import { useUndoToast } from '../stores/useUndoToast'
 import { approvalKey, selectCurrent, selectOpenCount, useApprovalStore, type ApprovalEntry, type Decision } from '../stores/useApprovalStore'
 import { ApprovalPill } from './ApprovalPill'
 import { hostLabel, useHostLook } from '../lib/host-look'
+import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH, TEAM_NAME_CHARS } from '../lib/team/label'
+import { cellWidth } from '../lib/textwidth'
 import { leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
@@ -48,11 +50,8 @@ function parseRoots(text: string): string[] {
 // other Cf characters, NBSP and U+3000 are refused here as the daemon refuses them (it is the authority; this only
 // keeps 核准 from sending a name that comes back 400). Leading / trailing white space is trimmed before the check.
 const TEAM_NAME_MAX_BYTES = 64
-const TEAM_NAME_CHARS = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u
-// Go's strings.TrimSpace strips unicode.IsSpace: \t \n \v \f \r, space, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
-// U+2029, U+202F, U+205F and U+3000. JS trim() differs (it keeps U+0085 and strips U+FEFF), so trim by that set.
-const GO_SPACE_EDGES = new RegExp(String.raw`^[\t-\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+|[\t-\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+$`, 'gu')
-const goTrim = (s: string) => s.replace(GO_SPACE_EDGES, '')
+// goTrim and TEAM_NAME_CHARS live in lib/team/label.ts, where the label rules (the same character set, plus a width)
+// are; the trim is Go's, not JS's.
 const teamNameOk = (name: string) => new TextEncoder().encode(name).length <= TEAM_NAME_MAX_BYTES && TEAM_NAME_CHARS.test(name)
 
 const fieldClass = 'rounded-md border border-border-default bg-surface-input px-2 py-1 text-xs text-text-primary disabled:opacity-50'
@@ -87,6 +86,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   // Shown only when the payload has a team_name (a daemon that knows names, D-N10), prefilled with the requested one.
   // Kept here beside the member limit, so minimize / restore (the dialog stays mounted) keeps the edit.
   const [teamName, setTeamName] = useState(payload.team_name ?? '')
+  // The short label (team-label D-L10): shown only when the payload has a team_label (a daemon that knows labels),
+  // prefilled with the requested one; while it is empty the placeholder says what the daemon will take from the name.
+  const [teamLabel, setTeamLabel] = useState(payload.team_label ?? '')
   const [rootsText, setRootsText] = useState(payload.roots.join('\n'))
   // 「這個 session 不再詢問」 (spec §8.7 (a)): applied with the decision, whichever it is.
   const [noMoreAsking, setNoMoreAsking] = useState(false)
@@ -196,15 +198,22 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const trimmedName = goTrim(teamName)
   const nameOk = !nameShown || teamNameOk(trimmedName)
   const nameErrorId = useId()
+  const labelShown = !isSelfRelay && payload.team_label !== undefined
+  const trimmedLabel = goTrim(teamLabel)
+  const labelBad = labelShown ? labelProblem(trimmedLabel) : null
+  const labelOk = labelBad === null
+  const labelErrorId = useId()
+  // What an empty label becomes (D-L3): derived from the name as it stands in the dialog (edited or not), else 「（無）」.
+  const derivedLabel = labelShown ? deriveTeamLabel(nameShown ? trimmedName : (payload.team_name ?? '')) : ''
   // A self relay carries no grant (U13a: one click); only the lead kind validates its fields.
-  const grantOk = isSelfRelay || (membersOk && rootsOk && nameOk)
+  const grantOk = isSelfRelay || (membersOk && rootsOk && nameOk && labelOk)
   const locked = busy || queued !== undefined
   const session = approvalSessionLabel(approval.origin)
 
   const decide = async (decision: Decision) => {
     if (inFlight.current || locked) return
     if (decision === 'approve' && !grantOk) return
-    const grant: Grant | undefined = !isSelfRelay && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}) } : undefined
+    const grant: Grant | undefined = !isSelfRelay && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}), ...(labelShown ? { team_label: trimmedLabel } : {}) } : undefined
     if (!connected) {
       // A second click in the same tick still sees locked=false (React has not re-rendered the queued state):
       // the store is read synchronously so the FIRST queued decision wins (PR #1742 attacker A-2).
@@ -342,7 +351,33 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                   )}
                 </>
               )}
-              <label className={`${nameShown ? 'mt-2' : 'mt-3'} flex items-center gap-2 text-xs text-text-secondary`}>
+              {labelShown && (
+                <>
+                  <div className={`${nameShown ? 'mt-2' : 'mt-3'} flex items-center gap-2 text-xs text-text-secondary`}>
+                    <label className="flex min-w-0 flex-1 items-center gap-2">
+                      <span className="shrink-0">{t('approval.dialog.team_label')}</span>
+                      <input
+                        type="text"
+                        value={teamLabel}
+                        placeholder={derivedLabel !== '' ? derivedLabel : t('approval.dialog.team_label_none')}
+                        disabled={locked}
+                        onChange={(e) => setTeamLabel(e.target.value)}
+                        aria-invalid={labelOk ? undefined : true}
+                        aria-describedby={labelOk ? undefined : labelErrorId}
+                        data-testid="approval-team-label"
+                        className={`min-w-0 flex-1 ${fieldClass}`}
+                      />
+                    </label>
+                    <span data-testid="approval-team-label-width" className={`shrink-0 tabular-nums ${labelOk ? 'text-text-muted' : 'text-status-warning'}`}>
+                      {cellWidth(trimmedLabel)}/{TEAM_LABEL_MAX_WIDTH}
+                    </span>
+                  </div>
+                  {!labelOk && (
+                    <p id={labelErrorId} role="alert" data-testid="approval-team-label-error" className="mt-1 text-xs text-status-warning">{t(`approval.dialog.team_label_invalid_${labelBad}`)}</p>
+                  )}
+                </>
+              )}
+              <label className={`${nameShown || labelShown ? 'mt-2' : 'mt-3'} flex items-center gap-2 text-xs text-text-secondary`}>
                 {t('approval.dialog.max_members')}
                 <input
                   type="number"
