@@ -23,8 +23,9 @@ import (
 )
 
 // leadUsage is the grammar-rejection message for `pdx lead` (exit 2).
-const leadUsage = "usage: pdx lead request --reason <text> [--name <team name>] [--max-members N] [--root <dir>]... [--wait 9m] [--config <path>]\n" +
-	"       (--max-members 1..8, default 3; --wait up to 10m, default 9m so the call fits one Bash timeout)"
+const leadUsage = "usage: pdx lead request --reason <text> [--name <team name>] [--label <短名>] [--max-members N] [--root <dir>]... [--wait 9m] [--config <path>]\n" +
+	"       (--max-members 1..8, default 3; --wait up to 10m, default 9m so the call fits one Bash timeout;\n" +
+	"        --label: the tab group's short name, about five Chinese characters / 10 columns, e.g. \"A 線\"; --name is the longer one for the team panel)"
 
 const (
 	// leadAttemptTimeout bounds every single request the client makes: 25 s
@@ -66,6 +67,7 @@ type leadRequestArgs struct {
 	cfgPath    string
 	reason     string
 	teamName   string // normalised (team.NormaliseTeamName); "" = no name
+	teamLabel  string // normalised (team.NormaliseTeamLabel); "" = none requested (the daemon derives one from the name)
 	maxMembers int
 	roots      []string
 	wait       time.Duration
@@ -86,8 +88,9 @@ func parseLeadRequestArgs(args []string, stderr io.Writer) (leadRequestArgs, boo
 	var roots stringList
 	fs.StringVar(&a.cfgPath, "config", "", "")
 	fs.StringVar(&a.reason, "reason", "", "")
-	var name string
+	var name, label string
 	fs.StringVar(&name, "name", "", "")
+	fs.StringVar(&label, "label", "", "")
 	fs.IntVar(&a.maxMembers, "max-members", 0, "")
 	fs.Var(&roots, "root", "")
 	fs.DurationVar(&a.wait, "wait", time.Duration(team.DefaultWaitS)*time.Second, "")
@@ -109,6 +112,11 @@ func parseLeadRequestArgs(args []string, stderr io.Writer) (leadRequestArgs, boo
 	var err error
 	if a.teamName, err = team.NormaliseTeamName(name); err != nil {
 		return reject(fmt.Sprintf("--name 無效：%v", err))
+	}
+	// The label has a width rule of its own (about five Chinese characters):
+	// refused here too, with the rule spelt out, before any HTTP call.
+	if a.teamLabel, err = team.NormaliseTeamLabel(label); err != nil {
+		return reject(fmt.Sprintf("--label 無效：%v", err))
 	}
 	// 0 is "not given": the daemon applies its default (team.DefaultMaxMembers).
 	if a.maxMembers < 0 || a.maxMembers > team.MaxMaxMembers {
@@ -175,6 +183,7 @@ func runLeadCmd(ctx context.Context, args []string, getenv func(string) string, 
 		OriginInbox: inbox,
 		Reason:      a.reason,
 		TeamName:    a.teamName,
+		TeamLabel:   a.teamLabel,
 		MaxMembers:  a.maxMembers,
 		Roots:       a.roots,
 		WaitS:       int(a.wait / time.Second),
@@ -303,6 +312,10 @@ func leadFinish(ap team.Approval, stdout, stderr io.Writer) int {
 				if p.TeamName != "" {
 					name := p.TeamName
 					grant.TeamName = &name
+				}
+				if p.TeamLabel != "" {
+					label := p.TeamLabel
+					grant.TeamLabel = &label
 				}
 			}
 		}

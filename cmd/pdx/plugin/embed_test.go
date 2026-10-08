@@ -605,8 +605,10 @@ func TestSkill_LeadRequestAsksForATeamName(t *testing.T) {
 		t.Fatal("SKILL.md has no \"When to ask for lead mode\" section")
 	}
 	for _, want := range []string{
-		`pdx lead request --reason "<why>" --name "<team name>" [--max-members N] [--root <dir>]`,
-		"Always give `--name`: a short name for the team's work (at most 64 bytes); it is shown at the front of the team's tab group, and the user may change it when approving.",
+		`pdx lead request --reason "<why>" --name "<team name>" --label "<短名>" [--max-members N] [--root <dir>]`,
+		"Always give `--name`: a name for the team's work (at most 64 bytes); it is shown in the team panel, and the user may change it when approving.",
+		// Team label (TL-1c, D-L9)
+		"Always give `--label`: a short, meaningful name of your own for the tab group label, about five Chinese characters (10 display columns), e.g. `A 線`, `資源線`, `資源派工` — a summary, never the name cut short.",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("SKILL.md lead-mode section lacks %q", want)
