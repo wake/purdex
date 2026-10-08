@@ -116,8 +116,10 @@ func (n *Normalizer) toolResultRow(l *rawLine, blocks []block, off int64) {
 	}
 	for _, b := range results {
 		r := result{at: l.at, isErr: jsonTrue(b.obj.get("is_error"))}
+		// Not capBlocks: the totals of an output describe the whole result.
+		// What is stored stays bounded all the same (text 16 KiB, images
+		// maxOutputImages), and the content cannot outgrow the line cap.
 		r.blocks, _ = contentBlocks(b.obj.get("content"))
-		r.blocks = n.capBlocks(r.blocks)
 		r.text = joinText(r.blocks)
 		if len(results) == 1 {
 			r.denial, _ = capText(l.str(l.ToolDenialKind), maxDenial)

@@ -11,11 +11,16 @@ import (
 // output text (spec §8.1 "Steps"); the image itself is never kept.
 const imagePlaceholder = "[image]"
 
+// maxOutputImages bounds the image entries stored in one output; the `[image]`
+// lines of the text and the totals still count every image.
+const maxOutputImages = 64
+
 // outputOf builds the output of a result: the text of its content (a string
 // as is, a list's text blocks and `[image]` lines in block order, joined by
 // "\n"), each text block unwrapped from <persisted-output> as Nexen prelude
 // does, the totals of the whole text, and the text capped at 16 KiB on a line
-// boundary — the tail for an execute step, the head otherwise.
+// boundary — the tail for an execute step, the head otherwise. It reads every
+// block it is given; the caller must not have capped them.
 func (n *Normalizer) outputOf(blocks []block, kind convmodel.StepKind) *convmodel.Output {
 	var parts []string
 	var images []convmodel.Image
@@ -25,7 +30,9 @@ func (n *Normalizer) outputOf(blocks []block, kind convmodel.StepKind) *convmode
 			parts = append(parts, unwrapPersisted(b.text))
 		case "image":
 			mt, size := imageSize(b)
-			images = append(images, convmodel.Image{MediaType: mt, Bytes: size})
+			if len(images) < maxOutputImages {
+				images = append(images, convmodel.Image{MediaType: mt, Bytes: size})
+			}
 			parts = append(parts, imagePlaceholder)
 		default:
 			n.skipDyn("result_block:" + b.typ)

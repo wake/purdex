@@ -1,9 +1,11 @@
 package ccnorm
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/convmodel"
@@ -303,5 +305,80 @@ func TestSteps_DoesNotRetainImageBase64(t *testing.T) {
 	}
 	if len(row) < 5<<20 {
 		t.Fatalf("test row is only %d bytes", len(row))
+	}
+}
+
+// resultBlocks is a tool_result content of n blocks as raw JSON (marshalling
+// tens of thousands of maps would dominate the test); block(i) is the JSON of
+// block i.
+func resultBlocks(n int, block func(i int) string) json.RawMessage {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i := range n {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(block(i))
+	}
+	b.WriteByte(']')
+	return json.RawMessage(b.String())
+}
+
+const (
+	tinyText  = `{"type":"text","text":"x"}`
+	tinyImage = `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}`
+)
+
+func TestOutput_ManyResultBlocksTotalsCoverWholeResult(t *testing.T) {
+	// totals describe the whole result, not its first 64 blocks
+	o := outputOfResult(t, "Read", resultBlocks(65, func(int) string { return tinyText }))
+	if want := strings.TrimSuffix(strings.Repeat("x\n", 65), "\n"); o.Text != want || o.TotalLines != 65 || o.TotalBytes != 129 {
+		t.Errorf("65 blocks: lines %d bytes %d text %d bytes", o.TotalLines, o.TotalBytes, len(o.Text))
+	}
+
+	// 50,000 tiny blocks, every other one an image: bounded work and storage,
+	// exact totals (25,000 "x" + 25,000 "[image]" + 49,999 newlines)
+	start := time.Now()
+	o = outputOfResult(t, "Read", resultBlocks(50000, func(i int) string {
+		if i%2 == 1 {
+			return tinyImage
+		}
+		return tinyText
+	}))
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("took %v", d)
+	}
+	if o.TotalLines != 50000 || o.TotalBytes != 25000+25000*len(imagePlaceholder)+49999 {
+		t.Errorf("lines %d bytes %d", o.TotalLines, o.TotalBytes)
+	}
+	if len(o.Text) > convmodel.MaxOutput || !o.Truncated || o.Keep != convmodel.KeepHead {
+		t.Errorf("text %d bytes truncated=%v keep=%q", len(o.Text), o.Truncated, o.Keep)
+	}
+	if len(o.Images) != 64 {
+		t.Errorf("%d images stored, want 64", len(o.Images))
+	}
+	if len(o.Images) > 0 && o.Images[0] != (convmodel.Image{MediaType: "image/png", Bytes: 3}) {
+		t.Errorf("image 0 = %+v", o.Images[0])
+	}
+
+	// the same, text only
+	o = outputOfResult(t, "Read", resultBlocks(50000, func(int) string { return tinyText }))
+	if o.TotalLines != 50000 || o.TotalBytes != 99999 || len(o.Text) > convmodel.MaxOutput || o.Images != nil {
+		t.Errorf("text only: lines %d bytes %d text %d images %d", o.TotalLines, o.TotalBytes, len(o.Text), len(o.Images))
+	}
+}
+
+func TestOutput_ImageBeyond64BlocksStillCounted(t *testing.T) {
+	o := outputOfResult(t, "Read", resultBlocks(65, func(i int) string {
+		if i == 64 {
+			return tinyImage
+		}
+		return tinyText
+	}))
+	if want := strings.Repeat("x\n", 64) + imagePlaceholder; o.Text != want || o.TotalLines != 65 || o.TotalBytes != len(want) {
+		t.Errorf("lines %d bytes %d text %q", o.TotalLines, o.TotalBytes, o.Text)
+	}
+	if len(o.Images) != 1 || o.Images[0] != (convmodel.Image{MediaType: "image/png", Bytes: 3}) {
+		t.Errorf("images = %+v", o.Images)
 	}
 }
