@@ -2,10 +2,14 @@ package peers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
+	iagent "github.com/wake/purdex/internal/agent"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -258,4 +262,78 @@ func (r *OriginResolver) LiveSession(sessionID string) bool {
 		}
 	}
 	return false
+}
+
+// readRegistry is ipeers.ReadRegistry, a seam so a test can see the Liveness
+// ProcessRoots builds.
+var readRegistry = ipeers.ReadRegistry
+
+// rootView is the slice of a process snapshot ProcessRoots reads. The
+// embedded ProcessView is there so a test can prove ProcessRoots never calls
+// Read (argv); *agent.ProcessSnapshot is the production value.
+type rootView interface {
+	iagent.ProcessView
+	Start(pid int) (time.Time, error)
+}
+
+// ProcessRoots lists the live, non-proxy sessions of the registry as
+// resources.Root, for the host resource sampler (host-resource-lease plan,
+// Task 0.5). Liveness comes from snap alone: PidAlive and StartTime read the
+// snapshot, Info stays nil (snap.Read reads argv and may fork ps) and Zombie
+// stays nil, so the pass forks nothing. Proxy helpers are dropped by
+// proxyPIDs, not by argv. A session whose start time the snapshot cannot
+// read is classified unknown by the registry read and left out; a pid whose
+// start time differs from the registry file's (reused) is left out too, so
+// every Root names the process currently running under its pid.
+func (r *OriginResolver) ProcessRoots(snap *iagent.ProcessSnapshot) ([]resources.Root, error) {
+	if snap == nil {
+		return nil, errors.New("process roots: nil process snapshot")
+	}
+	return r.processRoots(snap)
+}
+
+func (r *OriginResolver) processRoots(view rootView) ([]resources.Root, error) {
+	live := ipeers.Liveness{
+		Stat: func(path string) error {
+			_, err := os.Stat(path)
+			return err
+		},
+		PidAlive:  view.Alive,
+		StartTime: view.Start,
+	}
+	entries, _, err := readRegistry(r.m.registryDir, live)
+	if err != nil {
+		r.m.logf("peers: origin resolver: read registry: %v", err)
+		return nil, fmt.Errorf("read registry: %w", err)
+	}
+	proxies := r.m.proxyPIDs()
+	roots := make([]resources.Root, 0, len(entries))
+	// A session id is one root. After a resume the old process can linger
+	// (a zombie keeps its registry file and inbox) next to the new one under
+	// the same id; the snapshot has no process state to tell them apart, so
+	// the process that started last is the session.
+	at := map[string]int{} // session id -> index in roots
+	began := map[string]time.Time{}
+	for _, e := range entries {
+		if e.SessionID == "" || e.IsProxy || proxies[e.PID] {
+			continue
+		}
+		start, _ := view.Start(e.PID) // the registry read vouched for it already
+		root := resources.Root{
+			SessionID: e.SessionID,
+			PID:       e.PID,
+			ProcStart: e.ProcStart,
+			Tmux:      e.Tmux,
+			Cwd:       e.Cwd,
+		}
+		if i, twin := at[e.SessionID]; twin {
+			if start.After(began[e.SessionID]) {
+				roots[i], began[e.SessionID] = root, start
+			}
+			continue
+		}
+		at[e.SessionID], began[e.SessionID] = len(roots), start
+		roots = append(roots, root)
+	}
+	return roots, nil
 }

@@ -34,6 +34,7 @@ import (
 	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	profilesmod "github.com/wake/purdex/internal/module/profiles"
+	resourcesmod "github.com/wake/purdex/internal/module/resources"
 	"github.com/wake/purdex/internal/module/session"
 	teammod "github.com/wake/purdex/internal/module/team"
 	"github.com/wake/purdex/internal/store"
@@ -44,7 +45,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, spawn, kill, team, relay, ask, nex, path, version\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, spawn, kill, team, lease, relay, ask, nex, path, version\n")
 		os.Exit(1)
 	}
 
@@ -81,6 +82,8 @@ func main() {
 		runSpawn(os.Args[2:])
 	case "kill":
 		runKill(os.Args[2:])
+	case "lease":
+		runLease(os.Args[2:])
 	case "team":
 		runTeam(os.Args[2:])
 	case "relay":
@@ -396,6 +399,9 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		peersMod.WithPeerNames(meta.PeerNames(), meta.ConversationNames())
 	}
 	c.AddModule(peersMod)
+	// resources samples the host on its own ticker; it reads the session
+	// roots from the peers origin resolver, so it comes after peers.
+	c.AddModule(resourcesmod.New())
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	c.AddModule(profilesmod.New())

@@ -26,6 +26,7 @@ import (
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
 	"github.com/wake/purdex/internal/config"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -426,9 +427,38 @@ func runKillCmd(ctx context.Context, args []string, getenv func(string) string, 
 	return ExitOK
 }
 
+// teamResourcesTimeout bounds the table's one resources request, retries
+// included. A var only so tests can shorten it.
+var teamResourcesTimeout = 5 * time.Second
+
+// teamHostShares is each session's share of the host (D-1 units, host
+// percent) from one GET /api/resources, keyed by session id. It is
+// best-effort: any failure, an unavailable sample or a daemon without the
+// route gives nil, and the table shows "-". The team table must never break,
+// or print an error line, because of this call.
+func teamHostShares(ctx context.Context, client *daemonclient.Client) map[string]resources.SessionUse {
+	ctx, cancel := context.WithTimeout(ctx, teamResourcesTimeout)
+	defer cancel()
+	_, snap, err := getResources(ctx, client)
+	if err != nil || !snap.Available {
+		return nil
+	}
+	out := make(map[string]resources.SessionUse, len(snap.Sessions))
+	for _, u := range snap.Sessions {
+		// One row per session is the contract; if a daemon lists a twin, the
+		// busier row is the session's load.
+		if prev, ok := out[u.SessionID]; !ok || u.Use > prev.Use {
+			out[u.SessionID] = u
+		}
+	}
+	return out
+}
+
 // runTeamCmd implements `pdx team [--json]` (spec §7.3, U20 (e)): --json is
 // the daemon's view as is; the table's MODEL and EFFORT are what each
 // member actually runs (its statusline reading), "-" until its first one.
+// CPU and MEM are the member's share of the host in whole percents (host
+// resource lease, review #14), joined by session id from /api/resources.
 func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, clientOpts ...daemonclient.Option) int {
 	fs := flag.NewFlagSet("pdx team", flag.ContinueOnError)
 	cfgPath := fs.String("config", "", "")
@@ -459,8 +489,15 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		fmt.Fprintln(stdout, line.String())
 		return ExitOK
 	}
+	// The resources call is optional, so it gets a client of its own whose
+	// stderr is discarded: the shared client would print its "daemon restarting"
+	// line for a failure the table already hides.
+	var shares map[string]resources.SessionUse
+	if quiet, _, ok := teamSetup("team", *cfgPath, getenv, io.Discard, clientOpts); ok {
+		shares = teamHostShares(ctx, quiet)
+	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ADDRESS\tREF\tTITLE\tSTATE\tCTX\tMODEL\tEFFORT\tCWD\tTMUX")
+	fmt.Fprintln(tw, "ADDRESS\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tCWD\tTMUX")
 	for _, m := range v.Members {
 		pct, model, effort := "", "", ""
 		if c := m.Context; c != nil {
@@ -469,7 +506,11 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 			}
 			model, effort = c.ModelID, c.Effort
 		}
-		cells := []string{m.Address, m.Ref, m.Title, string(m.State), pct, model, effort, m.Cwd, m.TmuxSession}
+		cpu, mem := "", ""
+		if u, ok := shares[m.SessionID]; ok {
+			cpu, mem = fmt.Sprintf("%.0f%%", u.CPU), fmt.Sprintf("%.0f%%", u.Mem)
+		}
+		cells := []string{m.Address, m.Ref, m.Title, string(m.State), pct, cpu, mem, model, effort, m.Cwd, m.TmuxSession}
 		for i, c := range cells {
 			if cells[i] = sanitizeCell(c); c == "" {
 				cells[i] = "-"
