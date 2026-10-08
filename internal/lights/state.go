@@ -69,6 +69,9 @@ type StreamState struct {
 	// background or agent.spawn does not move it, so a hook edge compared
 	// against it is not handed back by a mere beat. Zero until the first.
 	StatusEventAt time.Time
+	// AtRejected counts the light events whose at was not believed (farther
+	// than atSkewWindow from the receive time) and so was replaced by it.
+	AtRejected int
 }
 
 // NewStreamState returns the empty state of stream: idle, no dots, not
@@ -93,7 +96,8 @@ var activeAgent = map[string]bool{"pending": true, "running": true, "waiting": t
 // DotList(), Background or SID changed; LastEvent always moves and is not
 // a change. StatusEventAt moves only with the events apply says touch the
 // light, and with a heartbeat that changed Status(); it takes the event's at,
-// or now when at is missing or later than now, and never moves back. The mod
+// or now when at is missing, later than now, or not believed (more than
+// atSkewWindow from now: AtRejected counts those), and never moves back. The mod
 // reaches the daemon only through a Unix socket on the same host, so at and now
 // come off one wall clock. Data that does not decode leaves everything but SID,
 // LastEvent and Ended as it was.
@@ -112,11 +116,9 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 		touched = true
 	}
 	if touched {
-		at := now
-		if ev.At > 0 {
-			if t := time.UnixMilli(ev.At); t.Before(now) {
-				at = t
-			}
+		at, rejected := eventTime(ev.At, now)
+		if rejected {
+			s.AtRejected++
 		}
 		if at.After(s.StatusEventAt) {
 			s.StatusEventAt = at
@@ -124,6 +126,31 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	}
 
 	return status != s.Status() || bg != s.Background || sid != s.SID || !maps.Equal(dots, s.Dots)
+}
+
+// atSkewWindow is how far an event's at may be from the time the daemon received
+// it before it is not believed. Mod events arrive a few seconds late at worst, so
+// a larger gap is a wrong unit (Unix seconds sent as milliseconds), a version
+// mismatch or a mod clock gone wrong. It equals LiveWindow.
+const atSkewWindow = LiveWindow
+
+// eventTime is the time an event happened, from its at (ms) and the time now it
+// was received. A missing at (<= 0) is now; an at later than now by up to the
+// window is now (the clocks differ by a few seconds, the event cannot come from
+// the future); an at farther than the window from now, either way, is not
+// believed: it is now and rejected is true.
+func eventTime(atMs int64, now time.Time) (at time.Time, rejected bool) {
+	if atMs <= 0 {
+		return now, false
+	}
+	t := time.UnixMilli(atMs)
+	switch {
+	case now.Sub(t) > atSkewWindow || t.Sub(now) > atSkewWindow:
+		return now, true
+	case t.After(now):
+		return now, false
+	}
+	return t, false
 }
 
 // apply applies ev and reports whether it touched the inputs of Status(): a

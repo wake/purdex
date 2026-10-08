@@ -37,13 +37,14 @@ func TestStatusEventAt_UsesEventTime(t *testing.T) {
 	}
 }
 
-// TestStatusEventAt_ClampedToReceiveTime: an event stamped in the future (a
-// skewed or broken mod clock) counts as happening now, or a hook edge could
-// never beat it again.
+// TestStatusEventAt_ClampedToReceiveTime: an event stamped a little in the
+// future (clocks a few seconds apart) counts as happening now, or a hook edge
+// could never beat it again. One far in the future is not trusted at all
+// (statuseventat_skew_test.go).
 func TestStatusEventAt_ClampedToReceiveTime(t *testing.T) {
 	s := NewStreamState("s")
 	received := t0.Add(5 * time.Second)
-	s.Apply(turnStartAt(received.Add(time.Hour)), received)
+	s.Apply(turnStartAt(received.Add(5*time.Second)), received)
 	if !s.StatusEventAt.Equal(received) {
 		t.Fatalf("StatusEventAt = %v, want it clamped to %v", s.StatusEventAt, received)
 	}
