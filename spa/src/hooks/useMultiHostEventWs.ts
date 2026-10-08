@@ -22,6 +22,8 @@ import { handleWorkerExited } from '../lib/nex/worker-exited-event'
 import { dispatchNexHostEvent, NEX_OPT_IN } from '../lib/nex/nex-host-events'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { handleApprovalEvent } from '../lib/team/approval-ws'
+import { handleUnattendedEvent } from '../lib/team/unattended-ws'
+import { UNATTENDED_EVENT_TYPE } from '../lib/team/types'
 
 /**
  * The operation lock's observer (#1309 + #1310 spec §3.1): every tree rewriter —
@@ -226,6 +228,18 @@ export function useMultiHostEventWs() {
             // Lead / self-relay approval requests (lead-team spec §6.2): snapshot on
             // subscribe, opened, closed. `session` is empty; the value carries the host id.
             handleApprovalEvent(hostId, event.value)
+            return
+          }
+          if (event.type === UNATTENDED_EVENT_TYPE) {
+            // 無人值守模式's switch (unattended spec D-U23-6): snapshot on subscribe, changed after every change.
+            // Bound to the host this connection was made for (PU-2a review): a removal or a re-point reaches the
+            // store (unattended-support.ts forgets the entry) before this effect closes the old socket, and a frame
+            // still queued on it in between would bring the old daemon's support and switch back. So a frame is
+            // dropped unless the host still exists under the endpoint and token this connection was opened with.
+            // After the close, host-events.ts's epoch drops whatever is left on the socket.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleUnattendedEvent(hostId, event.value)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in
