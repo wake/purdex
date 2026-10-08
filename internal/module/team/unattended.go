@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -174,6 +175,9 @@ func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.
 // Caller holds createMu.
 func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 	g, err := unattendedGrant(a)
+	if err == nil && m.beforeAutoApprove != nil {
+		err = m.beforeAutoApprove(a)
+	}
 	if err == nil {
 		var after team.Approval
 		var won, memberCancelled bool
@@ -195,8 +199,9 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 }
 
 // sweepUnattended approves every open AutoApprovable row, oldest first
-// (D-U23-3; hook kinds are left open): at switch-on (PU-1c). pending
-// counts the ones still open (decision 5: PU-1b3's tick tries them again).
+// (D-U23-3; hook kinds are left open): at switch-on (PU-1c), every tick
+// while the switch is on (reconcileUnattended) and at boot. pending counts
+// the ones still open, which the next tick tries again (decision 5).
 // Caller holds createMu and has read the switch on.
 func (m *Module) sweepUnattended(why string) (approved, pending int) {
 	open, err := m.store.ListOpen()
@@ -216,4 +221,22 @@ func (m *Module) sweepUnattended(why string) (approved, pending int) {
 	}
 	m.logf("[team] unattended sweep (%s): approved %d, still open %d", why, approved, pending)
 	return approved, pending
+}
+
+// reconcileUnattended is the sweeper's half of decision 5 (rule 6): while
+// the switch is on, every tick approves the AutoApprovable rows still
+// open, so nothing the switch-on sweep or a create-time approve could not
+// approve (a transient storage error, a lost race) stays open. open is
+// the tick's own list, read before its closes: it only says whether a
+// sweep is worth createMu; the sweep re-reads what is still open. The
+// switch is read under createMu, as every caller of unattendedOn does.
+func (m *Module) reconcileUnattended(open []team.Approval) {
+	if !slices.ContainsFunc(open, func(a team.Approval) bool { return team.AutoApprovable(a.Kind) }) {
+		return
+	}
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	if !m.stopping() && m.unattendedOn() {
+		m.sweepUnattended("tick")
+	}
 }

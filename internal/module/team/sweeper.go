@@ -94,6 +94,7 @@ func (m *Module) tick() {
 			m.logf("[team] approval %s %s by the sweeper (origin %s)", a.ID, after.State, a.Origin.Ref)
 		}
 	}
+	m.reconcileUnattended(open)
 }
 
 // closeExpired is the sweeper's close for a passed deadline or lease: the

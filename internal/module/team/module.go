@@ -191,6 +191,9 @@ type Module struct {
 	// createMu; tests turn the unattended switch on there and prove the
 	// create reads it under the lock. nil in production.
 	beforeCreateLock func()
+	// beforeAutoApprove, when set, runs in autoApprove before the approve;
+	// an error fails that approve there (tests). nil in production.
+	beforeAutoApprove func(a team.Approval) error
 }
 
 // New returns a Module with production defaults.

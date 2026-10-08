@@ -265,13 +265,15 @@ func TestCreate_SwitchOnRacesCreateNeverOpen(t *testing.T) {
 
 // U25 / D-U24-7 (decision 22): every daemon approval of a lead request
 // grants min(requested, 3) members — unspecified counts as 3 — with the
-// requested roots; at create and through the switch-on sweep (the tick's
-// path is PU-1b3's) share unattendedGrant. Mutation gate: return the payload's
-// max_members uncapped → red (rows 5 and 8).
+// requested roots; at create, through the switch-on sweep and through the
+// tick share unattendedGrant. Mutation gates: return the payload's
+// max_members uncapped → red (rows 5 and 8); leave the tick's grant
+// uncapped → the tick rows 5 and 8 red.
 func TestUnattendedLeadGrant_IsMinOfRequestAndThree(t *testing.T) {
 	paths := map[string]func(f *fixture){
 		"create": func(f *fixture) { f.unatt.set(true); f.create(uid(1)) },
 		"sweep":  func(f *fixture) { f.create(uid(1)); f.unatt.set(true); f.sweep() },
+		"tick":   func(f *fixture) { f.create(uid(1)); f.unatt.set(true); f.m.tick() },
 	}
 	for _, c := range []struct{ asked, want int }{{0, 3}, {1, 1}, {2, 2}, {3, 3}, {5, 3}, {8, 3}} {
 		for name, run := range paths {
@@ -308,6 +310,43 @@ func TestSweepUnattended_ApprovesOpenLeadAndSelfRelayLeavesHookKinds(t *testing.
 	}
 	if f.op(relay.Op.ID).State != team.RelayClaimed {
 		t.Fatal("the self relay's op was not claimed")
+	}
+}
+
+// Decision 5 / rule 6: what the switch-on sweep could not approve (a
+// transient failure) the next tick approves. Mutation gate: drop
+// reconcileUnattended from tick → red.
+func TestTick_ApprovesWhatTheSwitchOnSweepLeftOpen(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	relay := f.begin("sid-2")
+	f.unatt.set(true)
+	failed := false
+	f.m.beforeAutoApprove = func(a team.Approval) error {
+		if a.ID == relay.RequestID && !failed {
+			failed = true
+			return errors.New("database is locked")
+		}
+		return nil
+	}
+	if approved, pending := f.sweep(); approved != 1 || pending != 1 {
+		t.Fatalf("sweep = (%d, %d), want (1, 1)", approved, pending)
+	}
+	f.m.tick()
+	a, _, _ := f.m.store.Get(relay.RequestID)
+	assertDecidedByUnattended(t, a, f.clock.Load())
+	if f.op(relay.Op.ID).State != team.RelayClaimed {
+		t.Fatal("the self relay's op was not claimed")
+	}
+}
+
+// Rule 6's other half: with the switch off the tick approves nothing.
+func TestTick_UnattendedOffApprovesNothing(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.m.tick()
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("state %s, want open", a.State)
 	}
 }
 
