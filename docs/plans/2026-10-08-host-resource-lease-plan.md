@@ -317,6 +317,8 @@ Mutation gates: release outside `finally` → `release runs even when the tool t
 
 Lead deploys the mod (`pdx setup --agent cc`); new sessions pick it up (running sessions keep the old mod until restart — said in the deploy note). δ watches `pdx lease ls` during the next real full vitest from any session.
 
+**P2 goes live under `mode: advise` for one day** (lead decision 2026-10-09: the user cares about misjudged blocks). Before the deploy the lead sets `PUT /api/hostconfig/resources {mode: "advise"}`; during that day every intercepted command is granted at once and recorded with `would_wait`. After the day δ reports to the lead: intercepted count per kind, `would_wait` count and the waits they would have had, any misclassified command (from `recent` + transcripts of the sessions involved). The lead switches to `lease` only after reading those numbers.
+
 ---
 
 ## P3 — learning
@@ -347,8 +349,10 @@ Tests: `TestAdmit_CapHoldsSecondTestFull`, `TestAdmit_CapStillOverrunsAtDeadline
 
 ## Decisions for the lead
 
+**Answered by the lead, 2026-10-09:** (1) `lease` after P1 deploys; **P2 goes live under `advise` for one day** first (P2 acceptance). (2) Keep D-1's vm_stat; P0 acceptance collects the real numbers incl. `memorystatus_level`. (3) `vanished` agreed. (4) Registry roots and the additive `ProcessSnapshot.Start` agreed. (5) Before P2 starts, δ settles the `register.js` order and the guard regex change directly with the interface lead (`mlab/_b84f5i`, whose team-interface item 14 also adds a mod registration), copy to the lead. The original questions follow.
+
 1. **Default `mode` after P1 deploys: `lease`** (proposed). P1 is voluntary only, so `lease` changes nothing for sessions that do not call `pdx lease`; P2 then intercepts immediately on its deploy. Alternative: ship P2 under `advise` for a day to watch `would_wait` before turning `lease` on.
-2. **Memory metric (M-R1):** keep D-1's vm_stat formula (stricter; ≈ 25 points above `100 − memorystatus_level` at load 17). With it and R5's 90 %, the host reads "full" whenever pressure goes to warn (seen once tonight). If that proves too eager in P0's real numbers, P0 acceptance step 2 gives the data to revisit.
+2. **Memory metric (M-R1):** keep D-1's vm_stat formula (stricter; ≈ 25 points above `100 − memorystatus_level` at load 17). With it and R5's 90 %, the host reads "full" whenever pressure goes to warn (seen once tonight). If that proves too eager in P0's real numbers, P0 acceptance step 2 gives the data to revisit (it records `host.mem` beside `memorystatus_level` for the same 10 minutes).
 3. **`vanished` release** (Task 1.5) is an addition to D-4: a mod lease whose tracked tree stayed empty for two samples after warmup ends. It only shortens a leaked lease (mod crashed between acquire and release); it cannot end a running command's lease while its processes exist.
 4. **Registry, not frames, for session roots** (Task 0.5): every CC session (incl. outside tmux) and no change in `internal/module/agent`; codex frames are not leasing sessions.
 
