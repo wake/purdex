@@ -35,7 +35,10 @@ type hookEdge struct {
 }
 
 // setHookEdge records frameID's edge unless a newer one is already there
-// (hooks of one process are applied out of order now and then).
+// (hooks of one process are applied out of order now and then) or the mod has
+// already reported a light event at or after the hook's arrival: it caught up
+// before the edge could be noted, and the event that did it has already marked
+// the pane dirty.
 func (m *Module) setHookEdge(frameID string, e hookEdge) {
 	if frameID == "" {
 		return
@@ -43,6 +46,9 @@ func (m *Module) setHookEdge(frameID string, e hookEdge) {
 	m.modMu.Lock()
 	defer m.modMu.Unlock()
 	if cur, ok := m.hookEdge[frameID]; ok && cur.at.After(e.at) {
+		return
+	}
+	if st := m.modStreams[m.modBySID[e.sid]]; st != nil && st.SID == e.sid && !st.StatusEventAt.Before(e.at) {
 		return
 	}
 	if m.hookEdge == nil {
@@ -67,8 +73,10 @@ func (m *Module) forgetHookEdge(frameID string) {
 // Stop that made it idle records one, a SessionStart drops it, anything else
 // does nothing. It reads the sender's own frame, as noteHookBackground does,
 // and holds no lock; takes modMu only inside the setters. Call it after
-// applyFrameEvent and before the projection the event emits is built.
-func (m *Module) noteHookEdge(req EventRequest, lifecycle agentpkg.LifecycleEventKind, result agentpkg.DeriveResult, meta FrameTraceMeta) {
+// applyFrameEvent and before the projection the event emits is built. recv is
+// when the daemon received the hook, read before anything was applied; it is
+// the edge's time.
+func (m *Module) noteHookEdge(req EventRequest, lifecycle agentpkg.LifecycleEventKind, result agentpkg.DeriveResult, meta FrameTraceMeta, recv time.Time) {
 	if req.AgentType != "cc" || m.frames == nil {
 		return
 	}
@@ -97,7 +105,7 @@ func (m *Module) noteHookEdge(req EventRequest, lifecycle agentpkg.LifecycleEven
 	if meta.Decision != "updated_frame" || frame.Status != want || frame.SessionID == "" {
 		return
 	}
-	m.setHookEdge(frame.FrameID, hookEdge{status: want, at: m.modClock(), sid: frame.SessionID})
+	m.setHookEdge(frame.FrameID, hookEdge{status: want, at: recv, sid: frame.SessionID})
 }
 
 // wins reports whether e still decides the light of a pane showing a live

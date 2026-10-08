@@ -242,6 +242,41 @@ func TestHookEdge_HeartbeatDoesNotHandBack(t *testing.T) {
 	}
 }
 
+// TestHookEdge_ModEventBetweenReceiveAndNoteDoesNotCreateEdge: the mod's
+// turn.complete lands while the Stop hook is still being processed (after the
+// daemon received it, before the edge is noted). The mod has caught up with
+// the hook, so the hook leaves no edge: the edge's time is the hook's arrival,
+// not the moment the handler gets round to noting it.
+func TestHookEdge_ModEventBetweenReceiveAndNoteDoesNotCreateEdge(t *testing.T) {
+	r := edgeRig(t)
+	r.modRunning()
+	r.round()
+	r.drain(t)
+	r.advance(10 * time.Second)
+
+	orig := verifyEventFn
+	verifyEventFn = func(m *Module, req EventRequest) verifyDecision {
+		r.advance(time.Second)
+		r.modEvent(modevents.TypeTurnComplete, `{"turn_id":"t1","reason":"answer"}`)
+		r.advance(time.Second)
+		return orig(m, req)
+	}
+	t.Cleanup(func() { verifyEventFn = orig })
+
+	r.hook(t, "PdxStop")
+
+	if n := r.edgeCount(); n != 0 {
+		t.Fatalf("%d edges, want none: the mod had already caught up", n)
+	}
+	wantLight(t, "overlay", r.light(t), agentpkg.StatusIdle, SourceMod)
+	r.round()
+	for _, e := range r.drain(t) {
+		if e.Ev.Source != "mod" {
+			t.Fatalf("emit %s/%s, want source mod throughout", e.Ev.Status, e.Ev.Source)
+		}
+	}
+}
+
 // TestHookEdge_HeartbeatRepairHandsBack: a heartbeat that repairs the mod's
 // light (here the turn.start was lost and the beat carries the turn_id) is a
 // light event like any other: it supersedes the edge at once, with the mod's

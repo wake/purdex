@@ -168,6 +168,10 @@ func (m *Module) classifyLifecycleForReq(req EventRequest) agentpkg.LifecycleEve
 // read-only handlers (fs search, nex preflights, upload), which follow their
 // request, this is deliberate (#1293).
 func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
+	// The hook's arrival, on the mod clock: the time a turn edge it makes is
+	// ranked by (hookedge.go). Taken before anything that waits, so a mod
+	// event that lands while this hook is processed counts as newer.
+	recv := m.modClock()
 	var req EventRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
@@ -539,7 +543,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// Keep the hook-sourced background symbol in step before the projection
 	// this event emits is built (a Stop sets it, a SessionStart clears it).
 	m.noteHookBackground(req, lifecycle, broadcastTs)
-	m.noteHookEdge(req, lifecycle, result, frameMeta)
+	m.noteHookEdge(req, lifecycle, result, frameMeta, recv)
 	if isDevMode() {
 		log.Printf("[handler] frame_apply session=%s frame_id=%s lifecycle=%s decision=%s chain_id=%s",
 			req.TmuxSession, frameMeta.FrameID, req.PurdexName, frameMeta.Decision, trace.ChainID())
