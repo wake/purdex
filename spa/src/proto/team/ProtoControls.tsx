@@ -46,7 +46,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
   const [open, setOpen] = useState(true)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const theme = useThemeStore((s) => s.activeThemeId)
-  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, hookTop, cornerSize, badgeIcon, edgeWidth, bookmarkCut, bookmarkPos, shadowStrength, shadowScope, shadowDepth, openMark, namesOff, target, log } = useProtoTeam()
+  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, hookTop, cornerSize, badgeIcon, edgeWidth, bookmarkCut, bookmarkPos, shadowStrength, shadowScope, shadowDepth, shadowCompanion, railCorner, openMark, namesOff, target, log } = useProtoTeam()
   const members = Object.values(seats).filter((s) => s.role === 'member' && s.alive && s.teamKey)
   const tgt = target ? seats[target] : null
   const tgtTab = tgt ? tabOfSeat(tgt) : null
@@ -63,7 +63,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
     <div data-testid="proto-controls" className="fixed right-3 bottom-3 z-50 w-[min(380px,calc(100vw-24px))] max-h-[48vh] overflow-y-auto rounded-xl border border-border-default bg-surface-elevated shadow-2xl p-3 text-xs flex flex-col gap-2">
       <div className="flex items-center">
         <span className="font-semibold">原型控制</span>
-        <span className="ml-2 text-text-muted">team 介面 · 第五版 h</span>
+        <span className="ml-2 text-text-muted">team 介面 · 第五版 i</span>
         <button type="button" onClick={() => setOpen(false)} className="ml-auto text-text-muted hover:text-text-primary cursor-pointer">收起</button>
       </div>
       <Seg label="分頁位置" value={tabPosition} options={[['top', '上方'], ['left', '左側'], ['both', '兩側']]} onChange={(v) => useLayoutStore.getState().setTabPosition(v)} />
@@ -88,12 +88,16 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         <>
           <Seg label="陰影強度" value={shadowStrength} options={[['thin', '細（1px）'], ['medium', '中（1px＋柔邊）'], ['thick', '粗（2px＋柔邊）']]} onChange={(v) => useProtoTeam.setState({ shadowStrength: v })} />
           <Seg label="顏色深淺" value={String(shadowDepth)} options={[['100', '原色'], ['70', '淡（預設）'], ['50', '更淡'], ['35', '最淡']]} onChange={(v) => useProtoTeam.setState({ shadowDepth: Number(v) as 100 | 70 | 50 | 35 })} />
+          <Seg label="左下補色" value={shadowCompanion} options={[['none', '無'], ['half', '主色的一半（預設）'], ['third', '主色的三分之一']]} onChange={(v) => useProtoTeam.setState({ shadowCompanion: v })} />
           <Seg label="陰影範圍" value={shadowScope} options={[['all', '整組每個分頁'], ['last', '只最後一個分頁']]} onChange={(v) => useProtoTeam.setState({ shadowScope: v })} />
         </>
       )}
       <Seg label="舊群組" value={groupStyle} options={[['tint', '淡色底'], ['frame', '外框'], ['topbar', '頂端色條'], ['plate', '共用底板']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
       <Seg label="收起樣式" value={collapseStyle} options={[['users', '新：人群圖示＋燈點'], ['sign', '舊：符號＋「N 個收起」']]} onChange={(v) => useProtoTeam.setState({ collapseStyle: v })} />
       <Seg label="掛勾" value={hookStyle} options={[['thin', '細線圓角'], ['bold', '加粗'], ['rail', '樹狀刻度'], ['glyph', '⎿ 字元']]} onChange={(v) => useProtoTeam.setState({ hookStyle: v })} />
+      {hookStyle === 'rail' && (
+        <Seg label="刻度轉角" value={railCorner} options={[['square', '直角（原本）'], ['small', '小圓角（預設）'], ['large', '大圓角']]} onChange={(v) => useProtoTeam.setState({ railCorner: v })} />
+      )}
       <Seg label="掛勾頂端" value={hookTop} options={[['below', '從底色下緣開始'], ['blend', '融入底色']]} onChange={(v) => useProtoTeam.setState({ hookTop: v })} />
       <Seg label="開分頁標示" value={openMark} options={[['tick', '底部小點'], ['none', '不標示']]} onChange={(v) => useProtoTeam.setState({ openMark: v })} />
       {collapseStyle === 'sign' && (
@@ -141,13 +145,11 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         {[0, 1, 2, 3].map((n) => <Btn key={n} testId={`ctl-sub-${n}`} disabled={!tgt} onClick={() => tgt && setSubagents(tgt.sessionId, n)}>{n}</Btn>)}
       </div>
       <details data-testid="ctl-notes" className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" open>
-        <summary className="cursor-pointer font-semibold text-text-primary">第五版（e）說明與待確認</summary>
+        <summary className="cursor-pointer font-semibold text-text-primary">第五版（i）說明與待確認</summary>
         <div className="mt-1 flex flex-col gap-1 leading-snug">
-          <div><b>這版改了</b>：①書籤（群組樣式選「轉角徽章・純圖示」、圖示選書籤時）改成頂端貼齊分頁上緣、往下垂的短緞帶，上方截掉 1/3 或 1/2（「書籤裁切」），位置三選一（「書籤位置」）：× 前面、× 左上、× 右上（預設）。顏色是 team 色，大小沿用「斜角大小」，不收滑鼠、不蓋 ×。②右邊線（弧邊、短邊都一樣）只畫在群組的最後一個分頁，當整組的收尾括號；只有 lead 時畫在 lead；拖曳換順序後會跟著換到新的最後一個。</div>
+          <div><b>這版改了</b>：①預設改成你選的六項；②上右陰影可加左下補色；③樹狀刻度轉角可調</div>
           <div className="font-semibold text-text-primary pt-0.5">待確認</div>
-          <div>1. 書籤截 1/3 還是 1/2？位置選哪個？大尺寸（大）在「× 左上」會稍微靠近 ×，要不要限制大小？</div>
-          <div>2. 右邊線只在最後一個分頁，收合後只剩 lead 時會畫在 lead 上，這樣可以嗎？</div>
-          <div>3. 書籤與右邊線是否允許同時開（目前二選一）？</div>
+          <div>（lead 會補）</div>
         </div>
       </details>
       <div className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" data-testid="ctl-log">

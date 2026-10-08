@@ -7,7 +7,7 @@
 // console, every row has its own ⎿ at the same x (no continuous line) — it needs the wrapped row count.
 // "blend" top: the stem also reaches up into the lead row's highlight, fading in from the highlight color so the
 // line looks fused with the block; "below" starts exactly at the block's lower edge.
-import type { TeamHookStyle, TeamHookTop } from './team-display'
+import type { TeamHookStyle, TeamHookTop, TeamRailCorner } from './team-display'
 
 /** Stem x inside the bead container (container left = sidebar + 18, bot icon center = +18 more). */
 export const HOOK_X = 17
@@ -21,18 +21,20 @@ const HALF_ROW = 12
 /** The block's lower edge sits this far above the container (the block's flex gap). */
 const GAP_UP = 2
 const BLEND_UP = 8
+/** Elbow radius of the rail hook (px), by the 刻度轉角 setting. */
+const RAIL_RADIUS: Record<TeamRailCorner, number> = { square: 0, small: 3, large: 6 }
 
 interface Props {
   hookStyle: TeamHookStyle
   rows: number
   hookTop: TeamHookTop
+  railCorner?: TeamRailCorner
   /** The lead row is drawn highlighted (only then does a "blend" top have a block to fuse with). */
   leadActive: boolean
 }
 
-export function TeamHook({ hookStyle, rows, hookTop, leadActive }: Props) {
+export function TeamHook({ hookStyle, rows, hookTop, leadActive, railCorner = 'square' }: Props) {
   const base = 'absolute pointer-events-none'
-  const total = rows * ROW_H + (rows - 1) * (ROW_PITCH - ROW_H)
   const blend = hookTop === 'blend' && leadActive && hookStyle !== 'glyph'
   const stemColor = hookStyle === 'bold' ? 'var(--text-secondary)' : 'var(--text-muted)'
   const stemW = hookStyle === 'bold' ? 2 : 1
@@ -65,20 +67,22 @@ export function TeamHook({ hookStyle, rows, hookTop, leadActive }: Props) {
     )
   }
   if (hookStyle === 'rail') {
+    // One stem down to where the last row's elbow starts; a tick per upper row; the last row turns with a radius.
+    const r = RAIL_RADIUS[railCorner]
+    const lastC = (rows - 1) * ROW_PITCH + HALF_ROW
+    const elbowTop = lastC - r - 0.5
+    const tone = { borderColor: 'var(--text-muted)', opacity: 0.7 }
     return (
-      <span data-testid="team-hook" data-hook-style="rail" aria-hidden="true" className="contents">
+      <span data-testid="team-hook" data-hook-style="rail" data-rail-corner={railCorner} aria-hidden="true" className="contents">
         {blendStem}
-        <span className={`${base} w-px`} style={{ left: HOOK_X, top: -GAP_UP, height: total - HALF_ROW + GAP_UP, background: 'var(--text-muted)', opacity: 0.7 }} />
+        <span className={`${base} w-px`} style={{ left: HOOK_X, top: -GAP_UP, height: elbowTop + GAP_UP, background: 'var(--text-muted)', opacity: 0.7 }} />
+        {Array.from({ length: rows - 1 }, (_, i) => (
+          <span key={i} data-testid="team-hook-tick" className={base} style={{ left: HOOK_X + 1, width: HOOK_ARM - 1, top: i * ROW_PITCH + HALF_ROW - 0.5, height: 1, background: 'var(--text-muted)', opacity: 0.7 }} />
+        ))}
         <span
+          data-testid="team-hook-elbow"
           className={base}
-          style={{
-            left: HOOK_X,
-            width: HOOK_ARM,
-            top: 0,
-            height: total,
-            backgroundImage: `repeating-linear-gradient(to bottom, transparent 0 ${HALF_ROW - 0.5}px, var(--text-muted) ${HALF_ROW - 0.5}px ${HALF_ROW + 0.5}px, transparent ${HALF_ROW + 0.5}px ${ROW_PITCH}px)`,
-            opacity: 0.7,
-          }}
+          style={{ left: HOOK_X, width: HOOK_ARM, top: elbowTop, height: r + 1, borderLeft: '1px solid', borderBottom: '1px solid', borderBottomLeftRadius: r, ...tone }}
         />
       </span>
     )

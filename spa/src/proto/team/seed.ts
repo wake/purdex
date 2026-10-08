@@ -6,7 +6,7 @@ import { useAgentStore, type AgentStatus } from '../../stores/useAgentStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { compositeKey } from '../../lib/composite-key'
 import { createTab, createWorkspace, type Tab } from '../../types/tab'
-import { useProtoTeam, type ProtoSeat } from './store'
+import { useProtoTeam, type ProtoSeat, DEFAULT_OPTIONS } from './store'
 
 const MLAB = 'h-mlab'
 const AIR = 'h-air26'
@@ -73,6 +73,7 @@ export function seed() {
   if (!useLayoutStore.getState().tabPosition || useLayoutStore.getState().tabPosition === 'top') useLayoutStore.getState().setTabPosition('both')
 
   useProtoTeam.setState({
+    ...DEFAULT_OPTIONS,
     seats,
     teams: { t1: { key: 't1', name: '介面線', color: 0, leadId: 'lead', order: ['m1', 'm2', 'm3'], collapsed: false, ghostWs: null } },
     target: 'm3',

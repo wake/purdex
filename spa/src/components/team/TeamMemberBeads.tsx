@@ -7,7 +7,7 @@
 // The hook beside the beads runs down to the last wrapped row; clicking the hook or the blank area around the
 // beads calls onBlankClick (the new fold style folds the team with it).
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
-import type { TeamHookStyle, TeamHookTop, TeamOpenMark, TeamSeatView } from './team-display'
+import type { TeamHookStyle, TeamHookTop, TeamOpenMark, TeamRailCorner, TeamSeatView } from './team-display'
 import { HOOK_PAD, TeamHook } from './TeamHook'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { useMemberDrag } from './useMemberDrag'
@@ -19,6 +19,7 @@ interface Props {
   activeTabId: string | null
   withHost: boolean
   hookStyle: TeamHookStyle | null
+  railCorner?: TeamRailCorner
   openMark: TeamOpenMark
   hookTop: TeamHookTop
   leadActive: boolean
@@ -27,7 +28,7 @@ interface Props {
   onBlankClick?: () => void
 }
 
-export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost, hookStyle, openMark, hookTop, leadActive, onOpen, onReorder, onBlankClick }: Props) {
+export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost, hookStyle, railCorner, openMark, hookTop, leadActive, onOpen, onReorder, onBlankClick }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const [rows, setRows] = useState(1)
   // Count the wrapped bead rows (distinct offsetTop) so the hook can draw one mark per row.
@@ -57,7 +58,7 @@ export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost
       className={`relative flex flex-wrap items-center content-start gap-0.5 ml-[18px] mr-2 mb-0.5 ${onBlankClick ? 'cursor-pointer' : ''}`}
       style={{ paddingLeft: HOOK_PAD }}
     >
-      {hookStyle && <TeamHook hookStyle={hookStyle} rows={rows} hookTop={hookTop} leadActive={leadActive} />}
+      {hookStyle && <TeamHook hookStyle={hookStyle} rows={rows} hookTop={hookTop} railCorner={railCorner} leadActive={leadActive} />}
       {members.map((m) => {
         const isActive = m.tabId !== null && m.tabId === activeTabId
         const ins = over?.id === m.sessionId ? (over.after ? 'after' : 'before') : null

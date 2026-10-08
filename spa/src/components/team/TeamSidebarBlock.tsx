@@ -91,6 +91,7 @@ export function TeamSidebarBlock({ team, teamKey, color, label, unnamed, collaps
           hookStyle={hook ? team.hookStyle : null}
           openMark={team.openMark}
           hookTop={team.hookTop}
+          railCorner={team.railCorner}
           leadActive={leadActive}
           onOpen={(sid) => team.onOpenSeat(teamKey, sid)}
           onReorder={(ids) => team.onReorderMembers(teamKey, ids)}

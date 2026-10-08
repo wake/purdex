@@ -10,7 +10,7 @@ import { getPrimaryPane } from '../../lib/pane-tree'
 import { compositeKey } from '../../lib/composite-key'
 import { createTab } from '../../types/tab'
 import type { ModelFamily } from '../../components/team/model-family'
-import type { TeamGroupStyle, TeamSidebarStyle, TeamCollapseStyle, TeamHookStyle, TeamOpenMark, TeamHookTop, TeamCornerSize, TeamBadgeIcon, TeamEdgeWidth, TeamBookmarkCut, TeamBookmarkPos, TeamShadowStrength, TeamShadowScope, TeamShadowDepth } from '../../components/team/team-display'
+import type { TeamGroupStyle, TeamSidebarStyle, TeamCollapseStyle, TeamHookStyle, TeamOpenMark, TeamHookTop, TeamCornerSize, TeamBadgeIcon, TeamEdgeWidth, TeamBookmarkCut, TeamBookmarkPos, TeamShadowStrength, TeamShadowScope, TeamShadowDepth, TeamShadowCompanion, TeamRailCorner } from '../../components/team/team-display'
 
 export interface ProtoSeat {
   sessionId: string
@@ -55,6 +55,8 @@ interface ProtoState {
   shadowStrength: TeamShadowStrength
   shadowScope: TeamShadowScope
   shadowDepth: TeamShadowDepth
+  shadowCompanion: TeamShadowCompanion
+  railCorner: TeamRailCorner
   openMark: TeamOpenMark
   /** Prototype switch: hide every team name, to see the fallback. */
   namesOff: boolean
@@ -69,26 +71,33 @@ function loadPanelModes(): Record<string, 'full' | 'line'> {
   try { return JSON.parse(localStorage.getItem(PANEL_KEY) ?? '{}') } catch { return {} }
 }
 
+/** The user's picks (v5i) — the initial state and what 重設 restores. */
+export const DEFAULT_OPTIONS = {
+  beadHost: true,
+  groupStyle: 'shadow-top-right' as TeamGroupStyle,
+  sidebarStyle: 'hook' as TeamSidebarStyle,
+  collapseStyle: 'users' as TeamCollapseStyle,
+  hookStyle: 'rail' as TeamHookStyle,
+  hookTop: 'below' as TeamHookTop,
+  cornerSize: 'md' as TeamCornerSize,
+  badgeIcon: 'bookmark' as TeamBadgeIcon,
+  edgeWidth: 2 as TeamEdgeWidth,
+  bookmarkCut: 'third' as TeamBookmarkCut,
+  bookmarkPos: 'above-right' as TeamBookmarkPos,
+  shadowStrength: 'thin' as TeamShadowStrength,
+  shadowScope: 'all' as TeamShadowScope,
+  shadowDepth: 70 as TeamShadowDepth,
+  shadowCompanion: 'half' as TeamShadowCompanion,
+  railCorner: 'small' as TeamRailCorner,
+  openMark: 'tick' as TeamOpenMark,
+  namesOff: false,
+}
+
 export const useProtoTeam = create<ProtoState>()(() => ({
   seats: {},
   teams: {},
   panelMode: loadPanelModes(),
-  beadHost: true,
-  groupStyle: 'corner-tr',
-  sidebarStyle: 'hook',
-  collapseStyle: 'users',
-  hookStyle: 'thin',
-  hookTop: 'below',
-  cornerSize: 'md',
-  badgeIcon: 'bookmark',
-  edgeWidth: 2,
-  bookmarkCut: 'third',
-  bookmarkPos: 'above-right',
-  shadowStrength: 'medium',
-  shadowScope: 'all',
-  shadowDepth: 70,
-  openMark: 'tick',
-  namesOff: false,
+  ...DEFAULT_OPTIONS,
   target: null,
   log: '',
   spawnN: 0,
