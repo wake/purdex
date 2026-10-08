@@ -74,6 +74,13 @@ describe('unattended-api', () => {
       expect(testGlobal.fetch.mock.calls[1][0]).toBe('http://100.64.0.2:7860/api/team/unattended?limit=10')
     })
 
+    it('hands a caller\'s abort signal to the request', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(view()))
+      const ctl = new AbortController()
+      await getUnattended(hostId, undefined, ctl.signal)
+      expect(testGlobal.fetch.mock.calls[0][1].signal).toBe(ctl.signal)
+    })
+
     it('a plain-text 404 (a daemon without the route) is `unsupported`', async () => {
       testGlobal.fetch.mockResolvedValueOnce(new Response('404 page not found\n', { status: 404 }))
       const err = await rejection(getUnattended(hostId))

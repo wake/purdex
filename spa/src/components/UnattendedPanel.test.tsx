@@ -30,6 +30,8 @@ const page = (rows: Approval[], over: Partial<UnattendedView> = {}): UnattendedV
 })
 
 const rows = () => screen.getAllByTestId('unattended-row').map((r) => r.textContent)
+/** The (host, query) of every call, without the abort signal each carries. */
+const askedOf = () => mockedGet.mock.calls.map(([h, q]) => (q === undefined ? [h] : [h, q]))
 const flush = () => act(async () => { await new Promise<void>((r) => setTimeout(r, 0)) })
 
 function open(hostIds: string[], onClose = vi.fn(), unreachableIds: string[] = []) {
@@ -64,7 +66,7 @@ describe('UnattendedPanel', () => {
       'air26：sess-b1 · 接力申請 · 08:45',
       'mlab：sess-a1 · 接力申請 · 07:05',
     ])
-    expect(mockedGet.mock.calls).toEqual([[A], [B]])
+    expect(askedOf()).toEqual([[A], [B]])
   })
 
   it('empty state: nothing approved on any host', async () => {
@@ -107,7 +109,7 @@ describe('UnattendedPanel', () => {
     expect(lines).toHaveLength(1)
     expect(lines[0]).toHaveTextContent('air26：無法連線，可能仍在自動通過')
     expect(lines[0].compareDocumentPosition(screen.getByTestId('unattended-row')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(mockedGet.mock.calls).toEqual([[A]])
+    expect(askedOf()).toEqual([[A]])
     expect(screen.queryByTestId('unattended-empty')).toBeNull()
   })
 
@@ -190,7 +192,7 @@ describe('UnattendedPanel', () => {
         'mlab：sess-a1 · 接力申請 · 06:00',
       ])
       expect(mockedGet).toHaveBeenCalledTimes(3)
-      expect(mockedGet).toHaveBeenLastCalledWith(A, { before: at(8, 0) })
+      expect(mockedGet).toHaveBeenLastCalledWith(A, { before: at(8, 0) }, expect.any(AbortSignal))
     })
 
     it('the button goes when no host is truncated', async () => {
@@ -212,11 +214,11 @@ describe('UnattendedPanel', () => {
       open([A, B])
       fireEvent.click(await screen.findByTestId('unattended-more'))
       await waitFor(() => expect(rows()).toHaveLength(4))
-      expect(mockedGet).toHaveBeenCalledWith(A, { before: 111 })
-      expect(mockedGet).toHaveBeenCalledWith(B, { before: 222 })
+      expect(mockedGet).toHaveBeenCalledWith(A, { before: 111 }, expect.any(AbortSignal))
+      expect(mockedGet).toHaveBeenCalledWith(B, { before: 222 }, expect.any(AbortSignal))
       expect(screen.getByTestId('unattended-more')).toBeInTheDocument()
       fireEvent.click(screen.getByTestId('unattended-more'))
-      await waitFor(() => expect(mockedGet).toHaveBeenCalledWith(B, { before: 333 }))
+      await waitFor(() => expect(mockedGet).toHaveBeenCalledWith(B, { before: 333 }, expect.any(AbortSignal)))
       expect(mockedGet.mock.calls.filter(([h]) => h === A)).toHaveLength(2) // A not asked a third time
     })
 
@@ -243,6 +245,93 @@ describe('UnattendedPanel', () => {
       fireEvent.click(more)
       expect(mockedGet).toHaveBeenCalledTimes(2)
       await act(async () => { release(page([])) })
+    })
+  })
+
+  describe('one host that never answers', () => {
+    const busy = () => document.querySelector('[aria-busy]')!.getAttribute('aria-busy')
+    const settle = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+
+    it('does not hold back the other host: its rows show at once and the panel is no longer busy', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      mockedGet.mockImplementation((hostId) => hostId === B
+        ? new Promise<UnattendedView>(() => {}) // B never answers
+        : Promise.resolve(page([approved('a1', at(9, 0))])))
+      open([A, B])
+      await settle(0)
+      expect(rows()).toEqual(['mlab：sess-a1 · 接力申請 · 09:00'])
+      expect(busy()).toBe('false')
+      // B has not answered: the list is not "empty", and B is not (yet) named as failed.
+      expect(screen.queryByTestId('unattended-empty')).toBeNull()
+      expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
+    })
+
+    it('stays busy, and says nothing is empty, while no host has answered', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      mockedGet.mockImplementation(() => new Promise<UnattendedView>(() => {}))
+      open([A, B])
+      await settle(0)
+      expect(busy()).toBe('true')
+      expect(screen.queryByTestId('unattended-empty')).toBeNull()
+    })
+
+    it('gives up on the silent host after 10 s: a failed line (timeout), and its request is aborted', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const signals: Record<string, AbortSignal | undefined> = {}
+      mockedGet.mockImplementation((hostId, _q, signal) => {
+        signals[hostId] = signal
+        return hostId === B ? new Promise<UnattendedView>(() => {}) : Promise.resolve(page([approved('a1', at(9, 0))]))
+      })
+      open([A, B])
+      await settle(9_999)
+      expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
+      expect(signals[B]!.aborted).toBe(false)
+      await settle(1)
+      expect(screen.getByTestId('unattended-host-failed')).toHaveTextContent('air26：無法讀取（timeout）')
+      expect(signals[B]!.aborted).toBe(true)
+      expect(rows()).toHaveLength(1)
+    })
+
+    it('every host silent: all are named after the timeout, and the list is not called empty', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      mockedGet.mockImplementation(() => new Promise<UnattendedView>(() => {}))
+      open([A, B])
+      await settle(10_000)
+      expect(screen.getAllByTestId('unattended-host-failed').map((f) => f.textContent)).toEqual(['mlab：無法讀取（timeout）', 'air26：無法讀取（timeout）'])
+      expect(screen.queryByTestId('unattended-empty')).toBeNull()
+      expect(busy()).toBe('false')
+    })
+
+    it('an answer that beats the timeout is not turned into a failure later', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      mockedGet.mockResolvedValue(page([approved('a1', at(9, 0))]))
+      open([A])
+      await settle(0)
+      await settle(20_000)
+      expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
+      expect(rows()).toHaveLength(1)
+    })
+
+    it('顯示更多: one stuck host does not hold back the other\'s next page, and keeps its cursor after the timeout', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      mockedGet.mockImplementation((hostId, q) => {
+        if (q?.before === undefined) return Promise.resolve(page([approved(`${hostId}-2`, at(9, 0))], { truncated: true, next_before: hostId === A ? 111 : 222 }))
+        return hostId === B ? new Promise<UnattendedView>(() => {}) : Promise.resolve(page([approved('a-1', at(5, 0))]))
+      })
+      open([A, B])
+      await settle(0)
+      expect(rows()).toHaveLength(2)
+      fireEvent.click(screen.getByTestId('unattended-more'))
+      await settle(0)
+      expect(rows()).toHaveLength(3) // A's second page is in while B is still silent
+      expect(screen.getByTestId('unattended-more')).toBeDisabled()
+      await settle(10_000)
+      expect(screen.getByTestId('unattended-host-failed')).toHaveTextContent('air26：無法讀取（timeout）')
+      expect(rows()).toHaveLength(3)
+      expect(screen.getByTestId('unattended-more')).not.toBeDisabled()
+      // retry asks B again with its kept cursor
+      fireEvent.click(screen.getByTestId('unattended-more'))
+      expect(mockedGet).toHaveBeenLastCalledWith(B, { before: 222 }, expect.any(AbortSignal))
     })
   })
 
