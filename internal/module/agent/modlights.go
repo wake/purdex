@@ -42,6 +42,12 @@ type modLights struct {
 	// hookBgClearedAt is the broadcast stamp of each frame's last
 	// SessionStart: a Stop stamped at or before it cannot set the symbol.
 	hookBgClearedAt map[string]int64
+	// hookEdge is each root cc frame's last turn-boundary hook by frame id
+	// (hookedge.go). Under modMu.
+	hookEdge map[string]hookEdge
+	// hookEdgeClearedAt is the arrival time of each frame's last
+	// SessionStart: a hook that arrived at or before it cannot set an edge.
+	hookEdgeClearedAt map[string]time.Time
 
 	// modOverlayOn is the overlay switch. It is on exactly while the re-emit
 	// worker runs (startModLights turns it on once the worker is in its loop,
@@ -72,6 +78,8 @@ const (
 	modEventStale = "stale" // the stream stopped driving the light (or vanished)
 	modEventLive  = "live"  // the stream started driving it with no event in between
 	modEventEvict = "evict" // the sid index moved because a stream was dropped
+
+	modEventEdgeExpired = "edge-expired" // a hook turn edge ran out (hookedge.go)
 )
 
 func newModLights() modLights {
@@ -84,8 +92,10 @@ func newModLights() modLights {
 		modLiveSeen: make(map[string]bool),
 		modTick:     modTickDefault,
 
-		hookBackground:  make(map[string]lights.Background),
-		hookBgClearedAt: make(map[string]int64),
+		hookBackground:    make(map[string]lights.Background),
+		hookBgClearedAt:   make(map[string]int64),
+		hookEdge:          make(map[string]hookEdge),
+		hookEdgeClearedAt: make(map[string]time.Time),
 	}
 }
 
@@ -201,7 +211,7 @@ func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
 			m.repointSIDLocked(st.SID)
 			m.markDirtyLocked(st.SID, ev.Type)
 		}
-		if changed {
+		if changed || m.edgeSupersededLocked(st.SID, st.StatusEventAt, now) {
 			m.markDirtyLocked(st.SID, ev.Type)
 		}
 	}
@@ -286,14 +296,17 @@ func (m *Module) dropModStreamLocked(id string) {
 
 // modLight is what the overlay copies out of a live stream under modMu.
 type modLight struct {
-	status     agentpkg.Status
-	background lights.Background
-	dots       []lights.Dot
+	status        agentpkg.Status
+	background    lights.Background
+	dots          []lights.Dot
+	statusEventAt time.Time // when the stream's light last moved, for the hook edge
 }
 
 // applyModOverlay replaces, in place, the light of every projection whose
 // top frame's session id has a live mod stream (spec §7): status, source
-// "mod", background and the dots. Projections without one keep the hook
+// "mod", background and the dots. The one exception is the status (and its
+// source "hook") while a turn-boundary hook edge newer than the stream's last
+// light event is in force (hookedge.go). Projections without one keep the hook
 // light, with the background symbol a Stop hook reported (hookbackground.go;
 // that part needs no mod, so it runs whether or not the overlay is on). It
 // takes modMu only to copy the stream states and the hook symbols (callers
@@ -305,7 +318,8 @@ func (m *Module) applyModOverlay(projections []SessionProjection) {
 	overlayOn := m.modOverlayOn.Load()
 	lit := make(map[int]modLight)
 	hookBg := make(map[int]lights.Background)
-	bySID := make(map[string]*modLight) // each sid's state is copied once; nil: no live stream
+	edged := make(map[int]agentpkg.Status) // projections a hook turn edge decides
+	bySID := make(map[string]*modLight)    // each sid's state is copied once; nil: no live stream
 	now := m.modClock()
 	m.modMu.Lock()
 	for i := range projections {
@@ -326,12 +340,17 @@ func (m *Module) applyModOverlay(projections []SessionProjection) {
 			// frame, which the hook SessionEnd or the sweep removes; the
 			// overlay never invents a clear.
 			if st != nil && st.SID == top.SessionID && st.Live(now) {
-				l = &modLight{status: st.Status(), background: st.Background, dots: st.DotList()}
+				l = &modLight{status: st.Status(), background: st.Background, dots: st.DotList(), statusEventAt: st.StatusEventAt}
 			}
 			bySID[top.SessionID] = l
 		}
 		if l != nil {
 			lit[i] = *l
+			// A turn-boundary hook newer than the mod's last light event
+			// decides the status for now (hookedge.go).
+			if e, ok := m.hookEdge[top.FrameID]; ok && e.wins(top.SessionID, l.statusEventAt, now) {
+				edged[i] = e.status
+			}
 		}
 	}
 	m.modMu.Unlock()
@@ -345,6 +364,10 @@ func (m *Module) applyModOverlay(projections []SessionProjection) {
 		p := &projections[i]
 		p.Status = l.status
 		p.Source = SourceMod
+		if es, ok := edged[i]; ok {
+			p.Status = es
+			p.Source = SourceHook
+		}
 		p.Background = string(l.background)
 		p.Subagents = overlayDots(p.Subagents, l.dots, p.TopFrame.AgentType)
 	}

@@ -258,6 +258,7 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 		deleted, _ := m.frames.DeleteIfUnchanged(candidate.FrameID, candidate.LastSeenAt)
 		if deleted {
 			m.forgetHookBackground(candidate.FrameID)
+			m.forgetHookEdge(candidate.FrameID)
 		}
 		if !deleted {
 			// Partial — concurrent refresh / hot-path won the race.
