@@ -44,6 +44,44 @@ type fakeOrigins struct {
 	unknown map[string]bool
 	// leadAsked is what LeadPresence was last asked per session: "pid procStart".
 	leadAsked map[string]string
+	// shown overrides what the registry shows for a session (the roster's
+	// tests: a title or tmux session of its own); hidden makes the registry
+	// not list it at all. Both are by session id.
+	shown  map[string]team.Origin
+	hidden map[string]bool
+	// batchHook, when set, runs first in every ResolveOriginsBySession (the
+	// roster's build): tests block or count there. batchCalls and
+	// singleCalls count the two forms of the by-session resolve.
+	batchHook   func()
+	batchCalls  int
+	singleCalls int
+}
+
+// setReadErr makes (or stops making) every registry read fail.
+func (f *fakeOrigins) setReadErr(v bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readErr = v
+}
+
+// show sets the registry entry of o.SessionID; the next resolve answers o.
+func (f *fakeOrigins) show(o team.Origin) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.shown == nil {
+		f.shown = map[string]team.Origin{}
+	}
+	f.shown[o.SessionID] = o
+}
+
+// hide makes the registry stop listing sid (it is no longer live).
+func (f *fakeOrigins) hide(sid string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hidden == nil {
+		f.hidden = map[string]bool{}
+	}
+	f.hidden[sid] = true
 }
 
 var fixtureOrigins = map[string]team.Origin{
@@ -63,6 +101,12 @@ func (f *fakeOrigins) ResolveOrigin(inbox string) (team.Origin, bool, error) {
 		return team.Origin{}, false, errors.New("read registry: not a directory")
 	}
 	o, ok := fixtureOrigins[inbox]
+	f.mu.Lock()
+	shown, isShown := f.shown[o.SessionID]
+	f.mu.Unlock()
+	if ok && isShown {
+		o = shown
+	}
 	return o, ok, nil
 }
 
@@ -85,10 +129,52 @@ func rid(i int) string { return fmt.Sprintf("11111111-1111-4111-8111-%012x", i) 
 // ResolveOriginBySession answers the fixture origin with that session id.
 func (f *fakeOrigins) ResolveOriginBySession(sid string) (team.Origin, bool, error) {
 	f.mu.Lock()
-	readErr := f.readErr
+	f.singleCalls++
+	f.mu.Unlock()
+	return f.lookup(sid)
+}
+
+// ResolveOriginsBySession is the batch form: one call, one hook, one count.
+func (f *fakeOrigins) ResolveOriginsBySession(ids []string) (map[string]team.Origin, error) {
+	return f.resolveMany(ids, f.lookup)
+}
+
+// resolveMany is the batch over one(sid): a read error fails it whole, a
+// session one does not list is absent.
+func (f *fakeOrigins) resolveMany(ids []string, one func(string) (team.Origin, bool, error)) (map[string]team.Origin, error) {
+	f.mu.Lock()
+	f.batchCalls++
+	hook := f.batchHook
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	out := map[string]team.Origin{}
+	for _, sid := range ids {
+		o, ok, err := one(sid)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out[sid] = o
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeOrigins) lookup(sid string) (team.Origin, bool, error) {
+	f.mu.Lock()
+	readErr, hidden := f.readErr, f.hidden[sid]
+	shown, isShown := f.shown[sid]
 	f.mu.Unlock()
 	if readErr {
 		return team.Origin{}, false, errors.New("read registry: not a directory")
+	}
+	if hidden {
+		return team.Origin{}, false, nil
+	}
+	if isShown {
+		return shown, true, nil
 	}
 	for _, o := range fixtureOrigins {
 		if o.SessionID == sid {
