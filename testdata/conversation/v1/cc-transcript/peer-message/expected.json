@@ -46,7 +46,7 @@
             "source": "peer",
             "from": {
               "kind": "peer",
-              "name": "mlab/fixture-peer"
+              "name": "host/fixture-peer"
             }
           },
           {
@@ -62,21 +62,21 @@
             "kind": "execute",
             "tool": "Bash",
             "status": "done",
-            "summary": "pdx msg send mlab/fixture-peer \"pong\"",
+            "summary": "pdx msg send host/fixture-peer \"pong\"",
             "started_at": 1791483016614,
             "duration_ms": 105995,
             "input": {
-              "command": "pdx msg send mlab/fixture-peer \"pong\"",
+              "command": "pdx msg send host/fixture-peer \"pong\"",
               "description": "Reply pong to peer session"
             },
             "output": {
-              "text": "sent 1535c7e7-aa21-4472-b32a-244a203b2319 → mlab/fixture-peer (delivered, mode unknown)",
+              "text": "sent 1535c7e7-aa21-4472-b32a-244a203b2319 → host/fixture-peer (delivered, mode unknown)",
               "total_lines": 1,
               "total_bytes": 89,
               "truncated": false
             },
             "command": {
-              "text": "pdx msg send mlab/fixture-peer \"pong\"",
+              "text": "pdx msg send host/fixture-peer \"pong\"",
               "description": "Reply pong to peer session"
             }
           },
@@ -84,7 +84,7 @@
             "type": "agent_text",
             "id": "ca60b1e7-3a7e-415d-b9b4-98234cc38108",
             "at": 1791483124285,
-            "markdown": "已用 pdx 回覆 `mlab/fixture-peer`：「pong」，對方已收到。"
+            "markdown": "已用 pdx 回覆 `host/fixture-peer`：「pong」，對方已收到。"
           }
         ]
       },

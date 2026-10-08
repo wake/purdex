@@ -178,8 +178,8 @@
       "expected": "cc-transcript/peer-message/expected.json",
       "facts": "cc-transcript/peer-message/facts.json",
       "sha256": {
-        "input": "fd43a2e9c1cb668fe5a43fba225fe5e89fcfb1be799e34a3ba1b8686e2dd73d3",
-        "expected": "c92626794d38d6c2a1141f83800bafba5aee06054fbbbbf25ae0d706988c06c6",
+        "input": "c667aa629f2c3f3ff3274f7efc92f5ccad5368cc7291afa6222622fbf20b0274",
+        "expected": "f4a364fd2347edf7301531283a2eadd847250dfe5429106983e517404e9e7f94",
         "facts": "8f26b3993063b2706e23ece0b0b80e708e54853788ff8d575368da067cccd70d"
       }
     },
@@ -234,8 +234,8 @@
       "expected": "cc-transcript/source-kinds/expected.json",
       "facts": "cc-transcript/source-kinds/facts.json",
       "sha256": {
-        "input": "6bf0f6701a81230e040226da16b70ca78ce196d43d008e506d233b6b0f3720b6",
-        "expected": "d6a8e4d316605ed375eaab96a1a3d2b6e55ed8e8dc915c35d4f882f03184c62e",
+        "input": "ec0505f2afd120e49a3e25451200a16ac804f8aaa17e16e73b214d45cf392095",
+        "expected": "ca57d4d1730436685e107f284624ed6c33f73e9a53a6a26c6bc58182e8ef42bf",
         "facts": "2115ca988817002f0a7ad5951f31bf155143677a94922146f4432b9371fd2811"
       }
     },

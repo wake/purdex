@@ -46,7 +46,7 @@
             "source": "peer",
             "from": {
               "kind": "peer",
-              "name": "mlab/fixture-peer"
+              "name": "host/fixture-peer"
             }
           },
           {

@@ -209,15 +209,15 @@ var (
 )
 
 // peerPatterns are private-data patterns that have one allowed fixture form:
-// a pdx peer address is fine as <host>/fixture-peer, a peer socket as
+// a pdx peer address is fine as host/fixture-peer, a recording host name is never fine, a peer socket as
 // uds:/work/tmp/cc-socks/1.sock (what the scrubber writes).
 var peerPatterns = []struct {
 	name  string
 	re    *regexp.Regexp
 	allow func(match string) bool
 }{
-	{"pdx peer address", regexp.MustCompile(`\b(mlab|air26|air19|air-2026|air-2019)/[A-Za-z0-9_-]+`),
-		func(m string) bool { return m[strings.IndexByte(m, '/')+1:] == scrub.FixturePeer }},
+	{"recording host name", regexp.MustCompile(`(?i)\b(?:mlab|air26|air19|air-2026|air-2019)\b`),
+		func(m string) bool { return false }},
 	{"peer socket path", regexp.MustCompile("uds:[^\\s\"'`<>\\\\]*/[0-9]+\\.sock"),
 		func(m string) bool { return m == scrub.FixtureSocket }},
 	// an MCP tool name names a server of the recording host's setup; only the
@@ -282,10 +282,8 @@ func TestFixtures_NoPrivateData(t *testing.T) {
 			}
 		}
 		if filepath.Base(path) != "MANIFEST.json" {
-			for _, run := range scrub.TokenRun().FindAllStringIndex(text, -1) {
-				if scrub.LooksLikeToken(text[run[0]:run[1]]) {
-					t.Errorf("%s contains a token-shaped string: …%s…", path, snippet(text, run))
-				}
+			for _, span := range scrub.TokenSpans(text) {
+				t.Errorf("%s contains a token-shaped string: …%s…", path, snippet(text, span[:]))
 			}
 		}
 		return nil

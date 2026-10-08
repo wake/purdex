@@ -111,8 +111,8 @@ result is `running`), so write the outcome the transcript shows. `steps` and
 `version`, rewrites the identity (`cwd` → `/work/fixture`, session ids → the
 fixed uuid, `gitBranch` → `main`), maps home and temp paths to `/work/…`, hides
 the account name, e-mail addresses, tailnet addresses and secret-shaped
-strings, rewrites pdx peer addresses (`mlab/…`, `air26/…`, `air19/…`,
-`air-2026/…`, `air-2019/…`) to `<host>/fixture-peer` and peer sockets
+strings, rewrites pdx peer addresses (`<recording host>/<name>`) to `host/fixture-peer`,
+any other bare recording-host name to `host`, and peer sockets
 (`uds:<path>/<digits>.sock`) to `uds:/work/tmp/cc-socks/1.sock`, and replaces every image's base64 data by a 1x1 PNG. **After
 scrubbing, an image placeholder's `bytes` is the size of that tiny PNG (70 bytes),
 not of the original.** Message text is kept as recorded, so only record

@@ -63,6 +63,7 @@ Out of U1 (later phases of the interface line, [D §16]): iOS switches to the mo
 - `$.http.fetch` has no timeout option; `$` calls pause the 10 s hook budget; `$.clock` waits do not.
 - Today the mod reaches the daemon only by running `pdx` (`$.process.run`); the daemon listens on TCP only (`cmd/pdx/main.go`), so the event channel is new.
 - Today's light pipeline: no sequence numbers, last-writer-wins, the tab light reads only the tab's primary pane, the per-tmux-session projection picks the most recently *started* pane, the WS snapshot never sends clears, `is_interrupt` / `background_tasks` / `session_crons` are never read, a subagent `StopFailure` turns the main frame red. Full map with file:line: §9.
+- **Claude Code 2.1.294 as a working environment (measured while recording the U1-4d goldens):** it has no `Grep`, `Glob` or `MultiEdit` tool (search and edit go through `Bash` and `Edit`); an `Agent` call is moved to the background automatically, its result arriving later as a notification; and a foreground `sleep` is refused (wait with a monitor or an until-loop instead). Briefs for sub-agents and recording scripts must not assume the missing tools or a blocking `Agent` call.
 
 ## 4. Architecture
 
