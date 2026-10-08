@@ -149,7 +149,12 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         <div className="mt-1 flex flex-col gap-1 leading-snug">
           <div><b>這版改了</b>：①預設改成你選的六項；②上右陰影可加左下補色；③樹狀刻度轉角可調</div>
           <div className="font-semibold text-text-primary pt-0.5">待確認</div>
-          <div>（lead 會補）</div>
+          <div>1. 陰影範圍：上右陰影畫在群組每個分頁（目前），還是只畫最後一個？</div>
+          <div>2. 掛勾頂端：刻度從 lead 底色下緣開始，還是融入底色？</div>
+          <div>3. 開分頁標示：側欄已開分頁的 member 顆粒，底部要不要加小點？</div>
+          <div>4. 沒有 team 名時（「team 名」切「沒名字」）群組最前面的退回樣子可以嗎？</div>
+          <div>5. 選了陰影，書籤／斜角／右邊線三組選項視為作廢（除非要跟陰影並用）。</div>
+          <div>6. 淺色主題目前分頁的白字偏淡（App 既有），要不要順便修？</div>
         </div>
       </details>
       <div className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" data-testid="ctl-log">
