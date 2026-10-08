@@ -28,6 +28,7 @@ type W = {
   daemon: (body: any, n: number) => Answer | Promise<Answer>
   bash: (e: any, $: any) => any // the Bash tool beneath the mod
   compact: (e: any) => any // the compaction beneath the mod
+  sessionStart?: (e: any) => any // classic.SessionStart beneath the mod (the relay's /clear work runs above it)
   pdx: (argv: string[]) => { exitCode: number; stdout?: string; stderr?: string } | Promise<{ exitCode: number; stdout?: string; stderr?: string }>
   clock: any
   logs: string[]
@@ -76,7 +77,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   on('turn.start', async (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
-  on('classic.SessionStart', async () => ({}))
+  on('classic.SessionStart', async (_$: any, e: any) => (w.sessionStart ? w.sessionStart(e) : {}))
   on('classic.Stop', async () => ({}))
   on('session.end', async (_$: any, e: any) => ({ sessionId: e.sessionId }))
   on('session.measure', async (_$: any, e: any) => ({ changed: e.changed }))
@@ -359,6 +360,54 @@ test('after /clear events carry the new sid and session.switch names the old one
   expect(ofType(w, 'session.switch')[0].data).toEqual({ prev_sid: SID1, source: 'clear' })
   expect(ofType(w, 'heartbeat')[0].data).toEqual({ asks: [], compacting: false, agents: [] })
   expect(new Set(w.posts.map((p) => p.body.stream)).size).toBe(1)
+})
+
+// /clear takes a while between session.end{clear} (old sid) and session.switch (new sid; about
+// 660 ms in M-U1-4, the hooks beneath doing the relay's /clear work). No heartbeat goes out in
+// between: neither one due then nor one that was waiting on agent.list when session.end came.
+// Mutation gates: no switching state → the beat due at 20 s goes out under SID1; session.end
+// {clear} leaves the beat in flight valid → the one released at 10 s goes out under SID1.
+test('between session.end{clear} and session.switch no heartbeat goes out; after it they go on under the new sid', async ($, on) => {
+  let releaseList: (() => void) | undefined
+  let releaseSwitch: (() => void) | undefined
+  const w = evWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  w.agents = () => new Promise<any[]>((r) => { releaseList = () => r([]) })
+  await w.clock.advance(10_000) // the 10 s beat has begun: it waits on agent.list
+  expect(typeof releaseList).toBe('function')
+  await end($, 'clear', SID1)
+  w.sid = SID2
+  w.sessionStart = () => new Promise((r) => { releaseSwitch = () => r({}) })
+  const sw = $.classic.SessionStart({ source: 'clear' })
+  await w.clock.settle()
+  expect(typeof releaseSwitch).toBe('function') // the switch is held beneath the reporter
+  w.agents = []
+  releaseList!() // the beat begun before session.end goes on now
+  await w.clock.advance(10_000) // and the 20 s one comes due, the switch still held
+  expect(ofType(w, 'heartbeat')).toEqual([])
+  releaseSwitch!()
+  await sw
+  await w.clock.advance(10_150) // the 30 s beat
+  expect(evs(w).map((x) => [x.type, x.sid])).toEqual([
+    ['session.start', SID1], ['turn.start', SID1], ['session.end', SID1], ['session.switch', SID2], ['heartbeat', SID2],
+  ])
+  expect(ofType(w, 'heartbeat')[0].data).toEqual({ asks: [], compacting: false, agents: [] })
+})
+
+// Mutation gate: the switch reported only after a next(e) that resolved → no session.switch
+// and the heartbeat stays silent for good.
+test('a SessionStart that fails beneath still ends the switch: the heartbeat goes on under the new sid', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await end($, 'clear', SID1)
+  w.sid = SID2
+  w.sessionStart = () => { throw new Error('a hook beneath failed') }
+  await $.classic.SessionStart({ source: 'clear' }).catch(() => {})
+  await w.clock.advance(10_150)
+  expect(evs(w).map((x) => [x.type, x.sid])).toEqual([
+    ['session.start', SID1], ['session.end', SID1], ['session.switch', SID2], ['heartbeat', SID2],
+  ])
 })
 
 test('a startup SessionStart is not a switch; a resume is', async ($, on) => {

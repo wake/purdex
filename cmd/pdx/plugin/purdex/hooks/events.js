@@ -62,7 +62,8 @@ const ev = {
   asks: new Set(), // tool_use_ids waiting on the person
   compacting: false, // the main conversation is compacting
   beat: null, // the heartbeat timer
-  beatGen: 0, // bumped when the heartbeat stops: a beat begun before then lands nowhere
+  beatGen: 0, // bumped when the heartbeat stops or pauses: a beat begun before then lands nowhere
+  switching: false, // from session.end{clear|resume} to session.switch: the heartbeat pauses
 }
 
 const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
@@ -226,11 +227,12 @@ function beatTick($) {
   void beat($).catch((err) => log($, 'heartbeat failed: ' + String(err)))
 }
 
-// beat reads the agents and queues one heartbeat — unless the heartbeat stopped while it
-// waited on $.agent.list (a session.end, a new session.start): stopping cancels the timer,
-// not a beat already past its start, so that one checks again on its way out.
+// beat reads the agents and queues one heartbeat — unless the heartbeat stopped or paused
+// while it waited on $.agent.list (a session.end, a new session.start): stopping cancels the
+// timer, not a beat already past its start, so that one checks again on its way out. While
+// a /clear or a resume switches the session id, no beat goes out: it would carry the old id.
 async function beat($) {
-  if (!ev.on) return
+  if (!ev.on || ev.switching) return
   const gen = ev.beatGen
   let agents = []
   try {
@@ -257,6 +259,7 @@ function stopBeat() {
 async function startReporter($, e) {
   stopBeat()
   ev.on = false
+  ev.switching = false
   const cfg = parse(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
   const sock = isObject(cfg) && typeof cfg.mod_socket === 'string' ? cfg.mod_socket : ''
   if (!sock) return
@@ -280,23 +283,35 @@ async function startReporter($, e) {
 
 // sessionSwitch follows a /clear or a resume: the process goes on under a new session id,
 // in the same stream, its seq and heartbeat going on; the old conversation's mirror is gone.
+// It ends the pause session.end began, whatever happens here.
 async function sessionSwitch($, source) {
   if (!ev.on) return
-  const prev = ev.sid
-  ev.sid = String(await $.session.id())
-  ev.turnId = ''
-  ev.asks.clear()
-  ev.compacting = false
-  enqueue($, 'session.switch', { prev_sid: prev, source })
+  try {
+    const prev = ev.sid
+    ev.sid = String(await $.session.id())
+    ev.turnId = ''
+    ev.asks.clear()
+    ev.compacting = false
+    enqueue($, 'session.switch', { prev_sid: prev, source })
+  } finally {
+    ev.switching = false
+  }
 }
 
 // sessionEnd queues session.end under the ending session's own id and flushes inside the
 // hook. `session.end` also fires on /clear and /resume (reason clear / resume), after which
 // the same process and stream go on: the heartbeat stops only on the other reasons, before
-// the final flush, so nothing of it (not even a beat in flight) lands after session.end.
+// the final flush, so nothing of it (not even a beat in flight) lands after session.end. On
+// clear / resume it pauses until session.switch (M-U1-4: about 660 ms later), so no beat
+// goes out under the old id meanwhile, the one in flight included.
 async function sessionEnd($, e) {
   if (!ev.on) return
-  if (e.reason !== 'clear' && e.reason !== 'resume') stopBeat()
+  if (e.reason === 'clear' || e.reason === 'resume') {
+    ev.switching = true
+    ev.beatGen += 1
+  } else {
+    stopBeat()
+  }
   enqueue($, 'session.end', { reason: e.reason }, e.sessionId)
   await finalFlush($)
 }
@@ -409,10 +424,15 @@ async function onTurnComplete($, e, next) {
   return r
 }
 
+// onSessionSwitch reports the switch once the hooks beneath (the relay's /clear work) are
+// done with the event — and when one of them failed too: the session id changed whatever
+// they did, and the heartbeat stays paused until the switch is reported.
 async function onSessionSwitch($, e, next) {
-  const r = await next(e) // the engine has moved to the new session id
-  await sessionSwitch($, e.source)
-  return r
+  try {
+    return await next(e) // the engine has moved to the new session id
+  } finally {
+    await sessionSwitch($, e.source)
+  }
 }
 
 // onCompact wraps the relay's compact hook (registered before it, so outside): ok is false
