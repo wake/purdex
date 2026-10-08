@@ -67,6 +67,7 @@ type Module struct {
 	settingsSrc  resources.SettingsReader
 	noteMu       sync.Mutex
 	settingsNote string // the settings problem last logged, so a standing one logs once
+	listFailing  bool   // the lease listing is failing and has been logged
 
 	// runCtx ends when Stop is called; it is made in New so that a Stop
 	// before Start still keeps a later Start from running.
