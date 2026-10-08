@@ -84,8 +84,8 @@ export type TeamShadowStrength = 'thin' | 'medium' | 'thick'
 export type TeamShadowScope = 'all' | 'last'
 /** Colour depth of the shadow, as a percent of the team colour (lower = lighter). */
 export type TeamShadowDepth = 100 | 70 | 50 | 35
-/** A fainter companion shadow toward the bottom-left, drawn together with the main one. */
-export type TeamShadowCompanion = 'none' | 'half' | 'third'
+/** A very faint wash of the team label colour over every tab of the group. */
+export type TeamLabelTint = 'none' | 'faint' | 'light'
 /** Corner radius of the rail hook's elbow. */
 export type TeamRailCorner = 'square' | 'small' | 'large'
 
@@ -153,7 +153,7 @@ export interface TeamDisplay {
   shadowStrength: TeamShadowStrength
   shadowScope: TeamShadowScope
   shadowDepth: TeamShadowDepth
-  shadowCompanion: TeamShadowCompanion
+  labelTint: TeamLabelTint
   railCorner: TeamRailCorner
   openMark: TeamOpenMark
   tabMark: (tabId: string) => TeamTabMark | null

@@ -9,7 +9,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { User, UsersThree, BookmarkSimple, Hexagon, Diamond, Circle } from '@phosphor-icons/react'
 import { useThemeStore } from '../../stores/useThemeStore'
-import { groupBadge, groupCorner, groupEdge, groupHasCue, groupShadow, useTeamDisplay, type TeamBadgeIcon, type TeamCornerSize, type TeamShadowCompanion, type TeamShadowDepth, type TeamShadowStrength, type TeamTabMark } from './team-display'
+import { groupBadge, groupCorner, groupEdge, groupHasCue, groupShadow, useTeamDisplay, type TeamBadgeIcon, type TeamCornerSize, type TeamLabelTint, type TeamShadowDepth, type TeamShadowStrength, type TeamTabMark } from './team-display'
 
 /** Dark text on the pastel team colors, in both themes. */
 const LABEL_FG = '#14141f'
@@ -115,7 +115,7 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
   const shadow = groupShadow(mark.style)
   if (shadow) {
     if ((display?.shadowScope ?? 'all') === 'last' && !mark.last) return null
-    return <TeamTabShadow mark={mark} dir={shadow} strength={display?.shadowStrength ?? 'medium'} depth={display?.shadowDepth ?? 70} companion={display?.shadowCompanion ?? 'none'} />
+    return <TeamTabShadow mark={mark} dir={shadow} strength={display?.shadowStrength ?? 'medium'} depth={display?.shadowDepth ?? 70} tint={display?.labelTint ?? 'none'} />
   }
   const edge = groupEdge(mark.style)
   if (edge) {
@@ -183,7 +183,7 @@ const SHADOW_PX: Record<TeamShadowStrength, { off: number; soft: number }> = {
  * optionally with a tiny soft companion. No inset, no glow. Sizes stay inside the TabBar clip (about 2px above, 6px below).
  * In the light theme the pastel colors are darkened so the line reads. An overlay span, so the tab's own background stays.
  */
-function TeamTabShadow({ mark, dir, strength, depth, companion }: { mark: TeamTabMark; dir: 'top' | 'bottom' | 'diag' | 'top-right'; strength: TeamShadowStrength; depth: TeamShadowDepth; companion: TeamShadowCompanion }) {
+function TeamTabShadow({ mark, dir, strength, depth, tint }: { mark: TeamTabMark; dir: 'top' | 'bottom' | 'diag' | 'top-right'; strength: TeamShadowStrength; depth: TeamShadowDepth; tint: TeamLabelTint }) {
   const light = useThemeStore((s) => s.activeThemeId) === 'light'
   const { off, soft } = SHADOW_PX[strength]
   const base = light ? `color-mix(in oklab, ${mark.color}, black 25%)` : mark.color
@@ -192,21 +192,18 @@ function TeamTabShadow({ mark, dir, strength, depth, companion }: { mark: TeamTa
   const [ox, oy] = dir === 'top' ? [0, -off] : dir === 'bottom' ? [0, off] : dir === 'top-right' ? [off, -off] : [off, off]
   const parts = [`${ox}px ${oy}px 0 ${line}`]
   if (soft) parts.push(`${ox}px ${oy}px ${soft}px ${halo}`)
-  if (companion !== 'none') {
-    // Fainter bottom-left twin: the main line's colour mixed toward transparent by the chosen fraction.
-    const pct = companion === 'half' ? 50 : 33
-    parts.push(`${-off}px ${off}px 0 color-mix(in oklab, ${line} ${pct}%, transparent)`)
-    if (soft) parts.push(`${-off}px ${off}px ${soft}px color-mix(in srgb, ${halo} ${pct}%, transparent)`)
-  }
+  // Faint wash of the label colour; the light theme darkens the pastel first and needs a little more to show.
+  const tintPct = tint === 'none' ? 0 : tint === 'faint' ? (light ? 8 : 6) : (light ? 15 : 12)
+  const wash = tintPct ? `color-mix(in oklab, ${base} ${tintPct}%, transparent)` : undefined
   return (
     <span
       data-testid="team-tab-shadow"
       data-shadow={dir}
       data-shadow-strength={strength}
-      data-shadow-companion={companion}
+      data-label-tint={tint}
       aria-hidden="true"
       className="absolute inset-0 pointer-events-none z-10"
-      style={{ borderRadius: 6, boxShadow: parts.join(', ') }}
+      style={{ borderRadius: 6, boxShadow: parts.join(', '), background: wash }}
     />
   )
 }

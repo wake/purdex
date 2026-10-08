@@ -46,7 +46,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
   const [open, setOpen] = useState(true)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const theme = useThemeStore((s) => s.activeThemeId)
-  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, hookTop, cornerSize, badgeIcon, edgeWidth, bookmarkCut, bookmarkPos, shadowStrength, shadowScope, shadowDepth, shadowCompanion, railCorner, openMark, namesOff, target, log } = useProtoTeam()
+  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, hookTop, cornerSize, badgeIcon, edgeWidth, bookmarkCut, bookmarkPos, shadowStrength, shadowScope, shadowDepth, labelTint, railCorner, openMark, namesOff, target, log } = useProtoTeam()
   const members = Object.values(seats).filter((s) => s.role === 'member' && s.alive && s.teamKey)
   const tgt = target ? seats[target] : null
   const tgtTab = tgt ? tabOfSeat(tgt) : null
@@ -63,7 +63,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
     <div data-testid="proto-controls" className="fixed right-3 bottom-3 z-50 w-[min(380px,calc(100vw-24px))] max-h-[48vh] overflow-y-auto rounded-xl border border-border-default bg-surface-elevated shadow-2xl p-3 text-xs flex flex-col gap-2">
       <div className="flex items-center">
         <span className="font-semibold">原型控制</span>
-        <span className="ml-2 text-text-muted">team 介面 · 第五版 i</span>
+        <span className="ml-2 text-text-muted">team 介面 · 第五版 j</span>
         <button type="button" onClick={() => setOpen(false)} className="ml-auto text-text-muted hover:text-text-primary cursor-pointer">收起</button>
       </div>
       <Seg label="分頁位置" value={tabPosition} options={[['top', '上方'], ['left', '左側'], ['both', '兩側']]} onChange={(v) => useLayoutStore.getState().setTabPosition(v)} />
@@ -74,6 +74,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
       </div>
       <div className="text-[10.5px] text-text-muted font-semibold pt-0.5">比較用（之後定一種）</div>
       <Seg label="群組樣式" value={groupStyle} options={[['label', '只有標籤'], ['dot', '色點（對照）'], ['endcap', '收尾刻度'], ['gap', '間距分群'], ['sepcolor', '色分隔線'], ['rule', '細線'], ['combo', '色點＋間距＋收尾']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
+      <details data-testid="ctl-old" className="text-[11px]"><summary className="cursor-pointer text-text-muted">舊選項（已不採用）</summary><div className="flex flex-col gap-2 mt-1">
       <Seg label="斜角" value={groupStyle} options={[['corner-tr', '右上斜角'], ['corner-br', '右下斜角'], ['corner-tr-icon', '右上＋圖示'], ['corner-br-icon', '右下＋圖示'], ['badge-icon', '轉角徽章・純圖示'], ['badge-disc', '轉角徽章・圓底'], ['edge-arc', '右邊線・弧邊'], ['edge-short', '右邊線・短邊（對照）'], ['shadow-top', '帶色陰影・上'], ['shadow-bottom', '帶色陰影・下'], ['shadow-diag', '帶色陰影・斜向'], ['shadow-top-right', '帶色陰影・上右']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
       <Seg label="斜角大小" value={cornerSize} options={[['sm', '小'], ['md', '中（預設）'], ['lg', '大']]} onChange={(v) => useProtoTeam.setState({ cornerSize: v })} />
       <Seg label="徽章圖示" value={badgeIcon} options={[['bookmark', '書籤（預設）'], ['users', '人群'], ['hexagon', '六角'], ['diamond', '菱形'], ['dot', '實心點'], ['letter', '首字'], ['user', '舊：人形']]} onChange={(v) => useProtoTeam.setState({ badgeIcon: v })} />
@@ -84,11 +85,12 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         </>
       )}
       <Seg label="邊線粗細" value={String(edgeWidth)} options={[['1.5', '1.5px'], ['2', '2px（預設）']]} onChange={(v) => useProtoTeam.setState({ edgeWidth: v === '1.5' ? 1.5 : 2 })} />
+      </div></details>
       {groupStyle.startsWith('shadow-') && (
         <>
           <Seg label="陰影強度" value={shadowStrength} options={[['thin', '細（1px）'], ['medium', '中（1px＋柔邊）'], ['thick', '粗（2px＋柔邊）']]} onChange={(v) => useProtoTeam.setState({ shadowStrength: v })} />
           <Seg label="顏色深淺" value={String(shadowDepth)} options={[['100', '原色'], ['70', '淡（預設）'], ['50', '更淡'], ['35', '最淡']]} onChange={(v) => useProtoTeam.setState({ shadowDepth: Number(v) as 100 | 70 | 50 | 35 })} />
-          <Seg label="左下補色" value={shadowCompanion} options={[['none', '無'], ['half', '主色的一半（預設）'], ['third', '主色的三分之一']]} onChange={(v) => useProtoTeam.setState({ shadowCompanion: v })} />
+          <Seg label="標籤底色" value={labelTint} options={[['none', '無'], ['faint', '極淡（預設）'], ['light', '淡']]} onChange={(v) => useProtoTeam.setState({ labelTint: v })} />
           <Seg label="陰影範圍" value={shadowScope} options={[['all', '整組每個分頁'], ['last', '只最後一個分頁']]} onChange={(v) => useProtoTeam.setState({ shadowScope: v })} />
         </>
       )}
@@ -145,16 +147,11 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         {[0, 1, 2, 3].map((n) => <Btn key={n} testId={`ctl-sub-${n}`} disabled={!tgt} onClick={() => tgt && setSubagents(tgt.sessionId, n)}>{n}</Btn>)}
       </div>
       <details data-testid="ctl-notes" className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" open>
-        <summary className="cursor-pointer font-semibold text-text-primary">第五版（i）說明與待確認</summary>
+        <summary className="cursor-pointer font-semibold text-text-primary">第五版（j）說明與待確認</summary>
         <div className="mt-1 flex flex-col gap-1 leading-snug">
-          <div><b>這版改了</b>：①預設改成你選的六項；②上右陰影可加左下補色；③樹狀刻度轉角可調</div>
+          <div><b>這版改了</b>：①六題答案設成預設（整組、不融入、不加小點、純陰影）；②拿掉左下補色；③新增標籤底色（極淡）</div>
           <div className="font-semibold text-text-primary pt-0.5">待確認</div>
-          <div>1. 陰影範圍：上右陰影畫在群組每個分頁（目前），還是只畫最後一個？</div>
-          <div>2. 掛勾頂端：刻度從 lead 底色下緣開始，還是融入底色？</div>
-          <div>3. 開分頁標示：側欄已開分頁的 member 顆粒，底部要不要加小點？</div>
-          <div>4. 沒有 team 名時（「team 名」切「沒名字」）群組最前面的退回樣子可以嗎？</div>
-          <div>5. 選了陰影，書籤／斜角／右邊線三組選項視為作廢（除非要跟陰影並用）。</div>
-          <div>6. 淺色主題目前分頁的白字偏淡（App 既有），要不要順便修？</div>
+          <div>1. 標籤底色極淡的濃度可以嗎？</div>
         </div>
       </details>
       <div className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" data-testid="ctl-log">

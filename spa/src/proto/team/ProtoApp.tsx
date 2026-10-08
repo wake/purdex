@@ -102,7 +102,7 @@ export function ProtoApp() {
       shadowStrength: proto.shadowStrength,
       shadowScope: proto.shadowScope,
       shadowDepth: proto.shadowDepth,
-      shadowCompanion: proto.shadowCompanion,
+      labelTint: proto.labelTint,
       railCorner: proto.railCorner,
       openMark: proto.openMark,
       tabMark: (id) => marks.get(id) ?? null,

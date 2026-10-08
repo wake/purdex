@@ -10,7 +10,7 @@ import { getPrimaryPane } from '../../lib/pane-tree'
 import { compositeKey } from '../../lib/composite-key'
 import { createTab } from '../../types/tab'
 import type { ModelFamily } from '../../components/team/model-family'
-import type { TeamGroupStyle, TeamSidebarStyle, TeamCollapseStyle, TeamHookStyle, TeamOpenMark, TeamHookTop, TeamCornerSize, TeamBadgeIcon, TeamEdgeWidth, TeamBookmarkCut, TeamBookmarkPos, TeamShadowStrength, TeamShadowScope, TeamShadowDepth, TeamShadowCompanion, TeamRailCorner } from '../../components/team/team-display'
+import type { TeamGroupStyle, TeamSidebarStyle, TeamCollapseStyle, TeamHookStyle, TeamOpenMark, TeamHookTop, TeamCornerSize, TeamBadgeIcon, TeamEdgeWidth, TeamBookmarkCut, TeamBookmarkPos, TeamShadowStrength, TeamShadowScope, TeamShadowDepth, TeamLabelTint, TeamRailCorner } from '../../components/team/team-display'
 
 export interface ProtoSeat {
   sessionId: string
@@ -55,7 +55,7 @@ interface ProtoState {
   shadowStrength: TeamShadowStrength
   shadowScope: TeamShadowScope
   shadowDepth: TeamShadowDepth
-  shadowCompanion: TeamShadowCompanion
+  labelTint: TeamLabelTint
   railCorner: TeamRailCorner
   openMark: TeamOpenMark
   /** Prototype switch: hide every team name, to see the fallback. */
@@ -71,7 +71,7 @@ function loadPanelModes(): Record<string, 'full' | 'line'> {
   try { return JSON.parse(localStorage.getItem(PANEL_KEY) ?? '{}') } catch { return {} }
 }
 
-/** The user's picks (v5i) — the initial state and what 重設 restores. */
+/** The user's picks (v5j) — the initial state and what 重設 restores. */
 export const DEFAULT_OPTIONS = {
   beadHost: true,
   groupStyle: 'shadow-top-right' as TeamGroupStyle,
@@ -87,9 +87,9 @@ export const DEFAULT_OPTIONS = {
   shadowStrength: 'thin' as TeamShadowStrength,
   shadowScope: 'all' as TeamShadowScope,
   shadowDepth: 70 as TeamShadowDepth,
-  shadowCompanion: 'half' as TeamShadowCompanion,
+  labelTint: 'faint' as TeamLabelTint,
   railCorner: 'small' as TeamRailCorner,
-  openMark: 'tick' as TeamOpenMark,
+  openMark: 'none' as TeamOpenMark,
   namesOff: false,
 }
 
