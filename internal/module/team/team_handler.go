@@ -44,13 +44,8 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 // and pdx (spec §6.5), and lead/team is not a security boundary between
 // processes of one uid (P4-6 review, ruled by the coordinator).
 func (m *Module) callerTeam(w http.ResponseWriter, inbox string) (team.Team, bool) {
-	origin, ok, err := m.origins.ResolveOrigin(inbox)
-	if err != nil {
-		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry", nil)
-		return team.Team{}, false
-	}
+	origin, ok := m.callerOrigin(w, inbox)
 	if !ok {
-		m.writeErr(w, http.StatusBadRequest, team.ErrOriginUnknown, "origin_inbox is not a live Claude Code session on this host", nil)
 		return team.Team{}, false
 	}
 	t, found, err := m.store.LiveTeamByLead(origin.SessionID)
@@ -64,6 +59,21 @@ func (m *Module) callerTeam(w http.ResponseWriter, inbox string) (team.Team, boo
 		return team.Team{}, false
 	}
 	return t, true
+}
+
+// callerOrigin is the live session the inbox names; false means an error
+// was written: 503 (registry), 400 origin_unknown.
+func (m *Module) callerOrigin(w http.ResponseWriter, inbox string) (team.Origin, bool) {
+	origin, ok, err := m.origins.ResolveOrigin(inbox)
+	if err != nil {
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry", nil)
+		return team.Origin{}, false
+	}
+	if !ok {
+		m.writeErr(w, http.StatusBadRequest, team.ErrOriginUnknown, "origin_inbox is not a live Claude Code session on this host", nil)
+		return team.Origin{}, false
+	}
+	return origin, true
 }
 
 // memberView is a member row in the wire's shape. Context is the agent

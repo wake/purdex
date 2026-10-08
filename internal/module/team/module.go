@@ -216,6 +216,11 @@ type Module struct {
 	// tests end the team there and prove the write sees it. nil in production.
 	beforeSpawnStep    func(op spawnRow)
 	afterSpawnTeamRead func()
+	// afterTaskLookup, when set, runs in the task routes right after the
+	// handler found the task in the caller's scope and before the store call
+	// that reads or writes it; tests change the world there and prove the
+	// store checks the caller's right again. nil in production.
+	afterTaskLookup func()
 	// beforeCreateLock, when set, runs in handleCreate just before it takes
 	// createMu; tests turn the unattended switch on there and prove the
 	// create reads it under the lock. nil in production.
@@ -333,6 +338,12 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/team", m.handleTeam)          // P4-6, spec §7.3
 	mux.HandleFunc("GET "+RosterRoute, m.handleRosterGet)  // PL-1f′: every live team (D-U24-5)
 	mux.HandleFunc("POST /api/team/kill", m.handleKill)
+	// T-1b1: tasks (plan "Routes"); a lead sees its team's, a member its own.
+	mux.HandleFunc("POST /api/team/tasks", m.handleTaskCreate)
+	mux.HandleFunc("GET /api/team/tasks", m.handleTaskList)
+	mux.HandleFunc("GET /api/team/tasks/{id}", m.handleTaskGet)
+	mux.HandleFunc("POST /api/team/tasks/{id}/status", m.handleTaskStatus)
+	mux.HandleFunc("POST /api/team/tasks/{id}/reassign", m.handleTaskReassign)
 	// U23: the unattended switch (unattended spec D-U23-1, D-U23-6), the App's.
 	mux.HandleFunc("GET "+UnattendedRoute, m.handleUnattendedGet)
 	mux.HandleFunc("PUT "+UnattendedRoute, m.handleUnattendedPut)

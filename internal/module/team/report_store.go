@@ -263,6 +263,16 @@ const maxListReports = 200
 // keeps reports with created_at >= sinceMS; limit is clamped to 1..200 (0 or
 // less means 200). The slice is never nil.
 func (s *Store) ListReports(teamID string, taskSeq int, sinceMS int64, limit int) ([]ReportRow, error) {
+	return listReportsIn(context.Background(), s.db, teamID, taskSeq, sinceMS, limit)
+}
+
+// rowsQuerier is what *sql.DB and *sql.Tx share for a multi-row read.
+type rowsQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// listReportsIn is ListReports on a database or on an open transaction.
+func listReportsIn(ctx context.Context, db rowsQuerier, teamID string, taskSeq int, sinceMS int64, limit int) ([]ReportRow, error) {
 	if limit <= 0 || limit > maxListReports {
 		limit = maxListReports
 	}
@@ -274,7 +284,7 @@ func (s *Store) ListReports(teamID string, taskSeq int, sinceMS int64, limit int
 	}
 	q += ` ORDER BY created_at DESC, rowid DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list reports %s: %w", teamID, err)
 	}
