@@ -47,6 +47,12 @@ type hookEdge struct {
 	sid    string
 }
 
+// atMs is the edge's time in whole milliseconds, the precision of the mod's
+// event time (lights.StreamState.StatusEventAt). Every comparison of the two
+// uses it, so an event stamped with the millisecond the hook arrived in counts
+// as at or after the hook: a tie goes to the mod.
+func (e hookEdge) atMs() time.Time { return e.at.Truncate(time.Millisecond) }
+
 // setHookEdge records frameID's edge unless a newer one is already there
 // (hooks of one process are applied out of order now and then), the frame's
 // last SessionStart arrived at or after the hook (hookEdgeClearedAt: a Stop of
@@ -66,7 +72,7 @@ func (m *Module) setHookEdge(frameID string, e hookEdge) {
 	if cur, ok := m.hookEdge[frameID]; ok && cur.at.After(e.at) {
 		return
 	}
-	if st := m.modStreams[m.modBySID[e.sid]]; st != nil && st.SID == e.sid && !st.StatusEventAt.Before(e.at) {
+	if st := m.modStreams[m.modBySID[e.sid]]; st != nil && st.SID == e.sid && !st.StatusEventAt.Before(e.atMs()) {
 		return
 	}
 	if m.hookEdge == nil {
@@ -147,10 +153,10 @@ func (m *Module) noteHookEdge(req EventRequest, lifecycle agentpkg.LifecycleEven
 
 // wins reports whether e still decides the light of a pane showing a live
 // stream at now: it belongs to the conversation sid, it arrived after the last
-// event that moved the stream's light happened (statusEventAt), and it has not
-// run out.
+// event that moved the stream's light happened (statusEventAt; a tie in the
+// same millisecond goes to the mod, see atMs), and it has not run out.
 func (e hookEdge) wins(sid string, statusEventAt, now time.Time) bool {
-	return e.sid == sid && e.at.After(statusEventAt) && now.Sub(e.at) < hookEdgeTTL
+	return e.sid == sid && e.atMs().After(statusEventAt) && now.Sub(e.at) < hookEdgeTTL
 }
 
 // expireHookEdgesLocked drops the edges that ran out by now and marks their
@@ -179,7 +185,7 @@ func (m *Module) edgeSupersededLocked(sid string, prev, cur, now time.Time) bool
 		return false
 	}
 	for _, e := range m.hookEdge {
-		if e.sid == sid && !cur.Before(e.at) && now.Sub(e.at) < hookEdgeTTL {
+		if e.sid == sid && !cur.Before(e.atMs()) && now.Sub(e.at) < hookEdgeTTL {
 			return true
 		}
 	}
