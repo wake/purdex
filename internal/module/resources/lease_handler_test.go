@@ -470,3 +470,37 @@ func TestPoll_TimeoutReadsTheRowAgain(t *testing.T) {
 		t.Fatalf("resp %+v: the timeout answered with the row it read before waiting", got)
 	}
 }
+
+// Nothing may follow the JSON object.
+func TestLeases_TrailingJSONIsRefused(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	req := httptest.NewRequest(http.MethodPost, "/api/resources/leases",
+		strings.NewReader(`{"client_id":"`+cidA+`","kind":"test-full","holder_pid":1,"holder_start":"Thu Oct  9 00:00:00 2026"} {"x":1}`))
+	rec := httptest.NewRecorder()
+	f.mux.ServeHTTP(rec, req)
+	if rec.Code != 400 {
+		t.Errorf("code %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A process row is not replayed as a session-new request that names another
+// holder, nor a session-new row as a process request.
+func TestLeases_ReplayScopeMustMatch(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	f.m.procSnapshot = func(context.Context) (*iagent.ProcessSnapshot, error) { return nil, nil }
+	f.m.roots = oneRoot{resources.Root{SessionID: "sid-known", PID: 777, ProcStart: "Thu Oct  9 01:00:00 2026"}}
+	sn := resources.LeaseRequest{ClientID: cidA, Kind: "test-pkg", HolderPID: 4242, HolderStart: "Thu Oct  9 00:00:00 2026",
+		Scope: resources.ScopeSessionNew, SessionID: "sid-known"}
+	if rec := f.do(http.MethodPost, "/api/resources/leases", sn); rec.Code != 201 {
+		t.Fatal(rec.Body.String())
+	}
+	asProcess := sn
+	asProcess.Scope = resources.ScopeProcess
+	asProcess.HolderPID, asProcess.HolderStart = 777, "Thu Oct  9 01:00:00 2026" // the very process the row resolved to: only the scope differs
+	if rec := f.do(http.MethodPost, "/api/resources/leases", asProcess); rec.Code != http.StatusConflict {
+		t.Errorf("a session-new row replayed as a process request: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := f.do(http.MethodPost, "/api/resources/leases", sn); rec.Code != 200 {
+		t.Errorf("the same session-new request: %d %s", rec.Code, rec.Body.String())
+	}
+}

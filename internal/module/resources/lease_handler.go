@@ -53,6 +53,10 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+	if _, err := dec.Token(); err != io.EOF { // nothing may follow the object
+		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "invalid JSON: unexpected data after the object")
+		return
+	}
 	set := m.settings()
 	weight, code, detail := m.requestWeight(req, set)
 	switch {
@@ -171,9 +175,7 @@ func validHolderStart(s string) (code, detail string) {
 
 // replay answers a POST whose client id already has a row: the row, when the
 // request is the one it was made for (kind or weight, session, tool use, and
-// the holder for a process-scope request), else 409 client_id_reused. A
-// session-new request compares no holder: the row holds the agent process it
-// resolved to.
+// the holder unless the row is a session-new one), else 409 client_id_reused.
 func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.LeaseRequest, row leaseRow, set resources.Settings) {
 	same := row.SessionID == req.SessionID && row.ToolUseID == req.ToolUseID
 	if req.Kind != "" {
@@ -181,8 +183,14 @@ func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.Le
 	} else {
 		same = same && row.Kind == "" && row.Weight == req.Weight
 	}
-	if req.Scope != resources.ScopeSessionNew {
-		same = same && row.HolderPID == req.HolderPID && row.HolderStart == req.HolderStart
+	// A process request replays a process row only. A session-new request
+	// replays a session-new row (the resolved agent process is not compared)
+	// or, when the session was unknown, the process row that tracks its
+	// holder (which is compared).
+	switch {
+	case req.Scope == resources.ScopeSessionNew && row.Scope == resources.ScopeSessionNew:
+	case req.Scope == resources.ScopeSessionNew || req.Scope == "" || req.Scope == resources.ScopeProcess:
+		same = same && row.Scope == resources.ScopeProcess && row.HolderPID == req.HolderPID && row.HolderStart == req.HolderStart
 	}
 	if !same {
 		writeErr(w, http.StatusConflict, resources.ErrClientIDReused, "this client_id was used for a different request")
