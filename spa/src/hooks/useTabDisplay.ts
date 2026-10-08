@@ -77,7 +77,10 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
 
   // identity (icon) from the primary pane; the light from all panes
   const { agentIcon, tabIndicatorStyle } = useSessionAgentIndicator(hostId, sessionCode, { isTerminated })
-  const panes = useMemo(() => tabAgentPanes(tab.layout), [tab.layout])
+  // a hostless execution pane resolves to the first host: re-resolve when that changes (hosts load asynchronously)
+  const firstHostId = useHostStore((s) => s.hostOrder[0] ?? '')
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- firstHostId is an input of the resolution inside
+  const panes = useMemo(() => tabAgentPanes(tab.layout), [tab.layout, firstHostId])
   const agg = useTabAgentAggregate(panes)
   const agentStatus = agg.status
   const isUnread = agg.isUnread

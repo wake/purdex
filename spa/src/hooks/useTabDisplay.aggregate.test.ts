@@ -97,6 +97,19 @@ describe('useTabDisplay — the light over all panes (U1-3c)', () => {
     expect(view.result.current.isAwaitingApproval).toBe(false)
   })
 
+  it('a hostless execution pane re-resolves when the first host loads', () => {
+    useHostStore.setState({ hostOrder: [] })
+    const hostless: PaneLayout = { type: 'leaf', pane: { id: 'p2', content: { kind: 'execution', executionId: 'e1' } } }
+    const t = tab(split([tmux('p1', 'a'), hostless]))
+    const { result } = renderHook(() => useTabDisplay(t))
+    expect(result.current.agentStatus).toBeUndefined()
+    act(() => {
+      useAgentStore.setState({ statuses: { 'h1:exec-e1': 'error' } })
+      useHostStore.setState({ hostOrder: ['h1'] })
+    })
+    expect(result.current.agentStatus).toBe('error')
+  })
+
   it('an event for another session does not re-render the tab', () => {
     useAgentStore.setState({ statuses: { 'h1:a': 'idle', 'h1:b': 'running' } })
     let renders = 0
