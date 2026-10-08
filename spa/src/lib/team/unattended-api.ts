@@ -63,13 +63,16 @@ function viewOf(raw: unknown): UnattendedView {
   }
 }
 
-/** `GET /api/team/unattended`: the switch and one page of what the daemon approved since its last switch-on. */
-export async function getUnattended(hostId: string, q: UnattendedPageQuery = {}): Promise<UnattendedView> {
+/**
+ * `GET /api/team/unattended`: the switch and one page of what the daemon approved since its last switch-on. `signal`
+ * lets a caller that has given up (the panel's per-host timeout, or closing) cut the request instead of leaving it open.
+ */
+export async function getUnattended(hostId: string, q: UnattendedPageQuery = {}, signal?: AbortSignal): Promise<UnattendedView> {
   const params = new URLSearchParams()
   if (q.before !== undefined) params.set('before', String(q.before))
   if (q.limit !== undefined) params.set('limit', String(q.limit))
   const qs = params.toString()
-  return viewOf(await send<unknown>(hostId, qs === '' ? UNATTENDED_PATH : `${UNATTENDED_PATH}?${qs}`, { method: 'GET' }))
+  return viewOf(await send<unknown>(hostId, qs === '' ? UNATTENDED_PATH : `${UNATTENDED_PATH}?${qs}`, { method: 'GET', ...(signal ? { signal } : {}) }))
 }
 
 /**

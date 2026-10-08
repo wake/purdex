@@ -9,12 +9,13 @@ import { useUnattendedStore, type UnattendedHostEntry } from '../stores/useUnatt
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { ApprovalApiError } from '../lib/team/approval-api'
-import { putUnattended } from '../lib/team/unattended-api'
+import { getUnattended, putUnattended } from '../lib/team/unattended-api'
 import { handleUnattendedEvent } from '../lib/team/unattended-ws'
-import type { UnattendedView } from '../lib/team/types'
+import type { Approval, UnattendedView } from '../lib/team/types'
 
-vi.mock('../lib/team/unattended-api', () => ({ putUnattended: vi.fn() }))
+vi.mock('../lib/team/unattended-api', () => ({ putUnattended: vi.fn(), getUnattended: vi.fn() }))
 const mockedPut = vi.mocked(putUnattended)
+const mockedGet = vi.mocked(getUnattended)
 
 const A = 'host-a'
 const B = 'host-b'
@@ -27,6 +28,14 @@ const yes = (state: typeof ON): UnattendedHostEntry => ({ support: 'yes', state 
 const view = (on: boolean): UnattendedView => ({ on, since: 1, changed_at: 1, approved: [], truncated: false })
 
 const toggle = () => screen.getByTestId('unattended-toggle')
+const list = () => screen.getByTestId('unattended-list')
+const approved = (id: string, decidedAt: number): Approval => ({
+  id, kind: 'self_relay', host_id: 'd1',
+  origin: { session_id: `S-${id}`, ref: `_${id}`, name: `sess-${id}`, pid: 1, proc_start: 'x', cwd: '/w', tmux: 'p:@1.%1' },
+  payload: {}, state: 'approved', created_at: decidedAt - 1_000, deadline_at: decidedAt + 540_000, lease_until: decidedAt + 30_000,
+  decided_by: { kind: 'unattended', label: '無人值守模式' }, decided_at: decidedAt,
+})
+const rowTexts = () => screen.queryAllByTestId('unattended-row').map((r) => r.textContent)
 const flush = () => act(async () => { await new Promise<void>((r) => setTimeout(r, 0)) })
 
 function setup(shown: string[], runtime: Record<string, HostRuntime>, byHost: Record<string, UnattendedHostEntry>) {
@@ -36,6 +45,9 @@ function setup(shown: string[], runtime: Record<string, HostRuntime>, byHost: Re
 }
 
 beforeEach(() => {
+  // The panel's rows show the date unless it is today: pin today to the fixtures' day.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(2026, 9, 8, 12, 0))
   useI18nStore.getState().setLocale('zh-TW')
   useHostStore.setState({
     hosts: {
@@ -49,9 +61,11 @@ beforeEach(() => {
   useUnattendedStore.getState().reset()
   useUndoToast.setState({ toast: null, notice: null })
   mockedPut.mockReset()
+  mockedGet.mockReset()
+  mockedGet.mockResolvedValue({ ...view(true), approved: [] })
   mockedPut.mockImplementation(async (_hostId, on) => view(on))
 })
-afterEach(() => useHostStore.getState().reset())
+afterEach(() => { vi.useRealTimers(); useHostStore.getState().reset() })
 
 describe('UnattendedButton', () => {
   // An unreachable or unsupported shown host makes the button partial by definition (D-U23-5), so "nothing written to
@@ -185,5 +199,113 @@ describe('UnattendedButton', () => {
     const ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
     toggle().dispatchEvent(ev)
     expect(ev.defaultPrevented).toBe(true)
+  })
+
+  describe('the ▾ list (plan PU-2c)', () => {
+    it('▾ opens the panel and it fetches every reachable shown host once; the unreachable, the too old and the hidden are not asked', async () => {
+      setup([A, B, C, D], { [A]: up, [B]: up, [C]: { status: 'reconnecting' }, [D]: up }, { [A]: yes(ON), [B]: yes(OFF), [C]: yes(ON), [D]: { support: 'no' } })
+      mockedGet.mockImplementation(async (hostId) => ({ ...view(true), approved: hostId === A ? [approved('a1', new Date(2026, 9, 8, 9, 5).getTime())] : [] }))
+      render(<UnattendedButton />)
+      expect(screen.queryByTestId('unattended-panel')).toBeNull()
+      expect(mockedGet).not.toHaveBeenCalled()
+      fireEvent.click(list())
+      expect(await screen.findByTestId('unattended-panel')).toBeInTheDocument()
+      await waitFor(() => expect(rowTexts()).toEqual(['mlab：sess-a1 · 接力申請 · 09:05']))
+      expect(mockedGet.mock.calls.map(([h]) => [h])).toEqual([[A], [B]])
+      expect(mockedPut).not.toHaveBeenCalled()
+    })
+
+    it('a shown host that is unreachable is named in the panel; one whose daemon is too old is not', async () => {
+      setup([A, C, D], { [A]: up, [C]: { status: 'reconnecting' }, [D]: up }, { [A]: yes(ON), [C]: yes(ON), [D]: { support: 'no' } })
+      render(<UnattendedButton />)
+      fireEvent.click(list())
+      const lines = await screen.findAllByTestId('unattended-host-unreachable')
+      expect(lines.map((l) => l.textContent)).toEqual(['air19：無法連線，可能仍在自動通過'])
+      expect(mockedGet.mock.calls.map(([h]) => [h])).toEqual([[A]])
+    })
+
+    it('no host reachable: the panel lists the unreachable and shows no empty state', async () => {
+      setup([A, B], { [A]: { status: 'reconnecting' }, [B]: { status: 'reconnecting' } }, { [A]: yes(ON), [B]: yes(ON) })
+      render(<UnattendedButton />)
+      fireEvent.click(list())
+      await screen.findAllByTestId('unattended-host-unreachable')
+      await flush()
+      expect(screen.getAllByTestId('unattended-host-unreachable')).toHaveLength(2)
+      expect(screen.queryByTestId('unattended-empty')).toBeNull()
+      expect(mockedGet).not.toHaveBeenCalled()
+    })
+
+    it('the ▾ sits in the same no-drag wrapper as the toggle, with the accessible name and aria-expanded', async () => {
+      setup([A], { [A]: up }, { [A]: yes(OFF) })
+      render(<UnattendedButton />)
+      expect(list().closest('[data-testid="unattended-buttons"]')).toBe(toggle().closest('[data-testid="unattended-buttons"]'))
+      expect(list()).toHaveAccessibleName('無人值守期間自動通過的申請')
+      expect(list()).toHaveAttribute('aria-expanded', 'false')
+      fireEvent.click(list())
+      expect(list()).toHaveAttribute('aria-expanded', 'true')
+      await screen.findByTestId('unattended-empty')
+    })
+
+    it('▾ again closes the panel', async () => {
+      setup([A], { [A]: up }, { [A]: yes(OFF) })
+      render(<UnattendedButton />)
+      fireEvent.click(list())
+      await screen.findByTestId('unattended-panel')
+      fireEvent.mouseDown(list())
+      fireEvent.click(list())
+      expect(screen.queryByTestId('unattended-panel')).toBeNull()
+    })
+
+    it('switching off opens nothing', async () => {
+      setup([A, B], { [A]: up, [B]: up }, { [A]: yes(ON), [B]: yes(ON) })
+      render(<UnattendedButton />)
+      fireEvent.click(toggle())
+      await flush()
+      expect(mockedPut.mock.calls).toEqual([[A, false], [B, false]])
+      act(() => { handleUnattendedEvent(A, JSON.stringify({ op: 'changed', state: OFF })); handleUnattendedEvent(B, JSON.stringify({ op: 'changed', state: OFF })) })
+      await flush()
+      expect(screen.queryByTestId('unattended-panel')).toBeNull()
+      expect(mockedGet).not.toHaveBeenCalled()
+    })
+
+    it('switching on opens nothing either', async () => {
+      setup([A], { [A]: up }, { [A]: yes(OFF) })
+      render(<UnattendedButton />)
+      fireEvent.click(toggle())
+      await flush()
+      act(() => handleUnattendedEvent(A, JSON.stringify({ op: 'changed', state: ON })))
+      await flush()
+      expect(screen.queryByTestId('unattended-panel')).toBeNull()
+      expect(mockedGet).not.toHaveBeenCalled()
+    })
+
+    it('every open fetches afresh: what the daemon approved in between shows on the next open', async () => {
+      setup([A], { [A]: up }, { [A]: yes(ON) })
+      mockedGet.mockResolvedValueOnce({ ...view(true), approved: [approved('a1', new Date(2026, 9, 8, 9, 0).getTime())] })
+      render(<UnattendedButton />)
+      fireEvent.click(list())
+      await waitFor(() => expect(rowTexts()).toEqual(['mlab：sess-a1 · 接力申請 · 09:00']))
+      fireEvent.mouseDown(list())
+      fireEvent.click(list())
+      expect(screen.queryByTestId('unattended-panel')).toBeNull()
+      mockedGet.mockResolvedValueOnce({ ...view(true), approved: [approved('a2', new Date(2026, 9, 8, 10, 0).getTime()), approved('a1', new Date(2026, 9, 8, 9, 0).getTime())] })
+      fireEvent.click(list())
+      await waitFor(() => expect(rowTexts()).toEqual(['mlab：sess-a2 · 接力申請 · 10:00', 'mlab：sess-a1 · 接力申請 · 09:00']))
+      expect(mockedGet).toHaveBeenCalledTimes(2)
+    })
+
+    it('none: the ▾ is disabled', () => {
+      setup([], { [A]: up }, { [A]: yes(ON) })
+      render(<UnattendedButton />)
+      expect(list()).toBeDisabled()
+    })
+
+    it('a mouse press on the ▾ keeps focus where it was', () => {
+      setup([A], { [A]: up }, { [A]: yes(OFF) })
+      render(<UnattendedButton />)
+      const ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+      list().dispatchEvent(ev)
+      expect(ev.defaultPrevented).toBe(true)
+    })
   })
 })

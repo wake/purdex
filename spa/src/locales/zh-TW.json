@@ -2064,5 +2064,13 @@
   "unattended.tooltip.partial_unreachable": "無法連線：{{hosts}}",
   "unattended.tooltip.partial_unsupported": "daemon 版本過舊：{{hosts}}",
   "unattended.tooltip.none": "這個工作台沒有顯示中的主機",
-  "unattended.toast.failed": "無法切換無人值守模式：{{hosts}}"
+  "unattended.toast.failed": "無法切換無人值守模式：{{hosts}}",
+  "unattended.list": "無人值守期間自動通過的申請",
+  "unattended.panel.title": "無人值守期間自動通過",
+  "unattended.panel.empty": "自這次開啟無人值守以來，沒有自動通過的申請",
+  "unattended.panel.since": "自 {{time}} 起",
+  "unattended.panel.row": "{{host}}：{{session}} · {{kind}} · {{time}}",
+  "unattended.panel.more": "顯示更多",
+  "unattended.panel.host_failed": "{{host}}：無法讀取（{{code}}）",
+  "unattended.panel.host_unreachable": "{{host}}：無法連線，可能仍在自動通過"
 }

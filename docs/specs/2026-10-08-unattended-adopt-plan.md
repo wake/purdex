@@ -524,7 +524,7 @@ type UnattendedStore interface {
 
 **Interfaces.**
 - A second button `data-testid="unattended-list"` (Phosphor `CaretDown`) opens `UnattendedPanel` anchored on the pair.
-- `UnattendedPanel` (`FloatingPanel`, `placement="below"`, width 360): on open, `getUnattended(hostId)` (first page) for every reachable shown host; rows merged newest first: `<host>：<session> · <kind> · <time>` (`approvalSessionLabel`, `approvalKindLabel`, local `HH:mm`); empty → `unattended.panel.empty`; a host whose GET failed → one line naming it.
+- `UnattendedPanel` (`FloatingPanel`, `placement="below"`, width 360): on open, `getUnattended(hostId)` (first page) for every reachable shown host; rows merged newest first: `<host>：<session> · <kind> · <time>` (`approvalSessionLabel`, `approvalKindLabel`, the time of `decided_at`, else `created_at`: `HH:mm` today, `M/D HH:mm` on another day); empty → `unattended.panel.empty`; a host whose GET failed → one line naming it. A shown host that cannot be reached gets its unreachable line and no GET; when every shown host is unreachable the empty state is not shown; each host has 10 s to answer and commits on its own (rulings 39–41).
 - **「顯示更多」** (`data-testid="unattended-more"`): shown while any host answered `truncated`; a click fetches the next page of each such host (`before = next_before`) and merges it in order. It fetches afresh each time the panel opens.
 - Locale keys: `unattended.list`, `panel.title`, `panel.empty`, `panel.since`, `panel.more`, `panel.host_failed`.
 
@@ -1259,7 +1259,7 @@ No other new behaviour of Claude Code is relied on: an approved request needs no
 8. **無人值守通過 lead 申請時的 member 上限**＝min(lead 申請的數字, 3)，沒指定的申請視為 3；允許的根目錄照申請。（D-U24-7／U25）
 9. **不在範圍、照常等人**：worker 的工具權限核准、agent 的 AskUserQuestion 與權限詢問。（U23）
 10. **關掉**：只是不再自動核准；已經在等的申請照樣等人；關掉時**不會**自動跳出清單。（D-U23-6；決定 19）
-11. **「▾」期間自動通過清單**：只在點「▾」時打開。列出「最近一次打開以來」被自動核准的申請：主機、session 名稱、種類（lead 申請／接力申請／納入申請）、時間（時:分），多台主機合併、新的在上。每台一次讀 50 筆，還有更多時出現「顯示更多」；某台讀取失敗會寫出那台的名字；沒有任何一筆時顯示空清單的說明。下次再「打開」開關時，清單從新的打開時間重新算起。（D-U23-6；OQ3；決定 17）
+11. **「▾」無人值守期間自動通過的申請**：只在點「▾」時打開。列出「最近一次打開以來」被自動核准的申請：主機、session 名稱、種類（lead 申請／接力申請／納入申請）、時間（今天顯示 時:分，其他天顯示 月/日 時:分），多台主機合併、新的在上。每台一次讀 50 筆，還有更多時出現「顯示更多」；某台讀取失敗會寫出那台的名字；顯示中但連不上的主機會寫「無法連線，可能仍在自動通過」；沒有任何一筆時才顯示「自這次開啟無人值守以來，沒有自動通過的申請」。下次再「打開」開關時，清單從新的打開時間重新算起。（D-U23-6；OQ3；決定 17）
 12. **開關會留著**：daemon 重啟後保持；每台主機各自一份；不跟 Profile Sync 同步。（D-U23-7）
 13. **所有視窗同步**：任一視窗或其他裝置按下，所有視窗的按鈕立刻跟著變。（D-U23-6）
 14. **誰能打開**：`pdx` 沒有打開無人值守的指令，skill 也禁止 agent 去開；但同一個使用者帳號下的 agent 如果拿 token 直接呼叫 daemon，技術上仍能打開——這時每個視窗的按鈕都會變成「無人值守中」，daemon log 記下是哪個 App 標籤、從哪個位址開的。（D-U23-2；deviation 6）
@@ -1414,6 +1414,12 @@ Implementation rulings (U23 SPA, purdex-1f, 2026-10-08):
 35. **"Unreachable and too-old hosts are never written" is tested on a partial press**, not an off press: under D-U23-5 a shown unreachable or too-old host makes the button partial, so an off button with such a host cannot exist. → PU-2b tests.
 36. **Open question 1's "no toast" covers only a close nobody pressed** (the WS `closed` of a daemon approval). When a person's own approve or deny loses to the daemon, the 409 `already_decided` path still tells them who decided, as for any other lost race. → PU-2b; `approval-decide.ts`.
 37. **The tooltips name the request kinds as the spec does** ("become lead", "self relay") and say that tool permissions and agent questions still wait (lead's wording). → PU-2b locales.
+38. **The panel's words say "while unattended"**, not a bare "期間": the ▾ is 「無人值守期間自動通過的申請」, the title 「無人值守期間自動通過」, the empty state 「自這次開啟無人值守以來，沒有自動通過的申請」 (lead's wording). → PU-2c locales.
+39. **A shown host that is unreachable is named without a GET** (「{{host}}：無法連線，可能仍在自動通過」): it may still be approving. When every shown host is unreachable the empty state is not shown; a host whose daemon is too old is not listed (it never auto-approves). → PU-2c `UnattendedPanel`.
+40. **Each host's read commits on its own, with a 10 s limit** (code `timeout`, the request aborted): one host that never answers cannot hold the others' rows or 「顯示更多」; `aria-busy` holds only until the first host answers, and the empty state waits for every host. → PU-2c.
+41. **A row's time is HH:mm today and M/D HH:mm on another day** (`decided_at`, else `created_at`), like the panel's 「自 {{time}} 起」 (the earliest `since` of the hosts). → PU-2c.
+42. **A GET answer with `list_failed: true` is that host's failure**, never an empty page (the daemon's GET does not send it today; defensive). → PU-2c.
+43. **The ▾ is disabled when no host is shown; the hosts read are fixed when the panel opens** (a connection change while it is open does not refetch); **a failed 「顯示更多」 keeps the loaded rows and the cursor** so a retry continues. → PU-2c.
 
 ## Codex review of this plan
 
