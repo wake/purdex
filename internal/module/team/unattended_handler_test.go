@@ -289,6 +289,29 @@ func TestUnattendedPut_AuditLineAndChangedBy(t *testing.T) {
 	}
 }
 
+// D-U23-6: changed is never lost silently. A subscriber that opted into
+// nothing and whose buffer is full is closed by it (Done, deregistered),
+// so its client reconnects for the snapshot instead of showing the switch
+// off; a subscriber with room gets it. Mutation gate: broadcast changed
+// best-effort (BroadcastEvent) → red.
+func TestUnattendedPut_ChangedClosesASubscriberThatCannotTakeIt(t *testing.T) {
+	f := newFixture(t)
+	f.realUnattended()
+	full := f.core.Events.AddTestSubscriber()
+	t.Cleanup(func() { f.core.Events.RemoveTestSubscriber(full) })
+	for full.TrySend([]byte(`{"type":"fill"}`)) {
+	}
+	f.switchTo(true)
+	select {
+	case <-full.Done():
+	default:
+		t.Fatal("a subscriber that could not take changed was kept without it")
+	}
+	if ops, _ := f.streamOf(); !reflect.DeepEqual(ops, []string{"team.unattended changed"}) {
+		t.Fatalf("events on the subscriber with room = %v, want changed", ops)
+	}
+}
+
 // The switch's route answers 503 once the module is stopping, writing
 // nothing.
 func TestUnattendedPut_StoppingIs503(t *testing.T) {

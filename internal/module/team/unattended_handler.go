@@ -137,7 +137,11 @@ func unattendedEvent(op string, st team.UnattendedState) (core.HostEvent, error)
 
 // broadcastUnattended queues {op, state} to every subscriber, under
 // eventMu like broadcast, so it never lands between a snapshot's read and
-// its send.
+// its send. It is strict for every subscriber (BroadcastStrict): one that
+// cannot take it is closed and reconnects for the snapshot, since a
+// dropped changed would leave its window showing the wrong switch with
+// nothing to correct it (D-U23-6). A switch changes rarely, so the cost is
+// a reconnect for a client that was already behind.
 func (m *Module) broadcastUnattended(op string, st team.UnattendedState) {
 	ev, err := unattendedEvent(op, st)
 	if err != nil {
@@ -146,7 +150,7 @@ func (m *Module) broadcastUnattended(op string, st team.UnattendedState) {
 	}
 	m.eventMu.Lock()
 	defer m.eventMu.Unlock()
-	m.core.Events.BroadcastEvent(ev)
+	m.core.Events.BroadcastStrict(ev)
 }
 
 // sendUnattendedSnapshot queues {op:"snapshot", state} to a new subscriber
