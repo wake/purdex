@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -485,4 +486,23 @@ func TestListAutoApproved_PageQueryUsesTheDecidedIndex(t *testing.T) {
 		}
 	}
 	t.Fatalf("plan %q does not use approval_requests_state_decided", plan)
+}
+
+// A decided_by_json that is no JSON object — malformed, SQL NULL, a
+// scalar, an array — is not the daemon's: the row is skipped, and the
+// list still answers the unattended rows around it.
+func TestListAutoApproved_MalformedDeciderIsSkipped(t *testing.T) {
+	s := openTestStore(t)
+	closedAt(t, s, "new", 3000, team.UnattendedClient(), team.StateApproved)
+	closedAt(t, s, "old", 1000, team.UnattendedClient(), team.StateApproved)
+	for i, raw := range []any{"{", nil, `"unattended"`, `42`, `["unattended"]`, `[{"kind":"unattended"}]`} {
+		id := fmt.Sprintf("bad-%d", i)
+		closedAt(t, s, id, int64(2000+i), team.UnattendedClient(), team.StateApproved)
+		if _, err := s.db.Exec(`UPDATE approval_requests SET decided_by_json = ? WHERE id = ?`, raw, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listPage(t, s, 1, 0, 50, []string{"new", "old"}, false)
+	listPage(t, s, 1, 0, 1, []string{"new"}, true)
+	listPage(t, s, 1, 3000, 1, []string{"old"}, false)
 }

@@ -92,11 +92,13 @@ func sameSelfRelay(op team.RelayOp, a team.Approval) error {
 
 // autoApprovedQuery is the rows the daemon approved itself (decided_by
 // kind unattended) decided at or after a since, then tail; its arguments
-// are since, team.ClientKindUnattended, then tail's.
+// are since, team.ClientKindUnattended, then tail's. A decided_by_json
+// that is not valid JSON never reaches json_extract (which would fail the
+// whole list): it is no decider of the daemon's, so the row is skipped.
 func autoApprovedQuery(tail string) string {
 	return `SELECT ` + selectCols + ` FROM approval_requests
 		WHERE state = 'approved' AND decided_at >= ?
-		  AND json_extract(decided_by_json, '$.kind') = ? ` + tail
+		  AND CASE WHEN json_valid(decided_by_json) THEN json_extract(decided_by_json, '$.kind') END = ? ` + tail
 }
 
 // The tails of ListAutoApproved's three reads: a page (before, before,
