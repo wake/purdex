@@ -105,7 +105,8 @@ func (m *Module) emitSession(kind slotKind, code, sessionName string, build buil
 //     failed: an unknown projection must not overwrite it with a guess);
 //  4. take the next seq and broadcast; a frame that could not be sent (no
 //     bus) gives the seq back;
-//  5. record the frame as the session's light baseline.
+//  5. record the frame as the session's light baseline (a non-tmux frame, kind
+//     kindNonTmux, as the code's last frame instead: nontmux_last.go).
 //
 // An empty code sends nothing: the in-memory view is still synced (steps
 // 1-3), as the callers did before the slot existed.
@@ -147,6 +148,9 @@ func (m *Module) emitSessionWith(kind slotKind, code, sessionName string, build 
 		return false
 	}
 	m.recordEmittedLights(sessionName, p, n)
+	if kind == kindNonTmux {
+		m.noteNonTmuxLocked(code, n)
+	}
 	return true
 }
 
