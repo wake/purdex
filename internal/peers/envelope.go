@@ -44,6 +44,10 @@ type Envelope struct {
 	UnknownRegistryFiles []string     `json:"unknown_registry_files"` // never null; alive-but-undecodable registry files (Diagnosis.BlockingUnknown)
 	TitlesUnavailable    bool         `json:"titles_unavailable"`     // the title store could not be read: every row renders without its title. Addresses are unaffected
 	LineageUnavailable   bool         `json:"lineage_unavailable"`    // the relay lineage could not be read: rows carry no previous_refs, and a ref that matches no live row is not-ready rather than not-found (lead-team-relay spec §8.4)
+	// ExecutionsUnavailable: the execution list could not be read, so no
+	// execution row is listed, and an address that matches no row is
+	// not-ready rather than not-found (peer mailbox spec §4.1).
+	ExecutionsUnavailable bool `json:"executions_unavailable,omitempty"`
 }
 
 // AddressVersionV5 is Envelope.AddressVersion for Peer Address v5 (peer
@@ -74,6 +78,8 @@ type HostResult struct {
 	UnknownRegistryFiles []string     `json:"unknown_registry_files"` // never null
 	TitlesUnavailable    bool         `json:"titles_unavailable"`     // copied from the host's Envelope
 	LineageUnavailable   bool         `json:"lineage_unavailable"`    // copied from the host's Envelope
+	// ExecutionsUnavailable is copied from the host's Envelope.
+	ExecutionsUnavailable bool `json:"executions_unavailable,omitempty"`
 }
 
 // AllEnvelope is GET /api/peers?scope=all's body.
