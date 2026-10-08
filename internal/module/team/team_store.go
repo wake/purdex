@@ -187,6 +187,25 @@ func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (a 
 		return team.Approval{}, false, false, fmt.Errorf("approve self relay %s: begin: %w", id, err)
 	}
 	defer tx.Rollback()
+	n, memberCancelled, err := s.closeSelfRelayApprovedIn(tx, id, c, sessionID)
+	if err == nil {
+		a, _, err = getRowIn(tx, id)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		return team.Approval{}, false, false, fmt.Errorf("approve self relay %s: %w", id, err)
+	}
+	return a, n == 1, memberCancelled, nil
+}
+
+// closeSelfRelayApprovedIn is CloseSelfRelayApproved's statements on the
+// caller's transaction — the click's (through CloseSelfRelayApproved) and
+// the unattended create's (CreateSelfRelayApproved) — so both run the same
+// SQL. n is the CAS's RowsAffected (1: this close won); memberCancelled
+// says the row and its awaiting op were cancelled instead (U13).
+func (s *Store) closeSelfRelayApprovedIn(tx *sql.Tx, id string, c Close, sessionID string) (n int64, memberCancelled bool, err error) {
 	// A write first, so SQLite takes the write lock before the member read.
 	_, err = tx.Exec(`UPDATE approval_requests SET id = id WHERE id = ?`, id)
 	var member bool
@@ -196,7 +215,6 @@ func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (a 
 	if member {
 		c = Close{State: team.StateCancelled, DecidedAt: c.DecidedAt}
 	}
-	var n int64
 	if err == nil {
 		n, err = closeRowIn(tx, id, c, "", 0)
 	}
@@ -207,16 +225,10 @@ func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (a 
 		_, err = tx.Exec(`UPDATE relay_ops SET state = ?, reason = ?, updated_at = ? WHERE request_id = ? AND state = ?`,
 			string(team.RelayCancelled), team.ErrMemberRelayIsLeads, c.DecidedAt, id, string(team.RelayAwaitingApproval))
 	}
-	if err == nil {
-		a, _, err = getRowIn(tx, id)
-	}
-	if err == nil {
-		err = tx.Commit()
-	}
 	if err != nil {
-		return team.Approval{}, false, false, fmt.Errorf("approve self relay %s: %w", id, err)
+		return 0, false, err
 	}
-	return a, n == 1, member && n == 1, nil
+	return n, member && n == 1, nil
 }
 
 // isLiveMemberIn reports, on q (a transaction's read under its write lock),
@@ -275,41 +287,14 @@ func (s *Store) CloseLeadApproved(id string, c Close, t team.Team) (team.Approva
 	fail := func(err error) (team.Approval, bool, error) {
 		return team.Approval{}, false, fmt.Errorf("approve lead %s: %w", id, err)
 	}
-	if c.State != team.StateApproved || c.Grant == nil {
-		return fail(fmt.Errorf("a team needs an approval with a grant (state %q, grant set %v)", c.State, c.Grant != nil))
-	}
-	if t.ID != id || t.RequestID != id {
-		return fail(fmt.Errorf("team id %q and request id %q must both be the request's id", t.ID, t.RequestID))
-	}
-	grantJSON, err := json.Marshal(t.Grant)
-	if err != nil {
-		return fail(fmt.Errorf("encode grant: %w", err))
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fail(fmt.Errorf("begin: %w", err))
 	}
 	defer tx.Rollback()
-	// The first statement is a write, so SQLite takes the write lock at once.
-	n, err := closeRowIn(tx, id, c, "", 0)
+	n, err := closeLeadApprovedIn(tx, id, c, t)
 	if err != nil {
 		return fail(err)
-	}
-	if n == 1 {
-		// No nested teams, re-checked under the write lock (P4-3 review H1):
-		// the origin may have become a member since its request was created.
-		if member, err := isLiveMemberIn(tx, t.LeadSessionID); err != nil {
-			return fail(err)
-		} else if member {
-			return fail(ErrMemberCannotLead)
-		}
-		if _, err := tx.Exec(`INSERT INTO teams (`+teamCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '')`,
-			t.ID, t.HostID, t.LeadSessionID, t.LeadRef, string(grantJSON), t.RequestID, t.CreatedAt); err != nil {
-			if strings.Contains(err.Error(), "teams.lead_session_id") { // the partial unique index teams_one_live_per_lead
-				return fail(ErrLeadHasTeam)
-			}
-			return fail(fmt.Errorf("insert team: %w", err))
-		}
 	}
 	a, _, err := getRowIn(tx, id) // ErrNoSuchApproval (wrapped) for an unknown id
 	if err != nil {
@@ -319,6 +304,49 @@ func (s *Store) CloseLeadApproved(id string, c Close, t team.Team) (team.Approva
 		return fail(fmt.Errorf("commit: %w", err))
 	}
 	return a, n == 1, nil
+}
+
+// closeLeadApprovedIn is CloseLeadApproved's statements on the caller's
+// transaction — the click's (through CloseLeadApproved) and the unattended
+// create's (CreateApproved) — so both run the same SQL: the open CAS and,
+// only when it changed the row, the member re-check and the team insert.
+// n is the CAS's RowsAffected (1: this close won). A misuse (see
+// CloseLeadApproved), ErrLeadHasTeam and ErrMemberCannotLead are errors;
+// the caller rolls back on any error, so nothing is written.
+func closeLeadApprovedIn(tx *sql.Tx, id string, c Close, t team.Team) (int64, error) {
+	if c.State != team.StateApproved || c.Grant == nil {
+		return 0, fmt.Errorf("a team needs an approval with a grant (state %q, grant set %v)", c.State, c.Grant != nil)
+	}
+	if t.ID != id || t.RequestID != id {
+		return 0, fmt.Errorf("team id %q and request id %q must both be the request's id", t.ID, t.RequestID)
+	}
+	grantJSON, err := json.Marshal(t.Grant)
+	if err != nil {
+		return 0, fmt.Errorf("encode grant: %w", err)
+	}
+	// In CloseLeadApproved this is the first statement, a write, so SQLite
+	// takes the write lock at once.
+	n, err := closeRowIn(tx, id, c, "", 0)
+	if err != nil {
+		return 0, err
+	}
+	if n == 1 {
+		// No nested teams, re-checked under the write lock (P4-3 review H1):
+		// the origin may have become a member since its request was created.
+		if member, err := isLiveMemberIn(tx, t.LeadSessionID); err != nil {
+			return 0, err
+		} else if member {
+			return 0, ErrMemberCannotLead
+		}
+		if _, err := tx.Exec(`INSERT INTO teams (`+teamCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, 0, '')`,
+			t.ID, t.HostID, t.LeadSessionID, t.LeadRef, string(grantJSON), t.RequestID, t.CreatedAt); err != nil {
+			if strings.Contains(err.Error(), "teams.lead_session_id") { // the partial unique index teams_one_live_per_lead
+				return 0, ErrLeadHasTeam
+			}
+			return 0, fmt.Errorf("insert team: %w", err)
+		}
+	}
+	return n, nil
 }
 
 // LiveTeamByLead returns the live team (ended_at = 0) the session leads, if

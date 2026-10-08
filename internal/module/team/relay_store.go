@@ -85,12 +85,17 @@ func scanRelayOp(r rowScanner) (team.RelayOp, error) {
 
 // CreateRelayOp inserts op as given (the caller sets State and times). A
 // duplicate id is an error: op ids are daemon-minted UUIDs, never retried.
-func (s *Store) CreateRelayOp(op team.RelayOp) error {
+func (s *Store) CreateRelayOp(op team.RelayOp) error { return insertRelayOpIn(s.db, op) }
+
+// insertRelayOpIn is CreateRelayOp on ex (the database, or a transaction:
+// CreateSelfRelayApproved). ErrRelayOpOpen (wrapped) when the session
+// already has a non-terminal op.
+func insertRelayOpIn(ex dbtx, op team.RelayOp) error {
 	var used any
 	if op.UsedPercentage != nil {
 		used = *op.UsedPercentage
 	}
-	if _, err := s.db.Exec(`
+	if _, err := ex.Exec(`
 		INSERT INTO relay_ops (id, kind, host_id, session_id, new_session_id, ref, new_ref, team_id, request_id,
 			state, reason, handoff_path, pruned, used_percentage, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
