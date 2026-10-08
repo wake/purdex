@@ -143,6 +143,15 @@ describe('listAllExecutions in delta mode (#1866)', () => {
     expect(r!.epoch).toBe('E1')
   })
 
+  it('upTo is the trusted next_cursor even when the page tail row is dropped as malformed', async () => {
+    vi.mocked(api.listExecutions)
+      .mockResolvedValueOnce({ items: [row('a'), { id: 'b' }], next_cursor: 'b', pdx: stamp(10) } as never)
+      .mockResolvedValueOnce({ items: [row('c')], next_cursor: '', pdx: stamp(20) } as never)
+    const r = await listAllExecutions('h1', { includeArchived: false, delta: true })
+    expect(r!.dropped).toBe(1)
+    expect(r!.pages[0]).toEqual({ ver: 10, upTo: 'b' })
+  })
+
   it('an empty final page still ends the walk at infinity', async () => {
     vi.mocked(api.listExecutions)
       .mockResolvedValueOnce({ items: [row('a')], next_cursor: 'a', pdx: stamp(1) } as never)

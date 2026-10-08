@@ -102,7 +102,7 @@ export async function listAllExecutions(
     dropped += p.dropped
     const ver = delta && p.pdx ? p.pdx.ver : 0
     const last = p.nextCursor === ''
-    pages.push({ ver, upTo: last ? UP_TO_END : (p.items.at(-1)?.id ?? p.nextCursor) })
+    pages.push({ ver, upTo: last ? UP_TO_END : p.nextCursor })
     if (last) return { items, pages, epoch, dropped, truncated: false, stuck: false, stuckPage: null }
     if (requested.has(p.nextCursor)) return { items, pages, epoch, dropped, truncated: false, stuck: true, stuckPage: page + 1 }
     cursor = p.nextCursor
