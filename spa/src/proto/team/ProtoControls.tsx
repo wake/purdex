@@ -63,7 +63,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
     <div data-testid="proto-controls" className="fixed right-3 bottom-3 z-50 w-[min(380px,calc(100vw-24px))] max-h-[48vh] overflow-y-auto rounded-xl border border-border-default bg-surface-elevated shadow-2xl p-3 text-xs flex flex-col gap-2">
       <div className="flex items-center">
         <span className="font-semibold">原型控制</span>
-        <span className="ml-2 text-text-muted">team 介面 · 第五版 j</span>
+        <span className="ml-2 text-text-muted">team 介面 · 第五版 k（定稿）</span>
         <button type="button" onClick={() => setOpen(false)} className="ml-auto text-text-muted hover:text-text-primary cursor-pointer">收起</button>
       </div>
       <Seg label="分頁位置" value={tabPosition} options={[['top', '上方'], ['left', '左側'], ['both', '兩側']]} onChange={(v) => useLayoutStore.getState().setTabPosition(v)} />
@@ -147,11 +147,11 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         {[0, 1, 2, 3].map((n) => <Btn key={n} testId={`ctl-sub-${n}`} disabled={!tgt} onClick={() => tgt && setSubagents(tgt.sessionId, n)}>{n}</Btn>)}
       </div>
       <details data-testid="ctl-notes" className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" open>
-        <summary className="cursor-pointer font-semibold text-text-primary">第五版（j）說明與待確認</summary>
+        <summary className="cursor-pointer font-semibold text-text-primary">第五版（k，定稿）說明與待確認</summary>
         <div className="mt-1 flex flex-col gap-1 leading-snug">
-          <div><b>這版改了</b>：①六題答案設成預設（整組、不融入、不加小點、純陰影）；②拿掉左下補色；③新增標籤底色（極淡）</div>
+          <div><b>這版改了</b>：有陰影的群組分頁之間、群組最後一個分頁右邊，分隔線都隱藏（群組前後原本就不畫）。標籤底色定為極淡。</div>
           <div className="font-semibold text-text-primary pt-0.5">待確認</div>
-          <div>1. 標籤底色極淡的濃度可以嗎？</div>
+          <div>1. 沒有標籤時群組最前面顯示什麼：A lead 完整標題（建議）／B 只放團隊色人群圖示／C 截斷加「…」</div>
         </div>
       </details>
       <div className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" data-testid="ctl-log">

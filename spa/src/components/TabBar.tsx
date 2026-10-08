@@ -6,7 +6,7 @@ import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
-import { useTeamDisplay, groupHasCue, type TeamTabMark } from './team/team-display'
+import { useTeamDisplay, groupHasCue, groupShadow, type TeamTabMark } from './team/team-display'
 import { TeamGroupLabel, TeamTabGroupFrame } from './team/TeamTabGroup'
 
 interface Props {
@@ -152,9 +152,11 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                     <Fragment key={tab.id}>
                       {i > 0 && (() => {
                         const gm = team?.tabMark(tab.id)
-                        return gm && groupHasCue(gm.style, 'sepcolor')
-                          ? <div data-testid="team-group-sep" className="w-px h-3.5 flex-shrink-0 mx-px" style={{ background: gm.color }} />
-                          : <TabSeparator show={shouldShowSeparator(list[i - 1], tab)} />
+                        if (gm && groupHasCue(gm.style, 'sepcolor')) {
+                          return <div data-testid="team-group-sep" className="w-px h-3.5 flex-shrink-0 mx-px" style={{ background: gm.color }} />
+                        }
+                        // A shadowed group's tabs already read as separate buttons (user, v5k): no separator line inside it.
+                        return <TabSeparator show={!(gm && groupShadow(gm.style)) && shouldShowSeparator(list[i - 1], tab)} />
                       })()}
                       <SortableTab
                         tab={tab}
@@ -188,7 +190,11 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
               </SortableContext>
             </div>
             {/* Trailing separator + add button (outside SortableContext, inside scroll) */}
-            {normalTabs.length > 0 && <TabSeparator show={(() => { const lastId = normalTabs[normalTabs.length - 1]?.id; return lastId !== activeTabId && lastId !== hoveredTabId })()} />}
+            {normalTabs.length > 0 && <TabSeparator show={(() => {
+              const lastId = normalTabs[normalTabs.length - 1]?.id
+              const gm = lastId ? team?.tabMark(lastId) : null
+              return lastId !== activeTabId && lastId !== hoveredTabId && !(gm && groupShadow(gm.style))
+            })()} />}
             <button
               onClick={onAddTab}
               className="flex items-center justify-center w-7 h-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-white/10 cursor-pointer flex-shrink-0"
