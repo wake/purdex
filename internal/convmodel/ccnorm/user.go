@@ -116,6 +116,11 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 	if !ok {
 		return
 	}
+	if n.sub && !n.briefDone {
+		// a subagent's first prompt is the brief its parent gave it (ruling D7)
+		n.briefDone = true
+		src, from = convmodel.SourceTask, nil
+	}
 	n.addUser(ti, l.uuid, l.at, src, from, text, blocks, off)
 	n.handoff(ti, l.str(l.Entrypoint), l.at, off)
 	n.attribute(ti, l.at)

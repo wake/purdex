@@ -120,6 +120,7 @@ type rawLine struct {
 	AITitle            json.RawMessage // "aiTitle"
 	ToolUseResult      json.RawMessage // "toolUseResult" (steps, U1-4c)
 	ToolDenialKind     json.RawMessage // "toolDenialKind": why a tool result is a denial
+	AgentID            json.RawMessage // "agentId": the agent a subagent file's rows belong to
 	DurationMS         json.RawMessage // "durationMs": turn_duration
 
 	// Derived once by decodeLine.
@@ -165,6 +166,7 @@ func decodeLine(line []byte) (rawLine, bool) {
 		AITitle:            o["aiTitle"],
 		ToolUseResult:      o["toolUseResult"],
 		ToolDenialKind:     o["toolDenialKind"],
+		AgentID:            o["agentId"],
 		DurationMS:         o["durationMs"],
 	}
 	l.typ, _ = jsonString(l.Type)
