@@ -146,6 +146,18 @@ func checkLeaseSize(kind string, weight int, wait time.Duration, clientID string
 	return o, ""
 }
 
+// psStartToUTC turns a start text as ps prints it, the local clock of loc, into
+// the registry's form the daemon stores and reads: UTC. The CLI does it because
+// it is the one that knows which zone the text is in; a daemon under another
+// TZ (launchd) would read the same text as another instant.
+func psStartToUTC(s string, loc *time.Location) (string, error) {
+	t, err := time.ParseInLocation(ipeers.ProcStartLayout, s, loc)
+	if err != nil || t.IsZero() {
+		return "", fmt.Errorf("not a ps start time: %q", s)
+	}
+	return t.UTC().Format(ipeers.ProcStartLayout), nil
+}
+
 func validLeaseClientID(id string) bool { return ipeers.IsUUID(id) && id[14] == '4' }
 
 func validHolderStartText(s string) bool {
@@ -195,6 +207,11 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 		}
 		o.holderStart = start
 	}
+	wireStart, err := psStartToUTC(o.holderStart, time.Local)
+	if err != nil {
+		return acquireOutcome{failOpen: "holder_start_unreadable"}
+	}
+	o.holderStart = wireStart
 	req := resources.LeaseRequest{ClientID: o.clientID, Kind: o.kind, Weight: o.weight, WaitS: int(o.wait / time.Second),
 		SessionID: o.session, HolderPID: o.holderPID, HolderStart: o.holderStart, ToolUseID: o.toolUse}
 	if o.session != "" {

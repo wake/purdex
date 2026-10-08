@@ -511,10 +511,9 @@ func TestLeases_ReplayScopeMustMatch(t *testing.T) {
 // whichever way the lease was made, on a host that is not on UTC (TestMain:
 // UTC+8, as mlab). End to end through POST, the sweeper and the measuring.
 func TestLeases_HolderStartAcrossTheTwoClocks(t *testing.T) {
-	started := time.Date(2026, 10, 9, 4, 19, 49, 0, time.Local) // 04:19:49 on the host's clock = 20:19:49 UTC
-	psText := started.Format("Mon Jan _2 15:04:05 2006")        // what ps prints, and what the CLI sends
-	registryText := started.UTC().Format("Mon Jan _2 15:04:05 2006")
-	if psText == registryText {
+	started := time.Date(2026, 10, 9, 4, 19, 49, 0, time.Local)      // 04:19:49 on the host's clock = 20:19:49 UTC
+	registryText := started.UTC().Format("Mon Jan _2 15:04:05 2006") // the form on the wire and in the row, for both sources
+	if registryText == started.Format("Mon Jan _2 15:04:05 2006") {
 		t.Fatal("the fixture must not be on UTC")
 	}
 	type source struct {
@@ -524,15 +523,15 @@ func TestLeases_HolderStartAcrossTheTwoClocks(t *testing.T) {
 		proc []resources.Proc // what runs under the lease: the holder itself, or (session-new) a child of the agent
 	}
 	for _, src := range []source{
-		{"process scope (the CLI's ps text)", func(f *routeFix) resources.LeaseResponse {
+		{"process scope (the CLI's UTC text)", func(f *routeFix) resources.LeaseResponse {
 			return decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", resources.LeaseRequest{
-				ClientID: cidA, Kind: "test-pkg", HolderPID: 4242, HolderStart: psText}))
+				ClientID: cidA, Kind: "test-pkg", HolderPID: 4242, HolderStart: registryText}))
 		}, 4242, []resources.Proc{cpuProc(4242, 1, 10)}},
 		{"session-new (the registry's text)", func(f *routeFix) resources.LeaseResponse {
 			f.m.procSnapshot = func(context.Context) (*iagent.ProcessSnapshot, error) { return nil, nil }
 			f.m.roots = oneRoot{resources.Root{SessionID: "sid-known", PID: 777, ProcStart: registryText}}
 			return decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", resources.LeaseRequest{
-				ClientID: cidB, Kind: "test-pkg", HolderPID: 1, HolderStart: psText, Scope: resources.ScopeSessionNew, SessionID: "sid-known"}))
+				ClientID: cidB, Kind: "test-pkg", HolderPID: 1, HolderStart: registryText, Scope: resources.ScopeSessionNew, SessionID: "sid-known"}))
 		}, 777, []resources.Proc{cpuProc(777, 1, 0), cpuProc(778, 777, 10)}},
 	} {
 		// The same process: kept, and measured.

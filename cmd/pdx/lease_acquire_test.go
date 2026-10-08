@@ -140,7 +140,7 @@ func TestAcquire_GrantedImmediately(t *testing.T) {
 	}
 	p := posts[0]
 	if p.ClientID != leaseCID || p.Kind != "test-full" || p.WaitS != 120 || p.Scope != resources.ScopeProcess ||
-		p.HolderPID != 4242 || p.HolderStart != leaseWhen || p.ToolUseID != "tu1" || p.SessionID != "" {
+		p.HolderPID != 4242 || p.HolderStart != wantWire(t, leaseWhen) || p.ToolUseID != "tu1" || p.SessionID != "" {
 		t.Errorf("request = %+v", p)
 	}
 }
@@ -361,6 +361,40 @@ func TestAcquire_WaitIsRoundedUpToWholeSeconds(t *testing.T) {
 		posts, _, _ := d.snapshot()
 		if len(posts) != 1 || posts[0].WaitS != want {
 			t.Errorf("--wait %s: wait_s = %+v, want %d", wait, posts, want)
+		}
+	}
+}
+
+// wantWire is what the CLI sends for a ps start text: the same instant in the
+// registry's UTC form.
+func wantWire(t *testing.T, ps string) string {
+	t.Helper()
+	w, err := psStartToUTC(ps, time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// The CLI turns the ps text (its own local clock) into UTC before it sends it,
+// so a daemon under another TZ cannot read it as another instant.
+func TestPsStartToUTC(t *testing.T) {
+	for _, c := range []struct {
+		zone *time.Location
+		in   string
+		want string
+	}{
+		{time.FixedZone("UTC+8", 8*3600), "Fri Oct  9 04:19:49 2026", "Thu Oct  8 20:19:49 2026"},
+		{time.FixedZone("UTC-5", -5*3600), "Thu Oct  8 20:19:49 2026", "Fri Oct  9 01:19:49 2026"},
+		{time.UTC, "Thu Oct  8 20:19:49 2026", "Thu Oct  8 20:19:49 2026"},
+	} {
+		if got, err := psStartToUTC(c.in, c.zone); err != nil || got != c.want {
+			t.Errorf("%s in %s: %q %v, want %q", c.in, c.zone, got, err, c.want)
+		}
+	}
+	for _, bad := range []string{"", "soon", "2026-10-09 04:19:49"} {
+		if _, err := psStartToUTC(bad, time.UTC); err == nil {
+			t.Errorf("%q accepted", bad)
 		}
 	}
 }

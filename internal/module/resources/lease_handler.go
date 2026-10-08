@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -114,7 +113,7 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	row := leaseRow{
 		ID: uuid.NewString(), ClientID: req.ClientID, State: resources.StateWaiting, Kind: req.Kind, Weight: weight,
-		SessionID: req.SessionID, HolderPID: req.HolderPID, Scope: req.Scope,
+		SessionID: req.SessionID, HolderPID: req.HolderPID, HolderStart: req.HolderStart, Scope: req.Scope,
 		ToolUseID: req.ToolUseID, CreatedAt: now.UnixMilli(), DeadlineAt: now.Add(wait).UnixMilli(),
 		LeaseUntil: now.Add(resources.LeaseS * time.Second).UnixMilli(),
 	}
@@ -135,10 +134,6 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	}
-
-	if row.Scope == resources.ScopeProcess {
-		row.HolderStart, _ = psStartToCanonical(req.HolderStart) // validated above
 	}
 
 	m.stateMu.Lock()
@@ -172,24 +167,10 @@ func validHolderStart(s string) (code, detail string) {
 	if s == "" {
 		return resources.ErrBadRequest, "holder_start is required"
 	}
-	if _, err := psStartToCanonical(s); err != nil {
-		return resources.ErrBadRequest, "holder_start must be a process start time as ps prints it"
+	if t, err := ipeers.ParseProcStart(s); err != nil || t.IsZero() {
+		return resources.ErrBadRequest, "holder_start must be a process start time in the registry's UTC form"
 	}
 	return "", ""
-}
-
-// psStartToCanonical turns a start text as ps prints it, the machine's local
-// clock (the CLI's, from the process table), into the one form resources.db
-// keeps in holder_start: the registry's, UTC (ipeers.ProcStartLayout). The
-// session-new lease takes its holder from the registry and stores that text as
-// it is; every read of holder_start (the sweeper, the measuring) is
-// ipeers.ParseProcStart. Two sources, two clocks, one stored form.
-func psStartToCanonical(s string) (string, error) {
-	t, err := time.ParseInLocation(ipeers.ProcStartLayout, s, time.Local)
-	if err != nil || t.IsZero() {
-		return "", errors.New("not a ps start time")
-	}
-	return t.UTC().Format(ipeers.ProcStartLayout), nil
 }
 
 // replay answers a POST whose client id already has a row: the row, when the
@@ -209,8 +190,7 @@ func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.Le
 	switch {
 	case req.Scope == resources.ScopeSessionNew && row.Scope == resources.ScopeSessionNew:
 	case req.Scope == resources.ScopeSessionNew || req.Scope == "" || req.Scope == resources.ScopeProcess:
-		canon, err := psStartToCanonical(req.HolderStart) // compared in the form it is stored in
-		same = same && err == nil && row.Scope == resources.ScopeProcess && row.HolderPID == req.HolderPID && row.HolderStart == canon
+		same = same && row.Scope == resources.ScopeProcess && row.HolderPID == req.HolderPID && row.HolderStart == req.HolderStart
 	}
 	if !same {
 		writeErr(w, http.StatusConflict, resources.ErrClientIDReused, "this client_id was used for a different request")

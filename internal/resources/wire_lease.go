@@ -51,12 +51,16 @@ const (
 // LeaseRequest is the body of POST /api/resources/leases. Exactly one of Kind
 // and Weight is set.
 type LeaseRequest struct {
-	ClientID    string `json:"client_id"`
-	Kind        string `json:"kind,omitempty"`
-	Weight      int    `json:"weight,omitempty"`
-	WaitS       int    `json:"wait_s,omitempty"`
-	SessionID   string `json:"session_id,omitempty"`
-	HolderPID   int    `json:"holder_pid"`
+	ClientID  string `json:"client_id"`
+	Kind      string `json:"kind,omitempty"`
+	Weight    int    `json:"weight,omitempty"`
+	WaitS     int    `json:"wait_s,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	HolderPID int    `json:"holder_pid"`
+	// HolderStart is when the holder process started, in the registry's form:
+	// UTC, "Mon Jan _2 15:04:05 2006". The CLI turns the ps text it reads
+	// (the machine's local clock) into this before it sends it; the daemon does not
+	// guess a zone for a text without one.
 	HolderStart string `json:"holder_start,omitempty"`
 	Scope       string `json:"scope,omitempty"`
 	ToolUseID   string `json:"tool_use_id,omitempty"`
