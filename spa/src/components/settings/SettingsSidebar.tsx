@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { PuzzlePiece } from '@phosphor-icons/react'
+import { ModuleOwnedPuzzleIcon } from './ModuleOwnedPuzzleIcon'
 import { listContributions } from '../../lib/settings-contribution-registry'
 import {
   isModuleOwnedContribution,
@@ -90,12 +90,7 @@ export function SettingsSidebar({ activeSection, onSelectSection }: Props) {
             >
               <span className="flex-1">{t(row.labelKey)}</span>
               {row.moduleOwned && (
-                <PuzzlePiece
-                  size={12}
-                  weight="bold"
-                  className="flex-shrink-0 text-text-muted"
-                  aria-hidden
-                />
+                <ModuleOwnedPuzzleIcon />
               )}
             </button>
           </div>
