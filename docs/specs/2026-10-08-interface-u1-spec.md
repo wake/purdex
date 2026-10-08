@@ -102,6 +102,8 @@ POST /mod/v1/events
   "cc_version": "2.1.293",             // $.session.version()
   "mod_version": "1.0.0-alpha.596",    // the extracted VERSION file; "" if unreadable
   "dropped_total": 0,                  // events this stream lost so far (queue overflow + 400-rejected batches), cumulative
+  "cwd": "/Users/wake/Workspace/x",    // where the session runs (session.start's cwd, kept across /clear and resume)
+  "interactive": true,                 // the reporter runs only for interactive sessions (U4 may send false)
   "events": [ { "seq": 1, "at": 1791409762960, "sid": "<lowercase uuid>",
                 "type": "turn.start", "data": { … } } ] }
 ```
@@ -113,6 +115,7 @@ POST /mod/v1/events
 - Events whose `seq ≤` the stream's last applied seq are skipped (retries). `seq > last + 1` increments the stream's `gaps` and is applied — except the first batch of a stream the registry has never seen (after a daemon restart a live stream resumes at its current seq; that is not a gap).
 - Unknown `type`s are accepted, counted under `unknown`, and not delivered (a newer mod against an older daemon).
 - `at` is the mod's `Date.now()` in ms; the daemon keeps it but orders only by seq.
+- `cwd` and `interactive` (U1-2a-1) are on every batch, so a daemon that restarts under a live stream — which never sees that stream's `session.start` again — knows both from its first batch. The registry copies a non-empty `cwd` and a `true` `interactive` from every envelope; a batch without them (an older mod) leaves what `session.start` set. Both are optional on the wire (absent → `""` / `false`).
 
 ### 6.3 Event types v1
 
@@ -129,7 +132,7 @@ POST /mod/v1/events
 | `compact.start` / `compact.end` | `session.compact` around `next` | `{trigger}` / `{ok}` |
 | `usage` | `session.measure` | `{context{tokens?, window, percent?}, rate_limits[{kind, percent_used, resets_at?}], cost_usd?, changed[]}` |
 | `background` | `classic.Stop` | `{tasks[{id, type, status}], crons}` (shell tasks included; the daemon decides what to show) |
-| `heartbeat` | `$.clock.every(10 000)` | `{turn_id?, asks[tool_use_id], compacting, agents[{id, status}]}` (`agents` from `$.agent.list()`) |
+| `heartbeat` | `$.clock.every(10 000)` | `{turn_id?, asks[tool_use_id], compacting, agents[{id, status}], error, background?}` (`agents` from `$.agent.list()`). `error` (always present, U1-2a-1): the last main `turn.complete` had `reason: "error"`; cleared by the next main `turn.start`, a `session.switch` and a new `session.start`; a subagent turn never sets it. `background` (U1-2a-1, when a `classic.Stop` has been seen): the same `{tasks, crons}` the last `background` event carried; kept across a `session.switch` (same process), forgotten by a new `session.start`. Together they restore, after a daemon restart, the parts of the live state no later event repeats |
 
 Conversation content (`turn.step`, prompt text, `session.append`) is **not** in v1; U1-5 adds it as new types.
 

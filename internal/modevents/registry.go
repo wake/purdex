@@ -35,8 +35,8 @@ type StreamInfo struct {
 	Stream       string
 	Agent        string
 	SID          string // the latest event's sid (moves on session.switch)
-	CWD          string // from session.start
-	Interactive  bool   // a session.start was seen
+	CWD          string // from session.start or any batch's envelope
+	Interactive  bool   // a session.start was seen, or an envelope said so
 	CCVersion    string
 	ModVersion   string
 	FirstSeen    time.Time // set once, when the registry first heard of the stream
@@ -145,6 +145,16 @@ func (r *Registry) Apply(b Batch) (ack int64, err error) {
 	in.Agent, in.CCVersion, in.ModVersion = b.Agent, b.CCVersion, b.ModVersion
 	in.LastSeen = now
 	in.DroppedTotal = max(in.DroppedTotal, b.DroppedTotal)
+	// Every batch of a U1-2a-1 mod names the cwd and that the session is
+	// interactive, so a stream first heard after a daemon restart (no
+	// session.start) has both from its first delivery. An older mod sends
+	// neither, and what session.start set stays.
+	if b.CWD != "" {
+		in.CWD = b.CWD
+	}
+	if b.Interactive {
+		in.Interactive = true
+	}
 	var out []delivery
 	for _, e := range b.Events {
 		if e.Seq <= in.LastSeq {

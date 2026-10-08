@@ -23,8 +23,13 @@ type Batch struct {
 	ModVersion string `json:"mod_version"`
 	// DroppedTotal is cumulative for the stream (never reset by the mod);
 	// the registry keeps the maximum it has seen.
-	DroppedTotal int64   `json:"dropped_total"`
-	Events       []Event `json:"events"`
+	DroppedTotal int64 `json:"dropped_total"`
+	// CWD and Interactive come with every batch from a U1-2a-1 mod, so
+	// a daemon that restarts under a running stream learns both without
+	// its session.start. An older mod sends neither (zero values).
+	CWD         string  `json:"cwd"`
+	Interactive bool    `json:"interactive"`
+	Events      []Event `json:"events"`
 }
 
 // Event is one mod event. Seq is per stream and strictly increasing; At

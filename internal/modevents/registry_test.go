@@ -476,6 +476,69 @@ func TestBySID_FollowsSwitch(t *testing.T) {
 	}
 }
 
+// After a daemon restart a live stream resumes with heartbeats only: no
+// session.start, yet the envelope names its cwd and that it is
+// interactive, from the first delivery on.
+// Mutation gate: drop the envelope copy in Apply → red.
+func TestApply_EnvelopeFillsCwdAndInteractive(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	var mu sync.Mutex
+	var seen []StreamInfo
+	reg.Subscribe(func(info StreamInfo, _ Event) {
+		mu.Lock()
+		seen = append(seen, info)
+		mu.Unlock()
+	})
+	const s = "streamRST"
+	b := mkBatch(s, 0, mkEvent(41, TypeHeartbeat), mkEvent(42, TypeHeartbeat))
+	b.CWD, b.Interactive = "/work/repo", true
+	if _, err := reg.Apply(b); err != nil {
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("cwd / interactive = %q / %v, want /work/repo / true", info.CWD, info.Interactive)
+	}
+	if info, ok := reg.BySID(sidA); !ok || info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("BySID = %+v, %v", info, ok)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Fatalf("delivered %d events, want 2", len(seen))
+	}
+	for i, info := range seen {
+		if info.CWD != "/work/repo" || !info.Interactive {
+			t.Fatalf("delivery %d carried cwd / interactive = %q / %v", i, info.CWD, info.Interactive)
+		}
+	}
+}
+
+// A batch without the envelope fields (an older mod) keeps what
+// session.start set; an envelope with them agrees with it.
+func TestApply_EnvelopeWithoutCwdKeepsSessionStartCwd(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	const s = "streamOLD"
+	start := mkEvent(1, TypeSessionStart)
+	start.Data = json.RawMessage(`{"cwd":"/work/repo","surface":"terminal"}`)
+	if _, err := reg.Apply(mkBatch(s, 0, start)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Apply(mkBatch(s, 0, mkEvent(2, TypeHeartbeat))); err != nil { // cwd "", interactive false
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("after an envelope without the fields: cwd / interactive = %q / %v", info.CWD, info.Interactive)
+	}
+	b := mkBatch(s, 0, mkEvent(3, TypeHeartbeat))
+	b.CWD, b.Interactive = "/work/repo", true
+	if _, err := reg.Apply(b); err != nil {
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("after a full envelope: cwd / interactive = %q / %v", info.CWD, info.Interactive)
+	}
+}
+
 func TestStreams_SortedByLastSeen(t *testing.T) {
 	clk := newFakeClock()
 	reg := NewRegistry(clk.Now)
