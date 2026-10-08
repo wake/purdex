@@ -20,6 +20,7 @@ import (
 	"github.com/wake/purdex/internal/agent/probe"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/execstat"
+	modeventsmod "github.com/wake/purdex/internal/module/modevents"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -90,6 +91,9 @@ type Module struct {
 	// listFramesFn is a test seam for liveFrameProjections' frames.ListAll
 	// (fault injection); nil in production.
 	listFramesFn func() ([]store.Frame, error)
+
+	// modLights is the mod event overlay's state (modlights.go).
+	modLights
 }
 
 // Test seams for Module.New. framesInitFn failure is fatal (hook processing
@@ -142,6 +146,7 @@ func New(events *store.AgentEventStore) (*Module, error) {
 		testObservers:      make(map[string]*testObserver),
 		pathHintDedup:      NewPathHintDedupCache(5 * time.Second),
 		pathHintBuffer:     NewPathHintRingBuffer(200),
+		modLights:          newModLights(),
 	}
 	if traces != nil {
 		m.traceSink = newHookTraceSink(traces)
@@ -206,12 +211,13 @@ func New(events *store.AgentEventStore) (*Module, error) {
 }
 
 func (m *Module) Name() string           { return "agent" }
-func (m *Module) Dependencies() []string { return []string{"session"} }
+func (m *Module) Dependencies() []string { return []string{"session", modeventsmod.ServiceName} }
 
 // Init retrieves the SessionProvider, initializes the provider registry,
 // and registers CC and Codex providers.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	m.initModLights(c)
 	svc, ok := c.Registry.Get(session.RegistryKey)
 	if !ok {
 		log.Printf("[agent] warning: session provider not found")
@@ -334,6 +340,8 @@ func (m *Module) Start(_ context.Context) error {
 	log.Printf("[agent] start: %s", st)
 	log.Print(startExecLine(execBase))
 
+	m.startModLights()
+
 	if m.core != nil {
 		m.core.Events.OnSubscribe(func(sub *core.EventSubscriber) {
 			m.sendSnapshot(sub)
@@ -354,6 +362,7 @@ func (m *Module) getUploadDir() string {
 
 // Stop cancels all active Activity watchers and resets transient state.
 func (m *Module) Stop(_ context.Context) error {
+	m.stopModLights()
 	if m.sweepCancel != nil {
 		m.sweepCancel()
 		m.sweepWG.Wait()
