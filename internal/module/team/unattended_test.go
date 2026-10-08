@@ -1,12 +1,14 @@
 package teammod
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -226,6 +228,29 @@ func TestRelayBegin_UnattendedMemberPausedOrOffRaisesNothing(t *testing.T) {
 	}
 }
 
+// logs captures the module's log lines.
+func (f *fixture) logs() func() []string {
+	var mu sync.Mutex
+	var lines []string
+	f.m.logf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	return func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), lines...) }
+}
+
+// countLines is how many lines hold sub.
+func countLines(lines []string, sub string) int {
+	n := 0
+	for _, l := range lines {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
+}
+
 // sweep runs the switch-on sweep as its caller does: under createMu.
 func (f *fixture) sweep() (int, int) {
 	f.m.createMu.Lock()
@@ -265,13 +290,15 @@ func TestCreate_SwitchOnRacesCreateNeverOpen(t *testing.T) {
 
 // U25 / D-U24-7 (decision 22): every daemon approval of a lead request
 // grants min(requested, 3) members — unspecified counts as 3 — with the
-// requested roots; at create and through the switch-on sweep (the tick's
-// path is PU-1b3's) share unattendedGrant. Mutation gate: return the payload's
-// max_members uncapped → red (rows 5 and 8).
+// requested roots; at create, through the switch-on sweep and through the
+// tick share unattendedGrant. Mutation gates: return the payload's
+// max_members uncapped → red (rows 5 and 8); leave the tick's grant
+// uncapped → the tick rows 5 and 8 red.
 func TestUnattendedLeadGrant_IsMinOfRequestAndThree(t *testing.T) {
 	paths := map[string]func(f *fixture){
 		"create": func(f *fixture) { f.unatt.set(true); f.create(uid(1)) },
 		"sweep":  func(f *fixture) { f.create(uid(1)); f.unatt.set(true); f.sweep() },
+		"tick":   func(f *fixture) { f.create(uid(1)); f.unatt.set(true); f.m.tick() },
 	}
 	for _, c := range []struct{ asked, want int }{{0, 3}, {1, 1}, {2, 2}, {3, 3}, {5, 3}, {8, 3}} {
 		for name, run := range paths {
@@ -311,6 +338,122 @@ func TestSweepUnattended_ApprovesOpenLeadAndSelfRelayLeavesHookKinds(t *testing.
 	}
 }
 
+// Decision 5 / rule 6: what the switch-on sweep could not approve (a
+// transient failure) the next tick approves. Mutation gate: drop
+// reconcileUnattended from tick → red.
+func TestTick_ApprovesWhatTheSwitchOnSweepLeftOpen(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	relay := f.begin("sid-2")
+	f.unatt.set(true)
+	failed := false
+	f.m.beforeAutoApprove = func(a team.Approval) error {
+		if a.ID == relay.RequestID && !failed {
+			failed = true
+			return errors.New("database is locked")
+		}
+		return nil
+	}
+	if approved, pending := f.sweep(); approved != 1 || pending != 1 {
+		t.Fatalf("sweep = (%d, %d), want (1, 1)", approved, pending)
+	}
+	f.m.tick()
+	a, _, _ := f.m.store.Get(relay.RequestID)
+	assertDecidedByUnattended(t, a, f.clock.Load())
+	if f.op(relay.Op.ID).State != team.RelayClaimed {
+		t.Fatal("the self relay's op was not claimed")
+	}
+}
+
+// Rule 6's other half: with the switch off the tick approves nothing.
+func TestTick_UnattendedOffApprovesNothing(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.m.tick()
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("state %s, want open", a.State)
+	}
+}
+
+// Rule 6: a row a rule refuses (its origin became a member) stays open,
+// and the refusal is logged once, not once per tick; a tick that approved
+// nothing logs no summary. Once the row is approved and closed its entry
+// goes, so a later refusal of the same id would log again. Mutation
+// gates: drop the per-row set → red (three lines); log the tick's summary
+// always → red.
+func TestTick_RuleRefusalLogsOnce(t *testing.T) {
+	f := newFixture(t)
+	logs := f.logs()
+	f.create(uid(1))
+	f.makeMember("sid-1")
+	f.unatt.set(true)
+	for range 3 {
+		f.m.tick()
+	}
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("state %s, want open", a.State)
+	}
+	if n := countLines(logs(), "not auto-approved"); n != 1 {
+		t.Fatalf("%d refusal lines in %q, want 1", n, logs())
+	}
+	if n := countLines(logs(), "unattended sweep (tick)"); n != 0 {
+		t.Fatalf("%d tick summaries in %q, want 0", n, logs())
+	}
+}
+
+// The per-row set forgets a row once it is no longer open (here it was
+// cancelled), at the next sweep: it does not grow with every refused row
+// of the daemon's life.
+func TestTick_RefusalSetForgetsClosedRows(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.makeMember("sid-1")
+	f.unatt.set(true)
+	f.m.tick()
+	if _, ok := f.m.notAutoApproved[uid(1)]; !ok {
+		t.Fatal("the refusal was not remembered")
+	}
+	f.unatt.set(false)
+	relay := f.begin("sid-2") // an open row that keeps the next tick sweeping
+	if code, body := f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil); code != http.StatusOK {
+		t.Fatalf("cancel: %d %s", code, body)
+	}
+	f.unatt.set(true)
+	f.m.tick()
+	if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateApproved {
+		t.Fatalf("relay row %s, want approved", a.State)
+	}
+	if len(f.m.notAutoApproved) != 0 {
+		t.Fatalf("set = %v, want empty", f.m.notAutoApproved)
+	}
+}
+
+// Rule 7: Start sweeps when the switch is on (the daemon restarted while
+// requests were open), before its sweeper's first tick. Mutation gate:
+// drop the boot sweep from Start → red.
+func TestStart_UnattendedOnSweepsAtBoot(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.unatt.set(true)
+	if err := f.m.Start(context.Background()); err != nil { // newFixture's Cleanup stops it
+		t.Fatal(err)
+	}
+	a, _, _ := f.m.store.Get(uid(1))
+	assertDecidedByUnattended(t, a, f.clock.Load())
+}
+
+// Rule 7: with the switch off, Start approves nothing.
+func TestStart_UnattendedOffLeavesRowsOpen(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	if err := f.m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("state %s, want open", a.State)
+	}
+}
+
 // Rule 9: a click and the daemon race on the CAS; exactly one wins and one
 // closed is broadcast. A losing click answers 409 already_decided carrying
 // the row decided by unattended.
@@ -339,5 +482,146 @@ func TestDecide_RacesUnattendedOneWins(t *testing.T) {
 	}
 	if ops := f.opsOf(); !reflect.DeepEqual(ops, []string{"closed"}) {
 		t.Fatalf("events = %v, want one closed", ops)
+	}
+}
+
+// Review (PU-1b3) H1, at boot: a self_relay row left open across a restart
+// longer than its deadline is overdue; Start extends its lease, but the
+// boot sweep must not approve it — the op stays unclaimed and the first
+// tick's expiry close makes it a timeout. Mutation gate: drop the expiry
+// guard from the daemon's approve → red (approved, op claimed).
+func TestStart_UnattendedLeavesAnOverdueRowToTheSweeper(t *testing.T) {
+	f := newFixture(t)
+	relay := f.begin("sid-2")
+	f.clock.Add(team.SelfRelayDeadlineS * 1000) // the daemon was down past the deadline
+	f.unatt.set(true)
+	if err := f.m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateOpen {
+		t.Fatalf("after the boot sweep the row is %s, want open", a.State)
+	}
+	if st := f.op(relay.Op.ID).State; st != team.RelayAwaitingApproval {
+		t.Fatalf("op %s, want %s", st, team.RelayAwaitingApproval)
+	}
+	if len(f.m.notAutoApproved) != 0 {
+		t.Fatalf("refusal set = %v, want empty", f.m.notAutoApproved)
+	}
+	_ = f.m.Stop(context.Background()) // join the sweeper: the test ticks
+	f.m.tick()
+	if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateTimeout {
+		t.Fatalf("after the tick the row is %s, want timeout", a.State)
+	}
+	if st := f.op(relay.Op.ID).State; st == team.RelayClaimed {
+		t.Fatal("the overdue row's op was claimed")
+	}
+}
+
+// Review (PU-1b3) H1, at the tick: when the tick's expiry close of an
+// overdue row fails (a transient storage error), the same tick's
+// reconciliation does not approve it and does not count it as pending;
+// the next tick closes it. Both overdue shapes: a passed deadline
+// (timeout) and an expired lease (abandoned). Mutation gate: drop the
+// expiry guard from the daemon's approve → red.
+func TestTick_FailedExpiryCloseIsNotApproved(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		advance int64
+		want    team.State
+	}{
+		{"deadline", team.SelfRelayDeadlineS * 1000, team.StateTimeout},
+		{"lease", team.LeaseS * 1000, team.StateAbandoned},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			relay := f.begin("sid-2")
+			f.clock.Add(c.advance)
+			f.unatt.set(true)
+			failed := false
+			f.m.beforeCloseExpired = func(id string) error {
+				if id == relay.RequestID && !failed {
+					failed = true
+					return errors.New("database is locked")
+				}
+				return nil
+			}
+			f.m.tick()
+			if !failed {
+				t.Fatal("the tick did not try to close the overdue row")
+			}
+			if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateOpen {
+				t.Fatalf("after the failed close the row is %s, want open", a.State)
+			}
+			if st := f.op(relay.Op.ID).State; st != team.RelayAwaitingApproval {
+				t.Fatalf("op %s, want %s", st, team.RelayAwaitingApproval)
+			}
+			f.m.createMu.Lock()
+			approved, pending := f.m.sweepUnattended(sweepTick)
+			f.m.createMu.Unlock()
+			if approved != 0 || pending != 0 {
+				t.Fatalf("sweep of the overdue row = (%d, %d), want (0, 0)", approved, pending)
+			}
+			if len(f.m.notAutoApproved) != 0 {
+				t.Fatalf("refusal set = %v, want empty", f.m.notAutoApproved)
+			}
+			f.m.tick()
+			if a, _, _ := f.m.store.Get(relay.RequestID); a.State != c.want {
+				t.Fatalf("after the next tick the row is %s, want %s", a.State, c.want)
+			}
+		})
+	}
+}
+
+// Review (PU-1b3) H1: the guard holds on the U13 branch too — an overdue
+// self_relay row whose origin became a member is not cancelled by the
+// daemon's approve either; it is the sweeper's. Mutation gate: drop
+// UnexpiredAt from the member-cancel Close → red (cancelled).
+func TestSweepUnattended_OverdueMemberRelayIsLeftToTheSweeper(t *testing.T) {
+	f := newFixture(t)
+	relay := f.begin("sid-1")
+	f.makeMember("sid-1")
+	f.clock.Add(team.SelfRelayDeadlineS * 1000)
+	f.unatt.set(true)
+	if approved, pending := f.sweep(); approved != 0 || pending != 0 {
+		t.Fatalf("sweep = (%d, %d), want (0, 0)", approved, pending)
+	}
+	if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateOpen {
+		t.Fatalf("row %s, want open", a.State)
+	}
+	if st := f.op(relay.Op.ID).State; st != team.RelayAwaitingApproval {
+		t.Fatalf("op %s, want %s", st, team.RelayAwaitingApproval)
+	}
+}
+
+// Review (PU-1b3) M2: the refusal set forgets a closed row at the next
+// tick even when nothing AutoApprovable is open any more — no open row at
+// all, or only a hook row — so it cannot grow for the daemon's life.
+// Mutation gate: drop the tick's forget when it does not sweep → red.
+func TestTick_RefusalSetForgetsClosedRowsWithNothingToSweep(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		open func(f *fixture)
+	}{
+		{"nothing open", func(*fixture) {}},
+		{"only a hook row", func(f *fixture) { f.askBegin("tu-1") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.create(uid(1))
+			f.makeMember("sid-1")
+			f.unatt.set(true)
+			f.m.tick()
+			if _, ok := f.m.notAutoApproved[uid(1)]; !ok {
+				t.Fatal("the refusal was not remembered")
+			}
+			if code, body := f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil); code != http.StatusOK {
+				t.Fatalf("cancel: %d %s", code, body)
+			}
+			c.open(f)
+			f.m.tick()
+			if len(f.m.notAutoApproved) != 0 {
+				t.Fatalf("set = %v, want empty", f.m.notAutoApproved)
+			}
+		})
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,7 +70,14 @@ type Module struct {
 	// read error logged, so a corrupt value logs once, not every tick.
 	unattended    hostconfig.UnattendedStore
 	unattendedErr string
-	titles        TitleMover
+	// notAutoApproved (under createMu) is, per open row the daemon could
+	// not approve, the reason last logged (autoApprove): a refusal retried
+	// every tick logs once. A sweep, and every tick while it is not empty,
+	// forgets the rows no longer open. notAutoApprovedN is its size, which
+	// the tick reads without createMu (rememberRefusal / forgetRefusal).
+	notAutoApproved  map[string]string
+	notAutoApprovedN atomic.Int64
+	titles           TitleMover
 	// usage is the agent module's per-session statusline reading; begin
 	// copies model_id / effort from it into the self_relay payload (the mod
 	// sends neither). Nil when the agent module is absent: both stay "".
@@ -191,6 +199,12 @@ type Module struct {
 	// createMu; tests turn the unattended switch on there and prove the
 	// create reads it under the lock. nil in production.
 	beforeCreateLock func()
+	// beforeAutoApprove, when set, runs in autoApprove before the approve;
+	// an error fails that approve there (tests). nil in production.
+	beforeAutoApprove func(a team.Approval) error
+	// beforeCloseExpired, when set, runs in closeExpired before the CAS;
+	// an error fails that close there (tests). nil in production.
+	beforeCloseExpired func(id string) error
 }
 
 // New returns a Module with production defaults.
@@ -333,6 +347,14 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.reconcileRelays()
 	m.resumeSpawns()
+	// U23 rule 7: requests left open across a restart while the switch is
+	// on are approved now, not at the first tick; createMu as every reader
+	// of the switch.
+	m.createMu.Lock()
+	if m.unattendedOn() {
+		m.sweepUnattended("boot")
+	}
+	m.createMu.Unlock()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.sweepWG.Add(2)
 	go m.runSweeper()

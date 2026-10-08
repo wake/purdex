@@ -66,6 +66,7 @@ func (m *Module) tick() {
 		return
 	}
 	if len(open) == 0 {
+		m.reconcileUnattended(open) // forgets refusals of rows closed since
 		return
 	}
 	if m.afterListOpen != nil {
@@ -94,11 +95,17 @@ func (m *Module) tick() {
 			m.logf("[team] approval %s %s by the sweeper (origin %s)", a.ID, after.State, a.Origin.Ref)
 		}
 	}
+	m.reconcileUnattended(open)
 }
 
 // closeExpired is the sweeper's close for a passed deadline or lease: the
 // store re-checks the expiry at now inside the CAS (CloseIfExpired).
 func (m *Module) closeExpired(id string, now int64, state team.State) (team.Approval, bool, error) {
+	if m.beforeCloseExpired != nil {
+		if err := m.beforeCloseExpired(id); err != nil {
+			return team.Approval{}, false, err
+		}
+	}
 	return m.closeWith(id, func() (team.Approval, bool, error) {
 		return m.store.CloseIfExpired(id, now, Close{State: state, DecidedAt: now})
 	})
