@@ -170,6 +170,9 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// cancels stopCtx under the same lock, so a create that passed the
 	// entry check before Stop ran still sees stopping here and writes
 	// nothing (no row, no event).
+	if m.beforeCreateLock != nil {
+		m.beforeCreateLock()
+	}
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
 	if m.stopping() {
@@ -224,10 +227,15 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := m.now()
-	stored, _, inserted, err := m.store.Create(team.Approval{
+	row := team.Approval{
 		ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
 		CreatedAt: now, DeadlineAt: now + int64(waitS)*1000, LeaseUntil: now + team.LeaseS*1000,
-	}, hash)
+	}
+	if m.unattendedOn() { // under createMu: a switch-on's sweep is never behind this read
+		m.createApprovedLead(w, row, hash)
+		return
+	}
+	stored, _, inserted, err := m.store.Create(row, hash)
 	if err != nil {
 		m.logf("[team] create %s: %v", req.ID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
@@ -381,17 +389,16 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 	// A self_relay approval carries no grant (its payload is a
 	// SelfRelayPayload); its op moves in afterClose.
 	if state == team.StateApproved && a.Kind == team.KindLead {
-		var payload team.LeadPayload
-		if err := json.Unmarshal(a.Payload, &payload); err != nil {
-			m.logf("[team] decide %s: decode payload: %v", id, err)
+		// nil grant → the payload's values; an edit falls back to them
+		// field by field (max_members 0, no roots).
+		g, err := leadGrantOf(a)
+		if err != nil {
+			m.logf("[team] decide %s: %v", id, err)
 			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 			return
 		}
-		// nil grant → the payload's values; an edit falls back to them
-		// field by field (max_members 0, no roots).
-		g := team.Grant{MaxMembers: payload.MaxMembers, Roots: payload.Roots}
 		if req.Grant != nil {
-			g.MaxMembers = normaliseMaxMembers(req.Grant.MaxMembers, payload.MaxMembers)
+			g.MaxMembers = normaliseMaxMembers(req.Grant.MaxMembers, g.MaxMembers)
 			if len(req.Grant.Roots) > 0 {
 				roots, err := normaliseRoots(req.Grant.Roots, a.Origin.Cwd)
 				if err != nil {
@@ -406,17 +413,10 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 	c := Close{State: state, DecidedAt: now, DecidedBy: &client, Grant: grant}
 	var after team.Approval
 	var won, memberCancelled bool
-	if grant != nil {
-		// Spec §6.2: the approval creates the team (§7.1) in the same
-		// transaction. Its id is the request's id (plan v3 deviation 1).
-		t := team.Team{ID: id, HostID: a.HostID, LeadSessionID: a.Origin.SessionID, LeadRef: a.Origin.Ref,
-			Grant: *grant, RequestID: id, CreatedAt: now}
-		after, won, err = m.closeWith(id, func() (team.Approval, bool, error) { return m.store.CloseLeadApproved(id, c, t) })
-	} else if state == team.StateApproved && a.Kind == team.KindSelfRelay {
-		after, won, err = m.closeWith(id, func() (row team.Approval, won bool, err error) {
-			row, won, memberCancelled, err = m.store.CloseSelfRelayApproved(id, c, a.Origin.SessionID)
-			return row, won, err
-		})
+	if state == team.StateApproved {
+		// The approve the daemon's own approvals run too (U23): a lead's
+		// team is created in the same transaction (spec §6.2).
+		after, won, memberCancelled, err = m.approve(a, c)
 	} else {
 		after, won, err = m.closeAs(id, c)
 	}
@@ -453,10 +453,6 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排; the request is cancelled", nil)
 		return
 	}
-	teamNote := ""
-	if grant != nil {
-		teamNote = fmt.Sprintf("; team %s created (max_members %d, roots %v)", id, grant.MaxMembers, grant.Roots)
-	}
-	m.logf("[team] approval %s %s by %s %q from %s (origin %s)%s", id, after.State, client.Kind, client.Label, client.Addr, after.Origin.Ref, teamNote)
+	m.logf("[team] approval %s %s by %s %q from %s (origin %s)%s", id, after.State, client.Kind, client.Label, client.Addr, after.Origin.Ref, teamNote(after))
 	m.writeJSON(w, http.StatusOK, after)
 }

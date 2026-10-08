@@ -313,28 +313,28 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		RequestID: reqID, State: team.RelayAwaitingApproval, HandoffPath: filepath.Join(m.relayDir, opID+".md"),
 		UsedPercentage: &pct, CreatedAt: now, UpdatedAt: now,
 	}
+	sp.OpID = opID
+	payload, _ = json.Marshal(sp) // encoded above already; now with its op id
+	row := team.Approval{
+		ID: reqID, Kind: team.KindSelfRelay, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
+		CreatedAt: now, DeadlineAt: now + team.SelfRelayDeadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
+	}
+	hash := requestHash(team.KindSelfRelay, origin.SessionID, team.SelfRelayDeadlineS, payload)
+	if m.unattendedOn() {
+		m.beginApproved(w, op, row, hash)
+		return
+	}
 	if err := m.store.CreateRelayOp(op); err != nil {
-		if errors.Is(err, ErrRelayOpOpen) {
-			// The table's one-open-op index caught a creator the check
-			// above did not see (PR P5a-1a codex R1): the same 409, with
-			// the op that is open, not a 500.
-			if open, found, rerr := m.store.OpenRelayOpBySession(req.SessionID); rerr == nil && found {
-				m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this session already has a relay in progress", Op: &open})
-				return
-			}
+		// The table's one-open-op index caught a creator the check above
+		// did not see (PR P5a-1a codex R1): the same 409, not a 500.
+		if errors.Is(err, ErrRelayOpOpen) && m.writeRelayOpen(w, req.SessionID) {
+			return
 		}
 		m.logf("[team] relay begin %s: %v", req.SessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
-	var p team.SelfRelayPayload
-	_ = json.Unmarshal(payload, &p)
-	p.OpID = opID
-	payload, _ = json.Marshal(p)
-	stored, _, inserted, err := m.store.Create(team.Approval{
-		ID: reqID, Kind: team.KindSelfRelay, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
-		CreatedAt: now, DeadlineAt: now + team.SelfRelayDeadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
-	}, requestHash(team.KindSelfRelay, origin.SessionID, team.SelfRelayDeadlineS, payload))
+	stored, _, inserted, err := m.store.Create(row, hash)
 	if err != nil || !inserted {
 		// The op is already there: close it so the session is not stuck
 		// behind an op whose approval never opened.
@@ -348,6 +348,17 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	m.logf("[team] relay op %s opened: self, origin=%s (%s) used=%.0f%% request=%s", opID, origin.Ref, origin.SessionID, req.UsedPercentage, reqID)
 	m.broadcast("opened", &stored)
 	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: reqID})
+}
+
+// writeRelayOpen answers 409 relay_open with the session's open op; false
+// (nothing written) when there is none to show.
+func (m *Module) writeRelayOpen(w http.ResponseWriter, sessionID string) bool {
+	open, found, err := m.store.OpenRelayOpBySession(sessionID)
+	if err != nil || !found {
+		return false
+	}
+	m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this session already has a relay in progress", Op: &open})
+	return true
 }
 
 // handleRelayWait is GET /api/relay/wait/{id}?wait=N: the self_relay

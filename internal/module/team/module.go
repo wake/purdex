@@ -64,7 +64,12 @@ type Module struct {
 	// prompts is the relay prompt bodies (host config, spec §8.8), read
 	// on every GET /api/relay/prompts.
 	prompts hostconfig.RelayPromptReader
-	titles  TitleMover
+	// unattended is the U23 switch (host config), read under createMu by
+	// every create and sweep; unattendedErr (under createMu) is the last
+	// read error logged, so a corrupt value logs once, not every tick.
+	unattended    hostconfig.UnattendedStore
+	unattendedErr string
+	titles        TitleMover
 	// usage is the agent module's per-session statusline reading; begin
 	// copies model_id / effort from it into the self_relay payload (the mod
 	// sends neither). Nil when the agent module is absent: both stay "".
@@ -182,6 +187,10 @@ type Module struct {
 	// tests end the team there and prove the write sees it. nil in production.
 	beforeSpawnStep    func(op spawnRow)
 	afterSpawnTeamRead func()
+	// beforeCreateLock, when set, runs in handleCreate just before it takes
+	// createMu; tests turn the unattended switch on there and prove the
+	// create reads it under the lock. nil in production.
+	beforeCreateLock func()
 }
 
 // New returns a Module with production defaults.
@@ -244,6 +253,9 @@ func (m *Module) Init(c *core.Core) error {
 		return err
 	}
 	m.prompts = prompts
+	if m.unattended, err = lookup[hostconfig.UnattendedStore](c, hostconfig.UnattendedKey); err != nil {
+		return err
+	}
 	if err := m.initSpawn(c); err != nil {
 		return err
 	}
@@ -402,11 +414,16 @@ func (m *Module) closeWithOp(id string, cas func() (team.Approval, bool, error),
 }
 
 // announceClosed is what follows every close that won, once it is
-// committed: the closed broadcast, the long-poll wake-up and afterClose.
+// committed: the closed broadcast, the long-poll wake-up, afterClose and,
+// for an approval, afterApproved — on every path, so the side effects of
+// an approval live in one place.
 func (m *Module) announceClosed(after team.Approval, rep *RelayReport) {
 	m.broadcast("closed", &after)
 	m.wake(after.ID)
 	m.afterClose(after, rep)
+	if after.State == team.StateApproved {
+		m.afterApproved(after)
+	}
 }
 
 // broadcast queues one opened/closed event to every subscriber, under
