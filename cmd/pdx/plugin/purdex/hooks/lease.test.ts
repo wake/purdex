@@ -30,6 +30,8 @@ const KINDS: [string, string | null][] = [
   ['npx vitest run --testNamePattern x', null],
   ['npx vitest run --project spa', null],
   ['npx vitest run --changed', null],
+  ['npx vitest run --dom src/foo.test.ts', null],
+  ['npx vitest run --logHeapUsage src/foo.test.ts', null],
   ['npx vitest', null],
   ['npx vitest watch', null],
   ['npx vitest related src/a.ts', null],
@@ -93,6 +95,7 @@ test('classify: needsMaxWorkers says a full vitest run has no worker limit', () 
   expect(classify('npx vitest run --maxWorkers=3')?.needsMaxWorkers).toBe(false)
   expect(classify('npx vitest run --max-workers 2')?.needsMaxWorkers).toBe(false)
   expect(classify('npx vitest run --poolOptions.threads.maxThreads=2')?.needsMaxWorkers).toBe(false)
+  expect(classify('bash -c "npx vitest run"')?.needsMaxWorkers).toBe(true)
   expect(classify('pnpm run build')?.needsMaxWorkers).toBe(false)
   expect(classify('go test -race ./...')?.needsMaxWorkers).toBe(false)
 })
@@ -104,6 +107,8 @@ const REWRITES: [string, string][] = [
   ['npx vitest run 2>&1 | tail -30', 'npx vitest run --maxWorkers=3 2>&1 | tail -30'],
   ['npx vitest run > out.txt 2>&1', 'npx vitest run --maxWorkers=3 > out.txt 2>&1'],
   ['cd spa && npx vitest run && pnpm run build', 'cd spa && npx vitest run --maxWorkers=3 && pnpm run build'],
+  ['bash -c "cd spa && npx vitest run"', 'bash -c "cd spa && npx vitest run --maxWorkers=3"'],
+  ["sh -c 'npx vitest run 2>&1 | tail'", "sh -c 'npx vitest run --maxWorkers=3 2>&1 | tail'"],
   ['npx vitest run; npx vitest run', 'npx vitest run --maxWorkers=3; npx vitest run --maxWorkers=3'],
 ]
 

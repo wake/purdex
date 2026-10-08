@@ -134,7 +134,7 @@ function commandOf(words) {
 
 // vitest flags that take a value as the next word. Anything unknown starting with `-` is taken as a
 // switch, so the word after it counts as a positional (a path): not intercepted, the safe side.
-const VITEST_VALUE = new Set(['-t', '--testNamePattern', '--project', '--maxWorkers', '--max-workers', '--reporter', '--config', '-c', '--root', '-r', '--dir', '--pool', '--shard', '--outputFile', '--environment', '--mode', '-m', '--coverage.reporter', '--coverage.provider', '--poolOptions.threads.maxThreads', '--poolOptions.forks.maxForks', '--poolOptions.threads.minThreads', '--poolOptions.forks.minForks', '--minWorkers', '--min-workers', '--logHeapUsage', '--retry', '--bail', '--testTimeout', '--hookTimeout', '--exclude', '--dom', '--browser.name', '--cache'])
+const VITEST_VALUE = new Set(['-t', '--testNamePattern', '--project', '--maxWorkers', '--max-workers', '--reporter', '--config', '-c', '--root', '-r', '--dir', '--pool', '--shard', '--outputFile', '--environment', '--mode', '-m', '--coverage.reporter', '--coverage.provider', '--poolOptions.threads.maxThreads', '--poolOptions.forks.maxForks', '--poolOptions.threads.minThreads', '--poolOptions.forks.minForks', '--minWorkers', '--min-workers', '--retry', '--bail', '--testTimeout', '--hookTimeout', '--exclude', '--browser.name', '--cache'])
 const VITEST_LIMIT = /^--(maxWorkers|max-workers|poolOptions\..*(maxThreads|maxForks))(=|$)/
 
 // vitestRun reads the words after `vitest`. kind is 'test-full' for a run over everything, null for any
@@ -230,13 +230,11 @@ export function classify(command) {
   if (typeof command !== 'string') return null
   const kind = classifyKind(command, 0)
   if (kind === null || kind === 'wrapped') return null
-  return { kind, needsMaxWorkers: needsCap(command).length > 0 }
+  return { kind, needsMaxWorkers: rewriteMaxWorkers(command).changed }
 }
 
 // needsCap lists the full-vitest segments (indexes into the scanned segments) that carry no worker limit.
-function needsCap(command) {
-  const segs = scan(command)
-  if (segs === null) return []
+function needsCap(segs) {
   const out = []
   segs.forEach((s, i) => {
     const w = commandOf(s)
@@ -250,28 +248,44 @@ function needsCap(command) {
 
 // rewriteMaxWorkers (R7) appends ` --maxWorkers=3` to each full vitest run that has no worker limit,
 // right after its last argument, so it lands before a redirection (`2>&1`) as well as before a pipe.
-// Returns {command, changed}.
+// A run inside `sh -c '...'` is rewritten in place when the string is plainly quoted. Returns
+// {command, changed}.
 export function rewriteMaxWorkers(command) {
+  return rewriteAt(command, 0)
+}
+
+function rewriteAt(command, depth) {
   if (typeof command !== 'string') return { command, changed: false }
   const segs = scan(command)
   if (segs === null) return { command, changed: false }
-  const todo = new Set(needsCap(command))
-  if (todo.size === 0) return { command, changed: false }
-  const inserts = []
+  const todo = new Set(needsCap(segs))
+  const edits = [] // {at, end, text}: replace command.slice(at, end) with text
   segs.forEach((s, i) => {
-    if (!todo.has(i)) return
-    const args = s.filter((x) => !x.redirect)
-    // the last word that is not a redirection or a redirection's target
-    let last = null
-    for (let k = 0; k < s.length; k++) {
-      if (s[k].redirect) { if (/(>>?|<)$/.test(s[k].text)) k++; continue }
-      last = s[k]
+    if (todo.has(i)) {
+      // the last word that is not a redirection or a redirection's target
+      let last = null
+      for (let k = 0; k < s.length; k++) {
+        if (s[k].redirect) { if (/(>>?|<)$/.test(s[k].text)) k++; continue }
+        last = s[k]
+      }
+      if (last !== null) edits.push({ at: last.end, end: last.end, text: ' --maxWorkers=3' })
+      return
     }
-    if (last === null || args.length === 0) return
-    inserts.push(last.end)
+    // sh -c "<command>": the string is another command line
+    const w = commandOf(s)
+    if (depth >= 2 || !w.length || !SHELLS.has(base(w[0]))) return
+    const c = w.indexOf('-c')
+    if (c < 0 || w[c + 1] === undefined) return
+    const arg = s.find((x) => x.text === w[c + 1] && x.quoted)
+    if (!arg) return
+    const src = command.slice(arg.start, arg.end)
+    const q = src[0]
+    if ((q !== '"' && q !== "'") || src[src.length - 1] !== q || src.slice(1, -1) !== arg.text) return
+    const inner = rewriteAt(arg.text, depth + 1)
+    if (inner.changed) edits.push({ at: arg.start + 1, end: arg.end - 1, text: inner.command })
   })
-  if (inserts.length === 0) return { command, changed: false }
+  if (edits.length === 0) return { command, changed: false }
   let out = command
-  for (const at of inserts.sort((a, b) => b - a)) out = out.slice(0, at) + ' --maxWorkers=3' + out.slice(at)
+  for (const e of edits.sort((a, b) => b.at - a.at)) out = out.slice(0, e.at) + e.text + out.slice(e.end)
   return { command: out, changed: true }
 }
