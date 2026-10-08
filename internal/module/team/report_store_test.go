@@ -282,6 +282,27 @@ func TestInsertReport_EffectAndRowCommitTogether(t *testing.T) {
 	}
 }
 
+// The other direction: when the task update itself fails, the report row must
+// not stay behind. A trigger makes every update of the task fail, which a seam
+// after the insert cannot model.
+func TestInsertReport_EffectAndRowCommitTogether_FailedEffect(t *testing.T) {
+	s, m := reportFixture(t)
+	if _, err := s.db.Exec(`CREATE TRIGGER tasks_no_update BEFORE UPDATE ON tasks
+		BEGIN SELECT RAISE(ABORT, 'task update refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	before := mustGetTask(t, s, tTeamA, 1)
+	if _, _, _, err := s.InsertReport(newReport(tTeamA, 1, m, team.ReportAck, 1, 100)); err == nil {
+		t.Fatal("want the failed task update to fail the call")
+	}
+	if _, ok, _ := s.GetReport(reportID(1)); ok {
+		t.Fatal("the report row stayed although the task update failed")
+	}
+	if after := mustGetTask(t, s, tTeamA, 1); !reflect.DeepEqual(after, before) {
+		t.Fatalf("the task changed: %+v", after)
+	}
+}
+
 func TestInsertReport_FinishedTaskStoresNoStatusChange(t *testing.T) {
 	finish := map[string]func(t *testing.T, s *Store){
 		"completed": func(t *testing.T, s *Store) {
