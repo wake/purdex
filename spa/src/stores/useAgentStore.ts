@@ -62,6 +62,23 @@ export interface NormalizedEvent {
   raw_event_name: string
   broadcast_ts: number
   detail?: Record<string, unknown>
+  /** The session's background-work symbol (U1-3, spec N6); '' / absent = none. Unknown strings are ignored. */
+  background?: '' | 'workflow' | 'monitor' | 'schedule'
+  /** What decided `status` on a daemon `hook` frame: a live mod stream or the hook. */
+  source?: 'mod' | 'hook'
+  /** Daemon boot id (suffixed `-n` after a counter rotation) and the contiguous per-process `hook` counter. */
+  epoch?: string
+  seq?: number
+  /** A subscribe-time replay frame / `agent.snapshot` entry: `seq` is the slot's high-water mark, not a new frame. */
+  snapshot?: boolean
+}
+
+export type BackgroundKind = 'workflow' | 'monitor' | 'schedule'
+
+/** The background symbol an event carries, or undefined (absent, '' or a kind this client does not know). */
+export function backgroundOf(e?: NormalizedEvent): BackgroundKind | undefined {
+  const b = e?.background
+  return b === 'workflow' || b === 'monitor' || b === 'schedule' ? b : undefined
 }
 
 /**
@@ -183,6 +200,18 @@ interface AgentState {
   // Actions
   handleNormalizedEvent: (hostId: string, sessionCode: string, event: NormalizedEvent) => void
   /**
+   * A daemon `hook` frame (live, legacy or replay). Same side effects as `handleNormalizedEvent`, but unread follows
+   * the transition rule (U1-3): only a status that really changed from a known previous one is news. The worker
+   * projection keeps `handleNormalizedEvent`'s rule, which deliberately counts same-status events.
+   */
+  applyHookEvent: (hostId: string, sessionCode: string, event: NormalizedEvent) => void
+  /**
+   * The host's complete agent list from an `agent.snapshot` frame: each entry is applied with the transition rule,
+   * then every code of this host the snapshot does not list is cleared (execution panes `exec-…` and codes with no
+   * agent state are left alone) — all in one `set`.
+   */
+  applyAgentSnapshot: (hostId: string, entries: { session: string; event: NormalizedEvent }[]) => void
+  /**
    * Replace a key's running-subagent refs and nothing else — no status, no `lastEvents` entry, no unread. For a
    * worker, whose refs are decoration read from its pane's live stream while its status comes from the host list
    * (useWorkerAgentProjection): a change of refs alone must never look like an event to the notification dispatcher.
@@ -196,8 +225,107 @@ interface AgentState {
   clearHostAgentStatus: (hostId: string) => void
 }
 
+type UnreadPolicy = 'worker' | 'transition'
+
+/** `s` without anything keyed `key` (what a `clear` event and clearSession do). */
+function withoutKey(s: AgentState, key: string): Partial<AgentState> {
+  const drop = <T,>(rec: Record<string, T>): Record<string, T> => {
+    if (!(key in rec)) return rec
+    const { [key]: _, ...rest } = rec
+    return rest
+  }
+  return {
+    statuses: drop(s.statuses),
+    agentTypes: drop(s.agentTypes),
+    models: drop(s.models),
+    subagents: drop(s.subagents),
+    lastEvents: drop(s.lastEvents),
+    oscTitles: drop(s.oscTitles),
+    ccStatus: drop(s.ccStatus),
+    unread: drop(s.unread),
+  }
+}
+
+/**
+ * The side effects of an event that live outside this store (rebuild record, exit record, unverified flag). Done
+ * once per event, before its state patch. The exit record is read BEFORE the clear return: a root's SessionEnd (or
+ * the sweep clearing it) is exactly the event that empties the session.
+ */
+function eventSideEffects(hostId: string, sessionCode: string, event: NormalizedEvent): void {
+  writeExitRecord(hostId, sessionCode, event.detail)
+  if (event.status === 'clear') return
+  // Rebuild record (spec §4.2). Reads ONLY `detail.pdx_provenance` — the outer `agent_type` is the
+  // session-projection winner and must never reach the record (spec §4.3.1).
+  const wroteProvenance = writeProvenanceRecord(hostId, sessionCode, event.detail, event.broadcast_ts)
+  if (!wroteProvenance && event.raw_event_name === 'replay') {
+    flagUnverifiedAgent(hostId, sessionCode, event.agent_type)
+  }
+}
+
+/**
+ * The state patch of one event on `s`. `policy` picks how unread is decided:
+ * - `worker`: the original rule (every actionable event, a replay only when the status changed);
+ * - `transition`: only a status that changed from a KNOWN previous one (U1-3 ruling 1).
+ */
+function eventPatch(
+  s: AgentState, hostId: string, sessionCode: string, event: NormalizedEvent, policy: UnreadPolicy,
+): Partial<AgentState> {
+  const key = compositeKey(hostId, sessionCode)
+  if (event.status === 'clear') return withoutKey(s, key)
+
+  const patch: Partial<AgentState> = { lastEvents: { ...s.lastEvents, [key]: event } }
+  if (event.agent_type) patch.agentTypes = { ...s.agentTypes, [key]: event.agent_type }
+  // model persists across events
+  if (event.model) patch.models = { ...s.models, [key]: event.model }
+  // subagents: only an event that carries the field changes them
+  if ('subagents' in event) {
+    const subagents = event.subagents ?? []
+    if (subagents.length > 0) patch.subagents = { ...s.subagents, [key]: subagents }
+    else if (key in s.subagents) {
+      const { [key]: _, ...rest } = s.subagents
+      patch.subagents = rest
+    }
+  }
+
+  // status: skip events with no status (e.g. SubagentStart/Stop)
+  const status = event.status as AgentStatus | ''
+  if (!status) return patch
+  const prevStatus = s.statuses[key]
+  patch.statuses = { ...s.statuses, [key]: status }
+
+  // running is unambiguous user activity — clear any leftover unread regardless of focus.
+  if (status === 'running') {
+    if (key in s.unread) {
+      const { [key]: _, ...rest } = s.unread
+      patch.unread = rest
+    }
+    return patch
+  }
+
+  if (policy === 'worker') {
+    // Stopgap: a reconnect replay re-sends every session's current status, and SPA statuses outlive a daemon
+    // restart — an unchanged (or first-seen) status is not news.
+    if (event.raw_event_name === 'replay' && (prevStatus === undefined || prevStatus === status)) return patch
+  } else if (prevStatus === undefined || prevStatus === status) {
+    return patch
+  }
+
+  // Mark unread unless some pane of the active tab shows the agent (#1853 — the notification dispatcher's rule).
+  // Notification raises status=idle but shouldn't surface as actionable: cc emits PdxNotification post-W2,
+  // codex/opencode pre-migration still emit "Notification". Recognise both literals during the transition.
+  const rawName = event.raw_event_name
+  const isNotification = rawName === 'Notification' || rawName === 'PdxNotification'
+  const notificationSilent = event.detail?.notification_silent === true
+  const isActionable = status === 'waiting' || status === 'error' ||
+    (status === 'idle' && !isNotification && !notificationSilent)
+  if (isActionable && !isAgentVisibleInActiveTab(hostId, sessionCode)) {
+    patch.unread = { ...s.unread, [key]: true }
+  }
+  return patch
+}
+
 export const useAgentStore = create<AgentState>()(
-  (set, get) => ({
+  (set) => ({
     statuses: {},
     agentTypes: {},
     models: {},
@@ -209,108 +337,39 @@ export const useAgentStore = create<AgentState>()(
 
     clearSession: (hostId, sessionCode) => {
       const key = compositeKey(hostId, sessionCode)
-      set((s) => {
-        const filterOut = <T,>(rec: Record<string, T>): Record<string, T> => {
-           
-          const { [key]: _, ...rest } = rec
-          return rest
-        }
-        return {
-          statuses: filterOut(s.statuses),
-          agentTypes: filterOut(s.agentTypes),
-          models: filterOut(s.models),
-          subagents: filterOut(s.subagents),
-          lastEvents: filterOut(s.lastEvents),
-          oscTitles: filterOut(s.oscTitles),
-          ccStatus: filterOut(s.ccStatus),
-          unread: filterOut(s.unread),
-        }
-      })
+      set((s) => withoutKey(s, key))
     },
 
     handleNormalizedEvent: (hostId, sessionCode, event) => {
-      const key = compositeKey(hostId, sessionCode)
+      eventSideEffects(hostId, sessionCode, event)
+      set((s) => eventPatch(s, hostId, sessionCode, event, 'worker'))
+    },
 
-      // BEFORE the clear return: a root's SessionEnd (or the sweep clearing
-      // it) is exactly the event that empties the session, so an exit read
-      // after that return would almost never be read at all.
-      writeExitRecord(hostId, sessionCode, event.detail)
+    applyHookEvent: (hostId, sessionCode, event) => {
+      eventSideEffects(hostId, sessionCode, event)
+      set((s) => eventPatch(s, hostId, sessionCode, event, 'transition'))
+    },
 
-      if (event.status === 'clear') {
-        get().clearSession(hostId, sessionCode)
-        return
-      }
-
-      // Store last event (for notification dispatcher)
-      set((s) => ({ lastEvents: { ...s.lastEvents, [key]: event } }))
-
-      // Store agent type
-      if (event.agent_type) {
-        set((s) => ({ agentTypes: { ...s.agentTypes, [key]: event.agent_type } }))
-      }
-
-      // Rebuild record (spec §4.2). Reads ONLY `detail.pdx_provenance` — the
-      // outer `agent_type` above is the session-projection winner and must
-      // never reach the record (spec §4.3.1).
-      const wroteProvenance = writeProvenanceRecord(hostId, sessionCode, event.detail, event.broadcast_ts)
-      if (!wroteProvenance && event.raw_event_name === 'replay') {
-        flagUnverifiedAgent(hostId, sessionCode, event.agent_type)
-      }
-
-      // Store model (persist across events)
-      if (event.model) {
-        set((s) => ({ models: { ...s.models, [key]: event.model! } }))
-      }
-
-      // Store subagents
-      if ('subagents' in event) {
-        const subagents = event.subagents ?? []
-        set((s) => ({
-          subagents: subagents.length > 0
-            ? { ...s.subagents, [key]: subagents }
-            : (() => { const { [key]: _, ...rest } = s.subagents; return rest })(),
-        }))
-      }
-
-      // Store status (skip events with no status, e.g. SubagentStart/Stop)
-      const status = event.status as AgentStatus | ''
-      if (status) {
-        const prevStatus = get().statuses[key]
-        set((s) => ({ statuses: { ...s.statuses, [key]: status } }))
-
-        // running is unambiguous user activity — clear any leftover unread
-        // (e.g. raised by a prior waiting/idle while the tab was in background)
-        // regardless of focus.
-        if (status === 'running') {
-          set((s) => {
-            if (!(key in s.unread)) return s
-
-            const { [key]: _, ...rest } = s.unread
-            return { unread: rest }
-          })
-          return
+    applyAgentSnapshot: (hostId, entries) => {
+      for (const e of entries) eventSideEffects(hostId, e.session, e.event)
+      set((s) => {
+        let draft: AgentState = s
+        const listed = new Set<string>()
+        for (const e of entries) {
+          listed.add(compositeKey(hostId, e.session))
+          draft = { ...draft, ...eventPatch(draft, hostId, e.session, e.event, 'transition') }
         }
-
-        // Stopgap: a reconnect replay re-sends every session's current status, and SPA
-        // statuses outlive a daemon restart — an unchanged (or first-seen) status is not
-        // news. Superseded by the interface-line U1-3 rework (`snapshot: true` +
-        // `(epoch, seq)`, docs/specs/2026-10-08-interface-u1-spec.md §7).
-        if (event.raw_event_name === 'replay' && (prevStatus === undefined || prevStatus === status)) return
-
-        // Mark unread unless some pane of the active tab shows the agent
-        // (#1853 — the notification dispatcher's rule). Notification raises
-        // status=idle but shouldn't surface as actionable: cc emits
-        // PdxNotification post-W2, codex/opencode pre-migration still emit
-        // "Notification". Recognise both literals during the transition.
-        const rawName = event.raw_event_name
-        const isNotification = rawName === 'Notification' || rawName === 'PdxNotification'
-        const notificationSilent = event.detail?.notification_silent === true
-        const isActionable = status === 'waiting' || status === 'error' ||
-          (status === 'idle' && !isNotification && !notificationSilent)
-        if (isActionable && !isAgentVisibleInActiveTab(hostId, sessionCode)) {
-          set((s) => ({ unread: { ...s.unread, [key]: true } }))
+        // A code of this host the snapshot does not list has no agent any more: clear it, but only a code that
+        // holds agent state, and never an execution pane (owned by the worker projection, not daemon hook frames).
+        const prefix = `${hostId}:`
+        const held = new Set<string>([...Object.keys(draft.statuses), ...Object.keys(draft.lastEvents)])
+        for (const key of held) {
+          if (!key.startsWith(prefix) || listed.has(key)) continue
+          if (key.slice(prefix.length).startsWith('exec-')) continue
+          draft = { ...draft, ...withoutKey(draft, key) }
         }
-      }
+        return draft
+      })
     },
 
     setSubagents: (hostId, sessionCode, subagents) => set((s) => {
