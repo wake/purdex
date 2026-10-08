@@ -35,8 +35,11 @@ const (
 	leaseMaxHungPolls = 3
 	// leaseReleaseTimeout bounds a release or a cancel (best effort).
 	leaseReleaseTimeout = 3 * time.Second
-	// leaseDefaultWait is how long a request may queue before it is let in.
-	leaseDefaultWait = 5 * time.Minute
+	// leaseDefaultWait is --wait when it is not given: 0, which the daemon reads
+	// as the host setting deadline_s (5 minutes unless changed). A number here
+	// would override the setting: the first P1 acceptance run found the host's
+	// deadline_s=10 ignored because the CLI always sent 300.
+	leaseDefaultWait time.Duration = 0
 )
 
 // Seams: the parent pid and the start text of a pid (as ps prints it, which is

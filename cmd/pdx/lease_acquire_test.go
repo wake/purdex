@@ -398,3 +398,15 @@ func TestPsStartToUTC(t *testing.T) {
 		}
 	}
 }
+
+// Without --wait the request carries wait_s 0, which the daemon reads as the
+// host setting deadline_s: a default here would override the setting.
+func TestAcquire_NoWaitFlagLeavesTheDeadlineToTheHost(t *testing.T) {
+	fixedHolder(t)
+	d := &fakeLeaseDaemon{}
+	driveLease(t, context.Background(), d, nil, "acquire", "--kind", "build")
+	posts, _, _ := d.snapshot()
+	if len(posts) != 1 || posts[0].WaitS != 0 {
+		t.Fatalf("posts = %+v, want wait_s 0", posts)
+	}
+}
