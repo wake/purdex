@@ -7,21 +7,9 @@
 // the only client — no browser fallback.
 import { hostLabel, hostLookOf } from '../host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { fnv1a32, FNV_OFFSET_32 } from './fnv1a'
 import { approvalSessionLabel } from './approval-format'
 import { leadPayloadOf, selfRelayPayloadOf, type Approval } from './types'
-
-const FNV_OFFSET_32 = 0x811c9dc5
-const FNV_PRIME_32 = 0x01000193
-
-/** FNV-1a over the string's UTF-16 code units, 32-bit, from the given basis. */
-function fnv1a32(s: string, basis: number): number {
-  let h = basis >>> 0
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i)
-    h = Math.imul(h, FNV_PRIME_32) >>> 0
-  }
-  return h
-}
 
 /**
  * The dedup key Electron gets for a request's notification: a stable 53-bit non-negative integer (a safe integer, so

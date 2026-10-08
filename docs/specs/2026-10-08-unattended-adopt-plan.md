@@ -1531,6 +1531,33 @@ The adopt / release path then runs in its own order, after U23's SPA (PU-2a…2d
 4. **Textual intersections:** PL-2b and β's PU-2a each add one type to `spa/src/lib/host-events.ts:4-18` and one branch to `useMultiHostEventWs.ts`; whichever merges second rebases. PL-3b's underline in `SortableTab.tsx` vs U1 lights v2 (member α): confirm with α before PL-3b starts (as "Intersections with other lines" already says).
 5. **Acceptance before batch A** (PL-3b's acceptance, narrowed): a lead with two spawned members, three tabs: one group, chip = the lead's title, members after the lead; drag a member within → kept; out → snaps back; collapse, activate a member from the sidebar → expands; `pdx kill` one member → its tab leaves the group within one tick; Settings › 介面 › 分頁 off → plain bar. The adopt / release steps are re-run after batch A.
 
+### PL-2b′ — the roster store and team views (replaces PL-2b's layout half; agreed with the interface lead purdex-88, 2026-10-08)
+
+The user's first ruling on the team interface (via purdex-88): **every member on the roster is shown, whether or not it has an open tab** (confirmation pack item 1, option (c)); the sidebar shows members in a row under the lead, the tab bar uses the lead's tab itself as the group head (no separate chip), plus a floating team panel and a line in the lead's terminal from the mod. Those surfaces are the interface line's PRs. PL-2b′ therefore gives them **data, not a layout**: `layoutTeamTabs`, `TeamBlock`, `orphanHint` and `reorderWithBlocks` are dropped from PL-2b (the interface PRs derive their own layout from the views below).
+
+**Files.**
+- Create `spa/src/lib/team/roster.ts` (types mirroring `internal/team/wire_roster.go`, `isRoster`, `parseRosterEvent`) and its test.
+- Create `spa/src/stores/useTeamRosterStore.ts` and its test: `byHost: Record<hostId, TeamRoster[]>`; `apply(hostId, teams)` (snapshot and changed both replace); `forgetHost(hostId)`. Not persisted, per renderer.
+- Create `spa/src/lib/team/team-views.ts` and its test; a hook `useTeamViews()` in the same file or `spa/src/hooks/useTeamViews.ts`.
+- Modify `spa/src/lib/host-events.ts` (type `team.roster`) and `spa/src/hooks/useMultiHostEventWs.ts` (branch `team.roster`, bound to the socket's `hostEndpointKey` as PU-2a's `team.unattended` branch is); forget the host's roster where the host is removed (wherever `team.unattended`'s per-host state is forgotten).
+
+**Interfaces.**
+- `selectTeamViews({ rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost, memberOrder? }) → TeamView[]` (pure), teams in roster order per host, hosts in a stable order.
+- `TeamView = { key: '<hostId>\0<teamId>'; hostId; teamId; createdAt; colorIndex: 0..7; lead: Seat; members: Seat[] }`. `colorIndex` = FNV-1a 32 of `teamId` mod 8 (stable across windows and restarts; the palette belongs to the interface PRs).
+- `Seat = { role: 'lead' | 'member'; session: RosterSession; state; origin; joinedAt; label; tabId: string | null; workspaceId: string | null }`. `label` = title, else the name part of `address` (after the last `/`), else the ref.
+- **Member order** (one order for every surface): `memberOrder?: Record<teamKey, sessionId[]>` — members listed there come first in that order; members not listed (new ones) follow in `joined_at` order; ids no longer on the roster are ignored. The lead is always first and never ordered. Persisting `memberOrder` and dragging are the interface PRs'.
+- **`tabId`**: a tab shows a seat when any `tmux-session` pane of its layout shows the seat's tmux session (the pane's session name = the host's session-list row with its code, else its `cachedName`). When several tabs show it, pick: for a **member**, a tab in the lead's tab's workspace first, then the active workspace, then the first in tab order; for the **lead**, the active workspace first, then the first in tab order. Within one workspace, a tab whose primary pane shows the session beats one where only a secondary pane does, then workspace tab order. `null` = not open. `workspaceId` = the chosen tab's workspace.
+- `teamOfTab(views, tabId) → { key; role; seat } | null` — reverse lookup for drawing a tab as group head / member (a tab showing panes of two teams: the primary pane's team, else the first matching pane in layout pre-order, decision 11).
+- Opening a tab for a seat is not here (interface PRs).
+
+**Tests.** roster parse (valid snapshot; non-array teams / bad member / unknown op dropped whole); store replace + forget; WS: a `team.roster` frame from a socket of a removed / re-pointed host is dropped; views: lead first then members by joined_at; `memberOrder` applied, new member appended by joined_at, stale ids ignored, lead never moved; unopened member → `tabId: null`; tab via a secondary pane; two tabs showing one member → lead's workspace wins, else active workspace, else tab order; lead's tab choice; session list unknown → `cachedName`; `colorIndex` stable and in 0..7; `teamOfTab` for lead / member / split of two teams / non-team tab; a released or killed member (absent from the roster) has no seat.
+
+**Mutation gates.** ignore `memberOrder` → red; prefer active workspace over the lead's workspace for a member → red; primary pane only → secondary-pane test red; persist the store → n/a (not persisted: assert no `persist` middleware).
+
+**Size.** ≈ 650 lines, 9 files. **Cut point:** the WS branch + `host-events.ts` move to PL-2b2. **Deploy.** SPA (harmless before PL-1f′ deploys: no `team.roster` frames, empty views).
+
+PL-2c, PL-3a and PL-3b as written above are **superseded**: the user's rulings (19 items, recorded by the interface line) replace the chip + indent design, and the interface line (purdex-88) owns those PRs. The WS branch mirrors `team.unattended`'s binding (`useMultiHostEventWs.ts`: a frame is dropped unless `connectionKey(host)` still equals the key the socket was opened with). PL-1f′3 adds `model`, `effort`, `context` to `RosterSession`; `Seat.session` carries them through.
+
 ### User-visible behaviour, display-first
 
 Items 31–45 of "User-visible behaviour" ship with PL-2c / PL-3b as written, with two differences until batch A: every member is one the lead spawned (`pdx spawn`), and item 44's "被釋出" cannot happen yet — a member leaves its group when it is killed or gone, or its team ends.
