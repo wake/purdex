@@ -175,7 +175,8 @@ func (r *Registry) Apply(b Batch) (ack int64, err error) {
 			var d struct {
 				CWD string `json:"cwd"`
 			}
-			if json.Unmarshal(e.Data, &d) == nil {
+			// An empty cwd never erases one already known (the envelope's).
+			if json.Unmarshal(e.Data, &d) == nil && d.CWD != "" {
 				in.CWD = d.CWD
 			}
 			in.Interactive = true

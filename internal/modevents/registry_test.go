@@ -559,6 +559,50 @@ func TestApply_EnvelopeWithoutCwdKeepsSessionStartCwd(t *testing.T) {
 	}
 }
 
+// An empty session.start cwd never erases the envelope's cwd, for the
+// stream and for the StreamInfo its own batch delivers.
+// Mutation gate: make session.start overwrite CWD unconditionally → red.
+func TestApply_EmptySessionStartCwdKeepsEnvelopeCwd(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	var mu sync.Mutex
+	var seen []StreamInfo
+	reg.Subscribe(func(info StreamInfo, _ Event) {
+		mu.Lock()
+		seen = append(seen, info)
+		mu.Unlock()
+	})
+	const s = "streamEMPTY"
+	start := mkEvent(1, TypeSessionStart)
+	start.Data = json.RawMessage(`{"cwd":""}`)
+	b := mkBatch(s, 0, start)
+	b.CWD, b.Interactive = "/work/repo", true
+	if _, err := reg.Apply(b); err != nil {
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("cwd / interactive = %q / %v, want /work/repo / true", info.CWD, info.Interactive)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 || seen[0].CWD != "/work/repo" {
+		t.Fatalf("delivered infos = %+v, want one carrying cwd /work/repo", seen)
+	}
+}
+
+// Without an envelope cwd (an older mod), session.start still sets it.
+func TestApply_SessionStartCwdStillSetsWithoutEnvelope(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	const s = "streamNOENV"
+	start := mkEvent(1, TypeSessionStart)
+	start.Data = json.RawMessage(`{"cwd":"/a"}`)
+	if _, err := reg.Apply(mkBatch(s, 0, start)); err != nil {
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/a" || !info.Interactive {
+		t.Fatalf("cwd / interactive = %q / %v, want /a / true", info.CWD, info.Interactive)
+	}
+}
+
 func TestStreams_SortedByLastSeen(t *testing.T) {
 	clk := newFakeClock()
 	reg := NewRegistry(clk.Now)
