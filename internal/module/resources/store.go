@@ -1,6 +1,7 @@
 package resourcesmod
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -497,13 +498,15 @@ type minuteRow struct {
 	Unleased        float64
 }
 
-// InsertMinute stores one row; a second one for the same minute replaces it.
+// InsertMinute stores one row. A minute that is already stored is kept (a
+// clock that stepped back must not overwrite what was written), and the
+// attempt is not an error.
 func (s *leaseStore) InsertMinute(r minuteRow) error {
 	full := 0
 	if r.Full {
 		full = 1
 	}
-	if _, err := s.db.Exec(`INSERT OR REPLACE INTO host_minutes
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO host_minutes
 		(at, load1, ncpu, mem, measured, full, full_ticks, full_starts, full_longest_s, held, heavy_held, sum_charge, waiting, unleased)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.At, r.Load1, r.NCPU, r.Mem, r.Measured, full, r.FullTicks, r.FullStarts, r.FullLongestS, r.Held, r.HeavyHeld,
@@ -522,10 +525,11 @@ func (s *leaseStore) PruneMinutes(before int64) (int64, error) {
 	return res.RowsAffected()
 }
 
-// CountWaiting is how many requests are queued.
-func (s *leaseStore) CountWaiting() (int, error) {
+// CountWaiting is how many requests are queued; ctx bounds the wait for a
+// busy database.
+func (s *leaseStore) CountWaiting(ctx context.Context) (int, error) {
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM resource_leases WHERE state = 'waiting'`).Scan(&n); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_leases WHERE state = 'waiting'`).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count waiting leases: %w", err)
 	}
 	return n, nil

@@ -43,6 +43,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	m.mode = m.settings().Mode
 	if m.mode == resources.ModeOff {
 		m.fails, m.degraded = 0, false
+		m.endMinute()
 		m.publish(m.unavailable(resources.ReasonOff))
 		return ctx.Err() != nil
 	}
@@ -88,8 +89,8 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	m.lastProcs.Store(&procs)
 	// After the publish, on this goroutine and never on a request or hook
 	// path: it reads the process table once more when a lease is held.
-	m.measureLeases(ctx, procs, raw)
-	m.noteMinute(host, m.now())
+	held, heldOK := m.measureLeases(ctx, procs, raw)
+	m.noteMinute(ctx, host, m.now(), held, heldOK)
 	return false
 }
 

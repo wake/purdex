@@ -21,25 +21,25 @@ import (
 // state = held, so a lease that ended in between is simply not written. With
 // no lease held it reads nothing, not even the process table. When the table
 // cannot be read this tick changes nothing.
-func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw resources.HostRaw) {
+func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw resources.HostRaw) (held []leaseRow, ok bool) {
 	if m.store == nil {
-		return
+		return nil, false
 	}
 	held, err := m.store.Active()
 	if err != nil {
 		m.noteMeasure("list held leases: " + err.Error())
-		return
+		return nil, false
 	}
 	if len(held) == 0 {
 		m.noteMeasure("")
 		m.setLeaseUse(nil)
 		m.useAt = nil
-		return
+		return held, true
 	}
 	view, err := m.readView(ctx)
 	if err != nil {
 		m.noteMeasure("process table: " + err.Error())
-		return
+		return held, true
 	}
 	m.noteMeasure("")
 
@@ -102,6 +102,7 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 	}
 	m.setLeaseUse(latest)
 	m.useAt = lastAt
+	return held, true
 }
 
 // holderStartMS reads a row's holder_start (the registry's text, second

@@ -16,7 +16,7 @@ import (
 )
 
 const resourcesDefaultItems = `{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},` +
-	`"deadline_s":300,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15}`
+	`"deadline_s":300,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30}`
 
 // A host that never wrote the key reads the defaults, on the GET and through
 // the reader; a body that leaves everything out stores them filled in.
@@ -67,6 +67,7 @@ func TestResourcesSettings_Ranges(t *testing.T) {
 		{"floor_pct", 0, 100, 50},
 		{"max_hold_s", 60, 86400, 3600},
 		{"ewma_half_life_s", 5, 300, 15},
+		{"heavy_min_weight", 1, 100, 30},
 	}
 	for _, f := range ints {
 		for _, ok := range []int{f.lo, f.hi, f.defValue} {
@@ -124,7 +125,7 @@ func TestResourcesSettings_PutGetRoundTrip(t *testing.T) {
 		`{"items":{"mode":"advise","warmup_s":0,"kinds":{"build":20,"mine":5}},"baseRevision":0}`)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	const stored = `{"mode":"advise","kinds":{"build":20,"lint-full":10,"mine":5,"test-full":35,"test-pkg":15},` +
-		`"deadline_s":300,"warmup_s":0,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15}`
+		`"deadline_s":300,"warmup_s":0,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30}`
 	assert.JSONEq(t, `{"items":`+stored+`,"revision":1}`, rr.Body.String())
 
 	rr = serve(m, http.MethodGet, "/api/hostconfig", "")

@@ -23,7 +23,11 @@ func newMinuteFix(t *testing.T) *minuteFix {
 
 // tick feeds one good tick to the timeline and moves the clock one interval.
 func (f *minuteFix) tick(h resources.HostUse) {
-	f.m.noteMinute(h, f.clock.now())
+	held, err := f.m.store.Active()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.m.noteMinute(context.Background(), h, f.clock.now(), held, true)
 	f.advance(f.m.interval)
 }
 
@@ -171,7 +175,7 @@ func TestMinutes_WriteFailureLoggedOnceAndRecovers(t *testing.T) {
 		t.Error("recovery not logged")
 	}
 	m := newTestModule(idleSampler(), nil)
-	m.noteMinute(resources.HostUse{Full: true}, time.Now()) // store == nil
+	m.noteMinute(context.Background(), resources.HostUse{Full: true}, time.Now(), nil, true) // store == nil
 }
 
 // Ended rows and minute rows go at the same retention (14 days): boot prunes both.
@@ -263,5 +267,66 @@ func TestMigration_FromTheAlpha610Schema(t *testing.T) {
 			t.Errorf("pass %d: %v", pass, err)
 		}
 		s.Close()
+	}
+}
+
+// A tick whose lease figures could not be read adds nothing: no part of it is
+// in the minute (not its full flag either).
+func TestMinutes_UnreadableLeasesAddNothing(t *testing.T) {
+	f := newMinuteFix(t)
+	on := resources.HostUse{Full: true, Load1: 9, NCPU: 10}
+	f.tick(resources.HostUse{NCPU: 10})
+	f.m.noteMinute(context.Background(), on, f.clock.now(), nil, false) // measureLeases could not read the table
+	f.advance(f.m.interval)
+	// A cancelled context fails the waiting count the same way.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.m.noteMinute(cancelled, on, f.clock.now(), nil, true)
+	f.advance(f.m.interval)
+	f.ticks(11, resources.HostUse{NCPU: 10})
+	r := f.minutes()[0]
+	if r.Full || r.FullTicks != 0 || r.FullStarts != 0 || r.Load1 != 0 {
+		t.Errorf("row = %+v: a tick that could not be completed was folded in", r)
+	}
+}
+
+// Mode off writes the open minute and ends the full run: a run that is on
+// when the sampler goes off does not continue across the time off.
+func TestMinutes_ModeOffFlushesAndEndsTheRun(t *testing.T) {
+	f := newMinuteFix(t)
+	on := resources.HostUse{Full: true, NCPU: 10}
+	f.ticks(2, on)
+	f.m.endMinute()
+	if rows := f.minutes(); len(rows) != 1 || rows[0].FullTicks != 2 {
+		t.Fatalf("rows after off = %+v", rows)
+	}
+	f.advance(3 * time.Hour)
+	f.tick(on)
+	f.ticks(12, resources.HostUse{NCPU: 10})
+	rows := f.minutes()
+	if len(rows) != 2 || rows[1].FullStarts != 1 || rows[1].FullLongestS != 5 {
+		t.Errorf("rows = %+v: the new run must start at the first tick after the time off (5 s), not span it", rows)
+	}
+}
+
+// A clock that steps back neither opens an older minute nor overwrites a row
+// already written.
+func TestMinutes_ClockStepBack(t *testing.T) {
+	f := newMinuteFix(t)
+	f.ticks(30, resources.HostUse{Load1: 5, NCPU: 10}) // 150 s: minutes 12:00, 12:01 written, 12:02 open
+	if rows := f.minutes(); len(rows) != 2 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	f.advance(-4 * time.Minute) // back to 11:58:30
+	f.ticks(2, resources.HostUse{Load1: 99, NCPU: 10})
+	if rows := f.minutes(); len(rows) != 2 {
+		t.Fatalf("a tick in the past wrote or opened a minute: %+v", rows)
+	}
+	// Moving forward again into a minute that is stored never replaces it.
+	if err := f.m.store.InsertMinute(minuteRow{At: f.minutes()[0].At, Load1: 99, NCPU: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.minutes()[0]; got.Load1 != 5 {
+		t.Errorf("a stored minute was overwritten: %+v", got)
 	}
 }

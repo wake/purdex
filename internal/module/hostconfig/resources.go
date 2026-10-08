@@ -35,10 +35,10 @@ func resourcesFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	}
 	for k := range fields {
 		switch k {
-		case "mode", "kinds", "deadline_s", "warmup_s", "floor_pct", "max_hold_s", "ewma_half_life_s":
+		case "mode", "kinds", "deadline_s", "warmup_s", "floor_pct", "max_hold_s", "ewma_half_life_s", "heavy_min_weight":
 		default:
 			return nil, errors.New("unknown resources field " + k +
-				"; only mode, kinds, deadline_s, warmup_s, floor_pct, max_hold_s and ewma_half_life_s")
+				"; only mode, kinds, deadline_s, warmup_s, floor_pct, max_hold_s, ewma_half_life_s and heavy_min_weight")
 		}
 	}
 	return fields, nil
@@ -97,6 +97,7 @@ func normalizeResources(raw json.RawMessage) (resources.Settings, error) {
 	}{
 		{"deadline_s", &s.DeadlineS}, {"warmup_s", &s.WarmupS}, {"floor_pct", &s.FloorPct},
 		{"max_hold_s", &s.MaxHoldS}, {"ewma_half_life_s", &s.EWMAHalfLifeS},
+		{"heavy_min_weight", &s.HeavyMinWeight},
 	} {
 		if *f.dst, err = resourcesInt(fields, f.key); err != nil {
 			return resources.Settings{}, err
