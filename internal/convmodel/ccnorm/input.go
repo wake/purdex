@@ -14,8 +14,15 @@ import (
 const maxInputDepth = 32
 
 // capInput bounds a tool input for storing (lead ruling D9): every string
-// value at most 4 KiB (head), the whole at most 16 KiB. It reports whether
-// anything was cut. The result is always valid JSON.
+// value at most 4 KiB (head), the whole at most 16 KiB, nesting at most
+// maxInputDepth. cut reports that the stored input is not the complete tool
+// input, whatever the reason (a string cut, the total cap, the depth cap, a
+// dropped member); Validate cannot tell the reasons apart and does not try.
+// The result is always a valid JSON object.
+//
+// The spec says a step input is an object. Anything else (a string, array,
+// number, bool, null, or no input at all) is stored as {} and is not flagged:
+// there was no object to cut. No wire change.
 //
 // A whole input over 16 KiB keeps its top-level members in sorted key order
 // while they fit and fills the rest of the budget from the first member that
@@ -25,8 +32,11 @@ func capInput(raw json.RawMessage) (out json.RawMessage, cut bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var v any
-	if len(raw) == 0 || dec.Decode(&v) != nil || v == nil {
+	if len(raw) == 0 || raw[0] != '{' {
 		return json.RawMessage(`{}`), false
+	}
+	if dec.Decode(&v) != nil {
+		return json.RawMessage(`{}`), true // an object that cannot be read
 	}
 	v = capValue(v, 0, &cut)
 	b := marshalNoEscape(v)

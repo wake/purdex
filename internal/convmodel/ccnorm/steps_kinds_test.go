@@ -205,15 +205,31 @@ func TestInput_SmallInputUntouched(t *testing.T) {
 }
 
 func TestInput_MissingOrOddInputBecomesEmptyObject(t *testing.T) {
-	for _, in := range []any{nil, "not an object", []int{1}} {
+	// the spec says a step input is an object; anything else is stored as {}
+	// and is not "truncated" (nothing of an object was cut)
+	cases := map[string]any{
+		"missing": nil, "string": "not an object", "array": []int{1},
+		"number": 5, "bool": true, "null": json.RawMessage("null"),
+	}
+	summaries := map[string]string{}
+	for name, in := range cases {
 		b := obj{"type": "tool_use", "id": "toolu_1", "name": "Bash"}
-		if in != nil {
+		if name != "missing" {
 			b["input"] = in
 		}
 		c := conv(t, userRow("u1", 1, "go"), assistantRow("a1", 2, "claude-opus-5-5", b))
 		s := stepNamed(t, c, "toolu_1")
-		if !json.Valid(s.Input) || len(s.Input) == 0 {
-			t.Errorf("input %v → %q is not valid JSON", in, s.Input)
+		if m := decodeInput(t, s); m == nil || len(m) != 0 || string(s.Input) != "{}" {
+			t.Errorf("%s: input %q, want {}", name, s.Input)
+		}
+		if s.InputTruncated {
+			t.Errorf("%s: a non-object input must not set input_truncated", name)
+		}
+		summaries[name] = s.Summary
+	}
+	for name, got := range summaries {
+		if got != summaries["missing"] {
+			t.Errorf("%s: summary %q, want the missing-input fallback %q", name, got, summaries["missing"])
 		}
 	}
 }

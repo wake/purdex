@@ -181,6 +181,17 @@ func TestValidate_InputTruncatedFlagAcceptsAnyCause(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsNonObjectInput(t *testing.T) {
+	for _, in := range []string{``, `null`, `"s"`, `[1]`, `5`, `true`, `{`} {
+		for _, flag := range []bool{false, true} {
+			rejects(t, func(c *Conversation) {
+				step(c, "s1").Input = json.RawMessage(in)
+				step(c, "s1").InputTruncated = flag
+			}, "input")
+		}
+	}
+}
+
 func TestValidate_RejectsUntruncatedInputOverCap(t *testing.T) {
 	// not flagged => nothing in the stored input may exceed a cap
 	rejects(t, func(c *Conversation) {

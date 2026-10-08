@@ -129,6 +129,10 @@ func validateStep(s *Step) error {
 	if (s.Status == StepDenied) != (s.Denial != "") {
 		return fmt.Errorf("denial %q with status %q: a denial goes with denied, and denied needs a denial", s.Denial, s.Status)
 	}
+	var in map[string]any
+	if json.Unmarshal(s.Input, &in) != nil || in == nil {
+		return fmt.Errorf("step input is not a JSON object: %.40q", s.Input)
+	}
 	// input_truncated says the stored input is not the complete tool input,
 	// for any reason (a cut string, the total cap, the depth cap, a dropped
 	// member), so the output alone cannot prove it. What can be proven is the
