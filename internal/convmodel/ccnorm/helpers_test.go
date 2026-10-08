@@ -78,7 +78,7 @@ func isMeta() opt               { return with("isMeta", true) }
 func sidechain() opt            { return with("isSidechain", true) }
 func entrypoint(e string) opt   { return with("entrypoint", e) }
 
-func contentBlocks_(blocks ...obj) opt {
+func blocksOf(blocks ...obj) opt {
 	return func(o obj) { o["message"] = obj{"role": "user", "content": blocks} }
 }
 

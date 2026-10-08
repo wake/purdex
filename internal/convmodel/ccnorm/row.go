@@ -243,7 +243,8 @@ func hasToolResult(blocks []block) bool {
 }
 
 // imageSize is the decoded size of an image block's base64 data, measured on
-// the trimmed length; the data itself is never kept. Escapes in the JSON
+// the trimmed length (base64.StdEncoding.DecodedLen less the padding); the
+// data itself is never kept. Escapes in the JSON
 // string (a "\/") are resolved only when present.
 func imageSize(b block) (mediaType string, size int64) {
 	src, ok := parseObject(b.obj.get("source"))
@@ -260,5 +261,12 @@ func imageSize(b block) (mediaType string, size int64) {
 		s, _ := jsonString(raw)
 		inner = []byte(s)
 	}
-	return mediaType, int64(base64.StdEncoding.DecodedLen(len(bytes.TrimSpace(inner))))
+	inner = bytes.TrimSpace(inner)
+	size = int64(base64.StdEncoding.DecodedLen(len(inner)))
+	// DecodedLen assumes the padding is all data; the decoded size is
+	// exact once the '=' characters are taken off.
+	for i := 0; i < 2 && i < len(inner) && inner[len(inner)-1-i] == '='; i++ {
+		size--
+	}
+	return mediaType, size
 }
