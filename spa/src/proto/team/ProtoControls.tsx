@@ -63,7 +63,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
     <div data-testid="proto-controls" className="fixed right-3 bottom-3 z-50 w-[min(380px,calc(100vw-24px))] max-h-[48vh] overflow-y-auto rounded-xl border border-border-default bg-surface-elevated shadow-2xl p-3 text-xs flex flex-col gap-2">
       <div className="flex items-center">
         <span className="font-semibold">原型控制</span>
-        <span className="ml-2 text-text-muted">team 介面 · 第五版</span>
+        <span className="ml-2 text-text-muted">team 介面 · 第五版 b</span>
         <button type="button" onClick={() => setOpen(false)} className="ml-auto text-text-muted hover:text-text-primary cursor-pointer">收起</button>
       </div>
       <Seg label="分頁位置" value={tabPosition} options={[['top', '上方'], ['left', '左側'], ['both', '兩側']]} onChange={(v) => useLayoutStore.getState().setTabPosition(v)} />
@@ -74,7 +74,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
       </div>
       <div className="text-[10.5px] text-text-muted font-semibold pt-0.5">比較用（之後定一種）</div>
       <Seg label="群組樣式" value={groupStyle} options={[['label', '只有標籤'], ['dot', '色點（對照）'], ['endcap', '收尾刻度'], ['gap', '間距分群'], ['sepcolor', '色分隔線'], ['rule', '細線'], ['combo', '色點＋間距＋收尾']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
-      <Seg label="斜角" value={groupStyle} options={[['corner-tr', '右上斜角'], ['corner-br', '右下斜角'], ['corner-tr-icon', '右上＋圖示'], ['corner-br-icon', '右下＋圖示']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
+      <Seg label="斜角" value={groupStyle} options={[['corner-tr', '右上斜角'], ['corner-br', '右下斜角'], ['corner-tr-icon', '右上＋圖示'], ['corner-br-icon', '右下＋圖示'], ['badge-icon', '轉角徽章・純圖示'], ['badge-disc', '轉角徽章・圓底']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
       <Seg label="斜角大小" value={cornerSize} options={[['sm', '小'], ['md', '中（預設）'], ['lg', '大']]} onChange={(v) => useProtoTeam.setState({ cornerSize: v })} />
       <Seg label="舊群組" value={groupStyle} options={[['tint', '淡色底'], ['frame', '外框'], ['topbar', '頂端色條'], ['plate', '共用底板']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
       <Seg label="收起樣式" value={collapseStyle} options={[['users', '新：人群圖示＋燈點'], ['sign', '舊：符號＋「N 個收起」']]} onChange={(v) => useProtoTeam.setState({ collapseStyle: v })} />
@@ -126,7 +126,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         {[0, 1, 2, 3].map((n) => <Btn key={n} testId={`ctl-sub-${n}`} disabled={!tgt} onClick={() => tgt && setSubagents(tgt.sessionId, n)}>{n}</Btn>)}
       </div>
       <details data-testid="ctl-notes" className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" open>
-        <summary className="cursor-pointer font-semibold text-text-primary">第五版說明與待確認</summary>
+        <summary className="cursor-pointer font-semibold text-text-primary">第五版（b）說明與待確認</summary>
         <div className="mt-1 flex flex-col gap-1 leading-snug">
           <div><b>這版改了</b>：①側欄掛勾改從 lead 的 bot 圖示下方長出來，顆粒整體右移一點讓出位置 ②多排時每排第一顆的左緣對齊同一條線；⎿ 字元版改成跟 Claude Code console 一樣，每排各一個 ⎿、x 位置相同，不再畫連續長線 ③細線圓角／加粗／樹狀刻度的起點與對齊一併修正，頂端預設從 lead 底色區塊的下緣開始，新增「掛勾頂端」切換可改成「融入底色」（線從底色漸入，lead 沒被選中時沒有底色就不變） ④上方群組新增 4 種斜角（右上／右下、單純填色／內放反色 member 圖示），預設是「右上斜角・中」，另有小／大兩種尺寸；原本的色點留作對照，不再是預設。</div>
           <div className="font-semibold text-text-primary pt-0.5">待確認</div>
@@ -134,7 +134,12 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
           <div>2. 斜角放在 lead 與每個 member 的分頁；右上角會跟 hover 才出現的關閉鈕在右側相鄰，右下角較不干擾關閉鈕。要哪個位置？</div>
           <div>3. 掛勾頂端：「從底色下緣開始」（乾淨）與「融入底色」（線頭漸入）請比較。</div>
           <div>4. 顆粒左緣比 v4 往右 12px，才能讓掛勾轉彎後仍有一小段橫線；可以接受嗎？</div>
-          <div>5. 沿用 v4 待確認：開分頁小點、收起樣式與燈點四色、面板縮一行的寬度。</div>
+          <div className="font-semibold text-text-primary pt-0.5">5b 轉角徽章（斜角那一列最後兩個）</div>
+          <div>member 圖示（Phosphor User）壓在分頁右上轉角線上，一半在分頁內、一半在外；active／inactive 位置相同，lead 與每個 member 分頁都有。「純圖示」＝圖示本身是 team 色、沒有底（實心）；「圓底」＝team 色實心圓＋分頁列底色的 bold 鏤空圖示。大小沿用「斜角大小」：純圖示 12／16／20px、圓底 14／18／22px。</div>
+          <div>5b-1. 與關閉鈕：徽章中心往分頁內縮 2px 並壓在最上緣，只佔右上角約 8px 見方，關閉鈕 × 在垂直置中，不會被蓋到、也不擋點擊（徽章不接收滑鼠）。選「大」時徽章最低點離 × 約 2px，若覺得擠要往外推再說。</div>
+          <div>5b-2. 分頁列上緣：分頁上方原本有約 8px 空隙，徽章往外突出最多 8px（大），所以不裁切、列高不變；最右邊一個分頁的徽章會往右突出 8px，壓在下一個分頁的左緣（徽章在上層）。要不要改成不重疊？</div>
+          <div>5b-3. 圓底的鏤空圖示色用分頁列底色（--surface-secondary）；純圖示在淺色主題上對比較弱的 team 色可能不夠清楚，請看兩種主題。</div>
+          <div>6. 沿用 v4 待確認：開分頁小點、收起樣式與燈點四色、面板縮一行的寬度。</div>
         </div>
       </details>
       <div className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" data-testid="ctl-log">

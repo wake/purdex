@@ -8,7 +8,7 @@
 // The older styles: an outline ("frame"), one shared tinted plate ("plate"); "tint" / "topbar" decorate the tabs.
 import type { CSSProperties, ReactNode } from 'react'
 import { User } from '@phosphor-icons/react'
-import { groupCorner, groupHasCue, useTeamDisplay, type TeamCornerSize, type TeamTabMark } from './team-display'
+import { groupBadge, groupCorner, groupHasCue, useTeamDisplay, type TeamCornerSize, type TeamTabMark } from './team-display'
 
 /** Dark text on the pastel team colors, in both themes. */
 const LABEL_FG = '#14141f'
@@ -59,10 +59,35 @@ const CORNER_PX: Record<'plain' | 'icon', Record<TeamCornerSize, number>> = {
   icon: { sm: 14, md: 18, lg: 22 },
 }
 
+/** Corner-badge diameter per size; the bare icon is a little smaller than the disc. */
+const BADGE_PX: Record<'icon' | 'disc', Record<TeamCornerSize, number>> = {
+  icon: { sm: 12, md: 16, lg: 20 },
+  disc: { sm: 14, md: 18, lg: 22 },
+}
+
 /** A folded-corner mark on a tab (the "corner-*" group styles): a team-colored right triangle, optionally holding a member icon. */
 export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
   const corner = groupCorner(mark.style)
+  const badge = groupBadge(mark.style)
   const size = useTeamDisplay()?.cornerSize ?? 'md'
+  if (badge) {
+    const px = BADGE_PX[badge][size]
+    // Center sits on the corner, nudged inward by 2px so the TabBar scroller (which clips vertically) keeps the whole badge visible.
+    const off = -(px / 2) + 2
+    return (
+      <span
+        data-testid="team-tab-badge"
+        data-badge={badge}
+        aria-hidden="true"
+        className="absolute pointer-events-none z-20 flex items-center justify-center"
+        style={{ top: off, right: off, width: px, height: px, borderRadius: '50%', background: badge === 'disc' ? mark.color : undefined }}
+      >
+        {badge === 'disc'
+          ? <User weight="bold" size={Math.round(px * 0.62)} color="var(--surface-secondary)" />
+          : <User weight="fill" size={px} color={mark.color} />}
+      </span>
+    )
+  }
   if (!corner) return null
   const px = CORNER_PX[corner.icon ? 'icon' : 'plain'][size]
   const top = corner.pos === 'tr'

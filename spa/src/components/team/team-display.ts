@@ -30,6 +30,7 @@ export interface TeamSeatView {
  */
 export type TeamGroupStyle = 'label' | 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule' | 'combo' | 'tint' | 'frame' | 'topbar' | 'plate'
   | 'corner-tr' | 'corner-br' | 'corner-tr-icon' | 'corner-br-icon'
+  | 'badge-icon' | 'badge-disc'
 
 /** The low-key cues a group style turns on (the older four styles use none of them). */
 export type TeamGroupCue = 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule'
@@ -47,6 +48,11 @@ export function groupCorner(style: TeamGroupStyle): { pos: 'tr' | 'br'; icon: bo
     case 'corner-br-icon': return { pos: 'br', icon: true }
     default: return null
   }
+}
+
+/** The corner-badge styles: a member icon straddling a tab's top-right corner (bare team-colored icon, or a team-colored disc with a knocked-out icon). */
+export function groupBadge(style: TeamGroupStyle): 'icon' | 'disc' | null {
+  return style === 'badge-icon' ? 'icon' : style === 'badge-disc' ? 'disc' : null
 }
 
 /** Corner size (small / default / large); the icon variants are drawn bigger to hold the icon. */
