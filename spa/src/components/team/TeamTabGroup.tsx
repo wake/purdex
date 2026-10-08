@@ -8,6 +8,7 @@
 // The older styles: an outline ("frame"), one shared tinted plate ("plate"); "tint" / "topbar" decorate the tabs.
 import type { CSSProperties, ReactNode } from 'react'
 import { User, UsersThree, BookmarkSimple, Hexagon, Diamond, Circle } from '@phosphor-icons/react'
+import { useThemeStore } from '../../stores/useThemeStore'
 import { groupBadge, groupCorner, groupEdge, groupHasCue, groupShadow, useTeamDisplay, type TeamBadgeIcon, type TeamCornerSize, type TeamShadowStrength, type TeamTabMark } from './team-display'
 
 /** Dark text on the pastel team colors, in both themes. */
@@ -170,24 +171,26 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
   )
 }
 
-/** Shadow look per strength: alpha (percent of team color), blur, offset, inset depth. */
-const SHADOW_PX: Record<TeamShadowStrength, { alpha: number; blur: number; off: number; inset: number }> = {
-  soft: { alpha: 40, blur: 6, off: 2, inset: 3 },
-  medium: { alpha: 65, blur: 8, off: 3, inset: 5 },
-  strong: { alpha: 95, blur: 11, off: 4, inset: 8 },
+/** Shadow width steps: a crisp solid line (off px) plus an optional soft companion (blur px, 35% alpha). */
+const SHADOW_PX: Record<TeamShadowStrength, { off: number; soft: number }> = {
+  thin: { off: 1, soft: 0 },
+  medium: { off: 1, soft: 2 },
+  thick: { off: 2, soft: 2 },
 }
 
 /**
- * A team-colored shadow on a tab (the "shadow-*" group styles). The TabBar scroller clips vertically (about 2px above a
- * tab, 6px below), so an outer shadow alone would be cut: each shadow is an outer part (what fits) plus an inset part on the
- * same side that always shows inside the tab. An overlay span, so the tab's own background and active highlight stay as they are.
+ * A team-colored "lifted button" shadow on a tab (the "shadow-*" group styles): a crisp 1-2px solid edge in the team color,
+ * optionally with a tiny soft companion. No inset, no glow. Sizes stay inside the TabBar clip (about 2px above, 6px below).
+ * In the light theme the pastel colors are darkened so the line reads. An overlay span, so the tab's own background stays.
  */
 function TeamTabShadow({ mark, dir, strength }: { mark: TeamTabMark; dir: 'top' | 'bottom' | 'diag'; strength: TeamShadowStrength }) {
-  const { alpha, blur, off, inset } = SHADOW_PX[strength]
-  const col = `color-mix(in srgb, ${mark.color} ${alpha}%, transparent)`
+  const light = useThemeStore((s) => s.activeThemeId) === 'light'
+  const { off, soft } = SHADOW_PX[strength]
+  const line = light ? `color-mix(in oklab, ${mark.color}, black 25%)` : mark.color
+  const halo = `color-mix(in srgb, ${line} 35%, transparent)`
   const [ox, oy] = dir === 'top' ? [0, -off] : dir === 'bottom' ? [0, off] : [off, off]
-  const k = inset / off
-  const boxShadow = [`${ox}px ${oy}px ${blur}px ${col}`, `inset ${-ox * k}px ${-oy * k}px ${inset + 2}px ${-Math.round(inset * 0.7)}px ${col}`].join(', ')
+  const parts = [`${ox}px ${oy}px 0 ${line}`]
+  if (soft) parts.push(`${ox}px ${oy}px ${soft}px ${halo}`)
   return (
     <span
       data-testid="team-tab-shadow"
@@ -195,7 +198,7 @@ function TeamTabShadow({ mark, dir, strength }: { mark: TeamTabMark; dir: 'top' 
       data-shadow-strength={strength}
       aria-hidden="true"
       className="absolute inset-0 pointer-events-none z-10"
-      style={{ borderRadius: 6, boxShadow }}
+      style={{ borderRadius: 6, boxShadow: parts.join(', ') }}
     />
   )
 }

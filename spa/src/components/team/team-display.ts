@@ -80,7 +80,7 @@ export function groupShadow(style: TeamGroupStyle): 'top' | 'bottom' | 'diag' | 
 }
 
 /** Shadow strength (blur + alpha) and scope (every tab of the group, or only its last tab). */
-export type TeamShadowStrength = 'soft' | 'medium' | 'strong'
+export type TeamShadowStrength = 'thin' | 'medium' | 'thick'
 export type TeamShadowScope = 'all' | 'last'
 
 /** Where the hook's top starts: exactly at the lead highlight's lower edge, or fused into the highlight. */

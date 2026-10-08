@@ -63,7 +63,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
     <div data-testid="proto-controls" className="fixed right-3 bottom-3 z-50 w-[min(380px,calc(100vw-24px))] max-h-[48vh] overflow-y-auto rounded-xl border border-border-default bg-surface-elevated shadow-2xl p-3 text-xs flex flex-col gap-2">
       <div className="flex items-center">
         <span className="font-semibold">原型控制</span>
-        <span className="ml-2 text-text-muted">team 介面 · 第五版 f</span>
+        <span className="ml-2 text-text-muted">team 介面 · 第五版 g</span>
         <button type="button" onClick={() => setOpen(false)} className="ml-auto text-text-muted hover:text-text-primary cursor-pointer">收起</button>
       </div>
       <Seg label="分頁位置" value={tabPosition} options={[['top', '上方'], ['left', '左側'], ['both', '兩側']]} onChange={(v) => useLayoutStore.getState().setTabPosition(v)} />
@@ -86,7 +86,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
       <Seg label="邊線粗細" value={String(edgeWidth)} options={[['1.5', '1.5px'], ['2', '2px（預設）']]} onChange={(v) => useProtoTeam.setState({ edgeWidth: v === '1.5' ? 1.5 : 2 })} />
       {groupStyle.startsWith('shadow-') && (
         <>
-          <Seg label="陰影強度" value={shadowStrength} options={[['soft', '柔'], ['medium', '中（預設）'], ['strong', '強']]} onChange={(v) => useProtoTeam.setState({ shadowStrength: v })} />
+          <Seg label="陰影強度" value={shadowStrength} options={[['thin', '細（1px）'], ['medium', '中（1px＋柔邊）'], ['thick', '粗（2px＋柔邊）']]} onChange={(v) => useProtoTeam.setState({ shadowStrength: v })} />
           <Seg label="陰影範圍" value={shadowScope} options={[['all', '整組每個分頁'], ['last', '只最後一個分頁']]} onChange={(v) => useProtoTeam.setState({ shadowScope: v })} />
         </>
       )}
