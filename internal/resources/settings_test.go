@@ -2,6 +2,7 @@ package resources
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -57,6 +58,33 @@ func TestSettings_EffectiveMergesClampsAndCopies(t *testing.T) {
 	assert.Equal(t, 15, w)
 	_, ok = s.Weight("nope")
 	assert.False(t, ok)
+}
+
+// Codex attack (high): the limit counts the kinds an operator adds. Effective
+// puts the four built-ins on top, so counting the merged set would accept 32
+// custom kinds and then refuse the stored result on the next read.
+func TestSettings_CustomKindLimitSurvivesEffective(t *testing.T) {
+	custom := func(n int) map[string]int {
+		m := map[string]int{}
+		for i := 0; i < n; i++ {
+			m[fmt.Sprintf("kind-%02d", i)] = 10
+		}
+		return m
+	}
+	ok := Settings{Kinds: custom(maxKinds)}
+	require.NoError(t, ok.Validate())
+	require.NoError(t, ok.Effective().Validate(), "what Effective stores must validate again")
+	assert.Equal(t, maxKinds+len(DefaultKinds), len(ok.Effective().Kinds))
+
+	tooMany := Settings{Kinds: custom(maxKinds + 1)}
+	assert.ErrorIs(t, tooMany.Validate(), ErrSettings)
+
+	// Overriding built-ins costs nothing against the limit.
+	withBuiltins := custom(maxKinds)
+	for k := range DefaultKinds {
+		withBuiltins[k] = 20
+	}
+	require.NoError(t, Settings{Kinds: withBuiltins}.Validate())
 }
 
 func TestSettings_ValidateNamesTheField(t *testing.T) {

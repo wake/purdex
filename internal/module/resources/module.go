@@ -51,6 +51,9 @@ type Module struct {
 	fails     int    // consecutive failed ticks
 	degraded  bool   // the failing log line has been written for this run of failures
 	rootsNote string // the last roots problem logged, so a standing one logs once
+	// fullLatch turns each reading into the published host.full with a
+	// hysteresis; a failed tick leaves it where it was.
+	fullLatch resources.FullLatch
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	startMu   sync.Mutex

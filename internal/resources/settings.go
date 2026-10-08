@@ -96,8 +96,17 @@ func (s Settings) Validate() error {
 	default:
 		return fmt.Errorf("%w: mode must be off, measure, advise or lease", ErrSettings)
 	}
-	if len(s.Kinds) > maxKinds {
-		return fmt.Errorf("%w: kinds has more than %d entries", ErrSettings, maxKinds)
+	// The limit is on the kinds an operator adds: Effective puts the built-ins
+	// on top of whatever is stored, so counting the merged set would accept a
+	// body that the next read refuses.
+	custom := 0
+	for name := range s.Kinds {
+		if _, builtin := DefaultKinds[name]; !builtin {
+			custom++
+		}
+	}
+	if custom > maxKinds {
+		return fmt.Errorf("%w: kinds has more than %d custom entries", ErrSettings, maxKinds)
 	}
 	for name, w := range s.Kinds {
 		if !kindName.MatchString(name) {

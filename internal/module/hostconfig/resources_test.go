@@ -3,7 +3,9 @@ package hostconfig
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -156,6 +158,37 @@ func TestResourcesSettings_PutGetRoundTrip(t *testing.T) {
 	rr = serve(m, http.MethodPut, "/api/hostconfig/resources", `{"items":{"deadline_s":5},"baseRevision":2}`)
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 	assert.Contains(t, rr.Body.String(), "deadline_s")
+}
+
+// Codex attack (high): a PUT the API accepts must be readable again. 32 custom
+// kinds plus the four built-ins is what gets stored, and GET and the reader
+// validate that stored copy.
+func TestResourcesSettings_MaxCustomKindsReadBackAndPutAgain(t *testing.T) {
+	m := newTestModule(t)
+	var kinds []string
+	for i := 0; i < 32; i++ {
+		kinds = append(kinds, fmt.Sprintf(`"kind-%02d":10`, i))
+	}
+	body := `{"items":{"kinds":{` + strings.Join(kinds, ",") + `}},"baseRevision":0}`
+	rr := serve(m, http.MethodPut, "/api/hostconfig/resources", body)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	s, err := m.ResourcesSettings()
+	require.NoError(t, err, "the reader must accept what the PUT stored")
+	assert.Len(t, s.Kinds, 36)
+
+	rr = serve(m, http.MethodGet, "/api/hostconfig", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var got map[string]struct {
+		Invalid bool            `json:"invalid"`
+		Items   json.RawMessage `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.False(t, got["resources"].Invalid, "GET must not flag the stored row invalid")
+
+	// And what GET shows goes straight back in.
+	rr = serve(m, http.MethodPut, "/api/hostconfig/resources", `{"items":`+string(got["resources"].Items)+`,"baseRevision":1}`)
+	assert.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 }
 
 // A stored value that no longer validates (written around the PUT) is an

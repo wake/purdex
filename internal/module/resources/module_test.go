@@ -117,6 +117,27 @@ func TestModule_TicksOnOwnTicker(t *testing.T) {
 	}
 }
 
+// Codex R1 + attack on P1-1a: the published host.full goes through FullLatch.
+// P0 acceptance saw load1 between 9.5 and 10.5 on 10 cores for ten minutes;
+// the stateless flag in ComputeHost would publish true, false, true, ...
+func TestModule_PublishedFullDoesNotFlap(t *testing.T) {
+	loads := []float64{3, 10, 9.5, 10.5, 9.2, 9.0, 8.9, 9.5}
+	want := []bool{false, true, true, true, true, true, false, false}
+	s := &fakeSampler{fn: func(_ context.Context, call int) (resources.HostRaw, []resources.Proc, error) {
+		r := goodRaw()
+		r.Load1 = loads[call-1]
+		return r, nil, nil
+	}}
+	m := newTestModule(s, nil)
+	for i, w := range want {
+		m.tick(context.Background())
+		got := m.latest.Load()
+		if got == nil || got.Host.Full != w {
+			t.Fatalf("tick %d (load1 %.1f): host.full = %v, want %v", i+1, loads[i], got.Host.Full, w)
+		}
+	}
+}
+
 func TestModule_FailingSampleKeepsLastThenMarksUnavailable(t *testing.T) {
 	var failing atomic.Bool
 	s := &fakeSampler{fn: func(_ context.Context, _ int) (resources.HostRaw, []resources.Proc, error) {
