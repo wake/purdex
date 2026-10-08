@@ -374,7 +374,7 @@ func TestSweeper_ModeOffAndMeasureDoNotEnd(t *testing.T) {
 	old := baseRow("old", "c-old")
 	old.CreatedAt = 1000
 	mustCreate(t, f.m.store, old)
-	if ok, err := f.m.store.End("old", resources.EndReleased, f.nowMS()-8*24*3600*1000); !ok || err != nil {
+	if ok, err := f.m.store.End("old", resources.EndReleased, f.nowMS()-15*24*3600*1000); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
 	ch := f.m.genChan()

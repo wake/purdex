@@ -21,25 +21,25 @@ import (
 // state = held, so a lease that ended in between is simply not written. With
 // no lease held it reads nothing, not even the process table. When the table
 // cannot be read this tick changes nothing.
-func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw resources.HostRaw) {
+func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw resources.HostRaw) (held []leaseRow, ok bool) {
 	if m.store == nil {
-		return
+		return nil, false
 	}
 	held, err := m.store.Active()
 	if err != nil {
 		m.noteMeasure("list held leases: " + err.Error())
-		return
+		return nil, false
 	}
 	if len(held) == 0 {
 		m.noteMeasure("")
 		m.setLeaseUse(nil)
 		m.useAt = nil
-		return
+		return held, true
 	}
 	view, err := m.readView(ctx)
 	if err != nil {
 		m.noteMeasure("process table: " + err.Error())
-		return
+		return held, true
 	}
 	m.noteMeasure("")
 
@@ -57,7 +57,7 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 	prev := m.leaseUseSnapshot()
 	latest := make(map[string]resources.LeaseUsage, len(held))
 	lastAt := make(map[string]time.Time, len(held))
-	for _, r := range held {
+	for i, r := range held {
 		u := usage[r.ID]
 		if u.Unverified {
 			// Its pid is another process now (the sweeper ends the lease as
@@ -99,9 +99,13 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 			continue
 		}
 		lastAt[r.ID] = now
+		// The rows handed back carry the figures just stored, so the timeline
+		// charges a lease by its current average, not last tick's.
+		held[i].EWMA, held[i].PeakUse, held[i].MeanUse, held[i].Samples, held[i].EmptySamples = ewma, peak, mean, samples, empty
 	}
 	m.setLeaseUse(latest)
 	m.useAt = lastAt
+	return held, true
 }
 
 // holderStartMS reads a row's holder_start (the registry's text, second

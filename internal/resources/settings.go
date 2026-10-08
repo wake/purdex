@@ -40,6 +40,9 @@ const (
 	DefaultFloorPct      = 50
 	DefaultMaxHoldS      = 3600
 	DefaultEWMAHalfLifeS = 15
+	// DefaultHeavyMinWeight: the report counts a lease as heavy from this
+	// weight (test-full and build are 35; a single-package go test is 15).
+	DefaultHeavyMinWeight = 30
 
 	minDeadlineS, maxDeadlineS         = 10, 590
 	minWarmupS, maxWarmupS             = 0, 300
@@ -47,6 +50,7 @@ const (
 	minMaxHoldS, maxMaxHoldS           = 60, 86400
 	minEWMAHalfLifeS, maxEWMAHalfLifeS = 5, 300
 	minKindWeight, maxKindWeight       = 1, 100
+	minHeavyWeight, maxHeavyWeight     = 1, 100
 	maxKinds                           = 32
 )
 
@@ -81,6 +85,9 @@ type Settings struct {
 	MaxHoldS *int `json:"max_hold_s,omitempty"`
 	// EWMAHalfLifeS is the half-life of the measured-use average.
 	EWMAHalfLifeS *int `json:"ewma_half_life_s,omitempty"`
+	// HeavyMinWeight is the weight from which a held lease counts as heavy in
+	// the host timeline (spec D-8.2 heavy_held).
+	HeavyMinWeight *int `json:"heavy_min_weight,omitempty"`
 }
 
 func intp(n int) *int { return &n }
@@ -126,6 +133,7 @@ func (s Settings) Validate() error {
 		{"floor_pct", s.FloorPct, minFloorPct, maxFloorPct},
 		{"max_hold_s", s.MaxHoldS, minMaxHoldS, maxMaxHoldS},
 		{"ewma_half_life_s", s.EWMAHalfLifeS, minEWMAHalfLifeS, maxEWMAHalfLifeS},
+		{"heavy_min_weight", s.HeavyMinWeight, minHeavyWeight, maxHeavyWeight},
 	} {
 		if f.v != nil && (*f.v < f.lo || *f.v > f.hi) {
 			return fmt.Errorf("%w: %s must be between %d and %d", ErrSettings, f.name, f.lo, f.hi)
@@ -139,13 +147,14 @@ func (s Settings) Validate() error {
 // hand still reads as something usable. It never mutates s or shares its map.
 func (s Settings) Effective() Settings {
 	out := Settings{
-		Mode:          s.mode(),
-		Kinds:         maps.Clone(DefaultKinds),
-		DeadlineS:     intp(clampInt(s.DeadlineS, DefaultDeadlineS, minDeadlineS, maxDeadlineS)),
-		WarmupS:       intp(clampInt(s.WarmupS, DefaultWarmupS, minWarmupS, maxWarmupS)),
-		FloorPct:      intp(clampInt(s.FloorPct, DefaultFloorPct, minFloorPct, maxFloorPct)),
-		MaxHoldS:      intp(clampInt(s.MaxHoldS, DefaultMaxHoldS, minMaxHoldS, maxMaxHoldS)),
-		EWMAHalfLifeS: intp(clampInt(s.EWMAHalfLifeS, DefaultEWMAHalfLifeS, minEWMAHalfLifeS, maxEWMAHalfLifeS)),
+		Mode:           s.mode(),
+		Kinds:          maps.Clone(DefaultKinds),
+		DeadlineS:      intp(clampInt(s.DeadlineS, DefaultDeadlineS, minDeadlineS, maxDeadlineS)),
+		WarmupS:        intp(clampInt(s.WarmupS, DefaultWarmupS, minWarmupS, maxWarmupS)),
+		FloorPct:       intp(clampInt(s.FloorPct, DefaultFloorPct, minFloorPct, maxFloorPct)),
+		MaxHoldS:       intp(clampInt(s.MaxHoldS, DefaultMaxHoldS, minMaxHoldS, maxMaxHoldS)),
+		EWMAHalfLifeS:  intp(clampInt(s.EWMAHalfLifeS, DefaultEWMAHalfLifeS, minEWMAHalfLifeS, maxEWMAHalfLifeS)),
+		HeavyMinWeight: intp(clampInt(s.HeavyMinWeight, DefaultHeavyMinWeight, minHeavyWeight, maxHeavyWeight)),
 	}
 	for name, w := range s.Kinds {
 		out.Kinds[name] = min(max(w, minKindWeight), maxKindWeight)
@@ -191,6 +200,11 @@ func (s Settings) MaxHold() time.Duration {
 // HalfLife is the half-life of the measured-use average.
 func (s Settings) HalfLife() time.Duration {
 	return time.Duration(clampInt(s.EWMAHalfLifeS, DefaultEWMAHalfLifeS, minEWMAHalfLifeS, maxEWMAHalfLifeS)) * time.Second
+}
+
+// HeavyMin is the weight from which a held lease counts as heavy.
+func (s Settings) HeavyMin() int {
+	return clampInt(s.HeavyMinWeight, DefaultHeavyMinWeight, minHeavyWeight, maxHeavyWeight)
 }
 
 // Weight is the weight of a kind: the setting's, else the built-in default;

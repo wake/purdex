@@ -1,0 +1,28 @@
+CREATE TABLE resource_leases (
+			id            TEXT PRIMARY KEY,
+			client_id     TEXT    NOT NULL UNIQUE,
+			state         TEXT    NOT NULL CHECK (state IN ('waiting','held','ended')),
+			kind          TEXT    NOT NULL DEFAULT '',
+			weight        INTEGER NOT NULL,
+			session_id    TEXT    NOT NULL DEFAULT '',
+			holder_pid    INTEGER NOT NULL,
+			holder_start  TEXT    NOT NULL DEFAULT '',
+			scope         TEXT    NOT NULL CHECK (scope IN ('process','session-new')),
+			tool_use_id   TEXT    NOT NULL DEFAULT '',
+			created_at    INTEGER NOT NULL,
+			deadline_at   INTEGER NOT NULL,
+			lease_until   INTEGER NOT NULL,
+			granted_at    INTEGER,
+			ended_at      INTEGER,
+			overrun       INTEGER NOT NULL DEFAULT 0,
+			would_wait    INTEGER NOT NULL DEFAULT 0,
+			end_reason    TEXT,
+			waited_ms     INTEGER,
+			peak_use      REAL,
+			mean_use      REAL,
+			ewma          REAL,
+			samples       INTEGER NOT NULL DEFAULT 0,
+			empty_samples INTEGER NOT NULL DEFAULT 0,
+			baseline      TEXT
+		);
+CREATE INDEX resource_leases_state ON resource_leases (state);
