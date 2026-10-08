@@ -52,7 +52,8 @@ interface Props {
   exitPending?: boolean
 }
 
-const ROW_CLASS = 'flex items-center gap-1.5 w-full min-w-0 px-3 py-1 text-left'
+const rowClass = (pad: string) => `flex items-center gap-1.5 w-full min-w-0 ${pad} py-1 text-left`
+const ROW_CLASS = rowClass('px-3')
 
 /**
  * The dot's tooltip: 「等待核准」 while the row awaits approval, else the activity when the row carries one, else (and
@@ -146,16 +147,17 @@ export function ExecutionRowCompact({ row, hostId, daemonHostId, now, showCost =
       data-testid="executions-row"
       onClick={onOpen}
       title={row.id}
-      className={`${ROW_CLASS} cursor-pointer hover:bg-surface-hover`}
+      className={`${onExit ? rowClass('pl-3 pr-1') : ROW_CLASS} cursor-pointer hover:bg-surface-hover`}
     >
       {content}
     </button>
   )
   if (!onExit) return openButton
-  // The exit button is a sibling, never nested in the open button. It is visually hidden until hover/focus, but
-  // stays in the tab order (opacity, not display:none).
+  // The exit button is a sibling, never nested in the open button. Like a storage row's actions (#1627 Q2) it sits in
+  // flow at the row's end, its width always reserved, so it never covers the age or the cost; it is visually hidden
+  // until hover / focus within the row, but stays in the tab order (opacity, not display:none).
   return (
-    <div className="group relative flex items-center">
+    <div className="group flex items-center hover:bg-surface-hover">
       {openButton}
       <button
         type="button"
@@ -164,7 +166,7 @@ export function ExecutionRowCompact({ row, hostId, daemonHostId, now, showCost =
         title={t('worker.exit.button')}
         disabled={exitPending}
         onClick={onExit}
-        className="absolute right-1 shrink-0 p-1 rounded bg-surface-secondary text-text-muted hover:text-status-error opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer disabled:opacity-40 disabled:cursor-default"
+        className="shrink-0 mr-1.5 p-1 rounded text-text-muted hover:text-status-error hover:bg-surface-active opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 cursor-pointer disabled:opacity-40 disabled:cursor-default"
       >
         <SignOut size={12} aria-hidden="true" />
       </button>

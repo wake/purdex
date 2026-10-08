@@ -9,7 +9,7 @@ import { isRefShownNow } from '../shown-hosts'
 import type { TFunction } from '../pane-labels'
 import type { PaneContent } from '../../types/tab'
 import { HandoffApiError, nexWorkerRebuild, type NexWorkerRebuildResult } from './handoff-api'
-import { ASK_PROFILE, executionContentFor, handoffErrorMessage, permissionTimeoutFor, singleFlight } from './handoff'
+import { ASK_PROFILE, executionContentFor, handoffErrorMessage, openMissedExecution, permissionTimeoutFor, singleFlight } from './handoff'
 
 export interface RebuildAsWorkerArgs {
   hostId: string
@@ -59,10 +59,14 @@ export function rebuildErrorMessage(err: unknown, t: TFunction): string {
 
 /**
  * After a rebuild that returned: when the pane could not be swapped (it moved on
- * while the request ran) the worker exists anyway — say where to find it.
+ * while the request ran) the worker exists anyway — say where to find it, and
+ * offer 開啟 exactly as the handoff's miss does (#1627 B): none for a host hidden
+ * during the flight, and re-checked at click.
  */
-export function announceRebuildOutcome(t: TFunction, hostId: string, outcome: { swapped: boolean }): void {
+export function announceRebuildOutcome(t: TFunction, hostId: string, outcome: { result: { execution_id: string }; swapped: boolean }): void {
   if (outcome.swapped) return
-  useUndoToast.getState().show(t('worker.rebuild.no_pane'))
+  const toast = useUndoToast.getState()
+  if (!isRefShownNow(hostId)) toast.show(t('worker.rebuild.no_pane'))
+  else toast.show(t('worker.rebuild.no_pane'), () => openMissedExecution(hostId, executionContentFor(hostId, outcome.result.execution_id)), t('common.open'))
   useExecutionListStore.getState().refetch(hostId)
 }

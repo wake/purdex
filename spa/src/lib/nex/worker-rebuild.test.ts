@@ -1,10 +1,13 @@
 // spa/src/lib/nex/worker-rebuild.test.ts — "rebuild as worker": the request, the
 // checked pane swap, the single flight and the refusal messages.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { rebuildAsWorker, rebuildErrorMessage } from './worker-rebuild'
+import { announceRebuildOutcome, rebuildAsWorker, rebuildErrorMessage } from './worker-rebuild'
 import { HandoffApiError, nexWorkerRebuild } from './handoff-api'
 import { useTabStore } from '../../stores/useTabStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useUndoToast } from '../../stores/useUndoToast'
+import { useExecutionListStore } from '../../stores/useExecutionListStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { createTab, type PaneContent } from '../../types/tab'
@@ -135,6 +138,56 @@ describe('rebuildAsWorker', () => {
   it('propagates a refusal', async () => {
     mocked.mockRejectedValue(new HandoffApiError(409, 'session_owned', { owner: 'worker' }))
     await expect(rebuildAsWorker(args())).rejects.toBeInstanceOf(HandoffApiError)
+  })
+})
+
+// #1627 B: a rebuild whose pane swap missed (tab closed / pane replaced while the request ran) still made a worker; the
+// toast offers 開啟 for it, exactly as the handoff's miss does — hidden-host checks included.
+describe('announceRebuildOutcome', () => {
+  const refetch = vi.fn()
+  const outcome = (swapped: boolean) => ({ result: { execution_id: NEW, state: 'running' as const }, swapped })
+  const toast = () => useUndoToast.getState().toast
+  beforeEach(() => {
+    refetch.mockReset()
+    useExecutionListStore.setState({ refetch } as never)
+    useUndoToast.setState({ toast: null, notice: null })
+    useHostStore.setState({ hosts: { [H]: { id: H, name: 'mlab', ip: '1', port: 7860, order: 0 } }, hostOrder: [H], activeHostId: null })
+  })
+
+  it('swapped: says nothing and refetches nothing', () => {
+    announceRebuildOutcome(t, H, outcome(true))
+    expect(toast()).toBeNull()
+    expect(refetch).not.toHaveBeenCalled()
+  })
+
+  it('a miss: the toast offers 開啟, which opens the new execution in a tab of its own; the list is refetched', () => {
+    announceRebuildOutcome(t, H, outcome(false))
+    expect(toast()?.message).toBe(en['worker.rebuild.no_pane'])
+    expect(toast()?.actionLabel).toBe(en['common.open'])
+    expect(refetch).toHaveBeenCalledWith(H)
+    toast()!.action!()
+    const s = useTabStore.getState()
+    expect(s.activeTabId).not.toBe(tabId)
+    expect(getPrimaryPane(s.tabs[s.activeTabId!].layout).content).toEqual({ kind: 'execution', executionId: NEW, host: H })
+    expect(paneContent()).toMatchObject({ executionId: OLD })
+  })
+
+  it('a host hidden before 開啟 is clicked: the Hosts page on that host, no execution tab (as the handoff)', () => {
+    announceRebuildOutcome(t, H, outcome(false))
+    const open = vi.spyOn(useTabStore.getState(), 'openSingletonTab')
+    useShownHostsStore.setState({ ids: [] })
+    toast()!.action!()
+    expect(open.mock.calls.map((c) => c[0].kind)).toEqual(['hosts'])
+    expect(useHostStore.getState().activeHostId).toBe(H)
+    open.mockRestore()
+  })
+
+  it('a host already hidden when the rebuild settled: the toast has no 開啟 (as the handoff)', () => {
+    useShownHostsStore.setState({ ids: [] })
+    announceRebuildOutcome(t, H, outcome(false))
+    expect(toast()?.message).toBe(en['worker.rebuild.no_pane'])
+    expect(toast()?.action).toBeUndefined()
+    expect(refetch).toHaveBeenCalledWith(H)
   })
 })
 

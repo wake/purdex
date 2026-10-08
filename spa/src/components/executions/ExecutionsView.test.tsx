@@ -400,6 +400,47 @@ describe('ExecutionsView', () => {
     expect(screen.getByText('fresh')).toBeInTheDocument()
   })
 
+  // #1627 C: a keyboard retry keeps focus — the button stays (disabled, aria-busy) while its retry runs, with a status
+  // line; a failure keeps focus on it, a success moves it to the list.
+  describe('a keyboard retry keeps its focus', () => {
+    async function failThenPress() {
+      vi.mocked(api.listExecutions).mockRejectedValueOnce(new Error('boom'))
+      render(<ExecutionsView hostId={H} isActive />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      let settle!: { resolve: (v: Awaited<ReturnType<typeof api.listExecutions>>) => void; reject: (e: unknown) => void }
+      vi.mocked(api.listExecutions).mockReturnValueOnce(new Promise((resolve, reject) => { settle = { resolve, reject } }))
+      screen.getByTestId('executions-retry').focus()
+      fireEvent.click(screen.getByTestId('executions-retry')) // Enter / Space on the focused button
+      return settle
+    }
+
+    it('the button stays, busy, with a status line while the retry runs; a failure keeps focus on it', async () => {
+      const settle = await failThenPress()
+      const retry = screen.getByTestId('executions-retry')
+      expect(retry).toBeDisabled()
+      expect(retry).toHaveAttribute('aria-busy', 'true')
+      expect(screen.getByTestId('executions-error')).toHaveTextContent('Could not load: boom')
+      expect(screen.getByTestId('executions-loading')).toHaveAttribute('role', 'status')
+      expect(screen.queryByTestId('executions-empty')).toBeNull()
+      // A browser drops focus from a button that turns disabled; jsdom keeps it — so the failure must refocus it itself.
+      const refocus = vi.spyOn(retry, 'focus')
+      await act(async () => { settle.reject(new Error('again')) })
+      expect(screen.getByTestId('executions-retry')).toBe(retry)
+      expect(retry).toBeEnabled()
+      expect(screen.getByTestId('executions-error')).toHaveTextContent('Could not load: again')
+      expect(refocus).toHaveBeenCalled()
+      expect(document.activeElement).toBe(retry)
+    })
+
+    it('a success moves focus to the list', async () => {
+      const settle = await failThenPress()
+      await act(async () => { settle.resolve({ items: [row({ id: 'exc_fresh', brief: 'fresh' })], next_cursor: '' }) })
+      expect(screen.queryByTestId('executions-retry')).toBeNull()
+      expect(screen.getByText('fresh')).toBeInTheDocument()
+      expect(document.activeElement).toBe(screen.getByTestId('executions-list'))
+    })
+  })
+
   it('error with no rows shows the error line, not the skeleton or the empty hint', async () => {
     vi.mocked(api.listExecutions).mockRejectedValueOnce(new Error('boom'))
     render(<ExecutionsView hostId={H} isActive />)
@@ -564,14 +605,40 @@ describe('ExecutionsView', () => {
     expect(screen.getByTestId('executions-row-exit')).toBeDisabled()
   })
 
-  it('confirming for a row that has disappeared sends no request', () => {
+  // #1627 Q1: the confirm is about one listed row; when that row leaves the list (its worker ended elsewhere) the
+  // confirm closes by itself, as the pane header's goes with its pane — and nothing is sent.
+  it('a running row that leaves the list closes its confirm by itself; nothing is sent', () => {
     seedList([row({ id: 'R', state: 'running' })])
     render(<ExecutionsView hostId={H} isActive />)
     fireEvent.click(screen.getByTestId('executions-row-exit'))
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
     act(() => { seedList([]) })
-    fireEvent.click(screen.getByTestId('exit-confirm'))
+    expect(screen.queryByTestId('exit-dialog')).toBeNull()
+    // The row coming back does not bring the confirm back.
+    act(() => { seedList([row({ id: 'R', state: 'running' })]) })
+    expect(screen.queryByTestId('exit-dialog')).toBeNull()
     expect(exitWorker).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('exit-confirm')).toBeNull()
+  })
+
+  it('a confirm whose row is still listed stays open; another row leaving, or another row\'s pending exit, is untouched', () => {
+    vi.mocked(exitWorker).mockImplementation(() => new Promise(() => {}))
+    seedList([
+      row({ id: 'R', state: 'running', brief: 'run one', session_id: 'SR' }),
+      row({ id: 'I', state: 'idle', brief: 'idle one', session_id: 'SI' }),
+      row({ id: 'X', state: 'idle', brief: 'other one', session_id: 'SX' }),
+    ])
+    render(<ExecutionsView hostId={H} isActive />)
+    const exitOf = (brief: string) => within(screen.getByText(brief).closest('[data-testid="executions-row"]')!.parentElement!).getByTestId('executions-row-exit')
+    fireEvent.click(exitOf('idle one'))
+    expect(exitOf('idle one')).toBeDisabled()
+    fireEvent.click(exitOf('run one'))
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
+    act(() => { seedList([row({ id: 'R', state: 'running', brief: 'run one', session_id: 'SR' }), row({ id: 'I', state: 'idle', brief: 'idle one', session_id: 'SI' })]) })
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
+    act(() => { seedList([row({ id: 'I', state: 'idle', brief: 'idle one', session_id: 'SI' })]) })
+    expect(screen.queryByTestId('exit-dialog')).toBeNull()
+    expect(exitOf('idle one')).toBeDisabled()
+    expect(exitWorker).toHaveBeenCalledTimes(1)
   })
 
   it('a host hidden in this workbench offers no exit', () => {

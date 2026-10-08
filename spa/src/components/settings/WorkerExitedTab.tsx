@@ -9,6 +9,7 @@
 // nowhere and counted under the list (R-4-15).
 import { useEffect, useMemo, useState } from 'react'
 import { useConversations } from '../../hooks/useConversations'
+import { useListRetry } from '../../hooks/useListRetry'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { matchesConversationQuery } from '../../lib/nex/conversation-search'
 import { rebuildConversation } from '../../lib/nex/rebuild-conversation'
@@ -24,6 +25,8 @@ export function WorkerExitedTab({ hostId }: { hostId?: string }) {
 function ExitedList({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
   const { page, phase, error, unavailable, refetch } = useConversations(hostId, 'ended', 'normal')
+  // The retry keeps its button (busy) while it runs and hands focus on when it settles (#1627 C).
+  const { busy: retrying, error: retryError, onRetry, bindButton: bindRetry, bindList } = useListRetry(phase, error, refetch)
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -54,11 +57,12 @@ function ExitedList({ hostId }: { hostId: string }) {
         <p data-testid="worker-exited-unavailable" className="text-xs text-text-muted">
           {t('settings.worker.conversations.unavailable')}
         </p>
-      ) : phase === 'error' && (
+      ) : (phase === 'error' || retrying) && (
         <div data-testid="worker-exited-error" className="flex items-center gap-2 text-xs text-red-400">
-          <span className="flex-1 min-w-0 truncate">{t('newtab.workers.error', { error: error ?? '' })}</span>
-          <button type="button" data-testid="worker-exited-retry" onClick={refetch}
-            className="shrink-0 px-1.5 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer">
+          <span className="flex-1 min-w-0 truncate">{t('newtab.workers.error', { error: retryError ?? '' })}</span>
+          <button ref={bindRetry} type="button" data-testid="worker-exited-retry" onClick={onRetry}
+            disabled={retrying} aria-busy={retrying}
+            className="shrink-0 px-1.5 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-50 disabled:cursor-default">
             {t('newtab.workers.retry')}
           </button>
         </div>
@@ -75,13 +79,13 @@ function ExitedList({ hostId }: { hostId: string }) {
       )}
       {/* The first load, or a retry after an error, which keeps its rows below this line. */}
       {phase === 'loading' && (
-        <p data-testid="worker-exited-loading" className="text-xs text-text-muted" aria-busy="true">{t('settings.worker.conversations.loading')}</p>
+        <p data-testid="worker-exited-loading" role="status" className="text-xs text-text-muted">{t('settings.worker.conversations.loading')}</p>
       )}
       {phase === 'ready' && rows.length === 0 && (
-        <p data-testid="worker-exited-empty" className="text-xs text-text-muted">{t('settings.worker.exited.empty')}</p>
+        <p ref={bindList} tabIndex={-1} data-testid="worker-exited-empty" className="text-xs text-text-muted outline-none">{t('settings.worker.exited.empty')}</p>
       )}
       {rows.length > 0 && (
-        <div role="list" aria-busy={phase === 'loading' ? 'true' : undefined} className="flex flex-col">
+        <div ref={bindList} tabIndex={-1} role="list" aria-busy={phase === 'loading' ? 'true' : undefined} className="flex flex-col outline-none">
           {rows.map((row) => (
             <ConversationRow key={row.session_id} row={row} state="ended" home={home} now={now}
               disabled={!!rootError} onRebuild={() => rebuildConversation(hostId, row)} />

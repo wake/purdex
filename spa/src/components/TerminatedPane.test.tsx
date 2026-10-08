@@ -11,6 +11,7 @@ import { findPane } from '../lib/pane-tree'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { rebuildAsWorker } from '../lib/nex/worker-rebuild'
 import { HandoffApiError } from '../lib/nex/handoff-api'
 import type { NexCapabilities } from '../lib/nex/types'
@@ -390,12 +391,14 @@ describe('TerminatedPane rebuild as worker', () => {
     expect(await screen.findByTestId('terminated-rebuild-error')).toHaveTextContent('already has a worker in progress')
   })
 
-  it('swapped:false toasts and refetches through the shared helper', async () => {
+  it('swapped:false toasts with 開啟 (#1627 B) and refetches through the shared helper', async () => {
+    useShownHostsStore.setState({ ids: [H] })
     vi.mocked(rebuildAsWorker).mockResolvedValue({ result: { execution_id: 'n', state: 'running' }, swapped: false })
     renderTerminated(fullRecord)
     fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
     fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
     await waitFor(() => expect(useUndoToast.getState().toast?.message).toMatch(/Rebuilt as a new worker, but the original tab/))
+    expect(useUndoToast.getState().toast?.actionLabel).toBe('Open')
     expect(refetch).toHaveBeenCalledWith(H)
   })
 
@@ -412,6 +415,21 @@ describe('TerminatedPane rebuild as worker', () => {
     await screen.findByTestId('terminated-rebuild-error')
     fireEvent.click(screen.getByTestId('rebuild-mode-terminal'))
     fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+    expect(screen.queryByTestId('terminated-rebuild-error')).toBeNull()
+  })
+
+  // #1627 F: any change of the effective mode clears a rebuild error — also the fallback to 終端機 when Nexen readiness
+  // drops after a failed Worker rebuild, so the error does not come back with the choice.
+  it('an automatic fallback to terminal clears a stale rebuild error, which does not come back with the choice', async () => {
+    vi.mocked(rebuildAsWorker).mockRejectedValue(new HandoffApiError(409, 'session_owned', { owner: 'worker' }))
+    renderTerminated(fullRecord)
+    fireEvent.click(screen.getByTestId('rebuild-mode-worker'))
+    fireEvent.click(screen.getByTestId('terminated-rebuild-worker'))
+    await screen.findByTestId('terminated-rebuild-error')
+    act(() => { useNexHostStore.setState({ byHost: {} } as never) })
+    expect(screen.queryByTestId('rebuild-mode-worker')).toBeNull()
+    act(() => { useNexHostStore.setState({ byHost: { [H]: readyEntry } } as never) })
+    expect(screen.getByTestId('rebuild-mode-worker')).toHaveAttribute('aria-checked', 'true')
     expect(screen.queryByTestId('terminated-rebuild-error')).toBeNull()
   })
 

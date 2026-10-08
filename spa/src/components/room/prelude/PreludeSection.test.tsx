@@ -1081,6 +1081,45 @@ describe.each<['room' | 'chat']>([['room'], ['chat']])('PreludeSection per-turn 
     }
   })
 
+  // #1627 D: a span whose last entry is a subagent child (drawn inside its Task card, nothing at its own place) still
+  // ends with its footer: right after the span's last drawn line, before whatever comes next — as the live transcript.
+  it('a span whose last entry is a subagent child still ends with its footer', async () => {
+    const task = (pos: string, id: string): PreludeItem => ({
+      offset: null, pos, at: 1, kind: 'assistant',
+      msg: { type: 'assistant', parent_tool_use_id: null, message: { id, role: 'assistant', content: [{ type: 'tool_use', id: 'tk', name: 'Task', input: { description: 'look', subagent_type: 'Explore' } }], stop_reason: null } } as unknown as StreamMessage,
+    })
+    const child = (pos: string): PreludeItem => ({
+      offset: null, pos, at: 1, kind: 'user',
+      msg: { type: 'user', parent_tool_use_id: 'tk', message: { role: 'user', content: [{ type: 'text', text: 'sub prompt' }], stop_reason: null } } as unknown as StreamMessage,
+    })
+    const tail = derivePrelude([
+      { offset: null, pos: '1', at: 0, kind: 'prelude.segment', entrypoint: 'sdk-cli' },
+      m('2', 'user', [{ type: 'text', text: 'prompt one' }]),
+      task('3', 'msg_A'),
+      child('4'),
+      { offset: null, pos: '5', at: 0, kind: 'prelude.note', source: 'command_output', text: 'between', truncated: false, totalBytes: null, stream: null },
+      m('6', 'user', [{ type: 'text', text: 'prompt two' }]),
+      say('7', 'msg_B', 'answer two'),
+      child('8'),
+    ])
+    draw(cacheOf(events), summary(), tail)
+    await waitFor(() => expect(footers()).toHaveLength(2))
+    const [a, b] = footers()
+    expect(a.textContent).toBe(footerText(turns[0]))
+    expect(b.textContent).toBe(footerText(turns[1]))
+    if (mode === 'room') {
+      // The span's lines, then its footer, then the next entry: nothing falls between.
+      expect(a.previousElementSibling!.getAttribute('data-prelude-pos')).toBe('3')
+      expect(a.nextElementSibling!.getAttribute('data-prelude-pos')).toBe('5')
+      expect(b.previousElementSibling!.getAttribute('data-prelude-pos')).toBe('7')
+      expect(b.nextElementSibling).toBe(screen.getByTestId('prelude-handoff'))
+    } else {
+      for (const f of [a, b]) expect(f.parentElement!.lastElementChild).toBe(f)
+      expect(owner(a)).toBe('4')
+      expect(owner(b)).toBe('8')
+    }
+  })
+
   it('draws nothing while loading, for a plain segment, and when the fetch failed', async () => {
     const plainDom = () => screen.getByTestId('worker-prelude').outerHTML
     let settle: (p: EventsPage) => void = () => {}

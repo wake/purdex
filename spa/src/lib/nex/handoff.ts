@@ -24,7 +24,7 @@
 //   write, `swapped: false`. The daemon-side action is not undone; the pane
 //   keeps its old content (gated) and the true state shows on re-show.
 import { useTabStore } from '../../stores/useTabStore'
-import { isRefShownNow } from '../shown-hosts'
+import { isRefShownNow, landOnHostsPageIfHidden } from '../shown-hosts'
 import {
   useNexHostStore, selectHandoffReady, selectPermissionAskReady, selectPermissionTimeoutMax,
 } from '../../stores/useNexHostStore'
@@ -140,6 +140,15 @@ export function executionContentFor(
     ...(title ? { fromTitle: title } : {}),
   }
   return mode ? withViewMode(content, mode) : content
+}
+
+/**
+ * The toast's "open execution" after a swap that missed (a handoff's, a worker rebuild's): opens `content` in a tab of
+ * its own. Re-checked at click (H2d-3): a host hidden since lands on the Hosts page on that host, never an execution tab.
+ */
+export function openMissedExecution(hostId: string, content: ExecutionContent): void {
+  if (landOnHostsPageIfHidden(hostId)) return
+  useTabStore.getState().openSingletonTab(content)
 }
 
 /** `from` for the execution pane, or undefined when the daemon says the session is gone. */

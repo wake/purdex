@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { WorkerEndedPane, workerEndedKind } from './WorkerEndedPane'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -12,6 +12,7 @@ import { exitWorker } from '../../lib/nex/exit-worker'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useExecutionListStore } from '../../stores/useExecutionListStore'
+import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { ExecutionSummary, NexCapabilities } from '../../lib/nex/types'
 
 vi.mock('../../lib/nex/handoff', async (o) => ({ ...(await o<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn() }))
@@ -151,6 +152,21 @@ describe('WorkerEndedPane', () => {
     expect(screen.queryByTestId('worker-rebuild-error')).toBeNull()
   })
 
+  // #1627 F: any change of the effective mode clears a rebuild error — also a fallback to 終端機 that is not a toggle
+  // (Nexen readiness dropped after a failed Worker rebuild); it does not come back with the worker option.
+  it('an automatic fallback to terminal clears a stale rebuild error, which does not come back', async () => {
+    vi.mocked(rebuildAsWorker).mockRejectedValue(new HandoffApiError(409, 'session_owned', { owner: 'terminal' }))
+    renderPane(sum({ state: 'terminated', archived: true, session_id: 'S', cwd: '/w' }))
+    fireEvent.click(screen.getByTestId('worker-rebuild'))
+    await screen.findByTestId('worker-rebuild-error')
+    act(() => { useNexHostStore.setState({ byHost: { [H]: entry({ phase: 'unavailable', capabilities: null }) } } as never) })
+    expect(screen.getByTestId('rebuild-mode-terminal')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByTestId('worker-rebuild-error')).toBeNull()
+    act(() => { useNexHostStore.setState({ byHost: { [H]: entry() } } as never) })
+    expect(screen.getByTestId('rebuild-mode-worker')).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByTestId('worker-rebuild-error')).toBeNull()
+  })
+
   describe('exit on a failed stint', () => {
     const failed = () => sum({ state: 'rejected', reject_reason: 'x', resume_session_id: 'S', cwd: '/w' })
     // Reads the summary from the store like ExecutionView does, so the patch re-renders the pane.
@@ -192,6 +208,16 @@ describe('WorkerEndedPane', () => {
       expect(screen.getByTestId('worker-rebuild-error')).toHaveTextContent('ploom:agent-7')
     })
 
+    it('an exit error stays across an automatic fallback to terminal (#1627 F)', async () => {
+      vi.mocked(exitWorker).mockRejectedValue(new HandoffApiError(409, 'held_by', { principal: 'ploom:agent-7' }))
+      renderPane(failed())
+      fireEvent.click(screen.getByTestId('worker-ended-exit'))
+      await screen.findByTestId('worker-rebuild-error')
+      act(() => { useNexHostStore.setState({ byHost: { [H]: entry({ phase: 'unavailable', capabilities: null }) } } as never) })
+      expect(screen.getByTestId('rebuild-mode-terminal')).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByTestId('worker-rebuild-error')).toHaveTextContent('ploom:agent-7')
+    })
+
     it('disables exit and rebuild while the exit is in flight', async () => {
       let done!: () => void
       vi.mocked(exitWorker).mockReturnValue(new Promise((r) => { done = () => r({ exited: true, terminated: true, archived: true, state: 'terminated' }) }))
@@ -212,10 +238,12 @@ describe('WorkerEndedPane', () => {
       fireEvent.click(screen.getByTestId('worker-rebuild'))
       await waitFor(() => expect(takeToTerminal).toHaveBeenCalled())
     }
-    it('exited:false leaves the persistent notice', async () => {
-      vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: false }, swapped: true } as never)
+    // #1627 A: only the notice — the toast would say the execution was archived, and it was not.
+    it.each([true, false])('exited:false leaves only the persistent notice, no toast (swapped:%s)', async (swapped) => {
+      vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: false }, swapped } as never)
       await take()
       await waitFor(() => expect(useUndoToast.getState().notice?.message).toBe('Resumed in the terminal, but the worker could not exit; exit it manually from the list.'))
+      expect(useUndoToast.getState().toast).toBeNull()
     })
     it('exited:true shows no exit notice', async () => {
       vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: true }, swapped: true } as never)
@@ -227,6 +255,7 @@ describe('WorkerEndedPane', () => {
       vi.mocked(takeToTerminal).mockResolvedValue({ result: { exited: true }, swapped: false } as never)
       await take()
       await waitFor(() => expect(useUndoToast.getState().toast?.message).toMatch(/pane was already closed/))
+      expect(useUndoToast.getState().notice).toBeNull()
     })
   })
 
@@ -238,10 +267,12 @@ describe('WorkerEndedPane', () => {
       fireEvent.click(screen.getByTestId('worker-rebuild'))
       await waitFor(() => expect(rebuildAsWorker).toHaveBeenCalled())
     }
-    it('swapped:false toasts and refetches the list', async () => {
+    it('swapped:false toasts with 開啟 (#1627 B) and refetches the list', async () => {
+      useShownHostsStore.setState({ ids: [H] })
       vi.mocked(rebuildAsWorker).mockResolvedValue({ result: { execution_id: 'n', state: 'running' }, swapped: false })
       await rebuild()
       await waitFor(() => expect(useUndoToast.getState().toast?.message).toMatch(/Rebuilt as a new worker, but the original tab/))
+      expect(useUndoToast.getState().toast?.actionLabel).toBe('Open')
       expect(refetch).toHaveBeenCalledWith(H)
     })
     it('swapped:true does neither', async () => {

@@ -91,6 +91,46 @@ describe('HostWorkerRows', () => {
     expect(screen.queryByTestId(`${P}-error`)).toBeNull()
   })
 
+  // #1627 C: a keyboard retry keeps focus — the button stays (disabled, aria-busy) while its retry runs, with a status
+  // line; a failure keeps focus on it, a success moves it to the list.
+  describe('a keyboard retry keeps its focus', () => {
+    async function failThenPress() {
+      vi.mocked(listExecutions).mockRejectedValueOnce(new Error('boom'))
+      renderRows()
+      await waitFor(() => expect(screen.getByTestId(`${P}-error`)).toBeInTheDocument())
+      let settle!: { resolve: (v: Awaited<ReturnType<typeof listExecutions>>) => void; reject: (e: unknown) => void }
+      vi.mocked(listExecutions).mockReturnValueOnce(new Promise((resolve, reject) => { settle = { resolve, reject } }))
+      screen.getByTestId(`${P}-retry`).focus()
+      fireEvent.click(screen.getByTestId(`${P}-retry`)) // Enter / Space on the focused button
+      return settle
+    }
+
+    it('the button stays, busy, with a status line while the retry runs; a failure keeps focus on it', async () => {
+      const settle = await failThenPress()
+      const retry = screen.getByTestId(`${P}-retry`)
+      expect(retry).toBeDisabled()
+      expect(retry).toHaveAttribute('aria-busy', 'true')
+      expect(screen.getByTestId(`${P}-error`)).toHaveTextContent('boom')
+      expect(screen.getByTestId(`${P}-loading`)).toHaveAttribute('role', 'status')
+      expect(screen.queryByTestId(`${P}-empty`)).toBeNull()
+      // A browser drops focus from a button that turns disabled; jsdom keeps it — so the failure must refocus it itself.
+      const refocus = vi.spyOn(retry, 'focus')
+      await act(async () => { settle.reject(new Error('again')) })
+      expect(screen.getByTestId(`${P}-retry`)).toBe(retry)
+      expect(retry).toBeEnabled()
+      expect(screen.getByTestId(`${P}-error`)).toHaveTextContent('again')
+      expect(refocus).toHaveBeenCalled()
+      expect(document.activeElement).toBe(retry)
+    })
+
+    it('a success moves focus to the list', async () => {
+      const settle = await failThenPress()
+      await act(async () => { settle.resolve({ items: [row({ id: 'E9', brief: 'fresh' })], next_cursor: '' }) })
+      expect(screen.queryByTestId(`${P}-retry`)).toBeNull()
+      expect(document.activeElement).toBe(screen.getByRole('list'))
+    })
+  })
+
   it('shows a loading state before the first page', () => {
     seed([], { phase: 'loading' })
     renderRows()
@@ -186,6 +226,25 @@ describe('HostWorkerRows', () => {
     expect(exitWorker).not.toHaveBeenCalled()
     await act(async () => { fireEvent.click(screen.getByTestId('exit-confirm')) })
     expect(exitWorker).toHaveBeenCalledWith({ hostId: H, executionId: 'E1' })
+  })
+
+  // #1627 Q1 (New Tab / Settings Workers): the confirm closes by itself once its row has left the list.
+  it('a running row\'s confirm stays while it is listed and closes by itself once it leaves; other rows are untouched', () => {
+    vi.mocked(exitWorker).mockImplementation(() => new Promise(() => {}))
+    const R = row({ id: 'R', state: 'running', session_id: 'SR', brief: 'run one' })
+    const I = row({ id: 'I', state: 'idle', session_id: 'SI', brief: 'idle one' })
+    seed([R, I, row({ id: 'X', state: 'idle', session_id: 'SX', brief: 'other one' })])
+    renderRows()
+    const exitOf = (brief: string) => screen.getByText(brief).closest('[data-testid="executions-row"]')!.parentElement!.querySelector<HTMLButtonElement>('[data-testid="executions-row-exit"]')!
+    fireEvent.click(exitOf('idle one'))
+    fireEvent.click(exitOf('run one'))
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
+    act(() => { seed([R, I]) })
+    expect(screen.getByTestId('exit-dialog')).toBeInTheDocument()
+    act(() => { seed([I]) })
+    expect(screen.queryByTestId('exit-dialog')).toBeNull()
+    expect(exitOf('idle one')).toBeDisabled()
+    expect(exitWorker).toHaveBeenCalledTimes(1)
   })
 
   describe('filter (worker test tab S4)', () => {

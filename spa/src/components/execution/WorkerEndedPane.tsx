@@ -58,10 +58,13 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
     ? (workerAvailable || !terminalAvailable ? 'worker' : 'terminal')
     : (terminalAvailable || !workerAvailable ? 'terminal' : 'worker')
   const nothingAvailable = !terminalAvailable && !workerAvailable
-  // A rebuild error belongs to the mode it was tried in; an exit error is not about the mode.
-  const changeMode = (m: RebuildMode) => {
-    if (m !== mode) setError((e) => (e?.from === 'rebuild' ? null : e))
-    setChoice(m)
+  // A rebuild error belongs to the mode it was tried in; an exit error is not about the mode. Any change of the
+  // effective mode clears it — a toggle, or the fallback when a mode stops working (Nexen readiness dropped, #1627 F),
+  // so it does not come back with that mode. Render-time, so it never draws under the new mode.
+  const [lastMode, setLastMode] = useState(mode)
+  if (mode !== lastMode) {
+    setLastMode(mode)
+    setError((e) => (e?.from === 'rebuild' ? null : e))
   }
 
   const rebuild = async () => {
@@ -127,7 +130,7 @@ export function WorkerEndedPane({ hostId, executionId, summary, tabId, paneId }:
       <div className="flex flex-col items-center gap-3 w-full max-w-lg">
         <RebuildModeChoice
           value={mode}
-          onChange={changeMode}
+          onChange={setChoice}
           terminalAvailable={terminalAvailable}
           workerAvailable={workerAvailable}
           workerUnavailableHint={t('worker.rebuild.worker_unavailable')}

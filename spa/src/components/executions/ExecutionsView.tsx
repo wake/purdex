@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Circle, Spinner } from '@phosphor-icons/react'
 import { useHostExecutions } from '../../hooks/useHostExecutions'
+import { useListRetry } from '../../hooks/useListRetry'
 import { useHostLook } from '../../lib/host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { selectRollupCostShown, useNexHostStore, type NexHostPhase } from '../../stores/useNexHostStore'
@@ -49,6 +50,8 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   const groups = useMemo(() => groupBySource(live), [live])
   const shown = useIsRefShown(id === '' ? null : id)
   const { requestExit, pendingIds, dialog: exitDialog } = useRowExit(id, live)
+  // The retry keeps its button (busy) while it runs and hands focus on when it settles (#1627 C).
+  const { busy: retrying, error: retryError, onRetry, bindButton: bindRetry, bindList } = useListRetry(phase, error, refetch)
 
   if (id === '') return null
 
@@ -69,7 +72,7 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
         {t('newtab.headless.unavailable', { error: entry?.error ?? '' })}
       </p>
     )
-  } else if (live.length === 0 && phase !== 'ready' && phase !== 'error') {
+  } else if (live.length === 0 && phase !== 'ready' && phase !== 'error' && !retrying) {
     body = (
       <div data-testid="executions-loading" className="flex flex-col gap-1.5 px-3 py-2 animate-pulse" aria-busy="true">
         <span className="text-xs text-text-muted">{t('executions.loading')}</span>
@@ -80,28 +83,39 @@ export function ExecutionsView({ hostId }: { hostId?: string; isActive?: boolean
   } else {
     body = (
       <>
-        {phase === 'error' && (
+        {(phase === 'error' || retrying) && (
           <div data-testid="executions-error" className="flex items-center gap-2 px-3 py-1.5 text-xs text-red-400">
-            <span className="flex-1 min-w-0 truncate">{t('executions.error', { message: error ?? '' })}</span>
+            <span className="flex-1 min-w-0 truncate">{t('executions.error', { message: retryError ?? '' })}</span>
             <button
+              ref={bindRetry}
               type="button"
               data-testid="executions-retry"
-              onClick={refetch}
-              className="shrink-0 px-1.5 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
+              onClick={onRetry}
+              disabled={retrying}
+              aria-busy={retrying}
+              className="shrink-0 px-1.5 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-50 disabled:cursor-default"
             >
               {t('executions.retry')}
             </button>
           </div>
         )}
+        {retrying && (
+          <p data-testid="executions-loading" role="status" className="px-3 py-1 text-xs text-text-muted">{t('executions.loading')}</p>
+        )}
         {truncated && (
           <p data-testid="executions-truncated" className="px-3 py-1 text-xs text-text-muted">{t('executions.truncated')}</p>
         )}
-        {live.length === 0 && phase !== 'error' && (
-          <p data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted">{t('executions.empty')}</p>
+        {live.length === 0 && phase !== 'error' && !retrying && (
+          <p ref={bindList} tabIndex={-1} data-testid="executions-empty" className="px-3 py-2 text-xs text-text-muted outline-none">{t('executions.empty')}</p>
         )}
-        {groups.map((group) => (
-          <ExecutionsGroup key={group.source} group={group} hostId={id} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} onExit={shown ? requestExit : undefined} exitPending={pendingIds} />
-        ))}
+        {groups.length > 0 && (
+          // The list as one element: what a successful retry focuses (#1627 C).
+          <div ref={bindList} tabIndex={-1} data-testid="executions-list" className="flex flex-col outline-none">
+            {groups.map((group) => (
+              <ExecutionsGroup key={group.source} group={group} hostId={id} daemonHostId={daemonHostId} now={now} showCost={showCost} onOpen={shown ? open : undefined} onExit={shown ? requestExit : undefined} exitPending={pendingIds} />
+            ))}
+          </div>
+        )}
       </>
     )
   }
