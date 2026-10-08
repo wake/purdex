@@ -91,8 +91,11 @@ export interface Grant {
 
 /** The audit label of whoever decided (spec §6.5). `addr` is set by the daemon from RemoteAddr. */
 export interface Client {
-  /** `terminal` on the closes the terminal made (answered_local, terminal_override). */
-  kind: 'app' | 'terminal'
+  /**
+   * `terminal` on the closes the terminal made (answered_local, terminal_override); `unattended` on the approvals the
+   * daemon made itself while 無人值守模式 was on (U23, `team.UnattendedClient()`: no `addr`).
+   */
+  kind: 'app' | 'terminal' | 'unattended'
   label: string
   addr?: string
 }
@@ -222,4 +225,53 @@ export function leadPayloadOf(a: Approval): LeadPayload {
   const max_members = rawMembers <= 0 ? DEFAULT_MAX_MEMBERS : Math.min(rawMembers, MAX_MAX_MEMBERS)
   const roots = Array.isArray(p.roots) ? p.roots.filter((r): r is string => typeof r === 'string' && r !== '') : []
   return { reason, max_members, roots: roots.length > 0 ? roots : [a.origin.cwd] }
+}
+
+// ---- U23: 無人值守模式 (unattended spec D-U23-5, D-U23-6; daemon `internal/team/wire_unattended.go`) ----
+
+/** `/api/info` capabilities entry of a daemon with the switch (D-U23-5): without it the host is unsupported. */
+export const UNATTENDED_CAPABILITY = 'relay.unattended.v1'
+/** `HostEvent.type` of the switch's events. */
+export const UNATTENDED_EVENT_TYPE = 'team.unattended'
+
+/** The switch as the daemon stores and answers it. Times are unix ms; `since` 0 = never on, `changed_at` 0 = never written. */
+export interface UnattendedState {
+  on: boolean
+  /** The last off→on: the "while you were away" list starts here (D-U23-6). */
+  since: number
+  changed_at: number
+  /** Who changed it last; absent when never written. `addr` is set by the daemon. */
+  changed_by?: Client
+}
+
+/** `GET` / `PUT /api/team/unattended`: the state, flattened, and one page of auto-approvals since `since`, newest first. */
+export interface UnattendedView extends UnattendedState {
+  approved: Approval[]
+  /** More rows exist before `next_before`. */
+  truncated: boolean
+  /** The next page's `before` cursor (a `decided_at`); present only when truncated. */
+  next_before?: number
+  /** PUT only: open requests the switch-on approved. */
+  swept?: number
+  /** PUT only: auto-approvable requests still open after the sweep (the daemon's next tick approves them). */
+  pending?: number
+  /** PUT only: the write took effect but the list could not be read — `approved` is `[]` and says nothing. */
+  list_failed?: boolean
+}
+
+/** `HostEvent.value` (JSON text) of a `team.unattended` event: a snapshot to each new subscriber, `changed` after every change. */
+export interface UnattendedEventValue {
+  op: 'snapshot' | 'changed'
+  state: UnattendedState
+}
+
+const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/** The whole `UnattendedState` wire shape: a frame or an answer that fails here says nothing about the switch. */
+export function isUnattendedState(v: unknown): v is UnattendedState {
+  return isRecord(v)
+    && typeof v.on === 'boolean'
+    && isFiniteNumber(v.since)
+    && isFiniteNumber(v.changed_at)
+    && optional(v.changed_by, isRecord)
 }

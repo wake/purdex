@@ -35,7 +35,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-async function errorFromResponse(res: Response): Promise<ApprovalApiError> {
+/** A non-2xx answer of any `/api/team/*` route as a typed error (shared with unattended-api.ts). */
+export async function errorFromResponse(res: Response): Promise<ApprovalApiError> {
   const fallback: ApprovalErrorCode = `http_${res.status}`
   let text = ''
   try {
@@ -60,7 +61,8 @@ async function errorFromResponse(res: Response): Promise<ApprovalApiError> {
 
 const hostConfigured = (hostId: string): boolean => Object.hasOwn(useHostStore.getState().hosts, hostId)
 
-async function send<T>(hostId: string, path: string, init: RequestInit): Promise<T> {
+/** One request to a configured host's team route; every failure is an `ApprovalApiError` (shared with unattended-api.ts). */
+export async function send<T>(hostId: string, path: string, init: RequestInit): Promise<T> {
   // `pinnedHostFetch` rejects an unconfigured host too, but with a plain Error; the dialog switches on `code`.
   if (!hostConfigured(hostId)) throw new ApprovalApiError(0, 'host_removed')
   let res: Response
