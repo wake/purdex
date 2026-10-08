@@ -68,6 +68,12 @@ type Normalizer struct {
 	model, effort        string // last main-thread assistant row (usage)
 	entry                string // entrypoint (cli / sdk-cli) of the last row that had one
 	entryBefore          string // the same, as it was before the current row
+
+	// Subagent mode (NormalizeSubagent): the file is an agent's own, so its
+	// sidechain rows count, and its first prompt is the brief.
+	sub       bool
+	subAgent  string // the agent id the rows must carry, "" for any
+	briefDone bool   // the first prompt has been taken as the brief
 }
 
 type itemLoc struct{ turn, item int }
@@ -111,6 +117,14 @@ func (n *Normalizer) Feed(offset int64, line []byte) ([]Change, error) {
 	}
 	n.row(offset, line)
 	return n.flush(), nil
+}
+
+// skipOversize accounts for a line of size bytes (without its newline) that
+// was never read because it is over the line cap.
+func (n *Normalizer) skipOversize(size int64) {
+	n.next += size + 1
+	n.stats.Lines++
+	n.skip("line:oversize")
 }
 
 // Next is the offset the next line must have.
@@ -180,9 +194,20 @@ func (n *Normalizer) row(off int64, line []byte) {
 		}
 		return
 	}
-	if l.sidechain {
+	if l.sidechain && !n.sub {
 		n.skip("sidechain")
 		return
+	}
+	if n.sub && n.subAgent != "" {
+		// only rows that name this agent belong to this file's story
+		switch id := l.str(l.AgentID); {
+		case id == "":
+			n.skip("agent:missing")
+			return
+		case id != n.subAgent:
+			n.skip("agent:other")
+			return
+		}
 	}
 	switch l.typ {
 	case "user", "assistant", "system", "attachment":

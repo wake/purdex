@@ -41,6 +41,12 @@ func (n *Normalizer) newStep(b block, taken []convmodel.Item, at int64) (convmod
 		Summary: summaryOf(tool, in), StartedAt: at,
 		Input: input, InputTruncated: cut,
 	}
+	switch s.Kind {
+	case convmodel.StepEdit:
+		s.Diff = inputDiff(tool, in) // replaced by the exact patch when the result brings one
+	case convmodel.StepExecute:
+		s.Command = commandOf(in)
+	}
 	return convmodel.Item{Type: convmodel.ItemStep, Step: s}, true
 }
 
@@ -106,13 +112,19 @@ const maxDenial = 64
 //
 // toolDenialKind and toolUseResult are members of the row, not of a block:
 // they are read only when the row holds exactly one result, since otherwise
-// there is no saying which result they are about.
+// there is no saying which result they are about. A several-result row that
+// carries toolDenialKind is counted as Skipped["multi_result_denial"].
 func (n *Normalizer) toolResultRow(l *rawLine, blocks []block, off int64) {
 	var results []block
 	for _, b := range blocks {
 		if b.typ == "tool_result" {
 			results = append(results, b)
 		}
+	}
+	if len(results) > 1 && l.str(l.ToolDenialKind) != "" {
+		// not seen in any real transcript; if it ever happens, say so
+		// instead of guessing which result the field is about
+		n.skip("multi_result_denial")
 	}
 	for _, b := range results {
 		r := result{at: l.at, isErr: jsonTrue(b.obj.get("is_error"))}
@@ -145,6 +157,23 @@ func (n *Normalizer) applyResult(id string, r result, off int64) {
 	s := *tr.t.Items[loc.item].Step
 	s.Status, s.Denial = resultStatus(r)
 	s.Output = n.outputOf(r.blocks, s.Kind)
+	tur, _ := parseObject(r.tur) // a string or absent toolUseResult is no object
+	switch s.Kind {
+	case convmodel.StepEdit:
+		path := ""
+		if s.Diff != nil {
+			path = s.Diff.Path
+		}
+		if d := patchDiff(path, tur); d != nil {
+			s.Diff = d
+		}
+	case convmodel.StepExecute:
+		if s.Command != nil {
+			s.Command = commandWithResult(s.Command, r.text, tur)
+		}
+	case convmodel.StepTask:
+		s.Subagent = n.subagentOf(&s, tur)
+	}
 	if r.at > 0 && s.StartedAt > 0 {
 		d := max(r.at-s.StartedAt, 0)
 		s.DurationMS = &d

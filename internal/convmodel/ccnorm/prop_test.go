@@ -29,6 +29,7 @@ func genTranscript(seed uint64, n int) [][]byte {
 	model := models[0]
 	entry := "cli"
 	add := func(b []byte) { lines = append(lines, b) }
+	g := &toolGen{r: r}
 
 	for len(lines) < n {
 		if r.IntN(12) == 0 {
@@ -88,12 +89,12 @@ func genTranscript(seed uint64, n int) [][]byte {
 				switch r.IntN(8) {
 				case 0:
 					add(assistantThinking(id("t"), tick(), "", 100+r.IntN(900), ep))
+				case 5, 6: // tool calls are common
+					g.emit(id, tick, model, ep, add)
 				case 1:
 					add(assistantThinking(id("t"), tick(), "pondering", 0, ep))
 				case 2:
-					tu := id("toolu")
-					add(assistantRow(id("a"), tick(), model, toolUseBlock(tu, "Bash", obj{"command": "ls"}), ep))
-					add(toolResultRow(id("r"), tick(), tu, "out", ep))
+					g.emit(id, tick, model, ep, add)
 				case 3:
 					add(queueOp(tick(), "enqueue"))
 					add(queuedCommand(id("q"), tick(), "also this", obj{"kind": "human"}, "prompt"))
@@ -285,6 +286,8 @@ func readLines(t *testing.T, path string) [][]byte {
 // invariance test proves little.
 func TestGen_CoversTheRowShapes(t *testing.T) {
 	n, _, _ := run(t, genTranscript(1, 2000), nil)
+	// the file ends mid-tool, so a running step exists
+	feed(t, n, userRow("zz-u", 99999, "last"), toolCall("zz-a", 99999.5, "zz-toolu", "Bash", obj{"command": "make"}))
 	c := validated(t, n)
 	seen := map[string]bool{}
 	for _, tr := range c.Turns {
@@ -297,9 +300,36 @@ func TestGen_CoversTheRowShapes(t *testing.T) {
 			if it.System != nil {
 				seen["system:"+string(it.System.Kind)] = true
 			}
+			if s := it.Step; s != nil {
+				seen["step:"+string(s.Kind)] = true
+				seen["status:"+string(s.Status)] = true
+				if s.Denial != "" {
+					seen["denial:"+s.Denial] = true
+				}
+				seen["input_truncated"] = seen["input_truncated"] || s.InputTruncated
+				if s.Output != nil {
+					seen["output"] = true
+					seen["output:"+string(s.Output.Keep)] = true
+					seen["output_images"] = seen["output_images"] || len(s.Output.Images) > 0
+				}
+				if s.Diff != nil {
+					seen[fmt.Sprintf("diff:exact=%v", s.Diff.Exact)] = true
+				}
+				if s.Command != nil {
+					seen["command"] = true
+					seen["exit_code"] = seen["exit_code"] || s.Command.ExitCode != nil
+					seen["background_task"] = seen["background_task"] || s.Command.BackgroundTaskID != ""
+				}
+				seen["subagent"] = seen["subagent"] || s.Subagent != nil
+			}
 		}
 	}
 	for _, want := range []string{
+		"step:edit", "step:execute", "step:read", "step:search", "step:task", "step:other",
+		"status:running", "status:done", "status:failed", "status:denied",
+		"denial:user-rejected", "denial:interrupted", "denial:permission-rule", "denial:cancelled",
+		"input_truncated", "output", "output:head", "output:tail", "output_images",
+		"diff:exact=true", "diff:exact=false", "command", "exit_code", "background_task", "subagent",
 		"outcome:done", "outcome:interrupted", "outcome:failed",
 		"user", "agent_text", "thinking",
 		"source:user", "source:queued", "source:slash", "source:bash", "source:peer", "source:task", "source:scheduled",
@@ -327,6 +357,11 @@ func FuzzFeed(f *testing.F) {
 	f.Add(join(userRow("p1", 1, peerText("b", "n"), isMeta(), originKind("peer")), queuedCommand("q1", 2, "x", obj{"kind": "human"}, "prompt")))
 	f.Add(join(userRow("b1", 1, "<bash-input>ls</bash-input>", without("turnPosition")), userRow("b2", 2, "<bash-stdout>x</bash-stdout>")))
 	f.Add(join(userRow("u1", 1, "", blocksOf(obj{"type": "image", "source": obj{"type": "base64", "media_type": "image/png", "data": "AAAA"}}))))
+	f.Add(join(userRow("u1", 1, "go"), toolCall("a1", 2, "toolu_1", "Edit", obj{"file_path": "/f", "old_string": "a", "new_string": "b"}),
+		resultRow("r1", 3, "toolu_1", refusal, true, denialKind("user-rejected"), toolUseResult("User rejected tool use")), interruptRow("i1", 4, true)))
+	f.Add(join(userRow("u1", 1, "go"), toolCall("a1", 2, "toolu_1", "Agent", obj{"description": "d"}), turnDuration("d1", 3, 1), userRow("u2", 4, "next"),
+		resultRow("r1", 5, "toolu_1", []obj{imgObj("image/png", "QUJD"), {"type": "text", "text": "x"}}, false, toolUseResult(obj{"agentId": "a1"}))))
+	f.Add(join(toolCall("a1", 1, "toolu_1", "Bash", obj{"command": "ls"}), resultRow("r1", 2, "toolu_1", "Exit code 2\nx", true), resultRow("r2", 3, "toolu_none", "x", false)))
 	f.Add(join([]byte(`{"type":"user"`), []byte(`[]`), []byte(``), []byte(`{"type":"assistant","uuid":"x","message":{"content":7}}`)))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		n := New(Options{})
