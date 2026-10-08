@@ -8,9 +8,9 @@ Eight PRs (seven rows, a-3 split in two), each ≤ 800 lines diff / ≤ 20 files
 
 | PR | Content | Depends on | Est. lines |
 |---|---|---|---|
-| **U1-2a-1** | mod + registry: every batch carries `cwd` / `interactive`; the heartbeat mirrors the error outcome and the background tasks (closes the U1-1 acceptance gap) | — | ~300 |
+| **U1-2a-1** | mod + registry: every batch carries `cwd` / `interactive`; the heartbeat mirrors the error outcome and the background tasks (closes the U1-1 acceptance gap); **`tool.approved`** from a `ui.render` `ToolUse` observer (M-U1-6) | — | ~450 |
 | **U1-2a-2** | `internal/lights`: the pure per-stream mod state machine (§7 table, dots, background kind, heartbeat reconcile) | — | ~650 |
-| **U1-2a-3** | agent module: subscribe to the registry, worker, **mod overlay** on every projection, `source` / `background` on `NormalizedEvent` | a-2 | ~870 → split: **a-3a** subscriber + overlay (~480), **a-3b** worker, eviction, probe gate (~400, depends on a-3a) |
+| **U1-2a-3** | agent module: subscribe to the registry, worker, **mod overlay** on every projection, `source` / `background` on `NormalizedEvent` | a-2 | ~900 → split: **a-3a** subscriber + overlay + `tool.approved` in `internal/lights` (~530), **a-3b** worker, eviction, probe gate (~400, depends on a-3a) |
 | **U1-2a-4** | hook fallback fixes: `is_interrupt` → idle, subagent `StopFailure` keeps the main status, `Stop` background symbol, per-pane error guard | a-3 | ~550 |
 | **U1-2b-1** | per-tmux-session priority aggregation (error > waiting > running > idle), session background = highest across panes | a-3 | ~400 |
 | **U1-2b-2** | the **hook emit slot**: every `hook` frame is read fresh, stamped `(epoch, seq)` and broadcast inside one mutex | b-1 | ~680 |
@@ -37,10 +37,11 @@ Problem (U1-1 acceptance): a restarted daemon starts with an empty registry; a s
 - `body(events)` adds `cwd: ev.cwd` and `interactive: true` to the envelope (the reporter only runs for interactive sessions; U4 may send `false`).
 - `turnStarted` (main): `lastError = false`. `turnCompleted` without `agentId`: `lastError = (e.reason === 'error')`. `sessionSwitch` and `startReporter`: `lastError = false`.
 - `stopped` stores the same `{tasks, crons}` it enqueues as `ev.background`. `startReporter` resets it to null; `sessionSwitch` keeps it (the daemon clears the symbol on a switch and this mirror restores it within one beat if the tasks are still there; the next `classic.Stop` refreshes it either way).
-- `beat`: data gains `error: ev.lastError` (always present) and `background: ev.background` when non-null.
+- `beat`: when `$.agent.list()` throws, `agents` is **left out** (not `[]`, which would clear every dot until the next beat); data gains `error: ev.lastError` (always present), `background: ev.background` when non-null. The mod keeps `asks` as a `Map(tool_use_id → 'permission' | 'question')` (question = AskUserQuestion / ExitPlanMode, also when `tool.check` asks for one); the heartbeat's `asks` stays a plain id list.
+- **`tool.approved`** (coordinator ruling after M-U1-6): `on('ui.render', { component: 'ToolUse' }, onToolUseRender).catch(($, e, next) => next(e))` — observe only, always `return next(e)` unchanged, O(1) per redraw. When `e.props.tool_use_id` is an open **permission** ask and `e.props.isRunning === true`: delete it from `asks` and enqueue `tool.approved {tool_use_id}`. A refusal or Esc needs nothing new (`tool.end` / `turn.complete` follow). Question asks still leave only at `tool.end`. `internal/modevents` `KnownTypes` gains `tool.approved`; spec §6.3 gains its row.
 - No new hook registration; nothing else changes.
 
-Tests (`events.test.ts`, existing kit): `every batch carries cwd and interactive`, `cwd survives /clear`, `heartbeat carries error after a main turn ends in error and clears it at the next main turn`, `a subagent turn ending in error does not set the heartbeat error`, `heartbeat mirrors the last background and a new session.start forgets it`.
+Tests (`events.test.ts`, existing kit): `every batch carries cwd and interactive`, `cwd survives /clear`, `heartbeat carries error after a main turn ends in error and clears it at the next main turn`, `a subagent turn ending in error does not set the heartbeat error`, `heartbeat mirrors the last background and a new session.start forgets it`, `a permission ask leaves on the ToolUse render with isRunning true and reports tool.approved once`, `a question ask is not approved by a render`, `a render of a tool with no open ask reports nothing`, `the render hook returns next(e) unchanged`, `heartbeat omits agents when agent.list throws`. Mutation gates (added): approving question asks → the question test red; no delete on approval → the "once" test red.
 Mutation gates: `cwd` left out of `body` → the first test red; `lastError` set by a subagent turn → the subagent test red.
 
 ### Task A1-2 — wire and registry
@@ -96,21 +97,24 @@ type StreamState struct {
 | `tool.check` decision `ask` | add `tool_use_id` (or `check:<seq>`) to `Asks` |
 | `tool.start` tool ∈ {AskUserQuestion, ExitPlanMode} (main or subagent) | add `tool_use_id` to `Asks` |
 | `tool.end` | remove `tool_use_id` from `Asks` |
+| `tool.approved` (a-3a) | remove `tool_use_id` from `Asks` |
 | `compact.start` / `compact.end` main, `trigger ≠ precompute` | `Compacting = true / false` |
 | `agent.spawn` without `workflow_run_id` | add dot `{agent_id, at}`; with `workflow_run_id`: nothing (N6) |
 | `background` | `Background = BackgroundKind(tasks, crons)` |
 | `heartbeat` | reconcile, below |
 | `usage`, unknown | nothing |
 
+`tool.approved {tool_use_id}` (M-U1-6) removes that ask like `tool.end` does — added in **U1-2a-3a** on top of a-2 (a-2 was already in review), with `TestStatus_ApprovedLeavesWaiting` (one ask approved → running; two asks, one approved → still waiting; a new ask afterwards → waiting again).
+
 `Status()`: `Ended` → clear; `Err` → error; `len(Asks) > 0` → waiting; `TurnID != "" || Compacting` → running; else idle.
 
-Heartbeat reconcile (repairs lost events, e.g. Esc without `turn.complete`): `TurnID = turn_id` (empty when absent); `Asks` = exactly the listed ids; `Compacting = compacting`; `Err = error` when the field is present (U1-2a-1 mods), unchanged otherwise; dots = agents with status ∈ {pending, running, waiting} (`$.agent.list()` never lists workflow agents, d.ts) — listed-active ids not yet dotted are added with `StartedAt = ev.at`, dotted ids not listed-active are removed; `background` present → `Background = BackgroundKind(...)`.
+Heartbeat reconcile (repairs lost events, e.g. Esc without `turn.complete`): `TurnID = turn_id` (empty when absent); `Asks` = exactly the listed ids when `asks` is present (the mod already dropped an approved ask from its mirror, so a beat never pulls it back); absent / null fields leave their part of the state alone (`asks`, `compacting`, `agents` — the mod omits `agents` when `$.agent.list()` throws; a-2 review); `Compacting = compacting`; `Err = error` when the field is present (U1-2a-1 mods), unchanged otherwise; dots = agents with status ∈ {pending, running, waiting} (`$.agent.list()` never lists workflow agents, d.ts) — listed-active ids not yet dotted are added with `StartedAt = ev.at`, dotted ids not listed-active are removed; `background` present → `Background = BackgroundKind(...)`.
 
 `BackgroundKind`: any task `type == "workflow"` → workflow; else any `monitor` → monitor; else `crons > 0` → schedule; else "" (`shell` and `subagent` tasks show nothing, N6). The CC hook payload lists only in-flight tasks (d.ts `StopHookInput.background_tasks`), so status is not filtered.
 
-Known limitation (also true of the hooks today): after the user approves a permission prompt, the light stays waiting until that tool's `tool.end`; no mod event marks the answer.
+Approval (user / coordinator ruling 2026-10-08, replaces the earlier known limitation): a permission ask leaves waiting on `tool.approved`, which the mod reports ~16 ms after the user approves in **any** terminal (M-U1-6). A new ask enters waiting again. Known gap: a subagent's tool row may not be drawn, so its approval is not seen and its ask leaves at `tool.end`.
 
-Tests (`state_test.go`, table-driven, each §7 row): `TestStatus_TurnLifecycle`, `TestStatus_AskFromCheckAndAskTools` (incl. a subagent's AskUserQuestion), `TestStatus_ToolEndClearsOnlyItsAsk`, `TestStatus_ErrorUntilNextMainTurn`, `TestStatus_SubagentErrorIsNotMain`, `TestStatus_CompactIsRunningPrecomputeIsNot`, `TestStatus_EndedIsClearAndAnyEventReopens`, `TestStatus_ClearResumeEndIsNotAnEnd`, `TestSwitch_ResetsTurnAndDots`, `TestDots_SpawnAddsWorkflowSpawnDoesNot`, `TestDots_SubagentTurnCompleteRemoves`, `TestHeartbeat_RepairsLostTurnComplete` (turn.start, then a heartbeat without turn_id → idle), `TestHeartbeat_ReconcilesDotsAndAsks`, `TestHeartbeat_ErrorFieldAbsentKeepsErr`, `TestHeartbeat_RestoresBackground`, `TestBackgroundKind_Priority` (workflow > monitor > schedule; shell only → ""), `TestApply_ChangedOnlyOnVisibleChange` (two identical heartbeats → second `changed == false`), `TestLive_Window` (30 s inclusive, ended never live).
+Tests (`state_test.go`, table-driven, each §7 row): `TestStatus_TurnLifecycle`, `TestStatus_AskFromCheckAndAskTools` (incl. a subagent's AskUserQuestion), `TestStatus_ToolEndClearsOnlyItsAsk`, `TestStatus_ErrorUntilNextMainTurn`, `TestStatus_SubagentErrorIsNotMain`, `TestStatus_CompactIsRunningPrecomputeIsNot`, `TestStatus_EndedIsClearAndAnyEventReopens`, `TestStatus_ClearResumeEndIsNotAnEnd`, `TestSwitch_ResetsTurnAndDots`, `TestDots_SpawnAddsWorkflowSpawnDoesNot`, `TestDots_SubagentTurnCompleteRemoves`, `TestHeartbeat_RepairsLostTurnComplete` (turn.start, then a heartbeat without turn_id → idle), `TestHeartbeat_ReconcilesDotsAndAsks`, `TestHeartbeat_ErrorFieldAbsentKeepsErr`, `TestHeartbeat_RestoresBackground`, `TestBackgroundKind_Priority` (workflow > monitor > schedule; shell only → ""), `TestApply_ChangedOnlyOnVisibleChange` (two identical heartbeats → second `changed == false`), `TestLive_Window` (30 s inclusive, ended never live); after review: `TestHeartbeat_AbsentFieldsKeepState`, `TestHeartbeat_AgentsAbsentKeepsDots`, `TestHeartbeat_NullFieldsKeepState`.
 Mutation gates: workflow spawn counted → `SpawnAddsWorkflowSpawnDoesNot` red; heartbeat not clearing TurnID → `RepairsLostTurnComplete` red; subagent turn.complete sets Err → `SubagentErrorIsNotMain` red; `changed` true on every heartbeat → `ChangedOnlyOnVisibleChange` red.
 
 ---
@@ -152,6 +156,10 @@ Mutation gates: overlay keyed by pane instead of sid → `MatchesBySid` red; emi
 If this PR passes 800 lines it splits into A3-1+A3-3 (overlay, driven by a test-only kick) and A3-2 (worker, tick, eviction).
 
 ---
+
+## M-U1-6 — the approval signal (measured 2026-10-08)
+
+CC 2.1.294, default permission mode, a Bash call that needs approval, a throwaway probe mod on `ui.render` {Spinner, ToolProgress, ToolUse} + `tool.check` / `tool.call`: `tool.call` starts, `tool.check` returns `ask` and the dialog opens; `ToolUse{tool_use_id}.isRunning` is `false` the whole time the dialog is open and turns `true` **16 ms** after the user's Enter on "Yes"; `ToolProgress{kind: background_hint}` follows **3.5 s** later (Bash only); `Spinner.mode` stays `tool-use` throughout (no signal). Refusal and Esc were not measured (they end in `tool.end` with an error / `turn.complete`). Recorded in spec §3; the coordinator chose this signal over watching answer keys in the daemon's terminal relay (works in any terminal, no key guessing, no relay change).
 
 ## U1-2a-4 — hook fallback fixes (no mod)
 
@@ -256,7 +264,7 @@ Spec §7 "Aggregation and wire" is updated in this PR with the frame shape and t
 2. Snapshot = one opt-in `agent.snapshot` frame.
 3. Multi-pane sessions: dots / agent type / model from the highest-priority pane only — a known limitation (spec §7).
 4. #1866 is closed (no further `featuresOf` changes). Member β's PU-1c adds `EventsBroadcaster.BroadcastStrict` to `internal/core/events.go` (strict for every subscriber: a frame that does not fit removes it, so it reconnects for a snapshot). **b-3 rebases on a main that contains PU-1c** and makes `agent.v2` strictness use, or match, that mechanism rather than adding a second one.
-- Known limitation accepted: waiting until the approved tool ends (the user mostly runs in bypass mode).
+- ~~Known limitation accepted: waiting until the approved tool ends~~ — superseded the same evening: the user wants approval to leave yellow at once. After M-U1-6 the coordinator chose the mod signal: `tool.approved` from the `ui.render` `ToolUse` observer (a-1), handled by the state machine in a-3a; no answer-key watching, no `question_asks`, no answered marks; the hook fallback keeps its old rule.
 - Every PR must be safe to deploy on its own (the coordinator may deploy main for other lines in between); a-1 changes the mod, so its deploy runs `pdx setup --agent cc`.
 
 ## Decisions for the coordinator (as asked; answered above)

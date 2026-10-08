@@ -194,6 +194,26 @@ func TestApply_UnknownTypeCountedNotDelivered(t *testing.T) {
 	}
 }
 
+// tool.approved (U1-2a-1) is a known type: counted under its own name,
+// kept in the ring and delivered.
+func TestApply_ToolApprovedIsDelivered(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	rec := &recorder{}
+	reg.Subscribe(rec.fn)
+	const s = "streamAPP"
+	approved := mkEvent(2, TypeToolApproved)
+	approved.Data = json.RawMessage(`{"tool_use_id":"tu-1"}`)
+	if _, err := reg.Apply(mkBatch(s, 0, mkEvent(1, TypeToolCheck), approved)); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := rec.list(), []string{s + "#1", s + "#2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("deliveries = %v, want %v", got, want)
+	}
+	if info := streamInfo(t, reg, s); info.Counts[TypeToolApproved] != 1 || info.Counts[CountUnknown] != 0 {
+		t.Fatalf("counts = %v", info.Counts)
+	}
+}
+
 func TestApply_DeliveryHoldsTheStream(t *testing.T) {
 	reg := NewRegistry(newFakeClock().Now)
 	const a, b = "streamAAA", "streamBBB"
@@ -473,6 +493,113 @@ func TestBySID_FollowsSwitch(t *testing.T) {
 	reg.Apply(mkBatch("streamOTH", 0, mkEvent(1, TypeHeartbeat))) // also on sidA
 	if info, _ := reg.BySID(sidA); info.Stream != "streamOTH" {
 		t.Fatalf("BySID = %s, want the stream seen last", info.Stream)
+	}
+}
+
+// After a daemon restart a live stream resumes with heartbeats only: no
+// session.start, yet the envelope names its cwd and that it is
+// interactive, from the first delivery on.
+// Mutation gate: drop the envelope copy in Apply → red.
+func TestApply_EnvelopeFillsCwdAndInteractive(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	var mu sync.Mutex
+	var seen []StreamInfo
+	reg.Subscribe(func(info StreamInfo, _ Event) {
+		mu.Lock()
+		seen = append(seen, info)
+		mu.Unlock()
+	})
+	const s = "streamRST"
+	b := mkBatch(s, 0, mkEvent(41, TypeHeartbeat), mkEvent(42, TypeHeartbeat))
+	b.CWD, b.Interactive = "/work/repo", true
+	if _, err := reg.Apply(b); err != nil {
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("cwd / interactive = %q / %v, want /work/repo / true", info.CWD, info.Interactive)
+	}
+	if info, ok := reg.BySID(sidA); !ok || info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("BySID = %+v, %v", info, ok)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 2 {
+		t.Fatalf("delivered %d events, want 2", len(seen))
+	}
+	for i, info := range seen {
+		if info.CWD != "/work/repo" || !info.Interactive {
+			t.Fatalf("delivery %d carried cwd / interactive = %q / %v", i, info.CWD, info.Interactive)
+		}
+	}
+}
+
+// A batch without the envelope fields (an older mod) keeps what
+// session.start set; an envelope with them agrees with it.
+func TestApply_EnvelopeWithoutCwdKeepsSessionStartCwd(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	const s = "streamOLD"
+	start := mkEvent(1, TypeSessionStart)
+	start.Data = json.RawMessage(`{"cwd":"/work/repo","surface":"terminal"}`)
+	if _, err := reg.Apply(mkBatch(s, 0, start)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Apply(mkBatch(s, 0, mkEvent(2, TypeHeartbeat))); err != nil { // cwd "", interactive false
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("after an envelope without the fields: cwd / interactive = %q / %v", info.CWD, info.Interactive)
+	}
+	b := mkBatch(s, 0, mkEvent(3, TypeHeartbeat))
+	b.CWD, b.Interactive = "/work/repo", true
+	if _, err := reg.Apply(b); err != nil {
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("after a full envelope: cwd / interactive = %q / %v", info.CWD, info.Interactive)
+	}
+}
+
+// An empty session.start cwd never erases the envelope's cwd, for the
+// stream and for the StreamInfo its own batch delivers.
+// Mutation gate: make session.start overwrite CWD unconditionally → red.
+func TestApply_EmptySessionStartCwdKeepsEnvelopeCwd(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	var mu sync.Mutex
+	var seen []StreamInfo
+	reg.Subscribe(func(info StreamInfo, _ Event) {
+		mu.Lock()
+		seen = append(seen, info)
+		mu.Unlock()
+	})
+	const s = "streamEMPTY"
+	start := mkEvent(1, TypeSessionStart)
+	start.Data = json.RawMessage(`{"cwd":""}`)
+	b := mkBatch(s, 0, start)
+	b.CWD, b.Interactive = "/work/repo", true
+	if _, err := reg.Apply(b); err != nil {
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/work/repo" || !info.Interactive {
+		t.Fatalf("cwd / interactive = %q / %v, want /work/repo / true", info.CWD, info.Interactive)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 || seen[0].CWD != "/work/repo" {
+		t.Fatalf("delivered infos = %+v, want one carrying cwd /work/repo", seen)
+	}
+}
+
+// Without an envelope cwd (an older mod), session.start still sets it.
+func TestApply_SessionStartCwdStillSetsWithoutEnvelope(t *testing.T) {
+	reg := NewRegistry(newFakeClock().Now)
+	const s = "streamNOENV"
+	start := mkEvent(1, TypeSessionStart)
+	start.Data = json.RawMessage(`{"cwd":"/a"}`)
+	if _, err := reg.Apply(mkBatch(s, 0, start)); err != nil {
+		t.Fatal(err)
+	}
+	if info := streamInfo(t, reg, s); info.CWD != "/a" || !info.Interactive {
+		t.Fatalf("cwd / interactive = %q / %v, want /a / true", info.CWD, info.Interactive)
 	}
 }
 

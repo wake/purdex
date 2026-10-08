@@ -5,9 +5,11 @@
 // events stamped with a strictly increasing seq, queued, and POSTed in batches to
 // `/mod/v1/events` from a $.clock.after timer — never inside a hook — one request at a time,
 // retried with backoff until the daemon acks them. A heartbeat every 10 s carries the live
-// mirror (the running main turn, open asks, compacting, the agents), so a daemon that
-// restarts or a batch that is lost converges within one beat. `session.end` flushes inside
-// its hook. Headless runs (`claude -p`, a Nexen worker) report nothing.
+// mirror (the running main turn, open asks, compacting, the agents, the last main turn's
+// error outcome, the last background tasks) and every batch says where the session runs
+// and that it is interactive, so a daemon that restarts or a batch that is lost converges
+// within one beat. `session.end` flushes inside its hook. Headless runs (`claude -p`, a
+// Nexen worker) report nothing.
 //
 // The hooks only observe: each calls next(e) and returns what it resolved to; nothing here
 // ever changes what the engine does. Every registration carries `.catch(($, e, next) =>
@@ -26,8 +28,9 @@
 //   and `session.compact` unmatched; here those carry a matcher (one with and one without
 //   load, the first registered outermost — registerEvents runs before register.js's own, so
 //   these wrap the relay's), and only `tool.call`, `tool.check`, `agent.spawn`,
-//   `session.measure`, `session.end` and `classic.Stop` are unmatched. A Go test over the
-//   embedded files keeps it so (cmd/pdx/plugin/embed_test.go).
+//   `session.measure`, `session.end` and `classic.Stop` are unmatched. `ui.render` carries
+//   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
+//   (cmd/pdx/plugin/embed_test.go).
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -51,6 +54,7 @@ const ev = {
   stream: '',
   seq: 0,
   sid: '',
+  cwd: '', // where the session runs: from session.start, kept across a /clear or a resume
   ccVersion: '',
   modVersion: '',
   queue: [],
@@ -59,8 +63,13 @@ const ev = {
   scheduled: false, // a flush timer (the 150 ms one, or a backoff) is pending
   backoffMs: 0,
   turnId: '', // the running main turn
-  asks: new Set(), // tool_use_ids waiting on the person
+  // tool_use_id → 'permission' | 'question': what waits on the person. A question
+  // (AskUserQuestion / ExitPlanMode) leaves at its tool.end; a permission ask leaves too
+  // when its ToolUse row starts running (tool.approved).
+  asks: new Map(),
   compacting: false, // the main conversation is compacting
+  lastError: false, // the last main turn ended in error (cleared by the next main turn)
+  background: null, // {tasks, crons} as the last classic.Stop listed them; null before one
   beat: null, // the heartbeat timer
   beatGen: 0, // bumped when the heartbeat stops or pauses: a beat begun before then lands nowhere
   switching: false, // from session.end{clear|resume} to session.switch: the heartbeat pauses
@@ -125,6 +134,8 @@ function body(events) {
     cc_version: ev.ccVersion,
     mod_version: ev.modVersion,
     dropped_total: ev.droppedTotal,
+    cwd: ev.cwd,
+    interactive: true, // the reporter runs only for interactive sessions
     events,
   })
 }
@@ -234,13 +245,15 @@ function beatTick($) {
 async function beat($) {
   if (!ev.on || ev.switching) return
   const gen = ev.beatGen
-  let agents = []
+  let agents // left out when the list fails: [] would clear every dot until the next beat
   try {
     agents = (await $.agent.list()).map((a) => ({ id: a.id, status: a.status }))
   } catch {}
   if (gen !== ev.beatGen) return
-  const data = { asks: [...ev.asks], compacting: ev.compacting, agents }
+  const data = { asks: [...ev.asks.keys()], compacting: ev.compacting, error: ev.lastError }
+  if (agents) data.agents = agents
   if (ev.turnId) data.turn_id = ev.turnId
+  if (ev.background) data.background = ev.background
   enqueue($, 'heartbeat', data)
 }
 
@@ -273,9 +286,12 @@ async function startReporter($, e) {
   const v = await $.session.version().catch(() => undefined)
   ev.ccVersion = isObject(v) && typeof v.version === 'string' ? v.version : ''
   ev.sid = String(await $.session.id())
+  ev.cwd = String(e.cwd ?? '')
   ev.turnId = ''
   ev.asks.clear()
   ev.compacting = false
+  ev.lastError = false
+  ev.background = null
   ev.on = true
   enqueue($, 'session.start', { cwd: e.cwd, surface: e.surface })
   ev.beat = $.clock.every(HEARTBEAT_MS, () => beatTick($))
@@ -283,7 +299,8 @@ async function startReporter($, e) {
 
 // sessionSwitch follows a /clear or a resume: the process goes on under a new session id,
 // in the same stream, its seq and heartbeat going on; the old conversation's mirror is gone.
-// It ends the pause session.end began, whatever happens here.
+// The cwd and the background tasks stay (same process: the tasks run on; the next
+// classic.Stop refreshes them). It ends the pause session.end began, whatever happens here.
 async function sessionSwitch($, source) {
   if (!ev.on) return
   try {
@@ -292,6 +309,7 @@ async function sessionSwitch($, source) {
     ev.turnId = ''
     ev.asks.clear()
     ev.compacting = false
+    ev.lastError = false
     enqueue($, 'session.switch', { prev_sid: prev, source })
   } finally {
     ev.switching = false
@@ -325,7 +343,8 @@ function withAgent(data, agentId) {
 
 function turnStarted($, e) {
   if (!ev.on) return
-  ev.turnId = e.turnId
+  ev.turnId = e.turnId // turn.start has no agentId: it is always the main conversation's
+  ev.lastError = false
   enqueue($, 'turn.start', { turn_id: e.turnId })
 }
 
@@ -334,18 +353,32 @@ function turnCompleted($, e) {
   if (!e.agentId) {
     ev.turnId = ''
     ev.asks.clear()
+    ev.lastError = e.reason === 'error'
   }
   enqueue($, 'turn.complete', { ...withAgent({ turn_id: e.turnId, reason: e.reason }, e.agentId), duration_ms: e.durationMs, aborted: !!e.isAborted })
 }
 
 function toolStarted($, e) {
-  if (ASK_TOOLS.has(e.tool) && e.tool_use_id) ev.asks.add(e.tool_use_id)
+  if (ASK_TOOLS.has(e.tool) && e.tool_use_id) ev.asks.set(e.tool_use_id, 'question')
   enqueue($, 'tool.start', withAgent({ tool: e.tool, tool_use_id: e.tool_use_id }, e.agentId))
 }
 
 function toolEnded($, e, ms, error) {
   if (e.tool_use_id) ev.asks.delete(e.tool_use_id)
   enqueue($, 'tool.end', withAgent({ tool_use_id: e.tool_use_id, ms, error }, e.agentId))
+}
+
+// toolUseDrawn reports the approval of a permission ask: the ToolUse row's isRunning is false
+// while the permission dialog is open and turns true about 16 ms after the person approves
+// (M-U1-6, Claude Code 2.1.294). It runs on every redraw of every tool row, so it only looks
+// the id up; the ask leaves the mirror at once, so a later redraw reports nothing. A question
+// is never approved here: it waits until its tool.end.
+function toolUseDrawn($, e) {
+  if (!ev.on) return
+  const p = e.props
+  if (!p || p.isRunning !== true || ev.asks.get(p.tool_use_id) !== 'permission') return
+  ev.asks.delete(p.tool_use_id)
+  enqueue($, 'tool.approved', { tool_use_id: p.tool_use_id })
 }
 
 function isErrorResult(r) {
@@ -355,7 +388,7 @@ function isErrorResult(r) {
 function toolChecked($, e, r) {
   if (!ev.on) return
   const decision = isObject(r) ? r.decision : undefined
-  if (decision === 'ask' && e.tool_use_id) ev.asks.add(e.tool_use_id)
+  if (decision === 'ask' && e.tool_use_id) ev.asks.set(e.tool_use_id, ASK_TOOLS.has(e.tool) ? 'question' : 'permission')
   const data = { tool: e.tool }
   if (e.tool_use_id) data.tool_use_id = e.tool_use_id
   enqueue($, 'tool.check', { ...withAgent(data, e.agentId), decision })
@@ -390,7 +423,8 @@ function measured($, e) {
 function stopped($, e) {
   if (!ev.on) return
   const tasks = (Array.isArray(e.background_tasks) ? e.background_tasks : []).map((t) => ({ id: t.id, type: t.type, status: t.status }))
-  enqueue($, 'background', { tasks, crons: Array.isArray(e.session_crons) ? e.session_crons.length : 0 })
+  ev.background = { tasks, crons: Array.isArray(e.session_crons) ? e.session_crons.length : 0 }
+  enqueue($, 'background', ev.background)
 }
 
 function compactStarted($, e) {
@@ -470,6 +504,12 @@ async function onToolCall($, e, next) {
   return r
 }
 
+// onToolUseRender only observes: the drawing is whatever beneath answers, unchanged.
+async function onToolUseRender($, e, next) {
+  toolUseDrawn($, e)
+  return next(e)
+}
+
 async function onToolCheck($, e, next) {
   const r = await next(e)
   toolChecked($, e, r)
@@ -503,7 +543,8 @@ async function onSessionEnd($, e, next) {
 // registerEvents is called once by register.js, before register.js's own hooks, so the
 // matched hooks below are outermost on the events register.js owns. The matchers admit
 // every event the reporter wants: any turn (every turn has an id), any compaction trigger,
-// an interactive session start, and a SessionStart that switched the session id.
+// an interactive session start, a SessionStart that switched the session id, and a tool
+// row's drawing.
 export function registerEvents(on) {
   on('session.start', { isInteractive: true }, onSessionStart).catch(($, e, next) => next(e))
   on('turn.start', { turnId: /^/ }, onTurnStart).catch(($, e, next) => next(e))
@@ -516,4 +557,5 @@ export function registerEvents(on) {
   on('session.measure', onMeasure).catch(($, e, next) => next(e))
   on('session.end', onSessionEnd).catch(($, e, next) => next(e))
   on('classic.Stop', onStop).catch(($, e, next) => next(e))
+  on('ui.render', { component: 'ToolUse' }, onToolUseRender).catch(($, e, next) => next(e))
 }

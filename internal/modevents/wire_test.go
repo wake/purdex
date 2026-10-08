@@ -126,9 +126,29 @@ func TestDecodeBatch_IgnoresUnknownFields(t *testing.T) {
 	}
 }
 
+// An older mod sends no cwd and no interactive: the batch decodes with
+// their zero values. A U1-2a-1 mod sends both on every batch.
+func TestDecodeBatch_EnvelopeFieldsOptional(t *testing.T) {
+	old, err := DecodeBatch(strings.NewReader(batchJSON(1, testStream, evs(ev(1, testSID, "heartbeat")))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.CWD != "" || old.Interactive {
+		t.Fatalf("an envelope without cwd / interactive decoded as %q / %v", old.CWD, old.Interactive)
+	}
+	body := `{"v":1,"stream":"` + testStream + `","agent":"cc","cwd":"/work/repo","interactive":true,"events":` + evs(ev(1, testSID, "heartbeat")) + `}`
+	b, err := DecodeBatch(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.CWD != "/work/repo" || !b.Interactive {
+		t.Fatalf("decoded cwd / interactive = %q / %v", b.CWD, b.Interactive)
+	}
+}
+
 func TestKnownTypes(t *testing.T) {
 	want := []string{"session.start", "session.switch", "session.end", "turn.start", "turn.complete",
-		"tool.check", "tool.start", "tool.end", "agent.spawn", "compact.start", "compact.end",
+		"tool.check", "tool.start", "tool.end", "tool.approved", "agent.spawn", "compact.start", "compact.end",
 		"usage", "background", "heartbeat"}
 	got := KnownTypes()
 	if len(got) != len(want) {

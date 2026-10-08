@@ -126,6 +126,8 @@ test('posts session.start then turn events in seq order to the socket from pdx.j
     cc_version: '2.1.293',
     mod_version: '1.0.0-alpha.600',
     dropped_total: 0,
+    cwd: '/work',
+    interactive: true,
     events: [
       { seq: 1, at: expect.any(Number), sid: SID1, type: 'session.start', data: { cwd: '/work', surface: 'terminal' } },
       { seq: 2, at: expect.any(Number), sid: SID1, type: 'turn.start', data: { turn_id: 't1' } },
@@ -285,12 +287,12 @@ test('heartbeat every 10 s carries turn_id, asks and agents', async ($, on) => {
   await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf x' }, tool_use_id: 'tu-1' } as any)
   await w.clock.advance(10_150)
   expect(ofType(w, 'heartbeat').map((e) => e.data)).toEqual([
-    { turn_id: 't1', asks: ['tu-1'], compacting: false, agents: [{ id: 'ag-1', status: 'running' }] },
+    { turn_id: 't1', asks: ['tu-1'], compacting: false, agents: [{ id: 'ag-1', status: 'running' }], error: false },
   ])
   await turnDone($, 't1') // the main turn ended: no turn, no open asks
   w.agents = 'fail'
   await w.clock.advance(10_000)
-  expect(ofType(w, 'heartbeat').map((e) => e.data)[1]).toEqual({ asks: [], compacting: false, agents: [] })
+  expect(ofType(w, 'heartbeat').map((e) => e.data)[1]).toEqual({ asks: [], compacting: false, error: false })
   await w.clock.advance(10_000)
   expect(ofType(w, 'heartbeat').length).toBe(3)
 })
@@ -358,7 +360,7 @@ test('after /clear events carry the new sid and session.switch names the old one
   ])
   expect(ofType(w, 'session.end')[0].data).toEqual({ reason: 'clear' })
   expect(ofType(w, 'session.switch')[0].data).toEqual({ prev_sid: SID1, source: 'clear' })
-  expect(ofType(w, 'heartbeat')[0].data).toEqual({ asks: [], compacting: false, agents: [] })
+  expect(ofType(w, 'heartbeat')[0].data).toEqual({ asks: [], compacting: false, agents: [], error: false })
   expect(new Set(w.posts.map((p) => p.body.stream)).size).toBe(1)
 })
 
@@ -392,7 +394,7 @@ test('between session.end{clear} and session.switch no heartbeat goes out; after
   expect(evs(w).map((x) => [x.type, x.sid])).toEqual([
     ['session.start', SID1], ['turn.start', SID1], ['session.end', SID1], ['session.switch', SID2], ['heartbeat', SID2],
   ])
-  expect(ofType(w, 'heartbeat')[0].data).toEqual({ asks: [], compacting: false, agents: [] })
+  expect(ofType(w, 'heartbeat')[0].data).toEqual({ asks: [], compacting: false, agents: [], error: false })
 })
 
 // Mutation gate: the switch reported only after a next(e) that resolved → no session.switch
@@ -549,6 +551,186 @@ test('agent.spawn, session.measure and classic.Stop report agent.spawn, usage an
     { tasks: [{ id: 'b1', type: 'monitor', status: 'running' }, { id: 'b2', type: 'shell', status: 'running' }], crons: 1 },
     { tasks: [], crons: 0 },
   ])
+})
+
+// ---- what a restarted daemon learns from any batch (U1-2a-1) ----
+
+// A daemon that restarts under a running mod never sees that stream's session.start again: every
+// batch says where the session runs and that it is interactive, the heartbeats alone included.
+// Mutation gate: cwd left out of the envelope → red.
+test('every batch carries cwd and interactive', async ($, on) => {
+  const w = evWorld(on, { daemon: (body, n) => (n === 2 ? { status: 500 } : ackAll(body)) })
+  await start($, w)
+  await turnStart($, 't1')
+  await w.clock.advance(150) // session.start, turn.start
+  await w.clock.advance(10_000) // the heartbeat's batch fails …
+  await w.clock.advance(1000) // … and goes again
+  await end($, 'prompt_input_exit') // the final flush, inside the hook
+  expect(w.posts.length).toBe(4)
+  expect(w.posts.map((p) => [p.body.cwd, p.body.interactive])).toEqual([['/work', true], ['/work', true], ['/work', true], ['/work', true]])
+  expect(w.posts.map((p) => p.body.events.map((e: any) => e.type))).toEqual([['session.start', 'turn.start'], ['heartbeat'], ['heartbeat'], ['session.end']])
+})
+
+test('cwd survives /clear', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await w.clock.advance(150)
+  await end($, 'clear', SID1)
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.advance(10_000) // the beat after the switch
+  const after = w.posts.slice(2) // [session.start], [session.end] (inside its hook), then the switch's
+  expect(after.length).toBeGreaterThan(0)
+  expect(after.flatMap((p) => p.body.events.map((e: any) => e.type))).toEqual(['session.switch', 'heartbeat'])
+  expect(after.every((p) => p.body.cwd === '/work' && p.body.interactive === true)).toBe(true)
+})
+
+test('heartbeat carries error after a main turn ends in error and clears it at the next main turn', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await w.clock.advance(10_000) // beat 1: nothing has failed
+  await turnStart($, 't1')
+  await turnDone($, 't1', { reason: 'error' })
+  await w.clock.advance(10_000) // beat 2: the main turn ended in error
+  await turnStart($, 't2')
+  await w.clock.advance(10_000) // beat 3: a new main turn clears it
+  await turnDone($, 't2', { reason: 'error' })
+  await end($, 'clear', SID1)
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.advance(10_150) // beat 4: a new conversation has no error outcome yet (posted)
+  expect(ofType(w, 'heartbeat').map((e) => e.data.error)).toEqual([false, true, false, false])
+})
+
+// Mutation gate: lastError set by a subagent turn → red.
+test('a subagent turn ending in error does not set the heartbeat error', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 'st-1', { agentId: 'ag-1', reason: 'error' })
+  await w.clock.advance(10_000)
+  await turnDone($, 't1')
+  await w.clock.advance(10_150)
+  expect(ofType(w, 'heartbeat').map((e) => e.data.error)).toEqual([false, false])
+})
+
+test('heartbeat mirrors the last background and a new session.start forgets it', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await w.clock.advance(10_000) // beat 1: no classic.Stop yet, no background member
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [{ id: 'b1', type: 'monitor', status: 'running', description: 'tail' }], session_crons: [{ id: 'c1', schedule: '0 9 * * *', recurring: true }] } as any)
+  await w.clock.advance(10_000) // beat 2: the tasks the last Stop listed
+  await end($, 'clear', SID1)
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.advance(10_000) // beat 3: kept across /clear (same process)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  await w.clock.advance(10_000) // beat 4: the last Stop listed none
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [{ id: 'b2', type: 'shell', status: 'running', description: 'sleep' }] } as any)
+  await start($, w) // a new session.start in the same load
+  await w.clock.advance(10_150) // beat 5: forgotten (posted)
+  const beats = ofType(w, 'heartbeat').map((e) => e.data)
+  expect(beats.length).toBe(5)
+  const BG = { tasks: [{ id: 'b1', type: 'monitor', status: 'running' }], crons: 1 }
+  expect(beats.map((d) => d.background)).toEqual([undefined, BG, BG, { tasks: [], crons: 0 }, undefined])
+  expect('background' in beats[0]).toBe(false)
+  expect('background' in beats[4]).toBe(false)
+  expect(ofType(w, 'background').map((e) => e.data)).toEqual([BG, { tasks: [], crons: 0 }, { tasks: [{ id: 'b2', type: 'shell', status: 'running' }], crons: 0 }])
+})
+
+test('heartbeat omits agents when agent.list throws', async ($, on) => {
+  const w = evWorld(on)
+  w.agents = [{ id: 'ag-1', description: 'look around', type: 'Explore', status: 'running' }]
+  await start($, w)
+  await w.clock.advance(10_150) // beat 1: the list answers
+  w.agents = 'fail'
+  await w.clock.advance(10_000) // beat 2: it throws — no agents member, not [] (that would clear every dot)
+  const beats = ofType(w, 'heartbeat').map((e) => e.data)
+  expect(beats[0].agents).toEqual([{ id: 'ag-1', status: 'running' }])
+  expect(beats[1]).toEqual({ asks: [], compacting: false, error: false })
+  expect('agents' in beats[1]).toBe(false)
+})
+
+// ---- tool.approved: a permission ask leaves waiting when its row starts running (M-U1-6) ----
+
+// The ToolUse row's isRunning is false while the permission dialog is open and turns true about
+// 16 ms after the person approves (M-U1-6, CC 2.1.294). The render hook only looks: whatever is
+// beneath answers is what the engine draws.
+const DRAWN = { type: 'engine', ref: 7 } as const
+const toolRow = (id: string, tool: string, isRunning: boolean) => ({
+  surface: 'terminal', component: 'ToolUse', requestId: id,
+  props: { tool_use_id: id, tool, input: {}, isRunning, isErrored: false, isInterrupted: false },
+}) as any
+function renderWorld(on: any, opts: Partial<W> = {}) {
+  const seen: any[] = []
+  on('ui.render', { component: 'ToolUse' }, async (_$: any, e: any) => { seen.push(e); return DRAWN })
+  return { w: evWorld(on, { decision: 'ask', ...opts }), seen }
+}
+
+// Mutation gate: report on every render (no delete) → red.
+test('a permission ask leaves on the ToolUse render with isRunning true and reports tool.approved once', async ($, on) => {
+  const { w } = renderWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf x' }, tool_use_id: 'tu-1' } as any)
+  await $.ui.render(toolRow('tu-1', 'Bash', false)) // the dialog is open
+  await w.clock.advance(10_150) // beat 1, posted at 10 150
+  await $.ui.render(toolRow('tu-1', 'Bash', true)) // approved: the row runs
+  await $.ui.render(toolRow('tu-1', 'Bash', true)) // redrawn while it runs
+  await $.ui.render(toolRow('tu-1', 'Bash', false)) // and once it ended
+  await w.clock.advance(10_000) // beat 2
+  expect(ofType(w, 'heartbeat').map((e) => e.data.asks)).toEqual([['tu-1'], []])
+  expect(ofType(w, 'tool.approved').map((e) => [e.sid, e.data])).toEqual([[SID1, { tool_use_id: 'tu-1' }]])
+  expect(types(w).filter((t) => t !== 'heartbeat')).toEqual(['session.start', 'turn.start', 'tool.check', 'tool.approved'])
+})
+
+// Mutation gate: approve question asks too → red.
+test('a question ask is not approved by a render', async ($, on) => {
+  let release!: () => void
+  on('tool.call', { tool: 'ExitPlanMode' }, async () => {
+    await new Promise<void>((r) => { release = r }) // the plan dialog is up
+    return BASH_OK
+  })
+  const { w } = renderWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await $.tool.check({ tool: 'AskUserQuestion', input: {}, tool_use_id: 'tu-q' } as any) // a check naming a question tool
+  const call = $.tool.call({ tool: 'ExitPlanMode', plan: 'p' } as any) // its tool.start opens a question
+  await w.clock.advance(150)
+  const plan = ofType(w, 'tool.start')[0].data.tool_use_id
+  expect(plan).toMatch(/.+/)
+  await $.ui.render(toolRow('tu-q', 'AskUserQuestion', true))
+  await $.ui.render(toolRow(plan, 'ExitPlanMode', true))
+  await w.clock.advance(10_000) // beat 1, posted at 10 150
+  expect(ofType(w, 'heartbeat')[0].data.asks).toEqual(['tu-q', plan]) // a question leaves at its tool.end only
+  release()
+  await call
+  await w.clock.advance(10_000)
+  expect(ofType(w, 'heartbeat')[1].data.asks).toEqual(['tu-q'])
+  expect(ofType(w, 'tool.approved')).toEqual([])
+})
+
+test('a render of a tool with no open ask reports nothing', async ($, on) => {
+  const { w } = renderWorld(on, { decision: 'allow' })
+  await start($, w)
+  await w.clock.advance(150) // session.start
+  await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'tu-ok' } as any) // allowed: no ask
+  await w.clock.advance(150)
+  await $.ui.render(toolRow('tu-ok', 'Bash', true))
+  await $.ui.render(toolRow('tu-none', 'Bash', true)) // a row no check ever named
+  await w.clock.advance(1000)
+  expect(types(w)).toEqual(['session.start', 'tool.check'])
+  expect(w.posts.length).toBe(2)
+})
+
+test('the render hook returns next(e) unchanged', async ($, on) => {
+  const { w, seen } = renderWorld(on)
+  await start($, w)
+  await $.tool.check({ tool: 'Bash', input: {}, tool_use_id: 'tu-1' } as any)
+  const rows = [toolRow('tu-1', 'Bash', false), toolRow('tu-1', 'Bash', true), toolRow('tu-x', 'Read', true)]
+  for (const row of rows) expect(await $.ui.render(row)).toEqual(DRAWN) // what beneath drew, as drawn
+  expect(seen.map((e) => e.props)).toEqual(rows.map((r) => r.props)) // and beneath saw the props as given
+  expect(seen.map((e) => e.requestId)).toEqual(['tu-1', 'tu-1', 'tu-x'])
 })
 
 test('a compaction reports compact.start and compact.end, and the heartbeat says compacting meanwhile', async ($, on) => {
