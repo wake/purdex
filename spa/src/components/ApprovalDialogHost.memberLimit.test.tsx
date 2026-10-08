@@ -109,4 +109,17 @@ describe('ApprovalDialogHost member limit (U25)', () => {
     fireEvent.change(field(), { target: { value: '8' } })
     expect(screen.queryByTestId('approval-max-members-error')).toBeNull()
   })
+
+  it('the range error is the field\'s accessible description while it shows', () => {
+    render(<ApprovalDialogHost />)
+    open(lead({ max_members: 5 }))
+    fireEvent.change(field(), { target: { value: '9' } })
+    const error = screen.getByTestId('approval-max-members-error')
+    expect(field()).toHaveAttribute('aria-invalid', 'true')
+    expect(field()).toHaveAccessibleDescription(error.textContent ?? '')
+    expect(error).toHaveAttribute('role', 'alert')
+    fireEvent.change(field(), { target: { value: '3' } })
+    expect(field()).not.toHaveAttribute('aria-invalid', 'true')
+    expect(field()).not.toHaveAttribute('aria-describedby')
+  })
 })

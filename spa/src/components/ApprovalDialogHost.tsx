@@ -19,7 +19,7 @@
 // Tab trap and the focus guard are off, and the keyboard goes back to where it was before the dialog took it. Only a
 // click restores it (the pill, or the approval notification); a new request never does. `minimized` is per window and
 // not persisted (useApprovalStore).
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowsClockwise, ArrowsInSimple } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useHostStore } from '../stores/useHostStore'
@@ -174,6 +174,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
 
   const members =maxMembers.trim() === '' ? NaN : Number(maxMembers)
   const membersOk = Number.isInteger(members) && members >= 1 && members <= MAX_MAX_MEMBERS
+  const membersErrorId = useId()
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
   // A self relay carries no grant (U13a: one click); only the lead kind validates its fields.
@@ -309,6 +310,8 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                   value={maxMembers}
                   disabled={locked}
                   onChange={(e) => setMaxMembers(e.target.value)}
+                  aria-invalid={membersOk ? undefined : true}
+                  aria-describedby={membersOk ? undefined : membersErrorId}
                   data-testid="approval-max-members"
                   className={`w-16 ${fieldClass}`}
                 />
@@ -317,7 +320,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 )}
               </label>
               {!membersOk && (
-                <p data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
+                <p id={membersErrorId} role="alert" data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
               )}
               <label className="mt-2 block text-xs text-text-secondary">
                 {t('approval.dialog.roots')}
