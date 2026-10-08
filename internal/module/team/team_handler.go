@@ -31,9 +31,29 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
+	// One read for the whole team (finished tasks are never a current task),
+	// grouped by owner, rather than one per member.
+	open, err := m.store.ListTasks(t.ID, "", false)
+	if err != nil {
+		m.logf("[team] team %s: %v", t.ID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	byOwner := map[string][]TaskRow{}
+	for _, tk := range open {
+		byOwner[tk.OwnerKey] = append(byOwner[tk.OwnerKey], tk)
+	}
 	v := team.TeamView{Team: t, Members: make([]team.Member, 0, len(rows))}
 	for _, mr := range rows {
-		v.Members = append(v.Members, m.memberView(mr))
+		mv := m.memberView(mr)
+		if mr.SpawnOp != "" { // an adopted member has no key, so no tasks
+			if cur, ok := currentTaskOf(byOwner[mr.SpawnOp]); ok {
+				mv.Task = &team.MemberTask{ID: team.TaskDisplayID(t.ID, cur.Seq), Subject: cur.Subject, Status: cur.Status}
+				// T-3a2 adds the member row's own last_turn_at to this max.
+				mv.LastAt = max(cur.LastTurnAt, cur.LastReportAt)
+			}
+		}
+		v.Members = append(v.Members, mv)
 	}
 	m.writeJSON(w, http.StatusOK, v)
 }
