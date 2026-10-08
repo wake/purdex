@@ -27,7 +27,8 @@ export interface Seat {
   /** The open tab standing for this seat, or null when none shows its session. */
   tabId: string | null
   workspaceId: string | null
-  /** Pre-order index of the pane showing the seat in `tabId` (0 = the primary pane); null with `tabId`. */
+  /** Pre-order index of the pane showing the seat in its chosen `tabId` (0 = the primary pane); null with `tabId`.
+   *  About the chosen tab only — another tab may show the seat too (`teamOfTab` reads each tab's own panes). */
   paneIndex: number | null
 }
 
@@ -78,6 +79,35 @@ interface Candidate {
   paneIndex: number
 }
 
+interface ShownSession {
+  key: string
+  /** Pre-order index of the (first) pane showing the session — counted over all leaves, so 0 is the primary pane. */
+  paneIndex: number
+}
+
+/**
+ * The sessions a tab's layout shows, in layout pre-order, one entry per session (its first pane). Only live
+ * `tmux-session` panes count. The single place that decides "which session does this pane show": `indexTabs` (which tab
+ * stands for a seat) and `teamOfTab` (which seat does a tab's pane show) both read it, so they cannot disagree.
+ */
+function shownSessions(
+  layout: Pick<Tab, 'layout'>['layout'],
+  sessionsByHost: TeamViewsInput['sessionsByHost'],
+): ShownSession[] {
+  const shown: ShownSession[] = []
+  const seen = new Set<string>()
+  collectLeaves(layout).forEach((pane, paneIndex) => {
+    const c = pane.content
+    if (c.kind !== 'tmux-session' || c.terminated) return
+    const listed = sessionsByHost[c.hostId]?.find((r) => r.code === c.sessionCode)
+    const key = sessionKey(c.hostId, listed?.name ?? c.cachedName)
+    if (seen.has(key)) return
+    seen.add(key)
+    shown.push({ key, paneIndex })
+  })
+  return shown
+}
+
 /** Session key → the tabs showing it (one entry per tab: its first matching pane in pre-order). */
 function indexTabs(input: TeamViewsInput): Map<string, Candidate[]> {
   const placement = new Map<string, { workspaceId: string | null; pos: number }>()
@@ -88,21 +118,13 @@ function indexTabs(input: TeamViewsInput): Map<string, Candidate[]> {
   }
   const index = new Map<string, Candidate[]>()
   Object.keys(input.tabsById).forEach((tabId, order) => {
-    const tab = input.tabsById[tabId]
     const where = placement.get(tabId) ?? { workspaceId: null, pos: order }
-    const seen = new Set<string>()
-    collectLeaves(tab.layout).forEach((pane, paneIndex) => {
-      const c = pane.content
-      if (c.kind !== 'tmux-session' || c.terminated) return
-      const listed = input.sessionsByHost[c.hostId]?.find((r) => r.code === c.sessionCode)
-      const key = sessionKey(c.hostId, listed?.name ?? c.cachedName)
-      if (seen.has(key)) return
-      seen.add(key)
-      const list = index.get(key)
+    for (const { key, paneIndex } of shownSessions(input.tabsById[tabId].layout, input.sessionsByHost)) {
       const candidate = { tabId, ...where, paneIndex }
+      const list = index.get(key)
       if (list) list.push(candidate)
       else index.set(key, [candidate])
-    })
+    }
   })
   return index
 }
@@ -181,17 +203,37 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
   return views
 }
 
+export interface TeamOfTabInput {
+  views: readonly TeamView[]
+  tabId: string
+  tabsById: TeamViewsInput['tabsById']
+  sessionsByHost: TeamViewsInput['sessionsByHost']
+}
+
 /**
- * The team and role a tab is drawn as, or null for a tab no seat chose. A tab showing panes of two teams belongs to the
- * one whose seat sits in the earliest pane — the primary pane's team, else the first matching pane in layout pre-order.
+ * The team and role a tab is drawn as, decided from the tab's OWN panes — not from the tab each seat was chosen for, so
+ * the same session open in two tabs, or a split tab whose secondary pane shows another team's member, still resolves.
+ * A tab showing panes of two teams belongs to the one whose seat sits in the earliest pane: the primary pane's team (the
+ * first leaf), else the first matching pane in layout pre-order — the same rule. `seat` is the roster seat that pane
+ * shows; its `tabId`/`paneIndex` describe the seat's chosen tab, which may be another one. Null when no pane matches.
  */
-export function teamOfTab(views: readonly TeamView[], tabId: string): { key: string; role: Seat['role']; seat: Seat } | null {
-  let best: { key: string; role: Seat['role']; seat: Seat } | null = null
+export function teamOfTab(
+  { views, tabId, tabsById, sessionsByHost }: TeamOfTabInput,
+): { key: string; role: Seat['role']; seat: Seat } | null {
+  const tab = tabsById[tabId]
+  if (!tab) return null
+  const seats = new Map<string, { key: string; role: Seat['role']; seat: Seat }>()
   for (const v of views) {
-    for (const s of [v.lead, ...v.members]) {
-      if (s.tabId !== tabId || s.paneIndex === null) continue
-      if (best === null || s.paneIndex < best.seat.paneIndex!) best = { key: v.key, role: s.role, seat: s }
+    for (const seat of [v.lead, ...v.members]) {
+      const name = seat.session.tmux_session
+      if (!name) continue
+      const k = sessionKey(v.hostId, name)
+      if (!seats.has(k)) seats.set(k, { key: v.key, role: seat.role, seat })
     }
   }
-  return best
+  for (const { key } of shownSessions(tab.layout, sessionsByHost)) {
+    const hit = seats.get(key)
+    if (hit) return hit
+  }
+  return null
 }

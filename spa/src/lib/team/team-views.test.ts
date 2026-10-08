@@ -41,6 +41,12 @@ function input(over: Partial<TeamViewsInput> & { tabs?: Tab[] } = {}): TeamViews
 }
 const ws = (id: string, tabs: string[]) => ({ id, tabs })
 
+/** Views for `inp`, plus a `teamOfTab` bound to the same tabs and session lists. */
+function viewsOf(inp: TeamViewsInput) {
+  const views = selectTeamViews(inp)
+  return { views, of: (tabId: string) => teamOfTab({ views, tabId, tabsById: inp.tabsById, sessionsByHost: inp.sessionsByHost }) }
+}
+
 describe('selectTeamViews — shape and order', () => {
   it('gives each team a key, its created_at, a stable colour index, the lead first and members by joined_at', () => {
     const t = team('t1', sess('L'), [mem('B', 30), mem('A', 10), mem('C', 20)], 777)
@@ -226,11 +232,10 @@ describe('selectTeamViews — which tab shows a seat', () => {
   it('a member absent from the roster (killed or released) has no seat, though its tab is still open', () => {
     const t = team('t', sess('L', 'lead-tm'), [mem('A', 1, 'a-tm')])
     const rest = { tabs: [tab('tl', leaf('h1', 'lead-tm')), tab('ta', leaf('h1', 'a-tm'))], workspaces: [ws('w1', ['tl', 'ta'])] }
-    const before = selectTeamViews(input({ rosterByHost: { h1: [t] }, ...rest }))
-    expect(teamOfTab(before, 'ta')?.role).toBe('member')
-    const after = selectTeamViews(input({ rosterByHost: { h1: [{ ...t, members: [] }] }, ...rest }))
-    expect(after[0].members).toEqual([])
-    expect(teamOfTab(after, 'ta')).toBeNull()
+    expect(viewsOf(input({ rosterByHost: { h1: [t] }, ...rest })).of('ta')?.role).toBe('member')
+    const after = viewsOf(input({ rosterByHost: { h1: [{ ...t, members: [] }] }, ...rest }))
+    expect(after.views[0].members).toEqual([])
+    expect(after.of('ta')).toBeNull()
   })
 })
 
@@ -238,41 +243,96 @@ describe('teamOfTab', () => {
   const lead = sess('L', 'lead-tm')
   const t1 = team('t1', lead, [mem('A', 1, 'a-tm')])
   const t2 = team('t2', sess('L2', 'lead2-tm'), [mem('B', 1, 'b-tm')])
+  const k1 = teamKeyOf('h1', 't1')
+  const k2 = teamKeyOf('h1', 't2')
 
   it('finds the team and role a tab is drawn as: lead, member, and none for a plain tab', () => {
-    const views = selectTeamViews(input({
+    const { of } = viewsOf(input({
       rosterByHost: { h1: [t1, t2] },
       tabs: [tab('tl', leaf('h1', 'lead-tm')), tab('ta', leaf('h1', 'a-tm')), tab('plain', leaf('h1', 'zzz'))],
       workspaces: [ws('w1', ['tl', 'ta', 'plain'])],
     }))
-    expect(teamOfTab(views, 'tl')).toMatchObject({ key: teamKeyOf('h1', 't1'), role: 'lead' })
-    expect(teamOfTab(views, 'tl')?.seat.session.session_id).toBe('L')
-    expect(teamOfTab(views, 'ta')).toMatchObject({ key: teamKeyOf('h1', 't1'), role: 'member' })
-    expect(teamOfTab(views, 'plain')).toBeNull()
-    expect(teamOfTab(views, 'no-such-tab')).toBeNull()
+    expect(of('tl')).toMatchObject({ key: k1, role: 'lead' })
+    expect(of('tl')?.seat.session.session_id).toBe('L')
+    expect(of('ta')).toMatchObject({ key: k1, role: 'member' })
+    expect(of('plain')).toBeNull()
+    expect(of('no-such-tab')).toBeNull()
   })
 
   it('a tab showing panes of two teams belongs to the primary pane\'s team, else the first pane in layout order', () => {
-    const views = (layout: PaneLayout) => selectTeamViews(input({
+    const of = (layout: PaneLayout) => viewsOf(input({
       rosterByHost: { h1: [t1, t2] },
       tabs: [tab('both', layout)],
       workspaces: [ws('w1', ['both'])],
-    }))
+    })).of('both')
     // the primary pane (the first leaf) shows team 2's member
-    expect(teamOfTab(views(split(leaf('h1', 'b-tm'), leaf('h1', 'a-tm'))), 'both')?.key).toBe(teamKeyOf('h1', 't2'))
+    expect(of(split(leaf('h1', 'b-tm'), leaf('h1', 'a-tm')))?.key).toBe(k2)
     // swap them: team 1 wins
-    expect(teamOfTab(views(split(leaf('h1', 'a-tm'), leaf('h1', 'b-tm'))), 'both')?.key).toBe(teamKeyOf('h1', 't1'))
+    expect(of(split(leaf('h1', 'a-tm'), leaf('h1', 'b-tm')))?.key).toBe(k1)
     // the primary pane shows no team: the first matching pane in layout pre-order (nested) wins
-    expect(teamOfTab(views(split(leaf('h1', 'plain'), split(leaf('h1', 'b-tm')), leaf('h1', 'a-tm'))), 'both')?.key).toBe(teamKeyOf('h1', 't2'))
+    expect(of(split(leaf('h1', 'plain'), split(leaf('h1', 'b-tm')), leaf('h1', 'a-tm')))?.key).toBe(k2)
   })
 
-  it('a tab that shows a seat which another tab was chosen for is not drawn as that seat', () => {
-    const views = selectTeamViews(input({
+  it('a split tab whose primary pane is a seat of team A is team A even though the seat was chosen for another tab', () => {
+    // A's member is chosen for tab X (the active workspace), and is also the primary pane of tab Y in another
+    // workspace, whose secondary pane shows team B's member
+    const { of, views } = viewsOf(input({
+      rosterByHost: { h1: [t1, t2] },
+      tabs: [tab('X', leaf('h1', 'a-tm')), tab('Y', split(leaf('h1', 'a-tm'), leaf('h1', 'b-tm')))],
+      workspaces: [ws('w1', ['X']), ws('w2', ['Y'])],
+      activeWorkspaceId: 'w1',
+    }))
+    expect(views[0].members[0].tabId).toBe('X')
+    expect(of('Y')).toMatchObject({ key: k1, role: 'member' })
+    expect(of('Y')?.seat.session.session_id).toBe('A')
+  })
+
+  it('the same session open in two tabs resolves in both', () => {
+    const { of } = viewsOf(input({
       rosterByHost: { h1: [t1] },
       tabs: [tab('first', leaf('h1', 'a-tm')), tab('second', leaf('h1', 'a-tm'))],
       workspaces: [ws('w1', ['first', 'second'])],
     }))
-    expect(teamOfTab(views, 'first')?.role).toBe('member')
-    expect(teamOfTab(views, 'second')).toBeNull()
+    expect(of('first')).toMatchObject({ key: k1, role: 'member' })
+    expect(of('second')).toMatchObject({ key: k1, role: 'member' })
+  })
+
+  it('a split tab whose primary pane is no team\'s falls to its secondary pane\'s team', () => {
+    const { of } = viewsOf(input({
+      rosterByHost: { h1: [t1, t2] },
+      tabs: [tab('Y', split(leaf('h1', 'plain'), leaf('h1', 'b-tm')))],
+      workspaces: [ws('w1', ['Y'])],
+    }))
+    expect(of('Y')).toMatchObject({ key: k2, role: 'member' })
+  })
+
+  it('matches on the same host only', () => {
+    const { of } = viewsOf(input({
+      rosterByHost: { h1: [t1] },
+      tabs: [tab('elsewhere', leaf('h2', 'a-tm')), tab('here', leaf('h1', 'a-tm'))],
+      workspaces: [ws('w1', ['elsewhere', 'here'])],
+    }))
+    expect(of('elsewhere')).toBeNull()
+    expect(of('here')).not.toBeNull()
+  })
+
+  it('reads a pane\'s session name from the host\'s session list, else its cachedName', () => {
+    const { of } = viewsOf(input({
+      rosterByHost: { h1: [t1] },
+      tabs: [tab('renamed', leaf('h1', 'old-name', { sessionCode: 'c1' }))],
+      workspaces: [ws('w1', ['renamed'])],
+      sessionsByHost: { h1: [{ code: 'c1', name: 'a-tm' }] },
+    }))
+    expect(of('renamed')).toMatchObject({ key: k1, role: 'member' })
+  })
+
+  it('ignores a terminated pane', () => {
+    const { of } = viewsOf(input({
+      rosterByHost: { h1: [t1, t2] },
+      tabs: [tab('dead-first', split(leaf('h1', 'a-tm', { terminated: true }), leaf('h1', 'b-tm'))), tab('dead-only', leaf('h1', 'a-tm', { terminated: true }))],
+      workspaces: [ws('w1', ['dead-first', 'dead-only'])],
+    }))
+    expect(of('dead-first')?.key).toBe(k2)
+    expect(of('dead-only')).toBeNull()
   })
 })
