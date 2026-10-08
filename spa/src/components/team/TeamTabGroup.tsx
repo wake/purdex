@@ -65,13 +65,43 @@ const BADGE_PX: Record<'icon' | 'disc', Record<TeamCornerSize, number>> = {
   disc: { sm: 14, md: 18, lg: 22 },
 }
 
+/** Gap between a tab's bottom edge and the tab bar's bottom rule, (the tab is 26px tall, the scroller clips 6px below it and the tab has a 1px border, so 7px from the padding edge). */
+const RULE_GAP = 7
+/** The close button's X is 12px wide, centered in a 24px slot at the tab's right edge (center = 12px from the edge). */
+const CLOSE_CENTER = 12
+/** Rule-position sizes are capped so the badge top stays below the X glyph (12px of free height under it, 1px air). */
+const RULE_PX: Record<'icon' | 'disc', Record<TeamCornerSize, number>> = {
+  icon: { sm: 9, md: 11, lg: 12 },
+  disc: { sm: 10, md: 11, lg: 12 },
+}
+
 /** A folded-corner mark on a tab (the "corner-*" group styles): a team-colored right triangle, optionally holding a member icon. */
 export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
   const corner = groupCorner(mark.style)
   const badge = groupBadge(mark.style)
-  const size = useTeamDisplay()?.cornerSize ?? 'md'
+  const display = useTeamDisplay()
+  const size = display?.cornerSize ?? 'md'
   if (badge) {
     const px = BADGE_PX[badge][size]
+    if (display?.badgePos === 'rule') {
+      const rpx = RULE_PX[badge][size]
+      // Stands on the tab bar's bottom rule: the badge's bottom edge sits on the rule, horizontally under the close button.
+      // The tab is 26px tall with a 2px top margin inside the bar, so the rule is RULE_GAP px below the tab's bottom edge.
+      return (
+        <span
+          data-testid="team-tab-badge"
+          data-badge={badge}
+          data-badge-pos="rule"
+          aria-hidden="true"
+          className="absolute pointer-events-none z-20 flex items-center justify-center"
+          style={{ bottom: -RULE_GAP, right: CLOSE_CENTER - rpx / 2, width: rpx, height: rpx, borderRadius: '50%', background: badge === 'disc' ? mark.color : undefined }}
+        >
+          {badge === 'disc'
+            ? <User weight="bold" size={Math.round(rpx * 0.62)} color="var(--surface-secondary)" />
+            : <User weight="fill" size={rpx} color={mark.color} />}
+        </span>
+      )
+    }
     // Center sits on the corner, nudged inward by 2px so the TabBar scroller (which clips vertically) keeps the whole badge visible.
     const off = -(px / 2) + 2
     return (

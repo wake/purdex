@@ -10,7 +10,7 @@ import { getPrimaryPane } from '../../lib/pane-tree'
 import { compositeKey } from '../../lib/composite-key'
 import { createTab } from '../../types/tab'
 import type { ModelFamily } from '../../components/team/model-family'
-import type { TeamGroupStyle, TeamSidebarStyle, TeamCollapseStyle, TeamHookStyle, TeamOpenMark, TeamHookTop, TeamCornerSize } from '../../components/team/team-display'
+import type { TeamGroupStyle, TeamSidebarStyle, TeamCollapseStyle, TeamHookStyle, TeamOpenMark, TeamHookTop, TeamCornerSize, TeamBadgePos } from '../../components/team/team-display'
 
 export interface ProtoSeat {
   sessionId: string
@@ -48,6 +48,7 @@ interface ProtoState {
   hookStyle: TeamHookStyle
   hookTop: TeamHookTop
   cornerSize: TeamCornerSize
+  badgePos: TeamBadgePos
   openMark: TeamOpenMark
   /** Prototype switch: hide every team name, to see the fallback. */
   namesOff: boolean
@@ -73,6 +74,7 @@ export const useProtoTeam = create<ProtoState>()(() => ({
   hookStyle: 'thin',
   hookTop: 'below',
   cornerSize: 'md',
+  badgePos: 'corner',
   openMark: 'tick',
   namesOff: false,
   target: null,

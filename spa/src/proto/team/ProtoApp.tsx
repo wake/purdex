@@ -95,6 +95,7 @@ export function ProtoApp() {
       hookStyle: proto.hookStyle,
       hookTop: proto.hookTop,
       cornerSize: proto.cornerSize,
+      badgePos: proto.badgePos,
       openMark: proto.openMark,
       tabMark: (id) => marks.get(id) ?? null,
       sidebarHidden: (id) => hidden.has(id),

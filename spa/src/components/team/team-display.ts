@@ -58,6 +58,9 @@ export function groupBadge(style: TeamGroupStyle): 'icon' | 'disc' | null {
 /** Corner size (small / default / large); the icon variants are drawn bigger to hold the icon. */
 export type TeamCornerSize = 'sm' | 'md' | 'lg'
 
+/** Where a corner badge sits: straddling the tab's top-right corner, or standing on the tab bar's bottom rule below the close button. */
+export type TeamBadgePos = 'corner' | 'rule'
+
 /** Where the hook's top starts: exactly at the lead highlight's lower edge, or fused into the highlight. */
 export type TeamHookTop = 'below' | 'blend'
 
@@ -115,6 +118,7 @@ export interface TeamDisplay {
   hookStyle: TeamHookStyle
   hookTop: TeamHookTop
   cornerSize: TeamCornerSize
+  badgePos: TeamBadgePos
   openMark: TeamOpenMark
   tabMark: (tabId: string) => TeamTabMark | null
   /** Member tabs folded into the bead row (their lead row is in the same list). */
