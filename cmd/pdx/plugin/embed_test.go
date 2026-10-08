@@ -528,6 +528,28 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 	}
 }
 
+// Team name (TN-1, D-N1): the skill's request line carries --name and the next
+// sentence tells every lead to always give one, in the section where an agent
+// asks for lead mode.
+func TestSkill_LeadRequestAsksForATeamName(t *testing.T) {
+	b, err := fs.ReadFile(Files(), "skills/pdx-team/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, ok := sectionOf(string(b), "## When to ask for lead mode, and how to wait")
+	if !ok {
+		t.Fatal("SKILL.md has no \"When to ask for lead mode\" section")
+	}
+	for _, want := range []string{
+		`pdx lead request --reason "<why>" --name "<team name>" [--max-members N] [--root <dir>]`,
+		"Always give `--name`: a short name for the team's work (at most 64 bytes); it is shown at the front of the team's tab group, and the user may change it when approving.",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("SKILL.md lead-mode section lacks %q", want)
+		}
+	}
+}
+
 // sectionOf is the text of the markdown section that starts with heading
 // (a whole line), up to the next "## " heading.
 func sectionOf(s, heading string) (string, bool) {
