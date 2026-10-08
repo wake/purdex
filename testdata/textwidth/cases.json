@@ -1,0 +1,377 @@
+[
+  {
+    "name": "empty",
+    "s": "",
+    "width": 0
+  },
+  {
+    "name": "ascii",
+    "s": "abc",
+    "width": 3
+  },
+  {
+    "name": "space",
+    "s": " ",
+    "width": 1
+  },
+  {
+    "name": "cjk",
+    "s": "長",
+    "width": 2
+  },
+  {
+    "name": "mixed",
+    "s": "a長b",
+    "width": 4
+  },
+  {
+    "name": "租約",
+    "s": "租約",
+    "width": 4
+  },
+  {
+    "name": "A 線",
+    "s": "A 線",
+    "width": 4
+  },
+  {
+    "name": "A線派工",
+    "s": "A線派工",
+    "width": 7
+  },
+  {
+    "name": "資源租約派工",
+    "s": "資源租約派工",
+    "width": 12
+  },
+  {
+    "name": "lease-p1",
+    "s": "lease-p1",
+    "width": 8
+  },
+  {
+    "name": "resource-lease",
+    "s": "resource-lease",
+    "width": 14
+  },
+  {
+    "name": "combining mark",
+    "s": "é",
+    "width": 1
+  },
+  {
+    "name": "ellipsis",
+    "s": "…",
+    "width": 1
+  },
+  {
+    "name": "ideographic tilde",
+    "s": "〜",
+    "width": 2
+  },
+  {
+    "name": "fullwidth latin",
+    "s": "Ａ",
+    "width": 2
+  },
+  {
+    "name": "halfwidth katakana",
+    "s": "ｱ",
+    "width": 1
+  },
+  {
+    "name": "emoji",
+    "s": "😀",
+    "width": 2
+  },
+  {
+    "name": "emoji modifier",
+    "s": "👍🏽",
+    "width": 2
+  },
+  {
+    "name": "rocket",
+    "s": "🚀",
+    "width": 2
+  },
+  {
+    "name": "text heart + VS16",
+    "s": "❤️",
+    "width": 1
+  },
+  {
+    "name": "keycap",
+    "s": "1️⃣",
+    "width": 1
+  },
+  {
+    "name": "ZWJ family",
+    "s": "👨‍👩‍👧‍👦",
+    "width": 8
+  },
+  {
+    "name": "flag (two regional indicators)",
+    "s": "🇹🇼",
+    "width": 2
+  },
+  {
+    "name": "Hangul syllable",
+    "s": "한",
+    "width": 2
+  },
+  {
+    "name": "Hangul decomposed jamo",
+    "s": "한",
+    "width": 4
+  },
+  {
+    "name": "variation selector alone",
+    "s": "a️",
+    "width": 1
+  },
+  {
+    "name": "zero width space",
+    "s": "a​b",
+    "width": 2
+  },
+  {
+    "name": "wide range 1100-115F lower-1 (U+10FF)",
+    "s": "ჿ",
+    "width": 1
+  },
+  {
+    "name": "wide range 1100-115F lower (U+1100)",
+    "s": "ᄀ",
+    "width": 2
+  },
+  {
+    "name": "wide range 1100-115F upper (U+115F)",
+    "s": "ᅟ",
+    "width": 2
+  },
+  {
+    "name": "wide range 1100-115F upper+1 (U+1160)",
+    "s": "ᅠ",
+    "width": 1
+  },
+  {
+    "name": "wide range 2E80-A4CF lower-1 (U+2E7F)",
+    "s": "⹿",
+    "width": 1
+  },
+  {
+    "name": "wide range 2E80-A4CF lower (U+2E80)",
+    "s": "⺀",
+    "width": 2
+  },
+  {
+    "name": "wide range 2E80-A4CF upper (U+A4CF)",
+    "s": "꓏",
+    "width": 2
+  },
+  {
+    "name": "wide range 2E80-A4CF upper+1 (U+A4D0)",
+    "s": "ꓐ",
+    "width": 1
+  },
+  {
+    "name": "wide range AC00-D7A3 lower-1 (U+ABFF)",
+    "s": "꯿",
+    "width": 1
+  },
+  {
+    "name": "wide range AC00-D7A3 lower (U+AC00)",
+    "s": "가",
+    "width": 2
+  },
+  {
+    "name": "wide range AC00-D7A3 upper (U+D7A3)",
+    "s": "힣",
+    "width": 2
+  },
+  {
+    "name": "wide range AC00-D7A3 upper+1 (U+D7A4)",
+    "s": "힤",
+    "width": 1
+  },
+  {
+    "name": "wide range F900-FAFF lower-1 (U+F8FF)",
+    "s": "",
+    "width": 1
+  },
+  {
+    "name": "wide range F900-FAFF lower (U+F900)",
+    "s": "豈",
+    "width": 2
+  },
+  {
+    "name": "wide range F900-FAFF upper (U+FAFF)",
+    "s": "﫿",
+    "width": 2
+  },
+  {
+    "name": "wide range F900-FAFF upper+1 (U+FB00)",
+    "s": "ﬀ",
+    "width": 1
+  },
+  {
+    "name": "wide range FE30-FE6F lower-1 (U+FE2F) is a combining mark (Mn): zero",
+    "s": "︯",
+    "width": 0
+  },
+  {
+    "name": "wide range FE30-FE6F lower (U+FE30)",
+    "s": "︰",
+    "width": 2
+  },
+  {
+    "name": "wide range FE30-FE6F upper (U+FE6F)",
+    "s": "﹯",
+    "width": 2
+  },
+  {
+    "name": "wide range FE30-FE6F upper+1 (U+FE70)",
+    "s": "ﹰ",
+    "width": 1
+  },
+  {
+    "name": "wide range FF00-FF60 lower-1 (U+FEFF)",
+    "s": "﻿",
+    "width": 1
+  },
+  {
+    "name": "wide range FF00-FF60 lower (U+FF00)",
+    "s": "＀",
+    "width": 2
+  },
+  {
+    "name": "wide range FF00-FF60 upper (U+FF60)",
+    "s": "｠",
+    "width": 2
+  },
+  {
+    "name": "wide range FF00-FF60 upper+1 (U+FF61)",
+    "s": "｡",
+    "width": 1
+  },
+  {
+    "name": "wide range FFE0-FFE6 lower-1 (U+FFDF)",
+    "s": "￟",
+    "width": 1
+  },
+  {
+    "name": "wide range FFE0-FFE6 lower (U+FFE0)",
+    "s": "￠",
+    "width": 2
+  },
+  {
+    "name": "wide range FFE0-FFE6 upper (U+FFE6)",
+    "s": "￦",
+    "width": 2
+  },
+  {
+    "name": "wide range FFE0-FFE6 upper+1 (U+FFE7)",
+    "s": "￧",
+    "width": 1
+  },
+  {
+    "name": "wide range 1F300-1F64F lower-1 (U+1F2FF)",
+    "s": "🋿",
+    "width": 1
+  },
+  {
+    "name": "wide range 1F300-1F64F lower (U+1F300)",
+    "s": "🌀",
+    "width": 2
+  },
+  {
+    "name": "wide range 1F300-1F64F upper (U+1F64F)",
+    "s": "🙏",
+    "width": 2
+  },
+  {
+    "name": "wide range 1F300-1F64F upper+1 (U+1F650)",
+    "s": "🙐",
+    "width": 1
+  },
+  {
+    "name": "wide range 1F680-1F6FF lower-1 (U+1F67F)",
+    "s": "🙿",
+    "width": 1
+  },
+  {
+    "name": "wide range 1F680-1F6FF lower (U+1F680)",
+    "s": "🚀",
+    "width": 2
+  },
+  {
+    "name": "wide range 1F680-1F6FF upper (U+1F6FF)",
+    "s": "🛿",
+    "width": 2
+  },
+  {
+    "name": "wide range 1F680-1F6FF upper+1 (U+1F700)",
+    "s": "🜀",
+    "width": 1
+  },
+  {
+    "name": "wide range 1F900-1FAFF lower-1 (U+1F8FF)",
+    "s": "🣿",
+    "width": 1
+  },
+  {
+    "name": "wide range 1F900-1FAFF lower (U+1F900)",
+    "s": "🤀",
+    "width": 2
+  },
+  {
+    "name": "wide range 1F900-1FAFF upper (U+1FAFF)",
+    "s": "🫿",
+    "width": 2
+  },
+  {
+    "name": "wide range 1F900-1FAFF upper+1 (U+1FB00)",
+    "s": "🬀",
+    "width": 1
+  },
+  {
+    "name": "wide range 20000-3FFFD lower-1 (U+1FFFF)",
+    "s": "🿿",
+    "width": 1
+  },
+  {
+    "name": "wide range 20000-3FFFD lower (U+20000)",
+    "s": "𠀀",
+    "width": 2
+  },
+  {
+    "name": "wide range 20000-3FFFD upper (U+3FFFD)",
+    "s": "𿿽",
+    "width": 2
+  },
+  {
+    "name": "wide range 20000-3FFFD upper+1 (U+3FFFE)",
+    "s": "𿿾",
+    "width": 1
+  },
+  {
+    "name": "zero range 200B-200F lower (U+200B)",
+    "s": "a​",
+    "width": 1
+  },
+  {
+    "name": "zero range 200B-200F upper (U+200F)",
+    "s": "a‏",
+    "width": 1
+  },
+  {
+    "name": "zero range 1F3FB-1F3FF lower (U+1F3FB)",
+    "s": "a🏻",
+    "width": 1
+  },
+  {
+    "name": "zero range 1F3FB-1F3FF upper (U+1F3FF)",
+    "s": "a🏿",
+    "width": 1
+  }
+]
