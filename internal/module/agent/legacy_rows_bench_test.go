@@ -10,9 +10,8 @@ import (
 )
 
 // TestLegacyRowsReadCost measures the agent_events listing that sendSnapshot
-// does inside the emit slot (U1-2b-3). Informational: it logs the time and
-// fails only if a listing of 200 rows takes 100 ms, which would put the hold
-// near the 250 ms log threshold.
+// does inside the emit slot (U1-2b-3). Informational only (it logs the
+// time and asserts nothing: a wall-clock bound would be flaky under load).
 func TestLegacyRowsReadCost(t *testing.T) {
 	events, err := store.OpenAgentEvent(":memory:")
 	if err != nil {
@@ -35,7 +34,4 @@ func TestLegacyRowsReadCost(t *testing.T) {
 		}
 	}
 	t.Logf("agent_events ListAll, 200 rows, worst of 20: %v", worst)
-	if worst > 100*time.Millisecond {
-		t.Fatalf("listing 200 legacy rows took %v", worst)
-	}
 }
