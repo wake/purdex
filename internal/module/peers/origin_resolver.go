@@ -67,6 +67,42 @@ func (r *OriginResolver) ResolveOriginBySession(sessionID string) (team.Origin, 
 	return team.Origin{}, false, nil
 }
 
+// ResolveOriginsBySession is ResolveOriginBySession for many sessions with
+// ONE registry read: the roster resolves a whole team set per build, and a
+// read forks ps per entry. The filter is the single form's — a live,
+// non-proxy entry, the first in registry order for a session id — and each
+// match is rendered by originOf. Sessions the registry does not list are
+// absent from the map (not an error); err is non-nil only when the registry
+// could not be read. Empty ids are ignored, and no ids means no read.
+func (r *OriginResolver) ResolveOriginsBySession(sessionIDs []string) (map[string]team.Origin, error) {
+	want := make(map[string]struct{}, len(sessionIDs))
+	for _, id := range sessionIDs {
+		if id != "" {
+			want[id] = struct{}{}
+		}
+	}
+	out := make(map[string]team.Origin, len(want))
+	if len(want) == 0 {
+		return out, nil
+	}
+	entries, _, err := ipeers.ReadRegistry(r.m.registryDir, r.m.liveness)
+	if err != nil {
+		r.m.logf("peers: origin resolver: read registry: %v", err)
+		return nil, fmt.Errorf("read registry: %w", err)
+	}
+	proxies := r.m.proxyPIDs()
+	for _, e := range entries {
+		if _, ok := want[e.SessionID]; !ok || e.IsProxy || proxies[e.PID] {
+			continue
+		}
+		if _, done := out[e.SessionID]; done {
+			continue
+		}
+		out[e.SessionID] = r.originOf(e)
+	}
+	return out, nil
+}
+
 // originOf renders a registry entry as a team.Origin: ref, address (the
 // rule GET /api/peers uses, record.go applyIdentity) and title. Name stays
 // the registry name; the address is the conversation's virtual name, from

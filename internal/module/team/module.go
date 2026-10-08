@@ -35,6 +35,10 @@ type OriginResolver interface {
 	// relay routes are called by the mod with its session id, not its
 	// inbox (P5a). Same ok/err contract.
 	ResolveOriginBySession(sessionID string) (team.Origin, bool, error)
+	// ResolveOriginsBySession is the same for many sessions with one
+	// registry read (the roster's build): a session the registry does not
+	// list is absent from the map; the error is a registry read failure only.
+	ResolveOriginsBySession(sessionIDs []string) (map[string]team.Origin, error)
 	LiveSession(sessionID string) bool
 	// LeadPresence is a team lead's presence for the team end (spec §7.1),
 	// which cannot be undone: tied to the lead's own process (pid and start
@@ -307,6 +311,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
 	mux.HandleFunc("POST /api/team/spawns", m.handleSpawn) // P4-5, spec §7.2
 	mux.HandleFunc("GET /api/team", m.handleTeam)          // P4-6, spec §7.3
+	mux.HandleFunc("GET "+RosterRoute, m.handleRosterGet)  // PL-1f′: every live team (D-U24-5)
 	mux.HandleFunc("POST /api/team/kill", m.handleKill)
 	// U23: the unattended switch (unattended spec D-U23-1, D-U23-6), the App's.
 	mux.HandleFunc("GET "+UnattendedRoute, m.handleUnattendedGet)

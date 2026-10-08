@@ -85,6 +85,19 @@ func (s *spawnOrigins) ResolveOriginBySession(sid string) (team.Origin, bool, er
 	return s.fakeOrigins.ResolveOriginBySession(sid)
 }
 
+// ResolveOriginsBySession is the batch over the same two sources.
+func (s *spawnOrigins) ResolveOriginsBySession(ids []string) (map[string]team.Origin, error) {
+	return s.fakeOrigins.resolveMany(ids, func(sid string) (team.Origin, bool, error) {
+		s.mu.Lock()
+		o, ok := s.members[sid]
+		s.mu.Unlock()
+		if ok {
+			return o, true, nil
+		}
+		return s.fakeOrigins.lookup(sid)
+	})
+}
+
 // register makes sid's Claude Code come up on pane: a verified frame there
 // and a live registry entry.
 func (f *fixture) register(pane, sid string) {
