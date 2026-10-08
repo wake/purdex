@@ -251,11 +251,24 @@ describe('useApprovalStore', () => {
       expect(s().minimized).toBe(false)
     })
 
-    it('a host with nothing held changes nothing (the state object is not replaced)', () => {
+    it('a host with nothing held changes nothing but its epoch (other hosts\' data keeps its identity)', () => {
       s().applyOpened('h2', approval({ id: 'c' }))
       const before = s()
       s().forgetHost('h1')
-      expect(s()).toBe(before)
+      expect(s().entries).toBe(before.entries)
+      expect(s().queued).toBe(before.queued)
+      expect(s().closedIds).toBe(before.closedIds)
+    })
+
+    it('bumps only that host\'s epoch, every time, held or not; reset keeps the counters', () => {
+      const at = (h: string) => s().hostEpoch[h] ?? 0
+      const [a, b] = [at('h1'), at('h2')]
+      s().forgetHost('h1')
+      s().forgetHost('h1')
+      s().forgetHost('h2')
+      expect([at('h1') - a, at('h2') - b]).toEqual([2, 1])
+      s().reset()
+      expect([at('h1') - a, at('h2') - b]).toEqual([2, 1])
     })
   })
 
