@@ -9,6 +9,7 @@ import { startBackupAutoTrigger } from './lib/storage-backup/backup-auto-trigger
 import { ensureDefaultDeviceName } from './stores/useDeviceNameStore'
 import { startHostConfigLoader } from './lib/host-config-loader'
 import { startHostDaemonIdVerification } from './lib/host-daemon-id'
+import { startUnattendedSupport } from './lib/team/unattended-support'
 import { startHostReresolve } from './lib/host-reresolve'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
@@ -41,6 +42,8 @@ void ensureDefaultDeviceName()
 startHostConfigLoader()
 // Daemon identity: one /api/info per (re)connect / endpoint / token / stored-daemonId change → observeDaemonId.
 startHostDaemonIdVerification()
+// 無人值守模式 support (unattended spec D-U23-5): one /api/info per (re)connect / endpoint / token change → useUnattendedStore.
+startUnattendedSupport()
 // Host re-resolve (host ownership §3.3): a reference kept verbatim because this device lacked its host points at the
 // local host once that host is here — after hydration, on every host-identity change and every store rehydrate.
 startHostReresolve()
