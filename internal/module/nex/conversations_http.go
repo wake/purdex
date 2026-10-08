@@ -387,12 +387,18 @@ func (m *Module) logConversationScan(r conversations.ScanResult, d time.Duration
 
 // listAllExecutions pages every execution, archived included, to the end
 // (§13.6: no page cap; one missing row could show a live worker's
-// conversation as ended). Each page runs under detachedContext, bounded by
-// engineOpTimeout; ctx is checked before each page. A cursor the store
+// conversation as ended).
+func (m *Module) listAllExecutions(ctx context.Context) ([]store.Execution, error) {
+	return m.walkExecutions(ctx, true)
+}
+
+// walkExecutions pages every execution (archived ones only with
+// includeArchived) to the end. Each page runs under detachedContext, bounded
+// by engineOpTimeout; ctx is checked before each page. A cursor the store
 // already gave fails the walk (R-4-2, fail closed): the walk cannot reach
 // every execution, so the rows read so far are never returned. The error
-// names the cursor; the failed flight logs it.
-func (m *Module) listAllExecutions(ctx context.Context) ([]store.Execution, error) {
+// names the cursor; the caller logs it.
+func (m *Module) walkExecutions(ctx context.Context, includeArchived bool) ([]store.Execution, error) {
 	var out []store.Execution
 	cursor := ""
 	seen := map[string]bool{}
@@ -401,7 +407,7 @@ func (m *Module) listAllExecutions(ctx context.Context) ([]store.Execution, erro
 			return nil, err
 		}
 		pctx, cancel := detachedContext(ctx, m.engineOpTimeout)
-		page, err := m.sys.store.List(pctx, store.ListOptions{IncludeArchived: true, Limit: ownerScanPageSize, Cursor: cursor})
+		page, err := m.sys.store.List(pctx, store.ListOptions{IncludeArchived: includeArchived, Limit: ownerScanPageSize, Cursor: cursor})
 		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("listing executions: %w", err)

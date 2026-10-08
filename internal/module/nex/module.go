@@ -22,6 +22,7 @@ import (
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/peers/execpeers"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -294,6 +295,10 @@ func (m *Module) Init(c *core.Core) error {
 		return m.softFail(fmt.Errorf("nex: init: assembling engine: %w", err))
 	}
 	m.sys = sys
+	// Only an assembled engine has executions to list (peer mailbox spec
+	// §4.1). A soft-failed one publishes nothing: the peers module then lists
+	// no execution rows, instead of a listing failure on every request.
+	c.Registry.Register(execpeers.RegistryKey, &execPeers{m: m})
 	return nil
 }
 
