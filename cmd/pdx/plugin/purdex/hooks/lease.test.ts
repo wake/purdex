@@ -177,3 +177,138 @@ test('rewriteMaxWorkers: the rewritten command still classifies as test-full wit
   const r = rewriteMaxWorkers('cd spa && npx vitest run 2>&1 | tail -30')
   expect(classify(r.command)).toEqual({ kind: 'test-full', needsMaxWorkers: false })
 })
+
+// ---- the hook: registerLease (plan Task 2.2) ----
+//
+// The test's `on` hooks stand beneath the whole mod as the engine: `process.run` is `pdx` (recording argv and
+// answering), `session.id` is the session, `tool.call` for Bash is the tool, counting its runs.
+
+const ok = (stdout: string, exitCode = 0, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
+const GRANT = (extra: object = {}) => JSON.stringify({ id: 'lease-1', granted: true, ...extra })
+const BASH_OK = { ref: 1, result: { stdout: 'ok', stderr: '', interrupted: false }, text: 'ok' }
+const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+type Rig = { calls: string[][]; ran: string[]; sid: { v: string } }
+// rig stands the engine up: `answer` is what pdx says to each call (by subcommand), `bash` the tool beneath.
+function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = () => BASH_OK, pdxJSON?: string): Rig {
+  const r: Rig = { calls: [], ran: [], sid: { v: 'sess-1' } }
+  on('session.id', () => ({ value: r.sid.v }))
+  on('fs.read', (_$: any, e: any) => (pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
+  on('ui.log', () => ({ value: undefined }))
+  on('process.run', (_$: any, e: any) => { r.calls.push([...e.argv]); return answer(e.argv) })
+  on('tool.call', { tool: 'Bash' }, (_$: any, e: any) => { r.ran.push(e.command); return bash(e) })
+  return r
+}
+const sub = (a: string[]) => a[2] // <pdx> lease <sub> …
+const arg = (a: string[], flag: string) => a[a.indexOf(flag) + 1]
+const bash = ($: any, command: string, extra: object = {}) => $.tool.call({ tool: 'Bash', command, tool_use_id: 'toolu_1', ...extra })
+
+test('a heavy foreground Bash acquires, runs the rewritten command once, releases by client id', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{"released":true}')))
+  const out = await bash($, 'cd spa && npx vitest run')
+  expect(out.result).toEqual(BASH_OK.result)
+  expect(r.ran).toEqual(['cd spa && npx vitest run --maxWorkers=3'])
+  expect(r.calls.map(sub)).toEqual(['acquire', 'release'])
+  const [acq, rel] = r.calls
+  expect(acq.slice(0, 3)).toEqual(['pdx', 'lease', 'acquire'])
+  expect(arg(acq, '--kind')).toBe('test-full')
+  expect(arg(acq, '--session')).toBe('sess-1')
+  expect(arg(acq, '--tool-use')).toBe('toolu_1')
+  expect(arg(acq, '--client-id')).toMatch(UUID4)
+  expect(acq).not.toContain('--json') // acquire prints its one JSON line without it
+  expect(rel).toEqual(['pdx', 'lease', 'release', '--client-id', arg(acq, '--client-id')])
+})
+
+test('the context names the rewrite, with the command that really ran', async ($, on) => {
+  rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')))
+  const out = await bash($, 'npx vitest run')
+  expect(out.context).toEqual(['Purdex mod 把 --maxWorkers=3 加進這個指令（主機資源規則 R7），實際執行的是：npx vitest run --maxWorkers=3'])
+})
+
+test('the context says plainly that the command waited, and overran', async ($, on) => {
+  let answer = GRANT({ waited_ms: 37000, host_measured: 72 })
+  rig(on, (a) => (sub(a) === 'acquire' ? ok(answer) : ok('{}')))
+  expect((await bash($, 'pnpm run build')).context).toEqual(['這個指令先等了 37 秒主機資源（負載 72/100），不是卡住，不要重試'])
+  answer = GRANT({ waited_ms: 300000, overrun: true })
+  expect((await bash($, 'pnpm run build')).context).toEqual(['等滿 5 分鐘超量放行，已記錄'])
+})
+
+test('a wait under a second is not announced; a fail-open answer says nothing', async ($, on) => {
+  let answer = GRANT({ waited_ms: 400 })
+  rig(on, (a) => (sub(a) === 'acquire' ? ok(answer) : ok('{}')))
+  expect((await bash($, 'pnpm run build')).context).toBeUndefined()
+  answer = JSON.stringify({ granted: true, fail_open: 'daemon_unreachable' })
+  expect((await bash($, 'pnpm run build')).context).toBeUndefined()
+})
+
+test('background Bash is not intercepted', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await bash($, 'npx vitest run', { run_in_background: true })
+  expect(r.calls).toEqual([])
+  expect(r.ran).toEqual(['npx vitest run'])
+})
+
+test('non-heavy Bash passes through untouched (no process.run)', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await bash($, 'ls -la')
+  await bash($, 'npx vitest run src/lib/foo.test.ts')
+  expect(r.calls).toEqual([])
+  expect(r.ran).toEqual(['ls -la', 'npx vitest run src/lib/foo.test.ts'])
+})
+
+test('already wrapped in pdx lease run → untouched', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await bash($, 'pdx lease run --kind build -- pnpm run build')
+  expect(r.calls).toEqual([])
+})
+
+test('acquire fails (non-zero, junk, rejected) → the command runs, release still goes by the same client id', async ($, on) => {
+  let acquire: any = ok('', 20, 'pdx lease: daemon unreachable')
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? acquire : ok('{}')))
+  for (const [i, a] of [ok('', 20, 'pdx lease: daemon unreachable'), ok('not json at all'), { deny: 'spawn failed' }].entries()) {
+    acquire = a
+    const out = await bash($, 'pnpm run build')
+    expect(out.result).toEqual(BASH_OK.result)
+    expect(r.ran.length).toBe(i + 1)
+    expect(r.ran[i]).toBe('pnpm run build')
+    const mine = r.calls.slice(i * 2)
+    expect(mine.map(sub)).toEqual(['acquire', 'release'])
+    expect(mine[1][4]).toBe(arg(mine[0], '--client-id'))
+  }
+})
+
+test('release runs even when the tool throws', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')), () => { throw new Error('the tool failed') })
+  await bash($, 'pnpm run build').catch(() => {})
+  expect(r.calls.map(sub)).toEqual(['acquire', 'release'])
+  expect(r.ran).toEqual(['pnpm run build']) // once: a throw after next never re-runs the tool
+})
+
+test('a release that fails is swallowed', async ($, on) => {
+  rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : { deny: 'release failed' }))
+  expect((await bash($, 'pnpm run build')).result).toEqual(BASH_OK.result)
+})
+
+test('subagent Bash is intercepted the same way', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')))
+  await bash($, 'pnpm run build', { agentId: 'agent-7' })
+  expect(r.calls.map(sub)).toEqual(['acquire', 'release'])
+})
+
+test('after /clear the lease carries the new session id', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')))
+  await bash($, 'pnpm run build')
+  r.sid.v = 'sess-2'
+  await bash($, 'pnpm run build')
+  const acquires = r.calls.filter((a) => sub(a) === 'acquire')
+  expect(acquires.map((a) => arg(a, '--session'))).toEqual(['sess-1', 'sess-2'])
+})
+
+test('pdx.json names the binary and the config, for acquire and release alike', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')), () => BASH_OK, '{"pdx":"/opt/pdx/bin/pdx","config":"/tmp/pdx b/config.toml"}')
+  await bash($, 'pnpm run build')
+  for (const a of r.calls) {
+    expect(a[0]).toBe('/opt/pdx/bin/pdx')
+    expect(arg(a, '--config')).toBe('/tmp/pdx b/config.toml')
+  }
+})

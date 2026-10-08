@@ -45,6 +45,7 @@
 
 import { register as registerAsk } from './ask.js'
 import { registerEvents } from './events.js'
+import { registerLease } from './lease.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
 const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
@@ -627,6 +628,7 @@ export function register(on) {
   // The event reporter (interface U1 spec §6.5): unmatched on events this module does not
   // hook, matched on the ones it does; registered first, so its hooks wrap the relay's.
   registerEvents(on)
+  registerLease(on)
 
   on('session.start', async ($, e, next) => {
     resetState()
