@@ -162,6 +162,13 @@ type Fake = {
   // seconds on the mocked clock and exits 0; `realSleep` sleeps in real time.
   sleeps: { argv: string[]; timeoutMs?: number }[]
   sleep?: (argv: string[]) => { exitCode: number } | Promise<{ exitCode: number }>
+  // Reporter on (interface U1 B2): pdx.json names a mod socket and `posts` holds every batch
+  // the event reporter sent to the fake daemon, which acks each whole. Off, nothing is posted.
+  reporter?: boolean
+  posts: any[]
+  // The session id the engine moves to while it handles the next classic.SessionStart (a
+  // /clear): a hook sees it only after its next(e), as in a session.
+  switchTo?: string
 }
 
 // The clock of `refuseNow`: the one way to make the prompt hold throw (its
@@ -183,16 +190,27 @@ const APPROVAL = (state: string) => JSON.stringify({ id: 'req-1', kind: 'self_re
 const GOOD_FILE = '# HANDOFF\n' + ['## 1. a', '## 2. b', '## 3. c', '## 4. d', '## 5. e', '## 6. f', '## 7. g', '## 8. h'].map((h) => h + '\n' + 'x'.repeat(40)).join('\n')
 const AT72 = { tokens: 144000, window: 200000, percent: 72 }
 
+const MOD_SOCKET = '/tmp/pdxm-relay/mod.sock'
+
 function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, string> = {}): Fake {
   const f: Fake = {
-    argvs: [], timeouts: [], registered: [], submits: [], commands: [], toasts: [], statuses: [], files: {}, logs: [], sleeps: [],
+    argvs: [], timeouts: [], registered: [], submits: [], commands: [], toasts: [], statuses: [], files: {}, logs: [], sleeps: [], posts: [],
     pdx: () => ({ exitCode: 0, stdout: HELLO() }),
     sessionId: 'sid-old',
     usage: { tokens: 10000, window: 200000, percent: 5 },
     ...opts,
   }
+  if (f.reporter) f.pdxJSON = JSON.stringify({ ...(f.pdxJSON ? JSON.parse(f.pdxJSON) : {}), mod_socket: MOD_SOCKET })
   f.clock = f.refuseNow ? refusingClock(on) : mock.clock(on)
   mock.env(on, env)
+  // The daemon's mod socket (the event reporter, interface U1): acks every batch whole.
+  on('http.fetch', async (_$: any, e: any) => {
+    const body = JSON.parse(e.init.body)
+    f.posts.push(body)
+    return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ ack: body.events[body.events.length - 1].seq }) } }
+  })
+  on('session.version', async () => ({ value: { version: '2.1.293' } }))
+  on('agent.list', async () => ({ value: [] }))
   on('tool.check', async () => ({ decision: 'ask', reason: 'mode' }))
   on('process.run', async (_$: any, e: any) => {
     if (e.argv[0] === '/bin/sleep') {
@@ -220,7 +238,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   on('turn.start', async (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
-  on('classic.SessionStart', async () => ({}))
+  on('classic.SessionStart', async () => { if (f.switchTo) { f.sessionId = f.switchTo; f.switchTo = undefined } return {} })
   on('prompt.submit', async (_$: any, e: any) => {
     f.submits.push(e)
     const fail = f.failSubmit?.(e.text)
@@ -247,6 +265,21 @@ const MSGS = [{ role: 'user' as const, text: 'hi', toolUses: [] }]
 const compact = ($: any, trigger: string) => $.session.compact({ trigger, messages: MSGS })
 const count = (f: Fake, cmd: string) => f.argvs.filter((a) => a[2] === cmd).length
 const reports = (f: Fake) => f.argvs.map(sub).filter((c) => c.startsWith('relay report'))
+
+// Reporter-on regression (interface U1 B2, codex plan review #8, #9): the /clear and
+// session.compact tests below run twice, the reporter off and on, and assert the same relay
+// outcomes either way; on, they also assert what the reporter sent. `modEvents` lets the
+// flush timer run (150 ms) and returns every event the daemon got, each seq once.
+const REPORTER = [false, true] as const
+const withReporter = (name: string, reporter: boolean) => (reporter ? name + ' — reporter on' : name)
+async function modEvents(f: Fake) {
+  await f.clock.advance(150)
+  const seen = new Map<number, any>()
+  for (const b of f.posts) for (const e of b.events) if (!seen.has(e.seq)) seen.set(e.seq, e)
+  return [...seen.values()].sort((a, b) => a.seq - b.seq)
+}
+const switches = async (f: Fake) => (await modEvents(f)).filter((e) => e.type === 'session.switch').map((e) => [e.sid, e.data])
+const compactions = async (f: Fake) => (await modEvents(f)).filter((e) => e.type.startsWith('compact.')).map((e) => [e.type, e.data])
 
 // A fake pdx: hello ok; begin ok; wait answers from a queue; everything else ok.
 function pdxWith(waits: Array<{ exitCode: number; stdout?: string }>, role = 'none') {
@@ -449,36 +482,43 @@ test('a short file (≤ 200 chars) with all headings is incomplete too', async (
   expect(f.submits[1].text).toContain('(內容過短)')
 })
 
-test('cleared: report cleared --new-session, hello again, seed prompt ↪ 接手自 <old ref>; the seed turn reports done and sets the floor', async ($, on) => {
-  const { f, clock } = await approvedRelay($, on)
-  f.files['/data/relay/op-1.md'] = GOOD_FILE
-  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
-  await turn($, 'tw')
-  await clock.advance(50)
-  expect(f.commands).toEqual(['clear'])
-  f.sessionId = 'sid-new'
-  await $.classic.SessionStart({ source: 'clear' })
-  await clock.settle()
-  const calls = f.argvs.map(sub)
-  expect(calls).toContain('relay report op-1 cleared --new-session sid-new')
-  expect(calls.filter((c) => c.startsWith('relay hello')).at(-1)).toBe('relay hello --session sid-new --version 1 --agent cc')
-  await clock.advance(50)
-  expect(f.submits.length).toBe(2)
-  expect(f.submits[1].text.split('\n')[0]).toBe('↪ 接手自 _abc123')
-  expect(f.submits[1].text).toMatch(/\n\[pdx-relay seed op=op-1 n=[0-9a-f]{12,}\] /)
-  expect(f.submits[1].text).not.toContain('交接')
-  f.usage = { tokens: 30000, window: 200000, percent: 15 }
-  await $.turn.start({ text: f.submits[1].text, turnId: 'ts' })
-  await turnAndSettle($, f, 'ts')
-  expect(reports(f)).toEqual(['relay report op-1 writing', 'relay report op-1 written', 'relay report op-1 cleared --new-session sid-new', 'relay report op-1 done'])
-  // the 20K loop guard: 75 % but only 10K over the floor → no new ask
-  f.usage = { tokens: 40000, window: 200000, percent: 75 }
-  await turnAndSettle($, f, 't9')
-  expect(count(f, 'begin')).toBe(1)
-  f.usage = { tokens: 50000, window: 200000, percent: 75 }
-  await turnAndSettle($, f, 't10')
-  expect(count(f, 'begin')).toBe(2)
-})
+for (const reporter of REPORTER) {
+  test(withReporter('cleared: report cleared --new-session, hello again, seed prompt ↪ 接手自 <old ref>; the seed turn reports done and sets the floor', reporter), async ($, on) => {
+    const { f, clock } = await approvedRelay($, on, undefined, { reporter })
+    f.files['/data/relay/op-1.md'] = GOOD_FILE
+    await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+    await turn($, 'tw')
+    await clock.advance(50)
+    expect(f.commands).toEqual(['clear'])
+    f.switchTo = 'sid-new' // the engine moves to it while it handles the SessionStart
+    await $.classic.SessionStart({ source: 'clear' })
+    await clock.settle()
+    const calls = f.argvs.map(sub)
+    expect(calls).toContain('relay report op-1 cleared --new-session sid-new')
+    expect(calls.filter((c) => c.startsWith('relay hello')).at(-1)).toBe('relay hello --session sid-new --version 1 --agent cc')
+    await clock.advance(50)
+    expect(f.submits.length).toBe(2)
+    expect(f.submits[1].text.split('\n')[0]).toBe('↪ 接手自 _abc123')
+    expect(f.submits[1].text).toMatch(/\n\[pdx-relay seed op=op-1 n=[0-9a-f]{12,}\] /)
+    expect(f.submits[1].text).not.toContain('交接')
+    f.usage = { tokens: 30000, window: 200000, percent: 15 }
+    await $.turn.start({ text: f.submits[1].text, turnId: 'ts' })
+    await turnAndSettle($, f, 'ts')
+    expect(reports(f)).toEqual(['relay report op-1 writing', 'relay report op-1 written', 'relay report op-1 cleared --new-session sid-new', 'relay report op-1 done'])
+    // the 20K loop guard: 75 % but only 10K over the floor → no new ask
+    f.usage = { tokens: 40000, window: 200000, percent: 75 }
+    await turnAndSettle($, f, 't9')
+    expect(count(f, 'begin')).toBe(1)
+    f.usage = { tokens: 50000, window: 200000, percent: 75 }
+    await turnAndSettle($, f, 't10')
+    expect(count(f, 'begin')).toBe(2)
+    if (!reporter) return expect(f.posts).toEqual([])
+    // the relay's own /clear: the switch carries the id `cleared --new-session` reported
+    const sw = await switches(f)
+    expect(sw).toEqual([['sid-new', { prev_sid: 'sid-old', source: 'clear' }]])
+    expect(calls).toContain('relay report op-1 cleared --new-session ' + sw[0][0])
+  })
+}
 
 // §8.3: a report that did not reach the daemon (20 unreachable — also a
 // cleared the daemon answered 503 not_ready for through the CLI's grace —
@@ -588,20 +628,24 @@ test('tool.check allows nothing while no op is pending', async ($, on) => {
 // The hello after /clear is P5b-1's (its own tests above); this one pins
 // that the user's own /clear also resets the relay guards: the +10 re-ask
 // of the old conversation no longer holds. Mutation gate: drop the reset → red.
-test('the user’s own /clear while idle resets the guards and says hello again', async ($, on) => {
-  const f = relayWorld(on, { usage: AT72 })
-  f.pdx = (argv) => argv[1] === 'begin' ? { exitCode: 13, stderr: 'pdx relay: paused self_relay_paused' } : { exitCode: 0, stdout: HELLO() }
-  await start($, f)
-  await turnAndSettle($, f, 't1')
-  await turnAndSettle($, f, 't2')
-  expect(count(f, 'begin')).toBe(1) // 72 again: not 10 points over the last ask
-  f.sessionId = 'sid-2'
-  await $.classic.SessionStart({ source: 'clear' })
-  await f.clock.settle()
-  await turnAndSettle($, f, 't3')
-  expect(count(f, 'begin')).toBe(2)
-  expect(f.argvs.map(sub).filter((c) => c.startsWith('relay hello'))).toEqual(['relay hello --session sid-old --version 1 --agent cc', 'relay hello --session sid-2 --version 1 --agent cc'])
-})
+for (const reporter of REPORTER) {
+  test(withReporter('the user’s own /clear while idle resets the guards and says hello again', reporter), async ($, on) => {
+    const f = relayWorld(on, { usage: AT72, reporter })
+    f.pdx = (argv) => argv[1] === 'begin' ? { exitCode: 13, stderr: 'pdx relay: paused self_relay_paused' } : { exitCode: 0, stdout: HELLO() }
+    await start($, f)
+    await turnAndSettle($, f, 't1')
+    await turnAndSettle($, f, 't2')
+    expect(count(f, 'begin')).toBe(1) // 72 again: not 10 points over the last ask
+    f.switchTo = 'sid-2'
+    await $.classic.SessionStart({ source: 'clear' })
+    await f.clock.settle()
+    await turnAndSettle($, f, 't3')
+    expect(count(f, 'begin')).toBe(2)
+    expect(f.argvs.map(sub).filter((c) => c.startsWith('relay hello'))).toEqual(['relay hello --session sid-old --version 1 --agent cc', 'relay hello --session sid-2 --version 1 --agent cc'])
+    if (!reporter) return expect(f.posts).toEqual([])
+    expect(await switches(f)).toEqual([['sid-2', { prev_sid: 'sid-old', source: 'clear' }]])
+  })
+}
 
 // A request the user's own /clear dropped keeps its wait loop running (the
 // daemon closes it); the next request must get a loop of its own, not the
@@ -955,21 +999,25 @@ test('the user’s /clear while beginning: the late op is cancelled{abandoned}, 
   expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
 })
 
-test('the user’s /clear while awaiting reports cancelled{abandoned} (the daemon closes the dialog), clears the status and starts over', async ($, on) => {
-  const f = relayWorld(on, { pdx: pdxWith([]), usage: AT72 })
-  await start($, f)
-  await turn($, 't1')
-  await f.clock.advance(50) // begin, then the wait (never answers)
-  expect(waits(f)).toEqual(['relay wait req-1'])
-  f.sessionId = 'sid-2'
-  await $.classic.SessionStart({ source: 'clear' })
-  await f.clock.settle()
-  expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
-  expect(f.statuses).toEqual(['接力等待核准中', undefined])
-  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
-  await turnAndSettle($, f, 't2') // the new conversation is asked afresh
-  expect(count(f, 'begin')).toBe(2)
-})
+for (const reporter of REPORTER) {
+  test(withReporter('the user’s /clear while awaiting reports cancelled{abandoned} (the daemon closes the dialog), clears the status and starts over', reporter), async ($, on) => {
+    const f = relayWorld(on, { pdx: pdxWith([]), usage: AT72, reporter })
+    await start($, f)
+    await turn($, 't1')
+    await f.clock.advance(50) // begin, then the wait (never answers)
+    expect(waits(f)).toEqual(['relay wait req-1'])
+    f.switchTo = 'sid-2'
+    await $.classic.SessionStart({ source: 'clear' })
+    await f.clock.settle()
+    expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
+    expect(f.statuses).toEqual(['接力等待核准中', undefined])
+    expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
+    await turnAndSettle($, f, 't2') // the new conversation is asked afresh
+    expect(count(f, 'begin')).toBe(2)
+    if (!reporter) return expect(f.posts).toEqual([])
+    expect(await switches(f)).toEqual([['sid-2', { prev_sid: 'sid-old', source: 'clear' }]])
+  })
+}
 
 test('the user’s /clear while approved reports cancelled{abandoned}; the write turn that follows is nobody’s', async ($, on) => {
   const { f, clock } = await approvedRelay($, on)
@@ -1541,29 +1589,33 @@ test('a compaction before the wait loop started releases a held prompt; no loop 
 // Mutation gates: drop the cancelled{compacted} report → no report; skip the
 // return to idle → the handoff path is still allowed and a new prompt is
 // held; skip compaction for an open request → red.
-test('auto-compact while a request is open: compaction runs, the request is reported cancelled{compacted} and a held prompt is released unchanged; the next ask needs ≥ threshold again', async ($, on) => {
-  const f = relayWorld(on, { usage: AT72 })
-  rowDaemon(f)
-  await start($, f)
-  await turn($, 't1')
-  await f.clock.advance(50) // begin; the wait loop (open until the daemon closes the row)
-  const p = typed($, 'q')
-  await f.clock.settle()
-  expect(f.submits.length).toBe(0)
-  expect(await compact($, 'auto')).toEqual({ messages: MSGS })
-  expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false) // idle at once
-  await typed($, 'after') // nothing open now: not held
-  expect(f.submits.map((s) => s.text)).toEqual(['q', 'after']) // q went on at the compaction (P5b-3 review)
-  await f.clock.settle() // the report goes out from a timer; the daemon closes the row; wait exits 12
-  expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
-  expect(f.submits.length).toBe(2)
-  await p
-  expect(f.submits[0].context).toBeUndefined()
-  expect(f.statuses.at(-1)).toBeUndefined()
-  f.usage = { tokens: 142000, window: 200000, percent: 71 }
-  await turnAndSettle($, f, 't2')
-  expect(count(f, 'begin')).toBe(2) // 71 ≥ 70 is enough after a compaction
-})
+for (const reporter of REPORTER) {
+  test(withReporter('auto-compact while a request is open: compaction runs, the request is reported cancelled{compacted} and a held prompt is released unchanged; the next ask needs ≥ threshold again', reporter), async ($, on) => {
+    const f = relayWorld(on, { usage: AT72, reporter })
+    rowDaemon(f)
+    await start($, f)
+    await turn($, 't1')
+    await f.clock.advance(50) // begin; the wait loop (open until the daemon closes the row)
+    const p = typed($, 'q')
+    await f.clock.settle()
+    expect(f.submits.length).toBe(0)
+    expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+    expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false) // idle at once
+    await typed($, 'after') // nothing open now: not held
+    expect(f.submits.map((s) => s.text)).toEqual(['q', 'after']) // q went on at the compaction (P5b-3 review)
+    await f.clock.settle() // the report goes out from a timer; the daemon closes the row; wait exits 12
+    expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
+    expect(f.submits.length).toBe(2)
+    await p
+    expect(f.submits[0].context).toBeUndefined()
+    expect(f.statuses.at(-1)).toBeUndefined()
+    f.usage = { tokens: 142000, window: 200000, percent: 71 }
+    await turnAndSettle($, f, 't2')
+    expect(count(f, 'begin')).toBe(2) // 71 ≥ 70 is enough after a compaction
+    if (!reporter) return expect(f.posts).toEqual([])
+    expect(await compactions(f)).toEqual([['compact.start', { trigger: 'auto' }], ['compact.end', { trigger: 'auto', ok: true }]])
+  })
+}
 
 test('manual /compact while a request is open cancels it like an auto one', async ($, on) => {
   const f = relayWorld(on, { usage: AT72 })
@@ -1600,31 +1652,35 @@ test('an approval that races a compaction is not acted on: the held prompt goes 
 // conversation as it was before it shrank: the generation moves on, so the
 // op is cancelled{abandoned} when begin answers, and a prompt held on it
 // goes on unchanged.
-test('a compaction while begin is still out: the late op is cancelled{abandoned}; a prompt held on it is released unchanged', async ($, on) => {
-  const f = relayWorld(on, { usage: AT72 })
-  const b = gated()
-  f.pdx = async (argv) => {
-    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO() }
-    if (argv[1] === 'begin') { await b.p; return { exitCode: 0, stdout: BEGIN_OK } }
-    if (argv[1] === 'wait') return new Promise<never>(() => {})
-    return { exitCode: 0, stdout: '{}' }
-  }
-  await start($, f)
-  await turnAndSettle($, f, 't1')
-  let done = false
-  const p = typed($, 'q').then(() => { done = true })
-  await f.clock.settle()
-  expect(done).toBe(false)
-  expect(await compact($, 'auto')).toEqual({ messages: MSGS })
-  await f.clock.settle()
-  expect(done).toBe(true) // let go with the request it waited for (P5b-3 review), not when begin answers
-  expect(f.submits[0].context).toBeUndefined()
-  b.release()
-  await f.clock.advance(50)
-  await p
-  expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
-  expect(waits(f)).toEqual([])
-})
+for (const reporter of REPORTER) {
+  test(withReporter('a compaction while begin is still out: the late op is cancelled{abandoned}; a prompt held on it is released unchanged', reporter), async ($, on) => {
+    const f = relayWorld(on, { usage: AT72, reporter })
+    const b = gated()
+    f.pdx = async (argv) => {
+      if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO() }
+      if (argv[1] === 'begin') { await b.p; return { exitCode: 0, stdout: BEGIN_OK } }
+      if (argv[1] === 'wait') return new Promise<never>(() => {})
+      return { exitCode: 0, stdout: '{}' }
+    }
+    await start($, f)
+    await turnAndSettle($, f, 't1')
+    let done = false
+    const p = typed($, 'q').then(() => { done = true })
+    await f.clock.settle()
+    expect(done).toBe(false)
+    expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+    await f.clock.settle()
+    expect(done).toBe(true) // let go with the request it waited for (P5b-3 review), not when begin answers
+    expect(f.submits[0].context).toBeUndefined()
+    b.release()
+    await f.clock.advance(50)
+    await p
+    expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
+    expect(waits(f)).toEqual([])
+    if (!reporter) return expect(f.posts).toEqual([])
+    expect(await compactions(f)).toEqual([['compact.start', { trigger: 'auto' }], ['compact.end', { trigger: 'auto', ok: true }]])
+  })
+}
 
 // ---- P5b-3 review item 2 (attacker high): a request the mod lets go of
 // releases its held prompts at once ----
@@ -1684,19 +1740,26 @@ test('a late approval for a request the mod already let go is ignored: no NOTE, 
 })
 
 // Mutation gate: skip on every trigger (drop `e.trigger === 'auto'`) → the manual test is red.
-test('auto-compact with an approved relay not yet written is skipped', async ($, on) => {
-  const { f } = await approvedRelay($, on)
-  expect(await compact($, 'auto')).toEqual({ skip: '接力已核准，略過壓縮，改為寫接力檔' })
-  await f.clock.settle()
-  expect(reports(f)).toEqual(['relay report op-1 writing'])
-})
+// Reporter on: compact.end {ok:false} exactly when the relay answered {skip}.
+for (const reporter of REPORTER) {
+  test(withReporter('auto-compact with an approved relay not yet written is skipped', reporter), async ($, on) => {
+    const { f } = await approvedRelay($, on, undefined, { reporter })
+    expect(await compact($, 'auto')).toEqual({ skip: '接力已核准，略過壓縮，改為寫接力檔' })
+    await f.clock.settle()
+    expect(reports(f)).toEqual(['relay report op-1 writing'])
+    if (!reporter) return expect(f.posts).toEqual([])
+    expect(await compactions(f)).toEqual([['compact.start', { trigger: 'auto' }], ['compact.end', { trigger: 'auto', ok: false }]])
+  })
 
-test('manual /compact with an approved relay not yet written runs (the person asked) and reports nothing', async ($, on) => {
-  const { f } = await approvedRelay($, on)
-  expect(await compact($, 'manual')).toEqual({ messages: MSGS })
-  await f.clock.settle()
-  expect(reports(f)).toEqual(['relay report op-1 writing'])
-})
+  test(withReporter('manual /compact with an approved relay not yet written runs (the person asked) and reports nothing', reporter), async ($, on) => {
+    const { f } = await approvedRelay($, on, undefined, { reporter })
+    expect(await compact($, 'manual')).toEqual({ messages: MSGS })
+    await f.clock.settle()
+    expect(reports(f)).toEqual(['relay report op-1 writing'])
+    if (!reporter) return expect(f.posts).toEqual([])
+    expect(await compactions(f)).toEqual([['compact.start', { trigger: 'manual' }], ['compact.end', { trigger: 'manual', ok: true }]])
+  })
+}
 
 test('auto-compact passes through for a member', async ($, on) => {
   const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 180000, window: 200000, percent: 90 } })
@@ -1707,14 +1770,23 @@ test('auto-compact passes through for a member', async ($, on) => {
   expect(reports(f)).toEqual([])
 })
 
-test('auto-compact passes through for an idle solo session, and so does a precompute', async ($, on) => {
-  const f = relayWorld(on)
-  await start($, f)
-  expect(await compact($, 'auto')).toEqual({ messages: MSGS })
-  expect(await compact($, 'precompute')).toEqual({ messages: MSGS })
-  await f.clock.settle()
-  expect(reports(f)).toEqual([])
-})
+for (const reporter of REPORTER) {
+  test(withReporter('auto-compact passes through for an idle solo session, and so does a precompute and a subagent’s', reporter), async ($, on) => {
+    const f = relayWorld(on, { reporter })
+    await start($, f)
+    expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+    expect(await compact($, 'precompute')).toEqual({ messages: MSGS })
+    expect(await $.session.compact({ trigger: 'auto', agentId: 'ag-1', messages: MSGS })).toEqual({ messages: MSGS })
+    await f.clock.settle()
+    expect(reports(f)).toEqual([])
+    if (!reporter) return expect(f.posts).toEqual([])
+    expect(await compactions(f)).toEqual([
+      ['compact.start', { trigger: 'auto' }], ['compact.end', { trigger: 'auto', ok: true }],
+      ['compact.start', { trigger: 'precompute' }], ['compact.end', { trigger: 'precompute', ok: true }],
+      ['compact.start', { trigger: 'auto', agent_id: 'ag-1' }], ['compact.end', { trigger: 'auto', agent_id: 'ag-1', ok: true }],
+    ])
+  })
+}
 
 const PRES = { isFullscreen: false, columns: 100 }
 const relayCmd = ($: any, args: string) => $.command.run({ command: 'relay', args, origin: { kind: 'composer' }, presentation: PRES })
