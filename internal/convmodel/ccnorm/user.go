@@ -118,6 +118,7 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 		return
 	}
 	n.addUser(ti, l.uuid, l.at, src, from, text, blocks, off)
+	n.handoff(ti, l.str(l.Entrypoint), l.at, off)
 	n.attribute(ti, l.at)
 }
 

@@ -25,6 +25,8 @@ func (n *Normalizer) systemRow(l *rawLine, off int64) {
 		n.attribute(ti, l.at)
 	case "local_command":
 		n.localCommand(l, off)
+	case "compact_boundary":
+		n.compactBoundary(l, off)
 	default:
 		n.skip("system:" + l.subtype)
 	}
@@ -57,6 +59,7 @@ func (n *Normalizer) localCommand(l *rawLine, off int64) {
 		}
 		n.turns[ti].modelFree = true
 		n.addUser(ti, l.uuid, l.at, convmodel.SourceSlash, nil, typed, nil, off)
+		n.handoff(ti, l.str(l.Entrypoint), l.at, off)
 		n.attribute(ti, l.at)
 	case firstTag(text) == "local-command-stdout":
 		v, _ := tagValue(text, "local-command-stdout")
@@ -64,6 +67,29 @@ func (n *Normalizer) localCommand(l *rawLine, off int64) {
 	default:
 		n.skip("local_command:other")
 	}
+}
+
+// compactBoundary adds a `compacted` item to the current turn: a compaction
+// opens no turn of its own (the /compact prompt row, or the turn it ended,
+// holds it); with no turn yet it opens one without a user item. A turn that
+// only compacts has no model reply to wait for.
+func (n *Normalizer) compactBoundary(l *rawLine, off int64) {
+	ti := n.ensureTurn(l.uuid, l.at, off)
+	tr := n.turns[ti]
+	if !tr.hasModel {
+		tr.modelFree = true
+	}
+	var detail json.RawMessage
+	meta, _ := parseObject(l.CompactMetadata)
+	if trig := meta.str("trigger"); trig == "auto" || trig == "manual" {
+		detail = marshalNoEscape(struct {
+			Trigger string `json:"trigger"`
+		}{trig})
+	}
+	n.upsert(tr.t.ID, convmodel.Item{Type: convmodel.ItemSystem, System: &convmodel.System{
+		ID: l.uuid, At: l.at, Kind: convmodel.SystemCompacted, Detail: detail,
+	}}, off)
+	n.attribute(ti, l.at)
 }
 
 // interruptMarker turns the "[Request interrupted by user…" row into an

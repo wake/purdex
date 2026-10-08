@@ -133,6 +133,9 @@ func (n *Normalizer) outcomeOf(tr *turnRec, last bool) convmodel.Outcome {
 // that already ended is untouched). SetLive(true) reopens a last turn that
 // has no end marker. Both return the turns they changed, with Offset -1.
 // Liveness is never inferred from the input.
+//
+// (U1-4c adds to the close: the steps of that turn that have no result become
+// denied with denial "interrupted".)
 func (n *Normalizer) SetLive(live bool) []Change {
 	n.live = live
 	if len(n.turns) > 0 {

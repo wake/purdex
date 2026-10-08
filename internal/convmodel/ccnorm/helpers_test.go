@@ -135,12 +135,12 @@ func toolResultRow(uuid string, sec float64, toolUseID, text string, opts ...opt
 	return line(o, opts...)
 }
 
-func turnDuration(uuid string, sec float64, durMS int) []byte {
+func turnDuration(uuid string, sec float64, durMS int, opts ...opt) []byte {
 	o := common("system", uuid, sec)
 	o["subtype"] = "turn_duration"
 	o["durationMs"] = durMS
 	o["isMeta"] = false
-	return line(o)
+	return line(o, opts...)
 }
 
 func stopHookSummary(uuid string, sec float64) []byte {

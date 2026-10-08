@@ -54,7 +54,8 @@ type Normalizer struct {
 	// Facts carried across rows.
 	customTitle, aiTitle string
 	model, effort        string // last main-thread assistant row (usage)
-	entry                string // entrypoint of the last row that had one
+	entry                string // entrypoint (cli / sdk-cli) of the last row that had one
+	entryBefore          string // the same, as it was before the current row
 }
 
 type itemLoc struct{ turn, item int }
@@ -157,6 +158,7 @@ func (n *Normalizer) row(off int64, line []byte) {
 		n.skip("type:" + l.typ)
 		return
 	}
+	n.entryBefore = n.entry
 	switch l.typ {
 	case "user":
 		n.userRow(&l, off)
@@ -166,6 +168,9 @@ func (n *Normalizer) row(off int64, line []byte) {
 		n.systemRow(&l, off)
 	case "attachment":
 		n.attachmentRow(&l, off)
+	}
+	if e := l.str(l.Entrypoint); e == "cli" || e == "sdk-cli" {
+		n.entry = e
 	}
 	if n.touched >= 0 {
 		n.refresh(n.touched, off)
