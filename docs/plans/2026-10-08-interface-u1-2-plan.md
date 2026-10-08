@@ -250,7 +250,16 @@ Spec §7 "Aggregation and wire" is updated in this PR with the frame shape and t
    - no-mod fallback: the same session started with the plugin disabled (`CLAUDE_CODE_PLUGIN_DIRS` unset for that process) → frames carry `source: "hook"`; Esc during a tool → `idle` (is_interrupt).
 4. Kill the throwaway sessions; record results in the PR and the kickoff memory.
 
-## Decisions for the coordinator
+## Coordinator rulings (2026-10-08, purdex-1f)
+
+1. One `hook` counter per daemon process, field name `seq`, epoch = `boot_id` in `value`, always present. Spec §7 rewritten in the plan PR, including that `hook (epoch, seq)` and `nex.* (epoch, bseq)` are separate counters.
+2. Snapshot = one opt-in `agent.snapshot` frame.
+3. Multi-pane sessions: dots / agent type / model from the highest-priority pane only — a known limitation (spec §7).
+4. #1866 is closed (no further `featuresOf` changes). Member β's PU-1c adds `EventsBroadcaster.BroadcastStrict` to `internal/core/events.go` (strict for every subscriber: a frame that does not fit removes it, so it reconnects for a snapshot). **b-3 rebases on a main that contains PU-1c** and makes `agent.v2` strictness use, or match, that mechanism rather than adding a second one.
+- Known limitation accepted: waiting until the approved tool ends (the user mostly runs in bypass mode).
+- Every PR must be safe to deploy on its own (the coordinator may deploy main for other lines in between); a-1 changes the mod, so its deploy runs `pdx setup --agent cc`.
+
+## Decisions for the coordinator (as asked; answered above)
 
 1. **`hook` seq scope and name** (review #2): spec §7 says "per session code, monotonic". The plan uses **one counter for all `hook` frames** (still monotonic per code, which is what §7's ordering rule needs, and it lets one snapshot carry one high-water `H`); gap checks are per connection, not per code. b-2 rewrites §7 to say so. Name: keep `seq` or rename to `bseq` (same semantics as #1866). Recommendation: `seq` — the families never share a cursor, and spec §8 (U1-7 list summary `status, epoch, seq, …`) already uses it.
 2. **Snapshot shape**: one opt-in `agent.snapshot` frame (this plan) vs. per-code frames plus an end marker. Recommendation: the single frame — atomic, needs no end marker, and an empty host is explicit.
