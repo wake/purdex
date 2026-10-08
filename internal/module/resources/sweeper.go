@@ -54,11 +54,27 @@ func (m *Module) sweepOnce(ctx context.Context) {
 		return
 	}
 	set := m.settings()
+	leasing := set.Mode != resources.ModeOff && set.Mode != resources.ModeMeasure
+
+	// The process table is read before stateMu is taken (codex R1 + attack):
+	// a read that stalls must not hold the lock every lease operation needs.
+	// It is read only when a lease is held, only once the first snapshot has
+	// been published (plan Task 1.5: holders are not judged before the first
+	// sample), and the rows are read again under the lock. viewAt is when the
+	// read began: a holder granted after it may not be in that table yet, so
+	// sweepLeases judges only the rows granted before it.
+	var view procView
+	var viewAt time.Time
+	if leasing && m.latest.Load() != nil && m.anyHeld() {
+		viewAt = m.now()
+		view = m.holderView(ctx)
+	}
+
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	now := m.now()
-	if set.Mode != resources.ModeOff && set.Mode != resources.ModeMeasure {
-		m.sweepLeases(ctx, now, set)
+	if leasing {
+		m.sweepLeases(now, set, view, viewAt)
 	}
 	if now.Sub(m.lastPrune) >= pruneEvery {
 		m.lastPrune = now
@@ -68,8 +84,17 @@ func (m *Module) sweepOnce(ctx context.Context) {
 	}
 }
 
-// sweepLeases ends what is overdue. stateMu is held.
-func (m *Module) sweepLeases(ctx context.Context, now time.Time, set resources.Settings) {
+// anyHeld says, without the lock, whether a lease is held; a hint that only
+// decides whether the process table is worth reading. A failed read says
+// nothing is held: the sweeper then judges no holder this tick.
+func (m *Module) anyHeld() bool {
+	held, err := m.store.Active()
+	return err == nil && len(held) > 0
+}
+
+// sweepLeases ends what is overdue. stateMu is held. view is the process
+// table read at viewAt, or nil when there is none (unknown reads as alive).
+func (m *Module) sweepLeases(now time.Time, set resources.Settings, view procView, viewAt time.Time) {
 	nowMS := now.UnixMilli()
 	waiting, err := m.store.Waiting()
 	if err != nil {
@@ -92,17 +117,12 @@ func (m *Module) sweepLeases(ctx context.Context, now time.Time, set resources.S
 		m.logf("[resources] sweeper: list held leases: %v", err)
 		return
 	}
-	if len(held) == 0 {
-		return // no snapshot: nothing here needs the process table
-	}
-	// The table is read after the rows, so a holder that started after the
-	// read of the rows cannot be judged by a table that predates it.
-	view := m.holderView(ctx)
 	maxHold := set.MaxHold()
+	viewAtMS := viewAt.UnixMilli()
 	for _, r := range held {
 		reason := ""
 		switch {
-		case view != nil && holderGone(view, r):
+		case view != nil && r.GrantedAt <= viewAtMS && holderGone(view, r):
 			reason = resources.EndHolderGone
 		case now.Sub(time.UnixMilli(r.GrantedAt)) >= maxHold:
 			reason = resources.EndExpired

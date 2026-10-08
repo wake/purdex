@@ -61,6 +61,9 @@ func newSweepFix(t *testing.T, mode string) *sweepFix {
 	f.set.set(resources.Settings{Mode: mode})
 	f.m, f.logs = initedModule(t, t.TempDir(), f.set, idleSampler())
 	f.m.now = f.clock.now
+	// The first sample has been published: from then on holders are judged.
+	// TestSweeper_NoLivenessBeforeFirstSample clears it again.
+	f.m.publish(&resources.Snapshot{Available: true, Capacity: resources.Capacity, Mode: mode})
 	f.m.sweepView = func(context.Context) (procView, error) {
 		f.snaps.Add(1)
 		if f.snapErr != nil {
@@ -230,6 +233,67 @@ func TestSweeper_NoLivenessWithoutSnapshot(t *testing.T) {
 	if f.logs.count("readable again") != 1 {
 		t.Fatalf("the recovery must be logged: %v", f.logs.lines)
 	}
+}
+
+// Codex attack (high): after a restart the sweeper's first tick can come
+// before the sampler has published anything; plan Task 1.5 judges holders
+// only after the first sample. Until then even a holder missing from a
+// readable table is left alone, and no table is read for it.
+func TestSweeper_NoLivenessBeforeFirstSample(t *testing.T) {
+	f := newSweepFix(t, resources.ModeLease)
+	f.m.latest.Store(nil) // the sampler has published nothing yet
+	f.held("h1", 4242, startText(procStart), f.nowMS()-10000)
+	for i := 0; i < 3; i++ {
+		f.sweep()
+	}
+	f.wantState("h1", resources.StateHeld)
+	if f.snaps.Load() != 0 {
+		t.Fatalf("the process table was read %d times before the first sample", f.snaps.Load())
+	}
+	f.m.publish(&resources.Snapshot{Available: true, Capacity: resources.Capacity})
+	f.sweep()
+	f.wantEnded("h1", resources.EndHolderGone)
+}
+
+// Codex R1 + attack (high): the process table is read before stateMu is
+// taken, so a read that stalls cannot hold the lock every lease operation
+// needs (D-5: they must still make progress).
+func TestSweeper_ProcessTableIsReadOutsideStateMu(t *testing.T) {
+	f := newSweepFix(t, resources.ModeLease)
+	f.held("h1", 4242, startText(procStart), f.nowMS()-10000)
+	f.alive(4242, procStart)
+	f.m.sweepView = func(context.Context) (procView, error) {
+		f.snaps.Add(1)
+		if !f.m.stateMu.TryLock() {
+			t.Error("stateMu is held while the process table is read")
+		} else {
+			f.m.stateMu.Unlock()
+		}
+		return f.view, nil
+	}
+	f.sweep()
+	if f.snaps.Load() != 1 {
+		t.Fatalf("the table was read %d times, want once", f.snaps.Load())
+	}
+	f.wantState("h1", resources.StateHeld)
+}
+
+// The table is read before the rows are judged, so a holder granted after the
+// read began may not be in it yet: it is not judged by that table. (The
+// reason the first version read the table under the lock.)
+func TestSweeper_HolderGrantedAfterTheTableIsReadIsNotJudgedByIt(t *testing.T) {
+	f := newSweepFix(t, resources.ModeLease)
+	f.held("old", 4242, startText(procStart), f.nowMS()-10000) // makes the sweeper read the table
+	f.alive(4242, procStart)
+	f.m.sweepView = func(context.Context) (procView, error) {
+		f.snaps.Add(1)
+		f.clock.ms.Add(5) // a few ms later, a holder is granted; the table predates it
+		f.held("new", 5151, startText(procStart), f.nowMS())
+		return f.view, nil
+	}
+	f.sweep()
+	f.wantState("old", resources.StateHeld)
+	f.wantState("new", resources.StateHeld)
 }
 
 func TestSweeper_DefaultViewReadsProcSnapshot(t *testing.T) {
