@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.618] - 2026-10-09
+
+> 動 mod：**要重跑 `pdx setup --agent cc`**（daemon 一起換新，內容沒有改）；SPA、Electron 不必更新。資源租約仍是「只記錄、不攔」（advise），「只記錄一天」從這一版部署時重新起算。
+
+### Fixed：重指令攔截的誤判（資源租約 P2，#2085）
+
+- 用 heredoc 寫檔或跑腳本時（例如 `python3 - <<'EOF' … EOF`），內文裡如果提到重指令（像用反引號包著 `go test ./...` 的說明文字），原本會被當成要執行的重指令而攔下。實際的 Bash 紀錄裡這種情況很常見。現在引號 heredoc 的內文與註解都不再被當成指令。
+
 ## [1.0.0-alpha.617] - 2026-10-09
 
 > 動 daemon、CLI、mod、skill 和 SPA：**要部署 daemon，也要重跑 `pdx setup --agent cc`**（mod 新增重指令攔截、skill 更新）；SPA 在主 checkout 快轉後就生效；Electron 不必更新。**部署前主機的資源租約先切到「只記錄、不攔」（advise）**：外掛會攔下前景的重指令並記錄「照規則要不要等」，但一律立刻放行。跑一天、看過報告之後，才會切成真的排隊。
