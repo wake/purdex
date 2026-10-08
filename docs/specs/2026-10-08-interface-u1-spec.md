@@ -36,6 +36,20 @@ Out of U1 (later phases of the interface line, [D §16]): iOS switches to the mo
 - **M-U1-4 interactive-mode event order** (Claude Code 2.1.293, interactive `claude` in tmux with the U1-1b reporter, 2026-10-08), as the daemon received it: `session.start → usage → heartbeat → turn.start → heartbeat(turn_id) → tool.start → tool.check(allow) → tool.end → background → turn.complete → usage`. **`background` (from `classic.Stop`) arrives before `turn.complete`.** Heartbeats came 10.00–10.01 s apart and did not break across `/clear`. `/clear` gave `session.end{reason:clear}` (old sid), then about 660 ms later `session.switch` (new sid, same stream). `/exit` gave `session.end{reason:prompt_input_exit}`, sent from inside the hook. `dropped_total` stayed 0.
 - **M-U1-5 `$` does not cross an import** (2.1.293): the static check follows `$` "only into a function declared in this same file, never across an import" — a module that passes `$` to a function imported from another file fails to load. So `register.js` cannot hand `$` to observer functions exported by `events.js`; the reporter registers its own hooks instead (§6.5).
 - **M-U1-6 the approval signal** (Claude Code 2.1.294, interactive `claude` in tmux, default permission mode, a Bash call that needs approval, a throwaway probe mod on `ui.render` {Spinner, ToolProgress, ToolUse} + `tool.check` / `tool.call`, 2026-10-08): `tool.call` starts, `tool.check` returns `ask`, the dialog opens; the `ToolUse` row of that `tool_use_id` is drawn with `isRunning: false` while the dialog is open and with `isRunning: true` **16 ms** after the person's Enter on "Yes"; `ToolProgress{kind: background_hint}` follows **3.5 s** later (Bash only); `Spinner.mode` stays `tool-use` throughout (no signal). Refusal and Esc were not measured (they end in `tool.end` with an error / `turn.complete`). The mod reports the flip as `tool.approved` (§6.3); it works in any terminal, including a plain `tmux attach`.
+- **M-U1-7 the Claude Code transcript format** (census of mlab `~/.claude/projects`, 2026-10-08: 1,460 files of the last 14 days, 491 k rows, CC 2.1.263–2.1.294, plus the three iOS samples; script and counts in the U1-4 plan, nothing but key names, enum values and counts printed):
+  - Row `type`s that carry conversation content: `user`, `assistant`, `system`, `attachment`, `queue-operation`; the other 18 types (`last-prompt`, `ai-title`, `mode`, `permission-mode`, `file-history-*`, `cost-state`, …) are metadata. `ai-title` / `custom-title` carry the title.
+  - An assistant row holds **one content block** (159,859 of 159,862); the rows of one API message share `message.id` and are ordered by `apiBlockIndex`. Every row has a `uuid`; no uuid repeats within a file.
+  - A prompt row (a `user` row that is not a tool result) carries `turnPosition {promptIndex, turnIndex}` from 2.1.284, `turnOrigin` (`human` | `peer` | `task_notification` | `sdk` | `scheduled` | `system` | `auto_continuation`) from 2.1.277, and `origin.kind` (`human` | `peer` | `task-notification` | `coordinator` | `plugin` | `auto-continuation`) and `promptSource` (`typed` | `queued` | `system` | `sdk` | `suggestion_accepted`) on every version seen. `turnIndex` counts every turn, `promptIndex` only human prompts.
+  - **Turn end**: a turn that reaches Stop writes `system/stop_hook_summary` then `system/turn_duration {durationMs}` — also a turn ended by a permission refusal. Esc while the model writes produces `[Request interrupted by user]` (a `user` text row with `interruptedMessageId`; the aborted assistant row may carry `isAbortedMidStream`) and **no** `turn_duration`. Esc at a permission dialog *and* Esc during a running tool give a tool result with `toolDenialKind: "user-rejected"`, `is_error: true`, then `[Request interrupted by user for tool use]`, then `turn_duration`.
+  - `toolDenialKind` ∈ `user-rejected` | `permission-rule` | `interrupted` | `cancelled` (all seen from 2.1.263 on); without it, other `is_error` results are tool failures (`Exit code N…`, `<tool_use_error>…`, hook blocks).
+  - **Queued prompts**: a prompt sent during a turn is written as `queue-operation enqueue`; when the running turn absorbs it, it becomes an `attachment {type: queued_command, prompt, origin, commandMode}` inside that turn (`queue-operation remove`, reason `absorbed_mid_turn`); when it waits for the turn to end it becomes the next turn's prompt row with `promptSource: "queued"`. Peer messages and task notifications take the same two paths with their own `origin`.
+  - **API errors**: an assistant row with `model: "<synthetic>"`, `isApiErrorMessage: true`, `error` ∈ `rate_limit` | `server_error` | `authentication_failed` | `invalid_request`, followed by `turn_duration`.
+  - Slash commands: a command that reaches the model is a prompt row whose text is `<command-name>…<command-args>…` (its expansion is an `isMeta` row); a local command (`/model`, `/usage`) is a pair of `system/local_command` rows (`<command-name>` then `<local-command-stdout>`). Bash mode (`!cmd`) is a `<bash-input>` row then a `<bash-stdout>…<bash-stderr>` prompt row, and the model answers it.
+  - Compaction: `system/compact_boundary {compactMetadata}`; the summary is a `user` row with `isCompactSummary`.
+  - Subagents live in their own file `<sid>/subagents/agent-<agentId>.jsonl` (every row `isSidechain: true`); the Agent tool's `toolUseResult.agentId` names it (2,449 of 2,449 resolved). Main files hold no sidechain rows.
+  - Thinking text is empty in 94.6 % of thinking blocks; `thinkingDurationMs` sits on the thinking row when known.
+  - Tool results embed images (3,157 blocks, 700 MB of base64 in 14 days); 227 rows exceed 1 MB (max 2.2 MB). Edit / Write results carry `toolUseResult.structuredPatch` (hunks); Bash results carry `stdout`, `stderr`, `interrupted`, and `backgroundTaskId` when backgrounded.
+  - `--resume` keeps writing the same file (no file held rows of another `sessionId`); 41 of 538 main files hold more than one `session_context` attachment — the candidate restart marker, to be confirmed (U1-4 plan M-U1-4-a).
 - Events the mod's `register.js` already registers without a matcher (2026-10-08): `session.start`, `turn.start`, `turn.complete`, `classic.SessionStart`, `prompt.submit`, `session.compact`. With matchers: `tool.check{Write}`, `tool.check{Edit}`, `command.run{relay}`; `ask.js`: `tool.call{AskUserQuestion}`.
 - [d.ts L4412–4434] `turn.start {text, turnId}` (observe only; subagent runs raise none); `turn.complete {reason: answer|aborted|refusal|error, turnId, agentId?, durationMs, isAborted, usage?}`.
 - [d.ts L3916–3941] `tool.call {tool, tool_use_id, agentId?, …args}` (no timing — time it around `await next(e)`); `tool.check {tool, input, tool_use_id?, agentId?} → {decision: allow|ask|deny, rule?}`.
@@ -208,11 +222,94 @@ Wire statuses stay `running | waiting | idle | error | clear`.
 
 ## 8. Later phases — contracts to hold
 
-- **Conversation model (U1-4, U1-5)** — [D §14] types: `Conversation{key: host_id+provider+session_id, backend, provider, title, status, capabilities, usage, turns[]}`, `Turn{id, started_at, ended_at?, outcome}`, items `UserMessage{…, client_msg_id?}`, `AgentText{…, streaming?}`, `Thinking{duration_ms, text?}`, `Step{kind ∈ edit|execute|read|search|fetch|task|other, status ∈ running|done|failed|denied, …, children?}`, `System`. The transcript normalizer evaluates reusing Nexen `prelude` classification (needs an import-boundary allowance in `internal/module/nex/imports_test.go` or an exported deriver) against an own parser; golden fixtures come from the iOS samples and from recorded mod streams. Mod items merge with transcript rows by row `uuid` (`session.append` carries it).
+- **Conversation model (U1-4, U1-5)** — [D §14] types: `Conversation{key: host_id+provider+session_id, backend, provider, title, status, capabilities, usage, turns[]}`, `Turn{id, started_at, ended_at?, outcome}`, items `UserMessage{…, client_msg_id?}`, `AgentText{…, streaming?}`, `Thinking{duration_ms, text?}`, `Step{kind ∈ edit|execute|read|search|fetch|task|other, status ∈ running|done|failed|denied, …, children?}`, `System`. The transcript normalizer evaluates reusing Nexen `prelude` classification (needs an import-boundary allowance in `internal/module/nex/imports_test.go` or an exported deriver) against an own parser; golden fixtures come from the iOS samples and from recorded mod streams. Mod items merge with transcript rows by row `uuid` (`session.append` carries it). **U1-4's detailed contract is §8.1.**
 - **API (U1-6)** — `GET /api/conversations/{key}` snapshot capped to the last N turns with `before` for older turns and `after` for increments; per-step output capped with `truncated`; images replaced by placeholders; a dedicated WS per conversation (not the host-wide broadcast) with `after` catch-up that also replays `approval.request` / `approval.closed`.
 - **Usage (U1-7)** — per session from `usage` events, statusline fallback (also parse `rate_limits` and `cost`); account quota at host level (newest reading across sessions); a list summary per session code: `status, epoch, seq, context_percent, background, unread_basis`.
 - **Capabilities (U1-8)** — [D §13] graded, fail-closed, named reasons; permanent `provider_unsupported` hides, temporary reasons disable with text; unknown = loading. Pane → current conversation key in the sessions list and a `conversation.switched` event, aligned with the conversation-entity identity (`docs/specs/2026-10-06-conversation-entity-spec.md` §4.1, D9).
 - **Writes (U1-9)** — send `{text, client_msg_id}` → `{state: sent|queued|rejected, reason?}`; interrupt; steer. With the mod: a daemon → mod command channel over the same socket (long poll from a mod timer) → `$.prompt.submit`, `$.turn.abort`, `$.session.append`. Without the mod: the daemon types (atomic text + Enter, refuse in copy mode, at most one Esc per turn — two Esc on an idle prompt opens Rewind). Answers use the existing P8a decide; with no mod every ask is terminal-only [D §9].
+
+### 8.1 U1-4 — conversation model and transcript normalizer (detailed contract)
+
+Scope: the model's Go types and their JSON form; a normalizer from a Claude Code transcript (the no-mod source, and the history every source starts from) to turns and items; golden fixtures shared with both Apps. Not in U1-4: the API (U1-6), the mod live source (U1-5), usage beyond model / effort (U1-7), capabilities beyond the transcript's own part and the pane → conversation key (U1-8), writes (U1-9). Facts: M-U1-7.
+
+**Packages.** `internal/convmodel` (types, JSON, `Validate`) and `internal/convmodel/ccnorm` (the Claude Code transcript normalizer). Both import only the standard library (and `ccnorm` imports `convmodel`); no file I/O, no clock — callers pass bytes and the liveness flag. An import-boundary test keeps it so (U1-5 and U4 reuse them from other modules). The name avoids `internal/conversations` (the existing title / first-prompt index).
+
+**Wire form.** JSON, `snake_case`, times as **integer milliseconds since the epoch**, optional fields omitted when empty. Items are one array with a `type` discriminator.
+
+```
+Conversation { key{host_id, provider, session_id}, backend, provider, title, status,
+               capabilities, usage?, turns[] }
+Usage        { model?, effort?, context?{tokens?, window?, percent?},
+               rate_limits?[{kind, percent_used, resets_at?}], cost_usd?, at? }
+Turn         { id, index, started_at, ended_at?, outcome: done|interrupted|failed|running,
+               error?{kind, message}, items[] }
+item user        { id, at, text, truncated?, source, from?{kind, name?}, images?[{media_type, bytes}],
+                   client_msg_id? }
+item agent_text  { id, at, markdown, truncated?, streaming? }
+item thinking    { id, at, text?, duration_ms? }
+item step        { id, at, kind, tool, status: running|done|failed|denied, denial?, summary,
+                   started_at, duration_ms?, input, input_truncated?, input_partial?,
+                   output?{text, total_lines, total_bytes, truncated, keep: head|tail, images?[…]},
+                   diff?{path, added, removed, exact, hunks[{old_start, old_lines, new_start, new_lines, lines[]}], truncated?},
+                   command?{text, description?, exit_code?, background_task_id?},
+                   subagent?{agent_id, description?, type?, async?}, children? }
+item system      { id, at, kind: interrupted|compacted|handoff|model_changed|resumed|command_output, detail? }
+```
+
+- `key` is the three fields, not a joined string: the conversation-entity line owns the identity and U1-8 settles any string form (§8 Capabilities). U1-4 fills `key.session_id` and `provider: "claude"`; `host_id`, `backend` and `status` are filled by the API (U1-6 / U1-8) and are empty in the normalizer's output and in fixtures.
+- Fields marked for later phases exist in the types now and stay empty in U1-4: `client_msg_id` (U1-9, G2), `streaming` / `input_partial` (U1-5), `children` inlining (U1-6 decides; U1-4 can normalize a subagent file on request), `usage.context` / `rate_limits` / `cost_usd` (U1-7).
+- `title`: the last `custom-title`, else the last `ai-title`, else empty.
+- `usage.model` / `usage.effort`: the last main-thread assistant row's `message.model` (never `<synthetic>`) and `perTurnEffort` (else `effort`).
+
+**Ids** (stable across re-normalization and shared with U1-5): a turn is its opening row's `uuid`; `user`, `agent_text`, `thinking`, `system` items are their row's `uuid` (`<uuid>#<n>` for the n-th further item from one row, n ≥ 1, which only pre-2.1.29x multi-block rows produce); a `step` is its `tool_use_id`; a derived `system` item (handoff, model change) is `<turn id>#handoff` / `<turn id>#model`. `Turn.index` is the 0-based ordinal of the turn in the conversation; together with the turn id it is the stable order key `before` / `after` cursors build on (U1-6, G4). The normalizer also records each turn's and item's byte offset in the transcript (not on the wire) for U1-6.
+
+**Rows.** A line that is not a JSON object is skipped and counted. Sidechain rows in a main file are skipped. Metadata types are read only for the title. `isMeta` rows are skipped except a peer message (`origin.kind: "peer"`). `isCompactSummary` rows are skipped (the `compacted` item stands for them). Unknown row types, attachment types and origins are skipped and counted (`Stats`), never an error.
+
+**Turns.** A turn opens at:
+1. a prompt row: a `user` row with `turnPosition` (2.1.284+), or — older rows — a non-meta `user` text row that is not a tool result, not an interrupt marker, not `<local-command-caveat>`, `<local-command-stdout>` or `<bash-stdout>` continuation of a command already open;
+2. a local command (`system/local_command` with `<command-name>`), and a bash-mode `<bash-input>` row (its `<bash-stdout>` prompt row then belongs to that turn instead of opening another).
+
+Everything until the next opening belongs to the turn. An absorbed queued prompt (`queued_command` attachment) is an item **inside** the running turn and does not open one. A `compact_boundary` outside a turn joins the previous turn (or opens a turn with no `user` item when there is none).
+
+**Outcome.** `failed` when the turn's last assistant row is an API error (`isApiErrorMessage`); `error {kind: <error field>, message: <its text>}`, and that synthetic text is not an `agent_text`. Else `interrupted` when the turn holds an interrupt marker (`[Request interrupted by user` prefix, or `interruptedMessageId`), or when it is not the last turn and has no `turn_duration` (a killed process). Else `done` when it has a `turn_duration`, or it is not the last turn, or the caller says the session is not live. Else `running`. `ended_at` is the `turn_duration` row's time, else the interrupt marker's, else the last row's of a closed turn.
+
+**User message `source`** (first match wins):
+
+| Row | source | from |
+|---|---|---|
+| `<command-name>` prompt row or local command | `slash` (text `/name args`) | — |
+| `<bash-input>` | `bash` (text = the command) | — |
+| `origin.kind: "peer"` (prompt row, `isMeta` row or `queued_command`) | `peer` (text = the message body, the `<cross-session-message>` wrapper removed) | `{kind: "peer", name: from-name}` |
+| `origin.kind: "task-notification"` (or `queued_command` with `commandMode: "task-notification"`) | `task` (text = the `<summary>`, else the text without tags) | — |
+| `turnOrigin: "scheduled"` | `scheduled` | — |
+| `promptSource: "queued"` or an absorbed `queued_command` from a human (origin `human` or none, `commandMode: "prompt"`) | `queued` | — |
+| `origin.kind` `human` or none, `promptSource` `typed` / `suggestion_accepted` / `sdk` / none | `user` | — |
+| any other origin (`coordinator`, `plugin`, `auto-continuation`) | skipped and counted | — |
+
+User text keeps `[Image #n]` markers; image blocks become `images[{media_type, bytes}]` (the decoded size; the base64 is never kept). A bash-mode turn's output and a local command's `<local-command-stdout>` become one `system {kind: command_output, detail}`.
+
+**Agent text and thinking.** Each non-empty `text` block is one `agent_text` (`markdown` verbatim). Each `thinking` block is one `thinking` item with `text` when non-empty and `duration_ms` from `thinkingDurationMs`; a block with neither is dropped. `<synthetic>` rows are never agent text.
+
+**System items.** `interrupted` at the interrupt marker (the marker text itself is not a user item); `compacted` at `compact_boundary` (`detail.trigger`); `handoff` at the first turn after a change of the rows' `entrypoint` between `cli` and `sdk-cli` (`detail.to: "execution" | "terminal"`); `model_changed` at the first turn whose main-thread model differs from the previous turn's (`detail.model`); `resumed` only when M-U1-4-a confirms a restart marker (else U1-5 brings it from the mod's `session.switch`); `command_output` as above.
+
+**Steps.** One `step` per `tool_use` block, `id` = `tool_use_id`, paired with its `tool_result` by id wherever the result appears (a result with no known step is skipped and counted).
+- `kind` by tool name: `Edit` `MultiEdit` `Write` `NotebookEdit` `apply_patch` → `edit`; `Bash` `exec_command` `Monitor` → `execute`; `Read` → `read`; `Grep` `Glob` `WebSearch` → `search`; `WebFetch` → `fetch`; `Agent` `Task` `spawn_agent` → `task`; anything else (incl. `ToolSearch`, `AskUserQuestion`, `ExitPlanMode`, `Skill`, `mcp__*`) → `other`.
+- `summary`: `Bash` → `command`; `Read` `Edit` `MultiEdit` `Write` `NotebookEdit` → the basename of `file_path` (`notebook_path`); `Grep` `Glob` → `pattern`; `WebFetch` → `url`; `WebSearch` → `query`; `Agent` `Task` `Monitor` → `description`; `Skill` → `skill`; `AskUserQuestion` → the first question's `question`; `mcp__<server>__<tool>` → `<server> · <tool>`; else the first string input value in key order; always the first line only.
+- `status`: no result → `running` while the turn is `running`, else `denied` with `denial: "interrupted"`; `toolDenialKind` present → `denied`, `denial` = that value; `is_error` without it → `denied` (`denial: "user-rejected"`) when the text contains `doesn't want to proceed`, `[Request interrupted by user` or `was rejected` (older versions), else `failed`; otherwise `done`.
+- `started_at` = the tool_use row's time; `duration_ms` = result row time − that (U1-5 replaces it with the mod's measured time).
+- `input`: the tool input object with every string value capped at 4 KiB (head) and the whole at 16 KiB; `input_truncated` when either cut.
+- `output` (when there is a result): the text of the result content (string, or the `text` blocks joined by `\n`; a `<persisted-output>` wrapper is unwrapped as Nexen prelude does), `total_lines` / `total_bytes` of the whole text; text kept up to **16 KiB**, cut on a line boundary — the **tail** for `execute`, the **head** otherwise (`keep`), `truncated` when cut. Image blocks become `output.images[{media_type, bytes}]` and a line `[image]` in the text.
+- `diff` (kind `edit` with a result carrying `structuredPatch`): `path` = `file_path`, hunks as given, `added` / `removed` counted from the `+` / `-` lines, `exact: true`; without a patch (denied, failed, older rows) the diff is built from `old_string` / `new_string` / `content` (`MultiEdit` edits concatenated) with `exact: false`. Hunk lines capped at 400 in total (`truncated`).
+- `command` (kind `execute`): `text` = `command`, `description`, `exit_code` from a result text starting `Exit code N`, `background_task_id` from `toolUseResult.backgroundTaskId`.
+- `subagent` (kind `task`): `agent_id` from `toolUseResult.agentId`, `description`, `type` = `subagent_type`, `async` = `toolUseResult.isAsync`. The normalizer can turn that agent's file into the items of one pseudo-turn (`children`), with the same rules.
+
+**Text caps.** `user.text`, `agent_text.markdown` and `thinking.text` are kept up to 64 KiB (head) with `truncated`.
+
+**Incremental.** The normalizer is fed complete lines with their byte offsets and can be asked for the model at any point; feeding a file in any split of whole lines gives the same result as feeding it at once. Each feed reports which turns and items it created or changed (for U1-6's increments).
+
+**Capabilities from the transcript** (U1-4's part; U1-8 completes the object): `source: "transcript"`, `text_streaming: "message"`, `thinking: "duration"`, `subagent: "partial"`; every other capability `none` with reason `not_wired` (fail-closed).
+
+**Golden fixtures (v1).** Directory `testdata/conversation/v1/` at the repo root (Go ignores `testdata`): `MANIFEST.json` `{version, cases[{name, source: "cc-transcript", cc_version, description, input, expected, sha256{input, expected}}]}`; per case `cc-transcript/<name>/input.jsonl` (scrubbed) + `expected.json` (`{"conversation": <wire form above>, "live": bool}`, pretty-printed, stable key order) + `README.md` (how it was recorded, what it covers). The daemon test normalizes `input.jsonl` and compares with `expected.json` (`-update` regenerates); the Apps decode `expected.json` into their model and pin the copy by `MANIFEST.json` sha256 at a named commit. A guard test fails when a fixture contains a home path, a tailnet address, an e-mail address or a secret-shaped string. `mod-events/<name>/` is reserved for U1-5.
 
 ## 9. Current-state map (for U1-2 / U1-3 planning)
 
