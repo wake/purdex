@@ -1445,7 +1445,7 @@ One round, plan + both specs (job output `scratchpad/u23u24-plan-review.txt` of 
 
 | PR | Content | Needs | ≈ lines / files | Deploy |
 |---|---|---|---|---|
-| **PL-1a′** | PL-1a's wire contract **except `AutoApprovable(KindAdopt)`** (moved to PL-1c) | P9 complete | 420 / 5 | none (types only; rides the next daemon deploy, inert) |
+| **PL-1a′** | PL-1a's wire contract **except `AutoApprovable(KindAdopt)`** (moved to PL-1c), plus `memberView` setting `Origin` | P9 complete | 440 / 6 | none (types only; rides the next daemon deploy, inert) |
 | **PL-1f′** | Roster over today's team.db: `GET /api/team/roster`, `team.roster` snapshot / changed; spawned members only, `origin` always `"spawned"` | PL-1a′ | 560 / 10 | **daemon** (coordinator), alone |
 | **PL-2b** | unchanged | PL-1f′ (wire only) | 700 / 8 | SPA |
 | **PL-2c** | unchanged | PL-2b | 650 / 9 | SPA |
@@ -1458,12 +1458,13 @@ The adopt / release path then runs in its own order, after U23's SPA (PU-2a…2d
 
 1. **Needs: P9 complete only.** Decision 20 gated PL-1a on PU-2c to keep spec §4's "after P9 and U23" for the adopt *feature*; PL-1a′ adds types and constants and no behaviour, so the gate moves to PL-1b (the first PR that writes adopt state) — the adopt feature still starts after U23.
 2. **`AutoApprovable(KindAdopt)` moves to PL-1c**, with `TestAutoApprovable_Adopt`, its mutation gate, and the flip of `"adopt": false` in `internal/team/wire_unattended_test.go:112-116` (which pins today's set and says "PL-1a adds adopt"). Reason: PL-1a′ is deployed with PL-1f′'s daemon, months of other deploys may follow before batch A, and the unattended sweep, the tick's reconciliation and boot all filter on `AutoApprovable` (`internal/module/team/unattended.go:263, 291`). No `adopt` row can exist before PL-1c (`handler.go:119-128` refuses every kind but `lead`), so the change is harmless either way, but keeping it out makes PL-1a′ a pure wire PR whose deploy changes nothing, and puts the switch-covers-adopt rule in the PR whose tests exercise it.
-3. `wire_unattended.go` is therefore **not** touched: 4 files + `wire_adopt_test.go` = 5 files, ≈ 420 lines.
+3. `wire_unattended.go` is therefore **not** touched. Files: `wire_adopt.go`, `wire_adopt_test.go`, `wire.go`, `wire_team.go` (PL-1a's four without `wire_unattended.go`), plus item 5's `team_handler.go` and `team_handler_test.go` = 6 files, ≈ 440 lines.
 4. Everything else — `KindAdopt`, the five codes, `AdoptPayload`, `MemberReleased`, the two origins, the notice constants and formats, `Approval.CloseReason`, `CreateApprovalRequest.Target`, `Member.Origin` / `EndedAt` / `AdoptRequest` — as PL-1a. `Member.Origin` is always present (rule 1): `GET /api/team` starts answering `"origin":"spawned"` for every member as soon as it deploys; `pdx team --json` passes it through, which is additive.
+5. **`memberView` sets `Origin`** (codex plan review 1): the only place a `team.Member` is built for the wire is `memberView` (`internal/module/team/team_handler.go:75-78`), which names every field; without a line there `GET /api/team` would answer `"origin":""`, breaking rule 1. PL-1a′ sets `Origin: team.MemberOriginSpawned` there (every row is spawned today, see PL-1f′ "Origin"), and `TestTeamGet_MemberOriginIsSpawned` asserts it on `GET /api/team`; mutation gate: drop the line → red. PL-1f″ switches it to the column, as it does for the roster.
 
 ### PL-1f′ — what changes against PL-1f
 
-**Content kept:** `internal/team/wire_roster.go` + test (the types of PL-1f, unchanged: `RosterSession`, `RosterMember`, `TeamRoster`, `Roster`, `RosterEventValue`, `RosterEventType`); `internal/module/team/roster.go` + test; `module.go` (route on the general chain, `OnSubscribe(m.sendRosterSnapshot)` next to `:361-362`, `rosterMu`, `lastRosterHash`); behaviour rules 1–4 of PL-1f.
+**Content kept:** `internal/team/wire_roster.go` + test (the types of PL-1f, unchanged: `RosterSession`, `RosterMember`, `TeamRoster`, `Roster`, `RosterEventValue`, `RosterEventType`); `internal/module/team/roster.go` + test; `module.go` (route on the general chain, `OnSubscribe(m.sendRosterSnapshot)` next to `:361-362`, `rosterMu`, `lastRosterHash`); behaviour rules 1–4 of PL-1f, with rule 3 amended: **`changed` is sent with `BroadcastStrict`** (`internal/core/events.go:394`), as `team.unattended` is (decision 29) — the roster is state, a dropped `changed` would leave a window grouping wrong until the next change, and a subscriber that cannot take it is closed so it reconnects for the snapshot (suggested by member β). Added test `TestRoster_ChangedIsStrict` (a full subscriber is closed, not skipped); mutation gate: plain `Broadcast` → red.
 
 **Call sites — today's writes only** (6 files instead of 7):
 
@@ -1497,17 +1498,37 @@ The adopt / release path then runs in its own order, after U23's SPA (PU-2a…2d
 
 ### PL-1f″ — the roster's adopt / release delta (new, last PR of batch A)
 
-**Needs** PL-1e (all adopt / release writes exist). **Content:** `roster.go` reads `team_members.origin` (PL-1b's column) instead of the constant; `release_handler.go` and `kill_adopted.go` call `rosterChanged()` after their winning write; an adopted member's `tmux_session` is its user's tmux session name (stored by PL-1b's insert). **Tests restored from PL-1f:** `TestRoster_LiveTeamsActiveMembersWithTmuxNames` gains the adopted member; `…AreOut` gains `released`; `TestRoster_ChangedOnEveryAdoptApprovePath` (the five paths, now for `adopt`); `TestRoster_ChangedAfterReleaseAndAdoptedKill`. **Mutation gates:** include `released` members → red; the origin constant left in place → the adopted member's `origin` red. **Size** ≈ 200 lines, 5 files. **Deploy** in batch A, so the roster is right the moment adopt exists. Between PL-1f′'s deploy and batch A no adopted or released row can exist, so nothing is wrong in the meantime; the 10-second liveness tick would also catch a missed call site.
+**Needs** PL-1e (all adopt / release writes exist). **Content:** `roster.go` reads `team_members.origin` (PL-1b's column) instead of the constant; `release_handler.go` and `kill_adopted.go` call `rosterChanged()` after their winning write; an adopted member's `tmux_session` is its user's tmux session name (stored by PL-1b's insert). **Tests restored from PL-1f:** `TestRoster_LiveTeamsActiveMembersWithTmuxNames` gains the adopted member; `…AreOut` gains `released`; `TestRoster_ChangedOnEveryAdoptApprovePath` (the five paths, now for `adopt`); `TestRoster_ChangedAfterReleaseAndAdoptedKill`. **Mutation gates:** include `released` members → red; the origin constant left in place → the adopted member's `origin` red; broadcast from `handleCreateAdopt` instead of `afterApproved` → `…OnEveryAdoptApprovePath` red (PL-1f's gate, restored; codex plan review 2). `memberView` reads the column too (PL-1a′ item 5), with `TestTeamGet_AdoptedMemberOriginIsAdopted`. **Size** ≈ 220 lines, 7 files. **Deploy** in batch A, so the roster is right the moment adopt exists. Between PL-1f′'s deploy and batch A no adopted or released row can exist, so nothing is wrong in the meantime; the 10-second liveness tick would also catch a missed call site.
 
 ### PL-2b, PL-2c, PL-3a, PL-3b — unchanged, with these notes
 
 1. **Merge before the daemon is harmless.** A daemon without PL-1f′ never sends `team.roster`; `useMultiHostEventWs` matches types one by one and falls through (`spa/src/hooks/useMultiHostEventWs.ts:178-230`), the roster store stays empty, every `teamRoleOfTab` is `null`, and the sidebar and tab bar render exactly as today. So the SPA PRs need PL-1f′ **merged** (the wire), not deployed.
-2. **Tests stay as written.** Their rosters are seeded in `useTeamRosterStore`; `origin` is not read by any of them. `a released member (absent from the roster) is not blocked` is a data case (absent from the roster) and stays valid before release exists.
-3. **Textual intersections:** PL-2b and β's PU-2a each add one type to `spa/src/lib/host-events.ts:4-18` and one branch to `useMultiHostEventWs.ts`; whichever merges second rebases. PL-3b's underline in `SortableTab.tsx` vs U1 lights v2 (member α): confirm with α before PL-3b starts (as "Intersections with other lines" already says).
-4. **Acceptance before batch A** (PL-3b's acceptance, narrowed): a lead with two spawned members, three tabs: one group, chip = the lead's title, members after the lead; drag a member within → kept; out → snaps back; collapse, activate a member from the sidebar → expands; `pdx kill` one member → its tab leaves the group within one tick; Settings › 介面 › 分頁 off → plain bar. The adopt / release steps are re-run after batch A.
+2. **The WS branch is bound to its connection.** β's PU-2a binds its `team.unattended` branch to the `hostEndpointKey` the socket was opened with, so a frame from an old socket is dropped after the host is removed or re-pointed. PL-2b's `team.roster` branch has the same exposure and uses the same binding: if PU-2a has merged, reuse it; if not, PL-2b adds the same check and whichever merges second unifies them. Test `a roster frame from a socket of a removed / re-pointed host is dropped`.
+3. **Tests stay as written.** Their rosters are seeded in `useTeamRosterStore`; `origin` is not read by any of them. `a released member (absent from the roster) is not blocked` is a data case (absent from the roster) and stays valid before release exists.
+4. **Textual intersections:** PL-2b and β's PU-2a each add one type to `spa/src/lib/host-events.ts:4-18` and one branch to `useMultiHostEventWs.ts`; whichever merges second rebases. PL-3b's underline in `SortableTab.tsx` vs U1 lights v2 (member α): confirm with α before PL-3b starts (as "Intersections with other lines" already says).
+5. **Acceptance before batch A** (PL-3b's acceptance, narrowed): a lead with two spawned members, three tabs: one group, chip = the lead's title, members after the lead; drag a member within → kept; out → snaps back; collapse, activate a member from the sidebar → expands; `pdx kill` one member → its tab leaves the group within one tick; Settings › 介面 › 分頁 off → plain bar. The adopt / release steps are re-run after batch A.
 
 ### User-visible behaviour, display-first
 
 Items 31–45 of "User-visible behaviour" ship with PL-2c / PL-3b as written, with two differences until batch A: every member is one the lead spawned (`pdx spawn`), and item 44's "被釋出" cannot happen yet — a member leaves its group when it is killed or gone, or its team ends.
 
-**A gap to rule on (not decided here):** a spawned member runs in a tmux session the daemon creates (`tm-…`, `spawn_tmux.go:23`); nothing in the SPA opens a tab for it, and both surfaces group **open tabs** only. Until the person opens the member's session from the session list, its lead's tab shows no members. See the coordinator's ruling, if any, appended below.
+**A gap to rule on (not decided here):** a spawned member runs in a tmux session the daemon creates (`tm-…`, `spawn_tmux.go:23`); nothing in the SPA opens a tab for it, and both surfaces group **open tabs** only. Until the person opens the member's session from the session list, its lead's tab shows no members (codex plan review 3: the reorder's data path works, but the display may stay invisible). Not ruled here: it goes into the user confirmation pack below.
+
+### Gate: the interface PRs wait for the user (coordinator, 2026-10-08)
+
+The user asked to confirm the team interface in detail first. **PL-2c, PL-3a and PL-3b are not implemented until the user has confirmed them.** The data path proceeds: PL-1a′ → PL-1f′ → PL-2b. Before PL-2c the implementer hands the coordinator a confirmation pack — every user-visible rule of items 31–45 in plain words with a concrete scenario (e.g. "a lead with three members, one of them closed: what the sidebar shows, what the tab bar shows"), the open choices with a recommended value and its reason (the open-tab gap above among them), and a clickable mock under `docs/pages/` — and waits. Whatever the user rules is folded into this plan before PL-2c starts.
+
+### Codex review of this reorder
+
+One round (`task-muznye8r-9trvm2`, plan + spec): 0 critical / 2 important / 4 minor.
+
+| # | Severity · confidence | Finding | Disposition |
+|---|---|---|---|
+| 1 | important · 0.99 | `memberView` (`team_handler.go:75`) builds `team.Member` without `Origin`; `GET /api/team` would answer `origin:""`. | Adopted → PL-1a′ item 5 (6 files, test + gate); PL-1f″ reads the column there too. |
+| 2 | minor · 0.99 | PL-1f″ lost PL-1f's "broadcast from `handleCreateAdopt`" gate. | Adopted → restored in PL-1f″. |
+| 3 | important · 0.97 | Spawned members have no tab, so the display may be invisible until the person opens them. | Recorded; goes to the user confirmation pack (gate above), not ruled here. |
+| 4 | minor · 0.99 | PL-1a′'s file count double-counted the test. | Adopted → recounted (with item 5: 6 files). |
+| 5 | minor · 0.98 | Pinned tabs ungrouped vs D-U24-6. | Already deviation 10 / decision 10; no change. |
+| 6 | minor · 0.97 | Call sites, the `AutoApprovable` move, sizes: no error found. | No change. |
+
+Also folded in from member β (U23): `team.roster` `changed` via `BroadcastStrict` (PL-1f′) and the WS branch bound to its connection (PL-2b note 2).
