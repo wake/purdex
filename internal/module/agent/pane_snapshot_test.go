@@ -305,3 +305,32 @@ func TestEmitSlotHold_ThirtyPanesStaysUnder50ms(t *testing.T) {
 		t.Fatalf("per-pane hold = %s, want over a second for 30 panes", mx)
 	}
 }
+
+// stuckBatchTmux's batch call blocks until its context ends, like a hung tmux.
+type stuckBatchTmux struct{ *batchCountingTmux }
+
+func (s stuckBatchTmux) ListPanePlacements(ctx context.Context) (map[string]tmux.PanePlacement, error) {
+	s.note(&s.batch)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A batch call that times out must not send the read on to per-pane calls: they
+// have no deadline, so a stuck tmux would hold the emit slot indefinitely.
+func TestProjectionRead_BatchTimeoutDoesNotFallBackPerPane(t *testing.T) {
+	f := newProjFixture(t, 30, false)
+	orig := paneSnapshotTimeout
+	paneSnapshotTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { paneSnapshotTimeout = orig })
+	f.m.tmux = stuckBatchTmux{f.tx}
+	start := time.Now()
+	if _, err := f.m.liveSessionProjections(); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Fatalf("read took %v after a batch timeout, want about the timeout", d)
+	}
+	if b, pid, sess := f.tx.counts(); b != 1 || pid != 0 || sess != 0 {
+		t.Fatalf("calls batch=%d pid=%d session=%d, want 1/0/0", b, pid, sess)
+	}
+}

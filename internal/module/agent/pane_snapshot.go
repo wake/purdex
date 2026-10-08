@@ -18,9 +18,12 @@ import (
 // paneSnapshot is ONE `list-panes -a` taken at the start of a read that
 // answers both for every pane.
 
-// paneSnapshotTimeout bounds the one batch call. Past it the read falls back
-// to the per-pane lookups, which are no more patient than they ever were.
-const paneSnapshotTimeout = 5 * time.Second
+// paneSnapshotTimeout bounds the one batch call. A call that merely fails falls
+// back to the per-pane lookups; one that runs out of time does not (tmux is
+// stuck, per-pane calls have no deadline and would hold the emit slot for as
+// long as tmux stays stuck): the read proceeds as if tmux knew no pane. A var
+// so tests can shorten it.
+var paneSnapshotTimeout = 2 * time.Second
 
 // batchFailLogEvery is how often a failing batch call is logged: every read
 // would otherwise log once, and reads run hundreds of times a minute.
@@ -53,6 +56,9 @@ func (m *Module) takePaneSnapshot() *paneSnapshot {
 	panes, err := m.tmux.ListPanePlacements(ctx)
 	if err != nil {
 		logBatchFailure(err)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return &paneSnapshot{m: m, panes: map[string]tmux.PanePlacement{}}
+		}
 		return nil
 	}
 	return &paneSnapshot{m: m, panes: panes}
