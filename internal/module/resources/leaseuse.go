@@ -7,7 +7,6 @@ import (
 	"math"
 	"time"
 
-	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/resources"
 )
 
@@ -111,7 +110,7 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 // holderStartMS reads a row's holder_start (the registry's text, second
 // precision) as unix milliseconds; 0 when it is empty or does not parse.
 func holderStartMS(s string) int64 {
-	t, err := ipeers.ParseProcStart(s)
+	t, err := parseHolderStart(s)
 	if err != nil || t.IsZero() {
 		return 0
 	}

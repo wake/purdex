@@ -167,7 +167,7 @@ func validHolderStart(s string) (code, detail string) {
 	if s == "" {
 		return resources.ErrBadRequest, "holder_start is required"
 	}
-	if t, err := ipeers.ParseProcStart(s); err != nil || t.IsZero() {
+	if t, err := parseHolderStart(s); err != nil || t.IsZero() {
 		return resources.ErrBadRequest, "holder_start must be a process start time as ps prints it"
 	}
 	return "", ""

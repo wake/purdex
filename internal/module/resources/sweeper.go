@@ -198,7 +198,7 @@ func (m *Module) holderView(ctx context.Context) procView {
 // second precision; anything that cannot be told (no pid, a start text that is
 // empty or does not parse, a start time the table cannot give) is alive.
 func holderGone(view procView, r leaseRow) bool {
-	want, err := ipeers.ParseProcStart(r.HolderStart)
+	want, err := parseHolderStart(r.HolderStart)
 	if r.HolderPID <= 0 || err != nil {
 		return false
 	}
@@ -226,4 +226,14 @@ func (m *Module) passIfWaiting(ctx context.Context) {
 		return
 	}
 	m.admissionPass(ctx, "")
+}
+
+// parseHolderStart reads a start text as the process table does: the text ps
+// prints is the machine's local clock, and the table (agent.parseLstart)
+// parses it in the local zone. Reading it as UTC, as the registry's
+// ParseProcStart does, puts it a whole zone offset away from the table's
+// answer, and every holder looks like a different process (a bug alpha.613's
+// acceptance found on a UTC+8 host).
+func parseHolderStart(s string) (time.Time, error) {
+	return time.ParseInLocation(ipeers.ProcStartLayout, s, time.Local)
 }

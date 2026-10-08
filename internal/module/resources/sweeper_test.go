@@ -53,7 +53,8 @@ type sweepFix struct {
 // procStart is when the fixture's holders started: an hour before the clock.
 var procStart = time.Date(2026, 10, 9, 11, 0, 0, 0, time.UTC)
 
-func startText(t time.Time) string { return t.UTC().Format(ipeers.ProcStartLayout) }
+// startText is a start time as ps prints it: the machine's local clock.
+func startText(t time.Time) string { return t.In(time.Local).Format(ipeers.ProcStartLayout) }
 
 func newSweepFix(t *testing.T, mode string) *sweepFix {
 	t.Helper()
