@@ -32,6 +32,16 @@ export function openSessionTab(hostId: string, session: Session): string | null 
   return tabId
 }
 
+/**
+ * Show `tabId` and record it as its workspace's active tab — the workspace on screen is not switched (the keyboard
+ * shortcuts only move among the tabs the screen already shows; `activateTabPane` is the one that crosses workspaces).
+ */
+export function activateTab(tabId: string): void {
+  useTabStore.getState().setActiveTab(tabId)
+  const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
+  if (ws && ws.activeTabId !== tabId) useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
+}
+
 /** Show `tabId` with `paneId` as the pane that takes the keyboard, and the tab's workspace. */
 export function activateTabPane(tabId: string, paneId: string): void {
   // The pane becomes its tab's most recently focused pane (usePaneFocusStore, rule F) and is asked to take focus,

@@ -4,6 +4,7 @@ import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { createTab } from '../types/tab'
 import { getVisibleTabIds as getVisibleTabIdsShared } from '../features/workspace'
+import { activateTab } from '../lib/open-session-tab'
 import { closeTab } from '../lib/tab-lifecycle'
 import { getTabShortcutHandler } from '../lib/tab-shortcut-registry'
 import { collectLeaves, getPrimaryPane } from '../lib/pane-tree'
@@ -17,13 +18,6 @@ export function useShortcuts(): void {
 
     const cleanup = window.electronAPI.onShortcut(({ action }) => {
       const tabState = useTabStore.getState()
-
-      // Set active tab and sync workspace activeTabId in one step
-      const activateTab = (tabId: string) => {
-        tabState.setActiveTab(tabId)
-        const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
-        if (ws && ws.activeTabId !== tabId) useWorkspaceStore.getState().setWorkspaceActiveTab(ws.id, tabId)
-      }
 
       const visibleIds = getVisibleTabIdsShared({
         tabs: tabState.tabs,

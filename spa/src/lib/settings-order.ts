@@ -36,10 +36,12 @@
  *   |-----------------------------|---------|------------------------------------------|
  *   | Module-owned                | 0 – 199 | Editor home path (inline 100)            |
  *
- * `register-modules/index.tsx`, `editor-module.tsx`, and any future
- * `registerSettingsSection` / `registerModule({ settings: [...] })` call
- * MUST import from this file instead of hard-coding numbers. Reviewers
- * watch for hard-coded `order:` literals during PR review.
+ * `register-modules/index.tsx` and any `registerSettingsSection` call MUST
+ * import the core / structural bands from this file instead of hard-coding
+ * numbers. The one exception is a module's own `settings: [...]` entries in
+ * the module-owned bands above (e.g. `editor-module.tsx` uses inline 0 / 100):
+ * those literals are local to the module and only need to stay inside the
+ * band's range. Reviewers watch for literals outside it.
  *
  * Spec §4.1.3 (PR-2 final values). PR-1's transitional `*_PR1` constants
  * were removed by PR-2 commit 5 once Editor was consolidated and Sync

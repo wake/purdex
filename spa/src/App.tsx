@@ -21,7 +21,7 @@ import { useWorkerAgentProjection } from './hooks/useWorkerAgentProjection'
 import { useElectronIpc } from './hooks/useElectronIpc'
 import { useDeeplinkResolver } from './hooks/useDeeplinkResolver'
 import { useNewTabBootstrap } from './hooks/useNewTabBootstrap'
-import { useTabWorkspaceActions } from './hooks/useTabWorkspaceActions'
+import { useTabWorkspaceActions } from './features/workspace/hooks'
 import { useWorkspaceWindowActions } from './hooks/useWorkspaceWindowActions'
 import {
   getVisibleTabIds,

@@ -1,4 +1,5 @@
-import { Plus, CaretDown, CaretRight, Circle, DownloadSimple, LockSimple, PuzzlePiece, ShareNetwork, Spinner, Warning } from '@phosphor-icons/react'
+import { Plus, CaretDown, CaretRight, Circle, DownloadSimple, LockSimple, ShareNetwork, Spinner, Warning } from '@phosphor-icons/react'
+import { ModuleOwnedPuzzleIcon } from '../settings/ModuleOwnedPuzzleIcon'
 import { useState } from 'react'
 import { listContributions } from '../../lib/settings-contribution-registry'
 import { isModuleOwnedContribution } from '../../lib/settings-contribution-types'
@@ -143,12 +144,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                       >
                         <span className="flex-1 truncate">{t(page.labelKey)}</span>
                         {moduleOwned && (
-                          <PuzzlePiece
-                            size={10}
-                            weight="bold"
-                            className="flex-shrink-0 text-text-secondary"
-                            aria-hidden
-                          />
+                          <ModuleOwnedPuzzleIcon size={10} tone="secondary" />
                         )}
                       </button>
                     )

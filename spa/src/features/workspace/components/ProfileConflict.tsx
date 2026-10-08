@@ -21,6 +21,7 @@ import { FloatingPanel } from '../../../components/FloatingPanel'
 import { useMasterScreen, useMasterWorkspaces } from '../../../hooks/useMasterOnScreen'
 import { useProfileSync } from '../../../hooks/useProfileSync'
 import { locksOf, type LockView } from '../../../lib/profile/conflict-view'
+import { lockWhyOf, sectionLabelOf } from '../../../lib/profile/conflict-text'
 import type { SectionView } from '../../../lib/profile/sync-view'
 import { useConflictPanelStore } from '../../../stores/useConflictPanelStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -54,19 +55,9 @@ export function ProfileConflictButton() {
 
   const label = t('profile.conflict.button', { count: locks.length })
 
-  const sectionLabel = (view: SectionView): string => {
-    if (view.kind === 'other') return view.key
-    if (view.kind !== 'tabs') return t(`settings.profile.current.label.${view.kind}`)
-    if (view.workspace === undefined) return t('settings.profile.current.label.tabs_unknown')
-    return view.workspace === null ? t('settings.profile.current.label.tabs_unseen') : t('settings.profile.current.label.tabs', { workspace: view.workspace })
-  }
+  const sectionLabel = (view: SectionView): string => sectionLabelOf(t, view)
 
-  const why = (lock: LockView): { reason?: string; text: string } => {
-    if (lock.status === 'locked:conflict') return { text: t('settings.profile.resolve.why.conflict') }
-    if (lock.status === 'locked:reset') return { text: t('settings.profile.resolve.why.reset') }
-    const reason = sync.status?.detail[lock.key]?.invalidReason ?? 'unknown'
-    return { reason, text: t(`settings.profile.resolve.why.invalid.${reason.replace(/-/g, '_')}`) }
-  }
+  const why = (lock: LockView) => lockWhyOf(t, lock.status, sync.status?.detail[lock.key]?.invalidReason)
 
   const actionOf = (lock: LockView): Action => {
     if (lock.workspaceId === null) return 'settings'

@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react'
-import { PuzzlePiece, Trash } from '@phosphor-icons/react'
+import { ModuleOwnedPuzzleIcon } from '../../../components/settings/ModuleOwnedPuzzleIcon'
+import { Trash } from '@phosphor-icons/react'
 import { useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
@@ -159,12 +160,7 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
               >
                 <span>{t(c.labelKey) ?? c.labelKey}</span>
                 {moduleOwned && (
-                  <PuzzlePiece
-                    size={12}
-                    weight="bold"
-                    className="flex-shrink-0 text-text-muted"
-                    aria-hidden
-                  />
+                  <ModuleOwnedPuzzleIcon />
                 )}
               </h3>
               {!isDisabled && <Body ctx={ctx} />}

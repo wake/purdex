@@ -17,6 +17,7 @@
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { useProfileStore } from '../../../stores/useProfileStore'
 import type { InvalidReason } from '../../../lib/profile/apply-to-stores'
+import { lockWhyOf } from '../../../lib/profile/conflict-text'
 import type { SectionLock } from '../../../lib/profile/executor'
 import type { SectionView } from '../../../lib/profile/sync-view'
 import { ConfirmDialog } from '../../ConfirmDialog'
@@ -45,10 +46,8 @@ export function ResolveRow({ sectionKey, kind, label, lock, invalidReason, fromL
   const { open, local, host, changed, outcome, ask, cancel, confirm } = useResolveContext(sectionKey, lock)
 
   const why = (): { reason?: string; text: string } => {
-    if (lock.status === 'locked:conflict') return { text: t('settings.profile.resolve.why.conflict') }
-    if (lock.status === 'locked:reset') return { text: t('settings.profile.resolve.why.reset') }
-    const reason = invalidReason ?? 'unknown'
-    return { reason, text: `${t(`settings.profile.resolve.why.invalid.${reason.replace(/-/g, '_')}`)} ${t('settings.profile.resolve.invalid_only')}` }
+    const w = lockWhyOf(t, lock.status, invalidReason)
+    return w.reason === undefined ? w : { ...w, text: `${w.text} ${t('settings.profile.resolve.invalid_only')}` }
   }
 
   const countText = (side: LocalSide | HostSide | null): { state: string; text: string } => {

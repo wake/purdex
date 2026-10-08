@@ -38,6 +38,7 @@ import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore } from '../../../features/workspace/store'
 import { useProfileSync } from '../../../hooks/useProfileSync'
+import { sectionLabelOf } from '../../../lib/profile/conflict-text'
 import { requestSyncNow } from '../../../lib/profile/start'
 import type { ProfileSyncSnapshot } from '../../../lib/profile/start'
 import { readMasterWorld, type UnsettledReason } from '../../../lib/profile/master-world'
@@ -188,13 +189,7 @@ function Attached({ sync, master, masterName }: { sync: ProfileSyncSnapshot; mas
   const waiting = waitReason === 'failing' && !live ? null : waitReason
   const lastSuccessAt = sync.status?.lastSuccessAt ?? null
 
-  const sectionLabel = (view: SectionView): string => {
-    if (view.kind === 'other') return view.key // a kind this build does not know: nothing better to call it
-    if (view.kind !== 'tabs') return t(`settings.profile.current.label.${view.kind}`)
-    if (view.workspace === undefined) return t('settings.profile.current.label.tabs_unknown')
-    // A workspace's name is the user's own text: into the sentence as it is.
-    return view.workspace === null ? t('settings.profile.current.label.tabs_unseen') : t('settings.profile.current.label.tabs', { workspace: view.workspace })
-  }
+  const sectionLabel = (view: SectionView): string => sectionLabelOf(t, view)
 
   const blockedText = (): string => {
     switch (blocked) {

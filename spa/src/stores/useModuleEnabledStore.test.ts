@@ -78,6 +78,17 @@ describe('useModuleEnabledStore', () => {
     expect(useModuleEnabledStore.getState().baseline).toEqual({ editor: true, files: true })
   })
 
+  it('captureBaseline adds modules that first appear after the first call (HMR) without touching known ones (#834)', () => {
+    registerModule({ id: 'files', name: 'Files', disableable: true })
+    const { captureBaseline, setEnabled, hasPendingChanges } = useModuleEnabledStore.getState()
+    captureBaseline({ editor: true })
+    captureBaseline({ editor: false, files: true })
+    expect(useModuleEnabledStore.getState().baseline).toEqual({ editor: true, files: true })
+    expect(hasPendingChanges()).toBe(false)
+    setEnabled('files', false)
+    expect(hasPendingChanges()).toBe(true)
+  })
+
   it('T1-8: captureBaseline repeat call is a no-op (first value retained)', () => {
     const { captureBaseline } = useModuleEnabledStore.getState()
     captureBaseline({ editor: true })
