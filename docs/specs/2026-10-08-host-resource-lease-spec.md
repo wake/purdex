@@ -1,6 +1,6 @@
 # Host resource lease (spec)
 
-Date: 2026-10-08. Coordinator: purdex-1f (`mlab/_vqnjx1`). Status: **user decisions final (§1, incl. R5–R8 of 2026-10-08 23:4x)**; plan pending.
+Date: 2026-10-08. Coordinator: purdex-1f (`mlab/_vqnjx1`). Status: **user decisions final (§1, incl. R5–R8 of 2026-10-08 23:4x, R9–R10 of 2026-10-09)**; plan pending.
 Line: lead/member (A). Order (user, 2026-10-08): U23 → **this** → task/report spec → U24 adopt/release.
 Research: `docs/research/2026-10-08-agent-teams-and-workflow.md` §5(a). Facts: §3 below (gathered 2026-10-08, file:line in each item).
 Plan: `docs/plans/2026-10-08-host-resource-lease-plan.md`.
@@ -19,6 +19,8 @@ Plan: `docs/plans/2026-10-08-host-resource-lease-plan.md`.
 | R6 | **排隊最多等 5 分鐘，到時放行**，並記一筆「超量」（`pdx lease ls` 看得到）。 |
 | R7 | **完整 vitest 沒帶 `--maxWorkers` 時，mod 自動補 `--maxWorkers=3`**（不擋，只改小，並告訴 agent 改了什麼）。 |
 | R8 | **背景執行（`run_in_background`）的重指令 v1 不攔**，只靠量測擋住後面的申請。 |
+| R9 | （2026-10-09，P0 驗收後，選 A）**容量 100 只在重指令之間分配，每個重指令照估值佔額度；主機實際用量只用來判斷「滿了沒」，滿了就排隊，最多等 5 分鐘。**（取代 R2「剩下的才可分配」裡「扣掉主機實際用量」的讀法：平常 session 的零碎用量不扣額度。） |
+| R10 | （2026-10-09）「要補個監控紀錄，我們需要事後確認規則是否合適」：每一次准入的判斷與當時的主機狀態都要留紀錄，並能事後彙整成報告。 |
 
 ## 2. Why
 
@@ -80,11 +82,14 @@ Plan: `docs/plans/2026-10-08-host-resource-lease-plan.md`.
 
 **D-1 · Units.** 100 = the host fully busy. A lease's **weight** is its estimated share of the host, as the larger of its CPU share and its memory share. The host's **measured use** is the larger of `load1 / ncpu` and memory in use (from `vm_stat`: `1 − (free + inactive + speculative) / total`), each as a percentage; memory pressure level 2 (warn) counts as at least 90, level 4 (critical) as 100. 〔δ〕 Sources (M-R1): load, ncpu, memsize and pressure from sysctl without a fork; free / inactive / speculative from one `vm_stat` fork per tick (no fork-free source exists without cgo). 〔δ, lead-approved 2026-10-09〕 The published **`full`** flag has a hysteresis: it turns on exactly as R5 says and turns off only once load1 < 0.9 × ncpu, memory in use < 0.9 × 90 % and pressure is normal (P0 acceptance: load1 wobbled between 9.5 and 10.5 for ten minutes). A session's (or lease's) measured use is the larger of `Σ pcpu / ncpu` and `Σ rss / memsize` over its process tree, from one `ps` fork per tick.
 
-**D-2 · Admission.** A request of weight `w` is granted when
-`Σ charge(active leases) + unleased + w ≤ 100`, where
-- `charge(lease)` = its weight until it has run `warmup` seconds (default 20 s), then the EWMA of its own measured use (its process tree), but never below `floor × weight` (default 0.5);
-- `unleased` = host measured use − Σ measured use of active leases, never negative. **Unknown or un-intercepted heavy work therefore still blocks new grants through measurement** (answers R3's "only known types").
-- A request heavier than the whole capacity is granted only when nothing else is active.
+**D-2 · Admission (R9).** A request of weight `w` is granted when **both**
+1. `Σ charge(active leases) + w ≤ 100`, and
+2. the host is **not full** (D-1's `full`, with its hysteresis: entered at `load1 ≥ ncpu`, memory ≥ 90 % or pressure ≥ warn; left only when `load1 < 0.9 × ncpu`, memory < 81 % and pressure is normal).
+
+- `charge(lease)` = its weight until it has run `warmup` seconds (default 20 s), then the EWMA of its own measured use (its process tree), but never below `floor × weight` (default 0.5).
+- **Unleased use is not an additive term.** It is still measured (`unleased` = host measured use − Σ measured use of active leases, never negative) and recorded with every decision (D-8), so the rule can be judged afterwards. Unknown or un-intercepted heavy work holds new grants back only through `full` (R3).
+- A request heavier than the whole capacity is granted only when no other lease is active (and the host is not full).
+- Why (P0, §3.2): with `unleased` additive, a busy host's baseline (`measured` 69–100 with nothing leased) left no room for a `test-full`; every heavy request would have waited its full deadline. Under R9, on the same night, about two thirds of the time a request is granted at once, and a `full` run lasted at most 60 s.
 
 **D-3 · Queue, never refuse.** Requests wait FIFO (a later light request may pass an earlier heavy one only if the heavy one still does not fit — no starvation guard beyond FIFO in v1). Each waiter has a deadline (**default 5 min**, R6; configurable up to the mod's 10 min maximum). **On the deadline the request is granted anyway** with `overrun: true` (logged, counted, visible). Admission is advice that becomes a wait, never a refusal (R3: no misjudged blocks).
 
@@ -92,7 +97,7 @@ Plan: `docs/plans/2026-10-08-host-resource-lease-plan.md`.
 
 **D-5 · Fail open everywhere.** daemon unreachable, a bad response, or a crashed wrapper → the command runs. The pool is advice; correctness never depends on it.
 
-**D-6 · Scope.** Per host, per daemon; not in Profile Sync; a cross-host member uses its own host's pool. Codex review sandboxes, Nexen executions and processes outside Purdex are never intercepted; they count only through measurement (D-2 `unleased`).
+**D-6 · Scope.** Per host, per daemon; not in Profile Sync; a cross-host member uses its own host's pool. Codex review sandboxes, Nexen executions and processes outside Purdex are never intercepted; they count only through measurement (D-2's `full`, and the `unleased` figure D-8 records).
 
 **D-7 · Kinds and default weights** (host setting `resources`, editable):
 
@@ -105,6 +110,21 @@ Plan: `docs/plans/2026-10-08-host-resource-lease-plan.md`.
 | (explicit) | `pdx lease run --weight N` | N |
 
 Affected-only runs (file names, `-run`, `-t`) are not intercepted.
+
+**D-8 · Monitoring record (R10).** Three parts, all in `resources.db`, all written outside `stateMu`'s slow paths (the decision row is the same single-row write the grant already does).
+
+1. **Every decision.** When a lease is granted (at once, after waiting, or as an overrun), its row also records the host state the decision saw: `dec_load1`, `dec_ncpu`, `dec_mem`, `dec_measured`, `dec_full`, `dec_sum_charge`, `dec_unleased`, `dec_weight` (= w), `dec_path` (`immediate`｜`waited`｜`overrun`), `waited_ms`, and **`would_wait_r2`** — whether the pre-R9 formula (`Σ charge + unleased + w > 100`) would have held it back at that moment. With the lease's own measured peak／mean／EWMA and `end_reason` (already on the row), one row answers "was this wait needed, and was the weight right".
+2. **Host timeline.** One row per minute in a new table `host_minutes`: `at`, `load1`, `ncpu`, `mem`, `measured`, `full`, `held` (count), `sum_charge`, `waiting` (count), `unleased`. Written by the sampler goroutine; kept 14 days (pruned with the existing hourly prune). About 20 000 rows at most.
+3. **Report.** `pdx lease report [--since 24h] [--json]` and `GET /api/resources/report?since=<duration>`:
+   - requests per kind; how many were granted at once / after waiting / as overruns; wait p50／p90／max;
+   - how many grants the pre-R9 formula would have held back (`would_wait_r2`);
+   - share of minutes the host was `full`; number of full runs and the longest;
+   - highest `load1` and memory while two or more heavy leases were held;
+   - per kind: measured peak and mean versus its weight (is 35 right for `test-full`?).
+
+   The report reads only stored rows; it never samples.
+
+**Review point.** After P2 (mod interception) has run in `advise` mode for one day and then in `lease` mode for about three days, the coordinator runs the report and brings the user the numbers in plain words with a recommendation (keep the rule, move a threshold, change a weight).
 
 ## 5. Surfaces
 
@@ -123,7 +143,7 @@ Affected-only runs (file names, `-run`, `-t`) are not intercepted.
 | Phase | Content | Deploy |
 |---|---|---|
 | **P0 measure** | Sampler (5 s, own ticker): host D-1 values via sysctl (no fork) and one process-table read with cpu/rss; per-session attribution; `GET /api/resources` (no leases yet); `pdx team` CPU/MEM; `pdx lease ls` (measured only) | daemon |
-| **P1 voluntary leases** | `resource_leases` table, admission D-2, queue D-3, liveness D-4, `pdx lease run／acquire／release／ls`, host setting `resources` (D-7 weights, deadline, warmup, floor, max_hold), WS event, skill text | daemon + CLI + setup |
+| **P1 voluntary leases** | `resource_leases` table, admission D-2, queue D-3, decision record (D-8.1), host timeline (D-8.2), `pdx lease report` (D-8.3), liveness D-4, `pdx lease run／acquire／release／ls`, host setting `resources` (D-7 weights, deadline, warmup, floor, max_hold), WS event, skill text | daemon + CLI + setup |
 | **P2 mod interception** | D-7 classifier, flag rewrite, acquire／release around `next(e)`, waited-context; guard tests | daemon + mod (`pdx setup`) |
 | **P3 learning** | Per-kind EWMA of observed charge feeds the default weight (bounded, shown in `pdx lease ls`); optional per-kind concurrency cap (e.g. one `test-full` per host) | daemon |
 | **App** | Indicator + holders／waiters list | SPA (interface lead) |

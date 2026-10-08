@@ -376,3 +376,16 @@ All 14 findings accepted (none rebutted); the tasks above carry the fixes.
 | 12 | imp | Guard allow-list hard-codes `registerAsk|registerEvents` | Task 2.2 lists the exact `embed_test.go` changes (regex `:55-65`, messages and fixtures `:105-110`) |
 | 13 | imp | No-fork test needs a seam; `StartTime` string vs `time.Time` | Task 0.5: `readRegistry` package var seam; new `ProcessSnapshot.Start(pid) (time.Time, error)` (no argv read); tests for unreadable start and non-ENOENT `Stat` |
 | 14 | minor | `pdx team` MEM unit vs D-1 | Task 0.8: both CPU and MEM are host % (D-1 units); RSS stays in `pdx lease ls` |
+
+## R9／R10 addendum (2026-10-09)
+
+User decision A (admission: capacity 100 is shared only among heavy commands; host measurement decides only "full") and the request for a monitoring record: spec R9, R10, D-2, D-6, D-8, §6. Constraints carried over: TDD, mutation gates, ≤ 800 lines or ≤ 20 files per PR, no fork／process table／tmux／network inside `stateMu`. **`resources.db` is live on mlab since the alpha.610 boot (02:38): every schema change from now on is a migration** (`ensureColumn`; new tables may use `CREATE TABLE IF NOT EXISTS`).
+
+| PR | Content | Notes |
+|---|---|---|
+| **P1-1b** | `Charge`, `UpdateEWMA` use (exists), `Admit` per D-2 (R9): inputs `Σcharge`, `w`, `full`, `othersActive`; output `grant bool` plus a `Decision` value carrying every D-8.1 field incl. `would_wait_r2` | pure functions only; table tests for: fits and not full → grant; fits but full → wait; over 100 → wait; heavier than capacity with nothing else active → grant unless full; `would_wait_r2` true while R9 grants (the P0 night's numbers as a fixture). Mutation: drop the `full` check; add `unleased` back into the sum. |
+| **P1-2c** | D-8.1 columns on `resource_leases` (`ensureColumn` each, `NOT NULL DEFAULT` values that read as "not recorded"); D-8.2 `host_minutes` table + sampler write once a minute + 14-day prune | migration test from the live schema (dump mlab's `resources.db` schema read-only with `sqlite3 -readonly`, use it as the fixture); prune test; the minute write is skipped (not retried) when the store is nil or fails, logged once per failure run |
+| **P1-2a-3 (D)** | Admitter + pass + `POST`／long-poll `GET`／`DELETE` + wake (as already split), now calling `Admit` (P1-1b) and writing the `Decision` into the row in the grant's own write; `captureBaseline` + `SetBaseline` after grant, before answering (issue #2038) | the decision write is the same single-row statement as the grant, inside `stateMu` |
+| **P1-3r** | `pdx lease report` + `GET /api/resources/report` (D-8.3) | read-only queries; a fixture DB with a known day of rows and the exact expected report; `--json` shape test |
+
+Order: docs PR (this addendum + the spec changes + `res-lease-docs-d2`) → P1-1b → P1-2c → D → P1-3r → (P1-3 `pdx lease run` etc. as planned). Deploy: P1 as before (mode `lease`); P2 starts in `advise` for one day.
