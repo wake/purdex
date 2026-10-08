@@ -62,6 +62,7 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 		n.skip("content")
 		return
 	}
+	blocks = n.capBlocks(blocks)
 	if l.compactSummary {
 		n.skip("compact_summary")
 		return
@@ -210,6 +211,7 @@ func (n *Normalizer) attachmentRow(l *rawLine, off int64) {
 		n.skip("content")
 		return
 	}
+	blocks = n.capBlocks(blocks)
 	mode := a.str("commandMode")
 	var kind string
 	if len(a.get("origin")) > 0 {

@@ -222,6 +222,18 @@ func contentBlocks(content json.RawMessage) ([]block, bool) {
 	return blocks, true
 }
 
+// capBlocks keeps the first maxBlocksPerRow blocks of a row and counts the
+// rest under one fixed Skipped reason. Every path that walks a row's blocks
+// (assistant, user, tool-result and queued-prompt rows) goes through it, so
+// nothing a row adds to the model grows with its block count.
+func (n *Normalizer) capBlocks(blocks []block) []block {
+	if len(blocks) > maxBlocksPerRow {
+		n.stats.Skipped["row:too_many_blocks"] += len(blocks) - maxBlocksPerRow
+		return blocks[:maxBlocksPerRow]
+	}
+	return blocks
+}
+
 // joinText is the text of any content: a string as is, an array's text
 // blocks joined by newlines (other blocks contribute nothing).
 func joinText(blocks []block) string {

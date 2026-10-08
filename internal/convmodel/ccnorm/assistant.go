@@ -17,6 +17,7 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 		n.skip("content")
 		return
 	}
+	blocks = n.capBlocks(blocks)
 	model := msg.str("model")
 	if l.apiError {
 		n.apiError(l, off, joinText(blocks))
@@ -42,10 +43,6 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 			return l.uuid
 		}
 		return fmt.Sprintf("%s#%d", l.uuid, len(items))
-	}
-	if len(blocks) > maxBlocksPerRow {
-		n.stats.Skipped["row:too_many_blocks"] += len(blocks) - maxBlocksPerRow
-		blocks = blocks[:maxBlocksPerRow]
 	}
 	for _, b := range blocks {
 		switch b.typ {

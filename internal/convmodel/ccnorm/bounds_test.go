@@ -125,6 +125,56 @@ func TestStats_SkippedKeyCardinalityBounded(t *testing.T) {
 	}
 }
 
+// manyImagesBlocks is a content array of one text block and n tiny image
+// blocks, as JSON.
+func manyImagesBlocks(n int) string {
+	var b strings.Builder
+	b.WriteString(`[{"type":"text","text":"look"}`)
+	for i := 0; i < n; i++ {
+		b.WriteString(`,{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}`)
+	}
+	b.WriteString(`]`)
+	return b.String()
+}
+
+func assertOneBoundedUser(t *testing.T, n *Normalizer, total int) {
+	t.Helper()
+	items := itemsOf(t, validated(t, n), 0)
+	if len(items) != 1 || items[0].User == nil {
+		t.Fatalf("want one user item, got %d", len(items))
+	}
+	if got := len(items[0].User.Images); got == 0 || got > maxBlocksPerRow {
+		t.Errorf("%d images from one row, want 1..%d", got, maxBlocksPerRow)
+	}
+	if got, want := n.Stats().Skipped["row:too_many_blocks"], total-maxBlocksPerRow; got != want {
+		t.Errorf("Skipped = %v, want row:too_many_blocks = %d", n.Stats().Skipped, want)
+	}
+}
+
+func TestUser_ManyImageBlocksRowIsBounded(t *testing.T) {
+	row := fmt.Sprintf(`{"type":"user","uuid":"u1","timestamp":%q,"isSidechain":false,`+
+		`"userType":"external","entrypoint":"cli","cwd":"/work/x","sessionId":%q,"version":"2.1.292",`+
+		`"origin":{"kind":"human"},"promptSource":"typed","turnOrigin":"human",`+
+		`"turnPosition":{"promptIndex":0,"turnIndex":0},`+
+		`"message":{"role":"user","content":%s}}`, at(1), sidA, manyImagesBlocks(50000))
+	n := New(Options{SessionID: sidA})
+	if _, err := n.Feed(n.Next(), []byte(row)); err != nil {
+		t.Fatal(err)
+	}
+	assertOneBoundedUser(t, n, 50001)
+}
+
+func TestAttachment_ManyBlocksRowIsBounded(t *testing.T) {
+	o := common("attachment", "q1", 1)
+	o["attachment"] = obj{"type": "queued_command", "commandMode": "prompt",
+		"prompt": json.RawMessage(manyImagesBlocks(50000))}
+	n := New(Options{SessionID: sidA})
+	if _, err := n.Feed(n.Next(), line(o)); err != nil {
+		t.Fatal(err)
+	}
+	assertOneBoundedUser(t, n, 50001)
+}
+
 func TestFeed_OversizeLineSkippedButOffsetAdvances(t *testing.T) {
 	n := New(Options{SessionID: sidA})
 	big := userRow("u0", 1, strings.Repeat("a", 9<<20))
