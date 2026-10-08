@@ -95,6 +95,19 @@ func (m *Module) runModRound(now time.Time) {
 		m.modMu.Unlock()
 	}
 
+	// Roots first, then the pane listing: a root created in between is then
+	// never missing from a listing taken after it.
+	rootsBySID := make(map[string][]string, len(sids))
+	for _, sid := range sids {
+		roots, err := m.frames.ListRootsBySessionID(sid)
+		if err != nil {
+			continue
+		}
+		for _, f := range roots {
+			rootsBySID[sid] = append(rootsBySID[sid], f.PaneID)
+		}
+	}
+
 	// Pane -> session names come from one bounded batch call (a per-pane
 	// lookup has no deadline and would hang the worker, and its shutdown, on a
 	// stuck tmux). A timed-out call retries every sid next round.
@@ -111,12 +124,8 @@ func (m *Module) runModRound(now time.Time) {
 	var targets []target
 	seen := make(map[string]bool)
 	for _, sid := range sids {
-		roots, err := m.frames.ListRootsBySessionID(sid)
-		if err != nil {
-			continue
-		}
-		for _, f := range roots {
-			name := nameOf(f.PaneID)
+		for _, paneID := range rootsBySID[sid] {
+			name := nameOf(paneID)
 			if name == "" || seen[name] {
 				continue
 			}
