@@ -296,7 +296,7 @@ describe('UnattendedPanel', () => {
     const settle = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 
     it('does not hold back the other host: its rows show at once and the panel is no longer busy', async () => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(at(12, 0))
       mockedGet.mockImplementation((hostId) => hostId === B
         ? new Promise<UnattendedView>(() => {}) // B never answers
         : Promise.resolve(page([approved('a1', at(9, 0))])))
@@ -310,7 +310,7 @@ describe('UnattendedPanel', () => {
     })
 
     it('stays busy, and says nothing is empty, while no host has answered', async () => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(at(12, 0))
       mockedGet.mockImplementation(() => new Promise<UnattendedView>(() => {}))
       open([A, B])
       await settle(0)
@@ -319,7 +319,7 @@ describe('UnattendedPanel', () => {
     })
 
     it('gives up on the silent host after 10 s: a failed line (timeout), and its request is aborted', async () => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(at(12, 0))
       const signals: Record<string, AbortSignal | undefined> = {}
       mockedGet.mockImplementation((hostId, _q, signal) => {
         signals[hostId] = signal
@@ -336,7 +336,7 @@ describe('UnattendedPanel', () => {
     })
 
     it('every host silent: all are named after the timeout, and the list is not called empty', async () => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(at(12, 0))
       mockedGet.mockImplementation(() => new Promise<UnattendedView>(() => {}))
       open([A, B])
       await settle(10_000)
@@ -346,7 +346,7 @@ describe('UnattendedPanel', () => {
     })
 
     it('an answer that beats the timeout is not turned into a failure later', async () => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(at(12, 0))
       mockedGet.mockResolvedValue(page([approved('a1', at(9, 0))]))
       open([A])
       await settle(0)
@@ -356,7 +356,7 @@ describe('UnattendedPanel', () => {
     })
 
     it('顯示更多: one stuck host does not hold back the other\'s next page, and keeps its cursor after the timeout', async () => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(at(12, 0))
       mockedGet.mockImplementation((hostId, q) => {
         if (q?.before === undefined) return Promise.resolve(page([approved(`${hostId}-2`, at(9, 0))], { truncated: true, next_before: hostId === A ? 111 : 222 }))
         return hostId === B ? new Promise<UnattendedView>(() => {}) : Promise.resolve(page([approved('a-1', at(5, 0))]))
@@ -422,7 +422,7 @@ describe('UnattendedPanel', () => {
     })
 
     it('closing the panel aborts the first read and 「顯示更多」, and leaves no timer behind', async () => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(at(12, 0))
       const calls = controlled()
       const { unmount } = open([A])
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })
@@ -434,7 +434,7 @@ describe('UnattendedPanel', () => {
     })
 
     it('closing the panel with a 「顯示更多」 read in flight aborts that read and clears its timer', async () => {
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(at(12, 0))
       const calls = controlled()
       const { unmount } = open([A])
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })

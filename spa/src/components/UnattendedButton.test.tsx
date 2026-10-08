@@ -45,6 +45,9 @@ function setup(shown: string[], runtime: Record<string, HostRuntime>, byHost: Re
 }
 
 beforeEach(() => {
+  // The panel's rows show the date unless it is today: pin today to the fixtures' day.
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(2026, 9, 8, 12, 0))
   useI18nStore.getState().setLocale('zh-TW')
   useHostStore.setState({
     hosts: {
@@ -62,7 +65,7 @@ beforeEach(() => {
   mockedGet.mockResolvedValue({ ...view(true), approved: [] })
   mockedPut.mockImplementation(async (_hostId, on) => view(on))
 })
-afterEach(() => useHostStore.getState().reset())
+afterEach(() => { vi.useRealTimers(); useHostStore.getState().reset() })
 
 describe('UnattendedButton', () => {
   // An unreachable or unsupported shown host makes the button partial by definition (D-U23-5), so "nothing written to
