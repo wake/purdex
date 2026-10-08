@@ -593,6 +593,51 @@ test('a Monitor call that failed, or whose id is not listed, changes nothing', a
   expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([['shell', 'shell']])
 })
 
+test('an id leaves when a Stop stops listing it, so a reused id is an ordinary shell again', async ($, on) => {
+  const w = monitorWorld(on)
+  await start($, w)
+  await $.tool.call({ tool: 'Monitor', description: 'd', command: 'x', timeout_ms: 1000, tool_use_id: 'tu-m' } as any)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: TASKS } as any) // listed: monitor
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [TASKS[1]] } as any) // gone: the task ended
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: TASKS } as any) // the id again, a different task
+  await w.clock.advance(150)
+  expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([['monitor', 'shell'], ['shell'], ['shell', 'shell']])
+})
+
+test('a monitor not listed yet survives a Stop that does not list it (a subagent or an earlier Stop)', async ($, on) => {
+  const w = monitorWorld(on)
+  await start($, w)
+  await $.tool.call({ tool: 'Monitor', description: 'd', command: 'x', timeout_ms: 1000, tool_use_id: 'tu-m' } as any)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] } as any)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: TASKS } as any)
+  await w.clock.advance(150)
+  expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([[], ['monitor', 'shell']])
+})
+
+for (const [name, result] of [
+  ['a top-level taskId', { ref: 1, result: {}, taskId: 'mon1', text: 'x' }],
+  ['text only', { ref: 1, result: {}, text: 'Monitor started (task mon1, expires in 30m unless the source ends first)' }],
+] as const) test('the task id is also found from ' + name, async ($, on) => {
+  const w = monitorWorld(on, result)
+  await start($, w)
+  await $.tool.call({ tool: 'Monitor', description: 'd', command: 'x', timeout_ms: 1000, tool_use_id: 'tu-m' } as any)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: TASKS } as any)
+  await w.clock.advance(150)
+  expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([['monitor', 'shell']])
+})
+
+test('at most 64 monitor ids are kept: the oldest goes first', async ($, on) => {
+  const results = Array.from({ length: 65 }, (_, i) => ({ ref: 1, result: { taskId: 'm' + i }, text: 't' }))
+  let n = 0
+  const w = evWorld(on)
+  on('tool.call', { tool: 'Monitor' }, async () => results[n++])
+  await start($, w)
+  for (let i = 0; i < 65; i++) await $.tool.call({ tool: 'Monitor', description: 'd', command: 'x', timeout_ms: 1000, tool_use_id: 'tu-' + i } as any)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [{ id: 'm0', type: 'shell', status: 'running' }, { id: 'm64', type: 'shell', status: 'running' }] } as any)
+  await w.clock.advance(150)
+  expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([['shell', 'monitor']])
+})
+
 test('the monitor ids are forgotten at session.end', async ($, on) => {
   const w = monitorWorld(on)
   await start($, w)

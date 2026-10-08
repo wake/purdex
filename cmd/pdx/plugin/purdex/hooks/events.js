@@ -42,6 +42,7 @@ const BACKOFF_MIN_MS = 1000
 const BACKOFF_MAX_MS = 30_000
 const HEARTBEAT_MS = 10_000
 const STREAM_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-' // 64: one per 6 bits
+const MONITORS_MAX = 64 // monitor ids kept at once; one more drops the oldest
 const ASK_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']) // tools that wait on the person by themselves
 const TIMEOUT = Symbol('timeout')
 
@@ -70,12 +71,14 @@ const ev = {
   compacting: false, // the main conversation is compacting
   lastError: false, // the last main turn ended in error (cleared by the next main turn)
   background: null, // {tasks, crons} as the last classic.Stop listed them; null before one
-  // ids of the background tasks the Monitor tool started (its tool.call result's taskId). Claude Code lists such a
-  // task as type "shell" (the "monitor" type is an MCP watch), so the daemon would draw nothing for it; the
-  // background event this reporter sends names those ids "monitor" instead (spec §7 "Background symbol"). Cleared
-  // when the session ends or switches; rebuilt only by new Monitor calls, so after a mod reload a task that is
-  // still running stays "shell" until it is started again (known limit).
-  monitors: new Set(),
+  // id → whether a classic.Stop has listed it yet, for the background tasks the Monitor tool started (its tool.call
+  // result's taskId). Claude Code lists such a task as type "shell" (the "monitor" type is an MCP watch), so the
+  // daemon would draw nothing for it; the background event this reporter sends names those ids "monitor" instead
+  // (spec §7 "Background symbol"). An id leaves when a Stop no longer lists it after having listed it (the task
+  // ended, so a reused id is a different task), at the cap (the oldest), and when the session ends or switches;
+  // rebuilt only by new Monitor calls, so after a mod reload a task that is still running stays "shell" until it
+  // is started again (known limit).
+  monitors: new Map(),
   beat: null, // the heartbeat timer
   beatGen: 0, // bumped when the heartbeat stops or pauses: a beat begun before then lands nowhere
   switching: false, // from session.end{clear|resume} to session.switch: the heartbeat pauses
@@ -394,8 +397,16 @@ function toolUseDrawn($, e) {
 // {ref, result: {taskId, timeoutMs, persistent}, text}, and taskId is the id classic.Stop lists in background_tasks).
 function monitorStarted(e, r) {
   if (e.tool !== 'Monitor' || !isObject(r) || isErrorResult(r)) return
-  const id = isObject(r.result) ? r.result.taskId : r.taskId
-  if (typeof id === 'string' && id) ev.monitors.add(id)
+  // the nested result first, then a top-level taskId, then the strictly anchored text of the success message
+  let id = isObject(r.result) ? r.result.taskId : undefined
+  if (typeof id !== 'string' || !id) id = r.taskId
+  if (typeof id !== 'string' || !id) {
+    const m = typeof r.text === 'string' ? /^Monitor started \(task ([A-Za-z0-9_-]+)[,)]/.exec(r.text) : null
+    id = m ? m[1] : undefined
+  }
+  if (typeof id !== 'string' || !id) return
+  ev.monitors.set(id, false)
+  while (ev.monitors.size > MONITORS_MAX) ev.monitors.delete(ev.monitors.keys().next().value)
 }
 
 function isErrorResult(r) {
@@ -440,7 +451,14 @@ function measured($, e) {
 function stopped($, e) {
   if (!ev.on) return
   // a copy: the engine's objects are never touched. A task the Monitor tool started is named "monitor".
-  const tasks = (Array.isArray(e.background_tasks) ? e.background_tasks : []).map((t) => ({ id: t.id, type: ev.monitors.has(t.id) ? 'monitor' : t.type, status: t.status }))
+  const listed = Array.isArray(e.background_tasks) ? e.background_tasks : []
+  const tasks = listed.map((t) => ({ id: t.id, type: ev.monitors.has(t.id) ? 'monitor' : t.type, status: t.status }))
+  // a monitor this Stop lists is now known to the engine; one it listed before and no longer lists has ended
+  const present = new Set(listed.map((t) => t.id))
+  for (const [id, seen] of [...ev.monitors]) {
+    if (present.has(id)) ev.monitors.set(id, true)
+    else if (seen) ev.monitors.delete(id)
+  }
   ev.background = { tasks, crons: Array.isArray(e.session_crons) ? e.session_crons.length : 0 }
   enqueue($, 'background', ev.background)
 }
