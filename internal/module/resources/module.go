@@ -165,8 +165,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/resources", m.handleGet)
 }
 
-// Start launches the sampler goroutine: one tick at once, then one per
-// interval, until Stop.
+// Start runs the boot reconcile, then launches the sampler goroutine: one
+// tick at once, then one per interval, until Stop.
 func (m *Module) Start(context.Context) error {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
@@ -174,6 +174,7 @@ func (m *Module) Start(context.Context) error {
 		return nil
 	}
 	m.started = true
+	m.boot() // before the sampler: its first tick sees the reconciled rows
 	m.wg.Add(1)
 	go m.run(m.runCtx)
 	return nil
