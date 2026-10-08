@@ -1,6 +1,7 @@
 package team
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -111,5 +112,40 @@ func TestDeriveTeamLabelInvalidUTF8(t *testing.T) {
 		if got := DeriveTeamLabel(in); got != "" {
 			t.Errorf("%q -> %q, want no label", in, got)
 		}
+	}
+}
+
+// The wire names of the label (spec D-L4/D-L5): the payload, the team and the
+// roster always carry team_label; a grant and a create request only when set.
+func TestTeamLabelWireShapes(t *testing.T) {
+	lp, _ := json.Marshal(LeadPayload{Reason: "r", MaxMembers: 3, Roots: []string{"/w"}})
+	if !strings.Contains(string(lp), `"team_name":"","team_label":""`) {
+		t.Errorf("LeadPayload = %s, want team_label always present", lp)
+	}
+	g, _ := json.Marshal(Grant{MaxMembers: 3})
+	if strings.Contains(string(g), "team_label") {
+		t.Errorf("Grant without a label = %s, want the key absent", g)
+	}
+	empty, label := "", "A 線"
+	g, _ = json.Marshal(Grant{MaxMembers: 3, TeamLabel: &empty})
+	if !strings.Contains(string(g), `"team_label":""`) {
+		t.Errorf("Grant with an empty label = %s, want the key present", g)
+	}
+	g, _ = json.Marshal(Grant{MaxMembers: 3, TeamLabel: &label})
+	if !strings.Contains(string(g), `"team_label":"A 線"`) {
+		t.Errorf("Grant = %s", g)
+	}
+	cr, _ := json.Marshal(CreateApprovalRequest{ID: "i", Kind: KindLead, Reason: "r"})
+	if strings.Contains(string(cr), "team_label") {
+		t.Errorf("CreateApprovalRequest without a label = %s", cr)
+	}
+	cr, _ = json.Marshal(CreateApprovalRequest{ID: "i", Kind: KindLead, Reason: "r", TeamLabel: "A 線"})
+	if !strings.Contains(string(cr), `"team_label":"A 線"`) {
+		t.Errorf("CreateApprovalRequest = %s", cr)
+	}
+	tm, _ := json.Marshal(Team{TeamLabel: "A 線"})
+	tr, _ := json.Marshal(TeamRoster{TeamLabel: "A 線"})
+	if !strings.Contains(string(tm), `"team_label":"A 線"`) || !strings.Contains(string(tr), `"team_label":"A 線"`) {
+		t.Errorf("Team %s, TeamRoster %s", tm, tr)
 	}
 }

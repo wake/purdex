@@ -107,10 +107,14 @@ type leadHashPayload struct {
 	MaxMembers int      `json:"max_members"`
 	Roots      []string `json:"roots"`
 	TeamName   string   `json:"team_name,omitempty"`
+	// TeamLabel is left out when empty for the same reason as TeamName: the
+	// stored payload always carries it, and a retry from before labels must
+	// still match the hash stored then (team-label D-L6).
+	TeamLabel string `json:"team_label,omitempty"`
 }
 
 func hashPayload(p team.LeadPayload) leadHashPayload {
-	return leadHashPayload{Reason: p.Reason, MaxMembers: p.MaxMembers, Roots: p.Roots, TeamName: p.TeamName}
+	return leadHashPayload{Reason: p.Reason, MaxMembers: p.MaxMembers, Roots: p.Roots, TeamName: p.TeamName, TeamLabel: p.TeamLabel}
 }
 
 // handleCreate is POST /api/team/approvals.
@@ -157,6 +161,11 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "team_name: "+err.Error(), nil)
 		return
 	}
+	teamLabel, err := team.NormaliseTeamLabel(req.TeamLabel)
+	if err != nil {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "team_label: "+err.Error(), nil)
+		return
+	}
 	origin, ok, err := m.origins.ResolveOrigin(req.OriginInbox)
 	if err != nil {
 		// The registry could not be read (already logged by the resolver):
@@ -181,7 +190,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if waitS > team.MaxWaitS {
 		waitS = team.MaxWaitS
 	}
-	lead := team.LeadPayload{Reason: reason, MaxMembers: normaliseMaxMembers(req.MaxMembers, team.DefaultMaxMembers), Roots: roots, TeamName: teamName}
+	lead := team.LeadPayload{Reason: reason, MaxMembers: normaliseMaxMembers(req.MaxMembers, team.DefaultMaxMembers), Roots: roots, TeamName: teamName, TeamLabel: teamLabel}
 	payload, err := json.Marshal(lead)
 	if err != nil {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "encode payload: "+err.Error(), nil)
@@ -444,6 +453,16 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				g.TeamName = &name
+			}
+			// D-L4: absent keeps the requested label (an older App never wipes
+			// it); present, "" asks for the label to be derived (D-L3).
+			if req.Grant.TeamLabel != nil {
+				label, err := team.NormaliseTeamLabel(*req.Grant.TeamLabel)
+				if err != nil {
+					m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "team_label: "+err.Error(), nil)
+					return
+				}
+				g.TeamLabel = &label
 			}
 		}
 		grant = &g

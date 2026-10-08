@@ -49,6 +49,7 @@ var capabilities = []string{
 	"relay.unattended.v1",    // GET/PUT /api/team/unattended, team.unattended events (U23)
 	"team.name.v1",           // lead request team_name, grant.team_name, Team / TeamRoster team_name
 	"team.tasks.v1",          // /api/team/tasks…, task routes (T-1b)
+	"team.label.v1",          // lead request team_label, grant.team_label, Team / TeamRoster team_label
 }
 
 // handleInfo returns daemon metadata: host ID, tmux instance, version, OS, and architecture.

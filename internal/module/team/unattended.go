@@ -50,8 +50,8 @@ func leadGrantOf(a team.Approval) (team.Grant, error) {
 	if err := json.Unmarshal(a.Payload, &p); err != nil {
 		return team.Grant{}, fmt.Errorf("lead row %s: decode payload: %w", a.ID, err)
 	}
-	name := p.TeamName // a copy: the grant owns its pointer
-	return team.Grant{MaxMembers: p.MaxMembers, Roots: p.Roots, TeamName: &name}, nil
+	name, label := p.TeamName, p.TeamLabel // copies: the grant owns its pointers
+	return team.Grant{MaxMembers: p.MaxMembers, Roots: p.Roots, TeamName: &name, TeamLabel: &label}, nil
 }
 
 // leadTeamOf is the team a lead row's approval creates (spec §7.1); its id
@@ -63,8 +63,17 @@ func leadTeamOf(a team.Approval, g team.Grant, at int64) team.Team {
 	if g.TeamName != nil {
 		name = *g.TeamName
 	}
+	// The label is the explicit one the grant carries, else the one derived from
+	// the approved name (team-label D-L3, D-L5); never cut from the middle.
+	label := ""
+	if g.TeamLabel != nil {
+		label = *g.TeamLabel
+	}
+	if label == "" {
+		label = team.DeriveTeamLabel(name)
+	}
 	return team.Team{ID: a.ID, HostID: a.HostID, LeadSessionID: a.Origin.SessionID, LeadRef: a.Origin.Ref,
-		TeamName: name, Grant: g, RequestID: a.ID, CreatedAt: at}
+		TeamName: name, TeamLabel: label, Grant: g, RequestID: a.ID, CreatedAt: at}
 }
 
 // teamNote is the decision log line's suffix for an approval that created

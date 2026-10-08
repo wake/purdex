@@ -110,7 +110,7 @@ func TestDecide_UnnamedRequestStaysUnnamed(t *testing.T) {
 	f := newFixture(t)
 	f.create(uid(1))
 	code, body := f.decideRaw(uid(1), `{"decision":"approve",`+nameClient+`}`)
-	if code != 200 || !strings.Contains(string(body), `"grant":{"max_members":3,"roots":["/w"],"team_name":""}`) {
+	if code != 200 || !strings.Contains(string(body), `"grant":{"max_members":3,"roots":["/w"],"team_name":"","team_label":""}`) {
 		t.Fatalf("approve: %d %s, want grant.team_name \"\" present", code, body)
 	}
 	f.assertTeamNamed("sid-1", "")
