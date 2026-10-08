@@ -1,0 +1,76 @@
+{
+  "since": 1791460800000,
+  "until": 1791547200000,
+  "coverage": {
+    "from": 1791460800000,
+    "to": 1791547140000,
+    "minutes": 1430
+  },
+  "not_recorded": 1,
+  "requests": {
+    "total": 9,
+    "not_granted": 1,
+    "by_kind": [
+      {
+        "kind": "test-full",
+        "count": 4
+      },
+      {
+        "kind": "build",
+        "count": 3
+      },
+      {
+        "kind": "",
+        "count": 1
+      },
+      {
+        "kind": "test-pkg",
+        "count": 1
+      }
+    ]
+  },
+  "paths": {
+    "immediate": 4,
+    "waited": 2,
+    "overrun": 1
+  },
+  "wait_ms": {
+    "p50": 0,
+    "p90": 300000,
+    "max": 300000
+  },
+  "would_wait_r2": 3,
+  "full": {
+    "share": 0.0036713286713286712,
+    "runs": 2,
+    "longest_s": 300
+  },
+  "heavy": {
+    "minutes": 3,
+    "max_load1": 11.2,
+    "max_mem": 83.5
+  },
+  "kinds": [
+    {
+      "kind": "build",
+      "n": 2,
+      "weight": 35,
+      "peak_max": 28,
+      "mean_avg": 15
+    },
+    {
+      "kind": "test-full",
+      "n": 3,
+      "weight": 35,
+      "peak_max": 55,
+      "mean_avg": 35.666666666666664
+    },
+    {
+      "kind": "test-pkg",
+      "n": 1,
+      "weight": 15,
+      "peak_max": 10,
+      "mean_avg": 6
+    }
+  ]
+}

@@ -254,6 +254,7 @@ func (m *Module) findSettings(c *core.Core) {
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/resources", m.handleGet)
+	mux.HandleFunc("GET /api/resources/report", m.handleReport)
 	mux.HandleFunc("POST /api/resources/leases", m.handleLeaseCreate)
 	mux.HandleFunc("DELETE /api/resources/leases", m.handleLeaseDeleteByClient)
 	mux.HandleFunc("GET /api/resources/leases/{id}", m.handleLeaseGet)
