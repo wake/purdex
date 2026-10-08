@@ -404,7 +404,7 @@ func TestHandleInfo_Capabilities(t *testing.T) {
 	c.handleInfo(rec, httptest.NewRequest("GET", "/api/info", nil))
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
-	assert.Equal(t, []any{"transcript.v1", "terminal.mirror.v1", "conversations.scope.v1", "relay.unattended.v1", "team.name.v1"}, body["capabilities"])
+	assert.Equal(t, []any{"transcript.v1", "terminal.mirror.v1", "conversations.scope.v1", "relay.unattended.v1", "team.name.v1", "team.tasks.v1"}, body["capabilities"])
 }
 
 func TestHandleInfo_LastShutdown(t *testing.T) {
