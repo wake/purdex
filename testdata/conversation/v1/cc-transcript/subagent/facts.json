@@ -10,7 +10,7 @@
     {"id": "toolu_01R2cprP5o4tDUDwZ3RikzsL", "kind": "task", "status": "done"}
   ],
   "outputs": [
-    {"step": "toolu_01R2cprP5o4tDUDwZ3RikzsL", "total_lines": 6, "total_bytes": 1026, "keep": "head", "truncated": false}
+    {"step": "toolu_01R2cprP5o4tDUDwZ3RikzsL", "total_lines": 6, "total_bytes": 1026, "truncated": false}
   ],
   "shapes": []
 }

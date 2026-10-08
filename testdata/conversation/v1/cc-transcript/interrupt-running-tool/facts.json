@@ -17,11 +17,11 @@
     {"id": "toolu_01K3n9h6kHJoWQMqpT31CJZs", "kind": "execute", "status": "denied", "denial": "user-rejected"}
   ],
   "outputs": [
-    {"step": "toolu_01EoTWRRhmpSGWtbA6Cv2nqv", "total_lines": 1, "total_bytes": 280, "keep": "tail", "truncated": false},
-    {"step": "toolu_01561zzDRfhH3wBhm8WbaVeW", "total_lines": 1, "total_bytes": 241, "keep": "tail", "truncated": false},
-    {"step": "toolu_017ZqKRjb2YWirEJFpB6yhTS", "total_lines": 1, "total_bytes": 225, "keep": "tail", "truncated": false},
-    {"step": "toolu_016SDT52sASWi8UMA2THq5jX", "total_lines": 1, "total_bytes": 9, "keep": "tail", "truncated": false},
-    {"step": "toolu_01K3n9h6kHJoWQMqpT31CJZs", "total_lines": 1, "total_bytes": 225, "keep": "tail", "truncated": false}
+    {"step": "toolu_01EoTWRRhmpSGWtbA6Cv2nqv", "total_lines": 1, "total_bytes": 280, "truncated": false},
+    {"step": "toolu_01561zzDRfhH3wBhm8WbaVeW", "total_lines": 1, "total_bytes": 241, "truncated": false},
+    {"step": "toolu_017ZqKRjb2YWirEJFpB6yhTS", "total_lines": 1, "total_bytes": 225, "truncated": false},
+    {"step": "toolu_016SDT52sASWi8UMA2THq5jX", "total_lines": 1, "total_bytes": 9, "truncated": false},
+    {"step": "toolu_01K3n9h6kHJoWQMqpT31CJZs", "total_lines": 1, "total_bytes": 225, "truncated": false}
   ],
   "shapes": ["interrupted_marker", "interrupted_refusal"]
 }

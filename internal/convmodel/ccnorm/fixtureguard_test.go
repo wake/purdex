@@ -48,7 +48,7 @@ type factOutput struct {
 	Step       string `json:"step"`
 	TotalLines int    `json:"total_lines"`
 	TotalBytes int    `json:"total_bytes"`
-	Keep       string `json:"keep"`
+	Keep       string `json:"keep,omitempty"`
 	Truncated  bool   `json:"truncated"`
 }
 
@@ -91,6 +91,83 @@ func TestFacts(t *testing.T) {
 				}
 				checkFacts(t, f, []convmodel.Turn{tr}, true)
 			})
+		}
+	}
+}
+
+// TestFacts_AssertNothingExpectedLacks keeps facts and expected from drifting
+// apart on optional fields: every key a facts entry asserts (output keys such
+// as keep, step keys such as denial) must exist on the matching object of
+// expected.json. An optional field the wire omits (keep on an uncut output)
+// must therefore be omitted in facts too. Facts may say less than expected,
+// never more.
+func TestFacts_AssertNothingExpectedLacks(t *testing.T) {
+	check := func(t *testing.T, factsRel, expectedRel string) {
+		var ff struct {
+			Steps   []map[string]any `json:"steps"`
+			Outputs []map[string]any `json:"outputs"`
+		}
+		if err := json.Unmarshal(readFile(t, factsRel), &ff); err != nil {
+			t.Fatal(err)
+		}
+		var exp any
+		if err := json.Unmarshal(readFile(t, expectedRel), &exp); err != nil {
+			t.Fatal(err)
+		}
+		steps := map[string]map[string]any{}
+		var walk func(v any)
+		walk = func(v any) {
+			switch x := v.(type) {
+			case map[string]any:
+				if x["type"] == "step" {
+					if id, _ := x["id"].(string); id != "" {
+						steps[id] = x
+					}
+				}
+				for _, e := range x {
+					walk(e)
+				}
+			case []any:
+				for _, e := range x {
+					walk(e)
+				}
+			}
+		}
+		walk(exp)
+		for _, fs := range ff.Steps {
+			id, _ := fs["id"].(string)
+			st, ok := steps[id]
+			if !ok {
+				t.Errorf("%s: facts step %s is not in %s", factsRel, id, expectedRel)
+				continue
+			}
+			for k := range fs {
+				if _, has := st[k]; !has {
+					t.Errorf("%s: facts step %s asserts %q, which %s does not carry", factsRel, id, k, expectedRel)
+				}
+			}
+		}
+		for _, fo := range ff.Outputs {
+			id, _ := fo["step"].(string)
+			out, _ := steps[id]["output"].(map[string]any)
+			if out == nil {
+				t.Errorf("%s: facts output %s has no output in %s", factsRel, id, expectedRel)
+				continue
+			}
+			for k := range fo {
+				if k == "step" {
+					continue
+				}
+				if _, has := out[k]; !has {
+					t.Errorf("%s: facts output %s asserts %q, which %s does not carry", factsRel, id, k, expectedRel)
+				}
+			}
+		}
+	}
+	for _, c := range loadManifest(t).Cases {
+		check(t, c.Facts, c.Expected)
+		for _, ch := range c.Children {
+			check(t, ch.Facts, ch.Expected)
 		}
 	}
 }
@@ -177,6 +254,9 @@ func checkFacts(t *testing.T, f facts, turns []convmodel.Turn, isChild bool) {
 			t.Errorf("facts output %s says not truncated", want.Step)
 		} else if !want.Truncated && (s.Output.TotalLines != want.TotalLines || s.Output.TotalBytes != want.TotalBytes) {
 			t.Errorf("output of %s: totals %d/%d, facts %d/%d", want.Step, s.Output.TotalLines, s.Output.TotalBytes, want.TotalLines, want.TotalBytes)
+		} else if want.Keep != string(s.Output.Keep) {
+			// keep is on the wire only when the output was cut, and so it is in facts
+			t.Errorf("output of %s: keep %q, facts %q (keep exists only when truncated)", want.Step, s.Output.Keep, want.Keep)
 		}
 	}
 }

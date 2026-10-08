@@ -9,7 +9,7 @@
     {"id": "toolu_018vRUEjFJQ3GknHxQUAsvKP", "kind": "read", "status": "done"}
   ],
   "outputs": [
-    {"step": "toolu_018vRUEjFJQ3GknHxQUAsvKP", "total_lines": 1, "total_bytes": 7, "keep": "head", "truncated": false}
+    {"step": "toolu_018vRUEjFJQ3GknHxQUAsvKP", "total_lines": 1, "total_bytes": 7, "truncated": false}
   ],
   "shapes": []
 }
