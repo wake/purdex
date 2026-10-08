@@ -70,7 +70,9 @@ func OpenStore(path string) (*Store, error) {
 			grant_json        TEXT
 		);
 		CREATE INDEX IF NOT EXISTS approval_requests_state_created
-			ON approval_requests (state, created_at);`); err != nil {
+			ON approval_requests (state, created_at);
+		CREATE INDEX IF NOT EXISTS approval_requests_state_decided
+			ON approval_requests (state, decided_at);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db: %w", err)
 	}

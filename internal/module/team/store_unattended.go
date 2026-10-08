@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,44 +90,90 @@ func sameSelfRelay(op team.RelayOp, a team.Approval) error {
 	return nil
 }
 
+// autoApprovedQuery is the rows the daemon approved itself (decided_by
+// kind unattended) decided at or after a since, then tail; its arguments
+// are since, team.ClientKindUnattended, then tail's.
+func autoApprovedQuery(tail string) string {
+	return `SELECT ` + selectCols + ` FROM approval_requests
+		WHERE state = 'approved' AND decided_at >= ?
+		  AND json_extract(decided_by_json, '$.kind') = ? ` + tail
+}
+
+// The tails of ListAutoApproved's three reads: a page (before, before,
+// limit + 1), the rest of a millisecond (its decided_at, the page's last
+// id) and whether an older millisecond remains (that decided_at).
+const (
+	autoApprovedPage  = `AND (? = 0 OR decided_at < ?) ORDER BY decided_at DESC, id LIMIT ?`
+	autoApprovedRest  = `AND decided_at = ? AND id > ? ORDER BY id`
+	autoApprovedOlder = `AND decided_at < ? LIMIT 1`
+)
+
 // ListAutoApproved is one page of the "while you were away" list (D-U23-6,
 // decision 17): the requests the daemon approved itself (decided_by.kind
 // unattended) with decided_at >= since — the switch's last off→on — and,
 // when before > 0, decided_at < before (the cursor), newest first
-// (decided_at DESC, id). A page holds limit rows, except that it never ends
-// inside one millisecond: when the next row shares the last row's
-// decided_at, every row of that millisecond joins the page, so the next
-// page (before = the last row's decided_at) skips nothing and repeats
-// nothing. truncated says older rows remain. since 0 (never on) answers an
-// empty page without a query. Never nil.
+// (decided_at DESC, id). A page holds limit rows, read as limit + 1 (an
+// index range of approval_requests_state_decided), except that it never
+// ends inside one millisecond: when row limit + 1 shares the last row's
+// decided_at, the rest of that millisecond (by id) joins the page, so the
+// next page (before = the last row's decided_at) skips nothing and repeats
+// nothing. truncated says older rows remain. The reads share one
+// transaction, so they see one commit. since 0 (never on) answers an empty
+// page without a query. Never nil.
 func (s *Store) ListAutoApproved(since, before int64, limit int) (rows []team.Approval, truncated bool, err error) {
-	out := []team.Approval{}
 	if since == 0 {
-		return out, false, nil
+		return []team.Approval{}, false, nil
 	}
-	if limit < 1 {
-		return nil, false, fmt.Errorf("list auto-approved: limit %d is not positive", limit)
-	}
-	q, err := s.db.Query(`SELECT `+selectCols+` FROM approval_requests
-		WHERE state = 'approved' AND decided_at >= ? AND (? = 0 OR decided_at < ?)
-		  AND json_extract(decided_by_json, '$.kind') = ?
-		ORDER BY decided_at DESC, id`, since, before, before, team.ClientKindUnattended)
-	if err != nil {
+	fail := func(err error) ([]team.Approval, bool, error) {
 		return nil, false, fmt.Errorf("list auto-approved: %w", err)
 	}
+	if limit < 1 {
+		return fail(fmt.Errorf("limit %d is not positive", limit))
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(fmt.Errorf("begin: %w", err))
+	}
+	defer tx.Rollback()
+	read := func(tail string, args ...any) ([]team.Approval, error) {
+		return autoApprovedIn(tx, autoApprovedQuery(tail), append([]any{since, team.ClientKindUnattended}, args...)...)
+	}
+	page, err := read(autoApprovedPage, before, before, limit+1)
+	if err != nil {
+		return fail(err)
+	}
+	if len(page) <= limit {
+		return page, false, nil
+	}
+	last := page[limit-1]
+	if page[limit].DecidedAt != last.DecidedAt {
+		return page[:limit], true, nil // a row of an older millisecond remains
+	}
+	rest, err := read(autoApprovedRest, last.DecidedAt, last.ID)
+	if err != nil {
+		return fail(err)
+	}
+	older, err := read(autoApprovedOlder, last.DecidedAt)
+	if err != nil {
+		return fail(err)
+	}
+	return append(page[:limit], rest...), len(older) > 0, nil
+}
+
+// autoApprovedIn is the rows of query on tx, in its order. Never nil.
+func autoApprovedIn(tx *sql.Tx, query string, args ...any) ([]team.Approval, error) {
+	q, err := tx.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
 	defer q.Close()
+	out := []team.Approval{}
 	for q.Next() {
 		a, _, err := scanRow(q)
 		if err != nil {
-			return nil, false, fmt.Errorf("list auto-approved: %w", err)
-		}
-		if len(out) >= limit && a.DecidedAt != out[len(out)-1].DecidedAt {
-			return out, true, nil // a row of an older millisecond remains
+			return nil, err
 		}
 		out = append(out, a)
 	}
-	if err := q.Err(); err != nil {
-		return nil, false, fmt.Errorf("list auto-approved: %w", err)
-	}
-	return out, false, nil
+	return out, q.Err()
 }

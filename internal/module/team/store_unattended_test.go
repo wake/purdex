@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/team"
@@ -440,4 +441,48 @@ func TestListAutoApproved_PageNeverSplitsAMillisecond(t *testing.T) {
 	listPage(t, s, 1, 400, 2, []string{"c", "d", "e"}, true)
 	// The extension reaches the oldest row: nothing is left.
 	listPage(t, s, 250, 400, 2, []string{"c", "d", "e"}, false)
+}
+
+// A millisecond with more rows than limit — more than the limit + 1 the
+// page query reads — still joins one page whole: the rest of it is read
+// by id after the page's last row, and truncated says whether an older
+// millisecond remains.
+func TestListAutoApproved_MillisecondLongerThanTheLimitIsOnePage(t *testing.T) {
+	s := openTestStore(t)
+	for id, at := range map[string]int64{"a": 500, "c": 300, "d": 300, "e": 300, "f": 300, "g": 300, "h": 200} {
+		closedAt(t, s, id, at, team.UnattendedClient(), team.StateApproved)
+	}
+	listPage(t, s, 1, 0, 2, []string{"a", "c", "d", "e", "f", "g"}, true)
+	listPage(t, s, 1, 300, 2, []string{"h"}, false)
+	listPage(t, s, 1, 400, 1, []string{"c", "d", "e", "f", "g"}, true)
+	listPage(t, s, 250, 0, 2, []string{"a", "c", "d", "e", "f", "g"}, false)
+}
+
+// The page query is a range scan of approval_requests_state_decided
+// (state, decided_at), not a sort of the whole history.
+func TestListAutoApproved_PageQueryUsesTheDecidedIndex(t *testing.T) {
+	s := openTestStore(t)
+	q, err := s.db.Query(`EXPLAIN QUERY PLAN `+autoApprovedQuery(autoApprovedPage), 1, team.ClientKindUnattended, 0, 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	var plan []string
+	for q.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := q.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := q.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range plan {
+		if strings.Contains(d, "USING INDEX approval_requests_state_decided") {
+			return
+		}
+	}
+	t.Fatalf("plan %q does not use approval_requests_state_decided", plan)
 }
