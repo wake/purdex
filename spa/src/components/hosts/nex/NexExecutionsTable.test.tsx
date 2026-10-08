@@ -443,6 +443,27 @@ describe('NexExecutionsTable', () => {
     expect(api.listExecutions).toHaveBeenLastCalledWith('h', { includeArchived: true, limit: 100 })
   })
 
+  it('delta host: ordinary deltas never re-run the archived query; an archive-membership delta does (#1866 §4.7)', async () => {
+    vi.mocked(api.listExecutions).mockImplementation(async () => ({ items: [row()], next_cursor: '', pdx: { epoch: 'E1', ver: 1, bseq: 0 } }) as never)
+    useExecutionListStore.getState().onHello('h', { epoch: 'E1', bseq: 0 })
+    render(<NexExecutionsTable hostId="h" enabled />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    fireEvent.click(screen.getByLabelText(/show archived/i))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(archivedCalls()).toBe(1)
+
+    const apply = (bseq: number, ver: number, over: object, cause: string[]) =>
+      act(() => { useExecutionListStore.getState().applyDelta('h', { epoch: 'E1', bseq, id: 'exc_0123456789abcdef', ver, cause, row: row(over) as never }) })
+    apply(1, 5, { state: 'idle' }, ['execution.terminal'])
+    apply(2, 6, { brief: 'renamed' }, ['execution.title_changed'])
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(archivedCalls()).toBe(1)
+
+    apply(3, 7, {}, ['execution.archived'])
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(archivedCalls()).toBe(2)
+  })
+
   it('archived mode: a failed shared refresh still re-runs the archived query and its error is shown', async () => {
     render(<NexExecutionsTable hostId="h" enabled />)
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })

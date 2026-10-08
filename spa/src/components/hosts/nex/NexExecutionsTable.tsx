@@ -64,7 +64,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
   // subscribes nothing (the store would refuse to open anyway, but staying
   // off it keeps the refcount honest for the worker list).
   const shared = useHostExecutions(hostId, { enabled })
-  const { refetch, refreshRevision } = shared
+  const { refetch, refreshRevision, archivedRevision } = shared
 
   // Kept in sync every render (not via effect) so async action handlers
   // always read the latest host without being an effect dependency.
@@ -107,8 +107,10 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
 
   // Table-local archived query (plan task 3): keyed on `refreshRevision` so
   // every refresh cycle the store runs — SSE frame, reconnect, post-action
-  // refetch — refreshes this view too. Toggling off issues nothing: the
-  // shared rows are rendered directly.
+  // refetch, a failed one too — refreshes this view too, and on
+  // `archivedRevision` (#1866 §4.7) so an archive-membership delta does. An
+  // ordinary delta moves neither. Toggling off issues nothing: the shared
+  // rows are rendered directly.
   useEffect(() => {
     if (!enabled || !includeArchived) return
     const token = ++archivedTokenRef.current
@@ -130,7 +132,7 @@ export default function NexExecutionsTable({ hostId, enabled }: NexExecutionsTab
         setArchived((prev) => ({ hostId, items: prev?.hostId === hostId ? prev.items : [], error: errorCode(err) }))
       })
     return () => { archivedTokenRef.current += 1 }
-  }, [hostId, enabled, includeArchived, refreshRevision])
+  }, [hostId, enabled, includeArchived, refreshRevision, archivedRevision])
 
   const handleIncludeArchived = (checked: boolean) => {
     setIncludeArchived(checked)
