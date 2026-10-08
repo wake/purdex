@@ -343,6 +343,17 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 		return false, ""
 	}
 
+	// Mod gate (lights v2): while the session's representative pane takes
+	// its light from a live mod stream, the probe has nothing to recover —
+	// the stream is the better observer. Read before the final critical
+	// section (the projection read takes modMu, never m.mu).
+	if p, _ := m.projectionForSession(args.Session); p != nil && p.Source == SourceMod {
+		if args.OnDrop != nil {
+			args.OnDrop("mod-live")
+		}
+		return false, ""
+	}
+
 	// Test-only seam: simulate a concurrent stop/rename that mutates the
 	// active-set between the early fast-path and the final critical section.
 	// Production leaves interruptBeforeFinalLockFn nil (no-op).

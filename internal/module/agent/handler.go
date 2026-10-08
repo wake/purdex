@@ -538,7 +538,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			paneID = projection.PaneID
 			subagentCount = len(projection.Subagents)
 			if projection.TopFrame != nil {
-				topStatus = string(projection.TopFrame.Status)
+				topStatus = string(projection.EffectiveStatus())
 			}
 		}
 		log.Printf("[handler] projection_built session=%s top_status=%s subagents=%d pane_id=%s chain_id=%s",
@@ -629,7 +629,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	watchStatus := result.Status
 	if projection != nil && projection.TopFrame != nil {
 		watchAgentType = projection.TopFrame.AgentType
-		watchStatus = projection.TopFrame.Status
+		watchStatus = projection.EffectiveStatus()
 	}
 	if req.TmuxSession != "" && m.prober != nil && result.Valid {
 		m.manageActivityWatch(req.TmuxSession, watchAgentType, watchStatus)
