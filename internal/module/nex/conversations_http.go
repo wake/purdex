@@ -389,16 +389,18 @@ func (m *Module) logConversationScan(r conversations.ScanResult, d time.Duration
 // (§13.6: no page cap; one missing row could show a live worker's
 // conversation as ended).
 func (m *Module) listAllExecutions(ctx context.Context) ([]store.Execution, error) {
-	return m.walkExecutions(ctx, true)
+	return m.walkExecutions(ctx, true, true)
 }
 
 // walkExecutions pages every execution (archived ones only with
-// includeArchived) to the end. Each page runs under detachedContext, bounded
-// by engineOpTimeout; ctx is checked before each page. A cursor the store
+// includeArchived) to the end. Each page is bounded by engineOpTimeout and,
+// with detach, runs under detachedContext (the caller leaving does not cancel
+// it); without, it ends with ctx too — the earlier of ctx's deadline and
+// engineOpTimeout. ctx is checked before each page. A cursor the store
 // already gave fails the walk (R-4-2, fail closed): the walk cannot reach
 // every execution, so the rows read so far are never returned. The error
 // names the cursor; the caller logs it.
-func (m *Module) walkExecutions(ctx context.Context, includeArchived bool) ([]store.Execution, error) {
+func (m *Module) walkExecutions(ctx context.Context, includeArchived, detach bool) ([]store.Execution, error) {
 	var out []store.Execution
 	cursor := ""
 	seen := map[string]bool{}
@@ -406,7 +408,11 @@ func (m *Module) walkExecutions(ctx context.Context, includeArchived bool) ([]st
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		pctx, cancel := detachedContext(ctx, m.engineOpTimeout)
+		parent := ctx
+		if detach {
+			parent = context.WithoutCancel(ctx) // detachedContext's parent
+		}
+		pctx, cancel := context.WithTimeout(parent, m.engineOpTimeout)
 		page, err := m.sys.store.List(pctx, store.ListOptions{IncludeArchived: includeArchived, Limit: ownerScanPageSize, Cursor: cursor})
 		cancel()
 		if err != nil {

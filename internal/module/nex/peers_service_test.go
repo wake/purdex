@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -122,6 +123,47 @@ func TestExecPeersRows_MidWalkErrorFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk on fire")
 	assert.Nil(t, rows)
+}
+
+// blockingListStore parks every List until its ctx ends, counting the Lists
+// still running.
+type blockingListStore struct{ active atomic.Int32 }
+
+func (s *blockingListStore) Get(context.Context, string) (store.Execution, error) {
+	return store.Execution{}, store.ErrNotFound
+}
+
+func (s *blockingListStore) List(ctx context.Context, _ store.ListOptions) (store.ListPage, error) {
+	s.active.Add(1)
+	defer s.active.Add(-1)
+	<-ctx.Done()
+	return store.ListPage{}, ctx.Err()
+}
+
+// A page ends with the caller (the inventory's budget) or engineOpTimeout,
+// whichever comes first: Rows is never detached from its caller, so a GET
+// that gave up leaves no List running behind it.
+func TestExecPeersRows_PageEndsWithCallerOrEngineTimeout(t *testing.T) {
+	cases := map[string]struct {
+		callerTimeout, engineTimeout time.Duration
+	}{
+		"caller first": {50 * time.Millisecond, 5 * time.Second},
+		"engine first": {5 * time.Second, 50 * time.Millisecond},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			bs := &blockingListStore{}
+			m := pxModule(bs)
+			m.engineOpTimeout = tc.engineTimeout
+			ctx, cancel := context.WithTimeout(context.Background(), tc.callerTimeout)
+			defer cancel()
+			start := time.Now()
+			_, err := (&execPeers{m: m}).Rows(ctx)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Less(t, time.Since(start), 2*time.Second, "the page outlived the earlier deadline")
+			assert.Zero(t, bs.active.Load(), "a List is still running")
+		})
+	}
 }
 
 // P4a lists executions only: the mailbox last hop is not wired, and Send

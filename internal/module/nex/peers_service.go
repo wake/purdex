@@ -22,9 +22,10 @@ var _ execpeers.ExecPeers = (*execPeers)(nil)
 // with a session id. It walks every page (walkExecutions: the same complete
 // walk and repeated-cursor guard as the conversation listing) and fails whole
 // when any page does, so the peers module never takes a partial list for the
-// whole one.
+// whole one. The walk is not detached: the caller is an inventory pass with a
+// budget of its own, and a page must end with it, never outlive it.
 func (p *execPeers) Rows(ctx context.Context) ([]execpeers.Row, error) {
-	execs, err := p.m.walkExecutions(ctx, false)
+	execs, err := p.m.walkExecutions(ctx, false, false)
 	if err != nil {
 		return nil, err
 	}
