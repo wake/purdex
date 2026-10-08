@@ -44,6 +44,11 @@ describe('handleUnattendedEvent', () => {
     ['since is missing', { op: 'snapshot', state: { on: true, changed_at: 1_000 } }],
     ['changed_at is not finite', { op: 'snapshot', state: { ...state, changed_at: null } }],
     ['changed_by is not a record', { op: 'changed', state: { ...state, changed_by: 'app' } }],
+    ['changed_by is an empty record', { op: 'changed', state: { ...state, changed_by: {} } }],
+    ['changed_by.kind is not a string', { op: 'changed', state: { ...state, changed_by: { kind: 1, label: 'Purdex.app' } } }],
+    ['changed_by.kind is empty', { op: 'changed', state: { ...state, changed_by: { kind: '', label: 'Purdex.app' } } }],
+    ['changed_by.label is empty', { op: 'changed', state: { ...state, changed_by: { kind: 'app', label: '' } } }],
+    ['changed_by.addr is a number', { op: 'changed', state: { ...state, changed_by: { kind: 'app', label: 'Purdex.app', addr: 51234 } } }],
     ['the op is unknown', { op: 'x', state }],
     ['the state is missing', { op: 'snapshot' }],
   ])('a frame whose %s is dropped whole, with one warning, and proves nothing', (_what, frame) => {

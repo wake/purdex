@@ -267,11 +267,21 @@ export interface UnattendedEventValue {
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
+/**
+ * `Client` as the daemon writes it (`wire.go`): `kind` and `label` non-empty strings, `addr` a string when present.
+ * The kind is not narrowed to the ones this build knows — a later daemon's decider is still a decider.
+ */
+const isClient = (v: unknown): v is Client =>
+  isRecord(v)
+    && isString(v.kind) && v.kind !== ''
+    && isString(v.label) && v.label !== ''
+    && optional(v.addr, isString)
+
 /** The whole `UnattendedState` wire shape: a frame or an answer that fails here says nothing about the switch. */
 export function isUnattendedState(v: unknown): v is UnattendedState {
   return isRecord(v)
     && typeof v.on === 'boolean'
     && isFiniteNumber(v.since)
     && isFiniteNumber(v.changed_at)
-    && optional(v.changed_by, isRecord)
+    && optional(v.changed_by, isClient)
 }
