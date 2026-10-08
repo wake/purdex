@@ -476,12 +476,21 @@ func TokenSpans(s string) [][2]int {
 		}
 		last := 0
 		for _, id := range reKeptID.FindAllStringIndex(m, -1) {
+			// a kept id only counts as one when no letter or digit touches it:
+			// a uuid inside a longer secret-shaped string is part of the secret
+			if id[0] > 0 && isAlnum(m[id[0]-1]) || id[1] < len(m) && isAlnum(m[id[1]]) {
+				continue
+			}
 			check(last, id[0])
 			last = id[1]
 		}
 		check(last, len(m))
 	}
 	return out
+}
+
+func isAlnum(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 func redactTokens(s string) string {

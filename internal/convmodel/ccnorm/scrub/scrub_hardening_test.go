@@ -47,6 +47,7 @@ func TestScrub_UrlSafeAndSlashSplitTokensRedacted(t *testing.T) {
 		"dGhpcyBpcyBhIHNlY3JldCB0b2tlbiB3aXRoIGxvdHMgb2YgY2hhcnM+/Zm9vYmFy", // "+" and "/" together
 		"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",  // hex
 		"AbCd1234efGh5678IjKl9012mnOp3456qrSt7890UvWx1234==",                // padded
+		"AAAAAAAAAAAA7e7f214b-c4e3-48cd-ab15-62a3471bd4fdBBBBBBBBBBBB",      // a uuid inside a longer secret is part of it
 	}
 	for _, s := range secrets {
 		m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote("token "+s+" end")+`}}`)
