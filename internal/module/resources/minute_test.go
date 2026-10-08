@@ -322,11 +322,38 @@ func TestMinutes_ClockStepBack(t *testing.T) {
 	if rows := f.minutes(); len(rows) != 2 {
 		t.Fatalf("a tick in the past wrote or opened a minute: %+v", rows)
 	}
-	// Moving forward again into a minute that is stored never replaces it.
-	if err := f.m.store.InsertMinute(minuteRow{At: f.minutes()[0].At, Load1: 99, NCPU: 1}); err != nil {
+	// A minute that is stored is never lowered by another write for it.
+	if err := f.m.store.InsertMinute(minuteRow{At: f.minutes()[0].At, Load1: 1, NCPU: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.minutes()[0]; got.Load1 != 5 {
 		t.Errorf("a stored minute was overwritten: %+v", got)
+	}
+}
+
+// The sampler going off and on again inside one minute: the second part is
+// merged into the first, nothing is lost (full counters add up, peaks stay).
+func TestMinutes_OffAndOnInsideOneMinuteMerges(t *testing.T) {
+	f := newMinuteFix(t)
+	on := resources.HostUse{Full: true, Load1: 4, NCPU: 10}
+	f.ticks(2, on) // 12:00:00, :05
+	f.m.endMinute()
+	f.ticks(1, resources.HostUse{NCPU: 10}) // off for 5 s, still inside the minute
+	f.advance(5 * time.Second)
+	f.ticks(2, resources.HostUse{Full: true, Load1: 9, NCPU: 10})
+	f.ticks(12, resources.HostUse{NCPU: 10})
+	r := f.minutes()[0]
+	if r.FullTicks != 4 || r.FullStarts != 2 || r.Load1 != 9 {
+		t.Errorf("row = %+v, want full_ticks 4, full_starts 2, load1 9", r)
+	}
+}
+
+// The lease rows measureLeases hands back carry the average it just stored.
+func TestMeasureLeases_ReturnsTheUpdatedRows(t *testing.T) {
+	f := newMinuteFix(t)
+	f.heldLease("a", resources.ScopeProcess, 100)
+	held, ok := f.m.measureLeases(context.Background(), []resources.Proc{cpuProc(100, 1, 40)}, goodRaw())
+	if !ok || len(held) != 1 || held[0].Samples != 1 || !approx(held[0].EWMA, 40) {
+		t.Fatalf("held = %+v ok=%v", held, ok)
 	}
 }

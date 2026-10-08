@@ -498,17 +498,25 @@ type minuteRow struct {
 	Unleased        float64
 }
 
-// InsertMinute stores one row. A minute that is already stored is kept (a
-// clock that stepped back must not overwrite what was written), and the
-// attempt is not an error.
+// InsertMinute stores one row. A minute that is already stored is merged, not
+// replaced: peaks take the larger, the full counters add up, ncpu is the
+// newer. So a sampler that went off and on inside a minute, a restart in the
+// minute, or a clock that stepped back can only add to what was written.
 func (s *leaseStore) InsertMinute(r minuteRow) error {
 	full := 0
 	if r.Full {
 		full = 1
 	}
-	if _, err := s.db.Exec(`INSERT OR IGNORE INTO host_minutes
+	if _, err := s.db.Exec(`INSERT INTO host_minutes
 		(at, load1, ncpu, mem, measured, full, full_ticks, full_starts, full_longest_s, held, heavy_held, sum_charge, waiting, unleased)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(at) DO UPDATE SET
+			load1 = max(load1, excluded.load1), ncpu = excluded.ncpu, mem = max(mem, excluded.mem),
+			measured = max(measured, excluded.measured), full = max(full, excluded.full),
+			full_ticks = full_ticks + excluded.full_ticks, full_starts = full_starts + excluded.full_starts,
+			full_longest_s = max(full_longest_s, excluded.full_longest_s), held = max(held, excluded.held),
+			heavy_held = max(heavy_held, excluded.heavy_held), sum_charge = max(sum_charge, excluded.sum_charge),
+			waiting = max(waiting, excluded.waiting), unleased = max(unleased, excluded.unleased)`,
 		r.At, r.Load1, r.NCPU, r.Mem, r.Measured, full, r.FullTicks, r.FullStarts, r.FullLongestS, r.Held, r.HeavyHeld,
 		r.SumCharge, r.Waiting, r.Unleased); err != nil {
 		return fmt.Errorf("insert host minute: %w", err)

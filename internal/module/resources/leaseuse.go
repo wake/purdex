@@ -57,7 +57,7 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 	prev := m.leaseUseSnapshot()
 	latest := make(map[string]resources.LeaseUsage, len(held))
 	lastAt := make(map[string]time.Time, len(held))
-	for _, r := range held {
+	for i, r := range held {
 		u := usage[r.ID]
 		if u.Unverified {
 			// Its pid is another process now (the sweeper ends the lease as
@@ -99,6 +99,9 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 			continue
 		}
 		lastAt[r.ID] = now
+		// The rows handed back carry the figures just stored, so the timeline
+		// charges a lease by its current average, not last tick's.
+		held[i].EWMA, held[i].PeakUse, held[i].MeanUse, held[i].Samples, held[i].EmptySamples = ewma, peak, mean, samples, empty
 	}
 	m.setLeaseUse(latest)
 	m.useAt = lastAt
