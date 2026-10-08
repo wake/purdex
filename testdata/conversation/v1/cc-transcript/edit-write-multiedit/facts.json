@@ -18,13 +18,13 @@
     {"id": "toolu_015UEUGC7oWyQvKDZFXKR1vw", "kind": "edit", "status": "done"}
   ],
   "outputs": [
-    {"step": "toolu_01M4PsfQqtoB8cdfowKL65k1", "total_lines": 1, "total_bytes": 120, "keep": "head", "truncated": false},
-    {"step": "toolu_01UmLJ3h1yd2DV9ZBYbnjdmP", "total_lines": 1, "total_bytes": 130, "keep": "head", "truncated": false},
-    {"step": "toolu_01BWbh6VR5RXo8QbBo43xKGs", "total_lines": 12, "total_bytes": 187, "keep": "head", "truncated": false},
-    {"step": "toolu_0193T2pao4FwUFfDyNqjQ2sc", "total_lines": 1, "total_bytes": 159, "keep": "head", "truncated": false},
-    {"step": "toolu_01GsKZdaFcw3m9tEc1RXEKAZ", "total_lines": 1, "total_bytes": 159, "keep": "head", "truncated": false},
-    {"step": "toolu_01KKczVrfEEKiHBy6sr5jbmb", "total_lines": 4, "total_bytes": 35, "keep": "head", "truncated": false},
-    {"step": "toolu_015UEUGC7oWyQvKDZFXKR1vw", "total_lines": 1, "total_bytes": 130, "keep": "head", "truncated": false}
+    {"step": "toolu_01M4PsfQqtoB8cdfowKL65k1", "total_lines": 1, "total_bytes": 120, "truncated": false},
+    {"step": "toolu_01UmLJ3h1yd2DV9ZBYbnjdmP", "total_lines": 1, "total_bytes": 130, "truncated": false},
+    {"step": "toolu_01BWbh6VR5RXo8QbBo43xKGs", "total_lines": 12, "total_bytes": 187, "truncated": false},
+    {"step": "toolu_0193T2pao4FwUFfDyNqjQ2sc", "total_lines": 1, "total_bytes": 159, "truncated": false},
+    {"step": "toolu_01GsKZdaFcw3m9tEc1RXEKAZ", "total_lines": 1, "total_bytes": 159, "truncated": false},
+    {"step": "toolu_01KKczVrfEEKiHBy6sr5jbmb", "total_lines": 4, "total_bytes": 35, "truncated": false},
+    {"step": "toolu_015UEUGC7oWyQvKDZFXKR1vw", "total_lines": 1, "total_bytes": 130, "truncated": false}
   ],
   "shapes": []
 }

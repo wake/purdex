@@ -8,7 +8,7 @@
     {"id": "toolu_01ACmSwsZd5nw2Uy33rssf6V", "kind": "execute", "status": "done"}
   ],
   "outputs": [
-    {"step": "toolu_01ACmSwsZd5nw2Uy33rssf6V", "total_lines": 4, "total_bytes": 75, "keep": "tail", "truncated": false}
+    {"step": "toolu_01ACmSwsZd5nw2Uy33rssf6V", "total_lines": 4, "total_bytes": 75, "truncated": false}
   ],
   "shapes": []
 }

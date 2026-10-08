@@ -14,9 +14,9 @@
     {"id": "toolu_01693LPNQciTk6MVYRNQsRfN", "kind": "execute", "status": "done"}
   ],
   "outputs": [
-    {"step": "toolu_01NKWyU76Gj63hS6KG9dznmd", "total_lines": 2, "total_bytes": 68, "keep": "tail", "truncated": false},
-    {"step": "toolu_01Austw3RXHvweuceuaB6KxZ", "total_lines": 2, "total_bytes": 67, "keep": "tail", "truncated": false},
-    {"step": "toolu_01693LPNQciTk6MVYRNQsRfN", "total_lines": 1, "total_bytes": 241, "keep": "tail", "truncated": false}
+    {"step": "toolu_01NKWyU76Gj63hS6KG9dznmd", "total_lines": 2, "total_bytes": 68, "truncated": false},
+    {"step": "toolu_01Austw3RXHvweuceuaB6KxZ", "total_lines": 2, "total_bytes": 67, "truncated": false},
+    {"step": "toolu_01693LPNQciTk6MVYRNQsRfN", "total_lines": 1, "total_bytes": 241, "truncated": false}
   ],
   "shapes": []
 }

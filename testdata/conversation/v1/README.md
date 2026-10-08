@@ -75,7 +75,7 @@ cc-transcript/<case>/children/<agentId>.facts.json       hand-written; required 
 - `steps` lists **every** step in order of appearance; `denial` only when
   denied.
 - `outputs` must list every output that is truncated (a non-truncated one may
-  be listed too); `total_*` count the whole text, `keep` is the end kept.
+  be listed too); `total_*` count the whole text, `keep` is the end kept and exists only for a truncated output (the wire omits it otherwise, and so does facts).
 - `shapes` declares the rule shapes the case demonstrates that the structured
   part cannot show. `TestFixtures_CoverRuleShapes` unions them with the shapes
   it derives from `steps`, `outputs` and `per_turn` (every denial value, a
