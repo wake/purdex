@@ -1,7 +1,11 @@
 package ccnorm
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -118,5 +122,114 @@ func TestStats_SkippedKeyCardinalityBounded(t *testing.T) {
 	feed(t, n, line(obj{"type": "unknown-0", "uuid": "x"}))
 	if got := n.Stats().Skipped["type:unknown-0"]; got != 2 {
 		t.Errorf("type:unknown-0 = %d, want 2", got)
+	}
+}
+
+func TestFeed_OversizeLineSkippedButOffsetAdvances(t *testing.T) {
+	n := New(Options{SessionID: sidA})
+	big := userRow("u0", 1, strings.Repeat("a", 9<<20))
+	if len(big) <= 8<<20 {
+		t.Fatalf("test line is only %d bytes", len(big))
+	}
+	ch, err := n.Feed(0, big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ch) != 0 {
+		t.Errorf("an oversize line produced changes: %v", ch)
+	}
+	if want := int64(len(big)) + 1; n.Next() != want {
+		t.Fatalf("Next = %d, want offset+len+1 = %d", n.Next(), want)
+	}
+	if got := n.Stats().Skipped["line:oversize"]; got != 1 {
+		t.Errorf("Skipped = %v, want line:oversize 1", n.Stats().Skipped)
+	}
+	if len(n.Conversation().Turns) != 0 {
+		t.Error("an oversize line opened a turn")
+	}
+
+	// the next normal line at that offset is processed as usual
+	off := n.Next()
+	ch, err = n.Feed(off, userRow("u1", 2, "hi"))
+	if err != nil || len(ch) == 0 {
+		t.Fatalf("next line: changes %v err %v", ch, err)
+	}
+	c := validated(t, n)
+	if len(c.Turns) != 1 || c.Turns[0].ID != "u1" || c.Turns[0].Offset != off {
+		t.Errorf("turns after the oversize line: %s", dump(c))
+	}
+
+	// a line of exactly 8 MiB is still read
+	m := New(Options{})
+	pad := 8<<20 - len(userRow("u0", 1, ""))
+	exact := userRow("u0", 1, strings.Repeat("a", pad))
+	if len(exact) != 8<<20 {
+		t.Fatalf("exact line is %d bytes", len(exact))
+	}
+	feed(t, m, exact)
+	if len(m.Conversation().Turns) != 1 {
+		t.Error("a line of exactly 8 MiB must still be parsed")
+	}
+}
+
+// totalAlloc is the bytes allocated by f.
+func totalAlloc(f func()) uint64 {
+	var a, b runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&a)
+	f()
+	runtime.ReadMemStats(&b)
+	return b.TotalAlloc - a.TotalAlloc
+}
+
+func imageBlock(t testing.TB, rawData string) block {
+	t.Helper()
+	raw := `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + rawData + `"}}`
+	o, ok := parseObject([]byte(raw))
+	if !ok {
+		t.Fatal("test image block does not parse")
+	}
+	return block{typ: "image", obj: o}
+}
+
+func TestUser_ImageSizeNoFullStringAllocation(t *testing.T) {
+	// 4 MiB of JSON text with an escaped slash every 4 characters: measuring
+	// it must not build the decoded string (nor any other copy of the data)
+	unit := `AA\/A`
+	rawData := strings.Repeat(unit, (4<<20)/len(unit)) + `\n`
+	b := imageBlock(t, rawData)
+	var mt string
+	var size int64
+	alloc := totalAlloc(func() { mt, size = imageSize(b) })
+	chars := (4 << 20) / len(unit) * 4
+	if mt != "image/png" || size != int64(chars/4*3) {
+		t.Errorf("imageSize = %q, %d, want image/png, %d", mt, size, chars/4*3)
+	}
+	if limit := uint64(len(rawData) / 8); alloc > limit {
+		t.Errorf("imageSize allocated %d bytes for %d bytes of data, want at most %d", alloc, len(rawData), limit)
+	}
+}
+
+func TestUser_ImageSizeMatchesDecodedString(t *testing.T) {
+	// the scan must agree with decode-then-trim on escapes, edge whitespace
+	// and padding
+	for _, data := range []string{
+		``, `AAAA`, `AAAA=`, `AAA=`, `AA==`, `AA==`, `AA\/A`, `\nAAAA\n`, `\n \tAAA=\r\n`,
+		`AA=\n=`, `AAAA\n==`, `AA\"A`, `A\\AA`, `ABAA`, `héllo`, `éAAA`, `   `,
+	} {
+		b := imageBlock(t, data)
+		_, got := imageSize(b)
+		var s string
+		if err := json.Unmarshal([]byte(`"`+data+`"`), &s); err != nil {
+			t.Fatalf("%q: %v", data, err)
+		}
+		inner := bytes.TrimSpace([]byte(s))
+		want := int64(base64.StdEncoding.DecodedLen(len(inner)))
+		for i := 0; i < 2 && i < len(inner) && inner[len(inner)-1-i] == '='; i++ {
+			want--
+		}
+		if got != want {
+			t.Errorf("data %q: size %d, want %d", data, got, want)
+		}
 	}
 }

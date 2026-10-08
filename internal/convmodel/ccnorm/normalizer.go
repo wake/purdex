@@ -31,8 +31,9 @@ type Stats struct {
 
 // Bounds on what one row, or the counters, can cost.
 const (
-	maxBlocksPerRow = 64 // content blocks processed per row; the rest are skipped
-	maxSkipKeys     = 64 // distinct Stats.Skipped reasons; later new ones count as "other"
+	maxBlocksPerRow = 64      // content blocks processed per row; the rest are skipped
+	maxSkipKeys     = 64      // distinct Stats.Skipped reasons; later new ones count as "other"
+	maxLineBytes    = 8 << 20 // a longer line is not parsed (the transcript API's per-line cap)
 )
 
 // ErrGap is returned by Feed for a line beyond the next expected offset.
@@ -99,6 +100,12 @@ func (n *Normalizer) Feed(offset int64, line []byte) ([]Change, error) {
 	}
 	n.next = offset + int64(len(line)) + 1
 	n.stats.Lines++
+	if len(line) > maxLineBytes {
+		// Too big to decode (a huge inline image): the offset has moved on,
+		// the content is dropped and counted.
+		n.skip("line:oversize")
+		return nil, nil
+	}
 	n.row(offset, line)
 	return n.flush(), nil
 }

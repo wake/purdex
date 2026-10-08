@@ -20,6 +20,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // object is a decoded JSON object whose values stay raw until a rule needs
@@ -242,31 +243,109 @@ func hasToolResult(blocks []block) bool {
 	return false
 }
 
-// imageSize is the decoded size of an image block's base64 data, measured on
-// the trimmed length (base64.StdEncoding.DecodedLen less the padding); the
-// data itself is never kept. Escapes in the JSON
-// string (a "\/") are resolved only when present.
+// sizedValue is a member of an image's source object read without keeping a
+// long value: a short one stays raw (media_type), a string also has its
+// base64 size measured in place (UnmarshalJSON is handed a slice of the
+// input, so nothing is copied).
+type sizedValue struct {
+	raw  json.RawMessage // the value when it is short, else nil
+	size int64           // base64Size of a string value
+}
+
+func (v *sizedValue) UnmarshalJSON(b []byte) error {
+	if len(b) <= 1024 {
+		v.raw = append(json.RawMessage(nil), b...)
+	}
+	if len(b) >= 2 && b[0] == '"' {
+		v.size = base64Size(b[1 : len(b)-1])
+	}
+	return nil
+}
+
+// imageSize is the media type and decoded size of an image block's base64
+// data (base64.StdEncoding.DecodedLen less the padding, on the length
+// trimmed of white space). The data itself is never copied or kept, however
+// it is escaped.
 func imageSize(b block) (mediaType string, size int64) {
-	src, ok := parseObject(b.obj.get("source"))
-	if !ok {
+	src := b.obj.get("source")
+	if len(src) == 0 || src[0] != '{' {
 		return "", 0
 	}
-	mediaType = src.str("media_type")
-	raw := src.get("data")
-	if len(raw) < 2 || raw[0] != '"' {
-		return mediaType, 0
+	var members map[string]sizedValue
+	if err := json.Unmarshal(src, &members); err != nil {
+		return "", 0
 	}
-	inner := raw[1 : len(raw)-1]
-	if bytes.IndexByte(inner, '\\') >= 0 {
-		s, _ := jsonString(raw)
-		inner = []byte(s)
+	mediaType, _ = jsonString(members["media_type"].raw)
+	return mediaType, members["data"].size // 0 unless data is a string
+}
+
+// base64Size measures the inside of a JSON string (the quotes off) as the
+// string it decodes to would measure: white space at either end does not
+// count, nor does '=' padding. It walks the escapes (\/ \n \uXXXX …) and
+// keeps no decoded copy.
+func base64Size(in []byte) int64 {
+	var chars, ws, pad int
+	for i := 0; i < len(in); {
+		c, w := in[i], 1
+		i++
+		if c == '\\' && i < len(in) {
+			e := in[i]
+			i++
+			switch e {
+			case 'n':
+				c = '\n'
+			case 't':
+				c = '\t'
+			case 'r':
+				c = '\r'
+			case 'b':
+				c = '\b'
+			case 'f':
+				c = '\f'
+			case 'u':
+				r := rune(0)
+				for j := 0; j < 4 && i < len(in); j++ {
+					r = r<<4 | rune(hexVal(in[i]))
+					i++
+				}
+				if r < utf8.RuneSelf {
+					c = byte(r)
+				} else {
+					c, w = 0xff, max(utf8.RuneLen(r), 3) // not white space, not '='
+				}
+			default: // \" \\ \/
+				c = e
+			}
+		}
+		switch c {
+		case ' ', '\t', '\n', '\v', '\f', '\r':
+			if chars > 0 {
+				ws++
+			}
+			continue
+		}
+		if ws > 0 { // white space inside the data, not at its end
+			pad = 0
+		}
+		chars += ws + w
+		ws = 0
+		if c == '=' {
+			pad++
+		} else {
+			pad = 0
+		}
 	}
-	inner = bytes.TrimSpace(inner)
-	size = int64(base64.StdEncoding.DecodedLen(len(inner)))
-	// DecodedLen assumes the padding is all data; the decoded size is
-	// exact once the '=' characters are taken off.
-	for i := 0; i < 2 && i < len(inner) && inner[len(inner)-1-i] == '='; i++ {
-		size--
+	return int64(base64.StdEncoding.DecodedLen(chars)) - int64(min(pad, 2))
+}
+
+func hexVal(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
 	}
-	return mediaType, size
+	return 0
 }
