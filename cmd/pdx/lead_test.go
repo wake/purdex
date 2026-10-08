@@ -1042,3 +1042,83 @@ func leadRestartScenario(t *testing.T, upOnSleep int) {
 		t.Errorf("a restart must not cancel the request: deletes=%v %v", deletes1, deletes2)
 	}
 }
+
+// TL-1c, D-L4: --label is trimmed and sent as team_label; none (or a blank
+// one) leaves the key out of the body.
+func TestRunLeadCmd_LabelReachesTheRequestBody(t *testing.T) {
+	for _, tc := range []struct {
+		args    []string
+		want    string
+		wantKey bool
+	}{
+		{[]string{"--reason", "r", "--label", "  A 線  "}, "A 線", true},
+		{[]string{"--reason", "r", "--label", "資源租約派"}, "資源租約派", true}, // 10: five Chinese characters
+		{[]string{"--reason", "r", "--label", "   "}, "", false},
+		{[]string{"--reason", "r"}, "", false},
+	} {
+		var body []byte
+		d := newFakeTeamDaemon(team.Approval{State: team.StateApproved, Grant: &team.Grant{MaxMembers: 3}})
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == "/api/team/approvals" {
+				body, _ = io.ReadAll(r.Body)
+				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
+			d.ServeHTTP(w, r)
+		})
+		if code, _, stderr := driveLead(t, context.Background(), h, tc.args...); code != ExitOK {
+			t.Fatalf("%v: code=%d stderr=%q", tc.args, code, stderr)
+		}
+		creates, _, _, _ := d.snapshot()
+		if len(creates) != 1 || creates[0].TeamLabel != tc.want {
+			t.Errorf("%v: team_label = %+v, want %q", tc.args, creates, tc.want)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(body, &raw); err != nil {
+			t.Fatalf("%v: body %q: %v", tc.args, body, err)
+		}
+		if _, has := raw["team_label"]; has != tc.wantKey {
+			t.Errorf("%v: body %s has team_label = %v, want %v", tc.args, body, has, tc.wantKey)
+		}
+	}
+}
+
+// An invalid --label is refused before any HTTP call, naming the flag and the
+// rule (the width), with the usage line.
+func TestRunLeadCmd_InvalidLabelExits2BeforeAnyHTTPCall(t *testing.T) {
+	for name, bad := range map[string]string{"six Chinese characters": "資源租約派工", "11 ASCII": "01234567890", "control": "a\x07b", "invisible": "️"} {
+		d := newFakeTeamDaemon(team.Approval{State: team.StateApproved})
+		code, stdout, stderr := driveLead(t, context.Background(), d, "--reason", "r", "--label", bad)
+		creates, _, _, _ := d.snapshot()
+		if code != ExitUsage || stdout != "" || !strings.Contains(stderr, "--label") || !strings.Contains(stderr, "usage: pdx lead request") || len(creates) != 0 {
+			t.Errorf("%s: code=%d stdout=%q stderr=%q creates=%d", name, code, stdout, stderr, len(creates))
+		}
+	}
+	if !strings.Contains(leadUsage, "[--label <短名>]") {
+		t.Errorf("leadUsage = %q, want [--label <短名>]", leadUsage)
+	}
+}
+
+// The older-daemon fallback (no grant on the approval) carries the requested
+// label as the grant does.
+func TestRunLeadCmd_ApprovedWithoutGrantCarriesTheLabel(t *testing.T) {
+	payload, _ := json.Marshal(team.LeadPayload{Reason: "r", MaxMembers: 3, TeamLabel: "A 線"})
+	d := newFakeTeamDaemon(team.Approval{State: team.StateApproved, Payload: payload})
+	code, stdout, _ := driveLead(t, context.Background(), d, "--reason", "r", "--label", "A 線")
+	var out struct {
+		Grant team.Grant `json:"grant"`
+	}
+	if code != ExitOK || json.Unmarshal([]byte(stdout), &out) != nil || out.Grant.TeamLabel == nil || *out.Grant.TeamLabel != "A 線" {
+		t.Fatalf("code=%d stdout=%q", code, stdout)
+	}
+	payload, _ = json.Marshal(team.LeadPayload{Reason: "r", MaxMembers: 3})
+	d = newFakeTeamDaemon(team.Approval{State: team.StateApproved, Payload: payload})
+	if _, stdout, _ := driveLead(t, context.Background(), d, "--reason", "r"); strings.Contains(stdout, "team_label") {
+		t.Errorf("stdout = %q, want no team_label key", stdout)
+	}
+	// An approved approval with its grant prints the grant as the daemon gave it.
+	empty := ""
+	d = newFakeTeamDaemon(team.Approval{State: team.StateApproved, Grant: &team.Grant{MaxMembers: 3, TeamLabel: &empty}})
+	if _, stdout, _ := driveLead(t, context.Background(), d, "--reason", "r"); !strings.Contains(stdout, `"team_label":""`) {
+		t.Errorf("stdout = %q, want the grant's team_label as it is", stdout)
+	}
+}

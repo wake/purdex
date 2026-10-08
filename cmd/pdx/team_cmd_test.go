@@ -663,3 +663,40 @@ func TestTeamCmd_JSONAndNotLead(t *testing.T) {
 		t.Errorf("extra argument: code=%d", code)
 	}
 }
+
+// D-L8: the first line is the name, then the label in full-width brackets when
+// it differs from the name; the label alone when there is no name; nothing
+// when there is neither. Both are sanitised.
+func TestTeamCmd_TeamLineWithTheLabel(t *testing.T) {
+	for name, c := range map[string]struct{ name, label, want string }{
+		"name and label":    {"資源租約與派工回報", "資源線", "team: 資源租約與派工回報 ［資源線］"},
+		"label equals name": {"介面線", "介面線", "team: 介面線"},
+		"name only":         {"驗收 team", "", "team: 驗收 team"},
+		"label only":        {"", "A 線", "team: ［A 線］"},
+		"neither":           {"", "", ""},
+		"escapes":           {"a\x1b[31mb", "c\x07d", `team: a\x1b[31mb ［c\ad］`},
+	} {
+		v := fakeView()
+		v.Team.TeamName, v.Team.TeamLabel = c.name, c.label
+		d := &fakeTeamCmdDaemon{view: answer{body: v}}
+		code, stdout, stderr := driveTeamCmd(t, runTeamCmd, d)
+		first := strings.SplitN(stdout, "\n", 2)[0]
+		if c.want == "" {
+			if code != ExitOK || !strings.HasPrefix(stdout, "ADDRESS") {
+				t.Errorf("%s: stdout = %q, want the table alone", name, stdout)
+			}
+			continue
+		}
+		if code != ExitOK || first != c.want || strings.ContainsRune(stdout, 0x1b) || strings.ContainsRune(stdout, 0x07) {
+			t.Errorf("%s: first line %q (code %d, stderr %q), want %q", name, first, code, stderr, c.want)
+		}
+	}
+	// --json is the daemon's view as is: the label rides in team.team_label.
+	v := fakeView()
+	v.Team.TeamLabel = "資源線"
+	d := &fakeTeamCmdDaemon{view: answer{body: v}}
+	var back team.TeamView
+	if code, stdout, _ := driveTeamCmd(t, runTeamCmd, d, "--json"); code != ExitOK || json.Unmarshal([]byte(stdout), &back) != nil || back.Team.TeamLabel != "資源線" || strings.Contains(stdout, "team: ") {
+		t.Errorf("--json: code=%d stdout=%q", code, stdout)
+	}
+}

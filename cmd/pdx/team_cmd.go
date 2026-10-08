@@ -509,8 +509,8 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 	}
 	// D-N9: the team's name, when it has one, on a line of its own above the
 	// table; sanitised like a table cell, since it is printed into a terminal.
-	if v.Team.TeamName != "" {
-		fmt.Fprintf(stdout, "team: %s\n", sanitizeCell(v.Team.TeamName))
+	if line := teamLine(v.Team); line != "" {
+		fmt.Fprintln(stdout, line)
 	}
 	rows := [][]string{strings.Split("ADDRESS\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tTASK\tLAST\tCWD\tTMUX", "\t")}
 	for _, m := range v.Members {
@@ -548,4 +548,20 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		return ExitError
 	}
 	return ExitOK
+}
+
+// teamLine is the first line of `pdx team` (name D-N9, label D-L8): the name,
+// then the label in full-width brackets when it differs from the name; "" when
+// the team has neither. Both are sanitised: they are printed into a terminal.
+func teamLine(t team.Team) string {
+	name, label := sanitizeCell(t.TeamName), sanitizeCell(t.TeamLabel)
+	switch {
+	case name == "" && label == "":
+		return ""
+	case label == "" || label == name:
+		return "team: " + name
+	case name == "":
+		return "team: ［" + label + "］"
+	}
+	return "team: " + name + " ［" + label + "］"
 }
