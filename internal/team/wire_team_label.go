@@ -35,6 +35,11 @@ func NormaliseTeamLabel(s string) (string, error) {
 	if err := peers.ValidateTitle(s); err != nil {
 		return "", fmt.Errorf("%w: %s", ErrTeamLabelInvalid, strings.TrimPrefix(err.Error(), peers.ErrTitleInvalid.Error()+": "))
 	}
+	if textwidth.CellWidth(s) == 0 {
+		// Printable, but nothing to see (a lone variation selector, bare
+		// combining marks): it would stand for "no label" without being one.
+		return "", fmt.Errorf("%w: no visible character", ErrTeamLabelInvalid)
+	}
 	if w := textwidth.CellWidth(s); w > MaxTeamLabelWidth {
 		return "", fmt.Errorf("%w: weighs %d, at most %d (about five Chinese characters)", ErrTeamLabelInvalid, w, MaxTeamLabelWidth)
 	}
@@ -52,7 +57,7 @@ func NormaliseTeamLabel(s string) (string, error) {
 // compound (resource-lease) or an identifier (I/O) they are not separators.
 func DeriveTeamLabel(name string) string {
 	name = strings.TrimSpace(name)
-	if name == "" {
+	if name == "" || !utf8.ValidString(name) { // the byte offsets below are those of valid UTF-8
 		return ""
 	}
 	first := len(name)

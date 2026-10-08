@@ -91,3 +91,25 @@ func TestDeriveTeamLabelIsAlwaysValid(t *testing.T) {
 		}
 	}
 }
+
+// Printable but invisible is not a label: it would stand for "none" without
+// being it.
+func TestNormaliseTeamLabelNeedsAVisibleCharacter(t *testing.T) {
+	for _, in := range []string{"\ufe0f", "\u0301\u0301", "\U0001F3FD", "\u0301\ufe0f"} {
+		if _, err := NormaliseTeamLabel(in); !errors.Is(err, ErrTeamLabelInvalid) {
+			t.Errorf("%q accepted (err %v)", in, err)
+		}
+	}
+	if got, err := NormaliseTeamLabel("a\u0301"); err != nil || got != "a\u0301" {
+		t.Errorf("a with a combining mark: %q %v", got, err)
+	}
+}
+
+// Invalid UTF-8 never panics and never makes a label.
+func TestDeriveTeamLabelInvalidUTF8(t *testing.T) {
+	for _, in := range []string{"\xff:", "a\xff:b", "\xff", "ab\xc3", "A \xe2\x82 - x", ":\xff"} {
+		if got := DeriveTeamLabel(in); got != "" {
+			t.Errorf("%q -> %q, want no label", in, got)
+		}
+	}
+}
