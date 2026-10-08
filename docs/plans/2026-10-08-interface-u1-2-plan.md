@@ -126,7 +126,7 @@ Mutation gates: workflow spawn counted → `SpawnAddsWorkflowSpawnDoesNot` red; 
 Files: `internal/module/agent/modlights.go` (new), `module.go`, tests.
 
 - `Dependencies()` adds `"modevents"` so its registry is published before `Init`; `Init` looks it up (`c.Registry.Get(modeventsmod.ServiceName)`); absent → the mod path is off (every overlay lookup misses).
-- `Start` subscribes; `Stop` cancels the subscription, then stops the worker (A3-2) and waits for it.
+- `Start` subscribes; `Stop` cancels the subscription, then stops the worker (A3-2) and waits for it. The overlay is off until the worker runs (see "The overlay switch" below).
 - Module state, guarded by its own `modMu` (never held while calling the store, tmux, or `m.mu`): `modStreams map[string]*lights.StreamState` (by stream), `modBySID map[string]string` (sid → newest stream), `modDirty map[string]struct{}` (sids whose panes must be re-emitted), `modKick chan struct{}` (cap 1). **`modMu` is a leaf lock**: nothing else is taken while it is held (the overlay copies what it needs and releases it).
 - The subscriber `func(info modevents.StreamInfo, ev modevents.Event)`: under `modMu`, get or create the state, `changed := st.Apply(ev, now())`, update `modBySID` (a switch moves the old sid out and marks **both** sids dirty), on `changed` add the sid to `modDirty`; release; non-blocking send on `modKick`. **It never touches the frame store, tmux, `m.mu`, the events bus or the registry** (spec §6.4: subscribers must not block and must not lead back into `Apply`). Eviction mirrors the registry: a stream ended > 30 min or idle > 2 h is dropped by the worker tick; when the dropped stream is `modBySID[sid]`, the index is re-pointed to the newest other stream with that sid (or deleted) and the sid is marked dirty (review #6).
 
@@ -154,6 +154,13 @@ Tests (`modlights_test.go`, existing fakes): `TestModOverlay_LiveStreamWinsOverH
 Mutation gates: overlay keyed by pane instead of sid → `MatchesBySid` red; emitting without the change check → `EmitsOnChangeOnly` red; subscriber calling the store → `NeverBlocks` red (deadline); `omitempty` on background → `BackgroundAlwaysPresent` red; digest without the representative frame id → `EmitsWhenRepresentativeChangesWithEqualStatus` red; eviction leaving the index → `RepointsSidIndex` red; probe gate removed → `SkippedWhileModLive` red.
 
 If this PR passes 800 lines it splits into A3-1+A3-3 (overlay, driven by a test-only kick) and A3-2 (worker, tick, eviction).
+
+### The overlay switch (a-3a / a-3b split, lead ruling 2026-10-08)
+
+Found while checking a-3a's deploy-alone safety: the mod event channel has been live since alpha.604, so an overlay without the A3-2 worker changes the lights at once — and wrongly. The mod queues events and flushes 150 ms after the first (`events.js` `FLUSH_MS`); hooks arrive almost at once. At the end of a turn the `Stop` hook emits first, the overlay still reads the mod's `running` (its `turn.complete` sits in the mod's queue), the frame goes out as `running` / `source: "mod"`, and when `turn.complete` lands 150 ms later it only marks the sid dirty — nothing re-emits, so the light stays `running` until the next hook (usually the user's next prompt). A permission ask's `waiting` has the same ordering race.
+
+- **a-3a** ships the overlay behind a switch, **off by default**: `applyModOverlay` is a no-op until it is on. Deployed alone, a-3a subscribes and keeps the per-stream state, and the lights on the wire are exactly today's; frames only gain `source: "hook"` and `background: ""`. Tests turn the switch on in their helper; `TestModOverlay_OffByDefault` pins the deployed state.
+- **a-3b** turns the switch on only once the worker is running, in the same place that starts it; `Stop` turns it off before stopping the worker. a-3b adds two regression tests for the race: `TestModWorker_StopHookBeforeTurnComplete` (a hook `Stop` emit while the mod still says running, then the mod's `turn.complete`: the last emitted status is `idle` within one worker round) and `TestModWorker_PermissionAskBeforeHookOrder` (the same shape for a permission ask's `waiting`).
 
 ---
 
