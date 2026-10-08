@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/lights"
 	"github.com/wake/purdex/internal/modevents"
@@ -40,6 +41,14 @@ func newModLights() modLights {
 		modDirty:   make(map[string]struct{}),
 		modKick:    make(chan struct{}, 1),
 	}
+}
+
+// modClock reads modNow, or the wall clock on a Module built without New.
+func (l *modLights) modClock() time.Time {
+	if l.modNow == nil {
+		return time.Now()
+	}
+	return l.modNow()
 }
 
 // initModLights looks up the mod event registry. Absent (a daemon built
@@ -79,7 +88,7 @@ func (m *Module) stopModLights() {
 // modMu and kicks the worker, nothing else — no frame store, no tmux, no
 // m.mu, no events bus, no registry call.
 func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
-	now := m.modNow()
+	now := m.modClock()
 	m.modMu.Lock()
 	st := m.modStreams[info.Stream]
 	if st == nil {
@@ -129,4 +138,74 @@ func (m *Module) repointSIDLocked(sid string) {
 		return
 	}
 	m.modBySID[sid] = best
+}
+
+// modLight is what the overlay copies out of a live stream under modMu.
+type modLight struct {
+	status     agentpkg.Status
+	background lights.Background
+	dots       []lights.Dot
+}
+
+// applyModOverlay replaces, in place, the light of every projection whose
+// top frame's session id has a live mod stream (spec §7): status, source
+// "mod", background and the dots. Projections without one keep the hook
+// light. It takes modMu only to copy the stream states (callers may hold
+// m.mu: the order is m.mu → modMu, and modMu is a leaf).
+func (m *Module) applyModOverlay(projections []SessionProjection) {
+	if len(projections) == 0 {
+		return
+	}
+	lit := make(map[int]modLight)
+	now := m.modClock()
+	m.modMu.Lock()
+	for i := range projections {
+		top := projections[i].TopFrame
+		if top == nil || top.SessionID == "" {
+			continue
+		}
+		st := m.modStreams[m.modBySID[top.SessionID]]
+		// An ended stream is never live: the pane falls back to its frame,
+		// which the hook SessionEnd or the sweep removes; the overlay
+		// never invents a clear.
+		if st == nil || st.SID != top.SessionID || !st.Live(now) {
+			continue
+		}
+		lit[i] = modLight{status: st.Status(), background: st.Background, dots: st.DotList()}
+	}
+	m.modMu.Unlock()
+
+	for i, l := range lit {
+		p := &projections[i]
+		p.Status = l.status
+		p.Source = SourceMod
+		p.Background = string(l.background)
+		p.Subagents = overlayDots(p.Subagents, l.dots, p.TopFrame.AgentType)
+	}
+}
+
+// overlayDots is the projection's proxy refs followed by one native ref per
+// mod dot, in dot order. A dot the hooks also track keeps the hook ref
+// (Delegating, DelegatingToolUseIDs, StartedAt); a new one starts at the
+// spawn (ms → ns, the unit of a hook ref's StartedAt). Hook native refs the
+// mod does not dot (workflow agents, N6) are left out — of the projection
+// only, the frame row keeps them.
+func overlayDots(refs []agentpkg.SubagentRef, dots []lights.Dot, agentType string) []agentpkg.SubagentRef {
+	out := make([]agentpkg.SubagentRef, 0, len(refs)+len(dots))
+	native := make(map[string]agentpkg.SubagentRef)
+	for _, r := range refs {
+		if r.IsProxy {
+			out = append(out, r)
+		} else if _, seen := native[r.ID]; !seen {
+			native[r.ID] = r
+		}
+	}
+	for _, d := range dots {
+		if r, ok := native[d.ID]; ok {
+			out = append(out, r)
+			continue
+		}
+		out = append(out, agentpkg.SubagentRef{ID: d.ID, Type: agentType, StartedAt: d.StartedAt * int64(time.Millisecond)})
+	}
+	return out
 }
