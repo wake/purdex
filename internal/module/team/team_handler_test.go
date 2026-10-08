@@ -101,6 +101,27 @@ func TestTeam_ListsMembersWithModelEffortAndContext(t *testing.T) {
 	}
 }
 
+// Plan PL-1a′: every member row is spawned today, and GET /api/team says so
+// ("origin" is always on the wire, so a client never reads a blank as the
+// default). Mutation gate: drop `Origin:` in memberView → red.
+func TestTeamGet_MemberOriginIsSpawned(t *testing.T) {
+	f, root := newTeamFixture(t, 3)
+	f.member(1, root, "sid-m1", "w-one", nil)
+	code, body := f.do(http.MethodGet, "/api/team?origin_inbox="+url.QueryEscape("/tmp/10.sock"), "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/team = %d %s", code, body)
+	}
+	var raw struct {
+		Members []map[string]json.RawMessage `json:"members"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil || len(raw.Members) != 1 {
+		t.Fatalf("members = %v, %v; %s", raw.Members, err, body)
+	}
+	if got := string(raw.Members[0]["origin"]); got != `"spawned"` {
+		t.Fatalf(`member origin = %s, want "spawned"; %s`, got, body)
+	}
+}
+
 // Only a live team's lead sees its team; the registry being unreadable is a
 // retry.
 func TestTeam_NotLeadIs409(t *testing.T) {

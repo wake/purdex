@@ -76,7 +76,8 @@ func (m *Module) memberView(mr memberRow) team.Member {
 	alias, _ := m.selfHost()
 	v := team.Member{SessionID: mr.SessionID, Ref: mr.Ref, Address: alias + "/" + mr.Ref, TeamID: mr.TeamID,
 		HostID: mr.HostID, Title: mr.Title, Cwd: mr.Cwd, TmuxSession: mr.TmuxSession, State: mr.State,
-		Model: mr.Model, Effort: mr.Effort, Context: mr.Usage, SpawnOp: mr.SpawnOp, CreatedAt: mr.CreatedAt}
+		Model: mr.Model, Effort: mr.Effort, Context: mr.Usage, SpawnOp: mr.SpawnOp, CreatedAt: mr.CreatedAt,
+		Origin: team.MemberOriginSpawned} // every row is spawned until adopt lands (PL-1b)
 	if mr.State == team.MemberActive {
 		if o, ok, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && ok {
 			v.Address = o.Address
