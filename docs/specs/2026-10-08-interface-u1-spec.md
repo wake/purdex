@@ -229,6 +229,19 @@ Wire statuses stay `running | waiting | idle | error | clear`.
 
 **SPA (U1-3):** connects with `?agent=v2`; the `agent.snapshot` replaces that host's agent state (codes absent → cleared); `hook` frames that arrive on a connection before its snapshot are ignored, and so are frames with `(epoch, seq) ≤` the last applied; a different epoch is taken only from a snapshot; a seq gap forces a reconnect; replayed state never sets unread; the tab light is the highest priority over **all** its panes; the corner symbol renders per N6; dots exclude workflow agents (the daemon never sends them).
 
+**U1-3 notes (from the lights-3 smoke work; the SPA must not mark unread for these).** Unread is set only on a real status *transition*, not on every idle / waiting / error frame (today `useAgentStore.ts` ~294–311 marks every one). The daemon legitimately sends the following same-status frames, none of which may set unread:
+
+1. A change of representative pane or model with the status unchanged (the a-3b digest includes the representative frame id and agent type).
+2. A frame whose only change is `background` (one pane already emits it, #607; with several panes a non-representative pane's background change does too, b-1).
+3. The hook → mod hand-over (#2015 on): `running (hook)` → `running (mod)` at the start of a turn, `idle (hook)` → `idle (mod)` at its end — same colour, new `source`, two idles in a row.
+4. A subagent's hooks repeating idle (a session with subagents emits on every `PdxPreToolUse` / `PostToolUse`; about 25 frames in 65 s were seen).
+5. A `PdxSubagentStop` idle of unknown origin (seen once, from a session that started no subagent, with an `agent_id`).
+6. The reconnect replay: the `agent.snapshot` of `agent=v2` replaces the stopgap the legacy replay frames needed.
+
+Other facts for U1-3: `(epoch, seq)` and `agent.snapshot` exist only from b-2 / b-3 on (earlier frames carry neither); in a multi-pane session dots / agent type / model come from the representative pane and `background` is the highest across panes (known limit); wire `model` is present only when the hook came from the representative pane, and the SPA keeps its previous model on an empty one; a permission box's `waiting` comes from the mod's `tool.check` (a hook's Notification / PermissionRequest must not override the mod) and arrives about 1 s after the hook; payloads not yet seen in a live run: the Stop `monitor` / `workflow` task types, the raw `session_crons` array, and a `PostToolUseFailure` carrying `is_interrupt` (smoke and mod streams only showed subagent / shell tasks and the cron count).
+
+**Known limit of the snapshot's non-tmux part.** `nonTmuxLast` is written by the emit slot in slot order, not request order. A SessionEnd that overtakes an older event of the same session could leave a stale non-tmux entry in the snapshot; a CC command hook waits for the previous hook, so one session's hooks reach the daemon in order, and a stray entry is dropped after 2 h (and the table is capped at 1024 codes).
+
 ## 8. Later phases — contracts to hold
 
 - **Conversation model (U1-4, U1-5)** — [D §14] types: `Conversation{key: host_id+provider+session_id, backend, provider, title, status, capabilities, usage, turns[]}`, `Turn{id, started_at, ended_at?, outcome}`, items `UserMessage{…, client_msg_id?}`, `AgentText{…, streaming?}`, `Thinking{duration_ms, text?}`, `Step{kind ∈ edit|execute|read|search|fetch|task|other, status ∈ running|done|failed|denied, …, children?}`, `System`. The transcript normalizer evaluates reusing Nexen `prelude` classification (needs an import-boundary allowance in `internal/module/nex/imports_test.go` or an exported deriver) against an own parser; golden fixtures come from the iOS samples and from recorded mod streams. Mod items merge with transcript rows by row `uuid` (`session.append` carries it). **U1-4's detailed contract is §8.1.**

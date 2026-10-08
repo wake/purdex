@@ -26,7 +26,7 @@ import (
 //
 // hookEmitter.mu is taken in exactly these places: emitSessionWith (every
 // hook, probe, sweep, non-tmux and mod worker frame) and
-// Module.sendFrameSnapshot (the subscribe-time replay). Both time their hold
+// Module.sendSnapshot (the subscribe-time replay). Both time their hold
 // (hookemitter_hold.go).
 type hookEmitter struct {
 	mu sync.Mutex

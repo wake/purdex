@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -614,76 +615,200 @@ func (m *Module) replayFromDB() {
 	}
 }
 
-// sendFrameSnapshot sends one replay frame per session that has a frame
-// projection and returns those sessions' names. Reading the projections,
-// sending, syncing the in-memory state and seeding the baseline are one
-// critical section under emit.mu: the mod worker (and every hook emit) is
-// either wholly before it, in which case the snapshot reads what they sent,
-// or wholly after it, in which case their frame follows the snapshot's on
-// this connection. A snapshot sent outside the lock could land after a newer
-// frame and, with a baseline that already exists, leave this connection on
-// the stale state for good. The legacy agent_events part of the snapshot
-// stays outside.
-func (m *Module) sendFrameSnapshot(sub *core.EventSubscriber) map[string]struct{} {
-	projectedSessions := make(map[string]struct{})
-	m.emit.mu.Lock()
-	defer m.emit.mu.Unlock()
-	defer m.emit.end(m.emit.begin(), "", kindSnapshot)
-	projections, err := m.liveSessionProjections()
-	if err != nil {
-		log.Printf("[agent] snapshot frames: %v", err)
-		return projectedSessions
-	}
-	for _, item := range projections {
-		projectedSessions[item.SessionName] = struct{}{}
-		if item.SessionCode == "" {
-			continue
-		}
-		normalized := buildProjectionNormalized(&item.Projection, item.Projection.TopFrame.AgentType, "replay", time.Now().UnixNano(), agentpkg.DeriveResult{})
-		payload, _ := json.Marshal(normalized)
-		event := core.HostEvent{Type: "hook", Session: item.SessionCode, Value: string(payload)}
-		data, _ := json.Marshal(event)
-		sent := sub.TrySend(data)
-		m.mu.Lock()
-		syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
-		if sent {
-			m.seedBaselineLocked(item.SessionName, &item.Projection, normalized)
-		}
-		m.mu.Unlock()
-	}
-	return projectedSessions
-}
-
-// sendSnapshot sends the latest hook event for each known session to a new WS subscriber.
+// sendSnapshot gives a new WS subscriber the agent state of every session on
+// this host. Everything happens in one critical section under emit.mu, the
+// hook emit slot: the projections are read, the frames sent, the in-memory
+// state synced and the baseline seeded while no hook, probe, sweep or mod
+// worker frame can go out. Anything broadcast before it has seq <= H (the
+// slot's high-water mark), anything after it has seq > H, so a client can
+// order the snapshot against the live frames. A snapshot sent outside the
+// slot could land after a newer frame and, with a baseline that already
+// exists, leave this connection on the stale state for good.
+//
+// An agent.v2 subscriber gets one complete agent.snapshot frame
+// (agentSnapshotFrame); every other subscriber gets the per-session replay
+// hook frames it always had, now carrying (epoch, H, snapshot:true), which
+// old clients ignore.
+//
+// Cost: a frame-projection read (one tmux call, see paneSnapshot), the
+// legacy agent_events listing and the session list, once per subscribe.
 func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 	if m.sessions == nil {
 		return
 	}
-	projectedSessions := m.sendFrameSnapshot(sub)
+	var stale []string
+	defer func() {
+		// stale legacy rows are deleted after the slot is released
+		for _, name := range stale {
+			if err := m.events.Delete(name); err != nil {
+				log.Printf("[agent] snapshot cleanup of legacy event: %v", err)
+			}
+		}
+	}()
+
+	e := &m.emit
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	defer e.end(e.begin(), "", kindSnapshot)
+
+	boot := ""
+	if m.core != nil {
+		boot = m.core.BootID
+	}
+	if e.epoch == "" {
+		e.epoch = boot
+	}
+	// The legacy rows and the session names are read inside the slot too: the
+	// snapshot is the complete list as of H, and a session that emitted its
+	// first frame (seq <= H) while the names were read outside would be in
+	// neither the snapshot nor the frames the client keeps. Cost (measured):
+	// the agent_events listing is ~0.5 ms for 200 rows; ListSessions has a 1 s
+	// cache that resolveSessionCode may just have warmed, ~27 ms cold for 5
+	// sessions.
+	legacy, legacyErr := m.readLegacyRows()
+	items, staleNames, framesErr := m.snapshotItemsLocked(legacy)
+	stale = staleNames
+	for i := range items {
+		items[i].event.Epoch, items[i].event.Seq, items[i].event.Snapshot = e.epoch, e.seq, true
+	}
+
+	if sub.Wants(core.FeatureAgentV2) {
+		// agent.snapshot is authoritative: the client replaces the host's
+		// whole agent state with it. A list built from a failed read would
+		// clear sessions that are merely unreadable, so it is not sent; the
+		// connection ends and the reconnect asks again.
+		if framesErr != nil || legacyErr != nil {
+			log.Printf("[agent] agent.snapshot not sent (frames: %v, legacy: %v); closing the subscriber so it reconnects", framesErr, legacyErr)
+			if m.core != nil {
+				m.core.Events.Remove(sub)
+			}
+			return
+		}
+		sent := m.sendAgentSnapshot(sub, e.epoch, e.seq, items)
+		for _, it := range items {
+			m.syncSnapshotItem(it, sent)
+		}
+		return
+	}
+	for _, it := range items {
+		payload, _ := json.Marshal(it.event)
+		data, _ := json.Marshal(core.HostEvent{Type: "hook", Session: it.code, Value: string(payload)})
+		m.syncSnapshotItem(it, sub.TrySend(data))
+	}
+}
+
+// snapshotItem is one session of a snapshot: the code it is sent under, the
+// frame, and (for a frame projection) the projection that frame came from.
+type snapshotItem struct {
+	code    string
+	session string // tmux session name; "" for a non-tmux session
+	event   agentpkg.NormalizedEvent
+	proj    *SessionProjection
+}
+
+// syncSnapshotItem brings the in-memory state of a frame-projection session
+// to what the snapshot says and, when the frame reached the subscriber (sent),
+// seeds its light baseline. Items that are not frame projections have nothing
+// to sync.
+func (m *Module) syncSnapshotItem(it snapshotItem, sent bool) {
+	if it.proj == nil || it.session == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	syncProjectionState(m.currentStatus, m.subagents, it.session, it.proj)
+	if sent {
+		m.seedBaselineLocked(it.session, it.proj, it.event)
+	}
+}
+
+// snapshotItemsLocked lists every session with an agent: the frame
+// projections, the legacy agent_events sessions (rows read by readLegacyRows),
+// and the non-tmux sessions the slot has seen (nonTmuxLast, expired first).
+// Under emit.mu. framesErr is a failed frame-projection read: the list is then
+// missing sessions (the legacy subscriber still gets what there is; agent.v2
+// must not treat it as complete). stale are legacy rows to delete once the
+// slot is released.
+func (m *Module) snapshotItemsLocked(legacy *legacyRows) (items []snapshotItem, stale []string, framesErr error) {
+	projectedSessions := make(map[string]struct{})
+	projections, err := m.liveSessionProjections()
+	if err != nil {
+		log.Printf("[agent] snapshot frames: %v", err)
+		framesErr = err
+	} else {
+		for i := range projections {
+			item := projections[i]
+			projectedSessions[item.SessionName] = struct{}{}
+			if item.SessionCode == "" {
+				continue
+			}
+			proj := item.Projection
+			normalized := buildProjectionNormalized(&proj, proj.TopFrame.AgentType, "replay", time.Now().UnixNano(), agentpkg.DeriveResult{})
+			items = append(items, snapshotItem{code: item.SessionCode, session: item.SessionName, event: normalized, proj: &proj})
+		}
+	}
+	legacyItems, stale := m.legacySnapshotItems(legacy, projectedSessions)
+	items = append(items, legacyItems...)
+
+	m.expireNonTmuxLocked(m.nonTmuxClock())
+	codes := make([]string, 0, len(m.nonTmuxLast))
+	for code := range m.nonTmuxLast {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	for _, code := range codes {
+		ev := m.nonTmuxLast[code].event
+		ev.RawEventName = "replay"
+		items = append(items, snapshotItem{code: code, event: ev})
+	}
+	return items, stale, framesErr
+}
+
+// legacyRows is the agent_events table and the session names, read inside the
+// emit slot (sendSnapshot).
+type legacyRows struct {
+	events     []store.AgentEvent
+	nameToCode map[string]string
+}
+
+// readLegacyRows reads the legacy part of a snapshot. nil rows with a nil error
+// means there is nothing legacy to list.
+func (m *Module) readLegacyRows() (*legacyRows, error) {
+	if m.events == nil {
+		return nil, nil
+	}
 	all, err := m.events.ListAll()
 	if err != nil {
 		log.Printf("[agent] snapshot: %v", err)
-		return
+		return nil, err
 	}
 	if len(all) == 0 {
-		return
+		return nil, nil
 	}
-
 	sessions, err := m.sessions.ListSessions()
 	if err != nil {
 		log.Printf("[agent] snapshot sessions: %v", err)
-		return
+		return nil, err
 	}
 	nameToCode := make(map[string]string, len(sessions))
 	for _, s := range sessions {
 		nameToCode[s.Name] = s.Code
 	}
+	return &legacyRows{events: all, nameToCode: nameToCode}, nil
+}
 
-	for _, ev := range all {
+// legacySnapshotItems is the agent_events part of the snapshot: the latest
+// stored hook event of every session that has no frame projection. stale are
+// the sessions whose stored event no longer derives to a valid status.
+func (m *Module) legacySnapshotItems(rows *legacyRows, projectedSessions map[string]struct{}) (items []snapshotItem, stale []string) {
+	if rows == nil {
+		return nil, nil
+	}
+	for _, ev := range rows.events {
 		if _, ok := projectedSessions[ev.TmuxSession]; ok {
 			continue
 		}
-		code, ok := nameToCode[ev.TmuxSession]
+		code, ok := rows.nameToCode[ev.TmuxSession]
 		if !ok {
 			continue
 		}
@@ -698,19 +823,41 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 			// raw_event_name on cold reconnect (which would re-key
 			// hook-module lastTrigger and surface stale legacy events
 			// despite replayFromDB intentionally skipping them).
-			if m.events != nil {
-				if err := m.events.Delete(ev.TmuxSession); err != nil {
-					log.Printf("[agent] snapshot cleanup of legacy event: %v", err)
-				}
-			}
+			stale = append(stale, ev.TmuxSession)
 			continue
 		}
 		normalized := m.buildNormalized(ev.TmuxSession, ev.EventName, ev.AgentType, ev.BroadcastTs, result)
-		payload, _ := json.Marshal(normalized)
-		event := core.HostEvent{Type: "hook", Session: code, Value: string(payload)}
-		data, _ := json.Marshal(event)
-		sub.Send(data)
+		items = append(items, snapshotItem{code: code, event: normalized})
 	}
+	return items, stale
+}
+
+// agentSnapshotFrame is the value of the one frame an agent.v2 subscriber gets
+// on connect. Seq is the slot's high-water mark and is always present, 0
+// included (nothing broadcast yet). Sessions is never null: an empty host
+// sends [].
+type agentSnapshotFrame struct {
+	Epoch    string               `json:"epoch"`
+	Seq      uint64               `json:"seq"`
+	Sessions []agentSnapshotEntry `json:"sessions"`
+}
+
+type agentSnapshotEntry struct {
+	Session string                   `json:"session"`
+	Event   agentpkg.NormalizedEvent `json:"event"`
+}
+
+// sendAgentSnapshot sends the one complete agent.snapshot frame and reports
+// whether it was queued. The subscriber is strict (agent.v2): a frame that
+// does not fit ends the connection and the reconnect brings a new snapshot.
+func (m *Module) sendAgentSnapshot(sub *core.EventSubscriber, epoch string, seq uint64, items []snapshotItem) bool {
+	frame := agentSnapshotFrame{Epoch: epoch, Seq: seq, Sessions: make([]agentSnapshotEntry, 0, len(items))}
+	for _, it := range items {
+		frame.Sessions = append(frame.Sessions, agentSnapshotEntry{Session: it.code, Event: it.event})
+	}
+	payload, _ := json.Marshal(frame)
+	data, _ := json.Marshal(core.HostEvent{Type: "agent.snapshot", Value: string(payload)})
+	return sub.TrySend(data)
 }
 
 func (m *Module) liveFrameProjections() ([]SessionProjection, error) {
