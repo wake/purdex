@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.608] - 2026-10-09
+
+> 動 daemon、CLI 和 skill：**要部署 daemon，也要重跑 `pdx setup --agent cc`**（skill 換版；mod 沒有改）；SPA、Electron 不必更新。使用者看得到的有兩項：**team 可以取名字**（lead 申請時交出、`pdx team` 第一行顯示；App 的核准框欄位是下一版），以及沒有外掛即時事件的 session 燈號更準了。其餘是底層。
+
+### Added：team 名稱 — 主機端（#2016）
+
+- `pdx lead request --name "<名字>"`：lead 申請時一起交出 team 名稱。名字可以不填，但 skill 會要求 lead 一律填。規則跟 session title 一樣：頭尾空白去掉，最多 64 bytes，只能是可顯示的字元。
+- 核准時可以改名；不改就用申請時給的名字。無人值守自動核准也用申請時的名字。
+- `pdx team` 在表格上方多一行 `team: <名字>`；`GET /api/team` 與 `GET /api/team/roster` 都帶 `team_name`。主機能力清單多 `team.name.v1`。
+- 核准後還不能改名（待確認）。App 的核准框欄位，以及分頁群組、側欄、team 面板上的名字顯示，會在之後的版本加上。
+
+### Fixed：沒有外掛即時事件時的燈號（介面語言 U1-2a-4，#2005）
+
+- 按 Esc 中斷一個回合時，燈號會回到閒置；Claude Code 不會為中斷送出「回合結束」，以前燈號會卡著。
+- 子 agent 失敗時，主 session 的燈號不再跟著變成錯誤。
+- 回合結束時，如果還有背景工作或排程，燈號會加上背景符號。
+- 一個 pane 出錯，不再擋住同一個 session 其他 pane 的燈號更新。
+
+### Internal
+
+- 派工／回報規格 T：任務表與回報表的資料層（#2007、#2012）。還沒有 API 或指令可以用，這一版只會在開機時建表。
+- 對話模型：Claude Code 對話紀錄轉換器加上工具步驟（種類、結果配對、狀態、輸出截斷）；目前不在任何執行路徑上（#2010）。
+
 ## [1.0.0-alpha.607] - 2026-10-09
 
 > 動 daemon、CLI 和 SPA：**要部署 daemon**（`bin/pdx` 一起換新）；這版 mod 沒有改，不必重跑 `pdx setup`；主 checkout 快轉後 SPA 就生效；Electron 不必更新。使用者看得到的有三項：**燈號改由 Claude Code 外掛的即時事件驅動**（燈號 v2 上線）、`pdx team` 多了 CPU／記憶體欄、移除主機時會一併清掉它的核准框。其餘是底層，還沒有新畫面。
