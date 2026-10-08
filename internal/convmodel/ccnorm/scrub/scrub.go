@@ -37,6 +37,8 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/user"
@@ -44,6 +46,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/convmodel/ccnorm"
 )
@@ -66,6 +69,10 @@ const (
 	FixturePeer   = "fixture-peer"
 	FixtureSocket = "uds:/work/tmp/cc-socks/1.sock"
 
+	// FixtureHost stands in for the host part of a pdx address and for every
+	// bare host name of the recording setup.
+	FixtureHost = "host"
+
 	// TinyPNG is a 1x1 PNG, the stand-in for every image's base64 data.
 	TinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
@@ -74,7 +81,33 @@ const (
 type Options struct {
 	Home  string   // home directory; "" = os.UserHomeDir()
 	Users []string // account names, rewritten as whole words; nil = the current account
+
+	// AllowBadRows counts and skips a row that is not a JSON object or not
+	// valid UTF-8 instead of failing the run. It does not lift a size limit.
+	AllowBadRows bool
+
+	// Limits; zero means the Default… value.
+	MaxLineBytes  int
+	MaxTotalBytes int
+	MaxDepth      int
 }
+
+// The default limits: one line, the whole input, and the nesting depth of a row
+// (the row object is depth 1).
+const (
+	DefaultMaxLineBytes  = 16 << 20
+	DefaultMaxTotalBytes = 256 << 20
+	DefaultMaxDepth      = 64
+)
+
+// RowError is a row (a line of the input) the scrubber refuses. It names the
+// line and the reason, never the content.
+type RowError struct {
+	Line   int
+	Reason string
+}
+
+func (e *RowError) Error() string { return fmt.Sprintf("line %d: %s", e.Line, e.Reason) }
 
 // Report counts what a run read and left out.
 type Report struct {
@@ -85,19 +118,30 @@ type Report struct {
 // Scrub reads a transcript from r and writes the fixture input to w.
 func Scrub(r io.Reader, w io.Writer, o Options) (Report, error) {
 	rep := Report{Dropped: map[string]int{}}
+	maxLine, maxTotal, maxDepth := orDefault(o.MaxLineBytes, DefaultMaxLineBytes), orDefault(o.MaxTotalBytes, DefaultMaxTotalBytes), orDefault(o.MaxDepth, DefaultMaxDepth)
 	var rows []map[string]any
 	br := bufio.NewReaderSize(r, 1<<20)
-	for {
-		line, err := br.ReadBytes('\n')
+	total := 0
+	for lineNo := 1; ; lineNo++ {
+		line, raw, err := readLine(br, maxLine)
+		if err == errLineTooLong {
+			return rep, &RowError{lineNo, fmt.Sprintf("longer than %d bytes", maxLine)}
+		}
+		if total += raw; total > maxTotal {
+			return rep, fmt.Errorf("input is larger than %d bytes", maxTotal)
+		}
 		if line = bytes.TrimSpace(line); len(line) > 0 {
 			rep.Rows++
-			dec := json.NewDecoder(bytes.NewReader(line))
-			dec.UseNumber()
-			var m map[string]any
-			if dec.Decode(&m) != nil || m == nil {
-				rep.Dropped["not_json"]++
-			} else {
+			m, kind, reason := decodeRow(line)
+			switch {
+			case m != nil && exceedsDepth(m, 1, maxDepth):
+				return rep, &RowError{lineNo, fmt.Sprintf("nested deeper than %d levels", maxDepth)}
+			case m != nil:
 				rows = append(rows, m)
+			case o.AllowBadRows:
+				rep.Dropped[kind]++
+			default:
+				return rep, &RowError{lineNo, reason + " (use -allow-bad-rows to count and skip such rows)"}
 			}
 		}
 		if err == io.EOF {
@@ -123,6 +167,83 @@ func Scrub(r io.Reader, w io.Writer, o Options) (Report, error) {
 		}
 	}
 	return rep, nil
+}
+
+func orDefault(v, def int) int {
+	if v > 0 {
+		return v
+	}
+	return def
+}
+
+var errLineTooLong = errors.New("line too long")
+
+// readLine reads one line (newline included) of at most max bytes of content;
+// raw is how many bytes it consumed from br. A longer line stops the read
+// early with errLineTooLong, before it is held whole.
+func readLine(br *bufio.Reader, max int) (line []byte, raw int, err error) {
+	for {
+		chunk, e := br.ReadSlice('\n')
+		raw += len(chunk)
+		line = append(line, chunk...)
+		if len(line) > max+1 {
+			return nil, raw, errLineTooLong
+		}
+		if e == bufio.ErrBufferFull {
+			continue
+		}
+		content := len(line)
+		if content > 0 && line[content-1] == '\n' {
+			content--
+		}
+		if content > max {
+			return nil, raw, errLineTooLong
+		}
+		return line, raw, e
+	}
+}
+
+// decodeRow decodes a line that must be one JSON object in valid UTF-8; when
+// it is not, m is nil and kind / reason say why (never with the content).
+func decodeRow(line []byte) (m map[string]any, kind, reason string) {
+	if !utf8.Valid(line) {
+		return nil, "not_utf8", "not valid UTF-8"
+	}
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.UseNumber()
+	if dec.Decode(&m) != nil || m == nil {
+		return nil, "not_json", "not a JSON object"
+	}
+	var more json.RawMessage
+	if dec.Decode(&more) != io.EOF {
+		return nil, "not_json", "more than one JSON value on the line"
+	}
+	return m, "", ""
+}
+
+// exceedsDepth reports whether v, found at depth d, nests deeper than limit.
+func exceedsDepth(v any, d, limit int) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		if d > limit {
+			return true
+		}
+		for _, e := range x {
+			if exceedsDepth(e, d+1, limit) {
+				return true
+			}
+		}
+	case []any:
+		if d > limit {
+			return true
+		}
+		for _, e := range x {
+			if exceedsDepth(e, d+1, limit) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // scrubRow is the fixture form of one row, or nil and the reason it goes.
@@ -264,7 +385,10 @@ func keepValue(v any, path string, ix *index, rw *rewriter, key string) (any, bo
 // ---- string rewriting -----------------------------------------------------
 
 var (
-	rePdxAddr  = regexp.MustCompile(`\b(mlab|air26|air19|air-2026|air-2019)/[A-Za-z0-9_-]+`)
+	// the recording hosts: a pdx address <host>/<name> becomes host/fixture-peer,
+	// a bare host name becomes the word host
+	rePdxAddr  = regexp.MustCompile(`(?i)\b(?:mlab|air26|air19|air-2026|air-2019)/[A-Za-z0-9_-]+`)
+	reHostName = regexp.MustCompile(`(?i)\b(?:mlab|air26|air19|air-2026|air-2019)\b`)
 	reUDS      = regexp.MustCompile("uds:[^\\s\"'`<>\\\\]*/[0-9]+\\.sock")
 	reProjects = regexp.MustCompile(`\.claude/projects/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._/-]*)?`)
 	reUUID     = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
@@ -278,19 +402,29 @@ var (
 	reHome      = regexp.MustCompile("/(?:Users|home)/[^/\\s\"'`<>\\\\]+")
 	reEncHome   = regexp.MustCompile(`-Users-[A-Za-z0-9._]+`)
 	reTailnet   = regexp.MustCompile(`100\.64\.\d{1,3}\.\d{1,3}`)
-	reBearer    = regexp.MustCompile("Bearer(?:\\s+[^\\s\"'`]*)?")
-	reSK        = regexp.MustCompile(`(^|[^A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}`)
-	reGH        = regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]*`)
-	reSlack     = regexp.MustCompile(`xox[a-z]-[A-Za-z0-9\-]*`)
-	reAWS       = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
-	reLongRun   = regexp.MustCompile(`[A-Za-z0-9+=]{32,}`)
+	// credential prefixes, in any letter case
+	reBearer = regexp.MustCompile("(?i)\\bBearer(?:\\s+[^\\s\"'`]*)?")
+	reSK     = regexp.MustCompile(`(?i)(^|[^A-Za-z0-9])sk-[A-Za-z0-9_\-]{8,}`)
+	reGH     = regexp.MustCompile(`(?i)\bgh[pousr]_[A-Za-z0-9_]*`)
+	reSlack  = regexp.MustCompile(`(?i)\bxox[a-z]-[A-Za-z0-9\-]*`)
+	reAWS    = regexp.MustCompile(`(?i)\bAKIA[0-9A-Z]{16}`)
+
+	// a run of the base64 alphabets (standard and URL-safe, with padding):
+	// a candidate for LooksLikeToken
+	reLongRun = regexp.MustCompile(`[A-Za-z0-9+/_-]{32,}={0,2}`)
+	// ids that are kept as they are inside a run: a message / tool / request
+	// id, a uuid, a subagent id (a + 16 hex characters)
+	reKeptID = regexp.MustCompile(`\b(?:toolu|msg|req)_[A-Za-z0-9]+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\ba[0-9a-f]{16}\b`)
 )
 
-// LooksLikeToken reports whether s is a run of 32 or more base64 / hex
-// characters mixing letters and digits: what the scrubber redacts and the
-// fixture guard refuses.
+// LooksLikeToken reports whether s, a stretch of the base64 alphabets, is
+// secret-shaped: 32 or more characters mixing letters and digits, not a
+// canonical uuid, and (so that paths and hyphenated words are left alone)
+// holding at least one piece, between "/", "-" and "_", of 8 or more
+// characters that itself mixes letters and digits. What the scrubber redacts
+// and the fixture guard refuses.
 func LooksLikeToken(s string) bool {
-	if len(s) < 32 {
+	if len(s) < 32 || reUUIDExact.MatchString(s) {
 		return false
 	}
 	var letter, digit bool
@@ -302,11 +436,69 @@ func LooksLikeToken(s string) bool {
 			letter = true
 		}
 	}
-	return letter && digit
+	if !letter || !digit {
+		return false
+	}
+	for _, piece := range strings.FieldsFunc(s, func(r rune) bool { return r == '/' || r == '-' || r == '_' }) {
+		if len(piece) < 8 {
+			continue
+		}
+		var l, d bool
+		for _, c := range piece {
+			switch {
+			case c >= '0' && c <= '9':
+				d = true
+			case c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+				l = true
+			}
+		}
+		if l && d {
+			return true
+		}
+	}
+	return false
 }
 
-// TokenRun finds the runs LooksLikeToken tests.
-func TokenRun() *regexp.Regexp { return reLongRun }
+var reUUIDExact = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// TokenSpans finds the secret-shaped stretches of s as [from, to) offsets:
+// inside every run of the base64 alphabets, what lies between the ids that
+// are kept (uuid, toolu_/msg_/req_ ids, subagent ids) and passes
+// LooksLikeToken. The scrubber redacts these and the fixture guard refuses them.
+func TokenSpans(s string) [][2]int {
+	var out [][2]int
+	for _, run := range reLongRun.FindAllStringIndex(s, -1) {
+		m := s[run[0]:run[1]]
+		check := func(from, to int) {
+			if LooksLikeToken(m[from:to]) {
+				out = append(out, [2]int{run[0] + from, run[0] + to})
+			}
+		}
+		last := 0
+		for _, id := range reKeptID.FindAllStringIndex(m, -1) {
+			check(last, id[0])
+			last = id[1]
+		}
+		check(last, len(m))
+	}
+	return out
+}
+
+func redactTokens(s string) string {
+	spans := TokenSpans(s)
+	if len(spans) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, sp := range spans {
+		b.WriteString(s[last:sp[0]])
+		b.WriteString("[redacted-token]")
+		last = sp[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
 
 type rewriter struct {
 	exact   *strings.Replacer // recorded cwd / session ids, longest first
@@ -364,14 +556,21 @@ func newRewriter(o Options, rows []map[string]any) *rewriter {
 	return rw
 }
 
-// noRewrite are the keys whose values are ids, never text.
-var noRewrite = map[string]bool{"uuid": true, "tool_use_id": true, "id": true, "agentId": true, "timestamp": true}
+// idKeys are the keys whose values are ids. A value under such a key that has
+// the shape of a structural id (structuralID) is kept as recorded; any other
+// string under it is ordinary text and gets every redaction rule: a tool input
+// is free-form and may well have an "id" or "uuid" member holding a secret.
+var idKeys = map[string]bool{"uuid": true, "tool_use_id": true, "id": true, "agentId": true, "timestamp": true}
+
+var reStructuralID = regexp.MustCompile(`^(?:(?:toolu|msg|req)_[A-Za-z0-9]+|a[0-9a-f]{16}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$`)
+
+func structuralID(s string) bool { return reUUIDExact.MatchString(s) || reStructuralID.MatchString(s) }
 
 // deep rewrites every string under v (json.Number and the rest as they are).
 func (rw *rewriter) deep(v any, key string) any {
 	switch x := v.(type) {
 	case string:
-		if noRewrite[key] {
+		if idKeys[key] && structuralID(x) {
 			return x
 		}
 		return rw.str(x)
@@ -447,7 +646,8 @@ func (rw *rewriter) str(s string) string {
 	}
 	s = rw.exact.Replace(s)
 	s = reUDS.ReplaceAllString(s, FixtureSocket)
-	s = rePdxAddr.ReplaceAllString(s, "${1}/"+FixturePeer)
+	s = rePdxAddr.ReplaceAllString(s, FixtureHost+"/"+FixturePeer)
+	s = reHostName.ReplaceAllString(s, FixtureHost)
 	s = reEmail.ReplaceAllString(s, "user@example.com")
 	s = reProjects.ReplaceAllStringFunc(s, neutralProjectsPath)
 	s = reMcp.ReplaceAllStringFunc(s, neutralMcpName)
@@ -480,10 +680,5 @@ func (rw *rewriter) str(s string) string {
 	s = reGH.ReplaceAllString(s, "[redacted-token]")
 	s = reSlack.ReplaceAllString(s, "[redacted-token]")
 	s = reAWS.ReplaceAllString(s, "[redacted-key]")
-	return reLongRun.ReplaceAllStringFunc(s, func(m string) string {
-		if LooksLikeToken(m) {
-			return "[redacted-token]"
-		}
-		return m
-	})
+	return redactTokens(s)
 }

@@ -14,6 +14,14 @@ var testOpts = Options{Home: "/Users/wake", Users: []string{"wake"}}
 // run scrubs the given rows and returns the output lines.
 func run(t *testing.T, rows ...string) []string {
 	t.Helper()
+	return runWith(t, testOpts, rows...)
+}
+
+// lenientOpts is testOpts that count and skip rows that are not JSON objects.
+var lenientOpts = Options{Home: "/Users/wake", Users: []string{"wake"}, AllowBadRows: true}
+
+func runWith(t *testing.T, o Options, rows ...string) []string {
+	t.Helper()
 	var out bytes.Buffer
 	var in []string
 	for _, r := range rows {
@@ -23,7 +31,7 @@ func run(t *testing.T, rows ...string) []string {
 		}
 		in = append(in, r)
 	}
-	if _, err := Scrub(strings.NewReader(strings.Join(in, "\n")+"\n"), &out, testOpts); err != nil {
+	if _, err := Scrub(strings.NewReader(strings.Join(in, "\n")+"\n"), &out, o); err != nil {
 		t.Fatal(err)
 	}
 	s := strings.TrimSuffix(out.String(), "\n")
@@ -53,7 +61,7 @@ func one(t *testing.T, row string) map[string]any {
 }
 
 func TestScrub_DropsRowsTheNormalizerIgnores(t *testing.T) {
-	out := run(t,
+	out := runWith(t, lenientOpts,
 		`{"type":"file-history-snapshot","messageId":"m"}`,
 		`{"type":"last-prompt","lastPrompt":"x"}`,
 		`{"type":"permission-mode","permissionMode":"auto"}`,
@@ -256,22 +264,42 @@ func TestScrub_SecretsEmailsAndAddresses(t *testing.T) {
 
 func TestScrub_PdxAddressRewritten(t *testing.T) {
 	in := "from mlab/purdex-75-6c and air26/purdex-b0-q3, air19/_q34psn, air-2026/x_y and air-2019/z; " +
-		"quoted \"mlab/purdex-b0-q3\" and (mlab/purdex-b0-q3). keep mlabs/foo, notmlab/foo and amlab/x and air26 alone"
+		"quoted \"mlab/purdex-b0-q3\" and (mlab/purdex-b0-q3). keep mlabs/foo, notmlab/foo and amlab/x"
 	m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote(in)+`}}`)
 	got := m["message"].(map[string]any)["content"].(string)
-	for _, bad := range []string{"purdex-75", "purdex-b0", "_q34psn", "x_y", "air-2019/z"} {
+	for _, bad := range []string{"purdex-75", "purdex-b0", "_q34psn", "x_y", "air-2019/z", "air26/", "air19/", "air-2026/", "air-2019/"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("%q survived in %q", bad, got)
 		}
 	}
-	for _, want := range []string{"from mlab/fixture-peer and", "air26/fixture-peer,", "air19/fixture-peer,", "air-2026/fixture-peer and", "air-2019/fixture-peer;", `"mlab/fixture-peer"`, "(mlab/fixture-peer)."} {
+	for _, want := range []string{"from host/fixture-peer and", "host/fixture-peer,", "host/fixture-peer;", `"host/fixture-peer"`, "(host/fixture-peer)."} {
 		if !strings.Contains(got, want) {
 			t.Errorf("%q missing from %q", want, got)
 		}
 	}
-	for _, keep := range []string{"mlabs/foo", "notmlab/foo", "amlab/x", "air26 alone"} {
+	for _, keep := range []string{"mlabs/foo", "notmlab/foo", "amlab/x"} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("%q was rewritten in %q", keep, got)
+		}
+	}
+}
+
+// The recording machine's name must not survive in an address (the host part
+// is the literal word "host") nor as a bare word.
+func TestScrub_PdxAddressHostNeutralized(t *testing.T) {
+	cases := map[string]string{
+		"mlab/purdex-b0-q3":                 "host/fixture-peer",
+		"AIR26/x":                           "host/fixture-peer",
+		"send to air-2026/_q34psn now":      "send to host/fixture-peer now",
+		"run on mlab, then air26 and Air19": "run on host, then host and host",
+		"https://mlab.host/x and air-2019":  "https://host.host/x and host",
+		"host/fixture-peer":                 "host/fixture-peer",
+		"mlabs and notair26 and air260":     "mlabs and notair26 and air260",
+	}
+	for in, want := range cases {
+		m := one(t, `{"type":"user","uuid":"u","message":{"content":`+quote(in)+`}}`)
+		if got := m["message"].(map[string]any)["content"]; got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
 		}
 	}
 }
@@ -402,7 +430,7 @@ func TestScrub_IsDeterministicAndIdempotent(t *testing.T) {
 
 func TestScrub_ReportCountsWhatItDropped(t *testing.T) {
 	var out bytes.Buffer
-	rep, err := Scrub(strings.NewReader(`{"type":"last-prompt"}`+"\n"+`{"type":"last-prompt"}`+"\n"+`junk`+"\n"+`{"type":"ai-title","aiTitle":"t"}`+"\n"), &out, testOpts)
+	rep, err := Scrub(strings.NewReader(`{"type":"last-prompt"}`+"\n"+`{"type":"last-prompt"}`+"\n"+`junk`+"\n"+`{"type":"ai-title","aiTitle":"t"}`+"\n"), &out, lenientOpts)
 	if err != nil {
 		t.Fatal(err)
 	}
