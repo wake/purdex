@@ -22,6 +22,8 @@ func TestSettings_EffectiveDefaults(t *testing.T) {
 	assert.Equal(t, 50, *d.FloorPct)
 	assert.Equal(t, 3600, *d.MaxHoldS)
 	assert.Equal(t, 15, *d.EWMAHalfLifeS)
+	assert.Equal(t, 30, *d.HeavyMinWeight)
+	assert.Equal(t, 30, Settings{}.HeavyMin())
 
 	var zero Settings
 	assert.Equal(t, 300*time.Second, zero.Deadline())
@@ -97,6 +99,7 @@ func TestSettings_ValidateNamesTheField(t *testing.T) {
 		"floor_pct":        {FloorPct: intp(-1)},
 		"max_hold_s":       {MaxHoldS: intp(59)},
 		"ewma_half_life_s": {EWMAHalfLifeS: intp(4)},
+		"heavy_min_weight": {HeavyMinWeight: intp(101)},
 		"kinds.build":      {Kinds: map[string]int{"build": 0}},
 		"kind name":        {Kinds: map[string]int{"Bad Name": 5}},
 	} {

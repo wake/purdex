@@ -57,6 +57,8 @@ type Module struct {
 	// fullLatch turns each reading into the published host.full with a
 	// hysteresis; a failed tick leaves it where it was.
 	fullLatch resources.FullLatch
+	// minute is the host timeline's open minute (D-8.2).
+	minute minuteAgg
 	// mode is the setting's mode as of the last tick (the sampler goroutine's
 	// own); empty before the first one.
 	mode string

@@ -81,6 +81,9 @@ func (m *Module) sweepOnce(ctx context.Context) {
 		if _, err := m.store.Prune(now.Add(-retention).UnixMilli()); err != nil {
 			m.logf("[resources] sweeper prune: %v", err)
 		}
+		if _, err := m.store.PruneMinutes(now.Add(-retention).UnixMilli()); err != nil {
+			m.logf("[resources] sweeper prune minutes: %v", err)
+		}
 	}
 }
 

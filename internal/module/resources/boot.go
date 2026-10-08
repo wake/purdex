@@ -6,8 +6,9 @@ const (
 	// bootGrace is how long a waiting row survives its poller being gone at
 	// boot: the client needs the restart time to come back (spec D-4).
 	bootGrace = 30 * time.Second
-	// retention is how long ended rows are kept.
-	retention = 7 * 24 * time.Hour
+	// retention is how long ended rows and host_minutes rows are kept (spec
+	// D-8.2: one period for both, so a report never mixes a short and a long one).
+	retention = 14 * 24 * time.Hour
 )
 
 // boot is the reconcile that runs before the sampler starts. Rows live in
@@ -28,5 +29,8 @@ func (m *Module) boot() {
 	}
 	if _, err := m.store.Prune(now.Add(-retention).UnixMilli()); err != nil {
 		m.logf("[resources] boot prune: %v", err)
+	}
+	if _, err := m.store.PruneMinutes(now.Add(-retention).UnixMilli()); err != nil {
+		m.logf("[resources] boot prune minutes: %v", err)
 	}
 }

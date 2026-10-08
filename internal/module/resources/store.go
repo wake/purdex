@@ -128,6 +128,10 @@ func openLeaseStore(path string) (*leaseStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate resources db: %w", err)
 	}
+	if err := migrateDecisionColumns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if path != ":memory:" {
 		// A file an earlier run left loose, and any sidecar it left, are
 		// tightened now that the migration has made SQLite create them.
@@ -393,4 +397,136 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// decisionColumns are the D-8.1 columns of resource_leases, added to a
+// database that alpha.610 already created (resources.db is live: every schema
+// change is a migration). Only dec_recorded tells a real decision from a row
+// that predates the columns: a row stays 0 until the grant that writes the
+// snapshot sets it to 1, and the report counts only those. The defaults of
+// the other columns carry no meaning.
+var decisionColumns = []struct{ name, def string }{
+	{"dec_recorded", "INTEGER NOT NULL DEFAULT 0"},
+	{"dec_load1", "REAL NOT NULL DEFAULT 0"},
+	{"dec_ncpu", "INTEGER NOT NULL DEFAULT 0"},
+	{"dec_mem", "REAL NOT NULL DEFAULT 0"},
+	{"dec_measured", "INTEGER NOT NULL DEFAULT 0"},
+	{"dec_full", "INTEGER NOT NULL DEFAULT 0"},
+	{"dec_sum_charge", "REAL NOT NULL DEFAULT 0"},
+	{"dec_unleased", "REAL NOT NULL DEFAULT 0"},
+	{"dec_weight", "INTEGER NOT NULL DEFAULT 0"},
+	{"dec_path", "TEXT NOT NULL DEFAULT ''"},
+	{"would_wait_r2", "INTEGER NOT NULL DEFAULT 0"},
+}
+
+// hostMinutesSchema is the D-8.2 timeline: one row per minute, written by the
+// sampler goroutine (at is the minute's start, unix ms). The figures are the
+// minute's peaks, except ncpu (the last tick's), full (any tick) and the
+// three full_* counters (see minute.go).
+const hostMinutesSchema = `
+	CREATE TABLE IF NOT EXISTS host_minutes (
+		at             INTEGER PRIMARY KEY,
+		load1          REAL    NOT NULL,
+		ncpu           INTEGER NOT NULL,
+		mem            REAL    NOT NULL,
+		measured       INTEGER NOT NULL,
+		full           INTEGER NOT NULL,
+		full_ticks     INTEGER NOT NULL,
+		full_starts    INTEGER NOT NULL,
+		full_longest_s INTEGER NOT NULL,
+		held           INTEGER NOT NULL,
+		heavy_held     INTEGER NOT NULL,
+		sum_charge     REAL    NOT NULL,
+		waiting        INTEGER NOT NULL,
+		unleased       REAL    NOT NULL
+	)`
+
+// migrateDecisionColumns adds what the D-8 monitoring record needs, and is a
+// no-op on a database that has it.
+func migrateDecisionColumns(db *sql.DB) error {
+	have, err := columnSet(db, "resource_leases")
+	if err != nil {
+		return fmt.Errorf("migrate resources db: %w", err)
+	}
+	for _, c := range decisionColumns {
+		if have[c.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE resource_leases ADD COLUMN " + c.name + " " + c.def); err != nil {
+			return fmt.Errorf("migrate resources db: add %s: %w", c.name, err)
+		}
+	}
+	if _, err := db.Exec(hostMinutesSchema); err != nil {
+		return fmt.Errorf("migrate resources db: host_minutes: %w", err)
+	}
+	return nil
+}
+
+// columnSet lists a table's column names.
+func columnSet(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query("SELECT name FROM pragma_table_info('" + table + "')")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, err
+		}
+		out[n] = true
+	}
+	return out, rows.Err()
+}
+
+// minuteRow is one host_minutes row.
+type minuteRow struct {
+	At              int64
+	Load1           float64
+	NCPU            int
+	Mem             float64
+	Measured        int
+	Full            bool
+	FullTicks       int
+	FullStarts      int
+	FullLongestS    int
+	Held, HeavyHeld int
+	SumCharge       float64
+	Waiting         int
+	Unleased        float64
+}
+
+// InsertMinute stores one row; a second one for the same minute replaces it.
+func (s *leaseStore) InsertMinute(r minuteRow) error {
+	full := 0
+	if r.Full {
+		full = 1
+	}
+	if _, err := s.db.Exec(`INSERT OR REPLACE INTO host_minutes
+		(at, load1, ncpu, mem, measured, full, full_ticks, full_starts, full_longest_s, held, heavy_held, sum_charge, waiting, unleased)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.At, r.Load1, r.NCPU, r.Mem, r.Measured, full, r.FullTicks, r.FullStarts, r.FullLongestS, r.Held, r.HeavyHeld,
+		r.SumCharge, r.Waiting, r.Unleased); err != nil {
+		return fmt.Errorf("insert host minute: %w", err)
+	}
+	return nil
+}
+
+// PruneMinutes deletes the minute rows before the cutoff (unix ms).
+func (s *leaseStore) PruneMinutes(before int64) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM host_minutes WHERE at < ?`, before)
+	if err != nil {
+		return 0, fmt.Errorf("prune host minutes: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// CountWaiting is how many requests are queued.
+func (s *leaseStore) CountWaiting() (int, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM resource_leases WHERE state = 'waiting'`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count waiting leases: %w", err)
+	}
+	return n, nil
 }

@@ -89,17 +89,17 @@ func TestBoot_PrunesOldEndedRows(t *testing.T) {
 		}
 	}
 	m := bootModule(t, idleSampler(), clock, func(s *leaseStore, now int64) {
-		end(t, s, "old", now-8*day)
-		end(t, s, "recent", now-6*day)
+		end(t, s, "old", now-15*day)
+		end(t, s, "recent", now-13*day)
 		w := baseRow("w", "c-w")
-		w.CreatedAt, w.LeaseUntil = now-9*day, now-9*day // waiting rows are never pruned
+		w.CreatedAt, w.LeaseUntil = now-16*day, now-16*day // waiting rows are never pruned
 		mustCreate(t, s, w)
 	})
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := mustGet(t, m, "old"); ok {
-		t.Fatal("a row that ended 8 days ago survived boot")
+		t.Fatal("a row that ended 15 days ago survived boot")
 	}
 	if _, ok := mustGet(t, m, "recent"); !ok {
 		t.Fatal("a row that ended 6 days ago was pruned")

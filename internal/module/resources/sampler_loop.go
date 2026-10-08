@@ -89,6 +89,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	// After the publish, on this goroutine and never on a request or hook
 	// path: it reads the process table once more when a lease is held.
 	m.measureLeases(ctx, procs, raw)
+	m.noteMinute(host, m.now())
 	return false
 }
 
