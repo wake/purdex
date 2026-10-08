@@ -434,7 +434,7 @@ describe('ApprovalDialogHost', () => {
       open(approval())
       fireEvent.click(screen.getByTestId('approval-minimize'))
       expect(useApprovalStore.getState().minimized).toBe(true)
-      act(() => { useHostStore.getState().updateHost(H, { token: 'rotated' }) })
+      act(() => { useHostStore.getState().updateHost(H, { ip: '9.9.9.9' }) }) // re-pointed
       expect(dialog()).toBeNull()
       expect(screen.queryByTestId('approval-pill')).toBeNull()
       expect(useApprovalStore.getState().minimized).toBe(false)

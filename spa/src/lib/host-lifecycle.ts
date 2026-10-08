@@ -370,8 +370,9 @@ function hostIdentity(h: HostConfig | undefined): string {
 
 /**
  * Drop a host's cached peer rows and cwd readings whenever its daemon identity
- * changes (peer-info-panel spec §3.1) — and, by the same rule, its open approval
- * requests (#1978).
+ * changes (peer-info-panel spec §3.1). Its open approval requests follow the same
+ * removal / re-point rule, but with a looser notion of identity — see
+ * `forgetApprovalsOnHostChange` (#1978).
  *
  * A peer address names a process on one machine, so keeping the cache across a
  * re-point would show one daemon's peers under another's name — and the address
@@ -387,6 +388,7 @@ function hostIdentity(h: HostConfig | undefined): string {
 export function startPeerCacheInvalidation(): () => void {
   return useHostStore.subscribe((next, prev) => {
     if (next.hosts === prev.hosts) return
+    forgetApprovalsOnHostChange(next.hosts, prev.hosts)
     for (const hostId of Object.keys(prev.hosts)) {
       const after = next.hosts[hostId]
       // A removed host and a re-pointed one are the same problem: whatever is
@@ -394,9 +396,23 @@ export function startPeerCacheInvalidation(): () => void {
       if (after && hostIdentity(prev.hosts[hostId]) === hostIdentity(after)) continue
       usePeerStore.getState().forgetHost(hostId)
       useSessionCwdStore.getState().forgetHost(hostId)
-      // An approval request is the old daemon's too (#1978): the dialog, the pill and the restart guard would keep
-      // showing it for a host that is gone or now another daemon. The new connection's snapshot fills it again.
-      useApprovalStore.getState().forgetHost(hostId)
     }
   })
+}
+
+/**
+ * An approval request is the old daemon's once its host is removed or re-pointed (#1978): the dialog, the pill and the
+ * restart guard would keep showing it for a host that is gone or now another daemon. The new connection's snapshot
+ * fills the set again.
+ *
+ * Identity here is `ip:port`, not `hostIdentity`: a token rotation is nearly always the same daemon, whose snapshot
+ * corrects the entries on the reconnect and which still takes the decisions queued meanwhile. (The WS hook drops a
+ * frame from the connection made with the old token; the snapshot of the new one supersedes anything that dropped.)
+ */
+function forgetApprovalsOnHostChange(next: Record<string, HostConfig>, prev: Record<string, HostConfig>): void {
+  for (const hostId of Object.keys(prev)) {
+    const after = next[hostId]
+    if (after && prev[hostId].ip === after.ip && prev[hostId].port === after.port) continue
+    useApprovalStore.getState().forgetHost(hostId)
+  }
 }

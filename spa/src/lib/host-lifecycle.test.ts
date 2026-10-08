@@ -1364,14 +1364,25 @@ describe('approval store invalidation (#1978)', () => {
     expect(useUndoToast.getState().toast).toBeNull()
   })
 
-  it('a changed ip, port or token clears that host\'s requests and nothing else\'s', () => {
-    for (const patch of [{ ip: '9.9.9.9' }, { port: 7861 }, { token: 'rotated' }]) {
+  it('a changed ip or port clears that host\'s requests and nothing else\'s', () => {
+    for (const patch of [{ ip: '9.9.9.9' }, { port: 7861 }]) {
       useApprovalStore.getState().reset()
       seed()
       useHostStore.getState().updateHost(HOST_A, patch)
       expect(held()).toEqual([`${HOST_B}:b1`])
       expect(useUndoToast.getState().toast).toBeNull()
     }
+  })
+
+  // A token rotation is nearly always the same daemon: its snapshot corrects the entries and the queued decisions are
+  // resent on the reconnect. The epoch stays too, so a decision in flight still lands (its token is read at send time).
+  it('a changed token keeps the requests, the queued decisions and the epoch', () => {
+    seed()
+    const epoch = useApprovalStore.getState().hostEpoch[HOST_A]
+    useHostStore.getState().updateHost(HOST_A, { token: 'rotated' })
+    expect(held()).toEqual([`${HOST_A}:a1`, `${HOST_A}:a2`, `${HOST_B}:b1`])
+    expect(Object.keys(useApprovalStore.getState().queued)).toEqual([approvalKey(HOST_A, 'a1')])
+    expect(useApprovalStore.getState().hostEpoch[HOST_A]).toBe(epoch)
   })
 
   it('a rename keeps the requests', () => {
