@@ -150,7 +150,9 @@ func TestStatus_CompactIsRunningPrecomputeIsNot(t *testing.T) {
 		{"manual compact runs", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"manual"}`)}, agentpkg.StatusRunning},
 		{"auto compact runs", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"auto"}`)}, agentpkg.StatusRunning},
 		{"compact end is idle", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"auto"}`), e(modevents.TypeCompactEnd, `{"trigger":"auto","ok":true}`)}, agentpkg.StatusIdle},
-		{"compact end without trigger is idle", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"auto"}`), e(modevents.TypeCompactEnd, `{"ok":true}`)}, agentpkg.StatusIdle},
+		{"manual compact end is idle", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"manual"}`), e(modevents.TypeCompactEnd, `{"trigger":"manual","ok":true}`)}, agentpkg.StatusIdle},
+		{"skipped compaction (ok false) ends too", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"auto"}`), e(modevents.TypeCompactEnd, `{"trigger":"auto","ok":false}`)}, agentpkg.StatusIdle},
+		{"precompute start and end stay idle", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"precompute"}`), e(modevents.TypeCompactEnd, `{"trigger":"precompute","ok":true}`)}, agentpkg.StatusIdle},
 		{"precompute does not run", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"precompute"}`)}, agentpkg.StatusIdle},
 		{"precompute end does not end a real compaction", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"auto"}`), e(modevents.TypeCompactEnd, `{"trigger":"precompute","ok":true}`)}, agentpkg.StatusRunning},
 		{"subagent compact does not run main", []modevents.Event{start, e(modevents.TypeCompactStart, `{"trigger":"auto","agent_id":"a1"}`)}, agentpkg.StatusIdle},
@@ -319,6 +321,74 @@ func TestHeartbeat_ReconcilesDotsAndAsks(t *testing.T) {
 			t.Fatalf("Status() = %q, Asks = %v", s.Status(), s.Asks)
 		}
 	})
+}
+
+func TestHeartbeat_AbsentFieldsKeepState(t *testing.T) {
+	s := play(start, turnStart,
+		e(modevents.TypeToolCheck, `{"tool":"Bash","tool_use_id":"u1","decision":"ask"}`),
+		e(modevents.TypeAgentSpawn, `{"agent_id":"a1"}`),
+		e(modevents.TypeHeartbeat, `{"turn_id":"t1","error":false}`))
+	if s.Status() != agentpkg.StatusWaiting {
+		t.Fatalf("Status() = %q, want waiting", s.Status())
+	}
+	if !reflect.DeepEqual(s.Asks, map[string]bool{"u1": true}) {
+		t.Fatalf("Asks = %v, want u1 kept", s.Asks)
+	}
+	if got := s.DotList(); len(got) != 1 || got[0].ID != "a1" {
+		t.Fatalf("DotList() = %v, want a1 kept", got)
+	}
+	t.Run("absent compacting keeps it", func(t *testing.T) {
+		s := play(start, e(modevents.TypeCompactStart, `{"trigger":"auto"}`), e(modevents.TypeHeartbeat, `{"asks":[],"agents":[]}`))
+		if !s.Compacting || s.Status() != agentpkg.StatusRunning {
+			t.Fatalf("Compacting = %v, Status() = %q", s.Compacting, s.Status())
+		}
+	})
+	t.Run("absent turn_id still clears the turn", func(t *testing.T) {
+		s := play(start, turnStart, e(modevents.TypeHeartbeat, `{}`))
+		if s.TurnID != "" || s.Status() != agentpkg.StatusIdle {
+			t.Fatalf("TurnID = %q, Status() = %q", s.TurnID, s.Status())
+		}
+	})
+}
+
+func TestHeartbeat_AgentsAbsentKeepsDots(t *testing.T) {
+	cases := []struct {
+		name string
+		hb   string
+		want []string
+	}{
+		// The mod omits agents when $.agent.list() throws.
+		{"absent keeps every dot", `{"asks":[],"compacting":false}`, []string{"a1", "a2"}},
+		{"empty list removes every dot", `{"asks":[],"compacting":false,"agents":[]}`, nil},
+		{"listed active keeps only that dot", `{"asks":[],"compacting":false,"agents":[{"id":"a2","status":"running"}]}`, []string{"a2"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := play(start, e(modevents.TypeAgentSpawn, `{"agent_id":"a1"}`), e(modevents.TypeAgentSpawn, `{"agent_id":"a2"}`), e(modevents.TypeHeartbeat, c.hb))
+			var got []string
+			for _, d := range s.DotList() {
+				got = append(got, d.ID)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("dots = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestHeartbeat_NullFieldsKeepState(t *testing.T) {
+	s := play(start, turnStart,
+		e(modevents.TypeToolCheck, `{"tool":"Bash","tool_use_id":"u1","decision":"ask"}`),
+		e(modevents.TypeCompactStart, `{"trigger":"auto"}`),
+		e(modevents.TypeAgentSpawn, `{"agent_id":"a1"}`),
+		e(modevents.TypeBackground, `{"tasks":[],"crons":1}`),
+		e(modevents.TypeHeartbeat, `{"turn_id":"t1","asks":null,"compacting":null,"agents":null,"error":null,"background":null}`))
+	if s.Status() != agentpkg.StatusWaiting || !reflect.DeepEqual(s.Asks, map[string]bool{"u1": true}) {
+		t.Fatalf("Status() = %q, Asks = %v", s.Status(), s.Asks)
+	}
+	if !s.Compacting || len(s.DotList()) != 1 || s.Background != BackgroundSchedule || s.Err {
+		t.Fatalf("Compacting %v, dots %v, background %q, Err %v", s.Compacting, s.DotList(), s.Background, s.Err)
+	}
 }
 
 func TestHeartbeat_ErrorFieldAbsentKeepsErr(t *testing.T) {

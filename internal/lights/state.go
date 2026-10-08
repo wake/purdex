@@ -192,38 +192,56 @@ type backgroundData struct {
 	Crons int    `json:"crons"`
 }
 
+type heartbeatAgent struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
 // reconcile replaces the mirrored state with the heartbeat's, repairing
 // events that were lost (an Esc without turn.complete, a daemon restart).
+// A field that is absent or null leaves its part of the state alone, except
+// turn_id: the mod omits it exactly when no main turn runs.
 func (s *StreamState) reconcile(ev modevents.Event) {
 	var d struct {
-		TurnID     string   `json:"turn_id"`
-		Asks       []string `json:"asks"`
-		Compacting bool     `json:"compacting"`
-		Agents     []struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-		} `json:"agents"`
-		Error      *bool           `json:"error"`      // absent from mods older than U1-2a-1
-		Background *backgroundData `json:"background"` // present only while there is one
+		TurnID     string            `json:"turn_id"`
+		Asks       *[]string         `json:"asks"`
+		Compacting *bool             `json:"compacting"`
+		Agents     *[]heartbeatAgent `json:"agents"`     // omitted when $.agent.list() fails
+		Error      *bool             `json:"error"`      // absent from mods older than U1-2a-1
+		Background *backgroundData   `json:"background"` // present only while there is one
 	}
 	if !decode(ev.Data, &d) {
 		return
 	}
 	s.TurnID = d.TurnID
-	clear(s.Asks)
-	for _, id := range d.Asks {
-		if id != "" {
-			s.Asks[id] = true
+	if d.Asks != nil {
+		clear(s.Asks)
+		for _, id := range *d.Asks {
+			if id != "" {
+				s.Asks[id] = true
+			}
 		}
 	}
-	s.Compacting = d.Compacting
+	if d.Compacting != nil {
+		s.Compacting = *d.Compacting
+	}
 	if d.Error != nil {
 		s.Err = *d.Error
 	}
-	// $.agent.list() never lists workflow agents, so every listed active
-	// agent is one that gets a dot.
-	active := make(map[string]bool, len(d.Agents))
-	for _, a := range d.Agents {
+	if d.Agents != nil {
+		s.reconcileDots(*d.Agents, ev.At)
+	}
+	if d.Background != nil {
+		s.Background = BackgroundKind(d.Background.Tasks, d.Background.Crons)
+	}
+}
+
+// reconcileDots keeps a dot for exactly the listed active agents; one not
+// dotted yet starts at the heartbeat's at. $.agent.list() never lists
+// workflow agents, so every listed active agent is one that gets a dot.
+func (s *StreamState) reconcileDots(agents []heartbeatAgent, at int64) {
+	active := make(map[string]bool, len(agents))
+	for _, a := range agents {
 		if a.ID != "" && activeAgent[a.Status] {
 			active[a.ID] = true
 		}
@@ -231,11 +249,8 @@ func (s *StreamState) reconcile(ev modevents.Event) {
 	maps.DeleteFunc(s.Dots, func(id string, _ Dot) bool { return !active[id] })
 	for id := range active {
 		if _, ok := s.Dots[id]; !ok {
-			s.Dots[id] = Dot{ID: id, StartedAt: ev.At}
+			s.Dots[id] = Dot{ID: id, StartedAt: at}
 		}
-	}
-	if d.Background != nil {
-		s.Background = BackgroundKind(d.Background.Tasks, d.Background.Crons)
 	}
 }
 
