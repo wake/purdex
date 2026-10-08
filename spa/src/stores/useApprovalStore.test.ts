@@ -224,6 +224,54 @@ describe('useApprovalStore', () => {
     })
   })
 
+  describe('forgetHost', () => {
+    it('removes that host\'s entries, queued decisions, decidedHere marks and tombstones; other hosts are untouched', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      s().applyOpened('h2', approval({ id: 'c' }))
+      s().queueDecision('h1', approval({ id: 'a' }), 'approve')
+      s().queueDecision('h2', approval({ id: 'c' }), 'deny')
+      s().markDecidedHere('h1', 'a')
+      s().markDecidedHere('h2', 'c')
+      s().applyClosed('h1', approval({ id: 'gone', state: 'denied' }))
+      s().applyClosed('h2', approval({ id: 'gone2', state: 'denied' }))
+      s().forgetHost('h1')
+      expect(ids()).toEqual(['h2:c'])
+      expect(Object.keys(s().queued)).toEqual([approvalKey('h2', 'c')])
+      expect(Object.keys(s().decidedHere)).toEqual([approvalKey('h2', 'c')])
+      expect(s().closedIds).toEqual({ h2: ['gone2'] })
+    })
+
+    it('ends the minimize when nothing is left open, keeps it while another host still has a request', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      s().applyOpened('h2', approval({ id: 'c' }))
+      s().setMinimized(true)
+      s().forgetHost('h1')
+      expect(s().minimized).toBe(true)
+      s().forgetHost('h2')
+      expect(s().minimized).toBe(false)
+    })
+
+    it('a host with nothing held changes nothing but its epoch (other hosts\' data keeps its identity)', () => {
+      s().applyOpened('h2', approval({ id: 'c' }))
+      const before = s()
+      s().forgetHost('h1')
+      expect(s().entries).toBe(before.entries)
+      expect(s().queued).toBe(before.queued)
+      expect(s().closedIds).toBe(before.closedIds)
+    })
+
+    it('bumps only that host\'s epoch, every time, held or not; reset keeps the counters', () => {
+      const at = (h: string) => s().hostEpoch[h] ?? 0
+      const [a, b] = [at('h1'), at('h2')]
+      s().forgetHost('h1')
+      s().forgetHost('h1')
+      s().forgetHost('h2')
+      expect([at('h1') - a, at('h2') - b]).toEqual([2, 1])
+      s().reset()
+      expect([at('h1') - a, at('h2') - b]).toEqual([2, 1])
+    })
+  })
+
   describe('selectCurrent', () => {
     it('is the oldest created_at across hosts, ties broken by id; null when empty', () => {
       expect(selectCurrent(s())).toBeNull()

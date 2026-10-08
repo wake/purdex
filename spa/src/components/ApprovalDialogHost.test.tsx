@@ -14,6 +14,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { ApprovalApiError, decideApproval } from '../lib/team/approval-api'
 import { toastClosed } from '../lib/team/approval-decide'
+import { startPeerCacheInvalidation } from '../lib/host-lifecycle'
 import { handleApprovalEvent } from '../lib/team/approval-ws'
 import { __resetClientDescriptorForTests } from '../lib/team/client-label'
 import type { Approval } from '../lib/team/types'
@@ -404,5 +405,54 @@ describe('ApprovalDialogHost', () => {
     act(() => handleApprovalEvent(H, JSON.stringify({ op: 'snapshot', approvals: [ask, approval({ created_at: 2_000 }), perm] })))
     expect(dialog()?.getAttribute('data-kind')).toBe('lead')
     expect(screen.queryByTestId('approval-more')).toBeNull()
+  })
+
+  // #1978: the shown request's host goes away (removed, or re-pointed at another daemon). The entry leaves the store
+  // through lib/host-lifecycle.ts's subscription; the dialog follows it like any close, without the "handled by" toast.
+  describe('the shown request\'s host is removed or re-pointed', () => {
+    let stop: () => void = () => {}
+    beforeEach(() => { stop = startPeerCacheInvalidation() })
+    afterEach(() => { stop() })
+
+    it('the dialog moves on to the next host\'s request, with no toast and the keyboard released', () => {
+      render(<ApprovalDialogHost />)
+      open(approval({ id: 'old', created_at: 2_000, origin: { ...approval().origin, name: 'nexen-c1' } }), 'h2')
+      open(approval({ id: 'newer', created_at: 5_000 }))
+      expect(screen.getByTestId('approval-session').textContent).toBe('nexen-c1')
+      act(() => { useHostStore.setState((s) => ({ hosts: { [H]: s.hosts[H] }, hostOrder: [H] })) }) // h2 removed
+      expect(screen.getByTestId('approval-session').textContent).toBe('purdex-7c')
+      expect(screen.queryByTestId('approval-more')).toBeNull()
+      expect(useUndoToast.getState().toast).toBeNull()
+      // The next dialog is the only one holding Escape; the removed host's did not leave a second swallow behind.
+      const esc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true })
+      window.dispatchEvent(esc)
+      expect(esc.defaultPrevented).toBe(true)
+    })
+
+    it('the last request: the dialog is gone, a minimize ended, the Escape swallow released', () => {
+      render(<ApprovalDialogHost />)
+      open(approval())
+      fireEvent.click(screen.getByTestId('approval-minimize'))
+      expect(useApprovalStore.getState().minimized).toBe(true)
+      act(() => { useHostStore.getState().updateHost(H, { ip: '9.9.9.9' }) }) // re-pointed
+      expect(dialog()).toBeNull()
+      expect(screen.queryByTestId('approval-pill')).toBeNull()
+      expect(useApprovalStore.getState().minimized).toBe(false)
+      expect(useUndoToast.getState().toast).toBeNull()
+      const esc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true })
+      window.dispatchEvent(esc)
+      expect(esc.defaultPrevented).toBe(false)
+    })
+
+    it('a dialog showing (not minimized) is gone when its host is removed, and its Escape swallow with it', () => {
+      render(<ApprovalDialogHost />)
+      open(approval())
+      expect(dialog()).toBeInTheDocument()
+      act(() => { useHostStore.setState((s) => ({ hosts: { h2: s.hosts.h2 }, hostOrder: ['h2'] })) })
+      expect(dialog()).toBeNull()
+      const esc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true })
+      window.dispatchEvent(esc)
+      expect(esc.defaultPrevented).toBe(false)
+    })
   })
 })

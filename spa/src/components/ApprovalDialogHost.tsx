@@ -199,6 +199,8 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
     }
     inFlight.current = true
     setBusy(true)
+    // Taken before the pause's await: a host forgotten meanwhile (#1978) voids the decision, not just its answer.
+    const epoch = useApprovalStore.getState().hostEpoch[hostId] ?? 0
     if (isSelfRelay && noMoreAsking) {
       // Best effort, before the decision: a pause that fails must not swallow the click.
       try {
@@ -208,7 +210,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
         useUndoToast.getState().show(t('approval.dialog.pause_failed', { code }))
       }
     }
-    const outcome = await submitDecision(hostId, approval, decision, grant)
+    const outcome = await submitDecision(hostId, approval, decision, grant, { epoch })
     // 'closed' and 'decided_elsewhere' unmount this dialog through the store; the other two keep it.
     if (outcome === 'failed' || outcome === 'queued') {
       inFlight.current = false

@@ -44,6 +44,12 @@ export interface ApprovalStoreState {
   decidedHere: Record<string, true>
   /** Per host, the ids closed in this socket generation, oldest first, at most TOMBSTONES_PER_HOST. */
   closedIds: Record<string, string[]>
+  /**
+   * Per host, how many times `forgetHost` has run (#1978): a generation counter. A decision in flight records it before
+   * it sends and gives up on its answer when it moved — the answer belongs to a daemon the id no longer names. Kept
+   * across `reset` (a counter that went back to 0 could match an old caller's record).
+   */
+  hostEpoch: Record<string, number>
   /** The dialog is minimized to the corner pill (U22 (b)); only ever true while `entries` is non-empty. */
   minimized: boolean
   /** `true` takes effect only while a request is open. */
@@ -59,6 +65,13 @@ export interface ApprovalStoreState {
   queueDecision: (hostId: string, approval: Approval, decision: Decision, grant?: Grant, pauseSession?: string) => void
   /** Remove and return the host's queued decisions (each is sent at most once). */
   takeQueued: (hostId: string) => QueuedDecision[]
+  /**
+   * Drop everything held for a host: its open requests, the decisions queued or marked for them, its tombstones (#1978).
+   * For a host that was removed or re-pointed, where what was held belongs to a daemon the id no longer names. Silent:
+   * nothing was decided, so no toast; the request is simply gone, and a dialog showing it moves on like after any close.
+   * Also bumps `hostEpoch[hostId]`, which voids the answers of decisions already in flight.
+   */
+  forgetHost: (hostId: string) => void
   reset: () => void
 }
 
@@ -87,6 +100,7 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
   queued: {},
   decidedHere: {},
   closedIds: {},
+  hostEpoch: {},
   minimized: false,
 
   setMinimized: (v) => set((s) => ({ minimized: v && Object.keys(s.entries).length > 0 })),
@@ -157,6 +171,21 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
     if (taken.length > 0) set({ queued: rest })
     return taken
   },
+
+  forgetHost: (hostId) => set((s) => {
+    // Always: a decision may be in flight with nothing yet held for it (before `markDecidedHere`).
+    const hostEpoch = { ...s.hostEpoch, [hostId]: (s.hostEpoch[hostId] ?? 0) + 1 }
+    const entries = Object.fromEntries(Object.entries(s.entries).filter(([, e]) => e.hostId !== hostId))
+    const queued = Object.fromEntries(Object.entries(s.queued).filter(([, q]) => q.hostId !== hostId))
+    // `decidedHere` is keyed by the NUL-joined key only: a host id can hold any printable separator but never NUL,
+    // so the prefix is exact.
+    const prefix = `${hostId}\u0000`
+    const decidedHere = Object.fromEntries(Object.entries(s.decidedHere).filter(([key]) => !key.startsWith(prefix)))
+    const held = Object.keys(s.entries).length + Object.keys(s.queued).length + Object.keys(s.decidedHere).length
+    const left = Object.keys(entries).length + Object.keys(queued).length + Object.keys(decidedHere).length
+    if (held === left && !Object.hasOwn(s.closedIds, hostId)) return { hostEpoch }
+    return { hostEpoch, entries, queued, decidedHere, closedIds: without(s.closedIds, hostId), ...endMinimizeIfEmpty(entries) }
+  }),
 
   reset: () => set({ entries: {}, queued: {}, decidedHere: {}, closedIds: {}, minimized: false }),
 }))

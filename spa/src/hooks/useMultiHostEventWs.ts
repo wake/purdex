@@ -227,6 +227,12 @@ export function useMultiHostEventWs() {
           if (event.type === 'approval.request') {
             // Lead / self-relay approval requests (lead-team spec §6.2): snapshot on
             // subscribe, opened, closed. `session` is empty; the value carries the host id.
+            // Bound to the host this connection was made for (#1978, as `team.unattended` below): a removal or a
+            // re-point reaches the store (lib/host-lifecycle.ts forgets the host's requests) before this effect
+            // closes the old socket, and a frame still queued on it in between would bring the old daemon's
+            // requests back. After the close, host-events.ts's epoch drops whatever is left on the socket.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
             handleApprovalEvent(hostId, event.value)
             return
           }

@@ -151,4 +151,69 @@ describe('useMultiHostEventWs approval.request', () => {
     expect(useUndoToast.getState().toast).toBeNull()
     view.unmount()
   })
+
+  // A frame is bound to the host identity its connection was made for (#1978, as PU-2a's team.unattended). Between a
+  // host-store change and the effect that closes the old socket, a frame still queued on it must not reach the store.
+  // These tests do NOT forget the host themselves (lib/host-lifecycle.ts does that in the app): the guard has to
+  // hold on its own, and the entries seeded below are what a dropped snapshot / closed would otherwise change.
+  describe('a frame from a connection the host no longer has', () => {
+    const seeded = async () => {
+      const { view, ws } = await connected()
+      act(() => { ws.emit(frame({ op: 'snapshot', approvals: [approval({ id: 'a' })] })) })
+      expect(held()).toEqual(['a'])
+      return { view, old: ws }
+    }
+    const repoint = () => useHostStore.setState((s) => ({ hosts: { ...s.hosts, [HOST]: { ...s.hosts[HOST], ip: '5.6.7.8' } } }))
+
+    it('after a re-point, opened / closed / snapshot queued on the old socket do not write; the new connection\'s do', async () => {
+      const { view, old } = await seeded()
+      act(() => {
+        repoint()
+        old.emit(frame({ op: 'opened', approval: approval({ id: 'late' }) })) // before the effect closes the old socket
+        old.emit(frame({ op: 'closed', approval: approval({ id: 'a', state: 'denied', decided_by: { kind: 'app', label: 'x' } }) }))
+        old.emit(frame({ op: 'snapshot', approvals: [] }))
+      })
+      expect(held()).toEqual(['a'])
+      expect(useUndoToast.getState().toast).toBeNull()
+      await waitFor(() => expect(sockets).toHaveLength(2))
+      act(() => { sockets[1].emit(frame({ op: 'snapshot', approvals: [approval({ id: 'n' })] })) })
+      expect(held()).toEqual(['n'])
+      view.unmount()
+    })
+
+    it('a token change is a re-point too', async () => {
+      const { view, old } = await seeded()
+      act(() => {
+        useHostStore.setState((s) => ({ hosts: { ...s.hosts, [HOST]: { ...s.hosts[HOST], token: 'rotated' } } }))
+        old.emit(frame({ op: 'opened', approval: approval({ id: 'late' }) }))
+      })
+      expect(held()).toEqual(['a'])
+      view.unmount()
+    })
+
+    it('after a removal, a frame queued on the old socket does not write, nor one after the effect closed it', async () => {
+      const { view, old } = await seeded()
+      act(() => {
+        useHostStore.setState({ hosts: {}, hostOrder: [] })
+        old.emit(frame({ op: 'opened', approval: approval({ id: 'late' }) }))
+      })
+      expect(held()).toEqual(['a'])
+      act(() => { old.emit(frame({ op: 'opened', approval: approval({ id: 'later' }) })) })
+      expect(held()).toEqual(['a'])
+      view.unmount()
+    })
+
+    it('removed and added again with the same settings in one batch: the one connection is kept and its frames write', async () => {
+      const { view, old } = await seeded()
+      const config = useHostStore.getState().hosts[HOST]
+      act(() => {
+        useHostStore.setState({ hosts: {}, hostOrder: [] })
+        useHostStore.setState({ hosts: { [HOST]: config }, hostOrder: [HOST] })
+        old.emit(frame({ op: 'opened', approval: approval({ id: 'b', created_at: 2_000 }) }))
+      })
+      expect(held()).toEqual(['a', 'b'])
+      expect(sockets).toHaveLength(1)
+      view.unmount()
+    })
+  })
 })

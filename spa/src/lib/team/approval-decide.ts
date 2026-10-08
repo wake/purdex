@@ -10,6 +10,8 @@
 //   host_removed             → this device no longer has the host: drop the request, nothing to replay against;
 //   404                      → the daemon no longer knows the request: close, toast the failure;
 //   anything else            → toast the failure, leave the request open.
+// And whatever the answer, when the host was forgotten while it was out (`hostEpoch` moved: removed or re-pointed, #1978)
+// the answer belongs to the old daemon: nothing is written to the store or the UI, and no decision is queued.
 // `toastClosed` lives here too (the plan had it in approval-ws.ts, which P3b creates): the WS `closed` branch and the
 // 409 path must word the "handled elsewhere" toast the same way.
 //
@@ -48,15 +50,23 @@ export interface SubmitOptions {
   /** A pause queued with the decision (「這個 session 不再詢問」 clicked while disconnected): sent first, best effort;
    *  a network failure keeps it with the decision if that is re-queued too. */
   pauseSession?: string
+  /** The host's `hostEpoch` when the person clicked, for a caller that awaited something of its own first (the dialog's
+   *  pause). Default: the value now. A forget since then voids the send and its answer. */
+  epoch?: number
 }
 
 export async function submitDecision(hostId: string, approval: Approval, decision: Decision, grant?: Grant, opts: SubmitOptions = {}): Promise<DecideOutcome> {
+  const epoch = opts.epoch ?? (useApprovalStore.getState().hostEpoch[hostId] ?? 0)
+  // The host was removed or re-pointed since the click: this decision is the old daemon's, the id is now another's.
+  const forgotten = (): boolean => (useApprovalStore.getState().hostEpoch[hostId] ?? 0) !== epoch
+  if (forgotten()) return 'failed'
   let pauseLeft = opts.pauseSession
   if (pauseLeft) {
     try {
       await setSelfRelayPause(hostId, pauseLeft, 'off')
       pauseLeft = undefined
     } catch (e: unknown) {
+      if (forgotten()) return 'failed'
       const code = e instanceof ApprovalApiError ? e.code : 'network'
       if (code !== 'network') {
         pauseLeft = undefined
@@ -65,6 +75,7 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
     }
   }
   const client = await clientDescriptor()
+  if (forgotten()) return 'failed'
   // Before the send: the daemon's `closed` broadcast can outrun the HTTP answer, and it must read as ours.
   useApprovalStore.getState().markDecidedHere(hostId, approval.id)
   try {
@@ -73,6 +84,7 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
       ...(decision === 'approve' && grant ? { grant } : {}),
       client,
     })
+    if (forgotten()) return 'failed'
     useApprovalStore.getState().applyClosed(hostId, closed)
     // U22 (a): a decision made here — a click, or a queued one resent on reconnect — goes back to the requester's tab,
     // behind the next dialog when another request is open. Only this 200 does: never a 409, a network failure or the
@@ -89,6 +101,7 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
     }
     return 'closed'
   } catch (e: unknown) {
+    if (forgotten()) return 'failed'
     const err = e instanceof ApprovalApiError ? e : new ApprovalApiError(0, 'unknown', e instanceof Error ? e.message : String(e))
     const store = useApprovalStore.getState()
     if (err.code === 'network') {

@@ -18,6 +18,8 @@ import { getPrimaryPane, scanPaneTree } from './pane-tree'
 import { HOST_DELETE_LOCK_OWNER, HostDeleteRollbackIncompleteError, deleteHostCascade, deleteHostWithUndoToast, startPeerCacheInvalidation } from './host-lifecycle'
 import { emptyPeerHostEntry, usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
+import { approvalKey, useApprovalStore } from '../stores/useApprovalStore'
+import type { Approval } from './team/types'
 import { useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
 import { STORAGE_KEYS } from './storage/keys'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
@@ -1325,6 +1327,68 @@ describe('peer cache invalidation', () => {
     useHostStore.getState().updateHost(HOST_A, { ip: '9.9.9.9' })
     expect(usePeerStore.getState().byHost[HOST_A]).toBeDefined()
     expect(useSessionCwdStore.getState().byHost[HOST_A]).toBeDefined()
+  })
+})
+
+// #1978: an approval request belongs to the daemon that raised it, so a removed or re-pointed host loses its open
+// requests (and the decisions queued for them) the same way it loses its peer rows.
+describe('approval store invalidation (#1978)', () => {
+  let stop: () => void = () => {}
+  const open = (id: string): Approval => ({
+    id, kind: 'lead', host_id: 'd1',
+    origin: { session_id: 'S1', ref: '_40iueq', name: 'purdex-7c', pid: 1, proc_start: 'p', cwd: '/w', tmux: '' },
+    payload: { reason: 'r', max_members: 3, roots: ['/w'] },
+    state: 'open', created_at: 1_000, deadline_at: 541_000, lease_until: 31_000,
+  })
+  const held = () => Object.values(useApprovalStore.getState().entries).map((e) => `${e.hostId}:${e.approval.id}`).sort()
+  const seed = () => {
+    const st = useApprovalStore.getState()
+    st.applyOpened(HOST_A, open('a1'))
+    st.applyOpened(HOST_A, open('a2'))
+    st.applyOpened(HOST_B, open('b1'))
+    st.queueDecision(HOST_A, open('a1'), 'approve')
+  }
+  beforeEach(() => {
+    resetAllStores()
+    useApprovalStore.getState().reset()
+    useUndoToast.setState({ toast: null, notice: null })
+    stop = startPeerCacheInvalidation()
+  })
+  afterEach(() => { stop(); stop = () => {}; useApprovalStore.getState().reset() })
+
+  it('a host removed from the store loses its open requests; other hosts keep theirs; nothing is toasted', () => {
+    seed()
+    useHostStore.setState((s) => ({ hosts: { [HOST_B]: s.hosts[HOST_B] }, hostOrder: [HOST_B] }))
+    expect(held()).toEqual([`${HOST_B}:b1`])
+    expect(useApprovalStore.getState().queued[approvalKey(HOST_A, 'a1')]).toBeUndefined()
+    expect(useUndoToast.getState().toast).toBeNull()
+  })
+
+  it('a changed ip or port clears that host\'s requests and nothing else\'s', () => {
+    for (const patch of [{ ip: '9.9.9.9' }, { port: 7861 }]) {
+      useApprovalStore.getState().reset()
+      seed()
+      useHostStore.getState().updateHost(HOST_A, patch)
+      expect(held()).toEqual([`${HOST_B}:b1`])
+      expect(useUndoToast.getState().toast).toBeNull()
+    }
+  })
+
+  // A token rotation is nearly always the same daemon: its snapshot corrects the entries and the queued decisions are
+  // resent on the reconnect. The epoch stays too, so a decision in flight still lands (its token is read at send time).
+  it('a changed token keeps the requests, the queued decisions and the epoch', () => {
+    seed()
+    const epoch = useApprovalStore.getState().hostEpoch[HOST_A]
+    useHostStore.getState().updateHost(HOST_A, { token: 'rotated' })
+    expect(held()).toEqual([`${HOST_A}:a1`, `${HOST_A}:a2`, `${HOST_B}:b1`])
+    expect(Object.keys(useApprovalStore.getState().queued)).toEqual([approvalKey(HOST_A, 'a1')])
+    expect(useApprovalStore.getState().hostEpoch[HOST_A]).toBe(epoch)
+  })
+
+  it('a rename keeps the requests', () => {
+    seed()
+    useHostStore.getState().updateHost(HOST_A, { name: 'renamed' })
+    expect(held()).toEqual([`${HOST_A}:a1`, `${HOST_A}:a2`, `${HOST_B}:b1`])
   })
 })
 
