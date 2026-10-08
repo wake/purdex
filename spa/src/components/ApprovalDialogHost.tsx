@@ -27,7 +27,7 @@ import { useUndoToast } from '../stores/useUndoToast'
 import { approvalKey, selectCurrent, selectOpenCount, useApprovalStore, type ApprovalEntry, type Decision } from '../stores/useApprovalStore'
 import { ApprovalPill } from './ApprovalPill'
 import { hostLabel, useHostLook } from '../lib/host-look'
-import { leadPayloadOf, selfRelayPayloadOf, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { submitDecision } from '../lib/team/approval-decide'
@@ -71,7 +71,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const isSelfRelay = approval.kind === 'self_relay'
   const payload = leadPayloadOf(approval)
   const relay = selfRelayPayloadOf(approval)
-  const [maxMembers, setMaxMembers] = useState(String(payload.max_members))
+  const [maxMembers, setMaxMembers] = useState(String(DEFAULT_MAX_MEMBERS)) // U25: always 3; the lead's request is only named beside the field
   const [rootsText, setRootsText] = useState(payload.roots.join('\n'))
   // 「這個 session 不再詢問」 (spec §8.7 (a)): applied with the decision, whichever it is.
   const [noMoreAsking, setNoMoreAsking] = useState(false)
@@ -312,6 +312,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                   data-testid="approval-max-members"
                   className={`w-16 ${fieldClass}`}
                 />
+                {payload.max_members !== DEFAULT_MAX_MEMBERS && (
+                  <span data-testid="approval-max-members-requested">{t('approval.dialog.max_members_requested', { n: payload.max_members })}</span>
+                )}
               </label>
               {!membersOk && (
                 <p data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
