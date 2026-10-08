@@ -88,7 +88,7 @@ var activeAgent = map[string]bool{"pending": true, "running": true, "waiting": t
 // Apply applies one event received at now. It reports whether Status(),
 // DotList(), Background or SID changed; LastEvent always moves and is not
 // a change. StatusEventAt moves only with the events apply says touch the
-// light. Data that does not decode leaves everything but SID, LastEvent and
+// light, and with a heartbeat that changed Status(). Data that does not decode leaves everything but SID, LastEvent and
 // Ended as it was.
 func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	status, bg, sid := s.Status(), s.Background, s.SID
@@ -97,7 +97,14 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	s.SID = ev.SID
 	s.LastEvent = now
 	s.Ended = false // any later event reopens an ended stream, as in the registry
-	if s.apply(ev) {
+	touched := s.apply(ev)
+	if ev.Type == modevents.TypeHeartbeat && s.Status() != status {
+		// A heartbeat that repairs the light (a lost turn.start /
+		// turn.complete, an ask, a compaction, an error) moves it like the
+		// event it stands in for; one that repeats the state does not.
+		touched = true
+	}
+	if touched {
 		s.StatusEventAt = now
 	}
 
@@ -106,8 +113,9 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 
 // apply applies ev and reports whether it touched the inputs of Status(): a
 // session boundary, a main turn's start or end, an ask opened or closed, a
-// main compaction. Events that merely repeat or refine the state (heartbeat,
-// usage, background, agent.spawn), a subagent's turn, a check that allowed, a
+// main compaction. Events that merely repeat or refine the state (usage,
+// background, agent.spawn; a heartbeat is judged by Apply, which sees Status()
+// before and after), a subagent's turn, a check that allowed, a
 // tool that was not waiting on the person and data that does not decode
 // report false.
 func (s *StreamState) apply(ev modevents.Event) (touched bool) {

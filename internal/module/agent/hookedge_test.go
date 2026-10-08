@@ -242,6 +242,24 @@ func TestHookEdge_HeartbeatDoesNotHandBack(t *testing.T) {
 	}
 }
 
+// TestHookEdge_HeartbeatRepairHandsBack: a heartbeat that repairs the mod's
+// light (here the turn.start was lost and the beat carries the turn_id) is a
+// light event like any other: it supersedes the edge at once, with the mod's
+// running.
+func TestHookEdge_HeartbeatRepairHandsBack(t *testing.T) {
+	r := edgeRig(t)
+	r.modIdle()
+	r.advance(10 * time.Second)
+	r.hook(t, "PdxStop")
+	wantLights(t, "stop hook", r.drain(t), "idle/hook")
+
+	r.advance(300 * time.Millisecond)
+	r.modEvent(modevents.TypeHeartbeat, `{"turn_id":"t2"}`)
+	wantLight(t, "overlay", r.light(t), agentpkg.StatusRunning, SourceMod)
+	r.round()
+	wantLights(t, "heartbeat repair", r.drain(t), "running/mod")
+}
+
 // TestHookEdge_ExpiresAfterTTL: no mod event confirms the prompt (a slash
 // command starts no turn), so the edge runs out and the mod's light returns;
 // the worker says so once.
