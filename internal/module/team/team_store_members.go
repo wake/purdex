@@ -69,6 +69,34 @@ func (s *Store) ActiveMembersOfLiveTeams() ([]memberRow, error) {
 		WHERE m.state = 'active' AND t.ended_at = 0 ORDER BY m.created_at, m.spawn_op`)
 }
 
+// LiveLeadUsages returns the persisted reading of the lead of every live
+// team (teams.lead_usage_*), by team id; a team that never had one is absent.
+// Never nil. The team scan (teamCols) does not read these columns: team.Team
+// is a wire type, and only the roster wants the reading.
+func (s *Store) LiveLeadUsages() (map[string]*team.MemberContext, error) {
+	rows, err := s.db.Query(`SELECT id, lead_usage_pct, lead_usage_window, lead_usage_model, lead_usage_effort, lead_usage_at
+		FROM teams WHERE ended_at = 0`)
+	if err != nil {
+		return nil, fmt.Errorf("lead readings: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]*team.MemberContext{}
+	for rows.Next() {
+		var id string
+		var u usageScan
+		if err := rows.Scan(append([]any{&id}, u.dest()...)...); err != nil {
+			return nil, fmt.Errorf("lead readings: %w", err)
+		}
+		if c := u.reading(); c != nil {
+			out[id] = c
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("lead readings: %w", err)
+	}
+	return out, nil
+}
+
 func pctArg(c team.MemberContext) any {
 	if c.UsedPercentage == nil {
 		return nil

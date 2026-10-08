@@ -68,6 +68,10 @@ func (m *Module) buildRoster() (team.Roster, error) {
 			}
 		}
 	}
+	leadUsage, err := m.store.LiveLeadUsages()
+	if err != nil {
+		return team.Roster{}, err
+	}
 	var origins map[string]team.Origin
 	if len(ids) > 0 {
 		if origins, err = m.origins.ResolveOriginsBySession(ids); err != nil {
@@ -78,12 +82,14 @@ func (m *Module) buildRoster() (team.Roster, error) {
 	out := team.Roster{Teams: make([]team.TeamRoster, 0, len(teams))}
 	for i, t := range teams {
 		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, CreatedAt: t.CreatedAt,
-			Lead: m.rosterLead(t, origins, alias), Members: []team.RosterMember{}}
+			Lead: m.rosterLead(t, origins, alias, leadUsage[t.ID]), Members: []team.RosterMember{}}
 		for _, mr := range active[i] {
 			s := rosterSession(origins, mr.SessionID, func() team.RosterSession {
 				return team.RosterSession{SessionID: mr.SessionID, Ref: mr.Ref, Address: alias + "/" + mr.Ref,
 					Title: mr.Title, TmuxSession: mr.TmuxSession}
 			}, mr.Ref, alias)
+			s.Model, s.Effort = mr.Model, mr.Effort // what it was spawned with
+			s.Context = m.sessionContext(mr.SessionID, mr.Usage)
 			tr.Members = append(tr.Members, team.RosterMember{RosterSession: s, State: mr.State,
 				Origin: rosterMemberOrigin, JoinedAt: mr.CreatedAt})
 		}
@@ -97,8 +103,9 @@ func (m *Module) buildRoster() (team.Roster, error) {
 // The recorded address is the request-time one, so it is used only while
 // the lead's ref is still the one it was recorded with (a relay's cleared
 // moves the lead to a new ref); otherwise it is <self alias>/<lead_ref>.
-func (m *Module) rosterLead(t team.Team, origins map[string]team.Origin, alias string) team.RosterSession {
-	return rosterSession(origins, t.LeadSessionID, func() team.RosterSession {
+// persisted is the lead reading the sweeper stored on the team row.
+func (m *Module) rosterLead(t team.Team, origins map[string]team.Origin, alias string, persisted *team.MemberContext) team.RosterSession {
+	s := rosterSession(origins, t.LeadSessionID, func() team.RosterSession {
 		s := team.RosterSession{SessionID: t.LeadSessionID, Ref: t.LeadRef, Address: alias + "/" + t.LeadRef}
 		req, ok, err := m.store.Get(t.RequestID)
 		if err != nil || !ok {
@@ -113,6 +120,8 @@ func (m *Module) rosterLead(t team.Team, origins map[string]team.Origin, alias s
 		s.Title, s.Name, s.TmuxSession = req.Origin.Title, req.Origin.Name, tmuxName(req.Origin.Tmux)
 		return s
 	}, t.LeadRef, alias)
+	s.Context = m.sessionContext(t.LeadSessionID, persisted) // a lead has no spawn model / effort
+	return s
 }
 
 // rosterSession is one session of the roster: the registry's origin when it
