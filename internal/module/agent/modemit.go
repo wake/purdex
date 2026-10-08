@@ -22,6 +22,25 @@ import (
 // sweep emits) and Module.emitSessionState (the mod worker), plus
 // Module.seedBaselineFromSnapshot (sendSnapshot).
 
+// seedBaselineFromSnapshot records the frame a snapshot just sent as
+// session's baseline, but only when the session has none: the baseline stands
+// for what every connection has seen, so a connection arriving later must not
+// rewrite it. Without a seed the first mod worker round after a daemon
+// restart would send the light the subscriber was just told. Takes emitMu,
+// then m.mu; the caller holds neither.
+func (m *Module) seedBaselineFromSnapshot(session string, p *SessionProjection, n agentpkg.NormalizedEvent) {
+	if session == "" || p == nil || p.TopFrame == nil || n.Status == string(agentpkg.StatusClear) {
+		return
+	}
+	m.emitMu.Lock()
+	defer m.emitMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.lastEmittedLights[session]; !ok {
+		m.lastEmittedLights[session] = lightsDigestOf(p, n)
+	}
+}
+
 // emitRecorded puts n on the wire under session code and, only when it went
 // out, records its digest as session's baseline. Callers resolve code first
 // and hold no module lock.

@@ -623,10 +623,13 @@ func (m *Module) sendSnapshot(sub *core.EventSubscriber) {
 			payload, _ := json.Marshal(normalized)
 			event := core.HostEvent{Type: "hook", Session: item.SessionCode, Value: string(payload)}
 			data, _ := json.Marshal(event)
-			sub.Send(data)
+			sent := sub.TrySend(data)
 			m.mu.Lock()
 			syncProjectionState(m.currentStatus, m.subagents, item.SessionName, &item.Projection)
 			m.mu.Unlock()
+			if sent {
+				m.seedBaselineFromSnapshot(item.SessionName, &item.Projection, normalized)
+			}
 		}
 	} else {
 		log.Printf("[agent] snapshot frames: %v", err)
