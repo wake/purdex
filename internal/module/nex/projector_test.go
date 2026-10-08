@@ -31,8 +31,8 @@ import (
 // fails[id] reads with a 500; a script (states) sets the row's state anew
 // for each read until it runs out. GET /v1/executions pages through the
 // rows as Nexen's list does (ordered by id; limit, cursor; next_cursor the
-// last id of a page that has more; archived rows left out), first waiting
-// on listGate when one is set.
+// last id of a page that has more; archived rows left out), first calling
+// listHook with the cursor and waiting on listGate when they are set.
 type rowServer struct {
 	mu          sync.Mutex
 	rows        map[string]string
@@ -40,6 +40,7 @@ type rowServer struct {
 	reads       map[string]int
 	script      map[string][]string
 	listReads   int
+	listHook    func(cursor string) // set only while nothing lists
 	listEntered chan struct{}
 	listGate    chan struct{}
 }
@@ -84,6 +85,13 @@ func (s *rowServer) readsOf(id string) int {
 	return s.reads[id]
 }
 
+// remove takes id's row away: its GET answers 404, the list leaves it out.
+func (s *rowServer) remove(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.rows, id)
+}
+
 func (s *rowServer) listReadCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,6 +100,9 @@ func (s *rowServer) listReadCount() int {
 
 func (s *rowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/executions" {
+		if s.listHook != nil {
+			s.listHook(r.URL.Query().Get("cursor"))
+		}
 		if s.listGate != nil {
 			s.listEntered <- struct{}{}
 			<-s.listGate

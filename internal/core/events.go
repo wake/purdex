@@ -445,6 +445,22 @@ func (eb *EventsBroadcaster) HasSubscribers() bool {
 	return len(eb.subscribers) > 0
 }
 
+// HasSubscribersWanting reports whether any registered subscriber opted
+// into feature. The nex projector's safety reconcile runs only while one
+// does (#1866 spec §3.7): only such a subscriber consumes the deltas it
+// would repair. A subscriber a strict send has just ended may still be
+// counted until its removal lands, a moment later.
+func (eb *EventsBroadcaster) HasSubscribersWanting(feature string) bool {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
+	for sub := range eb.subscribers {
+		if sub.Wants(feature) {
+			return true
+		}
+	}
+	return false
+}
+
 // OnSubscribe registers a callback invoked when a new WS subscriber connects.
 // Callbacks receive the subscriber and can use sub.Send() to push snapshot data
 // (for a subscriber that opted into nex.v1, a snapshot frame that does not
