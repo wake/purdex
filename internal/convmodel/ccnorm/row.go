@@ -1,6 +1,6 @@
 // Package ccnorm turns a Claude Code transcript (the JSONL file Claude Code
 // writes for a session) into the conversation model of package convmodel:
-// turns, user messages, agent text, thinking and system items (spec
+// turns, user messages, agent text, thinking, tool steps and system items (spec
 // 2026-10-08-interface-u1 §8.1, facts in §3 M-U1-7).
 //
 // A Normalizer covers one file from offset 0 and is fed complete lines with
