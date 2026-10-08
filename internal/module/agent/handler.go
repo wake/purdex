@@ -442,6 +442,42 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 			return
 		}
+		// An interrupted tool call (is_interrupt, spec §7) is the one
+		// detail-only event that carries a status: idle. It still never
+		// resurrects — only the sender's own existing frame is touched, and
+		// through the narrow status + last_seen write (#632 R7), so a
+		// concurrent Subagents mutation is not clobbered. A sender without a
+		// frame writes and emits nothing.
+		interrupted := result.Status == agentpkg.StatusIdle && m.frames != nil
+		if interrupted {
+			senderFrame, gerr := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+			if gerr != nil {
+				log.Printf("[handler] interrupt frame lookup: %v", gerr)
+				trace.Finish("aborted", "projection_failed")
+				traceFinished = true
+				http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
+				return
+			}
+			if senderFrame == nil {
+				trace.Finish("completed", "detail_only_no_frame")
+				traceFinished = true
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+				return
+			}
+			// Same ordering rule as the main path: the hook is authoritative,
+			// so the probe grace window opens before the status is written.
+			if m.probeOrch != nil {
+				m.probeOrch.recordHookAt(req.TmuxSession)
+			}
+			if uerr := m.frames.UpdateStatusAndLastSeen(senderFrame.FrameID, agentpkg.StatusIdle, broadcastTs); uerr != nil {
+				log.Printf("[handler] interrupt status write: %v", uerr)
+				trace.Finish("aborted", "frame_apply_failed")
+				traceFinished = true
+				http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
+				return
+			}
+		}
 		projection, perr := m.projectionForSession(req.TmuxSession)
 		if perr != nil {
 			log.Printf("[handler] detail-only projection: %v", perr)
@@ -459,6 +495,16 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 			return
+		}
+		if interrupted {
+			// The status changed, so the in-memory view and the activity
+			// watcher follow it exactly as for any other status-bearing hook.
+			m.mu.Lock()
+			syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
+			m.mu.Unlock()
+			if m.prober != nil {
+				m.manageActivityWatch(req.TmuxSession, projection.TopFrame.AgentType, projection.EffectiveStatus())
+			}
 		}
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 		emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)

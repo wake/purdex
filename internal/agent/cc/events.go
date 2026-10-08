@@ -13,7 +13,10 @@ import "github.com/wake/purdex/internal/agent"
 //     runtime. PreToolUse + PostToolUseFailure are routed via handler.go's
 //     delegation extractor (PR #829, issue #821) to mark/unmark the
 //     Delegating flag for codex-companion Bash invocations; they must stay
-//     installable so cc actually fires them on fresh installs.
+//     installable so cc actually fires them on fresh installs. The one
+//     runtime exception: PostToolUseFailure with is_interrupt=true derives
+//     idle (the user pressed Esc; see deriveCCStatus). The catalog entry
+//     stays detail-only because that is its normal shape.
 //   - Polymorphic events (Notification) declare the union across sub-branches
 //     (permission_prompt / elicitation_dialog → Waiting; idle_prompt /
 //     auth_success → Idle). Drift test pins each sub-branch separately.
