@@ -14,6 +14,8 @@ export interface HostEvent {
     | 'profile'
     | 'nex-worker-exited'
     | 'approval.request'
+    | 'nex.executions.hello'
+    | 'nex.execution'
   session: string
   value: string
   /** `sessions` frames of a new daemon only: the list's version (#1255 daemon contract §3.2). Absent: unversioned. */
