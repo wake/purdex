@@ -28,10 +28,10 @@ import (
 )
 
 const leaseUsage = "usage: pdx lease ls [--json] [--config <path>]\n" +
-	"       pdx lease acquire (--kind <k> | --weight <n>) [--wait 5m] [--session <sid>] [--tool-use <id>] [--holder-pid <pid>] [--holder-start <text>] [--client-id <uuid>] [--config <path>]\n" +
-	"       pdx lease run (--kind <k> | --weight <n>) [--wait 5m] [--client-id <uuid>] [--config <path>] -- <command…>\n" +
+	"       pdx lease acquire (--kind <k> | --weight <n>) [--wait <dur>] [--session <sid>] [--tool-use <id>] [--holder-pid <pid>] [--holder-start <text>] [--client-id <uuid>] [--config <path>]\n" +
+	"       pdx lease run (--kind <k> | --weight <n>) [--wait <dur>] [--client-id <uuid>] [--config <path>] -- <command…>\n" +
 	"       pdx lease release (<id> | --client-id <uuid>) [--json] [--config <path>]\n" +
-	"       (acquire holds for --holder-pid, default the parent of pdx: a bare acquire in a subshell or $(…) names a process that exits at once. Give --holder-pid a long-lived pid, or use pdx lease run.)"
+	"       (--wait: how long to queue before being let in anyway; default the host setting deadline_s, 5 minutes unless changed. acquire holds for --holder-pid, default the parent of pdx: a bare acquire in a subshell or $(…) names a process that exits at once. Give --holder-pid a long-lived pid, or use pdx lease run.)"
 
 // leaseAttemptTimeout bounds one request to the daemon; a snapshot is a read
 // of memory, so a daemon slower than this is not answering.
