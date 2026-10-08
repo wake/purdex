@@ -2066,6 +2066,9 @@ func (m *Module) reconcileCreatedFrameAsProxy(stored store.Frame, req EventReque
 	if derr != nil {
 		return false, store.Frame{}, derr
 	}
+	if deleted {
+		m.forgetHookBackground(stored.FrameID)
+	}
 	if !deleted {
 		// Partial state: parent has the proxy ref, self still
 		// standalone. Acceptable transient — projection dedup hides
@@ -2246,6 +2249,9 @@ func (m *Module) canonicalizeDescendantsAfterUpsert(self store.Frame, broadcastT
 		deleted, derr := m.frames.DeleteIfUnchanged(candidate.FrameID, candidate.LastSeenAt)
 		if derr != nil {
 			return parentStored, derr
+		}
+		if deleted {
+			m.forgetHookBackground(candidate.FrameID)
 		}
 		if !deleted {
 			// Partial state: proxy attached on self + candidate row

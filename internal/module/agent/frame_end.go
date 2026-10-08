@@ -50,5 +50,8 @@ func (m *Module) claimFrameEnd(frame store.Frame, requireSessionID string, exit 
 	if err != nil || !claimed {
 		return nil, false, err
 	}
+	// The frame is gone, and so is whatever background symbol its last Stop
+	// reported (before the callers project and emit the new state).
+	m.forgetHookBackground(frame.FrameID)
 	return exit, true, nil
 }
