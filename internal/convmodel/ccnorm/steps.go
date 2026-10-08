@@ -142,6 +142,7 @@ func (n *Normalizer) applyResult(id string, r result, off int64) {
 	tr := n.turns[loc.turn]
 	s := *tr.t.Items[loc.item].Step
 	s.Status, s.Denial = resultStatus(r)
+	s.Output = n.outputOf(r.blocks, s.Kind)
 	if r.at > 0 && s.StartedAt > 0 {
 		d := max(r.at-s.StartedAt, 0)
 		s.DurationMS = &d
