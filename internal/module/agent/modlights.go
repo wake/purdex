@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -27,28 +28,53 @@ type modLights struct {
 	modCancel func()              // the registry subscription; nil when not subscribed
 	modNow    func() time.Time    // daemon receive time of mod events; test seam
 
-	modMu      sync.Mutex
-	modStreams map[string]*lights.StreamState // by stream id
-	modBySID   map[string]string              // sid → the newest stream reporting it
-	modDirty   map[string]struct{}            // sids whose panes must be re-emitted
-	modKick    chan struct{}                  // cap 1: wakes the re-emit worker
+	modMu       sync.Mutex
+	modStreams  map[string]*lights.StreamState // by stream id
+	modBySID    map[string]string              // sid → the newest stream reporting it
+	modDirty    map[string]string              // sids whose panes must be re-emitted → the latest event type that dirtied them
+	modKick     chan struct{}                  // cap 1: wakes the re-emit worker
+	modLiveSeen map[string]bool                // sid → Live() as of the worker's last round; under modMu
 
-	// modOverlayOn is the overlay switch, off until the re-emit worker
-	// (a-3b) runs: without it a mod change after a hook emit is never
-	// re-sent (the Stop hook arrives before the mod's 150 ms-batched
-	// turn.complete, and the light would stay running). The subscriber
-	// records either way; only applyModOverlay reads the switch. Nothing in
-	// production code turns it on yet; tests do.
+	// modOverlayOn is the overlay switch. It is on exactly while the re-emit
+	// worker runs (startModLights turns it on once the worker is in its loop,
+	// stopModLights turns it off first): without the worker a mod change
+	// after a hook emit is never re-sent (the Stop hook arrives before the
+	// mod's 150 ms-batched turn.complete, and the light would stay running).
+	// The subscriber records either way; only applyModOverlay reads the
+	// switch.
 	modOverlayOn atomic.Bool
+
+	// The re-emit worker (modworker.go). Touched by startModLights /
+	// stopModLights only, which Start / Stop call one at a time.
+	modTick         time.Duration      // worker period; test seam
+	modWorkerCancel context.CancelFunc // nil: no worker
+	modWorkerDone   chan struct{}      // closed when the worker goroutine returns
+	// modWorkerStartHook, when set, runs in the worker goroutine before it
+	// reports ready: a test seam to hold the worker back and observe that the
+	// overlay is still off.
+	modWorkerStartHook func()
 }
+
+// modTickDefault is how often the worker looks for stale flips when no mod
+// event kicks it (LiveWindow is 30 s, so a flip is noticed within one tick).
+const modTickDefault = 5 * time.Second
+
+// What dirtied a sid when no mod event did.
+const (
+	modEventStale = "stale" // the stream stopped driving the light (or vanished)
+	modEventLive  = "live"  // the stream started driving it with no event in between
+	modEventEvict = "evict" // the sid index moved because a stream was dropped
+)
 
 func newModLights() modLights {
 	return modLights{
-		modNow:     time.Now,
-		modStreams: make(map[string]*lights.StreamState),
-		modBySID:   make(map[string]string),
-		modDirty:   make(map[string]struct{}),
-		modKick:    make(chan struct{}, 1),
+		modNow:      time.Now,
+		modStreams:  make(map[string]*lights.StreamState),
+		modBySID:    make(map[string]string),
+		modDirty:    make(map[string]string),
+		modKick:     make(chan struct{}, 1),
+		modLiveSeen: make(map[string]bool),
+		modTick:     modTickDefault,
 	}
 }
 
@@ -119,7 +145,10 @@ func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
 		if m.modBySID[prevSID] == info.Stream {
 			m.repointSIDLocked(prevSID)
 		}
-		m.modDirty[prevSID] = struct{}{}
+		m.markDirtyLocked(prevSID, ev.Type)
+		if st.SID != "" {
+			m.markDirtyLocked(st.SID, ev.Type)
+		}
 	}
 	if st.SID != "" {
 		switch {
@@ -129,10 +158,10 @@ func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
 			// An ended stream never takes or keeps the index: a live
 			// sibling with this sid keeps the pane's overlay.
 			m.repointSIDLocked(st.SID)
-			m.modDirty[st.SID] = struct{}{}
+			m.markDirtyLocked(st.SID, ev.Type)
 		}
 		if changed {
-			m.modDirty[st.SID] = struct{}{}
+			m.markDirtyLocked(st.SID, ev.Type)
 		}
 	}
 	m.modMu.Unlock()
@@ -140,6 +169,13 @@ func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
 	case m.modKick <- struct{}{}:
 	default:
 	}
+}
+
+// markDirtyLocked records that sid's panes must be re-emitted, and what
+// dirtied it last (the worker reports it as detail.mod_event). modMu must be
+// held.
+func (m *Module) markDirtyLocked(sid, why string) {
+	m.modDirty[sid] = why
 }
 
 // repointSIDLocked points sid at the other stream reporting it that heard
@@ -203,7 +239,7 @@ func (m *Module) dropModStreamLocked(id string) {
 	delete(m.modStreams, id)
 	if st != nil && st.SID != "" && m.modBySID[st.SID] == id {
 		m.repointSIDLocked(st.SID)
-		m.modDirty[st.SID] = struct{}{}
+		m.markDirtyLocked(st.SID, modEventEvict)
 	}
 }
 

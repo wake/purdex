@@ -385,6 +385,7 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 	if projection, err := m.setProjectionTopStatus(args.Session, newStatus); err == nil && projection != nil {
 		normalized := buildProjectionNormalized(projection, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{})
 		m.broadcastToSession(args.Session, normalized)
+		m.recordEmittedLights(args.Session, projection, normalized)
 		return true, newStatus
 	}
 	// Fallback when the projection is unavailable (e.g. frames row removed

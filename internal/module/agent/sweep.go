@@ -301,6 +301,7 @@ func (m *Module) broadcastProxyCanonicalized(reference store.Frame) {
 	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_canonicalized", nowFn().UnixNano(), agentpkg.DeriveResult{})
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
+	m.recordEmittedLights(sessionName, projection, normalized)
 }
 
 // findCanonicalAncestor walks descendant's PPID chain looking for a
@@ -473,6 +474,7 @@ func (m *Module) broadcastProxyPruned(reference store.Frame) {
 	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_pruned", nowFn().UnixNano(), agentpkg.DeriveResult{})
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
+	m.recordEmittedLights(sessionName, projection, normalized)
 }
 
 // clearFrame is the eager delete path used for pid_dead / pid_reused sweeps
@@ -582,5 +584,6 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit)
 	attachExit(&normalized, exit)
 	payload, _ := json.Marshal(normalized)
 	m.core.Events.Broadcast(code, "hook", string(payload))
+	m.recordEmittedLights(sessionName, freshProjection, normalized)
 	return cleanupErr
 }

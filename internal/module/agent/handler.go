@@ -462,6 +462,9 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 		emitDecision, emitReason := m.emitHookToSession(req, normalized)
+		if emitDecision == "broadcasted" {
+			m.recordEmittedLights(req.TmuxSession, projection, normalized)
+		}
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if isDevMode() {
 			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s detail_only=true",
@@ -573,6 +576,9 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 		emitDecision, emitReason := m.emitHookToSession(req, normalized)
+		if emitDecision == "broadcasted" {
+			m.recordEmittedLights(req.TmuxSession, projection, normalized)
+		}
 		trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 		if isDevMode() {
 			log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",
@@ -669,6 +675,9 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 	}
 	emitDecision, emitReason := m.emitHookToSession(req, normalized)
+	if emitDecision == "broadcasted" {
+		m.recordEmittedLights(req.TmuxSession, projection, normalized)
+	}
 	trace.Emit(normalized, normalized.AgentType, normalized.RawEventName, emitDecision, emitReason)
 	if isDevMode() {
 		log.Printf("[broadcast] session=%s has_clients=%t decision=%s reason=%s raw_event_name=%s chain_id=%s",

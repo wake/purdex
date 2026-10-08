@@ -52,6 +52,10 @@ type Module struct {
 	currentStatus  map[string]agentpkg.Status
 	subagents      map[string][]agentpkg.SubagentRef
 	activeWatchers map[string]string // tmuxSession → agentType
+	// lastEmittedLights is, per tmux session, the digest of the last light
+	// frame sent for it (hook, probe, sweep or mod worker). The mod worker
+	// emits only when its fresh digest differs. Protected by m.mu.
+	lastEmittedLights map[string]lightsDigest
 
 	// W6-3 P1-T4: ProbeIntent dispatcher state. activeProbeIntents and
 	// probeIntentGen are protected by m.mu (same mutex as activeWatchers).
@@ -140,6 +144,7 @@ func New(events *store.AgentEventStore) (*Module, error) {
 		currentStatus:      make(map[string]agentpkg.Status),
 		subagents:          make(map[string][]agentpkg.SubagentRef),
 		activeWatchers:     make(map[string]string),
+		lastEmittedLights:  make(map[string]lightsDigest),
 		activeProbeIntents: make(map[string]map[agentpkg.ProbeIntentKind]activeIntent),
 		statusSnapshots:    make(map[string]statusSnapshot),
 		contextUsage:       make(map[string]ContextUsage),
@@ -415,6 +420,10 @@ func (m *Module) renameSessionLocked(oldName, newName string) []context.CancelFu
 	if status, ok := m.currentStatus[oldName]; ok {
 		m.currentStatus[newName] = status
 		delete(m.currentStatus, oldName)
+	}
+	if d, ok := m.lastEmittedLights[oldName]; ok {
+		m.lastEmittedLights[newName] = d
+		delete(m.lastEmittedLights, oldName)
 	}
 	if _, ok := m.activeWatchers[oldName]; ok {
 		// W3 撤回: rename is now stop-only. Phase 4a-1 wired a stopWatch +
