@@ -37,6 +37,16 @@ func (m *Module) run(ctx context.Context) {
 // loop should end: the platform is unsupported, or ctx was cancelled.
 func (m *Module) tick(ctx context.Context) (stop bool) {
 	began := time.Now()
+	// The setting is re-read every tick (nothing to subscribe to). Mode off
+	// skips the reads but keeps the ticker, so switching back on needs no
+	// restart.
+	st := m.settings()
+	m.mode = st.Mode
+	if st.Mode == resources.ModeOff {
+		m.fails, m.degraded = 0, false
+		m.publish(m.unavailable(resources.ReasonOff))
+		return ctx.Err() != nil
+	}
 	sctx, cancel := context.WithTimeout(ctx, sampleBudget)
 	defer cancel()
 
@@ -65,13 +75,18 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		m.logf("[resources] sampling recovered after %d failed tick(s)", m.fails)
 	}
 	m.fails, m.degraded = 0, false
+	// ComputeHost's Full is the stateless R5 reading; the published flag goes
+	// through the latch so load1 wobbling around the core count does not make
+	// it flap.
+	host := resources.ComputeHost(raw)
+	host.Full = m.latch.Update(host)
 	m.publish(&resources.Snapshot{
 		SampledAt: m.now(),
 		Available: true,
 		Capacity:  resources.Capacity,
-		Host:      resources.ComputeHost(raw),
+		Host:      host,
 		Sessions:  sessions,
-		Mode:      resources.ModeMeasure,
+		Mode:      m.modeOrMeasure(),
 		SampleMS:  time.Since(began).Milliseconds(),
 	})
 	return false
@@ -178,14 +193,23 @@ func (m *Module) unavailable(reason string) *resources.Snapshot {
 		SampledAt: m.now(),
 		Capacity:  resources.Capacity,
 		Sessions:  []resources.SessionUse{},
-		Mode:      resources.ModeMeasure,
 	}
 	if prev := m.latest.Load(); prev != nil {
 		s = *prev // the last good figures, sessions and sampled_at
 	}
 	s.Available = false
 	s.Reason = reason
+	s.Mode = m.modeOrMeasure()
 	return &s
+}
+
+// modeOrMeasure is the setting's mode as of the last tick; measure before the
+// first one.
+func (m *Module) modeOrMeasure() string {
+	if m.mode == "" {
+		return resources.ModeMeasure
+	}
+	return m.mode
 }
 
 func (m *Module) publish(s *resources.Snapshot) { m.latest.Store(s) }
