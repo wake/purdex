@@ -124,6 +124,8 @@ Affected-only runs (file names, `-run`, `-t`) are not intercepted.
 
    The report reads only stored rows; it never samples.
 
+**Known limit (session-new baseline).** A `session-new` lease's baseline is the processes under the session's agent pid at the sampler's last reading, up to one sampling interval (5 s) before the grant, with their start times; it is written by the grant's own statement, so a held lease always has it, and the process table is never read under `stateMu`. A child that started in that last interval is not in the baseline and is charged to the lease: the error is on the high side, which is the safe one for admission.
+
 **Review point.** After P2 (mod interception) has run in `advise` mode for one day and then in `lease` mode for about three days, the coordinator runs the report and brings the user the numbers in plain words with a recommendation (keep the rule, move a threshold, change a weight).
 
 ## 5. Surfaces

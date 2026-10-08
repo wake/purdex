@@ -242,6 +242,22 @@ func (s *leaseStore) Grant(id string, now int64, overrun, wouldWait bool) (bool,
 		WHERE id = ? AND state = 'waiting'`, now, b2i(overrun), b2i(wouldWait), now, id)
 }
 
+// GrantDecided is Grant with the D-8.1 snapshot of the decision and, for a
+// session-new lease, its baseline, written by the same single-row UPDATE: the
+// row is never held without them. baseline "" leaves the column as it is.
+func (s *leaseStore) GrantDecided(id string, now int64, wouldWait bool, g resources.Grant, baseline string) (bool, error) {
+	return s.changed(`
+		UPDATE resource_leases
+		SET state = 'held', granted_at = ?, overrun = ?, would_wait = ?, waited_ms = ? - created_at,
+			dec_recorded = 1, dec_load1 = ?, dec_ncpu = ?, dec_mem = ?, dec_measured = ?, dec_full = ?,
+			dec_sum_charge = ?, dec_unleased = ?, dec_weight = ?, dec_path = ?, would_wait_r2 = ?,
+			baseline = COALESCE(?, baseline)
+		WHERE id = ? AND state = 'waiting'`,
+		now, b2i(g.Overrun), b2i(wouldWait), now,
+		g.Load1, g.NCPU, g.Mem, g.Measured, b2i(g.Full), g.SumCharge, g.Unleased, g.Weight, g.Path, b2i(g.WouldWaitR2),
+		nullable(baseline), id)
+}
+
 // End moves a waiting or held row to ended with the reason (compare-and-set
 // on state != ended). A row that never waited long enough to record it gets
 // its waited_ms here.
