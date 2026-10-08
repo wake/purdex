@@ -292,7 +292,7 @@ test('heartbeat every 10 s carries turn_id, asks and agents', async ($, on) => {
   await turnDone($, 't1') // the main turn ended: no turn, no open asks
   w.agents = 'fail'
   await w.clock.advance(10_000)
-  expect(ofType(w, 'heartbeat').map((e) => e.data)[1]).toEqual({ asks: [], compacting: false, agents: [], error: false })
+  expect(ofType(w, 'heartbeat').map((e) => e.data)[1]).toEqual({ asks: [], compacting: false, error: false })
   await w.clock.advance(10_000)
   expect(ofType(w, 'heartbeat').length).toBe(3)
 })
@@ -636,6 +636,101 @@ test('heartbeat mirrors the last background and a new session.start forgets it',
   expect('background' in beats[0]).toBe(false)
   expect('background' in beats[4]).toBe(false)
   expect(ofType(w, 'background').map((e) => e.data)).toEqual([BG, { tasks: [], crons: 0 }, { tasks: [{ id: 'b2', type: 'shell', status: 'running' }], crons: 0 }])
+})
+
+test('heartbeat omits agents when agent.list throws', async ($, on) => {
+  const w = evWorld(on)
+  w.agents = [{ id: 'ag-1', description: 'look around', type: 'Explore', status: 'running' }]
+  await start($, w)
+  await w.clock.advance(10_150) // beat 1: the list answers
+  w.agents = 'fail'
+  await w.clock.advance(10_000) // beat 2: it throws — no agents member, not [] (that would clear every dot)
+  const beats = ofType(w, 'heartbeat').map((e) => e.data)
+  expect(beats[0].agents).toEqual([{ id: 'ag-1', status: 'running' }])
+  expect(beats[1]).toEqual({ asks: [], compacting: false, error: false })
+  expect('agents' in beats[1]).toBe(false)
+})
+
+// ---- tool.approved: a permission ask leaves waiting when its row starts running (M-U1-6) ----
+
+// The ToolUse row's isRunning is false while the permission dialog is open and turns true about
+// 16 ms after the person approves (M-U1-6, CC 2.1.294). The render hook only looks: whatever is
+// beneath answers is what the engine draws.
+const DRAWN = { type: 'engine', ref: 7 } as const
+const toolRow = (id: string, tool: string, isRunning: boolean) => ({
+  surface: 'terminal', component: 'ToolUse', requestId: id,
+  props: { tool_use_id: id, tool, input: {}, isRunning, isErrored: false, isInterrupted: false },
+}) as any
+function renderWorld(on: any, opts: Partial<W> = {}) {
+  const seen: any[] = []
+  on('ui.render', { component: 'ToolUse' }, async (_$: any, e: any) => { seen.push(e); return DRAWN })
+  return { w: evWorld(on, { decision: 'ask', ...opts }), seen }
+}
+
+// Mutation gate: report on every render (no delete) → red.
+test('a permission ask leaves on the ToolUse render with isRunning true and reports tool.approved once', async ($, on) => {
+  const { w } = renderWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await $.tool.check({ tool: 'Bash', input: { command: 'rm -rf x' }, tool_use_id: 'tu-1' } as any)
+  await $.ui.render(toolRow('tu-1', 'Bash', false)) // the dialog is open
+  await w.clock.advance(10_150) // beat 1, posted at 10 150
+  await $.ui.render(toolRow('tu-1', 'Bash', true)) // approved: the row runs
+  await $.ui.render(toolRow('tu-1', 'Bash', true)) // redrawn while it runs
+  await $.ui.render(toolRow('tu-1', 'Bash', false)) // and once it ended
+  await w.clock.advance(10_000) // beat 2
+  expect(ofType(w, 'heartbeat').map((e) => e.data.asks)).toEqual([['tu-1'], []])
+  expect(ofType(w, 'tool.approved').map((e) => [e.sid, e.data])).toEqual([[SID1, { tool_use_id: 'tu-1' }]])
+  expect(types(w).filter((t) => t !== 'heartbeat')).toEqual(['session.start', 'turn.start', 'tool.check', 'tool.approved'])
+})
+
+// Mutation gate: approve question asks too → red.
+test('a question ask is not approved by a render', async ($, on) => {
+  let release!: () => void
+  on('tool.call', { tool: 'ExitPlanMode' }, async () => {
+    await new Promise<void>((r) => { release = r }) // the plan dialog is up
+    return BASH_OK
+  })
+  const { w } = renderWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await $.tool.check({ tool: 'AskUserQuestion', input: {}, tool_use_id: 'tu-q' } as any) // a check naming a question tool
+  const call = $.tool.call({ tool: 'ExitPlanMode', plan: 'p' } as any) // its tool.start opens a question
+  await w.clock.advance(150)
+  const plan = ofType(w, 'tool.start')[0].data.tool_use_id
+  expect(plan).toMatch(/.+/)
+  await $.ui.render(toolRow('tu-q', 'AskUserQuestion', true))
+  await $.ui.render(toolRow(plan, 'ExitPlanMode', true))
+  await w.clock.advance(10_000) // beat 1, posted at 10 150
+  expect(ofType(w, 'heartbeat')[0].data.asks).toEqual(['tu-q', plan]) // a question leaves at its tool.end only
+  release()
+  await call
+  await w.clock.advance(10_000)
+  expect(ofType(w, 'heartbeat')[1].data.asks).toEqual(['tu-q'])
+  expect(ofType(w, 'tool.approved')).toEqual([])
+})
+
+test('a render of a tool with no open ask reports nothing', async ($, on) => {
+  const { w } = renderWorld(on, { decision: 'allow' })
+  await start($, w)
+  await w.clock.advance(150) // session.start
+  await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 'tu-ok' } as any) // allowed: no ask
+  await w.clock.advance(150)
+  await $.ui.render(toolRow('tu-ok', 'Bash', true))
+  await $.ui.render(toolRow('tu-none', 'Bash', true)) // a row no check ever named
+  await w.clock.advance(1000)
+  expect(types(w)).toEqual(['session.start', 'tool.check'])
+  expect(w.posts.length).toBe(2)
+})
+
+test('the render hook returns next(e) unchanged', async ($, on) => {
+  const { w, seen } = renderWorld(on)
+  await start($, w)
+  await $.tool.check({ tool: 'Bash', input: {}, tool_use_id: 'tu-1' } as any)
+  const rows = [toolRow('tu-1', 'Bash', false), toolRow('tu-1', 'Bash', true), toolRow('tu-x', 'Read', true)]
+  for (const row of rows) expect(await $.ui.render(row)).toEqual(DRAWN) // what beneath drew, as drawn
+  expect(seen.map((e) => e.props)).toEqual(rows.map((r) => r.props)) // and beneath saw the props as given
+  expect(seen.map((e) => e.requestId)).toEqual(['tu-1', 'tu-1', 'tu-x'])
 })
 
 test('a compaction reports compact.start and compact.end, and the heartbeat says compacting meanwhile', async ($, on) => {

@@ -28,8 +28,9 @@
 //   and `session.compact` unmatched; here those carry a matcher (one with and one without
 //   load, the first registered outermost — registerEvents runs before register.js's own, so
 //   these wrap the relay's), and only `tool.call`, `tool.check`, `agent.spawn`,
-//   `session.measure`, `session.end` and `classic.Stop` are unmatched. A Go test over the
-//   embedded files keeps it so (cmd/pdx/plugin/embed_test.go).
+//   `session.measure`, `session.end` and `classic.Stop` are unmatched. `ui.render` carries
+//   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
+//   (cmd/pdx/plugin/embed_test.go).
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -62,7 +63,10 @@ const ev = {
   scheduled: false, // a flush timer (the 150 ms one, or a backoff) is pending
   backoffMs: 0,
   turnId: '', // the running main turn
-  asks: new Set(), // tool_use_ids waiting on the person
+  // tool_use_id → 'permission' | 'question': what waits on the person. A question
+  // (AskUserQuestion / ExitPlanMode) leaves at its tool.end; a permission ask leaves too
+  // when its ToolUse row starts running (tool.approved).
+  asks: new Map(),
   compacting: false, // the main conversation is compacting
   lastError: false, // the last main turn ended in error (cleared by the next main turn)
   background: null, // {tasks, crons} as the last classic.Stop listed them; null before one
@@ -241,12 +245,13 @@ function beatTick($) {
 async function beat($) {
   if (!ev.on || ev.switching) return
   const gen = ev.beatGen
-  let agents = []
+  let agents // left out when the list fails: [] would clear every dot until the next beat
   try {
     agents = (await $.agent.list()).map((a) => ({ id: a.id, status: a.status }))
   } catch {}
   if (gen !== ev.beatGen) return
-  const data = { asks: [...ev.asks], compacting: ev.compacting, agents, error: ev.lastError }
+  const data = { asks: [...ev.asks.keys()], compacting: ev.compacting, error: ev.lastError }
+  if (agents) data.agents = agents
   if (ev.turnId) data.turn_id = ev.turnId
   if (ev.background) data.background = ev.background
   enqueue($, 'heartbeat', data)
@@ -354,13 +359,26 @@ function turnCompleted($, e) {
 }
 
 function toolStarted($, e) {
-  if (ASK_TOOLS.has(e.tool) && e.tool_use_id) ev.asks.add(e.tool_use_id)
+  if (ASK_TOOLS.has(e.tool) && e.tool_use_id) ev.asks.set(e.tool_use_id, 'question')
   enqueue($, 'tool.start', withAgent({ tool: e.tool, tool_use_id: e.tool_use_id }, e.agentId))
 }
 
 function toolEnded($, e, ms, error) {
   if (e.tool_use_id) ev.asks.delete(e.tool_use_id)
   enqueue($, 'tool.end', withAgent({ tool_use_id: e.tool_use_id, ms, error }, e.agentId))
+}
+
+// toolUseDrawn reports the approval of a permission ask: the ToolUse row's isRunning is false
+// while the permission dialog is open and turns true about 16 ms after the person approves
+// (M-U1-6, Claude Code 2.1.294). It runs on every redraw of every tool row, so it only looks
+// the id up; the ask leaves the mirror at once, so a later redraw reports nothing. A question
+// is never approved here: it waits until its tool.end.
+function toolUseDrawn($, e) {
+  if (!ev.on) return
+  const p = e.props
+  if (!p || p.isRunning !== true || ev.asks.get(p.tool_use_id) !== 'permission') return
+  ev.asks.delete(p.tool_use_id)
+  enqueue($, 'tool.approved', { tool_use_id: p.tool_use_id })
 }
 
 function isErrorResult(r) {
@@ -370,7 +388,7 @@ function isErrorResult(r) {
 function toolChecked($, e, r) {
   if (!ev.on) return
   const decision = isObject(r) ? r.decision : undefined
-  if (decision === 'ask' && e.tool_use_id) ev.asks.add(e.tool_use_id)
+  if (decision === 'ask' && e.tool_use_id) ev.asks.set(e.tool_use_id, ASK_TOOLS.has(e.tool) ? 'question' : 'permission')
   const data = { tool: e.tool }
   if (e.tool_use_id) data.tool_use_id = e.tool_use_id
   enqueue($, 'tool.check', { ...withAgent(data, e.agentId), decision })
@@ -486,6 +504,12 @@ async function onToolCall($, e, next) {
   return r
 }
 
+// onToolUseRender only observes: the drawing is whatever beneath answers, unchanged.
+async function onToolUseRender($, e, next) {
+  toolUseDrawn($, e)
+  return next(e)
+}
+
 async function onToolCheck($, e, next) {
   const r = await next(e)
   toolChecked($, e, r)
@@ -519,7 +543,8 @@ async function onSessionEnd($, e, next) {
 // registerEvents is called once by register.js, before register.js's own hooks, so the
 // matched hooks below are outermost on the events register.js owns. The matchers admit
 // every event the reporter wants: any turn (every turn has an id), any compaction trigger,
-// an interactive session start, and a SessionStart that switched the session id.
+// an interactive session start, a SessionStart that switched the session id, and a tool
+// row's drawing.
 export function registerEvents(on) {
   on('session.start', { isInteractive: true }, onSessionStart).catch(($, e, next) => next(e))
   on('turn.start', { turnId: /^/ }, onTurnStart).catch(($, e, next) => next(e))
@@ -532,4 +557,5 @@ export function registerEvents(on) {
   on('session.measure', onMeasure).catch(($, e, next) => next(e))
   on('session.end', onSessionEnd).catch(($, e, next) => next(e))
   on('classic.Stop', onStop).catch(($, e, next) => next(e))
+  on('ui.render', { component: 'ToolUse' }, onToolUseRender).catch(($, e, next) => next(e))
 }
