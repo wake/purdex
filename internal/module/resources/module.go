@@ -197,10 +197,7 @@ var errStopped = errors.New("resources module: Start after Stop")
 // down, closes it. Stop may be called again after a timeout and finishes the
 // job; it is idempotent, and it also keeps a later Start from running.
 func (m *Module) Stop(ctx context.Context) error {
-	m.startMu.Lock()
-	m.stopped = true
-	m.startMu.Unlock()
-	m.stopRun()
+	m.markStopped()
 	done := make(chan struct{})
 	go func() {
 		m.wg.Wait()
@@ -214,11 +211,21 @@ func (m *Module) Stop(ctx context.Context) error {
 	}
 }
 
+// markStopped ends the module for good, atomically with Start: after it a
+// Start answers errStopped, whichever of Stop and Close came first, and the
+// sampler's context is cancelled.
+func (m *Module) markStopped() {
+	m.startMu.Lock()
+	m.stopped = true
+	m.startMu.Unlock()
+	m.stopRun()
+}
+
 // Close closes resources.db once. The daemon calls it after the HTTP server
 // has shut down (core.Closer); the loop was joined by Stop, and a Close that
 // comes first stops it too, so it never closes the database under a sampler.
 func (m *Module) Close() error {
-	m.stopRun()
+	m.markStopped()
 	m.wg.Wait()
 	m.closeOnce.Do(func() {
 		if m.store == nil {

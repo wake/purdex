@@ -332,6 +332,21 @@ func TestModule_StartAfterStopFails(t *testing.T) {
 	}
 }
 
+// Re-review (P2): Close comes first when a daemon is torn down before it was
+// started, and closes the database; a Start after that must refuse too.
+func TestModule_StartAfterCloseFails(t *testing.T) {
+	m, _ := initedModule(t, t.TempDir(), &fakeSettings{}, idleSampler())
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background()); err == nil {
+		t.Fatal("Start after Close must fail: the database is closed")
+	}
+	if m.latest.Load() != nil {
+		t.Fatal("a refused Start must not sample")
+	}
+}
+
 func TestModule_StartAfterStopBeforeStartFails(t *testing.T) {
 	m, _ := initedModule(t, t.TempDir(), &fakeSettings{}, idleSampler())
 	if err := m.Stop(context.Background()); err != nil {
