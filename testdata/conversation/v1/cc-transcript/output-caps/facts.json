@@ -1,0 +1,17 @@
+{
+  "live": false,
+  "turns": 2,
+  "per_turn": [
+    {"id": "0c000000-0000-4000-8000-000000000001", "outcome": "done", "user_source": "user"},
+    {"id": "0c000000-0000-4000-8000-000000000006", "outcome": "done", "user_source": "user"}
+  ],
+  "steps": [
+    {"id": "toolu_01ReadBig000000000000", "kind": "read", "status": "done"},
+    {"id": "toolu_01BashBig000000000000", "kind": "execute", "status": "done"}
+  ],
+  "outputs": [
+    {"step": "toolu_01ReadBig000000000000", "total_lines": 400, "total_bytes": 21999, "keep": "head", "truncated": true},
+    {"step": "toolu_01BashBig000000000000", "total_lines": 1200, "total_bytes": 21599, "keep": "tail", "truncated": true}
+  ],
+  "shapes": []
+}

@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "api-error",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Synthetic, built from the M-U1-7 shapes: API errors (`<synthetic>` assistant row, `isApiErrorMessage`, `error`), which cannot be provoked on demand.",
+      "input": "cc-transcript/api-error/input.jsonl",
+      "expected": "cc-transcript/api-error/expected.json",
+      "facts": "cc-transcript/api-error/facts.json",
+      "sha256": {
+        "input": "b003dccbfd3d0f356f3902c8a04060310e84c328b1e909bc097a7d5f8053660f",
+        "expected": "ae908f522b2ea77a20862b49675b82b8772204a53d2421cd46a7d589a5ba3a82",
+        "facts": "69c49d4fe490008708e3fcfe7a82493983bc8c81d40c83c013db7a58bcccbb5c"
+      }
+    },
+    {
+      "name": "denial-kinds",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Synthetic, built from the M-U1-7 shapes: every `toolDenialKind` value with and without `is_error`, a killed-process turn, a failed step and an old-style refusal.",
+      "input": "cc-transcript/denial-kinds/input.jsonl",
+      "expected": "cc-transcript/denial-kinds/expected.json",
+      "facts": "cc-transcript/denial-kinds/facts.json",
+      "sha256": {
+        "input": "26e6cbd9e9ef6f9248a12bc82b2f676955e5c4430b0ea3139f87ab46e6ebaec7",
+        "expected": "f6bd1f6193f92d1899388287cb267e0c95470ab37e2e4a128146f3980e0129fb",
+        "facts": "b6ba748955735d316b5521330e9ec35f2cf20494ee9b49a99d60496890364891"
+      }
+    },
+    {
+      "name": "ios-c2-send-keys",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Plain prompts, pasted and multi-line text, a refused Bash call, AskUserQuestion, a bash-mode turn and a background task, from the iOS C2 recording (Claude Code 2.1.292).",
+      "input": "cc-transcript/ios-c2-send-keys/input.jsonl",
+      "expected": "cc-transcript/ios-c2-send-keys/expected.json",
+      "facts": "cc-transcript/ios-c2-send-keys/facts.json",
+      "sha256": {
+        "input": "25287a43ab9e899f473673d88039cf8882c85cc4f6052cda7f48b64b73d09482",
+        "expected": "f32238cfcabf52012d03bae673c722d57a937d0b1a628070ae9d903171c92df5",
+        "facts": "3f9f9da67a97fa2bd124e853e37e040f75b56e69a4608fe4b426ca3fdd0d51fd"
+      }
+    },
+    {
+      "name": "ios-f2b-queue-interrupt",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Queued prompts (`promptSource: queued`), a background-task notification turn and three Esc interrupts, from the iOS F2-B recording (Claude Code 2.1.292).",
+      "input": "cc-transcript/ios-f2b-queue-interrupt/input.jsonl",
+      "expected": "cc-transcript/ios-f2b-queue-interrupt/expected.json",
+      "facts": "cc-transcript/ios-f2b-queue-interrupt/facts.json",
+      "sha256": {
+        "input": "1b69e2f09cce081c7e31c6ba9618f64529c46a29527f8b67e16cc78b05db4635",
+        "expected": "d0a9b45f3819dbc9f9501da50cd7bf5cc37066f970babfa43d5ea721d69c1508",
+        "facts": "0bb39a33e62f97514d48f45b9a5f16a6136adaae1a34632437e13bc11a94f602"
+      }
+    },
+    {
+      "name": "ios-f3-ask-permission",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "AskUserQuestion answers and permission prompts that were allowed or refused, from the iOS F3 recording (Claude Code 2.1.292, `--permission-mode default`).",
+      "input": "cc-transcript/ios-f3-ask-permission/input.jsonl",
+      "expected": "cc-transcript/ios-f3-ask-permission/expected.json",
+      "facts": "cc-transcript/ios-f3-ask-permission/facts.json",
+      "sha256": {
+        "input": "5f66d789616b7cb157d828bb2b6b6b70773d0fd75ac008dba2ca23d5bca89397",
+        "expected": "72ab6cc1ffb2fdceffcef8b9ae53da685c8c4ea35f1ef3f3bc58d31fce018a95",
+        "facts": "1100067750525302f6c1b46be26c13ee12018a5eb2657d381a75954af38e694d"
+      }
+    },
+    {
+      "name": "output-caps",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Synthetic, built from the M-U1-7 shapes: step outputs over the 16 KiB cap, a Read keeping its head and a Bash keeping its tail.",
+      "input": "cc-transcript/output-caps/input.jsonl",
+      "expected": "cc-transcript/output-caps/expected.json",
+      "facts": "cc-transcript/output-caps/facts.json",
+      "sha256": {
+        "input": "87fcd8b9c15aeaf91958ab79d04ce2c2cc198d0f8834d210c7c53c4f57e43501",
+        "expected": "33e79e74d1b4bedd803dd93a4eca41d8ac3f7bde933b4891552d29d36bf6340a",
+        "facts": "237bbd411689f22f5f5e9ea960a0828bcf35e35cb96c90c7a37248036a2b90d2"
+      }
+    },
+    {
+      "name": "source-kinds",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Synthetic, built from the M-U1-7 shapes: a peer message, a local slash command, a slash command that reaches the model, a scheduled wake-up and an absorbed queued prompt.",
+      "input": "cc-transcript/source-kinds/input.jsonl",
+      "expected": "cc-transcript/source-kinds/expected.json",
+      "facts": "cc-transcript/source-kinds/facts.json",
+      "sha256": {
+        "input": "406aacccaa6ad4298d4f9fd4fe905be29fb3c56f587aac4e5c93599a8af5dc1a",
+        "expected": "844cc950a98150958474fff478f7c54e2e055e43852b18e1a1d0c5f01dba9b6d",
+        "facts": "2115ca988817002f0a7ad5951f31bf155143677a94922146f4432b9371fd2811"
+      }
+    }
+  ]
+}

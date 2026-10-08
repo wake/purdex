@@ -1,0 +1,12 @@
+{
+  "live": false,
+  "turns": 3,
+  "per_turn": [
+    {"id": "a1e00000-0000-4000-8000-000000000001", "outcome": "failed", "user_source": "user", "error_kind": "rate_limit"},
+    {"id": "a1e00000-0000-4000-8000-000000000004", "outcome": "done", "user_source": "user"},
+    {"id": "a1e00000-0000-4000-8000-000000000007", "outcome": "done", "user_source": "user"}
+  ],
+  "steps": [],
+  "outputs": [],
+  "shapes": ["failed_api_error"]
+}

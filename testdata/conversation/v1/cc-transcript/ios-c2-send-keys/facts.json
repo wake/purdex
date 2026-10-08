@@ -1,0 +1,32 @@
+{
+  "live": false,
+  "turns": 19,
+  "per_turn": [
+    {"id": "9c3e870f-3d75-494b-ab8a-266e3653b9a2", "outcome": "done", "user_source": "user"},
+    {"id": "77d987a2-1aa8-40a5-ae5f-ef5f465feb4c", "outcome": "done", "user_source": "user"},
+    {"id": "6af05208-3102-4889-adc7-7f4793a6330b", "outcome": "done", "user_source": "user"},
+    {"id": "49e0487a-4aaf-4cf6-b7f9-10cdc9c2d9b7", "outcome": "done", "user_source": "user"},
+    {"id": "f5944b81-5576-4241-a6ad-7065ae2cc3b7", "outcome": "done", "user_source": "user"},
+    {"id": "a6c01c05-3a7e-449a-8292-d715617d80a9", "outcome": "done", "user_source": "user"},
+    {"id": "4483e2f8-16c7-4e04-b09f-5eb1f09111fe", "outcome": "done", "user_source": "user"},
+    {"id": "cbbb1713-8ea1-4352-a3fd-e56cd45d16d4", "outcome": "done", "user_source": "user"},
+    {"id": "91441df3-bb73-48eb-879c-42935a9f3800", "outcome": "interrupted", "user_source": "user"},
+    {"id": "95b9b343-2455-491b-af6b-690561b847e2", "outcome": "done", "user_source": "user"},
+    {"id": "624593b5-b2e1-4ba9-9405-7512b27f66d9", "outcome": "done", "user_source": "user"},
+    {"id": "28ce6f70-8453-4624-a7c9-fff5f7eadb2f", "outcome": "done", "user_source": "user"},
+    {"id": "a898560a-102e-4db6-ab2a-3e22bd6fd3f4", "outcome": "done", "user_source": "user"},
+    {"id": "2aac0bee-24bf-4c0c-9266-fad19dc7d5ea", "outcome": "done", "user_source": "user"},
+    {"id": "9c6eeb85-a17f-40b8-8a9a-9e39e3715aed", "outcome": "interrupted", "user_source": "user"},
+    {"id": "fa924977-a586-4cb9-8974-4f8e44a35c4c", "outcome": "done", "user_source": "task"},
+    {"id": "79697494-14e8-4fc1-8f2e-95cd1cc895e4", "outcome": "done", "user_source": "bash"},
+    {"id": "ae47e696-3dfe-410a-bb6a-b6fd6f4f88b3", "outcome": "done", "user_source": "user"},
+    {"id": "0944a4ae-f4c2-4b20-abf7-c565b1838c73", "outcome": "done", "user_source": "user"}
+  ],
+  "steps": [
+    {"id": "toolu_018nY4gHmai6cqhpZvpiwrZ7", "kind": "execute", "status": "denied", "denial": "user-rejected"},
+    {"id": "toolu_01C93fT13N4kF3MBCwWz1Bwa", "kind": "other", "status": "done"},
+    {"id": "toolu_017vNxcyb6esotPk8BTYkD6d", "kind": "execute", "status": "done"}
+  ],
+  "outputs": [],
+  "shapes": ["interrupted_marker", "interrupted_refusal"]
+}

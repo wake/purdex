@@ -1,0 +1,436 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "turns": [
+      {
+        "id": "de000000-0000-4000-8000-000000000001",
+        "index": 0,
+        "started_at": 1791378001000,
+        "ended_at": 1791378011000,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "de000000-0000-4000-8000-000000000001",
+            "at": 1791378001000,
+            "text": "權限矩陣一：四種拒絕原因，工具結果帶 is_error: true",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01DenyErr0100000000000",
+            "at": 1791378002000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "user-rejected",
+            "summary": "echo err1",
+            "started_at": 1791378002000,
+            "duration_ms": 1000,
+            "input": {
+              "command": "echo err1",
+              "description": "拒絕原因 user-rejected（is_error true）"
+            },
+            "output": {
+              "text": "The tool use was denied (user-rejected).",
+              "total_lines": 1,
+              "total_bytes": 40,
+              "truncated": false
+            },
+            "command": {
+              "text": "echo err1",
+              "description": "拒絕原因 user-rejected（is_error true）"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01DenyErr0200000000000",
+            "at": 1791378004000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "permission-rule",
+            "summary": "echo err2",
+            "started_at": 1791378004000,
+            "duration_ms": 1000,
+            "input": {
+              "command": "echo err2",
+              "description": "拒絕原因 permission-rule（is_error true）"
+            },
+            "output": {
+              "text": "The tool use was denied (permission-rule).",
+              "total_lines": 1,
+              "total_bytes": 42,
+              "truncated": false
+            },
+            "command": {
+              "text": "echo err2",
+              "description": "拒絕原因 permission-rule（is_error true）"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01DenyErr0300000000000",
+            "at": 1791378006000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "interrupted",
+            "summary": "echo err3",
+            "started_at": 1791378006000,
+            "duration_ms": 1000,
+            "input": {
+              "command": "echo err3",
+              "description": "拒絕原因 interrupted（is_error true）"
+            },
+            "output": {
+              "text": "The tool use was denied (interrupted).",
+              "total_lines": 1,
+              "total_bytes": 38,
+              "truncated": false
+            },
+            "command": {
+              "text": "echo err3",
+              "description": "拒絕原因 interrupted（is_error true）"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01DenyErr0400000000000",
+            "at": 1791378008000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "cancelled",
+            "summary": "echo err4",
+            "started_at": 1791378008000,
+            "duration_ms": 1000,
+            "input": {
+              "command": "echo err4",
+              "description": "拒絕原因 cancelled（is_error true）"
+            },
+            "output": {
+              "text": "The tool use was denied (cancelled).",
+              "total_lines": 1,
+              "total_bytes": 36,
+              "truncated": false
+            },
+            "command": {
+              "text": "echo err4",
+              "description": "拒絕原因 cancelled（is_error true）"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "de000000-0000-4000-8000-000000000010",
+            "at": 1791378010000,
+            "markdown": "四個工具都被拒絕了。"
+          }
+        ]
+      },
+      {
+        "id": "de000000-0000-4000-8000-000000000012",
+        "index": 1,
+        "started_at": 1791378012000,
+        "ended_at": 1791378022000,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "de000000-0000-4000-8000-000000000012",
+            "at": 1791378012000,
+            "text": "權限矩陣二：四種拒絕原因，is_error 為 false 或沒有這個欄位",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01DenyOk01000000000000",
+            "at": 1791378013000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "user-rejected",
+            "summary": "echo ok1",
+            "started_at": 1791378013000,
+            "duration_ms": 1000,
+            "input": {
+              "command": "echo ok1",
+              "description": "拒絕原因 user-rejected（is_error false）"
+            },
+            "output": {
+              "text": "The tool use was denied (user-rejected).",
+              "total_lines": 1,
+              "total_bytes": 40,
+              "truncated": false
+            },
+            "command": {
+              "text": "echo ok1",
+              "description": "拒絕原因 user-rejected（is_error false）"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01DenyOk02000000000000",
+            "at": 1791378015000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "permission-rule",
+            "summary": "echo ok2",
+            "started_at": 1791378015000,
+            "duration_ms": 1000,
+            "input": {
+              "command": "echo ok2",
+              "description": "拒絕原因 permission-rule（is_error 缺）"
+            },
+            "output": {
+              "text": "The tool use was denied (permission-rule).",
+              "total_lines": 1,
+              "total_bytes": 42,
+              "truncated": false
+            },
+            "command": {
+              "text": "echo ok2",
+              "description": "拒絕原因 permission-rule（is_error 缺）"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01DenyOk03000000000000",
+            "at": 1791378017000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "interrupted",
+            "summary": "echo ok3",
+            "started_at": 1791378017000,
+            "duration_ms": 1000,
+            "input": {
+              "command": "echo ok3",
+              "description": "拒絕原因 interrupted（is_error false）"
+            },
+            "output": {
+              "text": "The tool use was denied (interrupted).",
+              "total_lines": 1,
+              "total_bytes": 38,
+              "truncated": false
+            },
+            "command": {
+              "text": "echo ok3",
+              "description": "拒絕原因 interrupted（is_error false）"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01DenyOk04000000000000",
+            "at": 1791378019000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "cancelled",
+            "summary": "echo ok4",
+            "started_at": 1791378019000,
+            "duration_ms": 1000,
+            "input": {
+              "command": "echo ok4",
+              "description": "拒絕原因 cancelled（is_error 缺）"
+            },
+            "output": {
+              "text": "The tool use was denied (cancelled).",
+              "total_lines": 1,
+              "total_bytes": 36,
+              "truncated": false
+            },
+            "command": {
+              "text": "echo ok4",
+              "description": "拒絕原因 cancelled（is_error 缺）"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "de000000-0000-4000-8000-000000000021",
+            "at": 1791378021000,
+            "markdown": "又是四個拒絕。"
+          }
+        ]
+      },
+      {
+        "id": "de000000-0000-4000-8000-000000000023",
+        "index": 2,
+        "started_at": 1791378023000,
+        "ended_at": 1791378024000,
+        "outcome": "interrupted",
+        "items": [
+          {
+            "type": "user",
+            "id": "de000000-0000-4000-8000-000000000023",
+            "at": 1791378023000,
+            "text": "行程被殺掉：工具已送出、沒有結果，回合也沒有收尾",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01Killed0000000000000",
+            "at": 1791378024000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "interrupted",
+            "summary": "sleep 600",
+            "started_at": 1791378024000,
+            "input": {
+              "command": "sleep 600",
+              "description": "不會有結果的指令"
+            },
+            "command": {
+              "text": "sleep 600",
+              "description": "不會有結果的指令"
+            }
+          }
+        ]
+      },
+      {
+        "id": "de000000-0000-4000-8000-000000000025",
+        "index": 3,
+        "started_at": 1791378025000,
+        "ended_at": 1791378027000,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "de000000-0000-4000-8000-000000000025",
+            "at": 1791378025000,
+            "text": "殺掉之後的下一回合",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "de000000-0000-4000-8000-000000000026",
+            "at": 1791378026000,
+            "markdown": "收到。"
+          }
+        ]
+      },
+      {
+        "id": "de000000-0000-4000-8000-000000000028",
+        "index": 4,
+        "started_at": 1791378028000,
+        "ended_at": 1791378032000,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "de000000-0000-4000-8000-000000000028",
+            "at": 1791378028000,
+            "text": "一個真正失敗的指令",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01Failed0000000000000",
+            "at": 1791378029000,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "failed",
+            "summary": "false",
+            "started_at": 1791378029000,
+            "duration_ms": 1000,
+            "input": {
+              "command": "false",
+              "description": "會失敗"
+            },
+            "output": {
+              "text": "Exit code 1\n(no output)",
+              "total_lines": 2,
+              "total_bytes": 23,
+              "truncated": false
+            },
+            "command": {
+              "text": "false",
+              "description": "會失敗",
+              "exit_code": 1
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "de000000-0000-4000-8000-000000000031",
+            "at": 1791378031000,
+            "markdown": "指令失敗了，結束碼 1。"
+          }
+        ]
+      },
+      {
+        "id": "de000000-0000-4000-8000-000000000033",
+        "index": 5,
+        "started_at": 1791378033000,
+        "ended_at": 1791378037000,
+        "outcome": "interrupted",
+        "items": [
+          {
+            "type": "user",
+            "id": "de000000-0000-4000-8000-000000000033",
+            "at": 1791378033000,
+            "text": "舊版 CC：拒絕只寫在文字裡，沒有 toolDenialKind",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01OldRefuse00000000000",
+            "at": 1791378034000,
+            "kind": "read",
+            "tool": "Read",
+            "status": "denied",
+            "denial": "user-rejected",
+            "summary": "notes.txt",
+            "started_at": 1791378034000,
+            "duration_ms": 1000,
+            "input": {
+              "file_path": "/work/fixture/notes.txt"
+            },
+            "output": {
+              "text": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file).",
+              "total_lines": 1,
+              "total_bytes": 151,
+              "truncated": false
+            }
+          },
+          {
+            "type": "system",
+            "id": "de000000-0000-4000-8000-000000000036",
+            "at": 1791378036000,
+            "kind": "interrupted"
+          }
+        ]
+      }
+    ]
+  }
+}
