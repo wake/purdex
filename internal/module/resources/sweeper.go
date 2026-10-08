@@ -150,10 +150,10 @@ func (m *Module) ended(r leaseRow, reason string, won bool, err error) {
 	}
 }
 
-// holderView takes the process table the holders are judged against, or nil
-// when it cannot be read: unknown reads as alive. A standing failure is logged
-// once.
-func (m *Module) holderView(ctx context.Context) procView {
+// readView takes the process table through the sweepView seam, or the
+// module's own snapshot reader. It touches no lock and no module state, so the
+// sweeper, the sampler's lease measure and a request can all call it.
+func (m *Module) readView(ctx context.Context) (procView, error) {
 	take := m.sweepView
 	if take == nil {
 		take = func(ctx context.Context) (procView, error) {
@@ -166,7 +166,14 @@ func (m *Module) holderView(ctx context.Context) procView {
 	}
 	sctx, cancel := context.WithTimeout(ctx, sampleBudget)
 	defer cancel()
-	view, err := take(sctx)
+	return take(sctx)
+}
+
+// holderView takes the process table the holders are judged against, or nil
+// when it cannot be read: unknown reads as alive. A standing failure is logged
+// once.
+func (m *Module) holderView(ctx context.Context) procView {
+	view, err := m.readView(ctx)
 	if err != nil {
 		if !m.viewFailing {
 			m.viewFailing = true
