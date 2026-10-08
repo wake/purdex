@@ -30,6 +30,15 @@ describe('startRosterForget', () => {
     expect(useTeamRosterStore.getState().byHost).toEqual({})
   })
 
+  it('tells apart a re-point whose endpoint and token read the same when joined with a colon', () => {
+    // `${ip}:${port}:${token}` is `h:1:2:x` for both configurations
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, ip: 'h', port: 1, token: '2:x' } } }))
+    expect(Object.keys(useTeamRosterStore.getState().byHost)).toEqual(['h2'])
+    useTeamRosterStore.getState().apply('h1', [])
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, ip: 'h:1', port: 2, token: 'x' } } }))
+    expect(Object.keys(useTeamRosterStore.getState().byHost)).toEqual(['h2'])
+  })
+
   it('leaves everyone alone on a change that is neither (a rename, a runtime update)', () => {
     useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, name: 'renamed' } } }))
     useHostStore.setState({ runtime: { h1: { status: 'connected' } as never } })

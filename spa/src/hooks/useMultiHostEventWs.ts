@@ -26,6 +26,7 @@ import { handleUnattendedEvent } from '../lib/team/unattended-ws'
 import { UNATTENDED_EVENT_TYPE } from '../lib/team/types'
 import { handleRosterEvent } from '../lib/team/roster-ws'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
+import { connectionKey } from '../lib/host-connection-key'
 
 /**
  * The operation lock's observer (#1309 + #1310 spec §3.1): every tree rewriter —
@@ -67,22 +68,6 @@ interface HostEntry {
   conn: EventConnection
   sm: ConnectionStateMachine
   configKey: string // see `connectionKey`
-}
-
-/**
- * What a host's connection is negotiated from: its endpoint AND its token. A
- * change to either tears the connection down and starts a fresh one, exactly
- * as a reload would. The token has to be part of it (#1360): a tokenless host
- * ends its negotiation in `auth-error`, which the state machine treats as final
- * — so without a new connection, a token added in-app was never tried.
- *
- * JSON, not a joined string: a token is user input and may contain any
- * separator, so a joined key could serialise two different configurations
- * identically. `null` and an absent token are the same (no token). The key
- * carries the token, so it must never be logged.
- */
-function connectionKey(host: { ip: string; port: number; token?: string | null }): string {
-  return JSON.stringify([host.ip, host.port, host.token ?? ''])
 }
 
 export function useMultiHostEventWs() {
