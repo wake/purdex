@@ -1,10 +1,12 @@
 package teammod
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -75,6 +77,98 @@ var usageColumns = [][2]string{
 // a row written before it reads "" (no name).
 func migrateTeamName(db *sql.DB) error {
 	return ensureColumn(db, "teams", "team_name", "TEXT NOT NULL DEFAULT ''")
+}
+
+// afterReportsPKRead, when set, runs in migrateReportsPK between the unlocked
+// check that found the old key and the write lock; tests let a second opener
+// migrate there. nil in production.
+var afterReportsPKRead func()
+
+// reportsPK is the primary key columns of reports in key order, empty when the
+// table does not exist.
+func reportsPK(db interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}) ([]string, error) {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('reports') WHERE pk > 0 ORDER BY pk`)
+	if err != nil {
+		return nil, fmt.Errorf("read reports key: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, fmt.Errorf("read reports key: %w", err)
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// migrateReportsPK gives reports the primary key (team_id, member_key, id).
+// alpha.608 created the table with (team_id, id), which CREATE TABLE IF NOT
+// EXISTS leaves alone, and SQLite cannot change a key in place, so a table of
+// any other key is rebuilt: copied into reports_new, dropped, renamed, its
+// index recreated, all in ONE immediate transaction (a failure anywhere rolls
+// back to the old table untouched). The key is read again under the write
+// lock, so a second daemon opening the same team.db finds the work done and
+// leaves it. A missing table is simply created.
+func migrateReportsPK(db *sql.DB) error {
+	pk, err := reportsPK(db)
+	if err != nil {
+		return err
+	}
+	if slices.Equal(pk, reportPKColumns) {
+		return nil
+	}
+	if afterReportsPKRead != nil {
+		afterReportsPKRead()
+	}
+	cols := reportCols // the same list in both tables, in this order
+	return (&Store{db: db}).immediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		tx := connQuerier{ctx, conn}
+		pk, err := reportsPK(tx)
+		if err != nil {
+			return err
+		}
+		switch {
+		case slices.Equal(pk, reportPKColumns):
+			return nil // somebody else did it
+		case len(pk) == 0:
+			_, err := conn.ExecContext(ctx, reportSchema)
+			return wrapReportsMigration("create", err)
+		}
+		for _, step := range []struct{ what, sql string }{
+			{"create reports_new", `CREATE TABLE reports_new (` + reportColumnsDDL + `)`},
+			{"copy", `INSERT INTO reports_new (` + cols + `) SELECT ` + cols + ` FROM reports ORDER BY rowid`},
+			{"drop", `DROP TABLE reports`},
+			{"rename", `ALTER TABLE reports_new RENAME TO reports`},
+			{"index", reportIndexDDL},
+		} {
+			if _, err := conn.ExecContext(ctx, step.sql); err != nil {
+				return wrapReportsMigration(step.what, err)
+			}
+		}
+		return nil
+	})
+}
+
+func wrapReportsMigration(what string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("rebuild reports (%s): %w", what, err)
+}
+
+// connQuerier is a dedicated connection as the Query-only interface reportsPK
+// takes, bound to its context.
+type connQuerier struct {
+	ctx  context.Context
+	conn *sql.Conn
+}
+
+func (c connQuerier) Query(query string, args ...any) (*sql.Rows, error) {
+	return c.conn.QueryContext(c.ctx, query, args...)
 }
 
 // migrateUsage gives team_members and teams their usage columns (P4-6).

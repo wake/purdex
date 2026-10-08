@@ -39,8 +39,12 @@ func (e *DefaultTaskError) Unwrap() error { return e.Err }
 // report is always about a task; the id is the CLI's UUID, unique per
 // (team, member): a member's id space is its own, so one member can never
 // learn that another used an id. Rows are never updated or deleted.
-const reportSchema = `
-	CREATE TABLE IF NOT EXISTS reports (
+//
+// The column list and the key are written once (reportColumnsDDL) and shared
+// with migrateReportsPK, which rebuilds a table an older build created with
+// the key (team_id, id).
+const (
+	reportColumnsDDL = `
 		id          TEXT    NOT NULL,
 		team_id     TEXT    NOT NULL,
 		task_seq    INTEGER NOT NULL,
@@ -50,9 +54,13 @@ const reportSchema = `
 		fields_json TEXT    NOT NULL DEFAULT '{}',
 		body        TEXT    NOT NULL DEFAULT '',
 		created_at  INTEGER NOT NULL,
-		PRIMARY KEY (team_id, member_key, id)
-	);
-	CREATE INDEX IF NOT EXISTS reports_task ON reports (team_id, task_seq, created_at);`
+		PRIMARY KEY (team_id, member_key, id)`
+	reportIndexDDL = `CREATE INDEX IF NOT EXISTS reports_task ON reports (team_id, task_seq, created_at);`
+	reportSchema   = `CREATE TABLE IF NOT EXISTS reports (` + reportColumnsDDL + `);` + reportIndexDDL
+)
+
+// reportPKColumns is the primary key reportColumnsDDL declares, in key order.
+var reportPKColumns = []string{"team_id", "member_key", "id"}
 
 // ReportRow is one reports row. fields_json holds Needs, PR, Reviews and SHA
 // (zero values omitted); SHA is stored lower-case. As with tasks the store
