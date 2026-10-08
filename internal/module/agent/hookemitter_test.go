@@ -49,14 +49,14 @@ func TestEmitSlot_FreshReadInsideSlot(t *testing.T) {
 	inA, releaseA := make(chan struct{}), make(chan struct{})
 	doneA, doneB := make(chan bool, 1), make(chan bool, 1)
 	go func() {
-		doneA <- r.m.emitSession("code-work", "work", func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
+		doneA <- r.m.emitSession(kindHook, "code-work", "work", func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
 			close(inA)
 			<-releaseA
 			return plainBuild(p)
 		})
 	}()
 	<-inA // A holds the slot, with its (idle) projection read
-	go func() { doneB <- r.m.emitSession("code-work", "work", plainBuild) }()
+	go func() { doneB <- r.m.emitSession(kindHook, "code-work", "work", plainBuild) }()
 	waitParkedOnEmitLock(t) // B is waiting for A
 
 	if err := r.m.frames.UpdateStatusAndLastSeen(frame.FrameID, agentpkg.StatusRunning, 20); err != nil {
@@ -83,7 +83,7 @@ func TestEmitSlot_BuildFalseSkipsAndDoesNotConsumeSeq(t *testing.T) {
 	r := newWorkerRig(t)
 	seedIdentityFrame(t, r.m, "%5", "cc", 200, "Sun Apr 20 01:30:00 2026", 10, modSID1, "/w")
 
-	if r.m.emitSession("code-work", "work", func(*SessionProjection) (agentpkg.NormalizedEvent, bool) {
+	if r.m.emitSession(kindHook, "code-work", "work", func(*SessionProjection) (agentpkg.NormalizedEvent, bool) {
 		return agentpkg.NormalizedEvent{}, false
 	}) {
 		t.Fatal("a declined build reported a send")
@@ -94,7 +94,7 @@ func TestEmitSlot_BuildFalseSkipsAndDoesNotConsumeSeq(t *testing.T) {
 	if r.m.emit.seq != 0 {
 		t.Fatalf("seq = %d after a declined build, want 0", r.m.emit.seq)
 	}
-	if !r.m.emitSession("code-work", "work", plainBuild) || r.m.emit.seq != 1 {
+	if !r.m.emitSession(kindHook, "code-work", "work", plainBuild) || r.m.emit.seq != 1 {
 		t.Fatalf("the next emit: seq = %d, want 1", r.m.emit.seq)
 	}
 }
@@ -107,14 +107,14 @@ func TestEmitSlot_BroadcastFailureDoesNotConsumeSeq(t *testing.T) {
 	bus := r.m.core.Events
 	r.m.core = &core.Core{} // no events bus: emitNormalizedToCode fails
 
-	if r.m.emitSession("code-work", "work", plainBuild) {
+	if r.m.emitSession(kindHook, "code-work", "work", plainBuild) {
 		t.Fatal("an emit with no bus reported a send")
 	}
 	if r.m.emit.seq != 0 {
 		t.Fatalf("seq = %d after a failed broadcast, want 0", r.m.emit.seq)
 	}
 	r.m.core = &core.Core{Events: bus}
-	if !r.m.emitSession("code-work", "work", plainBuild) || r.m.emit.seq != 1 {
+	if !r.m.emitSession(kindHook, "code-work", "work", plainBuild) || r.m.emit.seq != 1 {
 		t.Fatalf("after the bus is back: seq = %d, want 1", r.m.emit.seq)
 	}
 }
@@ -131,7 +131,7 @@ func TestEmitSlot_SeqContiguousAcrossSessions(t *testing.T) {
 		{"code-work", "work"}, {"code-other", "other"}, {"code-other", "other"},
 		{"code-work", "work"}, {"code-other", "other"},
 	} {
-		if !r.m.emitSession(step.code, step.name, plainBuild) {
+		if !r.m.emitSession(kindHook, step.code, step.name, plainBuild) {
 			t.Fatalf("emit %+v did not go out", step)
 		}
 	}
@@ -152,7 +152,7 @@ func TestEmitSlot_WireJSON(t *testing.T) {
 	r := newWorkerRig(t)
 	r.m.core.BootID = "boot-a"
 	seedIdentityFrame(t, r.m, "%5", "cc", 200, "Sun Apr 20 01:30:00 2026", 10, modSID1, "/w")
-	if !r.m.emitSession("code-work", "work", plainBuild) {
+	if !r.m.emitSession(kindHook, "code-work", "work", plainBuild) {
 		t.Fatal("emit did not go out")
 	}
 	var env struct{ Value string }
@@ -176,7 +176,7 @@ func TestEmitSlot_EpochRotatesAtMax(t *testing.T) {
 	r.m.emit.seqMax = 3
 	seedIdentityFrame(t, r.m, "%5", "cc", 200, "Sun Apr 20 01:30:00 2026", 10, modSID1, "/w")
 	for i := 0; i < 5; i++ {
-		if !r.m.emitSession("code-work", "work", plainBuild) {
+		if !r.m.emitSession(kindHook, "code-work", "work", plainBuild) {
 			t.Fatalf("emit %d did not go out", i)
 		}
 	}

@@ -164,7 +164,7 @@ func (m *Module) emitSessionState(sessionName, rawEvent string, detail map[strin
 	if code == "" {
 		return
 	}
-	m.emitSession(code, sessionName, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
+	m.emitSession(kindWorker, code, sessionName, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
 		if p == nil || p.TopFrame == nil || p.EffectiveStatus() == agentpkg.StatusClear {
 			return agentpkg.NormalizedEvent{}, false
 		}

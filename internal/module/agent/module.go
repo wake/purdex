@@ -622,6 +622,7 @@ func (m *Module) sendFrameSnapshot(sub *core.EventSubscriber) map[string]struct{
 	projectedSessions := make(map[string]struct{})
 	m.emit.mu.Lock()
 	defer m.emit.mu.Unlock()
+	defer m.emit.end(m.emit.begin(), "", kindSnapshot)
 	projections, err := m.liveSessionProjections()
 	if err != nil {
 		log.Printf("[agent] snapshot frames: %v", err)

@@ -26,7 +26,8 @@ import (
 //
 // hookEmitter.mu is taken in exactly these places: emitSessionWith (every
 // hook, probe, sweep, non-tmux and mod worker frame) and
-// Module.sendFrameSnapshot (the subscribe-time replay).
+// Module.sendFrameSnapshot (the subscribe-time replay). Both time their hold
+// (hookemitter_hold.go).
 type hookEmitter struct {
 	mu sync.Mutex
 	// seq counts the frames broadcast under epoch; epoch is core.BootID, or
@@ -37,6 +38,8 @@ type hookEmitter struct {
 	// seqMax is the largest seq before the epoch rotates; 0 means
 	// hookSeqMax. A test seam: no run gets near it.
 	seqMax uint64
+	// hold is the mutex's hold-time distribution (hookemitter_hold.go).
+	hold holdStats
 }
 
 // hookSeqMax is the largest integer a JS client represents exactly (2^53-1):
@@ -82,8 +85,8 @@ type buildTolerantFn func(p *SessionProjection, readErr error) (agentpkg.Normali
 // The frame must be built from the p it is given, never from a projection
 // read before the call: that read is not ordered against the frames that
 // went out while the caller waited for the slot.
-func (m *Module) emitSession(code, sessionName string, build buildFn) bool {
-	return m.emitSessionWith(code, sessionName, func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
+func (m *Module) emitSession(kind slotKind, code, sessionName string, build buildFn) bool {
+	return m.emitSessionWith(kind, code, sessionName, func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
 		if readErr != nil {
 			log.Printf("[agent] emit slot: projection of %q: %v", sessionName, readErr)
 			return agentpkg.NormalizedEvent{}, false
@@ -106,10 +109,11 @@ func (m *Module) emitSession(code, sessionName string, build buildFn) bool {
 //
 // An empty code sends nothing: the in-memory view is still synced (steps
 // 1-3), as the callers did before the slot existed.
-func (m *Module) emitSessionWith(code, sessionName string, build buildTolerantFn) bool {
+func (m *Module) emitSessionWith(kind slotKind, code, sessionName string, build buildTolerantFn) bool {
 	e := &m.emit
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	defer e.end(e.begin(), sessionName, kind)
 
 	var (
 		p       *SessionProjection
@@ -163,12 +167,12 @@ func (m *Module) emitNormalizedToCode(code string, normalized agentpkg.Normalize
 // emitSessionByName is emitSessionWith for a caller that has only the tmux
 // session name (the probe has no hook payload, hence no tmux_session_id).
 // The code is resolved before the slot is entered.
-func (m *Module) emitSessionByName(tmuxSession string, build buildTolerantFn) bool {
+func (m *Module) emitSessionByName(kind slotKind, tmuxSession string, build buildTolerantFn) bool {
 	code := ""
 	if m.core != nil {
 		code = m.resolveSessionCode(tmuxSession)
 	}
-	return m.emitSessionWith(code, tmuxSession, build)
+	return m.emitSessionWith(kind, code, tmuxSession, build)
 }
 
 // emitHookSession routes a hook-derived frame to its WS code (preferring the
@@ -195,7 +199,7 @@ func (m *Module) emitHookSessionWith(req EventRequest, build buildTolerantFn) (s
 	if m.core != nil {
 		code, path = m.resolveSessionCodeFromHook(req)
 	}
-	if m.emitSessionWith(code, req.TmuxSession, build) {
+	if m.emitSessionWith(kindHook, code, req.TmuxSession, build) {
 		return "broadcasted", string(path)
 	}
 	switch {

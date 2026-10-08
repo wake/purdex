@@ -290,7 +290,7 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 func (m *Module) broadcastProxyCanonicalized(reference store.Frame) {
 	sessionName, code := m.resolvePaneSession(reference.PaneID)
 	// Read, synced and sent inside the emit slot; a failed read does nothing.
-	m.emitSession(code, sessionName, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
+	m.emitSession(kindSweep, code, sessionName, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
 		return buildProjectionNormalized(p, reference.AgentType, "sweep:proxy_canonicalized", nowFn().UnixNano(), agentpkg.DeriveResult{}), true
 	})
 }
@@ -451,7 +451,7 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 func (m *Module) broadcastProxyPruned(reference store.Frame) {
 	sessionName, code := m.resolvePaneSession(reference.PaneID)
 	// Read, synced and sent inside the emit slot; a failed read does nothing.
-	m.emitSession(code, sessionName, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
+	m.emitSession(kindSweep, code, sessionName, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
 		return buildProjectionNormalized(p, reference.AgentType, "sweep:proxy_pruned", nowFn().UnixNano(), agentpkg.DeriveResult{}), true
 	})
 }
@@ -551,7 +551,7 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit)
 	// StatusClear via the projection==nil branch in buildProjectionNormalized;
 	// passing it explicitly documents intent at the callsite.
 	var abort error
-	m.emitSessionWith(code, sessionName, func(fresh *SessionProjection, ferr error) (agentpkg.NormalizedEvent, bool) {
+	m.emitSessionWith(kindSweep, code, sessionName, func(fresh *SessionProjection, ferr error) (agentpkg.NormalizedEvent, bool) {
 		if ferr != nil {
 			if err := degrade("projectionForSession (re-resolve)", ferr); err != nil {
 				abort = err

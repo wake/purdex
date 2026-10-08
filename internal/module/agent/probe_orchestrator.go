@@ -419,7 +419,7 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 	// The frame is built from the projection the emit slot reads, which is
 	// the write above or something newer.
 	modLate := false
-	m.emitSessionByName(args.Session, func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
+	m.emitSessionByName(kindProbe, args.Session, func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
 		if readErr != nil || p == nil {
 			return minimalProbeEvent(args, newStatus), true
 		}
@@ -453,7 +453,7 @@ func (m *Module) emitProbeMinimal(args probeGuardArgs, status agentpkg.Status) {
 	if m.core != nil {
 		code = m.resolveSessionCode(args.Session)
 	}
-	m.emitSessionWith(code, "", func(*SessionProjection, error) (agentpkg.NormalizedEvent, bool) {
+	m.emitSessionWith(kindProbe, code, "", func(*SessionProjection, error) (agentpkg.NormalizedEvent, bool) {
 		n := minimalProbeEvent(args, status)
 		m.recordEmittedLights(args.Session, nil, n)
 		return n, true
@@ -548,7 +548,7 @@ func applyPaneProbe(m *Module, args probeGuardArgs, newStatus agentpkg.Status) (
 	// projection is unavailable (frames removed concurrently) the minimal
 	// event is sent so clients still see the change.
 	modLate := false
-	m.emitSessionByName(args.Session, func(rep *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
+	m.emitSessionByName(kindProbe, args.Session, func(rep *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
 		if readErr != nil || rep == nil {
 			return minimalProbeEvent(args, newStatus), true
 		}
