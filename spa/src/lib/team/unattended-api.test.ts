@@ -120,6 +120,7 @@ describe('unattended-api', () => {
       ['list_failed is a string', view({ list_failed: 'yes' })],
       ['a lead row is malformed', view({ approved: [row('a1', 2_000), { ...row('a0', 1_500), origin: null }] })],
       ['a self_relay row is malformed', view({ approved: [{ ...row('a1', 2_000), kind: 'self_relay', created_at: 'x' }] })],
+      ['a lead row has no origin.proc_start', view({ approved: [{ ...row('a1', 2_000), origin: { session_id: 'S1', ref: '_40iueq', name: 'purdex-7c', pid: 4242, cwd: '/w/purdex', tmux: '' } }] })],
       ['a row has no kind', view({ approved: [row('a1', 2_000), { id: 'x' }] })],
       ['a row is not a record', view({ approved: [row('a1', 2_000), 'a0'] })],
     ])('an answer where %s is `bad_response`, not a page', async (_what, body) => {

@@ -178,6 +178,7 @@ export function isOrigin(v: unknown): v is Origin {
     && isString(v.cwd)
     && isString(v.tmux)
     && isNumber(v.pid)
+    && isString(v.proc_start)
     && optional(v.title, isString)
     && optional(v.address, isString)
 }
