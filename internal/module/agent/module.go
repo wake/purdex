@@ -60,6 +60,12 @@ type Module struct {
 	// built, stamped and broadcast inside emit.mu. Total lock order:
 	// emit.mu → mu → modMu.
 	emit hookEmitter
+	// nonTmuxLast is, per non-tmux agent code ("cc-<session id>"), the last
+	// frame the slot sent for it, so a complete snapshot can list sessions that
+	// have no pane, frame or agent_events row (nontmux_last.go). Protected by
+	// emit.mu; nonTmuxNow is its clock (nil means time.Now), a test seam.
+	nonTmuxLast map[string]nonTmuxEntry
+	nonTmuxNow  func() time.Time
 
 	// W6-3 P1-T4: ProbeIntent dispatcher state. activeProbeIntents and
 	// probeIntentGen are protected by m.mu (same mutex as activeWatchers).
