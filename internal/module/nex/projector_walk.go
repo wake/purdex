@@ -1,6 +1,7 @@
 package nex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -129,6 +130,11 @@ func (rr rowReader) page(ctx context.Context, cursor string, limit int) ([]walkR
 		return nil, "", fmt.Errorf("nex list page after %q: response exceeds %d bytes", cursor, listBodyLimit)
 	case res.code() != http.StatusOK:
 		return nil, "", fmt.Errorf("nex list page after %q: status %d: %s", cursor, res.code(), snippet(res.body.Bytes()))
+	}
+	// A JSON null unmarshals into a struct without error and would read as an
+	// empty last page, which the seed takes as "nothing is listed any more".
+	if bytes.Equal(bytes.TrimSpace(res.body.Bytes()), []byte("null")) {
+		return nil, "", fmt.Errorf("nex list page after %q: body is null, not a page", cursor)
 	}
 	var body struct {
 		Items      []json.RawMessage `json:"items"`

@@ -120,6 +120,7 @@ func TestProjectorWalk_FailedPageEndsTheWalkWithoutAVer(t *testing.T) {
 	cases := map[string]func(http.ResponseWriter, *http.Request){
 		"500":           answer(http.StatusInternalServerError, `{"error":"boom","code":"internal"}`),
 		"not an object": answer(http.StatusOK, `[]`),
+		"null":          answer(http.StatusOK, `null`),
 		"no progress":   answer(http.StatusOK, `{"items":[],"next_cursor":"exc_01"}`),
 		"panic":         func(http.ResponseWriter, *http.Request) { panic("list exploded") },
 		"panic after a complete page": func(w http.ResponseWriter, r *http.Request) {
