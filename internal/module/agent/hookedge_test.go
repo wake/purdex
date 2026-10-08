@@ -277,6 +277,38 @@ func TestHookEdge_ModEventBetweenReceiveAndNoteDoesNotCreateEdge(t *testing.T) {
 	}
 }
 
+// TestHookEdge_LateStopAfterSessionStartDoesNotRecreateEdge: an old
+// conversation's Stop has been applied to the frame but not yet noted when the
+// next conversation's SessionStart is processed in full (and drops the edge).
+// The Stop's note then reads the frame as the new conversation left it; it
+// must not build an idle edge from that, because the Stop arrived before the
+// SessionStart. A Stop that arrives after it still does.
+func TestHookEdge_LateStopAfterSessionStartDoesNotRecreateEdge(t *testing.T) {
+	r := edgeRig(t)
+	r.modIdle()
+	r.advance(10 * time.Second)
+	staleRecv := r.clock.Now() // the old Stop's arrival
+
+	r.advance(time.Second)
+	r.hook(t, "PdxSessionStart")
+
+	req := EventRequest{AgentType: "cc", TmuxPaneID: racePane, SenderPID: 200, SenderStartTime: raceFrameStart}
+	idle := agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+	r.m.noteHookEdge(req, agentpkg.LifecycleStop, idle, FrameTraceMeta{Decision: "updated_frame"}, staleRecv)
+
+	if n := r.edgeCount(); n != 0 {
+		t.Fatalf("%d edges, want none: the Stop arrived before the SessionStart", n)
+	}
+	wantLight(t, "overlay", r.light(t), agentpkg.StatusIdle, SourceMod)
+
+	r.advance(time.Second)
+	r.hook(t, "PdxStop")
+	if n := r.edgeCount(); n != 1 {
+		t.Fatalf("%d edges after a Stop that arrived later, want 1", n)
+	}
+	wantLight(t, "overlay after the later Stop", r.light(t), agentpkg.StatusIdle, SourceHook)
+}
+
 // TestHookEdge_HeartbeatRepairHandsBack: a heartbeat that repairs the mod's
 // light (here the turn.start was lost and the beat carries the turn_id) is a
 // light event like any other: it supersedes the edge at once, with the mod's
@@ -408,6 +440,7 @@ func TestHookEdge_ClearedBySessionStartAndFrameDelete(t *testing.T) {
 		t.Fatalf("%d edges after SessionStart, want 0", n)
 	}
 
+	r.advance(time.Second) // the Stop arrives after the SessionStart
 	r.hook(t, "PdxStop")
 	if n := r.edgeCount(); n != 1 {
 		t.Fatalf("%d edges after Stop, want 1", n)
@@ -422,6 +455,12 @@ func TestHookEdge_ClearedBySessionStartAndFrameDelete(t *testing.T) {
 	}
 	if n := r.edgeCount(); n != 0 {
 		t.Fatalf("%d edges after SessionEnd deleted the frame, want 0", n)
+	}
+	r.m.modMu.Lock()
+	stamps := len(r.m.hookEdgeClearedAt)
+	r.m.modMu.Unlock()
+	if stamps != 0 {
+		t.Fatalf("%d SessionStart stamps left after the frame was deleted, want 0", stamps)
 	}
 }
 

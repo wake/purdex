@@ -45,6 +45,9 @@ type modLights struct {
 	// hookEdge is each root cc frame's last turn-boundary hook by frame id
 	// (hookedge.go). Under modMu.
 	hookEdge map[string]hookEdge
+	// hookEdgeClearedAt is the arrival time of each frame's last
+	// SessionStart: a hook that arrived at or before it cannot set an edge.
+	hookEdgeClearedAt map[string]time.Time
 
 	// modOverlayOn is the overlay switch. It is on exactly while the re-emit
 	// worker runs (startModLights turns it on once the worker is in its loop,
@@ -89,9 +92,10 @@ func newModLights() modLights {
 		modLiveSeen: make(map[string]bool),
 		modTick:     modTickDefault,
 
-		hookBackground:  make(map[string]lights.Background),
-		hookBgClearedAt: make(map[string]int64),
-		hookEdge:        make(map[string]hookEdge),
+		hookBackground:    make(map[string]lights.Background),
+		hookBgClearedAt:   make(map[string]int64),
+		hookEdge:          make(map[string]hookEdge),
+		hookEdgeClearedAt: make(map[string]time.Time),
 	}
 }
 

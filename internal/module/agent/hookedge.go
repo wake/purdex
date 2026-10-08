@@ -35,16 +35,21 @@ type hookEdge struct {
 }
 
 // setHookEdge records frameID's edge unless a newer one is already there
-// (hooks of one process are applied out of order now and then) or the mod has
-// already reported a light event at or after the hook's arrival: it caught up
-// before the edge could be noted, and the event that did it has already marked
-// the pane dirty.
+// (hooks of one process are applied out of order now and then), the frame's
+// last SessionStart arrived at or after the hook (hookEdgeClearedAt: a Stop of
+// the old conversation noted after the new one began must not leave an edge in
+// it), or the mod has already reported a light event at or after the hook's
+// arrival: it caught up before the edge could be noted, and the event that did
+// it has already marked the pane dirty.
 func (m *Module) setHookEdge(frameID string, e hookEdge) {
 	if frameID == "" {
 		return
 	}
 	m.modMu.Lock()
 	defer m.modMu.Unlock()
+	if cleared, ok := m.hookEdgeClearedAt[frameID]; ok && !e.at.After(cleared) {
+		return
+	}
 	if cur, ok := m.hookEdge[frameID]; ok && cur.at.After(e.at) {
 		return
 	}
@@ -57,14 +62,33 @@ func (m *Module) setHookEdge(frameID string, e hookEdge) {
 	m.hookEdge[frameID] = e
 }
 
-// forgetHookEdge drops frameID's edge: the frame is gone, or a SessionStart
-// began a new conversation (a no-op without one).
+// clearHookEdge is a SessionStart that arrived at recv: drop frameID's edge and
+// remember the arrival so an older hook cannot set one again. The stamp only
+// moves forward.
+func (m *Module) clearHookEdge(frameID string, recv time.Time) {
+	if frameID == "" {
+		return
+	}
+	m.modMu.Lock()
+	defer m.modMu.Unlock()
+	delete(m.hookEdge, frameID)
+	if m.hookEdgeClearedAt == nil {
+		m.hookEdgeClearedAt = make(map[string]time.Time)
+	}
+	if recv.After(m.hookEdgeClearedAt[frameID]) {
+		m.hookEdgeClearedAt[frameID] = recv
+	}
+}
+
+// forgetHookEdge drops everything kept for frameID — the edge and the
+// SessionStart stamp — because the frame is gone (a no-op without any).
 func (m *Module) forgetHookEdge(frameID string) {
 	if frameID == "" {
 		return
 	}
 	m.modMu.Lock()
 	delete(m.hookEdge, frameID)
+	delete(m.hookEdgeClearedAt, frameID)
 	m.modMu.Unlock()
 }
 
@@ -96,7 +120,7 @@ func (m *Module) noteHookEdge(req EventRequest, lifecycle agentpkg.LifecycleEven
 		return
 	}
 	if want == "" {
-		m.forgetHookEdge(frame.FrameID)
+		m.clearHookEdge(frame.FrameID, recv)
 		return
 	}
 	// The hook must have written its status to the frame it was applied to:
