@@ -5,7 +5,7 @@ import { useTeamRosterStore } from './useTeamRosterStore'
 import type { TeamRoster } from '../lib/team/roster'
 
 const team = (id: string): TeamRoster => ({
-  id, host_id: 'd', created_at: 1,
+  id, host_id: 'd', created_at: 1, team_name: '',
   lead: { session_id: `lead-${id}`, ref: '_aaaaaa', address: 'h/a', live: true },
   members: [],
 })
@@ -19,6 +19,14 @@ describe('useTeamRosterStore', () => {
     s.apply('h2', [team('c')])
     s.apply('h1', [team('d')])
     expect(useTeamRosterStore.getState().byHost).toEqual({ h1: [team('d')], h2: [team('c')] })
+  })
+
+  it('carries the team name, and a rename replaces the host\'s list like any other change', () => {
+    const s = useTeamRosterStore.getState()
+    s.apply('h1', [{ ...team('a'), team_name: 'build' }])
+    expect(useTeamRosterStore.getState().byHost.h1[0].team_name).toBe('build')
+    s.apply('h1', [{ ...team('a'), team_name: 'renamed' }])
+    expect(useTeamRosterStore.getState().byHost.h1[0].team_name).toBe('renamed')
   })
 
   it('an empty roster is kept as an empty list (the host answered: no teams)', () => {

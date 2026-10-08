@@ -72,6 +72,11 @@ export interface LeadPayload {
   reason: string
   max_members: number
   roots: string[]
+  /**
+   * The name the lead asked for ('' = none). Set only when the payload carries a string `team_name`, so
+   * `undefined` means the daemon does not know team names (the dialog then shows no name field).
+   */
+  team_name?: string
 }
 
 /** `Approval.payload` for kind `self_relay` (spec §8.7): the usage the mod reported when it asked. */
@@ -87,6 +92,8 @@ export interface SelfRelayPayload {
 export interface Grant {
   max_members: number
   roots: string[]
+  /** Optional on a decide body (absent keeps the requested name; '' clears it); present on a grant this daemon served. */
+  team_name?: string
 }
 
 /** The audit label of whoever decided (spec §6.5). `addr` is set by the daemon from RemoteAddr. */
@@ -225,7 +232,9 @@ export function leadPayloadOf(a: Approval): LeadPayload {
   const rawMembers = typeof p.max_members === 'number' && Number.isFinite(p.max_members) ? Math.trunc(p.max_members) : 0
   const max_members = rawMembers <= 0 ? DEFAULT_MAX_MEMBERS : Math.min(rawMembers, MAX_MAX_MEMBERS)
   const roots = Array.isArray(p.roots) ? p.roots.filter((r): r is string => typeof r === 'string' && r !== '') : []
-  return { reason, max_members, roots: roots.length > 0 ? roots : [a.origin.cwd] }
+  const lead: LeadPayload = { reason, max_members, roots: roots.length > 0 ? roots : [a.origin.cwd] }
+  if (typeof p.team_name === 'string') lead.team_name = p.team_name
+  return lead
 }
 
 // ---- U23: 無人值守模式 (unattended spec D-U23-5, D-U23-6; daemon `internal/team/wire_unattended.go`) ----

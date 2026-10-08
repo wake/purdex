@@ -201,5 +201,14 @@ describe('approval-api', () => {
       expect(leadPayloadOf(approval({ payload: { reason: 'r', max_members: 99, roots: ['/a', 7, ''] } }))).toEqual({ reason: 'r', max_members: 8, roots: ['/a'] })
       expect(leadPayloadOf(approval({ payload: 'garbage' }))).toEqual({ reason: '', max_members: 3, roots: ['/w/purdex'] })
     })
+
+    it('team_name is set only when the payload has a string one ("" counts); otherwise the key is absent', () => {
+      const of = (payload: unknown) => leadPayloadOf(approval({ payload }))
+      expect(of({ reason: 'r', team_name: '驗收 team' }).team_name).toBe('驗收 team')
+      expect(of({ reason: 'r', team_name: '' }).team_name).toBe('')
+      for (const payload of [{ reason: 'r' }, { reason: 'r', team_name: null }, { reason: 'r', team_name: 7 }, 'garbage']) {
+        expect(Object.hasOwn(of(payload), 'team_name')).toBe(false)
+      }
+    })
   })
 })
