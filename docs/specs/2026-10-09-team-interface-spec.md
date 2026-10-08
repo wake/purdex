@@ -64,7 +64,8 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - **Tab membership**: `teamOfTab({views, tabId, tabsById, sessionsByHost})` (same file) — decided from the tab's own panes; the primary pane's team wins.
 - **Name / label**: `TeamRoster.team_name` (parsed today), `TeamRoster.team_label` (parsed by the team-label line's TL-2, `docs/specs/2026-10-09-team-label-spec.md` D-L10; `""` when absent). This spec adds both to `TeamView` (`name`, `label`).
 - **Per-seat readings**: `RosterSession.model`, `.effort`, `.context{used_percentage, window, model_id, effort}`; lights, unread and subagents from `useAgentStore` keyed by `(hostId, tmux session code)` — the code is the session list entry whose `name` equals `RosterSession.tmux_session` (the same match `shownSessions` makes).
-- **Device-local UI state** (new, persisted on this device, never synced): member order per team, collapse per team, panel mode per team, the bead setting (§4.9).
+- **Device-local UI state** (new, persisted on this device, never synced): member order per team, collapse per team, panel mode per team, the ghost row's workspace per team, the bead setting (§4.9). Entries of a team are pruned when a roster frame from its connected host no longer lists it (the team ended) or when its host is deleted — never on a disconnect, an endpoint change or an App reload.
+- **Mod read (new, §4.10)**: `GET /mod/v1/team?session_id=<sid>` on the mod socket → `{role: "lead" | "member" | "none", members: <active member count>}`.
 
 ## 4. Behaviour
 
@@ -74,13 +75,13 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - A team with no open tab and a closed lead tab still exists in the sidebar as a ghost row (§4.6) and in no other surface.
 
 ### 4.2 Top tab bar group
-- Order inside a workspace's normal (unpinned) zone: the group sits where its lead tab is; inside it: label → lead → members in team order (R5). Member tabs of a team whose lead tab is in another workspace are not grouped (they stay where they are; `chooseTab` already prefers the lead's workspace).
+- Order inside a workspace's normal (unpinned) zone: the group sits where its lead tab is; inside it: label → lead → members in team order (R5). The workspace's own tab order is kept equal to what is shown: the group's tabs are one contiguous run starting at the lead, in team order (re-normalised whenever membership, team order or the tab list changes), so tab stepping, ⌘1–8 and the sidebar all agree with the bar. Member tabs of a team whose lead tab is in another workspace are not grouped (they stay where they are; `chooseTab` already prefers the lead's workspace).
 - **Label**: a capsule in team colour, text = §4.8 label; clicking it toggles collapse (R8). Collapsed: the label shows `+N` (hidden member tabs) next to the text.
 - **Cue** (P11): every tab of the group gets the narrow shadow and the wash (§5); separators inside the group and after its last tab are hidden; the separators before the label and after the group follow today's rule (hidden next to the group).
 - **Collapse** (R8–R10): one collapse state per team, shared with the sidebar (§4.3). Collapsed hides member tabs; left/right tab stepping skips them; collapsing while a member is active activates the lead (R9); any open-member action expands first (R10).
 - **Drag**: tabs reorder within the group only (members; the lead stays first); a drop outside snaps back; dragging a non-group tab into the group is refused (snap back); the group as a whole is not draggable in v1.
 - **Pin** (R12): the context menu's pin item is disabled for group tabs (tooltip: why). A pinned tab is never grouped.
-- **Release / end** (R6): the tab leaves the group at the next roster frame and becomes a normal tab right after the group; never closed by this.
+- **Release / end** (R6): the tab leaves the group at the next roster frame and becomes a normal tab right after the group (a consequence of the normalised order); never closed by this.
 - Existing tab indicators (light, unread, approval hand, host badge, U1-3 corner symbol) are unchanged on group tabs.
 
 ### 4.3 Left tab list (tab position left or both)
@@ -104,7 +105,7 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 ### 4.5 Opening and closing tabs
 - **Open a member** (bead, panel, session list — R3, R10, R11): if it has a tab → activate it; else open a tab for its tmux session inserted after the group's last tab in the **lead tab's workspace**; if the lead has no tab, the lead's tab is opened first (in the ghost row's workspace, else the active one) and the member after it.
 - **Session list** (R11): `openSessionTab` learns where a member goes; a non-team session opens as today.
-- **Close the lead tab** (P2): closes every tab of the group in one action (no history entries for the members); sessions keep running; the team becomes a ghost row (§4.6). Closing a member's tab only closes that tab; it stays a member (bead unchanged — P8).
+- **Close the lead tab** (P2), by **any** path (tab ✕, ⌘W, context menu, a terminated / ended pane's close, closing a workspace): every tab of the group closes too (no history entries for the members); sessions keep running; the team becomes a ghost row (§4.6). A **locked** member tab is not closed (the lock wins); it stays open as a normal tab until the lead's tab is back, then rejoins the group. Closing a member's tab only closes that tab; it stays a member (bead unchanged — P8).
 
 ### 4.6 Ghost lead row
 - A team whose lead tab is closed shows, in the sidebar of the workspace the lead tab was closed from, a faded lead row with its beads. Clicking the lead row reopens the lead tab there (the group comes back, members unopened — P2); clicking a bead opens that member (§4.5). The ghost disappears when the team ends. The workspace is remembered device-locally per team.
@@ -123,8 +124,8 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 
 ### 4.10 Lead mode in the terminal (R14)
 - Rendered by the Purdex mod through `ui.render` `{component: 'SessionMode'}` — the dim mode labels at the right of Claude Code's prompt footer (2.1.294 types: "A hook adds a mode by rewriting `modes`"): appends `lead mode · N members` (`1 member` singular; `0 members` shown too) while this session is a lead. Alternatives if the user wants a separate row after seeing it: `PromptHint.tail` or the `AbovePrompt` band — decided on a live screenshot during implementation.
-- Data: the mod's `s.role` (from `pdx relay hello`) says lead; N = the live member count from the daemon's `GET /api/team` over the mod socket, refreshed on session start, on each relay hello, and every 15 s while the role is lead; a failed read keeps the last value; not lead → no label.
-- Mod rules M-U1-2 / M-U1-3 / M-U1-5 hold: a new hooks file registers `ui.render` with the `SessionMode` matcher; `register.js` (owned by the lead/team line) only gains the import and one call, agreed with purdex-1f first.
+- Data: the mod asks the daemon over its own mod socket, `GET /mod/v1/team?session_id=<sid>` → `{role, members}` (`members` = members whose state is `active`; the mod socket otherwise only takes `POST /mod/v1/events`, U1 spec §6.1; the TCP `/api/team` needs a token and an `origin_inbox` the mod does not have). Asked on `session.start` and every 15 s; role `lead` → the label; any other role or a failed read → the last good value (no label before the first good read).
+- Mod rules M-U1-2 / M-U1-3 / M-U1-5 hold: the hook lives in `events.js` (the interface line's file, which already owns the socket client and a `ui.render{component:'ToolUse'}` hook) and registers `ui.render` **with** the `{component: 'SessionMode'}` matcher; `register.js` is not touched. The daemon read is a small addition to the mod socket (the team module answers it; agreed with purdex-1f, whose module it reads).
 
 ### 4.11 Not in v1
 - Current task line (R19); renaming a team after approval (team-name D-N5); syncing order / collapse / panel mode across devices; dragging a whole group; light-theme polish (the user does not use it); merging dots across panes (spec U1 §7 limit).
@@ -149,4 +150,4 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 
 - Data: team-label TL-2 (1f line) parses `team_label` before the interface reads it; the interface PR that needs it waits for TL-2 or reads `""`.
 - U1-3c (lights over all panes, corner symbol) touches `SortableTab`, `TabIcon`, `useTabDisplay`, `renderInlineTabIcon`, `InlineTab`; the interface PRs that touch the same files start after U1-3 merges.
-- The mod line (§4.10) touches `register.js` → agreed with purdex-1f before its PR.
+- The mod line (§4.10) adds a read to the mod socket answered by the team module (purdex-1f's) → agreed with purdex-1f before its PR; `register.js` is not touched.
