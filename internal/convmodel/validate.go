@@ -1,6 +1,7 @@
 package convmodel
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -167,11 +168,39 @@ func validateStep(s *Step) error {
 	return nil
 }
 
+// inputTooDeep reports whether raw nests containers deeper than MaxInputDepth.
+// It walks tokens with a counter, not recursion, and stops at the first
+// container past the limit, so hostile nesting costs at most MaxInput bytes.
+func inputTooDeep(raw json.RawMessage) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		if d, ok := tok.(json.Delim); ok {
+			switch d {
+			case '{', '[':
+				if depth++; depth > MaxInputDepth {
+					return true
+				}
+			default:
+				depth--
+			}
+		}
+	}
+}
+
 // inputOverCap reports a step input that exceeds a cap: the whole input over
-// MaxInput bytes, or any string value over MaxInputString bytes.
+// MaxInput bytes, containers nested deeper than MaxInputDepth, or any string
+// value over MaxInputString bytes.
 func inputOverCap(raw json.RawMessage) error {
 	if len(raw) > MaxInput {
 		return fmt.Errorf("is %d bytes, over the %d cap", len(raw), MaxInput)
+	}
+	if inputTooDeep(raw) {
+		return fmt.Errorf("nests deeper than %d levels", MaxInputDepth)
 	}
 	var v any
 	if json.Unmarshal(raw, &v) != nil {

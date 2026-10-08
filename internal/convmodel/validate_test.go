@@ -213,6 +213,41 @@ func TestValidate_RejectsUntruncatedInputOverCap(t *testing.T) {
 	}
 }
 
+// nestedInput is an object input whose containers nest levels deep (the
+// input itself is level 1).
+func nestedInput(levels int) json.RawMessage {
+	return json.RawMessage(strings.Repeat(`{"a":`, levels) + `1` + strings.Repeat(`}`, levels))
+}
+
+func TestValidate_RejectsUntruncatedInputTooDeep(t *testing.T) {
+	// 33 levels, a few hundred bytes: only the depth cap can reject it
+	rejects(t, func(c *Conversation) {
+		step(c, "s1").Input = nestedInput(MaxInputDepth + 1)
+	}, "input")
+	rejects(t, func(c *Conversation) {
+		step(c, "s1").Input = json.RawMessage(strings.Repeat(`{"a":[`, MaxInputDepth/2+1) + `1` + strings.Repeat(`]}`, MaxInputDepth/2+1))
+	}, "input")
+	// hostile depth: rejected without recursing
+	rejects(t, func(c *Conversation) {
+		step(c, "s1").Input = json.RawMessage(strings.Repeat(`{"a":`, 5000) + `1` + strings.Repeat(`}`, 5000))
+	}, "input")
+	// flagged: any depth is a cut input, accepted
+	for _, levels := range []int{MaxInputDepth + 1, 200} {
+		c := wellFormed()
+		step(c, "s1").Input = nestedInput(levels)
+		step(c, "s1").InputTruncated = true
+		if err := c.Validate(); err != nil {
+			t.Errorf("flagged input %d levels deep: %v", levels, err)
+		}
+	}
+	// exactly the cap, unflagged: fine
+	c := wellFormed()
+	step(c, "s1").Input = nestedInput(MaxInputDepth)
+	if err := c.Validate(); err != nil {
+		t.Errorf("unflagged input exactly %d levels deep: %v", MaxInputDepth, err)
+	}
+}
+
 func TestValidate_AcceptsTruncatedFlagAtCap(t *testing.T) {
 	c := wellFormed()
 	u := c.Turns[0].Items[0].User

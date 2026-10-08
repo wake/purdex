@@ -18,6 +18,7 @@ const (
 	MaxText        = 64 << 10 // user text, agent markdown, thinking text (head)
 	MaxInputString = 4 << 10  // one string value of a step input
 	MaxInput       = 16 << 10 // a whole step input
+	MaxInputDepth  = 32       // container levels of a step input (the input object is level 1)
 	MaxOutput      = 16 << 10 // step output text
 	MaxDiffLines   = 400      // hunk lines of one diff, in total
 )

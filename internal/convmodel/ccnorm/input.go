@@ -10,8 +10,9 @@ import (
 )
 
 // maxInputDepth is how deep a tool input may nest before the rest is
-// dropped (Claude Code's inputs are two or three levels deep).
-const maxInputDepth = 32
+// dropped (Claude Code's inputs are two or three levels deep). It is the
+// cap Validate checks.
+const maxInputDepth = convmodel.MaxInputDepth
 
 // capInput bounds a tool input for storing (lead ruling D9): every string
 // value at most 4 KiB (head), the whole at most 16 KiB, nesting at most
