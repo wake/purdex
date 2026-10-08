@@ -116,7 +116,15 @@ func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
 		m.modDirty[prevSID] = struct{}{}
 	}
 	if st.SID != "" {
-		m.modBySID[st.SID] = info.Stream // the stream that just reported is the newest
+		switch {
+		case !st.Ended:
+			m.modBySID[st.SID] = info.Stream // the stream that just reported is the newest
+		case m.modBySID[st.SID] == info.Stream:
+			// An ended stream never takes or keeps the index: a live
+			// sibling with this sid keeps the pane's overlay.
+			m.repointSIDLocked(st.SID)
+			m.modDirty[st.SID] = struct{}{}
+		}
 		if changed {
 			m.modDirty[st.SID] = struct{}{}
 		}
@@ -129,13 +137,13 @@ func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
 }
 
 // repointSIDLocked points sid at the other stream reporting it that heard
-// from its mod last, or drops the entry when there is none. modMu must be
-// held.
+// from its mod last and has not ended, or drops the entry when there is
+// none. modMu must be held.
 func (m *Module) repointSIDLocked(sid string) {
 	best := ""
 	var bestAt time.Time
 	for id, st := range m.modStreams {
-		if st.SID != sid || id == m.modBySID[sid] {
+		if st.SID != sid || st.Ended || id == m.modBySID[sid] {
 			continue
 		}
 		if best == "" || st.LastEvent.After(bestAt) {

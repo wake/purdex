@@ -551,3 +551,95 @@ func TestNormalized_NonTmuxSourceIsHook(t *testing.T) {
 		t.Fatalf("legacy replay source = %q, want hook", ev.Source)
 	}
 }
+
+// ---- the sid index: an ended stream never shadows a live one ----
+
+func modIndex(m *Module, sid string) (string, bool) {
+	m.modMu.Lock()
+	defer m.modMu.Unlock()
+	id, ok := m.modBySID[sid]
+	return id, ok
+}
+
+func clearModDirty(m *Module) {
+	m.modMu.Lock()
+	clear(m.modDirty)
+	m.modMu.Unlock()
+}
+
+func modSessionEnd() modevents.Event {
+	end := modEv(modSID1, modevents.TypeSessionEnd, `{"reason":"prompt_input_exit"}`)
+	end.Seq = 9
+	return end
+}
+
+// TestModBySID_EndedStreamRepointsToLiveSibling: A runs, B reports the same
+// sid later and then ends; the pane keeps A's overlay.
+func TestModBySID_EndedStreamRepointsToLiveSibling(t *testing.T) {
+	m, clock := overlayModule(t)
+	seedIdentityFrame(t, m, "%5", "cc", 501, "s501", 10, modSID1, "/w")
+	feedMod(m, "stream-A", modStart, modTurnStart)
+	clock.Set(modT0.Add(time.Second))
+	feedMod(m, "stream-B", modStart)
+	if id, _ := modIndex(m, modSID1); id != "stream-B" {
+		t.Fatalf("modBySID = %q, want the newest reporter stream-B", id)
+	}
+	clearModDirty(m)
+
+	feedMod(m, "stream-B", modSessionEnd())
+
+	if id, _ := modIndex(m, modSID1); id != "stream-A" {
+		t.Fatalf("modBySID = %q, want stream-A (B ended)", id)
+	}
+	if !modDirtySIDs(m)[modSID1] {
+		t.Fatal("the sid is not dirty after its index moved")
+	}
+	wantLight(t, "pane", *paneProjection(t, m, "%5"), agentpkg.StatusRunning, "mod")
+}
+
+// TestModBySID_EndedOnlyStreamDropsIndex: with no live sibling the index
+// entry goes and the pane shows its frame.
+func TestModBySID_EndedOnlyStreamDropsIndex(t *testing.T) {
+	m, _ := overlayModule(t)
+	seedIdentityFrame(t, m, "%5", "cc", 501, "s501", 10, modSID1, "/w")
+	feedMod(m, modStrm, modStart, modTurnStart)
+	clearModDirty(m)
+
+	feedMod(m, modStrm, modSessionEnd())
+
+	if id, ok := modIndex(m, modSID1); ok {
+		t.Fatalf("modBySID still points at %q", id)
+	}
+	if !modDirtySIDs(m)[modSID1] {
+		t.Fatal("the sid is not dirty after its stream ended")
+	}
+	wantLight(t, "pane", *paneProjection(t, m, "%5"), agentpkg.StatusIdle, "hook")
+}
+
+// TestModBySID_RepointSkipsEndedCandidates: stream A moves away from sid S
+// while B (ended, heard from last) and C (live) also report S.
+func TestModBySID_RepointSkipsEndedCandidates(t *testing.T) {
+	m, clock := overlayModule(t)
+	feedMod(m, "stream-C", modStart, modTurnStart)
+	clock.Set(modT0.Add(time.Second))
+	feedMod(m, "stream-A", modStart)
+	clock.Set(modT0.Add(2 * time.Second))
+	feedMod(m, "stream-B", modStart)
+	clock.Set(modT0.Add(3 * time.Second))
+	feedMod(m, "stream-B", modSessionEnd())
+	if id, _ := modIndex(m, modSID1); id != "stream-A" {
+		t.Fatalf("setup: modBySID = %q, want stream-A", id)
+	}
+
+	clock.Set(modT0.Add(4 * time.Second))
+	sw := modEv(modSID2, modevents.TypeSessionSwitch, `{"prev_sid":"`+modSID1+`","source":"clear"}`)
+	sw.Seq = 3
+	feedMod(m, "stream-A", sw)
+
+	if id, _ := modIndex(m, modSID1); id != "stream-C" {
+		t.Fatalf("modBySID[old] = %q, want the live stream-C, not the ended stream-B", id)
+	}
+	if id, _ := modIndex(m, modSID2); id != "stream-A" {
+		t.Fatalf("modBySID[new] = %q, want stream-A", id)
+	}
+}
