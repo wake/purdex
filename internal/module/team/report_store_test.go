@@ -227,13 +227,12 @@ func TestInsertReport_IDReusedWithDifferentContent(t *testing.T) {
 	before := mustGetTask(t, s, tTeamA, 1)
 
 	variants := map[string]func(*ReportRow){
-		"summary":    func(r *ReportRow) { r.Summary = "other" },
-		"body":       func(r *ReportRow) { r.Body = "other" },
-		"kind":       func(r *ReportRow) { r.Kind = team.ReportProgress; r.PR, r.Reviews = 0, nil },
-		"pr":         func(r *ReportRow) { r.PR = 13 },
-		"reviews":    func(r *ReportRow) { r.Reviews = []string{"R1=job-2"} },
-		"member key": func(r *ReportRow) { r.MemberKey = "someone-else" },
-		"task":       func(r *ReportRow) { r.TaskSeq = 2 },
+		"summary": func(r *ReportRow) { r.Summary = "other" },
+		"body":    func(r *ReportRow) { r.Body = "other" },
+		"kind":    func(r *ReportRow) { r.Kind = team.ReportProgress; r.PR, r.Reviews = 0, nil },
+		"pr":      func(r *ReportRow) { r.PR = 13 },
+		"reviews": func(r *ReportRow) { r.Reviews = []string{"R1=job-2"} },
+		"task":    func(r *ReportRow) { r.TaskSeq = 2 },
 	}
 	for name, mut := range variants {
 		r := base
@@ -341,18 +340,14 @@ func TestInsertReport_SameIDInAnotherTeamIsIndependent(t *testing.T) {
 		t.Fatal("a third team must not find the id")
 	}
 
-	// Inside one team the id is still taken, whoever asks and for whatever task.
+	// Inside one team and for one member the id is still taken, for whatever
+	// task (another member's id space is separate: see
+	// TestInsertReport_SameIDFromAnotherMemberIsIndependent).
 	mustCreateTask(t, s, newTask(tTeamA, ma, "second", 11))
-	seedMember(t, s, "op-2", tTeamA, "sess-2", 2)
-	for name, mut := range map[string]func(*ReportRow){
-		"other task":   func(r *ReportRow) { r.TaskSeq = 2 },
-		"other member": func(r *ReportRow) { r.MemberKey = "op-2" },
-	} {
-		r := a
-		mut(&r)
-		if _, _, _, err := s.InsertReport(r); !errors.Is(err, ErrReportIDReused) {
-			t.Errorf("%s in the same team: err = %v, want ErrReportIDReused", name, err)
-		}
+	other := a
+	other.TaskSeq = 2
+	if _, _, _, err := s.InsertReport(other); !errors.Is(err, ErrReportIDReused) {
+		t.Errorf("other task in the same team: err = %v, want ErrReportIDReused", err)
 	}
 	// A retry in B is B's replay.
 	if _, _, replay, err := s.InsertReport(b); err != nil || !replay {

@@ -344,6 +344,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/team/tasks/{id}", m.handleTaskGet)
 	mux.HandleFunc("POST /api/team/tasks/{id}/status", m.handleTaskStatus)
 	mux.HandleFunc("POST /api/team/tasks/{id}/reassign", m.handleTaskReassign)
+	// T-1b2: reports; a member reports on its own task, a lead or the owner reads.
+	mux.HandleFunc("POST /api/team/reports", m.handleReportCreate)
+	mux.HandleFunc("GET /api/team/reports", m.handleReportList)
 	// U23: the unattended switch (unattended spec D-U23-1, D-U23-6), the App's.
 	mux.HandleFunc("GET "+UnattendedRoute, m.handleUnattendedGet)
 	mux.HandleFunc("PUT "+UnattendedRoute, m.handleUnattendedPut)

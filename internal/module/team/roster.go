@@ -101,22 +101,29 @@ func (m *Module) buildRoster() (team.Roster, error) {
 // moves the lead to a new ref); otherwise it is <self alias>/<lead_ref>.
 // persisted is the lead reading the sweeper stored on the team row.
 func (m *Module) rosterLead(t team.Team, origins map[string]team.Origin, alias string, persisted *team.MemberContext) team.RosterSession {
-	s := rosterSession(origins, t.LeadSessionID, func() team.RosterSession {
-		s := team.RosterSession{SessionID: t.LeadSessionID, Ref: t.LeadRef, Address: alias + "/" + t.LeadRef}
-		req, ok, err := m.store.Get(t.RequestID)
-		if err != nil || !ok {
-			if err != nil {
-				m.logf("[team] roster: request row of team %s: %v", t.ID, err)
-			}
-			return s
-		}
-		if req.Origin.Ref == t.LeadRef && req.Origin.Address != "" {
-			s.Address = req.Origin.Address
-		}
-		s.Title, s.Name, s.TmuxSession = req.Origin.Title, req.Origin.Name, tmuxName(req.Origin.Tmux)
-		return s
-	}, t.LeadRef, alias)
+	s := rosterSession(origins, t.LeadSessionID, func() team.RosterSession { return m.leadStoredSession(t, alias) }, t.LeadRef, alias)
 	s.Context = m.sessionContext(t.LeadSessionID, persisted) // a lead has no spawn model / effort
+	return s
+}
+
+// leadStoredSession is a team's lead as the database knows it, for a lead the
+// registry does not list: teams.lead_ref, and what the lead's request
+// recorded. The recorded address is the request-time one, so it is used only
+// while the lead's ref is still the one it was recorded with; otherwise it is
+// <alias>/<lead_ref>. Shared by the roster and by the report routes.
+func (m *Module) leadStoredSession(t team.Team, alias string) team.RosterSession {
+	s := team.RosterSession{SessionID: t.LeadSessionID, Ref: t.LeadRef, Address: alias + "/" + t.LeadRef}
+	req, ok, err := m.store.Get(t.RequestID)
+	if err != nil || !ok {
+		if err != nil {
+			m.logf("[team] roster: request row of team %s: %v", t.ID, err)
+		}
+		return s
+	}
+	if req.Origin.Ref == t.LeadRef && req.Origin.Address != "" {
+		s.Address = req.Origin.Address
+	}
+	s.Title, s.Name, s.TmuxSession = req.Origin.Title, req.Origin.Name, tmuxName(req.Origin.Tmux)
 	return s
 }
 
