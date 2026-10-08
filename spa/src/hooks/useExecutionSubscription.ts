@@ -6,7 +6,7 @@
 // duplicate). The summary is authoritative: lifecycle events only mark it
 // stale and this hook refetches, debounced; it also refetches once after a
 // reconnect. Host removal in keep-tabs mode tears everything down here.
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { attachObserve, fetchExecutionEvents, fetchExecutionTasks, getExecution } from '../lib/nex/nex-api'
 import { openNexSse, type NexSseHandle } from '../lib/nex/nex-sse'
 import { frameToEvent } from '../lib/nex/event-reducer'
@@ -74,15 +74,26 @@ export function useExecutionSubscription(hostId: string, executionId: string, ac
   // that lost its slot to a busier sibling reclaims it only when the
   // caller signals renewed interest by toggling `active`; nothing resumes
   // it spontaneously just because a slot happens to free up elsewhere.
-  useEffect(() => {
-    if (!active || problem) return
+  const activate = useCallback(() => {
+    if (problem) return
     if (!useHostStore.getState().hosts[hostId]) return // main effect already reports host_removed
     subscriptionSlots.touch(hostId, key)
     if (subscriptionSlots.isLive(hostId, key) && !sseRef.current && openStreamRef.current) {
       setPaused(false)
       openStreamRef.current() // rejoins this execution's streams as `connecting`
     }
-  }, [active, hostId, executionId, key, problem])
+  }, [hostId, key, problem])
+
+  useEffect(() => {
+    if (active) activate()
+  }, [active, activate, executionId])
+
+  // The one spontaneous resume (#1866 §4.6): the host's lane was given back after a reservation evicted this key.
+  // Only a pane that is still active takes the activation path again; ordinary LRU evictions are never announced.
+  useEffect(() => {
+    if (!active) return
+    return subscriptionSlots.onCapacity(key, activate)
+  }, [active, key, activate])
 
   useEffect(() => {
     let cancelled = false
