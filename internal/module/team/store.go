@@ -40,6 +40,14 @@ type Store struct {
 	// (since > 0); an error fails the list there (tests). nil in
 	// production.
 	beforeListAutoApproved func() error
+	// afterTaskSeqRead, when set, runs in CreateTask's transaction right
+	// after it read MAX(seq) and before it inserts (tests: a barrier that
+	// proves two creates never share a seq). nil in production.
+	afterTaskSeqRead func()
+	// beforeTaskCommit, when set, runs in a task write transaction where
+	// COMMIT would run; an error stands for a failed COMMIT, the
+	// transaction still open on its connection (tests). nil in production.
+	beforeTaskCommit func() error
 }
 
 // OpenStore opens (or creates) team.db at path. ":memory:" is for tests.
@@ -91,6 +99,10 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := db.Exec(spawnSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (spawn ops): %w", err)
+	}
+	if _, err := db.Exec(taskSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (tasks): %w", err)
 	}
 	if err := migrateUsage(db); err != nil {
 		db.Close()
