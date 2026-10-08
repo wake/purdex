@@ -182,6 +182,19 @@ type Member struct {
 	AdoptRequest string         `json:"adopt_request,omitempty"` // adopted only: the approval that took it in
 	CreatedAt    int64          `json:"created_at"`              // unix ms
 	EndedAt      int64          `json:"ended_at,omitempty"`      // unix ms; 0 while the member is active
+
+	// Task and LastAt are GET /api/team's per-member display columns (T-1d1).
+	// Both are optional: a daemon that predates them omits them and a CLI that
+	// predates them ignores them, so either pairing works (the table prints "-").
+	Task   *MemberTask `json:"task,omitempty"`    // the member's current task (D-T6); nil when it has none
+	LastAt int64       `json:"last_at,omitempty"` // unix ms of its latest turn or report on that task; 0 = none
+}
+
+// MemberTask is the member's current task as `pdx team` shows it.
+type MemberTask struct {
+	ID      string     `json:"id"` // the display id (TaskDisplayID)
+	Subject string     `json:"subject"`
+	Status  TaskStatus `json:"status"`
 }
 
 // SpawnRequest is POST /api/team/spawns.

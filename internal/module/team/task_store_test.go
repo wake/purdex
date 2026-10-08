@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -574,5 +575,45 @@ func TestTaskSchema_SpawnOpIsUniqueWhenSet(t *testing.T) {
 	mustCreateTask(t, s, a)
 	if _, err := s.CreateTask(b); err == nil {
 		t.Fatal("a second task with the same spawn_op must be refused by the unique index")
+	}
+}
+
+// D-T6: the one task a member shows as its current one. Rows are one
+// owner's; input order must not matter.
+func TestCurrentTaskOf_Table(t *testing.T) {
+	row := func(seq int, st team.TaskStatus, updated int64) TaskRow {
+		return TaskRow{Seq: seq, Status: st, UpdatedAt: updated}
+	}
+	cases := []struct {
+		name    string
+		rows    []TaskRow
+		wantSeq int // 0 = none
+	}{
+		{"empty", nil, 0},
+		{"in progress newest updated_at wins", []TaskRow{row(1, team.TaskInProgress, 10), row(2, team.TaskInProgress, 20), row(3, team.TaskInProgress, 15)}, 2},
+		{"same updated_at: the higher seq wins", []TaskRow{row(4, team.TaskInProgress, 10), row(7, team.TaskInProgress, 10), row(5, team.TaskInProgress, 10)}, 7},
+		{"in progress beats a newer pending", []TaskRow{row(1, team.TaskInProgress, 10), row(2, team.TaskPending, 99)}, 1},
+		{"no in progress: the newest pending", []TaskRow{row(1, team.TaskPending, 10), row(2, team.TaskPending, 30), row(3, team.TaskPending, 20)}, 2},
+		{"pending tie: the higher seq", []TaskRow{row(1, team.TaskPending, 10), row(2, team.TaskPending, 10)}, 2},
+		{"completed and deleted never", []TaskRow{row(1, team.TaskCompleted, 50), row(2, team.TaskDeleted, 60)}, 0},
+		{"a finished newer task does not hide a pending one", []TaskRow{row(1, team.TaskPending, 10), row(2, team.TaskCompleted, 99)}, 1},
+	}
+	for _, c := range cases {
+		for _, order := range []string{"as given", "reversed"} {
+			rows := slices.Clone(c.rows)
+			if order == "reversed" {
+				slices.Reverse(rows)
+			}
+			got, ok := currentTaskOf(rows)
+			if c.wantSeq == 0 {
+				if ok {
+					t.Errorf("%s (%s): got seq %d, want none", c.name, order, got.Seq)
+				}
+				continue
+			}
+			if !ok || got.Seq != c.wantSeq {
+				t.Errorf("%s (%s): got seq %d ok=%v, want %d", c.name, order, got.Seq, ok, c.wantSeq)
+			}
+		}
 	}
 }

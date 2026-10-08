@@ -88,6 +88,10 @@ func TestWireTeam_JSONShapes(t *testing.T) {
 
 		{"Member full", member, memberFull},
 		{"Member minimal", Member{}, memberMin},
+		// T-1d1: task and last_at are optional; an unset pair is absent, so an
+		// old CLI against a new daemon (and the reverse) sees no difference.
+		{"Member with its current task", Member{Task: &MemberTask{ID: "3f2a9c-2", Subject: "fix it", Status: TaskInProgress}, LastAt: 9},
+			`{"session_id":"","ref":"","address":"","team_id":"","host_id":"","cwd":"","tmux_session":"","state":"","origin":"","spawn_op":"","created_at":0,"task":{"id":"3f2a9c-2","subject":"fix it","status":"in_progress"},"last_at":9}`},
 
 		{"SpawnRequest full", SpawnRequest{ID: "id", OriginInbox: "/tmp/in.sock", Cwd: "/w/r", Title: "worker", Model: "opus[1m]", Effort: "high"},
 			`{"id":"id","origin_inbox":"/tmp/in.sock","cwd":"/w/r","title":"worker","model":"opus[1m]","effort":"high"}`},

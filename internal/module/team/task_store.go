@@ -347,6 +347,34 @@ func (s *Store) ListTasks(teamID, ownerKey string, all bool) ([]TaskRow, error) 
 	return listTasksIn(context.Background(), s.db, teamID, ownerKey, all)
 }
 
+// currentTaskOf is the one task a member shows as its current one (plan
+// D-T6), for `pdx team` TASK / LAST today and the last-turn target and the
+// roster later (T-3a2, T-3b reuse it, so the rule lives here once): the
+// in_progress task with the newest updated_at, ties to the highest seq; none
+// in progress, the newest pending by the same order. completed and deleted
+// never count. rows are one owner's tasks, in any order; ok=false when none
+// qualifies. A pure function: no clock, no database.
+func currentTaskOf(rows []TaskRow) (TaskRow, bool) {
+	var best TaskRow
+	bestRank := 0 // 0 = nothing yet, 1 = pending, 2 = in_progress
+	for _, r := range rows {
+		rank := 0
+		switch r.Status {
+		case team.TaskInProgress:
+			rank = 2
+		case team.TaskPending:
+			rank = 1
+		}
+		if rank == 0 {
+			continue
+		}
+		if rank > bestRank || (rank == bestRank && (r.UpdatedAt > best.UpdatedAt || (r.UpdatedAt == best.UpdatedAt && r.Seq > best.Seq))) {
+			best, bestRank = r, rank
+		}
+	}
+	return best, bestRank != 0
+}
+
 // ListTasksForOwner is a member's list: its own tasks (ListTasks' order and
 // all flag), read in the transaction that first checks the member is still
 // an active member of a live team of teamID. ok=false, nothing returned,
