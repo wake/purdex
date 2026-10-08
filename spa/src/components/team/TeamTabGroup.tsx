@@ -9,7 +9,7 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { User, UsersThree, BookmarkSimple, Hexagon, Diamond, Circle } from '@phosphor-icons/react'
 import { useThemeStore } from '../../stores/useThemeStore'
-import { groupBadge, groupCorner, groupEdge, groupHasCue, groupShadow, useTeamDisplay, type TeamBadgeIcon, type TeamCornerSize, type TeamShadowStrength, type TeamTabMark } from './team-display'
+import { groupBadge, groupCorner, groupEdge, groupHasCue, groupShadow, useTeamDisplay, type TeamBadgeIcon, type TeamCornerSize, type TeamShadowDepth, type TeamShadowStrength, type TeamTabMark } from './team-display'
 
 /** Dark text on the pastel team colors, in both themes. */
 const LABEL_FG = '#14141f'
@@ -115,7 +115,7 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
   const shadow = groupShadow(mark.style)
   if (shadow) {
     if ((display?.shadowScope ?? 'all') === 'last' && !mark.last) return null
-    return <TeamTabShadow mark={mark} dir={shadow} strength={display?.shadowStrength ?? 'medium'} />
+    return <TeamTabShadow mark={mark} dir={shadow} strength={display?.shadowStrength ?? 'medium'} depth={display?.shadowDepth ?? 70} />
   }
   const edge = groupEdge(mark.style)
   if (edge) {
@@ -183,12 +183,13 @@ const SHADOW_PX: Record<TeamShadowStrength, { off: number; soft: number }> = {
  * optionally with a tiny soft companion. No inset, no glow. Sizes stay inside the TabBar clip (about 2px above, 6px below).
  * In the light theme the pastel colors are darkened so the line reads. An overlay span, so the tab's own background stays.
  */
-function TeamTabShadow({ mark, dir, strength }: { mark: TeamTabMark; dir: 'top' | 'bottom' | 'diag'; strength: TeamShadowStrength }) {
+function TeamTabShadow({ mark, dir, strength, depth }: { mark: TeamTabMark; dir: 'top' | 'bottom' | 'diag' | 'top-right'; strength: TeamShadowStrength; depth: TeamShadowDepth }) {
   const light = useThemeStore((s) => s.activeThemeId) === 'light'
   const { off, soft } = SHADOW_PX[strength]
-  const line = light ? `color-mix(in oklab, ${mark.color}, black 25%)` : mark.color
-  const halo = `color-mix(in srgb, ${line} 35%, transparent)`
-  const [ox, oy] = dir === 'top' ? [0, -off] : dir === 'bottom' ? [0, off] : [off, off]
+  const base = light ? `color-mix(in oklab, ${mark.color}, black 25%)` : mark.color
+  const line = depth === 100 ? base : `color-mix(in oklab, ${base} ${depth}%, transparent)`
+  const halo = `color-mix(in srgb, ${base} ${Math.round(0.35 * depth)}%, transparent)`
+  const [ox, oy] = dir === 'top' ? [0, -off] : dir === 'bottom' ? [0, off] : dir === 'top-right' ? [off, -off] : [off, off]
   const parts = [`${ox}px ${oy}px 0 ${line}`]
   if (soft) parts.push(`${ox}px ${oy}px ${soft}px ${halo}`)
   return (

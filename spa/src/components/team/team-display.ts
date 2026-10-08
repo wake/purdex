@@ -31,7 +31,7 @@ export interface TeamSeatView {
 export type TeamGroupStyle = 'label' | 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule' | 'combo' | 'tint' | 'frame' | 'topbar' | 'plate'
   | 'corner-tr' | 'corner-br' | 'corner-tr-icon' | 'corner-br-icon'
   | 'badge-icon' | 'badge-disc' | 'edge-arc' | 'edge-short'
-  | 'shadow-top' | 'shadow-bottom' | 'shadow-diag'
+  | 'shadow-top' | 'shadow-bottom' | 'shadow-diag' | 'shadow-top-right'
 
 /** The low-key cues a group style turns on (the older four styles use none of them). */
 export type TeamGroupCue = 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule'
@@ -75,13 +75,15 @@ export function groupEdge(style: TeamGroupStyle): 'arc' | 'short' | null {
 }
 
 /** The team-colored shadow styles: the shadow falls above, below, or toward the bottom-right of a group tab. */
-export function groupShadow(style: TeamGroupStyle): 'top' | 'bottom' | 'diag' | null {
-  return style === 'shadow-top' ? 'top' : style === 'shadow-bottom' ? 'bottom' : style === 'shadow-diag' ? 'diag' : null
+export function groupShadow(style: TeamGroupStyle): 'top' | 'bottom' | 'diag' | 'top-right' | null {
+  return style === 'shadow-top' ? 'top' : style === 'shadow-bottom' ? 'bottom' : style === 'shadow-diag' ? 'diag' : style === 'shadow-top-right' ? 'top-right' : null
 }
 
 /** Shadow strength (blur + alpha) and scope (every tab of the group, or only its last tab). */
 export type TeamShadowStrength = 'thin' | 'medium' | 'thick'
 export type TeamShadowScope = 'all' | 'last'
+/** Colour depth of the shadow, as a percent of the team colour (lower = lighter). */
+export type TeamShadowDepth = 100 | 70 | 50 | 35
 
 /** Where the hook's top starts: exactly at the lead highlight's lower edge, or fused into the highlight. */
 export type TeamHookTop = 'below' | 'blend'
@@ -146,6 +148,7 @@ export interface TeamDisplay {
   bookmarkPos: TeamBookmarkPos
   shadowStrength: TeamShadowStrength
   shadowScope: TeamShadowScope
+  shadowDepth: TeamShadowDepth
   openMark: TeamOpenMark
   tabMark: (tabId: string) => TeamTabMark | null
   /** Member tabs folded into the bead row (their lead row is in the same list). */
