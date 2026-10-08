@@ -5,9 +5,11 @@
 // events stamped with a strictly increasing seq, queued, and POSTed in batches to
 // `/mod/v1/events` from a $.clock.after timer — never inside a hook — one request at a time,
 // retried with backoff until the daemon acks them. A heartbeat every 10 s carries the live
-// mirror (the running main turn, open asks, compacting, the agents), so a daemon that
-// restarts or a batch that is lost converges within one beat. `session.end` flushes inside
-// its hook. Headless runs (`claude -p`, a Nexen worker) report nothing.
+// mirror (the running main turn, open asks, compacting, the agents, the last main turn's
+// error outcome, the last background tasks) and every batch says where the session runs
+// and that it is interactive, so a daemon that restarts or a batch that is lost converges
+// within one beat. `session.end` flushes inside its hook. Headless runs (`claude -p`, a
+// Nexen worker) report nothing.
 //
 // The hooks only observe: each calls next(e) and returns what it resolved to; nothing here
 // ever changes what the engine does. Every registration carries `.catch(($, e, next) =>
@@ -51,6 +53,7 @@ const ev = {
   stream: '',
   seq: 0,
   sid: '',
+  cwd: '', // where the session runs: from session.start, kept across a /clear or a resume
   ccVersion: '',
   modVersion: '',
   queue: [],
@@ -61,6 +64,8 @@ const ev = {
   turnId: '', // the running main turn
   asks: new Set(), // tool_use_ids waiting on the person
   compacting: false, // the main conversation is compacting
+  lastError: false, // the last main turn ended in error (cleared by the next main turn)
+  background: null, // {tasks, crons} as the last classic.Stop listed them; null before one
   beat: null, // the heartbeat timer
   beatGen: 0, // bumped when the heartbeat stops or pauses: a beat begun before then lands nowhere
   switching: false, // from session.end{clear|resume} to session.switch: the heartbeat pauses
@@ -125,6 +130,8 @@ function body(events) {
     cc_version: ev.ccVersion,
     mod_version: ev.modVersion,
     dropped_total: ev.droppedTotal,
+    cwd: ev.cwd,
+    interactive: true, // the reporter runs only for interactive sessions
     events,
   })
 }
@@ -239,8 +246,9 @@ async function beat($) {
     agents = (await $.agent.list()).map((a) => ({ id: a.id, status: a.status }))
   } catch {}
   if (gen !== ev.beatGen) return
-  const data = { asks: [...ev.asks], compacting: ev.compacting, agents }
+  const data = { asks: [...ev.asks], compacting: ev.compacting, agents, error: ev.lastError }
   if (ev.turnId) data.turn_id = ev.turnId
+  if (ev.background) data.background = ev.background
   enqueue($, 'heartbeat', data)
 }
 
@@ -273,9 +281,12 @@ async function startReporter($, e) {
   const v = await $.session.version().catch(() => undefined)
   ev.ccVersion = isObject(v) && typeof v.version === 'string' ? v.version : ''
   ev.sid = String(await $.session.id())
+  ev.cwd = String(e.cwd ?? '')
   ev.turnId = ''
   ev.asks.clear()
   ev.compacting = false
+  ev.lastError = false
+  ev.background = null
   ev.on = true
   enqueue($, 'session.start', { cwd: e.cwd, surface: e.surface })
   ev.beat = $.clock.every(HEARTBEAT_MS, () => beatTick($))
@@ -283,7 +294,8 @@ async function startReporter($, e) {
 
 // sessionSwitch follows a /clear or a resume: the process goes on under a new session id,
 // in the same stream, its seq and heartbeat going on; the old conversation's mirror is gone.
-// It ends the pause session.end began, whatever happens here.
+// The cwd and the background tasks stay (same process: the tasks run on; the next
+// classic.Stop refreshes them). It ends the pause session.end began, whatever happens here.
 async function sessionSwitch($, source) {
   if (!ev.on) return
   try {
@@ -292,6 +304,7 @@ async function sessionSwitch($, source) {
     ev.turnId = ''
     ev.asks.clear()
     ev.compacting = false
+    ev.lastError = false
     enqueue($, 'session.switch', { prev_sid: prev, source })
   } finally {
     ev.switching = false
@@ -325,7 +338,8 @@ function withAgent(data, agentId) {
 
 function turnStarted($, e) {
   if (!ev.on) return
-  ev.turnId = e.turnId
+  ev.turnId = e.turnId // turn.start has no agentId: it is always the main conversation's
+  ev.lastError = false
   enqueue($, 'turn.start', { turn_id: e.turnId })
 }
 
@@ -334,6 +348,7 @@ function turnCompleted($, e) {
   if (!e.agentId) {
     ev.turnId = ''
     ev.asks.clear()
+    ev.lastError = e.reason === 'error'
   }
   enqueue($, 'turn.complete', { ...withAgent({ turn_id: e.turnId, reason: e.reason }, e.agentId), duration_ms: e.durationMs, aborted: !!e.isAborted })
 }
@@ -390,7 +405,8 @@ function measured($, e) {
 function stopped($, e) {
   if (!ev.on) return
   const tasks = (Array.isArray(e.background_tasks) ? e.background_tasks : []).map((t) => ({ id: t.id, type: t.type, status: t.status }))
-  enqueue($, 'background', { tasks, crons: Array.isArray(e.session_crons) ? e.session_crons.length : 0 })
+  ev.background = { tasks, crons: Array.isArray(e.session_crons) ? e.session_crons.length : 0 }
+  enqueue($, 'background', ev.background)
 }
 
 function compactStarted($, e) {
