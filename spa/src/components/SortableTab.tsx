@@ -10,7 +10,7 @@ import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { HostBadge } from './HostBadge'
 import { useTabHostBadge } from '../hooks/useTabHostBadge'
 import { hasHostBadge } from '../lib/host-color'
-import type { TeamTabMark } from './team/team-display'
+import { groupHasCue, type TeamTabMark } from './team/team-display'
 
 interface Props {
   tab: Tab
@@ -130,7 +130,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     <div
       ref={setNodeRef}
       data-tab-id={tab.id}
-      style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '0 1 140px', width: 140, minWidth: 80, ...(group?.style === 'tint' ? { backgroundColor: tabBg } : null) }}
+      style={{ ...style, height: 26, marginLeft: group && groupHasCue(group.style, 'gap') ? 0 : 1, marginRight: group && groupHasCue(group.style, 'gap') ? 0 : 1, marginTop: 2, flex: '0 1 140px', width: 140, minWidth: 80, ...(group?.style === 'tint' ? { backgroundColor: tabBg } : null) }}
       data-team-role={group?.role}
       {...attributes}
       {...listeners}
@@ -151,6 +151,9 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
+      {group && groupHasCue(group.style, 'dot') && (
+        <span data-testid="team-tab-dot" className="absolute left-[21px] bottom-[3px] w-[5px] h-[5px] rounded-full pointer-events-none z-10" style={{ background: group.color }} />
+      )}
       {group?.style === 'topbar' && (
         <span data-testid="team-group-topbar" className="absolute left-1 right-1 top-0 h-[2px] rounded-b pointer-events-none" style={{ background: group.color }} />
       )}

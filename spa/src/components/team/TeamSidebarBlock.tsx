@@ -5,11 +5,31 @@
 //   hook      — the bead row hangs under the lead with ⎿ (Claude Code's tree mark); no toggle here
 //   plusminus — ⊟／⊞ in front of the lead row expands / collapses the beads
 //   chevron   — ▾／▸ in front of the lead row, and the bead row hangs with ⎿
+// With collapseStyle "users" there is no sign in front of the lead row: folded, one row (Users icon + one light
+// dot per member) expands on a click anywhere; unfolded, a click on the hook or the blank area beside the beads folds.
 // The toggle shares the team's collapsed state with the TabBar group.
 import type { ReactNode } from 'react'
-import { CaretDown, CaretRight } from '@phosphor-icons/react'
+import { CaretDown, CaretRight, UsersThree } from '@phosphor-icons/react'
 import type { TeamDisplay, TeamSeatView } from './team-display'
 import { TeamMemberBeads } from './TeamMemberBeads'
+import { useAgentStore } from '../../stores/useAgentStore'
+import { compositeKey } from '../../lib/composite-key'
+
+/** The four light colors (same as the tab lights). */
+const LIGHT_COLOR = { running: '#4ade80', waiting: '#facc15', idle: '#6b7280', error: '#ef4444' } as const
+
+function MemberLightDot({ member }: { member: TeamSeatView }) {
+  const status = useAgentStore((s) => s.statuses[compositeKey(member.hostId, member.sessionCode)])
+  return (
+    <span
+      data-testid="team-fold-dot"
+      data-status={status ?? 'none'}
+      title={member.title}
+      className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+      style={{ background: status ? LIGHT_COLOR[status] : 'var(--border-default)' }}
+    />
+  )
+}
 
 const LABEL_FG = '#14141f'
 
@@ -28,9 +48,10 @@ interface Props {
 
 export function TeamSidebarBlock({ team, teamKey, color, label, unnamed, collapsed, members, children, ghost = false }: Props) {
   const style = team.sidebarStyle
-  const hasToggle = style !== 'hook' && members.length > 0
-  const showBeads = !(hasToggle && collapsed)
-  const hook = style === 'hook' || style === 'chevron'
+  const users = team.collapseStyle === 'users'
+  const hasToggle = !users && style !== 'hook' && members.length > 0
+  const showBeads = !((hasToggle || users) && collapsed)
+  const hook = users || style === 'hook' || style === 'chevron'
   return (
     <div data-testid={ghost ? 'team-ghost-lead' : 'team-lead-block'} data-sidebar-style={style} className="flex flex-col gap-0.5">
       <div className="flex items-center mx-2 pl-[18px] h-[18px]">
@@ -65,12 +86,26 @@ export function TeamSidebarBlock({ team, teamKey, color, label, unnamed, collaps
           members={members}
           activeTabId={team.activeTabId}
           withHost={team.beadHost}
+          hookStyle={hook ? team.hookStyle : null}
+          openMark={team.openMark}
           onOpen={(sid) => team.onOpenSeat(teamKey, sid)}
           onReorder={(ids) => team.onReorderMembers(teamKey, ids)}
-          prefix={hook ? <span className="text-text-muted text-[13px] leading-none -mt-1.5 mr-0.5 select-none" aria-hidden="true">⎿</span> : undefined}
+          onBlankClick={users && members.length > 0 ? () => team.onToggleCollapse(teamKey) : undefined}
         />
       )}
-      {!showBeads && (
+      {!showBeads && users && (
+        <button
+          type="button"
+          data-testid="team-sidebar-collapsed"
+          title={`${members.length} 個 member，點一下展開`}
+          onClick={() => team.onToggleCollapse(teamKey)}
+          className="flex items-center gap-1.5 ml-[36px] mr-2 mb-0.5 h-6 px-1.5 rounded-md text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
+        >
+          <UsersThree size={14} />
+          <span className="flex items-center gap-1">{members.map((m) => <MemberLightDot key={m.sessionId} member={m} />)}</span>
+        </button>
+      )}
+      {!showBeads && !users && (
         <div className="ml-[42px] text-[10px] text-text-muted -mt-0.5 mb-0.5" data-testid="team-sidebar-collapsed">{members.length} 個 member 收起</div>
       )}
     </div>

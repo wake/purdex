@@ -10,8 +10,7 @@ import { getPrimaryPane } from '../../lib/pane-tree'
 import { compositeKey } from '../../lib/composite-key'
 import { createTab } from '../../types/tab'
 import type { ModelFamily } from '../../components/team/model-family'
-import type { TeamPanelLayout } from '../../components/team/TeamPanel'
-import type { TeamGroupStyle, TeamSidebarStyle } from '../../components/team/team-display'
+import type { TeamGroupStyle, TeamSidebarStyle, TeamCollapseStyle, TeamHookStyle, TeamOpenMark } from '../../components/team/team-display'
 
 export interface ProtoSeat {
   sessionId: string
@@ -43,9 +42,11 @@ interface ProtoState {
   teams: Record<string, ProtoTeam>
   panelMode: Record<string, 'full' | 'line'>
   beadHost: boolean
-  layout: TeamPanelLayout
   groupStyle: TeamGroupStyle
   sidebarStyle: TeamSidebarStyle
+  collapseStyle: TeamCollapseStyle
+  hookStyle: TeamHookStyle
+  openMark: TeamOpenMark
   /** Prototype switch: hide every team name, to see the fallback. */
   namesOff: boolean
   target: string | null
@@ -63,10 +64,12 @@ export const useProtoTeam = create<ProtoState>()(() => ({
   seats: {},
   teams: {},
   panelMode: loadPanelModes(),
-  beadHost: false,
-  layout: 'a',
-  groupStyle: 'tint',
+  beadHost: true,
+  groupStyle: 'combo',
   sidebarStyle: 'hook',
+  collapseStyle: 'users',
+  hookStyle: 'thin',
+  openMark: 'tick',
   namesOff: false,
   target: null,
   log: '',

@@ -6,7 +6,7 @@ import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
-import { useTeamDisplay, type TeamTabMark } from './team/team-display'
+import { useTeamDisplay, groupHasCue, type TeamTabMark } from './team/team-display'
 import { TeamGroupLabel, TeamTabGroupFrame } from './team/TeamTabGroup'
 
 interface Props {
@@ -150,7 +150,12 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                 {segments.map((seg, si) => {
                   const renderTab = (tab: Tab, i: number, list: Tab[]) => (
                     <Fragment key={tab.id}>
-                      {i > 0 && <TabSeparator show={shouldShowSeparator(list[i - 1], tab)} />}
+                      {i > 0 && (() => {
+                        const gm = team?.tabMark(tab.id)
+                        return gm && groupHasCue(gm.style, 'sepcolor')
+                          ? <div data-testid="team-group-sep" className="w-px h-3.5 flex-shrink-0 mx-px" style={{ background: gm.color }} />
+                          : <TabSeparator show={shouldShowSeparator(list[i - 1], tab)} />
+                      })()}
                       <SortableTab
                         tab={tab}
                         isActive={tab.id === activeTabId}

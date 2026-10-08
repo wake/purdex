@@ -91,6 +91,9 @@ export function ProtoApp() {
       beadHost: proto.beadHost,
       groupStyle: proto.groupStyle,
       sidebarStyle: proto.sidebarStyle,
+      collapseStyle: proto.collapseStyle,
+      hookStyle: proto.hookStyle,
+      openMark: proto.openMark,
       tabMark: (id) => marks.get(id) ?? null,
       sidebarHidden: (id) => hidden.has(id),
       sidebarBeads: (id) => beads.get(id) ?? null,
@@ -191,7 +194,6 @@ export function ProtoApp() {
                   members={liveMembers(activeTeam).map((m) => seatView(m, 'member'))}
                   activeTabId={activeTabId}
                   mode={proto.panelMode[activeTeam.key] ?? 'full'}
-                  layout={proto.layout}
                   onSetMode={(m) => setPanelMode(activeTeam.key, m)}
                   onOpen={(sid) => openSeat(activeTeam.key, sid)}
                   onReorder={(ids) => reorderMembers(activeTeam.key, ids)}

@@ -28,7 +28,27 @@ export interface TeamSeatView {
  * How a group is drawn on the TabBar (the user compares these). Every style starts the group with the
  * team-name label; they differ in how the group's tabs are tied to it.
  */
-export type TeamGroupStyle = 'tint' | 'frame' | 'topbar' | 'plate' | 'label'
+export type TeamGroupStyle = 'label' | 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule' | 'combo' | 'tint' | 'frame' | 'topbar' | 'plate'
+
+/** The low-key cues a group style turns on (the older four styles use none of them). */
+export type TeamGroupCue = 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule'
+
+const GROUP_CUES: Partial<Record<TeamGroupStyle, TeamGroupCue[]>> = {
+  dot: ['dot'], endcap: ['endcap'], gap: ['gap'], sepcolor: ['sepcolor'], rule: ['rule'], combo: ['dot', 'gap', 'endcap'],
+}
+
+export function groupHasCue(style: TeamGroupStyle, cue: TeamGroupCue): boolean {
+  return GROUP_CUES[style]?.includes(cue) ?? false
+}
+
+/** How the sidebar folds the member beads: a caret/sign in front of the lead row, or the Users icon + dots row. */
+export type TeamCollapseStyle = 'sign' | 'users'
+
+/** The drawing of the hook that hangs the bead rows under the lead (every one runs down to the last row). */
+export type TeamHookStyle = 'glyph' | 'thin' | 'bold' | 'rail'
+
+/** How a bead whose member has a tab open is told apart from one without (no fading either way). */
+export type TeamOpenMark = 'none' | 'tick'
 
 /** How the sidebar shows that the beads hang under the lead (no left border line). */
 export type TeamSidebarStyle = 'hook' | 'plusminus' | 'chevron'
@@ -67,6 +87,9 @@ export interface TeamDisplay {
   beadHost: boolean
   groupStyle: TeamGroupStyle
   sidebarStyle: TeamSidebarStyle
+  collapseStyle: TeamCollapseStyle
+  hookStyle: TeamHookStyle
+  openMark: TeamOpenMark
   tabMark: (tabId: string) => TeamTabMark | null
   /** Member tabs folded into the bead row (their lead row is in the same list). */
   sidebarHidden: (tabId: string) => boolean
