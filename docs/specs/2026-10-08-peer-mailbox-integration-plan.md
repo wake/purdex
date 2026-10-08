@@ -55,7 +55,7 @@ P1, P2, P3a may run in parallel (different files). First user-visible deploy aft
 - **C2 `ipeers.NormalizeBase(s string) string`**: lowercase; every rune outside `[a-z0-9-]` → `-`; collapse runs of `-`; trim leading/trailing `-`. Used only for the execution cwd-basename fallback.
 - **C3 `store.PeerNameStore`** (new `internal/store/peer_name.go`, DDL in `internal/store/meta.go` next to `peer_messages`):
   - `Assign(ctx, sessionID, ref, name, source string, nowMs int64) (stored Entry, err error)` — `INSERT … ON CONFLICT(session_id) DO NOTHING` then `SELECT`, in one transaction; returns the row that won (first writer wins, concurrent callers converge on the same name).
-  - `AdoptLineage(ctx, sessionID, name string, nowMs int64) (stored Entry, err error)` — `UPDATE … SET name=?, source='lineage' WHERE session_id=? AND source <> 'lineage'` then `SELECT`, one transaction. The only path that changes a name (spec §3.2 "lineage 晚到時升級一次").
+  - `AdoptLineage(ctx, sessionID, name string) (stored Entry, err error)` — `UPDATE … SET name=?, source='lineage' WHERE session_id=? AND source <> 'lineage'` then `SELECT`, one transaction. **It does not touch `assigned_at`** (it orders `ByRefs` for a shared ref); `ref` must equal `RefID(lowercase sid)` on every write. The only path that changes a name (spec §3.2 "lineage 晚到時升級一次").
   - `Lookup(ctx, sessionIDs []string) (map[string]Entry, error)`; `ByRefs(ctx, refs []string) (map[string]string, error)`. `Entry = {Name, Source}`.
   - session ids are stored lowercase; `source ∈ {lineage, registry, conversation_name, dir}`.
 - **C4 `PeerRecord.Name string \`json:"name,omitempty"\``** — the virtual name, empty when none. `Address` = `alias + "/" + Name` when `Name != ""`, else `alias + "/" + Ref`. The registry name stays in `Agent.PeerName` for display only.
@@ -63,6 +63,8 @@ P1, P2, P3a may run in parallel (different files). First user-visible deploy aft
   1. Lineage name: walk `previousRefs` newest-first (the order `internal/module/team/relay_store_lineage.go:17-63` already returns), first hit in `ByRefs` = `ln`.
   2. Existing row (`Lookup`): if present and `source == lineage` → use it. If present, `source != lineage` and `ln != ""` → `AdoptLineage(ln)`. Otherwise use it as is.
   3. No row: `ln` if any (`source=lineage`); else `VirtualName(registryName)` (`registry`); else `conversation_names` (`ConversationNameReader`, `internal/module/nex/conversations_http.go:116`) → `VirtualName` (`conversation_name`); else executions only `VirtualName(NormalizeBase(dirBase))` (`dir`) → `Assign`.
+  - `conversation_names` read failure or `AdoptLineage` failure → that row has no name this pass (same rule as below).
+  - Bounds: the inventory pass names under `invCtx`; self verbs (whoami) use the request ctx plus `namerTimeout = 1s` and run **outside `titleMu`**; `OriginResolver.originOf` (no request ctx) uses `namerTimeout` as its cap.
   - A store error for a candidate → no name for that row this pass (address falls back to the ref form), logged once per pass; never an unpersisted name.
   - Race argument (pin in a comment and a test): two concurrent passes converge through `DO NOTHING`; a pass that saw lineage either inserts `lineage` first or upgrades the loser's fallback row via `AdoptLineage`, so lineage always wins eventually and a `lineage` row is never overwritten.
 - **C6 Execution rows** (P4): `RowKind = "execution"`; new fields `ExecutionID string \`json:"execution_id,omitempty"\``, `ExecState string \`json:"exec_state,omitempty"\`` (idle|running|queued); `Agent = &AgentInfo{Type:"cc", SessionID: sid, PID: <live pid or 0>}`; `Deliverable`/`Reason` per spec §4.1 (`mailbox_disabled`).
@@ -90,7 +92,7 @@ P1, P2, P3a may run in parallel (different files). First user-visible deploy aft
 3. **Equal** (`nex.go:199`) compares `Peer` (scalar struct, `==`). Test in `info_handler_test.go:290-320` style: changing only `peer.enabled` sets `restart_required`.
 4. **buildOptions** (`build_config.go:80`) maps `Peer` → `cfg.Peer`; extend `TestBuildOptionsFullMapping` (`build_config_test.go:23`): `max_pending = 0` comes back as Nexen's default after `cfg.Validate()`.
 5. **Status** (`status.go:21-44`): effective map gains `peer_enabled`, `peer_max_pending`.
-6. **PUT** (`config_handler.go:57-66`): a bad template → 400 naming `nex.peer.wake_template`; table test in `config_handler_test.go:425-450`.
+6. **PUT** (`config_handler.go:57-66`): `peer` is merged per key (a PUT that omits a key keeps the stored one), and `null` → 400; a bad template → 400 naming `nex.peer.wake_template`; table test in `config_handler_test.go:425-450`.
 7. **SPA.** `NexConfig.peer` type; `emptyNexConfig` gets the default (enabled true, 0, "", ""); `trimForSubmit` (`NexConfigForm.tsx:49-69`) sends all four peer keys, templates passed through untouched; the form gets a toggle「peer 信箱」and a number「排隊上限」(0 = 預設); the error regex (`:37`) already maps `nex.peer.x`. Update the key-set test (`NexConfigForm.test.tsx:71-80`) to 8 keys; add a test that two non-empty templates loaded by GET are PUT back byte-identical.
 
 **Mutations:** drop `Peer` from `Equal` → restart test red; omit `peer` in `trimForSubmit` → round-trip test red; omit only `wake_template` → round-trip test red; omit only `reply_line` → round-trip test red; default `Enabled=false` → default test red; skip template validation in `Validate` → PUT test red.
@@ -101,6 +103,7 @@ P1, P2, P3a may run in parallel (different files). First user-visible deploy aft
 
 1. **Fixtures.** Copy the three recorded files (+ README with source commit) into `__fixtures__/peer-mailbox/`.
 2. **Reducer** (switch near `event-reducer.ts:595`; the reducer only ever sees the per-execution stream and history pages, both full payloads): `case 'peer_message'`: `markTurnStart({...next, summaryStale: true}, created_at, turn_id || null)`; **does not** touch `pendingLocal` / `sendLocked`; push one synthetic `{type: 'purdex_peer', from_name, text, msg_id, at: created_at}` (defensive: a payload without `text` opens the turn and pushes nothing). `applyTurnRules` (`:514`) adds `peer_message` to the `turnLive` condition. The raw payload is never appended (the unknown-kind fallthrough at `:576-580` must not see it). Site-wide frames never reach this reducer (step 6).
+   The end of a peer turn must **not** clear the pane's local send state (`pendingLocal` and friends): only the pane's own turn end does.
 3. **Types.** `PurdexPeerMessage` in `message-types.ts`; `isOpeningLine` (`turns.ts:36`) stays false for it, so sent-history (ArrowUp) never offers a peer's text as the user's own.
 4. **Block.** `PeerMessageBlock`: left border in the info colour, header「來自 {from_name} · {time}」, body through `RoomProse`. Room view renders it from `MessageRow`; chat view renders the same block left-aligned (never a user bubble). The component takes plain props so the terminal underlying can reuse it later.
 5. **Search.** `transcript-search.ts` indexes the peer text (the existing prelude peer note path at `:252-255` is the pattern).
@@ -130,11 +133,12 @@ P1, P2, P3a may run in parallel (different files). First user-visible deploy aft
 **Files:** `internal/peers/address.go` (+test), `internal/module/peers/module.go` (`remoteAddress` `:992-1010`), `internal/module/peers/send.go` (hint `:31-57`, not-found path `:432`), `cmd/pdx/msg.go` (usage text `:45-59`, whoami rendering `:685-702`), `spa/src/stores/usePeerStore.ts` (`:95-110`), `spa/src/components/StatusBar.tsx` (`:263,294-297`, displayed and copied address), `spa/src/components/RenamePopover.tsx` (`:119-137`), their tests, repo `CLAUDE.md` § Peer addresses.
 
 1. Tier 1 (`address.go:305-322`) and the combined `"<name> [<ref>]"` check (`:211-291`) compare `rec.Name`; a row is name-addressable when it is a live entry row (today's `hasLiveEntry`) — P4 extends the predicate to execution rows.
-2. Remote rows: `remoteAddress` prefers `rec.Name` when `RoutableName`, else the current rule (old remote daemons keep working).
+2. Remote rows: `remoteAddress` prefers `rec.Name` when `RoutableName`. Old vs new is decided by the envelope's `address_version` (≥ 5), **not** inferred from rows; a remote without it keeps the current rule (old daemons keep working). Name and `address_version` ship in the same build, so no intermediate version has one without the other.
 3. Not-found hint: when the head equals some live row's `Agent.PeerName`, the 404 detail appends `did you mean <alias>/<Name>?` (only when that row has a `Name`). Rewrite `peerNotFoundHint` for v5.
 4. Docs: repo `CLAUDE.md` Peer-address section describes the virtual name (`<base>-<ref[1:3]>`, fixed for the conversation's life, registry name no longer routes).
 5. SPA: the status bar shows and copies the record's `address` (not `agent.peer_name`); the rename popover shows the address as the conversation's address and the registry name only as "CLI 名稱" if at all. `cmd/pdx` whoami prints the virtual address.
-6. Audit every other caller that composes an address from `Agent.PeerName` / `agent.peer_name` (grep under `internal/`, `cmd/`, `spa/src`), switch each to `Address`/`Name`, and list the audit in the PR body with file:line.
+6. Also covered: `team_handler` `membersNamed` (member lookup by virtual name) and `team_cmd` `sendBrief` (brief addressed by virtual name).
+7. Audit every other caller that composes an address from `Agent.PeerName` / `agent.peer_name` (grep under `internal/`, `cmd/`, `spa/src`), switch each to `Address`/`Name`, and list the audit in the PR body with file:line.
 
 **Tests:** registry name no longer resolves (404 + hint); virtual name resolves; `"<registry name> [ref]"` → `name_mismatch`; two rows with one virtual name → `ambiguous`; remote row without `name` resolves by the old rule; StatusBar copy test yields the virtual address; whoami output test.
 **Mutations:** tier 1 back to `Agent.PeerName` → test red; hint dropped → test red; StatusBar back to `peer_name` → copy test red.

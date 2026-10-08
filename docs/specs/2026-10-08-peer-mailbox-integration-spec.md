@@ -57,8 +57,10 @@ CREATE INDEX IF NOT EXISTS peer_names_ref ON peer_names(ref);
 - **配發時機**＝這個 session id 第一次被 daemon 看到：inventory 建列時（終端機的 live entry、執行體列）、送訊解析時。`INSERT … ON CONFLICT DO NOTHING`，已有就不動 ⇒ `/rename`、CLI 每次喚醒換名都不影響。
 - **基底來源順序**：(1) 該 session 目前 live registry entry 的 routable 名；(2) `conversation_names` 記過的名字；(3) 執行體專用：工作目錄 basename 正規化（小寫、非 `[a-z0-9-]` 換成 `-`、去頭尾 `-`）。都沒有 ⇒ 不配名（§3.1）。
 - **接力繼承**：一個 session 的 `PreviousRefs` 非空時，沿 lineage（新到舊）找最近一個已配名的前任，**沿用同一個名字**（後綴不重算，因此後綴與新 ref 可能不同，這是預期的）。手動 `/clear`（沒有 lineage）＝新對話，重新配發。
-- **lineage 晚到時升級一次**：接力後的新 session 可能先出現在 registry、lineage 稍後才寫入，這段時間會先用其他來源配到名字。之後一旦看到 lineage 且前任有名字，就把這個 session 的名字**改成前任的名字一次**（`source` 改為 `lineage`）；`source = lineage` 的名字永遠不再改。這是「之後不變」的唯一例外，只發生在接力剛完成的幾秒內。
+- **lineage 晚到時升級一次**：接力後的新 session 可能先出現在 registry、lineage 稍後才寫入，這段時間會先用其他來源配到名字。之後一旦看到 lineage 且前任有名字，就把這個 session 的名字**改成前任的名字一次**（`source` 改為 `lineage`）；`source = lineage` 的名字永遠不再改。這是「之後不變」的唯一例外。**晚到是常態而非罕見**：接力時新 session 通常先出現在 registry、lineage 之後才寫入，所以多數接力都會經過一次這個升級；升級不改 `assigned_at`（它決定 `ByRefs` 對共用 ref 的排序）。
 - **同名**：兩個對話剛好配到同一個名字時不另外處理，照現有規則（同名→ `ambiguous` 409，附候選，請對方用 `[ref]` 或 `_ref`）。
+- **失敗語意**：`conversation_names` 讀失敗或 `AdoptLineage` 失敗 ⇒ 該列本輪**無名**（地址退回 ref 形式），不發放未持久化的名字，下一輪再試。
+- **有界**：inventory 以外的呼叫端（self verbs 如 whoami、`OriginResolver.originOf`）命名時用請求 ctx（originOf 無請求 ctx，用 `namerTimeout`＝1s 上限），且不在 `titleMu` 內做，避免名稱表慢拖住整個 titles 路徑。
 - **刪除**：不刪（與 `conversation_names` 同生命期）。
 
 ### 3.3 定址
@@ -66,7 +68,7 @@ CREATE INDEX IF NOT EXISTS peer_names_ref ON peer_names(ref);
 - Resolve tier 1（bare name）、合併式 `"<name> [<ref>]"` 的 name 核對：改比對**虛擬名**。registry 名**不再路由**。
 - `_ref`、lineage、`tmux:<name>`、`cc:` 拒絕等其他 tier 不變。
 - **遷移提示**：bare name 沒命中、但等於某個 live entry 的 registry 名時，`peer_not_found` 的 detail 附「你要找的可能是 `<alias>/<虛擬名>`」。
-- **遠端列**：`PeerRecord` 新增 `name`（虛擬名，omitempty）。`remoteAddress` 優先用 `name`；對方是舊版（沒有 `name`）時退回現行規則（`Agent.PeerName`），混版本照常可送。
+- **遠端列**：`PeerRecord` 新增 `name`（虛擬名，omitempty）。新舊版**不由 row 有沒有 `name` 推斷**，而由 envelope 的 `address_version`（≥ 5 ＝ v5 規則）明說；沒帶 `address_version` 的對方是舊版，退回現行規則（`Agent.PeerName`），混版本照常可送。
 
 ### 3.4 顯示與寄件者
 
