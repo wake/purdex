@@ -13,7 +13,7 @@ import (
 	"github.com/wake/purdex/internal/resources"
 )
 
-const resourcesDefaultItems = `{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":45,"test-pkg":15},` +
+const resourcesDefaultItems = `{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},` +
 	`"deadline_s":300,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15}`
 
 // A host that never wrote the key reads the defaults, on the GET and through
@@ -103,7 +103,7 @@ func TestResourcesSettings_Ranges(t *testing.T) {
 	// kinds: weights 1..100, merged over the built-ins; custom names allowed.
 	s, err := normalizeResources(json.RawMessage(`{"kinds":{"build":1,"test-pkg":100,"my-kind":7}}`))
 	require.NoError(t, err)
-	assert.Equal(t, map[string]int{"test-full": 45, "build": 1, "test-pkg": 100, "lint-full": 10, "my-kind": 7}, s.Kinds)
+	assert.Equal(t, map[string]int{"test-full": 35, "build": 1, "test-pkg": 100, "lint-full": 10, "my-kind": 7}, s.Kinds)
 	for _, bad := range []string{
 		`{"build":0}`, `{"build":101}`, `{"build":-1}`, `{"build":null}`, `{"build":"35"}`, `{"build":35.5}`,
 		`{"Bad Name":5}`, `{"":5}`, `null`, `[]`, `"x"`,
@@ -121,7 +121,7 @@ func TestResourcesSettings_PutGetRoundTrip(t *testing.T) {
 	rr := serve(m, http.MethodPut, "/api/hostconfig/resources",
 		`{"items":{"mode":"advise","warmup_s":0,"kinds":{"build":20,"mine":5}},"baseRevision":0}`)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-	const stored = `{"mode":"advise","kinds":{"build":20,"lint-full":10,"mine":5,"test-full":45,"test-pkg":15},` +
+	const stored = `{"mode":"advise","kinds":{"build":20,"lint-full":10,"mine":5,"test-full":35,"test-pkg":15},` +
 		`"deadline_s":300,"warmup_s":0,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15}`
 	assert.JSONEq(t, `{"items":`+stored+`,"revision":1}`, rr.Body.String())
 
