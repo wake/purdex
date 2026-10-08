@@ -44,17 +44,28 @@ func (c *Conversation) Validate() error {
 }
 
 func validateItem(it Item, ids map[string]bool) error {
-	n := 0
-	for _, set := range []bool{it.User != nil, it.AgentText != nil, it.Thinking != nil, it.Step != nil, it.System != nil} {
-		if set {
-			n++
-		}
-	}
 	if !it.Type.known() {
 		return fmt.Errorf("unknown item type %q", it.Type)
 	}
-	if n != 1 {
-		return fmt.Errorf("item type %q must hold exactly its own variant, has %d variants", it.Type, n)
+	// Exactly the variant Type names must be set; check before any deref.
+	n, own := 0, false
+	for _, v := range []struct {
+		set bool
+		typ ItemType
+	}{
+		{it.User != nil, ItemUser},
+		{it.AgentText != nil, ItemAgentText},
+		{it.Thinking != nil, ItemThinking},
+		{it.Step != nil, ItemStep},
+		{it.System != nil, ItemSystem},
+	} {
+		if v.set {
+			n++
+			own = own || v.typ == it.Type
+		}
+	}
+	if n != 1 || !own {
+		return fmt.Errorf("item type %q must hold exactly its own variant, has %d variants (own set: %v)", it.Type, n, own)
 	}
 
 	var id string

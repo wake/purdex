@@ -181,3 +181,47 @@ func TestValidate_AcceptsTruncatedFlagAtCap(t *testing.T) {
 		t.Fatalf("truncated fields at the cap rejected: %v", err)
 	}
 }
+
+func TestValidate_RejectsTypeVariantMismatch(t *testing.T) {
+	variants := map[ItemType]func(*Item){
+		ItemUser:      func(it *Item) { it.User = &UserMessage{ID: "m1", Source: SourceUser} },
+		ItemAgentText: func(it *Item) { it.AgentText = &AgentText{ID: "m1"} },
+		ItemThinking:  func(it *Item) { it.Thinking = &Thinking{ID: "m1"} },
+		ItemStep: func(it *Item) {
+			it.Step = &Step{ID: "m1", Kind: StepOther, Status: StepDone, Input: json.RawMessage(`{}`)}
+		},
+		ItemSystem: func(it *Item) { it.System = &System{ID: "m1", Kind: SystemResumed} },
+	}
+	types := []ItemType{ItemUser, ItemAgentText, ItemThinking, ItemStep, ItemSystem}
+
+	check := func(name string, it Item) {
+		t.Run(name, func(t *testing.T) {
+			c := wellFormed()
+			c.Turns[0].Items = []Item{it}
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("Validate panicked: %v", r)
+				}
+			}()
+			if err := c.Validate(); err == nil {
+				t.Fatalf("Validate accepted %+v", it)
+			}
+		})
+	}
+	for _, typ := range types {
+		check(string(typ)+"/zero", Item{Type: typ})
+		for _, other := range types {
+			if other == typ {
+				continue
+			}
+			wrong := Item{Type: typ}
+			variants[other](&wrong)
+			check(string(typ)+"/holds-"+string(other), wrong)
+
+			both := Item{Type: typ}
+			variants[typ](&both)
+			variants[other](&both)
+			check(string(typ)+"/own-plus-"+string(other), both)
+		}
+	}
+}
