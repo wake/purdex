@@ -144,6 +144,36 @@ func TestStart_RunsTheSweeperUntilStop(t *testing.T) {
 	}
 }
 
+// #1970: opened and closed are never dropped silently. A plain subscriber
+// (opted into nothing) whose buffer is full is closed by the broadcast
+// (Done, deregistered), so its client reconnects for the approval snapshot
+// instead of running without the dialog's open or close; a subscriber with
+// room still gets the frame. Mutation gate: broadcast with BroadcastEvent
+// (best-effort) in Module.broadcast → red, for both ops.
+func TestApprovalEvents_AreStrictForASubscriberThatCannotTakeThem(t *testing.T) {
+	for _, op := range []string{"opened", "closed"} {
+		t.Run(op, func(t *testing.T) {
+			f := newFixture(t)
+			a := f.create(uid(1))
+			f.events() // drain the fixture subscriber: it must have room
+			full := f.core.Events.AddTestSubscriber()
+			t.Cleanup(func() { f.core.Events.RemoveTestSubscriber(full) })
+			for full.TrySend([]byte(`{"type":"fill"}`)) {
+			}
+			f.m.broadcast(op, &a)
+			select {
+			case <-full.Done():
+			default:
+				t.Fatalf("a subscriber that could not take %s was kept without it", op)
+			}
+			evs := f.events()
+			if len(evs) != 1 || evs[0].Op != op {
+				t.Fatalf("events on the subscriber with room = %+v, want one %s", evs, op)
+			}
+		})
+	}
+}
+
 func TestSendSnapshot_FullBufferClosesSubscriber(t *testing.T) {
 	f := newFixture(t)
 	sub := f.core.Events.AddTestSubscriber()

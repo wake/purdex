@@ -482,6 +482,13 @@ func (m *Module) announceClosed(after team.Approval, rep *RelayReport) {
 
 // broadcast queues one opened/closed event to every subscriber, under
 // eventMu so it cannot land between a snapshot's read and its send.
+//
+// It is strict for every subscriber (BroadcastStrict, #1970): one whose send
+// buffer is full is removed and its client reconnects for the approval
+// snapshot, instead of losing the frame and keeping its connection. A
+// dropped opened would leave that window without the dialog, a dropped
+// closed would leave the dialog up, and nothing would ever tell it. Approval
+// events are rare, so the occasional reconnect is cheap.
 func (m *Module) broadcast(op string, a *team.Approval) {
 	v, err := json.Marshal(team.EventValue{Op: op, Approval: a})
 	if err != nil {
@@ -490,7 +497,7 @@ func (m *Module) broadcast(op string, a *team.Approval) {
 	}
 	m.eventMu.Lock()
 	defer m.eventMu.Unlock()
-	m.core.Events.BroadcastEvent(core.HostEvent{Type: team.EventType, Value: string(v)})
+	m.core.Events.BroadcastStrict(core.HostEvent{Type: team.EventType, Value: string(v)})
 }
 
 // sendSnapshot queues {op:"snapshot", approvals:[…]} to a new subscriber
