@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.0.0-alpha.606] - 2026-10-09
+
+> 動 daemon、mod 和 SPA：**要部署 daemon，也要重跑 `pdx setup --agent cc`**（mod 換版）；主 checkout 快轉後 SPA 即生效；Electron 不必更新。使用者看得到的是**標題列的「無人值守」開關**與它的期間清單、daemon 重啟後燈號不再全數變未讀；其餘是底層（team 名冊、燈號 v2 的 daemon 前半、對話模型型別），還沒有新畫面。
+
+### Added：標題列的無人值守開關 — U23 SPA（#1982、#1986、#1991、#1987）
+
+- 標題列（版型按鈕左邊）多一顆「無人值守」：一次套用到工作台上顯示的所有主機，狀態有「關／開／部分」（部分＝有主機沒開、連不上或 daemon 太舊，tooltip 逐台列出）。
+- 開著時「成為 lead」與「自我接力」的申請由 daemon 自動通過，不跳核准框、不發通知；工具權限與 agent 的提問照常等人。
+- 旁邊的 ▾ 列出「無人值守期間自動通過」的申請（主機、session、種類、時間；非今天顯示日期；「顯示更多」）；某台讀取失敗或連不上會寫出名字（連不上的標「可能仍在自動通過」）。
+- 你自己按的核准／拒絕剛好輸給自動核准時，仍會提示是誰決定的。
+- 核准框的 member 上限一律預填 3，lead 申請的數字不同時在旁顯示「lead 申請 N 個」（U25）。
+
+### Fixed
+
+- daemon 重啟後，燈號不再全部變成未讀：重播只有在狀態真的改變時才可能標未讀（例如原本工作中、重播已閒置＝離線期間做完了）（#1975）。介面線 U1-3 之後會全面取代這個做法。
+- 核准框的開啟／關閉通知改走嚴格推送，接收端塞滿時改為斷線重連拿完整狀態，不再靜默遺失（#1994，#1970）。
+
+### Added：team 名冊（daemon）— U24 PL-1a′／PL-1f′（#1980、#1984、#1985、#1992）
+
+- `GET /api/team/roster` 與 `team.roster` 事件：每台主機的 live team、lead 與 member（地址、title、tmux session、狀態、模型、effort、context 用量），名冊變動時以嚴格推送通知 App。`GET /api/team` 的 member 多 `origin` 欄位。
+- 修正：接力（relay cleared）後，新 session 不再顯示上一個 session 的 context 讀數（`pdx team` 同修）。
+- 給之後的 team 介面（左側 member 列、上方 lead 群組、浮蓋面板）用；畫面還沒做。
+
+### Added：燈號 v2 的 daemon 前半 — 介面語言 U1-2（#1974、#1976、#1983）
+
+- mod 每批事件帶 cwd 與是否互動（daemon 重啟後也對得回 pane）；心跳帶錯誤與背景狀態；在終端機核准權限的瞬間送出 `tool.approved`（燈號 v2 會據此立刻離開黃燈）；`$.agent.list()` 失敗時不再送空清單。
+- daemon 的燈號狀態機與 mod 訂閱已就緒，但**開關預設關**，現行燈號行為不變（事件多了 `source`、`background` 兩個欄位）。
+
+### Added：對話模型型別 — 介面語言 U1-4a（#1989）
+
+- daemon 端對話模型的型別、JSON 形狀、驗證與能力宣告（之後 iOS 與 Mac App 指揮台共用）；尚無 API。
+
+### Docs
+
+- 主機層資源租約 spec 與 plan（#1993）；U1-4 plan（#1988）；team 顯示的確認包與設計稿（#1981，已由使用者 19 條定案取代）、U24 顯示先行的重排（#1977）。
+
 ## [1.0.0-alpha.605] - 2026-10-08
 
 > 動 daemon、skill 和 SPA：**要部署 daemon，也要重跑 `pdx setup --agent cc`**（skill 文字改了）；主 checkout 快轉後 SPA 即生效；Electron 不必更新。使用者看得到的是 worker 狀態改由 daemon 推送（燈號更即時）；無人值守模式的 daemon 端已就緒，標題列按鈕在之後的版本。
