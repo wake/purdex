@@ -582,7 +582,7 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 			d.startDetector(plan.startCtx, d.parent, intent.Kind, plan.paneID, plan.senderPID, out)
 			close(out)
 		}()
-		go d.consumeSignals(plan.startCtx, session, agentType, intent, plan.generation, out)
+		go d.consumeSignals(plan.startCtx, session, plan.paneID, agentType, intent, plan.generation, out)
 		agentpkg.MetricProbeIntentStarted.Add(1)
 		if isDevMode() {
 			log.Printf("[probe-intent] start session=%s agent=%s kind=%s pane=%s pid=%d generation=%d",
@@ -631,7 +631,7 @@ func (d *probeIntentDispatcher) applyIntentLifecycle(
 // (W6-3 §9.14).
 func (d *probeIntentDispatcher) consumeSignals(
 	ctx context.Context,
-	session, agentType string,
+	session, paneID, agentType string,
 	intent agentpkg.ProbeIntent,
 	generation uint64,
 	in <-chan agentpkg.Signal,
@@ -740,6 +740,7 @@ func (d *probeIntentDispatcher) consumeSignals(
 
 		applied, appliedStatus := applyProbeGuards(d.parent, probeGuardArgs{
 			Session:            session,
+			PaneID:             paneID,
 			AgentType:          agentType,
 			Reason:             "probe-intent:" + string(intent.Kind),
 			Signal:             sig,
