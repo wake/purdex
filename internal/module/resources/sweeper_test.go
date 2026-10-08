@@ -3,6 +3,7 @@ package resourcesmod
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -282,18 +283,24 @@ func TestSweeper_ProcessTableIsReadOutsideStateMu(t *testing.T) {
 // read began may not be in it yet: it is not judged by that table. (The
 // reason the first version read the table under the lock.)
 func TestSweeper_HolderGrantedAfterTheTableIsReadIsNotJudgedByIt(t *testing.T) {
-	f := newSweepFix(t, resources.ModeLease)
-	f.held("old", 4242, startText(procStart), f.nowMS()-10000) // makes the sweeper read the table
-	f.alive(4242, procStart)
-	f.m.sweepView = func(context.Context) (procView, error) {
-		f.snaps.Add(1)
-		f.clock.ms.Add(5) // a few ms later, a holder is granted; the table predates it
-		f.held("new", 5151, startText(procStart), f.nowMS())
-		return f.view, nil
+	// 0 ms is the boundary (re-review P1): a grant in the same millisecond the
+	// read began cannot be told from one before it, so it is not judged either.
+	for _, advance := range []int64{0, 1, 5} {
+		t.Run(fmt.Sprintf("granted %d ms after the read began", advance), func(t *testing.T) {
+			f := newSweepFix(t, resources.ModeLease)
+			f.held("old", 4242, startText(procStart), f.nowMS()-10000) // makes the sweeper read the table
+			f.alive(4242, procStart)
+			f.m.sweepView = func(context.Context) (procView, error) {
+				f.snaps.Add(1)
+				f.clock.ms.Add(advance) // a holder is granted; the table predates it
+				f.held("new", 5151, startText(procStart), f.nowMS())
+				return f.view, nil
+			}
+			f.sweep()
+			f.wantState("old", resources.StateHeld)
+			f.wantState("new", resources.StateHeld)
+		})
 	}
-	f.sweep()
-	f.wantState("old", resources.StateHeld)
-	f.wantState("new", resources.StateHeld)
 }
 
 func TestSweeper_DefaultViewReadsProcSnapshot(t *testing.T) {

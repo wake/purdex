@@ -62,7 +62,7 @@ func (m *Module) sweepOnce(ctx context.Context) {
 	// been published (plan Task 1.5: holders are not judged before the first
 	// sample), and the rows are read again under the lock. viewAt is when the
 	// read began: a holder granted after it may not be in that table yet, so
-	// sweepLeases judges only the rows granted before it.
+	// sweepLeases judges only the rows granted strictly before it (a grant in the same millisecond cannot be ordered against the read).
 	var view procView
 	var viewAt time.Time
 	if leasing && m.latest.Load() != nil && m.anyHeld() {
@@ -122,7 +122,7 @@ func (m *Module) sweepLeases(now time.Time, set resources.Settings, view procVie
 	for _, r := range held {
 		reason := ""
 		switch {
-		case view != nil && r.GrantedAt <= viewAtMS && holderGone(view, r):
+		case view != nil && r.GrantedAt < viewAtMS && holderGone(view, r):
 			reason = resources.EndHolderGone
 		case now.Sub(time.UnixMilli(r.GrantedAt)) >= maxHold:
 			reason = resources.EndExpired
