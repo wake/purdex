@@ -109,7 +109,7 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 			return
 		}
 	default:
-		n.skip("origin:" + kind)
+		n.skipDyn("origin:" + kind)
 		return
 	}
 
@@ -202,7 +202,7 @@ func (n *Normalizer) attachmentRow(l *rawLine, off int64) {
 		return
 	}
 	if typ := a.str("type"); typ != "queued_command" {
-		n.skip("attachment:" + typ)
+		n.skipDyn("attachment:" + typ)
 		return
 	}
 	blocks, ok := contentBlocks(a.get("prompt"))
@@ -231,7 +231,7 @@ func (n *Normalizer) attachmentRow(l *rawLine, off int64) {
 	switch kind {
 	case "human":
 		if mode != "" && mode != "prompt" {
-			n.skip("attachment:queued_command:" + mode)
+			n.skipDyn("attachment:queued_command:" + mode)
 			return
 		}
 		src = convmodel.SourceQueued
@@ -245,7 +245,7 @@ func (n *Normalizer) attachmentRow(l *rawLine, off int64) {
 	case "task-notification":
 		src, text = convmodel.SourceTask, taskText(text)
 	default:
-		n.skip("origin:" + kind)
+		n.skipDyn("origin:" + kind)
 		return
 	}
 	ti := n.ensureTurn(l.uuid, l.at, off)

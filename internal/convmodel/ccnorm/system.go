@@ -28,7 +28,7 @@ func (n *Normalizer) systemRow(l *rawLine, off int64) {
 	case "compact_boundary":
 		n.compactBoundary(l, off)
 	default:
-		n.skip("system:" + l.subtype)
+		n.skipDyn("system:" + l.subtype)
 	}
 }
 

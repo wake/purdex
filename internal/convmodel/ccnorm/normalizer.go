@@ -29,6 +29,12 @@ type Stats struct {
 	Skipped                  map[string]int // by reason: "type:<t>", "attachment:<t>", "origin:<k>", …
 }
 
+// Bounds on what one row, or the counters, can cost.
+const (
+	maxBlocksPerRow = 64 // content blocks processed per row; the rest are skipped
+	maxSkipKeys     = 64 // distinct Stats.Skipped reasons; later new ones count as "other"
+)
+
 // ErrGap is returned by Feed for a line beyond the next expected offset.
 var ErrGap = errors.New("ccnorm: offset beyond the next expected line")
 
@@ -48,8 +54,11 @@ type Normalizer struct {
 	turnAt map[string]int     // turn id → index in turns
 	itemAt map[string]itemLoc // item id → where it lives
 
-	pend    []Change // changes of the current feed, in order
-	touched int      // turn index the current row belonged to, -1 for none
+	pend    []Change               // changes of the current feed, in order
+	pendSet map[[2]string]struct{} // (turn id, item id) of pend, for O(1) dedupe
+	touched int                    // turn index the current row belonged to, -1 for none
+
+	dynKeys map[string]struct{} // the dynamic Skipped reasons kept so far
 
 	// Facts carried across rows.
 	customTitle, aiTitle string
@@ -68,6 +77,8 @@ func New(o Options) *Normalizer {
 		stats:   Stats{Skipped: map[string]int{}},
 		turnAt:  map[string]int{},
 		itemAt:  map[string]itemLoc{},
+		pendSet: map[[2]string]struct{}{},
+		dynKeys: map[string]struct{}{},
 		touched: -1,
 	}
 }
@@ -124,6 +135,21 @@ func (n *Normalizer) Position(turnID, itemID string) (Position, bool) {
 
 func (n *Normalizer) skip(reason string) { n.stats.Skipped[reason]++ }
 
+// skipDyn counts a reason built from a transcript value (an unknown type,
+// subtype, block type, origin kind, …). At most maxSkipKeys distinct such
+// reasons are kept; later new ones are counted under "other", so the map
+// stays small however varied the input is.
+func (n *Normalizer) skipDyn(reason string) {
+	if _, known := n.dynKeys[reason]; !known {
+		if len(n.dynKeys) >= maxSkipKeys {
+			reason = "other"
+		} else {
+			n.dynKeys[reason] = struct{}{}
+		}
+	}
+	n.stats.Skipped[reason]++
+}
+
 // row applies one decoded line.
 func (n *Normalizer) row(off int64, line []byte) {
 	l, ok := decodeLine(line)
@@ -155,7 +181,7 @@ func (n *Normalizer) row(off int64, line []byte) {
 			return
 		}
 	default:
-		n.skip("type:" + l.typ)
+		n.skipDyn("type:" + l.typ)
 		return
 	}
 	n.entryBefore = n.entry
@@ -179,11 +205,11 @@ func (n *Normalizer) row(off int64, line []byte) {
 
 // add records a change, once per (turn, item) within a feed.
 func (n *Normalizer) add(c Change) {
-	for _, p := range n.pend {
-		if p.TurnID == c.TurnID && p.ItemID == c.ItemID {
-			return
-		}
+	k := [2]string{c.TurnID, c.ItemID}
+	if _, dup := n.pendSet[k]; dup {
+		return
 	}
+	n.pendSet[k] = struct{}{}
 	n.pend = append(n.pend, c)
 }
 
@@ -191,6 +217,7 @@ func (n *Normalizer) add(c Change) {
 func (n *Normalizer) flush() []Change {
 	out := n.pend
 	n.pend = nil
+	clear(n.pendSet)
 	return out
 }
 

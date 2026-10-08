@@ -43,6 +43,10 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 		}
 		return fmt.Sprintf("%s#%d", l.uuid, len(items))
 	}
+	if len(blocks) > maxBlocksPerRow {
+		n.stats.Skipped["row:too_many_blocks"] += len(blocks) - maxBlocksPerRow
+		blocks = blocks[:maxBlocksPerRow]
+	}
 	for _, b := range blocks {
 		switch b.typ {
 		case "text":
@@ -65,7 +69,7 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 		case "tool_use":
 			n.skip("step:deferred") // steps arrive in U1-4c
 		default:
-			n.skip("block:" + b.typ)
+			n.skipDyn("block:" + b.typ)
 		}
 	}
 	// Turn bookkeeping belongs to the row, not to the items it produced: a
