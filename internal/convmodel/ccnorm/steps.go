@@ -41,6 +41,12 @@ func (n *Normalizer) newStep(b block, taken []convmodel.Item, at int64) (convmod
 		Summary: summaryOf(tool, in), StartedAt: at,
 		Input: input, InputTruncated: cut,
 	}
+	switch s.Kind {
+	case convmodel.StepEdit:
+		s.Diff = inputDiff(tool, in) // replaced by the exact patch when the result brings one
+	case convmodel.StepExecute:
+		s.Command = commandOf(in)
+	}
 	return convmodel.Item{Type: convmodel.ItemStep, Step: s}, true
 }
 
@@ -145,6 +151,23 @@ func (n *Normalizer) applyResult(id string, r result, off int64) {
 	s := *tr.t.Items[loc.item].Step
 	s.Status, s.Denial = resultStatus(r)
 	s.Output = n.outputOf(r.blocks, s.Kind)
+	tur, _ := parseObject(r.tur) // a string or absent toolUseResult is no object
+	switch s.Kind {
+	case convmodel.StepEdit:
+		path := ""
+		if s.Diff != nil {
+			path = s.Diff.Path
+		}
+		if d := patchDiff(path, tur); d != nil {
+			s.Diff = d
+		}
+	case convmodel.StepExecute:
+		if s.Command != nil {
+			s.Command = commandWithResult(s.Command, r.text, tur)
+		}
+	case convmodel.StepTask:
+		s.Subagent = n.subagentOf(&s, tur)
+	}
 	if r.at > 0 && s.StartedAt > 0 {
 		d := max(r.at-s.StartedAt, 0)
 		s.DurationMS = &d
