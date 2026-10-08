@@ -23,8 +23,12 @@ describe('tabAgentPanes', () => {
   })
   it('keeps the execution id of a worker pane and skips an ended tmux pane', () => {
     const ended: PaneLayout = { type: 'leaf', pane: { id: 'p9', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'dead', mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'session-closed' } } }
-    const got = tabAgentPanes(split([ended, exec('p1', 'e1')]))
+    const got = tabAgentPanes(split([exec('p1', 'e1'), ended]))
     expect(got).toEqual([{ key: 'h1:exec-e1', hostId: 'h1', executionId: 'e1' }])
+  })
+  it('an ended PRIMARY tmux pane keeps showing its code\'s light (as before U1-3c)', () => {
+    const ended: PaneLayout = { type: 'leaf', pane: { id: 'p9', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'dead', mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'session-closed' } } }
+    expect(tabAgentPanes(ended).map((p) => p.key)).toEqual(['h1:dead'])
   })
 })
 

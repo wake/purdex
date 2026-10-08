@@ -27,8 +27,13 @@ export interface TabAgentPane {
 export function tabAgentPanes(layout: PaneLayout): TabAgentPane[] {
   const out: TabAgentPane[] = []
   const seen = new Set<string>()
-  for (const pane of [getPrimaryPane(layout), ...collectLeaves(layout)]) {
-    const a = paneAgentKey(pane.content)
+  const primary = getPrimaryPane(layout)
+  for (const pane of [primary, ...collectLeaves(layout)]) {
+    // The primary pane keeps showing its code's light even when its session ended (the tab's own identity, as before
+    // U1-3c); a secondary pane that ended shows nothing (paneAgentKey: a restarted tmux server reuses codes, #1840).
+    const a = pane === primary && pane.content.kind === 'tmux-session'
+      ? { hostId: pane.content.hostId, sessionCode: pane.content.sessionCode }
+      : paneAgentKey(pane.content)
     if (!a) continue
     const key = compositeKey(a.hostId, a.sessionCode)
     if (seen.has(key)) continue
