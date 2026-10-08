@@ -22,3 +22,25 @@ type Capabilities struct {
 
 	Reasons map[string]string `json:"reasons,omitempty"`
 }
+
+// TranscriptCapabilities is the part of the table a transcript alone can
+// declare: the data comes from the transcript, text arrives per message,
+// thinking carries a duration, and subagents are partly visible. Every other
+// capability is omitted (undeclared = unsupported) and named in Reasons as
+// not_wired, so the result is fail-closed until later phases fill it in.
+func TranscriptCapabilities() Capabilities {
+	reasons := map[string]string{}
+	for _, name := range []string{
+		"answer_question", "answer_permission", "answer_plan", "usage", "todo",
+		"background_tasks", "peer_inbound", "send", "interrupt", "steer",
+	} {
+		reasons[name] = "not_wired"
+	}
+	return Capabilities{
+		Source:        "transcript",
+		TextStreaming: "message",
+		Thinking:      "duration",
+		Subagent:      "partial",
+		Reasons:       reasons,
+	}
+}
