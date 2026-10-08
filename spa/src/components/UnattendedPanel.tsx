@@ -1,6 +1,8 @@
 // spa/src/components/UnattendedPanel.tsx — the "while you were away" list under the title bar's ▾ (unattended spec
 // D-U23-6; plan PU-2c): what each reachable shown host's daemon approved since its switch last turned on, read page by
-// page from its audit (`GET /api/team/unattended`), merged newest first: `<host>：<session> · <kind> · <HH:mm>`.
+// page from its audit (`GET /api/team/unattended`), merged newest first: `<host>：<session> · <kind> · <time>`
+// (`HH:mm`, with `M/D` when not today). Each host commits its own answer as it arrives and has 10 s to give it: one
+// silent daemon is named (`timeout`), it never holds the others' rows back.
 // 「顯示更多」 pages every host that still has more (`next_before`); a host that cannot be read is named, never skipped.
 // A shown host that cannot be reached (`unreachableIds`) is not asked but named above the list: its daemon may still be
 // approving. When no host can be reached there is no list to be empty, so only those lines show.
@@ -54,7 +56,8 @@ function readPage(hostId: string, before: number | undefined): Promise<Unattende
   return new Promise<UnattendedView>((resolve, reject) => {
     const timer = setTimeout(() => { ctl.abort(); reject(new ApprovalApiError(0, 'timeout')) }, HOST_READ_TIMEOUT_MS)
     getUnattended(hostId, before === undefined ? undefined : { before }, ctl.signal).then(
-      (v) => { clearTimeout(timer); resolve(v) },
+      // `list_failed` is the PUT's flag (the daemon's GET never sets it): if it ever comes, `approved` says nothing.
+      (v) => { clearTimeout(timer); if (v.list_failed === true) reject(new ApprovalApiError(200, 'list_failed')); else resolve(v) },
       (e: unknown) => { clearTimeout(timer); reject(e) },
     )
   })

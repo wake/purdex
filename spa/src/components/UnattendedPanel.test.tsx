@@ -103,6 +103,28 @@ describe('UnattendedPanel', () => {
     expect(screen.queryByTestId('unattended-empty')).toBeNull()
   })
 
+  it('a GET answer flagged list_failed is a failed read (not an empty page): named list_failed, the other host\'s rows still show', async () => {
+    mockedGet.mockImplementation(async (hostId) => hostId === B
+      ? page([], { list_failed: true })
+      : page([approved('a1', at(9, 0))]))
+    open([A, B])
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    expect(screen.getByTestId('unattended-host-failed')).toHaveTextContent('air26：無法讀取（list_failed）')
+  })
+
+  it('a next page flagged list_failed keeps the rows and the cursor, and names the host', async () => {
+    mockedGet.mockImplementation(async (_h, q) => q?.before === undefined
+      ? page([approved('a2', at(9, 0))], { truncated: true, next_before: 5 })
+      : page([], { list_failed: true }))
+    open([A])
+    fireEvent.click(await screen.findByTestId('unattended-more'))
+    await waitFor(() => expect(screen.getByTestId('unattended-host-failed')).toHaveTextContent('mlab：無法讀取（list_failed）'))
+    expect(rows()).toHaveLength(1)
+    expect(screen.getByTestId('unattended-more')).not.toBeDisabled()
+    fireEvent.click(screen.getByTestId('unattended-more'))
+    expect(mockedGet).toHaveBeenLastCalledWith(A, { before: 5 }, expect.any(AbortSignal)) // retried with the kept cursor
+  })
+
   it('a shown host that cannot be reached is named above the list and not asked; the reachable host\'s rows still show', async () => {
     mockedGet.mockResolvedValue(page([approved('a1', at(9, 0))]))
     open([A], vi.fn(), [B])
