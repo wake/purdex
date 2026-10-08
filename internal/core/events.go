@@ -38,13 +38,28 @@ type HostEvent struct {
 // keeps the best effort it always had.
 const FeatureNexV1 = "nex.v1"
 
+// FeatureAgentV2 is the opt-in to the agent snapshot (interface U1-2b-3, spec
+// 2026-10-08 §7): one agent.snapshot frame in place of the per-session hook
+// replay, after which the hook frames carry a contiguous (epoch, seq) the
+// client checks for gaps. A client asks for it with /ws/host-events?agent=v2,
+// alone or together with ?nex=v1; the two are parsed independently
+// (featuresOf).
+//
+// It is strict like FeatureNexV1, for the same reason: the client detects a
+// lost hook frame by a gap in seq, and a dropped LAST frame leaves no gap. A
+// frame that cannot be queued ends the connection and the reconnect brings a
+// fresh snapshot. A subscriber that did not opt in is sent no agent.snapshot,
+// keeps its per-session replay, and keeps its best effort.
+const FeatureAgentV2 = "agent.v2"
+
 const (
 	// defaultSendBuffer is a subscriber's send buffer, in frames.
 	defaultSendBuffer = 64
 
 	// optedInSendBuffer is the send buffer of a subscriber that opted into a
-	// feature. The only feature, nex.v1, makes the subscriber strict (see
-	// FeatureNexV1): any frame that does not fit closes the connection.
+	// feature. Every feature (nex.v1, agent.v2) makes the subscriber strict
+	// (see FeatureNexV1, FeatureAgentV2): any frame that does not fit closes
+	// the connection.
 	// The projector pushes one delta per changed execution, back to back,
 	// so every execution touched in one coalescing window arrives as one
 	// burst; with 64 slots, a burst of 65 would disconnect a client that
@@ -69,7 +84,7 @@ type EventSubscriber struct {
 	conn     *websocket.Conn
 	send     chan []byte
 	features map[string]struct{} // what it opted into when it connected; never changes
-	strict   bool                // opted into FeatureNexV1: a frame that does not fit ends it; never changes
+	strict   bool                // opted into any feature: a frame that does not fit ends it; never changes
 
 	mu     sync.Mutex // guards closed; held across a send so close never races it
 	closed bool
@@ -91,7 +106,7 @@ func newEventSubscriber(conn *websocket.Conn, features ...string) *EventSubscrib
 		}
 		sub.send = make(chan []byte, optedInSendBuffer)
 	}
-	sub.strict = sub.Wants(FeatureNexV1)
+	sub.strict = sub.Wants(FeatureNexV1) || sub.Wants(FeatureAgentV2)
 	return sub
 }
 
@@ -104,20 +119,21 @@ func (sub *EventSubscriber) Wants(feature string) bool {
 
 // Send pushes data to the subscriber's write pump. Non-blocking — if the
 // buffer is full the message is silently dropped, unless the subscriber
-// opted into nex.v1: then the subscriber is ended instead (its connection
-// closes, the client reconnects; see offer). After Remove it is a no-op.
+// opted into a feature (nex.v1, agent.v2): then the subscriber is ended
+// instead (its connection closes, the client reconnects; see offer). After
+// Remove it is a no-op.
 func (sub *EventSubscriber) Send(data []byte) {
 	sub.TrySend(data)
 }
 
 // TrySend is Send that reports whether data was actually queued: false when
 // the buffer is full (data dropped — and, for a subscriber that opted into
-// nex.v1, the subscriber ended) or the subscriber has been removed.
+// a feature, the subscriber ended) or the subscriber has been removed.
 // Non-blocking.
 func (sub *EventSubscriber) TrySend(data []byte) bool {
 	r := sub.offer(data)
 	if r == offerEnded {
-		log.Printf("events: a frame for a nex.v1 subscriber could not be queued (send buffer full); closing the connection so the client reconnects")
+		log.Printf("events: a frame for an opted-in subscriber could not be queued (send buffer full); closing the connection so the client reconnects")
 	}
 	return r == offerQueued
 }
@@ -136,7 +152,7 @@ const (
 // it: a broadcast, a strict send, or a direct Send from an OnSubscribe
 // snapshot callback. Non-blocking.
 //
-// A strict subscriber (opted into nex.v1) whose buffer is full is ended
+// A strict subscriber (opted into nex.v1 or agent.v2) whose buffer is full is ended
 // right here: marked closed, its send channel and Done closed, then its
 // connection closed. Ending takes only sub.mu, never the broadcaster's
 // lock, so it is safe from inside a broadcast's read-locked loop and from
@@ -224,7 +240,8 @@ func NewEventsBroadcaster() *EventsBroadcaster {
 
 // Add registers a WebSocket connection as subscriber and starts its write pump.
 // Returns the subscriber handle (needed for Remove). features are what the
-// connection opted into (FeatureNexV1); Add(conn) opts into nothing.
+// connection opted into (FeatureNexV1, FeatureAgentV2); Add(conn) opts into
+// nothing.
 func (eb *EventsBroadcaster) Add(conn *websocket.Conn, features ...string) *EventSubscriber {
 	sub := newEventSubscriber(conn, features...)
 	eb.mu.Lock()
@@ -280,7 +297,7 @@ func (eb *EventsBroadcaster) Remove(sub *EventSubscriber) {
 
 // Broadcast sends a JSON event to all subscribers, with BroadcastEvent's
 // rules: non-blocking; a subscriber with a full buffer loses the message,
-// or — if it opted into nex.v1 — its connection.
+// or — if it opted into a feature (nex.v1, agent.v2) — its connection.
 func (eb *EventsBroadcaster) Broadcast(session, eventType, value string) {
 	eb.BroadcastEvent(HostEvent{
 		Type:    eventType,
@@ -291,8 +308,8 @@ func (eb *EventsBroadcaster) Broadcast(session, eventType, value string) {
 
 // BroadcastEvent sends a fully-formed HostEvent (including optional version
 // fields) to all subscribers. Non-blocking. A subscriber whose buffer is
-// full loses this frame and keeps running — unless it opted into nex.v1,
-// which makes it strict for every frame (FeatureNexV1): then it is ended
+// full loses this frame and keeps running — unless it opted into a feature,
+// which makes it strict for every frame (FeatureNexV1, FeatureAgentV2): then it is ended
 // (offer) and Removed once the read lock is released, so its client
 // reconnects instead of running without the frame.
 func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
@@ -312,7 +329,7 @@ func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 	eb.mu.RUnlock()
 
 	for _, sub := range ended {
-		log.Printf("events: %s frame could not be queued for a nex.v1 subscriber (send buffer full); closing the connection so the client reconnects", ev.Type)
+		log.Printf("events: %s frame could not be queued for an opted-in subscriber (send buffer full); closing the connection so the client reconnects", ev.Type)
 		eb.Remove(sub)
 	}
 }
@@ -343,7 +360,7 @@ func (eb *EventsBroadcaster) BroadcastEvent(ev HostEvent) {
 // released: Remove takes the write lock, so calling it inside the loop
 // would deadlock against the read lock held right there.
 //
-// A subscriber that opted into nex.v1 is strict for every frame, Broadcast
+// A subscriber that opted into any feature is strict for every frame, Broadcast
 // and BroadcastEvent included (FeatureNexV1); for every other subscriber
 // those stay best-effort. Concurrent strict broadcasts are not ordered
 // against each other — a caller that needs order (the nex projector)
@@ -361,7 +378,7 @@ func (eb *EventsBroadcaster) BroadcastStrictTo(feature string, ev HostEvent) {
 		if !sub.Wants(feature) {
 			continue
 		}
-		// offerEnded: a nex.v1 subscriber ended itself. offerDropped: one
+		// offerEnded: an opted-in subscriber ended itself. offerDropped: one
 		// that opted into some other feature, which this send is strict for
 		// all the same. offerClosed: already gone, nothing to close.
 		if r := sub.offer(msg); r == offerEnded || r == offerDropped {
@@ -401,7 +418,7 @@ func (eb *EventsBroadcaster) BroadcastStrict(ev HostEvent) {
 	var failed []*EventSubscriber
 	eb.mu.RLock()
 	for sub := range eb.subscribers {
-		// offerEnded: a nex.v1 subscriber ended itself. offerDropped: any
+		// offerEnded: an opted-in subscriber ended itself. offerDropped: any
 		// other, which this send is strict for. offerClosed: already gone.
 		if r := sub.offer(msg); r == offerEnded || r == offerDropped {
 			failed = append(failed, sub)
@@ -442,7 +459,7 @@ func (eb *EventsBroadcaster) SendStrict(sub *EventSubscriber, ev HostEvent) bool
 	case offerClosed: // already removed: nothing to close
 		return false
 	}
-	// offerEnded (a nex.v1 subscriber ended itself and needs deregistering)
+	// offerEnded (an opted-in subscriber ended itself and needs deregistering)
 	// or offerDropped (any other subscriber, which this send is strict for).
 	log.Printf("events: %s frame could not be queued (send buffer full); closing the connection so the client reconnects", ev.Type)
 	eb.Remove(sub)
@@ -485,9 +502,10 @@ func (eb *EventsBroadcaster) HasSubscribers() bool {
 }
 
 // HasSubscribersWanting reports whether any registered subscriber opted
-// into feature. The nex projector's safety reconcile runs only while one
-// does (#1866 spec §3.7): only such a subscriber consumes the deltas it
-// would repair. A subscriber a strict send has just ended may still be
+// into feature (each feature is asked for on its own: a subscriber that
+// wants agent.v2 does not count for nex.v1). The nex projector's safety
+// reconcile runs only while one wants nex.v1 (#1866 spec §3.7): only such a
+// subscriber consumes the deltas it would repair. A subscriber a strict send has just ended may still be
 // counted until its removal lands, a moment later.
 func (eb *EventsBroadcaster) HasSubscribersWanting(feature string) bool {
 	eb.mu.RLock()
@@ -502,7 +520,7 @@ func (eb *EventsBroadcaster) HasSubscribersWanting(feature string) bool {
 
 // OnSubscribe registers a callback invoked when a new WS subscriber connects.
 // Callbacks receive the subscriber and can use sub.Send() to push snapshot data
-// (for a subscriber that opted into nex.v1, a snapshot frame that does not
+// (for a subscriber that opted into a feature, a snapshot frame that does not
 // fit ends it, as any frame would).
 func (eb *EventsBroadcaster) OnSubscribe(fn func(sub *EventSubscriber)) {
 	eb.mu.Lock()
@@ -510,18 +528,27 @@ func (eb *EventsBroadcaster) OnSubscribe(fn func(sub *EventSubscriber)) {
 	eb.onSubscribe = append(eb.onSubscribe, fn)
 }
 
-// featuresOf reads what a /ws/host-events upgrade request opts into: a
-// query with exactly one nex value, and that value exactly "v1", is
-// FeatureNexV1. Anything else opts into nothing: no nex, any other value,
-// or more than one nex — even v1 twice. Query().Get would read only the
-// first value, so ?nex=v1&nex=v2 would opt in while ?nex=v2&nex=v1 would
-// not; an ambiguous request gets the conservative answer instead, since
-// opting in changes what the connection is sent and when it is closed.
+// featuresOf reads what a /ws/host-events upgrade request opts into. The
+// nex and agent query parameters are read independently and may both be
+// present (?nex=v1&agent=v2): a nex with exactly one value, exactly "v1", is
+// FeatureNexV1; an agent with exactly one value, exactly "v2", is
+// FeatureAgentV2. Anything else opts that feature out: the parameter missing,
+// any other value, or more than one value — even the right one twice.
+// Query().Get would read only the first value, so ?nex=v1&nex=v2 would opt in
+// while ?nex=v2&nex=v1 would not; an ambiguous request gets the conservative
+// answer instead, since opting in changes what the connection is sent and
+// when it is closed. A bad value for one feature leaves the other alone.
+// The result is in a fixed order: nex first, agent second.
 func featuresOf(r *http.Request) []string {
-	if nex := r.URL.Query()["nex"]; len(nex) == 1 && nex[0] == "v1" {
-		return []string{FeatureNexV1}
+	q := r.URL.Query()
+	var features []string
+	if nex := q["nex"]; len(nex) == 1 && nex[0] == "v1" {
+		features = append(features, FeatureNexV1)
 	}
-	return nil
+	if agent := q["agent"]; len(agent) == 1 && agent[0] == "v2" {
+		features = append(features, FeatureAgentV2)
+	}
+	return features
 }
 
 // HandleHostEvents handles /ws/host-events — SPA subscribes for
