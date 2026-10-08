@@ -127,3 +127,17 @@ type RecentView struct {
 	WaitedMS  int64     `json:"waited_ms"`
 	EndedAt   time.Time `json:"ended_at"`
 }
+
+// Error codes of the lease routes, in APIError.Error.
+const (
+	ErrBadRequest  = "bad_request"
+	ErrUnknownKind = "unknown_kind"
+	ErrNoLease     = "no_lease"
+	ErrNotReady    = "not_ready" // the daemon is stopping, or resources.db is not open
+)
+
+// APIError is the body of a refused lease request: {"error": code, "detail": text}.
+type APIError struct {
+	Error  string `json:"error"`
+	Detail string `json:"detail,omitempty"`
+}

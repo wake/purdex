@@ -104,6 +104,9 @@ type Module struct {
 	// baselineFailing: the "no baseline" problem has been logged (the unlocked part
 	// of the pass runs on the sampler and the sweeper goroutine).
 	baselineFailing atomic.Bool
+	// pollHook runs in a long poll after it read the row and released stateMu,
+	// before it waits: a seam for tests to land a transition in that window.
+	pollHook func()
 	// skipPass makes admissionPass a no-op (a test seam).
 	skipPass    bool
 	lastPrune   time.Time
@@ -235,6 +238,10 @@ func (m *Module) findSettings(c *core.Core) {
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/resources", m.handleGet)
+	mux.HandleFunc("POST /api/resources/leases", m.handleLeaseCreate)
+	mux.HandleFunc("DELETE /api/resources/leases", m.handleLeaseDeleteByClient)
+	mux.HandleFunc("GET /api/resources/leases/{id}", m.handleLeaseGet)
+	mux.HandleFunc("DELETE /api/resources/leases/{id}", m.handleLeaseDelete)
 }
 
 // Start runs the boot reconcile, then launches the sampler goroutine (one
