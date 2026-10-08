@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"encoding/json"
 	"net/http"
 	"reflect"
 	"slices"
@@ -353,7 +354,15 @@ func TestReports_PostRacesOwnerState(t *testing.T) {
 				w.m.afterTaskLookup = func() { w.m.afterTaskLookup = nil; race() }
 				code, raw := w.do(http.MethodPost, "/api/team/reports",
 					team.CreateReportRequest{OriginInbox: maInbox, ReportRequest: rreq(1, team.ReportDone, task)})
-				if code != wantCode || string(raw) != wantBody {
+				if byDefault && name == "the lead reassigns it to B" {
+					// With no task named, the member whose only task moved away
+					// simply has none in progress any more: a 400 that names no
+					// foreign task.
+					var e team.APIError
+					if code != 400 || json.Unmarshal(raw, &e) != nil || e.Error != team.ErrBadRequest || strings.Contains(e.Detail, "000000-") {
+						t.Fatalf("raced default report = %d %s, want a 400 bad_request naming no task", code, raw)
+					}
+				} else if code != wantCode || string(raw) != wantBody {
 					t.Fatalf("raced report = %d %s, want exactly %d %s", code, raw, wantCode, wantBody)
 				}
 				if n := reportCount(t, w, uid(1)); n != 0 {
@@ -407,4 +416,113 @@ func TestReports_ReplayByTheOldOwnerAfterReassignIsNotFound(t *testing.T) {
 	}
 	code, _, e := w.postReport(maInbox, req)
 	wantErr(t, "old owner's replay", code, e, 409, team.ErrTaskNotFound)
+}
+
+// With no task named, the default is the one in progress where the report is
+// WRITTEN, not where the handler looked: between the two the member finished
+// task 1 and started task 2, and the report belongs to task 2. Mutation gate:
+// pick the default before the store call (outside its transaction) → red.
+func TestReports_DefaultTaskFollowsTheMemberUntilTheWrite(t *testing.T) {
+	w := newTaskWorld(t)
+	t1 := w.mustTask(leadInbox, w.ma.Ref, "one", nil)
+	t2 := w.mustTask(leadInbox, w.ma.Ref, "two", nil)
+	if code, _, e := w.setStatus(maInbox, t1.ID, team.TaskInProgress); code != 200 {
+		t.Fatalf("start one: %d %+v", code, e)
+	}
+	w.m.afterTaskLookup = func() {
+		w.m.afterTaskLookup = nil
+		if code, _, e := w.setStatus(leadInbox, t1.ID, team.TaskCompleted); code != 200 {
+			t.Fatalf("finish one: %d %+v", code, e)
+		}
+		if code, _, e := w.setStatus(maInbox, t2.ID, team.TaskInProgress); code != 200 {
+			t.Fatalf("start two: %d %+v", code, e)
+		}
+	}
+	out := w.mustReport(maInbox, rreq(1, team.ReportReady, ""))
+	if out.Report.Task != t2.ID || out.Task.ID != t2.ID || !slices.Equal(out.Task.Metadata.PRs, []int{12}) {
+		t.Fatalf("the report landed on %s / %+v, want task %s", out.Report.Task, out.Task, t2.ID)
+	}
+	if got := mustGetTask(t, w.m.store, uid(1), 1); got.LastReportAt != 0 || len(got.Metadata.PRs) != 0 {
+		t.Fatalf("the finished task 1 was reported on: %+v", got)
+	}
+}
+
+// If two tasks are in progress at the write the report is refused, 400, naming
+// both, and nothing is written.
+func TestReports_DefaultTaskAmbiguousAtTheWriteWritesNothing(t *testing.T) {
+	w := newTaskWorld(t)
+	t1 := w.mustTask(leadInbox, w.ma.Ref, "one", nil)
+	t2 := w.mustTask(leadInbox, w.ma.Ref, "two", nil)
+	if code, _, e := w.setStatus(maInbox, t1.ID, team.TaskInProgress); code != 200 {
+		t.Fatalf("start one: %d %+v", code, e)
+	}
+	w.m.afterTaskLookup = func() {
+		w.m.afterTaskLookup = nil
+		if code, _, e := w.setStatus(maInbox, t2.ID, team.TaskInProgress); code != 200 {
+			t.Fatalf("start two: %d %+v", code, e)
+		}
+	}
+	code, _, e := w.postReport(maInbox, rreq(1, team.ReportProgress, ""))
+	wantErr(t, "two in progress at the write", code, e, 400, team.ErrBadRequest)
+	if want := "several tasks are in progress: " + t1.ID + ", " + t2.ID + "; pass task=<id>"; e.Detail != want {
+		t.Fatalf("detail = %q, want %q", e.Detail, want)
+	}
+	if n := reportCount(t, w, uid(1)); n != 0 {
+		t.Fatalf("%d reports stored", n)
+	}
+}
+
+// A report id belongs to the member that minted it: another member of the
+// team using the same id neither collides nor learns that it exists.
+// Mutation gate: leave member_key out of the replay lookup → red.
+func TestReports_SameIDFromAnotherMemberIsIndependent(t *testing.T) {
+	w := newTaskWorld(t)
+	ta := w.mustTask(leadInbox, w.ma.Ref, "a's", nil)
+	tb := w.mustTask(leadInbox, w.mb.Ref, "b's", nil)
+	a := w.mustReport(maInbox, rreq(1, team.ReportAck, ta.ID))
+	other := rreq(1, team.ReportDone, tb.ID) // the same id, other content, other member
+	other.Summary = "b's own words"
+	b := w.mustReport(mbInbox, other)
+	if a.Report.Member.Ref != w.ma.Ref || b.Report.Member.Ref != w.mb.Ref || b.Report.Summary != "b's own words" {
+		t.Fatalf("a = %+v\nb = %+v", a.Report, b.Report)
+	}
+	if n := reportCount(t, w, uid(1)); n != 2 {
+		t.Fatalf("%d rows, want one per member", n)
+	}
+	if got := mustGetTask(t, w.m.store, uid(1), 1); got.Status != team.TaskInProgress {
+		t.Fatalf("b's report moved a's task: %+v", got)
+	}
+	// Each member's retry is a replay; the same member with other content is a conflict.
+	if code, _, e := w.postReport(mbInbox, other); code != http.StatusOK {
+		t.Fatalf("b's retry = %d %+v", code, e)
+	}
+	changed := rreq(1, team.ReportAck, ta.ID)
+	changed.Summary = "changed"
+	code, _, e := w.postReport(maInbox, changed)
+	wantErr(t, "a reuses its own id", code, e, 409, team.ErrIDConflict)
+}
+
+// With the lead missing from the registry, its address is what its request
+// recorded while the ref is still the recorded one (the roster's rule), else
+// <alias>/<ref>.
+func TestReports_LeadNotInTheRegistryUsesTheRecordedAddress(t *testing.T) {
+	w := newTaskWorld(t)
+	tk := w.mustTask(leadInbox, w.ma.Ref, "work", nil)
+	alias, _ := w.m.selfHost()
+	origin, _ := json.Marshal(team.Origin{SessionID: "sid-1", Ref: "_abc123", Address: "recorded/boss", PID: 10, Cwd: "/w"})
+	if _, err := w.m.store.db.Exec(`UPDATE approval_requests SET origin_json = ? WHERE id = ?`, string(origin), uid(1)); err != nil {
+		t.Fatal(err)
+	}
+	w.origins.hide("sid-1")
+
+	if out := w.mustReport(maInbox, rreq(1, team.ReportAck, tk.ID)); out.Lead != (team.ReportLead{Ref: "_abc123", Address: "recorded/boss"}) {
+		t.Fatalf("ref unchanged: lead = %+v, want the recorded address", out.Lead)
+	}
+	// The lead relayed: its ref moved, the recorded address is stale.
+	if _, err := w.m.store.db.Exec(`UPDATE teams SET lead_ref = '_new999' WHERE id = ?`, uid(1)); err != nil {
+		t.Fatal(err)
+	}
+	if out := w.mustReport(maInbox, rreq(2, team.ReportProgress, tk.ID)); out.Lead != (team.ReportLead{Ref: "_new999", Address: alias + "/_new999"}) {
+		t.Fatalf("ref moved: lead = %+v, want %s/_new999", out.Lead, alias)
+	}
 }

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -50,7 +49,11 @@ func (m *Module) handleReportCreate(w http.ResponseWriter, r *http.Request) {
 	row, task, replay, err := m.store.InsertReportByOwner(ReportRow{TeamID: c.team.ID, TaskSeq: seq, ID: req.ID,
 		MemberKey: c.ownerKey(), Kind: req.Kind, Summary: req.Summary, Needs: req.Needs, PR: req.PR, Reviews: req.Reviews,
 		SHA: req.SHA, Body: req.Body, CreatedAt: m.now()})
+	var noDefault *DefaultTaskError
 	switch {
+	case errors.As(err, &noDefault):
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, defaultTaskDetail(c.team.ID, noDefault), nil)
+		return
 	case errors.Is(err, ErrReportIDReused):
 		m.writeErr(w, http.StatusConflict, team.ErrIDConflict, "report id is already used by a different report", nil)
 		return
@@ -72,65 +75,51 @@ func (m *Module) handleReportCreate(w http.ResponseWriter, r *http.Request) {
 	m.writeJSON(w, status, out)
 }
 
-// reportTask is the seq of the member's task a report is about: the one named,
-// else its only in_progress task. A task that is not the member's own is the
-// usual task_not_found; none or several in progress is a 400 that names the
-// choice, from the member's own open tasks only.
+// reportTask is the seq of the member's task a report names, looked up in its
+// scope (a task that is not its own is the usual task_not_found), or 0 when it
+// names none: the store then picks the member's only in_progress task inside
+// the transaction that writes the report, so the choice cannot go stale.
 func (m *Module) reportTask(w http.ResponseWriter, c taskCaller, id string) (int, bool) {
 	if id != "" {
 		row, ok := m.lookupTask(w, c, id)
 		return row.Seq, ok
 	}
-	open, live, err := m.store.ListTasksForOwner(c.team.ID, c.ownerKey(), false)
-	if err != nil {
-		return 0, m.taskStorageErr(w, "open tasks of "+c.ref(), err)
+	if m.afterTaskLookup != nil {
+		m.afterTaskLookup()
 	}
-	if !live { // it lost its right since taskCallerOf: no member any more
-		m.notMember(w)
-		return 0, false
-	}
-	slices.SortFunc(open, func(a, b TaskRow) int { return a.Seq - b.Seq })
-	var started, names []string
-	var startedSeq int
-	for _, t := range open {
-		names = append(names, team.TaskDisplayID(t.TeamID, t.Seq))
-		if t.Status == team.TaskInProgress {
-			started = append(started, names[len(names)-1])
-			startedSeq = t.Seq
-		}
-	}
-	switch {
-	case len(started) == 1:
-		if m.afterTaskLookup != nil {
-			m.afterTaskLookup()
-		}
-		return startedSeq, true
-	case len(started) > 1:
-		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest,
-			fmt.Sprintf("several tasks are in progress: %s; pass task=<id>", strings.Join(started, ", ")), nil)
-	case len(names) > 0:
-		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest,
-			fmt.Sprintf("no task is in progress; pass task=<id> (open: %s)", strings.Join(names, ", ")), nil)
-	default:
-		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "no task is in progress and none is open; pass task=<id>", nil)
-	}
-	return 0, false
+	return 0, true
 }
 
-// reportLead is the lead a report is addressed to: the live registry entry of
-// its session (its ref moves when the lead relays), else the ref recorded on
-// the team under this host's alias.
+// defaultTaskDetail is the 400 text for a report with no task named and no
+// single in_progress task: it names the member's own open tasks only.
+func defaultTaskDetail(teamID string, d *DefaultTaskError) string {
+	ids := func(seqs []int) string {
+		out := make([]string, 0, len(seqs))
+		for _, s := range seqs {
+			out = append(out, team.TaskDisplayID(teamID, s))
+		}
+		return strings.Join(out, ", ")
+	}
+	switch {
+	case errors.Is(d, ErrAmbiguousDefaultTask):
+		return fmt.Sprintf("several tasks are in progress: %s; pass task=<id>", ids(d.InProgress))
+	case len(d.Open) > 0:
+		return fmt.Sprintf("no task is in progress; pass task=<id> (open: %s)", ids(d.Open))
+	}
+	return "no task is in progress and none is open; pass task=<id>"
+}
+
+// reportLead is the lead a report is addressed to, by the roster's rule: the
+// live registry entry of its session (its ref moves when the lead relays),
+// else what team.db recorded (leadStoredSession).
 func (m *Module) reportLead(t team.Team) team.ReportLead {
 	alias, _ := m.selfHost()
-	lead := team.ReportLead{Ref: t.LeadRef, Address: alias + "/" + t.LeadRef}
-	if o, ok, err := m.origins.ResolveOriginBySession(t.LeadSessionID); err == nil && ok && o.Ref != "" {
-		lead.Ref = o.Ref
-		lead.Address = alias + "/" + o.Ref
-		if o.Address != "" {
-			lead.Address = o.Address
-		}
+	origins := map[string]team.Origin{}
+	if o, ok, err := m.origins.ResolveOriginBySession(t.LeadSessionID); err == nil && ok {
+		origins[t.LeadSessionID] = o
 	}
-	return lead
+	s := rosterSession(origins, t.LeadSessionID, func() team.RosterSession { return m.leadStoredSession(t, alias) }, t.LeadRef, alias)
+	return team.ReportLead{Ref: s.Ref, Address: s.Address}
 }
 
 // handleReportList is GET /api/team/reports?origin_inbox=&task=<id>&since=<ms>:

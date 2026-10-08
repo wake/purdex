@@ -16,10 +16,29 @@ import (
 // mistake, never a replay.
 var ErrReportIDReused = errors.New("report id is already used by a different report")
 
+// Default-task refusals of InsertReportByOwner with TaskSeq 0, carried by a
+// *DefaultTaskError.
+var (
+	ErrNoDefaultTask        = errors.New("no task is in progress")
+	ErrAmbiguousDefaultTask = errors.New("several tasks are in progress")
+)
+
+// DefaultTaskError says why a report with no task named has no default task,
+// and what the member has open at that moment (seqs, ascending), so the route
+// can name the choice. errors.Is matches ErrNoDefaultTask / ErrAmbiguousDefaultTask.
+type DefaultTaskError struct {
+	Err        error
+	Open       []int // pending and in_progress tasks of the member
+	InProgress []int // the in_progress ones
+}
+
+func (e *DefaultTaskError) Error() string { return e.Err.Error() }
+func (e *DefaultTaskError) Unwrap() error { return e.Err }
+
 // reportSchema is the T-1a2 reports table (plan "Tables"). Idempotent. A
-// report is always about a task; the id is the CLI's UUID, unique within its
-// team (an id is never looked up without the team id). Rows are never
-// updated or deleted.
+// report is always about a task; the id is the CLI's UUID, unique per
+// (team, member): a member's id space is its own, so one member can never
+// learn that another used an id. Rows are never updated or deleted.
 const reportSchema = `
 	CREATE TABLE IF NOT EXISTS reports (
 		id          TEXT    NOT NULL,
@@ -31,7 +50,7 @@ const reportSchema = `
 		fields_json TEXT    NOT NULL DEFAULT '{}',
 		body        TEXT    NOT NULL DEFAULT '',
 		created_at  INTEGER NOT NULL,
-		PRIMARY KEY (team_id, id)
+		PRIMARY KEY (team_id, member_key, id)
 	);
 	CREATE INDEX IF NOT EXISTS reports_task ON reports (team_id, task_seq, created_at);`
 
@@ -156,7 +175,9 @@ func (s *Store) InsertReportByOwner(r ReportRow) (ReportRow, TaskRow, bool, erro
 // condition of the same transaction.
 func (s *Store) insertReport(r ReportRow, byOwner bool) (ReportRow, TaskRow, bool, error) {
 	r = r.normalize()
-	if r.TeamID == "" || r.MemberKey == "" || r.TaskSeq <= 0 {
+	// TaskSeq 0 asks for the member's default task, which only the guarded
+	// insert can resolve (it knows the member is the caller).
+	if r.TeamID == "" || r.MemberKey == "" || r.TaskSeq < 0 || (r.TaskSeq == 0 && !byOwner) {
 		return ReportRow{}, TaskRow{}, false, errors.New("insert report: team, task and member must be set")
 	}
 	if err := team.ValidReportID(r.ID); err != nil {
@@ -170,6 +191,13 @@ func (s *Store) insertReport(r ReportRow, byOwner bool) (ReportRow, TaskRow, boo
 	var task TaskRow
 	var replay bool
 	err := s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		if r.TaskSeq == 0 {
+			seq, err := defaultTaskIn(ctx, conn, r)
+			if err != nil {
+				return err
+			}
+			r.TaskSeq = seq
+		}
 		cur, ok, err := getTaskIn(ctx, conn, r.TeamID, r.TaskSeq)
 		if err != nil {
 			return fmt.Errorf("read task %s/%d: %w", r.TeamID, r.TaskSeq, err)
@@ -189,7 +217,8 @@ func (s *Store) insertReport(r ReportRow, byOwner bool) (ReportRow, TaskRow, boo
 			}
 		}
 
-		prev, err := scanReport(conn.QueryRowContext(ctx, `SELECT `+reportCols+` FROM reports WHERE team_id = ? AND id = ?`, r.TeamID, r.ID))
+		prev, err := scanReport(conn.QueryRowContext(ctx, `SELECT `+reportCols+` FROM reports WHERE team_id = ? AND member_key = ? AND id = ?`,
+			r.TeamID, r.MemberKey, r.ID))
 		switch {
 		case err == nil:
 			if !sameReport(prev, r) {
@@ -225,6 +254,63 @@ func (s *Store) insertReport(r ReportRow, byOwner bool) (ReportRow, TaskRow, boo
 		return ReportRow{}, TaskRow{}, false, err
 	}
 	return stored, task, replay, nil
+}
+
+// defaultTaskIn is the task a guarded report with no task (r.TaskSeq 0) is
+// about, read in the transaction that stores it. The member must be an active
+// member of a live team (else ErrTaskNotFound, as for any task it cannot
+// report on). A retry finds the report it already stored under (team, member,
+// id) and answers that report's task, so it is a replay even when the member
+// has moved on to another task. Otherwise the member must have exactly one
+// in_progress task; none or several is a *DefaultTaskError that lists the
+// member's open tasks.
+func defaultTaskIn(ctx context.Context, conn *sql.Conn, r ReportRow) (int, error) {
+	live, err := liveMemberIn(ctx, conn, r.TeamID, r.MemberKey)
+	if err != nil {
+		return 0, fmt.Errorf("check owner: %w", err)
+	}
+	if !live {
+		return 0, ErrTaskNotFound
+	}
+	var seq int
+	err = conn.QueryRowContext(ctx, `SELECT task_seq FROM reports WHERE team_id = ? AND member_key = ? AND id = ?`,
+		r.TeamID, r.MemberKey, r.ID).Scan(&seq)
+	if err == nil {
+		return seq, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("read report %s: %w", r.ID, err)
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT seq, status FROM tasks WHERE team_id = ? AND owner_key = ?
+		AND status IN ('pending', 'in_progress') ORDER BY seq`, r.TeamID, r.MemberKey)
+	if err != nil {
+		return 0, fmt.Errorf("read open tasks of %s: %w", r.MemberKey, err)
+	}
+	defer rows.Close()
+	d := &DefaultTaskError{Open: []int{}, InProgress: []int{}}
+	for rows.Next() {
+		var n int
+		var status string
+		if err := rows.Scan(&n, &status); err != nil {
+			return 0, fmt.Errorf("read open tasks of %s: %w", r.MemberKey, err)
+		}
+		d.Open = append(d.Open, n)
+		if team.TaskStatus(status) == team.TaskInProgress {
+			d.InProgress = append(d.InProgress, n)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("read open tasks of %s: %w", r.MemberKey, err)
+	}
+	switch len(d.InProgress) {
+	case 1:
+		return d.InProgress[0], nil
+	case 0:
+		d.Err = ErrNoDefaultTask
+	default:
+		d.Err = ErrAmbiguousDefaultTask
+	}
+	return 0, d
 }
 
 // applyReport returns t with report r's effect applied (spec D-3). It is a
@@ -269,14 +355,25 @@ func appendMissing[T comparable](list []T, v T) []T {
 	return append(list, v)
 }
 
-// GetReport returns the report with the given id.
+// GetReport returns the first stored report of the team with the given id.
+// Ids are unique per member, so two members may hold the same one; a caller
+// that knows the member uses GetReportOf.
 func (s *Store) GetReport(teamID, id string) (ReportRow, bool, error) {
-	r, err := scanReport(s.db.QueryRow(`SELECT `+reportCols+` FROM reports WHERE team_id = ? AND id = ?`, teamID, id))
+	return s.getReport(`SELECT `+reportCols+` FROM reports WHERE team_id = ? AND id = ? ORDER BY rowid LIMIT 1`, teamID, id)
+}
+
+// GetReportOf returns the report with the given id that memberKey stored.
+func (s *Store) GetReportOf(teamID, memberKey, id string) (ReportRow, bool, error) {
+	return s.getReport(`SELECT `+reportCols+` FROM reports WHERE team_id = ? AND id = ? AND member_key = ?`, teamID, id, memberKey)
+}
+
+func (s *Store) getReport(query string, args ...any) (ReportRow, bool, error) {
+	r, err := scanReport(s.db.QueryRow(query, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ReportRow{}, false, nil
 	}
 	if err != nil {
-		return ReportRow{}, false, fmt.Errorf("get report %s/%s: %w", teamID, id, err)
+		return ReportRow{}, false, fmt.Errorf("get report %v: %w", args, err)
 	}
 	return r, true, nil
 }
