@@ -110,7 +110,7 @@ export function UnattendedButton() {
       >
         <CaretDown size={12} />
       </button>
-      {listOpen && <UnattendedPanel hostIds={agg.reachable} anchorRef={pairRef} onClose={closeList} />}
+      {listOpen && <UnattendedPanel hostIds={agg.reachable} unreachableIds={agg.unreachable} anchorRef={pairRef} onClose={closeList} />}
     </div>
   )
 }

@@ -2,6 +2,8 @@
 // D-U23-6; plan PU-2c): what each reachable shown host's daemon approved since its switch last turned on, read page by
 // page from its audit (`GET /api/team/unattended`), merged newest first: `<host>：<session> · <kind> · <HH:mm>`.
 // 「顯示更多」 pages every host that still has more (`next_before`); a host that cannot be read is named, never skipped.
+// A shown host that cannot be reached (`unreachableIds`) is not asked but named above the list: its daemon may still be
+// approving. When no host can be reached there is no list to be empty, so only those lines show.
 //
 // Not tab-hosted: opened by a click of UnattendedButton's ▾ and gone when closed. The loaded pages are this
 // component's own state — closing drops them and every open fetches afresh (a stale list would hide what the daemon
@@ -47,14 +49,17 @@ function firstPage(v: UnattendedView): HostPages {
 export interface UnattendedPanelProps {
   /** The hosts to read, fixed at open. */
   hostIds: readonly string[]
+  /** Shown hosts that cannot be reached (disconnected, support or state unknown): named, not asked. Fixed at open. */
+  unreachableIds?: readonly string[]
   anchorRef: RefObject<HTMLElement | null>
   onClose: () => void
 }
 
-export function UnattendedPanel({ hostIds, anchorRef, onClose }: UnattendedPanelProps) {
+export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClose }: UnattendedPanelProps) {
   const t = useI18nStore((s) => s.t)
   // Set once per mount: a re-render with another reachable set must not refetch or drop what is shown.
   const [hosts] = useState(hostIds)
+  const [unreachable] = useState(unreachableIds)
   const [pages, setPages] = useState<Record<string, HostPages> | null>(null)
   const [paging, setPaging] = useState(false)
   const alive = useRef(true)
@@ -106,9 +111,14 @@ export function UnattendedPanel({ hostIds, anchorRef, onClose }: UnattendedPanel
         {loaded && Number.isFinite(since) && (
           <div data-testid="unattended-since" className="text-text-muted">{t('unattended.panel.since', { time: sinceText(since) })}</div>
         )}
-        {loaded && merged.length === 0 && failed.length === 0 && (
+        {loaded && merged.length === 0 && failed.length === 0 && unreachable.length === 0 && (
           <div data-testid="unattended-empty" className="text-text-muted">{t('unattended.panel.empty')}</div>
         )}
+        {unreachable.map((hostId) => (
+          <div key={hostId} data-testid="unattended-host-unreachable" className="text-status-warning">
+            {t('unattended.panel.host_unreachable', { host: label(hostId) })}
+          </div>
+        ))}
         {merged.length > 0 && (
           <ul className="flex flex-col gap-1">
             {merged.map(({ hostId, a }) => (

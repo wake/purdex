@@ -2071,5 +2071,6 @@
   "unattended.panel.since": "自 {{time}} 起",
   "unattended.panel.row": "{{host}}：{{session}} · {{kind}} · {{time}}",
   "unattended.panel.more": "顯示更多",
-  "unattended.panel.host_failed": "{{host}}：無法讀取（{{code}}）"
+  "unattended.panel.host_failed": "{{host}}：無法讀取（{{code}}）",
+  "unattended.panel.host_unreachable": "{{host}}：無法連線，可能仍在自動通過"
 }

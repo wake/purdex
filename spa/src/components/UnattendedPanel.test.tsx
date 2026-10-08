@@ -32,9 +32,9 @@ const page = (rows: Approval[], over: Partial<UnattendedView> = {}): UnattendedV
 const rows = () => screen.getAllByTestId('unattended-row').map((r) => r.textContent)
 const flush = () => act(async () => { await new Promise<void>((r) => setTimeout(r, 0)) })
 
-function open(hostIds: string[], onClose = vi.fn()) {
+function open(hostIds: string[], onClose = vi.fn(), unreachableIds: string[] = []) {
   const anchorRef = createRef<HTMLDivElement>()
-  const utils = render(<><div ref={anchorRef} /><UnattendedPanel hostIds={hostIds} anchorRef={anchorRef} onClose={onClose} /></>)
+  const utils = render(<><div ref={anchorRef} /><UnattendedPanel hostIds={hostIds} unreachableIds={unreachableIds} anchorRef={anchorRef} onClose={onClose} /></>)
   return { ...utils, onClose }
 }
 
@@ -97,6 +97,35 @@ describe('UnattendedPanel', () => {
     expect(failed).toHaveLength(1)
     expect(failed[0]).toHaveTextContent('air26：無法讀取（not_ready）')
     expect(screen.queryByTestId('unattended-empty')).toBeNull()
+  })
+
+  it('a shown host that cannot be reached is named above the list and not asked; the reachable host\'s rows still show', async () => {
+    mockedGet.mockResolvedValue(page([approved('a1', at(9, 0))]))
+    open([A], vi.fn(), [B])
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    const lines = screen.getAllByTestId('unattended-host-unreachable')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toHaveTextContent('air26：無法連線，可能仍在自動通過')
+    expect(lines[0].compareDocumentPosition(screen.getByTestId('unattended-row')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(mockedGet.mock.calls).toEqual([[A]])
+    expect(screen.queryByTestId('unattended-empty')).toBeNull()
+  })
+
+  it('every shown host unreachable: only the unreachable lines, no empty state, nothing asked', async () => {
+    open([], vi.fn(), [A, B])
+    await flush()
+    const lines = screen.getAllByTestId('unattended-host-unreachable')
+    expect(lines.map((l) => l.textContent)).toEqual(['mlab：無法連線，可能仍在自動通過', 'air26：無法連線，可能仍在自動通過'])
+    expect(screen.queryByTestId('unattended-empty')).toBeNull()
+    expect(screen.queryByTestId('unattended-row')).toBeNull()
+    expect(mockedGet).not.toHaveBeenCalled()
+  })
+
+  it('no unreachable host: no unreachable line', async () => {
+    mockedGet.mockResolvedValue(page([]))
+    open([A])
+    await screen.findByTestId('unattended-empty')
+    expect(screen.queryByTestId('unattended-host-unreachable')).toBeNull()
   })
 
   it('kind labels for lead and self_relay', async () => {

@@ -212,6 +212,26 @@ describe('UnattendedButton', () => {
       expect(mockedPut).not.toHaveBeenCalled()
     })
 
+    it('a shown host that is unreachable is named in the panel; one whose daemon is too old is not', async () => {
+      setup([A, C, D], { [A]: up, [C]: { status: 'reconnecting' }, [D]: up }, { [A]: yes(ON), [C]: yes(ON), [D]: { support: 'no' } })
+      render(<UnattendedButton />)
+      fireEvent.click(list())
+      const lines = await screen.findAllByTestId('unattended-host-unreachable')
+      expect(lines.map((l) => l.textContent)).toEqual(['air19：無法連線，可能仍在自動通過'])
+      expect(mockedGet.mock.calls).toEqual([[A]])
+    })
+
+    it('no host reachable: the panel lists the unreachable and shows no empty state', async () => {
+      setup([A, B], { [A]: { status: 'reconnecting' }, [B]: { status: 'reconnecting' } }, { [A]: yes(ON), [B]: yes(ON) })
+      render(<UnattendedButton />)
+      fireEvent.click(list())
+      await screen.findAllByTestId('unattended-host-unreachable')
+      await flush()
+      expect(screen.getAllByTestId('unattended-host-unreachable')).toHaveLength(2)
+      expect(screen.queryByTestId('unattended-empty')).toBeNull()
+      expect(mockedGet).not.toHaveBeenCalled()
+    })
+
     it('the ▾ sits in the same no-drag wrapper as the toggle, with the accessible name and aria-expanded', async () => {
       setup([A], { [A]: up }, { [A]: yes(OFF) })
       render(<UnattendedButton />)

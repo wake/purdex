@@ -2071,5 +2071,6 @@
   "unattended.panel.since": "Since {{time}}",
   "unattended.panel.row": "{{host}}: {{session}} · {{kind}} · {{time}}",
   "unattended.panel.more": "Show more",
-  "unattended.panel.host_failed": "{{host}}: could not be read ({{code}})"
+  "unattended.panel.host_failed": "{{host}}: could not be read ({{code}})",
+  "unattended.panel.host_unreachable": "{{host}}: unreachable, may still be approving"
 }
