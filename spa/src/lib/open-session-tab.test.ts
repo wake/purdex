@@ -2,7 +2,7 @@
 // switch (U22, lead-team plan v3 P9b-1) share: open a tab on a tmux session the way Hosts › Sessions does, and activate
 // a pane that already shows it the way the notification click does. Real stores throughout.
 import { describe, it, expect, beforeEach } from 'vitest'
-import { activateTabPane, openSessionTab } from './open-session-tab'
+import { activateTab, activateTabPane, openSessionTab } from './open-session-tab'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
@@ -110,5 +110,27 @@ describe('activateTabPane (the notification click\'s existing-tab block, moved)'
     expect(useTabStore.getState().activeTabId).toBe('tS')
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe(wsO.id)
     expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === wsO.id)?.activeTabId).not.toBe('tS')
+  })
+})
+
+describe('activateTab (the shortcuts\' tab switch, moved from useShortcuts #1042)', () => {
+  it('activates the tab and records it as its workspace\'s active tab, leaving the workspace on screen', () => {
+    openTabs([blankTab('t1'), blankTab('t2')], 't1')
+    const ws = useWorkspaceStore.getState().addWorkspace('W')
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, 't1')
+    useWorkspaceStore.getState().addTabToWorkspace(ws.id, 't2')
+    useWorkspaceStore.getState().setActiveWorkspace(ws.id)
+
+    activateTab('t2')
+
+    expect(useTabStore.getState().activeTabId).toBe('t2')
+    expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === ws.id)?.activeTabId).toBe('t2')
+    expect(usePaneFocusStore.getState().focusRequest).toBeNull()
+  })
+
+  it('a tab no workspace holds: only the tab is activated', () => {
+    openTabs([blankTab('t1')], null)
+    activateTab('t1')
+    expect(useTabStore.getState().activeTabId).toBe('t1')
   })
 })
