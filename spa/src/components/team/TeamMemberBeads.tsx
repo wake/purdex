@@ -6,9 +6,9 @@
 // the bead (TeamOpenMark), or nothing. Click opens or switches; drag reorders within the team.
 // The hook beside the beads runs down to the last wrapped row; clicking the hook or the blank area around the
 // beads calls onBlankClick (the new fold style folds the team with it).
-import { useCallback } from 'react'
-import type { TeamHookStyle, TeamOpenMark, TeamSeatView } from './team-display'
-import { TeamHook } from './TeamHook'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import type { TeamHookStyle, TeamHookTop, TeamOpenMark, TeamSeatView } from './team-display'
+import { HOOK_PAD, TeamHook } from './TeamHook'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { useMemberDrag } from './useMemberDrag'
 
@@ -20,24 +20,44 @@ interface Props {
   withHost: boolean
   hookStyle: TeamHookStyle | null
   openMark: TeamOpenMark
+  hookTop: TeamHookTop
+  leadActive: boolean
   onOpen: (sessionId: string) => void
   onReorder: (sessionIds: string[]) => void
   onBlankClick?: () => void
 }
 
-export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost, hookStyle, openMark, onOpen, onReorder, onBlankClick }: Props) {
+export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost, hookStyle, openMark, hookTop, leadActive, onOpen, onReorder, onBlankClick }: Props) {
+  const box = useRef<HTMLDivElement>(null)
+  const [rows, setRows] = useState(1)
+  // Count the wrapped bead rows (distinct offsetTop) so the hook can draw one mark per row.
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    const count = () => {
+      const tops = new Set<number>()
+      el.querySelectorAll<HTMLElement>('[data-testid="team-bead"]').forEach((b) => tops.add(b.offsetTop))
+      setRows(Math.max(1, tops.size))
+    }
+    count()
+    const ro = new ResizeObserver(count)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [members.length, withHost])
   const order = members.map((m) => m.sessionId)
   const reorder = useCallback((ids: string[]) => onReorder(ids), [onReorder])
   const { propsFor, over, draggingId } = useMemberDrag(teamKey, order, reorder, 'x')
   if (members.length === 0) return null
   return (
     <div
+      ref={box}
       data-testid="team-beads"
       title={onBlankClick ? '點空白處收起' : undefined}
       onClick={(e) => { if (onBlankClick && !(e.target as HTMLElement).closest('[data-testid="team-bead"]')) onBlankClick() }}
-      className={`relative flex flex-wrap items-center content-start gap-0.5 ml-[18px] mr-2 mb-0.5 pl-[18px] ${onBlankClick ? 'cursor-pointer' : ''}`}
+      className={`relative flex flex-wrap items-center content-start gap-0.5 ml-[18px] mr-2 mb-0.5 ${onBlankClick ? 'cursor-pointer' : ''}`}
+      style={{ paddingLeft: HOOK_PAD }}
     >
-      {hookStyle && <TeamHook hookStyle={hookStyle} />}
+      {hookStyle && <TeamHook hookStyle={hookStyle} rows={rows} hookTop={hookTop} leadActive={leadActive} />}
       {members.map((m) => {
         const isActive = m.tabId !== null && m.tabId === activeTabId
         const ins = over?.id === m.sessionId ? (over.after ? 'after' : 'before') : null

@@ -11,6 +11,7 @@ import { HostBadge } from './HostBadge'
 import { useTabHostBadge } from '../hooks/useTabHostBadge'
 import { hasHostBadge } from '../lib/host-color'
 import { groupHasCue, type TeamTabMark } from './team/team-display'
+import { TeamTabCorner } from './team/TeamTabGroup'
 
 interface Props {
   tab: Tab
@@ -154,6 +155,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       {group && groupHasCue(group.style, 'dot') && (
         <span data-testid="team-tab-dot" className="absolute left-[21px] bottom-[3px] w-[5px] h-[5px] rounded-full pointer-events-none z-10" style={{ background: group.color }} />
       )}
+      {group && <TeamTabCorner mark={group} />}
       {group?.style === 'topbar' && (
         <span data-testid="team-group-topbar" className="absolute left-1 right-1 top-0 h-[2px] rounded-b pointer-events-none" style={{ background: group.color }} />
       )}

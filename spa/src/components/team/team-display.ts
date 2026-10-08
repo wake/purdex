@@ -29,6 +29,7 @@ export interface TeamSeatView {
  * team-name label; they differ in how the group's tabs are tied to it.
  */
 export type TeamGroupStyle = 'label' | 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule' | 'combo' | 'tint' | 'frame' | 'topbar' | 'plate'
+  | 'corner-tr' | 'corner-br' | 'corner-tr-icon' | 'corner-br-icon'
 
 /** The low-key cues a group style turns on (the older four styles use none of them). */
 export type TeamGroupCue = 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule'
@@ -36,6 +37,23 @@ export type TeamGroupCue = 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule'
 const GROUP_CUES: Partial<Record<TeamGroupStyle, TeamGroupCue[]>> = {
   dot: ['dot'], endcap: ['endcap'], gap: ['gap'], sepcolor: ['sepcolor'], rule: ['rule'], combo: ['dot', 'gap', 'endcap'],
 }
+
+/** The folded-corner styles: a team-colored diagonal corner on each tab (optionally with an inverted member icon). */
+export function groupCorner(style: TeamGroupStyle): { pos: 'tr' | 'br'; icon: boolean } | null {
+  switch (style) {
+    case 'corner-tr': return { pos: 'tr', icon: false }
+    case 'corner-br': return { pos: 'br', icon: false }
+    case 'corner-tr-icon': return { pos: 'tr', icon: true }
+    case 'corner-br-icon': return { pos: 'br', icon: true }
+    default: return null
+  }
+}
+
+/** Corner size (small / default / large); the icon variants are drawn bigger to hold the icon. */
+export type TeamCornerSize = 'sm' | 'md' | 'lg'
+
+/** Where the hook's top starts: exactly at the lead highlight's lower edge, or fused into the highlight. */
+export type TeamHookTop = 'below' | 'blend'
 
 export function groupHasCue(style: TeamGroupStyle, cue: TeamGroupCue): boolean {
   return GROUP_CUES[style]?.includes(cue) ?? false
@@ -89,6 +107,8 @@ export interface TeamDisplay {
   sidebarStyle: TeamSidebarStyle
   collapseStyle: TeamCollapseStyle
   hookStyle: TeamHookStyle
+  hookTop: TeamHookTop
+  cornerSize: TeamCornerSize
   openMark: TeamOpenMark
   tabMark: (tabId: string) => TeamTabMark | null
   /** Member tabs folded into the bead row (their lead row is in the same list). */

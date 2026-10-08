@@ -44,9 +44,11 @@ interface Props {
   /** The lead row itself. */
   children: ReactNode
   ghost?: boolean
+  /** The lead row is the highlighted (active) one. */
+  leadActive?: boolean
 }
 
-export function TeamSidebarBlock({ team, teamKey, color, label, unnamed, collapsed, members, children, ghost = false }: Props) {
+export function TeamSidebarBlock({ team, teamKey, color, label, unnamed, collapsed, members, children, ghost = false, leadActive = false }: Props) {
   const style = team.sidebarStyle
   const users = team.collapseStyle === 'users'
   const hasToggle = !users && style !== 'hook' && members.length > 0
@@ -88,6 +90,8 @@ export function TeamSidebarBlock({ team, teamKey, color, label, unnamed, collaps
           withHost={team.beadHost}
           hookStyle={hook ? team.hookStyle : null}
           openMark={team.openMark}
+          hookTop={team.hookTop}
+          leadActive={leadActive}
           onOpen={(sid) => team.onOpenSeat(teamKey, sid)}
           onReorder={(ids) => team.onReorderMembers(teamKey, ids)}
           onBlankClick={users && members.length > 0 ? () => team.onToggleCollapse(teamKey) : undefined}

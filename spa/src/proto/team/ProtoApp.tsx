@@ -93,6 +93,8 @@ export function ProtoApp() {
       sidebarStyle: proto.sidebarStyle,
       collapseStyle: proto.collapseStyle,
       hookStyle: proto.hookStyle,
+      hookTop: proto.hookTop,
+      cornerSize: proto.cornerSize,
       openMark: proto.openMark,
       tabMark: (id) => marks.get(id) ?? null,
       sidebarHidden: (id) => hidden.has(id),

@@ -7,7 +7,8 @@
 // inside, team-colored separators inside the group (TabBar), one faint rule under the whole group.
 // The older styles: an outline ("frame"), one shared tinted plate ("plate"); "tint" / "topbar" decorate the tabs.
 import type { CSSProperties, ReactNode } from 'react'
-import { groupHasCue, type TeamTabMark } from './team-display'
+import { User } from '@phosphor-icons/react'
+import { groupCorner, groupHasCue, useTeamDisplay, type TeamCornerSize, type TeamTabMark } from './team-display'
 
 /** Dark text on the pastel team colors, in both themes. */
 const LABEL_FG = '#14141f'
@@ -49,5 +50,48 @@ export function TeamTabGroupFrame({ mark, children }: { mark: TeamTabMark; child
         <span data-testid="team-group-rule" className="absolute left-1 right-1 bottom-[1px] h-[2px] rounded-full pointer-events-none" style={{ background: `color-mix(in srgb, ${mark.color} 70%, transparent)` }} />
       )}
     </div>
+  )
+}
+
+/** Triangle leg length per size; the icon variants are bigger so the inverted member icon fits inside. */
+const CORNER_PX: Record<'plain' | 'icon', Record<TeamCornerSize, number>> = {
+  plain: { sm: 6, md: 9, lg: 13 },
+  icon: { sm: 14, md: 18, lg: 22 },
+}
+
+/** A folded-corner mark on a tab (the "corner-*" group styles): a team-colored right triangle, optionally holding a member icon. */
+export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
+  const corner = groupCorner(mark.style)
+  const size = useTeamDisplay()?.cornerSize ?? 'md'
+  if (!corner) return null
+  const px = CORNER_PX[corner.icon ? 'icon' : 'plain'][size]
+  const top = corner.pos === 'tr'
+  return (
+    <span
+      data-testid="team-tab-corner"
+      data-corner={corner.pos}
+      data-corner-icon={String(corner.icon)}
+      aria-hidden="true"
+      className="absolute right-0 pointer-events-none z-10"
+      style={{
+        [top ? 'top' : 'bottom']: 0,
+        width: px,
+        height: px,
+        background: mark.color,
+        opacity: corner.icon ? 0.95 : 0.85,
+        clipPath: top ? 'polygon(0 0, 100% 0, 100% 100%)' : 'polygon(100% 0, 100% 100%, 0 100%)',
+        [top ? 'borderTopRightRadius' : 'borderBottomRightRadius']: 6,
+      }}
+    >
+      {corner.icon && (
+        <User
+          weight="fill"
+          size={Math.round(px * 0.42)}
+          color={LABEL_FG}
+          className="absolute"
+          style={{ right: 1, [top ? 'top' : 'bottom']: 1 }}
+        />
+      )}
+    </span>
   )
 }

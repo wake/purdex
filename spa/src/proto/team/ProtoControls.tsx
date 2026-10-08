@@ -46,7 +46,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
   const [open, setOpen] = useState(true)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const theme = useThemeStore((s) => s.activeThemeId)
-  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, openMark, namesOff, target, log } = useProtoTeam()
+  const { seats, beadHost, groupStyle, sidebarStyle, collapseStyle, hookStyle, hookTop, cornerSize, openMark, namesOff, target, log } = useProtoTeam()
   const members = Object.values(seats).filter((s) => s.role === 'member' && s.alive && s.teamKey)
   const tgt = target ? seats[target] : null
   const tgtTab = tgt ? tabOfSeat(tgt) : null
@@ -63,7 +63,7 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
     <div data-testid="proto-controls" className="fixed right-3 bottom-3 z-50 w-[min(380px,calc(100vw-24px))] max-h-[48vh] overflow-y-auto rounded-xl border border-border-default bg-surface-elevated shadow-2xl p-3 text-xs flex flex-col gap-2">
       <div className="flex items-center">
         <span className="font-semibold">原型控制</span>
-        <span className="ml-2 text-text-muted">team 介面 · 第四版</span>
+        <span className="ml-2 text-text-muted">team 介面 · 第五版</span>
         <button type="button" onClick={() => setOpen(false)} className="ml-auto text-text-muted hover:text-text-primary cursor-pointer">收起</button>
       </div>
       <Seg label="分頁位置" value={tabPosition} options={[['top', '上方'], ['left', '左側'], ['both', '兩側']]} onChange={(v) => useLayoutStore.getState().setTabPosition(v)} />
@@ -73,10 +73,13 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         <Seg label="顆粒主機" value={beadHost ? 'on' : 'off'} options={[['off', '只有 bot'], ['on', 'bot＋主機圖示']]} onChange={(v) => useProtoTeam.setState({ beadHost: v === 'on' })} />
       </div>
       <div className="text-[10.5px] text-text-muted font-semibold pt-0.5">比較用（之後定一種）</div>
-      <Seg label="群組樣式" value={groupStyle} options={[['label', '只有標籤'], ['dot', '色點'], ['endcap', '收尾刻度'], ['gap', '間距分群'], ['sepcolor', '色分隔線'], ['rule', '細線'], ['combo', '色點＋間距＋收尾']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
+      <Seg label="群組樣式" value={groupStyle} options={[['label', '只有標籤'], ['dot', '色點（對照）'], ['endcap', '收尾刻度'], ['gap', '間距分群'], ['sepcolor', '色分隔線'], ['rule', '細線'], ['combo', '色點＋間距＋收尾']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
+      <Seg label="斜角" value={groupStyle} options={[['corner-tr', '右上斜角'], ['corner-br', '右下斜角'], ['corner-tr-icon', '右上＋圖示'], ['corner-br-icon', '右下＋圖示']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
+      <Seg label="斜角大小" value={cornerSize} options={[['sm', '小'], ['md', '中（預設）'], ['lg', '大']]} onChange={(v) => useProtoTeam.setState({ cornerSize: v })} />
       <Seg label="舊群組" value={groupStyle} options={[['tint', '淡色底'], ['frame', '外框'], ['topbar', '頂端色條'], ['plate', '共用底板']]} onChange={(v) => useProtoTeam.setState({ groupStyle: v })} />
       <Seg label="收起樣式" value={collapseStyle} options={[['users', '新：人群圖示＋燈點'], ['sign', '舊：符號＋「N 個收起」']]} onChange={(v) => useProtoTeam.setState({ collapseStyle: v })} />
       <Seg label="掛勾" value={hookStyle} options={[['thin', '細線圓角'], ['bold', '加粗'], ['rail', '樹狀刻度'], ['glyph', '⎿ 字元']]} onChange={(v) => useProtoTeam.setState({ hookStyle: v })} />
+      <Seg label="掛勾頂端" value={hookTop} options={[['below', '從底色下緣開始'], ['blend', '融入底色']]} onChange={(v) => useProtoTeam.setState({ hookTop: v })} />
       <Seg label="開分頁標示" value={openMark} options={[['tick', '底部小點'], ['none', '不標示']]} onChange={(v) => useProtoTeam.setState({ openMark: v })} />
       {collapseStyle === 'sign' && (
         <Seg label="舊符號" value={sidebarStyle} options={[['hook', '⎿ 掛勾'], ['plusminus', '⊟／⊞'], ['chevron', '▾＋⎿']]} onChange={(v) => useProtoTeam.setState({ sidebarStyle: v })} />
@@ -123,15 +126,15 @@ export function ProtoControls({ stepIds, onOpenPicker }: { stepIds: string[]; on
         {[0, 1, 2, 3].map((n) => <Btn key={n} testId={`ctl-sub-${n}`} disabled={!tgt} onClick={() => tgt && setSubagents(tgt.sessionId, n)}>{n}</Btn>)}
       </div>
       <details data-testid="ctl-notes" className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" open>
-        <summary className="cursor-pointer font-semibold text-text-primary">第四版說明與待確認</summary>
+        <summary className="cursor-pointer font-semibold text-text-primary">第五版說明與待確認</summary>
         <div className="mt-1 flex flex-col gap-1 leading-snug">
-          <div><b>這版改了</b>：①多排顆粒的掛勾一路到最後一排（四種畫法都支援） ②顆粒不再淡出，正在看的 member 是 active（亮字＋底），其餘一律 inactive ③顆粒預設「bot＋主機圖示」 ④新收起樣式（前面沒有箭頭；收起＝人群圖示＋每人一顆燈點，整行點開；展開時點掛勾或顆粒旁空白處收起） ⑤面板固定 C 排法、active 跟側欄同一種、不顯示主機名、後方標記與摘要調亮 ⑥面板拿掉頂端色條、兩種模式同寬、縮成一行會換排 ⑦上方群組新增 6 種低干擾樣式。</div>
+          <div><b>這版改了</b>：①側欄掛勾改從 lead 的 bot 圖示下方長出來，顆粒整體右移一點讓出位置 ②多排時每排第一顆的左緣對齊同一條線；⎿ 字元版改成跟 Claude Code console 一樣，每排各一個 ⎿、x 位置相同，不再畫連續長線 ③細線圓角／加粗／樹狀刻度的起點與對齊一併修正，頂端預設從 lead 底色區塊的下緣開始，新增「掛勾頂端」切換可改成「融入底色」（線從底色漸入，lead 沒被選中時沒有底色就不變） ④上方群組新增 4 種斜角（右上／右下、單純填色／內放反色 member 圖示），預設是「右上斜角・中」，另有小／大兩種尺寸；原本的色點留作對照，不再是預設。</div>
           <div className="font-semibold text-text-primary pt-0.5">待確認</div>
-          <div>1. 有沒有開分頁：我做成顆粒底部一個 3px 的 team 色小點（「開分頁標示」可關掉＝完全不標示）。面板的「未開」小字照留。要保留、關掉、還是換別的？</div>
-          <div>2. 掛勾替代：細線圓角（最接近 App 圖示線條）／加粗（較有存在感）／樹狀刻度（每排各一個刻度，像 ├ └）；⎿ 字元版保留對照，多排時補了一條豎線。</div>
-          <div>3. 群組樣式（都以「只有標籤」為底）：色點＝每個 member／lead 分頁圖示左上角一顆 team 色點，分頁本身不動；收尾刻度＝最後一個分頁後面一根短的 team 色小豎條，看得出群組在哪結束；間距分群＝群組前後多留空、群組內分頁貼緊，不加任何顏色；色分隔線＝群組內分頁之間的分隔線改 team 色；細線＝整個群組底下一條很淡的連續線（不是每個分頁一條底線）；色點＋間距＋收尾＝我個人推薦的組合，三個都很輕。舊的四種留在「舊群組」當對照。</div>
-          <div>4. 收起狀態的燈點用主燈號四色（綠／黃／灰／紅），沒有燈號的是淺灰空點；未讀不另外標。</div>
-          <div>5. 面板縮成一行：寬度固定 312，名字最多 84px，顆粒放不下就換到第二排，展開鈕固定在右上。</div>
+          <div>1. 斜角預設：右上、中（9px、85% 不透明）；覺得太吵改「小」（6px），不夠看得出來改「大」（13px）。圖示版斜角較大（14／18／22px），圖示用 Phosphor User（實心、深色反色）。</div>
+          <div>2. 斜角放在 lead 與每個 member 的分頁；右上角會跟 hover 才出現的關閉鈕在右側相鄰，右下角較不干擾關閉鈕。要哪個位置？</div>
+          <div>3. 掛勾頂端：「從底色下緣開始」（乾淨）與「融入底色」（線頭漸入）請比較。</div>
+          <div>4. 顆粒左緣比 v4 往右 12px，才能讓掛勾轉彎後仍有一小段橫線；可以接受嗎？</div>
+          <div>5. 沿用 v4 待確認：開分頁小點、收起樣式與燈點四色、面板縮一行的寬度。</div>
         </div>
       </details>
       <div className="text-[11px] text-text-secondary border-t border-border-subtle pt-1.5" data-testid="ctl-log">

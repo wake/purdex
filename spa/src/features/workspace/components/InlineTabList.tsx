@@ -72,6 +72,7 @@ export function InlineTabList({
               unnamed={beads.unnamed}
               collapsed={beads.collapsed}
               members={beads.members}
+              leadActive={activeTabId === id}
             >
               {row}
             </TeamSidebarBlock>
