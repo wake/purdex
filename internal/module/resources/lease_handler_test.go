@@ -504,3 +504,65 @@ func TestLeases_ReplayScopeMustMatch(t *testing.T) {
 		t.Errorf("the same session-new request: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// holder_start has two sources on two clocks, and one stored form (the
+// registry's, UTC). The process table answers with the instant the process
+// started; a holder that is the same process must be judged the same
+// whichever way the lease was made, on a host that is not on UTC (TestMain:
+// UTC+8, as mlab). End to end through POST, the sweeper and the measuring.
+func TestLeases_HolderStartAcrossTheTwoClocks(t *testing.T) {
+	started := time.Date(2026, 10, 9, 4, 19, 49, 0, time.Local) // 04:19:49 on the host's clock = 20:19:49 UTC
+	psText := started.Format("Mon Jan _2 15:04:05 2006")        // what ps prints, and what the CLI sends
+	registryText := started.UTC().Format("Mon Jan _2 15:04:05 2006")
+	if psText == registryText {
+		t.Fatal("the fixture must not be on UTC")
+	}
+	type source struct {
+		name string
+		make func(f *routeFix) resources.LeaseResponse
+		pid  int
+		proc []resources.Proc // what runs under the lease: the holder itself, or (session-new) a child of the agent
+	}
+	for _, src := range []source{
+		{"process scope (the CLI's ps text)", func(f *routeFix) resources.LeaseResponse {
+			return decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", resources.LeaseRequest{
+				ClientID: cidA, Kind: "test-pkg", HolderPID: 4242, HolderStart: psText}))
+		}, 4242, []resources.Proc{cpuProc(4242, 1, 10)}},
+		{"session-new (the registry's text)", func(f *routeFix) resources.LeaseResponse {
+			f.m.procSnapshot = func(context.Context) (*iagent.ProcessSnapshot, error) { return nil, nil }
+			f.m.roots = oneRoot{resources.Root{SessionID: "sid-known", PID: 777, ProcStart: registryText}}
+			return decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", resources.LeaseRequest{
+				ClientID: cidB, Kind: "test-pkg", HolderPID: 1, HolderStart: psText, Scope: resources.ScopeSessionNew, SessionID: "sid-known"}))
+		}, 777, []resources.Proc{cpuProc(777, 1, 0), cpuProc(778, 777, 10)}},
+	} {
+		// The same process: kept, and measured.
+		f := newRouteFix(t, resources.ModeLease)
+		f.alive(src.pid, started)
+		r := src.make(f)
+		if r.State != resources.StateHeld {
+			t.Fatalf("%s: %+v", src.name, r)
+		}
+		if got := f.row(r.ID).HolderStart; got != registryText {
+			t.Errorf("%s: stored holder_start %q, want the registry form %q", src.name, got, registryText)
+		}
+		f.advance(2 * time.Second)
+		f.m.sweepOnce(context.Background())
+		if st := f.row(r.ID); st.State != "held" {
+			t.Errorf("%s: the same process was judged gone: %+v", src.name, st)
+		}
+		f.measure(src.proc)
+		if got := f.use(r.ID); !approx(got, 10) {
+			t.Errorf("%s: use = %v, want 10 (taken for a reused pid?)", src.name, got)
+		}
+
+		// A different process under the same pid (reused): gone.
+		f2 := newRouteFix(t, resources.ModeLease)
+		f2.alive(src.pid, started.Add(time.Hour))
+		r2 := src.make(f2)
+		f2.advance(2 * time.Second)
+		f2.m.sweepOnce(context.Background())
+		if st := f2.row(r2.ID); st.State != "ended" || st.EndReason != resources.EndHolderGone {
+			t.Errorf("%s: a reused pid was not judged gone: %+v", src.name, st)
+		}
+	}
+}

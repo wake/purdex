@@ -394,21 +394,3 @@ func TestLeaseUse_SnapshotIsACopy(t *testing.T) {
 		t.Fatalf("nothing measured: %v, want an empty non-nil map", empty)
 	}
 }
-
-// A holder the process table knows by the same start the row recorded is
-// measured, not taken for a reused pid: the start text is the local clock, and
-// the table reads it in the local zone (TestMain puts the tests on UTC+8; read
-// as UTC, every lease looked reused and nothing was ever measured).
-func TestLeaseUse_HolderWithTheRecordedStartIsMeasured(t *testing.T) {
-	f := newUseFix(t)
-	start := time.Date(2026, 10, 9, 5, 0, 0, 0, time.Local)
-	f.alive(4242, start)
-	f.heldLease("a", resources.ScopeProcess, 4242)
-	if _, err := f.m.store.db.Exec(`UPDATE resource_leases SET holder_start = ? WHERE id = 'a'`, startText(start)); err != nil {
-		t.Fatal(err)
-	}
-	f.measure([]resources.Proc{cpuProc(4242, 1, 10)})
-	if got := f.use("a"); !approx(got, 10) {
-		t.Fatalf("use = %v, want 10: the lease was taken for a reused pid", got)
-	}
-}
