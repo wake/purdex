@@ -18,10 +18,13 @@ description: 主機資源租約。要跑重指令前使用（完整測試 vitest
 
 只跑受影響檔案的測試（有檔名、`-run`、`-t`）不算，不用包。完整 vitest 請自己帶 `--maxWorkers=3`。
 
+**完整 vitest 的名額規定照舊**：在 mod 自動攔截上線之前（P2），完整 vitest 仍然只在 merge 前跑、而且要先向統籌（lead）取得名額；取得名額之後，再用下面的 `pdx lease run` 執行。租約不取代這條規定，只是讓漏掉的人不會把主機壓垮。
+
 ## 怎麼用
 
-- `pdx lease run --kind <kind> -- <指令…>`，例如 `pdx lease run --kind test-full -- pnpm exec vitest run --maxWorkers=3`。不在上表的重指令用 `--weight <1-200>` 自己估一個佔幾成（100＝整台機器）。
-- `pdx lease run` 會等到有空才執行你的指令，指令結束（含被中斷）自動歸還；它的結束碼就是你指令的結束碼。
+- `pdx lease run --kind <kind> -- <指令…>`，例如 `pdx lease run --kind test-full -- sh -c 'cd spa && npx vitest run --maxWorkers=3'`。不在上表的重指令用 `--weight <1-200>` 自己估一個佔幾成（100＝整台機器）。
+- **`pdx lease run` 自己的旗標（`--kind`、`--weight`、`--wait`、`--client-id`、`--config`）都要放在 `--` 之前**；`--` 之後整段都是你的指令，連旗標都會原樣交給它。對：`pdx lease run --kind build --wait 2m -- pnpm run build`；錯：`pdx lease run --kind build -- pnpm run build --wait 2m`（`--wait` 會被交給 pnpm）。
+- `pdx lease run` 會等到有空才執行你的指令，指令結束（含被中斷）自動歸還。**指令跑起來之後，它的結束碼就是你指令的結束碼**（被 signal 殺掉是 128+n）；另外有三個是 `pdx lease run` 自己的：**12**＝等待中被你中斷（指令沒執行）、**126**＝指令無法執行、**127**＝找不到指令。看到這三個不要當成測試或 build 失敗。
 - 預設最多等 5 分鐘，到時超量放行並記一筆。`--wait 2m` 可以縮短（最長 9 分 50 秒）。
 - `pdx lease ls` 看現在誰佔著、誰在排隊、最近有沒有超量。
 

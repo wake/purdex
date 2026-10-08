@@ -495,6 +495,12 @@ func TestSkill_LeaseMentionsRun(t *testing.T) {
 		"不要在子 shell 裡直接 acquire",
 		"agent 一律用 `pdx lease run`",
 		"pdx lease ls",
+		// Review of P1-3c: the contract an agent following the text literally needs.
+		"`--kind`、`--weight`、`--wait`、`--client-id`、`--config`）都要放在 `--` 之前", // flags before the separator
+		"pdx lease run --kind build -- pnpm run build --wait 2m",             // the wrong example is shown as wrong
+		"**12**", "**126**", "**127**", // pdx's own exit codes
+		"完整 vitest 的名額規定照舊",                               // the coordinator-slot rule stays until P2 (Task 2.4)
+		"sh -c 'cd spa && npx vitest run --maxWorkers=3'", // runs from the repo root
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md of pdx-lease lacks %q", want)
