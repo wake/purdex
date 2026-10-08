@@ -643,3 +643,100 @@ func TestModBySID_RepointSkipsEndedCandidates(t *testing.T) {
 		t.Fatalf("modBySID[new] = %q, want stream-A", id)
 	}
 }
+
+// ---- bounding the mirror like the registry ----
+
+func modStreamIDs(m *Module) map[string]bool {
+	m.modMu.Lock()
+	defer m.modMu.Unlock()
+	out := map[string]bool{}
+	for id := range m.modStreams {
+		out[id] = true
+	}
+	return out
+}
+
+// TestModEviction_DropsIdleAndEndedStreams: the first event of a new stream
+// drops what the registry would have dropped by now — a stream idle for
+// IdleTTL and an ended one EndedTTL after its session.end — and keeps the
+// rest.
+func TestModEviction_DropsIdleAndEndedStreams(t *testing.T) {
+	m, clock := overlayModule(t)
+	tn := modT0.Add(modevents.IdleTTL)
+	sidOf := func(id string) modevents.Event { return modEv("sid-"+id, modevents.TypeSessionStart, `{"cwd":"/w"}`) }
+	endOf := func(id string) modevents.Event {
+		end := modEv("sid-"+id, modevents.TypeSessionEnd, `{"reason":"prompt_input_exit"}`)
+		end.Seq = 2
+		return end
+	}
+
+	feedMod(m, "idle", sidOf("idle")) // at T0: IdleTTL old at tn
+	clock.Set(tn.Add(-modevents.EndedTTL))
+	feedMod(m, "ended", sidOf("ended"), endOf("ended")) // EndedTTL old at tn
+	feedMod(m, "running", sidOf("running"))             // EndedTTL old but not ended: stays
+	clock.Set(tn.Add(-time.Minute))
+	feedMod(m, "fresh", sidOf("fresh"))
+	if got := modStreamIDs(m); len(got) != 4 {
+		t.Fatalf("setup: streams = %v, want 4 (nothing is old enough while they arrive)", got)
+	}
+
+	clock.Set(tn)
+	feedMod(m, "newcomer", sidOf("newcomer"))
+
+	got := modStreamIDs(m)
+	want := map[string]bool{"running": true, "fresh": true, "newcomer": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("streams = %v, want %v", got, want)
+	}
+}
+
+// TestModEviction_RepointsSidIndex: dropping the stream the sid index
+// points at moves the index to the remaining live stream and marks the sid
+// dirty. (The index follows the newest reporter, so the clock has to be
+// bent for it to point at the older stream.)
+func TestModEviction_RepointsSidIndex(t *testing.T) {
+	m, clock := overlayModule(t)
+	feedMod(m, "stream-A", modStart)
+	feedMod(m, "stream-B", modStart)
+	if id, _ := modIndex(m, modSID1); id != "stream-B" {
+		t.Fatalf("setup: modBySID = %q, want stream-B", id)
+	}
+	m.modMu.Lock()
+	m.modStreams["stream-B"].LastEvent = modT0.Add(-modevents.IdleTTL)
+	m.modMu.Unlock()
+	clearModDirty(m)
+
+	clock.Set(modT0.Add(time.Second))
+	feedMod(m, "newcomer", modEv(modSID2, modevents.TypeSessionStart, `{"cwd":"/w"}`))
+
+	if got := modStreamIDs(m); got["stream-B"] || !got["stream-A"] {
+		t.Fatalf("streams = %v, want stream-B dropped and stream-A kept", got)
+	}
+	if id, _ := modIndex(m, modSID1); id != "stream-A" {
+		t.Fatalf("modBySID = %q, want stream-A", id)
+	}
+	if !modDirtySIDs(m)[modSID1] {
+		t.Fatal("the sid is not dirty after its index moved")
+	}
+}
+
+// TestModEviction_CapsAtMaxStreams: the mirror never holds more than the
+// registry does; the stream heard from longest ago is the one to go.
+func TestModEviction_CapsAtMaxStreams(t *testing.T) {
+	m, clock := overlayModule(t)
+	for i := 0; i <= modevents.MaxStreams; i++ {
+		clock.Set(modT0.Add(time.Duration(i) * time.Second))
+		id := fmt.Sprintf("stream-%03d", i)
+		feedMod(m, id, modEv("sid-"+id, modevents.TypeSessionStart, `{"cwd":"/w"}`))
+	}
+	got := modStreamIDs(m)
+	if len(got) != modevents.MaxStreams {
+		t.Fatalf("streams = %d, want %d", len(got), modevents.MaxStreams)
+	}
+	if got["stream-000"] || !got["stream-001"] || !got[fmt.Sprintf("stream-%03d", modevents.MaxStreams)] {
+		t.Fatal("the oldest stream was not the one dropped")
+	}
+	if _, ok := modIndex(m, "sid-stream-000"); ok {
+		t.Fatal("the dropped stream's sid is still indexed")
+	}
+}

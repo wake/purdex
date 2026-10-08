@@ -101,6 +101,12 @@ func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
 	m.modMu.Lock()
 	st := m.modStreams[info.Stream]
 	if st == nil {
+		// Only a new stream pays for the sweep, so steady-state events
+		// stay O(1). The registry evicts its own streams without telling
+		// subscribers; the mirror bounds itself the same way.
+		m.evictModStreamsLocked(now)
+		for len(m.modStreams) >= modevents.MaxStreams && m.dropOldestModStreamLocked() {
+		}
 		st = lights.NewStreamState(info.Stream)
 		m.modStreams[info.Stream] = st
 	}
@@ -155,6 +161,50 @@ func (m *Module) repointSIDLocked(sid string) {
 		return
 	}
 	m.modBySID[sid] = best
+}
+
+// evictModStreamsLocked drops the streams the registry would have dropped
+// by now: an ended one EndedTTL after its session.end, any one IdleTTL after
+// its last event. StreamState has no EndedAt; the session.end is the last
+// event an ended stream applied (any later event reopens it), so LastEvent
+// stands in for it. a-3b's worker tick may call this too. modMu must be
+// held.
+func (m *Module) evictModStreamsLocked(now time.Time) {
+	for id, st := range m.modStreams {
+		age := now.Sub(st.LastEvent)
+		if age >= modevents.IdleTTL || (st.Ended && age >= modevents.EndedTTL) {
+			m.dropModStreamLocked(id)
+		}
+	}
+}
+
+// dropOldestModStreamLocked drops the stream heard from longest ago and
+// reports whether there was one. modMu must be held.
+func (m *Module) dropOldestModStreamLocked() bool {
+	oldest := ""
+	var oldestAt time.Time
+	for id, st := range m.modStreams {
+		if oldest == "" || st.LastEvent.Before(oldestAt) {
+			oldest, oldestAt = id, st.LastEvent
+		}
+	}
+	if oldest == "" {
+		return false
+	}
+	m.dropModStreamLocked(oldest)
+	return true
+}
+
+// dropModStreamLocked forgets a stream. When the sid index points at it,
+// the index moves to the newest live sibling (or goes) and the sid is
+// dirty. modMu must be held.
+func (m *Module) dropModStreamLocked(id string) {
+	st := m.modStreams[id]
+	delete(m.modStreams, id)
+	if st != nil && st.SID != "" && m.modBySID[st.SID] == id {
+		m.repointSIDLocked(st.SID)
+		m.modDirty[st.SID] = struct{}{}
+	}
 }
 
 // modLight is what the overlay copies out of a live stream under modMu.
