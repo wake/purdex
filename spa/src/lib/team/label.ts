@@ -2,7 +2,9 @@
 // check the approval dialog shows before 核准, and the label the daemon will derive from a name, which the dialog shows
 // as the placeholder while the field is empty. The daemon is the authority (`team.NormaliseTeamLabel`,
 // `team.DeriveTeamLabel`); this mirrors it and reads the same fixtures (testdata/textwidth/cases.json,
-// testdata/teamlabel/derive.json), so a drift fails a test on one side.
+// testdata/teamlabel/derive.json), so a drift in the rules fails a test on one side. What it cannot pin is the Unicode
+// version of the character classes: `\p{…}` here is the engine's, Go's tables are its own, so a code point assigned
+// only in a newer Unicode can pass here and be refused by the daemon, which answers 400 and the dialog says so.
 import { cellWidth } from '../textwidth'
 
 /** A label weighs at most this (about five Chinese characters, each 2). */

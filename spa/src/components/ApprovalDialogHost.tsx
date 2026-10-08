@@ -203,6 +203,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const labelBad = labelShown ? labelProblem(trimmedLabel) : null
   const labelOk = labelBad === null
   const labelErrorId = useId()
+  const labelCountId = useId()
   // What an empty label becomes (D-L3): derived from the name as it stands in the dialog (edited or not), else 「（無）」.
   const derivedLabel = labelShown ? deriveTeamLabel(nameShown ? trimmedName : (payload.team_name ?? '')) : ''
   // A self relay carries no grant (U13a: one click); only the lead kind validates its fields.
@@ -363,12 +364,12 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                         disabled={locked}
                         onChange={(e) => setTeamLabel(e.target.value)}
                         aria-invalid={labelOk ? undefined : true}
-                        aria-describedby={labelOk ? undefined : labelErrorId}
+                        aria-describedby={labelOk ? labelCountId : `${labelCountId} ${labelErrorId}`}
                         data-testid="approval-team-label"
                         className={`min-w-0 flex-1 ${fieldClass}`}
                       />
                     </label>
-                    <span data-testid="approval-team-label-width" className={`shrink-0 tabular-nums ${labelOk ? 'text-text-muted' : 'text-status-warning'}`}>
+                    <span id={labelCountId} data-testid="approval-team-label-width" className={`shrink-0 tabular-nums ${labelOk ? 'text-text-muted' : 'text-status-warning'}`}>
                       {cellWidth(trimmedLabel)}/{TEAM_LABEL_MAX_WIDTH}
                     </span>
                   </div>

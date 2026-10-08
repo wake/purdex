@@ -162,6 +162,18 @@ describe('ApprovalDialogHost team label (D-L10)', () => {
     expect(screen.getByTestId('approval-approve')).toBeDisabled()
   })
 
+  it('the counter is described to the field, with the error added when there is one', () => {
+    render(<ApprovalDialogHost />)
+    open(lead({ team_name: '', team_label: '' }))
+    const counter = widthEl()
+    expect(counter.id).not.toBe('')
+    expect(label().getAttribute('aria-describedby')).toBe(counter.id)
+    typeLabel('01234567890')
+    const described = (label().getAttribute('aria-describedby') ?? '').split(' ')
+    expect(described).toContain(counter.id)
+    expect(described).toContain(errorEl()!.id)
+  })
+
   it('the field alone: a payload with a label but no name still shows it', () => {
     render(<ApprovalDialogHost />)
     open(lead({ team_label: 'A' }))
