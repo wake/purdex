@@ -200,6 +200,26 @@ func TestSystem_ModelChangedBetweenTurns(t *testing.T) {
 	}
 }
 
+func TestSystem_ModelChangedWhenTurnEndsWithToolUse(t *testing.T) {
+	// the second turn's only assistant rows are tool_use rows, with another
+	// model: they still feed model_changed
+	c := conv(t,
+		userRow("u1", 1, "a"), assistantRow("a1", 2, "claude-opus-5-5", textBlock("ok")), turnDuration("d1", 3, 1),
+		userRow("u2", 4, "b"),
+		assistantRow("a2", 5, "claude-sonnet-5-5", toolUseBlock("toolu_1", "Bash", obj{"command": "ls"})),
+		turnDuration("d2", 6, 1),
+	)
+	var m *convmodel.System
+	for _, it := range c.Turns[1].Items {
+		if it.System != nil && it.System.Kind == convmodel.SystemModelChanged {
+			m = it.System
+		}
+	}
+	if m == nil || m.ID != "u2#model" || string(m.Detail) != `{"model":"claude-sonnet-5-5"}` {
+		t.Fatalf("turn 1 model_changed = %+v\n%s", m, dump(c))
+	}
+}
+
 func TestSystem_ModelChangedIgnoresSynthetic(t *testing.T) {
 	c := conv(t,
 		userRow("u1", 1, "a"), assistantRow("a1", 2, "claude-opus-5-5", textBlock("ok")), turnDuration("d1", 3, 1),

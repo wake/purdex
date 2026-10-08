@@ -115,6 +115,21 @@ func TestOutcome_FailedByApiError(t *testing.T) {
 	}
 }
 
+func TestOutcome_ApiErrorThenToolUseRowIsNotFailed(t *testing.T) {
+	// a tool_use row is a main-thread assistant row (its step arrives in
+	// U1-4c): as the turn's last assistant row it clears the API error
+	c := conv(t,
+		userRow("u1", 1, "hi"),
+		apiErrorRow("e1", 2, "server_error", "oops"),
+		assistantRow("a1", 3, "claude-opus-5-5", toolUseBlock("toolu_1", "Bash", obj{"command": "ls"})),
+		turnDuration("d1", 4, 1),
+	)
+	tr := c.Turns[0]
+	if tr.Outcome != convmodel.OutcomeDone || tr.Error != nil {
+		t.Errorf("outcome %q error %+v, want done without error", tr.Outcome, tr.Error)
+	}
+}
+
 func TestOutcome_OpenNonLastTurnIsInterrupted(t *testing.T) {
 	// a killed process: no turn_duration, no marker, and the next turn began
 	c := conv(t, userRow("u1", 1, "go"), assistantText("a1", 2, "wr"), userRow("u2", 9, "again"))

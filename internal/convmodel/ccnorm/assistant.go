@@ -68,7 +68,12 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 			n.skip("block:" + b.typ)
 		}
 	}
-	if len(items) == 0 {
+	// Turn bookkeeping belongs to the row, not to the items it produced: a
+	// tool_use row (its step arrives in U1-4c) is a main-thread assistant
+	// row too, and decides the API-error state and the model in use. A row
+	// that shows nothing does not open a turn of its own (the model in use
+	// above still counts).
+	if len(items) == 0 && len(n.turns) == 0 {
 		return
 	}
 	ti := n.ensureTurn(l.uuid, l.at, off)
