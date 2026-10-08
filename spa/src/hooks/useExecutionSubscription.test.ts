@@ -639,6 +639,49 @@ describe('useExecutionSubscription', () => {
     fifth.unmount(); hooks.forEach((h) => h.unmount())
   })
 
+  describe('onCapacity (#1866 §4.6)', () => {
+    const setup = async () => {
+      vi.mocked(sse.openNexSse).mockImplementation(() => ({ close: vi.fn<() => void>() }))
+      vi.mocked(api.attachObserve).mockImplementation(async (_h, id) => ({ mode: 'observe', stream_url: `/api/nex/v1/events?execution_id=${id}`, cursor: 0, state: 'idle' }))
+      vi.mocked(api.fetchExecutionEvents).mockResolvedValue({ items: [], next_cursor: 0 })
+      const hooks = ['exc_a', 'exc_b', 'exc_c', 'exc_d'].map((id) => renderHook(({ active }) => useExecutionSubscription(H, id, active), { initialProps: { active: true } }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      return hooks
+    }
+    const opensFor = (id: string) => vi.mocked(sse.openNexSse).mock.calls.filter((c) => c[0].url.includes(id)).length
+
+    it('a pane the lane reservation paused resumes when the lane is given back and it is still active', async () => {
+      const hooks = await setup()
+      act(() => subscriptionSlots.reserve(H, 'site-wide')) // evicts exc_a
+      expect(hooks[0].result.current.paused).toBe(true)
+      await act(async () => { subscriptionSlots.unreserve(H, 'site-wide'); await vi.advanceTimersByTimeAsync(0) })
+      expect(hooks[0].result.current.paused).toBe(false)
+      expect(opensFor('exc_a')).toBe(2)
+      hooks.forEach((h) => h.unmount())
+    })
+
+    it('an inactive evicted pane ignores the notice and stays paused until activated', async () => {
+      const hooks = await setup()
+      act(() => subscriptionSlots.reserve(H, 'site-wide'))
+      hooks[0].rerender({ active: false })
+      await act(async () => { subscriptionSlots.unreserve(H, 'site-wide'); await vi.advanceTimersByTimeAsync(0) })
+      expect(hooks[0].result.current.paused).toBe(true)
+      expect(opensFor('exc_a')).toBe(1)
+      hooks.forEach((h) => h.unmount())
+    })
+
+    it('an ordinary LRU eviction between panes never resumes spontaneously', async () => {
+      const hooks = await setup()
+      const fifth = renderHook(({ active }) => useExecutionSubscription(H, 'exc_e', active), { initialProps: { active: true } })
+      await act(async () => { await vi.advanceTimersByTimeAsync(0) }) // evicts exc_a, no reservation
+      expect(hooks[0].result.current.paused).toBe(true)
+      await act(async () => { subscriptionSlots.reserve(H, 'site-wide'); subscriptionSlots.unreserve(H, 'site-wide'); await vi.advanceTimersByTimeAsync(0) })
+      expect(hooks[0].result.current.paused).toBe(true)
+      expect(opensFor('exc_a')).toBe(1)
+      fifth.unmount(); hooks.forEach((h) => h.unmount())
+    })
+  })
+
   it('host removal closes the SSE and reports host_removed (keep-tabs mode, I13)', async () => {
     const { result } = renderHook(() => useExecutionSubscription(H, E, true))
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
@@ -879,7 +922,8 @@ describe('useExecutionSubscription', () => {
     expect(closes['exc_e']).toBeUndefined()
     expect(useExecutionStore.getState().executions[`${H}:exc_e`].sse).toBe('paused')
 
-    // lane released → the next activation goes live without evicting anyone
+    // lane released → the next activation goes live without evicting anyone (exc_a is inactive, so it ignores the notice)
+    hooks[0].rerender({ active: false })
     act(() => { subscriptionSlots.unreserve(H, 'site-wide') })
     fifth.rerender({ active: true })
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })

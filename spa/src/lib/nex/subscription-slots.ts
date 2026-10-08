@@ -34,13 +34,21 @@ export interface SlotRegistry {
   reserve(hostId: string, tag: ReservedLane): void
   /** Give the lane back (no-op when not held); the cap returns to the full budget. */
   unreserve(hostId: string, tag: ReservedLane): void
+  /**
+   * Notice that capacity came back for a key a `reserve` had evicted (#1866 §4.6): fired by `unreserve`, once per
+   * key, then forgotten. An ordinary LRU eviction is never announced, so panes never resume spontaneously.
+   */
+  onCapacity(key: string, cb: () => void): () => void
   resetForTests(): void
 }
 
 // Insertion-ordered: first entry is the least recently touched.
 const live = new Map<string, Set<string>>()
 const listeners = new Map<string, Set<() => void>>()
+const capacityListeners = new Map<string, Set<() => void>>()
 const reserved = new Set<string>()
+// Keys evicted by a `reserve`, per host; consumed by `unreserve`.
+const reserveEvicted = new Map<string, Set<string>>()
 
 const set = (hostId: string) => { let s = live.get(hostId); if (!s) { s = new Set(); live.set(hostId, s) } return s }
 
@@ -53,7 +61,7 @@ export function capFor(hostId: string): number {
   return MAX_LIVE_SUBSCRIPTIONS_PER_HOST - (reserved.has(hostId) ? 1 : 0)
 }
 
-function evictToCap(hostId: string): string[] {
+function evictToCap(hostId: string, byReserve = false): string[] {
   const s = set(hostId)
   const cap = capFor(hostId)
   const evicted: string[] = []
@@ -61,6 +69,10 @@ function evictToCap(hostId: string): string[] {
     const oldest = s.values().next().value as string
     s.delete(oldest)
     evicted.push(oldest)
+    if (byReserve) {
+      let r = reserveEvicted.get(hostId); if (!r) { r = new Set(); reserveEvicted.set(hostId, r) }
+      r.add(oldest)
+    }
     listeners.get(oldest)?.forEach((cb) => cb())
   }
   return evicted
@@ -71,6 +83,7 @@ function create(): SlotRegistry {
     touch(hostId, key) {
       const s = set(hostId)
       s.delete(key); s.add(key)
+      reserveEvicted.get(hostId)?.delete(key)
       return evictToCap(hostId)
     },
     claimIfFree(hostId, key) {
@@ -78,9 +91,10 @@ function create(): SlotRegistry {
       if (s.has(key)) { s.delete(key); s.add(key); return true }
       if (s.size >= capFor(hostId)) return false
       s.add(key)
+      reserveEvicted.get(hostId)?.delete(key)
       return true
     },
-    release(hostId, key) { live.get(hostId)?.delete(key) },
+    release(hostId, key) { live.get(hostId)?.delete(key); reserveEvicted.get(hostId)?.delete(key) },
     onEvict(key, cb) {
       let l = listeners.get(key); if (!l) { l = new Set(); listeners.set(key, l) }
       l.add(cb)
@@ -90,13 +104,21 @@ function create(): SlotRegistry {
     reserve(hostId, tag) {
       assertLane(tag)
       reserved.add(hostId)
-      evictToCap(hostId)
+      evictToCap(hostId, true)
     },
     unreserve(hostId, tag) {
       assertLane(tag)
       reserved.delete(hostId)
+      const keys = reserveEvicted.get(hostId)
+      reserveEvicted.delete(hostId)
+      keys?.forEach((k) => capacityListeners.get(k)?.forEach((cb) => cb()))
     },
-    resetForTests() { live.clear(); listeners.clear(); reserved.clear() },
+    onCapacity(key, cb) {
+      let l = capacityListeners.get(key); if (!l) { l = new Set(); capacityListeners.set(key, l) }
+      l.add(cb)
+      return () => { l!.delete(cb); if (l!.size === 0) capacityListeners.delete(key) }
+    },
+    resetForTests() { live.clear(); listeners.clear(); capacityListeners.clear(); reserveEvicted.clear(); reserved.clear() },
   }
 }
 

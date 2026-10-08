@@ -113,3 +113,47 @@ describe('subscriptionSlots', () => {
     expect(capFor('h')).toBe(MAX_LIVE_SUBSCRIPTIONS_PER_HOST)
   })
 })
+
+describe('subscriptionSlots onCapacity (#1866 §4.6)', () => {
+  beforeEach(() => subscriptionSlots.resetForTests())
+  const fill = () => { for (const k of ['a', 'b', 'c', 'd']) subscriptionSlots.touch('h', k) }
+
+  it('unreserve notifies only the key a reserve evicted, then forgets it', () => {
+    fill()
+    const a = vi.fn(); const b = vi.fn()
+    subscriptionSlots.onCapacity('a', a); subscriptionSlots.onCapacity('b', b)
+    subscriptionSlots.reserve('h', 'site-wide') // evicts a
+    subscriptionSlots.unreserve('h', 'site-wide')
+    expect(a).toHaveBeenCalledTimes(1)
+    expect(b).not.toHaveBeenCalled()
+    subscriptionSlots.reserve('h', 'site-wide'); subscriptionSlots.unreserve('h', 'site-wide')
+    expect(a).toHaveBeenCalledTimes(1) // forgotten after the first notice
+  })
+
+  it('an ordinary LRU eviction is never announced by unreserve', () => {
+    fill()
+    const a = vi.fn()
+    subscriptionSlots.onCapacity('a', a)
+    subscriptionSlots.touch('h', 'e') // evicts a, no reservation involved
+    subscriptionSlots.reserve('h', 'site-wide'); subscriptionSlots.unreserve('h', 'site-wide')
+    expect(a).not.toHaveBeenCalled()
+  })
+
+  it('a key that was released or re-claimed before unreserve is not announced', () => {
+    fill()
+    const a = vi.fn()
+    subscriptionSlots.onCapacity('a', a)
+    subscriptionSlots.reserve('h', 'site-wide') // evicts a
+    subscriptionSlots.release('h', 'a')
+    subscriptionSlots.unreserve('h', 'site-wide')
+    expect(a).not.toHaveBeenCalled()
+  })
+
+  it('the unsubscribe stops notices', () => {
+    fill()
+    const a = vi.fn()
+    const off = subscriptionSlots.onCapacity('a', a)
+    subscriptionSlots.reserve('h', 'site-wide'); off(); subscriptionSlots.unreserve('h', 'site-wide')
+    expect(a).not.toHaveBeenCalled()
+  })
+})
