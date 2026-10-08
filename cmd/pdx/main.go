@@ -34,6 +34,7 @@ import (
 	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	profilesmod "github.com/wake/purdex/internal/module/profiles"
+	resourcesmod "github.com/wake/purdex/internal/module/resources"
 	"github.com/wake/purdex/internal/module/session"
 	teammod "github.com/wake/purdex/internal/module/team"
 	"github.com/wake/purdex/internal/store"
@@ -396,6 +397,9 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		peersMod.WithPeerNames(meta.PeerNames(), meta.ConversationNames())
 	}
 	c.AddModule(peersMod)
+	// resources samples the host on its own ticker; it reads the session
+	// roots from the peers origin resolver, so it comes after peers.
+	c.AddModule(resourcesmod.New())
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	c.AddModule(profilesmod.New())

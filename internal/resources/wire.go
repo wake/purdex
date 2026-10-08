@@ -30,7 +30,12 @@ const (
 const (
 	ReasonUnsupportedPlatform = "unsupported_platform"
 	ReasonSampleFailed        = "sample_failed"
+	// ReasonWarmingUp is what a snapshot says before the first sample lands.
+	ReasonWarmingUp = "warming_up"
 )
+
+// ModeMeasure is the only mode P0 reports: measure, no admission.
+const ModeMeasure = "measure"
 
 // Snapshot is one reading of the host. P1 adds Leases and Waiters; those
 // field names are reserved so the App contract stays stable, and nothing
@@ -43,6 +48,9 @@ type Snapshot struct {
 	Host      HostUse      `json:"host"`
 	Sessions  []SessionUse `json:"sessions"`
 	Mode      string       `json:"mode"`
+	// SampleMS is how long the tick that produced this snapshot took, for
+	// seeing the cost of sampling; a debug field.
+	SampleMS int64 `json:"sample_ms,omitempty"`
 }
 
 // MarshalJSON writes sampled_at in UTC whatever zone the time carries.
