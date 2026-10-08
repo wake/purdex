@@ -388,6 +388,8 @@ User decision A (admission: capacity 100 is shared only among heavy commands; ho
 | **P1-2a-3 (D)** | Admitter + pass + `POST`／long-poll `GET`／`DELETE` + wake (as already split), now calling `Admit` (P1-1b) and writing the `Decision` into the row in the grant's own write; `captureBaseline` + `SetBaseline` after grant, before answering (issue #2038) | the decision write is the same single-row statement as the grant, inside `stateMu` |
 | **P1-3r** | `pdx lease report` + `GET /api/resources/report` (D-8.3) | `since` > 14 d → 400; `coverage` and the "not recorded" count in the answer; read-only queries; a fixture DB with a known day of rows and the exact expected report; `--json` shape test |
 
+`heavy_held` counts leases with weight ≥ `heavy_min_weight` (host setting, **default 30**): the report answers whether the host holds up when two or more big leases (`test-full`／`build`, 35 each) run together; 15 would also count a single-package `go test -race`.
+
 **Supersedes:** Task 1.2's `Admit` text (an additive `unleased`, the "host 80 → waits" row, the "drop `unleased`" mutation) and review row #10's `unleased = 0` fallback; P1-1b replaces them (when the sample is unavailable, `full` is false and only the Σ charge rule applies; `unleased` is recorded as 0).
 
 Order: docs PR (this addendum + the spec changes + `res-lease-docs-d2`) → P1-1b → P1-2c → D → P1-3r → (P1-3 `pdx lease run` etc. as planned). Deploy: P1 as before (mode `lease`); P2 starts in `advise` for one day.
