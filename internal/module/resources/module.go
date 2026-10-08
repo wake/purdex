@@ -107,6 +107,10 @@ type Module struct {
 	// pollHook runs in a long poll after it read the row and released stateMu,
 	// before it waits: a seam for tests to land a transition in that window.
 	pollHook func()
+	// lastSettings is the settings the last tick read: the snapshot route
+	// uses them (for the leases' charge) instead of reading the settings store
+	// per request.
+	lastSettings atomic.Pointer[resources.Settings]
 	// skipPass makes admissionPass a no-op (a test seam).
 	skipPass    bool
 	lastPrune   time.Time

@@ -40,7 +40,9 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	// The setting is re-read every tick (nothing to subscribe to). Mode off
 	// skips the reads but keeps the ticker, so switching back on needs no
 	// restart.
-	m.mode = m.settings().Mode
+	set := m.settings()
+	m.mode = set.Mode
+	m.lastSettings.Store(&set) // for GET /api/resources, which reads no settings itself
 	if m.mode == resources.ModeOff {
 		m.fails, m.degraded = 0, false
 		m.endMinute()

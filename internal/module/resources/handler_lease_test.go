@@ -64,7 +64,7 @@ func TestAPI_LeasesWaitersRecent(t *testing.T) {
 		t.Fatalf("leases = %+v", snap.Leases)
 	}
 	if l := snap.Leases[0]; l.ID != "h1" || l.Kind != "build" || l.Weight != 35 || l.SessionID != "s-1" ||
-		l.AgeS != 90 || !l.Overrun || l.Charge != 35 || l.Use != 0 {
+		l.AgeS != 90 || !l.Overrun || l.Charge != 17.5 || l.Use != 0 { // measured idle after the warmup: the floor, half of 35
 		t.Fatalf("lease = %+v", l)
 	}
 	if len(snap.Waiters) != 2 {
