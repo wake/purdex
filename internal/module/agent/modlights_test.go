@@ -294,52 +294,6 @@ func wantLight(t *testing.T, what string, p SessionProjection, status agentpkg.S
 	}
 }
 
-// TestModOverlay_OffByDefault pins the deployed state of a-3a: Init and
-// Start subscribe to the registry and the module keeps the per-stream
-// state, but nothing turns the overlay on until the re-emit worker (a-3b)
-// runs, so the lights stay the hook lights. Without the worker a mod change
-// after a hook emit is never re-sent: the Stop hook beats the mod's
-// 150 ms-batched turn.complete and the light would stay running.
-func TestModOverlay_OffByDefault(t *testing.T) {
-	m := newTestModule(t) // not overlayModule: that one turns the switch on
-	useModClock(m)
-	reg := modevents.NewRegistry(time.Now)
-	c := &core.Core{Registry: core.NewServiceRegistry()}
-	c.Registry.Register(modeventsmod.ServiceName, reg)
-	m.initModLights(c)
-	m.startModLights()
-	t.Cleanup(m.stopModLights)
-	seedIdentityFrame(t, m, "%5", "cc", 501, "s501", 10, modSID1, "/w") // hook status: idle
-
-	for i, ev := range []modevents.Event{modStart, modTurnStart} {
-		ev.Seq = int64(i + 1)
-		ev.At = ev.Seq * 1000
-		if _, err := reg.Apply(modevents.Batch{V: 1, Stream: modStrm, Agent: "cc", Events: []modevents.Event{ev}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// The subscriber still records the stream; only the overlay is off.
-	m.modMu.Lock()
-	st := m.modStreams[modStrm]
-	live := st != nil && st.Live(m.modClock()) && st.Status() == agentpkg.StatusRunning
-	m.modMu.Unlock()
-	if !live {
-		t.Fatal("the subscriber did not record a live running stream")
-	}
-	if !modDirtySIDs(m)[modSID1] {
-		t.Fatal("the sid was not marked dirty")
-	}
-
-	pane := *paneProjection(t, m, "%5")
-	wantLight(t, "projectPane", pane, agentpkg.StatusIdle, "hook")
-	all := liveProjectionByPane(t, m)
-	wantLight(t, "liveFrameProjections", all["%5"], agentpkg.StatusIdle, "hook")
-	if pane.Background != "" || all["%5"].Background != "" {
-		t.Fatalf("background = %q / %q, want empty", pane.Background, all["%5"].Background)
-	}
-}
-
 // TestModOverlay_LiveStreamWinsOverHookStatus: hooks leave the frame idle,
 // the mod says a turn runs; the hook emit carries the mod's status.
 func TestModOverlay_LiveStreamWinsOverHookStatus(t *testing.T) {

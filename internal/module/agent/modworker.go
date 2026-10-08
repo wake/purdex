@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"slices"
 	"strconv"
 	"strings"
@@ -182,4 +183,51 @@ func (m *Module) emitSessionState(sessionName, rawEvent string, detail map[strin
 	m.mu.Unlock()
 
 	m.emitNormalizedToCode(code, n)
+}
+
+// startModWorker launches the worker and returns once it is in its loop, so
+// the caller can turn the overlay on knowing every change from then on will
+// be picked up.
+func (m *Module) startModWorker() {
+	if m.modWorkerCancel != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	ready := make(chan struct{})
+	m.modWorkerCancel, m.modWorkerDone = cancel, done
+	tick := m.modTick
+	if tick <= 0 {
+		tick = modTickDefault
+	}
+	go func() {
+		defer close(done)
+		if hook := m.modWorkerStartHook; hook != nil {
+			hook()
+		}
+		t := time.NewTicker(tick)
+		defer t.Stop()
+		close(ready)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-m.modKick:
+			case <-t.C:
+			}
+			m.runModRound(m.modClock())
+		}
+	}()
+	<-ready
+}
+
+// stopModWorker cancels the worker and waits for it. Safe to call when no
+// worker runs.
+func (m *Module) stopModWorker() {
+	if m.modWorkerCancel == nil {
+		return
+	}
+	m.modWorkerCancel()
+	<-m.modWorkerDone
+	m.modWorkerCancel = nil
 }

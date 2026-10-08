@@ -103,18 +103,28 @@ func (m *Module) initModLights(c *core.Core) {
 	}
 }
 
-// startModLights subscribes to the registry; stopModLights cancels it.
+// startModLights subscribes to the registry, starts the re-emit worker and,
+// only once the worker is in its loop, turns the overlay on. Without a
+// registry nothing starts and the overlay stays off.
 func (m *Module) startModLights() {
-	if m.modReg != nil && m.modCancel == nil {
-		m.modCancel = m.modReg.Subscribe(m.onModEvent)
+	if m.modReg == nil || m.modCancel != nil {
+		return
 	}
+	m.modCancel = m.modReg.Subscribe(m.onModEvent)
+	m.startModWorker()
+	m.modOverlayOn.Store(true)
 }
 
+// stopModLights undoes startModLights in the opposite order: the overlay
+// goes off first (nothing is left to re-emit what it would show), then the
+// subscription, then the worker, which is waited for. Safe to call twice.
 func (m *Module) stopModLights() {
+	m.modOverlayOn.Store(false)
 	if m.modCancel != nil {
 		m.modCancel()
 		m.modCancel = nil
 	}
+	m.stopModWorker()
 }
 
 // onModEvent is the registry subscriber. It runs synchronously inside
