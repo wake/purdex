@@ -47,6 +47,7 @@ var capabilities = []string{
 	"terminal.mirror.v1",     // /ws/terminal/{code}?mirror=1 plus window text frames
 	"conversations.scope.v1", // GET /api/nex/conversations?scope=test|normal|all
 	"relay.unattended.v1",    // GET/PUT /api/team/unattended, team.unattended events (U23)
+	"team.name.v1",           // lead request team_name, grant.team_name, Team / TeamRoster team_name
 }
 
 // handleInfo returns daemon metadata: host ID, tmux instance, version, OS, and architecture.
