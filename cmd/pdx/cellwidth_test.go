@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
@@ -9,10 +10,20 @@ func TestCellWidth(t *testing.T) {
 	for _, c := range []struct {
 		s    string
 		want int
-	}{{"abc", 3}, {"長", 2}, {"a長b", 4}, {"e\u0301", 1}, {"😀", 2}, {"", 0}} {
+	}{{"abc", 3}, {"長", 2}, {"a長b", 4}, {"e\u0301", 1}, {"😀", 2}, {"🚀", 2}, {"👍🏽", 2}, {"", 0}} {
 		if got := cellWidth(c.s); got != c.want {
 			t.Errorf("cellWidth(%q) = %d, want %d", c.s, got, c.want)
 		}
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestAlignRowsReturnsWriteError(t *testing.T) {
+	if err := alignRows(failWriter{}, [][]string{{"a", "b"}}, 2); err == nil {
+		t.Fatal("write error swallowed")
 	}
 }
 

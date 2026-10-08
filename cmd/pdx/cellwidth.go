@@ -10,7 +10,7 @@ import (
 // and zero-width characters, 2 for East Asian wide characters and emoji, else 1.
 func runeWidth(r rune) int {
 	switch {
-	case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || (r >= 0x200B && r <= 0x200F) || r == 0xFE0F:
+	case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || (r >= 0x200B && r <= 0x200F) || r == 0xFE0F || (r >= 0x1F3FB && r <= 0x1F3FF):
 		return 0
 	case r >= 0x1100 && r <= 0x115F,
 		r >= 0x2E80 && r <= 0xA4CF,
@@ -20,7 +20,8 @@ func runeWidth(r rune) int {
 		r >= 0xFF00 && r <= 0xFF60,
 		r >= 0xFFE0 && r <= 0xFFE6,
 		r >= 0x1F300 && r <= 0x1F64F,
-		r >= 0x1F900 && r <= 0x1F9FF,
+		r >= 0x1F680 && r <= 0x1F6FF,
+		r >= 0x1F900 && r <= 0x1FAFF,
 		r >= 0x20000 && r <= 0x3FFFD:
 		return 2
 	}
@@ -56,8 +57,8 @@ func cutWidth(s string, max int) string {
 
 // alignRows writes rows as a table whose columns are padded by display width
 // (text/tabwriter counts runes, which misaligns CJK), gap spaces apart; the
-// last column is not padded.
-func alignRows(w io.Writer, rows [][]string, gap int) {
+// last column is not padded. It returns the first write error.
+func alignRows(w io.Writer, rows [][]string, gap int) error {
 	var widths []int
 	for _, row := range rows {
 		for i, c := range row {
@@ -76,6 +77,9 @@ func alignRows(w io.Writer, rows [][]string, gap int) {
 			}
 		}
 		b.WriteByte('\n')
-		io.WriteString(w, b.String())
+		if _, err := io.WriteString(w, b.String()); err != nil {
+			return err
+		}
 	}
+	return nil
 }

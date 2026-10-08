@@ -543,6 +543,9 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		}
 		rows = append(rows, cells)
 	}
-	alignRows(stdout, rows, 2)
+	if err := alignRows(stdout, rows, 2); err != nil {
+		fmt.Fprintf(stderr, "pdx team: %v\n", err)
+		return ExitError
+	}
 	return ExitOK
 }
