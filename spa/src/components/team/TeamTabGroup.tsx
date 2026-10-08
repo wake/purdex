@@ -7,8 +7,8 @@
 // inside, team-colored separators inside the group (TabBar), one faint rule under the whole group.
 // The older styles: an outline ("frame"), one shared tinted plate ("plate"); "tint" / "topbar" decorate the tabs.
 import type { CSSProperties, ReactNode } from 'react'
-import { User } from '@phosphor-icons/react'
-import { groupBadge, groupCorner, groupHasCue, useTeamDisplay, type TeamCornerSize, type TeamTabMark } from './team-display'
+import { User, UsersThree, BookmarkSimple, Hexagon, Diamond, Circle } from '@phosphor-icons/react'
+import { groupBadge, groupCorner, groupEdge, groupHasCue, useTeamDisplay, type TeamBadgeIcon, type TeamCornerSize, type TeamTabMark } from './team-display'
 
 /** Dark text on the pastel team colors, in both themes. */
 const LABEL_FG = '#14141f'
@@ -65,16 +65,6 @@ const BADGE_PX: Record<'icon' | 'disc', Record<TeamCornerSize, number>> = {
   disc: { sm: 14, md: 18, lg: 22 },
 }
 
-/** Gap between a tab's bottom edge and the tab bar's bottom rule, (the tab is 26px tall, the scroller clips 6px below it and the tab has a 1px border, so 7px from the padding edge). */
-const RULE_GAP = 7
-/** The close button's X is 12px wide, centered in a 24px slot at the tab's right edge (center = 12px from the edge). */
-const CLOSE_CENTER = 12
-/** Rule-position sizes are capped so the badge top stays below the X glyph (12px of free height under it, 1px air). */
-const RULE_PX: Record<'icon' | 'disc', Record<TeamCornerSize, number>> = {
-  icon: { sm: 9, md: 11, lg: 12 },
-  disc: { sm: 10, md: 11, lg: 12 },
-}
-
 /** A folded-corner mark on a tab (the "corner-*" group styles): a team-colored right triangle, optionally holding a member icon. */
 export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
   const corner = groupCorner(mark.style)
@@ -83,25 +73,6 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
   const size = display?.cornerSize ?? 'md'
   if (badge) {
     const px = BADGE_PX[badge][size]
-    if (display?.badgePos === 'rule') {
-      const rpx = RULE_PX[badge][size]
-      // Stands on the tab bar's bottom rule: the badge's bottom edge sits on the rule, horizontally under the close button.
-      // The tab is 26px tall with a 2px top margin inside the bar, so the rule is RULE_GAP px below the tab's bottom edge.
-      return (
-        <span
-          data-testid="team-tab-badge"
-          data-badge={badge}
-          data-badge-pos="rule"
-          aria-hidden="true"
-          className="absolute pointer-events-none z-20 flex items-center justify-center"
-          style={{ bottom: -RULE_GAP, right: CLOSE_CENTER - rpx / 2, width: rpx, height: rpx, borderRadius: '50%', background: badge === 'disc' ? mark.color : undefined }}
-        >
-          {badge === 'disc'
-            ? <User weight="bold" size={Math.round(rpx * 0.62)} color="var(--surface-secondary)" />
-            : <User weight="fill" size={rpx} color={mark.color} />}
-        </span>
-      )
-    }
     // Center sits on the corner, nudged inward by 2px so the TabBar scroller (which clips vertically) keeps the whole badge visible.
     const off = -(px / 2) + 2
     return (
@@ -112,10 +83,27 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
         className="absolute pointer-events-none z-20 flex items-center justify-center"
         style={{ top: off, right: off, width: px, height: px, borderRadius: '50%', background: badge === 'disc' ? mark.color : undefined }}
       >
-        {badge === 'disc'
-          ? <User weight="bold" size={Math.round(px * 0.62)} color="var(--surface-secondary)" />
-          : <User weight="fill" size={px} color={mark.color} />}
+        <BadgeGlyph kind={display?.badgeIcon ?? 'bookmark'} disc={badge === 'disc'} px={px} mark={mark} />
       </span>
+    )
+  }
+  const edge = groupEdge(mark.style)
+  if (edge) {
+    const w = display?.edgeWidth ?? 2
+    // Arc: a right-only border on a box with the tab's own corner radius (6px, drawn over the 1px transparent border),
+    // so the line follows the active tab's rounded corners and tapers off at the top/bottom like a ")" bracket.
+    // Short: a plain bar on the middle of the right edge, no turns. Sits at the very edge; the close X is 12px in.
+    return (
+      <span
+        data-testid="team-tab-edge"
+        data-edge={edge}
+        data-edge-width={String(w)}
+        aria-hidden="true"
+        className="absolute pointer-events-none z-10"
+        style={edge === 'arc'
+          ? { top: -1, bottom: -1, right: -1, width: 8, borderRight: `${w}px solid ${mark.color}`, borderTopRightRadius: 6, borderBottomRightRadius: 6 }
+          : { top: 7, bottom: 7, right: -1, width: w, background: mark.color, borderRadius: w }}
+      />
     )
   }
   if (!corner) return null
@@ -149,4 +137,23 @@ export function TeamTabCorner({ mark }: { mark: TeamTabMark }) {
       )}
     </span>
   )
+}
+
+/** The glyph inside a corner badge: bare (team-colored glyph) or on a team-colored disc (knocked-out glyph). */
+function BadgeGlyph({ kind, disc, px, mark }: { kind: TeamBadgeIcon; disc: boolean; px: number; mark: TeamTabMark }) {
+  const fg = disc ? 'var(--surface-secondary)' : mark.color
+  const size = disc ? Math.round(px * 0.62) : px
+  const weight = disc ? 'bold' : 'fill'
+  switch (kind) {
+    case 'users': return <UsersThree weight={weight} size={size} color={fg} />
+    case 'bookmark': return <BookmarkSimple weight={weight} size={size} color={fg} />
+    case 'hexagon': return <Hexagon weight={weight} size={size} color={fg} />
+    case 'diamond': return <Diamond weight={weight} size={size} color={fg} />
+    case 'dot': return disc ? <Circle weight="fill" size={Math.round(px * 0.34)} color={fg} /> : <Circle weight="fill" size={Math.round(px * 0.7)} color={fg} />
+    case 'letter': {
+      const ch = Array.from(mark.label.trim())[0] ?? '?'
+      return <span className="font-bold leading-none" style={{ fontSize: Math.round(px * (disc ? 0.6 : 0.8)), color: fg }}>{ch.toUpperCase()}</span>
+    }
+    default: return <User weight={weight} size={size} color={fg} />
+  }
 }

@@ -30,7 +30,7 @@ export interface TeamSeatView {
  */
 export type TeamGroupStyle = 'label' | 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule' | 'combo' | 'tint' | 'frame' | 'topbar' | 'plate'
   | 'corner-tr' | 'corner-br' | 'corner-tr-icon' | 'corner-br-icon'
-  | 'badge-icon' | 'badge-disc'
+  | 'badge-icon' | 'badge-disc' | 'edge-arc' | 'edge-short'
 
 /** The low-key cues a group style turns on (the older four styles use none of them). */
 export type TeamGroupCue = 'dot' | 'endcap' | 'gap' | 'sepcolor' | 'rule'
@@ -58,8 +58,16 @@ export function groupBadge(style: TeamGroupStyle): 'icon' | 'disc' | null {
 /** Corner size (small / default / large); the icon variants are drawn bigger to hold the icon. */
 export type TeamCornerSize = 'sm' | 'md' | 'lg'
 
-/** Where a corner badge sits: straddling the tab's top-right corner, or standing on the tab bar's bottom rule below the close button. */
-export type TeamBadgePos = 'corner' | 'rule'
+/** The glyph in a corner badge ('user' is the old v5b one, kept as a comparison). */
+export type TeamBadgeIcon = 'bookmark' | 'users' | 'hexagon' | 'diamond' | 'dot' | 'letter' | 'user'
+
+/** Right-edge line thickness in px. */
+export type TeamEdgeWidth = 1.5 | 2
+
+/** The right-edge styles: a team-colored line on the tab's right edge, either following the corner radius (arc) or only the middle (short). */
+export function groupEdge(style: TeamGroupStyle): 'arc' | 'short' | null {
+  return style === 'edge-arc' ? 'arc' : style === 'edge-short' ? 'short' : null
+}
 
 /** Where the hook's top starts: exactly at the lead highlight's lower edge, or fused into the highlight. */
 export type TeamHookTop = 'below' | 'blend'
@@ -118,7 +126,8 @@ export interface TeamDisplay {
   hookStyle: TeamHookStyle
   hookTop: TeamHookTop
   cornerSize: TeamCornerSize
-  badgePos: TeamBadgePos
+  badgeIcon: TeamBadgeIcon
+  edgeWidth: TeamEdgeWidth
   openMark: TeamOpenMark
   tabMark: (tabId: string) => TeamTabMark | null
   /** Member tabs folded into the bead row (their lead row is in the same list). */
