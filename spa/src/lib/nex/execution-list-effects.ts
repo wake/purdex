@@ -484,7 +484,7 @@ export function createExecutionListEffects(sink: ListSink): ExecutionListEffects
     rt.baseline.last = d.bseq
     observeDelta(rt, d)
     armSuspects(hostId, rt)
-    const entry = normalizeDelta(d.ver, d.row)
+    const entry = normalizeDelta(d.ver, d.row, d.bseq)
     if (rt.overlay) putOverlay(rt.overlay, d.id, entry)
     const membership = d.row === null || d.row.archived === true
       || d.cause.includes('execution.archived') || d.cause.includes('execution.unarchived')

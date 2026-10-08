@@ -60,6 +60,9 @@ export function findSuspects(
   const consider = (id: string, c: ExecutionSummary | null, f: ExecutionSummary | null, page: WalkPage) => {
     const newer = overlay?.get(id)
     if (newer && newer.ver > page.ver) return
+    // A delta seen during the walk that was enqueued before the page was read and carries the very state the page
+    // lists is that state in flight (§8 R3-1), even though it was not applied (its ver is not newer than the page).
+    if (newer && newer.bseq !== undefined && newer.bseq <= (page.bseq ?? 0) && statusDigest(newer.row) === statusDigest(f)) return
     if (page.ver <= (vers[id] ?? 0) && c) return
     const diff = digestDiff(c, f)
     if (diff) out.push({ id, V: page.ver, H: page.bseq ?? 0, listDigest: statusDigest(f), ...diff })

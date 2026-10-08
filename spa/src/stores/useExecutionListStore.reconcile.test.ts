@@ -60,6 +60,12 @@ const ready = async () => {
   expect(cache().rowVers).toEqual({ a: 5 })
 }
 
+const ready9 = async () => {
+  store().onHello(A, { epoch: E1, bseq: 0 })
+  store().subscribe(A)
+  await advance(0)
+}
+
 describe('F2: the daemon seed absorbed a silent transition; the next reconcile corrects the cache by ver', () => {
   it('(a) a hello-triggered reconcile', async () => {
     await ready()
@@ -176,6 +182,23 @@ describe('suspects', () => {
     expect(mismatches()).toBe(0)
     await advance(1)
     expect(mismatches()).toBe(1)
+  })
+
+  it('G2: a matching delta (bseq <= H, ver <= V) that arrived between pages, before the commit, makes the suspect benign', async () => {
+    vi.mocked(api.listExecutions).mockResolvedValue(page(9, [row('a', { state: 'running' })]))
+    await ready9()
+    let release!: (p: never) => void
+    vi.mocked(api.listExecutions).mockReset()
+      .mockResolvedValueOnce({ items: [row('a', { state: 'idle' })], next_cursor: 'b', pdx: { epoch: E1, ver: 10, bseq: 3 } } as never)
+      .mockImplementationOnce(() => new Promise((r) => { release = r as never }))
+    await advance(SAFETY_MS)
+    store().applyDelta(A, delta(1, 'a', 8, row('a', { state: 'idle' }))) // between pages: ver 8 <= known 9, so it only reaches the overlay
+    release({ items: [], next_cursor: '', pdx: { epoch: E1, ver: 11, bseq: 3 } } as never)
+    await advance(0)
+    store().applyDelta(A, delta(2, 'x', 12, row('x')))
+    store().applyDelta(A, delta(3, 'y', 13, row('y')))
+    await advance(GRACE_MS * 3)
+    expect(mismatches()).toBe(0)
   })
 
   it('a row only on one side is a suspect; the commit repairs it', async () => {

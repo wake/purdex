@@ -46,6 +46,17 @@ describe('findSuspects', () => {
   it('a cached-only row beyond a truncated walk has no covering page and is ignored', () => {
     expect(findSuspects(cacheOf([row('z')], { z: 1 }), [], [{ ver: 10, upTo: 'b', bseq: 3 }], null)).toEqual([])
   })
+  it('G2: an overlay entry with bseq <= H and the listed digest explains the row even though it is not newer than the page', () => {
+    const o: Overlay = new Map()
+    putOverlay(o, 'a', { ...normalizeDelta(8, row('a')), bseq: 2 })
+    expect(findSuspects(cacheOf([row('a', { state: 'running' })], { a: 9 }), [row('a')], pages, o)).toEqual([])
+    const late: Overlay = new Map()
+    putOverlay(late, 'a', { ...normalizeDelta(8, row('a')), bseq: 4 }) // after the page's H: not evidence about the page
+    expect(findSuspects(cacheOf([row('a', { state: 'running' })], { a: 9 }), [row('a')], pages, late)).toHaveLength(1)
+    const other: Overlay = new Map()
+    putOverlay(other, 'a', { ...normalizeDelta(8, row('a', { state: 'error' })), bseq: 2 })
+    expect(findSuspects(cacheOf([row('a', { state: 'running' })], { a: 9 }), [row('a')], pages, other)).toHaveLength(1)
+  })
   it('an id whose overlay entry is newer than its page is already explained', () => {
     const o: Overlay = new Map()
     putOverlay(o, 'a', normalizeDelta(15, row('a', { state: 'running' })))
