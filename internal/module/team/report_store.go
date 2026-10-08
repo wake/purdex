@@ -116,9 +116,8 @@ func sameReport(stored, in ReportRow) bool {
 // id and the fields (team.ValidReportID / team.ValidateReport) so nothing is
 // stored that could not be sent as a peer message.
 //
-// The store does not check that the task is the reporting member's own: that
-// is the route's job (T-1b2: "the task is the member's own"), which knows who
-// the caller is. Here MemberKey is only recorded.
+// InsertReport does not check that the task is the reporting member's own;
+// MemberKey is only recorded. The routes use InsertReportByOwner, which does.
 //
 //   - Task missing in that team: ErrTaskNotFound (another team's task with the
 //     same seq is a different task).
@@ -140,6 +139,22 @@ func sameReport(stored, in ReportRow) bool {
 //     deleted task still gets the stamps and the appends, but its status
 //     never changes.
 func (s *Store) InsertReport(r ReportRow) (ReportRow, TaskRow, bool, error) {
+	return s.insertReport(r, false)
+}
+
+// InsertReportByOwner is InsertReport for a member, with the member's right
+// read where the write happens: the task's owner_key must be r.MemberKey and
+// r.MemberKey an active member of a live team of r.TeamID, else
+// ErrTaskNotFound with nothing written, no hint which condition failed. The
+// check comes before the replay lookup, so a caller that lost the task is not
+// handed the stored report of a retry either.
+func (s *Store) InsertReportByOwner(r ReportRow) (ReportRow, TaskRow, bool, error) {
+	return s.insertReport(r, true)
+}
+
+// insertReport is the one insert; byOwner adds the member's right as a
+// condition of the same transaction.
+func (s *Store) insertReport(r ReportRow, byOwner bool) (ReportRow, TaskRow, bool, error) {
 	r = r.normalize()
 	if r.TeamID == "" || r.MemberKey == "" || r.TaskSeq <= 0 {
 		return ReportRow{}, TaskRow{}, false, errors.New("insert report: team, task and member must be set")
@@ -161,6 +176,17 @@ func (s *Store) InsertReport(r ReportRow) (ReportRow, TaskRow, bool, error) {
 		}
 		if !ok {
 			return ErrTaskNotFound
+		}
+		if byOwner {
+			live := cur.OwnerKey == r.MemberKey
+			if live {
+				if live, err = liveMemberIn(ctx, conn, r.TeamID, r.MemberKey); err != nil {
+					return fmt.Errorf("check owner: %w", err)
+				}
+			}
+			if !live {
+				return ErrTaskNotFound
+			}
 		}
 
 		prev, err := scanReport(conn.QueryRowContext(ctx, `SELECT `+reportCols+` FROM reports WHERE team_id = ? AND id = ?`, r.TeamID, r.ID))
@@ -301,4 +327,43 @@ func listReportsIn(ctx context.Context, db rowsQuerier, teamID string, taskSeq i
 		return nil, fmt.Errorf("list reports %s: %w", teamID, err)
 	}
 	return out, nil
+}
+
+// ListReportsForOwner is a member's read of one task's reports (ListReports'
+// order, since and limit): in one transaction it checks that ownerKey is an
+// active member of a live team of teamID and that task (teamID, taskSeq)
+// exists and is ownerKey's, then reads. ok=false, nothing returned, when any
+// of that fails (or taskSeq <= 0 or ownerKey is empty), without saying which.
+func (s *Store) ListReportsForOwner(teamID string, taskSeq int, ownerKey string, sinceMS int64, limit int) ([]ReportRow, bool, error) {
+	if ownerKey == "" || taskSeq <= 0 {
+		return nil, false, nil
+	}
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("list reports %s: %w", teamID, err)
+	}
+	defer tx.Rollback() // a read: nothing to commit
+	var owner string
+	err = tx.QueryRowContext(ctx, `SELECT owner_key FROM tasks WHERE team_id = ? AND seq = ?`, teamID, taskSeq).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("list reports %s/%d: read task: %w", teamID, taskSeq, err)
+	}
+	live := owner == ownerKey
+	if live {
+		if live, err = liveMemberIn(ctx, tx, teamID, ownerKey); err != nil {
+			return nil, false, fmt.Errorf("list reports %s/%d: check owner: %w", teamID, taskSeq, err)
+		}
+	}
+	if !live {
+		return nil, false, nil
+	}
+	rows, err := listReportsIn(ctx, tx, teamID, taskSeq, sinceMS, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	return rows, true, nil
 }
