@@ -91,6 +91,10 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 			m.logf("[resources] lease %s: %v", r.ID, err)
 			if at, ok := m.useAt[r.ID]; ok {
 				lastAt[r.ID] = at
+			} else {
+				// Resumed after a restart: the figure it resumes from is one
+				// interval old, as dt assumed above.
+				lastAt[r.ID] = now.Add(-m.interval)
 			}
 			continue
 		}

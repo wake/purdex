@@ -194,6 +194,31 @@ func TestLeaseUse_FailedWriteKeepsEWMAClock(t *testing.T) {
 	}
 }
 
+// After a restart (no clock in memory) a failed first write must still leave
+// an anchor, or the next good write forgets the time the database was down.
+func TestLeaseUse_FailedFirstWriteAfterRestartKeepsAnchor(t *testing.T) {
+	f := newUseFix(t)
+	f.heldLease("a", resources.ScopeProcess, 100)
+	if err := f.m.store.UpdateUse("a", 40, 55, 38, 9, 0); err != nil {
+		t.Fatal(err)
+	}
+	half := f.m.settings().HalfLife()
+	if _, err := f.m.store.db.Exec(`CREATE TRIGGER use_fail BEFORE UPDATE ON resource_leases
+		BEGIN SELECT RAISE(ABORT, 'busy'); END`); err != nil {
+		t.Fatal(err)
+	}
+	f.measure([]resources.Proc{cpuProc(100, 1, 100)}) // write fails
+	if _, err := f.m.store.db.Exec(`DROP TRIGGER use_fail`); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(30 * time.Second)
+	f.measure([]resources.Proc{cpuProc(100, 1, 100)})
+	want := resources.UpdateEWMA(40, 100, f.m.interval+30*time.Second, half, false)
+	if r := f.row("a"); !approx(r.EWMA, want) {
+		t.Fatalf("ewma = %v, want %v", r.EWMA, want)
+	}
+}
+
 func TestLeaseUse_ResumesPersistedAverage(t *testing.T) {
 	f := newUseFix(t)
 	f.heldLease("a", resources.ScopeProcess, 100)
