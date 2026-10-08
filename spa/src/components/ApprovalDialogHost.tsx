@@ -43,6 +43,14 @@ function parseRoots(text: string): string[] {
   return text.split('\n').map((line) => line.trim()).filter((line) => line !== '')
 }
 
+// A team name, as the daemon judges it (D-N2, peers.ValidateTitle): at most 64 UTF-8 bytes and nothing but what Go's
+// unicode.IsPrint accepts — letters, marks, numbers, punctuation, symbols and the ASCII space. So controls, U+200B and
+// other Cf characters, NBSP and U+3000 are refused here as the daemon refuses them (it is the authority; this only
+// keeps 核准 from sending a name that comes back 400). Leading / trailing white space is trimmed before the check.
+const TEAM_NAME_MAX_BYTES = 64
+const TEAM_NAME_CHARS = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u
+const teamNameOk = (name: string) => new TextEncoder().encode(name).length <= TEAM_NAME_MAX_BYTES && TEAM_NAME_CHARS.test(name)
+
 const fieldClass = 'rounded-md border border-border-default bg-surface-input px-2 py-1 text-xs text-text-primary disabled:opacity-50'
 // `aria-disabled` dims like RestartDaemonButton's counting state: the button still takes the click (it queues).
 const buttonBase = 'px-3 py-1 rounded-md text-xs cursor-pointer disabled:opacity-50 disabled:cursor-default aria-disabled:opacity-50 flex items-center gap-1.5'
@@ -72,6 +80,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const payload = leadPayloadOf(approval)
   const relay = selfRelayPayloadOf(approval)
   const [maxMembers, setMaxMembers] = useState(String(DEFAULT_MAX_MEMBERS)) // U25: always 3; the lead's request is only named beside the field
+  // Shown only when the payload has a team_name (a daemon that knows names, D-N10), prefilled with the requested one.
+  // Kept here beside the member limit, so minimize / restore (the dialog stays mounted) keeps the edit.
+  const [teamName, setTeamName] = useState(payload.team_name ?? '')
   const [rootsText, setRootsText] = useState(payload.roots.join('\n'))
   // 「這個 session 不再詢問」 (spec §8.7 (a)): applied with the decision, whichever it is.
   const [noMoreAsking, setNoMoreAsking] = useState(false)
@@ -177,15 +188,19 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const membersErrorId = useId()
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
+  const nameShown = !isSelfRelay && payload.team_name !== undefined
+  const trimmedName = teamName.trim()
+  const nameOk = !nameShown || teamNameOk(trimmedName)
+  const nameErrorId = useId()
   // A self relay carries no grant (U13a: one click); only the lead kind validates its fields.
-  const grantOk = isSelfRelay || (membersOk && rootsOk)
+  const grantOk = isSelfRelay || (membersOk && rootsOk && nameOk)
   const locked = busy || queued !== undefined
   const session = approvalSessionLabel(approval.origin)
 
   const decide = async (decision: Decision) => {
     if (inFlight.current || locked) return
     if (decision === 'approve' && !grantOk) return
-    const grant: Grant | undefined = !isSelfRelay && decision === 'approve' ? { max_members: members, roots } : undefined
+    const grant: Grant | undefined = !isSelfRelay && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}) } : undefined
     if (!connected) {
       // A second click in the same tick still sees locked=false (React has not re-rendered the queued state):
       // the store is read synchronously so the FIRST queued decision wins (PR #1742 attacker A-2).
@@ -302,7 +317,28 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             </>
           ) : (
             <>
-              <label className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
+              {nameShown && (
+                <>
+                  <label className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
+                    <span className="shrink-0">{t('approval.dialog.team_name')}</span>
+                    <input
+                      type="text"
+                      value={teamName}
+                      placeholder={t('approval.dialog.team_name_placeholder')}
+                      disabled={locked}
+                      onChange={(e) => setTeamName(e.target.value)}
+                      aria-invalid={nameOk ? undefined : true}
+                      aria-describedby={nameOk ? undefined : nameErrorId}
+                      data-testid="approval-team-name"
+                      className={`min-w-0 flex-1 ${fieldClass}`}
+                    />
+                  </label>
+                  {!nameOk && (
+                    <p id={nameErrorId} role="alert" data-testid="approval-team-name-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.team_name_invalid')}</p>
+                  )}
+                </>
+              )}
+              <label className={`${nameShown ? 'mt-2' : 'mt-3'} flex items-center gap-2 text-xs text-text-secondary`}>
                 {t('approval.dialog.max_members')}
                 <input
                   type="number"
