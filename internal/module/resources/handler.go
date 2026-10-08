@@ -12,6 +12,8 @@ import (
 // available = false, reason = warming_up.
 func (m *Module) handleGet(w http.ResponseWriter, r *http.Request) {
 	snap := m.current()
+	// The mode is the setting as of now, not as of the last tick.
+	snap.Mode = m.settings().Mode
 	if sid := r.URL.Query().Get("session"); sid != "" {
 		snap = onlySession(snap, sid)
 	}

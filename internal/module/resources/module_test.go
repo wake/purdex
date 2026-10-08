@@ -87,8 +87,8 @@ func TestModule_ImplementsCoreModule(t *testing.T) {
 	if m.Name() != "resources" {
 		t.Fatalf("name = %q", m.Name())
 	}
-	if deps := m.Dependencies(); len(deps) != 1 || deps[0] != "peers" {
-		t.Fatalf("dependencies = %v, want [peers]", deps)
+	if deps := m.Dependencies(); len(deps) != 2 || deps[0] != "peers" || deps[1] != "hostconfig" {
+		t.Fatalf("dependencies = %v, want [peers hostconfig]", deps)
 	}
 }
 
