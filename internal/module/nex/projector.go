@@ -51,14 +51,16 @@ const (
 	deltaEventType = "nex.execution"
 )
 
-// projectorTiming is the projector's timing; a zero field takes its default.
-// A test seam.
+// projectorTiming is the projector's timing, and the bounds of its list
+// walks; a zero field takes its default. A test seam.
 type projectorTiming struct {
 	trailing   time.Duration   // coalesceTrailing
 	maxDelay   time.Duration   // coalesceCap
 	retryDelay time.Duration   // readRetryDelay
 	recheck    []time.Duration // recheckOffsets (projector_recheck.go)
 	helloWait  time.Duration   // helloSlotWait (projector_hello.go)
+	walkLimit  int             // walkPageLimit (projector_walk.go)
+	walkPages  int             // walkMaxPages (projector_walk.go)
 }
 
 func (t projectorTiming) withDefaults() projectorTiming {
@@ -76,6 +78,12 @@ func (t projectorTiming) withDefaults() projectorTiming {
 	}
 	if t.helloWait <= 0 {
 		t.helloWait = helloSlotWait
+	}
+	if t.walkLimit <= 0 {
+		t.walkLimit = walkPageLimit
+	}
+	if t.walkPages <= 0 {
+		t.walkPages = walkMaxPages
 	}
 	return t
 }
@@ -110,8 +118,8 @@ func (e *dirtyExec) due(t projectorTiming) time.Time {
 
 // rowDigest is the part of a row the safety reconcile compares with what was
 // pushed (§3.7): state, pending_permission.request_id, archived, turn_count,
-// last_turn_reason, terminal_reason. PR1c reads it; the projector keeps it
-// current with every delta.
+// last_turn_reason, terminal_reason. The projector keeps it current with
+// every delta; a list walk reads it from each listed row.
 type rowDigest struct {
 	State             string
 	PermissionRequest string
@@ -367,12 +375,22 @@ func (p *projector) flush(id string, b *dirtyExec) {
 // order (§3.5). The broadcast reaches only the subscribers that opted into
 // nex.v1, and it is strict: one of them that cannot take the frame is
 // disconnected rather than left without it.
+//
+// An epoch whose bseq is exhausted (2^53−1, §3.6) ends here, in the same
+// hold: the next epoch starts and its hello goes out first, and the delta
+// is bseq 1 of the new epoch — so every client sees the hello before any
+// delta it numbers. The delta carries the epoch as it is after that, not
+// the one st was stamped with; its ver is st's either way.
 func (p *projector) push(id string, st slotStamp, cause []string, row json.RawMessage, found bool) pushedRow {
 	if !found {
 		row = nil // encodes as null: remove
 	}
+	if p.slot.bseqExhausted() {
+		epoch := p.startEpochLocked()
+		p.logf("nex-delta: bseq reached %d; new epoch %s, hello sent to every nex.v1 subscriber", p.slot.bseqLimit, epoch)
+	}
 	bseq := p.slot.nextBseq()
-	value, err := encodeValue(deltaValue{Epoch: st.Epoch, Bseq: bseq, ID: id, Ver: st.Ver, Cause: cause, Row: row})
+	value, err := encodeValue(deltaValue{Epoch: p.slot.current().Epoch, Bseq: bseq, ID: id, Ver: st.Ver, Cause: cause, Row: row})
 	if err != nil {
 		// Cannot happen: row is JSON the row reader just encoded. Were it to,
 		// the bseq skipped shows every client a gap, and a gap reconciles.

@@ -397,6 +397,41 @@ func TestReadSlot_HoldConsumesNothing(t *testing.T) {
 	assert.Equal(t, slotStamp{Epoch: s.epoch, Ver: 2, Bseq: 1}, st, "a hold consumed a ver or a bseq")
 }
 
+// #1866 PR1c (spec 2026-10-08 §3.5, §3.6): a new epoch restarts bseq at 0
+// and leaves ver alone — ver orders reads across epochs too (rule V never
+// resets within the process).
+func TestReadSlot_RotateEpochResetsBseqAndKeepsVer(t *testing.T) {
+	s := newReadSlot(discardLogf)
+	ctx := context.Background()
+	_, err := s.readThen(ctx, "row", 0, okRead, func(slotStamp) { s.nextBseq() })
+	require.NoError(t, err)
+	old := s.epoch
+
+	var rotated string
+	require.NoError(t, s.hold(ctx, "epoch", 0, func(context.Context) error {
+		rotated = s.rotateEpoch()
+		return nil
+	}))
+	assert.NotEqual(t, old, rotated)
+	assert.Regexp(t, regexp.MustCompile(`^[0-9a-f]{16}$`), rotated)
+	st, err := s.read(ctx, "list", 0, okRead)
+	require.NoError(t, err)
+	assert.Equal(t, slotStamp{Epoch: rotated, Ver: 2, Bseq: 0}, st)
+}
+
+// bseq is exhausted once the next one would pass the limit: 2^53−1, the
+// largest integer a JavaScript client holds exactly.
+func TestReadSlot_BseqIsExhaustedAtItsLimit(t *testing.T) {
+	s := newReadSlot(discardLogf)
+	assert.Equal(t, uint64(1<<53-1), s.bseqLimit)
+	s.bseqLimit = 2
+	assert.False(t, s.bseqExhausted())
+	s.nextBseq()
+	assert.False(t, s.bseqExhausted())
+	s.nextBseq()
+	assert.True(t, s.bseqExhausted(), "bseq 3 would pass a limit of 2")
+}
+
 func TestReadSlot_ReadThenSkipsTheContinuationOfAFailedRead(t *testing.T) {
 	s := newReadSlot(discardLogf)
 	ran := false

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -27,14 +29,17 @@ import (
 // rowServer is a fake engine handler. GET /v1/executions/{id} answers id's
 // row — 404 execution_not_found when it has none — after failing the first
 // fails[id] reads with a 500; a script (states) sets the row's state anew
-// for each read until it runs out. GET /v1/executions answers listPage,
-// first waiting on listGate when one is set.
+// for each read until it runs out. GET /v1/executions pages through the
+// rows as Nexen's list does (ordered by id; limit, cursor; next_cursor the
+// last id of a page that has more; archived rows left out), first waiting
+// on listGate when one is set.
 type rowServer struct {
 	mu          sync.Mutex
 	rows        map[string]string
 	fails       map[string]int
 	reads       map[string]int
 	script      map[string][]string
+	listReads   int
 	listEntered chan struct{}
 	listGate    chan struct{}
 }
@@ -79,13 +84,19 @@ func (s *rowServer) readsOf(id string) int {
 	return s.reads[id]
 }
 
+func (s *rowServer) listReadCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listReads
+}
+
 func (s *rowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/executions" {
 		if s.listGate != nil {
 			s.listEntered <- struct{}{}
 			<-s.listGate
 		}
-		answer(http.StatusOK, listPage)(w, r)
+		answer(http.StatusOK, s.page(r.URL.Query()))(w, r)
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/v1/executions/")
@@ -111,6 +122,35 @@ func (s *rowServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// page answers one list page from the rows.
+func (s *rowServer) page(q url.Values) string {
+	limit, err := strconv.Atoi(q.Get("limit"))
+	if err != nil || limit <= 0 {
+		limit = 50
+	}
+	cursor := q.Get("cursor")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listReads++
+	var ids []string
+	for id, body := range s.rows {
+		if id > cursor && !strings.Contains(body, `"archived":true`) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	next := ""
+	if len(ids) > limit {
+		ids = ids[:limit]
+		next = ids[limit-1]
+	}
+	items := make([]string, len(ids))
+	for i, id := range ids {
+		items[i] = strings.TrimSpace(s.rows[id])
+	}
+	return `{"items":[` + strings.Join(items, ",") + `],"next_cursor":"` + next + `"}` + "\n"
+}
+
 // fastTiming coalesces quickly enough for tests to wait in real time.
 var fastTiming = projectorTiming{trailing: 20 * time.Millisecond, maxDelay: 80 * time.Millisecond, retryDelay: 40 * time.Millisecond}
 
@@ -128,8 +168,14 @@ type projEnv struct {
 
 func newProjEnv(t *testing.T, timing projectorTiming) *projEnv {
 	t.Helper()
+	return startProjEnv(t, timing, newRowServer())
+}
+
+// startProjEnv is newProjEnv over rows the test filled in already.
+func startProjEnv(t *testing.T, timing projectorTiming, rows *rowServer) *projEnv {
+	t.Helper()
 	e := &projEnv{slot: newReadSlot(discardLogf), bus: bus.New(), events: core.NewEventsBroadcaster(),
-		rows: newRowServer(), logs: &logRecorder{}}
+		rows: rows, logs: &logRecorder{}}
 	e.sub = e.events.AddTestSubscriberWith(core.FeatureNexV1)
 	e.p = newProjector(e.slot, rowReader{handler: e.rows, logf: e.logs.logf}, e.events, e.bus, e.logs.logf, timing)
 	e.p.start()
