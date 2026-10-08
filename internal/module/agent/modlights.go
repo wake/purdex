@@ -35,6 +35,14 @@ type modLights struct {
 	modKick     chan struct{}                  // cap 1: wakes the re-emit worker
 	modLiveSeen map[string]bool                // sid → Live() as of the worker's last round; under modMu
 
+	// hookBackground is the hook-sourced background symbol by frame id
+	// (hookbackground.go): what a Stop hook reported, shown while no live
+	// stream drives the pane. Under modMu.
+	hookBackground map[string]lights.Background
+	// hookBgClearedAt is the broadcast stamp of each frame's last
+	// SessionStart: a Stop stamped at or before it cannot set the symbol.
+	hookBgClearedAt map[string]int64
+
 	// modOverlayOn is the overlay switch. It is on exactly while the re-emit
 	// worker runs (startModLights turns it on once the worker is in its loop,
 	// stopModLights turns it off first): without the worker a mod change
@@ -75,6 +83,9 @@ func newModLights() modLights {
 		modKick:     make(chan struct{}, 1),
 		modLiveSeen: make(map[string]bool),
 		modTick:     modTickDefault,
+
+		hookBackground:  make(map[string]lights.Background),
+		hookBgClearedAt: make(map[string]int64),
 	}
 }
 
@@ -283,19 +294,29 @@ type modLight struct {
 // applyModOverlay replaces, in place, the light of every projection whose
 // top frame's session id has a live mod stream (spec §7): status, source
 // "mod", background and the dots. Projections without one keep the hook
-// light. It takes modMu only to copy the stream states (callers may hold
-// m.mu: the order is m.mu → modMu, and modMu is a leaf).
+// light, with the background symbol a Stop hook reported (hookbackground.go;
+// that part needs no mod, so it runs whether or not the overlay is on). It
+// takes modMu only to copy the stream states and the hook symbols (callers
+// may hold m.mu: the order is m.mu → modMu, and modMu is a leaf).
 func (m *Module) applyModOverlay(projections []SessionProjection) {
-	if len(projections) == 0 || !m.modOverlayOn.Load() {
+	if len(projections) == 0 {
 		return
 	}
+	overlayOn := m.modOverlayOn.Load()
 	lit := make(map[int]modLight)
+	hookBg := make(map[int]lights.Background)
 	bySID := make(map[string]*modLight) // each sid's state is copied once; nil: no live stream
 	now := m.modClock()
 	m.modMu.Lock()
 	for i := range projections {
 		top := projections[i].TopFrame
-		if top == nil || top.SessionID == "" {
+		if top == nil {
+			continue
+		}
+		if b := m.hookBackground[top.FrameID]; b != "" {
+			hookBg[i] = b
+		}
+		if !overlayOn || top.SessionID == "" {
 			continue
 		}
 		l, seen := bySID[top.SessionID]
@@ -315,6 +336,11 @@ func (m *Module) applyModOverlay(projections []SessionProjection) {
 	}
 	m.modMu.Unlock()
 
+	for i, b := range hookBg {
+		if _, driven := lit[i]; !driven {
+			projections[i].Background = string(b)
+		}
+	}
 	for i, l := range lit {
 		p := &projections[i]
 		p.Status = l.status

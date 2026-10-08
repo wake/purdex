@@ -135,7 +135,12 @@ func deriveCCStatus(purdexName string, rawEvent json.RawMessage) agent.DeriveRes
 		// Status="" so PostToolUseFailure does not pollute the
 		// idle/running/waiting status derivation — failure semantics live
 		// in PdxStopFailure, not here.
-		return agent.DeriveResult{
+		//
+		// One exception: is_interrupt=true means the user pressed Esc. CC
+		// sends no Stop for an interrupted turn, so this hook is the only
+		// signal that the turn is over; it reports idle whatever the
+		// agent_id (Esc interrupts the main agent and its subagents alike).
+		res := agent.DeriveResult{
 			Valid: true,
 			Detail: map[string]any{
 				"tool_name":   raw["tool_name"],
@@ -143,6 +148,10 @@ func deriveCCStatus(purdexName string, rawEvent json.RawMessage) agent.DeriveRes
 				"agent_id":    raw["agent_id"],
 			},
 		}
+		if interrupted, _ := raw["is_interrupt"].(bool); interrupted {
+			res.Status = agent.StatusIdle
+		}
+		return res
 	}
 
 	return agent.DeriveResult{Valid: false}

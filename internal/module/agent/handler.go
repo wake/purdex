@@ -381,12 +381,22 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			req.AgentType, req.PurdexName, result.Status, result.Reason, trace.ChainID())
 	}
 
-	// Error guard: when in error state, only whitelisted events can clear it
+	// A StopFailure that names a subagent (non-empty agent_id) is that
+	// subagent's failure, not the main agent's (U1-2a-4): it detaches the dot
+	// but carries no status for the session, so the in-memory write below and
+	// the error guard treat it as status-less. applyFrameEvent applies the
+	// same rule to the stored frame.
+	if isSubagentStopFailure(lifecycle, result) {
+		result.Status = ""
+	}
+
+	// Error guard: when the SENDER'S frame is in error, only whitelisted events
+	// can clear it. It reads the pane's own frame, not the session-level
+	// status, so another pane's error (or the mod's, which the session view
+	// carries) never blocks this pane's events (U1-2a-4). A sender with no
+	// frame is not guarded.
 	if result.Valid && result.Status != "" && result.Status != agentpkg.StatusError {
-		m.mu.Lock()
-		current := m.currentStatus[req.TmuxSession]
-		m.mu.Unlock()
-		if current == agentpkg.StatusError {
+		if m.senderFrameInError(req) {
 			canClear := lifecycle == agentpkg.LifecycleUserPromptSubmit || lifecycle == agentpkg.LifecycleSessionStart
 			// SessionEnd carries StatusClear and unconditionally tears down
 			// session state — it must always pass the error guard or the
@@ -442,6 +452,35 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 			return
 		}
+		// An interrupted tool call (is_interrupt, spec §7) is the one
+		// detail-only event that carries a status: idle. It still never
+		// resurrects — only the sender's own existing frame is touched — and
+		// it never overwrites a newer event: idleInterruptedFrame writes
+		// conditionally on the last_seen_at it read (#632 R7, U1-2a-4 F2). A
+		// sender without a frame, or one a newer event already wrote, writes
+		// and emits nothing.
+		interrupted := result.Status == agentpkg.StatusIdle && m.frames != nil
+		if interrupted {
+			outcome, ierr := m.idleInterruptedFrame(req, broadcastTs)
+			if ierr != nil {
+				log.Printf("[handler] interrupt status write: %v", ierr)
+				trace.Finish("aborted", "frame_apply_failed")
+				traceFinished = true
+				http.Error(w, `{"error":"frame update failed"}`, http.StatusInternalServerError)
+				return
+			}
+			if outcome != interruptWritten {
+				reason := "detail_only_no_frame"
+				if outcome == interruptSuperseded {
+					reason = "detail_only_superseded"
+				}
+				trace.Finish("completed", reason)
+				traceFinished = true
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+				return
+			}
+		}
 		projection, perr := m.projectionForSession(req.TmuxSession)
 		if perr != nil {
 			log.Printf("[handler] detail-only projection: %v", perr)
@@ -459,6 +498,16 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 			return
+		}
+		if interrupted {
+			// The status changed, so the in-memory view and the activity
+			// watcher follow it exactly as for any other status-bearing hook.
+			m.mu.Lock()
+			syncProjectionState(m.currentStatus, m.subagents, req.TmuxSession, projection)
+			m.mu.Unlock()
+			if m.prober != nil {
+				m.manageActivityWatch(req.TmuxSession, projection.TopFrame.AgentType, projection.EffectiveStatus())
+			}
 		}
 		normalized := buildProjectionNormalized(projection, req.AgentType, req.PurdexName, broadcastTs, result)
 		emitDecision, emitReason := m.emitHookRecorded(req, projection, normalized)
@@ -487,6 +536,9 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	trace.Frame(req, frameMeta)
+	// Keep the hook-sourced background symbol in step before the projection
+	// this event emits is built (a Stop sets it, a SessionStart clears it).
+	m.noteHookBackground(req, lifecycle, broadcastTs)
 	if isDevMode() {
 		log.Printf("[handler] frame_apply session=%s frame_id=%s lifecycle=%s decision=%s chain_id=%s",
 			req.TmuxSession, frameMeta.FrameID, req.PurdexName, frameMeta.Decision, trace.ChainID())
@@ -501,6 +553,16 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// finding (PR #801).
 	if frameMeta.Decision == "skipped" && frameMeta.Reason == "pre_tool_without_proxy_parent" {
 		trace.Finish("completed", "pre_tool_without_proxy_parent_skipped")
+		traceFinished = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		return
+	}
+	// A subagent's StopFailure with no sender frame and nothing to detach
+	// changed nothing: no projection, no legacy-row cleanup, no frame on the
+	// wire (U1-2a-4 F1).
+	if frameMeta.Decision == "skipped" && frameMeta.Reason == reasonSubagentStopFailureNoFrame {
+		trace.Finish("completed", "subagent_stop_failure_without_frame_skipped")
 		traceFinished = true
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -683,6 +745,21 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// senderFrameInError reports whether the sender's own frame is in error. A
+// missing frame, a missing store or a failed read all say no: the guard only
+// ever holds a state it can see, and a hook must not be dropped on a guess.
+func (m *Module) senderFrameInError(req EventRequest) bool {
+	if m.frames == nil {
+		return false
+	}
+	frame, err := m.frames.GetByIdentity(req.TmuxPaneID, req.SenderPID, req.SenderStartTime)
+	if err != nil {
+		log.Printf("[handler] error guard frame lookup: %v", err)
+		return false
+	}
+	return frame != nil && frame.Status == agentpkg.StatusError
 }
 
 // hasSubscribers reports whether the events broadcaster has any connected

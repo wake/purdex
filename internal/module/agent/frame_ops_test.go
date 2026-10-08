@@ -4887,10 +4887,25 @@ func buildStopFailureRequest(paneID string, senderPID int, senderStartTime, agen
 	return req, result
 }
 
+// seedRunningFrameWithSubagents seeds a frame whose status is running, so a
+// test can tell "status kept" from "status reset to the seed default".
+func seedRunningFrameWithSubagents(t *testing.T, m *Module, paneID, agentType string, pid int, startTime string, lastSeenAt int64, refs []agentpkg.SubagentRef) store.Frame {
+	t.Helper()
+	f := seedFrameWithSubagents(t, m, paneID, agentType, pid, startTime, lastSeenAt, refs)
+	if err := m.frames.UpdateStatusAndLastSeen(f.FrameID, agentpkg.StatusRunning, lastSeenAt); err != nil {
+		t.Fatalf("seed running status: %v", err)
+	}
+	got, err := m.frames.GetByIdentity(paneID, pid, startTime)
+	if err != nil || got == nil {
+		t.Fatalf("reload running frame: %v / %v", err, got)
+	}
+	return *got
+}
+
 func TestStopFailure_NativeDetach_Hits(t *testing.T) {
 	m := newProxyTestModule(t)
 	pane := newStopFailurePane()
-	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+	parent := seedRunningFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
 		nativeSubagentRef("match-id", 40),
 	})
 
@@ -4912,13 +4927,10 @@ func TestStopFailure_NativeDetach_Hits(t *testing.T) {
 	if len(got.Subagents) != 0 {
 		t.Fatalf("Subagents = %+v, want empty after native detach", got.Subagents)
 	}
-	// PR-A round-1 codex review P1 (thread 019ded5d): atomic ref+status
-	// write — frame.Status MUST persist as error after detach. Earlier
-	// implementation called mutateSubagentsWithRetry alone, which only
-	// touches Subagents+LastSeenAt and skipped the post-switch
-	// UpdateHookPath status update.
-	if got.Status != agentpkg.StatusError {
-		t.Fatalf("Status = %q, want %q after StopFailure detach (codex round-1 P1)", got.Status, agentpkg.StatusError)
+	// U1-2a-4: a StopFailure that carries an agent_id is a SUBAGENT's
+	// failure — the ref goes, the main status stays what it was.
+	if got.Status != agentpkg.StatusRunning {
+		t.Fatalf("Status = %q, want %q kept after a subagent StopFailure detach", got.Status, agentpkg.StatusRunning)
 	}
 	if got.LastSeenAt != 200 {
 		t.Fatalf("LastSeenAt = %d, want 200 (broadcastTs)", got.LastSeenAt)
@@ -4930,7 +4942,7 @@ func TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace(t *testing.T) {
 	pane := newStopFailurePane()
 	// Frame holds a single native ref whose ID does NOT match the
 	// incoming StopFailure payload.
-	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+	parent := seedRunningFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
 		nativeSubagentRef("no-match-id", 40),
 	})
 
@@ -4956,14 +4968,15 @@ func TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace(t *testing.T) {
 	default:
 		t.Fatalf("Reason = %q, want one of parent_frame_found/daemon_restart_recovery/no_parent_fallback", meta.Reason)
 	}
-	// (c) Legacy semantics preserved: status=error, LastSeenAt refreshed,
-	// ref still present (because not matched).
+	// (c) The payload still names a subagent (agent_id set), so the main
+	// status is kept even though no ref matched; LastSeenAt is refreshed and
+	// the unmatched ref stays.
 	got, err := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
 	if err != nil || got == nil {
 		t.Fatalf("reload parent: %v / %v", err, got)
 	}
-	if got.Status != agentpkg.StatusError {
-		t.Fatalf("Status = %q, want error", got.Status)
+	if got.Status != agentpkg.StatusRunning {
+		t.Fatalf("Status = %q, want running kept (agent_id set: a subagent's failure)", got.Status)
 	}
 	if got.LastSeenAt < preTs {
 		t.Fatalf("LastSeenAt = %d, want >= %d (refresh)", got.LastSeenAt, preTs)
@@ -4976,7 +4989,7 @@ func TestStopFailure_NativeDetach_Misses_NoNativeDetachTrace(t *testing.T) {
 func TestStopFailure_NoAgentId_LegacyBehaviour(t *testing.T) {
 	m := newProxyTestModule(t)
 	pane := newStopFailurePane()
-	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+	parent := seedRunningFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
 		nativeSubagentRef("no-match-id", 40),
 	})
 
@@ -5000,6 +5013,9 @@ func TestStopFailure_NoAgentId_LegacyBehaviour(t *testing.T) {
 	if err != nil || got == nil {
 		t.Fatalf("reload: %v / %v", err, got)
 	}
+	if got.Status != agentpkg.StatusError {
+		t.Fatalf("Status = %q, want error (no agent_id: the main agent failed)", got.Status)
+	}
 	if len(got.Subagents) != 1 {
 		t.Fatalf("Subagents = %+v, want unchanged", got.Subagents)
 	}
@@ -5008,7 +5024,7 @@ func TestStopFailure_NoAgentId_LegacyBehaviour(t *testing.T) {
 func TestStopFailure_EmptyAgentId_LegacyBehaviour(t *testing.T) {
 	m := newProxyTestModule(t)
 	pane := newStopFailurePane()
-	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+	parent := seedRunningFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
 		nativeSubagentRef("no-match-id", 40),
 	})
 
@@ -5029,6 +5045,9 @@ func TestStopFailure_EmptyAgentId_LegacyBehaviour(t *testing.T) {
 	got, err := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
 	if err != nil || got == nil {
 		t.Fatalf("reload: %v / %v", err, got)
+	}
+	if got.Status != agentpkg.StatusError {
+		t.Fatalf("Status = %q, want error (no agent_id: the main agent failed)", got.Status)
 	}
 	if len(got.Subagents) != 1 {
 		t.Fatalf("Subagents = %+v, want unchanged", got.Subagents)
@@ -5116,7 +5135,7 @@ func TestStopFailure_FixtureReplay_DthnPayload(t *testing.T) {
 
 	m := newProxyTestModule(t)
 	pane := newStopFailurePane()
-	parent := seedFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
+	parent := seedRunningFrameWithSubagents(t, m, pane, "cc", 100, "t100", 50, []agentpkg.SubagentRef{
 		nativeSubagentRef(agentID, 40),
 	})
 
@@ -5152,6 +5171,9 @@ func TestStopFailure_FixtureReplay_DthnPayload(t *testing.T) {
 	got, gerr := m.frames.GetByIdentity(pane, parent.PID, parent.ProcessStartTime)
 	if gerr != nil || got == nil {
 		t.Fatalf("reload: %v / %v", gerr, got)
+	}
+	if got.Status != agentpkg.StatusRunning {
+		t.Fatalf("Status = %q, want running kept (the recorded payload is a subagent's failure)", got.Status)
 	}
 	if len(got.Subagents) != 0 {
 		t.Fatalf("Subagents = %+v, want empty after fixture replay detach", got.Subagents)
@@ -5189,6 +5211,19 @@ func TestStopFailure_FrameAbsentBeforePreCheck(t *testing.T) {
 	if meta.Reason == "native_subagent_detached_on_stop_failure" {
 		t.Fatalf("Reason = %q, want non-detach for deleted frame", meta.Reason)
 	}
+	// The payload names a subagent, so with no sender frame and no proxy ref
+	// to detach there is nothing to update: it is skipped and must not
+	// resurrect a frame (U1-2a-4 review F1).
+	if meta.Decision != "skipped" {
+		t.Fatalf("Decision = %q, want skipped (meta=%+v)", meta.Decision, meta)
+	}
+	frames, lerr := m.frames.ListByPane(pane)
+	if lerr != nil {
+		t.Fatalf("ListByPane: %v", lerr)
+	}
+	if len(frames) != 0 {
+		t.Fatalf("frames = %+v, want none: a subagent StopFailure must not create the sender's frame", frames)
+	}
 }
 
 // PR-A round-2 codex review (threads 019ded61/62/63) caught that the
@@ -5206,7 +5241,7 @@ func TestMutateSubagentsAndStatusWithRetry_DetachedSuccessfully(t *testing.T) {
 	})
 
 	ref := agentpkg.SubagentRef{ID: "match-id", Type: "cc"}
-	outcome, stored, err := m.mutateSubagentsAndStatusWithRetry(parent, ref, agentpkg.StatusError, 200)
+	outcome, stored, err := m.mutateSubagentsAndStatusWithRetry(parent, ref, 200)
 	if err != nil {
 		t.Fatalf("mutate: %v", err)
 	}
@@ -5216,8 +5251,8 @@ func TestMutateSubagentsAndStatusWithRetry_DetachedSuccessfully(t *testing.T) {
 	if len(stored.Subagents) != 0 {
 		t.Fatalf("Subagents = %+v, want empty", stored.Subagents)
 	}
-	if stored.Status != agentpkg.StatusError {
-		t.Fatalf("Status = %q, want %q", stored.Status, agentpkg.StatusError)
+	if stored.Status != agentpkg.StatusIdle {
+		t.Fatalf("Status = %q, want %q (the row's own status is kept)", stored.Status, agentpkg.StatusIdle)
 	}
 	if stored.LastSeenAt != 200 {
 		t.Fatalf("LastSeenAt = %d, want 200", stored.LastSeenAt)
@@ -5252,7 +5287,7 @@ func TestMutateSubagentsAndStatusWithRetry_RefAlreadyAbsentAfterReload(t *testin
 	// reloads → racePost (ref already absent) → returns RefAlreadyAbsent
 	// without committing a phantom detach.
 	ref := agentpkg.SubagentRef{ID: "match-id", Type: "cc"}
-	outcome, _, err := m.mutateSubagentsAndStatusWithRetry(stale, ref, agentpkg.StatusError, 1500)
+	outcome, _, err := m.mutateSubagentsAndStatusWithRetry(stale, ref, 1500)
 	if err != nil {
 		t.Fatalf("mutate: %v", err)
 	}
@@ -5284,7 +5319,7 @@ func TestMutateSubagentsAndStatusWithRetry_FrameDeletedMidFlight(t *testing.T) {
 	// Helper sees pre-check pass on stale baseline (ref present), then
 	// UpsertIfUnchanged conflicts, GetByIdentity returns nil → FrameMissing.
 	ref := agentpkg.SubagentRef{ID: "match-id", Type: "cc"}
-	outcome, _, err := m.mutateSubagentsAndStatusWithRetry(stale, ref, agentpkg.StatusError, 200)
+	outcome, _, err := m.mutateSubagentsAndStatusWithRetry(stale, ref, 200)
 	if err != nil {
 		t.Fatalf("mutate: %v", err)
 	}

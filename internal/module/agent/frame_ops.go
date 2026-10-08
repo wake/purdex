@@ -533,8 +533,18 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		// the target ref was present, spec §2.3). Without the pre-check
 		// we'd broadcast a phantom "detached" trace step on every
 		// mismatched payload.
+		//
+		// U1-2a-4: a payload that names a subagent (non-empty agent_id) is
+		// that subagent's failure, never the main agent's, so none of the
+		// paths below may write error. Blanking the status here makes the
+		// ref-absent / already-detached fall-throughs and the generic
+		// post-switch write keep the frame's own status. Without an
+		// agent_id the main agent failed and the status stays error.
+		agentID, _ := result.Detail["agent_id"].(string)
+		if agentID != "" {
+			result.Status = ""
+		}
 		if frame != nil {
-			agentID, _ := result.Detail["agent_id"].(string)
 			if agentID == "" || findNativeRefByID(frame.Subagents, agentID) < 0 {
 				// No payload agent_id, or payload references a ref we
 				// don't hold. Trace as no-detach for observability;
@@ -557,10 +567,10 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			}
 			// PR-A round-2 codex review (threads 019ded61/62/63):
 			// mutateSubagentsAndStatusWithRetry handles three concerns:
-			//  1. atomic ref removal + Status=error write (R1 P1 fix)
+			//  1. atomic ref removal that keeps the row's own status
 			//  2. per-attempt ref-presence re-check (R2 phantom-detach fix)
 			//  3. retry exhaustion vs frame deletion distinguished
-			outcome, stored, merr := m.mutateSubagentsAndStatusWithRetry(*frame, ref, result.Status, broadcastTs)
+			outcome, stored, merr := m.mutateSubagentsAndStatusWithRetry(*frame, ref, broadcastTs)
 			if merr != nil {
 				// Retry exhausted (frame still exists but every
 				// UpsertIfUnchanged conflicted). Surface as handler
@@ -598,10 +608,10 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			case detachOutcomeRefAlreadyAbsent:
 				// Race lost — another writer detached the same ref
 				// between our pre-check and a retry baseline. We
-				// did NOT mutate; fall through to legacy
-				// post-switch UpdateHookPath path so StopFailure
-				// semantics (Status=error, LastSeenAt refresh)
-				// still take effect. The trace step is whatever
+				// did NOT mutate; fall through to the
+				// post-switch UpdateHookPath path, which refreshes
+				// LastSeenAt and keeps the frame's status (result.Status
+				// was blanked above). The trace step is whatever
 				// the legacy path emits (parent_frame_found etc.),
 				// honestly reflecting "didn't take detach branch".
 				break
@@ -645,6 +655,22 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 					Before:        ownerBefore,
 					After:         ownerAfterMap,
 				}, perr
+			}
+			// A subagent's StopFailure (agent_id set) that reaches here has
+			// no frame of its own (frame == nil in this body) and no proxy
+			// ref to detach: nothing to update. The generic path below
+			// would create the sender's frame, resurrecting one a SessionEnd
+			// or the sweep already removed, so it is skipped (U1-2a-4 F1).
+			if isSubagentStopFailure(lifecycle, result) {
+				// Nothing was changed and nothing will be emitted, so no
+				// projection is built: a failing read here would only turn
+				// a no-op into a 500 the hook retries (U1-2a-4 F4).
+				return nil, FrameTraceMeta{
+					Decision: "skipped",
+					Reason:   reasonSubagentStopFailureNoFrame,
+					Before:   map[string]any{},
+					After:    map[string]any{},
+				}, nil
 			}
 			// No matching ref — fall through to generic post-switch path
 			// so legacy behavior (no frame mutation, projection refresh)
@@ -1423,6 +1449,22 @@ func strFromDetail(detail map[string]any, key string) string {
 	return ""
 }
 
+// reasonSubagentStopFailureNoFrame is the skipped trace reason of a subagent's
+// StopFailure whose sender has no frame and no proxy ref to detach; the
+// handler ends such a request without projecting or emitting.
+const reasonSubagentStopFailureNoFrame = "subagent_stop_failure_without_frame"
+
+// isSubagentStopFailure reports whether the event is a StopFailure that names
+// a subagent (non-empty payload agent_id): that subagent's failure, never the
+// main agent's.
+func isSubagentStopFailure(lifecycle agentpkg.LifecycleEventKind, result agentpkg.DeriveResult) bool {
+	if lifecycle != agentpkg.LifecycleStopFailure {
+		return false
+	}
+	id, _ := result.Detail["agent_id"].(string)
+	return id != ""
+}
+
 func (m *Module) projectionForSession(sessionName string) (*SessionProjection, error) {
 	projections, err := m.liveFrameProjections()
 	if err != nil {
@@ -1704,8 +1746,8 @@ const (
 	// detachOutcomeRefAlreadyAbsent: a reload showed the target ref no
 	// longer present (concurrent SubagentStop or another StopFailure for
 	// the same agent_id won the race). No mutation issued for this path.
-	// Caller MUST fall back to legacy post-switch status update so
-	// StopFailure semantics still write Status=error / refresh LastSeenAt.
+	// Caller falls back to the post-switch path, which refreshes LastSeenAt
+	// and keeps the frame's status (the event names a subagent).
 	detachOutcomeRefAlreadyAbsent
 	// detachOutcomeFrameMissing: a reload returned nil because the row
 	// was deleted concurrently (SessionEnd / sweep). Caller emits
@@ -1713,19 +1755,20 @@ const (
 	detachOutcomeFrameMissing
 )
 
-// mutateSubagentsAndStatusWithRetry atomically removes a native ref AND
-// updates frame Status in a single UpsertIfUnchanged transaction. Mirrors
-// mutateSubagentsWithRetry's OCC retry loop but adds two contracts the
-// plain helper does not provide:
+// mutateSubagentsAndStatusWithRetry removes a native ref in a single
+// UpsertIfUnchanged transaction. Mirrors mutateSubagentsWithRetry's OCC retry
+// loop but adds two contracts the plain helper does not provide:
 //
 //  1. Per-attempt ref-presence re-check: if the target ref disappears
 //     between attempts (concurrent writer wins the race), abort with
 //     detachOutcomeRefAlreadyAbsent so caller can avoid emitting a phantom
 //     detach trace.
-//  2. Atomic Status field write: Status persists in the same row update
-//     as the Subagents change, eliminating the race window between
-//     "ref removed" and "status updated to error" that a two-step
-//     (mutate then UpdateHookPath) approach would leak.
+//  2. Status is the row's own, re-read on every attempt: the failing
+//     subagent's StopFailure no longer changes the main status (U1-2a-4;
+//     it used to write error here), and a status a hook or the probe wrote
+//     between attempts — the usual reason an attempt conflicts — is
+//     written back as it stands, never replaced by a value captured
+//     before the first attempt (plan review #5).
 //
 // Retry exhaustion (UpsertIfUnchanged keeps conflicting while the row
 // still exists across all proxyUpsertMaxAttempts iterations) returns an
@@ -1736,7 +1779,6 @@ const (
 func (m *Module) mutateSubagentsAndStatusWithRetry(
 	frame store.Frame,
 	ref agentpkg.SubagentRef,
-	status agentpkg.Status,
 	broadcastTs int64,
 ) (detachOutcome, store.Frame, error) {
 	current := frame
@@ -1755,7 +1797,9 @@ func (m *Module) mutateSubagentsAndStatusWithRetry(
 		expected := current.LastSeenAt
 		next := current
 		next.Subagents = updateSubagents(current.Subagents, agentpkg.LifecycleSubagentStop, ref)
-		next.Status = status
+		// next.Status is deliberately left as current's: every attempt
+		// writes the row it just read, so a status a hook or probe wrote
+		// between attempts (the usual cause of the conflict) survives.
 		next.LastSeenAt = broadcastTs
 		ok, stored, err := m.frames.UpsertIfUnchanged(next, expected)
 		if err != nil {
@@ -2054,6 +2098,9 @@ func (m *Module) reconcileCreatedFrameAsProxy(stored store.Frame, req EventReque
 	if derr != nil {
 		return false, store.Frame{}, derr
 	}
+	if deleted {
+		m.forgetHookBackground(stored.FrameID)
+	}
 	if !deleted {
 		// Partial state: parent has the proxy ref, self still
 		// standalone. Acceptable transient — projection dedup hides
@@ -2234,6 +2281,9 @@ func (m *Module) canonicalizeDescendantsAfterUpsert(self store.Frame, broadcastT
 		deleted, derr := m.frames.DeleteIfUnchanged(candidate.FrameID, candidate.LastSeenAt)
 		if derr != nil {
 			return parentStored, derr
+		}
+		if deleted {
+			m.forgetHookBackground(candidate.FrameID)
 		}
 		if !deleted {
 			// Partial state: proxy attached on self + candidate row

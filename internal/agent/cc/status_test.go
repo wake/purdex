@@ -286,3 +286,43 @@ func TestDeriveCCStatus_SessionStart_CompactStillIgnored(t *testing.T) {
 		t.Fatalf("compact must stay Valid=false, got %+v", r)
 	}
 }
+
+// An interrupted tool call (the user pressed Esc) ends the whole turn, so the
+// failure hook carries the only "idle" signal CC sends (spec §7): no Stop
+// fires for an interrupted turn. Any agent_id — Esc interrupts the main
+// agent and its subagents alike.
+func TestDerive_PostToolUseFailureInterruptIsIdle(t *testing.T) {
+	for _, agentID := range []any{nil, "", "agent-Z"} {
+		r := deriveViaProvider("PdxPostToolUseFailure", map[string]any{
+			"tool_name":    "Bash",
+			"tool_use_id":  "T3",
+			"is_interrupt": true,
+			"agent_id":     agentID,
+		})
+		if !r.Valid {
+			t.Fatalf("agent_id=%v: interrupt should be valid; got %+v", agentID, r)
+		}
+		if r.Status != agent.StatusIdle {
+			t.Fatalf("agent_id=%v: interrupt status = %q, want idle", agentID, r.Status)
+		}
+		if r.Detail["tool_use_id"] != "T3" {
+			t.Errorf("agent_id=%v: Detail[tool_use_id] = %v, want T3 (delegation unmark keeps working)", agentID, r.Detail["tool_use_id"])
+		}
+	}
+}
+
+func TestDerive_PostToolUseFailureWithoutInterruptStaysDetailOnly(t *testing.T) {
+	for name, raw := range map[string]map[string]any{
+		"absent":     {"tool_name": "Bash", "tool_use_id": "T4"},
+		"false":      {"tool_name": "Bash", "tool_use_id": "T4", "is_interrupt": false},
+		"not-a-bool": {"tool_name": "Bash", "tool_use_id": "T4", "is_interrupt": "true"},
+	} {
+		r := deriveViaProvider("PdxPostToolUseFailure", raw)
+		if !r.Valid {
+			t.Fatalf("%s: should be valid (detail-only); got %+v", name, r)
+		}
+		if r.Status != "" {
+			t.Fatalf("%s: status = %q, want detail-only (empty)", name, r.Status)
+		}
+	}
+}
