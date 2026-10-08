@@ -76,20 +76,31 @@ func (m *Module) memberView(mr memberRow) team.Member {
 	alias, _ := m.selfHost()
 	v := team.Member{SessionID: mr.SessionID, Ref: mr.Ref, Address: alias + "/" + mr.Ref, TeamID: mr.TeamID,
 		HostID: mr.HostID, Title: mr.Title, Cwd: mr.Cwd, TmuxSession: mr.TmuxSession, State: mr.State,
-		Model: mr.Model, Effort: mr.Effort, Context: mr.Usage, SpawnOp: mr.SpawnOp, CreatedAt: mr.CreatedAt,
+		Model: mr.Model, Effort: mr.Effort, SpawnOp: mr.SpawnOp, CreatedAt: mr.CreatedAt,
 		Origin: team.MemberOriginSpawned} // every row is spawned until adopt lands (PL-1b)
 	if mr.State == team.MemberActive {
 		if o, ok, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && ok {
 			v.Address = o.Address
 		}
 	}
+	v.Context = m.sessionContext(mr.SessionID, mr.Usage)
+	return v
+}
+
+// sessionContext is the ONE place a session's context reading is chosen: the
+// agent module's live reading of sessionID, else persisted (the one the
+// sweeper stored on the member's row or the lead's team row), else nil. The
+// team view, GET /api/team and the roster all call it, so they never
+// disagree; U1-7 changes the context source here and nowhere else. A nil
+// m.usage (tests, early boot) is "no live reading".
+func (m *Module) sessionContext(sessionID string, persisted *team.MemberContext) *team.MemberContext {
 	if m.usage != nil {
-		if u, ok := m.usage.ContextUsage(mr.SessionID); ok {
+		if u, ok := m.usage.ContextUsage(sessionID); ok {
 			c := contextOf(u)
-			v.Context = &c
+			return &c
 		}
 	}
-	return v
+	return persisted
 }
 
 func (m *Module) selfHost() (alias, hostID string) {
