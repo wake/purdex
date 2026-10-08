@@ -49,7 +49,7 @@ func (m *Module) handleRosterGet(w http.ResponseWriter, r *http.Request) {
 // read failure is errRegistry, not "everyone is not live": the roster would
 // flip to the stored values and back on a transient error.
 func (m *Module) buildRoster() (team.Roster, error) {
-	teams, err := m.store.ListLiveTeams()
+	teams, err := m.store.ListLiveTeamsWithLeadUsage()
 	if err != nil {
 		return team.Roster{}, err
 	}
@@ -68,10 +68,6 @@ func (m *Module) buildRoster() (team.Roster, error) {
 			}
 		}
 	}
-	leadUsage, err := m.store.LiveLeadUsages()
-	if err != nil {
-		return team.Roster{}, err
-	}
 	var origins map[string]team.Origin
 	if len(ids) > 0 {
 		if origins, err = m.origins.ResolveOriginsBySession(ids); err != nil {
@@ -82,7 +78,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 	out := team.Roster{Teams: make([]team.TeamRoster, 0, len(teams))}
 	for i, t := range teams {
 		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, CreatedAt: t.CreatedAt,
-			Lead: m.rosterLead(t, origins, alias, leadUsage[t.ID]), Members: []team.RosterMember{}}
+			Lead: m.rosterLead(t.Team, origins, alias, t.leadUsage), Members: []team.RosterMember{}}
 		for _, mr := range active[i] {
 			s := rosterSession(origins, mr.SessionID, func() team.RosterSession {
 				return team.RosterSession{SessionID: mr.SessionID, Ref: mr.Ref, Address: alias + "/" + mr.Ref,
