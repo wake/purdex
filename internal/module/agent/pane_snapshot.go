@@ -55,8 +55,9 @@ func (m *Module) takePaneSnapshot() *paneSnapshot {
 	defer cancel()
 	panes, err := m.tmux.ListPanePlacements(ctx)
 	if err != nil {
-		logBatchFailure(err)
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded)
+		logBatchFailure(err, timedOut)
+		if timedOut {
 			return &paneSnapshot{m: m, panes: map[string]tmux.PanePlacement{}}
 		}
 		return nil
@@ -64,7 +65,7 @@ func (m *Module) takePaneSnapshot() *paneSnapshot {
 	return &paneSnapshot{m: m, panes: panes}
 }
 
-func logBatchFailure(err error) {
+func logBatchFailure(err error, timedOut bool) {
 	now := time.Now().UnixNano()
 	last := batchFailLastLog.Load()
 	if last != 0 && now-last < int64(batchFailLogEvery) {
@@ -75,8 +76,12 @@ func logBatchFailure(err error) {
 		batchFailSuppressed.Add(1)
 		return
 	}
-	log.Printf("[agent] pane snapshot unavailable, reading panes one by one (%d similar reads since the last report): %v",
-		batchFailSuppressed.Swap(0), err)
+	action := "reading panes one by one"
+	if timedOut {
+		action = "treating every pane as unknown (no per-pane retry)"
+	}
+	log.Printf("[agent] pane snapshot unavailable, %s (%d similar reads since the last report): %v",
+		action, batchFailSuppressed.Swap(0), err)
 }
 
 // panePID is resolvePanePID from the snapshot. A pane the listing does not
