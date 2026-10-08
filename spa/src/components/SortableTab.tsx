@@ -1,5 +1,5 @@
 import { useSortable } from '@dnd-kit/sortable'
-import { X, Lock, WifiSlash } from '@phosphor-icons/react'
+import { X, Lock, WifiSlash, CaretDown, CaretRight } from '@phosphor-icons/react'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTabDisplay } from '../hooks/useTabDisplay'
@@ -10,6 +10,7 @@ import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { HostBadge } from './HostBadge'
 import { useTabHostBadge } from '../hooks/useTabHostBadge'
 import { hasHostBadge } from '../lib/host-color'
+import type { TeamTabMark } from './team/team-display'
 
 interface Props {
   tab: Tab
@@ -21,6 +22,9 @@ interface Props {
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
   onRename?: (tabId: string) => void
   onHover?: (tabId: string | null) => void
+  /** This tab's place in a lead/member group (team display); undefined outside one. */
+  group?: TeamTabMark
+  onToggleGroup?: (teamKey: string) => void
 }
 
 // Composite bg colors (canvas-verified for opaque X button bg)
@@ -28,7 +32,7 @@ interface Props {
 const TAB_BG_INACTIVE = 'var(--surface-secondary)'
 const TAB_BG_ACTIVE = 'var(--surface-active)'
 
-export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover }: Props) {
+export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, group, onToggleGroup }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
 
   const style = {
@@ -78,7 +82,9 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   }
   const handleDoubleClick = () => onRename?.(tab.id)
 
-  const tabBg = isActive ? TAB_BG_ACTIVE : TAB_BG_INACTIVE
+  const baseBg = isActive ? TAB_BG_ACTIVE : TAB_BG_INACTIVE
+  // The lead tab is the group head: tinted with the team color.
+  const tabBg = group?.role === 'lead' ? `color-mix(in srgb, ${group.color} ${isActive ? 40 : 26}%, ${baseBg})` : baseBg
   const showTooltip = tabNameTooltipMode === 'top' || tabNameTooltipMode === 'both'
 
   if (pinned) {
@@ -125,7 +131,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     <div
       ref={setNodeRef}
       data-tab-id={tab.id}
-      style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '0 1 140px', width: 140, minWidth: 80 }}
+      style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '0 1 140px', width: 140, minWidth: 80, ...(group?.role === 'lead' ? { backgroundColor: tabBg } : null) }}
+      data-team-role={group?.role}
       {...attributes}
       {...listeners}
       role="tab"
@@ -145,6 +152,34 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
           : 'text-text-muted hover:text-text-primary bg-surface-secondary hover:bg-surface-hover border border-transparent'
       }`}
     >
+      {group && (
+        <span
+          data-testid="team-group-line"
+          className="absolute -bottom-[5px] h-[3px] pointer-events-none"
+          style={{
+            background: group.color,
+            left: group.first ? 0 : -2,
+            right: group.last ? 0 : -2,
+            borderTopLeftRadius: group.first ? 3 : 0,
+            borderBottomLeftRadius: group.first ? 3 : 0,
+            borderTopRightRadius: group.last ? 3 : 0,
+            borderBottomRightRadius: group.last ? 3 : 0,
+          }}
+        />
+      )}
+      {group?.role === 'lead' && (
+        <button
+          type="button"
+          tabIndex={-1}
+          data-testid="team-group-toggle"
+          title={group.collapsed ? '展開群組' : '收合群組'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onToggleGroup?.(group.teamKey) }}
+          className="-ml-1 w-4 h-4 flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-white/10 cursor-pointer flex-shrink-0"
+        >
+          {group.collapsed ? <CaretRight size={10} weight="bold" /> : <CaretDown size={10} weight="bold" />}
+        </button>
+      )}
       <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} awaitingApproval={isAwaitingApproval} />
       {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge
@@ -158,6 +193,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         />
       )}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
+      {group?.role === 'lead' && group.collapsed && group.hiddenCount > 0 && (
+        <span data-testid="team-group-hidden" className="text-[10px] font-semibold px-1.5 rounded-full flex-shrink-0" style={{ background: `color-mix(in srgb, ${group.color} 45%, transparent)` }}>
+          +{group.hiddenCount}
+        </span>
+      )}
       {showTooltip && <HoverTooltip placement="top">{label}</HoverTooltip>}
       {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}

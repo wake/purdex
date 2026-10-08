@@ -6,6 +6,7 @@ import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useTeamDisplay } from './team/team-display'
 
 interface Props {
   tabs: Tab[]
@@ -27,6 +28,7 @@ function TabSeparator({ show }: { show: boolean }) {
 
 export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded }: Props) {
   const t = useI18nStore((s) => s.t)
+  const team = useTeamDisplay()
   const pinnedTabs = useMemo(() => tabs.filter((t) => t.pinned), [tabs])
   const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
   const pinnedIds = useMemo(() => pinnedTabs.map((t) => t.id), [pinnedTabs])
@@ -139,6 +141,8 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                     <SortableTab
                       tab={tab}
                       isActive={tab.id === activeTabId}
+                      group={team?.tabMark(tab.id) ?? undefined}
+                      onToggleGroup={team?.onToggleCollapse}
                       onSelect={onSelectTab}
                       onClose={onCloseTab}
                       onMiddleClick={onMiddleClick}
