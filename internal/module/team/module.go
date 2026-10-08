@@ -402,11 +402,16 @@ func (m *Module) closeWithOp(id string, cas func() (team.Approval, bool, error),
 }
 
 // announceClosed is what follows every close that won, once it is
-// committed: the closed broadcast, the long-poll wake-up and afterClose.
+// committed: the closed broadcast, the long-poll wake-up, afterClose and,
+// for an approval, afterApproved — on every path, so the side effects of
+// an approval live in one place.
 func (m *Module) announceClosed(after team.Approval, rep *RelayReport) {
 	m.broadcast("closed", &after)
 	m.wake(after.ID)
 	m.afterClose(after, rep)
+	if after.State == team.StateApproved {
+		m.afterApproved(after)
+	}
 }
 
 // broadcast queues one opened/closed event to every subscriber, under
