@@ -153,3 +153,55 @@ func TestRoster_ContextChangeIsAnnouncedOnTheTick(t *testing.T) {
 		t.Fatalf("changed carries %+v, want 42%%", ev.Teams[0].Members[0].Context)
 	}
 }
+
+// PL-1f′3 review A-1: after a relay's cleared the new session has no
+// statusline yet, so its context is none, never the old session's stored
+// reading. Checked on the roster (lead and member) and on GET /api/team
+// (member). Mutation gates: drop the usage reset for the lead → the lead
+// half red; for the member → the member half red.
+func TestRoster_ClearedDoesNotCarryTheOldSessionsContext(t *testing.T) {
+	old := team.MemberContext{UsedPercentage: pct(88), Window: 200000, ModelID: "claude-opus-5-5", Effort: "high", At: 5}
+
+	t.Run("lead", func(t *testing.T) {
+		f := newFixture(t)
+		seedTeam(t, f.m.store, uid(1), "sid-1", 1000)
+		if ok, err := f.m.store.SetLeadUsage(uid(1), "sid-1", old); err != nil || !ok {
+			t.Fatalf("persist lead reading: %v %v", ok, err)
+		}
+		if l := f.getRoster().Teams[0].Lead; l.Context == nil {
+			t.Fatal("precondition: the old lead's reading is not shown")
+		}
+		claimedOp(t, f.m.store, "relay-1", "sid-1", "_abc123")
+		mustReport(t, f.m.store, "relay-1", RelayReport{State: team.RelayCleared, NewSessionID: "sid-1b", NewRef: "_lll222", At: 5000})
+		if l := f.getRoster().Teams[0].Lead; l.SessionID != "sid-1b" || l.Context != nil {
+			t.Fatalf("new lead = %s, context %+v, want sid-1b with no context", l.SessionID, l.Context)
+		}
+	})
+
+	t.Run("member", func(t *testing.T) {
+		f := newFixture(t)
+		seedTeam(t, f.m.store, uid(1), "sid-1", 1000)
+		seedMember(t, f.m.store, "op-1", uid(1), "sid-m1", 2000)
+		f.persistedMember("op-1", "sid-m1", old)
+		if m := f.getRoster().Teams[0].Members[0]; m.Context == nil {
+			t.Fatal("precondition: the old member's reading is not shown")
+		}
+		claimedOp(t, f.m.store, "relay-1", "sid-m1", "_memop-1")
+		mustReport(t, f.m.store, "relay-1", RelayReport{State: team.RelayCleared, NewSessionID: "sid-m2", NewRef: "_mmm222", At: 5000})
+
+		if m := f.getRoster().Teams[0].Members[0]; m.SessionID != "sid-m2" || m.Context != nil {
+			t.Fatalf("roster member = %s, context %+v, want sid-m2 with no context", m.SessionID, m.Context)
+		}
+		code, body := f.do(http.MethodGet, "/api/team?origin_inbox=/tmp/10.sock", nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET /api/team: %d %s", code, body)
+		}
+		var view team.TeamView
+		if err := json.Unmarshal(body, &view); err != nil {
+			t.Fatal(err)
+		}
+		if len(view.Members) != 1 || view.Members[0].SessionID != "sid-m2" || view.Members[0].Context != nil {
+			t.Fatalf("GET /api/team members = %+v, want sid-m2 with no context", view.Members)
+		}
+	})
+}
