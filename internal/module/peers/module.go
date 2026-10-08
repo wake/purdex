@@ -36,6 +36,7 @@ import (
 	"github.com/wake/purdex/internal/module/session"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/peers/ccuds"
+	"github.com/wake/purdex/internal/peers/execpeers"
 	"github.com/wake/purdex/internal/peers/proxyhelper"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/team"
@@ -147,6 +148,8 @@ func redactRecord(rec *ipeers.PeerRecord, secret string) {
 	rec.TmuxName = redactSecret(rec.TmuxName, secret)
 	rec.Cwd = redactSecret(rec.Cwd, secret)
 	rec.Reason = redactSecret(rec.Reason, secret)
+	rec.ExecutionID = redactSecret(rec.ExecutionID, secret)
+	rec.ExecState = redactSecret(rec.ExecState, secret)
 	if rec.Agent != nil {
 		a := *rec.Agent
 		a.Type = redactSecret(a.Type, secret)
@@ -804,12 +807,13 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	}
 
 	previousRefs, lineageUnavailable := m.previousRefs()
+	execs, mailbox, execsUnavailable := m.executions(invCtx)
 	// Virtual names (Peer Address v5): every live conversation is named once,
 	// at first sighting, and the row pinned to its live entry is addressed by
 	// that name. Under invCtx, the inventory's one budget: a name store that
 	// hangs, or a pass whose budget is already spent, costs this pass its
 	// names (every row takes the ref form), never the GET or the send.
-	virtualNames := m.resolveNames(invCtx, entryNameCandidates(entries, proxyPIDs, previousRefs))
+	virtualNames := m.resolveNames(invCtx, append(entryNameCandidates(entries, proxyPIDs, previousRefs), execNameCandidates(execs, previousRefs)...))
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:       hostID,
 		Alias:        alias,
@@ -828,6 +832,9 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		// title column is blank. It says nothing about their addresses,
 		// which the title store never had a part in.
 		TitlesUnavailable: titlesUnavailable,
+		// One row per execution (peer mailbox spec §4.1).
+		Executions:     execs,
+		MailboxEnabled: mailbox,
 	})
 
 	return ipeers.Envelope{
@@ -847,7 +854,47 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 		UnknownRegistryFiles: unknown,
 		TitlesUnavailable:    titlesUnavailable,
 		LineageUnavailable:   lineageUnavailable,
+		// Not partial, like lineage_unavailable: every row shown is whole.
+		ExecutionsUnavailable: execsUnavailable,
 	}
+}
+
+// executions reads the nex module's execution list (execpeers.RegistryKey,
+// peer mailbox spec §4.1), looked up per call like previousRefs: no nex module
+// (off, soft-failed) means no execution rows and nothing else changes. A
+// listing that fails, or does not answer within ctx (the inventory's budget),
+// lists none and reports unavailable, under which a miss is not-ready rather
+// than not-found. The read runs on its own goroutine, as snapshotWithin's
+// does, so a page that does not honour ctx cannot hold the inventory.
+func (m *Module) executions(ctx context.Context) (rows []execpeers.Row, mailbox, unavailable bool) {
+	if m.core == nil || m.core.Registry == nil {
+		return nil, false, false
+	}
+	svc, _ := m.core.Registry.Get(execpeers.RegistryKey)
+	ep, ok := svc.(execpeers.ExecPeers)
+	if !ok {
+		return nil, false, false
+	}
+	type result struct {
+		rows []execpeers.Row
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		rows, err := ep.Rows(ctx)
+		done <- result{rows, err}
+	}()
+	var res result
+	select {
+	case res = <-done:
+	case <-ctx.Done():
+		res.err = ctx.Err()
+	}
+	if res.err != nil {
+		m.logf("peers: inventory: execution list unavailable, listing no execution: %v", res.err)
+		return nil, false, true
+	}
+	return res.rows, ep.MailboxEnabled(), false
 }
 
 // previousRefs reads the relay lineage the team module publishes under
@@ -958,6 +1005,8 @@ func (m *Module) allEnvelope(ctx context.Context, hostID, alias string, hosts []
 		UnknownRegistryFiles: local.UnknownRegistryFiles,
 		TitlesUnavailable:    local.TitlesUnavailable,
 		LineageUnavailable:   local.LineageUnavailable,
+		// The local row's execution flag, like its lineage flag.
+		ExecutionsUnavailable: local.ExecutionsUnavailable,
 	}
 
 	wg.Wait()
@@ -1011,7 +1060,7 @@ func normalizeRemoteRows(rows []ipeers.PeerRecord, alias, hostID string, address
 // name is addressed by its ref there, and must be here too — promoting its
 // registry name would print an address that remote no longer routes by.
 func remoteName(rec ipeers.PeerRecord, preV5 bool) string {
-	if !isLiveCC(rec) {
+	if !ipeers.NameAddressable(rec) {
 		return ""
 	}
 	name := rec.Name
@@ -1022,12 +1071,6 @@ func remoteName(rec ipeers.PeerRecord, preV5 bool) string {
 		return ""
 	}
 	return name
-}
-
-// isLiveCC is Resolve's hasLiveEntry condition, spelled out: the row carries
-// a real, live cc registry entry.
-func isLiveCC(rec ipeers.PeerRecord) bool {
-	return rec.Agent != nil && rec.Agent.Type == "cc" && rec.Agent.PID != 0
 }
 
 // remoteAddress derives the address this host will print for one remote row,
@@ -1051,10 +1094,10 @@ func isLiveCC(rec ipeers.PeerRecord) bool {
 func remoteAddress(rec ipeers.PeerRecord, alias string) string {
 	var session string
 	switch {
-	// hasLiveEntry's condition, spelled out: Resolve's name and ref tiers
-	// decide only on rows carrying a real live cc registry entry, so only
-	// those two forms may be printed for one.
-	case isLiveCC(rec):
+	// Resolve's name and ref tiers decide only on rows carrying a real live
+	// cc registry entry or an execution (NameAddressable), so only those two
+	// forms may be printed for one.
+	case ipeers.NameAddressable(rec):
 		switch {
 		case ipeers.RoutableName(rec.Name):
 			session = rec.Name
@@ -1224,5 +1267,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		UnknownRegistryFiles: bounded,
 		TitlesUnavailable:    env.TitlesUnavailable,
 		LineageUnavailable:   env.LineageUnavailable,
+		// A bool, copied through like the lineage flag.
+		ExecutionsUnavailable: env.ExecutionsUnavailable,
 	}
 }
