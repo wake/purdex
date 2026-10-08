@@ -1,0 +1,27 @@
+{
+  "live": false,
+  "turns": 6,
+  "per_turn": [
+    {"id": "f9c28c01-5168-478c-8b2e-e053aad6e897", "outcome": "done", "user_source": "user"},
+    {"id": "c8d5c110-3c08-4e0f-a00b-8908cc9aee14", "outcome": "done", "user_source": "task"},
+    {"id": "f05ffe58-db6d-419f-96b5-b51e88635b5a", "outcome": "interrupted", "user_source": "user"},
+    {"id": "21f0ade7-7f70-4f84-bf41-2d845907e2ff", "outcome": "done", "user_source": "user"},
+    {"id": "7988e4a6-3032-4c30-9275-bf1486e2fe62", "outcome": "interrupted", "user_source": "user"},
+    {"id": "8d3642fe-d299-49cb-a9c5-b3ee8adef863", "outcome": "done", "user_source": "slash"}
+  ],
+  "steps": [
+    {"id": "toolu_01EoTWRRhmpSGWtbA6Cv2nqv", "kind": "execute", "status": "failed"},
+    {"id": "toolu_01561zzDRfhH3wBhm8WbaVeW", "kind": "execute", "status": "done"},
+    {"id": "toolu_017ZqKRjb2YWirEJFpB6yhTS", "kind": "execute", "status": "denied", "denial": "user-rejected"},
+    {"id": "toolu_016SDT52sASWi8UMA2THq5jX", "kind": "execute", "status": "done"},
+    {"id": "toolu_01K3n9h6kHJoWQMqpT31CJZs", "kind": "execute", "status": "denied", "denial": "user-rejected"}
+  ],
+  "outputs": [
+    {"step": "toolu_01EoTWRRhmpSGWtbA6Cv2nqv", "total_lines": 1, "total_bytes": 280, "keep": "tail", "truncated": false},
+    {"step": "toolu_01561zzDRfhH3wBhm8WbaVeW", "total_lines": 1, "total_bytes": 241, "keep": "tail", "truncated": false},
+    {"step": "toolu_017ZqKRjb2YWirEJFpB6yhTS", "total_lines": 1, "total_bytes": 225, "keep": "tail", "truncated": false},
+    {"step": "toolu_016SDT52sASWi8UMA2THq5jX", "total_lines": 1, "total_bytes": 9, "keep": "tail", "truncated": false},
+    {"step": "toolu_01K3n9h6kHJoWQMqpT31CJZs", "total_lines": 1, "total_bytes": 225, "keep": "tail", "truncated": false}
+  ],
+  "shapes": ["interrupted_marker", "interrupted_refusal"]
+}

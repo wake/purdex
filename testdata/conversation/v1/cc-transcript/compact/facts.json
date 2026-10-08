@@ -1,0 +1,15 @@
+{
+  "live": false,
+  "turns": 6,
+  "per_turn": [
+    {"id": "85a7e16a-3231-4d99-aea7-69d3157bb9eb", "outcome": "done", "user_source": "user"},
+    {"id": "c5d67fc1-5f6e-4491-831a-4e594bcb8887", "outcome": "done", "user_source": "user"},
+    {"id": "82fe160f-6656-4750-bfad-9eb38177ee58", "outcome": "done", "user_source": "user"},
+    {"id": "191597f8-ad8c-4085-932e-9b691c15f661", "outcome": "done", "user_source": "slash"},
+    {"id": "1c47f28a-a0a5-4499-aa57-e986b8142210", "outcome": "done", "user_source": "user"},
+    {"id": "d0afd618-6ae7-4056-9db7-7d51bdc2d9ce", "outcome": "done", "user_source": "slash"}
+  ],
+  "steps": [],
+  "outputs": [],
+  "shapes": []
+}

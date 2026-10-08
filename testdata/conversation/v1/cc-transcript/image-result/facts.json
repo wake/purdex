@@ -1,0 +1,15 @@
+{
+  "live": false,
+  "turns": 2,
+  "per_turn": [
+    {"id": "1260b599-c1fb-40ec-8988-4df537251300", "outcome": "done", "user_source": "user"},
+    {"id": "a20c1fe3-84fb-4e68-97db-2879e0acb05a", "outcome": "done", "user_source": "slash"}
+  ],
+  "steps": [
+    {"id": "toolu_018vRUEjFJQ3GknHxQUAsvKP", "kind": "read", "status": "done"}
+  ],
+  "outputs": [
+    {"step": "toolu_018vRUEjFJQ3GknHxQUAsvKP", "total_lines": 1, "total_bytes": 7, "keep": "head", "truncated": false}
+  ],
+  "shapes": []
+}

@@ -46,7 +46,7 @@
             "source": "peer",
             "from": {
               "kind": "peer",
-              "name": "mlab/purdex-b0-q3"
+              "name": "mlab/fixture-peer"
             }
           },
           {

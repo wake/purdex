@@ -1,0 +1,16 @@
+{
+  "live": false,
+  "turns": 3,
+  "per_turn": [
+    {"id": "d8fc1753-9be5-47f2-b993-c00bdc7b3673", "outcome": "done", "user_source": "user"},
+    {"id": "2784af76-2dee-4701-9fda-70d4f16cdf1c", "outcome": "done", "user_source": "task"},
+    {"id": "08c3cfd0-3493-42ef-b44a-3e029c75e8b1", "outcome": "done", "user_source": "slash"}
+  ],
+  "steps": [
+    {"id": "toolu_01R2cprP5o4tDUDwZ3RikzsL", "kind": "task", "status": "done"}
+  ],
+  "outputs": [
+    {"step": "toolu_01R2cprP5o4tDUDwZ3RikzsL", "total_lines": 6, "total_bytes": 1026, "keep": "head", "truncated": false}
+  ],
+  "shapes": []
+}

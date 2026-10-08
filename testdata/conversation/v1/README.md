@@ -12,20 +12,25 @@ Fetch **only** these files, pinned by commit and checked against the sha256 in
 
 | File | What |
 |---|---|
-| `MANIFEST.json` | the case list: `{"version": 1, "cases": [{name, source, cc_version, description, input, expected, facts, sha256{input, expected, facts}}]}` |
+| `MANIFEST.json` | the case list: `{"version": 1, "cases": [{name, source, cc_version, description, input, expected, facts, sha256{input, expected, facts}, children?: [{agent_id, input, expected, facts, sha256{input, expected, facts}}]}]}` |
 | `cc-transcript/<case>/expected.json` | `{"live": bool, "conversation": <wire form, spec §8.1>}`, pretty-printed, stable key order |
 | `cc-transcript/<case>/facts.json` | hand-written checks (format below) |
+| `cc-transcript/<case>/children/<agentId>.expected.json` | `{"items": [<item>, …]}`: the items of a subagent's file (one pseudo-turn, what a parent step's `children` hold) |
+| `cc-transcript/<case>/children/<agentId>.facts.json` | hand-written checks of the child (same format as `facts.json`, see "Child facts") |
 
 Decode `expected.json` into your model and compare; use `facts.json` as an
-independent check of your own reading of the rules. **Ignore unknown fields**
-(`MANIFEST.json` cases may carry a `children` list, `facts.json` may grow).
+independent check of your own reading of the rules. A case with subagent files
+lists them under `children` in its MANIFEST entry; take their `expected` and
+`facts` files, never the `input`. **Ignore unknown fields**
+(`facts.json` may grow).
 Times are integer milliseconds since the epoch. `key.host_id` is empty and
 `key.session_id` is the fixed fixture id `00000000-0000-4000-8000-000000000001`.
 
-**Do not fetch `input.jsonl`** (or `children/`): it is the daemon's own test
-input, scrubbed but still a transcript, and the Apps have no use for it. The
-copy script should take `MANIFEST.json`, `expected.json` and `facts.json` of
-every case and nothing else; `mod-events/<case>/` is reserved for U1-5.
+**Do not fetch any `*.input.jsonl`** (`input.jsonl`, `children/*.input.jsonl`):
+it is the daemon's own test input, scrubbed but still a transcript, and the
+Apps have no use for it. The copy script should take `MANIFEST.json` and the
+`expected` and `facts` files of every case and of every child listed in it,
+and nothing else; `mod-events/<case>/` is reserved for U1-5.
 
 ## Layout
 
@@ -37,7 +42,8 @@ cc-transcript/<case>/expected.json     normalizer output; regenerated with -upda
 cc-transcript/<case>/facts.json        hand-written; never regenerated
 cc-transcript/<case>/README.md         where it came from and what it covers (line 1 = MANIFEST description)
 cc-transcript/<case>/children/<agentId>.input.jsonl      optional: a subagent file
-cc-transcript/<case>/children/<agentId>.expected.json    its items ({"items": [...]})
+cc-transcript/<case>/children/<agentId>.expected.json    its items ({"items": [...]}); regenerated with -update
+cc-transcript/<case>/children/<agentId>.facts.json       hand-written; required for every child; never regenerated
 ```
 
 ## facts.json
@@ -85,6 +91,18 @@ cc-transcript/<case>/children/<agentId>.expected.json    its items ({"items": [.
   disagree, decide by reading the row: a wrong fact is fixed, a wrong
   normalizer is reported.
 
+### Child facts
+
+`children/<agentId>.facts.json` has the same shape and is checked the same way
+(`TestFacts`, against `NormalizeSubagent`, independently of the child's
+`expected.json`), with these differences: the file is one pseudo-turn, so
+`turns` is 1 and `per_turn[0].id` is the id of its first user item (the brief
+the parent gave, `user_source: task`: the first prompt row of a subagent file
+is `source: task`); `per_turn[0].outcome` and `live` are **not checked** (a
+child has no outcome of its own and is always read as live: a call without a
+result is `running`), so write the outcome the transcript shows. `steps` and
+`outputs` are as above.
+
 ## Scrubbing
 
 `input.jsonl` files come from `internal/convmodel/ccnorm/cmd/scrubfixture`
@@ -93,13 +111,16 @@ cc-transcript/<case>/children/<agentId>.expected.json    its items ({"items": [.
 `version`, rewrites the identity (`cwd` → `/work/fixture`, session ids → the
 fixed uuid, `gitBranch` → `main`), maps home and temp paths to `/work/…`, hides
 the account name, e-mail addresses, tailnet addresses and secret-shaped
-strings, and replaces every image's base64 data by a 1x1 PNG. **After
+strings, rewrites pdx peer addresses (`mlab/…`, `air26/…`, `air19/…`,
+`air-2026/…`, `air-2019/…`) to `<host>/fixture-peer` and peer sockets
+(`uds:<path>/<digits>.sock`) to `uds:/work/tmp/cc-socks/1.sock`, and replaces every image's base64 data by a 1x1 PNG. **After
 scrubbing, an image placeholder's `bytes` is the size of that tiny PNG (70 bytes),
 not of the original.** Message text is kept as recorded, so only record
 throwaway prompts. Output is deterministic and scrubbing it again changes
 nothing. `TestFixtures_NoPrivateData` refuses a home path, a tailnet address, an
-e-mail address, a secret-shaped string or a 32+ character token (outside image
-data) in any file here.
+e-mail address, a pdx peer address or socket other than the scrubbed forms, a
+secret-shaped string or a 32+ character token (outside image data) in any file
+here.
 
 ## Adding a case
 
@@ -122,8 +143,12 @@ data) in any file here.
    rewrites `expected.json` (and `children/*.expected.json`) of every case
    directory and rebuilds `MANIFEST.json` (cases sorted by name; `description`
    from a one-line `DESCRIPTION` file if present, else line 1 of `README.md`;
-   `cc_version` from the first row with a `version`; sha256 of every file).
-   `facts.json` is never touched.
+   `cc_version` from the first row with a `version`; sha256 of every file,
+   children's `input`, `expected` and `facts` included). `facts.json` and
+   `children/*.facts.json` are never touched (each child needs its own,
+   hand-written beforehand). Tests run in file order, so the first `-update`
+   run can still show the old state in `TestFacts` and `TestFixtures_NoPrivateData`:
+   run again without `-update`.
 5. Run `go test ./internal/convmodel/...`. `TestFacts` must pass **without**
    changing `facts.json` to match; read `expected.json` once for sense.
 

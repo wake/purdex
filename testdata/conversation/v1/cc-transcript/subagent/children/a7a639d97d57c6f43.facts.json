@@ -1,0 +1,14 @@
+{
+  "live": false,
+  "turns": 1,
+  "per_turn": [
+    {"id": "0736154e-c55b-4175-96ca-852bba616cb0", "outcome": "done", "user_source": "task"}
+  ],
+  "steps": [
+    {"id": "toolu_01ACmSwsZd5nw2Uy33rssf6V", "kind": "execute", "status": "done"}
+  ],
+  "outputs": [
+    {"step": "toolu_01ACmSwsZd5nw2Uy33rssf6V", "total_lines": 4, "total_bytes": 75, "keep": "tail", "truncated": false}
+  ],
+  "shapes": []
+}

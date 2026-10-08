@@ -1,0 +1,19 @@
+{
+  "live": false,
+  "turns": 4,
+  "per_turn": [
+    {"id": "a5283c47-0016-4b74-9970-e31b0c48c381", "outcome": "done", "user_source": "user"},
+    {"id": "e379852f-a79b-413e-82b4-711fdedce938", "outcome": "done", "user_source": "user"},
+    {"id": "67a3e6b0-3add-4934-8b53-bf378ea3fb20", "outcome": "done", "user_source": "queued"},
+    {"id": "ca76785d-cdd6-4008-8299-f40fbaa7d594", "outcome": "done", "user_source": "slash"}
+  ],
+  "steps": [
+    {"id": "toolu_01JnERBSriPfo1Rn6EU4ba3w", "kind": "execute", "status": "done"},
+    {"id": "toolu_01NGbLzMN15by4apo8HbAPoF", "kind": "execute", "status": "done"}
+  ],
+  "outputs": [
+    {"step": "toolu_01JnERBSriPfo1Rn6EU4ba3w", "total_lines": 6, "total_bytes": 41, "keep": "tail", "truncated": false},
+    {"step": "toolu_01NGbLzMN15by4apo8HbAPoF", "total_lines": 6, "total_bytes": 47, "keep": "tail", "truncated": false}
+  ],
+  "shapes": ["queued_prompt_row", "queued_absorbed"]
+}

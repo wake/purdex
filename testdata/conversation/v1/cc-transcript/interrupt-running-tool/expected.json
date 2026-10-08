@@ -1,0 +1,314 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "Sleep 120 Bash command",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-sonnet-5-5",
+      "effort": "low"
+    },
+    "turns": [
+      {
+        "id": "f9c28c01-5168-478c-8b2e-e053aad6e897",
+        "index": 0,
+        "started_at": 1791483367752,
+        "ended_at": 1791483385040,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "f9c28c01-5168-478c-8b2e-e053aad6e897",
+            "at": 1791483367752,
+            "text": "Run `sleep 120` with Bash",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01EoTWRRhmpSGWtbA6Cv2nqv",
+            "at": 1791483372225,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "failed",
+            "summary": "sleep 120",
+            "started_at": 1791483372225,
+            "duration_ms": 16,
+            "input": {
+              "command": "sleep 120",
+              "description": "Wait 120 seconds",
+              "timeout": 180000
+            },
+            "output": {
+              "text": "\u003ctool_use_error\u003eBlocked: standalone sleep 120. To wait for a condition, use Monitor with an until-loop (e.g. `until \u003ccheck\u003e; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this block.\u003c/tool_use_error\u003e",
+              "total_lines": 1,
+              "total_bytes": 280,
+              "truncated": false
+            },
+            "command": {
+              "text": "sleep 120",
+              "description": "Wait 120 seconds"
+            }
+          },
+          {
+            "type": "thinking",
+            "id": "24c86aeb-b5be-44d1-945b-089949b721b9",
+            "at": 1791483375359,
+            "duration_ms": 676
+          },
+          {
+            "type": "agent_text",
+            "id": "1a13e158-e8e4-4b79-80e4-9ff53224f784",
+            "at": 1791483375361,
+            "markdown": "前景執行的 `sleep` 被擋下了，我改成背景執行。"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01561zzDRfhH3wBhm8WbaVeW",
+            "at": 1791483375754,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "done",
+            "summary": "sleep 120",
+            "started_at": 1791483375754,
+            "duration_ms": 5911,
+            "input": {
+              "command": "sleep 120",
+              "description": "Run sleep 120 in background",
+              "run_in_background": true
+            },
+            "output": {
+              "text": "Command running in background with ID: bgiefqf4z. Output is being written to: /work/tmp/00000000-0000-4000-8000-000000000001/tasks/bgiefqf4z.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+              "total_lines": 1,
+              "total_bytes": 241,
+              "truncated": false
+            },
+            "command": {
+              "text": "sleep 120",
+              "description": "Run sleep 120 in background",
+              "background_task_id": "bgiefqf4z"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "70b90648-9b4f-4b42-af30-33daccc4c5bd",
+            "at": 1791483383621,
+            "markdown": "`sleep 120` 已改在背景執行（任務 ID `bgiefqf4z`），因為前景的獨立 `sleep` 會被擋下。120 秒後會有完成通知。"
+          }
+        ]
+      },
+      {
+        "id": "c8d5c110-3c08-4e0f-a00b-8908cc9aee14",
+        "index": 1,
+        "started_at": 1791483499652,
+        "ended_at": 1791483503166,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "c8d5c110-3c08-4e0f-a00b-8908cc9aee14",
+            "at": 1791483499652,
+            "text": "Background command \"Run sleep 120 in background\" completed (exit code 0)",
+            "source": "task"
+          },
+          {
+            "type": "agent_text",
+            "id": "fbe54a3a-698d-4070-bcd2-680e2edbc798",
+            "at": 1791483502340,
+            "markdown": "`sleep 120` 已跑完，結束碼為 0。"
+          }
+        ]
+      },
+      {
+        "id": "f05ffe58-db6d-419f-96b5-b51e88635b5a",
+        "index": 2,
+        "started_at": 1791483514395,
+        "ended_at": 1791483534086,
+        "outcome": "interrupted",
+        "items": [
+          {
+            "type": "user",
+            "id": "f05ffe58-db6d-419f-96b5-b51e88635b5a",
+            "at": 1791483514395,
+            "text": "Run `python3 -c \"import time; time.sleep(120)\"` with Bash in the foreground (do not use run_in_background) and wait for it.",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_017ZqKRjb2YWirEJFpB6yhTS",
+            "at": 1791483516935,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "user-rejected",
+            "summary": "python3 -c \"import time; time.sleep(120)\"",
+            "started_at": 1791483516935,
+            "duration_ms": 17149,
+            "input": {
+              "command": "python3 -c \"import time; time.sleep(120)\"",
+              "description": "Run a 120 second Python sleep in foreground",
+              "timeout": 180000
+            },
+            "output": {
+              "text": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+              "total_lines": 1,
+              "total_bytes": 225,
+              "truncated": false
+            },
+            "command": {
+              "text": "python3 -c \"import time; time.sleep(120)\"",
+              "description": "Run a 120 second Python sleep in foreground"
+            }
+          },
+          {
+            "type": "system",
+            "id": "abda382a-d01b-47f6-9a8f-b5914180c43f",
+            "at": 1791483534086,
+            "kind": "interrupted"
+          }
+        ]
+      },
+      {
+        "id": "21f0ade7-7f70-4f84-bf41-2d845907e2ff",
+        "index": 3,
+        "started_at": 1791483544725,
+        "ended_at": 1791483552375,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "21f0ade7-7f70-4f84-bf41-2d845907e2ff",
+            "at": 1791483544725,
+            "text": "Run `echo refuse-me` with Bash",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_016SDT52sASWi8UMA2THq5jX",
+            "at": 1791483548511,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "done",
+            "summary": "echo refuse-me",
+            "started_at": 1791483548511,
+            "duration_ms": 1791,
+            "input": {
+              "command": "echo refuse-me",
+              "description": "Print refuse-me"
+            },
+            "output": {
+              "text": "refuse-me",
+              "total_lines": 1,
+              "total_bytes": 9,
+              "truncated": false
+            },
+            "command": {
+              "text": "echo refuse-me",
+              "description": "Print refuse-me"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "c9e36964-48d8-4416-a2c8-47f2797bc16d",
+            "at": 1791483551415,
+            "markdown": "輸出是 `refuse-me`。"
+          }
+        ]
+      },
+      {
+        "id": "7988e4a6-3032-4c30-9275-bf1486e2fe62",
+        "index": 4,
+        "started_at": 1791483563215,
+        "ended_at": 1791483575978,
+        "outcome": "interrupted",
+        "items": [
+          {
+            "type": "user",
+            "id": "7988e4a6-3032-4c30-9275-bf1486e2fe62",
+            "at": 1791483563215,
+            "text": "Run `python3 -c \"print('refuse-me-2')\"` with Bash",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01K3n9h6kHJoWQMqpT31CJZs",
+            "at": 1791483565975,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "user-rejected",
+            "summary": "python3 -c \"print('refuse-me-2')\"",
+            "started_at": 1791483565975,
+            "duration_ms": 10002,
+            "input": {
+              "command": "python3 -c \"print('refuse-me-2')\"",
+              "description": "Print refuse-me-2 via Python"
+            },
+            "output": {
+              "text": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+              "total_lines": 1,
+              "total_bytes": 225,
+              "truncated": false
+            },
+            "command": {
+              "text": "python3 -c \"print('refuse-me-2')\"",
+              "description": "Print refuse-me-2 via Python"
+            }
+          },
+          {
+            "type": "system",
+            "id": "5076a6b2-18da-43b5-9f7d-ac60371c33fb",
+            "at": 1791483575977,
+            "kind": "interrupted"
+          }
+        ]
+      },
+      {
+        "id": "8d3642fe-d299-49cb-a9c5-b3ee8adef863",
+        "index": 5,
+        "started_at": 1791483586938,
+        "ended_at": 1791483586938,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "8d3642fe-d299-49cb-a9c5-b3ee8adef863",
+            "at": 1791483586938,
+            "text": "/exit",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "be336002-34e4-4507-9a09-dee0b0275bd5",
+            "at": 1791483586938,
+            "kind": "command_output",
+            "detail": {
+              "text": "Goodbye!"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

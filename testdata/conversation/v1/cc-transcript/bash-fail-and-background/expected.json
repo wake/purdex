@@ -1,0 +1,227 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "Nonexistent directory exit code",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-sonnet-5-5",
+      "effort": "low"
+    },
+    "turns": [
+      {
+        "id": "3528a92f-c87f-4f14-8807-a455c07d2d47",
+        "index": 0,
+        "started_at": 1791482332621,
+        "ended_at": 1791482361592,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "3528a92f-c87f-4f14-8807-a455c07d2d47",
+            "at": 1791482332621,
+            "text": "Run `ls /nonexistent_dir_fixture` with Bash and tell me the exit code.",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01NKWyU76Gj63hS6KG9dznmd",
+            "at": 1791482335779,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "done",
+            "summary": "ls /nonexistent_dir_fixture; echo \"exit code: $?\"",
+            "started_at": 1791482335779,
+            "duration_ms": 23066,
+            "input": {
+              "command": "ls /nonexistent_dir_fixture; echo \"exit code: $?\"",
+              "description": "List nonexistent directory and print exit code"
+            },
+            "output": {
+              "text": "ls: /nonexistent_dir_fixture: No such file or directory\nexit code: 1",
+              "total_lines": 2,
+              "total_bytes": 68,
+              "truncated": false
+            },
+            "command": {
+              "text": "ls /nonexistent_dir_fixture; echo \"exit code: $?\"",
+              "description": "List nonexistent directory and print exit code"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "eba4c33c-9d26-4ccb-a7a1-c80e63bfc037",
+            "at": 1791482360641,
+            "markdown": "結束碼是 **1**。`ls` 回報 `ls: /nonexistent_dir_fixture: No such file or directory`。\n\n我用 `echo $?` 讀取結束碼。Bash 工具本身可能把失敗的指令標成錯誤，但上面的 1 是 `ls` 自己的結束碼。"
+          }
+        ]
+      },
+      {
+        "id": "116ed138-0a53-40a6-bae3-901a4d6d2393",
+        "index": 1,
+        "started_at": 1791482397056,
+        "ended_at": 1791482421506,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "116ed138-0a53-40a6-bae3-901a4d6d2393",
+            "at": 1791482397056,
+            "text": "Now run exactly `ls /nonexistent_dir_fixture` as the whole Bash command, with nothing appended (no echo, no pipes), and tell me what the tool returned.",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01Austw3RXHvweuceuaB6KxZ",
+            "at": 1791482400529,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "failed",
+            "summary": "ls /nonexistent_dir_fixture",
+            "started_at": 1791482400529,
+            "duration_ms": 16967,
+            "input": {
+              "command": "ls /nonexistent_dir_fixture",
+              "description": "List nonexistent directory"
+            },
+            "output": {
+              "text": "Exit code 1\nls: /nonexistent_dir_fixture: No such file or directory",
+              "total_lines": 2,
+              "total_bytes": 67,
+              "truncated": false
+            },
+            "command": {
+              "text": "ls /nonexistent_dir_fixture",
+              "description": "List nonexistent directory",
+              "exit_code": 1
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "86108d7d-4b6c-4ba3-ad75-739d647cab0c",
+            "at": 1791482419388,
+            "markdown": "工具回傳了錯誤結果：\n\n```\nExit code 1\nls: /nonexistent_dir_fixture: No such file or directory\n```\n\n這次工具把結束碼 1 標成錯誤，並附上 `ls` 的 stderr 訊息。上一次我在指令後面加了 `echo`，整串指令最後的結束碼是 `echo` 的 0，所以工具沒有標成錯誤。"
+          }
+        ]
+      },
+      {
+        "id": "e7b92d4d-f349-430e-8389-fe0a4f88143f",
+        "index": 2,
+        "started_at": 1791482434396,
+        "ended_at": 1791482444940,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "e7b92d4d-f349-430e-8389-fe0a4f88143f",
+            "at": 1791482434396,
+            "text": "Run `sleep 6; echo finished` with Bash using run_in_background, then reply 'started' and nothing else.",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01693LPNQciTk6MVYRNQsRfN",
+            "at": 1791482437756,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "done",
+            "summary": "sleep 6; echo finished",
+            "started_at": 1791482437756,
+            "duration_ms": 3915,
+            "input": {
+              "command": "sleep 6; echo finished",
+              "description": "Sleep then print finished in background",
+              "run_in_background": true
+            },
+            "output": {
+              "text": "Command running in background with ID: bo6d759qf. Output is being written to: /work/tmp/00000000-0000-4000-8000-000000000001/tasks/bo6d759qf.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+              "total_lines": 1,
+              "total_bytes": 241,
+              "truncated": false
+            },
+            "command": {
+              "text": "sleep 6; echo finished",
+              "description": "Sleep then print finished in background",
+              "background_task_id": "bo6d759qf"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "8ccf5cf1-95ff-466e-9177-aad8a7ea2ffc",
+            "at": 1791482442838,
+            "markdown": "started"
+          }
+        ]
+      },
+      {
+        "id": "6b060f1b-99a0-43a5-a726-e56a39005741",
+        "index": 3,
+        "started_at": 1791482445759,
+        "ended_at": 1791482451280,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "6b060f1b-99a0-43a5-a726-e56a39005741",
+            "at": 1791482445759,
+            "text": "Background command \"Sleep then print finished in background\" completed (exit code 0)",
+            "source": "task"
+          },
+          {
+            "type": "agent_text",
+            "id": "ceafd4ba-330d-4a16-a95b-9d2536e92fcd",
+            "at": 1791482449186,
+            "markdown": "背景指令已完成，結束碼 0，輸出應該是 `finished`。我沒有讀輸出檔來確認內容。"
+          }
+        ]
+      },
+      {
+        "id": "bf24c819-14df-4fac-8e22-9849e72ecac8",
+        "index": 4,
+        "started_at": 1791482461793,
+        "ended_at": 1791482461793,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "bf24c819-14df-4fac-8e22-9849e72ecac8",
+            "at": 1791482461793,
+            "text": "/exit",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "864dad41-9aab-49b3-835b-b1e2d358fb51",
+            "at": 1791482461793,
+            "kind": "command_output",
+            "detail": {
+              "text": "See ya!"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
