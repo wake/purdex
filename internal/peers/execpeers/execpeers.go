@@ -50,7 +50,8 @@ type PeerSendResult struct {
 type ExecPeers interface {
 	// Rows lists every addressable execution, or fails whole: a listing
 	// that could not reach every execution returns an error, never the rows
-	// it did see, so a missing row is never mistaken for a gone one.
+	// it did see, so a missing row is never mistaken for a gone one. Two
+	// rows sharing a session id fail it too: one address cannot name two.
 	Rows(ctx context.Context) ([]Row, error)
 	// MailboxEnabled reports whether the assembled engine accepts peer
 	// messages ([nex.peer].enabled).

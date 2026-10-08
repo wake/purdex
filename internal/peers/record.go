@@ -245,7 +245,8 @@ func Build(in BuildInput) []PeerRecord {
 //     row, which from then on stands for that process too — so a running
 //     execution is still found as the origin of its own `pdx msg send`.
 //
-// Two executions listing one session id keep the first, in listing order.
+// ExecPeers.Rows fails closed on two executions sharing a session id, so
+// keeping the first here is only a guard that one sid never gets two rows.
 func foldExecutions(in BuildInput, records []PeerRecord) []PeerRecord {
 	if len(in.Executions) == 0 {
 		return records

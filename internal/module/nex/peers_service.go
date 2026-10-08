@@ -3,6 +3,7 @@ package nex
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"lab.protype.tw/wake/nexen/store"
@@ -30,10 +31,20 @@ func (p *execPeers) Rows(ctx context.Context) ([]execpeers.Row, error) {
 		return nil, err
 	}
 	out := make([]execpeers.Row, 0, len(execs))
+	bySID := map[string]string{} // lowercase session id → execution id
 	for _, e := range execs {
-		if row, ok := execPeerRow(e); ok {
-			out = append(out, row)
+		row, ok := execPeerRow(e)
+		if !ok {
+			continue
 		}
+		// Two addressable executions of one conversation would give one
+		// address two rows, and neither is the right one to pick: the whole
+		// listing fails closed (executions_unavailable) rather than guess.
+		if prev, dup := bySID[row.SessionID]; dup {
+			return nil, fmt.Errorf("listing executions: duplicate session id %s in executions %s and %s", row.SessionID, prev, row.ExecutionID)
+		}
+		bySID[row.SessionID] = row.ExecutionID
+		out = append(out, row)
 	}
 	return out, nil
 }

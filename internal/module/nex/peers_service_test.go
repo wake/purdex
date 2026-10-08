@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -123,6 +124,45 @@ func TestExecPeersRows_MidWalkErrorFails(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk on fire")
 	assert.Nil(t, rows)
+}
+
+// Two addressable executions of one conversation would put one address on
+// two rows: Rows fails closed instead of picking one, on one page or across
+// pages, comparing session ids case-insensitively. A terminated execution of
+// that conversation is no peer row, so it is no duplicate.
+func TestExecPeersRows_DuplicateSessionIDFails(t *testing.T) {
+	idle := func(id, sid string) store.Execution {
+		return store.Execution{ID: id, State: store.StateIdle, SessionID: sid}
+	}
+	page := func(n int) []store.Execution {
+		var rows []store.Execution
+		for i := 1; i <= n; i++ {
+			rows = append(rows, idle(fmt.Sprintf("E%05d", i), fmt.Sprintf("00000000-0000-4000-8000-%012d", i)))
+		}
+		return rows
+	}
+	crossPage := page(ownerScanPageSize + 1)
+	crossPage[ownerScanPageSize].SessionID = strings.ToUpper(crossPage[0].SessionID)
+	cases := map[string]struct {
+		rows    []store.Execution
+		wantErr bool
+	}{
+		"same page":  {[]store.Execution{idle("E1", pxSidA), {ID: "E2", State: store.StateRunning, ResumeSessionID: pxSidA}}, true},
+		"cross page": {crossPage, true},
+		"terminated": {[]store.Execution{{ID: "E1", State: store.StateTerminated, SessionID: pxSidA}, idle("E2", pxSidA)}, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rows, err := pxRows(t, &fakeNexStore{listRows: tc.rows})
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "duplicate session id")
+			assert.Nil(t, rows)
+		})
+	}
 }
 
 // blockingListStore parks every List until its ctx ends, counting the Lists
