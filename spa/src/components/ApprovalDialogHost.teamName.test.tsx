@@ -147,6 +147,24 @@ describe('ApprovalDialogHost team name (D-N10)', () => {
     expect(screen.getByTestId('approval-approve')).not.toBeDisabled()
   })
 
+  it('trims what Go strings.TrimSpace trims: U+0085, U+3000, U+00A0 and U+2003 at the edges go', async () => {
+    mockedDecide.mockResolvedValueOnce({ ...lead(), state: 'approved' })
+    render(<ApprovalDialogHost />)
+    open(lead({ team_name: '' }))
+    type('\u0085　build  ')
+    expect(errorEl()).toBeNull()
+    await approve()
+    expect(sentGrant()).toMatchObject({ team_name: 'build' })
+  })
+
+  it('does not trim U+FEFF (JS trim() would; Go keeps it as a Cf character, so the daemon would answer 400)', () => {
+    render(<ApprovalDialogHost />)
+    open(lead({ team_name: '' }))
+    type('﻿build')
+    expect(errorEl()).not.toBeNull()
+    expect(screen.getByTestId('approval-approve')).toBeDisabled()
+  })
+
   it.each([
     ['a control character (BEL)', 'a\u0007b'],
     ['a tab', 'a\tb'],

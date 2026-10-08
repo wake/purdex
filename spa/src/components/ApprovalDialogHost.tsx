@@ -49,6 +49,10 @@ function parseRoots(text: string): string[] {
 // keeps 核准 from sending a name that comes back 400). Leading / trailing white space is trimmed before the check.
 const TEAM_NAME_MAX_BYTES = 64
 const TEAM_NAME_CHARS = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]*$/u
+// Go's strings.TrimSpace strips unicode.IsSpace: \t \n \v \f \r, space, U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
+// U+2029, U+202F, U+205F and U+3000. JS trim() differs (it keeps U+0085 and strips U+FEFF), so trim by that set.
+const GO_SPACE_EDGES = new RegExp(String.raw`^[\t-\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+|[\t-\r \u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+$`, 'gu')
+const goTrim = (s: string) => s.replace(GO_SPACE_EDGES, '')
 const teamNameOk = (name: string) => new TextEncoder().encode(name).length <= TEAM_NAME_MAX_BYTES && TEAM_NAME_CHARS.test(name)
 
 const fieldClass = 'rounded-md border border-border-default bg-surface-input px-2 py-1 text-xs text-text-primary disabled:opacity-50'
@@ -189,7 +193,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
   const nameShown = !isSelfRelay && payload.team_name !== undefined
-  const trimmedName = teamName.trim()
+  const trimmedName = goTrim(teamName)
   const nameOk = !nameShown || teamNameOk(trimmedName)
   const nameErrorId = useId()
   // A self relay carries no grant (U13a: one click); only the lead kind validates its fields.
