@@ -24,6 +24,25 @@ func bySession(t *testing.T, got []SessionUse, id string) SessionUse {
 	return SessionUse{}
 }
 
+// A table with the same pid twice is read with one policy: the first row
+// wins, and only that row's parent edge exists (codex attack finding: the
+// second row's numbers were charged to the first row's parent).
+func TestAttribute_DuplicatePIDFirstRowWins(t *testing.T) {
+	procs := []Proc{
+		{PID: 10, PPID: 1, RSSBytes: 1 * mb},
+		{PID: 20, PPID: 1, RSSBytes: 1 * mb},
+		{PID: 30, PPID: 10, RSSBytes: 1 * mb},
+		{PID: 30, PPID: 20, RSSBytes: 999 * mb},
+	}
+	got := Attribute(procs, []Root{{SessionID: "a", PID: 10}, {SessionID: "b", PID: 20}}, attrNCPU, attrMem)
+	if a := bySession(t, got, "a"); a.Procs != 2 || a.RSSBytes != 2*mb {
+		t.Fatalf("a = %+v; want root + the first pid 30 row", a)
+	}
+	if b := bySession(t, got, "b"); b.Procs != 1 || b.RSSBytes != 1*mb {
+		t.Fatalf("b = %+v; the second pid 30 row must not be reachable", b)
+	}
+}
+
 func TestAttribute_TreeSums(t *testing.T) {
 	procs := []Proc{
 		{PID: 100, PPID: 1, Pcpu: 5, RSSBytes: 300 * mb},    // claude (root)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -116,6 +117,7 @@ func TestParsePS(t *testing.T) {
 type fakeHost struct {
 	failSysctl map[string]bool // names whose sysctl fails
 	vmErr      error
+	vmOut      string
 	psErr      error
 	psOut      string
 	cmds       []fakeCmd
@@ -173,6 +175,9 @@ func (f *fakeHost) install(t *testing.T) {
 		case "vm_stat":
 			if f.vmErr != nil {
 				return nil, f.vmErr
+			}
+			if f.vmOut != "" {
+				return []byte(f.vmOut), nil
 			}
 			return []byte(vmStatSample), nil
 		case "ps":
@@ -283,4 +288,33 @@ func TestSampler_HardFailures(t *testing.T) {
 			t.Fatal("zero valid ps lines must fail the sample")
 		}
 	})
+}
+
+// An implausible vm_stat (page counts whose byte total wraps a uint64) is not
+// a sample: wrapped, it would read as an idle host (codex attack finding).
+func TestSampler_VMStatOverflowFailsTheSample(t *testing.T) {
+	f := &fakeHost{vmOut: "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n" +
+		"Pages free:                                     18446744073709551615.\n" +
+		"Pages inactive:                                 1.\n" +
+		"Pages speculative:                              1.\n"}
+	f.install(t)
+	if _, _, err := (&sysSampler{}).Sample(context.Background()); err == nil {
+		t.Fatal("vm_stat counts that overflow must fail the sample")
+	}
+}
+
+// A ps line whose rss cannot be expressed in bytes is malformed, not zero.
+func TestParsePS_RSSOverflowIsMalformed(t *testing.T) {
+	const maxKiB = ^uint64(0) / 1024
+	out := fmt.Sprintf("42 1 1.0 %d\n43 1 1.0 %d\n44 1 1.0 10\n", maxKiB, maxKiB+1)
+	procs, skipped, err := parsePS(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 1 || len(procs) != 2 {
+		t.Fatalf("procs = %+v skipped = %d; want the over-limit line skipped only", procs, skipped)
+	}
+	if procs[0].RSSBytes != maxKiB*1024 {
+		t.Fatalf("limit line rss = %d", procs[0].RSSBytes)
+	}
 }

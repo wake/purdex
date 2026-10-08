@@ -92,6 +92,9 @@ func (s *sysSampler) Sample(ctx context.Context) (HostRaw, []Proc, error) {
 		return raw, nil, err
 	}
 	raw.PageSize, raw.Free, raw.Inactive, raw.Speculative = vm.PageSize, vm.Free, vm.Inactive, vm.Speculative
+	if _, ok := raw.availableBytes(); !ok {
+		return raw, nil, fmt.Errorf("vm_stat: page counts overflow (%d + %d + %d pages of %d bytes)", vm.Free, vm.Inactive, vm.Speculative, vm.PageSize)
+	}
 
 	// LC_ALL=C keeps the decimal point a point in pcpu.
 	psOut, err := s.fork(ctx, []string{"LC_ALL=C"}, "ps", "-axo", "pid=,ppid=,pcpu=,rss=")
@@ -228,7 +231,7 @@ func parsePSFields(f []string) (Proc, bool) {
 		return Proc{}, false
 	}
 	rssKiB, err := strconv.ParseUint(f[3], 10, 64)
-	if err != nil {
+	if err != nil || rssKiB > math.MaxUint64/1024 { // beyond that, KiB * 1024 would wrap to a small number
 		return Proc{}, false
 	}
 	return Proc{PID: pid, PPID: ppid, Pcpu: pcpu, RSSBytes: rssKiB * 1024}, true

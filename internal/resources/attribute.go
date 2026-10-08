@@ -14,6 +14,13 @@ type Proc struct {
 }
 
 // Root is where a session's process tree starts: the agent process itself.
+//
+// ProcStart is carried for the caller and is not compared here: a Proc has
+// no start time (ps would give it as locale-dependent text), so Attribute
+// matches a root by pid alone. The root source is what rules out a reused
+// pid, by checking the pid's start time against the process snapshot it
+// takes in the same tick, a few milliseconds before the ps fork
+// (P0-2, ProcessRoots).
 type Root struct {
 	SessionID string
 	PID       int
@@ -39,6 +46,9 @@ func Attribute(procs []Proc, roots []Root, ncpu int, memBytes uint64) []SessionU
 	byPID := make(map[int]Proc, len(procs))
 	children := make(map[int][]int, len(procs))
 	for _, p := range procs {
+		if _, dup := byPID[p.PID]; dup {
+			continue // one policy for a table that lists a pid twice: the first row is the process
+		}
 		byPID[p.PID] = p
 		children[p.PPID] = append(children[p.PPID], p.PID)
 	}

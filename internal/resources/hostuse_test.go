@@ -82,6 +82,28 @@ func TestComputeHost_PassThroughAndBytes(t *testing.T) {
 	}
 }
 
+// Page counts whose byte total wraps a uint64 make the reading unusable
+// instead of reading as an idle (or full) host (codex attack finding).
+func TestHostRaw_UsableRejectsOverflow(t *testing.T) {
+	cases := map[string]HostRaw{
+		"sum wraps":     {NCPU: 1, MemBytes: 1024, PageSize: 2, Free: 1 << 63, Inactive: 1 << 63},
+		"product wraps": {NCPU: 1, MemBytes: 1024, PageSize: 1 << 40, Free: 1 << 40},
+	}
+	for name, r := range cases {
+		t.Run(name, func(t *testing.T) {
+			if r.Usable() {
+				t.Fatal("overflowing page counts must be unusable")
+			}
+			if h := ComputeHost(r); h.Measured != 0 || h.Full {
+				t.Fatalf("unusable reading must derive nothing: %+v", h)
+			}
+		})
+	}
+	if !rawWith(1, 10, 1, 1, 1, 1).Usable() {
+		t.Fatal("a plain reading stays usable")
+	}
+}
+
 func TestHostRaw_Usable(t *testing.T) {
 	if !rawWith(1, 10, 1, 1, 1, 1).Usable() {
 		t.Error("a complete reading must be usable")

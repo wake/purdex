@@ -1,6 +1,9 @@
 package resources
 
-import "math"
+import (
+	"math"
+	"math/bits"
+)
 
 // HostRaw is what the sampler read from the host, before any arithmetic.
 type HostRaw struct {
@@ -14,9 +17,31 @@ type HostRaw struct {
 	PcpuSum                               float64
 }
 
-// Usable reports whether the reading has what D-1 divides by. An unusable
-// reading must be published as Available = false, Reason = "sample_failed".
-func (r HostRaw) Usable() bool { return r.NCPU > 0 && r.MemBytes > 0 }
+// Usable reports whether the reading has what D-1 divides by and whether its
+// page counts fit in a uint64 of bytes: a count that wraps would read as an
+// idle (or full) host. An unusable reading must be published as
+// Available = false, Reason = "sample_failed".
+func (r HostRaw) Usable() bool {
+	if r.NCPU <= 0 || r.MemBytes == 0 {
+		return false
+	}
+	_, ok := r.availableBytes()
+	return ok
+}
+
+// availableBytes is (free + inactive + speculative) pages in bytes; ok is
+// false when the sum or the product overflows a uint64.
+func (r HostRaw) availableBytes() (uint64, bool) {
+	pages, carry := bits.Add64(r.Free, r.Inactive, 0)
+	if carry != 0 {
+		return 0, false
+	}
+	if pages, carry = bits.Add64(pages, r.Speculative, 0); carry != 0 {
+		return 0, false
+	}
+	hi, lo := bits.Mul64(pages, r.PageSize)
+	return lo, hi == 0
+}
 
 // ceilPercent rounds up to a whole percentage, ignoring float noise so that
 // an exact 40 does not become 41.
@@ -47,7 +72,7 @@ func ComputeHost(r HostRaw) HostUse {
 	h.CPU = 100 * r.Load1 / ncpu
 	h.PcpuTotal = r.PcpuSum / ncpu
 
-	available := (r.Free + r.Inactive + r.Speculative) * r.PageSize
+	available, _ := r.availableBytes() // Usable() above ruled out an overflow
 	h.MemUsedBytes = r.MemBytes - min(available, r.MemBytes)
 	h.Mem = clampFloat(float64(h.MemUsedBytes)*100/float64(r.MemBytes), 0, 100)
 
