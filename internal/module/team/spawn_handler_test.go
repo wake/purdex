@@ -54,7 +54,7 @@ func TestSpawn_PostAnswersTheMemberAndTheLeadAddress(t *testing.T) {
 	code, op, e := f.spawn(1, root, func(r *team.SpawnRequest) { r.Model, r.Effort, r.Title = "opus[1m]", "high", "worker" })
 	ref := ipeers.RefID("sid-m1")
 	want := team.Member{SessionID: "sid-m1", Ref: ref, Address: "mlab/" + ref, TeamID: uid(1), HostID: "h:1", Title: "worker",
-		Cwd: root, TmuxSession: "tm-0000000100", State: team.MemberActive, Model: "opus[1m]", Effort: "high", SpawnOp: spawnID(1)}
+		Cwd: root, TmuxSession: "tm-0000000100", State: team.MemberActive, Origin: team.MemberOriginSpawned, Model: "opus[1m]", Effort: "high", SpawnOp: spawnID(1)}
 	if code != 200 || op.State != team.SpawnDone || op.LeadAddress != "mlab/n10" || op.Member == nil {
 		t.Fatalf("spawn = %d %+v %+v", code, op, e)
 	}

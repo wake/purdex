@@ -68,9 +68,9 @@ func TestWireTeam_JSONShapes(t *testing.T) {
 	ctx := &MemberContext{UsedPercentage: &pct, Window: 200000, ModelID: "claude-sonnet-5", Effort: "low", At: 7}
 	member := Member{SessionID: "s", Ref: "_abc123", Address: "mlab/_abc123", TeamID: "t", HostID: "h",
 		Title: "worker", Cwd: "/w/r", TmuxSession: "tm-0123456789", State: MemberActive,
-		Model: "sonnet", Effort: "low", Context: ctx, SpawnOp: "op", CreatedAt: 5}
-	const memberFull = `{"session_id":"s","ref":"_abc123","address":"mlab/_abc123","team_id":"t","host_id":"h","title":"worker","cwd":"/w/r","tmux_session":"tm-0123456789","state":"active","model":"sonnet","effort":"low","context":{"used_percentage":41.5,"window":200000,"model_id":"claude-sonnet-5","effort":"low","at":7},"spawn_op":"op","created_at":5}`
-	const memberMin = `{"session_id":"","ref":"","address":"","team_id":"","host_id":"","cwd":"","tmux_session":"","state":"","spawn_op":"","created_at":0}`
+		Model: "sonnet", Effort: "low", Context: ctx, Origin: MemberOriginSpawned, SpawnOp: "op", CreatedAt: 5}
+	const memberFull = `{"session_id":"s","ref":"_abc123","address":"mlab/_abc123","team_id":"t","host_id":"h","title":"worker","cwd":"/w/r","tmux_session":"tm-0123456789","state":"active","origin":"spawned","model":"sonnet","effort":"low","context":{"used_percentage":41.5,"window":200000,"model_id":"claude-sonnet-5","effort":"low","at":7},"spawn_op":"op","created_at":5}`
+	const memberMin = `{"session_id":"","ref":"","address":"","team_id":"","host_id":"","cwd":"","tmux_session":"","state":"","origin":"","spawn_op":"","created_at":0}`
 	const teamMin = `{"id":"","host_id":"","lead_session_id":"","lead_ref":"","grant":{"max_members":0,"roots":null},"request_id":"","created_at":0}`
 	cases := []struct {
 		name string
