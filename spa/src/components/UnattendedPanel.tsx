@@ -33,7 +33,7 @@ interface HostPages {
 const pad2 = (n: number) => (n < 10 ? `0${n}` : String(n))
 const clock = (ms: number) => { const d = new Date(ms); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}` }
 const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-/** `HH:mm` today, `M/D HH:mm` on another day (the list can span days; a row's own time stays `HH:mm`). */
+/** `HH:mm` today, `M/D HH:mm` on another day (the list can span days: the "since" line and every row use it). */
 function sinceText(ms: number): string {
   const d = new Date(ms)
   return sameDay(d, new Date()) ? clock(ms) : `${d.getMonth() + 1}/${d.getDate()} ${clock(ms)}`
@@ -147,7 +147,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
           <ul className="flex flex-col gap-1">
             {merged.map(({ hostId, a }) => (
               <li key={`${hostId}:${a.id}`} data-testid="unattended-row" className="text-text-primary">
-                {t('unattended.panel.row', { host: label(hostId), session: approvalSessionLabel(a.origin), kind: approvalKindLabel(t, a.kind), time: clock(timeOf(a)) })}
+                {t('unattended.panel.row', { host: label(hostId), session: approvalSessionLabel(a.origin), kind: approvalKindLabel(t, a.kind), time: sinceText(timeOf(a)) })}
               </li>
             ))}
           </ul>

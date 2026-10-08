@@ -51,6 +51,8 @@ beforeEach(() => {
     hostOrder: [A, B, C], activeHostId: A, runtime: {},
   })
   mockedGet.mockReset()
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(at(12, 0)) // the rows' time shows the date when it is not today
 })
 afterEach(() => { vi.useRealTimers(); useHostStore.getState().reset() })
 
@@ -138,6 +140,25 @@ describe('UnattendedPanel', () => {
     open([A])
     await waitFor(() => expect(rows()).toHaveLength(2))
     expect(rows()).toEqual(['mlab：sess-l1 · lead 申請 · 09:00', 'mlab：sess-r1 · 接力申請 · 08:00'])
+  })
+
+  it('a row from another day carries its date, so yesterday and today at the same time can be told apart', async () => {
+    const yesterday = new Date(2026, 9, 7, 9, 30).getTime()
+    mockedGet.mockResolvedValue(page([approved('t1', at(9, 30)), approved('y1', yesterday)]))
+    open([A])
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(rows()).toEqual([
+      'mlab：sess-t1 · 接力申請 · 09:30',
+      'mlab：sess-y1 · 接力申請 · 10/7 09:30',
+    ])
+  })
+
+  it('a row without decided_at takes its time (and date) from created_at', async () => {
+    const r = approved('c1', at(9, 0), { created_at: new Date(2026, 9, 6, 22, 5).getTime() })
+    delete r.decided_at
+    mockedGet.mockResolvedValue(page([r]))
+    open([A])
+    await waitFor(() => expect(rows()).toEqual(['mlab：sess-c1 · 接力申請 · 10/6 22:05']))
   })
 
   it('names the session by its title when it has one', async () => {
