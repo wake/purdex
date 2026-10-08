@@ -272,35 +272,6 @@ func TestRows_CompactSummarySkipped(t *testing.T) {
 	}
 }
 
-func TestRows_ToolStepsDeferred(t *testing.T) {
-	// steps arrive in U1-4c; until then tool_use and tool_result rows are
-	// recognised, counted, and neither open a turn nor break the outcome
-	n := norm(t,
-		assistantRow("a0", 1, "claude-opus-5-5", toolUseBlock("toolu_0", "Bash", obj{"command": "ls"})),
-		toolResultRow("r0", 2, "toolu_0", "file"),
-	)
-	if len(n.Conversation().Turns) != 0 {
-		t.Fatalf("a step row opened a turn: %s", dump(n.Conversation()))
-	}
-	feed(t, n,
-		userRow("u1", 3, "go"),
-		assistantRow("a1", 4, "claude-opus-5-5", toolUseBlock("toolu_1", "Bash", obj{"command": "ls"})),
-		toolResultRow("r1", 5, "toolu_1", "file"),
-		assistantText("a2", 6, "done"),
-		turnDuration("d1", 7, 3000),
-	)
-	c := validated(t, n)
-	if len(c.Turns) != 1 || len(c.Turns[0].Items) != 2 {
-		t.Fatalf("turns/items: %s", dump(c))
-	}
-	if c.Turns[0].Outcome != convmodel.OutcomeDone {
-		t.Errorf("outcome = %q", c.Turns[0].Outcome)
-	}
-	if got := n.Stats().Skipped["step:deferred"]; got != 4 {
-		t.Errorf("step:deferred = %d, want 4 (%v)", got, n.Stats().Skipped)
-	}
-}
-
 // ---- sources --------------------------------------------------------------
 
 // peerText is the text of a peer message as CC writes it (the wrapper is

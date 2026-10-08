@@ -55,6 +55,8 @@ type Normalizer struct {
 	turnAt map[string]int     // turn id → index in turns
 	itemAt map[string]itemLoc // item id → where it lives
 
+	resulted map[string]struct{} // ids of the steps that have had their result
+
 	pend    []Change               // changes of the current feed, in order
 	pendSet map[[2]string]struct{} // (turn id, item id) of pend, for O(1) dedupe
 	touched int                    // turn index the current row belonged to, -1 for none
@@ -73,14 +75,15 @@ type itemLoc struct{ turn, item int }
 // New returns a live normalizer.
 func New(o Options) *Normalizer {
 	return &Normalizer{
-		opts:    o,
-		live:    true,
-		stats:   Stats{Skipped: map[string]int{}},
-		turnAt:  map[string]int{},
-		itemAt:  map[string]itemLoc{},
-		pendSet: map[[2]string]struct{}{},
-		dynKeys: map[string]struct{}{},
-		touched: -1,
+		opts:     o,
+		live:     true,
+		stats:    Stats{Skipped: map[string]int{}},
+		turnAt:   map[string]int{},
+		itemAt:   map[string]itemLoc{},
+		resulted: map[string]struct{}{},
+		pendSet:  map[[2]string]struct{}{},
+		dynKeys:  map[string]struct{}{},
+		touched:  -1,
 	}
 }
 

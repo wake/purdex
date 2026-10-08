@@ -119,6 +119,7 @@ type rawLine struct {
 	CustomTitle        json.RawMessage // "customTitle"
 	AITitle            json.RawMessage // "aiTitle"
 	ToolUseResult      json.RawMessage // "toolUseResult" (steps, U1-4c)
+	ToolDenialKind     json.RawMessage // "toolDenialKind": why a tool result is a denial
 	DurationMS         json.RawMessage // "durationMs": turn_duration
 
 	// Derived once by decodeLine.
@@ -163,6 +164,7 @@ func decodeLine(line []byte) (rawLine, bool) {
 		CustomTitle:        o["customTitle"],
 		AITitle:            o["aiTitle"],
 		ToolUseResult:      o["toolUseResult"],
+		ToolDenialKind:     o["toolDenialKind"],
 		DurationMS:         o["durationMs"],
 	}
 	l.typ, _ = jsonString(l.Type)
@@ -224,8 +226,10 @@ func contentBlocks(content json.RawMessage) ([]block, bool) {
 
 // capBlocks keeps the first maxBlocksPerRow blocks of a row and counts the
 // rest under one fixed Skipped reason. Every path that walks a row's blocks
-// (assistant, user, tool-result and queued-prompt rows) goes through it, so
-// nothing a row adds to the model grows with its block count.
+// (assistant, user and queued-prompt rows) goes through it, so nothing a row
+// adds to the model grows with its block count. A tool_result's own content
+// does not: its output totals cover the whole result, and what is stored of
+// it is bounded by outputOf (see maxOutputImages).
 func (n *Normalizer) capBlocks(blocks []block) []block {
 	if len(blocks) > maxBlocksPerRow {
 		n.stats.Skipped["row:too_many_blocks"] += len(blocks) - maxBlocksPerRow

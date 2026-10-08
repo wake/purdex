@@ -161,11 +161,91 @@ func TestValidate_RejectsTruncatedFlagShorterThanCap(t *testing.T) {
 		a := c.Turns[0].Items[4].AgentText
 		a.Markdown, a.Truncated = short, true
 	}, "agent_text")
-	rejects(t, func(c *Conversation) { step(c, "s1").InputTruncated = true }, "input")
 	rejects(t, func(c *Conversation) {
 		step(c, "s2").Diff = &Diff{Path: "a", Exact: true, Truncated: true,
 			Hunks: []Hunk{{Lines: []string{"+x"}}}}
 	}, "diff")
+}
+
+func TestValidate_InputTruncatedFlagAcceptsAnyCause(t *testing.T) {
+	// the flag says the stored input is not the complete tool input; the
+	// output alone cannot show why (a depth cut, a dropped member, a string
+	// cut all leave a small object), so any object input may carry it
+	for _, in := range []string{`{}`, `{"command":"ls"}`, `{"a":null}`, `{"command":"` + strings.Repeat("a", MaxInputString) + `"}`} {
+		c := wellFormed()
+		step(c, "s1").Input = json.RawMessage(in)
+		step(c, "s1").InputTruncated = true
+		if err := c.Validate(); err != nil {
+			t.Errorf("input %.40s with the flag: %v", in, err)
+		}
+	}
+}
+
+func TestValidate_RejectsNonObjectInput(t *testing.T) {
+	for _, in := range []string{``, `null`, `"s"`, `[1]`, `5`, `true`, `{`} {
+		for _, flag := range []bool{false, true} {
+			rejects(t, func(c *Conversation) {
+				step(c, "s1").Input = json.RawMessage(in)
+				step(c, "s1").InputTruncated = flag
+			}, "input")
+		}
+	}
+}
+
+func TestValidate_RejectsUntruncatedInputOverCap(t *testing.T) {
+	// not flagged => nothing in the stored input may exceed a cap
+	rejects(t, func(c *Conversation) {
+		step(c, "s1").Input = json.RawMessage(`{"a":{"b":["` + strings.Repeat("x", MaxInputString+1) + `"]}}`)
+	}, "input")
+	rejects(t, func(c *Conversation) {
+		in := map[string]string{}
+		for i := range 5 {
+			in[strings.Repeat("k", i+1)] = strings.Repeat("v", MaxInputString)
+		}
+		b, _ := json.Marshal(in)
+		step(c, "s1").Input = b // five strings at the string cap: over the whole cap
+	}, "input")
+	// exactly at the string cap is fine
+	c := wellFormed()
+	step(c, "s1").Input = json.RawMessage(`{"command":"` + strings.Repeat("a", MaxInputString) + `"}`)
+	if err := c.Validate(); err != nil {
+		t.Errorf("a string of exactly the cap: %v", err)
+	}
+}
+
+// nestedInput is an object input whose containers nest levels deep (the
+// input itself is level 1).
+func nestedInput(levels int) json.RawMessage {
+	return json.RawMessage(strings.Repeat(`{"a":`, levels) + `1` + strings.Repeat(`}`, levels))
+}
+
+func TestValidate_RejectsUntruncatedInputTooDeep(t *testing.T) {
+	// 33 levels, a few hundred bytes: only the depth cap can reject it
+	rejects(t, func(c *Conversation) {
+		step(c, "s1").Input = nestedInput(MaxInputDepth + 1)
+	}, "input")
+	rejects(t, func(c *Conversation) {
+		step(c, "s1").Input = json.RawMessage(strings.Repeat(`{"a":[`, MaxInputDepth/2+1) + `1` + strings.Repeat(`]}`, MaxInputDepth/2+1))
+	}, "input")
+	// hostile depth: rejected without recursing
+	rejects(t, func(c *Conversation) {
+		step(c, "s1").Input = json.RawMessage(strings.Repeat(`{"a":`, 5000) + `1` + strings.Repeat(`}`, 5000))
+	}, "input")
+	// flagged: any depth is a cut input, accepted
+	for _, levels := range []int{MaxInputDepth + 1, 200} {
+		c := wellFormed()
+		step(c, "s1").Input = nestedInput(levels)
+		step(c, "s1").InputTruncated = true
+		if err := c.Validate(); err != nil {
+			t.Errorf("flagged input %d levels deep: %v", levels, err)
+		}
+	}
+	// exactly the cap, unflagged: fine
+	c := wellFormed()
+	step(c, "s1").Input = nestedInput(MaxInputDepth)
+	if err := c.Validate(); err != nil {
+		t.Errorf("unflagged input exactly %d levels deep: %v", MaxInputDepth, err)
+	}
 }
 
 func TestValidate_AcceptsTruncatedFlagAtCap(t *testing.T) {
