@@ -56,7 +56,7 @@ func TestRoster_LiveTeamsActiveMembersWithTmuxNames(t *testing.T) {
 	got := f.getRoster()
 	member := func(sid, ref, title, addr, tm string, at int64) team.RosterMember {
 		return team.RosterMember{
-			RosterSession: team.RosterSession{SessionID: sid, Ref: ref, Address: addr, Title: title, Name: "reg-" + sid, TmuxSession: tm, Live: true},
+			RosterSession: team.RosterSession{SessionID: sid, Ref: ref, Address: addr, Title: title, Name: "reg-" + sid, TmuxSession: tm, Live: true, Model: "sonnet", Effort: "high"}, // newMember's spawn values
 			State:         team.MemberActive, Origin: team.MemberOriginSpawned, JoinedAt: at}
 	}
 	want := team.Roster{Teams: []team.TeamRoster{
@@ -146,7 +146,7 @@ func TestRoster_StoredFallbackWhenNotLive(t *testing.T) {
 	if tm.Lead != wantLead {
 		t.Fatalf("lead = %+v, want %+v", tm.Lead, wantLead)
 	}
-	wantMember := team.RosterSession{SessionID: "sid-m1", Ref: "_memop-1", Address: alias + "/_memop-1", Title: "worker", TmuxSession: "tm-op-1", Live: false}
+	wantMember := team.RosterSession{SessionID: "sid-m1", Ref: "_memop-1", Address: alias + "/_memop-1", Title: "worker", TmuxSession: "tm-op-1", Live: false, Model: "sonnet", Effort: "high"}
 	if len(tm.Members) != 1 || tm.Members[0].RosterSession != wantMember {
 		t.Fatalf("members = %+v, want %+v", tm.Members, wantMember)
 	}

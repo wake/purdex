@@ -69,6 +69,46 @@ func (s *Store) ActiveMembersOfLiveTeams() ([]memberRow, error) {
 		WHERE m.state = 'active' AND t.ended_at = 0 ORDER BY m.created_at, m.spawn_op`)
 }
 
+// liveTeam is a live team with the reading its lead's statusline stored on
+// the team row (teams.lead_usage_*), nil when none was ever stored. The team
+// scan (teamCols) does not read those columns: team.Team is a wire type, and
+// only the roster wants the reading.
+type liveTeam struct {
+	team.Team
+	leadUsage *team.MemberContext
+}
+
+// ListLiveTeamsWithLeadUsage returns every live team, oldest first, each
+// with its persisted lead reading, in ONE statement: a team that ends
+// between two reads cannot be listed without its reading (PL-1f'3 review
+// A-2). Never nil.
+func (s *Store) ListLiveTeamsWithLeadUsage() ([]liveTeam, error) {
+	rows, err := s.db.Query(`SELECT ` + teamCols + `, lead_usage_pct, lead_usage_window, lead_usage_model, lead_usage_effort, lead_usage_at
+		FROM teams WHERE ended_at = 0 ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list live teams with lead readings: %w", err)
+	}
+	defer rows.Close()
+	out := []liveTeam{}
+	for rows.Next() {
+		var lt liveTeam
+		var grantJSON string
+		var u usageScan
+		if err := rows.Scan(append(teamDest(&lt.Team, &grantJSON), u.dest()...)...); err != nil {
+			return nil, fmt.Errorf("list live teams with lead readings: %w", err)
+		}
+		if err := decodeTeamGrant(&lt.Team, grantJSON); err != nil {
+			return nil, fmt.Errorf("list live teams with lead readings: %w", err)
+		}
+		lt.leadUsage = u.reading()
+		out = append(out, lt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list live teams with lead readings: %w", err)
+	}
+	return out, nil
+}
+
 func pctArg(c team.MemberContext) any {
 	if c.UsedPercentage == nil {
 		return nil

@@ -66,6 +66,16 @@ func checkLineage(tx *sql.Tx, cur team.RelayOp, r RelayReport) error {
 // re-sends, and the op stays written for reconciliation (P6-4, #1735).
 var ErrClearedTargetHasRole = errors.New("the new session already leads or is a member of a live team")
 
+// The stored statusline reading belongs to the session that sent it, so a
+// row that moves to a new session goes back to "no reading" (usage_at = 0,
+// usage_pct NULL, the rest empty: what usageScan.reading treats as absent).
+// Left as it was, the new session would show the old one's context until its
+// own statusline arrives (PL-1f'3 review A-1).
+const (
+	resetMemberUsage = `usage_pct = NULL, usage_window = 0, usage_model = '', usage_effort = '', usage_at = 0`
+	resetLeadUsage   = `lead_usage_pct = NULL, lead_usage_window = 0, lead_usage_model = '', lead_usage_effort = '', lead_usage_at = 0`
+)
+
 // moveTeamRoles is the team half of a cleared (spec §8.4), run in its
 // lineage transaction after the lineage insert: the live team the old
 // session leads now follows the new session and ref, and so does the old
@@ -86,11 +96,11 @@ func moveTeamRoles(tx *sql.Tx, oldSessionID string, r RelayReport) error {
 			return fmt.Errorf("%w (%s)", ErrClearedTargetHasRole, r.NewSessionID)
 		}
 	}
-	if _, err := tx.Exec(`UPDATE teams SET lead_session_id = ?, lead_ref = ?
+	if _, err := tx.Exec(`UPDATE teams SET lead_session_id = ?, lead_ref = ?, `+resetLeadUsage+`
 		WHERE lead_session_id = ? AND ended_at = 0`, r.NewSessionID, r.NewRef, oldSessionID); err != nil {
 		return fmt.Errorf("move lead: %w", err)
 	}
-	if _, err := tx.Exec(`UPDATE team_members SET session_id = ?, ref = ?, updated_at = ?
+	if _, err := tx.Exec(`UPDATE team_members SET session_id = ?, ref = ?, updated_at = ?, `+resetMemberUsage+`
 		WHERE session_id = ? AND state = 'active'
 		  AND EXISTS (SELECT 1 FROM teams WHERE teams.id = team_members.team_id AND teams.ended_at = 0)`,
 		r.NewSessionID, r.NewRef, r.At, oldSessionID); err != nil {

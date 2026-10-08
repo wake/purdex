@@ -3,6 +3,7 @@ package team
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,28 @@ func TestWireRoster_JSONShapes(t *testing.T) {
 		}
 	}
 
+	// model / effort / context (PL-1f′3): left out when empty / nil, written
+	// in the member context's own shape when there.
+	used := 41.5
+	withCtx := RosterSession{SessionID: "s", Ref: "_abc123", Address: "a/_abc123", Live: true,
+		Model: "sonnet", Effort: "high", Context: &MemberContext{UsedPercentage: &used, Window: 200000, ModelID: "claude-sonnet-5-5", Effort: "high", At: 9}}
+	raw, err := json.Marshal(withCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"session_id":"s","ref":"_abc123","address":"a/_abc123","live":true,"model":"sonnet","effort":"high","context":{"used_percentage":41.5,"window":200000,"model_id":"claude-sonnet-5-5","effort":"high","at":9}}`; string(raw) != want {
+		t.Errorf("session with model/effort/context: %s, want %s", raw, want)
+	}
+	raw, err = json.Marshal(RosterSession{SessionID: "s", Ref: "_abc123", Address: "a/_abc123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{`"model"`, `"effort"`, `"context"`} {
+		if strings.Contains(string(raw), k) {
+			t.Errorf("session without them still writes %s: %s", k, raw)
+		}
+	}
+
 	full := Roster{Teams: []TeamRoster{{
 		ID: "t", HostID: "h", CreatedAt: 5,
 		Lead: RosterSession{SessionID: "s0", Ref: "_lead01", Address: "a/lead", Title: "lead", Name: "n0", TmuxSession: "main", Live: true},
@@ -41,7 +64,7 @@ func TestWireRoster_JSONShapes(t *testing.T) {
 			State:         MemberActive, Origin: MemberOriginSpawned, JoinedAt: 7,
 		}},
 	}}}
-	raw, err := json.Marshal(RosterEventValue{Op: "changed", Teams: full.Teams})
+	raw, err = json.Marshal(RosterEventValue{Op: "changed", Teams: full.Teams})
 	if err != nil {
 		t.Fatal(err)
 	}

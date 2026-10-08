@@ -1517,6 +1517,7 @@ The adopt / release path then runs in its own order, after U23's SPA (PU-2a…2d
 - *`rosterChanged` is an async coalescing signal* (A-2a): a non-blocking send on a one-slot channel, answered by one publisher goroutine that Start launches and Stop joins (`roster_publish.go`), so no registry or naming I/O runs on the caller's thread — most callers hold `createMu` (`afterApproved`); `TestRosterChanged_NeverBlocks`, `TestRosterPublisher_CoalescesBursts`, `TestRosterPublisher_StopsWithTheModule`.
 - *One registry read per build* (A-2b): `buildRoster` collects every lead and active-member session id and resolves them with the new `ResolveOriginsBySession` (one `ReadRegistry`, the single form's filter), instead of one read per session; `TestRoster_BuildResolvesOncePerBuild`.
 - *A-3* (file responsibilities) was rejected by the critic as a finding, but the split below answers it anyway: PL-1f′ ships as two stacked PRs — **A** (wire types, `roster.go` = materialization, the route, `ResolveOriginsBySession`) and **B** (`roster_publish.go` = the signal, the publisher, the snapshot, all call sites).
+- **PL-1f′3 (2026-10-08, coordinator + interface lead):** `RosterSession` carries `model`, `effort` (members: the spawn values) and `context` (lead and members) through the one read point `memberView` uses (`Module.sessionContext`), so the App, iOS and `pdx team` agree; context changes are announced like any other change.
 
 ### PL-1f″ — the roster's adopt / release delta (new, last PR of batch A)
 

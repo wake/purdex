@@ -283,6 +283,59 @@ func memberBySpawn(t *testing.T, s *Store, spawnOp string) memberRow {
 	return m
 }
 
+// leadReading reads the lead reading stored on a team row (tests only).
+func leadReading(t *testing.T, s *Store, teamID string) *team.MemberContext {
+	t.Helper()
+	var u usageScan
+	if err := s.db.QueryRow(`SELECT lead_usage_pct, lead_usage_window, lead_usage_model, lead_usage_effort, lead_usage_at
+		FROM teams WHERE id = ?`, teamID).Scan(u.dest()...); err != nil {
+		t.Fatalf("lead reading of %s: %v", teamID, err)
+	}
+	return u.reading()
+}
+
+// A cleared moves the role to a new session, and the stored statusline
+// reading was the OLD session's: it must not follow the row, or the new
+// session shows the previous one's context until its own statusline arrives
+// (PL-1f'3 review A-1). The row is back to "no reading" (usage_at = 0,
+// usage_pct NULL). Mutation gates: drop the lead's usage reset → the lead
+// half red; drop the member's → the member half red.
+func TestRelayStore_ClearedDropsTheOldSessionsReading(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-1", "L1", 1000)
+	seedMember(t, s, "sp-1", "team-1", "M1", 1000)
+	v := 71.0
+	old := team.MemberContext{UsedPercentage: &v, Window: 200000, ModelID: "claude-opus-5-5", Effort: "high", At: 50}
+	if ok, err := s.SetLeadUsage("team-1", "L1", old); err != nil || !ok {
+		t.Fatalf("persist lead reading: %v %v", ok, err)
+	}
+	if ok, err := s.SetMemberUsage("sp-1", "M1", old); err != nil || !ok {
+		t.Fatalf("persist member reading: %v %v", ok, err)
+	}
+	if leadReading(t, s, "team-1") == nil || memberUsage(t, s, "sp-1") == nil {
+		t.Fatal("seeded readings are absent")
+	}
+
+	claimedOp(t, s, "op-l", "L1", "_abc123")
+	mustReport(t, s, "op-l", RelayReport{State: team.RelayCleared, NewSessionID: "L2", NewRef: "_lll222", At: 5000})
+	if got := leadReading(t, s, "team-1"); got != nil {
+		t.Fatalf("lead reading after a cleared = %+v, want none", got)
+	}
+	if memberUsage(t, s, "sp-1") == nil {
+		t.Fatal("a lead's cleared dropped a member's reading")
+	}
+
+	claimedOp(t, s, "op-m", "M1", "_memsp-1")
+	mustReport(t, s, "op-m", RelayReport{State: team.RelayCleared, NewSessionID: "M2", NewRef: "_mmm222", At: 6000})
+	if got := memberUsage(t, s, "sp-1"); got != nil {
+		t.Fatalf("member reading after a cleared = %+v, want none", got)
+	}
+	// The new session's own first reading is stored (usage_at was reset to 0).
+	if ok, err := s.SetMemberUsage("sp-1", "M2", team.MemberContext{Window: 1000000, At: 7}); err != nil || !ok {
+		t.Fatalf("the new session's first reading: %v %v", ok, err)
+	}
+}
+
 // Spec §8.4: a cleared report moves the team's lead_session_id and lead_ref,
 // and the active member row's session id and ref, in the lineage
 // transaction. Other teams and members are untouched. A move that fails

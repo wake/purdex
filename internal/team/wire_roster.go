@@ -22,6 +22,13 @@ type RosterSession struct {
 	Name        string `json:"name,omitempty"`         // the registry name
 	TmuxSession string `json:"tmux_session,omitempty"` // the tmux session NAME; "" when not in tmux
 	Live        bool   `json:"live"`
+	// Model and Effort are what a member was spawned with (the row's values);
+	// empty for a lead, which was not spawned by the team. Context is the
+	// session's last statusline reading, live else persisted, the same value
+	// GET /api/team answers for a member; nil until one was ever reported.
+	Model   string         `json:"model,omitempty"`
+	Effort  string         `json:"effort,omitempty"`
+	Context *MemberContext `json:"context,omitempty"`
 }
 
 // RosterMember is an active member: its session plus how it joined.

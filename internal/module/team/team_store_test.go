@@ -312,6 +312,45 @@ func TestStore_EndTeamOnceAndOnlyForTheLeadItSaw(t *testing.T) {
 	}
 }
 
+// PL-1f′3 review A-2: the roster reads the live teams and each lead's stored
+// reading in ONE statement, so a team ended between two reads cannot be
+// listed with its reading dropped. Live teams only, oldest first, the
+// reading nil for a team that never stored one. Mutation gate: drop
+// `ended_at = 0` → the ended team is listed → red.
+func TestStore_ListLiveTeamsWithLeadUsage(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "id-1", "sid-1", 1000)
+	seedTeam(t, s, "id-2", "sid-2", 2000)
+	seedTeam(t, s, "id-3", "sid-3", 3000)
+	v := 64.0
+	want := team.MemberContext{UsedPercentage: &v, Window: 1000000, ModelID: "claude-opus-5-5", Effort: "high", At: 50}
+	for _, id := range []string{"id-1", "id-3"} {
+		if ok, err := s.SetLeadUsage(id, "sid-"+id[3:], want); err != nil || !ok {
+			t.Fatalf("persist %s: %v %v", id, ok, err)
+		}
+	}
+	if ended, err := s.EndTeam("id-3", "sid-3", team.TeamEndLeadGone, 4000); err != nil || !ended {
+		t.Fatalf("end id-3: %v %v", ended, err)
+	}
+
+	got, err := s.ListLiveTeamsWithLeadUsage()
+	if err != nil || len(got) != 2 || got[0].ID != "id-1" || got[1].ID != "id-2" {
+		t.Fatalf("live teams = %+v err=%v, want id-1, id-2", got, err)
+	}
+	if got[0].LeadSessionID != "sid-1" || got[0].Grant.MaxMembers != 3 {
+		t.Fatalf("team columns not scanned: %+v", got[0].Team)
+	}
+	if u := got[0].leadUsage; u == nil || *u.UsedPercentage != 64 || u.Window != 1000000 || u.ModelID != "claude-opus-5-5" || u.Effort != "high" || u.At != 50 {
+		t.Fatalf("id-1 lead reading = %+v, want the stored one", u)
+	}
+	if got[1].leadUsage != nil {
+		t.Fatalf("id-2 lead reading = %+v, want none", got[1].leadUsage)
+	}
+	if none, err := openTestStore(t).ListLiveTeamsWithLeadUsage(); err != nil || none == nil {
+		t.Fatalf("no teams = %#v err=%v (must be [] not nil)", none, err)
+	}
+}
+
 // The deploy path: a team.db written before P4-2 has no teams table (before
 // P4-3, no team_members). OpenStore adds them (CREATE … IF NOT EXISTS) and
 // keeps every existing row.
