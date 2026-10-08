@@ -12,7 +12,8 @@
 
 // ---- tokenizing ----
 
-const REDIRECT = /^(\d*|&)>>?(&\d*-?)?|^\d*<<?<?/
+// a redirection word ends in an operator (its target is the next word)
+const BARE = /[<>&]$/
 
 // scan splits a command into segments of words. A word records the text between its quotes and where it
 // sits in the original string. Returns null when the command cannot be parsed (an open quote) or has a
@@ -23,11 +24,11 @@ function scan(cmd) {
   let cur = null // {text, start, end, redirect}
   let quote = ''
   let background = false
+  const heredocs = [] // {delim, strip} awaiting the next newline
 
   const endWord = (i) => {
     if (cur) {
       cur.end = i
-      cur.redirect = REDIRECT.test(cur.text) && !cur.quoted
       words.push(cur)
       cur = null
     }
@@ -63,7 +64,38 @@ function scan(cmd) {
     }
     if (c === '\\' && i + 1 < cmd.length) { push(cmd[++i], i); continue }
     if (c === ' ' || c === '\t') { endWord(i); continue }
-    if (c === '\n' || c === ';') { endSegment(i); continue }
+    if (c === '\n') {
+      endSegment(i)
+      for (const h of heredocs.splice(0)) {
+        // the body: lines up to one that is the delimiter; none of it is a command
+        for (;;) {
+          const nl = cmd.indexOf('\n', i + 1)
+          const line = cmd.slice(i + 1, nl < 0 ? cmd.length : nl)
+          i = nl < 0 ? cmd.length : nl
+          if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delim || nl < 0) break
+        }
+      }
+      continue
+    }
+    if (c === ';') { endSegment(i); continue }
+    if (c === '#' && !cur) { while (i + 1 < cmd.length && cmd[i + 1] !== '\n') i++; continue }
+    if (c === '>' || c === '<') {
+      // an unquoted redirection ends the word before it (`run>out`), but keeps a file descriptor
+      // (`2>`) and the operator it is building (`>>`, `<<`)
+      if (cur && !(cur.redirect && /[<>]$/.test(cur.text)) && !/^(\d+|&)$/.test(cur.text)) endWord(i)
+      if (c === '<' && cmd[i + 1] === '<' && cmd[i - 1] !== '<' && cmd[i + 2] !== '<') {
+        let j = i + 2
+        const strip = cmd[j] === '-'
+        if (strip) j++
+        while (cmd[j] === ' ' || cmd[j] === '\t') j++
+        let delim = ''
+        for (; j < cmd.length && !' \t\n;|&()<>'.includes(cmd[j]); j++) if (!'\'"\\'.includes(cmd[j])) delim += cmd[j]
+        heredocs.push({ delim, strip })
+      }
+      push(c, i)
+      cur.redirect = true
+      continue
+    }
     if (c === '|') {
       endSegment(i)
       if (cmd[i + 1] === '|') i++
@@ -92,7 +124,7 @@ function scan(cmd) {
 const PM_VALUE_OPTS = new Set(['-C', '--dir', '--prefix', '--filter', '-F', '--workspace', '-w', '--package', '-p', '--cwd'])
 const RUNNERS = new Set(['npx', 'pnpm', 'pnpx', 'yarn', 'npm', 'bunx', 'bun', 'corepack'])
 const PM_SUBCOMMANDS = new Set(['exec', 'run', 'run-script', 'dlx', 'x'])
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash'])
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'ksh'])
 const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/
 
 const base = (p) => p.slice(p.lastIndexOf('/') + 1)
@@ -103,7 +135,7 @@ const base = (p) => p.slice(p.lastIndexOf('/') + 1)
 function commandOf(words) {
   let w = words.filter((x) => !x.redirect).map((x) => x.text)
   // a redirection's target (the word after a bare `>`) is not an argument
-  const idx = words.map((x, k) => (x.redirect && /(>>?|<)$/.test(x.text) ? k + 1 : -1)).filter((k) => k >= 0)
+  const idx = words.map((x, k) => (x.redirect && BARE.test(x.text) ? k + 1 : -1)).filter((k) => k >= 0)
   if (idx.length) w = words.filter((x, k) => !x.redirect && !idx.includes(k)).map((x) => x.text)
   for (let guard = 0; guard < 8 && w.length; guard++) {
     const head = base(w[0])
@@ -209,17 +241,47 @@ function kindOf(w, depth) {
 
 const ORDER = ['test-full', 'build', 'test-pkg', 'lint-full']
 
-// classifyKind is the heaviest kind among a command's segments; 'wrapped' when any segment already
-// goes through `pdx lease`; null for none or an unparseable command.
+// substitutions lists the command lines inside `$( )` and backticks, outside single quotes: they run
+// too, so a heavy command there counts.
+function substitutions(cmd) {
+  const out = []
+  let single = false
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i]
+    if (single) { if (c === "'") single = false; continue }
+    if (c === "'") { single = true; continue }
+    if (c === '\\') { i++; continue }
+    if (c === '`') {
+      let j = i + 1
+      while (j < cmd.length && cmd[j] !== '`') j += cmd[j] === '\\' ? 2 : 1
+      out.push(cmd.slice(i + 1, j))
+      i = j
+    } else if (c === '$' && cmd[i + 1] === '(') {
+      let depth = 1
+      let j = i + 2
+      for (; j < cmd.length && depth > 0; j++) {
+        if (cmd[j] === '(') depth++
+        else if (cmd[j] === ')') depth--
+      }
+      out.push(cmd.slice(i + 2, j - 1))
+      // the text is still scanned, so a nested one is found by the recursion in classifyKind
+    }
+  }
+  return out
+}
+
+// classifyKind is the heaviest kind among a command's segments and the command lines substituted into
+// them. A segment already going through `pdx lease` is skipped, not the whole command: what follows it
+// is not covered by its lease. null for none or an unparseable command.
 function classifyKind(cmd, depth) {
   const segs = scan(cmd)
   if (segs === null) return null
   let best = null
-  for (const s of segs) {
-    const k = kindOf(commandOf(s), depth)
-    if (k === 'wrapped') return 'wrapped'
-    if (k && (best === null || ORDER.indexOf(k) < ORDER.indexOf(best))) best = k
+  const consider = (k) => {
+    if (k && k !== 'wrapped' && (best === null || ORDER.indexOf(k) < ORDER.indexOf(best))) best = k
   }
+  for (const s of segs) consider(kindOf(commandOf(s), depth))
+  if (depth < 3) for (const inner of substitutions(cmd)) consider(classifyKind(inner, depth + 1))
   return best
 }
 
@@ -229,7 +291,7 @@ function classifyKind(cmd, depth) {
 export function classify(command) {
   if (typeof command !== 'string') return null
   const kind = classifyKind(command, 0)
-  if (kind === null || kind === 'wrapped') return null
+  if (kind === null) return null
   return { kind, needsMaxWorkers: rewriteMaxWorkers(command).changed }
 }
 
@@ -265,7 +327,7 @@ function rewriteAt(command, depth) {
       // the last word that is not a redirection or a redirection's target
       let last = null
       for (let k = 0; k < s.length; k++) {
-        if (s[k].redirect) { if (/(>>?|<)$/.test(s[k].text)) k++; continue }
+        if (s[k].redirect) { if (BARE.test(s[k].text)) k++; continue }
         last = s[k]
       }
       if (last !== null) edits.push({ at: last.end, end: last.end, text: ' --maxWorkers=3' })

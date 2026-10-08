@@ -68,7 +68,8 @@ const KINDS: [string, string | null][] = [
   ['pdx lease run --kind build -- pnpm run build', null],
   ['cd spa && pdx lease run --kind test-full -- npx vitest run', null],
   ['echo "npx vitest run"', null],
-  ['pdx lease run --kind build -- pnpm run build && npx vitest run', null],
+  ['pdx lease run --kind build -- pnpm run build && npx vitest run', 'test-full'],
+  ['pdx lease run --kind build -- pnpm run build && ls', null],
   ["echo 'pnpm run build'", null],
   ['grep -r "vitest run" docs', null],
   ['ls', null],
@@ -77,6 +78,30 @@ const KINDS: [string, string | null][] = [
   ['npx vitest run &', null],
   ['pnpm run build & sleep 1', null],
   ['npx vitest run > out.txt 2>&1', 'test-full'],
+  // attached redirections end the word
+  ['npx vitest run>out.txt', 'test-full'],
+  ['npx vitest run>>out.txt', 'test-full'],
+  ['npx vitest run 2>/dev/null', 'test-full'],
+  ['npx vitest run &>out.txt', 'test-full'],
+  ['npx vitest run <in.txt', 'test-full'],
+  ['npx vitest run src/a.test.ts>out.txt', null],
+  // substitutions and other shells run the command too
+  ['echo $(npx vitest run)', 'test-full'],
+  ['echo "$(npx vitest run)"', 'test-full'],
+  ['echo `npx vitest run`', 'test-full'],
+  ['x=$(cd spa && pnpm run build)', 'build'],
+  ["echo '$(npx vitest run)'", null],
+  ['fish -c "npx vitest run"', 'test-full'],
+  ['echo $(echo $(npx vitest run))', 'test-full'],
+  // heredoc bodies and comments are data
+  ['cat <<EOF\nnpx vitest run\nEOF', null],
+  ["cat <<'EOF'\nnpx vitest run\nEOF\nnpx vitest run", 'test-full'],
+  ['cat <<-EOF\n\tpnpm run build\n\tEOF', null],
+  ['cat <<A <<B\nnpx vitest run\nA\npnpm run build\nB', null],
+  ['cat > f <<EOF\nx\nEOF\ngo vet ./...', 'lint-full'],
+  ['echo ok # npx vitest run', null],
+  ['# npx vitest run\nls', null],
+  ['echo a#b && npx vitest run', 'test-full'],
 ]
 
 for (const [cmd, want] of KINDS) {
@@ -109,6 +134,9 @@ const REWRITES: [string, string][] = [
   ['cd spa && npx vitest run && pnpm run build', 'cd spa && npx vitest run --maxWorkers=3 && pnpm run build'],
   ['bash -c "cd spa && npx vitest run"', 'bash -c "cd spa && npx vitest run --maxWorkers=3"'],
   ["sh -c 'npx vitest run 2>&1 | tail'", "sh -c 'npx vitest run --maxWorkers=3 2>&1 | tail'"],
+  ['npx vitest run>out.txt', 'npx vitest run --maxWorkers=3>out.txt'],
+  ['npx vitest run 2>/dev/null', 'npx vitest run --maxWorkers=3 2>/dev/null'],
+  ['pdx lease run --kind build -- ls && npx vitest run', 'pdx lease run --kind build -- ls && npx vitest run --maxWorkers=3'],
   ['npx vitest run; npx vitest run', 'npx vitest run --maxWorkers=3; npx vitest run --maxWorkers=3'],
 ]
 
@@ -119,6 +147,8 @@ for (const [cmd, want] of REWRITES) {
 }
 
 const UNCHANGED = [
+  'cat <<EOF\nnpx vitest run\nEOF',
+  'echo ok # npx vitest run',
   'npx vitest run --maxWorkers=3',
   'npx vitest run --max-workers=2',
   'npx vitest run src/lib/foo.test.ts',
