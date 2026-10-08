@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/lights"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -1498,17 +1499,25 @@ func (m *Module) selectSessionProjection(sessionName string, projections []Sessi
 
 // selectSessionProjectionBy picks the representative projection of the tmux
 // session sessionName (spec 7): the pane whose effective light ranks highest
-// (projectionRankGreater), using nameOf for the pane→session-name step.
+// (projectionRankGreater), using nameOf for the pane→session-name step. The
+// returned copy's Background is the highest across all the session's panes;
+// everything else (dots, agent type, model, source, status) is the
+// representative pane's.
 func (m *Module) selectSessionProjectionBy(sessionName string, projections []SessionProjection, nameOf func(paneID string) string) *SessionProjection {
 	var selected *SessionProjection
+	background := ""
 	for i := range projections {
 		if nameOf(projections[i].PaneID) != sessionName {
 			continue
 		}
+		background = higherBackground(background, projections[i].Background)
 		if selected == nil || projectionRankGreater(projections[i], *selected) {
 			projection := projections[i]
 			selected = &projection
 		}
+	}
+	if selected != nil {
+		selected.Background = background
 	}
 	return selected
 }
@@ -1528,11 +1537,13 @@ func (m *Module) liveSessionProjections() ([]namedProjection, error) {
 		return nil, nil
 	}
 	selected := make(map[string]namedProjection)
+	background := make(map[string]string) // the highest across all of a session's panes
 	for _, projection := range projections {
 		sessionName, sessionCode := m.resolvePaneSession(projection.PaneID)
 		if sessionName == "" {
 			continue
 		}
+		background[sessionName] = higherBackground(background[sessionName], projection.Background)
 		current, ok := selected[sessionName]
 		if !ok || projectionRankGreater(projection, current.Projection) {
 			selected[sessionName] = namedProjection{
@@ -1549,7 +1560,9 @@ func (m *Module) liveSessionProjections() ([]namedProjection, error) {
 	sort.Strings(sessionNames)
 	out := make([]namedProjection, 0, len(sessionNames))
 	for _, sessionName := range sessionNames {
-		out = append(out, selected[sessionName])
+		np := selected[sessionName]
+		np.Projection.Background = background[sessionName] // np is a copy
+		out = append(out, np)
 	}
 	return out, nil
 }
@@ -1565,6 +1578,27 @@ func projectionRank(p SessionProjection) int {
 	case agentpkg.StatusRunning:
 		return 2
 	case agentpkg.StatusIdle:
+		return 1
+	}
+	return 0
+}
+
+// higherBackground is the higher-priority of two background symbols:
+// workflow > monitor > schedule > none.
+func higherBackground(a, b string) string {
+	if backgroundRank(b) > backgroundRank(a) {
+		return b
+	}
+	return a
+}
+
+func backgroundRank(b string) int {
+	switch lights.Background(b) {
+	case lights.BackgroundWorkflow:
+		return 3
+	case lights.BackgroundMonitor:
+		return 2
+	case lights.BackgroundSchedule:
 		return 1
 	}
 	return 0

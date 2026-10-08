@@ -791,3 +791,43 @@ func TestSelectSession_ModOverlayDecidesRank(t *testing.T) {
 		t.Fatalf("selected %+v, want pane %%5 waiting from the mod", got)
 	}
 }
+
+// TestSelectSession_BackgroundIsHighestAcrossPanes: the representative pane
+// has no background, another pane runs a workflow - the session shows the
+// workflow; the dots, agent type and source stay the representative pane's.
+func TestSelectSession_BackgroundIsHighestAcrossPanes(t *testing.T) {
+	m := newTestModule(t)
+	rep := rankPane("%5", "f-rep", agentpkg.StatusWaiting, 10, "")
+	rep.Subagents = []agentpkg.SubagentRef{{ID: "dot-rep", Type: "cc"}}
+	other := rankPane("%6", "f-other", agentpkg.StatusIdle, 20, "workflow")
+	other.Subagents = []agentpkg.SubagentRef{{ID: "dot-other", Type: "cc"}}
+	third := rankPane("%7", "f-third", agentpkg.StatusIdle, 30, "schedule")
+	in := []SessionProjection{rep, other, third}
+
+	got := selectWork(m, in)
+	if got == nil || got.PaneID != "%5" {
+		t.Fatalf("selected %+v, want the waiting pane %%5", got)
+	}
+	if got.Background != "workflow" {
+		t.Fatalf("background = %q, want workflow (highest across panes)", got.Background)
+	}
+	if len(got.Subagents) != 1 || got.Subagents[0].ID != "dot-rep" || got.Source != SourceHook || got.TopFrame.AgentType != "cc" {
+		t.Fatalf("dots/source/type must stay the representative pane's, got %+v", got)
+	}
+	if in[0].Background != "" {
+		t.Fatalf("the input slice was mutated: %+v", in[0])
+	}
+
+	// workflow > monitor > schedule > none
+	for _, c := range []struct{ a, b, want string }{
+		{"", "schedule", "schedule"}, {"schedule", "monitor", "monitor"}, {"monitor", "workflow", "workflow"}, {"workflow", "", "workflow"}, {"", "", ""},
+	} {
+		got := selectWork(m, []SessionProjection{
+			rankPane("%5", "f1", agentpkg.StatusRunning, 20, c.a),
+			rankPane("%6", "f2", agentpkg.StatusIdle, 10, c.b),
+		})
+		if got.Background != c.want {
+			t.Errorf("backgrounds %q + %q: got %q, want %q", c.a, c.b, got.Background, c.want)
+		}
+	}
+}
