@@ -59,7 +59,7 @@ Tests (decide bodies as **raw JSON**, so key absence is real):
 
 **Task 5 — roster and `GET /api/team`.**
 Files: `internal/module/team/roster.go:80` (`TeamName: t.TeamName`), `team_store_members.go` only if `ListLiveTeamsWithLeadUsage` does not go through `teamCols`.
-Tests: roster lists the name; a team without one lists `""`; `GET /api/team` from the lead and from a member both show `team.team_name`.
+Tests: roster lists the name; a team without one lists `""`; `GET /api/team` from the lead shows `team.team_name`. (Corrected while implementing: `GET /api/team` is the lead's own view by design — `callerTeam` resolves `LiveTeamByLead` and answers a member 409 `not_lead`, P4-6 — so there is no member test; a member reads the name from the roster.)
 
 **Task 6 — capability.**
 Files: `internal/core/info_handler.go:45-50` (append `"team.name.v1"` last), `info_handler_test.go:401-409`.
