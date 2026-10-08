@@ -3,6 +3,7 @@ package teammod
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -111,6 +112,13 @@ func scanTask(r rowScanner) (TaskRow, error) {
 // first (BEGIN IMMEDIATE), so what fn reads cannot change before it writes.
 // modernc's BeginTx has no IMMEDIATE option and the DSN no _txlock, so the
 // transaction lives on a dedicated connection. fn must use only conn.
+//
+// A connection whose transaction could not be ended (a failed COMMIT or
+// ROLLBACK) or was abandoned by a panic is discarded, never returned to the
+// pool: closing the SQLite connection ends the transaction, whereas a
+// pooled one would fail every later BEGIN with "cannot start a transaction
+// within a transaction". A failed ROLLBACK is returned joined to the error
+// that caused it.
 func (s *Store) immediateTx(fn func(ctx context.Context, conn *sql.Conn) error) error {
 	ctx := context.Background()
 	conn, err := s.db.Conn(ctx)
@@ -121,20 +129,38 @@ func (s *Store) immediateTx(fn func(ctx context.Context, conn *sql.Conn) error) 
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
-	committed := false
+	settled := false
 	defer func() {
-		if !committed {
-			conn.ExecContext(ctx, "ROLLBACK")
+		if !settled { // fn panicked: the transaction is still open
+			discardConn(conn)
 		}
 	}()
 	if err := fn(ctx, conn); err != nil {
+		settled = true
+		if _, rbErr := conn.ExecContext(ctx, "ROLLBACK"); rbErr != nil {
+			discardConn(conn)
+			return errors.Join(err, fmt.Errorf("rollback: %w", rbErr))
+		}
 		return err
 	}
-	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-		return err
+	var commitErr error
+	if s.beforeTaskCommit != nil {
+		commitErr = s.beforeTaskCommit()
 	}
-	committed = true
+	if commitErr == nil {
+		_, commitErr = conn.ExecContext(ctx, "COMMIT")
+	}
+	settled = true
+	if commitErr != nil {
+		discardConn(conn)
+		return fmt.Errorf("commit: %w", commitErr)
+	}
 	return nil
+}
+
+// discardConn marks conn bad so that Close drops it instead of pooling it.
+func discardConn(conn *sql.Conn) {
+	conn.Raw(func(any) error { return driver.ErrBadConn })
 }
 
 func getTaskIn(ctx context.Context, conn *sql.Conn, teamID string, seq int) (TaskRow, bool, error) {
@@ -385,7 +411,8 @@ func (s *Store) SetTaskStatus(teamID string, seq int, to team.TaskStatus, by tea
 
 // ReassignTask hands a pending or in-progress task to another active member
 // of the team: the owner changes and the status goes back to pending (the
-// new owner starts it). ErrTaskNotFound / ErrBadTaskTransition (finished
+// new owner starts it). Handing a task to the member that already owns it
+// is a no-op that returns the row as it is. ErrTaskNotFound / ErrBadTaskTransition (finished
 // task) / ErrOwnerNotActive.
 func (s *Store) ReassignTask(teamID string, seq int, toKey string, at int64) (TaskRow, error) {
 	var out TaskRow
@@ -406,6 +433,10 @@ func (s *Store) ReassignTask(teamID string, seq int, toKey string, at int64) (Ta
 		}
 		if !active {
 			return ErrOwnerNotActive
+		}
+		if cur.OwnerKey == toKey { // already theirs: nothing to hand over, status and stamp stay
+			out = cur
+			return nil
 		}
 		res, err := conn.ExecContext(ctx, `UPDATE tasks SET owner_key = ?, status = 'pending', updated_at = ?
 			WHERE team_id = ? AND seq = ? AND status = ?`, toKey, at, teamID, seq, string(cur.Status))

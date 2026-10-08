@@ -465,6 +465,79 @@ func TestReassignTask(t *testing.T) {
 	}
 }
 
+func TestReassignTask_SameOwnerIsANoOp(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, tTeamA, "lead-a", 1)
+	seedMember(t, s, "op-1", tTeamA, "s-1", 1)
+	row := mustCreateTask(t, s, newTask(tTeamA, "op-1", "work", 10))
+	if _, err := s.SetTaskStatus(tTeamA, row.Seq, team.TaskInProgress, team.TaskByOwner, 11); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ReassignTask(tTeamA, row.Seq, "op-1", 99)
+	if err != nil {
+		t.Fatalf("same owner: %v", err)
+	}
+	if got.Status != team.TaskInProgress || got.UpdatedAt != 11 || got.OwnerKey != "op-1" {
+		t.Fatalf("returned row = %+v, want the unchanged in_progress row", got)
+	}
+	if after, _, _ := s.GetTask(tTeamA, row.Seq); after.Status != team.TaskInProgress || after.UpdatedAt != 11 {
+		t.Fatalf("stored row changed: %+v", after)
+	}
+	// A finished task is still refused, same owner or not.
+	if _, err := s.db.Exec(`UPDATE tasks SET status = 'completed' WHERE team_id = ? AND seq = ?`, tTeamA, row.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReassignTask(tTeamA, row.Seq, "op-1", 100); !errors.Is(err, ErrBadTaskTransition) {
+		t.Fatalf("completed task, same owner: err = %v, want ErrBadTaskTransition", err)
+	}
+}
+
+// A COMMIT that fails must not hand its connection back to the pool with
+// the transaction still open: the next statement on it would fail with
+// "cannot start a transaction within a transaction". The seam fails the
+// commit before it runs, which leaves the transaction open on the conn.
+func TestImmediateTx_CommitFailureDiscardsTheConnection(t *testing.T) {
+	s := openTestStore(t)
+	m := seedTaskTeam(t, s, tTeamA, "lead-a", "op-a", "sess-a")
+	first := mustCreateTask(t, s, newTask(tTeamA, m, "kept", 5))
+
+	boom := errors.New("simulated commit failure")
+	s.beforeTaskCommit = func() error { return boom }
+	if _, err := s.CreateTask(newTask(tTeamA, m, "lost", 6)); !errors.Is(err, boom) {
+		t.Fatalf("create: err = %v, want the commit failure", err)
+	}
+	if _, err := s.SetTaskStatus(tTeamA, first.Seq, team.TaskInProgress, team.TaskByLead, 7); !errors.Is(err, boom) {
+		t.Fatalf("set status: err = %v, want the commit failure", err)
+	}
+	s.beforeTaskCommit = nil
+
+	// Several rounds so every pooled connection is exercised.
+	for i := 0; i < 4; i++ {
+		got, err := s.CreateTask(newTask(tTeamA, m, "after", int64(10+i)))
+		if err != nil {
+			t.Fatalf("create after a failed commit (round %d): %v", i, err)
+		}
+		if got.Seq != 2+i {
+			t.Fatalf("round %d: seq = %d, want %d (the failed create stored nothing)", i, got.Seq, 2+i)
+		}
+		if _, err := s.SetTaskStatus(tTeamA, got.Seq, team.TaskInProgress, team.TaskByLead, int64(20+i)); err != nil {
+			t.Fatalf("set status after a failed commit (round %d): %v", i, err)
+		}
+	}
+	rows, err := s.ListTasks(tTeamA, "", true)
+	if err != nil || len(rows) != 5 {
+		t.Fatalf("rows = %d err %v, want 5 (kept + 4)", len(rows), err)
+	}
+	for _, r := range rows {
+		if r.Subject == "lost" {
+			t.Fatal("the create whose commit failed was stored")
+		}
+	}
+	if first, _, _ := s.GetTask(tTeamA, first.Seq); first.Status != team.TaskPending {
+		t.Fatalf("the status change whose commit failed was stored: %+v", first)
+	}
+}
+
 func TestTaskSchema_IdempotentOnReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "team.db")
 	s1, err := OpenStore(path)

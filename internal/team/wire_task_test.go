@@ -98,6 +98,27 @@ func TestValidTaskSubject_PeerSafeText(t *testing.T) {
 			t.Errorf("%s: want an error", name)
 		}
 	}
+	for name, s := range controlSamples() {
+		if err := ValidTaskSubject("a" + s + "b"); err == nil {
+			t.Errorf("subject with %s: want an error", name)
+		}
+	}
+	if err := ValidTaskSubject("ok\x1b[2Jspoof"); err == nil {
+		t.Error("an ANSI escape in a subject must be refused")
+	}
+	// Rune counting is unchanged: 80 runes of three-byte CJK pass, 81 do not.
+	if ValidTaskSubject(strings.Repeat("字", 80)) != nil || ValidTaskSubject(strings.Repeat("字", 81)) == nil {
+		t.Error("rune counting broke")
+	}
+}
+
+// controlSamples are control characters (C0, DEL and C1) a peer message
+// must never carry in a one-line field.
+func controlSamples() map[string]string {
+	return map[string]string{
+		"NUL": "\x00", "ESC": "\x1b", "backspace": "\b", "vertical tab": "\v", "form feed": "\f",
+		"tab": "\t", "DEL": "\x7f", "C1 NEL": "\u0085", "C1 CSI": "\u009b",
+	}
 }
 
 func TestValidDoneWhen_Lines(t *testing.T) {
@@ -135,6 +156,14 @@ func TestValidDoneWhen_EachLine(t *testing.T) {
 			t.Errorf("%s: want an error", name)
 		}
 	}
+	for name, s := range controlSamples() {
+		if err := ValidDoneWhen([]string{"fine", "a" + s + "b"}); err == nil {
+			t.Errorf("done_when with %s: want an error", name)
+		}
+	}
+	if err := ValidDoneWhen([]string{"ok\x1b[2Jspoof"}); err == nil {
+		t.Error("an ANSI escape in a done_when line must be refused")
+	}
 }
 
 func TestValidTaskDescription(t *testing.T) {
@@ -152,6 +181,22 @@ func TestValidTaskDescription(t *testing.T) {
 	}
 	if err := ValidTaskDescription("a\xffb"); err == nil {
 		t.Error("invalid UTF-8: want an error")
+	}
+	// A description may carry line breaks and tabs; every other control
+	// character is refused.
+	if err := ValidTaskDescription("a\n\tb\r\nc"); err != nil {
+		t.Errorf("newline, tab and CR are allowed: %v", err)
+	}
+	for name, s := range controlSamples() {
+		if name == "tab" {
+			continue
+		}
+		if err := ValidTaskDescription("a" + s + "b"); err == nil {
+			t.Errorf("description with %s: want an error", name)
+		}
+	}
+	if err := ValidTaskDescription("ok\x1b[2Jspoof"); err == nil {
+		t.Error("an ANSI escape in a description must be refused")
 	}
 }
 

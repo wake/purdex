@@ -44,6 +44,10 @@ type Store struct {
 	// after it read MAX(seq) and before it inserts (tests: a barrier that
 	// proves two creates never share a seq). nil in production.
 	afterTaskSeqRead func()
+	// beforeTaskCommit, when set, runs in a task write transaction where
+	// COMMIT would run; an error stands for a failed COMMIT, the
+	// transaction still open on its connection (tests). nil in production.
+	beforeTaskCommit func() error
 }
 
 // OpenStore opens (or creates) team.db at path. ":memory:" is for tests.

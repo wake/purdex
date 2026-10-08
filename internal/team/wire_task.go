@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	ipeers "github.com/wake/purdex/internal/peers"
@@ -131,16 +132,26 @@ func ParseTaskID(id, teamID string) (seq int, ok bool) {
 	return n, true
 }
 
-// oneLine is s with no line break in it.
-func oneLine(s string) bool { return !strings.ContainsAny(s, "\r\n") }
+// firstControl returns the first control character (C0, DEL or C1) of s that
+// allow does not permit.
+func firstControl(s string, allow string) (rune, bool) {
+	for _, r := range s {
+		if unicode.IsControl(r) && !strings.ContainsRune(allow, r) {
+			return r, true
+		}
+	}
+	return 0, false
+}
 
-// validLine checks a one-line text of 1..maxRunes runes that is also peer-safe.
+// validLine checks a one-line text of 1..maxRunes runes that is also
+// peer-safe: no control character at all (line breaks and tabs included, so
+// no ESC sequence can reach a terminal either).
 func validLine(what, s string, maxRunes int) error {
 	if err := ipeers.ValidateText(s); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
-	if !oneLine(s) {
-		return fmt.Errorf("%s must be one line", what)
+	if r, bad := firstControl(s, ""); bad {
+		return fmt.Errorf("%s must be one line of plain text, it has the control character %U", what, r)
 	}
 	if n := utf8.RuneCountInString(s); n > maxRunes {
 		return fmt.Errorf("%s is %d runes, at most %d", what, n, maxRunes)
@@ -168,7 +179,8 @@ func ValidDoneWhen(lines []string) error {
 }
 
 // ValidTaskDescription checks a task description: empty is allowed, else at
-// most 32 KiB and peer-safe.
+// most 32 KiB and peer-safe; line breaks (\n, \r) and tabs pass, every other
+// control character is refused.
 func ValidTaskDescription(s string) error {
 	if s == "" {
 		return nil
@@ -178,6 +190,9 @@ func ValidTaskDescription(s string) error {
 	}
 	if err := ipeers.ValidateText(s); err != nil {
 		return fmt.Errorf("description: %w", err)
+	}
+	if r, bad := firstControl(s, "\n\r\t"); bad {
+		return fmt.Errorf("description has the control character %U", r)
 	}
 	return nil
 }
