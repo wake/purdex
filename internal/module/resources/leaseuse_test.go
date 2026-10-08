@@ -165,6 +165,35 @@ func TestLeaseUse_EWMAAndPeakPersist(t *testing.T) {
 	}
 }
 
+// A failed UpdateUse must not move the lease's clock: the next good write
+// weighs the whole time since the last figure that reached the database.
+func TestLeaseUse_FailedWriteKeepsEWMAClock(t *testing.T) {
+	f := newUseFix(t)
+	f.heldLease("a", resources.ScopeProcess, 100)
+	half := f.m.settings().HalfLife()
+	f.measure([]resources.Proc{cpuProc(100, 1, 40)}) // ewma 40 persisted
+
+	if _, err := f.m.store.db.Exec(`CREATE TRIGGER use_fail BEFORE UPDATE ON resource_leases
+		BEGIN SELECT RAISE(ABORT, 'busy'); END`); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(60 * time.Second)
+	f.measure([]resources.Proc{cpuProc(100, 1, 100)}) // write fails
+	if _, err := f.m.store.db.Exec(`DROP TRIGGER use_fail`); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.row("a"); !approx(r.EWMA, 40) {
+		t.Fatalf("failed write changed the row: ewma %v", r.EWMA)
+	}
+
+	f.advance(5 * time.Second)
+	f.measure([]resources.Proc{cpuProc(100, 1, 100)})
+	want := resources.UpdateEWMA(40, 100, 65*time.Second, half, false)
+	if r := f.row("a"); !approx(r.EWMA, want) {
+		t.Fatalf("ewma = %v, want %v (dt 65s since the last persisted figure)", r.EWMA, want)
+	}
+}
+
 func TestLeaseUse_ResumesPersistedAverage(t *testing.T) {
 	f := newUseFix(t)
 	f.heldLease("a", resources.ScopeProcess, 100)

@@ -71,7 +71,6 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 			continue
 		}
 		latest[r.ID] = u
-		lastAt[r.ID] = now
 
 		first := r.Samples == 0
 		dt := m.interval // a lease resumed after a restart: one interval since its last figure
@@ -87,8 +86,15 @@ func (m *Module) measureLeases(ctx context.Context, procs []resources.Proc, raw 
 			empty = r.EmptySamples + 1
 		}
 		if err := m.store.UpdateUse(r.ID, ewma, peak, mean, samples, empty); err != nil {
+			// The clock stays where the last figure that reached the
+			// database left it, so the next good write weighs all of it.
 			m.logf("[resources] lease %s: %v", r.ID, err)
+			if at, ok := m.useAt[r.ID]; ok {
+				lastAt[r.ID] = at
+			}
+			continue
 		}
+		lastAt[r.ID] = now
 	}
 	m.setLeaseUse(latest)
 	m.useAt = lastAt
