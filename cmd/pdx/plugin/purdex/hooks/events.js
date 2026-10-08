@@ -70,6 +70,12 @@ const ev = {
   compacting: false, // the main conversation is compacting
   lastError: false, // the last main turn ended in error (cleared by the next main turn)
   background: null, // {tasks, crons} as the last classic.Stop listed them; null before one
+  // ids of the background tasks the Monitor tool started (its tool.call result's taskId). Claude Code lists such a
+  // task as type "shell" (the "monitor" type is an MCP watch), so the daemon would draw nothing for it; the
+  // background event this reporter sends names those ids "monitor" instead (spec §7 "Background symbol"). Cleared
+  // when the session ends or switches; rebuilt only by new Monitor calls, so after a mod reload a task that is
+  // still running stays "shell" until it is started again (known limit).
+  monitors: new Set(),
   beat: null, // the heartbeat timer
   beatGen: 0, // bumped when the heartbeat stops or pauses: a beat begun before then lands nowhere
   switching: false, // from session.end{clear|resume} to session.switch: the heartbeat pauses
@@ -292,6 +298,7 @@ async function startReporter($, e) {
   ev.compacting = false
   ev.lastError = false
   ev.background = null
+  ev.monitors.clear()
   ev.on = true
   enqueue($, 'session.start', { cwd: e.cwd, surface: e.surface })
   ev.beat = $.clock.every(HEARTBEAT_MS, () => beatTick($))
@@ -310,6 +317,7 @@ async function sessionSwitch($, source) {
     ev.asks.clear()
     ev.compacting = false
     ev.lastError = false
+    ev.monitors.clear()
     enqueue($, 'session.switch', { prev_sid: prev, source })
   } finally {
     ev.switching = false
@@ -324,6 +332,7 @@ async function sessionSwitch($, source) {
 // goes out under the old id meanwhile, the one in flight included.
 async function sessionEnd($, e) {
   if (!ev.on) return
+  ev.monitors.clear()
   if (e.reason === 'clear' || e.reason === 'resume') {
     ev.switching = true
     ev.beatGen += 1
@@ -381,6 +390,14 @@ function toolUseDrawn($, e) {
   enqueue($, 'tool.approved', { tool_use_id: p.tool_use_id })
 }
 
+// monitorStarted remembers the task id of a Monitor call (measured on Claude Code 2.1.295: the hook's result is
+// {ref, result: {taskId, timeoutMs, persistent}, text}, and taskId is the id classic.Stop lists in background_tasks).
+function monitorStarted(e, r) {
+  if (e.tool !== 'Monitor' || !isObject(r) || isErrorResult(r)) return
+  const id = isObject(r.result) ? r.result.taskId : r.taskId
+  if (typeof id === 'string' && id) ev.monitors.add(id)
+}
+
 function isErrorResult(r) {
   return !!r && (r.isError === true || r.deny !== undefined)
 }
@@ -422,7 +439,8 @@ function measured($, e) {
 
 function stopped($, e) {
   if (!ev.on) return
-  const tasks = (Array.isArray(e.background_tasks) ? e.background_tasks : []).map((t) => ({ id: t.id, type: t.type, status: t.status }))
+  // a copy: the engine's objects are never touched. A task the Monitor tool started is named "monitor".
+  const tasks = (Array.isArray(e.background_tasks) ? e.background_tasks : []).map((t) => ({ id: t.id, type: ev.monitors.has(t.id) ? 'monitor' : t.type, status: t.status }))
   ev.background = { tasks, crons: Array.isArray(e.session_crons) ? e.session_crons.length : 0 }
   enqueue($, 'background', ev.background)
 }
@@ -501,6 +519,7 @@ async function onToolCall($, e, next) {
     throw err
   }
   toolEnded($, e, (await $.clock.now()) - t0, isErrorResult(r))
+  monitorStarted(e, r)
   return r
 }
 

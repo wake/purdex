@@ -553,6 +553,67 @@ test('agent.spawn, session.measure and classic.Stop report agent.spawn, usage an
   ])
 })
 
+// ---- the Monitor tool's task is named "monitor" (U1-2 follow-up, spec §7 "Background symbol") ----
+
+// Claude Code lists a background task the Monitor tool started as type "shell" (its "monitor" type is an MCP
+// watch). The Monitor tool's tool.call result carries the task id (measured on 2.1.295: {ref, result: {taskId,
+// timeoutMs, persistent}, text}); the background event this reporter sends names that id "monitor", on a copy.
+// Mutation gates: the rewrite left out → red; every shell task renamed → red; the set not cleared on session.end →
+// red; not cleared on session.switch → red.
+const MONITOR_OK = { ref: 1, result: { taskId: 'mon1', timeoutMs: 1_800_000, persistent: false }, text: 'Monitor started (task mon1)' }
+const monitorWorld = (on: any, result: any = MONITOR_OK) => {
+  const w = evWorld(on)
+  on('tool.call', { tool: 'Monitor' }, async () => result)
+  return w
+}
+const TASKS = [{ id: 'mon1', type: 'shell', status: 'running', description: 'until stop-me', command: 'until [ -e stop-me ]; do sleep 2; done' }, { id: 'sh2', type: 'shell', status: 'running', description: 'sleep', command: 'sleep 9' }]
+
+test('a task the Monitor tool started is reported as monitor; every other task is untouched', async ($, on) => {
+  const w = monitorWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await $.tool.call({ tool: 'Monitor', description: 'd', command: 'until [ -e stop-me ]; do sleep 2; done', timeout_ms: 1_800_000, tool_use_id: 'tu-m' } as any)
+  const stop = { stop_hook_active: false, background_tasks: TASKS, session_crons: [] } as any
+  await $.classic.Stop(stop)
+  await w.clock.advance(150)
+  expect(ofType(w, 'background').map((e) => e.data)).toEqual([
+    { tasks: [{ id: 'mon1', type: 'monitor', status: 'running' }, { id: 'sh2', type: 'shell', status: 'running' }], crons: 0 },
+  ])
+  expect(stop.background_tasks[0].type).toBe('shell') // the engine's own object is not rewritten
+  await w.clock.advance(10_000) // the heartbeat mirrors the rewritten copy
+  expect(ofType(w, 'heartbeat').at(-1).data.background).toEqual({ tasks: [{ id: 'mon1', type: 'monitor', status: 'running' }, { id: 'sh2', type: 'shell', status: 'running' }], crons: 0 })
+})
+
+test('a Monitor call that failed, or whose id is not listed, changes nothing', async ($, on) => {
+  const w = monitorWorld(on, { ref: 1, result: { taskId: 'mon1' }, isError: true, text: 'could not start' }) // an error answer carries no usable id
+  await start($, w)
+  await $.tool.call({ tool: 'Monitor', description: 'd', command: 'x', timeout_ms: 1000, tool_use_id: 'tu-m' } as any)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: TASKS } as any)
+  await w.clock.advance(150)
+  expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([['shell', 'shell']])
+})
+
+test('the monitor ids are forgotten at session.end', async ($, on) => {
+  const w = monitorWorld(on)
+  await start($, w)
+  await $.tool.call({ tool: 'Monitor', description: 'd', command: 'x', timeout_ms: 1000, tool_use_id: 'tu-m' } as any)
+  await end($, 'prompt_input_exit', SID1) // no new session.start, no session.switch after it
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: TASKS } as any)
+  await w.clock.advance(150)
+  expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([['shell', 'shell']])
+})
+
+test('the monitor ids are forgotten at session.switch', async ($, on) => {
+  const w = monitorWorld(on)
+  await start($, w)
+  await $.tool.call({ tool: 'Monitor', description: 'd', command: 'x', timeout_ms: 1000, tool_use_id: 'tu-m' } as any)
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' }) // session.switch without a session.end before it
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: TASKS } as any)
+  await w.clock.advance(150)
+  expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([['shell', 'shell']])
+})
+
 // ---- what a restarted daemon learns from any batch (U1-2a-1) ----
 
 // A daemon that restarts under a running mod never sees that stream's session.start again: every
