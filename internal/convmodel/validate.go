@@ -129,8 +129,14 @@ func validateStep(s *Step) error {
 	if (s.Status == StepDenied) != (s.Denial != "") {
 		return fmt.Errorf("denial %q with status %q: a denial goes with denied, and denied needs a denial", s.Denial, s.Status)
 	}
-	if s.InputTruncated && !inputAtCap(s.Input) {
-		return fmt.Errorf("step input flagged truncated but no string or total reaches its cap")
+	// input_truncated says the stored input is not the complete tool input,
+	// for any reason (a cut string, the total cap, the depth cap, a dropped
+	// member), so the output alone cannot prove it. What can be proven is the
+	// other direction: an input that is not flagged is within the caps.
+	if !s.InputTruncated {
+		if err := inputOverCap(s.Input); err != nil {
+			return fmt.Errorf("step input not flagged truncated but %w", err)
+		}
 	}
 	if o := s.Output; o != nil {
 		cut := len(o.Text) < o.TotalBytes
@@ -157,32 +163,40 @@ func validateStep(s *Step) error {
 	return nil
 }
 
-// inputAtCap reports whether a step input looks cut: it is at the whole-input
-// cap, or one of its string values is at the per-string cap (a cut on a UTF-8
-// boundary lands up to 3 bytes under).
-func inputAtCap(raw json.RawMessage) bool {
-	if len(raw) >= MaxInput-3 {
-		return true
+// inputOverCap reports a step input that exceeds a cap: the whole input over
+// MaxInput bytes, or any string value over MaxInputString bytes.
+func inputOverCap(raw json.RawMessage) error {
+	if len(raw) > MaxInput {
+		return fmt.Errorf("is %d bytes, over the %d cap", len(raw), MaxInput)
 	}
 	var v any
 	if json.Unmarshal(raw, &v) != nil {
-		return false
+		return nil
 	}
-	var walk func(any) bool
-	walk = func(v any) bool {
+	var walk func(any) int
+	walk = func(v any) int {
 		switch x := v.(type) {
 		case string:
-			return len(x) >= MaxInputString-3
+			if len(x) > MaxInputString {
+				return len(x)
+			}
 		case []any:
-			return slices.ContainsFunc(x, walk)
+			for _, e := range x {
+				if n := walk(e); n > 0 {
+					return n
+				}
+			}
 		case map[string]any:
 			for _, e := range x {
-				if walk(e) {
-					return true
+				if n := walk(e); n > 0 {
+					return n
 				}
 			}
 		}
-		return false
+		return 0
 	}
-	return walk(v)
+	if n := walk(v); n > 0 {
+		return fmt.Errorf("holds a string of %d bytes, over the %d cap", n, MaxInputString)
+	}
+	return nil
 }
