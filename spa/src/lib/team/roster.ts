@@ -41,6 +41,8 @@ export interface TeamRoster {
   id: string
   host_id: string
   created_at: number
+  /** The team's current name; '' = unnamed (also what a daemon that predates names yields — see `parseRosterEvent`). */
+  team_name: string
   lead: RosterSession
   members: RosterMember[]
 }
@@ -96,5 +98,7 @@ export function parseRosterEvent(value: unknown): RosterEventValue | string {
   if (op !== 'snapshot' && op !== 'changed') return `unknown op ${JSON.stringify(op)}`
   if (!Array.isArray(teams)) return `${op}: teams is not an array`
   if (!teams.every(isTeamRoster)) return `${op}: a team is not the wire shape`
-  return { op, teams }
+  // The guard stays tolerant of a missing `team_name` (a daemon that predates names), so give the field its
+  // declared type here instead of handing the parsed objects back as-is.
+  return { op, teams: (teams as TeamRoster[]).map((t) => ({ ...t, team_name: typeof t.team_name === 'string' ? t.team_name : '' })) }
 }

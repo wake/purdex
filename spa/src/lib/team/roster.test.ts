@@ -7,7 +7,7 @@ const member = {
   session_id: 's-m1', ref: '_bbbbbb', address: 'mlab/m1-bb', live: false,
   state: 'active', origin: 'spawned', joined_at: 5,
 }
-const team: TeamRoster = { id: 't1', host_id: 'd1', created_at: 1, lead, members: [member] }
+const team: TeamRoster = { id: 't1', host_id: 'd1', created_at: 1, team_name: '', lead, members: [member] }
 const v = (o: unknown) => JSON.stringify(o)
 
 describe('parseRosterEvent', () => {
@@ -18,6 +18,21 @@ describe('parseRosterEvent', () => {
 
   it('accepts an already-parsed value', () => {
     expect(parseRosterEvent({ op: 'changed', teams: [team] })).toEqual({ op: 'changed', teams: [team] })
+  })
+
+  it('keeps a team name as sent', () => {
+    const named = { ...team, team_name: '驗收 team' }
+    expect(parseRosterEvent(v({ op: 'snapshot', teams: [named] }))).toEqual({ op: 'snapshot', teams: [named] })
+  })
+
+  it('normalises a team from a daemon that predates names (no team_name, or not a string) to ""', () => {
+    const { team_name: _omit, ...old } = team
+    void _omit
+    for (const t of [old, { ...old, team_name: null }, { ...old, team_name: 7 }]) {
+      const r = parseRosterEvent(v({ op: 'snapshot', teams: [t] }))
+      expect(r).toEqual({ op: 'snapshot', teams: [{ ...team, team_name: '' }] })
+      expect((r as { teams: TeamRoster[] }).teams[0].team_name).toBe('')
+    }
   })
 
   it('accepts the optional model / effort / context of a session', () => {

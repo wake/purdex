@@ -229,6 +229,23 @@ describe('ApprovalDialogHost — 縮小 (U22 b)', () => {
     expect((screen.getByTestId('approval-no-more-asking') as HTMLInputElement).checked).toBe(true)
   })
 
+  it('the edited team name survives minimize and restore (the dialog stays mounted)', () => {
+    renderWithTerminal()
+    open('h1', { ...request('lead', 'a', NOW - 5_000, NOW + 500_000), payload: { reason: 'r', max_members: 3, roots: ['/w/purdex'], team_name: 'build' } })
+    const name = () => screen.getByTestId('approval-team-name') as HTMLInputElement
+    expect(name().value).toBe('build')
+    fireEvent.change(name(), { target: { value: '重構 team' } })
+    minimize()
+    fireEvent.click(pill()!)
+    expect(name().value).toBe('重構 team')
+    // An invalid edit survives too, and so does the disabled 核准.
+    fireEvent.change(name(), { target: { value: 'a\u0007' } })
+    minimize()
+    fireEvent.click(pill()!)
+    expect(name().value).toBe('a\u0007')
+    expect(screen.getByTestId('approval-approve')).toBeDisabled()
+  })
+
   it('the countdown ticks while minimized', () => {
     renderWithTerminal()
     open('h1', request('lead', 'a', NOW, NOW + 125_000))
