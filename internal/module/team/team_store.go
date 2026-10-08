@@ -213,7 +213,7 @@ func (s *Store) closeSelfRelayApprovedIn(tx *sql.Tx, id string, c Close, session
 		member, err = isLiveMemberIn(tx, sessionID)
 	}
 	if member {
-		c = Close{State: team.StateCancelled, DecidedAt: c.DecidedAt}
+		c = Close{State: team.StateCancelled, DecidedAt: c.DecidedAt, UnexpiredAt: c.UnexpiredAt}
 	}
 	if err == nil {
 		n, err = closeRowIn(tx, id, c, "", 0)

@@ -198,6 +198,9 @@ type Module struct {
 	// beforeAutoApprove, when set, runs in autoApprove before the approve;
 	// an error fails that approve there (tests). nil in production.
 	beforeAutoApprove func(a team.Approval) error
+	// beforeCloseExpired, when set, runs in closeExpired before the CAS;
+	// an error fails that close there (tests). nil in production.
+	beforeCloseExpired func(id string) error
 }
 
 // New returns a Module with production defaults.

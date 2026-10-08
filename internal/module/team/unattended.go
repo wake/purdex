@@ -173,7 +173,12 @@ func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.
 // won as approved; open that the row is still open — refused by a rule (a
 // lead's origin became a member) or a failure — for the next sweep. A row
 // it cannot approve is logged once per reason (notAutoApproved), not once
-// per tick. Caller holds createMu.
+// per tick. An overdue row (deadline or lease passed at now) is never
+// approved: the CAS itself requires it unexpired (Close.UnexpiredAt), so it
+// loses like a row closed first and is left, neither open-for-retry nor
+// logged, to the sweeper's timeout or abandonment — even when Start has
+// just extended its lease, or the tick's expiry close failed. Caller holds
+// createMu.
 func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 	g, err := unattendedGrant(a)
 	if err == nil && m.beforeAutoApprove != nil {
@@ -182,10 +187,13 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 	if err == nil {
 		var after team.Approval
 		var won, memberCancelled bool
-		after, won, memberCancelled, err = m.approve(a, daemonClose(m.now(), g))
+		now := m.now()
+		c := daemonClose(now, g)
+		c.UnexpiredAt = now
+		after, won, memberCancelled, err = m.approve(a, c)
 		switch {
 		case err != nil: // logged below
-		case !won: // closed first by a click, a cancel or the sweeper
+		case !won: // closed first by a click, a cancel or the sweeper, or overdue
 			return false, false
 		case memberCancelled:
 			m.logf("[team] approval %s cancelled at its auto-approve: origin %s is a member of a live team", a.ID, a.Origin.Ref)

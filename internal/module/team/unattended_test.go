@@ -484,3 +484,111 @@ func TestDecide_RacesUnattendedOneWins(t *testing.T) {
 		t.Fatalf("events = %v, want one closed", ops)
 	}
 }
+
+// Review (PU-1b3) H1, at boot: a self_relay row left open across a restart
+// longer than its deadline is overdue; Start extends its lease, but the
+// boot sweep must not approve it — the op stays unclaimed and the first
+// tick's expiry close makes it a timeout. Mutation gate: drop the expiry
+// guard from the daemon's approve → red (approved, op claimed).
+func TestStart_UnattendedLeavesAnOverdueRowToTheSweeper(t *testing.T) {
+	f := newFixture(t)
+	relay := f.begin("sid-2")
+	f.clock.Add(team.SelfRelayDeadlineS * 1000) // the daemon was down past the deadline
+	f.unatt.set(true)
+	if err := f.m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateOpen {
+		t.Fatalf("after the boot sweep the row is %s, want open", a.State)
+	}
+	if st := f.op(relay.Op.ID).State; st != team.RelayAwaitingApproval {
+		t.Fatalf("op %s, want %s", st, team.RelayAwaitingApproval)
+	}
+	if len(f.m.notAutoApproved) != 0 {
+		t.Fatalf("refusal set = %v, want empty", f.m.notAutoApproved)
+	}
+	_ = f.m.Stop(context.Background()) // join the sweeper: the test ticks
+	f.m.tick()
+	if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateTimeout {
+		t.Fatalf("after the tick the row is %s, want timeout", a.State)
+	}
+	if st := f.op(relay.Op.ID).State; st == team.RelayClaimed {
+		t.Fatal("the overdue row's op was claimed")
+	}
+}
+
+// Review (PU-1b3) H1, at the tick: when the tick's expiry close of an
+// overdue row fails (a transient storage error), the same tick's
+// reconciliation does not approve it and does not count it as pending;
+// the next tick closes it. Both overdue shapes: a passed deadline
+// (timeout) and an expired lease (abandoned). Mutation gate: drop the
+// expiry guard from the daemon's approve → red.
+func TestTick_FailedExpiryCloseIsNotApproved(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		advance int64
+		want    team.State
+	}{
+		{"deadline", team.SelfRelayDeadlineS * 1000, team.StateTimeout},
+		{"lease", team.LeaseS * 1000, team.StateAbandoned},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			relay := f.begin("sid-2")
+			f.clock.Add(c.advance)
+			f.unatt.set(true)
+			failed := false
+			f.m.beforeCloseExpired = func(id string) error {
+				if id == relay.RequestID && !failed {
+					failed = true
+					return errors.New("database is locked")
+				}
+				return nil
+			}
+			f.m.tick()
+			if !failed {
+				t.Fatal("the tick did not try to close the overdue row")
+			}
+			if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateOpen {
+				t.Fatalf("after the failed close the row is %s, want open", a.State)
+			}
+			if st := f.op(relay.Op.ID).State; st != team.RelayAwaitingApproval {
+				t.Fatalf("op %s, want %s", st, team.RelayAwaitingApproval)
+			}
+			f.m.createMu.Lock()
+			approved, pending := f.m.sweepUnattended(sweepTick)
+			f.m.createMu.Unlock()
+			if approved != 0 || pending != 0 {
+				t.Fatalf("sweep of the overdue row = (%d, %d), want (0, 0)", approved, pending)
+			}
+			if len(f.m.notAutoApproved) != 0 {
+				t.Fatalf("refusal set = %v, want empty", f.m.notAutoApproved)
+			}
+			f.m.tick()
+			if a, _, _ := f.m.store.Get(relay.RequestID); a.State != c.want {
+				t.Fatalf("after the next tick the row is %s, want %s", a.State, c.want)
+			}
+		})
+	}
+}
+
+// Review (PU-1b3) H1: the guard holds on the U13 branch too — an overdue
+// self_relay row whose origin became a member is not cancelled by the
+// daemon's approve either; it is the sweeper's. Mutation gate: drop
+// UnexpiredAt from the member-cancel Close → red (cancelled).
+func TestSweepUnattended_OverdueMemberRelayIsLeftToTheSweeper(t *testing.T) {
+	f := newFixture(t)
+	relay := f.begin("sid-1")
+	f.makeMember("sid-1")
+	f.clock.Add(team.SelfRelayDeadlineS * 1000)
+	f.unatt.set(true)
+	if approved, pending := f.sweep(); approved != 0 || pending != 0 {
+		t.Fatalf("sweep = (%d, %d), want (0, 0)", approved, pending)
+	}
+	if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateOpen {
+		t.Fatalf("row %s, want open", a.State)
+	}
+	if st := f.op(relay.Op.ID).State; st != team.RelayAwaitingApproval {
+		t.Fatalf("op %s, want %s", st, team.RelayAwaitingApproval)
+	}
+}

@@ -100,6 +100,11 @@ func (m *Module) tick() {
 // closeExpired is the sweeper's close for a passed deadline or lease: the
 // store re-checks the expiry at now inside the CAS (CloseIfExpired).
 func (m *Module) closeExpired(id string, now int64, state team.State) (team.Approval, bool, error) {
+	if m.beforeCloseExpired != nil {
+		if err := m.beforeCloseExpired(id); err != nil {
+			return team.Approval{}, false, err
+		}
+	}
 	return m.closeWith(id, func() (team.Approval, bool, error) {
 		return m.store.CloseIfExpired(id, now, Close{State: state, DecidedAt: now})
 	})

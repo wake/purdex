@@ -282,6 +282,12 @@ type Close struct {
 	DecidedBy *team.Client
 	Grant     *team.Grant
 	Hook      *team.HookDecision // hook kinds: stored in grant_json in Grant's place
+	// UnexpiredAt, when non-zero, makes the CAS also require that the row is
+	// not overdue at it (deadline_at and lease_until both after it): the
+	// daemon's own approve (U23 autoApprove) leaves an overdue row to the
+	// sweeper's timeout or abandonment, in the same statement. A click
+	// leaves it 0 and runs today's SQL.
+	UnexpiredAt int64
 }
 
 // CloseIfOpen is the compare-and-set every close goes through: the UPDATE
@@ -352,6 +358,10 @@ func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int6
 	args := []any{string(c.State), c.DecidedAt, decidedBy, grant, id}
 	if guard != "" {
 		args = append(args, guardArg)
+	}
+	if c.UnexpiredAt != 0 {
+		guard += " AND deadline_at > ? AND lease_until > ?"
+		args = append(args, c.UnexpiredAt, c.UnexpiredAt)
 	}
 	res, err := ex.Exec(`
 		UPDATE approval_requests
