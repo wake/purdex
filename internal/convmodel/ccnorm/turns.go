@@ -22,6 +22,7 @@ type turnRec struct {
 	lastAt      int64                // time of the last row that belonged to the turn
 	prevModel   string               // the model before this turn, for model_changed
 	sawModel    bool                 // the turn's first model reply has been compared
+	pending     []string             // ids of steps that have had no result (pruned lazily)
 }
 
 // openTurn starts a turn whose id is the opening row's uuid. It reports false
@@ -78,6 +79,7 @@ func (n *Normalizer) refresh(ti int, off int64) {
 func (n *Normalizer) settle(ti int, last bool, off int64) {
 	tr := n.turns[ti]
 	outcome := n.outcomeOf(tr, last)
+	wasRunning := tr.t.Outcome == convmodel.OutcomeRunning
 	var ended *int64
 	if outcome != convmodel.OutcomeRunning {
 		e := tr.lastAt
@@ -101,6 +103,9 @@ func (n *Normalizer) settle(ti int, last bool, off int64) {
 	tr.t.Outcome, tr.t.EndedAt, tr.t.Error = outcome, ended, terr
 	if off >= 0 {
 		tr.updated = off
+	}
+	if wasRunning != (outcome == convmodel.OutcomeRunning) {
+		n.repend(tr, off) // a step with no result follows its turn
 	}
 	n.add(Change{tr.t.ID, "", off})
 }

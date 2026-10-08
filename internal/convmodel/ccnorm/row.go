@@ -119,6 +119,7 @@ type rawLine struct {
 	CustomTitle        json.RawMessage // "customTitle"
 	AITitle            json.RawMessage // "aiTitle"
 	ToolUseResult      json.RawMessage // "toolUseResult" (steps, U1-4c)
+	ToolDenialKind     json.RawMessage // "toolDenialKind": why a tool result is a denial
 	DurationMS         json.RawMessage // "durationMs": turn_duration
 
 	// Derived once by decodeLine.
@@ -163,6 +164,7 @@ func decodeLine(line []byte) (rawLine, bool) {
 		CustomTitle:        o["customTitle"],
 		AITitle:            o["aiTitle"],
 		ToolUseResult:      o["toolUseResult"],
+		ToolDenialKind:     o["toolDenialKind"],
 		DurationMS:         o["durationMs"],
 	}
 	l.typ, _ = jsonString(l.Type)

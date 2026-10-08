@@ -76,9 +76,7 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 		return
 	}
 	if hasToolResult(blocks) {
-		// U1-4c pairs results with steps; until then they are recognised so
-		// they are never taken for a prompt.
-		n.skip("step:deferred")
+		n.toolResultRow(l, blocks, off) // never a prompt, never opens a turn
 		return
 	}
 	if isInterruptMarker(l, blocks) {
