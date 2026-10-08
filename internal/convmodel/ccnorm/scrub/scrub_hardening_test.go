@@ -40,6 +40,14 @@ func TestScrub_IdNamedFieldStillRedacted(t *testing.T) {
 	}
 }
 
+func TestScrub_PrivateIPKeepsNonASCIINeighbour(t *testing.T) {
+	m := one(t, `{"type":"user","uuid":"u","message":{"content":"位址中10.0.0.7與(192.168.1.5)"}}`)
+	got := m["message"].(map[string]any)["content"].(string)
+	if want := "位址中192.0.2.1與(192.0.2.1)"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // A structural-looking id that carries a credential is not an id.
 func TestScrub_StructuralIdWithEmbeddedCredentialRedacted(t *testing.T) {
 	m := one(t, `{"type":"assistant","uuid":"`+rowUUID+`","message":{"model":"m","content":[

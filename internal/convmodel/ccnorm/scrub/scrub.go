@@ -695,10 +695,7 @@ func (rw *rewriter) str(s string) string {
 	s = reTailnet.ReplaceAllString(s, "192.0.2.1")
 	s = rePrivateIP.ReplaceAllStringFunc(s, func(m string) string {
 		// the pattern may have taken one character before the address
-		if c := m[0]; c < '0' || c > '9' {
-			return string(c) + "192.0.2.1"
-		}
-		return "192.0.2.1"
+		return m[:strings.IndexAny(m, "0123456789")] + "192.0.2.1"
 	})
 	s = reBearer.ReplaceAllString(s, "[redacted-auth]")
 	s = reSK.ReplaceAllString(s, "${1}[redacted-key]")
