@@ -2,8 +2,11 @@ package ccnorm
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/wake/purdex/internal/convmodel"
 )
@@ -37,7 +40,7 @@ func subagentFile() []byte {
 }
 
 func TestNormalizeSubagent_ItemsFromSidechainFile(t *testing.T) {
-	items, st := NormalizeSubagent(bytes.NewReader(subagentFile()), agentX)
+	items, st, _ := NormalizeSubagent(bytes.NewReader(subagentFile()), agentX)
 	c := asConversation(items)
 	if err := c.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -74,7 +77,7 @@ func TestNormalizeSubagent_BriefIsTheFirstPromptOnly(t *testing.T) {
 		userRow("s2", 3, "follow-up", a()...),
 		userRow("o1", 4, "someone else", sidechain(), with("agentId", "zzzz")),
 	)
-	items, st := NormalizeSubagent(bytes.NewReader(file), agentX)
+	items, st, _ := NormalizeSubagent(bytes.NewReader(file), agentX)
 	var got []string
 	for _, it := range items {
 		got = append(got, sig(it))
@@ -86,7 +89,7 @@ func TestNormalizeSubagent_BriefIsTheFirstPromptOnly(t *testing.T) {
 		t.Errorf("Skipped = %v", st.Skipped)
 	}
 	// without an agent id nothing is filtered
-	items, _ = NormalizeSubagent(bytes.NewReader(file), "")
+	items, _, _ = NormalizeSubagent(bytes.NewReader(file), "")
 	if len(items) != 4 {
 		t.Errorf("no filter: %d items", len(items))
 	}
@@ -99,7 +102,7 @@ func TestNormalizeSubagent_RowWithoutAgentIDSkipped(t *testing.T) {
 		assistantText("a2", 2, "evil", sidechain()), // no agentId
 		assistantText("s1", 3, "fine", a()...),
 	)
-	items, st := NormalizeSubagent(bytes.NewReader(file), agentX)
+	items, st, _ := NormalizeSubagent(bytes.NewReader(file), agentX)
 	for _, it := range items {
 		if itemID(it) == "a2" {
 			t.Errorf("the row without an agentId is in the story: %q", sig(it))
@@ -109,7 +112,7 @@ func TestNormalizeSubagent_RowWithoutAgentIDSkipped(t *testing.T) {
 		t.Errorf("items %d, Skipped = %v", len(items), st.Skipped)
 	}
 	// without an agent id to match, nothing is filtered
-	items, _ = NormalizeSubagent(bytes.NewReader(file), "")
+	items, _, _ = NormalizeSubagent(bytes.NewReader(file), "")
 	if len(items) != 3 {
 		t.Errorf("no filter: %d items", len(items))
 	}
@@ -118,7 +121,7 @@ func TestNormalizeSubagent_RowWithoutAgentIDSkipped(t *testing.T) {
 func TestNormalizeSubagent_StepsOpenWhileTheFileEndsMidTool(t *testing.T) {
 	// the file is read as live: a tool still running has no result yet
 	a := func(o ...opt) []opt { return append([]opt{sidechain(), with("agentId", agentX)}, o...) }
-	items, _ := NormalizeSubagent(bytes.NewReader(joinLines(
+	items, _, _ := NormalizeSubagent(bytes.NewReader(joinLines(
 		userRow("s0", 1, "brief", a()...),
 		assistantRow("s2", 3, "claude-haiku-5-5", toolUseBlock("toolu_s1", "Bash", obj{"command": "make"}), a()...),
 	)), agentX)
@@ -128,13 +131,13 @@ func TestNormalizeSubagent_StepsOpenWhileTheFileEndsMidTool(t *testing.T) {
 }
 
 func TestNormalizeSubagent_EmptyAndMalformedInput(t *testing.T) {
-	items, st := NormalizeSubagent(strings.NewReader(""), agentX)
+	items, st, _ := NormalizeSubagent(strings.NewReader(""), agentX)
 	if items == nil || len(items) != 0 || st.Lines != 0 {
 		t.Errorf("empty: %v %+v", items, st)
 	}
 	// no final newline, a bad line, a blank line: all counted, none fatal
 	file := append(joinLines(subagentLine("{not json"), subagentLine("")), subagentFile()[:len(subagentFile())-1]...)
-	items, st = NormalizeSubagent(bytes.NewReader(file), agentX)
+	items, st, _ = NormalizeSubagent(bytes.NewReader(file), agentX)
 	if len(items) != 4 || st.BadJSON != 2 {
 		t.Errorf("items %d badjson %d", len(items), st.BadJSON)
 	}
@@ -150,7 +153,7 @@ func TestNormalizeSubagent_LineFillingTheReadBufferExactly(t *testing.T) {
 	if len(row) != 64<<10 {
 		t.Fatalf("row is %d bytes", len(row))
 	}
-	items, st := NormalizeSubagent(bytes.NewReader(row), "")
+	items, st, _ := NormalizeSubagent(bytes.NewReader(row), "")
 	if len(items) != 1 || st.Lines != 1 || st.BadJSON != 0 {
 		t.Errorf("items %d stats %+v", len(items), st)
 	}
@@ -163,9 +166,98 @@ func TestNormalizeSubagent_OversizeLineSkippedAndReadingGoesOn(t *testing.T) {
 		big,
 		assistantText("s1", 3, "after", sidechain(), with("agentId", agentX)),
 	)
-	items, st := NormalizeSubagent(bytes.NewReader(file), agentX)
+	items, st, _ := NormalizeSubagent(bytes.NewReader(file), agentX)
 	if len(items) != 2 || st.Skipped["line:oversize"] != 1 || st.Lines != 3 {
 		t.Errorf("items %d stats %+v", len(items), st)
+	}
+}
+
+// limitFile is a brief and n-1 further assistant texts, each its own line and
+// its own item, all the agent's.
+func limitFile(n int) (file []byte, lineLen int) {
+	a := func(o ...opt) []opt { return append([]opt{sidechain(), with("agentId", agentX)}, o...) }
+	lines := [][]byte{userRow("s0", 1, "brief", a()...)}
+	for i := 1; i < n; i++ {
+		lines = append(lines, assistantText("s"+string(rune('a'+i)), float64(i+1), "text", a()...))
+	}
+	return joinLines(lines...), len(lines[1]) + 1
+}
+
+// setLimits swaps the package caps for the test and puts them back.
+func setLimits(t *testing.T, bytesCap int64, lines, items int) {
+	t.Helper()
+	ob, ol, oi := maxSubagentBytes, maxSubagentLines, maxSubagentItems
+	maxSubagentBytes, maxSubagentLines, maxSubagentItems = bytesCap, lines, items
+	t.Cleanup(func() { maxSubagentBytes, maxSubagentLines, maxSubagentItems = ob, ol, oi })
+}
+
+func TestNormalizeSubagent_TotalBytesLimit(t *testing.T) {
+	file, _ := limitFile(8)
+	setLimits(t, 1<<40, 1<<30, 1<<30)
+	maxSubagentBytes = int64(len(file)) // exactly the file: not truncated
+	items, st, err := NormalizeSubagent(bytes.NewReader(file), agentX)
+	if err != nil || len(items) != 8 || st.Skipped["subagent:truncated"] != 0 {
+		t.Fatalf("at the cap: err %v items %d skipped %v", err, len(items), st.Skipped)
+	}
+	maxSubagentBytes = int64(len(file)) - 1 // one byte short: the last line goes
+	items, st, err = NormalizeSubagent(bytes.NewReader(file), agentX)
+	if err != nil || len(items) != 7 || st.Skipped["subagent:truncated"] != 1 {
+		t.Errorf("over the cap: err %v items %d skipped %v", err, len(items), st.Skipped)
+	}
+}
+
+func TestNormalizeSubagent_LineLimit(t *testing.T) {
+	file, _ := limitFile(8)
+	setLimits(t, 1<<40, 8, 1<<30) // exactly the file's lines: not truncated
+	items, st, err := NormalizeSubagent(bytes.NewReader(file), agentX)
+	if err != nil || len(items) != 8 || st.Skipped["subagent:truncated"] != 0 {
+		t.Fatalf("at the cap: err %v items %d skipped %v", err, len(items), st.Skipped)
+	}
+	maxSubagentLines = 5
+	items, st, err = NormalizeSubagent(bytes.NewReader(file), agentX)
+	if err != nil || len(items) != 5 || st.Lines != 5 || st.Skipped["subagent:truncated"] != 1 {
+		t.Errorf("over the cap: err %v items %d stats %+v", err, len(items), st)
+	}
+}
+
+func TestNormalizeSubagent_ItemLimit(t *testing.T) {
+	file, _ := limitFile(8)
+	setLimits(t, 1<<40, 1<<30, 8) // exactly the file's items: not truncated
+	items, st, err := NormalizeSubagent(bytes.NewReader(file), agentX)
+	if err != nil || len(items) != 8 || st.Skipped["subagent:truncated"] != 0 {
+		t.Fatalf("at the cap: err %v items %d skipped %v", err, len(items), st.Skipped)
+	}
+	maxSubagentItems = 3
+	items, st, err = NormalizeSubagent(bytes.NewReader(file), agentX)
+	if err != nil || len(items) != 3 || st.Skipped["subagent:truncated"] != 1 {
+		t.Errorf("over the cap: err %v items %d skipped %v", err, len(items), st.Skipped)
+	}
+	if st.Lines > 4 {
+		t.Errorf("reading went on after the cap: %d lines", st.Lines)
+	}
+	c := asConversation(items)
+	if verr := c.Validate(); verr != nil {
+		t.Errorf("Validate: %v", verr)
+	}
+}
+
+func TestNormalizeSubagent_ReaderErrorIsReported(t *testing.T) {
+	brief := userRow("s0", 1, "brief", sidechain(), with("agentId", agentX))
+	r := io.MultiReader(bytes.NewReader(append(brief, '\n')), iotest.ErrReader(io.ErrUnexpectedEOF))
+	items, st, err := NormalizeSubagent(r, agentX)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("err = %v, want it to wrap io.ErrUnexpectedEOF", err)
+	}
+	if len(items) != 1 || items[0].User == nil || st.Lines != 1 {
+		t.Errorf("the rows read before the error are lost: %d items, stats %+v", len(items), st)
+	}
+}
+
+func TestNormalizeSubagent_EOFIsNotAnError(t *testing.T) {
+	for _, file := range [][]byte{subagentFile(), subagentFile()[:len(subagentFile())-1], nil} {
+		if _, _, err := NormalizeSubagent(bytes.NewReader(file), agentX); err != nil {
+			t.Errorf("err = %v", err)
+		}
 	}
 }
 
