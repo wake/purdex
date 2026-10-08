@@ -3,6 +3,7 @@ package team
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -147,5 +148,24 @@ func TestTeamLabelWireShapes(t *testing.T) {
 	tr, _ := json.Marshal(TeamRoster{TeamLabel: "A 線"})
 	if !strings.Contains(string(tm), `"team_label":"A 線"`) || !strings.Contains(string(tr), `"team_label":"A 線"`) {
 		t.Errorf("Team %s, TeamRoster %s", tm, tr)
+	}
+}
+
+// The shared derive fixture: the App (spa/src/lib/team/label.ts) mirrors
+// DeriveTeamLabel to show the label the daemon will take, and reads the same
+// file, so the two cannot drift.
+func TestDeriveTeamLabelFixture(t *testing.T) {
+	b, err := os.ReadFile("../../testdata/teamlabel/derive.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct{ Input, Label string }
+	if err := json.Unmarshal(b, &cases); err != nil || len(cases) < 20 {
+		t.Fatalf("fixture: %v (%d cases)", err, len(cases))
+	}
+	for _, c := range cases {
+		if got := DeriveTeamLabel(c.Input); got != c.Label {
+			t.Errorf("DeriveTeamLabel(%q) = %q, want %q", c.Input, got, c.Label)
+		}
 	}
 }

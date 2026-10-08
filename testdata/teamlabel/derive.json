@@ -1,0 +1,118 @@
+[
+  {
+    "input": "A 線：資源租約＋派工回報",
+    "label": "A 線"
+  },
+  {
+    "input": "lease-p1: foo",
+    "label": "lease-p1"
+  },
+  {
+    "input": "resource-lease",
+    "label": ""
+  },
+  {
+    "input": "lease-p1",
+    "label": "lease-p1"
+  },
+  {
+    "input": "A - lease",
+    "label": "A"
+  },
+  {
+    "input": "A -lease",
+    "label": "A -lease"
+  },
+  {
+    "input": "資源／派工",
+    "label": "資源"
+  },
+  {
+    "input": "I/O lease",
+    "label": "I/O lease"
+  },
+  {
+    "input": "I / O lease",
+    "label": "I"
+  },
+  {
+    "input": "介面線",
+    "label": "介面線"
+  },
+  {
+    "input": "資源租約與派工回報",
+    "label": ""
+  },
+  {
+    "input": "：開頭",
+    "label": ""
+  },
+  {
+    "input": "   ",
+    "label": ""
+  },
+  {
+    "input": "",
+    "label": ""
+  },
+  {
+    "input": ":",
+    "label": ""
+  },
+  {
+    "input": "介面線:右邊 panel",
+    "label": "介面線"
+  },
+  {
+    "input": "介面線：右邊",
+    "label": "介面線"
+  },
+  {
+    "input": "介面線／右邊",
+    "label": "介面線"
+  },
+  {
+    "input": "介面線|右邊",
+    "label": "介面線"
+  },
+  {
+    "input": "介面線｜右邊",
+    "label": "介面線"
+  },
+  {
+    "input": "介面線－右邊",
+    "label": "介面線"
+  },
+  {
+    "input": "介面線—右邊",
+    "label": "介面線"
+  },
+  {
+    "input": "介面線 － 右邊",
+    "label": "介面線"
+  },
+  {
+    "input": "資源租約與派工回報：說明",
+    "label": ""
+  },
+  {
+    "input": "  A 線  ：  x  ",
+    "label": "A 線"
+  },
+  {
+    "input": "資源租約派/工",
+    "label": ""
+  },
+  {
+    "input": "️:x",
+    "label": ""
+  },
+  {
+    "input": "a:b:c",
+    "label": "a"
+  },
+  {
+    "input": "　A 線　：x",
+    "label": "A 線"
+  }
+]

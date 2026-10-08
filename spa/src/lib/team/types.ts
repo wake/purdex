@@ -77,6 +77,11 @@ export interface LeadPayload {
    * `undefined` means the daemon does not know team names (the dialog then shows no name field).
    */
   team_name?: string
+  /**
+   * The short label the lead asked for ('' = none; the daemon then derives one from the name, D-L3). Set only when the
+   * payload carries a string `team_label`, so `undefined` means the daemon does not know labels (no label field).
+   */
+  team_label?: string
 }
 
 /** `Approval.payload` for kind `self_relay` (spec §8.7): the usage the mod reported when it asked. */
@@ -94,6 +99,11 @@ export interface Grant {
   roots: string[]
   /** Optional on a decide body (absent keeps the requested name; '' clears it); present on a grant this daemon served. */
   team_name?: string
+  /**
+   * Optional on a decide body (team-label D-L4: absent keeps the requested label; '' asks for it to be derived from
+   * the name); on a served grant it is the explicit label, '' when the team's label was derived.
+   */
+  team_label?: string
 }
 
 /** The audit label of whoever decided (spec §6.5). `addr` is set by the daemon from RemoteAddr. */
@@ -234,6 +244,7 @@ export function leadPayloadOf(a: Approval): LeadPayload {
   const roots = Array.isArray(p.roots) ? p.roots.filter((r): r is string => typeof r === 'string' && r !== '') : []
   const lead: LeadPayload = { reason, max_members, roots: roots.length > 0 ? roots : [a.origin.cwd] }
   if (typeof p.team_name === 'string') lead.team_name = p.team_name
+  if (typeof p.team_label === 'string') lead.team_label = p.team_label
   return lead
 }
 

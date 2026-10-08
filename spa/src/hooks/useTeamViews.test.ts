@@ -11,7 +11,7 @@ import type { TeamRoster } from '../lib/team/roster'
 import type { Tab } from '../types/tab'
 
 const roster: TeamRoster[] = [{
-  id: 't1', host_id: 'd', created_at: 1, team_name: '',
+  id: 't1', host_id: 'd', created_at: 1, team_name: '', team_label: '',
   lead: { session_id: 'L', ref: '_aaaaaa', address: 'mlab/lead-aa', live: true, tmux_session: 'lead-tm' },
   members: [{ session_id: 'A', ref: '_bbbbbb', address: 'mlab/a-bb', live: true, state: 'active', origin: 'spawned', joined_at: 2 }],
 }]
