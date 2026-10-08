@@ -37,11 +37,12 @@ type taskCaller struct {
 	member *memberRow
 }
 
-func (c taskCaller) actor() team.TaskActor {
+// ownerKey is the member key the store must check, "" for a lead.
+func (c taskCaller) ownerKey() string {
 	if c.member != nil {
-		return team.TaskByOwner
+		return c.member.SpawnOp
 	}
-	return team.TaskByLead
+	return ""
 }
 
 // ref is the caller's current ref, for the log.
@@ -117,12 +118,17 @@ func (m *Module) targetMember(w http.ResponseWriter, t team.Team, target string)
 	return memberRow{}, false
 }
 
+// taskNotFound is the one answer for every task the caller may not see.
+func (m *Module) taskNotFound(w http.ResponseWriter) {
+	m.writeErr(w, http.StatusConflict, team.ErrTaskNotFound, taskNotFoundDetail, nil)
+}
+
 // lookupTask is the task id names in the caller's scope: looked up with the
 // caller's team id, and for a member only if it owns it. Anything else,
 // whatever the reason, is the same task_not_found.
 func (m *Module) lookupTask(w http.ResponseWriter, c taskCaller, id string) (TaskRow, bool) {
 	notFound := func() (TaskRow, bool) {
-		m.writeErr(w, http.StatusConflict, team.ErrTaskNotFound, taskNotFoundDetail, nil)
+		m.taskNotFound(w)
 		return TaskRow{}, false
 	}
 	seq, ok := team.ParseTaskID(id, c.team.ID)
@@ -135,6 +141,9 @@ func (m *Module) lookupTask(w http.ResponseWriter, c taskCaller, id string) (Tas
 	}
 	if !found || (c.member != nil && row.OwnerKey != c.member.SpawnOp) {
 		return notFound()
+	}
+	if m.afterTaskLookup != nil {
+		m.afterTaskLookup()
 	}
 	return row, true
 }
@@ -229,9 +238,16 @@ func (m *Module) handleTaskGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	reports, err := m.store.ListReports(c.team.ID, row.Seq, 0, maxListReports)
+	// The lookup above is a fast fail; the read that is answered is this one,
+	// which checks a member's right again in the transaction that reads the
+	// task and its reports.
+	row, reports, found, err := m.store.GetTaskDetail(c.team.ID, row.Seq, c.ownerKey())
 	if err != nil {
-		m.taskStorageErr(w, "reports of "+r.PathValue("id"), err)
+		m.taskStorageErr(w, "detail of "+r.PathValue("id"), err)
+		return
+	}
+	if !found {
+		m.taskNotFound(w)
 		return
 	}
 	v, ok := m.newTaskView(w, c.team.ID)
@@ -265,7 +281,15 @@ func (m *Module) handleTaskStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	updated, err := m.store.SetTaskStatus(c.team.ID, row.Seq, req.Status, c.actor(), m.now())
+	// A member's change re-checks its right inside the write (the lookup
+	// above is a fast fail only); a lead's needs only the team scope.
+	var updated TaskRow
+	var err error
+	if c.member != nil {
+		updated, err = m.store.SetTaskStatusByOwner(c.team.ID, row.Seq, c.ownerKey(), req.Status, m.now())
+	} else {
+		updated, err = m.store.SetTaskStatus(c.team.ID, row.Seq, req.Status, team.TaskByLead, m.now())
+	}
 	if err != nil {
 		m.taskStoreErr(w, "status of "+r.PathValue("id"), err)
 		return

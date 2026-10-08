@@ -216,6 +216,11 @@ type Module struct {
 	// tests end the team there and prove the write sees it. nil in production.
 	beforeSpawnStep    func(op spawnRow)
 	afterSpawnTeamRead func()
+	// afterTaskLookup, when set, runs in the task routes right after the
+	// handler found the task in the caller's scope and before the store call
+	// that reads or writes it; tests change the world there and prove the
+	// store checks the caller's right again. nil in production.
+	afterTaskLookup func()
 	// beforeCreateLock, when set, runs in handleCreate just before it takes
 	// createMu; tests turn the unattended switch on there and prove the
 	// create reads it under the lock. nil in production.

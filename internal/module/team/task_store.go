@@ -379,6 +379,24 @@ func (s *Store) ListTasks(teamID, ownerKey string, all bool) ([]TaskRow, error) 
 // transaction that holds the write lock, so a change is never applied on top
 // of one it did not see.
 func (s *Store) SetTaskStatus(teamID string, seq int, to team.TaskStatus, by team.TaskActor, at int64) (TaskRow, error) {
+	return s.setTaskStatus(teamID, seq, "", to, by, at)
+}
+
+// SetTaskStatusByOwner is SetTaskStatus for a member, with the member's
+// right read where the write happens: the task's owner_key must be ownerKey
+// and ownerKey an active member of a live team, else ErrTaskNotFound with
+// nothing written and no hint which condition failed. The owner's
+// transition table applies (team.TaskByOwner).
+func (s *Store) SetTaskStatusByOwner(teamID string, seq int, ownerKey string, to team.TaskStatus, at int64) (TaskRow, error) {
+	if ownerKey == "" {
+		return TaskRow{}, ErrTaskNotFound
+	}
+	return s.setTaskStatus(teamID, seq, ownerKey, to, team.TaskByOwner, at)
+}
+
+// setTaskStatus is the one status change; a non-empty ownerKey adds the
+// owner's right as a condition of the same transaction.
+func (s *Store) setTaskStatus(teamID string, seq int, ownerKey string, to team.TaskStatus, by team.TaskActor, at int64) (TaskRow, error) {
 	var out TaskRow
 	err := s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		cur, ok, err := getTaskIn(ctx, conn, teamID, seq)
@@ -387,6 +405,17 @@ func (s *Store) SetTaskStatus(teamID string, seq int, to team.TaskStatus, by tea
 		}
 		if !ok {
 			return ErrTaskNotFound
+		}
+		if ownerKey != "" {
+			live := cur.OwnerKey == ownerKey
+			if live {
+				if live, err = liveMemberIn(ctx, conn, teamID, ownerKey); err != nil {
+					return fmt.Errorf("check owner: %w", err)
+				}
+			}
+			if !live {
+				return ErrTaskNotFound
+			}
 		}
 		if !team.TaskTransitionAllowed(cur.Status, to, by) {
 			return ErrBadTaskTransition
@@ -407,6 +436,62 @@ func (s *Store) SetTaskStatus(teamID string, seq int, to team.TaskStatus, by tea
 		return TaskRow{}, err
 	}
 	return out, nil
+}
+
+// rowQuerier is what *sql.Conn and *sql.Tx share for a single-row read.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// liveMemberIn reports whether key is an active member row of teamID whose
+// team is live (not ended): the only state in which a member may act.
+func liveMemberIn(ctx context.Context, q rowQuerier, teamID, key string) (bool, error) {
+	var one int
+	err := q.QueryRowContext(ctx, `SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.spawn_op = ? AND m.team_id = ? AND m.state = 'active' AND t.ended_at = 0`, key, teamID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// GetTaskDetail reads task (teamID, seq) and its reports (newest first, at
+// most 200, as ListReports) in one transaction, so the two are one view.
+// A non-empty ownerKey is the member asking: the task must be its own and
+// it still an active member of a live team, checked in that same
+// transaction. ok=false (nothing returned) when the task is absent or the
+// owner check fails, without saying which. ownerKey "" is the lead: the
+// team scope alone applies.
+func (s *Store) GetTaskDetail(teamID string, seq int, ownerKey string) (TaskRow, []ReportRow, bool, error) {
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TaskRow{}, nil, false, fmt.Errorf("task detail %s/%d: %w", teamID, seq, err)
+	}
+	defer tx.Rollback() // a read: nothing to commit
+	row, err := scanTask(tx.QueryRowContext(ctx, `SELECT `+taskCols+` FROM tasks WHERE team_id = ? AND seq = ?`, teamID, seq))
+	if errors.Is(err, sql.ErrNoRows) {
+		return TaskRow{}, nil, false, nil
+	}
+	if err != nil {
+		return TaskRow{}, nil, false, fmt.Errorf("task detail %s/%d: %w", teamID, seq, err)
+	}
+	if ownerKey != "" {
+		live := row.OwnerKey == ownerKey
+		if live {
+			if live, err = liveMemberIn(ctx, tx, teamID, ownerKey); err != nil {
+				return TaskRow{}, nil, false, fmt.Errorf("task detail %s/%d: check owner: %w", teamID, seq, err)
+			}
+		}
+		if !live {
+			return TaskRow{}, nil, false, nil
+		}
+	}
+	reports, err := listReportsIn(ctx, tx, teamID, seq, 0, maxListReports)
+	if err != nil {
+		return TaskRow{}, nil, false, err
+	}
+	return row, reports, true, nil
 }
 
 // ReassignTask hands a pending or in-progress task to another active member
