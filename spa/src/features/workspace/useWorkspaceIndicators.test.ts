@@ -78,4 +78,32 @@ describe('useWorkspaceIndicators', () => {
     const { result } = renderHook(() => useWorkspaceIndicators(['t1']))
     expect(result.current.aggregatedStatus).toBeUndefined()
   })
+
+  describe('every pane of a tab (U1-3c)', () => {
+    const splitTab = (id: string, codes: string[]): Tab => ({
+      id, pinned: false, locked: false, createdAt: 0,
+      layout: {
+        type: 'split', id: `s-${id}`, direction: 'h', sizes: codes.map(() => 100 / codes.length),
+        children: codes.map((c, i) => ({
+          type: 'leaf' as const,
+          pane: { id: `p${i}-${id}`, content: { kind: 'tmux-session' as const, hostId: 'h1', sessionCode: c, mode: 'terminal' as const, cachedName: '', tmuxInstance: '' } },
+        })),
+      },
+    })
+
+    it('a split tab\'s second pane counts', () => {
+      useTabStore.setState({ tabs: { t1: splitTab('t1', ['a', 'b']) } })
+      useAgentStore.setState({ unread: { 'h1:b': true }, statuses: { 'h1:b': 'waiting' } })
+      const { result } = renderHook(() => useWorkspaceIndicators(['t1']))
+      expect(result.current.unreadCount).toBe(1)
+      expect(result.current.aggregatedStatus).toBe('waiting')
+    })
+
+    it('two unread panes in one tab count 1', () => {
+      useTabStore.setState({ tabs: { t1: splitTab('t1', ['a', 'b']), t2: mockSessionTab('t2', 'h1', 'c') } })
+      useAgentStore.setState({ unread: { 'h1:a': true, 'h1:b': true, 'h1:c': true } })
+      const { result } = renderHook(() => useWorkspaceIndicators(['t1', 't2']))
+      expect(result.current.unreadCount).toBe(2)
+    })
+  })
 })
