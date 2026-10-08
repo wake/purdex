@@ -17,11 +17,12 @@ import (
 var ErrReportIDReused = errors.New("report id is already used by a different report")
 
 // reportSchema is the T-1a2 reports table (plan "Tables"). Idempotent. A
-// report is always about a task; the id is the CLI's UUID. Rows are never
+// report is always about a task; the id is the CLI's UUID, unique within its
+// team (an id is never looked up without the team id). Rows are never
 // updated or deleted.
 const reportSchema = `
 	CREATE TABLE IF NOT EXISTS reports (
-		id          TEXT    PRIMARY KEY,
+		id          TEXT    NOT NULL,
 		team_id     TEXT    NOT NULL,
 		task_seq    INTEGER NOT NULL,
 		member_key  TEXT    NOT NULL,
@@ -29,7 +30,8 @@ const reportSchema = `
 		summary     TEXT    NOT NULL,
 		fields_json TEXT    NOT NULL DEFAULT '{}',
 		body        TEXT    NOT NULL DEFAULT '',
-		created_at  INTEGER NOT NULL
+		created_at  INTEGER NOT NULL,
+		PRIMARY KEY (team_id, id)
 	);
 	CREATE INDEX IF NOT EXISTS reports_task ON reports (team_id, task_seq, created_at);`
 
@@ -120,16 +122,23 @@ func sameReport(stored, in ReportRow) bool {
 //
 //   - Task missing in that team: ErrTaskNotFound (another team's task with the
 //     same seq is a different task).
-//   - r.ID already stored with the same content: replay=true, the stored row
-//     and the CURRENT task come back, nothing is written and no effect runs
-//     again. With different content: ErrReportIDReused.
+//   - r.ID already stored IN THIS TEAM with the same content: replay=true, the
+//     stored row and the CURRENT task come back, nothing is written and no
+//     effect runs again. With different content: ErrReportIDReused. The id is
+//     scoped to the team (primary key (team_id, id)), so another team's
+//     report with the same id is invisible here and never an error: the
+//     answer cannot tell a team whether an id exists elsewhere.
 //   - Otherwise the row is inserted and the effect applied (spec D-3): ack
 //     moves pending to in_progress; ready appends pr to metadata.prs; merged
 //     appends the lower-cased sha to metadata.shas; done completes a pending
-//     or in_progress task; every report sets last_report_* and moves
-//     updated_at to r.CreatedAt. Appends skip a value already present and keep
-//     the order. A completed or deleted task still gets last_report_* and its
-//     metadata appends, but its status never changes.
+//     or in_progress task. Every report sets last_report_* when r.CreatedAt is
+//     not older than the task's last_report_at (a tie goes to the later
+//     write) and raises updated_at to r.CreatedAt when that is newer, so a
+//     late or out-of-order report never moves either stamp backwards; its
+//     status effect and metadata append apply regardless of the stamps.
+//     Appends skip a value already present and keep the order. A completed or
+//     deleted task still gets the stamps and the appends, but its status
+//     never changes.
 func (s *Store) InsertReport(r ReportRow) (ReportRow, TaskRow, bool, error) {
 	r = r.normalize()
 	if r.TeamID == "" || r.MemberKey == "" || r.TaskSeq <= 0 {
@@ -154,7 +163,7 @@ func (s *Store) InsertReport(r ReportRow) (ReportRow, TaskRow, bool, error) {
 			return ErrTaskNotFound
 		}
 
-		prev, err := scanReport(conn.QueryRowContext(ctx, `SELECT `+reportCols+` FROM reports WHERE id = ?`, r.ID))
+		prev, err := scanReport(conn.QueryRowContext(ctx, `SELECT `+reportCols+` FROM reports WHERE team_id = ? AND id = ?`, r.TeamID, r.ID))
 		switch {
 		case err == nil:
 			if !sameReport(prev, r) {
@@ -215,8 +224,12 @@ func applyReport(t TaskRow, r ReportRow) TaskRow {
 			t.Status = team.TaskCompleted
 		}
 	}
-	t.LastReportKind, t.LastReportSummary, t.LastReportAt = string(r.Kind), r.Summary, r.CreatedAt
-	t.UpdatedAt = r.CreatedAt
+	if r.CreatedAt >= t.LastReportAt { // a tie goes to the later write
+		t.LastReportKind, t.LastReportSummary, t.LastReportAt = string(r.Kind), r.Summary, r.CreatedAt
+	}
+	if r.CreatedAt > t.UpdatedAt {
+		t.UpdatedAt = r.CreatedAt
+	}
 	return t
 }
 
@@ -231,13 +244,13 @@ func appendMissing[T comparable](list []T, v T) []T {
 }
 
 // GetReport returns the report with the given id.
-func (s *Store) GetReport(id string) (ReportRow, bool, error) {
-	r, err := scanReport(s.db.QueryRow(`SELECT `+reportCols+` FROM reports WHERE id = ?`, id))
+func (s *Store) GetReport(teamID, id string) (ReportRow, bool, error) {
+	r, err := scanReport(s.db.QueryRow(`SELECT `+reportCols+` FROM reports WHERE team_id = ? AND id = ?`, teamID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ReportRow{}, false, nil
 	}
 	if err != nil {
-		return ReportRow{}, false, fmt.Errorf("get report %s: %w", id, err)
+		return ReportRow{}, false, fmt.Errorf("get report %s/%s: %w", teamID, id, err)
 	}
 	return r, true, nil
 }

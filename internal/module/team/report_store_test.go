@@ -116,7 +116,7 @@ func TestInsertReport_EffectsPerKind(t *testing.T) {
 	if row.SHA != "abcdef1" || !reflect.DeepEqual(task.Metadata.SHAs, []string{"abcdef1"}) {
 		t.Fatalf("merged: row sha=%q shas=%v, want lower-case", row.SHA, task.Metadata.SHAs)
 	}
-	if back, _, _ := s.GetReport(row.ID); back.SHA != "abcdef1" {
+	if back, _, _ := s.GetReport(tTeamA, row.ID); back.SHA != "abcdef1" {
 		t.Fatalf("stored sha = %q, want lower-case", back.SHA)
 	}
 	_, task, _ = mustInsertReport(t, s, next(team.ReportMerged, 51)) // abcdef1 again
@@ -148,14 +148,14 @@ func TestInsertReport_StoresTheRowRoundTrip(t *testing.T) {
 	in.Body = "findings\n| a | b |"
 	in.Reviews = []string{"R1=job-1", "R2=job-2"}
 	got, _, _ := mustInsertReport(t, s, in)
-	back, ok, err := s.GetReport(reportID(1))
+	back, ok, err := s.GetReport(tTeamA, reportID(1))
 	if err != nil || !ok {
 		t.Fatalf("get: ok=%v err=%v", ok, err)
 	}
 	if !reflect.DeepEqual(got, in) || !reflect.DeepEqual(back, in) {
 		t.Fatalf("round trip lost a field:\n in   %+v\n got  %+v\n back %+v", in, got, back)
 	}
-	if _, ok, _ := s.GetReport(reportID(2)); ok {
+	if _, ok, _ := s.GetReport(tTeamA, reportID(2)); ok {
 		t.Fatal("an unknown id must not be found")
 	}
 	// A kind without kind fields stores an empty fields document.
@@ -234,7 +234,6 @@ func TestInsertReport_IDReusedWithDifferentContent(t *testing.T) {
 		"reviews":    func(r *ReportRow) { r.Reviews = []string{"R1=job-2"} },
 		"member key": func(r *ReportRow) { r.MemberKey = "someone-else" },
 		"task":       func(r *ReportRow) { r.TaskSeq = 2 },
-		"team":       func(r *ReportRow) { r.TeamID, r.TaskSeq = tTeamB, 1; r.MemberKey = mb },
 	}
 	for name, mut := range variants {
 		r := base
@@ -265,7 +264,7 @@ func TestInsertReport_EffectAndRowCommitTogether(t *testing.T) {
 			if _, _, _, err := s.InsertReport(newReport(tTeamA, 1, m, k, 1, 100)); !errors.Is(err, boom) {
 				t.Fatalf("err = %v, want the injected failure", err)
 			}
-			if _, ok, _ := s.GetReport(reportID(1)); ok {
+			if _, ok, _ := s.GetReport(tTeamA, reportID(1)); ok {
 				t.Fatal("the report row survived a failed call")
 			}
 			if after := mustGetTask(t, s, tTeamA, 1); !reflect.DeepEqual(after, before) {
@@ -295,11 +294,116 @@ func TestInsertReport_EffectAndRowCommitTogether_FailedEffect(t *testing.T) {
 	if _, _, _, err := s.InsertReport(newReport(tTeamA, 1, m, team.ReportAck, 1, 100)); err == nil {
 		t.Fatal("want the failed task update to fail the call")
 	}
-	if _, ok, _ := s.GetReport(reportID(1)); ok {
+	if _, ok, _ := s.GetReport(tTeamA, reportID(1)); ok {
 		t.Fatal("the report row stayed although the task update failed")
 	}
 	if after := mustGetTask(t, s, tTeamA, 1); !reflect.DeepEqual(after, before) {
 		t.Fatalf("the task changed: %+v", after)
+	}
+}
+
+// The id is scoped to the team (primary key (team_id, id)): another team
+// using the same id neither collides nor learns that it exists.
+func TestInsertReport_SameIDInAnotherTeamIsIndependent(t *testing.T) {
+	s, ma := reportFixture(t)
+	mb := seedTaskTeam(t, s, tTeamB, "lead-b", "op-b", "sess-b")
+	mustCreateTask(t, s, newTask(tTeamB, mb, "b work", 10))
+
+	a := newReport(tTeamA, 1, ma, team.ReportReady, 1, 100)
+	mustInsertReport(t, s, a)
+	aTask := mustGetTask(t, s, tTeamA, 1)
+
+	// Team B uses the very same id, with different content, on its own task.
+	b := newReport(tTeamB, 1, mb, team.ReportDone, 1, 150)
+	b.Summary = "b's own words"
+	gotB, bTask, replay, err := s.InsertReport(b)
+	if err != nil || replay {
+		t.Fatalf("same id in another team: replay=%v err=%v, want an independent insert", replay, err)
+	}
+	if bTask.Status != team.TaskCompleted || gotB.TeamID != tTeamB {
+		t.Fatalf("team B's report: row=%+v task=%+v", gotB, bTask)
+	}
+	if after := mustGetTask(t, s, tTeamA, 1); !reflect.DeepEqual(after, aTask) {
+		t.Fatalf("team B's report touched team A's task:\n%+v\n%+v", aTask, after)
+	}
+	if countReports(t, s, tTeamA) != 1 || countReports(t, s, tTeamB) != 1 {
+		t.Fatal("each team keeps its own row")
+	}
+
+	// Each team reads its own, and a team does not find the other's.
+	if got, ok, _ := s.GetReport(tTeamA, reportID(1)); !ok || !reflect.DeepEqual(got, a) {
+		t.Fatalf("team A's report: ok=%v %+v", ok, got)
+	}
+	if got, ok, _ := s.GetReport(tTeamB, reportID(1)); !ok || got.Summary != "b's own words" {
+		t.Fatalf("team B's report: ok=%v %+v", ok, got)
+	}
+	if _, ok, _ := s.GetReport("3f2a9c03-cccc-4000-8000-000000000003", reportID(1)); ok {
+		t.Fatal("a third team must not find the id")
+	}
+
+	// Inside one team the id is still taken, whoever asks and for whatever task.
+	mustCreateTask(t, s, newTask(tTeamA, ma, "second", 11))
+	seedMember(t, s, "op-2", tTeamA, "sess-2", 2)
+	for name, mut := range map[string]func(*ReportRow){
+		"other task":   func(r *ReportRow) { r.TaskSeq = 2 },
+		"other member": func(r *ReportRow) { r.MemberKey = "op-2" },
+	} {
+		r := a
+		mut(&r)
+		if _, _, _, err := s.InsertReport(r); !errors.Is(err, ErrReportIDReused) {
+			t.Errorf("%s in the same team: err = %v, want ErrReportIDReused", name, err)
+		}
+	}
+	// A retry in B is B's replay.
+	if _, _, replay, err := s.InsertReport(b); err != nil || !replay {
+		t.Fatalf("B's own retry: replay=%v err=%v", replay, err)
+	}
+}
+
+// A late or out-of-order report still takes effect on status and metadata,
+// but it never moves the stamps backwards.
+func TestInsertReport_OlderReportNeverMovesStampsBackwards(t *testing.T) {
+	s, m := reportFixture(t)
+	mustInsertReport(t, s, newReport(tTeamA, 1, m, team.ReportDone, 1, 200))
+
+	// A progress report stamped earlier arrives afterwards.
+	row, task, replay := mustInsertReport(t, s, newReport(tTeamA, 1, m, team.ReportProgress, 2, 100))
+	if replay || row.CreatedAt != 100 {
+		t.Fatalf("the late report must be stored as it is: replay=%v row=%+v", replay, row)
+	}
+	if _, ok, _ := s.GetReport(tTeamA, reportID(2)); !ok {
+		t.Fatal("the late report was not stored")
+	}
+	if task.Status != team.TaskCompleted || task.LastReportKind != "done" || task.LastReportAt != 200 || task.UpdatedAt != 200 {
+		t.Fatalf("a late progress moved the stamps: %+v", task)
+	}
+
+	// Its metadata append still applies.
+	_, task, _ = mustInsertReport(t, s, newReport(tTeamA, 1, m, team.ReportReady, 3, 150))
+	if !reflect.DeepEqual(task.Metadata.PRs, []int{12}) || task.LastReportKind != "done" || task.UpdatedAt != 200 {
+		t.Fatalf("a late ready: prs=%v last=%s updated=%d", task.Metadata.PRs, task.LastReportKind, task.UpdatedAt)
+	}
+	if db := mustGetTask(t, s, tTeamA, 1); !reflect.DeepEqual(db, task) {
+		t.Fatalf("stored task differs:\n%+v\n%+v", task, db)
+	}
+
+	// Its status effect still applies too: a late ack starts a pending task
+	// whose newest report is a later progress.
+	s2, m2 := reportFixture(t)
+	mustInsertReport(t, s2, newReport(tTeamA, 1, m2, team.ReportProgress, 1, 200))
+	_, task, _ = mustInsertReport(t, s2, newReport(tTeamA, 1, m2, team.ReportAck, 2, 120))
+	if task.Status != team.TaskInProgress || task.LastReportKind != "progress" || task.LastReportAt != 200 || task.UpdatedAt != 200 {
+		t.Fatalf("a late ack: %+v", task)
+	}
+
+	// The same millisecond: the later write wins the stamp.
+	_, task, _ = mustInsertReport(t, s2, newReport(tTeamA, 1, m2, team.ReportQuestion, 3, 200))
+	if task.LastReportKind != "question" || task.LastReportAt != 200 || task.UpdatedAt != 200 {
+		t.Fatalf("same-millisecond report did not win: %+v", task)
+	}
+	_, task, _ = mustInsertReport(t, s2, newReport(tTeamA, 1, m2, team.ReportProgress, 4, 200))
+	if task.LastReportKind != "progress" {
+		t.Fatalf("same-millisecond report did not win again: %+v", task)
 	}
 }
 
@@ -513,7 +617,7 @@ func TestReportSchema_IdempotentOnReopen(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer s2.Close()
-	got, ok, err := s2.GetReport(reportID(1))
+	got, ok, err := s2.GetReport(tTeamA, reportID(1))
 	if err != nil || !ok || !reflect.DeepEqual(got, first) {
 		t.Fatalf("report after reopen: %+v ok=%v err=%v", got, ok, err)
 	}
