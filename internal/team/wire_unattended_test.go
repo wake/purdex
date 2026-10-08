@@ -53,7 +53,8 @@ func jsonKeys(t *testing.T, raw []byte) []string {
 
 // UnattendedView flattens the state; approved is [] when empty, never null
 // (the SPA replaces its list from it); truncated is always there; the
-// cursor, the PUT's counts and changed_by are left out when zero / nil.
+// cursor, the PUT's counts, list_failed and changed_by are left out when
+// zero / false / nil.
 func TestWireUnattended_JSONShapes(t *testing.T) {
 	zero, err := json.Marshal(UnattendedView{})
 	if err != nil {
@@ -70,13 +71,13 @@ func TestWireUnattended_JSONShapes(t *testing.T) {
 	full := UnattendedView{
 		UnattendedState: UnattendedState{On: true, Since: 1000, ChangedAt: 1000, ChangedBy: by},
 		Approved:        []Approval{{ID: "a", Kind: KindLead, State: StateApproved, DecidedAt: 1500, DecidedBy: &Client{Kind: ClientKindUnattended, Label: UnattendedLabel}}},
-		Truncated:       true, NextBefore: 1500, Swept: 2, Pending: 1,
+		Truncated:       true, NextBefore: 1500, Swept: 2, Pending: 1, ListFailed: true,
 	}
 	raw, err := json.Marshal(full)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"approved", "changed_at", "changed_by", "next_before", "on", "pending", "since", "swept", "truncated"}
+	want := []string{"approved", "changed_at", "changed_by", "list_failed", "next_before", "on", "pending", "since", "swept", "truncated"}
 	if got := jsonKeys(t, raw); !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %v, want %v (state flattened)", got, want)
 	}

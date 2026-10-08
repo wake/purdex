@@ -296,8 +296,8 @@ func (m *Module) Init(c *core.Core) error {
 	return nil
 }
 
-// RegisterRoutes mounts the six /api/team/* routes and the hook decision
-// route (Go method patterns).
+// RegisterRoutes mounts the /api/team/* routes, the hook decision route,
+// the relay routes and the 分流 routes (Go method patterns).
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/approvals", m.handleCreate)
 	mux.HandleFunc("GET /api/team/approvals", m.handleList)
@@ -308,6 +308,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/spawns", m.handleSpawn) // P4-5, spec §7.2
 	mux.HandleFunc("GET /api/team", m.handleTeam)          // P4-6, spec §7.3
 	mux.HandleFunc("POST /api/team/kill", m.handleKill)
+	// U23: the unattended switch (unattended spec D-U23-1, D-U23-6), the App's.
+	mux.HandleFunc("GET "+UnattendedRoute, m.handleUnattendedGet)
+	mux.HandleFunc("PUT "+UnattendedRoute, m.handleUnattendedPut)
 	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
@@ -356,6 +359,7 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.createMu.Unlock()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
+	m.core.Events.OnSubscribe(m.sendUnattendedSnapshot)
 	m.sweepWG.Add(2)
 	go m.runSweeper()
 	go m.runRetention()

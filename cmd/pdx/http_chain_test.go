@@ -14,6 +14,7 @@ import (
 	"github.com/wake/purdex/internal/middleware"
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
+	teammod "github.com/wake/purdex/internal/module/team"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -778,6 +779,40 @@ func TestNewOuterHandler_HostConfigTeamPutIsAdminOnly(t *testing.T) {
 			outer.ServeHTTP(rec, req)
 			if rec.Code != tc.want {
 				t.Errorf("%s bearer %q: got %d %s, want %d", path, tc.bearer, rec.Code, rec.Body.String(), tc.want)
+			}
+		}
+	}
+}
+
+// D-U23-2 (Review focus 5): the unattended switch is on the general chain,
+// admin token only. Stubs mounted at teammod.UnattendedRoute behind the
+// real outer handler: the peer host's inbound token, a wrong token and none
+// are 401 and never reach the stub; the admin token does. Mutation gate:
+// move UnattendedRoute under /api/peers/ → red (the peer token then meets
+// PeerAuth, not TokenAuth's 401).
+func TestNewOuterHandler_UnattendedIsAdminOnly(t *testing.T) {
+	c := newTestCore(&config.Config{Token: "admin-secret", DataDir: t.TempDir(), Peers: config.PeersConfig{
+		Hosts: []config.PeerHost{{Alias: "host-a", HostID: "hostid-a", InboundToken: "host-a-token"}}}})
+	ran := 0
+	stub := func(w http.ResponseWriter, _ *http.Request) { ran++; w.WriteHeader(http.StatusOK) }
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+teammod.UnattendedRoute, stub)
+	mux.HandleFunc("PUT "+teammod.UnattendedRoute, stub)
+	outer := newOuterHandler(c, mux, nil)
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		for _, tc := range []struct {
+			bearer string
+			want   int
+		}{{"host-a-token", 401}, {"wrong-token", 401}, {"", 401}, {"admin-secret", 200}} {
+			before := ran
+			req := httptest.NewRequest(method, teammod.UnattendedRoute, strings.NewReader(`{"on":true,"client":{"kind":"app","label":"x"}}`))
+			if tc.bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.bearer)
+			}
+			rec := httptest.NewRecorder()
+			outer.ServeHTTP(rec, req)
+			if reached := ran > before; rec.Code != tc.want || reached != (tc.want == 200) {
+				t.Errorf("%s bearer %q: got %d (stub ran %v), want %d", method, tc.bearer, rec.Code, reached, tc.want)
 			}
 		}
 	}

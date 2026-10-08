@@ -129,6 +129,11 @@ func (s *Store) ListAutoApproved(since, before int64, limit int) (rows []team.Ap
 	fail := func(err error) ([]team.Approval, bool, error) {
 		return nil, false, fmt.Errorf("list auto-approved: %w", err)
 	}
+	if s.beforeListAutoApproved != nil {
+		if err := s.beforeListAutoApproved(); err != nil {
+			return fail(err)
+		}
+	}
 	if limit < 1 {
 		return fail(fmt.Errorf("limit %d is not positive", limit))
 	}

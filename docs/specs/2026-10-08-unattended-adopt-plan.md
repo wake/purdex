@@ -103,7 +103,7 @@ Total ≈ 12 500 lines across 21 PRs.
 | Route | Answers | PR |
 |---|---|---|
 | `GET /api/team/unattended?before=<ms>&limit=<n>` | 200 `UnattendedView` (a page of `approved`, `truncated`, `next_before`) · 400 · 500 `storage_error` | PU-1c |
-| `PUT /api/team/unattended` | 200 `UnattendedView` with `swept` and `pending` · 400 `bad_request` · 500 · 503 `not_ready` | PU-1c |
+| `PUT /api/team/unattended` | 200 `UnattendedView` with `swept` and `pending` (and `list_failed: true` with `approved: []` when the write took effect but the list could not be read) · 400 `bad_request` · 500 · 503 `not_ready` | PU-1c |
 | `POST /api/team/approvals` with `kind:"adopt"` | 201 / 200 replay · 400 · 409 (adopt refusals) · 503 | PL-1c |
 | `POST /api/team/release` | 200 `Member` · 400 `origin_unknown` · 409 `not_lead` / `not_your_member` / `relay_open` · 503 | PL-1d2 |
 | `GET /api/team/roster` | 200 `Roster` · 500 · 503 | PL-1f |
@@ -198,6 +198,7 @@ type UnattendedView struct {
 	NextBefore int64      `json:"next_before,omitempty"` // the cursor of the next page (a decided_at)
 	Swept      int        `json:"swept,omitempty"`   // PUT only: open requests the switch-on approved
 	Pending    int        `json:"pending,omitempty"` // PUT only: auto-approvable requests still open after the sweep
+	ListFailed bool       `json:"list_failed,omitempty"` // PUT only: the write took effect, the list was not read (approved is [] and means nothing); GET it (decision 30)
 }
 type UnattendedEventValue struct { Op string `json:"op"`; State UnattendedState `json:"state"` } // op: snapshot | changed
 ```
@@ -356,7 +357,7 @@ type UnattendedStore interface {
 **Interfaces.**
 - `const UnattendedRoute = "/api/team/unattended"` (exported for the chain test).
 - `GET /api/team/unattended?before=<ms>&limit=<n>` → 200 `UnattendedView`: the state and one page `ListAutoApproved(state.Since, before, limit)` (limit default 50, max 200), `truncated`, `next_before` (the last row's `decided_at` when truncated). A `before` or `limit` that is not a positive integer → 400 `bad_request`. A store error → 500 `storage_error`.
-- `PUT /api/team/unattended`, body `UnattendedPutRequest` → 200 `UnattendedView` (first page) with `swept` and `pending`. 400 `bad_request` when `on` is missing or not a boolean, when `client.kind` or `client.label` is blank, or when `client.kind` is not `"app"`. 503 `not_ready` while stopping. The daemon sets `client.addr = r.RemoteAddr`.
+- `PUT /api/team/unattended`, body `UnattendedPutRequest` → 200 `UnattendedView` (first page) with `swept` and `pending`; once the write has taken effect the PUT is 200 even when the list cannot be read, then with `approved: []` and `list_failed: true` (decision 30). 400 `bad_request` when `on` is missing or not a boolean, when `client.kind` or `client.label` is blank, or when `client.kind` is not `"app"`. 503 `not_ready` while stopping. The daemon sets `client.addr = r.RemoteAddr`.
 - Event `team.unattended`: `{op:"snapshot", state}` to each new subscriber (`OnSubscribe`), `{op:"changed", state}` after every write that changed something, under `eventMu` like `broadcast`.
 - `capabilities` gains `"relay.unattended.v1"` (appended; the order is the contract).
 
@@ -473,7 +474,7 @@ type UnattendedStore interface {
   - unsupported = `support === 'no'`;
   - reachable = connected, supported, with a state;
   - `none` = no shown host; `on` = every shown host reachable and on; `off` = every shown host reachable and off; anything else `partial` (D-U23-5: mixed, unreachable, or too old — an unreachable host may still be on and approving).
-- `toggleUnattended(agg) → Promise<{ target: boolean; failed: Array<{ hostId; code }> }>`: `target = agg.mode !== 'on'` (off, partial → on; on → off); `putUnattended(hostId, target)` for every **reachable** host in parallel; unreachable and unsupported hosts are never written; the caller toasts `unattended.toast.failed` once, naming every failed host.
+- `toggleUnattended(agg) → Promise<{ target: boolean; failed: Array<{ hostId; code }> }>`: `target = agg.mode !== 'on'` (off, partial → on; on → off); `putUnattended(hostId, target)` for every **reachable** host in parallel (a 200 is success whatever its `list_failed`: only the state is read from it, never `approved` — the panel always GETs its list, PU-2c); unreachable and unsupported hosts are never written; the caller toasts `unattended.toast.failed` once, naming every failed host.
 - `UnattendedButton`, in a `no-drag` wrapper with `onMouseDown={keepFocus}`. The shown hosts are `hostOrder.filter(useShownRefFilter())`.
   - The toggle `data-testid="unattended-toggle"`, `aria-pressed={mode === 'on'}`. Off: Phosphor `MoonStars` in `IDLE`. On: `PRESSED` plus the text `t('unattended.on_label')` = 「無人值守中」. Partial: `MoonStars` with a warning-coloured ring and `data-state="partial"`. `none`: disabled.
   - Its `title` is the tooltip: one line for off and on; for partial, the hosts by group — 「未開啟：…」「無法連線：…」「daemon 版本過舊：…」 (labels via `hostLabel(hostId, hostLookOf(hostId))`).
@@ -1390,6 +1391,17 @@ Follow-up rulings the same day (purdex-d3, relayed by purdex-f0), folded into th
 21. **The U24 spec is revised in this plan PR** (`docs/specs/2026-10-08-lead-adopt-release-spec.md`): D-U24-5 = the sidebar's tab list, the Workers list unchanged with the reason from the code; D-U24-3 gains the close of an adopted member (SIGTERM to the re-verified process, tmux session and shell kept, per M30; a spawned member's `pdx kill` unchanged); §3 says so; D-U24-7 is added word for word, with a U25 row in §1. The plan's matching deviations become "folded into the spec". → the spec diff; deviations 7 and 9; decisions 9 and 13; Open questions 7 and 9.
 22. **U25 / D-U24-7 in the plan.** Daemon half: an unattended lead approval's grant is `min(requested — unspecified counts as 3 —, 3)` members, in PU-1b2 (`unattendedGrant`, `TestUnattendedLeadGrant_IsMinOfRequestAndThree`, `TestDecide_ClickGrantIsNotCapped`, a mutation gate). Dialog half: a small PR of its own, PU-2d (`OpenApprovalDialog`'s member field prefilled 3, 「lead 申請 N 個」 beside it, tests and gates). → PR table; PU-1a constant; PU-1b2; PU-2d.
 23. **A user-visible behaviour list** in Traditional Chinese, every item with its source, for d3 to review. → "User-visible behaviour (for coordinator review)".
+
+Implementation rulings (U23 daemon batch, purdex-1f, 2026-10-08):
+
+24. **PU-1b2 was cut at its cut point:** `reconcileUnattended`, the boot sweep and the once-per-row refusal log are PU-1b3 (#1969), shipped in the same U23 batch. → PU-1b2 / PU-1b3.
+25. **The daemon never approves an overdue row:** an auto-approval's CAS also requires `deadline_at > now AND lease_until > now` (`Close.UnexpiredAt`); the overdue row is left to the expiry sweeper and is not counted as pending. A click's approve is unchanged (a click on a row overdue by less than one tick stays the person's decision). → PU-1b3.
+26. **`GET /api/team/unattended` caps `limit` at 200** instead of answering 400; `before`/`limit` that are 0, negative or not a number are 400. → PU-1c.
+27. **A switch value that cannot be read sends no snapshot** and keeps the subscriber (reconnecting would not repair it; the App's GET gets the 500). → PU-1c.
+28. **The guard test is stricter than planned:** no pdx source names the route or `UnattendedRoute`, no `hooks/*.js` contains "unattended", SKILL.md never writes the route; `main()` strings are checked through the AST. → PU-1c.
+29. **`team.unattended` `changed` is sent strictly to every subscriber** (`BroadcastStrict`): a subscriber that cannot take it is closed so it reconnects for the snapshot; a dropped frame would leave a window showing the wrong switch (D-U23-6). → PU-1c.
+30. **A PUT whose write took effect answers 200** even when the list cannot be read, with `approved: []` and `list_failed: true`; the client GETs the list. → PU-1a wire (additive), Shared contracts (routes, `UnattendedView`), PU-1c Interfaces; PU-2b `toggleUnattended` reads only the state from a PUT and never its `approved`.
+31. **The skill's lead-mode paragraph says the answer may be an automatic approval** under unattended mode, which the agent never turns on and never asks for. → PU-1c.
 
 **The other Open questions** take the plan's recommended defaults: 1, 3, 4, 5, 6, 8, 10, 11, 12, 13, 15, 17, 19, 20 (each marked *Ruled* in "Open questions"). Open questions 7 and 9 follow their defaults, now written into the spec (decision 21); 2, 14, 16 and 18 are decided by decisions 19, 10, 11 and 16.
 

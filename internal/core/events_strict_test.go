@@ -241,3 +241,40 @@ func TestSendStrict_RemovedSubscriberIsANoOpReturningFalse(t *testing.T) {
 	assert.False(t, ok)
 	assert.Empty(t, drained(t, sub))
 }
+
+// BroadcastStrict is strict for every subscriber, whatever it opted into:
+// one whose buffer is full is Removed (Done closes, deregistered) instead
+// of losing the frame, and every subscriber with room gets it. The frame's
+// type needs no feature: it reaches a subscriber that opted into nothing.
+func TestBroadcastStrict_RemovesEverySubscriberWhoseBufferIsFull(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	plain := eb.AddTestSubscriber()
+	defer eb.RemoveTestSubscriber(plain)
+	opted := eb.AddTestSubscriberWith(FeatureNexV1)
+	defer eb.RemoveTestSubscriber(opted)
+	var full []*EventSubscriber
+	for _, features := range [][]string{nil, {FeatureNexV1}, {"other.v1"}} {
+		sub := eb.AddTestSubscriberWith(features...)
+		fillBuffer(t, sub)
+		full = append(full, sub)
+	}
+
+	ev := HostEvent{Type: "team.unattended", Value: `{"op":"changed"}`}
+	eb.BroadcastStrict(ev)
+
+	for _, sub := range []*EventSubscriber{plain, opted} {
+		assert.Equal(t, marshalled(t, ev), next(t, sub), "a subscriber with room did not get the frame")
+		assert.False(t, isDone(sub), "a subscriber with room was removed")
+		assert.True(t, registered(eb, sub))
+	}
+	for i, sub := range full {
+		assert.True(t, isDone(sub), "full subscriber %d was kept without the frame", i)
+		assert.False(t, registered(eb, sub), "full subscriber %d is still registered", i)
+		assert.Len(t, drained(t, sub), cap(sub.send), "the frame that did not fit was queued anyway")
+	}
+}
+
+func TestBroadcastStrict_NoSubscribersIsANoOp(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	assert.NotPanics(t, func() { eb.BroadcastStrict(HostEvent{Type: "team.unattended"}) })
+}

@@ -376,6 +376,45 @@ func (eb *EventsBroadcaster) BroadcastStrictTo(feature string, ev HostEvent) {
 	}
 }
 
+// BroadcastStrict sends ev to every subscriber, strict for all of them,
+// whatever they opted into: a subscriber whose buffer is full loses its
+// connection instead of this frame (Removed: Done closes, the WS closes),
+// so its client reconnects and gets the snapshots again. It is
+// BroadcastStrictTo without the feature filter.
+//
+// Only for a frame that every client takes, that is rare, and whose loss
+// would leave a client wrong for good with nothing to show it — the team
+// module's team.unattended changed (D-U23-6: a window that missed it would
+// show the switch off until it reconnected). A frequent frame does not
+// belong here: under load it would turn a slow client's dropped frames
+// into a stream of reconnects. Everything else stays on BroadcastEvent.
+//
+// As in BroadcastStrictTo, the subscribers that could not take the frame
+// are collected under the read lock and Removed after it is released.
+func (eb *EventsBroadcaster) BroadcastStrict(ev HostEvent) {
+	msg, err := json.Marshal(ev)
+	if err != nil {
+		log.Printf("events: marshal error: %v", err)
+		return
+	}
+
+	var failed []*EventSubscriber
+	eb.mu.RLock()
+	for sub := range eb.subscribers {
+		// offerEnded: a nex.v1 subscriber ended itself. offerDropped: any
+		// other, which this send is strict for. offerClosed: already gone.
+		if r := sub.offer(msg); r == offerEnded || r == offerDropped {
+			failed = append(failed, sub)
+		}
+	}
+	eb.mu.RUnlock()
+
+	for _, sub := range failed {
+		log.Printf("events: %s frame could not be queued (send buffer full); closing the connection so the client reconnects", ev.Type)
+		eb.Remove(sub)
+	}
+}
+
 // SendStrict queues ev for one subscriber — an OnSubscribe callback's
 // snapshot, the nex hello — with BroadcastStrictTo's rule: if it cannot be
 // queued, the subscriber is Removed (its connection closes) rather than
