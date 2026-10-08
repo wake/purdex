@@ -1,6 +1,7 @@
 // Package resourcesmod measures the host's load and each agent session's
 // share of it, and serves the latest reading on GET /api/resources
-// (host-resource-lease spec §3.1, §4 D-1; plan P0-2).
+// (host-resource-lease spec §3.1, §4 D-1; plan P0-2). It keeps the lease
+// queue in resources.db and follows the host setting `resources` (plan P1).
 //
 // Sampling forks, so it runs on this module's own ticker in one goroutine
 // and never on a request or hook path: the handler only reads the last
@@ -9,8 +10,10 @@ package resourcesmod
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,35 +57,60 @@ type Module struct {
 	// fullLatch turns each reading into the published host.full with a
 	// hysteresis; a failed tick leaves it where it was.
 	fullLatch resources.FullLatch
-	cancel    context.CancelFunc
+	// mode is the setting's mode as of the last tick (the sampler goroutine's
+	// own); empty before the first one.
+	mode string
+
+	// store is resources.db; nil when it could not be opened (or there is no
+	// data dir), and the module then runs measure-only. settingsSrc is the
+	// hostconfig module's reader; nil reads as mode measure.
+	store           *leaseStore
+	settingsSrc     resources.SettingsReader
+	noteMu          sync.Mutex
+	settingsFailing bool // a run of settings read failures is under way and has been logged
+	listFailing     bool // the lease listing is failing and has been logged
+
+	// runCtx ends when Stop is called; it is made in New so that a Stop
+	// before Start still keeps a later Start from running.
+	runCtx    context.Context
+	stopRun   context.CancelFunc
 	wg        sync.WaitGroup
 	startMu   sync.Mutex
 	started   bool
+	stopped   bool // Stop was called: the module cannot be started again
+	closeOnce sync.Once
 }
 
 // New returns the module with production defaults; Init installs the platform
 // sampler and finds the root source.
 func New() *Module {
+	runCtx, stopRun := context.WithCancel(context.Background())
 	return &Module{
 		interval:     resources.SampleInterval,
 		now:          time.Now,
 		logf:         log.Printf,
 		procSnapshot: iagent.SnapshotProcesses,
+		runCtx:       runCtx,
+		stopRun:      stopRun,
 	}
 }
 
 func (m *Module) Name() string           { return "resources" }
-func (m *Module) Dependencies() []string { return []string{"peers"} }
+func (m *Module) Dependencies() []string { return []string{"peers", "hostconfig"} }
 
-// Init installs the platform sampler (unless one was set) and looks up the
-// peers module's origin resolver as the session root source. A missing or
-// foreign service is not an error: the host figures still work, the
-// per-session list is just empty.
+// Init installs the platform sampler (unless one was set), opens
+// resources.db, looks up the hostconfig module as the settings reader and the
+// peers module's origin resolver as the session root source. None of them is
+// fatal: a missing root source leaves the per-session list empty, and a
+// database that does not open (or a missing settings reader) leaves the module
+// measuring only.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
 	}
+	m.openStore(c)
+	m.findSettings(c)
 	if m.roots != nil {
 		return nil
 	}
@@ -100,35 +128,76 @@ func (m *Module) Init(c *core.Core) error {
 	return nil
 }
 
+// openStore opens resources.db in the data dir. A failure is logged and
+// leaves m.store nil (measure-only); the daemon never fails for it.
+func (m *Module) openStore(c *core.Core) {
+	if m.store != nil {
+		return
+	}
+	if c.Cfg == nil || c.Cfg.DataDir == "" {
+		m.logf("[resources] no data dir: resources.db is not opened, measuring only")
+		return
+	}
+	st, err := openLeaseStore(filepath.Join(c.Cfg.DataDir, "resources.db"))
+	if err != nil {
+		m.logf("[resources] resources.db: %v: measuring only", err)
+		return
+	}
+	m.store = st
+}
+
+// findSettings looks up the hostconfig module's SettingsReader.
+func (m *Module) findSettings(c *core.Core) {
+	if m.settingsSrc != nil {
+		return
+	}
+	svc, ok := c.Registry.Get(resources.SettingsKey)
+	if !ok {
+		m.logf("[resources] service %q not registered: settings read as mode measure", resources.SettingsKey)
+		return
+	}
+	rd, ok := svc.(resources.SettingsReader)
+	if !ok {
+		m.logf("[resources] service %q is %T, not a SettingsReader: settings read as mode measure", resources.SettingsKey, svc)
+		return
+	}
+	m.settingsSrc = rd
+}
+
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/resources", m.handleGet)
 }
 
-// Start launches the sampler goroutine: one tick at once, then one per
-// interval, until Stop.
+// Start runs the boot reconcile, then launches the sampler goroutine: one
+// tick at once, then one per interval, until Stop.
 func (m *Module) Start(context.Context) error {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
+	if m.stopped {
+		return errStopped
+	}
 	if m.started {
 		return nil
 	}
 	m.started = true
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
+	m.boot() // before the sampler: its first tick sees the reconciled rows
 	m.wg.Add(1)
-	go m.run(ctx)
+	go m.run(m.runCtx)
 	return nil
 }
 
-// Stop cancels the loop and waits for the goroutine, as far as ctx (the
-// shared shutdown budget) allows.
+// errStopped is what Start answers after Stop: a stopped module is finished,
+// and a Start that returned nil would leave a daemon serving a frozen snapshot.
+var errStopped = errors.New("resources module: Start after Stop")
+
+// Stop cancels the loop and waits for the goroutine as far as ctx (the shared
+// shutdown budget) allows. It leaves resources.db open: the daemon stops
+// modules before the HTTP server drains (cmd/pdx/shutdown.go), so a request
+// still in flight needs the database; Close, which runs after the server is
+// down, closes it. Stop may be called again after a timeout and finishes the
+// job; it is idempotent, and it also keeps a later Start from running.
 func (m *Module) Stop(ctx context.Context) error {
-	m.startMu.Lock()
-	cancel := m.cancel
-	m.startMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
+	m.markStopped()
 	done := make(chan struct{})
 	go func() {
 		m.wg.Wait()
@@ -140,4 +209,31 @@ func (m *Module) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// markStopped ends the module for good, atomically with Start: after it a
+// Start answers errStopped, whichever of Stop and Close came first, and the
+// sampler's context is cancelled.
+func (m *Module) markStopped() {
+	m.startMu.Lock()
+	m.stopped = true
+	m.startMu.Unlock()
+	m.stopRun()
+}
+
+// Close closes resources.db once. The daemon calls it after the HTTP server
+// has shut down (core.Closer); the loop was joined by Stop, and a Close that
+// comes first stops it too, so it never closes the database under a sampler.
+func (m *Module) Close() error {
+	m.markStopped()
+	m.wg.Wait()
+	m.closeOnce.Do(func() {
+		if m.store == nil {
+			return
+		}
+		if err := m.store.Close(); err != nil {
+			m.logf("[resources] close resources.db: %v", err)
+		}
+	})
+	return nil
 }

@@ -83,12 +83,13 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 
 func TestModule_ImplementsCoreModule(t *testing.T) {
 	var _ core.Module = (*Module)(nil)
+	var _ core.Closer = (*Module)(nil) // CloseModules runs after the HTTP server is down
 	m := New()
 	if m.Name() != "resources" {
 		t.Fatalf("name = %q", m.Name())
 	}
-	if deps := m.Dependencies(); len(deps) != 1 || deps[0] != "peers" {
-		t.Fatalf("dependencies = %v, want [peers]", deps)
+	if deps := m.Dependencies(); len(deps) != 2 || deps[0] != "peers" || deps[1] != "hostconfig" {
+		t.Fatalf("dependencies = %v, want [peers hostconfig]", deps)
 	}
 }
 

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"sort"
 
+	"github.com/wake/purdex/internal/resources"
 	_ "modernc.org/sqlite"
 )
 
@@ -297,6 +299,51 @@ func (s *leaseStore) Waiting() ([]leaseRow, error) {
 func (s *leaseStore) Recent(n int, since int64) ([]leaseRow, error) {
 	return s.many(`SELECT `+leaseCols+` FROM resource_leases
 		WHERE state = 'ended' AND ended_at >= ? ORDER BY ended_at DESC, id LIMIT ?`, since, n)
+}
+
+// Listing returns the held rows (by grant time), the queue (in queue order)
+// and up to n rows that ended at or after since (newest first) as one view:
+// a single statement reads one snapshot, so a row that moves between the
+// lists is in exactly one of them and none is lost or shown twice. Separate
+// queries would not give that (codex attack on P1-2a-2).
+func (s *leaseStore) Listing(n int, since int64) (active, waiting, recent []leaseRow, err error) {
+	rows, err := s.many(`SELECT `+leaseCols+` FROM resource_leases WHERE state IN ('held','waiting')
+		UNION ALL
+		SELECT * FROM (SELECT `+leaseCols+` FROM resource_leases
+			WHERE state = 'ended' AND ended_at >= ? ORDER BY ended_at DESC, id LIMIT ?)`, since, n)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	active, waiting, recent = []leaseRow{}, []leaseRow{}, []leaseRow{}
+	for _, r := range rows {
+		switch r.State {
+		case resources.StateHeld:
+			active = append(active, r)
+		case resources.StateWaiting:
+			waiting = append(waiting, r)
+		default:
+			recent = append(recent, r)
+		}
+	}
+	sort.SliceStable(active, func(i, j int) bool {
+		if active[i].GrantedAt != active[j].GrantedAt {
+			return active[i].GrantedAt < active[j].GrantedAt
+		}
+		return active[i].ID < active[j].ID
+	})
+	sort.SliceStable(waiting, func(i, j int) bool {
+		if waiting[i].CreatedAt != waiting[j].CreatedAt {
+			return waiting[i].CreatedAt < waiting[j].CreatedAt
+		}
+		return waiting[i].ID < waiting[j].ID
+	})
+	sort.SliceStable(recent, func(i, j int) bool {
+		if recent[i].EndedAt != recent[j].EndedAt {
+			return recent[i].EndedAt > recent[j].EndedAt
+		}
+		return recent[i].ID < recent[j].ID
+	})
+	return active, waiting, recent, nil
 }
 
 // Prune deletes ended rows that ended before the cutoff and returns how many.
