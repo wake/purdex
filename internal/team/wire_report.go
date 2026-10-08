@@ -75,15 +75,18 @@ type Report struct {
 	CreatedAt int64      `json:"created_at"`
 }
 
-// ValidReportID checks a report id: a lower-case 8-4-4-4-12 UUID.
+// ValidReportID checks a report id: a lower-case 8-4-4-4-12 UUID of version 4
+// (the version digit is 4) and the RFC 4122 variant (the variant digit is 8,
+// 9, a or b), which is what every id generator in the repo produces. An
+// all-zero id or a version 1 id is refused.
 func ValidReportID(id string) error {
-	if !ipeers.IsUUID(id) {
-		return fmt.Errorf("id must be a lower-case UUID, got %q", id)
+	if !ipeers.IsUUID(id) || id[14] != '4' || !strings.ContainsRune("89ab", rune(id[19])) {
+		return fmt.Errorf("id must be a lower-case UUID v4, got %q", id)
 	}
 	return nil
 }
 
-// validReportReview checks one "stage=job" entry: both parts non-empty, no
+// validReportReview checks one "stage=job" entry: exactly one '=', both parts non-empty, no
 // whitespace or control character, at most 200 runes in all.
 func validReportReview(i int, e string) error {
 	what := fmt.Sprintf("reviews[%d]", i)
@@ -98,8 +101,11 @@ func validReportReview(i int, e string) error {
 			return fmt.Errorf("%s must not contain whitespace or control characters, it has %U", what, r)
 		}
 	}
-	stage, job, ok := strings.Cut(e, "=")
-	if !ok || stage == "" || job == "" {
+	if strings.Count(e, "=") != 1 {
+		return fmt.Errorf("%s must look like stage=job with exactly one '=', got %q", what, e)
+	}
+	stage, job, _ := strings.Cut(e, "=")
+	if stage == "" || job == "" {
 		return fmt.Errorf("%s must look like stage=job (both parts non-empty), got %q", what, e)
 	}
 	return nil

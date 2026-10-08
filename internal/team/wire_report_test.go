@@ -23,13 +23,23 @@ func TestValidReportKind(t *testing.T) {
 }
 
 func TestValidReportID(t *testing.T) {
-	good := []string{"3f2a9c01-aaaa-4000-8000-000000000001", "0e8f3c5a-1b2d-4c6e-9f70-a1b2c3d4e5f6"}
+	good := []string{"3f2a9c01-aaaa-4000-8000-000000000001", "0e8f3c5a-1b2d-4c6e-9f70-a1b2c3d4e5f6",
+		"0e8f3c5a-1b2d-4c6e-a000-a1b2c3d4e5f6", "0e8f3c5a-1b2d-4c6e-bfff-a1b2c3d4e5f6", "0e8f3c5a-1b2d-4c6e-8fff-a1b2c3d4e5f6"}
 	for _, id := range good {
 		if err := ValidReportID(id); err != nil {
 			t.Errorf("ValidReportID(%q) = %v, want nil", id, err)
 		}
 	}
-	bad := []string{"", "abc", "3F2A9C01-AAAA-4000-8000-000000000001", " 3f2a9c01-aaaa-4000-8000-000000000001",
+	bad := []string{"", "abc",
+		"00000000-0000-0000-0000-000000000000",   // all zero: no version, no variant
+		"3f2a9c01-aaaa-1000-8000-000000000001",   // version 1
+		"3f2a9c01-aaaa-5000-8000-000000000001",   // version 5
+		"3f2a9c01-aaaa-4000-0000-000000000001",   // variant 0 (NCS)
+		"3f2a9c01-aaaa-4000-c000-000000000001",   // variant c (Microsoft)
+		"3f2a9c01-aaaa-4000-f000-000000000001",   // variant f (reserved)
+		"3f2a9c01-aaaa-4000-8000-00000000000a\n", // trailing newline
+		"ffffffff-ffff-ffff-ffff-ffffffffffff",   // all ones
+		"3F2A9C01-AAAA-4000-8000-000000000001", " 3f2a9c01-aaaa-4000-8000-000000000001",
 		"3f2a9c01aaaa40008000000000000001", "3f2a9c01-aaaa-4000-8000-00000000000g", "3f2a9c01-aaaa-4000-8000-0000000000012"}
 	for _, id := range bad {
 		if err := ValidReportID(id); err == nil {
@@ -200,7 +210,7 @@ func TestValidateReport_PerKindRequiredFields(t *testing.T) {
 
 	t.Run("reviews entries", func(t *testing.T) {
 		ok := [][]string{
-			{"R1=job"}, {"R1=a=b"}, {"R1=j1", "R2=j2"}, {"R1=" + strings.Repeat("j", 197)}, tenReviews(),
+			{"R1=job"}, {"R1=j1", "R2=j2"}, {"R1=" + strings.Repeat("j", 197)}, tenReviews(),
 		}
 		for _, rv := range ok {
 			r := goodReport(ReportReady)
@@ -211,6 +221,10 @@ func TestValidateReport_PerKindRequiredFields(t *testing.T) {
 		}
 		bad := map[string][]string{
 			"no equals":      {"R1"},
+			"two equals":     {"R1=a=b"},
+			"equals at end":  {"R1=job="},
+			"only equals":    {"="},
+			"double equals":  {"R1==job"},
 			"empty stage":    {"=job"},
 			"empty job":      {"R1="},
 			"space in stage": {"R 1=job"},
