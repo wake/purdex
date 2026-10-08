@@ -14,7 +14,7 @@ import (
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/prompts.js", "skills/pdx-team/SKILL.md", "skills/pdx-lease/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/lease.js", "hooks/prompts.js", "skills/pdx-team/SKILL.md", "skills/pdx-lease/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
