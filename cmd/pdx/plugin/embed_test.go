@@ -515,6 +515,7 @@ func TestSkill_LeaseMentionsRun(t *testing.T) {
 		"`--kind`、`--weight`、`--wait`、`--client-id`、`--config`）都要放在 `--` 之前", // flags before the separator
 		"pdx lease run --kind build -- pnpm run build --wait 2m",             // the wrong example is shown as wrong
 		"**12**", "**126**", "**127**", "以 `pdx lease:` 開頭的一行", // pdx's own exit codes
+		"Purdex mod 已經替你處理前景的重 Bash", "你不必自己包 `pdx lease run`", "`advise` 期間 mod 只記錄不擋", // Task 2.4: the mod covers foreground Bash
 		"完整 vitest 的名額規定照舊",                               // the coordinator-slot rule stays until P2 (Task 2.4)
 		"sh -c 'cd spa && npx vitest run --maxWorkers=3'", // runs from the repo root
 	} {

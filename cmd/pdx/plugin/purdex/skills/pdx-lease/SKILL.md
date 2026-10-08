@@ -1,13 +1,19 @@
 ---
 name: pdx-lease
-description: 主機資源租約。要跑重指令前使用（完整測試 vitest run／go test ./...、build、全專案 lint），或看到 pdx lease 的等待訊息時。說明哪些指令算重、怎麼用 pdx lease run 排隊、等待時不要做什麼，以及為什麼不要在子 shell 裡直接 pdx lease acquire。
+description: 主機資源租約。要跑重指令前使用（完整測試 vitest run／go test ./...、build、全專案 lint），或看到 pdx lease 的等待訊息時。說明哪些指令算重、mod 會自動處理前景的重 Bash、腳本裡怎麼用 pdx lease run 排隊、等待時不要做什麼，以及為什麼不要在子 shell 裡直接 pdx lease acquire。
 ---
 
 # pdx-lease — 主機資源租約
 
 這台主機的 CPU 與記憶體是共用的：好幾個 session 同時跑重指令會把主機壓滿。重指令先跟 daemon 申請「租約」，主機有空就立刻放行，忙就排隊。這是建議不是封鎖：排太久會放行，daemon 連不上也會直接執行。
 
-## 哪些指令算重（要包 `pdx lease run`）
+## Purdex mod 已經替你處理前景的重 Bash
+
+在 Claude Code 裡直接下的**前景** Bash 重指令（下表那些），Purdex mod 會自動替你向 daemon 申請租約、等到有空才執行、結束後歸還，**你不必自己包 `pdx lease run`**。完整 vitest 沒帶 `--maxWorkers` 時，mod 會替你加上 `--maxWorkers=3`，並在 tool 的 context 說明實際執行的指令；排隊超過 1 秒也會告訴你「先等了 N 秒主機資源，不是卡住」。已經包了 `pdx lease run` 的指令、背景執行（`run_in_background`）的指令，mod 不管。
+
+只有**腳本、背景工作、mod 管不到的地方**（例如你寫的 shell 腳本裡的重指令）才需要自己用下面的 `pdx lease run`。主機模式是 `advise` 時，mod 只記錄「如果是 lease 模式會不會排隊」，一律立刻放行。
+
+## 哪些指令算重
 
 | kind | 指令 | 權重 |
 |---|---|---|
@@ -18,9 +24,9 @@ description: 主機資源租約。要跑重指令前使用（完整測試 vitest
 
 只跑受影響檔案的測試（有檔名、`-run`、`-t`）不算，不用包。完整 vitest 請自己帶 `--maxWorkers=3`。
 
-**完整 vitest 的名額規定照舊**：在 mod 自動攔截上線之前（P2），完整 vitest 仍然只在 merge 前跑、而且要先向統籌（lead）取得名額；取得名額之後，再用下面的 `pdx lease run` 執行。租約不取代這條規定，只是讓漏掉的人不會把主機壓垮。
+**完整 vitest 的名額規定照舊**：直到 lead 宣布主機切到 `lease` 模式（mod 真的會排隊）為止，完整 vitest 仍然只在 merge 前跑、而且要先向統籌（lead）取得名額；之後 lead 會更新 brief，名額規定才退役。`advise` 期間 mod 只記錄不擋，租約不取代這條規定，只是讓漏掉的人不會把主機壓垮。
 
-## 怎麼用
+## 腳本裡怎麼用（mod 管不到的地方）
 
 - `pdx lease run --kind <kind> -- <指令…>`，例如 `pdx lease run --kind test-full -- sh -c 'cd spa && npx vitest run --maxWorkers=3'`。不在上表的重指令用 `--weight <1-200>` 自己估一個佔幾成（100＝整台機器）。
 - **`pdx lease run` 自己的旗標（`--kind`、`--weight`、`--wait`、`--client-id`、`--config`）都要放在 `--` 之前**；`--` 之後整段都是你的指令，連旗標都會原樣交給它。對：`pdx lease run --kind build --wait 2m -- pnpm run build`；錯：`pdx lease run --kind build -- pnpm run build --wait 2m`（`--wait` 會被交給 pnpm）。
