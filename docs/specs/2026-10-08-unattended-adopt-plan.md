@@ -524,7 +524,7 @@ type UnattendedStore interface {
 
 **Interfaces.**
 - A second button `data-testid="unattended-list"` (Phosphor `CaretDown`) opens `UnattendedPanel` anchored on the pair.
-- `UnattendedPanel` (`FloatingPanel`, `placement="below"`, width 360): on open, `getUnattended(hostId)` (first page) for every reachable shown host; rows merged newest first: `<host>：<session> · <kind> · <time>` (`approvalSessionLabel`, `approvalKindLabel`, local `HH:mm`); empty → `unattended.panel.empty`; a host whose GET failed → one line naming it.
+- `UnattendedPanel` (`FloatingPanel`, `placement="below"`, width 360): on open, `getUnattended(hostId)` (first page) for every reachable shown host; rows merged newest first: `<host>：<session> · <kind> · <time>` (`approvalSessionLabel`, `approvalKindLabel`, the time of `decided_at`, else `created_at`: `HH:mm` today, `M/D HH:mm` on another day); empty → `unattended.panel.empty`; a host whose GET failed → one line naming it. A shown host that cannot be reached gets its unreachable line and no GET; when every shown host is unreachable the empty state is not shown; each host has 10 s to answer and commits on its own (rulings 39–41).
 - **「顯示更多」** (`data-testid="unattended-more"`): shown while any host answered `truncated`; a click fetches the next page of each such host (`before = next_before`) and merges it in order. It fetches afresh each time the panel opens.
 - Locale keys: `unattended.list`, `panel.title`, `panel.empty`, `panel.since`, `panel.more`, `panel.host_failed`.
 
@@ -1259,7 +1259,7 @@ No other new behaviour of Claude Code is relied on: an approved request needs no
 8. **無人值守通過 lead 申請時的 member 上限**＝min(lead 申請的數字, 3)，沒指定的申請視為 3；允許的根目錄照申請。（D-U24-7／U25）
 9. **不在範圍、照常等人**：worker 的工具權限核准、agent 的 AskUserQuestion 與權限詢問。（U23）
 10. **關掉**：只是不再自動核准；已經在等的申請照樣等人；關掉時**不會**自動跳出清單。（D-U23-6；決定 19）
-11. **「▾」期間自動通過清單**：只在點「▾」時打開。列出「最近一次打開以來」被自動核准的申請：主機、session 名稱、種類（lead 申請／接力申請／納入申請）、時間（時:分），多台主機合併、新的在上。每台一次讀 50 筆，還有更多時出現「顯示更多」；某台讀取失敗會寫出那台的名字；沒有任何一筆時顯示空清單的說明。下次再「打開」開關時，清單從新的打開時間重新算起。（D-U23-6；OQ3；決定 17）
+11. **「▾」無人值守期間自動通過的申請**：只在點「▾」時打開。列出「最近一次打開以來」被自動核准的申請：主機、session 名稱、種類（lead 申請／接力申請／納入申請）、時間（今天顯示 時:分，其他天顯示 月/日 時:分），多台主機合併、新的在上。每台一次讀 50 筆，還有更多時出現「顯示更多」；某台讀取失敗會寫出那台的名字；顯示中但連不上的主機會寫「無法連線，可能仍在自動通過」；沒有任何一筆時才顯示「自這次開啟無人值守以來，沒有自動通過的申請」。下次再「打開」開關時，清單從新的打開時間重新算起。（D-U23-6；OQ3；決定 17）
 12. **開關會留著**：daemon 重啟後保持；每台主機各自一份；不跟 Profile Sync 同步。（D-U23-7）
 13. **所有視窗同步**：任一視窗或其他裝置按下，所有視窗的按鈕立刻跟著變。（D-U23-6）
 14. **誰能打開**：`pdx` 沒有打開無人值守的指令，skill 也禁止 agent 去開；但同一個使用者帳號下的 agent 如果拿 token 直接呼叫 daemon，技術上仍能打開——這時每個視窗的按鈕都會變成「無人值守中」，daemon log 記下是哪個 App 標籤、從哪個位址開的。（D-U23-2；deviation 6）
