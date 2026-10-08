@@ -281,3 +281,91 @@ func TestCreateSelfRelayApproved_MisuseWritesNothing(t *testing.T) {
 		})
 	}
 }
+
+// closedAt stores request id closed state at by.
+func closedAt(t *testing.T, s *Store, id string, at int64, by team.Client, state team.State) {
+	t.Helper()
+	if _, _, _, err := s.Create(openApproval(id, "sid-"+id, at-100), "h-"+id); err != nil {
+		t.Fatal(err)
+	}
+	if _, won, err := s.CloseIfOpen(id, Close{State: state, DecidedAt: at, DecidedBy: &by}); err != nil || !won {
+		t.Fatalf("close %s: won=%v err=%v", id, won, err)
+	}
+}
+
+// ids is the request ids of rows, in order.
+func ids(rows []team.Approval) []string {
+	out := []string{}
+	for _, a := range rows {
+		out = append(out, a.ID)
+	}
+	return out
+}
+
+// listPage calls ListAutoApproved and checks the page's ids and truncated.
+func listPage(t *testing.T, s *Store, since, before int64, limit int, want []string, wantTruncated bool) {
+	t.Helper()
+	rows, truncated, err := s.ListAutoApproved(since, before, limit)
+	if err != nil || rows == nil || !reflect.DeepEqual(ids(rows), want) || truncated != wantTruncated {
+		t.Fatalf("ListAutoApproved(since %d, before %d, limit %d) = %v (nil %v) truncated=%v err=%v; want %v truncated=%v",
+			since, before, limit, ids(rows), rows == nil, truncated, err, want, wantTruncated)
+	}
+}
+
+// D-U23-6 and decision 17: the list holds only rows approved by the daemon
+// itself at or after since (the last switch-on) — not a click's approval,
+// not one from before since, not a row closed any other way — newest
+// first; since 0 (never on) is empty, never nil. Pages of 2 over 5 rows
+// walk every row exactly once. Mutation gate: drop decided_at >= since → red.
+func TestListAutoApproved_SinceKindAndCursor(t *testing.T) {
+	s := openTestStore(t)
+	app := team.Client{Kind: "app", Label: "Purdex.app @ air26"}
+	closedAt(t, s, "by-app", 2000, app, team.StateApproved)
+	closedAt(t, s, "before-since", 900, team.UnattendedClient(), team.StateApproved)
+	closedAt(t, s, "at-since", 1000, team.UnattendedClient(), team.StateApproved)
+	closedAt(t, s, "after-since", 2100, team.UnattendedClient(), team.StateApproved)
+	closedAt(t, s, "denied", 2200, team.UnattendedClient(), team.StateDenied)
+	listPage(t, s, 1000, 0, 50, []string{"after-since", "at-since"}, false)
+	listPage(t, s, 0, 0, 50, []string{}, false)
+	listPage(t, s, 5000, 0, 50, []string{}, false)
+
+	s = openTestStore(t)
+	for i, id := range []string{"r1", "r2", "r3", "r4", "r5"} {
+		closedAt(t, s, id, int64(3000+100*i), team.UnattendedClient(), team.StateApproved)
+	}
+	var walked []string
+	before := int64(0)
+	for range 5 {
+		rows, truncated, err := s.ListAutoApproved(1, before, 2)
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("page before %d: %v err=%v", before, ids(rows), err)
+		}
+		walked = append(walked, ids(rows)...)
+		if !truncated {
+			break
+		}
+		before = rows[len(rows)-1].DecidedAt
+	}
+	if want := []string{"r5", "r4", "r3", "r2", "r1"}; !reflect.DeepEqual(walked, want) {
+		t.Fatalf("walked %v, want %v once each", walked, want)
+	}
+}
+
+// Decision 17: a page never ends inside one millisecond. When the row after
+// the limit shares the last row's decided_at, the page takes every row of
+// that millisecond (by id), so the next cursor (before = that decided_at)
+// skips nothing and repeats nothing; truncated says whether older rows
+// remain. Mutation gate: end a page at exactly limit → red.
+func TestListAutoApproved_PageNeverSplitsAMillisecond(t *testing.T) {
+	s := openTestStore(t)
+	for id, at := range map[string]int64{"a": 500, "b": 400, "c": 300, "d": 300, "e": 300, "f": 200} {
+		closedAt(t, s, id, at, team.UnattendedClient(), team.StateApproved)
+	}
+	listPage(t, s, 1, 0, 3, []string{"a", "b", "c", "d", "e"}, true)
+	listPage(t, s, 1, 300, 3, []string{"f"}, false)
+	// The boundary falls between milliseconds, then inside one.
+	listPage(t, s, 1, 0, 2, []string{"a", "b"}, true)
+	listPage(t, s, 1, 400, 2, []string{"c", "d", "e"}, true)
+	// The extension reaches the oldest row: nothing is left.
+	listPage(t, s, 250, 400, 2, []string{"c", "d", "e"}, false)
+}
