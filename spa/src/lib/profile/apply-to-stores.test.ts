@@ -885,6 +885,23 @@ describe('applySectionToStores — workspaces', () => {
     expect(Object.keys(useWorkspaceSettingsStore.getState().workspaces)).toEqual(['wb'])
   })
 
+  it('a removed workspace\'s settings tab goes with it even when it lives in another workspace (#1268)', async () => {
+    seedTabWorld()
+    const settingsLeaf = (id: string, workspaceId: string): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind: 'settings', scope: { workspaceId } } } })
+    useTabStore.setState({
+      tabs: { ...useTabStore.getState().tabs, sa: tab('sa', settingsLeaf('psa', 'wa')), sb: tab('sb', settingsLeaf('psb', 'wb')) },
+      tabOrder: [...useTabStore.getState().tabOrder, 'sa', 'sb'],
+      activeTabId: 'sa',
+    })
+    useWorkspaceStore.setState({ workspaces: [ws('wa', ['a1', 'a2'], 'a2'), ws('wb', ['b1', 'sa', 'sb'], 'sa')], activeWorkspaceId: 'wb' })
+    await applySectionToStores('workspaces', { order: ['wb'], workspaces: { wb: { name: 'WB' } } }, ctx)
+    const t = useTabStore.getState()
+    expect(Object.keys(t.tabs).sort()).toEqual(['b1', 'sb', 'solo'])
+    expect(t.tabOrder).not.toContain('sa')
+    expect(useWorkspaceStore.getState().workspaces[0]).toMatchObject({ id: 'wb', tabs: ['b1', 'sb'], activeTabId: 'b1' })
+    expect(t.activeTabId).toBe('b1')
+  })
+
   it('a workspace whose id cannot sync is device-local: an apply keeps it, its tabs, its history and its scoped settings', async () => {
     seedTabWorld()
     useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, x1: tab('x1') }, tabOrder: [...useTabStore.getState().tabOrder, 'x1'], activeTabId: 'x1', visitHistory: ['x1', 'b1'] })

@@ -48,6 +48,7 @@ import type { LocaleDef } from '../locale-registry'
 import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
 import { applySettings, applyTabs, applyWorkspaces, isWellFormedSection, settingsFromWire, tabsFromWire, upcastLegacySettings, upcastLegacyTabs } from './applier'
+import { getPrimaryPane } from '../pane-tree'
 import { identityOfSync } from './host-identity'
 import { hashSection } from './hash'
 import { masterWorkspaceIds, readMasterWorld, writeMasterWorld } from './master-world'
@@ -304,11 +305,25 @@ async function applyWorkspacesSection(payload: unknown): Promise<ApplyOutcome> {
       const { next, removedWorkspaceIds } = applyWorkspaces({ workspaces: local.workspaces, activeWorkspaceId: local.activeWorkspaceId }, payload as WorkspacesPayload)
       // A removed workspace takes its tabs with it; left in the record they would turn into standalone tabs.
       const gone = new Set(local.workspaces.filter((w) => removedWorkspaceIds.includes(w.id)).flatMap((w) => w.tabs))
+      // So does a settings tab about it, wherever it lives (one may have been dragged into another workspace): it is
+      // about a workspace that is going away. What the interactive delete does (WorkspaceSettingsPage).
+      if (removedWorkspaceIds.length > 0) {
+        for (const [id, tab] of Object.entries(local.tabs)) {
+          const content = getPrimaryPane(tab.layout).content
+          if (content.kind === 'settings' && content.scope !== 'global' && removedWorkspaceIds.includes(content.scope.workspaceId)) gone.add(id)
+        }
+      }
       const tabs: Record<string, Tab> = {}
       for (const [id, tab] of Object.entries(local.tabs)) {
         if (!gone.has(id)) tabs[id] = tab
       }
-      const written = writeMasterWorld({ tabs, workspaces: next.workspaces, activeWorkspaceId: next.activeWorkspaceId }, () => {
+      // No kept workspace keeps a pointer at a tab that went.
+      const workspaces = next.workspaces.map((w) => {
+        if (!w.tabs.some((id) => gone.has(id))) return w
+        const kept = w.tabs.filter((id) => !gone.has(id))
+        return { ...w, tabs: kept, activeTabId: w.activeTabId !== null && gone.has(w.activeTabId) ? (kept[0] ?? null) : w.activeTabId }
+      })
+      const written = writeMasterWorld({ tabs, workspaces, activeWorkspaceId: next.activeWorkspaceId }, () => {
         // What `removeWorkspace` does besides dropping the row. On the parked path too: the scoped settings are a
         // live store whatever is on screen.
         for (const id of removedWorkspaceIds) useWorkspaceSettingsStore.getState().clearWorkspace(id)
