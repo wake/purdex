@@ -15,16 +15,29 @@ import (
 // Newer-hook-wins is allowed only at those two edges: a root cc frame's
 // UserPromptSubmit that made it running, and its Stop that made it idle. Such
 // a hook is remembered as an edge, and applyModOverlay shows its status
-// (source hook) until the mod reports something that moves the light after it
+// (source hook) until the mod reports something that moves the light and
+// happened after it
 // (lights.StreamState.StatusEventAt) or hookEdgeTTL passes. Every other hook
 // stays below the mod: a Notification or a PermissionRequest would put a
 // waiting back after the mod has seen the approval (spec §12.1 item 16), and a
 // detail-only hook says nothing about the turn.
+//
+// Time basis. The edge's time is when the hook reached the daemon; the mod's
+// is when its event happened (the event's own at, the mod's Date.now(), clamped
+// to its arrival), not when it arrived. Mod events reach the daemon about 1.2 s
+// late and up to about 3 s (alpha.609), so a turn.start that happened before a
+// Stop is received after it, and the receive order would call that "the mod
+// caught up" and reveal a running that is already over. The mod reaches the
+// daemon only through a Unix socket on the same host, so both stamps come off
+// one wall clock and can be compared. Inside one stream events stay ordered by
+// seq alone.
 
 // hookEdgeTTL bounds an edge whose turn the mod never confirms (a slash
 // command submits a prompt and starts no turn): past it the pane goes back to
-// the mod's light.
-const hookEdgeTTL = 3 * time.Second
+// the mod's light. Mod events arrive up to about 3 s late, so it is 5 s; a mod
+// that is later than that shows its old light until its events land (or its
+// stream goes stale).
+const hookEdgeTTL = 5 * time.Second
 
 // hookEdge is one frame's last turn-boundary hook: the status it set, when the
 // daemon applied it, and the conversation it belongs to.
@@ -38,8 +51,8 @@ type hookEdge struct {
 // (hooks of one process are applied out of order now and then), the frame's
 // last SessionStart arrived at or after the hook (hookEdgeClearedAt: a Stop of
 // the old conversation noted after the new one began must not leave an edge in
-// it), or the mod has already reported a light event at or after the hook's
-// arrival: it caught up before the edge could be noted, and the event that did
+// it), or the mod has already reported a light event that happened at or after
+// the hook's arrival: it caught up before the edge could be noted, and the event that did
 // it has already marked the pane dirty.
 func (m *Module) setHookEdge(frameID string, e hookEdge) {
 	if frameID == "" {
@@ -133,8 +146,9 @@ func (m *Module) noteHookEdge(req EventRequest, lifecycle agentpkg.LifecycleEven
 }
 
 // wins reports whether e still decides the light of a pane showing a live
-// stream at now: it belongs to the conversation sid, it is newer than the last
-// event that moved the stream's light (statusEventAt), and it has not run out.
+// stream at now: it belongs to the conversation sid, it arrived after the last
+// event that moved the stream's light happened (statusEventAt), and it has not
+// run out.
 func (e hookEdge) wins(sid string, statusEventAt, now time.Time) bool {
 	return e.sid == sid && e.at.After(statusEventAt) && now.Sub(e.at) < hookEdgeTTL
 }
@@ -154,16 +168,18 @@ func (m *Module) expireHookEdgesLocked(now time.Time, dirty map[string]string) {
 	}
 }
 
-// edgeSupersededLocked reports whether sid has an edge that the mod event just
-// applied at now (st.StatusEventAt) takes over. The light's status may be the
-// same, but its source changes from hook to mod and the SPA is told. modMu
-// must be held.
-func (m *Module) edgeSupersededLocked(sid string, statusEventAt, now time.Time) bool {
-	if !statusEventAt.Equal(now) {
+// edgeSupersededLocked reports whether sid has a live edge that the mod event
+// just applied takes over: the event moved the stream's StatusEventAt (from
+// prev to cur) and it happened at or after the hook arrived (the opposite of
+// hookEdge.wins). An event that happened before the hook, however late it
+// arrived, leaves the edge in charge. The light's status may be the same, but
+// its source changes from hook to mod and the SPA is told. modMu must be held.
+func (m *Module) edgeSupersededLocked(sid string, prev, cur, now time.Time) bool {
+	if !cur.After(prev) {
 		return false
 	}
 	for _, e := range m.hookEdge {
-		if e.sid == sid && e.at.Before(now) && now.Sub(e.at) < hookEdgeTTL {
+		if e.sid == sid && !cur.Before(e.at) && now.Sub(e.at) < hookEdgeTTL {
 			return true
 		}
 	}

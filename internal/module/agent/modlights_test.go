@@ -49,7 +49,10 @@ func feedMod(m *Module, stream string, evs ...modevents.Event) {
 			ev.Seq = int64(i + 1)
 		}
 		if ev.At == 0 {
-			ev.At = ev.Seq * 1000
+			// The event happened when it arrives, as far as the clock goes
+			// (StatusEventAt takes the event's at, hookedge.go); a test that
+			// wants a late event sets At itself.
+			ev.At = m.modClock().UnixMilli()
 		}
 		m.onModEvent(modevents.StreamInfo{Stream: stream, SID: ev.SID}, ev)
 	}

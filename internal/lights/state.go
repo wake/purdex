@@ -60,8 +60,12 @@ type StreamState struct {
 	Ended       bool
 	Dots        map[string]Dot // keyed by agent id
 	Background  Background
-	// StatusEventAt is the daemon receive time of the last event that moved,
-	// or could have moved, the light (see apply). A heartbeat, usage,
+	// StatusEventAt is when the last event that moved, or could have moved,
+	// the light happened: the event's own at (the mod's Date.now()), clamped
+	// to the time the daemon received it, never going back (see Apply and
+	// apply). It is the event time and not the receive time because mod events
+	// reach the daemon a second or more late, and a hook that arrived in
+	// between must not read as older than them. A heartbeat, usage,
 	// background or agent.spawn does not move it, so a hook edge compared
 	// against it is not handed back by a mere beat. Zero until the first.
 	StatusEventAt time.Time
@@ -88,8 +92,11 @@ var activeAgent = map[string]bool{"pending": true, "running": true, "waiting": t
 // Apply applies one event received at now. It reports whether Status(),
 // DotList(), Background or SID changed; LastEvent always moves and is not
 // a change. StatusEventAt moves only with the events apply says touch the
-// light, and with a heartbeat that changed Status(). Data that does not decode leaves everything but SID, LastEvent and
-// Ended as it was.
+// light, and with a heartbeat that changed Status(); it takes the event's at,
+// or now when at is missing or later than now, and never moves back. The mod
+// reaches the daemon only through a Unix socket on the same host, so at and now
+// come off one wall clock. Data that does not decode leaves everything but SID,
+// LastEvent and Ended as it was.
 func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	status, bg, sid := s.Status(), s.Background, s.SID
 	dots := maps.Clone(s.Dots)
@@ -105,7 +112,15 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 		touched = true
 	}
 	if touched {
-		s.StatusEventAt = now
+		at := now
+		if ev.At > 0 {
+			if t := time.UnixMilli(ev.At); t.Before(now) {
+				at = t
+			}
+		}
+		if at.After(s.StatusEventAt) {
+			s.StatusEventAt = at
+		}
 	}
 
 	return status != s.Status() || bg != s.Background || sid != s.SID || !maps.Equal(dots, s.Dots)

@@ -188,6 +188,7 @@ func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
 		m.modStreams[info.Stream] = st
 	}
 	prevSID := st.SID
+	prevEventAt := st.StatusEventAt
 	changed := st.Apply(ev, now)
 	if prevSID != "" && prevSID != st.SID {
 		// A /clear or /resume moved the stream to a new conversation: the
@@ -211,7 +212,7 @@ func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
 			m.repointSIDLocked(st.SID)
 			m.markDirtyLocked(st.SID, ev.Type)
 		}
-		if changed || m.edgeSupersededLocked(st.SID, st.StatusEventAt, now) {
+		if changed || m.edgeSupersededLocked(st.SID, prevEventAt, st.StatusEventAt, now) {
 			m.markDirtyLocked(st.SID, ev.Type)
 		}
 	}
@@ -299,7 +300,7 @@ type modLight struct {
 	status        agentpkg.Status
 	background    lights.Background
 	dots          []lights.Dot
-	statusEventAt time.Time // when the stream's light last moved, for the hook edge
+	statusEventAt time.Time // when the event that last moved the stream's light happened, for the hook edge
 }
 
 // applyModOverlay replaces, in place, the light of every projection whose
