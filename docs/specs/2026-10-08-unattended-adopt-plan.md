@@ -1471,7 +1471,7 @@ The adopt / release path then runs in its own order, after U23's SPA (PU-2a…2d
 | Write | Where (at `286ab4af`) |
 |---|---|
 | a team is created (a lead approve, on every path: click, create-time, switch-on sweep, tick reconciliation, boot) | `afterApproved` (`unattended.go:77`), reached from the winner point `announceClosed` (`module.go:446-452`); the team row is inserted inside the approve (`closeLeadApprovedIn`, `team_store.go:316-350`). `self_relay` approvals pass here too; the hash gate makes them free. |
-| a spawned member joins | `spawn_register.go:144` (after `InsertMember`) |
+| a spawned member joins | `spawn_register.go` `spawnFinish` (after `InsertMember` **and** the title claim) |
 | a spawned member is killed | `team_handler.go:171` (after `MarkMemberKilled` wins) |
 | a team ends; a member is marked gone; the liveness tick | `sweeper.go:152` (`EndTeam`), `:235` (`MarkMemberGone`), the `checkLive` tick (`:52`) |
 | a relay's `cleared` moves the lead's or a member's session | `relay_report.go` `afterReport` (`:170-176`; the move itself is `relay_store_report.go:89-93`) |
@@ -1495,6 +1495,13 @@ The adopt / release path then runs in its own order, after U23's SPA (PU-2a…2d
 **Mutation gates:** include `killed` members → `…AreOut` red; broadcast from the decide handler instead of `afterApproved` → `…OnEveryLeadApprovePath` red (the create-time / sweep / boot cases); broadcast on every tick → `…OnlyWhenItChanged` red.
 
 **Size.** ≈ 560 lines, 10 files. **Cut point** as PL-1f: the tick diff and the call sites outside `afterApproved` move to PL-1f′2. **Deploy.** Daemon alone (the coordinator; "U24 display batch"). **Coordination:** `internal/module/team` is also member β's line (U23); β's remaining work (PU-2a…2d) is SPA, but the call sites are confirmed with β before the PR opens.
+
+**Review fold-in (codex R1 + attacker + critic):**
+- *Spawn announces after the title claim* (R1-1): the roster's title comes from the title store, so `spawnFinish` signals once the claim has run (won or failed), not right after `InsertMember`; `TestRoster_SpawnAnnouncesTheClaimedTitle`.
+- *A snapshot that cannot be built* (A-1) sends nothing and keeps the subscriber, but marks the publisher unsent, so the next successful sync (the next signal, at the latest the 10 s liveness tick) broadcasts the full roster as `changed`; the hash gate no longer hides an unchanged roster from a subscriber that never got it; `TestRoster_SnapshotBuildFailureIsRepairedByTheNextSync`.
+- *`rosterChanged` is an async coalescing signal* (A-2a): a non-blocking send on a one-slot channel, answered by one publisher goroutine that Start launches and Stop joins (`roster_publish.go`), so no registry or naming I/O runs on the caller's thread — most callers hold `createMu` (`afterApproved`); `TestRosterChanged_NeverBlocks`, `TestRosterPublisher_CoalescesBursts`, `TestRosterPublisher_StopsWithTheModule`.
+- *One registry read per build* (A-2b): `buildRoster` collects every lead and active-member session id and resolves them with the new `ResolveOriginsBySession` (one `ReadRegistry`, the single form's filter), instead of one read per session; `TestRoster_BuildResolvesOncePerBuild`.
+- *A-3* (file responsibilities) was rejected by the critic as a finding, but the split below answers it anyway: PL-1f′ ships as two stacked PRs — **A** (wire types, `roster.go` = materialization, the route, `ResolveOriginsBySession`) and **B** (`roster_publish.go` = the signal, the publisher, the snapshot, all call sites).
 
 ### PL-1f″ — the roster's adopt / release delta (new, last PR of batch A)
 

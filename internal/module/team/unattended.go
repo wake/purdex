@@ -72,9 +72,11 @@ func teamNote(a team.Approval) string {
 // afterApproved runs once for every close that won as approved, on every
 // path — a click, create-time, the switch-on sweep, the tick, boot
 // (announceClosed: the plan's one winner point). Later side effects of an
-// approval (PL-1c's adopt notice, PL-1f's roster event) hang here, never
-// on a route. Nothing yet.
-func (m *Module) afterApproved(team.Approval) {}
+// approval (PL-1c's adopt notice) hang here, never on a route. Today it
+// announces the roster: a lead approve creates a team inside the approve
+// (closeLeadApprovedIn), and the other kinds leave the roster as it was,
+// which rosterChanged's hash gate makes free.
+func (m *Module) afterApproved(team.Approval) { m.rosterChanged() }
 
 // unattendedOn reads the U23 switch. Every caller holds createMu, so a
 // create that reads it off committed before a switch-on's sweep, which

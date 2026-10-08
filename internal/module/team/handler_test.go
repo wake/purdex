@@ -301,6 +301,9 @@ type fakeTitles struct {
 	has    map[string]bool // sessions that currently hold a title
 	fail   bool            // meta.db is down: every Move errors
 	claims [][2]string     // Claim(session, title): a spawned member's title
+	// onClaim, when set, runs first in Claim (the roster's tests flush the
+	// publisher there and then write the title the way the store does).
+	onClaim func(sid, label string)
 }
 
 func (f *fakeTitles) Move(from, to string, _ time.Time) (bool, error) {
@@ -417,6 +420,9 @@ func (f *fixture) events() []team.EventValue {
 			var ev core.HostEvent
 			if err := json.Unmarshal(raw, &ev); err != nil {
 				f.t.Fatalf("decode HostEvent: %v", err)
+			}
+			if ev.Type == team.RosterEventType {
+				continue // the roster's tests read their own subscriber
 			}
 			if ev.Type != team.EventType || ev.Session != "" {
 				f.t.Fatalf("event = %+v", ev)

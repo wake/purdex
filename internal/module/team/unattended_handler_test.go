@@ -82,6 +82,9 @@ func (f *fixture) streamOf() (ops []string, states []team.UnattendedState) {
 			if json.Unmarshal(raw, &ev) != nil || json.Unmarshal([]byte(ev.Value), &v) != nil {
 				f.t.Fatalf("decode %s", raw)
 			}
+			if ev.Type == team.RosterEventType {
+				continue // the roster's tests read their own subscriber
+			}
 			ops = append(ops, ev.Type+" "+v.Op)
 			if ev.Type == team.UnattendedEventType {
 				states = append(states, v.State)

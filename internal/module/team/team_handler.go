@@ -176,6 +176,7 @@ func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (
 	if killed {
 		m.logf("[team] member %s (%s) of team %s killed", mr.Ref, mr.SessionID, t.ID)
 		mr.State = team.MemberKilled
+		m.rosterChanged()
 		return mr, true
 	}
 	rows, err := m.store.MembersOf(t.ID)

@@ -153,6 +153,10 @@ func (m *Module) spawnFinish(op spawnRow, o *team.Origin) {
 			m.logf("[team] spawn %s: title %q for %s: %v", op.ID, op.Title, op.SessionID, err)
 		}
 	}
+	// The member is on the roster from the insert, but its title comes from
+	// the title store: announce once the claim has run, whether it won or
+	// failed, so the roster sent carries the member as it will be seen.
+	m.rosterChanged()
 	won, err := m.store.AdvanceSpawnOp(op.ID, team.StepRegistered, spawnUpdate{Step: team.StepRegistered, State: team.SpawnDone, At: now})
 	if err != nil {
 		m.abortSpawn(op.ID, op.TmuxID, op.TmuxInstance, err)

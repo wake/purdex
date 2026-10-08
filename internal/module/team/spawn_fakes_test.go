@@ -62,6 +62,12 @@ func (f *fakeFrames) LiveSessions(context.Context, string) ([]agent.TerminalSess
 
 func (f *fakeTitles) Claim(sid, label string, _ time.Time) (store.PeerLabel, error) {
 	f.mu.Lock()
+	hook := f.onClaim
+	f.mu.Unlock()
+	if hook != nil {
+		hook(sid, label) // before the claim lands, outside the lock
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.claims = append(f.claims, [2]string{sid, label})
 	return store.PeerLabel{SessionID: sid, Label: label}, nil

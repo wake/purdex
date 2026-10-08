@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -124,6 +125,22 @@ type Module struct {
 	// store write happens under it: each broadcast follows its own write.
 	eventMu sync.Mutex
 
+	// rosterMu orders the team.roster stream (plan PL-1f′): held across
+	// rosterSync's read + send and across sendRosterSnapshot's, so a
+	// snapshot and a changed never interleave. lastRosterHash is the hash
+	// of the roster JSON last sent as changed, valid when rosterSent
+	// (a snapshot that could not be built clears it). It is taken by the
+	// publisher and by subscribe, never under createMu; no store write
+	// happens under it.
+	rosterMu       sync.Mutex
+	lastRosterHash [sha256.Size]byte
+	rosterSent     bool
+	// rosterSig is the publisher's one-slot signal (rosterChanged);
+	// rosterBarrier is the test seam runRoster serves (nothing in
+	// production sends on it).
+	rosterSig     chan struct{}
+	rosterBarrier chan chan struct{}
+
 	// afterRead, when set, runs in pollRow right after the row is read
 	// and before the wait. Tests use it to close the row in that window
 	// and prove the waiter was registered before the read; nil in production.
@@ -222,6 +239,9 @@ func New() *Module {
 		waiters:    map[string][]chan struct{}{},
 		newID:      uuid.NewString,
 		modSeen:    map[string]helloInfo{},
+		// The roster publisher's signal (one slot) and its test barrier.
+		rosterSig:     make(chan struct{}, 1),
+		rosterBarrier: make(chan chan struct{}),
 		// A cleared report waits this long for the registry to show the new
 		// session id (measured ~0.6 s after /clear), polling every 100 ms.
 		clearedWait: 3 * time.Second,
@@ -353,6 +373,7 @@ func (m *Module) Start(context.Context) error {
 	if n > 0 {
 		m.logf("[team] boot: extended the lease of %d open approval request(s) by %ds", n, team.BootGraceS)
 	}
+	m.rosterBaseline() // before the boot's own writes: each of them announces itself
 	m.reconcileRelays()
 	m.resumeSpawns()
 	// U23 rule 7: requests left open across a restart while the switch is
@@ -365,9 +386,11 @@ func (m *Module) Start(context.Context) error {
 	m.createMu.Unlock()
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.core.Events.OnSubscribe(m.sendUnattendedSnapshot)
-	m.sweepWG.Add(2)
+	m.core.Events.OnSubscribe(m.sendRosterSnapshot)
+	m.sweepWG.Add(3)
 	go m.runSweeper()
 	go m.runRetention()
+	go m.runRoster() // after the boot's own writes signalled: it publishes what they left
 	m.logf("[team] endpoints enabled")
 	return nil
 }
