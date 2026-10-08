@@ -2,6 +2,7 @@ package nex
 
 import (
 	"context"
+	"time"
 
 	"lab.protype.tw/wake/nexen/bus"
 )
@@ -12,12 +13,31 @@ import (
 // read slot: a consumer that fell behind would be kicked off the bus (a full
 // channel drops its subscriber), so per frame it does no more than a kind
 // lookup and, for a trigger, a map update under a short lock.
+//
+// A subscription that closes while the projector runs — the bus kicked the
+// consumer, or the bus itself closed — is replaced (§3.6): back off,
+// subscribe again, and once the new subscription is registered start a new
+// epoch, whose hello makes every client reconcile against list pages read
+// after it existed. Whatever was published between the old subscription's
+// end and the new one's start is lost to the projector, and covered that
+// way.
 
-// projectorBusBuffer is the subscription's channel capacity (§3.2). The
-// consumer only marks, so it drains far faster than the engine publishes —
-// a commit publishes a raw frame plus the few events derived from it — and
-// the buffer covers a scheduling hiccup, not a slow consumer.
-const projectorBusBuffer = 1024
+const (
+	// projectorBusBuffer is the subscription's channel capacity (§3.2). The
+	// consumer only marks, so it drains far faster than the engine
+	// publishes — a commit publishes a raw frame plus the few events derived
+	// from it — and the buffer covers a scheduling hiccup, not a slow
+	// consumer.
+	projectorBusBuffer = 1024
+
+	// The wait before each new Subscribe after the subscription closed
+	// (§3.6): 100 ms, doubling up to 5 s. A kicked consumer is back within
+	// 100 ms; a closed bus, which answers every Subscribe with a
+	// subscription that is already over, costs one attempt every 5 s until
+	// Stop instead of a spin.
+	resubscribeBackoffMin = 100 * time.Millisecond
+	resubscribeBackoffMax = 5 * time.Second
+)
 
 // triggerKinds are the frame kinds that mark their execution dirty (§3.2):
 // the kinds whose writes can change what a list row shows. Lease writes bump
@@ -58,41 +78,98 @@ var _ frameBus = (*bus.Bus)(nil)
 // returns is missed. The subscription's Snapshot (in-progress partial
 // messages) is ignored: it never changes a row.
 func (p *projector) subscribe() {
-	p.sub = p.bus.Subscribe("", projectorBusBuffer)
+	p.setSubscription(p.bus.Subscribe("", projectorBusBuffer))
 }
 
-// consume is the bus consumer goroutine.
+// subscription is the live subscription.
+func (p *projector) subscription() *bus.Subscription {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sub
+}
+
+func (p *projector) setSubscription(s *bus.Subscription) {
+	p.mu.Lock()
+	p.sub = s
+	p.mu.Unlock()
+}
+
+// consume is the bus consumer goroutine. The flush worker runs on whatever
+// happens to the subscription, so what was marked still flushes while the
+// consumer resubscribes.
 func (p *projector) consume() {
+	sub := p.subscription()
 	for {
 		select {
 		case <-p.ctx.Done():
-			p.bus.Unsubscribe(p.sub)
+			p.bus.Unsubscribe(sub)
 			return
-		case f, ok := <-p.sub.Ch:
-			if !ok {
-				p.busClosed()
-				return
+		case f, ok := <-sub.Ch:
+			if ok {
+				p.observe(f)
+				continue
 			}
-			p.observe(f)
+			if sub = p.resubscribe(); sub == nil {
+				return // stopping
+			}
 		}
 	}
 }
 
-// busClosed handles the subscription's channel closing while the projector
-// runs: the bus kicked the consumer for falling behind, or the engine closed
-// the bus before Stop reached the projector. Deltas stop until the daemon
-// restarts; a client holding rows keeps them, unrefreshed. The flush worker
-// keeps running, so what was already marked still flushes.
+// resubscribe replaces a subscription that closed while the projector runs
+// (§3.6) — the bus kicked the consumer for falling behind, or the engine
+// closed the bus before Stop reached the projector — and returns the new
+// one, or nil once the projector is stopping.
 //
-// TODO(PR1c, spec §3.6): back off (100 ms doubling to 5 s), subscribe again,
-// then — under the slot — start a new epoch with bseq 0, send every client a
-// hello and mark every execution in pushed dirty, so each client reconciles
-// against pages read after the new subscription existed.
-func (p *projector) busClosed() {
+// It backs off before every attempt (backoffMin, doubling to backoffMax;
+// Stop ends a wait at once) and checks what Subscribe handed back before
+// using it: a closed bus answers with a subscription that is already over,
+// and starting an epoch for that would send every client a hello — and a
+// reconcile — for nothing, every few seconds until Stop. A receive that
+// does not block tells the cases apart: closed means try again later; a
+// frame means the subscription is live, and the frame is kept (observed
+// right after); nothing yet means live too.
+//
+// A live subscription becomes the projector's, then the maintenance
+// goroutine is asked to start the new epoch and seed (projector_epoch.go).
+// The consumer does not wait for either — both take the slot, and the
+// consumer never waits on the slot (§3.2): it goes straight back to
+// draining the new subscription. A delta flushed before the new epoch
+// starts still goes out in the old one, contiguous; the hello that follows
+// is what sends every client to reconcile.
+func (p *projector) resubscribe() *bus.Subscription {
 	if p.ctx.Err() != nil {
-		return // stop is under way: the closing is ours
+		return nil // stop is under way: the closing is ours
 	}
-	p.logf("nex-delta: bus subscription closed; execution deltas stopped")
+	p.logf("nex-delta: bus subscription closed; resubscribing")
+	delay := p.timing.backoffMin
+	for {
+		t := time.NewTimer(delay)
+		select {
+		case <-p.ctx.Done():
+			t.Stop()
+			return nil
+		case <-t.C:
+		}
+		delay = min(2*delay, p.timing.backoffMax)
+
+		sub := p.bus.Subscribe("", projectorBusBuffer)
+		var first *bus.Frame
+		select {
+		case f, ok := <-sub.Ch:
+			if !ok {
+				continue // over before it started: the bus is closed
+			}
+			first = &f
+		default:
+		}
+		p.setSubscription(sub)
+		p.requestEpochWork(true)
+		if first != nil {
+			p.observe(*first)
+		}
+		return sub
+	}
 }
 
 // observe marks a trigger frame's execution dirty. A frame with no
