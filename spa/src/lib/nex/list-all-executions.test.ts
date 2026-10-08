@@ -127,19 +127,19 @@ describe('listAllExecutions', () => {
 })
 
 describe('listAllExecutions in delta mode (#1866)', () => {
-  const stamp = (ver: number, epoch = 'E1') => ({ epoch, ver, bseq: 0 })
+  const stamp = (ver: number, epoch = 'E1', bseq = 0) => ({ epoch, ver, bseq })
   const busy = () => new NexApiError(503, 'nex_busy', 'busy')
   beforeEach(() => { vi.mocked(api.listExecutions).mockReset(); vi.useFakeTimers() })
   afterEach(() => vi.useRealTimers())
 
   it('walks with limit 100 and pdx=retry, recording each page ver and upTo (infinity for the final page)', async () => {
     vi.mocked(api.listExecutions)
-      .mockResolvedValueOnce({ items: [row('a'), row('b')], next_cursor: 'b', pdx: stamp(5) } as never)
-      .mockResolvedValueOnce({ items: [row('c')], next_cursor: '', pdx: stamp(9) } as never)
+      .mockResolvedValueOnce({ items: [row('a'), row('b')], next_cursor: 'b', pdx: stamp(5, 'E1', 3) } as never)
+      .mockResolvedValueOnce({ items: [row('c')], next_cursor: '', pdx: stamp(9, 'E1', 8) } as never)
     const r = await listAllExecutions('h1', { includeArchived: false, delta: true })
     expect(api.listExecutions).toHaveBeenNthCalledWith(1, 'h1', { includeArchived: false, limit: DELTA_PAGE_LIMIT, pdxRetry: true })
     expect(DELTA_PAGE_LIMIT).toBe(100)
-    expect(r!.pages).toEqual([{ ver: 5, upTo: 'b' }, { ver: 9, upTo: UP_TO_END }])
+    expect(r!.pages).toEqual([{ ver: 5, upTo: 'b', bseq: 3 }, { ver: 9, upTo: UP_TO_END, bseq: 8 }])
     expect(r!.epoch).toBe('E1')
   })
 
@@ -149,7 +149,7 @@ describe('listAllExecutions in delta mode (#1866)', () => {
       .mockResolvedValueOnce({ items: [row('c')], next_cursor: '', pdx: stamp(20) } as never)
     const r = await listAllExecutions('h1', { includeArchived: false, delta: true })
     expect(r!.dropped).toBe(1)
-    expect(r!.pages[0]).toEqual({ ver: 10, upTo: 'b' })
+    expect(r!.pages[0]).toEqual({ ver: 10, upTo: 'b', bseq: 0 })
   })
 
   it('an empty final page still ends the walk at infinity', async () => {
@@ -157,7 +157,7 @@ describe('listAllExecutions in delta mode (#1866)', () => {
       .mockResolvedValueOnce({ items: [row('a')], next_cursor: 'a', pdx: stamp(1) } as never)
       .mockResolvedValueOnce({ items: [], next_cursor: '', pdx: stamp(2) } as never)
     const r = await listAllExecutions('h1', { includeArchived: false, delta: true })
-    expect(r!.pages).toEqual([{ ver: 1, upTo: 'a' }, { ver: 2, upTo: UP_TO_END }])
+    expect(r!.pages).toEqual([{ ver: 1, upTo: 'a', bseq: 0 }, { ver: 2, upTo: UP_TO_END, bseq: 0 }])
   })
 
   it('a page without a valid pdx makes its version 0 and warns', async () => {
@@ -185,7 +185,7 @@ describe('listAllExecutions in delta mode (#1866)', () => {
     const r = await listAllExecutions('h1', { includeArchived: false, delta: true })
     expect(r!.items.map((i) => i.id)).toEqual(['a', 'b'])
     expect(r!.epoch).toBe('E2')
-    expect(r!.pages).toEqual([{ ver: 2, upTo: UP_TO_END }])
+    expect(r!.pages).toEqual([{ ver: 2, upTo: UP_TO_END, bseq: 0 }])
     expect(vi.mocked(api.listExecutions).mock.calls[2][1]).not.toHaveProperty('cursor')
   })
 

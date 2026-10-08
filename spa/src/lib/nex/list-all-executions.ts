@@ -20,7 +20,12 @@ const BUSY_BACKOFF_CAP_MS = 2000
 const EPOCH_RESTARTS = 2
 
 /** One page's read order and the ids it answers for: the first page with `id <= upTo` is an id's covering page. */
-export interface WalkPage { ver: number; upTo: string }
+export interface WalkPage {
+  ver: number
+  upTo: string
+  /** The daemon's broadcast high-water mark when the page was read (§8 R3-1); only on a stamped page. */
+  bseq?: number
+}
 
 export interface ListAllResult {
   items: ExecutionSummary[]
@@ -102,7 +107,7 @@ export async function listAllExecutions(
     dropped += p.dropped
     const ver = delta && p.pdx ? p.pdx.ver : 0
     const last = p.nextCursor === ''
-    pages.push({ ver, upTo: last ? UP_TO_END : p.nextCursor })
+    pages.push({ ver, upTo: last ? UP_TO_END : p.nextCursor, ...(delta && p.pdx ? { bseq: p.pdx.bseq } : {}) })
     if (last) return { items, pages, epoch, dropped, truncated: false, stuck: false, stuckPage: null }
     if (requested.has(p.nextCursor)) return { items, pages, epoch, dropped, truncated: false, stuck: true, stuckPage: page + 1 }
     cursor = p.nextCursor
