@@ -484,6 +484,24 @@ describe('SortableTab renderTabIcon modes', () => {
     // We assert the component renders without crashing.
     expect(screen.getByTestId('tab-status-indicator')).toBeTruthy()
   })
+
+  it.each(['badge', 'iconDot', 'dot'] as const)('%s: the background symbol (N6) reaches the tab; lights off hides it', (style) => {
+    seedAgent(style)
+    useAgentStore.setState({ lastEvents: { 'h1:sc1': { agent_type: 'cc', status: 'running', raw_event_name: 'x', broadcast_ts: 1, background: 'monitor' } } })
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.getByTestId('tab-background-symbol').getAttribute('data-kind')).toBe('monitor')
+    cleanup()
+    seedAgent('icon')
+    render(<SortableTab {...defaultProps} />)
+    expect(screen.queryByTestId('tab-background-symbol')).toBeNull()
+  })
+
+  it('the pinned render site shows the background symbol too', () => {
+    seedAgent('badge')
+    useAgentStore.setState({ lastEvents: { 'h1:sc1': { agent_type: 'cc', status: 'running', raw_event_name: 'x', broadcast_ts: 1, background: 'workflow' } } })
+    render(<SortableTab {...defaultProps} tab={makeTestTab('t1', { pinned: true })} />)
+    expect(screen.getByTestId('tab-background-symbol').getAttribute('data-kind')).toBe('workflow')
+  })
 })
 
 // Permission channel PC2, user decision 2026-10-08: an awaiting worker's tab shows the hand on its light (both the

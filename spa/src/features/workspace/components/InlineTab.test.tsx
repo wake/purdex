@@ -725,3 +725,25 @@ describe('InlineTab — worker awaiting approval', () => {
     expect(screen.queryByTestId('tab-status-awaiting')).toBeNull()
   })
 })
+
+describe('InlineTab — background symbol (U1-3c, spec N6)', () => {
+  const seed = (style: 'badge' | 'iconDot' | 'dot' | 'icon') => {
+    useAgentStore.setState({
+      statuses: { 'h1:S1': 'running' }, agentTypes: { 'h1:S1': 'cc' },
+      lastEvents: { 'h1:S1': { agent_type: 'cc', status: 'running', raw_event_name: 'x', broadcast_ts: 1, background: 'schedule' } },
+    })
+    useUISettingsStore.setState({ tabIndicatorStyle: style })
+  }
+
+  it.each(['badge', 'iconDot', 'dot'] as const)('%s: the symbol reaches the activity-bar tab', (style) => {
+    seed(style)
+    renderInline()
+    expect(screen.getByTestId('tab-background-symbol').getAttribute('data-kind')).toBe('schedule')
+  })
+
+  it('icon (lights off): hidden', () => {
+    seed('icon')
+    renderInline()
+    expect(screen.queryByTestId('tab-background-symbol')).toBeNull()
+  })
+})
