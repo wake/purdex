@@ -289,20 +289,10 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 // granularity. PR-3.5b §2.4.
 func (m *Module) broadcastProxyCanonicalized(reference store.Frame) {
 	sessionName, code := m.resolvePaneSession(reference.PaneID)
-	projection, err := m.projectionForSession(sessionName)
-	if err != nil {
-		return
-	}
-	if sessionName != "" {
-		m.mu.Lock()
-		syncProjectionState(m.currentStatus, m.subagents, sessionName, projection)
-		m.mu.Unlock()
-	}
-	if code == "" || m.core == nil {
-		return
-	}
-	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_canonicalized", nowFn().UnixNano(), agentpkg.DeriveResult{})
-	m.emitRecorded(code, sessionName, projection, normalized)
+	// Read, synced and sent inside the emit slot; a failed read does nothing.
+	m.emitSession(code, sessionName, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
+		return buildProjectionNormalized(p, reference.AgentType, "sweep:proxy_canonicalized", nowFn().UnixNano(), agentpkg.DeriveResult{}), true
+	})
 }
 
 // findCanonicalAncestor walks descendant's PPID chain looking for a
@@ -460,20 +450,10 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 // best-effort passes. Codex round 2 #P1 fix.
 func (m *Module) broadcastProxyPruned(reference store.Frame) {
 	sessionName, code := m.resolvePaneSession(reference.PaneID)
-	projection, err := m.projectionForSession(sessionName)
-	if err != nil {
-		return
-	}
-	if sessionName != "" {
-		m.mu.Lock()
-		syncProjectionState(m.currentStatus, m.subagents, sessionName, projection)
-		m.mu.Unlock()
-	}
-	if code == "" || m.core == nil {
-		return
-	}
-	normalized := buildProjectionNormalized(projection, reference.AgentType, "sweep:proxy_pruned", nowFn().UnixNano(), agentpkg.DeriveResult{})
-	m.emitRecorded(code, sessionName, projection, normalized)
+	// Read, synced and sent inside the emit slot; a failed read does nothing.
+	m.emitSession(code, sessionName, func(p *SessionProjection) (agentpkg.NormalizedEvent, bool) {
+		return buildProjectionNormalized(p, reference.AgentType, "sweep:proxy_pruned", nowFn().UnixNano(), agentpkg.DeriveResult{}), true
+	})
 }
 
 // clearFrame is the eager delete path used for pid_dead / pid_reused sweeps
@@ -560,27 +540,31 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit)
 	if code == "" || m.core == nil {
 		return cleanupErr
 	}
-	// Issue #717 round-2 race fix: re-resolve projection right before
-	// broadcasting. A hook handler may have created a new frame for
-	// this session between the projectionForSession call above and
-	// this broadcast (e.g. user kills opencode and immediately runs
-	// `opencode` again — the SessionStart hook can land mid-sweep).
-	// Without re-resolve, the broadcast carries the stale
-	// projection==nil view and overwrites the just-installed running
-	// status with clear. The race is best-effort — we cannot fully
-	// serialize without per-session locking, which is tracked
-	// separately. Empty result.Status carries StatusClear via the
-	// projection==nil branch in buildProjectionNormalized; passing
-	// it explicitly documents intent at the callsite.
-	freshProjection, ferr := projectionForSessionFn(m, sessionName)
-	if ferr != nil {
-		if err := degrade("projectionForSession (re-resolve)", ferr); err != nil {
-			return err
+	// Issue #717 round-2 race fix: the projection the broadcast carries is
+	// read right before broadcasting, and since the emit slot (U1-2b-2) that
+	// read happens inside the slot itself, so no other emit can land between
+	// it and the send. A hook handler may have created a new frame for this
+	// session after the projectionForSession call above (e.g. user kills
+	// opencode and immediately runs `opencode` again — the SessionStart hook
+	// can land mid-sweep); a stale projection==nil view would overwrite the
+	// just-installed running status with clear. Empty result.Status carries
+	// StatusClear via the projection==nil branch in buildProjectionNormalized;
+	// passing it explicitly documents intent at the callsite.
+	var abort error
+	m.emitSessionWith(code, sessionName, func(fresh *SessionProjection, ferr error) (agentpkg.NormalizedEvent, bool) {
+		if ferr != nil {
+			if err := degrade("projectionForSession (re-resolve)", ferr); err != nil {
+				abort = err
+				return agentpkg.NormalizedEvent{}, false
+			}
+			fresh = nil // degraded: a nil projection broadcasts status clear
 		}
-		freshProjection = nil // degraded: a nil projection broadcasts status clear
+		normalized := buildProjectionNormalized(fresh, frame.AgentType, "sweep:"+reason, nowFn().UnixNano(), agentpkg.DeriveResult{Status: agentpkg.StatusClear})
+		attachExit(&normalized, exit)
+		return normalized, true
+	})
+	if abort != nil {
+		return abort
 	}
-	normalized := buildProjectionNormalized(freshProjection, frame.AgentType, "sweep:"+reason, nowFn().UnixNano(), agentpkg.DeriveResult{Status: agentpkg.StatusClear})
-	attachExit(&normalized, exit)
-	m.emitRecorded(code, sessionName, freshProjection, normalized)
 	return cleanupErr
 }

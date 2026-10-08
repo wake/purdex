@@ -19,11 +19,11 @@ func (s slowTmux) PaneSessionName(pane string) (string, error) {
 	return s.FakeExecutor.PaneSessionName(pane)
 }
 
-// TestLockOrder_ConcurrentPaths runs every path that takes emitMu, m.mu or
+// TestLockOrder_ConcurrentPaths runs every path that takes emit.mu, m.mu or
 // modMu at the same time against a slow frame store and a slow tmux: real
 // handler hook emits, worker rounds (with the real worker goroutine running
 // too), snapshots, probe transitions, a rename, and mod events through a
-// real registry. The total order is emitMu → m.mu → modMu; a path that
+// real registry. The total order is emit.mu → m.mu → modMu; a path that
 // takes them the other way round deadlocks against the others, and the
 // test fails when the goroutines have not all finished by the deadline. The
 // verdict is "finished or not", never how long it took (run it with -race).

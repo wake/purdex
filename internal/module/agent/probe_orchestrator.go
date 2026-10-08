@@ -280,8 +280,9 @@ func (args probeGuardArgs) effectivePostGraceWindow() time.Duration {
 //  4. Final critical section: m.mu Lock → StaleCheck re-check + ErrorGuard +
 //     transition gate; mutate currentStatus on pass.
 //  5. Broadcast: setProjectionTopStatus + buildProjectionNormalized +
-//     broadcastRecorded (with NormalizedEvent fallback when the projection
-//     is unavailable).
+//     emitSessionByName (with a minimal NormalizedEvent fallback when the
+//     projection is unavailable); the frame is built from the projection the
+//     emit slot reads.
 //
 // Returns applied=true iff step 4 mutated currentStatus and step 5 broadcast
 // the transition; appliedStatus carries the freshly applied newStatus on the
@@ -407,34 +408,67 @@ func applyProbeGuards(m *Module, args probeGuardArgs) (applied bool, appliedStat
 		log.Printf("[probe] status session=%s agent=%s status=%s reason=%s",
 			args.Session, args.AgentType, newStatus, args.Reason)
 	}
-	if projection, err := m.setProjectionTopStatus(args.Session, newStatus); err == nil && projection != nil {
-		if projection.Source == SourceMod {
+	projection, err := m.setProjectionTopStatus(args.Session, newStatus)
+	if err != nil || projection == nil {
+		// Fallback when the projection is unavailable (e.g. frames row
+		// removed concurrently with the event). Broadcast a minimal normalized
+		// event so SPA clients still see the status change.
+		m.emitProbeMinimal(args, newStatus)
+		return true, newStatus
+	}
+	// The frame is built from the projection the emit slot reads, which is
+	// the write above or something newer.
+	modLate := false
+	m.emitSessionByName(args.Session, func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
+		if readErr != nil || p == nil {
+			return minimalProbeEvent(args, newStatus), true
+		}
+		if p.Source == SourceMod {
 			// The mod took over between the gate and the write (the write
 			// cannot be undone): the frame we would send is the mod's
 			// light, not the probe's, so leave it to the worker.
+			modLate = true
 			m.mu.Lock()
-			syncProjectionState(m.currentStatus, m.subagents, args.Session, projection)
+			syncProjectionState(m.currentStatus, m.subagents, args.Session, p)
 			m.mu.Unlock()
-			if args.OnDrop != nil {
-				args.OnDrop("mod-live-late")
-			}
-			return false, ""
+			return agentpkg.NormalizedEvent{}, false
 		}
-		normalized := buildProjectionNormalized(projection, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{})
-		m.broadcastRecorded(args.Session, projection, normalized)
-		return true, newStatus
+		return buildProjectionNormalized(p, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{}), true
+	})
+	if modLate {
+		if args.OnDrop != nil {
+			args.OnDrop("mod-live-late")
+		}
+		return false, ""
 	}
-	// Fallback when the projection is unavailable (e.g. frames row removed
-	// concurrently with the event). Broadcast a minimal normalized event so
-	// SPA clients still see the status change.
-	normalized := agentpkg.NormalizedEvent{
+	return true, newStatus
+}
+
+// emitProbeMinimal sends the minimal probe event when no projection can
+// describe it. Such a frame is not a light the worker can compare against, so
+// the session's baseline is forgotten (the worker re-sends its own view next
+// time) and no session state is read or synced.
+func (m *Module) emitProbeMinimal(args probeGuardArgs, status agentpkg.Status) {
+	code := ""
+	if m.core != nil {
+		code = m.resolveSessionCode(args.Session)
+	}
+	m.emitSessionWith(code, "", func(*SessionProjection, error) (agentpkg.NormalizedEvent, bool) {
+		n := minimalProbeEvent(args, status)
+		m.recordEmittedLights(args.Session, nil, n)
+		return n, true
+	})
+}
+
+// minimalProbeEvent is the frame a probe transition sends when no projection
+// can describe it: the status and the reason, nothing else.
+func minimalProbeEvent(args probeGuardArgs, status agentpkg.Status) agentpkg.NormalizedEvent {
+	return agentpkg.NormalizedEvent{
 		AgentType:    args.AgentType,
-		Status:       string(newStatus),
+		Status:       string(status),
 		RawEventName: args.Reason,
 		BroadcastTs:  time.Now().UnixNano(),
 	}
-	m.broadcastRecorded(args.Session, nil, normalized)
-	return true, newStatus
 }
 
 // applyPaneProbe is steps 3b-5 of applyProbeGuards for a detector bound to
@@ -510,28 +544,28 @@ func applyPaneProbe(m *Module, args probeGuardArgs, newStatus agentpkg.Status) (
 		return drop("write-failed")
 	}
 
-	rep, err := m.projectionForSession(args.Session)
-	if err == nil && rep != nil {
-		m.mu.Lock()
-		syncProjectionState(m.currentStatus, m.subagents, args.Session, rep)
-		m.mu.Unlock()
+	// The session's light is re-aggregated inside the emit slot. When its
+	// projection is unavailable (frames removed concurrently) the minimal
+	// event is sent so clients still see the change.
+	modLate := false
+	m.emitSessionByName(args.Session, func(rep *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
+		if readErr != nil || rep == nil {
+			return minimalProbeEvent(args, newStatus), true
+		}
 		if rep.Source == SourceMod && rep.PaneID == args.PaneID {
 			// The mod took over this pane between the gate and the write
 			// (the write cannot be undone): leave the frame to the worker.
-			return drop("mod-live-late")
+			modLate = true
+			m.mu.Lock()
+			syncProjectionState(m.currentStatus, m.subagents, args.Session, rep)
+			m.mu.Unlock()
+			return agentpkg.NormalizedEvent{}, false
 		}
-		normalized := buildProjectionNormalized(rep, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{})
-		m.broadcastRecorded(args.Session, rep, normalized)
-		return true, newStatus
-	}
-	// The session's projection is unavailable (frames removed concurrently):
-	// send the minimal event so clients still see the change.
-	m.broadcastRecorded(args.Session, nil, agentpkg.NormalizedEvent{
-		AgentType:    args.AgentType,
-		Status:       string(newStatus),
-		RawEventName: args.Reason,
-		BroadcastTs:  time.Now().UnixNano(),
+		return buildProjectionNormalized(rep, args.AgentType, args.Reason, time.Now().UnixNano(), agentpkg.DeriveResult{}), true
 	})
+	if modLate {
+		return drop("mod-live-late")
+	}
 	return true, newStatus
 }
 
