@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as api from './nex-api'
-import { listAllExecutions, LIST_PAGE_LIMIT, LIST_MAX_PAGES } from './list-all-executions'
+import { listAllExecutions, LIST_PAGE_LIMIT, LIST_MAX_PAGES, DELTA_PAGE_LIMIT, UP_TO_END } from './list-all-executions'
+import { NexApiError } from './types'
 
 vi.mock('./nex-api', () => ({ listExecutions: vi.fn() }))
 const row = (id: string) => ({ id, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/w', mount_kind: 'dir', brief: '', labels: {}, created_at: 1, updated_at: 1, duration_ms: null, event_count: 0, observers: 0, archived: false })
@@ -122,5 +123,105 @@ describe('listAllExecutions', () => {
   it('rejects when the first page is malformed', async () => {
     vi.mocked(api.listExecutions).mockResolvedValueOnce(null as never)
     await expect(listAllExecutions('h1', { includeArchived: false })).rejects.toThrow('nex: malformed executions page 1')
+  })
+})
+
+describe('listAllExecutions in delta mode (#1866)', () => {
+  const stamp = (ver: number, epoch = 'E1') => ({ epoch, ver, bseq: 0 })
+  const busy = () => new NexApiError(503, 'nex_busy', 'busy')
+  beforeEach(() => { vi.mocked(api.listExecutions).mockReset(); vi.useFakeTimers() })
+  afterEach(() => vi.useRealTimers())
+
+  it('walks with limit 100 and pdx=retry, recording each page ver and upTo (infinity for the final page)', async () => {
+    vi.mocked(api.listExecutions)
+      .mockResolvedValueOnce({ items: [row('a'), row('b')], next_cursor: 'b', pdx: stamp(5) } as never)
+      .mockResolvedValueOnce({ items: [row('c')], next_cursor: '', pdx: stamp(9) } as never)
+    const r = await listAllExecutions('h1', { includeArchived: false, delta: true })
+    expect(api.listExecutions).toHaveBeenNthCalledWith(1, 'h1', { includeArchived: false, limit: DELTA_PAGE_LIMIT, pdxRetry: true })
+    expect(DELTA_PAGE_LIMIT).toBe(100)
+    expect(r!.pages).toEqual([{ ver: 5, upTo: 'b' }, { ver: 9, upTo: UP_TO_END }])
+    expect(r!.epoch).toBe('E1')
+  })
+
+  it('an empty final page still ends the walk at infinity', async () => {
+    vi.mocked(api.listExecutions)
+      .mockResolvedValueOnce({ items: [row('a')], next_cursor: 'a', pdx: stamp(1) } as never)
+      .mockResolvedValueOnce({ items: [], next_cursor: '', pdx: stamp(2) } as never)
+    const r = await listAllExecutions('h1', { includeArchived: false, delta: true })
+    expect(r!.pages).toEqual([{ ver: 1, upTo: 'a' }, { ver: 2, upTo: UP_TO_END }])
+  })
+
+  it('a page without a valid pdx makes its version 0 and warns', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(api.listExecutions).mockResolvedValueOnce({ items: [row('a')], next_cursor: '' } as never)
+    const r = await listAllExecutions('h1', { includeArchived: false, delta: true })
+    expect(r!.pages).toEqual([{ ver: 0, upTo: UP_TO_END }])
+    expect(r!.epoch).toBeUndefined()
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('the legacy walk keeps limit 500, no pdx=retry and version 0', async () => {
+    vi.mocked(api.listExecutions).mockResolvedValueOnce({ items: [row('a')], next_cursor: '', pdx: stamp(4) } as never)
+    const r = await listAllExecutions('h1', { includeArchived: false })
+    expect(api.listExecutions).toHaveBeenCalledWith('h1', { includeArchived: false, limit: 500 })
+    expect(r!.pages).toEqual([{ ver: 0, upTo: UP_TO_END }])
+  })
+
+  it('an epoch change between pages discards the walk and starts over', async () => {
+    vi.mocked(api.listExecutions)
+      .mockResolvedValueOnce({ items: [row('a')], next_cursor: 'a', pdx: stamp(5, 'E1') } as never)
+      .mockResolvedValueOnce({ items: [row('b')], next_cursor: '', pdx: stamp(1, 'E2') } as never)
+      .mockResolvedValueOnce({ items: [row('a'), row('b')], next_cursor: '', pdx: stamp(2, 'E2') } as never)
+    const r = await listAllExecutions('h1', { includeArchived: false, delta: true })
+    expect(r!.items.map((i) => i.id)).toEqual(['a', 'b'])
+    expect(r!.epoch).toBe('E2')
+    expect(r!.pages).toEqual([{ ver: 2, upTo: UP_TO_END }])
+    expect(vi.mocked(api.listExecutions).mock.calls[2][1]).not.toHaveProperty('cursor')
+  })
+
+  it('retries the same page after nex_busy with 250 ms doubling backoff, then completes', async () => {
+    vi.mocked(api.listExecutions)
+      .mockRejectedValueOnce(busy()).mockRejectedValueOnce(busy())
+      .mockResolvedValueOnce({ items: [row('a')], next_cursor: '', pdx: stamp(1) } as never)
+    const p = listAllExecutions('h1', { includeArchived: false, delta: true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(api.listExecutions).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(249)
+    expect(api.listExecutions).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(499)
+    expect(api.listExecutions).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect((await p)!.items.map((i) => i.id)).toEqual(['a'])
+  })
+
+  it('gives up after five retries', async () => {
+    vi.mocked(api.listExecutions).mockRejectedValue(busy())
+    const p = listAllExecutions('h1', { includeArchived: false, delta: true })
+    const settled = expect(p).rejects.toMatchObject({ code: 'nex_busy' })
+    await vi.advanceTimersByTimeAsync(10_000)
+    await settled
+    expect(api.listExecutions).toHaveBeenCalledTimes(6)
+  })
+
+  it('other errors are not retried, and the legacy walk never retries', async () => {
+    vi.mocked(api.listExecutions).mockRejectedValue(new NexApiError(500, 'nex_list_panicked', 'x'))
+    await expect(listAllExecutions('h1', { includeArchived: false, delta: true })).rejects.toMatchObject({ code: 'nex_list_panicked' })
+    vi.mocked(api.listExecutions).mockReset().mockRejectedValue(busy())
+    await expect(listAllExecutions('h1', { includeArchived: false })).rejects.toMatchObject({ code: 'nex_busy' })
+    expect(api.listExecutions).toHaveBeenCalledTimes(1)
+  })
+
+  it('a walk superseded during the backoff makes no further request', async () => {
+    vi.mocked(api.listExecutions).mockRejectedValue(busy())
+    let current = true
+    const p = listAllExecutions('h1', { includeArchived: false, delta: true }, () => current)
+    await vi.advanceTimersByTimeAsync(0)
+    current = false
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(await p).toBeNull()
+    expect(api.listExecutions).toHaveBeenCalledTimes(1)
   })
 })
