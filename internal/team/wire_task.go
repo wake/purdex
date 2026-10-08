@@ -182,17 +182,24 @@ func ValidDoneWhen(lines []string) error {
 // most 32 KiB and peer-safe; line breaks (\n, \r) and tabs pass, every other
 // control character is refused.
 func ValidTaskDescription(s string) error {
+	return validMultiline("description", s, MaxTaskDescriptionLen)
+}
+
+// validMultiline is the free-text rule shared by descriptions and report
+// bodies: empty is allowed, else at most maxBytes and peer-safe; \n, \r and
+// tabs pass, every other control character is refused.
+func validMultiline(what, s string, maxBytes int) error {
 	if s == "" {
 		return nil
 	}
-	if len(s) > MaxTaskDescriptionLen {
-		return fmt.Errorf("description is %d bytes, at most %d", len(s), MaxTaskDescriptionLen)
+	if len(s) > maxBytes {
+		return fmt.Errorf("%s is %d bytes, at most %d", what, len(s), maxBytes)
 	}
 	if err := ipeers.ValidateText(s); err != nil {
-		return fmt.Errorf("description: %w", err)
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	if r, bad := firstControl(s, "\n\r\t"); bad {
-		return fmt.Errorf("description has the control character %U", r)
+		return fmt.Errorf("%s has the control character %U", what, r)
 	}
 	return nil
 }
