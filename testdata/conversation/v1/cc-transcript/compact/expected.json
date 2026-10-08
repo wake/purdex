@@ -1,0 +1,177 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "Haiku about rain",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-sonnet-5-5",
+      "effort": "low"
+    },
+    "turns": [
+      {
+        "id": "85a7e16a-3231-4d99-aea7-69d3157bb9eb",
+        "index": 0,
+        "started_at": 1791482875841,
+        "ended_at": 1791482882259,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "85a7e16a-3231-4d99-aea7-69d3157bb9eb",
+            "at": 1791482875841,
+            "text": "Write a haiku about rain",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "da4d03d4-64a7-482c-8957-538c9cd15b55",
+            "at": 1791482880144,
+            "markdown": "雨落屋簷上\n滴答聲裡夜漸深\n青苔也喝飽"
+          }
+        ]
+      },
+      {
+        "id": "c5d67fc1-5f6e-4491-831a-4e594bcb8887",
+        "index": 1,
+        "started_at": 1791482890462,
+        "ended_at": 1791482896187,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "c5d67fc1-5f6e-4491-831a-4e594bcb8887",
+            "at": 1791482890462,
+            "text": "Now one about wind",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "68ef36fa-8504-4467-89ba-2863b8055d49",
+            "at": 1791482894146,
+            "markdown": "風過竹林梢\n萬葉低語翻成浪\n又向遠山去"
+          }
+        ]
+      },
+      {
+        "id": "82fe160f-6656-4750-bfad-9eb38177ee58",
+        "index": 2,
+        "started_at": 1791482905576,
+        "ended_at": 1791482914444,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "82fe160f-6656-4750-bfad-9eb38177ee58",
+            "at": 1791482905576,
+            "text": "/compact",
+            "source": "user"
+          },
+          {
+            "type": "system",
+            "id": "ff460392-89d8-45fc-aa2d-d9cb120b3336",
+            "at": 1791482914444,
+            "kind": "compacted",
+            "detail": {
+              "trigger": "manual"
+            }
+          }
+        ]
+      },
+      {
+        "id": "191597f8-ad8c-4085-932e-9b691c15f661",
+        "index": 3,
+        "started_at": 1791482905578,
+        "ended_at": 1791482914544,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "191597f8-ad8c-4085-932e-9b691c15f661",
+            "at": 1791482905578,
+            "text": "/compact",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "4a8c3b3b-1d52-47af-9836-d3f0849df527",
+            "at": 1791482914544,
+            "kind": "command_output",
+            "detail": {
+              "text": "\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m"
+            }
+          }
+        ]
+      },
+      {
+        "id": "1c47f28a-a0a5-4499-aa57-e986b8142210",
+        "index": 4,
+        "started_at": 1791482931986,
+        "ended_at": 1791482937983,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "1c47f28a-a0a5-4499-aa57-e986b8142210",
+            "at": 1791482931986,
+            "text": "Thanks.",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "e953f6b2-524d-4ddf-a882-0fb6dd81bd3a",
+            "at": 1791482935859,
+            "markdown": "不客氣！還需要其他主題的俳句，像是雪、月光或海，隨時告訴我。"
+          }
+        ]
+      },
+      {
+        "id": "d0afd618-6ae7-4056-9db7-7d51bdc2d9ce",
+        "index": 5,
+        "started_at": 1791482948318,
+        "ended_at": 1791482948318,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "d0afd618-6ae7-4056-9db7-7d51bdc2d9ce",
+            "at": 1791482948318,
+            "text": "/exit",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "f2eecc3a-efcf-4e9c-878d-b6292b3ea2db",
+            "at": 1791482948318,
+            "kind": "command_output",
+            "detail": {
+              "text": "Bye!"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

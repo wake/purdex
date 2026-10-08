@@ -1,0 +1,166 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-opus-5-5",
+      "effort": "medium"
+    },
+    "turns": [
+      {
+        "id": "50000000-0000-4000-8000-000000000001",
+        "index": 0,
+        "started_at": 1791378001000,
+        "ended_at": 1791378003000,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "50000000-0000-4000-8000-000000000001",
+            "at": 1791378001000,
+            "text": "請回報目前進度",
+            "source": "peer",
+            "from": {
+              "kind": "peer",
+              "name": "host/fixture-peer"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "50000000-0000-4000-8000-000000000002",
+            "at": 1791378002000,
+            "markdown": "目前進度：已完成一半。"
+          }
+        ]
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000004",
+        "index": 1,
+        "started_at": 1791378004000,
+        "ended_at": 1791378005000,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "50000000-0000-4000-8000-000000000004",
+            "at": 1791378004000,
+            "text": "/model",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "50000000-0000-4000-8000-000000000005",
+            "at": 1791378005000,
+            "kind": "command_output",
+            "detail": {
+              "text": "Set model to opus"
+            }
+          }
+        ]
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000006",
+        "index": 2,
+        "started_at": 1791378006000,
+        "ended_at": 1791378009000,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "50000000-0000-4000-8000-000000000006",
+            "at": 1791378006000,
+            "text": "/review src/",
+            "source": "slash"
+          },
+          {
+            "type": "agent_text",
+            "id": "50000000-0000-4000-8000-000000000008",
+            "at": 1791378008000,
+            "markdown": "審查完成，沒有問題。"
+          }
+        ]
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000010",
+        "index": 3,
+        "started_at": 1791378010000,
+        "ended_at": 1791378012000,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "50000000-0000-4000-8000-000000000010",
+            "at": 1791378010000,
+            "text": "check the build",
+            "source": "scheduled"
+          },
+          {
+            "type": "agent_text",
+            "id": "50000000-0000-4000-8000-000000000011",
+            "at": 1791378011000,
+            "markdown": "建置正常。"
+          }
+        ]
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000013",
+        "index": 4,
+        "started_at": 1791378013000,
+        "ended_at": 1791378017000,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "50000000-0000-4000-8000-000000000013",
+            "at": 1791378013000,
+            "text": "請寫一個很長的故事",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "50000000-0000-4000-8000-000000000014",
+            "at": 1791378014000,
+            "markdown": "從前從前……"
+          },
+          {
+            "type": "user",
+            "id": "50000000-0000-4000-8000-000000000015",
+            "at": 1791378015000,
+            "text": "另外請回覆 QUEUED",
+            "source": "queued"
+          },
+          {
+            "type": "agent_text",
+            "id": "50000000-0000-4000-8000-000000000016",
+            "at": 1791378016000,
+            "markdown": "QUEUED"
+          }
+        ]
+      }
+    ]
+  }
+}

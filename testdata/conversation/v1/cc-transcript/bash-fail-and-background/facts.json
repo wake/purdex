@@ -1,0 +1,22 @@
+{
+  "live": false,
+  "turns": 5,
+  "per_turn": [
+    {"id": "3528a92f-c87f-4f14-8807-a455c07d2d47", "outcome": "done", "user_source": "user"},
+    {"id": "116ed138-0a53-40a6-bae3-901a4d6d2393", "outcome": "done", "user_source": "user"},
+    {"id": "e7b92d4d-f349-430e-8389-fe0a4f88143f", "outcome": "done", "user_source": "user"},
+    {"id": "6b060f1b-99a0-43a5-a726-e56a39005741", "outcome": "done", "user_source": "task"},
+    {"id": "bf24c819-14df-4fac-8e22-9849e72ecac8", "outcome": "done", "user_source": "slash"}
+  ],
+  "steps": [
+    {"id": "toolu_01NKWyU76Gj63hS6KG9dznmd", "kind": "execute", "status": "done"},
+    {"id": "toolu_01Austw3RXHvweuceuaB6KxZ", "kind": "execute", "status": "failed"},
+    {"id": "toolu_01693LPNQciTk6MVYRNQsRfN", "kind": "execute", "status": "done"}
+  ],
+  "outputs": [
+    {"step": "toolu_01NKWyU76Gj63hS6KG9dznmd", "total_lines": 2, "total_bytes": 68, "keep": "tail", "truncated": false},
+    {"step": "toolu_01Austw3RXHvweuceuaB6KxZ", "total_lines": 2, "total_bytes": 67, "keep": "tail", "truncated": false},
+    {"step": "toolu_01693LPNQciTk6MVYRNQsRfN", "total_lines": 1, "total_bytes": 241, "keep": "tail", "truncated": false}
+  ],
+  "shapes": []
+}

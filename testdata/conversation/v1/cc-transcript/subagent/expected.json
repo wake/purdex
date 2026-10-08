@@ -1,0 +1,134 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "Markdown line count via Agent",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-sonnet-5-5",
+      "effort": "low"
+    },
+    "turns": [
+      {
+        "id": "d8fc1753-9be5-47f2-b993-c00bdc7b3673",
+        "index": 0,
+        "started_at": 1791482511204,
+        "ended_at": 1791482524579,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "d8fc1753-9be5-47f2-b993-c00bdc7b3673",
+            "at": 1791482511204,
+            "text": "Use the Agent tool (general-purpose) to count the lines of every .md file in this repo and report the total.",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01R2cprP5o4tDUDwZ3RikzsL",
+            "at": 1791482517056,
+            "kind": "task",
+            "tool": "Agent",
+            "status": "done",
+            "summary": "Count lines of .md files",
+            "started_at": 1791482517056,
+            "duration_ms": 3863,
+            "input": {
+              "description": "Count lines of .md files",
+              "model": "haiku",
+              "prompt": "In the git repo at /work/fixture, count the number of lines in every .md file (include untracked ones such as docs/, one.md, two.md; exclude node_modules and .git). Use e.g. `find . -name '*.md' -not -path './.git/*' -not -path '*/node_modules/*' -print0 | xargs -0 wc -l`. Report the per-file line counts and the total. Read-only; do not modify anything.",
+              "subagent_type": "general-purpose"
+            },
+            "output": {
+              "text": "Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)\nagentId: a7a639d97d57c6f43 (internal ID - do not mention to user. Use SendMessage with to: 'a7a639d97d57c6f43', summary: '\u003c5-10 word recap\u003e' to continue this agent.)\nThe agent is working in the background. You will be notified automatically when it completes. You know nothing about its results until that notification arrives — do not report, assume, or predict them; continue other work or respond to the user in the meantime.\nDo not duplicate this agent's work — avoid working with the same files or topics it is using.\noutput_file: /work/tmp/00000000-0000-4000-8000-000000000001/tasks/a7a639d97d57c6f43.output\nDo NOT Read or tail this file via the shell tool — it is the full subagent JSONL transcript and reading it will overflow your context. If the user asks for progress, say the agent is still running; you'll get a completion notification.",
+              "total_lines": 6,
+              "total_bytes": 1026,
+              "truncated": false
+            },
+            "subagent": {
+              "agent_id": "a7a639d97d57c6f43",
+              "description": "Count lines of .md files",
+              "type": "general-purpose",
+              "async": true
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "2fbbd36b-b4d3-4bff-8cd7-d4d4ee3c50a8",
+            "at": 1791482522399,
+            "markdown": "已派出 subagent 去統計 repo 內所有 .md 檔的行數，目前還在執行。結果回來後，我會回報各檔行數與總計。"
+          }
+        ]
+      },
+      {
+        "id": "2784af76-2dee-4701-9fda-70d4f16cdf1c",
+        "index": 1,
+        "started_at": 1791482531419,
+        "ended_at": 1791482537742,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "2784af76-2dee-4701-9fda-70d4f16cdf1c",
+            "at": 1791482531419,
+            "text": "Agent \"Count lines of .md files\" finished",
+            "source": "task"
+          },
+          {
+            "type": "agent_text",
+            "id": "01595ebf-9275-4636-817f-72abc5562acf",
+            "at": 1791482535595,
+            "markdown": "repo 內共有 3 個 `.md` 檔（已排除 `.git` 與 `node_modules`），總計 **12 行**：\n\n| 檔案 | 行數 |\n|---|---|\n| `one.md` | 4 |\n| `two.md` | 3 |\n| `docs/three.md` | 5 |\n| **總計** | **12** |\n\n這是 subagent 回報的數字，我沒有另外複核。"
+          }
+        ]
+      },
+      {
+        "id": "08c3cfd0-3493-42ef-b44a-3e029c75e8b1",
+        "index": 2,
+        "started_at": 1791482545421,
+        "ended_at": 1791482545421,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "08c3cfd0-3493-42ef-b44a-3e029c75e8b1",
+            "at": 1791482545421,
+            "text": "/exit",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "9695587b-f9d5-482c-a951-1f0ca4022144",
+            "at": 1791482545421,
+            "kind": "command_output",
+            "detail": {
+              "text": "See ya!"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

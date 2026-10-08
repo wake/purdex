@@ -1,0 +1,14 @@
+{
+  "live": false,
+  "turns": 5,
+  "per_turn": [
+    {"id": "50000000-0000-4000-8000-000000000001", "outcome": "done", "user_source": "peer"},
+    {"id": "50000000-0000-4000-8000-000000000004", "outcome": "done", "user_source": "slash"},
+    {"id": "50000000-0000-4000-8000-000000000006", "outcome": "done", "user_source": "slash"},
+    {"id": "50000000-0000-4000-8000-000000000010", "outcome": "done", "user_source": "scheduled"},
+    {"id": "50000000-0000-4000-8000-000000000013", "outcome": "done", "user_source": "user"}
+  ],
+  "steps": [],
+  "outputs": [],
+  "shapes": ["queued_absorbed"]
+}

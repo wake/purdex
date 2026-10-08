@@ -1,0 +1,270 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "api-error",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Synthetic, built from the M-U1-7 shapes: API errors (`<synthetic>` assistant row, `isApiErrorMessage`, `error`), which cannot be provoked on demand.",
+      "input": "cc-transcript/api-error/input.jsonl",
+      "expected": "cc-transcript/api-error/expected.json",
+      "facts": "cc-transcript/api-error/facts.json",
+      "sha256": {
+        "input": "b003dccbfd3d0f356f3902c8a04060310e84c328b1e909bc097a7d5f8053660f",
+        "expected": "ae908f522b2ea77a20862b49675b82b8772204a53d2421cd46a7d589a5ba3a82",
+        "facts": "69c49d4fe490008708e3fcfe7a82493983bc8c81d40c83c013db7a58bcccbb5c"
+      }
+    },
+    {
+      "name": "bash-fail-and-background",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Recorded Claude Code session: a Bash command that exits 0 despite `ls` failing, a Bash failure (`Exit code 1`), a backgrounded Bash and the task-notification turn that follows it.",
+      "input": "cc-transcript/bash-fail-and-background/input.jsonl",
+      "expected": "cc-transcript/bash-fail-and-background/expected.json",
+      "facts": "cc-transcript/bash-fail-and-background/facts.json",
+      "sha256": {
+        "input": "ec9af2a463b1d7978697c1ef8b6c1dd5a2cd478ccf372fefd60388547181befe",
+        "expected": "17c8b45f3de936176140aefd9aae790b9e7d927f3282a58d19e3eb067a94c21e",
+        "facts": "8cd0695ff118fe217840a72644d67dc5604c26d3f3eb8c3c7866ecdf252d687e"
+      }
+    },
+    {
+      "name": "compact",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "A manual /compact in the middle of a session: the compact boundary, the compact summary row and the local-command rows around it, recorded from Claude Code 2.1.294.",
+      "input": "cc-transcript/compact/input.jsonl",
+      "expected": "cc-transcript/compact/expected.json",
+      "facts": "cc-transcript/compact/facts.json",
+      "sha256": {
+        "input": "0c2d1813091e537bdf6f9f9f8953afe870ac617ea5e1863f537347b78540b06b",
+        "expected": "851623d41371f94f6767f5f3413ec77777455a300677ca8a46fb96de924e970c",
+        "facts": "e8a74f5f9fc491432a79e01a6daf3f536baa984ea6643cebea6ec85c04af09c0"
+      }
+    },
+    {
+      "name": "denial-kinds",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Synthetic, built from the M-U1-7 shapes: every `toolDenialKind` value with and without `is_error`, a killed-process turn, a failed step and an old-style refusal.",
+      "input": "cc-transcript/denial-kinds/input.jsonl",
+      "expected": "cc-transcript/denial-kinds/expected.json",
+      "facts": "cc-transcript/denial-kinds/facts.json",
+      "sha256": {
+        "input": "26e6cbd9e9ef6f9248a12bc82b2f676955e5c4430b0ea3139f87ab46e6ebaec7",
+        "expected": "f6bd1f6193f92d1899388287cb267e0c95470ab37e2e4a128146f3980e0129fb",
+        "facts": "b6ba748955735d316b5521330e9ec35f2cf20494ee9b49a99d60496890364891"
+      }
+    },
+    {
+      "name": "edit-write-multiedit",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Recorded Claude Code session: Write, Edit and a two-Edit rename (no MultiEdit in this build), with Read before an overwrite.",
+      "input": "cc-transcript/edit-write-multiedit/input.jsonl",
+      "expected": "cc-transcript/edit-write-multiedit/expected.json",
+      "facts": "cc-transcript/edit-write-multiedit/facts.json",
+      "sha256": {
+        "input": "4bef74e413de223bce741a9edf97cb2dfad93a9886bc39c1815e86f1aac08ef5",
+        "expected": "5a75289cc55c03f75667fadd0c02fdc77d771a12e454edb567ae81b3beff5bf5",
+        "facts": "67edba68ca2093bbb792a59169b2712c6a48eb7943cee56e7f0b0af1f62440b9"
+      }
+    },
+    {
+      "name": "image-result",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Recorded Claude Code session: Read of a PNG, whose tool result is an image block.",
+      "input": "cc-transcript/image-result/input.jsonl",
+      "expected": "cc-transcript/image-result/expected.json",
+      "facts": "cc-transcript/image-result/facts.json",
+      "sha256": {
+        "input": "4b981b0da3a82ca8b43e7c004d54ed1782e98a92c75d7f3b635d09d471807ef2",
+        "expected": "b1899be5cc61b894b45e177ab18846801b38065f0c66b96f3c6ddf9067e67bc1",
+        "facts": "501b50571220c124ec5bc906fb7628c61171dee976d7f0663947fe1a412e5575"
+      }
+    },
+    {
+      "name": "interrupt-running-tool",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Bash edge cases: a blocked foreground sleep re-run in the background with a task notification turn, and two Esc-refused tool calls ending in `[Request interrupted by user for tool use]`, recorded from Claude Code 2.1.294.",
+      "input": "cc-transcript/interrupt-running-tool/input.jsonl",
+      "expected": "cc-transcript/interrupt-running-tool/expected.json",
+      "facts": "cc-transcript/interrupt-running-tool/facts.json",
+      "sha256": {
+        "input": "6711ee1b9831a5e7f9f01bce2dceef217042b8d0194129cc6bdad747dad1bacb",
+        "expected": "b90ba72c8d1caa1e890129ec00e44e77a0ea3c1d8b7b972e7a64ff8469ce24c9",
+        "facts": "26fff58f7284a84820678a17de20fade304e06c41f73622f55c5eeb1863f4da3"
+      }
+    },
+    {
+      "name": "ios-c2-send-keys",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Plain prompts, pasted and multi-line text, a refused Bash call, AskUserQuestion, a bash-mode turn and a background task, from the iOS C2 recording (Claude Code 2.1.292).",
+      "input": "cc-transcript/ios-c2-send-keys/input.jsonl",
+      "expected": "cc-transcript/ios-c2-send-keys/expected.json",
+      "facts": "cc-transcript/ios-c2-send-keys/facts.json",
+      "sha256": {
+        "input": "25287a43ab9e899f473673d88039cf8882c85cc4f6052cda7f48b64b73d09482",
+        "expected": "f32238cfcabf52012d03bae673c722d57a937d0b1a628070ae9d903171c92df5",
+        "facts": "3f9f9da67a97fa2bd124e853e37e040f75b56e69a4608fe4b426ca3fdd0d51fd"
+      }
+    },
+    {
+      "name": "ios-f2b-queue-interrupt",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Queued prompts (`promptSource: queued`), a background-task notification turn and three Esc interrupts, from the iOS F2-B recording (Claude Code 2.1.292).",
+      "input": "cc-transcript/ios-f2b-queue-interrupt/input.jsonl",
+      "expected": "cc-transcript/ios-f2b-queue-interrupt/expected.json",
+      "facts": "cc-transcript/ios-f2b-queue-interrupt/facts.json",
+      "sha256": {
+        "input": "1b69e2f09cce081c7e31c6ba9618f64529c46a29527f8b67e16cc78b05db4635",
+        "expected": "d0a9b45f3819dbc9f9501da50cd7bf5cc37066f970babfa43d5ea721d69c1508",
+        "facts": "0bb39a33e62f97514d48f45b9a5f16a6136adaae1a34632437e13bc11a94f602"
+      }
+    },
+    {
+      "name": "ios-f3-ask-permission",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "AskUserQuestion answers and permission prompts that were allowed or refused, from the iOS F3 recording (Claude Code 2.1.292, `--permission-mode default`).",
+      "input": "cc-transcript/ios-f3-ask-permission/input.jsonl",
+      "expected": "cc-transcript/ios-f3-ask-permission/expected.json",
+      "facts": "cc-transcript/ios-f3-ask-permission/facts.json",
+      "sha256": {
+        "input": "5f66d789616b7cb157d828bb2b6b6b70773d0fd75ac008dba2ca23d5bca89397",
+        "expected": "72ab6cc1ffb2fdceffcef8b9ae53da685c8c4ea35f1ef3f3bc58d31fce018a95",
+        "facts": "1100067750525302f6c1b46be26c13ee12018a5eb2657d381a75954af38e694d"
+      }
+    },
+    {
+      "name": "large-output",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Recorded Claude Code session: `seq 1 5000` through Bash, an output larger than the 16 KiB cap, kept from the tail.",
+      "input": "cc-transcript/large-output/input.jsonl",
+      "expected": "cc-transcript/large-output/expected.json",
+      "facts": "cc-transcript/large-output/facts.json",
+      "sha256": {
+        "input": "85035d366dac0690befc716c613ef0cadf0e493ec3bf43305e12e01a7c4cc7e6",
+        "expected": "ba2f3c5ebed9d717d50ab9a32d1291806452ca2e89d92fdd41215209fbeb6a28",
+        "facts": "ccdb3f482166927a8bce22d7dc5da73c17d11077e3f7d640e865f38d685c6cfe"
+      }
+    },
+    {
+      "name": "output-caps",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Synthetic, built from the M-U1-7 shapes: step outputs over the 16 KiB cap, a Read keeping its head and a Bash keeping its tail.",
+      "input": "cc-transcript/output-caps/input.jsonl",
+      "expected": "cc-transcript/output-caps/expected.json",
+      "facts": "cc-transcript/output-caps/facts.json",
+      "sha256": {
+        "input": "87fcd8b9c15aeaf91958ab79d04ce2c2cc198d0f8834d210c7c53c4f57e43501",
+        "expected": "33e79e74d1b4bedd803dd93a4eca41d8ac3f7bde933b4891552d29d36bf6340a",
+        "facts": "237bbd411689f22f5f5e9ea960a0828bcf35e35cb96c90c7a37248036a2b90d2"
+      }
+    },
+    {
+      "name": "peer-message",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "A real peer message that starts a turn in an idle session (origin `peer`, `isMeta`), and the Bash reply the model sends back, recorded from Claude Code 2.1.294.",
+      "input": "cc-transcript/peer-message/input.jsonl",
+      "expected": "cc-transcript/peer-message/expected.json",
+      "facts": "cc-transcript/peer-message/facts.json",
+      "sha256": {
+        "input": "c667aa629f2c3f3ff3274f7efc92f5ccad5368cc7291afa6222622fbf20b0274",
+        "expected": "f4a364fd2347edf7301531283a2eadd847250dfe5429106983e517404e9e7f94",
+        "facts": "8f26b3993063b2706e23ece0b0b80e708e54853788ff8d575368da067cccd70d"
+      }
+    },
+    {
+      "name": "queued-mid-turn",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "A prompt typed during a running tool that is absorbed into the running turn, and a prompt typed just after the answer that becomes the next turn's `queued` prompt row, recorded from Claude Code 2.1.294.",
+      "input": "cc-transcript/queued-mid-turn/input.jsonl",
+      "expected": "cc-transcript/queued-mid-turn/expected.json",
+      "facts": "cc-transcript/queued-mid-turn/facts.json",
+      "sha256": {
+        "input": "eeb43b438c4c3873d137e355045da1c9a16af3e85936b703e9a9c20d3b50bc21",
+        "expected": "5fd531ef4610d10adb99585f60cedd61c335a73132a395646f765215d24fa989",
+        "facts": "4d6a07eff0df729b72a533de7a796be5ab1494c876d5a0ccb26d4ee7f2a94c73"
+      }
+    },
+    {
+      "name": "read-grep-glob-webfetch",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Recorded Claude Code session: one prompt that reads, searches (via Bash), loads a deferred tool with ToolSearch and fetches a web page.",
+      "input": "cc-transcript/read-grep-glob-webfetch/input.jsonl",
+      "expected": "cc-transcript/read-grep-glob-webfetch/expected.json",
+      "facts": "cc-transcript/read-grep-glob-webfetch/facts.json",
+      "sha256": {
+        "input": "b3fadf7d9db47c24b64868a90585b2f098eea05f5e4d7ce686fadb6bdce580fb",
+        "expected": "9ecf386b1e7b8c4f9975d4305ca9b32934eafa1a82e9201df1b5e0fd8bc95d93",
+        "facts": "d2a914c013f04449a46f81cba567643223f550adb5f57a6d59d791b32dbd2d4d"
+      }
+    },
+    {
+      "name": "slash-and-local-command",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Slash commands: local commands (/model, /context, /usage, /exit) and a project command that reaches the model (/hello), recorded from Claude Code 2.1.294.",
+      "input": "cc-transcript/slash-and-local-command/input.jsonl",
+      "expected": "cc-transcript/slash-and-local-command/expected.json",
+      "facts": "cc-transcript/slash-and-local-command/facts.json",
+      "sha256": {
+        "input": "03635ba0497f4099ae38bb45fb4700d75990e96b73438dd2e0d11698ea6e9fd0",
+        "expected": "0580624f90cb652bb42ac571dc3f7c93baf3982e5c0a1c0c3cc3c24f741f735d",
+        "facts": "1778fa27c739b99a6d1f81fcd8ea82301488802650844885bc80e397ff5ed7ae"
+      }
+    },
+    {
+      "name": "source-kinds",
+      "source": "cc-transcript",
+      "cc_version": "2.1.292",
+      "description": "Synthetic, built from the M-U1-7 shapes: a peer message, a local slash command, a slash command that reaches the model, a scheduled wake-up and an absorbed queued prompt.",
+      "input": "cc-transcript/source-kinds/input.jsonl",
+      "expected": "cc-transcript/source-kinds/expected.json",
+      "facts": "cc-transcript/source-kinds/facts.json",
+      "sha256": {
+        "input": "ec0505f2afd120e49a3e25451200a16ac804f8aaa17e16e73b214d45cf392095",
+        "expected": "ca57d4d1730436685e107f284624ed6c33f73e9a53a6a26c6bc58182e8ef42bf",
+        "facts": "2115ca988817002f0a7ad5951f31bf155143677a94922146f4432b9371fd2811"
+      }
+    },
+    {
+      "name": "subagent",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Recorded Claude Code session: an Agent (subagent) call that Claude Code backgrounded, the task-notification turn that reports it, and the subagent's own transcript file under children/.",
+      "input": "cc-transcript/subagent/input.jsonl",
+      "expected": "cc-transcript/subagent/expected.json",
+      "facts": "cc-transcript/subagent/facts.json",
+      "sha256": {
+        "input": "03201688b83632bc2964c50d630e221f841bbb4cbbe9004eac7b11d4132c01fa",
+        "expected": "f17c4c09895c754b25590355d1110453da9fde1962fd2ffdc737837b2d3b249a",
+        "facts": "ea658ef4102bac073f8dfa265ca3f1927174441de9fdb814390cd3835da1a91e"
+      },
+      "children": [
+        {
+          "agent_id": "a7a639d97d57c6f43",
+          "input": "cc-transcript/subagent/children/a7a639d97d57c6f43.input.jsonl",
+          "expected": "cc-transcript/subagent/children/a7a639d97d57c6f43.expected.json",
+          "facts": "cc-transcript/subagent/children/a7a639d97d57c6f43.facts.json",
+          "sha256": {
+            "input": "acf118bab4e00998413ef407f4e6f605b13ad348e4b77a209b7d77e277e458bb",
+            "expected": "e2e04eab50bb1431cfdd6d11a75a38b0fb3758b09a245ea18d78059f29468828",
+            "facts": "9e51b3216d44b4532a661f9c250bfd9c32d31f2194bb1495826a5331c904498f"
+          }
+        }
+      ]
+    }
+  ]
+}

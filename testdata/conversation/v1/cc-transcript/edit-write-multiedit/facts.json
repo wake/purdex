@@ -1,0 +1,30 @@
+{
+  "live": false,
+  "turns": 5,
+  "per_turn": [
+    {"id": "06aaa560-d20c-4370-a207-d55bbacc2156", "outcome": "done", "user_source": "user"},
+    {"id": "907b926f-103d-4cbd-9098-e449da4889b2", "outcome": "done", "user_source": "user"},
+    {"id": "9caa2892-ea71-4707-b77d-aa406ef63a37", "outcome": "done", "user_source": "user"},
+    {"id": "82627382-fb58-4892-9463-78fbd14c17a1", "outcome": "done", "user_source": "user"},
+    {"id": "7682a2e6-6d77-4df5-a6ea-72f21a166f69", "outcome": "done", "user_source": "slash"}
+  ],
+  "steps": [
+    {"id": "toolu_01M4PsfQqtoB8cdfowKL65k1", "kind": "edit", "status": "done"},
+    {"id": "toolu_01UmLJ3h1yd2DV9ZBYbnjdmP", "kind": "edit", "status": "done"},
+    {"id": "toolu_01BWbh6VR5RXo8QbBo43xKGs", "kind": "read", "status": "done"},
+    {"id": "toolu_0193T2pao4FwUFfDyNqjQ2sc", "kind": "edit", "status": "done"},
+    {"id": "toolu_01GsKZdaFcw3m9tEc1RXEKAZ", "kind": "edit", "status": "done"},
+    {"id": "toolu_01KKczVrfEEKiHBy6sr5jbmb", "kind": "read", "status": "done"},
+    {"id": "toolu_015UEUGC7oWyQvKDZFXKR1vw", "kind": "edit", "status": "done"}
+  ],
+  "outputs": [
+    {"step": "toolu_01M4PsfQqtoB8cdfowKL65k1", "total_lines": 1, "total_bytes": 120, "keep": "head", "truncated": false},
+    {"step": "toolu_01UmLJ3h1yd2DV9ZBYbnjdmP", "total_lines": 1, "total_bytes": 130, "keep": "head", "truncated": false},
+    {"step": "toolu_01BWbh6VR5RXo8QbBo43xKGs", "total_lines": 12, "total_bytes": 187, "keep": "head", "truncated": false},
+    {"step": "toolu_0193T2pao4FwUFfDyNqjQ2sc", "total_lines": 1, "total_bytes": 159, "keep": "head", "truncated": false},
+    {"step": "toolu_01GsKZdaFcw3m9tEc1RXEKAZ", "total_lines": 1, "total_bytes": 159, "keep": "head", "truncated": false},
+    {"step": "toolu_01KKczVrfEEKiHBy6sr5jbmb", "total_lines": 4, "total_bytes": 35, "keep": "head", "truncated": false},
+    {"step": "toolu_015UEUGC7oWyQvKDZFXKR1vw", "total_lines": 1, "total_bytes": 130, "keep": "head", "truncated": false}
+  ],
+  "shapes": []
+}

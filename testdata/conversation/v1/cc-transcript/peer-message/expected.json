@@ -1,0 +1,118 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-sonnet-5-5",
+      "effort": "low"
+    },
+    "turns": [
+      {
+        "id": "b0519bf4-4fc2-44df-b7cf-24df6a7633be",
+        "index": 0,
+        "started_at": 1791483013118,
+        "ended_at": 1791483125037,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "b0519bf4-4fc2-44df-b7cf-24df6a7633be",
+            "at": 1791483013118,
+            "text": "fixture ping: reply with the single word pong",
+            "source": "peer",
+            "from": {
+              "kind": "peer",
+              "name": "host/fixture-peer"
+            }
+          },
+          {
+            "type": "thinking",
+            "id": "342b0bf6-7e28-4772-9431-50df10bc9382",
+            "at": 1791483016108,
+            "duration_ms": 789
+          },
+          {
+            "type": "step",
+            "id": "toolu_01PyuQkUpWNdqBfgNMbsnAqL",
+            "at": 1791483016614,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "done",
+            "summary": "pdx msg send host/fixture-peer \"pong\"",
+            "started_at": 1791483016614,
+            "duration_ms": 105995,
+            "input": {
+              "command": "pdx msg send host/fixture-peer \"pong\"",
+              "description": "Reply pong to peer session"
+            },
+            "output": {
+              "text": "sent 1535c7e7-aa21-4472-b32a-244a203b2319 → host/fixture-peer (delivered, mode unknown)",
+              "total_lines": 1,
+              "total_bytes": 89,
+              "truncated": false
+            },
+            "command": {
+              "text": "pdx msg send host/fixture-peer \"pong\"",
+              "description": "Reply pong to peer session"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "ca60b1e7-3a7e-415d-b9b4-98234cc38108",
+            "at": 1791483124285,
+            "markdown": "已用 pdx 回覆 `host/fixture-peer`：「pong」，對方已收到。"
+          }
+        ]
+      },
+      {
+        "id": "b39e733e-6ae7-4b9f-920e-6c61e825310b",
+        "index": 1,
+        "started_at": 1791483132146,
+        "ended_at": 1791483132146,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "b39e733e-6ae7-4b9f-920e-6c61e825310b",
+            "at": 1791483132146,
+            "text": "/exit",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "b1e47811-3643-4cdd-91a6-421531fc27a7",
+            "at": 1791483132146,
+            "kind": "command_output",
+            "detail": {
+              "text": "See ya!"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

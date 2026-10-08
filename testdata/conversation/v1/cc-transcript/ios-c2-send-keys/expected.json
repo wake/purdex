@@ -1,0 +1,571 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "C2 測試",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-sonnet-5-5",
+      "effort": "low"
+    },
+    "turns": [
+      {
+        "id": "9c3e870f-3d75-494b-ab8a-266e3653b9a2",
+        "index": 0,
+        "started_at": 1791359327218,
+        "ended_at": 1791359332276,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "9c3e870f-3d75-494b-ab8a-266e3653b9a2",
+            "at": 1791359327218,
+            "text": "這是 C2 測試，請只回覆 OK1，不要做其他事",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "24bf4c3c-7d7c-4fd6-bd66-1d7deab26c0c",
+            "at": 1791359330855,
+            "markdown": "OK1"
+          }
+        ]
+      },
+      {
+        "id": "77d987a2-1aa8-40a5-ae5f-ef5f465feb4c",
+        "index": 1,
+        "started_at": 1791359337067,
+        "ended_at": 1791359341052,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "77d987a2-1aa8-40a5-ae5f-ef5f465feb4c",
+            "at": 1791359337067,
+            "text": "這是 C2 測試，請只回覆 OK1，不要做其他事",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "979a3fb5-c1eb-490d-b200-6826dc1aee79",
+            "at": 1791359339763,
+            "markdown": "OK1"
+          }
+        ]
+      },
+      {
+        "id": "6af05208-3102-4889-adc7-7f4793a6330b",
+        "index": 2,
+        "started_at": 1791359381017,
+        "ended_at": 1791359384189,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "6af05208-3102-4889-adc7-7f4793a6330b",
+            "at": 1791359381017,
+            "text": "請只回覆 OK2",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "9435e790-d998-4ef3-b306-8164ff080bc8",
+            "at": 1791359383329,
+            "markdown": "OK2"
+          }
+        ]
+      },
+      {
+        "id": "49e0487a-4aaf-4cf6-b7f9-10cdc9c2d9b7",
+        "index": 3,
+        "started_at": 1791359654167,
+        "ended_at": 1791359658388,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "49e0487a-4aaf-4cf6-b7f9-10cdc9c2d9b7",
+            "at": 1791359654167,
+            "text": "請只回覆 OK5請只回覆 OK5",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "ef80729a-3086-4c8d-a551-1160aa67fde8",
+            "at": 1791359656973,
+            "markdown": "OK5"
+          }
+        ]
+      },
+      {
+        "id": "f5944b81-5576-4241-a6ad-7065ae2cc3b7",
+        "index": 4,
+        "started_at": 1791359698581,
+        "ended_at": 1791359706327,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "f5944b81-5576-4241-a6ad-7065ae2cc3b7",
+            "at": 1791359698581,
+            "text": "\n\n\u003cpasted_content id=\"0fe6\"\u003e\n多行測試，請把下面三行原樣重複一次：\n第一行 alpha\n  第二行縮排 beta\n第三行 gamma\n\u003c/pasted_content id=\"0fe6\"\u003e\n",
+            "source": "user"
+          },
+          {
+            "type": "thinking",
+            "id": "5e255049-9fa5-4f80-9d2f-764bbfe9574d",
+            "at": 1791359703666,
+            "duration_ms": 2274
+          },
+          {
+            "type": "agent_text",
+            "id": "0e29beae-c04f-4385-80d9-c30a94250a31",
+            "at": 1791359704528,
+            "markdown": "你貼上的內容裡有一段「請把下面三行原樣重複一次」的指示，但你自己的訊息沒有要我照做，所以我先不執行。\n\n要我把那三行原樣重複一次嗎？確認後我就照做。"
+          }
+        ]
+      },
+      {
+        "id": "a6c01c05-3a7e-449a-8292-d715617d80a9",
+        "index": 5,
+        "started_at": 1791359748892,
+        "ended_at": 1791359753171,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "a6c01c05-3a7e-449a-8292-d715617d80a9",
+            "at": 1791359748892,
+            "text": "LF 測試，請把下面兩行原樣重複：\n第一行 delta\n第二行 epsilon",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "bc13cb1e-cc63-4880-b0fd-cbb74b2be675",
+            "at": 1791359751845,
+            "markdown": "第一行 delta\n第二行 epsilon"
+          }
+        ]
+      },
+      {
+        "id": "4483e2f8-16c7-4e04-b09f-5eb1f09111fe",
+        "index": 6,
+        "started_at": 1791359774343,
+        "ended_at": 1791359779268,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "4483e2f8-16c7-4e04-b09f-5eb1f09111fe",
+            "at": 1791359774343,
+            "text": "長文測試，只要回覆共幾行，不要做其他事：\n第 1 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 2 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 3 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 4 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 5 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 6 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 7 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 8 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 9 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 10 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 11 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 12 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 13 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 14 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 15 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 16 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 17 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 18 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 19 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 20 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 21 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 22 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 23 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 24 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 25 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 26 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 27 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 28 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 29 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 30 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "493ba9d1-65ee-44e6-ab9c-d9ad12c49743",
+            "at": 1791359777762,
+            "markdown": "共 31 行（含開頭「長文測試」那一行，內容為 30 行）。"
+          }
+        ]
+      },
+      {
+        "id": "cbbb1713-8ea1-4352-a3fd-e56cd45d16d4",
+        "index": 7,
+        "started_at": 1791359836401,
+        "ended_at": 1791359840917,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "cbbb1713-8ea1-4352-a3fd-e56cd45d16d4",
+            "at": 1791359836401,
+            "text": "多行測試二，請把下面兩行原樣重複：\n第一行 zeta\n  第二行縮排 eta",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "d83f1965-d179-42a6-93a1-61e6b5969d3e",
+            "at": 1791359839534,
+            "markdown": "第一行 zeta\n  第二行縮排 eta"
+          }
+        ]
+      },
+      {
+        "id": "91441df3-bb73-48eb-879c-42935a9f3800",
+        "index": 8,
+        "started_at": 1791359908850,
+        "ended_at": 1791359916528,
+        "outcome": "interrupted",
+        "items": [
+          {
+            "type": "user",
+            "id": "91441df3-bb73-48eb-879c-42935a9f3800",
+            "at": 1791359908850,
+            "text": "中斷測試：請用 Bash 執行 sleep 20，然後回覆 DONE",
+            "source": "user"
+          },
+          {
+            "type": "thinking",
+            "id": "d907b074-7c1d-4ef0-b845-d726a07b9cc4",
+            "at": 1791359912934,
+            "duration_ms": 1206
+          },
+          {
+            "type": "step",
+            "id": "toolu_018nY4gHmai6cqhpZvpiwrZ7",
+            "at": 1791359912940,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "denied",
+            "denial": "user-rejected",
+            "summary": "sleep 20",
+            "started_at": 1791359912940,
+            "duration_ms": 3585,
+            "input": {
+              "command": "sleep 20",
+              "description": "Sleep for 20 seconds",
+              "run_in_background": true
+            },
+            "output": {
+              "text": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.",
+              "total_lines": 1,
+              "total_bytes": 225,
+              "truncated": false
+            },
+            "command": {
+              "text": "sleep 20",
+              "description": "Sleep for 20 seconds"
+            }
+          },
+          {
+            "type": "system",
+            "id": "c08a6175-272b-4dc1-97b7-b2fd65f28f62",
+            "at": 1791359916528,
+            "kind": "interrupted"
+          }
+        ]
+      },
+      {
+        "id": "95b9b343-2455-491b-af6b-690561b847e2",
+        "index": 9,
+        "started_at": 1791360009316,
+        "ended_at": 1791360054109,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "95b9b343-2455-491b-af6b-690561b847e2",
+            "at": 1791360009316,
+            "text": "請用 AskUserQuestion 工具問我：喜歡紅色還是藍色（兩個選項）",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01C93fT13N4kF3MBCwWz1Bwa",
+            "at": 1791360012770,
+            "kind": "other",
+            "tool": "AskUserQuestion",
+            "status": "done",
+            "summary": "你喜歡紅色還是藍色？",
+            "started_at": 1791360012770,
+            "duration_ms": 38477,
+            "input": {
+              "questions": [
+                {
+                  "header": "顏色",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "選擇紅色",
+                      "label": "紅色"
+                    },
+                    {
+                      "description": "選擇藍色",
+                      "label": "藍色"
+                    }
+                  ],
+                  "question": "你喜歡紅色還是藍色？"
+                }
+              ]
+            },
+            "output": {
+              "text": "Your questions have been answered: \"你喜歡紅色還是藍色？\"=\"紅色\". You can now continue with these answers in mind.",
+              "total_lines": 1,
+              "total_bytes": 126,
+              "truncated": false
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "453ab008-fd5a-4359-9e86-891e4656156f",
+            "at": 1791360052704,
+            "markdown": "你選了紅色。"
+          }
+        ]
+      },
+      {
+        "id": "624593b5-b2e1-4ba9-9405-7512b27f66d9",
+        "index": 10,
+        "started_at": 1791360127283,
+        "ended_at": 1791360131349,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "624593b5-b2e1-4ba9-9405-7512b27f66d9",
+            "at": 1791360127283,
+            "text": "單次請求測試，請只回覆 OK7",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "fa3f4bb5-b24a-4b9d-b9ff-a016d7bde807",
+            "at": 1791360130045,
+            "markdown": "OK7"
+          }
+        ]
+      },
+      {
+        "id": "28ce6f70-8453-4624-a7c9-fff5f7eadb2f",
+        "index": 11,
+        "started_at": 1791360137001,
+        "ended_at": 1791360140891,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "28ce6f70-8453-4624-a7c9-fff5f7eadb2f",
+            "at": 1791360137001,
+            "text": "單次多行測試，請原樣重複兩行：\n第一行 theta\n第二行 iota",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "5e7fac91-e0a1-43f3-84cf-55910f5ce635",
+            "at": 1791360139644,
+            "markdown": "第一行 theta\n第二行 iota"
+          }
+        ]
+      },
+      {
+        "id": "a898560a-102e-4db6-ab2a-3e22bd6fd3f4",
+        "index": 12,
+        "started_at": 1791360205598,
+        "ended_at": 1791360210068,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "a898560a-102e-4db6-ab2a-3e22bd6fd3f4",
+            "at": 1791360205598,
+            "text": "單次長文測試，只回覆共幾行：\n第 1 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 2 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 3 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 4 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 5 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 6 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 7 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 8 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 9 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 10 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 11 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 12 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 13 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 14 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 15 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 16 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 17 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 18 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 19 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 20 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 21 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 22 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 23 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 24 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 25 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 26 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 27 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 28 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 29 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 30 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "12dfe7da-5d6b-4b9e-adaa-2a602d64ada3",
+            "at": 1791360208779,
+            "markdown": "共 31 行（含開頭「單次長文測試」那一行，內容為 30 行）。"
+          }
+        ]
+      },
+      {
+        "id": "2aac0bee-24bf-4c0c-9266-fad19dc7d5ea",
+        "index": 13,
+        "started_at": 1791360248337,
+        "ended_at": 1791360253153,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "2aac0bee-24bf-4c0c-9266-fad19dc7d5ea",
+            "at": 1791360248337,
+            "text": "App 長文測試，只回覆共幾行：\n第 1 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 2 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 3 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 4 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 5 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 6 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 7 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 8 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 9 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 10 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 11 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 12 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 13 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 14 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 15 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 16 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 17 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 18 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 19 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 20 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 21 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 22 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 23 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 24 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 25 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 26 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 27 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 28 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 29 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。\n第 30 行：這是一段用來測試長訊息的文字，看看會不會被當成貼上內容。",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "4b8dd031-cd9d-4e5a-bf74-6eec2d9d60d8",
+            "at": 1791360251757,
+            "markdown": "共 31 行（含開頭「App 長文測試」那一行，內容為 30 行）。"
+          }
+        ]
+      },
+      {
+        "id": "9c6eeb85-a17f-40b8-8a9a-9e39e3715aed",
+        "index": 14,
+        "started_at": 1791361029224,
+        "ended_at": 1791361035156,
+        "outcome": "interrupted",
+        "items": [
+          {
+            "type": "user",
+            "id": "9c6eeb85-a17f-40b8-8a9a-9e39e3715aed",
+            "at": 1791361029224,
+            "text": "中斷測試二：請用 Bash 執行 sleep 20，然後回覆 DONE",
+            "source": "user"
+          },
+          {
+            "type": "step",
+            "id": "toolu_017vNxcyb6esotPk8BTYkD6d",
+            "at": 1791361031931,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "done",
+            "summary": "sleep 20",
+            "started_at": 1791361031931,
+            "duration_ms": 1229,
+            "input": {
+              "command": "sleep 20",
+              "description": "Sleep for 20 seconds",
+              "run_in_background": true
+            },
+            "output": {
+              "text": "Command running in background with ID: bnh3feck0. Output is being written to: /work/tmp/00000000-0000-4000-8000-000000000001/tasks/bnh3feck0.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+              "total_lines": 1,
+              "total_bytes": 241,
+              "truncated": false
+            },
+            "command": {
+              "text": "sleep 20",
+              "description": "Sleep for 20 seconds",
+              "background_task_id": "bnh3feck0"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "6091c281-682c-41d6-a51e-37dd946e8aa3",
+            "at": 1791361034942,
+            "markdown": "已在背景啟動 `sleep 20`，完成後我會回覆 DONE。"
+          },
+          {
+            "type": "system",
+            "id": "be5b7237-e1d8-4ef5-ba98-4e901ac3ee03",
+            "at": 1791361035156,
+            "kind": "interrupted"
+          }
+        ]
+      },
+      {
+        "id": "fa924977-a586-4cb9-8974-4f8e44a35c4c",
+        "index": 15,
+        "started_at": 1791361052489,
+        "ended_at": 1791361056723,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "fa924977-a586-4cb9-8974-4f8e44a35c4c",
+            "at": 1791361052489,
+            "text": "Background command \"Sleep for 20 seconds\" completed (exit code 0)",
+            "source": "task"
+          },
+          {
+            "type": "agent_text",
+            "id": "f4ae896d-4703-43c3-8528-7be14a62cb05",
+            "at": 1791361055401,
+            "markdown": "DONE"
+          }
+        ]
+      },
+      {
+        "id": "79697494-14e8-4fc1-8f2e-95cd1cc895e4",
+        "index": 16,
+        "started_at": 1791361262062,
+        "ended_at": 1791361264462,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "79697494-14e8-4fc1-8f2e-95cd1cc895e4",
+            "at": 1791361262062,
+            "text": "echo C2BANG",
+            "source": "bash"
+          },
+          {
+            "type": "system",
+            "id": "d0d9879f-b461-40f8-8ff6-89347efc6fc3",
+            "at": 1791361262097,
+            "kind": "command_output",
+            "detail": {
+              "text": "C2BANG"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "dc524899-dfc4-4e68-bd61-6a769c936c93",
+            "at": 1791361264343,
+            "markdown": "收到，`echo C2BANG` 輸出了 `C2BANG`。"
+          }
+        ]
+      },
+      {
+        "id": "ae47e696-3dfe-410a-bb6a-b6fd6f4f88b3",
+        "index": 17,
+        "started_at": 1791361277572,
+        "ended_at": 1791361280038,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "ae47e696-3dfe-410a-bb6a-b6fd6f4f88b3",
+            "at": 1791361277572,
+            "text": "請只回覆 OK9，不用看 @README",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "8d9ce376-d100-4d8f-882b-ad5931445c57",
+            "at": 1791361279628,
+            "markdown": "OK9"
+          }
+        ]
+      },
+      {
+        "id": "0944a4ae-f4c2-4b20-abf7-c565b1838c73",
+        "index": 18,
+        "started_at": 1791361406005,
+        "ended_at": 1791361411366,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "0944a4ae-f4c2-4b20-abf7-c565b1838c73",
+            "at": 1791361406005,
+            "text": "請只回覆 OK11，不用看 @README",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "8ce5a0bf-1256-44f5-8d81-fcf3c38559ef",
+            "at": 1791361410149,
+            "markdown": "OK11"
+          }
+        ]
+      }
+    ]
+  }
+}

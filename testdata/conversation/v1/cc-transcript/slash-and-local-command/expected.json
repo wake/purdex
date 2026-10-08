@@ -1,0 +1,158 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-sonnet-5-5",
+      "effort": "low"
+    },
+    "turns": [
+      {
+        "id": "dfa7ab65-33e8-4a65-a856-2371f8d6657e",
+        "index": 0,
+        "started_at": 1791482777617,
+        "ended_at": 1791482777617,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "dfa7ab65-33e8-4a65-a856-2371f8d6657e",
+            "at": 1791482777617,
+            "text": "/model",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "e8ff971e-e1d0-4653-b3c0-4ea29155232f",
+            "at": 1791482777617,
+            "kind": "command_output",
+            "detail": {
+              "text": "Kept model as `Sonnet 5.5`"
+            }
+          }
+        ]
+      },
+      {
+        "id": "57d1be9b-65a8-4bdd-8b69-fb5fcbf183f6",
+        "index": 1,
+        "started_at": 1791482787338,
+        "ended_at": 1791482793620,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "57d1be9b-65a8-4bdd-8b69-fb5fcbf183f6",
+            "at": 1791482787338,
+            "text": "/hello fixture",
+            "source": "slash"
+          },
+          {
+            "type": "agent_text",
+            "id": "6612213c-56d0-474b-a529-8a97e25fc409",
+            "at": 1791482791476,
+            "markdown": "哈囉，fixture，很高興見到你！"
+          }
+        ]
+      },
+      {
+        "id": "ee5bdd9a-f5aa-461d-82d2-306d8deb3c61",
+        "index": 2,
+        "started_at": 1791482805404,
+        "ended_at": 1791482805404,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "ee5bdd9a-f5aa-461d-82d2-306d8deb3c61",
+            "at": 1791482805404,
+            "text": "/context",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "e8e3a8a7-209d-45e8-bffa-3a9d74076b8e",
+            "at": 1791482805404,
+            "kind": "command_output",
+            "detail": {
+              "text": "[output omitted by scrubber]"
+            }
+          }
+        ]
+      },
+      {
+        "id": "11db1a66-1711-4c35-9661-cfc9827535d2",
+        "index": 3,
+        "started_at": 1791482827456,
+        "ended_at": 1791482827456,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "11db1a66-1711-4c35-9661-cfc9827535d2",
+            "at": 1791482827456,
+            "text": "/usage",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "524bbe59-4d22-44de-b7fc-7a5bc00e349e",
+            "at": 1791482827456,
+            "kind": "command_output",
+            "detail": {
+              "text": "Settings dialog dismissed"
+            }
+          }
+        ]
+      },
+      {
+        "id": "805f98b9-ede4-469c-9422-c62ba97bbd96",
+        "index": 4,
+        "started_at": 1791482830904,
+        "ended_at": 1791482830904,
+        "outcome": "done",
+        "items": [
+          {
+            "type": "user",
+            "id": "805f98b9-ede4-469c-9422-c62ba97bbd96",
+            "at": 1791482830904,
+            "text": "/exit",
+            "source": "slash"
+          },
+          {
+            "type": "system",
+            "id": "2affa6b5-5dbd-46f8-b5f2-bb849aebb57b",
+            "at": 1791482830904,
+            "kind": "command_output",
+            "detail": {
+              "text": "See ya!"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "live": false,
+  "turns": 11,
+  "per_turn": [
+    {"id": "c0300df3-be8e-433b-9288-032ed8a84b1d", "outcome": "done", "user_source": "user"},
+    {"id": "d890a7cd-4be1-445f-af67-17ec46c7c86b", "outcome": "done", "user_source": "queued"},
+    {"id": "b94ec5fc-51bb-49f2-8e61-719ff32d9dfe", "outcome": "done", "user_source": "task"},
+    {"id": "33b186ec-1c53-46ea-abde-6bf2f315a278", "outcome": "done", "user_source": "user"},
+    {"id": "b873764d-f8fd-4bf8-8f99-dbc123470c30", "outcome": "done", "user_source": "queued"},
+    {"id": "a9e236ce-aa75-48b5-b9bb-8ba0d5f70927", "outcome": "interrupted", "user_source": "user"},
+    {"id": "4b51a852-0572-49bf-9f04-c40fca967843", "outcome": "done", "user_source": "queued"},
+    {"id": "b18d5f0f-d63a-4195-9d85-517198eae2a0", "outcome": "done", "user_source": "user"},
+    {"id": "e93e1ffa-4bee-423f-b7bf-de64f2d5eccb", "outcome": "interrupted", "user_source": "user"},
+    {"id": "f2777d64-fcc3-4850-a4d5-9dcc237ffeaa", "outcome": "done", "user_source": "user"},
+    {"id": "2510af48-73b4-461d-8161-9a1865bfd0c4", "outcome": "interrupted", "user_source": "user"}
+  ],
+  "steps": [
+    {"id": "toolu_01PVAPkx4DJV7AJcTjCAE9MU", "kind": "execute", "status": "done"}
+  ],
+  "outputs": [],
+  "shapes": ["queued_prompt_row", "interrupted_marker"]
+}
