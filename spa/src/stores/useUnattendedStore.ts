@@ -29,6 +29,8 @@ interface UnattendedStoreState {
   setQuotaSupport: (hostId: string, support: UnattendedSupport) => void
   setMaxMembersSupport: (hostId: string, support: UnattendedSupport) => void
   setEditSupport: (hostId: string, support: UnattendedSupport) => void
+  /** The edit capability is unknown again (the connection it was learned on is gone); a no-op when never learned. */
+  invalidateEditSupport: (hostId: string) => void
   applyState: (hostId: string, state: UnattendedState) => void
   forgetHost: (hostId: string) => void
   reset: () => void
@@ -50,6 +52,11 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
     const cur = s.byHost[hostId]
     if (cur?.maxMembersSupport === maxMembersSupport) return s
     return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', maxMembersSupport } } }
+  }),
+  invalidateEditSupport: (hostId) => set((s) => {
+    const cur = s.byHost[hostId]
+    if (cur?.editSupport === undefined || cur.editSupport === 'unknown') return s
+    return { byHost: { ...s.byHost, [hostId]: { ...cur, editSupport: 'unknown' } } }
   }),
   setEditSupport: (hostId, editSupport) => set((s) => {
     const cur = s.byHost[hostId]

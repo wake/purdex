@@ -71,6 +71,64 @@ describe('startUnattendedSupport', () => {
     expect(useUnattendedStore.getState().byHost.h2?.editSupport).toBe('no')
   })
 
+  describe('the edit capability follows the connection', () => {
+    const EDIT = info(['relay.unattended.v1', 'team.edit.v1'])
+    const edit = () => useUnattendedStore.getState().byHost.h1?.editSupport
+    const setStatus = (status: 'connected' | 'disconnected') => useHostStore.setState({ runtime: { h1: { status } } })
+
+    it('a disconnect makes it unknown; a reconnect probes before it is "yes" again', async () => {
+      setStatus('connected')
+      fetchHostInfo.mockResolvedValue(EDIT)
+      stop = startUnattendedSupport()
+      await flush()
+      expect(edit()).toBe('yes')
+      setStatus('disconnected')
+      expect(edit()).toBe('unknown')
+      const d = deferred<HostInfo>()
+      fetchHostInfo.mockReturnValueOnce(d.promise)
+      setStatus('connected')
+      expect(edit()).toBe('unknown') // reconnected, not answered yet: no popover
+      d.resolve(EDIT)
+      await flush()
+      expect(edit()).toBe('yes')
+    })
+
+    it('an answer still on its way when the host disconnects does not set it', async () => {
+      const d = deferred<HostInfo>()
+      fetchHostInfo.mockReturnValueOnce(d.promise)
+      setStatus('connected')
+      stop = startUnattendedSupport()
+      setStatus('disconnected')
+      d.resolve(EDIT)
+      await flush()
+      expect(edit()).not.toBe('yes')
+    })
+
+    it('a daemon that dropped the capability reads "no" after the reconnect', async () => {
+      setStatus('connected')
+      fetchHostInfo.mockResolvedValue(EDIT)
+      stop = startUnattendedSupport()
+      await flush()
+      setStatus('disconnected')
+      fetchHostInfo.mockResolvedValue(WITH)
+      setStatus('connected')
+      await flush()
+      expect(edit()).toBe('no')
+    })
+
+    it('a failed probe leaves it unknown, never the old "yes"', async () => {
+      setStatus('connected')
+      fetchHostInfo.mockResolvedValue(EDIT)
+      stop = startUnattendedSupport()
+      await flush()
+      setStatus('disconnected')
+      fetchHostInfo.mockRejectedValue(new Error('down'))
+      setStatus('connected')
+      await flush()
+      expect(edit()).toBe('unknown')
+    })
+  })
+
   it('probes the hosts already connected at start', async () => {
     useHostStore.setState({ runtime: { h2: { status: 'connected' } } })
     stop = startUnattendedSupport()

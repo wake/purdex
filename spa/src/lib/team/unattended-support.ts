@@ -27,6 +27,7 @@ export function startUnattendedSupport(): () => void {
   const probe = (hostId: string) => {
     const generation = ++counter
     current.set(hostId, generation)
+    useUnattendedStore.getState().invalidateEditSupport(hostId) // what the last connection said is not this one's answer
     fetchHostInfo(hostId).then(
       (info) => {
         if (current.get(hostId) !== generation) return
@@ -37,7 +38,9 @@ export function startUnattendedSupport(): () => void {
         useUnattendedStore.getState().setMaxMembersSupport(hostId, listed.includes(TEAM_MAX_MEMBERS_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setEditSupport(hostId, listed.includes(TEAM_EDIT_CAPABILITY) ? 'yes' : 'no')
       },
-      () => { /* not retried until the next trigger */ },
+      () => { // not retried until the next trigger; the edit capability stays unknown rather than keeping an old 'yes'
+        if (current.get(hostId) === generation) useUnattendedStore.getState().invalidateEditSupport(hostId)
+      },
     )
   }
 
@@ -69,7 +72,15 @@ export function startUnattendedSupport(): () => void {
         useRelayQuotaStore.getState().forgetHost(hostId) // and so are the quota numbers it confirmed
         useMaxMembersStore.getState().forgetHost(hostId) // and a cap request still out to it
       }
-      if (next.runtime[hostId]?.status !== 'connected') continue
+      if (next.runtime[hostId]?.status !== 'connected') {
+        // The connection the edit capability was learned on is gone: it is unknown until the next probe answers, and an
+        // answer still on its way from that connection must not set it.
+        if (prev.runtime[hostId]?.status === 'connected') {
+          current.delete(hostId)
+          store.invalidateEditSupport(hostId)
+        }
+        continue
+      }
       if (repointed || !before || prev.runtime[hostId]?.status !== 'connected') probe(hostId)
     }
   })
