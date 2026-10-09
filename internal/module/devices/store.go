@@ -185,7 +185,11 @@ func (s *Store) RevokePairing(pairingID string) ([]string, error) {
 		}
 		ids = append(ids, id)
 	}
+	iterErr := rows.Err() // an iteration that stopped on an error is not the whole list: never revoke on part of it
 	rows.Close()
+	if iterErr != nil {
+		return nil, iterErr
+	}
 	if len(ids) == 0 {
 		return nil, nil
 	}
