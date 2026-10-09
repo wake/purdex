@@ -73,9 +73,13 @@ func (m *Module) judgeRelayTimeout(op team.RelayOp, now int64) {
 func (m *Module) failOnTimeout(op team.RelayOp, reason string) {
 	// Conditional on the snapshot the judgement used: a seen, a claim or a report that landed since wins.
 	exp := &RelayExpect{State: op.State, UpdatedAt: op.UpdatedAt, SeenAt: op.SeenAt}
-	if _, err := m.applyReconcile(op, RelayReport{State: team.RelayFailed, Reason: reason, At: m.now(), Expect: exp}); err != nil {
+	_, applied, err := m.applyReconcile(op, RelayReport{State: team.RelayFailed, Reason: reason, At: m.now(), Expect: exp})
+	switch {
+	case err != nil:
 		m.logf("[team] relay op %s timeout: %v", op.ID, err)
-		return
+	case applied:
+		m.logf("[team] relay op %s timed out (%s)", op.ID, reason)
+	default:
+		m.logf("[team] relay op %s: a timeout judged from a stale read was skipped (progress landed first)", op.ID)
 	}
-	m.logf("[team] relay op %s timed out (%s)", op.ID, reason)
 }

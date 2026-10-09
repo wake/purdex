@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/team"
@@ -188,9 +189,15 @@ func TestSweep_ProgressThatLandsAfterTheSnapshotWins(t *testing.T) {
 	if code, _, _ := f.seen(op.ID, "sid-m1"); code != 200 { // the mod answers after the sweeper's read
 		t.Fatal("seen")
 	}
+	getLogs := f.logs()
 	f.m.judgeRelayTimeout(stale, f.clock.Load())
 	if f.op(op.ID).State != team.RelayRequested {
 		t.Fatalf("a stale judgement failed an op that was seen meanwhile: %+v", f.op(op.ID))
+	}
+	for _, l := range getLogs() {
+		if strings.Contains(l, "timed out") {
+			t.Fatalf("a skipped timeout was logged as applied: %q", l)
+		}
 	}
 	// and a claim
 	f2 := newFixture(t)
