@@ -88,7 +88,7 @@ type Turn struct {
 	Outcome   Outcome    `json:"outcome"`
 	Error     *TurnError `json:"error,omitempty"`
 	// DurationMS is the turn time Claude Code records in its turn_duration row
-	// (the last one when several); absent when none, or not a non-negative number.
+	// (the last valid one when several); absent when no row has a non-negative number.
 	DurationMS *int64 `json:"duration_ms,omitempty"`
 	Items      []Item `json:"items"`
 	// OmittedItems is how many of the turn's oldest items a size-capped window

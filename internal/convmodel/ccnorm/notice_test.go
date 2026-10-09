@@ -117,3 +117,28 @@ func TestNotice_TruncatedAndNonString(t *testing.T) {
 }
 
 func i64p(v int64) *int64 { return &v }
+
+// (Rows share the first row's timestamp: a later one would move ended_at, a real change of its own.)
+// A broken turn_duration row never wipes a good number; a new valid one replaces it and reports a change.
+func TestTurnDuration_LastValidWins(t *testing.T) {
+	n := New(Options{SessionID: sidA})
+	feed(t, n, userRow("u1", 1, "go"), turnDuration("d1", 2, 100))
+	for _, bad := range [][]byte{
+		turnDuration("d2", 2, 1, without("durationMs")),
+		turnDuration("d3", 2, 1, with("durationMs", -7)),
+		turnDuration("d4", 2, 1, with("durationMs", "9")),
+	} {
+		if ch := feed(t, n, bad); len(ch) != 0 {
+			t.Errorf("invalid duration row reported %v", ch)
+		}
+	}
+	if d := n.Conversation().Turns[0].DurationMS; d == nil || *d != 100 {
+		t.Errorf("duration_ms = %v, want 100", d)
+	}
+	if ch := feed(t, n, turnDuration("d5", 6, 200)); len(ch) != 1 || ch[0].ItemID != "" {
+		t.Errorf("new valid duration changes = %v, want one turn change", ch)
+	}
+	if d := n.Conversation().Turns[0].DurationMS; d == nil || *d != 200 {
+		t.Errorf("duration_ms = %v, want 200", d)
+	}
+}
