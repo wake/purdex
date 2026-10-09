@@ -86,6 +86,23 @@ func TestWBHold_AStopWaitsThenCarriesTheLine(t *testing.T) {
 	}
 }
 
+// A Stop whose reply asks the person something is a `waiting` frame: after the rule-8 check it waits for the line too
+// (codex R1).
+// Mutation gate: send at once from the waiting branch → red.
+func TestWBHold_AWaitingStopWaitsForTheLineToo(t *testing.T) {
+	e := newAgentEnv(t, time.Millisecond) // rule 8's own hold is short
+	fl := e.withWorkbook(8 * time.Second)
+	e.device(tokA, "en", "mlab", tabsOf("c1"))
+	e.feed.emit(nev("c1", "PdxStop", "waiting", stopDetail("要先備份嗎？")))
+	waitFor(t, "the hold to start", func() bool { return fl.started.Load() == 1 })
+	e.noSends(t)
+	fl.release <- lineAnswer{workbooklines.Line{Thing: "部署", Push: "請決定要不要先備份", ConvKey: "r", EntryID: 5}, true}
+	c := e.waitSends(t, 1)[0]
+	if !strings.Contains(c.Payload, `"body":"請決定要不要先備份"`) || !strings.Contains(c.Payload, `"title":"mlab: dev・部署"`) {
+		t.Fatalf("payload = %s", c.Payload)
+	}
+}
+
 // No line (a failed entry, the deadline): today's push, unchanged.
 func TestWBHold_NoLineSendsTodaysPush(t *testing.T) {
 	e := newAgentEnv(t, time.Hour)

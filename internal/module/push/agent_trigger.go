@@ -73,6 +73,7 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	// An ask that was opened and answered before the event arrived does not hide it.
 	if !m.holds.after(m.holdFor, func() {
 		if !m.asks.Overlaps(ev.SessionID, ev.SessionName, arrival, windowEnd) {
+			// a Stop whose reply asks the person something comes as `waiting` too: it waits for its workbook line as well
 			send()
 		}
 	}) {
