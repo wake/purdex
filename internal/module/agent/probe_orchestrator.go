@@ -453,7 +453,7 @@ func (m *Module) emitProbeMinimal(args probeGuardArgs, status agentpkg.Status) {
 	if m.core != nil {
 		code = m.resolveSessionCode(args.Session)
 	}
-	m.emitSessionWith(kindProbe, code, "", func(*SessionProjection, error) (agentpkg.NormalizedEvent, bool) {
+	m.emitSlot(kindProbe, code, "", args.Session, func(*SessionProjection, error) (agentpkg.NormalizedEvent, bool) {
 		n := minimalProbeEvent(args, status)
 		m.recordEmittedLights(args.Session, nil, n)
 		return n, true
