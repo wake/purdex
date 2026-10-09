@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.672] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`。
+
+### Changed：「做完／出錯」的推播改用工作簿的短句 — WB-3（#2365，介面線）
+
+- 一輪結束（Stop）或出錯（StopFailure）要推播時，daemon 最多等 8 秒（主機設定 `workbook.push_wait_s`，0＝不等）拿這一輪工作簿的推播短句：標題改成「<主機>：<session>・<事名>」（沒有主機標籤時「<session>・<事名>」），內文是那一句短句，payload 帶 `purdex.workbook = {conv_key, entry_id}`，iOS 點推播可以開到那一筆。沒有紀錄、整理失敗或逾時就照舊用原本的標題與內文。要求權限與其他通知不變。Mac 在場時照舊不推。
+
+### Tests
+
+- 對話轉譯 README 改用短 sha，修好 main 上的守門測試（#2367）。
+
 ## [1.0.0-alpha.671] - 2026-10-10
 
 > 只動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
