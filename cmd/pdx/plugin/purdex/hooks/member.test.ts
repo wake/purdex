@@ -297,3 +297,24 @@ test('turnRunning is cleared even when a turn.complete hook beneath throws', asy
   await f.clock.advance(300)
   expect(calls(f, 'claim').length).toBe(1)
 })
+
+// R1 incremental (codex): a seen answer that lands after the relay returned to idle still counts; one that lands after a /clear does not.
+test('a seen answer that lands after the relay returned to idle is still kept', async ($, on) => {
+  let answer: (r: R) => void = () => {}
+  const gate = new Promise<R>((r) => { answer = r })
+  const f = memberWorld(on, 'none', (argv) => {
+    if (argv[1] === 'begin') return { exitCode: 0, stdout: JSON.stringify({ op: { ...OP, id: 'self-op', kind: 'self' }, request_id: 'req-1' }) }
+    if (argv[1] === 'wait') return { exitCode: 10 }
+    if (argv[1] === 'seen') return gate as any
+    if (argv[1] === 'claim') return { exitCode: 0, stdout: CLAIM }
+    return undefined
+  })
+  await start($, f)
+  await complete($, 't0')
+  await f.clock.advance(10) // begin → awaiting
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(300) // the wait answers denied: back to idle (gen moved) while seen is out
+  answer({ exitCode: 0, stdout: '{}' })
+  await f.clock.advance(300)
+  expect(calls(f, 'claim')).toEqual(['relay claim ' + OPID + ' --session sid-old'])
+})

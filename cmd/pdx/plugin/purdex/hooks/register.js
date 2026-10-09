@@ -1032,11 +1032,11 @@ export function register(on) {
       // Branch A: the daemon learns the mod has the message now, not at the claim. Its answer is also the proof the
       // op is this member's (any peer can send the marker; `seen` is refused for an op that is not): only an op
       // that was seen is kept for the claim.
-      const gen = s.gen
       later($, 0, async () => {
         const sid = await $.session.id()
         const r = await pdx($, ['relay', 'seen', opId, '--session', sid], CALL_TIMEOUT_MS)
-        if (r.exitCode !== 0 || s.gen !== gen) return log($, 'relay control ' + opId + ' dropped (seen exit ' + r.exitCode + ')')
+        // s.gen moves at every return to idle, so the conversation is told by its session id (a /clear changes it)
+        if (r.exitCode !== 0 || (await $.session.id().catch(() => undefined)) !== sid) return log($, 'relay control ' + opId + ' dropped (seen exit ' + r.exitCode + ')')
         if (!s.control.includes(opId)) s.control = [...s.control, opId].slice(-MAX_CONTROLS)
         if (!s.turnRunning && s.state === 'idle') claimLater($)
       })
