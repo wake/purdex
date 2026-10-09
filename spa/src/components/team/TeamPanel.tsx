@@ -140,6 +140,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
       data-session-id={seat.sessionId}
       data-role={seat.role}
       data-active={String(isActive)}
+      onMouseDown={keepFocus}
       onClick={() => onOpen(seat.sessionId)}
       onKeyDown={(e) => { if (e.key === 'Enter') onOpen(seat.sessionId) }}
       {...drag}
