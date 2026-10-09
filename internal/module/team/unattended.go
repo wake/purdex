@@ -38,6 +38,9 @@ func (m *Module) approve(a team.Approval, c Close) (after team.Approval, won, me
 	case team.KindSelfRelay:
 		after, won, err = m.closeWith(a.ID, func() (row team.Approval, won bool, err error) {
 			row, won, memberCancelled, err = m.store.CloseSelfRelayApproved(a.ID, c, a.Origin.SessionID)
+			if err == nil && won && c.SpentOut != nil && *c.SpentOut {
+				m.markSpent(a.ID) // before closeWith announces the close
+			}
 			return row, won, err
 		})
 	default:
@@ -100,11 +103,8 @@ func teamNote(a team.Approval) string {
 // which rosterChanged's hash gate makes free.
 func (m *Module) afterApproved(a team.Approval) {
 	m.rosterChanged()
-	if a.Kind == team.KindSelfRelay && a.DecidedBy != nil && a.DecidedBy.Kind == team.ClientKindUnattended && m.quotaRuleOn() {
-		// An automatic approval under the quota rule spent one: announce the chain's new numbers (the App orders by rev).
-		if q, root, err := m.store.RelayQuotaOf(a.Origin.SessionID); err == nil {
-			m.broadcastRelayQuota(root, q)
-		}
+	if a.Kind == team.KindSelfRelay && m.takeSpent(a.ID) {
+		m.announceSpend(a.Origin.SessionID) // the approval's own transaction spent a unit: announce the chain's new numbers
 	}
 	if a.Kind == team.KindAdopt {
 		m.kickNotices() // the adopted member is owed its notice
@@ -191,7 +191,8 @@ func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, ha
 // is on and the chain's self_left is 0 — nothing was written and nothing answered, and the caller opens the request
 // for a person as with unattended mode off, and lists it as held for quota. Caller holds createMu.
 func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.Approval, hash string) (done, exhausted bool) {
-	after, claimed, err := m.store.CreateSelfRelayApproved(op, row, hash, m.withQuotaRule(daemonClose(row.CreatedAt, nil), team.KindSelfRelay))
+	c := m.withQuotaRule(daemonClose(row.CreatedAt, nil), team.KindSelfRelay)
+	after, claimed, err := m.store.CreateSelfRelayApproved(op, row, hash, c)
 	switch {
 	case errors.Is(err, ErrQuotaExhausted):
 		// The chain has no quota left (the rule is on): nothing was written; the caller opens the request for a person
@@ -206,6 +207,9 @@ func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.
 		m.logf("[team] relay begin %s: %v", op.SessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return true, false
+	}
+	if c.SpentOut != nil && *c.SpentOut {
+		m.markSpent(after.ID)
 	}
 	m.logf("[team] relay op %s claimed: self, origin=%s (%s), request %s approved by unattended at begin", op.ID, op.Ref, op.SessionID, after.ID)
 	m.announceClosed(after, nil)

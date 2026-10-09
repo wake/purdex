@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -374,5 +375,86 @@ func TestQuotaRule_ASpendBumpsRevAndAnnouncesTheNewNumbers(t *testing.T) {
 	}
 	if !strings.Contains(got, `self_left\":1`) || !strings.Contains(got, `rev\":2`) {
 		t.Fatalf("last quota event = %s, want self_left 1 and rev 2", got)
+	}
+}
+
+func (f *fixture) quotaEvents(sub interface{ SendCh() <-chan []byte }) []string {
+	var out []string
+	for {
+		select {
+		case raw := <-sub.SendCh():
+			if strings.Contains(string(raw), team.RelayQuotaEventType) {
+				out = append(out, string(raw))
+			}
+			continue
+		default:
+		}
+		return out
+	}
+}
+
+// An automatic approval with the rule OFF spends nothing and announces no quota. Mutation gate: announce on every
+// unattended approval → red.
+func TestQuotaRule_NoQuotaEventWhenNothingWasSpent(t *testing.T) {
+	f := newFixture(t)
+	f.unatt.set(true) // rule off
+	f.setQuota("sid-1", 2)
+	sub := f.core.Events.AddTestSubscriber()
+	defer f.core.Events.RemoveTestSubscriber(sub)
+	f.begin("sid-1")
+	if evs := f.quotaEvents(sub); len(evs) != 0 {
+		t.Fatalf("events = %v, want none: nothing was spent", evs)
+	}
+}
+
+// A spend's event leaves in the PUT's section, reading the current row: with a PUT held inside it, the spend's event
+// waits and carries a rev no lower than the PUT's. Mutation gate: publish outside quotaMu → the spend's older rev
+// goes out first → red.
+func TestQuotaRule_ASpendEventFollowsAPutInTheSection(t *testing.T) {
+	f := newFixture(t)
+	f.qrule.set(true, nil)
+	f.unatt.set(true)
+	f.setQuota("sid-1", 3) // rev 1
+	sub := f.core.Events.AddTestSubscriber()
+	defer f.core.Events.RemoveTestSubscriber(sub)
+	inPut, releasePut := make(chan struct{}), make(chan struct{})
+	f.m.afterQuotaSet = func() { close(inPut); <-releasePut }
+	donePut, doneBegin := make(chan struct{}), make(chan struct{})
+	go func() {
+		f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-1", MemberPoolLeft: ip(5), Client: appClient2})
+		close(donePut)
+	}()
+	<-inPut // the PUT committed rev 2 and sits in the section
+	go func() { f.begin("sid-1"); close(doneBegin) }()
+	time.Sleep(150 * time.Millisecond) // the begin commits its spend (rev 3) and waits for the section
+	close(releasePut)
+	<-donePut
+	<-doneBegin
+	evs := f.quotaEvents(sub)
+	if len(evs) != 2 || !strings.Contains(evs[0], `rev\":2`) || !strings.Contains(evs[1], `rev\":3`) {
+		t.Fatalf("quota events = %v, want rev 2 then rev 3", evs)
+	}
+}
+
+// An exhausted request that is denied before any tick leaves no trace in the held set. Mutation gate: no unhold at the
+// winner point → red.
+func TestQuotaRule_AClosedHeldRequestIsForgotten(t *testing.T) {
+	f := newFixture(t)
+	f.qrule.set(true, nil)
+	f.unatt.set(true)
+	b := f.begin("sid-1") // exhausted: held at once
+	f.m.heldMu.Lock()
+	held := len(f.m.heldQuota)
+	f.m.heldMu.Unlock()
+	if held != 1 {
+		t.Fatalf("held = %d, want 1", held)
+	}
+	if code, body := f.decide(b.RequestID, "deny"); code != http.StatusOK {
+		t.Fatalf("deny: %d %s", code, body)
+	}
+	f.m.heldMu.Lock()
+	defer f.m.heldMu.Unlock()
+	if len(f.m.heldQuota) != 0 {
+		t.Fatalf("held set = %v after the deny, want empty", f.m.heldQuota)
 	}
 }

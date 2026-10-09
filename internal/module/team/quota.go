@@ -283,6 +283,7 @@ func (m *Module) quotaRuleOn() bool {
 func (m *Module) withQuotaRule(c Close, kind team.Kind) Close {
 	if kind == team.KindSelfRelay && c.Auto && m.quotaRuleOn() {
 		c.SpendQuota = true
+		c.SpentOut = new(bool)
 	}
 	return c
 }
@@ -330,4 +331,36 @@ func (m *Module) fillHeld(v *team.UnattendedView) {
 		}
 	}
 	v.Held = held
+}
+
+// markSpent / takeSpent carry "this approval's transaction spent a unit" from the approve (which knows) to the winner
+// point afterApproved (which publishes), without re-reading a mutable switch.
+func (m *Module) markSpent(approvalID string) {
+	m.heldMu.Lock()
+	defer m.heldMu.Unlock()
+	if m.spent == nil {
+		m.spent = map[string]struct{}{}
+	}
+	m.spent[approvalID] = struct{}{}
+}
+
+func (m *Module) takeSpent(approvalID string) bool {
+	m.heldMu.Lock()
+	defer m.heldMu.Unlock()
+	_, ok := m.spent[approvalID]
+	delete(m.spent, approvalID)
+	return ok
+}
+
+// announceSpend publishes the new numbers of sid's chain after a spend. It runs in the PUT's section (quotaMu) and
+// reads the CURRENT row there, so the events of spends and PUTs leave in lock order carrying nondecreasing revs — an
+// older snapshot can never follow a newer PUT.
+func (m *Module) announceSpend(sid string) {
+	m.quotaMu.Lock()
+	defer m.quotaMu.Unlock()
+	if q, root, err := m.store.RelayQuotaOf(sid); err == nil {
+		m.broadcastRelayQuota(root, q)
+	} else {
+		m.logf("[team] relay quota event after a spend (%s): %v", sid, err)
+	}
 }

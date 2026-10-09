@@ -354,6 +354,10 @@ type Close struct {
 	// (the relay-quota rule, #2062; set by the module only while the hostconfig switch relay_quota is on). Never honoured
 	// for a close that is not Auto: a person's click spends nothing.
 	SpendQuota bool
+	// SpentOut, when non-nil, is set true by the store when the close won AND spent a unit in its transaction: the
+	// module publishes the new numbers only for a close that really spent, not by re-reading a switch that may have
+	// changed since.
+	SpentOut *bool
 }
 
 // ErrReservedDecider is a non-Auto close that names the daemon's own decider kind.
