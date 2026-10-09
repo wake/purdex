@@ -55,6 +55,60 @@ type PeerHost struct {
 	// rotate/cancel (restore the old as the only one).
 	InboundTokenPrev string `toml:"inbound_token_prev" json:"inbound_token_prev"`
 	AllowBypass      bool   `toml:"allow_bypass"  json:"allow_bypass"`
+	// AllowTeam: this host (the peer) may run team commands on us — it may
+	// make our sessions its team members (cross-host team spec §5.4).
+	// TeamRoots are the only directories it may ask us to spawn in (X-U7);
+	// none means no spawn. Absolute, canonical (CanonicalTeamRoots).
+	AllowTeam bool     `toml:"allow_team"  json:"allow_team"`
+	TeamRoots []string `toml:"team_roots"  json:"team_roots"`
+}
+
+// MaxTeamRoots bounds how many roots one peer entry may carry.
+const MaxTeamRoots = 16
+
+// RootError names the one team root that failed and why. Reason is one of
+// the fixed codes not_absolute, not_found, not_a_directory, too_many (Root
+// is empty for too_many).
+type RootError struct {
+	Root   string
+	Reason string
+}
+
+func (e *RootError) Error() string {
+	if e.Root == "" {
+		return "team roots: " + e.Reason
+	}
+	return fmt.Sprintf("team root %q: %s", e.Root, e.Reason)
+}
+
+// CanonicalTeamRoots validates and normalises a list of spawn roots: each
+// must be an absolute path (the CLI expands ~ — tmux does not) naming an
+// existing directory; symlinks are resolved (the grant is the real
+// directory), duplicates dropped, order kept. The result is never nil;
+// errors are *RootError.
+func CanonicalTeamRoots(in []string) ([]string, error) {
+	if len(in) > MaxTeamRoots {
+		return nil, &RootError{Reason: "too_many"}
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, p := range in {
+		if !filepath.IsAbs(p) {
+			return nil, &RootError{Root: p, Reason: "not_absolute"}
+		}
+		real, err := filepath.EvalSymlinks(filepath.Clean(p))
+		if err != nil {
+			return nil, &RootError{Root: p, Reason: "not_found"}
+		}
+		if st, err := os.Stat(real); err != nil || !st.IsDir() {
+			return nil, &RootError{Root: p, Reason: "not_a_directory"}
+		}
+		if !seen[real] {
+			seen[real] = true
+			out = append(out, real)
+		}
+	}
+	return out, nil
 }
 
 type PeersConfig struct {
