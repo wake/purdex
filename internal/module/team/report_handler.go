@@ -28,6 +28,12 @@ func (m *Module) handleReportCreate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	m.createReportAs(w, c, req)
+}
+
+// createReportAs is the report create for the caller c, resolved by the route (a session of this host) or by the proxy
+// adapter (a remote member bound to its host and member key). The request's origin_inbox is not read here.
+func (m *Module) createReportAs(w http.ResponseWriter, c taskCaller, req team.CreateReportRequest) {
 	if c.member == nil {
 		m.notMember(w)
 		return
