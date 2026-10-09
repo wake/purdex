@@ -14,6 +14,8 @@ import { LocaleEditor } from './LocaleEditor'
 import { LocaleImportModal } from './LocaleImportModal'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { TabPosition } from '../../stores/useLayoutStore'
+import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { ToggleSwitch } from './ToggleSwitch'
 
 function exportTheme(theme: ThemeDefinition) {
   const data = JSON.stringify({ name: theme.name, tokens: theme.tokens }, null, 2)
@@ -47,6 +49,8 @@ export function AppearanceSection() {
   const t = useI18nStore((s) => s.t)
   const tabPosition = useLayoutStore((s) => s.tabPosition)
   const setTabPosition = useLayoutStore((s) => s.setTabPosition)
+  const teamBeadHost = useTeamUiStore((s) => s.teamBeadHost)
+  const setTeamBeadHost = useTeamUiStore((s) => s.setTeamBeadHost)
   const activeLocaleId = useI18nStore((s) => s.activeLocaleId)
   const setLocale = useI18nStore((s) => s.setLocale)
   const deleteCustomLocale = useI18nStore((s) => s.deleteCustomLocale)
@@ -226,6 +230,13 @@ export function AppearanceSection() {
             {t('settings.appearance.tab_position.left_hint')}
           </p>
         </div>
+      </SettingItem>
+
+      <SettingItem
+        label={t('settings.appearance.team_bead_host.label')}
+        description={t('settings.appearance.team_bead_host.desc')}
+      >
+        <ToggleSwitch label={t('settings.appearance.team_bead_host.label')} checked={teamBeadHost} onChange={setTeamBeadHost} />
       </SettingItem>
 
       {/* Locale customize + import */}

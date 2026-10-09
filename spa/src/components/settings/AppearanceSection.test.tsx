@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AppearanceSection } from './AppearanceSection'
 import { useThemeStore } from '../../stores/useThemeStore'
+import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { registerTheme, clearThemeRegistry } from '../../lib/theme-registry'
 import type { ThemeTokens } from '../../lib/theme-tokens'
 
@@ -104,6 +105,16 @@ describe('AppearanceSection', () => {
 
     render(<AppearanceSection />)
     expect(screen.getByLabelText('Export theme')).toBeTruthy()
+  })
+
+  it('has a device-local switch for host icons on member beads, on by default (team spec P7)', () => {
+    useTeamUiStore.setState({ teamBeadHost: true })
+    render(<AppearanceSection />)
+    const sw = screen.getByRole('switch', { name: 'Show host icons on member beads' })
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sw)
+    expect(useTeamUiStore.getState().teamBeadHost).toBe(false)
+    expect(sw.getAttribute('aria-checked')).toBe('false')
   })
 
   it('does not show export/delete buttons for preset themes', () => {
