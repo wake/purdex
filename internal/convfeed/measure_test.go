@@ -10,17 +10,6 @@ import (
 	"time"
 )
 
-// osFile adapts an *os.File to File.
-type osFile struct{ *os.File }
-
-func (f osFile) Size() (int64, error) {
-	st, err := f.File.Stat()
-	if err != nil {
-		return 0, err
-	}
-	return st.Size(), nil
-}
-
 // TestMeasure_RealTranscript times the follower on a real transcript. It is skipped unless
 // PDX_CONVFEED_TRANSCRIPT names a file; the file is only read (a copy takes the appended row):
 //

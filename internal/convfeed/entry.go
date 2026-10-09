@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,12 @@ type Source struct {
 	File     File
 	Identity string
 	Live     bool
+
+	// Set by the Resolver (the Entry ignores them): the pane's light or "ended" / "unknown", "terminal" while a pane
+	// runs the session, and what closes the open file once the caller is done with it.
+	Status  string
+	Backend string
+	Closer  io.Closer
 }
 
 // RefreshResult says what a Refresh did to the model.

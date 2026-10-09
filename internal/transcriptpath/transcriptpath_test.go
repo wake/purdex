@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestSlug(t *testing.T) {
@@ -77,5 +80,37 @@ func TestOpenRefusesSymlink(t *testing.T) {
 	}
 	if err, ok := open(good); !errors.Is(err, ErrNoTranscript) || ok {
 		t.Fatalf("directory symlink: err=%v opened=%v", err, ok)
+	}
+}
+
+// A FIFO where a transcript should be is refused at once: the open must not wait for a writer.
+func TestOpenRefusesAFIFOWithoutBlocking(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "projects")
+	if err := os.MkdirAll(filepath.Join(root, "s"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(root, "s", "t.jsonl")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		f, err := Open(root, fifo)
+		if f != nil {
+			f.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNoTranscript) {
+			t.Fatalf("err = %v, want ErrNoTranscript", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Open blocked on a FIFO")
 	}
 }

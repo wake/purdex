@@ -67,6 +67,9 @@ func Open(root, path string) (*os.File, error) {
 		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC
 		if !last {
 			flags |= unix.O_DIRECTORY
+		} else {
+			// a FIFO in the projects tree must not make the open wait for a writer: fstat below refuses it
+			flags |= unix.O_NONBLOCK
 		}
 		next, err := unix.Openat(dirFD, p, flags, 0)
 		unix.Close(dirFD)

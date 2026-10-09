@@ -12,11 +12,12 @@ import (
 )
 
 // TestImportBoundary keeps the follower free of the daemon: the non-test files of this package import only the
-// standard library, convmodel and ccnorm (a path is standard library when its first element has no dot).
+// standard library, convmodel, ccnorm and transcriptpath (a path is standard library when its first element has no dot).
 func TestImportBoundary(t *testing.T) {
 	allowed := map[string]bool{
 		"github.com/wake/purdex/internal/convmodel":        true,
 		"github.com/wake/purdex/internal/convmodel/ccnorm": true,
+		"github.com/wake/purdex/internal/transcriptpath":   true,
 	}
 	checked := 0
 	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
@@ -36,7 +37,7 @@ func TestImportBoundary(t *testing.T) {
 			p, _ := strconv.Unquote(im.Path.Value)
 			first, _, _ := strings.Cut(p, "/")
 			if strings.Contains(first, ".") && !allowed[p] {
-				t.Errorf("%s imports %s: only the standard library, convmodel and ccnorm are allowed", path, p)
+				t.Errorf("%s imports %s: only the standard library, convmodel, ccnorm and transcriptpath are allowed", path, p)
 			}
 		}
 		return nil
