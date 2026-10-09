@@ -283,6 +283,24 @@ func (r *OriginResolver) LeadPresence(sessionID string, pid int, procStart strin
 	return PresenceUnknown
 }
 
+// SameProcess is LeadPresence's step 2 alone: pid is alive and was started at procStart (to the second, as
+// LeadPresence compares). A dead or reused pid is false, nil; a procStart that does not parse or a start time
+// that cannot be read is an error, so the caller never signals on a guess.
+func (r *OriginResolver) SameProcess(pid int, procStart string) (bool, error) {
+	want, err := ipeers.ParseProcStart(procStart)
+	if pid <= 0 || err != nil {
+		return false, fmt.Errorf("process %d: start time %q cannot be verified", pid, procStart)
+	}
+	if !r.m.liveness.PidAlive(pid) {
+		return false, nil
+	}
+	got, ok := r.startTime(pid)
+	if !ok {
+		return false, fmt.Errorf("process %d: start time cannot be read", pid)
+	}
+	return got.Truncate(time.Second).Equal(want.Truncate(time.Second)), nil
+}
+
 // startTime reads pid's start time as ReadRegistryDiag does (Info when set,
 // else StartTime); ok is false when it cannot be read.
 func (r *OriginResolver) startTime(pid int) (time.Time, bool) {

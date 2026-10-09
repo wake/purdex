@@ -76,6 +76,14 @@ var teamRefusalCodes = map[string]bool{
 	team.ErrCwdOutsideGrant: true,
 	team.ErrNotYourMember:   true,
 	team.ErrRelayOpen:       true,
+	// Adopt (spec D-U24-2; the same codes close a request at the click as its close_reason).
+	team.ErrAdoptSelf:            true,
+	team.ErrAdoptTargetIsLead:    true,
+	team.ErrAdoptAlreadyMember:   true,
+	team.ErrAdoptTargetNotFound:  true,
+	team.ErrAdoptTargetAmbiguous: true,
+	team.ErrRemoteUnsupported:    true,
+	team.ErrRequestOpen:          true,
 	// The task routes' refusals (plan T-1c).
 	team.ErrNotMember:         true,
 	team.ErrTaskNotFound:      true,

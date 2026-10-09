@@ -593,6 +593,9 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		"`/relay` (or `/relay now`) is the user's way to relay early: **you never run it**",
 		// /lead (lead-command spec §3): requested at once, not judged.
 		"When the user runs `/lead` or plainly asks you to become a lead, request it at once",
+		// U24 (adopt spec D-U24-2/3): the commands, the foreground wait and the ambiguity hint.
+		"`pdx adopt <ref>` takes a **running session on this host**", "**in the foreground with Bash `timeout: 600000`**",
+		"`adopt_target_ambiguous` means two sessions share that ref", "`pdx release <ref>` lets a member go",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md lacks %q", want)
@@ -713,5 +716,45 @@ func TestFiltered_WalkSkipsGeneratedPaths(t *testing.T) {
 	}
 	if _, err := (filtered{src}).Open("tsconfig.json"); err == nil {
 		t.Fatal("Open(tsconfig.json) must fail")
+	}
+}
+
+// skillEndMemberRule is D-U24-4 word for word (adopt plan decision 8): the lead asks before it closes a member on
+// its own judgement, with exactly three options. A test-local golden: editing the rule is a reviewed change of two
+// places.
+const skillEndMemberRule = "When you yourself judge that a member is no longer needed, first ask the user with AskUserQuestion. " +
+	"Name the member (its address and title) in the question, and give exactly three options: 釋出 / 關閉 / 保留. " +
+	"Then do what the answer says: 釋出 → `pdx release <ref>`, 關閉 → `pdx kill <ref>`, 保留 → nothing. " +
+	"When the user asked you directly to release or close a member, do it without asking."
+
+// Mutation gates: add a fourth option, or drop the direct-request sentence, in the skill → red.
+func TestSkill_EndMemberRuleIsPinned(t *testing.T) {
+	b, err := fs.ReadFile(Files(), "skills/pdx-team/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, ok := sectionOf(string(b), "## As a lead")
+	if !ok {
+		t.Fatal("no `## As a lead` section")
+	}
+	var para []string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, "AskUserQuestion") {
+			para = append(para, strings.TrimPrefix(line, "- "))
+		}
+	}
+	if len(para) != 1 || para[0] != skillEndMemberRule {
+		t.Fatalf("the end-member rule in `## As a lead` = %q, want exactly %q", para, skillEndMemberRule)
+	}
+	// the option list is exactly three items, in this order
+	i := strings.Index(para[0], "exactly three options: ")
+	opts := strings.SplitN(para[0][i+len("exactly three options: "):], ".", 2)[0]
+	if opts != "釋出 / 關閉 / 保留" {
+		t.Fatalf("options = %q", opts)
+	}
+	for _, want := range []string{"Name the member", "釋出 → `pdx release <ref>`", "關閉 → `pdx kill <ref>`", "保留 → nothing", "do it without asking"} {
+		if !strings.Contains(para[0], want) {
+			t.Errorf("rule lacks %q", want)
+		}
 	}
 }

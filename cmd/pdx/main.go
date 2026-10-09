@@ -47,7 +47,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, spawn, kill, team, task, report, lease, relay, ask, nex, path, version\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, adopt, release, spawn, kill, team, task, report, lease, relay, ask, nex, path, version\n")
 		os.Exit(1)
 	}
 
@@ -80,6 +80,10 @@ func main() {
 		runMsg(os.Args[2:])
 	case "lead":
 		runLead(os.Args[2:])
+	case "adopt":
+		runAdopt(os.Args[2:])
+	case "release":
+		runRelease(os.Args[2:])
 	case "spawn":
 		runSpawn(os.Args[2:])
 	case "kill":
