@@ -204,7 +204,7 @@ func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail
 	// The binding is the op's own pid (P6-2a), for any kind. An op from before it (pid 0) falls back to its approval
 	// row's origin pid, as before; with neither there is nothing to vouch for the new session, so the report is
 	// refused rather than waved through (fail closed) — a member op has no approval row, so its pid 0 ends here.
-	wantPID := op.PID
+	wantPID, wantStart := op.PID, op.ProcStart
 	if wantPID == 0 {
 		if op.Kind == team.RelayKindMember || op.RequestID == "" {
 			return http.StatusBadRequest, "relay op " + opID + " has no process binding (pid) for new_session_id"
@@ -216,7 +216,7 @@ func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail
 		if !ok || row.Origin.PID == 0 {
 			return http.StatusBadRequest, "relay op " + opID + ": its approval row (" + op.RequestID + ") or origin pid is missing; cannot bind new_session_id"
 		}
-		wantPID = row.Origin.PID
+		wantPID, wantStart = row.Origin.PID, row.Origin.ProcStart
 	}
 	deadline := time.Now().Add(m.clearedWait)
 	for {
@@ -227,6 +227,9 @@ func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail
 		if live {
 			if target.PID != wantPID {
 				return http.StatusBadRequest, "new_session_id " + newSessionID + " is live under another process (pid " + strconv.Itoa(target.PID) + ", the op's is " + strconv.Itoa(wantPID) + "); a cleared session keeps its process"
+			}
+			if wantStart != "" && target.ProcStart != wantStart { // the same pid, another process: the pid was reused
+				return http.StatusBadRequest, "new_session_id " + newSessionID + " is live under a process that started at " + target.ProcStart + ", not the op's (" + wantStart + "); a cleared session keeps its process"
 			}
 			return 0, ""
 		}

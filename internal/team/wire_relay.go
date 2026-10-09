@@ -77,6 +77,7 @@ type RelayOp struct {
 	HandoffPath    string     `json:"handoff_path"`      // <data_dir>/relay/<op id>.md
 	PID            int        `json:"pid,omitempty"`     // the process the op is bound to (P6-2a); 0 on an op from before it
 	PaneID         string     `json:"pane_id,omitempty"` // the tmux pane "%N" it runs in, "" when none
+	ProcStart      string     `json:"proc_start,omitempty"` // the process's start time as the registry shows it; pid + proc_start is the identity (a pid is reused)
 	Pruned         bool       `json:"pruned,omitempty"`
 	UsedPercentage *float64   `json:"used_percentage,omitempty"`
 	CreatedAt      int64      `json:"created_at"`

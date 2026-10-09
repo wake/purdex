@@ -22,17 +22,24 @@ func (m *Module) handoverNoticeAsync(op team.RelayOp) {
 	if m.sender == nil || op.State != team.RelayCleared || op.NewSessionID == "" {
 		return
 	}
+	m.goTracked(func() { m.handoverNotice(op) })
+}
+
+// goTracked runs fn on a goroutine Stop waits for; false (fn not run) once Stop has begun. The Add happens under
+// noticeMu, which Stop passes right after its cancel, so no Add can follow Stop's Wait.
+func (m *Module) goTracked(fn func()) bool {
 	m.noticeMu.Lock()
-	if m.stopping() { // Stop passes the noticeMu barrier after its cancel: past this check the Add precedes Stop's Wait
+	if m.stopping() {
 		m.noticeMu.Unlock()
-		return
+		return false
 	}
 	m.sweepWG.Add(1)
 	m.noticeMu.Unlock()
 	go func() {
 		defer m.sweepWG.Done()
-		m.handoverNotice(op)
+		fn()
 	}()
+	return true
 }
 
 // handoverNotice does the work: the live team led by op.NewSessionID (the cleared moved the role in its transaction),

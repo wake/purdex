@@ -317,7 +317,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	op := team.RelayOp{
 		ID: opID, Kind: team.RelayKindSelf, HostID: m.hostID(), SessionID: origin.SessionID, Ref: origin.Ref,
 		RequestID: reqID, State: team.RelayAwaitingApproval, HandoffPath: filepath.Join(m.relayDir, opID+".md"),
-		UsedPercentage: &pct, CreatedAt: now, UpdatedAt: now, PID: origin.PID, PaneID: paneOf(origin.Tmux),
+		UsedPercentage: &pct, CreatedAt: now, UpdatedAt: now, PID: origin.PID, PaneID: paneOf(origin.Tmux), ProcStart: origin.ProcStart,
 	}
 	sp.OpID = opID
 	payload, _ = json.Marshal(sp) // encoded above already; now with its op id

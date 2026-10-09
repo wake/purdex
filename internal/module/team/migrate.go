@@ -262,5 +262,9 @@ func migrateRelayOpBinding(db *sql.DB) error {
 	if err := ensureColumn(db, "relay_ops", "pid", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	return ensureColumn(db, "relay_ops", "pane_id", "TEXT NOT NULL DEFAULT ''")
+	if err := ensureColumn(db, "relay_ops", "pane_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// proc_start (P6-2b-1) completes the identity: a pid is reused, pid + start time is not.
+	return ensureColumn(db, "relay_ops", "proc_start", "TEXT NOT NULL DEFAULT ''")
 }
