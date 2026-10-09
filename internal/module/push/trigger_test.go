@@ -298,3 +298,25 @@ func TestTrigger_EndToEndAgainstAFakeAPNs(t *testing.T) {
 		t.Fatal("the device is still in the store")
 	}
 }
+
+// Stop can overlap an approval callback that is already running (unsubscribing does not wait for it): the callback must
+// not trip over the sender going away. Run with -race.
+func TestTrigger_StopRacingAnApprovalCallbackIsSafe(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		te := newTriggerEnv(t, nil)
+		te.register(tokA, "en", "mlab")
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				te.mod.onApproval("opened", leadApproval("ap-race"))
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			te.mod.Stop(context.Background())
+		}()
+		wg.Wait()
+	}
+}

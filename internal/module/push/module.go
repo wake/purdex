@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/core"
@@ -53,7 +54,7 @@ type Module struct {
 	events   team.ApprovalEvents
 	newAPNs  func() apnsClient
 	presence presenceChecker
-	sender   *sender
+	sender   atomic.Pointer[sender] // read by the approval callback, which Stop does not wait for
 	unsub    func()
 }
 
@@ -176,8 +177,9 @@ func (m *Module) Start(ctx context.Context) error {
 	m.core.CfgMu.RLock()
 	hostID := m.core.Cfg.HostID
 	m.core.CfgMu.RUnlock()
-	m.sender = newSender(m, m.newAPNs(), hostID, push.BundleID)
-	m.sender.Start(ctx)
+	snd := newSender(m, m.newAPNs(), hostID, push.BundleID)
+	snd.Start(ctx)
+	m.sender.Store(snd)
 	if m.events != nil {
 		_, m.unsub = m.events.SubscribeApprovals(m.onApproval)
 	}
@@ -191,9 +193,8 @@ func (m *Module) Stop(context.Context) error {
 		m.unsub()
 		m.unsub = nil
 	}
-	if m.sender != nil {
-		m.sender.Stop()
-		m.sender = nil
+	if snd := m.sender.Swap(nil); snd != nil {
+		snd.Stop() // a callback that already holds snd only enqueues onto a stopped sender: harmless
 	}
 	if m.store != nil {
 		return m.store.Close()
@@ -206,7 +207,8 @@ func (m *Module) Stop(context.Context) error {
 // when a present Mac shows the requesting session (R6, by the tmux session name of the origin; an origin with no tmux is
 // never suppressed).
 func (m *Module) onApproval(op string, a team.Approval) {
-	if op != "opened" || m.sender == nil {
+	snd := m.sender.Load() // one read: Stop may clear it at any moment
+	if op != "opened" || snd == nil {
 		return
 	}
 	pa := toPushApproval(a)
@@ -224,7 +226,7 @@ func (m *Module) onApproval(op string, a team.Approval) {
 	for i, d := range devs {
 		ids[i] = d.DeviceID
 	}
-	m.sender.Enqueue(Job{DeviceIDs: ids, Make: func(d push.Device) (push.Content, bool) {
+	snd.Enqueue(Job{DeviceIDs: ids, Make: func(d push.Device) (push.Content, bool) {
 		return push.ApprovalContent(pa, d.HostLabel, d.Locale)
 	}})
 }
