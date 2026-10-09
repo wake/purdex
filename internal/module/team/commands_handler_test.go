@@ -158,6 +158,17 @@ func TestCommands_ValidationIs400(t *testing.T) {
 		"lead_moved no new lead": mut(func(c *team.TeamCommand) {
 			c.Kind, c.MK, c.LeadSessionID, c.LeadRef = team.CommandLeadMoved, "", "", ""
 		}),
+		// The lead tuple is the whole origin or nothing: it later builds a reply-capable sender (codex attack).
+		"adopt empty proc_start": mut(func(c *team.TeamCommand) { c.Lead.ProcStart = "" }),
+		"adopt pid 0":            mut(func(c *team.TeamCommand) { c.Lead.PID = 0 }),
+		"lead_moved split tuple": mut(func(c *team.TeamCommand) {
+			c.Kind, c.MK, c.LeadSessionID, c.LeadRef = team.CommandLeadMoved, "", "lead-new", "_lead02"
+			c.Lead.SessionID, c.Lead.Ref = "lead-other", "_lead02"
+		}),
+		"lead_moved empty proc_start": mut(func(c *team.TeamCommand) {
+			c.Kind, c.MK, c.LeadSessionID, c.LeadRef = team.CommandLeadMoved, "", "lead-sid", "_lead01"
+			c.Lead.ProcStart = ""
+		}),
 	} {
 		code, body := f.postCmd(leadPrincipal(), c)
 		if code != http.StatusBadRequest || errCode(t, body) != team.ErrCommandBadRequest {
@@ -242,6 +253,53 @@ func TestCommands_ReplayIsByReceivedBytes(t *testing.T) {
 	}
 }
 
+// The consent and the binding are the entry's as of the apply, not as of the bind: an admin who turns AllowTeam
+// off, or re-creates the alias for another host, while the target is being resolved, is honoured (codex attack).
+func TestCommands_ConsentAndBindingAreReadAgainBeforeTheApply(t *testing.T) {
+	f := newFixture(t)
+	f.setLeadHost(true)
+	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w"})
+
+	f.m.afterTargetResolved = func() { f.setLeadHost(false) }
+	if code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID1, cmdUUID1, "sid-t")); code != http.StatusForbidden || errCode(t, body) != team.ErrCommandHostNotAllowed {
+		t.Fatalf("consent revoked meanwhile: %d %s", code, body)
+	}
+	if role, _ := f.m.store.SessionRole("sid-t"); role != sessionRoleNone {
+		t.Fatalf("a revoked consent still adopted: role %s", role)
+	}
+
+	f.setLeadHost(true)
+	f.m.afterTargetResolved = func() {
+		f.core.CfgMu.Lock()
+		f.core.Cfg.Peers.Hosts[0].HostID = "someone-else:9"
+		f.core.CfgMu.Unlock()
+	}
+	if code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID2, cmdUUID2, "sid-t")); code != http.StatusForbidden || errCode(t, body) != "host_unverified" {
+		t.Fatalf("alias re-bound meanwhile: %d %s", code, body)
+	}
+	if role, _ := f.m.store.SessionRole("sid-t"); role != sessionRoleNone {
+		t.Fatalf("a re-bound alias still adopted: role %s", role)
+	}
+}
+
+// §6.1: the binding comes first. A stopping daemon answers an admin or a re-bound host 403, not a retryable 503.
+func TestCommands_BindingBeforeStopping(t *testing.T) {
+	f := newFixture(t)
+	f.setLeadHost(true)
+	f.m.stopCancel()
+	good := wireAdopt(cmdUUID1, cmdUUID1, "sid-t")
+	if code, body := f.postCmd(&middleware.Principal{Kind: middleware.PrincipalAdmin}, good); code != http.StatusForbidden || errCode(t, body) != "admin_not_allowed" {
+		t.Fatalf("admin while stopping: %d %s", code, body)
+	}
+	rebound := &middleware.Principal{Kind: middleware.PrincipalHost, Alias: "lead", HostID: "other:9"}
+	if code, body := f.postCmd(rebound, good); code != http.StatusForbidden || errCode(t, body) != "host_unverified" {
+		t.Fatalf("re-bound host while stopping: %d %s", code, body)
+	}
+	if code, body := f.postCmd(leadPrincipal(), good); code != http.StatusServiceUnavailable || errCode(t, body) != team.ErrNotReady {
+		t.Fatalf("bound host while stopping: %d %s", code, body)
+	}
+}
+
 func TestCommands_AdoptRefusals(t *testing.T) {
 	f := newFixture(t)
 	f.setLeadHost(false)
@@ -273,6 +331,7 @@ func TestCommands_ReleaseEndLeadMovedOverHTTP(t *testing.T) {
 	}
 	mv := relCmd(cmdUUID2, team.CommandLeadMoved, "")
 	mv.ToHostID, mv.LeadSessionID, mv.LeadRef = "h:1", "lead-new", "_lead02"
+	mv.Lead = team.TeamLead{SessionID: "lead-new", Ref: "_lead02", Address: "lead/y [lead02]", PID: 9, ProcStart: "ps9"}
 	if code, body := f.postCmd(leadPrincipal(), mv); code != http.StatusOK {
 		t.Fatalf("lead_moved: %d %s", code, body)
 	}

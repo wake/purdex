@@ -40,25 +40,21 @@ func (m *Module) writeCommandErr(w http.ResponseWriter, status int, code, detail
 // This version applies adopt, release, end and lead_moved. Any other kind is 400 unsupported_kind, never stored.
 // The inventory announces no kind yet (X3d), so no lead host sends these.
 func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
-	if m.stopCtx.Err() != nil {
-		m.writeCommandErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping")
-		return
-	}
 	var entry config.PeerHost
 	var ourHostID string
-	_, _, berr := peersmod.BindHostPrincipal(r, "team commands", func(alias string) (config.PeerHost, bool) {
-		m.core.CfgMu.RLock()
-		defer m.core.CfgMu.RUnlock()
-		ourHostID = m.core.Cfg.HostID
-		if i := m.core.Cfg.Peers.FindPeerHostByAlias(alias); i >= 0 {
-			entry = m.core.Cfg.Peers.Hosts[i]
-			return entry, true
-		}
-		return config.PeerHost{}, false
+	principal, _, berr := peersmod.BindHostPrincipal(r, "team commands", func(alias string) (config.PeerHost, bool) {
+		var ok bool
+		entry, ourHostID, ok = m.peerEntry(alias)
+		return entry, ok
 	})
 	if berr != nil {
 		m.logf("[team] command refused (%s): %s", berr.Code, berr.Detail)
 		m.writeCommandErr(w, berr.Status, berr.Code, berr.Detail)
+		return
+	}
+	// After the binding (§6.1): an identity refusal is permanent and must not read as a retryable 503.
+	if m.stopCtx.Err() != nil {
+		m.writeCommandErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping")
 		return
 	}
 
@@ -112,6 +108,17 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		if found && o.Ref == cmd.TargetRef {
 			plan.Target = &o
 		}
+		// The registry read took time: the consent and the binding are the entry's as of now, not as of the bind
+		// (an admin may have turned AllowTeam off or re-created the alias for another host meanwhile).
+		if m.afterTargetResolved != nil {
+			m.afterTargetResolved()
+		}
+		fresh, _, ok := m.peerEntry(principal.Alias)
+		if !ok || fresh.HostID != entry.HostID {
+			m.writeCommandErr(w, http.StatusForbidden, ipeers.ErrHostUnverified, "host entry no longer matches the authenticated host")
+			return
+		}
+		plan.Consent = fresh.AllowTeam
 	}
 	res, err := m.store.ApplyTeamCommand(plan)
 	switch {
@@ -132,6 +139,17 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 	m.writeJSON(w, http.StatusOK, team.TeamCommandAnswer{ID: cmd.ID, HostID: ourHostID, Outcome: res.Body})
 }
 
+// peerEntry is the live config entry for alias, and this host's own id, under one read of the config.
+func (m *Module) peerEntry(alias string) (e config.PeerHost, ourHostID string, ok bool) {
+	m.core.CfgMu.RLock()
+	defer m.core.CfgMu.RUnlock()
+	ourHostID = m.core.Cfg.HostID
+	if i := m.core.Cfg.Peers.FindPeerHostByAlias(alias); i >= 0 {
+		return m.core.Cfg.Peers.Hosts[i], ourHostID, true
+	}
+	return config.PeerHost{}, ourHostID, false
+}
+
 // validateCommand checks the fields each kind needs and that every string is bounded and free of control
 // characters (they end up in rows and, through templates, in notices). "" means valid.
 func validateCommand(c team.TeamCommand) string {
@@ -141,9 +159,6 @@ func validateCommand(c team.TeamCommand) string {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
 	}
-	if c.Lead.PID < 0 {
-		return "lead.pid is negative"
-	}
 	switch c.Kind {
 	case team.CommandAdopt:
 		switch {
@@ -151,19 +166,28 @@ func validateCommand(c team.TeamCommand) string {
 			return "adopt: mk is the command id"
 		case c.TargetSessionID == "" || c.TargetRef == "":
 			return "adopt: target_session_id and target_ref are required"
-		case c.Lead.SessionID == "" || c.Lead.Ref == "" || c.Lead.Address == "":
-			return "adopt: the lead's session_id, ref and address are required"
+		case !completeLead(c.Lead):
+			return "adopt: the lead's origin tuple (session_id, ref, address, pid, proc_start) is required"
 		}
 	case team.CommandRelease:
 		if c.MK == "" {
 			return "release: mk is required"
 		}
 	case team.CommandLeadMoved:
-		if c.LeadSessionID == "" || c.LeadRef == "" || c.Lead.Address == "" {
-			return "lead_moved: lead_session_id, lead_ref and the lead's address are required"
+		switch {
+		case !completeLead(c.Lead):
+			return "lead_moved: the lead's origin tuple (session_id, ref, address, pid, proc_start) is required"
+		case c.LeadSessionID != c.Lead.SessionID || c.LeadRef != c.Lead.Ref:
+			return "lead_moved: lead_session_id and lead_ref must be the lead tuple's own"
 		}
 	}
 	return ""
+}
+
+// completeLead: the whole origin tuple the member host needs to present the lead as a reply-capable sender. A
+// partial or split tuple never describes one process.
+func completeLead(l team.TeamLead) bool {
+	return l.SessionID != "" && l.Ref != "" && l.Address != "" && l.ProcStart != "" && l.PID > 0
 }
 
 // boundText is s cut to 64 bytes on a rune boundary, for an error detail echoing the sender's text.

@@ -120,9 +120,12 @@ type Module struct {
 	// Close (PD6): in-flight handlers still read it during srv.Shutdown.
 	stopCtx context.Context
 	// cmdLimit is the per-lead-host admission of the cross-host commands route (spent before the body is decoded).
-	cmdLimit   *peersmod.HostLimiter
-	stopCancel context.CancelFunc
-	sweepWG    sync.WaitGroup
+	cmdLimit *peersmod.HostLimiter
+	// afterTargetResolved, when set, runs in the commands route between the target's resolution and the apply (test
+	// seam for a consent revoked meanwhile). nil in production.
+	afterTargetResolved func()
+	stopCancel          context.CancelFunc
+	sweepWG             sync.WaitGroup
 	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
 	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
 	noticeMu sync.Mutex
