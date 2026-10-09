@@ -28,6 +28,11 @@ type remoteSpawnLead struct {
 	TeamName string        `json:"team_name,omitempty"`
 }
 
+// maxPerLeadHost bounds what one lead host may hold on this host at once: the forwarded spawns still running plus its
+// active remote members. A paired host that is allowed to spawn here cannot be allowed to fill the machine (a team's own
+// member limit lives on the lead host, which this host does not trust for it).
+const maxPerLeadHost = 16
+
 // peerEntryByHostID is the live config entry carrying hostID, by host id and never by alias.
 func (m *Module) peerEntryByHostID(hostID string) (config.PeerHost, bool) {
 	m.core.CfgMu.RLock()
@@ -92,6 +97,14 @@ func applySpawnIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 		return refusal(http.StatusForbidden, team.ErrCommandHostNotAllowed, "this host does not accept team commands from the lead host"), nil
 	case p.SpawnCwd == "":
 		return refusal(http.StatusConflict, team.ErrCwdOutsideGrant, "the cwd is under none of the roots this host granted"), nil
+	}
+	var held int
+	if err := tx.QueryRow(`SELECT (SELECT COUNT(*) FROM spawn_ops WHERE lead_host_id = ? AND state = 'running')
+		+ (SELECT COUNT(*) FROM remote_members WHERE lead_host_id = ? AND state = ?)`, p.LeadHostID, p.LeadHostID, remoteActive).Scan(&held); err != nil {
+		return CommandResult{}, err
+	}
+	if held >= maxPerLeadHost {
+		return refusal(http.StatusConflict, team.ErrCommandCapacity, "this host already runs as many sessions for the lead host as it allows"), nil
 	}
 	name, err := team.SpawnTmuxName(c.ID)
 	if err != nil {

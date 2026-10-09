@@ -26,6 +26,7 @@ const (
 	ErrCommandIDConflict      = "id_conflict"
 	ErrCommandHostNotAllowed  = "host_not_allowed"
 	ErrCommandNotYourMember   = "not_your_member"
+	ErrCommandCapacity        = "capacity_exceeded" // 409: the lead host already has as many spawns running and members here as one host may
 	ErrCommandMKConflict      = "mk_conflict"
 	ErrCommandVoided          = "command_void" // 409: the lead host voided this command id (spec §3.3)
 	ErrCommandNotVoidable     = "not_voidable" // 409: a void names a command that is no adopt or spawn

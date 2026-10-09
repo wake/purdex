@@ -165,6 +165,31 @@ func TestRemoteSpawn_ResolveUnderRoots(t *testing.T) {
 	}
 }
 
+// One lead host cannot fill the machine: running forwarded spawns plus its active remote members are capped, and the
+// refusal is stored like any other.
+func TestRemoteSpawn_ALeadHostIsCapped(t *testing.T) {
+	f, root := remoteSpawnFixture(t)
+	for i := 0; i < maxPerLeadHost; i++ {
+		r := newRemote(fmt.Sprintf("mk-%d", i), fmt.Sprintf("sid-%d", i), "lead:1", f.clock.Load())
+		if err := f.m.store.InsertRemoteMember(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, body := f.postCmd(leadPrincipal(), spawnCommand(cmdUUID1, root))
+	if code != http.StatusConflict || errCode(t, body) != team.ErrCommandCapacity {
+		t.Fatalf("spawn over the cap = %d %s", code, body)
+	}
+	if _, ok, _ := f.m.store.GetSpawnOp(cmdUUID1); ok {
+		t.Fatal("a refused spawn left an op")
+	}
+	// another lead host is not charged for it
+	var other int
+	_ = f.m.store.db.QueryRow(`SELECT COUNT(*) FROM remote_members WHERE lead_host_id <> 'lead:1'`).Scan(&other)
+	if other != 0 {
+		t.Fatal("the fixture mixed hosts")
+	}
+}
+
 // The title is held to the limits a local spawn's is, before the command is accepted.
 func TestRemoteSpawn_TitleIsValidated(t *testing.T) {
 	f, root := remoteSpawnFixture(t)
