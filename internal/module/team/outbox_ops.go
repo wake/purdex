@@ -69,6 +69,9 @@ func (m *Module) expireCommands() {
 			m.logf("[team] void command %s: %v", c.ID, err)
 		}
 	}
+	if len(due) > 0 {
+		m.kickCommands() // the void commands go out at once
+	}
 }
 
 // voidCommand is one void, in one transaction: the CAS pending → void, the local wrap-up and the void command.

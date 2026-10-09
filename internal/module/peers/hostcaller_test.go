@@ -261,3 +261,51 @@ func TestEscalate401(t *testing.T) {
 		t.Fatalf("10m = %s", got)
 	}
 }
+
+// X3a: the team module asks whether a host id is still paired, and what team kinds it announces (§3.1 rule 7).
+func TestHostCaller_PairedIsByHostID(t *testing.T) {
+	h := newHolder(config.PeerHost{Alias: "b", URL: "http://x", HostID: "hostB", Token: "t"})
+	c := callerFor(h)
+	if !c.Paired("hostB") || c.Paired("hostC") || c.Paired("") {
+		t.Fatal("Paired must be true for the live host id only")
+	}
+	h.set(config.PeerHost{Alias: "b", URL: "http://x", HostID: "hostC", Token: "t"}) // the alias re-created for another host
+	if c.Paired("hostB") || !c.Paired("hostC") {
+		t.Fatal("Paired followed the alias, not the host id")
+	}
+}
+
+func TestHostCaller_TeamCaps(t *testing.T) {
+	var gotAuth string
+	s := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "host_id": "hostB", "peers": []any{}, "team": map[string]any{"kinds": []string{"adopt", "release"}, "allow_team": true}})
+	})
+	h := newHolder(config.PeerHost{Alias: "b", URL: s.URL, HostID: "hostB", Token: "tok1"})
+	caps, err := callerFor(h).TeamCaps(context.Background(), "hostB")
+	if err != nil || gotAuth != "Bearer tok1" || !caps.AllowTeam || len(caps.Kinds) != 2 {
+		t.Fatalf("caps = %+v err=%v auth=%q", caps, err, gotAuth)
+	}
+	// an unpaired host id
+	if _, err := callerFor(h).TeamCaps(context.Background(), "hostZ"); err == nil {
+		t.Fatal("an unpaired host answered capabilities")
+	}
+	// the answer names another host: refused (rule 1)
+	h.set(config.PeerHost{Alias: "b", URL: s.URL, HostID: "hostOther", Token: "tok1"})
+	if _, err := callerFor(h).TeamCaps(context.Background(), "hostOther"); err == nil {
+		t.Fatal("a host_id mismatch was accepted")
+	}
+}
+
+func TestHostCaller_TeamCapsAnOlderDaemonSupportsNothing(t *testing.T) {
+	s := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "host_id": "hostB", "peers": []any{}}) // no "team"
+	})
+	h := newHolder(config.PeerHost{Alias: "b", URL: s.URL, HostID: "hostB", Token: "t"})
+	caps, err := callerFor(h).TeamCaps(context.Background(), "hostB")
+	if err != nil || len(caps.Kinds) != 0 || caps.AllowTeam {
+		t.Fatalf("caps = %+v err=%v, want none", caps, err)
+	}
+}
