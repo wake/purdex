@@ -111,6 +111,11 @@ func (s *Store) MarkRemoteMemberGone(mk, memberSessionID, factID string, at int6
 		return fail(err)
 	}
 	defer tx.Rollback()
+	// A write first, so SQLite takes the write lock before the read (a deferred read-then-write transaction fails
+	// SQLITE_BUSY_SNAPSHOT when another writer commits in between).
+	if _, err := tx.Exec(`UPDATE remote_members SET mk = mk WHERE mk = ?`, mk); err != nil {
+		return fail(err)
+	}
 	var leadHost, teamID, sid string
 	err = tx.QueryRow(`SELECT lead_host_id, team_id, member_session_id FROM remote_members WHERE mk = ? AND state = ?`, mk, remoteActive).Scan(&leadHost, &teamID, &sid)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && sid != memberSessionID) {
@@ -150,6 +155,9 @@ func (s *Store) EndRemoteMemberLocally(mk, factID, causeID string, at int64) (re
 		return fail(err)
 	}
 	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE remote_members SET mk = mk WHERE mk = ?`, mk); err != nil { // the write lock first, as above
+		return fail(err)
+	}
 	var leadHost, teamID, leadAddr, teamName, state string
 	err = tx.QueryRow(`SELECT lead_host_id, team_id, lead_address, team_name, state FROM remote_members WHERE mk = ?`, mk).
 		Scan(&leadHost, &teamID, &leadAddr, &teamName, &state)
