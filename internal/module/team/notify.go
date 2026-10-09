@@ -124,8 +124,10 @@ func (m *Module) sendNotice(r memberRow) {
 	defer cancel()
 	resp, err := m.sender.Send(ctx, ipeers.SendRequest{To: alias + "/" + r.Ref, Text: noticeText(r.NoticePending, leadAddress, t.ID), OriginInbox: inbox})
 	var se *peersmod.SendError
-	if err == nil && resp.Result != ipeers.ResultDelivered { // delivery_uncertain: the write was not confirmed, so it is sent again
-		err = fmt.Errorf("result %q", resp.Result)
+	if err == nil && resp.Result == ipeers.ResultDeliveryUncertain {
+		// The frame was written and only the wait for the receiver timed out: the peer-bridge protocol says the
+		// caller does not resend (peer-bridge spec, "Timeout after write"), and the notice may well have been read.
+		m.logf("[team] notice %s to %s: delivery uncertain; not resent", r.NoticePending, r.Ref)
 	}
 	if err != nil {
 		if errors.As(err, &se) {

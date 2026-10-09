@@ -286,24 +286,26 @@ func TestStop_JoinsTheDrain(t *testing.T) {
 	}
 }
 
-// delivery_uncertain is not a delivery: the notice stays owed and is sent again (at least once).
-// Mutation gate: clear on any 2xx → red.
-func TestNotice_UncertainDeliveryStaysOwed(t *testing.T) {
+// delivery_uncertain (the frame was written, the wait for the receiver timed out) is not resent: the
+// peer-bridge protocol says the caller does not, so the notice is cleared and the uncertainty logged.
+// Mutation gate: keep it owed on uncertain → it is sent again → red.
+func TestNotice_UncertainDeliveryIsNotResent(t *testing.T) {
 	f := newFixture(t)
 	key := f.adoptedMember(t)
+	logs := f.logs()
 	f.sender.mu.Lock()
 	f.sender.result = ipeers.ResultDeliveryUncertain
 	f.sender.mu.Unlock()
 	f.m.drainNotices()
-	if kind, _ := f.noticeOf(t, key); kind != team.NoticeAdopted {
-		t.Fatalf("notice_pending = %q after an uncertain delivery, want kept", kind)
-	}
-	f.sender.mu.Lock()
-	f.sender.result = ""
-	f.sender.mu.Unlock()
 	f.m.drainNotices()
+	if n := len(f.sender.calls()); n != 1 {
+		t.Fatalf("sends = %d, want one (no resend after an uncertain delivery)", n)
+	}
 	if kind, _ := f.noticeOf(t, key); kind != "" {
-		t.Fatalf("notice_pending = %q after a confirmed delivery, want cleared", kind)
+		t.Fatalf("notice_pending = %q, want cleared", kind)
+	}
+	if countLines(logs(), "delivery uncertain") != 1 {
+		t.Fatalf("logs = %q, want one uncertainty line", logs())
 	}
 }
 
