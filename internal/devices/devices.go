@@ -114,6 +114,13 @@ func WithCaller(ctx context.Context, c Caller) context.Context {
 	return ctx
 }
 
+// Refresher gives the CURRENT principal of a device id, or false when the device is revoked or unknown. A one-time ticket
+// minted by a device is redeemed through it: the ticket is a snapshot taken up to 30 s earlier, and a device revoked in the
+// meantime (or whose bindings changed) must not be let in on that snapshot.
+type Refresher interface {
+	RefreshPrincipal(deviceID string) (Principal, bool)
+}
+
 // Authenticator turns a bearer into a principal. The middleware holds one; the devices module implements it.
 type Authenticator interface {
 	// AuthenticateToken: ok only for a live device token (not revoked, used before or still before its use_by).

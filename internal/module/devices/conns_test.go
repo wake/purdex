@@ -228,3 +228,37 @@ func TestInit_PublishesTheConnectionTracker(t *testing.T) {
 		t.Fatalf("published %T", svc)
 	}
 }
+
+// A device revoked AFTER it minted a ticket and BEFORE the ticket is redeemed gets nothing: refused at the middleware, before
+// any handler work. Through the real middleware, ticket store and module. Mutation gate: no refresh at redemption → red.
+func TestRevoke_ATicketMintedBeforeTheRevokeIsRefusedAfterIt(t *testing.T) {
+	e := newWSEnv(t)
+	idA, tokA := e.mintDevice(t, pairingA)
+	e.dial(t, "/ws/host-events", http.Header{"Authorization": {"Bearer " + tokA}}) // the device is in use (first use recorded)
+	ticket := e.ticketFor(t, idA)
+	before := e.opened.Load()
+	e.del(t, "/api/devices/"+idA)
+
+	u := url.URL{Scheme: "ws", Host: strings.TrimPrefix(e.srv.URL, "http://"), Path: "/ws/host-events"}
+	_, resp, err := websocket.DefaultDialer.Dial(u.String()+"?ticket="+ticket, nil)
+	if err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a ticket of a revoked device was honoured: %v %v", err, resp)
+	}
+	if e.opened.Load() != before {
+		t.Fatal("the handler ran for a revoked device's ticket")
+	}
+}
+
+// A live device's ticket is honoured and carries the stored principal.
+func TestTicket_ALiveDevicesTicketOpensAConnectionAsThatDevice(t *testing.T) {
+	e := newWSEnv(t)
+	idA, tokA := e.mintDevice(t, pairingA)
+	e.dial(t, "/ws/host-events", http.Header{"Authorization": {"Bearer " + tokA}}) // first use
+	c := e.dial(t, "/ws/host-events?ticket="+e.ticketFor(t, idA), nil)
+	if !stillOpen(c) {
+		t.Fatal("the connection was not kept")
+	}
+	if e.mod.conns.Count(idA) != 2 {
+		t.Fatalf("tracked %d, want the bearer connection and the ticket one", e.mod.conns.Count(idA))
+	}
+}

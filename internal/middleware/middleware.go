@@ -116,6 +116,22 @@ func TokenAuthWith(tokenFn func() string, tickets TicketValidator, devs devices.
 				ticket := r.URL.Query().Get("ticket")
 				if ct, ok := tickets.(CallerTicketValidator); ok {
 					if caller, valid := ct.ValidateCaller(ticket); valid {
+						// A device's ticket is a snapshot: the device is looked up again, so a revoked one is refused here
+						// (before any handler work) and a live one carries its current bindings. Without a way to look it up
+						// a device ticket is not honoured.
+						if caller.Device != nil {
+							ref, canRefresh := devs.(devices.Refresher)
+							if !canRefresh {
+								http.Error(w, "unauthorized", http.StatusUnauthorized)
+								return
+							}
+							p, live := ref.RefreshPrincipal(caller.Device.ID)
+							if !live {
+								http.Error(w, "unauthorized", http.StatusUnauthorized)
+								return
+							}
+							caller.Device = &p
+						}
 						next.ServeHTTP(w, r.WithContext(devices.WithCaller(r.Context(), caller)))
 						return
 					}

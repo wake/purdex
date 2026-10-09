@@ -264,6 +264,21 @@ func (s *Store) Authenticate(tokenHash string) (devices.Principal, bool) {
 	return p, true
 }
 
+// PrincipalByID is the current principal of a device that is live and has been used (not revoked): what a redeemed ticket
+// of that device is held to. False for an unknown, revoked or never-used device.
+func (s *Store) PrincipalByID(id string) (devices.Principal, bool) {
+	var (
+		p                    devices.Principal
+		firstUsed, revokedAt int64
+	)
+	err := s.db.QueryRow(`SELECT id, pairing_id, profile_id, first_used_at, revoked_at FROM device_tokens WHERE id = ?`, id).
+		Scan(&p.ID, &p.PairingID, &p.ProfileID, &firstUsed, &revokedAt)
+	if err != nil || revokedAt != 0 || firstUsed == 0 {
+		return devices.Principal{}, false
+	}
+	return p, true
+}
+
 // IsLive: the device exists and is not revoked (what a WebSocket hijack asks, so a revoke that raced the open is caught).
 func (s *Store) IsLive(id string) bool {
 	var revoked int64

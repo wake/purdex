@@ -95,6 +95,15 @@ func (m *Module) AuthenticateToken(token string) (devices.Principal, bool) {
 	return st.Authenticate(devices.Hash(token))
 }
 
+// RefreshPrincipal implements devices.Refresher for redeemed device tickets.
+func (m *Module) RefreshPrincipal(deviceID string) (devices.Principal, bool) {
+	st := m.live()
+	if st == nil {
+		return devices.Principal{}, false
+	}
+	return st.PrincipalByID(deviceID)
+}
+
 // SetOnRevoke registers what runs after devices were revoked, with their ids (nil clears it).
 func (m *Module) SetOnRevoke(fn func(ids []string)) {
 	m.mu.Lock()
