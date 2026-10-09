@@ -282,6 +282,23 @@ func TestCommands_ConsentAndBindingAreReadAgainBeforeTheApply(t *testing.T) {
 	}
 }
 
+// Consent can be revoked between the bind and the apply, never promoted: with it off at the bind the target is not
+// resolved, so turning it on meanwhile must not turn the answer into a stored, wrong adopt_target_not_found.
+func TestCommands_ConsentEnabledMeanwhileIsNotPromoted(t *testing.T) {
+	f := newFixture(t)
+	f.setLeadHost(false)
+	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w"})
+	f.m.afterTargetResolved = func() { f.setLeadHost(true) }
+	if code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID1, cmdUUID1, "sid-t")); code != http.StatusForbidden || errCode(t, body) != team.ErrCommandHostNotAllowed {
+		t.Fatalf("%d %s, want 403 host_not_allowed (the state when it was decided)", code, body)
+	}
+	// A new command, after consent is on, is applied.
+	f.m.afterTargetResolved = nil
+	if code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID2, cmdUUID2, "sid-t")); code != http.StatusOK {
+		t.Fatalf("after consent: %d %s", code, body)
+	}
+}
+
 // The binding is read again before the apply for EVERY kind, not just adopt (codex re-review): a release from a
 // host whose alias was re-created for another host while the request was in flight does nothing.
 func TestCommands_EveryKindRechecksTheBindingBeforeTheApply(t *testing.T) {

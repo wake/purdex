@@ -120,7 +120,8 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		m.writeCommandErr(w, http.StatusForbidden, ipeers.ErrHostUnverified, "host entry no longer matches the authenticated host")
 		return
 	}
-	plan.Consent = fresh.AllowTeam
+	// Consent can be revoked since the bind, never promoted: the target was resolved only for a host that had it.
+	plan.Consent = plan.Consent && fresh.AllowTeam
 	res, err := m.store.ApplyTeamCommand(plan)
 	switch {
 	case errors.Is(err, ErrCommandIDConflict):
