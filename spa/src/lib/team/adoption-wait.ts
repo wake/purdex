@@ -84,6 +84,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
 export function resetAdoptionWaitForTests(): void {
   for (const id of timers) clearTimeout(id)
   timers.clear()
+  warned.clear()
   useAdoptionWait.getState().reset()
 }
 
@@ -109,6 +110,15 @@ function finish(key: string, state: Exclude<AdoptionWaitState, 'waiting'>, code 
       if (useAdoptionWait.getState().entries[key]?.state === 'active') useAdoptionWait.getState().dismiss(key)
     })
   }
+}
+
+/** The answers that mean the member joined (wire_adopt.go `Adoption`: `active`, then the row's later states). */
+const JOINED_STATES: ReadonlySet<string> = new Set(['active', 'releasing', 'released', 'killing', 'killed', 'gone'])
+const warned = new Set<string>()
+function warnUnknownState(key: string, state: string): void {
+  if (warned.has(key)) return
+  warned.add(key)
+  console.warn(`[adoption-wait] unknown adoption state ${JSON.stringify(state)}; still waiting`)
 }
 
 /** A request is cut this long after the wait it asked for: a daemon that accepts and never answers must not hold the bound. */
@@ -158,12 +168,14 @@ async function run(key: string, hostId: string, approvalId: string): Promise<voi
     switch (answer.state) {
       case 'failed': finish(key, 'failed', answer.code ?? ''); return
       case 'void': finish(key, 'void'); return
-      case 'joining': case '':
+      default:
+        // Joined: `active`, or a state the row only reaches after being a member. Anything else is not read as success.
+        if (JOINED_STATES.has(answer.state)) { finish(key, 'active'); return }
+        // `joining`, or a state this client does not know (a newer daemon): keep waiting, say so once.
+        if (answer.state !== 'joining') warnUnknownState(key, answer.state)
         if (last) { finish(key, 'timeout'); return }
         // A long poll normally holds for the wait; one that came straight back must not spin.
         if (Date.now() - askedAt < MIN_POLL_GAP_MS) await sleep(Math.min(MIN_POLL_GAP_MS, Math.max(0, deadline - Date.now())))
-        break
-      default: finish(key, 'active'); return // active, or a later member state: it did join
     }
   }
 }

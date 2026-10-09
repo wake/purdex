@@ -62,6 +62,17 @@ describe('startAdoptionWait', () => {
     expect(useAdoptionWait.getState().entries).toEqual({}) // closes as today
   })
 
+  it('a state this client does not know is never read as joined: it keeps waiting and warns once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mocked.mockResolvedValue(ans('teleporting'))
+    startAdoptionWait('lead', 'ap-1', payload)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(entry().state).toBe('waiting')
+    expect(mocked.mock.calls.length).toBeGreaterThan(2)
+    expect(warn).toHaveBeenCalledTimes(1)
+    warn.mockRestore()
+  })
+
   it('failed keeps the code', async () => {
     mocked.mockResolvedValue(ans('failed', 'dir_missing'))
     startAdoptionWait('lead', 'ap-1', payload)
