@@ -37,6 +37,7 @@
         "started_at": 1791482623109,
         "ended_at": 1791482636277,
         "outcome": "done",
+        "duration_ms": 13195,
         "items": [
           {
             "type": "user",
