@@ -47,6 +47,17 @@ describe('notifyApprovalOpened — adopt', () => {
     }))
     expect(showNotification.mock.calls[0][0]).toMatchObject({ title: 'mlab：purdex-7c 想納入 doc-writer', body: '/w/docs', eventName: 'ApprovalRequest' })
   })
+
+  it('the target’s own label in the title is cleaned of direction marks and clipped', () => {
+    notifyApprovalOpened(H, approval({
+      kind: 'adopt',
+      payload: { team_id: 'T', lead_session_id: 'S1', target_ref: '_t', target_session_id: 'S2', title: '\u202e' + 'x'.repeat(200), target_name: '', target_address: '', target_cwd: '/w', target_tmux: '' },
+    }))
+    const title = showNotification.mock.calls[0][0].title as string
+    expect(title).not.toContain('\u202e')
+    expect(title.endsWith('…')).toBe(true)
+    expect(title.length).toBeLessThan(100)
+  })
 })
 
 describe('notifyApprovalOpened', () => {
