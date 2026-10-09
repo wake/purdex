@@ -193,9 +193,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// Without this the event was refused as schema_invalid - which the hook swallows - and the session never appeared.
 	// A name the hook did send is trusted as before; a pane the daemon cannot place stays refused.
 	if req.TmuxSession == "" && req.TmuxPaneID != "" && m.tmux != nil {
-		if name, err := m.tmux.PaneSessionName(req.TmuxPaneID); err == nil && name != "" {
-			req.TmuxSession = name
-		}
+		req.TmuxSession = m.sessionNameOfPane(r.Context(), req.TmuxPaneID)
 	}
 
 	// A session outside tmux (an sdk-cli session, a Nexen worker's `claude -p`)
@@ -1484,4 +1482,25 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+// paneNameTimeout bounds the one tmux read that names a session from its pane.
+const paneNameTimeout = 2 * time.Second
+
+// sessionNameOfPane is the tmux session that owns paneID, or "" when it cannot be said for sure: tmux does not answer
+// within paneNameTimeout (a stuck server must not hold the hook's request), the pane is unknown, or it is linked into
+// several sessions and the listing cannot tell which one the hook ran in (the event stays refused rather than land in a
+// guess).
+func (m *Module) sessionNameOfPane(ctx context.Context, paneID string) string {
+	ctx, cancel := context.WithTimeout(ctx, paneNameTimeout)
+	defer cancel()
+	placements, err := m.tmux.ListPanePlacements(ctx)
+	if err != nil {
+		return ""
+	}
+	p, ok := placements[paneID]
+	if !ok || p.Ambiguous {
+		return ""
+	}
+	return p.SessionName
 }

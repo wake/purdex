@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -82,5 +83,39 @@ func TestHandleEvent_AnUnplaceablePaneIsStillRefused(t *testing.T) {
 	w := postEvent(m, `{"tmux_session":"","tmux_pane_id":"%404",`+paneOnlyTail+`}`)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "schema_invalid") {
 		t.Fatalf("status = %d body=%s, want 400 schema_invalid", w.Code, w.Body.String())
+	}
+}
+
+// A pane linked into several sessions cannot be told apart from the pane alone: refused, not guessed.
+func TestHandleEvent_ALinkedPaneIsNotGuessed(t *testing.T) {
+	m, fake := paneOnlyModule(t)
+	fake.SetPaneAmbiguous("%9", true)
+	w := postEvent(m, `{"tmux_session":"","tmux_pane_id":"%9",`+paneOnlyTail+`}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
+// stuckPaneListing never answers the pane listing until the caller gives up.
+type stuckPaneListing struct{ *tmux.FakeExecutor }
+
+func (stuckPaneListing) ListPanePlacements(ctx context.Context) (map[string]tmux.PanePlacement, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A stuck tmux must not hold the hook's request for ever.
+func TestHandleEvent_AStuckTmuxDoesNotHoldTheRequest(t *testing.T) {
+	m, fake := paneOnlyModule(t)
+	m.tmux = stuckPaneListing{fake}
+	done := make(chan int, 1)
+	go func() { done <- postEvent(m, `{"tmux_session":"","tmux_pane_id":"%9",`+paneOnlyTail+`}`).Code }()
+	select {
+	case code := <-done:
+		if code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", code)
+		}
+	case <-time.After(paneNameTimeout + 3*time.Second):
+		t.Fatal("the request hung on tmux")
 	}
 }
