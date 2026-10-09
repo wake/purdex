@@ -47,7 +47,11 @@ func (m *Module) ConfirmedOwners(ctx context.Context, sessionID string) ([]PaneO
 	}
 
 	pass := m.NewOwnerPass(nil).(*ownerPass)
-	if err := pass.enumerate(ctx); err != nil {
+	err = pass.enumerate(ctx)
+	if err == nil {
+		err = ctx.Err() // a listing that returned as the deadline passed is not an answer
+	}
+	if err != nil {
 		return nil, err
 	}
 	var codes []string

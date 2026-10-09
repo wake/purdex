@@ -187,3 +187,33 @@ func TestConfirmedOwners_TwoPaneListingsAtMost(t *testing.T) {
 		t.Fatalf("%d pane listings, want 2", exec.calls)
 	}
 }
+
+// cancellingListExecutor cancels the request as its (successful) listing returns.
+type cancellingListExecutor struct {
+	*tmux.FakeExecutor
+	cancel context.CancelFunc
+}
+
+func (e *cancellingListExecutor) ListAllPanes(ctx context.Context) ([]tmux.PaneLocation, error) {
+	rows, err := e.FakeExecutor.ListAllPanes(ctx)
+	e.cancel()
+	return rows, err
+}
+
+// The deadline passes just as the first listing succeeds: that is "could not tell", not "nobody".
+func TestConfirmedOwners_DeadlineAtTheFirstListingIsAnError(t *testing.T) {
+	m, fake, _ := newProvenanceQueryModule(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.tmux = &cancellingListExecutor{FakeExecutor: fake, cancel: cancel}
+	fake.AddSession("work", "/w")
+	attachPane(fake, "%5", "$0", "200")
+	// the frame's pane is not in the listing (it just went away): without the deadline check that reads as "nobody"
+	seedIdentityFrame(t, m, "%9", "cc", 100, "t100", 42, "sess-1", "/w")
+	withProcessTree(t, map[int]int{100: 200, 200: 1})
+	withLivePids(t, map[int]string{100: "t100"})
+
+	if got, err := m.ConfirmedOwners(ctx, "sess-1"); err == nil {
+		t.Fatalf("got %+v with no error, want the cancellation", got)
+	}
+}
