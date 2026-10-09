@@ -320,26 +320,29 @@ func TestFacts_AFloodOfFreshIdsIsRateLimited(t *testing.T) {
 	}
 }
 
-// codex re-review: validation runs after the stored answer is consulted. A fact stored as a refusal keeps its answer
-// even if the same copy would fail a validation of this version; a malformed fact is answered and not stored.
-// Mutation gate: validate in the route before the store → the replay answers bad_request → red.
-func TestFacts_AStoredAnswerPrecedesValidation(t *testing.T) {
+// codex re-review: the stored answer is consulted before the shape check, and the shape check before the addressing
+// refusal (§6.1 order). A malformed fact is answered 400 and never stored — even when it is also addressed to another
+// host; a stored answer survives a validation that later rejects the same copy.
+// Mutation gate: validate before the stored lookup → the replay answers bad_request → red.
+func TestFacts_AStoredAnswerPrecedesValidationAndShapePrecedesAddressing(t *testing.T) {
 	f := factFixture(t)
 	f.remoteRow("abc12", "lead:1", "mk1", rowActive)
-	wrong := endedFact(factUUID1, "") // no mk: invalid for ended, yet addressed to another host
-	wrong.ToHostID = "other:1"
-	if code, body := f.postFact(leadPrincipal(), wrong); code != 409 || errCode(t, body) != "wrong_host" {
-		t.Fatalf("first = %d %s", code, body)
+	// malformed AND addressed elsewhere: bad_request, not stored
+	both := endedFact(factUUID1, "")
+	both.ToHostID = "other:1"
+	if code, body := f.postFact(leadPrincipal(), both); code != 400 || errCode(t, body) != "bad_request" || factLogCount(t, f) != 0 {
+		t.Fatalf("malformed+wrong host = %d %s, logged %d", code, body, factLogCount(t, f))
 	}
-	if code, body := f.postFact(leadPrincipal(), wrong); code != 409 || errCode(t, body) != "wrong_host" {
-		t.Fatalf("replay = %d %s, want the stored wrong_host", code, body)
+	// a stored decision whose copy would now fail validation keeps its answer
+	stored := endedFact(factUUID2, "mk1")
+	stored.ToHostID = "other:1"
+	raw, _ := json.Marshal(stored)
+	ref := refusal(http.StatusConflict, team.ErrCommandWrongHost, "stored")
+	if _, err := f.m.store.ApplyTeamFact(FactPlan{FromHostID: "lead:1", Body: raw, Now: 1, Refusal: &ref}); err != nil {
+		t.Fatal(err)
 	}
-	// a malformed fact is answered 400 and not stored
-	bad := endedFact(factUUID2, "")
-	if code, body := f.postFact(leadPrincipal(), bad); code != 400 || errCode(t, body) != "bad_request" {
-		t.Fatalf("malformed = %d %s", code, body)
-	}
-	if factLogCount(t, f) != 1 {
-		t.Fatalf("%d logged, want 1", factLogCount(t, f))
+	res, err := f.m.store.ApplyTeamFact(FactPlan{FromHostID: "lead:1", Body: raw, Now: 2, Invalid: "a rule of a later version"})
+	if err != nil || !res.Replayed || res.Status != http.StatusConflict {
+		t.Fatalf("replay = %+v %v, want the stored refusal", res, err)
 	}
 }
