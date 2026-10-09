@@ -146,7 +146,17 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	if cmd.Kind == team.CommandKill && plan.Consent && killedOutcome(res.Body) {
 		// Decided and logged (or replayed): now the signal, which a failure here leaves to the lead host's retry of this
-		// very command (a replay signals again).
+		// very command (a replay signals again). The consent is read once more right before it (the window left is the
+		// signal call itself, as for every write of this route); a consent withdrawn since leaves the decision standing
+		// and sends nothing.
+		if m.beforeKillSignal != nil {
+			m.beforeKillSignal()
+		}
+		if again, _, ok := m.peerEntry(principal.Alias); !ok || again.HostID != entry.HostID || !again.AllowTeam {
+			m.kickRemoteNotices()
+			m.writeJSON(w, http.StatusOK, team.TeamCommandAnswer{ID: cmd.ID, HostID: ourHostID, Outcome: res.Body})
+			return
+		}
 		if status, code, detail := m.signalKill(cmd.MK); status != 0 {
 			m.writeCommandErr(w, status, code, detail)
 			return
