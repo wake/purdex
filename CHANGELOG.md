@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.658] - 2026-10-09
+
+> 動到 daemon、`pdx` 指令與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Added：member 用到 70% 且閒置時通知 lead — P7-1（#2253，A 線）
+
+- 同一台主機上的 member，context 用到 70% 而且停下來時，lead 會收到一則通知：`[pdx team] member <地址> [<ref>]「<名稱>」已用 N%，目前閒置。要接力請執行：pdx relay _<ref>`。要不要接力由 lead 決定，daemon 不會自己動手。
+- 每個 member 只通知一次；接力完成或用量降回門檻以下才會再提醒。正在接力的 member 不會被提醒。
+
+### Added：允許別台主機把這台的 session 收進 team — X1b（#2252，A 線）
+
+- 新指令 `pdx peers host allow-team <別名> on|off [--root <目錄>]…`：決定某台主機能不能把這台的 session 收進它的 team，以及它能在哪些目錄開 member（沒設目錄就不能開）。主機設定頁之後也會有這個開關。
+- 只有驗證過身分的主機才能打開；目前跨主機 team 還沒有任何動作能用，這只是先把同意的設定存起來。
+
+### Changed：上方分頁的 team 群組外觀 — TI-2b（#2250，介面線）
+
+- 上方分頁列裡，同一個 team 的分頁會用標籤膠囊、陰影與底色框成一組，可以收合，也能在組內拖曳排序。
+
 ## [1.0.0-alpha.657] - 2026-10-09
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
