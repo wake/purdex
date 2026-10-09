@@ -318,6 +318,34 @@ describe('push presence reporter', () => {
     expect(e.puts.length).toBeGreaterThan(0)
   })
 
+  it('a refused active:false does not hide the different body of coming back with no sessions', async () => {
+    const e = makeEnv()
+    e.capable.delete('h2')
+    e.shown = {} // nothing shown: both bodies have an empty session list
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2) // active:true, accepted
+    e.reject4xx.on = true
+    e.tracker.set(false)
+    await tick(DEBOUNCE_MS * 2) // active:false, refused
+    e.reject4xx.on = false
+    e.puts.length = 0
+    e.tracker.set(true)
+    await tick(DEBOUNCE_MS * 2)
+    expect(e.puts.map((p) => p.body.active)).toEqual([true])
+  })
+
+  it('a probe that fails after stop() leaves no timer behind', async () => {
+    const e = makeEnv()
+    let fail!: (e: Error) => void
+    e.deps.supportsPush = () => new Promise<boolean>((_, reject) => { fail = reject })
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2) // the probe is pending
+    stop()
+    fail(new Error('timed out'))
+    await settle()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('stop() also cancels a pending probe retry', async () => {
     const e = makeEnv()
     e.deps.supportsPush = async () => { throw new Error('down') }

@@ -120,6 +120,7 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
       deps.supportsPush(h.id).then(
         (ok) => { if (!stopped && support.get(h.id) === entry) { entry.supported = ok; schedule() } },
         () => {
+          if (stopped) return // stop() cannot cancel a timer made after it ran
           // Not answered (down, or timed out): forget the entry after a pause so the next flush asks again, instead of
           // leaving the host silent for as long as it stays connected.
           const retry = setTimeout(() => {
@@ -151,7 +152,7 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
       } else {
         const sessions = shown[hostId] ?? []
         const signature = JSON.stringify(sessions)
-        if (last?.rejected && last.signature === signature) continue // refused as it is: only a change is worth sending
+        if (last?.rejected && last.active && last.signature === signature) continue // refused as it is: only a change is worth sending
         if (last?.active === true && last.signature === signature && !heartbeat) continue // the 20 s tick is the heartbeat
         body = { client_id: deps.clientId(), active: true, sessions, ttl_ms: PRESENCE_TTL_MS }
         next = { active: true, signature }
