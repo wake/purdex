@@ -3,6 +3,7 @@ package workbook
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 type recorder struct {
@@ -125,6 +126,32 @@ func TestObserver_MayReadTheStoreBack(t *testing.T) {
 	id := mustInsert(t, s, pending("c", "s1", "a", 1))
 	if got := <-done; got.ID != id || got.State != StatePending {
 		t.Fatalf("read back %+v", got)
+	}
+}
+
+// The interleaving the lock exists for, forced: a Finish arrives between an insert's commit and its event. The entry's
+// events must still be pending, then ok. Mutation gate: drop the writer lock → [ok ok] → red.
+func TestObserver_AFinishBetweenCommitAndEventDoesNotReorder(t *testing.T) {
+	s, r := observed(t)
+	committed := make(chan struct{})
+	s.afterCommit = func() {
+		close(committed)
+		time.Sleep(150 * time.Millisecond) // long enough for the other writer to get in, if it can
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-committed
+		s.Finish(1, StateOK, "", Output{Entry: "x"}) // the first row of a fresh store
+	}()
+	mustInsert(t, s, pending("c", "s1", "a", 1))
+	<-done
+	var states []string
+	for _, ev := range r.take() {
+		states = append(states, ev.Entry.State)
+	}
+	if len(states) != 2 || states[0] != StatePending || states[1] != StateOK {
+		t.Fatalf("events = %v, want [pending ok]", states)
 	}
 }
 

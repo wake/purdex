@@ -73,10 +73,11 @@ type StatusRow struct {
 
 // Store is workbook.db: the summaries, owner-only, one file.
 type Store struct {
-	db  *sql.DB
-	now func() int64 // unix ms; injectable for tests
-	obs atomic.Pointer[func(Event)]
-	wmu sync.Mutex // serialises the writes together with their events; an observer must not write to the store
+	db          *sql.DB
+	now         func() int64 // unix ms; injectable for tests
+	obs         atomic.Pointer[func(Event)]
+	afterCommit func()     // test seam: between InsertPending's commit and its event; nil in production
+	wmu         sync.Mutex // serialises the writes together with their events; an observer must not write to the store
 }
 
 // OpenStore opens (or creates) the store at path. The file and its WAL siblings are owner-only.
@@ -221,6 +222,9 @@ func (s *Store) InsertPending(e Entry) (id int64, inserted bool, err error) {
 	if n, _ := res.RowsAffected(); n == 1 {
 		id, err = res.LastInsertId()
 		if err == nil {
+			if s.afterCommit != nil {
+				s.afterCommit()
+			}
 			s.emitEntry(id)
 		}
 		return id, true, err
