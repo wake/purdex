@@ -1,8 +1,10 @@
 package push
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/wake/purdex/internal/push"
@@ -151,4 +153,44 @@ func mustOne(t *testing.T, s *Store) push.Device {
 		t.Fatalf("list = %+v err %v", list, err)
 	}
 	return list[0]
+}
+
+// The rows carry full APNs tokens and the data dir is world-readable (0755): push.db and its WAL sidecars are owner-only,
+// whether the file is new or an old one with looser permissions.
+func TestStore_FilesAreOwnerOnly(t *testing.T) {
+	old := syscall.Umask(0o022) // the usual umask, under which SQLite would create 0644
+	defer syscall.Umask(old)
+	for name, prepare := range map[string]func(path string){
+		"new file": func(string) {},
+		"loose file": func(path string) {
+			if err := os.WriteFile(path, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "push.db")
+			prepare(path)
+			s, err := OpenStore(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if _, err := s.Upsert(dev(tokA)); err != nil {
+				t.Fatal(err)
+			}
+			for _, suffix := range []string{"", "-wal", "-shm"} {
+				fi, err := os.Stat(path + suffix)
+				if err != nil {
+					if suffix != "" && os.IsNotExist(err) {
+						continue
+					}
+					t.Fatal(err)
+				}
+				if fi.Mode().Perm()&0o077 != 0 {
+					t.Fatalf("push.db%s is %v, want owner-only", suffix, fi.Mode().Perm())
+				}
+			}
+		})
+	}
 }

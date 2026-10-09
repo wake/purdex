@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/wake/purdex/internal/push"
@@ -15,8 +16,9 @@ import (
 // Store is the SQLite persistence of the registered devices (push spec §4.4), a small file of its own like
 // internal/module/hostconfig's. The module reads every row into memory at Start; the send path never touches SQLite.
 type Store struct {
-	db  *sql.DB
-	now func() int64 // Unix ms; injectable for tests
+	db   *sql.DB
+	now  func() int64 // Unix ms; injectable for tests
+	path string       // "" for :memory:
 }
 
 const columns = `token, device_id, bundle_id, env, platform, device_name, host_label, locale, prefs,
@@ -27,6 +29,18 @@ func OpenStore(path string) (*Store, error) {
 	dsn := path
 	if path != ":memory:" {
 		dsn = path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)"
+	}
+	if path != ":memory:" {
+		// The rows carry full APNs tokens and the data dir is world-readable: create the file owner-only BEFORE SQLite
+		// does (which would make it 0644 under the usual umask), and tighten an older one.
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, dbFileMode)
+		if err != nil {
+			return nil, errors.New("open push db: cannot create the file")
+		}
+		f.Close()
+		if err := os.Chmod(path, dbFileMode); err != nil {
+			return nil, errors.New("open push db: cannot restrict the file")
+		}
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -46,7 +60,25 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate push db: %w", err)
 	}
-	return &Store{db: db, now: func() int64 { return time.Now().UnixMilli() }}, nil
+	if path != ":memory:" {
+		restrictSidecars(path)
+	}
+	st := &Store{db: db, now: func() int64 { return time.Now().UnixMilli() }}
+	if path != ":memory:" {
+		st.path = path
+	}
+	return st, nil
+}
+
+// dbFileMode: owner-only for push.db and its WAL sidecars.
+const dbFileMode = 0o600
+
+// restrictSidecars chmods whichever WAL siblings exist (SQLite creates them with the main file's mode; this makes it
+// explicit and covers a sidecar left over from an older run).
+func restrictSidecars(path string) {
+	for _, suffix := range []string{"-wal", "-shm"} {
+		_ = os.Chmod(path+suffix, dbFileMode) // absent is fine
+	}
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -71,6 +103,7 @@ func (s *Store) Upsert(d push.Device) (push.Device, error) {
 	); err != nil {
 		return push.Device{}, errors.New("store device: write failed")
 	}
+	s.restrict()
 	row := s.db.QueryRow(`SELECT `+columns+` FROM push_devices WHERE token = ?`, d.Token)
 	return scan(row)
 }
@@ -135,4 +168,10 @@ func scan(r scanner) (push.Device, error) {
 		return push.Device{}, errors.New("read device: stored prefs are not valid")
 	}
 	return d, nil
+}
+
+func (s *Store) restrict() {
+	if s.path != "" {
+		restrictSidecars(s.path)
+	}
 }
