@@ -47,10 +47,14 @@ func deviceAppendGuard(stored, in Section) error {
 		}
 	}
 	added := next.order[len(old.order):]
+	inOrder := make(map[string]bool, len(old.order)) // O(1) membership: the guard stays linear in the payload size
+	for _, id := range old.order {
+		inOrder[id] = true
+	}
 	seen := make(map[string]bool, len(added))
 	for _, id := range added {
 		_, inOld := old.tabs[id]
-		if seen[id] || inOld || old.has(id) {
+		if seen[id] || inOld || inOrder[id] {
 			return forbidAppend("a new tab id repeats or reuses an existing one")
 		}
 		seen[id] = true
@@ -65,9 +69,8 @@ func deviceAppendGuard(stored, in Section) error {
 		}
 	}
 	for _, id := range added {
-		v, present := next.tabs[id]
-		if _, isObj := v.(map[string]any); !present || !isObj {
-			return forbidAppend("a new tab must be a JSON object")
+		if !wellFormedNewTab(id, next.tabs[id]) {
+			return forbidAppend("a new tab must be an object with id equal to its key, boolean pinned and locked, a finite createdAt and an object layout")
 		}
 	}
 	for k, v := range old.rest {
@@ -91,13 +94,28 @@ type tabsPayload struct {
 	rest  map[string]any // every other top-level member
 }
 
-func (t tabsPayload) has(id string) bool {
-	for _, o := range t.order {
-		if o == id {
-			return true
-		}
+// wellFormedNewTab is the stable core of the Mac's own tab check (spa/src/lib/profile/applier.ts isTabsPayload): a tab the Mac
+// would refuse locks the whole section on every Mac, so a phone may not store one. The layout's inner shape and the exact
+// field list stay the SPA's to judge; they move with the SPA and are not copied here.
+func wellFormedNewTab(id string, v any) bool {
+	t, ok := v.(map[string]any)
+	if !ok {
+		return false
 	}
-	return false
+	if got, isStr := t["id"].(string); !isStr || got != id {
+		return false
+	}
+	if _, ok := t["pinned"].(bool); !ok {
+		return false
+	}
+	if _, ok := t["locked"].(bool); !ok {
+		return false
+	}
+	if _, ok := t["createdAt"].(float64); !ok { // JSON numbers are finite by construction
+		return false
+	}
+	_, ok = t["layout"].(map[string]any)
+	return ok
 }
 
 // decodeTabsPayload reads a tabs payload as parsed JSON (numbers as float64, as JavaScript reads them).

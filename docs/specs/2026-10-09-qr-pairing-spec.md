@@ -232,7 +232,12 @@ gates; failing one of 1–3 → 403 `device_append_only`, gate 4 → 400 `hash_m
 3. **Append only.** Both payloads are objects with an `order` array of strings and a `tabs` object. The new `order` is
    the stored `order` followed by one or more new ids (no repeats; none already in the stored `order` or `tabs`); the
    new `tabs` holds exactly the stored entries, each deep-equal to its stored value as parsed JSON, plus one JSON object
-   per new id; every other top-level member is unchanged.
+   per new id; every other top-level member is unchanged. Each new object must carry the stable core of the Mac's own
+   tab check (a tab the Mac refuses would lock the section on every Mac): `id` a string equal to its key, boolean
+   `pinned` and `locked`, a finite number `createdAt`, an object `layout`. The layout's inner shape and the exact field
+   list stay the Mac's to judge (they move with the SPA and are not copied into the daemon): a phone that sends a valid
+   core with a malformed layout can still have the Macs refuse the section — R7 is not a sandbox (§3.3), and revoking
+   the phone is the remedy. The check is linear in the payload size.
 4. **Hash verified.** `hash` equals the SHA-256 of the payload's canonical form, computed by the daemon with a Go port
    of the SPA's `hash.ts` (object keys sorted at every depth, arrays in order, strings and numbers as `JSON.stringify`
    writes them). A payload the port cannot reproduce exactly (say, a lone surrogate) is refused the same way. This gate

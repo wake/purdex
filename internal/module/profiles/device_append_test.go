@@ -19,7 +19,7 @@ const (
 	storedTabs = `{"order":["t1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999}},"extra":{"a":1}}`
 	devID      = "d_0123456789ab"
 	devClient  = "c_0123456789ab"
-	goodAppend = `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","layout":{"type":"leaf"}}},"extra":{"a":1}}`
+	goodAppend = `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}}},"extra":{"a":1}}`
 )
 
 func sumOf(t *testing.T, payload string) string {
@@ -85,20 +85,20 @@ func TestDeviceAppend_OneAndTwoTabsAreApplied(t *testing.T) {
 	assert.Equal(t, e.rev+1, rev)
 	assert.Equal(t, before+1, len(e.rec.events), "the usual profile event")
 
-	two := `{"order":["t1","p1","p2"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","layout":{"type":"leaf"}},"p2":{"id":"p2"}},"extra":{"a":1}}`
+	two := `{"order":["t1","p1","p2"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}},"p2":{"id":"p2","pinned":false,"locked":false,"createdAt":2,"layout":{}}},"extra":{"a":1}}`
 	e.rev = rev
 	rr = e.put(t, "tabs.w1", devClient, two, "", nil)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	// two tabs at once from the first state
 	e2 := newAppendEnv(t)
-	both := `{"order":["t1","a","b"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"a":{"id":"a"},"b":{"id":"b"}},"extra":{"a":1}}`
+	both := `{"order":["t1","a","b"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"a":{"id":"a","pinned":false,"locked":false,"createdAt":3,"layout":{}},"b":{"id":"b","pinned":false,"locked":false,"createdAt":4,"layout":{}}},"extra":{"a":1}}`
 	assert.Equal(t, http.StatusOK, e2.put(t, "tabs.w1", devClient, both, "", nil).Code)
 }
 
 // A number written differently but equal as JSON (1.0 vs 1, an exponent) is the same value and passes the equality gates.
 func TestDeviceAppend_NumbersCompareAsJSONValues(t *testing.T) {
 	e := newAppendEnv(t)
-	p := `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1.789999999999e12},"p1":{"id":"p1"}},"extra":{"a":1.0}}`
+	p := `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1.789999999999e12},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}}},"extra":{"a":1.0}}`
 	assert.Equal(t, http.StatusOK, e.put(t, "tabs.w1", devClient, p, "", nil).Code)
 }
 
@@ -112,17 +112,22 @@ func TestDeviceAppend_Refusals(t *testing.T) {
 		"changed fingerprint (a higher ordinal passes the schema gate)": {payload: goodAppend, mutate: func(r *sectionReq) { r.Fingerprint = otherFingerprint; r.Ordinal = 2 }},
 		"changed ordinal":              {payload: goodAppend, mutate: func(r *sectionReq) { r.Ordinal = 2 }},
 		"nothing appended":             {payload: storedTabs},
-		"existing tab removed":         {payload: `{"order":["p1"],"tabs":{"p1":{"id":"p1"}},"extra":{"a":1}}`},
-		"existing tab edited":          {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":false,"createdAt":1789999999999},"p1":{"id":"p1"}},"extra":{"a":1}}`},
-		"order reordered":              {payload: `{"order":["p1","t1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1"}},"extra":{"a":1}}`},
-		"new id repeated":              {payload: `{"order":["t1","p1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1"}},"extra":{"a":1}}`},
+		"existing tab removed":         {payload: `{"order":["p1"],"tabs":{"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}}},"extra":{"a":1}}`},
+		"existing tab edited":          {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":false,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}}},"extra":{"a":1}}`},
+		"order reordered":              {payload: `{"order":["p1","t1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}}},"extra":{"a":1}}`},
+		"new id repeated":              {payload: `{"order":["t1","p1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}}},"extra":{"a":1}}`},
 		"new id reuses an old one":     {payload: `{"order":["t1","t1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999}},"extra":{"a":1}}`},
+		"new tab is empty":             {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{}},"extra":{"a":1}}`},
+		"new tab id differs from key":  {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"zz","pinned":false,"locked":false,"createdAt":1,"layout":{}}},"extra":{"a":1}}`},
+		"new tab pinned not boolean":   {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":"no","locked":false,"createdAt":1,"layout":{}}},"extra":{"a":1}}`},
+		"new tab createdAt a string":   {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":"1","layout":{}}},"extra":{"a":1}}`},
+		"new tab layout not an object": {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1,"layout":[]}},"extra":{"a":1}}`},
 		"new entry not an object":      {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":"x"},"extra":{"a":1}}`},
 		"new entry missing":            {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999}},"extra":{"a":1}}`},
-		"extra tab entry not in order": {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1"},"zz":{}},"extra":{"a":1}}`},
-		"top-level member changed":     {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1"}},"extra":{"a":2}}`},
-		"top-level member added":       {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1"}},"extra":{"a":1},"more":1}`},
-		"top-level member dropped":     {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1"}}}`},
+		"extra tab entry not in order": {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}},"zz":{}},"extra":{"a":1}}`},
+		"top-level member changed":     {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}}},"extra":{"a":2}}`},
+		"top-level member added":       {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}}},"extra":{"a":1},"more":1}`},
+		"top-level member dropped":     {payload: `{"order":["t1","p1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"p1":{"id":"p1","pinned":false,"locked":false,"createdAt":1790000000000,"layout":{"type":"leaf"}}}}`},
 		"order holds a non-string":     {payload: `{"order":["t1",2],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999}},"extra":{"a":1}}`},
 		"tabs is not an object":        {payload: `{"order":["t1","p1"],"tabs":[],"extra":{"a":1}}`},
 	}
@@ -188,7 +193,7 @@ func TestDeviceAppend_HashGate(t *testing.T) {
 	}
 	e.untouched(t, before)
 	// A payload the port cannot reproduce (a lone surrogate in a new tab) is the same refusal.
-	lone := strings.Replace(goodAppend, `"id":"p1"`, `"id":"p1\ud800"`, 1)
+	lone := strings.Replace(goodAppend, `"type":"leaf"`, `"type":"le\ud800af"`, 1)
 	rr := e.put(t, "tabs.w1", devClient, lone, hashOf("x"), nil)
 	assert.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
 	e.untouched(t, before)
@@ -197,7 +202,7 @@ func TestDeviceAppend_HashGate(t *testing.T) {
 // A Mac write landing between the phone's read and write: the phone gets the 409 with the SOT payload and nothing is appended.
 func TestDeviceAppend_AStaleBaseRevIsAConflict(t *testing.T) {
 	e := newAppendEnv(t)
-	macPayload := `{"order":["t1","m1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"m1":{"id":"m1"}},"extra":{"a":1}}`
+	macPayload := `{"order":["t1","m1"],"tabs":{"t1":{"id":"t1","pinned":true,"createdAt":1789999999999},"m1":{"id":"m1","pinned":false,"locked":false,"createdAt":5,"layout":{}}},"extra":{"a":1}}`
 	putSection(t, e.m, e.mine, "tabs.w1", "c_bbbbbbbbbbbb", e.rev, sumOf(t, macPayload), macPayload)
 	before := len(e.rec.events)
 	rr := e.put(t, "tabs.w1", devClient, goodAppend, "", nil) // still on the old baseRev
