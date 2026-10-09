@@ -30,7 +30,18 @@ type Batch struct {
 	CWD         string  `json:"cwd"`
 	Interactive bool    `json:"interactive"`
 	Events      []Event `json:"events"`
+	// Caps are the optional features this mod can run, e.g. "workbook.v2" (absent = none). Each batch restates them,
+	// and the registry counts a capability as live for CapsFresh after the last batch that named it.
+	Caps []string `json:"caps,omitempty"`
 }
+
+// Limits of Caps.
+const (
+	MaxCaps    = 8
+	CodeBadCap = "bad_caps"
+)
+
+var capRe = regexp.MustCompile(`^[a-z][a-z0-9.]{0,31}$`)
 
 // Event is one mod event. Seq is per stream and strictly increasing; At
 // is the mod's Date.now() in ms (kept, never used for ordering). A decoded
@@ -175,6 +186,14 @@ func DecodeBatch(r io.Reader) (Batch, error) {
 	for _, e := range b.Events {
 		if !eventTypeRe.MatchString(e.Type) || !isObject(e.Data) {
 			return fail(CodeBadEvent)
+		}
+	}
+	if len(b.Caps) > MaxCaps {
+		return fail(CodeBadCap)
+	}
+	for _, c := range b.Caps {
+		if !capRe.MatchString(c) {
+			return fail(CodeBadCap)
 		}
 	}
 	return b, nil
