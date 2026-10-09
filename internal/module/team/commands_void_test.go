@@ -99,6 +99,29 @@ func TestVoid_EarlyVoidOnlyVoidsAdoptAndSpawn(t *testing.T) {
 	}
 }
 
+// A void belongs to a team like every other command: another team's void neither undoes nor pre-empts an adopt
+// (codex attack).
+func TestVoid_IsScopedToItsTeam(t *testing.T) {
+	s := openTestStore(t)
+	mustApply(t, s, plan(adoptCmd("c1", "c1", "sid-t"), true, targetOrigin("sid-t"))) // team-L
+	other := voidCmd("v1", "c1")
+	other.TeamID = "team-other"
+	res := mustApply(t, s, plan(other, false, nil))
+	if res.Status != http.StatusConflict || refusalCode(t, res) != team.ErrCommandNotYourMember {
+		t.Fatalf("cross-team void of an applied adopt = %d %s", res.Status, res.Body)
+	}
+	if row, _, _ := s.RemoteMember("c1"); row.State != remoteActive {
+		t.Fatalf("another team's void released the member: %+v", row)
+	}
+
+	early := voidCmd("v2", "c2")
+	early.TeamID = "team-other"
+	mustApply(t, s, plan(early, false, nil)) // recorded for team-other
+	if res := mustApply(t, s, plan(adoptCmd("c2", "c2", "sid-u"), true, targetOrigin("sid-u"))); res.Status != http.StatusOK {
+		t.Fatalf("team-L's adopt c2 = %d %s, want it applied (the early void was another team's)", res.Status, res.Body)
+	}
+}
+
 // The void is itself idempotent (rule 3), and scoped to the host that sent it.
 func TestVoid_IdempotentAndScopedToItsHost(t *testing.T) {
 	s := openTestStore(t)

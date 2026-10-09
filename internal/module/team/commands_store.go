@@ -49,6 +49,7 @@ const commandSchema = `
 	CREATE TABLE IF NOT EXISTS team_command_voids (
 		lead_host_id TEXT    NOT NULL,
 		command_id   TEXT    NOT NULL,
+		team_id      TEXT    NOT NULL,
 		void_id      TEXT    NOT NULL,
 		at           INTEGER NOT NULL,
 		PRIMARY KEY (lead_host_id, command_id)
@@ -131,7 +132,8 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 	// not swallow a release, end or lead_moved carrying the same id.
 	if p.cmd.Kind == team.CommandAdopt || p.cmd.Kind == team.CommandSpawn {
 		var voided int
-		switch err := tx.QueryRow(`SELECT 1 FROM team_command_voids WHERE lead_host_id = ? AND command_id = ?`, p.LeadHostID, p.cmd.ID).Scan(&voided); {
+		switch err := tx.QueryRow(`SELECT 1 FROM team_command_voids WHERE lead_host_id = ? AND command_id = ? AND team_id = ?`,
+			p.LeadHostID, p.cmd.ID, p.cmd.TeamID).Scan(&voided); {
 		case err == nil:
 			return refusal(http.StatusConflict, team.ErrCommandVoided, "the lead host voided this command"), nil
 		case !errors.Is(err, sql.ErrNoRows):
@@ -341,7 +343,7 @@ func applyVoidIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	err := tx.QueryRow(`SELECT kind, status FROM team_command_log WHERE lead_host_id = ? AND id = ?`, p.LeadHostID, target).Scan(&kind, &status)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if err := recordVoidIn(tx, p.LeadHostID, target, c.ID, p.Now); err != nil {
+		if err := recordVoidIn(tx, p.LeadHostID, target, c.TeamID, c.ID, p.Now); err != nil {
 			return CommandResult{}, err
 		}
 		return okResult(map[string]string{"state": "recorded"})
@@ -354,10 +356,13 @@ func applyVoidIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	case status != http.StatusOK:
 		return okResult(map[string]string{"state": "ok"}) // refused: nothing was applied, its stored refusal stands
 	}
-	var leadAddr, teamName string
-	err = tx.QueryRow(`SELECT lead_address, team_name FROM remote_members WHERE mk = ? AND lead_host_id = ?`, target, p.LeadHostID).Scan(&leadAddr, &teamName)
+	var leadAddr, teamName, rowTeam string
+	err = tx.QueryRow(`SELECT lead_address, team_name, team_id FROM remote_members WHERE mk = ? AND lead_host_id = ?`, target, p.LeadHostID).Scan(&leadAddr, &teamName, &rowTeam)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return CommandResult{}, err
+	}
+	if err == nil && rowTeam != c.TeamID { // a void belongs to a team like every command
+		return refusal(http.StatusConflict, team.ErrCommandNotYourMember, "that command belongs to another team"), nil
 	}
 	state := "ok"
 	if err == nil {
@@ -372,15 +377,15 @@ func applyVoidIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 			}
 		}
 	}
-	if err := recordVoidIn(tx, p.LeadHostID, target, c.ID, p.Now); err != nil {
+	if err := recordVoidIn(tx, p.LeadHostID, target, c.TeamID, c.ID, p.Now); err != nil {
 		return CommandResult{}, err
 	}
 	return okResult(map[string]string{"state": state})
 }
 
-func recordVoidIn(tx dbtx, leadHostID, commandID, voidID string, at int64) error {
-	_, err := tx.Exec(`INSERT INTO team_command_voids (lead_host_id, command_id, void_id, at) VALUES (?, ?, ?, ?)
-		ON CONFLICT (lead_host_id, command_id) DO NOTHING`, leadHostID, commandID, voidID, at)
+func recordVoidIn(tx dbtx, leadHostID, commandID, teamID, voidID string, at int64) error {
+	_, err := tx.Exec(`INSERT INTO team_command_voids (lead_host_id, command_id, team_id, void_id, at) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (lead_host_id, command_id) DO NOTHING`, leadHostID, commandID, teamID, voidID, at)
 	if err != nil {
 		return fmt.Errorf("record void of %s: %w", commandID, err)
 	}
