@@ -302,6 +302,46 @@ func TestEntry_ContextCancelledBetweenChunks(t *testing.T) {
 	}
 }
 
+// A refresh cut short (cancelled, or a read error) after complete lines were fed must still leave a fingerprint of the
+// offset it reached: a same-inode rewrite before the next refresh is a new epoch, not a model mixing two file versions.
+func TestEntry_RewriteAfterAnInterruptedRefreshStartsANewEpoch(t *testing.T) {
+	pad := strings.Repeat("x", 100_000)
+	var lines [][]byte
+	for i := 0; i < 70; i++ {
+		lines = append(lines, userRow("u"+string(rune('a'+i%26))+string(rune('a'+i/26)), float64(i), pad))
+	}
+	m := newMem(lines...)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.onRead = func(n int) {
+		if n == 2 {
+			cancel()
+		}
+	}
+	e := NewEntry(sidA)
+	if _, err := e.Refresh(ctx, src(m, "f1", false)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if e.norm.Next() == 0 {
+		t.Fatal("setup: nothing was fed before the cancel")
+	}
+	old := e.Epoch()
+	// the same inode rewritten, as large as before, with other bytes where the entry had read
+	rewritten := make([][]byte, len(lines))
+	for i := range lines {
+		rewritten[i] = userRow("w"+string(rune('a'+i%26))+string(rune('a'+i/26)), float64(i), pad)
+	}
+	m.onRead = nil
+	m.Set(joinLines(rewritten))
+	r := refresh(t, e, src(m, "f1", false))
+	if !r.Reset || e.Epoch() == old {
+		t.Fatalf("a rewrite after an interrupted refresh was not noticed: %+v", r)
+	}
+	w := e.Window(1000, -1, everything)
+	if len(w.Turns) != 70 || w.Turns[0].Items[0].User == nil || w.Turns[0].Items[0].User.ID != "waa" {
+		t.Fatalf("the rewrite was not re-read from zero: %d turns", len(w.Turns))
+	}
+}
+
 func TestParseCursor_StaleEpoch(t *testing.T) {
 	e := NewEntry(sidA)
 	epoch, rev, err := ParseCursor(e.Cursor())

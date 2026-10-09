@@ -182,7 +182,7 @@ func (e *Entry) fingerprintHolds(f File) bool {
 
 // feedFrom reads the lines from the normalizer's next offset to size.
 func (e *Entry) feedFrom(ctx context.Context, f File, size int64) error {
-	next, err := readLines(ctx, f, e.norm.Next(), size, lineSink{
+	_, err := readLines(ctx, f, e.norm.Next(), size, lineSink{
 		feed: func(off int64, line []byte) error {
 			feed := e.norm.Feed
 			if e.feedHook != nil {
@@ -193,34 +193,33 @@ func (e *Entry) feedFrom(ctx context.Context, f File, size int64) error {
 				return err
 			}
 			e.bump(changes)
+			e.rollFingerprint(line)
 			return nil
 		},
 		skip: func(off, length int64) error {
-			return e.norm.Skip(off, length)
+			if err := e.norm.Skip(off, length); err != nil {
+				return err
+			}
+			e.fp, e.fpEnd = nil, e.norm.Next() // not read: nothing to remember until the next line
+			return nil
 		},
 	})
-	_ = next // the normalizer's Next already moved with every line it took
-	if err != nil {
-		return err
-	}
-	e.rememberFingerprint(f)
-	return nil
+	return err
 }
 
-func (e *Entry) rememberFingerprint(f File) {
+// rollFingerprint keeps the last fingerprintBytes of what was actually fed, line by line, so the fingerprint is
+// right at every point: a read cut short by cancellation or an error still leaves one for the offset reached,
+// built from the bytes the model was built from, not from whatever the file holds by then.
+func (e *Entry) rollFingerprint(line []byte) {
 	end := e.norm.Next()
-	if end == 0 {
-		e.fp, e.fpEnd = nil, 0
-		return
+	buf := make([]byte, 0, len(e.fp)+len(line)+1)
+	buf = append(buf, e.fp...)
+	buf = append(buf, line...)
+	buf = append(buf, '\n')
+	if len(buf) > fingerprintBytes {
+		buf = buf[len(buf)-fingerprintBytes:]
 	}
-	n := int64(fingerprintBytes)
-	if end < n {
-		n = end
-	}
-	buf := make([]byte, n)
-	if got, _ := f.ReadAt(buf, end-n); got == len(buf) {
-		e.fp, e.fpEnd = buf, end
-	}
+	e.fp, e.fpEnd = buf, end
 }
 
 // refreshHeader bumps the revision when the title or the usage changed.
