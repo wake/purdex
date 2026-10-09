@@ -68,6 +68,9 @@ func (m *Module) runApprovalSub(sub *approvalSub, fn func(string, team.Approval)
 			return false
 		}
 	}
+	// The checks below are not one atomic step with the call: a callback already taken off the queue when unsubscribe is
+	// called may still run once (see team.ApprovalEvents). Making unsubscribe wait for it would deadlock a callback that
+	// unsubscribes itself, which the interface allows.
 	for {
 		// Stopping wins over a waiting event: a select with both ready picks at random, and unsubscribe must mean that
 		// nothing already queued is delivered after it.
