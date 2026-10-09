@@ -243,7 +243,8 @@ func spendSelfQuotaIn(tx *sql.Tx, sid string, at int64) error {
 	if err != nil {
 		return err
 	}
-	res, err := tx.Exec(`UPDATE relay_quotas SET self_left = self_left - 1, updated_at = ?
+	// rev + 1 in the same statement: a spend is a write of the chain's row like a PUT, and the App orders by rev.
+	res, err := tx.Exec(`UPDATE relay_quotas SET self_left = self_left - 1, updated_at = ?, rev = rev + 1
 		WHERE root_session_id = ? AND self_left >= 1`, at, root)
 	if err != nil {
 		return fmt.Errorf("spend relay quota of %s: %w", root, err)
@@ -316,7 +317,7 @@ func (m *Module) fillHeld(v *team.UnattendedView) {
 	}
 	m.heldMu.Unlock()
 	held := []team.Approval{}
-	if len(ids) > 0 {
+	if v.On && len(ids) > 0 { // with the switch off nothing is "held for quota": every request waits for a person anyway
 		open, err := m.store.ListOpen()
 		if err != nil {
 			m.logf("[team] unattended held: %v", err)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -315,5 +316,63 @@ func BenchmarkQuotaRule_ApproveWithoutSpend(b *testing.B) {
 		if _, won, _, err := s.CloseSelfRelayApproved(id, daemonClose(2000, nil), "c10"); err != nil || !won {
 			b.Fatalf("close: %v %v", won, err)
 		}
+	}
+}
+
+// Exhausted at begin: the open request is listed as held at once, before any tick. Mutation gate: don't hold at
+// begin → red.
+func TestQuotaRule_ExhaustedAtBeginIsHeldImmediately(t *testing.T) {
+	f := newFixture(t)
+	f.qrule.set(true, nil)
+	f.unatt.set(true)
+	b := f.begin("sid-1") // no quota: opens for a person
+	_, v, raw := f.getUnattended("")
+	if len(v.Held) != 1 || v.Held[0].ID != b.RequestID {
+		t.Fatalf("held = %+v (%s), want the new request before any tick", v.Held, raw)
+	}
+	// with the switch off nothing is held for quota: every request waits for a person anyway
+	f.unatt.set(false)
+	if _, v, raw = f.getUnattended(""); v.Held == nil || len(v.Held) != 0 || !strings.Contains(string(raw), `"held":[]`) {
+		t.Fatalf("switch off: held = %+v (%s), want []", v.Held, raw)
+	}
+}
+
+// held is [] when nothing waits (read and none), never absent.
+func TestQuotaRule_HeldIsAnEmptyListWhenNothingWaits(t *testing.T) {
+	f := newFixture(t)
+	_, raw := f.do(http.MethodGet, UnattendedRoute, nil)
+	if !strings.Contains(string(raw), `"held":[]`) {
+		t.Fatalf("%s, want \"held\":[]", raw)
+	}
+}
+
+// A spend is a write of the chain's row: rev goes up in the same transaction and the new numbers are announced as a
+// team.relay_quota event (the App orders by rev). Mutation gate: spend without rev + 1 → red; no event → red.
+func TestQuotaRule_ASpendBumpsRevAndAnnouncesTheNewNumbers(t *testing.T) {
+	f := newFixture(t)
+	f.qrule.set(true, nil)
+	f.unatt.set(true)
+	f.setQuota("sid-1", 2) // rev 1
+	sub := f.core.Events.AddTestSubscriber()
+	defer f.core.Events.RemoveTestSubscriber(sub)
+	f.begin("sid-1")
+	q, _, _ := f.m.store.RelayQuotaOf("sid-1")
+	if q.SelfLeft != 1 || q.Rev != 2 {
+		t.Fatalf("after the spend: %+v, want self_left 1, rev 2", q)
+	}
+	got := ""
+	for {
+		select {
+		case raw := <-sub.SendCh():
+			if strings.Contains(string(raw), team.RelayQuotaEventType) {
+				got = string(raw)
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if !strings.Contains(got, `self_left\":1`) || !strings.Contains(got, `rev\":2`) {
+		t.Fatalf("last quota event = %s, want self_left 1 and rev 2", got)
 	}
 }

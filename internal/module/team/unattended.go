@@ -100,6 +100,12 @@ func teamNote(a team.Approval) string {
 // which rosterChanged's hash gate makes free.
 func (m *Module) afterApproved(a team.Approval) {
 	m.rosterChanged()
+	if a.Kind == team.KindSelfRelay && a.DecidedBy != nil && a.DecidedBy.Kind == team.ClientKindUnattended && m.quotaRuleOn() {
+		// An automatic approval under the quota rule spent one: announce the chain's new numbers (the App orders by rev).
+		if q, root, err := m.store.RelayQuotaOf(a.Origin.SessionID); err == nil {
+			m.broadcastRelayQuota(root, q)
+		}
+	}
 	if a.Kind == team.KindAdopt {
 		m.kickNotices() // the adopted member is owed its notice
 		if m.noticeKick != nil {
@@ -181,30 +187,30 @@ func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, ha
 // beginApproved is handleRelayBegin's write while the switch is on (PU-1b2
 // rule 2): the op (claimed) and its row (approved) in one transaction,
 // announced as closed only; the 201 carries the claimed op, and the mod's
-// wait answers approved at once. It reports whether it answered: false only when the relay-quota rule is on and
-// the chain's self_left is 0 — nothing was written and nothing answered, and the caller opens the request for a person
-// as with unattended mode off. Caller holds createMu.
-func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.Approval, hash string) bool {
+// wait answers approved at once. done says it answered; (false, true) is the one case it did not: the relay-quota rule
+// is on and the chain's self_left is 0 — nothing was written and nothing answered, and the caller opens the request
+// for a person as with unattended mode off, and lists it as held for quota. Caller holds createMu.
+func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.Approval, hash string) (done, exhausted bool) {
 	after, claimed, err := m.store.CreateSelfRelayApproved(op, row, hash, m.withQuotaRule(daemonClose(row.CreatedAt, nil), team.KindSelfRelay))
 	switch {
 	case errors.Is(err, ErrQuotaExhausted):
 		// The chain has no quota left (the rule is on): nothing was written; the caller opens the request for a person
 		// exactly as with unattended mode off. The sweeps hold it quietly and approve it once the quota is raised.
-		return false
+		return false, true
 	case errors.Is(err, ErrMemberRelayIsLeads):
 		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
-		return true
+		return true, false
 	case errors.Is(err, ErrRelayOpOpen) && m.writeRelayOpen(w, op.SessionID):
-		return true
+		return true, false
 	case err != nil:
 		m.logf("[team] relay begin %s: %v", op.SessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-		return true
+		return true, false
 	}
 	m.logf("[team] relay op %s claimed: self, origin=%s (%s), request %s approved by unattended at begin", op.ID, op.Ref, op.SessionID, after.ID)
 	m.announceClosed(after, nil)
 	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: claimed, RequestID: after.ID})
-	return true
+	return true, false
 }
 
 // autoApprove is the daemon's approve of an open AutoApprovable row (U23):

@@ -60,7 +60,7 @@ func TestWireUnattended_JSONShapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(zero) != `{"on":false,"since":0,"changed_at":0,"approved":[],"truncated":false,"quotas":null}` {
+	if string(zero) != `{"on":false,"since":0,"changed_at":0,"approved":[],"truncated":false,"quotas":null,"held":null}` {
 		t.Fatalf("zero view = %s", zero)
 	}
 	if empty, _ := json.Marshal(UnattendedView{Approved: []Approval{}}); string(empty) != string(zero) {
@@ -77,7 +77,7 @@ func TestWireUnattended_JSONShapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"approved", "changed_at", "changed_by", "list_failed", "next_before", "on", "pending", "quotas", "since", "swept", "truncated"}
+	want := []string{"approved", "changed_at", "changed_by", "held", "list_failed", "next_before", "on", "pending", "quotas", "since", "swept", "truncated"}
 	if got := jsonKeys(t, raw); !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %v, want %v (state flattened)", got, want)
 	}
