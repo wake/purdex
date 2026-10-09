@@ -191,10 +191,40 @@ describe('PairedPhonesSection', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     render(<PairedPhonesSection />)
     const card = await screen.findByTestId('paired-phone-P1')
-    expect(within(card).getByTestId('paired-no-token').textContent).toMatch(/noauth/)
+    expect(within(card).queryByTestId('paired-no-token')).toBeNull()
+    expect(screen.getByTestId('paired-no-token').textContent).toMatch(/noauth/)
     fireEvent.click(within(card).getByRole('button', { name: 'Revoke' }))
     expect(String(confirm.mock.calls[0][0])).toMatch(/noauth/)
     expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('the no-admin-access note is ONE line above the list, naming every such host, and absent when all hosts have a token', async () => {
+    useHostStore.setState((s) => ({
+      hosts: { ...s.hosts, e: { id: 'e', name: 'nas', ip: '1.1.1.5', port: 1, order: 4 } },
+      hostOrder: [...s.hostOrder, 'e'],
+    }))
+    byHost.a = ok([row({ id: 'a1' }), row({ id: 'x', pairing_id: 'P2' })])
+    render(<PairedPhonesSection />)
+    await screen.findByTestId('paired-phone-P2')
+    expect(screen.getAllByTestId('paired-no-token')).toHaveLength(1)
+    expect(screen.getByTestId('paired-no-token').textContent).toBe('noauth, nas: This Mac has no admin access to it, so it cannot see or revoke pairings there.')
+    cleanup()
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, d: { ...s.hosts.d, token: 'td' } }, hostOrder: s.hostOrder.filter((id) => id !== 'e') }))
+    render(<PairedPhonesSection />)
+    await screen.findByTestId('paired-phone-P1')
+    expect(screen.queryByTestId('paired-no-token')).toBeNull()
+  })
+
+  it('times are shown with date and hour:minute, without seconds', async () => {
+    const t = new Date(2026, 9, 9, 20, 56, 34).getTime()
+    byHost.a = ok([row({ first_used_at: t, last_used_at: t })])
+    render(<PairedPhonesSection />)
+    const first = (await screen.findByTestId('paired-first')).textContent!
+    expect(first).toMatch(/2026/)
+    expect(first).toMatch(/56/)
+    expect(first).not.toMatch(/:34/)
+    expect(first).not.toMatch(/\d:\d\d:\d\d/)
+    expect(screen.getByTestId('paired-last').textContent).not.toMatch(/:34/)
   })
 
   it('D: with a manageable host offline the empty line is NOT shown; a different line says it cannot be confirmed', async () => {

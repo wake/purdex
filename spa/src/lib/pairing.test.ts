@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
 import { pinnedHostFetch } from './host-api'
+import { hostLookOf } from './host-look'
 import {
+  classifyHostsForPairing,
   createPairingSession,
   mintAndPackage,
   PAIRING_POLL_MS,
@@ -254,6 +256,22 @@ describe('mintAndPackage', () => {
     expect(res.kind).toBe('ok')
     if (res.kind === 'ok') expect(res.leftOut).toEqual([{ hostId: bare, reason: 'no_daemon_id' }])
     expect(minted().some((c) => c.hostId === bare)).toBe(false)
+  })
+
+  it('classifyHostsForPairing is the one rule: it names the same pre-known left-out hosts mintAndPackage reports', async () => {
+    const bare = addHost('bare', '100.64.0.9', undefined)
+    const tokenless = addHost('tokenless', '100.64.0.10', 'd1_tokenless')
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [tokenless]: { ...s.hosts[tokenless], token: undefined } } }))
+    input.hosts = [...input.hosts, useHostStore.getState().hosts[bare], useHostStore.getState().hosts[tokenless], useHostStore.getState().hosts[bare]]
+    const cls = classifyHostsForPairing(input.hosts, hostLookOf)
+    expect(cls.leftOut).toEqual([
+      { hostId: bare, reason: 'no_daemon_id' },
+      { hostId: tokenless, reason: 'no_token' },
+    ])
+    expect(cls.usable.map((h) => h.id)).toEqual(input.hosts.slice(0, 2).map((h) => h.id))
+    const res = await mintAndPackage(input)
+    expect(res.kind).toBe('ok')
+    if (res.kind === 'ok') expect(res.leftOut).toEqual(cls.leftOut)
   })
 
   it('an SOT host without a daemon id fails the pairing before anything is minted', async () => {

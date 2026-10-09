@@ -1,3 +1,4 @@
+import { hostLookOf } from '../../lib/host-look'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import * as pairing from '../../lib/pairing'
@@ -54,7 +55,7 @@ function inputOf(): PairingInput {
 
 async function renderDialog(onClose = vi.fn()) {
   const view = render(<PairPhoneDialog onClose={onClose} />)
-  await screen.findByRole('option', { name: 'Work' })
+  await screen.findByRole('option', { name: 'Home' })
   return { ...view, onClose }
 }
 
@@ -100,7 +101,7 @@ describe('PairPhoneDialog setup', () => {
   it('lists the profiles of the master host and selects the master profile; the relay defaults to the active host', async () => {
     await renderDialog()
     expect(profileApi.listProfiles).toHaveBeenCalledWith('air')
-    expect((screen.getByLabelText('Profile') as HTMLSelectElement).value).toBe('p2')
+    expect((screen.getByLabelText('Workbench') as HTMLSelectElement).value).toBe('p2')
     expect((screen.getByLabelText('Relay through') as HTMLSelectElement).value).toBe('relay')
   })
 
@@ -108,7 +109,42 @@ describe('PairPhoneDialog setup', () => {
     useProfileStore.setState({ masterHostId: null, masterProfileId: null } as never)
     await renderDialog()
     expect(profileApi.listProfiles).toHaveBeenCalledWith('relay')
-    expect((screen.getByLabelText('Profile') as HTMLSelectElement).value).toBe('p1')
+    expect((screen.getByLabelText('Workbench') as HTMLSelectElement).value).toBe('p1')
+  })
+
+  it('shows the master profile as 「<name> (workbench master)」 and the others plainly', async () => {
+    await renderDialog()
+    expect(screen.getByRole('option', { name: 'Work (workbench master)' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Home' })).toBeTruthy()
+  })
+
+  it('SETUP lists a host with a token but no daemon id under Left out with its reason, same as the ready view will', async () => {
+    useHostStore.setState((s) => ({
+      hosts: { ...s.hosts, nas: { id: 'nas', name: 'NAS', ip: '10.0.0.7', port: 7860, order: 3, token: 'nas-tok' } },
+      hostOrder: [...s.hostOrder, 'nas'],
+    }))
+    await renderDialog()
+    expect(screen.getByTestId('pair-included').textContent).not.toContain('NAS')
+    const setupLeft = screen.getByTestId('pair-leftout').textContent!
+    expect(setupLeft).toMatch(/NAS: its identity is not known yet/)
+    expect(setupLeft).toMatch(/tokenless: no token/)
+    await clickCreate()
+    const sent = inputOf().hosts.map((h) => h.id)
+    expect(sent).not.toContain('bare')
+    const cls = pairing.classifyHostsForPairing(Object.values(useHostStore.getState().hosts), hostLookOf)
+    fake.push({ phase: 'ready', result: { ...readyResult, leftOut: cls.leftOut }, leftOut: cls.leftOut })
+    const ready = screen.getByTestId('pair-leftout-ready').textContent!
+    expect(ready).toMatch(/NAS: its identity is not known yet/)
+    expect(ready).toMatch(/tokenless: no token/)
+  })
+
+  it('the trust note says the access lasts until revoked, in the setup and the ready view', async () => {
+    const TEXT = 'This QR code is a credential: the first person to scan it within 10 minutes keeps access to your hosts until you revoke it under “Paired phones”. Scan it only with your own phone and never share a screenshot.'
+    await renderDialog()
+    expect(screen.getByTestId('pair-trust').textContent).toBe(TEXT)
+    await clickCreate()
+    fake.push({ phase: 'ready', result: readyResult })
+    expect(screen.getByTestId('pair-trust').textContent).toBe(TEXT)
   })
 
   it('lists a host without a token as left out, and the others as included', async () => {
@@ -123,20 +159,20 @@ describe('PairPhoneDialog setup', () => {
   it('an empty profile list disables the button and says why', async () => {
     vi.spyOn(profileApi, 'listProfiles').mockResolvedValue({ kind: 'ok', value: [] })
     render(<PairPhoneDialog onClose={() => {}} />)
-    await screen.findByText(/has no profile/)
+    await screen.findByText(/has no workbench/)
     expect((screen.getByRole('button', { name: 'Generate code' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('a failed profile listing disables the button and says why', async () => {
     vi.spyOn(profileApi, 'listProfiles').mockResolvedValue({ kind: 'failed', reason: 'network', status: 0, message: 'x' })
     render(<PairPhoneDialog onClose={() => {}} />)
-    await screen.findByText(/Could not load the profiles/)
+    await screen.findByText(/Could not load the workbenches/)
     expect((screen.getByRole('button', { name: 'Generate code' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('Generate code starts a session with the picked profile, relay, hosts with a token and the default label', async () => {
     await renderDialog()
-    fireEvent.change(screen.getByLabelText('Profile'), { target: { value: 'p1' } })
+    fireEvent.change(screen.getByLabelText('Workbench'), { target: { value: 'p1' } })
     fireEvent.change(screen.getByLabelText('Relay through'), { target: { value: 'air' } })
     await clickCreate()
     const input = inputOf()
@@ -151,7 +187,7 @@ describe('PairPhoneDialog setup', () => {
     await renderDialog()
     await clickCreate()
     fake.push({ phase: 'minting' })
-    expect((screen.getByLabelText('Profile') as HTMLSelectElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Workbench') as HTMLSelectElement).disabled).toBe(true)
     expect((screen.getByLabelText('Relay through') as HTMLSelectElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: /Generate code/ }) as HTMLButtonElement).disabled).toBe(true)
   })
@@ -215,7 +251,7 @@ describe('PairPhoneDialog session states', () => {
   })
 
   it.each([
-    ['sot_failed', /profile.*host/i],
+    ['sot_failed', /workbench.*host/i],
     ['too_late', /too long/],
     ['capacity', /too many/],
     ['unavailable', /not available/],

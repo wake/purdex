@@ -12,7 +12,7 @@ import { useProfileStore } from '../../stores/useProfileStore'
 import { usePendingRevocationsStore } from '../../stores/usePendingRevocationsStore'
 import { formatTransferCode } from '../../lib/host-transfer-api'
 import { useHostLookResolver } from '../../lib/host-look'
-import { createPairingSession, type PairingSession, type PairingState } from '../../lib/pairing'
+import { classifyHostsForPairing, createPairingSession, type PairingSession, type PairingState } from '../../lib/pairing'
 import { listProfiles } from '../../lib/profile/api'
 
 interface Props {
@@ -59,7 +59,9 @@ export function PairPhoneDialog({ onClose }: Props) {
 
   const list = hostOrder.map((id) => hosts[id]).filter((h): h is HostConfig => h !== undefined)
   const withToken = list.filter(hasToken)
-  const tokenless = list.filter((h) => !hasToken(h))
+  // Setup and ready share one rule (lib/pairing.ts): what is knowable before minting is shown before minting.
+  const classified = classifyHostsForPairing(list, lookOf)
+  const usable = classified.usable
   const connected = list.filter((h) => runtime[h.id]?.status === 'connected')
 
   // The profile's SOT host: where this Mac's profile lives when it is attached, else the host in use.
@@ -123,7 +125,7 @@ export function PairPhoneDialog({ onClose }: Props) {
   const phase = state?.phase ?? 'idle'
   const minting = phase === 'minting' || (state !== null && phase === 'idle')
   const setupVisible = phase === 'idle' || phase === 'minting'
-  const blocked = !profile || !relay || minting || profiles.kind !== 'ok' || withToken.length === 0
+  const blocked = !profile || !relay || minting || profiles.kind !== 'ok' || usable.length === 0
 
   const handleCreate = () => {
     if (blocked || !profile || !relay || !sotHostId || sessionRef.current) return
@@ -191,7 +193,7 @@ export function PairPhoneDialog({ onClose }: Props) {
                   className="w-full bg-surface-secondary border border-border-default rounded px-3 py-2 text-sm text-text-primary"
                 >
                   {profileList.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
+                    <option key={p.id} value={p.id}>{p.id === attachedHere ? t('hosts.pair.profile_master', { name: p.name }) : p.name}</option>
                   ))}
                 </select>
                 {profileNote !== null && <p className="text-xs text-text-muted mt-1">{profileNote}</p>}
@@ -218,21 +220,21 @@ export function PairPhoneDialog({ onClose }: Props) {
 
               <div>
                 <span className="text-xs text-text-secondary block mb-1">{t('hosts.pair.included_label')}</span>
-                {withToken.length === 0 ? (
+                {usable.length === 0 ? (
                   <p className="text-xs text-text-muted">{t('hosts.pair.included_none')}</p>
                 ) : (
                   <ul data-testid="pair-included" className="space-y-0.5 text-sm text-text-primary">
-                    {withToken.map((h) => (
+                    {usable.map((h) => (
                       <li key={h.id} className="truncate">{lookOf(h.id).name}</li>
                     ))}
                   </ul>
                 )}
-                {tokenless.length > 0 && (
+                {classified.leftOut.length > 0 && (
                   <div data-testid="pair-leftout" className="mt-2">
                     <span className="text-xs text-text-secondary block">{t('hosts.pair.leftout_label')}</span>
                     <ul className="space-y-0.5 text-xs text-text-muted">
-                      {tokenless.map((h) => (
-                        <li key={h.id}>{t('hosts.pair.leftout_item', { host: lookOf(h.id).name ?? h.id, reason: t('hosts.pair.leftout.no_token') })}</li>
+                      {classified.leftOut.map((l) => (
+                        <li key={l.hostId}>{t('hosts.pair.leftout_item', { host: nameOfHost(l.hostId), reason: t(`hosts.pair.leftout.${l.reason}`) })}</li>
                       ))}
                     </ul>
                   </div>

@@ -109,7 +109,9 @@ export function PairedPhonesSection() {
 
   const nameOf = (id: string) => (hosts[id] ? (lookOf(id).name ?? id) : id)
   const labelOf = (p: PairedPhone) => (p.label === '' ? t('hosts.pairedPhones.unknown_label') : p.label)
-  const timeText = (ms: number) => new Date(ms).toLocaleString(dateLocale)
+  // Date and hour:minute — seconds are noise here.
+  const timeText = (ms: number) =>
+    new Date(ms).toLocaleString(dateLocale, { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 
   // Every configured host with an admin token is a target, whether or not it listed rows of the phone: the revoke is
   // idempotent, and a host that failed to list (or is offline right now) may still hold the pairing.
@@ -170,6 +172,12 @@ export function PairedPhonesSection() {
       {loaded && loaded.unreachable > 0 && (
         <p data-testid="paired-unreachable" className="text-xs text-yellow-400">
           {t('hosts.pairedPhones.unreachable', { count: loaded.unreachable })}
+        </p>
+      )}
+
+      {tokenlessIds.length > 0 && (
+        <p data-testid="paired-no-token" className="text-xs text-yellow-400">
+          {t('hosts.pairedPhones.no_token', { hosts: tokenlessIds.map(nameOf).join(t('hosts.pairedPhones.separator')) })}
         </p>
       )}
 
@@ -241,11 +249,6 @@ export function PairedPhonesSection() {
                   </button>
                 </div>
               ))}
-              {tokenlessIds.length > 0 && (
-                <p data-testid="paired-no-token" className="text-xs text-yellow-400">
-                  {t('hosts.pairedPhones.no_token', { hosts: tokenlessIds.map(nameOf).join(t('hosts.pairedPhones.separator')) })}
-                </p>
-              )}
             </li>
           )
         })}

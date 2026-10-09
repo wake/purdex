@@ -199,6 +199,28 @@ function planOf(host: HostConfig, lookOf: (id: string) => HostLook): Plan | Left
   return { host, name: parsed.name, ip: parsed.ip, port: parsed.port, daemonId: host.daemonId, look: parsed.look ?? {} }
 }
 
+/**
+ * The one rule for which hosts a pairing can carry — everything knowable BEFORE minting (unknown host, no token, no valid
+ * daemon id, an address a phone cannot take). `mintAndPackage` and the dialog's setup view both call this, so the setup list
+ * and the ready list cannot drift; only what happens while minting (`mint_failed`) is added later. Duplicates are skipped.
+ */
+export function classifyHostsForPairing(
+  hosts: readonly HostConfig[],
+  lookOf: (id: string) => HostLook,
+): { usable: HostConfig[]; leftOut: LeftOut[]; plans: Plan[] } {
+  const plans: Plan[] = []
+  const leftOut: LeftOut[] = []
+  const seen = new Set<string>()
+  for (const host of hosts) {
+    if (seen.has(host.id)) continue
+    seen.add(host.id)
+    const p = planOf(host, lookOf)
+    if (typeof p === 'string') leftOut.push({ hostId: host.id, reason: p })
+    else plans.push(p)
+  }
+  return { usable: plans.map((p) => p.host), leftOut, plans }
+}
+
 function failed(reason: PairingFailureReason, revokeFailed: string[] = [], pairingId?: string): PairingFailure {
   return pairingId === undefined ? { kind: 'failed', reason, revokeFailed } : { kind: 'failed', reason, revokeFailed, pairingId }
 }
@@ -214,16 +236,7 @@ export async function mintAndPackage(input: PairingInput, opts: { isCancelled?: 
   const deadline = clock() + PAIRING_TTL_MS
   const lookOf = input.lookOf ?? ((id: string) => hostLookOf(id)) // the look of a host is read through the resolver, never off its config
 
-  const plans: Plan[] = []
-  const leftOut: LeftOut[] = []
-  const seen = new Set<string>()
-  for (const host of input.hosts) {
-    if (seen.has(host.id)) continue
-    seen.add(host.id)
-    const p = planOf(host, lookOf)
-    if (typeof p === 'string') leftOut.push({ hostId: host.id, reason: p })
-    else plans.push(p)
-  }
+  const { plans, leftOut } = classifyHostsForPairing(input.hosts, lookOf)
   if (!plans.some((p) => p.host.id === profile.sotHostId)) return failed('sot_failed')
 
   const pairingId = crypto.randomUUID()
