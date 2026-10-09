@@ -1,6 +1,6 @@
 # Session workbook — spec (v2)
 
-> Status: v1 **approved by the user 2026-10-09** (「工作簿 spec 可以」); §10 surfaces decided the same evening. **v2 (2026-10-10)** carries the user's decisions of 2026-10-10 (§2 items 8–14): the summariser call moves into the session's own Purdex mod, a read-only todo list with a done record, a manual refresh, and a full-screen workbook page on iOS. Changed from v1: §2, §3, §4, §5, §6, §9, §10, §12–§14 and the prompt (prompt_ver 2, `docs/specs/2026-10-10-session-workbook-prompt-v2.md`). Unchanged: the conversation key and trigger (§4.1, §4.2), push (§7), secrets (§8). Discussion hosted by the A-line lead (purdex-1f); the result goes to the interface line (88) for the App side. Sub-project 1 of 2: the **session workbook**. The **employee workbook** (named virtual employees, monthly statistics) is a later round built on these records (§11).
+> Status: v1 **approved by the user 2026-10-09** (「工作簿 spec 可以」); §10 surfaces decided the same evening. **v2 (2026-10-10)** carries the user's decisions of 2026-10-10 (§2 items 8–14): the summariser call moves into the session's own Purdex mod, a read-only todo list with a done record, a manual refresh, and a full-screen session detail page on iOS. Changed from v1: §2, §3, §4, §5, §6, §9, §10, §12–§14 and the prompt (prompt_ver 2, `docs/specs/2026-10-10-session-workbook-prompt-v2.md`). Unchanged: the conversation key and trigger (§4.1, §4.2), push (§7), secrets (§8). Discussion hosted by the A-line lead (purdex-1f); the result goes to the interface line (88) for the App side. Sub-project 1 of 2: the **session workbook**. The **employee workbook** (named virtual employees, monthly statistics) is a later round built on these records (§11).
 
 ## 1. Problem and goal
 
@@ -37,7 +37,7 @@ It stays readable after the session is gone. And (user extension) **the push not
 11. **The todos are read-only** in the Apps: no tick, no delete; the model (turns and refreshes) alone changes them.
 12. **A refresh is asked from two places**: the 「重整」 control of the Mac workbook view, and `/workbook refresh` typed in the session.
 13. **Not in the terminal**: no todo band above the prompt (claude-todo-list's) in this version.
-14. **iOS shows everything** — status, todos with their details, the done record, all entries — on a **full-screen workbook page**; the Tab-info sheet keeps a summary that opens it (purdex-ios's proposal, §10.3).
+14. **iOS shows everything** — status, todos with their details, the done record, all entries — on a **full-screen session detail page**: the conversation screen's ⓘ opens it, and so does a swipe to the left; the old Tab-info sheet becomes a segment or a button of that page (user, 2026-10-10, §10.3).
 
 ## 3. Measurements this stands on (1f; data in the 1f scratchpad `workbook-exp/`)
 
@@ -277,7 +277,7 @@ v2 (`workbook.v2` — the todos and the refresh):
 
 ## 10. Where it is seen (user decision 2026-10-09, extended 2026-10-10) and what 88 gets
 
-**Three surfaces, no more.** The user chose: the panel beside a conversation, the team panel line, and iOS. **No standalone workbook page on the Mac** (iOS's workbook page, §10.3, opens from a session's tab): reading the workbook of a session that has ended, and the period view for C ("what got done this week"), have no screen yet; the records are kept (§6) and the API serves them (§9), so a later page needs no daemon change.
+**Three surfaces, no more.** The user chose: the panel beside a conversation, the team panel line, and iOS. **No standalone workbook page on the Mac** (iOS's session detail page, §10.3, opens from a session's conversation screen): reading the workbook of a session that has ended, and the period view for C ("what got done this week"), have no screen yet; the records are kept (§6) and the API serves them (§9), so a later page needs no daemon change.
 
 ### 10.1 Mac App — one shared panel: team panel and workbook (user 2026-10-09)
 
@@ -300,13 +300,14 @@ The workbook view (either way in):
 
 ### 10.2 (merged into 10.1)
 
-### 10.3 iOS — the Tab-info summary, the workbook page, and opening a push
+### 10.3 iOS — the session detail page, and opening a push
 
-iOS has no separate session-detail screen: a conversation screen's ⓘ opens the 「Tab 資訊」 sheet, one section per session; v1's workbook section lives there (purdex-ios 0.6.30, behind `workbook.v1`). v2 (user 2026-10-10, purdex-ios's proposal):
+Before v2, iOS had no session-detail screen: a conversation screen's ⓘ opened the 「Tab 資訊」 sheet (one section per session: host, state, agent, path, 「在手機隱藏」, 「我的最愛」), and v1's workbook section lived there (purdex-ios 0.6.30, behind `workbook.v1`). v2 (user 2026-10-10; **the iOS interface design is assigned by 88**, the user's points below are fixed):
 
-- **Tab 資訊 → summary:** each session's 「工作簿」 section shows 「目前狀況」, the number of open todos and the last 3 entries, and a 「工作簿 ›」 row.
-- **「工作簿 ›」 pushes a full-screen workbook page** with four segments: 「目前狀況」 (`status` and its time); 「待辦」 (the open todos, title and detail, read-only); 「已完成」 (the done record, newest first, paged); 「紀錄」 (every entry, grouped as on the Mac, `before=` paging, a refresh entry included).
-- **Tapping a workbook push** opens that page on 「紀錄」, scrolled to the entry, highlighted. The push carries `purdex.workbook = {conv_key, entry_id}` (§7). A push without it (today's body, the fallback) opens the session as today.
+- **ⓘ opens the session detail page** — a full-screen page, pushed — instead of the sheet; **a swipe to the left on the conversation screen opens it too**.
+- **The page's segments:** 「目前狀況」 (`status` and its time); 「待辦」 (the open todos, title and detail, read-only); 「已完成」 (the done record, newest first, paged); 「紀錄」 (every entry, grouped as on the Mac, `before=` paging, refresh entries included); and **the old Tab-info content as a segment or a button of the page** (the user allowed either; 88's iOS design decides). Without `workbook.v1` / `workbook.v2` the workbook segments are absent and the page shows the Tab-info content alone.
+- A tab that holds more than one session: the page opens on the session the screen shows, with a switch between the tab's sessions (88's iOS design).
+- **Tapping a workbook push** opens the detail page on 「紀錄」, scrolled to the entry, highlighted. The push carries `purdex.workbook = {conv_key, entry_id}` (§7). A push without it (today's body, the fallback) opens the session as today.
 - No refresh on iOS (§9 device routes are reads).
 
 ### 10.4 Contract items for 88
