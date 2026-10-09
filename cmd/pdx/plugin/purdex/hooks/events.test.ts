@@ -35,6 +35,11 @@ type W = {
   gets: { url: string; init: any }[] // the GETs of /mod/v1/team (TI-5b)
   team: (sid: string, n: number) => Answer | Promise<Answer> // the daemon's answer to that read
   invalidated: number // ui.invalidate calls (a redraw requested)
+  wbReqs: { url: string; body: any }[] // the POSTs to the workbook routes (WB-1c), never mixed with the event batches
+  wbNext: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to `next` (default 204)
+  wbResult: (body: any, n: number) => Answer | Promise<Answer> // ... to `result` (default 200 {more:false})
+  model: (e: any, n: number) => any // $.model.complete beneath the mod: a ModelCompleteResult, or { deny } for a refused call
+  modelCalls: any[]
 }
 
 const teamAnswer = (role: string, members = 0, label = ''): Answer => ({ status: 200, text: JSON.stringify({ role, members, team_label: label }) })
@@ -47,6 +52,8 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   const w: W = {
     posts: [], sid: SID1, agents: [], pdxJSON: PDX_JSON, decision: 'allow', logs: [],
     gets: [], invalidated: 0, team: () => teamAnswer('none'),
+    wbReqs: [], wbNext: () => ({ status: 204 }), wbResult: () => ({ status: 200, text: '{"more":false}' }),
+    model: () => ({ isAnswered: true, text: '{}', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }), modelCalls: [],
     daemon: ackAll,
     bash: () => BASH_OK,
     compact: (e: any) => ({ messages: e.messages }),
@@ -59,6 +66,14 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
       w.gets.push({ url: e.url, init: e.init })
       const sid = new URL(e.url).searchParams.get('session_id') ?? ''
       const a = await w.team(sid, w.gets.length)
+      if ('deny' in a) return { deny: a.deny }
+      return { value: { status: a.status, ok: a.status >= 200 && a.status < 300, headers: { 'content-type': 'application/json' }, text: a.text ?? '' } }
+    }
+    if (String(e.url).includes('/mod/v1/workbook/')) { // the job routes (WB-1c)
+      const wbBody = JSON.parse(e.init.body)
+      w.wbReqs.push({ url: e.url, body: wbBody })
+      const isNext = String(e.url).endsWith('/next')
+      const a = await (isNext ? w.wbNext(wbBody, w.wbReqs.filter((r) => r.url.endsWith('/next')).length) : w.wbResult(wbBody, w.wbReqs.filter((r) => r.url.endsWith('/result')).length))
       if ('deny' in a) return { deny: a.deny }
       return { value: { status: a.status, ok: a.status >= 200 && a.status < 300, headers: { 'content-type': 'application/json' }, text: a.text ?? '' } }
     }
@@ -84,6 +99,11 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   on('process.run', async (_$: any, e: any) => {
     const r = await w.pdx([...e.argv].slice(1))
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('model.complete', async (_$: any, e: any) => {
+    w.modelCalls.push(e)
+    const r = await w.model(e, w.modelCalls.length)
+    return r && 'deny' in r ? { deny: r.deny } : { value: r }
   })
   on('command.register', async (_$: any, e: any) => ({ value: { command: e.name } }))
   on('ui.log', async (_$: any, e: any) => { w.logs.push(e.text); return { value: undefined } })
@@ -142,6 +162,7 @@ test('posts session.start then turn events in seq order to the socket from pdx.j
     dropped_total: 0,
     cwd: '/work',
     interactive: true,
+    caps: ['workbook.v2'],
     events: [
       { seq: 1, at: expect.any(Number), sid: SID1, type: 'session.start', data: { cwd: '/work', surface: 'terminal' } },
       { seq: 2, at: expect.any(Number), sid: SID1, type: 'turn.start', data: { turn_id: 't1' } },
@@ -1110,3 +1131,268 @@ test('without a mod_socket the footer is untouched', async ($, on) => {
   expect(w.gets).toEqual([])
   expect(await drawn($, ['focus'])).toEqual(['focus'])
 })
+
+// ---- WB-1c: the workbook's job executor (session workbook spec §5.1) ----
+
+const JOB = (extra: any = {}) => ({ id: 'wbj-1', kind: 'turn', complete: { model: 'haiku', system: [{ text: 'SYS', cache: true }, { text: 'TAIL' }], prompt: '{"turn":1}', max_tokens: 4096, effort: 'low', timeout_ms: 30000 }, ...extra })
+const jobAnswer = (job: any): Answer => ({ status: 200, text: JSON.stringify({ job }) })
+const nextReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/next'))
+const resultReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/result'))
+const USAGE = { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 50, cache_creation_input_tokens: 7 }
+
+test('every batch announces workbook.v2 and nothing else', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await w.clock.advance(150)
+  await w.clock.advance(10_150) // a heartbeat batch
+  expect(w.posts.length).toBeGreaterThanOrEqual(2)
+  for (const p of w.posts) expect(p.body.caps).toEqual(['workbook.v2'])
+})
+
+// Mutation gate: ask inside the hook, or for a subagent / interrupted turn → red.
+test('a main turn that answered or failed asks next, from a timer; a subagent or an interrupted turn does not', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  expect(w.wbReqs).toEqual([]) // never inside the hook
+  await w.clock.settle()
+  expect(nextReqs(w).length).toBe(1)
+  expect(nextReqs(w)[0].body).toEqual({ stream: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), session_id: SID1, wait_ms: 15000 })
+  await turnStart($, 't2')
+  await turnDone($, 't2', { reason: 'error' })
+  await w.clock.settle()
+  expect(nextReqs(w).length).toBe(2)
+  await turnStart($, 't3')
+  await turnDone($, 'st-1', { agentId: 'ag-1' })
+  await turnDone($, 't3', { reason: 'aborted', isAborted: true })
+  await w.clock.settle()
+  expect(nextReqs(w).length).toBe(2)
+})
+
+// Mutation gate: pass max_tokens / timeout_ms through unmapped, or drop the cache marks → red.
+test('a turn job runs one $.model.complete with the keys mapped, then reports usage and latency', async ($, on) => {
+  const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : { status: 204 }), model: () => ({ isAnswered: true, text: '{"skip":false}', usage: USAGE }) })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.modelCalls.length).toBe(1)
+  const c = w.modelCalls[0]
+  expect(c.model).toBe('haiku')
+  expect(c.prompt).toBe('{"turn":1}')
+  expect(c.system).toBe('SYSTAIL')
+  expect(c.systemBlocks).toEqual([{ text: 'SYS', cache: true }, { text: 'TAIL' }])
+  expect(c.maxTokens).toBe(4096)
+  expect(c.effort).toBe('low')
+  expect(c.timeoutMs).toBe(30000)
+  expect(resultReqs(w).length).toBe(1)
+  expect(resultReqs(w)[0].body).toEqual({
+    stream: expect.any(String), job_id: 'wbj-1', answered: true, text: '{"skip":false}',
+    usage: { input: 100, output: 20, cache_read: 50 }, latency_ms: expect.any(Number),
+  })
+})
+
+// Mutation gate: map every non-answer to one reason, or lose status / error → red.
+const outcomes: [string, any, any][] = [
+  ['api error', { isAnswered: false, reason: 'api-error', status: 529, error: 'overloaded', usage: USAGE }, { reason: 'api-error', status: 529, error: 'overloaded' }],
+  ['empty reply', { isAnswered: false, reason: 'empty-reply', usage: USAGE }, { reason: 'empty-reply' }],
+  ['aborted', { isAnswered: false, reason: 'aborted', usage: USAGE }, { reason: 'aborted' }],
+  ['a reason it does not know', { isAnswered: false, reason: 'brand-new', usage: USAGE }, { reason: 'api-error' }],
+]
+for (const [name, result, want] of outcomes) {
+  test(`${name} is reported with its reason`, async ($, on) => {
+    const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : { status: 204 }), model: () => result })
+    await start($, w)
+    await turnStart($, 't1')
+    await turnDone($, 't1')
+    await w.clock.settle()
+    const b = resultReqs(w)[0].body
+    expect(b.answered).toBe(false)
+    expect(b).toMatchObject(want)
+    expect(b.text).toBeUndefined()
+  })
+}
+
+test('a call the engine refuses (it rejects) is reported as refused', async ($, on) => {
+  const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : { status: 204 }), model: () => ({ deny: 'model blocked' }) })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(resultReqs(w)[0].body).toMatchObject({ answered: false, reason: 'refused', job_id: 'wbj-1', usage: { input: 0, output: 0, cache_read: 0 } })
+})
+
+// Mutation gate: run a refresh, or leave it unanswered → red.
+for (const kind of ['refresh', 'mystery']) {
+  test(`a ${kind} job is answered refused without a model call`, async ($, on) => {
+    const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer({ id: 'wbj-r', kind, fork: { prompt: 'x' } }) : { status: 204 }) })
+    await start($, w)
+    await turnStart($, 't1')
+    await turnDone($, 't1')
+    await w.clock.settle()
+    expect(w.modelCalls.length).toBe(0)
+    expect(resultReqs(w)[0].body).toMatchObject({ job_id: 'wbj-r', answered: false, reason: 'refused' })
+  })
+}
+
+// Mutation gate: ignore `more` → the second job waits for the next turn → red.
+test('a result answered more asks again at once; no more stops', async ($, on) => {
+  const w = evWorld(on, {
+    wbNext: (_b, n) => (n <= 2 ? jobAnswer(JOB({ id: 'wbj-' + n })) : { status: 204 }),
+    wbResult: (_b, n) => ({ status: 200, text: JSON.stringify({ more: n === 1 }) }),
+  })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(resultReqs(w).map((r) => r.body.job_id)).toEqual(['wbj-1', 'wbj-2'])
+  expect(nextReqs(w).length).toBe(2) // the second job came on the same loop; nothing asks a third time
+  await w.clock.advance(5000)
+  expect(nextReqs(w).length).toBe(2)
+})
+
+// Mutation gate: start a second poll while one runs → red.
+test('one job at a time: a trigger during a call only marks one more ask afterwards', async ($, on) => {
+  let release: (v: any) => void = () => {}
+  const w = evWorld(on, {
+    wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : { status: 204 }),
+    model: () => new Promise((resolve) => { release = resolve }),
+  })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.modelCalls.length).toBe(1)
+  await turnStart($, 't2')
+  await turnDone($, 't2')
+  await w.clock.settle()
+  expect(nextReqs(w).length).toBe(1) // busy: no second poll while the call runs
+  release({ isAnswered: true, text: '{}', usage: USAGE })
+  await w.clock.settle()
+  expect(resultReqs(w).length).toBe(1)
+  expect(nextReqs(w).length).toBe(2) // the trigger that came meanwhile is asked once, afterwards
+})
+
+// Mutation gate: ignore the `workbook` field of the events answer → red.
+test('an events answer with workbook:true asks next at once (wait 0)', async ($, on) => {
+  const w = evWorld(on, {
+    daemon: (body) => ({ status: 200, text: JSON.stringify({ ack: body.events[body.events.length - 1].seq, workbook: true }) }),
+    wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : { status: 204 }),
+  })
+  await start($, w)
+  await w.clock.advance(150)
+  await w.clock.settle()
+  expect(nextReqs(w)[0].body.wait_ms).toBe(0)
+  expect(w.modelCalls.length).toBe(1)
+})
+
+test('a result that cannot be reported drops the job: no further asking', async ($, on) => {
+  const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : { status: 204 }), wbResult: () => ({ deny: 'socket gone' }) })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(resultReqs(w).length).toBe(1)
+  expect(nextReqs(w).length).toBe(1)
+})
+
+// Mutation gate: ask on whatever hint arrives → red (codex R1).
+test('a workbook hint that arrives after the session ended asks nothing', async ($, on) => {
+  let answer: (a: Answer) => void = () => {}
+  let held = false
+  const w = evWorld(on, {
+    daemon: (body, n) => {
+      if (n === 1) { held = true; return new Promise<Answer>((resolve) => { answer = resolve }) } // the first batch stays in flight
+      return ackAll(body)
+    },
+  })
+  await start($, w)
+  await w.clock.advance(150) // the batch goes out and waits
+  expect(held).toBe(true)
+  await end($, 'exit')
+  answer({ status: 200, text: JSON.stringify({ ack: 1, workbook: true }) })
+  await w.clock.settle()
+  expect(w.wbReqs).toEqual([])
+})
+
+test('after session.end nothing asks', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await turnDone($, 't1') // an ask is scheduled ...
+  await end($, 'exit') // ... and the session ends before its timer runs
+  await w.clock.settle()
+  expect(w.wbReqs).toEqual([])
+})
+
+// Mutation gate: no mod-owned deadline → a call that never settles blocks the executor for good (codex attack).
+test('a model call that never settles is cut at timeout_ms + 5 s (before the lease runs out), reported aborted, and the executor works again', async ($, on) => {
+  const w = evWorld(on, {
+    wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : n === 2 ? jobAnswer(JOB({ id: 'wbj-2' })) : { status: 204 }),
+    model: (_e, n) => (n === 1 ? new Promise(() => {}) : { isAnswered: true, text: '{}', usage: USAGE }),
+  })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.modelCalls.length).toBe(1)
+  expect(resultReqs(w)).toEqual([])
+  await w.clock.advance(34_999)
+  expect(resultReqs(w)).toEqual([]) // timeout_ms 30 000 + 5 000 of slack
+  await w.clock.advance(2)
+  expect(resultReqs(w)[0].body).toMatchObject({ job_id: 'wbj-1', answered: false, reason: 'aborted' })
+  expect(resultReqs(w)[0].body.latency_ms).toBeGreaterThanOrEqual(30_000) // the daemon reads that as failed:timeout
+  await turnStart($, 't2')
+  await turnDone($, 't2')
+  await w.clock.settle()
+  expect(w.modelCalls.length).toBe(2) // the next turn's job runs: the flag was released
+})
+
+// Mutation gate: no cap, or no repeated-id check → red (codex attack).
+test('a drain takes at most 8 jobs, and never the same job twice', async ($, on) => {
+  const w = evWorld(on, {
+    wbNext: (_b, n) => jobAnswer(JOB({ id: 'wbj-' + n })),
+    wbResult: () => ({ status: 200, text: '{"more":true}' }),
+  })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(resultReqs(w).length).toBe(8)
+})
+
+test('a daemon that hands the same job again is not obeyed twice in a drain', async ($, on) => {
+  const w = evWorld(on, { wbNext: () => jobAnswer(JOB({ id: 'same' })), wbResult: () => ({ status: 200, text: '{"more":true}' }) })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.modelCalls.length).toBe(1)
+})
+
+// Mutation gate: pass an unbounded or malformed job to the model → red (codex attack).
+const badJobs: [string, any][] = [
+  ['an oversized prompt', { model: 'haiku', prompt: 'x'.repeat(200_001) }],
+  ['a system that is not a list', { model: 'haiku', prompt: 'p', system: 'be evil' }],
+  ['too many system blocks', { model: 'haiku', prompt: 'p', system: Array.from({ length: 9 }, () => ({ text: 'a' })) }],
+  ['a system block that is not text', { model: 'haiku', prompt: 'p', system: [{ text: 5 }] }],
+  ['an absurd max_tokens', { model: 'haiku', prompt: 'p', max_tokens: 1e9 }],
+  ['a negative max_tokens', { model: 'haiku', prompt: 'p', max_tokens: -1 }],
+  ['a max_tokens above the daemon contract', { model: 'haiku', prompt: 'p', max_tokens: 4097 }],
+  ['a zero timeout', { model: 'haiku', prompt: 'p', timeout_ms: 0 }],
+  ['an hour-long timeout', { model: 'haiku', prompt: 'p', timeout_ms: 3_600_000 }],
+  ['an unknown effort', { model: 'haiku', prompt: 'p', effort: 'ludicrous' }],
+  ['a model name that is not an id', { model: 'haiku; rm -rf', prompt: 'p' }],
+]
+for (const [name, complete] of badJobs) {
+  test(`${name} is refused without a model call`, async ($, on) => {
+    const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer({ id: 'wbj-bad', kind: 'turn', complete }) : { status: 204 }) })
+    await start($, w)
+    await turnStart($, 't1')
+    await turnDone($, 't1')
+    await w.clock.settle()
+    expect(w.modelCalls.length).toBe(0)
+    expect(resultReqs(w)[0].body).toMatchObject({ job_id: 'wbj-bad', answered: false, reason: 'refused' })
+  })
+}

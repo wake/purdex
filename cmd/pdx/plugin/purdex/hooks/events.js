@@ -32,6 +32,8 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
+import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, moreOf, nextBody, parseNext, refusedBody, resultBody, shouldAsk } from './workbook.js'
+
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
 const BATCH_MAX = 200 // events per POST
@@ -52,6 +54,11 @@ const TEAM_MS = 15_000 // how often the lead's member count is read
 // looks at it (never at the socket); a change asks for a redraw. `gen` counts the session changes: an answer that left
 // before one and lands after it belongs to the old session and is dropped.
 const team = { good: false, role: 'none', members: 0, gen: 0, timer: null, pending: -1 }
+
+// wb is the workbook job executor's state (session workbook spec §5.1): one job at a time. `busy` is the loop that polls the
+// daemon and runs what it hands out; a trigger that comes while it runs only sets `again`. `gen` counts the session ends
+// and switches, so a loop that began before one stops asking. `wait` is the longest poll that is asked for next.
+const wb = { busy: false, again: false, scheduled: false, gen: 0, wait: 0 }
 
 // ev is the reporter's whole state; one per mod load. `stream` and `seq` live as long as the
 // load (a /clear or a resume goes on in the same stream), the queue holds every event not yet
@@ -152,6 +159,7 @@ function body(events) {
     dropped_total: ev.droppedTotal,
     cwd: ev.cwd,
     interactive: true, // the reporter runs only for interactive sessions
+    caps: CAPS, // what this mod can run besides reporting (the workbook's turn and re-write jobs)
     events,
   })
 }
@@ -173,6 +181,13 @@ async function postWithDeadline($, events) {
   }
 }
 
+// hintOf reads the daemon's `workbook: true` on an events answer: a job of this session's conversation waits that nobody
+// holds, so the mod asks `next`.
+function hintOf(res) {
+  const o = parse(res.text)
+  return isObject(o) && o.workbook === true
+}
+
 // ackOf reads the daemon's {"ack": N}; undefined for anything else.
 function ackOf(res) {
   const o = parse(res.text)
@@ -188,13 +203,14 @@ function dropThrough(n) {
 
 // apply takes one POST's outcome for the batch it carried: true when the daemon answered for
 // it (200 with an ack, or a refusal of the batch), false for a failure to retry.
-function apply(outcome, batch) {
+function apply(outcome, batch, $, ask) {
   const res = outcome && outcome !== TIMEOUT ? outcome.res : undefined
   if (!res) return false
   if (res.status === 200) {
     const ack = ackOf(res)
     if (ack === undefined) return false
     dropThrough(ack)
+    if (ask && hintOf(res)) wbAsk($, 0) // a job waits: ask at once (a refresh needs no turn to end)
     return true
   }
   // 400: the daemon refused the batch as written (a bad event, a bad sid…): sending it again
@@ -211,6 +227,7 @@ function apply(outcome, batch) {
 async function flush($) {
   if (ev.inflight || ev.queue.length === 0) return
   const batch = ev.queue.slice(0, BATCH_MAX)
+  const wbGen = wb.gen
   ev.inflight = true
   let outcome
   try {
@@ -218,7 +235,8 @@ async function flush($) {
   } finally {
     ev.inflight = false
   }
-  if (apply(outcome, batch)) {
+  // A hint that comes back after the session ended or switched is for a session that is gone: it asks nothing.
+  if (apply(outcome, batch, $, wbGen === wb.gen)) {
     ev.backoffMs = 0
     schedule($, FLUSH_MS)
     return
@@ -245,7 +263,7 @@ async function finalFlush($) {
   } catch (err) {
     outcome = { err }
   }
-  apply(outcome, batch)
+  apply(outcome, batch, $, false) // the session is ending: no more asking
 }
 
 // ---- the heartbeat ----
@@ -277,6 +295,113 @@ function stopBeat() {
   if (ev.beat) ev.beat.cancel()
   ev.beat = null
   ev.beatGen += 1
+}
+
+// ---- the workbook's jobs (session workbook spec §5.1) ----
+
+// wbAsk asks the daemon for a job soon: from a timer, never inside a hook, and one loop at a time — a trigger that comes
+// while the loop runs only marks that it must ask once more when it ends (with the longer wait, if either asked for one).
+function wbAsk($, waitMs) {
+  if (!ev.on) return
+  wb.wait = Math.max(wb.wait, waitMs)
+  if (wb.busy) {
+    wb.again = true
+    return
+  }
+  if (wb.scheduled) return
+  wb.scheduled = true
+  const gen = wb.gen
+  $.clock.after(0, () => wbTick($, gen))
+}
+
+// wbTick: an ask scheduled before a session end or switch is stale and goes nowhere (the next trigger asks afresh).
+function wbTick($, gen) {
+  wb.scheduled = false
+  if (gen !== wb.gen) return
+  void wbLoop($).catch((err) => log($, 'workbook loop failed: ' + String(err)))
+}
+
+// wbRequest posts to the daemon with a deadline of its own ($.http.fetch has none): { res }, { err } or TIMEOUT.
+async function wbRequest($, url, bodyText, waitMs) {
+  let timer = null
+  const deadline = new Promise((resolve) => { timer = $.clock.after(waitMs + REQUEST_DEADLINE_MS, () => resolve(TIMEOUT)) })
+  try {
+    const req = $.http.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: bodyText, socketPath: ev.sock })
+    return await Promise.race([req.then((res) => ({ res }), (err) => ({ err })), deadline])
+  } finally {
+    if (timer) timer.cancel()
+  }
+}
+
+// wbLoop asks, runs the job it is handed, reports it, and goes on while the daemon says another one is ready. Any failure
+// ends the loop: a job that could not be reported is dropped (its lease runs out on the daemon, which fails the entry).
+async function wbLoop($) {
+  if (wb.busy || !ev.on) return
+  wb.busy = true
+  const gen = wb.gen
+  try {
+    // A drain takes at most MAX_JOBS_PER_DRAIN jobs and never the same job id twice: a daemon that keeps answering
+    // "more" (or hands the same lease again) cannot make this mod spend the person's model quota without end. The next
+    // trigger (a turn end, the heartbeat's hint) starts another drain.
+    const seen = new Set()
+    for (let n = 0; n < MAX_JOBS_PER_DRAIN; n++) {
+      const waitMs = wb.wait
+      wb.wait = 0
+      wb.again = false
+      const out = await wbRequest($, NEXT_URL, nextBody(ev.stream, ev.sid, waitMs), waitMs)
+      if (gen !== wb.gen || !ev.on || !out || out === TIMEOUT || !out.res) return
+      const job = parseNext(out.res)
+      if (!job || seen.has(job.id)) break // 204 (nothing yet), an error, or a job already taken in this drain
+      seen.add(job.id)
+      const more = await wbRun($, job, gen)
+      if (more !== true) break
+    }
+  } finally {
+    wb.busy = false
+    if (wb.again && ev.on) { // a trigger came while the loop ran (or the session moved on under it): ask once more
+      wb.again = false
+      wbAsk($, 0)
+    }
+  }
+}
+
+// wbRun runs one job and reports it; true when the daemon said another job is ready. A turn or re-write job is one
+// $.model.complete; a refresh (this mod does not announce workbook.refresh, so none should come) or a kind it does not know
+// is answered `refused`. A call the engine refuses rejects: that is reported as `refused` too.
+async function wbRun($, job, gen) {
+  // gen only decides whether to go on asking afterwards (see the end)
+  const jobId = job.id
+  let bodyText
+  const req = job.kind === 'turn' || job.kind === 'rewrite' ? completeRequest(job.complete) : null
+  if (!req) {
+    bodyText = refusedBody(ev.stream, jobId)
+  } else {
+    const t0 = await $.clock.now()
+    // The mod owns a deadline of its own: a call that never settles (or outlives its timeout_ms) must not hold the
+    // executor for good. It is aborted and reported `aborted`; the daemon reads that as a timeout.
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null
+    let cut = null
+    const deadline = new Promise((resolve) => {
+      cut = $.clock.after((req.timeoutMs ?? DEFAULT_TIMEOUT_MS) + MODEL_SLACK_MS, () => {
+        if (ctl) ctl.abort()
+        resolve({ isAnswered: false, reason: 'aborted', usage: {} })
+      })
+    })
+    let r = null
+    try {
+      const call = ctl ? $.model.complete(req, { signal: ctl.signal }) : $.model.complete(req)
+      r = await Promise.race([call, deadline])
+    } catch (err) {
+      log($, 'workbook call refused: ' + String(err))
+    } finally {
+      if (cut) cut.cancel()
+    }
+    bodyText = resultBody(ev.stream, jobId, r, (await $.clock.now()) - t0)
+  }
+  // The result is reported even if the session moved on meanwhile: the lease belongs to this stream, not to a session id.
+  const out = await wbRequest($, RESULT_URL, bodyText, 0)
+  if (!out || out === TIMEOUT || !out.res) return false
+  return gen === wb.gen && moreOf(out.res)
 }
 
 // ---- the lead's footer (TI-5b, spec §4.10) ----
@@ -363,6 +488,7 @@ function startTeam($) {
 async function startReporter($, e) {
   stopBeat()
   stopTeam()
+  wb.gen += 1
   ev.on = false
   ev.switching = false
   const cfg = parse(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
@@ -401,6 +527,7 @@ async function sessionSwitch($, source) {
   try {
     const prev = ev.sid
     ev.sid = String(await $.session.id())
+    wb.gen += 1 // a poll made under the old session id stops asking
     ev.turnId = ''
     ev.asks.clear()
     ev.compacting = false
@@ -429,6 +556,7 @@ async function sessionEnd($, e) {
   } else {
     stopBeat()
     stopTeam()
+    wb.gen += 1
   }
   enqueue($, 'session.end', { reason: e.reason }, e.sessionId)
   await finalFlush($)
@@ -455,6 +583,7 @@ function turnCompleted($, e) {
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
   }
+  if (shouldAsk(e)) wbAsk($, WAIT_MS) // the daemon's job for this turn appears after its Stop hook and the catch-up
   enqueue($, 'turn.complete', { ...withAgent({ turn_id: e.turnId, reason: e.reason }, e.agentId), duration_ms: e.durationMs, aborted: !!e.isAborted })
 }
 
