@@ -103,7 +103,7 @@ export function buildTeamDisplay(input: StructureInput, actions: TeamActions = N
     const label = groupLabel(view)
     marks.set(tabId, {
       teamKey: hit.key, color: teamColor(view.colorIndex), label: label.text, full: label.full, truncated: label.truncated,
-      tooltip: tooltipOf(view), role: hit.role,
+      tooltip: tooltipOf(view), role: hit.role, seatState: hit.seat.state, hostAlias: hit.seat.hostAlias,
       first: visible[0] === tabId, last: visible[visible.length - 1] === tabId,
       collapsed: isCollapsed, hidden: isCollapsed && hit.role === 'member',
       hiddenCount: isCollapsed ? group.filter((id) => index.byTabId.get(id)?.role === 'member').length : 0,

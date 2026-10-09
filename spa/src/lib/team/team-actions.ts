@@ -13,6 +13,7 @@ import { collectLeaves } from '../pane-tree'
 import { activateTab, activateTabPane, openSessionTabAt } from '../open-session-tab'
 import { isRefShownNow } from '../shown-hosts'
 import { currentTeamState } from './team-state'
+import { hiddenMemberIds } from './team-runs'
 import type { Seat, TeamView } from './team-views'
 
 export type OpenSeatOutcome =
@@ -160,16 +161,15 @@ export function toggleTeamCollapse(teamKey: string): void {
 }
 
 /**
- * `tabIds` without the member tabs of collapsed teams (R8): the list stepping and ⌘1–8 / ⌘9 act on, so a hidden member
- * is never landed on. `teamOfTab` answers (key, role) for a tab id, `null` for a tab in no team.
+ * `tabIds` (ONE workspace's tab list) without the member tabs the bar hides (R8): the list stepping and ⌘1–8 / ⌘9 act on,
+ * so a hidden member is never landed on and a drawn tab is always reachable. "Hidden" is `hiddenMemberIds` — a member in
+ * a run behind its lead in this list while its team is collapsed. `teamOfTab` answers (key, role) for a tab id.
  */
 export function visibleTabIds(
   tabIds: readonly string[],
   collapsed: Record<string, boolean>,
   teamOfTab: (tabId: string) => { key: string; role: 'lead' | 'member' } | null | undefined,
 ): string[] {
-  return tabIds.filter((id) => {
-    const hit = teamOfTab(id)
-    return !(hit && hit.role === 'member' && collapsed[hit.key] === true)
-  })
+  const hidden = hiddenMemberIds(tabIds, collapsed, teamOfTab)
+  return tabIds.filter((id) => !hidden.has(id))
 }
