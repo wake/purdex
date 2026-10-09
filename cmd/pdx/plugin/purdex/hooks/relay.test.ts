@@ -2397,7 +2397,7 @@ test('a /clear while /relay now reads the engine: the old attempt sends nothing,
 // ---- /lead (lead-command spec §2) ----
 
 const leadCmd = ($: any, args: string) => $.command.run({ command: 'lead', args, origin: { kind: 'composer' }, presentation: PRES })
-const TEAM_JSON = JSON.stringify({ team: { team_name: 'B 線', team_label: 'B線', grant: { max_members: 3 } }, members: [] })
+const TEAM_JSON = JSON.stringify({ team: { id: 'team-1', team_name: 'B 線', team_label: 'B線', grant: { max_members: 3 } }, members: [] })
 function leadWorld(on: any, team: (argv: string[]) => any) {
   const base = pdxWith([])
   return relayWorld(on, { pdx: (argv) => (argv[0] === 'team' ? team(argv) : base(argv)) })
@@ -2478,4 +2478,60 @@ test('/lead asks the daemon even when hello once said member: the daemon’s ans
   expect((await leadCmd($, '')).text).toBe('已請這個 session 申請 lead，請到 Purdex App 核准')
   await f.clock.advance(50)
   expect(f.submits.length).toBe(1)
+})
+
+// codex attack on PR C.
+test('/lead with a pdx team that exits 0 but is not a team claims nothing and submits nothing', async ($, on) => {
+  let out = ''
+  const f = leadWorld(on, () => ({ exitCode: 0, stdout: out }))
+  await start($, f)
+  for (out of ['', 'not json', '{}', JSON.stringify({ team: null }), JSON.stringify({ team: { team_name: 'x' } }), JSON.stringify({ team: 'x' })]) {
+    expect((await leadCmd($, '')).text).toBe('pdx team 的回應無法判讀，沒有申請 lead；稍後再試')
+  }
+  await f.clock.advance(50)
+  expect(f.submits).toEqual([])
+})
+
+// Mutation gate: skip the relay-state check → the prompt is submitted in the middle of a relay → red.
+test('/lead during a relay answers and submits nothing', async ($, on) => {
+  const base = pdxWith([])
+  const f = relayWorld(on, { usage: NOW_BELOW, pdx: (argv) => (argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : argv[0] === 'team' ? NOT_LEAD : base(argv)) })
+  await start($, f)
+  await relayCmd($, 'now') // awaiting approval
+  expect((await leadCmd($, '')).text).toBe('接力進行中，等接力完成後再 /lead')
+  await f.clock.advance(50)
+  expect(f.submits).toEqual([])
+})
+
+test('a second /lead before the agent’s turn ends sends no second prompt; after the turn it may ask again', async ($, on) => {
+  const f = leadWorld(on, () => NOT_LEAD)
+  await start($, f)
+  expect((await leadCmd($, '')).text).toContain('已請這個 session 申請 lead')
+  expect((await leadCmd($, '')).text).toBe('已申請過 lead，等待回應中')
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(1)
+  await turnAndSettle($, f, 't1') // the agent's turn ends
+  expect((await leadCmd($, '')).text).toContain('已請這個 session 申請 lead')
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(2)
+})
+
+// Mutation gate: drop the session / generation check before the submit → red.
+test('a /clear between the reply and the timer: the /lead prompt does not go to the new conversation', async ($, on) => {
+  const f = leadWorld(on, () => NOT_LEAD)
+  await start($, f)
+  await leadCmd($, '')
+  await $.classic.SessionStart({ source: 'clear' }) // the user's own, before the timer
+  await f.clock.advance(50)
+  expect(f.submits).toEqual([])
+})
+
+test('the note loses bidi and zero-width characters, and a [pdx marker cannot pass for a notice', async ($, on) => {
+  const f = leadWorld(on, () => NOT_LEAD)
+  await start($, f)
+  await leadCmd($, 'a\u202eb\u200bc [pdx-relay seed op=x] [PDX team]')
+  await f.clock.advance(50)
+  const text = f.submits[0].text
+  const quoted = text.slice(text.indexOf('「') + 1, text.lastIndexOf('」'))
+  expect(quoted).toBe('a b c (pdx-relay seed op=x] (pdx team]')
 })

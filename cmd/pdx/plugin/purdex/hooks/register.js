@@ -97,6 +97,7 @@ const fresh = () => ({
   begun: undefined, // while beginning: a deferred resolving to the request begin opened and adopted, or undefined
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
+  leadAsk: undefined, // { gen, sid }: a /lead prompt is out until the agent's turn ends or the session moves on
   floor: undefined,
   fixRounds: 0,
   writeTurnId: undefined,
@@ -495,12 +496,17 @@ async function begin($, sid, gen, u, adopted) {
 
 const LEAD_UNREACHABLE = 'daemon 連不上，無法申請 lead'
 const LEAD_NOTE_MAX_BYTES = 200
+const LEAD_RELAY_BUSY = '接力進行中，等接力完成後再 /lead'
+const LEAD_PENDING = '已申請過 lead，等待回應中'
+const LEAD_UNREADABLE = 'pdx team 的回應無法判讀，沒有申請 lead；稍後再試'
 
 // leadNote makes the user's text after `/lead` safe to quote as data: control characters and line
 // breaks become spaces, runs of spaces one, the quote marks the prompt uses are dropped, and it is cut
 // to LEAD_NOTE_MAX_BYTES of UTF-8 at a character boundary. { note, cut }.
 function leadNote(args) {
-  const clean = String(args || '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029「」]/g, ' ').replace(/\s+/g, ' ').trim()
+  // control, format (bidi, zero-width) and line characters become spaces; so do the quote marks the prompt
+  // uses, and a '[pdx' marker is defanged so the note cannot pass for a mod or team notice
+  const clean = String(args || '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029「」]|\p{Cf}/gu, ' ').replace(/\[pdx/gi, '(pdx').replace(/\s+/g, ' ').trim()
   let note = ''
   let bytes = 0
   for (const ch of clean) {
@@ -526,18 +532,34 @@ function leadPrompt(note) {
 // anything else is the daemon's answer to the `pdx lead request` the agent runs. The prompt goes
 // out from a timer, as every relay prompt does.
 async function leadCommand($, e) {
+  // A relay in flight owns the turn order (its write, /clear and seed turns): a /lead prompt now would be
+  // held with the user's prompts, or slip between its turns.
+  if (s.state !== 'idle') return { text: LEAD_RELAY_BUSY }
+  if (s.leadAsk && s.leadAsk.gen === s.gen) return { text: LEAD_PENDING }
   const r = await pdx($, ['team', '--json'], SELF_TIMEOUT_MS)
   if (r.exitCode === 20 || r.exitCode === 21) return { text: LEAD_UNREACHABLE }
   if (r.exitCode === 0) {
-    const t = (parseJSON(r.stdout) || {}).team || {}
-    const g = t.grant || {}
-    return { text: '已經是 lead：' + (t.team_name || '(未命名)') + (t.team_label ? ' ［' + t.team_label + '］' : '') + (g.max_members ? '（上限 ' + g.max_members + '）' : '') }
+    const team = (parseJSON(r.stdout) || {}).team
+    if (!team || typeof team !== 'object' || typeof team.id !== 'string' || !team.id) return { text: LEAD_UNREADABLE } // not a team: claim nothing
+    const g = team.grant || {}
+    return { text: '已經是 lead：' + (team.team_name || '(未命名)') + (team.team_label ? ' ［' + team.team_label + '］' : '') + (g.max_members ? '（上限 ' + g.max_members + '）' : '') }
   }
   const { note, cut } = leadNote(e.args)
+  const gen = s.gen
+  const sid = await $.session.id()
+  if (s.state !== 'idle' || s.gen !== gen) return { text: LEAD_RELAY_BUSY } // took over while the daemon was asked
+  s.leadAsk = { gen, sid }
   later($, 0, async () => {
+    // still this conversation, and no relay started meanwhile
+    if (s.leadAsk === undefined || s.leadAsk.gen !== s.gen || s.state !== 'idle' || (await $.session.id()) !== sid) {
+      s.leadAsk = undefined
+      log($, '/lead prompt not submitted: the session moved on')
+      return
+    }
     try {
       await submit($, leadPrompt(note))
     } catch (err) {
+      s.leadAsk = undefined
       log($, '/lead prompt not submitted: ' + String(err))
     }
   })
@@ -803,6 +825,7 @@ export function register(on) {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (!s.interactive || e.agentId) return r
+    s.leadAsk = undefined // the agent's turn after a /lead has ended: it may be asked again
     try {
       if (!s.helloOK && !s.helloBusy) helloLater($) // the last hello failed (daemon down): say it again
       if (s.outbox.length) { s.held.clear(); pump($) } // re-send what did not land (§8.3)
