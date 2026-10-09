@@ -8,15 +8,12 @@ package peers
 // is the reply address, and writes the frame into the target's inbox.
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
 	ipeers "github.com/wake/purdex/internal/peers"
-	"github.com/wake/purdex/internal/peers/ccuds"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -219,146 +216,29 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// refuseWith records auditDetail (local, may name paths and internal
-	// errors) and answers the peer with wireDetail; refuse uses one text
-	// for both.
+	// errors) and answers the peer with wireDetail.
 	refuseWith := func(status int, code, wireDetail, auditDetail string) {
 		m.setResult(id, "", code, auditDetail)
 		m.logf("peers: deliver %s from %q refused (%s): %s", req.MsgID, principal.Alias, code, auditDetail)
 		writeWireError(w, status, ipeers.APIError{Error: code, Detail: wireDetail})
 	}
-	refuse := func(status int, code, detail string) { refuseWith(status, code, detail, detail) }
 
-	// 7. Re-verify the target against this daemon's own inventory: the
-	// sender's view may be stale, and a session that restarted, whose inbox
-	// died, or that is a proxy row is not this target. An inventory that
-	// could not be built at all says nothing about the target: it is this
-	// daemon's own trouble, answered 503 not_ready (never target_gone,
-	// which the origin takes as a verdict and reaps the sender's helper on)
-	// with a fixed detail — the error text is local (tmux, registry paths)
-	// and stays in the audit row and the log. Peer Address v2 gives every
-	// live, non-proxy registry entry its own entry row (spec §3.4)
-	// regardless of tmux owner resolution, so a merely PARTIAL inventory
-	// (an owner lookup timed out, failed, or never started, or the label
-	// store read failed) no longer hides a live target: only an
-	// alive-but-undecodable registry file (env.UnknownRegistryFiles,
-	// Diagnosis's "unknown" class) can, because that file could be exactly
-	// the entry that would have superseded whatever mismatched row
-	// findTarget did resolve (a restart racing the registry write). Its
-	// mere presence is not_ready, never a verdict, overriding even a
-	// genuine candidate row; anything else findTarget reports is a real
-	// verdict, target_gone.
-	env := m.localEnvelope(r.Context(), snap.localHostID, snap.localAlias)
-	if !env.OK {
-		refuseWith(http.StatusServiceUnavailable, ipeers.ErrNotReady, "inventory unavailable", "inventory unavailable: "+env.Error)
-		return
-	}
-	target, detail := findTarget(env.Peers, req.To)
-	if detail != "" {
-		if len(env.UnknownRegistryFiles) > 0 {
-			refuse(http.StatusServiceUnavailable, ipeers.ErrNotReady, detailInventoryPartial)
-			return
-		}
-		refuse(http.StatusConflict, ipeers.ErrTargetGone, detail)
-		return
-	}
-
-	// 8. Per (sender, receiver) process pair rate limit.
-	if !m.pairs.Allow(pairKey{From: req.From.Key(), To: req.To.Key(snap.localHostID)}) {
-		refuse(http.StatusTooManyRequests, ipeers.ErrRateLimited, "pair rate limit exceeded")
-		return
-	}
-
-	// 9. The sender's helper: its socket is the reply address the frame
-	// carries. The wait is bounded by the request (and by Stop); the helper
-	// itself is owned by the manager and outlives both (B1). Its name is
-	// the sender's address under the peer's alias (spec §3.5): a v2 sender
-	// names "<alias>/<label>:<suffix>" at its address_rev; a v1 sender
-	// (no from.address) names "<alias>/<session_name>" with no revision,
-	// so the first v2 request for the same origin renames the instance.
-	spawnName, rev := principal.Alias+"/"+req.From.SessionName, revUnapplied // v1 sender
-	if req.From.Address != "" {
-		spawnName, rev = principal.Alias+"/"+req.From.Address, req.From.AddressRev
-	}
-	waitCtx, cancelWait := context.WithCancel(r.Context())
-	defer cancelWait()
-	stopAfter := context.AfterFunc(m.stopCtx, cancelWait)
-	defer stopAfter()
-	h, err := m.helpers.Acquire(waitCtx, req.From.Key(), spawnName, rev)
-	if err != nil {
-		// The manager's typed errors are classified first, by sentinel:
-		// a spawn failure wraps its cause, and that cause must never be
-		// mistaken for the caller leaving. Only then is "the caller is
-		// gone" decided — by the request's own context, not by the shape
-		// of the error — and anything else is a spawn failure. A spawn
-		// error names local paths (the registry dir, proxies.json): the
-		// peer gets a fixed detail, the audit row and the log keep the
-		// cause.
-		const spawnDetail = "helper could not be started"
-		switch {
-		case errors.Is(err, ErrProxySpawnFailed):
-			refuseWith(http.StatusBadGateway, ipeers.ErrProxySpawnFailed, spawnDetail, err.Error())
-		case errors.Is(err, ErrProxyLimit):
-			refuse(http.StatusServiceUnavailable, ipeers.ErrProxyLimit, "helper cap reached")
-		case errors.Is(err, ErrNotReady) || m.stopCtx.Err() != nil:
-			refuse(http.StatusServiceUnavailable, ipeers.ErrNotReady, "helper manager is not ready")
-		case r.Context().Err() != nil:
-			// The caller is gone; nothing to answer. The helper keeps
-			// starting under the manager for the retry.
+	// 7–10. The target side of the delivery — re-verify the target, the pair limit, the sender's helper and its reply
+	// socket, the frame and its write — is shared with the team notice seam: deliverToLocalTarget (deliver_local.go).
+	result, errText, ref := m.deliverToLocalTarget(r.Context(), snap, localDelivery{
+		msgID: req.MsgID, hopChain: req.HopChain, text: req.Text, from: req.From, to: req.To,
+		senderAlias: principal.Alias, effective: effective, oneWay: oneWay,
+	})
+	if ref != nil {
+		if ref.clientGone {
 			m.setResult(id, "", resultClientGone, "")
 			m.logf("peers: deliver %s from %q: caller gone while waiting for its helper", req.MsgID, principal.Alias)
-		default:
-			refuseWith(http.StatusBadGateway, ipeers.ErrProxySpawnFailed, spawnDetail, err.Error())
+			return
 		}
-		return
-	}
-
-	// 10. The wrapper's from-name: for a v2 sender the helper follows the
-	// address in place when this request's revision is newer than what the
-	// instance carries (an existing instance named by an earlier request,
-	// or a v1 spawn); an older revision, or a failed rewrite, keeps the
-	// current name — and the delivery goes through either way. The name
-	// is never read off the instance directly: ApplyAddress/Name hold
-	// the manager lock.
-	name := m.helpers.Name(h)
-	if req.From.Address != "" {
-		name = m.helpers.ApplyAddress(h, spawnName, rev)
-	}
-
-	// The frame, written under stopCtx (never the request context: a
-	// caller that disconnects mid-write must not leave a half frame).
-	line, err := ccuds.BuildFrame(req.MsgID, h.sock, ccuds.Wrapper{
-		From:     "uds:" + h.sock,
-		FromName: name,
-		FromMode: effective,
-		HopChain: req.HopChain,
-		Text:     req.Text,
-	})
-	if err != nil {
-		refuse(http.StatusInternalServerError, ipeers.ErrSocketWriteFailed, "build frame: "+err.Error())
-		return
-	}
-	err = m.writeFrame(m.stopCtx, target.Agent.Inbox, line, m.sockWriteTimeout)
-	var (
-		result  string
-		errText string
-	)
-	switch {
-	case err == nil:
-		result = ipeers.ResultDelivered
-		if oneWay {
-			errText = ipeers.ErrNoReturnRoute
-		}
-	case errors.Is(err, ccuds.ErrPostWriteTimeout):
-		// Fully written, but the peer never closed: it may or may not
-		// have consumed the frame (spec §4.3).
-		result = ipeers.ResultDeliveryUncertain
-		errText = err.Error()
-	default:
-		refuse(http.StatusBadGateway, ipeers.ErrSocketWriteFailed, err.Error())
+		refuseWith(ref.status, ref.code, ref.wireDetail, ref.auditDetail)
 		return
 	}
 	m.setResult(id, "", result, errText)
-	m.helpers.Touch(h.key)
 	_ = json.NewEncoder(w).Encode(ipeers.DeliverResponse{
 		MsgID:         req.MsgID,
 		Result:        result,
