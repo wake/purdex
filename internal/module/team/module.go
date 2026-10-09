@@ -120,6 +120,8 @@ type Module struct {
 	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
 	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
 	noticeMu sync.Mutex
+	// beforeMemberRelayInsert, when set, runs in the member-relay create between its checks and the insert's transaction (tests race a release there).
+	beforeMemberRelayInsert func(mr memberRow)
 	// helloMu orders a hello's modSeen update with its mod_hello write (P6-2a); never held with mu across the write.
 	helloMu sync.Mutex
 	// unsubTurnEnd ends the subscription to the agent module's turn ends (T-3a2); nil when none.
@@ -413,6 +415,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/team", m.handleTeam)          // P4-6, spec §7.3
 	mux.HandleFunc("GET "+RosterRoute, m.handleRosterGet)  // PL-1f′: every live team (D-U24-5)
 	mux.HandleFunc("POST /api/team/kill", m.handleKill)
+	mux.HandleFunc("POST /api/team/relays", m.handleRelayCreate)
 	mux.HandleFunc("POST /api/team/release", m.handleRelease)
 	// T-1b1: tasks (plan "Routes"); a lead sees its team's, a member its own.
 	mux.HandleFunc("POST /api/team/tasks", m.handleTaskCreate)
