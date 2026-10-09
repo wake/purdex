@@ -89,7 +89,7 @@ func TestNewOuterHandler_EmptyAdminToken(t *testing.T) {
 	}
 	c := newTestCore(cfg)
 	rec := &muxRecorder{}
-	outer := newOuterHandler(c, rec.handler(), nil)
+	outer := newOuterHandler(c, nil, rec.handler(), nil)
 
 	t.Run("/api/sessions 200 via general chain", func(t *testing.T) {
 		rec.reset()
@@ -139,7 +139,7 @@ func TestNewOuterHandler_TicketNeverConsultedOnPeerChain(t *testing.T) {
 	cfg := &config.Config{Token: "admin-secret"}
 	c := newTestCore(cfg)
 	rec := &muxRecorder{}
-	outer := newOuterHandler(c, rec.handler(), nil)
+	outer := newOuterHandler(c, nil, rec.handler(), nil)
 
 	ticket, err := c.Tickets.Generate()
 	if err != nil {
@@ -183,7 +183,7 @@ func TestNewOuterHandler_PeersHostsSubpathForbiddenForHost(t *testing.T) {
 	}
 	c := newTestCore(cfg)
 	rec := &muxRecorder{}
-	outer := newOuterHandler(c, rec.handler(), nil)
+	outer := newOuterHandler(c, nil, rec.handler(), nil)
 
 	res := doRequest(t, outer, "GET", "/api/peers/hosts", "host-a-token")
 	if res.Code != 403 {
@@ -201,7 +201,7 @@ func TestNewOuterHandler_PeersXFallsThroughToGeneralChain(t *testing.T) {
 	cfg := &config.Config{Token: ""}
 	c := newTestCore(cfg)
 	rec := &muxRecorder{}
-	outer := newOuterHandler(c, rec.handler(), nil)
+	outer := newOuterHandler(c, nil, rec.handler(), nil)
 
 	res := doRequest(t, outer, "GET", "/api/peersx", "")
 	if res.Code != 200 {
@@ -221,7 +221,7 @@ func TestNewOuterHandler_AdminBearerOnPeersSeenAsAdminPrincipal(t *testing.T) {
 	cfg := &config.Config{Token: "admin-secret"}
 	c := newTestCore(cfg)
 	rec := &muxRecorder{}
-	outer := newOuterHandler(c, rec.handler(), nil)
+	outer := newOuterHandler(c, nil, rec.handler(), nil)
 
 	res := doRequest(t, outer, "GET", "/api/peers/hosts", "admin-secret")
 	if res.Code != 200 {
@@ -258,7 +258,7 @@ func TestOuterChain_NexAuthMatrix(t *testing.T) {
 		probe := &muxRecorder{}
 		inner := http.NewServeMux()
 		inner.Handle("/api/nex/", probe.handler())
-		outer := newOuterHandler(c, inner, []string{"127.0.0.1"})
+		outer := newOuterHandler(c, nil, inner, []string{"127.0.0.1"})
 		return c, probe, outer
 	}
 
@@ -584,7 +584,7 @@ func TestNewOuterHandler_PeerChainObservesHostMatchUnderCfgRLock(t *testing.T) {
 		seen = append(seen, obs{alias, fp, free})
 	}
 	rec := &muxRecorder{}
-	outer := newOuterHandler(c, rec.handler(), nil)
+	outer := newOuterHandler(c, nil, rec.handler(), nil)
 
 	if res := doRequest(t, outer, "GET", "/api/peers", "host-a-token"); res.Code != 200 {
 		t.Fatalf("host bearer: want 200, got %d", res.Code)
@@ -621,7 +621,7 @@ func TestOuterChain_HostTransferBehindTokenAuth(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
-	outer := newOuterHandler(c, mux, nil)
+	outer := newOuterHandler(c, mux, mux, nil)
 
 	post := func(path, body, bearer string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -675,7 +675,7 @@ func TestOuterChain_HostTransferFailsClosedWithoutAdminToken(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	mod.RegisterRoutes(mux)
-	outer := newOuterHandler(c, mux, nil)
+	outer := newOuterHandler(c, mux, mux, nil)
 
 	for path, body := range map[string]string{
 		"/api/host-transfer":        `{"hosts":[{"ip":"10.0.0.1","token":"t"}]}`,
@@ -718,7 +718,7 @@ func TestOuterChain_HostTransferTokenSetAfterOuterAuth(t *testing.T) {
 				c.CfgMu.Unlock()
 				mux.ServeHTTP(w, r)
 			})
-			outer := newOuterHandler(c, setTokenThenServe, nil)
+			outer := newOuterHandler(c, nil, setTokenThenServe, nil)
 
 			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 			rec := httptest.NewRecorder()
@@ -735,7 +735,7 @@ func TestDaemonRestartRequiresHostToken(t *testing.T) {
 	c.SetRestartHook(func() {})
 	mux := http.NewServeMux()
 	c.RegisterCoreRoutes(mux)
-	h := newOuterHandler(c, mux, nil)
+	h := newOuterHandler(c, mux, mux, nil)
 
 	if rec := doRequest(t, h, "POST", "/api/daemon/restart", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no token: got %d, want 401", rec.Code)
@@ -762,7 +762,7 @@ func TestNewOuterHandler_HostConfigTeamPutIsAdminOnly(t *testing.T) {
 	t.Cleanup(func() { hc.Stop(context.Background()) })
 	mux := http.NewServeMux()
 	hc.RegisterRoutes(mux)
-	outer := newOuterHandler(c, mux, nil)
+	outer := newOuterHandler(c, mux, mux, nil)
 	for path, body := range map[string]string{
 		"/api/hostconfig/team":  `{"items":{"member_command":"claude"},"baseRevision":0}`,
 		"/api/hostconfig/relay": `{"items":{"self_solo":true,"self_lead":true,"prompt_write":"寫接力檔 {{path}}"},"baseRevision":0}`,
@@ -798,7 +798,7 @@ func TestNewOuterHandler_UnattendedIsAdminOnly(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+teammod.UnattendedRoute, stub)
 	mux.HandleFunc("PUT "+teammod.UnattendedRoute, stub)
-	outer := newOuterHandler(c, mux, nil)
+	outer := newOuterHandler(c, mux, mux, nil)
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		for _, tc := range []struct {
 			bearer string

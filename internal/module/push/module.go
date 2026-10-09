@@ -29,7 +29,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/module/agent"
+	devicesmod "github.com/wake/purdex/internal/module/devices"
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/push/apnskey"
@@ -40,10 +42,11 @@ const maxBody = 64 << 10 // device registration body cap (spec §4.1)
 
 // Module is the push module.
 type Module struct {
-	core  *core.Core
-	store *Store
-	key   apnskey.Key
-	home  func() (string, error) // the daemon user's home; injectable for tests
+	followed atomic.Bool // the revoke feed is subscribed (once per module)
+	core     *core.Core
+	store    *Store
+	key      apnskey.Key
+	home     func() (string, error) // the daemon user's home; injectable for tests
 
 	// mu orders every write: the store first, the cache after it succeeds, both under the lock, so the cache never
 	// holds a row the store does not.
@@ -174,6 +177,7 @@ func (m *Module) Start(ctx context.Context) error {
 	if !m.isReady() {
 		return nil
 	}
+	m.followRevokes()
 	if m.events == nil {
 		svc, ok := m.core.Registry.Get(team.ApprovalEventsKey)
 		if ev, isEv := svc.(team.ApprovalEvents); ok && isEv {
@@ -223,6 +227,75 @@ func (m *Module) Start(ctx context.Context) error {
 	}
 	log.Printf("[push] enabled (%v, %d device(s))", m.key, len(m.snapshot()))
 	return nil
+}
+
+// followRevokes ties a registration's life to the paired phone that made it: a phone revoked now loses its registrations at
+// once, and one revoked while push was down (or never existed) loses them here, at Start. Without the devices module there
+// are no paired phones to follow and the registrations of phones are dropped as unverifiable.
+func (m *Module) followRevokes() {
+	svc, _ := m.core.Registry.Get(devicesmod.RevokeFeedKey)
+	if feed, ok := svc.(devices.RevokeFeed); ok && m.followed.CompareAndSwap(false, true) { // once, however often Start runs
+		feed.SubscribeRevoked(m.dropOwned)
+	}
+	live, _ := m.core.Registry.Get(devicesmod.RegistryKey)
+	ref, _ := live.(devices.Refresher)
+	owners := map[string]bool{}
+	for _, d := range m.snapshot() {
+		if d.OwnerDeviceID != "" {
+			owners[d.OwnerDeviceID] = true
+		}
+	}
+	var dead []string
+	for o := range owners {
+		if ref == nil {
+			dead = append(dead, o)
+		} else if _, ok := ref.RefreshPrincipal(o); !ok {
+			dead = append(dead, o)
+		}
+	}
+	m.dropOwned(dead)
+}
+
+// phoneLive: the devices module still knows the phone (not revoked). With no devices module, no phone is live.
+func (m *Module) phoneLive(id string) bool {
+	svc, _ := m.core.Registry.Get(devicesmod.RegistryKey)
+	ref, ok := svc.(devices.Refresher)
+	if !ok {
+		return false
+	}
+	_, live := ref.RefreshPrincipal(id)
+	return live
+}
+
+// dropOwned removes the registrations of revoked paired phones from the store and the cache; a push already queued for one
+// finds no device when it is sent.
+func (m *Module) dropOwned(owners []string) {
+	if len(owners) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	gone, err := m.store.DeleteByOwners(owners)
+	for _, id := range gone {
+		delete(m.devices, id)
+	}
+	// Fail closed: whatever the database said, nothing owned by a revoked phone stays in the send cache (a failed delete is
+	// retried by the reconcile at the next Start).
+	revoked := make(map[string]bool, len(owners))
+	for _, o := range owners {
+		revoked[o] = true
+	}
+	for id, d := range m.devices {
+		if d.OwnerDeviceID != "" && revoked[d.OwnerDeviceID] {
+			delete(m.devices, id)
+		}
+	}
+	if err != nil {
+		log.Printf("[push] drop registrations of revoked phones: %v", err)
+	}
+	if len(gone) > 0 {
+		log.Printf("[push] dropped %d registration(s) of %d revoked phone(s)", len(gone), len(owners))
+	}
 }
 
 // Stop ends the subscription and the sender (cancelling a request in flight), then closes the store.
@@ -381,7 +454,18 @@ func (m *Module) handlePost(w http.ResponseWriter, r *http.Request) {
 		DeviceID: push.DeviceID(req.Token), Token: req.Token, BundleID: req.BundleID, Env: req.Env, Platform: req.Platform,
 		DeviceName: req.DeviceName, HostLabel: req.HostLabel, Locale: req.Locale, Prefs: req.Prefs,
 	}
+	p, isDevice := devices.PrincipalFrom(r.Context())
+	if isDevice {
+		d.OwnerDeviceID = p.ID // a paired phone registers as itself; the same APNs token again moves to whoever sends it
+	}
 	m.mu.Lock()
+	if isDevice && !m.phoneLive(p.ID) {
+		// Revoked after this request passed authentication. The revoke's drop runs under this same mutex, so checking here
+		// (not earlier) means either the phone is still live and the drop follows, or it is refused.
+		m.mu.Unlock()
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 	stored, err := m.store.Upsert(d)
 	if err == nil {
 		m.devices[stored.DeviceID] = stored
@@ -396,10 +480,14 @@ func (m *Module) handlePost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stored.View())
 }
 
-func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
+func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
+	p, isDevice := devices.PrincipalFrom(r.Context())
 	devs := m.snapshot()
 	views := make([]push.DeviceView, 0, len(devs))
 	for _, d := range devs {
+		if isDevice && d.OwnerDeviceID != p.ID {
+			continue // a paired phone sees only its own registrations
+		}
 		views = append(views, d.View())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
@@ -407,11 +495,23 @@ func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
 
 func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("device_id")
+	p, isDevice := devices.PrincipalFrom(r.Context())
 	if !push.ValidDeviceID(id) { // not an id this module ever issued: nothing to remove, and nothing of it is logged
+		if isDevice { // to a paired phone every id that is not its own is the same 404, well-formed or not
+			writeError(w, http.StatusNotFound, "not_found")
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	m.mu.Lock()
+	if isDevice { // someone else's registration (or none) is the same 404 to a paired phone
+		if d, ok := m.devices[id]; !ok || d.OwnerDeviceID != p.ID {
+			m.mu.Unlock()
+			writeError(w, http.StatusNotFound, "not_found")
+			return
+		}
+	}
 	gone, err := m.store.DeleteByID(id)
 	if err == nil {
 		delete(m.devices, id)

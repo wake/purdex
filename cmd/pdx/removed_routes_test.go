@@ -44,7 +44,7 @@ func TestRemovedRoutesAre404(t *testing.T) {
 	mux := http.NewServeMux()
 	c.RegisterCoreRoutes(mux)
 	c.RegisterRoutes(mux)
-	outer := newOuterHandler(c, mux, nil)
+	outer := newOuterHandler(c, mux, mux, nil)
 
 	// Control: a surviving module route must NOT be 404 through the same
 	// chain, otherwise the assertions below would pass against an empty mux.

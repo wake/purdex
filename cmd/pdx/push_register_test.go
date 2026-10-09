@@ -38,7 +38,7 @@ func serve(t *testing.T, c *core.Core, method, path string) *httptest.ResponseRe
 	mux := http.NewServeMux()
 	c.RegisterCoreRoutes(mux)
 	c.RegisterRoutes(mux)
-	outer := newOuterHandler(c, mux, []string{"127.0.0.1"})
+	outer := newOuterHandler(c, mux, mux, []string{"127.0.0.1"})
 	req := httptest.NewRequest(method, path, nil)
 	req.RemoteAddr = "127.0.0.1:54321"
 	req.Header.Set("Authorization", "Bearer t")

@@ -29,7 +29,7 @@ func TestRegisterServeModules_MountsTeam(t *testing.T) {
 	mux := http.NewServeMux()
 	c.RegisterCoreRoutes(mux)
 	c.RegisterRoutes(mux)
-	outer := newOuterHandler(c, mux, nil)
+	outer := newOuterHandler(c, mux, mux, nil)
 
 	res := doRequest(t, outer, http.MethodGet, "/api/team/approvals?state=open", "t")
 	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())

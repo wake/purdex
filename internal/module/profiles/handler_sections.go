@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+
+	"github.com/wake/purdex/internal/devices"
 )
 
 // putBodyCap bounds a section PUT body. The spec caps the *payload* at
@@ -77,6 +79,17 @@ func pathSection(w http.ResponseWriter, r *http.Request) (profileID, section str
 	return profileID, section, true
 }
 
+// deviceOwns reports whether the request may touch profile id (QR pairing spec §3.3): the admin any, a paired phone only
+// the profile its token was minted for. Anything else is the same 404 as a profile that does not exist, and a token minted
+// with no profile reaches none.
+func deviceOwns(w http.ResponseWriter, r *http.Request, id string) bool {
+	if p, isDevice := devices.PrincipalFrom(r.Context()); isDevice && (p.ProfileID == "" || p.ProfileID != id) {
+		http.Error(w, ErrProfileNotFound.Error(), http.StatusNotFound)
+		return false
+	}
+	return true
+}
+
 // writeStoreError answers a PutSection / DeleteSection error.
 func writeStoreError(w http.ResponseWriter, what string, err error) {
 	switch {
@@ -112,7 +125,7 @@ func writeConflict(w http.ResponseWriter, res PutResult) {
 // is all the protocol asks for (cross-section writes are not atomic, §4.6.3).
 func (m *Module) handleGetProfile(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathProfileID(w, r)
-	if !ok {
+	if !ok || !deviceOwns(w, r, id) {
 		return
 	}
 	if err := m.store.requireProfile(id); err != nil {
@@ -142,7 +155,7 @@ func (m *Module) handleGetProfile(w http.ResponseWriter, r *http.Request) {
 // GET /api/profiles/{id}/sections/{section}. A tombstone is a 404.
 func (m *Module) handleGetSection(w http.ResponseWriter, r *http.Request) {
 	id, section, ok := pathSection(w, r)
-	if !ok {
+	if !ok || !deviceOwns(w, r, id) {
 		return
 	}
 	sec, found, err := m.store.GetSection(id, section)
@@ -161,7 +174,12 @@ func (m *Module) handleGetSection(w http.ResponseWriter, r *http.Request) {
 // PUT /api/profiles/{id}/sections/{section}.
 func (m *Module) handlePutSection(w http.ResponseWriter, r *http.Request) {
 	id, section, ok := pathSection(w, r)
-	if !ok {
+	if !ok || !deviceOwns(w, r, id) {
+		return
+	}
+	// Until the append-only guard of spec §5.2 lands (QP-1c), a paired phone writes nothing at all.
+	if _, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
+		writeJSONStatus(w, http.StatusForbidden, map[string]string{"error": "device_append_only"})
 		return
 	}
 	body, ok := readBody(w, r, putBodyCap)

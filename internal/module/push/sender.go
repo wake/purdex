@@ -144,13 +144,19 @@ func (s *sender) process(ctx context.Context, j Job) {
 // pause of 2 s after a 429 / 5xx / network error.
 func (s *sender) sendWithRetry(ctx context.Context, d push.Device, h apns.Headers, payload []byte) apns.Result {
 	res := s.apns.Send(ctx, d.Env, d.Token, h, payload)
+	// A registration dropped meanwhile (its phone was revoked) is not sent the retry. The one request already in flight when
+	// the revoke lands cannot be recalled.
+	stillRegistered := func() bool { _, ok := s.book.Get(d.DeviceID); return ok }
 	switch res.Class {
 	case apns.JWTRejected:
 		s.apns.Invalidate()
+		if !stillRegistered() {
+			return res
+		}
 		return s.apns.Send(ctx, d.Env, d.Token, h, payload)
 	case apns.RetryLater:
 		s.sleep(ctx, retryAfter)
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || !stillRegistered() {
 			return res
 		}
 		return s.apns.Send(ctx, d.Env, d.Token, h, payload)

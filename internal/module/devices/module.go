@@ -26,6 +26,9 @@ const RegistryKey = "devices.authenticator"
 // itself with it; it closes a revoked device's WebSocket connections).
 const ConnsKey = "devices.conns"
 
+// RevokeFeedKey is the key it publishes its devices.RevokeFeed under (push drops a revoked phone's registrations).
+const RevokeFeedKey = "devices.revoke"
+
 // sweepEvery: how often rows that can no longer work are deleted.
 const sweepEvery = time.Hour
 
@@ -40,6 +43,7 @@ type Module struct {
 
 	conns    *devices.ConnRegistry
 	onRevoke func(ids []string) // an extra hook after a revoke (the connections are closed by the module itself)
+	subs     []func(ids []string)
 	cancel   context.CancelFunc
 	done     chan struct{}
 }
@@ -67,6 +71,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.conns = devices.NewConnRegistry(st.IsLive)
 	c.Registry.Register(RegistryKey, devices.Authenticator(m))
 	c.Registry.Register(ConnsKey, devices.Tracker(m.conns))
+	c.Registry.Register(RevokeFeedKey, devices.RevokeFeed(m))
 	return nil
 }
 
@@ -111,14 +116,34 @@ func (m *Module) SetOnRevoke(fn func(ids []string)) {
 	m.mu.Unlock()
 }
 
+// notifyRevoked runs one subscriber; a panic in it must not skip the others or the revoke's own answer.
+func notifyRevoked(fn func(ids []string), ids []string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[devices] a revoke subscriber panicked: %v", r)
+		}
+	}()
+	fn(ids)
+}
+
+// SubscribeRevoked implements devices.RevokeFeed.
+func (m *Module) SubscribeRevoked(fn func(ids []string)) {
+	m.mu.Lock()
+	m.subs = append(m.subs, fn)
+	m.mu.Unlock()
+}
+
 func (m *Module) revoked(ids []string) {
 	if len(ids) == 0 {
 		return
 	}
 	m.mu.Lock()
-	fn, conns := m.onRevoke, m.conns
+	fn, conns, subs := m.onRevoke, m.conns, append([]func(ids []string){}, m.subs...)
 	m.mu.Unlock()
 	conns.CloseDevices(ids) // every WebSocket the revoked devices hold, whatever route and however they authenticated
+	for _, s := range subs {
+		notifyRevoked(s, ids)
+	}
 	if fn != nil {
 		fn(ids)
 	}
