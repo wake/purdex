@@ -62,7 +62,8 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The body is kept as received: the store hashes those bytes (a replay is the same bytes) and decodes them itself.
+	// The JSON value is kept as received (surrounding whitespace is not content): the store hashes those bytes — a replay
+	// is the same value bytes, a field of a newer version makes another command — and decodes them itself.
 	var raw json.RawMessage
 	switch st := peersmod.AdmitDecode(w, r, m.cmdLimit, entry.HostID, maxCommandBody, &raw); st {
 	case 0:
