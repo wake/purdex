@@ -24,6 +24,9 @@ const (
 	// clockStepBack: BroadcastTs is wall-clock nanoseconds. One that is older than the last seen by more than this is a
 	// clock that was set back (NTP, resume from sleep, a manual change), not an out-of-order frame (those are
 	// milliseconds apart); it is accepted, or every later event of the session would be dropped until the clock caught up.
+	// The accepted trade-off: a frame that sat more than a minute between its hook's arrival and its broadcast would be
+	// taken for a clock step too. A frame waits only for the serialised emit slot, so that is not expected; if the
+	// emitter ever grows such a delay, freshness needs a generation from the producer instead of this inference.
 	clockStepBack = int64(time.Minute)
 )
 
