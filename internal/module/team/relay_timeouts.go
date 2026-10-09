@@ -68,10 +68,12 @@ func (m *Module) judgeRelayTimeout(op team.RelayOp, now int64) {
 	}
 }
 
-// failOnTimeout fails op with reason through the same path as a report (CAS on the state; the follow-ups and the lead's
-// notice on Applied only).
+// failOnTimeout fails op with reason through the same path as a report (CAS on the state, the updated_at and the
+// seen_at of the snapshot; the follow-ups and the lead's notice on Applied only).
 func (m *Module) failOnTimeout(op team.RelayOp, reason string) {
-	if _, err := m.applyReconcile(op, RelayReport{State: team.RelayFailed, Reason: reason, At: m.now()}); err != nil {
+	// Conditional on the snapshot the judgement used: a seen, a claim or a report that landed since wins.
+	exp := &RelayExpect{State: op.State, UpdatedAt: op.UpdatedAt, SeenAt: op.SeenAt}
+	if _, err := m.applyReconcile(op, RelayReport{State: team.RelayFailed, Reason: reason, At: m.now(), Expect: exp}); err != nil {
 		m.logf("[team] relay op %s timeout: %v", op.ID, err)
 		return
 	}

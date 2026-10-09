@@ -177,3 +177,29 @@ func TestSweep_TheLivenessTickRunsTheTimeouts(t *testing.T) {
 		t.Fatal("the liveness tick did not run the relay timeouts")
 	}
 }
+
+// The judgement is made from a snapshot; a seen or a claim that lands before the write wins. Mutation gate: drop the
+// expectation from failOnTimeout → the stale judgement fails the op (red).
+func TestSweep_ProgressThatLandsAfterTheSnapshotWins(t *testing.T) {
+	f := newFixture(t)
+	op := f.requestedMemberOp()
+	f.clock.Add(2 * minute)
+	stale := f.op(op.ID)
+	if code, _, _ := f.seen(op.ID, "sid-m1"); code != 200 { // the mod answers after the sweeper's read
+		t.Fatal("seen")
+	}
+	f.m.judgeRelayTimeout(stale, f.clock.Load())
+	if f.op(op.ID).State != team.RelayRequested {
+		t.Fatalf("a stale judgement failed an op that was seen meanwhile: %+v", f.op(op.ID))
+	}
+	// and a claim
+	f2 := newFixture(t)
+	op2 := f2.requestedMemberOp()
+	f2.clock.Add(2 * minute)
+	stale2 := f2.op(op2.ID)
+	f2.claim(op2.ID, "sid-m1")
+	f2.m.judgeRelayTimeout(stale2, f2.clock.Load())
+	if f2.op(op2.ID).State != team.RelayClaimed {
+		t.Fatalf("a stale judgement failed a claimed op: %+v", f2.op(op2.ID))
+	}
+}
