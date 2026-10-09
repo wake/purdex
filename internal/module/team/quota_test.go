@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -216,6 +218,10 @@ func TestRelayQuotaPut_PendingLineageFlagsAProvisionalRoot(t *testing.T) {
 	}
 	claimedOp(t, f.m.store, "relay-1", "sid-1", "_abc123")
 	f.origins.markDead("sid-1") // /clear: the old session left the registry...
+	// a stranger: sid-2 has no lineage either, and a relay is in flight on the host — but not in its process
+	if _, v, _ := f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-2", SelfLeft: ip(1), Client: appClient2}); v.PendingLineage {
+		t.Fatal("an unrelated session was flagged pending_lineage")
+	}
 	// ...and the new one (sid-1b, the same process) is there, with no lineage row yet
 	code, v, body := f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-1b", SelfLeft: ip(5), Client: appClient2})
 	if code != http.StatusOK || !v.PendingLineage || v.RootSessionID != "sid-1b" {
@@ -252,5 +258,96 @@ func TestOpenStore_AddsRelayQuotasToAnOlderDatabase(t *testing.T) {
 	}
 	if _, ok, err := s.Get(uid(1)); err != nil || !ok {
 		t.Fatalf("the older data is gone: %v %v", ok, err)
+	}
+}
+
+// Two PUTs racing: the last COMMIT is the last EVENT. A is held just after its commit, inside the section; B must
+// wait for it, so B's commit and event follow A's. Mutation gate: drop quotaMu → B commits and publishes first, A's
+// stale event comes last → red.
+func TestRelayQuotaPut_ConcurrentPutsPublishInCommitOrder(t *testing.T) {
+	f := newFixture(t)
+	sub := f.core.Events.AddTestSubscriber()
+	defer f.core.Events.RemoveTestSubscriber(sub)
+	inA, releaseA := make(chan struct{}), make(chan struct{})
+	first := true
+	var mu sync.Mutex
+	f.m.afterQuotaSet = func() {
+		mu.Lock()
+		hold := first
+		first = false
+		mu.Unlock()
+		if hold {
+			close(inA)
+			<-releaseA
+		}
+	}
+	doneA, doneB := make(chan struct{}), make(chan struct{})
+	go func() {
+		f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-1", SelfLeft: ip(1), Client: appClient2})
+		close(doneA)
+	}()
+	<-inA
+	go func() {
+		f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-1", SelfLeft: ip(2), Client: appClient2})
+		close(doneB)
+	}()
+	time.Sleep(150 * time.Millisecond) // B reaches the section and waits (or, without the lock, commits and publishes)
+	close(releaseA)
+	<-doneA
+	<-doneB
+	var seen []string
+	for {
+		select {
+		case raw := <-sub.SendCh():
+			switch {
+			case strings.Contains(string(raw), `self_left\":1`):
+				seen = append(seen, "1")
+			case strings.Contains(string(raw), `self_left\":2`):
+				seen = append(seen, "2")
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if strings.Join(seen, ",") != "1,2" {
+		t.Fatalf("quota events = %v, want 1 then 2 (the commit order)", seen)
+	}
+	if q, _, _ := f.m.store.RelayQuotaOf("sid-1"); q.SelfLeft != 2 {
+		t.Fatalf("stored = %+v, want the last commit's 2", q)
+	}
+}
+
+// The roster's batch read costs two queries however deep the chains are, and agrees with the single walk.
+func TestRelayQuotasOf_AgreesWithTheSingleWalkInTwoReads(t *testing.T) {
+	s := openTestStore(t)
+	for i := 1; i <= 40; i++ {
+		lineage(t, s, fmt.Sprintf("a%d", i), fmt.Sprintf("a%d", i-1))
+	}
+	lineage(t, s, "b1", "b0")
+	if _, _, err := s.SetRelayQuota("a40", ip(7), ip(3), 1, "app"); err != nil {
+		t.Fatal(err)
+	}
+	sids := []string{"a40", "a0", "a20", "b1", "b0", "lone", "a40", ""}
+	quotas, roots, err := s.RelayQuotasOf(sids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range sids[:6] {
+		q, root, err := s.RelayQuotaOf(sid)
+		if err != nil || quotas[sid] != q || roots[sid] != root {
+			t.Errorf("%s: batch %+v root %q, single %+v root %q (%v)", sid, quotas[sid], roots[sid], q, root, err)
+		}
+	}
+	if quotas["a20"] != (team.RelayQuota{SelfLeft: 7, MemberPoolLeft: 3}) || roots["b1"] != "b0" || roots["lone"] != "lone" {
+		t.Errorf("quotas=%v roots=%v", quotas, roots)
+	}
+	// a looping chain is left out and reported, the others still read
+	if _, err := s.db.Exec(`INSERT INTO session_lineage (session_id, predecessor_session_id, predecessor_ref, op_id, at) VALUES ('a0', 'a40', '_x', 'opx', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	q2, r2, err := s.RelayQuotasOf([]string{"a20", "lone"})
+	if !errors.Is(err, ErrLineageCycle) || len(q2) != 1 || r2["lone"] != "lone" {
+		t.Fatalf("cycle: %v %v %v", q2, r2, err)
 	}
 }

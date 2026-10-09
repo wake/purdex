@@ -74,15 +74,51 @@ func (s *Store) RelayQuotaOf(sid string) (team.RelayQuota, string, error) {
 	return r.RelayQuota, root, err
 }
 
-// RelayQuotasOf is RelayQuotaOf for many sessions in one read transaction (the roster's build): sid → numbers and
-// sid → root. A session whose chain cannot be walked is left out of both maps and the error is returned with what
-// was read.
+// RelayQuotasOf is RelayQuotaOf for many sessions (the roster's build, every liveness tick): TWO reads in one
+// transaction however many sessions and however deep their chains — the lineage once, the quota rows once — and the
+// roots resolved in memory with a visited set (a lineage row per relay ever made is small). sid → numbers and
+// sid → root; a session whose chain loops is left out of both and the first such error is returned with what was read.
 func (s *Store) RelayQuotasOf(sids []string) (map[string]team.RelayQuota, map[string]string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, nil, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback()
+	parent := map[string]string{}
+	rows, err := tx.Query(`SELECT session_id, predecessor_session_id FROM session_lineage`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read lineage: %w", err)
+	}
+	for rows.Next() {
+		var sid, pred string
+		if err := rows.Scan(&sid, &pred); err != nil {
+			rows.Close()
+			return nil, nil, fmt.Errorf("read lineage: %w", err)
+		}
+		parent[sid] = pred
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, fmt.Errorf("read lineage: %w", err)
+	}
+	rows.Close()
+	byRoot := map[string]team.RelayQuota{}
+	qrows, err := tx.Query(`SELECT root_session_id, self_left, member_pool_left FROM relay_quotas`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read relay quotas: %w", err)
+	}
+	defer qrows.Close()
+	for qrows.Next() {
+		var root string
+		var q team.RelayQuota
+		if err := qrows.Scan(&root, &q.SelfLeft, &q.MemberPoolLeft); err != nil {
+			return nil, nil, fmt.Errorf("read relay quotas: %w", err)
+		}
+		byRoot[root] = q
+	}
+	if err := qrows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read relay quotas: %w", err)
+	}
 	quotas := make(map[string]team.RelayQuota, len(sids))
 	roots := make(map[string]string, len(sids))
 	var firstErr error
@@ -90,17 +126,27 @@ func (s *Store) RelayQuotasOf(sids []string) (map[string]team.RelayQuota, map[st
 		if _, done := roots[sid]; done || sid == "" {
 			continue
 		}
-		root, _, err := chainRootIn(tx, sid)
-		if err == nil {
-			var r quotaRow
-			if r, err = quotaOfRootIn(tx, root); err == nil {
-				quotas[sid], roots[sid] = r.RelayQuota, root
-				continue
+		seen := map[string]struct{}{sid: {}}
+		cur := sid
+		for {
+			p, ok := parent[cur]
+			if !ok {
+				break
 			}
+			if _, dup := seen[p]; dup {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("chain root of %s: %w (at %s)", sid, ErrLineageCycle, p)
+				}
+				cur = ""
+				break
+			}
+			seen[p] = struct{}{}
+			cur = p
 		}
-		if firstErr == nil {
-			firstErr = err
+		if cur == "" {
+			continue
 		}
+		quotas[sid], roots[sid] = byRoot[cur], cur
 	}
 	return quotas, roots, firstErr
 }
@@ -156,4 +202,26 @@ func (s *Store) KnownSession(sid string) (bool, error) {
 		return false, fmt.Errorf("known session %s: %w", sid, err)
 	}
 	return true, nil
+}
+
+// ProcessOfSession is the pid team.db recorded for a session that is a member (its row) or leads a team (its lead
+// request's origin); 0 when it knows none. pendingLineage uses it to tie a new session id to a relay in flight.
+func (s *Store) ProcessOfSession(sid string) (int, error) {
+	var pid sql.NullInt64
+	err := s.db.QueryRow(`SELECT pid FROM team_members WHERE session_id = ? AND pid > 0 ORDER BY created_at DESC LIMIT 1`, sid).Scan(&pid)
+	if err == nil && pid.Valid {
+		return int(pid.Int64), nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("process of %s: %w", sid, err)
+	}
+	err = s.db.QueryRow(`SELECT CASE WHEN json_valid(a.origin_json) THEN json_extract(a.origin_json, '$.pid') END
+		FROM teams t JOIN approval_requests a ON a.id = t.request_id WHERE t.lead_session_id = ? LIMIT 1`, sid).Scan(&pid)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !pid.Valid) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("process of %s: %w", sid, err)
+	}
+	return int(pid.Int64), nil
 }

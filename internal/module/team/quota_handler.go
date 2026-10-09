@@ -59,28 +59,43 @@ func (m *Module) handleRelayQuotaPut(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = live
 	label := strings.TrimSpace(req.Client.Label)
+	// The commit, its event and the roster announcement are one section: two PUTs racing could otherwise commit A then
+	// B and publish B then A, leaving a stepper on the stale number with nothing to correct it.
+	m.quotaMu.Lock()
 	root, row, err := m.store.SetRelayQuota(req.SessionID, req.SelfLeft, req.MemberPoolLeft, m.now(), label)
+	if m.afterQuotaSet != nil {
+		m.afterQuotaSet() // test seam: just after the commit, still inside the section
+	}
+	if err == nil {
+		m.broadcastRelayQuota(root, row.RelayQuota)
+		m.rosterChanged()
+	}
+	m.quotaMu.Unlock() // the answer below is written outside the section
 	if err != nil {
 		m.logf("[team] relay quota of %s: %v", req.SessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
 	m.logf("[team] relay quota of chain %s set to self %d, pool %d by app %q from %s (session %s)", root, row.SelfLeft, row.MemberPoolLeft, label, r.RemoteAddr, req.SessionID)
-	m.broadcastRelayQuota(root, row.RelayQuota)
-	m.rosterChanged()
 	m.writeJSON(w, http.StatusOK, team.RelayQuotaView{SessionID: req.SessionID, RootSessionID: root, RelayQuota: row.RelayQuota,
 		PendingLineage: ok && m.pendingLineage(req.SessionID, root), UpdatedAt: row.UpdatedAt, UpdatedBy: row.UpdatedBy})
 }
 
 func quotaInRange(v *int) bool { return v == nil || (*v >= 0 && *v <= team.MaxRelayQuota) }
 
-// pendingLineage is an ADVISORY flag for the route's answer: sid is its own chain root and a relay is mid-flight
-// (claimed, writing or written) whose old session has already left the registry — the shape of a /clear whose cleared
-// report has not committed, when the new session id exists but its lineage row does not yet. A value written under
-// that provisional root is not migrated when the lineage appears (it is orphaned, harmlessly: every read walks to the
-// real root). A false positive only asks the App to say so; it never changes what is stored.
+// pendingLineage says whether sid is its own chain root only because the lineage of a relay in flight has not been
+// written yet: sid is live in the registry, a relay is mid-flight (claimed, writing or written) whose old session has
+// already left the registry, AND that old session's recorded process (its member row, or its lead request's origin) is
+// the process sid runs in — a /clear keeps the process, so the pid ties the new session id to the op. A value written
+// under that provisional root is not migrated when the lineage appears (it is orphaned, harmlessly: every read walks to
+// the real root). An old session whose process team.db never recorded (a plain session's self relay) cannot be tied, so
+// it is not flagged; the flag only asks the App to say so, it never changes what is stored.
 func (m *Module) pendingLineage(sid, root string) bool {
 	if root != sid {
+		return false
+	}
+	cur, ok, err := m.origins.ResolveOriginBySession(sid)
+	if err != nil || !ok || cur.PID <= 0 {
 		return false
 	}
 	ops, err := m.store.ListActiveRelayOps()
@@ -90,7 +105,10 @@ func (m *Module) pendingLineage(sid, root string) bool {
 	for _, op := range ops {
 		switch op.State {
 		case team.RelayClaimed, team.RelayWriting, team.RelayWritten:
-			if op.SessionID != sid && !m.origins.LiveSession(op.SessionID) {
+			if op.SessionID == sid || m.origins.LiveSession(op.SessionID) {
+				continue
+			}
+			if pid, err := m.store.ProcessOfSession(op.SessionID); err == nil && pid == cur.PID {
 				return true
 			}
 		}

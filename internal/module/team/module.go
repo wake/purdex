@@ -253,6 +253,9 @@ type Module struct {
 	// noticeKick is a test seam called after kickNotices when an adopt approval won; afterApproved is its
 	// only caller. nil until then (tests count it).
 	noticeKick func()
+	// quotaMu serialises a relay-quota PUT's commit, event and roster signal (quota_handler.go); afterQuotaSet is a test seam.
+	quotaMu       sync.Mutex
+	afterQuotaSet func()
 	// killProcess signals an adopted member's Claude Code process (SIGTERM; tests inject).
 	killProcess func(pid int) error
 	// sender sends the notices (peers.SenderKey; nil → notices stay owed); noticeSig wakes the drain
