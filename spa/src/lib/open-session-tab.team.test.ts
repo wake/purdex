@@ -5,6 +5,7 @@ import { openSessionTab } from './open-session-tab'
 import { KEY, resetTeamStores, seedScene, tabShowing, wsTabs } from './team/__tests__/team-fixture'
 import { useTabStore } from '../stores/useTabStore'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
+import { useSessionStore } from '../stores/useSessionStore'
 import type { Session } from './host-api'
 
 beforeEach(resetTeamStores)
@@ -57,5 +58,16 @@ describe('openSessionTab and teams', () => {
     resetTeamStores()
     const id = openSessionTab('h1', session('solo'))
     expect(id === null || useTabStore.getState().tabs[id] !== undefined).toBe(true)
+  })
+})
+
+describe('a stale session of a recognised member', () => {
+  it('opens no tab when the host no longer lists it (the session-list row was stale)', () => {
+    scene()
+    const before = Object.keys(useTabStore.getState().tabs)
+    // the roster still names B, the host's list no longer holds it
+    useSessionStore.setState({ sessions: { h1: [{ code: 'code-lead-tm', name: 'lead-tm', mode: 'terminal', cwd: '~' }] as never } })
+    expect(openSessionTab('h1', session('b-tm'))).toBeNull()
+    expect(Object.keys(useTabStore.getState().tabs)).toEqual(before)
   })
 })

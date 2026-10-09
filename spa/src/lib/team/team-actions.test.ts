@@ -7,6 +7,8 @@ import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { usePaneFocusStore } from '../../stores/usePaneFocusStore'
+import { tabOn } from './__tests__/team-fixture'
 import { KEY, resetTeamStores, seedScene, tabShowing, wsTabs } from './__tests__/team-fixture'
 
 beforeEach(resetTeamStores)
@@ -128,5 +130,31 @@ describe('visibleTabIds', () => {
     expect(visibleTabIds(ids, { k: true }, teamOf)).toEqual(['lead', 'x', 'z'])
     expect(visibleTabIds(ids, {}, teamOf)).toEqual(ids)
     expect(visibleTabIds(ids, { k: true, other: true }, teamOf)).toEqual(['lead', 'x'])
+  })
+})
+
+describe('the pane and the workspace follow (codex review of TI-1b)', () => {
+  it('a seat shown in a SECONDARY pane of a split tab takes the keyboard, in the same workspace too', () => {
+    seedScene({ members, tabs: [['lead', 'lead-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'x'] }] })
+    const a = tabOn('split', 'plain-tm')
+    const b = tabOn('other', 'a-tm')
+    useTabStore.setState((s) => ({
+      tabs: {
+        ...s.tabs,
+        split: { ...a, layout: { type: 'split', id: 's1', direction: 'h', sizes: [1, 1], children: [a.layout, b.layout] } },
+      },
+      tabOrder: [...s.tabOrder, 'split'],
+    }))
+    useWorkspaceStore.setState((s) => ({ workspaces: s.workspaces.map((w) => ({ ...w, tabs: [...w.tabs, 'split'] })) }))
+    usePaneFocusStore.setState({ recent: {}, focusRequest: null })
+    expect(openTeamSeat(KEY, 'A')).toEqual({ outcome: 'activated', tabId: 'split' })
+    expect(usePaneFocusStore.getState().focusRequest).toMatchObject({ paneId: 'p-other' }) // the secondary pane, not the primary
+  })
+
+  it('collapsing from a member in ANOTHER workspace brings the lead\'s workspace on screen with it', () => {
+    seedScene({ members, tabs: [['lead', 'lead-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }, { id: 'w2', tabs: ['ma'] }], activeWorkspaceId: 'w2', activeTabId: 'ma' })
+    toggleTeamCollapse(KEY)
+    expect(useTabStore.getState().activeTabId).toBe('lead')
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w1')
   })
 })

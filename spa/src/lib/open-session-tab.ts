@@ -23,7 +23,8 @@ export function openSessionTab(hostId: string, session: Session): string | null 
   const hit = currentTeamState().index.bySession.get(`${hostId}\u0000${session.name}`)
   if (hit && hit.role === 'member') {
     const { outcome, tabId } = openTeamSeat(hit.key, hit.seat.session.session_id)
-    if (tabId !== null || outcome === 'hidden') return tabId
+    // Whatever the team answered stands: a stale `session` the host no longer lists ('unlisted') opens no tab to nowhere.
+    if (outcome !== 'unknown') return tabId
   }
   return openSessionTabAt(hostId, session)
 }

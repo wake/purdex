@@ -30,20 +30,17 @@ export interface OpenSeatResult {
 const seatOf = (view: TeamView, sessionId: string): Seat | undefined =>
   view.lead.session.session_id === sessionId ? view.lead : view.members.find((m) => m.session.session_id === sessionId)
 
-/** Show a seat's existing tab, crossing to its workspace when it is in another one. */
+/**
+ * Show a seat's existing tab: the pane that shows the seat takes the keyboard (the seat may sit in a secondary pane of a
+ * split tab), and the workspace on screen follows when the tab is in another one.
+ */
 function showSeatTab(seat: Seat): string | null {
   const tab = seat.tabId === null ? undefined : useTabStore.getState().tabs[seat.tabId]
   if (seat.tabId === null || !tab) return null
-  const ws = useWorkspaceStore.getState().findWorkspaceByTab(seat.tabId)
-  if (ws && ws.id !== useWorkspaceStore.getState().activeWorkspaceId) {
-    const leaves = collectLeaves(tab.layout)
-    const pane = leaves[seat.paneIndex ?? 0] ?? leaves[0]
-    if (pane) {
-      activateTabPane(seat.tabId, pane.id) // also switches the workspace on screen
-      return seat.tabId
-    }
-  }
-  activateTab(seat.tabId)
+  const leaves = collectLeaves(tab.layout)
+  const pane = leaves[seat.paneIndex ?? 0] ?? leaves[0]
+  if (pane) activateTabPane(seat.tabId, pane.id)
+  else activateTab(seat.tabId)
   return seat.tabId
 }
 
@@ -142,9 +139,7 @@ export function toggleTeamCollapse(teamKey: string): void {
   const activeId = useTabStore.getState().activeTabId
   const activeHit = activeId === null ? undefined : index.byTabId.get(activeId)
   ui.setCollapsed(teamKey, true)
-  if (view && activeHit?.key === teamKey && activeHit.role === 'member' && view.lead.tabId !== null) {
-    activateTab(view.lead.tabId)
-  }
+  if (view && activeHit?.key === teamKey && activeHit.role === 'member') showSeatTab(view.lead)
 }
 
 /**
