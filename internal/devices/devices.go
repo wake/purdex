@@ -121,6 +121,13 @@ type Refresher interface {
 	RefreshPrincipal(deviceID string) (Principal, bool)
 }
 
+// RevokeFeed lets another module hear that devices were revoked (by id or by pairing), with their ids, after the module has
+// closed their connections. Push uses it to drop a revoked phone's registrations. A subscriber runs on the revoking
+// request's goroutine, so it must be quick.
+type RevokeFeed interface {
+	SubscribeRevoked(fn func(ids []string))
+}
+
 // Authenticator turns a bearer into a principal. The middleware holds one; the devices module implements it.
 type Authenticator interface {
 	// AuthenticateToken: ok only for a live device token (not revoked, used before or still before its use_by).

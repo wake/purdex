@@ -93,13 +93,41 @@ func addOwnerColumn(db *sql.DB) error {
 	if err != nil {
 		return errors.New("migrate push db: cannot read the schema")
 	}
-	if has {
-		return nil
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE push_devices ADD COLUMN owner_device_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return errors.New("migrate push db: cannot add owner_device_id")
+		}
 	}
-	if _, err := db.Exec(`ALTER TABLE push_devices ADD COLUMN owner_device_id TEXT NOT NULL DEFAULT ''`); err != nil {
-		return errors.New("migrate push db: cannot add owner_device_id")
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS push_devices_owner ON push_devices(owner_device_id)`); err != nil {
+		return errors.New("migrate push db: cannot index owner_device_id")
 	}
 	return nil
+}
+
+// DeleteByOwners removes every registration made by one of the given paired phones and returns the removed device ids.
+func (s *Store) DeleteByOwners(owners []string) ([]string, error) {
+	var gone []string
+	for _, o := range owners {
+		if o == "" {
+			continue // "" is the admin's; a revoke never removes those
+		}
+		rows, err := s.db.Query(`DELETE FROM push_devices WHERE owner_device_id = ? RETURNING device_id`, o)
+		if err != nil {
+			return gone, errors.New("delete devices of owner: write failed")
+		}
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) == nil {
+				gone = append(gone, id)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return gone, errors.New("delete devices of owner: write failed")
+		}
+	}
+	return gone, nil
 }
 
 // dbFileMode: owner-only for push.db and its WAL sidecars.

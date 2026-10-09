@@ -31,6 +31,7 @@ import (
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/module/agent"
+	devicesmod "github.com/wake/purdex/internal/module/devices"
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/push/apnskey"
@@ -175,6 +176,7 @@ func (m *Module) Start(ctx context.Context) error {
 	if !m.isReady() {
 		return nil
 	}
+	m.followRevokes()
 	if m.events == nil {
 		svc, ok := m.core.Registry.Get(team.ApprovalEventsKey)
 		if ev, isEv := svc.(team.ApprovalEvents); ok && isEv {
@@ -224,6 +226,53 @@ func (m *Module) Start(ctx context.Context) error {
 	}
 	log.Printf("[push] enabled (%v, %d device(s))", m.key, len(m.snapshot()))
 	return nil
+}
+
+// followRevokes ties a registration's life to the paired phone that made it: a phone revoked now loses its registrations at
+// once, and one revoked while push was down (or never existed) loses them here, at Start. Without the devices module there
+// are no paired phones to follow and the registrations of phones are dropped as unverifiable.
+func (m *Module) followRevokes() {
+	svc, _ := m.core.Registry.Get(devicesmod.RevokeFeedKey)
+	if feed, ok := svc.(devices.RevokeFeed); ok {
+		feed.SubscribeRevoked(m.dropOwned)
+	}
+	live, _ := m.core.Registry.Get(devicesmod.RegistryKey)
+	ref, _ := live.(devices.Refresher)
+	owners := map[string]bool{}
+	for _, d := range m.snapshot() {
+		if d.OwnerDeviceID != "" {
+			owners[d.OwnerDeviceID] = true
+		}
+	}
+	var dead []string
+	for o := range owners {
+		if ref == nil {
+			dead = append(dead, o)
+		} else if _, ok := ref.RefreshPrincipal(o); !ok {
+			dead = append(dead, o)
+		}
+	}
+	m.dropOwned(dead)
+}
+
+// dropOwned removes the registrations of revoked paired phones from the store and the cache; a push already queued for one
+// finds no device when it is sent.
+func (m *Module) dropOwned(owners []string) {
+	if len(owners) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	gone, err := m.store.DeleteByOwners(owners)
+	for _, id := range gone {
+		delete(m.devices, id)
+	}
+	if err != nil {
+		log.Printf("[push] drop registrations of revoked phones: %v", err)
+	}
+	if len(gone) > 0 {
+		log.Printf("[push] dropped %d registration(s) of %d revoked phone(s)", len(gone), len(owners))
+	}
 }
 
 // Stop ends the subscription and the sender (cancelling a request in flight), then closes the store.
