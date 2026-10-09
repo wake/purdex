@@ -545,7 +545,7 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 			return &apiError{http.StatusNotFound, "unknown alias"}
 		}
 		h := &cfg.Peers.Hosts[i]
-		if verifying || renaming {
+		if verifying || renaming || req.AllowTeam != nil || req.TeamRoots != nil {
 			// InboundToken is unique per entry and minted fresh at POST, so
 			// comparing it (alongside URL) catches an entry that was
 			// deleted and re-created — even at the SAME url — while this

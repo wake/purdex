@@ -128,6 +128,30 @@ func TestHandlePutHost_BadRootNamesTheRoot(t *testing.T) {
 	}
 }
 
+// A consent for one peer must never land on a different entry that took the
+// alias meanwhile (codex R1) — even one re-created at the same URL.
+func TestHandlePutHost_TeamFieldsNotAppliedToRecreatedEntry(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+	m.putHostAfterSnapshot = func() {
+		if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/air", nil, adminPrincipal()); rr.Code != http.StatusNoContent {
+			t.Fatalf("delete: %d", rr.Code)
+		}
+		if rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts",
+			map[string]string{"alias": "air", "url": "https://a.example"}, adminPrincipal()); rr.Code != http.StatusCreated {
+			t.Fatalf("re-add: %d %s", rr.Code, rr.Body.String())
+		}
+	}
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"allow_team": true}, adminPrincipal())
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("PUT = %d, want 409: %s", rr.Code, rr.Body.String())
+	}
+	if h := loadCfg(t, cfgPath).Peers.Hosts[0]; h.AllowTeam {
+		t.Fatalf("consent landed on the re-created entry: %+v", h)
+	}
+}
+
 func TestHandlePutHost_TooManyRoots(t *testing.T) {
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "i"}}
 	c, _ := newHostsTestCore(t, "local:1", "local", "", hosts)
