@@ -1,0 +1,30 @@
+{
+  "hash": "66b71a1c9a38d82f391d8caa0ee18fec05137b46b56bb924eb5d9f264e7762b8",
+  "payload": {
+    "order": [
+      "phtab1"
+    ],
+    "tabs": {
+      "phtab1": {
+        "createdAt": 1790000000000,
+        "id": "phtab1",
+        "layout": {
+          "pane": {
+            "content": {
+              "cachedName": "fixture-1",
+              "hostId": "d1_aaaaaaaaaaaaaaaa",
+              "kind": "tmux-session",
+              "mode": "terminal",
+              "sessionCode": "fix001",
+              "tmuxInstance": "12345:1790000000"
+            },
+            "id": "phpan1"
+          },
+          "type": "leaf"
+        },
+        "locked": false,
+        "pinned": false
+      }
+    }
+  }
+}
