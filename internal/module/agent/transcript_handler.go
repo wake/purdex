@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/wake/purdex/internal/transcriptpath"
 	"github.com/wake/purdex/internal/transcripttail"
 )
 
@@ -100,12 +101,12 @@ func (m *Module) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 		transcriptError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	root, err := transcriptRoot(home)
+	root, err := transcriptpath.Root(home)
 	if err != nil {
 		transcriptError(w, http.StatusNotFound, "no_transcript")
 		return
 	}
-	f, err := openTranscript(root, path)
+	f, err := transcriptpath.Open(root, path)
 	if err != nil {
 		transcriptError(w, http.StatusNotFound, err.Error())
 		return
