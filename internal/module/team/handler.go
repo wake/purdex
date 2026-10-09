@@ -266,6 +266,15 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrMemberCannotLead, "this session is a member of team "+t.ID+"; a member cannot lead", nil)
 		return
 	}
+	// A remote member (a team led on another host) is a member too (cross-host team spec §5.3).
+	if role, err := m.store.SessionRole(origin.SessionID); err != nil {
+		m.logf("[team] create %s: %v", req.ID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	} else if role == sessionRoleMemberRemote {
+		m.writeErr(w, http.StatusConflict, team.ErrMemberCannotLead, "this session is a member of a team led on another host; a member cannot lead", nil)
+		return
+	}
 	now := m.now()
 	row := team.Approval{
 		ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
