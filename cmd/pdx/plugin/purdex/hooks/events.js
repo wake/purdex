@@ -32,7 +32,7 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { CAPS, NEXT_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, moreOf, nextBody, parseNext, refusedBody, resultBody, shouldAsk } from './workbook.js'
+import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, moreOf, nextBody, parseNext, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -340,14 +340,19 @@ async function wbLoop($) {
   wb.busy = true
   const gen = wb.gen
   try {
-    for (;;) {
+    // A drain takes at most MAX_JOBS_PER_DRAIN jobs and never the same job id twice: a daemon that keeps answering
+    // "more" (or hands the same lease again) cannot make this mod spend the person's model quota without end. The next
+    // trigger (a turn end, the heartbeat's hint) starts another drain.
+    const seen = new Set()
+    for (let n = 0; n < MAX_JOBS_PER_DRAIN; n++) {
       const waitMs = wb.wait
       wb.wait = 0
       wb.again = false
       const out = await wbRequest($, NEXT_URL, nextBody(ev.stream, ev.sid, waitMs), waitMs)
       if (gen !== wb.gen || !ev.on || !out || out === TIMEOUT || !out.res) return
       const job = parseNext(out.res)
-      if (!job) break // 204 (nothing yet) or an error
+      if (!job || seen.has(job.id)) break // 204 (nothing yet), an error, or a job already taken in this drain
+      seen.add(job.id)
       const more = await wbRun($, job, gen)
       if (more !== true) break
     }
@@ -372,11 +377,24 @@ async function wbRun($, job, gen) {
     bodyText = refusedBody(ev.stream, jobId)
   } else {
     const t0 = await $.clock.now()
+    // The mod owns a deadline of its own: a call that never settles (or outlives its timeout_ms) must not hold the
+    // executor for good. It is aborted and reported `aborted`; the daemon reads that as a timeout.
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null
+    let cut = null
+    const deadline = new Promise((resolve) => {
+      cut = $.clock.after((req.timeoutMs ?? DEFAULT_TIMEOUT_MS) + MODEL_SLACK_MS, () => {
+        if (ctl) ctl.abort()
+        resolve({ isAnswered: false, reason: 'aborted', usage: {} })
+      })
+    })
     let r = null
     try {
-      r = await $.model.complete(req)
+      const call = ctl ? $.model.complete(req, { signal: ctl.signal }) : $.model.complete(req)
+      r = await Promise.race([call, deadline])
     } catch (err) {
       log($, 'workbook call refused: ' + String(err))
+    } finally {
+      if (cut) cut.cancel()
     }
     bodyText = resultBody(ev.stream, jobId, r, (await $.clock.now()) - t0)
   }

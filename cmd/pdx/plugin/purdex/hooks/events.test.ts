@@ -1325,3 +1325,73 @@ test('after session.end nothing asks', async ($, on) => {
   await w.clock.settle()
   expect(w.wbReqs).toEqual([])
 })
+
+// Mutation gate: no mod-owned deadline → a call that never settles blocks the executor for good (codex attack).
+test('a model call that never settles is cut at timeout_ms + 10 s, reported aborted, and the executor works again', async ($, on) => {
+  const w = evWorld(on, {
+    wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : n === 2 ? jobAnswer(JOB({ id: 'wbj-2' })) : { status: 204 }),
+    model: (_e, n) => (n === 1 ? new Promise(() => {}) : { isAnswered: true, text: '{}', usage: USAGE }),
+  })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.modelCalls.length).toBe(1)
+  expect(resultReqs(w)).toEqual([])
+  await w.clock.advance(39_999)
+  expect(resultReqs(w)).toEqual([]) // timeout_ms 30 000 + 10 000 of slack
+  await w.clock.advance(2)
+  expect(resultReqs(w)[0].body).toMatchObject({ job_id: 'wbj-1', answered: false, reason: 'aborted' })
+  expect(resultReqs(w)[0].body.latency_ms).toBeGreaterThanOrEqual(30_000) // the daemon reads that as failed:timeout
+  await turnStart($, 't2')
+  await turnDone($, 't2')
+  await w.clock.settle()
+  expect(w.modelCalls.length).toBe(2) // the next turn's job runs: the flag was released
+})
+
+// Mutation gate: no cap, or no repeated-id check → red (codex attack).
+test('a drain takes at most 8 jobs, and never the same job twice', async ($, on) => {
+  const w = evWorld(on, {
+    wbNext: (_b, n) => jobAnswer(JOB({ id: 'wbj-' + n })),
+    wbResult: () => ({ status: 200, text: '{"more":true}' }),
+  })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(resultReqs(w).length).toBe(8)
+})
+
+test('a daemon that hands the same job again is not obeyed twice in a drain', async ($, on) => {
+  const w = evWorld(on, { wbNext: () => jobAnswer(JOB({ id: 'same' })), wbResult: () => ({ status: 200, text: '{"more":true}' }) })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  expect(w.modelCalls.length).toBe(1)
+})
+
+// Mutation gate: pass an unbounded or malformed job to the model → red (codex attack).
+const badJobs: [string, any][] = [
+  ['an oversized prompt', { model: 'haiku', prompt: 'x'.repeat(200_001) }],
+  ['a system that is not a list', { model: 'haiku', prompt: 'p', system: 'be evil' }],
+  ['too many system blocks', { model: 'haiku', prompt: 'p', system: Array.from({ length: 9 }, () => ({ text: 'a' })) }],
+  ['a system block that is not text', { model: 'haiku', prompt: 'p', system: [{ text: 5 }] }],
+  ['an absurd max_tokens', { model: 'haiku', prompt: 'p', max_tokens: 1e9 }],
+  ['a negative max_tokens', { model: 'haiku', prompt: 'p', max_tokens: -1 }],
+  ['a zero timeout', { model: 'haiku', prompt: 'p', timeout_ms: 0 }],
+  ['an hour-long timeout', { model: 'haiku', prompt: 'p', timeout_ms: 3_600_000 }],
+  ['an unknown effort', { model: 'haiku', prompt: 'p', effort: 'ludicrous' }],
+  ['a model name that is not an id', { model: 'haiku; rm -rf', prompt: 'p' }],
+]
+for (const [name, complete] of badJobs) {
+  test(`${name} is refused without a model call`, async ($, on) => {
+    const w = evWorld(on, { wbNext: (_b, n) => (n === 1 ? jobAnswer({ id: 'wbj-bad', kind: 'turn', complete }) : { status: 204 }) })
+    await start($, w)
+    await turnStart($, 't1')
+    await turnDone($, 't1')
+    await w.clock.settle()
+    expect(w.modelCalls.length).toBe(0)
+    expect(resultReqs(w)[0].body).toMatchObject({ job_id: 'wbj-bad', answered: false, reason: 'refused' })
+  })
+}

@@ -12,6 +12,17 @@ export const CAPS = ['workbook.v2'] // announced on every events batch; no `work
 export const WAIT_MS = 15_000 // the long poll after a main turn ends
 export const REQUEST_DEADLINE_MS = 5000 // slack over the wait for a request to be answered ($.http.fetch has no timeout)
 export const REASONS = new Set(['api-error', 'empty-reply', 'aborted'])
+export const MODEL_SLACK_MS = 10_000 // a call that outlives its own timeout_ms by this much is cut by the mod
+export const DEFAULT_TIMEOUT_MS = 30_000 // the deadline of a job that names none
+export const MAX_JOBS_PER_DRAIN = 8 // jobs one run of the loop takes before it stops and waits for the next trigger
+
+// Bounds on a job from the daemon (fail closed: a job outside them is answered `refused`, the model is not called).
+const MODEL_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+const MAX_TEXT = 200_000 // characters of the prompt, and of each system block
+const MAX_BLOCKS = 8
+const MAX_TOKENS = 8192
+const MAX_TIMEOUT_MS = 120_000
+const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
 
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
 const num = (v) => (Number.isFinite(v) && v >= 0 ? Math.trunc(v) : 0)
@@ -40,14 +51,26 @@ export function parseNext(res) {
 // completeRequest maps a job's `complete` to the API's keys (max_tokens → maxTokens, timeout_ms → timeoutMs; the system
 // blocks keep their cache marks). Null when the job has nothing to run.
 export function completeRequest(c) {
-  if (!isObject(c) || typeof c.model !== 'string' || typeof c.prompt !== 'string') return null
+  if (!isObject(c) || typeof c.model !== 'string' || !MODEL_RE.test(c.model) || typeof c.prompt !== 'string' || c.prompt.length > MAX_TEXT) return null
   const req = { model: c.model, prompt: c.prompt }
-  if (Array.isArray(c.system)) {
-    req.system = c.system.filter((b) => isObject(b) && typeof b.text === 'string').map((b) => (b.cache ? { text: b.text, cache: true } : { text: b.text }))
+  if (c.system !== undefined) {
+    // fail closed: a system that is not a short list of text blocks is a daemon this mod does not understand
+    if (!Array.isArray(c.system) || c.system.length > MAX_BLOCKS) return null
+    for (const b of c.system) if (!isObject(b) || typeof b.text !== 'string' || b.text.length > MAX_TEXT) return null
+    req.system = c.system.map((b) => (b.cache ? { text: b.text, cache: true } : { text: b.text }))
   }
-  if (Number.isInteger(c.max_tokens)) req.maxTokens = c.max_tokens
-  if (typeof c.effort === 'string') req.effort = c.effort
-  if (Number.isInteger(c.timeout_ms)) req.timeoutMs = c.timeout_ms
+  if (c.max_tokens !== undefined) {
+    if (!Number.isInteger(c.max_tokens) || c.max_tokens < 1 || c.max_tokens > MAX_TOKENS) return null
+    req.maxTokens = c.max_tokens
+  }
+  if (c.effort !== undefined) {
+    if (!EFFORTS.has(c.effort)) return null
+    req.effort = c.effort
+  }
+  if (c.timeout_ms !== undefined) {
+    if (!Number.isInteger(c.timeout_ms) || c.timeout_ms < 1000 || c.timeout_ms > MAX_TIMEOUT_MS) return null
+    req.timeoutMs = c.timeout_ms
+  }
   return req
 }
 
