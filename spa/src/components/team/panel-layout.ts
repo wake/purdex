@@ -50,6 +50,22 @@ export function firstRowCapacity(width: number): number {
   return Math.max(1, Math.floor((avail - SEP_W + CELL_GAP) / (CELL_W + CELL_GAP)))
 }
 
+/**
+ * How many cells fit in `avail` px, given every seat's REAL cell width in seat order (cells differ: a remote seat draws a
+ * host icon). Adds width + CELL_GAP per cell, and the divider after the lead once there are 2+; the largest k that fits, at
+ * least 1. It depends only on the widths and `avail`, never on how many cells are currently shown.
+ */
+export function capacityFromWidths(widths: readonly number[], avail: number): number {
+  let used = 0
+  let k = 1
+  for (let i = 0; i < widths.length; i++) {
+    used += widths[i] + (i > 0 ? CELL_GAP : 0) + (i === 1 ? SEP_W : 0)
+    if (used > avail) break
+    k = i + 1
+  }
+  return Math.max(1, k)
+}
+
 /** Width the first row's cells take for `n` seats (divider after the lead when there are 2 or more). */
 export function cellsWidth(n: number): number {
   return n * CELL_W + Math.max(0, n - 1) * CELL_GAP + (n >= 2 ? SEP_W : 0)

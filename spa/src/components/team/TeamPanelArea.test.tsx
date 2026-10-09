@@ -355,7 +355,7 @@ describe('header height (TI-6)', () => {
       expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(6)
     })
 
-    it('a wider boundary cell does not make the capacity oscillate (the widest seen only grows)', () => {
+    it('a wider boundary cell does not make the capacity oscillate (capacity comes from the widths, not from what is shown)', () => {
       const err = vi.spyOn(console, 'error').mockImplementation(() => {})
       const widths: Record<string, number> = { L: 38, M0: 38, M1: 38, M2: 50 } // the 4th seat is the wide one (status light)
       vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
@@ -375,7 +375,7 @@ describe('header height (TI-6)', () => {
       expect(err).not.toHaveBeenCalled() // no "Maximum update depth exceeded"
     })
 
-    describe('the remembered widest cell resets with its premises', () => {
+    describe('the capacity follows the current seats', () => {
       let widths: Record<string, number> = {}
       beforeEach(() => {
         vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
@@ -425,6 +425,130 @@ describe('header height (TI-6)', () => {
       mount()
       expect(inHeader()).toBe(3)
       expect(screen.getByTestId('team-panel-more')).toBeTruthy()
+    })
+
+    describe('capacity from each cell\'s own width', () => {
+      let widths: Record<string, number> = {}
+      let roCallbacks: Array<() => void> = []
+      let roLive: Array<{ cb: () => void; targets: Set<Element>; live: boolean }> = []
+      beforeEach(() => {
+        widths = {}
+        roCallbacks = []
+        roLive = []
+        vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+          return this.getAttribute('data-testid') === 'team-panel-cell' ? widths[this.getAttribute('data-session-id') ?? ''] ?? 38 : 0
+        })
+        vi.stubGlobal('ResizeObserver', class {
+          rec = { cb: () => {}, targets: new Set<Element>(), live: true }
+          constructor(cb: () => void) { this.rec.cb = cb; roCallbacks.push(cb); roLive.push(this.rec) }
+          observe(t: Element) { this.rec.targets.add(t) }
+          disconnect() { this.rec.live = false }
+        })
+      })
+      afterEach(() => vi.unstubAllGlobals())
+
+      it('a wider remote cell (+12px host icon) as the 4th seat still leaves 4 in the first row when there is room', () => {
+        widths = { M2: 50 }
+        scene5(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        availW = 180 // 38*3 + 50 + 3*2 + 5 = 175
+        mount()
+        expect(inHeader()).toBe(4)
+      })
+
+      it('too little room for the wide cell drops it to the second row', () => {
+        widths = { M2: 50 }
+        scene5(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        availW = 170
+        mount()
+        expect(inHeader()).toBe(3)
+      })
+
+      it('the capacity depends on the wrapped cells too (narrow 5th seat fits)', () => {
+        widths = { M3: 20 }
+        scene5(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        availW = 190 // 4 * 38 + 20 + 4*2 + 5 = 185
+        mount()
+        expect(inHeader()).toBe(5)
+      })
+
+      it('repeated ResizeObserver callbacks and re-renders keep the capacity put', () => {
+        const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+        widths = { M2: 50, M4: 12 }
+        scene5(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        availW = 180
+        const { rerender } = mount()
+        const first = inHeader()
+        for (let i = 0; i < 6; i++) {
+          act(() => roCallbacks.forEach((cb) => cb()))
+          rerender(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
+          expect(inHeader()).toBe(first)
+        }
+        expect(err).not.toHaveBeenCalled()
+      })
+
+      it('seats added or removed re-measure without oscillating', () => {
+        const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+        widths = { M2: 50 }
+        availW = 165
+        const seed = (n: number) => seedScene({
+          members: Array.from({ length: n }, (_, i) => [`M${i}`, `m${i}-tm`] as [string, string]),
+          tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead',
+        })
+        seed(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        mount()
+        expect(inHeader()).toBe(3)
+        act(() => seed(2)) // the wide seat is gone
+        expect(inHeader()).toBe(3)
+        act(() => seed(8))
+        expect(inHeader()).toBe(3)
+        expect(err).not.toHaveBeenCalled()
+      })
+
+      it('a cell resizing by itself (container unchanged) updates the capacity, wrapped cells included', () => {
+        widths = { M3: 20, M4: 3 }
+        scene5(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        availW = 190 // 4*38 + 20 + 3 + 5*2 + 5 = 190 -> 6 fit
+        mount()
+        expect(inHeader()).toBe(6)
+        widths = { M3: 20, M4: 20 } // e.g. a host badge got wider; no container resize
+        act(() => roLive.filter((r) => r.live).forEach((r) => r.cb()))
+        expect(inHeader()).toBe(5)
+      })
+
+      it('every cell, in the row and in the wrapped region, is observed; new seats get bound', () => {
+        const seed = (n: number) => seedScene({
+          members: Array.from({ length: n }, (_, i) => [`M${i}`, `m${i}-tm`] as [string, string]),
+          tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead',
+        })
+        availW = 165
+        seed(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        mount()
+        const observed = () => new Set(roLive.filter((r) => r.live).flatMap((r) => [...r.targets]))
+        const cells = () => screen.getAllByTestId('team-panel-cell')
+        expect(cells().length).toBe(9)
+        expect(inHeader()).toBeLessThan(9) // some wrap
+        cells().forEach((c) => expect(observed().has(c)).toBe(true))
+        act(() => seed(10))
+        expect(cells().length).toBe(11)
+        cells().forEach((c) => expect(observed().has(c)).toBe(true))
+      })
+
+      it('an enlarged panel uses the same widths', () => {
+        widths = { M2: 50 }
+        scene5(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        act(() => useTeamUiStore.getState().setPanelExpanded(true))
+        availW = 130 // 38*2 + 2 + 5 = 83; + 2 + 38 = 123 -> 3 fit, 4th (50) does not
+        mount()
+        expect(inHeader()).toBe(3)
+      })
     })
 
     it('an enlarged panel with room keeps everyone in the header row', () => {
