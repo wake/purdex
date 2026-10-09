@@ -30,6 +30,7 @@ type peerRecordReader interface {
 // remoteReading is one host's last answer: the context of each session on it by CC session id, or failed.
 type remoteReading struct {
 	at     int64
+	gen    uint64 // the order the reads started in
 	failed bool
 	ctx    map[string]*team.MemberContext
 	// seen are the CC session ids the host listed at all (with or without a context reading): a listed session is live.
@@ -38,6 +39,7 @@ type remoteReading struct {
 
 type remoteReadings struct {
 	mu       sync.Mutex
+	gen      uint64
 	by       map[string]remoteReading
 	inFlight map[string]bool
 }
@@ -55,7 +57,8 @@ func (m *Module) remoteHostsOf(rows []memberRow) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, r := range rows {
-		if m.isRemoteRow(r) && !seen[r.HostID] {
+		// Only members in play: a host that holds finished rows alone is not asked (a dead old host must not slow a view).
+		if m.isRemoteRow(r) && remoteLiveState(r.State) && !seen[r.HostID] {
 			seen[r.HostID] = true
 			out = append(out, r.HostID)
 		}
@@ -79,6 +82,10 @@ func (m *Module) staleRemoteHosts(hostIDs []string) []string {
 // readRemoteHost asks one host and stores the answer (or the failure).
 func (m *Module) readRemoteHost(ctx context.Context, hostID string) {
 	rr := remoteReading{at: m.now()}
+	m.remote.mu.Lock()
+	m.remote.gen++
+	rr.gen = m.remote.gen
+	m.remote.mu.Unlock()
 	if m.peerRecords == nil {
 		rr.failed = true
 	} else if rows, err := m.peerRecords(ctx, hostID); err != nil {
@@ -105,7 +112,7 @@ func (m *Module) readRemoteHost(ctx context.Context, hostID string) {
 	}
 	// Two reads of one host can overlap (a background refresh and a GET /api/team): the one that STARTED later wins,
 	// whichever finishes last.
-	if have, ok := m.remote.by[hostID]; !ok || have.at <= rr.at {
+	if have, ok := m.remote.by[hostID]; !ok || have.gen < rr.gen {
 		m.remote.by[hostID] = rr
 	}
 	m.remote.mu.Unlock()
