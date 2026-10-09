@@ -130,9 +130,11 @@ func (m *Module) drainRemoteNotices() {
 
 func (m *Module) sendRemoteNotice(n remoteNoticeRow) {
 	supersede := func(why string) {
-		if _, err := m.store.SettleRemoteNotice(n.ID, noticeSuperseded, m.now()); err != nil {
+		if ok, err := m.store.SettleRemoteNotice(n.ID, noticeSuperseded, m.now()); err != nil {
 			m.logf("[team] remote notice %d (%s to %s): %v", n.ID, n.Kind, n.MK, err)
 			return
+		} else if !ok {
+			return // settled meanwhile
 		}
 		m.logf("[team] remote notice %d (%s to %s) superseded: %s", n.ID, n.Kind, n.MK, why)
 	}
@@ -177,8 +179,10 @@ func (m *Module) sendRemoteNotice(n remoteNoticeRow) {
 		if res == ipeers.ResultDeliveryUncertain {
 			m.logf("[team] remote notice %d (%s to %s): delivery uncertain; not resent", n.ID, n.Kind, n.MK)
 		}
-		if _, err := m.store.SettleRemoteNotice(n.ID, noticeSent, m.now()); err != nil {
+		if ok, err := m.store.SettleRemoteNotice(n.ID, noticeSent, m.now()); err != nil {
 			m.logf("[team] remote notice %d (%s to %s): settle: %v", n.ID, n.Kind, n.MK, err)
+		} else if !ok {
+			m.logf("[team] remote notice %d (%s to %s) was no longer owed when it was sent", n.ID, n.Kind, n.MK)
 		}
 	case errors.Is(err, peersmod.ErrNoticeNotBound):
 		supersede("the lead host is not a bound peer")
