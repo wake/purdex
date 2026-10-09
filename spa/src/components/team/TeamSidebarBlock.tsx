@@ -31,7 +31,6 @@ function MemberLightDot({ member }: { member: TeamSeatView }) {
 interface Props {
   team: TeamDisplay
   teamKey: string
-  color: string
   collapsed: boolean
   members: TeamSeatView[]
   /** The lead row itself. */
@@ -40,7 +39,7 @@ interface Props {
   activeTabId: string | null
 }
 
-export function TeamSidebarBlock({ team, teamKey, color, collapsed, members, children, ghost = false, activeTabId }: Props) {
+export function TeamSidebarBlock({ team, teamKey, collapsed, members, children, ghost = false, activeTabId }: Props) {
   const t = useI18nStore((s) => s.t)
   const showBeads = !collapsed
   return (
@@ -49,7 +48,6 @@ export function TeamSidebarBlock({ team, teamKey, color, collapsed, members, chi
       {showBeads && (
         <TeamMemberBeads
           teamKey={teamKey}
-          color={color}
           members={members}
           activeTabId={activeTabId}
           withHost={team.beadHost}

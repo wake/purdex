@@ -205,6 +205,34 @@ describe('InlineTabList — team beads', () => {
     expect(wsTabs('w1')).toEqual(['lead', 'ma', 'mc', 'plain'])
   })
 
+  it('the bead drag insert line is neutral (accent token), never the team color - live and ghost', () => {
+    const check = (block: HTMLElement) => {
+      const bd = within(block).getAllByTestId('team-bead')
+      fireEvent.dragStart(bd[0], dt())
+      fireEvent.dragOver(bd[2], { ...dt(), clientX: 0 })
+      const line = within(block).getByTestId('team-bead-insert')
+      expect(line.className).toContain('bg-accent-base')
+      expect(line.getAttribute('style') ?? '').not.toMatch(/background/)
+      fireEvent.dragEnd(bd[0])
+    }
+    seedScene(base)
+    mount()
+    check(screen.getByTestId('team-lead-block'))
+  })
+
+  it('the ghost bead insert line is neutral too', () => {
+    seedScene({ members, tabs: [['plain', null]], workspaces: [{ id: 'w1', tabs: ['plain'] }] })
+    act(() => useTeamUiStore.getState().setGhostWorkspace(KEY, 'w1'))
+    mount()
+    const block = screen.getByTestId('team-ghost-lead')
+    const bd = within(block).getAllByTestId('team-bead')
+    fireEvent.dragStart(bd[0], dt())
+    fireEvent.dragOver(bd[2], { ...dt(), clientX: 0 })
+    const line = within(block).getByTestId('team-bead-insert')
+    expect(line.className).toContain('bg-accent-base')
+    expect(line.getAttribute('style') ?? '').not.toMatch(/background/)
+  })
+
   it('drop outside the block snaps back', () => {
     seedScene({ ...base, workspaces: [{ id: 'w1', tabs: ['lead', 'ma', 'mc', 'plain'] }, { id: 'w2', tabs: [] }] })
     mount()
