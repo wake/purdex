@@ -35,6 +35,8 @@ type Source struct {
 	Closer  io.Closer
 	// Path is the resolved transcript path (under the symlink-resolved projects root); the Resolver sets it.
 	Path string
+	// FrameID is the confirmed owning frame of a live source (the Resolver sets it; the Entry ignores it).
+	FrameID string
 }
 
 // RefreshResult says what a Refresh did to the model.

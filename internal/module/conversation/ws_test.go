@@ -359,15 +359,22 @@ func TestWS_HeaderOnlyChangeIsAHeaderFrame(t *testing.T) {
 }
 
 type fakeLight struct {
-	mu sync.Mutex
-	st string
-	ok bool
+	mu     sync.Mutex
+	st     string
+	ok     bool
+	frames []string      // the frame ids it was asked about
+	block  chan struct{} // when set, every lookup waits for it to close
 }
 
-func (f *fakeLight) LightStatus(string) (string, bool) {
+func (f *fakeLight) LightStatus(_, frameID string) (string, bool) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.st, f.ok
+	f.frames = append(f.frames, frameID)
+	st, ok, block := f.st, f.ok, f.block
+	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
+	return st, ok
 }
 
 func (f *fakeLight) set(st string, ok bool) {
@@ -393,7 +400,7 @@ func headerStatus(t *testing.T, f wsFrame) string {
 func TestWS_LightChangeIsAHeaderFrame(t *testing.T) {
 	e, _ := wsEnv(t)
 	p := e.transcript(idleTurns(1))
-	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "idle", SeenAt: 1}}
+	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "idle", SeenAt: 1, FrameID: "f1"}}
 	e.mod.tweak.reresolve = time.Hour // only the cheap lookup can move the light
 	light := &fakeLight{st: "idle", ok: true}
 	e.mod.light = light
@@ -416,6 +423,53 @@ func TestWS_LightChangeIsAHeaderFrame(t *testing.T) {
 	if _, b, err := c.conn.ReadMessage(); err == nil {
 		t.Fatalf("an unexpected frame: %s", b)
 	}
+	light.mu.Lock()
+	defer light.mu.Unlock()
+	for _, id := range light.frames { // the lookup follows the frame the full lookup confirmed, nothing else
+		if id != "f1" {
+			t.Fatalf("asked about frame %q, want f1", id)
+		}
+	}
+}
+
+// A lookup that hangs holds up only its own connection: another reader of the same entry still refreshes.
+func TestWS_ASlowLightDoesNotHoldTheEntryGate(t *testing.T) {
+	e, _ := wsEnv(t)
+	p := e.transcript(idleTurns(1))
+	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "idle", SeenAt: 1, FrameID: "f1"}}
+	e.mod.tweak.reresolve = time.Hour
+	light := &fakeLight{st: "idle", ok: true}
+	e.mod.light = light
+	srv := e.server()
+	c := e.connect(srv, "")
+	c.expect("conversation.snapshot")
+	c.expect("approvals.snapshot")
+	light.mu.Lock()
+	light.block = make(chan struct{})
+	light.mu.Unlock()
+	defer func() {
+		light.mu.Lock()
+		if light.block != nil {
+			close(light.block)
+			light.block = nil
+		}
+		light.mu.Unlock()
+	}()
+	time.Sleep(60 * time.Millisecond) // the follower is now stuck in its lookup, outside the gate
+	done := make(chan int, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		e.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/conversations/claude/"+sid, nil))
+		done <- rec.Code
+	}()
+	select {
+	case code := <-done:
+		if code != http.StatusOK {
+			t.Fatalf("HTTP answered %d", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("an HTTP refresh of the same entry waited on the stuck light lookup")
+	}
 }
 
 // The cheap lookup never overrules "no live pane" and never invents a light it cannot place.
@@ -426,8 +480,8 @@ func TestWS_LightIsIgnoredWithoutALivePaneOrAnAnswer(t *testing.T) {
 		want   string
 	}{
 		"no pane":      {nil, &fakeLight{st: "running", ok: true}, "ended"},
-		"cannot place": {[]convfeed.Owner{{Status: "idle", SeenAt: 1}}, &fakeLight{ok: false}, "idle"},
-		"empty light":  {[]convfeed.Owner{{Status: "idle", SeenAt: 1}}, &fakeLight{st: "", ok: true}, "idle"},
+		"cannot place": {[]convfeed.Owner{{Status: "idle", SeenAt: 1, FrameID: "f1"}}, &fakeLight{ok: false}, "idle"},
+		"empty light":  {[]convfeed.Owner{{Status: "idle", SeenAt: 1, FrameID: "f1"}}, &fakeLight{st: "", ok: true}, "idle"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			e, _ := wsEnv(t)

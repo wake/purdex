@@ -24,10 +24,10 @@ type OwnerSource interface {
 	ConfirmedOwners(ctx context.Context, sessionID string) ([]agent.PaneOwner, error)
 }
 
-// LightSource reads the current light of a session's live pane without the full owner lookup (no tmux, no process
+// LightSource reads the current light of one confirmed frame without the full owner lookup (no tmux, no process
 // walk): the agent module. Optional: without it the light is only as fresh as the last full lookup.
 type LightSource interface {
-	LightStatus(sessionID string) (status string, ok bool)
+	LightStatus(sessionID, frameID string) (status string, ok bool)
 }
 
 const (
@@ -213,7 +213,7 @@ func (a ownerAdapter) LiveSessions(ctx context.Context, sessionID string) ([]con
 	}
 	out := make([]convfeed.Owner, 0, len(panes))
 	for _, p := range panes {
-		out = append(out, convfeed.Owner{TranscriptPath: p.TranscriptPath, Status: p.Status, SeenAt: p.LastSeenAt})
+		out = append(out, convfeed.Owner{TranscriptPath: p.TranscriptPath, Status: p.Status, SeenAt: p.LastSeenAt, FrameID: p.FrameID})
 	}
 	return out, nil
 }

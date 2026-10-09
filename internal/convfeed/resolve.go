@@ -30,6 +30,7 @@ type Owner struct {
 	TranscriptPath string // reported by the pane's hook; may be empty
 	Status         string // the pane's light: running | waiting | idle | error
 	SeenAt         int64  // when the pane was last seen; the largest wins among several
+	FrameID        string // the owning frame, so a cheap light lookup can follow the frame that was confirmed
 }
 
 // OwnerLookup finds the confirmed live panes of a session. An error means "could not tell", not "none".
@@ -97,7 +98,7 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 		}
 		s := Source{File: osFile{f}, Identity: identity, Closer: f, Status: status, Path: path}
 		if owner != nil {
-			s.Live, s.Backend = true, "terminal"
+			s.Live, s.Backend, s.FrameID = true, "terminal", owner.FrameID
 		}
 		return s, nil
 	}
