@@ -47,6 +47,9 @@ type OriginResolver interface {
 	// InboxOf is the messaging socket of the session's live entry, for the notice outbox (PL-1d1).
 	InboxOf(sessionID string) (inbox string, ok bool, err error)
 	LiveSession(sessionID string) bool
+	// ListLiveOrigins is every live, non-proxy session of this host (one registry read), for the unattended panel's
+	// quota list. An error is a registry read failure only.
+	ListLiveOrigins() ([]team.Origin, error)
 	// SameProcess reports whether pid is alive and started at procStart (LeadPresence's step 2 alone): the
 	// re-verification right before a signal is sent to an adopted member's process. A start time that cannot
 	// be read, or a procStart that cannot be parsed, is an error — never "same".
@@ -250,6 +253,9 @@ type Module struct {
 	// noticeKick is a test seam called after kickNotices when an adopt approval won; afterApproved is its
 	// only caller. nil until then (tests count it).
 	noticeKick func()
+	// quotaMu serialises a relay-quota PUT's commit, event and roster signal (quota_handler.go); afterQuotaSet is a test seam.
+	quotaMu       sync.Mutex
+	afterQuotaSet func()
 	// killProcess signals an adopted member's Claude Code process (SIGTERM; tests inject).
 	killProcess func(pid int) error
 	// sender sends the notices (peers.SenderKey; nil → notices stay owed); noticeSig wakes the drain
@@ -388,6 +394,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	// U23: the unattended switch (unattended spec D-U23-1, D-U23-6), the App's.
 	mux.HandleFunc("GET "+UnattendedRoute, m.handleUnattendedGet)
 	mux.HandleFunc("PUT "+UnattendedRoute, m.handleUnattendedPut)
+	mux.HandleFunc("PUT "+team.RelayQuotaRoute, m.handleRelayQuotaPut)
 	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
