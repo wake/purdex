@@ -115,6 +115,9 @@ type Client struct {
 	Now    func() time.Time
 }
 
+// Invalidate drops the cached provider token (the sender calls it after a 403 about it).
+func (c *Client) Invalidate() { c.Signer.Invalidate() }
+
 func (c *Client) timeout() time.Duration { return 10 * time.Second }
 
 func (c *Client) hosts() map[string]string {
