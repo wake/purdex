@@ -162,6 +162,46 @@ func (f *fakeOrigins) resolveMany(ids []string, one func(string) (team.Origin, b
 	return out, nil
 }
 
+// ResolveOriginByRef answers the fixture origin whose ref is ref (shown entries first).
+func (f *fakeOrigins) ResolveOriginByRef(ref string) (team.Origin, bool, error) {
+	f.mu.Lock()
+	readErr := f.readErr
+	var found *team.Origin
+	for sid, o := range f.shown {
+		if o.Ref == ref && !f.hidden[sid] {
+			c := o
+			found = &c
+			break
+		}
+	}
+	f.mu.Unlock()
+	if readErr {
+		return team.Origin{}, false, errors.New("read registry: not a directory")
+	}
+	if found != nil {
+		return *found, true, nil
+	}
+	for _, o := range fixtureOrigins {
+		if o.Ref == ref {
+			return f.lookup(o.SessionID)
+		}
+	}
+	return team.Origin{}, false, nil
+}
+
+// InboxOf is the fixture inbox of the session, if it is listed.
+func (f *fakeOrigins) InboxOf(sid string) (string, bool, error) {
+	if _, ok, err := f.lookup(sid); !ok || err != nil {
+		return "", false, err
+	}
+	for inbox, o := range fixtureOrigins {
+		if o.SessionID == sid {
+			return inbox, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 func (f *fakeOrigins) lookup(sid string) (team.Origin, bool, error) {
 	f.mu.Lock()
 	readErr, hidden := f.readErr, f.hidden[sid]

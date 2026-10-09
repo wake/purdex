@@ -91,6 +91,19 @@ func (s *spawnOrigins) ResolveOriginBySession(sid string) (team.Origin, bool, er
 	return s.fakeOrigins.ResolveOriginBySession(sid)
 }
 
+// ResolveOriginByRef looks at the registered members first, then at the fixture.
+func (s *spawnOrigins) ResolveOriginByRef(ref string) (team.Origin, bool, error) {
+	s.mu.Lock()
+	for _, o := range s.members {
+		if o.Ref == ref {
+			s.mu.Unlock()
+			return o, true, nil
+		}
+	}
+	s.mu.Unlock()
+	return s.fakeOrigins.ResolveOriginByRef(ref)
+}
+
 // ResolveOriginsBySession is the batch over the same two sources.
 func (s *spawnOrigins) ResolveOriginsBySession(ids []string) (map[string]team.Origin, error) {
 	return s.fakeOrigins.resolveMany(ids, func(sid string) (team.Origin, bool, error) {

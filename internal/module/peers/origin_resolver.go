@@ -71,6 +71,48 @@ func (r *OriginResolver) ResolveOriginBySession(sessionID string) (team.Origin, 
 	return team.Origin{}, false, nil
 }
 
+// ResolveOriginByRef is ResolveOriginBySession keyed by the conversation's ref ("_xxxxxx", ipeers.RefID of its
+// session id): the live, non-proxy registry entry whose RefID is ref. `pdx adopt <ref>` names its target this way (adopt
+// plan PL-1c). Same ok/err contract; two live entries with one ref answer the first in registry order. The ref is the
+// CURRENT one: a ref a relay replaced is looked up through the team module's lineage, not here.
+func (r *OriginResolver) ResolveOriginByRef(ref string) (team.Origin, bool, error) {
+	if ref == "" {
+		return team.Origin{}, false, nil
+	}
+	entries, _, err := ipeers.ReadRegistry(r.m.registryDir, r.m.liveness)
+	if err != nil {
+		r.m.logf("peers: origin resolver: read registry: %v", err)
+		return team.Origin{}, false, fmt.Errorf("read registry: %w", err)
+	}
+	proxies := r.m.proxyPIDs()
+	for _, e := range entries {
+		if e.SessionID != "" && ipeers.RefID(e.SessionID) == ref && !e.IsProxy && !proxies[e.PID] {
+			return r.originOf(e), true, nil
+		}
+	}
+	return team.Origin{}, false, nil
+}
+
+// InboxOf is the messaging socket of sessionID's live, non-proxy registry entry (the notice outbox sends from the
+// lead's inbox, PL-1d1). ok is false (err nil) for an empty id and a session the registry does not list as live.
+func (r *OriginResolver) InboxOf(sessionID string) (string, bool, error) {
+	if sessionID == "" {
+		return "", false, nil
+	}
+	entries, _, err := ipeers.ReadRegistry(r.m.registryDir, r.m.liveness)
+	if err != nil {
+		r.m.logf("peers: origin resolver: read registry: %v", err)
+		return "", false, fmt.Errorf("read registry: %w", err)
+	}
+	proxies := r.m.proxyPIDs()
+	for _, e := range entries {
+		if e.SessionID == sessionID && !e.IsProxy && !proxies[e.PID] && e.Inbox != "" {
+			return e.Inbox, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 // ResolveOriginsBySession is ResolveOriginBySession for many sessions with
 // ONE registry read: the roster resolves a whole team set per build, and a
 // read forks ps per entry. The filter is the single form's — a live,

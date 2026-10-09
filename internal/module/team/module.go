@@ -40,6 +40,11 @@ type OriginResolver interface {
 	// registry read (the roster's build): a session the registry does not
 	// list is absent from the map; the error is a registry read failure only.
 	ResolveOriginsBySession(sessionIDs []string) (map[string]team.Origin, error)
+	// ResolveOriginByRef is ResolveOriginBySession keyed by the conversation's CURRENT ref ("_xxxxxx"): `pdx adopt`
+	// names its target by it. Same ok/err contract.
+	ResolveOriginByRef(ref string) (team.Origin, bool, error)
+	// InboxOf is the messaging socket of the session's live entry, for the notice outbox (PL-1d1).
+	InboxOf(sessionID string) (inbox string, ok bool, err error)
 	LiveSession(sessionID string) bool
 	// LeadPresence is a team lead's presence for the team end (spec §7.1),
 	// which cannot be undone: tied to the lead's own process (pid and start
