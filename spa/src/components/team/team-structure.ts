@@ -9,7 +9,7 @@ import { runMemberIds } from '../../lib/team/team-runs'
 import type { Seat, TeamView } from '../../lib/team/team-views'
 import type { PanelMode } from '../../stores/useTeamUiStore'
 import {
-  teamColor, type TeamBeads, type TeamDisplay, type TeamGhostLead, type TeamPanelTeam, type TeamSeatView, type TeamTabMark,
+  teamColor, type TeamBeads, type TeamCapsule, type TeamDisplay, type TeamGhostLead, type TeamPanelTeam, type TeamSeatView, type TeamTabMark,
 } from './team-display'
 
 export interface StructureInput {
@@ -71,6 +71,11 @@ export function structureSignature(input: StructureInput): string {
   ])
 }
 
+function capsuleOf(view: TeamView, collapsed: boolean): TeamCapsule {
+  const label = groupLabel(view)
+  return { teamKey: view.key, color: teamColor(view.colorIndex), label: label.text, full: label.full, truncated: label.truncated, tooltip: tooltipOf(view), collapsed }
+}
+
 const NOOP = () => {}
 
 export interface TeamActions {
@@ -116,7 +121,7 @@ export function buildTeamDisplay(input: StructureInput, actions: TeamActions = N
     if (hit.role !== 'lead') continue
     const view = index.byKey.get(hit.key)
     if (!view) continue
-    beads.set(tabId, { teamKey: hit.key, color: teamColor(view.colorIndex), collapsed: collapsed[hit.key] === true, members: seatsOf(view).members })
+    beads.set(tabId, { teamKey: hit.key, color: teamColor(view.colorIndex), collapsed: collapsed[hit.key] === true, capsule: capsuleOf(view, collapsed[hit.key] === true), members: seatsOf(view).members })
   }
 
   const panels = new Map<string, TeamPanelTeam>()
@@ -142,7 +147,7 @@ export function buildTeamDisplay(input: StructureInput, actions: TeamActions = N
     const label = groupLabel(v)
     const { lead, members } = seatsOf(v)
     const list = ghosts.get(at) ?? []
-    list.push({ teamKey: v.key, color: teamColor(v.colorIndex), label: label.text, full: label.full, collapsed: collapsed[v.key] === true, lead, members })
+    list.push({ teamKey: v.key, color: teamColor(v.colorIndex), label: label.text, full: label.full, collapsed: collapsed[v.key] === true, capsule: capsuleOf(v, collapsed[v.key] === true), lead, members })
     ghosts.set(at, list)
   }
 

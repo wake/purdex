@@ -55,10 +55,14 @@ export interface TeamTabMark {
   hiddenCount: number
 }
 
+/** What the label capsule needs of a team (the tab bar's and the sidebar's are the same capsule). */
+export type TeamCapsule = Pick<TeamTabMark, 'teamKey' | 'color' | 'label' | 'full' | 'truncated' | 'tooltip' | 'collapsed'>
+
 export interface TeamBeads {
   teamKey: string
   color: string
   collapsed: boolean
+  capsule: TeamCapsule
   /** The members in team order, opened or not. */
   members: TeamSeatView[]
 }
@@ -71,6 +75,7 @@ export interface TeamGhostLead {
   full: string
   /** The team's shared fold state: the ghost's beads fold like a live lead's. */
   collapsed: boolean
+  capsule: TeamCapsule
   lead: TeamSeatView
   members: TeamSeatView[]
 }

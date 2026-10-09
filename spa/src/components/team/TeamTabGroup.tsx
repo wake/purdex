@@ -4,17 +4,17 @@
 // overlay so the tab's own background and active highlight stay. No separators are drawn inside the group (TabBar).
 import type { ReactNode } from 'react'
 import { useThemeStore } from '../../stores/useThemeStore'
-import type { TeamTabMark } from './team-display'
+import type { TeamCapsule, TeamTabMark } from './team-display'
 
 /** Dark text on the pastel team colours, in both themes. */
 const LABEL_FG = '#14141f'
 
 /** The capsule's tooltip: the mark's own, plus the whole lead title when the capsule shows it cut. */
-function labelTitle(mark: TeamTabMark): string {
+function labelTitle(mark: TeamCapsule): string {
   return mark.truncated && !mark.tooltip.includes(mark.full) ? `${mark.tooltip}\n${mark.full}` : mark.tooltip
 }
 
-export function TeamGroupLabel({ mark, hidden, onToggle }: { mark: TeamTabMark; /** Member tabs the collapse hides. */ hidden: number; onToggle: (teamKey: string) => void }) {
+export function TeamGroupLabel({ mark, hidden, onToggle }: { mark: TeamCapsule; /** Member tabs the collapse hides. */ hidden: number; onToggle: (teamKey: string) => void }) {
   return (
     <button
       type="button"

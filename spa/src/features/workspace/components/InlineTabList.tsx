@@ -70,6 +70,7 @@ export function InlineTabList({
               teamKey={beads.teamKey}
               color={beads.color}
               collapsed={beads.collapsed}
+              capsule={beads.capsule}
               members={beads.members}
               activeTabId={activeTabId}
             >

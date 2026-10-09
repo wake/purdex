@@ -94,10 +94,49 @@ describe('InlineTabList — team beads', () => {
     expect(within(screen.getByTestId('team-ghost-lead')).queryByTestId('team-bead')).toBeNull()
     // Reopening the lead goes through openTeamSeat, which expands a collapsed group first (R10); the live block then
     // draws the one shared state (no stale copy on the ghost).
-    fireEvent.click(within(screen.getByTestId('team-ghost-lead')).getByRole('button', { name: /title L/ }))
+    fireEvent.click(within(screen.getByTestId('team-ghost-lead')).getByTitle(/tab closed/))
     expect(tabShowing('lead-tm')).toBeDefined()
     expect(useTeamUiStore.getState().collapsed[KEY]).toBeUndefined()
     expect(within(screen.getByTestId('team-lead-block')).getAllByTestId('team-bead')).toHaveLength(3)
+  })
+
+  it('label capsule above the lead row: text and tooltip from the label / name, no +N, click toggles the shared collapse', () => {
+    seedScene({ ...base, teamLabel: '發版', teamName: 'Release train' })
+    mount()
+    const capsule = within(screen.getByTestId('team-lead-block')).getByTestId('team-group-label')
+    expect(capsule.textContent).toBe('發版')
+    expect(capsule.getAttribute('title')).toBe('Release train (發版)')
+    // Above the lead's row.
+    const block = screen.getByTestId('team-lead-block')
+    expect(capsule.compareDocumentPosition(within(block).getAllByTestId('inline-tab-row')[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(capsule)
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true) // the top bar's state
+    expect(screen.queryByTestId('team-group-hidden')).toBeNull() // no +N in the sidebar (the beads show the members)
+    expect(screen.getByTestId('team-sidebar-collapsed')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('team-group-label'))
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBeUndefined()
+    expect(screen.getAllByTestId('team-bead')).toHaveLength(3)
+  })
+
+  it('an empty label shows the lead title cut to 10 wide, the tooltip carrying the whole title', () => {
+    seedScene(base)
+    const t = useTeamRosterStore.getState().byHost[HOST][0]
+    act(() => useTeamRosterStore.setState({ byHost: { [HOST]: [{ ...t, lead: { ...t.lead, title: 'abcdefghijklmnop' } }] } }))
+    mount()
+    const capsule = screen.getByTestId('team-group-label')
+    expect(capsule.textContent).toBe('abcdefghi…')
+    expect(capsule.getAttribute('title')).toContain('abcdefghijklmnop')
+  })
+
+  it('the ghost lead row has the same capsule, faded like the ghost; clicking it toggles collapse', () => {
+    seedScene({ members, tabs: [['plain', null]], workspaces: [{ id: 'w1', tabs: ['plain'] }], teamLabel: '發版' })
+    act(() => useTeamUiStore.getState().setGhostWorkspace(KEY, 'w1'))
+    mount()
+    const capsule = within(screen.getByTestId('team-ghost-lead')).getByTestId('team-group-label')
+    expect(capsule.textContent).toBe('發版')
+    expect(capsule.closest('[data-testid="team-sidebar-label"]')!.className).toMatch(/opacity-/)
+    fireEvent.click(capsule)
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true)
   })
 
   it('beads in team order, wrap to rows', () => {
@@ -228,7 +267,7 @@ describe('InlineTabList — team beads', () => {
     const ghost = screen.getByTestId('team-ghost-lead')
     expect(within(ghost).getAllByTestId('team-bead')).toHaveLength(3)
     expect(within(screen.getByTestId('second')).queryByTestId('team-ghost-lead')).toBeNull() // only the workspace it was closed from
-    fireEvent.click(within(ghost).getByRole('button', { name: /title L/ }))
+    fireEvent.click(within(ghost).getByTitle(/tab closed/))
     const lead = tabShowing('lead-tm')
     expect(lead).toBeDefined()
     expect(screen.queryByTestId('team-ghost-lead')).toBeNull()
@@ -268,6 +307,7 @@ describe('InlineTabList — team beads', () => {
     )
     expect(screen.queryByTestId('team-bead')).toBeNull()
     expect(screen.queryByTestId('team-lead-block')).toBeNull()
+    expect(screen.queryByTestId('team-group-label')).toBeNull()
   })
 
   it('without a provider the list renders exactly as before (member tabs are rows, no beads)', () => {
@@ -275,6 +315,7 @@ describe('InlineTabList — team beads', () => {
     render(<DndContext><List /></DndContext>)
     expect(screen.getAllByTestId('inline-tab-row')).toHaveLength(4)
     expect(screen.queryByTestId('team-bead')).toBeNull()
+    expect(screen.queryByTestId('team-group-label')).toBeNull()
   })
 
   it('a remote member bead with an unmapped host shows the neutral glyph and clicking it toasts without opening anything', () => {
