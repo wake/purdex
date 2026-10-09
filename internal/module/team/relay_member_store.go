@@ -55,6 +55,11 @@ func (s *Store) CreateMemberRelayOp(op team.RelayOp, gate MemberRelayGate) (team
 	if err := insertRelayOpIn(tx, op); err != nil {
 		return fail(err)
 	}
+	if s.afterMemberOpInsert != nil {
+		if err := s.afterMemberOpInsert(); err != nil {
+			return fail(err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fail(fmt.Errorf("commit: %w", err))
 	}

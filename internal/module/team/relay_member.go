@@ -2,7 +2,10 @@ package teammod
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -126,7 +129,11 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 	if m.beforeMemberRelayInsert != nil {
 		m.beforeMemberRelayInsert(mr)
 	}
-	op, _, err = m.store.CreateMemberRelayOp(op, nil)
+	var (
+		spent bool
+		held  *team.Approval // the member_relay row this create opened (pool spent out), for the announce after the commit
+	)
+	op, _, err = m.store.CreateMemberRelayOp(op, m.memberRelayGate(req.OriginInbox, mr, &spent, &held))
 	switch {
 	case errors.Is(err, ErrMemberNotActive):
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, "member "+mr.Ref+" left the team while the relay was being opened", nil)
@@ -140,8 +147,16 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 		fail(err)
 		return
 	}
-	m.logf("[team] relay op %s opened: member %s (%s) of team %s", op.ID, mr.Ref, mr.SessionID, t.ID)
-	m.sendMemberControlAsync(op)
+	m.logf("[team] relay op %s opened: member %s (%s) of team %s (%s)", op.ID, mr.Ref, mr.SessionID, t.ID, op.State)
+	if spent {
+		m.announceSpend(t.LeadSessionID) // the lead's pool is spent: publish the chain's new numbers
+	}
+	if held != nil { // the pool is spent out: a person decides (RQ-2 §4.1), listed as held at once
+		m.holdForQuota(held.ID)
+		m.broadcast("opened", held)
+	} else {
+		m.sendMemberControlAsync(op)
+	}
 	m.writeJSON(w, http.StatusCreated, team.RelayCreateResponse{Op: op})
 }
 
@@ -181,5 +196,60 @@ func (m *Module) sendMemberControl(op team.RelayOp) {
 	defer cancel()
 	if _, err := m.sender.Send(ctx, ipeers.SendRequest{To: alias + "/" + cur.Ref, Text: team.RelayControlPrefix + cur.ID, OriginInbox: inbox}); err != nil {
 		m.logf("[team] control for op %s to %s: %v", op.ID, cur.Ref, err)
+	}
+}
+
+// memberRelayGate is CreateMemberRelayOp's gate (RQ-2 §4.1), run in the create's transaction under createMu. Unattended
+// off, or the quota rule off: the op stays `requested` and nothing is spent (a member's relay needs no approval, U13).
+// Both on: one unit of the lead's pool is spent in this transaction (spent is set); at 0 the op becomes
+// awaiting_approval with RequestID = the member_relay row's id, and that row (held) is inserted open in the same
+// transaction. Any failure rolls everything back.
+func (m *Module) memberRelayGate(inbox string, mr memberRow, spent *bool, held **team.Approval) MemberRelayGate {
+	return func(tx *sql.Tx, op *team.RelayOp) (bool, error) {
+		if !m.unattendedOn() || !m.quotaRuleOn() {
+			return false, nil
+		}
+		err := spendPoolIn(tx, op.TeamID, op.CreatedAt)
+		if err == nil {
+			if m.afterPoolSpend != nil {
+				if err := m.afterPoolSpend(); err != nil { // test seam: a failure right after the spend
+					return false, err
+				}
+			}
+			*spent = true
+			return false, nil
+		}
+		if !errors.Is(err, ErrQuotaExhausted) {
+			return false, err
+		}
+		lead, ok, err := m.origins.ResolveOrigin(inbox)
+		if err != nil || !ok {
+			return false, fmt.Errorf("the lead's origin: ok=%v err=%v", ok, err)
+		}
+		p := team.MemberRelayPayload{OpID: op.ID, TeamID: op.TeamID, LeadRef: lead.Ref, LeadTitle: lead.Title,
+			MemberSessionID: op.SessionID, MemberRef: mr.Ref, MemberTitle: mr.Title}
+		if m.usage != nil {
+			if u, ok := m.usage.ContextUsage(op.SessionID); ok {
+				p.UsedPercentage = u.UsedPercentage
+			}
+		}
+		payload, err := json.Marshal(p)
+		if err != nil {
+			return false, err
+		}
+		now := op.CreatedAt
+		row := team.Approval{ID: m.newID(), Kind: team.KindMemberRelay, HostID: op.HostID, Origin: lead, Payload: payload, State: team.StateOpen,
+			CreatedAt: now, DeadlineAt: now + team.SelfRelayDeadlineS*1000, LeaseUntil: now + team.SelfRelayDeadlineS*1000} // nobody renews it
+		if _, err := insertRowIn(tx, row, requestHash(team.KindMemberRelay, lead.SessionID, team.SelfRelayDeadlineS, payload), ""); err != nil {
+			return false, err
+		}
+		if m.afterMemberRowInsert != nil {
+			if err := m.afterMemberRowInsert(); err != nil { // test seam: a failure right after the row insert
+				return false, err
+			}
+		}
+		op.State, op.RequestID = team.RelayAwaitingApproval, row.ID
+		*held = &row
+		return true, nil
 	}
 }

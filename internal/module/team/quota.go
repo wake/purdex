@@ -308,7 +308,7 @@ func (m *Module) unhold(id string) {
 	m.heldMu.Unlock()
 }
 
-// fillHeld fills v.Held: the open self_relay rows waiting for quota (the panel says "額度用完，等你核准"). [] when
+// fillHeld fills v.Held: the open self_relay and member_relay rows waiting for quota (the panel says "額度用完，等你核准"). [] when
 // none; left nil — null on the wire — when the open rows could not be read.
 func (m *Module) fillHeld(v *team.UnattendedView) {
 	m.heldMu.Lock()
@@ -325,7 +325,7 @@ func (m *Module) fillHeld(v *team.UnattendedView) {
 			return
 		}
 		for _, a := range open {
-			if _, ok := ids[a.ID]; ok && a.Kind == team.KindSelfRelay {
+			if _, ok := ids[a.ID]; ok && (a.Kind == team.KindSelfRelay || a.Kind == team.KindMemberRelay) {
 				held = append(held, a)
 			}
 		}

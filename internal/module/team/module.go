@@ -122,6 +122,8 @@ type Module struct {
 	noticeMu sync.Mutex
 	// beforeMemberRelayInsert, when set, runs in the member-relay create between its checks and the insert's transaction (tests race a release there).
 	beforeMemberRelayInsert func(mr memberRow)
+	// afterPoolSpend and afterMemberRowInsert fail the member-relay create's gate at that point (tests: fault injection).
+	afterPoolSpend, afterMemberRowInsert func() error
 	// helloMu orders a hello's modSeen update with its mod_hello write (P6-2a); never held with mu across the write.
 	helloMu sync.Mutex
 	// unsubTurnEnd ends the subscription to the agent module's turn ends (T-3a2); nil when none.

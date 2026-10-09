@@ -51,3 +51,16 @@ const (
 type RelayCreateResponse struct {
 	Op RelayOp `json:"op"`
 }
+
+// MemberRelayPayload is Approval.Payload for KindMemberRelay: the text of the card that asks a person to approve a
+// member's relay when the lead's pool is spent out. Nothing in it is trusted at approve.
+type MemberRelayPayload struct {
+	OpID            string   `json:"op_id"`
+	TeamID          string   `json:"team_id"`
+	LeadRef         string   `json:"lead_ref"`
+	LeadTitle       string   `json:"lead_title,omitempty"`
+	MemberSessionID string   `json:"member_session_id"`
+	MemberRef       string   `json:"member_ref"`
+	MemberTitle     string   `json:"member_title,omitempty"`
+	UsedPercentage  *float64 `json:"used_percentage,omitempty"`
+}
