@@ -87,15 +87,20 @@ func (s *Store) ActiveRemoteMembers() ([]remoteMemberRow, error) {
 
 // writeEndedFactIn queues an `ended` fact for the lead host in the caller's transaction.
 func writeEndedFactIn(tx dbtx, factID, leadHostID, teamID, mk, reason string, at int64) error {
-	body, err := json.Marshal(team.TeamFact{ID: factID, Kind: team.FactEnded, ToHostID: leadHostID, TeamID: teamID, MK: mk, Reason: reason})
+	return writeFactIn(tx, team.TeamFact{ID: factID, Kind: team.FactEnded, ToHostID: leadHostID, TeamID: teamID, MK: mk, Reason: reason}, at)
+}
+
+// writeFactIn queues fact (its ToHostID is the lead host) in the caller's transaction.
+func writeFactIn(tx dbtx, f team.TeamFact, at int64) error {
+	body, err := json.Marshal(f)
 	if err != nil {
 		return err
 	}
 	sum := sha256.Sum256(body)
 	_, err = tx.Exec(`INSERT INTO team_facts (id, kind, team_id, mk, host_id, body_json, body_hash, state, created_at, updated_at, next_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, factID, team.FactEnded, teamID, mk, leadHostID, string(body), hex.EncodeToString(sum[:]), factPending, at, at, at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, f.ID, f.Kind, f.TeamID, f.MK, f.ToHostID, string(body), hex.EncodeToString(sum[:]), factPending, at, at, at)
 	if err != nil {
-		return fmt.Errorf("queue ended fact %s: %w", factID, err)
+		return fmt.Errorf("queue %s fact %s: %w", f.Kind, f.ID, err)
 	}
 	return nil
 }

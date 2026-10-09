@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/google/uuid"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -27,7 +28,7 @@ const spawnSchema = `
 
 const spawnCols = `id, team_id, host_id, origin_session_id, cwd, title, model, effort, tmux_name, tmux_id,
 	tmux_instance, pane_id, step, state, reason, session_id, launched_at, created_at, updated_at,
-	task_subject, task_description, task_done_json`
+	task_subject, task_description, task_done_json, lead_host_id, lead_json`
 
 // spawnRow is one spawn_ops row but its request hash.
 type spawnRow struct {
@@ -39,12 +40,16 @@ type spawnRow struct {
 	LaunchedAt, CreatedAt, UpdatedAt                               int64
 	// The task the spawn creates with its member (T-2): TaskSubject "" = none.
 	TaskSubject, TaskDescription, TaskDoneJSON string
+	// LeadHostID is the lead host of a spawn FORWARDED to this host ("" = a local spawn); LeadJSON is that lead's tuple
+	// and the team's name (remoteSpawnLead), what the remote member's row is written from. OriginSessionID is then the
+	// lead's session on the other host, TeamID the team of that host.
+	LeadHostID, LeadJSON string
 }
 
 func (r *spawnRow) dest() []any {
 	return []any{&r.ID, &r.TeamID, &r.HostID, &r.OriginSessionID, &r.Cwd, &r.Title, &r.Model, &r.Effort,
 		&r.TmuxName, &r.TmuxID, &r.TmuxInstance, &r.PaneID, &r.Step, &r.State, &r.Reason, &r.SessionID,
-		&r.LaunchedAt, &r.CreatedAt, &r.UpdatedAt, &r.TaskSubject, &r.TaskDescription, &r.TaskDoneJSON}
+		&r.LaunchedAt, &r.CreatedAt, &r.UpdatedAt, &r.TaskSubject, &r.TaskDescription, &r.TaskDoneJSON, &r.LeadHostID, &r.LeadJSON}
 }
 
 // spawnStepRank orders the steps. A running row at rank n holds the
@@ -146,10 +151,10 @@ func insertSpawnOp(q dbtx, op spawnRow, hash string) (stored spawnRow, storedHas
 		return fail(err)
 	}
 	res, err := q.Exec(`INSERT INTO spawn_ops (request_hash, `+spawnCols+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 		hash, op.ID, op.TeamID, op.HostID, op.OriginSessionID, op.Cwd, op.Title, op.Model, op.Effort, op.TmuxName,
 		op.TmuxID, op.TmuxInstance, op.PaneID, op.Step, string(op.State), op.Reason, op.SessionID,
-		op.LaunchedAt, op.CreatedAt, op.UpdatedAt, op.TaskSubject, op.TaskDescription, op.TaskDoneJSON)
+		op.LaunchedAt, op.CreatedAt, op.UpdatedAt, op.TaskSubject, op.TaskDescription, op.TaskDoneJSON, op.LeadHostID, op.LeadJSON)
 	if inserted, err = oneRow(res, err, "insert"); err == nil {
 		err = q.QueryRow(`SELECT request_hash, `+spawnCols+` FROM spawn_ops WHERE id = ?`, op.ID).
 			Scan(append([]any{&storedHash}, stored.dest()...)...)
@@ -309,12 +314,70 @@ func (s *Store) AdvanceSpawnOp(id, fromStep string, upd spawnUpdate) (bool, erro
 // keeping the step it reached. won is false for an unknown or already
 // ended op.
 func (s *Store) FailSpawnOp(id, reason string, at int64) (bool, error) {
+	return s.failSpawnOp(id, "", reason, at)
+}
+
+// failSpawnOp ends a running op failed (at step when given). An op forwarded from a lead host writes its `spawn_failed`
+// fact in the same transaction, so the lead host is told exactly once whatever dies afterwards.
+func (s *Store) failSpawnOp(id, atStep, reason string, at int64) (bool, error) {
 	if !spawnReasons[reason] {
 		return false, fmt.Errorf("fail spawn op %s: unknown reason %q", id, reason)
 	}
-	res, err := s.db.Exec(`UPDATE spawn_ops SET state = 'failed', reason = ?, updated_at = ?
-		WHERE id = ? AND state = 'running'`, reason, at, id)
-	return oneRow(res, err, "fail spawn op "+id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("fail spawn op %s: %w", id, err)
+	}
+	defer tx.Rollback()
+	q, args := `UPDATE spawn_ops SET state = 'failed', reason = ?, updated_at = ? WHERE id = ? AND state = 'running'`, []any{reason, at, id}
+	if atStep != "" {
+		q, args = q+` AND step = ?`, append(args, atStep)
+	}
+	res, err := tx.Exec(q, args...)
+	won, err := oneRow(res, err, "fail spawn op "+id)
+	if err != nil || !won {
+		return false, err
+	}
+	var leadHost, teamID string
+	if err := tx.QueryRow(`SELECT lead_host_id, team_id FROM spawn_ops WHERE id = ?`, id).Scan(&leadHost, &teamID); err != nil {
+		return false, fmt.Errorf("fail spawn op %s: %w", id, err)
+	}
+	if leadHost != "" {
+		if err := writeFactIn(tx, team.TeamFact{ID: uuid.NewString(), Kind: team.FactSpawnFailed, ToHostID: leadHost, TeamID: teamID, MK: id, Reason: reason}, at); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("fail spawn op %s: %w", id, err)
+	}
+	return true, nil
+}
+
+// FinishRemoteSpawn is registered → done for an op forwarded from a lead host: the remote member's row and the
+// `registered` fact are written in the transaction that closes the op, a compare-and-set on the step registered (won
+// false: another runner, or the op ended, got there first and nothing was written).
+func (s *Store) FinishRemoteSpawn(id string, mem remoteMemberRow, fact team.TeamFact, at int64) (bool, error) {
+	fail := func(err error) (bool, error) { return false, fmt.Errorf("finish remote spawn %s: %w", id, err) }
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE spawn_ops SET step = ?, state = 'done', updated_at = ?
+		WHERE id = ? AND step = ? AND state = 'running' AND lead_host_id <> ''`, team.StepRegistered, at, id, team.StepRegistered)
+	won, err := oneRow(res, err, "close forwarded spawn op")
+	if err != nil || !won {
+		return false, err
+	}
+	if err := insertRemoteMemberIn(tx, mem); err != nil {
+		return fail(err)
+	}
+	if err := writeFactIn(tx, fact, at); err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(err)
+	}
+	return true, nil
 }
 
 // FailSpawnOpAtStep is FailSpawnOp only while the op is still running at
@@ -322,12 +385,7 @@ func (s *Store) FailSpawnOp(id, reason string, at int64) (bool, error) {
 // of the two exactly one wins (P4-5 re-review: the timeout decides before it
 // kills, against the registration).
 func (s *Store) FailSpawnOpAtStep(id, step, reason string, at int64) (bool, error) {
-	if !spawnReasons[reason] {
-		return false, fmt.Errorf("fail spawn op %s: unknown reason %q", id, reason)
-	}
-	res, err := s.db.Exec(`UPDATE spawn_ops SET state = 'failed', reason = ?, updated_at = ?
-		WHERE id = ? AND state = 'running' AND step = ?`, reason, at, id, step)
-	return oneRow(res, err, "fail spawn op "+id)
+	return s.failSpawnOp(id, step, reason, at)
 }
 
 // oneRow reports whether a guarded single-row UPDATE changed its row.

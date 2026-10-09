@@ -43,7 +43,7 @@ func (m *Module) spawnCreate(op spawnRow) bool {
 		m.failSpawn(op.ID, team.SpawnReasonNameTaken)
 		return false
 	}
-	cwd, ok := m.underTeamRoots(op.TeamID, op.Cwd)
+	cwd, ok := m.underOpRoots(op, op.Cwd)
 	if !ok {
 		m.logf("[team] spawn %s: cwd %s is no longer under the team's roots", op.ID, op.Cwd)
 		m.failSpawn(op.ID, team.SpawnReasonCreateFailed)
@@ -132,7 +132,7 @@ func (m *Module) checkLaunchPane(op spawnRow) error {
 	case !ownsPane(op, id):
 		return fmt.Errorf("pane %s is no longer this op's: %+v", op.PaneID, id)
 	}
-	if _, ok := m.underTeamRoots(op.TeamID, id.Cwd); !ok {
+	if _, ok := m.underOpRoots(op, id.Cwd); !ok {
 		return fmt.Errorf("pane %s is in %q, outside the team's roots", op.PaneID, id.Cwd)
 	}
 	return nil
