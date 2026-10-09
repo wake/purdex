@@ -43,21 +43,9 @@ type AgentEvent struct {
 	ErrorString string // detail.error
 }
 
-// eventAliases: cc broadcasts PdxXxx; the notification rules key on the legacy names (normalizeEventName).
-var eventAliases = map[string]string{
-	"PdxNotification":      "Notification",
-	"PdxPermissionRequest": "PermissionRequest",
-	"PdxStop":              "Stop",
-	"PdxStopFailure":       "StopFailure",
-}
-
-// NormalizeEventName collapses the four user-facing notification events to their legacy form.
-func NormalizeEventName(raw string) string {
-	if n, ok := eventAliases[raw]; ok {
-		return n
-	}
-	return raw
-}
+// NormalizeEventName collapses the four user-facing notification events to their legacy form (one definition, shared
+// with the content builder).
+func NormalizeEventName(raw string) string { return push.NormalizeEventName(raw) }
 
 // Gate holds the two pieces of state the rules need: the last BroadcastTs seen per session code (rule 0) and the error
 // debounce (rule 7). Both are in memory; a daemon restart forgets them.

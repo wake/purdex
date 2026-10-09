@@ -12,7 +12,9 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -281,5 +283,32 @@ func TestNotify_ABlockedLogTargetDoesNotHoldUpTheEmitter(t *testing.T) {
 	if grew := runtime.NumGoroutine() - before; grew > 5 {
 		openGate()
 		t.Fatalf("%d goroutines accumulated behind a blocked log target", grew)
+	}
+}
+
+// The push module reads the feed from the service registry, as it reads the team module's approval feed. Mutation
+// gate: drop the Register in Init → red.
+func TestModuleInit_RegistersTheNotifyFeed(t *testing.T) {
+	m := newTestModule(t)
+	fake := tmux.NewFakeExecutor()
+	m.tmux = fake
+	c := core.New(core.CoreDeps{Config: &config.Config{}, Tmux: fake, Registry: core.NewServiceRegistry()})
+	c.Registry.Register(session.RegistryKey, &fakeFastSessionProvider{})
+	if err := m.Init(c); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	svc, ok := c.Registry.Get(NotifyFeedKey)
+	if !ok {
+		t.Fatal("NotifyFeedKey not registered")
+	}
+	feed, ok := svc.(NotifyFeed)
+	if !ok {
+		t.Fatalf("registered service is not a NotifyFeed: %T", svc)
+	}
+	got := make(chan NotifyEvent, 1)
+	defer feed.SubscribeNotify(func(ev NotifyEvent) { got <- ev })()
+	m.notifies.publish(NotifyEvent{SessionCode: "c"})
+	if ev := wantNotify(t, got); ev.SessionCode != "c" {
+		t.Fatalf("event = %+v", ev)
 	}
 }

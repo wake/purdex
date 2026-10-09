@@ -95,6 +95,16 @@ func (h *notifyHub) publish(ev NotifyEvent) {
 // Dropped is how many (subscriber, event) deliveries were lost to a full queue.
 func (h *notifyHub) Dropped() int64 { return h.dropped.Load() }
 
+// NotifyFeedKey is the service-registry key under which the agent module publishes its NotifyFeed (the push module
+// reads it; agent does not import push).
+const NotifyFeedKey = "agent.notify-feed"
+
+// NotifyFeed is the narrow view of the agent module a consumer of live tmux `hook` frames gets: subscribe, and nothing
+// else.
+type NotifyFeed interface {
+	SubscribeNotify(fn func(NotifyEvent)) (unsubscribe func())
+}
+
 // SubscribeNotify registers fn for every live tmux `hook` frame, under notifyHub's delivery contract. fn runs on
 // the subscriber's own goroutine: never under m.mu, emit.mu or modMu.
 func (m *Module) SubscribeNotify(fn func(NotifyEvent)) func() {
