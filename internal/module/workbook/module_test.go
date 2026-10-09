@@ -8,6 +8,7 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent"
 )
 
 func TestModule_NameAndDependencies(t *testing.T) {
@@ -116,6 +117,47 @@ func TestModule_StartWritesThePromptFiles(t *testing.T) {
 	}
 	if st := m.Status(); st["ready"] != true {
 		t.Fatalf("status = %v", st)
+	}
+}
+
+type fakeSessions struct {
+	fn    func(agent.TurnEndEvent)
+	unsub int
+}
+
+func (f *fakeSessions) SubscribeTurnEnd(fn func(agent.TurnEndEvent)) func() {
+	f.fn = fn
+	return func() { f.unsub++ }
+}
+
+// Start subscribes the engine to the agent module's turn ends (a hook-only text is enough: no transcript reader is
+// registered), and Stop unsubscribes before the store closes. With no mod capable the turn is skipped:no_mod.
+// Mutation gate: drop the subscribe, or the unsubscribe, → red.
+func TestModule_StartSubscribesTheEngineAndStopLetsGo(t *testing.T) {
+	dir := t.TempDir()
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: dir}})
+	sessions := &fakeSessions{}
+	c.Registry.Register(agent.TerminalSessionsKey, sessions)
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sessions.fn == nil || m.Jobs() == nil {
+		t.Fatal("not subscribed")
+	}
+	sessions.fn(agent.TurnEndEvent{SessionID: "s1", Text: "做完了", At: 5000, Seq: 1})
+	rows, err := m.live().Conversation("s1", 10, 0)
+	if err != nil || len(rows) != 1 || rows[0].State != StateSkipped || rows[0].Reason != ReasonNoMod {
+		t.Fatalf("rows = %+v err=%v", rows, err)
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sessions.unsub != 1 || m.Jobs() != nil {
+		t.Fatalf("unsub = %d, jobs = %v", sessions.unsub, m.Jobs())
 	}
 }
 

@@ -13,7 +13,10 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/wake/purdex/internal/convturns"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent"
+	"github.com/wake/purdex/internal/team"
 )
 
 // Module is the workbook module.
@@ -25,6 +28,10 @@ type Module struct {
 	ready   bool
 	initErr string
 	prompts PromptFiles // where Start wrote the prompts
+
+	engine       *Engine // the subscriber and the job queue; nil until Start
+	unsubTurnEnd func()
+	stopReaper   context.CancelFunc
 
 	// broadcast sends a host event (type, JSON-string value); the core's event hub, replaced in tests.
 	broadcast func(eventType, value string)
@@ -110,7 +117,57 @@ func (m *Module) Start(context.Context) error {
 	m.mu.Lock()
 	m.prompts = files
 	m.mu.Unlock()
+	m.startEngine(st)
 	return nil
+}
+
+// turnEndSubscriber is the part of the agent module's TerminalSessions the engine needs.
+type turnEndSubscriber interface {
+	SubscribeTurnEnd(fn func(agent.TurnEndEvent)) (unsubscribe func())
+}
+
+// startEngine builds the engine from whatever the registry offers (a daemon without a module simply lacks that part) and
+// subscribes it to the turn ends. Called from Start, after every Init.
+func (m *Module) startEngine(st *Store) {
+	d := Deps{Store: st}
+	m.core.CfgMu.RLock()
+	d.HostID = m.core.Cfg.HostID
+	m.core.CfgMu.RUnlock()
+	if reg := m.core.Registry; reg != nil {
+		if svc, ok := reg.Get(convturns.Key); ok {
+			d.Turns, _ = svc.(convturns.Reader)
+		}
+		if svc, ok := reg.Get(team.LineageRootKey); ok {
+			d.Lineage, _ = svc.(team.LineageRootResolver)
+		}
+		if svc, ok := reg.Get(team.SeatReaderKey); ok {
+			d.Seats, _ = svc.(team.SeatReader)
+		}
+	}
+	eng := NewEngine(d)
+	ctx, cancel := context.WithCancel(context.Background())
+	go eng.RunReaper(ctx)
+	var unsub func()
+	if m.core.Registry != nil {
+		if svc, ok := m.core.Registry.Get(agent.TerminalSessionsKey); ok {
+			if s, ok := svc.(turnEndSubscriber); ok {
+				unsub = s.SubscribeTurnEnd(eng.OnTurnEnd)
+			}
+		}
+	}
+	m.mu.Lock()
+	m.engine, m.unsubTurnEnd, m.stopReaper = eng, unsub, cancel
+	m.mu.Unlock()
+}
+
+// Jobs is what the mod socket's workbook routes call; nil while the module is off.
+func (m *Module) Jobs() JobSource {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.engine == nil {
+		return nil
+	}
+	return m.engine
 }
 
 // disable turns the module off after a failure that happened once it was running: not ready, the reason recorded, the
@@ -129,9 +186,19 @@ func (m *Module) disable(err error) {
 // Stop releases the store. Nothing writes after it returns.
 func (m *Module) Stop(context.Context) error {
 	m.mu.Lock()
-	st := m.store
-	m.store, m.ready = nil, false
+	st, eng, unsub, stopReaper := m.store, m.engine, m.unsubTurnEnd, m.stopReaper
+	m.store, m.ready, m.engine, m.unsubTurnEnd, m.stopReaper = nil, false, nil, nil, nil
 	m.mu.Unlock()
+	// the engine ends its entries while the store is still open
+	if unsub != nil {
+		unsub()
+	}
+	if stopReaper != nil {
+		stopReaper()
+	}
+	if eng != nil {
+		eng.Stop()
+	}
 	if st == nil {
 		return nil
 	}
