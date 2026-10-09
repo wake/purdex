@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 )
@@ -74,6 +75,12 @@ func (r *DeviceRequest) Validate() error {
 	if err := printable("host_label", r.HostLabel, maxHostLabelRunes); err != nil {
 		return err
 	}
+	// Both come back in responses: neither may carry (a long enough slice of) the token itself.
+	for _, v := range []string{r.DeviceName, r.HostLabel} {
+		if containsTokenSlice(lower(v), r.Token) {
+			return errors.New("device_name / host_label: must not contain the token")
+		}
+	}
 	if r.Locale != "zh-TW" && r.Locale != "en" {
 		r.Locale = "zh-TW"
 	}
@@ -106,6 +113,22 @@ func (p *Prefs) validate() error {
 		}
 	}
 	return nil
+}
+
+// containsTokenSlice reports whether v holds 16 or more consecutive characters of token.
+func containsTokenSlice(v, token string) bool {
+	const n = 16
+	for i := 0; i+n <= len(token); i++ {
+		if strings.Contains(v, token[i:i+n]) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidDeviceID reports whether s has the shape DeviceID produces: 16 lowercase hex characters.
+func ValidDeviceID(s string) bool {
+	return len(s) == 16 && isHex(s) && s == lower(s)
 }
 
 func isHex(s string) bool {

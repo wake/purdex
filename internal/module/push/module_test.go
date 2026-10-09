@@ -302,3 +302,45 @@ func TestRestart_RebuildsTheCacheFromTheStore(t *testing.T) {
 		t.Fatalf("device lost across restart: %s", rec.Body)
 	}
 }
+
+// The caller controls device_name, host_label and the DELETE path; none of them can make the module echo the token.
+func TestTheTokenCannotBeSmuggledBackThroughAnotherField(t *testing.T) {
+	e := newEnv(t)
+	for name, mut := range map[string]func(*push.DeviceRequest){
+		"device_name":                  func(r *push.DeviceRequest) { r.DeviceName = tokA[:60] },
+		"host_label":                   func(r *push.DeviceRequest) { r.HostLabel = tokA[:30] },
+		"name holding the whole token": func(r *push.DeviceRequest) { r.DeviceName = strings.ToUpper(tokA) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := e.do("POST", "/api/push/devices", reqBody(tokA, mut))
+			if rec.Code != 400 {
+				t.Fatalf("code %d: %s", rec.Code, rec.Body)
+			}
+		})
+	}
+	// DELETE with the token as the "id": answered like any unknown id, and neither the body nor the log has it
+	rec := e.do("DELETE", "/api/push/devices/"+tokA, "")
+	if rec.Code != 204 {
+		t.Fatalf("delete by token: %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), tokA) || strings.Contains(e.logs.String(), tokA) {
+		t.Fatal("the token leaked through the DELETE path")
+	}
+	// a registered device's name is never logged raw
+	e.do("POST", "/api/push/devices", reqBody(tokA, func(r *push.DeviceRequest) { r.DeviceName = "NAME-MARKER" }))
+	if strings.Contains(e.logs.String(), "NAME-MARKER") {
+		t.Fatal("the device name is in the log")
+	}
+}
+
+// encoding/json would turn an invalid UTF-8 byte into U+FFFD and let it through; the module refuses the raw body.
+func TestPost_InvalidUTF8IsRefusedNotRewritten(t *testing.T) {
+	e := newEnv(t)
+	body := strings.Replace(reqBody(tokA, nil), `"iPhone 8"`, "\"iPhone \xff8\"", 1)
+	if rec := e.do("POST", "/api/push/devices", body); rec.Code != 400 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body)
+	}
+	if list, _ := e.mod.store.List(); len(list) != 0 {
+		t.Fatalf("stored %d rows", len(list))
+	}
+}

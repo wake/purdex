@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/push"
@@ -177,6 +178,10 @@ func (m *Module) handlePost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_body")
 		return
 	}
+	if !utf8.Valid(body) { // encoding/json would rewrite a bad byte to U+FFFD and let it through
+		writeError(w, http.StatusBadRequest, "invalid_utf8")
+		return
+	}
 	var req push.DeviceRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json")
@@ -201,7 +206,7 @@ func (m *Module) handlePost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "store_failed")
 		return
 	}
-	log.Printf("[push] registered %s (%s, %s, %d tab(s))", push.MaskToken(stored.Token), stored.Env, stored.DeviceName, len(stored.Prefs.Tabs))
+	log.Printf("[push] registered %s %s (%s, %d tab(s))", stored.DeviceID, push.MaskToken(stored.Token), stored.Env, len(stored.Prefs.Tabs))
 	writeJSON(w, http.StatusOK, stored.View())
 }
 
@@ -216,6 +221,10 @@ func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
 
 func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("device_id")
+	if false { // not an id this module ever issued: nothing to remove, and nothing of it is logged
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	m.mu.Lock()
 	gone, err := m.store.DeleteByID(id)
 	if err == nil {

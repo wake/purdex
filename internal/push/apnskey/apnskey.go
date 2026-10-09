@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -76,11 +77,16 @@ func Load(dir string) (Key, error) {
 }
 
 func readThrough(root *os.Root, name string) ([]byte, error) {
-	f, err := root.Open(name)
+	// O_NONBLOCK: opening a FIFO must not wait for a writer (Init runs while the daemon boots); what was opened must be
+	// a regular file, so a FIFO, a device or a directory is refused before a single byte is read.
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return nil, errors.New("not a regular file")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, maxFileSize+1))
 	if err != nil {
 		return nil, err

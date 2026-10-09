@@ -11,7 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // A throwaway key for every test: nothing here reads a real key directory.
@@ -203,5 +205,44 @@ func TestNoPrintingExposesKeyMaterialOrFileContent(t *testing.T) {
 		t.Fatal("want an error")
 	} else if strings.Contains(err.Error(), secret) { // not even the file NAME it was told to open is echoed
 		t.Fatalf("error text carries file content: %v", err)
+	}
+}
+
+// A FIFO (or any non-regular file) in place of config.env or the key must fail at once, not block the daemon's boot.
+func TestLoad_ASpecialFileFailsFastInsteadOfBlocking(t *testing.T) {
+	for name, build := range map[string]func(dir string){
+		"config.env is a fifo": func(dir string) {
+			if err := syscall.Mkfifo(filepath.Join(dir, "config.env"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			write(t, dir, "AuthKey_KEYID12345.p8", pemOf(t, p256(t)))
+		},
+		"key file is a fifo": func(dir string) {
+			write(t, dir, "config.env", []byte(goodEnv))
+			if err := syscall.Mkfifo(filepath.Join(dir, "AuthKey_KEYID12345.p8"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"key file is a directory": func(dir string) {
+			write(t, dir, "config.env", []byte(goodEnv))
+			if err := os.Mkdir(filepath.Join(dir, "AuthKey_KEYID12345.p8"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			build(dir)
+			done := make(chan error, 1)
+			go func() { _, err := Load(dir); done <- err }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("want an error")
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("Load blocked on a special file")
+			}
+		})
 	}
 }
