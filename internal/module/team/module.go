@@ -418,6 +418,9 @@ func (m *Module) Init(c *core.Core) error {
 	m.relayDir = filepath.Join(c.Cfg.DataDir, team.RelayDir)
 	// The peers inventory reads the relay lineage through this (spec §8.4).
 	c.Registry.Register(team.LineageReaderKey, store)
+	// The session workbook reads one chain root and one team seat at a time.
+	c.Registry.Register(team.LineageRootKey, store)
+	c.Registry.Register(team.SeatReaderKey, store)
 	c.Registry.Register(team.ApprovalFeedKey, team.ApprovalFeed(m))
 	c.Registry.Register(team.ApprovalEventsKey, team.ApprovalEvents(m))
 	return nil
