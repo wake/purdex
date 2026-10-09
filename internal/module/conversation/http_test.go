@@ -124,7 +124,7 @@ func newEnv(t *testing.T) *env {
 	}
 	owners := &fakeOwners{}
 	c := core.New(core.CoreDeps{Config: &config.Config{HostID: "h1:abc"}})
-	m := &Module{core: c, maxBody: maxBody,
+	m := &Module{core: c, maxBody: maxBody, subSem: make(chan struct{}, maxSubagentReads),
 		cache:    convfeed.NewCache(convfeed.CacheOptions{}),
 		resolver: &convfeed.Resolver{Home: home, Owners: owners}}
 	mux := http.NewServeMux()
@@ -544,5 +544,138 @@ func TestModule_StartWorksAfterATimedOutStop(t *testing.T) {
 	}
 	if err := e.mod.Stop(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ---- subagents ----
+
+const childID = "a7a639d97d57c6f43"
+
+func (e *env) subagentFile(id, content string) string {
+	e.t.Helper()
+	p := filepath.Join(e.home, ".claude", "projects", "-work-x", sid, "subagents", "agent-"+id+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	return p
+}
+
+func childFixture(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../../../testdata/conversation/v1/cc-transcript/subagent/children/" + childID + ".input.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+type subagentResp struct {
+	Items   []json.RawMessage `json:"items"`
+	Partial bool              `json:"partial"`
+}
+
+func TestSubagent_ItemsOfTheChildFile(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	e.subagentFile(childID, childFixture(t))
+	w := e.get("/api/conversations/claude/" + sid + "/subagents/" + childID)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var got subagentResp
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("../../../testdata/conversation/v1/cc-transcript/subagent/children/" + childID + ".expected.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) == 0 || len(got.Items) != len(want.Items) || got.Partial {
+		t.Fatalf("items %d (want %d) partial %v", len(got.Items), len(want.Items), got.Partial)
+	}
+}
+
+func TestSubagent_ValidationBeforeAnyAccessAndIdLengths(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	long128 := "a" + strings.Repeat("b", 127)
+	e.subagentFile(long128, "")
+	for _, c := range []struct {
+		url    string
+		status int
+		code   string
+	}{
+		{"/api/conversations/codex/" + sid + "/subagents/" + childID, 404, "provider_unsupported"},
+		{"/api/conversations/claude/nope/subagents/" + childID, 400, "bad_session_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/" + long128 + "c", 400, "bad_agent_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/-a", 400, "bad_agent_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/a.b", 400, "bad_agent_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/..%2F..%2Fx", 400, "bad_agent_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/" + childID, 404, "not_found"}, // no such file
+	} {
+		if got := errCode(t, e.get(c.url), c.status); got != c.code {
+			t.Errorf("%s: code %q, want %q", c.url, got, c.code)
+		}
+	}
+	if e.owners.calls != 1 { // only the last, valid request got as far as the resolver
+		t.Fatalf("%d owner lookups: invalid requests must not reach the resolver", e.owners.calls)
+	}
+	if w := e.get("/api/conversations/claude/" + sid + "/subagents/" + long128); w.Code != 200 {
+		t.Fatalf("a 128-character id must be accepted: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The agent file is opened by the descriptor-relative walk: a symlinked subagents directory is not followed.
+func TestSubagent_SymlinkedDirectoryIsNotFollowed(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "agent-"+childID+".jsonl"), []byte(childFixture(t)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(e.home, ".claude", "projects", "-work-x", sid)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "subagents")); err != nil {
+		t.Fatal(err)
+	}
+	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"/subagents/"+childID), 404); got != "not_found" {
+		t.Fatalf("code %q", got)
+	}
+}
+
+func TestSubagent_AnswerIsCappedAndMarkedPartial(t *testing.T) {
+	e := newEnv(t)
+	e.mod.maxBody = 1000
+	e.transcript(idleTurns(1))
+	e.subagentFile(childID, childFixture(t))
+	w := e.get("/api/conversations/claude/" + sid + "/subagents/" + childID)
+	var got subagentResp
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || w.Body.Len() > e.mod.maxBody || !got.Partial {
+		t.Fatalf("status %d body %d partial %v: the answer must fit the cap and say it is partial", w.Code, w.Body.Len(), got.Partial)
+	}
+}
+
+func TestSubagent_BusyWhenTooManyReads(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	for i := 0; i < maxSubagentReads; i++ {
+		e.mod.subSem <- struct{}{}
+	}
+	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"/subagents/"+childID), 503); got != "busy" {
+		t.Fatalf("code %q", got)
 	}
 }

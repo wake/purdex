@@ -38,6 +38,7 @@ type Module struct {
 	cache    *convfeed.Cache
 	resolver *convfeed.Resolver
 	maxBody  int // tests lower it
+	subSem   chan struct{}
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -45,7 +46,7 @@ type Module struct {
 }
 
 // New returns the module.
-func New() *Module { return &Module{maxBody: maxBody} }
+func New() *Module { return &Module{maxBody: maxBody, subSem: make(chan struct{}, maxSubagentReads)} }
 
 // WithIndex sets the conversation index the resolver consults after the live pane (nil: the bounded lookup only).
 func (m *Module) WithIndex(idx convfeed.IndexLookup) *Module {
@@ -77,6 +78,7 @@ func (m *Module) Init(c *core.Core) error {
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/conversations/{provider}/{session_id}", m.handleSnapshot)
+	mux.HandleFunc("GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}", m.handleSubagent)
 }
 
 // Start runs the cache sweeper; a second Start while it runs does nothing.

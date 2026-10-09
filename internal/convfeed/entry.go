@@ -33,6 +33,8 @@ type Source struct {
 	Status  string
 	Backend string
 	Closer  io.Closer
+	// Path is the resolved transcript path (under the symlink-resolved projects root); the Resolver sets it.
+	Path string
 }
 
 // RefreshResult says what a Refresh did to the model.

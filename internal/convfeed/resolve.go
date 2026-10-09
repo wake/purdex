@@ -89,13 +89,13 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 		}
 	}
 
-	finish := func(f *os.File) (Source, error) {
+	finish := func(f *os.File, path string) (Source, error) {
 		identity, ierr := identityOf(f)
 		if ierr != nil {
 			f.Close()
 			return Source{}, ErrNotFound
 		}
-		s := Source{File: osFile{f}, Identity: identity, Closer: f, Status: status}
+		s := Source{File: osFile{f}, Identity: identity, Closer: f, Status: status, Path: path}
 		if owner != nil {
 			s.Live, s.Backend = true, "terminal"
 		}
@@ -103,23 +103,23 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 	}
 
 	if owner != nil && owner.TranscriptPath != "" {
-		if f := r.openCandidate(root, owner.TranscriptPath); f != nil {
-			return finish(f)
+		if f, p := r.openCandidate(root, owner.TranscriptPath); f != nil {
+			return finish(f, p)
 		}
 	}
 	if r.Index != nil {
 		p, ok, ierr := r.Index.TranscriptPath(ctx, sessionID)
 		if ierr == nil && ok && p != "" {
-			if f := r.openCandidate(root, p); f != nil {
-				return finish(f)
+			if f, rp := r.openCandidate(root, p); f != nil {
+				return finish(f, rp)
 			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return Source{}, err
 	}
-	if f, _ := r.lookup(ctx, root, sessionID); f != nil {
-		return finish(f)
+	if f, p, _ := r.lookup(ctx, root, sessionID); f != nil {
+		return finish(f, p)
 	}
 	if err := ctx.Err(); err != nil { // the request ended during the scan: that is not "no such conversation"
 		return Source{}, err
@@ -130,30 +130,30 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 // openCandidate checks a path that came from outside (a hook, the index): it must exist, resolve to a regular .jsonl
 // file under the symlink-resolved root; then it is opened by the descriptor-relative walk, so a directory swapped for
 // a symlink after the check is refused at that component. nil when the candidate is not usable.
-func (r *Resolver) openCandidate(root, path string) *os.File {
+func (r *Resolver) openCandidate(root, path string) (*os.File, string) {
 	path = filepath.Clean(path)
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) || filepath.Ext(resolved) != ".jsonl" {
-		return nil
+		return nil, ""
 	}
 	if r.afterCheck != nil {
 		r.afterCheck()
 	}
 	f, err := transcriptpath.Open(root, resolved)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
-	return f
+	return f, resolved
 }
 
 // lookup searches <slug>/<session_id>.jsonl across the root's slug directories (depth 1 only), bounded by directory
 // count, time and the context; unreadable directories are skipped. Only directories count toward the bound (files and
 // sockets in the root cost nothing). It also returns how many directories it opened (tests check the bound; the
 // directory order is the file system's).
-func (r *Resolver) lookup(ctx context.Context, root, sessionID string) (*os.File, int) {
+func (r *Resolver) lookup(ctx context.Context, root, sessionID string) (*os.File, string, int) {
 	maxDirs, limit := r.MaxLookupDirs, r.LookupTime
 	if maxDirs <= 0 {
 		maxDirs = DefaultLookupDirs
@@ -165,7 +165,7 @@ func (r *Resolver) lookup(ctx context.Context, root, sessionID string) (*os.File
 	defer cancel()
 	d, err := os.Open(root)
 	if err != nil {
-		return nil, 0
+		return nil, "", 0
 	}
 	defer d.Close()
 	visited := 0
@@ -176,24 +176,46 @@ func (r *Resolver) lookup(ctx context.Context, root, sessionID string) (*os.File
 				continue
 			}
 			if ctx.Err() != nil || visited >= maxDirs {
-				return nil, visited
+				return nil, "", visited
 			}
 			visited++
 			if r.onDir != nil {
 				r.onDir()
 			}
 			if ctx.Err() != nil { // cancelled between the check above and the open
-				return nil, visited
+				return nil, "", visited
 			}
-			f, oerr := transcriptpath.Open(root, filepath.Join(root, de.Name(), sessionID+".jsonl"))
+			p := filepath.Join(root, de.Name(), sessionID+".jsonl")
+			f, oerr := transcriptpath.Open(root, p)
 			if oerr == nil {
-				return f, visited
+				return f, p, visited
 			}
 		}
 		if err != nil { // io.EOF, or an unreadable directory: nothing more to visit
-			return nil, visited
+			return nil, "", visited
 		}
 	}
+}
+
+// OpenSubagent opens `<session_id>/subagents/agent-<agent_id>.jsonl` next to the session's transcript, by the same
+// descriptor-relative walk. agentID must already have passed ccnorm.ValidAgentID. Any failure to find or safely open
+// the file is ErrNotFound (never a path).
+func (r *Resolver) OpenSubagent(ctx context.Context, sessionID, agentID string) (*os.File, error) {
+	src, err := r.Resolve(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	src.Closer.Close() // only the path is wanted; the file is opened below by the same walk
+	root, err := transcriptpath.Root(r.Home)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	p := filepath.Join(filepath.Dir(src.Path), sessionID, "subagents", "agent-"+agentID+".jsonl")
+	f, err := transcriptpath.Open(root, p)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	return f, nil
 }
 
 // osFile adapts an *os.File to File.

@@ -244,7 +244,7 @@ func TestResolve_LookupIsBoundedByDirectoryCount(t *testing.T) {
 	}
 	look := func(max int) (*os.File, int) {
 		r := &Resolver{Home: e.home, MaxLookupDirs: max}
-		f, n := r.lookup(context.Background(), e.root, sidR)
+		f, _, n := r.lookup(context.Background(), e.root, sidR)
 		if f != nil {
 			t.Cleanup(func() { f.Close() })
 		}

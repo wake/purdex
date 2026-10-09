@@ -268,3 +268,15 @@ func TestRows_SidechainStillSkippedInAMainFile(t *testing.T) {
 		t.Errorf("a sidechain row entered a main file: %s", dump(n.Conversation()))
 	}
 }
+
+func TestValidAgentID(t *testing.T) {
+	long128 := "a" + strings.Repeat("b", 127)
+	for id, want := range map[string]bool{
+		"a7a639d97d57c6f43": true, "A-b_c": true, long128: true, long128 + "c": false,
+		"": false, "-a": false, "_a": false, "a/b": false, "a.b": false, "..": false, "a b": false, "é": false,
+	} {
+		if got := ValidAgentID(id); got != want {
+			t.Errorf("ValidAgentID(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
