@@ -22,6 +22,7 @@ type fakeMemberRelayDaemon struct {
 	pollN    int
 	verbs    []string // "<verb> <body>"
 	verbResp func(verb string) (int, any)
+	onPoll   func() // called at each long-poll (tests cancel the caller there)
 }
 
 func (d *fakeMemberRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +50,9 @@ func (d *fakeMemberRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request
 			i = len(d.polls) - 1
 		}
 		d.pollN++
+		if d.onPoll != nil {
+			d.onPoll()
+		}
 		json.NewEncoder(w).Encode(d.polls[i])
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/relay/ops/"):
 		verb := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
@@ -271,5 +275,23 @@ func TestRelayCmd_SeenPrintsAndMaps(t *testing.T) {
 	}}
 	if code, _, errs := driveMemberRelay(t, d2, "", "seen", "op-1", "--session", "other"); code != ExitRefused || !strings.HasSuffix(strings.TrimSpace(errs), team.ErrNotYourOp) {
 		t.Fatalf("not_your_op: %d %q", code, errs)
+	}
+}
+
+// An interrupted wait is exit 12 like a cancelled op, but it says the relay goes on and leaves the op alone.
+func TestRelayCmd_AnInterruptedWaitSaysTheRelayGoesOn(t *testing.T) {
+	d := &fakeMemberRelayDaemon{polls: []team.RelayOp{opIn(team.RelayWriting, "")}}
+	srv := httptest.NewServer(d)
+	defer srv.Close()
+	cfg := writeTestConfig(t, srv.URL, "tok")
+	old := relayGetenv
+	relayGetenv = func(string) string { return "/tmp/x.sock" }
+	defer func() { relayGetenv = old }()
+	ctx, cancel := context.WithCancel(context.Background())
+	d.onPoll = cancel // SIGINT while the first poll is out
+	var stdout, stderr bytes.Buffer
+	code := runRelayCmd(ctx, []string{"_mem001", "--wait", "5m", "--config", cfg}, &stdout, &stderr, leadClockOpt())
+	if code != ExitCancelled || !strings.Contains(stderr.String(), "接力仍在進行") {
+		t.Fatalf("code=%d err=%q", code, stderr.String())
 	}
 }

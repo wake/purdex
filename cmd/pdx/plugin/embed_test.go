@@ -596,6 +596,7 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		// P6-5: the lead decides when a member is relayed, with pdx relay <ref> in the foreground; approval is the user's.
 		"**you decide** whether and when to relay that member: `pdx relay <ref> --wait 9m`", "**in the foreground with Bash `timeout: 600000`**",
 		"`relay_unsupported`: that member has no Purdex mod", "you never approve it",
+		"**or your wait was interrupted (Ctrl-C, a Bash timeout): the relay keeps going",
 		// #2062: the relay quota and its switch are the user's.
 		"**The relay quota is the user's.**", "you never ask for more quota", "a lead sees its own in the header of `pdx team`, read-only",
 		// The team's member limit is the user's too.
