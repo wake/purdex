@@ -5,15 +5,25 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
+import { useHostStore } from './useHostStore'
 
+/** An entry is bound to the daemon it was made on: `endpoint` ("ip:port") and `daemonId` are the host's identity at the
+ *  moment of creation, so a retry never goes to whatever the same hostId points at later (lib/pending-revocation-retry.ts).
+ *  Entries written by the first shape (hostId + pairingId only) have none of the optional fields: unknown, never retried. */
 export interface PendingRevocation {
   hostId: string
   pairingId: string
+  endpoint?: string
+  daemonId?: string
+  /** Display only. */
+  hostName?: string
+  label?: string
+  createdAt?: number
 }
 
 interface State {
   items: PendingRevocation[]
-  add: (hostId: string, pairingId: string) => void
+  add: (hostId: string, pairingId: string, meta?: { label?: string }) => void
   remove: (hostId: string, pairingId: string) => void
   has: (hostId: string, pairingId: string) => boolean
 }
@@ -28,7 +38,14 @@ function heal(persisted: unknown): PendingRevocation[] {
     if (typeof v !== 'object' || v === null) continue
     const { hostId, pairingId } = v as Record<string, unknown>
     if (typeof hostId !== 'string' || hostId === '' || typeof pairingId !== 'string' || pairingId === '') continue
-    if (!out.some((o) => same(o, hostId, pairingId))) out.push({ hostId, pairingId })
+    if (out.some((o) => same(o, hostId, pairingId))) continue
+    const r = v as Record<string, unknown>
+    const item: PendingRevocation = { hostId, pairingId }
+    for (const k of ['endpoint', 'daemonId', 'hostName', 'label'] as const) {
+      if (typeof r[k] === 'string' && r[k] !== '') item[k] = r[k] as string
+    }
+    if (typeof r.createdAt === 'number' && Number.isFinite(r.createdAt)) item.createdAt = r.createdAt
+    out.push(item)
   }
   return out
 }
@@ -37,9 +54,17 @@ export const usePendingRevocationsStore = create<State>()(
   persist(
     (set, get) => ({
       items: [],
-      add: (hostId, pairingId) => {
+      add: (hostId, pairingId, meta) => {
         if (get().items.some((i) => same(i, hostId, pairingId))) return
-        set((s) => ({ items: [...s.items, { hostId, pairingId }] }))
+        const host = useHostStore.getState().hosts[hostId]
+        const item: PendingRevocation = { hostId, pairingId, createdAt: Date.now() }
+        if (host) {
+          item.endpoint = `${host.ip}:${host.port}`
+          if (host.daemonId) item.daemonId = host.daemonId
+          item.hostName = host.name
+        }
+        if (meta?.label) item.label = meta.label
+        set((s) => ({ items: [...s.items, item] }))
       },
       remove: (hostId, pairingId) => {
         if (!get().items.some((i) => same(i, hostId, pairingId))) return

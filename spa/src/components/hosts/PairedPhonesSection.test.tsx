@@ -59,11 +59,12 @@ function ok(rows: DeviceRow[]): devicesApi.ListResult {
 describe('PairedPhonesSection', () => {
   it('lists only connected hosts that have a token, in parallel', async () => {
     render(<PairedPhonesSection />)
-    await screen.findByTestId('paired-empty')
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     expect(list.mock.calls.map((c: unknown[]) => c[0]).sort()).toEqual(['a', 'b'])
   })
 
   it('shows the empty state', async () => {
+    connect('c')
     render(<PairedPhonesSection />)
     expect((await screen.findByTestId('paired-empty')).textContent).toBe('No phone is paired yet.')
   })
@@ -194,6 +195,92 @@ describe('PairedPhonesSection', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Revoke' }))
     expect(String(confirm.mock.calls[0][0])).toMatch(/noauth/)
     expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('D: with a manageable host offline the empty line is NOT shown; a different line says it cannot be confirmed', async () => {
+    render(<PairedPhonesSection />) // c (token) is disconnected
+    const line = await screen.findByTestId('paired-unconfirmed')
+    expect(line.textContent).toBe('Cannot confirm: 1 host(s) offline or not listable; paired phones may still exist on them')
+    expect(screen.queryByTestId('paired-empty')).toBeNull()
+  })
+
+  it('D: a host whose list failed also counts toward the cannot-confirm line', async () => {
+    connect('c')
+    byHost.b = { kind: 'failed', reason: 'network', status: 0 }
+    render(<PairedPhonesSection />)
+    expect((await screen.findByTestId('paired-unconfirmed')).textContent).toMatch(/1 host/)
+    expect(screen.queryByTestId('paired-empty')).toBeNull()
+  })
+
+  it('D: every token host listed ok and nothing pending: the definite empty state', async () => {
+    connect('c')
+    render(<PairedPhonesSection />)
+    await screen.findByTestId('paired-empty')
+    expect(screen.queryByTestId('paired-unconfirmed')).toBeNull()
+  })
+
+  it('C: a pending entry keeps its card after a remount with an empty live list', async () => {
+    connect('c')
+    usePendingRevocationsStore.getState().add('c', 'P9', { label: 'Wake iPhone' })
+    const first = render(<PairedPhonesSection />)
+    await screen.findByTestId('paired-phone-P9')
+    first.unmount()
+    render(<PairedPhonesSection />)
+    const card = await screen.findByTestId('paired-phone-P9')
+    expect(within(card).getByText('Wake iPhone')).toBeTruthy()
+    expect(within(card).getByTestId('paired-pending').textContent).toBe('Not yet revoked on offline')
+    expect(screen.queryByTestId('paired-empty')).toBeNull()
+    expect(screen.queryByTestId('paired-unconfirmed')).toBeNull()
+  })
+
+  it('C: a pending entry and a live row of the same pairing are one card', async () => {
+    byHost.a = ok([row({ pairing_id: 'P9' })])
+    usePendingRevocationsStore.getState().add('c', 'P9', { label: 'other label' })
+    render(<PairedPhonesSection />)
+    await screen.findByTestId('paired-phone-P9')
+    expect(screen.getAllByTestId('paired-phone-P9')).toHaveLength(1)
+  })
+
+  it('B: an entry whose host was deleted stays, says so, and only the confirmed 放棄追蹤 action removes it', async () => {
+    usePendingRevocationsStore.getState().add('c', 'P9', { label: 'Wake iPhone' })
+    useHostStore.setState((s) => {
+      const { c: _c, ...rest } = s.hosts
+      return { hosts: rest, hostOrder: s.hostOrder.filter((id) => id !== 'c') }
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<PairedPhonesSection />)
+    const card = await screen.findByTestId('paired-phone-P9')
+    expect(within(card).getByTestId('paired-attention').textContent).toMatch(/Host removed, not yet revoked \(offline\)/)
+    const stop = within(card).getByRole('button', { name: 'Stop tracking' })
+    fireEvent.click(stop)
+    expect(String(confirm.mock.calls[0][0])).toMatch(/offline/)
+    expect(usePendingRevocationsStore.getState().has('c', 'P9')).toBe(true)
+    confirm.mockReturnValue(true)
+    fireEvent.click(stop)
+    expect(usePendingRevocationsStore.getState().items).toEqual([])
+    await waitFor(() => expect(screen.queryByTestId('paired-phone-P9')).toBeNull())
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('A: an entry whose host was re-pointed is shown as needing attention and never sent', async () => {
+    connect('c')
+    usePendingRevocationsStore.getState().add('c', 'P9', { label: 'Wake iPhone' })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, c: { ...s.hosts.c, ip: '7.7.7.7' } } }))
+    render(<PairedPhonesSection />)
+    const card = await screen.findByTestId('paired-phone-P9')
+    expect(within(card).getByTestId('paired-attention').textContent).toMatch(/address of offline has changed/)
+    expect(within(card).getByRole('button', { name: 'Stop tracking' })).toBeTruthy()
+    expect(within(card).queryByTestId('paired-pending')).toBeNull()
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('legacy entry (no endpoint) is shown as needing attention with the same action', async () => {
+    connect('c')
+    usePendingRevocationsStore.setState({ items: [{ hostId: 'c', pairingId: 'P8' }] })
+    render(<PairedPhonesSection />)
+    const card = await screen.findByTestId('paired-phone-P8')
+    expect(within(card).getByTestId('paired-attention').textContent).toMatch(/older version/)
+    expect(within(card).getByRole('button', { name: 'Stop tracking' })).toBeTruthy()
   })
 
   it('shows a pending note for a host recorded earlier (e.g. by the pairing dialog)', async () => {

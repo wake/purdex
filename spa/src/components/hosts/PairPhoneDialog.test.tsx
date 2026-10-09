@@ -294,7 +294,8 @@ describe('PairPhoneDialog pending revocations', () => {
     await renderDialog()
     await clickCreate()
     fake.push({ phase: 'ready', result: readyResult, revokeFailed: ['air'], pairingId: 'pid' })
-    expect(usePendingRevocationsStore.getState().items).toEqual([{ hostId: 'air', pairingId: 'pid' }])
+    expect(usePendingRevocationsStore.getState().items).toMatchObject([{ hostId: 'air', pairingId: 'pid', label: 'iPhone' }])
+    expect(usePendingRevocationsStore.getState().items).toHaveLength(1)
   })
 
   it('records the hosts of a failed session too (the id comes with the state)', async () => {

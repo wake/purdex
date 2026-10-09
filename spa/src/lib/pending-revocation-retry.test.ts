@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as devicesApi from './devices-api'
-import { retryPendingRevocations, startPendingRevocationRetry } from './pending-revocation-retry'
+import { resolvePendingTarget, retryPendingRevocations, startPendingRevocationRetry } from './pending-revocation-retry'
 import { useHostStore } from '../stores/useHostStore'
 import { usePendingRevocationsStore } from '../stores/usePendingRevocationsStore'
 
@@ -41,11 +41,81 @@ describe('retryPendingRevocations', () => {
     expect(usePendingRevocationsStore.getState().has('a', 'P1')).toBe(true)
   })
 
-  it('drops an entry whose host no longer exists, without sending anything', async () => {
-    usePendingRevocationsStore.getState().add('gone', 'P1')
+  it('B: keeps an entry whose host no longer exists (the only record that a phone may still be valid), sending nothing', async () => {
+    usePendingRevocationsStore.setState({ items: [{ hostId: 'gone', pairingId: 'P1', endpoint: '9.9.9.9:1', createdAt: 1 }] })
     await retryPendingRevocations()
     expect(revoke).not.toHaveBeenCalled()
+    expect(usePendingRevocationsStore.getState().has('gone', 'P1')).toBe(true)
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'removed' })
+  })
+
+  it('A: a host re-pointed at another ip:port is not retried, the entry stays flagged', async () => {
+    usePendingRevocationsStore.getState().add('a', 'P1')
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, ip: '8.8.8.8' } } }))
+    await retryPendingRevocations()
+    await retryPendingRevocations('a')
+    expect(revoke).not.toHaveBeenCalled()
+    expect(usePendingRevocationsStore.getState().has('a', 'P1')).toBe(true)
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'repointed' })
+  })
+
+  it('A: same endpoint but another daemonId is also a re-point', async () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, daemonId: 'D1' } } }))
+    usePendingRevocationsStore.getState().add('a', 'P1')
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, daemonId: 'D2' } } }))
+    await retryPendingRevocations()
+    expect(revoke).not.toHaveBeenCalled()
+    expect(usePendingRevocationsStore.getState().has('a', 'P1')).toBe(true)
+  })
+
+  it('A: a changed port with the same daemonId is also a re-point', async () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, daemonId: 'D1' } } }))
+    usePendingRevocationsStore.getState().add('a', 'P1')
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, port: 2 } } }))
+    await retryPendingRevocations()
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('A: the stored host id is gone but another host has the same daemonId (re-added): retried against it, entry removed on 204', async () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, daemonId: 'D1' } } }))
+    usePendingRevocationsStore.getState().add('a', 'P1')
+    useHostStore.setState((s) => {
+      const { a: _a, ...rest } = s.hosts
+      return {
+        hosts: { ...rest, a2: { id: 'a2', name: 'a again', ip: '1.1.1.9', port: 5, order: 0, token: 'x', daemonId: 'D1' } },
+        hostOrder: ['a2', 'b'],
+      }
+    })
+    await retryPendingRevocations()
+    expect(revoke).toHaveBeenCalledTimes(1)
+    expect(revoke).toHaveBeenCalledWith('a2', 'P1')
     expect(usePendingRevocationsStore.getState().items).toEqual([])
+  })
+
+  it('A: a connect of the re-added host triggers the retry', async () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, daemonId: 'D1' } } }))
+    usePendingRevocationsStore.getState().add('a', 'P1')
+    useHostStore.setState((s) => {
+      const { a: _a, ...rest } = s.hosts
+      return { hosts: { ...rest, a2: { id: 'a2', name: 'a again', ip: '1.1.1.9', port: 5, order: 0, token: 'x', daemonId: 'D1' } } }
+    })
+    const stop = startPendingRevocationRetry()
+    useHostStore.setState({ runtime: { a2: { status: 'connected' }, b: { status: 'disconnected' } } })
+    await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith('a2', 'P1'))
+    stop()
+  })
+
+  it('legacy entry without an endpoint is never retried automatically', async () => {
+    usePendingRevocationsStore.setState({ items: [{ hostId: 'a', pairingId: 'P1' }] })
+    await retryPendingRevocations()
+    expect(revoke).not.toHaveBeenCalled()
+    expect(usePendingRevocationsStore.getState().has('a', 'P1')).toBe(true)
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'unverifiable' })
+    const stop = startPendingRevocationRetry()
+    useHostStore.setState({ runtime: { a: { status: 'connected' }, b: { status: 'disconnected' } } })
+    await Promise.resolve()
+    expect(revoke).not.toHaveBeenCalled()
+    stop()
   })
 
   it('limits to one host when asked', async () => {
@@ -55,7 +125,7 @@ describe('retryPendingRevocations', () => {
     await retryPendingRevocations('b')
     expect(revoke).toHaveBeenCalledTimes(1)
     expect(revoke).toHaveBeenCalledWith('b', 'P2')
-    expect(usePendingRevocationsStore.getState().items).toEqual([{ hostId: 'a', pairingId: 'P1' }])
+    expect(usePendingRevocationsStore.getState().items).toMatchObject([{ hostId: 'a', pairingId: 'P1' }])
   })
 
   it('does not double-send an entry that is already in flight', async () => {

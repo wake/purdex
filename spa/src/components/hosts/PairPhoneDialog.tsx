@@ -127,11 +127,12 @@ export function PairPhoneDialog({ onClose }: Props) {
 
   const handleCreate = () => {
     if (blocked || !profile || !relay || !sotHostId || sessionRef.current) return
+    const phoneLabel = t('hosts.pair.phone_label_default')
     const session = createPairingSession({
       profile: { sotHostId, profileId: profile.id, profileName: profile.name },
       relay,
       hosts: withToken,
-      label: t('hosts.pair.phone_label_default'),
+      label: phoneLabel,
     })
     sessionRef.current = session
     setState(session.getState())
@@ -140,7 +141,7 @@ export function PairPhoneDialog({ onClose }: Props) {
     // subscription outlives the dialog: closing never waits for the session, whose revoke may settle after unmount.
     session.subscribe((st) => {
       if (st.pairingId === undefined) return
-      for (const hostId of st.revokeFailed) usePendingRevocationsStore.getState().add(hostId, st.pairingId)
+      for (const hostId of st.revokeFailed) usePendingRevocationsStore.getState().add(hostId, st.pairingId, { label: phoneLabel })
     })
     void session.start()
   }

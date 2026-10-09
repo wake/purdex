@@ -2,16 +2,24 @@
 // every connected host that has a token. 撤銷 revokes the pairing on every host that has rows of it; a host that cannot be
 // reached gets a pending revocation (usePendingRevocationsStore), retried by lib/pending-revocation-retry.ts. Rows carry
 // no token, and nothing here renders one.
+//
+// A pending entry is persisted, so its card is built from the entry (label, host name, createdAt) and merged with the live
+// list by pairing_id: the card survives unmount and reload for as long as the entry does. An entry that cannot be matched to
+// the daemon it was made on (host removed / re-pointed / legacy) is shown as needing attention, and only the user's
+// confirmed 放棄追蹤 removes it. The definite "no phone is paired" line is shown only when every host with an admin token
+// was listed and nothing is pending; otherwise the section says it cannot confirm.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useDateLocale, useI18nStore } from '../../stores/useI18nStore'
-import { usePendingRevocationsStore } from '../../stores/usePendingRevocationsStore'
+import { usePendingRevocationsStore, type PendingRevocation } from '../../stores/usePendingRevocationsStore'
 import { useHostLookResolver } from '../../lib/host-look'
 import { listDevices, revokePairing, type DeviceRow } from '../../lib/devices-api'
 import { groupPairedPhones } from '../../lib/paired-phones'
-import { retryPendingRevocations } from '../../lib/pending-revocation-retry'
+import { resolvePendingTarget, retryPendingRevocations } from '../../lib/pending-revocation-retry'
 
-type PairedPhone = ReturnType<typeof groupPairedPhones>[number]
+type Listed = ReturnType<typeof groupPairedPhones>[number]
+/** A live card, or one rebuilt from pending entries alone (`state: null`: nothing is known of the rows). */
+type PairedPhone = Omit<Listed, 'state'> & { state: Listed['state'] | null }
 type HostRows = { hostId: string; rows: DeviceRow[] }
 type Loaded = { perHost: HostRows[]; unreachable: number; at: number }
 
@@ -78,16 +86,29 @@ export function PairedPhonesSection() {
     [],
   )
 
-  const [retained, setRetained] = useState<Record<string, PairedPhone>>({})
   const listed = useMemo(() => (loaded ? groupPairedPhones(loaded.perHost, loaded.at) : []), [loaded])
-  const phones = useMemo(() => {
+  const phones = useMemo<PairedPhone[]>(() => {
     const ids = new Set(listed.map((p) => p.pairingId))
-    const stillPending = new Set(pending.map((i) => i.pairingId))
-    const kept = Object.values(retained).filter((p) => !ids.has(p.pairingId) && stillPending.has(p.pairingId))
+    const fromPending = new Map<string, PairedPhone>()
+    for (const item of pending) {
+      if (ids.has(item.pairingId)) continue
+      const cur = fromPending.get(item.pairingId)
+      if (cur) {
+        if (cur.label === '' && item.label) cur.label = item.label
+        if (item.createdAt !== undefined && item.createdAt < (cur.createdAt || Infinity)) cur.createdAt = item.createdAt
+        continue
+      }
+      fromPending.set(item.pairingId, {
+        pairingId: item.pairingId, label: item.label ?? '', createdAt: item.createdAt ?? 0,
+        firstUsedAt: 0, lastUsedAt: 0, state: null, perHost: [],
+      })
+    }
+    const kept = [...fromPending.values()].sort((a, b) => b.createdAt - a.createdAt)
     return [...listed, ...kept]
-  }, [listed, retained, pending])
+  }, [listed, pending])
 
   const nameOf = (id: string) => (hosts[id] ? (lookOf(id).name ?? id) : id)
+  const labelOf = (p: PairedPhone) => (p.label === '' ? t('hosts.pairedPhones.unknown_label') : p.label)
   const timeText = (ms: number) => new Date(ms).toLocaleString(dateLocale)
 
   // Every configured host with an admin token is a target, whether or not it listed rows of the phone: the revoke is
@@ -96,7 +117,8 @@ export function PairedPhonesSection() {
   const tokenlessIds = hostOrder.filter((id) => hosts[id] && !hasToken(hosts[id]))
 
   const handleRevoke = async (phone: PairedPhone) => {
-    const { pairingId, label } = phone
+    const { pairingId } = phone
+    const label = labelOf(phone)
     const tokenless = tokenlessIds.map(nameOf).join(', ')
     const msg =
       tokenless === ''
@@ -112,17 +134,13 @@ export function PairedPhonesSection() {
       }),
     )
     const done = new Set<string>()
-    let anyPending = false
     for (const { hostId, done: ok } of results) {
       if (ok) done.add(hostId)
       else {
-        anyPending = true
-        usePendingRevocationsStore.getState().add(hostId, pairingId)
+        usePendingRevocationsStore.getState().add(hostId, pairingId, { label })
       }
     }
     if (!mounted.current) return
-    // The card must outlive the loaded rows while any host is still pending (it may have had no rows to begin with).
-    if (anyPending) setRetained((m) => ({ ...m, [pairingId]: phone }))
     setRevoking((s) => {
       const next = new Set(s)
       next.delete(pairingId)
@@ -136,6 +154,15 @@ export function PairedPhonesSection() {
     )
   }
 
+  const handleAbandon = (item: PendingRevocation, label: string, host: string) => {
+    if (!window.confirm(t('hosts.pairedPhones.abandon_confirm', { label, host }))) return
+    usePendingRevocationsStore.getState().remove(item.hostId, item.pairingId)
+  }
+
+  // Hosts with an admin token that this section could not list (offline) or failed to list.
+  const offlineManageable = targetIds.filter((id) => runtime[id]?.status !== 'connected').length
+  const uncertainCount = (loaded?.unreachable ?? 0) + offlineManageable
+
   return (
     <div className="max-w-2xl space-y-4">
       <h2 className="text-lg font-semibold">{t('hosts.pairedPhones.title')}</h2>
@@ -147,20 +174,34 @@ export function PairedPhonesSection() {
       )}
 
       {loaded === null && <p className="text-sm text-text-muted">{t('hosts.pairedPhones.loading')}</p>}
-      {loaded !== null && phones.length === 0 && (
+      {loaded !== null && phones.length === 0 && uncertainCount === 0 && (
         <p data-testid="paired-empty" className="text-sm text-text-muted">{t('hosts.pairedPhones.empty')}</p>
+      )}
+      {loaded !== null && phones.length === 0 && uncertainCount > 0 && (
+        <p data-testid="paired-unconfirmed" className="text-sm text-yellow-400">{t('hosts.pairedPhones.unconfirmed', { count: uncertainCount })}</p>
       )}
 
       <ul className="space-y-3">
         {phones.map((p) => {
           const hostIds = [...new Set(p.perHost.map((h) => h.hostId))]
-          const pendingHosts = pending.filter((i) => i.pairingId === p.pairingId).map((i) => nameOf(i.hostId))
+          const entries = pending
+            .filter((i) => i.pairingId === p.pairingId)
+            .map((item) => {
+              const target = resolvePendingTarget(item)
+              // A re-pointed or removed host id no longer names the daemon the entry was made on: show the stored name.
+              const live = hosts[item.hostId] && target.kind !== 'repointed'
+              return { item, target, name: live ? nameOf(item.hostId) : (item.hostName ?? item.hostId) }
+            })
+          const pendingHosts = entries.filter((e) => e.target.kind === 'retry').map((e) => e.name)
+          const attention = entries.filter((e) => e.target.kind !== 'retry')
           return (
             <li key={p.pairingId} data-testid={`paired-phone-${p.pairingId}`} className="border border-border-default rounded-lg p-4 space-y-1 bg-surface-secondary">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <span className="text-sm font-medium text-text-primary truncate block">{p.label}</span>
-                  <span data-testid="paired-state" className="text-xs text-text-secondary">{t(`hosts.pairedPhones.state.${p.state}`)}</span>
+                  <span className="text-sm font-medium text-text-primary truncate block">{labelOf(p)}</span>
+                  {p.state !== null && (
+                    <span data-testid="paired-state" className="text-xs text-text-secondary">{t(`hosts.pairedPhones.state.${p.state}`)}</span>
+                  )}
                 </div>
                 <button
                   onClick={() => void handleRevoke(p)}
@@ -176,14 +217,30 @@ export function PairedPhonesSection() {
               {p.lastUsedAt > 0 && (
                 <p data-testid="paired-last" className="text-xs text-text-muted">{t('hosts.pairedPhones.last_used', { time: timeText(p.lastUsedAt) })}</p>
               )}
-              <p data-testid="paired-hosts" className="text-xs text-text-muted">
-                {t('hosts.pairedPhones.hosts', { hosts: hostIds.map(nameOf).join(', ') })}
-              </p>
+              {p.state === null && p.createdAt > 0 && (
+                <p data-testid="paired-created" className="text-xs text-text-muted">{t('hosts.pairedPhones.created_at', { time: timeText(p.createdAt) })}</p>
+              )}
+              {hostIds.length > 0 && (
+                <p data-testid="paired-hosts" className="text-xs text-text-muted">
+                  {t('hosts.pairedPhones.hosts', { hosts: hostIds.map(nameOf).join(', ') })}
+                </p>
+              )}
               {pendingHosts.length > 0 && (
                 <p data-testid="paired-pending" className="text-xs text-yellow-400">
                   {t('hosts.pairedPhones.pending', { hosts: pendingHosts.join(', ') })}
                 </p>
               )}
+              {attention.map(({ item, target, name }) => (
+                <div key={item.hostId} data-testid="paired-attention" className="flex items-center justify-between gap-3 text-xs text-yellow-400">
+                  <span>{t(`hosts.pairedPhones.attention.${target.kind === 'retry' ? 'removed' : target.kind}`, { host: name })}</span>
+                  <button
+                    onClick={() => handleAbandon(item, labelOf(p), name)}
+                    className="shrink-0 px-2 py-1 rounded border border-border-default text-text-secondary hover:bg-surface-hover cursor-pointer"
+                  >
+                    {t('hosts.pairedPhones.abandon')}
+                  </button>
+                </div>
+              ))}
               {tokenlessIds.length > 0 && (
                 <p data-testid="paired-no-token" className="text-xs text-yellow-400">
                   {t('hosts.pairedPhones.no_token', { hosts: tokenlessIds.map(nameOf).join(', ') })}
