@@ -242,6 +242,9 @@ type Module struct {
 	// beforeAutoApprove, when set, runs in autoApprove before the approve;
 	// an error fails that approve there (tests). nil in production.
 	beforeAutoApprove func(a team.Approval) error
+	// noticeKick wakes the notice outbox's drain (PL-1d1) after an adopt approval won; afterApproved is its
+	// only caller. nil until then (tests count it).
+	noticeKick func()
 	// beforeCloseExpired, when set, runs in closeExpired before the CAS;
 	// an error fails that close there (tests). nil in production.
 	beforeCloseExpired func(id string) error
