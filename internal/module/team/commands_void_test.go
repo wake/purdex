@@ -84,6 +84,21 @@ func TestVoid_BeforeItsCommandMakesTheCommandVoid(t *testing.T) {
 	}
 }
 
+// A void that arrived early names an adopt or a spawn; it must not swallow a release, end or lead_moved that
+// happens to carry that id (codex R1): those keep queuing and are decided on their own.
+func TestVoid_EarlyVoidOnlyVoidsAdoptAndSpawn(t *testing.T) {
+	s := openTestStore(t)
+	mustApply(t, s, plan(adoptCmd("c1", "c1", "sid-t"), true, targetOrigin("sid-t")))
+	mustApply(t, s, plan(voidCmd("v1", "r1"), false, nil)) // r1 was never seen: recorded
+	res := mustApply(t, s, plan(relCmd("r1", team.CommandRelease, "c1"), false, nil))
+	if res.Status != http.StatusOK {
+		t.Fatalf("release r1 = %d %s, want it applied despite the void table", res.Status, res.Body)
+	}
+	if row, _, _ := s.RemoteMember("c1"); row.State != remoteReleased {
+		t.Fatalf("row = %+v", row)
+	}
+}
+
 // The void is itself idempotent (rule 3), and scoped to the host that sent it.
 func TestVoid_IdempotentAndScopedToItsHost(t *testing.T) {
 	s := openTestStore(t)

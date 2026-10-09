@@ -127,12 +127,16 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 
 	// The void table is read BEFORE the log (spec §3.3): a command id the lead host voided answers 409
 	// command_void, whatever a copy of it once stored. Not logged — the table is the answer.
-	var voided int
-	switch err := tx.QueryRow(`SELECT 1 FROM team_command_voids WHERE lead_host_id = ? AND command_id = ?`, p.LeadHostID, p.cmd.ID).Scan(&voided); {
-	case err == nil:
-		return refusal(http.StatusConflict, team.ErrCommandVoided, "the lead host voided this command"), nil
-	case !errors.Is(err, sql.ErrNoRows):
-		return fail(err)
+	// Only an adopt or a spawn can be voided; a void that arrived early did not know its target's kind, so it must
+	// not swallow a release, end or lead_moved carrying the same id.
+	if p.cmd.Kind == team.CommandAdopt || p.cmd.Kind == team.CommandSpawn {
+		var voided int
+		switch err := tx.QueryRow(`SELECT 1 FROM team_command_voids WHERE lead_host_id = ? AND command_id = ?`, p.LeadHostID, p.cmd.ID).Scan(&voided); {
+		case err == nil:
+			return refusal(http.StatusConflict, team.ErrCommandVoided, "the lead host voided this command"), nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return fail(err)
+		}
 	}
 
 	var hash, kind string
