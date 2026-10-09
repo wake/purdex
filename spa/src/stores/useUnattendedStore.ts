@@ -38,7 +38,7 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
   setQuotaSupport: (hostId, quotaSupport) => set((s) => {
     const cur = s.byHost[hostId]
     if (cur?.quotaSupport === quotaSupport) return s
-    return { byHost: { ...s.byHost, [hostId]: { support: cur?.support ?? 'unknown', ...cur, quotaSupport } } }
+    return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', quotaSupport } } }
   }),
   applyState: (hostId, state) => set((s) => {
     const cur = s.byHost[hostId]
