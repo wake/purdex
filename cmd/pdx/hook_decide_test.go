@@ -156,7 +156,7 @@ func TestHookDecision_FlagAndDenyPrintsPreToolUseJSONOnly(t *testing.T) {
 }
 
 // A Write of a large file: the stdin is far over 64 KiB, the request goes
-// out with the ids only (no tool_input, no raw) and the deny still lands.
+// out with the ids and the file_path only (no content, no raw) and the deny still lands; the relay lock needs the path.
 // Without the cap a > 1 MiB body would be a 400 from the daemon — no
 // decision, the lock bypassed for the biggest writes exactly.
 func TestHookDecision_LargeStdinSendsIdsOnly(t *testing.T) {
@@ -173,7 +173,7 @@ func TestHookDecision_LargeStdinSendsIdsOnly(t *testing.T) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	got := d.decides[0]
-	if got.SessionID != "cc-sid-1" || got.ToolName != "Write" || got.ToolUseID != "toolu_big" || len(got.ToolInput) != 0 || len(got.Raw) != 0 {
+	if got.SessionID != "cc-sid-1" || got.ToolName != "Write" || got.ToolUseID != "toolu_big" || string(got.ToolInput) != `{"file_path":"/w/big.txt"}` || len(got.Raw) != 0 {
 		t.Fatalf("decide body must carry the ids only: session=%q tool=%q use=%q input=%d raw=%d", got.SessionID, got.ToolName, got.ToolUseID, len(got.ToolInput), len(got.Raw))
 	}
 }
@@ -524,5 +524,28 @@ func TestRunHook_StdinThatNeverClosesIsInsideTheBudget(t *testing.T) {
 	defer postMu.Unlock()
 	if len(posted) != 1 || string(posted[0].RawEvent) != "{}" {
 		t.Fatalf("the event POST still goes out with the empty payload: %+v", posted)
+	}
+}
+
+// P6-3b: the relay lock's handoff Write is printed as an allow (M18 shape), a deny as before, {} and PermissionRequest
+// print nothing. Mutation gate: print only deny → the allow case is empty (red).
+func TestRunHook_PrintsAllowAndDenyShapes(t *testing.T) {
+	for _, c := range []struct {
+		decision, event, want string
+	}{
+		{"allow", "PdxPreToolUse", `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"Purdex 接力檔"}}` + "\n"},
+		{"deny", "PdxPreToolUse", `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Purdex 接力檔"}}` + "\n"},
+		{"allow", "PdxPermissionRequest", ""},
+		{"", "PdxPreToolUse", ""},
+	} {
+		d := newFakeHookDaemon(team.HookDecideResponse{Decision: c.decision, Reason: "Purdex 接力檔", Lock: team.HookLockRelay, ID: "op-1"})
+		srv := httptest.NewServer(d)
+		dataDir := t.TempDir()
+		touchHookLock(t, dataDir, "cc", "cc-sid-1")
+		out, _ := hookDecision(context.Background(), hookInput(dataDir, srv.URL, "cc", c.event, ccPreToolUseStdin))
+		srv.Close()
+		if string(out) != c.want {
+			t.Errorf("%s %s: printed %q, want %q", c.decision, c.event, out, c.want)
+		}
 	}
 }

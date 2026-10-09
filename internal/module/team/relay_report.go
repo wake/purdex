@@ -160,6 +160,9 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 // closes its approval row if that is still open. Every step is idempotent,
 // so it runs on the first report and on every re-send of the same state.
 func (m *Module) afterReport(op team.RelayOp) {
+	if op.State == team.RelayCleared || op.State.Terminal() {
+		m.removeRelayFlag(op)
+	}
 	if op.State == team.RelayCleared || op.State == team.RelayDone {
 		m.moveTitle(op)
 		// A cleared moved the team's lead or a member to the new session
@@ -337,4 +340,16 @@ func (m *Module) reconcileRelays() {
 		}
 	}
 	m.reconcileMemberRelays(ops)
+}
+
+// removeRelayFlag is the safety net for a mod that died holding the relay lock (plan v3 P6-3b): the daemon never
+// raises the flag, but when the op reaches cleared (the old session id) or a terminal state it compare-and-removes the
+// session's flag BY OP ID — a flag holding a lead request's id, or another op's, is never touched.
+func (m *Module) removeRelayFlag(op team.RelayOp) {
+	if m.dataDir == "" {
+		return
+	}
+	if p := team.HookLockPath(m.dataDir, team.HookAgentCC, op.SessionID); p != "" {
+		team.RemoveHookLock(p, op.ID)
+	}
 }
