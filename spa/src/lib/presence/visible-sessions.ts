@@ -18,7 +18,9 @@ const MAX_SESSIONS = 200
 const MAX_RUNES = 64
 const MAX_BYTES = 12 * 1024 // of the sessions' JSON, leaving the rest of the 16 KiB to the envelope
 
-const clean = (s: string): string => Array.from(s.replace(/\p{C}/gu, '')).slice(0, MAX_RUNES).join('')
+// Go's unicode.IsPrint, which the daemon applies: letters, marks, numbers, punctuation, symbols and the plain space.
+// (Line and paragraph separators, other spaces and all of the C categories are not printable there.)
+const clean = (s: string): string => Array.from(s.replace(/[^\p{L}\p{M}\p{N}\p{P}\p{S} ]/gu, '')).slice(0, MAX_RUNES).join('')
 
 /** The sessions as the daemon accepts them: control characters dropped, codes and names cut to 64 characters, a code
  *  that is empty skipped, and no more than 200 entries / 12 KiB (the first ones in layout order stay). */

@@ -83,6 +83,11 @@ describe('boundSessions', () => {
     expect(boundSessions([{ code: 'x'.repeat(100), name: '' }])[0].code).toHaveLength(64)
   })
 
+  it("drops what Go's unicode.IsPrint refuses (the daemon would answer 400 for the whole report)", () => {
+    const name = 'a\u2028b\u2029c\u00A0d\u200Be\uFEFFf\u0085g h接😀'
+    expect(boundSessions([{ code: 'c1', name }])[0].name).toBe('abcdefg h接😀')
+  })
+
   it('skips an entry whose code is empty after cleaning', () => {
     expect(boundSessions([{ code: '', name: 'a' }, { code: '\u0001', name: 'b' }, { code: 'ok', name: 'c' }])).toEqual([{ code: 'ok', name: 'c' }])
   })

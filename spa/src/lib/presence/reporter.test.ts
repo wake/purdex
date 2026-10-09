@@ -25,6 +25,7 @@ interface Env {
   capable: Set<string>
   change: () => void
   failPuts: { on: boolean }
+  reject4xx: { on: boolean }
   probes: string[]
 }
 
@@ -33,17 +34,18 @@ function makeEnv(): Env {
   const puts: Env['puts'] = []
   const changeFns = new Set<() => void>()
   const failPuts = { on: false }
+  const reject4xx = { on: false }
   const probes: string[] = []
   const env: Env = {
     tracker, puts, shown: { h1: [{ code: 'c1', name: 'dev' }], h2: [{ code: 'c9', name: 'nine' }] },
     hosts: [{ id: 'h1', identity: 'e1:t1' }, { id: 'h2', identity: 'e2:t2' }], capable: new Set(['h1', 'h2']),
-    change: () => changeFns.forEach((f) => f()), failPuts, probes,
+    change: () => changeFns.forEach((f) => f()), failPuts, reject4xx, probes,
     deps: undefined as never,
   }
   env.deps = {
     tracker, clientId: () => 'c_aaaaaaaaaaaa:win1',
     visible: () => env.shown,
-    put: async (hostId, body) => { puts.push({ hostId, body }); if (failPuts.on) throw new Error('down') },
+    put: async (hostId, body) => { puts.push({ hostId, body }); if (failPuts.on) throw new Error('down'); return reject4xx.on ? 'rejected' : 'ok' },
     supportsPush: async (hostId) => { probes.push(hostId); return env.capable.has(hostId) },
     connectedHosts: () => env.hosts,
     subscribeChanges: (fn) => { changeFns.add(fn); return () => { changeFns.delete(fn) } },
@@ -178,8 +180,9 @@ describe('push presence reporter', () => {
     const inner = e.deps.put
     let first = true
     e.deps.put = async (hostId, body) => {
-      await inner(hostId, body)
+      const r = await inner(hostId, body)
       if (first) { first = false; await gate }
+      return r
     }
     stop = startPushPresence(e.deps)
     await tick(DEBOUNCE_MS) // the first PUT is out and held
@@ -202,8 +205,9 @@ describe('push presence reporter', () => {
     const inner = e.deps.put
     let first = true
     e.deps.put = async (hostId, body) => {
-      await inner(hostId, body)
+      const r = await inner(hostId, body)
       if (first) { first = false; await gate }
+      return r
     }
     stop = startPushPresence(e.deps)
     await tick(DEBOUNCE_MS)
@@ -219,7 +223,7 @@ describe('push presence reporter', () => {
     e.capable.delete('h2')
     const inner = e.deps.put
     let hang = true
-    e.deps.put = (hostId, body) => (hang ? (inner(hostId, body), new Promise<void>(() => {})) : inner(hostId, body))
+    e.deps.put = (hostId, body) => (hang ? (inner(hostId, body), new Promise<'ok'>(() => {})) : inner(hostId, body))
     stop = startPushPresence(e.deps)
     await tick(DEBOUNCE_MS * 2)
     expect(e.puts).toHaveLength(1)
@@ -228,6 +232,34 @@ describe('push presence reporter', () => {
     e.change()
     await tick(DEBOUNCE_MS * 2)
     expect(e.puts).toHaveLength(2) // the new daemon is not held up by the old request
+  })
+
+  it('a body the daemon refused for good is not sent again by the heartbeat, until what is shown changes', async () => {
+    const e = makeEnv()
+    e.capable.delete('h2')
+    e.reject4xx.on = true
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2)
+    expect(e.puts).toHaveLength(1)
+    await tick(HEARTBEAT_MS * 3)
+    expect(e.puts).toHaveLength(1)
+    e.shown = { h1: [{ code: 'c2', name: 'ops' }] }
+    e.change()
+    await tick(DEBOUNCE_MS * 2)
+    expect(e.puts).toHaveLength(2) // a different body is worth a try
+  })
+
+  it('a probe that never answers is asked again after a pause while the host stays connected', async () => {
+    const e = makeEnv()
+    e.hosts = [{ id: 'h1', identity: 'e1:t1' }]
+    let calls = 0
+    e.deps.supportsPush = async (hostId) => { e.probes.push(hostId); calls++; if (calls === 1) throw new Error('timed out'); return true }
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2)
+    expect(e.puts).toHaveLength(0)
+    await tick(HEARTBEAT_MS + DEBOUNCE_MS * 2) // the pause ends, the entry is forgotten and the next flush asks again
+    expect(calls).toBe(2)
+    expect(e.puts.length).toBeGreaterThan(0)
   })
 
   it('a failed active:false is retried', async () => {
@@ -284,6 +316,15 @@ describe('push presence reporter', () => {
     e.change()
     await tick(DEBOUNCE_MS * 2)
     expect(e.puts.length).toBeGreaterThan(0)
+  })
+
+  it('stop() also cancels a pending probe retry', async () => {
+    const e = makeEnv()
+    e.deps.supportsPush = async () => { throw new Error('down') }
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2) // the probe failed: a retry timer is waiting
+    stop()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('stop() ends the timers, the subscriptions and the tracker', async () => {

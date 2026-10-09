@@ -41,7 +41,8 @@ export interface ReporterDeps {
   tracker: ActivityTracker
   visible: () => Record<string, PresenceSession[]>
   clientId: () => string
-  put: (hostId: string, body: PresenceBody) => Promise<void>
+  /** Resolves "rejected" when the daemon refused this body for good (a 4xx); rejects for a failure worth retrying. */
+  put: (hostId: string, body: PresenceBody) => Promise<'ok' | 'rejected'>
   supportsPush: (hostId: string) => Promise<boolean>
   connectedHosts: () => ConnectedHost[]
   /** Calls fn whenever the tabs, the sessions or the hosts change; returns the unsubscribe. */
@@ -63,7 +64,11 @@ export function defaultReporterDeps(): ReporterDeps {
       // A 4xx is the daemon refusing this body for good: sending the same body again cannot change it (the next change
       // or heartbeat sends what is then shown). Only a network failure or a 5xx is worth an early retry.
       if (res.status >= 500) throw new Error(`presence ${res.status}`)
-      if (!res.ok) console.warn(`[presence] ${hostId} refused the report (${res.status})`)
+      if (!res.ok) {
+        console.warn(`[presence] ${hostId} refused the report (${res.status})`)
+        return 'rejected'
+      }
+      return 'ok'
     },
     async supportsPush(hostId) {
       const info = await Promise.race([
@@ -87,6 +92,7 @@ export function defaultReporterDeps(): ReporterDeps {
 interface Sent {
   active: boolean
   signature: string
+  rejected?: boolean // the daemon refused exactly this body: it is not sent again until what is shown changes
 }
 
 export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): () => void {
@@ -94,6 +100,7 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
   const support = new Map<string, { identity: string; supported: boolean | null }>()
   const sent = new Map<string, Sent>()
   const inflight = new Map<string, unknown>() // host -> the support entry (host identity) the request was made under
+  const retries = new Set<ReturnType<typeof setTimeout>>()
   const skipped = new Set<string>() // changes that came while that host's PUT was out: sent when it settles
   let debounce: ReturnType<typeof setTimeout> | undefined
   let stopped = false
@@ -112,7 +119,15 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
       support.set(h.id, entry)
       deps.supportsPush(h.id).then(
         (ok) => { if (!stopped && support.get(h.id) === entry) { entry.supported = ok; schedule() } },
-        () => { /* unknown: asked again on the next connect */ },
+        () => {
+          // Not answered (down, or timed out): forget the entry after a pause so the next flush asks again, instead of
+          // leaving the host silent for as long as it stays connected.
+          const retry = setTimeout(() => {
+            retries.delete(retry)
+            if (!stopped && support.get(h.id) === entry) { support.delete(h.id); schedule() }
+          }, HEARTBEAT_MS)
+          retries.add(retry)
+        },
       )
     }
   }
@@ -136,6 +151,7 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
       } else {
         const sessions = shown[hostId] ?? []
         const signature = JSON.stringify(sessions)
+        if (last?.rejected && last.signature === signature) continue // refused as it is: only a change is worth sending
         if (last?.active === true && last.signature === signature && !heartbeat) continue // the 20 s tick is the heartbeat
         body = { client_id: deps.clientId(), active: true, sessions, ttl_ms: PRESENCE_TTL_MS }
         next = { active: true, signature }
@@ -143,7 +159,7 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
       inflight.set(hostId, s)
       const entry = s
       deps.put(hostId, body).then(
-        () => { if (!stopped && support.get(hostId) === entry) sent.set(hostId, next) },
+        (result) => { if (!stopped && support.get(hostId) === entry) sent.set(hostId, result === 'rejected' ? { ...next, rejected: true } : next) },
         () => { /* ignored: the next tick retries */ },
       ).finally(() => {
         if (inflight.get(hostId) === entry) inflight.delete(hostId)
@@ -168,6 +184,7 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
     stopped = true
     if (debounce !== undefined) clearTimeout(debounce)
     clearInterval(heartbeat)
+    for (const r of retries) clearTimeout(r)
     offChanges()
     offActivity()
     deps.tracker.dispose()
