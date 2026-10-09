@@ -188,6 +188,16 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// (round-2 A3).
 	req.SenderStartTime = strings.TrimSpace(req.SenderStartTime)
 
+	// A hook that knows its pane but could not name its tmux session (#2123: `tmux` was not on the PATH of a pane that an
+	// ssh login without a login shell started, so the hook's own lookup failed) is named by the daemon from the pane.
+	// Without this the event was refused as schema_invalid - which the hook swallows - and the session never appeared.
+	// A name the hook did send is trusted as before; a pane the daemon cannot place stays refused.
+	if req.TmuxSession == "" && req.TmuxPaneID != "" && m.tmux != nil {
+		if name, err := m.tmux.PaneSessionName(req.TmuxPaneID); err == nil && name != "" {
+			req.TmuxSession = name
+		}
+	}
+
 	// A session outside tmux (an sdk-cli session, a Nexen worker's `claude -p`)
 	// has no pane identity; it is keyed by its agent session id instead.
 	if req.TmuxSession == "" && req.TmuxPaneID == "" && req.AgentType == "cc" {

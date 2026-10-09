@@ -1,0 +1,86 @@
+package agent
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/tmux"
+)
+
+func paneOnlyModule(t *testing.T) (*Module, *tmux.FakeExecutor) {
+	t.Helper()
+	m := newTestModule(t)
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(string, json.RawMessage) agentpkg.DeriveResult {
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusIdle}
+		},
+	})
+	fake := tmux.NewFakeExecutor()
+	fake.SetPaneSessionName("%9", "dev")
+	m.tmux = fake
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "dev-code", Name: "dev"}}}
+	return m, fake
+}
+
+// hookSession is the session name the accepted event was broadcast under.
+func hookSession(t *testing.T, m *Module, body string) string {
+	t.Helper()
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+	w := postEvent(m, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	select {
+	case msg := <-sub.SendCh():
+		var env struct{ Type, Session string }
+		if err := json.Unmarshal(msg, &env); err != nil || env.Type != "hook" {
+			t.Fatalf("message = %s (%v)", msg, err)
+		}
+		return env.Session
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("no hook broadcast")
+		return ""
+	}
+}
+
+const paneOnlyTail = `"sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"`
+
+// #2123: a hook started where `tmux` is not on PATH (a pane that an ssh login without a login shell started) cannot name
+// its tmux session; it still knows its pane. The event used to be refused as schema_invalid (and the hook swallows
+// that), so the session never appeared. The daemon names the session from the pane.
+func TestHandleEvent_PaneWithoutSessionNameIsNamedByTheDaemon(t *testing.T) {
+	m, _ := paneOnlyModule(t)
+	if got := hookSession(t, m, `{"tmux_session":"","tmux_pane_id":"%9",`+paneOnlyTail+`}`); got != "dev-code" {
+		t.Fatalf("broadcast under %q, want the code of the pane's session dev", got)
+	}
+	if frames, err := m.frames.ListByPane("%9"); err != nil || len(frames) != 1 {
+		t.Fatalf("frames = %+v err %v, want the pane's frame registered", frames, err)
+	}
+}
+
+// A name the hook did send is trusted as before (the daemon does not ask tmux, whatever tmux would say).
+func TestHandleEvent_ASessionNameFromTheHookIsNotOverruled(t *testing.T) {
+	m, fake := paneOnlyModule(t)
+	fake.SetPaneSessionName("%9", "something-else")
+	if got := hookSession(t, m, `{"tmux_session":"dev","tmux_pane_id":"%9",`+paneOnlyTail+`}`); got != "dev-code" {
+		t.Fatalf("broadcast under %q, want the code of the hook's own dev", got)
+	}
+}
+
+// A pane the daemon cannot place stays refused: no invented identity.
+func TestHandleEvent_AnUnplaceablePaneIsStillRefused(t *testing.T) {
+	m, _ := paneOnlyModule(t)
+	w := postEvent(m, `{"tmux_session":"","tmux_pane_id":"%404",`+paneOnlyTail+`}`)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "schema_invalid") {
+		t.Fatalf("status = %d body=%s, want 400 schema_invalid", w.Code, w.Body.String())
+	}
+}
