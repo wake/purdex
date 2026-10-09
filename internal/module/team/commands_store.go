@@ -507,7 +507,8 @@ func applyAppearanceIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 		return CommandResult{}, err
 	}
 	n, _ := res.RowsAffected()
-	if _, err := tx.Exec(`UPDATE spawn_ops SET lead_json = json_set(lead_json, '$.team_name', ?, '$.team_label', ?, '$.team_color', ?) WHERE lead_host_id = ? AND team_id = ? AND state = 'running' AND lead_json <> ''`,
+	if _, err := tx.Exec(`UPDATE spawn_ops SET lead_json = CASE WHEN json_valid(lead_json) THEN json_set(lead_json, '$.team_name', ?, '$.team_label', ?, '$.team_color', ?) ELSE lead_json END
+		WHERE lead_host_id = ? AND team_id = ? AND state = 'running'`,
 		c.TeamName, c.TeamLabel, color, p.LeadHostID, c.TeamID); err != nil {
 		return CommandResult{}, err
 	}

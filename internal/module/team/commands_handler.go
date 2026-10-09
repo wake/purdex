@@ -225,6 +225,13 @@ func validateCommand(c team.TeamCommand) string {
 			return "void: command_id (a UUID v4 other than the void's own id) is required"
 		}
 	case team.CommandAppearance:
+		// the lead host stores what the product rules allow; a value that is not exactly the normalised form is not one
+		if n, err := team.NormaliseTeamName(c.TeamName); err != nil || n != c.TeamName {
+			return "team.appearance: team_name is not a normalised team name"
+		}
+		if l, err := team.NormaliseTeamLabel(c.TeamLabel); err != nil || l != c.TeamLabel {
+			return "team.appearance: team_label is not a normalised team label"
+		}
 		if c.TeamColor != nil && (*c.TeamColor < 0 || *c.TeamColor > team.MaxTeamColor) {
 			return "team.appearance: team_color is 0-" + strconv.Itoa(team.MaxTeamColor) + " or absent"
 		}

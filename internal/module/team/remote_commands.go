@@ -210,17 +210,6 @@ func (s *Store) liveRemoteHostsTx(tx dbtxq, teamID string, withSpawns bool) ([]s
 	return hosts, rows.Err()
 }
 
-// LiveRemoteHosts are the member hosts that hold a live remote row of the team (and, with withSpawns, a running forwarded
-// spawn), outside a transaction: the hosts a caller asks about before it opens the one that writes.
-func (s *Store) LiveRemoteHosts(teamID string, withSpawns bool) ([]string, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	return s.liveRemoteHostsTx(tx, teamID, withSpawns)
-}
-
 // enqueueTeamLevelTx enqueues one team-level command (no mk) per host with a live remote row of the team, in tx.
 func (s *Store) enqueueTeamLevelTx(tx dbtxq, t team.Team, kind string, lead team.TeamLead, extra func(*team.TeamCommand), newID func() string, now int64, only map[string]bool) (int, error) {
 	hosts, err := s.liveRemoteHostsTx(tx, t.ID, kind == CmdEnd || kind == CmdAppearance)

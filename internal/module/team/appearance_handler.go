@@ -116,13 +116,18 @@ func (m *Module) appearanceFanout(ctx context.Context, teamID string) *Appearanc
 	if err != nil || !ok || tm.EndedAt != 0 {
 		return nil
 	}
-	hosts, err := m.store.LiveRemoteHosts(teamID, true)
-	if err != nil {
-		m.logf("[team] appearance of %s: member hosts: %v", teamID, err)
-		return nil
+	// every paired host is asked, not only the ones that hold a row now: the transaction decides who is a member host,
+	// and a host that joins between this look and that transaction must still hear of the rename
+	var paired []string
+	m.core.CfgMu.RLock()
+	for _, h := range m.core.Cfg.Peers.Hosts {
+		if h.HostID != "" {
+			paired = append(paired, h.HostID)
+		}
 	}
+	m.core.CfgMu.RUnlock()
 	announcing := map[string]bool{}
-	for _, h := range hosts {
+	for _, h := range paired {
 		if caps, err := m.cmdCaller.TeamCaps(ctx, h); err == nil && slices.Contains(caps.Kinds, CmdAppearance) && caps.AllowTeam {
 			announcing[h] = true
 		}

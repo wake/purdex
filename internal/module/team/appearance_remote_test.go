@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/wake/purdex/internal/config"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -26,8 +27,19 @@ func appearanceCmds(f *fixture) map[string]team.TeamCommand {
 	return out
 }
 
+// pairHosts makes the config carry the member hosts the fake caller answers for (the fan-out asks every paired host).
+func pairHosts(f *fixture, ids ...string) {
+	f.core.CfgMu.Lock()
+	defer f.core.CfgMu.Unlock()
+	f.core.Cfg.Peers.Hosts = nil
+	for _, id := range ids {
+		f.core.Cfg.Peers.Hosts = append(f.core.Cfg.Peers.Hosts, config.PeerHost{Alias: "a-" + id, URL: "https://" + id, HostID: id, InboundToken: "i"})
+	}
+}
+
 func TestAppearance_TheRenameIsQueuedForEveryAnnouncingMemberHost(t *testing.T) {
 	f, fc := remoteFixture(t)
+	pairHosts(f, "hostM", "hostN", "hostO")
 	fc.aliases["old"] = "hostO"
 	fc.caps["hostM"] = ipeers.TeamCaps{Kinds: append(append([]string{}, allKinds...), CmdAppearance), AllowTeam: true}
 	fc.caps["hostN"] = ipeers.TeamCaps{Kinds: append(append([]string{}, allKinds...), CmdAppearance), AllowTeam: true}
@@ -65,7 +77,9 @@ func TestAppearance_TheRenameIsQueuedForEveryAnnouncingMemberHost(t *testing.T) 
 }
 
 func TestAppearance_NoMemberHostQueuesNothingAndTheRenameStands(t *testing.T) {
-	f, _ := remoteFixture(t)
+	f, fc := remoteFixture(t)
+	pairHosts(f, "hostM")
+	fc.caps["hostM"] = ipeers.TeamCaps{Kinds: append(append([]string{}, allKinds...), CmdAppearance), AllowTeam: true}
 	if code, body := f.putAppearance(appearanceBody(nil)); code != http.StatusOK {
 		t.Fatalf("put = %d %s", code, body)
 	}
@@ -116,6 +130,18 @@ func TestCommands_AppearanceUpdatesTheLeadHostsLiveRowsOfThatTeamOnly(t *testing
 	if row, _, _ := f.m.store.RemoteMember(cmdUUID1); row.TeamColor.Valid {
 		t.Fatalf("colour kept: %+v", row)
 	}
+	// a name or label that is not the normalised form is refused (the lead host never stores one)
+	for _, edit := range []func(*team.TeamCommand){
+		func(c *team.TeamCommand) { c.TeamName = " padded " },
+		func(c *team.TeamCommand) { c.TeamLabel = "far too long a label for the chip" },
+	} {
+		ap.ID = "66666666-6666-4666-8666-666666666666"
+		bad := ap
+		edit(&bad)
+		if code, _ := f.postCmd(leadPrincipal(), bad); code != http.StatusBadRequest {
+			t.Fatalf("unnormalised %+v = %d, want 400", bad, code)
+		}
+	}
 	// out of range is refused as bad_request, nothing stored
 	bad := 9
 	ap.ID, ap.TeamColor = "55555555-5555-4555-8555-555555555555", &bad
@@ -145,4 +171,24 @@ func TestCommands_AppearanceReachesARunningForwardedSpawn(t *testing.T) {
 	if !ok || row.TeamName != "改過" || row.TeamLabel != "改" || !row.TeamColor.Valid || row.TeamColor.Int64 != 2 {
 		t.Fatalf("registered row = %+v ok=%v", row, ok)
 	}
+}
+
+// A running op whose stored lead is empty or damaged is left as it is; the command itself still applies.
+func TestCommands_AppearanceWithADamagedRunningOpStillApplies(t *testing.T) {
+	f, root := remoteSpawnFixture(t)
+	waitReached, release := holdAt(f, team.StepLaunched)
+	if code, body := f.postCmd(leadPrincipal(), spawnCommand(cmdUUID1, root)); code != http.StatusOK {
+		t.Fatalf("spawn = %d %s", code, body)
+	}
+	waitReached()
+	if _, err := f.m.store.db.Exec(`UPDATE spawn_ops SET lead_json = '{not json' WHERE id = ?`, cmdUUID1); err != nil {
+		t.Fatal(err)
+	}
+	ap := relCmd(cmdUUID2, team.CommandAppearance, "")
+	ap.ToHostID, ap.TeamID, ap.TeamName, ap.TeamLabel = "h:1", "team-L", "改過", "改"
+	if code, body := f.postCmd(leadPrincipal(), ap); code != http.StatusOK {
+		t.Fatalf("appearance: %d %s", code, body)
+	}
+	release()
+	f.m.spawnWG.Wait()
 }
