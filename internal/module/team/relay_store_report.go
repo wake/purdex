@@ -199,6 +199,11 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 	defer tx.Rollback()
 	var led []string // the teams this cleared will move: read before it runs (X3b-1b)
 	if r.State == team.RelayCleared && s.newID != nil {
+		// reportRelayIn's first statement is a write, so a concurrent report waits instead of failing on a stale snapshot:
+		// this read must not come first — a no-op write takes the lock
+		if _, err := tx.Exec(`UPDATE relay_ops SET updated_at = updated_at WHERE id = ?`, id); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lock: %w", id, err)
+		}
 		var old string
 		if err := tx.QueryRow(`SELECT session_id FROM relay_ops WHERE id = ?`, id).Scan(&old); err == nil {
 			if led, err = ledTeamsTx(tx, old); err != nil {
