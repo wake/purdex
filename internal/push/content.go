@@ -42,6 +42,9 @@ type Content struct {
 	SessionName string
 	Event       string
 	CollapseID  string
+	// OpenApprovals is how many approvals of the pushed kinds are open on this host; the sender fills it in at send time
+	// (the iOS notification extension sets the app-icon badge from it, spec §6).
+	OpenApprovals int
 }
 
 var (
@@ -217,18 +220,20 @@ func (c Content) Payload(hostID string) ([]byte, error) {
 }
 
 func (c Content) payload(hostID, body string) ([]byte, error) {
-	purdex := map[string]string{"host_id": hostID, "kind": c.Kind}
+	purdex := map[string]any{"host_id": hostID, "kind": c.Kind}
 	for k, v := range map[string]string{"approval_id": c.ApprovalID, "session_code": c.SessionCode, "session_id": c.SessionID, "session_title": c.SessionName, "event": c.Event} {
 		if v != "" {
 			purdex[k] = v
 		}
 	}
+	purdex["open_approvals"] = c.OpenApprovals
 	return json.Marshal(map[string]any{
 		"aps": map[string]any{
 			"alert":              map[string]string{"title": c.Title, "body": body},
 			"sound":              "default",
 			"thread-id":          hostID,
 			"interruption-level": "time-sensitive",
+			"mutable-content":    1,
 		},
 		"purdex": purdex,
 	})
