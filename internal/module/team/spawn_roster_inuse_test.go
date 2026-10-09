@@ -58,3 +58,16 @@ func TestSpawnRoster_TimeoutIsAnnounced(t *testing.T) {
 		t.Fatalf("in_use after timeout = %d, want 0", n)
 	}
 }
+
+// GET /api/team carries the same in_use: a held starting spawn is a place taken.
+func TestSpawnRoster_TeamViewCarriesInUse(t *testing.T) {
+	f, root := newSpawnFixture(t, 1)
+	f.holdRunners()
+	if code, _, e := f.spawn(1, root, nil); code != 200 {
+		t.Fatalf("spawn = %d %+v", code, e)
+	}
+	code, v, e := f.teamView("/tmp/10.sock")
+	if code != 200 || v.InUse == nil || *v.InUse != 1 {
+		t.Fatalf("team view = %d in_use %v %+v, want 1", code, v.InUse, e)
+	}
+}

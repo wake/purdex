@@ -110,6 +110,7 @@ func TestWireTeam_JSONShapes(t *testing.T) {
 		{"KillRequest", KillRequest{OriginInbox: "/tmp/in.sock", Target: "_abc123"}, `{"origin_inbox":"/tmp/in.sock","target":"_abc123"}`},
 
 		{"TeamView with a member", TeamView{Team: Team{}, Members: []Member{{}}}, `{"team":` + teamMin + `,"members":[` + memberMin + `]}`},
+		{"TeamView with in_use", TeamView{Members: []Member{}, InUse: new(int)}, `{"team":` + teamMin + `,"members":[],"in_use":0}`},
 		{"TeamView with nil members", TeamView{}, `{"team":` + teamMin + `,"members":[]}`},
 		{"TeamView with empty members", TeamView{Members: []Member{}}, `{"team":` + teamMin + `,"members":[]}`},
 	}

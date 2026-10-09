@@ -575,6 +575,9 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 			active++
 		}
 	}
+	if v.InUse != nil { // starting spawns hold a place too
+		active = *v.InUse
+	}
 	fmt.Fprintf(stdout, "members %d/%d\n", active, v.Team.Grant.MaxMembers)
 	// #2062: the lead's own automatic-relay quota and its member pool, read-only (the user sets them in Purdex.app).
 	if line := quotaLine(v.LeadRelayQuota); line != "" {
