@@ -16,6 +16,56 @@ describe('parseRosterEvent', () => {
     expect(parseRosterEvent(v({ op: 'changed', teams: [] }))).toEqual({ op: 'changed', teams: [] })
   })
 
+  it('host_alias and host_id are parsed only when strings', () => {
+    const good = { ...member, host_id: 'dm-b', host_alias: 'b26' }
+    const bad = { ...member, session_id: 's-m2', host_id: 7, host_alias: { x: 1 } }
+    const t = { ...team, lead: { ...lead, host_id: '', host_alias: null }, members: [good, bad] }
+    const r = parseRosterEvent(v({ op: 'snapshot', teams: [t] }))
+    if (typeof r === 'string') throw new Error(r)
+    const [g, b] = r.teams[0].members
+    expect(g).toMatchObject({ host_id: 'dm-b', host_alias: 'b26' })
+    expect('host_id' in b || 'host_alias' in b).toBe(false)
+    expect(r.teams[0].lead.host_id).toBe('')
+    expect('host_alias' in r.teams[0].lead).toBe(false)
+    // an old roster without them parses exactly as before
+    expect(parseRosterEvent(v({ op: 'snapshot', teams: [team] }))).toEqual({ op: 'snapshot', teams: [team] })
+  })
+
+  it('host_alias is bounded and printable; host_id bounded and control-free; invalid ones are dropped, never the frame', () => {
+    const parse = (extra: Record<string, unknown>) => {
+      const r = parseRosterEvent(v({ op: 'snapshot', teams: [{ ...team, members: [{ ...member, ...extra }] }] }))
+      if (typeof r === 'string') throw new Error(r)
+      return r.teams[0].members[0]
+    }
+    expect(parse({ host_alias: '工作站 B-26' }).host_alias).toBe('工作站 B-26') // a clean CJK alias is kept intact
+    expect(parse({ host_alias: 'a'.repeat(64) }).host_alias).toHaveLength(64)
+    for (const bad of [
+      'a'.repeat(65), '', '   ', 'x\ny', 'x\u0000y', 'x\u001by', 'x\u007fy', 'x\u0085y', 'x​y', 'x‮y', 'x⁦y', 'x﻿y',
+    ]) {
+      expect('host_alias' in parse({ host_alias: bad }), JSON.stringify(bad)).toBe(false)
+    }
+    expect(parse({ host_id: 'd'.repeat(128) }).host_id).toHaveLength(128)
+    expect('host_id' in parse({ host_id: 'd'.repeat(129) })).toBe(false)
+    expect('host_id' in parse({ host_id: 'a\nb' })).toBe(false)
+    expect(parse({ host_id: '' }).host_id).toBe('') // "" is the lead's host and stays
+  })
+
+  it('a host_id that was sent but cannot be trusted is marked host_untrusted, never read as local', () => {
+    const parse = (extra: Record<string, unknown>) => {
+      const r = parseRosterEvent(v({ op: 'snapshot', teams: [{ ...team, members: [{ ...member, ...extra }] }] }))
+      if (typeof r === 'string') throw new Error(r)
+      return r.teams[0].members[0]
+    }
+    for (const bad of ['d'.repeat(129), 'a\nb', 'a\u202eb', 7, true, { x: 1 }, ['d']]) {
+      const m = parse({ host_id: bad, host_alias: 'b26' })
+      expect(m.host_untrusted, JSON.stringify(bad)).toBe(true)
+      expect('host_id' in m).toBe(false)
+    }
+    for (const fine of [{}, { host_id: '' }, { host_id: 'dm-b' }, { host_alias: 'only-alias' }]) {
+      expect('host_untrusted' in parse(fine), JSON.stringify(fine)).toBe(false)
+    }
+  })
+
   it('accepts an already-parsed value', () => {
     expect(parseRosterEvent({ op: 'changed', teams: [team] })).toEqual({ op: 'changed', teams: [team] })
   })

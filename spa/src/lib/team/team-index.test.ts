@@ -95,6 +95,22 @@ describe('buildTeamIndex', () => {
     expect(index.byTabId.get('both')?.key).toBeUndefined() // its primary pane shows a member of the same team
   })
 
+  it('buildTeamIndex uses the seat\'s host: a remote member\'s tab is in its team, the same name on the lead\'s host is not', () => {
+    const remote: RosterMember = { ...mem('R', 1, 'r-tm'), host_id: 'dm-b', host_alias: 'b26' }
+    const tabs = [tab('lead', leaf('h1', 'lead-tm')), tab('onB', leaf('h2', 'r-tm')), tab('onLead', leaf('h1', 'r-tm'))]
+    const tabsById = Object.fromEntries(tabs.map((t) => [t.id, t]))
+    const views = selectTeamViews({
+      rosterByHost: { h1: [team('t1', sess('L', 'lead-tm'), [remote])] }, tabsById,
+      workspaces: [{ id: 'w1', tabs: ['lead', 'onB', 'onLead'] }], activeWorkspaceId: 'w1', sessionsByHost: {},
+      hostIdByDaemonId: { 'dm-b': 'h2' },
+    })
+    const index = buildTeamIndex(views, tabsById, {})
+    expect(index.byTabId.get('onB')).toMatchObject({ role: 'member' })
+    expect(index.byTabId.has('onLead')).toBe(false)
+    expect(index.bySession.has('h2\u0000r-tm')).toBe(true)
+    expect(index.bySession.has('h1\u0000r-tm')).toBe(false)
+  })
+
   it('an empty input gives empty maps', () => {
     const index = buildTeamIndex([], {}, {})
     expect(index.byTabId.size + index.byKey.size + index.bySession.size).toBe(0)

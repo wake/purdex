@@ -317,6 +317,8 @@
   "tab.unpin": "Unpin tab",
   "tab.pin_team_disabled": "Tabs in a team group cannot be pinned",
   "team.seat_not_listed": "This session is not in the host's session list yet",
+  "team.seat_host_unknown": "that host",
+  "team.seat_no_host": "This Mac has no host configured for {{alias}}, so this tab cannot be opened",
   "tab.close": "Close tab",
   "tab.close_others": "Close other tabs",
   "tab.close_right": "Close tabs to the right",

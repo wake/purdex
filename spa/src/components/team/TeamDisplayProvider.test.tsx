@@ -159,6 +159,30 @@ describe('TeamDisplayProvider — the structure value is stable', () => {
     expect(renders).toBe(before)
   })
 
+  it('a seat\'s state change re-renders a structure consumer, a context-only change does not', () => {
+    render(<TeamDisplayProvider><Probe /></TeamDisplayProvider>)
+    const joining = () => {
+      const r = roster()
+      r.members[0] = { ...r.members[0], state: 'joining', host_id: 'dm-b', host_alias: 'b26' }
+      return r
+    }
+    seed([joining()], tabs)
+    const first = display
+    const ctxOnly = joining()
+    ctxOnly.members[0] = { ...ctxOnly.members[0], context: { used_percentage: 10, window: 200000, at: 3 } }
+    act(() => useTeamRosterStore.getState().apply('h1', [ctxOnly]))
+    expect(display).toBe(first)
+    const active = joining()
+    active.members[0] = { ...active.members[0], state: 'active' }
+    act(() => useTeamRosterStore.getState().apply('h1', [active]))
+    expect(display).not.toBe(first)
+    const second = display
+    const moved = joining() // the host alias is structure too
+    moved.members[0] = { ...moved.members[0], state: 'active', host_alias: 'b27' }
+    act(() => useTeamRosterStore.getState().apply('h1', [moved]))
+    expect(display).not.toBe(second)
+  })
+
   it('a membership change (a member joins), a label change, a collapse, an order change and a tab change do re-render', () => {
     render(<TeamDisplayProvider><Probe /></TeamDisplayProvider>)
     seed([roster()], tabs)

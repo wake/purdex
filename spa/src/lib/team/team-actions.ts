@@ -20,6 +20,7 @@ export type OpenSeatOutcome =
   | 'opened' // a tab was opened for it
   | 'unlisted' // its tmux session is not in the host's session list yet: toast, nothing opened
   | 'hidden' // its host is hidden in this workbench: nothing opened
+  | 'no-host' // a remote member whose host this Mac has not configured: toast, nothing opened (cross-host teams)
   | 'unknown' // no such team / seat
 
 export interface OpenSeatResult {
@@ -48,11 +49,16 @@ function notListed(): void {
   useUndoToast.getState().show(useI18nStore.getState().t('team.seat_not_listed'))
 }
 
-/** The seat's session as the host lists it (by tmux name), or null while the list does not hold it. */
-function listedSession(view: TeamView, seat: Seat) {
+function noHost(seat: Seat): void {
+  const { t } = useI18nStore.getState()
+  useUndoToast.getState().show(t('team.seat_no_host', { alias: seat.hostAlias || t('team.seat_host_unknown') }))
+}
+
+/** The seat's session as ITS host lists it (by tmux name), or null while the list does not hold it. */
+function listedSession(seat: Seat) {
   const name = seat.session.tmux_session
-  if (!name) return null
-  return useSessionStore.getState().sessions[view.hostId]?.find((s) => s.name === name) ?? null
+  if (!name || seat.hostId === null) return null
+  return useSessionStore.getState().sessions[seat.hostId]?.find((s) => s.name === name) ?? null
 }
 
 /**
@@ -67,24 +73,30 @@ export function openTeamSeat(teamKey: string, sessionId: string): OpenSeatResult
   const seat = view ? seatOf(view, sessionId) : undefined
   if (!view || !seat) return { outcome: 'unknown', tabId: null }
 
+  // A remote member whose host this Mac lacks: nothing to open, and nothing else touched (collapse, ghost).
+  if (seat.hostId === null) {
+    noHost(seat)
+    return { outcome: 'no-host', tabId: null }
+  }
+
   const ui = useTeamUiStore.getState()
   if (ui.collapsed[teamKey] === true) ui.setCollapsed(teamKey, false)
 
   const shown = showSeatTab(seat)
   if (shown !== null) return { outcome: 'activated', tabId: shown }
 
-  if (!isRefShownNow(view.hostId)) return { outcome: 'hidden', tabId: null }
+  if (!isRefShownNow(view.hostId) || !isRefShownNow(seat.hostId)) return { outcome: 'hidden', tabId: null }
 
   const workspaces = useWorkspaceStore.getState()
 
   // A member needs its lead's tab as the anchor of the group: open the lead first when it has none.
   if (seat.role === 'member' && view.lead.tabId === null) {
-    const leadSession = listedSession(view, view.lead)
+    const leadSession = listedSession(view.lead)
     if (!leadSession) {
       notListed()
       return { outcome: 'unlisted', tabId: null }
     }
-    if (!listedSession(view, seat)) {
+    if (!listedSession(seat)) {
       notListed()
       return { outcome: 'unlisted', tabId: null }
     }
@@ -95,7 +107,7 @@ export function openTeamSeat(teamKey: string, sessionId: string): OpenSeatResult
     useTeamUiStore.getState().setGhostWorkspace(teamKey, null)
   }
 
-  const session = listedSession(view, seat)
+  const session = listedSession(seat)
   if (!session) {
     notListed()
     return { outcome: 'unlisted', tabId: null }
@@ -116,7 +128,7 @@ export function openTeamSeat(teamKey: string, sessionId: string): OpenSeatResult
       place = { workspaceId: ws.id, afterTabId: group[group.length - 1] ?? fresh.lead.tabId }
     }
   }
-  const tabId = openSessionTabAt(view.hostId, session, place)
+  const tabId = openSessionTabAt(seat.hostId, session, place)
   if (tabId === null) return { outcome: 'hidden', tabId: null }
   if (seat.role === 'lead') useTeamUiStore.getState().setGhostWorkspace(teamKey, null)
   const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)

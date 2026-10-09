@@ -38,10 +38,12 @@ function codeLookup(sessionsByHost: StructureInput['sessionsByHost']): CodeLooku
   }
 }
 
-function seatView(view: TeamView, seat: Seat, codeOf: CodeLookup): TeamSeatView {
+function seatView(seat: Seat, codeOf: CodeLookup): TeamSeatView {
   const name = seat.session.tmux_session
-  const code = name ? codeOf(view.hostId, name) : ''
-  return { sessionId: seat.session.session_id, title: seat.label, hostId: view.hostId, sessionCode: code, role: seat.role, tabId: seat.tabId }
+  // The seat's own host (a remote member lives elsewhere); '' while this Mac has no such host, so no light is keyed to it.
+  const hostId = seat.hostId ?? ''
+  const code = name && seat.hostId !== null ? codeOf(seat.hostId, name) : ''
+  return { sessionId: seat.session.session_id, title: seat.label, hostId, sessionCode: code, role: seat.role, tabId: seat.tabId }
 }
 
 /**
@@ -56,8 +58,8 @@ export function structureSignature(input: StructureInput): string {
     views.map((v) => [
       v.key, v.name, v.label, v.colorIndex,
       [v.lead, ...v.members].map((s) => {
-        const sv = seatView(v, s, codeOf)
-        return [sv.sessionId, sv.role, sv.title, sv.tabId, sv.sessionCode, s.session.tmux_session ?? '']
+        const sv = seatView(s, codeOf)
+        return [sv.sessionId, sv.role, sv.title, sv.tabId, sv.sessionCode, s.session.tmux_session ?? '', s.hostId, s.hostAlias, s.state]
       }),
     ]),
     workspaces.map((w) => [w.id, w.tabs.filter((id) => index.byTabId.has(id)).map((id) => { const h = index.byTabId.get(id)!; return `${id}\u0000${h.key}\u0000${h.role}` })]),
@@ -83,8 +85,8 @@ export function buildTeamDisplay(input: StructureInput, actions: TeamActions = N
 
   const codeOf = codeLookup(sessionsByHost)
   const seatsOf = (v: TeamView) => ({
-    lead: seatView(v, v.lead, codeOf),
-    members: v.members.map((m) => seatView(v, m, codeOf)),
+    lead: seatView(v.lead, codeOf),
+    members: v.members.map((m) => seatView(m, codeOf)),
   })
 
   // Marks: for each team tab, where it sits among the VISIBLE tabs of its group in its workspace.
