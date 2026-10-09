@@ -95,7 +95,11 @@ P6-3c raised the relay lock in the write turn's `turn.start` hook: `await pdx re
 | daemon log "hook allow … holds the lock" for the op | none (the flag was not up) |
 | Conclusion | **The engine does not hold a turn for `turn.start`'s awaited call.** The model's Write ran 12 s before the lock finished. Plan P6-3c rule 1's fallback is taken: the lock is raised in `startWrite`, before the write prompt's `$.prompt.submit`. |
 
-After the fix the same measurement needs no shim: a relay's write turn must log `hook allow: … tool "Write" while relay op <op> holds the lock` in the daemon log.
+**Verified after the fix (alpha.656, 2026-10-09, op `ae050b17-2de5-4153-8f63-ae8c734091ee`, a spawned member):** `→ writing` 22:06:53, daemon log `hook allow: … tool "Write" while relay op ae050b17… holds the lock` 22:07:02, `→ written` 22:07:10, `→ cleared` 22:07:14, `→ done` 22:07:28. The lock was up for the write turn.
+
+Real runs of this recipe (alpha.652/656): idle relay (49 s, `seen` 0.8 s after the op was created), relay during an 80 s foreground `ping` (`seen` within 1 s, claimed only after the ping), handoff §8 carrying the lead line, the old ref still reached the member (lineage), `model_id`/`effort` equal before and after, no control text in any transcript, afterwards no flag in `hooklocks/`, every op `done`, no throwaway tmux or session left.
+
+Before the fix, the same measurement needed this shim: a relay's write turn must log `hook allow: … tool "Write" while relay op <op> holds the lock` in the daemon log.
 
 ## Not verified on a real session
 
