@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -299,4 +300,54 @@ func TestResolve_ConcurrentResolutionsShareOneResolver(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// The request is cancelled while the scan runs: the answer is the cancellation, not a 404.
+func TestResolve_CancelledDuringTheScanIsNotNotFound(t *testing.T) {
+	e := newResEnv(t)
+	for i := 0; i < 300; i++ {
+		if err := os.MkdirAll(filepath.Join(e.root, fmt.Sprintf("-d%03d", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	n := 0
+	r := &Resolver{Home: e.home, onDir: func() {
+		if n++; n == 3 {
+			cancel()
+		}
+	}}
+	if _, err := r.Resolve(ctx, sidR); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// A FIFO named like the transcript (as a candidate and in the lookup) neither blocks nor is returned.
+func TestResolve_FIFOIsNeitherOpenedNorBlocksTheLookup(t *testing.T) {
+	e := newResEnv(t)
+	fifo := filepath.Join(e.root, "-fifo", sidR+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(fifo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		r := &Resolver{Home: e.home, Index: fakeIndex{path: fifo, ok: true},
+			Owners: fakeOwners{owners: []Owner{{TranscriptPath: fifo, Status: "idle"}}}}
+		s, err := r.Resolve(context.Background(), sidR)
+		if err == nil {
+			s.Closer.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("err = %v, want ErrNotFound", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the resolver blocked on a FIFO")
+	}
 }

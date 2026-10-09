@@ -53,6 +53,8 @@ type Resolver struct {
 
 	// afterCheck runs between a candidate's containment check and its open (tests swap a directory there).
 	afterCheck func()
+	// onDir runs before each directory the lookup opens (tests cancel the request mid-scan).
+	onDir func()
 }
 
 // Resolve returns the current Source of the session, with its file open: the caller closes Source.Closer. The order
@@ -119,6 +121,9 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 	if f, _ := r.lookup(ctx, root, sessionID); f != nil {
 		return finish(f)
 	}
+	if err := ctx.Err(); err != nil { // the request ended during the scan: that is not "no such conversation"
+		return Source{}, err
+	}
 	return Source{}, ErrNotFound
 }
 
@@ -174,6 +179,9 @@ func (r *Resolver) lookup(ctx context.Context, root, sessionID string) (*os.File
 				return nil, visited
 			}
 			visited++
+			if r.onDir != nil {
+				r.onDir()
+			}
 			f, oerr := transcriptpath.Open(root, filepath.Join(root, de.Name(), sessionID+".jsonl"))
 			if oerr == nil {
 				return f, visited
