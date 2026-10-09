@@ -1,6 +1,6 @@
 # Session workbook — spec (v1)
 
-> Status: **approved by the user 2026-10-09** (「工作簿 spec 可以」). Discussion hosted by the A-line lead (purdex-1f); the result goes to the interface line (88) for the App side. Sub-project 1 of 2: the **session workbook**. The **employee workbook** (named virtual employees, monthly statistics) is a later round built on these records (§11).
+> Status: **approved by the user 2026-10-09** (「工作簿 spec 可以」); §10 surfaces decided the same evening. Discussion hosted by the A-line lead (purdex-1f); the result goes to the interface line (88) for the App side. Sub-project 1 of 2: the **session workbook**. The **employee workbook** (named virtual employees, monthly statistics) is a later round built on these records (§11).
 
 ## 1. Problem and goal
 
@@ -130,7 +130,7 @@ wb_status(conv_key TEXT PRIMARY KEY, status TEXT NOT NULL, entry_id INTEGER NOT 
 ## 7. Push
 
 - Applies to the push of a **Stop** (turn ended: done, or asking the user in text) and **StopFailure** (error). Permission requests and `Notification` keep today's text: they fire in the middle of a turn, before any workbook entry can exist, and their text is already specific ("需要權限：Bash").
-- When the push gate (`internal/module/push/gate.go`) has decided to push a Stop, the push module **holds it up to N = 8 s** (a timer, the `holdSet` pattern of `agent_trigger.go:101`; never a sleep in `onNotify`) for that turn's entry. Ready with a `push` → title `{session name}・{thing}` (cut to the title limit), body `push`. Not ready, failed, skipped or no `push` → today's title and body, unchanged.
+- When the push gate (`internal/module/push/gate.go`) has decided to push a Stop, the push module **holds it up to N = 8 s** (a timer, the `holdSet` pattern of `agent_trigger.go:101`; never a sleep in `onNotify`) for that turn's entry. Ready with a `push` → title `{session name}・{thing}` (cut to the title limit), body `push`, and the payload gains `purdex.workbook = {conv_key, entry_id}` so iOS can open that entry (§10.3). Not ready, failed, skipped or no `push` → today's title and body, unchanged.
 - Covered by the hold: the measured p90 ≈ 10 s means roughly 8 in 10 Stop pushes get the workbook line. N is a host setting (`workbook.push_wait_s`, 0 = never wait).
 - A present Mac still suppresses the push (gate rule 4); the entry is written either way.
 
@@ -147,13 +147,37 @@ wb_status(conv_key TEXT PRIMARY KEY, status TEXT NOT NULL, entry_id INTEGER NOT 
 - Host event `workbook.entry` `{conv_key, session_id, entry}` on insert and on every state change (pending → ok / failed / skipped, re-write); host event `workbook.status` `{conv_key, status, updated_at}`.
 - Errors: 404 `not_found` (no workbook for that session), 400 `bad_request`.
 
-## 10. What 88 gets (the App side is 88's)
+## 10. Where it is seen (user decision 2026-10-09) and what 88 gets
+
+**Three surfaces, no more in v1.** The user chose: the panel beside a conversation, the team panel line, and iOS. **No standalone workbook page in v1**: reading the workbook of a session that has ended, and the period view for C ("what got done this week"), have no screen yet; the records are kept (§6) and the API serves them (§9), so a later page needs no daemon change.
+
+### 10.1 Mac App — one shared panel: team panel and workbook (user 2026-10-09)
+
+The workbook and the team panel **share one panel area**, and that area can be **enlarged and shrunk** (resize, plus an expanded mode that takes most of the window). Two ways in, one place:
+
+- **From the team panel:** each member row (and the lead's own row) shows 「正在做的任務」 — the **first sentence of the conversation's latest `status`**, one line with an ellipsis, hover for the whole `status`; no workbook yet → no line. **Clicking a row drills into that member's workbook** in the same panel area, with a back control to the team list. A member that has ended (killed, gone, released) still opens its workbook: the records are kept.
+- **From a conversation:** a 「工作簿」 toggle (Phosphor `Notebook`) in the toolbar of a Claude Code session's tab (terminal or conversation view) opens the same panel area on that conversation's workbook. Hidden for other agents and for a session with no workbook yet.
+
+The workbook view (either way in):
+- Top: 「目前狀況」 — the latest `status`, with its time.
+- Below: entries **grouped by `thing`**, the most recent thing first. Each group: the thing's name, 進行中 / 完成 (from `thing_done`), and its entries newest first (time + `entry`). Finished things are collapsed; a click expands them.
+- A relayed conversation shows one continuous workbook (one `conv_key`, §4.1).
+- **Live:** inserts and state changes arrive through the host events of §9 (`workbook.status` also refreshes the team panel line); no polling.
+- **States:** `pending` 「整理中…」, `failed` 「整理失敗」 with the reason on hover, `skipped` not shown.
+- **Tab-hosted rule (CLAUDE.md checklist):** the panel's open state, size, which view it shows (team list / which workbook) and scroll position live outside the component and survive a tab switch; a regression test switches away and back with the real `TabContent`.
+
+### 10.2 (merged into 10.1)
+
+### 10.3 iOS — session detail, and opening a push
+
+- **Session detail:** 「目前狀況」 (`status`) and the **last 3 entries** (time, `thing`, `entry`); 「更多」 loads older ones (`before=` paging, §9).
+- **Tapping a workbook push** opens that session's detail scrolled to the entry, highlighted. The push carries `purdex.workbook = {conv_key, entry_id}` (§7). A push without it (today's body, the fallback) opens the session as today.
+
+### 10.4 Contract items for 88
 
 1. **Data contract:** §6 fields as returned by §9; the entry states and reasons; `prompt_ver`.
-2. **"正在做的任務"** (team panel member row, kickoff_team_interface item 19): the conversation's latest `status`, first sentence, one line; updates on `workbook.status`; no workbook yet → show nothing (today's row).
-3. **Display surfaces** (88 decides the layout): team panel row (2), a workbook view beside a conversation (status on top, entries grouped by `thing`, done things collapsed), the iOS command view (status + the last 3 entries), a period view for C.
-4. **States to show:** `pending` 「整理中」, `failed` 「整理失敗」 (the reason in a tooltip), `skipped` not shown.
-5. Filtering is the daemon's job (§8).
+2. Filtering is the daemon's job (§8); the App shows what the daemon stored.
+3. Capability `workbook.v1` gates every surface: an older daemon shows none of them.
 
 ## 11. Employee workbook (later round)
 
