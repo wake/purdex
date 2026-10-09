@@ -299,7 +299,7 @@ function fill(text, vars) {
 
 // compose builds the write, fix or seed prompt of request p (U21 (c)): the
 // fixed head, the body, and the fixed tail on the next line —
-//   fill(head, all) + fill(body, public) + (tail === '' ? '' : '\n' + fill(tail, all))
+//   fill(head, all) + fill(body, public) + (the tail filled, on the next line, unless it fills to nothing)
 // The head and tail are always the mod's own (FIXED, never the daemon's):
 // the machine tag with the nonce, the reply rule, the eight headings the
 // check reads and the facts. The body gets only the five public variables;
