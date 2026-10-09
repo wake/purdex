@@ -56,6 +56,7 @@ const ROLE_RECHECK_MS = 60_000 // a cached `member` role is re-read (hello) at t
 const MAX_FIX_ROUNDS = 2
 const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
+const LOCK_TIMEOUT_MS = 8_000 // `pdx relay lock|unlock` (local file operations; P6-3c)
 const SELF_TIMEOUT_MS = 8_000 // /relay waits in its hook for `pdx relay self`: the person waits for the answer
 const PROMPTS_TIMEOUT_MS = 8_000 // `pdx relay prompts` before each write / fix / seed prompt (spec §8.8); then the built-in body
 const MAX_BODY_BYTES = 16_384 // a body's limit in UTF-8 bytes, the daemon's (internal/team RelayPromptMaxBytes)
@@ -471,9 +472,41 @@ async function whoami($) {
   return (r.stdout || '').trim().replace(/\n/g, ' | ') || '(unknown)'
 }
 
+// The relay lock (P6-3c; spec §6.6): the flag file that makes `pdx hook` ask the daemon, which then allows only the
+// handoff Write. It is raised by the turn.start of THE turn that writes the handoff (after any running or released
+// turn has completed, so those are never denied) and lowered before the mod's own /clear. Fail-open both ways: a lock
+// that cannot be raised is one log line and the write goes on; an unlock that fails is one log line and the daemon's
+// safety net removes the flag at `cleared` or at a terminal state.
+async function lockRelay($, p) {
+  try {
+    const r = await pdx($, ['relay', 'lock', p.op.id, '--session', p.oldSession], LOCK_TIMEOUT_MS)
+    if (r.exitCode === 0) {
+      p.locked = true
+    } else {
+      log($, 'relay lock not raised (exit ' + r.exitCode + '): ' + String(r.stderr || '').trim().split('\n')[0])
+    }
+  } catch (err) {
+    log($, 'relay lock not raised: ' + String(err))
+  }
+}
+
+async function unlockRelay($, p) {
+  if (!p.locked) return
+  p.locked = false // before the call: a second path in the meantime does not send a second unlock
+  try {
+    const r = await pdx($, ['relay', 'unlock', p.op.id, '--session', p.oldSession], LOCK_TIMEOUT_MS)
+    if (r.exitCode !== 0) log($, 'relay unlock failed (exit ' + r.exitCode + '): the daemon removes the flag at cleared')
+  } catch (err) {
+    log($, 'relay unlock failed: ' + String(err))
+  }
+}
+
 // toIdle is every return to idle: it lets the request go first (letGo), so
-// a caller that also reports does so after the held prompts went on.
-function toIdle() {
+// a caller that also reports does so after the held prompts went on. A relay lock still up is lowered from a timer
+// (never awaited in a hook).
+function toIdle($) {
+  const p = s.pending
+  if (p && p.locked) later($, 0, () => unlockRelay($, p))
   letGo()
   Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
 }
@@ -558,13 +591,13 @@ async function begin($, sid, gen, u, adopted) {
   const mine = s.gen === gen && s.state === 'beginning'
   if (!mine || now !== sid) {
     if (opened) report($, body.op.id, 'cancelled', ['--error', 'abandoned'])
-    if (mine) toIdle() // same generation, another session id: nothing will ever answer for this begin
+    if (mine) toIdle($) // same generation, another session id: nothing will ever answer for this begin
     return { kind: 'abandoned' }
   }
   if (!opened) {
     const code = r.exitCode === 13 ? stderrCode(r) : ''
     if (code === 'member_relay_is_leads') s.role = 'member'
-    toIdle()
+    toIdle($)
     // 13 self_relay_off | self_relay_paused | relay_open, 20, 21, 1: the threshold caller does nothing
     // (§8.1, §8.7 (d)) and asks again at +10; `/relay now` says why.
     if (r.exitCode === 13) return { kind: 'refused', code }
@@ -706,7 +739,7 @@ async function relayNow($) {
   s.begun = begun
   const giveBack = () => {
     begun.resolve(undefined)
-    if (s.gen === gen && s.state === 'beginning') toIdle()
+    if (s.gen === gen && s.state === 'beginning') toIdle($)
   }
   let u, sid
   try {
@@ -817,7 +850,7 @@ function settle($, p, outcome) {
   if (s.pending !== p) return
   $.ui.status(undefined)
   if (s.state !== 'awaiting') return
-  if (outcome !== 'approved') return toIdle()
+  if (outcome !== 'approved') return toIdle($)
   s.state = 'approved'
   later($, STEP_MS, async () => {
     // both bounded (10 s, 8 s) and asked together: the step waits no longer than whoami did
@@ -852,7 +885,7 @@ async function submit($, text) {
 function giveUp($, p, inState, state, error, why) {
   log($, why)
   if (s.pending !== p || s.state !== inState) return false
-  toIdle()
+  toIdle($)
   report($, p.op.id, state, ['--error', error])
   return true
 }
@@ -872,6 +905,8 @@ async function onWriteTurnDone($) {
     s.state = 'clearing'
     report($, p.op.id, 'written')
     later($, STEP_MS, async () => {
+      if (s.pending !== p || s.state !== 'clearing') return
+      await unlockRelay($, p) // before the /clear, so the new conversation never starts under the lock
       if (s.pending !== p || s.state !== 'clearing') return
       try {
         await $.command.run({ command: 'clear' })
@@ -896,7 +931,7 @@ async function onWriteTurnDone($) {
     })
     return
   }
-  toIdle()
+  toIdle($)
   report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
   $.ui.toast(TOAST_GAVE_UP)
 }
@@ -906,7 +941,7 @@ async function onSeedTurnDone($) {
   const u = (await $.session.usage()).context
   if (s.pending !== p) return
   report($, p.op.id, 'done')
-  toIdle()
+  toIdle($)
   s.floor = u.tokens // the loop guard: the next ask needs minGrowth more (§8.1)
   s.lastAskPct = undefined
 }
@@ -946,9 +981,15 @@ export function register(on) {
     const p = s.pending
     if (s.interactive && s.leadAsk && s.leadAsk.turnId === undefined && typeof e.text === 'string' && e.text.includes(s.leadAsk.nonce)) s.leadAsk.turnId = e.turnId
     if (s.interactive && p && p.nonce && s.state === p.nonceState && typeof e.text === 'string' && e.text.includes(p.nonce)) {
-      if (s.state === 'approved') s.writeTurnId = e.turnId
+      const writing = s.state === 'approved'
+      if (writing) s.writeTurnId = e.turnId
       else s.seedTurnId = e.turnId
       p.nonce = undefined
+      if (writing && !p.lockTried) {
+        p.lockTried = true // fix rounds do not lock again
+        await lockRelay($, p) // before next(e): the turn enters locked
+        if (s.pending !== p) await unlockRelay($, p) // the relay ended while the call was out: nothing will lower it
+      }
     }
     return next(e)
   })
@@ -1010,7 +1051,7 @@ export function register(on) {
     // generation bump above has begin() cancel the op when it answers.
     // toIdle first: a prompt held on the request goes on before the report.
     const was = s.state
-    toIdle()
+    toIdle($)
     if (p && (was === 'awaiting' || was === 'approved')) report($, p.op.id, 'cancelled', ['--error', 'abandoned'])
     else if (p && was === 'seeding') report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
     if (was === 'awaiting') $.ui.status(undefined)
@@ -1083,11 +1124,11 @@ export function register(on) {
     }
     if (s.state === 'awaiting' && s.pending) {
       const op = s.pending.op.id
-      toIdle() // a held prompt goes on at once, unchanged, before the report
+      toIdle($) // a held prompt goes on at once, unchanged, before the report
       $.ui.status(undefined)
       report($, op, 'cancelled', ['--error', 'compacted'])
     } else if (s.state === 'beginning') {
-      toIdle() // the begin still out answers for a gone generation: its op is cancelled{abandoned}
+      toIdle($) // the begin still out answers for a gone generation: its op is cancelled{abandoned}
     }
     s.lastAskPct = undefined // after a compaction the next ask needs ≥ threshold again
     return next(e)

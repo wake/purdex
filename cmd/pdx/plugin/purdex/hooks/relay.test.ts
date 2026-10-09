@@ -164,6 +164,8 @@ type Fake = {
   // The mod's own read-only git runs (P6-3a), kept apart from the pdx calls in argvs: every run's argv and init, and how
   // each answers (default: exit 0, no output).
   gitRuns?: { argv: string[]; init?: any }[]
+  order?: string[] // every pdx call and every $.command.run, in the order they happened (P6-3c)
+  atTurnStart?: () => void // called inside the engine's turn.start, i.e. after the mod's turn.start hook called next(e)
   git?: (argv: string[]) => { exitCode: number; stdout?: string; stderr?: string } | Promise<{ exitCode: number; stdout?: string; stderr?: string }>
   sleep?: (argv: string[]) => { exitCode: number } | Promise<{ exitCode: number }>
   // Reporter on (interface U1 B2): pdx.json names a mod socket and `posts` holds every batch
@@ -230,6 +232,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
       return { value: { exitCode: g.exitCode, stdout: g.stdout ?? '', stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     f.argvs.push([...e.argv])
+    ;(f.order ??= []).push('pdx ' + e.argv.slice(1).join(' '))
     f.timeouts.push(e.init?.timeoutMs)
     const argv = [...e.argv].slice(1)
     const r = await (f.prompts && argv[0] === 'relay' && argv[1] === 'prompts' ? f.prompts(argv, e.init) : f.pdx(argv))
@@ -247,7 +250,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
   on('ui.log', async (_$: any, e: any) => { f.logs.push(e.text); return { value: undefined } })
   on('command.register', async (_$: any, e: any) => { f.registered.push(e); return { value: { command: e.name } } })
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
-  on('turn.start', async (_$: any, e: any) => ({ turnId: e.turnId }))
+  on('turn.start', async (_$: any, e: any) => { f.atTurnStart?.(); return { turnId: e.turnId } })
   on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
   on('classic.SessionStart', async () => { if (f.switchTo) { f.sessionId = f.switchTo; f.switchTo = undefined } return {} })
   on('prompt.submit', async (_$: any, e: any) => {
@@ -259,6 +262,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
   })
   on('command.run', async (_$: any, e: any) => {
     f.commands.push(e.command)
+    ;(f.order ??= []).push('command ' + e.command)
     if (f.failCommand) throw new Error(f.failCommand)
     return { text: 'ran ' + e.command }
   })
@@ -2764,4 +2768,89 @@ test('the byte cap cuts on a code point: a pair of surrogates is never split', a
   const text = f.submits[0].text
   expect(text).toContain('…（截斷）')
   expect(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(text)).toBe(false)
+})
+
+// ---- P6-3c: the mod raises the relay lock in the write turn and lowers it before /clear ----
+
+const lockCalls = (f: Fake) => f.argvs.map(sub).filter((c) => c.startsWith('relay lock') || c.startsWith('relay unlock'))
+
+// Mutation gate: lock at approval/claim instead of at the write turn → the released-prompt test is red.
+test('the write turn\'s turn.start runs pdx relay lock before next(e)', async ($, on) => {
+  const { f } = await approvedRelay($, on)
+  expect(lockCalls(f)).toEqual([]) // not at approval, not at the prompt's submit
+  let lockedWhenTheTurnEntered: string[] | undefined
+  f.atTurnStart = () => { lockedWhenTheTurnEntered = lockCalls(f) }
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  expect(lockedWhenTheTurnEntered).toEqual(['relay lock op-1 --session sid-old'])
+  expect(f.timeouts[f.argvs.findIndex((a) => sub(a).startsWith('relay lock'))]).toBe(8000)
+})
+
+test('a released prompt\'s turn does not lock', async ($, on) => {
+  const { f } = await approvedRelay($, on)
+  await $.turn.start({ text: 'a released prompt that ran first', turnId: 'tx' })
+  await $.turn.start({ text: 'the op id alone: op-1', turnId: 'ty' })
+  expect(lockCalls(f)).toEqual([])
+})
+
+// Mutation gate: unlock after the /clear → red.
+test('unlock runs before /clear, and the mod\'s own /clear leaves nothing up', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  const o = f.order!
+  const iLock = o.indexOf('pdx relay lock op-1 --session sid-old')
+  const iUnlock = o.indexOf('pdx relay unlock op-1 --session sid-old')
+  const iClear = o.indexOf('command clear')
+  expect(iLock).toBeGreaterThan(-1)
+  expect(iUnlock).toBeGreaterThan(iLock)
+  expect(iClear).toBeGreaterThan(iUnlock)
+  expect(lockCalls(f).length).toBe(2)
+})
+
+test('a give-up after the lock went up unlocks: fix rounds exhausted', async ($, on) => {
+  // fix rounds exhausted (failed handoff_incomplete)
+  {
+    const { f, clock } = await approvedRelay($, on)
+    f.files['/data/relay/op-1.md'] = '# HANDOFF\n## 1. a\n'
+    for (let i = 0; i < 6 && f.submits.length < 20; i++) {
+      await $.turn.start({ text: f.submits[f.submits.length - 1].text, turnId: 'tw' + i })
+      await turn($, 'tw' + i)
+      await clock.advance(50)
+    }
+    expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old', 'relay unlock op-1 --session sid-old'])
+  }
+})
+
+test('the user\'s own /clear while the write turn holds the lock lowers it', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  f.sessionId = 'sid-user-cleared'
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.advance(50)
+  expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old', 'relay unlock op-1 --session sid-old'])
+})
+
+test('a lock that fails does not stop the write, and nothing is unlocked for it', async ($, on) => {
+  const f0 = (argv: string[]) => argv[1] === 'lock' ? { exitCode: 1, stderr: 'pdx relay: cannot raise the relay lock: boom\n' } : pdxWith([{ exitCode: 0, stdout: APPROVAL('approved') }])(argv)
+  const { f, clock } = await approvedRelay($, on, undefined, { pdx: f0 as any })
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old']) // no unlock for a lock that never went up
+  expect(f.commands).toContain('clear') // the relay went on
+  expect(f.logs.some((l: string) => l.includes('relay lock not raised'))).toBe(true)
+})
+
+test('fix rounds do not lock again', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  f.files['/data/relay/op-1.md'] = '# HANDOFF\n## 1. a\n'
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(f.submits.length).toBe(2) // the fix prompt
+  await $.turn.start({ text: f.submits[1].text, turnId: 'tf' })
+  expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old'])
 })
