@@ -3,6 +3,8 @@ package teammod
 
 import (
 	"net/http"
+	"strings"
+	"unicode"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -44,13 +46,13 @@ func (m *Module) handleRemoteMembersEnd(w http.ResponseWriter, r *http.Request) 
 	if !m.decodeBody(w, r, &req) {
 		return
 	}
-	if req.MK == "" || len(req.MK) > maxCommandField {
-		m.writeJSON(w, http.StatusBadRequest, team.RemoteMemberEndError{Error: team.ErrBadRequest, Detail: "mk is required (at most 256 bytes)"})
+	if req.MK == "" || len(req.MK) > maxCommandField || strings.IndexFunc(req.MK, unicode.IsControl) >= 0 {
+		m.writeJSON(w, http.StatusBadRequest, team.RemoteMemberEndError{Error: team.ErrBadRequest, Detail: "mk is required (at most 256 bytes, no control characters)"})
 		return
 	}
 	res, err := m.store.EndRemoteMemberLocally(req.MK, m.newID(), m.newID(), m.now())
 	if err != nil {
-		m.logf("[team] end remote member %s: %v", req.MK, err)
+		m.logf("[team] end remote member %q: %v", req.MK, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
