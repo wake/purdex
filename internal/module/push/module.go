@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/push/apnskey"
@@ -53,11 +54,19 @@ type Module struct {
 
 	// The trigger side (started in Start, only when ready). events / newAPNs / presence are seams: nil = the real ones.
 	events   team.ApprovalEvents
+	notify   agent.NotifyFeed // the agent module's live hook frames; nil = from the registry
 	newAPNs  func() apnsClient
 	presence presenceChecker        // what the gates ask; nil = pres
 	pres     *Presence              // what PUT /api/push/presence feeds
 	sender   atomic.Pointer[sender] // read by the approval callback, which Stop does not wait for
 	unsub    func()
+
+	// The agent-event side (agent_trigger.go).
+	gate        *Gate
+	asks        *openAsks
+	holds       holdSet
+	holdFor     time.Duration // how long a waiting event waits for its hook_ask (spec §5.2 rule 8); a test seam
+	unsubNotify func()
 }
 
 // presenceChecker answers "does a present Mac show this session" (push spec R6, §5.4): by tmux session name for an
@@ -68,11 +77,12 @@ type presenceChecker interface {
 }
 
 func New() *Module {
-	return &Module{home: os.UserHomeDir, devices: map[string]push.Device{}, pres: NewPresence(time.Now)}
+	return &Module{home: os.UserHomeDir, devices: map[string]push.Device{}, pres: NewPresence(time.Now),
+		gate: NewGate(time.Now), asks: newOpenAsks(time.Now), holdFor: waitingHold}
 }
 
 func (m *Module) Name() string           { return "push" }
-func (m *Module) Dependencies() []string { return []string{"team"} }
+func (m *Module) Dependencies() []string { return []string{"team", "agent"} }
 
 // Init loads the APNs key, opens push.db and reads every device into the cache. Any failure is recorded (without key
 // material) and leaves the module off; Init itself returns nil so the daemon starts (push spec §3).
@@ -184,8 +194,22 @@ func (m *Module) Start(ctx context.Context) error {
 	snd := newSender(m, m.newAPNs(), hostID, push.BundleID)
 	snd.Start(ctx)
 	m.sender.Store(snd)
+	m.holds.reset()
 	if m.events != nil {
-		_, m.unsub = m.events.SubscribeApprovals(m.onApproval)
+		var open []team.Approval
+		open, m.unsub = m.events.SubscribeApprovals(m.onApproval)
+		m.asks.Load(open)
+	}
+	if m.notify == nil {
+		svc, ok := m.core.Registry.Get(agent.NotifyFeedKey)
+		if feed, isFeed := svc.(agent.NotifyFeed); ok && isFeed {
+			m.notify = feed
+		} else {
+			log.Printf("[push] the agent module's hook feed is not available: agent events will not be pushed")
+		}
+	}
+	if m.notify != nil {
+		m.unsubNotify = m.notify.SubscribeNotify(m.onNotify)
 	}
 	log.Printf("[push] enabled (%v, %d device(s))", m.key, len(m.snapshot()))
 	return nil
@@ -197,6 +221,11 @@ func (m *Module) Stop(context.Context) error {
 		m.unsub()
 		m.unsub = nil
 	}
+	if m.unsubNotify != nil {
+		m.unsubNotify()
+		m.unsubNotify = nil
+	}
+	m.holds.stopAll()
 	if snd := m.sender.Swap(nil); snd != nil {
 		snd.Stop() // a callback that already holds snd only enqueues onto a stopped sender: harmless
 	}
@@ -211,6 +240,12 @@ func (m *Module) Stop(context.Context) error {
 // when a present Mac shows the requesting session (R6, by the tmux session name of the origin; an origin with no tmux is
 // never suppressed).
 func (m *Module) onApproval(op string, a team.Approval) {
+	switch op { // the open hook_ask set is kept whether or not this approval is pushed (rule 8 reads it)
+	case "opened":
+		m.asks.Opened(a)
+	case "closed":
+		m.asks.Closed(a.ID)
+	}
 	snd := m.sender.Load() // one read: Stop may clear it at any moment
 	if op != "opened" || snd == nil {
 		return

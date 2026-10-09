@@ -44,12 +44,11 @@ func isPushedAsk(a team.Approval) bool {
 	return pushed
 }
 
-// Reset replaces the set with the snapshot of open approvals (a new subscription: the daemon restarted or the feed
-// was re-armed).
-func (o *openAsks) Reset(open []team.Approval) {
+// Load adds the snapshot of open approvals the feed returned when it was subscribed. It adds, never clears: the feed
+// arms its callback in the same step that returns the snapshot, so an event may already have run by the time this does.
+func (o *openAsks) Load(open []team.Approval) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.byID = map[string]askEntry{}
 	now := o.now()
 	for _, a := range open {
 		if !isPushedAsk(a) {

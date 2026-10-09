@@ -72,19 +72,19 @@ func TestOpenAsks_ClosedStaysFor10SecondsThenGoes(t *testing.T) {
 	}
 }
 
-// A restart (a new subscription) rebuilds from the snapshot. Mutation gate: ignore the snapshot → red.
-func TestOpenAsks_ResetRebuildsFromTheSnapshot(t *testing.T) {
+// A new subscription (a restart) loads the snapshot; an event that ran before the snapshot was loaded is kept.
+// Mutation gate: ignore the snapshot → red; clear before loading → red.
+func TestOpenAsks_LoadAddsTheSnapshotAndKeepsEarlierEvents(t *testing.T) {
 	o, c := newAsks()
-	o.Opened(ask("old", "sid-old", "gone:@1.%1"))
-	c.advance(time.Minute)
+	o.Opened(ask("early", "sid-early", "early:@1.%1"))
 	snap := ask("a1", "sid-1", "dev:@1.%2")
 	snap.CreatedAt = c.Now().Add(-5 * time.Minute).UnixMilli()
-	o.Reset([]team.Approval{snap})
+	o.Load([]team.Approval{snap})
 	if !o.Has("sid-1", "") {
 		t.Fatal("an ask in the snapshot is not open")
 	}
-	if o.Has("sid-old", "") {
-		t.Fatal("an ask from before the reset survived it")
+	if !o.Has("sid-early", "") {
+		t.Fatal("loading the snapshot dropped an ask that opened first")
 	}
 }
 
@@ -101,7 +101,7 @@ func TestOpenAsks_OnlyAnAnswerableHookAskCounts(t *testing.T) {
 	for _, a := range []team.Approval{terminal, lead, perm} {
 		o.Opened(a)
 	}
-	o.Reset([]team.Approval{terminal, lead, perm})
+	o.Load([]team.Approval{terminal, lead, perm})
 	if o.Has("sid-t", "t") || o.Has("sid-l", "l") || o.Has("sid-p", "p") {
 		t.Fatal("something that is not an answerable hook_ask counted")
 	}
