@@ -406,16 +406,40 @@ const GIT_MAX_LINES = 200
 const GIT_MAX_BYTES = 12_000
 const GIT_COMMANDS = [['status', '--short'], ['diff', '--stat'], ['log', '--oneline', '-10']]
 
+// cleanGit makes git's output safe to embed: it is third-party text (file names, commit subjects). Control characters
+// (except \n and \t), bidi and zero-width marks, a lone surrogate and the BOM are dropped, and the machine tag's opening
+// is defused so no line can pass for the mod's own.
+function cleanGit(text) {
+  let out = ''
+  for (const ch of text) {
+    const c = ch.codePointAt(0)
+    if (c >= 0xd800 && c <= 0xdfff) continue
+    if (c !== 0x0a && c !== 0x09 && (c <= 0x1f || (c >= 0x7f && c <= 0x9f))) continue
+    if ((c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0xfeff) continue
+    out += ch
+  }
+  return out.replaceAll('[pdx', '［pdx')
+}
+
+// capGit cuts at GIT_MAX_LINES and GIT_MAX_BYTES (UTF-8) on a code point, never inside a surrogate pair.
 function capGit(text) {
-  let t = text.replace(/\n+$/, '')
+  let t = cleanGit(text).replace(/\n+$/, '')
   let cut = false
   const rows = t.split('\n')
   if (rows.length > GIT_MAX_LINES) {
     t = rows.slice(0, GIT_MAX_LINES).join('\n')
     cut = true
   }
-  while (utf8Bytes(t) > GIT_MAX_BYTES) {
-    t = t.slice(0, Math.floor(t.length * 0.9))
+  if (utf8Bytes(t) > GIT_MAX_BYTES) {
+    let bytes = 0
+    let kept = ''
+    for (const ch of t) {
+      const n = utf8Bytes(ch)
+      if (bytes + n > GIT_MAX_BYTES) break
+      bytes += n
+      kept += ch
+    }
+    t = kept
     cut = true
   }
   return cut ? t + '\n…（截斷）' : t
@@ -426,17 +450,20 @@ async function gitOne($, argv) {
     const r = await $.process.run(['git', ...argv], { timeoutMs: GIT_TIMEOUT_MS })
     if (r.exitCode !== 0) {
       const first = String(r.stderr || '').split('\n').find((l) => l.trim() !== '') ?? 'exit ' + r.exitCode
-      return '（git 失敗：' + first.trim() + '）'
+      return '（git 失敗：' + cleanGit(first).trim() + '）'
     }
     return capGit(String(r.stdout || '')) || '（無輸出）'
   } catch (err) {
-    return '（git 失敗：' + String(err).split('\n')[0] + '）'
+    return '（git 失敗：' + cleanGit(String(err).split('\n')[0]) + '）'
   }
 }
 
 async function gitFacts($) {
   const outs = await Promise.all(GIT_COMMANDS.map((argv) => gitOne($, argv)))
-  return '```\n' + GIT_COMMANDS.map((argv, i) => '$ git ' + argv.join(' ') + '\n' + outs[i]).join('\n\n') + '\n```'
+  const body = GIT_COMMANDS.map((argv, i) => '$ git ' + argv.join(' ') + '\n' + outs[i]).join('\n\n')
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((r) => r.length))
+  const fence = '`'.repeat(Math.max(3, longest + 1)) // longer than any run of backticks in the output: it cannot close the fence
+  return fence + '\n' + body + '\n' + fence
 }
 
 async function whoami($) {
