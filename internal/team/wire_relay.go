@@ -166,6 +166,22 @@ type ApprovalFeed interface {
 	HoldResponder() (release func())
 }
 
+// ApprovalEventsKey is the service-registry key under which the team module publishes its ApprovalEvents (the push
+// module reads it; team does not import push).
+const ApprovalEventsKey = "team.approval-events"
+
+// ApprovalEvents is the host-wide approval stream for a consumer that must not slow the approval paths (push spec §5.1).
+type ApprovalEvents interface {
+	// SubscribeApprovals returns every open approval and arms fn for every later opened / closed op, in one step under
+	// the module's event lock (no op falls between the list and the first delivery). fn does NOT run under that lock:
+	// each subscriber has its own bounded queue and goroutine, the module's publish is a non-blocking send, and an op
+	// that does not fit is dropped and counted. fn may block, and may call unsubscribe. Ops reach fn in order.
+	// unsubscribe stops delivery: nothing still queued is delivered after it. It does not wait for fn (fn may be the
+	// caller), so ONE callback that was already taken off the queue when unsubscribe was called may still start or finish
+	// afterwards; a consumer must tolerate that single late call.
+	SubscribeApprovals(fn func(op string, a Approval)) (open []Approval, unsubscribe func())
+}
+
 // LineageReaderKey is the service-registry key under which the team module
 // publishes its LineageReader; the peers module reads it at request time
 // (team depends on peers, so peers cannot import the team module).

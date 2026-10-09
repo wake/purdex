@@ -145,6 +145,10 @@ type Module struct {
 	sessionSubs    map[string]map[uint64]func(op string, a team.Approval) // by session id, then subscription id
 	nextSessionSub uint64
 	sessionSubN    int // subscriptions in all
+	// approvalSubs are the SubscribeApprovals subscribers (approval_events.go), under eventMu.
+	approvalSubs   map[uint64]*approvalSub
+	nextApprovalID uint64
+	approvalDrops  atomic.Int64
 	responderHolds atomic.Int64
 
 	// rosterMu orders the team.roster stream (plan PL-1f′): held across
@@ -365,6 +369,7 @@ func (m *Module) Init(c *core.Core) error {
 	// The peers inventory reads the relay lineage through this (spec §8.4).
 	c.Registry.Register(team.LineageReaderKey, store)
 	c.Registry.Register(team.ApprovalFeedKey, team.ApprovalFeed(m))
+	c.Registry.Register(team.ApprovalEventsKey, team.ApprovalEvents(m))
 	return nil
 }
 
@@ -475,6 +480,7 @@ func (m *Module) Stop(context.Context) error {
 	m.turnEndMu.Lock() // a turn-end write already past its stopping() check finishes first; later ones see stopping()
 	m.turnEndMu.Unlock()
 	m.dropSessionSubs()
+	m.dropApprovalSubs()
 	m.sweepWG.Wait()
 	m.spawnWG.Wait()
 	return nil
@@ -570,6 +576,7 @@ func (m *Module) broadcast(op string, a *team.Approval) {
 	m.core.Events.BroadcastStrict(core.HostEvent{Type: team.EventType, Value: string(v)})
 	if a != nil {
 		m.deliverToSessionSubs(op, a)
+		m.publishApprovalEvent(op, a)
 	}
 }
 
