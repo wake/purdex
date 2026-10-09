@@ -180,3 +180,62 @@ func TestNotice_SelfOpsAreNotAnnouncedToALead(t *testing.T) {
 		t.Fatalf("a self op was announced: %v", n)
 	}
 }
+
+// Right after a restart the registry may not list a live session yet: "no frame, not live" is not proof, and the
+// failure is irreversible. It waits for the boot grace; the first liveness tick after it judges. Mutation gate: drop
+// the grace → the op fails at once (red).
+func TestReconcile_MemberGoneWaitsForTheBootGrace(t *testing.T) {
+	f := newFixture(t)
+	op := f.claimedMemberOp()
+	f.setFrames()
+	f.origins.markDead("sid-m1")
+	f.m.bootAt = f.clock.Load()
+	if got, _ := f.m.reconcileFromFrames(context.Background(), op); got.State != team.RelayClaimed {
+		t.Fatalf("failed inside the grace: %+v", got)
+	}
+	f.m.reconcileRelays() // the boot's own run
+	if f.op(op.ID).State != team.RelayClaimed {
+		t.Fatalf("the boot run failed it inside the grace")
+	}
+	f.clock.Add(team.BootGraceS*1000 + 1)
+	f.m.tickN = livenessEvery - 1 // the next tick is a liveness tick
+	f.m.tick()
+	if got := f.op(op.ID); got.State != team.RelayFailed || got.Reason != team.RelayReasonMemberGone {
+		t.Fatalf("after the grace: %+v", got)
+	}
+}
+
+// A positive witness is not deferred: a /clear seen in the frame is written at once, even inside the grace.
+func TestReconcile_AClearSeenInTheFrameIsWrittenEvenInsideTheGrace(t *testing.T) {
+	f := newFixture(t)
+	op := f.claimedMemberOp()
+	f.origins.cleared = map[string]int{"sid-new": 42}
+	f.setFrames(frameOf("sid-new", "%2", true))
+	f.m.bootAt = f.clock.Load()
+	if got, _ := f.m.reconcileFromFrames(context.Background(), op); got.State != team.RelayCleared {
+		t.Fatalf("after: %+v", got)
+	}
+}
+
+// No start time, no automatic cleared (pane ids are reissued after a tmux restart and pids are reused). An old self op
+// takes it from its approval row's origin. Mutation gate: accept an empty start → the first case is cleared (red).
+func TestReconcile_NeedsAStartTimeToWriteACleared(t *testing.T) {
+	f := newFixture(t)
+	op := f.claimedMemberOp()
+	f.m.store.db.Exec(`UPDATE relay_ops SET proc_start = '' WHERE id = ?`, op.ID)
+	f.origins.cleared = map[string]int{"sid-new": 42}
+	f.setFrames(frameOf("sid-new", "%2", true))
+	if got, _ := f.m.reconcileFromFrames(context.Background(), f.op(op.ID)); got.State != team.RelayClaimed {
+		t.Fatalf("cleared without a start time: %+v", got)
+	}
+	// an old self op: pid and pane from its approval row, start time too
+	g := newFixture(t)
+	out := g.begin("sid-1") // pid 10, tmux mt0:@1.%1
+	g.decide(out.RequestID, "approve")
+	g.m.store.db.Exec(`UPDATE relay_ops SET pid = 0, pane_id = '', proc_start = '' WHERE id = ?`, out.Op.ID)
+	g.origins.cleared = map[string]int{"sid-1b": 10}
+	g.setFrames(frameOf("sid-1b", "%1", true))
+	if got, _ := g.m.reconcileFromFrames(context.Background(), g.op(out.Op.ID)); got.State != team.RelayCleared || got.NewSessionID != "sid-1b" {
+		t.Fatalf("old self op: %+v", got)
+	}
+}

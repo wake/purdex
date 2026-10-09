@@ -54,6 +54,7 @@ func (m *Module) tick() {
 		// Flags outlive their request (spec §6.6): prune them on the same
 		// cadence as the liveness check, whether or not anything is open.
 		// With no flag on disk this is one ReadDir that answers ENOENT.
+		m.reconcileAfterBootGrace()
 		m.pruneHookLocks()
 		m.pruneAskFlags()
 		m.persistUsage()

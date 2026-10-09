@@ -17,18 +17,24 @@ import (
 
 // opBinding is the process and pane an op is bound to: its own columns (P6-2a), else — an old self op — its approval
 // row's origin.
-func (m *Module) opBinding(op team.RelayOp) (pid int, pane string) {
+func (m *Module) opBinding(op team.RelayOp) (pid int, pane, procStart string) {
 	if op.PID != 0 {
-		return op.PID, op.PaneID
+		procStart = op.ProcStart
+		if procStart == "" && op.RequestID != "" { // an op from between P6-2a and P6-2b-1: the approval row has it
+			if row, ok, err := m.store.Get(op.RequestID); err == nil && ok && row.Origin.PID == op.PID {
+				procStart = row.Origin.ProcStart
+			}
+		}
+		return op.PID, op.PaneID, procStart
 	}
 	if op.RequestID == "" {
-		return 0, ""
+		return 0, "", ""
 	}
 	row, ok, err := m.store.Get(op.RequestID)
 	if err != nil || !ok {
-		return 0, ""
+		return 0, "", ""
 	}
-	return row.Origin.PID, paneOf(row.Origin.Tmux)
+	return row.Origin.PID, paneOf(row.Origin.Tmux), row.Origin.ProcStart
 }
 
 // pastClaimed says whether op is in one of the states reconcileFromFrames judges.
@@ -45,7 +51,7 @@ func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team
 	if !pastClaimed(op) || m.frames == nil {
 		return op, nil
 	}
-	pid, pane := m.opBinding(op)
+	pid, pane, start := m.opBinding(op)
 	if pane == "" || pid == 0 {
 		return op, nil // nothing to compare with: left to the stall timeout
 	}
@@ -68,12 +74,17 @@ func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team
 		if err != nil {
 			return op, fmt.Errorf("reconcile op %s: registry: %w", op.ID, err)
 		}
-		if !ok || o.PID != pid || (op.ProcStart != "" && o.ProcStart != op.ProcStart) {
-			continue // another process's session: never ours to write
+		if !ok || o.PID != pid || start == "" || o.ProcStart != start {
+			continue // another process's session, or no start time to prove it is ours: never written
 		}
 		return m.applyReconcile(op, RelayReport{State: team.RelayCleared, NewSessionID: f.SessionID, NewRef: ipeers.RefID(f.SessionID), At: m.now()})
 	}
 	if unverified || m.origins.LiveSession(op.SessionID) {
+		return op, nil
+	}
+	if m.now() < m.bootAt+team.BootGraceS*1000 {
+		// Right after a restart a session may not be listed yet (spec §9.2): "no frame, not live" proves nothing. The
+		// failure is irreversible, so it waits for the grace; the first liveness tick after it runs this again.
 		return op, nil
 	}
 	return m.applyReconcile(op, RelayReport{State: team.RelayFailed, Reason: team.RelayReasonMemberGone, At: m.now()})
@@ -172,4 +183,19 @@ func (m *Module) outcomeNotice(op team.RelayOp) {
 	if _, err := m.sender.Send(ctx, ipeers.SendRequest{To: to, Text: text, OriginInbox: inbox}); err != nil {
 		m.logf("[team] outcome notice (op %s) to %s: %v", op.ID, to, err)
 	}
+}
+
+// reconcileAfterBootGrace runs the boot's frame reconciliation once more, at the first liveness tick after BootGraceS:
+// the boot's own run could not fail an op for a session the registry had not listed yet.
+func (m *Module) reconcileAfterBootGrace() {
+	if m.bootReconciled || m.now() < m.bootAt+team.BootGraceS*1000 {
+		return
+	}
+	m.bootReconciled = true
+	ops, err := m.store.ListActiveRelayOps()
+	if err != nil {
+		m.logf("[team] after the boot grace: list relay ops: %v", err)
+		return
+	}
+	m.reconcileOpsFromFrames(ops)
 }
