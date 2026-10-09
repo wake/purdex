@@ -535,7 +535,7 @@ function leadPrompt(note, nonce) {
 async function leadCommand($, e) {
   // A relay in flight owns the turn order (its write, /clear and seed turns): a /lead prompt now would be
   // held with the user's prompts, or slip between its turns.
-  const at = await $.clock.now().catch(() => 0)
+  const at = await $.clock.now().catch(() => Date.now()) // a refused engine clock falls back to the real one: the TTL always runs
   if (s.state !== 'idle') return { text: LEAD_RELAY_BUSY }
   // An ask the turn events never ended (a prompt cancelled before its turn, a turn without text) lets go
   // after LEAD_ASK_TTL_MS, so a /lead is never refused for good.
