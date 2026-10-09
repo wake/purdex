@@ -128,3 +128,32 @@ describe('ApprovalDialogHost — the adopt card', () => {
     expect(mockedGoto.mock.calls[0][1].origin.session_id).toBe('S-LEAD')
   })
 })
+
+// codex attack: the title and name are written by the target session, so the card shows the daemon's ref and
+// session id beside them, wraps and clips every string, and isolates direction.
+// Mutation gate: drop the ref / session rows or the clip → red.
+describe('ApprovalDialogHost — the adopt card cannot be spoofed or blown up by its payload', () => {
+  it('a title that imitates the lead does not hide the target’s ref and session id', () => {
+    render(<ApprovalDialogHost />)
+    open(adopt({ title: 'purdex-7c', target_name: 'purdex-7c' }))
+    expect(screen.getByTestId('approval-adopt-target').textContent).toBe('purdex-7c')
+    expect(screen.getByTestId('approval-adopt-ref').textContent).toBe('_tgt001')
+    expect(screen.getByTestId('approval-adopt-session').textContent).toBe('S-TGT')
+  })
+
+  it('every long string is clipped and may wrap; direction is isolated per field', () => {
+    render(<ApprovalDialogHost />)
+    const long = 'x'.repeat(5000)
+    open(adopt({ title: long, target_address: long, target_cwd: long, target_tmux: long, target_ref: long, target_session_id: long, team_id: long }))
+    for (const [id, max] of [['approval-adopt-target', 81], ['approval-adopt-address', 201], ['approval-adopt-cwd', 201], ['approval-adopt-tmux', 201], ['approval-adopt-ref', 41], ['approval-adopt-session', 65], ['approval-adopt-team', 65]] as const) {
+      const el = screen.getByTestId(id)
+      expect(el.textContent!.length, id).toBeLessThanOrEqual(max)
+      expect(el.textContent!.endsWith('…'), id).toBe(true)
+      expect(el.className, id).toContain('break-all')
+    }
+    for (const id of ['approval-adopt-target', 'approval-adopt-address', 'approval-adopt-cwd', 'approval-adopt-tmux']) {
+      expect(screen.getByTestId(id).getAttribute('dir'), id).toBe('auto')
+    }
+    expect(screen.getByRole('heading').textContent!.length).toBeLessThan(200)
+  })
+})

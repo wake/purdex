@@ -29,7 +29,7 @@ import { ApprovalPill } from './ApprovalPill'
 import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH, TEAM_NAME_CHARS } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
-import { adoptPayloadOf, adoptTargetLabel, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { submitDecision } from '../lib/team/approval-decide'
@@ -275,7 +275,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
           <div className="flex items-start justify-between gap-3">
             <h3 id={titleId} className="text-sm font-medium text-text-primary">
               {isAdopt
-                ? t('approval.dialog.title_adopt', { host: hostName, lead: session, target: adoptTargetLabel(adopt) })
+                ? t('approval.dialog.title_adopt', { host: hostName, lead: session, target: clipForDisplay(adoptTargetLabel(adopt), 60) })
                 : t(isSelfRelay ? 'approval.dialog.title_self_relay' : 'approval.dialog.title_lead', { host: hostName, session })}
             </h3>
             {/* Never disabled: minimizing during a send is harmless (the outcome lands in the store either way). */}
@@ -307,15 +307,21 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             {isAdopt ? (
               <>
                 <dt className="text-text-muted">{t('approval.dialog.adopt_target')}</dt>
-                <dd data-testid="approval-adopt-target" className="text-text-primary">{adoptTargetLabel(adopt)}</dd>
+                {/* The title and name are written by the target session: an alias, never the identity. The ref and the
+                    session id are the daemon's, shown beside it; every string is clipped and may wrap anywhere. */}
+                <dd data-testid="approval-adopt-target" dir="auto" className="break-all text-text-primary">{clipForDisplay(adoptTargetLabel(adopt), 80)}</dd>
+                <dt className="text-text-muted">{t('approval.dialog.adopt_target_ref')}</dt>
+                <dd data-testid="approval-adopt-ref" className="font-mono break-all text-text-primary">{adopt.target_ref !== '' ? clipForDisplay(adopt.target_ref, 40) : '—'}</dd>
+                <dt className="text-text-muted">{t('approval.dialog.adopt_target_session')}</dt>
+                <dd data-testid="approval-adopt-session" className="font-mono break-all text-text-primary">{adopt.target_session_id !== '' ? clipForDisplay(adopt.target_session_id, 64) : '—'}</dd>
                 <dt className="text-text-muted">{t('approval.dialog.adopt_target_address')}</dt>
-                <dd data-testid="approval-adopt-address" className="font-mono text-text-primary">{adopt.target_address !== '' ? adopt.target_address : '—'}</dd>
+                <dd data-testid="approval-adopt-address" dir="auto" className="font-mono break-all text-text-primary">{adopt.target_address !== '' ? clipForDisplay(adopt.target_address) : '—'}</dd>
                 <dt className="text-text-muted">{t('approval.dialog.adopt_target_cwd')}</dt>
-                <dd data-testid="approval-adopt-cwd" className="font-mono break-all text-text-primary">{adopt.target_cwd !== '' ? adopt.target_cwd : '—'}</dd>
+                <dd data-testid="approval-adopt-cwd" dir="auto" className="font-mono break-all text-text-primary">{adopt.target_cwd !== '' ? clipForDisplay(adopt.target_cwd) : '—'}</dd>
                 <dt className="text-text-muted">{t('approval.dialog.adopt_target_tmux')}</dt>
-                <dd data-testid="approval-adopt-tmux" className="font-mono text-text-primary">{adopt.target_tmux !== '' ? adopt.target_tmux : '—'}</dd>
+                <dd data-testid="approval-adopt-tmux" dir="auto" className="font-mono break-all text-text-primary">{adopt.target_tmux !== '' ? clipForDisplay(adopt.target_tmux) : '—'}</dd>
                 <dt className="text-text-muted">{t('approval.dialog.adopt_team')}</dt>
-                <dd data-testid="approval-adopt-team" className="font-mono text-text-primary">{adopt.team_id !== '' ? adopt.team_id : '—'}</dd>
+                <dd data-testid="approval-adopt-team" className="font-mono break-all text-text-primary">{adopt.team_id !== '' ? clipForDisplay(adopt.team_id, 64) : '—'}</dd>
               </>
             ) : isSelfRelay ? (
               <>

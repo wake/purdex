@@ -2060,6 +2060,8 @@
   "approval.dialog.self_relay_note": "Once approved, this session writes its relay file, clears, and takes over in place (about 1 minute)",
   "approval.dialog.adopt_note": "Once approved, this session becomes a member: its own relays are off and the lead arranges them; its model does not change.",
   "approval.dialog.adopt_target": "Session to take in",
+  "approval.dialog.adopt_target_ref": "Ref (from the daemon)",
+  "approval.dialog.adopt_target_session": "Session id",
   "approval.dialog.adopt_target_address": "Its address",
   "approval.dialog.adopt_target_cwd": "Its directory",
   "approval.dialog.adopt_target_tmux": "Its tmux",

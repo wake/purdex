@@ -2060,6 +2060,8 @@
   "approval.dialog.self_relay_note": "核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）",
   "approval.dialog.adopt_note": "核准後這個 session 會成為 member：自我接力關閉，接力由 lead 安排；它的模型不變。",
   "approval.dialog.adopt_target": "要納入的 session",
+  "approval.dialog.adopt_target_ref": "Ref（系統給的）",
+  "approval.dialog.adopt_target_session": "Session id",
   "approval.dialog.adopt_target_address": "它的地址",
   "approval.dialog.adopt_target_cwd": "它的目錄",
   "approval.dialog.adopt_target_tmux": "它的 tmux",

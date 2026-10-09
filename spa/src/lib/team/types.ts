@@ -266,6 +266,15 @@ export function adoptPayloadOf(a: Approval): AdoptPayload {
   }
 }
 
+/**
+ * A payload string for display: cut to `max` characters (the target session writes these, so they can be any length),
+ * with an ellipsis when cut. The dialog shows the trusted identifiers (ref, session id) beside the label it calls the target.
+ */
+export function clipForDisplay(s: string, max = 200): string {
+  const chars = Array.from(s)
+  return chars.length <= max ? s : `${chars.slice(0, max).join('')}…`
+}
+
 /** The label of an adopt target: its title, else its name, else its ref (what the dialog and the notification call it). */
 export function adoptTargetLabel(p: AdoptPayload): string {
   return p.title !== '' ? p.title : p.target_name !== '' ? p.target_name : p.target_ref
