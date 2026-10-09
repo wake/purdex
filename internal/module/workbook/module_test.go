@@ -87,6 +87,38 @@ func TestModule_StartDisablesItselfWhenFailPendingFails(t *testing.T) {
 	}
 }
 
+// Start writes the prompts the runner will read, owner-only, and a stale file is replaced.
+// Mutation gate: drop the WritePromptFiles call from Start → red.
+func TestModule_StartWritesThePromptFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "workbook"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "workbook", "prompt-v1.txt"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: dir}})
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Stop(context.Background()) })
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(m.prompts.System)
+	if err != nil || string(got) != SystemPrompt {
+		t.Fatalf("system prompt file: err=%v, equal=%v", err, string(got) == SystemPrompt)
+	}
+	fi, _ := os.Stat(m.prompts.System)
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o", fi.Mode().Perm())
+	}
+	if st := m.Status(); st["ready"] != true {
+		t.Fatalf("status = %v", st)
+	}
+}
+
 // A restart settles what a crash left pending. Mutation gate: drop the FailPending call in Start → red.
 func TestModule_StartFailsLeftoverPending(t *testing.T) {
 	dir := t.TempDir()

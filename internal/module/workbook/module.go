@@ -25,6 +25,7 @@ type Module struct {
 	store   *Store
 	ready   bool
 	initErr string
+	prompts PromptFiles // where Start wrote the prompts
 }
 
 func New() *Module { return &Module{} }
@@ -90,6 +91,19 @@ func (m *Module) Start(context.Context) error {
 	if n > 0 {
 		log.Printf("[workbook] %d entries were pending at the last stop; marked failed (stopped)", n)
 	}
+	// The summariser reads its prompt by path (`claude --system-prompt-file`): written fresh at every start, so a file
+	// from another version or with another mode never survives.
+	m.core.CfgMu.RLock()
+	dataDir := m.core.Cfg.DataDir
+	m.core.CfgMu.RUnlock()
+	files, err := WritePromptFiles(filepath.Join(dataDir, "workbook"))
+	if err != nil {
+		m.disable(fmt.Errorf("start: %w", err))
+		return nil
+	}
+	m.mu.Lock()
+	m.prompts = files
+	m.mu.Unlock()
 	return nil
 }
 
