@@ -2258,5 +2258,6 @@
   "peers.team.end_keep": "Turn off only, keep these members",
   "peers.team.leftover": "Consent for {{alias}} is off, but {{count}} member(s) are still live.",
   "peers.team.leftover_error": "Consent for {{alias}} is off, but members may still be live ({{details}}).",
-  "peers.team.retry": "Retry ending"
+  "peers.team.retry": "Retry ending",
+  "peers.team.row_gone": "Peer no longer listed: {{alias}}"
 }

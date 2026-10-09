@@ -11,7 +11,7 @@
 import { useState } from 'react'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import {
-  HostApiError, endRemoteMember, listRemoteMembers, updatePeerHost, type PeerHostRow, type RemoteMemberView,
+  HostApiError, endRemoteMember, listPeerHosts, listRemoteMembers, updatePeerHost, type PeerHostRow, type RemoteMemberView,
 } from '../../../lib/host-api'
 import { ConfirmDialog } from '../../ConfirmDialog'
 import { errText, type BoundRunFlow } from './flow'
@@ -104,12 +104,20 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
     })
   }
 
-  const writeRoots = (next: string[], onOk?: () => void) => {
+  // The wire is whole-set (no revision on the daemon), so a write from a stale render could drop what another window
+  // or the CLI just changed. Narrow that window: re-read this peer's row right before writing and compute the new set
+  // from THAT. `change` gets the latest roots and returns the set to write, or null when there is nothing to do (the
+  // path to add is already there / the one to remove is already gone: that is what was asked, so it counts as done).
+  const writeRoots = (change: (latest: string[]) => string[] | null, onDone?: () => void) => {
     setRootsError('')
     void runFlow(async () => {
       try {
-        await updatePeerHost(hostId, alias, { team_roots: next })
-        onOk?.()
+        const fresh = (await listPeerHosts(hostId)).find((r) => r.alias.toLowerCase() === alias.toLowerCase())
+        if (!fresh) throw new Error(t('peers.team.row_gone', { alias }))
+        const latest = Array.isArray(fresh.team_roots) ? fresh.team_roots.filter((x): x is string => typeof x === 'string') : []
+        const next = change(latest)
+        if (next) await updatePeerHost(hostId, alias, { team_roots: next })
+        onDone?.()
       } catch (e) {
         setRootsError(errText(e))
       }
@@ -120,7 +128,7 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
   const add = () => {
     const p = draft.trim()
     if (!p) return
-    writeRoots([...roots, p], () => setDraft(''))
+    writeRoots((latest) => (latest.includes(p) ? null : [...latest, p]), () => setDraft(''))
   }
 
   return (
@@ -151,7 +159,7 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
               <li key={`${i}:${r}`} className="flex items-center gap-2">
                 <span data-testid="peer-team-root" className="font-mono text-xs text-text-secondary break-all">{r}</span>
                 <button type="button" data-testid="peer-team-root-remove" disabled={busy}
-                  onClick={() => writeRoots(roots.filter((_, j) => j !== i))}
+                  onClick={() => writeRoots((latest) => (latest.includes(r) ? latest.filter((x) => x !== r) : null))}
                   className="text-xs px-1.5 py-0.5 rounded bg-surface-tertiary text-text-secondary hover:text-status-error cursor-pointer disabled:opacity-50 disabled:cursor-default">
                   {t('peers.team.root_remove')}
                 </button>

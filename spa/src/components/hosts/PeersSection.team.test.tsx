@@ -132,6 +132,40 @@ describe('PeersSection — team consent (allow_team / team_roots)', () => {
     await waitFor(() => expect(within(screen.getByTestId('peer-row-air')).queryAllByTestId('peer-team-root')).toHaveLength(0))
   })
 
+  it('adding a root builds the set from the latest row, not the render-time one', async () => {
+    airRow = { ...AIR, team_roots: ['/a'] }
+    const row = await openRow()
+    airRow = { ...airRow, team_roots: ['/a', '/other-window'] } // changed elsewhere after render
+    fireEvent.change(within(row).getByTestId('peer-team-root-input'), { target: { value: '/b' } })
+    fireEvent.click(within(row).getByTestId('peer-team-root-add'))
+    await waitFor(() => expect(api.updatePeerHost).toHaveBeenCalledWith(M, 'air', { team_roots: ['/a', '/other-window', '/b'] }))
+  })
+
+  it('removing a root also works from the latest row; one already gone elsewhere sends nothing', async () => {
+    airRow = { ...AIR, team_roots: ['/a', '/b'] }
+    const row = await openRow()
+    airRow = { ...airRow, team_roots: ['/b', '/c'] }
+    fireEvent.click(within(row).getAllByTestId('peer-team-root-remove')[1]) // /b
+    await waitFor(() => expect(api.updatePeerHost).toHaveBeenCalledWith(M, 'air', { team_roots: ['/c'] }))
+    vi.mocked(api.updatePeerHost).mockClear()
+    await waitFor(() => expect(within(screen.getByTestId('peer-row-air')).getAllByTestId('peer-team-root')).toHaveLength(1))
+    airRow = { ...airRow, team_roots: [] } // /c removed from another window meanwhile
+    fireEvent.click(within(screen.getByTestId('peer-row-air')).getByTestId('peer-team-root-remove'))
+    await waitFor(() => expect(within(screen.getByTestId('peer-row-air')).getByTestId('peer-team-toggle')).toBeEnabled())
+    expect(api.updatePeerHost).not.toHaveBeenCalled()
+  })
+
+  it('a root already present in the latest row is not re-sent', async () => {
+    airRow = { ...AIR, team_roots: ['/a'] }
+    const row = await openRow()
+    airRow = { ...airRow, team_roots: ['/a', '/b'] }
+    fireEvent.change(within(row).getByTestId('peer-team-root-input'), { target: { value: '/b' } })
+    fireEvent.click(within(row).getByTestId('peer-team-root-add'))
+    await waitFor(() => expect(within(screen.getByTestId('peer-row-air')).getByTestId('peer-team-toggle')).toBeEnabled())
+    expect(api.updatePeerHost).not.toHaveBeenCalled()
+    await waitFor(() => expect((within(screen.getByTestId('peer-row-air')).getByTestId('peer-team-root-input') as HTMLInputElement).value).toBe(''))
+  })
+
   it('a 400 on roots shows the daemon message under the field and keeps the old list', async () => {
     airRow = { ...AIR, team_roots: ['/a'] }
     vi.mocked(api.updatePeerHost).mockRejectedValue(new HostApiError(400, 'Bad Request', 'team root "rel" is not an absolute path'))
