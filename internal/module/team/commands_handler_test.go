@@ -125,7 +125,7 @@ func TestCommands_WrongHostIsNotStored(t *testing.T) {
 func TestCommands_UnsupportedKindsAreRefusedNotStored(t *testing.T) {
 	f := newFixture(t)
 	f.setLeadHost(true)
-	for _, kind := range []string{"spawn", "kill", "void", "bogus"} {
+	for _, kind := range []string{"spawn", "kill", "bogus"} {
 		c := wireAdopt(cmdUUID1, cmdUUID1, "sid-t")
 		c.Kind = kind
 		code, body := f.postCmd(leadPrincipal(), c)
@@ -279,6 +279,54 @@ func TestCommands_ConsentAndBindingAreReadAgainBeforeTheApply(t *testing.T) {
 	}
 	if role, _ := f.m.store.SessionRole("sid-t"); role != sessionRoleNone {
 		t.Fatalf("a re-bound alias still adopted: role %s", role)
+	}
+}
+
+// void over HTTP (§3.3, §11): the void before its command makes the command command_void; the void after it undoes it.
+func TestCommands_VoidOverHTTP(t *testing.T) {
+	f := newFixture(t)
+	f.setLeadHost(true)
+	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w"})
+	voidOf := func(id, target string) team.TeamCommand {
+		v := voidCmd(id, target)
+		v.ToHostID = "h:1"
+		return v
+	}
+
+	// Before its command: recorded; the command answers 409 command_void.
+	if code, body := f.postCmd(leadPrincipal(), voidOf(cmdUUID2, cmdUUID1)); code != http.StatusOK {
+		t.Fatalf("void first: %d %s", code, body)
+	}
+	if code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID1, cmdUUID1, "sid-t")); code != http.StatusConflict || errCode(t, body) != team.ErrCommandVoided {
+		t.Fatalf("voided adopt: %d %s", code, body)
+	}
+	if role, _ := f.m.store.SessionRole("sid-t"); role != sessionRoleNone {
+		t.Fatalf("role = %s", role)
+	}
+
+	// After its command (a lost ack): undone.
+	if code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID3, cmdUUID3, "sid-t")); code != http.StatusOK {
+		t.Fatalf("adopt: %d %s", code, body)
+	}
+	code, body := f.postCmd(leadPrincipal(), voidOf(cmdUUID4, cmdUUID3))
+	var ans team.TeamCommandAnswer
+	_ = json.Unmarshal(body, &ans)
+	if code != http.StatusOK || !strings.Contains(string(ans.Outcome), "undone") {
+		t.Fatalf("void after: %d %s", code, body)
+	}
+	if row, _, _ := f.m.store.RemoteMember(cmdUUID3); row.State != remoteReleased {
+		t.Fatalf("row = %+v", row)
+	}
+
+	// Shape: a void needs a UUID command_id other than its own id.
+	for name, v := range map[string]team.TeamCommand{
+		"no command_id":  voidOf(cmdUUID1, ""),
+		"bad command_id": voidOf(cmdUUID1, cmdBadUID),
+		"itself":         voidOf(cmdUUID1, cmdUUID1),
+	} {
+		if code, body := f.postCmd(leadPrincipal(), v); code != http.StatusBadRequest || errCode(t, body) != team.ErrCommandBadRequest {
+			t.Fatalf("%s: %d %s", name, code, body)
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ const (
 	CommandEnd       = "end"
 	CommandLeadMoved = "lead_moved"
 	CommandVoid      = "void"
+	CommandSpawn     = "spawn" // not applied by this version (X4a)
 )
 
 // Command refusal codes (JSON 4xx bodies, {"error": code}).
@@ -25,6 +26,8 @@ const (
 	ErrCommandHostNotAllowed  = "host_not_allowed"
 	ErrCommandNotYourMember   = "not_your_member"
 	ErrCommandMKConflict      = "mk_conflict"
+	ErrCommandVoided          = "command_void" // 409: the lead host voided this command id (spec §3.3)
+	ErrCommandNotVoidable     = "not_voidable" // 409: a void names a command that is no adopt or spawn
 )
 
 // TeamLead is the lead's full origin tuple a command carries, which the member host needs to present the lead as a

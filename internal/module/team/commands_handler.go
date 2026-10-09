@@ -87,7 +87,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch cmd.Kind {
-	case team.CommandAdopt, team.CommandRelease, team.CommandEnd, team.CommandLeadMoved:
+	case team.CommandAdopt, team.CommandRelease, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid:
 	default:
 		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(cmd.Kind)+" commands")
 		return
@@ -174,6 +174,10 @@ func validateCommand(c team.TeamCommand) string {
 	case team.CommandRelease:
 		if c.MK == "" {
 			return "release: mk is required"
+		}
+	case team.CommandVoid:
+		if !uuidV4.MatchString(c.CommandID) || c.CommandID == c.ID {
+			return "void: command_id (a UUID v4 other than the void's own id) is required"
 		}
 	case team.CommandLeadMoved:
 		switch {
