@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.643] - 2026-10-09
+
+> 動 daemon、CLI 與 pdx-team skill：**要部署 daemon，並重跑 `pdx setup --agent cc`**（skill 改了）；SPA、Electron 不必更新。alpha.642 沒有單獨部署，它的內容（手機推播等）隨這一版一起上線。team 核准後也能調整人數上限了（App 的調整按鈕由介面線接著做）。
+
+### Added：核准後調整 team 人數上限（#2195，A 線）
+
+- daemon 新增一條只給 App 用的路由，可以把一個 team 的人數上限調成 1–8 人，但不能低於目前已經在用的人數（在職的 member 加上還在啟動中的）。無人值守核准時的上限 3 只管核准那一刻，之後你在 App 可以調到 8。
+- team 清單多了「上限」與「使用中」兩個數字；`pdx team` 的標頭會顯示 `members 使用中/上限`。
+- agent 沒有任何指令能改上限，skill 也寫明上限是你的。
+- 修正一個舊問題：新 member 剛完成註冊的那一瞬間，同一席會被算成兩席，可能讓新增 member 被誤擋。
+
 ## [1.0.0-alpha.642] - 2026-10-09
 
 > 動 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主 checkout 快轉生效（Mac App 按 Cmd+R）；Electron 不必更新。**手機開始會收到 agent 的推播**：你不在 Mac 前時，Claude 停下來等你、做完或出錯，會推到已登記的 iPhone。
