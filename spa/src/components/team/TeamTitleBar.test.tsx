@@ -200,6 +200,27 @@ describe('the strip', () => {
       expect(more.getAttribute('title')).not.toContain('{')
     })
 
+    it('a wider seat that joins past the capacity is measured too: the capacity is decided again with its width', () => {
+      const wide: Record<string, number> = { W: 70 }
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.getAttribute('data-testid') === 'team-panel-cell' ? wide[this.getAttribute('data-session-id') ?? ''] ?? 41 : 0
+      })
+      scene()
+      avail = 256 // less the name: 170 -> all four fit
+      mountBar()
+      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
+      expect(within(strip()!).getAllByTestId('team-panel-cell')).toHaveLength(4)
+      act(() => { // a fifth, wider (remote-looking) seat joins
+        const roster = structuredClone(useTeamRosterStore.getState().byHost[HOST])
+        roster[0].members.push(member('W', 9, 'w-tm'))
+        useTeamRosterStore.setState({ byHost: { [HOST]: roster } })
+        useSessionStore.setState({ sessions: { [HOST]: [...useSessionStore.getState().sessions[HOST], { code: 'code-w-tm', name: 'w-tm', mode: 'terminal', cwd: '~' }] as never } })
+      })
+      // with W's 70px counted: floor((170 - 30 - 3 + 1) / 71) = 1 cell, the other four in 「+N」 (the old 41px unit said 3)
+      expect(within(strip()!).getAllByTestId('team-panel-cell')).toHaveLength(1)
+      expect(within(strip()!).getByTestId('team-strip-more').textContent).toBe('+4')
+    })
+
     it('「+N」 brings the area back to the pane', () => {
       scene()
       avail = 190
