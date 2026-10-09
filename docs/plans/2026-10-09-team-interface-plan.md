@@ -125,6 +125,18 @@ Screenshot gate: dark, full and one-line, small and large team.
 
 ---
 
+## TI-6 — round 2 (user 2026-10-10): no pills, no top-bar collapse, shadow trial
+
+Lands right after WA-2a, before TI-5a. Spec: TI spec items marked *round 2* (R7, R8, P6, P11, §4.1–§4.3, §4.8, §5).
+
+- **Top bar**: the group no longer renders `TeamGroupLabel`; the group starts with the lead's tab. No collapse control on the top bar; the bar still reads the shared `collapsed` state (set from the sidebar) — collapsed hides member tabs, stepping skips them, R9 / R10 unchanged. Separators: the one before the group's first tab follows today's rule.
+- **Left list**: `TeamSidebarBlock` no longer renders the label capsule (live and ghost rows). Collapse stays on the collapse line, the tick and the blank bead area (P9).
+- **Panel**: unchanged (its header keeps name / label).
+- **Shadow trial**: `useTeamUiStore.groupShadow: 'v0' | 'v1' | 'v2' | 'v3'` (device-local, default `'v2'`); the group tabs take the variant's `box-shadow` from TI spec §4.2 (one function mapping variant + team colour + theme → the shadow string, shared by the tab and its tests). Setting row 設定 → 介面 → 分頁 「（試用）群組陰影」 with four options named 現行／加柔光／往左下延伸／整圈浮起 (zh-TW / en keys). Removed by a follow-up once the user picks.
+Tests: no label on the top bar, in the left list or on a ghost row; the top bar has no collapse control; collapsing from the sidebar hides the members on the top bar and stepping skips them; expanding from the sidebar shows them; the shadow function returns each variant's string (dark and light); the setting switches the rendered shadow; default `v2`; locale completeness.
+Mutation gates: render the label again → "no label" red; shadow function ignores the variant → variant test red.
+Screenshot gate (zh-TW): the top bar with one group under each variant V0–V3 (dark), V2 in light; the left list expanded, collapsed and ghost without the capsule.
+
 ## TI-5a — daemon: the mod's team read
 
 Files: the mod socket handler (`internal/modevents`, U1-1a), a narrow interface the team module implements (`TeamRoleOf(sessionID) (role string, activeMembers int, ok bool)`), wiring where the modules are assembled, tests. **Agreed with purdex-1f first** (its module answers).
