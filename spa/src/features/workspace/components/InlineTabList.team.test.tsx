@@ -359,7 +359,9 @@ describe('InlineTabList — team beads', () => {
     const tabsBefore = Object.keys(useTabStore.getState().tabs).length
     fireEvent.click(r)
     expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(tabsBefore)
-    expect(useUndoToast.getState().toast?.message).toContain('b26')
+    expect(useUndoToast.getState().toast?.message).toBe('This host is not in this App')
+    expect(r.getAttribute('title')).toContain('This host is not in this App')
+    expect(bead('A').getAttribute('title')).not.toContain('This host is not in this App')
   })
 
   it('an unmapped-host bead always draws the bot icon; the neutral glyph only with the setting on', () => {
@@ -372,7 +374,7 @@ describe('InlineTabList — team beads', () => {
     expect(within(r).getByTestId('team-bead-bot')).toBeInTheDocument() // visible, not an empty click target
     expect(within(r).queryByTestId('tab-status-indicator')).toBeNull() // no agent store key, so no light
     expect(within(r).queryByTestId('team-bead-host-unknown')).toBeNull()
-    expect(r.getAttribute('title')).toBe('title R')
+    expect(r.getAttribute('title')).toBe('title R — This host is not in this App')
     act(() => useTeamUiStore.getState().setTeamBeadHost(true))
     expect(within(bead('R')).getByTestId('team-bead-bot')).toBeInTheDocument()
     expect(within(bead('R')).getByTestId('team-bead-host-unknown')).toBeInTheDocument()
@@ -399,6 +401,6 @@ describe('InlineTabList — team beads', () => {
     mount()
     expect(bead('A').getAttribute('title')).toBe('title A')
     expect(bead('J').getAttribute('title')).toBe('title J · joining')
-    expect(bead('K').getAttribute('title')).toBe('title K · b26: killing')
+    expect(bead('K').getAttribute('title')).toBe('title K · b26: killing — This host is not in this App')
   })
 })

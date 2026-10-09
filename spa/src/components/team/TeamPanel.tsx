@@ -198,7 +198,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
   const transition = transitionOf(seat)
   const away = notInApp(seat)
   const noAnswer = r.unavailable === true ? t('team.panel.context_unavailable') : undefined
-  const open = () => { if (!away) onOpen(seat.sessionId) }
+  const open = () => onOpen(seat.sessionId) // a seat on a host this Mac lacks toasts the reason (openTeamSeat)
   return (
     <div
       role="button"
@@ -215,7 +215,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
       onKeyDown={(e) => { if (e.key === 'Enter') open() }}
       {...drag}
       onDragEnd={drag ? () => { drag.onDragEnd(); restore() } : undefined}
-      className={`group relative mx-1.5 px-2 py-2 rounded-md transition-colors ${away ? 'cursor-default' : 'cursor-pointer'} ${
+      className={`group relative mx-1.5 px-2 py-2 rounded-md transition-colors cursor-pointer ${
         isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
       } ${dragging ? 'opacity-30' : ''}`}
     >
@@ -231,7 +231,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
             {seat.hostAlias !== '' ? seat.hostAlias : t('team.seat_host_unknown')}
           </span>
         )}
-        <span className="truncate min-w-0 flex-1" title={seat.title}>{seat.title}</span>
+        <span className="truncate min-w-0 flex-1" title={away ? `${seat.title} — ${t('team.seat_not_in_app')}` : seat.title}>{seat.title}</span>
         {transition && <span data-testid="team-panel-state" className="text-[9.5px] text-text-muted flex-shrink-0">{t(`team.seat_state.${transition}`)}</span>}
         {seat.role === 'lead' && (
           <span className="text-[9.5px] px-1 rounded border flex-shrink-0 text-text-primary" style={{ borderColor: color }}>{t('team.panel.lead')}</span>
@@ -275,10 +275,10 @@ function Cell({ teamKey, seat, isActive, onOpen }: { teamKey: string; seat: Team
       data-active={String(isActive)}
       data-seat-state={seat.state}
       onMouseDown={keepFocus}
-      onClick={() => { if (!away) onOpen(seat.sessionId) }}
+      onClick={() => onOpen(seat.sessionId)}
       title={`${seat.title} · ${model} · ${t('team.panel.context')} ${r.ctx !== undefined ? `${r.ctx}%` : '—'}${seat.tabId ? '' : ` · ${t('team.panel.unopened')}`}${notes.map((n) => ` · ${n}`).join('')}`}
       style={{ height: CELL_H, paddingInline: CELL_PX, columnGap: CELL_INNER_GAP }}
-      className={`flex items-center rounded-md ${away ? 'cursor-default' : 'cursor-pointer'} ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
+      className={`flex items-center rounded-md cursor-pointer ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
     >
       <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`inline-flex ${transition !== null ? 'opacity-40' : ''}`} style={{ marginLeft: CELL_ICON_PULL }}>
         <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} size={CELL_ICON} compact />

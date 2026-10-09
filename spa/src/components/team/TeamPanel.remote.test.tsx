@@ -204,14 +204,16 @@ describe('one-line mode', () => {
 })
 
 describe('clicking a remote seat', () => {
-  it('on a host this Mac does not have: nothing opens, nothing is toasted, the team state is untouched', () => {
+  it('on a host this Mac does not have: nothing opens, the same sentence is toasted, the title tooltip carries the reason', () => {
     scene({ mapped: 'none' })
     mount()
     const tabs = Object.keys(useTabStore.getState().tabs)
     fireEvent.click(row('R'))
     fireEvent.keyDown(row('R'), { key: 'Enter' })
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(tabs)
-    expect(useUndoToast.getState().toast).toBeNull()
+    expect(useUndoToast.getState().toast?.message).toBe(ZH.notInApp)
+    expect(within(row('R')).getByText('title R')).toHaveAttribute('title', `title R — ${ZH.notInApp}`)
+    expect(within(row('A')).getByText('title A')).toHaveAttribute('title', 'title A') // other seats: unchanged
   })
 
   it('in line mode too', () => {
@@ -221,6 +223,7 @@ describe('clicking a remote seat', () => {
     const tabs = Object.keys(useTabStore.getState().tabs)
     fireEvent.click(cell('R'))
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(tabs)
+    expect(useUndoToast.getState().toast?.message).toBe(ZH.notInApp)
   })
 
   it('on a verified host it opens a tab there (R3), or switches to the one it has', () => {

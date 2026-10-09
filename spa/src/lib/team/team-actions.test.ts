@@ -134,7 +134,7 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
     useShownHostsStore.setState({ ids: [HOST, 'h2'] })
   }
 
-  it('a remote seat on a host this Mac lacks has hostId null, no tab, and openTeamSeat is a no-op with the toast', () => {
+  it('a remote seat on a host this Mac lacks has hostId null, no tab, and openTeamSeat is a toasts the reason', () => {
     seedRemote(false)
     useTeamUiStore.getState().setCollapsed(KEY, true)
     useTeamUiStore.getState().setGhostWorkspace(KEY, 'w2')
@@ -142,7 +142,7 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
     expect(currentTeamState().views[0].members.find((m) => m.session.session_id === 'R')).toMatchObject({ hostId: null, tabId: null })
     expect(openTeamSeat(KEY, 'R')).toEqual({ outcome: 'no-host', tabId: null })
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(tabsBefore)
-    expect(useUndoToast.getState().toast?.message).toContain('b26')
+    expect(useUndoToast.getState().toast?.message).toBe('This host is not in this App')
     expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true) // collapse state untouched
     expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBe('w2')
   })
