@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/wake/purdex/internal/convmodel"
@@ -20,8 +21,18 @@ func (i indexedItem) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if i.User == nil && i.AgentText == nil && i.Thinking == nil && i.Step == nil && i.System == nil {
+		// an item of a type this daemon does not know is written back as the received object, which may carry an
+		// `index` of its own: the server's value replaces it (exactly one member), and a non-object is an error
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(b, &m); err != nil || m == nil {
+			return nil, fmt.Errorf("conversation: an item of unknown type is not a JSON object: %q", b)
+		}
+		m["index"] = json.RawMessage(strconv.Itoa(i.index))
+		return json.Marshal(m)
+	}
 	if len(b) < 2 || b[0] != '{' || b[len(b)-1] != '}' {
-		return b, nil // not an object (cannot happen for items); leave it as it is
+		return nil, fmt.Errorf("conversation: an item is not a JSON object: %q", b)
 	}
 	field := `"index":` + strconv.Itoa(i.index)
 	if len(b) == 2 {

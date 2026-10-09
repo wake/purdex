@@ -16,6 +16,7 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/convfeed"
+	"github.com/wake/purdex/internal/convmodel"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
 )
@@ -1135,5 +1136,32 @@ func TestIndex_TheCapIsMeasuredWithTheIndexes(t *testing.T) {
 	}
 	if w.Body.Len() > e.mod.maxBody {
 		t.Fatalf("body %d over the cap %d with %d indexed items", w.Body.Len(), e.mod.maxBody, len(idx))
+	}
+}
+
+// An item of an unknown type is written back as it was received; if it already has an `index`, the server's value
+// replaces it (one member, not two).
+func TestIndex_UnknownTypeItemWithItsOwnIndexGetsExactlyOne(t *testing.T) {
+	raw := json.RawMessage(`{"type":"future","index":99,"extra":"kept"}`)
+	var it convmodel.Item
+	if err := json.Unmarshal(raw, &it); err != nil {
+		t.Fatal(err)
+	}
+	b, err := indexedItem{Item: it, index: 3}.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(b), `"index"`) != 1 {
+		t.Fatalf("%s: want exactly one index member", b)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(b, &back); err != nil || back["index"] != float64(3) || back["extra"] != "kept" || back["type"] != "future" {
+		t.Fatalf("%s: %v", b, err)
+	}
+	// a known item gets one too
+	known := convmodel.Item{Type: convmodel.ItemUser, User: &convmodel.UserMessage{ID: "u", Text: "hi"}}
+	kb, err := indexedItem{Item: known, index: 7}.MarshalJSON()
+	if err != nil || strings.Count(string(kb), `"index"`) != 1 || !strings.Contains(string(kb), `"index":7`) {
+		t.Fatalf("%s: %v", kb, err)
 	}
 }
