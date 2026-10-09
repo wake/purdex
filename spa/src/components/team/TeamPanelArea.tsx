@@ -43,7 +43,7 @@ export function TeamPanelArea() {
     <div
       data-testid="team-panel-area"
       data-expanded={String(expanded)}
-      className={`absolute z-20 flex ${expanded ? 'inset-3' : 'top-0 right-3 max-h-[calc(100%-12px)]'}`}
+      className={`absolute z-20 flex font-sans ${expanded ? 'inset-3' : 'top-0 right-3 max-h-[calc(100%-12px)]'}`}
       style={expanded ? undefined : { width: draft ?? width }}
     >
       {!expanded && (

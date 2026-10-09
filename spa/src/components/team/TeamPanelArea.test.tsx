@@ -88,6 +88,15 @@ describe('who the panel shows for', () => {
   })
 })
 
+describe('typeface', () => {
+  it('the panel is UI sans even when the surrounding content box is monospace', () => {
+    scene()
+    render(<div className="font-mono"><TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider></div>)
+    expect(area().className).toMatch(/\bfont-sans\b/)
+    expect(area().className).not.toMatch(/\bfont-mono\b/)
+  })
+})
+
 describe('full mode', () => {
   it('pressing a row keeps the keyboard in the terminal (mousedown is default-prevented, Enter still opens)', () => {
     scene()
