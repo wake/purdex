@@ -183,6 +183,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (relay quota rev): %w", err)
 	}
+	if err := migrateSpawnRemote(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (spawn remote): %w", err)
+	}
 	if err := migrateSpawnTask(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (spawn task): %w", err)

@@ -122,6 +122,7 @@ func runAdoptCmd(ctx context.Context, args []string, getenv func(string) string,
 		return ExitError
 	}
 	id := newID()
+	started := time.Now()
 	fmt.Fprintf(stderr, "申請納入 %s 中（%s），請在 Purdex 介面核准；這個呼叫必須在前景等待（Bash timeout 600000）\n", sanitizeCell(a.target), id)
 	create := team.CreateApprovalRequest{ID: id, Kind: team.KindAdopt, OriginInbox: inbox, Target: a.target, WaitS: int(a.wait / time.Second)}
 	var ap team.Approval
@@ -155,6 +156,12 @@ func runAdoptCmd(ctx context.Context, args []string, getenv func(string) string,
 		}
 		hung = 0
 		ap = polled
+	}
+	if ap.State == team.StateApproved {
+		// A remote target: the approval is the user's consent; what the call waits on is the membership (X3c).
+		if p, err := team.AdoptPayloadOf(ap); err == nil && p.TargetHostID != "" {
+			return adoptWaitMembership(ctx, client, ap, p, started.Add(a.wait), stdout, stderr)
+		}
 	}
 	return adoptFinish(ap, stdout, stderr)
 }

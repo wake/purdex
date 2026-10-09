@@ -805,7 +805,7 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 				return
 			}
 			if u, ok := r.ContextUsage(sid); ok {
-				contexts[sid] = ipeers.ContextInfo{UsedPercentage: u.UsedPercentage, Window: u.WindowSize, At: u.At}
+				contexts[sid] = ipeers.ContextInfo{UsedPercentage: u.UsedPercentage, Window: u.WindowSize, At: u.At, ModelID: u.ModelID, Effort: u.Effort}
 			}
 		}
 		for _, o := range owners {

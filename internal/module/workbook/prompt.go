@@ -9,24 +9,36 @@ import (
 
 // PromptVersion is stored with every entry (prompt_ver). A change to either prompt below is a new version: bump it and
 // the file names, never edit a shipped version in place.
-const PromptVersion = 1
+const PromptVersion = 2
 
-// SystemPrompt and RewritePrompt are the measured prompts of docs/specs/2026-10-09-session-workbook-prompt.md, byte for
-// byte (a test compares them to the document's fenced blocks). They are embedded files because the prompt itself
-// contains backticks.
+// SystemPrompt (the turn prompt, with the todo rules), RewritePrompt and RefreshPrompt are the three measured blocks of
+// docs/specs/2026-10-10-session-workbook-prompt-v2.md, byte for byte (a test compares them to the document's fenced
+// blocks). They are embedded files because the prompts themselves contain backticks.
 //
-//go:embed prompts/system-v1.txt
+//go:embed prompts/system-v2.txt
 var SystemPrompt string
 
-//go:embed prompts/rewrite-v1.txt
+//go:embed prompts/rewrite-v2.txt
 var RewritePrompt string
 
-// PromptFiles are where the prompts were written for `claude --system-prompt-file`.
+//go:embed prompts/refresh-v2.txt
+var RefreshPrompt string
+
+// SystemPromptV1 and RewritePromptV1 are prompt_ver 1 (docs/specs/2026-10-09-session-workbook-prompt.md), kept as the
+// history of what entries with prompt_ver 1 were written with; nothing sends them.
+//
+//go:embed prompts/system-v1.txt
+var SystemPromptV1 string
+
+//go:embed prompts/rewrite-v1.txt
+var RewritePromptV1 string
+
+// PromptFiles are where the prompts were written.
 type PromptFiles struct {
-	System, Rewrite string
+	System, Rewrite, Refresh string
 }
 
-// WritePromptFiles writes both prompts under dir (created 0700) as owner-only files, replacing a stale file. The
+// WritePromptFiles writes the three prompts under dir (created 0700) as owner-only files, replacing a stale file. The
 // process reads them by path, so a file left from another version or with another mode must not survive.
 func WritePromptFiles(dir string) (PromptFiles, error) {
 	// A path that is already there must be a real directory: a symlink would send the chmod and the writes below to
@@ -45,8 +57,9 @@ func WritePromptFiles(dir string) (PromptFiles, error) {
 	p := PromptFiles{
 		System:  filepath.Join(dir, fmt.Sprintf("prompt-v%d.txt", PromptVersion)),
 		Rewrite: filepath.Join(dir, fmt.Sprintf("rewrite-v%d.txt", PromptVersion)),
+		Refresh: filepath.Join(dir, fmt.Sprintf("refresh-v%d.txt", PromptVersion)),
 	}
-	for path, text := range map[string]string{p.System: SystemPrompt, p.Rewrite: RewritePrompt} {
+	for path, text := range map[string]string{p.System: SystemPrompt, p.Rewrite: RewritePrompt, p.Refresh: RefreshPrompt} {
 		if err := writeOwnerOnly(path, text); err != nil {
 			return PromptFiles{}, err
 		}

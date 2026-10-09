@@ -8,6 +8,8 @@ export const HEADER_H = 34
 /** The header's side padding and the gap between its parts (capsule | cells or count | buttons). */
 export const HEADER_PX = 6
 export const HEADER_GAP = 4
+/** A single click on the team name waits this long for a second one (a double-click edits instead of toggling). */
+export const NAME_CLICK_DELAY_MS = 280
 /** The name capsule's cap in one-line mode. */
 export const CAPSULE_MAX_W = 84
 /** Mode toggle (11px caret + px-1) and enlarge (12px icon + px-1) buttons, and the gap-0.5 between them. */
@@ -25,6 +27,15 @@ export const CELL_RING = 20
 export const CELL_PX = 1
 export const CELL_INNER_GAP = 0
 export const CELL_W = CELL_PX * 2 + CELL_ICON_SLOT + CELL_INNER_GAP + CELL_RING
+/** The widest a one-line cell may be under any light style (iconDot used to be 50: dot slot + icon side by side). */
+export const CELL_W_MAX = 44
+/**
+ * A cell's width under a light style. Every style takes CELL_W: the panel draws iconDot as the corner-overlay light
+ * (TeamSeatIcon `compact`), so the status dot sits on the icon instead of taking a 16px slot of its own.
+ */
+export function cellWidthFor(_style: 'icon' | 'dot' | 'iconDot' | 'badge'): number {
+  return CELL_W
+}
 export const CELL_H = 26
 export const CELL_GAP = 2
 /** The 1px divider after the lead, with its side margin. */
@@ -42,4 +53,17 @@ export function firstRowCapacity(width: number): number {
 /** Width the first row's cells take for `n` seats (divider after the lead when there are 2 or more). */
 export function cellsWidth(n: number): number {
   return n * CELL_W + Math.max(0, n - 1) * CELL_GAP + (n >= 2 ? SEP_W : 0)
+}
+
+/** The edit form under the header (TI-7): its width, the gap to the viewport edge and to the header. */
+export const POPOVER_W = 260
+const EDGE = 8
+const GAP = 4
+
+/** Where the form goes for a header at `r`: under its left edge, kept inside the viewport on the left, right and bottom. */
+export function placeBelow(r: { left: number; bottom: number }, size: { w: number; h: number }, view: { w: number; h: number }): { left: number; top: number } {
+  const left = Math.max(EDGE, Math.min(r.left, view.w - size.w - EDGE))
+  let top = r.bottom + GAP
+  if (top + size.h > view.h - EDGE) top = Math.max(EDGE, view.h - size.h - EDGE)
+  return { left, top }
 }

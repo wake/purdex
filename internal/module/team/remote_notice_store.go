@@ -1,7 +1,11 @@
 // internal/module/team/remote_notice_store.go
 package teammod
 
-import "fmt"
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+)
 
 // DueRemoteNotices lists the owed notices whose next try has come (spec §4.4), oldest first.
 func (s *Store) DueRemoteNotices(now int64) ([]remoteNoticeRow, error) {
@@ -40,4 +44,18 @@ func (s *Store) RetryRemoteNotice(id int64, attempts int, nextAt, at int64) erro
 		return fmt.Errorf("retry remote notice %d: %w", id, err)
 	}
 	return nil
+}
+
+// RemoteMemberLive says whether a session of another host is a member in play (joining / active / releasing / killing) of
+// a team led from this host.
+func (s *Store) RemoteMemberLive(hostID, sessionID string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM team_members WHERE host_id = ? AND session_id = ? AND state IN `+liveRemoteStates, hostID, sessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("remote member %s/%s: %w", hostID, sessionID, err)
+	}
+	return true, nil
 }

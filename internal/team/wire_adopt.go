@@ -66,6 +66,30 @@ type AdoptPayload struct {
 	TargetAddress   string `json:"target_address,omitempty"`
 	TargetCwd       string `json:"target_cwd,omitempty"`
 	TargetTmux      string `json:"target_tmux,omitempty"` // "<session>:@<win>.%<pane>"
+	// TargetHostID and TargetHostAlias name the member host of a REMOTE target (cross-host team spec §4.3); both absent for
+	// a session on the lead's own host. For a remote target the approval means "the user consents", not "adopted".
+	TargetHostID    string `json:"target_host_id,omitempty"`
+	TargetHostAlias string `json:"target_host_alias,omitempty"`
+}
+
+// AdoptionsRoute is GET /api/team/adoptions/{approval_id}: the membership a remote adopt's approval led to.
+const AdoptionsRoute = "/api/team/adoptions/"
+
+// Adoption states (the answer of AdoptionsRoute): the membership row's state as the lead host holds it, with a failed row
+// whose reason is `remote_unreachable` (the 10 minute void of §3.3) reported as AdoptionVoid.
+const (
+	AdoptionJoining = "joining"
+	AdoptionActive  = "active"
+	AdoptionFailed  = "failed"
+	AdoptionVoid    = "void"
+)
+
+// Adoption is the answer of AdoptionsRoute. State is one of the Adoption* states, or the row's later state
+// (releasing, released, killing, killed, gone) once it was a member; Code is the failure code of a failed one.
+type Adoption struct {
+	ApprovalID string `json:"approval_id"`
+	State      string `json:"state"`
+	Code       string `json:"code,omitempty"`
 }
 
 // ReleaseRequest is POST /api/team/release: the same body as a kill.

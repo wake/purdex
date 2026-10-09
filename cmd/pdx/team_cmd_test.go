@@ -608,9 +608,9 @@ func TestTeamCmd_TableShowsModelAndEffort(t *testing.T) {
 		t.Fatalf("stdout = %q, want a header and two rows", stdout)
 	}
 	for i, want := range [][]string{
-		{"ADDRESS", "REF", "TITLE", "STATE", "CTX", "CPU", "MEM", "MODEL", "EFFORT", "TASK", "LAST", "CWD", "TMUX"},
-		{"mlab/_m1m1m1", "_m1m1m1", "p4", "tester", "active", "42%", "-", "-", "claude-sonnet-4-5", "low", "-", "-", "/w/a", "tm-1111111122"},
-		{"mlab/_m2m2m2", "_m2m2m2", "-", "killed", "-", "-", "-", "-", "-", "-", "-", "/w/b", "tm-2222222222"},
+		{"ADDRESS", "HOST", "REF", "TITLE", "STATE", "CTX", "CPU", "MEM", "MODEL", "EFFORT", "TASK", "LAST", "CWD", "TMUX"},
+		{"mlab/_m1m1m1", "-", "_m1m1m1", "p4", "tester", "active", "42%", "-", "-", "claude-sonnet-4-5", "low", "-", "-", "/w/a", "tm-1111111122"},
+		{"mlab/_m2m2m2", "-", "_m2m2m2", "-", "killed", "-", "-", "-", "-", "-", "-", "-", "/w/b", "tm-2222222222"},
 	} {
 		if got := strings.Fields(lines[i]); strings.Join(got, " ") != strings.Join(want, " ") {
 			t.Errorf("line %d = %q, want fields %q", i, lines[i], want)

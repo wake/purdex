@@ -25,9 +25,9 @@ func teamHosts() []config.PeerHost {
 
 // wantTeamKinds is written out, not derived from teamKinds(): taking one away (or announcing spawn before X4a applies
 // it) must fail here.
-var wantTeamKinds = []string{"adopt", "release", "end", "lead_moved", "void"}
+var wantTeamKinds = []string{"adopt", "release", "kill", "spawn", "end", "lead_moved", "void"}
 
-// wantFactKinds is written out too: registered / spawn_failed are announced only once X4 applies them, moved never (reserved).
+// wantFactKinds is written out too: registered / spawn_failed are announced only once the lead host applies them (X4b), moved never (reserved).
 var wantFactKinds = []string{"ended"}
 
 func TestInventory_TeamCapsPerPrincipal(t *testing.T) {
@@ -56,7 +56,7 @@ func TestInventory_TeamCapsPerPrincipal(t *testing.T) {
 			if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil || env.Team == nil {
 				t.Fatalf("%d %s", rr.Code, rr.Body.String())
 			}
-			// Every principal reads the same kinds (X3d-3): what this daemon applies, which is not spawn or kill (X4a).
+			// Every principal reads the same kinds (X3d-3): what this daemon applies, which is everything this version applies.
 			if !reflect.DeepEqual(env.Team.Kinds, wantTeamKinds) || !reflect.DeepEqual(env.Team.FactKinds, wantFactKinds) || env.Team.AllowTeam != tc.want {
 				t.Fatalf("team = %+v", env.Team)
 			}

@@ -125,7 +125,7 @@ func TestCommands_WrongHostIsNotStored(t *testing.T) {
 func TestCommands_UnsupportedKindsAreRefusedNotStored(t *testing.T) {
 	f := newFixture(t)
 	f.setLeadHost(true)
-	for _, kind := range []string{"spawn", "kill", "bogus"} {
+	for _, kind := range []string{"bogus"} {
 		c := wireAdopt(cmdUUID1, cmdUUID1, "sid-t")
 		c.Kind = kind
 		code, body := f.postCmd(leadPrincipal(), c)

@@ -46,9 +46,16 @@ func (s *Store) SeatsUsed(teamID string) (used, limit int, err error) {
 // OpenAdoptForTarget is the open adopt request for the target session, if any: at most one may be open
 // per target (the create invariant).
 func (s *Store) OpenAdoptForTarget(targetSessionID string) (team.Approval, bool, error) {
+	return s.OpenAdoptForTargetOn("", targetSessionID)
+}
+
+// OpenAdoptForTargetOn is OpenAdoptForTarget for the session of the host targetHostID ("" = a session of the lead's own
+// host): a session id is only meaningful together with its host, so another host announcing the same id cannot block it.
+func (s *Store) OpenAdoptForTargetOn(targetHostID, targetSessionID string) (team.Approval, bool, error) {
 	a, _, err := scanRow(s.db.QueryRow(`SELECT `+selectCols+` FROM approval_requests
 		WHERE kind = ? AND state = 'open' AND json_extract(payload_json, '$.target_session_id') = ?
-		ORDER BY created_at, id LIMIT 1`, string(team.KindAdopt), targetSessionID))
+		AND COALESCE(json_extract(payload_json, '$.target_host_id'), '') = ?
+		ORDER BY created_at, id LIMIT 1`, string(team.KindAdopt), targetSessionID, targetHostID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return team.Approval{}, false, nil
 	}
@@ -69,30 +76,44 @@ func adoptRefusal(tx *sql.Tx, id, rowHostID string, p team.AdoptPayload, chk ado
 	case err != nil:
 		return "", fmt.Errorf("re-check lead: %w", err)
 	}
+	remote := p.TargetHostID != ""
 	switch {
-	case rowHostID != chk.HostID:
+	case !remote && rowHostID != chk.HostID, remote && p.TargetHostID == chk.HostID:
 		return team.ErrRemoteUnsupported, nil
 	case !chk.TargetLive:
 		return team.ErrAdoptTargetNotFound, nil
-	case p.TargetSessionID == p.LeadSessionID:
+	case !remote && p.TargetSessionID == p.LeadSessionID: // another host's session is never the lead, whatever id it announces
 		return team.ErrAdoptSelf, nil
 	}
-	err = tx.QueryRow(`SELECT 1 FROM teams WHERE lead_session_id = ? AND ended_at = 0`, p.TargetSessionID).Scan(&one)
-	switch {
-	case err == nil:
-		return team.ErrAdoptTargetIsLead, nil
-	case !errors.Is(err, sql.ErrNoRows):
-		return "", fmt.Errorf("re-check target lead: %w", err)
-	}
-	member, err := isLiveMemberIn(tx, p.TargetSessionID)
-	if err != nil {
-		return "", err
-	}
-	if member {
-		return team.ErrAdoptAlreadyMember, nil
+	if remote {
+		// A session on another host: it cannot lead a team here, and it is a member only through a live row of THAT host
+		// (the member host decides the rest when it applies the command).
+		err = tx.QueryRow(`SELECT 1 FROM team_members WHERE host_id = ? AND session_id = ? AND state IN `+liveRemoteStates, p.TargetHostID, p.TargetSessionID).Scan(&one)
+		switch {
+		case err == nil:
+			return team.ErrAdoptAlreadyMember, nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return "", fmt.Errorf("re-check remote member: %w", err)
+		}
+	} else {
+		err = tx.QueryRow(`SELECT 1 FROM teams WHERE lead_session_id = ? AND ended_at = 0`, p.TargetSessionID).Scan(&one)
+		switch {
+		case err == nil:
+			return team.ErrAdoptTargetIsLead, nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return "", fmt.Errorf("re-check target lead: %w", err)
+		}
+		member, err := isLiveMemberIn(tx, p.TargetSessionID)
+		if err != nil {
+			return "", err
+		}
+		if member {
+			return team.ErrAdoptAlreadyMember, nil
+		}
 	}
 	err = tx.QueryRow(`SELECT 1 FROM approval_requests WHERE kind = ? AND state = 'open' AND id <> ?
-		AND json_extract(payload_json, '$.target_session_id') = ?`, string(team.KindAdopt), id, p.TargetSessionID).Scan(&one)
+		AND json_extract(payload_json, '$.target_session_id') = ? AND COALESCE(json_extract(payload_json, '$.target_host_id'), '') = ?`,
+		string(team.KindAdopt), id, p.TargetSessionID, p.TargetHostID).Scan(&one)
 	switch {
 	case err == nil:
 		return team.ErrRequestOpen, nil
@@ -119,12 +140,20 @@ func adoptRefusal(tx *sql.Tx, id, rowHostID string, p team.AdoptPayload, chk ado
 // n is the close's RowsAffected: 0 means another writer closed the row first and nothing was written.
 // m must be the adopted member the request describes (key = the request id, origin adopted, active,
 // the `adopted` notice owed); anything else is an error.
-func adoptApprovedIn(tx *sql.Tx, id string, c Close, p team.AdoptPayload, chk adoptCheck, m memberRow) (n int64, refused string, err error) {
+func adoptApprovedIn(tx *sql.Tx, id string, c Close, p team.AdoptPayload, chk adoptCheck, m memberRow, cmd *Command) (n int64, refused string, err error) {
 	if c.State != team.StateApproved {
 		return 0, "", fmt.Errorf("adopt approve of %s needs an approved close (state %q)", id, c.State)
 	}
-	if m.SpawnOp != id || m.Origin != team.MemberOriginAdopted || m.State != team.MemberActive ||
-		m.TeamID != p.TeamID || m.SessionID != p.TargetSessionID || m.NoticePending != team.NoticeAdopted {
+	// A remote target (spec §4.3): the approval is the user's consent, so the row is `joining` on the member host, no
+	// notice is owed from here (the member host tells its session), and the adopt command is enqueued in this transaction.
+	remote := p.TargetHostID != ""
+	wantState, wantNotice := team.MemberActive, team.NoticeAdopted
+	if remote {
+		wantState, wantNotice = team.MemberJoining, ""
+	}
+	if m.SpawnOp != id || m.Origin != team.MemberOriginAdopted || m.State != wantState || m.TeamID != p.TeamID ||
+		m.SessionID != p.TargetSessionID || m.NoticePending != wantNotice || (remote && m.HostID != p.TargetHostID) ||
+		(remote != (cmd != nil)) || (cmd != nil && (cmd.ID != id || cmd.Kind != CmdAdopt || cmd.MK != id || cmd.HostID != p.TargetHostID || cmd.TeamID != p.TeamID)) {
 		return 0, "", fmt.Errorf("adopt member row of %s does not describe the request (key %q, origin %q, state %q, team %q, session %q, notice %q)",
 			id, m.SpawnOp, m.Origin, m.State, m.TeamID, m.SessionID, m.NoticePending)
 	}
@@ -159,9 +188,11 @@ func adoptApprovedIn(tx *sql.Tx, id string, c Close, p team.AdoptPayload, chk ad
 	if n, err = closeRowIn(tx, id, c, "", 0); err != nil || n == 0 {
 		return 0, "", err
 	}
-	if _, err = tx.Exec(`UPDATE team_members SET state = ?, ended_at = ?, updated_at = ?
-		WHERE session_id = ? AND state = 'active'`, string(team.MemberReleased), c.DecidedAt, c.DecidedAt, p.TargetSessionID); err != nil {
-		return 0, "", fmt.Errorf("retire the target's row of an ended team: %w", err)
+	if !remote {
+		if _, err = tx.Exec(`UPDATE team_members SET state = ?, ended_at = ?, updated_at = ?
+			WHERE session_id = ? AND state = 'active'`, string(team.MemberReleased), c.DecidedAt, c.DecidedAt, p.TargetSessionID); err != nil {
+			return 0, "", fmt.Errorf("retire the target's row of an ended team: %w", err)
+		}
 	}
 	inserted, err := insertMemberRowIn(context.Background(), tx, m)
 	if err != nil {
@@ -170,6 +201,11 @@ func adoptApprovedIn(tx *sql.Tx, id string, c Close, p team.AdoptPayload, chk ad
 	if !inserted { // the key is taken: committing the close without the member would report an adoption that did not happen
 		return 0, "", fmt.Errorf("adopt member key %s is already a team_members row", id)
 	}
+	if cmd != nil {
+		if err := enqueueCommandIn(tx, *cmd, c.DecidedAt); err != nil {
+			return 0, "", err // the row does not exist without its command
+		}
+	}
 	return n, "", nil
 }
 
@@ -177,6 +213,12 @@ func adoptApprovedIn(tx *sql.Tx, id string, c Close, p team.AdoptPayload, chk ad
 // a is the row after the attempt (the winner's close for a loser too); won says this call closed it;
 // refused is the code the request was cancelled with, when a re-check failed.
 func (s *Store) CloseAdoptApproved(id string, c Close, p team.AdoptPayload, chk adoptCheck, m memberRow) (a team.Approval, won bool, refused string, err error) {
+	return s.CloseAdoptApprovedWith(id, c, p, chk, m, nil)
+}
+
+// CloseAdoptApprovedWith is CloseAdoptApproved with the adopt command of a remote target (nil for a same-host one), enqueued
+// in the same transaction.
+func (s *Store) CloseAdoptApprovedWith(id string, c Close, p team.AdoptPayload, chk adoptCheck, m memberRow, cmd *Command) (a team.Approval, won bool, refused string, err error) {
 	fail := func(err error) (team.Approval, bool, string, error) {
 		return team.Approval{}, false, "", fmt.Errorf("approve adopt %s: %w", id, err)
 	}
@@ -185,7 +227,7 @@ func (s *Store) CloseAdoptApproved(id string, c Close, p team.AdoptPayload, chk 
 		return fail(fmt.Errorf("begin: %w", err))
 	}
 	defer tx.Rollback()
-	n, refused, err := adoptApprovedIn(tx, id, c, p, chk, m)
+	n, refused, err := adoptApprovedIn(tx, id, c, p, chk, m, cmd)
 	if err != nil {
 		return fail(err)
 	}

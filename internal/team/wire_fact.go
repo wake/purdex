@@ -8,7 +8,11 @@ import "encoding/json"
 // daemon applies it; the member host queues it in its facts outbox in the transaction of the change that caused it.
 
 // Fact kinds.
-const FactEnded = "ended" // the membership ended on the member host
+const (
+	FactEnded       = "ended"        // the membership ended on the member host
+	FactRegistered  = "registered"   // a forwarded spawn's session registered: it is a member now (spec §6.3)
+	FactSpawnFailed = "spawn_failed" // a forwarded spawn ended without a member; Reason says why (a SpawnReason*)
+)
 
 // Reasons of an `ended` fact.
 const (
@@ -25,6 +29,13 @@ type TeamFact struct {
 	TeamID   string `json:"team_id"`
 	MK       string `json:"mk"`
 	Reason   string `json:"reason,omitempty"`
+	// registered: the new member as the member host registered it
+	MemberSession string `json:"member_session_id,omitempty"`
+	Ref           string `json:"ref,omitempty"`
+	PID           int    `json:"pid,omitempty"`
+	ProcStart     string `json:"proc_start,omitempty"`
+	Pane          string `json:"pane,omitempty"`
+	Title         string `json:"title,omitempty"`
 }
 
 // TeamFactAnswer is the 200 body: the receiver's host id (the sender checks it is who it addressed) and the fact's

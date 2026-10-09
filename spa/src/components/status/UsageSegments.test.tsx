@@ -44,7 +44,7 @@ describe('CcUsageSegments', () => {
     expect(container.innerHTML).toBe('')
   })
 
-  it('shows icon + ring + remaining %, with no text label, and names the limit in tooltip and aria-label', () => {
+  it('shows icon + ring + number (ring: context = used, limits = remaining; number: all remaining), with no text label, and names the limit in tooltip and aria-label', () => {
     seed(payload())
     render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
     const ctx = screen.getByTestId('status-seg-usage-context')
@@ -65,8 +65,8 @@ describe('CcUsageSegments', () => {
     }
   })
 
-  it('shows what is left: used 15 -> 85%, used 120 -> 0%, used -5 -> 100%', () => {
-    for (const [used, shown] of [[15, '85%'], [120, '0%'], [-5, '100%']] as const) {
+  it('context number shows what is LEFT: used 37 -> 63%, used 15 -> 85%, used 120 -> 0%, used -5 -> 100%', () => {
+    for (const [used, shown] of [[37, '63%'], [15, '85%'], [120, '0%'], [-5, '100%']] as const) {
       cleanup()
       seed(payload({ context_window: { used_percentage: used } }))
       render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
@@ -74,14 +74,42 @@ describe('CcUsageSegments', () => {
     }
   })
 
-  it('draws the ring to the USED share, clockwise from 12 o\'clock', () => {
-    seed(payload({ context_window: { used_percentage: 25 } }))
+  it('limits show what is LEFT: used 12 -> 88%, used 61 -> 39%, used 120 -> 0%, used -5 -> 100%', () => {
+    for (const [used, shown] of [[12, '88%'], [61, '39%'], [120, '0%'], [-5, '100%']] as const) {
+      cleanup()
+      seed(payload({ rate_limits: { five_hour: { used_percentage: used }, seven_day: { used_percentage: used } } }))
+      render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+      expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe(shown)
+      expect(screen.getByTestId('status-seg-usage-seven-day').textContent).toBe(shown)
+    }
+  })
+
+  it('context ring lit = USED (37 -> 37% arc); limit rings lit = REMAINING; tone follows used', () => {
+    seed(payload({ context_window: { used_percentage: 37 }, rate_limits: { five_hour: { used_percentage: 12 }, seven_day: { used_percentage: 93 } } }))
     render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
-    const arc = screen.getByTestId('status-seg-usage-context').querySelector('[data-testid="usage-ring-arc"]')!
-    expect(arc.getAttribute('data-used')).toBe('25')
-    const [on, total] = arc.getAttribute('stroke-dasharray')!.split(' ').map(Number)
-    expect(on / total).toBeCloseTo(0.25, 5)
-    expect(arc.getAttribute('transform')).toContain('rotate(-90')
+    const arcOf = (id: string) => screen.getByTestId(id).querySelector('[data-testid="usage-ring-arc"]')!
+    const frac = (a: Element) => { const [on, total] = a.getAttribute('stroke-dasharray')!.split(' ').map(Number); return on / total }
+    const ctx = arcOf('status-seg-usage-context')
+    expect(ctx.getAttribute('data-shown')).toBe('37')
+    expect(frac(ctx)).toBeCloseTo(0.37, 5)
+    expect(ctx.getAttribute('data-tone')).toBe('ok')
+    const five = arcOf('status-seg-usage-five-hour')
+    expect(five.getAttribute('data-used')).toBe('12')
+    expect(five.getAttribute('data-shown')).toBe('88')
+    expect(frac(five)).toBeCloseTo(0.88, 5)
+    const week = arcOf('status-seg-usage-seven-day')
+    expect(week.getAttribute('data-shown')).toBe('7')
+    expect(frac(week)).toBeCloseTo(0.07, 5)
+    expect(week.getAttribute('data-tone')).toBe('danger')
+    expect(week.getAttribute('class')).toContain('stroke-status-error')
+  })
+
+  it('limit ring clamps: used 120 -> 0% lit, used -5 -> 100% lit', () => {
+    seed(payload({ rate_limits: { five_hour: { used_percentage: 120 }, seven_day: { used_percentage: -5 } } }))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    const shown = (id: string) => screen.getByTestId(id).querySelector('[data-testid="usage-ring-arc"]')!.getAttribute('data-shown')
+    expect(shown('status-seg-usage-five-hour')).toBe('0')
+    expect(shown('status-seg-usage-seven-day')).toBe('100')
   })
 
   it.each([[69, 'ok', 'stroke-status-success'], [70, 'warn', 'stroke-status-warning'], [89, 'warn', 'stroke-status-warning'], [90, 'danger', 'stroke-status-error']])(
@@ -131,7 +159,7 @@ describe('CcUsageSegments', () => {
 describe('one normalised used value', () => {
   it.each([
     [69.4, 69, 'ok', 31], [69.6, 70, 'warn', 30], [89.6, 90, 'danger', 10], [99.6, 100, 'danger', 0], [120, 100, 'danger', 0], [-5, 0, 'ok', 100],
-  ])('used %f -> used %i, %s, left %i in ring, number and tooltip', (raw, used, tone, left) => {
+  ])('used %f -> used %i, %s; context ring shows used, number shows left, tooltip names both (left %i)', (raw, used, tone, left) => {
     seed(payload({ context_window: { used_percentage: raw } }))
     render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
     const seg = screen.getByTestId('status-seg-usage-context')
@@ -139,6 +167,7 @@ describe('one normalised used value', () => {
     expect(arc.getAttribute('data-used')).toBe(String(used))
     expect(arc.getAttribute('data-tone')).toBe(tone)
     expect(seg.textContent).toBe(`${left}%`)
+    expect(arc.getAttribute('data-shown')).toBe(String(used))
     expect(seg.title).toBe(`Context window: ${left}% left (${used}% used)`)
   })
 

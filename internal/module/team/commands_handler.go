@@ -87,7 +87,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch cmd.Kind {
-	case team.CommandAdopt, team.CommandRelease, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid:
+	case team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid:
 	default:
 		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(cmd.Kind)+" commands")
 		return
@@ -97,7 +97,11 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan := CommandPlan{LeadHostID: entry.HostID, Body: raw, Consent: entry.AllowTeam, Now: m.now()}
+	plan := CommandPlan{LeadHostID: entry.HostID, Body: raw, Consent: entry.AllowTeam, Now: m.now(), HostID: ourHostID}
+	if cmd.Kind == team.CommandSpawn && (m.tmux == nil || m.sessions == nil) {
+		m.writeCommandErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "spawn is not available on this daemon")
+		return
+	}
 	if cmd.Kind == team.CommandAdopt && entry.AllowTeam {
 		o, found, err := m.origins.ResolveOriginBySession(cmd.TargetSessionID)
 		if err != nil {
@@ -107,6 +111,12 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		}
 		if found && o.Ref == cmd.TargetRef {
 			plan.Target = &o
+		}
+	}
+	if cmd.Kind == team.CommandKill && plan.Consent {
+		if status, code, detail := m.prepareKill(&plan, cmd); status != 0 {
+			m.writeCommandErr(w, status, code, detail)
+			return
 		}
 	}
 	// The work above took time (a registry read): the binding and the consent are the entry's as of now, not as of
@@ -122,6 +132,9 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	// Consent can be revoked since the bind, never promoted: the target was resolved only for a host that had it.
 	plan.Consent = plan.Consent && fresh.AllowTeam
+	if cmd.Kind == team.CommandSpawn && plan.Consent {
+		plan.SpawnCwd, _ = resolveUnderRoots(fresh.TeamRoots, cmd.Cwd)
+	}
 	res, err := m.store.ApplyTeamCommand(plan)
 	switch {
 	case errors.Is(err, ErrCommandIDConflict):
@@ -137,6 +150,27 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(res.Status)
 		_, _ = w.Write(res.Body)
 		return
+	}
+	if cmd.Kind == team.CommandSpawn && !res.Replayed {
+		m.startRemoteSpawn(cmd.ID)
+	}
+	if cmd.Kind == team.CommandKill && plan.Consent && killedOutcome(res.Body) {
+		// Decided and logged (or replayed): now the signal, which a failure here leaves to the lead host's retry of this
+		// very command (a replay signals again). The consent is read once more right before it (the window left is the
+		// signal call itself, as for every write of this route); a consent withdrawn since leaves the decision standing
+		// and sends nothing.
+		if m.beforeKillSignal != nil {
+			m.beforeKillSignal()
+		}
+		if again, _, ok := m.peerEntry(principal.Alias); !ok || again.HostID != entry.HostID || !again.AllowTeam {
+			m.kickRemoteNotices()
+			m.writeJSON(w, http.StatusOK, team.TeamCommandAnswer{ID: cmd.ID, HostID: ourHostID, Outcome: res.Body})
+			return
+		}
+		if status, code, detail := m.signalKill(cmd.MK); status != 0 {
+			m.writeCommandErr(w, status, code, detail)
+			return
+		}
 	}
 	m.kickRemoteNotices() // the command's notice (if it owed one) is committed: tell the member now
 	m.writeJSON(w, http.StatusOK, team.TeamCommandAnswer{ID: cmd.ID, HostID: ourHostID, Outcome: res.Body})
@@ -157,7 +191,7 @@ func (m *Module) peerEntry(alias string) (e config.PeerHost, ourHostID string, o
 // characters (they end up in rows and, through templates, in notices). "" means valid.
 func validateCommand(c team.TeamCommand) string {
 	for _, s := range []string{c.ID, c.Kind, c.ToHostID, c.TeamID, c.TeamName, c.MK, c.Lead.SessionID, c.Lead.Ref, c.Lead.Title,
-		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID} {
+		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID, c.Cwd, c.Title, c.Model, c.Effort} {
 		if len(s) > maxCommandField || !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
@@ -172,9 +206,11 @@ func validateCommand(c team.TeamCommand) string {
 		case !completeLead(c.Lead):
 			return "adopt: the lead's origin tuple (session_id, ref, address, pid, proc_start) is required"
 		}
-	case team.CommandRelease:
+	case team.CommandSpawn:
+		return validSpawnCommand(c)
+	case team.CommandRelease, team.CommandKill:
 		if c.MK == "" {
-			return "release: mk is required"
+			return c.Kind + ": mk is required"
 		}
 	case team.CommandVoid:
 		if !uuidV4.MatchString(c.CommandID) || c.CommandID == c.ID {

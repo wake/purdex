@@ -20,6 +20,7 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/hostconfig"
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -126,8 +127,10 @@ type Module struct {
 	// afterTargetResolved, when set, runs in the commands route between the target's resolution and the apply (test
 	// seam for a consent revoked meanwhile). nil in production.
 	afterTargetResolved func()
-	stopCancel          context.CancelFunc
-	sweepWG             sync.WaitGroup
+	// beforeKillSignal, when set, runs in the commands route between a kill's committed decision and its signal (test).
+	beforeKillSignal func()
+	stopCancel       context.CancelFunc
+	sweepWG          sync.WaitGroup
 	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
 	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
 	noticeMu sync.Mutex
@@ -310,6 +313,10 @@ type Module struct {
 	// its pump (X3d-2).
 	teamNotices     peersmod.TeamNoticeDeliverer
 	remoteNoticeSig chan struct{}
+	// peerRecords reads a member host's GET /api/peers (the host caller's PeerRecords; nil → remote members show no
+	// context) and remote caches what it read (remote_view.go, X5).
+	peerRecords func(ctx context.Context, hostID string) ([]ipeers.PeerRecord, error)
+	remote      remoteReadings
 	// beforeCloseExpired, when set, runs in closeExpired before the CAS;
 	// an error fails that close there (tests). nil in production.
 	beforeCloseExpired func(id string) error
@@ -415,6 +422,9 @@ func (m *Module) Init(c *core.Core) error {
 		if hc, ok := svc.(hostCaller); ok {
 			m.cmdCaller = hc
 		}
+		if pr, ok := svc.(peerRecordReader); ok {
+			m.peerRecords = pr.PeerRecords
+		}
 	}
 	if svc, ok := c.Registry.Get(peersmod.TeamNoticeKey); ok {
 		if d, ok := svc.(peersmod.TeamNoticeDeliverer); ok {
@@ -466,6 +476,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/approvals", m.handleCreate)
 	mux.HandleFunc("GET /api/team/approvals", m.handleList)
 	mux.HandleFunc("GET /api/team/approvals/{id}", m.handleGet)
+	mux.HandleFunc("GET "+team.AdoptionsRoute+"{id}", m.handleAdoption) // the membership a remote adopt led to (X3c)
 	mux.HandleFunc("DELETE /api/team/approvals/{id}", m.handleDelete)
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)

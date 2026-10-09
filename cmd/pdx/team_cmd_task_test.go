@@ -45,7 +45,7 @@ func TestTeamTable_TaskAndLastColumns(t *testing.T) {
 	if len(got) != 1+len(v.Members) {
 		t.Fatalf("stdout = %q, want a header and %d rows", stdout, len(v.Members))
 	}
-	if h := strings.Join(got[0], " "); h != "ADDRESS REF TITLE STATE CTX CPU MEM MODEL EFFORT TASK LAST CWD TMUX" {
+	if h := strings.Join(got[0], " "); h != "ADDRESS HOST REF TITLE STATE CTX CPU MEM MODEL EFFORT TASK LAST CWD TMUX" {
 		t.Errorf("header = %q", h)
 	}
 	for i, want := range [][2]string{
@@ -58,14 +58,14 @@ func TestTeamTable_TaskAndLastColumns(t *testing.T) {
 		{"-", "1m"},
 	} {
 		row := got[i+1]
-		if len(row) != 13 {
-			t.Fatalf("row %d = %q, want 13 cells", i, row)
+		if len(row) != 14 {
+			t.Fatalf("row %d = %q, want 14 cells", i, row)
 		}
-		if row[9] != want[0] || row[10] != want[1] {
-			t.Errorf("row %d TASK / LAST = %q / %q, want %q / %q", i, row[9], row[10], want[0], want[1])
+		if row[10] != want[0] || row[11] != want[1] {
+			t.Errorf("row %d TASK / LAST = %q / %q, want %q / %q", i, row[10], row[11], want[0], want[1])
 		}
-		if row[11] != "/w/a" || row[12] != "tm-1111111122" {
-			t.Errorf("row %d CWD / TMUX = %q / %q: the new cells shifted the old ones", i, row[11], row[12])
+		if row[12] != "/w/a" || row[13] != "tm-1111111122" {
+			t.Errorf("row %d CWD / TMUX = %q / %q: the new cells shifted the old ones", i, row[12], row[13])
 		}
 	}
 	if strings.ContainsRune(stdout, 0x1b) {

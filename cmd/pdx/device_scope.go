@@ -30,6 +30,7 @@ var deviceAllowed = map[string]bool{
 	"GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}": true,
 	// team
 	"GET /api/team/approvals/{id}":         true,
+	"GET /api/team/adoptions/{id}":         true, // read-only: the membership a remote adopt's approval led to (X3c)
 	"POST /api/team/approvals/{id}/decide": true,
 	"GET /api/team/unattended":             true,
 	"PUT /api/team/unattended":             true,

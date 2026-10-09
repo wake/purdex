@@ -39,6 +39,10 @@ type ContextInfo struct {
 	UsedPercentage *float64 `json:"used_percentage"`
 	Window         int      `json:"window"`
 	At             int64    `json:"at"`
+	// ModelID and Effort are the same reading's (cross-host team spec §8: a lead host shows a remote member's MODEL
+	// from here). Additive and omitted when the statusline did not carry them.
+	ModelID string `json:"model_id,omitempty"`
+	Effort  string `json:"effort,omitempty"`
 }
 
 // AgentInfo describes the agent that owns a peer row, when known.

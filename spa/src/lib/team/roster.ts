@@ -62,6 +62,8 @@ export interface TeamRoster {
    *  that predates `team.max_members.v1`. */
   max_members?: number
   in_use?: number
+  /** The team's chosen colour, 0-7; absent = automatic (the id hash). Absent on a daemon without `team.edit.v1`. */
+  team_color?: number
 }
 
 export interface RosterEventValue {
@@ -148,7 +150,7 @@ export function parseRosterEvent(value: unknown): RosterEventValue | string {
   return {
     op,
     teams: (teams as TeamRoster[]).map((t) => {
-      const { max_members, in_use, ...rest } = t
+      const { max_members, in_use, team_color, ...rest } = t
       return {
         ...rest,
         lead: cleanHost(t.lead),
@@ -157,6 +159,8 @@ export function parseRosterEvent(value: unknown): RosterEventValue | string {
         team_label: typeof t.team_label === 'string' ? t.team_label : '',
         // Both or neither: a cap without its usage (or the reverse) is not a number to build a stepper on.
         ...(isCapPair(max_members, in_use) ? { max_members, in_use } : {}),
+        // 0-7 or nothing: null, a bad value or a daemon that predates colours all read as automatic.
+        ...(Number.isInteger(team_color) && (team_color as number) >= 0 && (team_color as number) <= 7 ? { team_color } : {}),
       }
     }),
   }

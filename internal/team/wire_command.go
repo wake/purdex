@@ -14,6 +14,7 @@ const (
 	CommandEnd       = "end"
 	CommandLeadMoved = "lead_moved"
 	CommandVoid      = "void"
+	CommandKill      = "kill"
 	CommandSpawn     = "spawn" // not applied by this version (X4a)
 )
 
@@ -25,6 +26,7 @@ const (
 	ErrCommandIDConflict      = "id_conflict"
 	ErrCommandHostNotAllowed  = "host_not_allowed"
 	ErrCommandNotYourMember   = "not_your_member"
+	ErrCommandCapacity        = "capacity_exceeded" // 409: the lead host already has as many spawns running and members here as one host may
 	ErrCommandMKConflict      = "mk_conflict"
 	ErrCommandVoided          = "command_void" // 409: the lead host voided this command id (spec §3.3)
 	ErrCommandNotVoidable     = "not_voidable" // 409: a void names a command that is no adopt or spawn
@@ -61,6 +63,11 @@ type TeamCommand struct {
 	LeadRef       string `json:"lead_ref,omitempty"`
 	// void
 	CommandID string `json:"command_id,omitempty"`
+	// spawn: where and what to start on the member host (the cwd must lie under the roots that host granted)
+	Cwd    string `json:"cwd,omitempty"`
+	Title  string `json:"title,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // TeamCommandAnswer is the 200 body: the receiver's host id (the sender checks it is who it addressed) and the

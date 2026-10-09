@@ -177,6 +177,7 @@ v2, the todos:
 
 - `done` / `dropped` numbers are read through the job's map; an unknown number is ignored; a todo no longer open when the result is applied stays as it is; a number in both lists counts as `done`.
 - `add`: the first 2 are kept; `title` > 30 → cut; `detail` > 100 → cut at the last sentence end ≤ 100 (none → cut at 100); an add whose trimmed title equals an open todo's title is ignored; with 30 open, adds are ignored (one log line).
+- *Clarified (88, 2026-10-10, WB-1b′-a):* "all seven fields are required" means the seven top-level keys, and `todos` must be an object. Inside it a missing `done` / `dropped` / `add` is an empty list; one that is present with the wrong type (e.g. `done` a string, `add` not an array) is a format error like a non-object `todos` (one retry → `failed: format`). An `add` item whose `title` is missing or empty after trimming is ignored (one log line); a missing `detail` is `""`.
 - The todo changes are applied in the transaction that writes the push line and the status (they never wait for the re-write).
 - `skip: true` → the entry is `skipped: model`, and its `todos` are still applied (a turn with no progress may still answer an open question).
 
@@ -191,6 +192,7 @@ v2, the todos:
 
 - **Asked by** the Mac App's 「重整」 control (§10) → `POST …/refresh` (§9) → the daemon queues a `refresh` job in the conversation's queue; the live session's mod collects it (≤ 10 s, through the events answer) and runs `$.model.fork({prompt})` with the refresh prompt (third block of the prompt document) filled with the current status, the numbered open todos and the dropped titles (empty in v2). Also typed in the session: **`/workbook refresh`** (the mod registers it; it asks the daemon to queue the same job and runs it). (§2 item 12.)
 - Only for a conversation whose session is live and whose mod announced `workbook.v2`; one refresh at a time per conversation (a second → 409 `refresh_pending`); it takes its place in the queue like any job.
+- *Clarified by the plan (rev 4, agreed with 1f):* a mod announces **`workbook.refresh`** besides `workbook.v2` once it can run a refresh job; the refresh needs a live session whose mod announced `workbook.refresh` (a mod with `workbook.v2` alone runs turn jobs only), so a daemon that serves refreshes never hands one to an older mod. The refresh runs in a capable session of the conversation (the asking one preferred), and its row records that session.
 - **Output** `{status, todos: {done, dropped, add}}`; validated as §5.4 except: up to 10 adds; no push; no thing.
 - **Written** as an entry of kind `refresh` (state `ok`, `thing` = the conversation's current thing, `entry` = a line the daemon writes: 「重整：完成 2、移除 1、新增 3」, no push), the status replaced and the todo changes applied, in one transaction. Failures as §5.1, plus `failed: nothing_to_fork` (the session has not answered since it started or since `/clear`).
 - **Cost:** the main model over the whole transcript — read mostly from the main thread's prompt cache while it is warm, the whole prefix billed otherwise. The usage is stored with the refresh entry and shown with its result. Never automatic.
@@ -270,7 +272,8 @@ v2 (`workbook.v2` — the todos and the refresh):
 - Every entry gains `kind` (`turn` | `refresh`), `usage` and `todo_changes: {added: [{id, title}], done: [{id, title}], dropped: [{id, title}]}` — what that entry did to the list (the mixed view, §10).
 - The conversation answer gains `todos: {open: [… oldest first], done: [… newest 20]}`. A todo: `{id, title, detail, state, closed_by, created_at, closed_at, added_entry_id, closed_entry_id}`.
 - `GET /api/workbook/conversations/{provider}/{session_id}/todos?state=open|done|dropped&limit=&before=` — the list or the done record, paged like the entries (`before=<todo id>`).
-- `POST /api/workbook/conversations/{provider}/{session_id}/refresh` → 202 `{entry_id}` (the refresh entry, `pending`); 409 `not_live` (no live session of the conversation whose mod announced `workbook.v2`); 409 `refresh_pending`.
+- `POST /api/workbook/conversations/{provider}/{session_id}/refresh` → 202 `{entry_id}` (the refresh entry, `pending`); 409 `not_live` (no live session of the conversation whose mod announced `workbook.v2`; *clarified:* `workbook.refresh`, §5.6); 409 `refresh_pending`.
+- *Clarified by the plan:* the conversation answer carries `refresh_available` (bool, now), and host event `workbook.refresh_available {conv_key, available}` is sent when it changes — the Mac's 「重整」 control is enabled by it (§10.1).
 - No route edits a todo (§2 item 11).
 - Host event `workbook.todos` `{conv_key, session_id, todos: [the changed todos]}` on every change (a turn or a refresh). A refresh entry travels as `workbook.entry`.
 - Device tokens (iOS): the GET routes (iOS reads everything, §10.3); the refresh is the Mac App's.
@@ -305,6 +308,7 @@ The workbook view (either way in):
 Before v2, iOS had no session-detail screen: a conversation screen's ⓘ opened the 「Tab 資訊」 sheet (one section per session: host, state, agent, path, 「在手機隱藏」, 「我的最愛」), and v1's workbook section lived there (purdex-ios 0.6.30, behind `workbook.v1`). v2 (user 2026-10-10; **the iOS interface design is assigned by 88**, the user's points below are fixed):
 
 - **ⓘ opens the session detail page** — a full-screen page, pushed — instead of the sheet; **a swipe to the left on the conversation screen opens it too**.
+- *Amended (user 2026-10-10, iOS 0.6.35):* the workbook and the Tab info have **two different icons**. On the conversation screen the button that opens the detail page is a **workbook icon** (SF Symbol `book.closed`, the Mac's `Notebook`; accessibility label 「工作簿」) when the tab's primary session has `workbook.v1` and has not ended, else ⓘ (then the page is the Tab info alone); on the detail page, the button that opens the Tab info sheet stays ⓘ. The detail page's **title is the tab's title** — the same as the conversation screen's — not the session's name; a tab with several sessions keeps the ▾ session switch beside it, its items named by session.
 - **The page's segments:** 「目前狀況」 (`status` and its time); 「待辦」 (the open todos, title and detail, read-only); 「已完成」 (the done record, newest first, paged); 「紀錄」 (every entry, grouped as on the Mac, `before=` paging, refresh entries included); and **the old Tab-info content as a segment or a button of the page** (the user allowed either; 88's iOS design decides). Without `workbook.v1` / `workbook.v2` the workbook segments are absent and the page shows the Tab-info content alone.
 - A tab that holds more than one session: the page opens on the session the screen shows, with a switch between the tab's sessions (88's iOS design).
 - **Tapping a workbook push** opens the detail page on 「紀錄」, scrolled to the entry, highlighted. The push carries `purdex.workbook = {conv_key, entry_id}` (§7). A push without it (today's body, the fallback) opens the session as today.
@@ -314,7 +318,7 @@ Before v2, iOS had no session-detail screen: a conversation screen's ⓘ opened 
 
 1. **Data contract:** §6 fields as returned by §9; the entry states and reasons; `prompt_ver`; *v2:* the todo fields, `kind`, `todo_changes`.
 2. Filtering is the daemon's job (§8); the App shows what the daemon stored.
-3. Capability `workbook.v1` gates the v1 surfaces; *v2:* `workbook.v2` gates the todos, the switch and the refresh. An older daemon shows none of them.
+3. Capability `workbook.v1` gates the v1 surfaces; *v2:* `workbook.v2` gates the todos, the switch and the refresh. An older daemon shows none of them. *Clarified:* the host capability `workbook.v2` shows the 「重整」 control; whether it is enabled for a conversation is `refresh_available` (§9) — that is where the mod-level `workbook.refresh` (§5.6) reaches the App.
 4. *v2:* the events answer flag `workbook: true` (§5.1) is a field of the U1 events wire (88's).
 
 ## 11. Employee workbook (later round)

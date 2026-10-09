@@ -49,6 +49,8 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 	for _, tk := range open {
 		byOwner[tk.OwnerKey] = append(byOwner[tk.OwnerKey], tk)
 	}
+	// An explicit question: the stale remote hosts are asked now (all at once, 3 s at most) so the table is complete.
+	m.refreshRemoteReadings(r.Context(), m.remoteHostsOf(rows))
 	v := team.TeamView{Team: t, Members: make([]team.Member, 0, len(rows))}
 	if n, err := seatsTaken(m.store.db, t.ID, ""); err != nil {
 		m.logf("[team] team %s in use: %v", t.ID, err) // omitted: the reader counts the active members
@@ -130,13 +132,15 @@ func (m *Module) memberView(mr memberRow) team.Member {
 	}
 	if m.isRemoteRow(mr) {
 		// A remote row never goes through this host's registry, usage or quota readers (a same-looking session id here would
-		// leak its data): its address is its host's alias (else its host id) and its ref, its context what was synced.
-		if a := m.remoteAlias(mr.HostID); a != "" {
-			v.Address = a + "/" + mr.Ref
-		} else {
-			v.Address = mr.HostID + "/" + mr.Ref
+		// leak its data): its address is its host's alias (else its host id) and its ref. Its context is what the member
+		// host's GET /api/peers last said (remote_view.go; blank and flagged when that host did not answer), else the
+		// reading synced onto the row.
+		v.HostAlias = m.remoteAlias(mr.HostID)
+		v.Address = firstNonEmpty(v.HostAlias, mr.HostID) + "/" + mr.Ref
+		v.Context, v.ContextUnavailable = m.remoteContextOf(mr.HostID, mr.SessionID)
+		if v.Context == nil && !v.ContextUnavailable {
+			v.Context = mr.Usage
 		}
-		v.Context = mr.Usage
 		return v
 	}
 	if mr.State == team.MemberActive {

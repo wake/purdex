@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.666] - 2026-10-10
+
+> 動到 daemon、mod、`pdx` 指令與 SPA：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；SPA 已隨主機上的 dev server 生效。
+
+### Added：lead 的終端機底部顯示 team 人數 — TI-5b（#2302，介面線）
+
+- 帶 team 的 lead session，終端機底部模式列多一個「lead mode · N members」（N 含別台主機的 member）。mod 每 15 秒向本機 daemon 查一次，畫面只讀查到的值；查不到就維持上一次的值，不是 lead 就不顯示。
+
+### Added：team 名單顯示 member 在哪台主機 — X5（#2299，A 線）
+
+- team 名單（App 的事件與 `GET /api/team/roster`）與 `GET /api/team` 的 member 多帶 `host_id`、`host_alias`、`context_unavailable`；別台主機的 member 位址是 `<那台別名>/<ref>`，加入中、放出中、結束中的也會列出。
+- `pdx team` 多一欄 HOST；別台 member 的 context 與模型讀自那台的 `GET /api/peers`（快取 10 秒；名單從不等遠端，`pdx team` 最多等 3 秒），那台沒回應就顯示「(主機無回應)」。`/api/peers` 的 context 資訊多帶 `model_id`、`effort`。
+
+### Changed：只看本機 member 的地方不再碰到別台的 — X3b-1c（#2293，A 線）
+
+- 存活檢查、最後一輪、member 接力、放出／kill／消失標記、呼叫者身分判斷等只看本機的 member；座位、任務指派、角色判斷照舊兩台都算。別台 member 不能做 member 接力（回 `relay_unsupported`）。
+
+### Fixed：用量環的意思 — #2303（介面線）
+
+- context 環與數字改成顯示「已用」；5 小時與每週額度顯示「剩餘」。
+
 ## [1.0.0-alpha.665] - 2026-10-10
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。跨主機的「宣告指令種類」要**兩台都部署**才會生效（被收進 team 的那台也要升級）。
