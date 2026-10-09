@@ -385,3 +385,26 @@ func TestResolve_CandidateOfAnotherSessionIsSkipped(t *testing.T) {
 		t.Fatalf("got %+v err %v, want the file named after the session", s, err)
 	}
 }
+
+// An in-root link named like this session that leads to another session's file is skipped too.
+func TestResolve_SymlinkNamedLikeTheSessionToAnotherSessionIsSkipped(t *testing.T) {
+	e := newResEnv(t)
+	target := filepath.Join(e.root, "-other", "99999999-9999-4999-8999-999999999999.jsonl")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("not this one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(e.root, "-link", sidR+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	r := &Resolver{Home: e.home, Index: fakeIndex{path: link, ok: true}}
+	if s, err := resolve(t, r); err == nil {
+		t.Fatalf("resolved %q (%s) through a link to another session's file", s.Path, readAll(t, s))
+	}
+}

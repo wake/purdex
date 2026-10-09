@@ -141,7 +141,8 @@ func (r *Resolver) openCandidate(root, path, sessionID string) (*os.File, string
 	if err != nil {
 		return nil, ""
 	}
-	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) || filepath.Ext(resolved) != ".jsonl" {
+	// the same rule after symlinks: a link named like this session that leads to another session's file is not it
+	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) || filepath.Base(resolved) != sessionID+".jsonl" {
 		return nil, ""
 	}
 	if r.afterCheck != nil {
