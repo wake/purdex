@@ -21,8 +21,12 @@ import (
 )
 
 // SessionVars are the variables a Claude Code session sets for itself (the
-// eleven seen leaking on 2026-10-09, #2122). Exact names: tmux's
-// set-environment needs them.
+// eleven MEASURED leaking on 2026-10-09, #2122, by name). Exact names: tmux's
+// set-environment needs them. They are session identity by definition, so nothing
+// a person set on purpose is lost by removing them, in the process or in tmux's
+// global environment. A name a later Claude Code adds goes here (or under a
+// prefix below) once it has been seen: this is a measured list, not a guess at
+// every CLAUDE_*/MCP_* name, many of which are configuration.
 var SessionVars = []string{
 	"CLAUDECODE",
 	"CLAUDE_PID",
