@@ -24,8 +24,8 @@ const maxFactBody = 64 << 10
 // handleTeamFact serves POST /api/peers/team/facts. The order is the contract (spec §6.1, as the commands route): the
 // binding of the host principal to its live entry, the per-host rate limit and the body cap BEFORE the body is decoded,
 // then shape, to_host_id and kind; then the store decides in one transaction (idempotency by id and content, the row
-// change, the log entry). This version applies `ended`; registered / spawn_failed (X4) and the reserved moved are 400
-// unsupported_kind, never stored.
+// change, the log entry). This version applies `ended`, `registered` and `spawn_failed`; the reserved moved is 400
+// unsupported_kind (stored).
 func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 	var entry config.PeerHost
 	var ourHostID string
@@ -73,7 +73,7 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 	case fact.ToHostID != ourHostID:
 		r := refusal(http.StatusConflict, team.ErrCommandWrongHost, "this fact is addressed to another host")
 		refusalPlan = &r
-	case fact.Kind != team.FactEnded:
+	case fact.Kind != team.FactEnded && fact.Kind != team.FactRegistered && fact.Kind != team.FactSpawnFailed:
 		r := refusal(http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(fact.Kind)+" facts")
 		refusalPlan = &r
 	}
@@ -113,8 +113,26 @@ func validateFact(f team.TeamFact) string {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
 	}
-	if f.Kind == team.FactEnded && f.MK == "" {
-		return "ended: mk is required"
+	for _, s := range []string{f.MemberSession, f.Ref, f.ProcStart, f.Pane, f.Title} {
+		if len(s) > maxCommandField || !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
+			return "a field is over 256 bytes, not UTF-8, or holds a control character"
+		}
+	}
+	switch f.Kind {
+	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed:
+		if f.MK == "" {
+			return f.Kind + ": mk is required"
+		}
+	}
+	switch f.Kind {
+	case team.FactRegistered:
+		if f.MemberSession == "" || f.Ref == "" || f.PID <= 0 || f.ProcStart == "" {
+			return "registered: member_session_id, ref, pid and proc_start are required"
+		}
+	case team.FactSpawnFailed:
+		if !spawnReasons[f.Reason] {
+			return "spawn_failed: reason is not a known spawn reason"
+		}
 	}
 	return ""
 }

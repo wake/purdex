@@ -18,9 +18,11 @@ func teamKinds() []string {
 	return []string{team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid}
 }
 
-// teamFactKinds is what this daemon applies as a lead host on POST /api/peers/team/facts (X3b-2): `ended`. registered and
-// spawn_failed join with X4; moved is reserved.
-func teamFactKinds() []string { return []string{team.FactEnded} }
+// teamFactKinds is what this daemon applies as a lead host on POST /api/peers/team/facts (X3b-2, X4b): `ended`, and the
+// forwarded spawn's `registered` / `spawn_failed`; moved is reserved.
+func teamFactKinds() []string {
+	return []string{team.FactEnded, team.FactRegistered, team.FactSpawnFailed}
+}
 
 // teamEntryFor is the live entry a host principal stands for, under the
 // same binding as the other host routes (spec §6.1): present, verified, and

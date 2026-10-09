@@ -207,6 +207,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (commands): %w", err)
 	}
+	if _, err := db.Exec(remoteSpawnSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (remote spawns): %w", err)
+	}
 	if _, err := db.Exec(factLogSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (fact log): %w", err)

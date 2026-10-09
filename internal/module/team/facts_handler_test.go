@@ -111,14 +111,14 @@ func TestFacts_ShapeAndAddressing(t *testing.T) {
 		"bad id":         {badID, 400, "bad_request"},
 		"not JSON":       {"{", 400, "bad_request"},
 		"reserved moved": {team.TeamFact{ID: factUUID2, Kind: "moved", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
-		"registered":     {team.TeamFact{ID: factUUID3, Kind: "registered", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
+		"unknown kind":   {team.TeamFact{ID: factUUID3, Kind: "made_up", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
 	} {
 		code, body := f.postFact(leadPrincipal(), tc.body)
 		if code != tc.status || errCode(t, body) != tc.code {
 			t.Fatalf("%s: %d %s, want %d %s", name, code, body, tc.status, tc.code)
 		}
 	}
-	// wrong_host and unsupported_kind are stored decisions (wrong host, moved, registered); bad_request is not.
+	// wrong_host and unsupported_kind are stored decisions (wrong host, moved, an unknown kind); bad_request is not.
 	if n := factLogCount(t, f); n != 3 {
 		t.Fatalf("%d logged, want 3", n)
 	}
@@ -129,7 +129,7 @@ func TestFacts_ShapeAndAddressing(t *testing.T) {
 func TestFacts_AnUnsupportedKindRefusalIsStoredAndSurvivesAnUpgrade(t *testing.T) {
 	f := factFixture(t)
 	f.remoteRow("abc12", "lead:1", "mk1", rowActive)
-	reg := team.TeamFact{ID: factUUID1, Kind: "registered", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}
+	reg := team.TeamFact{ID: factUUID1, Kind: "moved", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}
 	code, first := f.postFact(leadPrincipal(), reg)
 	if code != 400 || errCode(t, first) != "unsupported_kind" || factLogCount(t, f) != 1 {
 		t.Fatalf("first = %d %s, logged %d", code, first, factLogCount(t, f))
