@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -47,15 +48,28 @@ func migrate(db *sql.DB) error {
 // waiting for a lock, but not a new connection switching a file to WAL while another opener does the same; whatever f
 // did is rolled back by its own failure, so running it again is safe.
 func retryBusy(f func() error) error {
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(busyRetryFor)
+	logged := false
 	for {
 		err := f()
-		if err == nil || time.Now().After(deadline) || !(strings.Contains(err.Error(), "SQLITE_BUSY") || strings.Contains(err.Error(), "database is locked")) {
+		busy := err != nil && (strings.Contains(err.Error(), "SQLITE_BUSY") || strings.Contains(err.Error(), "database is locked"))
+		if !busy {
 			return err
+		}
+		if time.Now().After(deadline) {
+			log.Printf("[workbook] migrate: the database stayed locked for %s; giving up", busyRetryFor)
+			return err
+		}
+		if !logged {
+			log.Printf("[workbook] migrate: the database is locked by another opener; retrying for up to %s", busyRetryFor)
+			logged = true
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// busyRetryFor bounds retryBusy (a var so a test can shorten it).
+var busyRetryFor = 5 * time.Second
 
 // connTx is a BEGIN IMMEDIATE transaction on one connection, as a stepExec.
 type connTx struct {

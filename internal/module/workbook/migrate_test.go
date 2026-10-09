@@ -2,9 +2,13 @@ package workbook
 
 import (
 	"database/sql"
+	"errors"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // v1Schema is the deployed schema of workbook.db as WB-1a-ii shipped it, plus one row (what a host that has run the v1
@@ -221,5 +225,46 @@ func TestMigrate_ConcurrentOpenersBothSucceed(t *testing.T) {
 			}
 			last.Close()
 		}
+	}
+}
+
+// The retry on a locked database is bounded and says so: it gives up after busyRetryFor with the error, and logs once when
+// it starts to wait and once when it gives up. Mutation gate: retry without a deadline → this test hangs / red.
+func TestRetryBusy_IsBoundedAndLogged(t *testing.T) {
+	old := busyRetryFor
+	busyRetryFor = 120 * time.Millisecond
+	defer func() { busyRetryFor = old }()
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	calls := 0
+	start := time.Now()
+	err := retryBusy(func() error { calls++; return errors.New("database is locked (5) (SQLITE_BUSY)") })
+	if err == nil || time.Since(start) < 100*time.Millisecond || time.Since(start) > 2*time.Second {
+		t.Fatalf("err=%v after %v", err, time.Since(start))
+	}
+	if calls < 3 {
+		t.Fatalf("only %d attempts", calls)
+	}
+	out := buf.String()
+	if strings.Count(out, "retrying for up to") != 1 || strings.Count(out, "giving up") != 1 {
+		t.Fatalf("log = %q", out)
+	}
+	// a failure that is not a lock is returned at once, unlogged
+	buf.Reset()
+	calls = 0
+	if err := retryBusy(func() error { calls++; return errors.New("disk I/O error") }); err == nil || calls != 1 || buf.Len() != 0 {
+		t.Fatalf("calls=%d log=%q err=%v", calls, buf.String(), err)
+	}
+	// success after the lock is cleared
+	n := 0
+	if err := retryBusy(func() error {
+		if n++; n < 3 {
+			return errors.New("database is locked")
+		}
+		return nil
+	}); err != nil || n != 3 {
+		t.Fatalf("n=%d err=%v", n, err)
 	}
 }
