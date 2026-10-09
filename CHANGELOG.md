@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.664] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`。部署後 team.db 的 teams 表多一欄 `team_color`（自動加，可重入）。
+
+### Added：team 改名、短標籤、顏色 — TR-1（#2290，介面線）
+
+- 新路由 `PUT /api/team/appearance`：App 一次送出 team 的名稱、短標籤、顏色（0–7，或 null＝照舊自動配色）。短標籤留空時照建立時的規則從名稱推；只能改還在進行的 team（已結束回 409 `not_live`）。改完 team 名單即時更新，名單多帶 `team_color`（自動時不帶）；能力 `team.edit.v1`。每次修改記一行 log（舊值→新值、來源）。
+- 跨主機：被收進 team 的那台還會看到舊名稱與自動顏色，之後由 #2288 同步。
+
+### Added：工作簿讀取 API 與即時事件 — WB-2（#2286，介面線）
+
+- `GET /api/workbook/conversations/{provider}/{session_id}`（同一條接力鏈的任一個 session 都查得到同一本）與 `GET /api/workbook/entries`（依時間查跨對話的紀錄）；新增或狀態改變時發 `workbook.entry`／`workbook.status` 事件；能力 `workbook.v1`。手機（已配對的裝置）可讀。目前還不會產生任何紀錄，整理流程改走 mod 後才接上。
+
+### Added：跨主機 team 的放出、結束、換 lead 指令 — X3b-1b（#2282，A 線）
+
+- lead 那台放出或結束遠端 member、team 結束、lead 接力換人時，會在同一筆交易裡把對應指令排進送往對方主機的佇列；`pdx team kill`／`release` 可以用 `<別台別名>/<ref>` 指定遠端 member。目前還沒有遠端 member，所以不會真的送出。
+
+### Changed：peers 投遞的目標端共用一份 — X3d-1（#2287，A 線）
+
+- 收訊投遞的「重新確認目標、限流、建回覆通道、寫入」抽成共用函式，並新增給 team 用的窄接縫（遠端 member 的通知由它那台以 lead 身分投遞）。現有收訊行為不變；接縫目前沒有人呼叫。
+
+### Docs
+
+- team 面板：標題列點一下切換模式、雙擊改名／標籤／顏色（#2289）。
+
 ## [1.0.0-alpha.663] - 2026-10-10
 
 > 動到 daemon、`pdx` 指令與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
