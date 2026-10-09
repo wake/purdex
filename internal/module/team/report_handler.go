@@ -61,6 +61,9 @@ func (m *Module) handleReportCreate(w http.ResponseWriter, r *http.Request) {
 		m.taskStoreErr(w, "report "+req.ID, err)
 		return
 	}
+	if !replay {
+		m.rosterChanged() // the report is committed: a report that moves its task (ack starts it, done finishes it) changes the member's current task (T-3b), whatever the view read below does
+	}
 	v, ok := m.newTaskView(w, c.team.ID, c.ownerKey())
 	if !ok {
 		return

@@ -37,6 +37,17 @@ type RosterMember struct {
 	State    MemberState `json:"state"`  // always MemberActive: the others leave the roster
 	Origin   string      `json:"origin"` // MemberOriginSpawned | MemberOriginAdopted
 	JoinedAt int64       `json:"joined_at"`
+	// Task is the member's current task as the lead set it (plan T-3b, D-7): its in_progress task (the
+	// newest updated_at, then the highest seq), else its newest pending one; absent when it has neither.
+	// Subject only: a task's last turn / report text is never in the roster. Additive.
+	Task *RosterTask `json:"task,omitempty"`
+}
+
+// RosterTask is a roster member's current task.
+type RosterTask struct {
+	ID      string     `json:"id"` // the display id (TaskDisplayID)
+	Subject string     `json:"subject"`
+	Status  TaskStatus `json:"status"`
 }
 
 // TeamRoster is one live team.
