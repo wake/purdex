@@ -252,6 +252,54 @@ func (s *Store) EndUnpairedRemoteMembers(pairedHostIDs []string, at int64) (int,
 	return ended, nil
 }
 
+// EndRemoteMembersOfHost is spec §3.2 on the member host for ONE lead host (the facts pump found it unpaired, or
+// unpaired_by_peer): its live remote rows end, its still-queued facts are dropped, in one transaction. No notice,
+// no fact. Rows of other hosts and terminal rows are untouched. It returns how many live rows it ended.
+func (s *Store) EndRemoteMembersOfHost(hostID string, at int64) (int, error) {
+	fail := func(err error) (int, error) { return 0, fmt.Errorf("end remote members of %s: %w", hostID, err) }
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE remote_members SET mk = mk WHERE mk = ''`); err != nil { // the write lock first
+		return fail(err)
+	}
+	rows, err := tx.Query(`SELECT mk FROM remote_members WHERE lead_host_id = ? AND state = ?`, hostID, remoteActive)
+	if err != nil {
+		return fail(err)
+	}
+	var due []string
+	for rows.Next() {
+		var mk string
+		if err := rows.Scan(&mk); err != nil {
+			rows.Close()
+			return fail(err)
+		}
+		due = append(due, mk)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fail(err)
+	}
+	rows.Close()
+	ended := 0
+	for _, mk := range due {
+		if ok, err := casRemoteMemberStateIn(tx, mk, []string{remoteActive}, remoteEnded, at); err != nil {
+			return fail(err)
+		} else if ok {
+			ended++
+		}
+	}
+	if _, err := tx.Exec(`UPDATE team_facts SET state = ?, updated_at = ? WHERE host_id = ? AND state = ?`, factDropped, at, hostID, factPending); err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(err)
+	}
+	return ended, nil
+}
+
 func containsString(list []string, s string) bool {
 	for _, x := range list {
 		if x == s {
