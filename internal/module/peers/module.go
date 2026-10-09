@@ -397,6 +397,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/peers/settings", m.handlePutSettings)
 	mux.HandleFunc("POST /api/peers/send", m.handleSend)
 	mux.HandleFunc("POST /api/peers/deliver", m.handleDeliver)
+	mux.HandleFunc("GET /api/peers/team/roots", m.handleTeamRoots)
 	mux.HandleFunc("GET /api/peers/log", m.handlePeersLog)
 	mux.HandleFunc("POST /api/peers/self", m.handleSelf)
 	mux.HandleFunc("PUT /api/peers/self/title", m.handleClaimTitle)
@@ -441,7 +442,10 @@ func (m *Module) handlePeers(w http.ResponseWriter, r *http.Request) {
 	snap := m.configSnapshot()
 
 	if scope != "all" {
-		json.NewEncoder(w).Encode(m.localEnvelope(r.Context(), snap.hostID, snap.alias))
+		env := m.localEnvelope(r.Context(), snap.hostID, snap.alias)
+		p, known := middleware.PrincipalFrom(r.Context())
+		env.Team = teamCapsFor(snap.hosts, p, known)
+		json.NewEncoder(w).Encode(env)
 		return
 	}
 

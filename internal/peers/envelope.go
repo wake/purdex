@@ -48,6 +48,17 @@ type Envelope struct {
 	// execution row is listed, and an address that matches no row is
 	// not-ready rather than not-found (peer mailbox spec §4.1).
 	ExecutionsUnavailable bool `json:"executions_unavailable,omitempty"`
+	// Team states which cross-host team kinds this host applies and whether
+	// it lets the ASKING principal use them (cross-host team spec §3.1 rule
+	// 7). Absent: an older daemon, which supports none.
+	Team *TeamCaps `json:"team,omitempty"`
+}
+
+// TeamCaps is Envelope.Team. Kinds is never null; AllowTeam is the asking
+// host principal's consent entry (false for admin and every other reader).
+type TeamCaps struct {
+	Kinds     []string `json:"kinds"`
+	AllowTeam bool     `json:"allow_team"`
 }
 
 // AddressVersionV5 is Envelope.AddressVersion for Peer Address v5 (peer
