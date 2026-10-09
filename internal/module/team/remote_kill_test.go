@@ -20,6 +20,7 @@ func killFixture(t *testing.T, allow bool) (*fixture, *killRec) {
 	rec := &killRec{}
 	f.m.killProcess = rec.kill
 	row := newRemote("mk-1", "sid-2", "lead:1", f.clock.Load())
+	row.PID, row.ProcStart = 20, "Sun Sep 13 15:22:36 2026" // what the fake registry shows for sid-2
 	if err := f.m.store.InsertRemoteMember(row); err != nil {
 		t.Fatal(err)
 	}
@@ -63,14 +64,15 @@ func TestRemoteKill_SignalsTheProcessAndMarksKilled(t *testing.T) {
 	if rowState(t, f, "mk-1") != remoteKilled {
 		t.Fatalf("row = %s", rowState(t, f, "mk-1"))
 	}
-	// the very same command again: the stored answer, no second signal
+	// the very same command again: the stored answer; a killed answer signals again (guarded by the recorded identity),
+	// which is what makes a lost signal heal
 	code, body = f.postCmd(leadPrincipal(), killCmd(cmdUUID1, "mk-1"))
-	if code != http.StatusOK || outcomeState(t, body) != "killed" || len(rec.got()) != 1 {
+	if code != http.StatusOK || outcomeState(t, body) != "killed" || len(rec.got()) != 2 {
 		t.Fatalf("replay = %d %s signals=%v", code, body, rec.got())
 	}
-	// another command id for the same member: the row's state, still no signal
+	// another command id for the same member: the row's state, same rule
 	code, body = f.postCmd(leadPrincipal(), killCmd(cmdUUID2, "mk-1"))
-	if code != http.StatusOK || outcomeState(t, body) != "killed" || len(rec.got()) != 1 {
+	if code != http.StatusOK || outcomeState(t, body) != "killed" || len(rec.got()) != 3 {
 		t.Fatalf("second kill = %d %s signals=%v", code, body, rec.got())
 	}
 }
@@ -90,25 +92,73 @@ func TestRemoteKill_NothingLeftToSignalIsGone(t *testing.T) {
 	}
 }
 
-func TestRemoteKill_ESRCHIsGone(t *testing.T) {
+// The process ended between the look and the signal: the answer was decided from the look and stays `killed`; the ESRCH is
+// not an error.
+func TestRemoteKill_ESRCHAtSignalTimeIsNotAnError(t *testing.T) {
 	f, rec := killFixture(t, true)
 	rec.err = syscall.ESRCH
 	code, body := f.postCmd(leadPrincipal(), killCmd(cmdUUID1, "mk-1"))
-	if code != http.StatusOK || outcomeState(t, body) != "gone" {
+	if code != http.StatusOK || outcomeState(t, body) != "killed" || len(rec.got()) != 1 {
 		t.Fatalf("kill = %d %s", code, body)
 	}
 }
 
-// A signal that failed marks nothing and is answered retryably (5xx), so the lead host sends it again.
-func TestRemoteKill_FailedSignalMarksNothing(t *testing.T) {
+// The signal comes AFTER the decision is committed. A signal that failed leaves the row killed and is answered retryably
+// (5xx); the lead host sends the SAME command again, a replay, and the replay signals again until it takes.
+func TestRemoteKill_FailedSignalIsRetriedByTheReplay(t *testing.T) {
 	f, rec := killFixture(t, true)
 	rec.err = syscall.EPERM
 	code, body := f.postCmd(leadPrincipal(), killCmd(cmdUUID1, "mk-1"))
 	if code < 500 {
 		t.Fatalf("kill = %d %s, want a 5xx", code, body)
 	}
-	if rowState(t, f, "mk-1") != remoteActive {
-		t.Fatalf("row = %s, want still active", rowState(t, f, "mk-1"))
+	if rowState(t, f, "mk-1") != remoteKilled {
+		t.Fatalf("row = %s, want killed (decided and logged before the signal)", rowState(t, f, "mk-1"))
+	}
+	rec.mu.Lock()
+	rec.err = nil
+	rec.mu.Unlock()
+	code, body = f.postCmd(leadPrincipal(), killCmd(cmdUUID1, "mk-1"))
+	if code != http.StatusOK || outcomeState(t, body) != "killed" {
+		t.Fatalf("replay = %d %s", code, body)
+	}
+	if pids := rec.got(); len(pids) != 2 || pids[1] != 20 {
+		t.Fatalf("signals %v, want the failed try and the replay's", pids)
+	}
+}
+
+// Nothing is signalled before the command is decided: the same id with another body is id_conflict, and the process of the
+// OTHER member the second body names is left alone.
+func TestRemoteKill_IdConflictSignalsNothing(t *testing.T) {
+	f, rec := killFixture(t, true)
+	other := newRemote("mk-2", "sid-3", "lead:1", f.clock.Load())
+	other.PID, other.ProcStart = 30, "Sun Sep 13 15:23:00 2026"
+	if err := f.m.store.InsertRemoteMember(other); err != nil {
+		t.Fatal(err)
+	}
+	f.origins.show(team.Origin{SessionID: "sid-3", Ref: "_ghi789", PID: 30, ProcStart: "Sun Sep 13 15:23:00 2026"})
+	if code, body := f.postCmd(leadPrincipal(), killCmd(cmdUUID1, "mk-1")); code != http.StatusOK {
+		t.Fatalf("kill = %d %s", code, body)
+	}
+	code, body := f.postCmd(leadPrincipal(), killCmd(cmdUUID1, "mk-2"))
+	if code != http.StatusConflict || errCode(t, body) != team.ErrCommandIDConflict {
+		t.Fatalf("same id other body = %d %s", code, body)
+	}
+	if pids := rec.got(); len(pids) != 1 || pids[0] != 20 || rowState(t, f, "mk-2") != remoteActive {
+		t.Fatalf("signals %v, mk-2 %s: the conflicting command touched its target", pids, rowState(t, f, "mk-2"))
+	}
+}
+
+// The process signalled is the one the row recorded: when the session id now belongs to another process, nothing is
+// signalled and the member is gone.
+func TestRemoteKill_AnotherProcessUnderTheSessionIdIsNeverSignalled(t *testing.T) {
+	f, rec := killFixture(t, true)
+	if _, err := f.m.store.db.Exec(`UPDATE remote_members SET pid = 99, proc_start = 'earlier' WHERE mk = 'mk-1'`); err != nil {
+		t.Fatal(err)
+	}
+	code, body := f.postCmd(leadPrincipal(), killCmd(cmdUUID1, "mk-1"))
+	if code != http.StatusOK || outcomeState(t, body) != "gone" || len(rec.got()) != 0 {
+		t.Fatalf("kill = %d %s signals=%v", code, body, rec.got())
 	}
 }
 
