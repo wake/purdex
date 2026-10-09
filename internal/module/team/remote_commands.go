@@ -230,16 +230,8 @@ func (s *Store) EndTeamWithCommands(t team.Team, reason string, at int64, lead t
 		return false, err
 	}
 	defer tx.Rollback()
-	res, err := tx.Exec(`UPDATE teams SET ended_at = ?, end_reason = ?
-		WHERE id = ? AND lead_session_id = ? AND ended_at = 0
-		  AND NOT EXISTS (SELECT 1 FROM relay_ops
-			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
-		at, reason, t.ID, t.LeadSessionID, t.LeadSessionID)
-	if err != nil {
-		return false, fmt.Errorf("end team %s: %w", t.ID, err)
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return false, nil
+	if ended, err := endTeamTx(tx, t.ID, t.LeadSessionID, reason, at); err != nil || !ended {
+		return false, err
 	}
 	// the rows keep their states (D4); the commands read them, so they are enqueued from the rows as they are
 	if _, err := s.enqueueTeamLevelTx(tx, t, CmdEnd, lead, nil, newID, at); err != nil {
