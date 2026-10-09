@@ -102,8 +102,10 @@ func TestRemoteMembersEnd_Refusals(t *testing.T) {
 		"not live":    {team.RemoteMemberEndRequest{MK: "mk-1"}, http.StatusConflict, "not_live"},
 		"mk too long": {team.RemoteMemberEndRequest{MK: string(make([]byte, 300))}, http.StatusBadRequest, team.ErrBadRequest},
 		// An mk ends up in log lines: no line breaks, no escapes (codex attack).
-		"mk with a newline": {team.RemoteMemberEndRequest{MK: "mk-1\n[team] forged line"}, http.StatusBadRequest, team.ErrBadRequest},
-		"mk with an escape": {team.RemoteMemberEndRequest{MK: "mk-1\x1b[31m"}, http.StatusBadRequest, team.ErrBadRequest},
+		"mk with a newline":        {team.RemoteMemberEndRequest{MK: "mk-1\n[team] forged line"}, http.StatusBadRequest, team.ErrBadRequest},
+		"mk with an escape":        {team.RemoteMemberEndRequest{MK: "mk-1\x1b[31m"}, http.StatusBadRequest, team.ErrBadRequest},
+		"mk with a line separator": {team.RemoteMemberEndRequest{MK: "mk-1 forged"}, http.StatusBadRequest, team.ErrBadRequest},
+		"mk with a paragraph sep":  {team.RemoteMemberEndRequest{MK: "mk-1 forged"}, http.StatusBadRequest, team.ErrBadRequest},
 	} {
 		code, body := f.do(http.MethodPost, team.RemoteMembersEndRoute, tc.body)
 		var e team.RemoteMemberEndError

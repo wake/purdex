@@ -46,8 +46,9 @@ func (m *Module) handleRemoteMembersEnd(w http.ResponseWriter, r *http.Request) 
 	if !m.decodeBody(w, r, &req) {
 		return
 	}
-	if req.MK == "" || len(req.MK) > maxCommandField || strings.IndexFunc(req.MK, unicode.IsControl) >= 0 {
-		m.writeJSON(w, http.StatusBadRequest, team.RemoteMemberEndError{Error: team.ErrBadRequest, Detail: "mk is required (at most 256 bytes, no control characters)"})
+	if req.MK == "" || len(req.MK) > maxCommandField || strings.IndexFunc(req.MK, func(r rune) bool { return !unicode.IsGraphic(r) }) >= 0 {
+		// Printable only: controls and the Unicode line/paragraph separators would let an mk forge a log line.
+		m.writeJSON(w, http.StatusBadRequest, team.RemoteMemberEndError{Error: team.ErrBadRequest, Detail: "mk is required (at most 256 bytes, printable characters only)"})
 		return
 	}
 	res, err := m.store.EndRemoteMemberLocally(req.MK, m.newID(), m.newID(), m.now())
