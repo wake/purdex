@@ -19,6 +19,10 @@ func TestReapInheritedChildren_NeverBlocksOnARunningChild(t *testing.T) {
 	reapScenario(t, "running")
 }
 
+func TestReapInheritedChildren_SurvivorIsCollectedLaterWithoutTouchingNewChildren(t *testing.T) {
+	reapScenario(t, "survivor")
+}
+
 // reapScenario runs the scenario in a fresh copy of the test binary: wait4(-1) takes the exit status of ANY
 // child of the process, so in this package's own test process it could steal one from a test that is still
 // waiting for its command. The copy has no children but its own.
@@ -39,6 +43,8 @@ func TestReapHelperProcess(t *testing.T) {
 		reapCollect(t)
 	case "running":
 		reapRunning(t)
+	case "survivor":
+		reapSurvivor(t)
 	}
 }
 
@@ -52,7 +58,7 @@ func reapCollect(t *testing.T) {
 		pids = append(pids, cmd.Process.Pid)
 	}
 	waitUntil(t, func() bool { return zombieCount(pids) == len(pids) })
-	if n := reapInheritedChildren(); n < 3 {
+	if n, _ := reapInheritedChildren(); n < 3 {
 		t.Fatalf("reaped %d, want at least the 3 zombies", n)
 	}
 	for _, pid := range pids {
@@ -60,7 +66,7 @@ func reapCollect(t *testing.T) {
 			t.Errorf("pid %d: kill(0) = %v, want ESRCH (reaped)", pid, err)
 		}
 	}
-	if n := reapInheritedChildren(); n != 0 {
+	if n, _ := reapInheritedChildren(); n != 0 {
 		t.Errorf("a second pass reaped %d, want 0", n)
 	}
 }
@@ -72,7 +78,8 @@ func reapRunning(t *testing.T) {
 	}
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 	done := make(chan int, 1)
-	go func() { done <- reapInheritedChildren() }()
+	var survivors []int
+	go func() { n, s := reapInheritedChildren(); survivors = s; done <- n }()
 	select {
 	case n := <-done:
 		if n != 0 {
@@ -81,8 +88,38 @@ func reapRunning(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("reapInheritedChildren blocked on a running child")
 	}
+	if len(survivors) != 1 || survivors[0] != cmd.Process.Pid {
+		t.Errorf("survivors = %v, want the running child %d", survivors, cmd.Process.Pid)
+	}
 	if err := syscall.Kill(cmd.Process.Pid, 0); err != nil {
 		t.Errorf("the running child was disturbed: %v", err)
+	}
+}
+
+// A child still running at boot that exits later is collected by the targeted watcher — and a child of THIS image
+// started afterwards keeps its exit status for its own Wait (the watcher waits for the given pids only).
+// Mutation gate: wait4(-1) in the watcher → the new child's Wait gets ECHILD → red.
+func reapSurvivor(t *testing.T) {
+	old := exec.Command("/bin/sleep", "1")
+	if err := old.Start(); err != nil { // the previous image's child, unwaited
+		t.Fatal(err)
+	}
+	reaped, survivors := reapInheritedChildren()
+	if reaped != 0 || len(survivors) != 1 || survivors[0] != old.Process.Pid {
+		t.Fatalf("reaped=%d survivors=%v, want the one running child %d", reaped, survivors, old.Process.Pid)
+	}
+	mine := exec.Command("/bin/sh", "-c", "exit 7") // this image's own child, started after the boot step
+	if err := mine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if n := reapSurvivors(survivors, 50*time.Millisecond, 10*time.Second, t.Logf); n != 1 {
+		t.Fatalf("watcher collected %d, want 1", n)
+	}
+	if err := syscall.Kill(old.Process.Pid, 0); err != syscall.ESRCH {
+		t.Errorf("the survivor is still there after it ended: %v", err)
+	}
+	if err := mine.Wait(); err == nil || err.(*exec.ExitError).ExitCode() != 7 {
+		t.Errorf("this image's own child lost its exit status: %v", err)
 	}
 }
 
