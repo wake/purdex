@@ -59,16 +59,18 @@ type Engine struct {
 	life    sync.RWMutex // callbacks hold it shared; Stop takes it to bar new ones and wait for the running ones
 	stopped bool
 
-	qmu      sync.Mutex // the queue structures only; never held across a store call
-	qstopped bool
-	inflight sync.WaitGroup // results and reaps being applied; Stop waits for them
-	convs    map[string]*convQ
-	leases   map[string]*lease
-	seq      int64
-	hour     int64
-	hourN    int
-	capLog   bool
-	callCap  int
+	qmu        sync.Mutex // the queue structures only; never held across a store call
+	qstopped   bool
+	afterBuild func()         // test seam: between a job's input being built and its lease being checked
+	intakeMu   sync.Mutex     // one catch-up at a time: cursor read, insert and enqueue keep the turns' order
+	inflight   sync.WaitGroup // results and reaps being applied; Stop waits for them
+	convs      map[string]*convQ
+	leases     map[string]*lease
+	seq        int64
+	hour       int64
+	hourN      int
+	capLog     bool
+	callCap    int
 
 	// pushLine tells the push hold that an entry's line is final: ready true at the push line, false when the entry
 	// ended without one. Nil until the push module's waiter (WB-3) is wired.

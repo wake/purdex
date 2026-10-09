@@ -142,6 +142,26 @@ func TestQueue_StopWaitsForAResultBeingApplied(t *testing.T) {
 	<-resultDone
 }
 
+// A job whose lease was reaped or stopped while its input was being built is not handed out (codex attack).
+// Mutation gate: return the job without re-checking the lease → red.
+func TestQueue_NextDoesNotHandOutARevokedLease(t *testing.T) {
+	for name, revoke := range map[string]func(k *kit){
+		"reaped":  func(k *kit) { k.clock.Add(time.Minute); k.e.reap() },
+		"stopped": func(k *kit) { k.e.Stop() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := kitWith(t, "s1", "t1")
+			k.e.afterBuild = func() { revoke(k) }
+			if j, ok := k.next("m", "s1"); ok {
+				t.Fatalf("handed out %+v", j)
+			}
+			if e := k.entries("s1")[0]; e.State != StateFailed {
+				t.Fatalf("entry = %s/%s", e.State, e.Reason)
+			}
+		})
+	}
+}
+
 // A long poll returns the job as soon as one is queued, and gives up at its wait or when the context ends.
 func TestQueue_NextWaits(t *testing.T) {
 	k := newKit(t)

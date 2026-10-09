@@ -33,6 +33,10 @@ func (e *Engine) catchUp(ev agent.TurnEndEvent, attempt int) {
 	if e.stopped || ev.SessionID == "" {
 		return
 	}
+	// The subscriber is one goroutine but a busy re-queue comes from a timer: two catch-ups of one conversation must not
+	// interleave between their insert and their enqueue, or a newer turn would queue before an older one.
+	e.intakeMu.Lock()
+	defer e.intakeMu.Unlock()
 	conv, err := e.convKey(ev.SessionID)
 	if err != nil {
 		e.d.Logf("[workbook] conversation of a session: %v", err)

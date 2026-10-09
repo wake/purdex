@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/convfeed"
 	"github.com/wake/purdex/internal/convmodel"
@@ -89,6 +90,42 @@ func retriedOnce(t *testing.T, k *kit) {
 	k.finish("m1", j, Result{Reason: "refused"}) // frees the conversation: a duplicate job would be handed out now
 	if _, ok := k.next("m2", "s1"); ok {
 		t.Fatal("a second job for one turn")
+	}
+}
+
+// Two catch-ups of one conversation (the subscriber and a busy re-queue) never interleave between insert and enqueue: the
+// older turn is queued first (codex attack).
+// Mutation gate: drop intakeMu → red.
+func TestCatchUp_ConcurrentCatchUpsKeepTheOrder(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "a"))
+	k.event("s1", 1000)
+	blocked, release := make(chan struct{}), make(chan struct{})
+	first := true
+	k.e.d.Capable = func(string) bool { // asked after A's insert of t2 and before its enqueue
+		if first {
+			first = false
+			close(blocked)
+			<-release
+		}
+		return true
+	}
+	k.turns.set("s1", endedTurn("t1", 100, "a"), endedTurn("t2", 200, "b"))
+	done := make(chan struct{}, 2)
+	go func() { k.event("s1", 2000); done <- struct{}{} }()
+	<-blocked
+	k.turns.set("s1", endedTurn("t1", 100, "a"), endedTurn("t2", 200, "b"), endedTurn("t3", 300, "c"))
+	go func() { k.event("s1", 3000); done <- struct{}{} }()
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	<-done
+	<-done
+	j1 := mustNext(t, k, "m", "s1")
+	k.finish("m", j1, Result{Reason: "refused"})
+	j2 := mustNext(t, k, "m", "s1")
+	if !strings.Contains(j1.Complete.Prompt, "做 t1") || !strings.Contains(j2.Complete.Prompt, "做 t2") {
+		t.Fatalf("order: %s | %s", j1.Complete.Prompt, j2.Complete.Prompt)
 	}
 }
 

@@ -251,9 +251,21 @@ func (e *Engine) Next(ctx context.Context, stream, sessionID string, wait time.D
 				e.finishUnrun(handed, StateFailed, ReasonAPI)
 				continue
 			}
+			if e.afterBuild != nil {
+				e.afterBuild()
+			}
+			// The lease may have been reaped or stopped while the input was built (the store reads take a while):
+			// a job is handed out only if its lease is still the conversation's, and its time starts now.
 			e.qmu.Lock()
-			l.ids = ids
+			valid := !e.qstopped && e.leases[handed.id] == l && q.lease == l && !l.processing
+			if valid {
+				l.ids = ids
+				l.expires = e.d.Now().Add(completeTimeout*time.Millisecond + leaseSlack)
+			}
 			e.qmu.Unlock()
+			if !valid {
+				return Job{}, false
+			}
 			return Job{ID: handed.id, Kind: handed.kind, Complete: out}, true
 		}
 		if wait <= 0 {
