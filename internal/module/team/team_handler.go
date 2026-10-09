@@ -313,6 +313,19 @@ func (m *Module) matchMember(t team.Team, target string) (memberRow, bool, error
 	if err == nil && name != "" {
 		hits, err = m.membersNamed(hits, name)
 	}
+	if err == nil && len(hits) > 1 {
+		// A session released and adopted again leaves two rows that share its ref: the one that is active is the
+		// member the lead means (a session is an active member at most once, team_members_one_active).
+		var active []memberRow
+		for _, h := range hits {
+			if h.State == team.MemberActive {
+				active = append(active, h)
+			}
+		}
+		if len(active) == 1 {
+			hits = active
+		}
+	}
 	if err != nil || len(hits) != 1 {
 		return memberRow{}, false, err
 	}

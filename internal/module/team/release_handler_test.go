@@ -283,3 +283,31 @@ func TestKillAdopted_ReleasedIsRefusedWithoutASignal(t *testing.T) {
 		t.Fatalf("kill = %d %s signals=%v", code, body, rec.got())
 	}
 }
+
+// A session released and adopted again leaves two rows with one ref; release and kill mean the active one.
+// Mutation gate: drop the active preference in matchMember → not_your_member → red.
+func TestRelease_AfterAReAdoptionTheActiveRowIsMeant(t *testing.T) {
+	f := newFixture(t)
+	f.adoptedMember(t)
+	if code, _, _, body := f.release("_def456"); code != http.StatusOK {
+		t.Fatalf("first release: %d %s", code, body)
+	}
+	again := f.adoptOK(uid(30), "_def456")
+	if code, body := f.decide(again.ID, "approve"); code != http.StatusOK {
+		t.Fatalf("re-adopt: %d %s", code, body)
+	}
+	code, m, _, body := f.release("_def456")
+	if code != http.StatusOK || m.State != team.MemberReleased {
+		t.Fatalf("release of the re-adopted member = %d %s", code, body)
+	}
+	if row := memberBySpawn(t, f.m.store, again.ID); row.State != team.MemberReleased {
+		t.Fatalf("the active row was not the one released: %+v", row)
+	}
+	// and the kill of a third adoption
+	third := f.adoptOK(uid(31), "_def456")
+	f.decide(third.ID, "approve")
+	f.m.killProcess = (&killRec{}).kill
+	if code, m, _, body := f.killTarget("_def456"); code != http.StatusOK || m.State != team.MemberKilled {
+		t.Fatalf("kill of the re-adopted member = %d %s", code, body)
+	}
+}
