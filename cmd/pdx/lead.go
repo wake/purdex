@@ -213,8 +213,8 @@ func runLeadCmd(ctx context.Context, args []string, getenv func(string) string, 
 	if lock := team.HookLockPath(cfg.DataDir, team.HookAgentCC, ap.Origin.SessionID); lock == "" {
 		fmt.Fprintln(stderr, "pdx lead: 無法建立硬鎖旗標（data_dir 或 session id 為空），這次只有軟鎖")
 	} else {
-		writeHookLock(lock, id, stderr)
-		defer removeHookLock(lock, id)
+		team.WriteHookLock(lock, id, stderr)
+		defer team.RemoveHookLock(lock, id)
 	}
 
 	hung := 0

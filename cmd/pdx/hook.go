@@ -246,7 +246,7 @@ func hookDecision(ctx context.Context, in hookDecideInput) (out []byte, asked bo
 	if err := json.Unmarshal(in.Raw, &stdin); err != nil || stdin.SessionID == "" {
 		return nil, false
 	}
-	if !hookLockExists(team.HookLockPath(in.DataDir, in.Agent, stdin.SessionID)) {
+	if !team.HookLockExists(team.HookLockPath(in.DataDir, in.Agent, stdin.SessionID)) {
 		return nil, false
 	}
 	opts := append([]daemonclient.Option{
