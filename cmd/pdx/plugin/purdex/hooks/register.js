@@ -52,6 +52,7 @@ const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --ve
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
+const ROLE_RECHECK_MS = 60_000 // a cached `member` role is re-read (hello) at the threshold at most this often (U24 PL-1g)
 const MAX_FIX_ROUNDS = 2
 const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
 const CALL_TIMEOUT_MS = 35_000 // one daemonclient grace (30 s) plus slack
@@ -89,6 +90,7 @@ const fresh = () => ({
   threshold: DEFAULT_THRESHOLD,
   minGrowth: DEFAULT_MIN_GROWTH,
   role: 'none',
+  roleCheckedAt: undefined, // { at, domain }: when a cached `member` role was last re-read at the threshold (PL-1g); cleared when that hello went unanswered
   helloOK: false, // this session's hello answered (exit 0, JSON): only then is the threshold the daemon's
   helloSeq: 0, // the newest hello sent; an older one's answer is dropped
   helloBusy: false, // the newest hello has not answered yet
@@ -187,9 +189,17 @@ async function hello($, seq) {
     const r = await pdx($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
     if (seq !== s.helloSeq) return // a newer hello answers for the session now
     const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
-    if (!h || typeof h !== 'object') return // any other exit: not answered; said again at the next turn end
+    if (!h || typeof h !== 'object') {
+      s.roleCheckedAt = undefined // an unanswered re-check is not a check: the next turn at the threshold may try again
+      return // any other exit: not answered; said again at the next turn end
+    }
     s.helloOK = true
-    if (h.role) s.role = h.role
+    if (h.role) {
+      // A member that is none now (released, or its team ended) asks afresh: the +10 guard of an ask the daemon
+      // refused as member must not hold it back (a refusal at 95% would otherwise mean never again).
+      if (s.role === 'member' && h.role !== 'member') s.lastAskPct = undefined
+      s.role = h.role
+    }
     if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
     if (h.min_growth > 0) s.minGrowth = h.min_growth
   } finally {
@@ -399,10 +409,44 @@ function toIdle() {
   Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
 }
 
+// recheckMember is U24 PL-1g: a cached `member` role is the daemon's answer of a moment ago, and a released
+// member (or the member of a team that ended) is an ordinary session again. At the threshold, at most once
+// ROLE_RECHECK_MS, hello is sent again from a timer; its answer sets the role, and a `none` lets the next
+// turn.complete ask. Below the threshold nothing is sent. It never takes s.state: /relay now takes that before
+// its first await, and a hello is not a relay step.
+async function recheckMember($) {
+  if (s.helloBusy) return
+  const u = (await $.session.usage()).context
+  if (u.percent === undefined || u.percent < s.threshold) return
+  // One time domain per throttle: the engine's clock, or the real one when the engine refuses. A reading from
+  // the other domain, or one that went backwards, is never "recent" (two domains must not block the check for good).
+  // The trade-off (ruled by the lead): when the clock source flips between two turns, the throttle is bypassed once —
+  // at worst one extra hello per flip, which is cheap, idempotent and side-effect free; remembering both clocks is not worth it.
+  let at = 0
+  let domain = 'engine'
+  try {
+    at = await $.clock.now()
+  } catch {
+    at = Date.now()
+    domain = 'real'
+  }
+  const prev = s.roleCheckedAt
+  if (prev !== undefined && prev.domain === domain && at >= prev.at && at - prev.at < ROLE_RECHECK_MS) return
+  // Both reads above are awaits: a /clear or a session start meanwhile may have sent its own hello (it owns
+  // helloSeq now) or answered the role. Look again, with nothing awaited between this and the send.
+  if (!s.helloOK || s.role !== 'member' || s.helloBusy) return
+  s.roleCheckedAt = { at, domain }
+  helloLater($)
+}
+
 // maybeBegin runs in turn.complete: it reads the engine, moves to beginning
 // and leaves `pdx relay begin` to a timer.
 async function maybeBegin($) {
-  if (!s.helloOK || s.role === 'member') return
+  if (!s.helloOK) return
+  if (s.role === 'member') {
+    await recheckMember($)
+    return
+  }
   if (!hasCSPRNG()) {
     if (!s.noCSPRNGLogged) {
       s.noCSPRNGLogged = true
