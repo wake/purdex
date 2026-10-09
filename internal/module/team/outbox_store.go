@@ -80,6 +80,11 @@ func hashBody(body []byte) string {
 // same body is a replay (nothing changes); the same id with another body is an error. Not sent here: the caller kicks the
 // pump after its commit.
 func (s *Store) EnqueueCommand(q dbtx, c Command, now int64) error {
+	return enqueueCommandIn(q, c, now)
+}
+
+// enqueueCommandIn is EnqueueCommand for a caller that holds no *Store (the adopt approve's transaction).
+func enqueueCommandIn(q dbtx, c Command, now int64) error {
 	if c.ID == "" || c.Kind == "" || c.HostID == "" || c.TeamID == "" {
 		return fmt.Errorf("enqueue command: id, kind, team and host must be set")
 	}

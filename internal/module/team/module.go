@@ -470,6 +470,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/team/approvals", m.handleCreate)
 	mux.HandleFunc("GET /api/team/approvals", m.handleList)
 	mux.HandleFunc("GET /api/team/approvals/{id}", m.handleGet)
+	mux.HandleFunc("GET "+team.AdoptionsRoute+"{id}", m.handleAdoption) // the membership a remote adopt led to (X3c)
 	mux.HandleFunc("DELETE /api/team/approvals/{id}", m.handleDelete)
 	mux.HandleFunc("POST /api/team/approvals/{id}/decide", m.handleDecide)
 	mux.HandleFunc("GET /api/team/inflight", m.handleInflight)
