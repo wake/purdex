@@ -41,7 +41,7 @@ func TestRelayContract_Literals(t *testing.T) {
 		"ErrRelayUnsupported":   ErrRelayUnsupported,
 		"ErrNotYourOp":          ErrNotYourOp,
 		"RelayControlPrefix":    RelayControlPrefix,
-		"KindMemberRelay":       KindMemberRelay,
+		"KindMemberRelay":       string(KindMemberRelay),
 
 		"LineageReaderKey": LineageReaderKey, "ApprovalFeedKey": ApprovalFeedKey,
 		"RelayDir": RelayDir,

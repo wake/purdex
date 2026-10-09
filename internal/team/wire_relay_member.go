@@ -51,8 +51,3 @@ const (
 type RelayCreateResponse struct {
 	Op RelayOp `json:"op"`
 }
-
-// KindMemberRelay is the approval kind a member relay waits on when the lead's pool is spent (RQ-2). Reserved: no
-// path opens such a row yet, and an older SPA skips an unknown kind row by row, so it is not an Approval kind until
-// the card ships.
-const KindMemberRelay = "member_relay"

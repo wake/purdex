@@ -43,6 +43,8 @@ func (m *Module) approve(a team.Approval, c Close) (after team.Approval, won, me
 			}
 			return row, won, err
 		})
+	case team.KindMemberRelay:
+		after, won, err = m.approveMemberRelay(a, c)
 	default:
 		after, won, err = m.closeAs(a.ID, c)
 	}
@@ -105,6 +107,9 @@ func (m *Module) afterApproved(a team.Approval) {
 	m.rosterChanged()
 	if a.Kind == team.KindSelfRelay && m.takeSpent(a.ID) {
 		m.announceSpend(a.Origin.SessionID) // the approval's own transaction spent a unit: announce the chain's new numbers
+	}
+	if a.Kind == team.KindMemberRelay {
+		m.afterMemberRelayApproved(a)
 	}
 	if a.Kind == team.KindAdopt {
 		m.kickNotices() // the adopted member is owed its notice

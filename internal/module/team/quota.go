@@ -281,7 +281,7 @@ func (m *Module) quotaRuleOn() bool {
 // withQuotaRule marks c to spend a self relay's quota when the rule is on. Only the daemon's own closes (Auto) are
 // ever honoured by the store, so a click never reaches the rule.
 func (m *Module) withQuotaRule(c Close, kind team.Kind) Close {
-	if kind == team.KindSelfRelay && c.Auto && m.quotaRuleOn() {
+	if (kind == team.KindSelfRelay || kind == team.KindMemberRelay) && c.Auto && m.quotaRuleOn() {
 		c.SpendQuota = true
 		c.SpentOut = new(bool)
 	}

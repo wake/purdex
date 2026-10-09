@@ -64,7 +64,7 @@ func (s *Store) CreateMemberRelayOp(op team.RelayOp, gate MemberRelayGate) (team
 
 // notifyOp tells the module an op changed, after the commit that changed it.
 func (s *Store) notifyOp(opID string) {
-	if s.opChanged != nil {
+	if s.opChanged != nil && opID != "" {
 		s.opChanged(opID)
 	}
 }

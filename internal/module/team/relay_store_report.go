@@ -20,6 +20,19 @@ var relayTransitions = map[team.RelayState]map[team.RelayState]bool{
 	team.RelayCleared:          {team.RelayDone: true, team.RelayFailed: true},
 }
 
+// relayTransitionOK is relayTransitions per kind (RQ-2 §4.5): only the one state differs. A self op leaves
+// awaiting_approval for claimed (its approval's close); a MEMBER op for requested (its member_relay row's approve) —
+// it must not be claimed, and so relayed, before a person approves. Every other row of the map is shared.
+func relayTransitionOK(kind team.RelayKind, from, to team.RelayState) bool {
+	if from == team.RelayAwaitingApproval {
+		if kind == team.RelayKindMember {
+			return to == team.RelayRequested || to == team.RelayCancelled
+		}
+		return to == team.RelayClaimed || to == team.RelayCancelled
+	}
+	return relayTransitions[from][to]
+}
+
 // checkLineage guards the `cleared` transition inside ReportRelay's
 // transaction (spec §8.4): the new session id and ref are set, the new
 // session is not the old one, no other op has already cleared into the
@@ -192,7 +205,7 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	if cur.State == r.State {
 		return cur, ReportNoop, nil
 	}
-	if !relayTransitions[cur.State][r.State] {
+	if !relayTransitionOK(cur.Kind, cur.State, r.State) {
 		return cur, ReportBadTransition, nil
 	}
 	if r.State == team.RelayCleared {

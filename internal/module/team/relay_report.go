@@ -71,6 +71,11 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if cur, ok, err := m.store.GetRelayOp(id); err == nil && ok && cur.Kind == team.RelayKindMember && cur.State == team.RelayAwaitingApproval {
+		// Only its member_relay row moves an awaiting member op (RQ-2 §3): a report would step past the person.
+		m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrBadTransition, Detail: "the op awaits approval; only its approval row moves it", Op: &cur})
+		return
+	}
 	if rep.State.Terminal() {
 		// A terminal report on an op still awaiting approval closes the
 		// approval row FIRST, through the same CAS an approve uses, and the
@@ -331,4 +336,5 @@ func (m *Module) reconcileRelays() {
 			m.moveTitle(op)
 		}
 	}
+	m.reconcileMemberRelays(ops)
 }
