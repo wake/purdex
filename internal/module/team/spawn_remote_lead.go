@@ -43,10 +43,10 @@ func (m *Module) handleRemoteSpawn(w http.ResponseWriter, r *http.Request, req t
 	if err == nil && found {
 		m.createMu.Unlock()
 		// A replay is read back by its id whatever the pairing is NOW (the host may have been unpaired since, which is what
-		// ended the op): the stored end must stay readable. The host named in the request is compared when it still resolves;
-		// when it no longer does, it cannot be compared and the rest of the request must match.
+		// ended the op): the stored end must stay readable. The host named in the request is compared by id when it still
+		// resolves; when it no longer does, by the very text the first request named — never "any unknown name".
 		want.TeamID, want.HostID = op.TeamID, m.remoteHostID(req.Host)
-		if want.HostID == "" {
+		if want.HostID == "" && req.Host == op.HostRef {
 			want.HostID = op.HostID
 		}
 		if !sameRemoteSpawn(op, want) {
@@ -61,7 +61,7 @@ func (m *Module) handleRemoteSpawn(w http.ResponseWriter, r *http.Request, req t
 		m.failRemoteSpawn(w, req.ID, err)
 		return
 	}
-	want.HostID = m.remoteHostID(req.Host)
+	want.HostID, want.HostRef = m.remoteHostID(req.Host), req.Host
 	if want.HostID == "" || !m.cmdCaller.Paired(want.HostID) {
 		m.createMu.Unlock()
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "no paired host answers to "+req.Host, nil)

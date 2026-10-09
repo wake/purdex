@@ -285,6 +285,10 @@ func TestSpawnHost_AReplayAfterUnpairingReadsTheStoredEnd(t *testing.T) {
 	if code, _, e := f.spawnRemote(1, "air26", func(r *team.SpawnRequest) { r.Title = "other" }); code != 409 || e.Error != team.ErrIDConflict {
 		t.Fatalf("other body = %d %+v", code, e)
 	}
+	// an unknown name is not "the host that went away": only the text the first request named replays
+	if code, _, e := f.spawnRemote(1, "some-other-name", nil); code != 409 || e.Error != team.ErrIDConflict {
+		t.Fatalf("unknown name = %d %+v", code, e)
+	}
 	// a NEW id for the unpaired host is still refused
 	if code, _, e := f.spawnRemote(2, "air26", nil); code != 400 || e.Error != team.ErrBadRequest {
 		t.Fatalf("new id = %d %+v", code, e)

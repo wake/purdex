@@ -211,6 +211,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (remote spawns): %w", err)
 	}
+	if err := ensureColumn(db, "remote_spawns", "host_ref", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (remote spawns host_ref): %w", err)
+	}
 	if _, err := db.Exec(factLogSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (fact log): %w", err)
