@@ -30,9 +30,9 @@ beforeEach(() => {
   useHostLookStore.setState({ looks: {} })
   useHostStore.setState({
     hosts: {
-      a: { id: 'a', name: 'mlab', ip: '1.1.1.1', port: 1, order: 0, token: 'ta' },
-      b: { id: 'b', name: 'air26', ip: '1.1.1.2', port: 1, order: 1, token: 'tb' },
-      c: { id: 'c', name: 'offline', ip: '1.1.1.3', port: 1, order: 2, token: 'tc' },
+      a: { id: 'a', name: 'mlab', ip: '1.1.1.1', port: 1, order: 0, token: 'ta', daemonId: 'Da' },
+      b: { id: 'b', name: 'air26', ip: '1.1.1.2', port: 1, order: 1, token: 'tb', daemonId: 'Db' },
+      c: { id: 'c', name: 'offline', ip: '1.1.1.3', port: 1, order: 2, token: 'tc', daemonId: 'Dc' },
       d: { id: 'd', name: 'noauth', ip: '1.1.1.4', port: 1, order: 3 },
     },
     hostOrder: ['a', 'b', 'c', 'd'],
@@ -274,12 +274,32 @@ describe('PairedPhonesSection', () => {
     expect(revoke).not.toHaveBeenCalled()
   })
 
+  it('ambiguous: the host id is gone and two hosts share the stored daemonId: shown as needing attention with the stored name', async () => {
+    usePendingRevocationsStore.getState().add('c', 'P9', { label: 'Wake iPhone' })
+    useHostStore.setState((s) => {
+      const { c: _c, ...rest } = s.hosts
+      return {
+        hosts: {
+          ...rest,
+          c1: { id: 'c1', name: 'twin1', ip: '3.3.3.1', port: 1, order: 4, daemonId: 'Dc' },
+          c2: { id: 'c2', name: 'twin2', ip: '3.3.3.2', port: 1, order: 5, daemonId: 'Dc' },
+        },
+        hostOrder: ['a', 'b', 'd', 'c1', 'c2'],
+      }
+    })
+    render(<PairedPhonesSection />)
+    const card = await screen.findByTestId('paired-phone-P9')
+    expect(within(card).getByTestId('paired-attention').textContent).toMatch(/offline.*more than one host/)
+    expect(within(card).getByRole('button', { name: 'Stop tracking' })).toBeTruthy()
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
   it('legacy entry (no endpoint) is shown as needing attention with the same action', async () => {
     connect('c')
     usePendingRevocationsStore.setState({ items: [{ hostId: 'c', pairingId: 'P8' }] })
     render(<PairedPhonesSection />)
     const card = await screen.findByTestId('paired-phone-P8')
-    expect(within(card).getByTestId('paired-attention').textContent).toMatch(/older version/)
+    expect(within(card).getByTestId('paired-attention').textContent).toMatch(/no verifiable host identity/)
     expect(within(card).getByRole('button', { name: 'Stop tracking' })).toBeTruthy()
   })
 

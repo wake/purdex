@@ -11,8 +11,8 @@ beforeEach(() => {
   usePendingRevocationsStore.setState({ items: [] })
   useHostStore.setState({
     hosts: {
-      a: { id: 'a', name: 'a', ip: '1.1.1.1', port: 1, order: 0, token: 'ta' },
-      b: { id: 'b', name: 'b', ip: '1.1.1.2', port: 1, order: 1, token: 'tb' },
+      a: { id: 'a', name: 'a', ip: '1.1.1.1', port: 1, order: 0, token: 'ta', daemonId: 'Da' },
+      b: { id: 'b', name: 'b', ip: '1.1.1.2', port: 1, order: 1, token: 'tb', daemonId: 'Db' },
     },
     hostOrder: ['a', 'b'],
     runtime: { a: { status: 'disconnected' }, b: { status: 'disconnected' } },
@@ -103,6 +103,61 @@ describe('retryPendingRevocations', () => {
     useHostStore.setState({ runtime: { a2: { status: 'connected' }, b: { status: 'disconnected' } } })
     await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith('a2', 'P1'))
     stop()
+  })
+
+  it('1: an entry made when the host had no daemonId is never auto-retried, even if a daemonId shows up later', async () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, daemonId: undefined } } }))
+    usePendingRevocationsStore.getState().add('a', 'P1')
+    expect(usePendingRevocationsStore.getState().items[0].daemonId).toBeUndefined()
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, daemonId: 'Dnew' } } }))
+    await retryPendingRevocations()
+    expect(revoke).not.toHaveBeenCalled()
+    expect(usePendingRevocationsStore.getState().has('a', 'P1')).toBe(true)
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'unverifiable' })
+  })
+
+  it('1: a stored daemonId but a host that now has none is unverifiable too', async () => {
+    usePendingRevocationsStore.getState().add('a', 'P1')
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, daemonId: undefined } } }))
+    await retryPendingRevocations()
+    expect(revoke).not.toHaveBeenCalled()
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'unverifiable' })
+  })
+
+  it.each([
+    ['first', ['x1', 'x2']],
+    ['second', ['x2', 'x1']],
+  ])('2: two hosts with the stored daemonId (%s order) are ambiguous: nothing sent, entry kept', async (_n, order) => {
+    usePendingRevocationsStore.getState().add('a', 'P1')
+    const mk = (id: string) => ({ id, name: id, ip: `2.2.2.${id.length}${id.slice(-1)}`, port: 5, order: 0, token: 'x', daemonId: 'Da' })
+    useHostStore.setState({
+      hosts: Object.fromEntries([...order.map((id) => [id, mk(id)]), ['b', useHostStore.getState().hosts.b]]),
+      hostOrder: [...order, 'b'],
+    })
+    await retryPendingRevocations()
+    expect(revoke).not.toHaveBeenCalled()
+    expect(usePendingRevocationsStore.getState().has('a', 'P1')).toBe(true)
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'ambiguous' })
+  })
+
+  it('3: DNS case and IPv6 spellings of the same endpoint are not a re-point; a real change still is', async () => {
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, ip: 'MLab.Example.com', port: 7860 } } }))
+    usePendingRevocationsStore.getState().add('a', 'P1')
+    expect(usePendingRevocationsStore.getState().items[0].endpoint).toBe('mlab.example.com:7860')
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, ip: 'mlab.EXAMPLE.com' } } }))
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'retry', hostId: 'a' })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, ip: 'mlab.example.com', port: 7861 } } }))
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'repointed' })
+  })
+
+  it('3: a raw-form stored endpoint still matches the canonical form at compare time (IPv6 expanded vs compressed)', async () => {
+    usePendingRevocationsStore.setState({
+      items: [{ hostId: 'a', pairingId: 'P1', endpoint: '[0:0:0:0:0:0:0:1]:7860', daemonId: 'Da' }],
+    })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, ip: '[::1]', port: 7860 } } }))
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'retry', hostId: 'a' })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, a: { ...s.hosts.a, ip: '[::2]' } } }))
+    expect(resolvePendingTarget(usePendingRevocationsStore.getState().items[0])).toEqual({ kind: 'repointed' })
   })
 
   it('legacy entry without an endpoint is never retried automatically', async () => {
