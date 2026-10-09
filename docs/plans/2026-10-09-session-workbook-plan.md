@@ -68,14 +68,24 @@ Revision 2 (2026-10-09 23:xx): codex plan review `task-mv12whuc-yxlm33` (15 find
 ## 1. Decisions this revision makes (implementation of the approved spec; no user-visible change)
 
 - **D1 Turn identity = the transcript turn id.** An entry is keyed by `UNIQUE(session_id, turn_id)`, `turn_id` =
-  `convmodel.Turn.ID`. When the transcript cannot be read, `turn_id = "t:" + hex(sha256(Text))[:16]` (a retry carries the
-  same `Text`). A retried hook therefore inserts nothing.
+  `convmodel.Turn.ID`. A retried hook therefore inserts nothing. Transcript busy (`ErrBusy`) → the session mark is
+  re-queued up to 3 times, 2 s apart, before the fallback. Transcript unreadable (not found / still busy) → fallback
+  `turn_id = "t:" + hex(sha256(Text))[:16] + ":" + (At / 120000)`: a retry (seconds later, same `Text`) lands in the same
+  2-minute bucket and dedupes, while two different turns with the same text (「完成」, an empty text) in different
+  buckets stay apart. Accepted residue: a retry that crosses a bucket boundary records twice; two same-text turns inside
+  one bucket record once.
 - **D2 Catch-up instead of trusting every event.** Each turn-end event means "this session has new ended turns". The worker
-  reads the session's last 4 turns and inserts, oldest first, every **ended** turn (`Outcome != running`) newer than the
-  session's newest recorded turn, at most 3 (the backlog limit). A session with no record yet inserts only its newest
-  ended turn (no history backfill). A dropped event is recovered by the next one; an event processed late after the next
-  turn also ended records both, in order. The newest inserted turn gets `turn_at = event.At`; older caught-up turns get
-  their own `EndedAt` (ms).
+  reads the session's last 6 turns, drops the `running` ones, and inserts, oldest first, the **ended** turns newer than
+  the session's newest recorded turn — at most the newest 3 (the backlog limit; older ones are not recorded). When the
+  newest recorded turn is not in the window, "newer" is the whole window, so the newest 3 ended turns are taken. A session
+  with no record yet inserts only its newest ended turn (no history backfill). A dropped event is recovered by the next
+  one; an event processed late after the next turn also ended records both, in order. The newest inserted turn gets
+  `turn_at = event.At`; older caught-up turns get their own `EndedAt` (ms).
+- **D9 Stop and restart leave no entry `pending`.** Workbook `Stop` cancels the running calls: an entry whose first call
+  was cut → `failed: stopped`; an entry already past its push line whose re-write was cut → `Finish(ok)` with `entry` cut
+  at the last sentence end ≤ 150; queued entries → `skipped: stopped`; every waiter is released (false for failed /
+  skipped). Each transition emits its event as usual. On `Start`, rows still `pending` from a crash become
+  `failed: stopped` in one UPDATE (no events: clients refetch on reconnect). Spec §6 gains the reason `stopped`.
 - **D3 Push-ready is separate from `ok`.** One job per entry holds the conversation's slot until the entry is final:
   call → validate → write `thing` + `push` + status (state still `pending`) → **release push waiters** → re-write if
   `entry` > 150 (same slot, counts toward cap and concurrency; at the cap → no re-write, cut) → `Finish(ok)`. The next turn
@@ -152,19 +162,23 @@ Size ~650 lines incl. tests.
    in-memory "session has news" mark (coalesced per session, never blocks). Stop: unsubscribe, then a barrier like team's
    `turnEndMu`. Tests: the callback never blocks with a stuck worker (1,000 events in < 50 ms); Stop after unsubscribe
    writes nothing.
-3. **Catch-up (D1, D2).** For a marked session: `RootSessionOf` → `LastTurns(4)` → the ended turns newer than
-   `NewestTurn(session)` (match by turn id; when the newest recorded id is not among the 4, take only the newest ended
-   turn) → `InsertPending` each, oldest first, with `team_id / role` from `SeatOf` and `ref = peers.RefID(session)`;
-   transcript unreadable → one entry keyed `t:<sha>` from the event `Text` (no tools). A turn with no agent text and no
-   step → `skipped: no_text` without a call (spec §4.3). Tests: a retried event (same turn, newer stamp) inserts
-   nothing; a dropped event is recovered by the next one (two entries, in order); an event handled after the next turn
-   ended inserts both; a running last turn is not inserted; a new session inserts only its newest ended turn; the team
-   snapshot is stored and survives the member ending; the unreadable path dedupes a retry.
+3. **Catch-up (D1, D2).** For a marked session: `RootSessionOf` → `LastTurns(6)` → drop `running` → the ended turns
+   newer than `NewestTurn(session)` (match by turn id; not in the window → all of it), the newest 3 of them →
+   `InsertPending` each, oldest first, with `team_id / role` from `SeatOf` and `ref = peers.RefID(session)`; `ErrBusy` →
+   re-queue (3 × 2 s); still unreadable → one entry keyed by the D1 fallback from the event `Text` (no tools). A turn with
+   no agent text and no step → `skipped: no_text` without a call (spec §4.3). Tests: a retried event (same turn, newer
+   stamp) inserts nothing; a dropped event is recovered by the next one (two entries, in order); recorded T1, then
+   T2–T6 ended with T7 running → T4, T5, T6 inserted in order, T7 not; an event handled after the next turn ended inserts
+   both; a new session inserts only its newest ended turn; the team snapshot is stored and survives the member ending;
+   busy → re-queued then read; the fallback dedupes a retry within its bucket and keeps two same-text turns in
+   different buckets apart.
 4. **Queue.** Per conversation FIFO of entry jobs, at most 3 waiting (older → `skipped: backlog`); host-wide at most 2
    running calls (a re-write counts); hourly cap 300 (`skipped: cap`, one log line per hour). A job holds its
-   conversation until `Finish` (D3). Tests with a fake runner: order within a conversation; two conversations in
-   parallel; the next turn does not start before the previous entry's re-write finished; backlog trimming; cap; Stop
-   drains without starting new calls.
+   conversation until `Finish` (D3). Stop and start follow D9. Tests with a fake runner: order within a conversation; two
+   conversations in parallel; the next turn does not start before the previous entry's re-write finished; backlog
+   trimming; cap; Stop during a first call → `failed: stopped` + waiter released false; Stop during a re-write →
+   `ok` with the cut entry; Stop with queued entries → `skipped: stopped`; a `pending` row found at Start →
+   `failed: stopped`; nothing starts after Stop.
 5. **Input.** Spec §5.2's JSON (user ≤ 1500, assistant ≤ 3000, tools ≤ 20 as `"<Tool>: <summary>"`), `redact.String` on
    every string, `previous_status` + `RecentForPrompt`.
 6. **Runner.** `exec.LookPath("claude")` on the daemon's `PATH`; argv exactly spec §3 + `--system-prompt-file
@@ -220,11 +234,16 @@ Size ~450 lines.
    does not satisfy it either.
 2. **Hold (D5).** In `onNotify`, after `gate.Decide` accepted a `Stop` or `StopFailure`, `push_wait_s > 0`, and the
    registry yields `workbook.push-lines` **at this moment** (looked up per decision, so start order does not matter; no
-   new dependency): start a hold goroutine in a `wbHolds` set `{ctx, cancel, wg, n atomic}` with cap 256 (at the cap →
-   send at once). The hold calls `Await(ctx, sessionID, BroadcastTs/1e6, now + push_wait_s)` — **ns → ms** — then, if
-   `ctx` is not cancelled, enqueues the job with the line (or without it). `Stop`: cancel → `wg.Wait()` → `holds.stopAll()`
-   → `sender.Stop()`. Tests: a real ns `BroadcastTs` matches an entry whose `turn_at` is the same instant in ms; 256
+   new dependency): start a hold goroutine in a `wbHolds` set `{mu, stopped, n, ctx, cancel, wg}` with cap 256. Admission
+   and Stop are linearised by `mu`: admission = under `mu`, if `stopped` → refuse (the caller sends at once onto the
+   sender, which is harmless after Stop, as today), if `n == 256` → refuse (send at once), else `n++`, `wg.Add(1)`, start
+   the goroutine; Stop = under `mu`, `stopped = true`, `cancel()`; then `wg.Wait()` outside `mu`. So no `Add` can follow
+   the `Wait`, and no hold admitted before Stop outlives it. The hold calls `Await(ctx, sessionID, BroadcastTs/1e6,
+   now + push_wait_s)` — **ns → ms** — then enqueues the job with the line (or without it) only if `ctx` is not
+   cancelled; on exit `n--` under `mu`, `wg.Done()`. Push `Stop`: unsubscribe → `wbHolds.stop()` → `holds.stopAll()` →
+   `sender.Stop()`. Tests: a real ns `BroadcastTs` matches an entry whose `turn_at` is the same instant in ms; 256
    outstanding holds, the 257th sends at once; `Stop` with 256 outstanding holds returns in < 200 ms and enqueues nothing;
+   `onNotify` racing `Stop` (`-race`, 1,000 iterations) never panics and never enqueues from a hold after `Stop` returned;
    no workbook in the registry → no hold; workbook registered after push `Start` → holds work.
 3. **Body and title.** `push.AgentInput` gains an optional `Workbook *WorkbookLine`. When present: body = `Push`, title =
    today's title with `・{Thing}` appended (`"<host>：<name>・<thing>"` or `"<name>・<thing>"`), cut to the title limit by
@@ -263,19 +282,20 @@ Size ~650 lines.
    strict parsers (times in ms; drop a malformed entry whole, warn once).
 2. `stores/useWorkbookStore.ts`: `byHost[hostId].byConv[convKey] = {status, statusAt, entries (newest first, deduped by
    id), oldestId, loading, missing}` + `convOfSession[hostId][sessionId] → convKey`; not persisted.
-3. **Loading rules** (codex #9): (a) team view: for each seat on a `workbook.v1` host, `fetchConversation(limit: 1)` when
-   the seat first appears and again after the host reconnects (connection key change); a 404 marks the session
-   `missing` until a `workbook.entry` for that session arrives, which triggers one refetch; (b) a workbook view (drill,
-   toolbar, ended list) fetches `limit: 20` on open and pages with `before = oldestId`; (c) events: `workbook.entry`
-   upserts by `entry.id` (and learns `session_id → conv_key`); `workbook.status` carries `session_id`, so it maps even
-   after a reload; a status for an unknown conversation is stored by `conv_key` and shown once a fetch maps a seat to it;
-   (d) host removal / re-point forgets the host (the `roster-forget.ts` hook).
+3. **Loading rules** (codex #9): fetches happen only on (a) a seat's first appearance in the team view and (b) a host
+   reconnect (connection key change) — `fetchConversation(limit: 1)` once per seat per connection generation, on a
+   `workbook.v1` host — and (c) opening a workbook view (drill, toolbar, ended list): `limit: 20`, then 「更多」 with
+   `before = oldestId`. A 404 marks the session `missing` for that generation. **Events never trigger a fetch**: a
+   `workbook.entry` carries the entry, so it upserts by `entry.id` and learns `session_id → conv_key` (clearing
+   `missing`); `workbook.status` carries `session_id`, so it lands even after a reload; a status for a `conv_key` no seat
+   maps to yet is kept and shown once one does. (d) host removal / re-point forgets the host (the `roster-forget.ts` hook).
+   So the fetch count is bounded by seats × connection generations + views opened.
 4. Events added to `lib/host-events.ts`, routed in `useMultiHostEventWs.ts` with the connection-key guard.
 5. Capability `workbook.v1` probed with the unattended probe (a sibling flag sharing its generation guard);
    `selectWorkbookSupport(hostId)`.
-Tests: parsers (ms units); upsert / dedupe / ordering; first-appearance fetch once per seat; reconnect refetch; 404 →
-missing → entry event → refetch; status event after a reload maps through `session_id`; host forget; capability off →
-no fetch at all.
+Tests: parsers (ms units); upsert / dedupe / ordering; first-appearance fetch once per seat; reconnect refetch once per
+seat; 404 → missing → an entry event fills it **without** a fetch (fetch count unchanged after 50 entry events); status
+event after a reload maps through `session_id`; host forget; capability off → no fetch at all.
 Size ~550 lines.
 
 ## WA-2b SPA: workbook view, task line, drill-in, ended list, toolbar
@@ -331,3 +351,8 @@ push → D3, WB-1b.4 / .8, WB-2.2 · 5 lost events → D2, WB-1b.3 · 6 StopFail
 WB-1a-i.2, WB-1b.3 · 8 ended members → WA-2b.3, TI spec §4.4 · 9 App loading → WA-1.3 · 10 sha → D8, WB-1a-ii.4 ·
 11 mount → WB-1a-ii.2 · 12 push dependency → WB-3.2 (per-decision lookup) · 13 envelope / isolation → WB-1b.6 ·
 14 `enabled` → D7 · 15 prompt file → WB-1b.7.
+
+Incremental re-review `task-mv141hip-0501fg` (no critical; 10 resolved, 5 partial + 5 new important, all taken):
+catch-up window (cursor outside the window, running turns) → D2, WB-1b.3 · same-text fallback ids → D1 (2-minute
+bucket, busy re-queue) · hold admission vs Stop → WB-3.2 (`mu` + `stopped`) · Stop / restart terminal states → D9,
+WB-1b.4, spec §6 reason `stopped` · event-triggered refetch loop → WA-1.3 (events never fetch).

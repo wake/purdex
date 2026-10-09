@@ -54,7 +54,7 @@ A record belongs to a **conversation**, not a session id: a relay (self or membe
 
 The workbook module subscribes to the agent module's `TurnEndEvent` (`internal/module/agent/turn_end_hub.go:20`, `SubscribeTurnEnd`): one per accepted Claude Code main-turn `Stop`, at-least-once, tmux sessions only. Consumers must be idempotent: the module keys a turn by `(session_id, At, Seq)` and drops a repeat.
 
-*Clarified by the plan (2026-10-09, codex plan review):* a retried hook is published again with a **newer** stamp, and a full subscriber queue drops events, so `(session_id, At, Seq)` cannot be the key. A turn is keyed by its **transcript turn id** (`convmodel.Turn.ID`; `"t:" + sha256(Text)` prefix when the transcript cannot be read), and each event is read as "this session has new ended turns": the module records every ended turn newer than the session's newest recorded one (at most 3, oldest first; a session with no record yet records only its newest). A dropped event is recovered by the next one. An accepted main-turn `StopFailure` also publishes a `TurnEndEvent` (`Failed: true`), so §7's StopFailure push has an entry to wait for; the team module ignores failed events.
+*Clarified by the plan (2026-10-09, codex plan review):* a retried hook is published again with a **newer** stamp, and a full subscriber queue drops events, so `(session_id, At, Seq)` cannot be the key. A turn is keyed by its **transcript turn id** (`convmodel.Turn.ID`; when the transcript cannot be read, a hash of `Text` plus a 2-minute time bucket, so a retry dedupes and two same-text turns minutes apart do not), and each event is read as "this session has new ended turns": the module records the ended turns newer than the session's newest recorded one (the newest 3 at most, oldest first; a session with no record yet records only its newest). A dropped event is recovered by the next one. An accepted main-turn `StopFailure` also publishes a `TurnEndEvent` (`Failed: true`), so §7's StopFailure push has an entry to wait for; the team module ignores failed events.
 
 The turn's input is read from the conversation module's normalised model (U1-6, `internal/convmodel`): the last turn's `user` item(s), `step` summaries and final `agent_text`. If the model is not available in process, the plan adds a read accessor; `TurnEndEvent.Text` (the hook's `last_assistant_message`) is the fallback for the assistant text.
 
@@ -119,7 +119,7 @@ wb_entries(
   turn_id TEXT NOT NULL,           -- transcript turn id (§4.2); the idempotency key with session_id
   turn_at INTEGER NOT NULL, turn_seq INTEGER NOT NULL,   -- unix ms: the event's At for the newest turn, EndedAt for a caught-up one
   state TEXT NOT NULL,             -- pending | ok | failed | skipped
-  reason TEXT NOT NULL DEFAULT '', -- failed: timeout|format|exit|auth ; skipped: no_text|backlog|cap|model
+  reason TEXT NOT NULL DEFAULT '', -- failed: timeout|format|exit|auth|stopped ; skipped: no_text|backlog|cap|model|stopped (stopped: daemon stop or restart, plan D9)
   thing TEXT, push TEXT, entry TEXT, thing_done INTEGER NOT NULL DEFAULT 0,
   push_ready_at INTEGER NOT NULL DEFAULT 0,   -- when thing/push were final (§5.4); the push hold waits on it
   team_id TEXT, role TEXT, ref TEXT,   -- who the session was at that moment (employee workbook later); role lead|member|member_remote|none (team's role gate, 1f)
