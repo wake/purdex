@@ -15,7 +15,7 @@ import (
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/lease.js", "hooks/prompts.js", "skills/pdx-team/SKILL.md", "skills/pdx-lease/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/lease.js", "hooks/member.js", "hooks/prompts.js", "skills/pdx-team/SKILL.md", "skills/pdx-lease/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
@@ -601,6 +601,8 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		"**The relay quota is the user's.**", "you never ask for more quota", "a lead sees its own in the header of `pdx team`, read-only",
 		// The team's member limit is the user's too.
 		"**The team's member limit is the user's.**", "you never ask for a larger team", "`members M/N` in the header of `pdx team`",
+		// P6-6: a member never sees the control message; it writes the handoff with one Write when the prompt arrives.
+		"When the lead relays you, the Purdex mod does it all", "write the handoff file it names with **one `Write`** and answer `HANDOFF-WRITTEN`", "your old ref still reaches you",
 		// U24 (adopt spec D-U24-2/3): the commands, the foreground wait and the ambiguity hint.
 		"`pdx adopt <ref>` takes a **running session on this host**", "**in the foreground with Bash `timeout: 600000`**",
 		"`adopt_target_ambiguous` means two sessions share that ref", "`pdx release <ref>` lets a member go",
