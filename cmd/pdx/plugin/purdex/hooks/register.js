@@ -90,7 +90,7 @@ const fresh = () => ({
   threshold: DEFAULT_THRESHOLD,
   minGrowth: DEFAULT_MIN_GROWTH,
   role: 'none',
-  roleCheckedAt: undefined, // when a cached `member` role was last re-read at the threshold (PL-1g)
+  roleCheckedAt: undefined, // { at, domain }: when a cached `member` role was last re-read at the threshold (PL-1g); cleared when that hello went unanswered
   helloOK: false, // this session's hello answered (exit 0, JSON): only then is the threshold the daemon's
   helloSeq: 0, // the newest hello sent; an older one's answer is dropped
   helloBusy: false, // the newest hello has not answered yet
@@ -189,9 +189,17 @@ async function hello($, seq) {
     const r = await pdx($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
     if (seq !== s.helloSeq) return // a newer hello answers for the session now
     const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
-    if (!h || typeof h !== 'object') return // any other exit: not answered; said again at the next turn end
+    if (!h || typeof h !== 'object') {
+      s.roleCheckedAt = undefined // an unanswered re-check is not a check: the next turn at the threshold may try again
+      return // any other exit: not answered; said again at the next turn end
+    }
     s.helloOK = true
-    if (h.role) s.role = h.role
+    if (h.role) {
+      // A member that is none now (released, or its team ended) asks afresh: the +10 guard of an ask the daemon
+      // refused as member must not hold it back (a refusal at 95% would otherwise mean never again).
+      if (s.role === 'member' && h.role !== 'member') s.lastAskPct = undefined
+      s.role = h.role
+    }
     if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
     if (h.min_growth > 0) s.minGrowth = h.min_growth
   } finally {
@@ -410,12 +418,22 @@ async function recheckMember($) {
   if (s.helloBusy) return
   const u = (await $.session.usage()).context
   if (u.percent === undefined || u.percent < s.threshold) return
-  const at = await $.clock.now().catch(() => Date.now())
-  if (s.roleCheckedAt !== undefined && at - s.roleCheckedAt < ROLE_RECHECK_MS) return
+  // One time domain per throttle: the engine's clock, or the real one when the engine refuses. A reading from
+  // the other domain, or one that went backwards, is never "recent" (two domains must not block the check for good).
+  let at = 0
+  let domain = 'engine'
+  try {
+    at = await $.clock.now()
+  } catch {
+    at = Date.now()
+    domain = 'real'
+  }
+  const prev = s.roleCheckedAt
+  if (prev !== undefined && prev.domain === domain && at >= prev.at && at - prev.at < ROLE_RECHECK_MS) return
   // Both reads above are awaits: a /clear or a session start meanwhile may have sent its own hello (it owns
   // helloSeq now) or answered the role. Look again, with nothing awaited between this and the send.
   if (!s.helloOK || s.role !== 'member' || s.helloBusy) return
-  s.roleCheckedAt = at
+  s.roleCheckedAt = { at, domain }
   helloLater($)
 }
 
