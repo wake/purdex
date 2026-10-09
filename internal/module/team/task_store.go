@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -431,6 +432,38 @@ func currentTaskOf(rows []TaskRow) (TaskRow, bool) {
 		}
 	}
 	return best, bestRank != 0
+}
+
+// OpenTaskBriefs is the open (pending or in_progress) tasks of the given teams, narrow: only what
+// currentTaskOf and the roster use (team, owner, seq, subject, status, updated_at), read in ONE statement
+// whatever the number of teams, with none of the JSON columns decoded. Keyed team id → owner key.
+func (s *Store) OpenTaskBriefs(teamIDs []string) (map[string]map[string][]TaskRow, error) {
+	out := map[string]map[string][]TaskRow{}
+	if len(teamIDs) == 0 {
+		return out, nil
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(teamIDs)), ",")
+	args := make([]any, len(teamIDs))
+	for i, id := range teamIDs {
+		args[i] = id
+	}
+	rows, err := s.db.Query(`SELECT team_id, owner_key, seq, subject, status, updated_at FROM tasks
+		WHERE status IN ('pending', 'in_progress') AND team_id IN (`+marks+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("open task briefs: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var t TaskRow
+		if err := rows.Scan(&t.TeamID, &t.OwnerKey, &t.Seq, &t.Subject, &t.Status, &t.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("open task briefs: %w", err)
+		}
+		if out[t.TeamID] == nil {
+			out[t.TeamID] = map[string][]TaskRow{}
+		}
+		out[t.TeamID][t.OwnerKey] = append(out[t.TeamID][t.OwnerKey], t)
+	}
+	return out, rows.Err()
 }
 
 // ListTasksForOwner is a member's list: its own tasks (ListTasks' order and

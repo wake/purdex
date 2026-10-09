@@ -165,3 +165,34 @@ func TestRoster_ChangedOnAReportThatMovesTheTask(t *testing.T) {
 		t.Fatal("a finished task still shows")
 	}
 }
+
+// The roster reads every live team's open tasks in one narrow statement, keyed by team: another team's
+// task never lands on this team's member, finished and deleted ones are not read, and an unknown team
+// is nothing (T-3b attack review: no per-team query, no JSON payload decoded).
+func TestOpenTaskBriefs_OneReadKeyedByTeamAndOnlyOpenTasks(t *testing.T) {
+	w := newTaskWorld(t)
+	a := w.mustTask(leadInbox, w.ma.Ref, "team one, open", nil)
+	done := w.mustTask(leadInbox, w.ma.Ref, "team one, done", nil)
+	w.start(done.ID)
+	if code, _, e := w.setStatus(leadInbox, done.ID, team.TaskCompleted); code != http.StatusOK {
+		t.Fatalf("%d %+v", code, e)
+	}
+	x := w.mustTask(lead2, w.mx.Ref, "team two, open", nil) // the same display prefix as team one
+	got, err := w.m.store.OpenTaskBriefs([]string{uid(1), uid(2), "no-such-team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || len(got[uid(1)][w.ma.SpawnOp]) != 1 || len(got[uid(2)][w.mx.SpawnOp]) != 1 {
+		t.Fatalf("briefs = %+v", got)
+	}
+	one, two := got[uid(1)][w.ma.SpawnOp][0], got[uid(2)][w.mx.SpawnOp][0]
+	if team.TaskDisplayID(uid(1), one.Seq) != a.ID || one.Subject != "team one, open" || one.Status != team.TaskPending {
+		t.Fatalf("team one brief = %+v", one)
+	}
+	if team.TaskDisplayID(uid(2), two.Seq) != x.ID || two.Subject != "team two, open" {
+		t.Fatalf("team two brief = %+v", two)
+	}
+	if empty, err := w.m.store.OpenTaskBriefs(nil); err != nil || len(empty) != 0 {
+		t.Fatalf("no teams: %+v %v", empty, err)
+	}
+}
