@@ -37,6 +37,7 @@
         "started_at": 1791482332621,
         "ended_at": 1791482361592,
         "outcome": "done",
+        "duration_ms": 9898,
         "items": [
           {
             "type": "user",
@@ -84,6 +85,7 @@
         "started_at": 1791482397056,
         "ended_at": 1791482421506,
         "outcome": "done",
+        "duration_ms": 11582,
         "items": [
           {
             "type": "user",
@@ -132,6 +134,7 @@
         "started_at": 1791482434396,
         "ended_at": 1791482444940,
         "outcome": "done",
+        "duration_ms": 10549,
         "items": [
           {
             "type": "user",
@@ -181,6 +184,7 @@
         "started_at": 1791482445759,
         "ended_at": 1791482451280,
         "outcome": "done",
+        "duration_ms": 5547,
         "items": [
           {
             "type": "user",

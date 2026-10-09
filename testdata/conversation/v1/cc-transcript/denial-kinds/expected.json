@@ -37,6 +37,7 @@
         "started_at": 1791378001000,
         "ended_at": 1791378011000,
         "outcome": "done",
+        "duration_ms": 3000,
         "items": [
           {
             "type": "user",
@@ -163,6 +164,7 @@
         "started_at": 1791378012000,
         "ended_at": 1791378022000,
         "outcome": "done",
+        "duration_ms": 3100,
         "items": [
           {
             "type": "user",
@@ -324,6 +326,7 @@
         "started_at": 1791378025000,
         "ended_at": 1791378027000,
         "outcome": "done",
+        "duration_ms": 1000,
         "items": [
           {
             "type": "user",
@@ -346,6 +349,7 @@
         "started_at": 1791378028000,
         "ended_at": 1791378032000,
         "outcome": "done",
+        "duration_ms": 1800,
         "items": [
           {
             "type": "user",
@@ -394,6 +398,7 @@
         "started_at": 1791378033000,
         "ended_at": 1791378037000,
         "outcome": "interrupted",
+        "duration_ms": 900,
         "items": [
           {
             "type": "user",

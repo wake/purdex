@@ -244,6 +244,7 @@ type turnHeaderJSON struct {
 	EndedAt      *int64               `json:"ended_at,omitempty"`
 	Outcome      convmodel.Outcome    `json:"outcome"`
 	Error        *convmodel.TurnError `json:"error,omitempty"`
+	DurationMS   *int64               `json:"duration_ms,omitempty"`
 	OmittedItems int                  `json:"omitted_items,omitempty"`
 }
 
@@ -266,7 +267,7 @@ func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string, overhead
 		t := c.Turn
 		items := indexedItemsAt(c.Items, c.Indexes)
 		resp.Changes = append(resp.Changes, changeJSON{
-			Turn:  turnHeaderJSON{ID: t.ID, Index: t.Index, StartedAt: t.StartedAt, EndedAt: t.EndedAt, Outcome: t.Outcome, Error: t.Error, OmittedItems: t.OmittedItems},
+			Turn:  turnHeaderJSON{ID: t.ID, Index: t.Index, StartedAt: t.StartedAt, EndedAt: t.EndedAt, Outcome: t.Outcome, Error: t.Error, DurationMS: t.DurationMS, OmittedItems: t.OmittedItems},
 			Items: items,
 		})
 	}

@@ -37,6 +37,7 @@
         "started_at": 1791382958082,
         "ended_at": 1791382971409,
         "outcome": "done",
+        "duration_ms": 4692,
         "items": [
           {
             "type": "user",
@@ -95,6 +96,7 @@
         "started_at": 1791382979510,
         "ended_at": 1791383006253,
         "outcome": "done",
+        "duration_ms": 3765,
         "items": [
           {
             "type": "user",
@@ -157,6 +159,7 @@
         "started_at": 1791383016277,
         "ended_at": 1791383041099,
         "outcome": "done",
+        "duration_ms": 9938,
         "items": [
           {
             "type": "user",
@@ -230,6 +233,7 @@
         "started_at": 1791383050401,
         "ended_at": 1791383087515,
         "outcome": "done",
+        "duration_ms": 6090,
         "items": [
           {
             "type": "user",
@@ -277,6 +281,7 @@
         "started_at": 1791383096130,
         "ended_at": 1791383106217,
         "outcome": "interrupted",
+        "duration_ms": 1681,
         "items": [
           {
             "type": "user",
@@ -325,6 +330,7 @@
         "started_at": 1791383122155,
         "ended_at": 1791383153312,
         "outcome": "interrupted",
+        "duration_ms": 3068,
         "items": [
           {
             "type": "user",
@@ -384,6 +390,7 @@
         "started_at": 1791384235552,
         "ended_at": 1791384283698,
         "outcome": "done",
+        "duration_ms": 4608,
         "items": [
           {
             "type": "user",
@@ -467,6 +474,7 @@
         "started_at": 1791384302231,
         "ended_at": 1791384320599,
         "outcome": "done",
+        "duration_ms": 3282,
         "items": [
           {
             "type": "user",
@@ -514,6 +522,7 @@
         "started_at": 1791384338310,
         "ended_at": 1791384345594,
         "outcome": "done",
+        "duration_ms": 3096,
         "items": [
           {
             "type": "user",
@@ -561,6 +570,7 @@
         "started_at": 1791384374564,
         "ended_at": 1791384380605,
         "outcome": "interrupted",
+        "duration_ms": 1961,
         "items": [
           {
             "type": "user",
@@ -615,6 +625,7 @@
         "started_at": 1791384399926,
         "ended_at": 1791384421264,
         "outcome": "done",
+        "duration_ms": 3849,
         "items": [
           {
             "type": "user",
@@ -673,6 +684,7 @@
         "started_at": 1791384636756,
         "ended_at": 1791384656963,
         "outcome": "done",
+        "duration_ms": 3678,
         "items": [
           {
             "type": "user",

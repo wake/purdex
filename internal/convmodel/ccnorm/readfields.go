@@ -81,10 +81,11 @@ var ReadFields = []ReadField{
 	{Row: "assistant", Path: "message.content[].name"},
 	{Row: "assistant", Path: "message.content[].input", Subtree: true},
 
-	// system rows: turn_duration, local_command, compact_boundary
+	// system rows: turn_duration, local_command, compact_boundary, informational
 	{Row: "system", Path: "subtype"},
 	{Row: "system", Path: "content"},
 	{Row: "system", Path: "durationMs"},
+	{Row: "system", Path: "level"},
 	{Row: "system", Path: "compactMetadata.trigger"},
 
 	// attachment rows: only queued_command is read
@@ -102,7 +103,7 @@ var ReadFields = []ReadField{
 
 // ReadsRow reports whether the normalizer does anything with a row of this
 // type: user, assistant, custom-title and ai-title rows; the system rows
-// turn_duration, local_command and compact_boundary (subtype); the
+// turn_duration, local_command, compact_boundary and informational (subtype); the
 // queued_command attachment (attachmentType). Every other row is counted as
 // skipped and changes nothing. TestReadsRow_AgreesWithNormalizer keeps this in
 // step with the row switch.
@@ -111,7 +112,7 @@ func ReadsRow(typ, subtype, attachmentType string) bool {
 	case "user", "assistant", "custom-title", "ai-title":
 		return true
 	case "system":
-		return subtype == "turn_duration" || subtype == "local_command" || subtype == "compact_boundary"
+		return subtype == "turn_duration" || subtype == "local_command" || subtype == "compact_boundary" || subtype == "informational"
 	case "attachment":
 		return attachmentType == "queued_command"
 	}

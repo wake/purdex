@@ -64,6 +64,7 @@ const (
 	SystemModelChanged  SystemKind = "model_changed"
 	SystemResumed       SystemKind = "resumed"
 	SystemCommandOutput SystemKind = "command_output"
+	SystemNotice        SystemKind = "notice"
 )
 
 // Keep says which end of a capped step output is kept.

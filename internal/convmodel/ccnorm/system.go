@@ -22,7 +22,17 @@ func (n *Normalizer) systemRow(l *rawLine, off int64) {
 		ti := len(n.turns) - 1
 		tr := n.turns[ti]
 		tr.duration, tr.durationAt = true, l.at
+		if d, ok := jsonInt(l.DurationMS); ok {
+			dd := d
+			if cur := tr.t.DurationMS; cur == nil || *cur != d {
+				tr.t.DurationMS = &dd
+				tr.updated = off
+				n.add(Change{tr.t.ID, "", off})
+			}
+		}
 		n.attribute(ti, l.at)
+	case "informational":
+		n.notice(l, off)
 	case "local_command":
 		n.localCommand(l, off)
 	case "compact_boundary":
@@ -90,6 +100,34 @@ func (n *Normalizer) compactBoundary(l *rawLine, off int64) {
 		ID: l.uuid, At: l.at, Kind: convmodel.SystemCompacted, Detail: detail,
 	}}, off)
 	n.attribute(ti, l.at)
+}
+
+// notice adds a `notice` item for a mod's system/informational row: to the
+// current turn, which is the last one (the previous turn's end when none is
+// open, since a closed turn is still the last until another opens). With no
+// turn yet there is nowhere to put it, so it is skipped and counted. It
+// neither opens a turn nor takes part in the turn's outcome.
+func (n *Normalizer) notice(l *rawLine, off int64) {
+	text, ok := jsonString(l.Content)
+	if !ok || strings.TrimSpace(text) == "" {
+		n.skip("notice:content")
+		return
+	}
+	if len(n.turns) == 0 {
+		n.skip("orphan_notice")
+		return
+	}
+	ti := len(n.turns) - 1
+	tr := n.turns[ti]
+	text, cut := capText(text, convmodel.MaxText)
+	d := struct {
+		Text      string `json:"text"`
+		Level     string `json:"level,omitempty"`
+		Truncated bool   `json:"truncated,omitempty"`
+	}{text, l.str(l.Level), cut}
+	n.upsert(tr.t.ID, convmodel.Item{Type: convmodel.ItemSystem, System: &convmodel.System{
+		ID: l.uuid, At: l.at, Kind: convmodel.SystemNotice, Detail: marshalNoEscape(d),
+	}}, off)
 }
 
 // interruptMarker turns the "[Request interrupted by user…" row into an

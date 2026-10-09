@@ -37,6 +37,7 @@
         "started_at": 1791379489490,
         "ended_at": 1791379495898,
         "outcome": "done",
+        "duration_ms": 6423,
         "items": [
           {
             "type": "user",
@@ -92,6 +93,7 @@
         "started_at": 1791379495915,
         "ended_at": 1791379497829,
         "outcome": "done",
+        "duration_ms": 1922,
         "items": [
           {
             "type": "user",
@@ -114,6 +116,7 @@
         "started_at": 1791379509432,
         "ended_at": 1791379511111,
         "outcome": "done",
+        "duration_ms": 1686,
         "items": [
           {
             "type": "user",
@@ -136,6 +139,7 @@
         "started_at": 1791379523562,
         "ended_at": 1791379552454,
         "outcome": "done",
+        "duration_ms": 28900,
         "items": [
           {
             "type": "user",
@@ -164,6 +168,7 @@
         "started_at": 1791379552490,
         "ended_at": 1791379553926,
         "outcome": "done",
+        "duration_ms": 1442,
         "items": [
           {
             "type": "user",
@@ -220,6 +225,7 @@
         "started_at": 1791379585795,
         "ended_at": 1791379588177,
         "outcome": "done",
+        "duration_ms": 2389,
         "items": [
           {
             "type": "user",
@@ -242,6 +248,7 @@
         "started_at": 1791379836627,
         "ended_at": 1791379838395,
         "outcome": "done",
+        "duration_ms": 1776,
         "items": [
           {
             "type": "user",
@@ -298,6 +305,7 @@
         "started_at": 1791380253340,
         "ended_at": 1791380255179,
         "outcome": "done",
+        "duration_ms": 1849,
         "items": [
           {
             "type": "user",

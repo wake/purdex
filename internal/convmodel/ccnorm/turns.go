@@ -175,6 +175,10 @@ func cloneTurn(t convmodel.Turn) convmodel.Turn {
 		e := *t.Error
 		c.Error = &e
 	}
+	if t.DurationMS != nil {
+		d := *t.DurationMS
+		c.DurationMS = &d
+	}
 	c.Items = cloneItems(t.Items)
 	return c
 }

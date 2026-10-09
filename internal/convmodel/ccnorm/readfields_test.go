@@ -114,6 +114,7 @@ func TestReadsRow_AgreesWithNormalizer(t *testing.T) {
 		{"turn_duration", `{"type":"system","subtype":"turn_duration","uuid":"s"}`, "system", "turn_duration", ""},
 		{"local_command", `{"type":"system","subtype":"local_command","uuid":"s","content":"x"}`, "system", "local_command", ""},
 		{"compact_boundary", `{"type":"system","subtype":"compact_boundary","uuid":"s"}`, "system", "compact_boundary", ""},
+		{"informational", `{"type":"system","subtype":"informational","uuid":"s","content":"x"}`, "system", "informational", ""},
 		{"stop_hook_summary", `{"type":"system","subtype":"stop_hook_summary","uuid":"s"}`, "system", "stop_hook_summary", ""},
 		{"queued_command", `{"type":"attachment","uuid":"a","attachment":{"type":"queued_command","prompt":"x"}}`, "attachment", "", "queued_command"},
 		{"hook_success", `{"type":"attachment","uuid":"a","attachment":{"type":"hook_success"}}`, "attachment", "", "hook_success"},

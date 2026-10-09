@@ -41,6 +41,7 @@
           "kind": "rate_limit",
           "message": "API Error: Rate limit reached. Please try again later."
         },
+        "duration_ms": 1200,
         "items": [
           {
             "type": "user",
@@ -57,6 +58,7 @@
         "started_at": 1791378004000,
         "ended_at": 1791378006000,
         "outcome": "done",
+        "duration_ms": 1500,
         "items": [
           {
             "type": "user",
@@ -79,6 +81,7 @@
         "started_at": 1791378007000,
         "ended_at": 1791378010000,
         "outcome": "done",
+        "duration_ms": 2200,
         "items": [
           {
             "type": "user",
