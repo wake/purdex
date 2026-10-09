@@ -207,7 +207,7 @@ describe('the strip', () => {
         return this.getAttribute('data-testid') === 'team-panel-cell' ? (this.getAttribute('data-session-id') === 'W' ? width : 43) : 0
       })
       seedScene({ members: [['A', 'a-tm'], ['B', 'b-tm']], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
-      avail = 264 // less the name: 178 -> 43 + 50 + 45 = 138 for three, 160 with a 20px fourth
+      avail = 286 // less the name: 200 -> three cells take 3 x 43 + 2 x 8 + 17 = 162, a 20px fourth makes 190; a 70px one would make 240
       mountBar()
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
       expect(shownCells()).toHaveLength(3)

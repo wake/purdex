@@ -3,10 +3,18 @@
 import { describe, it, expect } from 'vitest'
 import { PANEL_DEFAULT_WIDTH } from '../../stores/useTeamUiStore'
 import {
-  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_PX, CELL_GAP, SEP_W, POPOVER_W, SUBAGENT_SLOT_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
+  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_PX, CELL_GAP, SEP_MARGIN, SEP_W, POPOVER_W, SUBAGENT_SLOT_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
 } from './panel-layout'
 
 describe('panel header budget', () => {
+  it('spacing: 8px between cells and either side of the divider; header padding, gap and cell padding are back at their old values', () => {
+    expect(CELL_GAP).toBe(8)
+    expect(SEP_MARGIN).toBe(8)
+    expect(SEP_W).toBe(1 + 2 * 8)
+    expect([HEADER_PX, HEADER_GAP, CELL_PX]).toEqual([6, 4, 1])
+    expect(CELL_W).toBe(43) // 2 x 1 padding + 5 subagent slot + 16 bot + 20 ring: nothing squeezed
+  })
+
   // The room the cells have at the default width: the area's borders, the header's padding and gaps, the name capsule at its
   // cap and the two buttons come off 312. A cell is [subagent slot] + bot + ring (no squeezing: the content keeps its size).
   const ROOM = PANEL_DEFAULT_WIDTH - (AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + BUTTONS_W)
@@ -27,10 +35,12 @@ describe('panel header budget', () => {
 
   describe('capacityFromWidths', () => {
     it('adds the real widths in seat order, with the gaps and the divider after the lead', () => {
-      // [38,38,38,50,38] at 170: 4 cells = 164 + 3*2 gaps + 5 divider = 175 > 170; 3 cells = 114 + 4 + 5 = 123
-      expect(capacityFromWidths([38, 38, 38, 50, 38], 170)).toBe(3)
-      expect(capacityFromWidths([38, 38, 38, 50, 38], 175)).toBe(4)
-      expect(capacityFromWidths([38, 38, 38, 38, 38], 170)).toBe(4)
+      const three = 3 * 38 + 2 * CELL_GAP + SEP_W // 147: three plain cells
+      expect(capacityFromWidths([38, 38, 38, 50, 38], three)).toBe(3)
+      expect(capacityFromWidths([38, 38, 38, 50, 38], three - 1)).toBe(2)
+      expect(capacityFromWidths([38, 38, 38, 50, 38], three + CELL_GAP + 50)).toBe(4)
+      expect(capacityFromWidths([38, 38, 38, 50, 38], three + CELL_GAP + 50 - 1)).toBe(3)
+      expect(capacityFromWidths([38, 38, 38, 38, 38], three + CELL_GAP + 38)).toBe(4)
     })
     it('a wider cell later in the row costs only its own extra width', () => {
       const avail = 38 * 4 + 3 * CELL_GAP + SEP_W // exactly 4 plain cells
@@ -85,7 +95,10 @@ describe('panel header budget', () => {
     const remote = CELL_W + 12
     const plain = [CELL_W, CELL_W, CELL_W, CELL_W]
     expect(capacityFromWidths(plain, ROOM)).toBe(3)
-    expect(capacityFromWidths([CELL_W, CELL_W, remote, CELL_W], ROOM)).toBe(3) // 12px wider still fits in the 3rd place
-    expect(capacityFromWidths([CELL_W, remote, remote, remote], ROOM)).toBeLessThanOrEqual(3)
+    // 312: 43 + (8 + 17 + 43) + (8 + 43) = 162 of 165 for three plain cells; one remote cell (+12) anywhere pushes the 3rd out
+    expect(capacityFromWidths([CELL_W, CELL_W, remote, CELL_W], ROOM)).toBe(2)
+    expect(capacityFromWidths([CELL_W, remote, CELL_W, CELL_W], ROOM)).toBe(2)
+    expect(capacityFromWidths([remote, CELL_W, CELL_W, CELL_W], ROOM)).toBe(2)
+    expect(capacityFromWidths([remote, remote, remote, remote], ROOM)).toBe(2) // 55 + 80 = 135 <= 165; the 3rd: 198 > 165
   })
 })

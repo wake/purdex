@@ -347,12 +347,12 @@ describe('header height (TI-6)', () => {
       availW = 165
       cellW = 38
       const { unmount } = mount()
-      expect(inHeader()).toBe(4)
+      expect(inHeader()).toBe(3) // 3 x 38 + 2 x 8 + 17 = 147 of 165; a 4th would make 193
       unmount()
       cellW = 50 // the iconDot style: ~12px wider per cell
       mount()
-      expect(inHeader()).toBe(3)
-      expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(6)
+      expect(inHeader()).toBe(2) // 2 x 50 + 8 + 17 = 125; a 3rd would make 183
+      expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(7)
     })
 
     it('a wider boundary cell does not make the capacity oscillate (capacity comes from the widths, not from what is shown)', () => {
@@ -367,7 +367,7 @@ describe('header height (TI-6)', () => {
       const { rerender } = mount()
       const count = () => within(header()).getAllByTestId('team-panel-cell').length
       const first = count()
-      expect(first).toBe(3) // (165 - 5 + 2) / (50 + 2) -> 3, and it stays
+      expect(first).toBe(3) // 3 x 38 + 16 + 17 = 147 of 165; the 4th (50) would make 205; and it stays
       for (let i = 0; i < 5; i++) {
         rerender(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
         expect(count()).toBe(first)
@@ -381,7 +381,7 @@ describe('header height (TI-6)', () => {
         vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
           return this.getAttribute('data-testid') === 'team-panel-cell' ? widths[this.getAttribute('data-session-id') ?? ''] ?? 38 : 0
         })
-        availW = 165
+        availW = 200
       })
       const seed = (ids: string[]) => seedScene({
         members: ids.map((id) => [id, `${id}-tm`] as [string, string]),
@@ -440,7 +440,7 @@ describe('header height (TI-6)', () => {
         widths = { M2: 50 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 180 // 38*3 + 50 + 3*2 + 5 = 175
+        availW = 210 // 38*3 + 50 + 3*8 + 17 = 205
         mount()
         expect(inHeader()).toBe(4)
       })
@@ -449,7 +449,7 @@ describe('header height (TI-6)', () => {
         widths = { M2: 50 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 170
+        availW = 200
         mount()
         expect(inHeader()).toBe(3)
       })
@@ -458,7 +458,7 @@ describe('header height (TI-6)', () => {
         widths = { M3: 20 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 190 // 4 * 38 + 20 + 4*2 + 5 = 185
+        availW = 225 // 4 * 38 + 20 + 4*8 + 17 = 221
         mount()
         expect(inHeader()).toBe(5)
       })
@@ -502,7 +502,7 @@ describe('header height (TI-6)', () => {
         widths = { M3: 20, M4: 3 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 190 // 4*38 + 20 + 3 + 5*2 + 5 = 190 -> 6 fit
+        availW = 235 // 4*38 + 20 + 3 + 5*8 + 17 = 232 -> 6 fit
         mount()
         expect(inHeader()).toBe(6)
         widths = { M3: 20, M4: 20 } // e.g. a host badge got wider; no container resize

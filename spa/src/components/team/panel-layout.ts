@@ -43,9 +43,9 @@ export function cellWidthFor(_style: 'icon' | 'dot' | 'iconDot' | 'badge'): numb
   return CELL_W
 }
 export const CELL_H = 26
-export const CELL_GAP = 2
+export const CELL_GAP = 8
 /** The 1px divider after the lead, with its side margin. */
-export const SEP_MARGIN = 2
+export const SEP_MARGIN = 8
 export const SEP_W = 1 + 2 * SEP_MARGIN
 
 /** The area's own 1px border on each side. */
