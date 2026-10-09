@@ -74,3 +74,9 @@ describe('parseRosterEvent', () => {
     expect(typeof parseRosterEvent(v({ op: 'snapshot', teams: [team, { ...team, id: 7 }] }))).toBe('string')
   })
 })
+
+describe('parseRosterEvent — a team id cannot carry the team-key separator', () => {
+  it('drops a frame whose team id contains NUL, whole', () => {
+    expect(typeof parseRosterEvent(v({ op: 'snapshot', teams: [team, { ...team, id: 'b\u0000c' }] }))).toBe('string')
+  })
+})

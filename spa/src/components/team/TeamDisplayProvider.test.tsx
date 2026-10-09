@@ -195,3 +195,23 @@ describe('moveInOrder', () => {
     expect(moveInOrder(['a', 'b'], 'a', 'a', true)).toEqual(['a', 'b'])
   })
 })
+
+describe('structureSignature cost', () => {
+  it('a large roster (20 teams x 10 seats, 300 sessions on the host) is signed in a few milliseconds', async () => {
+    const { structureSignature } = await import('./team-structure')
+    const { selectTeamViews } = await import('../../lib/team/team-views')
+    const { buildTeamIndex } = await import('../../lib/team/team-index')
+    const teams: TeamRoster[] = Array.from({ length: 20 }, (_, i) => ({
+      ...team(Array.from({ length: 9 }, (_, j) => mem(`M${i}-${j}`, j, `m-${i}-${j}`))), id: `t${i}`, lead: sess(`L${i}`, `l-${i}`),
+    }))
+    const sessions = Array.from({ length: 300 }, (_, i) => ({ code: `c${i}`, name: i < 200 ? `m-${i % 20}-${i % 9}` : `other-${i}` }))
+    const sessionsByHost = { h1: sessions }
+    const views = selectTeamViews({ rosterByHost: { h1: teams }, tabsById: {}, workspaces: [], activeWorkspaceId: null, sessionsByHost })
+    const input = { views, index: buildTeamIndex(views, {}, sessionsByHost), workspaces: [], sessionsByHost, collapsed: {}, panelMode: {}, ghostWorkspace: {}, beadHost: true }
+    structureSignature(input) // warm
+    const t0 = performance.now()
+    for (let i = 0; i < 20; i++) structureSignature(input)
+    const perCall = (performance.now() - t0) / 20
+    expect(perCall).toBeLessThan(10)
+  })
+})

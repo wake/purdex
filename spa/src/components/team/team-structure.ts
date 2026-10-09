@@ -22,9 +22,25 @@ export interface StructureInput {
   beadHost: boolean
 }
 
-function seatView(view: TeamView, seat: Seat, sessionsByHost: StructureInput['sessionsByHost']): TeamSeatView {
+/** Per host, tmux session name → code (the first row of a name wins, as a scan would). Built once per call. */
+type CodeLookup = (hostId: string, name: string) => string
+
+function codeLookup(sessionsByHost: StructureInput['sessionsByHost']): CodeLookup {
+  const byHost = new Map<string, Map<string, string>>()
+  return (hostId, name) => {
+    let names = byHost.get(hostId)
+    if (!names) {
+      names = new Map()
+      for (const r of sessionsByHost[hostId] ?? []) if (!names.has(r.name)) names.set(r.name, r.code)
+      byHost.set(hostId, names)
+    }
+    return names.get(name) ?? ''
+  }
+}
+
+function seatView(view: TeamView, seat: Seat, codeOf: CodeLookup): TeamSeatView {
   const name = seat.session.tmux_session
-  const code = name ? sessionsByHost[view.hostId]?.find((r) => r.name === name)?.code ?? '' : ''
+  const code = name ? codeOf(view.hostId, name) : ''
   return { sessionId: seat.session.session_id, title: seat.label, hostId: view.hostId, sessionCode: code, role: seat.role, tabId: seat.tabId }
 }
 
@@ -35,11 +51,12 @@ function seatView(view: TeamView, seat: Seat, sessionsByHost: StructureInput['se
  */
 export function structureSignature(input: StructureInput): string {
   const { views, index, workspaces, sessionsByHost } = input
+  const codeOf = codeLookup(sessionsByHost)
   return JSON.stringify([
     views.map((v) => [
       v.key, v.name, v.label, v.colorIndex,
       [v.lead, ...v.members].map((s) => {
-        const sv = seatView(v, s, sessionsByHost)
+        const sv = seatView(v, s, codeOf)
         return [sv.sessionId, sv.role, sv.title, sv.tabId, sv.sessionCode, s.session.tmux_session ?? '']
       }),
     ]),
@@ -56,9 +73,10 @@ const NOOP = () => {}
 export function buildTeamDisplay(input: StructureInput): TeamDisplay {
   const { views, index, workspaces, sessionsByHost, collapsed, panelMode, ghostWorkspace } = input
 
+  const codeOf = codeLookup(sessionsByHost)
   const seatsOf = (v: TeamView) => ({
-    lead: seatView(v, v.lead, sessionsByHost),
-    members: v.members.map((m) => seatView(v, m, sessionsByHost)),
+    lead: seatView(v, v.lead, codeOf),
+    members: v.members.map((m) => seatView(v, m, codeOf)),
   })
 
   // Marks: for each team tab, where it sits among the VISIBLE tabs of its group in its workspace.
