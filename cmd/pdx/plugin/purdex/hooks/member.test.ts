@@ -188,7 +188,7 @@ test('a lead’s write prompt carries the roster from pdx team --json; an empty 
   team = { exitCode: 0, stdout: JSON.stringify({ team: {}, members: [] }) }
 })
 
-test('the full member path reports written, cleared (new id), done under the member op id; lock before the write turn, unlock before /clear', async ($, on) => {
+test('the full member path reports written, cleared (new id), done under the member op id; lock before the write prompt, unlock before /clear', async ($, on) => {
   const f = memberWorld(on, 'member', memberPdx())
   await start($, f)
   await receive($, ENVELOPE(CONTROL))
@@ -215,8 +215,8 @@ test('the full member path reports written, cleared (new id), done under the mem
     'relay report ' + OPID + ' done',
   ])
   const at = (needle: string) => f.order.findIndex((o) => o.startsWith(needle))
-  expect(at('pdx relay lock ' + OPID)).toBeGreaterThan(at('submit'))
-  expect(at('pdx relay lock ' + OPID)).toBeLessThan(at('turn.start')) // …and the lock is up before the write turn enters (the first turn.start here is the write turn's)
+  expect(at('pdx relay lock ' + OPID)).toBeGreaterThan(-1)
+  expect(at('pdx relay lock ' + OPID)).toBeLessThan(at('submit')) // the lock is up before the write prompt goes out (the engine does not wait for turn.start's await)
   expect(at('pdx relay unlock ' + OPID)).toBeLessThan(at('command clear'))
   expect(at('pdx relay unlock ' + OPID)).toBeGreaterThan(at('pdx relay lock ' + OPID))
   expect(nonceOf(write)).toBeTruthy()
@@ -317,4 +317,26 @@ test('a seen answer that lands after the relay returned to idle is still kept', 
   answer({ exitCode: 0, stdout: '{}' })
   await f.clock.advance(300)
   expect(calls(f, 'claim')).toEqual(['relay claim ' + OPID + ' --session sid-old'])
+})
+
+// R2 (codex): a user turn that starts while the lock call is out does not run under the lock; the write waits for it.
+// Mutation gate: no turnRunning check after the lock → the write is submitted under the running turn, no unlock → red.
+test('a turn that starts while the lock call is out is unlocked and the write waits for its turn.complete', async ($, on) => {
+  let release: (r: R) => void = () => {}
+  const gate = new Promise<R>((r) => { release = r })
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'claim' ? { exitCode: 0, stdout: CLAIM } : argv[1] === 'lock' ? (gate as any) : undefined))
+  await start($, f)
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(300) // claimed; the lock call is out
+  expect(calls(f, 'lock').length).toBe(1)
+  await $.turn.start({ text: 'the user typed something', turnId: 't1' })
+  release({ exitCode: 0, stdout: '{}' })
+  await f.clock.advance(300)
+  expect(f.submits).toEqual([]) // not while t1 runs
+  expect(calls(f, 'unlock').length).toBe(1) // t1 did not run locked
+  await complete($, 't1')
+  await f.clock.advance(300)
+  expect(calls(f, 'lock').length).toBe(2) // locked afresh
+  expect(f.submits.length).toBe(1)
+  expect(f.order.indexOf('submit')).toBeGreaterThan(f.order.lastIndexOf('pdx relay lock ' + OPID + ' --session sid-old'))
 })
