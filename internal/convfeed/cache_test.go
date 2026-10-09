@@ -196,3 +196,78 @@ func TestCache_CancelledContextAcquiresNothing(t *testing.T) {
 		t.Fatal("a cancelled Acquire created an entry")
 	}
 }
+
+// The clock does not move between uses (coarse clock, a burst): the least recently used entry is still the one to go.
+func TestCache_EqualTimestampsStillEvictTheLeastRecentlyUsed(t *testing.T) {
+	for i := 0; i < 20; i++ { // map iteration order is random: repeat
+		c, _ := newTestCache(2)
+		for _, id := range []string{"a", "b", "a"} {
+			_, r := acquire(t, c, id)
+			r()
+		}
+		_, r := acquire(t, c, "c")
+		r()
+		if _, ok := c.entries["a"]; !ok {
+			t.Fatalf("round %d: the entry used last was evicted", i)
+		}
+		if _, ok := c.entries["b"]; ok {
+			t.Fatalf("round %d: b (least recently used) was kept", i)
+		}
+	}
+}
+
+// A caller cancelled while it waits for the cache lock must not evict, create or pin anything.
+func TestCache_CancelledWhileWaitingForTheLockChangesNothing(t *testing.T) {
+	c, _ := newTestCache(1)
+	_, r := acquire(t, c, "keep")
+	r()
+	ctx, cancel := context.WithCancel(context.Background())
+	c.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := c.Acquire(ctx, "new")
+		done <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // the goroutine is parked on c.mu
+	cancel()
+	c.mu.Unlock()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if _, ok := c.entries["keep"]; !ok || c.Len() != 1 {
+		t.Fatal("a cancelled Acquire evicted the entry that was there")
+	}
+}
+
+// With no further traffic, Sweep (run on a timer by the owner) still reclaims an idle entry.
+func TestCache_SweepReclaimsWithoutTraffic(t *testing.T) {
+	c, clk := newTestCache(16)
+	_, r := acquire(t, c, "s1")
+	r()
+	_, rp := acquire(t, c, "pinned")
+	defer rp()
+	clk.Advance(DefaultIdle)
+	c.Sweep()
+	if c.Len() != 1 {
+		t.Fatalf("Len = %d, want only the pinned entry", c.Len())
+	}
+}
+
+func TestCache_RunSweepsUntilCancelled(t *testing.T) {
+	c, clk := newTestCache(16)
+	_, r := acquire(t, c, "s1")
+	r()
+	clk.Advance(DefaultIdle)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Run(ctx, 5*time.Millisecond); close(done) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for c.Len() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if c.Len() != 0 {
+		t.Fatal("Run did not reclaim the idle entry")
+	}
+}

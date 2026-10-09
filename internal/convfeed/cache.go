@@ -29,6 +29,7 @@ type CacheOptions struct {
 type Cache struct {
 	mu      sync.Mutex
 	entries map[string]*cached
+	seq     uint64 // advances on every use: the LRU order, exact when the clock is coarse
 	max     int
 	idle    time.Duration
 	now     func() time.Time
@@ -38,6 +39,7 @@ type cached struct {
 	entry    *Entry
 	pins     int
 	lastUsed time.Time
+	lastSeq  uint64
 }
 
 // NewCache returns an empty cache.
@@ -65,6 +67,9 @@ func (c *Cache) Acquire(ctx context.Context, sessionID string) (*Entry, func(), 
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil { // cancelled while waiting for the lock: change nothing
+		return nil, nil, err
+	}
 	now := c.now()
 	c.sweepIdle(now)
 	ce, ok := c.entries[sessionID]
@@ -76,17 +81,46 @@ func (c *Cache) Acquire(ctx context.Context, sessionID string) (*Entry, func(), 
 		c.entries[sessionID] = ce
 	}
 	ce.pins++
-	ce.lastUsed = now
+	c.touch(ce, now)
 	var once sync.Once
 	release := func() {
 		once.Do(func() {
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			ce.pins--
-			ce.lastUsed = c.now()
+			c.touch(ce, c.now())
 		})
 	}
 	return ce.entry, release, nil
+}
+
+// touch marks ce as the most recently used. c.mu is held.
+func (c *Cache) touch(ce *cached, now time.Time) {
+	c.seq++
+	ce.lastSeq = c.seq
+	ce.lastUsed = now
+}
+
+// Sweep drops the unpinned entries idle for the idle time. Acquire sweeps too, but a quiet cache would keep its last
+// entries (and their normalized transcripts) forever, so the owner calls Sweep on a timer (see Run).
+func (c *Cache) Sweep() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sweepIdle(c.now())
+}
+
+// Run sweeps every interval until ctx is done.
+func (c *Cache) Run(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			c.Sweep()
+		}
+	}
 }
 
 // Len is how many entries the cache holds (tests and diagnostics).
@@ -108,14 +142,14 @@ func (c *Cache) sweepIdle(now time.Time) {
 // evictOldestUnpinned removes the least recently used unpinned entry; false when every entry is pinned. c.mu is held.
 func (c *Cache) evictOldestUnpinned() bool {
 	var oldest string
-	var at time.Time
+	var at uint64
 	found := false
 	for id, ce := range c.entries {
 		if ce.pins > 0 {
 			continue
 		}
-		if !found || ce.lastUsed.Before(at) {
-			oldest, at, found = id, ce.lastUsed, true
+		if !found || ce.lastSeq < at {
+			oldest, at, found = id, ce.lastSeq, true
 		}
 	}
 	if found {
