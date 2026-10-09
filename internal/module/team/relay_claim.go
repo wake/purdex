@@ -54,7 +54,14 @@ func (m *Module) handleRelayClaim(w http.ResponseWriter, r *http.Request) {
 	if !m.decodeBody(w, r, &req) {
 		return
 	}
-	if _, ok := m.memberOpOf(w, id, req.SessionID); !ok {
+	cur, ok := m.memberOpOf(w, id, req.SessionID)
+	if !ok {
+		return
+	}
+	if cur.State == team.RelayAwaitingApproval {
+		// ReportRelay's table lets a SELF op go awaiting_approval → claimed (its approval's close); a member op waiting
+		// for a person (RQ-2) must not be claimed past that person.
+		m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrBadTransition, Detail: "the op awaits approval; it cannot be claimed yet", Op: &cur})
 		return
 	}
 	op, res, err := m.store.ReportRelay(id, RelayReport{State: team.RelayClaimed, At: m.now()})

@@ -91,6 +91,11 @@ func TestClaim_IsIdempotentAndCarriesTheLead(t *testing.T) {
 			t.Fatalf("a claim left lock files: %v", entries)
 		}
 	}
+	// an op that awaits a person (RQ-2) is not claimable by its target; mutation gate: drop the check → 200 (red)
+	f.m.store.db.Exec(`UPDATE relay_ops SET state = 'awaiting_approval' WHERE id = ?`, op.ID)
+	if code, _, ae := f.claim(op.ID, "sid-m1"); code != 409 || ae.Error != team.ErrBadTransition || f.op(op.ID).State != team.RelayAwaitingApproval {
+		t.Fatalf("claim of an awaiting op: %d %+v", code, ae)
+	}
 	// past claimed, a claim does not step back
 	f.m.store.db.Exec(`UPDATE relay_ops SET state = 'written' WHERE id = ?`, op.ID)
 	if code, _, ae := f.claim(op.ID, "sid-m1"); code != 409 || ae.Error != team.ErrBadTransition || ae.Op == nil || ae.Op.State != team.RelayWritten {
