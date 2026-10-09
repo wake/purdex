@@ -65,7 +65,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		}
 		ids = append(ids, t.LeadSessionID)
 		for _, mr := range rows {
-			if mr.State == team.MemberActive {
+			if mr.State == team.MemberActive && !m.isRemoteRow(mr) { // remote rows are X5's (display with their host)
 				active[i] = append(active[i], mr)
 				ids = append(ids, mr.SessionID)
 			}

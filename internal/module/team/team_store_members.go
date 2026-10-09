@@ -60,6 +60,12 @@ func (s *Store) queryMembers(what, query string, args ...any) ([]memberRow, erro
 	return out, nil
 }
 
+// local is the SQL (and its two args) that keeps a statement to the rows that live on THIS host (cross-host spec §4.2): a
+// remote member's session, usage and relays are its own host's. localHostID "" (a bare test store) filters nothing.
+func (s *Store) local(col string) (string, []any) {
+	return `(? = '' OR ` + col + ` = ?)`, []any{s.localHostID, s.localHostID}
+}
+
 // ActiveMembersOfLiveTeams returns every active member row of a live team,
 // with its reading, oldest first: what the sweeper looks after. A member of
 // an ended team is left as it ended (D4). Local rows only: a remote member's liveness, usage and notices are its own host's
@@ -144,11 +150,12 @@ func (s *Store) SetLeadUsage(teamID, leadSessionID string, c team.MemberContext)
 // relay op in flight. killed says whether this call marked it.
 func (s *Store) MarkMemberKilled(spawnOp, sessionID string, at int64) (bool, error) {
 	// ended_at is when the row first left `active`: a row that went gone keeps its time.
+	loc, locArgs := s.local("host_id")
 	res, err := s.db.Exec(`UPDATE team_members SET state = 'killed', updated_at = ?, ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
-		WHERE spawn_op = ? AND session_id = ? AND state IN ('active', 'gone')
+		WHERE spawn_op = ? AND session_id = ? AND state IN ('active', 'gone') AND `+loc+`
 		  AND NOT EXISTS (SELECT 1 FROM relay_ops
 			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
-		at, at, spawnOp, sessionID, sessionID)
+		append([]any{at, at, spawnOp, sessionID}, append(locArgs, sessionID)...)...)
 	return oneRow(res, err, "mark member "+spawnOp+" killed")
 }
 
@@ -161,10 +168,11 @@ func (s *Store) MarkMemberKilled(spawnOp, sessionID string, at int64) (bool, err
 // The guard is in the statement, as EndTeam's is, so a relay claimed after
 // the caller looked wins. gone says whether this call marked it.
 func (s *Store) MarkMemberGone(spawnOp, sessionID string, at int64) (bool, error) {
+	loc, locArgs := s.local("host_id")
 	res, err := s.db.Exec(`UPDATE team_members SET state = 'gone', updated_at = ?, ended_at = ?
-		WHERE spawn_op = ? AND session_id = ? AND state = 'active'
+		WHERE spawn_op = ? AND session_id = ? AND state = 'active' AND `+loc+`
 		  AND NOT EXISTS (SELECT 1 FROM relay_ops
 			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
-		at, at, spawnOp, sessionID, sessionID)
+		append([]any{at, at, spawnOp, sessionID}, append(locArgs, sessionID)...)...)
 	return oneRow(res, err, "mark member "+spawnOp+" gone")
 }
