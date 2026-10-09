@@ -36,14 +36,14 @@ const RING_STROKE = 2
 const RING_R = (RING_SIZE - RING_STROKE) / 2
 const RING_C = 2 * Math.PI * RING_R
 
-/** What a segment's ring and number show: the context window reads USED, the 5-hour / weekly limits read REMAINING. */
+/** What a ring or a number shows. Context window: ring USED, number REMAINING. 5-hour / weekly limits: both REMAINING. */
 export type UsageMode = 'used' | 'remaining'
 
 function shownPct(used: number, mode: UsageMode): number {
   return mode === 'used' ? usedPct(used) : remainingPct(used)
 }
 
-/** A ring that fills clockwise from 12 o'clock to the shown share (per `mode`); its colour always follows `usageTone` of the USED share. */
+/** A ring that fills clockwise from 12 o'clock to the shown share (per `mode`, the ring's own); its colour always follows `usageTone` of the USED share. */
 function Ring({ used, mode }: { used: number; mode: UsageMode }) {
   const u = usedPct(used)
   const shown = shownPct(used, mode)
@@ -69,14 +69,16 @@ function Ring({ used, mode }: { used: number; mode: UsageMode }) {
   )
 }
 
-/** icon + ring + % (used or remaining per `mode`). No text label: the tooltip (and aria-label) names which limit this is. */
-export function UsageSegment({ testId, icon: IconCmp, used, mode, title, stale, className = '' }: {
+/** icon + ring + % (each used or remaining per `ring` / `number`). No text label: the tooltip (and aria-label) names which limit this is. */
+export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title, stale, className = '' }: {
   testId: string
   icon: Icon
   /** Used share, 0-100. Colour always follows it. */
   used: number
-  /** 'used': ring and number show the used share; 'remaining': they show what is left. */
-  mode: UsageMode
+  /** What the ring shows: 'used' fills with the used share, 'remaining' with what is left. */
+  ring: UsageMode
+  /** What the number shows. */
+  number: UsageMode
   title: string
   stale: boolean
   className?: string
@@ -91,8 +93,8 @@ export function UsageSegment({ testId, icon: IconCmp, used, mode, title, stale, 
       className={`flex shrink-0 items-center gap-1 tabular-nums select-none ${stale ? 'opacity-50' : ''} ${className}`}
     >
       <IconCmp size={10} className="text-text-muted" aria-hidden="true" />
-      <Ring used={used} mode={mode} />
-      <span className="text-text-secondary">{shownPct(used, mode)}%</span>
+      <Ring used={used} mode={ring} />
+      <span className="text-text-secondary">{shownPct(used, number)}%</span>
     </span>
   )
 }
@@ -123,7 +125,8 @@ function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
           testId={`${idPrefix}-five-hour`}
           icon={Clock}
           used={fiveHour.pct}
-          mode="remaining"
+          ring="remaining"
+          number="remaining"
           title={windowTitle(t, 'status.usage.five_hour', fiveHour, now, stale)}
           stale={stale}
           className="max-[700px]:hidden"
@@ -134,7 +137,8 @@ function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
           testId={`${idPrefix}-seven-day`}
           icon={CalendarBlank}
           used={sevenDay.pct}
-          mode="remaining"
+          ring="remaining"
+          number="remaining"
           title={windowTitle(t, 'status.usage.seven_day', sevenDay, now, stale)}
           stale={stale}
           className="max-[700px]:hidden"
@@ -160,7 +164,8 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
           testId="status-seg-usage-context"
           icon={Brain}
           used={usage.context}
-          mode="used"
+          ring="used"
+          number="remaining"
           title={[t('status.usage.context', { left: remainingPct(usage.context), pct: usedPct(usage.context) }), stale ? t('status.usage.stale') : ''].filter(Boolean).join(' — ')}
           stale={stale}
           className="max-[600px]:hidden"

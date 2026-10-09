@@ -44,11 +44,11 @@ describe('CcUsageSegments', () => {
     expect(container.innerHTML).toBe('')
   })
 
-  it('shows icon + ring + number (context = used, limits = remaining), with no text label, and names the limit in tooltip and aria-label', () => {
+  it('shows icon + ring + number (ring: context = used, limits = remaining; number: all remaining), with no text label, and names the limit in tooltip and aria-label', () => {
     seed(payload())
     render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
     const ctx = screen.getByTestId('status-seg-usage-context')
-    expect(ctx.textContent).toBe('23%')
+    expect(ctx.textContent).toBe('77%')
     expect(ctx.title).toBe('Context window: 77% left (23% used)')
     expect(ctx.getAttribute('aria-label')).toBe(ctx.title)
     const five = screen.getByTestId('status-seg-usage-five-hour')
@@ -65,8 +65,8 @@ describe('CcUsageSegments', () => {
     }
   })
 
-  it('context shows what is USED: used 15 -> 15%, used 120 -> 100%, used -5 -> 0%', () => {
-    for (const [used, shown] of [[15, '15%'], [120, '100%'], [-5, '0%']] as const) {
+  it('context number shows what is LEFT: used 37 -> 63%, used 15 -> 85%, used 120 -> 0%, used -5 -> 100%', () => {
+    for (const [used, shown] of [[37, '63%'], [15, '85%'], [120, '0%'], [-5, '100%']] as const) {
       cleanup()
       seed(payload({ context_window: { used_percentage: used } }))
       render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
@@ -159,14 +159,14 @@ describe('CcUsageSegments', () => {
 describe('one normalised used value', () => {
   it.each([
     [69.4, 69, 'ok', 31], [69.6, 70, 'warn', 30], [89.6, 90, 'danger', 10], [99.6, 100, 'danger', 0], [120, 100, 'danger', 0], [-5, 0, 'ok', 100],
-  ])('used %f -> used %i, %s; context number/ring show used, tooltip names both (left %i)', (raw, used, tone, left) => {
+  ])('used %f -> used %i, %s; context ring shows used, number shows left, tooltip names both (left %i)', (raw, used, tone, left) => {
     seed(payload({ context_window: { used_percentage: raw } }))
     render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
     const seg = screen.getByTestId('status-seg-usage-context')
     const arc = seg.querySelector('[data-testid="usage-ring-arc"]')!
     expect(arc.getAttribute('data-used')).toBe(String(used))
     expect(arc.getAttribute('data-tone')).toBe(tone)
-    expect(seg.textContent).toBe(`${used}%`)
+    expect(seg.textContent).toBe(`${left}%`)
     expect(arc.getAttribute('data-shown')).toBe(String(used))
     expect(seg.title).toBe(`Context window: ${left}% left (${used}% used)`)
   })
