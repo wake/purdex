@@ -21,8 +21,8 @@ interface IconProps {
   size?: number
 }
 
-/** The agent icon of a seat whose host this Mac lacks: it has no agent store key, so nothing else would draw. */
-function UnmappedBot({ size, className }: { size: number; className?: string }) {
+/** The icon of a seat whose agent type is not known (no store key, or none yet): a bead is never visually empty. */
+function DefaultBot({ size, className }: { size: number; className?: string }) {
   return <Robot size={size} className={className} data-testid="team-bead-bot" />
 }
 
@@ -30,7 +30,7 @@ export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14 
   const { agentIcon, agentStatus, isUnread, tabIndicatorStyle } = useSessionAgentIndicator(hostId, sessionCode)
   return (
     <TabIcon
-      IconComponent={hostId === '' ? UnmappedBot : agentIcon}
+      IconComponent={agentIcon ?? DefaultBot}
       agentStatus={agentStatus}
       tabIndicatorStyle={tabIndicatorStyle}
       isActive={isActive}

@@ -362,6 +362,18 @@ describe('InlineTabList — team beads', () => {
     expect(within(bead('R')).getByTestId('team-bead-host-unknown')).toBeInTheDocument()
   })
 
+  it('a mapped-host bead with no agent type yet still draws the bot icon (never an empty bead), setting off; the type replaces it', () => {
+    seedScene(base)
+    act(() => useTeamUiStore.getState().setTeamBeadHost(false))
+    mount()
+    for (const id of ['A', 'B', 'C']) expect(within(bead(id)).getByTestId('team-bead-bot')).toBeInTheDocument()
+    expect(within(bead('A')).queryByTestId('tab-status-indicator')).toBeNull()
+    // Once the agent store knows the type and status, its own icon and light take over.
+    act(() => useAgentStore.setState({ agentTypes: { [`${HOST}:code-a-tm`]: 'cc' }, statuses: { [`${HOST}:code-a-tm`]: 'running' } }))
+    expect(within(bead('A')).queryByTestId('team-bead-bot')).toBeNull()
+    expect(within(bead('A')).getByTestId('tab-status-indicator')).toBeInTheDocument()
+  })
+
   it("a joining member's tooltip carries the state, alias only when remote", () => {
     seedScene(base)
     const t = useTeamRosterStore.getState().byHost[HOST][0]
