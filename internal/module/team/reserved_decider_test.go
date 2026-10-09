@@ -72,3 +72,24 @@ func TestDaemonClose_IsAuto(t *testing.T) {
 		t.Fatalf("daemonClose = %+v", c)
 	}
 }
+
+// A row written before RQ-0, when a decide request could name `unattended` (it always carried its RemoteAddr), is
+// not the daemon's approval. Mutation gate: drop the addr condition from autoApprovedQuery → red.
+func TestListAutoApproved_SkipsAPreRQ0RowThatNamedTheKindWithAnAddr(t *testing.T) {
+	s := openTestStore(t)
+	closedAt(t, s, "auto", 2000, team.UnattendedClient(), team.StateApproved)
+	if _, _, _, err := s.Create(openApproval("forged", "sid-forged", 1900), "h-forged"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE approval_requests SET state = 'approved', decided_at = 2100,
+		decided_by_json = '{"kind":"unattended","label":"無人值守模式","addr":"100.64.0.4:51234"}' WHERE id = 'forged'`); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := s.ListAutoApproved(1, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(rows); len(got) != 1 || got[0] != "auto" {
+		t.Fatalf("auto-approved = %v, want only the daemon's own", got)
+	}
+}

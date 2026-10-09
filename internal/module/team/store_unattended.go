@@ -94,11 +94,14 @@ func sameSelfRelay(op team.RelayOp, a team.Approval) error {
 // kind unattended) decided at or after a since, then tail; its arguments
 // are since, team.ClientKindUnattended, then tail's. A decided_by_json
 // that is not valid JSON never reaches json_extract (which would fail the
-// whole list): it is no decider of the daemon's, so the row is skipped.
+// whole list): it is no decider of the daemon's, so the row is skipped. The daemon's decider has no addr (a
+// click's always carries the caller's RemoteAddr), so a row from before RQ-0, when a decide request could name
+// the kind `unattended` itself, is not taken for an automatic approval.
 func autoApprovedQuery(tail string) string {
 	return `SELECT ` + selectCols + ` FROM approval_requests
 		WHERE state = 'approved' AND decided_at >= ?
-		  AND CASE WHEN json_valid(decided_by_json) THEN json_extract(decided_by_json, '$.kind') END = ? ` + tail
+		  AND CASE WHEN json_valid(decided_by_json) THEN json_extract(decided_by_json, '$.kind') END = ?
+		  AND CASE WHEN json_valid(decided_by_json) THEN COALESCE(json_extract(decided_by_json, '$.addr'), '') END = '' ` + tail
 }
 
 // The tails of ListAutoApproved's three reads: a page (before, before,
