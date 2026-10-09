@@ -419,4 +419,36 @@ describe('RestartDaemonButton - onActiveChange', () => {
       expect(screen.getByTestId('restart-daemon-approvals').textContent).toBe('1 個申請等待核准')
     })
   })
+
+  describe('relays in progress (plan P6-8)', () => {
+    const inflight = (approvals_open: number, relays_active: number) =>
+      vi.mocked(approvalApi.fetchInflight).mockResolvedValueOnce({ approvals_open, relays_active })
+
+    it('relays line shows when non-zero', async () => {
+      inflight(0, 2)
+      await openConfirm(0)
+      expect(screen.getByTestId('restart-daemon-relays').textContent).toBe('2 個接力進行中（重啟後會接續）')
+      expect(screen.queryByTestId('restart-daemon-approvals')).toBeNull()
+    })
+
+    // Mutation gate: show the line at 0 → red.
+    it('relays line does not show at 0', async () => {
+      inflight(1, 0)
+      await openConfirm(0)
+      expect(screen.queryByTestId('restart-daemon-relays')).toBeNull()
+      expect(screen.queryByText(/接力進行中/)).toBeNull()
+    })
+
+    it('joins both with 、 in one line', async () => {
+      inflight(2, 3)
+      await openConfirm(0)
+      expect(screen.getByTestId('restart-daemon-inflight').textContent).toBe('2 個申請等待核准、3 個接力進行中（重啟後會接續）')
+    })
+
+    it('fetch failure shows no relay line', async () => {
+      // beforeEach leaves fetchInflight rejecting.
+      await openConfirm(0)
+      expect(screen.queryByTestId('restart-daemon-relays')).toBeNull()
+    })
+  })
 })

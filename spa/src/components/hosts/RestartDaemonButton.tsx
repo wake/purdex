@@ -38,6 +38,9 @@ interface PendingConfirm {
   // GET /api/team/inflight's approvals_open (lead-team spec §9.5); null = the call failed or timed out, and the
   // line falls back to the store's count for this host.
   approvals: number | null
+  // The same call's relays_active: member and self relays in progress (they resume after the restart); null = the
+  // call failed or timed out, and there is no relay line (no store fallback for relays).
+  relays: number | null
 }
 
 const btnClass = 'px-3 py-1.5 text-xs rounded-md bg-surface-input border border-border-default text-text-primary hover:bg-surface-hover disabled:opacity-50 cursor-pointer disabled:cursor-default'
@@ -92,14 +95,16 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
     setCountingFor({ hostId: target, gen })
     // Both inside the dialog's 3 s budget: countRunningWorkers races its own timer, fetchInflight aborts its own
     // request (approval-api.ts INFLIGHT_TIMEOUT_MS). Any inflight failure is null → the store's count below.
-    const [workers, approvals] = await Promise.all([
+    const [workers, inflight] = await Promise.all([
       countRunningWorkers(target),
-      fetchInflight(target).then((r) => r.approvals_open, () => null),
+      fetchInflight(target).then((r) => ({ approvals: r.approvals_open, relays: r.relays_active }), () => null),
     ])
+    const approvals = inflight?.approvals ?? null
+    const relays = inflight?.relays ?? null
     // Invalidated meanwhile: a newer state owns `countingFor`, touch nothing.
     if (!mounted.current || requestRef.current !== mine) return
     setCountingFor(null)
-    if (stillValid(target, gen)) setConfirm({ hostId: target, gen, workers, approvals })
+    if (stillValid(target, gen)) setConfirm({ hostId: target, gen, workers, approvals, relays })
   }
 
   const onConfirm = () => {
@@ -120,6 +125,8 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
   // Open approval requests on THIS host (lead-team spec §9.5): they survive the restart (leases are extended at
   // boot), so the line informs, it does not block. The daemon's answer first; the store when it could not be asked.
   const openApprovals = confirm === null ? 0 : (confirm.approvals ?? storeOpenApprovals)
+  // Relays in progress (plan P6-8): they continue after the restart too. Only the daemon's answer counts.
+  const activeRelays = confirm?.relays ?? 0
 
   return (
     <>
@@ -144,9 +151,11 @@ export function RestartDaemonButton({ hostId, label, testId = 'restart-daemon', 
                 : t('hosts.restart.confirm_workers', { count: confirm.workers })}
             </p>
           )}
-          {openApprovals > 0 && (
-            <p data-testid={`${testId}-approvals`} className="mt-1 text-xs text-amber-400">
-              {t('approval.restart.pending', { count: openApprovals })}
+          {(openApprovals > 0 || activeRelays > 0) && (
+            <p data-testid={`${testId}-inflight`} className="mt-1 text-xs text-amber-400">
+              {openApprovals > 0 && <span data-testid={`${testId}-approvals`}>{t('approval.restart.pending', { count: openApprovals })}</span>}
+              {openApprovals > 0 && activeRelays > 0 && t('approval.restart.join')}
+              {activeRelays > 0 && <span data-testid={`${testId}-relays`}>{t('approval.restart.relays', { count: activeRelays })}</span>}
             </p>
           )}
         </ConfirmDialog>
