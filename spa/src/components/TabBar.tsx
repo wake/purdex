@@ -6,6 +6,10 @@ import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useTeamUiStore } from '../stores/useTeamUiStore'
+import { useTeamDisplay, type TeamTabMark } from './team/team-display'
+import { groupSegments } from './team/groupSegments'
+import { TeamGroupLabel, TeamTabGroupFrame } from './team/TeamTabGroup'
 
 interface Props {
   tabs: Tab[]
@@ -22,7 +26,7 @@ interface Props {
 }
 
 function TabSeparator({ show }: { show: boolean }) {
-  return <div className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
+  return <div data-testid="tab-separator" className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
 }
 
 export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded }: Props) {
@@ -31,6 +35,21 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
   const pinnedIds = useMemo(() => pinnedTabs.map((t) => t.id), [pinnedTabs])
   const normalIds = useMemo(() => normalTabs.map((t) => t.id), [normalTabs])
+  // Team runs (spec §4.2): the unpinned tabs split into plain tabs and label + lead + visible members. Only the tabs
+  // that are drawn are sortable items; the members a collapse hides are still in `normalIds` for the reorder below.
+  const team = useTeamDisplay()
+  const collapsed = useTeamUiStore((s) => s.collapsed)
+  const segments = useMemo(() => groupSegments(normalTabs, (id) => team?.tabMark(id) ?? null, collapsed), [normalTabs, team, collapsed])
+  const shownIds = useMemo(() => segments.flatMap((s) => (s.kind === 'tab' ? [s.tab.id] : s.tabs.map((t) => t.id))), [segments])
+  /** Tab id → the run it is drawn in (grouped tabs only). */
+  const runOf = useMemo(() => {
+    const m = new Map<string, { teamKey: string; role: 'lead' | 'member'; leadTabId: string }>()
+    for (const s of segments) {
+      if (s.kind !== 'team') continue
+      for (const tab of s.tabs) m.set(tab.id, { teamKey: s.mark.teamKey, role: tab === s.tabs[0] ? 'lead' : 'member', leadTabId: s.tabs[0].id })
+    }
+    return m
+  }, [segments])
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
   const pinnedZoneRef = useRef<HTMLDivElement>(null)
   const normalTabsRef = useRef<HTMLDivElement>(null)
@@ -68,6 +87,25 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
     // Only allow same-zone reorder
     if (inPinned !== overInPinned) return
 
+    // A team run (spec §4.2): members swap places inside it (written to the shared member order; the tab list follows from
+    // the lifecycle subscriber). The lead stays first and the run is not draggable as a whole; a drop across its boundary,
+    // or a plain tab dropped into it, snaps back.
+    const from = runOf.get(activeId)
+    const to = runOf.get(overId)
+    if (from || to) {
+      if (!from || !to || from.teamKey !== to.teamKey || from.role !== 'member' || to.role !== 'member') return
+      const order = team?.panelTeam(from.leadTabId)?.members ?? []
+      // The whole member order (unopened members included): the dragged seat takes the target's index, as dnd-kit's arrayMove.
+      const ids = order.map((m) => m.sessionId)
+      const fromIdx = order.findIndex((m) => m.tabId === activeId)
+      const toIdx = order.findIndex((m) => m.tabId === overId)
+      if (fromIdx < 0 || toIdx < 0) return
+      const [moved] = ids.splice(fromIdx, 1)
+      ids.splice(toIdx, 0, moved)
+      team?.onReorderMembers(from.teamKey, ids)
+      return
+    }
+
     const zone = inPinned ? [...pinnedIds] : [...normalIds]
     const oldIdx = zone.indexOf(activeId)
     const newIdx = zone.indexOf(overId)
@@ -76,7 +114,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
 
     const newOrder = inPinned ? [...zone, ...normalIds] : [...pinnedIds, ...zone]
     onReorderTabs(newOrder)
-  }, [pinnedIds, normalIds, onReorderTabs])
+  }, [pinnedIds, normalIds, onReorderTabs, runOf, team])
 
   // Separator visibility: hide near active or hovered tab
   const shouldShowSeparator = (leftTab: Tab | undefined, rightTab: Tab | undefined) => {
@@ -85,6 +123,21 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
     if (hide.includes(leftTab.id) || hide.includes(rightTab.id)) return false
     return true
   }
+
+  const renderTab = (tab: Tab, group?: TeamTabMark) => (
+    <SortableTab
+      key={tab.id}
+      tab={tab}
+      isActive={tab.id === activeTabId}
+      group={group}
+      onSelect={onSelectTab}
+      onClose={onCloseTab}
+      onMiddleClick={onMiddleClick}
+      onContextMenu={onContextMenu}
+      onRename={onRenameTab}
+      onHover={setHoveredTabId}
+    />
+  )
 
   return (
     <div className={`flex items-center px-1 ${embedded ? 'h-full flex-1 min-w-0' : 'flex-shrink-0 bg-surface-secondary border-b border-border-subtle'}`} style={embedded ? undefined : { height: 41 }}>
@@ -132,26 +185,32 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
           )}
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
             <div ref={normalTabsRef} className="flex items-center h-full flex-1 min-w-0" style={{ maxWidth: 'max-content' }}>
-              <SortableContext items={normalIds} strategy={horizontalListSortingStrategy}>
-                {normalTabs.map((tab, i) => (
-                  <Fragment key={tab.id}>
-                    {i > 0 && <TabSeparator show={shouldShowSeparator(normalTabs[i - 1], tab)} />}
-                    <SortableTab
-                      tab={tab}
-                      isActive={tab.id === activeTabId}
-                      onSelect={onSelectTab}
-                      onClose={onCloseTab}
-                      onMiddleClick={onMiddleClick}
-                      onContextMenu={onContextMenu}
-                      onRename={onRenameTab}
-                      onHover={setHoveredTabId}
-                    />
-                  </Fragment>
-                ))}
+              <SortableContext items={shownIds} strategy={horizontalListSortingStrategy}>
+                {segments.map((seg, si) => {
+                  const prev = segments[si - 1]
+                  // Separators before the label / after the group stay in the row but are never drawn next to a group.
+                  const sep = si > 0 && <TabSeparator show={seg.kind === 'tab' && prev.kind === 'tab' && shouldShowSeparator(prev.tab, seg.tab)} />
+                  if (seg.kind === 'tab') {
+                    return <Fragment key={seg.tab.id}>{sep}{renderTab(seg.tab)}</Fragment>
+                  }
+                  return (
+                    <Fragment key={`g-${seg.mark.teamKey}`}>
+                      {sep}
+                      <TeamTabGroupFrame mark={seg.mark}>
+                        <TeamGroupLabel mark={seg.mark} hidden={seg.hidden} onToggle={team!.onToggleCollapse} />
+                        {seg.tabs.map((tab) => renderTab(tab, team?.tabMark(tab.id) ?? undefined))}
+                      </TeamTabGroupFrame>
+                    </Fragment>
+                  )
+                })}
               </SortableContext>
             </div>
             {/* Trailing separator + add button (outside SortableContext, inside scroll) */}
-            {normalTabs.length > 0 && <TabSeparator show={(() => { const lastId = normalTabs[normalTabs.length - 1]?.id; return lastId !== activeTabId && lastId !== hoveredTabId })()} />}
+            {segments.length > 0 && <TabSeparator show={(() => {
+              const last = segments[segments.length - 1]
+              if (last.kind === 'team') return false
+              return last.tab.id !== activeTabId && last.tab.id !== hoveredTabId
+            })()} />}
             <button
               onClick={onAddTab}
               className="flex items-center justify-center w-7 h-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-white/10 cursor-pointer flex-shrink-0"
