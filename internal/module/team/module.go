@@ -413,6 +413,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.store = store
 	store.localHostID = c.Cfg.HostID
 	store.newID = func() string { return m.newID() }
+	store.onCommands = m.kickCommands
 	store.aliasFn = func() string { a, _ := m.selfHost(); return a }
 	store.opChanged = m.wake                    // the one choke point: every committed change of an op wakes its long-polls
 	seen, err := store.LoadModHello(modSeenCap) // presence outlives a restart (P6-2a)

@@ -440,7 +440,11 @@ func (m *Module) matchRemoteMember(t team.Team, hostAlias, sess string) (memberR
 	if m.cmdCaller == nil || ref == "" {
 		return memberRow{}, false, nil
 	}
+	// the host part is a peer alias or a peer host id (ipeers address rules)
 	hostID := m.cmdCaller.HostIDOf(hostAlias)
+	if hostID == "" && m.cmdCaller.AliasOf(hostAlias) != "" {
+		hostID = hostAlias
+	}
 	if hostID == "" {
 		return memberRow{}, false, nil
 	}

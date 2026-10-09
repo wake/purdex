@@ -269,3 +269,35 @@ func TestRemoteLeadMoved_NoLocalHandoverNoticeForARemoteRow(t *testing.T) {
 		t.Fatalf("a notice was sent to %s for a team with only a remote member", c.To)
 	}
 }
+
+// codex attack: a cleared that moves NO team (the old session led nothing) enqueues no lead_moved, even if the new session
+// already leads one. Mutation gate: look the teams up by the new session → red.
+func TestRemoteLeadMoved_NotForATeamTheClearedDidNotMove(t *testing.T) {
+	f, _ := remoteFixture(t)
+	f.remoteRow("abc12", "hostM", "mk1", rowActive)
+	// an ordinary session's relay whose new session id happens to be the lead's: the old session leads nothing
+	out := f.begin("sid-2")
+	if code, body := f.decide(out.RequestID, "approve"); code != 200 {
+		t.Fatalf("approve: %d %s", code, body)
+	}
+	for _, st := range []team.RelayState{team.RelayWriting, team.RelayWritten} {
+		f.report(out.Op.ID, team.RelayReportRequest{State: st})
+	}
+	f.origins.markDead("sid-2")
+	// at the store (the route refuses a new session under another process before it gets here)
+	op, res, err := f.m.store.ReportRelay(out.Op.ID, RelayReport{State: team.RelayCleared, NewSessionID: "sid-1", NewRef: "_new123", At: f.clock.Load()})
+	t.Logf("store cleared into a session that already leads: %s %v %v", op.State, res, err)
+	if n := len(f.commandsOf(CmdLeadMoved)); n != 0 {
+		t.Fatalf("%d lead_moved for a team no cleared moved", n)
+	}
+}
+
+// codex R1: the host part of a target may be a peer's host id as well as its alias.
+func TestRemoteTarget_ByHostId(t *testing.T) {
+	f, fc := remoteFixture(t)
+	f.remoteRow("abc12", "hostM", "mk1", rowActive)
+	fc.aliases["air26"] = "hostM"
+	if code, m, _, _ := f.release("hostM/" + remoteRef); code != http.StatusOK || m.State != team.MemberReleasing {
+		t.Fatalf("host-id target = %d %s", code, m.State)
+	}
+}

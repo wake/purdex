@@ -248,25 +248,36 @@ func (s *Store) EndTeamWithCommands(t team.Team, reason string, at int64, lead t
 	return true, tx.Commit()
 }
 
-// enqueueLeadMovedTx tells every host with a live remote row of the team that moved with the lead's cleared that the lead is
-// now newLead (§4.2): in the cleared's own transaction, after moveTeamRoles.
-func (s *Store) enqueueLeadMovedTx(tx *sql.Tx, newLead team.TeamLead, newID func() string, now int64) error {
-	rows, err := tx.Query(`SELECT `+teamCols+` FROM teams WHERE lead_session_id = ? AND ended_at = 0`, newLead.SessionID)
+// ledTeamsTx are the live teams the session leads, read in tx (before a cleared moves them).
+func ledTeamsTx(tx *sql.Tx, sessionID string) ([]string, error) {
+	rows, err := tx.Query(`SELECT id FROM teams WHERE lead_session_id = ? AND ended_at = 0`, sessionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var teams []team.Team
+	defer rows.Close()
+	var ids []string
 	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// enqueueLeadMovedTx tells every host with a live remote row of the given teams — the ones THIS cleared moved, read before
+// it ran — that the lead is now newLead (§4.2): in the cleared's own transaction, after moveTeamRoles.
+func (s *Store) enqueueLeadMovedTx(tx *sql.Tx, teamIDs []string, newLead team.TeamLead, newID func() string, now int64) error {
+	for _, id := range teamIDs {
 		var t team.Team
 		var grant string
-		if err := rows.Scan(teamDest(&t, &grant)...); err != nil {
-			rows.Close()
+		if err := tx.QueryRow(`SELECT `+teamCols+` FROM teams WHERE id = ? AND lead_session_id = ? AND ended_at = 0`, id, newLead.SessionID).Scan(teamDest(&t, &grant)...); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // it did not follow the lead after all
+			}
 			return err
 		}
-		teams = append(teams, t)
-	}
-	rows.Close()
-	for _, t := range teams {
 		if _, err := s.enqueueTeamLevelTx(tx, t, CmdLeadMoved, newLead, func(c *team.TeamCommand) {
 			c.LeadSessionID, c.LeadRef = newLead.SessionID, newLead.Ref
 		}, newID, now); err != nil {
