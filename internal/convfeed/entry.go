@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/convmodel"
 	"github.com/wake/purdex/internal/convmodel/ccnorm"
@@ -35,6 +36,10 @@ type Source struct {
 	Closer  io.Closer
 	// Path is the resolved transcript path (under the symlink-resolved projects root); the Resolver sets it.
 	Path string
+	// StatusAt is when Status / Backend were read (before the lookup began). The Entry refuses a reading older than the
+	// one it already holds, so a follower that waited for the gate cannot move the header backwards; zero = untimed,
+	// always applied.
+	StatusAt time.Time
 	// FrameID is the confirmed owning frame of a live source (the Resolver sets it; the Entry ignores it).
 	FrameID string
 }
@@ -70,8 +75,9 @@ type Entry struct {
 	// status and backend are the resolver's answer as of the last Refresh (the pane's light or ended / unknown, and
 	// "terminal" while a pane runs the session). They live in the entry so that a header, a window and a cursor read
 	// together never mix two requests' views; a change bumps the revision like a title change does.
-	status  string
-	backend string
+	status   string
+	backend  string
+	statusAt time.Time // the reading status / backend came from
 
 	fp    []byte // the bytes before the last fed offset
 	fpEnd int64  // the offset fp ends at
@@ -121,7 +127,7 @@ func (e *Entry) newEpoch() {
 	e.headRev = 0
 	e.changed = map[string]uint64{}
 	e.title, e.usage = "", nil
-	e.status, e.backend = "", ""
+	e.status, e.backend, e.statusAt = "", "", time.Time{}
 	e.fp, e.fpEnd = nil, 0
 	e.snapOK = false
 }
@@ -184,8 +190,10 @@ func (e *Entry) Refresh(ctx context.Context, src Source) (RefreshResult, error) 
 	}
 	e.bump(e.norm.SetLive(src.Live))
 	e.live = src.Live
-	if src.Status != e.status || src.Backend != e.backend {
-		e.status, e.backend = src.Status, src.Backend
+	if !src.StatusAt.IsZero() && src.StatusAt.Before(e.statusAt) {
+		// an older reading than the one held: ignore it
+	} else if src.Status != e.status || src.Backend != e.backend {
+		e.status, e.backend, e.statusAt = src.Status, src.Backend, src.StatusAt
 		e.rev++
 		e.headRev = e.rev
 	}

@@ -71,6 +71,7 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 		return Source{}, ErrNotFound
 	}
 
+	readAt := time.Now() // before the lookups: any reading taken after this is newer
 	var owner *Owner
 	status := "ended"
 	if r.Owners != nil {
@@ -96,7 +97,7 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 			f.Close()
 			return Source{}, ErrNotFound
 		}
-		s := Source{File: osFile{f}, Identity: identity, Closer: f, Status: status, Path: path}
+		s := Source{File: osFile{f}, Identity: identity, Closer: f, Status: status, StatusAt: readAt, Path: path}
 		if owner != nil {
 			s.Live, s.Backend, s.FrameID = true, "terminal", owner.FrameID
 		}
