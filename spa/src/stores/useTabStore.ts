@@ -9,6 +9,7 @@ import { bindingMatchesLegacy, generationMatchesLegacy } from '../lib/rebuild/bi
 import { fencedWorldStorage, registerFencedStore, STORAGE_KEYS, syncManager } from '../lib/storage'
 import type { UntitledDocumentState } from '../types/tab'
 import { layoutFromWire } from '../lib/profile/host-identity'
+import { isTeamTab } from '../lib/team/team-state'
 
 // --- Persist migration helpers ---
 // These functions handle legacy persisted data whose shape no longer matches
@@ -871,6 +872,8 @@ export const useTabStore = create<TabState>()(
         set((state) => {
           const tab = state.tabs[id]
           if (!tab) return state
+          // Spec R12: a tab drawn as a lead / member of a team cannot be pinned (unpinning is always allowed).
+          if (!tab.pinned && isTeamTab(id)) return state
           const newPinned = !tab.pinned
           const updated = { ...tab, pinned: newPinned }
           const newOrder = state.tabOrder.filter((tid) => tid !== id)

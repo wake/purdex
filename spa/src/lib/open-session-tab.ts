@@ -8,6 +8,8 @@ import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { usePaneFocusStore } from '../stores/usePaneFocusStore'
 import { isRefShownNow } from './shown-hosts'
+import { currentTeamState } from './team/team-state'
+import { openTeamSeat } from './team/team-actions'
 import type { Session } from './host-api'
 
 /**
@@ -16,6 +18,25 @@ import type { Session } from './host-api'
  * tab. A host hidden in this workbench opens nothing (plan H2d-2, §0.21 user rules 1 / 5) → `null`.
  */
 export function openSessionTab(hostId: string, session: Session): string | null {
+  // R11 (team interface): a session that is a MEMBER of a live team opens inside its lead's group (or switches to the tab
+  // it already has); a lead and any other session open a new tab as always.
+  const hit = currentTeamState().index.bySession.get(`${hostId}\u0000${session.name}`)
+  if (hit && hit.role === 'member') {
+    const { outcome, tabId } = openTeamSeat(hit.key, hit.seat.session.session_id)
+    // Whatever the team answered stands: a stale `session` the host no longer lists ('unlisted') opens no tab to nowhere.
+    if (outcome !== 'unknown') return tabId
+  }
+  return openSessionTabAt(hostId, session)
+}
+
+/** Where `openSessionTabAt` puts the tab: this workspace, after this tab (the workspace's end when none). */
+export interface TabPlacement {
+  workspaceId: string
+  afterTabId?: string
+}
+
+/** `openSessionTab` without the team redirect: always a NEW tab, optionally at a given place. */
+export function openSessionTabAt(hostId: string, session: Session, place?: TabPlacement): string | null {
   if (!isRefShownNow(hostId)) return null
   const tabId = useTabStore.getState().openSingletonTab({
     kind: 'tmux-session',
@@ -27,7 +48,12 @@ export function openSessionTab(hostId: string, session: Session): string | null 
     // ambient host state (spec §4.5).
     tmuxInstance: session.tmux_instance ?? '',
   })
-  useWorkspaceStore.getState().insertTab(tabId)
+  useWorkspaceStore.getState().insertTab(tabId, place?.workspaceId, place?.afterTabId)
+  // `insertTab` does nothing for a workspace that is gone: a tab no workspace owns is unreachable, so it goes where a tab
+  // with no place goes (the active workspace, else the first, else Unsorted).
+  if (place !== undefined && useWorkspaceStore.getState().findWorkspaceByTab(tabId) === null) {
+    useWorkspaceStore.getState().insertTab(tabId)
+  }
   useTabStore.getState().setActiveTab(tabId)
   return tabId
 }

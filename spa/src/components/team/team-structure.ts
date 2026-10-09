@@ -70,7 +70,15 @@ export function structureSignature(input: StructureInput): string {
 
 const NOOP = () => {}
 
-export function buildTeamDisplay(input: StructureInput): TeamDisplay {
+export interface TeamActions {
+  onToggleCollapse: (teamKey: string) => void
+  onOpenSeat: (teamKey: string, sessionId: string) => void
+  onReorderMembers: (teamKey: string, sessionIds: string[]) => void
+}
+
+const NOOP_ACTIONS: TeamActions = { onToggleCollapse: NOOP, onOpenSeat: NOOP, onReorderMembers: NOOP }
+
+export function buildTeamDisplay(input: StructureInput, actions: TeamActions = NOOP_ACTIONS): TeamDisplay {
   const { views, index, workspaces, sessionsByHost, collapsed, panelMode, ghostWorkspace } = input
 
   const codeOf = codeLookup(sessionsByHost)
@@ -145,8 +153,6 @@ export function buildTeamDisplay(input: StructureInput): TeamDisplay {
       const hit = activeTabId === null ? undefined : index.byTabId.get(activeTabId)
       return hit ? panelOf(hit.key) : null
     },
-    onToggleCollapse: NOOP,
-    onOpenSeat: NOOP,
-    onReorderMembers: NOOP,
+    ...actions,
   }
 }

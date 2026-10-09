@@ -119,7 +119,7 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - Tooltips on the label and the panel header show both: "<name> (<label>)" when both exist.
 
 ### 4.9 Settings
-- 設定 → 介面 → 分頁: "member 顆粒顯示主機圖示" (bot + host icon), default on (P7). Device-local like the other interface settings.
+- 設定 → 介面 → 分頁: "member 顆粒顯示主機圖示" (bot + host icon), default on (P7). Stored in `useTeamUiStore` — device-local, not synced by Profile Sync (unlike the other interface settings); moving it into the synced UI settings needs a settings-ordinal bump and is left for later.
 - The old "分頁群組顯示 team" toggle (PL-3a) is **dropped**: the user's rulings make teams always grouped.
 
 ### 4.10 Lead mode in the terminal (R14)
