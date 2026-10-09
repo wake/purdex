@@ -252,6 +252,31 @@ func TestWorkbookNext_OnlyTheSessionsOwnCapableStreamMayPoll(t *testing.T) {
 	}
 }
 
+// A poll that waited in its stream's queue is checked again when it runs: if the stream switched session meanwhile it
+// gets 204 and the service is not asked a second time (codex critic).
+// Mutation gate: drop the re-check → red.
+func TestWorkbookNext_AQueuedPollIsCheckedAgainWhenItRuns(t *testing.T) {
+	f := &fakeWB{delay: 300 * time.Millisecond, job: map[string]string{"id": "j"}}
+	reg := capableReg()
+	h := NewHandler(reg, WithWorkbook(func() WorkbookService { return f }))
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	for i := range codes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i] = post(t, h, http.MethodPost, WorkbookNextPath, nextBody(testStream, testSID, 5000)).Code
+		}()
+		time.Sleep(50 * time.Millisecond)
+	}
+	_, _ = reg.Apply(Batch{V: 1, Stream: testStream, Agent: "cc", Caps: []string{CapWorkbookV2}, // /clear: the stream moves on
+		Events: []Event{{Seq: 2, SID: sidB, Type: "session.switch", Data: json.RawMessage(`{}`)}}})
+	wg.Wait()
+	if codes[0] != 200 || codes[1] != http.StatusNoContent {
+		t.Fatalf("codes = %v", codes)
+	}
+}
+
 // More than the cap of polls at once: the extra one is told to back off (429), never queued without bound.
 // Mutation gate: drop the cap → red.
 func TestWorkbookNext_PollsAreCapped(t *testing.T) {

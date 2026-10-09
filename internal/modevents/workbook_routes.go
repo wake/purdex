@@ -164,6 +164,11 @@ func (h *handler) workbookNext(w http.ResponseWriter, r *http.Request) {
 		return // the client went away while queued behind its own earlier poll
 	}
 	defer release()
+	// The stream may have switched session or ended while this poll was queued behind its earlier one (codex critic).
+	if !h.streamMayPoll(in.Stream, in.SessionID) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	// Queued behind its own earlier poll, this one's clock starts now: the deadline above covered the queue time only.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait + waitWriteSlack))
 	job, ok := svc.NextJob(ctx, in.Stream, in.SessionID, wait)
