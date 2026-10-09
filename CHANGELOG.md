@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.647] - 2026-10-09
+
+> 動 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 改了）；SPA、Electron 不必更新。**接力寫交接檔的那一輪，Claude 只能做「寫交接檔」這一件事。**
+
+### Changed：寫交接檔那一輪鎖住其他工具 — P6-3c（#2213，A 線）
+
+- 你核准接力後，mod 在寫交接檔那一輪開始時上鎖：這一輪 Claude 只能用一次 Write 寫出交接檔，其他工具（讀檔、跑指令、Edit 等）都會被擋下，避免它在 context 快滿時還去做別的事。
+- 交接檔寫完、清空對話之前就解鎖；寫入失敗、這一輪被中斷、session 重新開始時也會解鎖。萬一 mod 自己來不及解鎖，daemon 在接力完成或失敗時也會把鎖拿掉。
+- 上鎖失敗時只記一行 log，接力照常進行（不會因為鎖而卡住）。
+
 ## [1.0.0-alpha.646] - 2026-10-09
 
 > 只動 daemon（與 SPA）：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主 checkout 快轉生效（Mac App 按 Cmd+R）；Electron 不必更新。「lead 幫 member 接力時扣 member 額度」的規則上線，但要等 member 端的 mod 更新（P6-6）才會實際用到。
