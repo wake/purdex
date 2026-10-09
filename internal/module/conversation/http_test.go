@@ -280,8 +280,15 @@ func TestValidation_BeforeAnyAccess(t *testing.T) {
 		{"/api/conversations/claude/" + sid + "?turns=abc", 400, "bad_turns"},
 		{"/api/conversations/claude/" + sid + "?before=-1", 400, "bad_before"},
 		{"/api/conversations/claude/" + sid + "?before=x", 400, "bad_before"},
-		{"/api/conversations/claude/" + sid + "?after=e:1", 501, "not_implemented"},
-		{"/api/conversations/claude/" + sid + "?around=i1", 501, "not_implemented"},
+		{"/api/conversations/claude/" + sid + "?after=junk", 400, "bad_cursor"},
+		{"/api/conversations/claude/" + sid + "?after=:5", 400, "bad_cursor"},
+		{"/api/conversations/claude/" + sid + "?after=abc:x", 400, "bad_cursor"},
+		{"/api/conversations/claude/" + sid + "?after=abc:1&turns=5", 400, "turns_and_after"},
+		{"/api/conversations/claude/" + sid + "?after=abc:1&before=5", 400, "bad_query"},
+		{"/api/conversations/claude/" + sid + "?after=abc:1&around=x", 400, "bad_query"},
+		{"/api/conversations/claude/" + sid + "?around=x&before=3", 400, "before_and_around"},
+		{"/api/conversations/claude/" + sid + "?around=", 400, "bad_around"},
+		{"/api/conversations/claude/" + sid + "?around=" + strings.Repeat("a", 257), 400, "bad_around"},
 	}
 	for _, c := range cases {
 		if got := errCode(t, e.get(c.url), c.status); got != c.code {
@@ -741,5 +748,266 @@ func TestCtxReader_StopsWithTheContext(t *testing.T) {
 	cancel()
 	if n, err := r.Read(buf); n != 0 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("read after cancel: %d %v, want context.Canceled", n, err)
+	}
+}
+
+// ---- increments and around ----
+
+type incResp struct {
+	Reset   bool   `json:"reset"`
+	Cursor  string `json:"cursor"`
+	Changes []struct {
+		Turn struct {
+			ID    string `json:"id"`
+			Index int    `json:"index"`
+		} `json:"turn"`
+		Items []map[string]any `json:"items"`
+	} `json:"changes"`
+	Header struct {
+		Status string `json:"status"`
+		Live   bool   `json:"live"`
+	} `json:"header"`
+	Conversation json.RawMessage `json:"conversation"`
+}
+
+func decodeInc(t *testing.T, w *httptest.ResponseRecorder) incResp {
+	t.Helper()
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var r incResp
+	if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
+		t.Fatalf("%v: %s", err, w.Body.String())
+	}
+	return r
+}
+
+func appendRows(t *testing.T, path string, rows ...string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, r := range rows {
+		f.WriteString(r + "\n")
+	}
+}
+
+func TestIncrement_OnlyWhatChangedAfterTheCursor(t *testing.T) {
+	e := newEnv(t)
+	p := e.transcript(idleTurns(3))
+	snap := decode(t, e.get("/api/conversations/claude/"+sid))
+
+	same := decodeInc(t, e.get("/api/conversations/claude/"+sid+"?after="+snap.Cursor))
+	if same.Reset || len(same.Changes) != 0 || same.Cursor != snap.Cursor {
+		t.Fatalf("nothing happened: %+v", same)
+	}
+
+	appendRows(t, p, userRow("u9", 60, "a new question"))
+	inc := decodeInc(t, e.get("/api/conversations/claude/"+sid+"?after="+snap.Cursor))
+	if inc.Reset || inc.Cursor == snap.Cursor || len(inc.Changes) == 0 {
+		t.Fatalf("an appended row: %+v", inc)
+	}
+	last := inc.Changes[len(inc.Changes)-1]
+	if last.Turn.Index != 3 || len(last.Items) == 0 || inc.Header.Status != "ended" {
+		t.Fatalf("last change = %+v header %+v", last, inc.Header)
+	}
+	for _, c := range inc.Changes {
+		if c.Turn.Index < 2 {
+			t.Fatalf("turn %d changed? only the last settled turn and the new one may be reported", c.Turn.Index)
+		}
+		if c.Items == nil {
+			t.Fatalf("items must be a list, not null")
+		}
+	}
+	// from the new cursor again: quiet
+	if again := decodeInc(t, e.get("/api/conversations/claude/"+sid+"?after="+inc.Cursor)); len(again.Changes) != 0 || again.Reset {
+		t.Fatalf("after catching up: %+v", again)
+	}
+}
+
+func TestIncrement_AHeaderOnlyChangeStillAnswers(t *testing.T) {
+	e := newEnv(t)
+	p := e.transcript(idleTurns(1))
+	snap := decode(t, e.get("/api/conversations/claude/"+sid))
+	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "running", SeenAt: 1}}
+	inc := decodeInc(t, e.get("/api/conversations/claude/"+sid+"?after="+snap.Cursor))
+	if inc.Reset || inc.Cursor == snap.Cursor || inc.Header.Status != "running" || !inc.Header.Live {
+		t.Fatalf("a pane appeared: %+v", inc)
+	}
+}
+
+func TestIncrement_StaleCursorIsAResetWithASnapshot(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(3))
+	snap := decode(t, e.get("/api/conversations/claude/"+sid))
+	_, rev, _ := convfeed.ParseCursor(snap.Cursor)
+	for name, cur := range map[string]string{
+		"foreign epoch":   "ffffffffffffffff:1",
+		"future revision": fmt.Sprintf("%s:%d", strings.SplitN(snap.Cursor, ":", 2)[0], rev+100),
+	} {
+		w := e.get("/api/conversations/claude/" + sid + "?after=" + cur)
+		var r struct {
+			Reset        bool `json:"reset"`
+			Conversation struct {
+				Turns []any `json:"turns"`
+			} `json:"conversation"`
+			Cursor string `json:"cursor"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil || w.Code != 200 {
+			t.Fatalf("%s: %d %v %s", name, w.Code, err, w.Body.String())
+		}
+		if !r.Reset || len(r.Conversation.Turns) != 3 || r.Cursor != snap.Cursor {
+			t.Fatalf("%s: %+v", name, r)
+		}
+	}
+	// a fresh snapshot is not marked reset
+	var plain map[string]any
+	_ = json.Unmarshal(e.get("/api/conversations/claude/"+sid).Body.Bytes(), &plain)
+	if _, has := plain["reset"]; has {
+		t.Fatal("a plain snapshot must not carry reset")
+	}
+}
+
+// A rewritten file starts a new epoch: the old cursor is stale.
+func TestIncrement_RewrittenFileMakesTheCursorStale(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(3))
+	snap := decode(t, e.get("/api/conversations/claude/"+sid))
+	e.transcript(idleTurns(2)) // shorter: the file shrank
+	w := e.get("/api/conversations/claude/" + sid + "?after=" + snap.Cursor)
+	var r struct {
+		Reset bool `json:"reset"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &r)
+	if w.Code != 200 || !r.Reset {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+}
+
+// A catch-up that would pass the cap is a reset with a snapshot instead.
+func TestIncrement_TooBigACatchUpBecomesAReset(t *testing.T) {
+	e := newEnv(t)
+	p := e.transcript(idleTurns(1))
+	snap := decode(t, e.get("/api/conversations/claude/"+sid))
+	e.mod.maxBody = 4000
+	var rows []string
+	for i := 0; i < 30; i++ {
+		rows = append(rows, userRow(fmt.Sprintf("n%d", i), float64(100+i*2), strings.Repeat("padding ", 20)))
+		rows = append(rows, assistantRow(fmt.Sprintf("m%d", i), float64(101+i*2), obj{"type": "text", "text": strings.Repeat("reply ", 20)}))
+	}
+	appendRows(t, p, rows...)
+	w := e.get("/api/conversations/claude/" + sid + "?after=" + snap.Cursor)
+	var r struct {
+		Reset        bool `json:"reset"`
+		Conversation struct {
+			Turns []any `json:"turns"`
+		} `json:"conversation"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil || w.Code != 200 || !r.Reset || len(r.Conversation.Turns) == 0 {
+		t.Fatalf("%d %v: %.300s", w.Code, err, w.Body.String())
+	}
+	if w.Body.Len() > e.mod.maxBody {
+		t.Fatalf("the reset snapshot is %d bytes, over the cap %d", w.Body.Len(), e.mod.maxBody)
+	}
+}
+
+func itemIDs(t *testing.T, w *httptest.ResponseRecorder) (ids []string, s snapshot) {
+	t.Helper()
+	s = decode(t, w)
+	for _, tr := range s.Conversation.Turns {
+		for _, it := range tr.Items {
+			var x struct {
+				ID string `json:"id"`
+			}
+			_ = json.Unmarshal(it, &x)
+			ids = append(ids, x.ID)
+		}
+	}
+	return ids, s
+}
+
+func TestAround_CentresOnTheItemsTurnAndClampsAtTheEnds(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(20))
+	// ids of turn 10's items
+	_, mid := itemIDs(t, e.get("/api/conversations/claude/"+sid+"?turns=1&before=11"))
+	var one struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(mid.Conversation.Turns[0].Items[0], &one)
+	if one.ID == "" || mid.Conversation.Turns[0].Index != 10 {
+		t.Fatalf("setup: turn %+v item %q", mid.Conversation.Turns[0].Index, one.ID)
+	}
+	s := decode(t, e.get("/api/conversations/claude/"+sid+"?turns=5&around="+one.ID))
+	if s.Window.FirstIndex != 8 || s.Window.LastIndex != 12 || !s.Window.HasMoreBefore {
+		t.Fatalf("centred on turn 10: %+v", s.Window)
+	}
+	// near the start and near the end the window slides but keeps its size
+	_, first := itemIDs(t, e.get("/api/conversations/claude/"+sid+"?turns=1&before=1"))
+	var f struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(first.Conversation.Turns[0].Items[0], &f)
+	s = decode(t, e.get("/api/conversations/claude/"+sid+"?turns=5&around="+f.ID))
+	if s.Window.FirstIndex != 0 || s.Window.LastIndex != 4 || s.Window.HasMoreBefore {
+		t.Fatalf("at the start: %+v", s.Window)
+	}
+	_, lastS := itemIDs(t, e.get("/api/conversations/claude/"+sid+"?turns=1"))
+	var l struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(lastS.Conversation.Turns[0].Items[0], &l)
+	s = decode(t, e.get("/api/conversations/claude/"+sid+"?turns=5&around="+l.ID))
+	if s.Window.FirstIndex != 15 || s.Window.LastIndex != 19 {
+		t.Fatalf("at the end: %+v", s.Window)
+	}
+	// an unknown item
+	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"?around=nope"), 404); got != "item_not_found" {
+		t.Fatalf("code %q", got)
+	}
+}
+
+// Under the size cap the target turn is never the one that drops out.
+func TestAround_TheTargetSurvivesTheCap(t *testing.T) {
+	e := newEnv(t)
+	e.mod.maxBody = 6000
+	e.transcript(idleTurns(40))
+	_, early := itemIDs(t, e.get("/api/conversations/claude/"+sid+"?turns=1&before=3"))
+	var x struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(early.Conversation.Turns[0].Items[0], &x)
+	w := e.get("/api/conversations/claude/" + sid + "?turns=200&around=" + x.ID)
+	s := decode(t, w)
+	if w.Body.Len() > e.mod.maxBody {
+		t.Fatalf("body %d over cap %d", w.Body.Len(), e.mod.maxBody)
+	}
+	if s.Window.FirstIndex > 2 || s.Window.LastIndex < 2 {
+		t.Fatalf("turn 2 is not in the window %+v", s.Window)
+	}
+}
+
+// The item exists but its turn is over the cap and the item is among the dropped oldest: say so, never a window
+// that silently lacks what was asked for.
+func TestAround_AnItemDroppedByTheCapIsAnExplicitError(t *testing.T) {
+	e := newEnv(t)
+	e.mod.maxBody = 6000
+	e.transcript(stepsTurn(40, 300))
+	_, s := itemIDs(t, e.get("/api/conversations/claude/"+sid+"?turns=1"))
+	if s.Conversation.Turns[0].OmittedItems == 0 {
+		t.Fatal("setup: the turn must be over the cap")
+	}
+	// the very first item of the turn (the user message) is the oldest: it was dropped
+	e.mod.maxBody = maxBody
+	_, full := itemIDs(t, e.get("/api/conversations/claude/"+sid))
+	var first struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(full.Conversation.Turns[0].Items[0], &first)
+	e.mod.maxBody = 6000
+	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"?around="+first.ID), 422); got != "item_not_shown" {
+		t.Fatalf("code %q", got)
 	}
 }

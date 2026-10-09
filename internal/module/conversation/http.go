@@ -17,6 +17,8 @@ const (
 	maxTurns     = 200
 	// envelopeSlack covers what varies in the envelope around the turns (digits of the indexes and counts).
 	envelopeSlack = 512
+	// maxItemID bounds the item id an `around` names (ids are short; nothing legitimate is longer).
+	maxItemID = 256
 )
 
 var sessionIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -42,10 +44,19 @@ type windowJSON struct {
 }
 
 type snapshotJSON struct {
+	Reset        bool                   `json:"reset,omitempty"`
 	Conversation convmodel.Conversation `json:"conversation"`
 	Header       headerJSON             `json:"header"`
 	Window       windowJSON             `json:"window"`
 	Cursor       string                 `json:"cursor"`
+}
+
+func headerOf(h convfeed.Header) headerJSON {
+	var u *usageJSON
+	if h.Usage != nil {
+		u = &usageJSON{Model: h.Usage.Model, Effort: h.Usage.Effort}
+	}
+	return headerJSON{Title: h.Title, Status: h.Status, Backend: h.Backend, Usage: u, Live: h.Live}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body []byte) {
@@ -86,8 +97,30 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	if q.Has("after") || q.Has("around") {
-		writeError(w, http.StatusNotImplemented, "not_implemented") // increments and around: the next PR of this line
+	if q.Has("after") && q.Has("turns") {
+		writeError(w, http.StatusBadRequest, "turns_and_after") // an increment has no window to shape
+		return
+	}
+	if q.Has("after") && (q.Has("before") || q.Has("around")) {
+		writeError(w, http.StatusBadRequest, "bad_query")
+		return
+	}
+	if q.Has("around") && q.Has("before") {
+		writeError(w, http.StatusBadRequest, "before_and_around")
+		return
+	}
+	var afterEpoch string
+	var afterRev uint64
+	if q.Has("after") {
+		var err error
+		if afterEpoch, afterRev, err = convfeed.ParseCursor(q.Get("after")); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_cursor")
+			return
+		}
+	}
+	around := q.Get("around")
+	if q.Has("around") && (around == "" || len(around) > maxItemID) {
+		writeError(w, http.StatusBadRequest, "bad_around")
 		return
 	}
 	turns, ok := intParam(w, r, "turns", "bad_turns", defaultTurns, 1, maxTurns)
@@ -128,29 +161,55 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	hostID := m.core.Cfg.HostID
 	m.core.CfgMu.RUnlock()
 
-	build := func(h convfeed.Header, cursor string, turnList []convmodel.Turn, w convfeed.WindowResult) snapshotJSON {
-		var u *usageJSON
+	build := func(h convfeed.Header, cursor string, turnList []convmodel.Turn, win convfeed.WindowResult, reset bool) snapshotJSON {
 		var cu *convmodel.Usage
 		if h.Usage != nil {
-			u = &usageJSON{Model: h.Usage.Model, Effort: h.Usage.Effort}
 			cu = &convmodel.Usage{Model: h.Usage.Model, Effort: h.Usage.Effort}
 		}
 		return snapshotJSON{
+			Reset: reset,
 			Conversation: convmodel.Conversation{
 				Key:      convmodel.Key{HostID: hostID, Provider: "claude", SessionID: sid},
 				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Usage: cu, Turns: turnList,
 			},
-			Header: headerJSON{Title: h.Title, Status: h.Status, Backend: h.Backend, Usage: u, Live: h.Live},
-			Window: windowJSON{FirstIndex: w.FirstIndex, LastIndex: w.LastIndex, TotalTurns: w.TotalTurns, HasMoreBefore: w.HasMoreBefore},
+			Header: headerOf(h),
+			Window: windowJSON{FirstIndex: win.FirstIndex, LastIndex: win.LastIndex, TotalTurns: win.TotalTurns, HasMoreBefore: win.HasMoreBefore},
 			Cursor: cursor,
 		}
 	}
-	view := entry.View(turns, before, func(h convfeed.Header, cursor string) func([]byte) bool {
-		empty, _ := json.Marshal(build(h, cursor, []convmodel.Turn{}, convfeed.WindowResult{}))
+
+	reset := false
+	if q.Has("after") {
+		inc := entry.Increment(afterEpoch, afterRev)
+		if !inc.Stale {
+			body, ok := m.encodeIncrement(inc, hostID)
+			if ok {
+				writeJSON(w, http.StatusOK, body)
+				return
+			}
+		}
+		reset = true // a cursor of another epoch, or a catch-up too big for one answer: a fresh snapshot instead
+	}
+
+	envelope := func(h convfeed.Header, cursor string) func([]byte) bool {
+		empty, _ := json.Marshal(build(h, cursor, []convmodel.Turn{}, convfeed.WindowResult{}, reset))
 		return func(turnArray []byte) bool { // the array replaces the "[]" of the empty body
 			return len(empty)-2+len(turnArray)+envelopeSlack <= m.maxBody
 		}
-	})
+	}
+	var view convfeed.View
+	if q.Has("around") {
+		var found, shown bool
+		if view, found, shown = entry.ViewAround(turns, around, envelope); !found {
+			writeError(w, http.StatusNotFound, "item_not_found")
+			return
+		} else if !shown && !view.OverBudget {
+			writeError(w, http.StatusUnprocessableEntity, "item_not_shown") // its turn is over the cap and the item was dropped
+			return
+		}
+	} else {
+		view = entry.View(turns, before, envelope)
+	}
 	if view.OverBudget {
 		writeError(w, http.StatusInternalServerError, "too_large")
 		return
@@ -158,12 +217,55 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if view.Turns == nil {
 		view.Turns = []convmodel.Turn{}
 	}
-	body, err := json.Marshal(build(view.Header, view.Cursor, view.Turns, view.WindowResult))
+	body, err := json.Marshal(build(view.Header, view.Cursor, view.Turns, view.WindowResult, reset))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encode_failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+type turnHeaderJSON struct {
+	ID           string               `json:"id"`
+	Index        int                  `json:"index"`
+	StartedAt    int64                `json:"started_at"`
+	EndedAt      *int64               `json:"ended_at,omitempty"`
+	Outcome      convmodel.Outcome    `json:"outcome"`
+	Error        *convmodel.TurnError `json:"error,omitempty"`
+	OmittedItems int                  `json:"omitted_items,omitempty"`
+}
+
+type changeJSON struct {
+	Turn  turnHeaderJSON   `json:"turn"`
+	Items []convmodel.Item `json:"items"`
+}
+
+type incrementJSON struct {
+	Changes []changeJSON `json:"changes"`
+	Header  headerJSON   `json:"header"`
+	Cursor  string       `json:"cursor"`
+}
+
+// encodeIncrement is the answer to a valid cursor; ok is false when it would pass the body cap (the caller then
+// answers a reset with a snapshot, which has its own way to fit).
+func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string) (body []byte, ok bool) {
+	resp := incrementJSON{Changes: make([]changeJSON, 0, len(inc.Changes)), Header: headerOf(inc.Header), Cursor: inc.Cursor}
+	for _, c := range inc.Changes {
+		t := c.Turn
+		items := c.Items
+		if items == nil {
+			items = []convmodel.Item{}
+		}
+		resp.Changes = append(resp.Changes, changeJSON{
+			Turn:  turnHeaderJSON{ID: t.ID, Index: t.Index, StartedAt: t.StartedAt, EndedAt: t.EndedAt, Outcome: t.Outcome, Error: t.Error, OmittedItems: t.OmittedItems},
+			Items: items,
+		})
+	}
+	body, err := json.Marshal(resp)
+	if err != nil || len(body) > m.maxBody {
+		return nil, false
+	}
+	return body, true
 }
 
 // resolveError marks a resolver failure that is not "not found".

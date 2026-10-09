@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/wake/purdex/internal/convmodel"
+	"github.com/wake/purdex/internal/convmodel/ccnorm"
 )
 
 // WindowResult is a window of a conversation's turns.
@@ -47,6 +48,60 @@ func (e *Entry) View(turns, before int, envelope func(h Header, cursor string) f
 	defer e.mu.Unlock()
 	h, cur := e.headerLocked(), e.cursorLocked()
 	return View{WindowResult: e.windowLocked(turns, before, envelope(h, cur)), Header: h, Cursor: cur}
+}
+
+// ViewAround is View centred on the turn that holds the item itemID: the `turns` turns around it, as close to the middle
+// as the ends allow. ok is false when no turn holds the item. When the size budget drops the older turns and the target
+// is among them, the window is taken again with the target as its newest turn. shown is false when the item itself is
+// not in the window: its turn alone is over the cap and the oldest items that were dropped include it (the caller says
+// so instead of answering with a window that silently lacks what was asked for).
+func (e *Entry) ViewAround(turns int, itemID string, envelope func(h Header, cursor string) func([]byte) bool) (v View, ok, shown bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	all := e.conv().Turns
+	pos := -1
+find:
+	for i, t := range all {
+		for _, it := range t.Items {
+			if ccnorm.ItemID(it) == itemID {
+				pos = i
+				break find
+			}
+		}
+	}
+	if pos < 0 {
+		return View{}, false, false
+	}
+	start := pos - (turns-1)/2
+	if start+turns > len(all) {
+		start = len(all) - turns
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + turns
+	if end > len(all) {
+		end = len(all)
+	}
+	h, cur := e.headerLocked(), e.cursorLocked()
+	budget := envelope(h, cur)
+	w := e.windowLocked(turns, all[end-1].Index+1, budget)
+	if !w.OverBudget && (w.FirstIndex < 0 || all[pos].Index < w.FirstIndex) {
+		w = e.windowLocked(turns, all[pos].Index+1, budget)
+	}
+	v = View{WindowResult: w, Header: h, Cursor: cur}
+	target := all[pos].Index
+	for _, t := range w.Turns {
+		if t.Index != target {
+			continue
+		}
+		for _, it := range t.Items {
+			if ccnorm.ItemID(it) == itemID {
+				shown = true
+			}
+		}
+	}
+	return v, true, shown
 }
 
 func (e *Entry) windowLocked(turns, before int, budget func([]byte) bool) WindowResult {
