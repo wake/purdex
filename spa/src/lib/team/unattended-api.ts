@@ -117,7 +117,7 @@ export async function putUnattended(hostId: string, on: boolean): Promise<Unatte
  * be re-pointed to another daemon meanwhile; a write must go to the daemon its caller decided on. When the host changed
  * (or is gone) by the time the descriptor is there, nothing is sent: code `host_changed`.
  */
-async function descriptorFor(hostId: string): Promise<Awaited<ReturnType<typeof clientDescriptor>>> {
+export async function descriptorFor(hostId: string): Promise<Awaited<ReturnType<typeof clientDescriptor>>> {
   const identity = hostIdentityNow(hostId)
   if (identity === null) throw new ApprovalApiError(0, 'host_removed')
   const client = await clientDescriptor()
