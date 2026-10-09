@@ -129,6 +129,9 @@ type Module struct {
 	// afterTargetResolved, when set, runs in the commands route between the target's resolution and the apply (test
 	// seam for a consent revoked meanwhile). nil in production.
 	afterTargetResolved func()
+	// afterOrphanIdentity, when set, runs in the boot sweep between the identity read that found an orphan and the re-read before
+	// its kill (test seam for an owner that changed meanwhile). nil in production.
+	afterOrphanIdentity func(sessionName string)
 	// beforeKillSignal, when set, runs in the commands route between a kill's committed decision and its signal (test).
 	beforeKillSignal func()
 	stopCancel       context.CancelFunc
