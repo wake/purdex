@@ -68,6 +68,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"POST /api/push/devices", "GET /api/push/devices", "DELETE /api/push/devices/{device_id}",
 		"GET /api/profiles", "GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
 		"PUT /api/devices/self",
+		"GET /api/workbook/conversations/{provider}/{session_id}", "GET /api/workbook/entries",
 	}
 	got := make([]string, 0, len(deviceAllowed))
 	for p := range deviceAllowed {

@@ -50,6 +50,9 @@ var deviceAllowed = map[string]bool{
 	"PUT /api/profiles/{id}/sections/{section}": true,
 	// devices
 	"PUT /api/devices/self": true,
+	// session workbook: read-only
+	"GET /api/workbook/conversations/{provider}/{session_id}": true,
+	"GET /api/workbook/entries":                               true,
 }
 
 // nexEnginePattern is the one pattern that mounts the whole embedded engine; for a device the scope looks past the pattern.
