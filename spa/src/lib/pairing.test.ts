@@ -309,6 +309,7 @@ describe('mintAndPackage', () => {
     })
     const res = await mintAndPackage(input)
     expect(res).toMatchObject({ kind: 'failed', reason: 'capacity', revokeFailed: [air] })
+    expect((res as { pairingId?: string }).pairingId).toMatch(/^[0-9a-f-]{36}$/) // the id a later retry revokes
   })
 
   it('a relay that is not in the host store is never sent to', async () => {
@@ -411,6 +412,7 @@ describe('createPairingSession', () => {
     const s = await ready()
     await s.close()
     expect(s.getState()).toMatchObject({ phase: 'closed', revokeFailed: [air] })
+    expect(s.getState().pairingId).toMatch(/^[0-9a-f-]{36}$/)
   })
 
   it('a revoke that throws is reported in revokeFailed', async () => {

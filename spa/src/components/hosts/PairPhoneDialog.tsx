@@ -9,6 +9,7 @@ import { QrCode } from '../QrCode'
 import { useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useProfileStore } from '../../stores/useProfileStore'
+import { usePendingRevocationsStore } from '../../stores/usePendingRevocationsStore'
 import { formatTransferCode } from '../../lib/host-transfer-api'
 import { useHostLookResolver } from '../../lib/host-look'
 import { createPairingSession, type PairingSession, type PairingState } from '../../lib/pairing'
@@ -135,6 +136,12 @@ export function PairPhoneDialog({ onClose }: Props) {
     sessionRef.current = session
     setState(session.getState())
     unsubRef.current = session.subscribe(setState)
+    // A revoke that could not reach a host is retried later (spec §4.3). Recorded here, not in an effect, and this
+    // subscription outlives the dialog: closing never waits for the session, whose revoke may settle after unmount.
+    session.subscribe((st) => {
+      if (st.pairingId === undefined) return
+      for (const hostId of st.revokeFailed) usePendingRevocationsStore.getState().add(hostId, st.pairingId)
+    })
     void session.start()
   }
 

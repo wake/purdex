@@ -79,6 +79,8 @@ export interface PairingFailure {
   reason: PairingFailureReason
   /** Hosts whose tokens could not be revoked after the abort; the caller retries later. */
   revokeFailed: string[]
+  /** The pairing the minted tokens belong to (absent when nothing was minted): what a later retry revokes. */
+  pairingId?: string
 }
 
 export interface PairingReady {
@@ -211,8 +213,8 @@ function defaultLookOf(hosts: readonly HostConfig[]): (id: string) => HostLook {
   }
 }
 
-function failed(reason: PairingFailureReason, revokeFailed: string[] = []): PairingFailure {
-  return { kind: 'failed', reason, revokeFailed }
+function failed(reason: PairingFailureReason, revokeFailed: string[] = [], pairingId?: string): PairingFailure {
+  return pairingId === undefined ? { kind: 'failed', reason, revokeFailed } : { kind: 'failed', reason, revokeFailed, pairingId }
 }
 
 /**
@@ -263,7 +265,7 @@ export async function mintAndPackage(input: PairingInput, opts: { isCancelled?: 
 
   // Every host a token may exist on (a definite refusal means none).
   const touched = plans.filter((_, i) => outcomes[i].kind !== 'rejected').map((p) => p.host.id)
-  const abort = async (reason: PairingFailureReason): Promise<PairingFailure> => failed(reason, await revokeHosts(touched, pairingId))
+  const abort = async (reason: PairingFailureReason): Promise<PairingFailure> => failed(reason, await revokeHosts(touched, pairingId), pairingId)
 
   const rows: Record<string, unknown>[] = []
   const mintedHostIds: string[] = []
@@ -347,6 +349,8 @@ export interface PairingState {
   leftOut: LeftOut[]
   /** Hosts whose tokens must still be revoked (retry later). */
   revokeFailed: string[]
+  /** The pairing those tokens belong to; set together with `revokeFailed`, so a retry knows what to revoke. */
+  pairingId?: string
 }
 
 export interface PairingSession {
@@ -408,7 +412,7 @@ export function createPairingSession(input: PairingInput): PairingSession {
     const r = await call(input.relay.id, 'DELETE', `/api/host-transfer/pairings/${encodeURIComponent(result.code)}`)
     if (r.kind === 'res' && r.status === 204) {
       const revokeFailed = await revokeHosts(result.mintedHostIds, result.pairingId)
-      set({ phase: kind, revokeFailed: [...state.revokeFailed, ...revokeFailed] })
+      set({ phase: kind, revokeFailed: [...state.revokeFailed, ...revokeFailed], pairingId: result.pairingId })
     } else if (r.kind === 'res' && r.status === 409) {
       set({ phase: 'claimed', seenClaim: true })
     } else {
@@ -424,11 +428,11 @@ export function createPairingSession(input: PairingInput): PairingSession {
     }
     const res = await mintAndPackage(input, { isCancelled: () => closeRequested })
     if (res.kind === 'failed') {
-      if (closeRequested) set({ phase: 'closed', revokeFailed: res.revokeFailed })
-      else set({ phase: 'failed', failure: res, revokeFailed: res.revokeFailed })
+      if (closeRequested) set({ phase: 'closed', revokeFailed: res.revokeFailed, pairingId: res.pairingId })
+      else set({ phase: 'failed', failure: res, revokeFailed: res.revokeFailed, pairingId: res.pairingId })
       return
     }
-    set({ phase: 'ready', result: res, leftOut: res.leftOut, revokeFailed: res.revokeFailed })
+    set({ phase: 'ready', result: res, leftOut: res.leftOut, revokeFailed: res.revokeFailed, pairingId: res.pairingId })
     if (closeRequested) return // doClose is waiting for this and settles the entry next
     schedulePoll(res)
     deadlineTimer = setTimeout(() => void requestClose('expired'), Math.max(0, res.deadline - clock()))

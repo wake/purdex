@@ -157,6 +157,17 @@ describe('HostSidebar', () => {
     expect(onPairPhone).toHaveBeenCalledTimes(1)
   })
 
+  it('"Paired phones" calls onShowPairedPhones and, while showing, no host sub-page is highlighted (QP-3 task 4)', () => {
+    const onShow = vi.fn()
+    const { rerender } = render(<HostSidebar {...defaultProps} onShowPairedPhones={onShow} />)
+    fireEvent.click(screen.getByText('Paired phones'))
+    expect(onShow).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Overview').closest('button')?.className).toContain('text-accent')
+    rerender(<HostSidebar {...defaultProps} onShowPairedPhones={onShow} pairedPhonesActive />)
+    expect(screen.getByText('Paired phones').closest('button')).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByText('Overview').closest('button')?.className).not.toContain('text-accent')
+  })
+
   it('sub-page items are clickable and call onSelect', () => {
     render(<HostSidebar {...defaultProps} />)
     // The selected host is expanded by default, so sub-pages are visible

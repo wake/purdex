@@ -6,6 +6,7 @@ import * as profileApi from '../../lib/profile/api'
 import { useHostStore } from '../../stores/useHostStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useProfileStore } from '../../stores/useProfileStore'
+import { usePendingRevocationsStore } from '../../stores/usePendingRevocationsStore'
 import { PairPhoneDialog } from './PairPhoneDialog'
 
 const T0 = 1_700_000_000_000
@@ -283,5 +284,41 @@ describe('PairPhoneDialog closing', () => {
     unmount()
     expect(fake.session.close).toHaveBeenCalledTimes(1)
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('PairPhoneDialog pending revocations', () => {
+  beforeEach(() => usePendingRevocationsStore.setState({ items: [] }))
+
+  it('records every revokeFailed host with the pairing id as a pending revocation', async () => {
+    await renderDialog()
+    await clickCreate()
+    fake.push({ phase: 'ready', result: readyResult, revokeFailed: ['air'], pairingId: 'pid' })
+    expect(usePendingRevocationsStore.getState().items).toEqual([{ hostId: 'air', pairingId: 'pid' }])
+  })
+
+  it('records the hosts of a failed session too (the id comes with the state)', async () => {
+    await renderDialog()
+    await clickCreate()
+    fake.push({ phase: 'failed', failure: { kind: 'failed', reason: 'capacity', revokeFailed: ['air'] }, revokeFailed: ['air'], pairingId: 'pid2' })
+    expect(usePendingRevocationsStore.getState().has('air', 'pid2')).toBe(true)
+  })
+
+  it('still records a revoke that fails after the dialog was closed', async () => {
+    const { onClose } = await renderDialog()
+    await clickCreate()
+    fake.push({ phase: 'ready', result: readyResult })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Close' }).at(-1)!)
+    expect(onClose).toHaveBeenCalled()
+    fake.push({ phase: 'closed', revokeFailed: ['relay'], pairingId: 'pid' })
+    expect(usePendingRevocationsStore.getState().has('relay', 'pid')).toBe(true)
+  })
+
+  it('records nothing when no host failed, or the id is unknown', async () => {
+    await renderDialog()
+    await clickCreate()
+    fake.push({ phase: 'ready', result: readyResult, revokeFailed: [] })
+    fake.push({ revokeFailed: ['air'] })
+    expect(usePendingRevocationsStore.getState().items).toEqual([])
   })
 })

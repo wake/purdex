@@ -12,6 +12,7 @@ import { AddHostDialog } from './hosts/AddHostDialog'
 import { ReceiveHostsDialog } from './hosts/ReceiveHostsDialog'
 import { ShareHostsDialog } from './hosts/ShareHostsDialog'
 import { PairPhoneDialog } from './hosts/PairPhoneDialog'
+import { PairedPhonesSection } from './hosts/PairedPhonesSection'
 
 export type { HostSubPage } from '../lib/host-routes'
 
@@ -266,6 +267,8 @@ export function HostPage({ isActive }: PaneRendererProps) {
   const [showShare, setShowShare] = useState(false)
   const [showPair, setShowPair] = useState(false)
   const [showReceive, setShowReceive] = useState(false)
+  // 已配對的手機 is across hosts, not a sub-page of one: it takes the content area until a host sub-page is picked.
+  const [showPaired, setShowPaired] = useState(false)
   const t = useI18nStore((s) => s.t)
 
   // R2 attacker A2 fix — snapshot module-scoped lastSelection ONCE per render
@@ -368,14 +371,19 @@ export function HostPage({ isActive }: PaneRendererProps) {
       <HostSidebar
         selectedHostId={selection?.hostId ?? ''}
         selectedSubPage={sidebarSubPage}
-        onSelect={(hostId, subPage) => setLocation(buildHostPath({ hostId, subPage }), { replace: true })}
+        onSelect={(hostId, subPage) => {
+          setShowPaired(false)
+          setLocation(buildHostPath({ hostId, subPage }), { replace: true })
+        }}
         onAddHost={() => setShowAddHost(true)}
         onShareHosts={() => setShowShare(true)}
         onReceiveHosts={() => setShowReceive(true)}
         onPairPhone={() => setShowPair(true)}
+        onShowPairedPhones={() => setShowPaired(true)}
+        pairedPhonesActive={showPaired}
       />
       <div className="flex-1 overflow-y-auto p-6">
-        {renderContent()}
+        {showPaired ? <PairedPhonesSection /> : renderContent()}
       </div>
       {showAddHost && <AddHostDialog onClose={() => setShowAddHost(false)} />}
       {showShare && <ShareHostsDialog onClose={() => setShowShare(false)} />}
