@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.630] - 2026-10-09
+
+> 只動 daemon 與 CLI：**要部署 daemon**；這一版**刻意不跑 `pdx setup`**（skill 的收編說明等 U24 第一批全部完成、驗收時再一起裝），SPA、Electron 不必更新。這一版大幅降低 daemon 的 CPU 用量，並加上釋放 member、收編與釋放的 CLI。
+
+### Changed：daemon 的掃描不再一直呼叫 `ps`（#2153，#2138，介面線）
+
+- daemon 每 2 秒掃一次 session，原本對每個 session、以及往上追的每一層父行程都各呼叫一次 `ps`，session 越多越吃 CPU（mlab 上 daemon 長時間約佔 30–45% 的 CPU）。現在每輪只讀一次行程表，所有查詢都從那一份回答。
+
+### Added：釋放 member、結束被收編的 member — U24 PL-1d2（#2150）
+
+- lead 可以把 member 釋放出 team：它繼續以一般 session 執行，並收到通知。
+- 結束一個被收編的 member 時，只停止它的 Claude Code 行程（送出前會再確認行程身分），它的 tmux session 與 shell 都留著；派出的 member 照舊結束它自己的 tmux session。
+- 已被釋放的 member 不能再被 `pdx kill`。
+
+### Added：`pdx adopt`、`pdx release` 指令 — U24 PL-1e（#2154）
+
+- `pdx adopt <ref>`：把這台主機上執行中的 session 收進自己的 team，等待 App 核准（無人值守時立即核准）。兩個 session 剛好同一個 ref 時會請你改用 session id。
+- `pdx release <ref>`：釋放 member。
+- pdx-team skill 的對應說明（包含 lead 自己判斷要結束 member 時，必須先問使用者「釋出／關閉／保留」）會在下一次 `pdx setup` 生效。
+
 ## [1.0.0-alpha.629] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版讓手機推播在 mlab 上就緒，並加上收編與釋放 member 時發給對方的通知（目前還沒有入口會觸發）。
