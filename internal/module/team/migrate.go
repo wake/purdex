@@ -100,6 +100,22 @@ func migrateSpawnTask(db *sql.DB) error {
 	return nil
 }
 
+// migrateMemberLastTurn gives team_members the member's last turn (plan T-3a2): the
+// summary and its (at, seq) stamp, written when the member has no in_progress task. A row
+// written before it reads no turn. Never reset on a relay (resetMemberUsage leaves it).
+func migrateMemberLastTurn(db *sql.DB) error {
+	for _, c := range [][2]string{
+		{"last_turn_summary", "TEXT NOT NULL DEFAULT ''"},
+		{"last_turn_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"last_turn_seq", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := ensureColumn(db, "team_members", c[0], c[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // afterReportsPKRead, when set, runs in migrateReportsPK between the unlocked
 // check that found the old key and the write lock; tests let a second opener
 // migrate there. nil in production.
