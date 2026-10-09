@@ -146,6 +146,11 @@ func (s *Store) CloseMemberRelayApproved(id string, c Close) (a team.Approval, w
 	if err := lockApproval(tx, id); err != nil {
 		return fail(err)
 	}
+	if cur, _, err := getRowIn(tx, id); err != nil {
+		return fail(err)
+	} else if cur.State != team.StateOpen { // a deny, a timeout or an abandonment committed first: a lost CAS, not an error
+		return cur, false, "", nil
+	}
 	op, ok, err := opOfRowIn(tx, id)
 	if err != nil {
 		return fail(err)

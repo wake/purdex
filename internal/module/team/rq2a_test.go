@@ -402,3 +402,18 @@ func TestCloseMemberRelayApproved_ASpendIsNeverAClicks(t *testing.T) {
 		t.Fatalf("a non-Auto close spent: spent=%v pool=%d", spent, f.poolLeft("sid-1"))
 	}
 }
+
+// A deny that committed before the approve's transaction: the approve loses the CAS (won=false, no error), nothing is
+// spent, the op stays cancelled. Mutation gate: drop the row-state read → an error (red).
+func TestCloseMemberRelayApproved_AfterADenyIsALostCASNotAnError(t *testing.T) {
+	f := newFixture(t)
+	op, row := f.awaitingMemberRelay(rid(200), rid(201))
+	f.setPool("sid-1", 2)
+	f.decide(row.ID, "deny")
+	spent := false
+	c := Close{State: team.StateApproved, DecidedAt: f.clock.Load(), Auto: true, SpendQuota: true, SpentOut: &spent}
+	a, won, refused, err := f.m.store.CloseMemberRelayApproved(row.ID, c)
+	if err != nil || won || refused != "" || a.State != team.StateDenied || spent || f.poolLeft("sid-1") != 2 || f.op(op.ID).State != team.RelayCancelled {
+		t.Fatalf("approve after a deny: row=%s won=%v refused=%q err=%v spent=%v op=%s", a.State, won, refused, err, spent, f.op(op.ID).State)
+	}
+}
