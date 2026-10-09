@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -399,10 +401,32 @@ func labelOf(c *team.Client) string {
 	return c.Label
 }
 
+// chatReplyMax is the longest reply (in runes, after trimming) a phone can
+// send back instead of picking answers.
+const chatReplyMax = 4000
+
+// chatReply validates the person's reply to a hook_ask: trimmed, 1..chatReplyMax
+// runes, valid UTF-8, no control characters except \n and \t (so \r, NUL and
+// ESC are refused). Format characters (zero-width joiners in emoji) stay legal,
+// which unicode.IsPrint alone would refuse.
+func chatReply(raw string) (string, bool) {
+	msg := strings.TrimSpace(raw)
+	if msg == "" || !utf8.ValidString(msg) || utf8.RuneCountInString(msg) > chatReplyMax {
+		return "", false
+	}
+	for _, r := range msg {
+		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+			return "", false
+		}
+	}
+	return msg, true
+}
+
 // decideHook is handleDecide's branch for a hook row (spec §6.6 steps 4–5):
 // the remote client's answer rides in `hook`; a terminal_only card is
-// read-only; hook_ask takes approve with answers only, hook_permission takes
-// approve (allow) or deny. The close goes through the same closeAs.
+// read-only; hook_ask takes approve with answers, or deny with the person's
+// reply in hook.message (never both), hook_permission takes approve (allow)
+// or deny. The close goes through the same closeAs.
 func (m *Module) decideHook(w http.ResponseWriter, a team.Approval, req team.DecideRequest, state team.State, client team.Client) {
 	if isTerminalOnly(a) {
 		m.writeErr(w, http.StatusConflict, team.ErrTerminalOnly, "這題只能在終端機回答", &a)
@@ -414,8 +438,17 @@ func (m *Module) decideHook(w http.ResponseWriter, a team.Approval, req team.Dec
 	}
 	switch a.Kind {
 	case team.KindHookAsk:
+		if state == team.StateDenied {
+			msg, ok := chatReply(hook.Message)
+			if !ok || len(hook.Answers) > 0 {
+				m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a denied hook_ask needs hook.message (1-4000 printable runes, \\n and \\t allowed) and no hook.answers", nil)
+				return
+			}
+			hook = &team.HookDecision{Message: msg}
+			break
+		}
 		if state != team.StateApproved {
-			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a hook_ask is answered with decision approve and hook.answers", nil)
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a hook_ask is answered with decision approve and hook.answers, or deny and hook.message", nil)
 			return
 		}
 		if len(hook.Answers) == 0 {
