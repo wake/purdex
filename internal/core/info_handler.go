@@ -50,6 +50,7 @@ var capabilities = []string{
 	"team.name.v1",           // lead request team_name, grant.team_name, Team / TeamRoster team_name
 	"team.tasks.v1",          // /api/team/tasks…, task routes (T-1b)
 	"team.label.v1",          // lead request team_label, grant.team_label, Team / TeamRoster team_label
+	"conversations.v1",       // GET /api/conversations/{provider}/{session_id} (snapshot, ?after= increments, ?around=) and .../subagents/{agent_id}
 }
 
 // handleInfo returns daemon metadata: host ID, tmux instance, version, OS, and architecture.

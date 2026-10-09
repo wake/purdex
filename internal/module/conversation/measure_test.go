@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,6 +38,18 @@ func TestMeasure_RealTranscriptRequests(t *testing.T) {
 	}
 	t.Logf("transcript %d bytes", len(data))
 	time1("first request (reads from zero)", "/api/conversations/claude/"+sid)
+	var first struct {
+		Cursor string `json:"cursor"`
+	}
+	_ = json.Unmarshal(e.get("/api/conversations/claude/"+sid).Body.Bytes(), &first)
+	time1("increment, nothing new", "/api/conversations/claude/"+sid+"?after="+first.Cursor)
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(userRow("zz-measure", 1e6, "one more") + "\n")
+	f.Close()
+	time1("increment, one row appended", "/api/conversations/claude/"+sid+"?after="+first.Cursor)
 	time1("second request (nothing new)", "/api/conversations/claude/"+sid)
 	time1("turns=200", "/api/conversations/claude/"+sid+"?turns=200")
 	time1("turns=200&before=30", "/api/conversations/claude/"+sid+"?turns=200&before=30")

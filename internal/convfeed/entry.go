@@ -381,6 +381,33 @@ type TurnChange struct {
 func (e *Entry) ChangesSince(rev uint64) []TurnChange {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.changesSinceLocked(rev)
+}
+
+// Increment is what happened after a cursor, with the header and the new cursor of the same instant. Stale: the cursor
+// is not this entry's (another epoch — a restart, an eviction, a rewritten file — or a revision from the future), so
+// there are no changes to give and the caller sends a fresh snapshot.
+type Increment struct {
+	Stale   bool
+	Changes []TurnChange
+	Header  Header
+	Cursor  string
+}
+
+// Increment returns the changes after the cursor (epoch, rev) under one hold of the lock.
+func (e *Entry) Increment(epoch string, rev uint64) Increment {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	inc := Increment{Header: e.headerLocked(), Cursor: e.cursorLocked()}
+	if epoch != e.epoch || rev > e.rev {
+		inc.Stale = true
+		return inc
+	}
+	inc.Changes = e.changesSinceLocked(rev)
+	return inc
+}
+
+func (e *Entry) changesSinceLocked(rev uint64) []TurnChange {
 	c := e.conv()
 	var out []TurnChange
 	for _, t := range c.Turns {
