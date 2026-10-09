@@ -10,7 +10,7 @@ import (
 func runes(s string) int { return utf8.RuneCountInString(s) }
 
 func TestParseModelJSON(t *testing.T) {
-	good := `{"skip":false,"thing":"P6-5 接力指令","push":"審查問題已修","entry":"做了一件事。理由。結果。","status":"等 lead 放行","thing_done":true}`
+	good := `{"skip":false,"thing":"P6-5 接力指令","push":"審查問題已修","entry":"做了一件事。理由。結果。","status":"等 lead 放行","thing_done":true,"todos":{"done":[],"dropped":[],"add":[]}}`
 	for name, in := range map[string]string{
 		"plain":           good,
 		"fenced":          "```json\n" + good + "\n```",
@@ -42,7 +42,7 @@ func TestParseModelJSON_FormatErrors(t *testing.T) {
 		}
 	}
 	// a skip needs nothing else
-	if s, err := ParseModelJSON(`{"skip":true,"thing":"","push":"","entry":"","status":"前情","thing_done":false}`); err != nil || !s.Skip {
+	if s, err := ParseModelJSON(`{"skip":true,"thing":"","push":"","entry":"","status":"前情","thing_done":false,"todos":{"done":[1],"dropped":[],"add":[]}}`); err != nil || !s.Skip {
 		t.Errorf("skip: %+v err=%v", s, err)
 	}
 }
@@ -137,7 +137,7 @@ func TestParseModelJSON_DuplicateMemberIsAFormatError(t *testing.T) {
 // §5.3 names six fields; leaving one out is a malformed answer, not an empty value.
 // Mutation gate: drop the presence loop → red.
 func TestParseModelJSON_MissingFieldIsAFormatError(t *testing.T) {
-	full := map[string]string{"skip": `false`, "thing": `"t"`, "push": `"p"`, "entry": `"e"`, "status": `"s"`, "thing_done": `false`}
+	full := map[string]string{"skip": `false`, "thing": `"t"`, "push": `"p"`, "entry": `"e"`, "status": `"s"`, "thing_done": `false`, "todos": `{"done":[],"dropped":[],"add":[]}`}
 	for drop := range full {
 		var parts []string
 		for k, v := range full {
@@ -157,7 +157,7 @@ func TestParseModelJSON_MissingFieldIsAFormatError(t *testing.T) {
 
 func TestParseModelJSON_SizeLimit(t *testing.T) {
 	obj := func(entry string) string {
-		return `{"skip":false,"thing":"t","push":"","entry":"` + entry + `","status":"","thing_done":false}`
+		return `{"skip":false,"thing":"t","push":"","entry":"` + entry + `","status":"","thing_done":false,"todos":{"done":[],"dropped":[],"add":[]}}`
 	}
 	fixed := len(obj(""))
 	atLimit := obj(strings.Repeat("a", maxModelJSON-fixed))

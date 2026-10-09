@@ -25,7 +25,7 @@ const ReasonStopped = "stopped"
 
 const (
 	dbFileMode    = 0o600
-	schemaVersion = 1
+	schemaVersion = 2
 )
 
 // Entry is one summarised turn (spec §6). Every time is unix milliseconds.
@@ -52,7 +52,19 @@ type Entry struct {
 	LatencyMS   int64
 	CreatedAt   int64
 	UpdatedAt   int64
+
+	// v2: the kind (turn | refresh) and the tokens of the call(s); 0 = none recorded.
+	Kind           string
+	UsageIn        int64
+	UsageOut       int64
+	UsageCacheRead int64
 }
+
+// Entry kinds.
+const (
+	KindTurn    = "turn"
+	KindRefresh = "refresh"
+)
 
 // Output is what a finished call leaves on its entry. An ok entry takes every field; a failed or skipped one only its
 // latency (its thing / push, if the push line was already written, stay as they are).
@@ -107,73 +119,12 @@ func OpenStore(path string) (*Store, error) {
 	return &Store{db: db, now: func() int64 { return time.Now().UnixMilli() }}, nil
 }
 
-// migrate creates the schema at version 1. A later change adds a step keyed on the stored version; never edit this one
-// (the table exists on a host as soon as the module has run).
-func migrate(db *sql.DB) error {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`); err != nil {
-		return fmt.Errorf("migrate workbook db: %w", err)
-	}
-	var have int
-	err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&have)
-	if errors.Is(err, sql.ErrNoRows) {
-		have = 0
-	} else if err != nil {
-		return fmt.Errorf("migrate workbook db: %w", err)
-	}
-	if have > schemaVersion {
-		return fmt.Errorf("migrate workbook db: schema version %d is newer than this daemon's %d", have, schemaVersion)
-	}
-	if have < 1 {
-		// One transaction: a failure half way leaves no tables behind, so the next start retries from nothing.
-		tx, err := db.Begin()
-		if err != nil {
-			return fmt.Errorf("migrate workbook db: %w", err)
-		}
-		defer tx.Rollback()
-		if _, err := tx.Exec(`
-			CREATE TABLE wb_entries (
-				id INTEGER PRIMARY KEY,
-				conv_key TEXT NOT NULL,
-				host_id TEXT NOT NULL,
-				provider TEXT NOT NULL,
-				session_id TEXT NOT NULL,
-				turn_id TEXT NOT NULL,
-				turn_at INTEGER NOT NULL,
-				turn_seq INTEGER NOT NULL,
-				state TEXT NOT NULL,
-				reason TEXT NOT NULL DEFAULT '',
-				thing TEXT, push TEXT, entry TEXT,
-				thing_done INTEGER NOT NULL DEFAULT 0,
-				push_ready_at INTEGER NOT NULL DEFAULT 0,
-				team_id TEXT, role TEXT, ref TEXT,
-				prompt_ver INTEGER NOT NULL,
-				latency_ms INTEGER,
-				created_at INTEGER NOT NULL,
-				updated_at INTEGER NOT NULL,
-				UNIQUE (session_id, turn_id));
-			CREATE INDEX wb_entries_conv ON wb_entries (conv_key, id);
-			CREATE INDEX wb_entries_turn_at ON wb_entries (turn_at);
-			CREATE TABLE wb_status (
-				conv_key TEXT PRIMARY KEY,
-				status TEXT NOT NULL,
-				entry_id INTEGER NOT NULL,
-				session_id TEXT NOT NULL,
-				updated_at INTEGER NOT NULL);
-			INSERT INTO schema_version (version) VALUES (1);`); err != nil {
-			return fmt.Errorf("migrate workbook db: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("migrate workbook db: %w", err)
-		}
-	}
-	return nil
-}
-
 func (s *Store) Close() error { return s.db.Close() }
 
 const entryCols = `id, conv_key, host_id, provider, session_id, turn_id, turn_at, turn_seq, state, reason,
 	COALESCE(thing, ''), COALESCE(push, ''), COALESCE(entry, ''), thing_done, push_ready_at,
-	COALESCE(team_id, ''), COALESCE(role, ''), COALESCE(ref, ''), prompt_ver, COALESCE(latency_ms, 0), created_at, updated_at`
+	COALESCE(team_id, ''), COALESCE(role, ''), COALESCE(ref, ''), prompt_ver, COALESCE(latency_ms, 0), created_at, updated_at,
+	kind, COALESCE(usage_in, 0), COALESCE(usage_out, 0), COALESCE(usage_cache_read, 0)`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -181,7 +132,8 @@ func scanEntry(r scanner) (Entry, error) {
 	var e Entry
 	var done int
 	err := r.Scan(&e.ID, &e.ConvKey, &e.HostID, &e.Provider, &e.SessionID, &e.TurnID, &e.TurnAt, &e.TurnSeq, &e.State, &e.Reason,
-		&e.Thing, &e.Push, &e.Entry, &done, &e.PushReadyAt, &e.TeamID, &e.Role, &e.Ref, &e.PromptVer, &e.LatencyMS, &e.CreatedAt, &e.UpdatedAt)
+		&e.Thing, &e.Push, &e.Entry, &done, &e.PushReadyAt, &e.TeamID, &e.Role, &e.Ref, &e.PromptVer, &e.LatencyMS, &e.CreatedAt, &e.UpdatedAt,
+		&e.Kind, &e.UsageIn, &e.UsageOut, &e.UsageCacheRead)
 	e.ThingDone = done != 0
 	return e, err
 }
@@ -212,10 +164,14 @@ func (s *Store) InsertPending(e Entry) (id int64, inserted bool, err error) {
 		return 0, false, errors.New("insert workbook entry: conversation key, session and turn id are required")
 	}
 	now := s.now()
+	kind := e.Kind
+	if kind == "" {
+		kind = KindTurn
+	}
 	res, err := s.db.Exec(`INSERT INTO wb_entries (conv_key, host_id, provider, session_id, turn_id, turn_at, turn_seq, state,
-			team_id, role, ref, prompt_ver, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?) ON CONFLICT (session_id, turn_id) DO NOTHING`,
-		e.ConvKey, e.HostID, e.Provider, e.SessionID, e.TurnID, e.TurnAt, e.TurnSeq, e.TeamID, e.Role, e.Ref, e.PromptVer, now, now)
+			team_id, role, ref, prompt_ver, created_at, updated_at, kind)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session_id, turn_id) DO NOTHING`,
+		e.ConvKey, e.HostID, e.Provider, e.SessionID, e.TurnID, e.TurnAt, e.TurnSeq, e.TeamID, e.Role, e.Ref, e.PromptVer, now, now, kind)
 	if err != nil {
 		return 0, false, fmt.Errorf("insert workbook entry: %w", err)
 	}

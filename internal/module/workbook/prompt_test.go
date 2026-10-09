@@ -7,31 +7,42 @@ import (
 	"testing"
 )
 
-// docBlocks are the two fenced ```text blocks of the prompt document: the system prompt and the re-write prompt.
-func docBlocks(t *testing.T) (system, rewrite string) {
+// docBlocks are the fenced ```text blocks of a prompt document, in order.
+func docBlocks(t *testing.T, file string, want int) []string {
 	t.Helper()
-	doc, err := os.ReadFile("../../../docs/specs/2026-10-09-session-workbook-prompt.md")
+	doc, err := os.ReadFile("../../../docs/specs/" + file)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := regexp.MustCompile("(?s)```text\n(.*?)\n```").FindAllSubmatch(doc, -1)
-	if len(m) != 2 {
-		t.Fatalf("the prompt document has %d text blocks, want 2", len(m))
+	if len(m) != want {
+		t.Fatalf("%s has %d text blocks, want %d", file, len(m), want)
 	}
-	return string(m[0][1]), string(m[1][1])
+	out := make([]string, len(m))
+	for i := range m {
+		out[i] = string(m[i][1])
+	}
+	return out
 }
 
 // The shipped prompts are the measured ones, byte for byte. Mutation gate: change one character of a prompt → red.
 func TestPrompts_EqualTheDocumentBlocks(t *testing.T) {
-	system, rewrite := docBlocks(t)
-	if SystemPrompt != system {
-		t.Errorf("SystemPrompt differs from the document block (%d vs %d bytes)", len(SystemPrompt), len(system))
+	b := docBlocks(t, "2026-10-10-session-workbook-prompt-v2.md", 3)
+	for name, pair := range map[string][2]string{"SystemPrompt": {SystemPrompt, b[0]}, "RewritePrompt": {RewritePrompt, b[1]}, "RefreshPrompt": {RefreshPrompt, b[2]}} {
+		if pair[0] != pair[1] {
+			t.Errorf("%s differs from the document block (%d vs %d bytes)", name, len(pair[0]), len(pair[1]))
+		}
 	}
-	if RewritePrompt != rewrite {
-		t.Errorf("RewritePrompt differs from the document block (%d vs %d bytes)", len(RewritePrompt), len(rewrite))
-	}
-	if PromptVersion != 1 {
+	if PromptVersion != 2 {
 		t.Errorf("PromptVersion = %d", PromptVersion)
+	}
+}
+
+// The v1 prompts stay what they were: the history of what prompt_ver 1 entries were written with.
+func TestPromptsV1_EqualTheirDocumentBlocks(t *testing.T) {
+	b := docBlocks(t, "2026-10-09-session-workbook-prompt.md", 2)
+	if SystemPromptV1 != b[0] || RewritePromptV1 != b[1] {
+		t.Error("a v1 prompt differs from its document")
 	}
 }
 
@@ -65,7 +76,7 @@ func TestWritePromptFiles_BytesModeAndOverwrite(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stale := filepath.Join(dir, "prompt-v1.txt")
+	stale := filepath.Join(dir, "prompt-v2.txt")
 	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +84,7 @@ func TestWritePromptFiles_BytesModeAndOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for path, want := range map[string]string{p.System: SystemPrompt, p.Rewrite: RewritePrompt} {
+	for path, want := range map[string]string{p.System: SystemPrompt, p.Rewrite: RewritePrompt, p.Refresh: RefreshPrompt} {
 		got, err := os.ReadFile(path)
 		if err != nil || string(got) != want {
 			t.Fatalf("%s: err=%v, content differs from the constant", filepath.Base(path), err)
@@ -83,7 +94,7 @@ func TestWritePromptFiles_BytesModeAndOverwrite(t *testing.T) {
 			t.Errorf("%s is %o, want 600", filepath.Base(path), fi.Mode().Perm())
 		}
 	}
-	if p.System != stale || filepath.Base(p.Rewrite) != "rewrite-v1.txt" {
+	if filepath.Base(p.System) != "prompt-v2.txt" || filepath.Base(p.Rewrite) != "rewrite-v2.txt" || filepath.Base(p.Refresh) != "refresh-v2.txt" {
 		t.Fatalf("paths = %+v", p)
 	}
 	// the dir itself is private
