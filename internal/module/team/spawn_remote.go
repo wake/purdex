@@ -137,17 +137,24 @@ func (m *Module) startRemoteSpawn(id string) {
 }
 
 // killEndedSpawnSessions kills the tmux sessions of the forwarded ops a committed `end` failed (#2327), each only under
-// the generation it was created in. A failure to list them is logged: the lead host's retry of the same command lists
-// again.
-func (m *Module) killEndedSpawnSessions(leadHost, teamID string) {
+// the generation it was created in. An error (listing them, or the kill itself) is returned so the handler answers a
+// retryable failure and the lead host sends the same command again, which lists them again; a generation that moved or
+// a session already gone is not an error.
+func (m *Module) killEndedSpawnSessions(leadHost, teamID string) error {
 	ops, err := m.store.AbandonedSpawnSessions(leadHost, teamID)
 	if err != nil {
-		m.logf("[team] end of team %s from %s: %v", teamID, leadHost, err)
-		return
+		return err
 	}
+	var first error
 	for _, op := range ops {
-		m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
+		if _, err := m.tmux.KillSessionIfInstance(op.TmuxID, op.TmuxInstance); err != nil {
+			m.logf("[team] spawn %s: tmux session %s not killed on end: %v", op.ID, op.TmuxID, err)
+			if first == nil {
+				first = err
+			}
+		}
 	}
+	return first
 }
 
 // validSpawnCommand is the shape of a `spawn` command ("" = fine).

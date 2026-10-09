@@ -45,6 +45,39 @@ func TestRemoteEnd_AHostWithOnlyARunningSpawnGetsTheEnd(t *testing.T) {
 	if len(ends) != 2 || ends[0].HostID != "hostM" || ends[1].HostID != "hostN" {
 		t.Fatalf("ends = %+v, want hostM and hostN", ends)
 	}
+	// the lead's own record of those ops closes with the team; a finished one is left as it was
+	for id, want := range map[string]string{"spawn-n": "failed", "spawn-m": "failed", "spawn-o": "done"} {
+		if st, _ := f.spawnState(id); st != want {
+			t.Fatalf("%s = %s, want %s", id, st, want)
+		}
+	}
+}
+
+// A kill that fails is not an answered `end`: the lead host retries the same command, which kills it then.
+func TestRemoteSpawn_TeamEndRetriesAFailedKill(t *testing.T) {
+	f, root := remoteSpawnFixture(t)
+	waitReached, releaseRunner := holdAt(f, team.StepLaunched)
+	if code, body := f.postCmd(leadPrincipal(), spawnCommand(cmdUUID1, root)); code != http.StatusOK {
+		t.Fatalf("spawn = %d %s", code, body)
+	}
+	waitReached()
+	f.tmux.FailKillIfInstance = true
+	if code, body := f.postCmd(leadPrincipal(), endOf(cmdUUID3, "team-L")); code != http.StatusServiceUnavailable {
+		t.Fatalf("end with a failing kill = %d %s, want 503", code, body)
+	}
+	releaseRunner()
+	f.m.spawnWG.Wait()
+	f.tmux.FailKillIfInstance = false
+	name, _ := team.SpawnTmuxName(cmdUUID1)
+	if !f.tmux.HasSession(name) {
+		t.Skip("the runner's own cleanup already took the session")
+	}
+	if code, body := f.postCmd(leadPrincipal(), endOf(cmdUUID3, "team-L")); code != http.StatusOK {
+		t.Fatalf("retried end = %d %s", code, body)
+	}
+	if f.tmux.HasSession(name) {
+		t.Fatal("the retried end did not kill the session")
+	}
 }
 
 func endOf(id, teamID string) team.TeamCommand {

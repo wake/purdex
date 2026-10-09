@@ -243,6 +243,12 @@ func (s *Store) EndTeamWithCommands(t team.Team, reason string, at int64, lead t
 	if _, err := s.enqueueTeamLevelTx(tx, t, CmdEnd, lead, nil, newID, at); err != nil {
 		return false, err
 	}
+	// the forwarded spawns still running are over with the team (the member host aborts them on the end above): close them
+	// here too, after the hosts were read, so a replayed spawn request does not keep answering `running` (#2327)
+	if _, err := tx.Exec(`UPDATE remote_spawns SET state = 'failed', reason = ?, updated_at = ? WHERE team_id = ? AND state = 'running'`,
+		team.SpawnReasonAbandoned, at, t.ID); err != nil {
+		return false, err
+	}
 	return true, tx.Commit()
 }
 

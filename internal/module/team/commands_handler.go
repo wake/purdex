@@ -155,7 +155,11 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		m.startRemoteSpawn(cmd.ID)
 	}
 	if cmd.Kind == team.CommandEnd {
-		m.killEndedSpawnSessions(entry.HostID, cmd.TeamID)
+		if err := m.killEndedSpawnSessions(entry.HostID, cmd.TeamID); err != nil {
+			m.logf("[team] end %s: %v", cmd.ID, err)
+			m.writeCommandErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "could not stop the team's unregistered spawns; retry")
+			return
+		}
 	}
 	if cmd.Kind == team.CommandKill && plan.Consent && killedOutcome(res.Body) {
 		// Decided and logged (or replayed): now the signal, which a failure here leaves to the lead host's retry of this
