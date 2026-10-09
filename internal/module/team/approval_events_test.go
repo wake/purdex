@@ -169,3 +169,38 @@ func TestSubscribeApprovals_APanickingCallbackDoesNotStopTheStream(t *testing.T)
 		t.Fatalf("ops = %+v", ops)
 	}
 }
+
+// unsubscribe means no more callbacks: events already waiting in the subscriber's queue are not delivered after it (only
+// the one callback already running may finish). A select with both stop and an event ready picks at random, so one
+// attempt would let a broken drain slip through half the time: repeat it.
+func TestSubscribeApprovals_UnsubscribeDropsWhatIsAlreadyQueued(t *testing.T) {
+	f := newFixture(t)
+	for round := 0; round < 25; round++ {
+		release := make(chan struct{})
+		entered := make(chan struct{})
+		var calls int
+		var mu sync.Mutex
+		_, unsub := f.m.SubscribeApprovals(func(string, team.Approval) {
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+			if n == 1 {
+				close(entered)
+				<-release
+			}
+		})
+		a := f.createFrom(uid(100+round), "/tmp/10.sock") // op 1: the callback blocks on it
+		<-entered
+		f.do(http.MethodDelete, "/api/team/approvals/"+a.ID, nil) // ops 2..: queued behind the blocked callback
+		unsub()
+		close(release)
+		time.Sleep(15 * time.Millisecond)
+		mu.Lock()
+		got := calls
+		mu.Unlock()
+		if got != 1 {
+			t.Fatalf("round %d: callback ran %d times, want only the one already running", round, got)
+		}
+	}
+}

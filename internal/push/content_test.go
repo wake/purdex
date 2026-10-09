@@ -139,3 +139,16 @@ func TestPayload_Shape(t *testing.T) {
 		t.Fatalf("empty fields are left out: %v", p.Purdex)
 	}
 }
+
+// A payload whose fixed fields alone are over the limit is refused locally, not sent to be refused by APNs.
+func TestPayload_FixedFieldsOverTheLimitAreAnError(t *testing.T) {
+	c := Content{Title: "T", Body: "b", Kind: "lead", ApprovalID: strings.Repeat("x", 5000), CollapseID: "c"}
+	if raw, err := c.Payload("host-1"); err == nil {
+		t.Fatalf("a %d byte payload came back without an error", len(raw))
+	}
+	big := Content{Title: "T", Body: strings.Repeat("字", 400), Kind: "lead", ApprovalID: "ap1"}
+	raw, err := big.Payload(strings.Repeat("h", 100))
+	if err != nil || len(raw) > 4096 {
+		t.Fatalf("a long body must be cut to fit: %d bytes, %v", len(raw), err)
+	}
+}

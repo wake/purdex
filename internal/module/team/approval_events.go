@@ -60,11 +60,27 @@ func (m *Module) SubscribeApprovals(fn func(op string, a team.Approval)) (open [
 }
 
 func (m *Module) runApprovalSub(sub *approvalSub, fn func(string, team.Approval)) {
+	stopped := func() bool {
+		select {
+		case <-sub.stop:
+			return true
+		default:
+			return false
+		}
+	}
 	for {
+		// Stopping wins over a waiting event: a select with both ready picks at random, and unsubscribe must mean that
+		// nothing already queued is delivered after it.
+		if stopped() {
+			return
+		}
 		select {
 		case <-sub.stop:
 			return
 		case ev := <-sub.ch:
+			if stopped() {
+				return
+			}
 			m.callApprovalSub(fn, ev)
 		}
 	}

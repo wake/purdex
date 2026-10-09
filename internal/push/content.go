@@ -2,6 +2,7 @@ package push
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -158,8 +159,14 @@ func (c Content) Payload(hostID string) ([]byte, error) {
 	body := c.Body
 	for {
 		raw, err := c.payload(hostID, body)
-		if err != nil || len(raw) <= maxPayload || body == "" {
-			return raw, err
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) <= maxPayload {
+			return raw, nil
+		}
+		if body == "" { // only the fixed fields are left and they are still over: refuse here, not at APNs
+			return nil, errors.New("push payload exceeds 4096 bytes")
 		}
 		r := []rune(body)
 		body = string(r[:len(r)*3/4])
