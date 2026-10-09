@@ -1582,3 +1582,87 @@ One round (`task-muznye8r-9trvm2`, plan + spec): 0 critical / 2 important / 4 mi
 | 6 | minor · 0.97 | Call sites, the `AutoApprovable` move, sizes: no error found. | No change. |
 
 Also folded in from member β (U23): `team.roster` `changed` via `BroadcastStrict` (PL-1f′) and the WS branch bound to its connection (PL-2b note 2).
+
+---
+
+## 2026-10-09 現況對齊 (draft — η, for the coordinator's ruling; not a decision)
+
+> Written against origin/main **`0e94deb3`** (T-3b merged; alpha.62x line). Task c933b0-6: inventory only, nothing implemented, no codex. Every "evidence" below was read on that commit.
+
+### 1. Status of every PR
+
+| PR | Status | Evidence |
+|---|---|---|
+| **PU-1a** wire + switch storage | ✅ merged | `0e2d5e6f` (#1957); `internal/team/wire_unattended.go` |
+| **PU-1b1 / b2 / b3** store, module approve, create-time | ✅ merged | `99c25759` (#1962), `61d6931f` (#1967), `fd22b053` (#1969); `internal/module/team/unattended.go` |
+| **PU-1c** route, event, capability | ✅ merged | `5c33ce69` (#1971) |
+| **PU-2a / 2b / 2c / 2d** SPA (data, toggle, panel, member limit) | ✅ merged | `651b658f` (#1982), `1577ca8c` (#1986), `7dbf47b0` (#1991), `5b4071c8` (#1987); `spa/src/stores/useUnattendedStore.ts`, `UnattendedButton.tsx`, `UnattendedPanel.tsx`, `lib/team/unattended-api.ts` |
+| **PL-1a′** wire contract of adopt / release (display-first form) | ✅ merged | `bd1a480e` (#1980); `internal/team/wire_adopt.go` (kinds, codes, `AdoptPayload`, `ReleaseRequest = KillRequest`), `Member.Origin/EndedAt/AdoptRequest` (`wire_team.go:178-185`), `Approval.CloseReason` + `CreateApprovalRequest.Target` (`wire.go:115,129`); `memberView` sets `Origin: spawned` (`team_handler.go:117`) |
+| **PL-1f′** roster (A, B, ctx = PL-1f′3) | ✅ merged | `e89081f1` (#1984), `f1f3235a` (#1985), `6fea212b` (#1992); `roster.go`, `roster_publish.go`, `wire_roster.go` |
+| **PL-2b′** roster store + team views | ✅ merged | `fd9f4420` (#1996), `e3b8b386` (#1997); `spa/src/stores/useTeamRosterStore.ts`, `lib/team/{roster,roster-ws,roster-forget,team-views,team-index,team-names}.ts` |
+| **PL-2c / PL-3a / PL-3b** sidebar tree, chip, tab-bar groups | ⛔ **superseded by 88's TI plan** (`docs/plans/2026-10-09-team-interface-plan.md`): TI-2 (top group), TI-3 (left list), TI-4 (panel). TI-1a ✅ merged (`46ea5d4a`, #2114); TI-1b/1c/2/3/4/5a/5b not merged | the display-first reorder already says "superseded" |
+| **PL-1b** team.db: adopt / release in the store | ❌ not done | `team_members` has no `origin / ended_at / notice_pending / notice_since` (host `team.db` schema read with `sqlite3 -readonly`; `memberCols` `team_store.go:72`); `approval_requests` has no `close_reason` column; `validMemberState` has no `released`; no `adoptApprovedIn`, `ReleaseMember` |
+| **PL-2a** the `adopt` card (SPA) | ❌ not done | `grep "'adopt'" spa/src/components/ApprovalDialogHost.tsx` → none; `APPROVAL_KINDS` has no `adopt` (only a test row builds `kind:'adopt'`, `unattended-api.test.ts:139`) |
+| **PL-1c** adopt route, decide, create-time approval, winner hook | ❌ not done | `handler.go` still answers `kind must be lead` (`:147`); `AutoApprovable` is `lead \|\| self_relay` (`wire_unattended.go:36`); no `adopt_handler.go`; `OriginResolver` has no `ResolveOriginByRef` / `InboxOf` / `SameProcess` (`origin_resolver.go`: only `ResolveOrigin`, `…BySession`, `…sBySession`, `LeadPresence`) |
+| **PL-1d1** sender + notice outbox | ❌ not done | no `internal/module/peers/sender.go`, no `SenderKey`; no `notify.go` |
+| **PL-1d2** release; kill of an adopted member | ❌ not done | no `release_handler.go`, `kill_adopted.go`; `killAndMark` (`team_handler.go:~196-235`) has no origin branch |
+| **PL-1e** CLI `pdx adopt` / `pdx release`, skill | ❌ not done | no `cmd/pdx/adopt_cmd.go`; `teamRefusalCodes` lacks the adopt codes |
+| **PL-1f″** roster adopt / release delta | ❌ not done | `roster.go` has no origin column read; `memberView` constant (`team_handler.go:117`) |
+| **PL-1g** mod re-reads a cached `member` role at the threshold | ◐ partly overtaken | the threshold path still returns while `s.role === 'member'` (`register.js:405`) and sets it from a 409 (`:453`); `/relay now` (#2108) and `/lead` (#2111) now ask the daemon and ignore the cache, so only `maybeBegin` still needs the re-read |
+
+### 2. What changed on main since 10-08 that the unmerged PRs must absorb
+
+**Daemon (Go)**
+1. **The "adopted member has no key" assumption is now wrong in four places.** PL-1b stores the adoption's request id in `team_members.spawn_op` (deviation 5), so for an adopted row the *column* is non-empty while the wire `SpawnOp` stays `""`. T-1…T-3b read the column: `team_handler.go:55` and `roster.go:99` guard with `if mr.SpawnOp != "" // an adopted member has no key, so no tasks`, `last_turn.go` `SetLastTurn` keys by `m.spawn_op`, task `owner_key` is the column, and spawn's `InsertMemberAndTask` requires it (`task_store.go`). Consequence — good: **adopted members get tasks, reports and last turns for free** (owner key = adoption id); PL-1b must (a) fix those two comments / guards (they were written as "adopted ⇒ no tasks"), (b) decide whether `memberView` keeps `SpawnOp: ""` on the wire for adopted (it does in the plan) — the CLI/App must not use the wire `SpawnOp` as the task owner key (already true: they use refs / display ids).
+2. **`memberRow` / `memberCols` have more consumers.** `InsertMember` → `insertMemberIn` (`team_store.go`), `InsertMemberAndTask` (T-2), `MemberLastTurnAts` and `SetLastTurn` write/read `team_members` with explicit column lists, `ActiveMemberInLiveTeam` and `MembersOf` use `memberCols`. PL-1b's four new columns go through `memberCols`/`dest`; `InsertMember` currently refuses `SpawnOp == ""` (fine: the adopted row uses the request id). `validMemberState` gains `released`; every `state = 'active'` query already excludes it (T-3a2 `SetLastTurn`, `MemberLastTurnAts` take only active/any — `MemberLastTurnAts` has **no state filter**: add `AND state='active'` or accept a released row's age being ignored by the view, which only reads active rows).
+3. **Roster (`roster.go`, `wire_roster.go`)** now carries `RosterMember.Task` (T-3b) and reads open tasks in one `OpenTaskBriefs` call before the member loop. PL-1f″ replaces the constant origin with the column and adds `rosterChanged()` calls in `release_handler.go` / `kill_adopted.go` / the adopt winner hook — textual conflict only in `roster.go`'s member loop.
+4. **`respondTask` / report route signal the roster** (T-3b): a *release* must also drop the released member's tasks from the roster (it leaves the roster as a non-active member) — nothing to do beyond PL-1f″'s call; but **what happens to a released member's tasks is undefined**: T-1 says a released/killed/gone member's tasks answer `task_not_found` to the member, and the lead can `reassign` or `delete` them. Confirm that `ReleaseMember` leaves the tasks as they are (recommended; the lead sees them in `pdx task ls` with owner state `released`/`gone`).
+5. **TurnEnd (T-3a1) is tmux-hook only.** #2115 (`non-tmux hook path does not publish`) becomes load-bearing the moment PL-1c can adopt a session with no tmux session (`adopt` plan: `tmux_session` may be empty). Without it an adopted non-tmux member never gets a `last_turn` (T-3a2 consumes the feed).
+6. **`/relay now` and `/lead`** (mod, #2108/#2111) read the member state from the daemon, so a *released* member is already not blocked there; PL-1g shrinks to the threshold path only (≈ 100 lines, not 160). `begin()` now returns a typed outcome (`register.js:~433`); PL-1g's re-read goes in `maybeBegin` before the `s.role === 'member'` early return and must not set state that `relayNow` also takes (`s.state='beginning'` is taken before any await — keep PL-1g's hello re-send out of that window).
+7. **`ApprovalDialogHost.tsx` changed twice** since the plan: TL-2 (#2077) added the team-label second field to the `lead` card and `ApprovalDialogHost.teamName/teamLabel.test.tsx` exist. PL-2a adds the `adopt` body in the same file: it must branch around the new fields (an `adopt` card has no name/label inputs) and keep `data-kind`.
+8. **Capability list:** `/api/info` capabilities gained `team.tasks.v1` (T-1b1) after the unattended ones; adopt adds its own capability (plan PL-1c) **after** it — order is the contract (`TestHandleInfo_Capabilities`).
+9. **Release vs the lease and the tasks:** a released session returns to `none`; `resources` leases are keyed by session, not team — no interaction.
+
+**SPA**
+10. `useTeamRosterStore`, `team-views`, `team-index` exist (PL-2b′ + TI-1a). TI-1c plans "a released member's tab ends up right after the group (R6)" and TI-3/TI-4 render roster members; they assume `released` members leave the roster (PL-1f″ gives that) — **TI-1c's R6 test cannot be exercised on a real daemon until PL-1d2 ships** (88 can fake it in the store).
+11. **TI-5a** (`GET /mod/v1/team?session_id=` → `{role, members}`) counts "active members, not released": it needs the `released` state (PL-1b) for its mutation gate "lead with 3 active + 1 released → members 3"; before PL-1b the released case can only be a `gone` row.
+
+### 3. Where #2115 (non-tmux TurnEnd) goes
+
+A **separate small PR "PL-1c2" (agent module, ≈ 200 lines / 3 files), merged before U24 batch A deploys and after PL-1c is written** (it has no code dependency on PL-1c; it must just ship in the same deploy so an adopted non-tmux member has a `last_turn`). Reasons: it is in `internal/module/agent` (88's ground — tell 88, same rules as T-3a1), it needs the arrival stamp passed into `handleNonTmuxEvent`, and keeping it out of PL-1c keeps PL-1c in the 740-line budget. The issue's scope (positive non-tmux Stop, none for a failed/rejected one) is the PR's test list.
+
+### 4. Remaining order and size (re-estimated)
+
+| # | PR | Re-estimate (lines / files) | Notes / conflicts |
+|---|---|---|---|
+| 1 | **PL-1b** store (+ cut PL-1b2: `ReleaseMember`, outbox reads, `ended_at` on kill/gone) | 780 / 8 → keep the planned cut: 520 + 300 | fix the two `SpawnOp != ""` guards' comments (item 2.1); `MemberLastTurnAts` state filter; the `InsertMemberAndTask` / `SetLastTurn` queries are unaffected; schema: **ensureColumn migration** (team.db is deployed; verified absent) |
+| 2 | **PL-2a** `adopt` card (SPA) | 480 / 10 → ~400 | rebase over TL-2's dialog (item 7); must merge and fast-forward before PL-1c (decision 3) |
+| 3 | **PL-1c** adopt route + decide + create-time + winner hook | 740 / 9 | `OriginResolver` gains `ResolveOriginByRef`, `InboxOf` (fakes: `handler_test.go` `fakeOrigins`, and the spawn fixture's `spawnOrigins`); `AutoApprovable(adopt)` flip + `wire_unattended_test.go` pinned set; capability appended after `team.tasks.v1` |
+| 4 | **PL-1c2** non-tmux TurnEnd (#2115) | ~200 / 3 | tell 88 first |
+| 5 | **PL-1d1** sender + notice outbox | 680 / 9 | `peers/sender.go` does not exist; `memberView` fills `Origin/EndedAt/AdoptRequest` (replaces the PL-1a′ constant) |
+| 6 | **PL-1d2** release + kill of an adopted member | 720 / 8 | `killAndMark` branch; `SameProcess` on `OriginResolver`; released × switch × pause matrix |
+| 7 | **PL-1e** CLI + skill | 720 / 7 | skill: `pdx-team` gained the T lines, `/relay`/`/lead` lines; pinned strings in `embed_test.go` (spawn grammar prefix, the headings U23 finds) must stay |
+| 8 | **PL-1f″** roster delta | 300 / 5 | `roster.go` member loop (T-3b) — rebase only |
+| 9 | **PL-1g** threshold re-read | ~100 / 2 | smaller than planned (item 6); batch B |
+
+Total remaining ≈ 4 700 lines / ~60 files (was ≈ 8 600 for the same PRs in the 10-08 table). **Deploy batches unchanged:** batch A = PL-1b, PL-1c, PL-1c2, PL-1d1, PL-1d2, PL-1e, PL-1f″ (+ PL-2a SPA first); batch B = PL-1g.
+
+### 5. SPA overlap with 88's TI plan (for the coordinator to settle with 88)
+
+| Surface | Adopt plan | TI plan | Overlap |
+|---|---|---|---|
+| sidebar tree of members under the lead | PL-2c | TI-3 | superseded — drop PL-2c |
+| tab-bar groups | PL-3a/PL-3b | TI-2 | superseded — drop |
+| roster store / views | PL-2b′ ✅ | TI-1a ✅ builds on it | none left |
+| `adopt` approval card | **PL-2a (ours)** | — | none, but file shared with TL-2 (`ApprovalDialogHost.tsx`) |
+| `released` members | PL-1f″ (they leave the roster) | TI-1c R6, TI-5a count | TI-1c/5a assume the roster/daemon can say *released*: they work on a faked store until PL-1b/1d2 |
+| kill of an adopted member | PL-1d2 | TI-1b "open a seat" must not offer kill for an adopted member? (not in the TI plan) | **ask 88**: the App's seat actions should know `origin` (already on `RosterMember.origin`) |
+| `Member.origin` label (被釋出 / 納入) | PL-1f″ column | TI-3/TI-4 | the field is on the wire since PL-1f′ (constant `spawned`); after PL-1f″ it can be `adopted` — 88's surfaces should treat any non-`spawned` value as adopted |
+
+### 6. Open points for the coordinator
+
+1. Released members' tasks: leave as is (recommended) or auto-`delete`? (section 2 item 4)
+2. Does the App need `origin` before PL-1f″ to hide kill for adopted seats? (section 5)
+3. Fold PL-1c2 into PL-1c, or keep it separate (recommended: separate)?
+4. Keep PL-1g at all, or drop it now that `/relay now` and `/lead` bypass the cache and the cache goes stale only for the threshold path (recommended: keep, small).
+5. The adopt plan's "Codex review" tables stay as history; this section replaces only the **status and estimates** of the PR table, not the contracts.
