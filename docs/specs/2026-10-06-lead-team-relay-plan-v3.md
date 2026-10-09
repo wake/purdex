@@ -2556,3 +2556,91 @@ Binding. **All 13 open questions of the P9 addendum take the plan's recommended 
 - **Critical 2, "only this window"** — rebutted with evidence: `activeTabId` and the workspaces are persisted and synced to every window of the device (`useTabStore.ts:1035-1043`, `lib/storage/sync.ts`), so every tab activation, a click included, already moves them all. U22 (a) now says "this window" names who acts; P9b changes nothing there.
 - **Adopted:** raw-bytes UTF-8 check before decoding (P9a-1); the timeout fallback test and the fix/seed custom-body tests (P9a-2); the tab-switch test pins `keepAliveCount: 0` and a real unmount (P9a-3); both kinds in the P9b tests; a non-empty snapshot keeps `minimized` (P9b-2); P6-3a's files and golden gate; the session list still opens a second tab (P9b-1).
 - **Minor, whitespace-only body** — the spec now says "unset, empty or whitespace only" means the default (U21 (a), §8.8), which is what the plan does.
+
+---
+
+## 2026-10-09 現況對齊（P6）
+
+Draft by η for the coordinator's ruling (task c933b0-26). Written against main at `d5c5d2cc`+ (alpha.638 line); no code was changed. Everything below is read from the tree, with file:line. It follows the shape of the U24 plan's "現況對齊" (`2026-10-08-unattended-adopt-plan.md`).
+
+### 1. Status of what is left of P6
+
+P4 (teams, spawn, kill, `pdx team`), P9a (relay prompts in the daemon) and P9b (approval dialog) are merged; P4b and P4c are **not built** (no `--repo/--host`, no `AllowTeam`, no `forwarded_ops`/`remote_members` anywhere in `internal/` or `cmd/`). Of P6:
+
+| PR | Status | Evidence on main |
+|---|---|---|
+| **P6-0** split `cmd/pdx/relay.go` | ❌ not done | one file, 468 lines (`cmd/pdx/relay.go`); `runRelayWait` `:242`, `runRelayPrompts` `:450` (P9a-1 added it, as the plan expected) |
+| **P6-1** notifier (virtual peer, auto-reply, handover notice) | ◐ the **sender** is done (PL-1d1: `internal/module/peers/sender.go`, `internal/module/team/notify.go` — a membership-notice outbox, not a generic `notify`); the virtual peer, auto-reply and the handover notice are not | `ccuds.StartVirtualPeer` is called only by the peer-proxy helper (`internal/peers/proxyhelper/helper.go:114`); no `notice.go` |
+| **P6-2a** member-relay wire, op pid/pane, persisted hello, `cleared` binding | ❌ not done | `RelayOp` has no `pid`/`pane_id` (`internal/team/wire_relay.go:65-82`); `modSeen` is in memory only (`internal/module/team/module.go:106`, filled by `handleRelayHello`, capped 512 at `relay_handler.go:30`); `RelayKindMember` exists only as a constant (`wire_relay.go:10`) |
+| **P6-2b** `POST /api/team/relays`, control message, `claim`, op long-poll | ❌ not done | `relay_handler.go:185` refuses a non-self begin with "a member relay is POST /api/team/relays"; `relay_report.go:59` still says "claimed is not reportable: … a member op by pdx relay claim" |
+| **P6-3a** mod embeds git facts | ❌ not done | the default write body still says `自己跑 git status…` (`internal/team/relay_prompts.go:77`; the comment at `:28` says "P6-3a appends git") |
+| **P6-3b** relay-lock machinery | ❌ not done | `cmd/pdx/hooklock.go` still holds the flock helpers; `handleHookDecide` (`internal/module/team/hooks.go:23`) knows only the lead lock (`openLeadAndRemoveStaleFlag` `:87`); no `pdx relay lock|unlock` |
+| **P6-3c** mod raises/lowers the flag | ❌ not done | `register.js` (1047 lines) has no lock call; the only `onWriteTurnDone` is `:796` |
+| **P6-4** timeouts, frame reconciliation, notices | ❌ not done | `reconcileRelays` (`relay_report.go:285`) only handles self ops `awaiting_approval` and `cleared`'s title move; **#1735 is still open**; no claim/stall timeout in `sweeper.go` |
+| **P6-5** CLI `pdx relay <ref>` / `claim` / `seen` | ❌ not done | `runRelayCmd` (`relay.go:92`) dispatches only hello/begin/wait/self/report/op/prompts |
+| **P6-6** mod: control consumed, claim, protocol 2 | ❌ not done | `VERSION = '1'` (`register.js:51`); no `session.receive` hook anywhere in `hooks/*.js` or `hooks.json` |
+| **P6-7a / P6-7b** cross-host member relay | ❌ not done, **blocked** | needs P4c-4, which is not built |
+| **P6-8** SPA restart-confirm line | ❌ not done | the daemon half exists (`relays_active` in `/api/team/inflight`, `handler.go:315-330`; SPA type in `approval-api.ts`), no line in `RestartDaemonButton` |
+| **P7-1 / P7-2** 70% idle notice, auto-compact report | ❌ not done | no `AgentStatus` accessor in `internal/module/agent` (only `currentStatus`, `handler.go`/`frame_ops.go:1408`) |
+
+**M28 is measured** (spec `2026-10-06-lead-team-relay-spec.md:277`, 2026-10-08): `session.receive` fires within ~1 s while a turn runs. So P6-4 takes **branch A** (claim timeout counted from the request, `pdx relay seen`, `RelayOp.SeenAt`); branch B and its `internal/module/agent` accessor are not needed for P6 — which also keeps P6 out of 88's agent-module ground (ed-72's PU-3a, #2180, just changed `hookemitter.go`/`module.go` there).
+
+### 2. What other PRs already did, or changed under P6
+
+1. **The in-process sender exists (PL-1d1).** P6-1's `notify(ctx, to, text)` need not build a sender. PL-1d1 chose to send **from the lead's inbox** (`InboxOf(lead)` as `OriginInbox`, not a daemon virtual peer; text prefix `[pdx team]`; adopted by the coordinator for the adopt/release notices). The same works for P6's two messages: the **control message** `[pdx-relay:control] op=<id>` is a peer message from the lead (the requester) and arrives with `origin.kind === 'peer'` (M1), which is all the mod checks; the **handover notice** goes out from the *new* lead session's inbox. → **Recommend dropping the virtual peer and the auto-reply from P6-1** (the "a reply to it gets one line back" rule has no sender to reply to), leaving only the handover notice. Ruling needed (§5, Q1).
+2. **Release/relay exclusion is half done.** `ReleaseMember` already refuses while any relay op of the session is non-terminal (`internal/module/team/release_store.go:21`, the `NOT EXISTS … relay_ops … NOT IN ('done','failed','cancelled')` guard) — so a `requested` member op blocks a release, and `kill`'s own guard (`team_handler.go:220`) only looks at `claimed|writing|written` (a `requested` op does not block a kill; P6-4's `failed{member_gone}` covers it). The other half — P6-2b's create confirming `active` membership **in its insert transaction** — is still to write (the plan's "Exclusive with a release" rule stands as written).
+3. **Adopted members are valid targets for free.** The member row of an adopted session carries `PID`, `ProcStart`, `PaneID` and `Ref` (`adopt_handler.go` `adoptMemberRow`), so P6-2a's "pid/pane from the member row" works for spawned and adopted rows alike; `moveTeamRoles` in `cleared` keys by session id, and `PendingNotices` addresses by the row's ref which lineage forwards after a relay (PL-1b2 note). `matchMember` already prefers the unique active row when a session was released and re-adopted (PL-1d2).
+4. **The winner point exists.** Every approved close ends in `announceClosed → afterApproved` (`unattended.go`); a `member_relay` approval's side effect (sending the control message) hangs there, never on a route (U24 decision, shared contract 4).
+5. **Unattended mode and the quota (U23/RQ-0…1c).** The relay quota rule is live (`relay_quota.rule` is on). Self relays spend `self_left` at the automatic approval; **member relays spend the lead's `member_pool_left` (RQ-2, spec §3.4)** — see §4 for the hook points P6-2b must leave.
+6. **Mod ground moved.** `register.js` is 1047 lines (the plan's "grows past 900" risk is already past). Since the plan: `/relay now`, `/lead`, PL-1g's member re-read (`recheckMember`), `recv` state `s.state`/`s.leadAsk`. The new member path (P6-6) must not take `s.state` before an await the way `/relay now` does and must coexist with `recheckMember` (a *member*'s hello re-send at the threshold is harmless: a member never reaches `maybeBegin`'s ask). Hooks: no `session.receive` registration exists, so P6-6's registration cannot hit the "second registration of one event without a matcher" failure (U1 M-U1-3) — but `TestHooks_NoEventRegisteredTwiceWithoutMatcher` must keep passing.
+7. **Skill ahead of the code.** `SKILL.md` ("As a lead") already tells a lead to run `pdx relay <ref>` when a context notice arrives; the command does not exist (`runRelayCmd` answers usage, exit 2) and the notice (P7-1) is not built either. Low risk today; P6-5 should land with or before any notice, or the line be softened until then.
+8. **Hook decide grew.** `handleHookDecide` now sits beside U23/P8a pieces (ask flags, `pruneAskFlags`); P6-3b's decide order (lead lock → relay lock → stale-flag removal) still fits the structure (`hooks.go:23-100`), but the plan's line numbers (`hooks.go:23-175`) are stale; re-read at start.
+9. **Deployed schema.** `relay_ops` is a deployed table: P6-2a's `pid`/`pane_id` and branch-A's `seen_at` are `ensureColumn` migrations — **verify the host DB with `sqlite3 -readonly` before writing them** (the RQ-1a2 rule, `docs/specs/2026-10-09-relay-quota-spec-plan.md`). `mod_hello` is a new table (`CREATE TABLE IF NOT EXISTS`).
+10. **State machine.** `relayTransitions` (`relay_store_report.go:14`) has `requested → claimed|cancelled|failed` and `awaiting_approval → claimed|cancelled`. RQ-2 needs `awaiting_approval → requested` for **member** ops (see §4).
+
+### 3. Remaining order and sizes (every PR ≤ 800 lines / ≤ 20 files, tests included; ×2 allowance already applied)
+
+Deploy: P6 needs no new batch rule except that anything touching the **mod** (3a, 3c, 6) needs `pdx setup`, and **P6-6 must wait for P6-2b+P6-4+P6-5 to be deployed** (protocol 2 hello makes the daemon's `relay_unsupported` check pass).
+
+| # | PR | Re-estimate (lines / files) | Notes |
+|---|---|---|---|
+| 1 | **P6-0** pure move | ~560 diff / 3 | optional, off the critical path: `relay.go` 468 lines; P6-5 adds new files anyway. Do it just before P6-5 if wanted (byte-comparison proof, no codex). |
+| 2 | **P6-1′** handover notice only (no virtual peer) | ~180 / 4 | if Q1 is ruled as recommended; else the plan's 420/5 minus the sender. Uses `Sender`; lead address helper reused from adopt. |
+| 3 | **P6-2a** wire + columns + `mod_hello` + `cleared` binding | ~600 / 10 | `ensureColumn` ×2 on `relay_ops`, new table, hello upsert, binding by `op.PID` (fail closed for a member op with pid 0). |
+| 4 | **P6-2b-1** create route + control message + exclusion tx | ~520 / 5 | `relay_member.go`: checks (lead, `matchMember`, running, mod ≥ 2, one op), the **single create transaction** (membership confirm + op insert, §4), control send after commit via the sender; replay/`id_conflict`; tests for the release race. |
+| 5 | **P6-2b-2** claim + op long-poll + wake-ups (+ `seen`, branch A) | ~480 / 5 | `POST /api/relay/ops/{id}/claim` (only the target session), `GET /api/relay/ops/{id}?wait=N`, `POST …/seen` + `seen_at` column. The plan's 650/6 split in two. |
+| 6 | **P6-3a** git facts in the mod, write-tail rule | ~340 / 5 | edits `relay_prompts.go` default body + fixed tail, regenerates `prompts.js`; mod only; `pdx setup`. |
+| 7 | **P6-3b-1** move flock helpers to `internal/team` | ~300 / 6 | pure move + call sites (`lead.go`, `hook.go`); byte-comparison proof. |
+| 8 | **P6-3b-2** `pdx relay lock|unlock`, decide `allow`/`deny`, `pdx hook` prints allow, safety net, prune guard | ~620 / 9 | the plan's 720/12 minus the move. |
+| 9 | **P6-3c** mod raises/lowers the flag | ~320 / 3 | needs the kit's `turn.start` hold check (plan rule 1 has the fallback). |
+| 10 | **P6-4a** `reconcileFromFrames`, boot reconciliation (#1735), completion/failure notices | ~560 / 5 | closes #1735 (`LiveSessions(ctx,"cc")` verified frame + pid check); notices on `ReportApplied` only. |
+| 11 | **P6-4b** claim/stall timeouts in the sweeper (branch A) | ~320 / 4 | `created_at + 60 s` unseen → `member_unresponsive`; seen → 15 min; stall 15 min after `updated_at`; no agent-module change. |
+| 12 | **P6-5** CLI | ~560 / 4 | dispatch by ref shape, `claim`, `seen`, `--wait` mapping, refusal map (`not_lead`, `not_your_member`, `relay_unsupported`, `not_your_op`). |
+| 13 | **P6-6** mod: control consumed, claim after the running turn, protocol 2, acceptance doc | ~600 / 5 | **consider `hooks/member.js`** (Q3): `register.js` is 1047 lines; ES imports between hook files already work (`ask.js`, `events.js`, `lease.js`, `prompts.js`). |
+| — | **P6-7a / P6-7b** cross-host | 600 + 450 | **deferred until P4c-4 exists** (P4b/P4c unbuilt); not on RQ-2's path. |
+| — | **P6-8** SPA line | ~120 / 5 | independent of P6-2b (the daemon half is merged); can land any time. |
+| — | **P7-1 / P7-2** | 620 + 430 | unchanged in kind; P7-1 needs the `AgentStatus` accessor only if P6-4 had taken branch B — it did not, so P7-1 adds it (agent-module change; coordinate with 88). |
+
+Total remaining on the local path (rows 2–13) ≈ 5 000 lines in 13 PRs (the plan had ≈ 5 300 for the same PRs), plus P6-0/P6-8 optional.
+
+**Critical path to a working member relay:** 2a → 2b-1 → 2b-2 → 3a → 3b-1 → 3b-2 → 3c → 4a → 4b → 5 → 6. **RQ-2 depends only on 2b-1** (the create transaction and the control send); it is *useless* before the mod side (6) exists, because nothing can be relayed — recommend RQ-2 right after P6-6, or alongside 2b-1 behind the existing `relay_quota` rule only when the mod is ≥ 2 (the create already answers `relay_unsupported` otherwise, so RQ-2 can merge earlier without a user-visible change).
+
+### 4. Hook points P6-2b must leave for RQ-2 (spec §3.4)
+
+RQ-2's rule: *while unattended is on and the quota rule is on, a lead's member relay spends 1 of the lead's chain `member_pool_left`; at 0 the request becomes a `member_relay` approval and waits for a person; unattended off → no approval, nothing spent.* To make that a small PR, P6-2b-1 must be written so that:
+
+1. **One store function creates the op in one transaction** — `CreateMemberRelayOp(op, gate func(tx *sql.Tx) (needsApproval bool, err error))`: takes the write lock, confirms the target's member row is `active` in a live team (the release exclusion), runs `gate`, inserts the op (`requested`, or `awaiting_approval` when the gate says so), and — for the approval case — inserts the approval row in the **same** transaction. In P6-2b-1 the gate is `nil` (always `requested`). RQ-2 supplies the gate: spend pool (same guarded `UPDATE … member_pool_left >= 1` + `rev + 1`, `spendSelfQuotaIn`'s sibling) or request approval.
+2. **Sending the control message is its own step** — `m.sendMemberControl(op)` — called from the create path *and*, for RQ-2, from `afterApproved` for a `member_relay` approval (the winner point), and from boot reconciliation for `requested` ops. It must be idempotent on the op id (the claim is a CAS, so a second delivery is harmless).
+3. **State machine:** add `awaiting_approval → requested` for **member** ops in `relayTransitions` (a self op keeps `awaiting_approval → claimed`); a denied/expired/cancelled `member_relay` row maps the op to `cancelled` the way `afterClose` does for self ops (`relay_report.go`); deadline/lease sweeper rules apply to the approval row as for any kind.
+4. **Wire/SPA first:** a new approval kind `member_relay` is skipped by an older SPA row by row (`APPROVAL_KINDS`, `approval-ws.ts`) — the PL-2a lesson. 88's SPA card must merge and be fast-forwarded **before** the daemon that can open such a row is deployed. P6-2b-1 itself only reserves the constant `KindMemberRelay` (not yet opened by any path), so P6-2b-1 can deploy before the SPA.
+5. **The lead's CLI wait** (`pdx relay <ref> --wait`, P6-5) already long-polls the *op*, which is the right object for an approval wait too (`awaiting_approval` is a non-terminal op state); the foreground-600 s-timeout rule from `pdx lead request` applies to the *first* response when the op may sit in `awaiting_approval` — P6-5's refusal/exit map should reserve exit 10/11/12 (denied/timeout/cancelled) for RQ-2 (a `cancelled` op from a denied approval already maps to 12 in the plan).
+6. **Quota rev/event:** the pool spend, like the self spend, bumps `rev` and publishes `team.relay_quota` through the same `announceSpend` mechanism (a `SpentOut`-style flag carried from the create transaction to the post-commit step).
+
+### 5. Open questions for the coordinator
+
+1. **P6-1 without the virtual peer.** Send the control message and the handover notice from the *lead's* inbox through the PL-1d1 sender (recommended: no new process-level component; the control message is invisible to the model either way, the handover notice carries the `[pdx team]` prefix), or build the daemon's own virtual peer as P6-1 and spec §8.5 say? Consequence of the first: a control message cannot be re-sent at boot while the lead's session is not live (the claim timeout then fails the op `member_unresponsive`, which is the right outcome for an unattended lead that died).
+2. **Branch A for P6-4** (M28 is measured; recommended) — confirm, which retires branch B and P7-1's dependency on P6-4.
+3. **Where the member mod path lives.** Keep it in `register.js` (the plan) or put it in `hooks/member.js`, sharing `s` and `later`/`pdx` helpers by import? The file is 1047 lines now; the plan's own risk note predicted this.
+4. **P6-7a/b** — formally defer until P4b/P4c exist? (Recommended; nothing in U23/U24/RQ needs them.)
+5. **RQ-2 timing** — merge right after P6-2b-1 (the create route answers `relay_unsupported` until a protocol-2 mod exists) or after P6-6? Recommended: after P6-6, so every RQ-2 test can run against a real end-to-end relay.
+6. **Skill line (§2 item 7)** — soften now or accept until P6-5.
