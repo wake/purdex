@@ -41,7 +41,7 @@ export function ContextRing({ pct, model, size = 22 }: { pct: number | undefined
   return (
     <span className="relative inline-grid place-items-center flex-shrink-0" style={{ width: size, height: size }} data-testid="context-ring">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="absolute inset-0">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border-default)" strokeWidth={2.5} opacity={0.6} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border-default)" strokeWidth={2.5} />
         {geo && (
           <circle
             data-testid="context-ring-arc"
