@@ -39,6 +39,9 @@ export interface TeamTabMark {
   /** Tooltip of the capsule: `"<name> (<label>)"` when both exist. */
   tooltip: string
   role: 'lead' | 'member'
+  /** The seat's roster state (`active` | `joining` | `releasing` | `killing`) and the alias of the host a remote member lives on ('' = local). */
+  seatState: string
+  hostAlias: string
   /** First / last VISIBLE tab of the group in this tab's workspace. */
   first: boolean
   last: boolean
