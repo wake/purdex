@@ -109,7 +109,7 @@ func TestPump_FifoPerHostAndAHostDoesNotBlockAnother(t *testing.T) {
 		if host == "hostA" {
 			return peersmod.CallResult{Class: peersmod.ClassTransient}
 		}
-		return peersmod.CallResult{Class: peersmod.ClassDone, Body: json.RawMessage(`{"host_id":"hostB"}`)}
+		return peersmod.CallResult{Class: peersmod.ClassDone, Body: json.RawMessage(fmt.Sprintf(`{"id":%q,"host_id":"hostB"}`, body["id"]))}
 	}
 	f.enqueue(f.cmd("a1", CmdRelease, "hostA", "m"))
 	f.enqueue(f.cmd("a2", CmdRelease, "hostA", "m"))
@@ -166,7 +166,7 @@ func TestPump_APermanentRefusalSettlesAndTheNextGoes(t *testing.T) {
 		case "c2":
 			return peersmod.CallResult{Class: peersmod.ClassWrongHost, Code: "wrong_host"}
 		}
-		return peersmod.CallResult{Class: peersmod.ClassDone, Body: json.RawMessage(`{"host_id":"hostM"}`)}
+		return peersmod.CallResult{Class: peersmod.ClassDone, Body: json.RawMessage(fmt.Sprintf(`{"id":%q,"host_id":"hostM"}`, body["id"]))}
 	}
 	for _, id := range []string{"c1", "c2", "c3"} {
 		f.enqueue(f.cmd(id, CmdRelease, "hostM", "m"))
@@ -379,5 +379,31 @@ func TestPump_ExpiryKicksThePump(t *testing.T) {
 	case <-f.m.cmdPump.sig:
 	default:
 		t.Fatal("expiry queued a void without kicking the pump")
+	}
+}
+
+// codex R1: a 2xx answer must carry THIS command's id; another id keeps the entry pending (a broken or hostile peer).
+// Mutation gate: skip the id check → the entry is marked done with another command's outcome → red.
+func TestPump_AnAnswerForAnotherCommandIsNotApplied(t *testing.T) {
+	f, fc, out := pumpFixture(t)
+	fc.script = func(host string, body map[string]any) peersmod.CallResult {
+		return peersmod.CallResult{Class: peersmod.ClassDone, Body: json.RawMessage(`{"id":"someone-else","host_id":"hostM","outcome":{}}`)}
+	}
+	f.enqueue(f.cmd("c1", CmdRelease, "hostM", "m"))
+	f.m.cmdPump.drain("hostM")
+	if f.cmdState("c1").State != cmdPending || len(out.seen) != 0 || f.cmdState("c1").Attempts != 1 {
+		t.Fatalf("state=%s outcomes=%v attempts=%d", f.cmdState("c1").State, out.seen, f.cmdState("c1").Attempts)
+	}
+}
+
+// codex attack: a local settle failure must not turn into one request per second.
+func TestPump_ASettleFailureBacksOff(t *testing.T) {
+	f, fc, out := pumpFixture(t)
+	out.fail = fmt.Errorf("apply failed")
+	f.enqueue(f.cmd("c1", CmdRelease, "hostM", "m"))
+	f.m.cmdPump.drain("hostM")
+	f.m.cmdPump.drain("hostM") // a second pass at once: backed off
+	if n := len(fc.sent()); n != 1 || f.cmdState("c1").NextAt != f.clock.Load()+30_000 {
+		t.Fatalf("%d calls, next_at %d (now %d): the failed settle was not backed off", n, f.cmdState("c1").NextAt, f.clock.Load())
 	}
 }

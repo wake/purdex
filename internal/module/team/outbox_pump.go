@@ -117,6 +117,15 @@ func (p *outboxPump) run() {
 	}
 }
 
+// answerID is the id a 2xx answer carries ({id, host_id, outcome}), "" when it has none.
+func answerID(body json.RawMessage) string {
+	var a struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(body, &a)
+	return a.ID
+}
+
 // pass starts a drain for every host with something pending that has none running.
 func (p *outboxPump) pass() {
 	hosts, err := p.store.Hosts()
@@ -132,6 +141,8 @@ func (p *outboxPump) pass() {
 		}
 		p.running[h] = true
 		p.mu.Unlock()
+		// pass runs only on run()'s goroutine, which the wait group already counts: this Add happens while the counter is
+		// positive, so it cannot race Stop's Wait (WaitGroup rule), and every drain ends before run() returns... or is waited for.
 		p.wg.Add(1)
 		go func(h string) {
 			defer p.wg.Done()
@@ -169,9 +180,18 @@ func (p *outboxPump) attempt(e outboxEntry) bool {
 	now := p.now()
 	switch res.Class {
 	case peersmod.ClassDone, peersmod.ClassRefused, peersmod.ClassWrongHost:
+		// A done answer must be THIS entry's: HostCaller proved the host, not the command. Another id is a broken peer, not an
+		// outcome to apply (and never to mark this entry done with).
+		if res.Class == peersmod.ClassDone && answerID(res.Body) != e.ID {
+			p.backoff(e, 0, "its answer names another command")
+			return false
+		}
 		// done, or the peer's permanent refusal (a wrong_host too, rule 1): the outcome is applied with the entry
 		if err := p.store.Settle(e, res); err != nil {
+			// a local failure (the database, the outcome): the peer already has the command, so it is not sent again every
+			// second — it backs off like any failure, and the stored outcome comes back when it is
 			p.logf("[team] %s outbox %s (%s): settle: %v", p.name, e.ID, e.HostID, err)
+			p.backoff(e, 0, "settling its answer failed")
 			return false
 		}
 		p.mu.Lock()
