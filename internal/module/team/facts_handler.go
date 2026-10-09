@@ -77,17 +77,13 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 		r := refusal(http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(fact.Kind)+" facts")
 		refusalPlan = &r
 	}
-	if msg := validateFact(fact); msg != "" {
-		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandBadRequest, msg)
-		return
-	}
 	// The binding is the entry's as of now, not as of the bind: the alias may have been re-created for another host.
 	fresh, _, ok := m.peerEntry(principal.Alias)
 	if !ok || fresh.HostID != entry.HostID {
 		m.writeCommandErr(w, http.StatusForbidden, ipeers.ErrHostUnverified, "host entry no longer matches the authenticated host")
 		return
 	}
-	res, err := m.store.ApplyTeamFact(FactPlan{FromHostID: entry.HostID, Body: raw, Now: m.now(), Refusal: refusalPlan})
+	res, err := m.store.ApplyTeamFact(FactPlan{FromHostID: entry.HostID, Body: raw, Now: m.now(), Refusal: refusalPlan, Invalid: validateFact(fact)})
 	switch {
 	case errors.Is(err, ErrCommandIDConflict):
 		m.writeCommandErr(w, http.StatusConflict, team.ErrCommandIDConflict, "the id is already used by a different fact")

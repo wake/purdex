@@ -35,6 +35,10 @@ type FactPlan struct {
 	// unsupported_kind): it is stored like any other answer (§3.1 rule 3, refusals included), so a copy resent after an
 	// upgrade meets the stored refusal instead of being applied for the first time.
 	Refusal *CommandResult
+	// Invalid, when not empty, is the shape problem the route found (validateFact). It is answered 400 bad_request
+	// only AFTER the stored answer of an earlier copy is consulted — validation rules may tighten across versions, and a
+	// stored decision must not change — and it is not stored itself: a malformed fact has no content worth keeping.
+	Invalid string
 
 	fact team.TeamFact
 	hash string
@@ -78,6 +82,8 @@ func (s *Store) ApplyTeamFact(p FactPlan) (CommandResult, error) {
 	switch {
 	case p.Refusal != nil:
 		res, err = *p.Refusal, nil
+	case p.Invalid != "":
+		return refusal(http.StatusBadRequest, team.ErrCommandBadRequest, p.Invalid), nil
 	case p.fact.Kind == team.FactEnded:
 		res, err = s.applyEndedIn(tx, p)
 	default:

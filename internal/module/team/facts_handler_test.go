@@ -98,7 +98,7 @@ func TestFacts_ShapeAndAddressing(t *testing.T) {
 	f.remoteRow("abc12", "lead:1", "mk1", rowActive)
 	wrong := endedFact(factUUID1, "mk1")
 	wrong.ToHostID = "other:1"
-	noMK := endedFact(factUUID1, "")
+	noMK := endedFact(factUUID2, "")
 	badID := endedFact("nope", "mk1")
 	for name, tc := range map[string]struct {
 		body   any
@@ -317,5 +317,29 @@ func TestFacts_AFloodOfFreshIdsIsRateLimited(t *testing.T) {
 	}
 	if !limited {
 		t.Fatal("500 fresh fact ids were never rate-limited")
+	}
+}
+
+// codex re-review: validation runs after the stored answer is consulted. A fact stored as a refusal keeps its answer
+// even if the same copy would fail a validation of this version; a malformed fact is answered and not stored.
+// Mutation gate: validate in the route before the store → the replay answers bad_request → red.
+func TestFacts_AStoredAnswerPrecedesValidation(t *testing.T) {
+	f := factFixture(t)
+	f.remoteRow("abc12", "lead:1", "mk1", rowActive)
+	wrong := endedFact(factUUID1, "") // no mk: invalid for ended, yet addressed to another host
+	wrong.ToHostID = "other:1"
+	if code, body := f.postFact(leadPrincipal(), wrong); code != 409 || errCode(t, body) != "wrong_host" {
+		t.Fatalf("first = %d %s", code, body)
+	}
+	if code, body := f.postFact(leadPrincipal(), wrong); code != 409 || errCode(t, body) != "wrong_host" {
+		t.Fatalf("replay = %d %s, want the stored wrong_host", code, body)
+	}
+	// a malformed fact is answered 400 and not stored
+	bad := endedFact(factUUID2, "")
+	if code, body := f.postFact(leadPrincipal(), bad); code != 400 || errCode(t, body) != "bad_request" {
+		t.Fatalf("malformed = %d %s", code, body)
+	}
+	if factLogCount(t, f) != 1 {
+		t.Fatalf("%d logged, want 1", factLogCount(t, f))
 	}
 }
