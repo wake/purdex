@@ -24,7 +24,7 @@ func (m *Module) handleReportCreate(w http.ResponseWriter, r *http.Request) {
 	if !m.decodeBody(w, r, &req) {
 		return
 	}
-	if m.forwardAsRemoteMember(w, req.OriginInbox, http.MethodPost, "/api/team/reports", nil, req.ReportRequest) {
+	if m.forwardAsRemoteMember(w, req.OriginInbox, http.MethodPost, "/api/team/reports", nil, req.ReportRequest, true, "resend with --id "+req.ID+" to be sure it is stored once") {
 		return // a remote member's report is the lead host's to store (X6-2)
 	}
 	c, ok := m.taskCallerOf(w, req.OriginInbox)

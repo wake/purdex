@@ -38,7 +38,7 @@ func (s *Store) ActiveRemoteMemberBySession(sessionID string) (remoteMemberRow, 
 // forwardAsRemoteMember answers the request itself and returns true when the inbox is an active remote member of this
 // host; false leaves the request to the ordinary handler (any lookup that fails or finds nothing does: the ordinary path
 // then gives its own refusals). body is the forwarded JSON body (nil for a GET), which must carry no origin_inbox.
-func (m *Module) forwardAsRemoteMember(w http.ResponseWriter, inbox, method, path string, q url.Values, body any) bool {
+func (m *Module) forwardAsRemoteMember(w http.ResponseWriter, inbox, method, path string, q url.Values, body any, retrySafe bool, resendHint string) bool {
 	if m.cmdCaller == nil || inbox == "" {
 		return false
 	}
@@ -71,10 +71,14 @@ func (m *Module) forwardAsRemoteMember(w http.ResponseWriter, inbox, method, pat
 	ctx, cancel := context.WithTimeout(m.stopCtx, proxyForwardTimeout)
 	defer cancel()
 	res := m.cmdCaller.Call(ctx, row.LeadHostID, team.ProxyRoute, req)
+	if res.Class == peersmod.ClassTransient && retrySafe && ctx.Err() == nil {
+		// The call may have been applied with its answer lost: the very same request again is safe (a report is idempotent on
+		// its id, a list reads), a different one would not be.
+		res = m.cmdCaller.Call(ctx, row.LeadHostID, team.ProxyRoute, req)
+	}
 	if res.Class != peersmod.ClassDone {
 		m.logf("[team] proxy %s %s for %s: %s %s %v", method, path, row.MK, res.Class, res.Code, res.Err)
-		code := http.StatusServiceUnavailable
-		m.writeErr(w, code, team.ErrProxyLeadUnreachable, "the lead host cannot be reached ("+string(res.Class)+"); retry", nil)
+		m.writeProxyFailure(w, res, resendHint)
 		return true
 	}
 	var ans team.ProxyAnswer
@@ -90,6 +94,28 @@ func (m *Module) forwardAsRemoteMember(w http.ResponseWriter, inbox, method, pat
 	w.WriteHeader(ans.Status)
 	_, _ = w.Write(out)
 	return true
+}
+
+// writeProxyFailure answers a forwarded call that got no proxy answer, keeping what the host caller knows: only a transport
+// failure (or a token the lead host does not accept yet) is "retry"; a lead host that is no longer paired, one that does not
+// serve the route, or one that refused the call itself are not.
+func (m *Module) writeProxyFailure(w http.ResponseWriter, res peersmod.CallResult, resendHint string) {
+	switch res.Class {
+	case peersmod.ClassUnpaired:
+		m.writeErr(w, http.StatusConflict, team.ErrProxyLeadUnpaired, "this host is no longer paired with the lead host", nil)
+	case peersmod.ClassWrongHost:
+		m.writeErr(w, http.StatusConflict, team.ErrCommandWrongHost, "the lead host's address now belongs to another host", nil)
+	case peersmod.ClassUnsupported:
+		m.writeErr(w, http.StatusConflict, team.ErrRemoteUnsupported, "the lead host does not support member reports yet; upgrade it", nil)
+	case peersmod.ClassRefused:
+		m.writeErr(w, http.StatusBadGateway, team.ErrProxyLeadRefused, "the lead host refused the call ("+boundText(res.Code)+")", nil)
+	default: // transient, unauthorized (a token it has not learnt yet), anything unexpected
+		detail := "the lead host cannot be reached (" + string(res.Class) + "); retry"
+		if resendHint != "" {
+			detail += "; the call may have been applied — " + resendHint
+		}
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrProxyLeadUnreachable, detail, nil)
+	}
 }
 
 // proxyForwardTimeout bounds one forwarded call (the host caller has its own cap too).

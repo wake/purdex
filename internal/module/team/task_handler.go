@@ -201,7 +201,7 @@ func (m *Module) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 // Finished tasks are hidden unless all=1.
 func (m *Module) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if m.forwardAsRemoteMember(w, q.Get("origin_inbox"), http.MethodGet, "/api/team/tasks", q, nil) {
+	if m.forwardAsRemoteMember(w, q.Get("origin_inbox"), http.MethodGet, "/api/team/tasks", q, nil, true, "") {
 		return
 	}
 	c, ok := m.taskCallerOf(w, q.Get("origin_inbox"))
@@ -305,7 +305,7 @@ func (m *Module) handleTaskStatus(w http.ResponseWriter, r *http.Request) {
 	if !m.decodeBody(w, r, &req) {
 		return
 	}
-	if m.forwardAsRemoteMember(w, req.OriginInbox, http.MethodPost, "/api/team/tasks/"+url.PathEscape(r.PathValue("id"))+"/status", nil, map[string]any{"status": req.Status}) {
+	if m.forwardAsRemoteMember(w, req.OriginInbox, http.MethodPost, "/api/team/tasks/"+url.PathEscape(r.PathValue("id"))+"/status", nil, map[string]any{"status": req.Status}, false, "look at pdx task mine before changing it again") {
 		return
 	}
 	c, ok := m.taskCallerOf(w, req.OriginInbox)
