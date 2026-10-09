@@ -61,6 +61,9 @@ func runPeersHostAllowTeam(cfg config.Config, base string, inv peersInvocation, 
 		roots = strings.Join(row.TeamRoots, ", ")
 	}
 	fmt.Fprintf(stdout, "%s: allow-team %s  roots: %s\n", sanitizeCell(row.Alias), state, sanitizeCell(roots))
+	if inv.endMembers {
+		return endMembersOf(cfg, row, stdout, stderr)
+	}
 	return 0
 }
 
