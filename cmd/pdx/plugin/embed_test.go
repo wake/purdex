@@ -593,8 +593,9 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		"`/relay` (or `/relay now`) is the user's way to relay early: **you never run it**",
 		// /lead (lead-command spec §3): requested at once, not judged.
 		"When the user runs `/lead` or plainly asks you to become a lead, request it at once",
-		// P6-1′: until pdx relay <ref> exists the skill says so in plain words and sends no lead to a missing command.
-		"**The member-relay command is not available yet.**",
+		// P6-5: the lead decides when a member is relayed, with pdx relay <ref> in the foreground; approval is the user's.
+		"**you decide** whether and when to relay that member: `pdx relay <ref> --wait 9m`", "**in the foreground with Bash `timeout: 600000`**",
+		"`relay_unsupported`: that member has no Purdex mod", "you never approve it",
 		// #2062: the relay quota and its switch are the user's.
 		"**The relay quota is the user's.**", "you never ask for more quota", "a lead sees its own in the header of `pdx team`, read-only",
 		// The team's member limit is the user's too.
@@ -607,8 +608,8 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 			t.Errorf("SKILL.md lacks %q", want)
 		}
 	}
-	if strings.Contains(s, "**you decide** whether and when to relay that member: `pdx relay <ref>`") {
-		t.Error("SKILL.md still tells a lead to run a member-relay command that does not exist yet (P6-5 brings it back)")
+	if strings.Contains(s, "The member-relay command is not available yet") {
+		t.Error("SKILL.md still says the member-relay command is not available (P6-5 brought it)")
 	}
 	if strings.Contains(s, "--root <dir> [--repo") {
 		t.Error("SKILL.md still teaches the pre-P4 spawn grammar")

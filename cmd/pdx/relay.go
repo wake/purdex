@@ -22,8 +22,8 @@ import (
 )
 
 // relayUsage is the grammar-rejection message for `pdx relay` (exit 2).
-// These are the mod's calls (lead-team-relay spec §8.3); `pdx relay <ref>`
-// (the lead's member relay) and `claim` arrive with P6.
+// These are the mod's calls (lead-team-relay spec §8.3) plus `pdx relay <ref>`
+// (the lead's member relay, P6-5).
 const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]\n" +
 	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--config <path>]\n" +
 	"       pdx relay wait <request_id> [--wait 9m] [--config <path>]\n" +
@@ -31,7 +31,9 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 	"       pdx relay report <op> <state> [--new-session <sid>] [--error <e>] [--config <path>]\n" +
 	"       pdx relay op <id> [--config <path>]\n" +
 	"       pdx relay prompts [--config <path>]\n" +
-	"       pdx relay lock|unlock <op> --session <sid> [--config <path>]"
+	"       pdx relay lock|unlock <op> --session <sid> [--config <path>]\n" +
+	"       pdx relay claim|seen <op> --session <sid> [--config <path>]\n" +
+	"       pdx relay <ref|address> [--wait <dur>] [--config <path>]"
 
 const (
 	// relayAttemptTimeout bounds one long-poll (team.MaxPollWaitS plus room), as lead's does.
@@ -53,6 +55,10 @@ var relayRefusalCodes = map[string]bool{
 	team.ErrSelfRelayPaused:    true,
 	team.ErrRelayOpen:          true,
 	team.ErrBadTransition:      true,
+	team.ErrNotLead:            true, // P6-5: the member relay's refusals
+	team.ErrNotYourMember:      true,
+	team.ErrRelayUnsupported:   true,
+	team.ErrNotYourOp:          true,
 }
 
 // runRelay is the `pdx relay` switch target. SIGINT/SIGTERM cancel ctx;
@@ -110,11 +116,18 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		return runRelayOp(ctx, args[1:], stdout, stderr, clientOpts)
 	case "prompts":
 		return runRelayPrompts(ctx, args[1:], stdout, stderr, clientOpts)
+	case "claim":
+		return runRelayClaim(ctx, args[1:], stdout, stderr, clientOpts)
+	case "seen":
+		return runRelaySeen(ctx, args[1:], stdout, stderr, clientOpts)
 	case "lock":
 		return runRelayLock(args[1:], stdout, stderr, true)
 	case "unlock":
 		return runRelayLock(args[1:], stdout, stderr, false)
 	default:
+		if isMemberRelayTarget(args[0]) {
+			return runRelayMember(ctx, args[0], args[1:], stdout, stderr, clientOpts)
+		}
 		fmt.Fprintf(stderr, "pdx relay: unknown subcommand %q\n%s\n", args[0], relayUsage)
 		return ExitUsage
 	}
