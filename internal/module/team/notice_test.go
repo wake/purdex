@@ -88,3 +88,18 @@ func TestHandover_AFailedSendIsLoggedNotFatal(t *testing.T) {
 	f.relayLeadTo("sid-1b") // the cleared still answers 200 (relayLeadTo fails the test otherwise)
 	waitFor(t, func() bool { return countLines(logs(), "handover notice to") == 1 })
 }
+
+// Mutation gate: drop the stopping() check under noticeMu → a notice is sent after Stop (red).
+func TestHandover_NothingStartsOnceStopHasBegun(t *testing.T) {
+	f := newFixture(t)
+	f.approveLead(uid(1))
+	seedMember(t, f.m.store, "op-a", uid(1), "sid-ma", f.clock.Load())
+	opID := f.relayLeadTo("sid-1b")
+	waitFor(t, func() bool { return len(f.sender.calls()) == 1 })
+	f.m.stopCancel()
+	f.m.handoverNoticeAsync(f.op(opID))
+	f.m.sweepWG.Wait() // would race with a late Add if the guard were missing
+	if n := len(f.sender.calls()); n != 1 {
+		t.Fatalf("a notice went out after Stop began: %d sends", n)
+	}
+}

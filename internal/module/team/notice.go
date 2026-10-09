@@ -19,10 +19,16 @@ const HandoverNoticeFmt = "[pdx team] 你的 lead 已換手：%s [%s]（舊 ref 
 
 // handoverNoticeAsync sends the notice from its own goroutine, so the report's answer never waits for N peer sends.
 func (m *Module) handoverNoticeAsync(op team.RelayOp) {
-	if m.sender == nil || op.State != team.RelayCleared || op.NewSessionID == "" || m.stopping() {
+	if m.sender == nil || op.State != team.RelayCleared || op.NewSessionID == "" {
+		return
+	}
+	m.noticeMu.Lock()
+	if m.stopping() { // Stop cancels under noticeMu: past this check the Add precedes Stop's Wait
+		m.noticeMu.Unlock()
 		return
 	}
 	m.sweepWG.Add(1)
+	m.noticeMu.Unlock()
 	go func() {
 		defer m.sweepWG.Done()
 		m.handoverNotice(op)
