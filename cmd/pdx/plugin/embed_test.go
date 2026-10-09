@@ -591,6 +591,8 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		"Report with `pdx report <kind>`", "`pdx task mine` lists your tasks",
 		// /relay now (lead-command spec §2b): the user's early relay, never the agent's.
 		"`/relay` (or `/relay now`) is the user's way to relay early: **you never run it**",
+		// /lead (lead-command spec §3): requested at once, not judged.
+		"When the user runs `/lead` or plainly asks you to become a lead, request it at once",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md lacks %q", want)

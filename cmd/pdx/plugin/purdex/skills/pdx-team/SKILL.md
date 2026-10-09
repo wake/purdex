@@ -10,6 +10,7 @@ Vocabulary (spec §4): a **lead** runs a **team** of **members**. A member is ne
 ## When to ask for lead mode, and how to wait
 
 - Ask only when the work is **large and parallel**: several independent pieces that would each take a session a long time. One sequential task is not a reason.
+- When the user runs `/lead` or plainly asks you to become a lead, request it at once: the "large and parallel" test above does not apply.
 - Run `pdx lead request --reason "<why>" --name "<team name>" --label "<短名>" [--max-members N] [--root <dir>]` **in the foreground**, with Bash `timeout: 600000`. **Never in the background**: the approval is a hard lock on this session and a background run defeats it.
 - Always give `--name`: a name for the team's work (at most 64 bytes); it is shown in the team panel, and the user may change it when approving.
 - Always give `--label`: a short, meaningful name of your own for the tab group label, about five Chinese characters (10 display columns), e.g. `A 線`, `資源線`, `資源派工` — a summary, never the name cut short.
