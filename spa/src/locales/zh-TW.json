@@ -2125,6 +2125,8 @@
   "approval.toast.ended_while_away": "{{host}}：{{session}} 的 {{kind}}已在離線期間結束，你的決定未送出",
   "approval.notify.title": "{{host}}：{{session}} 申請成為 lead",
   "approval.restart.pending": "{{count}} 個申請等待核准",
+  "approval.restart.relays": "{{count}} 個接力進行中（重啟後會接續）",
+  "approval.restart.join": "、",
   "approval.dialog.title_self_relay": "{{host}}：{{session}} 申請接力",
   "approval.dialog.title_adopt": "{{host}}：{{lead}} 想把 {{target}} 納入 team",
   "approval.dialog.ref": "Ref",

@@ -195,7 +195,7 @@ export type ApprovalEventValue =
   | { op: 'opened' | 'closed'; approval: Approval }
   | { op: 'snapshot'; approvals: Approval[] }
 
-/** `GET /api/team/inflight` (spec §9.5): what a restart of that daemon would interrupt. `relays_active` is 0 until P6. */
+/** `GET /api/team/inflight` (spec §9.5): what a restart of that daemon would interrupt. `relays_active` counts the relays in progress (self and member; they resume after the restart). */
 export interface InflightResponse {
   approvals_open: number
   relays_active: number

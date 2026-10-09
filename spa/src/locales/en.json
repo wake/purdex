@@ -2125,6 +2125,8 @@
   "approval.toast.ended_while_away": "{{host}}: the {{kind}} from {{session}} ended while this app was disconnected; your decision was not sent",
   "approval.notify.title": "{{host}}: {{session}} requests to become lead",
   "approval.restart.pending": "{{count}} request(s) awaiting approval",
+  "approval.restart.relays": "{{count}} relay(s) in progress (they resume after the restart)",
+  "approval.restart.join": ", ",
   "approval.dialog.title_self_relay": "{{host}}: {{session}} requests a relay",
   "approval.dialog.title_adopt": "{{host}}: {{lead}} wants to take {{target}} into its team",
   "approval.dialog.ref": "Ref",
