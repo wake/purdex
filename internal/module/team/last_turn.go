@@ -78,6 +78,19 @@ func (s *Store) SetLastTurn(sessionID, summary string, at, seq int64) (lastTurnW
 		if err != nil {
 			return fmt.Errorf("last turn: member of %s: %w", sessionID, err)
 		}
+		// The newest stamp this member holds anywhere (its row, any of its tasks): the target moves with the
+		// task's status, so a late event must not become visible just because it lands on a place that is empty.
+		var newestAt, newestSeq int64
+		if err := conn.QueryRowContext(ctx, `SELECT last_turn_at, last_turn_seq FROM (
+				SELECT last_turn_at, last_turn_seq FROM team_members WHERE spawn_op = ?
+				UNION ALL
+				SELECT last_turn_at, last_turn_seq FROM tasks WHERE team_id = ? AND owner_key = ?)
+			ORDER BY last_turn_at DESC, last_turn_seq DESC LIMIT 1`, key, teamID, key).Scan(&newestAt, &newestSeq); err != nil {
+			return fmt.Errorf("last turn: newest stamp of %s: %w", sessionID, err)
+		}
+		if at < newestAt || (at == newestAt && seq <= newestSeq) {
+			return nil // not newer than what the member already shows
+		}
 		var taskSeq int
 		err = conn.QueryRowContext(ctx, `SELECT seq FROM tasks WHERE team_id = ? AND owner_key = ? AND status = 'in_progress'
 			ORDER BY updated_at DESC, seq DESC LIMIT 1`, teamID, key).Scan(&taskSeq)

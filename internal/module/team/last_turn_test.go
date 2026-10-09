@@ -291,3 +291,28 @@ func TestLastTurn_SubscribesAndLetsGo(t *testing.T) {
 		t.Fatalf("unsub = %d", f.unsub)
 	}
 }
+
+// The target moves with the task's status; a late event must not reappear on the place that is empty
+// (codex R1). Mutation gate: drop the cross-location check → red.
+func TestLastTurn_ALateEventNeverReappearsWhenTheTargetMoves(t *testing.T) {
+	w := newTaskWorld(t)
+	w.turn("sid-ma", "newer, on the row.", 200, 2) // no task: the member row
+	tk := w.mustTask(leadInbox, w.ma.Ref, "own", nil)
+	w.start(tk.ID)
+	w.turn("sid-ma", "older, late.", 100, 1) // now an in_progress task is the target
+	if sum, _ := w.taskTurn(tk.ID); sum != "" {
+		t.Fatalf("a late event became visible on the task: %q", sum)
+	}
+	w.turn("sid-ma", "newest.", 300, 3)
+	if sum, _ := w.taskTurn(tk.ID); sum != "newest." {
+		t.Fatalf("task = %q", sum)
+	}
+	// and back: the task completes, a late event must not move onto the row either
+	if code, _, e := w.setStatus(leadInbox, tk.ID, team.TaskCompleted); code != http.StatusOK {
+		t.Fatalf("%d %+v", code, e)
+	}
+	w.turn("sid-ma", "late again.", 250, 9)
+	if sum, at, _ := w.rowTurn(w.ma.SpawnOp); at != 200 || sum != "newer, on the row." {
+		t.Fatalf("row = %q @%d", sum, at)
+	}
+}
