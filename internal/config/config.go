@@ -255,6 +255,11 @@ func (c Config) Clone() Config {
 	out.Nex.ServiceRoots = slices.Clone(c.Nex.ServiceRoots)
 	out.Nex.PathPrepend = slices.Clone(c.Nex.PathPrepend)
 
+	if c.Push != nil {
+		p := *c.Push
+		out.Push = &p
+	}
+
 	return out
 }
 
@@ -274,6 +279,7 @@ type Config struct {
 	Dev          DevConfig      `toml:"dev"            json:"dev"`
 	Peers        PeersConfig    `toml:"peers"          json:"peers"`
 	Nex          NexConfig      `toml:"nex"            json:"nex"`
+	Push         *PushConfig    `toml:"push,omitempty" json:"push,omitempty"`
 
 	// Path is the file Load read (or would have read: a missing file still
 	// sets it), so a caller can name this daemon's config to a child — the
