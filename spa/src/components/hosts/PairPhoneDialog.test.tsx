@@ -130,7 +130,7 @@ describe('PairPhoneDialog setup', () => {
     expect(setupLeft).toMatch(/tokenless: no token/)
     await clickCreate()
     const sent = inputOf().hosts.map((h) => h.id)
-    expect(sent).not.toContain('bare')
+    expect(sent).toEqual(Object.keys(useHostStore.getState().hosts)) // the session gets every host and classifies with the same helper, so its leftOut matches the setup list
     const cls = pairing.classifyHostsForPairing(Object.values(useHostStore.getState().hosts), hostLookOf)
     fake.push({ phase: 'ready', result: { ...readyResult, leftOut: cls.leftOut }, leftOut: cls.leftOut })
     const ready = screen.getByTestId('pair-leftout-ready').textContent!
@@ -170,7 +170,7 @@ describe('PairPhoneDialog setup', () => {
     expect((screen.getByRole('button', { name: 'Generate code' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('Generate code starts a session with the picked profile, relay, hosts with a token and the default label', async () => {
+  it('Generate code starts a session with the picked profile, relay, every host (the session classifies them) and the default label', async () => {
     await renderDialog()
     fireEvent.change(screen.getByLabelText('Workbench'), { target: { value: 'p1' } })
     fireEvent.change(screen.getByLabelText('Relay through'), { target: { value: 'air' } })
@@ -178,7 +178,7 @@ describe('PairPhoneDialog setup', () => {
     const input = inputOf()
     expect(input.profile).toEqual({ sotHostId: 'air', profileId: 'p1', profileName: 'Home' })
     expect(input.relay.id).toBe('air')
-    expect(input.hosts.map((h) => h.id)).toEqual(['relay', 'air'])
+    expect(input.hosts.map((h) => h.id)).toEqual(['relay', 'air', 'bare'])
     expect(input.label).toBe('iPhone')
     expect(fake.session.start).toHaveBeenCalledTimes(1)
   })

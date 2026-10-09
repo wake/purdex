@@ -25,10 +25,6 @@ interface ProfileChoice {
 }
 type ProfileList = { kind: 'loading' } | { kind: 'ok'; profiles: ProfileChoice[] } | { kind: 'failed' }
 
-function hasToken(h: HostConfig): boolean {
-  return typeof h.token === 'string' && h.token !== ''
-}
-
 /** mm:ss until `deadline`, re-read every second. Mounted only while the code is shown, so `now` starts fresh. */
 function Countdown({ deadline }: { deadline: number }) {
   const t = useI18nStore((s) => s.t)
@@ -58,7 +54,6 @@ export function PairPhoneDialog({ onClose }: Props) {
   const lookOf = useHostLookResolver()
 
   const list = hostOrder.map((id) => hosts[id]).filter((h): h is HostConfig => h !== undefined)
-  const withToken = list.filter(hasToken)
   // Setup and ready share one rule (lib/pairing.ts): what is knowable before minting is shown before minting.
   const classified = classifyHostsForPairing(list, lookOf)
   const usable = classified.usable
@@ -133,7 +128,7 @@ export function PairPhoneDialog({ onClose }: Props) {
     const session = createPairingSession({
       profile: { sotHostId, profileId: profile.id, profileName: profile.name },
       relay,
-      hosts: withToken,
+      hosts: list,
       label: phoneLabel,
     })
     sessionRef.current = session
