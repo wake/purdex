@@ -142,11 +142,12 @@ func (s *Store) SetLeadUsage(teamID, leadSessionID string, c team.MemberContext)
 // gone (the sweeper may mark it gone meanwhile), and that session has no
 // relay op in flight. killed says whether this call marked it.
 func (s *Store) MarkMemberKilled(spawnOp, sessionID string, at int64) (bool, error) {
-	res, err := s.db.Exec(`UPDATE team_members SET state = 'killed', updated_at = ?
+	// ended_at is when the row first left `active`: a row that went gone keeps its time.
+	res, err := s.db.Exec(`UPDATE team_members SET state = 'killed', updated_at = ?, ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
 		WHERE spawn_op = ? AND session_id = ? AND state IN ('active', 'gone')
 		  AND NOT EXISTS (SELECT 1 FROM relay_ops
 			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
-		at, spawnOp, sessionID, sessionID)
+		at, at, spawnOp, sessionID, sessionID)
 	return oneRow(res, err, "mark member "+spawnOp+" killed")
 }
 
@@ -159,10 +160,10 @@ func (s *Store) MarkMemberKilled(spawnOp, sessionID string, at int64) (bool, err
 // The guard is in the statement, as EndTeam's is, so a relay claimed after
 // the caller looked wins. gone says whether this call marked it.
 func (s *Store) MarkMemberGone(spawnOp, sessionID string, at int64) (bool, error) {
-	res, err := s.db.Exec(`UPDATE team_members SET state = 'gone', updated_at = ?
+	res, err := s.db.Exec(`UPDATE team_members SET state = 'gone', updated_at = ?, ended_at = ?
 		WHERE spawn_op = ? AND session_id = ? AND state = 'active'
 		  AND NOT EXISTS (SELECT 1 FROM relay_ops
 			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
-		at, spawnOp, sessionID, sessionID)
+		at, at, spawnOp, sessionID, sessionID)
 	return oneRow(res, err, "mark member "+spawnOp+" gone")
 }
