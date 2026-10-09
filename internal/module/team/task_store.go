@@ -207,50 +207,108 @@ func (s *Store) CreateTask(t TaskRow) (TaskRow, error) {
 	}
 	var out TaskRow
 	err := s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
-		var maxSeq int
-		if err := conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq), 0) FROM tasks WHERE team_id = ?`, t.TeamID).Scan(&maxSeq); err != nil {
-			return fmt.Errorf("read next seq: %w", err)
-		}
-		if s.afterTaskSeqRead != nil {
-			s.afterTaskSeqRead()
-		}
-		seq := maxSeq + 1
-
-		active, err := activeMemberIn(ctx, conn, t.TeamID, t.OwnerKey)
-		if err != nil {
-			return fmt.Errorf("check owner: %w", err)
-		}
-		if !active {
-			return ErrOwnerNotActive
-		}
-		blockedBy, err := checkBlockedBy(ctx, conn, t.TeamID, seq, t.BlockedBy)
-		if err != nil {
-			return err
-		}
-
-		row := t
-		row.Seq, row.Status, row.BlockedBy = seq, team.TaskPending, blockedBy
-		if row.DoneWhen == nil {
-			row.DoneWhen = []string{}
-		}
-		row.Metadata = team.TaskMetadata{}
-		doneJSON, _ := json.Marshal(row.DoneWhen)
-		blockedJSON, _ := json.Marshal(row.BlockedBy)
-		metaJSON, _ := json.Marshal(row.Metadata)
-		if _, err := conn.ExecContext(ctx, `INSERT INTO tasks (team_id, seq, subject, description, done_when_json, status,
-			owner_key, blocked_by_json, created_by_ref, spawn_op, metadata_json, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			row.TeamID, row.Seq, row.Subject, row.Description, string(doneJSON), string(row.Status),
-			row.OwnerKey, string(blockedJSON), row.CreatedByRef, row.SpawnOp, string(metaJSON), row.CreatedAt, row.UpdatedAt); err != nil {
-			return fmt.Errorf("insert task: %w", err)
-		}
-		out = row
-		return nil
+		var err error
+		out, err = s.createTaskIn(ctx, conn, t)
+		return err
 	})
 	if err != nil {
 		return TaskRow{}, err
 	}
 	return out, nil
+}
+
+// createTaskIn is CreateTask's body on a connection that holds the write
+// lock (immediateTx), so the member insert of a spawn can share the
+// transaction (T-2).
+func (s *Store) createTaskIn(ctx context.Context, conn *sql.Conn, t TaskRow) (TaskRow, error) {
+	var maxSeq int
+	if err := conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq), 0) FROM tasks WHERE team_id = ?`, t.TeamID).Scan(&maxSeq); err != nil {
+		return TaskRow{}, fmt.Errorf("read next seq: %w", err)
+	}
+	if s.afterTaskSeqRead != nil {
+		s.afterTaskSeqRead()
+	}
+	seq := maxSeq + 1
+
+	active, err := activeMemberIn(ctx, conn, t.TeamID, t.OwnerKey)
+	if err != nil {
+		return TaskRow{}, fmt.Errorf("check owner: %w", err)
+	}
+	if !active {
+		return TaskRow{}, ErrOwnerNotActive
+	}
+	blockedBy, err := checkBlockedBy(ctx, conn, t.TeamID, seq, t.BlockedBy)
+	if err != nil {
+		return TaskRow{}, err
+	}
+
+	row := t
+	row.Seq, row.Status, row.BlockedBy = seq, team.TaskPending, blockedBy
+	if row.DoneWhen == nil {
+		row.DoneWhen = []string{}
+	}
+	row.Metadata = team.TaskMetadata{}
+	doneJSON, _ := json.Marshal(row.DoneWhen)
+	blockedJSON, _ := json.Marshal(row.BlockedBy)
+	metaJSON, _ := json.Marshal(row.Metadata)
+	if _, err := conn.ExecContext(ctx, `INSERT INTO tasks (team_id, seq, subject, description, done_when_json, status,
+		owner_key, blocked_by_json, created_by_ref, spawn_op, metadata_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.TeamID, row.Seq, row.Subject, row.Description, string(doneJSON), string(row.Status),
+		row.OwnerKey, string(blockedJSON), row.CreatedByRef, row.SpawnOp, string(metaJSON), row.CreatedAt, row.UpdatedAt); err != nil {
+		return TaskRow{}, fmt.Errorf("insert task: %w", err)
+	}
+	return row, nil
+}
+
+// InsertMemberAndTask is a spawn's member insert and its first task in one
+// write transaction (T-2, D-T8): a member never exists without its task, and
+// neither is written when either fails. Both halves are idempotent, so a
+// finish that runs again after a crash adds nothing: the member by its
+// spawn_op, the task by the unique index on tasks.spawn_op (the task whose
+// row already exists is returned). t == nil is InsertMember.
+func (s *Store) InsertMemberAndTask(m memberRow, t *TaskRow) (TaskRow, error) {
+	if t == nil {
+		return TaskRow{}, s.InsertMember(m)
+	}
+	if m.SpawnOp == "" || t.SpawnOp != m.SpawnOp || t.OwnerKey != m.SpawnOp || t.TeamID != m.TeamID {
+		return TaskRow{}, errors.New("insert member and task: the task must belong to this spawn's member")
+	}
+	var out TaskRow
+	err := s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		if err := insertMemberIn(ctx, conn, m); err != nil {
+			return err
+		}
+		var seq int
+		err := conn.QueryRowContext(ctx, `SELECT seq FROM tasks WHERE spawn_op = ?`, m.SpawnOp).Scan(&seq)
+		switch {
+		case err == nil:
+			row, _, gerr := getTaskIn(ctx, conn, m.TeamID, seq)
+			out = row
+			return gerr
+		case !errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("read spawn task: %w", err)
+		}
+		out, err = s.createTaskIn(ctx, conn, *t)
+		return err
+	})
+	if err != nil {
+		return TaskRow{}, err
+	}
+	return out, nil
+}
+
+// TaskBySpawnOp is the task a spawn created, if it created one.
+func (s *Store) TaskBySpawnOp(teamID, spawnOp string) (TaskRow, bool, error) {
+	var seq int
+	err := s.db.QueryRow(`SELECT seq FROM tasks WHERE team_id = ? AND spawn_op = ?`, teamID, spawnOp).Scan(&seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TaskRow{}, false, nil
+	}
+	if err != nil {
+		return TaskRow{}, false, fmt.Errorf("task of spawn %s: %w", spawnOp, err)
+	}
+	return s.GetTask(teamID, seq)
 }
 
 // checkBlockedBy returns the deduplicated blockers of the task about to get

@@ -139,6 +139,71 @@ func (c taskCall) ls(args []string) int {
 	return ExitOK
 }
 
+// mine implements `pdx task mine [--all] [--json | --seed]`: a member's own
+// tasks (a lead is refused not_member, exit 13). --seed prints the relay
+// notice's lines (team.TaskSeedText), nothing when the member has no open task.
+func (c taskCall) mine(args []string) int {
+	fs := flag.NewFlagSet("pdx task mine", flag.ContinueOnError)
+	cfgPath := fs.String("config", "", "")
+	all := fs.Bool("all", false, "")
+	asJSON := fs.Bool("json", false, "")
+	seed := fs.Bool("seed", false, "")
+	pos, err := parseTeamFlags(fs, args)
+	switch {
+	case err == nil && len(pos) != 0:
+		err = fmt.Errorf("unexpected argument %q", pos[0])
+	case err == nil && *asJSON && *seed:
+		err = fmt.Errorf("--json 與 --seed 只能擇一")
+	}
+	if err != nil {
+		return taskUsageErr(c.stderr, err.Error())
+	}
+	client, inbox, ok := teamSetup("task", *cfgPath, c.getenv, c.stderr, c.clientOpts)
+	if !ok {
+		return ExitError
+	}
+	q := url.Values{"origin_inbox": {inbox}, "mine": {"1"}}
+	if *all {
+		q.Set("all", "1")
+	}
+	var raw json.RawMessage
+	if _, err := client.Do(c.ctx, http.MethodGet, "/api/team/tasks?"+q.Encode(), nil, &raw); err != nil {
+		return teamReportErr("task", err, c.stderr)
+	}
+	var list team.TaskList
+	var line bytes.Buffer
+	if json.Unmarshal(raw, &list) != nil || json.Compact(&line, raw) != nil {
+		fmt.Fprintln(c.stderr, "pdx task: daemon 的回應不是 task list invalid_response")
+		return ExitError
+	}
+	switch {
+	case *asJSON:
+		fmt.Fprintln(c.stdout, line.String())
+	case *seed:
+		// The member's own words are in it (subjects): cleaned like the table's cells.
+		clean := make([]team.Task, len(list.Tasks))
+		for i, t := range list.Tasks {
+			t.ID, t.Subject = taskCell(t.ID), taskCell(t.Subject)
+			clean[i] = t
+		}
+		if text := team.TaskSeedText(clean); text != "" {
+			fmt.Fprintln(c.stdout, text)
+		}
+	default:
+		tw := tabwriter.NewWriter(c.stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "ID\tSTATUS\tSUBJECT\tLAST")
+		for _, t := range list.Tasks {
+			fmt.Fprintln(tw, strings.Join([]string{taskCell(t.ID), taskStatusCell(t),
+				cutRunes(taskCell(t.Subject), taskSubjectCells), taskAge(taskLastAt(t))}, "\t"))
+		}
+		if err := tw.Flush(); err != nil {
+			fmt.Fprintf(c.stderr, "pdx task: %v\n", err)
+			return ExitError
+		}
+	}
+	return ExitOK
+}
+
 // show implements `pdx task show <id> [--json | --message]`. --message
 // prints the down message the task would send (so a failed send can be
 // repeated by hand), from the same composer as add and reassign.

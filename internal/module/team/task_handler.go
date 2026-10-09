@@ -196,7 +196,8 @@ func (m *Module) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 
 // handleTaskList is GET /api/team/tasks?origin_inbox=&member=<ref>&all=1: a
 // lead lists its team's tasks (narrowed to one member by member), a member
-// its own. Finished tasks are hidden unless all=1.
+// its own. mine=1 is a member's only: a lead is answered not_member (T-2).
+// Finished tasks are hidden unless all=1.
 func (m *Module) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	c, ok := m.taskCallerOf(w, q.Get("origin_inbox"))
@@ -205,6 +206,10 @@ func (m *Module) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	}
 	owner := ""
 	switch target := q.Get("member"); {
+	case q.Get("mine") == "1" && c.member == nil:
+		// `pdx task mine` is a member's: a lead asking is not one (T-2).
+		m.notMember(w)
+		return
 	case c.member != nil && target != "":
 		m.writeErr(w, http.StatusConflict, team.ErrNotLead, "only a lead filters by member", nil)
 		return

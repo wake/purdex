@@ -141,10 +141,18 @@ func (m *Module) spawnFinish(op spawnRow, o *team.Origin) {
 		o = &r
 	}
 	now := m.now()
-	if err := m.store.InsertMember(memberRow{SpawnOp: op.ID, TeamID: op.TeamID, HostID: op.HostID, SessionID: op.SessionID,
+	mem := memberRow{SpawnOp: op.ID, TeamID: op.TeamID, HostID: op.HostID, SessionID: op.SessionID,
 		Ref: o.Ref, Title: op.Title, Cwd: op.Cwd, TmuxSession: op.TmuxName, TmuxID: op.TmuxID, TmuxInstance: op.TmuxInstance,
 		PaneID: op.PaneID, PID: o.PID, ProcStart: o.ProcStart, Model: op.Model, Effort: op.Effort,
-		State: team.MemberActive, CreatedAt: now, UpdatedAt: now}); err != nil {
+		State: team.MemberActive, CreatedAt: now, UpdatedAt: now}
+	var first *TaskRow
+	if op.TaskSubject != "" {
+		// The spawn's task, created with the member row in one transaction (T-2).
+		first = &TaskRow{TeamID: op.TeamID, Subject: op.TaskSubject, Description: op.TaskDescription,
+			DoneWhen: op.taskDoneWhen(), OwnerKey: op.ID, CreatedByRef: ipeers.RefID(op.OriginSessionID),
+			SpawnOp: op.ID, CreatedAt: now, UpdatedAt: now}
+	}
+	if _, err := m.store.InsertMemberAndTask(mem, first); err != nil {
 		m.abortSpawn(op.ID, op.TmuxID, op.TmuxInstance, err)
 		return
 	}
