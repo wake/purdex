@@ -2832,6 +2832,16 @@ test('the user\'s own /clear while the write turn holds the lock lowers it', asy
   expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old', 'relay unlock op-1 --session sid-old'])
 })
 
+// Mutation gate: drop the unlock in session.start → the flag stays up for a relay the mod no longer knows (red).
+test('a session.start after the lock went up lowers it before the state is reset', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old'])
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await clock.advance(50)
+  expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old', 'relay unlock op-1 --session sid-old'])
+})
+
 test('a lock that fails does not stop the write, and nothing is unlocked for it', async ($, on) => {
   const f0 = (argv: string[]) => argv[1] === 'lock' ? { exitCode: 1, stderr: 'pdx relay: cannot raise the relay lock: boom\n' } : pdxWith([{ exitCode: 0, stdout: APPROVAL('approved') }])(argv)
   const { f, clock } = await approvedRelay($, on, undefined, { pdx: f0 as any })

@@ -954,6 +954,8 @@ export function register(on) {
   registerLease(on)
 
   on('session.start', async ($, e, next) => {
+    const stale = s.pending
+    if (stale && stale.locked) later($, 0, () => unlockRelay($, stale)) // the reset forgets the relay: lower its lock first
     resetState()
     s.interactive = !!e.isInteractive
     if (!s.interactive) return next(e) // a Nexen worker's `claude -p`: the mod does nothing (spec §5)
