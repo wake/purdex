@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -215,6 +216,10 @@ func (c *HostCaller) TeamCaps(ctx context.Context, hostID string) (ipeers.TeamCa
 	defer cancel()
 	env, err := fetchRemote(ctx, c.client, entry.URL, entry.Token)
 	if err != nil {
+		var se *CapsStatusError
+		if errors.As(err, &se) { // the code survives, the text is bounded like any other
+			return ipeers.TeamCaps{}, se
+		}
 		return ipeers.TeamCaps{}, fmt.Errorf("%s", boundRemote(err.Error(), entry.Token))
 	}
 	if env.HostID != hostID {

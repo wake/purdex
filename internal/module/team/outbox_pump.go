@@ -3,11 +3,14 @@ package teammod
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"sync"
 	"time"
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
 )
 
 // The outbox pump (cross-host team spec §3.1 rule 6). One pump per side: L's commands (X3a), M's facts (X2c). It is
@@ -34,6 +37,8 @@ type outboxEntry struct {
 	Path     string
 	Body     json.RawMessage // the request body; it names to_host_id (HostCaller checks it)
 	Attempts int
+	// Kind is the entry's kind when the peer must announce it before it is sent (a kindGate store); "" otherwise.
+	Kind string
 	// First401At is when the current run of 401s began (unix ms), 0 when the last attempt was not a 401.
 	First401At int64
 }
@@ -52,6 +57,18 @@ type outboxStore interface {
 	// Unpaired ends the relation with the host on this side (rule 6, §3.2): reason is "unpaired" or "unpaired_by_peer".
 	Unpaired(hostID, reason string) error
 }
+
+// kindGate is an optional part of an outboxStore whose entries carry a Kind the receiving host has to announce before
+// the entry is sent (the symmetric half of rule 7: a lead host announces the fact kinds it applies, X4a-3). Without it a
+// kind the peer does not know comes back as a JSON 400, which the pump reads as a permanent refusal and settles — the fact
+// would be lost. An entry whose kind is not announced is held, not settled: it backs off like any other failure, with no
+// attempt limit, and goes out in the first round after the peer announces it.
+type kindGate interface {
+	Announces(caps ipeers.TeamCaps, kind string) bool
+}
+
+// capsTTL is how long a host's capabilities are reused by the gate (ms).
+const capsTTL = 30_000
 
 // hostCaller is *peersmod.HostCaller as the pump uses it (a test seam).
 type hostCaller interface {
@@ -72,6 +89,7 @@ type outboxPump struct {
 	wg     *sync.WaitGroup
 
 	sig     chan struct{}
+	caps    map[string]cachedCaps
 	mu      sync.Mutex
 	running map[string]bool
 	// stuck remembers, per host, the last error text logged, so a host that stays down logs once per change.
@@ -80,7 +98,31 @@ type outboxPump struct {
 
 func newOutboxPump(name string, caller hostCaller, store outboxStore, now func() int64, logf func(string, ...any), ctx context.Context, wg *sync.WaitGroup) *outboxPump {
 	return &outboxPump{name: name, caller: caller, store: store, now: now, logf: logf, ctx: ctx, wg: wg,
-		sig: make(chan struct{}, 1), running: map[string]bool{}, stuck: map[string]string{}}
+		sig: make(chan struct{}, 1), running: map[string]bool{}, stuck: map[string]string{}, caps: map[string]cachedCaps{}}
+}
+
+// cachedCaps is a host's capabilities and when they were read.
+type cachedCaps struct {
+	caps ipeers.TeamCaps
+	at   int64
+}
+
+// capsOf is the host's capabilities, reused for capsTTL: a queue of facts asks once, not once per fact.
+func (p *outboxPump) capsOf(hostID string) (ipeers.TeamCaps, error) {
+	p.mu.Lock()
+	c, ok := p.caps[hostID]
+	p.mu.Unlock()
+	if ok && p.now()-c.at < capsTTL {
+		return c.caps, nil
+	}
+	caps, err := p.caller.TeamCaps(p.ctx, hostID)
+	if err != nil {
+		return ipeers.TeamCaps{}, err
+	}
+	p.mu.Lock()
+	p.caps[hostID] = cachedCaps{caps: caps, at: p.now()}
+	p.mu.Unlock()
+	return caps, nil
 }
 
 // pumpBackoff is the wait after the n-th failed attempt (n ≥ 1): 30 s, 60 s, 120 s … capped at 10 min.
@@ -178,8 +220,35 @@ func (p *outboxPump) drain(hostID string) {
 // attempt makes one call for the head entry and acts on its class; true means the entry was settled and the next one
 // may go at once.
 func (p *outboxPump) attempt(e outboxEntry) bool {
+	if g, ok := p.store.(kindGate); ok && e.Kind != "" {
+		caps, err := p.capsOf(e.HostID)
+		var se *peersmod.CapsStatusError
+		switch {
+		case err != nil && !p.caller.Paired(e.HostID):
+			p.unpaired(e.HostID, "unpaired") // the same verdict Call would have reached
+			return false
+		case errors.As(err, &se) && se.Code == http.StatusUnauthorized:
+			p.onUnauthorized(e) // a 401 for ten minutes is unpaired_by_peer here as on a send
+			return false
+		case err != nil:
+			p.backoff(e, 0, "its capabilities are unavailable: "+err.Error())
+			return false
+		case !g.Announces(caps, e.Kind):
+			p.backoff(e, 0, "the host does not announce "+e.Kind+" yet; held")
+			return false
+		}
+	}
 	res := p.caller.Call(p.ctx, e.HostID, e.Path, e.Body)
-	now := p.now()
+	if _, gated := p.store.(kindGate); gated && e.Kind != "" && res.Class == peersmod.ClassRefused && res.Code == team.ErrCommandUnsupportedKind {
+		// The host announced the kind (the capabilities were up to date as far as the cache knew) and refused it all the
+		// same: it was downgraded, or the cache is stale. Not a verdict on the fact — the receiver does not store such a
+		// refusal — so it is held, and the next attempt reads the capabilities again.
+		p.mu.Lock()
+		delete(p.caps, e.HostID)
+		p.mu.Unlock()
+		p.backoff(e, 0, "the host refused "+e.Kind+" as unsupported; held")
+		return false
+	}
 	switch res.Class {
 	case peersmod.ClassDone, peersmod.ClassRefused, peersmod.ClassWrongHost:
 		// A done answer must be THIS entry's: HostCaller proved the host, not the command. Another id is a broken peer, not an
@@ -204,22 +273,28 @@ func (p *outboxPump) attempt(e outboxEntry) bool {
 		p.unpaired(e.HostID, "unpaired")
 		return false
 	case peersmod.ClassUnauthorized:
-		first := e.First401At
-		if first == 0 {
-			first = now
-		}
-		if peersmod.Escalate401(time.UnixMilli(first), time.UnixMilli(now)) == peersmod.ClassUnpairedByPeer {
-			p.unpaired(e.HostID, "unpaired_by_peer")
-			return false
-		}
-		// the next look is never later than the end of the 10 minutes, so the escalation is on time (not at the next
-		// doubling step after it)
-		p.backoffUntil(e, first, first+peersmod.UnpairedByPeerAfter.Milliseconds(), "401 (the peer does not know our token yet)")
+		p.onUnauthorized(e)
 		return false
 	default: // transient, unsupported (the route is missing: nothing else could apply either), anything unexpected
 		p.backoff(e, 0, string(res.Class)+" "+res.Code)
 		return false
 	}
+}
+
+// onUnauthorized is the 401 rule: a run of 401s that lasts UnpairedByPeerAfter ends the relation on this side.
+func (p *outboxPump) onUnauthorized(e outboxEntry) {
+	now := p.now()
+	first := e.First401At
+	if first == 0 {
+		first = now
+	}
+	if peersmod.Escalate401(time.UnixMilli(first), time.UnixMilli(now)) == peersmod.ClassUnpairedByPeer {
+		p.unpaired(e.HostID, "unpaired_by_peer")
+		return
+	}
+	// the next look is never later than the end of the 10 minutes, so the escalation is on time (not at the next
+	// doubling step after it)
+	p.backoffUntil(e, first, first+peersmod.UnpairedByPeerAfter.Milliseconds(), "401 (the peer does not know our token yet)")
 }
 
 func (p *outboxPump) unpaired(hostID, reason string) {

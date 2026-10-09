@@ -29,6 +29,12 @@ func newRemoteClient() *http.Client {
 	}
 }
 
+// CapsStatusError is a GET /api/peers the paired host answered with a status other than 200 ("HTTP <code>"). A caller that
+// holds a queue for the host (the facts pump's kind gate) reads the code: a 401 counts toward unpaired_by_peer.
+type CapsStatusError struct{ Code int }
+
+func (e *CapsStatusError) Error() string { return fmt.Sprintf("HTTP %d", e.Code) }
+
 // fetchRemote GETs <baseURL>/api/peers with "Authorization: Bearer <bearer>"
 // and decodes the body as an Envelope. bearer is sent only to baseURL's own
 // host — no redirect is ever followed, so it cannot leak to another host.
@@ -50,7 +56,7 @@ func fetchRemote(ctx context.Context, client *http.Client, baseURL, bearer strin
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return ipeers.Envelope{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return ipeers.Envelope{}, &CapsStatusError{Code: resp.StatusCode}
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxRemoteBodyBytes+1))

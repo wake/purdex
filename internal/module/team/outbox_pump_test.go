@@ -30,7 +30,9 @@ type fakeHostCaller struct {
 	paired  map[string]bool
 	caps    map[string]ipeers.TeamCaps
 	capsErr error
-	aliases map[string]string // alias → host id
+	// capsAsks counts the TeamCaps calls (the facts pump's kind gate caches them).
+	capsAsks int
+	aliases  map[string]string // alias → host id
 }
 
 func (f *fakeHostCaller) Call(_ context.Context, host, path string, body any) peersmod.CallResult {
@@ -60,9 +62,16 @@ func (f *fakeHostCaller) AliasOf(host string) string {
 	}
 	return ""
 }
+func (f *fakeHostCaller) capsAsked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.capsAsks
+}
+
 func (f *fakeHostCaller) TeamCaps(_ context.Context, h string) (ipeers.TeamCaps, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.capsAsks++
 	if f.capsErr != nil {
 		return ipeers.TeamCaps{}, f.capsErr
 	}

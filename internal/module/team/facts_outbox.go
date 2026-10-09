@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	ipeers "github.com/wake/purdex/internal/peers"
 )
 
 // M's facts outbox as the generic outbox pump's store (cross-host team spec §3.1 rules 1, 4, 6; plan X2c-2). The
@@ -54,9 +56,9 @@ func (o *factOutbox) Head(hostID string) (outboxEntry, int64, bool, error) {
 	var e outboxEntry
 	var body string
 	var nextAt int64
-	err := o.s.db.QueryRow(`SELECT id, host_id, body_json, attempts, first_401_at, next_at FROM team_facts
+	err := o.s.db.QueryRow(`SELECT id, host_id, kind, body_json, attempts, first_401_at, next_at FROM team_facts
 		WHERE host_id = ? AND state = ? ORDER BY rowid LIMIT 1`, hostID, factPending).
-		Scan(&e.ID, &e.HostID, &body, &e.Attempts, &e.First401At, &nextAt)
+		Scan(&e.ID, &e.HostID, &e.Kind, &body, &e.Attempts, &e.First401At, &nextAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return outboxEntry{}, 0, false, nil
 	}
@@ -65,6 +67,12 @@ func (o *factOutbox) Head(hostID string) (outboxEntry, int64, bool, error) {
 	}
 	e.Path, e.Body = factsPath, []byte(body)
 	return e, nextAt, true, nil
+}
+
+// Announces is the pump's kind gate (kindGate): a fact is sent only when the lead host lists its kind in fact_kinds. A host
+// that lists none (a daemon without the facts route) gets nothing, as before it would have answered 404.
+func (o *factOutbox) Announces(caps ipeers.TeamCaps, kind string) bool {
+	return slices.Contains(caps.FactKinds, kind)
 }
 
 func (o *factOutbox) Attempted(id string, nextAt, first401At int64) error {
