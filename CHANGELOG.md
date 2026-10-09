@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.648] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。接力做到一半時 daemon 重啟或漏了回報，現在 daemon 會自己從終端機狀態補判。
+
+### Fixed：接力的回報漏掉時，daemon 自己對帳 — P6-4a（#2215，A 線，#1735）
+
+- 接力已經開始（已認領、寫交接檔中或已寫好）時，如果 session 其實已經清空對話換成新的、卻沒回報給 daemon，daemon 會從那個終端機面板的狀態看出來，並代為記成「已接力」，後續（標題、lead 角色移轉等）照常完成。
+- 那個 session 已經不在、面板也沒有任何 agent 時，記成「member 已消失」並結束這次接力。
+- daemon 剛重啟的頭一段時間（session 可能還沒重新登記）不會下「已消失」的判斷，等寬限期過了再對帳一次，避免誤判。
+- lead 幫 member 接力時，接力完成、失敗或取消都會通知 lead（member 接力要等 P6-6 才會實際發生）。
+
 ## [1.0.0-alpha.647] - 2026-10-09
 
 > 動 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 改了）；SPA、Electron 不必更新。**接力寫交接檔的那一輪，Claude 只能做「寫交接檔」這一件事。**
