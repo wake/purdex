@@ -25,7 +25,7 @@ const maxFactBody = 64 << 10
 // binding of the host principal to its live entry, the per-host rate limit and the body cap BEFORE the body is decoded,
 // then shape, to_host_id and kind; then the store decides in one transaction (idempotency by id and content, the row
 // change, the log entry). This version applies `ended`, `registered` and `spawn_failed`; the reserved moved is 400
-// unsupported_kind (stored).
+// unsupported_kind (not stored).
 func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 	var entry config.PeerHost
 	var ourHostID string
@@ -65,17 +65,19 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandBadRequest, "id (a UUID v4), kind and team_id are required")
 		return
 	}
-	// An addressing or kind refusal is a decision of this host about an identified fact (valid id, bound sender): it is
-	// stored with the fact's content hash, so the same copy later gets the same answer and another body under the id is
-	// id_conflict (rule 3). validateFact (below) stays unstored: a malformed fact has no content worth keeping.
+	// wrong_host is a decision of this host about an identified fact (valid id, bound sender): it is stored with the fact's
+	// content hash, so the same copy later gets the same answer and another body under the id is id_conflict (rule 3).
+	// unsupported_kind is NOT stored: a kind this version does not know may be one a later version applies, and the member
+	// host drops a fact on a permanent refusal — a stored refusal would make a resend after the upgrade lose a fact that is
+	// true. (Rule 3 says refusals are stored; this is the one deliberate exception, and the member host's own gate on the
+	// kinds announced in fact_kinds keeps the case to a stale capability cache.) validateFact (below) stays unstored too.
 	var refusalPlan *CommandResult
-	switch {
-	case fact.ToHostID != ourHostID:
+	if fact.ToHostID != ourHostID {
 		r := refusal(http.StatusConflict, team.ErrCommandWrongHost, "this fact is addressed to another host")
 		refusalPlan = &r
-	case fact.Kind != team.FactEnded && fact.Kind != team.FactRegistered && fact.Kind != team.FactSpawnFailed:
-		r := refusal(http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(fact.Kind)+" facts")
-		refusalPlan = &r
+	} else if !factKindApplied(fact.Kind) {
+		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(fact.Kind)+" facts")
+		return
 	}
 	// The binding is the entry's as of now, not as of the bind: the alias may have been re-created for another host.
 	fresh, _, ok := m.peerEntry(principal.Alias)
@@ -103,6 +105,15 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 		m.rosterChanged() // a seat may have been freed
 	}
 	m.writeJSON(w, http.StatusOK, team.TeamFactAnswer{ID: fact.ID, HostID: ourHostID, Outcome: res.Body})
+}
+
+// factKindApplied: the fact kinds this version applies (the same list the inventory announces as fact_kinds).
+func factKindApplied(kind string) bool {
+	switch kind {
+	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed:
+		return true
+	}
+	return false
 }
 
 // validateFact checks that every string is bounded and free of control characters (they end up in rows) and the fields
