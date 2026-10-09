@@ -64,6 +64,18 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('a click on the header', () => {
+  it('shows the pointer cursor across the whole row in both modes, and the name does not override it', () => {
+    scene()
+    mount()
+    expect(header().className).toContain('cursor-pointer')
+    expect(header().className).toContain('select-none') // a double-click on the name must not leave its text selected
+    expect(name().className).not.toMatch(/cursor-(?!pointer)/)
+    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    expect(mode()).toBe('line')
+    expect(header().className).toContain('cursor-pointer')
+    expect(name().className).not.toMatch(/cursor-(?!pointer)/)
+  })
+
   it('toggles full and one-line from anywhere on it', () => {
     scene()
     mount()
