@@ -212,6 +212,25 @@ and count only entries that can still be taken (a claimed entry's status tombsto
     完成配對，會出現在「已配對的手機」」 — never "not paired": the paired-phones list (a token's `first_used_at`) is the
     answer that does not depend on a tombstone surviving.
 
+### 4.4 Wire details (as implemented)
+
+All times are Unix milliseconds. Every answer carries `Cache-Control: no-store`. Errors are `{"reason": …}`:
+
+- create → `200 {code, expiresAt}`; `400 bad_payload` (any row or envelope rule of §4.1, including an unknown top-level key),
+  `400 bad_expiry` (`expires_in_s` outside 60–600), `413 too_large`, `429 capacity` (16 takeable codes), `503 unavailable`;
+  no/wrong admin token → `403 no_token` / `401 unauthorized`.
+- claim → `200 {rows: [...]}` (the rows exactly as created); `403 forbidden_source`; `400 bad_request` (a body that is not
+  exactly `{code}` — not a guess, not counted); `404 invalid_code` (unknown, expired, already claimed, or a transfer
+  code — counted as a failure); `429 rate_limited` + `Retry-After` (seconds; the code is not taken); `503 unavailable`
+  (relay stopping).
+- status → `200 {claimed, claimedAt?, expiresAt}` (`claimedAt` only when claimed); `404 not_found`.
+- delete → `204` / `409 claimed` / `404 not_found` as above.
+- The source is the TCP peer address (never a forwarded header); an IPv4-mapped IPv6 address is read as its IPv4 form. All
+  loopback addresses (127.0.0.0/8 and ::1) are **one** limiter source — a local process can bind any 127.x address, so
+  per-address buckets would let it fill the table or dodge the limit; tailnet addresses are assigned by the control
+  server and stay per address. The limiter table is bounded at 4096 sources: when it is full of live windows a new source
+  is answered `429` rather than growing it.
+
 ## 5. Profile, one way (R4–R6)
 
 ### 5.1 Reading
