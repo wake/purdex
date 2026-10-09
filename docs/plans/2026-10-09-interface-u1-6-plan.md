@@ -92,6 +92,14 @@ Mutation gates: list then subscribe without the module's lock → "closed during
 
 ---
 
+## U1-6e — item `index` on API answers (iOS review 2026-10-09; after U1-6d)
+
+Files: `internal/convfeed/window.go` / the change builder, `internal/module/conversation` encoders, tests. No `convmodel` / fixture change.
+
+- Every item in a snapshot window, an increment change and a WebSocket `conversation.changes` frame carries `index` = its 0-based position in its turn's **full** item list (spec §8.2 client rules), computed when the answer is built (the entry's turn `Items` order is creation order); items dropped by the 4 MiB cap still count, so the first shown item of a turn with `omitted_items: N` has `index: N`.
+- Tests: `indexes are contiguous from 0 in a full turn`; `a capped turn's first shown item has index == omitted_items`; `an increment that updates an omitted item carries its original index`; `index unchanged by later updates`.
+- Mutation gate: index within the window instead of the full turn → the capped-turn test red.
+
 ## Acceptance (after U1-6d merges; the coordinator deploys)
 
 `scripts/acceptance/u1-6.sh` (in the repo, run by hand; tmux rules as U1-3: `acc-u16-<n>` sessions on the real server, `kill-session -t` by name only, `unset TMUX` around any test server; tokens read into variables, never printed), a Sonnet `claude` in default permission mode with a cwd inside a throw-away git repo:
