@@ -23,6 +23,7 @@ func (e *Engine) apply(l *lease, r Result) (follow *job) {
 		res, ok, err := e.d.Store.FinishSkippedV2(j.entryID, ReasonModel, j.usage, j.lat, ResolveTodos(sum.Todos, l.ids), "model")
 		if err != nil {
 			e.d.Logf("[workbook] finish a skipped entry: %v", err)
+			e.orphan(j.entryID)
 		}
 		e.logTodos(res)
 		if ok {
@@ -63,9 +64,7 @@ func (e *Engine) apply(l *lease, r Result) (follow *job) {
 func (e *Engine) finishOK(j *job) {
 	out := j.out
 	out.LatencyMS, out.Usage = j.lat, j.usage
-	if _, err := e.d.Store.Finish(j.entryID, StateOK, "", out); err != nil {
-		e.d.Logf("[workbook] finish an entry: %v", err)
-	}
+	e.finishRow(j.entryID, StateOK, "", out)
 }
 
 // applyRewrite: whatever the re-write does, the entry ends ok — thing and push are out already; a failed or empty

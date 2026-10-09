@@ -89,8 +89,9 @@ type Store struct {
 	db          *sql.DB
 	now         func() int64 // unix ms; injectable for tests
 	obs         atomic.Pointer[func(Event)]
-	afterCommit func()     // test seam: between InsertPending's commit and its event; nil in production
-	wmu         sync.Mutex // serialises the writes together with their events; an observer must not write to the store
+	failFinish  func() error // test seam: makes Finish fail; nil in production
+	afterCommit func()       // test seam: between InsertPending's commit and its event; nil in production
+	wmu         sync.Mutex   // serialises the writes together with their events; an observer must not write to the store
 }
 
 // OpenStore opens (or creates) the store at path. The file and its WAL siblings are owner-only.
@@ -211,6 +212,11 @@ func (s *Store) SetPushLine(id int64, thing, push string) (bool, error) {
 func (s *Store) Finish(id int64, state, reason string, out Output) (bool, error) {
 	s.wmu.Lock() // one writer at a time, and its event goes out before the next write starts: events follow commit order
 	defer s.wmu.Unlock()
+	if s.failFinish != nil { // test seam
+		if err := s.failFinish(); err != nil {
+			return false, err
+		}
+	}
 	now := s.now()
 	var res sql.Result
 	var err error

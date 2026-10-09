@@ -61,9 +61,11 @@ type Engine struct {
 
 	qmu        sync.Mutex // the queue structures only; never held across a store call
 	qstopped   bool
-	afterBuild func()         // test seam: between a job's input being built and its lease being checked
-	intakeMu   sync.Mutex     // one catch-up at a time: cursor read, insert and enqueue keep the turns' order
-	inflight   sync.WaitGroup // results and reaps being applied; Stop waits for them
+	afterBuild func()     // test seam: between a job's input being built and its lease being checked
+	intakeMu   sync.Mutex // one catch-up at a time: cursor read, insert and enqueue keep the turns' order
+	omu        sync.Mutex
+	orphans    map[int64]struct{} // entries whose final state the store refused (settle.go)
+	inflight   sync.WaitGroup     // results and reaps being applied; Stop waits for them
 	convs      map[string]*convQ
 	leases     map[string]*lease
 	seq        int64
