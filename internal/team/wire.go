@@ -137,7 +137,7 @@ type CreateApprovalRequest struct {
 type DecideRequest struct {
 	Decision string        `json:"decision"`        // "approve" | "deny"
 	Grant    *Grant        `json:"grant,omitempty"` // approve only; nil → the payload's values
-	Hook     *HookDecision `json:"hook,omitempty"`  // hook kinds only: answers (hook_ask, required on approve) or behavior (hook_permission)
+	Hook     *HookDecision `json:"hook,omitempty"`  // hook kinds only: answers (hook_ask approve) or message (hook_ask deny: the reply instead of answers) or behavior (hook_permission)
 	Client   Client        `json:"client"`
 }
 
