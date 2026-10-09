@@ -161,6 +161,10 @@ type Fake = {
   // the pdx calls in argvs, and how each answers: by default it sleeps its
   // seconds on the mocked clock and exits 0; `realSleep` sleeps in real time.
   sleeps: { argv: string[]; timeoutMs?: number }[]
+  // The mod's own read-only git runs (P6-3a), kept apart from the pdx calls in argvs: every run's argv and init, and how
+  // each answers (default: exit 0, no output).
+  gitRuns?: { argv: string[]; init?: any }[]
+  git?: (argv: string[]) => { exitCode: number; stdout?: string; stderr?: string } | Promise<{ exitCode: number; stdout?: string; stderr?: string }>
   sleep?: (argv: string[]) => { exitCode: number } | Promise<{ exitCode: number }>
   // Reporter on (interface U1 B2): pdx.json names a mod socket and `posts` holds every batch
   // the event reporter sent to the fake daemon, which acks each whole. Off, nothing is posted.
@@ -218,6 +222,12 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
       f.sleeps.push({ argv: [...e.argv], timeoutMs: e.init?.timeoutMs })
       const r = await (f.sleep ? f.sleep([...e.argv]) : f.clock.sleep(Number(e.argv[1]) * 1000).then(() => ({ exitCode: 0 })))
       return { value: { exitCode: r.exitCode, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (e.argv[0] === 'git') {
+      ;(f.gitRuns ??= []).push({ argv: [...e.argv], init: e.init })
+      const g: any = await (f.git ? f.git([...e.argv]) : { exitCode: 0, stdout: '' })
+      if ('deny' in g) return { deny: g.deny }
+      return { value: { exitCode: g.exitCode, stdout: g.stdout ?? '', stderr: g.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     f.argvs.push([...e.argv])
     f.timeouts.push(e.init?.timeoutMs)
@@ -1958,13 +1968,19 @@ test('/relay runs the installed pdx with --config and an 8 s bound; a timeout, 2
 // The pre-P9a prompts for OP, written out literally (register.js before P9a):
 // the default bodies must compose to exactly these bytes. `who` is the
 // pdx msg whoami answer, `n` the nonce of that one prompt.
+const EMPTY_GIT_BLOCK = ['```', '$ git status --short', '（無輸出）', '', '$ git diff --stat', '（無輸出）', '', '$ git log --oneline -10', '（無輸出）', '```'].join('\n')
+const GIT_BLOCK = EMPTY_GIT_BLOCK
 const PRE_P9A_WRITE = (n: string, who = 'mlab/purdex-x [abc123]') => [
   '[pdx-relay op=op-1 n=' + n + '] 這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。',
   '請先停下手邊工作，用你完整的工具撰寫接力檔：/data/relay/op-1.md',
   '',
   '要求：',
-  '- 自己跑 `git status`、`git diff --stat`、`git log --oneline -10` 取得檔案狀態，不要憑記憶寫。',
   '- 接力檔必須自成一體：讀它的是一個完全沒有這段對話記憶的新對話。',
+  '',
+  '機器提供的 git 狀態（照抄進 §3）：',
+  GIT_BLOCK,
+  '',
+  '- 只用 Write 工具一次寫入整個接力檔；這一輪不要執行其他工具（接力期間其他工具會被拒絕）。',
   '- 寫完後只回一行「HANDOFF-WRITTEN」，不要繼續原本的工作。',
   '',
   '格式（每一段都要有，沒有內容就寫「無」）：',
@@ -1994,7 +2010,7 @@ const PRE_P9A_SEED = (n: string) => [
   '回覆的第一行請寫「↪ 接手自 _abc123」。',
 ].join('\n')
 
-test('with the defaults, the write and seed prompts equal the pre-P9a text byte for byte', async ($, on) => {
+test('with the defaults, the write prompt is the pre-P9a text with the P6-3a changes (git block, one-Write rule) and the seed prompt is unchanged byte for byte', async ($, on) => {
   const { f, clock } = await approvedRelay($, on)
   expect(f.submits[0].text).toBe(PRE_P9A_WRITE(nonceOf(f.submits[0].text)))
   f.files['/data/relay/op-1.md'] = GOOD_FILE
@@ -2016,12 +2032,12 @@ test('the fix prompt is head, body, then 缺少段落 and the reply rule on the 
   await turn($, 'tw')
   await clock.advance(50)
   const text = f.submits[1].text
-  expect(text).toBe('[pdx-relay op=op-1 n=' + nonceOf(text) + '] 接力檔 /data/relay/op-1.md 不完整。\n缺少段落：## 2.、## 3.、## 5.、## 6.、## 7.、## 8.。請補齊後只回「HANDOFF-WRITTEN」。')
+  expect(text).toBe('[pdx-relay op=op-1 n=' + nonceOf(text) + '] 接力檔 /data/relay/op-1.md 不完整。\n缺少段落：## 2.、## 3.、## 5.、## 6.、## 7.、## 8.。請用 Write 重寫整個接力檔（不要用 Edit），補齊後只回「HANDOFF-WRITTEN」。')
   f.files['/data/relay/op-1.md'] = ''
   await $.turn.start({ text, turnId: 'tf' })
   await turn($, 'tf')
   await clock.advance(50)
-  expect(f.submits[2].text).toBe('[pdx-relay op=op-1 n=' + nonceOf(f.submits[2].text) + '] 接力檔 /data/relay/op-1.md 不完整。\n缺少段落：## 1.、## 2.、## 3.、## 4.、## 5.、## 6.、## 7.、## 8.。請補齊後只回「HANDOFF-WRITTEN」。')
+  expect(f.submits[2].text).toBe('[pdx-relay op=op-1 n=' + nonceOf(f.submits[2].text) + '] 接力檔 /data/relay/op-1.md 不完整。\n缺少段落：## 1.、## 2.、## 3.、## 4.、## 5.、## 6.、## 7.、## 8.。請用 Write 重寫整個接力檔（不要用 Edit），補齊後只回「HANDOFF-WRITTEN」。')
 })
 
 // A guard between the check (REQUIRED, register.js) and the generated
@@ -2046,9 +2062,9 @@ test('every REQUIRED heading and # HANDOFF are in FIXED.write.tail', async ($, o
 
 const answers = (b: Record<string, unknown>) => () => ({ exitCode: 0, stdout: JSON.stringify(b) })
 const INCOMPLETE = '# HANDOFF\n## 1. a\n' + 'x'.repeat(300) // ## 2.–## 8. missing
-const MISSING = '缺少段落：## 2.、## 3.、## 4.、## 5.、## 6.、## 7.、## 8.。請補齊後只回「HANDOFF-WRITTEN」。'
+const MISSING = '缺少段落：## 2.、## 3.、## 4.、## 5.、## 6.、## 7.、## 8.。請用 Write 重寫整個接力檔（不要用 Edit），補齊後只回「HANDOFF-WRITTEN」。'
 const DEFAULT_FIX = (n: string) => '[pdx-relay op=op-1 n=' + n + '] 接力檔 /data/relay/op-1.md 不完整。\n' + MISSING
-const WRITE_TAIL = (who = 'mlab/purdex-x [abc123]') => PRE_P9A_WRITE('-', who).split('\n').slice(6).join('\n') // the fixed write tail, filled for OP
+const WRITE_TAIL = (who = 'mlab/purdex-x [abc123]') => '\n' + PRE_P9A_WRITE('-', who).split('\n').slice(PRE_P9A_WRITE('-', who).split('\n').findIndex((l) => l.startsWith('- 只用 Write'))).join('\n') // the fixed write tail (it opens with a blank line), filled for OP
 const DONE = ['relay report op-1 writing', 'relay report op-1 written', 'relay report op-1 cleared --new-session sid-new', 'relay report op-1 done']
 const promptsCalls = (f: Fake) => f.argvs.flatMap((a, i) => (a[1] === 'relay' && a[2] === 'prompts' ? [{ argv: a, timeoutMs: f.timeouts[i] }] : []))
 const BIG = '接'.repeat(5000) + 'x'.repeat(1384) // 16 384 UTF-8 bytes: the daemon's limit, still used
@@ -2666,4 +2682,66 @@ test('a /lead whose turn never ends is not refused for good: after 10 minutes it
   expect((await leadCmd($, '')).text).toContain('已請這個 session 申請 lead')
   await f.clock.advance(50)
   expect(f.submits.length).toBe(2)
+})
+
+// ---- P6-3a: the mod runs the read-only git commands itself and embeds the output ----
+
+test('the write prompt embeds git status, diff --stat and log from the mod\'s own runs, once, in the session\'s directory', async ($, on) => {
+  const f0: Partial<Fake> = {
+    git: (argv) => ({ exitCode: 0, stdout: { status: ' M a.go\n?? b.go\n', diff: ' a.go | 2 +-\n', log: 'abc1234 first\ndef5678 second\n' }[argv[1] === 'status' ? 'status' : argv[1] === 'diff' ? 'diff' : 'log'] }),
+  }
+  const { f } = await approvedRelay($, on, undefined, f0)
+  const text = f.submits[0].text
+  expect(text).toContain('機器提供的 git 狀態（照抄進 §3）：\n```\n$ git status --short\n M a.go\n?? b.go\n\n$ git diff --stat\n a.go | 2 +-\n\n$ git log --oneline -10\nabc1234 first\ndef5678 second\n```')
+  expect(f.gitRuns!.map((g) => g.argv.join(' '))).toEqual(['git status --short', 'git diff --stat', 'git log --oneline -10'])
+  // no cwd of its own: $.process.run's default is the session's directory; each run is bounded
+  expect(f.gitRuns!.every((g) => g.init?.cwd === undefined && g.init?.timeoutMs === 10_000)).toBe(true)
+})
+
+// Mutation gate: keep the old instruction line in the default body → red.
+test('the write prompt no longer asks the model to run git', async ($, on) => {
+  const { f } = await approvedRelay($, on)
+  expect(f.submits[0].text).not.toContain('自己跑')
+  expect(f.submits[0].text).toContain('- 只用 Write 工具一次寫入整個接力檔；')
+})
+
+test('git output is capped, and a failing or missing git is embedded as such, never thrown', async ($, on) => {
+  const big = Array.from({ length: 500 }, (_, i) => 'line ' + i).join('\n')
+  const { f } = await approvedRelay($, on, undefined, {
+    git: (argv) => argv[1] === 'status' ? { exitCode: 0, stdout: big } : argv[1] === 'diff' ? { exitCode: 128, stderr: 'fatal: not a git repository (or any of the parent directories): .git\nmore' } : { exitCode: 0, stdout: 'é'.repeat(20_000) },
+  })
+  const text = f.submits[0].text
+  expect(text).toContain('line 199\n…（截斷）')
+  expect(text).not.toContain('line 200')
+  expect(text).toContain('（git 失敗：fatal: not a git repository (or any of the parent directories): .git）')
+  const logPart = text.slice(text.indexOf('$ git log --oneline -10'))
+  expect(logPart).toContain('…（截斷）')
+  expect(logPart.length).toBeLessThan(13_000)
+  expect(f.submits.length).toBe(1) // the relay went on
+})
+
+test('a git run that rejects (the engine refused it) is embedded as a failure and the relay goes on', async ($, on) => {
+  const { f } = await approvedRelay($, on, undefined, { git: () => ({ deny: 'no such executable' }) as any })
+  expect(f.submits[0].text.match(/（git 失敗：/g)?.length).toBe(3)
+  expect(f.submits.length).toBe(1)
+})
+
+test('the git facts are collected once per relay, not again for fix rounds', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  const n = f.gitRuns!.length
+  f.files['/data/relay/op-1.md'] = '# HANDOFF\n## 1. a\n'
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(f.submits.length).toBe(2) // the fix prompt
+  expect(f.gitRuns!.length).toBe(n)
+})
+
+test('the fix prompt asks for one Write of the whole file, not an Edit', async ($, on) => {
+  const { f, clock } = await approvedRelay($, on)
+  f.files['/data/relay/op-1.md'] = '# HANDOFF\n## 1. a\n'
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  expect(f.submits[1].text).toContain('請用 Write 重寫整個接力檔（不要用 Edit），補齊後只回「HANDOFF-WRITTEN」。')
 })
