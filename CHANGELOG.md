@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.631] - 2026-10-09
+
+> 動 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**；SPA、Electron 不必更新。這一版完成「把執行中的 session 收進 team」（U24）的最後一塊：被放出 team 的 session 會重新開始自動接力。U24 第一批（收編、釋放、結束 member）已在 alpha.630 驗收通過，並於當時重跑 `pdx setup` 讓 skill 生效。
+
+### Changed：被放出 team 的 session 會恢復門檻接力 — U24 PL-1g（#2157）
+
+- mod 先前記得「這個 session 是 member」就不再自己申請接力；member 被釋放或 team 結束後，這個記憶不會更新，session 就再也不會在門檻時接力。
+- 現在 context 超過門檻時，mod 每分鐘最多向 daemon 重新確認一次角色；確認已不是 member，就照常申請接力。
+- 門檻以下不做任何確認；`/relay now` 與 `/lead` 本來就以 daemon 當下的回答為準，不受影響。
+
 ## [1.0.0-alpha.630] - 2026-10-09
 
 > 只動 daemon 與 CLI：**要部署 daemon**；這一版**刻意不跑 `pdx setup`**（skill 的收編說明等 U24 第一批全部完成、驗收時再一起裝），SPA、Electron 不必更新。這一版大幅降低 daemon 的 CPU 用量，並加上釋放 member、收編與釋放的 CLI。
