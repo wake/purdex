@@ -4,6 +4,7 @@ package peers
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 )
 
@@ -17,12 +18,20 @@ func admitDecode(w http.ResponseWriter, r *http.Request, lim *hostLimiter, hostI
 	if !lim.Allow(hostID) {
 		return http.StatusTooManyRequests
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes)).Decode(v); err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			return http.StatusRequestEntityTooLarge
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes))
+	err := dec.Decode(v)
+	if err == nil {
+		// One value, then EOF: reading on makes the cap cover the whole
+		// body and refuses trailing values.
+		if err = dec.Decode(&struct{}{}); err == io.EOF {
+			return 0
+		} else if err == nil {
+			err = errors.New("trailing data")
 		}
-		return http.StatusBadRequest
 	}
-	return 0
+	var tooBig *http.MaxBytesError
+	if errors.As(err, &tooBig) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
 }

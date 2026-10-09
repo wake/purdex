@@ -37,6 +37,27 @@ func TestAdmitDecode_BodyCap(t *testing.T) {
 	}
 }
 
+// A valid first value followed by more data must not get past the cap or
+// the syntax check (codex R1).
+func TestAdmitDecode_TrailingData(t *testing.T) {
+	lim := newHostLimiter(10, time.Minute, time.Now)
+	run := func(body string, max int64) int {
+		var v struct{ ID string }
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		return admitDecode(w, r, lim, "hostA", max, &v)
+	}
+	if st := run(`{"ID":"a"}`+strings.Repeat(" ", 200)+`{}`, 64); st != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized tail st=%d", st)
+	}
+	if st := run(`{"ID":"a"} {}`, 1024); st != http.StatusBadRequest {
+		t.Fatalf("second value st=%d", st)
+	}
+	if st := run(`{"ID":"a"}`+"\n", 1024); st != 0 {
+		t.Fatalf("trailing newline st=%d", st)
+	}
+}
+
 func TestAdmitDecode_BadJSON(t *testing.T) {
 	lim := newHostLimiter(10, time.Minute, time.Now)
 	var v struct{ ID string }
