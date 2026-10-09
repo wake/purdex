@@ -50,7 +50,9 @@ export function AdoptionWaitCard() {
   const shown = open.slice(0, MAX_CARDS)
   const more = open.length - shown.length
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+    // z-40, one under the approval dialog's z-50 (a later sibling at the same level would paint over its buttons): the
+    // dialog is modal and its backdrop covers these cards while it is open; minimized, they show again.
+    <div data-testid="adoption-wait-stack" className="fixed bottom-4 right-4 z-40 flex flex-col items-end gap-2">
       {shown.map((e) => <Card key={e.key} entry={e} />)}
       {more > 0 && <p data-testid="adoption-wait-more" className="text-xs text-text-muted">{t('approval.dialog.adopt_wait.more', { count: more })}</p>}
     </div>

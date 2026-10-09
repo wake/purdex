@@ -152,6 +152,22 @@ describe('adopt card — after a reload', () => {
   })
 })
 
+describe('adopt card — beside the approval dialog', () => {
+  const z = (id: string) => Number(/z-(\d+)/.exec(screen.getByTestId(id).className)?.[1])
+
+  // Mutation gate: give the wait stack the dialog's z-50 (it is later in the DOM, so it would cover the buttons) → red.
+  it('a new request opens above a card that is still waiting, buttons clickable', async () => {
+    mockedDecide.mockResolvedValue({ ...adopt(), state: 'denied' })
+    render(<ApprovalDialogHost />)
+    act(() => { startAdoptionWait(H, 'old', adoptPayloadOf(adopt(REMOTE))) })
+    open(adopt())
+    expect(screen.getByTestId('adoption-wait-card')).toBeTruthy()
+    expect(z('approval-dialog')).toBeGreaterThan(z('adoption-wait-stack'))
+    await click('approval-deny')
+    expect(mockedDecide).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('adopt cards — several waits at once', () => {
   const pending = new Map<string, (v: { approval_id: string; state: string; code?: string }) => void>()
   beforeEach(() => {
