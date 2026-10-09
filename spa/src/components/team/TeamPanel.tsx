@@ -18,6 +18,7 @@ import { useMemberDrag } from './useMemberDrag'
 import { TeamEditPopover } from './TeamEditPopover'
 import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
 import { useI18nStore } from '../../stores/useI18nStore'
+import type { PanelMode } from '../../stores/useTeamUiStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
@@ -26,11 +27,10 @@ import { CELL_GAP, CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, C
 interface Props {
   team: TeamPanelTeam
   activeTabId: string | null
-  expanded: boolean
   /** The area's width while it floats (draft included); undefined when enlarged (everything fits in the header row). */
   width?: number
-  onSetMode: (mode: 'full' | 'line') => void
-  onToggleExpanded: () => void
+  /** Move the area: ⌃ -> titlebar, the header click line <-> full, the enlarge control full <-> max. */
+  onSetMode: (mode: PanelMode) => void
   onOpen: (sessionId: string) => void
   onReorder: (sessionIds: string[]) => void
 }
@@ -45,7 +45,7 @@ export function TeamPanel(props: Props) {
   const { rootRef, hdr, editOpen, close, anchor } = useHeaderGestures({ teamKey: team.teamKey, mode: team.mode, onSetMode: props.onSetMode, canEdit })
   return (
     <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className="text-xs text-text-primary">
-      {team.mode === 'full' ? <FullPanel {...props} hdr={hdr} /> : <LinePanel {...props} hdr={hdr} />}
+      {team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} hdr={hdr} />}
       {editOpen && canEdit && (
         <TeamEditPopover
           target={{ hostId, teamId, name: roster.team_name, label: roster.team_label, color: roster.team_color ?? null }}
@@ -132,8 +132,9 @@ function NameCapsule({ team, className = '', style }: { team: TeamPanelTeam; cla
   )
 }
 
-function FullPanel({ team, activeTabId, expanded, onSetMode, onToggleExpanded, onOpen, onReorder, hdr }: Props & { hdr: HeaderHandlers }) {
+function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Props & { hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
+  const expanded = team.mode === 'max'
   const { teamKey, color, lead, members } = team
   const order = members.map((m) => m.sessionId)
   const reorder = useCallback((ids: string[]) => onReorder(ids), [onReorder])
@@ -148,14 +149,14 @@ function FullPanel({ team, activeTabId, expanded, onSetMode, onToggleExpanded, o
             type="button"
             data-testid="team-panel-to-line"
             onMouseDown={keepFocus}
-            onClick={() => onSetMode('line')}
+            onClick={() => onSetMode('titlebar')}
             className="px-1 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
             title={t('team.panel.to_line')}
             aria-label={t('team.panel.to_line')}
           >
             <CaretUp size={11} />
           </button>
-          <ExpandButton expanded={expanded} onToggle={onToggleExpanded} />
+          <ExpandButton expanded={expanded} onToggle={() => onSetMode(expanded ? 'full' : 'max')} />
         </span>
       </div>
       <div className="border-t border-border-subtle py-1.5 flex flex-col gap-1">
@@ -289,7 +290,7 @@ function Cell({ teamKey, seat, isActive, onOpen }: { teamKey: string; seat: Team
   )
 }
 
-function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpanded, onOpen, hdr }: Props & { hdr: HeaderHandlers }) {
+function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props & { hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
   const seats = [team.lead, ...team.members]
   // The header row holds as many cells as it really has room for; the rest wrap into a region UNDER it, so the first row
@@ -350,7 +351,7 @@ function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpa
         >
           <CaretDown size={11} />
         </button>
-        <ExpandButton expanded={expanded} onToggle={onToggleExpanded} />
+        <ExpandButton expanded={false} onToggle={() => onSetMode('max')} />
       </span>
     </div>
     {more.length > 0 && (

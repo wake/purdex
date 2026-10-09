@@ -2,8 +2,9 @@
 //
 // A floating layer over the top-right of the pane area (the shell's content box is `relative`): the panes keep their
 // size, the tab bar is never covered. It shows the team view for the active tab's team (`panelView`); a workbook result
-// renders nothing yet (WA-2b). Everything the person arranged lives in `useTeamUiStore` (width, expanded, mode), so a tab
-// switch that unmounts the pane and a reload both come back to the same area.
+// renders nothing yet (WA-2b). Everything the person arranged lives in `useTeamUiStore` (width, and per team one of four
+// states: titlebar | line | full | max), so a tab switch that unmounts the pane and a reload both come back to the same
+// area. In the `titlebar` state the pane draws nothing: the strip in the title bar (TeamTitleStrip) is the area.
 //
 // Resize: the LEFT edge, draft-then-commit (the ActivityBarWide pattern): a drag only moves a local draft width and the
 // store is written once on mouseup. The area never calls focus(): the terminal keeps the keyboard.
@@ -22,7 +23,13 @@ export function TeamPanelArea() {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const workbookTabs = useTeamUiStore((s) => s.workbookTabs)
   const teamDrill = useTeamUiStore((s) => s.teamDrill)
-  const { width, expanded } = useTeamUiStore((s) => s.panel)
+  const { width } = useTeamUiStore((s) => s.panel)
+  const view0 = display ? panelView(activeTabId, { workbookTabs, panelTeam: display.panelTeam(activeTabId), teamDrill }) : null
+  const expanded = view0?.kind === 'team' && view0.team.mode === 'max'
+  // A store saved before the four states held `expanded: true`: the team showing when the area first draws becomes `max`
+  // (an old value with no team on screen is dropped). Once per load.
+  const teamOnShow = view0?.kind === 'team' ? view0.team.teamKey : null
+  useEffect(() => { useTeamUiStore.getState().takeLegacyMax(teamOnShow) }, [teamOnShow])
   const [draft, setDraft] = useState<number | null>(null)
   const draftRef = useRef<number | null>(null)
   // The handle unmounts when the panel is enlarged (or goes away): a half-done drag is abandoned, so drop its draft.
@@ -35,9 +42,9 @@ export function TeamPanelArea() {
     if (expanded) draftRef.current = null
   }, [expanded])
 
-  const view = display ? panelView(activeTabId, { workbookTabs, panelTeam: display.panelTeam(activeTabId), teamDrill }) : null
-  if (!display || !view || view.kind !== 'team') return null
-  const team = view.team
+  // In the title bar the area is the strip's (TeamTitleStrip), not the pane's.
+  if (!display || !view0 || view0.kind !== 'team' || view0.team.mode === 'titlebar') return null
+  const team = view0.team
 
   return (
     <div
@@ -71,10 +78,8 @@ export function TeamPanelArea() {
         <TeamPanel
           team={team}
           activeTabId={activeTabId}
-          expanded={expanded}
           width={expanded ? undefined : draft ?? width}
           onSetMode={(mode) => useTeamUiStore.getState().setPanelMode(team.teamKey, mode)}
-          onToggleExpanded={() => useTeamUiStore.getState().setPanelExpanded(!expanded)}
           onOpen={(sessionId) => display.onOpenSeat(team.teamKey, sessionId)}
           onReorder={(ids) => display.onReorderMembers(team.teamKey, ids)}
         />

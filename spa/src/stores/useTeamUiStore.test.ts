@@ -9,7 +9,7 @@ const k = (host: string, team: string) => teamKeyOf(host, team)
 
 beforeEach(() => {
   localStorage.clear()
-  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamDrill: {}, workbookTabs: {}, panel: { width: 312, expanded: false }, teamBeadHost: true })
+  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', legacyMax: false, ghostWorkspace: {}, teamDrill: {}, workbookTabs: {}, panel: { width: 312 }, teamBeadHost: true })
 })
 
 describe('useTeamUiStore', () => {
@@ -23,7 +23,8 @@ describe('useTeamUiStore', () => {
     const raw = JSON.parse(localStorage.getItem('purdex-team-ui')!)
     expect(raw.state).toEqual({
       memberOrder: { [key]: ['b', 'a'] }, collapsed: { [key]: true }, panelMode: { [key]: 'line' }, ghostWorkspace: { [key]: 'w9' },
-      teamBeadHost: true, teamDrill: {}, panel: { width: 312, expanded: false }, workbookTabs: {},
+      teamBeadHost: true, teamDrill: {}, panel: { width: 312 }, workbookTabs: {},
+      panelLast: { [key]: 'line' }, sharedPanelMode: 'titlebar', sharedPanelLast: 'full',
     })
     const saved = localStorage.getItem('purdex-team-ui')!
     useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {} }) // persists the empty state too
@@ -173,8 +174,8 @@ describe('the bead host-icon setting (spec P7, device-local)', () => {
 
 describe('the panel area (WA-2a)', () => {
   const saved = () => JSON.parse(localStorage.getItem('purdex-team-ui')!).state
-  it('defaults to 312 wide, not expanded', () => {
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 312, expanded: false })
+  it('defaults to 312 wide', () => {
+    expect(useTeamUiStore.getState().panel).toEqual({ width: 312 })
   })
   it('setPanelWidth clamps to 280-720 and rounds', () => {
     const { setPanelWidth } = useTeamUiStore.getState()
@@ -187,16 +188,13 @@ describe('the panel area (WA-2a)', () => {
     setPanelWidth(Number.NaN)
     expect(useTeamUiStore.getState().panel.width).toBe(401)
   })
-  it('width and expanded are saved apart and survive a reload', () => {
+  it('the width is saved and survives a reload', () => {
     useTeamUiStore.getState().setPanelWidth(500)
-    useTeamUiStore.getState().setPanelExpanded(true)
-    expect(saved().panel).toEqual({ width: 500, expanded: true })
-    useTeamUiStore.setState({ panel: { width: 312, expanded: false } })
-    localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { panel: { width: 500, expanded: true } }, version: 0 }))
+    expect(saved().panel).toEqual({ width: 500 })
+    useTeamUiStore.setState({ panel: { width: 312 } })
+    localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { panel: { width: 500 } }, version: 0 }))
     useTeamUiStore.persist.rehydrate()
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 500, expanded: true })
-    useTeamUiStore.getState().setPanelExpanded(false)
-    expect(useTeamUiStore.getState().panel.width).toBe(500)
+    expect(useTeamUiStore.getState().panel).toEqual({ width: 500 })
   })
   it('heal clamps a wild width and rejects bad types', () => {
     const load = (panel: unknown) => {
@@ -204,11 +202,11 @@ describe('the panel area (WA-2a)', () => {
       useTeamUiStore.persist.rehydrate()
       return useTeamUiStore.getState().panel
     }
-    expect(load({ width: 9999, expanded: true })).toEqual({ width: 720, expanded: true })
-    expect(load({ width: 3, expanded: 'yes' })).toEqual({ width: 280, expanded: false })
-    expect(load({ width: 'wide' })).toEqual({ width: 312, expanded: false })
-    expect(load('oops')).toEqual({ width: 312, expanded: false })
-    expect(load(null)).toEqual({ width: 312, expanded: false })
+    expect(load({ width: 9999 })).toEqual({ width: 720 })
+    expect(load({ width: 3 })).toEqual({ width: 280 })
+    expect(load({ width: 'wide' })).toEqual({ width: 312 })
+    expect(load('oops')).toEqual({ width: 312 })
+    expect(load(null)).toEqual({ width: 312 })
   })
   it('teamDrill and workbookTabs round-trip and heal', () => {
     const key = k('h1', 't1')
@@ -258,5 +256,101 @@ describe('the panel area (WA-2a)', () => {
     expect(useTeamUiStore.getState().teamDrill).toEqual({})
     useTeamUiStore.getState().restoreHostTeams(snap)
     expect(useTeamUiStore.getState().teamDrill[a]).toEqual({ hostId: 'h1', sessionId: 's' })
+  })
+})
+
+describe('the four states (WA-2a′)', () => {
+  const key = k('h1', 't1')
+  const st = () => useTeamUiStore.getState()
+  const reload = (state: unknown) => {
+    localStorage.setItem('purdex-team-ui', JSON.stringify({ state, version: 0 }))
+    useTeamUiStore.persist.rehydrate()
+  }
+
+  it('a team starts in full; leaving the title bar goes back to the pane state it left', () => {
+    expect(st().panelMode[key] ?? 'full').toBe('full')
+    st().toggleTitleBar(key)
+    expect(st().panelMode[key]).toBe('titlebar')
+    st().toggleTitleBar(key)
+    expect(key in st().panelMode).toBe(false) // full is the absence
+    st().setPanelMode(key, 'max')
+    st().setPanelMode(key, 'titlebar')
+    expect(st().panelLast[key]).toBe('max')
+    st().toggleTitleBar(key)
+    expect(st().panelMode[key]).toBe('max')
+    st().setPanelMode(key, 'line')
+    st().toggleTitleBar(key)
+    st().toggleTitleBar(key)
+    expect(st().panelMode[key]).toBe('line')
+  })
+
+  it('each team remembers its own state and the shared (non-team) value starts in the title bar', () => {
+    const other = k('h1', 't2')
+    st().setPanelMode(key, 'titlebar')
+    st().setPanelMode(other, 'max')
+    expect(st().panelMode[key]).toBe('titlebar')
+    expect(st().panelMode[other]).toBe('max')
+    expect(st().sharedPanelMode).toBe('titlebar')
+    st().setSharedPanelMode('line')
+    st().setSharedPanelMode('titlebar')
+    expect(st().sharedPanelLast).toBe('line')
+    expect(st().panelMode[key]).toBe('titlebar')
+  })
+
+  it('the states survive a reload', () => {
+    st().setPanelMode(key, 'max')
+    st().setPanelMode(key, 'titlebar')
+    st().setSharedPanelMode('full')
+    const saved = localStorage.getItem('purdex-team-ui')!
+    useTeamUiStore.setState({ panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full' })
+    localStorage.setItem('purdex-team-ui', saved)
+    useTeamUiStore.persist.rehydrate()
+    expect(st().panelMode[key]).toBe('titlebar')
+    expect(st().panelLast[key]).toBe('max')
+    expect(st().sharedPanelMode).toBe('full')
+  })
+
+  it('an old store maps line -> line, full -> full, and expanded:true waits for the team showing', () => {
+    reload({ panelMode: { [key]: 'line' }, panel: { width: 400, expanded: true } })
+    expect(st().panelMode[key]).toBe('line')
+    expect(st().panel).toEqual({ width: 400 })
+    expect(st().legacyMax).toBe(true)
+    st().takeLegacyMax(k('h1', 't2'))
+    expect(st().panelMode[k('h1', 't2')]).toBe('max')
+    expect(st().panelMode[key]).toBe('line')
+    expect(st().legacyMax).toBe(false)
+    st().takeLegacyMax(k('h1', 't3')) // taken once
+    expect(k('h1', 't3') in st().panelMode).toBe(false)
+  })
+
+  it('expanded:true with no team showing is dropped; not expanded asks for nothing', () => {
+    reload({ panel: { width: 400, expanded: true } })
+    st().takeLegacyMax(null)
+    expect(st().legacyMax).toBe(false)
+    expect(st().panelMode).toEqual({})
+    reload({ panel: { width: 400, expanded: false } })
+    expect(st().legacyMax).toBe(false)
+  })
+
+  it('heal drops bad values and never persists the legacy flag', () => {
+    reload({ panelMode: { a: 'bogus', b: 3, c: 'max', d: 'full', e: 'titlebar' }, panelLast: { a: 'titlebar', b: 'x', c: 'max' }, sharedPanelMode: 'nope', sharedPanelLast: 'titlebar' })
+    expect(st().panelMode).toEqual({ c: 'max', e: 'titlebar' })
+    expect(st().panelLast).toEqual({ c: 'max' })
+    expect(st().sharedPanelMode).toBe('titlebar')
+    expect(st().sharedPanelLast).toBe('full')
+    st().setPanelMode(key, 'line')
+    expect('legacyMax' in JSON.parse(localStorage.getItem('purdex-team-ui')!).state).toBe(false)
+  })
+
+  it('the state and the way back are pruned and restored with the team', () => {
+    st().setPanelMode(key, 'max')
+    st().setPanelMode(key, 'titlebar')
+    const snap = st().snapshotHostTeams('h1')
+    st().forgetHostTeams('h1')
+    expect(st().panelMode).toEqual({})
+    expect(st().panelLast).toEqual({})
+    st().restoreHostTeams(snap)
+    expect(st().panelMode[key]).toBe('titlebar')
+    expect(st().panelLast[key]).toBe('max')
   })
 })

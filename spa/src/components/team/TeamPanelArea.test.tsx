@@ -49,7 +49,7 @@ beforeEach(() => {
   cleanup()
   localStorage.clear()
   resetTeamStores()
-  useTeamUiStore.setState({ panel: { width: 312, expanded: false }, teamDrill: {}, workbookTabs: {} })
+  useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {}, workbookTabs: {} })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
 })
@@ -276,7 +276,7 @@ describe('full mode', () => {
   it('the header switches to one-line, and the mode is per team in the store', () => {
     scene()
     mount()
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    fireEvent.click(screen.getByTestId('team-panel-count')) // a header click: full -> line
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('line')
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
     fireEvent.click(screen.getByTestId('team-panel-to-full'))
@@ -416,17 +416,6 @@ describe('header height (TI-6)', () => {
       })
     })
 
-    it('an enlarged panel with a narrow box and a big team wraps under the header', () => {
-      scene5(8)
-      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-      act(() => useTeamUiStore.getState().setPanelExpanded(true))
-      availW = 130
-      cellW = 38
-      mount()
-      expect(inHeader()).toBe(3)
-      expect(screen.getByTestId('team-panel-more')).toBeTruthy()
-    })
-
     describe('capacity from each cell\'s own width', () => {
       let widths: Record<string, number> = {}
       let roCallbacks: Array<() => void> = []
@@ -540,21 +529,11 @@ describe('header height (TI-6)', () => {
         cells().forEach((c) => expect(observed().has(c)).toBe(true))
       })
 
-      it('an enlarged panel uses the same widths', () => {
-        widths = { M2: 50 }
-        scene5(8)
-        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        act(() => useTeamUiStore.getState().setPanelExpanded(true))
-        availW = 130 // 38*2 + 2 + 5 = 83; + 2 + 38 = 123 -> 3 fit, 4th (50) does not
-        mount()
-        expect(inHeader()).toBe(3)
-      })
     })
 
-    it('an enlarged panel with room keeps everyone in the header row', () => {
+    it('a line panel with room keeps everyone in the header row', () => {
       scene5(8)
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-      act(() => useTeamUiStore.getState().setPanelExpanded(true))
       availW = 900
       cellW = 38
       mount()
@@ -631,10 +610,10 @@ describe('resize and enlarge', () => {
     scene()
     mount()
     drag(500, 420, false)
-    act(() => { useTeamUiStore.getState().setPanelExpanded(true) })
+    act(() => { useTeamUiStore.getState().setPanelMode(KEY, 'max') })
     fireEvent.mouseMove(document, { clientX: 100 })
     fireEvent.mouseUp(document)
-    act(() => { useTeamUiStore.getState().setPanelExpanded(false) })
+    act(() => { useTeamUiStore.getState().setPanelMode(KEY, 'full') })
     expect(useTeamUiStore.getState().panel.width).toBe(312)
     expect(area().style.width).toBe('312px')
   })
@@ -662,30 +641,71 @@ describe('resize and enlarge', () => {
     act(() => useTeamUiStore.getState().setPanelWidth(600))
     mount()
     expect(area().style.width).toBe('600px')
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    fireEvent.click(screen.getByTestId('team-panel-count')) // full -> line
     expect(area().style.width).toBe('600px')
   })
 
-  it('enlarge toggles expanded and keeps the width apart', () => {
+  it('enlarge toggles full <-> max and keeps the width apart', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelWidth(500))
     mount()
     expect(area().getAttribute('data-expanded')).toBe('false')
     fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 500, expanded: true })
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+    expect(useTeamUiStore.getState().panel).toEqual({ width: 500 })
     expect(area().getAttribute('data-expanded')).toBe('true')
     expect(screen.queryByTestId('resize-hit')).toBeNull() // nothing to resize while it fills the area
     fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 500, expanded: false })
+    expect(KEY in useTeamUiStore.getState().panelMode).toBe(false) // back to full
     expect(area().style.width).toBe('500px')
   })
 
-  it('expanded works from one-line mode too', () => {
+  it('enlarge from one-line mode goes to max (the full list, enlarged)', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
     fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().panel.expanded).toBe(true)
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+    expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('max')
+    expect(rows().length).toBeGreaterThan(0)
+  })
+
+  it('a header click leaves a max panel alone', () => {
+    scene()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'max'))
+    mount()
+    fireEvent.click(screen.getByTestId('team-panel-count'))
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+  })
+
+  it('an old store saved enlarged: the team showing at the first draw becomes max', () => {
+    scene()
+    act(() => useTeamUiStore.setState({ legacyMax: true }))
+    mount()
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+    expect(useTeamUiStore.getState().legacyMax).toBe(false)
+  })
+
+  it('an old store saved enlarged with no team showing: dropped', () => {
+    scene({ activeTabId: 'x' })
+    act(() => useTeamUiStore.setState({ legacyMax: true }))
+    mount()
+    expect(useTeamUiStore.getState().legacyMax).toBe(false)
+    expect(useTeamUiStore.getState().panelMode).toEqual({})
+  })
+})
+
+describe('the title bar state', () => {
+  it('⌃ hands the area to the title bar: the pane draws nothing, and the way back is the state it left', () => {
+    scene()
+    mount()
+    fireEvent.click(screen.getByTestId('team-panel-expand')) // max
+    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
+    expect(screen.queryByTestId('team-panel-area')).toBeNull()
+    act(() => useTeamUiStore.getState().toggleTitleBar(KEY))
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
   })
 })
 
@@ -693,18 +713,16 @@ describe('the panel state lives in the store (tab-hosted rule)', () => {
   it('mode remembered per team and survives a reload', () => {
     scene()
     const first = mount()
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
-    act(() => { useTeamUiStore.getState().setPanelWidth(555); useTeamUiStore.getState().setPanelExpanded(true) })
+    fireEvent.click(screen.getByTestId('team-panel-count')) // line
+    act(() => { useTeamUiStore.getState().setPanelWidth(555) })
     first.unmount()
     // A reload: the in-memory state is gone, the persisted copy is read back.
     const saved = localStorage.getItem(STORAGE)!
-    act(() => useTeamUiStore.setState({ panelMode: {}, panel: { width: 312, expanded: false } }))
+    act(() => useTeamUiStore.setState({ panelMode: {}, panelLast: {}, panel: { width: 312 } }))
     localStorage.setItem(STORAGE, saved)
     act(() => { void useTeamUiStore.persist.rehydrate() })
     mount()
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
-    expect(area().getAttribute('data-expanded')).toBe('true')
-    act(() => useTeamUiStore.getState().setPanelExpanded(false))
     expect(area().style.width).toBe('555px')
   })
 

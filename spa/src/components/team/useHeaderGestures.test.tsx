@@ -4,8 +4,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useHeaderGestures } from './useHeaderGestures'
 import { NAME_CLICK_DELAY_MS } from './panel-layout'
+import type { PanelMode } from '../../stores/useTeamUiStore'
 
-interface P { teamKey: string; mode: 'full' | 'line'; canEdit: boolean; onSetMode: (m: 'full' | 'line') => void }
+interface P { teamKey: string; mode: PanelMode; canEdit: boolean; onSetMode: (m: PanelMode) => void }
 
 function Harness({ teamKey, mode, canEdit, onSetMode }: P) {
   const { rootRef, hdr, editOpen } = useHeaderGestures({ teamKey, mode, onSetMode, canEdit })
@@ -28,6 +29,22 @@ const nameClick = () => fireEvent.click(screen.getByTestId('team-panel-name'))
 
 beforeEach(() => { vi.useFakeTimers(); onSetMode.mockReset() })
 afterEach(() => { cleanup(); vi.useRealTimers() })
+
+describe('which states a header click toggles', () => {
+  it.each([['full', 'line'], ['line', 'full']] as const)('%s -> %s', (mode, to) => {
+    render(<Harness {...base} mode={mode} />)
+    fireEvent.click(screen.getByTestId('blank'))
+    expect(onSetMode.mock.calls).toEqual([[to]])
+  })
+
+  it.each(['max', 'titlebar'] as const)('%s is left alone', (mode) => {
+    render(<Harness {...base} mode={mode} />)
+    fireEvent.click(screen.getByTestId('blank'))
+    nameClick()
+    advance(NAME_CLICK_DELAY_MS)
+    expect(onSetMode).not.toHaveBeenCalled()
+  })
+})
 
 describe('a pending name-click toggle', () => {
   it('fires once after the delay when nothing else happens', () => {

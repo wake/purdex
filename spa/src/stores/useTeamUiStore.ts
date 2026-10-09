@@ -16,14 +16,21 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
 
-export type PanelMode = 'full' | 'line'
+/** Where the panel area sits (team spec §4.4 Round 3): in the title bar, or in the pane as one line, the full list, or enlarged. */
+export type PanelMode = 'titlebar' | 'line' | 'full' | 'max'
+/** The states in the pane: what the area goes back to when it leaves the title bar. */
+export type PaneMode = Exclude<PanelMode, 'titlebar'>
+const isPaneMode = (v: unknown): v is PaneMode => v === 'line' || v === 'full' || v === 'max'
+const isPanelMode = (v: unknown): v is PanelMode => v === 'titlebar' || isPaneMode(v)
 
 interface Slices {
   /** Per team key, the member session ids in the order the person arranged (the lead is never in it). */
   memberOrder: Record<string, string[]>
   collapsed: Record<string, boolean>
-  /** Absent = `full` (R17). */
+  /** Per team key, the four-state value; absent = `full` (R17). */
   panelMode: Record<string, PanelMode>
+  /** Per team key, the pane state the area left when it went to the title bar; absent = `full`. */
+  panelLast: Record<string, PaneMode>
   ghostWorkspace: Record<string, string>
   /** Per team key, the seat whose workbook the panel area shows in place of the team view (WA-2b writes it). */
   teamDrill: Record<string, DrillSeat>
@@ -31,8 +38,8 @@ interface Slices {
 
 export interface DrillSeat { hostId: string; sessionId: string }
 
-/** The panel area (one pair for the whole area): width in px and whether it takes most of the content area. */
-export interface PanelArea { width: number; expanded: boolean }
+/** The panel area: its width in px, one value for the whole area (enlarging is the per-team `max` state). */
+export interface PanelArea { width: number }
 
 export const PANEL_MIN_WIDTH = 280
 export const PANEL_MAX_WIDTH = 720
@@ -45,7 +52,13 @@ interface TeamUiState extends Slices {
   /** Tabs whose 「工作簿」 toggle is on (WA-2b writes it). */
   workbookTabs: Record<string, true>
   setPanelWidth: (width: number) => void
-  setPanelExpanded: (expanded: boolean) => void
+  /** The four-state value of tabs that belong to no team (WA-2b-1 reads it); starts in the title bar. */
+  sharedPanelMode: PanelMode
+  sharedPanelLast: PaneMode
+  setSharedPanelMode: (mode: PanelMode) => void
+  /** An old store held `panel.expanded: true`: the team showing when the area first draws becomes `max` (TeamPanelArea). Not persisted. */
+  legacyMax: boolean
+  takeLegacyMax: (teamKey: string | null) => void
   setTeamDrill: (teamKey: string, seat: DrillSeat | null) => void
   setWorkbookTab: (tabId: string, on: boolean) => void
   /** Show the host icon next to each member bead (spec P7); default on. */
@@ -54,7 +67,10 @@ interface TeamUiState extends Slices {
   /** Trial (TI-6, spec §4.2): which box-shadow the group tabs wear; removed once the user picks. Default `v2`. */
   setMemberOrder: (teamKey: string, order: readonly string[]) => void
   setCollapsed: (teamKey: string, collapsed: boolean) => void
+  /** Move the area; a pane state is also remembered as the one to come back to from the title bar. */
   setPanelMode: (teamKey: string, mode: PanelMode) => void
+  /** Title bar <-> the pane state last left (the title-bar button, the strip's name / +N). */
+  toggleTitleBar: (teamKey: string) => void
   setGhostWorkspace: (teamKey: string, workspaceId: string | null) => void
   forgetTeams: (hostId: string, liveTeamKeys: readonly string[]) => void
   forgetHostTeams: (hostId: string) => void
@@ -62,8 +78,8 @@ interface TeamUiState extends Slices {
   restoreHostTeams: (snapshot: Slices) => void
 }
 
-const EMPTY: Slices = { memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamDrill: {} }
-const DEFAULT_PANEL: PanelArea = { width: PANEL_DEFAULT_WIDTH, expanded: false }
+const EMPTY: Slices = { memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, ghostWorkspace: {}, teamDrill: {} }
+const DEFAULT_PANEL: PanelArea = { width: PANEL_DEFAULT_WIDTH }
 
 /** A team key is `<hostId>\0<teamId>` (team-views `teamKeyOf`); a host's keys start with `<hostId>\0`. */
 const hostPrefix = (hostId: string) => `${hostId}\u0000`
@@ -91,7 +107,7 @@ const DANGEROUS = new Set(['__proto__', 'prototype', 'constructor'])
 function healPanel(v: unknown): PanelArea {
   if (!isRecord(v)) return DEFAULT_PANEL
   const width = typeof v.width === 'number' && Number.isFinite(v.width) ? clampWidth(v.width) : PANEL_DEFAULT_WIDTH
-  return { width, expanded: v.expanded === true }
+  return { width }
 }
 
 /** The host of a `<hostId>\0<teamId>` key, or null when the key is not that shape (either part empty / extra separator). */
@@ -101,13 +117,18 @@ function keyHost(key: string): string | null {
 }
 
 /** Persisted data is untrusted: keep only well-formed entries of each slice. */
-function heal(persisted: unknown): Slices & { panel: PanelArea; workbookTabs: Record<string, true> } {
+function heal(persisted: unknown): Slices & { panel: PanelArea; workbookTabs: Record<string, true>; sharedPanelMode: PanelMode; sharedPanelLast: PaneMode; legacyMax: boolean } {
   const p = isRecord(persisted) ? persisted : {}
   const entries = (v: unknown) => (isRecord(v) ? Object.entries(v).filter(([k]) => !DANGEROUS.has(k)) : [])
   return {
     memberOrder: Object.fromEntries(entries(p.memberOrder).filter(([, v]) => Array.isArray(v) && v.every((x) => typeof x === 'string'))) as Slices['memberOrder'],
     collapsed: Object.fromEntries(entries(p.collapsed).filter(([, v]) => v === true)) as Slices['collapsed'],
-    panelMode: Object.fromEntries(entries(p.panelMode).filter(([, v]) => v === 'line')) as Slices['panelMode'],
+    // An old store kept only `line` here (`full` was the absence); `full` stays the absence in the four-state value too.
+    panelMode: Object.fromEntries(entries(p.panelMode).filter(([, v]) => isPanelMode(v) && v !== 'full')) as Slices['panelMode'],
+    panelLast: Object.fromEntries(entries(p.panelLast).filter(([, v]) => isPaneMode(v) && v !== 'full')) as Slices['panelLast'],
+    sharedPanelMode: isPanelMode(p.sharedPanelMode) ? p.sharedPanelMode : 'titlebar',
+    sharedPanelLast: isPaneMode(p.sharedPanelLast) ? p.sharedPanelLast : 'full',
+    legacyMax: isRecord(p.panel) && p.panel.expanded === true,
     ghostWorkspace: Object.fromEntries(entries(p.ghostWorkspace).filter(([, v]) => typeof v === 'string' && v !== '')) as Slices['ghostWorkspace'],
     teamDrill: Object.fromEntries(entries(p.teamDrill).filter(([key, v]) => isRecord(v) && typeof v.hostId === 'string' && v.hostId !== ''
       && keyHost(key) === v.hostId && typeof v.sessionId === 'string' && v.sessionId !== '').map(([k, v]) => [k, { hostId: (v as DrillSeat).hostId, sessionId: (v as DrillSeat).sessionId }])),
@@ -127,7 +148,18 @@ export const useTeamUiStore = create<TeamUiState>()(
         const next = clampWidth(width)
         return next === s.panel.width ? s : { panel: { ...s.panel, width: next } }
       }),
-      setPanelExpanded: (expanded) => set((s) => (s.panel.expanded === expanded ? s : { panel: { ...s.panel, expanded } })),
+      sharedPanelMode: 'titlebar',
+      sharedPanelLast: 'full',
+      setSharedPanelMode: (mode) => set((s) => {
+        const last = mode === 'titlebar' ? s.sharedPanelLast : mode
+        return mode === s.sharedPanelMode && last === s.sharedPanelLast ? s : { sharedPanelMode: mode, sharedPanelLast: last }
+      }),
+      legacyMax: false,
+      takeLegacyMax: (teamKey) => {
+        if (!get().legacyMax) return
+        set({ legacyMax: false })
+        if (teamKey !== null) get().setPanelMode(teamKey, 'max')
+      },
       setTeamDrill: (teamKey, seat) => set((s) => {
         if (seat === null) return teamKey in s.teamDrill ? { teamDrill: without(s.teamDrill, (k) => k === teamKey) } : s
         const cur = s.teamDrill[teamKey]
@@ -150,9 +182,19 @@ export const useTeamUiStore = create<TeamUiState>()(
         return { collapsed: collapsed ? { ...s.collapsed, [teamKey]: true } : without(s.collapsed, (k) => k === teamKey) }
       }),
       setPanelMode: (teamKey, mode) => set((s) => {
-        if (mode === (s.panelMode[teamKey] ?? 'full')) return s
-        return { panelMode: mode === 'line' ? { ...s.panelMode, [teamKey]: 'line' } : without(s.panelMode, (k) => k === teamKey) }
+        const lastNow = s.panelLast[teamKey] ?? 'full'
+        const last = mode === 'titlebar' ? lastNow : mode
+        if (mode === (s.panelMode[teamKey] ?? 'full') && last === lastNow) return s
+        // `full` is the absence in both records.
+        return {
+          panelMode: mode === 'full' ? without(s.panelMode, (k) => k === teamKey) : { ...s.panelMode, [teamKey]: mode },
+          panelLast: last === 'full' ? without(s.panelLast, (k) => k === teamKey) : { ...s.panelLast, [teamKey]: last },
+        }
       }),
+      toggleTitleBar: (teamKey) => {
+        const s = get()
+        s.setPanelMode(teamKey, (s.panelMode[teamKey] ?? 'full') === 'titlebar' ? s.panelLast[teamKey] ?? 'full' : 'titlebar')
+      },
       setGhostWorkspace: (teamKey, workspaceId) => set((s) => {
         if (workspaceId === null || workspaceId === '') {
           return teamKey in s.ghostWorkspace ? { ghostWorkspace: without(s.ghostWorkspace, (k) => k === teamKey) } : s
@@ -166,11 +208,11 @@ export const useTeamUiStore = create<TeamUiState>()(
         const stale = (k: string) => k.startsWith(prefix) && !live.has(k)
         const next = {
           memberOrder: without(s.memberOrder, stale), collapsed: without(s.collapsed, stale),
-          panelMode: without(s.panelMode, stale), ghostWorkspace: without(s.ghostWorkspace, stale),
+          panelMode: without(s.panelMode, stale), panelLast: without(s.panelLast, stale), ghostWorkspace: without(s.ghostWorkspace, stale),
           teamDrill: without(s.teamDrill, stale),
         }
         const same = next.memberOrder === s.memberOrder && next.collapsed === s.collapsed
-          && next.panelMode === s.panelMode && next.ghostWorkspace === s.ghostWorkspace && next.teamDrill === s.teamDrill
+          && next.panelMode === s.panelMode && next.panelLast === s.panelLast && next.ghostWorkspace === s.ghostWorkspace && next.teamDrill === s.teamDrill
         return same ? s : next
       }),
       forgetHostTeams: (hostId) => get().forgetTeams(hostId, []),
@@ -180,7 +222,7 @@ export const useTeamUiStore = create<TeamUiState>()(
         const mine = (k: string) => k.startsWith(prefix)
         return {
           memberOrder: pick(s.memberOrder, mine), collapsed: pick(s.collapsed, mine),
-          panelMode: pick(s.panelMode, mine), ghostWorkspace: pick(s.ghostWorkspace, mine),
+          panelMode: pick(s.panelMode, mine), panelLast: pick(s.panelLast, mine), ghostWorkspace: pick(s.ghostWorkspace, mine),
           teamDrill: pick(s.teamDrill, mine),
         }
       },
@@ -188,6 +230,7 @@ export const useTeamUiStore = create<TeamUiState>()(
         memberOrder: { ...s.memberOrder, ...snapshot.memberOrder },
         collapsed: { ...s.collapsed, ...snapshot.collapsed },
         panelMode: { ...s.panelMode, ...snapshot.panelMode },
+        panelLast: { ...s.panelLast, ...snapshot.panelLast },
         ghostWorkspace: { ...s.ghostWorkspace, ...snapshot.ghostWorkspace },
         teamDrill: { ...s.teamDrill, ...snapshot.teamDrill },
       })),
@@ -195,7 +238,7 @@ export const useTeamUiStore = create<TeamUiState>()(
     {
       name: STORAGE_KEYS.TEAM_UI,
       storage: purdexStorage,
-      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, ghostWorkspace: s.ghostWorkspace, teamDrill: s.teamDrill, panel: s.panel, workbookTabs: s.workbookTabs, teamBeadHost: s.teamBeadHost }),
+      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, panelLast: s.panelLast, sharedPanelMode: s.sharedPanelMode, sharedPanelLast: s.sharedPanelLast, ghostWorkspace: s.ghostWorkspace, teamDrill: s.teamDrill, panel: s.panel, workbookTabs: s.workbookTabs, teamBeadHost: s.teamBeadHost }),
       merge: (persisted, current) => ({
         ...current, ...heal(persisted),
         teamBeadHost: isRecord(persisted) && typeof persisted.teamBeadHost === 'boolean' ? persisted.teamBeadHost : true,
