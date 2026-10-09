@@ -23,7 +23,7 @@ func (m *Module) handoverNoticeAsync(op team.RelayOp) {
 		return
 	}
 	m.noticeMu.Lock()
-	if m.stopping() { // Stop cancels under noticeMu: past this check the Add precedes Stop's Wait
+	if m.stopping() { // Stop passes the noticeMu barrier after its cancel: past this check the Add precedes Stop's Wait
 		m.noticeMu.Unlock()
 		return
 	}

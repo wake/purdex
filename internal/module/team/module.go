@@ -118,7 +118,7 @@ type Module struct {
 	stopCancel context.CancelFunc
 	sweepWG    sync.WaitGroup
 	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
-	// held and stopping() is false, and Stop cancels under it, so no Add can follow the Wait.
+	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
 	noticeMu sync.Mutex
 	// unsubTurnEnd ends the subscription to the agent module's turn ends (T-3a2); nil when none.
 	unsubTurnEnd func()
