@@ -64,3 +64,28 @@ func TestModHello_HelloRoutePersistsAndInitLoads(t *testing.T) {
 		t.Fatalf("a restarted module lost the hello: %+v", g.modSeen)
 	}
 }
+
+// Memory and the table drop the same session when several hellos share one millisecond: oldest At first, the greatest
+// session id among ties. Mutation gate: evict by At only (Go map order) → the two sets differ (red, flaky-proof by size).
+func TestModHello_EvictionAgreesWithTheTableOnTies(t *testing.T) {
+	f := newFixture(t)
+	for i := 0; i < modSeenCap+20; i++ { // every hello at the same clock value
+		if code, body := f.do("POST", "/api/relay/hello", map[string]any{"session_id": fmt.Sprintf("s-%04d", i), "mod_version": "2", "agent": "cc"}); code != 200 {
+			t.Fatalf("hello %d: %d %s", i, code, body)
+		}
+	}
+	rows, err := f.m.store.LoadModHello(1 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.m.mu.Lock()
+	defer f.m.mu.Unlock()
+	if len(rows) != modSeenCap || len(f.m.modSeen) != modSeenCap {
+		t.Fatalf("table %d, memory %d, want %d each", len(rows), len(f.m.modSeen), modSeenCap)
+	}
+	for sid := range rows {
+		if _, ok := f.m.modSeen[sid]; !ok {
+			t.Fatalf("%s is in the table but not in memory", sid)
+		}
+	}
+}
