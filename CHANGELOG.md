@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.0.0-alpha.626] - 2026-10-09
+
+> 動 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主 checkout 快轉生效（Mac App 按 Cmd+R）；Electron 不必更新。這一版修正 daemon 與新 tmux session 帶著別的 Claude Code session 身分的問題，並換上新的狀態列用量顯示。
+
+### Fixed：daemon 與新 tmux session 不再帶著別的 Claude Code session 的身分（#2126，#2122）
+
+- daemon 若是從某個 Claude Code session 裡啟動的，會繼承那個 session 的身分變數（session id、訊息 socket 與 token、pid 等 11 個），之後它開的 tmux session、Nexen worker 也跟著繼承：新 shell 裡的 `pdx msg send` 會被算到別人的信箱，新開的 claude 會以為自己是子 session。
+- daemon 啟動時先把這些變數清掉；部署重啟後就是乾淨的。
+- daemon 每次開新的 tmux session 時，順帶把 tmux 全域環境裡的這些變數清掉。
+- 只清 Claude Code 標示「自己是哪個 session」的變數；`CLAUDE_CONFIG_DIR`、`CLAUDE_CODE_PLUGIN_DIRS` 等設定照常保留。
+
+### Changed：狀態列的用量改成圖示＋圓環＋剩餘百分比（#2117，介面線）
+
+- 拿掉狀態列裡重複的位址格。
+- context／5 小時／7 天用量移到右側控制區，各自以圖示加圓環顯示，數字是剩餘百分比；用到 70% 以上轉黃、90% 以上轉紅。worker 的用量列同樣改版。
+
+### Added：team 介面的操作 — TI-1b（#2125，介面線）
+
+- 點 team 成員會打開它的分頁，或切到已開的分頁並把鍵盤焦點交給它所在的窗格；收合中的群組會先展開。
+- 群組收合、只在看得到的分頁之間切換、固定分頁的保護。這些操作由之後的 team 介面畫面（TI-2／3／4）呼叫。
+
+### 其他
+
+- U24 plan 與現況對齊（#2124，文件）。
+
 ## [1.0.0-alpha.625] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版讓 team 的成員清單帶上每個 member 手上的任務，App 之後可以直接顯示；派工／回報（T 線）到此全部完成。
