@@ -214,6 +214,27 @@ func (f *fakeOrigins) SameProcess(pid int, _ string) (bool, error) {
 	return !f.otherProc[pid], nil
 }
 
+// ListLiveOrigins lists the fixture sessions that are live and not hidden (shown entries over the fixture's).
+func (f *fakeOrigins) ListLiveOrigins() ([]team.Origin, error) {
+	f.mu.Lock()
+	readErr := f.readErr
+	f.mu.Unlock()
+	if readErr {
+		return nil, errors.New("read registry: not a directory")
+	}
+	var out []team.Origin
+	for _, inbox := range []string{"/tmp/10.sock", "/tmp/20.sock"} {
+		o := fixtureOrigins[inbox]
+		if !f.LiveSession(o.SessionID) {
+			continue
+		}
+		if cur, ok, _ := f.lookup(o.SessionID); ok {
+			out = append(out, cur)
+		}
+	}
+	return out, nil
+}
+
 // setRefAmbiguous makes ResolveOriginByRef answer the ambiguity error for ref (two live sessions share it).
 func (f *fakeOrigins) setRefAmbiguous(ref string) {
 	f.mu.Lock()

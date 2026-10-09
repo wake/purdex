@@ -27,7 +27,7 @@ var ErrRelayOpOpen = errors.New("relay op already open for this session")
 // fields before reaching here; this is the floor for every other caller.
 var ErrBadRelayReport = errors.New("bad relay report")
 
-// relaySchema holds the three P5a tables (spec §8.1, §8.4, §8.7). It is
+// relaySchema holds the P5a tables (and relay_quotas, #2062) (spec §8.1, §8.4, §8.7). It is
 // run by OpenStore after approval_requests; every statement is idempotent.
 const relaySchema = `
 	CREATE TABLE IF NOT EXISTS relay_ops (
@@ -57,6 +57,13 @@ const relaySchema = `
 		predecessor_ref        TEXT    NOT NULL,
 		op_id                  TEXT    NOT NULL,
 		at                     INTEGER NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS relay_quotas (
+		root_session_id  TEXT PRIMARY KEY,
+		self_left        INTEGER NOT NULL DEFAULT 0,
+		member_pool_left INTEGER NOT NULL DEFAULT 0,
+		updated_at       INTEGER NOT NULL,
+		updated_by       TEXT    NOT NULL DEFAULT ''
 	);
 	CREATE TABLE IF NOT EXISTS session_prefs (
 		session_id        TEXT PRIMARY KEY,

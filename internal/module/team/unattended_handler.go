@@ -40,6 +40,7 @@ func (m *Module) handleUnattendedGet(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
+	m.fillQuotas(&v)
 	m.writeJSON(w, http.StatusOK, v)
 }
 
@@ -128,6 +129,7 @@ func (m *Module) handleUnattendedPut(w http.ResponseWriter, r *http.Request) {
 	if m.fillUnattendedPage(&v, 0, team.UnattendedPageDefault) != nil {
 		v.ListFailed = true
 	}
+	m.fillQuotas(&v)
 	m.writeJSON(w, http.StatusOK, v)
 }
 
