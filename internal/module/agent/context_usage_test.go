@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	agentpkg "github.com/wake/purdex/internal/agent"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
@@ -131,3 +132,21 @@ func TestContextUsage_ClearedByStatuslineRemove(t *testing.T) {
 }
 
 var _ ContextUsageReader = (*Module)(nil)
+
+// P7-1: the team module's 70% idle notice reads a tmux session's status through AgentStatus.
+func TestAgentStatus_ByTmuxSession(t *testing.T) {
+	m := usageModule(t)
+	if st, ok := m.AgentStatus("sess1"); ok || st != "" {
+		t.Fatalf("an unknown session = %q ok=%v, want none", st, ok)
+	}
+	m.mu.Lock()
+	m.currentStatus["sess1"] = agentpkg.StatusIdle
+	m.currentStatus["sess2"] = agentpkg.StatusRunning
+	m.mu.Unlock()
+	if st, ok := m.AgentStatus("sess1"); !ok || st != "idle" {
+		t.Fatalf("sess1 = %q ok=%v, want idle", st, ok)
+	}
+	if st, ok := m.AgentStatus("sess2"); !ok || st != "running" {
+		t.Fatalf("sess2 = %q ok=%v, want running (keyed by tmux session, not shared)", st, ok)
+	}
+}

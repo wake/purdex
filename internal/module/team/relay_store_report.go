@@ -113,7 +113,7 @@ func moveTeamRoles(tx *sql.Tx, oldSessionID string, r RelayReport) error {
 		WHERE lead_session_id = ? AND ended_at = 0`, r.NewSessionID, r.NewRef, oldSessionID); err != nil {
 		return fmt.Errorf("move lead: %w", err)
 	}
-	if _, err := tx.Exec(`UPDATE team_members SET session_id = ?, ref = ?, updated_at = ?, `+resetMemberUsage+`
+	if _, err := tx.Exec(`UPDATE team_members SET session_id = ?, ref = ?, updated_at = ?, notice_armed = 1, `+resetMemberUsage+`
 		WHERE session_id = ? AND state = 'active'
 		  AND EXISTS (SELECT 1 FROM teams WHERE teams.id = team_members.team_id AND teams.ended_at = 0)`,
 		r.NewSessionID, r.NewRef, r.At, oldSessionID); err != nil {

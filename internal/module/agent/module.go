@@ -1098,3 +1098,12 @@ func (m *Module) manageActivityWatch(session, agentType string, newStatus agentp
 		m.probeIntentDisp.applyStatus(session, agentType, newStatus)
 	}
 }
+
+// AgentStatus is the last status the module holds for a tmux session ("idle", "running", ...), ok false when it holds none.
+// Read-only, under m.mu (P7-1: the team module's 70% idle notice type-asserts it as AgentStatusReader).
+func (m *Module) AgentStatus(tmuxSession string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, ok := m.currentStatus[tmuxSession]
+	return string(st), ok
+}

@@ -100,7 +100,11 @@ type Module struct {
 	// usage is the agent module's per-session statusline reading; begin
 	// copies model_id / effort from it into the self_relay payload (the mod
 	// sends neither). Nil when the agent module is absent: both stay "".
-	usage    agent.ContextUsageReader
+	usage agent.ContextUsageReader
+	// status is the agent module's status per tmux session and noticeAt the percentage the 70% idle notice fires at
+	// (PDX_RELAY_THRESHOLD, read once at Init; P7-1).
+	status   AgentStatusReader
+	noticeAt int
 	newID    func() string
 	relayDir string
 	modSeen  map[string]helloInfo
@@ -381,7 +385,11 @@ func (m *Module) Init(c *core.Core) error {
 		if r, ok := svc.(agent.ContextUsageReader); ok {
 			m.usage = r
 		}
+		if r, ok := svc.(AgentStatusReader); ok {
+			m.status = r
+		}
 	}
+	m.noticeAt = noticeThreshold()
 	store, err := OpenStore(filepath.Join(c.Cfg.DataDir, "team.db"))
 	if err != nil {
 		return fmt.Errorf("team: %w", err)

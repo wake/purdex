@@ -61,6 +61,7 @@ func (m *Module) tick() {
 		m.persistUsage()
 		m.endGoneTeams()
 		m.markGoneMembers()
+		m.noticeUsage() // after the gone teams and members are settled: a member at the threshold and idle tells its lead once (P7-1)
 		// Titles and names change in the registry without a write of ours:
 		// the hash gate in rosterChanged makes the unchanged case a read.
 		m.rosterChanged()
