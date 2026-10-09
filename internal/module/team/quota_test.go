@@ -472,3 +472,26 @@ func TestOpenStore_AddsRelayQuotaRevToTheDeployedShape(t *testing.T) {
 		t.Fatalf("second open: %v", err)
 	}
 }
+
+// A quota read that fails in the store is null too, not an empty or partial list. Mutation gate: continue past the
+// error → red.
+func TestUnattendedView_QuotasNullWhenTheStoreCannotBeRead(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.m.store.db.Exec(`DROP TABLE relay_quotas`); err != nil {
+		t.Fatal(err)
+	}
+	_, raw := f.do(http.MethodGet, UnattendedRoute, nil)
+	if !strings.Contains(string(raw), `"quotas":null`) {
+		t.Fatalf("store unreadable: %s, want \"quotas\":null", raw)
+	}
+	// a looping chain in one session: the same
+	f2 := newFixture(t)
+	lineage(t, f2.m.store, "sid-2", "sid-9")
+	if _, err := f2.m.store.db.Exec(`INSERT INTO session_lineage (session_id, predecessor_session_id, predecessor_ref, op_id, at) VALUES ('sid-9', 'sid-2', '_x', 'opx', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	_, raw = f2.do(http.MethodGet, UnattendedRoute, nil)
+	if !strings.Contains(string(raw), `"quotas":null`) {
+		t.Fatalf("looping chain: %s, want \"quotas\":null", raw)
+	}
+}
