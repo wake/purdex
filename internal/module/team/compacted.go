@@ -47,26 +47,15 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
 		return
 	}
-	disarmed, err := m.store.DisarmNoticeForce(mr.SpawnOp, mr.SessionID)
-	if err != nil {
+	if _, err := m.store.DisarmNoticeForce(mr.SpawnOp, mr.SessionID); err != nil {
 		m.logf("[team] compacted %s: %v", req.SessionID, err)
 	}
 	text := fmt.Sprintf(CompactedNoticeFmt, mr.Ref)
-	if !m.goTracked(func() {
-		// a notice that did not go gives the 70% notice back, so the lead is not left with neither
-		if !m.noticeToLead(mr, t, text, "compaction notice") && disarmed {
-			m.rearm(mr)
-		}
-	}) {
-		m.rearmIf(disarmed, mr)
+	// Best effort, and a notice that does not go is NOT given back as an armed 70% notice: the last reading is from before
+	// the compaction, so arming would send a stale "over 70%" at the next tick (codex finding 5). The lead sees CTX in `pdx team`.
+	if !m.goTracked(func() { m.noticeToLead(mr, t, text, "compaction notice") }) {
 		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
 		return
 	}
 	m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{Noticed: true})
-}
-
-func (m *Module) rearmIf(cond bool, mr memberRow) {
-	if cond {
-		m.rearm(mr)
-	}
 }

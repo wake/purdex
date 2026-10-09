@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -97,13 +98,17 @@ func TestCompacted_NoticeIsNotFollowedByA70NoticeOnTheNextTick(t *testing.T) {
 	}
 }
 
-// A compaction notice that did not go gives the 70% notice back (the lead is not left with neither).
-func TestCompacted_AFailedSendRearmsTheUsageNotice(t *testing.T) {
+// Codex finding 5 again: a compaction notice that did not go does NOT arm the 70% notice (the reading is stale).
+func TestCompacted_AFailedSendDoesNotArmTheUsageNotice(t *testing.T) {
 	f := noticeFixture(t)
+	f.usage.setStatus("tm-op-a", "idle")
+	f.usage.setPct("sid-ma", 85) // from before the compaction
 	f.sender.setErr(fmt.Errorf("lead inbox down"))
 	f.compacted("sid-ma", "auto")
-	waitFor(t, func() bool {
-		won, _ := f.m.store.DisarmNotice("op-a", "sid-ma") // armed again → this call flips it
-		return won
-	})
+	time.Sleep(100 * time.Millisecond)
+	f.sender.setErr(nil)
+	f.usageCheck()
+	if n := len(f.sender.calls()); n != 0 {
+		t.Fatalf("%d notices after a failed compaction notice, want 0 (no stale 70%% notice)", n)
+	}
 }
