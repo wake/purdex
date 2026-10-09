@@ -21,7 +21,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
-import { CELL_GAP, CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, SEP_W, firstRowCapacity } from './panel-layout'
+import { CELL_GAP, CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, capacityFromWidths, firstRowCapacity } from './panel-layout'
 
 interface Props {
   team: TeamPanelTeam
@@ -298,22 +298,19 @@ function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpa
   // measured (no layout) it falls back to the constants: the stored width's capacity, or everything when enlarged.
   const box = useRef<HTMLDivElement>(null)
   const [measured, setMeasured] = useState<number | null>(null)
-  // Cells differ in width (a seat with a status light draws a wider icon in some styles), and which cells are rendered
-  // depends on the capacity just computed. To keep that from oscillating (N -> N-1 -> N ...), the widest cell seen under
-  // the same premises (box width + indicator style) is remembered and only ever grows; the premises changing resets it.
-  const indicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
-  const seen = useRef({ key: '', unit: 0 })
+  // Every seat's cell is always rendered (the first row, then the wrapped region under it), so each one's REAL width can be
+  // read in seat order and the capacity is the longest prefix that fits (capacityFromWidths). It depends only on those
+  // widths and the box width, never on how many cells are currently in the first row, so it cannot oscillate (N -> N-1 -> N).
+  useUISettingsStore((s) => s.tabIndicatorStyle) // a light style change widens the cells: re-render so the effect below re-measures
+  const moreBox = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const el = box.current
     if (!el) return
     const measure = () => {
       const avail = el.clientWidth
-      const key = `${team.teamKey}|${seats.map((x) => x.sessionId).join(",")}|${avail}|${indicatorStyle}`
-      if (seen.current.key !== key) seen.current = { key, unit: 0 }
-      let unit = seen.current.unit
-      el.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]').forEach((c) => { unit = Math.max(unit, c.offsetWidth) })
-      seen.current.unit = unit
-      setMeasured(unit > 0 && avail > 0 ? Math.max(1, Math.floor((avail - SEP_W + CELL_GAP) / (unit + CELL_GAP))) : null)
+      const cells = [...el.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]'), ...(moreBox.current?.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]') ?? [])]
+      const widths = cells.map((c) => c.offsetWidth)
+      setMeasured(avail > 0 && widths.length > 0 && widths.every((w) => w > 0) ? capacityFromWidths(widths, avail) : null)
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
@@ -353,7 +350,7 @@ function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpa
       </span>
     </div>
     {more.length > 0 && (
-      <div data-testid="team-panel-more" className="flex flex-wrap items-center border-t border-border-subtle py-1" style={{ paddingInline: HEADER_PX, gap: CELL_GAP }}>
+      <div ref={moreBox} data-testid="team-panel-more" className="flex flex-wrap items-center border-t border-border-subtle py-1" style={{ paddingInline: HEADER_PX, gap: CELL_GAP }}>
         {more.map(cell)}
       </div>
     )}
