@@ -214,6 +214,19 @@ func TestAPI_ConversationErrors(t *testing.T) {
 	errCode(t, e.get("/api/workbook/conversations/claude/s1"), 500, "internal")
 }
 
+// A cursor does not change whether a conversation exists: unknown stays 404 with any `before`, and the end of paging of a
+// known conversation is an empty 200. Mutation gate: skip the HasEntries check → red.
+func TestAPI_PagingNeverTurnsAnUnknownConversationIntoAnEmptyOne(t *testing.T) {
+	e := newAPI(t)
+	id := mustInsert(t, e.store, pending("c", "s1", "a", 1))
+	e.roots.root["s1"] = "c"
+	errCode(t, e.get("/api/workbook/conversations/claude/nobody?before=99"), 404, "not_found")
+	end := decodeConv(t, e.get("/api/workbook/conversations/claude/s1?before="+itoa(id)))
+	if len(end.Entries) != 0 || end.ConvKey != "c" {
+		t.Fatalf("end of paging: %+v", end)
+	}
+}
+
 func TestAPI_NoStatusYetIsEmptyNotMissing(t *testing.T) {
 	e := newAPI(t)
 	e.roots.root["s1"] = "c" // the conversation key is the relay chain's root

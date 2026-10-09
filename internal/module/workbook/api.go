@@ -128,9 +128,18 @@ func (m *Module) handleConversation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal")
 		return
 	}
-	if len(rows) == 0 && !haveStatus && before == 0 {
-		writeError(w, http.StatusNotFound, "not_found")
-		return
+	if len(rows) == 0 && !haveStatus {
+		// an exhausted page of a conversation that exists is an empty 200; a conversation that was never written is 404
+		known, err := st.HasEntries(conv)
+		if err != nil {
+			log.Printf("[workbook] read conversation: %v", err)
+			writeError(w, http.StatusInternalServerError, "internal")
+			return
+		}
+		if !known {
+			writeError(w, http.StatusNotFound, "not_found")
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"conv_key":  conv,

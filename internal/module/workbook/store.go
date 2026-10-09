@@ -312,6 +312,19 @@ func (s *Store) Conversation(convKey string, limit int, beforeID int64) ([]Entry
 	return s.queryEntries(`SELECT `+entryCols+` FROM wb_entries WHERE conv_key = ? AND id < ? ORDER BY id DESC LIMIT ?`, convKey, beforeID, limit)
 }
 
+// HasEntries reports whether the conversation has any entry (whatever its state).
+func (s *Store) HasEntries(convKey string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM wb_entries WHERE conv_key = ? LIMIT 1`, convKey).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read workbook entries: %w", err)
+	}
+	return true, nil
+}
+
 // Entries lists entries across conversations newest first. since is inclusive and until exclusive, on turn_at (0 = no
 // bound); thingDone keeps only the entries whose turn finished a thing.
 func (s *Store) Entries(since, until int64, thingDone bool, limit int) ([]Entry, error) {
