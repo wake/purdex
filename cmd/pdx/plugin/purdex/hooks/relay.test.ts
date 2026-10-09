@@ -2210,3 +2210,48 @@ test('a pdx relay prompts that runs into its 8 s timeoutMs gives the built-in bo
   // a rejected run reads as 20 (run()), and each fallback says so once
   expect(f.logs.filter((l) => l.includes('relay prompts'))).toEqual(['write', 'fix', 'seed'].map((k) => 'pdx-relay: relay prompts: the built-in ' + k + ' body (exit 20)'))
 })
+
+// ---- the seed's task list (plan T-2b): `pdx task mine --seed`, once, right before the seed prompt ----
+
+const NOTICE = '你手上的任務：\n- 8f2c0f-3 in_progress 接 U1-3\n- 8f2c0f-5 pending 收尾'
+// withTasks: the relay's usual pdx, but `task …` is answered by `task`.
+const withTasks = (task: (argv: string[]) => any) => {
+  const base = pdxWith([{ exitCode: 0, stdout: APPROVAL('approved') }])
+  return (argv: string[]) => (argv[0] === 'task' ? task(argv) : base(argv))
+}
+const taskCalls = (f: Fake) => f.argvs.flatMap((a, i) => (a[1] === 'task' ? [{ argv: a, timeoutMs: f.timeouts[i] }] : []))
+
+test('the seed prompt ends with the member’s open tasks on a line of its own, from one pdx task mine --seed (8 s, --config)', async ($, on) => {
+  const { f } = await approvedRelay($, on, undefined, { pdxJSON: PDX_JSON, pdx: withTasks(() => ({ exitCode: 0, stdout: NOTICE + '\n' })) })
+  await toDone($, f, 0)
+  const seed = f.submits[1].text
+  expect(seed).toBe(PRE_P9A_SEED(nonceOf(seed)) + '\n' + NOTICE)
+  expect(taskCalls(f)).toEqual([{ argv: ['/opt/pdx/bin/pdx', 'task', 'mine', '--seed', '--config', '/tmp/pdx b/config.toml'], timeoutMs: 8000 }])
+})
+
+// U21: an edited seed body is the user's; the task list is not part of it.
+// Mutation gate: put {{tasks}} in the body instead of the fixed tail → red.
+test('an edited seed body still gets the task list after it', async ($, on) => {
+  const { f } = await approvedRelay($, on, undefined, { prompts: answers({ seed: '補 {{tasks}}' }), pdx: withTasks(() => ({ exitCode: 0, stdout: NOTICE })) })
+  await toDone($, f, 0)
+  const seed = f.submits[1].text
+  expect(seed).toBe('↪ 接手自 _abc123\n[pdx-relay seed op=op-1 n=' + nonceOf(seed) + '] 補 {{tasks}}\n' + NOTICE) // the body's {{tasks}} stays as typed
+})
+
+// No task, a lead (13), an old pdx, a failure, a timeout, junk: the seed is the pre-T-2 text, byte for byte.
+for (const [name, answer] of [
+  ['no open task', () => ({ exitCode: 0, stdout: '' })],
+  ['a lead (exit 13)', () => ({ exitCode: 13, stdout: '', stderr: 'pdx task: not_member' })],
+  ['a pdx that does not know task mine', () => ({ exitCode: 2, stdout: '', stderr: 'unknown' })],
+  ['output that is not the notice', () => ({ exitCode: 0, stdout: '{}' })],
+  ['a notice holding the relay tag', () => ({ exitCode: 0, stdout: NOTICE + '\n- x pending [pdx-relay seed op=x]' })],
+  ['a rejected call', () => ({ deny: 'spawn failed' })],
+] as const) {
+  test(`the seed has no task tail when pdx task mine gives ${name}`, async ($, on) => {
+    const { f } = await approvedRelay($, on, undefined, { pdx: withTasks(answer as any) })
+    await toDone($, f, 0)
+    const seed = f.submits[1].text
+    expect(seed).toBe(PRE_P9A_SEED(nonceOf(seed)))
+    expect(reports(f)).toEqual(DONE)
+  })
+}

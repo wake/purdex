@@ -25,7 +25,7 @@ const RelayPromptMaxBytes = 16 << 10
 
 // RelayPromptVariables are the {{name}}s a body may use (U21 (d)); the mod
 // fills them. The fixed parts also use {{op}}, {{nonce}} and {{missing}},
-// which only the mod knows. P6-3a appends "git".
+// which only the mod knows, and {{tasks}} (the seed's tail, T-2). P6-3a appends "git".
 var RelayPromptVariables = []string{"path", "old_ref", "old_session", "context", "whoami"}
 
 // RelayPromptBodies is one body per prompt: the stored values (where "" is
@@ -123,6 +123,11 @@ var RelayPromptFixedParts = RelayPromptSkeleton{
 	},
 	Seed: RelayPromptFixed{
 		Head: "↪ 接手自 {{old_ref}}\n[pdx-relay seed op={{op}} n={{nonce}}] ",
+		// The member's open tasks (T-2): the mod fills {{tasks}} from
+		// `pdx task mine --seed` (TaskSeedText) and leaves the tail out when
+		// there are none. Fixed, not the body's, so an edited seed (U21) still
+		// lists them; no body may use it (it is not in RelayPromptVariables).
+		Tail: "{{tasks}}",
 	},
 }
 

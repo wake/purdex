@@ -10,6 +10,7 @@ import (
 	"testing/fstest"
 
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/team"
 )
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
@@ -35,6 +36,10 @@ func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	}
 	if !strings.Contains(string(reg), "import { registerLease } from './lease.js'") || !strings.Contains(string(reg), "registerLease(on)") {
 		t.Error("register.js does not import and register ./lease.js")
+	}
+	// The seed's task notice (T-2b): the mod checks the header `pdx task mine --seed` prints.
+	if !strings.Contains(string(reg), "const TASKS_HEADER = '"+team.TaskSeedHeader+"'") {
+		t.Error("register.js does not check the task notice header internal/team prints")
 	}
 	b, err := fs.ReadFile(f, ".claude-plugin/plugin.json")
 	if err != nil {
