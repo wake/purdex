@@ -10,6 +10,8 @@ import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { HostBadge } from './HostBadge'
 import { useTabHostBadge } from '../hooks/useTabHostBadge'
 import { hasHostBadge } from '../lib/host-color'
+import type { TeamTabMark } from './team/team-display'
+import { TeamTabShadow } from './team/TeamTabGroup'
 
 interface Props {
   tab: Tab
@@ -21,6 +23,8 @@ interface Props {
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
   onRename?: (tabId: string) => void
   onHover?: (tabId: string | null) => void
+  /** This tab's place in a lead/member team group (normal zone only); undefined outside one. */
+  group?: TeamTabMark
 }
 
 // Composite bg colors (canvas-verified for opaque X button bg)
@@ -28,7 +32,7 @@ interface Props {
 const TAB_BG_INACTIVE = 'var(--surface-secondary)'
 const TAB_BG_ACTIVE = 'var(--surface-active)'
 
-export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover }: Props) {
+export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, group }: Props) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
 
   const style = {
@@ -118,6 +122,11 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
 
   const showClose = !tab.locked
 
+  // A remote member that is still joining / being released / killed: the state goes in the tooltip and the aria name only.
+  const seatState = group?.role === 'member' && ['joining', 'releasing', 'killing'].includes(group.seatState) ? group.seatState : null
+  const stateSuffix = seatState ? t('team.seat_state_suffix', { alias: group!.hostAlias, state: t(`team.seat_state.${seatState}`) }) : null
+  const tipText = stateSuffix ? `${label} · ${stateSuffix}` : label
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(tab.id) }
   }
@@ -131,6 +140,8 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       {...listeners}
       role="tab"
       aria-selected={isActive}
+      aria-label={stateSuffix ? tipText : undefined}
+      data-seat-state={seatState ?? undefined}
       data-active={String(isActive)}
       onClick={() => onSelect(tab.id)}
       onDoubleClick={handleDoubleClick}
@@ -159,13 +170,14 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         />
       )}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
-      {showTooltip && <HoverTooltip placement="top">{label}</HoverTooltip>}
+      {showTooltip && <HoverTooltip placement="top">{tipText}</HoverTooltip>}
       {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}
       {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
         <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
           style={{ backgroundColor: '#b91c1c' }} />
       )}
+      {group && <TeamTabShadow mark={group} />}
       {showClose && (
         <span className="absolute right-0 top-0 bottom-0 flex items-center">
           {/* Gradient fade -- always visible */}
