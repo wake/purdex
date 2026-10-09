@@ -8,7 +8,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useNexHostQuota } from '../../hooks/useNexHostQuota'
 import { compositeKey } from '../../lib/composite-key'
 import {
-  USAGE_STALE_MS, epochToMs, formatResetsIn, parseCcUsage, remainingPct, usedPct, usageTone,
+  USAGE_STALE_MS, epochToMs, formatResetsIn, parseCcUsage, remainingPct, ringGeometry, ringTransform, usedPct,
   type UsageTone, type UsageWindow,
 } from '../../lib/usage-display'
 import type { Icon } from '@phosphor-icons/react'
@@ -32,7 +32,7 @@ const RING_TONE_CLASS: Record<UsageTone, string> = {
 }
 
 const RING_SIZE = 12
-const RING_STROKE = 2
+const RING_STROKE = 2.5
 const RING_R = (RING_SIZE - RING_STROKE) / 2
 const RING_C = 2 * Math.PI * RING_R
 
@@ -43,19 +43,18 @@ function shownPct(used: number, mode: UsageMode): number {
   return mode === 'used' ? usedPct(used) : remainingPct(used)
 }
 
-/** A ring that fills clockwise from 12 o'clock to the shown share (per `mode`, the ring's own); its colour always follows `usageTone` of the USED share. */
+/** From 12 o'clock: a `used` ring's bright arc grows counterclockwise; a `remaining` ring's runs clockwise (so it shrinks counterclockwise). Colour always follows `usageTone` of the USED share. */
 function Ring({ used, mode }: { used: number; mode: UsageMode }) {
-  const u = usedPct(used)
-  const shown = shownPct(used, mode)
-  const tone = usageTone(u)
+  const { sharePct: shown, direction, tone } = ringGeometry(used, mode)
   return (
     <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} aria-hidden="true" className="shrink-0">
-      <circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RING_R} fill="none" strokeWidth={RING_STROKE} stroke="currentColor" className="text-border-subtle" />
+      <circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RING_R} fill="none" strokeWidth={RING_STROKE} stroke="currentColor" className="text-border-subtle" opacity={0.6} />
       <circle
         data-testid="usage-ring-arc"
-        data-used={u}
+        data-used={usedPct(used)}
         data-shown={shown}
         data-tone={tone}
+        data-direction={direction}
         className={RING_TONE_CLASS[tone]}
         cx={RING_SIZE / 2}
         cy={RING_SIZE / 2}
@@ -63,7 +62,7 @@ function Ring({ used, mode }: { used: number; mode: UsageMode }) {
         fill="none"
         strokeWidth={RING_STROKE}
         strokeDasharray={`${(shown / 100) * RING_C} ${RING_C}`}
-        transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+        transform={ringTransform(RING_SIZE, direction)}
       />
     </svg>
   )
