@@ -37,6 +37,7 @@ import (
 	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/push/apnskey"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/workbooklines"
 )
 
 const maxBody = 64 << 10 // device registration body cap (spec §4.1)
@@ -74,7 +75,10 @@ type Module struct {
 	sessBusy    atomic.Bool                                                      // a session read is still running: never more than one outstanding
 	sessStalled atomic.Bool                                                      // the "still busy" line was already logged for this stall
 	holds       holdSet
-	holdFor     time.Duration // how long a waiting event waits for its hook_ask (spec §5.2 rule 8); a test seam
+	wbHolds     wbHoldSet                  // Stop pushes held for the session workbook's line (agent_trigger.go)
+	wbWait      func() time.Duration       // a test seam: the push_wait_s setting; nil = from the registry
+	wbLines     func() workbooklines.Lines // a test seam: the workbook's waiter; nil = from the registry
+	holdFor     time.Duration              // how long a waiting event waits for its hook_ask (spec §5.2 rule 8); a test seam
 	unsubNotify func()
 }
 
@@ -223,6 +227,7 @@ func (m *Module) Start(ctx context.Context) error {
 	snd.openState = m.openState
 	m.sender.Store(snd)
 	m.holds.reset()
+	m.wbHolds.reset()
 	m.asks.Clear() // a restart begins from the feed's snapshot, not from asks an earlier run saw open
 	if m.events != nil {
 		// The feed arms the callback in the same step that returns the snapshot, and may run an event before this goroutine
@@ -331,6 +336,7 @@ func (m *Module) Stop(context.Context) error {
 		m.unsubNotify()
 		m.unsubNotify = nil
 	}
+	m.wbHolds.stop() // before the sender: a hold that is mid-send enqueues onto a live sender, then nothing more
 	m.holds.stopAll()
 	if snd := m.sender.Swap(nil); snd != nil {
 		snd.Stop() // a callback that already holds snd only enqueues onto a stopped sender: harmless

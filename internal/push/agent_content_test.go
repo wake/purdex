@@ -1,6 +1,7 @@
 package push
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -136,5 +137,93 @@ func TestAgentContent_PayloadCarriesTheAgentFields(t *testing.T) {
 	}
 	if strings.Contains(s, "approval_id") {
 		t.Fatalf("an agent payload names an approval: %s", s)
+	}
+}
+
+// WB-3 (plan item 3): a Stop push that has the workbook's line takes its body and puts the thing on the title.
+
+func wbIn(ev string, host string, name string, line *WorkbookLine) AgentInput {
+	return AgentInput{HostLabel: host, SessionCode: "c1", SessionID: "sid-1", SessionName: name, EventName: ev,
+		Detail: map[string]any{"last_assistant_message": "the whole last message"}, Workbook: line}
+}
+
+// Mutation gate: ignore the line, or apply it to a Notification → red.
+func TestAgentContent_WorkbookLine(t *testing.T) {
+	line := &WorkbookLine{Thing: "推播整合", Push: "PR 已 merge，等部署", ConvKey: "root-1", EntryID: 42}
+	c, ok := AgentContent(wbIn("Stop", "mlab", "dev", line), "zh-TW")
+	if !ok || c.Body != "PR 已 merge，等部署" || c.Title != "mlab：dev・推播整合" || c.WorkbookConv != "root-1" || c.WorkbookEntry != 42 {
+		t.Fatalf("content = %+v", c)
+	}
+	// no host prefix when the device has none
+	if c, _ := AgentContent(wbIn("PdxStop", "", "dev", line), "en"); c.Title != "dev・推播整合" || c.Body != "PR 已 merge，等部署" {
+		t.Fatalf("no host: %+v", c)
+	}
+	// StopFailure takes it too (its entry summarised the failed turn)
+	if c, _ := AgentContent(wbIn("StopFailure", "mlab", "dev", line), "en"); c.Body != "PR 已 merge，等部署" || c.WorkbookEntry != 42 {
+		t.Fatalf("stop failure: %+v", c)
+	}
+	// every other event keeps today's text and carries no workbook block
+	for _, ev := range []string{"Notification", "PermissionRequest"} {
+		c, ok := AgentContent(wbIn(ev, "mlab", "dev", line), "en")
+		if !ok || c.Title != "mlab: dev" || c.WorkbookEntry != 0 || c.WorkbookConv != "" || strings.Contains(c.Body, "PR 已") {
+			t.Fatalf("%s: %+v", ev, c)
+		}
+	}
+	// absent: today's push
+	if c, _ := AgentContent(wbIn("Stop", "mlab", "dev", nil), "en"); c.Title != "mlab: dev" || c.Body != "the whole last message" || c.WorkbookEntry != 0 {
+		t.Fatalf("absent: %+v", c)
+	}
+	// an empty push line falls back to today's body (and the thing is still the subject)
+	if c, _ := AgentContent(wbIn("Stop", "mlab", "dev", &WorkbookLine{Thing: "事", Push: "  ", EntryID: 7, ConvKey: "r"}), "en"); c.Body != "the whole last message" || c.Title != "mlab: dev・事" {
+		t.Fatalf("empty push: %+v", c)
+	}
+}
+
+// The title limit cuts the thing first: the session name (and the host) always stay.
+// Mutation gate: cut the whole title → the name is lost → red.
+func TestAgentContent_WorkbookTitleCutsTheThingFirst(t *testing.T) {
+	long := strings.Repeat("長", 200)
+	c, _ := AgentContent(wbIn("Stop", "mlab", "dev", &WorkbookLine{Thing: long, Push: "x", ConvKey: "r", EntryID: 1}), "zh-TW")
+	if !strings.HasPrefix(c.Title, "mlab：dev・") || len([]rune(c.Title)) > maxTitleRunes+1 { // +1: the ellipsis
+		t.Fatalf("title = %q (%d runes)", c.Title, len([]rune(c.Title)))
+	}
+	if !strings.HasSuffix(c.Title, "…") {
+		t.Fatalf("a cut thing ends with an ellipsis: %q", c.Title)
+	}
+}
+
+func TestContent_PayloadCarriesTheWorkbookBlock(t *testing.T) {
+	c := Content{Title: "t", Body: "b", Kind: "agent", SessionCode: "c1", WorkbookConv: "root-1", WorkbookEntry: 42}
+	raw, err := c.Payload("h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Purdex map[string]any `json:"purdex"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	wb, ok := got.Purdex["workbook"].(map[string]any)
+	if !ok || wb["conv_key"] != "root-1" || wb["entry_id"] != float64(42) {
+		t.Fatalf("purdex = %v", got.Purdex)
+	}
+	// without an entry the block is left out
+	raw, _ = Content{Title: "t", Body: "b", Kind: "agent"}.Payload("h1")
+	if strings.Contains(string(raw), "workbook") {
+		t.Fatalf("payload = %s", raw)
+	}
+}
+
+// The thing is model text on a lock screen: newlines, control and bidi characters are removed like the body's (codex attack).
+// Mutation gate: only TrimSpace the thing → red.
+func TestAgentContent_WorkbookThingIsSanitised(t *testing.T) {
+	line := &WorkbookLine{Thing: "推播\n整合\u202eevil\u200b\u0007", Push: "x", ConvKey: "r", EntryID: 1}
+	c, _ := AgentContent(wbIn("Stop", "mlab", "dev", line), "en")
+	if strings.ContainsAny(c.Title, "\n\u202e\u200b\u0007") {
+		t.Fatalf("title = %q", c.Title)
+	}
+	if !strings.HasPrefix(c.Title, "mlab: dev・推播") {
+		t.Fatalf("title = %q", c.Title)
 	}
 }

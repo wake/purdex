@@ -283,6 +283,20 @@ func (s *Store) NewestTurn(sessionID string) (turnID string, turnAt int64, ok bo
 	return turnID, turnAt, true, nil
 }
 
+// ClosestTurn is the session's entry whose turn_at is nearest to `at` within [at-before, at+after] (the push hold's match: a
+// Stop's own entry carries the event's time); ok is false when there is none. Two Stops a moment apart each find their own.
+func (s *Store) ClosestTurn(sessionID string, at, before, after int64) (Entry, bool, error) {
+	e, err := scanEntry(s.db.QueryRow(`SELECT `+entryCols+` FROM wb_entries WHERE session_id = ? AND turn_at BETWEEN ? AND ?
+		ORDER BY ABS(turn_at - ?) ASC, id DESC LIMIT 1`, sessionID, at-before, at+after, at))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Entry{}, false, nil
+	}
+	if err != nil {
+		return Entry{}, false, fmt.Errorf("read workbook entry near a stop: %w", err)
+	}
+	return e, true, nil
+}
+
 // Conversation lists a conversation's entries newest first; beforeID > 0 returns the entries with a smaller id.
 func (s *Store) Conversation(convKey string, limit int, beforeID int64) ([]Entry, error) {
 	if beforeID <= 0 {
