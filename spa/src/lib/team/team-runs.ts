@@ -32,6 +32,19 @@ export function teamRuns(tabIds: readonly string[], teamOfTab: (tabId: string) =
   return runs
 }
 
+/**
+ * Every member tab sitting in a run behind its lead in this list, whatever the collapse state: the sidebar folds exactly
+ * these into the lead's beads. A member outside a run (lead in another workspace, or left open when the lead closed) is absent.
+ */
+export function runMemberIds(
+  tabIds: readonly string[],
+  teamOfTab: (tabId: string) => TabTeamHit | null | undefined,
+): Set<string> {
+  const members = new Set<string>()
+  for (const run of teamRuns(tabIds, teamOfTab)) for (let k = 1; k <= run.members; k++) members.add(tabIds[run.start + k])
+  return members
+}
+
 /** The member tabs a collapse hides: those in a run behind their lead, while that team is collapsed. */
 export function hiddenMemberIds(
   tabIds: readonly string[],

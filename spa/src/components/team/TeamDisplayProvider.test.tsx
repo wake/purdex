@@ -89,10 +89,12 @@ describe('TeamDisplayProvider — marks, fold, panel', () => {
     expect(display!.tabMark('lead')).toMatchObject({ collapsed: true, hiddenCount: 2, first: true, last: true })
   })
 
-  it('sidebarHidden is true for member tabs only', () => {
+  it('sidebarHidden is the member tabs in a run behind their lead in the given tab list', () => {
     render(<TeamDisplayProvider><Probe /></TeamDisplayProvider>)
     seed([roster()], tabs)
-    expect(['lead', 'ma', 'mb', 'plain'].map((id) => display!.sidebarHidden(id))).toEqual([false, true, true, false])
+    expect(display!.sidebarHidden(['lead', 'ma', 'mb', 'plain'])).toEqual(new Set(['ma', 'mb']))
+    expect(display!.sidebarHidden(['ma', 'plain'])).toEqual(new Set()) // the lead is in another workspace
+    expect(display!.sidebarHidden(['lead', 'plain', 'ma'])).toEqual(new Set()) // not right behind it
   })
 
   it('sidebarBeads: the lead tab gets every roster member in team order (opened or not); other tabs none', () => {

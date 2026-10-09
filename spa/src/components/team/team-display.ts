@@ -26,6 +26,9 @@ export interface TeamSeatView {
   role: 'lead' | 'member'
   /** The tab showing this seat, or null when it has none (an unopened member). */
   tabId: string | null
+  /** The seat's roster state (`active` | `joining` | `releasing` | `killing`) and the alias of the host a remote member lives on ('' = local). */
+  state: string
+  hostAlias: string
 }
 
 /** How one tab sits in a team group on the TabBar. */
@@ -52,10 +55,14 @@ export interface TeamTabMark {
   hiddenCount: number
 }
 
+/** What the label capsule needs of a team (the tab bar's and the sidebar's are the same capsule). */
+export type TeamCapsule = Pick<TeamTabMark, 'teamKey' | 'color' | 'label' | 'full' | 'truncated' | 'tooltip' | 'collapsed'>
+
 export interface TeamBeads {
   teamKey: string
   color: string
   collapsed: boolean
+  capsule: TeamCapsule
   /** The members in team order, opened or not. */
   members: TeamSeatView[]
 }
@@ -66,6 +73,9 @@ export interface TeamGhostLead {
   color: string
   label: string
   full: string
+  /** The team's shared fold state: the ghost's beads fold like a live lead's. */
+  collapsed: boolean
+  capsule: TeamCapsule
   lead: TeamSeatView
   members: TeamSeatView[]
 }
@@ -87,8 +97,12 @@ export interface TeamDisplay {
   /** Show the host icon next to each bead (the user setting, spec P7). */
   beadHost: boolean
   tabMark: (tabId: string) => TeamTabMark | null
-  /** Member tabs are folded into the bead row under their lead row. */
-  sidebarHidden: (tabId: string) => boolean
+  /**
+   * The member tabs of THIS tab list that are folded into the bead row under their lead row: those in a run behind
+   * their lead (team-runs), whatever the collapse. A member whose lead is in another workspace, or that stayed open
+   * after the lead closed, is not among them: it is an ordinary row.
+   */
+  sidebarHidden: (tabIds: readonly string[]) => Set<string>
   /** The bead row under a lead tab's row; null for any other tab. */
   sidebarBeads: (tabId: string) => TeamBeads | null
   ghostLeads: (workspaceId: string | null) => TeamGhostLead[]
