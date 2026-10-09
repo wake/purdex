@@ -384,12 +384,6 @@
   "settings.appearance.tab_position.left_hint": "Left/Both keeps the activity bar wide",
   "settings.appearance.team_bead_host.label": "Show host icons on member beads",
   "settings.appearance.team_bead_host.desc": "In the left tab list, each team member bead also shows the icon of the host it runs on",
-  "settings.appearance.group_shadow.label": "(Trial) Group shadow",
-  "settings.appearance.group_shadow.desc": "How the tabs of a team group on the top bar are lifted. A temporary setting while the look is being chosen",
-  "settings.appearance.group_shadow.v0": "Current",
-  "settings.appearance.group_shadow.v1": "Soft glow",
-  "settings.appearance.group_shadow.v2": "Spread bottom-left",
-  "settings.appearance.group_shadow.v3": "Floating all round",
   "nav.collapse_locked_tooltip": "Can't collapse while tabs are on the left",
 
   "page.newtab.title": "New Tab",

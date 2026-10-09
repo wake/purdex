@@ -3,7 +3,6 @@
 // background and active highlight stay. No label and no collapse control (round 2); no separators inside the group (TabBar).
 import type { ReactNode } from 'react'
 import { useThemeStore } from '../../stores/useThemeStore'
-import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import type { TeamTabMark } from './team-display'
 import { groupShadow, shadowBase } from './group-shadow'
 
@@ -16,21 +15,19 @@ export function TeamTabGroupFrame({ mark, children }: { mark: TeamTabMark; child
 }
 
 /**
- * The shadow and the wash of one group tab: the shadow of the variant picked in settings (group-shadow.ts, a trial) and a
+ * The shadow and the wash of one group tab: the crisp top-right shadow (group-shadow.ts) and a
  * 6 % wash (light 8 %). An overlay, so the tab's own background and active highlight are untouched.
  */
 export function TeamTabShadow({ mark }: { mark: TeamTabMark }) {
   const theme = useThemeStore((s) => s.activeThemeId)
-  const variant = useTeamUiStore((s) => s.groupShadow)
   const base = shadowBase(mark.color, theme)
-  const shadow = groupShadow(variant, mark.color, theme)
+  const shadow = groupShadow(mark.color, theme)
   const wash = theme === 'light' ? 8 : 6
   return (
     <span
       data-testid="team-tab-shadow"
       data-team-color={base}
       data-shadow={shadow}
-      data-shadow-variant={variant}
       data-wash={String(wash)}
       aria-hidden="true"
       className="absolute inset-0 pointer-events-none z-10"
