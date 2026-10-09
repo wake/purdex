@@ -43,7 +43,8 @@ var deviceAllowed = map[string]bool{
 	"POST /api/push/devices":               true,
 	"GET /api/push/devices":                true,
 	"DELETE /api/push/devices/{device_id}": true,
-	// profiles
+	// profiles (the list is narrowed to the device's own profile by the handler)
+	"GET /api/profiles":                         true,
 	"GET /api/profiles/{id}":                    true,
 	"GET /api/profiles/{id}/sections/{section}": true,
 	"PUT /api/profiles/{id}/sections/{section}": true,

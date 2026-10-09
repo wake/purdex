@@ -195,6 +195,7 @@ Tab requests were dropped in the same revision (the phone appends under a daemon
 | 8 | §5.1 "never writes" contradicts §5.2 | Reworded |
 | A | A device token can still run commands through sessions + send-keys | Stated in spec §3.3 ("what R7 is and is not"); revoking is the stop |
 | D | Default label | The model name, renamable on the phone (lead ruling) |
+| 9 | First real pairing (2026-10-09): the App lists profiles on connect and got 403, leaving the phone at 「連線中」 with empty lists | `GET /api/profiles` allowed; for a device it lists only the profile bound to its token (none if it has none) (spec §3.3) |
 
 ## QP-1b fold-in (implementation, 2026-10-09)
 

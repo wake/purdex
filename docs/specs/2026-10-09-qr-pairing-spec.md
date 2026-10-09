@@ -131,13 +131,12 @@ CREATE TABLE IF NOT EXISTS device_tokens (
     `/api/nex/v1/executions/{id}/events` (the one place the scope looks past the pattern; every other engine request
     from a device → 403);
   - push: `POST`, `GET /api/push/devices`, `DELETE /api/push/devices/{device_id}`;
-  - profiles: `GET /api/profiles/{id}`, `GET /api/profiles/{id}/sections/{section}`,
+  - profiles: `GET /api/profiles` (a device sees only its own profile), `GET /api/profiles/{id}`, `GET /api/profiles/{id}/sections/{section}`,
     `PUT /api/profiles/{id}/sections/{section}` (held to §5.2);
   - devices: `PUT /api/devices/self`.
 
   Left out on purpose: `fs` (the App's old fallback for daemons without a transcript API — a daemon with `devices.v1`
-  always has it), `POST /api/host-transfer/redeem` (developer-mode entry, admin token), `GET /api/profiles` (the phone
-  uses the profile from the QR), team roster (unused today). `GET /api/health` and `/api/peers*` sit on
+  always has it), `POST /api/host-transfer/redeem` (developer-mode entry, admin token), team roster (unused today). `GET /api/health` and `/api/peers*` sit on
   the outer mux and never see a device principal.
 - **What R7 is and is not.** The allow-list keeps a phone token away from arbitrary-path file access, configuration and
   management routes. It is not a sandbox: creating a session and sending keys is the App's purpose, so a phone token can

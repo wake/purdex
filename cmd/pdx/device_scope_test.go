@@ -66,7 +66,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"GET /api/team/approvals/{id}", "POST /api/team/approvals/{id}/decide", "GET /api/team/unattended", "PUT /api/team/unattended", "PUT /api/team/relay-quota", "PUT /api/team/max-members", "POST /api/relay/self",
 		"GET /api/nex/v1/executions", "/api/nex/",
 		"POST /api/push/devices", "GET /api/push/devices", "DELETE /api/push/devices/{device_id}",
-		"GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
+		"GET /api/profiles", "GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
 		"PUT /api/devices/self",
 	}
 	got := make([]string, 0, len(deviceAllowed))
@@ -103,7 +103,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/config"}, {"PUT", "/api/config"}, {"POST", "/api/daemon/restart"},
 		{"PUT", "/api/hostconfig/projects"}, {"POST", "/api/hostconfig/check-path"},
 		{"GET", "/api/sessions"}, {"DELETE", "/api/sessions/x"}, {"PATCH", "/api/sessions/x"}, {"GET", "/api/sessions/x/home"},
-		{"GET", "/api/profiles"}, {"POST", "/api/profiles"}, {"DELETE", "/api/profiles/p_0123456789ab"},
+		{"POST", "/api/profiles"}, {"DELETE", "/api/profiles/p_0123456789ab"},
 		{"PUT", "/api/profiles/p_0123456789ab/attachment"},
 		{"GET", "/api/team/approvals"}, {"POST", "/api/team/approvals"}, {"DELETE", "/api/team/approvals/x"},
 		{"GET", "/api/team/roster"}, {"POST", "/api/team/relay-quota"}, {"POST", "/api/team/max-members"}, {"GET", "/api/team/relay-quota"},
@@ -116,7 +116,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 	// Reachable: the scope lets these through to their own handlers (whatever those answer, not device_forbidden).
 	for _, r := range []struct{ method, path string }{
 		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
-		{"GET", "/api/push/devices"}, {"GET", "/api/profiles/p_0123456789ab"}, {"PUT", "/api/devices/self"},
+		{"GET", "/api/push/devices"}, {"GET", "/api/profiles"}, {"GET", "/api/profiles/p_0123456789ab"}, {"PUT", "/api/devices/self"},
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 	} {
 		assert.False(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
