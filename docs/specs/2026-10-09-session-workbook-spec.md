@@ -239,6 +239,8 @@ INDEX wb_todos_conv ON wb_todos(conv_key, state, id)
 
 Every time is unix milliseconds.
 
+*Clarified (WB-1b′-b, #2324):* one more `failed` reason, **`store`** — the daemon could not write the entry's final state to `workbook.db` (the write was refused), so the row was failed afterwards and the model's output was discarded. The daemon remembers such entries in memory only and retries every few seconds until the store takes the write; a restart forgets them and D9 (rows still `pending` at start become `failed: stopped`) settles any that were never marked. Clients show it like any other `failed` reason (a wire change: iOS / Mac add the text).
+
 - Raw prompts and assistant texts are **not** stored (the transcript already holds them); only the outputs.
 - Retention: kept (≈ 0.5 KB per entry; a busy day ≈ 1,000 entries ≈ 0.5 MB; todos are smaller). No automatic deletion.
 
