@@ -14,6 +14,9 @@ type WindowResult struct {
 	LastIndex     int // likewise the last
 	TotalTurns    int // turns the conversation has
 	HasMoreBefore bool
+	// OverBudget: not even the newest turn with every item dropped fits the budget, so no turn is returned (the
+	// caller answers its own error); the window never carries a body known to exceed the cap.
+	OverBudget bool
 }
 
 // Window is the last `turns` turns whose Index is below `before` (before < 0:
@@ -74,7 +77,13 @@ func (e *Entry) Window(turns, before int, budget func([]byte) bool) WindowResult
 	}
 	chosen := append([]convmodel.Turn(nil), cand[len(cand)-k:]...)
 	if k == 1 && !fits(1) {
-		chosen[0] = dropOldestItems(chosen[0], budget)
+		t, ok := dropOldestItems(chosen[0], budget)
+		if !ok {
+			res.OverBudget = true
+			res.HasMoreBefore = true
+			return res
+		}
+		chosen[0] = t
 	}
 	res.Turns = chosen
 	res.FirstIndex = chosen[0].Index
@@ -85,8 +94,8 @@ func (e *Entry) Window(turns, before int, budget func([]byte) bool) WindowResult
 
 // dropOldestItems keeps the fewest-dropped suffix of the turn's items that
 // fits (the smallest d such that dropping d oldest items fits); d = all items
-// when none does.
-func dropOldestItems(t convmodel.Turn, budget func([]byte) bool) convmodel.Turn {
+// when none does (then ok is false: the turn cannot fit at all).
+func dropOldestItems(t convmodel.Turn, budget func([]byte) bool) (convmodel.Turn, bool) {
 	n := len(t.Items)
 	try := func(d int) (convmodel.Turn, bool) {
 		c := t
@@ -108,8 +117,7 @@ func dropOldestItems(t convmodel.Turn, budget func([]byte) bool) convmodel.Turn 
 			lo = mid + 1
 		}
 	}
-	c, _ := try(best)
-	return c
+	return try(best)
 }
 
 func joinArray(parts [][]byte) []byte {

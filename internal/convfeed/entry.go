@@ -200,7 +200,7 @@ func (e *Entry) feedFrom(ctx context.Context, f File, size int64) error {
 			if err := e.norm.Skip(off, length); err != nil {
 				return err
 			}
-			e.fp, e.fpEnd = nil, e.norm.Next() // not read: nothing to remember until the next line
+			// not read: the fingerprint stays where the last line read ends, still a valid check of the bytes before it
 			return nil
 		},
 	})

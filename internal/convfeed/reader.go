@@ -15,6 +15,11 @@ import (
 	"io"
 )
 
+// ErrFileChanged is returned when the file changed under a read (a short read: it shrank after its size was taken).
+// The lines already fed are whole and valid; the next Refresh sees the new size and fingerprint and starts over if the
+// file really was replaced or rewritten.
+var ErrFileChanged = errors.New("convfeed: the file changed while it was being read")
+
 // File is what the follower reads: random access to the bytes and the size
 // now. The resolver hands over an open descriptor (never a bare path).
 type File interface {
@@ -57,11 +62,11 @@ func readLines(ctx context.Context, f File, from, size int64, sink lineSink) (in
 			want = size - readPos
 		}
 		n, err := f.ReadAt(buf[:want], readPos)
-		if n == 0 && err != nil {
-			if errors.Is(err, io.EOF) {
-				break // the file is shorter than its size said: the rest waits
+		if int64(n) < want {
+			if err != nil && !errors.Is(err, io.EOF) {
+				return lineOff, err
 			}
-			return lineOff, err
+			return lineOff, ErrFileChanged // shorter than its size said: nothing of this chunk is used
 		}
 		data := buf[:n]
 		readPos += int64(n)
@@ -116,8 +121,12 @@ func finishLong(f File, off, length int64, sink lineSink) error {
 		return sink.skip(off, length)
 	}
 	line := make([]byte, length)
-	if _, err := f.ReadAt(line, off); err != nil && !errors.Is(err, io.EOF) {
-		return err
+	n, err := f.ReadAt(line, off)
+	if int64(n) < length {
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		return ErrFileChanged
 	}
 	return sink.feed(off, line)
 }
