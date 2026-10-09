@@ -77,6 +77,20 @@ func TestForward_ATransportFailureRetriesIdempotentCallsOnceWithTheSameRequest(t
 		t.Fatalf("a report was tried %d times, want 2", len(fc2.sent()))
 	}
 
+	// a lead host that ANSWERED (429, 5xx, a redirect) is not asked again at once: only a transport failure is retried
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusBadGateway, http.StatusFound} {
+		fcs := &fakeHostCaller{script: func(string, map[string]any) peersmod.CallResult {
+			return peersmod.CallResult{Class: peersmod.ClassTransient, Status: status}
+		}}
+		f.m.cmdCaller = fcs
+		if code, _ := f.do(http.MethodPost, "/api/team/reports", team.CreateReportRequest{OriginInbox: memberInbox, ReportRequest: rreq(9, team.ReportAck, "000000-1")}); code != http.StatusServiceUnavailable {
+			t.Fatalf("answered %d: report = %d", status, code)
+		}
+		if len(fcs.sent()) != 1 {
+			t.Fatalf("a lead host that answered %d was asked %d times", status, len(fcs.sent()))
+		}
+	}
+
 	// a status change is sent once
 	fc3 := &fakeHostCaller{script: func(string, map[string]any) peersmod.CallResult {
 		return peersmod.CallResult{Class: peersmod.ClassTransient, Err: fmt.Errorf("timeout")}

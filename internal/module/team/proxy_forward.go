@@ -71,8 +71,8 @@ func (m *Module) forwardAsRemoteMember(w http.ResponseWriter, inbox, method, pat
 	ctx, cancel := context.WithTimeout(m.stopCtx, proxyForwardTimeout)
 	defer cancel()
 	res := m.cmdCaller.Call(ctx, row.LeadHostID, team.ProxyRoute, req)
-	if res.Class == peersmod.ClassTransient && retrySafe && ctx.Err() == nil {
-		// The call may have been applied with its answer lost: the very same request again is safe (a report is idempotent on
+	if res.Class == peersmod.ClassTransient && res.Status == 0 && retrySafe && ctx.Err() == nil { // Status 0: no HTTP answer at all (a transport failure)
+		// The call may have been applied with its answer lost (a lead host that ANSWERED, 429 and 5xx included, is not asked again): the very same request again is safe (a report is idempotent on
 		// its id, a list reads), a different one would not be.
 		res = m.cmdCaller.Call(ctx, row.LeadHostID, team.ProxyRoute, req)
 	}
