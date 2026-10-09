@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	"github.com/wake/purdex/internal/devices"
 )
 
 // smallBodyCap bounds the bodies of the routes that carry a name or an
@@ -101,7 +103,7 @@ type profileEntry struct {
 }
 
 // handleList returns every profile: GET /api/profiles.
-func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
+func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	profiles, err := m.store.ListProfiles()
 	if err != nil {
 		internalError(w, "list profiles", err)
@@ -109,6 +111,10 @@ func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
 	}
 	entries := make([]profileEntry, 0, len(profiles))
 	for _, p := range profiles {
+		// A paired phone lists only the profile its token was minted for (QR pairing spec §3.3); none if it has none.
+		if dev, isDevice := devices.PrincipalFrom(r.Context()); isDevice && (dev.ProfileID == "" || dev.ProfileID != p.ID) {
+			continue
+		}
 		sections, err := m.store.ListSections(p.ID)
 		if err != nil {
 			internalError(w, "list sections of "+p.ID, err)

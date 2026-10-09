@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -63,4 +64,31 @@ func TestOwnership_APhoneNeverCreatesASectionNorWritesAnotherProfile(t *testing.
 	require.Equal(t, http.StatusNotFound, serveAs(m, nil, "GET", sectionPath(mine, "tabs.w1"), nil).Code, "the section was not created")
 	// The admin still writes.
 	assert.Equal(t, http.StatusOK, serveAs(m, nil, "PUT", sectionPath(mine, "tabs.w1"), body).Code)
+}
+
+// First real pairing (2026-10-09): the App lists profiles on connect. A phone sees only the one its token names.
+func TestOwnership_ListShowsAPhoneOnlyItsOwnProfile(t *testing.T) {
+	m, _ := newTestModule(t)
+	mine, other := createProfile(t, m, "mine"), createProfile(t, m, "other")
+	ids := func(p *devices.Principal) []string {
+		rr := serveAs(m, p, "GET", "/api/profiles", nil)
+		require.Equal(t, http.StatusOK, rr.Code)
+		var resp struct {
+			Profiles []struct {
+				ID string `json:"id"`
+			} `json:"profiles"`
+		}
+		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+		out := []string{}
+		for _, e := range resp.Profiles {
+			out = append(out, e.ID)
+		}
+		return out
+	}
+	assert.Equal(t, []string{mine}, ids(&devices.Principal{ID: "d_aaaaaaaaaaaa", ProfileID: mine}))
+	assert.Empty(t, ids(&devices.Principal{ID: "d_bbbbbbbbbbbb"}), "no profile_id: empty list")
+	assert.Empty(t, ids(&devices.Principal{ID: "d_cccccccccccc", ProfileID: "p_ffffffffffff"}), "a profile that is gone: empty list")
+	assert.ElementsMatch(t, []string{mine, other}, ids(nil), "admin sees all")
+	rr := serveAs(m, &devices.Principal{ID: "d_bbbbbbbbbbbb"}, "GET", "/api/profiles", nil)
+	assert.JSONEq(t, `{"profiles":[]}`, rr.Body.String())
 }
