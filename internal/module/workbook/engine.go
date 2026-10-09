@@ -25,16 +25,18 @@ const (
 
 // Limits of the engine (spec §5.1, plan D1 / D2 / D10).
 const (
-	catchUpWindow   = 6                // turns read per turn-end event
-	catchUpKeep     = 3                // ended turns recorded at most per event (the backlog limit)
-	busyRetries     = 3                // transcript cache busy: re-queue the event this many times
-	busyDelay       = 2 * time.Second  // ... this far apart
-	fallbackBucket  = 120_000          // ms: the time bucket of a fallback turn id
-	maxWaitingTurns = 3                // waiting turn jobs per conversation
-	defaultCallCap  = 300              // calls per host per hour
-	leaseSlack      = 10 * time.Second // a lease lasts timeout_ms + this
-	completeTimeout = 30_000           // ms: timeout_ms of a job's call
-	reapEvery       = 5 * time.Second  // how often leases that ran out are looked for
+	catchUpWindow   = 6                      // turns read per turn-end event
+	catchUpKeep     = 3                      // ended turns recorded at most per event (the backlog limit)
+	busyRetries     = 3                      // transcript cache busy: re-queue the event this many times
+	settleDelay     = 100 * time.Millisecond // a Stop that comes before the transcript is written: look again this often ...
+	settleRetries   = 15                     // ... this many times (1.5 s), then use the hook's own words
+	busyDelay       = 2 * time.Second        // ... this far apart
+	fallbackBucket  = 120_000                // ms: the time bucket of a fallback turn id
+	maxWaitingTurns = 3                      // waiting turn jobs per conversation
+	defaultCallCap  = 300                    // calls per host per hour
+	leaseSlack      = 10 * time.Second       // a lease lasts timeout_ms + this
+	completeTimeout = 30_000                 // ms: timeout_ms of a job's call
+	reapEvery       = 5 * time.Second        // how often leases that ran out are looked for
 )
 
 // Deps are the engine's collaborators. Every one but Store may be nil (a daemon, or a test, without that module).
@@ -61,8 +63,9 @@ type Engine struct {
 
 	qmu        sync.Mutex // the queue structures only; never held across a store call
 	qstopped   bool
-	afterBuild func()     // test seam: between a job's input being built and its lease being checked
-	intakeMu   sync.Mutex // one catch-up at a time: cursor read, insert and enqueue keep the turns' order
+	afterBuild func()                // test seam: between a job's input being built and its lease being checked
+	waiting    map[string]*waitState // sessions with an event on a timer (intake.go); guarded by intakeMu
+	intakeMu   sync.Mutex            // one catch-up at a time: cursor read, insert and enqueue keep the turns' order
 	omu        sync.Mutex
 	orphans    map[int64]struct{} // entries whose final state the store refused (settle.go)
 	inflight   sync.WaitGroup     // results and reaps being applied; Stop waits for them
@@ -90,7 +93,7 @@ func NewEngine(d Deps) *Engine {
 	if d.Logf == nil {
 		d.Logf = log.Printf
 	}
-	return &Engine{d: d, convs: map[string]*convQ{}, leases: map[string]*lease{}, callCap: defaultCallCap}
+	return &Engine{d: d, convs: map[string]*convQ{}, waiting: map[string]*waitState{}, leases: map[string]*lease{}, callCap: defaultCallCap}
 }
 
 // SetPushLineHook registers the push-line notification (see Engine.pushLine).
