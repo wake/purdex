@@ -18,6 +18,7 @@ func TestWireAdopt_LiteralsArePinned(t *testing.T) {
 		{ErrAdoptAlreadyMember, "adopt_already_member"},
 		{ErrAdoptTargetNotFound, "adopt_target_not_found"},
 		{ErrAdoptTargetAmbiguous, "adopt_target_ambiguous"},
+		{ErrKillFailed, "kill_failed"},
 		{ErrRemoteUnsupported, "remote_unsupported"},
 		{string(MemberReleased), "released"},
 		{MemberOriginSpawned, "spawned"},

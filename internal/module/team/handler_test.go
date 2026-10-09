@@ -49,6 +49,11 @@ type fakeOrigins struct {
 	// not list it at all. Both are by session id.
 	shown  map[string]team.Origin
 	hidden map[string]bool
+	// otherProc marks pids whose process the process table says is not the one registered (ended or reused):
+	// SameProcess answers false for them; procErr makes SameProcess fail; verified records what it was asked.
+	otherProc map[int]bool
+	procErr   error
+	verified  []int
 	// ambiguousRef marks a ref two live sessions share (ResolveOriginByRef answers peersmod.ErrAmbiguousRef).
 	ambiguousRef map[string]bool
 	// batchHook, when set, runs first in every ResolveOriginsBySession (the
@@ -196,6 +201,17 @@ func (f *fakeOrigins) ResolveOriginByRef(ref string) (team.Origin, bool, error) 
 		}
 	}
 	return team.Origin{}, false, nil
+}
+
+// SameProcess answers true unless the test marked the pid (otherProc) or made the check fail (procErr).
+func (f *fakeOrigins) SameProcess(pid int, _ string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.verified = append(f.verified, pid)
+	if f.procErr != nil {
+		return false, f.procErr
+	}
+	return !f.otherProc[pid], nil
 }
 
 // setRefAmbiguous makes ResolveOriginByRef answer the ambiguity error for ref (two live sessions share it).
