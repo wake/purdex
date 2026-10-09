@@ -123,7 +123,7 @@ func runServe(args []string) *reexecPlan {
 	}
 	if len(survivors) > 0 {
 		go func() {
-			n := reapSurvivors(survivors, time.Second, 10*time.Minute, log.Printf)
+			n := reapSurvivors(survivors, time.Second, 0, log.Printf)
 			log.Printf("startup: reaped %d more child process(es) of the previous image after they ended", n)
 		}()
 	}

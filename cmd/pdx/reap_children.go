@@ -96,12 +96,13 @@ func directChildren() []int {
 }
 
 // reapSurvivors collects each of pids once it has exited, polling every interval for at most maxWait; it
-// returns how many it collected. Only the given pids are waited for (they are the previous image's children,
+// returns how many it collected (maxWait 0: until every one has been collected, however long that takes — one
+// wait4 per pid per second). Only the given pids are waited for (they are the previous image's children,
 // nobody else waits for them, and a pid cannot be reused while its zombie is uncollected).
 func reapSurvivors(pids []int, interval, maxWait time.Duration, logf func(string, ...any)) int {
 	n := 0
 	deadline := time.Now().Add(maxWait)
-	for len(pids) > 0 && time.Now().Before(deadline) {
+	for len(pids) > 0 && (maxWait == 0 || time.Now().Before(deadline)) {
 		time.Sleep(interval)
 		rest := pids[:0]
 		for _, p := range pids {
