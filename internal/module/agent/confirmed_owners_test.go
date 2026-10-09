@@ -25,21 +25,23 @@ func TestConfirmedOwners_ALivePaneRunningTheSession(t *testing.T) {
 	}
 }
 
-// The tmux session's owner is another conversation (the pane's newer frame): this one is not live.
-func TestConfirmedOwners_TheSessionsOwnerIsAnotherConversation(t *testing.T) {
-	m, fake, _ := newProvenanceQueryModule(t)
-	fake.AddSession("work", "/w")
-	attachPane(fake, "%5", "$0", "200")
-	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w")
-	seedIdentityFrame(t, m, "%5", "cc", 101, "t101", 99, "sess-2", "/w")
-	withProcessTree(t, map[int]int{100: 200, 101: 200, 200: 1})
-	withLivePids(t, map[int]string{100: "t100", 101: "t101"})
+// Two live roots in one pane (each passed identity and ancestry), whichever was seen last: each conversation is live.
+// LastSeenAt orders candidates; it is not proof that the other root stopped running.
+func TestConfirmedOwners_TwoLiveRootsInOnePaneAreBothLive(t *testing.T) {
+	for _, seen := range [][2]int64{{42, 99}, {99, 42}} {
+		m, fake, _ := newProvenanceQueryModule(t)
+		fake.AddSession("work", "/w")
+		attachPane(fake, "%5", "$0", "200")
+		seedIdentityFrame(t, m, "%5", "cc", 100, "t100", seen[0], "sess-1", "/w")
+		seedIdentityFrame(t, m, "%5", "cc", 101, "t101", seen[1], "sess-2", "/w")
+		withProcessTree(t, map[int]int{100: 200, 101: 200, 200: 1})
+		withLivePids(t, map[int]string{100: "t100", 101: "t101"})
 
-	if got, err := m.ConfirmedOwners(context.Background(), "sess-1"); err != nil || len(got) != 0 {
-		t.Fatalf("sess-1: got %+v err %v, want none", got, err)
-	}
-	if got, err := m.ConfirmedOwners(context.Background(), "sess-2"); err != nil || len(got) != 1 {
-		t.Fatalf("sess-2: got %+v err %v, want one", got, err)
+		for _, id := range []string{"sess-1", "sess-2"} {
+			if got, err := m.ConfirmedOwners(context.Background(), id); err != nil || len(got) != 1 {
+				t.Fatalf("last seen %v, %s: got %+v err %v, want one live owner", seen, id, got, err)
+			}
+		}
 	}
 }
 
@@ -153,5 +155,35 @@ func TestConfirmedOwners_ASiblingPaneWithANewerConversationDoesNotHideIt(t *test
 	got, err = m.ConfirmedOwners(context.Background(), "sess-2")
 	if err != nil || len(got) != 1 || got[0].TmuxPaneID != "%6" {
 		t.Fatalf("got %+v err %v, want the owner in %%6", got, err)
+	}
+}
+
+// countingListExecutor counts the pane listings.
+type countingListExecutor struct {
+	*tmux.FakeExecutor
+	calls int
+}
+
+func (e *countingListExecutor) ListAllPanes(ctx context.Context) ([]tmux.PaneLocation, error) {
+	e.calls++
+	return e.FakeExecutor.ListAllPanes(ctx)
+}
+
+// The whole query is the pass's two listings (placing and confirming), not a third one of its own.
+func TestConfirmedOwners_TwoPaneListingsAtMost(t *testing.T) {
+	m, fake, _ := newProvenanceQueryModule(t)
+	exec := &countingListExecutor{FakeExecutor: fake}
+	m.tmux = exec
+	fake.AddSession("work", "/w")
+	attachPane(fake, "%5", "$0", "200")
+	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w")
+	withProcessTree(t, map[int]int{100: 200, 200: 1})
+	withLivePids(t, map[int]string{100: "t100"})
+
+	if got, err := m.ConfirmedOwners(context.Background(), "sess-1"); err != nil || len(got) != 1 {
+		t.Fatalf("got %+v err %v", got, err)
+	}
+	if exec.calls != 2 {
+		t.Fatalf("%d pane listings, want 2", exec.calls)
 	}
 }
