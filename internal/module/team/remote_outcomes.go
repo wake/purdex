@@ -77,10 +77,13 @@ func (o remoteOutcomes) adoptApplied(tx *sql.Tx, c commandRow, res peersmod.Call
 		o.m.logf("[team] adopt %s: session %s is already an active member here; the membership fails session_conflict", c.ID, out.MemberSession)
 		return o.cas(tx, c, `state = ?, end_reason = 'session_conflict', updated_at = ?, ended_at = ?`, []any{rowFailed, now, now}, rowJoining)
 	}
+	// The member host answers with the whole Origin.Tmux ("<session>:@<win>.%<pane>"); the row keeps the session NAME and the pane
+	// apart, as a local adopt does (the name is what a workspace tab is matched by).
+	tmuxSession, pane := splitTmux(out.Tmux)
 	return o.cas(tx, c, `state = 'active', session_id = ?, ref = ?, pid = ?, proc_start = ?,
 		title = CASE WHEN ? <> '' THEN ? ELSE title END, cwd = CASE WHEN ? <> '' THEN ? ELSE cwd END,
-		tmux_session = CASE WHEN ? <> '' THEN ? ELSE tmux_session END, updated_at = ?`,
-		[]any{out.MemberSession, out.Ref, out.PID, out.ProcStart, out.Title, out.Title, out.Cwd, out.Cwd, out.Tmux, out.Tmux, now}, rowJoining)
+		tmux_session = CASE WHEN ? <> '' THEN ? ELSE tmux_session END, pane_id = CASE WHEN ? <> '' THEN ? ELSE pane_id END, updated_at = ?`,
+		[]any{out.MemberSession, out.Ref, out.PID, out.ProcStart, out.Title, out.Title, out.Cwd, out.Cwd, tmuxSession, tmuxSession, pane, pane, now}, rowJoining)
 }
 
 // killAnswer: killed / gone from the answer; a refusal returns the row to active (host_not_allowed, or any code but

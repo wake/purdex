@@ -33,6 +33,8 @@ type remoteReading struct {
 	gen    uint64 // the order the reads started in
 	failed bool
 	ctx    map[string]*team.MemberContext
+	// titles are the titles the host gave its sessions (PeerRecord.Title); a session without one is absent.
+	titles map[string]string
 	// seen are the CC session ids the host listed at all (with or without a context reading): a listed session is live.
 	seen map[string]bool
 }
@@ -83,13 +85,16 @@ func (m *Module) readRemoteHost(ctx context.Context, hostID string) {
 	} else if rows, err := m.peerRecords(ctx, hostID); err != nil {
 		rr.failed = true
 	} else {
-		rr.ctx, rr.seen = map[string]*team.MemberContext{}, map[string]bool{}
+		rr.ctx, rr.seen, rr.titles = map[string]*team.MemberContext{}, map[string]bool{}, map[string]string{}
 		for _, row := range rows {
 			a := row.Agent
 			if a == nil || a.SessionID == "" {
 				continue
 			}
 			rr.seen[a.SessionID] = true
+			if row.Title != "" {
+				rr.titles[a.SessionID] = cleanRemoteText(row.Title)
+			}
 			if a.Context == nil {
 				continue
 			}
@@ -175,6 +180,14 @@ func (m *Module) remoteContextOf(hostID, sessionID string) (c *team.MemberContex
 	return r.ctx[sessionID], false
 }
 
+// remoteTitleOf is the title a remote member's host gave it, from the cache; "" when the host did not answer, did not list the
+// session or it has none. The host is the source (a title changes), so a cached title wins over the row's own.
+func (m *Module) remoteTitleOf(hostID, sessionID string) string {
+	m.remote.mu.Lock()
+	defer m.remote.mu.Unlock()
+	return m.remote.by[hostID].titles[sessionID]
+}
+
 // remoteLiveState: a remote member row the roster shows (spec §4.2: the states with a seat).
 func remoteLiveState(s team.MemberState) bool {
 	switch s {
@@ -190,7 +203,7 @@ func remoteLiveState(s team.MemberState) bool {
 func (m *Module) remoteRosterMember(mr memberRow, open map[string][]TaskRow, teamID string) team.RosterMember {
 	alias := m.remoteAlias(mr.HostID)
 	s := team.RosterSession{SessionID: mr.SessionID, Ref: mr.Ref, Address: firstNonEmpty(alias, mr.HostID) + "/" + mr.Ref,
-		Title: mr.Title, TmuxSession: mr.TmuxSession, HostID: mr.HostID, HostAlias: alias}
+		Title: firstNonEmpty(m.remoteTitleOf(mr.HostID, mr.SessionID), mr.Title), TmuxSession: tmuxName(mr.TmuxSession), HostID: mr.HostID, HostAlias: alias}
 	s.Context, s.ContextUnavailable = m.remoteContextOf(mr.HostID, mr.SessionID)
 	if s.Context == nil && !s.ContextUnavailable {
 		s.Context = mr.Usage // the reading synced onto the row, when the host's answer has none
