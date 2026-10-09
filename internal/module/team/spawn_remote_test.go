@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/config"
@@ -157,6 +158,23 @@ func TestRemoteSpawn_ResolveUnderRoots(t *testing.T) {
 	}
 	if _, ok := resolveUnderRoots([]string{swapped}, inside); ok {
 		t.Fatal("a swapped root still admitted the directory it used to be")
+	}
+	// ... and not what it points to now either: a root that no longer resolves to itself grants nothing
+	if _, ok := resolveUnderRoots([]string{swapped}, outside); ok {
+		t.Fatal("a root replaced by a symlink admitted its target")
+	}
+}
+
+// The title is held to the limits a local spawn's is, before the command is accepted.
+func TestRemoteSpawn_TitleIsValidated(t *testing.T) {
+	f, root := remoteSpawnFixture(t)
+	c := spawnCommand(cmdUUID3, root)
+	c.Title = strings.Repeat("t", 65)
+	if code, body := f.postCmd(leadPrincipal(), c); code != http.StatusBadRequest {
+		t.Fatalf("spawn with a 65 byte title = %d %s", code, body)
+	}
+	if _, ok, _ := f.m.store.GetSpawnOp(cmdUUID3); ok {
+		t.Fatal("a refused spawn left an op")
 	}
 }
 

@@ -40,9 +40,9 @@ func (m *Module) peerEntryByHostID(hostID string) (config.PeerHost, bool) {
 	return config.PeerHost{}, false
 }
 
-// resolveUnderRoots is dir (absolute, symlinks evaluated) when it lies under one of roots — each root re-resolved now
-// and still a directory, containment judged by path components on the canonical paths (a root replaced by a symlink to
-// elsewhere, or renamed, after the roots were granted no longer admits anything it did not before) — else "", false.
+// resolveUnderRoots is dir (absolute, symlinks evaluated) when it lies under one of roots — each root re-resolved now,
+// still a directory and still itself (a root replaced by a symlink, or behind one, since it was granted is skipped),
+// containment judged by path components on the canonical paths — else "", false.
 // No roots is no spawn.
 func resolveUnderRoots(roots []string, dir string) (string, bool) {
 	if dir == "" || !filepath.IsAbs(dir) {
@@ -54,6 +54,11 @@ func resolveUnderRoots(roots []string, dir string) (string, bool) {
 	}
 	var live []string
 	for _, root := range roots {
+		// A granted root is stored canonical (config.CanonicalTeamRoots). One that no longer resolves to itself was
+		// replaced by a symlink (or sits behind one) since: it is not the directory that was granted.
+		if r, err := filepath.EvalSymlinks(root); err != nil || r != filepath.Clean(root) {
+			continue
+		}
 		if st, err := os.Stat(root); err == nil && st.IsDir() {
 			live = append(live, root)
 		}
@@ -127,6 +132,8 @@ func validSpawnCommand(c team.TeamCommand) string {
 		return "spawn: cwd must be an absolute path"
 	case c.Model != "" && !team.ValidModel(c.Model), c.Effort != "" && !team.ValidEffort(c.Effort):
 		return "spawn: unknown model or effort"
+	case c.Title != "" && ipeers.ValidateTitle(c.Title) != nil:
+		return "spawn: " + ipeers.ValidateTitle(c.Title).Error()
 	case !completeLead(c.Lead):
 		return "spawn: the lead's origin tuple (session_id, ref, address, pid, proc_start) is required"
 	}
