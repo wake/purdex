@@ -28,7 +28,9 @@ import (
 
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/push"
+	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/push/apnskey"
+	"github.com/wake/purdex/internal/team"
 )
 
 const maxBody = 64 << 10 // device registration body cap (spec §4.1)
@@ -46,12 +48,27 @@ type Module struct {
 	devices map[string]push.Device // by device id
 	ready   bool                   // the key loaded and the store opened; false = soft-failed (initErr says why)
 	initErr string
+
+	// The trigger side (started in Start, only when ready). events / newAPNs / presence are seams: nil = the real ones.
+	events   team.ApprovalEvents
+	newAPNs  func() apnsClient
+	presence presenceChecker
+	sender   *sender
+	unsub    func()
 }
+
+// presenceChecker answers "does a present Mac show this tmux session" (push spec R6, §5.4). The presence reports arrive
+// in PU-3; until then nothing is ever shown.
+type presenceChecker interface{ ShowsName(tmuxSession string) bool }
+
+type noPresence struct{}
+
+func (noPresence) ShowsName(string) bool { return false }
 
 func New() *Module { return &Module{home: os.UserHomeDir, devices: map[string]push.Device{}} }
 
 func (m *Module) Name() string           { return "push" }
-func (m *Module) Dependencies() []string { return nil }
+func (m *Module) Dependencies() []string { return []string{"team"} }
 
 // Init loads the APNs key, opens push.db and reads every device into the cache. Any failure is recorded (without key
 // material) and leaves the module off; Init itself returns nil so the daemon starts (push spec §3).
@@ -135,19 +152,137 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/push/devices/{device_id}", m.handleDelete)
 }
 
-func (m *Module) Start(context.Context) error {
+// Start arms the approval trigger: the sender goroutine, then the subscription to the team module's approval feed. A
+// module that is off (soft-failed) does nothing.
+func (m *Module) Start(ctx context.Context) error {
 	if !m.isReady() {
 		return nil
+	}
+	if m.events == nil {
+		svc, ok := m.core.Registry.Get(team.ApprovalEventsKey)
+		if ev, isEv := svc.(team.ApprovalEvents); ok && isEv {
+			m.events = ev
+		} else {
+			log.Printf("[push] the team module's approval feed is not available: approvals will not be pushed")
+		}
+	}
+	if m.newAPNs == nil {
+		signer := apns.NewSigner(m.key, nil)
+		m.newAPNs = func() apnsClient { return &apns.Client{HTTP: &http.Client{}, Signer: signer} }
+	}
+	if m.presence == nil {
+		m.presence = noPresence{}
+	}
+	m.core.CfgMu.RLock()
+	hostID := m.core.Cfg.HostID
+	m.core.CfgMu.RUnlock()
+	m.sender = newSender(m, m.newAPNs(), hostID, push.BundleID)
+	m.sender.Start(ctx)
+	if m.events != nil {
+		_, m.unsub = m.events.SubscribeApprovals(m.onApproval)
 	}
 	log.Printf("[push] enabled (%v, %d device(s))", m.key, len(m.snapshot()))
 	return nil
 }
 
+// Stop ends the subscription and the sender (cancelling a request in flight), then closes the store.
 func (m *Module) Stop(context.Context) error {
+	if m.unsub != nil {
+		m.unsub()
+		m.unsub = nil
+	}
+	if m.sender != nil {
+		m.sender.Stop()
+		m.sender = nil
+	}
 	if m.store != nil {
 		return m.store.Close()
 	}
 	return nil
+}
+
+// onApproval runs on the approval feed's own goroutine (never under the team module's lock). Only an `opened` approval of
+// the three pushed kinds becomes a notification, to every device (the Mac raises approvals whatever tabs are open); not
+// when a present Mac shows the requesting session (R6, by the tmux session name of the origin; an origin with no tmux is
+// never suppressed).
+func (m *Module) onApproval(op string, a team.Approval) {
+	if op != "opened" || m.sender == nil {
+		return
+	}
+	pa := toPushApproval(a)
+	if _, pushed := push.ApprovalContent(pa, "", "en"); !pushed {
+		return
+	}
+	if name := tmuxSessionOf(a.Origin.Tmux); name != "" && m.presence.ShowsName(name) {
+		return
+	}
+	devs := m.snapshot()
+	if len(devs) == 0 {
+		return
+	}
+	ids := make([]string, len(devs))
+	for i, d := range devs {
+		ids[i] = d.DeviceID
+	}
+	m.sender.Enqueue(Job{DeviceIDs: ids, Make: func(d push.Device) (push.Content, bool) {
+		return push.ApprovalContent(pa, d.HostLabel, d.Locale)
+	}})
+}
+
+func toPushApproval(a team.Approval) push.Approval {
+	return push.Approval{ID: a.ID, Kind: string(a.Kind), Payload: a.Payload,
+		Origin: push.ApprovalOrigin{Title: a.Origin.Title, Name: a.Origin.Name, Ref: a.Origin.Ref}}
+}
+
+// tmuxSessionOf is the session name of an origin.tmux ("<session>:@<win>.%<pane>"): tmux session names cannot hold ':'.
+func tmuxSessionOf(tmux string) string {
+	name, _, _ := strings.Cut(tmux, ":")
+	return name
+}
+
+// The deviceBook the sender works through: the store first, the cache after, under the module's mutex.
+
+func (m *Module) Get(deviceID string) (push.Device, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.devices[deviceID]
+	return d, ok
+}
+
+func (m *Module) Remove(deviceID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, err := m.store.DeleteByID(deviceID); err != nil {
+		log.Printf("[push] remove %s: %v", deviceID, err)
+		return
+	}
+	delete(m.devices, deviceID)
+}
+
+func (m *Module) MarkSent(deviceID string, at int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.store.MarkSent(deviceID, at); err != nil {
+		log.Printf("[push] mark sent %s: %v", deviceID, err)
+		return
+	}
+	if d, ok := m.devices[deviceID]; ok {
+		d.LastSentAt, d.LastError = at, ""
+		m.devices[deviceID] = d
+	}
+}
+
+func (m *Module) MarkError(deviceID, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.store.MarkError(deviceID, reason); err != nil {
+		log.Printf("[push] mark error %s: %v", deviceID, err)
+		return
+	}
+	if d, ok := m.devices[deviceID]; ok {
+		d.LastError = reason
+		m.devices[deviceID] = d
+	}
 }
 
 // snapshot is the devices in registration order (a copy; the caller may keep it).
