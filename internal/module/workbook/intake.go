@@ -111,8 +111,9 @@ func (e *Engine) pickTurns(ev agent.TurnEndEvent, attempt int) (picks []pick, re
 		}
 	}
 	var ended []convmodel.Turn
-	for _, t := range turns[from:] {
-		if t.Outcome != convmodel.OutcomeRunning {
+	for i, t := range turns[from:] {
+		last := from+i == len(turns)-1
+		if t.Outcome != convmodel.OutcomeRunning || (last && endedByEvent(t, ev)) {
 			ended = append(ended, t)
 		}
 	}
@@ -136,6 +137,27 @@ func (e *Engine) pickTurns(ev agent.TurnEndEvent, attempt int) (picks []pick, re
 		picks = append(picks, p)
 	}
 	return picks, false
+}
+
+// endedByEvent: the newest turn reads as running although this Stop event is about it, because Claude Code writes the
+// turn's duration row after the Stop hook. It is that turn when its last words are the hook's last_assistant_message (one
+// may be a prefix of the other: the hook's text is bounded); with no text to compare (a failed turn, a tool-only one) a
+// running turn that has done something counts, since a turn that has only begun has no assistant row yet.
+func endedByEvent(t convmodel.Turn, ev agent.TurnEndEvent) bool {
+	if t.Outcome != convmodel.OutcomeRunning || !summarisable(t) {
+		return false
+	}
+	want := strings.TrimSpace(ev.Text)
+	if want == "" {
+		return true
+	}
+	var last string
+	for _, it := range t.Items {
+		if it.AgentText != nil && strings.TrimSpace(it.AgentText.Markdown) != "" {
+			last = strings.TrimSpace(it.AgentText.Markdown)
+		}
+	}
+	return last != "" && (strings.HasPrefix(last, want) || strings.HasPrefix(want, last))
 }
 
 // summarisable: a turn with no assistant text and no tool step is not summarised (spec §4.3).
