@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/redact"
@@ -15,6 +16,9 @@ const (
 	maxPush   = 40
 	maxEntry  = 150
 	maxStatus = 200
+
+	// maxModelJSON bounds what is parsed (the object is a few hundred bytes; the runner caps stdout well above this).
+	maxModelJSON = 64 << 10
 )
 
 // ErrFormat: the model's answer is not the JSON object of spec §5.3 (after one fence is stripped).
@@ -33,7 +37,13 @@ type Summary struct {
 // ParseModelJSON reads the model's text as a Summary. One code fence around the object is allowed; anything else around
 // it, a non-object, a field of the wrong type, or (unless it skips) an empty thing or entry is ErrFormat.
 func ParseModelJSON(text string) (Summary, error) {
+	if len(text) > maxModelJSON {
+		return Summary{}, ErrFormat
+	}
 	body := stripFence(strings.TrimSpace(text))
+	if hasDuplicateMember(body) {
+		return Summary{}, ErrFormat // two values for one field: which one counts would depend on the order
+	}
 	dec := json.NewDecoder(strings.NewReader(body))
 	var s Summary
 	if err := dec.Decode(&s); err != nil || dec.More() {
@@ -46,6 +56,32 @@ func ParseModelJSON(text string) (Summary, error) {
 		return Summary{}, ErrFormat
 	}
 	return s, nil
+}
+
+// hasDuplicateMember reports whether the top-level object repeats a member name. The answer's values are all scalars,
+// so a flat token walk is enough; anything that does not walk cleanly is left to the real decode to refuse.
+func hasDuplicateMember(body string) bool {
+	dec := json.NewDecoder(strings.NewReader(body))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		k, err := dec.Token()
+		key, ok := k.(string)
+		if err != nil || !ok {
+			return false
+		}
+		if seen[key] {
+			return true
+		}
+		seen[key] = true
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return false
+		}
+	}
+	return false
 }
 
 // stripFence removes one ```[lang] ... ``` wrapper. A text with two fences is left as it is (and so fails to parse).
@@ -93,10 +129,10 @@ func repairPush(p string) string {
 	if utf8.RuneCountInString(p) <= maxPush {
 		return p
 	}
-	head := []rune(p)[:maxPush]
-	for i := len(head) - 1; i >= 0; i-- {
-		if isPunct(head[i]) {
-			return strings.TrimSpace(string(head[:i]))
+	all := []rune(p)
+	for i := maxPush - 1; i >= 0; i-- {
+		if isPunctAt(all, i) {
+			return strings.TrimSpace(string(all[:i]))
 		}
 	}
 	return ""
@@ -117,28 +153,31 @@ func cutAtSentenceEnd(s string, n int) string {
 	if len(r) <= n {
 		return s
 	}
-	head := r[:n]
-	for i := len(head) - 1; i >= 0; i-- {
-		if isSentenceEnd(head[i]) {
-			return string(head[:i+1])
+	for i := n - 1; i >= 0; i-- {
+		if isSentenceEndAt(r, i) {
+			return string(r[:i+1])
 		}
 	}
-	return string(head)
+	return string(r[:n])
 }
 
-func isSentenceEnd(r rune) bool {
-	switch r {
-	case '。', '！', '？', '!', '?', '.', '\n':
+// isSentenceEndAt: a Chinese or ASCII stop mark, or a newline; an ASCII '.' only when whitespace follows it, so
+// "v1.2", "3.14" and "main.go" are not cut in the middle.
+func isSentenceEndAt(r []rune, i int) bool {
+	switch r[i] {
+	case '。', '！', '？', '!', '?', '\n':
 		return true
+	case '.':
+		return i+1 < len(r) && unicode.IsSpace(r[i+1])
 	}
 	return false
 }
 
-func isPunct(r rune) bool {
-	if isSentenceEnd(r) {
+func isPunctAt(r []rune, i int) bool {
+	if isSentenceEndAt(r, i) {
 		return true
 	}
-	switch r {
+	switch r[i] {
 	case '，', '、', '；', '：', ',', ';', ':':
 		return true
 	}

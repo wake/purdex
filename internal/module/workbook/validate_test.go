@@ -120,6 +120,59 @@ func TestRepair_RedactsEveryField(t *testing.T) {
 	}
 }
 
+// Two values for one field are ambiguous (which one counts would depend on the order): a format error, so the retry runs.
+// Mutation gate: drop hasDuplicateMember → red.
+func TestParseModelJSON_DuplicateMemberIsAFormatError(t *testing.T) {
+	for _, in := range []string{
+		`{"skip":true,"skip":false,"thing":"t","entry":"e"}`,
+		`{"skip":false,"thing":"a","thing":"b","entry":"e"}`,
+		`{"skip":false,"thing":"t","entry":"e","entry":"f"}`,
+	} {
+		if _, err := ParseModelJSON(in); !errors.Is(err, ErrFormat) {
+			t.Errorf("%s: err = %v", in, err)
+		}
+	}
+}
+
+func TestParseModelJSON_SizeLimit(t *testing.T) {
+	obj := func(entry string) string {
+		return `{"skip":false,"thing":"t","push":"","entry":"` + entry + `","status":"","thing_done":false}`
+	}
+	fixed := len(obj(""))
+	atLimit := obj(strings.Repeat("a", maxModelJSON-fixed))
+	if len(atLimit) != maxModelJSON {
+		t.Fatalf("fixture is %d bytes", len(atLimit))
+	}
+	if _, err := ParseModelJSON(atLimit); err != nil {
+		t.Errorf("exactly at the limit: %v", err)
+	}
+	if _, err := ParseModelJSON(obj(strings.Repeat("a", maxModelJSON-fixed+1))); !errors.Is(err, ErrFormat) {
+		t.Errorf("one byte over: err = %v", err)
+	}
+}
+
+// A '.' ends a sentence only before whitespace: versions, decimals and file names are not cut in the middle.
+func TestCut_DotInsideAWordIsNotASentenceEnd(t *testing.T) {
+	for _, mid := range []string{"v1.2", "3.14", "main.go", "pdx.mlab.host"} {
+		status := strings.Repeat("字", 195) + mid + strings.Repeat("字", 40) // the only '.' is inside the first 200 runes
+		got, _ := Repair(Summary{Thing: "t", Entry: "e。", Status: status})
+		// no sentence end inside the limit → the hard cut at 200 runes, not a cut right after the dot
+		if runes(got.Status) != 200 {
+			t.Errorf("%s: want the hard cut at 200, got %d runes", mid, runes(got.Status))
+		}
+	}
+	// a real English sentence end still counts
+	got, _ := Repair(Summary{Thing: "t", Entry: "e。", Status: strings.Repeat("a", 100) + ". " + strings.Repeat("b", 150)})
+	if got.Status != strings.Repeat("a", 100)+"." {
+		t.Errorf("status = %q", got.Status)
+	}
+	// and push: "v1.2" inside the first 40 is no cut point either
+	push := strings.Repeat("字", 30) + "升級到 v1.2 之後就完成" + strings.Repeat("字", 10)
+	if got, _ := Repair(Summary{Thing: "t", Push: push, Entry: "e。"}); got.Push != "" {
+		t.Errorf("push = %q, want dropped (the only '.' is inside a version)", got.Push)
+	}
+}
+
 func TestRepair_ChineseSentenceEndsAndASCII(t *testing.T) {
 	got, _ := Repair(Summary{Thing: "t", Entry: "e。", Status: strings.Repeat("a", 150) + "! " + strings.Repeat("b", 80)})
 	if got.Status != strings.Repeat("a", 150)+"!" {

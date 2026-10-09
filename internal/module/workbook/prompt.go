@@ -29,6 +29,13 @@ type PromptFiles struct {
 // WritePromptFiles writes both prompts under dir (created 0700) as owner-only files, replacing a stale file. The
 // process reads them by path, so a file left from another version or with another mode must not survive.
 func WritePromptFiles(dir string) (PromptFiles, error) {
+	// A path that is already there must be a real directory: a symlink would send the chmod and the writes below to
+	// wherever it points.
+	if fi, err := os.Lstat(dir); err == nil && !fi.IsDir() {
+		return PromptFiles{}, fmt.Errorf("workbook prompts: %s is not a directory (a symlink is refused)", filepath.Base(dir))
+	} else if err != nil && !os.IsNotExist(err) {
+		return PromptFiles{}, fmt.Errorf("workbook prompts: %w", err)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return PromptFiles{}, fmt.Errorf("workbook prompts: %w", err)
 	}

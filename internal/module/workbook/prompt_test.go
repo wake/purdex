@@ -35,6 +35,30 @@ func TestPrompts_EqualTheDocumentBlocks(t *testing.T) {
 	}
 }
 
+// A workbook path that is a symlink is refused, and its target is left exactly as it was.
+// Mutation gate: drop the Lstat check → red.
+func TestWritePromptFiles_RefusesASymlinkedDirectory(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "elsewhere")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "workbook")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WritePromptFiles(link); err == nil {
+		t.Fatal("a symlinked directory was accepted")
+	}
+	fi, _ := os.Stat(target)
+	if fi.Mode().Perm() != 0o755 {
+		t.Errorf("the target's mode changed to %o", fi.Mode().Perm())
+	}
+	if ents, _ := os.ReadDir(target); len(ents) != 0 {
+		t.Errorf("something was written into the target: %d entries", len(ents))
+	}
+}
+
 func TestWritePromptFiles_BytesModeAndOverwrite(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "workbook")
 	// a stale file with the wrong mode and wrong content is replaced
