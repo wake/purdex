@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.0.0-alpha.663] - 2026-10-10
+
+> 動到 daemon、`pdx` 指令與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Added：列出並結束被別台收走的 session — X2c-1b（#2277，A 線）
+
+- 新路由 `GET /api/team/remote-members`（依建立時間排序）與 `POST /api/team/remote-members/end`：看這台有哪些 session 被別台主機收進 team，並可在本機結束。主機設定頁之後會用它們。
+- `pdx peers host allow-team <別名> off --end-members`：關掉同意的同時，結束那台主機收走的所有 session；`pdx peers host list` 多一欄 MEMBERS。
+
+### Added：跨主機 team 的回報開始送出 — X2c-2（#2283，A 線）
+
+- 被收進 team 的 session 結束時，這台會把「已結束」送回 lead 那台（共用 lead 那邊的送出佇列）。lead 那台要等下一步（X3b-2）才收得到；在那之前回報會排隊、退避重試，屬預期行為。lead 主機被解除配對或長期不認我方 token 時，相關 member 在本機結束。
+
+### Added：lead 那台的遠端 member 狀態 — X3b-1a（#2276，A 線）
+
+- lead 那台記錄遠端 member「加入中／在 team 裡／放出中／結束」等狀態與座位計算；team 結束時遠端 member 的紀錄維持原狀（與本機 member 一致）。目前還不會產生遠端 member。
+
+### Changed：team 面板可浮動、可縮放 — WA-2a（#2275，介面線）
+
+- team 面板區可以浮動、拖曳調整大小、放大；為之後與工作簿共用面板做準備。
+
+### Added：工作簿設定與整理規則 — WB-1b.1／1b.2（#2279、#2280，介面線）
+
+- 主機設定多了工作簿的「推播最多等幾秒」（預設 8 秒，0–30）；daemon 內建量測過的整理提示詞與回覆檢查。還沒有開始整理任何紀錄。
+
+### Docs
+
+- team 介面第二輪調整說明（#2281）。
+
 ## [1.0.0-alpha.662] - 2026-10-10
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。會新建 `workbook.db`，team.db 多一張表；使用上沒有可見變化。
