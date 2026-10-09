@@ -169,3 +169,18 @@ describe('max_members / in_use on the roster', () => {
     }
   })
 })
+
+describe('team_color on the roster (TR-1)', () => {
+  const frame = (t: Record<string, unknown>) => JSON.stringify({ op: 'changed', teams: [{ ...team, ...t }] })
+  const parsed = (t: Record<string, unknown>) => (parseRosterEvent(frame(t)) as { teams: TeamRoster[] }).teams[0]
+
+  it('an integer 0-7 is kept', () => {
+    for (const c of [0, 3, 7]) expect(parsed({ team_color: c }).team_color).toBe(c)
+  })
+
+  it('absent, null and bad values are automatic (the field is absent, the frame is still valid)', () => {
+    for (const bad of [{}, { team_color: null }, { team_color: 8 }, { team_color: -1 }, { team_color: 2.5 }, { team_color: '3' }, { team_color: {} }]) {
+      expect('team_color' in parsed(bad)).toBe(false)
+    }
+  })
+})

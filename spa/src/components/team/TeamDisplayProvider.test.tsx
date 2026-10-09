@@ -74,6 +74,15 @@ describe('TeamDisplayProvider — marks, fold, panel', () => {
     expect([display!.tabMark('mb')!.first, display!.tabMark('mb')!.last]).toEqual([false, true])
   })
 
+  it('a roster team_color recolours the panel and the tab mark; absent is the hash colour', () => {
+    render(<TeamDisplayProvider><Probe /></TeamDisplayProvider>)
+    seed([team([mem('A', 1, 'a-tm')], { team_color: 2 })], tabs)
+    expect(display!.panelTeam('lead')!.color).toBe(teamColor(2))
+    expect(display!.tabMark('lead')!.color).toBe(teamColor(2))
+    seed([team([mem('A', 1, 'a-tm')])], tabs)
+    expect(display!.panelTeam('lead')!.color).toBe(teamColor(fnv1a32('t1') % 8))
+  })
+
   it('the team name wins over the lead title in the panel header', () => {
     render(<TeamDisplayProvider><Probe /></TeamDisplayProvider>)
     seed([team([mem('A', 1, 'a-tm')], { team_name: 'Release train', team_label: '發版' })], tabs)

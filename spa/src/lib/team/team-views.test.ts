@@ -420,3 +420,13 @@ describe('selectTeamViews — a seat knows its own host (TI-2a)', () => {
     expect([...seatLookup(views).keys()].sort()).toEqual(['h1\u0000a-tm', 'h1\u0000lead-tm', 'h2\u0000same-tm'])
   })
 })
+
+describe('colorIndex from the roster (TR-1)', () => {
+  it('uses team_color when set, else the id hash', () => {
+    const base = team('alpha', sess('L1'))
+    const [auto, set, zero] = selectTeamViews(input({ rosterByHost: { h1: [base, { ...base, id: 'beta', team_color: 5 }, { ...base, id: 'gamma', team_color: 0 }] } }))
+    expect(auto.colorIndex).toBe(fnv1a32('alpha') % 8)
+    expect(set.colorIndex).toBe(5)
+    expect(zero.colorIndex).toBe(0)
+  })
+})
