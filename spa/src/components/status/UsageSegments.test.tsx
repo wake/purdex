@@ -128,6 +128,53 @@ describe('CcUsageSegments', () => {
   })
 })
 
+describe('one normalised used value', () => {
+  it.each([
+    [69.4, 69, 'ok', 31], [69.6, 70, 'warn', 30], [89.6, 90, 'danger', 10], [99.6, 100, 'danger', 0], [120, 100, 'danger', 0], [-5, 0, 'ok', 100],
+  ])('used %f -> used %i, %s, left %i in ring, number and tooltip', (raw, used, tone, left) => {
+    seed(payload({ context_window: { used_percentage: raw } }))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    const seg = screen.getByTestId('status-seg-usage-context')
+    const arc = seg.querySelector('[data-testid="usage-ring-arc"]')!
+    expect(arc.getAttribute('data-used')).toBe(String(used))
+    expect(arc.getAttribute('data-tone')).toBe(tone)
+    expect(seg.textContent).toBe(`${left}%`)
+    expect(seg.title).toBe(`Context window: ${left}% left (${used}% used)`)
+  })
+
+  it('the limit tooltips use the same normalised value', () => {
+    seed(payload({ rate_limits: { five_hour: { used_percentage: 120 }, seven_day: { used_percentage: -5 } } }))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-seg-usage-five-hour').title).toBe('5-hour limit: 0% left (100% used)')
+    expect(screen.getByTestId('status-seg-usage-seven-day').title).toBe('Weekly limit: 100% left (0% used)')
+  })
+})
+
+describe('accessible names and hiding', () => {
+  it('each usage is an img named with the limit, what is left and what is used', () => {
+    seed(payload())
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByRole('img', { name: /Context window: 77% left \(23% used\)/ })).toBeTruthy()
+    expect(screen.getByRole('img', { name: /5-hour limit: 76% left \(24% used\)/ })).toBeTruthy()
+    expect(screen.getByRole('img', { name: /Weekly limit: 7% left \(93% used\)/ })).toBeTruthy()
+  })
+
+  it('the wrapper hides at the breakpoint where all its children are hidden', async () => {
+    seed(payload())
+    const { unmount } = render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-usage').className).toContain('max-[600px]:hidden')
+    unmount()
+    seed({ rate_limits: { five_hour: { used_percentage: 5 } } })
+    const r2 = render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-usage').className).toContain('max-[700px]:hidden')
+    r2.unmount()
+    mockFetchNexHost.mockResolvedValue({ active_account: 'a', quota: { five_hour_pct: 1, seven_day_pct: 2, resets_at: 0, source: 'x' } } as NexHostInfo)
+    render(<HostQuotaSegments hostId="h1" />)
+    await act(async () => {})
+    expect(screen.getByTestId('status-usage').className).toContain('max-[700px]:hidden')
+  })
+})
+
 describe('HostQuotaSegments', () => {
   const host = (quota: NexHostInfo['quota']): NexHostInfo => ({ active_account: 'a', quota } as NexHostInfo)
 

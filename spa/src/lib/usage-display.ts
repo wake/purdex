@@ -53,14 +53,14 @@ export function parseCcUsage(raw: Record<string, unknown> | null | undefined): C
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 
-/** Used share, 0-100 (what the ring fills to). */
+/** The one normalised used share: rounded, clamped to 0-100. Ring, tone, tooltip and remaining all derive from it. */
 export function usedPct(used: number): number {
-  return clamp(used, 0, 100)
+  return clamp(Math.round(used), 0, 100)
 }
 
 /** Remaining share shown as the number: 100 - used, rounded, clamped to 0-100. */
 export function remainingPct(used: number): number {
-  return clamp(Math.round(100 - used), 0, 100)
+  return 100 - usedPct(used)
 }
 
 export type UsageTone = 'ok' | 'warn' | 'danger'

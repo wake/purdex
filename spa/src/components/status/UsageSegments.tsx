@@ -39,7 +39,7 @@ const RING_C = 2 * Math.PI * RING_R
 /** A ring that fills clockwise from 12 o'clock to the USED share; its colour follows `usageTone` of the used share. */
 function Ring({ used }: { used: number }) {
   const u = usedPct(used)
-  const tone = usageTone(used)
+  const tone = usageTone(u)
   return (
     <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} aria-hidden="true" className="shrink-0">
       <circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RING_R} fill="none" strokeWidth={RING_STROKE} stroke="currentColor" className="text-border-subtle" />
@@ -74,6 +74,7 @@ export function UsageSegment({ testId, icon: IconCmp, used, title, stale, classN
     <span
       data-testid={testId}
       data-dim={stale ? 'true' : undefined}
+      role="img"
       title={title}
       aria-label={title}
       className={`flex shrink-0 items-center gap-1 tabular-nums select-none ${stale ? 'opacity-50' : ''} ${className}`}
@@ -88,7 +89,7 @@ export function UsageSegment({ testId, icon: IconCmp, used, title, stale, classN
 type T = (key: string, params?: Record<string, string | number>) => string
 
 function windowTitle(t: T, nameKey: string, w: UsageWindow, now: number, stale: boolean): string {
-  const parts = [t(nameKey, { left: remainingPct(w.pct), pct: Math.round(w.pct) })]
+  const parts = [t(nameKey, { left: remainingPct(w.pct), pct: usedPct(w.pct) })]
   const left = w.resetsAtMs === null ? null : formatResetsIn(w.resetsAtMs, now)
   if (left) parts.push(t('status.usage.resets_in', { time: left }))
   if (stale) parts.push(t('status.usage.stale'))
@@ -140,13 +141,13 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
 
   const stale = now - entry.receivedAt > USAGE_STALE_MS
   return (
-    <div data-testid="status-usage" className="flex shrink-0 items-center gap-2">
+    <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${usage.context !== null ? 'max-[600px]:hidden' : 'max-[700px]:hidden'}`}>
       {usage.context !== null && (
         <UsageSegment
           testId="status-seg-usage-context"
           icon={Brain}
           used={usage.context}
-          title={[t('status.usage.context', { left: remainingPct(usage.context), pct: Math.round(usage.context) }), stale ? t('status.usage.stale') : ''].filter(Boolean).join(' — ')}
+          title={[t('status.usage.context', { left: remainingPct(usage.context), pct: usedPct(usage.context) }), stale ? t('status.usage.stale') : ''].filter(Boolean).join(' — ')}
           stale={stale}
           className="max-[600px]:hidden"
         />
@@ -165,7 +166,7 @@ export function HostQuotaSegments({ hostId }: { hostId: string }) {
   // Nexen reports one reset time for the reading; it is shown on the 5-hour window, the one it belongs to.
   const stale = now - fetchedAt > USAGE_STALE_MS
   return (
-    <div data-testid="status-usage" className="flex shrink-0 items-center gap-2">
+    <div data-testid="status-usage" className="flex shrink-0 items-center gap-2 max-[700px]:hidden">
       <LimitSegments
         fiveHour={{ pct: quota.five_hour_pct, resetsAtMs }}
         sevenDay={{ pct: quota.seven_day_pct, resetsAtMs: null }}
