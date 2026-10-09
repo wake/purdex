@@ -234,6 +234,66 @@ describe('a reload does not lose the wait or its result', () => {
   })
 })
 
+describe('two windows write the same key', () => {
+  // A window is its own memory; its write is what the store hands persist. `window()` plays another one with a stale view.
+  const e = (id: string, over: Record<string, unknown> = {}) => ({
+    key: `lead\u0000${id}`, hostId: 'lead', approvalId: id, alias: 'air26', target: id, startedAt: Date.now(), state: 'waiting', code: '', dismissed: false, ...over,
+  })
+  const otherWindowWrites = (entries: Record<string, unknown>, gone: Record<string, number> = {}) => {
+    const storage = useAdoptionWait.persist.getOptions().storage!
+    void storage.setItem(STORAGE_KEYS.ADOPTION_WAITS, { state: { entries, gone } as never, version: 0 })
+  }
+  const stored = () => (JSON.parse(localStorage.getItem(STORAGE_KEYS.ADOPTION_WAITS)!) as { state: { entries: Record<string, { state: string; dismissed: boolean }>; gone: Record<string, number> } }).state
+  const k = (id: string) => `lead\u0000${id}`
+
+  it('parallel adds from two windows both stay', async () => {
+    mocked.mockImplementation(() => new Promise(() => {}))
+    startAdoptionWait('lead', 'a', payload) // this window
+    otherWindowWrites({ [k('b')]: e('b') }) // the other one, which never saw 'a'
+    expect(Object.keys(stored().entries).sort()).toEqual([k('a'), k('b')])
+    await useAdoptionWait.persist.rehydrate() // reload / the sync-driven read
+    expect(Object.keys(useAdoptionWait.getState().entries).sort()).toEqual([k('a'), k('b')])
+  })
+
+  it('a stale waiting copy never overwrites a finished one', async () => {
+    mocked.mockResolvedValue(ans('failed', 'x'))
+    startAdoptionWait('lead', 'a', payload)
+    await flush()
+    otherWindowWrites({ [k('a')]: e('a') })
+    expect(stored().entries[k('a')].state).toBe('failed')
+  })
+
+  it('a dismissal is not undone by a stale open copy', () => {
+    mocked.mockImplementation(() => new Promise(() => {}))
+    startAdoptionWait('lead', 'a', payload)
+    useAdoptionWait.getState().dismiss(k('a'))
+    otherWindowWrites({ [k('a')]: e('a') })
+    expect(stored().entries[k('a')].dismissed).toBe(true)
+  })
+
+  it('a removed entry is not brought back by the other window, in either order', async () => {
+    mocked.mockResolvedValue(ans('failed', 'x'))
+    startAdoptionWait('lead', 'a', payload)
+    await flush()
+    useAdoptionWait.getState().dismiss(k('a')) // closed here: removed, tombstoned
+    otherWindowWrites({ [k('a')]: e('a', { state: 'failed' }) })
+    expect(stored().entries[k('a')]).toBeUndefined()
+    await useAdoptionWait.persist.rehydrate()
+    expect(useAdoptionWait.getState().entries).toEqual({})
+  })
+
+  it('an adoption another window already owns is not polled here', async () => {
+    const request = vi.fn((_n: string, _o: unknown, cb: (l: unknown) => unknown) => Promise.resolve(cb(null)))
+    vi.stubGlobal('navigator', { ...navigator, locks: { request } })
+    try {
+      startAdoptionWait('lead', 'a', payload)
+      await flush()
+      expect(request).toHaveBeenCalledTimes(1)
+      expect(mocked).not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+  })
+})
+
 // A fetch that never answers and ends only when its signal aborts (what the browser does).
 const hanging = (_h: string, _id: string, _w: number, signal?: AbortSignal) => new Promise<never>((_, reject) => {
   signal?.addEventListener('abort', () => reject(new ApprovalApiError(0, 'network', 'aborted')))

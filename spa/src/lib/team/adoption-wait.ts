@@ -12,7 +12,9 @@
 // its outcome as a toast instead.
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import { purdexStorage, STORAGE_KEYS } from '../storage'
+import { createJSONStorage } from 'zustand/middleware'
+import { STORAGE_KEYS, syncManager } from '../storage'
+import { browserStorage } from '../storage/browser-backend'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { ApprovalApiError, fetchAdoption } from './approval-api'
@@ -44,6 +46,8 @@ export interface AdoptionWaitEntry {
 
 interface AdoptionWaitStore {
   entries: Record<string, AdoptionWaitEntry>
+  /** Removed entry keys → when (tombstones, kept an hour). */
+  gone: Record<string, number>
   dismiss: (key: string) => void
   /** Test reset. */
   reset: () => void
@@ -74,32 +78,97 @@ export function healAdoptionWaits(persisted: unknown): Record<string, AdoptionWa
   return out
 }
 
+/** Removed keys with when: a removal must survive the merge below (else the other window's copy would bring the entry back). */
+const GONE_TTL_MS = 60 * 60_000
+
+function healGone(persisted: unknown, now = Date.now()): Record<string, number> {
+  const raw = isRecord(persisted) && isRecord(persisted.gone) ? Object.entries(persisted.gone) : []
+  const out: Record<string, number> = {}
+  for (const [k, at] of raw) {
+    if (typeof at === 'number' && Number.isFinite(at) && now - at < GONE_TTL_MS) out[k] = at
+  }
+  return out
+}
+
+/** `without` plus a tombstone, for the removal paths. */
+function removeFrom(s: Pick<AdoptionWaitStore, 'entries' | 'gone'>, key: string): Pick<AdoptionWaitStore, 'entries' | 'gone'> {
+  const { [key]: _gone, ...rest } = s.entries
+  return { entries: rest, gone: { ...s.gone, [key]: Date.now() } }
+}
+
+// The same entry as two windows saw it: a finished one beats a waiting one, a closed one beats an open one, else `b`.
+function newer(a: AdoptionWaitEntry, b: AdoptionWaitEntry): AdoptionWaitEntry {
+  const fa = a.state !== 'waiting'
+  const fb = b.state !== 'waiting'
+  if (fa !== fb) return fa ? a : b
+  if (a.dismissed !== b.dismissed) return a.dismissed ? a : b
+  return b
+}
+
+/** Two persisted images of the store become one: union by key, `newer` per entry, a tombstone beats any copy. */
+export function mergeAdoptionWaitImages(stored: unknown, incoming: unknown): { entries: Record<string, AdoptionWaitEntry>; gone: Record<string, number> } {
+  const gone = { ...healGone(stored), ...healGone(incoming) }
+  const a = healAdoptionWaits(stored)
+  const b = healAdoptionWaits(incoming)
+  const entries: Record<string, AdoptionWaitEntry> = {}
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (key in gone) continue
+    entries[key] = a[key] && b[key] ? newer(a[key], b[key]) : (a[key] ?? b[key])
+  }
+  return { entries, gone }
+}
+
+const stateOfRaw = (raw: string | null): unknown => {
+  if (raw === null) return undefined
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return isRecord(parsed) ? parsed.state : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Every window of this client writes the same key, each from its own memory: a plain write would let the last one wipe
+// what the other added or finished. So a write is merged with what storage holds right now (`mergeAdoptionWaitImages`)
+// before it lands; `syncManager` then tells the other windows to read the result.
+const mergingStorage = createJSONStorage(() => ({
+  getItem: (name: string) => browserStorage.getItem(name),
+  setItem: (name: string, value: string) => {
+    const merged = mergeAdoptionWaitImages(stateOfRaw(browserStorage.getItem(name) as string | null), stateOfRaw(value))
+    browserStorage.setItem(name, JSON.stringify({ state: merged, version: 0 }))
+  },
+  removeItem: (name: string) => browserStorage.removeItem(name),
+}))
+
 // Device-local (purdex-adoption-waits): a reload mid-wait must not lose the wait or its outcome. The approval is closed
 // and the member host answers once, so nothing else would bring the result back.
 export const useAdoptionWait = create<AdoptionWaitStore>()(
   persist(
     (set) => ({
       entries: {},
+      gone: {},
       dismiss: (key) => set((s) => {
         const e = s.entries[key]
         if (!e) return s
         // A finished card just goes; a waiting one stays (dismissed) so the outcome can toast.
-        if (e.state !== 'waiting') {
-          const { [key]: _gone, ...rest } = s.entries
-          return { entries: rest }
-        }
+        if (e.state !== 'waiting') return removeFrom(s, key)
         return { entries: { ...s.entries, [key]: { ...e, dismissed: true } } }
       }),
-      reset: () => set({ entries: {} }),
+      reset: () => set({ entries: {}, gone: {} }),
     }),
     {
       name: STORAGE_KEYS.ADOPTION_WAITS,
-      storage: purdexStorage,
-      partialize: (s) => ({ entries: s.entries }),
-      merge: (persisted, current) => ({ ...current, entries: healAdoptionWaits(persisted) }),
+      storage: mergingStorage,
+      partialize: (s) => ({ entries: s.entries, gone: s.gone }),
+      merge: (persisted, current) => {
+        const gone = healGone(persisted)
+        const entries = Object.fromEntries(Object.entries(healAdoptionWaits(persisted)).filter(([k]) => !(k in gone)))
+        return { ...current, entries, gone }
+      },
     },
   ),
 )
+syncManager.register(STORAGE_KEYS.ADOPTION_WAITS, useAdoptionWait)
 
 export function adoptionAlias(p: AdoptPayload): string {
   return clipForDisplay(p.target_host_alias !== '' ? p.target_host_alias : p.target_host_id, 60)
@@ -124,6 +193,7 @@ export function resetAdoptionWaitForTests(): void {
   warned.clear()
   running.clear()
   useAdoptionWait.getState().reset()
+  try { localStorage.removeItem(STORAGE_KEYS.ADOPTION_WAITS) } catch { /* no storage */ }
 }
 
 function patch(key: string, p: Partial<AdoptionWaitEntry>): void {
@@ -136,10 +206,7 @@ function finish(key: string, state: Exclude<AdoptionWaitState, 'waiting'>, code 
   const done = { ...e, state, code }
   if (e.dismissed) {
     useUndoToast.getState().show(useI18nStore.getState().t('approval.dialog.adopt_wait.toast', { target: e.target, result: adoptionWaitText(done) }))
-    useAdoptionWait.setState((s) => {
-      const { [key]: _gone, ...rest } = s.entries
-      return { entries: rest }
-    })
+    useAdoptionWait.setState((s) => removeFrom(s, key))
     return
   }
   patch(key, { state, code })
@@ -178,7 +245,7 @@ async function run(key: string, hostId: string, approvalId: string): Promise<voi
   const deadline = (useAdoptionWait.getState().entries[key]?.startedAt ?? Date.now()) + ADOPTION_WAIT_BOUND_MS
   let backoff = BACKOFF_START_MS
   for (;;) {
-    if (!useAdoptionWait.getState().entries[key]) return
+    if (useAdoptionWait.getState().entries[key]?.state !== 'waiting') return
     let remaining = deadline - Date.now()
     // Under a second left: wait it out, then the one final ask.
     if (remaining > 0 && remaining < 1_000) { await sleep(remaining); remaining = 0 }
@@ -191,7 +258,7 @@ async function run(key: string, hostId: string, approvalId: string): Promise<voi
     try {
       answer = await ask(hostId, approvalId, waitS, timeoutMs)
     } catch (e: unknown) {
-      if (!useAdoptionWait.getState().entries[key]) return
+      if (useAdoptionWait.getState().entries[key]?.state !== 'waiting') return
       // Only a transport failure, 429 and 5xx can pass: a 404 (unsupported / not_found), a 409 not_approved, the host
       // forgotten or any other 4xx will answer the same next time, so it ends here with its code.
       if (e instanceof ApprovalApiError && !(e.code === 'network' || e.status === 429 || e.status >= 500)) { finish(key, 'failed', e.code); return }
@@ -203,7 +270,7 @@ async function run(key: string, hostId: string, approvalId: string): Promise<voi
       }
       continue
     }
-    if (!useAdoptionWait.getState().entries[key]) return
+    if (useAdoptionWait.getState().entries[key]?.state !== 'waiting') return
     backoff = BACKOFF_START_MS
     switch (answer.state) {
       case 'failed': finish(key, 'failed', answer.code ?? ''); return
@@ -225,6 +292,7 @@ export function startAdoptionWait(hostId: string, approvalId: string, p: AdoptPa
   const key = waitKey(hostId, approvalId)
   if (useAdoptionWait.getState().entries[key]) return
   useAdoptionWait.setState((s) => ({
+    gone: Object.fromEntries(Object.entries(s.gone).filter(([k]) => k !== key)),
     entries: { ...s.entries, [key]: { key, hostId, approvalId, alias: adoptionAlias(p), target: clipForDisplay(adoptTargetLabel(p), 60), startedAt: Date.now(), state: 'waiting', code: '', dismissed: false } },
   }))
   launch(key)
@@ -235,7 +303,15 @@ function launch(key: string): void {
   const e = useAdoptionWait.getState().entries[key]
   if (!e || running.has(key)) return
   running.add(key)
-  void run(key, e.hostId, e.approvalId).finally(() => running.delete(key))
+  const go = () => run(key, e.hostId, e.approvalId)
+  // One window polls an adoption. The first to take its Web Lock does, for as long as it runs; a window that cannot
+  // take it (`ifAvailable`) leaves the entry to the owner and only shows what the owner writes to storage — so two
+  // windows never poll twice or toast twice. Without Web Locks (an old webview) the window just polls.
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+  const owned = locks
+    ? locks.request(`purdex-adoption-wait:${key}`, { ifAvailable: true }, (lock) => (lock ? go() : undefined))
+    : go()
+  void Promise.resolve(owned).catch(() => {}).finally(() => running.delete(key))
 }
 
 /**
