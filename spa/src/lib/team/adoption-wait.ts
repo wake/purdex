@@ -32,6 +32,8 @@ export interface AdoptionWaitEntry {
   approvalId: string
   alias: string
   target: string
+  /** When the approve was sent (ms): the bound counts from here. */
+  startedAt: number
   state: AdoptionWaitState
   code: string
   /** The person closed the card while it waited: the outcome is a toast, not a card. */
@@ -109,22 +111,46 @@ function finish(key: string, state: Exclude<AdoptionWaitState, 'waiting'>, code 
   }
 }
 
+/** A request is cut this long after the wait it asked for: a daemon that accepts and never answers must not hold the bound. */
+const REQUEST_SLACK_MS = 5_000
+const FINAL_ASK_TIMEOUT_MS = 5_000
+
+/** One ask, aborted after `timeoutMs`; an abort reads as a network error like any other transport failure. */
+async function ask(hostId: string, approvalId: string, waitS: number, timeoutMs: number) {
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), timeoutMs)
+  try {
+    return await fetchAdoption(hostId, approvalId, waitS, ctl.signal)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function run(key: string, hostId: string, approvalId: string): Promise<void> {
-  const deadline = Date.now() + ADOPTION_WAIT_BOUND_MS
+  const deadline = (useAdoptionWait.getState().entries[key]?.startedAt ?? Date.now()) + ADOPTION_WAIT_BOUND_MS
   let backoff = BACKOFF_START_MS
   for (;;) {
     if (!useAdoptionWait.getState().entries[key]) return
-    const last = Date.now() >= deadline
+    let remaining = deadline - Date.now()
+    // Under a second left: wait it out, then the one final ask.
+    if (remaining > 0 && remaining < 1_000) { await sleep(remaining); remaining = 0 }
+    const last = remaining <= 0
+    // The wait never runs past the deadline; the final ask is a plain read (wait=0).
+    const waitS = last ? 0 : Math.min(ADOPTION_POLL_S, Math.floor(remaining / 1_000))
+    const timeoutMs = last ? FINAL_ASK_TIMEOUT_MS : Math.min(waitS * 1_000 + REQUEST_SLACK_MS, remaining)
     const askedAt = Date.now()
     let answer
     try {
-      answer = await fetchAdoption(hostId, approvalId, last ? 0 : ADOPTION_POLL_S)
+      answer = await ask(hostId, approvalId, waitS, timeoutMs)
     } catch (e: unknown) {
       if (!useAdoptionWait.getState().entries[key]) return
       if (e instanceof ApprovalApiError && e.code === 'host_removed') { finish(key, 'timeout'); return }
       if (last) { finish(key, 'timeout'); return }
-      await sleep(backoff)
-      backoff = Math.min(backoff * 2, BACKOFF_MAX_MS)
+      // Not yet at the deadline: back off (never past it); at it, the next turn is the final ask.
+      if (Date.now() < deadline) {
+        await sleep(Math.min(backoff, Math.max(0, deadline - Date.now())))
+        backoff = Math.min(backoff * 2, BACKOFF_MAX_MS)
+      }
       continue
     }
     if (!useAdoptionWait.getState().entries[key]) return
@@ -135,7 +161,7 @@ async function run(key: string, hostId: string, approvalId: string): Promise<voi
       case 'joining': case '':
         if (last) { finish(key, 'timeout'); return }
         // A long poll normally holds for the wait; one that came straight back must not spin.
-        if (Date.now() - askedAt < MIN_POLL_GAP_MS) await sleep(MIN_POLL_GAP_MS)
+        if (Date.now() - askedAt < MIN_POLL_GAP_MS) await sleep(Math.min(MIN_POLL_GAP_MS, Math.max(0, deadline - Date.now())))
         break
       default: finish(key, 'active'); return // active, or a later member state: it did join
     }
@@ -147,7 +173,7 @@ export function startAdoptionWait(hostId: string, approvalId: string, p: AdoptPa
   const key = waitKey(hostId, approvalId)
   if (useAdoptionWait.getState().entries[key]) return
   useAdoptionWait.setState((s) => ({
-    entries: { ...s.entries, [key]: { key, hostId, approvalId, alias: adoptionAlias(p), target: clipForDisplay(adoptTargetLabel(p), 60), state: 'waiting', code: '', dismissed: false } },
+    entries: { ...s.entries, [key]: { key, hostId, approvalId, alias: adoptionAlias(p), target: clipForDisplay(adoptTargetLabel(p), 60), startedAt: Date.now(), state: 'waiting', code: '', dismissed: false } },
   }))
   void run(key, hostId, approvalId)
 }

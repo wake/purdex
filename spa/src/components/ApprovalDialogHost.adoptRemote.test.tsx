@@ -82,7 +82,7 @@ describe('adopt card — remote target', () => {
     await click('approval-approve')
     expect(screen.queryByTestId('approval-dialog')).toBeNull()
     expect(text('adoption-wait-text')).toBe('等待 air26 回覆…')
-    expect(mockedPoll).toHaveBeenCalledWith(H, 'req-1', 30)
+    expect(mockedPoll).toHaveBeenCalledWith(H, 'req-1', 30, expect.any(AbortSignal))
   })
 
   it('active → 已納入, then the card closes by itself', async () => {

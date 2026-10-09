@@ -46,7 +46,7 @@ describe('startAdoptionWait', () => {
     mocked.mockResolvedValueOnce(ans('joining')).mockImplementation(() => new Promise(() => {}))
     startAdoptionWait('lead', 'ap-1', payload)
     await flush()
-    expect(mocked).toHaveBeenCalledWith('lead', 'ap-1', 30)
+    expect(mocked).toHaveBeenCalledWith('lead', 'ap-1', 30, expect.any(AbortSignal))
     expect(entry().state).toBe('waiting')
     expect(entry().alias).toBe('air26')
     await vi.advanceTimersByTimeAsync(1_000)
@@ -125,5 +125,39 @@ describe('startAdoptionWait', () => {
     startAdoptionWait('lead', 'ap-1', payload)
     await vi.advanceTimersByTimeAsync(ADOPTION_WAIT_BOUND_MS + 2_000)
     expect(entry()?.state ?? 'closed').not.toBe('timeout')
+  })
+})
+
+// A fetch that never answers and ends only when its signal aborts (what the browser does).
+const hanging = (_h: string, _id: string, _w: number, signal?: AbortSignal) => new Promise<never>((_, reject) => {
+  signal?.addEventListener('abort', () => reject(new ApprovalApiError(0, 'network', 'aborted')))
+})
+
+describe('the bound holds against a request that hangs', () => {
+  it('a stuck long poll is aborted shortly after the wait it asked for, and the loop asks again', async () => {
+    mocked.mockImplementation(hanging)
+    startAdoptionWait('lead', 'ap-1', payload)
+    await flush()
+    expect(mocked).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(35_000) // 30 s wait + 5 s slack
+    await vi.advanceTimersByTimeAsync(2_000) // the backoff
+    expect(mocked.mock.calls.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('ends in timeout at the deadline with exactly one final ask, no wait over 30 s', async () => {
+    mocked.mockImplementation(hanging)
+    startAdoptionWait('lead', 'ap-1', payload)
+    await vi.advanceTimersByTimeAsync(ADOPTION_WAIT_BOUND_MS + 10_000)
+    for (const c of mocked.mock.calls) expect(c[2]).toBeLessThanOrEqual(30)
+    expect(mocked.mock.calls.filter((c) => c[2] === 0)).toHaveLength(1)
+    expect(entry().state).toBe('timeout')
+  })
+
+  it('the last long poll is shortened to the time left', async () => {
+    mocked.mockResolvedValue(ans('joining')) // each ask comes straight back: one per second
+    startAdoptionWait('lead', 'ap-1', payload)
+    await vi.advanceTimersByTimeAsync(ADOPTION_WAIT_BOUND_MS + 10_000)
+    const waits = mocked.mock.calls.map((c) => c[2])
+    expect(waits.some((w) => w > 0 && w < 30)).toBe(true)
   })
 })

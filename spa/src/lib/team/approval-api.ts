@@ -94,9 +94,9 @@ export function decideApproval(hostId: string, id: string, body: DecideRequest):
 /** `GET /api/team/adoptions/{approval_id}?wait=<s>` (cross-host spec §4.3): the membership a remote adopt led to. */
 export interface AdoptionAnswer { approval_id: string; state: string; code?: string }
 
-export async function fetchAdoption(hostId: string, approvalId: string, waitS: number): Promise<AdoptionAnswer> {
+export async function fetchAdoption(hostId: string, approvalId: string, waitS: number, signal?: AbortSignal): Promise<AdoptionAnswer> {
   const wait = Math.max(0, Math.min(30, Math.trunc(waitS)))
-  const r = await send<Partial<AdoptionAnswer>>(hostId, `/api/team/adoptions/${encodeURIComponent(approvalId)}?wait=${wait}`, { method: 'GET' })
+  const r = await send<Partial<AdoptionAnswer>>(hostId, `/api/team/adoptions/${encodeURIComponent(approvalId)}?wait=${wait}`, { method: 'GET', ...(signal ? { signal } : {}) })
   return { approval_id: typeof r.approval_id === 'string' ? r.approval_id : approvalId, state: typeof r.state === 'string' ? r.state : '', ...(typeof r.code === 'string' && r.code !== '' ? { code: r.code } : {}) }
 }
 
