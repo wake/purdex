@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.625] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版讓 team 的成員清單帶上每個 member 手上的任務，App 之後可以直接顯示；派工／回報（T 線）到此全部完成。
+
+### Added：成員清單帶上目前的任務 — 派工／回報 T-3b（#2120）
+
+- `GET /api/team/roster` 與 `team.roster` 事件裡，每個 member 多一個 `task` 欄位：`{id, subject, status}`。優先取進行中的任務，沒有就取最新一個待辦的；都沒有就不帶這個欄位。
+- 只放任務主旨，不帶最後一輪或回報的內容。
+- 任務建立、開始、完成、刪除、改派，以及 member 回報開始或完成時，成員清單會立刻更新。
+- 所有 team 的未完成任務用一次查詢讀出，不會隨 team 數量變慢。
+
 ## [1.0.0-alpha.624] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版讓 lead 在 `pdx team` 的 LAST 欄看到每個 member 最近一輪說了什麼。
