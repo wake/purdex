@@ -1327,7 +1327,7 @@ test('after session.end nothing asks', async ($, on) => {
 })
 
 // Mutation gate: no mod-owned deadline → a call that never settles blocks the executor for good (codex attack).
-test('a model call that never settles is cut at timeout_ms + 5 s (before the daemon's lease at + 10 s), reported aborted, and the executor works again', async ($, on) => {
+test('a model call that never settles is cut at timeout_ms + 5 s (before the lease runs out), reported aborted, and the executor works again', async ($, on) => {
   const w = evWorld(on, {
     wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : n === 2 ? jobAnswer(JOB({ id: 'wbj-2' })) : { status: 204 }),
     model: (_e, n) => (n === 1 ? new Promise(() => {}) : { isAnswered: true, text: '{}', usage: USAGE }),
