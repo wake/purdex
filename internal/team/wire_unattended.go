@@ -61,8 +61,9 @@ type UnattendedView struct {
 	Swept      int        `json:"swept,omitempty"`       // PUT only: open requests the switch-on approved
 	Pending    int        `json:"pending,omitempty"`     // PUT only: auto-approvable requests still open after the sweep
 	// Quotas is every live session of the host with its relay chain's numbers (#2062), for the panel's steppers.
-	// nil (and absent) when the quotas could not be read: the page above stays valid.
-	Quotas []SessionQuota `json:"quotas,omitempty"`
+	// null when the quotas could not be read (the page above stays valid); [] when they were read and the host has no
+	// live session; never absent. A client keeps what it had on null and replaces it on [].
+	Quotas []SessionQuota `json:"quotas"`
 	// ListFailed (PUT only): the write took effect — the state above is
 	// what is stored — but the list could not be read, so Approved is
 	// empty and says nothing; the client GETs the list.

@@ -75,7 +75,7 @@ func TestSetRelayQuota_WritesTheChainRootAndKeepsTheFieldsLeftOut(t *testing.T) 
 	}
 	for _, sid := range []string{"a", "b"} { // every session of the chain reads the one row
 		q, r, err := s.RelayQuotaOf(sid)
-		if err != nil || r != "a" || q != (team.RelayQuota{SelfLeft: 3, MemberPoolLeft: 1}) {
+		if err != nil || r != "a" || q != (team.RelayQuota{SelfLeft: 3, MemberPoolLeft: 1, Rev: 2}) {
 			t.Errorf("%s reads %+v root %s %v", sid, q, r, err)
 		}
 	}
@@ -147,7 +147,7 @@ func TestRelayQuotaPut_SetsTheChainAndShowsOnEveryDisplay(t *testing.T) {
 	}
 	// the roster: the lead's numbers, announced once
 	ev := w.one("relay quota")
-	if len(ev.Teams) != 1 || ev.Teams[0].Lead.RelayQuota != (team.RelayQuota{SelfLeft: 3, MemberPoolLeft: 2}) {
+	if len(ev.Teams) != 1 || ev.Teams[0].Lead.RelayQuota != (team.RelayQuota{SelfLeft: 3, MemberPoolLeft: 2, Rev: 1}) {
 		t.Fatalf("roster lead = %+v", ev.Teams)
 	}
 	// the event
@@ -344,7 +344,7 @@ func TestRelayQuotasOf_AgreesWithTheSingleWalkInTwoReads(t *testing.T) {
 			t.Errorf("%s: batch %+v root %q, single %+v root %q (%v)", sid, quotas[sid], roots[sid], q, root, err)
 		}
 	}
-	if quotas["a20"] != (team.RelayQuota{SelfLeft: 7, MemberPoolLeft: 3}) || roots["b1"] != "b0" || roots["lone"] != "lone" {
+	if quotas["a20"] != (team.RelayQuota{SelfLeft: 7, MemberPoolLeft: 3, Rev: 1}) || roots["b1"] != "b0" || roots["lone"] != "lone" {
 		t.Errorf("quotas=%v roots=%v", quotas, roots)
 	}
 	// a looping chain is left out and reported, the others still read
@@ -356,3 +356,207 @@ func TestRelayQuotasOf_AgreesWithTheSingleWalkInTwoReads(t *testing.T) {
 		t.Fatalf("cycle: %v %v %v", q2, r2, err)
 	}
 }
+
+// RQ-1a2: the chain row's version. It counts the writes of the row (a chain root's, not a session's), strictly
+// increasing; no row reads 0; every carrier shows it. Mutation gate: not incrementing → red.
+func TestSetRelayQuota_RevCountsTheWritesOfTheChain(t *testing.T) {
+	s := openTestStore(t)
+	lineage(t, s, "b", "a")
+	if q, _, _ := s.RelayQuotaOf("b"); q.Rev != 0 {
+		t.Fatalf("no row: rev %d, want 0", q.Rev)
+	}
+	for want, sid := range []string{"a", "b", "a"} { // writes through any session of the chain bump the one row
+		if _, row, err := s.SetRelayQuota(sid, ip(want), nil, int64(10+want), "app"); err != nil || row.Rev != int64(want+1) {
+			t.Fatalf("write %d via %s: rev %d (%v), want %d", want+1, sid, row.Rev, err, want+1)
+		}
+	}
+	if q, _, _ := s.RelayQuotaOf("b"); q.Rev != 3 {
+		t.Fatalf("rev %d, want 3", q.Rev)
+	}
+	if _, row, _ := s.SetRelayQuota("other", ip(1), nil, 99, "app"); row.Rev != 1 {
+		t.Fatalf("another chain starts at 1, got %d", row.Rev)
+	}
+}
+
+// The PUT answer, the event, the roster and the list all carry the version. Mutation gate: leave rev out of the event → red.
+func TestRelayQuota_EveryCarrierShowsTheRev(t *testing.T) {
+	f := newFixture(t)
+	f.approveLead(uid(1))
+	sub := f.core.Events.AddTestSubscriber()
+	defer f.core.Events.RemoveTestSubscriber(sub)
+	f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-1", SelfLeft: ip(1), Client: appClient2})
+	_, v, body := f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-1", SelfLeft: ip(2), Client: appClient2})
+	if v.Rev != 2 {
+		t.Fatalf("PUT answer rev %d (%s), want 2", v.Rev, body)
+	}
+	got := ""
+	for {
+		select {
+		case raw := <-sub.SendCh():
+			if strings.Contains(string(raw), team.RelayQuotaEventType) {
+				got = string(raw) // the last one
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if !strings.Contains(got, `rev\":2`) {
+		t.Fatalf("last event = %s, want rev 2", got)
+	}
+	if rs := f.getRoster(); rs.Teams[0].Lead.RelayQuota.Rev != 2 {
+		t.Fatalf("roster lead rev %d, want 2", rs.Teams[0].Lead.RelayQuota.Rev)
+	}
+	_, uv, _ := f.getUnattended("")
+	revs := map[string]int64{}
+	for _, q := range uv.Quotas {
+		revs[q.SessionID] = q.Rev
+	}
+	if revs["sid-1"] != 2 || revs["sid-2"] != 0 {
+		t.Fatalf("list revs = %v, want sid-1 2 and sid-2 0 (no row)", revs)
+	}
+}
+
+// The list says whether it could be read: null when it could not (the client keeps what it had), [] when it was read
+// and there is nothing, never absent. Mutation gate: omitempty back on quotas → red.
+func TestUnattendedView_QuotasNullWhenUnreadableEmptyWhenNone(t *testing.T) {
+	f := newFixture(t)
+	f.origins.hide("sid-1")
+	f.origins.hide("sid-2")
+	_, raw := f.do(http.MethodGet, UnattendedRoute, nil)
+	if !strings.Contains(string(raw), `"quotas":[]`) {
+		t.Fatalf("read, none live: %s, want \"quotas\":[]", raw)
+	}
+	f.origins.setReadErr(true)
+	_, raw = f.do(http.MethodGet, UnattendedRoute, nil)
+	if !strings.Contains(string(raw), `"quotas":null`) {
+		t.Fatalf("unreadable: %s, want \"quotas\":null", raw)
+	}
+}
+
+// The table is deployed without rev (RQ-1a, alpha.634): a database of that shape gets the column when it is opened,
+// keeps its rows lifted to rev 1 (0 means "no row") and counts from there. Mutation gate: drop migrateRelayQuotaRev → red.
+func TestOpenStore_AddsRelayQuotaRevToTheDeployedShape(t *testing.T) {
+	path := t.TempDir() + "/team.db"
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`DROP TABLE relay_quotas;
+		CREATE TABLE relay_quotas (
+			root_session_id  TEXT PRIMARY KEY,
+			self_left        INTEGER NOT NULL DEFAULT 0,
+			member_pool_left INTEGER NOT NULL DEFAULT 0,
+			updated_at       INTEGER NOT NULL,
+			updated_by       TEXT    NOT NULL DEFAULT ''
+		);
+		INSERT INTO relay_quotas VALUES ('r', 3, 1, 5, 'app')`); err != nil { // the shape on the host's disk
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s, err = OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	q, _, err := s.RelayQuotaOf("r")
+	if err != nil || q != (team.RelayQuota{SelfLeft: 3, MemberPoolLeft: 1, Rev: 1}) {
+		t.Fatalf("after the migration: %+v (%v), want the row kept and lifted to rev 1 (0 is \"no row\")", q, err)
+	}
+	if _, row, err := s.SetRelayQuota("r", ip(2), nil, 9, "app"); err != nil || row.Rev != 2 || row.SelfLeft != 2 || row.MemberPoolLeft != 1 {
+		t.Fatalf("first write after: %+v (%v), want rev 2", row, err)
+	}
+	// and opening it once more is a no-op
+	_ = s.Close()
+	if s, err = OpenStore(path); err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+}
+
+// A quota read that fails in the store is null too, not an empty or partial list. Mutation gate: continue past the
+// error → red.
+func TestUnattendedView_QuotasNullWhenTheStoreCannotBeRead(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.m.store.db.Exec(`DROP TABLE relay_quotas`); err != nil {
+		t.Fatal(err)
+	}
+	_, raw := f.do(http.MethodGet, UnattendedRoute, nil)
+	if !strings.Contains(string(raw), `"quotas":null`) {
+		t.Fatalf("store unreadable: %s, want \"quotas\":null", raw)
+	}
+	// a looping chain in one session: the same
+	f2 := newFixture(t)
+	lineage(t, f2.m.store, "sid-2", "sid-9")
+	if _, err := f2.m.store.db.Exec(`INSERT INTO session_lineage (session_id, predecessor_session_id, predecessor_ref, op_id, at) VALUES ('sid-9', 'sid-2', '_x', 'opx', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	_, raw = f2.do(http.MethodGet, UnattendedRoute, nil)
+	if !strings.Contains(string(raw), `"quotas":null`) {
+		t.Fatalf("looping chain: %s, want \"quotas\":null", raw)
+	}
+}
+
+// Rows an older daemon inserts after a rollback have rev 0 (the column default): the next open lifts them too.
+func TestOpenStore_LiftsRev0RowsOnEveryOpen(t *testing.T) {
+	path := t.TempDir() + "/team.db"
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO relay_quotas (root_session_id, self_left, member_pool_left, updated_at, updated_by) VALUES ('old', 4, 0, 1, 'app')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if s, err = OpenStore(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if q, _, _ := s.RelayQuotaOf("old"); q.Rev != 1 || q.SelfLeft != 4 {
+		t.Fatalf("%+v, want rev 1 with the value kept", q)
+	}
+}
+
+// Writers racing for one chain get distinct, gapless versions: the read-increment-write is one write-locked
+// transaction. Mutation gate: read the version before the lock (outside the transaction) → duplicates → red.
+func TestSetRelayQuota_ConcurrentWritersGetDistinctRevs(t *testing.T) {
+	s := openTestStore(t)
+	const n = 20
+	var wg sync.WaitGroup
+	revs := make([]int64, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, row, err := s.SetRelayQuota("r", ip(i%90), nil, int64(i), "app")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			revs[i] = row.Rev
+		}()
+	}
+	wg.Wait()
+	seen := map[int64]bool{}
+	for _, r := range revs {
+		seen[r] = true
+	}
+	for want := int64(1); want <= n; want++ {
+		if !seen[want] {
+			t.Fatalf("revs = %v, want each of 1..%d exactly once", revs, n)
+		}
+	}
+}
+
+// The PUT of the switch answers quotas the same way the GET does: null when unreadable.
+func TestUnattendedPut_QuotasNullWhenTheStoreCannotBeRead(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.m.store.db.Exec(`DROP TABLE relay_quotas`); err != nil {
+		t.Fatal(err)
+	}
+	code, raw := f.do(http.MethodPut, UnattendedRoute, team.UnattendedPutRequest{On: ptr(true), Client: appClient2})
+	if code != http.StatusOK || !strings.Contains(string(raw), `"quotas":null`) {
+		t.Fatalf("PUT = %d %s, want 200 with \"quotas\":null", code, raw)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

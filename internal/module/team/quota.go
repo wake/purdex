@@ -53,8 +53,8 @@ type quotaRow struct {
 
 func quotaOfRootIn(q queryer, root string) (quotaRow, error) {
 	var r quotaRow
-	err := q.QueryRow(`SELECT self_left, member_pool_left, updated_at, updated_by FROM relay_quotas WHERE root_session_id = ?`, root).
-		Scan(&r.SelfLeft, &r.MemberPoolLeft, &r.UpdatedAt, &r.UpdatedBy)
+	err := q.QueryRow(`SELECT self_left, member_pool_left, updated_at, updated_by, rev FROM relay_quotas WHERE root_session_id = ?`, root).
+		Scan(&r.SelfLeft, &r.MemberPoolLeft, &r.UpdatedAt, &r.UpdatedBy, &r.Rev)
 	if errors.Is(err, sql.ErrNoRows) {
 		return quotaRow{}, nil // no row = both 0
 	}
@@ -103,7 +103,7 @@ func (s *Store) RelayQuotasOf(sids []string) (map[string]team.RelayQuota, map[st
 	}
 	rows.Close()
 	byRoot := map[string]team.RelayQuota{}
-	qrows, err := tx.Query(`SELECT root_session_id, self_left, member_pool_left FROM relay_quotas`)
+	qrows, err := tx.Query(`SELECT root_session_id, self_left, member_pool_left, rev FROM relay_quotas`)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read relay quotas: %w", err)
 	}
@@ -111,7 +111,7 @@ func (s *Store) RelayQuotasOf(sids []string) (map[string]team.RelayQuota, map[st
 	for qrows.Next() {
 		var root string
 		var q team.RelayQuota
-		if err := qrows.Scan(&root, &q.SelfLeft, &q.MemberPoolLeft); err != nil {
+		if err := qrows.Scan(&root, &q.SelfLeft, &q.MemberPoolLeft, &q.Rev); err != nil {
 			return nil, nil, fmt.Errorf("read relay quotas: %w", err)
 		}
 		byRoot[root] = q
@@ -176,11 +176,12 @@ func (s *Store) SetRelayQuota(sid string, self, pool *int, at int64, updatedBy s
 		row.MemberPoolLeft = *pool
 	}
 	row.UpdatedAt, row.UpdatedBy = at, updatedBy
-	if _, err = tx.Exec(`INSERT INTO relay_quotas (root_session_id, self_left, member_pool_left, updated_at, updated_by)
-		VALUES (?, ?, ?, ?, ?)
+	row.Rev++ // read under the write lock taken above: the chain's versions are strictly increasing
+	if _, err = tx.Exec(`INSERT INTO relay_quotas (root_session_id, self_left, member_pool_left, updated_at, updated_by, rev)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(root_session_id) DO UPDATE SET self_left = excluded.self_left, member_pool_left = excluded.member_pool_left,
-			updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
-		root, row.SelfLeft, row.MemberPoolLeft, row.UpdatedAt, row.UpdatedBy); err != nil {
+			updated_at = excluded.updated_at, updated_by = excluded.updated_by, rev = excluded.rev`,
+		root, row.SelfLeft, row.MemberPoolLeft, row.UpdatedAt, row.UpdatedBy, row.Rev); err != nil {
 		return "", quotaRow{}, fmt.Errorf("write relay quota of %s: %w", root, err)
 	}
 	if err = tx.Commit(); err != nil {

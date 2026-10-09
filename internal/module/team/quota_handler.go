@@ -140,8 +140,9 @@ func (m *Module) relayQuotaOf(sid string) team.RelayQuota {
 	return q
 }
 
-// fillQuotas fills v.Quotas: every live session of the host with its chain's numbers, leads flagged. Best-effort
-// (logged, left nil): the page above must stay valid.
+// fillQuotas fills v.Quotas: every live session of the host with its chain's numbers, leads flagged. Best-effort: ANY
+// failure (registry, store, a looping chain) is logged and leaves it nil — null on the wire, never a partial or
+// empty list that a client would take for the truth; the page above stays valid.
 func (m *Module) fillQuotas(v *team.UnattendedView) {
 	origins, err := m.origins.ListLiveOrigins()
 	if err != nil {
@@ -153,8 +154,9 @@ func (m *Module) fillQuotas(v *team.UnattendedView) {
 		sids[i] = o.SessionID
 	}
 	quotas, roots, err := m.store.RelayQuotasOf(sids)
-	if err != nil {
+	if err != nil { // any read failure, a looping chain included: null, never a partial list that reads as authoritative
 		m.logf("[team] unattended quotas: %v", err)
+		return
 	}
 	out := make([]team.SessionQuota, 0, len(origins))
 	for _, o := range origins {
