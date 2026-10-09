@@ -412,6 +412,9 @@ async function recheckMember($) {
   if (u.percent === undefined || u.percent < s.threshold) return
   const at = await $.clock.now().catch(() => Date.now())
   if (s.roleCheckedAt !== undefined && at - s.roleCheckedAt < ROLE_RECHECK_MS) return
+  // Both reads above are awaits: a /clear or a session start meanwhile may have sent its own hello (it owns
+  // helloSeq now) or answered the role. Look again, with nothing awaited between this and the send.
+  if (!s.helloOK || s.role !== 'member' || s.helloBusy) return
   s.roleCheckedAt = at
   helloLater($)
 }

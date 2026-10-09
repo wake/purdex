@@ -381,6 +381,19 @@ test('the re-check runs at most once a minute', async ($, on) => {
   expect(helloCount(f)).toBe(3)
 })
 
+// Mutation gate: drop the look-again after the awaits → a third hello goes out and the /clear's is superseded → red.
+test('a /clear while the threshold check reads the engine: the re-check sends no hello of its own', async ($, on) => {
+  let open!: () => void
+  const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 180000, window: 200000, percent: 90 }, usageGate: new Promise<void>((r) => { open = r }) })
+  await start($, f)
+  const t = turn($, 't1') // maybeBegin reads the engine and waits on the gate
+  await $.classic.SessionStart({ source: 'clear' }) // the new conversation's own hello is queued
+  open()
+  await t
+  await f.clock.settle()
+  expect(helloCount(f)).toBe(2) // the start's, and the /clear's: not a third from the re-check
+})
+
 test('a member whose hello still says member never begins', async ($, on) => {
   const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 180000, window: 200000, percent: 90 } })
   await start($, f)
