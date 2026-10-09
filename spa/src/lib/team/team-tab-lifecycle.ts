@@ -65,20 +65,13 @@ function pass(prev: Map<string, LedGroup>): { changed: boolean; groups: Map<stri
   const groups = ledGroups(state)
   const tabs = useTabStore.getState().tabs
 
-  // A close takes the tab out of its workspace first and out of the tab store a moment later: in between, the group is
-  // not drawn (its lead is in no workspace) but is not gone either. Keep it until the tab store lets go of the tab.
-  const { workspaces } = useWorkspaceStore.getState()
-  for (const [leadTab, led] of prev) {
-    if (!groups.has(leadTab) && Object.hasOwn(tabs, leadTab) && !workspaces.some((w) => w.tabs.includes(leadTab))) groups.set(leadTab, led)
-  }
-
   let changed = false
   for (const [leadTab, led] of prev) {
     if (Object.hasOwn(tabs, leadTab)) continue
     for (const id of led.memberTabIds) {
       if (!Object.hasOwn(useTabStore.getState().tabs, id) || useTabStore.getState().tabs[id].locked) continue
       closeTab(id, { skipHistory: true })
-      changed = true
+      if (!Object.hasOwn(useTabStore.getState().tabs, id)) changed = true // a close the person declined stays declined
     }
     useTeamUiStore.getState().setGhostWorkspace(led.teamKey, led.workspaceId)
     changed = true
@@ -107,6 +100,8 @@ export function startTeamTabLifecycle(): () => void {
   let prev = new Map<string, LedGroup>()
   let running = false
   let dirty = false
+  let scheduled = false
+  let stopped = false
 
   const run = () => {
     if (running) {
@@ -135,7 +130,15 @@ export function startTeamTabLifecycle(): () => void {
     ]
     if (inputs.length === last.length && inputs.every((v, i) => Object.is(v, last[i]))) return
     last = inputs
-    run()
+    // Not inside the notification: a close notifies the tab store BEFORE it has chosen the next active tab, and the group's
+    // cascade would remove the tab it is about to pick. A microtask runs once the action has finished, and folds a burst
+    // of notifications into one pass.
+    if (scheduled) return
+    scheduled = true
+    queueMicrotask(() => {
+      scheduled = false
+      if (!stopped) run()
+    })
   }
 
   const offs = [
@@ -143,5 +146,8 @@ export function startTeamTabLifecycle(): () => void {
     useSessionStore.subscribe(onChange), useTeamUiStore.subscribe(onChange), useHostStore.subscribe(onChange),
   ]
   onChange()
-  return () => { for (const off of offs) off() }
+  return () => {
+    stopped = true
+    for (const off of offs) off()
+  }
 }
