@@ -571,3 +571,33 @@ func TestTeamGet_CarriesTheLeadsRelayQuota(t *testing.T) {
 		t.Fatalf("GET /api/team = %d lead quota %+v %+v, want 3 / 2 at rev 1", code, tv.LeadRelayQuota, e)
 	}
 }
+
+// After the lead relayed (its session id moved), GET /api/team still shows the chain's numbers: the quota follows the
+// chain root, not the session id.
+func TestTeamGet_TheLeadsQuotaFollowsItsChainAcrossARelay(t *testing.T) {
+	f := newFixture(t)
+	f.approveLead(uid(1))
+	f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-1", SelfLeft: ip(4), Client: appClient2})
+	// the relay's cleared moved the team to sid-1b: lineage and the lead's session id change together
+	lineage(t, f.m.store, "sid-1b", "sid-1")
+	if _, err := f.m.store.db.Exec(`UPDATE teams SET lead_session_id = 'sid-1b' WHERE id = ?`, uid(1)); err != nil {
+		t.Fatal(err)
+	}
+	q, root, err := f.m.store.RelayQuotaOf("sid-1b")
+	if err != nil || root != "sid-1" || q.SelfLeft != 4 {
+		t.Fatalf("after the relay: %+v root %s %v, want the chain's 4", q, root, err)
+	}
+}
+
+// A quota that cannot be read is left out of GET /api/team, never a trusted 0 / 0. Mutation gate: set it anyway → red.
+func TestTeamGet_OmitsTheLeadsQuotaWhenItCannotBeRead(t *testing.T) {
+	f := newFixture(t)
+	f.approveLead(uid(1))
+	if _, err := f.m.store.db.Exec(`DROP TABLE relay_quotas`); err != nil {
+		t.Fatal(err)
+	}
+	code, body := f.do(http.MethodGet, "/api/team?origin_inbox=%2Ftmp%2F10.sock", nil)
+	if code != http.StatusOK || strings.Contains(string(body), "lead_relay_quota") {
+		t.Fatalf("GET /api/team = %d %s, want 200 without lead_relay_quota", code, body)
+	}
+}

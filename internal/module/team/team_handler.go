@@ -50,8 +50,11 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 		byOwner[tk.OwnerKey] = append(byOwner[tk.OwnerKey], tk)
 	}
 	v := team.TeamView{Team: t, Members: make([]team.Member, 0, len(rows))}
-	lq := m.relayQuotaOf(t.LeadSessionID)
-	v.LeadRelayQuota = &lq
+	if lq, _, err := m.store.RelayQuotaOf(t.LeadSessionID); err != nil {
+		m.logf("[team] relay quota of lead %s: %v", t.LeadSessionID, err) // omitted, not a trusted 0 / 0
+	} else {
+		v.LeadRelayQuota = &lq
+	}
 	for _, mr := range rows {
 		mv := m.memberView(mr)
 		if mr.SpawnOp != "" { // every row has a key: a spawned member's is its spawn op, an adopted one's the adoption's request id (the wire's SpawnOp is empty for it)
