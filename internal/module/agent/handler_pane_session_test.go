@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -117,5 +118,58 @@ func TestHandleEvent_AStuckTmuxDoesNotHoldTheRequest(t *testing.T) {
 		}
 	case <-time.After(paneNameTimeout + 3*time.Second):
 		t.Fatal("the request hung on tmux")
+	}
+}
+
+// listingCounter counts the pane listings it is asked for.
+type listingCounter struct {
+	*tmux.FakeExecutor
+	listings *atomic.Int32
+}
+
+func (c listingCounter) ListPanePlacements(ctx context.Context) (map[string]tmux.PanePlacement, error) {
+	c.listings.Add(1)
+	return c.FakeExecutor.ListPanePlacements(ctx)
+}
+
+// tmux is asked only for a request that already passes the cheap checks: no sender pid, no agent / event name, no start
+// time and not uncertain -> no `list-panes -a`.
+func TestHandleEvent_PaneNamingIsNotTriedForAnObviouslyBadRequest(t *testing.T) {
+	m, fake := paneOnlyModule(t)
+	var n atomic.Int32
+	m.tmux = listingCounter{fake, &n}
+	for name, body := range map[string]string{
+		"no sender pid":     `{"tmux_session":"","tmux_pane_id":"%9","sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"}`,
+		"no event name":     `{"tmux_session":"","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","raw_event":{},"agent_type":"cc"}`,
+		"no agent type":     `{"tmux_session":"","tmux_pane_id":"%9","sender_pid":99,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxStop","raw_event":{}}`,
+		"no start, certain": `{"tmux_session":"","tmux_pane_id":"%9","sender_pid":99,"purdex_name":"PdxStop","raw_event":{},"agent_type":"cc"}`,
+	} {
+		if w := postEvent(m, body); w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", name, w.Code)
+		}
+	}
+	if n.Load() != 0 {
+		t.Fatalf("tmux was listed %d times for requests that fail the cheap checks", n.Load())
+	}
+}
+
+// At most paneNameSlots listings at once: with all slots taken a further event is refused without asking tmux.
+func TestHandleEvent_PaneNamingIsCapped(t *testing.T) {
+	m, fake := paneOnlyModule(t)
+	var n atomic.Int32
+	m.tmux = listingCounter{fake, &n}
+	for i := 0; i < cap(paneNameSlots); i++ {
+		paneNameSlots <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < cap(paneNameSlots); i++ {
+			<-paneNameSlots
+		}
+	}()
+	if w := postEvent(m, `{"tmux_session":"","tmux_pane_id":"%9",`+paneOnlyTail+`}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	if n.Load() != 0 {
+		t.Fatalf("tmux was listed %d times with every slot taken", n.Load())
 	}
 }
