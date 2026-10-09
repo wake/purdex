@@ -10,6 +10,7 @@ import (
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
 )
 
 // The outbox pump (cross-host team spec §3.1 rule 6). One pump per side: L's commands (X3a), M's facts (X2c). It is
@@ -238,6 +239,16 @@ func (p *outboxPump) attempt(e outboxEntry) bool {
 		}
 	}
 	res := p.caller.Call(p.ctx, e.HostID, e.Path, e.Body)
+	if _, gated := p.store.(kindGate); gated && e.Kind != "" && res.Class == peersmod.ClassRefused && res.Code == team.ErrCommandUnsupportedKind {
+		// The host announced the kind (the capabilities were up to date as far as the cache knew) and refused it all the
+		// same: it was downgraded, or the cache is stale. Not a verdict on the fact — the receiver does not store such a
+		// refusal — so it is held, and the next attempt reads the capabilities again.
+		p.mu.Lock()
+		delete(p.caps, e.HostID)
+		p.mu.Unlock()
+		p.backoff(e, 0, "the host refused "+e.Kind+" as unsupported; held")
+		return false
+	}
 	switch res.Class {
 	case peersmod.ClassDone, peersmod.ClassRefused, peersmod.ClassWrongHost:
 		// A done answer must be THIS entry's: HostCaller proved the host, not the command. Another id is a broken peer, not an

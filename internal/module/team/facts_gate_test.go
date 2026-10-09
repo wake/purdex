@@ -90,6 +90,33 @@ func TestFactGate_UnreadableCapabilitiesHoldTheFact(t *testing.T) {
 	}
 }
 
+// The cached capabilities said yes but the host refuses the kind as unsupported (downgraded since): the fact is held, not
+// dropped, and the capabilities are read again.
+func TestFactGate_AnnouncedButRefusedAsUnsupportedIsHeldAndTheCacheDropped(t *testing.T) {
+	f, fc := factsFixture(t)
+	refused := true
+	fc.script = func(host string, body map[string]any) peersmod.CallResult {
+		if refused {
+			return peersmod.CallResult{Class: peersmod.ClassRefused, Status: 400, Code: team.ErrCommandUnsupportedKind}
+		}
+		return doneFor("host-L")(host, body)
+	}
+	f.queueEnded("mk-1", "sid-1")
+	f.m.factPump.drain("host-L")
+	if f.factState("fact-mk-1").State != factPending {
+		t.Fatalf("fact = %s, want pending (held), not dropped", f.factState("fact-mk-1").State)
+	}
+	refused = false
+	f.clock.Add(pumpBackoff(1).Milliseconds())
+	f.m.factPump.drain("host-L")
+	if f.factState("fact-mk-1").State != factDone {
+		t.Fatalf("fact = %s after the host took it", f.factState("fact-mk-1").State)
+	}
+	if fc.capsAsked() != 2 {
+		t.Fatalf("capabilities asked %d times, want a second read after the refusal", fc.capsAsked())
+	}
+}
+
 // The gate sits in front of the send, not in front of the clean-up: a host that is no longer paired, or whose 401 has
 // lasted ten minutes, still ends the relation when its capabilities cannot be read (codex R1).
 func TestFactGate_UnreadableCapabilitiesKeepTheUnpairingPaths(t *testing.T) {
