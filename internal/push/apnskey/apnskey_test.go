@@ -246,3 +246,154 @@ func TestLoad_ASpecialFileFailsFastInsteadOfBlocking(t *testing.T) {
 		})
 	}
 }
+
+// envWith builds a config.env whose APNS_KEY_FILE is value, written into dir.
+func envWith(t *testing.T, dir, value string) {
+	t.Helper()
+	write(t, dir, "config.env", []byte("APNS_KEY_ID=K\nAPNS_TEAM_ID=T\nAPNS_KEY_FILE="+value+"\n"))
+}
+
+// homeDir makes a fake HOME with a key directory <home>/.config/apns holding a key and returns both.
+func homeDir(t *testing.T) (home, dir string) {
+	t.Helper()
+	home = t.TempDir()
+	dir = filepath.Join(home, ".config", "apns")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "AuthKey.p8", pemOf(t, p256(t)))
+	t.Setenv("HOME", home)
+	return home, dir
+}
+
+func TestLoad_HomePrefixedKeyFileWorks(t *testing.T) {
+	for _, v := range []string{
+		"$HOME/.config/apns/AuthKey.p8",
+		"${HOME}/.config/apns/AuthKey.p8",
+		"~/.config/apns/AuthKey.p8",
+	} {
+		_, dir := homeDir(t)
+		envWith(t, dir, v)
+		if _, err := Load(dir); err != nil {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+}
+
+func TestLoad_HomePrefixedValueOutsideDirFails(t *testing.T) {
+	_, dir := homeDir(t)
+	envWith(t, dir, "$HOME/other/AuthKey.p8")
+	if _, err := Load(dir); err == nil {
+		t.Fatal("a $HOME path outside the directory must fail")
+	}
+}
+
+func TestLoad_AbsoluteKeyFilePlacement(t *testing.T) {
+	_, dir := homeDir(t)
+
+	envWith(t, dir, filepath.Join(dir, "AuthKey.p8"))
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("directly in dir must work: %v", err)
+	}
+
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, sub, "AuthKey.p8", pemOf(t, p256(t)))
+	envWith(t, dir, filepath.Join(sub, "AuthKey.p8"))
+	if _, err := Load(dir); err == nil {
+		t.Fatal("a subdirectory path must fail")
+	}
+
+	outside := t.TempDir()
+	write(t, outside, "AuthKey.p8", pemOf(t, p256(t)))
+	envWith(t, dir, filepath.Join(outside, "AuthKey.p8"))
+	if _, err := Load(dir); err == nil {
+		t.Fatal("a path outside the directory must fail")
+	}
+}
+
+func TestLoad_AbsoluteKeyFileThroughADirSymlink(t *testing.T) {
+	real := t.TempDir()
+	write(t, real, "AuthKey.p8", pemOf(t, p256(t)))
+	link := filepath.Join(t.TempDir(), "apns-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	// dir given as the symlink, value as the real path
+	envWith(t, real, filepath.Join(real, "AuthKey.p8"))
+	if _, err := Load(link); err != nil {
+		t.Fatalf("dir symlink, real value: %v", err)
+	}
+	// dir given as the real path, value through the symlink
+	envWith(t, real, filepath.Join(link, "AuthKey.p8"))
+	if _, err := Load(real); err != nil {
+		t.Fatalf("real dir, symlink value: %v", err)
+	}
+}
+
+func TestLoad_AbsoluteKeyFileThatIsASymlinkOutStillFails(t *testing.T) {
+	outside := t.TempDir()
+	write(t, outside, "stolen.p8", pemOf(t, p256(t)))
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(outside, "stolen.p8"), filepath.Join(dir, "link.p8")); err != nil {
+		t.Fatal(err)
+	}
+	envWith(t, dir, filepath.Join(dir, "link.p8"))
+	if _, err := Load(dir); err == nil {
+		t.Fatal("an absolute path naming a symlink that leaves the directory must fail")
+	}
+}
+
+func TestLoad_KeyFileErrorDoesNotEchoTheConfiguredPath(t *testing.T) {
+	_, dir := homeDir(t)
+	for _, v := range []string{"/nonexistent-zz/secret-name.p8", "$HOME/nonexistent-zz/secret-name.p8", "../nonexistent-zz/secret-name.p8"} {
+		envWith(t, dir, v)
+		_, err := Load(dir)
+		if err == nil {
+			t.Fatalf("%s: expected an error", v)
+		}
+		if strings.Contains(err.Error(), "nonexistent-zz") || strings.Contains(err.Error(), "secret-name") {
+			t.Fatalf("error echoes the configured path: %v", err)
+		}
+	}
+}
+
+// A relative (or empty) HOME must never expand a value: it would turn into a relative name and skip the directory check.
+func TestLoad_RelativeOrEmptyHomeNeverExpands(t *testing.T) {
+	dir := t.TempDir()
+	priv := filepath.Join(dir, "sub", "private")
+	if err := os.MkdirAll(priv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, priv, "AuthKey.p8", pemOf(t, p256(t)))
+	for _, home := range []string{"sub", ""} {
+		t.Setenv("HOME", home)
+		for _, prefix := range []string{"$HOME/", "${HOME}/", "~/"} {
+			envWith(t, dir, prefix+"private/AuthKey.p8")
+			_, err := Load(dir)
+			if err == nil {
+				t.Fatalf("HOME=%q %s: must fail", home, prefix)
+			}
+			if strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "AuthKey") {
+				t.Fatalf("error echoes the configured path: %v", err)
+			}
+		}
+	}
+}
+
+// On a case-insensitive filesystem a directory that differs from apns_dir only in case is the same directory.
+func TestLoad_DirectoryComparedByIdentityNotText(t *testing.T) {
+	_, dir := homeDir(t)
+	base := filepath.Base(dir) // "apns"
+	variant := filepath.Join(filepath.Dir(dir), strings.ToUpper(base))
+	if _, err := os.Stat(variant); err != nil {
+		t.Skip("filesystem is case-sensitive")
+	}
+	envWith(t, dir, filepath.Join(variant, "AuthKey.p8"))
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("case variant of the same directory must work: %v", err)
+	}
+}
