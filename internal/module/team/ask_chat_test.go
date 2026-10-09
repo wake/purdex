@@ -88,3 +88,33 @@ func TestDecide_HookAskDenyRaces(t *testing.T) {
 		t.Fatalf("deny terminal_only = %d %s", code, body)
 	}
 }
+
+// Wait: a denied hook_ask is answered_remote with its hook (the reply); the
+// other bodies are unchanged. Mutation gate: askWaitOf without the hook_ask
+// denied case ⇒ closed{denied} ⇒ red.
+func TestAskWait_ChatReplyIsAnsweredRemoteWithTheMessage(t *testing.T) {
+	f := newFixture(t)
+	msg := "先別選\n\t我想問：為什麼？"
+	id := f.askBegin("toolu_chat_w")
+	if code, body := f.do(http.MethodPost, "/api/team/approvals/"+id+"/decide", team.DecideRequest{Decision: "deny", Hook: &team.HookDecision{Message: msg}, Client: appClient()}); code != 200 {
+		t.Fatalf("deny = %d %s", code, body)
+	}
+	code, body := f.do(http.MethodGet, "/api/ask/wait/"+id+"?wait=25", nil)
+	w := decodeWait(t, body)
+	if code != 200 || w.State != team.AskAnsweredRemote || w.Hook == nil || w.Hook.Message != msg || w.Hook.Answers != nil || w.Reason != "" {
+		t.Fatalf("wait = %d %s", code, body)
+	}
+	// Unchanged: an approved hook_ask, and a dismissed one.
+	ok := f.askBegin("toolu_chat_w2")
+	f.do(http.MethodPost, "/api/team/approvals/"+ok+"/decide", team.DecideRequest{Decision: "approve", Hook: &team.HookDecision{Answers: map[string]string{"q": "a"}}, Client: appClient()})
+	_, body = f.do(http.MethodGet, "/api/ask/wait/"+ok, nil)
+	if w := decodeWait(t, body); w.State != team.AskAnsweredRemote || w.Hook == nil || w.Hook.Answers["q"] != "a" {
+		t.Fatalf("approved wait = %s", body)
+	}
+	dis := f.askBegin("toolu_chat_w3")
+	f.do(http.MethodPost, "/api/ask/report/"+dis, team.AskReportRequest{State: team.StateDismissed})
+	_, body = f.do(http.MethodGet, "/api/ask/wait/"+dis, nil)
+	if w := decodeWait(t, body); w.State != team.AskClosed || w.Reason != "dismissed" {
+		t.Fatalf("dismissed wait = %s", body)
+	}
+}

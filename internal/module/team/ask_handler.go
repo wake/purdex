@@ -263,14 +263,15 @@ func (m *Module) pollRow(w http.ResponseWriter, r *http.Request, id string) (tea
 
 // askWaitOf maps a hook row to the wait body (spec §6.6 step 2). A remote
 // answer is answered_remote with its hook: approved for either kind, and
-// denied for a hook_permission (hook.behavior "deny"; a hook_ask cannot be
-// denied — decideHook refuses it).
+// denied for both — a hook_permission (hook.behavior "deny") and a hook_ask
+// (hook.message, the person's reply instead of answers; decideHook only
+// closes a hook_ask denied with one).
 func askWaitOf(a team.Approval) team.AskWaitResponse {
 	switch {
 	case a.State == team.StateOpen:
 		return team.AskWaitResponse{State: team.AskStillOpen}
 	case a.State == team.StateApproved,
-		a.State == team.StateDenied && a.Kind == team.KindHookPermission:
+		a.State == team.StateDenied && (a.Kind == team.KindHookPermission || a.Kind == team.KindHookAsk):
 		return team.AskWaitResponse{State: team.AskAnsweredRemote, Hook: a.Hook}
 	default:
 		return team.AskWaitResponse{State: team.AskClosed, Reason: string(a.State)}
