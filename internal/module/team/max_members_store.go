@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // MaxMembersOutcome is what SetMaxMembers did.
@@ -55,14 +56,21 @@ func (s *Store) SetMaxMembers(teamID string, max int) (MaxMembersResult, error) 
 	return res, nil
 }
 
-// seatsTakenSQL is THE seat count, shared by SetMaxMembers, the spawn cap check, the adopt seat check and the roster's
-// in_use. ?1 is the team, ?2 a spawn op id to leave out (the op asking; "" for none). Each active member counts once;
-// a running spawn op counts only while no active member row carries its spawn_op, because spawnFinish inserts the
-// member before it moves the op to done, and in that window one seat is both.
-const seatsTakenSQL = `SELECT
-	(SELECT COUNT(*) FROM team_members WHERE team_id = ?1 AND state = 'active') +
-	(SELECT COUNT(*) FROM spawn_ops o WHERE o.team_id = ?1 AND o.state = 'running' AND o.id <> ?2
+// seatsExpr is THE seat rule, with TEAM and EXCEPT standing for the team id expression and the spawn op id to leave
+// out. seatsTakenSQL (one team) and seatsAllLiveSQL (every live team) are both made from it, so they cannot drift.
+// Each active member counts once; a running spawn op counts only while no active member row carries its spawn_op,
+// because spawnFinish inserts the member before it moves the op to done, and in that window one seat is both.
+const seatsExpr = `(SELECT COUNT(*) FROM team_members WHERE team_id = TEAM AND state = 'active') +
+	(SELECT COUNT(*) FROM spawn_ops o WHERE o.team_id = TEAM AND o.state = 'running' AND o.id <> EXCEPT
 		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.spawn_op = o.id AND m.state = 'active'))`
+
+// seatsTakenSQL is the seat count shared by SetMaxMembers, the spawn cap check, the adopt seat check and the roster's
+// in_use. ?1 is the team, ?2 a spawn op id to leave out (the op asking; "" for none).
+var seatsTakenSQL = `SELECT ` + strings.NewReplacer("TEAM", "?1", "EXCEPT", "?2").Replace(seatsExpr)
+
+// seatsAllLiveSQL is the same count for every live team in one query: rows of (team id, seats taken).
+var seatsAllLiveSQL = `SELECT t.id, ` + strings.NewReplacer("TEAM", "t.id", "EXCEPT", "''").Replace(seatsExpr) +
+	` FROM teams t WHERE t.ended_at = 0`
 
 // seatsTaken is seatsTakenSQL's count of team teamID, leaving out spawn op exceptOp.
 func seatsTaken(q dbtx, teamID, exceptOp string) (int, error) {
@@ -73,17 +81,30 @@ func seatsTaken(q dbtx, teamID, exceptOp string) (int, error) {
 	return n, nil
 }
 
-// InUseOfTeams is the in_use count (seatsTakenSQL) of each team id; a team with none is absent.
+// InUseOfTeams is the in_use count (seatsExpr) of each live team in ids, in one query; a team with none is absent.
 func (s *Store) InUseOfTeams(ids []string) (map[string]int, error) {
-	out := map[string]int{}
+	want := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		n, err := seatsTaken(s.db, id, "")
-		if err != nil {
-			return nil, err
+		want[id] = true
+	}
+	rows, err := s.db.Query(seatsAllLiveSQL)
+	if err != nil {
+		return nil, fmt.Errorf("seats taken of live teams: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, fmt.Errorf("seats taken of live teams: %w", err)
 		}
-		if n > 0 {
+		if n > 0 && want[id] {
 			out[id] = n
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("seats taken of live teams: %w", err)
 	}
 	return out, nil
 }

@@ -52,3 +52,35 @@ func TestSeats_RosterInUseCountsOnceInTheRegistrationWindow(t *testing.T) {
 	}
 	_ = opID
 }
+
+// Mutation gate: the batch query as a plain sum (no NOT EXISTS) -> the window team counts 2 -> red.
+func TestSeats_InUseOfTeamsEqualsThePerTeamCountForEveryTeam(t *testing.T) {
+	s := openTestStore(t)
+	// 1: member mid-registration (op running + its member row).
+	seedTeam(t, s, uid(1), "sid-1", 1000)
+	op := newSpawn(t, uid(1), 2000)
+	mustCreateSpawn(t, s, op)
+	seedMember(t, s, op.ID, uid(1), "sid-m1", 3000)
+	// 2: a running spawn only.
+	seedTeam(t, s, uid(2), "sid-2", 1000)
+	mustCreateSpawn(t, s, newSpawn(t, uid(2), 2000))
+	// 3: empty.
+	seedTeam(t, s, uid(3), "sid-3", 1000)
+	ids := []string{uid(1), uid(2), uid(3)}
+	got, err := s.InUseOfTeams(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		want, err := seatsTaken(s.db, id, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[id] != want {
+			t.Fatalf("team %s: InUseOfTeams %d, per-team %d (all %v)", id, got[id], want, got)
+		}
+	}
+	if got[uid(1)] != 1 || got[uid(2)] != 1 || len(got) != 2 {
+		t.Fatalf("got %v, want teams 1 and 2 at 1 seat, 3 absent", got)
+	}
+}
