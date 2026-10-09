@@ -39,7 +39,8 @@ const (
 	ErrMemberCannotLead = "member_cannot_lead" // 409, enforced from P4
 	ErrAlreadyDecided   = "already_decided"    // 409, carries the closed Approval
 	ErrNotFound         = "not_found"
-	ErrNotReady         = "not_ready" // 503 while stopping
+	ErrNotReady         = "not_ready"        // 503 while stopping
+	ErrMaxBelowInUse    = "max_below_in_use" // 409 of PUT /api/team/max-members, carries in_use
 )
 
 // Limits (spec §6.1, §6.2, §9.1)

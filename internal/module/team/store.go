@@ -41,6 +41,9 @@ type Store struct {
 	// (since > 0); an error fails the list there (tests). nil in
 	// production.
 	beforeListAutoApproved func() error
+	// afterMaxMembersCount, when set, runs in SetMaxMembers right after the in_use count and before the write (tests: prove
+	// nothing can change the count in between). nil in production.
+	afterMaxMembersCount func()
 	// afterTaskSeqRead, when set, runs in CreateTask's transaction right
 	// after it read MAX(seq) and before it inserts (tests: a barrier that
 	// proves two creates never share a seq). nil in production.
