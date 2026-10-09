@@ -516,6 +516,11 @@ async function relayNow($) {
     giveBack()
     return { text: RELAY_NO_USAGE }
   }
+  if (s.gen !== gen || s.state !== 'beginning' || s.begun !== begun) {
+    // a /clear, a compaction or a session start took the attempt while the engine was read
+    begun.resolve(undefined)
+    return { text: RELAY_NOT_STARTED }
+  }
   const out = await begin($, sid, gen, u, begun.resolve).finally(() => begun.resolve(undefined))
   switch (out.kind) {
     case 'opened': return { text: '已送出接力申請（context ' + u.percent + '%），請在 Purdex App 核准' }

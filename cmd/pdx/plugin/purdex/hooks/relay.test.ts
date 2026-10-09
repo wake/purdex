@@ -2378,3 +2378,17 @@ test('a /relay now whose usage read fails gives the state back: the next one ask
   f.usage = NOW_BELOW
   expect((await relayCmd($, 'now')).text).toBe('已送出接力申請（context 5%），請在 Purdex App 核准')
 })
+
+// A /clear while the first /relay now is still reading the engine hands the state back: the attempt
+// that is no longer current must not send its begin. Mutation gate: drop the recheck before begin → two begins → red.
+test('a /clear while /relay now reads the engine: the old attempt sends nothing, the new one opens the request', async ($, on) => {
+  let open!: () => void
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'none', { usageGate: new Promise<void>((r) => { open = r }) })
+  await start($, f)
+  const a = relayCmd($, 'now')
+  await $.classic.SessionStart({ source: 'clear' }) // the user's own: toIdle, a new generation
+  const b = relayCmd($, 'now')
+  open()
+  expect([(await a).text, (await b).text]).toEqual(['接力沒有開始（這個 session 剛換過或被清除）', '已送出接力申請（context 5%），請在 Purdex App 核准'])
+  expect(f.argvs.filter((x) => x[1] === 'relay' && x[2] === 'begin').length).toBe(1)
+})
