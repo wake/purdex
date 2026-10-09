@@ -1,6 +1,8 @@
 # Answering an AskUserQuestion with a reply ("chat about this") — spec + plan
 
-Date: 2026-10-09 · Owner: interface line lead (`mlab/purdex-88-b8`) · Status: draft for plan review
+Date: 2026-10-09 · Owner: interface line lead (`mlab/purdex-88-b8`) · Status: final for implementation (plan review
+`task-mv0ts1rz-irbnh2`: no critical; the two important points — who sees the reply, `\n` / `\t` pinned by tests — are
+folded into §2.1 and tasks 1, 2, 4)
 
 The phone's ask card (purdex-ios, Deck) answers a remote AskUserQuestion (`hook_ask`). The user asked for the two things
 the terminal dialog has and the card lacks: a free-text answer per question ("Other") and, for the whole ask, replying
@@ -33,8 +35,13 @@ in words instead of picking answers ("Chat about this"). The first needs nothing
 
 - `decision: "approve"` + `hook.answers` — unchanged.
 - **New:** `decision: "deny"` + `hook.message` — the person's reply. The message is trimmed; 1–4000 runes after
-  trimming, printable (newlines and tabs allowed); missing, empty or longer → 400 `bad_request`. `hook.answers` with a
-  deny → 400 (one or the other, never both). The row closes `denied` with `Hook{Message}` (nothing else kept).
+  trimming; printable, with exactly two control characters allowed, `\n` and `\t` (kept verbatim); `\r`, NUL and every
+  other control character → 400 `bad_request`, as are missing, empty or longer. `hook.answers` with a deny → 400 (one
+  or the other, never both). The row closes `denied` with `Hook{Message}` (nothing else kept).
+- **Who sees the reply.** Like `hook.answers` and the question text today, the message rides on the row: it is in the
+  closed approval event every authenticated host-event subscriber receives (the Mac Apps, paired phones) and in the
+  team's `ApprovalEvents` feed. That boundary is accepted — the reply is part of the conversation those clients already
+  show. Push never carries it (the push module reads the closed event only to end the open-ask interval).
 - A `terminal_only` row still answers 409 `terminal_only`; the CAS, `already_decided`, `answered_local` /
   `terminal_override` and the push dismissal are unchanged: whoever closes first wins, the terminal's answer stands
   over a remote one exactly as today.
@@ -78,18 +85,23 @@ Rules: TDD (failing test first), one commit per task, mutation check before rele
 Review: codex R1 + R2 (attack → critic).
 
 1. **Decide.** `decideHook`, `hook_ask` branch: accept `StateDenied` with a valid message (trim; 1–4000 runes;
-   printable except `\n` `\t`), reject answers alongside it; close with `Hook{Message}`. Tests: deny + message →
-   denied, row's hook carries exactly the trimmed message; deny with missing / empty / whitespace-only / 4001-rune /
-   control-character message → 400; deny with answers → 400; approve without answers → 400 (unchanged); approve with
-   answers → approved (unchanged); terminal_only → 409; a second decide → 409 `already_decided`; an `answered_local`
-   report after a remote deny → `terminal_override` as for an approve.
+   printable plus `\n` `\t` only — not `unicode.IsPrint` alone, which refuses both), reject answers alongside it; close
+   with `Hook{Message}`. Tests: deny + message → denied, row's hook carries exactly the trimmed message; **a message
+   with `\n` and `\t` inside → accepted and kept byte for byte**; exactly 4000 runes (multi-byte) → accepted; deny with
+   missing / empty / whitespace-only / 4001-rune message, or one containing `\r` or NUL → 400; deny with answers → 400;
+   approve without answers → 400 (unchanged); approve with answers → approved (unchanged); terminal_only → 409; a
+   second decide → 409 `already_decided`; an `answered_local` report after a remote deny → `terminal_override` as for
+   an approve; the closed approval event carries the message (the accepted boundary), and the push module's handling
+   of that event sends nothing new.
 2. **Wait.** `askWaitOf`: denied hook_ask → `answered_remote` with its hook. Tests: the body for denied hook_ask; the
    bodies for approved hook_ask, denied / approved hook_permission and the other closed states unchanged; `pdx ask
-   wait` prints the message (CLI test through a fake daemon).
+   wait` prints the message (CLI test through a fake daemon) — a multi-line message with a tab survives the round trip
+   exactly.
 3. **Capability.** `team.ask_chat.v1` in `capabilities`. Test: listed by `GET /api/info`.
 4. **Mod.** `ask.js` wait loop per §2.3; `CHAT_PREFIX` a module constant. Vitest (`ask.test.ts` rig): answered_remote
    with a message → the hook returns `{ deny }` equal to prefix + blank line + message and the native dialog's `next`
-   is abandoned; with fitting answers → `{ result }` (unchanged); with answers that do not fit and no message →
+   is abandoned; a multi-line message with a tab, parsed from the CLI's JSON output → `{ deny }` with it verbatim;
+   with fitting answers → `{ result }` (unchanged); with answers that do not fit and no message →
    remote-error, native dialog alone (unchanged); with both answers and a message → the answers win (defensive; the
    daemon never sends both); with an empty message → remote-error.
 5. **Comments.** The doc comments that say a hook_ask cannot be denied (`askWaitOf`, `decideHook`, `HookDecision` in
