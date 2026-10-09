@@ -9,7 +9,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useTeamDisplay, type TeamTabMark } from './team/team-display'
 import { groupSegments } from './team/groupSegments'
-import { TeamGroupLabel, TeamTabGroupFrame } from './team/TeamTabGroup'
+import { TeamTabGroupFrame } from './team/TeamTabGroup'
 
 interface Props {
   tabs: Tab[]
@@ -188,7 +188,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
               <SortableContext items={shownIds} strategy={horizontalListSortingStrategy}>
                 {segments.map((seg, si) => {
                   const prev = segments[si - 1]
-                  // Separators before the label / after the group stay in the row but are never drawn next to a group.
+                  // Separators before the group / after the group stay in the row but are never drawn next to a group.
                   const sep = si > 0 && <TabSeparator show={seg.kind === 'tab' && prev.kind === 'tab' && shouldShowSeparator(prev.tab, seg.tab)} />
                   if (seg.kind === 'tab') {
                     return <Fragment key={seg.tab.id}>{sep}{renderTab(seg.tab)}</Fragment>
@@ -197,7 +197,6 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                     <Fragment key={`g-${seg.mark.teamKey}`}>
                       {sep}
                       <TeamTabGroupFrame mark={seg.mark}>
-                        <TeamGroupLabel mark={seg.mark} hidden={seg.hidden} onToggle={team!.onToggleCollapse} />
                         {seg.tabs.map((tab) => renderTab(tab, team?.tabMark(tab.id) ?? undefined))}
                       </TeamTabGroupFrame>
                     </Fragment>

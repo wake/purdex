@@ -14,7 +14,7 @@ const marks: Record<string, TeamTabMark> = {
 const tabMark = (id: string) => marks[id] ?? null
 const t = (...ids: string[]) => ids.map((id) => ({ id }))
 const shape = (segs: ReturnType<typeof groupSegments<{ id: string }>>) =>
-  segs.map((s) => (s.kind === 'tab' ? s.tab.id : `[${s.tabs.map((x) => x.id).join(',')}${s.hidden ? `+${s.hidden}` : ''}]`))
+  segs.map((s) => (s.kind === 'tab' ? s.tab.id : `[${s.tabs.map((x) => x.id).join(',')}]`))
 
 describe('groupSegments', () => {
   it('a team run is the lead plus the members after it; other tabs are single segments', () => {
@@ -25,8 +25,8 @@ describe('groupSegments', () => {
     expect(shape(groupSegments(t('lead', 'a', 'lead2', 'c'), tabMark, {}))).toEqual(['[lead,a]', '[lead2,c]'])
   })
 
-  it('collapsed: the lead only, the hidden members counted', () => {
-    expect(shape(groupSegments(t('lead', 'a', 'b', 'y'), tabMark, { T: true }))).toEqual(['[lead+2]', 'y'])
+  it('collapsed: the lead only', () => {
+    expect(shape(groupSegments(t('lead', 'a', 'b', 'y'), tabMark, { T: true }))).toEqual(['[lead]', 'y'])
   })
 
   it('a member with no lead right before it stays an ordinary tab', () => {

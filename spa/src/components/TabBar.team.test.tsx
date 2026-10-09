@@ -77,7 +77,7 @@ function bar(tabs: Tab[], over: { activeTabId?: string | null } = {}) {
 }
 
 const idsInOrder = (root: HTMLElement) =>
-  Array.from(root.querySelectorAll('[data-testid="team-group-label"],[data-tab-id]')).map((el) => (el.getAttribute('data-tab-id') ?? 'LABEL'))
+  Array.from(root.querySelectorAll('[data-tab-id]')).map((el) => el.getAttribute('data-tab-id')!)
 const drag = (active: string, over: string) => act(() => dnd.onDragEnd!({ active: { id: active }, over: { id: over } } as unknown as DragEndEvent))
 
 beforeEach(() => {
@@ -91,55 +91,50 @@ beforeEach(() => {
 })
 
 describe('TabBar — team group (TI-2)', () => {
-  it('group renders label -> lead -> members in team order', () => {
+  it('group renders lead -> members in team order, no label', () => {
     const tabs = baseTabs()
     seed([roster()], tabs)
     const { container } = bar(tabs)
-    expect(idsInOrder(container)).toEqual(['plain', 'LABEL', 'lead', 'ma', 'mb', 'p2'])
+    expect(idsInOrder(container)).toEqual(['plain', 'lead', 'ma', 'mb', 'p2'])
     act(() => useTeamUiStore.getState().setMemberOrder(KEY, ['B', 'A', 'C']))
     // the tab list is re-ordered by the lifecycle subscriber; here we feed the bar the order it would hold
     cleanup()
     const reordered = [tabs[0], tabs[1], tabs[3], tabs[2], tabs[4]]
     const second = bar(reordered)
-    expect(idsInOrder(second.container)).toEqual(['plain', 'LABEL', 'lead', 'mb', 'ma', 'p2'])
+    expect(idsInOrder(second.container)).toEqual(['plain', 'lead', 'mb', 'ma', 'p2'])
   })
 
-  it('label text and tooltip from groupLabel (empty label -> cut lead title + tooltip)', () => {
+  it('no label (round 2): the group starts with the lead tab and nothing in the frame is a button of its own', () => {
     const tabs = baseTabs()
     seed([roster({ team_name: 'Release train', team_label: '發版' })], tabs)
-    const first = bar(tabs)
-    let label = screen.getByTestId('team-group-label')
-    expect(label).toHaveTextContent('發版')
-    expect(label).toHaveAttribute('title', 'Release train (發版)')
-    first.unmount()
-    seed([roster({ lead: sess('L', 'lead-tm', { title: 'A very long lead title' }) })], tabs)
-    bar(tabs)
-    label = screen.getByTestId('team-group-label')
-    expect(label.textContent).toBe('A very lo…')
-    expect(label.getAttribute('title')).toContain('A very long lead title')
+    const { container } = bar(tabs)
+    expect(screen.queryByTestId('team-group-label')).toBeNull()
+    expect(screen.queryByTestId('team-group-hidden')).toBeNull()
+    const frame = container.querySelector('[data-testid="team-tab-group"]') as HTMLElement
+    expect(frame.firstElementChild).toHaveAttribute('data-tab-id', 'lead')
+    expect(frame.textContent).not.toContain('發版')
   })
 
-  it('collapsed shows label +N and the lead only', () => {
+  it('collapsed (from the shared state): the lead only, no label, no +N, no collapse control on the bar', () => {
     const tabs = baseTabs()
     seed([roster()], tabs)
     act(() => useTeamUiStore.getState().setCollapsed(KEY, true))
     const { container } = bar(tabs)
-    expect(idsInOrder(container)).toEqual(['plain', 'LABEL', 'lead', 'p2'])
-    expect(screen.getByTestId('team-group-label')).toHaveTextContent('+2')
+    expect(idsInOrder(container)).toEqual(['plain', 'lead', 'p2'])
+    expect(screen.queryByTestId('team-group-label')).toBeNull()
+    expect(container.querySelector('[data-testid="team-tab-group"] [aria-expanded]')).toBeNull()
+    expect(container.querySelector('[data-testid="team-tab-group"]')!.textContent).not.toContain('+2')
   })
 
-  it('label click collapses / expands', () => {
+  it('the bar follows the shared collapse: collapse from the sidebar side hides members, expand shows them again', () => {
     const tabs = baseTabs()
     seed([roster()], tabs)
-    bar(tabs)
-    const label = screen.getByRole('button', { name: /title L/ })
-    expect(label).toHaveAttribute('aria-expanded', 'true')
-    fireEvent.click(label)
-    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true)
-    expect(screen.getByTestId('team-group-label')).toHaveAttribute('aria-expanded', 'false')
-    fireEvent.click(screen.getByTestId('team-group-label'))
-    expect(useTeamUiStore.getState().collapsed[KEY]).toBeFalsy()
-    expect(screen.getByTestId('team-group-label')).toHaveAttribute('aria-expanded', 'true')
+    const { container } = bar(tabs)
+    expect(idsInOrder(container)).toEqual(['plain', 'lead', 'ma', 'mb', 'p2'])
+    act(() => useTeamUiStore.getState().setCollapsed(KEY, true))
+    expect(idsInOrder(container)).toEqual(['plain', 'lead', 'p2'])
+    act(() => useTeamUiStore.getState().setCollapsed(KEY, false))
+    expect(idsInOrder(container)).toEqual(['plain', 'lead', 'ma', 'mb', 'p2'])
   })
 
   it('every group tab has the shadow and wash; a non-group tab has neither', () => {
@@ -231,7 +226,7 @@ describe('TabBar — team group (TI-2)', () => {
     expect(idsInOrder(first.container)).toEqual(['ma', 'plain'])
     first.unmount()
     const second = bar([tabs[0], tabs[2]]) // the lead's own workspace: the member behind it is hidden
-    expect(idsInOrder(second.container)).toEqual(['LABEL', 'lead'])
+    expect(idsInOrder(second.container)).toEqual(['lead'])
   })
 
   describe('a LOCAL member that is joining', () => {
