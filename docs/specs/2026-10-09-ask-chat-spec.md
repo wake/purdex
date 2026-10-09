@@ -36,8 +36,10 @@ in words instead of picking answers ("Chat about this"). The first needs nothing
 - `decision: "approve"` + `hook.answers` — unchanged.
 - **New:** `decision: "deny"` + `hook.message` — the person's reply. The message is trimmed; 1–4000 runes after
   trimming; no control characters but `\n` and `\t` (kept verbatim), no bidi controls, U+2028/2029 or invisible format
-  characters (Cf: U+200B, U+FEFF…) except ZWNJ/ZWJ and emoji tag characters; `\r`, NUL and the rest → 400 `bad_request`, as are missing, empty or longer. `hook.answers` with a deny → 400 (one
-  or the other, never both). The row closes `denied` with `Hook{Message}` (nothing else kept).
+  characters (Cf: U+200B, U+FEFF…) except ZWNJ/ZWJ and emoji tag characters; `\r`, NUL and the rest → 400
+  `bad_request`, as are missing, empty or longer. `hook.answers` with a deny — an object, even `{}` — → 400 (one or the
+  other, never both); `"answers": null` reads as absent, as JSON `null` does everywhere in this API. The row closes
+  `denied` with `Hook{Message}` (nothing else kept).
 - **Who sees the reply.** Like `hook.answers` and the question text today, the message rides on the row: it is in the
   closed approval event every authenticated host-event subscriber receives (the Mac Apps, paired phones) and in the
   team's `ApprovalEvents` feed. That boundary is accepted — the reply is part of the conversation those clients already
