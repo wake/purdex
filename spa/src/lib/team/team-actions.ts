@@ -50,9 +50,8 @@ function notListed(): void {
   useUndoToast.getState().show(useI18nStore.getState().t('team.seat_not_listed'))
 }
 
-function noHost(seat: Seat): void {
-  const { t } = useI18nStore.getState()
-  useUndoToast.getState().show(t('team.seat_no_host', { alias: seat.hostAlias || t('team.seat_host_unknown') }))
+function noHost(): void {
+  useUndoToast.getState().show(useI18nStore.getState().t('team.seat_not_in_app'))
 }
 
 /** The seat's session as ITS host lists it (by tmux name), or null while the list does not hold it. */
@@ -76,7 +75,7 @@ export function openTeamSeat(teamKey: string, sessionId: string): OpenSeatResult
 
   // A remote member whose host this Mac lacks: nothing to open, and nothing else touched (collapse, ghost).
   if (seat.hostId === null) {
-    noHost(seat)
+    noHost()
     return { outcome: 'no-host', tabId: null }
   }
 

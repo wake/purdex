@@ -2,7 +2,7 @@
 // actions (team-actions.ts), keyboard shortcuts, the pin guard. A render reads `TeamDisplayProvider`'s memoized value; an
 // action runs once per click and may afford one pass over the seats and tabs.
 import { useWorkspaceStore } from '../../features/workspace/store'
-import { useHostStore, selectDaemonIdMismatch } from '../../stores/useHostStore'
+import { useHostStore, selectDaemonIdVerified } from '../../stores/useHostStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
@@ -10,12 +10,13 @@ import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { buildTeamIndex, type TeamIndex } from './team-index'
 import { daemonIdMap, selectTeamViews, type TeamView } from './team-views'
 
-/** Wire daemon id → SPA host id for team seats, from host config AND runtime: a host where the runtime saw ANOTHER daemon
- *  answer (`selectDaemonIdMismatch`) is left out, so a seat of daemon B never lands on a same-named session of daemon C.
- *  A host that has merely not connected yet keeps its stored id. The one function both the render path (useTeamViews) and
+/** Wire daemon id → SPA host id for team seats, from host config AND runtime: only a host whose stored `daemonId` THIS
+ *  session verified at its current endpoint (`selectDaemonIdVerified`) maps, so a seat of daemon B never lands on a
+ *  same-named session of daemon C, and a host merely configured (or one that has not answered yet) is "not in this App".
+ *  The roster's `host_alias` is never consulted: it names, it does not identify. The one function both the render path (useTeamViews) and
  *  the action path (currentTeamState) call. */
 export function teamHostMap(state: Pick<ReturnType<typeof useHostStore.getState>, 'hosts' | 'runtime'>): Record<string, string> {
-  return daemonIdMap(state.hosts, (id) => selectDaemonIdMismatch(state, id) !== undefined)
+  return daemonIdMap(state.hosts, (id) => !selectDaemonIdVerified(state, id))
 }
 
 export interface TeamState {

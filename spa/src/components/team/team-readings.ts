@@ -15,6 +15,8 @@ export interface SeatReading {
   effort?: string
   /** Context used, 0-100 whole percent; undefined when unknown. */
   ctx?: number
+  /** The seat's host did not answer (`context_unavailable`): model and context are blank for that reason. */
+  unavailable?: boolean
 }
 
 /** A team key is `<hostId>\0<teamId>` (team-views `teamKeyOf`). */
@@ -29,9 +31,11 @@ export function useRosterSession(teamKey: string, sessionId: string): RosterSess
 
 export function readingOf(s: RosterSession | undefined): SeatReading {
   if (!s) return {}
+  const effort = s.effort || s.context?.effort || undefined
+  // Its host did not answer: whatever model / context the row still carries is not a reading, so none is drawn.
+  if (s.context_unavailable === true) return { unavailable: true, ...(effort ? { effort } : {}) }
   const raw = s.model || s.context?.model_id || undefined
   const model = familyOf(raw)
-  const effort = s.effort || s.context?.effort || undefined
   const used = s.context?.used_percentage
   return {
     ...(model ? { model } : raw ? { modelRaw: raw } : {}),

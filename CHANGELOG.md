@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.0-alpha.668] - 2026-10-10
+
+> 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。跨主機的新功能要**兩台都部署**才會生效。部署時 team.db 自動加 `remote_spawns` 表與欄位。
+
+### Fixed：被收進 team 的遠端 member 點了對不到分頁、TITLE 是「-」 — X5-fix（#2335，A 線）
+
+- 遠端 member 的 tmux 名稱寫入時拆成 session 名與 pane；名單與 `GET /api/team` 讀取時一律只取 session 名，已部署的那一列不用遷移就恢復正常。App 依 (主機, tmux 名) 能對到那台的 session 與分頁。
+- 遠端 member 的 TITLE 取自那台主機回報的資料（讀不到時沿用上一次的）。
+
+### Added：從 lead 那台在別台開 member — X4b（#2323、#2328，A 線）
+
+- `pdx spawn --host <別名> --cwd <那台的絕對路徑>`：先確認那台接受開 member 且允許我們，再在同一筆交易裡建立遠端開人紀錄、佔座位、排出指令；CLI 等到結果（開好回 member 位址與第一個任務；失敗依原因 exit 13／14／1）。
+- lead 那台套用「已開好」「開失敗」回報：開好時建立 member、第一個任務建在 lead 這台；失敗時釋放座位。這版開始宣告接受這兩種回報。
+
+### Added：遠端 member 的回報與任務 — X6（#2329、#2332，A 線）
+
+- 被收進別台 team 的 member 照常用 `pdx report`／`pdx task`：它那台把呼叫轉給 lead 那台（只帶 member 編號，不帶呼叫者資訊），lead 那台只放行三件事——發回報、列出自己的任務、改自己任務的狀態，身分只由「哪台主機＋member 編號」決定。lead 那台連不上時回 503 `lead_unreachable`。
+
+### Changed：回報先確認對方接受才送 — X4a-3（#2318，A 線）
+
+- 被收進的那台送回報前，先看 lead 那台宣告接受哪些種類；還不接受的先扣著（不丟、不算重試次數），對方升級後下一輪就送。
+
+### Changed：工作簿 daemon 第二、三段 — WB-1b′-b／c（#2320、#2321、#2325、#2331，介面線）
+
+- 回合結束的訂閱、補抓、每個對話的佇列與結果處理；mod socket 的工作派發與回報路由（`/mod/v1/workbook/next`、`/result`），事件批次可宣告能力。mod 端執行器還沒上，所以每一輪目前都記成「沒有 mod（no_mod）」，不影響現有行為。
+
+### Changed：team 面板顯示遠端 member — X3c-App（#2315）、X5-App-a（#2334）、#2330（介面線）
+
+- 收進別台 session 的流程與等待畫面；遠端 member 顯示主機標籤與狀態文字，依主機對到那台的分頁；面板標題列整列可點、不會選到文字。
+
 ## [1.0.0-alpha.667] - 2026-10-10
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。部署時 team.db（spawn_ops 新欄、team_fact_log 新表）與 workbook.db（結構第 2 版、待辦表）自動遷移。跨主機的新指令與回報要**兩台都部署**才會生效。

@@ -30,6 +30,9 @@ export interface Seat {
   hostId: string | null
   /** The alias of the host a remote member lives on (the roster's `host_alias`); '' for a local seat. */
   hostAlias: string
+  /** Whether the seat lives on another host than the lead's (a `host_id` that is not the team's, or one that cannot be trusted).
+   *  With `hostId === null` it says "a host this Mac does not have": the seat is drawn from the roster but cannot be opened. */
+  remote: boolean
   /** The open tab standing for this seat, or null when none shows its session. */
   tabId: string | null
   workspaceId: string | null
@@ -213,7 +216,7 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
       ? chooseTab(index.get(sessionKey(hostId, session.tmux_session)), preferred, workspaceOrder)
       : null
     return {
-      role, session, ...extra, label: labelOf(session), hostId, hostAlias: remote ? session.host_alias ?? '' : '',
+      role, session, ...extra, label: labelOf(session), hostId, remote, hostAlias: remote ? session.host_alias ?? '' : '',
       tabId: found?.tabId ?? null, workspaceId: found?.workspaceId ?? null, paneIndex: found?.paneIndex ?? null,
     }
   }

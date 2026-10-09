@@ -31,6 +31,23 @@ describe('parseRosterEvent', () => {
     expect(parseRosterEvent(v({ op: 'snapshot', teams: [team] }))).toEqual({ op: 'snapshot', teams: [team] })
   })
 
+  it('context_unavailable is kept only as boolean true; anything else reads as absent, never drops the frame', () => {
+    const parse = (extra: Record<string, unknown>) => {
+      const r = parseRosterEvent(v({ op: 'snapshot', teams: [{ ...team, members: [{ ...member, ...extra }] }] }))
+      if (typeof r === 'string') throw new Error(r)
+      return r.teams[0].members[0]
+    }
+    expect(parse({ context_unavailable: true }).context_unavailable).toBe(true)
+    for (const bad of [false, 'true', 1, null, {}]) expect('context_unavailable' in parse({ context_unavailable: bad })).toBe(false)
+    expect('context_unavailable' in parse({})).toBe(false)
+  })
+
+  it('a member state outside the known four is kept as sent (display treats it as active)', () => {
+    const r = parseRosterEvent(v({ op: 'snapshot', teams: [{ ...team, members: [{ ...member, state: 'joining' }, { ...member, session_id: 's2', state: 'weird' }] }] }))
+    if (typeof r === 'string') throw new Error(r)
+    expect(r.teams[0].members.map((m) => m.state)).toEqual(['joining', 'weird'])
+  })
+
   it('host_alias is bounded and printable; host_id bounded and control-free; invalid ones are dropped, never the frame', () => {
     const parse = (extra: Record<string, unknown>) => {
       const r = parseRosterEvent(v({ op: 'snapshot', teams: [{ ...team, members: [{ ...member, ...extra }] }] }))

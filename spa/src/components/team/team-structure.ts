@@ -44,7 +44,7 @@ function seatView(seat: Seat, codeOf: CodeLookup): TeamSeatView {
   // The seat's own host (a remote member lives elsewhere); '' while this Mac has no such host, so no light is keyed to it.
   const hostId = seat.hostId ?? ''
   const code = name && seat.hostId !== null ? codeOf(seat.hostId, name) : ''
-  return { sessionId: seat.session.session_id, title: seat.label, hostId, sessionCode: code, role: seat.role, tabId: seat.tabId, state: seat.state, hostAlias: seat.hostAlias }
+  return { sessionId: seat.session.session_id, title: seat.label, hostId, sessionCode: code, role: seat.role, tabId: seat.tabId, state: seat.state, hostAlias: seat.hostAlias, remote: seat.remote }
 }
 
 /**
@@ -60,7 +60,7 @@ export function structureSignature(input: StructureInput): string {
       v.key, v.name, v.label, v.colorIndex,
       [v.lead, ...v.members].map((s) => {
         const sv = seatView(s, codeOf)
-        return [sv.sessionId, sv.role, sv.title, sv.tabId, sv.sessionCode, s.session.tmux_session ?? '', s.hostId, s.hostAlias, s.state]
+        return [sv.sessionId, sv.role, sv.title, sv.tabId, sv.sessionCode, s.session.tmux_session ?? '', s.hostId, s.hostAlias, s.remote, s.state]
       }),
     ]),
     workspaces.map((w) => [w.id, w.tabs.filter((id) => index.byTabId.has(id)).map((id) => { const h = index.byTabId.get(id)!; return `${id}\u0000${h.key}\u0000${h.role}` })]),

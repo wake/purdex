@@ -116,13 +116,14 @@ describe('openTeamSeat', () => {
 
 describe('openTeamSeat — a member on another host (TI-2a)', () => {
   const remoteMember = () => ({ ...member('R', 9, 'r-tm'), host_id: 'dm-b', host_alias: 'b26' })
-  function seedRemote(mapped: boolean) {
+  const VERIFIED = { h2: { daemonIdVerified: { endpoint: '10.0.0.2:7860', daemonId: 'dm-b' } } } as never
+  function seedRemote(mapped: boolean, runtime: unknown = VERIFIED) {
     seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead', 'ma'] }, { id: 'w2', tabs: [] }], activeWorkspaceId: 'w2' })
     const t = useTeamRosterStore.getState().byHost[HOST][0]
     useTeamRosterStore.setState({ byHost: { [HOST]: [{ ...t, members: [...t.members, remoteMember()] }] } })
     useHostStore.setState({
       hosts: (mapped ? { h2: { id: 'h2', name: 'b26', ip: '10.0.0.2', port: 7860, daemonId: 'dm-b' } } : {}) as never,
-      runtime: {},
+      runtime: (mapped ? runtime : {}) as never,
     })
     useSessionStore.setState({
       sessions: {
@@ -133,7 +134,7 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
     useShownHostsStore.setState({ ids: [HOST, 'h2'] })
   }
 
-  it('a remote seat on a host this Mac lacks has hostId null, no tab, and openTeamSeat is a no-op with the toast', () => {
+  it('a remote seat on a host this Mac lacks has hostId null, no tab, and openTeamSeat is a toasts the reason', () => {
     seedRemote(false)
     useTeamUiStore.getState().setCollapsed(KEY, true)
     useTeamUiStore.getState().setGhostWorkspace(KEY, 'w2')
@@ -141,9 +142,22 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
     expect(currentTeamState().views[0].members.find((m) => m.session.session_id === 'R')).toMatchObject({ hostId: null, tabId: null })
     expect(openTeamSeat(KEY, 'R')).toEqual({ outcome: 'no-host', tabId: null })
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(tabsBefore)
-    expect(useUndoToast.getState().toast?.message).toContain('b26')
+    expect(useUndoToast.getState().toast?.message).toBe('This host is not in this App')
     expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true) // collapse state untouched
     expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBe('w2')
+  })
+
+  it('a stored daemon id this session has not verified maps nothing (a configured but unverified host is not a match)', () => {
+    seedRemote(true, {})
+    expect(currentTeamState().views[0].members.find((m) => m.session.session_id === 'R')).toMatchObject({ hostId: null, tabId: null })
+    expect(openTeamSeat(KEY, 'R')).toEqual({ outcome: 'no-host', tabId: null })
+  })
+
+  it('a host whose alias equals the roster host_alias but whose daemon id differs is not a match (alias is not an identity)', () => {
+    seedRemote(true)
+    useHostStore.setState({ hosts: { h2: { id: 'h2', name: 'b26', ip: '10.0.0.2', port: 7860, daemonId: 'dm-other' } } as never,
+      runtime: { h2: { daemonIdVerified: { endpoint: '10.0.0.2:7860', daemonId: 'dm-other' } } } as never })
+    expect(currentTeamState().views[0].members.find((m) => m.session.session_id === 'R')).toMatchObject({ hostId: null })
   })
 
   it('an untrusted host_id opens nothing, even when the lead\'s host has a session of that name', () => {
@@ -207,7 +221,7 @@ describe('openTeamSeat — a host whose daemon changed (TI-2a review)', () => {
   it('when the mismatch clears the seat maps again', () => {
     seedMismatch()
     expect(seatR().hostId).toBeNull()
-    useHostStore.setState({ runtime: {} as never })
+    useHostStore.setState({ runtime: { h2: { daemonIdVerified: { endpoint: '10.0.0.2:7860', daemonId: 'dm-b' } } } as never })
     expect(seatR()).toMatchObject({ hostId: 'h2', tabId: 'onC' })
   })
 
@@ -218,7 +232,7 @@ describe('openTeamSeat — a host whose daemon changed (TI-2a review)', () => {
     const [render1, action1] = hostIds()
     expect(render1).toEqual(action1)
     expect(render1).toEqual(['h1', null])
-    act(() => useHostStore.setState({ runtime: {} as never }))
+    act(() => useHostStore.setState({ runtime: { h2: { daemonIdVerified: { endpoint: '10.0.0.2:7860', daemonId: 'dm-b' } } } as never }))
     rerender()
     const [render2, action2] = hostIds()
     expect(render2).toEqual(action2)
