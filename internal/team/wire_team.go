@@ -183,6 +183,9 @@ type Member struct {
 	AdoptRequest string         `json:"adopt_request,omitempty"` // adopted only: the approval that took it in
 	CreatedAt    int64          `json:"created_at"`              // unix ms
 	EndedAt      int64          `json:"ended_at,omitempty"`      // unix ms; 0 while the member is active
+	// RelayQuota is the numbers of the member's relay chain (#2062); a member relays only through its lead, so its own
+	// self_left matters again only after a release. Always present.
+	RelayQuota RelayQuota `json:"relay_quota"`
 
 	// Task and LastAt are GET /api/team's per-member display columns (T-1d1).
 	// Both are optional: a daemon that predates them omits them and a CLI that

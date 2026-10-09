@@ -29,6 +29,8 @@ type RosterSession struct {
 	Model   string         `json:"model,omitempty"`
 	Effort  string         `json:"effort,omitempty"`
 	Context *MemberContext `json:"context,omitempty"`
+	// RelayQuota is the numbers of the session's relay chain (#2062); always present.
+	RelayQuota RelayQuota `json:"relay_quota"`
 }
 
 // RosterMember is an active member: its session plus how it joined.

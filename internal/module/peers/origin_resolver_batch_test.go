@@ -64,3 +64,40 @@ func TestOriginResolver_ResolveOriginsBySession_DuplicateEntryIsTheFirst(t *test
 		t.Fatalf("batch %+v, single %+v (%v)", got["sid-1"], one, err)
 	}
 }
+
+// #2062: the unattended panel lists every live session of the host: one origin per session id (a process pair
+// mid-resume counts once), dead holders out, an unreadable registry an error.
+func TestOriginResolver_ListLiveOrigins(t *testing.T) {
+	r, dir := resolverFixture(t, allLiveLiveness(fixture76973ProcStart))
+	writeRegistryFixture(t, dir, "11.json", `{"pid":11,"sessionId":"sid-1","cwd":"/w","procStart":"`+targetProcStart+`","version":"2.1.270","messagingSocketPath":"`+dir+`/11.sock","name":"n11","status":"idle"}`)
+	got, err := r.ListLiveOrigins()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	for _, o := range got {
+		seen[o.SessionID]++
+	}
+	if seen["sid-1"] != 1 || seen["sid-2"] != 1 {
+		t.Fatalf("sessions = %v, want sid-1 and sid-2 once each", seen)
+	}
+	for _, o := range got {
+		if one, ok, _ := r.ResolveOriginBySession(o.SessionID); !ok || one != o {
+			t.Errorf("%s: list %+v, single %+v; they must agree", o.SessionID, o, one)
+		}
+	}
+	live := allLiveLiveness(fixture76973ProcStart)
+	live.PidAlive = func(pid int) bool { return pid != 10 && pid != 11 }
+	dead, _ := resolverFixture(t, live)
+	if m, err := dead.ListLiveOrigins(); err != nil || len(m) != 1 || m[0].SessionID != "sid-2" {
+		t.Fatalf("dead sid-1: %v %v", m, err)
+	}
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.m.registryDir = file
+	if m, err := r.ListLiveOrigins(); err == nil || m != nil {
+		t.Fatalf("unreadable registry: %v %v, want an error", m, err)
+	}
+}

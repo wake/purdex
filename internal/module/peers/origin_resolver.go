@@ -164,6 +164,27 @@ func (r *OriginResolver) ResolveOriginsBySession(sessionIDs []string) (map[strin
 	return out, nil
 }
 
+// ListLiveOrigins is every live, non-proxy session of this host, one per session id, in registry order (the
+// unattended panel's quota list). A registry read failure is the error; nothing is guessed.
+func (r *OriginResolver) ListLiveOrigins() ([]team.Origin, error) {
+	entries, _, err := ipeers.ReadRegistry(r.m.registryDir, r.m.liveness)
+	if err != nil {
+		r.m.logf("peers: origin resolver: read registry: %v", err)
+		return nil, fmt.Errorf("read registry: %w", err)
+	}
+	proxies := r.m.proxyPIDs()
+	seen := map[string]bool{}
+	out := make([]team.Origin, 0, len(entries))
+	for _, e := range entries {
+		if e.IsProxy || proxies[e.PID] || e.SessionID == "" || seen[e.SessionID] {
+			continue
+		}
+		seen[e.SessionID] = true
+		out = append(out, r.originOf(e))
+	}
+	return out, nil
+}
+
 // originOf renders a registry entry as a team.Origin: ref, address (the
 // rule GET /api/peers uses, record.go applyIdentity) and title. Name stays
 // the registry name; the address is the conversation's virtual name, from

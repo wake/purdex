@@ -124,6 +124,7 @@ func (m *Module) memberView(mr memberRow) team.Member {
 		}
 	}
 	v.Context = m.sessionContext(mr.SessionID, mr.Usage)
+	v.RelayQuota = m.relayQuotaOf(mr.SessionID)
 	return v
 }
 

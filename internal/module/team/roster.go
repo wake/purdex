@@ -86,11 +86,17 @@ func (m *Module) buildRoster() (team.Roster, error) {
 	if err != nil {
 		return team.Roster{}, err
 	}
+	// One read transaction for the numbers of every session on the roster (#2062).
+	quotas, _, qerr := m.store.RelayQuotasOf(ids)
+	if qerr != nil {
+		m.logf("[team] roster relay quotas: %v", qerr)
+	}
 	alias, _ := m.selfHost()
 	out := team.Roster{Teams: make([]team.TeamRoster, 0, len(teams))}
 	for i, t := range teams {
 		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, TeamName: t.TeamName, TeamLabel: t.TeamLabel, CreatedAt: t.CreatedAt,
 			Lead: m.rosterLead(t.Team, origins, alias, t.leadUsage), Members: []team.RosterMember{}}
+		tr.Lead.RelayQuota = quotas[t.LeadSessionID]
 		for _, mr := range active[i] {
 			s := rosterSession(origins, mr.SessionID, func() team.RosterSession {
 				return team.RosterSession{SessionID: mr.SessionID, Ref: mr.Ref, Address: alias + "/" + mr.Ref,
@@ -98,6 +104,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 			}, mr.Ref, alias)
 			s.Model, s.Effort = mr.Model, mr.Effort // what it was spawned with
 			s.Context = m.sessionContext(mr.SessionID, mr.Usage)
+			s.RelayQuota = quotas[mr.SessionID]
 			rm := team.RosterMember{RosterSession: s, State: mr.State, Origin: rosterOriginOf(mr), JoinedAt: mr.CreatedAt}
 			if mr.SpawnOp != "" { // every row has a key (an adopted member's is the adoption's request id), so adopted members have tasks too
 				if cur, ok := currentTaskOf(tasks[t.ID][mr.SpawnOp]); ok {

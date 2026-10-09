@@ -80,13 +80,13 @@ func TestWireAdopt_JSONShapes(t *testing.T) {
 			`{"id":"id","kind":"lead","origin_inbox":"/tmp/in.sock","reason":""}`},
 
 		{"Member adopted (spawn_op empty, adopt_request, ended_at)", adopted,
-			`{"session_id":"s","ref":"_abc123","address":"mlab/_abc123","team_id":"t","host_id":"h","cwd":"/w/r","tmux_session":"main:@1.%2","state":"active","origin":"adopted","spawn_op":"","adopt_request":"req-1","created_at":5,"ended_at":9}`},
+			`{"session_id":"s","ref":"_abc123","address":"mlab/_abc123","team_id":"t","host_id":"h","cwd":"/w/r","tmux_session":"main:@1.%2","state":"active","origin":"adopted","spawn_op":"","adopt_request":"req-1","created_at":5,"ended_at":9,"relay_quota":{"self_left":0,"member_pool_left":0}}`},
 		{"Member spawned", spawned,
-			`{"session_id":"s","ref":"_abc123","address":"mlab/_abc123","team_id":"t","host_id":"h","cwd":"/w/r","tmux_session":"tm-0123456789","state":"active","origin":"spawned","spawn_op":"op","created_at":5}`},
+			`{"session_id":"s","ref":"_abc123","address":"mlab/_abc123","team_id":"t","host_id":"h","cwd":"/w/r","tmux_session":"tm-0123456789","state":"active","origin":"spawned","spawn_op":"op","created_at":5,"relay_quota":{"self_left":0,"member_pool_left":0}}`},
 		{"Member zero still carries origin", Member{},
-			`{"session_id":"","ref":"","address":"","team_id":"","host_id":"","cwd":"","tmux_session":"","state":"","origin":"","spawn_op":"","created_at":0}`},
+			`{"session_id":"","ref":"","address":"","team_id":"","host_id":"","cwd":"","tmux_session":"","state":"","origin":"","spawn_op":"","created_at":0,"relay_quota":{"self_left":0,"member_pool_left":0}}`},
 		{"Member released", Member{State: MemberReleased, Origin: MemberOriginAdopted, EndedAt: 7},
-			`{"session_id":"","ref":"","address":"","team_id":"","host_id":"","cwd":"","tmux_session":"","state":"released","origin":"adopted","spawn_op":"","created_at":0,"ended_at":7}`},
+			`{"session_id":"","ref":"","address":"","team_id":"","host_id":"","cwd":"","tmux_session":"","state":"released","origin":"adopted","spawn_op":"","created_at":0,"ended_at":7,"relay_quota":{"self_left":0,"member_pool_left":0}}`},
 	}
 	for _, c := range cases {
 		b, err := json.Marshal(c.v)
