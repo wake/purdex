@@ -304,6 +304,10 @@ type Module struct {
 	// factPump is M's facts outbox pump (X2c-2): the same generic pump, over team_facts.
 	factPump *outboxPump
 	outcomes commandOutcomes
+	// teamNotices delivers a remote member's notices (peers.TeamNoticeKey; nil → they stay owed) and remoteNoticeSig wakes
+	// its pump (X3d-2).
+	teamNotices     peersmod.TeamNoticeDeliverer
+	remoteNoticeSig chan struct{}
 	// beforeCloseExpired, when set, runs in closeExpired before the CAS;
 	// an error fails that close there (tests). nil in production.
 	beforeCloseExpired func(id string) error
@@ -321,10 +325,11 @@ func New() *Module {
 		newID:      uuid.NewString,
 		modSeen:    map[string]helloInfo{},
 		// The roster publisher's signal (one slot) and its test barrier.
-		rosterSig:     make(chan struct{}, 1),
-		rosterBarrier: make(chan chan struct{}),
-		noticeSig:     make(chan struct{}, 1),
-		killProcess:   func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) },
+		rosterSig:       make(chan struct{}, 1),
+		rosterBarrier:   make(chan chan struct{}),
+		noticeSig:       make(chan struct{}, 1),
+		remoteNoticeSig: make(chan struct{}, 1),
+		killProcess:     func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) },
 		// A cleared report waits this long for the registry to show the new
 		// session id (measured ~0.6 s after /clear), polling every 100 ms.
 		clearedWait: 3 * time.Second,
@@ -406,6 +411,11 @@ func (m *Module) Init(c *core.Core) error {
 	if svc, ok := c.Registry.Get(peersmod.HostCallerKey); ok {
 		if hc, ok := svc.(hostCaller); ok {
 			m.cmdCaller = hc
+		}
+	}
+	if svc, ok := c.Registry.Get(peersmod.TeamNoticeKey); ok {
+		if d, ok := svc.(peersmod.TeamNoticeDeliverer); ok {
+			m.teamNotices = d
 		}
 	}
 	store, err := OpenStore(filepath.Join(c.Cfg.DataDir, "team.db"))
@@ -539,6 +549,7 @@ func (m *Module) Start(context.Context) error {
 	go m.runRoster() // after the boot's own writes signalled: it publishes what they left
 	m.startCommandPump()
 	m.startFactPump()
+	m.startRemoteNoticePump()
 	m.logf("[team] endpoints enabled")
 	return nil
 }

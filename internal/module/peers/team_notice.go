@@ -58,6 +58,11 @@ type NoticeError struct {
 	retryable bool
 }
 
+// NewNoticeError is a NoticeError as the team module's tests script one; DeliverTeamNotice builds its own.
+func NewNoticeError(code, detail string, retryable bool) *NoticeError {
+	return &NoticeError{Code: code, Detail: detail, retryable: retryable}
+}
+
 func (e *NoticeError) Error() string { return e.Code + ": " + e.Detail }
 
 // Retryable: a later attempt may succeed (the daemon was busy, stopping, a helper was starting). A permanent one —
