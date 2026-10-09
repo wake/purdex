@@ -289,7 +289,7 @@ func hookDecision(ctx context.Context, in hookDecideInput) (out []byte, asked bo
 // the session name, or "" on any error. Retained for non-hook callers
 // (cmd/pdx/statusline_proxy.go) that only need the name.
 func queryTmuxSession() string {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
+	out, err := exec.Command(tmuxExecutable(), "display-message", "-p", "#{session_name}").Output()
 	if err != nil {
 		return ""
 	}
@@ -302,7 +302,7 @@ func queryTmuxSession() string {
 // the primary key the daemon uses to bypass the name cache rename-race
 // window when resolving session codes for hook events.
 func queryTmuxSessionInfo() (string, string) {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{session_id}|#{session_name}").Output()
+	out, err := exec.Command(tmuxExecutable(), "display-message", "-p", "#{session_id}|#{session_name}").Output()
 	if err != nil {
 		return "", ""
 	}

@@ -107,7 +107,7 @@ func newSelftestDeps(stderr io.Writer) (selftestDeps, error) {
 	cwd, _ := os.Getwd()
 	return selftestDeps{
 		tmux: func(ctx context.Context, args ...string) ([]byte, error) {
-			return exec.CommandContext(ctx, "tmux", args...).Output()
+			return exec.CommandContext(ctx, tmuxExecutable(), args...).Output()
 		},
 		registryDir: registryDir,
 		sockDir:     ccuds.DefaultSockDir,

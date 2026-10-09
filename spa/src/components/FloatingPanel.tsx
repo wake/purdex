@@ -238,7 +238,9 @@ export function FloatingPanel({ title, anchorRef, onClose, width = 320, testId =
       aria-modal="false"
       tabIndex={-1}
       data-testid={testId}
-      className="fixed bg-surface-elevated border border-border-default rounded-lg shadow-xl flex flex-col"
+      // outline-hidden (not outline-none: it keeps a transparent outline that forced-colors mode turns visible): the panel itself is only a programmatic focus target (tabIndex -1, taken when nothing inside is focusable);
+      // without it the browser draws its focus ring around the whole panel (#2063). Controls inside keep their own focus styles.
+      className="fixed bg-surface-elevated border border-border-default rounded-lg shadow-xl flex flex-col outline-hidden"
       style={{
         position: 'fixed',
         left: posRef.current.left,
