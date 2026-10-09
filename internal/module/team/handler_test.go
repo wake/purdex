@@ -322,6 +322,7 @@ type fixture struct {
 	titles   *fakeTitles
 	usage    *fakeUsage
 	unatt    *fakeUnattended
+	sender   *fakeSender
 	sub      *core.EventSubscriber
 	// createReqEdit, when set, edits every createReq body.
 	createReqEdit func(*team.CreateApprovalRequest)
@@ -390,13 +391,14 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	// sid-1b / sid-1c are what sid-1's process (pid 10) becomes after a
 	// /clear; the registry of these tests already shows them.
-	f := &fixture{t: t, origins: &fakeOrigins{cleared: map[string]int{"sid-1b": 10, "sid-1c": 10}}, switches: &fakeSwitches{sw: hostconfig.DefaultRelaySwitches}, titles: &fakeTitles{has: map[string]bool{"sid-1": true}}, usage: &fakeUsage{}, unatt: &fakeUnattended{}}
+	f := &fixture{t: t, origins: &fakeOrigins{cleared: map[string]int{"sid-1b": 10, "sid-1c": 10}}, switches: &fakeSwitches{sw: hostconfig.DefaultRelaySwitches}, titles: &fakeTitles{has: map[string]bool{"sid-1": true}}, usage: &fakeUsage{}, unatt: &fakeUnattended{}, sender: &fakeSender{}}
 	f.clock.Store(1_000_000)
 	f.core = core.New(core.CoreDeps{Config: &config.Config{HostID: "h:1", DataDir: t.TempDir()}})
 	f.core.Registry.Register(peersmod.OriginResolverKey, f.origins)
 	f.core.Registry.Register(hostconfig.RelaySwitchesKey, f.switches)
 	f.core.Registry.Register(hostconfig.RelayPromptsKey, f.switches)
 	f.core.Registry.Register(hostconfig.UnattendedKey, f.unatt)
+	f.core.Registry.Register(peersmod.SenderKey, f.sender)
 	f.core.Registry.Register(agent.OwnerResolverKey, f.usage) // the team module asserts agent.ContextUsageReader on it
 	f.registerSpawnFakes()
 	f.m = New().WithTitles(f.titles)

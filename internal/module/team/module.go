@@ -242,9 +242,14 @@ type Module struct {
 	// beforeAutoApprove, when set, runs in autoApprove before the approve;
 	// an error fails that approve there (tests). nil in production.
 	beforeAutoApprove func(a team.Approval) error
-	// noticeKick wakes the notice outbox's drain (PL-1d1) after an adopt approval won; afterApproved is its
+	// noticeKick is a test seam called after kickNotices when an adopt approval won; afterApproved is its
 	// only caller. nil until then (tests count it).
 	noticeKick func()
+	// sender sends the notices (peers.SenderKey; nil → notices stay owed); noticeSig wakes the drain
+	// (kickNotices); noticeLogAt is the drain's own record of when a row's failure was last logged.
+	sender      peersmod.Sender
+	noticeSig   chan struct{}
+	noticeLogAt map[string]int64
 	// beforeCloseExpired, when set, runs in closeExpired before the CAS;
 	// an error fails that close there (tests). nil in production.
 	beforeCloseExpired func(id string) error
@@ -264,6 +269,7 @@ func New() *Module {
 		// The roster publisher's signal (one slot) and its test barrier.
 		rosterSig:     make(chan struct{}, 1),
 		rosterBarrier: make(chan chan struct{}),
+		noticeSig:     make(chan struct{}, 1),
 		// A cleared report waits this long for the registry to show the new
 		// session id (measured ~0.6 s after /clear), polling every 100 ms.
 		clearedWait: 3 * time.Second,
@@ -299,6 +305,11 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: service %q does not implement OriginResolver (%T)", peersmod.OriginResolverKey, svc)
 	}
 	m.origins = origins
+	if svc, ok := c.Registry.Get(peersmod.SenderKey); ok {
+		if snd, ok := svc.(peersmod.Sender); ok {
+			m.sender = snd
+		}
+	}
 	sw, ok := c.Registry.Get(hostconfig.RelaySwitchesKey)
 	if !ok {
 		return fmt.Errorf("team: service %q not registered", hostconfig.RelaySwitchesKey)
@@ -422,7 +433,8 @@ func (m *Module) Start(context.Context) error {
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.core.Events.OnSubscribe(m.sendUnattendedSnapshot)
 	m.core.Events.OnSubscribe(m.sendRosterSnapshot)
-	m.sweepWG.Add(3)
+	m.sweepWG.Add(4)
+	go m.runNotices() // first: a notice owed across the restart goes out before the sweeper's first tick
 	go m.runSweeper()
 	go m.runRetention()
 	go m.runRoster() // after the boot's own writes signalled: it publishes what they left

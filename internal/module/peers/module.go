@@ -377,6 +377,8 @@ func (m *Module) Init(c *core.Core) error {
 
 	// The team module attributes approval requests through this view.
 	c.Registry.Register(OriginResolverKey, &OriginResolver{m: m})
+	// The team module's notice outbox (and later the handover notice) sends through this.
+	c.Registry.Register(SenderKey, moduleSender{m: m})
 
 	return nil
 }
