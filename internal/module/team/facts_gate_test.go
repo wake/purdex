@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -87,6 +88,43 @@ func TestFactGate_UnreadableCapabilitiesHoldTheFact(t *testing.T) {
 	if len(fc.sent()) != 0 || f.factState("fact-mk-1").State != factPending {
 		t.Fatalf("sent %+v, fact %+v", fc.sent(), f.factState("fact-mk-1"))
 	}
+}
+
+// The gate sits in front of the send, not in front of the clean-up: a host that is no longer paired, or whose 401 has
+// lasted ten minutes, still ends the relation when its capabilities cannot be read (codex R1).
+func TestFactGate_UnreadableCapabilitiesKeepTheUnpairingPaths(t *testing.T) {
+	t.Run("unpaired", func(t *testing.T) {
+		f, fc := factsFixture(t)
+		fc.capsErr = errors.New("no paired host carries that host id")
+		fc.paired = map[string]bool{}
+		f.queueEnded("mk-gone", "sid-gone")
+		seedRemote(t, f.m.store, "mk-live", "sid-live", f.clock.Load())
+		f.m.factPump.drain("host-L")
+		if row, _, _ := f.m.store.RemoteMember("mk-live"); row.State != remoteEnded {
+			t.Fatalf("mk-live = %s, want ended by the unpairing", row.State)
+		}
+		if f.factState("fact-mk-gone").State != factDropped {
+			t.Fatalf("fact = %s, want dropped with the relation", f.factState("fact-mk-gone").State)
+		}
+	})
+	t.Run("401 for ten minutes", func(t *testing.T) {
+		f, fc := factsFixture(t)
+		fc.capsErr = &peersmod.CapsStatusError{Code: 401}
+		f.queueEnded("mk-gone", "sid-gone")
+		seedRemote(t, f.m.store, "mk-live", "sid-live", f.clock.Load())
+		f.m.factPump.drain("host-L")
+		if st := f.factState("fact-mk-gone"); st.State != factPending || st.First401At != f.clock.Load() {
+			t.Fatalf("first 401: %+v", st)
+		}
+		f.clock.Add(10*60_000 + 1000)
+		f.m.factPump.drain("host-L")
+		if row, _, _ := f.m.store.RemoteMember("mk-live"); row.State != remoteEnded {
+			t.Fatalf("mk-live = %s, want ended by unpaired_by_peer", row.State)
+		}
+		if len(fc.sent()) != 0 {
+			t.Fatal("something was sent while the capabilities were unreadable")
+		}
+	})
 }
 
 // The commands pump has no gate (its kinds are checked before they are queued): nothing there changed.

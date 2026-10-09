@@ -3,6 +3,8 @@ package teammod
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"sync"
 	"time"
 
@@ -219,7 +221,14 @@ func (p *outboxPump) drain(hostID string) {
 func (p *outboxPump) attempt(e outboxEntry) bool {
 	if g, ok := p.store.(kindGate); ok && e.Kind != "" {
 		caps, err := p.capsOf(e.HostID)
+		var se *peersmod.CapsStatusError
 		switch {
+		case err != nil && !p.caller.Paired(e.HostID):
+			p.unpaired(e.HostID, "unpaired") // the same verdict Call would have reached
+			return false
+		case errors.As(err, &se) && se.Code == http.StatusUnauthorized:
+			p.onUnauthorized(e) // a 401 for ten minutes is unpaired_by_peer here as on a send
+			return false
 		case err != nil:
 			p.backoff(e, 0, "its capabilities are unavailable: "+err.Error())
 			return false
@@ -229,7 +238,6 @@ func (p *outboxPump) attempt(e outboxEntry) bool {
 		}
 	}
 	res := p.caller.Call(p.ctx, e.HostID, e.Path, e.Body)
-	now := p.now()
 	switch res.Class {
 	case peersmod.ClassDone, peersmod.ClassRefused, peersmod.ClassWrongHost:
 		// A done answer must be THIS entry's: HostCaller proved the host, not the command. Another id is a broken peer, not an
@@ -254,22 +262,28 @@ func (p *outboxPump) attempt(e outboxEntry) bool {
 		p.unpaired(e.HostID, "unpaired")
 		return false
 	case peersmod.ClassUnauthorized:
-		first := e.First401At
-		if first == 0 {
-			first = now
-		}
-		if peersmod.Escalate401(time.UnixMilli(first), time.UnixMilli(now)) == peersmod.ClassUnpairedByPeer {
-			p.unpaired(e.HostID, "unpaired_by_peer")
-			return false
-		}
-		// the next look is never later than the end of the 10 minutes, so the escalation is on time (not at the next
-		// doubling step after it)
-		p.backoffUntil(e, first, first+peersmod.UnpairedByPeerAfter.Milliseconds(), "401 (the peer does not know our token yet)")
+		p.onUnauthorized(e)
 		return false
 	default: // transient, unsupported (the route is missing: nothing else could apply either), anything unexpected
 		p.backoff(e, 0, string(res.Class)+" "+res.Code)
 		return false
 	}
+}
+
+// onUnauthorized is the 401 rule: a run of 401s that lasts UnpairedByPeerAfter ends the relation on this side.
+func (p *outboxPump) onUnauthorized(e outboxEntry) {
+	now := p.now()
+	first := e.First401At
+	if first == 0 {
+		first = now
+	}
+	if peersmod.Escalate401(time.UnixMilli(first), time.UnixMilli(now)) == peersmod.ClassUnpairedByPeer {
+		p.unpaired(e.HostID, "unpaired_by_peer")
+		return
+	}
+	// the next look is never later than the end of the 10 minutes, so the escalation is on time (not at the next
+	// doubling step after it)
+	p.backoffUntil(e, first, first+peersmod.UnpairedByPeerAfter.Milliseconds(), "401 (the peer does not know our token yet)")
 }
 
 func (p *outboxPump) unpaired(hostID, reason string) {
