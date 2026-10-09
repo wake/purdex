@@ -218,6 +218,13 @@ func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail
 		}
 		wantPID, wantStart = row.Origin.PID, row.Origin.ProcStart
 	}
+	if wantStart == "" && op.RequestID != "" { // an op written before proc_start: the approval row's origin has it
+		if row, ok, err := m.store.Get(op.RequestID); err != nil {
+			return http.StatusServiceUnavailable, "team.db failed; retry: " + err.Error()
+		} else if ok && row.Origin.PID == wantPID {
+			wantStart = row.Origin.ProcStart
+		}
+	}
 	deadline := time.Now().Add(m.clearedWait)
 	for {
 		target, live, err := m.origins.ResolveOriginBySession(newSessionID)

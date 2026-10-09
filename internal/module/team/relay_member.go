@@ -71,12 +71,14 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 		fail(err)
 		return
 	}
-	// Replay: the same id for the same member is the op it opened, whatever its state; for another, id_conflict.
+	// Replay: the same id for the same member is the op it opened, whatever its state; for another, id_conflict. "Same
+	// member" is the same row incarnation: a session's row is moved to its new session by a relay, so the session id alone
+	// would also accept a row released and adopted again later — that row is younger than the op.
 	if old, had, err := m.store.GetRelayOp(req.ID); err != nil {
 		fail(err)
 		return
 	} else if had {
-		if old.Kind == team.RelayKindMember && old.TeamID == t.ID && found && (mr.SessionID == old.SessionID || mr.SessionID == old.NewSessionID) {
+		if old.Kind == team.RelayKindMember && old.TeamID == t.ID && found && (mr.SessionID == old.SessionID || mr.SessionID == old.NewSessionID) && mr.CreatedAt <= old.CreatedAt {
 			m.writeJSON(w, http.StatusOK, team.RelayCreateResponse{Op: old})
 			return
 		}
@@ -110,6 +112,10 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 	start := mr.ProcStart
 	if start == "" {
 		start = origin.ProcStart
+	}
+	if start == "" { // no start time, no identity: the cleared binding would be pid-only
+		m.writeErr(w, http.StatusNotFound, team.ErrUnknownSession, "member "+mr.Ref+": its process cannot be identified", nil)
+		return
 	}
 	now := m.now()
 	op := team.RelayOp{

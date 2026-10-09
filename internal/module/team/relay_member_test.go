@@ -262,3 +262,44 @@ func TestRelayBegin_RecordsProcStartAndTheApprovalFallbackBindsIt(t *testing.T) 
 		t.Fatalf("fallback proc_start: %d %+v", code, ae)
 	}
 }
+
+// A relay moves the member's row to its new session; a row released and adopted again later is another incarnation and
+// must not pass for the original request. Mutation gate: drop the created-at comparison → the last case answers 200.
+func TestRelayCreate_ReplayIsTheSameRowIncarnation(t *testing.T) {
+	f := newFixture(t)
+	mr := f.memberTeam("2")
+	f.createRelay(rid(80), "/tmp/10.sock", "_mem001")
+	// the row moved to a new session by the relay, and the lead asks again with the same id
+	f.m.store.db.Exec(`UPDATE team_members SET session_id = 'sid-m1b' WHERE spawn_op = ?`, mr.SpawnOp)
+	f.m.store.db.Exec(`UPDATE relay_ops SET new_session_id = 'sid-m1b', state = 'done' WHERE id = ?`, rid(80))
+	f.liveMember("sid-m1b", "_mem001", "one", "self/w-one", "tm-1")
+	if code, _, ae := f.createRelay(rid(80), "/tmp/10.sock", "_mem001"); code != 200 {
+		t.Fatalf("replay after the relay moved the row: %d %+v", code, ae)
+	}
+	// the same session leaves and is adopted again: a younger row, so the id is not its request
+	f.m.store.db.Exec(`UPDATE team_members SET state = 'released' WHERE spawn_op = ?`, mr.SpawnOp)
+	again := newMember("op-m2", uid(1), "sid-m1b", "_mem001", f.clock.Load()+5000)
+	again.ProcStart = memStart
+	if err := f.m.store.InsertMember(again); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, ae := f.createRelay(rid(80), "/tmp/10.sock", "_mem001"); code != 409 || ae.Error != team.ErrIDConflict {
+		t.Fatalf("replay by a re-adopted row: %d %+v", code, ae)
+	}
+}
+
+// An op written before proc_start (pid set, start empty) is bound through its approval row's origin.
+func TestCleared_OpWithAPIDButNoStartTakesItFromTheApprovalRow(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1") // pid 10
+	f.decide(out.RequestID, "approve")
+	f.m.store.db.Exec(`UPDATE relay_ops SET proc_start = '' WHERE id = ?`, out.Op.ID)
+	row, _, _ := f.m.store.Get(out.RequestID)
+	row.Origin.ProcStart = "Mon Jan  1 00:00:00 2001"
+	raw, _ := json.Marshal(row.Origin)
+	f.m.store.db.Exec(`UPDATE approval_requests SET origin_json = ? WHERE id = ?`, string(raw), out.RequestID)
+	f.origins.cleared = map[string]int{"sid-new": 10}
+	if code, _, ae := f.report(out.Op.ID, team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-new"}); code != 400 || !strings.Contains(ae.Detail, "started at") {
+		t.Fatalf("pid set, start empty: %d %+v", code, ae)
+	}
+}
