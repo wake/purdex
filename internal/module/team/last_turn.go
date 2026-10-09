@@ -177,7 +177,7 @@ func (m *Module) subscribeTurnEnd(svc any) {
 // nothing: this fires for every turn of every session on the host.
 func (m *Module) onTurnEnd(ev agent.TurnEndEvent) {
 	summary := lastTurnSummary(ev.Text)
-	if summary == "" || m.store == nil {
+	if ev.Failed || summary == "" || m.store == nil { // a failed turn end is the workbook's, not a last-turn summary
 		return
 	}
 	// Stop waits for a callback that got past this check (turnEndMu): after Stop returns nothing writes,
