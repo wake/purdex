@@ -125,6 +125,23 @@ func TestParseListSessionsOutput_Created(t *testing.T) {
 			t.Fatalf("got %+v", got)
 		}
 	})
+	t.Run("a locale-mangled four-field line is skipped and logged, not half-parsed", func(t *testing.T) {
+		// No UTF-8 locale: tmux sanitises every TAB of the -F output to "_", so the line is one field.
+		buf := captureLog(t)
+		got := parseListSessionsOutput("$0_probe1_1700000000_/Users/wake\n$1_name_with_underscores_1700000001_/tmp\n")
+		if len(got) != 0 {
+			t.Fatalf("got %d sessions %+v, want 0", len(got), got)
+		}
+		if !strings.Contains(buf.String(), "2 malformed") || !strings.Contains(buf.String(), "UTF-8 locale") {
+			t.Errorf("log %q does not report the mangled lines with the locale hint", buf.String())
+		}
+	})
+	t.Run("a session name with underscores and spaces is kept whole", func(t *testing.T) {
+		got := parseListSessionsOutput("$5\tmy_sess name\t9\t/p\n")
+		if len(got) != 1 || got[0].Name != "my_sess name" || got[0].Created != 9 || got[0].Cwd != "/p" {
+			t.Fatalf("got %+v", got)
+		}
+	})
 	t.Run("an unreadable creation time is 0 (unknown), the session is kept", func(t *testing.T) {
 		got := parseListSessionsOutput("$1\tfoo\tx\t/p\n")
 		if len(got) != 1 || got[0].Created != 0 || got[0].Name != "foo" {
