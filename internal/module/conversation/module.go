@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/convfeed"
+	"github.com/wake/purdex/internal/convturns"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/team"
@@ -147,6 +148,7 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.cache = convfeed.NewCache(convfeed.CacheOptions{})
 	m.resolver = &convfeed.Resolver{Home: home, Owners: ownerAdapter{owners}, Index: m.index}
+	c.Registry.Register(convturns.Key, convturns.Reader(m)) // the session workbook reads a session's last turns
 	return nil
 }
 
