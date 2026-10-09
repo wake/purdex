@@ -2105,6 +2105,13 @@
   "unattended.quota.none": "沒有可設定的 session",
   "unattended.quota.save_failed": "{{host}}：{{session}} 的額度沒有存成功（{{code}}）",
   "unattended.quota.pending_lineage": "{{session}} 正在接力，接力完成後再設定一次",
+  "unattended.cap.label": "上限",
+  "unattended.cap.minus": "調低上限",
+  "unattended.cap.plus": "調高上限",
+  "unattended.cap.in_use": "目前有 {{n}} 個 member",
+  "unattended.cap.below": "目前有 {{n}} 個 member，上限不能低於 {{n}}",
+  "unattended.cap.ended": "這個 team 已結束",
+  "unattended.cap.failed": "{{host}}：{{session}} 的上限沒有調整（{{code}}）",
   "unattended.held.title": "額度用完，等你核准",
   "unattended.held.row": "{{host}}：{{session}} · 接力申請 · {{time}}"
 }

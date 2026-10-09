@@ -20,14 +20,17 @@ export class ApprovalApiError extends Error {
   readonly code: ApprovalErrorCode
   readonly detail: string
   readonly approval: Approval | null
+  /** The parsed error body when it was JSON (the 409 of max-members carries `in_use` there). */
+  readonly body: Record<string, unknown> | null
 
-  constructor(status: number, code: ApprovalErrorCode, detail = '', approval: Approval | null = null) {
+  constructor(status: number, code: ApprovalErrorCode, detail = '', approval: Approval | null = null, body: Record<string, unknown> | null = null) {
     super(detail !== '' ? `approval: ${code}: ${detail}` : `approval: ${code} (HTTP ${status})`)
     this.name = 'ApprovalApiError'
     this.status = status
     this.code = code
     this.detail = detail
     this.approval = approval
+    this.body = body
   }
 }
 
@@ -56,7 +59,7 @@ export async function errorFromResponse(res: Response): Promise<ApprovalApiError
   const code = typeof body.error === 'string' && body.error !== '' ? body.error : fallback
   const detail = typeof body.detail === 'string' ? body.detail : ''
   const approval = isRecord(body.approval) ? (body.approval as unknown as Approval) : null
-  return new ApprovalApiError(res.status, code, detail, approval)
+  return new ApprovalApiError(res.status, code, detail, approval, parsed)
 }
 
 const hostConfigured = (hostId: string): boolean => Object.hasOwn(useHostStore.getState().hosts, hostId)

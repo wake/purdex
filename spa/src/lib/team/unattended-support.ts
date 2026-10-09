@@ -14,7 +14,8 @@ import { fetchHostInfo } from '../host-api'
 import { hostEndpoint, useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { quotaHostIds, useRelayQuotaStore } from './relay-quota'
-import { RELAY_QUOTA_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
+import { useMaxMembersStore } from './max-members'
+import { RELAY_QUOTA_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
 
 const identity = (h: HostConfig): string => `${hostEndpoint(h)}:${h.token ?? ''}`
 
@@ -33,6 +34,7 @@ export function startUnattendedSupport(): () => void {
         const listed = Array.isArray(caps) ? caps : []
         useUnattendedStore.getState().setSupport(hostId, listed.includes(UNATTENDED_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setQuotaSupport(hostId, listed.includes(RELAY_QUOTA_CAPABILITY) ? 'yes' : 'no')
+        useUnattendedStore.getState().setMaxMembersSupport(hostId, listed.includes(TEAM_MAX_MEMBERS_CAPABILITY) ? 'yes' : 'no')
       },
       () => { /* not retried until the next trigger */ },
     )
@@ -54,6 +56,9 @@ export function startUnattendedSupport(): () => void {
     for (const hostId of quotaHostIds(useRelayQuotaStore.getState())) {
       if (!next.hosts[hostId]) useRelayQuotaStore.getState().forgetHost(hostId) // a removed host's numbers go with it
     }
+    for (const hostId of Object.keys(prev.hosts)) {
+      if (!next.hosts[hostId]) useMaxMembersStore.getState().forgetHost(hostId) // and a cap request still out to it
+    }
     for (const [hostId, host] of Object.entries(next.hosts)) {
       const before = prev.hosts[hostId]
       const repointed = before !== undefined && identity(before) !== identity(host)
@@ -61,6 +66,7 @@ export function startUnattendedSupport(): () => void {
         current.delete(hostId) // an answer still on its way is the old daemon's
         store.forgetHost(hostId)
         useRelayQuotaStore.getState().forgetHost(hostId) // and so are the quota numbers it confirmed
+        useMaxMembersStore.getState().forgetHost(hostId) // and a cap request still out to it
       }
       if (next.runtime[hostId]?.status !== 'connected') continue
       if (repointed || !before || prev.runtime[hostId]?.status !== 'connected') probe(hostId)

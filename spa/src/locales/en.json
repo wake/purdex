@@ -2105,6 +2105,13 @@
   "unattended.quota.none": "No session to set",
   "unattended.quota.save_failed": "{{host}}: the quota of {{session}} was not saved ({{code}})",
   "unattended.quota.pending_lineage": "{{session}} is relaying; set it again once the relay is done",
+  "unattended.cap.label": "Cap",
+  "unattended.cap.minus": "Lower the cap",
+  "unattended.cap.plus": "Raise the cap",
+  "unattended.cap.in_use": "{{n}} member(s) in use",
+  "unattended.cap.below": "{{n}} member(s) in use; the cap cannot go below {{n}}",
+  "unattended.cap.ended": "This team has ended",
+  "unattended.cap.failed": "{{host}}: the cap of {{session}} was not changed ({{code}})",
   "unattended.held.title": "Out of quota, waiting for you",
   "unattended.held.row": "{{host}}: {{session}} · relay request · {{time}}"
 }

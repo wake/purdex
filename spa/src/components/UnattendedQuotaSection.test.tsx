@@ -9,11 +9,15 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
 import { setQuota } from '../lib/team/relay-quota-writer'
+import { setMaxMembers, teamKey, useMaxMembersStore } from '../lib/team/max-members'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
 import type { RosterSession, TeamRoster } from '../lib/team/roster'
 import type { SessionQuota } from '../lib/team/types'
 
 vi.mock('../lib/team/relay-quota-writer', () => ({ setQuota: vi.fn() }))
 const mockedSet = vi.mocked(setQuota)
+vi.mock('../lib/team/max-members', async (orig) => ({ ...(await orig<typeof import('../lib/team/max-members')>()), setMaxMembers: vi.fn() }))
+const mockedCap = vi.mocked(setMaxMembers)
 
 const A = 'host-a'
 const B = 'host-b'
@@ -43,6 +47,9 @@ beforeEach(() => {
   useTeamRosterStore.getState().reset()
   useRelayQuotaStore.getState().reset()
   mockedSet.mockReset()
+  mockedCap.mockReset()
+  useUnattendedStore.getState().reset()
+  useMaxMembersStore.getState().reset()
 })
 
 describe('which sessions get a row', () => {
@@ -194,12 +201,139 @@ describe('layout: aligned columns', () => {
     expect(rowFor('p1').className).toContain('contents')
   })
 
-  it('a long name is truncated with the address as its hint', () => {
-    show([{ hostId: A, rows: [q('p1', { title: 'a very long session title that cannot fit in one line of the panel at all', address: 'mlab/p1-xx' })] }])
+  it('a long name is truncated, and hovering it shows the whole name and the address', () => {
+    const long = 'a very long session title that cannot fit in one line of the panel at all'
+    show([{ hostId: A, rows: [q('p1', { title: long, address: 'mlab/p1-xx' })] }])
     const name = rowFor('p1').children[0] as HTMLElement
     expect(name.className).toContain('truncate')
     expect(name.className).toContain('min-w-0')
-    expect(name).toHaveAttribute('title', 'mlab/p1-xx')
+    expect(name).toHaveAttribute('title', long + '\nmlab/p1-xx')
   })
 })
 
+
+
+// The team cap (`PUT /api/team/max-members`): a third group on a lead's row, 「上限 − N +」.
+describe('the team cap stepper', () => {
+  const capTeam = (lead: string, over: Partial<TeamRoster> = {}): TeamRoster => ({ ...team(lead, []), max_members: 3, in_use: 1, ...over })
+  const supported = () => useUnattendedStore.getState().setMaxMembersSupport(A, 'yes')
+  const cap = (id: string) => within(rowFor(id)).getByTestId('cap-stepper')
+
+  it('a lead with a team in the roster shows 上限 and the roster\'s number, after the member stepper', () => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('l1')])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    expect(within(cap('l1')).getByText('上限')).toBeInTheDocument()
+    expect(within(cap('l1')).getByTestId('cap-value')).toHaveTextContent('3')
+    const cells = Array.from(rowFor('l1').children)
+    expect(cells.map((c) => c.getAttribute('data-field') ?? c.getAttribute('data-testid'))).toEqual([null, 'self_left', 'member_pool_left', 'cap-stepper'])
+  })
+
+  it('the rows share four columns when some lead has one; a plain row gets blank cells', () => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('l1')])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true }), q('p1')] }])
+    const grid = rowFor('l1').parentElement!
+    expect(grid.className).toMatch(/grid-cols-\[minmax\(0,1fr\)_auto_auto_auto\]/)
+    expect(rowFor('p1').children).toHaveLength(4)
+    expect(within(rowFor('p1')).getByTestId('quota-pool-cell-empty')).toBeInTheDocument()
+    expect(within(rowFor('p1')).getByTestId('cap-cell-empty')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['the host does not list team.max_members.v1', () => useUnattendedStore.getState().setMaxMembersSupport(A, 'no')],
+    ['the probe has not answered', () => {}],
+  ])('is not shown when %s (and the grid stays three columns)', (_n, setup) => {
+    setup()
+    useTeamRosterStore.getState().apply(A, [capTeam('l1')])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    expect(screen.queryByTestId('cap-stepper')).toBeNull()
+    expect(rowFor('l1').children).toHaveLength(3)
+  })
+
+  it('is not shown when the roster has no team for the lead, or a team without a cap (an older daemon)', () => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('other')])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    expect(screen.queryByTestId('cap-stepper')).toBeNull()
+    act(() => { useTeamRosterStore.getState().apply(A, [{ ...team('l1', []) }]) })
+    expect(screen.queryByTestId('cap-stepper')).toBeNull()
+  })
+
+  it('a cap without its usage is no stepper (− could not know where to stop)', () => {
+    supported()
+    const t = capTeam('l1')
+    delete t.in_use
+    useTeamRosterStore.getState().apply(A, [t])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    expect(screen.queryByTestId('cap-stepper')).toBeNull()
+  })
+
+  it('finds the team by the LEAD\'s session id, not by position', () => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('l2', { max_members: 6 }), capTeam('l1', { max_members: 2 })])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true }), q('l2', { is_lead: true })] }])
+    expect(within(cap('l1')).getByTestId('cap-value')).toHaveTextContent('2')
+    expect(within(cap('l2')).getByTestId('cap-value')).toHaveTextContent('6')
+  })
+
+  it('a click sends the absolute value, current ± 1, for that team', () => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 4, in_use: 1 })])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    fireEvent.click(within(cap('l1')).getByRole('button', { name: '調高上限' }))
+    expect(mockedCap).toHaveBeenLastCalledWith({ hostId: A, teamId: 't-l1', label: 'T-l1' }, 5)
+    fireEvent.click(within(cap('l1')).getByRole('button', { name: '調低上限' }))
+    expect(mockedCap).toHaveBeenLastCalledWith({ hostId: A, teamId: 't-l1', label: 'T-l1' }, 3)
+  })
+
+  it.each([
+    ['− stops at the members in use', { max_members: 3, in_use: 3 }, true, false],
+    ['− is enabled above them', { max_members: 4, in_use: 3 }, false, false],
+    ['− never goes below 1 even with nobody in use', { max_members: 1, in_use: 0 }, true, false],
+    ['+ stops at 8', { max_members: 8, in_use: 2 }, false, true],
+    ['+ is enabled at 7', { max_members: 7, in_use: 2 }, false, false],
+  ])('%s', (_n, over, minusDisabled, plusDisabled) => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('l1', over)])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    expect(within(cap('l1')).getByRole('button', { name: '調低上限' }).hasAttribute('disabled')).toBe(minusDisabled)
+    expect(within(cap('l1')).getByRole('button', { name: '調高上限' }).hasAttribute('disabled')).toBe(plusDisabled)
+  })
+
+  it('both buttons are disabled while that team\'s request is out, and free again after', () => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 4, in_use: 1 }), capTeam('l2', { max_members: 4, in_use: 1 })])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true }), q('l2', { is_lead: true })] }])
+    act(() => { useMaxMembersStore.getState().begin(teamKey(A, 't-l1'), { token: 1, identity: 'x' }) })
+    expect(within(cap('l1')).getByRole('button', { name: '調高上限' })).toBeDisabled()
+    expect(within(cap('l1')).getByRole('button', { name: '調低上限' })).toBeDisabled()
+    expect(within(cap('l2')).getByRole('button', { name: '調高上限' })).toBeEnabled() // another team is not held
+    act(() => { useMaxMembersStore.getState().end(teamKey(A, 't-l1'), 1) })
+    expect(within(cap('l1')).getByRole('button', { name: '調高上限' })).toBeEnabled()
+  })
+
+  it('shows what the roster says and follows its events: no optimistic number', () => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 3 })])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    fireEvent.click(within(cap('l1')).getByRole('button', { name: '調高上限' }))
+    expect(within(cap('l1')).getByTestId('cap-value')).toHaveTextContent('3') // the click changed nothing on screen
+    act(() => { useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 4 })]) })
+    expect(within(cap('l1')).getByTestId('cap-value')).toHaveTextContent('4')
+  })
+
+  it('names the members in use on hover', () => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('l1', { in_use: 2 })])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    expect(cap('l1')).toHaveAttribute('title', '目前有 2 個 member')
+  })
+
+  it('the other host\'s support does not show a cap on this one', () => {
+    useUnattendedStore.getState().setMaxMembersSupport(B, 'yes')
+    useTeamRosterStore.getState().apply(A, [capTeam('l1')])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    expect(screen.queryByTestId('cap-stepper')).toBeNull()
+  })
+})
