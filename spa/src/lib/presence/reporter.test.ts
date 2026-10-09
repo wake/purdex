@@ -170,6 +170,50 @@ describe('push presence reporter', () => {
     expect(e.puts).toHaveLength(2) // now recorded as sent: a change with the same content sends nothing more
   })
 
+  it('a change that comes while a PUT is out is sent when it settles, not at the next heartbeat', async () => {
+    const e = makeEnv()
+    e.capable.delete('h2')
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const inner = e.deps.put
+    let first = true
+    e.deps.put = async (hostId, body) => {
+      await inner(hostId, body)
+      if (first) { first = false; await gate }
+    }
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS) // the first PUT is out and held
+    expect(e.puts).toHaveLength(1)
+    e.shown = { h1: [{ code: 'c2', name: 'ops' }] }
+    e.change()
+    await tick(DEBOUNCE_MS * 2) // flushed while the request is in flight: skipped, not lost
+    expect(e.puts).toHaveLength(1)
+    release()
+    await tick(DEBOUNCE_MS * 2)
+    expect(e.puts).toHaveLength(2)
+    expect(e.puts[1].body.sessions).toEqual([{ code: 'c2', name: 'ops' }])
+  })
+
+  it('the user going idle while a PUT is out is reported when it settles', async () => {
+    const e = makeEnv()
+    e.capable.delete('h2')
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const inner = e.deps.put
+    let first = true
+    e.deps.put = async (hostId, body) => {
+      await inner(hostId, body)
+      if (first) { first = false; await gate }
+    }
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS)
+    e.tracker.set(false)
+    await tick(DEBOUNCE_MS * 2)
+    release()
+    await tick(DEBOUNCE_MS * 2)
+    expect(e.puts.map((p) => p.body.active)).toEqual([true, false])
+  })
+
   it('a failed active:false is retried', async () => {
     const e = makeEnv()
     stop = startPushPresence(e.deps)

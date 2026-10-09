@@ -28,6 +28,7 @@ export function createActivityTracker(opts: ActivityOptions = {}): ActivityTrack
   let last = Number.NEGATIVE_INFINITY
   let lastMove = Number.NEGATIVE_INFINITY
   let disposed = false
+  let expiry: ReturnType<typeof setTimeout> | undefined
   const subs = new Set<(active: boolean) => void>()
 
   const active = (at: number): boolean => at - last <= windowMs && document.hasFocus()
@@ -42,6 +43,9 @@ export function createActivityTracker(opts: ActivityOptions = {}): ActivityTrack
   const onInput = () => {
     if (disposed) return
     last = now()
+    // Nothing else tells a subscriber that the 120 s have run out: ask again when they do.
+    if (expiry !== undefined) clearTimeout(expiry)
+    expiry = setTimeout(() => { expiry = undefined; notify() }, windowMs + 1)
     notify()
   }
   const onMove = () => {
@@ -68,6 +72,7 @@ export function createActivityTracker(opts: ActivityOptions = {}): ActivityTrack
     },
     dispose() {
       disposed = true
+      if (expiry !== undefined) clearTimeout(expiry)
       for (const [name, fn] of inputs) target.removeEventListener(name, fn, { capture: true })
       subs.clear()
     },

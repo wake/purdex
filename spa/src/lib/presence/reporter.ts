@@ -84,6 +84,7 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
   const support = new Map<string, { identity: string; supported: boolean | null }>()
   const sent = new Map<string, Sent>()
   const inflight = new Set<string>()
+  const skipped = new Set<string>() // changes that came while that host's PUT was out: sent when it settles
   let debounce: ReturnType<typeof setTimeout> | undefined
   let stopped = false
 
@@ -112,7 +113,8 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
     const active = deps.tracker.isActive()
     const shown = deps.visible()
     for (const [hostId, s] of support) {
-      if (s.supported !== true || inflight.has(hostId)) continue
+      if (s.supported !== true) continue
+      if (inflight.has(hostId)) { skipped.add(hostId); continue }
       const last = sent.get(hostId)
       let body: PresenceBody
       let next: Sent
@@ -132,7 +134,10 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
       deps.put(hostId, body).then(
         () => { if (!stopped && support.get(hostId) === entry) sent.set(hostId, next) },
         () => { /* ignored: the next tick retries */ },
-      ).finally(() => inflight.delete(hostId))
+      ).finally(() => {
+        inflight.delete(hostId)
+        if (skipped.delete(hostId)) schedule() // what changed during the request is not lost until the next heartbeat
+      })
     }
   }
 

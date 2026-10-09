@@ -97,6 +97,40 @@ describe('activity tracker', () => {
     t.dispose()
   })
 
+  it('tells a subscriber when the 120 s run out, without another event', () => {
+    const t = createActivityTracker()
+    const seen: boolean[] = []
+    t.subscribe((active) => seen.push(active))
+    key()
+    expect(seen).toEqual([true])
+    vi.advanceTimersByTime(120_000)
+    expect(seen).toEqual([true])
+    vi.advanceTimersByTime(2)
+    expect(seen).toEqual([true, false])
+    t.dispose()
+  })
+
+  it('later input pushes the expiry back', () => {
+    const t = createActivityTracker()
+    const seen: boolean[] = []
+    t.subscribe((active) => seen.push(active))
+    key()
+    vi.advanceTimersByTime(100_000)
+    key()
+    vi.advanceTimersByTime(100_000)
+    expect(seen).toEqual([true])
+    vi.advanceTimersByTime(21_000)
+    expect(seen).toEqual([true, false])
+    t.dispose()
+  })
+
+  it('dispose cancels the expiry timer', () => {
+    const t = createActivityTracker()
+    key()
+    t.dispose()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('stops listening on dispose', () => {
     const t = createActivityTracker()
     t.dispose()
