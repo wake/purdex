@@ -223,6 +223,31 @@ describe('TabBar — team group (TI-2)', () => {
     expect(container.querySelector('[data-tab-id="ma"] [data-testid="team-tab-shadow"]')).toBeNull()
   })
 
+  it('a collapsed team: the member whose lead is in another workspace is still drawn (same rule as stepping)', () => {
+    const tabs = [mk('lead', 'lead-tm'), mk('ma', 'a-tm'), mk('mb', 'b-tm'), mk('plain', 'other')]
+    seed([roster()], tabs, [{ id: 'w1', tabs: ['ma', 'plain'] }, { id: 'w2', tabs: ['lead', 'mb'] }])
+    act(() => useTeamUiStore.getState().setCollapsed(KEY, true))
+    const first = bar([tabs[1], tabs[3]])
+    expect(idsInOrder(first.container)).toEqual(['ma', 'plain'])
+    first.unmount()
+    const second = bar([tabs[0], tabs[2]]) // the lead's own workspace: the member behind it is hidden
+    expect(idsInOrder(second.container)).toEqual(['LABEL', 'lead'])
+  })
+
+  describe('a LOCAL member that is joining', () => {
+    it('gets the state word only: no alias, no dangling separator', () => {
+      const { t } = useI18nStore.getState()
+      const tabs = [mk('lead', 'lead-tm'), mk('ma', 'a-tm')]
+      seed([roster({}, [mem('A', 1, 'a-tm', { state: 'joining' })])], tabs)
+      const { container } = bar(tabs)
+      const tab = container.querySelector('[data-tab-id="ma"]') as HTMLElement
+      const label = tab.getAttribute('aria-label')!
+      expect(label.endsWith(` · ${t('team.seat_state.joining')}`)).toBe(true)
+      expect(label).not.toMatch(/· [:：]/)
+      expect(tab).toHaveAttribute('data-seat-state', 'joining')
+    })
+  })
+
   describe('a member on another host', () => {
     const remote = (state: string) => roster({}, [mem('R', 1, 'r-tm', { state, host_id: 'dm-b', host_alias: 'b26' } as Partial<RosterMember>)])
     const scene = (state: string) => {

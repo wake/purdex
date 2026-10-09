@@ -124,7 +124,9 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
 
   // A remote member that is still joining / being released / killed: the state goes in the tooltip and the aria name only.
   const seatState = group?.role === 'member' && ['joining', 'releasing', 'killing'].includes(group.seatState) ? group.seatState : null
-  const stateSuffix = seatState ? t('team.seat_state_suffix', { alias: group!.hostAlias, state: t(`team.seat_state.${seatState}`) }) : null
+  // A local seat has no host alias: the state word alone, never "<empty>：加入中".
+  const stateWord = seatState ? t(`team.seat_state.${seatState}`) : ''
+  const stateSuffix = seatState ? (group!.hostAlias !== '' ? t('team.seat_state_suffix', { alias: group!.hostAlias, state: stateWord }) : stateWord) : null
   const tipText = stateSuffix ? `${label} · ${stateSuffix}` : label
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

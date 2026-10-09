@@ -1,7 +1,8 @@
 // spa/src/components/team/groupSegments.ts — splits the normal (unpinned) zone of the TabBar into plain tabs and team runs
-// (spec §4.2, plan TI-2). A run starts at a team's LEAD tab and takes the member tabs of the same team right behind it
-// (the tab lifecycle keeps them contiguous, in team order). A member with no lead before it — its lead is in another
-// workspace, or pinned — stays an ordinary tab. A collapsed team keeps the lead and counts the members it hides.
+// (spec §4.2, plan TI-2). The run definition is `teamRuns` (lib/team/team-runs.ts), shared with stepping / ⌘N so what is
+// drawn is what can be reached: a lead plus the member tabs of its team right behind it. A member outside such a run stays
+// an ordinary tab. A collapsed team keeps the lead and counts the members it hides.
+import { teamRuns } from '../../lib/team/team-runs'
 import type { TeamTabMark } from './team-display'
 
 export type Segment<T extends { id: string }> =
@@ -13,21 +14,19 @@ export function groupSegments<T extends { id: string }>(
   tabMark: (tabId: string) => TeamTabMark | null,
   collapsed: Record<string, boolean>,
 ): Segment<T>[] {
+  const runs = teamRuns(tabs.map((t) => t.id), (id) => {
+    const m = tabMark(id)
+    return m ? { key: m.teamKey, role: m.role } : null
+  })
   const out: Segment<T>[] = []
-  for (let i = 0; i < tabs.length; i++) {
-    const mark = tabMark(tabs[i].id)
-    if (!mark || mark.role !== 'lead') {
-      out.push({ kind: 'tab', tab: tabs[i] })
-      continue
-    }
-    const run: T[] = [tabs[i]]
-    while (i + 1 < tabs.length) {
-      const next = tabMark(tabs[i + 1].id)
-      if (!next || next.role !== 'member' || next.teamKey !== mark.teamKey) break
-      run.push(tabs[++i])
-    }
-    const isCollapsed = collapsed[mark.teamKey] === true
-    out.push({ kind: 'team', mark, tabs: isCollapsed ? run.slice(0, 1) : run, hidden: isCollapsed ? run.length - 1 : 0 })
+  let at = 0
+  for (const run of runs) {
+    for (; at < run.start; at++) out.push({ kind: 'tab', tab: tabs[at] })
+    const all = tabs.slice(run.start, run.start + 1 + run.members)
+    const isCollapsed = collapsed[run.teamKey] === true
+    out.push({ kind: 'team', mark: tabMark(all[0].id)!, tabs: isCollapsed ? all.slice(0, 1) : all, hidden: isCollapsed ? all.length - 1 : 0 })
+    at = run.start + all.length
   }
+  for (; at < tabs.length; at++) out.push({ kind: 'tab', tab: tabs[at] })
   return out
 }

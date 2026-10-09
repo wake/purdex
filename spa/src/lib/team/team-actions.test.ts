@@ -247,11 +247,16 @@ describe('toggleTeamCollapse', () => {
 describe('visibleTabIds', () => {
   const hit = (key: string, role: 'lead' | 'member') => ({ key, role })
   const teamOf = (id: string) => ({ lead: hit('k', 'lead'), ma: hit('k', 'member'), mb: hit('k', 'member'), z: hit('other', 'member') } as Record<string, ReturnType<typeof hit>>)[id] ?? null
-  it('drops the member tabs of collapsed teams only', () => {
-    const ids = ['lead', 'ma', 'x', 'mb', 'z']
-    expect(visibleTabIds(ids, { k: true }, teamOf)).toEqual(['lead', 'x', 'z'])
+  it('drops the member tabs of collapsed teams that sit in a run behind their lead, nothing else', () => {
+    const ids = ['x', 'lead', 'ma', 'mb', 'z']
+    expect(visibleTabIds(ids, { k: true }, teamOf)).toEqual(['x', 'lead', 'z'])
     expect(visibleTabIds(ids, {}, teamOf)).toEqual(ids)
-    expect(visibleTabIds(ids, { k: true, other: true }, teamOf)).toEqual(['lead', 'x'])
+    expect(visibleTabIds(ids, { k: true, other: true }, teamOf)).toEqual(['x', 'lead', 'z']) // z: no lead in this list
+  })
+
+  it('a member whose lead is not in this workspace\'s list stays (it is drawn as an ordinary tab)', () => {
+    expect(visibleTabIds(['x', 'ma', 'z'], { k: true }, teamOf)).toEqual(['x', 'ma', 'z'])
+    expect(visibleTabIds(['lead', 'x', 'ma'], { k: true }, teamOf)).toEqual(['lead', 'x', 'ma']) // not in the run behind the lead
   })
 })
 

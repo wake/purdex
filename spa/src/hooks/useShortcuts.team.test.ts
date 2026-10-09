@@ -85,6 +85,23 @@ describe('useShortcuts with a collapsed team', () => {
     fire('next-tab'); expect(active()).toBe('mb')
   })
 
+  it('a member whose lead is in another workspace is drawn, so stepping and numbered shortcuts include it', () => {
+    seedScene({
+      members: [['A', 'a-tm'], ['B', 'b-tm']],
+      tabs: [['x', null], ['lead', 'lead-tm'], ['ma', 'a-tm'], ['mb', 'b-tm'], ['z', null]],
+      workspaces: [{ id: 'w1', tabs: ['lead', 'mb'] }, { id: 'w2', tabs: ['x', 'ma', 'z'] }],
+      activeWorkspaceId: 'w2',
+      activeTabId: 'ma',
+    })
+    useTeamUiStore.getState().setCollapsed(KEY, true)
+    const fire = mockElectronAPI()
+    renderHook(() => useShortcuts())
+    fire('next-tab'); expect(active()).toBe('z')
+    fire('prev-tab'); expect(active()).toBe('ma') // the member is in the list, not "not found -> first tab"
+    fire('switch-tab-2'); expect(active()).toBe('ma')
+    fire('switch-tab-last'); expect(active()).toBe('z')
+  })
+
   it('close-tab still reaches a hidden member that is the active tab (its workspace owns it)', () => {
     const fire = mockElectronAPI()
     renderHook(() => useShortcuts())
