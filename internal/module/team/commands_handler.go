@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -87,7 +88,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch cmd.Kind {
-	case team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid:
+	case team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid, team.CommandAppearance:
 	default:
 		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(cmd.Kind)+" commands")
 		return
@@ -198,7 +199,7 @@ func (m *Module) peerEntry(alias string) (e config.PeerHost, ourHostID string, o
 // characters (they end up in rows and, through templates, in notices). "" means valid.
 func validateCommand(c team.TeamCommand) string {
 	for _, s := range []string{c.ID, c.Kind, c.ToHostID, c.TeamID, c.TeamName, c.MK, c.Lead.SessionID, c.Lead.Ref, c.Lead.Title,
-		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID, c.Cwd, c.Title, c.Model, c.Effort} {
+		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID, c.Cwd, c.Title, c.Model, c.Effort, c.TeamLabel} {
 		if len(s) > maxCommandField || !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
@@ -222,6 +223,10 @@ func validateCommand(c team.TeamCommand) string {
 	case team.CommandVoid:
 		if !uuidV4.MatchString(c.CommandID) || c.CommandID == c.ID {
 			return "void: command_id (a UUID v4 other than the void's own id) is required"
+		}
+	case team.CommandAppearance:
+		if c.TeamColor != nil && (*c.TeamColor < 0 || *c.TeamColor > team.MaxTeamColor) {
+			return "team.appearance: team_color is 0-" + strconv.Itoa(team.MaxTeamColor) + " or absent"
 		}
 	case team.CommandLeadMoved:
 		switch {

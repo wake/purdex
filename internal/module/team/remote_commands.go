@@ -189,7 +189,7 @@ func (m *Module) finishRemote(w http.ResponseWriter, t team.Team, mr memberRow, 
 // liveRemoteHostsTx are the hosts that hold a live remote row of the team (§4.2), read in tx.
 // withSpawns adds the hosts that hold only a running forwarded spawn of the team (#2327): `end` has to reach them too, to
 // abort the op before it registers a member nobody leads.
-func (s *Store) liveRemoteHostsTx(tx *sql.Tx, teamID string, withSpawns bool) ([]string, error) {
+func (s *Store) liveRemoteHostsTx(tx dbtxq, teamID string, withSpawns bool) ([]string, error) {
 	q, args := `SELECT host_id FROM team_members WHERE team_id = ? AND host_id <> ? AND state IN `+liveRemoteStates, []any{teamID, s.localHostID}
 	if withSpawns {
 		q, args = q+` UNION SELECT host_id FROM remote_spawns WHERE team_id = ? AND host_id <> ? AND state = 'running'`, append(args, teamID, s.localHostID)
@@ -210,13 +210,28 @@ func (s *Store) liveRemoteHostsTx(tx *sql.Tx, teamID string, withSpawns bool) ([
 	return hosts, rows.Err()
 }
 
+// LiveRemoteHosts are the member hosts that hold a live remote row of the team (and, with withSpawns, a running forwarded
+// spawn), outside a transaction: the hosts a caller asks about before it opens the one that writes.
+func (s *Store) LiveRemoteHosts(teamID string, withSpawns bool) ([]string, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	return s.liveRemoteHostsTx(tx, teamID, withSpawns)
+}
+
 // enqueueTeamLevelTx enqueues one team-level command (no mk) per host with a live remote row of the team, in tx.
-func (s *Store) enqueueTeamLevelTx(tx *sql.Tx, t team.Team, kind string, lead team.TeamLead, extra func(*team.TeamCommand), newID func() string, now int64) (int, error) {
-	hosts, err := s.liveRemoteHostsTx(tx, t.ID, kind == CmdEnd)
+func (s *Store) enqueueTeamLevelTx(tx dbtxq, t team.Team, kind string, lead team.TeamLead, extra func(*team.TeamCommand), newID func() string, now int64, only map[string]bool) (int, error) {
+	hosts, err := s.liveRemoteHostsTx(tx, t.ID, kind == CmdEnd || kind == CmdAppearance)
 	if err != nil {
 		return 0, err
 	}
+	n := 0
 	for _, h := range hosts {
+		if only != nil && !only[h] {
+			continue
+		}
 		cmd, err := remoteCommand(newID(), kind, h, t, "", lead, extra)
 		if err != nil {
 			return 0, err
@@ -224,8 +239,9 @@ func (s *Store) enqueueTeamLevelTx(tx *sql.Tx, t team.Team, kind string, lead te
 		if err := s.EnqueueCommand(tx, cmd, now); err != nil {
 			return 0, err
 		}
+		n++
 	}
-	return len(hosts), nil
+	return n, nil
 }
 
 // EndTeamWithCommands is EndTeam that also enqueues `end` for every host with a live remote row, inside the same
@@ -240,7 +256,7 @@ func (s *Store) EndTeamWithCommands(t team.Team, reason string, at int64, lead t
 		return false, err
 	}
 	// the rows keep their states (D4); the commands read them, so they are enqueued from the rows as they are
-	if _, err := s.enqueueTeamLevelTx(tx, t, CmdEnd, lead, nil, newID, at); err != nil {
+	if _, err := s.enqueueTeamLevelTx(tx, t, CmdEnd, lead, nil, newID, at, nil); err != nil {
 		return false, err
 	}
 	// the forwarded spawns still running are over with the team (the member host aborts them on the end above): close them
@@ -284,7 +300,7 @@ func (s *Store) enqueueLeadMovedTx(tx *sql.Tx, teamIDs []string, newLead team.Te
 		}
 		if _, err := s.enqueueTeamLevelTx(tx, t, CmdLeadMoved, newLead, func(c *team.TeamCommand) {
 			c.LeadSessionID, c.LeadRef = newLead.SessionID, newLead.Ref
-		}, newID, now); err != nil {
+		}, newID, now, nil); err != nil {
 			return err
 		}
 	}

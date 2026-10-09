@@ -15,7 +15,7 @@ import (
 // it here, so this list is the switch that lets a remote lead act on this host. A kind is listed once a route applies it
 // and the notice it owes is delivered (X3d): adopt, release, end, lead_moved, void, kill and spawn (X4a).
 func teamKinds() []string {
-	return []string{team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid}
+	return []string{team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid, team.CommandAppearance}
 }
 
 // teamFactKinds is what this daemon applies as a lead host on POST /api/peers/team/facts (X3b-2, X4b): `ended`, and the

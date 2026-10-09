@@ -18,6 +18,8 @@ type RemoteMemberView struct {
 	Cwd             string `json:"cwd"`
 	TeamID          string `json:"team_id"`
 	TeamName        string `json:"team_name"`
+	TeamLabel       string `json:"team_label,omitempty"` // "" until the lead host sends team.appearance
+	TeamColor       *int   `json:"team_color,omitempty"` // absent = automatic (the App's hash of team_id)
 	LeadHostID      string `json:"lead_host_id"`
 	LeadAlias       string `json:"lead_alias"` // "" when the lead host is no longer paired
 	LeadAddress     string `json:"lead_address"`

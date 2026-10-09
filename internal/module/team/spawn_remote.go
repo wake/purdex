@@ -28,6 +28,9 @@ import (
 type remoteSpawnLead struct {
 	Lead     team.TeamLead `json:"lead"`
 	TeamName string        `json:"team_name,omitempty"`
+	// the label and colour a team.appearance command left (#2288)
+	TeamLabel string `json:"team_label,omitempty"`
+	TeamColor *int   `json:"team_color,omitempty"`
 }
 
 // maxPerLeadHost bounds what one lead host may hold on this host at once: the forwarded spawns still running plus its
@@ -207,6 +210,10 @@ func (m *Module) spawnFinishRemote(op spawnRow, o *team.Origin) {
 		Title: op.Title, Model: op.Model, Effort: op.Effort, CreatedAt: now, UpdatedAt: now}
 	fact := team.TeamFact{ID: m.newID(), Kind: team.FactRegistered, ToHostID: op.LeadHostID, TeamID: op.TeamID, MK: op.ID,
 		MemberSession: op.SessionID, Ref: o.Ref, PID: o.PID, ProcStart: o.ProcStart, Pane: op.PaneID, Title: op.Title}
+	mem.TeamLabel = lead.TeamLabel
+	if lead.TeamColor != nil {
+		mem.TeamColor = sql.NullInt64{Int64: int64(*lead.TeamColor), Valid: true}
+	}
 	won, err := m.store.FinishRemoteSpawn(op.ID, mem, fact, now)
 	if err != nil {
 		m.abortSpawn(op.ID, op.TmuxID, op.TmuxInstance, err)

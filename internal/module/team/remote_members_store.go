@@ -77,7 +77,9 @@ type remoteMemberRow struct {
 	LeadTitle       string
 	LeadPID         int
 	LeadProcStart   string
-	Origin          string // adopted | spawned
+	TeamLabel       string        // "" until the lead host sends team.appearance (#2288)
+	TeamColor       sql.NullInt64 // NULL = automatic
+	Origin          string        // adopted | spawned
 	State           string
 	PID             int
 	ProcStart       string
@@ -93,12 +95,20 @@ type remoteMemberRow struct {
 
 const remoteMemberCols = `mk, member_session_id, ref, team_id, team_name, lead_host_id, lead_session_id, lead_ref,
 	lead_address, lead_title, lead_pid, lead_proc_start, origin, state, pid, proc_start, pane_id, tmux_session,
-	cwd, title, model, effort, created_at, updated_at`
+	cwd, title, model, effort, created_at, updated_at, team_label, team_color`
 
 func (r *remoteMemberRow) dest() []any {
 	return []any{&r.MK, &r.MemberSessionID, &r.Ref, &r.TeamID, &r.TeamName, &r.LeadHostID, &r.LeadSessionID, &r.LeadRef,
 		&r.LeadAddress, &r.LeadTitle, &r.LeadPID, &r.LeadProcStart, &r.Origin, &r.State, &r.PID, &r.ProcStart, &r.PaneID,
-		&r.TmuxSession, &r.Cwd, &r.Title, &r.Model, &r.Effort, &r.CreatedAt, &r.UpdatedAt}
+		&r.TmuxSession, &r.Cwd, &r.Title, &r.Model, &r.Effort, &r.CreatedAt, &r.UpdatedAt, &r.TeamLabel, &r.TeamColor}
+}
+
+// migrateRemoteAppearance gives remote_members the label and colour the lead host sends with team.appearance (#2288).
+func migrateRemoteAppearance(db *sql.DB) error {
+	if err := ensureColumn(db, "remote_members", "team_label", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return ensureColumn(db, "remote_members", "team_color", "INTEGER")
 }
 
 // InsertRemoteMember stores r, idempotent on mk (a command replayed stores
@@ -115,10 +125,10 @@ func insertRemoteMemberIn(q dbtx, r remoteMemberRow) error {
 			r.MK, r.MemberSessionID, r.TeamID, r.LeadHostID, r.State)
 	}
 	res, err := q.Exec(`INSERT INTO remote_members (`+remoteMemberCols+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (mk) DO NOTHING`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (mk) DO NOTHING`,
 		r.MK, r.MemberSessionID, r.Ref, r.TeamID, r.TeamName, r.LeadHostID, r.LeadSessionID, r.LeadRef,
 		r.LeadAddress, r.LeadTitle, r.LeadPID, r.LeadProcStart, r.Origin, r.State, r.PID, r.ProcStart, r.PaneID,
-		r.TmuxSession, r.Cwd, r.Title, r.Model, r.Effort, r.CreatedAt, r.UpdatedAt)
+		r.TmuxSession, r.Cwd, r.Title, r.Model, r.Effort, r.CreatedAt, r.UpdatedAt, r.TeamLabel, r.TeamColor)
 	if err != nil {
 		return fmt.Errorf("insert remote member %s: %w", r.MK, err)
 	}
