@@ -3,6 +3,8 @@
 //   {op:"snapshot", teams}  to each new subscriber;  {op:"changed", teams}  after every change.
 // This is the trust boundary: the frame is checked whole and a malformed one is dropped whole (the store keeps what it
 // had), because half a roster would read as "those teams ended".
+import { isCapPair } from './types'
+
 export const ROSTER_EVENT_TYPE = 'team.roster'
 
 /** The live context window of a session (statusline sample); `used_percentage` is null before the first sample. */
@@ -117,7 +119,7 @@ export function parseRosterEvent(value: unknown): RosterEventValue | string {
         team_name: typeof t.team_name === 'string' ? t.team_name : '',
         team_label: typeof t.team_label === 'string' ? t.team_label : '',
         // Both or neither: a cap without its usage (or the reverse) is not a number to build a stepper on.
-        ...(Number.isInteger(max_members) && Number.isInteger(in_use) ? { max_members, in_use } : {}),
+        ...(isCapPair(max_members, in_use) ? { max_members, in_use } : {}),
       }
     }),
   }

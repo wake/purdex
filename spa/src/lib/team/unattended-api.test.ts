@@ -306,6 +306,34 @@ describe('unattended-api', () => {
       }
     })
 
+    it('a host re-pointed while the client descriptor resolves is not written to: nothing is sent', async () => {
+      const call = putMaxMembers(hostId, 't1', 3)
+      const h = useHostStore.getState().hosts[hostId]
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, [hostId]: { ...h, ip: '100.64.0.99' } } }) // re-pointed
+      expect((await rejection(call)).code).toBe('host_changed')
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+
+    it('the same guard protects the relay quota and the unattended switch', async () => {
+      const h = useHostStore.getState().hosts[hostId]
+      const repoint = () => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, [hostId]: { ...useHostStore.getState().hosts[hostId], ip: `100.64.0.${Math.floor(Math.random() * 200) + 20}` } } })
+      const q = putRelayQuota(hostId, 's1', 'self_left', 3)
+      repoint()
+      expect((await rejection(q)).code).toBe('host_changed')
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, [hostId]: h } })
+      const u = putUnattended(hostId, true)
+      repoint()
+      expect((await rejection(u)).code).toBe('host_changed')
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+
+    it('an answer with an impossible cap is bad_response (outside 1-8, negative or above the cap in use)', async () => {
+      for (const bad of [{ max_members: 0, in_use: 0 }, { max_members: 9, in_use: 1 }, { max_members: -1, in_use: -1 }, { max_members: 2, in_use: 3 }, { max_members: 4, in_use: -1 }]) {
+        testGlobal.fetch.mockResolvedValueOnce(json({ team_id: 't1', ...bad }))
+        expect((await rejection(putMaxMembers(hostId, 't1', 4))).code).toBe('bad_response')
+      }
+    })
+
     it('an answer about another team is bad_response (its numbers are not this team\'s to show)', async () => {
       testGlobal.fetch.mockResolvedValueOnce(json({ team_id: 'other', max_members: 4, in_use: 1 }))
       expect((await rejection(putMaxMembers(hostId, 't1', 4))).code).toBe('bad_response')

@@ -8,8 +8,9 @@
 // (`bad_response`), never read as "off" or as an empty page; only a row of a later daemon's kind is skipped.
 import { ApprovalApiError, send } from './approval-api'
 import { clientDescriptor } from './client-label'
+import { hostIdentityNow } from './quota-host'
 import { parseRelayQuotaView, parseSessionQuotas } from './relay-quota-wire'
-import { isApproval, isUnattendedState, isUnknownKindRow, type Approval, type MaxMembersView, type RelayQuotaField, type RelayQuotaView, type UnattendedState, type UnattendedView } from './types'
+import { isApproval, isCapPair, isUnattendedState, isUnknownKindRow, type Approval, type MaxMembersView, type RelayQuotaField, type RelayQuotaView, type UnattendedState, type UnattendedView } from './types'
 
 export const UNATTENDED_PATH = '/api/team/unattended'
 
@@ -103,12 +104,27 @@ export async function getUnattended(hostId: string, q: UnattendedPageQuery = {},
  * success even with `list_failed` (the write took effect; read only the state from it — plan decision 30).
  */
 export async function putUnattended(hostId: string, on: boolean): Promise<UnattendedView> {
-  const client = await clientDescriptor()
+  const client = await descriptorFor(hostId)
   return viewOf(await send<unknown>(hostId, UNATTENDED_PATH, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ on, client }),
   }))
+}
+
+/**
+ * This app's client descriptor for a write to `hostId`: resolving it can take a moment (label lookup), and the host id can
+ * be re-pointed to another daemon meanwhile; a write must go to the daemon its caller decided on. When the host changed
+ * (or is gone) by the time the descriptor is there, nothing is sent: code `host_changed`.
+ */
+async function descriptorFor(hostId: string): Promise<Awaited<ReturnType<typeof clientDescriptor>>> {
+  const identity = hostIdentityNow(hostId)
+  if (identity === null) throw new ApprovalApiError(0, 'host_removed')
+  const client = await clientDescriptor()
+  const now = hostIdentityNow(hostId)
+  if (now === null) throw new ApprovalApiError(0, 'host_removed')
+  if (now !== identity) throw new ApprovalApiError(0, 'host_changed')
+  return client
 }
 
 export const MAX_MEMBERS_PATH = '/api/team/max-members'
@@ -120,7 +136,7 @@ export const MAX_MEMBERS_TIMEOUT_MS = 10_000
  * `max_below_in_use` keeps its body on the error (`in_use`), 404 `not_found` means the team ended.
  */
 export async function putMaxMembers(hostId: string, teamId: string, maxMembers: number): Promise<MaxMembersView> {
-  const client = await clientDescriptor()
+  const client = await descriptorFor(hostId)
   const raw = await send<unknown>(hostId, MAX_MEMBERS_PATH, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -129,7 +145,7 @@ export async function putMaxMembers(hostId: string, teamId: string, maxMembers: 
   })
   const r = raw as Partial<MaxMembersView> | null
   // The answer must be about the team that was asked: another team's numbers are not this one's to show.
-  if (typeof r !== 'object' || r === null || r.team_id !== teamId || !Number.isInteger(r.max_members) || !Number.isInteger(r.in_use)) {
+  if (typeof r !== 'object' || r === null || !isCapPair(r.max_members, r.in_use) || r.team_id !== teamId) {
     throw new ApprovalApiError(200, 'bad_response', 'the max-members answer is not the wire shape')
   }
   return { team_id: r.team_id, max_members: r.max_members as number, in_use: r.in_use as number }
@@ -143,7 +159,7 @@ export const RELAY_QUOTA_PATH = '/api/team/relay-quota'
  * `rev`; a body that is not the wire shape is `bad_response`, never a number to show.
  */
 export async function putRelayQuota(hostId: string, sessionId: string, field: RelayQuotaField, value: number): Promise<RelayQuotaView> {
-  const client = await clientDescriptor()
+  const client = await descriptorFor(hostId)
   const raw = await send<unknown>(hostId, RELAY_QUOTA_PATH, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

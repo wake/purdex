@@ -83,6 +83,35 @@ describe('setMaxMembers', () => {
     expect(capOf('t1')).toMatchObject({ max_members: 3, in_use: 2 })
   })
 
+  it('an event about ANOTHER team while the request is out does not discard the answer', async () => {
+    const p = setMaxMembers(target, 3)
+    useTeamRosterStore.getState().apply(H, [team('t1'), team('t2', { in_use: 2 })]) // t2 changed; t1 did not
+    calls[0].resolve({ team_id: 't1', max_members: 3, in_use: 1 })
+    await p
+    expect(capOf('t1')).toMatchObject({ max_members: 3, in_use: 1 })
+    expect(capOf('t2')?.in_use).toBe(2)
+  })
+
+  it.each([
+    ['below 1', 0], ['above 8', 9], ['not an integer', 2.5], ['NaN', Number.NaN],
+    ['below the members in use', 1],
+  ])('a value the daemon would refuse is not sent: %s', (_n, value) => {
+    useTeamRosterStore.getState().apply(H, [team('t1', { max_members: 3, in_use: 2 })])
+    void setMaxMembers(target, value)
+    expect(calls).toHaveLength(0)
+    expect(useMaxMembersStore.getState().inflight).toEqual({})
+  })
+
+  it('the edges are sent: the members in use, and 8', () => {
+    useTeamRosterStore.getState().apply(H, [team('t1', { max_members: 4, in_use: 2 })])
+    void setMaxMembers(target, 2)
+    expect(calls.map((c) => c.value)).toEqual([2])
+    resetMaxMembers()
+    configureMaxMembers({ put: (hostId, teamId, value) => new Promise<MaxMembersView>(() => { calls.push({ hostId, teamId, value, resolve: () => {}, reject: () => {} }) }), identity: () => identity })
+    void setMaxMembers(target, 8)
+    expect(calls.map((c) => c.value)).toEqual([2, 8])
+  })
+
   it('409 max_below_in_use toasts the daemon\'s member count', async () => {
     const p = setMaxMembers(target, 1)
     calls[0].reject(new ApprovalApiError(409, 'max_below_in_use', 'x', null, { in_use: 3 }))

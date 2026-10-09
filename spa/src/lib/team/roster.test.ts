@@ -99,6 +99,18 @@ describe('max_members / in_use on the roster', () => {
     expect(t.in_use).toBeUndefined()
   })
 
+  it('an impossible cap is dropped as a pair: outside 1-8, a negative usage, or more in use than the cap', () => {
+    for (const bad of [{ max_members: 0, in_use: 0 }, { max_members: 9, in_use: 1 }, { max_members: -1, in_use: -1 }, { max_members: 1, in_use: 5 }, { max_members: 4, in_use: -1 }]) {
+      const t = (parseRosterEvent(frame(bad)) as { teams: TeamRoster[] }).teams[0]
+      expect(t.max_members).toBeUndefined()
+      expect(t.in_use).toBeUndefined()
+    }
+    const edge = (parseRosterEvent(frame({ max_members: 8, in_use: 8 })) as { teams: TeamRoster[] }).teams[0]
+    expect(edge).toMatchObject({ max_members: 8, in_use: 8 })
+    const low = (parseRosterEvent(frame({ max_members: 1, in_use: 0 })) as { teams: TeamRoster[] }).teams[0]
+    expect(low).toMatchObject({ max_members: 1, in_use: 0 })
+  })
+
   it('a cap without its usage, or a non-integer, is dropped as a pair', () => {
     for (const bad of [{ max_members: 4 }, { in_use: 2 }, { max_members: '4', in_use: 2 }, { max_members: 4.5, in_use: 2 }, { max_members: null, in_use: null }]) {
       const t = (parseRosterEvent(frame(bad)) as { teams: TeamRoster[] }).teams[0]

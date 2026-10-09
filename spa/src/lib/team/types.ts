@@ -347,6 +347,13 @@ export const TEAM_MAX_MEMBERS_CAPABILITY = 'team.max_members.v1'
 export const MAX_MEMBERS_MIN = 1
 export const MAX_MEMBERS_MAX = 8
 
+/** A cap and its usage as the daemon can truthfully report them: 1-8 members allowed, 0..cap in use. */
+export function isCapPair(maxMembers: unknown, inUse: unknown): maxMembers is number {
+  return Number.isInteger(maxMembers) && Number.isInteger(inUse)
+    && (maxMembers as number) >= MAX_MEMBERS_MIN && (maxMembers as number) <= MAX_MEMBERS_MAX
+    && (inUse as number) >= 0 && (inUse as number) <= (maxMembers as number)
+}
+
 /** The answer of `PUT /api/team/max-members`. */
 export interface MaxMembersView {
   team_id: string

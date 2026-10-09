@@ -12,7 +12,8 @@ import { hostLabel, hostLookOf } from '../host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUndoToast } from '../../stores/useUndoToast'
-import type { MaxMembersView } from './types'
+import type { TeamRoster } from './roster'
+import { MAX_MEMBERS_MAX, MAX_MEMBERS_MIN, type MaxMembersView } from './types'
 
 export const teamKey = (hostId: string, teamId: string): string => `${hostId}\u0000${teamId}`
 
@@ -93,10 +94,13 @@ function applyAnswer(hostId: string, view: MaxMembersView): void {
   store.apply(hostId, teams.map((t) => (t.id === view.team_id ? { ...t, max_members: view.max_members, in_use: view.in_use } : t)))
 }
 
+const teamOf = (hostId: string, teamId: string): TeamRoster | undefined => useTeamRosterStore.getState().byHost[hostId]?.find((t) => t.id === teamId)
+
 /**
- * Send the cap. Ignored while a request for the team is out, or when the host is gone. The answer is shown through the
- * roster; if a roster event for the host arrived while the request was out, that event is at least as new as this answer
- * (the daemon emits it after the write) and the answer is not applied over it.
+ * Send the cap. Ignored while a request for the team is out, when the host is gone, or for a value the daemon would
+ * refuse anyway (outside 1-8, or below the members in use). The answer is shown through the roster; if a roster event
+ * changed THIS team's numbers while the request was out, that event is at least as new as this answer (the daemon emits
+ * it after the write) and the answer is not applied over it. Events about other teams do not matter.
  */
 export async function setMaxMembers(target: MaxMembersTarget, value: number): Promise<void> {
   const { hostId, teamId } = target
@@ -104,15 +108,17 @@ export async function setMaxMembers(target: MaxMembersTarget, value: number): Pr
   const store = useMaxMembersStore.getState()
   const identity = deps.identity(hostId)
   if (identity === null) return
+  const before = teamOf(hostId, teamId)
+  if (!Number.isInteger(value) || value < MAX_MEMBERS_MIN || value > MAX_MEMBERS_MAX || value < (before?.in_use ?? 0)) return
   // A request out to the daemon the host means now holds the team; one out to an earlier daemon does not.
   if (store.inflight[key]?.identity === identity) return
   const token = ++nextToken
   store.begin(key, { token, identity })
-  const rosterBefore = useTeamRosterStore.getState().byHost[hostId]
   try {
     const view = await deps.put(hostId, teamId, value)
     if (deps.identity(hostId) !== identity) return // re-pointed or removed meanwhile: the answer is the old daemon's
-    if (useTeamRosterStore.getState().byHost[hostId] === rosterBefore) applyAnswer(hostId, view)
+    const now = teamOf(hostId, teamId)
+    if (now?.max_members === before?.max_members && now?.in_use === before?.in_use) applyAnswer(hostId, view)
   } catch (e: unknown) {
     if (deps.identity(hostId) !== identity) return
     const code = e instanceof ApprovalApiError ? e.code : 'error'
