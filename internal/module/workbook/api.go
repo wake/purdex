@@ -2,6 +2,7 @@ package workbook
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -152,6 +153,67 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/workbook/conversations/{provider}/{session_id}", m.handleConversation)
 	mux.HandleFunc("GET /api/workbook/entries", m.handleEntries)
 	mux.HandleFunc("GET /api/workbook/conversations/{provider}/{session_id}/todos", m.handleTodos)
+	mux.HandleFunc("POST /api/workbook/conversations/{provider}/{session_id}/refresh", m.handleRefresh) // the Mac App's; not a device route
+}
+
+// handleRefresh: POST …/refresh → 202 {entry_id}; 409 not_live (no live session of the conversation whose mod announced
+// workbook.refresh) or refresh_pending (one is under way).
+func (m *Module) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	eng := m.currentEngine()
+	if eng == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	if r.PathValue("provider") != "claude" {
+		writeError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	id, err := eng.RequestRefresh(r.PathValue("session_id"), "")
+	switch {
+	case errors.Is(err, ErrNotLive):
+		writeError(w, http.StatusConflict, "not_live")
+	case errors.Is(err, ErrRefreshPending):
+		writeError(w, http.StatusConflict, "refresh_pending")
+	case err != nil:
+		log.Printf("[workbook] request a refresh: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal")
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]int64{"entry_id": id})
+	}
+}
+
+// refreshAvailable: now, some session of the conversation can run a refresh (computed on read).
+func (m *Module) refreshAvailable(conv string) bool {
+	eng := m.currentEngine()
+	return eng != nil && eng.RefreshAvailable(conv)
+}
+
+func (m *Module) currentEngine() *Engine {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.engine
+}
+
+type refreshAvailableEventJSON struct {
+	ConvKey   string `json:"conv_key"`
+	Available bool   `json:"available"`
+}
+
+// announceAvailability sends workbook.refresh_available for each conversation whose value changed (plan D11).
+func (m *Module) announceAvailability(changes []AvailabilityChange) {
+	m.mu.Lock()
+	send := m.broadcast
+	m.mu.Unlock()
+	if send == nil {
+		return
+	}
+	for _, c := range changes {
+		b, err := json.Marshal(refreshAvailableEventJSON{ConvKey: c.ConvKey, Available: c.Available})
+		if err != nil {
+			continue
+		}
+		send("workbook.refresh_available", string(b))
+	}
 }
 
 // intQuery reads an optional integer query value in [min, max]; ok is false after it has answered 400.
@@ -225,11 +287,12 @@ func (m *Module) handleConversation(w http.ResponseWriter, r *http.Request) {
 		if open, err = st.OpenTodos(conv, maxOpenTodos); err == nil {
 			if done, err = st.Todos(conv, TodoDone, doneRecordN, 0); err == nil {
 				writeJSON(w, http.StatusOK, map[string]any{
-					"conv_key":  conv,
-					"status":    status.Status,
-					"status_at": status.UpdatedAt,
-					"entries":   entries,
-					"todos":     todoListsJSON{Open: todosWire(open), Done: todosWire(done)},
+					"conv_key":          conv,
+					"status":            status.Status,
+					"status_at":         status.UpdatedAt,
+					"entries":           entries,
+					"todos":             todoListsJSON{Open: todosWire(open), Done: todosWire(done)},
+					"refresh_available": m.refreshAvailable(conv),
 				})
 				return
 			}

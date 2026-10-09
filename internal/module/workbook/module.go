@@ -154,9 +154,17 @@ func (m *Module) startEngine(st *Store) {
 		if svc, ok := reg.Get("modevents"); ok {
 			if mr, ok := svc.(*modevents.Registry); ok {
 				d.Capable = func(sid string) bool { return mr.SessionCapable(sid, CapV2, modevents.CapsFresh) }
+				d.RefreshSessions = func() []CapSession {
+					var out []CapSession
+					for _, c := range mr.CapableSessions(modevents.CapWorkbookRefresh, modevents.CapsFresh) {
+						out = append(out, CapSession{SID: c.SID, At: c.At})
+					}
+					return out
+				}
 			}
 		}
 	}
+	d.OnAvailability = m.announceAvailability
 	eng := NewEngine(d)
 	eng.SetWaiter(m.lines)
 	ctx, cancel := context.WithCancel(context.Background())

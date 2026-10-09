@@ -283,6 +283,28 @@ func (r *Registry) SessionCapable(sid, c string, within time.Duration) bool {
 	return false
 }
 
+// CapableSession is a session id whose live stream announced a capability, and when (the latest batch that named it).
+type CapableSession struct {
+	SID string
+	At  time.Time
+}
+
+// CapableSessions lists the current session ids of the live streams that announced capability c within `within`. A
+// session served by two streams is listed once per stream (the caller takes the newest).
+func (r *Registry) CapableSessions(c string, within time.Duration) []CapableSession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	var out []CapableSession
+	for _, s := range r.streams {
+		in := &s.info
+		if in.SID != "" && !in.Ended && !in.CapsAt.IsZero() && now.Sub(in.CapsAt) <= within && slices.Contains(in.Caps, c) {
+			out = append(out, CapableSession{SID: in.SID, At: in.CapsAt})
+		}
+	}
+	return out
+}
+
 // StreamCapable is SessionCapable for one named stream: that stream is live, its current session is sid, and it announced
 // c within `within`. The workbook routes use it so a caller cannot take work for a session through a stream that is not
 // that session's.

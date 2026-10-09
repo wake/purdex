@@ -72,6 +72,8 @@ func NewHandler(reg *Registry, opts ...HandlerOption) http.Handler {
 			h.teamRead(w, r)
 		case WorkbookNextPath:
 			h.workbookNext(w, r)
+		case WorkbookRefreshPath:
+			h.workbookRefresh(w, r)
 		case WorkbookResultPath:
 			h.workbookResult(w, r)
 		default:
