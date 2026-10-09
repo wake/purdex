@@ -91,17 +91,27 @@ func OpenStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("migrate devices db: %w", err)
 	}
 	if path != ":memory:" {
-		restrictSidecars(path)
+		if err := restrictSidecars(path); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	return &Store{db: db, now: func() int64 { return time.Now().UnixMilli() }}, nil
 }
 
+// chmodFn is os.Chmod; a test seam.
+var chmodFn = os.Chmod
+
 // restrictSidecars chmods whichever WAL siblings exist (SQLite makes them with the main file's mode; this makes it
-// explicit and covers one left over from an older run).
-func restrictSidecars(path string) {
+// explicit and covers one left over from an older run). A sidecar that exists and cannot be restricted fails the open:
+// the hashes must not stay readable in it. One that does not exist is fine.
+func restrictSidecars(path string) error {
 	for _, suffix := range []string{"-wal", "-shm"} {
-		_ = os.Chmod(path+suffix, dbFileMode) // absent is fine
+		if err := chmodFn(path+suffix, dbFileMode); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return errors.New("open devices db: cannot restrict a sidecar file")
+		}
 	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }

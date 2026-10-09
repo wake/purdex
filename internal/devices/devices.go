@@ -70,6 +70,16 @@ func WithPrincipal(ctx context.Context, p Principal) context.Context {
 	return context.WithValue(ctx, ctxKey{}, p)
 }
 
+type adminKey struct{}
+
+// WithAdmin marks ctx as authenticated by the admin token (or by auth being off). A request that got in some other way, a
+// one-time WebSocket ticket for one, carries neither this nor a principal and is NOT an admin: the management routes ask
+// for this mark instead of treating "no device principal" as "admin".
+func WithAdmin(ctx context.Context) context.Context { return context.WithValue(ctx, adminKey{}, true) }
+
+// IsAdmin reports whether ctx carries the admin mark.
+func IsAdmin(ctx context.Context) bool { v, _ := ctx.Value(adminKey{}).(bool); return v }
+
 // PrincipalFrom is the device principal of a request's context; absent for the admin token (and with auth off).
 func PrincipalFrom(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(ctxKey{}).(Principal)

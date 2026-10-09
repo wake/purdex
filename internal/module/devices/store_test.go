@@ -449,3 +449,44 @@ func (s *Store) mustRowByToken(t *testing.T, tok string) Row {
 	}
 	return r
 }
+
+// A sidecar that exists and cannot be restricted fails the open (the hashes must not stay readable in it); an absent one is
+// fine. Mutation gate: ignore the chmod error → red.
+func TestOpenStore_AnUnrestrictableSidecarFailsTheOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "devices.db")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	// SQLite removes its WAL sidecars at a clean close: leave the kind an earlier run (or a crash) leaves behind.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.WriteFile(path+suffix, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orig := chmodFn
+	defer func() { chmodFn = orig }()
+	chmodFn = func(name string, mode os.FileMode) error {
+		if strings.HasSuffix(name, "-wal") {
+			return os.ErrPermission
+		}
+		return os.Chmod(name, mode)
+	}
+	if st, err := OpenStore(path); err == nil {
+		st.Close()
+		t.Fatal("opened with a sidecar that cannot be restricted")
+	}
+	// An absent sidecar is not an error.
+	chmodFn = func(name string, mode os.FileMode) error {
+		if strings.HasSuffix(name, "-shm") {
+			return os.ErrNotExist
+		}
+		return os.Chmod(name, mode)
+	}
+	st, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("an absent sidecar failed the open: %v", err)
+	}
+	st.Close()
+}

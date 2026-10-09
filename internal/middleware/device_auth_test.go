@@ -161,3 +161,37 @@ func TestTokenAuthWith_BearerOnAWebSocketHandshakeCarriesThePrincipal(t *testing
 		t.Fatalf("%d %q", rec.Code, rec.Body.String())
 	}
 }
+
+// The admin mark: set by the admin bearer and by auth being off, never by a device bearer or a ticket.
+func TestTokenAuthWith_OnlyTheAdminAndAuthOffCarryTheAdminMark(t *testing.T) {
+	probe := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, dev := devices.PrincipalFrom(r.Context())
+		_, _ = w.Write([]byte(map[bool]string{true: "admin", false: "not-admin"}[devices.IsAdmin(r.Context())] + "|" + map[bool]string{true: "device", false: "no-device"}[dev]))
+	})
+	tok := newDeviceToken(t)
+	devs := &fakeDevices{live: map[string]devices.Principal{tok: {ID: "d_aaaaaaaaaaaa"}}}
+	h := middleware.TokenAuthWith(func() string { return "secret" }, ticketOK{}, devs)(probe)
+	if got := do(h, "Bearer secret").Body.String(); got != "admin|no-device" {
+		t.Fatalf("admin bearer: %q", got)
+	}
+	if got := do(h, "Bearer "+tok).Body.String(); got != "not-admin|device" {
+		t.Fatalf("device bearer: %q", got)
+	}
+	req := httptest.NewRequest("GET", "/ws/x?ticket=ok", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || rec.Body.String() != "not-admin|no-device" {
+		t.Fatalf("ticket: %d %q", rec.Code, rec.Body.String())
+	}
+	off := middleware.TokenAuthWith(func() string { return "" }, nil, devs)(probe)
+	if got := do(off, "").Body.String(); got != "admin|no-device" {
+		t.Fatalf("auth off: %q", got)
+	}
+}
+
+type ticketOK struct{}
+
+func (ticketOK) Validate(t string) bool { return t == "ok" }

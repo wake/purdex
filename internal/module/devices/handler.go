@@ -27,6 +27,10 @@ const (
 	maxLabelRunes = 64
 )
 
+// profileIDRe is the profiles module's id contract (internal/module/profiles/validate.go): a token bound to anything else
+// could never read a profile.
+var profileIDRe = regexp.MustCompile(`^p_[0-9a-f]{12}$`)
+
 var uuidRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type rowView struct {
@@ -95,9 +99,10 @@ func writeError(w http.ResponseWriter, status int, code, detail string) {
 	writeJSON(w, status, map[string]string{"error": code, "detail": detail})
 }
 
-// adminOnly answers 403 and false when the request carries a device principal.
+// adminOnly answers 403 and false unless the request was authenticated as the admin (its bearer, or auth being off). "No
+// device principal" is not enough: a one-time WebSocket ticket also authenticates a request without carrying one.
 func adminOnly(w http.ResponseWriter, r *http.Request) bool {
-	if _, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
+	if !devices.IsAdmin(r.Context()) {
 		writeError(w, http.StatusForbidden, "admin_only", "device management needs the admin token")
 		return false
 	}
@@ -140,8 +145,8 @@ func (m *Module) handleMint(w http.ResponseWriter, r *http.Request) {
 	case !uuidRe.MatchString(req.PairingID):
 		bad("pairing_id must be a UUID")
 		return
-	case req.ProfileID != "" && !printable(req.ProfileID):
-		bad("profile_id must be 1-64 printable characters")
+	case req.ProfileID != "" && !profileIDRe.MatchString(req.ProfileID):
+		bad("profile_id must be a profile id (p_ and 12 lowercase hex)")
 		return
 	case !printable(req.Label):
 		bad("label must be 1-64 printable characters")

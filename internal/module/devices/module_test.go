@@ -32,6 +32,10 @@ type env struct {
 	dir   string
 }
 
+type fakeTickets struct{ valid string }
+
+func (f fakeTickets) Validate(ticket string) bool { return ticket != "" && ticket == f.valid }
+
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	dir := t.TempDir()
@@ -45,7 +49,7 @@ func newEnv(t *testing.T) *env {
 	t.Cleanup(func() { m.Stop(context.Background()) })
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
-	h := middleware.TokenAuthWith(func() string { return adminTok }, nil, m)(mux)
+	h := middleware.TokenAuthWith(func() string { return adminTok }, fakeTickets{valid: "one-time"}, m)(mux)
 	return &env{mod: m, h: h, admin: adminTok, dir: dir}
 }
 
@@ -102,8 +106,8 @@ func (e *env) mint(t *testing.T, over map[string]any) minted {
 
 func TestMintRoute_ReturnsTheTokenOnceAndItAuthenticates(t *testing.T) {
 	e := newEnv(t)
-	m := e.mint(t, map[string]any{"profile_id": "p_main"})
-	if !devices.IsDeviceToken(m.Token) || !devices.ValidID(m.ID) || m.PairingID != pairingA || m.ProfileID != "p_main" || m.Label != "iPhone" {
+	m := e.mint(t, map[string]any{"profile_id": "p_0123456789ab"})
+	if !devices.IsDeviceToken(m.Token) || !devices.ValidID(m.ID) || m.PairingID != pairingA || m.ProfileID != "p_0123456789ab" || m.Label != "iPhone" {
 		t.Fatalf("minted = %+v", m)
 	}
 	if d := m.UseBy - m.CreatedAt; d != 900_000 {
@@ -143,19 +147,22 @@ func TestMintRoute_UseWithinBounds(t *testing.T) {
 func TestMintRoute_Validation(t *testing.T) {
 	e := newEnv(t)
 	cases := map[string]map[string]any{
-		"no pairing id":        {"pairing_id": ""},
-		"pairing id not uuid":  {"pairing_id": "not-a-uuid"},
-		"empty label":          {"label": ""},
-		"blank label":          {"label": "   "},
-		"label too long":       {"label": strings.Repeat("x", 65)},
-		"control in label":     {"label": "a\x00b"},
-		"newline in label":     {"label": "a\nb"},
-		"bidi in label":        {"label": "a‮b"},
-		"profile id too long":  {"profile_id": strings.Repeat("p", 65)},
-		"control in profile":   {"profile_id": "p\n1"},
-		"client not app":       {"client": map[string]any{"kind": "cli", "label": "x"}},
-		"client label missing": {"client": map[string]any{"kind": "app", "label": ""}},
-		"client missing":       {"client": nil},
+		"no pairing id":          {"pairing_id": ""},
+		"pairing id not uuid":    {"pairing_id": "not-a-uuid"},
+		"empty label":            {"label": ""},
+		"blank label":            {"label": "   "},
+		"label too long":         {"label": strings.Repeat("x", 65)},
+		"control in label":       {"label": "a\x00b"},
+		"newline in label":       {"label": "a\nb"},
+		"bidi in label":          {"label": "a‮b"},
+		"profile id too long":    {"profile_id": strings.Repeat("p", 65)},
+		"profile id wrong shape": {"profile_id": "settings"},
+		"profile id uppercase":   {"profile_id": "p_0123456789AB"},
+		"profile id short":       {"profile_id": "p_0123"},
+		"control in profile":     {"profile_id": "p_01234567\nab"},
+		"client not app":         {"client": map[string]any{"kind": "cli", "label": "x"}},
+		"client label missing":   {"client": map[string]any{"kind": "app", "label": ""}},
+		"client missing":         {"client": nil},
 	}
 	for name, over := range cases {
 		if rec := e.call("POST", "/api/devices", e.admin, mintBody(over)); rec.Code != http.StatusBadRequest {
@@ -439,5 +446,57 @@ func TestStartSweepsAndStopIsClean(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Stop hangs")
+	}
+}
+
+// A one-time WebSocket ticket authenticates a request with no principal, but it is not the admin: the management routes
+// refuse it, even on a GET that has the shape of a WebSocket handshake. Mutation gate: adminOnly = "no principal" → red.
+func TestManagementRoutes_ATicketIsNotTheAdmin(t *testing.T) {
+	e := newEnv(t)
+	dev := e.mint(t, nil)
+	for _, rt := range []struct{ method, path string }{
+		{"GET", "/api/devices?ticket=one-time"}, {"GET", "/api/devices/" + dev.ID + "?ticket=one-time"},
+	} {
+		req := httptest.NewRequest(rt.method, rt.path, nil)
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Upgrade", "websocket")
+		req.Header.Set("Sec-WebSocket-Version", "13")
+		rec := httptest.NewRecorder()
+		e.h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden && rec.Code != http.StatusMethodNotAllowed && rec.Code != http.StatusNotFound {
+			t.Errorf("%s with a ticket: %d %s", rt.path, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), dev.PairingID) {
+			t.Errorf("%s with a ticket listed a device", rt.path)
+		}
+	}
+	// The same shape with the admin token still works, and a ticket cannot rename a device either.
+	req := httptest.NewRequest("GET", "/api/devices", nil)
+	req.Header.Set("Authorization", "Bearer "+e.admin)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("admin on a handshake-shaped GET: %d", rec.Code)
+	}
+	req = httptest.NewRequest("PUT", "/api/devices/self?ticket=one-time", strings.NewReader(`{"label":"x"}`))
+	rec = httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a ticket on a PUT: %d", rec.Code)
+	}
+}
+
+// profile_id is the profiles module's id, or nothing: a token bound to anything else could never read a profile. Edge: the
+// good id passes, empty means no profile.
+func TestMintRoute_ProfileIDIsTheProfilesContract(t *testing.T) {
+	e := newEnv(t)
+	for id, want := range map[string]int{"p_0123456789ab": 201, "p_ffffffffffff": 201, "": 201, "p_0123456789abc": 400, "P_0123456789ab": 400, "p_0123456789ag": 400, "profile": 400} {
+		over := map[string]any{"profile_id": id}
+		if rec := e.call("POST", "/api/devices", e.admin, mintBody(over)); rec.Code != want {
+			t.Errorf("profile_id %q -> %d, want %d", id, rec.Code, want)
+		}
 	}
 }

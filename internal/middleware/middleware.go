@@ -83,7 +83,7 @@ func TokenAuthWith(tokenFn func() string, tickets TicketValidator, devs devices.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := tokenFn()
 			if token == "" {
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(devices.WithAdmin(r.Context()))) // auth is off: everyone is the admin
 				return
 			}
 			// Check Authorization header first
@@ -91,7 +91,7 @@ func TokenAuthWith(tokenFn func() string, tickets TicketValidator, devs devices.
 			if len(auth) >= 7 && strings.EqualFold(auth[:7], "bearer ") {
 				bearer := auth[7:]
 				if subtle.ConstantTimeCompare([]byte(bearer), []byte(token)) == 1 {
-					next.ServeHTTP(w, r)
+					next.ServeHTTP(w, r.WithContext(devices.WithAdmin(r.Context())))
 					return
 				}
 				if devs != nil && devices.IsDeviceToken(bearer) {
