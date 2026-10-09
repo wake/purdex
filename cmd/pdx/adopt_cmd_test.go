@@ -95,7 +95,7 @@ func TestAdoptCmd_RefusalsExit13CodeLast(t *testing.T) {
 		d := newFakeTeamDaemon(team.Approval{})
 		d.createStatus, d.refuseCode = http.StatusConflict, code
 		got, stdout, stderr := driveAdopt(t, context.Background(), d, "_def456")
-		if got != ExitRefused || stdout != "" || !strings.Contains(stderr, code) {
+		if got != ExitRefused || stdout != "" || lastToken(stderr) != code {
 			t.Errorf("%s: code=%d stdout=%q stderr=%q", code, got, stdout, stderr)
 		}
 		if _, polls, _, _ := d.snapshot(); len(polls) != 0 {

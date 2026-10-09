@@ -162,12 +162,12 @@ func runAdoptCmd(ctx context.Context, args []string, getenv func(string) string,
 // adoptReportErr maps a client error of the create or a poll: the shared team table (exit 13 for a rule),
 // plus the hint for a ref two sessions share.
 func adoptReportErr(err error, stderr io.Writer) int {
-	code := teamReportErr("adopt", err, stderr)
 	var se *daemonclient.StatusError
 	if errors.As(err, &se) && se.API.Error == team.ErrAdoptTargetAmbiguous {
+		// Before the standard line: the code stays the last word on stderr (the machine-readable contract).
 		fmt.Fprintln(stderr, "pdx adopt: 兩個 session 用了同一個 ref，請改用 session id（pdx peers 看得到）")
 	}
-	return code
+	return teamReportErr("adopt", err, stderr)
 }
 
 // adoptOutput is what an approved adoption prints on stdout, one JSON line.
