@@ -263,15 +263,15 @@ func (s *Store) SetPushLineV2(entryID int64, p PushLineV2) (changed []Todo, ok b
 // FinishSkippedV2 turns a pending entry into skipped (reason, e.g. "model") and applies its todo changes in the same
 // transaction: a turn with no progress may still answer an open question (spec §5.4). ok is false when the entry is not
 // pending.
-func (s *Store) FinishSkippedV2(entryID int64, reason string, u Usage, ch TodoChanges, by string) (changed []Todo, ok bool, err error) {
+func (s *Store) FinishSkippedV2(entryID int64, reason string, u Usage, latencyMS int64, ch TodoChanges, by string) (changed []Todo, ok bool, err error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	var conv string
 	var res TodoResult
 	now := s.now()
 	err = s.inTx(func(tx execer) error {
-		r, err := tx.Exec(`UPDATE wb_entries SET state = 'skipped', reason = ?, usage_in = ?, usage_out = ?, usage_cache_read = ?, updated_at = ?
-			WHERE id = ? AND state = 'pending'`, reason, nullInt(u.In), nullInt(u.Out), nullInt(u.CacheRead), now, entryID)
+		r, err := tx.Exec(`UPDATE wb_entries SET state = 'skipped', reason = ?, usage_in = ?, usage_out = ?, usage_cache_read = ?, latency_ms = ?, updated_at = ?
+			WHERE id = ? AND state = 'pending'`, reason, nullInt(u.In), nullInt(u.Out), nullInt(u.CacheRead), latencyMS, now, entryID)
 		if err != nil {
 			return fmt.Errorf("finish workbook entry: %w", err)
 		}

@@ -325,12 +325,12 @@ func TestFinishSkippedV2_AppliesTheTodosToo(t *testing.T) {
 	seed := seedTodos(t, s, "c", prev, "等回覆")
 	id := readyEntry(t, s, "t1")
 	r.take()
-	changed, ok, err := s.FinishSkippedV2(id, "model", Usage{In: 7}, TodoChanges{Done: []int64{seed[0].ID}}, ClosedByModel)
+	changed, ok, err := s.FinishSkippedV2(id, "model", Usage{In: 7}, 2300, TodoChanges{Done: []int64{seed[0].ID}}, ClosedByModel)
 	if err != nil || !ok || len(changed) != 1 {
 		t.Fatalf("ok=%v err=%v changed=%v", ok, err, changed)
 	}
 	e, _ := s.Entry(id)
-	if e.State != StateSkipped || e.Reason != "model" || e.UsageIn != 7 {
+	if e.State != StateSkipped || e.Reason != "model" || e.UsageIn != 7 || e.LatencyMS != 2300 {
 		t.Fatalf("entry = %+v", e)
 	}
 	if d, _ := s.Todos("c", TodoDone, 10, 0); titles(d) != "等回覆" {
