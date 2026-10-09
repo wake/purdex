@@ -16,6 +16,7 @@ import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
 import { TeamDisplayProvider } from './components/team/TeamDisplayProvider'
+import { startTeamTabLifecycle } from './lib/team/team-tab-lifecycle'
 import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useWorkerAgentProjection } from './hooks/useWorkerAgentProjection'
@@ -75,6 +76,8 @@ export default function App() {
   useDeeplinkResolver()
   useElectronIpc()
   useNewTabBootstrap()
+  // Keeps each team's tabs one run in team order and closes the group with its lead's tab (TI-1c); once per window.
+  useEffect(() => startTeamTabLifecycle(), [])
 
   // Reconcile workspaceExpanded only when the id set actually changes
   // (workspace rename / tab reorder replace the `workspaces` ref but preserve ids).

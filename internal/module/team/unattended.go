@@ -33,6 +33,8 @@ func (m *Module) approve(a team.Approval, c Close) (after team.Approval, won, me
 		}
 		t := leadTeamOf(a, *c.Grant, c.DecidedAt)
 		after, won, err = m.closeWith(a.ID, func() (team.Approval, bool, error) { return m.store.CloseLeadApproved(a.ID, c, t) })
+	case team.KindAdopt:
+		after, won, err = m.approveAdopt(a, c)
 	case team.KindSelfRelay:
 		after, won, err = m.closeWith(a.ID, func() (row team.Approval, won bool, err error) {
 			row, won, memberCancelled, err = m.store.CloseSelfRelayApproved(a.ID, c, a.Origin.SessionID)
@@ -96,7 +98,12 @@ func teamNote(a team.Approval) string {
 // announces the roster: a lead approve creates a team inside the approve
 // (closeLeadApprovedIn), and the other kinds leave the roster as it was,
 // which rosterChanged's hash gate makes free.
-func (m *Module) afterApproved(team.Approval) { m.rosterChanged() }
+func (m *Module) afterApproved(a team.Approval) {
+	m.rosterChanged()
+	if a.Kind == team.KindAdopt && m.noticeKick != nil {
+		m.noticeKick() // the adopted member is owed its notice (PL-1d1 drains the outbox)
+	}
+}
 
 // unattendedOn reads the U23 switch. Every caller holds createMu, so a
 // create that reads it off committed before a switch-on's sweep, which
@@ -213,7 +220,12 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 		c := daemonClose(now, g)
 		c.UnexpiredAt = now
 		after, won, memberCancelled, err = m.approve(a, c)
+		var refused *adoptRefusedError
 		switch {
+		case errors.As(err, &refused): // closed cancelled by its own re-check: not retried
+			m.forgetRefusal(a.ID)
+			m.logf("[team] approval %s cancelled at its auto-approve: %s", a.ID, refused.Code)
+			return false, false
 		case err != nil: // logged below
 		case !won: // closed first by a click, a cancel or the sweeper, or overdue
 			return false, false

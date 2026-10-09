@@ -253,7 +253,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	trace.Verify(req, "accepted", "verify_passed", map[string]any{"decision": "accepted"})
 
 	if nonTmux {
-		m.handleNonTmuxEvent(w, req, trace)
+		m.handleNonTmuxEvent(w, req, trace, stamp)
 		traceFinished = true
 		return
 	}
