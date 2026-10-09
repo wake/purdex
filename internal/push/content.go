@@ -46,6 +46,9 @@ type Content struct {
 	// iOS notification extension sets the app-icon badge from it, spec §6). nil = unknown (the read failed): the field is
 	// left out of the payload, never sent as 0.
 	OpenApprovals *int
+	// OpenApprovalKeys are the badge keys of those approvals ("s:<session_code>" or "a:<approval_id>", sorted, de-duplicated,
+	// at most 32). nil = unknown (left out); a non-nil empty slice is a known "none".
+	OpenApprovalKeys []string
 }
 
 var (
@@ -229,6 +232,9 @@ func (c Content) payload(hostID, body string) ([]byte, error) {
 	}
 	if c.OpenApprovals != nil {
 		purdex["open_approvals"] = *c.OpenApprovals
+	}
+	if c.OpenApprovalKeys != nil {
+		purdex["open_approval_keys"] = c.OpenApprovalKeys
 	}
 	return json.Marshal(map[string]any{
 		"aps": map[string]any{

@@ -47,7 +47,7 @@ type sender struct {
 	hostID string
 	topic  string
 
-	openCount func() (int, bool) // the open-approval count each payload carries (spec §6); nil or !ok = unknown, left out
+	openState func() (int, []string, bool) // the open-approval count and badge keys each payload carries (spec §6); nil or !ok = unknown, left out
 
 	queue   chan Job
 	dropped atomic.Int64
@@ -132,9 +132,10 @@ func (s *sender) process(ctx context.Context, j Job) {
 		if !ok {
 			continue
 		}
-		if s.openCount != nil {
-			if n, ok := s.openCount(); ok {
+		if s.openState != nil {
+			if n, keys, ok := s.openState(); ok {
 				content.OpenApprovals = &n
+				content.OpenApprovalKeys = keys
 			}
 		}
 		payload, err := content.Payload(s.hostID)

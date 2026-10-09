@@ -32,6 +32,7 @@ import (
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/module/agent"
 	devicesmod "github.com/wake/purdex/internal/module/devices"
+	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/push/apnskey"
@@ -67,7 +68,8 @@ type Module struct {
 	// The agent-event side (agent_trigger.go).
 	gate        *Gate
 	asks        *openAsks
-	reader      team.OpenApprovalsReader // fresh read of the open set at send time (purdex.open_approvals); nil = unknown
+	reader      team.OpenApprovalsReader        // fresh read of the open set at send time (purdex.open_approvals); nil = unknown
+	codeOf      func(tmuxSession string) string // tmux session name -> session code; "" = unresolvable; nil = from the session module
 	holds       holdSet
 	holdFor     time.Duration // how long a waiting event waits for its hook_ask (spec §5.2 rule 8); a test seam
 	unsubNotify func()
@@ -193,6 +195,16 @@ func (m *Module) Start(ctx context.Context) error {
 	if m.reader == nil {
 		log.Printf("[push] no open-approvals reader: open_approvals is left out of pushes")
 	}
+	if m.codeOf == nil {
+		svc, _ := m.core.Registry.Get(session.RegistryKey)
+		if l, ok := svc.(interface {
+			LookupCodeByName(string) (string, bool)
+		}); ok {
+			m.codeOf = func(name string) string { c, _ := l.LookupCodeByName(name); return c }
+		} else {
+			log.Printf("[push] no session lookup: approval pushes carry no session_code and badge keys fall back to approval ids")
+		}
+	}
 	if m.newAPNs == nil {
 		signer := apns.NewSigner(m.key, nil)
 		m.newAPNs = func() apnsClient { return &apns.Client{HTTP: &http.Client{}, Signer: signer} }
@@ -205,7 +217,7 @@ func (m *Module) Start(ctx context.Context) error {
 	m.core.CfgMu.RUnlock()
 	snd := newSender(m, m.newAPNs(), hostID, push.BundleID)
 	snd.Start(ctx)
-	snd.openCount = m.countOpen
+	snd.openState = m.openState
 	m.sender.Store(snd)
 	m.holds.reset()
 	m.asks.Clear() // a restart begins from the feed's snapshot, not from asks an earlier run saw open
@@ -326,25 +338,53 @@ func (m *Module) Stop(context.Context) error {
 	return nil
 }
 
-// countOpen reads the open approval set now and counts the ones of the pushed kinds (lead, self_relay, member_relay, an
-// answerable hook_ask): the `purdex.open_approvals` every push carries (spec §6). Nothing is kept between sends, so there is
-// no count to drift. ok=false (no reader, or the read failed) means unknown: the payload then leaves the field out.
-func (m *Module) countOpen() (n int, ok bool) {
+// maxOpenKeys caps purdex.open_approval_keys (spec §6); open_approvals still reports the full count.
+const maxOpenKeys = 32
+
+// sessionCode resolves a tmux session name to its session code; "" when unknown.
+func (m *Module) sessionCode(name string) string {
+	if name == "" || m.codeOf == nil {
+		return ""
+	}
+	return m.codeOf(name)
+}
+
+// openState reads the open approval set now: the count of the pushed kinds (lead, self_relay, member_relay, an
+// answerable hook_ask) for `purdex.open_approvals`, and the sorted, de-duplicated badge keys for
+// `purdex.open_approval_keys` ("s:<session_code>" when the approval's tmux session resolves, else "a:<approval_id>",
+// at most maxOpenKeys). Nothing is kept between sends, so there is nothing to drift. ok=false (no reader, or the read
+// failed) means unknown: the payload then leaves both fields out.
+func (m *Module) openState() (n int, keys []string, ok bool) {
 	r := m.reader
 	if r == nil {
-		return 0, false
+		return 0, nil, false
 	}
 	open, err := r.OpenApprovals()
 	if err != nil {
 		log.Printf("[push] could not read the open approvals: %v (open_approvals left out of this push)", err)
-		return 0, false
+		return 0, nil, false
 	}
+	set := map[string]struct{}{}
 	for _, a := range open {
-		if _, pushed := push.ApprovalContent(toPushApproval(a), "", "en"); pushed {
-			n++
+		if _, pushed := push.ApprovalContent(toPushApproval(a), "", "en"); !pushed {
+			continue
+		}
+		n++
+		if code := m.sessionCode(tmuxSessionOf(a.Origin.Tmux)); code != "" {
+			set["s:"+code] = struct{}{}
+		} else {
+			set["a:"+a.ID] = struct{}{}
 		}
 	}
-	return n, true
+	keys = make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) > maxOpenKeys {
+		keys = keys[:maxOpenKeys]
+	}
+	return n, keys, true
 }
 
 // onApproval runs on the approval feed's own goroutine (never under the team module's lock). Only an `opened` approval of
@@ -373,12 +413,15 @@ func (m *Module) onApproval(op string, a team.Approval) {
 	if len(devs) == 0 {
 		return
 	}
+	code := m.sessionCode(tmuxSessionOf(a.Origin.Tmux)) // #2235: the phone opens the right tab without a GET
 	ids := make([]string, len(devs))
 	for i, d := range devs {
 		ids[i] = d.DeviceID
 	}
 	snd.Enqueue(Job{DeviceIDs: ids, Make: func(d push.Device) (push.Content, bool) {
-		return push.ApprovalContent(pa, d.HostLabel, d.Locale)
+		c, ok := push.ApprovalContent(pa, d.HostLabel, d.Locale)
+		c.SessionCode = code
+		return c, ok
 	}})
 }
 
