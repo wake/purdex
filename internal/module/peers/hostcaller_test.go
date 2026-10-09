@@ -32,6 +32,16 @@ func (h *hostsHolder) get() []config.PeerHost   { return h.v.Load().([]config.Pe
 
 func callerFor(h *hostsHolder) *HostCaller { return NewHostCaller(h.get, nil) }
 
+func TestNewHostCaller_ClientNeverFollowsRedirects(t *testing.T) {
+	c := NewHostCaller(newHolder().get, http.DefaultTransport)
+	if c.client.CheckRedirect == nil {
+		t.Fatal("CheckRedirect unset: redirects would be followed")
+	}
+	if err := c.client.CheckRedirect(nil, nil); err != http.ErrUseLastResponse {
+		t.Fatalf("CheckRedirect = %v", err)
+	}
+}
+
 func serve(t *testing.T, fn http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	s := httptest.NewServer(fn)
@@ -160,6 +170,10 @@ func TestHostCaller_Classification(t *testing.T) {
 		{"401 plain", plain(401), ClassUnauthorized, ""},
 		{"404", plain(404), ClassUnsupported, ""},
 		{"403 non-json", plain(403), ClassUnsupported, ""},
+		// A proxy's plain 4xx is not the app's verdict: it must not consume a FIFO head.
+		{"400 non-json", plain(400), ClassTransient, ""},
+		{"408 non-json", plain(408), ClassTransient, ""},
+		{"409 non-json", plain(409), ClassTransient, ""},
 		{"403 json", jsonErr(403, "host_unverified"), ClassRefused, "host_unverified"},
 		{"400 json", jsonErr(400, "unsupported_kind"), ClassRefused, "unsupported_kind"},
 		{"409 wrong_host", jsonErr(409, "wrong_host"), ClassWrongHost, "wrong_host"},
@@ -209,6 +223,32 @@ func TestHostCaller_RemoteTextRedactsToken(t *testing.T) {
 	res := callerFor(h).Call(context.Background(), "hostB", "/x", callBody{ToHost: "hostB"})
 	if strings.Contains(res.Detail, "SECRETTOK") {
 		t.Fatalf("detail leaks token: %q", res.Detail)
+	}
+}
+
+// blockingRT never answers until the request context ends.
+type blockingRT struct{}
+
+func (blockingRT) RoundTrip(r *http.Request) (*http.Response, error) {
+	<-r.Context().Done()
+	return nil, r.Context().Err()
+}
+
+// The 10 s bound is the caller's own, not a property of whatever transport it
+// was given (codex attack).
+func TestHostCaller_EnforcesItsOwnTimeout(t *testing.T) {
+	h := newHolder(config.PeerHost{URL: "http://peer.invalid", HostID: "hostB", Token: "tok-xyz"})
+	c := NewHostCaller(h.get, blockingRT{})
+	c.timeout = 50 * time.Millisecond
+	done := make(chan CallResult, 1)
+	go func() { done <- c.Call(context.Background(), "hostB", "/x", callBody{ToHost: "hostB"}) }()
+	select {
+	case res := <-done:
+		if res.Class != ClassTransient {
+			t.Fatalf("res = %+v", res)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Call did not honour its own timeout")
 	}
 }
 

@@ -68,17 +68,19 @@ func Escalate401(firstSeen, now time.Time) CallClass {
 // once. No redirect is followed, the answer is capped, one call has
 // InterDaemonTimeout.
 type HostCaller struct {
-	hosts  func() []config.PeerHost
-	client *http.Client
+	hosts   func() []config.PeerHost
+	client  *http.Client
+	timeout time.Duration
 }
 
-// NewHostCaller returns a caller reading the live peer list from hosts. A
-// nil client gets the no-redirect, InterDaemonTimeout client.
-func NewHostCaller(hosts func() []config.PeerHost, client *http.Client) *HostCaller {
-	if client == nil {
-		client = newDeliverClient()
-	}
-	return &HostCaller{hosts: hosts, client: client}
+// NewHostCaller returns a caller reading the live peer list from hosts. The
+// transport policy is the caller's own: the client is always built here
+// (never injected), so redirects stay off and the timeout stays on whatever
+// rt is; a nil rt is the default transport.
+func NewHostCaller(hosts func() []config.PeerHost, rt http.RoundTripper) *HostCaller {
+	client := newDeliverClient()
+	client.Transport = rt
+	return &HostCaller{hosts: hosts, client: client, timeout: ipeers.InterDaemonTimeout}
 }
 
 // HostCaller returns this module's caller over the live config.
@@ -106,6 +108,8 @@ func (c *HostCaller) Call(ctx context.Context, targetHostID, path string, body a
 		return CallResult{Class: ClassRefused, Code: "bad_request_local", Detail: "request to_host_id does not name the target host"}
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, entry.URL+path, bytes.NewReader(raw))
 	if err != nil {
 		return CallResult{Class: ClassRefused, Code: "bad_request_local", Detail: "build request: " + err.Error(), Err: err}
@@ -160,13 +164,14 @@ func (c *HostCaller) Call(ctx context.Context, targetHostID, path string, body a
 		res.Class = ClassUnsupported
 	case st == http.StatusTooManyRequests, st >= 500, st < 400:
 		res.Class = ClassTransient
-	case isJSON && ae.Error == "wrong_host":
+	case !isJSON:
+		// A plain 4xx other than 401/403/404 (a proxy's 400/408/409) is not
+		// the app's verdict; a permanent refusal would consume a FIFO head.
+		res.Class = ClassTransient
+	case ae.Error == "wrong_host":
 		res.Class = ClassWrongHost
-	default: // 4xx: a JSON refusal, or a body with no code at all
+	default: // JSON 4xx: the peer's permanent refusal
 		res.Class = ClassRefused
-		if !isJSON {
-			res.Code = fmt.Sprintf("http_%d", st)
-		}
 	}
 	return res
 }
