@@ -172,6 +172,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// ranked by (hookedge.go). Taken before anything that waits, so a mod
 	// event that lands while this hook is processed counts as newer.
 	recv := m.modClock()
+	stamp := m.stampTurnEnd() // the hook's arrival, for the turn-end event (T-3a1)
 	var req EventRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
@@ -638,6 +639,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// The frame is written and the fallible steps are behind us (a 500 above makes the hook retry, and a
+	// retry must not publish twice): the turn end goes out here, before every emit, with no lock held.
+	m.publishTurnEnd(req, provider, lifecycle, frameMeta, stamp)
 
 	// Handle subagent events (transient — broadcast only, don't persist)
 	if lifecycle == agentpkg.LifecycleSubagentStart || lifecycle == agentpkg.LifecycleSubagentStop {

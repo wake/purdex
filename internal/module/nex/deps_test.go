@@ -72,6 +72,7 @@ func (fakeTerminals) LiveSessions(context.Context, string) ([]agent.TerminalSess
 	return nil, nil
 }
 func (fakeTerminals) SubscribeSessionStart(func(agent.SessionStartEvent)) func() { return func() {} }
+func (fakeTerminals) SubscribeTurnEnd(func(agent.TurnEndEvent)) func()           { return func() {} }
 
 // Compile-time checks that the fakes satisfy exactly what Init looks up.
 var (

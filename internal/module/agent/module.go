@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -40,6 +41,11 @@ type Module struct {
 
 	// sessionStarts fans granted SessionStarts out to in-process subscribers.
 	sessionStarts sessionStartHub
+
+	// turnEnds fans accepted main-turn Stops out to in-process subscribers (T-3a1);
+	// turnEndSeq numbers the hooks as they arrive (stampTurnEnd).
+	turnEnds   turnEndHub
+	turnEndSeq atomic.Int64
 
 	prober    *probe.Prober
 	probeOrch *probeOrchestrator

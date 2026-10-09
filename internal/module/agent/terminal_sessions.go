@@ -52,6 +52,8 @@ type TerminalSessions interface {
 	// contract). Callers decide what an unverified frame means for them.
 	LiveSessions(ctx context.Context, agentType string) ([]TerminalSession, error)
 	SubscribeSessionStart(fn func(SessionStartEvent)) (unsubscribe func()) // Task 3
+	// SubscribeTurnEnd delivers every accepted main-turn Stop of a cc session (T-3a1); fn runs on the subscriber's own goroutine.
+	SubscribeTurnEnd(fn func(TurnEndEvent)) (unsubscribe func())
 }
 
 // sessionStartHub fans a granted SessionStart out to in-process subscribers.
