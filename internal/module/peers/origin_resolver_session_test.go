@@ -1,6 +1,9 @@
 package peers
 
 import (
+	"errors"
+	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,5 +91,40 @@ func TestOriginResolver_InboxOf(t *testing.T) {
 	dead, _ := resolverFixture(t, live)
 	if _, ok, err := dead.InboxOf("sid-1"); ok || err != nil {
 		t.Fatalf("dead: ok=%v err=%v", ok, err)
+	}
+}
+
+// A 6-character ref can be shared by two conversations; adopt acts on the answer, so the resolver does not
+// pick one by registry order. Two processes of ONE session are one conversation and resolve.
+// Mutation gate: return the first hit regardless → the collision case red.
+func TestOriginResolver_ResolveOriginByRef_CollisionIsAmbiguousPairIsNot(t *testing.T) {
+	r, dir := resolverFixture(t, allLiveLiveness(fixture76973ProcStart))
+	ref := ipeers.RefID("sid-1")
+	// a second process of the SAME session (a resume pair): still one conversation
+	writeRegistryFixture(t, dir, "11.json", `{"pid":11,"sessionId":"sid-1","cwd":"/w","procStart":"`+targetProcStart+`","version":"2.1.270","messagingSocketPath":"`+dir+`/11.sock","name":"n11","status":"idle"}`)
+	if o, ok, err := r.ResolveOriginByRef(ref); !ok || err != nil || o.SessionID != "sid-1" {
+		t.Fatalf("a resume pair: %+v ok=%v err=%v", o, ok, err)
+	}
+	// two sessions whose ids yield the same ref (a birthday search: the ref space is 36^6): found, never guessed
+	seen := map[string]string{}
+	var a, b string
+	rng := rand.New(rand.NewSource(7)) // a fixed seed: the same pair every run
+	for i := 0; i < 600_000 && b == ""; i++ {
+		id := fmt.Sprintf("%08x-%04x-4000-8000-%012x", rng.Uint32(), rng.Intn(1<<16), rng.Int63n(1<<48))
+		if prev, ok := seen[ipeers.RefID(id)]; ok {
+			a, b = prev, id
+		}
+		seen[ipeers.RefID(id)] = id
+	}
+	if b == "" {
+		t.Skip("no colliding session ids in the search window")
+	}
+	writeRegistryFixture(t, dir, "30.json", `{"pid":30,"sessionId":"`+a+`","cwd":"/w3","procStart":"`+targetProcStart+`","version":"2.1.270","messagingSocketPath":"`+dir+`/30.sock","name":"n30","status":"idle"}`)
+	if o, ok, err := r.ResolveOriginByRef(ipeers.RefID(a)); !ok || err != nil || o.SessionID != a {
+		t.Fatalf("one of the two alone: %+v ok=%v err=%v", o, ok, err)
+	}
+	writeRegistryFixture(t, dir, "31.json", `{"pid":31,"sessionId":"`+b+`","cwd":"/w4","procStart":"`+targetProcStart+`","version":"2.1.270","messagingSocketPath":"`+dir+`/31.sock","name":"n31","status":"idle"}`)
+	if _, ok, err := r.ResolveOriginByRef(ipeers.RefID(a)); ok || !errors.Is(err, ErrAmbiguousRef) {
+		t.Fatalf("a collision: ok=%v err=%v, want ErrAmbiguousRef", ok, err)
 	}
 }

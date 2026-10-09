@@ -85,13 +85,28 @@ func (r *OriginResolver) ResolveOriginByRef(ref string) (team.Origin, bool, erro
 		return team.Origin{}, false, fmt.Errorf("read registry: %w", err)
 	}
 	proxies := r.m.proxyPIDs()
-	for _, e := range entries {
-		if e.SessionID != "" && ipeers.RefID(e.SessionID) == ref && !e.IsProxy && !proxies[e.PID] {
-			return r.originOf(e), true, nil
+	var hit *ipeers.Entry
+	for i, e := range entries {
+		if e.SessionID == "" || ipeers.RefID(e.SessionID) != ref || e.IsProxy || proxies[e.PID] {
+			continue
+		}
+		if hit != nil && hit.SessionID != e.SessionID {
+			// The ref is 6 base36 characters: two conversations can share one. Adopt acts on the answer, so a
+			// guess by registry order is not made (the address resolver answers ambiguous for the same case).
+			return team.Origin{}, false, ErrAmbiguousRef
+		}
+		if hit == nil {
+			hit = &entries[i] // two processes of ONE session (a resume pair) are one conversation: the first
 		}
 	}
-	return team.Origin{}, false, nil
+	if hit == nil {
+		return team.Origin{}, false, nil
+	}
+	return r.originOf(*hit), true, nil
 }
+
+// ErrAmbiguousRef is ResolveOriginByRef's answer when two live conversations carry the same ref.
+var ErrAmbiguousRef = errors.New("two live sessions carry this ref")
 
 // InboxOf is the messaging socket of sessionID's live, non-proxy registry entry (the notice outbox sends from the
 // lead's inbox, PL-1d1). ok is false (err nil) for an empty id and a session the registry does not list as live.

@@ -49,6 +49,8 @@ type fakeOrigins struct {
 	// not list it at all. Both are by session id.
 	shown  map[string]team.Origin
 	hidden map[string]bool
+	// ambiguousRef marks a ref two live sessions share (ResolveOriginByRef answers peersmod.ErrAmbiguousRef).
+	ambiguousRef map[string]bool
 	// batchHook, when set, runs first in every ResolveOriginsBySession (the
 	// roster's build): tests block or count there. batchCalls and
 	// singleCalls count the two forms of the by-session resolve.
@@ -165,32 +167,52 @@ func (f *fakeOrigins) resolveMany(ids []string, one func(string) (team.Origin, b
 // ResolveOriginByRef answers the fixture origin whose ref is ref (shown entries first).
 func (f *fakeOrigins) ResolveOriginByRef(ref string) (team.Origin, bool, error) {
 	f.mu.Lock()
-	readErr := f.readErr
-	var found *team.Origin
+	readErr, ambiguous := f.readErr, f.ambiguousRef[ref]
+	var sids []string
 	for sid, o := range f.shown {
-		if o.Ref == ref && !f.hidden[sid] {
-			c := o
-			found = &c
-			break
+		if o.Ref == ref {
+			sids = append(sids, sid)
 		}
 	}
 	f.mu.Unlock()
-	if readErr {
+	switch {
+	case readErr:
 		return team.Origin{}, false, errors.New("read registry: not a directory")
-	}
-	if found != nil {
-		return *found, true, nil
+	case ambiguous:
+		return team.Origin{}, false, peersmod.ErrAmbiguousRef
 	}
 	for _, o := range fixtureOrigins {
 		if o.Ref == ref {
-			return f.lookup(o.SessionID)
+			sids = append(sids, o.SessionID)
+		}
+	}
+	for _, sid := range sids {
+		// the registry lists only live sessions: dead and unknown ones are not found, hidden ones neither
+		if !f.LiveSession(sid) {
+			continue
+		}
+		if o, ok, err := f.lookup(sid); ok || err != nil {
+			return o, ok, err
 		}
 	}
 	return team.Origin{}, false, nil
 }
 
-// InboxOf is the fixture inbox of the session, if it is listed.
+// setRefAmbiguous makes ResolveOriginByRef answer the ambiguity error for ref (two live sessions share it).
+func (f *fakeOrigins) setRefAmbiguous(ref string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ambiguousRef == nil {
+		f.ambiguousRef = map[string]bool{}
+	}
+	f.ambiguousRef[ref] = true
+}
+
+// InboxOf is the fixture inbox of the session, if it is listed and live (as the registry's liveness filter says).
 func (f *fakeOrigins) InboxOf(sid string) (string, bool, error) {
+	if !f.LiveSession(sid) {
+		return "", false, nil
+	}
 	if _, ok, err := f.lookup(sid); !ok || err != nil {
 		return "", false, err
 	}
