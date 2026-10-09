@@ -137,6 +137,8 @@ func (m *Module) memberView(mr memberRow) team.Member {
 		// reading synced onto the row.
 		v.HostAlias = m.remoteAlias(mr.HostID)
 		v.Address = firstNonEmpty(v.HostAlias, mr.HostID) + "/" + mr.Ref
+		v.Title = firstNonEmpty(m.remoteTitleOf(mr.HostID, mr.SessionID), mr.Title) // the host's, else the row's
+		v.TmuxSession = tmuxName(mr.TmuxSession)                                    // a row written with the whole Origin.Tmux reads as the name
 		v.Context, v.ContextUnavailable = m.remoteContextOf(mr.HostID, mr.SessionID)
 		if v.Context == nil && !v.ContextUnavailable {
 			v.Context = mr.Usage
