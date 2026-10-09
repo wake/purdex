@@ -35,6 +35,9 @@ func TestDecide_HookAskDenyCarriesTheReply(t *testing.T) {
 	}
 	accept("plain", "  先別選，我想問一下  \n", "先別選，我想問一下")
 	accept("nltab", "第一行\n\t第二行，含 tab\n第三行", "第一行\n\t第二行，含 tab\n第三行")
+	accept("zwj", "家人 \U0001F468\u200D\U0001F469\u200D\U0001F467 ok", "家人 \U0001F468\u200D\U0001F469\u200D\U0001F467 ok")
+	accept("vs16", "愛 \u2764\uFE0F", "愛 \u2764\uFE0F")
+	accept("flagtag", "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F", "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F")
 	accept("max", strings.Repeat("字", 4000), strings.Repeat("字", 4000))
 
 	reject := func(name string, h *team.HookDecision) {
@@ -55,6 +58,13 @@ func TestDecide_HookAskDenyCarriesTheReply(t *testing.T) {
 	reject("cr", &team.HookDecision{Message: "a\r\nb"})
 	reject("nul", &team.HookDecision{Message: "a\x00b"})
 	reject("esc", &team.HookDecision{Message: "a\x1bb"})
+	reject("rlo", &team.HookDecision{Message: "a\u202Eb"})
+	reject("lri", &team.HookDecision{Message: "a\u2066b"})
+	reject("rlm", &team.HookDecision{Message: "a\u200Fb"})
+	reject("ls", &team.HookDecision{Message: "a\u2028b"})
+	reject("ps", &team.HookDecision{Message: "a\u2029b"})
+	reject("bom", &team.HookDecision{Message: "a\uFEFFb"})
+	reject("zwsp", &team.HookDecision{Message: "a\u200Bb"})
 	reject("answers", &team.HookDecision{Message: "hi", Answers: map[string]string{"紅還是藍？": "藍"}})
 }
 

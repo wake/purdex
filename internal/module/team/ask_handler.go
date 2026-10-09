@@ -407,16 +407,25 @@ func labelOf(c *team.Client) string {
 const chatReplyMax = 4000
 
 // chatReply validates the person's reply to a hook_ask: trimmed, 1..chatReplyMax
-// runes, valid UTF-8, no control characters except \n and \t (so \r, NUL and
-// ESC are refused). Format characters (zero-width joiners in emoji) stay legal,
-// which unicode.IsPrint alone would refuse.
+// runes, valid UTF-8. Per rune only \n and \t may be control characters; refused
+// are every other control character (\r, NUL, ESC), Unicode bidi controls
+// (U+061C, U+200E/F, U+202A-E, U+2066-9), U+2028/U+2029 and every other format
+// character (Cf, e.g. U+200B, U+FEFF) except ZWNJ/ZWJ (U+200C/D, emoji
+// sequences) and the tag characters U+E0020-E007F (flag sequences). Variation
+// selectors are Mn and stay legal. This blocks display spoofing in terminals.
 func chatReply(raw string) (string, bool) {
 	msg := strings.TrimSpace(raw)
 	if msg == "" || !utf8.ValidString(msg) || utf8.RuneCountInString(msg) > chatReplyMax {
 		return "", false
 	}
 	for _, r := range msg {
-		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+		if r == '\n' || r == '\t' {
+			continue
+		}
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) || r == 0x2028 || r == 0x2029 {
+			return "", false
+		}
+		if unicode.Is(unicode.Cf, r) && r != 0x200C && r != 0x200D && (r < 0xE0020 || r > 0xE007F) {
 			return "", false
 		}
 	}
@@ -442,7 +451,7 @@ func (m *Module) decideHook(w http.ResponseWriter, a team.Approval, req team.Dec
 		if state == team.StateDenied {
 			msg, ok := chatReply(hook.Message)
 			if !ok || hook.Answers != nil {
-				m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a denied hook_ask needs hook.message (1-4000 printable runes, \\n and \\t allowed) and no hook.answers", nil)
+				m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a denied hook_ask needs hook.message (1-4000 runes; no control, bidi or invisible format characters except \\n, \\t, ZWJ/ZWNJ and emoji tags) and no hook.answers", nil)
 				return
 			}
 			hook = &team.HookDecision{Message: msg}

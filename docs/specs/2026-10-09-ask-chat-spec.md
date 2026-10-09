@@ -35,8 +35,8 @@ in words instead of picking answers ("Chat about this"). The first needs nothing
 
 - `decision: "approve"` + `hook.answers` — unchanged.
 - **New:** `decision: "deny"` + `hook.message` — the person's reply. The message is trimmed; 1–4000 runes after
-  trimming; printable, with exactly two control characters allowed, `\n` and `\t` (kept verbatim); `\r`, NUL and every
-  other control character → 400 `bad_request`, as are missing, empty or longer. `hook.answers` with a deny → 400 (one
+  trimming; no control characters but `\n` and `\t` (kept verbatim), no bidi controls, U+2028/2029 or invisible format
+  characters (Cf: U+200B, U+FEFF…) except ZWNJ/ZWJ and emoji tag characters; `\r`, NUL and the rest → 400 `bad_request`, as are missing, empty or longer. `hook.answers` with a deny → 400 (one
   or the other, never both). The row closes `denied` with `Hook{Message}` (nothing else kept).
 - **Who sees the reply.** Like `hook.answers` and the question text today, the message rides on the row: it is in the
   closed approval event every authenticated host-event subscriber receives (the Mac Apps, paired phones) and in the
@@ -88,7 +88,7 @@ Review: codex R1 + R2 (attack → critic).
    printable plus `\n` `\t` only — not `unicode.IsPrint` alone, which refuses both), reject answers alongside it; close
    with `Hook{Message}`. Tests: deny + message → denied, row's hook carries exactly the trimmed message; **a message
    with `\n` and `\t` inside → accepted and kept byte for byte**; exactly 4000 runes (multi-byte) → accepted; deny with
-   missing / empty / whitespace-only / 4001-rune message, or one containing `\r` or NUL → 400; deny with answers → 400;
+   missing / empty / whitespace-only / 4001-rune message, or one containing `\r`, NUL, a bidi control, U+2028/2029, U+200B or U+FEFF → 400 (ZWJ emoji, ❤️ and tag flags pass); deny with answers → 400;
    approve without answers → 400 (unchanged); approve with answers → approved (unchanged); terminal_only → 409; a
    second decide → 409 `already_decided`; an `answered_local` report after a remote deny → `terminal_override` as for
    an approve; the closed approval event carries the message (the accepted boundary), and the push module's handling
