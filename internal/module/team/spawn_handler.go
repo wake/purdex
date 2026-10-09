@@ -184,6 +184,7 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 		return fail(http.StatusConflict, team.ErrIDConflict, "id already used by a different spawn")
 	}
 	m.logf("[team] spawn %s accepted: team %s, %s in %s", row.ID, t.ID, row.TmuxName, row.Cwd)
+	m.rosterChanged() // the accept is committed: a starting spawn takes a seat (in_use)
 	m.startSpawn(row.ID)
 	return row, true
 }

@@ -103,6 +103,7 @@ func (m *Module) timeOutSpawn(op spawnRow) {
 		return
 	}
 	m.logf("[team] spawn %s failed: %s", op.ID, team.SpawnReasonStartTimeout)
+	m.rosterChanged() // the timeout is committed: the seat is free again (in_use)
 	m.wake(op.ID)
 	m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
 }
