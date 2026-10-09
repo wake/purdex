@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.624] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版讓 lead 在 `pdx team` 的 LAST 欄看到每個 member 最近一輪說了什麼。
+
+### Added：member 的最後一輪 — 派工／回報 T-3a（#2113、#2116）
+
+- daemon 在每輪對話結束時記下 member 說的第一句話（最多 200 字，遇句號就切），寫到它正在做的任務上；沒有進行中的任務就記在 member 本身。
+- `pdx team` 的 LAST 欄會顯示最新的一筆：任務上的最後一輪、最後一次回報，或 member 本身的最後一輪，取最新的。
+- 接力後的新對話沿用同一個 member 的紀錄，下一輪就會更新。
+- 只記 team 裡活躍 member 的回合；lead、獨立 session、已離開的 member 都不記。順序錯亂或重複送達的通知不會蓋掉較新的紀錄。
+- 目前只記在 tmux 裡執行的 session；不在 tmux 裡的 session 留待之後補（#2115）。
+- team.db 會自動補欄位，不必手動遷移。
+
 ## [1.0.0-alpha.623] - 2026-10-09
 
 > 只動 mod 與 pdx-team skill（daemon 行為不變，但 mod 隨執行檔打包）：**要部署並重跑 `pdx setup --agent cc`**；SPA、Electron 不必更新。這一版新增兩個 Claude Code 指令：`/relay now` 立刻接力、`/lead` 立刻申請成為 lead。
