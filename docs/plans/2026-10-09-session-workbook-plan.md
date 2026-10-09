@@ -414,6 +414,9 @@ The team part only (no workbook data needed); the non-team workbook in the four 
 4. **Header**: the ⌃ control (`team-panel-to-line`) → `titlebar`; the one-line header's ⌄ (`team-panel-to-full`) keeps
    line → full; header single click keeps line ⇄ full; the expand control toggles full ⇄ max.
 5. **Row click** stays `openTeamSeat` (it already is; WA-2b-1 no longer turns it into a drill).
+6. **Subagent dots in one-line cells** (user 2026-10-10): `TeamSeatIcon` gets `subagents` in the line cell and the strip
+   cell, inside a fixed-width slot left of the icon (reserved even with no subagents, so the cell width and the measured
+   first-row capacity never change with them); `firstRowCapacity` / the measured cell width include the slot.
 Tests: state transitions (button, ⌃, header click, expand, strip name / +N); per-team memory and the old-mode mapping;
 strip replaces the title, cells open seats, no-drag only on the strip's children; button lit / dim / absent; a tab switch
 between a titlebar team and a pane team keeps each one's state (real `TabContent` test).
