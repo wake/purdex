@@ -62,6 +62,7 @@ func (m *Module) tick() {
 		// Titles and names change in the registry without a write of ours:
 		// the hash gate in rosterChanged makes the unchanged case a read.
 		m.rosterChanged()
+		m.kickNotices() // a notice whose send failed, or a lead whose inbox was not up yet
 	}
 	open, err := m.store.ListOpen()
 	if err != nil {

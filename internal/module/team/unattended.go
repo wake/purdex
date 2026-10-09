@@ -100,8 +100,11 @@ func teamNote(a team.Approval) string {
 // which rosterChanged's hash gate makes free.
 func (m *Module) afterApproved(a team.Approval) {
 	m.rosterChanged()
-	if a.Kind == team.KindAdopt && m.noticeKick != nil {
-		m.noticeKick() // the adopted member is owed its notice (PL-1d1 drains the outbox)
+	if a.Kind == team.KindAdopt {
+		m.kickNotices() // the adopted member is owed its notice
+		if m.noticeKick != nil {
+			m.noticeKick() // test seam: counts the kicks
+		}
 	}
 }
 
