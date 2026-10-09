@@ -27,6 +27,9 @@ func teamHosts() []config.PeerHost {
 // it) must fail here.
 var wantTeamKinds = []string{"adopt", "release", "kill", "spawn", "end", "lead_moved", "void"}
 
+// wantFactKinds is written out too: registered / spawn_failed are announced only once the lead host applies them (X4b), moved never (reserved).
+var wantFactKinds = []string{"ended"}
+
 func TestInventory_TeamCapsPerPrincipal(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", teamHosts())
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
@@ -47,13 +50,14 @@ func TestInventory_TeamCapsPerPrincipal(t *testing.T) {
 				Team *struct {
 					Kinds     []string `json:"kinds"`
 					AllowTeam bool     `json:"allow_team"`
+					FactKinds []string `json:"fact_kinds"`
 				} `json:"team"`
 			}
 			if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil || env.Team == nil {
 				t.Fatalf("%d %s", rr.Code, rr.Body.String())
 			}
 			// Every principal reads the same kinds (X3d-3): what this daemon applies, which is everything this version applies.
-			if !reflect.DeepEqual(env.Team.Kinds, wantTeamKinds) || env.Team.AllowTeam != tc.want {
+			if !reflect.DeepEqual(env.Team.Kinds, wantTeamKinds) || !reflect.DeepEqual(env.Team.FactKinds, wantFactKinds) || env.Team.AllowTeam != tc.want {
 				t.Fatalf("team = %+v", env.Team)
 			}
 		})

@@ -18,6 +18,10 @@ func teamKinds() []string {
 	return []string{team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid}
 }
 
+// teamFactKinds is what this daemon applies as a lead host on POST /api/peers/team/facts (X3b-2): `ended`. registered and
+// spawn_failed join with X4; moved is reserved.
+func teamFactKinds() []string { return []string{team.FactEnded} }
+
 // teamEntryFor is the live entry a host principal stands for, under the
 // same binding as the other host routes (spec §6.1): present, verified, and
 // still carrying the principal's host id. ok is false otherwise.
@@ -35,7 +39,7 @@ func teamEntryFor(hosts []config.PeerHost, p middleware.Principal) (config.PeerH
 
 // teamCapsFor is the Envelope.Team value for the asking principal.
 func teamCapsFor(hosts []config.PeerHost, p middleware.Principal, known bool) *ipeers.TeamCaps {
-	caps := &ipeers.TeamCaps{Kinds: teamKinds()}
+	caps := &ipeers.TeamCaps{Kinds: teamKinds(), FactKinds: teamFactKinds()}
 	if known {
 		if h, ok := teamEntryFor(hosts, p); ok {
 			caps.AllowTeam = h.AllowTeam

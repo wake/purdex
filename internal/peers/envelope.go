@@ -59,6 +59,9 @@ type Envelope struct {
 type TeamCaps struct {
 	Kinds     []string `json:"kinds"`
 	AllowTeam bool     `json:"allow_team"`
+	// FactKinds are the member-host facts this host applies as a lead host (POST /api/peers/team/facts, X3b-2). Absent:
+	// an older daemon, which has no facts route.
+	FactKinds []string `json:"fact_kinds,omitempty"`
 }
 
 // AddressVersionV5 is Envelope.AddressVersion for Peer Address v5 (peer
