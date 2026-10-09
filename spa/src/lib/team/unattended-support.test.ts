@@ -10,6 +10,7 @@ import { startUnattendedSupport } from './unattended-support'
 import { useHostStore } from '../../stores/useHostStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useRelayQuotaStore } from './relay-quota'
+import { teamKey, useMaxMembersStore } from './max-members'
 
 const host = (id: string, ip = '100.64.0.2') => ({ id, name: id, ip, port: 7860, token: 't', order: 0 })
 const info = (capabilities?: unknown): HostInfo =>
@@ -32,6 +33,7 @@ beforeEach(() => {
   useHostStore.getState().reset()
   useUnattendedStore.getState().reset()
   useRelayQuotaStore.getState().reset()
+  useMaxMembersStore.getState().reset()
   fetchHostInfo.mockReset()
   fetchHostInfo.mockResolvedValue(WITH)
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2', '100.64.0.4') }, hostOrder: ['h1', 'h2'], runtime: {} })
@@ -39,6 +41,18 @@ beforeEach(() => {
 afterEach(() => { stop(); vi.restoreAllMocks() })
 
 describe('startUnattendedSupport', () => {
+  it('a cap request still out to a host is forgotten when the host is re-pointed or removed', () => {
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    stop = startUnattendedSupport()
+    useMaxMembersStore.getState().begin(teamKey('h1', 't1'), { token: 1, identity: 'x' })
+    useMaxMembersStore.getState().begin(teamKey('h2', 't1'), { token: 2, identity: 'y' })
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: host('h1', '100.64.0.9') } }) // re-point h1
+    expect(Object.keys(useMaxMembersStore.getState().inflight)).toEqual([teamKey('h2', 't1')])
+    const { h2: _gone, ...rest } = useHostStore.getState().hosts
+    useHostStore.setState({ hosts: rest }) // remove h2
+    expect(useMaxMembersStore.getState().inflight).toEqual({})
+  })
+
   it('team.max_members.v1 in the capabilities → the cap stepper is supported; without it, not', async () => {
     useHostStore.setState({ runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } })
     fetchHostInfo.mockImplementation(async (id) => info(id === 'h1' ? ['relay.unattended.v1', 'team.max_members.v1'] : ['relay.unattended.v1']))

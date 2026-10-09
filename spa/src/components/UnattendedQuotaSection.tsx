@@ -74,7 +74,7 @@ function capTeam(rosters: Record<string, TeamRoster[]>, supported: boolean, host
 
 function CapStepper({ hostId, team, label }: { hostId: string; team: TeamRoster; label: string }) {
   const t = useI18nStore((s) => s.t)
-  const busy = useMaxMembersStore((s) => s.inflight[teamKey(hostId, team.id)] === true)
+  const busy = useMaxMembersStore((s) => s.inflight[teamKey(hostId, team.id)] !== undefined)
   const value = team.max_members as number
   const inUse = team.in_use as number
   const write = (next: number) => { void setMaxMembers({ hostId, teamId: team.id, label }, next) }
@@ -120,7 +120,7 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
               <ul className={`grid ${withCap ? 'grid-cols-[minmax(0,1fr)_auto_auto_auto]' : 'grid-cols-[minmax(0,1fr)_auto_auto]'} items-center gap-x-3 gap-y-1`}>
                 {rows.map((r) => (
                   <li key={`${r.session_id}`} data-testid="quota-row" data-session={r.session_id} className="contents">
-                    <span className="block min-w-0 truncate text-text-primary" title={r.address}>{nameOf(r)}</span>
+                    <span className="block min-w-0 truncate text-text-primary" title={`${nameOf(r)}\n${r.address}`}>{nameOf(r)}</span>
                     <Stepper hostId={h.hostId} row={r} field="self_left" label={t('unattended.quota.self')} />
                     {r.is_lead
                       ? <Stepper hostId={h.hostId} row={r} field="member_pool_left" label={t('unattended.quota.pool')} />

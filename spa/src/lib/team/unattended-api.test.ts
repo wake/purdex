@@ -306,6 +306,17 @@ describe('unattended-api', () => {
       }
     })
 
+    it('an answer about another team is bad_response (its numbers are not this team\'s to show)', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ team_id: 'other', max_members: 4, in_use: 1 }))
+      expect((await rejection(putMaxMembers(hostId, 't1', 4))).code).toBe('bad_response')
+    })
+
+    it('the request carries a timeout signal', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ team_id: 't1', max_members: 4, in_use: 1 }))
+      await putMaxMembers(hostId, 't1', 4)
+      expect(testGlobal.fetch.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+    })
+
     it('409 max_below_in_use keeps its body (in_use), 404 not_found and 400 are codes', async () => {
       testGlobal.fetch.mockResolvedValueOnce(json({ error: 'max_below_in_use', detail: 'x', in_use: 3 }, 409))
       const a = await rejection(putMaxMembers(hostId, 't1', 2))

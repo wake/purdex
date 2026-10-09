@@ -32,7 +32,7 @@ import { useHostStore } from '../stores/useHostStore'
 import { sinceText } from '../lib/team/time-text'
 import type { Approval, SessionQuota, UnattendedView } from '../lib/team/types'
 
-const PANEL_WIDTH = 420
+const PANEL_WIDTH = 480
 
 /** One host's share of the list. */
 interface HostPages {

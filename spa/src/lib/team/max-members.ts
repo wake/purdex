@@ -16,23 +16,39 @@ import type { MaxMembersView } from './types'
 
 export const teamKey = (hostId: string, teamId: string): string => `${hostId}\u0000${teamId}`
 
+/** One request in flight: its token (so only the request that made the entry may end it) and the daemon it went to. */
+export interface Flight {
+  token: number
+  identity: string
+}
+
 interface MaxMembersState {
-  inflight: Record<string, true>
-  begin: (key: string) => void
-  end: (key: string) => void
+  inflight: Record<string, Flight>
+  begin: (key: string, flight: Flight) => void
+  /** Ends the flight only if it is still this request's: a replaced entry belongs to a newer request. */
+  end: (key: string, token: number) => void
+  /** A removed or re-pointed host: what was in flight went to a daemon that is no longer the host's. */
+  forgetHost: (hostId: string) => void
   reset: () => void
 }
 
 export const useMaxMembersStore = create<MaxMembersState>()((set) => ({
   inflight: {},
-  begin: (key) => set((s) => ({ inflight: { ...s.inflight, [key]: true } })),
-  end: (key) => set((s) => {
-    if (!s.inflight[key]) return s
+  begin: (key, flight) => set((s) => ({ inflight: { ...s.inflight, [key]: flight } })),
+  end: (key, token) => set((s) => {
+    if (s.inflight[key]?.token !== token) return s
     const { [key]: _gone, ...rest } = s.inflight
     return { inflight: rest }
   }),
+  forgetHost: (hostId) => set((s) => {
+    const prefix = `${hostId}\u0000`
+    const keep = Object.entries(s.inflight).filter(([k]) => !k.startsWith(prefix))
+    return keep.length === Object.keys(s.inflight).length ? s : { inflight: Object.fromEntries(keep) }
+  }),
   reset: () => set({ inflight: {} }),
 }))
+
+let nextToken = 0
 
 export interface MaxMembersTarget {
   hostId: string
@@ -86,10 +102,12 @@ export async function setMaxMembers(target: MaxMembersTarget, value: number): Pr
   const { hostId, teamId } = target
   const key = teamKey(hostId, teamId)
   const store = useMaxMembersStore.getState()
-  if (store.inflight[key]) return
   const identity = deps.identity(hostId)
   if (identity === null) return
-  store.begin(key)
+  // A request out to the daemon the host means now holds the team; one out to an earlier daemon does not.
+  if (store.inflight[key]?.identity === identity) return
+  const token = ++nextToken
+  store.begin(key, { token, identity })
   const rosterBefore = useTeamRosterStore.getState().byHost[hostId]
   try {
     const view = await deps.put(hostId, teamId, value)
@@ -107,6 +125,6 @@ export async function setMaxMembers(target: MaxMembersTarget, value: number): Pr
       deps.toast(deps.message('unattended.cap.failed', { host: deps.hostLabel(hostId), session: target.label, code }))
     }
   } finally {
-    useMaxMembersStore.getState().end(key)
+    useMaxMembersStore.getState().end(key, token)
   }
 }

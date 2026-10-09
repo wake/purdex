@@ -625,11 +625,11 @@ describe('UnattendedPanel layout', () => {
     expect(screen.getByTestId('quota-section').parentElement!.className).toContain('divide-y')
   })
 
-  it('is 420 px wide', async () => {
+  it('is 480 px wide, whether or not a team cap is shown', async () => {
     mockedGet.mockResolvedValue(page([]))
     open([A])
     await flush()
-    expect(screen.getByTestId('unattended-panel').style.width).toBe('420px')
+    expect(screen.getByTestId('unattended-panel').style.width).toBe('480px')
   })
 
   const quota = (id: string): SessionQuota => ({

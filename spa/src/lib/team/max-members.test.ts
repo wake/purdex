@@ -44,7 +44,7 @@ describe('setMaxMembers', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({ hostId: H, teamId: 't1', value: 3 })
     expect(capOf('t1')?.max_members).toBe(2) // unchanged until the daemon answers
-    expect(useMaxMembersStore.getState().inflight[teamKey(H, 't1')]).toBe(true)
+    expect(useMaxMembersStore.getState().inflight[teamKey(H, 't1')]).toMatchObject({ identity: 'ep1:tok' })
   })
 
   it('applies the answer to the roster (max_members and in_use) and ends the flight', async () => {
@@ -137,6 +137,35 @@ describe('setMaxMembers', () => {
     await bad
     expect(toasts).toEqual([])
     expect(useMaxMembersStore.getState().inflight).toEqual({})
+  })
+
+  it('a request that went to the old daemon does not hold the team on the new one, and cannot end the new one\'s flight', async () => {
+    const old = setMaxMembers(target, 3) // out to ep1, never answers yet
+    identity = 'ep2:tok' // re-pointed ...
+    useMaxMembersStore.getState().forgetHost(H) // ... and the host's state forgotten, as unattended-support does
+    expect(useMaxMembersStore.getState().inflight).toEqual({})
+    void setMaxMembers(target, 4) // the new daemon takes a request at once
+    expect(calls).toHaveLength(2)
+    expect(calls[1].value).toBe(4)
+    calls[0].resolve({ team_id: 't1', max_members: 3, in_use: 1 }) // the old one finally settles
+    await old
+    expect(useMaxMembersStore.getState().inflight[teamKey(H, 't1')]).toMatchObject({ identity: 'ep2:tok' }) // the new flight stands
+    void setMaxMembers(target, 5)
+    expect(calls).toHaveLength(2) // and still holds the team
+  })
+
+  it('even without a forget, an entry left by an earlier daemon is replaced by a request to the current one', async () => {
+    void setMaxMembers(target, 3)
+    identity = 'ep2:tok'
+    void setMaxMembers(target, 4)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('forgetHost clears only that host\'s flights', () => {
+    useMaxMembersStore.getState().begin(teamKey(H, 't1'), { token: 1, identity: 'a' })
+    useMaxMembersStore.getState().begin(teamKey('host-b', 't1'), { token: 2, identity: 'b' })
+    useMaxMembersStore.getState().forgetHost(H)
+    expect(Object.keys(useMaxMembersStore.getState().inflight)).toEqual([teamKey('host-b', 't1')])
   })
 
   it('an answer for a team the roster no longer has changes nothing', async () => {

@@ -201,12 +201,13 @@ describe('layout: aligned columns', () => {
     expect(rowFor('p1').className).toContain('contents')
   })
 
-  it('a long name is truncated with the address as its hint', () => {
-    show([{ hostId: A, rows: [q('p1', { title: 'a very long session title that cannot fit in one line of the panel at all', address: 'mlab/p1-xx' })] }])
+  it('a long name is truncated, and hovering it shows the whole name and the address', () => {
+    const long = 'a very long session title that cannot fit in one line of the panel at all'
+    show([{ hostId: A, rows: [q('p1', { title: long, address: 'mlab/p1-xx' })] }])
     const name = rowFor('p1').children[0] as HTMLElement
     expect(name.className).toContain('truncate')
     expect(name.className).toContain('min-w-0')
-    expect(name).toHaveAttribute('title', 'mlab/p1-xx')
+    expect(name).toHaveAttribute('title', long + '\nmlab/p1-xx')
   })
 })
 
@@ -304,11 +305,11 @@ describe('the team cap stepper', () => {
     supported()
     useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 4, in_use: 1 }), capTeam('l2', { max_members: 4, in_use: 1 })])
     show([{ hostId: A, rows: [q('l1', { is_lead: true }), q('l2', { is_lead: true })] }])
-    act(() => { useMaxMembersStore.getState().begin(teamKey(A, 't-l1')) })
+    act(() => { useMaxMembersStore.getState().begin(teamKey(A, 't-l1'), { token: 1, identity: 'x' }) })
     expect(within(cap('l1')).getByRole('button', { name: '調高上限' })).toBeDisabled()
     expect(within(cap('l1')).getByRole('button', { name: '調低上限' })).toBeDisabled()
     expect(within(cap('l2')).getByRole('button', { name: '調高上限' })).toBeEnabled() // another team is not held
-    act(() => { useMaxMembersStore.getState().end(teamKey(A, 't-l1')) })
+    act(() => { useMaxMembersStore.getState().end(teamKey(A, 't-l1'), 1) })
     expect(within(cap('l1')).getByRole('button', { name: '調高上限' })).toBeEnabled()
   })
 

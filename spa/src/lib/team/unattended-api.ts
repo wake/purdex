@@ -112,6 +112,7 @@ export async function putUnattended(hostId: string, on: boolean): Promise<Unatte
 }
 
 export const MAX_MEMBERS_PATH = '/api/team/max-members'
+export const MAX_MEMBERS_TIMEOUT_MS = 10_000
 
 /**
  * `PUT /api/team/max-members`: set a team's member cap to an absolute value, signed with this app's client descriptor.
@@ -124,9 +125,11 @@ export async function putMaxMembers(hostId: string, teamId: string, maxMembers: 
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ team_id: teamId, max_members: maxMembers, client }),
+    signal: AbortSignal.timeout(MAX_MEMBERS_TIMEOUT_MS), // a request that never answers must not leave the stepper disabled
   })
   const r = raw as Partial<MaxMembersView> | null
-  if (typeof r !== 'object' || r === null || typeof r.team_id !== 'string' || !Number.isInteger(r.max_members) || !Number.isInteger(r.in_use)) {
+  // The answer must be about the team that was asked: another team's numbers are not this one's to show.
+  if (typeof r !== 'object' || r === null || r.team_id !== teamId || !Number.isInteger(r.max_members) || !Number.isInteger(r.in_use)) {
     throw new ApprovalApiError(200, 'bad_response', 'the max-members answer is not the wire shape')
   }
   return { team_id: r.team_id, max_members: r.max_members as number, in_use: r.in_use as number }
