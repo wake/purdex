@@ -119,7 +119,13 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("migrate workbook db: schema version %d is newer than this daemon's %d", have, schemaVersion)
 	}
 	if have < 1 {
-		if _, err := db.Exec(`
+		// One transaction: a failure half way leaves no tables behind, so the next start retries from nothing.
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("migrate workbook db: %w", err)
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec(`
 			CREATE TABLE wb_entries (
 				id INTEGER PRIMARY KEY,
 				conv_key TEXT NOT NULL,
@@ -149,6 +155,9 @@ func migrate(db *sql.DB) error {
 				session_id TEXT NOT NULL,
 				updated_at INTEGER NOT NULL);
 			INSERT INTO schema_version (version) VALUES (1);`); err != nil {
+			return fmt.Errorf("migrate workbook db: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("migrate workbook db: %w", err)
 		}
 	}

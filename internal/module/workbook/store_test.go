@@ -1,6 +1,7 @@
 package workbook
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -250,6 +251,37 @@ func TestOpenStore_FileModesAndSchemaVersion(t *testing.T) {
 	if rows, _ := again.Conversation("c", 10, 0); len(rows) != 1 {
 		t.Fatalf("rows after reopen = %d", len(rows))
 	}
+}
+
+// A migration that fails half way leaves nothing behind, so the next start can retry (codex R1).
+// Mutation gate: run the statements outside the transaction → red.
+func TestOpenStore_FailedMigrationLeavesNoTables(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "workbook.db")
+	pre, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// wb_status already exists as something else, so the second CREATE TABLE of the migration fails
+	if _, err := pre.Exec(`CREATE TABLE wb_status (x INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenStore(path); err == nil {
+		t.Fatal("the migration should have failed")
+	}
+	var n int
+	if err := pre.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name = 'wb_entries'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("wb_entries survived a failed migration: n=%d err=%v", n, err)
+	}
+	// once the obstacle is gone the same file opens
+	if _, err := pre.Exec(`DROP TABLE wb_status`); err != nil {
+		t.Fatal(err)
+	}
+	pre.Close()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	s.Close()
 }
 
 func TestOpenStore_BrokenPathFails(t *testing.T) {
