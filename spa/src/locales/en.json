@@ -323,6 +323,8 @@
   "team.seat_state.joining": "joining",
   "team.seat_state.releasing": "releasing",
   "team.seat_state.killing": "killing",
+  "team.seat_not_in_app": "This host is not in this App",
+  "team.panel.context_unavailable": "The host did not respond",
   "team.sidebar.fold_hint": "Click the blank area to collapse",
   "team.sidebar.collapsed": "{{count}} members, click to expand",
   "team.sidebar.ghost": "{{title}} (tab closed, click to reopen)",

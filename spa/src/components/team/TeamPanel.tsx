@@ -12,6 +12,7 @@ import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { ContextRing, ModelIcon } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
+import { notInApp, transitionOf } from './seat-flags'
 import { useSeatReading } from './team-readings'
 import { useMemberDrag } from './useMemberDrag'
 import { TeamEditPopover } from './TeamEditPopover'
@@ -194,6 +195,10 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
   const ctxText = r.ctx !== undefined ? `${r.ctx}%` : '—'
   const { remember, restore } = useReturnFocus()
+  const transition = transitionOf(seat)
+  const away = notInApp(seat)
+  const noAnswer = r.unavailable === true ? t('team.panel.context_unavailable') : undefined
+  const open = () => { if (!away) onOpen(seat.sessionId) }
   return (
     <div
       role="button"
@@ -202,22 +207,32 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
       data-session-id={seat.sessionId}
       data-role={seat.role}
       data-active={String(isActive)}
+      data-seat-state={seat.state}
+      title={away ? t('team.seat_not_in_app') : undefined}
       onMouseDown={drag ? remember : keepFocus}
       onMouseUp={drag ? restore : undefined}
-      onClick={() => { restore(); onOpen(seat.sessionId) }}
-      onKeyDown={(e) => { if (e.key === 'Enter') onOpen(seat.sessionId) }}
+      onClick={() => { restore(); open() }}
+      onKeyDown={(e) => { if (e.key === 'Enter') open() }}
       {...drag}
       onDragEnd={drag ? () => { drag.onDragEnd(); restore() } : undefined}
-      className={`group relative mx-1.5 px-2 py-2 rounded-md cursor-pointer transition-colors ${
+      className={`group relative mx-1.5 px-2 py-2 rounded-md transition-colors ${away ? 'cursor-default' : 'cursor-pointer'} ${
         isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
       } ${dragging ? 'opacity-30' : ''}`}
     >
       {insert && <span className="absolute left-2 right-2 h-0.5 rounded" style={{ background: color, [insert === 'before' ? 'top' : 'bottom']: -1 }} />}
       {/* Line 1: subagent dots (drawn by the icon, to its left) -> bot + light -> host chip -> title -> lead / unopened */}
       <div className="flex items-center gap-1.5 pl-1.5">
-        <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents />
-        <TeamSeatHostBadge hostId={seat.hostId} sessionCode={seat.sessionCode} />
+        <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`inline-flex items-center gap-1.5 ${transition !== null ? 'opacity-40' : ''}`}>
+          <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents />
+          <TeamSeatHostBadge hostId={seat.hostId} sessionCode={seat.sessionCode} />
+        </span>
+        {seat.remote && (
+          <span data-testid="team-panel-host-chip" className="text-[9.5px] px-1 rounded bg-surface-hover text-text-secondary flex-shrink-0 max-w-[6rem] truncate">
+            {seat.hostAlias !== '' ? seat.hostAlias : t('team.seat_host_unknown')}
+          </span>
+        )}
         <span className="truncate min-w-0 flex-1" title={seat.title}>{seat.title}</span>
+        {transition && <span data-testid="team-panel-state" className="text-[9.5px] text-text-muted flex-shrink-0">{t(`team.seat_state.${transition}`)}</span>}
         {seat.role === 'lead' && (
           <span className="text-[9.5px] px-1 rounded border flex-shrink-0 text-text-primary" style={{ borderColor: color }}>{t('team.panel.lead')}</span>
         )}
@@ -227,10 +242,10 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
       <div className="flex items-center gap-2 pl-[26px] mt-1.5 text-[11px] leading-[16px] text-text-secondary min-w-0">
         <span className="flex items-center gap-1 min-w-0">
           <ModelIcon model={r.model} size={10} />
-          <span data-testid="team-panel-model" className="truncate" title={r.modelRaw}>{modelText}</span>
+          <span data-testid="team-panel-model" className="truncate" title={noAnswer ?? r.modelRaw}>{noAnswer ? '—' : modelText}</span>
         </span>
         <span data-testid="team-panel-effort" className="truncate">{r.effort ?? '—'}</span>
-        <span className="ml-auto flex items-center gap-1 flex-shrink-0 text-text-primary" title={`${t('team.panel.context')} ${ctxText}`}>
+        <span className="ml-auto flex items-center gap-1 flex-shrink-0 text-text-primary" title={noAnswer ?? `${t('team.panel.context')} ${ctxText}`}>
           <ContextRing pct={r.ctx} model={r.model} size={16} />
           <span data-testid="team-panel-ctx" className="tabular-nums text-text-secondary">{ctxText}</span>
         </span>
@@ -242,22 +257,33 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
 function Cell({ teamKey, seat, isActive, onOpen }: { teamKey: string; seat: TeamSeatView; isActive: boolean; onOpen: (sessionId: string) => void }) {
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
-  const model = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '?'
+  const model = r.unavailable ? '—' : r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '?'
+  const transition = transitionOf(seat)
+  const away = notInApp(seat)
+  // A remote seat's tooltip names its host, then what is going on with it (a transition, an unreachable host, a host this Mac lacks).
+  const notes = [
+    seat.remote ? (seat.hostAlias !== '' ? seat.hostAlias : t('team.seat_host_unknown')) : null,
+    transition ? t(`team.seat_state.${transition}`) : null,
+    r.unavailable ? t('team.panel.context_unavailable') : null,
+    away ? t('team.seat_not_in_app') : null,
+  ].filter((x): x is string => x !== null)
   return (
     <button
       type="button"
       data-testid="team-panel-cell"
       data-session-id={seat.sessionId}
       data-active={String(isActive)}
+      data-seat-state={seat.state}
       onMouseDown={keepFocus}
-      onClick={() => onOpen(seat.sessionId)}
-      title={`${seat.title} · ${model} · ${t('team.panel.context')} ${r.ctx !== undefined ? `${r.ctx}%` : '—'}${seat.tabId ? '' : ` · ${t('team.panel.unopened')}`}`}
+      onClick={() => { if (!away) onOpen(seat.sessionId) }}
+      title={`${seat.title} · ${model} · ${t('team.panel.context')} ${r.ctx !== undefined ? `${r.ctx}%` : '—'}${seat.tabId ? '' : ` · ${t('team.panel.unopened')}`}${notes.map((n) => ` · ${n}`).join('')}`}
       style={{ height: CELL_H, paddingInline: CELL_PX, columnGap: CELL_INNER_GAP }}
-      className={`flex items-center rounded-md cursor-pointer ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
+      className={`flex items-center rounded-md ${away ? 'cursor-default' : 'cursor-pointer'} ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
     >
-      <span className="inline-flex" style={{ marginLeft: CELL_ICON_PULL }}>
+      <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`inline-flex ${transition !== null ? 'opacity-40' : ''}`} style={{ marginLeft: CELL_ICON_PULL }}>
         <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} size={CELL_ICON} compact />
       </span>
+      {seat.remote && <TeamSeatHostBadge hostId={seat.hostId} sessionCode={seat.sessionCode} />}
       <ContextRing pct={r.ctx} model={r.model} size={CELL_RING} />
     </button>
   )
