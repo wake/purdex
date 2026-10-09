@@ -151,6 +151,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (member last turn): %w", err)
 	}
+	if err := migrateCrossHostL(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (cross-host L): %w", err)
+	}
 	if err := migrateNoticeArmed(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (notice armed): %w", err)

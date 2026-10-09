@@ -61,12 +61,14 @@ func (m *Module) tick() {
 		m.persistUsage()
 		m.endGoneTeams()
 		m.markGoneMembers()
-		m.noticeUsage() // after the gone teams and members are settled: a member at the threshold and idle tells its lead once (P7-1)
+		m.scanUnpaired() // a host whose pairing is gone: its remote members are gone, its commands dropped (X3a)
+		m.noticeUsage()  // after the gone teams and members are settled: a member at the threshold and idle tells its lead once (P7-1)
 		// Titles and names change in the registry without a write of ours:
 		// the hash gate in rosterChanged makes the unchanged case a read.
 		m.rosterChanged()
 		m.kickNotices() // a notice whose send failed, or a lead whose inbox was not up yet
 	}
+	m.expireCommands() // a spawn or adopt not delivered within 10 minutes is void (X3a)
 	open, err := m.store.ListOpen()
 	if err != nil {
 		m.logf("[team] sweep: %v", err)

@@ -379,6 +379,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(OriginResolverKey, &OriginResolver{m: m})
 	// The team module's notice outbox (and later the handover notice) sends through this.
 	c.Registry.Register(SenderKey, moduleSender{m: m})
+	// The team module's commands outbox pump (cross-host team spec X3a) calls paired hosts through this.
+	c.Registry.Register(HostCallerKey, m.HostCaller())
 
 	return nil
 }

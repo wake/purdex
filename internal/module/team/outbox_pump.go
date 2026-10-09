@@ -1,0 +1,221 @@
+package teammod
+
+import (
+	"context"
+	"encoding/json"
+	"sync"
+	"time"
+
+	peersmod "github.com/wake/purdex/internal/module/peers"
+	ipeers "github.com/wake/purdex/internal/peers"
+)
+
+// The outbox pump (cross-host team spec §3.1 rule 6). One pump per side: L's commands (X3a), M's facts (X2c). It is
+// written against outboxStore so both sides run the same code: the store knows its table, its path and how to apply an
+// answer; the pump knows the FIFO, the backoff and the classification.
+//
+//   - one drain per peer HOST at a time, entries in FIFO order (the head blocks the rest of its host, never another host);
+//   - the first attempt is made right after the cause committed (kick), not at the next tick;
+//   - 30 s, doubling to a 10 min cap, forever (the expiry of X-U8 is the store's, not the pump's);
+//   - classification follows peersmod.CallClass: done and a permanent refusal settle the entry (and go on to the next),
+//     transient / unsupported / a young 401 back off and block the host's queue, an unpaired host or a 401 that lasted
+//     10 minutes (Escalate401) ends the relation on this side (outboxStore.Unpaired).
+
+const (
+	pumpBackoffBase = 30 * time.Second
+	pumpBackoffCap  = 10 * time.Minute
+	pumpTick        = time.Second
+)
+
+// outboxEntry is the part of an outbox row the pump needs.
+type outboxEntry struct {
+	ID       string
+	HostID   string
+	Path     string
+	Body     json.RawMessage // the request body; it names to_host_id (HostCaller checks it)
+	Attempts int
+	// First401At is when the current run of 401s began (unix ms), 0 when the last attempt was not a 401.
+	First401At int64
+}
+
+// outboxStore is one side's table.
+type outboxStore interface {
+	// Hosts lists the host ids with a pending entry.
+	Hosts() ([]string, error)
+	// Head is the oldest pending entry of the host and when it may be tried next (unix ms).
+	Head(hostID string) (e outboxEntry, nextAt int64, ok bool, err error)
+	// Attempted records a failed attempt: one more attempt, the next try time and the 401 run's start (0 clears it).
+	Attempted(id string, nextAt, first401At int64) error
+	// Settle marks the entry done AND applies the answer in ONE transaction (rule 4); res is a done answer or a permanent
+	// refusal (ClassRefused / ClassWrongHost). An entry that is no longer pending is left alone.
+	Settle(e outboxEntry, res peersmod.CallResult) error
+	// Unpaired ends the relation with the host on this side (rule 6, §3.2): reason is "unpaired" or "unpaired_by_peer".
+	Unpaired(hostID, reason string) error
+}
+
+// hostCaller is *peersmod.HostCaller as the pump uses it (a test seam).
+type hostCaller interface {
+	Call(ctx context.Context, targetHostID, path string, body any) peersmod.CallResult
+	Paired(hostID string) bool
+	TeamCaps(ctx context.Context, hostID string) (ipeers.TeamCaps, error)
+}
+
+type outboxPump struct {
+	name   string
+	caller hostCaller
+	store  outboxStore
+	now    func() int64
+	logf   func(string, ...any)
+	ctx    context.Context
+	wg     *sync.WaitGroup
+
+	sig     chan struct{}
+	mu      sync.Mutex
+	running map[string]bool
+	// stuck remembers, per host, the last error text logged, so a host that stays down logs once per change.
+	stuck map[string]string
+}
+
+func newOutboxPump(name string, caller hostCaller, store outboxStore, now func() int64, logf func(string, ...any), ctx context.Context, wg *sync.WaitGroup) *outboxPump {
+	return &outboxPump{name: name, caller: caller, store: store, now: now, logf: logf, ctx: ctx, wg: wg,
+		sig: make(chan struct{}, 1), running: map[string]bool{}, stuck: map[string]string{}}
+}
+
+// pumpBackoff is the wait after the n-th failed attempt (n ≥ 1): 30 s, 60 s, 120 s … capped at 10 min.
+func pumpBackoff(n int) time.Duration {
+	d := pumpBackoffBase
+	for i := 1; i < n && d < pumpBackoffCap; i++ {
+		d *= 2
+	}
+	if d > pumpBackoffCap {
+		d = pumpBackoffCap
+	}
+	return d
+}
+
+// kick asks for a pass now (right after the cause committed); it never blocks.
+func (p *outboxPump) kick() {
+	select {
+	case p.sig <- struct{}{}:
+	default:
+	}
+}
+
+// run is the pump's goroutine: a pass on every kick and every tick, until the context ends.
+func (p *outboxPump) run() {
+	defer p.wg.Done()
+	ticker := time.NewTicker(pumpTick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-p.sig:
+		case <-ticker.C:
+		}
+		p.pass()
+	}
+}
+
+// pass starts a drain for every host with something pending that has none running.
+func (p *outboxPump) pass() {
+	hosts, err := p.store.Hosts()
+	if err != nil {
+		p.logf("[team] %s outbox: %v", p.name, err)
+		return
+	}
+	for _, h := range hosts {
+		p.mu.Lock()
+		if p.running[h] || p.ctx.Err() != nil {
+			p.mu.Unlock()
+			continue
+		}
+		p.running[h] = true
+		p.mu.Unlock()
+		p.wg.Add(1)
+		go func(h string) {
+			defer p.wg.Done()
+			defer func() {
+				p.mu.Lock()
+				delete(p.running, h)
+				p.mu.Unlock()
+			}()
+			p.drain(h)
+		}(h)
+	}
+}
+
+// drain sends the host's due entries in order until one has to wait.
+func (p *outboxPump) drain(hostID string) {
+	for p.ctx.Err() == nil {
+		e, nextAt, ok, err := p.store.Head(hostID)
+		if err != nil {
+			p.logf("[team] %s outbox %s: %v", p.name, hostID, err)
+			return
+		}
+		if !ok || nextAt > p.now() {
+			return
+		}
+		if !p.attempt(e) {
+			return
+		}
+	}
+}
+
+// attempt makes one call for the head entry and acts on its class; true means the entry was settled and the next one
+// may go at once.
+func (p *outboxPump) attempt(e outboxEntry) bool {
+	res := p.caller.Call(p.ctx, e.HostID, e.Path, e.Body)
+	now := p.now()
+	switch res.Class {
+	case peersmod.ClassDone, peersmod.ClassRefused, peersmod.ClassWrongHost:
+		// done, or the peer's permanent refusal (a wrong_host too, rule 1): the outcome is applied with the entry
+		if err := p.store.Settle(e, res); err != nil {
+			p.logf("[team] %s outbox %s (%s): settle: %v", p.name, e.ID, e.HostID, err)
+			return false
+		}
+		p.mu.Lock()
+		delete(p.stuck, e.HostID)
+		p.mu.Unlock()
+		return true
+	case peersmod.ClassUnpaired:
+		p.unpaired(e.HostID, "unpaired")
+		return false
+	case peersmod.ClassUnauthorized:
+		first := e.First401At
+		if first == 0 {
+			first = now
+		}
+		if peersmod.Escalate401(time.UnixMilli(first), time.UnixMilli(now)) == peersmod.ClassUnpairedByPeer {
+			p.unpaired(e.HostID, "unpaired_by_peer")
+			return false
+		}
+		p.backoff(e, first, "401 (the peer does not know our token yet)")
+		return false
+	default: // transient, unsupported (the route is missing: nothing else could apply either), anything unexpected
+		p.backoff(e, 0, string(res.Class)+" "+res.Code)
+		return false
+	}
+}
+
+func (p *outboxPump) unpaired(hostID, reason string) {
+	p.logf("[team] %s outbox: host %s %s; ending the relation on this side", p.name, hostID, reason)
+	if err := p.store.Unpaired(hostID, reason); err != nil {
+		p.logf("[team] %s outbox: unpair %s: %v", p.name, hostID, err)
+	}
+}
+
+func (p *outboxPump) backoff(e outboxEntry, first401 int64, why string) {
+	next := p.now() + pumpBackoff(e.Attempts+1).Milliseconds()
+	if err := p.store.Attempted(e.ID, next, first401); err != nil {
+		p.logf("[team] %s outbox %s: %v", p.name, e.ID, err)
+		return
+	}
+	p.mu.Lock()
+	changed := p.stuck[e.HostID] != why
+	p.stuck[e.HostID] = why
+	p.mu.Unlock()
+	if changed {
+		p.logf("[team] %s outbox: host %s: %s; trying again in %s", p.name, e.HostID, why, pumpBackoff(e.Attempts+1))
+	}
+}

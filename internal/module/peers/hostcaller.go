@@ -176,6 +176,45 @@ func (c *HostCaller) Call(ctx context.Context, targetHostID, path string, body a
 	return res
 }
 
+// HostCallerKey is the service-registry key of the module's HostCaller: the team module's outbox pumps send through it.
+const HostCallerKey = "peers.host-caller"
+
+// Paired says whether a live peer entry carries hostID (rule 1: by host id, never by alias).
+func (c *HostCaller) Paired(hostID string) bool {
+	_, ok := c.entry(hostID)
+	return ok
+}
+
+// TeamCaps fetches the paired host's GET /api/peers envelope and returns its team capabilities as they apply to us
+// (rule 7). An older daemon (no "team" in the envelope) supports nothing: empty kinds, allow_team false. An unpaired
+// host id, a transport failure, a non-ok envelope or an envelope naming another host is an error.
+func (c *HostCaller) TeamCaps(ctx context.Context, hostID string) (ipeers.TeamCaps, error) {
+	entry, ok := c.entry(hostID)
+	if !ok {
+		return ipeers.TeamCaps{}, fmt.Errorf("no paired host carries that host id")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	env, err := fetchRemote(ctx, c.client, entry.URL, entry.Token)
+	if err != nil {
+		return ipeers.TeamCaps{}, fmt.Errorf("%s", boundRemote(err.Error(), entry.Token))
+	}
+	if env.HostID != hostID {
+		return ipeers.TeamCaps{}, fmt.Errorf("host_id mismatch: got %s", boundRemote(env.HostID, entry.Token))
+	}
+	if !env.OK {
+		return ipeers.TeamCaps{}, fmt.Errorf("peer: %s", boundRemote(env.Error, entry.Token))
+	}
+	if env.Team == nil {
+		return ipeers.TeamCaps{Kinds: []string{}}, nil
+	}
+	caps := *env.Team
+	if caps.Kinds == nil {
+		caps.Kinds = []string{}
+	}
+	return caps, nil
+}
+
 // entry is the live peer entry carrying host id — by host id only.
 func (c *HostCaller) entry(hostID string) (config.PeerHost, bool) {
 	if hostID == "" {
