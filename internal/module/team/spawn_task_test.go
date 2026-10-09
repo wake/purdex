@@ -163,3 +163,25 @@ func TestTaskList_MineIsAMembersOnly(t *testing.T) {
 		t.Fatalf("member mine = %+v", got)
 	}
 }
+
+// A done-when column damaged after the op was accepted does not become a task
+// with no conditions. The runner refuses such a row when it loads it; the
+// finish itself is the second line (the row it is handed may have been read
+// earlier), so it is driven directly. Mutation gate: ignore the decode error
+// in spawnFinish → red.
+func TestSpawn_DamagedDoneWhenAbortsInsteadOfDroppingTheConditions(t *testing.T) {
+	f, root := newSpawnFixture(t, 2)
+	id := f.acceptOp(1, root, func(r *spawnRow) { r.TaskSubject = "s" })
+	op, _, err := f.m.store.GetSpawnOp(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op.SessionID, op.TaskDoneJSON = "sid-m1", `{"not":"an array"}`
+	f.m.spawnFinish(op, &team.Origin{SessionID: "sid-m1", Ref: ipeers.RefID("sid-m1")})
+	if rows, _ := f.m.store.MembersOf(uid(1)); len(rows) != 0 {
+		t.Fatalf("a member was written: %+v", rows)
+	}
+	if rows, _ := f.m.store.ListTasks(uid(1), "", true); len(rows) != 0 {
+		t.Fatalf("a task was written: %+v", rows)
+	}
+}

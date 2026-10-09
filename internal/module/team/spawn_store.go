@@ -98,14 +98,15 @@ func (r spawnRow) taskDoneJSON() string {
 	return r.TaskDoneJSON
 }
 
-// taskDoneWhen decodes the done-when column; a column that is not a JSON
-// array of strings reads as none (checkRunning refuses it on the way in).
-func (r spawnRow) taskDoneWhen() []string {
+// taskDoneWhen decodes the done-when column. A column that is not a JSON
+// array of strings is an error, never "no conditions": the task would
+// otherwise be created without the conditions that say when it is done.
+func (r spawnRow) taskDoneWhen() ([]string, error) {
 	var out []string
-	if json.Unmarshal([]byte(r.taskDoneJSON()), &out) != nil {
-		return nil
+	if err := json.Unmarshal([]byte(r.taskDoneJSON()), &out); err != nil {
+		return nil, fmt.Errorf("spawn %s: done-when column: %w", r.ID, err)
 	}
-	return out
+	return out, nil
 }
 
 // taskErr says what is wrong with the task the row carries.
@@ -116,9 +117,9 @@ func (r spawnRow) taskErr() error {
 	if err := team.ValidTaskDescription(r.TaskDescription); err != nil {
 		return err
 	}
-	var dw []string
-	if err := json.Unmarshal([]byte(r.taskDoneJSON()), &dw); err != nil {
-		return fmt.Errorf("done-when is not a JSON array of strings: %w", err)
+	dw, err := r.taskDoneWhen()
+	if err != nil {
+		return err
 	}
 	return team.ValidDoneWhen(dw)
 }
