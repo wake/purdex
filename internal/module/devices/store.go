@@ -20,6 +20,8 @@ var ErrNotFound = errors.New("device not found")
 type Store struct {
 	db  *sql.DB
 	now func() int64 // Unix ms; injectable for tests
+
+	afterLookup func() // test seam: runs between Authenticate's lookup and its first-use statement (nil in production)
 }
 
 // Row is a device token's record, never carrying the token or its hash.
@@ -137,7 +139,7 @@ func (s *Store) Mint(req MintRequest) (Row, string, error) {
 
 // List is every device row (revoked ones included until they are swept), oldest first.
 func (s *Store) List() ([]Row, error) {
-	rows, err := s.db.Query(`SELECT ` + columns + ` FROM device_tokens ORDER BY created_at, id`)
+	rows, err := s.db.Query(`SELECT ` + columns + ` FROM device_tokens ORDER BY created_at, rowid`)
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +225,9 @@ func (s *Store) Authenticate(tokenHash string) (devices.Principal, bool) {
 		Scan(&p.ID, &p.PairingID, &p.ProfileID, &firstUsed, &lastUsed, &useBy, &rev)
 	if err != nil || rev != 0 {
 		return devices.Principal{}, false
+	}
+	if s.afterLookup != nil {
+		s.afterLookup()
 	}
 	if firstUsed == 0 {
 		res, err := s.db.Exec(`UPDATE device_tokens SET first_used_at = ?, last_used_at = ? WHERE id = ? AND first_used_at = 0 AND use_by >= ? AND revoked_at = 0`, now, now, p.ID, now)

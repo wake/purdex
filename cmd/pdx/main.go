@@ -26,6 +26,7 @@ import (
 	backupmod "github.com/wake/purdex/internal/module/backup"
 	conversationmod "github.com/wake/purdex/internal/module/conversation"
 	"github.com/wake/purdex/internal/module/dev"
+	devicesmod "github.com/wake/purdex/internal/module/devices"
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
@@ -481,6 +482,10 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	} else {
 		log.Printf("push: disabled")
 	}
+
+	// devices (paired phones' tokens, QR pairing spec §3) is always mounted: it costs one small file and serves nothing
+	// until a Mac mints a token. A store that cannot be opened soft-fails the module (no route, no capability).
+	c.AddModule(devicesmod.New())
 
 	return nil
 }

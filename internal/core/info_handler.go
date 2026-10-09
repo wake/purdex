@@ -68,12 +68,26 @@ func (c *Core) pushReady() bool {
 	return ready
 }
 
-// capabilityList is the static list plus the one conditional capability: push.v1 while the push module is ready.
-// Every other name above is unconditional; keep it that way unless a feature really can be switched off at boot.
+// moduleReady reports whether a mounted module's Status says ready (a module that soft-failed at Init says not).
+func (c *Core) moduleReady(name string) bool {
+	st, ok := c.ModuleStatus(name)
+	if !ok {
+		return false
+	}
+	ready, _ := st["ready"].(bool)
+	return ready
+}
+
+// capabilityList is the static list plus the conditional capabilities: push.v1 while the push module is ready, and
+// devices.v1 while the devices module is. Every other name above is unconditional; keep it that way unless a feature really
+// can be switched off at boot.
 func (c *Core) capabilityList() []string {
 	out := append([]string(nil), capabilities...)
 	if c.pushReady() {
 		out = append(out, "push.v1") // POST/GET /api/push/devices, DELETE /api/push/devices/{device_id}, PUT /api/push/presence
+	}
+	if c.moduleReady("devices") {
+		out = append(out, "devices.v1") // POST/GET/DELETE /api/devices, PUT /api/devices/self; device tokens (pdxd_) as bearers
 	}
 	return out
 }

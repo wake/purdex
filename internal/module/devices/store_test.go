@@ -234,6 +234,33 @@ func TestAuthenticate_LastUsedAtIsThrottledToOnceAMinute(t *testing.T) {
 	}
 }
 
+// A request that loses the first-use race to another one that is then followed by a revoke must not be let in: the
+// re-read after the lost race checks revoked too. Mutation gate: drop that check → red.
+func TestAuthenticate_LostFirstUseRaceThenRevokedIsRefused(t *testing.T) {
+	s, c := openTest(t)
+	row, tok := mint(t, s, 10*time.Minute)
+	s.afterLookup = func() {
+		// Between this request's lookup and its first-use statement, another request used the token and an admin revoked it.
+		if _, err := s.db.Exec(`UPDATE device_tokens SET first_used_at = ?, revoked_at = ? WHERE id = ?`, c.ms, c.ms, row.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := s.Authenticate(devices.Hash(tok)); ok {
+		t.Fatal("a revoked token was let in after a lost first-use race")
+	}
+	// And the same race without the revoke still lets the request in: the token was used, which is all first use asks.
+	s.afterLookup = nil
+	row2, tok2 := mint(t, s, 10*time.Minute)
+	s.afterLookup = func() {
+		if _, err := s.db.Exec(`UPDATE device_tokens SET first_used_at = ? WHERE id = ?`, c.ms, row2.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := s.Authenticate(devices.Hash(tok2)); !ok {
+		t.Fatal("a request that lost the first-use race to a live use was refused")
+	}
+}
+
 func TestAuthenticate_PrincipalCarriesTheProfile(t *testing.T) {
 	s, _ := openTest(t)
 	_, tok := mint(t, s, time.Minute, func(r *MintRequest) { r.ProfileID = "p_main" })

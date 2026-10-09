@@ -5,9 +5,27 @@ import (
 	"net/http"
 
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/middleware"
+	devicesmod "github.com/wake/purdex/internal/module/devices"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 )
+
+// registryDevices is the devices module as the token middleware reaches it: through the service registry, when the module
+// is mounted and open (it publishes its authenticator at Init). Looked up on every use, so it needs no boot ordering.
+type registryDevices struct{ c *core.Core }
+
+func (r registryDevices) AuthenticateToken(token string) (devices.Principal, bool) {
+	svc, ok := r.c.Registry.Get(devicesmod.RegistryKey)
+	if !ok {
+		return devices.Principal{}, false
+	}
+	a, ok := svc.(devices.Authenticator)
+	if !ok {
+		return devices.Principal{}, false
+	}
+	return a.AuthenticateToken(token)
+}
 
 // newOuterHandler builds the daemon's outer http.Handler: /api/health
 // (CORS only), the /api/peers prefix chain (PeerAuth, no TokenAuth) and the
@@ -26,7 +44,7 @@ func newOuterHandler(c *core.Core, mux http.Handler, allow []string) http.Handle
 	peerChain := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
 		middleware.PeerAuth(tokenFn, peersmod.HostMatcher(c), peersmod.HostRoutePolicy)(mux))))
 	general := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
-		middleware.TokenAuth(tokenFn, c.Tickets)(mux))))
+		middleware.TokenAuthWith(tokenFn, c.Tickets, registryDevices{c})(mux))))
 
 	outer := http.NewServeMux()
 	outer.Handle("GET /api/health", middleware.CORS(http.HandlerFunc(c.HandleHealth)))
