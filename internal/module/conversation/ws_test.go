@@ -247,6 +247,13 @@ func TestWS_AppendedRowIsOneChangesFrame(t *testing.T) {
 	if last := inc.Changes[len(inc.Changes)-1]; last.Turn.Index != 2 {
 		t.Fatalf("last change = %+v", last)
 	}
+	for _, ch := range inc.Changes { // a WebSocket frame carries the same item index as the HTTP answers
+		for _, it := range ch.Items {
+			if _, ok := it["index"]; !ok {
+				t.Fatalf("item without an index in a WebSocket frame: %v", it)
+			}
+		}
+	}
 	// nothing more arrives while nothing happens
 	_ = c.conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
 	if _, b, err := c.conn.ReadMessage(); err == nil {

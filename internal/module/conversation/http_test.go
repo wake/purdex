@@ -1011,3 +1011,129 @@ func TestAround_AnItemDroppedByTheCapIsAnExplicitError(t *testing.T) {
 		t.Fatalf("code %q", got)
 	}
 }
+
+// ---- item index (U1-6e) ----
+
+// itemsOf decodes the items of snapshot turn i with their index and id.
+func itemsOf(t *testing.T, s snapshot, i int) (idx []int, ids []string) {
+	t.Helper()
+	for _, raw := range s.Conversation.Turns[i].Items {
+		var x struct {
+			Index *int   `json:"index"`
+			ID    string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &x); err != nil || x.Index == nil {
+			t.Fatalf("item without an index: %s (%v)", raw, err)
+		}
+		idx = append(idx, *x.Index)
+		ids = append(ids, x.ID)
+	}
+	return idx, ids
+}
+
+func TestIndex_ContiguousFromZeroInAFullTurn(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(stepsTurn(5, 10))
+	s := decode(t, e.get("/api/conversations/claude/"+sid))
+	idx, _ := itemsOf(t, s, 0)
+	if len(idx) < 6 || s.Conversation.Turns[0].OmittedItems != 0 {
+		t.Fatalf("setup: %d items omitted %d", len(idx), s.Conversation.Turns[0].OmittedItems)
+	}
+	for i, v := range idx {
+		if v != i {
+			t.Fatalf("indexes %v: not contiguous from 0", idx)
+		}
+	}
+	// every turn of a multi-turn window numbers its own items from 0
+	e.transcript(idleTurns(3))
+	s = decode(t, e.get("/api/conversations/claude/"+sid))
+	for i := range s.Conversation.Turns {
+		if idx, _ := itemsOf(t, s, i); idx[0] != 0 {
+			t.Fatalf("turn %d starts at index %d", i, idx[0])
+		}
+	}
+}
+
+// A capped turn's first shown item has index == omitted_items (the dropped ones still count), and the body that
+// carries the indexes is still inside the cap.
+func TestIndex_CappedTurnStartsAtOmittedItems(t *testing.T) {
+	e := newEnv(t)
+	e.mod.maxBody = 6000
+	e.transcript(stepsTurn(40, 300))
+	w := e.get("/api/conversations/claude/" + sid)
+	s := decode(t, w)
+	if w.Body.Len() > e.mod.maxBody {
+		t.Fatalf("body %d over the cap %d: the indexes were not measured", w.Body.Len(), e.mod.maxBody)
+	}
+	om := s.Conversation.Turns[0].OmittedItems
+	idx, _ := itemsOf(t, s, 0)
+	if om == 0 || idx[0] != om {
+		t.Fatalf("omitted %d, first shown index %d", om, idx[0])
+	}
+	for i, v := range idx {
+		if v != om+i {
+			t.Fatalf("indexes %v: not contiguous from %d", idx, om)
+		}
+	}
+}
+
+// An update to an item the cap omitted carries its original index; later updates never move it.
+func TestIndex_UpdateOfAnOmittedItemKeepsItsOriginalIndex(t *testing.T) {
+	e := newEnv(t)
+	e.mod.maxBody = 6000
+	var b strings.Builder
+	b.WriteString(userRow("us", 0, "do many things") + "\n")
+	b.WriteString(assistantRow("t0", 1, obj{"type": "tool_use", "id": "toolu_first", "name": "Bash", "input": obj{"command": "sleep 9"}}) + "\n")
+	for i := 1; i < 40; i++ { // the first step has no result yet; the others are done
+		id := fmt.Sprintf("toolu_%03d", i)
+		b.WriteString(assistantRow(fmt.Sprintf("t%d", i), float64(1+i*2), obj{"type": "tool_use", "id": id, "name": "Bash", "input": obj{"command": "echo " + id}}) + "\n")
+		b.WriteString(toolResultRow(fmt.Sprintf("r%d", i), float64(2+i*2), id, strings.Repeat("x", 300)) + "\n")
+	}
+	p := e.transcript(b.String())
+	snap := decode(t, e.get("/api/conversations/claude/"+sid))
+	if snap.Conversation.Turns[0].OmittedItems < 2 {
+		t.Fatalf("setup: the first steps must be omitted (omitted %d)", snap.Conversation.Turns[0].OmittedItems)
+	}
+	appendRows(t, p, toolResultRow("r0", 500, "toolu_first", "late result"))
+	inc := decodeInc(t, e.get("/api/conversations/claude/"+sid+"?after="+snap.Cursor))
+	found := false
+	for _, ch := range inc.Changes {
+		for _, it := range ch.Items {
+			if it["id"] == "toolu_first" {
+				found = true
+				if fmt.Sprint(it["index"]) != "1" { // user message 0, then the first step
+					t.Fatalf("the omitted step arrived with index %v, want its original 1: %v", it["index"], it)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the update of the omitted step is not in the increment: %+v", inc.Changes)
+	}
+	// and in a full (uncapped) snapshot the same item is still at index 1
+	e.mod.maxBody = maxBody
+	full := decode(t, e.get("/api/conversations/claude/"+sid))
+	idx, ids := itemsOf(t, full, 0)
+	for i, id := range ids {
+		if id == "toolu_first" && idx[i] != 1 {
+			t.Fatalf("the first step is at index %d in the snapshot", idx[i])
+		}
+	}
+}
+
+// The index of every shown item is part of the body the cap is measured on: with many small items the indexes alone
+// are more than the envelope's slack.
+func TestIndex_TheCapIsMeasuredWithTheIndexes(t *testing.T) {
+	e := newEnv(t)
+	e.mod.maxBody = 20000
+	e.transcript(stepsTurn(200, 0))
+	w := e.get("/api/conversations/claude/" + sid)
+	s := decode(t, w)
+	idx, _ := itemsOf(t, s, 0)
+	if len(idx) < 40 || s.Conversation.Turns[0].OmittedItems == 0 {
+		t.Fatalf("setup: %d items shown, %d omitted", len(idx), s.Conversation.Turns[0].OmittedItems)
+	}
+	if w.Body.Len() > e.mod.maxBody {
+		t.Fatalf("body %d over the cap %d with %d indexed items", w.Body.Len(), e.mod.maxBody, len(idx))
+	}
+}

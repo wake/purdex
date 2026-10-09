@@ -374,6 +374,9 @@ type TurnChange struct {
 	Turn          convmodel.Turn
 	HeaderChanged bool
 	Items         []convmodel.Item
+	// Indexes[i] is Items[i]'s 0-based position in the turn's full item list (the normalizer only appends items, so a
+	// position is stable within an epoch).
+	Indexes []int
 }
 
 // ChangesSince lists the turns whose header or any item changed after rev,
@@ -413,9 +416,10 @@ func (e *Entry) changesSinceLocked(rev uint64) []TurnChange {
 	for _, t := range c.Turns {
 		var ch TurnChange
 		ch.HeaderChanged = e.changed[turnKey(t.ID)] > rev
-		for _, it := range t.Items {
+		for pos, it := range t.Items {
 			if e.changed[itemKey(t.ID, ccnorm.ItemID(it))] > rev {
 				ch.Items = append(ch.Items, it)
+				ch.Indexes = append(ch.Indexes, pos)
 			}
 		}
 		if !ch.HeaderChanged && len(ch.Items) == 0 {
