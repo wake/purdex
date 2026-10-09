@@ -2,6 +2,7 @@
 package teammod
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
@@ -61,8 +62,9 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var cmd team.TeamCommand
-	switch st := peersmod.AdmitDecode(w, r, m.cmdLimit, entry.HostID, maxCommandBody, &cmd); st {
+	// The body is kept as received: the store hashes those bytes (a replay is the same bytes) and decodes them itself.
+	var raw json.RawMessage
+	switch st := peersmod.AdmitDecode(w, r, m.cmdLimit, entry.HostID, maxCommandBody, &raw); st {
 	case 0:
 	case http.StatusTooManyRequests:
 		m.writeCommandErr(w, st, ipeers.ErrRateLimited, "host rate limit exceeded")
@@ -72,6 +74,11 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	default:
 		m.writeCommandErr(w, st, team.ErrCommandBadRequest, "invalid JSON body")
+		return
+	}
+	var cmd team.TeamCommand
+	if err := json.Unmarshal(raw, &cmd); err != nil {
+		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandBadRequest, "the body is not a command")
 		return
 	}
 	if !uuidV4.MatchString(cmd.ID) || cmd.Kind == "" || cmd.TeamID == "" {
@@ -93,7 +100,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan := CommandPlan{LeadHostID: entry.HostID, Cmd: cmd, Hash: commandHash(cmd), Consent: entry.AllowTeam, Now: m.now()}
+	plan := CommandPlan{LeadHostID: entry.HostID, Body: raw, Consent: entry.AllowTeam, Now: m.now()}
 	if cmd.Kind == team.CommandAdopt && entry.AllowTeam {
 		o, found, err := m.origins.ResolveOriginBySession(cmd.TargetSessionID)
 		if err != nil {

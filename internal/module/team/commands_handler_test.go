@@ -222,6 +222,26 @@ func TestCommands_AdoptEndToEndAndReplay(t *testing.T) {
 	}
 }
 
+// The replay check is over the bytes received: the same id with a field this version does not know is another
+// command, not a replay (version skew), and the very same bytes still replay.
+func TestCommands_ReplayIsByReceivedBytes(t *testing.T) {
+	f := newFixture(t)
+	f.setLeadHost(true)
+	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w"})
+	raw, _ := json.Marshal(wireAdopt(cmdUUID1, cmdUUID1, "sid-t"))
+	first, _ := f.postCmd(leadPrincipal(), string(raw))
+	if first != http.StatusOK {
+		t.Fatalf("first = %d", first)
+	}
+	if code, _ := f.postCmd(leadPrincipal(), string(raw)); code != http.StatusOK {
+		t.Fatalf("same bytes = %d, want a replay", code)
+	}
+	skewed := strings.TrimSuffix(string(raw), "}") + `,"from_a_newer_version":1}`
+	if code, body := f.postCmd(leadPrincipal(), skewed); code != http.StatusConflict || errCode(t, body) != team.ErrCommandIDConflict {
+		t.Fatalf("skewed bytes: %d %s", code, body)
+	}
+}
+
 func TestCommands_AdoptRefusals(t *testing.T) {
 	f := newFixture(t)
 	f.setLeadHost(false)
