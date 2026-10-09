@@ -120,9 +120,9 @@ func TestRemoteNotices_AdoptedIsDeliveredFromTheRowsData(t *testing.T) {
 func TestRemoteNotices_EachKindUsesItsOwnTemplate(t *testing.T) {
 	for kind, want := range map[string]string{
 		noticeReleased:  fmt.Sprintf(team.ReleaseNoticeFmt, "lead/x [lead01]", "T"),
-		noticeHandover:  fmt.Sprintf(team.HandoverNoticeFmt, "lead/x [lead01]", "T", "lead/x [lead01]"),
-		noticeTeamEnded: fmt.Sprintf(team.TeamEndedNoticeFmt, "lead/x [lead01]", "T"),
-		noticeLocalEnd:  fmt.Sprintf(team.LocalEndNoticeFmt, "T", "lead/x [lead01]"),
+		noticeHandover:  fmt.Sprintf(team.RemoteHandoverNoticeFmt, "lead/x [lead01]", "T", "lead/x [lead01]"),
+		noticeTeamEnded: fmt.Sprintf(team.RemoteTeamEndedNoticeFmt, "lead/x [lead01]", "T"),
+		noticeLocalEnd:  fmt.Sprintf(team.RemoteLocalEndNoticeFmt, "T", "lead/x [lead01]"),
 	} {
 		t.Run(kind, func(t *testing.T) {
 			f, d := remoteNoticeFixture(t, kind)

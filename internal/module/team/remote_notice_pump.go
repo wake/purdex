@@ -69,11 +69,11 @@ func remoteNoticeText(n remoteNoticeRow, m remoteMemberRow) (string, bool) {
 	case noticeReleased:
 		return fmt.Sprintf(team.ReleaseNoticeFmt, lead, name), true
 	case noticeHandover:
-		return fmt.Sprintf(team.HandoverNoticeFmt, lead, name, lead), true
+		return fmt.Sprintf(team.RemoteHandoverNoticeFmt, lead, name, lead), true
 	case noticeTeamEnded:
-		return fmt.Sprintf(team.TeamEndedNoticeFmt, lead, name), true
+		return fmt.Sprintf(team.RemoteTeamEndedNoticeFmt, lead, name), true
 	case noticeLocalEnd:
-		return fmt.Sprintf(team.LocalEndNoticeFmt, name, lead), true
+		return fmt.Sprintf(team.RemoteLocalEndNoticeFmt, name, lead), true
 	}
 	return "", false
 }

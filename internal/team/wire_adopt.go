@@ -44,14 +44,14 @@ const (
 )
 
 // The notices of a remote member (cross-host team spec §4.4) are M's own fixed text; only the lead's address and the
-// team's name (each cleaned and at most 64 bytes) are filled in. HandoverNoticeFmt takes the new lead's address, the
-// team's name and the address to report to; TeamEndedNoticeFmt the lead's address and the team's name;
-// LocalEndNoticeFmt the team's name and the lead's address. A remote adopt and release use AdoptNoticeFmt and
+// team's name (each cleaned and at most 64 bytes) are filled in. RemoteHandoverNoticeFmt takes the new lead's address, the
+// team's name and the address to report to; RemoteTeamEndedNoticeFmt the lead's address and the team's name;
+// RemoteLocalEndNoticeFmt the team's name and the lead's address. A remote adopt and release use AdoptNoticeFmt and
 // ReleaseNoticeFmt, with the team's name in the place of the id.
 const (
-	HandoverNoticeFmt  = "[pdx team] 你的 lead 已改為 %s（team %s）；回報請送 %s。"
-	TeamEndedNoticeFmt = "[pdx team] %s 已結束 team %s：你現在是一般 session，自我接力依這台主機的設定。"
-	LocalEndNoticeFmt  = "[pdx team] 這台主機的操作者已讓你離開 team %s（lead %s）：你現在是一般 session，自我接力依這台主機的設定。"
+	RemoteHandoverNoticeFmt  = "[pdx team] 你的 lead 已改為 %s（team %s）；回報請送 %s。"
+	RemoteTeamEndedNoticeFmt = "[pdx team] %s 已結束 team %s：你現在是一般 session，自我接力依這台主機的設定。"
+	RemoteLocalEndNoticeFmt  = "[pdx team] 這台主機的操作者已讓你離開 team %s（lead %s）：你現在是一般 session，自我接力依這台主機的設定。"
 )
 
 // AdoptPayload is Approval.Payload for KindAdopt. The target fields are
