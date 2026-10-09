@@ -4,6 +4,7 @@ package teammod
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/wake/purdex/internal/config"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // A spawn forwarded from a lead host (cross-host team spec §5.5, §6.2, plan X4a-2). The `spawn` command is accepted on
@@ -150,7 +152,7 @@ func (m *Module) killEndedSpawnSessions(leadHost, teamID string) error {
 	}
 	var first error
 	for _, op := range ops {
-		if _, err := m.tmux.KillSessionIfInstance(op.TmuxID, op.TmuxInstance); err != nil {
+		if _, err := m.tmux.KillSessionIfInstance(op.TmuxID, op.TmuxInstance); err != nil && !errors.Is(err, tmux.ErrNoSession) { // gone already: a replay after a lost answer
 			m.logf("[team] spawn %s: tmux session %s not killed on end: %v", op.ID, op.TmuxID, err)
 			if first == nil {
 				first = err

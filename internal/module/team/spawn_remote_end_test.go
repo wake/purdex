@@ -98,6 +98,10 @@ func TestRemoteSpawn_TeamEndRetriesAFailedKill(t *testing.T) {
 	if f.tmux.HasSession(name) {
 		t.Fatal("the retried end did not kill the session")
 	}
+	// the answer was lost and the lead sends it once more: the session is gone, which is done, not a failure
+	if code, body := f.postCmd(leadPrincipal(), endOf(cmdUUID3, "team-L")); code != http.StatusOK {
+		t.Fatalf("replay after the kill = %d %s, want 200", code, body)
+	}
 }
 
 func endOf(id, teamID string) team.TeamCommand {
