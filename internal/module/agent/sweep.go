@@ -50,6 +50,7 @@ func (m *Module) sweepOnce() error {
 	if err != nil {
 		return err
 	}
+	procs := m.sweepProcsFor(frames)
 	survivors := make([]store.Frame, 0, len(frames))
 	for _, frame := range frames {
 		if !frame.Verified {
@@ -61,7 +62,7 @@ func (m *Module) sweepOnce() error {
 			}
 			continue
 		}
-		startTime, err := processStartTimeFn(frame.PID)
+		startTime, err := procs.startTime(frame.PID)
 		if err != nil {
 			// Codex round 3 #R2 fix: identity unverifiable for this
 			// frame's owner — keep it as a survivor so the pane still
@@ -103,8 +104,8 @@ func (m *Module) sweepOnce() error {
 		// healthy by prune in the same tick. Reverse order would also
 		// work but canonicalize-first is the natural narrative: fix
 		// partials, then verify pane health.
-		m.canonicalizePane(paneID, broadcastTs)
-		m.pruneDeadProxyRefs(paneID, broadcastTs)
+		m.canonicalizePane(paneID, broadcastTs, procs)
+		m.pruneDeadProxyRefs(paneID, broadcastTs, procs)
 	}
 	return nil
 }
@@ -136,7 +137,7 @@ func (m *Module) sweepOnce() error {
 // Best-effort: any storage error / failed gate / failed Upsert / failed
 // DeleteIfUnchanged makes this candidate skip; next sweep tick (2s)
 // retries. No rollback on partial.
-func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
+func (m *Module) canonicalizePane(paneID string, broadcastTs int64, procs sweepProcs) {
 	if m.frames == nil {
 		return
 	}
@@ -156,11 +157,11 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 		if !isPidAliveFn(candidate.PID) {
 			continue
 		}
-		actualStart, sterr := processStartTimeFn(candidate.PID)
+		actualStart, sterr := procs.startTime(candidate.PID)
 		if sterr != nil || actualStart != candidate.ProcessStartTime {
 			continue
 		}
-		ancestor, found := m.findCanonicalAncestor(candidate, framesByPID)
+		ancestor, found := m.findCanonicalAncestorIn(procs, candidate, framesByPID)
 		if !found {
 			continue
 		}
@@ -194,7 +195,7 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 		//  parent missing ref + no owned state → attach + delete (main
 		//                                       canonicalization path)
 		parentHasMatchingProxy := subagentsContainProxySender(ancestor.Subagents, candidate.PID, candidate.ProcessStartTime)
-		ownedState := candidateHasOwnedState(candidate)
+		ownedState := candidateHasOwnedStateIn(procs.startTime, candidate)
 		if parentHasMatchingProxy && ownedState {
 			continue
 		}
@@ -248,7 +249,7 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64) {
 			anyAncestor = parentStored
 			continue
 		}
-		actualAncestorStart, ancestorErr := processStartTimeFn(parentStored.PID)
+		actualAncestorStart, ancestorErr := procs.startTime(parentStored.PID)
 		if ancestorErr != nil || actualAncestorStart != parentStored.ProcessStartTime {
 			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
 			canonicalizedAny = true
@@ -314,11 +315,16 @@ func (m *Module) broadcastProxyCanonicalized(reference store.Frame) {
 // only frames from a single pane (ListByPane), so cross-pane PID
 // collision is impossible.
 func (m *Module) findCanonicalAncestor(candidate store.Frame, framesByPID map[int]store.Frame) (store.Frame, bool) {
-	info, err := readProcessInfoFn(candidate.PID)
+	return m.findCanonicalAncestorIn(sweepProcs{}, candidate, framesByPID)
+}
+
+// findCanonicalAncestorIn is findCanonicalAncestor over a sweep's process view: each step of the PPID walk is answered
+// from the tick's table (no fork), and only a pid the table lacks is read singly.
+func (m *Module) findCanonicalAncestorIn(procs sweepProcs, candidate store.Frame, framesByPID map[int]store.Frame) (store.Frame, bool) {
+	ppid, err := procs.ppid(candidate.PID)
 	if err != nil {
 		return store.Frame{}, false
 	}
-	ppid := info.PPID
 	for depth := 0; depth < proxyMaxDepth; depth++ {
 		if ppid <= 1 {
 			return store.Frame{}, false
@@ -331,7 +337,7 @@ func (m *Module) findCanonicalAncestor(candidate store.Frame, framesByPID map[in
 				return store.Frame{}, false
 			}
 			if isPidAliveFn(ancestor.PID) {
-				actualStart, sterr := processStartTimeFn(ancestor.PID)
+				actualStart, sterr := procs.startTime(ancestor.PID)
 				if sterr == nil && actualStart == ancestor.ProcessStartTime {
 					return ancestor, true
 				}
@@ -339,14 +345,14 @@ func (m *Module) findCanonicalAncestor(candidate store.Frame, framesByPID map[in
 			// Ancestor matched in pane but failed identity gate — keep
 			// walking; a deeper ancestor might still match.
 		}
-		ancestorInfo, err := readProcessInfoFn(ppid)
+		parent, err := procs.ppid(ppid)
 		if err != nil {
 			return store.Frame{}, false
 		}
-		if ancestorInfo.PPID == ppid {
+		if parent == ppid {
 			return store.Frame{}, false
 		}
-		ppid = ancestorInfo.PPID
+		ppid = parent
 	}
 	return store.Frame{}, false
 }
@@ -388,7 +394,7 @@ func uniquePaneIDs(frames []store.Frame) []string {
 // emit. Per-pane (not per-detach) so multiple stale refs in the same pane
 // coalesce into one broadcast — matches afterFrameCleared's per-frame
 // granularity.
-func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
+func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64, procs sweepProcs) {
 	if m.frames == nil {
 		return
 	}
@@ -412,7 +418,7 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64) {
 			if !isPidAliveFn(ref.SourcePID) {
 				shouldPrune = true // confirmed dead source
 			} else {
-				actualStart, sterr := processStartTimeFn(ref.SourcePID)
+				actualStart, sterr := procs.startTime(ref.SourcePID)
 				if sterr != nil {
 					// Read error → keep, retry next sweep.
 					continue
@@ -567,4 +573,74 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit)
 		return abort
 	}
 	return cleanupErr
+}
+
+// snapshotTimeout bounds the one process-table read of a sweep tick (a read is a sysctl on macOS and a /proc walk on
+// Linux; it only runs long when the machine is in trouble, and then the tick falls back instead of hanging).
+const snapshotTimeout = 3 * time.Second
+
+// procTable is what a sweep asks of one process-table read: a pid's start text (what store.Frame.ProcessStartTime
+// holds) and its parent. *agentpkg.ProcessSnapshot is one; tests stage others.
+type procTable interface {
+	StartTime(pid int) (string, error)
+	PPID(pid int) (int, error)
+}
+
+// snapshotProcessesFn reads the process table once. A seam: tests replace it.
+var snapshotProcessesFn = func(ctx context.Context) (procTable, error) {
+	snap, err := agentpkg.SnapshotProcesses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return snap, nil
+}
+
+// sweepProcs answers the process questions of ONE sweep tick. Until #2138 every one of them was its own `ps` fork - a
+// start time per frame, a parent per ancestor walked, a start time per proxy ref - about 15-25 forks a second on a busy
+// host; now they are answered from a single read of the table. The identity rules are unchanged (alive + start text
+// match; a read error keeps the frame): only where the answer comes from differs. A pid the table does not have (it
+// started after the read) is asked of the per-PID reader, and nothing else is, so a stale table can only ever cost one
+// read, never give a wrong answer for a pid it does not know. The zero value (no table) asks the per-PID readers for
+// everything, which is also what a failed table read leaves.
+type sweepProcs struct{ table procTable }
+
+// sweepProcsFor reads the table for this tick - only if some frame is there to verify, so an idle daemon forks nothing.
+func (m *Module) sweepProcsFor(frames []store.Frame) sweepProcs {
+	for _, f := range frames {
+		if !f.Verified {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
+		defer cancel()
+		table, err := snapshotProcessesFn(ctx)
+		if err != nil || table == nil {
+			return sweepProcs{}
+		}
+		return sweepProcs{table: table}
+	}
+	return sweepProcs{}
+}
+
+func (p sweepProcs) startTime(pid int) (string, error) {
+	if p.table != nil {
+		s, err := p.table.StartTime(pid)
+		if err == nil || !errors.Is(err, agentpkg.ErrNotInSnapshot) {
+			return s, err
+		}
+	}
+	return processStartTimeFn(pid)
+}
+
+func (p sweepProcs) ppid(pid int) (int, error) {
+	if p.table != nil {
+		ppid, err := p.table.PPID(pid)
+		if err == nil || !errors.Is(err, agentpkg.ErrNotInSnapshot) {
+			return ppid, err
+		}
+	}
+	info, err := readProcessInfoFn(pid)
+	if err != nil {
+		return 0, err
+	}
+	return info.PPID, nil
 }
