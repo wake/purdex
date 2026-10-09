@@ -11,7 +11,7 @@ const Mask = "[redacted]"
 var (
 	// the prefix patterns, tried before the long-run rule; each one swallows its whole token
 	prefixed = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=\-]{8,}`),
+		regexp.MustCompile(`(?i)\bBearer\s+[^\s"'` + "`" + `]+`),
 		regexp.MustCompile(`(?i)\bsk-[A-Za-z0-9_\-]{8,}`),
 		regexp.MustCompile(`(?i)\bgh[pousr]_[A-Za-z0-9_]{8,}`),
 		regexp.MustCompile(`(?i)\bxox[a-z]-[A-Za-z0-9\-]{4,}`),

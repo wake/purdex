@@ -8,6 +8,7 @@ import (
 func TestString_Redacts(t *testing.T) {
 	cases := map[string]struct{ in, want string }{
 		"bearer":        {"curl -H 'Authorization: Bearer abc.DEF-123_x' url", "curl -H 'Authorization: [redacted]' url"},
+		"bearer short":  {"Authorization: Bearer abc", "Authorization: [redacted]"}, // no length floor: any Bearer value is a credential
 		"bearer case":   {"authorization: bearer sometoken", "authorization: [redacted]"},
 		"sk":            {"key sk-ant-api03-AbCdEf123456 here", "key [redacted] here"},
 		"github":        {"token ghp_AbCdEf1234567890 and gho_ZyXwVu9876543210", "token [redacted] and [redacted]"},
@@ -34,7 +35,6 @@ func TestString_LeavesOrdinaryText(t *testing.T) {
 		"31 mixed":       strings.Repeat("aB3", 10) + "x",
 		"pure digits":    strings.Repeat("1", 40),
 		"pure letters":   strings.Repeat("a", 40),
-		"bearer word":    "the bearer of bad news",
 		"short sk":       "sk-1 and risk-free",
 		"hyphen words":   "a-very-long-hyphenated-word-that-goes-on-and-on-0123456789",
 		"empty":          "",
