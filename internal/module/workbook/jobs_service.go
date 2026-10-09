@@ -62,6 +62,22 @@ func (s jobsService) JobWaiting(sessionID string) bool {
 	return eng != nil && eng.JobWaiting(sessionID)
 }
 
+// RequestRefresh queues a refresh asked from the mod's /workbook refresh; the caller's session runs it when it can.
+func (s jobsService) RequestRefresh(_, sessionID string) (int64, error) {
+	eng := s.engine()
+	if eng == nil {
+		return 0, modevents.ErrNotLive
+	}
+	id, err := eng.RequestRefresh(sessionID, sessionID)
+	switch err {
+	case ErrNotLive, ErrStopped:
+		return 0, modevents.ErrNotLive
+	case ErrRefreshPending:
+		return 0, modevents.ErrRefreshPending
+	}
+	return id, err
+}
+
 // JobWaiting: the session's conversation has a job queued that nobody holds. Only a capable session is told, so a mod
 // that cannot run the job is never asked to.
 func (e *Engine) JobWaiting(sessionID string) bool {
@@ -72,8 +88,13 @@ func (e *Engine) JobWaiting(sessionID string) bool {
 	if err != nil {
 		return false
 	}
+	canRefresh := e.refreshCapable(sessionID)
 	e.qmu.Lock()
 	defer e.qmu.Unlock()
 	q := e.convs[conv]
-	return !e.qstopped && q != nil && q.lease == nil && len(q.waiting) > 0
+	if e.qstopped || q == nil || q.lease != nil || len(q.waiting) == 0 {
+		return false
+	}
+	// a refresh at the head is for a session that can run it; telling another would only make it ask for nothing
+	return q.waiting[0].kind != JobRefresh || canRefresh
 }

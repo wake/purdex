@@ -12,8 +12,9 @@ import (
 // The workbook job routes (session workbook spec §5.1). The mod asks `next` for the summariser job of its session's
 // conversation and posts the call's outcome to `result`; the daemon keeps every decision.
 const (
-	WorkbookNextPath   = "/mod/v1/workbook/next"
-	WorkbookResultPath = "/mod/v1/workbook/result"
+	WorkbookNextPath    = "/mod/v1/workbook/next"
+	WorkbookResultPath  = "/mod/v1/workbook/result"
+	WorkbookRefreshPath = "/mod/v1/workbook/refresh"
 )
 
 // Limits of the routes.
@@ -56,6 +57,52 @@ type WorkbookService interface {
 	JobResult(stream string, r WorkbookResult) (more bool, err error)
 	// JobWaiting says a job of the session's conversation is queued and nobody holds it (the events answer's hint).
 	JobWaiting(sessionID string) bool
+	// RequestRefresh queues a refresh of the session's conversation, preferring the caller's session to run it; entryID is
+	// the refresh entry. ErrNotLive and ErrRefreshPending are 409s.
+	RequestRefresh(stream, sessionID string) (entryID int64, err error)
+}
+
+// Errors of RequestRefresh.
+var (
+	ErrNotLive        = errors.New("modevents: no live session of the conversation can run a refresh")
+	ErrRefreshPending = errors.New("modevents: a refresh of the conversation is already pending")
+)
+
+// workbookRefresh serves POST /mod/v1/workbook/refresh {stream, session_id} (the mod's /workbook refresh): 202
+// {"entry_id"}, 409 not_live | refresh_pending, 400 bad_request, 503 unavailable. Only the stream that is the session's own,
+// live and refresh-capable may ask.
+func (h *handler) workbookRefresh(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Stream    string `json:"stream"`
+		SessionID string `json:"session_id"`
+	}
+	if !h.readJSON(w, r, &in) {
+		return
+	}
+	if !ValidStream(in.Stream) || !sidRe.MatchString(in.SessionID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
+		return
+	}
+	svc := h.service()
+	if svc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "unavailable"})
+		return
+	}
+	if h.reg == nil || !h.reg.StreamCapable(in.Stream, in.SessionID, CapWorkbookRefresh, CapsFresh) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not_live"})
+		return
+	}
+	id, err := svc.RequestRefresh(in.Stream, in.SessionID)
+	switch {
+	case errors.Is(err, ErrNotLive):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "not_live"})
+	case errors.Is(err, ErrRefreshPending):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "refresh_pending"})
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]int64{"entry_id": id})
+	}
 }
 
 // WithWorkbook enables the workbook routes and the events answer's `workbook` hint; get returns nil while the workbook

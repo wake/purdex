@@ -90,6 +90,7 @@ type Store struct {
 	now         func() int64 // unix ms; injectable for tests
 	obs         atomic.Pointer[func(Event)]
 	failFinish  func() error // test seam: makes Finish fail; nil in production
+	failRepoint func() error // test seam: runs at the start of RepointSession and may fail it; nil in production
 	afterCommit func()       // test seam: between InsertPending's commit and its event; nil in production
 	wmu         sync.Mutex   // serialises the writes together with their events; an observer must not write to the store
 }

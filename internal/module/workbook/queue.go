@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 const (
 	JobTurn    = "turn"
 	JobRewrite = "rewrite"
+	JobRefresh = "refresh"
 )
 
 // ErrNotLeased: the result's job is not leased to that stream (it ran out, was never handed out, was answered already,
@@ -36,11 +38,34 @@ type Complete struct {
 	TimeoutMS int           `json:"timeout_ms"`
 }
 
-// Job is what Next hands out.
+// Fork is a refresh job's call (spec §5.6): the mod passes it to $.model.fork, which sends the conversation itself.
+type Fork struct {
+	Prompt    string `json:"prompt"`
+	TimeoutMS int    `json:"timeout_ms"`
+}
+
+// Job is what Next hands out: turn and re-write jobs carry a Complete, a refresh job carries a Fork instead.
 type Job struct {
-	ID       string   `json:"id"`
-	Kind     string   `json:"kind"`
-	Complete Complete `json:"complete"`
+	ID       string
+	Kind     string
+	Complete Complete
+	Fork     *Fork
+}
+
+// MarshalJSON writes {id, kind, complete} or {id, kind, fork}: the wire kinds are exactly the spec's three.
+func (j Job) MarshalJSON() ([]byte, error) {
+	if j.Kind == JobRefresh {
+		return json.Marshal(struct {
+			ID   string `json:"id"`
+			Kind string `json:"kind"`
+			Fork *Fork  `json:"fork"`
+		}{j.ID, j.Kind, j.Fork})
+	}
+	return json.Marshal(struct {
+		ID       string   `json:"id"`
+		Kind     string   `json:"kind"`
+		Complete Complete `json:"complete"`
+	}{j.ID, j.Kind, j.Complete})
 }
 
 // Result is the mod's report of a call (spec §5.1).
@@ -95,6 +120,8 @@ type convQ struct {
 	waiting []*job
 	lease   *lease
 	wake    chan struct{} // closed and replaced when the conversation's state changes
+
+	noCapSince time.Time // a refresh at the head and nobody able to run it since then (refresh.go)
 }
 
 // newJobID is unguessable: the id doubles as the lease's credential, so a caller that holds the stream string still
@@ -120,12 +147,12 @@ func (q *convQ) signal() {
 }
 
 // enqueue appends a fresh turn job to its conversation; more than three waiting turns drop the oldest ones (backlog).
-func (e *Engine) enqueue(j *job) {
+func (e *Engine) enqueue(j *job) bool {
 	e.qmu.Lock()
 	if e.qstopped {
 		e.qmu.Unlock()
 		e.finishUnrun(j, StateSkipped, ReasonStopped)
-		return
+		return false
 	}
 	j.id = newJobID()
 	q := e.queueOf(j.conv)
@@ -154,6 +181,7 @@ func (e *Engine) enqueue(j *job) {
 	for _, d := range dropped {
 		e.finishUnrun(d, StateSkipped, ReasonBacklog)
 	}
+	return true
 }
 
 // isFresh: a turn job nobody has started on. Retries and re-writes belong to an entry already under way and are never
@@ -162,6 +190,9 @@ func isFresh(j *job) bool { return j.kind == JobTurn && j.attempt == 1 }
 
 // finishUnrun ends the entry of a job that never ran (or whose result will never come) as skipped or failed.
 func (e *Engine) finishUnrun(j *job, state, reason string) {
+	if j.kind == JobRefresh && state == StateSkipped {
+		state = StateFailed // a refresh was asked for: it fails (stopped), it is not skipped
+	}
 	if j.kind == JobRewrite {
 		e.finishCut(j) // its thing and push are out already: keep them, cut the entry
 		return
@@ -221,6 +252,7 @@ func (e *Engine) Next(ctx context.Context, stream, sessionID string, wait time.D
 	defer deadline.Stop()
 	for {
 		e.reap()
+		canRefresh := e.refreshCapable(sessionID) // read before qmu: it may reach the lineage
 		e.qmu.Lock()
 		if e.qstopped {
 			e.qmu.Unlock()
@@ -232,13 +264,20 @@ func (e *Engine) Next(ctx context.Context, stream, sessionID string, wait time.D
 		var l *lease
 		for q.lease == nil && len(q.waiting) > 0 {
 			j := q.waiting[0]
+			if j.kind == JobRefresh && !canRefresh {
+				break // a refresh goes only to a session whose mod can run it; the queue behind it waits (D10)
+			}
 			q.waiting = q.waiting[1:]
-			if !e.admit() {
+			if j.kind != JobRefresh && !e.admit() { // a manual refresh is not a summariser call of the hourly cap
 				skipped = append(skipped, j)
 				continue
 			}
-			l = &lease{job: j, stream: stream, timeoutMS: completeTimeout,
-				expires: e.d.Now().Add(completeTimeout*time.Millisecond + leaseSlack)}
+			timeout := completeTimeout
+			if j.kind == JobRefresh {
+				timeout = refreshTimeout
+			}
+			l = &lease{job: j, stream: stream, timeoutMS: timeout,
+				expires: e.d.Now().Add(time.Duration(timeout)*time.Millisecond + leaseSlack)}
 			q.lease, handed = l, j
 			e.leases[j.id] = l
 		}
@@ -248,7 +287,7 @@ func (e *Engine) Next(ctx context.Context, stream, sessionID string, wait time.D
 			e.finishUnrun(s, StateSkipped, ReasonCap)
 		}
 		if handed != nil {
-			out, ids, err := e.buildComplete(handed, conv)
+			out, fork, ids, err := e.buildCall(handed, conv)
 			if err != nil {
 				e.d.Logf("[workbook] build a job: %v", err)
 				e.release(l, nil)
@@ -258,19 +297,33 @@ func (e *Engine) Next(ctx context.Context, stream, sessionID string, wait time.D
 			if e.afterBuild != nil {
 				e.afterBuild()
 			}
+			if handed.kind == JobRefresh && handed.session != sessionID {
+				// the capable session that actually takes it is the one it runs in (D14): the row follows first, so the
+				// job is never handed to a session the row does not name
+				switch moved, err := e.repoint(handed, sessionID); {
+				case err != nil:
+					e.d.Logf("[workbook] re-point a refresh: %v", err)
+					e.releaseOwned(l, handed) // put it back at the head and try again
+					return Job{}, false
+				case !moved: // the entry is not pending any more: someone ended it, the job is dead
+					e.releaseOwned(l, nil)
+					return Job{}, false
+				}
+			}
 			// The lease may have been reaped or stopped while the input was built (the store reads take a while):
 			// a job is handed out only if its lease is still the conversation's, and its time starts now.
 			e.qmu.Lock()
-			valid := !e.qstopped && e.leases[handed.id] == l && q.lease == l && !l.processing
+			valid := e.ownsLeaseLocked(l)
 			if valid {
 				l.ids = ids
-				l.expires = e.d.Now().Add(completeTimeout*time.Millisecond + leaseSlack)
+				l.expires = e.d.Now().Add(time.Duration(l.timeoutMS)*time.Millisecond + leaseSlack)
 			}
 			e.qmu.Unlock()
 			if !valid {
 				return Job{}, false
 			}
-			return Job{ID: handed.id, Kind: handed.kind, Complete: out}, true
+			handed.session = sessionID
+			return Job{ID: handed.id, Kind: handed.kind, Complete: out, Fork: fork}, true
 		}
 		if wait <= 0 {
 			return Job{}, false
@@ -283,6 +336,24 @@ func (e *Engine) Next(ctx context.Context, stream, sessionID string, wait time.D
 		case <-wake:
 		}
 	}
+}
+
+// buildCall makes what a job sends: a refresh its fork, any other kind its complete.
+func (e *Engine) buildCall(j *job, conv string) (Complete, *Fork, map[int]int64, error) {
+	if j.kind != JobRefresh {
+		c, ids, err := e.buildComplete(j, conv)
+		return c, nil, ids, err
+	}
+	st, _, err := e.d.Store.Status(conv)
+	if err != nil {
+		return Complete{}, nil, nil, err
+	}
+	open, err := e.d.Store.OpenTodos(conv, maxPromptTodos)
+	if err != nil {
+		return Complete{}, nil, nil, err
+	}
+	prompt, ids := BuildRefreshInput(st.Status, open)
+	return Complete{}, &Fork{Prompt: prompt, TimeoutMS: refreshTimeout}, ids, nil
 }
 
 // buildComplete makes the call of a job from the store as it is now (plan D12): the previous output is applied, since
@@ -317,24 +388,46 @@ func (e *Engine) buildComplete(j *job, conv string) (Complete, map[int]int64, er
 
 // release drops a lease and puts follow (a retry or a re-write) at the head of the conversation, so the entry keeps its
 // place; it wakes the conversation's pollers.
-func (e *Engine) release(l *lease, follow *job) {
+func (e *Engine) release(l *lease, follow *job) { e.releaseIf(l, follow, false) }
+
+// releaseOwned is release for a caller that has not been told the lease is still its own (the hand-out path): nothing
+// happens when a reaper or Stop took the lease meanwhile, since they finish the job and release it themselves.
+func (e *Engine) releaseOwned(l *lease, follow *job) { e.releaseIf(l, follow, true) }
+
+func (e *Engine) releaseIf(l *lease, follow *job, owned bool) {
 	e.qmu.Lock()
-	defer e.qmu.Unlock()
+	if owned && !e.ownsLeaseLocked(l) {
+		e.qmu.Unlock()
+		return
+	}
 	q := e.queueOf(l.job.conv)
 	delete(e.leases, l.job.id)
 	if q.lease == l {
 		q.lease = nil
 	}
-	if follow != nil {
+	stopped := e.qstopped
+	if follow != nil && !stopped {
 		follow.id = newJobID()
 		q.waiting = append([]*job{follow}, q.waiting...)
 	}
 	q.signal()
+	e.qmu.Unlock()
+	if follow != nil && stopped { // nobody will ever run it: a queue that has been stopped takes no new work
+		e.finishUnrun(follow, StateFailed, ReasonStopped)
+	}
+}
+
+// ownsLeaseLocked: the lease is still the conversation's current one and nobody is applying or has ended it. qmu held.
+func (e *Engine) ownsLeaseLocked(l *lease) bool {
+	return !e.qstopped && e.leases[l.job.id] == l && e.queueOf(l.job.conv).lease == l && !l.processing
 }
 
 // reap ends the leases that ran out: the call is lost, and the queue moves on.
 func (e *Engine) reap() {
 	e.retryOrphans()
+	if e.refreshWaiting() {
+		e.failStaleRefreshHeads(e.refreshConvs())
+	}
 	var lost []*lease
 	e.qmu.Lock()
 	now := e.d.Now()
@@ -430,6 +523,11 @@ func (e *Engine) RunReaper(ctx context.Context) {
 			return
 		case <-t.C:
 			e.reap()
+			if e.d.OnAvailability != nil {
+				if ch := e.SweepAvailability(); len(ch) > 0 {
+					e.d.OnAvailability(ch)
+				}
+			}
 		}
 	}
 }
