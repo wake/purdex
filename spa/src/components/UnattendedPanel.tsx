@@ -27,6 +27,8 @@ import { approvalKindLabel, approvalSessionLabel } from '../lib/team/approval-fo
 import { getUnattended } from '../lib/team/unattended-api'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
 import { registerRefetch } from '../lib/team/relay-quota-writer'
+import { hostIdentityNow } from '../lib/team/quota-host'
+import { useHostStore } from '../stores/useHostStore'
 import { sinceText } from '../lib/team/time-text'
 import type { Approval, SessionQuota, UnattendedView } from '../lib/team/types'
 
@@ -143,19 +145,39 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
     lifeRef.current = life
     const disposers: Array<() => void> = []
     for (const hostId of hosts) {
-      const quotas = quotaHostOf(hostId)
-      if (quotas) useRelayQuotaStore.getState().beginGet(hostId)
-      void readPage(life, hostId, undefined).then(
-        (v) => { if (quotas) useRelayQuotaStore.getState().endGet(hostId, v.quotas ?? null); return firstPage(v) },
-        (e: unknown): HostPages => { if (quotas) useRelayQuotaStore.getState().endGet(hostId, null); return { rows: [], since: 0, failed: codeOf(e) } },
-      ).then((p) => { if (!life.cancelled) setPages((cur) => ({ ...cur, [hostId]: p })) })
-      if (quotas) {
+      // A GET belongs to the daemon (endpoint + token) it was made to. If the host is re-pointed while it is out, its answer
+      // is the old daemon's: it is not shown, the quota store ignores its end (the epoch moved), and the host is read again.
+      let gen = 0
+      const load = () => {
+        const mine = ++gen
+        const identity = hostIdentityNow(hostId)
+        if (identity === null) { setPages((cur) => { const { [hostId]: _gone, ...rest } = cur; return rest }); return }
+        const quotas = quotaHostOf(hostId)
+        const epoch = quotas ? useRelayQuotaStore.getState().beginGet(hostId) : 0
+        const current = () => !life.cancelled && mine === gen && hostIdentityNow(hostId) === identity
+        void readPage(life, hostId, undefined).then(
+          (v) => { if (quotas) useRelayQuotaStore.getState().endGet(hostId, v.quotas ?? null, epoch); return firstPage(v) },
+          (e: unknown): HostPages => { if (quotas) useRelayQuotaStore.getState().endGet(hostId, null, epoch); return { rows: [], since: 0, failed: codeOf(e) } },
+        ).then((p) => { if (current()) setPages((cur) => ({ ...cur, [hostId]: p })) })
+      }
+      load()
+      let seen = hostIdentityNow(hostId)
+      disposers.push(useHostStore.subscribe(() => {
+        const now = hostIdentityNow(hostId)
+        if (now === seen) return
+        seen = now
+        useRelayQuotaStore.getState().forgetHost(hostId)
+        load()
+      }))
+      if (quotaHostOf(hostId)) {
         // After a write that went to a provisional root (`pending_lineage`) the writer asks for this host's view again.
         disposers.push(registerRefetch(hostId, () => {
-          useRelayQuotaStore.getState().beginGet(hostId)
+          const identity = hostIdentityNow(hostId)
+          if (identity === null) return
+          const epoch = useRelayQuotaStore.getState().beginGet(hostId)
           void readPage(life, hostId, undefined).then(
-            (v) => { useRelayQuotaStore.getState().endGet(hostId, v.quotas ?? null); if (!life.cancelled) setPages((cur) => ({ ...cur, [hostId]: { ...cur[hostId], quotas: v.quotas, quotasFailed: v.quotasFailed, held: v.held } })) },
-            () => { useRelayQuotaStore.getState().endGet(hostId, null) },
+            (v) => { useRelayQuotaStore.getState().endGet(hostId, v.quotas ?? null, epoch); if (!life.cancelled && hostIdentityNow(hostId) === identity) setPages((cur) => ({ ...cur, [hostId]: { ...cur[hostId], quotas: v.quotas, quotasFailed: v.quotasFailed, held: v.held } })) },
+            () => { useRelayQuotaStore.getState().endGet(hostId, null, epoch) },
           )
         }))
       }

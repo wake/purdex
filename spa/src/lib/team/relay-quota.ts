@@ -39,6 +39,8 @@ function merge(cur: ConfirmedQuota | undefined, next: ConfirmedQuota): Confirmed
 interface GetState {
   depth: number
   events: RelayQuotaEvent[]
+  /** The epoch these GETs began in (see `epochs`). */
+  epoch: number
 }
 
 interface RelayQuotaState {
@@ -46,10 +48,17 @@ interface RelayQuotaState {
   writes: Record<string, FieldWrite>
   /** Per host, the GETs in flight and the events buffered meanwhile (absent = none in flight). */
   gets: Record<string, GetState>
+  /**
+   * Per host, a counter that moves every time the host is forgotten (removed or re-pointed). A GET carries the epoch it
+   * began in, so the late end of a GET made to the OLD daemon can neither apply its rows nor consume the depth of a GET
+   * made to the new one.
+   */
+  epochs: Record<string, number>
 
-  beginGet: (hostId: string) => void
-  /** The GET ended: its rows (null = it failed) are applied, then the events buffered while it was out. */
-  endGet: (hostId: string, rows: readonly SessionQuota[] | null) => void
+  /** Starts a GET for the host; returns the epoch to hand back to `endGet`. */
+  beginGet: (hostId: string) => number
+  /** The GET ended: its rows (null = it failed) are applied, then the events buffered while it was out. A stale epoch is ignored. */
+  endGet: (hostId: string, rows: readonly SessionQuota[] | null, epoch: number) => void
   applyEvent: (hostId: string, ev: RelayQuotaEvent) => void
   applyAnswer: (hostId: string, root: string, pair: RelayQuotaPair, rev: number) => void
   setWrite: (hostId: string, root: string, field: RelayQuotaField, write: FieldWrite) => void
@@ -64,22 +73,27 @@ function withConfirmed(confirmed: Record<string, ConfirmedQuota>, hostId: string
   return merged === confirmed[key] ? confirmed : { ...confirmed, [key]: merged }
 }
 
-export const useRelayQuotaStore = create<RelayQuotaState>()((set) => ({
+export const useRelayQuotaStore = create<RelayQuotaState>()((set, get) => ({
   confirmed: {},
   writes: {},
   gets: {},
+  epochs: {},
 
-  beginGet: (hostId) => set((s) => {
-    const cur = s.gets[hostId]
-    return { gets: { ...s.gets, [hostId]: { depth: (cur?.depth ?? 0) + 1, events: cur?.events ?? [] } } }
-  }),
+  beginGet: (hostId) => {
+    const epoch = get().epochs[hostId] ?? 0
+    set((s) => {
+      const cur = s.gets[hostId]
+      return { gets: { ...s.gets, [hostId]: { depth: (cur?.depth ?? 0) + 1, events: cur?.events ?? [], epoch } } }
+    })
+    return epoch
+  },
 
-  endGet: (hostId, rows) => set((s) => {
+  endGet: (hostId, rows, epoch) => set((s) => {
     const cur = s.gets[hostId]
-    if (cur === undefined) return s // the host was forgotten while the GET was out: its answer is the old daemon's
+    if (cur === undefined || cur.epoch !== epoch || (s.epochs[hostId] ?? 0) !== epoch) return s // forgotten while the GET was out: its answer is the old daemon's
     let confirmed = s.confirmed
     if (rows) for (const r of rows) confirmed = withConfirmed(confirmed, hostId, r.root_session_id, { self_left: r.self_left, member_pool_left: r.member_pool_left, rev: r.rev })
-    if (cur.depth > 1) return { confirmed, gets: { ...s.gets, [hostId]: { depth: cur.depth - 1, events: cur.events } } }
+    if (cur.depth > 1) return { confirmed, gets: { ...s.gets, [hostId]: { ...cur, depth: cur.depth - 1 } } }
     for (const e of cur.events) confirmed = withConfirmed(confirmed, hostId, e.root_session_id, { self_left: e.self_left, member_pool_left: e.member_pool_left, rev: e.rev })
     const { [hostId]: _done, ...gets } = s.gets
     return { confirmed, gets }
@@ -87,7 +101,7 @@ export const useRelayQuotaStore = create<RelayQuotaState>()((set) => ({
 
   applyEvent: (hostId, ev) => set((s) => {
     const get = s.gets[hostId]
-    if (get !== undefined) return { gets: { ...s.gets, [hostId]: { depth: get.depth, events: [...get.events, ev] } } }
+    if (get !== undefined) return { gets: { ...s.gets, [hostId]: { ...get, events: [...get.events, ev] } } }
     const confirmed = withConfirmed(s.confirmed, hostId, ev.root_session_id, { self_left: ev.self_left, member_pool_left: ev.member_pool_left, rev: ev.rev })
     return confirmed === s.confirmed ? s : { confirmed }
   }),
@@ -110,10 +124,10 @@ export const useRelayQuotaStore = create<RelayQuotaState>()((set) => ({
     const prefix = `${hostId}${SEP}`
     const keep = <T,>(rec: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(rec).filter(([k]) => !k.startsWith(prefix)))
     const { [hostId]: _gone, ...gets } = s.gets
-    return { confirmed: keep(s.confirmed), writes: keep(s.writes), gets }
+    return { confirmed: keep(s.confirmed), writes: keep(s.writes), gets, epochs: { ...s.epochs, [hostId]: (s.epochs[hostId] ?? 0) + 1 } }
   }),
 
-  reset: () => set({ confirmed: {}, writes: {}, gets: {} }),
+  reset: () => set({ confirmed: {}, writes: {}, gets: {}, epochs: {} }),
 }))
 
 /** Every host the store holds something for: a confirmed row, a write, or a GET in flight. */

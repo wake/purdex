@@ -93,7 +93,14 @@ export function setQuota(target: QuotaTarget, field: RelayQuotaField, value: num
   const store = useRelayQuotaStore.getState()
   const cur = store.writes[key]
   store.setWrite(target.hostId, target.root, field, { ...cur, desired: clamp(value) })
-  const slot = slots.get(key) ?? { target, identity: deps.identity(target.hostId) }
+  const identity = deps.identity(target.hostId)
+  let slot = slots.get(key)
+  if (slot !== undefined && slot.identity !== identity) { // the host was re-pointed since the slot began: that slot is the old daemon's
+    drop(key)
+    slot = undefined
+    store.setWrite(target.hostId, target.root, field, { desired: clamp(value) }) // and its half-done write with it
+  }
+  if (slot === undefined) slot = { target, identity }
   slot.target = target
   if (slot.timer !== undefined) clearTimeout(slot.timer)
   slot.timer = setTimeout(() => { slot.timer = undefined; flush(key, field) }, DEBOUNCE_MS)
@@ -115,14 +122,15 @@ function flush(key: string, field: RelayQuotaField): void {
   const sent = w.desired
   store.setWrite(hostId, root, field, { inflight: sent })
   deps.put(hostId, sessionId, field, sent).then(
-    (view) => settled(key, field, sent, view, null),
-    (e: unknown) => settled(key, field, sent, null, e),
+    (view) => settled(slot, key, field, sent, view, null),
+    (e: unknown) => settled(slot, key, field, sent, null, e),
   )
 }
 
-function settled(key: string, field: RelayQuotaField, sent: number, view: RelayQuotaView | null, error: unknown): void {
-  const slot = slots.get(key)
-  if (slot === undefined) return // reset meanwhile
+function settled(slot: Slot, key: string, field: RelayQuotaField, sent: number, view: RelayQuotaView | null, error: unknown): void {
+  // This PUT's own slot, not whatever is under the key now: a slot dropped (reset, re-point) and rebuilt is another
+  // generation, and this late answer is none of its business.
+  if (slots.get(key) !== slot) return
   const { hostId, root, label } = slot.target
   const store = useRelayQuotaStore.getState()
   if (slot.identity === null || deps.identity(hostId) !== slot.identity) { // removed or re-pointed while the PUT was out: its answer is the old daemon's
@@ -131,10 +139,19 @@ function settled(key: string, field: RelayQuotaField, sent: number, view: RelayQ
     return
   }
   if (view === null) {
-    store.clearWrite(hostId, root, field)
-    drop(key)
     const code = error instanceof ApprovalApiError ? error.code : 'error'
     deps.toast(deps.message('unattended.quota.save_failed', { host: deps.hostLabel(hostId), session: label, code }))
+    // A click made while this PUT was out is a later intent, not the failed request's: it stays and is sent now. Only the
+    // value that was sent is dropped (the stepper falls back to the confirmed one when nothing newer is pending).
+    const newer = useRelayQuotaStore.getState().writes[key]?.desired
+    if (newer !== undefined && newer !== sent) {
+      store.setWrite(hostId, root, field, { desired: newer })
+      if (slot.timer !== undefined) { clearTimeout(slot.timer); slot.timer = undefined }
+      flush(key, field)
+      return
+    }
+    store.clearWrite(hostId, root, field)
+    drop(key)
     return
   }
   if (view.pending_lineage === true) {

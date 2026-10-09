@@ -181,6 +181,37 @@ describe('a host re-pointed meanwhile', () => {
   })
 })
 
+describe('slot identity (codex attack)', () => {
+  it('a click after the host was re-pointed starts a fresh slot for the new daemon (the old slot does not eat it)', async () => {
+    setQuota(target(), 'self_left', 4)
+    identity = 'ep2:tok' // re-pointed during the debounce
+    st().forgetHost(H) // what unattended-support does on the same host change
+    setQuota(target(), 'self_left', 6) // the person clicks again, against the new daemon
+    vi.advanceTimersByTime(DEBOUNCE_MS)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({ value: 6 })
+    calls[0].resolve(answer({ self_left: 6, rev: 2 }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(shown('self_left')).toBe(6)
+    expect(st().writes).toEqual({})
+  })
+
+  it('the late answer of a PUT sent to the old daemon does not touch the new slot\'s write', async () => {
+    setQuota(target(), 'self_left', 4)
+    vi.advanceTimersByTime(DEBOUNCE_MS) // PUT(4) to the old daemon is out
+    identity = 'ep2:tok'
+    st().forgetHost(H)
+    setQuota(target(), 'self_left', 6) // new slot, new daemon
+    calls[0].resolve(answer({ self_left: 4, rev: 9 })) // the old daemon answers late
+    await vi.advanceTimersByTimeAsync(0)
+    expect(shown('self_left')).toBe(6) // the new intent is still on screen
+    expect(st().writes).not.toEqual({})
+    vi.advanceTimersByTime(DEBOUNCE_MS)
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({ value: 6 })
+  })
+})
+
 describe('failure', () => {
   it('drops the desired value (the stepper falls back to the confirmed one) and toasts with the code', async () => {
     st().applyAnswer(H, ROOT, { self_left: 2, member_pool_left: 0 }, 1)
@@ -197,14 +228,30 @@ describe('failure', () => {
     expect(toasts[0]).toContain('"session":"Lead A"')
   })
 
-  it('a click made during the failed flight is dropped with it', async () => {
+  it('a click made during the flight survives the failure of the earlier PUT and is sent (codex attack: a later intent is not the failed request\'s)', async () => {
     setQuota(target(), 'self_left', 7)
     vi.advanceTimersByTime(DEBOUNCE_MS)
     setQuota(target(), 'self_left', 8)
     calls[0].reject(new ApprovalApiError(0, 'network'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(toasts).toHaveLength(1) // the failed request is reported
+    expect(shown('self_left')).toBe(8) // the newer value stays on screen
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({ value: 8 })
+    calls[1].resolve(answer({ self_left: 8, rev: 2 }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(shown('self_left')).toBe(8)
+    expect(st().writes).toEqual({})
+  })
+
+  it('a failure with no newer click falls back to the confirmed value as before', async () => {
+    st().applyAnswer(H, ROOT, { self_left: 2, member_pool_left: 0 }, 1)
+    setQuota(target(), 'self_left', 7)
+    vi.advanceTimersByTime(DEBOUNCE_MS)
+    calls[0].reject(new ApprovalApiError(0, 'network'))
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 2)
     expect(calls).toHaveLength(1)
-    expect(st().writes).toEqual({})
+    expect(shown('self_left')).toBe(2)
   })
 
   it('a non-API error is code "error"', async () => {

@@ -22,7 +22,7 @@ beforeEach(() => st().reset())
 describe('the not-smaller rev rule', () => {
   it('rows seed the confirmed numbers', () => {
     st().beginGet(H)
-    st().endGet(H, [row()])
+    st().endGet(H, [row()], 0)
     expect(confirmed()).toEqual({ self_left: 3, member_pool_left: 2, rev: 5 })
   })
 
@@ -46,8 +46,8 @@ describe('the not-smaller rev rule', () => {
 
   it('an older GET after an event does not roll back', () => {
     st().applyEvent(H, ev({ rev: 8, self_left: 6 }))
-    st().beginGet(H)
-    st().endGet(H, [row({ rev: 5, self_left: 3 })])
+    const ep = st().beginGet(H)
+    st().endGet(H, [row({ rev: 5, self_left: 3 })], ep)
     expect(confirmed()).toEqual({ self_left: 6, member_pool_left: 2, rev: 8 })
   })
 
@@ -56,14 +56,14 @@ describe('the not-smaller rev rule', () => {
     st().applyEvent(H, ev({ rev: 9, self_left: 8 })) // newer than the rows
     st().applyEvent(H, ev({ rev: 6, self_left: 1 })) // older than the rows
     expect(confirmed()).toBeUndefined() // nothing applied while the GET is out
-    st().endGet(H, [row({ rev: 7, self_left: 3 })])
+    st().endGet(H, [row({ rev: 7, self_left: 3 })], 0)
     expect(confirmed()).toEqual({ self_left: 8, member_pool_left: 2, rev: 9 })
   })
 
   it('a GET that failed still releases its buffered events', () => {
     st().beginGet(H)
     st().applyEvent(H, ev({ rev: 9, self_left: 8 }))
-    st().endGet(H, null)
+    st().endGet(H, null, 0)
     expect(confirmed()?.self_left).toBe(8)
   })
 
@@ -71,15 +71,15 @@ describe('the not-smaller rev rule', () => {
     st().beginGet(H)
     st().beginGet(H)
     st().applyEvent(H, ev({ rev: 9 }))
-    st().endGet(H, [row({ rev: 7 })])
+    st().endGet(H, [row({ rev: 7 })], 0)
     expect(confirmed()?.rev).toBe(7) // the event is still buffered
-    st().endGet(H, null)
+    st().endGet(H, null, 0)
     expect(confirmed()?.rev).toBe(9)
   })
 
   it('rows of one root (the live session and a stale sibling) keep the newest', () => {
     st().beginGet(H)
-    st().endGet(H, [row({ session_id: 'a', rev: 4, self_left: 1 }), row({ session_id: 'b', rev: 6, self_left: 2 })])
+    st().endGet(H, [row({ session_id: 'a', rev: 4, self_left: 1 }), row({ session_id: 'b', rev: 6, self_left: 2 })], 0)
     expect(confirmed().self_left).toBe(2)
   })
 

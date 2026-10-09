@@ -197,7 +197,7 @@ describe('startUnattendedSupport', () => {
       useHostStore.setState({ hosts: { h1: host('h1') }, hostOrder: ['h1'] }) // h2 removed
       expect(useRelayQuotaStore.getState().gets).toEqual({})
       expect(useRelayQuotaStore.getState().writes).toEqual({})
-      useRelayQuotaStore.getState().endGet('h2', [{ session_id: 's', root_session_id: 'r1', address: 'x/y', is_lead: false, self_left: 9, member_pool_left: 0, rev: 1 }])
+      useRelayQuotaStore.getState().endGet('h2', [{ session_id: 's', root_session_id: 'r1', address: 'x/y', is_lead: false, self_left: 9, member_pool_left: 0, rev: 1 }], 0)
       expect(useRelayQuotaStore.getState().confirmed).toEqual({})
     })
 

@@ -637,3 +637,44 @@ describe('UnattendedPanel layout', () => {
   })
 })
 
+// codex attack: the panel's GET is bound to the daemon it was asked of. A host re-pointed while it is out (same id, another
+// endpoint) must not show the old daemon's sessions, quotas or held requests, and its late end must not eat the new GET's.
+describe('UnattendedPanel and a re-pointed host', () => {
+  const quota = (id: string, over: Partial<SessionQuota> = {}): SessionQuota => ({
+    session_id: id, root_session_id: `root-${id}`, title: `T-${id}`, address: `mlab/${id}-xx`, is_lead: false, self_left: 1, member_pool_left: 0, rev: 3, ...over,
+  })
+  beforeEach(() => {
+    useUnattendedStore.getState().reset()
+    useTeamRosterStore.getState().reset()
+    useRelayQuotaStore.getState().reset()
+    resetWriter()
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+  })
+  const repoint = () => act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: { ...s.hosts[A], ip: '9.9.9.9' } } })) })
+
+  it('the old daemon\'s late answer is not shown; the new daemon\'s is, from a fresh read', async () => {
+    let old!: (v: UnattendedView) => void
+    mockedGet.mockReturnValueOnce(new Promise<UnattendedView>((r) => { old = r }))
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('new', { self_left: 5, rev: 1 })] }))
+    open([A])
+    repoint()
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-new')
+    await act(async () => { old(page([], { quotas: [quota('old', { self_left: 9, rev: 99 })] })) }) // late
+    expect(screen.getAllByTestId('quota-row').map((r) => r.getAttribute('data-session'))).toEqual(['new'])
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'root-old')]).toBeUndefined()
+    expect(useRelayQuotaStore.getState().gets).toEqual({})
+  })
+
+  it('removed host: its rows go and nothing is read', async () => {
+    mockedGet.mockResolvedValue(page([], { quotas: [quota('p1')] }))
+    open([A])
+    expect(await screen.findByTestId('quota-row')).toBeInTheDocument()
+    mockedGet.mockClear()
+    act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: undefined as never }, hostOrder: s.hostOrder.filter((h) => h !== A) })) })
+    await flush()
+    expect(screen.queryByTestId('quota-row')).toBeNull()
+    expect(mockedGet).not.toHaveBeenCalled()
+  })
+})
+
