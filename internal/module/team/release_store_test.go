@@ -181,3 +181,24 @@ func TestPendingNoticesAndClearNotice(t *testing.T) {
 		t.Fatalf("still pending: %+v", got)
 	}
 }
+
+// A released session is nobody's member and lives on: the lead's pdx kill of it is refused BEFORE any tmux
+// call (codex attack on PL-1b2: the kill of a historical row ended a session the lead no longer owns).
+// Mutation gate: drop the released check in handleKill → the session is killed → red.
+func TestKill_AReleasedMemberIsNotKilled(t *testing.T) {
+	f, root := newTeamFixture(t, 3)
+	m1 := f.member(1, root, "sid-m1", "w-one", nil)
+	if released, err := f.m.store.ReleaseMember(m1.SpawnOp, m1.SessionID, 9000); err != nil || !released {
+		t.Fatal(released, err)
+	}
+	code, _, e := f.kill("/tmp/10.sock", m1.Ref)
+	if code != 409 || e.Error != team.ErrNotYourMember {
+		t.Fatalf("kill of a released member = %d %+v, want 409 not_your_member", code, e)
+	}
+	if n := len(f.tmux.KillIfInstanceCalls()); n != 0 || !f.tmux.HasSession(m1.TmuxSession) {
+		t.Fatalf("a released member's session was touched (kill calls %d)", n)
+	}
+	if memberBySpawn(t, f.m.store, m1.SpawnOp).State != team.MemberReleased {
+		t.Fatal("the row changed")
+	}
+}

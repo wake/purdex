@@ -15,7 +15,9 @@ import (
 // The guard is in the statement, as MarkMemberGone's is: the row still holds sessionID (a relay moved it
 // otherwise), is active, and the session has NO relay op in any non-terminal state (awaiting_approval,
 // requested, claimed, writing, written): a member is not released in the middle of its own relay, the lead
-// answers relay_open instead. released says whether this call did it; a false answer leaves the row as it is.
+// answers relay_open instead. The `released` notice is addressed by the row's ref, which a relay of the session
+// later redirects through lineage (the old ref still reaches it), so a relay right after the release loses
+// nothing. released says whether this call did it; a false answer leaves the row as it is.
 func (s *Store) ReleaseMember(rowKey, sessionID string, at int64) (released bool, err error) {
 	res, err := s.db.Exec(`UPDATE team_members
 		SET state = ?, ended_at = ?, updated_at = ?, notice_pending = ?, notice_since = ?

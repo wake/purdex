@@ -179,6 +179,11 @@ func (m *Module) handleKill(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, fmt.Sprintf("%q is no member of team %s", req.Target, t.ID), nil)
 		return
 	}
+	if mr.State == team.MemberReleased {
+		// Let go: the session is nobody's member and lives on. Refused before any tmux call (codex attack on PL-1b2).
+		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, fmt.Sprintf("%q was released from team %s", req.Target, t.ID), nil)
+		return
+	}
 	if mr.State != team.MemberKilled {
 		if mr, ok = m.killAndMark(w, t, mr); !ok {
 			return
