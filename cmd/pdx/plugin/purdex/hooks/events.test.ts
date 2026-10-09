@@ -1078,6 +1078,23 @@ test('an answer for the old session that lands after a switch is dropped', async
   expect(await drawn($)).toEqual([])
 })
 
+// $.http.fetch cannot be cancelled: a daemon that takes the request and never answers must not collect one more per tick.
+// Mutation gate: drop the one-in-flight guard → red.
+test('a read that never answers is the only one in flight, and a switch may read again', async ($, on) => {
+  const { w } = modeWorld(on, { team: () => never() })
+  await start($, w)
+  expect(w.gets.length).toBe(1)
+  await w.clock.advance(120_000) // eight ticks, the 5 s deadline long gone
+  expect(w.gets.length).toBe(1)
+  expect(await drawn($, ['focus'])).toEqual(['focus'])
+  await end($, 'clear')
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' } as any)
+  await w.clock.settle()
+  expect(w.gets.length).toBe(2) // the new session is a new generation
+  expect(w.gets[1].url).toBe('http://pdx/mod/v1/team?session_id=' + SID2)
+})
+
 test('a headless session asks nothing and leaves the footer alone', async ($, on) => {
   const { w } = modeWorld(on, { team: () => teamAnswer('lead', 3) })
   await start($, w, false)

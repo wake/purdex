@@ -51,7 +51,7 @@ const TEAM_MS = 15_000 // how often the lead's member count is read
 // team is the last good answer of the daemon's team read for the CURRENT session id. The ui.render hook below only
 // looks at it (never at the socket); a change asks for a redraw. `gen` counts the session changes: an answer that left
 // before one and lands after it belongs to the old session and is dropped.
-const team = { good: false, role: 'none', members: 0, gen: 0, timer: null }
+const team = { good: false, role: 'none', members: 0, gen: 0, timer: null, pending: -1 }
 
 // ev is the reporter's whole state; one per mod load. `stream` and `seq` live as long as the
 // load (a /clear or a resume goes on in the same stream), the queue holds every event not yet
@@ -301,12 +301,19 @@ function teamAnswer(res) {
 async function readTeam($) {
   if (!ev.on) return
   const gen = team.gen
+  // One read per session at a time: $.http.fetch cannot be cancelled, so a daemon that takes a request and never answers
+  // must not collect one more every tick. A switch is a new generation and may read again.
+  if (team.pending === gen) return
+  team.pending = gen
   const url = TEAM_URL + '?session_id=' + encodeURIComponent(ev.sid)
   let timer = null
   const deadline = new Promise((resolve) => { timer = $.clock.after(POST_DEADLINE_MS, () => resolve(TIMEOUT)) })
+  const request = $.http.fetch(url, { method: 'GET', socketPath: ev.sock }).then((res) => ({ res }), (err) => ({ err }))
+  // the slot is freed when the request itself ends, not at the deadline
+  void request.finally(() => { if (team.pending === gen) team.pending = -1 })
   let out
   try {
-    out = await Promise.race([$.http.fetch(url, { method: 'GET', socketPath: ev.sock }).then((res) => ({ res }), (err) => ({ err })), deadline])
+    out = await Promise.race([request, deadline])
   } finally {
     if (timer) timer.cancel()
   }
