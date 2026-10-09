@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.620] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版加上對話模型的 HTTP 介面（給之後 Mac App 指揮台與 iOS 用），目前還沒有畫面使用它。
+
+### Added：對話的 HTTP 介面 — 介面語言 U1-6（#2089–#2097）
+
+- `GET /api/conversations/claude/{session_id}`：把一個 Claude Code 對話整理成回合、步驟、輸出的結構化內容；支援 `turns`、`before`、`after`、`around` 取一段，以及增量更新。`GET …/subagents/{agent_id}` 取子 agent 的對話。主機能力清單多 `conversations.v1`。
+- 只讀、需要 token；只回答確實正在某個 pane 執行的 session。對話紀錄檔若是 FIFO 之類的特殊檔，直接拒絕，不會卡住。
+- 底層：對話紀錄的追蹤、快取與解析器（#2089、#2090、#2093），以及「哪些 pane 確實在跑這個 session」的確認（#2094）；`internal/transcriptpath` 純搬移（#2091）。
+
 ## [1.0.0-alpha.619] - 2026-10-09
 
 > 動 mod：**要重跑 `pdx setup --agent cc`**（daemon 一起換新，程式沒有改）；SPA、Electron 不必更新。
