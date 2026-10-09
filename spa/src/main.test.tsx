@@ -14,6 +14,7 @@ vi.mock('./stores/useNexHostStore', () => ({ startNexHostInvalidation: vi.fn() }
 vi.mock('./stores/useExecutionListStore', () => ({ startExecutionListInvalidation: vi.fn() }))
 vi.mock('./lib/nex/worker-title-prefetch', () => ({ startWorkerTitlePrefetch: vi.fn() }))
 vi.mock('./lib/profile/start', () => ({ startProfileSync: vi.fn() }))
+vi.mock('./lib/pending-revocation-retry', () => ({ startPendingRevocationRetry: vi.fn() }))
 vi.mock('./features/workspace/lib/adopt-standalone', () => ({ startStandaloneAdoption: vi.fn() }))
 vi.mock('./lib/legacy-residue-cleanup', () => ({ scheduleLegacyResidueCleanup: vi.fn() }))
 vi.mock('./stores/useDeviceNameStore', async (importOriginal) => ({
@@ -42,6 +43,13 @@ describe('boot', () => {
     const { startWorkerTitlePrefetch } = await import('./lib/nex/worker-title-prefetch')
     await import('./main')
     expect(startWorkerTitlePrefetch).toHaveBeenCalledTimes(1)
+  })
+
+  // QR pairing QP-3: a revocation a host could not take is retried when that host connects — app lifetime, once.
+  it('starts the pending revocation retry once', async () => {
+    const { startPendingRevocationRetry } = await import('./lib/pending-revocation-retry')
+    await import('./main')
+    expect(startPendingRevocationRetry).toHaveBeenCalledTimes(1)
   })
 
   // H2c-2 (plan §0.16): the host-look migration runs after BOTH the host store and the look store hydrated, and

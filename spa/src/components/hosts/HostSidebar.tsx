@@ -1,4 +1,4 @@
-import { Plus, CaretDown, CaretRight, Circle, DownloadSimple, LockSimple, ShareNetwork, Spinner, Warning } from '@phosphor-icons/react'
+import { Plus, CaretDown, CaretRight, Circle, DeviceMobile, DownloadSimple, LockSimple, ShareNetwork, Spinner, Warning } from '@phosphor-icons/react'
 import { ModuleOwnedPuzzleIcon } from '../settings/ModuleOwnedPuzzleIcon'
 import { useState } from 'react'
 import { listContributions } from '../../lib/settings-contribution-registry'
@@ -15,6 +15,10 @@ interface Props {
   onAddHost?: () => void
   onShareHosts?: () => void
   onReceiveHosts?: () => void
+  onPairPhone?: () => void
+  onShowPairedPhones?: () => void
+  /** The paired-phones page is showing (it is not a host sub-page): no host sub-page is highlighted. */
+  pairedPhonesActive?: boolean
 }
 
 function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
@@ -28,7 +32,7 @@ function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
   return <Circle size={8} weight="fill" className="text-red-400" />
 }
 
-export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost, onShareHosts, onReceiveHosts }: Props) {
+export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost, onShareHosts, onReceiveHosts, onPairPhone, onShowPairedPhones, pairedPhonesActive }: Props) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -120,7 +124,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                     // F7: disabled contributions show as a disabled row but are NOT
                     // filtered out. Clicking a disabled row is a no-op.
                     const isDisabled = page.disabled ? page.disabled(hostCtx) === true : false
-                    const isActive = selectedHostId === hostId && selectedSubPage === page.localId
+                    const isActive = !pairedPhonesActive && selectedHostId === hostId && selectedSubPage === page.localId
                     const disabledTitle =
                       isDisabled && page.disabledReasonKey
                         ? t(page.disabledReasonKey)
@@ -179,6 +183,27 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
           >
             <DownloadSimple size={14} />
             <span>{t('hosts.transfer.receive_button')}</span>
+          </button>
+        )}
+        {onPairPhone && (
+          <button
+            onClick={onPairPhone}
+            className="w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-2 text-text-muted hover:text-text-secondary"
+          >
+            <DeviceMobile size={14} />
+            <span>{t('hosts.pair.button')}</span>
+          </button>
+        )}
+        {onShowPairedPhones && (
+          <button
+            onClick={onShowPairedPhones}
+            aria-current={pairedPhonesActive ? 'page' : undefined}
+            className={`w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-2 ${
+              pairedPhonesActive ? 'text-accent font-semibold bg-accent/10' : 'text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            <DeviceMobile size={14} />
+            <span>{t('hosts.pairedPhones.title')}</span>
           </button>
         )}
       </div>

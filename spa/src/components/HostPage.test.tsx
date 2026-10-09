@@ -30,8 +30,13 @@ vi.mock('./hosts/HostSidebar', () => ({
     selectedHostId: string
     selectedSubPage: string
     onSelect: (hostId: string, subPage: string) => void
+    onShowPairedPhones?: () => void
+    pairedPhonesActive?: boolean
   }) => (
-    <div data-testid="host-sidebar" data-host={props.selectedHostId} data-subpage={props.selectedSubPage}>
+    <div data-testid="host-sidebar" data-host={props.selectedHostId} data-subpage={props.selectedSubPage} data-paired-active={String(!!props.pairedPhonesActive)}>
+      <button data-testid="show-paired-phones" onClick={() => props.onShowPairedPhones?.()}>
+        paired phones
+      </button>
       <button data-testid="select-test-host-logs" onClick={() => props.onSelect('test-host', 'logs')}>
         test-host logs
       </button>
@@ -58,6 +63,9 @@ vi.mock('./hosts/UploadSection', () => ({
 }))
 vi.mock('./hosts/LogsSection', () => ({
   LogsSection: (props: { hostId: string }) => <div data-testid="logs-section" data-host={props.hostId} />,
+}))
+vi.mock('./hosts/PairedPhonesSection', () => ({
+  PairedPhonesSection: () => <div data-testid="paired-phones-section" />,
 }))
 vi.mock('./hosts/AddHostDialog', () => ({
   AddHostDialog: (props: { onClose: () => void }) => <div data-testid="add-host-dialog" onClick={props.onClose} />,
@@ -139,6 +147,19 @@ afterEach(() => {
 // Suite 1: Original route-navigation smoke tests (HostPage switch → registry)
 // ---------------------------------------------------------------------------
 describe('HostPage', () => {
+  it('the sidebar\'s paired-phones item takes the content area; picking a host sub-page brings the sub-page back', () => {
+    renderHostPage('/hosts/test-host/logs')
+    expect(screen.getByTestId('logs-section')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('show-paired-phones'))
+    expect(screen.getByTestId('paired-phones-section')).toBeInTheDocument()
+    expect(screen.queryByTestId('logs-section')).not.toBeInTheDocument()
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-paired-active', 'true')
+    fireEvent.click(screen.getByTestId('select-test-host-logs'))
+    expect(screen.queryByTestId('paired-phones-section')).not.toBeInTheDocument()
+    expect(screen.getByTestId('logs-section')).toBeInTheDocument()
+    expect(screen.getByTestId('host-sidebar')).toHaveAttribute('data-paired-active', 'false')
+  })
+
   it('mounts from a deep link on first paint', () => {
     renderHostPage('/hosts/test-host/logs')
 

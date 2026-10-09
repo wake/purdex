@@ -48,6 +48,11 @@ export const STORAGE_KEYS = {
   /** 團隊介面的排列（useTeamUiStore）：每個 team key（`<hostId>\0<teamId>`）的成員順序、收合、面板模式、ghost lead 所在的工作區；
    *  device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、不走 syncManager；只被 roster frame 與刪除主機清掉 */
   TEAM_UI: 'purdex-team-ui',
+  /** 還沒送達主機的撤銷（usePendingRevocationsStore，QR 配對 QP-3）：`{ items: { hostId, pairingId, endpoint?, daemonId?, hostName?, label?, createdAt? }[] }`
+   *  （endpoint／daemonId 綁定建立當下的主機身分；舊版只有 hostId＋pairingId 的紀錄不自動重試），
+   *  配對手機的裝置 token 在某台連不上的主機上撤銷失敗後記在這裡，主機連上時重試。
+   *  device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、不走 syncManager */
+  PENDING_REVOCATIONS: 'purdex-pending-revocations',
   /** 手動管理（非 Zustand store）：lib/client-identity.ts 經 browserStorage 直接讀寫，值是裸字串 id */
   CLIENT_IDENTITY: 'purdex-client-identity',
   /** Profile Sync control plane（useProfileStore）：master 與 autoSync，走 syncManager 讓每個視窗一致 */
