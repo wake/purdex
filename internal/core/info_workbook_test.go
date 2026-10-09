@@ -14,10 +14,9 @@ func TestHandleInfo_WorkbookCapabilityFollowsReadiness(t *testing.T) {
 
 	ready := &devicesStub{stubModule{name: "workbook"}, map[string]any{"ready": true, "init_error": ""}}
 	with := infoOf(t, devicesCore(ready))["capabilities"].([]any)
-	assert.Equal(t, append(append([]any{}, none...), "workbook.v1", "workbook.v2"), with)
+	assert.Equal(t, append(append([]any{}, none...), "workbook.v1"), with)
 	assert.NotContains(t, with, "devices.v1")
 
 	broken := &devicesStub{stubModule{name: "workbook"}, map[string]any{"ready": false, "init_error": "open workbook db: cannot create the file"}}
 	assert.NotContains(t, infoOf(t, devicesCore(broken))["capabilities"], "workbook.v1")
-	assert.NotContains(t, infoOf(t, devicesCore(broken))["capabilities"], "workbook.v2")
 }
