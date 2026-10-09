@@ -150,6 +150,22 @@ type RelayReportRequest struct {
 	Error        string     `json:"error,omitempty"`          // failed: the reason
 }
 
+// ApprovalFeedKey is the service-registry key under which the team module publishes its ApprovalFeed (the
+// conversation module reads it; team does not import conversation).
+const ApprovalFeedKey = "team.approval-feed"
+
+// ApprovalFeed is what a per-conversation stream needs from the team module (spec §8.2, U1-6d).
+type ApprovalFeed interface {
+	// SubscribeSession returns the open approvals whose Origin.SessionID is sessionID and arms fn for every later
+	// opened / closed op of that session, atomically with respect to the module's broadcasts. fn runs under the
+	// module's event lock: it must only enqueue (never block, never call back into the module, cancel included).
+	// Filtering is by session id only; nothing is forwarded across a relay lineage.
+	SubscribeSession(sessionID string, fn func(op string, a Approval)) (open []Approval, cancel func(), err error)
+	// HoldResponder counts one more remote responder until release is called: terminal-only rows are created while
+	// any is held, like with a /ws/host-events subscriber. Both cancel and release are idempotent.
+	HoldResponder() (release func())
+}
+
 // LineageReaderKey is the service-registry key under which the team module
 // publishes its LineageReader; the peers module reads it at request time
 // (team depends on peers, so peers cannot import the team module).
