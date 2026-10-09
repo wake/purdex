@@ -25,6 +25,7 @@ import (
 
 const taskUsage = "usage: pdx task add --to <ref> --subject <s> [--brief-file <f> | --brief <text>] [--done-when <line>]… [--blocked-by <id>]… [--json] [--config <path>]\n" +
 	"       pdx task ls [--member <ref>] [--all] [--json]\n" +
+	"       pdx task mine [--all] [--json | --seed]   (a member's own tasks; --seed prints the relay notice lines)\n" +
 	"       pdx task show <id> [--json | --message]\n" +
 	"       pdx task start|done|delete <id> [--json]\n" +
 	"       pdx task reassign <id> --to <ref> [--json]\n" +
@@ -85,6 +86,8 @@ func runTaskCmd(ctx context.Context, args []string, getenv func(string) string, 
 		return c.setStatus(sub, team.TaskDeleted, rest)
 	case "ls":
 		return c.ls(rest)
+	case "mine":
+		return c.mine(rest)
 	case "show":
 		return c.show(rest)
 	}

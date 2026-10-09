@@ -52,3 +52,27 @@ func TaskDownMessage(t Task) string {
 	fmt.Fprintf(&b, TaskDownReportFmt, t.ID)
 	return b.String()
 }
+
+// TaskSeedHeader and TaskSeedLineFmt are the relay notice's task list (T-2):
+// `pdx task mine --seed` prints them, the mod puts them in the seed prompt's
+// fixed tail.
+const (
+	TaskSeedHeader  = "你手上的任務："
+	TaskSeedLineFmt = "- %s %s %s"
+)
+
+// TaskSeedText is the seed notice of a member's open tasks: the header and
+// one line each (id, status, subject), or "" when there is none.
+func TaskSeedText(tasks []Task) string {
+	var b strings.Builder
+	for _, t := range tasks {
+		if t.Status == TaskCompleted || t.Status == TaskDeleted {
+			continue
+		}
+		if b.Len() == 0 {
+			b.WriteString(TaskSeedHeader)
+		}
+		fmt.Fprintf(&b, "\n"+TaskSeedLineFmt, t.ID, t.Status, t.Subject)
+	}
+	return b.String()
+}

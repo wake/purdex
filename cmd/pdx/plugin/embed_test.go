@@ -581,6 +581,9 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		// pdx team before spawning again (PR P4-7 critic ruling).
 		"`spawn_wait_timeout`", "do not spawn again",
 		"Exit 14 (`member_start_timeout`) means the daemon gave up",
+		// T-2: the task flags come after the pinned grammar, and the two one-line rules.
+		"[--task-subject <s> [--done-when <line>]…]", "Hand each piece of work to a member as a task: `pdx task add --to <ref>",
+		"Report with `pdx report <kind>`", "`pdx task mine` lists your tasks",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md lacks %q", want)

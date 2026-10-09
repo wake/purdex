@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -25,7 +26,8 @@ const spawnSchema = `
 	CREATE INDEX IF NOT EXISTS spawn_ops_running ON spawn_ops (team_id) WHERE state = 'running';`
 
 const spawnCols = `id, team_id, host_id, origin_session_id, cwd, title, model, effort, tmux_name, tmux_id,
-	tmux_instance, pane_id, step, state, reason, session_id, launched_at, created_at, updated_at`
+	tmux_instance, pane_id, step, state, reason, session_id, launched_at, created_at, updated_at,
+	task_subject, task_description, task_done_json`
 
 // spawnRow is one spawn_ops row but its request hash.
 type spawnRow struct {
@@ -35,12 +37,14 @@ type spawnRow struct {
 	State                                                          team.SpawnState
 	Reason, SessionID                                              string
 	LaunchedAt, CreatedAt, UpdatedAt                               int64
+	// The task the spawn creates with its member (T-2): TaskSubject "" = none.
+	TaskSubject, TaskDescription, TaskDoneJSON string
 }
 
 func (r *spawnRow) dest() []any {
 	return []any{&r.ID, &r.TeamID, &r.HostID, &r.OriginSessionID, &r.Cwd, &r.Title, &r.Model, &r.Effort,
 		&r.TmuxName, &r.TmuxID, &r.TmuxInstance, &r.PaneID, &r.Step, &r.State, &r.Reason, &r.SessionID,
-		&r.LaunchedAt, &r.CreatedAt, &r.UpdatedAt}
+		&r.LaunchedAt, &r.CreatedAt, &r.UpdatedAt, &r.TaskSubject, &r.TaskDescription, &r.TaskDoneJSON}
 }
 
 // spawnStepRank orders the steps. A running row at rank n holds the
@@ -74,12 +78,50 @@ func (r spawnRow) checkRunning() error {
 		return errors.New("team, host, origin, cwd and both times must be set")
 	case (r.Model != "" && !team.ValidModel(r.Model)) || (r.Effort != "" && !team.ValidEffort(r.Effort)):
 		return fmt.Errorf("invalid model %q or effort %q", r.Model, r.Effort)
+	case r.TaskSubject != "" && r.taskErr() != nil:
+		return fmt.Errorf("task: %w", r.taskErr())
+	case r.TaskSubject == "" && (r.TaskDescription != "" || r.taskDoneJSON() != "[]"):
+		return errors.New("a task description or done-when without a subject")
 	case r.State != team.SpawnRunning || r.Reason != "" || !known:
 		return fmt.Errorf("state %q, reason %q, step %q is no running step", r.State, r.Reason, r.Step)
 	case partial || has[1] != (rank >= 1) || has[2] != (rank >= 2) || has[3] != (rank >= 3):
 		return fmt.Errorf("its milestones do not match step %s", r.Step)
 	}
 	return nil
+}
+
+// taskDoneJSON is the done-when column: a JSON array, "[]" when there is none.
+func (r spawnRow) taskDoneJSON() string {
+	if r.TaskDoneJSON == "" {
+		return "[]"
+	}
+	return r.TaskDoneJSON
+}
+
+// taskDoneWhen decodes the done-when column. A column that is not a JSON
+// array of strings is an error, never "no conditions": the task would
+// otherwise be created without the conditions that say when it is done.
+func (r spawnRow) taskDoneWhen() ([]string, error) {
+	var out []string
+	if err := json.Unmarshal([]byte(r.taskDoneJSON()), &out); err != nil {
+		return nil, fmt.Errorf("spawn %s: done-when column: %w", r.ID, err)
+	}
+	return out, nil
+}
+
+// taskErr says what is wrong with the task the row carries.
+func (r spawnRow) taskErr() error {
+	if err := team.ValidTaskSubject(r.TaskSubject); err != nil {
+		return err
+	}
+	if err := team.ValidTaskDescription(r.TaskDescription); err != nil {
+		return err
+	}
+	dw, err := r.taskDoneWhen()
+	if err != nil {
+		return err
+	}
+	return team.ValidDoneWhen(dw)
 }
 
 // CreateSpawnOp inserts op if its id is new (inserted=true); otherwise it
@@ -104,10 +146,10 @@ func insertSpawnOp(q dbtx, op spawnRow, hash string) (stored spawnRow, storedHas
 		return fail(err)
 	}
 	res, err := q.Exec(`INSERT INTO spawn_ops (request_hash, `+spawnCols+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 		hash, op.ID, op.TeamID, op.HostID, op.OriginSessionID, op.Cwd, op.Title, op.Model, op.Effort, op.TmuxName,
 		op.TmuxID, op.TmuxInstance, op.PaneID, op.Step, string(op.State), op.Reason, op.SessionID,
-		op.LaunchedAt, op.CreatedAt, op.UpdatedAt)
+		op.LaunchedAt, op.CreatedAt, op.UpdatedAt, op.TaskSubject, op.TaskDescription, op.TaskDoneJSON)
 	if inserted, err = oneRow(res, err, "insert"); err == nil {
 		err = q.QueryRow(`SELECT request_hash, `+spawnCols+` FROM spawn_ops WHERE id = ?`, op.ID).
 			Scan(append([]any{&storedHash}, stored.dest()...)...)

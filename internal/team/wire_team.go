@@ -206,6 +206,16 @@ type SpawnRequest struct {
 	Title       string `json:"title,omitempty"`  // the member's title (pdx msg name)
 	Model       string `json:"model,omitempty"`  // ValidModel; "" = the host's default model (U20)
 	Effort      string `json:"effort,omitempty"` // ValidEffort; "" = the host's default effort (U20)
+	// Task, when set, is the member's first task (T-2): the daemon creates it
+	// in the transaction that inserts the member row. Its description is the brief.
+	Task *SpawnTask `json:"task,omitempty"`
+}
+
+// SpawnTask is the task a spawn creates for its member (T-2).
+type SpawnTask struct {
+	Subject     string   `json:"subject"`
+	Description string   `json:"description,omitempty"`
+	DoneWhen    []string `json:"done_when,omitempty"`
 }
 
 // SpawnOp is a spawn operation, persisted step by step (spec §9.3). It is
@@ -223,6 +233,7 @@ type SpawnOp struct {
 	Effort      string     `json:"effort"`
 	TmuxSession string     `json:"tmux_session"`           // SpawnTmuxName(ID)
 	LeadAddress string     `json:"lead_address,omitempty"` // for the brief's first line (§7.2)
+	TaskID      string     `json:"task_id,omitempty"`      // done only: the display id of the task the spawn created (T-2)
 	Member      *Member    `json:"member,omitempty"`       // done only
 	CreatedAt   int64      `json:"created_at"`             // unix ms
 	UpdatedAt   int64      `json:"updated_at"`             // unix ms

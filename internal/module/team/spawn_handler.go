@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -83,6 +84,17 @@ func normaliseSpawn(req *team.SpawnRequest) string {
 	case !filepath.IsAbs(req.Cwd):
 		return "cwd must be an absolute path"
 	}
+	if t := req.Task; t != nil {
+		if err := team.ValidTaskSubject(t.Subject); err != nil {
+			return "task subject: " + err.Error()
+		}
+		if err := team.ValidTaskDescription(t.Description); err != nil {
+			return "task description: " + err.Error()
+		}
+		if err := team.ValidDoneWhen(t.DoneWhen); err != nil {
+			return "task done_when: " + err.Error()
+		}
+	}
 	req.ID, req.Cwd = u.String(), filepath.Clean(req.Cwd)
 	return ""
 }
@@ -90,7 +102,12 @@ func normaliseSpawn(req *team.SpawnRequest) string {
 // spawnHash is the idempotency fingerprint of a spawn: who asked, and for what.
 func spawnHash(sessionID string, req team.SpawnRequest) string {
 	h := sha256.New()
-	for _, s := range []string{sessionID, req.Cwd, req.Title, req.Model, req.Effort} {
+	parts := []string{sessionID, req.Cwd, req.Title, req.Model, req.Effort}
+	if t := req.Task; t != nil { // appended, so a spawn without a task hashes as it always did
+		done, _ := json.Marshal(t.DoneWhen)
+		parts = append(parts, "task", t.Subject, t.Description, string(done))
+	}
+	for _, s := range parts {
 		h.Write([]byte(s))
 		h.Write([]byte{0})
 	}
@@ -154,7 +171,8 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	now := m.now()
 	row, _, inserted, err := m.store.AcceptSpawnOp(spawnRow{ID: req.ID, TeamID: t.ID, HostID: m.hostID(),
 		OriginSessionID: origin.SessionID, Cwd: cwd, Title: req.Title, Model: req.Model, Effort: req.Effort,
-		TmuxName: name, Step: team.StepAccepted, State: team.SpawnRunning, CreatedAt: now, UpdatedAt: now}, hash)
+		TmuxName: name, Step: team.StepAccepted, State: team.SpawnRunning, CreatedAt: now, UpdatedAt: now,
+		TaskSubject: taskSubjectOf(req.Task), TaskDescription: taskDescriptionOf(req.Task), TaskDoneJSON: taskDoneJSONOf(req.Task)}, hash)
 	switch {
 	case errors.Is(err, ErrSpawnNotLead):
 		return fail(http.StatusConflict, team.ErrNotLead, "this session no longer leads team "+t.ID)
@@ -168,6 +186,28 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	m.logf("[team] spawn %s accepted: team %s, %s in %s", row.ID, t.ID, row.TmuxName, row.Cwd)
 	m.startSpawn(row.ID)
 	return row, true
+}
+
+func taskSubjectOf(t *team.SpawnTask) string {
+	if t == nil {
+		return ""
+	}
+	return t.Subject
+}
+
+func taskDescriptionOf(t *team.SpawnTask) string {
+	if t == nil {
+		return ""
+	}
+	return t.Description
+}
+
+func taskDoneJSONOf(t *team.SpawnTask) string {
+	if t == nil || len(t.DoneWhen) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(t.DoneWhen)
+	return string(b)
 }
 
 // awaitSpawn waits up to spawnWait for op id to leave running (the runner
@@ -213,6 +253,16 @@ func (m *Module) spawnView(r spawnRow, leadAddress string) (team.SpawnOp, error)
 		}
 		v := m.memberView(mr) // as GET /api/team shows it (P4-6)
 		op.Member = &v
+		if r.TaskSubject != "" {
+			task, found, err := m.store.TaskBySpawnOp(r.TeamID, r.ID)
+			if err != nil {
+				return team.SpawnOp{}, err
+			}
+			if !found {
+				return team.SpawnOp{}, fmt.Errorf("spawn op %s is done but its task is missing", r.ID)
+			}
+			op.TaskID = team.TaskDisplayID(task.TeamID, task.Seq)
+		}
 		return op, nil
 	}
 	return team.SpawnOp{}, fmt.Errorf("spawn op %s is done but has no member row", r.ID)

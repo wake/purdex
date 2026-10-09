@@ -85,6 +85,21 @@ func migrateTeamName(db *sql.DB) error {
 	return ensureColumn(db, "teams", "team_name", "TEXT NOT NULL DEFAULT ''")
 }
 
+// migrateSpawnTask gives spawn_ops the task a spawn creates with its member
+// (plan T-2): a row written before it carries none.
+func migrateSpawnTask(db *sql.DB) error {
+	for _, c := range [][2]string{
+		{"task_subject", "TEXT NOT NULL DEFAULT ''"},
+		{"task_description", "TEXT NOT NULL DEFAULT ''"},
+		{"task_done_json", "TEXT NOT NULL DEFAULT '[]'"},
+	} {
+		if err := ensureColumn(db, "spawn_ops", c[0], c[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // afterReportsPKRead, when set, runs in migrateReportsPK between the unlocked
 // check that found the old key and the write lock; tests let a second opener
 // migrate there. nil in production.

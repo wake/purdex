@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -142,7 +143,17 @@ func (s *Store) InsertMember(m memberRow) error {
 		return fmt.Errorf("insert member: spawn op %q, team %q, session %q and state %q must all be set and the state known",
 			m.SpawnOp, m.TeamID, m.SessionID, m.State)
 	}
-	if _, err := s.db.Exec(`INSERT INTO team_members (`+memberCols+`)
+	return insertMemberIn(context.Background(), s.db, m)
+}
+
+// execer is what insertMemberIn writes through: the store's pool or a
+// connection that holds the write lock.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func insertMemberIn(ctx context.Context, q execer, m memberRow) error {
+	if _, err := q.ExecContext(ctx, `INSERT INTO team_members (`+memberCols+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (spawn_op) DO NOTHING`,
 		m.SpawnOp, m.TeamID, m.HostID, m.SessionID, m.Ref, m.Title, m.Cwd, m.TmuxSession, m.TmuxID,
 		m.TmuxInstance, m.PaneID, m.PID, m.ProcStart, m.Model, m.Effort, string(m.State), m.CreatedAt, m.UpdatedAt); err != nil {

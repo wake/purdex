@@ -29,9 +29,10 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-const spawnUsage = "usage: pdx spawn [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>] [--config <path>]\n" +
+const spawnUsage = "usage: pdx spawn [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>] [--task-subject <s> [--done-when <line>]…] [--config <path>]\n" +
 	"       (--cwd defaults to this directory; --effort is low, medium, high, xhigh or max;\n" +
-	"        without --model the member runs this host's default model, which is not fixed)"
+	"        without --model the member runs this host's default model, which is not fixed;\n" +
+	"        --task-subject makes the brief that member's first task, and --done-when needs it)"
 
 const killUsage = "usage: pdx kill <ref> [--config <path>]\n" +
 	"       (<ref> is _xxxxxx, or an address from pdx team; only a member of your own team)"
@@ -180,6 +181,8 @@ type spawnArgs struct {
 	cfgPath, cwd, title, model, effort string
 	brief                              string
 	hasBrief                           bool
+	taskSubject                        string   // T-2: "" = no task
+	doneWhen                           []string // T-2
 }
 
 // parseSpawnArgs checks the grammar, U20 (a)'s model and effort included,
@@ -195,6 +198,9 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 	fs.StringVar(&a.effort, "effort", "", "")
 	fs.StringVar(&a.brief, "brief", "", "")
 	fs.StringVar(&briefFile, "brief-file", "", "")
+	fs.StringVar(&a.taskSubject, "task-subject", "", "")
+	var doneWhen listFlag
+	fs.Var(&doneWhen, "done-when", "")
 	reject := func(msg string) (spawnArgs, bool) {
 		fmt.Fprintf(stderr, "pdx spawn: %s\n%s\n", msg, spawnUsage)
 		return a, false
@@ -216,6 +222,17 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 		return reject("--title: " + ipeers.ValidateTitle(a.title).Error())
 	case set["brief"] && set["brief-file"]:
 		return reject("--brief 與 --brief-file 只能擇一")
+	case len(doneWhen) > 0 && !set["task-subject"]:
+		return reject("--done-when 需要 --task-subject")
+	}
+	if set["task-subject"] {
+		if err := team.ValidTaskSubject(a.taskSubject); err != nil {
+			return reject("--task-subject: " + err.Error())
+		}
+		if err := team.ValidDoneWhen(doneWhen); err != nil {
+			return reject("--done-when: " + err.Error())
+		}
+		a.doneWhen = doneWhen
 	}
 	a.hasBrief = set["brief"] || set["brief-file"]
 	if set["brief-file"] {
@@ -231,6 +248,18 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 		}
 		if len(a.brief) > briefMaxBytes || ipeers.ValidateText(a.brief) != nil {
 			return reject(fmt.Sprintf("brief 必須是不超過 %d bytes 的 UTF-8 文字（peers 訊息上限 %d bytes，扣掉首行）", briefMaxBytes, ipeers.MaxTextBytes))
+		}
+	}
+	if set["task-subject"] {
+		// The brief is the task's description, and the whole message (prefix,
+		// task header, brief, done-when, report line) must fit the peers limit.
+		if err := team.ValidTaskDescription(a.brief); err != nil {
+			return reject("brief 當任務描述不合格：" + err.Error())
+		}
+		worst := fmt.Sprintf(team.MemberBriefPrefixFmt, strings.Repeat("a", maxLeadAddressBytes), strings.Repeat("0", teamIDBytes)) + "\n" +
+			team.TaskDownMessage(team.Task{ID: team.TaskWorstCaseID, Subject: a.taskSubject, Description: a.brief, DoneWhen: a.doneWhen})
+		if len(worst) > ipeers.MaxTextBytes || ipeers.ValidateText(worst) != nil {
+			return reject(fmt.Sprintf("給 member 的任務訊息太長或不合格（上限 %d bytes）", ipeers.MaxTextBytes))
 		}
 	}
 	return a, true
@@ -286,6 +315,9 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 		fmt.Fprintln(stderr, team.ReminderNoModel) // U20 (c): the spawn goes on
 	}
 	req := team.SpawnRequest{ID: spawnNewID(), OriginInbox: inbox, Cwd: cwd, Title: a.title, Model: a.model, Effort: a.effort}
+	if a.taskSubject != "" {
+		req.Task = &team.SpawnTask{Subject: a.taskSubject, Description: a.brief, DoneWhen: a.doneWhen}
+	}
 	op, code := spawnSettle(ctx, client, req, stderr)
 	if code != ExitOK {
 		return code
@@ -303,8 +335,17 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 	}
 	m := op.Member
 	out, _ := json.Marshal(spawnOutput{Ref: m.Ref, Address: m.Address, TmuxSession: m.TmuxSession,
-		SessionID: m.SessionID, HostID: m.HostID, SpawnOp: op.ID}) // strings only: cannot fail
+		SessionID: m.SessionID, HostID: m.HostID, SpawnOp: op.ID, TaskID: op.TaskID}) // strings only: cannot fail
 	fmt.Fprintln(stdout, string(out))
+	if a.taskSubject != "" {
+		if op.TaskID == "" {
+			fmt.Fprintf(stderr, "pdx spawn: member 已開啟，但 daemon 沒有回任務 id（舊版 daemon？）；請用 pdx task ls 確認 invalid_response\n")
+			return ExitError
+		}
+		// The task replaces the plain brief: one message, the task header first.
+		task := team.Task{ID: op.TaskID, Subject: a.taskSubject, Description: a.brief, DoneWhen: a.doneWhen}
+		return sendBriefText(ctx, client, inbox, op, team.TaskDownMessage(task), stderr)
+	}
 	if !a.hasBrief {
 		return ExitOK
 	}
@@ -348,6 +389,7 @@ func spawnSettle(ctx context.Context, client *daemonclient.Client, req team.Spaw
 
 // spawnOutput is what a done spawn prints on stdout, one JSON line (§7.2 step 6).
 type spawnOutput struct {
+	TaskID      string `json:"task_id,omitempty"` // T-2
 	Ref         string `json:"ref"`
 	Address     string `json:"address"`
 	TmuxSession string `json:"tmux_session"`
@@ -362,6 +404,12 @@ type spawnOutput struct {
 // a send that may have arrived must not arrive twice. A failure is exit 1
 // with the member already on stdout (coordinator decision 14).
 func sendBrief(ctx context.Context, client *daemonclient.Client, inbox string, op team.SpawnOp, brief string, stderr io.Writer) int {
+	return sendBriefText(ctx, client, inbox, op, brief, stderr)
+}
+
+// sendBriefText is sendBrief for a text already composed (the task header
+// and all, T-2).
+func sendBriefText(ctx context.Context, client *daemonclient.Client, inbox string, op team.SpawnOp, brief string, stderr io.Writer) int {
 	text := fmt.Sprintf(team.MemberBriefPrefixFmt, op.LeadAddress, op.TeamID) + "\n" + brief
 	sctx, cancel := context.WithTimeout(ctx, briefTimeout)
 	defer cancel()
