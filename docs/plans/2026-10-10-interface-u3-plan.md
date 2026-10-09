@@ -106,7 +106,20 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
     `next` long-poll + `result`, a separate `prompt` queue) and answer when the mod reports: `accepted` (a turn
     started, or the prompt is queued by Claude Code itself), `dropped` (with the mod's `drop` reason), `busy` (if the
     measurement shows `$.prompt.submit` refuses while a turn runs), or `timeout` (10 s, nothing reported). Interrupt →
-    the mod's `$.turn.abort()`. `client_msg_id` makes a retry idempotent (the mod reports the id it already ran).
+    the mod's `$.turn.abort()`.
+  - **At most once** (round 5): the daemon keeps a ledger by `client_msg_id` (in memory, 10 min): `queued` →
+    `handed` (leased to one stream) → `accepted | dropped | busy` or **`unknown`** (the stream ended or 10 s passed after
+    hand-out without a result). A request is handed to a mod **once**: a repeat with the same `client_msg_id` answers
+    the ledger's state and never re-queues a `handed` / `unknown` one; only `queued`-but-never-handed (or `busy`) may be
+    sent again. The App never retries on its own after `unknown` or a lost connection — it shows
+    「可能已送出，請看紀錄」 and settles it from the transcript (the user item appears, matched by text within 30 s);
+    only `busy` is resent automatically (on idle). A daemon restart loses the ledger, so the App treats a request in
+    flight across a restart as `unknown`.
+  - **One owner stream per session**: the live mod stream that announced `prompt.v1` most recently for the session's
+    current id owns its prompt queue (an owner generation, bumped on each announce); `next` from any other stream →
+    204; the owner is re-checked when a job is leased and when its `result` arrives (a result from a stream that is no
+    longer the owner → 409 `not_owner`, the entry `unknown`). The mod re-reads `$.session.id()` right before
+    `$.prompt.submit` and reports `dropped: session_changed` when it differs.
   - The App (`lib/conversations/send.ts`): the destructive guard (a line matching `rm -rf`, a forced push, a hard
     reset, `DROP TABLE`, `mkfs`, `dd if=` → a second press within 5 s, 「真的要送出？」); iOS's `SendQueue` (3 s undo,
     one serial chain, local echo matched to the transcript's user item by `client_msg_id` or text within 30 s,
@@ -171,8 +184,9 @@ multi-select answer whose label contains a comma.
 2. daemon: the two routes (D7), the per-session prompt queue on the mod socket (`/mod/v1/prompt/next`,
    `/mod/v1/prompt/result`, stream-bound like WB-1b′-c's jobs), `prompt.v1` in the stream capabilities, the
    conversation capabilities, `conversations.submit.v1`; not in the phones' `deviceAllowed` for now. Tests: validation
-   rules; `no_mod`; accepted / dropped / busy / timeout; a retry with the same `client_msg_id` runs once; a stream that
-   ends mid-request → `timeout` and the next stream does not replay it.
+   rules; `no_mod`; accepted / dropped / busy / timeout; a repeat `client_msg_id` after `handed` / `unknown` is never
+   re-queued (at most once); a stream that ends after hand-out → `unknown`, the next stream does not get it; two live
+   streams for one session → only the newest owner leases; a result from a former owner → `not_owner`.
 3. mod (`events.js` area, as WB-1c): announce `prompt.v1`; poll `prompt/next` with the workbook pattern; run
    `$.prompt.submit` / `$.turn.abort`; report. Tests in the mod suite; `validate --strict`. Deploy needs `pdx setup`.
 Review focus: two Apps submitting to the same session at once (one queue, in order); a prompt arriving while the mod
@@ -278,3 +292,9 @@ hook status can lag the TUI; Claude Code's background tasks / cron wake-ups can 
 drops keystrokes from U3 altogether: sending and interrupting go through the mod (`$.prompt.submit` /
 `$.turn.abort`), as the design document had chosen; without the mod the input is disabled and points to the
 terminal.** No residual from the Enter race remains because no Enter is sent.
+
+Round 5 (`task-mv1h7vfi-venunb`): the Enter race is gone (no keystrokes). New: (critical) retrying by `client_msg_id`
+could run a prompt twice when the result is lost after `$.prompt.submit` → D7 at-most-once ledger, `unknown` never
+re-queued, the App settles it from the transcript; (important) several live mod streams for one session → one owner
+stream per session (owner generation), re-checked at lease and result, and the mod re-reads the session id before
+submitting. No further plan round: the rest is implementation detail reviewed in U3-0b's own PR (R1 + attack + critic).
