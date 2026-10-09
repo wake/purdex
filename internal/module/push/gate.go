@@ -1,6 +1,7 @@
 package push
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"sync"
 	"time"
@@ -19,6 +20,11 @@ const (
 	errorNotifyWindow = 60 * time.Second // ERROR_NOTIFY_WINDOW_MS
 	maxDebounceKeys   = 1000             // MAX_DEBOUNCE_ENTRIES
 	maxSeenSessions   = 4096             // freshness records kept; the oldest is evicted
+
+	// clockStepBack: BroadcastTs is wall-clock nanoseconds. One that is older than the last seen by more than this is a
+	// clock that was set back (NTP, resume from sleep, a manual change), not an out-of-order frame (those are
+	// milliseconds apart); it is accepted, or every later event of the session would be dropped until the clock caught up.
+	clockStepBack = int64(time.Minute)
 )
 
 // AgentEvent is one live tmux `hook` frame as the gate reads it.
@@ -64,6 +70,7 @@ type Gate struct {
 type debounceEntry struct {
 	until time.Time
 	seq   uint64
+	code  string // the session the key was made for (the key itself is a digest), for Forget
 }
 
 func NewGate(now func() time.Time) *Gate {
@@ -152,7 +159,7 @@ func (g *Gate) SendStage(ev AgentEvent) bool {
 		}
 		g.lastSweep = now
 	}
-	key := debounceKey(ev.SessionCode, ev.EventName, ev.ErrorString)
+	key := debounceKey(ev.SessionCode, ev.EventName, ev.ErrorString) // a fixed-size digest: the error string is not retained
 	e, known := g.debounce[key]
 	if known && now.Before(e.until) {
 		e.until = now.Add(errorNotifyWindow) // within the window: slide it and stay silent
@@ -171,7 +178,7 @@ func (g *Gate) SendStage(ev AgentEvent) bool {
 			delete(g.debounce, oldest)
 		}
 		g.nextSeq++
-		e.seq = g.nextSeq
+		e.seq, e.code = g.nextSeq, ev.SessionCode
 	}
 	e.until = now.Add(errorNotifyWindow)
 	g.debounce[key] = e
@@ -182,7 +189,7 @@ func (g *Gate) SendStage(ev AgentEvent) bool {
 func (g *Gate) fresh(code string, ts int64) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if last, ok := g.seen[code]; ok && ts <= last {
+	if last, ok := g.seen[code]; ok && ts <= last && last-ts <= clockStepBack {
 		return false
 	}
 	if _, ok := g.seen[code]; !ok && len(g.seen) >= maxSeenSessions {
@@ -199,10 +206,12 @@ func (g *Gate) fresh(code string, ts int64) bool {
 	return true
 }
 
-// debounceKey is collision-free: a JSON array escapes separators a joined string could be confused by.
+// debounceKey identifies an error bucket: the SHA-256 of a JSON array of the three parts (the array escapes the
+// separators a joined string could be confused by). A digest, so a huge error string costs 32 bytes of key, not itself.
 func debounceKey(code, event, errorString string) string {
 	b, _ := json.Marshal([]string{code, event, errorString})
-	return string(b)
+	sum := sha256.Sum256(b)
+	return string(sum[:])
 }
 
 // Forget drops everything the gate knows about a session code (it ended), so a reused code starts clean.
@@ -210,9 +219,8 @@ func (g *Gate) Forget(code string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.seen, code)
-	for k := range g.debounce {
-		var parts []string
-		if json.Unmarshal([]byte(k), &parts) == nil && len(parts) > 0 && parts[0] == code {
+	for k, e := range g.debounce {
+		if e.code == code {
 			delete(g.debounce, k)
 		}
 	}

@@ -104,6 +104,45 @@ func TestGate_Freshness(t *testing.T) {
 	}
 }
 
+// A clock set back (NTP, resume from sleep) must not silence the session until the clock catches up; an out-of-order
+// frame a few milliseconds older still must. Mutation gate: drop the step-back allowance → red; make it huge → red.
+func TestGate_AClockSetBackDoesNotSilenceTheSession(t *testing.T) {
+	g, _ := newTestGate()
+	devs := []push.Device{gdev("d1", nil, "c1")}
+	base := int64(1_800_000_000_000_000_000) // ns
+	e := ev("waiting", "PermissionRequest")
+	e.BroadcastTs = base
+	if decide(g, e, devs, nil) != 1 {
+		t.Fatal("first event")
+	}
+	e.BroadcastTs = base - int64(5*time.Millisecond) // a late frame of the same moment
+	if decide(g, e, devs, nil) != 0 {
+		t.Fatal("an out-of-order frame pushed")
+	}
+	e.BroadcastTs = base - int64(2*time.Minute) // the clock went back two minutes
+	if decide(g, e, devs, nil) != 1 {
+		t.Fatal("an event after the clock was set back was dropped")
+	}
+	e.BroadcastTs = base - int64(2*time.Minute) + 1 // and time moves on from there
+	if decide(g, e, devs, nil) != 1 {
+		t.Fatal("the next event after the step back was dropped")
+	}
+}
+
+// A huge error string costs the debounce a fixed-size key, not its own length. Mutation gate: key = the JSON → red.
+func TestGate_DebounceKeyIsAFixedSizeDigest(t *testing.T) {
+	huge := make([]byte, 1<<20)
+	for i := range huge {
+		huge[i] = 'x'
+	}
+	if n := len(debounceKey("c", "StopFailure", string(huge))); n != 32 {
+		t.Fatalf("key is %d bytes for a 1 MiB error, want a 32-byte digest", n)
+	}
+	if debounceKey("a", "b", "c") == debounceKey("a", "b", "d") || debounceKey("a|b", "c", "d") == debounceKey("a", "b|c", "d") {
+		t.Fatal("distinct buckets share a key")
+	}
+}
+
 // The timestamp is recorded even when the event is not pushed, as the Mac's dedup does: a suppressed event, then the
 // same frame again after the suppression ended, does not push.
 func TestGate_FreshnessIsRecordedEvenWhenTheEventIsFilteredOut(t *testing.T) {
