@@ -68,8 +68,12 @@ function pass(prev: Map<string, LedGroup>): { changed: boolean; groups: Map<stri
   let changed = false
   for (const [leadTab, led] of prev) {
     if (Object.hasOwn(tabs, leadTab)) continue
+    // The snapshot is a pass old: a team that ended, or a member released, since then is not the group any more (R6 -
+    // such a tab is a normal tab and is never closed by this), and a team that no longer exists leaves no ghost.
+    if (!state.index.byKey.has(led.teamKey)) continue
     for (const id of led.memberTabIds) {
       if (!Object.hasOwn(useTabStore.getState().tabs, id) || useTabStore.getState().tabs[id].locked) continue
+      if (state.index.byTabId.get(id)?.key !== led.teamKey) continue
       closeTab(id, { skipHistory: true })
       if (!Object.hasOwn(useTabStore.getState().tabs, id)) changed = true // a close the person declined stays declined
     }

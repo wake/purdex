@@ -16,9 +16,10 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useEditorStore } from '../../stores/useEditorStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
-import { KEY, resetTeamStores, seedScene, wsTabs } from './__tests__/team-fixture'
+import { HOST, KEY, resetTeamStores, seedScene, wsTabs } from './__tests__/team-fixture'
 
 let stop: () => void
 beforeEach(() => {
@@ -94,6 +95,13 @@ describe('order', () => {
     expect(wsTabs('w2')).toEqual(['ma', 'y'])
     await settle()
     expect(await workspaceWritesAfterANudge()).toBe(0) // and it is left alone, not rewritten on every pass
+  })
+
+  it('a pinned tab is never part of the run: a pinned member stays put and a pinned tab between them is not grouped', async () => {
+    seedScene({ members, tabs: [['lead', 'lead-tm'], ['p', null], ['ma', 'a-tm'], ['mb', 'b-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'p', 'ma', 'mb', 'x'] }] })
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, p: { ...useTabStore.getState().tabs.p, pinned: true }, mb: { ...useTabStore.getState().tabs.mb, pinned: true } } })
+    await settle()
+    expect(wsTabs('w1')).toEqual(['lead', 'ma', 'p', 'mb', 'x']) // ma joins the lead; pinned p and mb keep their relative order
   })
 
   it('a member that sits before its lead moves behind it', async () => {
@@ -239,6 +247,26 @@ describe('the lead\'s tab goes', () => {
     expect(tabIds()).toEqual(['mb', 'x', 'z']) // ma went; mb was kept by the person
     confirm.mockRestore()
     useEditorStore.setState({ buffers: {} })
+  })
+
+  it('a member released in the same burst as the lead\'s close is not closed (R6)', async () => {
+    scene()
+    await settle()
+    const roster = useTeamRosterStore.getState().byHost[HOST][0]
+    useTeamRosterStore.setState({ byHost: { [HOST]: [{ ...roster, members: roster.members.filter((m) => m.session_id !== 'A') }] } })
+    closeTab('lead') // both happen before the subscriber looks
+    await settle()
+    expect(tabIds()).toEqual(['ma', 'x', 'z']) // A was released: its tab is a normal tab; B went with the lead
+  })
+
+  it('a team that ended in the same burst leaves its tabs alone and no ghost behind', async () => {
+    scene()
+    await settle()
+    useTeamRosterStore.setState({ byHost: { [HOST]: [] } })
+    closeTab('lead')
+    await settle()
+    expect(tabIds()).toEqual(['ma', 'mb', 'x', 'z'])
+    expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBeUndefined()
   })
 
   it('closing a member only closes that tab (P8)', async () => {
