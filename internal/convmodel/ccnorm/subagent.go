@@ -112,6 +112,10 @@ flatten:
 // (`subagents/agent-<id>.jsonl`), so nothing that could walk a path gets in.
 var agentIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
+// ValidAgentID reports whether id is an agent id the normalizer accepts (up to 128 characters of its allowed set): the
+// rule an HTTP layer applies to a path segment before it names a file.
+func ValidAgentID(id string) bool { return agentIDRe.MatchString(id) }
+
 // subagentOf links a task step to the agent it started: toolUseResult.agentId
 // and isAsync, with the step's own description and subagent_type. nil when
 // the result names no (valid) agent.

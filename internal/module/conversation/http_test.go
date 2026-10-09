@@ -92,16 +92,20 @@ func stepsTurn(n, pad int) string {
 // ---- fixtures ----
 
 type fakeOwners struct {
-	mu    sync.Mutex
-	calls int
-	own   []convfeed.Owner
-	err   error
+	mu     sync.Mutex
+	calls  int
+	own    []convfeed.Owner
+	err    error
+	onCall func() // runs inside every lookup (tests cancel the request there)
 }
 
 func (f *fakeOwners) LiveSessions(context.Context, string) ([]convfeed.Owner, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	if f.onCall != nil {
+		f.onCall()
+	}
 	return f.own, f.err
 }
 
@@ -124,7 +128,7 @@ func newEnv(t *testing.T) *env {
 	}
 	owners := &fakeOwners{}
 	c := core.New(core.CoreDeps{Config: &config.Config{HostID: "h1:abc"}})
-	m := &Module{core: c, maxBody: maxBody,
+	m := &Module{core: c, maxBody: maxBody, subSem: make(chan struct{}, maxSubagentReads),
 		cache:    convfeed.NewCache(convfeed.CacheOptions{}),
 		resolver: &convfeed.Resolver{Home: home, Owners: owners}}
 	mux := http.NewServeMux()
@@ -544,5 +548,198 @@ func TestModule_StartWorksAfterATimedOutStop(t *testing.T) {
 	}
 	if err := e.mod.Stop(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ---- subagents ----
+
+const childID = "a7a639d97d57c6f43"
+
+func (e *env) subagentFile(id, content string) string {
+	e.t.Helper()
+	p := filepath.Join(e.home, ".claude", "projects", "-work-x", sid, "subagents", "agent-"+id+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		e.t.Fatal(err)
+	}
+	return p
+}
+
+func childFixture(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../../../testdata/conversation/v1/cc-transcript/subagent/children/" + childID + ".input.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+type subagentResp struct {
+	Items   []json.RawMessage `json:"items"`
+	Partial bool              `json:"partial"`
+}
+
+func TestSubagent_ItemsOfTheChildFile(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	e.subagentFile(childID, childFixture(t))
+	w := e.get("/api/conversations/claude/" + sid + "/subagents/" + childID)
+	if w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	var got subagentResp
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("../../../testdata/conversation/v1/cc-transcript/subagent/children/" + childID + ".expected.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &want); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) == 0 || len(got.Items) != len(want.Items) || got.Partial {
+		t.Fatalf("items %d (want %d) partial %v", len(got.Items), len(want.Items), got.Partial)
+	}
+}
+
+func TestSubagent_ValidationBeforeAnyAccessAndIdLengths(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	long128 := "a" + strings.Repeat("b", 127)
+	e.subagentFile(long128, "")
+	for _, c := range []struct {
+		url    string
+		status int
+		code   string
+	}{
+		{"/api/conversations/codex/" + sid + "/subagents/" + childID, 404, "provider_unsupported"},
+		{"/api/conversations/claude/nope/subagents/" + childID, 400, "bad_session_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/" + long128 + "c", 400, "bad_agent_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/-a", 400, "bad_agent_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/a.b", 400, "bad_agent_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/..%2F..%2Fx", 400, "bad_agent_id"},
+		{"/api/conversations/claude/" + sid + "/subagents/" + childID, 404, "not_found"}, // no such file
+	} {
+		if got := errCode(t, e.get(c.url), c.status); got != c.code {
+			t.Errorf("%s: code %q, want %q", c.url, got, c.code)
+		}
+	}
+	if e.owners.calls != 1 { // only the last, valid request got as far as the resolver
+		t.Fatalf("%d owner lookups: invalid requests must not reach the resolver", e.owners.calls)
+	}
+	if w := e.get("/api/conversations/claude/" + sid + "/subagents/" + long128); w.Code != 200 {
+		t.Fatalf("a 128-character id must be accepted: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The agent file is opened by the descriptor-relative walk: a symlinked subagents directory is not followed.
+func TestSubagent_SymlinkedDirectoryIsNotFollowed(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "agent-"+childID+".jsonl"), []byte(childFixture(t)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(e.home, ".claude", "projects", "-work-x", sid)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "subagents")); err != nil {
+		t.Fatal(err)
+	}
+	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"/subagents/"+childID), 404); got != "not_found" {
+		t.Fatalf("code %q", got)
+	}
+}
+
+func TestSubagent_AnswerIsCappedAndMarkedPartial(t *testing.T) {
+	e := newEnv(t)
+	e.mod.maxBody = 1000
+	e.transcript(idleTurns(1))
+	e.subagentFile(childID, childFixture(t))
+	w := e.get("/api/conversations/claude/" + sid + "/subagents/" + childID)
+	var got subagentResp
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || w.Body.Len() > e.mod.maxBody || !got.Partial {
+		t.Fatalf("status %d body %d partial %v: the answer must fit the cap and say it is partial", w.Code, w.Body.Len(), got.Partial)
+	}
+}
+
+func TestSubagent_BusyOnlyForAnOpenedFile(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	e.subagentFile(childID, childFixture(t))
+	for i := 0; i < maxSubagentReads; i++ {
+		e.mod.subSem <- struct{}{}
+	}
+	// a session that does not exist is a plain 404: lookups never queue for the read slots
+	if got := errCode(t, e.get("/api/conversations/claude/0e7f214b-c4e3-48cd-ab15-62a3471bd4fd/subagents/"+childID), 404); got != "not_found" {
+		t.Fatalf("code %q", got)
+	}
+	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"/subagents/"+childID), 503); got != "busy" {
+		t.Fatalf("code %q", got)
+	}
+}
+
+// The request ends while its file is being read: the parse stops, nothing is written, the slot is released.
+func TestSubagent_CancelledDuringTheReadStopsAndReleasesItsSlot(t *testing.T) {
+	e := newEnv(t)
+	p := e.transcript(idleTurns(1))
+	e.subagentFile(childID, childFixture(t)+strings.Repeat("{}\n", 40_000))
+	ctx, cancel := context.WithCancel(context.Background())
+	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "idle"}}
+	e.owners.onCall = cancel // the pane lookup cancels the request: the file is found, then read on a dead context
+	w := httptest.NewRecorder()
+	e.mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/conversations/claude/"+sid+"/subagents/"+childID, nil).WithContext(ctx))
+	if w.Body.Len() != 0 {
+		t.Fatalf("a cancelled request was answered: %d %s", w.Code, w.Body.String())
+	}
+	if len(e.mod.subSem) != 0 {
+		t.Fatal("the read slot was not released")
+	}
+}
+
+// An owner (or index) answer that names another transcript file must not choose the subagents directory.
+func TestSubagent_TranscriptOfAnotherNameIsRefused(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.home, ".claude", "projects", "-work-y", "11111111-1111-4111-8111-111111111111.jsonl")
+	if err := os.MkdirAll(filepath.Dir(other), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, []byte(idleTurns(1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the subagent file exists under the *requested* session id in the other project's directory
+	dir := filepath.Join(filepath.Dir(other), sid, "subagents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-"+childID+".jsonl"), []byte(childFixture(t)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.owners.own = []convfeed.Owner{{TranscriptPath: other, Status: "idle"}}
+	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"/subagents/"+childID), 404); got != "not_found" {
+		t.Fatalf("code %q", got)
+	}
+}
+
+func TestCtxReader_StopsWithTheContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r := ctxReader{ctx: ctx, r: strings.NewReader("abcdef")}
+	buf := make([]byte, 3)
+	if n, err := r.Read(buf); n != 3 || err != nil {
+		t.Fatalf("read before cancel: %d %v", n, err)
+	}
+	cancel()
+	if n, err := r.Read(buf); n != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("read after cancel: %d %v, want context.Canceled", n, err)
 	}
 }
