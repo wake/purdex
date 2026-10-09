@@ -134,6 +134,27 @@ func TestParseModelJSON_DuplicateMemberIsAFormatError(t *testing.T) {
 	}
 }
 
+// §5.3 names six fields; leaving one out is a malformed answer, not an empty value.
+// Mutation gate: drop the presence loop → red.
+func TestParseModelJSON_MissingFieldIsAFormatError(t *testing.T) {
+	full := map[string]string{"skip": `false`, "thing": `"t"`, "push": `"p"`, "entry": `"e"`, "status": `"s"`, "thing_done": `false`}
+	for drop := range full {
+		var parts []string
+		for k, v := range full {
+			if k != drop {
+				parts = append(parts, `"`+k+`":`+v)
+			}
+		}
+		if _, err := ParseModelJSON("{" + strings.Join(parts, ",") + "}"); !errors.Is(err, ErrFormat) {
+			t.Errorf("without %s: err = %v", drop, err)
+		}
+	}
+	// a skip still has to carry all six
+	if _, err := ParseModelJSON(`{"skip":true}`); !errors.Is(err, ErrFormat) {
+		t.Errorf("bare skip: err = %v", err)
+	}
+}
+
 func TestParseModelJSON_SizeLimit(t *testing.T) {
 	obj := func(entry string) string {
 		return `{"skip":false,"thing":"t","push":"","entry":"` + entry + `","status":"","thing_done":false}`

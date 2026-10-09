@@ -44,6 +44,15 @@ func ParseModelJSON(text string) (Summary, error) {
 	if hasDuplicateMember(body) {
 		return Summary{}, ErrFormat // two values for one field: which one counts would depend on the order
 	}
+	var members map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &members) != nil {
+		return Summary{}, ErrFormat
+	}
+	for _, k := range []string{"skip", "thing", "push", "entry", "status", "thing_done"} {
+		if _, ok := members[k]; !ok {
+			return Summary{}, ErrFormat // §5.3 names six fields; a missing one is not "empty", it is a malformed answer
+		}
+	}
 	dec := json.NewDecoder(strings.NewReader(body))
 	var s Summary
 	if err := dec.Decode(&s); err != nil || dec.More() {
