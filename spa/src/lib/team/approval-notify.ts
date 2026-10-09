@@ -8,7 +8,7 @@
 import { hostLabel, hostLookOf } from '../host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { fnv1a32, FNV_OFFSET_32 } from './fnv1a'
-import { approvalSessionLabel } from './approval-format'
+import { approvalSessionLabel, memberRelayNames } from './approval-format'
 import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, type Approval } from './types'
 
 /**
@@ -33,10 +33,13 @@ export function notifyApprovalOpened(hostId: string, approval: Approval): void {
   const pct = selfRelay ? Math.round(selfRelayPayloadOf(approval).used_percentage) : 0
   // An adopt request names the lead that asks and the session it wants (its cwd is the body).
   const adopt = approval.kind === 'adopt' ? adoptPayloadOf(approval) : null
+  // A member relay waiting for a person (the lead's member pool is out): who asks for whom, and why it waits.
+  const memberRelay = approval.kind === 'member_relay' ? memberRelayNames(approval) : null
   void window.electronAPI.showNotification({
     title: adopt ? t('approval.notify.title_adopt', { host, lead: session, target: clipForDisplay(adoptTargetLabel(adopt), 60) })
-      : selfRelay ? t('approval.notify.title_self_relay', { host, session, pct }) : t('approval.notify.title', { host, session }),
-    body: adopt ? adopt.target_cwd : selfRelay ? t('approval.dialog.self_relay_note') : leadPayloadOf(approval).reason,
+      : memberRelay ? t('approval.notify.title_member_relay', { host, lead: clipForDisplay(memberRelay.lead, 40), member: clipForDisplay(memberRelay.member, 40), pct: memberRelay.pct })
+        : selfRelay ? t('approval.notify.title_self_relay', { host, session, pct }) : t('approval.notify.title', { host, session }),
+    body: adopt ? adopt.target_cwd : memberRelay ? t('approval.notify.body_member_relay') : selfRelay ? t('approval.dialog.self_relay_note') : leadPayloadOf(approval).reason,
     sessionCode: '',
     eventName: 'ApprovalRequest',
     broadcastTs: approvalBroadcastTs(hostId, approval.id),

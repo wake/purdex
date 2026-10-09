@@ -85,6 +85,19 @@ describe('notifyApprovalOpened', () => {
     })
   })
 
+  it('a member_relay request names the lead, the member and the usage, and says the member quota is out', () => {
+    notifyApprovalOpened(H, approval({
+      kind: 'member_relay',
+      payload: { op_id: 'op-1', team_id: 't-1', lead_ref: '_a', lead_title: 'iface-lead', member_session_id: 'M1', member_ref: '_b', member_title: 'iface-solo', used_percentage: 72.6 },
+    }))
+    expect(showNotification).toHaveBeenCalledTimes(1)
+    expect(showNotification.mock.calls[0][0]).toMatchObject({
+      title: 'mlab：iface-lead 要幫 member iface-solo 接力（context 73%）',
+      body: 'member 額度用完，要核准嗎？',
+      action: { kind: 'open-approval', hostId: H, requestId: 'req-1' },
+    })
+  })
+
   it('broadcastTs is the request\'s identity, not its created_at: two requests born in the same millisecond on two hosts get two keys (F4)', () => {
     const a = approval({ id: 'same-ms-1', created_at: 1_696_000_000_000 })
     const b = approval({ id: 'same-ms-2', created_at: 1_696_000_000_000 })

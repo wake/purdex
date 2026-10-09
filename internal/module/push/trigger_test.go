@@ -142,6 +142,44 @@ func TestTrigger_OnlyOpenedOfTheThreeKindsIsPushed(t *testing.T) {
 	}
 }
 
+// RQ-2: a member relay that waits for a person is pushed to every device in its locale, unless a present Mac shows the
+// lead's session (R6 by the origin's tmux name); and it does not enter the open hook_ask set.
+func TestTrigger_AMemberRelayIsPushedInTheDevicesLocale(t *testing.T) {
+	te := newTriggerEnv(t, presenceFake{shows: map[string]bool{"seen": true}})
+	te.register(tokA, "zh-TW", "mlab")
+	te.register(tokB, "en", "mlab-en")
+	a := leadApproval("m1")
+	a.Kind = team.KindMemberRelay
+	a.Payload = json.RawMessage(`{"op_id":"o","team_id":"t","lead_title":"iface-lead","member_title":"iface-solo","member_ref":"_bbbbbb","used_percentage":72}`)
+	te.events.emit("opened", a)
+	calls := te.waitSends(t, 2)
+	all := calls[0].Payload + calls[1].Payload
+	for _, want := range []string{`"kind":"member_relay"`, "mlab：iface-lead 要幫 member iface-solo 接力（context 72%）", "mlab-en: iface-lead wants to relay member iface-solo (context 72%)", `"approval_id":"m1"`} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("payloads lack %s: %s", want, all)
+		}
+	}
+	if calls[0].H.CollapseID != "m1" {
+		t.Fatalf("collapse id = %q", calls[0].H.CollapseID)
+	}
+	// R6: the lead's session is shown by a present Mac: nothing more is pushed.
+	seen := leadApproval("m2")
+	seen.Kind = team.KindMemberRelay
+	seen.Payload = a.Payload
+	seen.Origin.Tmux = "seen:@1.%2"
+	te.events.emit("opened", seen)
+	time.Sleep(150 * time.Millisecond)
+	if got := te.apns.count(); got != 2 {
+		t.Fatalf("sends = %d, want no push for a session a present Mac shows", got)
+	}
+	// And closing it pushes nothing (R7).
+	te.events.emit("closed", a)
+	time.Sleep(100 * time.Millisecond)
+	if got := te.apns.count(); got != 2 {
+		t.Fatalf("sends = %d after a close", got)
+	}
+}
+
 func TestTrigger_NoDevicesNoPush(t *testing.T) {
 	te := newTriggerEnv(t, nil)
 	te.events.emit("opened", leadApproval("ap1"))

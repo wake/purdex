@@ -9,7 +9,7 @@ export const APPROVAL_EVENT_TYPE = 'approval.request'
 
 /** The two 分流 kinds (spec §6.6, U19) ride the same event; the Mac App draws no card for them (U19 (b)) and drops them at the WS boundary (approval-ws.ts). */
 export type HookKind = 'hook_ask' | 'hook_permission'
-export type ApprovalKind = 'lead' | 'self_relay' | 'adopt' | HookKind
+export type ApprovalKind = 'lead' | 'self_relay' | 'member_relay' | 'adopt' | HookKind
 
 /** `answered_local`, `terminal_override` and `dismissed` close hook kinds only; `approved` on a hook kind means "answered remotely". */
 export type ApprovalState = 'open' | 'approved' | 'denied' | 'timeout' | 'cancelled' | 'abandoned' | 'answered_local' | 'terminal_override' | 'dismissed'
@@ -91,6 +91,22 @@ export interface SelfRelayPayload {
   window: number
   model_id?: string
   effort?: string
+}
+
+/**
+ * `Approval.payload` for kind `member_relay` (RQ-2 spec §4.2; daemon `MemberRelayPayload`): a lead's member relay that
+ * waits for a person because the lead's member pool ran out. Only the card's text: nothing in it is trusted at approve
+ * (the daemon re-checks the op, the team and the member).
+ */
+export interface MemberRelayPayload {
+  op_id: string
+  team_id: string
+  lead_ref: string
+  lead_title: string
+  member_session_id: string
+  member_ref: string
+  member_title: string
+  used_percentage: number
 }
 
 /**
@@ -189,7 +205,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-const APPROVAL_KINDS: readonly string[] = ['lead', 'self_relay', 'adopt', 'hook_ask', 'hook_permission'] satisfies ApprovalKind[]
+const APPROVAL_KINDS: readonly string[] = ['lead', 'self_relay', 'member_relay', 'adopt', 'hook_ask', 'hook_permission'] satisfies ApprovalKind[]
 
 /**
  * A row whose kind this build does not know (a later daemon's): a record with a string `kind` outside
@@ -252,6 +268,18 @@ export function selfRelayPayloadOf(a: Approval): SelfRelayPayload {
     window,
     ...(typeof p.model_id === 'string' && p.model_id !== '' ? { model_id: p.model_id } : {}),
     ...(typeof p.effort === 'string' && p.effort !== '' ? { effort: p.effort } : {}),
+  }
+}
+
+/** The member-relay payload, defensively: every string '' when missing or of another type, a bad percentage 0. */
+export function memberRelayPayloadOf(a: Approval): MemberRelayPayload {
+  const p = isRecord(a.payload) ? a.payload : {}
+  const s = (k: string): string => (typeof p[k] === 'string' ? (p[k] as string) : '')
+  const pct = typeof p.used_percentage === 'number' && Number.isFinite(p.used_percentage) ? p.used_percentage : 0
+  return {
+    op_id: s('op_id'), team_id: s('team_id'), lead_ref: s('lead_ref'), lead_title: s('lead_title'),
+    member_session_id: s('member_session_id'), member_ref: s('member_ref'), member_title: s('member_title'),
+    used_percentage: pct,
   }
 }
 
