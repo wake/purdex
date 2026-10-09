@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.660] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。
+
+### Changed：核准推播可以直接打開對應的 session — #2256（介面線）
+
+- 核准類推播現在帶上該 session 的代碼與「目前還在等哪幾張核准」的清單，讓 iOS 點推播時能直接打開那個 session，並在核准被別處處理掉時更新通知（iOS 端隨之後的版本）。
+- daemon 讀 tmux session 清單時多讀一個「建立時間」欄位；沒有 UTF-8 語系時的防護與以前相同。
+
+### Added：跨主機 team：被收進 team 的那台記得身分 — X2a（#2257，A 線）
+
+- 被別台主機收進 team 的 session 會被記下來，所有「一個 session 只能有一種身分」的檢查都會算進去（例如它不能當 lead、不能被本機再收一次、自己接力會關閉）。目前還沒有路由能建立這種紀錄，使用上沒有變化。
+
 ## [1.0.0-alpha.659] - 2026-10-09
 
 > 改了 mod 與 pdx-team skill：**要部署 daemon，並重跑 `pdx setup`**；SPA、Electron 不必更新。
