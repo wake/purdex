@@ -3,8 +3,9 @@
 // stacked in the corner, one per adoption not closed yet — 「等待 <alias> 回覆…」, then the outcome. At most
 // `MAX_CARDS` show; the rest are counted (「另有 N 筆」) and appear as the others are closed. 「先關閉」 hides a card; the
 // wait goes on in `lib/team/adoption-wait.ts` and the outcome arrives as a toast.
+import { useEffect } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
-import { useAdoptionWait, adoptionWaitText, type AdoptionWaitEntry } from '../lib/team/adoption-wait'
+import { useAdoptionWait, adoptionWaitText, resumeAdoptionWaits, type AdoptionWaitEntry } from '../lib/team/adoption-wait'
 import { useI18nStore } from '../stores/useI18nStore'
 
 const MAX_CARDS = 3
@@ -41,6 +42,8 @@ function Card({ entry }: { entry: AdoptionWaitEntry }) {
 
 export function AdoptionWaitCard() {
   const t = useI18nStore((s) => s.t)
+  // Picks up the waits a reload interrupted (the host mounts this at app level, on every window start).
+  useEffect(() => { resumeAdoptionWaits() }, [])
   const entries = useAdoptionWait((s) => s.entries)
   const open = Object.values(entries).filter((e) => !e.dismissed)
   if (open.length === 0) return null

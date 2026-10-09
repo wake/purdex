@@ -48,6 +48,9 @@ export const STORAGE_KEYS = {
   /** 團隊介面的排列（useTeamUiStore）：每個 team key（`<hostId>\0<teamId>`）的成員順序、收合、面板模式、ghost lead 所在的工作區；
    *  device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、不走 syncManager；只被 roster frame 與刪除主機清掉 */
   TEAM_UI: 'purdex-team-ui',
+  /** 遠端 adopt 核准後的等待（lib/team/adoption-wait.ts）：`{ entries: { [key]: { hostId, approvalId, alias, target, startedAt, state, code, dismissed } } }`，
+   *  reload 後依原 deadline（startedAt＋11 分鐘）恢復輪詢；終態被看過或 toast 過就清掉。device-local，**永遠不進 SOT**、不走 syncManager */
+  ADOPTION_WAITS: 'purdex-adoption-waits',
   /** 還沒送達主機的撤銷（usePendingRevocationsStore，QR 配對 QP-3）：`{ items: { hostId, pairingId, endpoint?, daemonId?, hostName?, label?, createdAt? }[] }`
    *  （endpoint／daemonId 綁定建立當下的主機身分；舊版只有 hostId＋pairingId 的紀錄不自動重試），
    *  配對手機的裝置 token 在某台連不上的主機上撤銷失敗後記在這裡，主機連上時重試。

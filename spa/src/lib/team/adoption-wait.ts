@@ -11,6 +11,8 @@
 // (`wait=0`), and an answer that is still `joining` ends as `timeout`. A card the person closed early ("先關閉") gets
 // its outcome as a toast instead.
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+import { purdexStorage, STORAGE_KEYS } from '../storage'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { ApprovalApiError, fetchAdoption } from './approval-api'
@@ -47,22 +49,57 @@ interface AdoptionWaitStore {
   reset: () => void
 }
 
-export const useAdoptionWait = create<AdoptionWaitStore>()((set) => ({
-  entries: {},
-  dismiss: (key) => set((s) => {
-    const e = s.entries[key]
-    if (!e) return s
-    // A finished card just goes; a waiting one stays (dismissed) so the outcome can toast.
-    if (e.state !== 'waiting') {
-      const { [key]: _gone, ...rest } = s.entries
-      return { entries: rest }
-    }
-    return { entries: { ...s.entries, [key]: { ...e, dismissed: true } } }
-  }),
-  reset: () => set({ entries: {} }),
-}))
-
 const waitKey = (hostId: string, approvalId: string): string => `${hostId}\u0000${approvalId}`
+
+const STATES: readonly string[] = ['waiting', 'active', 'failed', 'void', 'timeout']
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const MAX_PERSISTED = 50
+
+/** Persisted data is untrusted: keep only well-formed entries, rebuilt field by field (the key is derived, never read). */
+export function healAdoptionWaits(persisted: unknown): Record<string, AdoptionWaitEntry> {
+  const raw = isRecord(persisted) && isRecord(persisted.entries) ? Object.values(persisted.entries) : []
+  const out: Record<string, AdoptionWaitEntry> = {}
+  for (const v of raw) {
+    if (!isRecord(v) || Object.keys(out).length >= MAX_PERSISTED) continue
+    const { hostId, approvalId, alias, target, startedAt, state, code, dismissed } = v
+    if (typeof hostId !== 'string' || hostId === '' || typeof approvalId !== 'string' || approvalId === '') continue
+    if (typeof alias !== 'string' || typeof target !== 'string' || typeof code !== 'string') continue
+    if (typeof startedAt !== 'number' || !Number.isFinite(startedAt) || startedAt <= 0) continue
+    if (typeof state !== 'string' || !STATES.includes(state) || typeof dismissed !== 'boolean') continue
+    // A finished entry the person has dealt with (closed, or toasted) is never kept.
+    if (dismissed && state !== 'waiting') continue
+    const key = waitKey(hostId, approvalId)
+    out[key] = { key, hostId, approvalId, alias: clipForDisplay(alias, 60), target: clipForDisplay(target, 60), startedAt, state: state as AdoptionWaitState, code: clipForDisplay(code, 80), dismissed }
+  }
+  return out
+}
+
+// Device-local (purdex-adoption-waits): a reload mid-wait must not lose the wait or its outcome. The approval is closed
+// and the member host answers once, so nothing else would bring the result back.
+export const useAdoptionWait = create<AdoptionWaitStore>()(
+  persist(
+    (set) => ({
+      entries: {},
+      dismiss: (key) => set((s) => {
+        const e = s.entries[key]
+        if (!e) return s
+        // A finished card just goes; a waiting one stays (dismissed) so the outcome can toast.
+        if (e.state !== 'waiting') {
+          const { [key]: _gone, ...rest } = s.entries
+          return { entries: rest }
+        }
+        return { entries: { ...s.entries, [key]: { ...e, dismissed: true } } }
+      }),
+      reset: () => set({ entries: {} }),
+    }),
+    {
+      name: STORAGE_KEYS.ADOPTION_WAITS,
+      storage: purdexStorage,
+      partialize: (s) => ({ entries: s.entries }),
+      merge: (persisted, current) => ({ ...current, entries: healAdoptionWaits(persisted) }),
+    },
+  ),
+)
 
 export function adoptionAlias(p: AdoptPayload): string {
   return clipForDisplay(p.target_host_alias !== '' ? p.target_host_alias : p.target_host_id, 60)
@@ -85,6 +122,7 @@ export function resetAdoptionWaitForTests(): void {
   for (const id of timers) clearTimeout(id)
   timers.clear()
   warned.clear()
+  running.clear()
   useAdoptionWait.getState().reset()
 }
 
@@ -189,5 +227,35 @@ export function startAdoptionWait(hostId: string, approvalId: string, p: AdoptPa
   useAdoptionWait.setState((s) => ({
     entries: { ...s.entries, [key]: { key, hostId, approvalId, alias: adoptionAlias(p), target: clipForDisplay(adoptTargetLabel(p), 60), startedAt: Date.now(), state: 'waiting', code: '', dismissed: false } },
   }))
-  void run(key, hostId, approvalId)
+  launch(key)
+}
+
+const running = new Set<string>()
+function launch(key: string): void {
+  const e = useAdoptionWait.getState().entries[key]
+  if (!e || running.has(key)) return
+  running.add(key)
+  void run(key, e.hostId, e.approvalId).finally(() => running.delete(key))
+}
+
+/**
+ * Picks the waits up again after a reload: from the persisted entries, by their ORIGINAL deadline (`startedAt` + bound —
+ * one already past it goes straight to the final ask); a finished card that was never closed shows again. Idempotent
+ * (a wait that is running is left alone), and it waits for the store to rehydrate. Called by the wait card on mount.
+ */
+export function resumeAdoptionWaits(): void {
+  const go = () => {
+    for (const e of Object.values(useAdoptionWait.getState().entries)) {
+      if (e.state === 'waiting') launch(e.key)
+      else if (e.state === 'active' && !running.has(e.key)) {
+        running.add(e.key)
+        void sleep(ADOPTION_DONE_LINGER_MS).then(() => {
+          running.delete(e.key)
+          if (useAdoptionWait.getState().entries[e.key]?.state === 'active') useAdoptionWait.getState().dismiss(e.key)
+        })
+      }
+    }
+  }
+  if (useAdoptionWait.persist.hasHydrated()) go()
+  else useAdoptionWait.persist.onFinishHydration(go)
 }

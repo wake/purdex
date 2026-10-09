@@ -140,6 +140,18 @@ describe('adopt card — remote target', () => {
   })
 })
 
+describe('adopt card — after a reload', () => {
+  it('mounting the host picks a persisted wait up again (no App.tsx call needed)', async () => {
+    localStorage.setItem('purdex-adoption-waits', JSON.stringify({ state: { entries: { k: {
+      hostId: H, approvalId: 'req-9', alias: 'air26', target: '寫文件的那個', startedAt: Date.now() - 60_000, state: 'waiting', code: '', dismissed: false,
+    } } }, version: 0 }))
+    await act(async () => { await (await import('../lib/team/adoption-wait')).useAdoptionWait.persist.rehydrate() })
+    render(<ApprovalDialogHost />)
+    expect(mockedPoll).toHaveBeenCalledWith(H, 'req-9', expect.any(Number), expect.any(AbortSignal))
+    expect(text('adoption-wait-text')).toBe('等待 air26 回覆…')
+  })
+})
+
 describe('adopt cards — several waits at once', () => {
   const pending = new Map<string, (v: { approval_id: string; state: string; code?: string }) => void>()
   beforeEach(() => {

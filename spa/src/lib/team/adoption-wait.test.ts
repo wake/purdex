@@ -1,7 +1,8 @@
 // adoption-wait.ts — the wait after a remote adopt is approved: every terminal answer, the 11 minute bound, retry on
 // errors, one poll loop per approval, and a toast when the card was closed first. fetchAdoption is the only mock.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { useAdoptionWait, startAdoptionWait, resetAdoptionWaitForTests, ADOPTION_WAIT_BOUND_MS } from './adoption-wait'
+import { useAdoptionWait, startAdoptionWait, resumeAdoptionWaits, resetAdoptionWaitForTests, ADOPTION_WAIT_BOUND_MS } from './adoption-wait'
+import { STORAGE_KEYS } from '../storage'
 import { ApprovalApiError, fetchAdoption } from './approval-api'
 import { adoptPayloadOf, type Approval } from './types'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -152,6 +153,84 @@ describe('startAdoptionWait', () => {
     startAdoptionWait('lead', 'ap-1', payload)
     await vi.advanceTimersByTimeAsync(ADOPTION_WAIT_BOUND_MS + 2_000)
     expect(entry()?.state ?? 'closed').not.toBe('timeout')
+  })
+})
+
+describe('a reload does not lose the wait or its result', () => {
+  const persistedEntry = (over: Record<string, unknown> = {}) => ({
+    hostId: 'lead', approvalId: 'ap-1', alias: 'air26', target: '寫文件的', startedAt: Date.now(), state: 'waiting', code: '', dismissed: false, ...over,
+  })
+  const writeAndReload = async (entries: unknown) => {
+    localStorage.setItem(STORAGE_KEYS.ADOPTION_WAITS, JSON.stringify({ state: { entries }, version: 0 }))
+    await useAdoptionWait.persist.rehydrate()
+  }
+
+  it('a finished result survives a reload and shows again', async () => {
+    mocked.mockResolvedValue(ans('failed', 'dir_missing'))
+    startAdoptionWait('lead', 'ap-1', payload)
+    await flush()
+    const raw = localStorage.getItem(STORAGE_KEYS.ADOPTION_WAITS)!
+    useAdoptionWait.setState({ entries: {} }) // the new window starts empty …
+    localStorage.setItem(STORAGE_KEYS.ADOPTION_WAITS, raw) // … and reads what the old one saved
+    await useAdoptionWait.persist.rehydrate()
+    expect(entry()).toMatchObject({ state: 'failed', code: 'dir_missing', alias: 'air26' })
+  })
+
+  it('a wait in progress resumes by its ORIGINAL deadline', async () => {
+    await writeAndReload({ k: persistedEntry({ startedAt: Date.now() - 10 * 60_000 }) })
+    mocked.mockImplementation(hanging)
+    resumeAdoptionWaits()
+    await flush()
+    // 11 min bound, 10 elapsed: about 60 s left, so the long poll is 30 s (not a fresh 11 minutes of them).
+    await vi.advanceTimersByTimeAsync(80_000)
+    expect(entry().state).toBe('timeout')
+    expect(mocked.mock.calls.filter((c) => c[2] === 0)).toHaveLength(1)
+  })
+
+  it('a wait already past its deadline gets only the final ask', async () => {
+    await writeAndReload({ k: persistedEntry({ startedAt: Date.now() - 12 * 60_000 }) })
+    mocked.mockResolvedValue(ans('joining'))
+    resumeAdoptionWaits()
+    await flush()
+    expect(mocked).toHaveBeenCalledTimes(1)
+    expect(mocked.mock.calls[0][2]).toBe(0)
+    expect(entry().state).toBe('timeout')
+  })
+
+  it('resuming twice does not start a second loop', async () => {
+    await writeAndReload({ k: persistedEntry() })
+    mocked.mockImplementation(hanging)
+    resumeAdoptionWaits()
+    resumeAdoptionWaits()
+    await flush()
+    expect(mocked).toHaveBeenCalledTimes(1)
+  })
+
+  it('a dismissed wait still toasts after the reload', async () => {
+    await writeAndReload({ k: persistedEntry({ dismissed: true }) })
+    mocked.mockResolvedValue(ans('active'))
+    resumeAdoptionWaits()
+    await flush()
+    expect(useUndoToast.getState().toast?.message).toBe('寫文件的：已納入')
+    expect(useAdoptionWait.getState().entries).toEqual({})
+  })
+
+  it('bad data is dropped, good entries around it are kept', async () => {
+    await writeAndReload({
+      a: persistedEntry({ approvalId: '' }),
+      b: persistedEntry({ startedAt: 'yesterday' }),
+      c: persistedEntry({ state: 'exploded' }),
+      d: persistedEntry({ dismissed: true, state: 'failed' }), // already dealt with
+      e: 'nonsense',
+      f: persistedEntry({ approvalId: 'ap-ok', key: 'forged' }),
+    })
+    expect(Object.values(useAdoptionWait.getState().entries).map((e) => e.approvalId)).toEqual(['ap-ok'])
+    expect(Object.keys(useAdoptionWait.getState().entries)[0]).toBe('lead\u0000ap-ok')
+    await writeAndReload([persistedEntry()]) // entries of the wrong shape
+    expect(useAdoptionWait.getState().entries).toEqual({})
+    localStorage.setItem(STORAGE_KEYS.ADOPTION_WAITS, JSON.stringify({ state: 'nonsense', version: 0 }))
+    await useAdoptionWait.persist.rehydrate()
+    expect(useAdoptionWait.getState().entries).toEqual({})
   })
 })
 
