@@ -63,8 +63,9 @@ type Engine struct {
 
 	qmu        sync.Mutex // the queue structures only; never held across a store call
 	qstopped   bool
-	afterBuild func()     // test seam: between a job's input being built and its lease being checked
-	intakeMu   sync.Mutex // one catch-up at a time: cursor read, insert and enqueue keep the turns' order
+	afterBuild func()                // test seam: between a job's input being built and its lease being checked
+	waiting    map[string]*waitState // sessions with an event on a timer (intake.go); guarded by intakeMu
+	intakeMu   sync.Mutex            // one catch-up at a time: cursor read, insert and enqueue keep the turns' order
 	omu        sync.Mutex
 	orphans    map[int64]struct{} // entries whose final state the store refused (settle.go)
 	inflight   sync.WaitGroup     // results and reaps being applied; Stop waits for them
@@ -92,7 +93,7 @@ func NewEngine(d Deps) *Engine {
 	if d.Logf == nil {
 		d.Logf = log.Printf
 	}
-	return &Engine{d: d, convs: map[string]*convQ{}, leases: map[string]*lease{}, callCap: defaultCallCap}
+	return &Engine{d: d, convs: map[string]*convQ{}, waiting: map[string]*waitState{}, leases: map[string]*lease{}, callCap: defaultCallCap}
 }
 
 // SetPushLineHook registers the push-line notification (see Engine.pushLine).

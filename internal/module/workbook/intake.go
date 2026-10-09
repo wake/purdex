@@ -29,7 +29,16 @@ func (e *Engine) OnTurnEnd(ev agent.TurnEndEvent) { e.catchUp(ev, tries{}) }
 
 // tries counts how often one event has been put back: for a busy transcript cache, and for a transcript that has not yet
 // caught up with the hook.
-type tries struct{ busy, settle int }
+type tries struct {
+	busy, settle int
+	cont         bool // a continuation (a timer's retry, or an event taken off a session's queue), not a fresh event
+}
+
+// waitState: a session with an event put back on a timer. Newer events of that session queue behind it (at most
+// maxQueued), so the turns are recorded in order and a first record never loses the turn a waiting event is about.
+type waitState struct{ queue []agent.TurnEndEvent }
+
+const maxQueued = 16
 
 // again is a catch-up to run later.
 type again struct {
@@ -47,6 +56,27 @@ func (e *Engine) catchUp(ev agent.TurnEndEvent, try tries) {
 	// interleave between their insert and their enqueue, or a newer turn would queue before an older one.
 	e.intakeMu.Lock()
 	defer e.intakeMu.Unlock()
+	ws := e.waiting[ev.SessionID]
+	if !try.cont && ws != nil { // an earlier event of this session is still waiting for the transcript: behind it
+		if len(ws.queue) < maxQueued {
+			ws.queue = append(ws.queue, ev)
+		}
+		return
+	}
+	retrying := false
+	defer func() {
+		if retrying || ws == nil && e.waiting[ev.SessionID] == nil {
+			return
+		}
+		// this event is settled: the next one of its session, if any, goes now; with none the session is free
+		if w := e.waiting[ev.SessionID]; w != nil && len(w.queue) > 0 {
+			next := w.queue[0]
+			w.queue = w.queue[1:]
+			e.d.After(0, func() { e.catchUp(next, tries{cont: true}) })
+			return
+		}
+		delete(e.waiting, ev.SessionID)
+	}()
 	conv, err := e.convKey(ev.SessionID)
 	if err != nil {
 		e.d.Logf("[workbook] conversation of a session: %v", err)
@@ -54,7 +84,13 @@ func (e *Engine) catchUp(ev agent.TurnEndEvent, try tries) {
 	}
 	picks, later := e.pickTurns(ev, try)
 	if later != nil {
-		e.d.After(later.after, func() { e.catchUp(ev, later.next) })
+		retrying = true
+		if e.waiting[ev.SessionID] == nil {
+			e.waiting[ev.SessionID] = &waitState{}
+		}
+		next := later.next
+		next.cont = true
+		e.d.After(later.after, func() { e.catchUp(ev, next) })
 		return
 	}
 	if len(picks) == 0 {
@@ -102,7 +138,7 @@ func (e *Engine) pickTurns(ev agent.TurnEndEvent, try tries) (picks []pick, late
 	turns, err := e.d.Turns.LastTurns(ctx, "claude", ev.SessionID, catchUpWindow)
 	switch {
 	case errors.Is(err, convfeed.ErrBusy) && try.busy < busyRetries:
-		return nil, &again{busyDelay, tries{try.busy + 1, try.settle}}
+		return nil, &again{busyDelay, tries{busy: try.busy + 1, settle: try.settle}}
 	case err != nil:
 		return e.fallbackPick(ev), nil
 	}
@@ -124,21 +160,34 @@ func (e *Engine) pickTurns(ev agent.TurnEndEvent, try tries) (picks []pick, late
 	// running) and sometimes the last assistant row. Wait a little for the file to catch up with the hook's own words; only
 	// then use those words.
 	forced := try.settle >= settleRetries
-	turns, caughtUp := adoptEvent(turns, ev, from, forced)
+	turns, target, caughtUp := adoptEvent(turns, ev, from, forced)
 	if !caughtUp {
-		return nil, &again{settleDelay, tries{try.busy, try.settle + 1}}
+		return nil, &again{settleDelay, tries{busy: try.busy, settle: try.settle + 1}}
 	}
 	if forced {
 		e.d.Logf("[workbook] the transcript had not caught up with a Stop after %d ms; the hook's own words are used", settleRetries*int(settleDelay/time.Millisecond))
 	}
 	var ended []convmodel.Turn
-	for _, t := range turns[from:] {
-		if t.Outcome != convmodel.OutcomeRunning {
-			ended = append(ended, t)
+	first := -1 // the window index of the first ended turn kept when there is no record yet
+	for i := from; i < len(turns); i++ {
+		if turns[i].Outcome != convmodel.OutcomeRunning {
+			ended = append(ended, turns[i])
+			first = i
 		}
 	}
-	if !has && len(ended) > 1 { // no record yet: no history backfill, only the newest ended turn
-		ended = ended[len(ended)-1:]
+	// No record yet: no history backfill, only the newest ended turn — but never less than the turn this event is about
+	// and what came after it (the event's turn may be an older one when two events came close together).
+	if !has && len(ended) > 1 {
+		if target >= from && target < len(turns) && turns[target].Outcome != convmodel.OutcomeRunning {
+			first = target
+		}
+		var kept []convmodel.Turn
+		for i := first; i < len(turns); i++ {
+			if turns[i].Outcome != convmodel.OutcomeRunning {
+				kept = append(kept, turns[i])
+			}
+		}
+		ended = kept
 	}
 	var keep []convmodel.Turn
 	for _, t := range ended {
@@ -167,10 +216,10 @@ func (e *Engine) pickTurns(ev agent.TurnEndEvent, try tries) (picks []pick, late
 // done something counts. When nothing matches and the newest turn is running with no assistant words at all, the file has
 // not caught up: caughtUp is false until `force`, then the hook's words become that turn's words. The turns slice is not
 // changed; a turn that is changed is copied.
-func adoptEvent(turns []convmodel.Turn, ev agent.TurnEndEvent, from int, force bool) (out []convmodel.Turn, caughtUp bool) {
+func adoptEvent(turns []convmodel.Turn, ev agent.TurnEndEvent, from int, force bool) (out []convmodel.Turn, target int, caughtUp bool) {
 	last := len(turns) - 1
 	if last < from {
-		return turns, true // nothing newer than the newest recorded turn
+		return turns, -1, true // nothing newer than the newest recorded turn
 	}
 	out = append([]convmodel.Turn(nil), turns...)
 	want := strings.TrimSpace(ev.Text)
@@ -178,28 +227,28 @@ func adoptEvent(turns []convmodel.Turn, ev agent.TurnEndEvent, from int, force b
 		if t := out[last]; t.Outcome == convmodel.OutcomeRunning && summarisable(t) {
 			out[last].Outcome = convmodel.OutcomeDone
 		}
-		return out, true
+		return out, last, true
 	}
 	for i := last; i >= from; i-- {
 		if said := lastWords(out[i]); said != "" && (strings.HasPrefix(said, want) || strings.HasPrefix(want, said)) {
 			if out[i].Outcome == convmodel.OutcomeRunning {
 				out[i].Outcome = convmodel.OutcomeDone
 			}
-			return out, true
+			return out, i, true
 		}
 	}
 	t := out[last]
 	if t.Outcome != convmodel.OutcomeRunning || lastWords(t) != "" {
-		return out, true // an ended turn, or a newer turn already speaking in its own words: not this event's
+		return out, -1, true // an ended turn, or a newer turn already speaking in its own words: not this event's
 	}
 	if !force {
-		return out, false
+		return out, -1, false
 	}
 	t.Items = append(append([]convmodel.Item(nil), t.Items...), convmodel.Item{Type: convmodel.ItemAgentText,
 		AgentText: &convmodel.AgentText{ID: "hook-" + t.ID, Markdown: want}})
 	t.Outcome = convmodel.OutcomeDone
 	out[last] = t
-	return out, true
+	return out, last, true
 }
 
 // lastWords is the turn's last non-blank assistant text, trimmed.

@@ -294,6 +294,47 @@ func TestCatchUp_RepeatedWordsStillFindTheNewTurn(t *testing.T) {
 	}
 }
 
+// The first record of a session keeps only its newest ended turn (no history backfill) — but never loses the turn the event
+// is about, nor drops it when a second event comes close behind a waiting one (codex R1).
+// Mutation gate: trim to the newest turn regardless of the event's turn, or let the newer event overtake → red.
+func TestCatchUp_TheFirstRecordKeepsTheEventsTurn(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "答1"), endedTurn("t2", 200, "答2"))
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "答1", At: 5000, Seq: 1}) // an old event: its turn is t1
+	if got := turnIDs(k.entries("s1")); got != "t1,t2" {
+		t.Fatalf("recorded %q, want t1,t2", got)
+	}
+}
+
+func TestCatchUp_ANewerEventQueuesBehindAWaitingOne(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", unflushedTurn("t1", "問1")) // the first turn of the session, not written yet
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "答1", At: 5000, Seq: 1})
+	if len(k.afters) != 1 {
+		t.Fatalf("%d timers", len(k.afters))
+	}
+	// the file catches up with both turns before the second event is handled
+	k.turns.set("s1", endedTurn("t1", 100, "答1"), endedTurn("t2", 200, "答2"))
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "答2", At: 5200, Seq: 2})
+	if got := turnIDs(k.entries("s1")); got != "" {
+		t.Fatalf("the newer event overtook the waiting one: %q", got)
+	}
+	runLater(k, 40)
+	if got := turnIDs(k.entries("s1")); got != "t1,t2" {
+		t.Fatalf("recorded %q, want t1,t2 in order", got)
+	}
+	j1 := mustNext(t, k, "m", "s1")
+	k.finish("m", j1, Result{Reason: "refused"})
+	if j2 := mustNext(t, k, "m", "s1"); !strings.Contains(j2.Complete.Prompt, "做 t2") {
+		t.Fatalf("order: %s", j2.Complete.Prompt)
+	}
+	if len(k.e.waiting) != 0 {
+		t.Fatalf("the session is still marked waiting: %v", k.e.waiting)
+	}
+}
+
 // A hook that carries no last_assistant_message gives nothing to wait for or to adopt: a turn that has done something is
 // the one that ended; a turn with only the user's prompt is not recorded (and nothing waits).
 func TestCatchUp_AHookWithNoWords(t *testing.T) {
