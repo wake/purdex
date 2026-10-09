@@ -61,18 +61,37 @@ const (
 	TaskSeedLineFmt = "- %s %s %s"
 )
 
+// TaskSeedMaxLines is how many open tasks the notice names; the rest are one
+// line saying how many more (the seed is read once by a new conversation, so
+// it stays small: at most 10 × (id + status + 80 runes) bytes).
+const TaskSeedMaxLines = 10
+
+// relayTagInNotice is the machine tag no notice line may carry; a subject
+// that holds it is shown with a space in place of the dash.
+const relayTagInNotice = "[pdx-relay"
+
 // TaskSeedText is the seed notice of a member's open tasks: the header and
-// one line each (id, status, subject), or "" when there is none.
+// one line each (id, status, subject) for the first TaskSeedMaxLines, then
+// a line naming how many more there are, or "" when there is no open task.
 func TaskSeedText(tasks []Task) string {
 	var b strings.Builder
+	open, more := 0, 0
 	for _, t := range tasks {
 		if t.Status == TaskCompleted || t.Status == TaskDeleted {
+			continue
+		}
+		if open++; open > TaskSeedMaxLines {
+			more++
 			continue
 		}
 		if b.Len() == 0 {
 			b.WriteString(TaskSeedHeader)
 		}
-		fmt.Fprintf(&b, "\n"+TaskSeedLineFmt, t.ID, t.Status, t.Subject)
+		subject := strings.ReplaceAll(t.Subject, relayTagInNotice, "[pdx relay")
+		fmt.Fprintf(&b, "\n"+TaskSeedLineFmt, t.ID, t.Status, subject)
+	}
+	if more > 0 {
+		fmt.Fprintf(&b, "\n- …另有 %d 項，見 pdx task mine", more)
 	}
 	return b.String()
 }

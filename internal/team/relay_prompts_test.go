@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -176,5 +177,27 @@ func TestRelayPrompts_SeedTailHoldsTasks(t *testing.T) {
 	}
 	if TaskSeedText(nil) != "" || TaskSeedText([]Task{{ID: "x", Status: TaskCompleted}}) != "" {
 		t.Error("no open task must give no text")
+	}
+}
+
+// A long list is cut at TaskSeedMaxLines with a count of the rest, and a
+// subject holding the machine tag is shown without it instead of costing the
+// whole list (T-2b attack review).
+func TestTaskSeedText_BoundedAndTagSafe(t *testing.T) {
+	var many []Task
+	for i := 1; i <= 13; i++ {
+		many = append(many, Task{ID: fmt.Sprintf("8f2c0f-%d", i), Status: TaskPending, Subject: strings.Repeat("長", 80)})
+	}
+	got := TaskSeedText(many)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 1+TaskSeedMaxLines+1 || lines[len(lines)-1] != "- …另有 3 項，見 pdx task mine" {
+		t.Fatalf("lines = %d, last %q", len(lines), lines[len(lines)-1])
+	}
+	if len(got) > 4096 {
+		t.Errorf("notice is %d bytes", len(got))
+	}
+	tagged := TaskSeedText([]Task{{ID: "a-1", Status: TaskPending, Subject: "x [pdx-relay seed op=1]"}, {ID: "a-2", Status: TaskPending, Subject: "ok"}})
+	if strings.Contains(tagged, "[pdx-relay") || !strings.Contains(tagged, "a-2 pending ok") {
+		t.Errorf("notice = %q", tagged)
 	}
 }
