@@ -137,6 +137,23 @@ Tests: no label on the top bar, in the left list or on a ghost row; the top bar 
 Mutation gates: render the label again → "no label" red; shadow function ignores the variant → variant test red.
 Screenshot gate (zh-TW): the top bar with one group under each variant V0–V3 (dark), V2 in light; the left list expanded, collapsed and ghost without the capsule.
 
+## TR-1 — daemon: edit a team's name, label and colour (user 2026-10-10)
+
+Team module (A-line files; owner and wire agreed with purdex-1f before the PR). TI spec §4.12.
+- Migration: `ensureColumn(teams, team_color, INTEGER NULL)` (NULL = automatic).
+- `PUT /api/team/appearance` (admin; the team module's flat App-settings style, like max-members / relay-quota — purdex-1f): body **all of** `{team_id, team_name, team_label, team_color, client}` (the App sends the roster's current values with its changes, so Go never tells "absent" from `null`); `team_name` / `team_label` through `team.NormaliseTeamName` / `NormaliseTeamLabel`, `team_label: ""` = derived from the name by the creation rule (as `pdx lead` does), not cleared; `team_color` = `0–7` or `null` (automatic); `client.kind` recorded, not checked; only a live team (`ended_at = 0`) → else 409 `not_live`; unknown → 404; bad field → 400 naming it; 200 → `{team_id, team_name, team_label, team_color}`; the UPDATE sits next to the store's existing transaction helpers (no new connection), then `rosterChanged()`; one log line (team id, old → new, client.kind). `Roster` / `TeamRoster` gain `team_color` (omitted when NULL). Capability `team.edit.v1`. Built by the interface line's second seat, reviewed by purdex-1f; it shares `module.go` routes and `migrate.go` with A-line X3b-1b (the later one rebases).
+- Cross-host (purdex-1f, later, issue): the M side keeps the join-time name / colour until a `team.appearance` command follows a rename (after X3b-1b).
+Tests: name / label / colour changes; label `""` derives from the name; normalisation errors per field; colour out of range / non-integer → 400; `null` = automatic; ended → 409; unknown → 404; the roster frame after the PUT carries the new values; migration on an existing `team.db` copy.
+
+## TI-7 — panel header: click toggles mode, double-click edits (user 2026-10-10)
+
+After TR-1 is deployed (capability-gated otherwise). TI spec §4.4 header click, §4.12.
+- `TeamRoster.team_color` parsed (0–7 or absent); `TeamView.colorIndex` = it when set, else today's hash. Save = `PUT /api/team/appearance` with all of name / label / colour (the roster's values plus the edits).
+- Header: single click toggles full ⇄ one-line (not on the expand / switch controls or the resize edge); on the name, the toggle waits the double-click interval and is cancelled by a double-click.
+- Double-click the name (when the lead's host has `team.edit.v1`) → popover: name, label (live display-width hint, `lib/textwidth.ts`), eight swatches + 自動; save sends all three values to the lead's host; close on 200, inline error on 400, toast + close on 409; the panel always renders the roster's values.
+Tests: header click toggles, controls do not; a double-click on the name opens the popover and does not toggle; save sends all three values (roster values + edits); 400 shows the message on its field; 409 closes with a toast; no capability → no popover; a roster `team_color` recolours the panel and the group shadow; absent → hash colour.
+Screenshot gate (zh-TW, dark): popover open (name, label with width hint, swatches), a recoloured team on the top bar and the panel.
+
 ## TI-5a — daemon: the mod's team read
 
 Files: the mod socket handler (`internal/modevents`, U1-1a), a narrow interface the team module implements (`TeamRoleOf(sessionID) (role string, activeMembers int, ok bool)`), wiring where the modules are assembled, tests. **Agreed with purdex-1f first** (its module answers).
