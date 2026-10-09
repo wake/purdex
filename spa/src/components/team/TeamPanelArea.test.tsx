@@ -330,6 +330,54 @@ describe('header height (TI-6)', () => {
     expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(9 - firstRowCapacity(312))
   })
 
+  describe('measured room', () => {
+    let cellW = 0
+    let availW = 0
+    beforeEach(() => {
+      const testid = (el: Element) => el.getAttribute('data-testid')
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) { return testid(this) === 'team-panel-cell' ? cellW : 0 })
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) { return testid(this) === 'team-panel-cells' ? availW : 0 })
+    })
+    afterEach(() => vi.restoreAllMocks())
+    const inHeader = () => within(header()).getAllByTestId('team-panel-cell').length
+
+    it('a wider cell (status light + icon) lowers the capacity', () => {
+      scene5(8)
+      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+      availW = 165
+      cellW = 38
+      const { unmount } = mount()
+      expect(inHeader()).toBe(4)
+      unmount()
+      cellW = 50 // the iconDot style: ~12px wider per cell
+      mount()
+      expect(inHeader()).toBe(3)
+      expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(6)
+    })
+
+    it('an enlarged panel with a narrow box and a big team wraps under the header', () => {
+      scene5(8)
+      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+      act(() => useTeamUiStore.getState().setPanelExpanded(true))
+      availW = 130
+      cellW = 38
+      mount()
+      expect(inHeader()).toBe(3)
+      expect(screen.getByTestId('team-panel-more')).toBeTruthy()
+    })
+
+    it('an enlarged panel with room keeps everyone in the header row', () => {
+      scene5(8)
+      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+      act(() => useTeamUiStore.getState().setPanelExpanded(true))
+      availW = 900
+      cellW = 38
+      mount()
+      expect(inHeader()).toBe(9)
+      expect(screen.queryByTestId('team-panel-more')).toBeNull()
+    })
+  })
+
   it('a cell is a fixed height inside the header row', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))

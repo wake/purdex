@@ -6,7 +6,7 @@
 // second row when the team is big. Both take the width of the area they sit in; the area (TeamPanelArea) owns the frame.
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretUp } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
@@ -15,7 +15,7 @@ import { MODEL_LABEL } from './model-family'
 import { useSeatReading } from './team-readings'
 import { useMemberDrag } from './useMemberDrag'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { CELL_GAP, CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
+import { CELL_GAP, CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, SEP_W, firstRowCapacity } from './panel-layout'
 
 interface Props {
   team: TeamPanelTeam
@@ -248,9 +248,28 @@ function Cell({ teamKey, seat, isActive, onOpen }: { teamKey: string; seat: Team
 function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpanded, onOpen }: Props) {
   const t = useI18nStore((s) => s.t)
   const seats = [team.lead, ...team.members]
-  // The header row holds as many cells as the width allows (4 at the default 312); the rest wrap into a region UNDER it,
-  // so the first row (capsule, cells, buttons) never changes height.
-  const cap = width === undefined ? seats.length : firstRowCapacity(width)
+  // The header row holds as many cells as it really has room for; the rest wrap into a region UNDER it, so the first row
+  // (capsule, cells, buttons) never changes height. The room is MEASURED (the cells container's width over a rendered cell's
+  // width: a status-light style draws a wider icon, an enlarged panel is wider than any stored width). Where nothing can be
+  // measured (no layout) it falls back to the constants: the stored width's capacity, or everything when enlarged.
+  const box = useRef<HTMLDivElement>(null)
+  const [measured, setMeasured] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    const measure = () => {
+      let unit = 0
+      el.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]').forEach((c) => { unit = Math.max(unit, c.offsetWidth) })
+      const avail = el.clientWidth
+      setMeasured(unit > 0 && avail > 0 ? Math.max(1, Math.floor((avail - SEP_W + CELL_GAP) / (unit + CELL_GAP))) : null)
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  })
+  const cap = measured ?? (width === undefined ? seats.length : firstRowCapacity(width))
   const first = seats.slice(0, cap)
   const more = seats.slice(cap)
   const cell = (s: TeamSeatView) => <Cell key={s.sessionId} teamKey={team.teamKey} seat={s} isActive={s.tabId !== null && s.tabId === activeTabId} onOpen={onOpen} />
@@ -258,7 +277,7 @@ function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpa
     <>
     <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle}>
       <NameCapsule team={team} className="flex-shrink-0" style={{ maxWidth: CAPSULE_MAX_W }} />
-      <div data-testid="team-panel-cells" className="flex items-center flex-1 min-w-0" style={{ columnGap: CELL_GAP }}>
+      <div ref={box} data-testid="team-panel-cells" className="flex items-center flex-1 min-w-0" style={{ columnGap: CELL_GAP }}>
         {first.map((s, i) => (
           <span key={s.sessionId} className="flex items-center">
             {i === 1 && <span className="w-px h-4 bg-border-default" style={{ marginInline: 2 }} />}
