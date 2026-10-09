@@ -275,8 +275,8 @@ describe('StatusBar agent label badge', () => {
         rate_limits: { five_hour: { used_percentage: 25, resets_at: Date.now() / 1000 + 3600 }, seven_day: { used_percentage: 73, resets_at: Date.now() / 1000 + 86400 } },
       })
     })
-    // The number is what is LEFT (100 - used); no text label.
-    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('64%')
+    // Context shows USED; the 5-hour / weekly limits show what is LEFT; no text label.
+    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('36%')
     expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('75%')
     expect(screen.getByTestId('status-seg-usage-seven-day').textContent).toBe('27%')
   })
