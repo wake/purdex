@@ -397,6 +397,29 @@ switch away and back → same view); resize clamps and persists; expanded toggle
 one-line, expanded, narrow, small and large team.
 Size ~650 lines.
 
+## WA-2a′ SPA: four states, the title bar and its button (user 2026-10-10, round 3; TI spec §4.4 "Round 3")
+
+The team part only (no workbook data needed); the non-team workbook in the four states comes with WA-2b-1.
+1. **State**: `useTeamUiStore` — the per-team mode (`line | full`) and the area-wide `expanded` become one four-state
+   value `titlebar | line | full | max` per team key (default `full`), plus one shared value for non-team tabs (default
+   `titlebar`, used from WA-2b-1); the width stays area-wide. Alpha: no migration — a stored old mode maps
+   `line → line`, `full → full`, and `expanded: true` → `max` for the team that was showing, else it is dropped.
+2. **Title-bar strip**: `TitleBar.tsx` gets a centred slot; when the active tab's team is in `titlebar`, the slot shows
+   the one-line content (team name + cells, no wrap, overflow → 「+N」) and replaces the centred window title. Only the
+   strip's children are `no-drag`. Team name / 「+N」 click → back to the pane state it left (`line`, `full` or `max`,
+   remembered per team); a cell click → `openTeamSeat` (R3 + R10).
+3. **Title-bar button**: `Notebook`, left of `UnattendedButton`, same button style; lit (pressed style) in `titlebar`,
+   dim otherwise; click toggles titlebar ⇄ the last pane state; absent when the active tab has no team (until WA-2b-1
+   adds the non-team workbook).
+4. **Header**: the ⌃ control (`team-panel-to-line`) → `titlebar`; the one-line header's ⌄ (`team-panel-to-full`) keeps
+   line → full; header single click keeps line ⇄ full; the expand control toggles full ⇄ max.
+5. **Row click** stays `openTeamSeat` (it already is; WA-2b-1 no longer turns it into a drill).
+Tests: state transitions (button, ⌃, header click, expand, strip name / +N); per-team memory and the old-mode mapping;
+strip replaces the title, cells open seats, no-drag only on the strip's children; button lit / dim / absent; a tab switch
+between a titlebar team and a pane team keeps each one's state (real `TabContent` test).
+Screenshot gate (zh-TW, dark): title bar with the strip (fits / +N), the button lit and dim, the pane in line / full / max.
+Size ~450 lines.
+
 ## WA-1 SPA: workbook data layer
 
 1. `lib/workbook/types.ts`, `api.ts` (`fetchConversation(hostId, provider, sessionId, {limit, before})`, `fetchEntries`),
@@ -442,6 +465,9 @@ Size ~650 lines.
    status; none without a workbook or `workbook.v1` (the row is then one line).
 2. **Click** (TI spec §4.4 amended): on a `workbook.v1` host a full row → `teamDrill[teamKey] = seat`, the row's bot icon →
    `openTeamSeat`; one-line cells and non-`workbook.v1` hosts keep `openTeamSeat`.
+   *Round 3 (user 2026-10-10) replaces this:* a row click stays `openTeamSeat`; **a workbook button at the row's end**
+   (`Notebook`, after the context ring; lead and members; only on a `workbook.v1` host whose conversation has a
+   workbook) → `teamDrill[teamKey] = seat`; an ended row's click and button both drill.
 3. **Ended list** (TI spec §4.4 amended, codex #8): `endedSeats: Record<teamKey, {hostId, sessionId, title, endedAt}[]>`
    in `useTeamUiStore` — a seat that leaves the team's roster on a frame from its connected host is recorded (newest
    first, cap 20, pruned with the team); full mode shows a collapsed 「已結束 (N)」 group at the bottom; a click drills
@@ -450,6 +476,11 @@ Size ~650 lines.
    `workbook.v1` host whose session has a workbook (`convOfSession` known, or a `limit: 1` probe returning 200) →
    `workbookTabs[tabId] = true`; toggling again deletes it; closing the tab prunes it. The workbook view itself is a
    placeholder until WA-2b-2 (status + the latest entries, plain).
+   *Round 3 (user 2026-10-10) replaces this:* no per-tab toggle and no `workbookTabs`. A tab not in a team whose `cc`
+   session has a workbook on a `workbook.v1` host shows that workbook in the four states of WA-2a′ (shared non-team
+   value); in `titlebar` / `line` it is one line — the first sentence of the latest `status` — and a click brings the
+   area into the pane; the title-bar button now also appears for such a tab. `panelView` becomes: team tab → team view
+   (or the drilled workbook); else the tab's conversation's workbook when it has one; else nothing.
 Tests: rows to the prototype (ring position, no percent, tooltip carries model / effort / %); task line present / absent;
 row click drills, bot icon opens the tab, back returns; non-`workbook.v1` row click opens the tab; ended seat recorded
 once, listed, drill works, pruned with the team, cap 20; toolbar toggle on a team tab (back to team view) and a plain
@@ -496,7 +527,7 @@ screen lands on its entry; a done item older than the first page is found.
 ## 7. Order
 
 Daemon + mod (second seat): WB-1b′-a → WB-1b′-b → WB-1b′-c → WB-1c (+ M4 / M6) → WB-3 → WB-2b-i → WB-2b-ii (+ M5).
-App (solo): TI-7 → X5-App → WA-1 → WA-2b-1 → WA-2b-2.
+App (solo): TI-7 → X5-App (a, b) → WA-2a′ → WA-1 → WA-2b-1 → WA-2b-2.
 Deploy: WB-1b′-* are inert until WB-1c (no mod announces `workbook.v2`, so every turn is `skipped: no_mod`); WB-1c needs
 `pdx setup`; WA-1 / WA-2b need WB-2 (v1) and WB-2b-i (v2) deployed for real data.
 
