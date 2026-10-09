@@ -198,6 +198,25 @@ describe('selectTeamViews — which tab shows a seat', () => {
     expect([v.members[0].tabId, v.members[0].workspaceId]).toEqual(['ta2', 'w2'])
   })
 
+  it('groupTabId: a member\'s tab in the lead\'s workspace only; a tab elsewhere stays its tabId but is not the group\'s', () => {
+    const t = team('t', sess('L', 'lead-tm'), [mem('A', 1, 'a-tm'), mem('B', 2, 'b-tm')])
+    const [v] = selectTeamViews(input({
+      rosterByHost: { h1: [t] },
+      tabs: [tab('tl', leaf('h1', 'lead-tm')), tab('ta', leaf('h1', 'a-tm')), tab('tb1', leaf('h1', 'b-tm')), tab('tb2', leaf('h1', 'b-tm'))],
+      workspaces: [ws('w1', ['tl', 'tb2']), ws('w2', ['ta', 'tb1'])],
+      activeWorkspaceId: 'w2',
+    }))
+    expect(v.lead.groupTabId).toBe('tl')
+    expect([v.members[0].tabId, v.members[0].groupTabId]).toEqual(['ta', null])
+    expect(v.members[1].groupTabId).toBe('tb2')
+  })
+
+  it('groupTabId: a lead with no tab leaves the member\'s tab as it is (no group yet)', () => {
+    const t = team('t', sess('L', 'lead-tm'), [mem('A', 1, 'a-tm')])
+    const [v] = selectTeamViews(input({ rosterByHost: { h1: [t] }, tabs: [tab('ta', leaf('h1', 'a-tm'))], workspaces: [ws('w2', ['ta'])] }))
+    expect(v.members[0].groupTabId).toBe('ta')
+  })
+
   it('...else the active workspace, else the first in tab order', () => {
     const t = team('t', sess('L', 'lead-tm'), [mem('A', 1, 'a-tm')])
     const base = {

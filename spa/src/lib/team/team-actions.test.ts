@@ -50,11 +50,33 @@ describe('openTeamSeat', () => {
     expect(Object.keys(useTabStore.getState().tabs)).toHaveLength(before)
   })
 
-  it('switches to a seat\'s tab in another workspace, and the workspace on screen follows', () => {
-    seedScene({ members, tabs: [['lead', 'lead-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }, { id: 'w2', tabs: ['ma'] }], activeWorkspaceId: 'w1' })
-    expect(openTeamSeat(KEY, 'A').outcome).toBe('activated')
+  it('switches to the LEAD\'s tab in another workspace, and the workspace on screen follows', () => {
+    seedScene({ members, tabs: [['lead', 'lead-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['x'] }, { id: 'w2', tabs: ['lead'] }, { id: 'w3', tabs: ['ma'] }], activeWorkspaceId: 'w1' })
+    expect(openTeamSeat(KEY, 'L').outcome).toBe('activated')
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w2')
-    expect(useTabStore.getState().activeTabId).toBe('ma')
+    expect(useTabStore.getState().activeTabId).toBe('lead')
+  })
+
+  it('a member whose only tab is in another workspace opens a new tab after the group; that tab is left alone (user 2026-10-10)', () => {
+    seedScene({ members, tabs: [['lead', 'lead-tm'], ['mb', 'b-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead', 'mb'] }, { id: 'w2', tabs: ['ma'] }], activeWorkspaceId: 'w2' })
+    const r = openTeamSeat(KEY, 'A')
+    expect(r.outcome).toBe('opened')
+    expect(r.tabId).not.toBe('ma')
+    expect(wsTabs('w1')).toEqual(['lead', 'mb', r.tabId])
+    expect(wsTabs('w2')).toEqual(['ma'])
+    expect(useTabStore.getState().activeTabId).toBe(r.tabId)
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w1')
+  })
+
+  it('a member with a tab in the group switches to it even when another workspace shows the session too', () => {
+    seedScene({ members, tabs: [['lead', 'lead-tm'], ['ma', 'a-tm'], ['ma2', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead', 'ma'] }, { id: 'w2', tabs: ['ma2'] }], activeWorkspaceId: 'w2' })
+    expect(openTeamSeat(KEY, 'A')).toEqual({ outcome: 'activated', tabId: 'ma' })
+    expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w1')
+  })
+
+  it('a lead with no tab: its member\'s tab elsewhere is still switched to (today\'s flow)', () => {
+    seedScene({ members, tabs: [['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: [] }, { id: 'w2', tabs: ['ma'] }], activeWorkspaceId: 'w1' })
+    expect(openTeamSeat(KEY, 'A')).toEqual({ outcome: 'activated', tabId: 'ma' })
   })
 
   it('reopens a closed lead first, in the ghost workspace, then the member after it', () => {
@@ -172,6 +194,19 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(before)
     expect(useUndoToast.getState().toast?.message).toMatch(/\S/)
     expect(useUndoToast.getState().toast?.message).not.toContain('{{')
+  })
+
+  it('a remote member with a tab only in another workspace opens a new tab beside the group, leaving that tab alone', () => {
+    seedRemote(true)
+    const rTab = { ...tabOn('rTab', null), layout: { type: 'leaf', pane: { id: 'p-rTab', content: { kind: 'tmux-session', hostId: 'h2', sessionCode: 'code-r-tm', mode: 'terminal', cachedName: 'r-tm', tmuxInstance: 'i' } } } } as never
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, rTab }, tabOrder: [...useTabStore.getState().tabOrder, 'rTab'] })
+    useWorkspaceStore.setState({ workspaces: useWorkspaceStore.getState().workspaces.map((w) => (w.id === 'w2' ? { ...w, tabs: ['rTab'] } : w)) })
+    const r = openTeamSeat(KEY, 'R')
+    expect(r.outcome).toBe('opened')
+    expect(r.tabId).not.toBe('rTab')
+    expect(wsTabs('w1')).toEqual(['lead', 'ma', r.tabId])
+    expect(wsTabs('w2')).toEqual(['rTab'])
+    expect(useTabStore.getState().activeTabId).toBe(r.tabId)
   })
 
   it('a remote seat with a mapped host opens its tab on that host, after the group\'s last tab in the lead\'s workspace', () => {

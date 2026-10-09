@@ -155,6 +155,10 @@ export interface PeerHostRow {
   has_token: boolean          // outbound token present (what we present to them)
   has_inbound_token: boolean  // what they must present to us
   allow_bypass: boolean
+  /** Cross-host team consent (spec §5.4): may this peer open members here. Absent on a daemon without it = off. */
+  allow_team?: boolean
+  /** Absolute folders the peer's members may be opened in; the daemon canonicalises. Absent = none. */
+  team_roots?: string[]
   rotation_pending: boolean                   // inbound_token_prev is set (spec §6.1)
   last_inbound_auth: '' | 'current' | 'prev'  // which token the peer LAST presented, derived at read time (§6.2)
 }
@@ -486,7 +490,8 @@ export function verifyPeerHost(hostId: string, alias: string): Promise<PeerHostV
 }
 
 /**
- * `PUT /api/peers/hosts/{alias}`: any subset of `{alias, token, allow_bypass}`.
+ * `PUT /api/peers/hosts/{alias}`: any subset of `{alias, token, allow_bypass, allow_team, team_roots}`
+ * (pointer fields on the daemon: absent = unchanged; `team_roots: []` clears).
  * D2 passes only `alias` (adopt the peer's self alias = plain rename, spec D-5).
  * D4 passes `token` for the push step (the daemon verifies with it before
  * storing); a token value must never be held longer than the call that
@@ -494,13 +499,37 @@ export function verifyPeerHost(hostId: string, alias: string): Promise<PeerHostV
  */
 export function updatePeerHost(
   hostId: string, alias: string,
-  patch: { alias?: string; token?: string; allow_bypass?: boolean },
+  patch: { alias?: string; token?: string; allow_bypass?: boolean; allow_team?: boolean; team_roots?: string[] },
 ): Promise<PeerHostRow> {
   return hostFetch(hostId, `/api/peers/hosts/${encodeURIComponent(alias)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   }).then(peerHostJson<PeerHostRow>)
+}
+
+/** One live remote member on this (member) host: `GET /api/team/remote-members` (internal/team/wire_remote_members.go). */
+export interface RemoteMemberView {
+  mk: string
+  title: string
+  cwd: string
+  lead_host_id: string
+  lead_alias: string
+}
+
+export async function listRemoteMembers(hostId: string): Promise<RemoteMemberView[]> {
+  const body = await peerHostJson<{ members: RemoteMemberView[] | null }>(await hostFetch(hostId, '/api/team/remote-members'))
+  return body.members ?? []
+}
+
+/** `POST /api/team/remote-members/end {mk}`; 409 = no longer live (the caller treats it as done). */
+export async function endRemoteMember(hostId: string, mk: string): Promise<void> {
+  const res = await hostFetch(hostId, '/api/team/remote-members/end', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mk }),
+  })
+  if (!res.ok) throw await peerHostError(res)
 }
 
 export function fetchPeerSettings(hostId: string): Promise<PeerSettings> {

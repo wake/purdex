@@ -26,6 +26,7 @@ import { FlowNote } from './peers/FlowNote'
 import { PairWithSection } from './peers/PairWithSection'
 import { RotationControls } from './peers/RotationControls'
 import { SelfAliasLine } from './peers/SelfAliasLine'
+import { TeamConsent } from './peers/TeamConsent'
 
 const STATUS_CLASS: Record<PairStatus, string> = {
   bidirectional: 'text-status-success',
@@ -297,6 +298,8 @@ function PeerRow({ hostId, hostName, xUrl, self, row, busy, flow, runFlow }: Row
           </div>
         )}
       </div>
+
+      <TeamConsent hostId={hostId} row={entry} busy={busy} runFlow={runFlow} />
 
       <FlowNote flow={flow} flowKey={rowKey(entry.alias)} />
 

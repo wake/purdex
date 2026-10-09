@@ -9,7 +9,7 @@ import type { TeamView, Seat } from './team-views'
 
 const seat = (label: string): Seat => ({
   role: 'lead', session: { session_id: 'L', ref: '_L', address: 'a/b', live: true }, state: 'active', origin: null,
-  joinedAt: 0, label, hostId: 'h1', hostAlias: '', remote: false, tabId: null, workspaceId: null, paneIndex: null,
+  joinedAt: 0, label, hostId: 'h1', hostAlias: '', remote: false, tabId: null, workspaceId: null, paneIndex: null, groupTabId: null, groupPaneIndex: null,
 })
 const view = (over: { name?: string; label?: string; lead?: string } = {}): TeamView => ({
   key: 'h\u0000t', hostId: 'h', teamId: 't', createdAt: 0, colorIndex: 0,

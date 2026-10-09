@@ -93,6 +93,7 @@ describe('CcUsageSegments', () => {
     expect(ctx.getAttribute('data-shown')).toBe('37')
     expect(frac(ctx)).toBeCloseTo(0.37, 5)
     expect(ctx.getAttribute('data-tone')).toBe('ok')
+    expect(ctx.getAttribute('data-direction')).toBe('ccw') // a used ring grows counterclockwise
     const five = arcOf('status-seg-usage-five-hour')
     expect(five.getAttribute('data-used')).toBe('12')
     expect(five.getAttribute('data-shown')).toBe('88')
@@ -101,6 +102,7 @@ describe('CcUsageSegments', () => {
     expect(week.getAttribute('data-shown')).toBe('7')
     expect(frac(week)).toBeCloseTo(0.07, 5)
     expect(week.getAttribute('data-tone')).toBe('danger')
+    expect(week.getAttribute('data-direction')).toBe('cw') // remaining: bright part runs clockwise from 12, so it shrinks counterclockwise
     expect(week.getAttribute('class')).toContain('stroke-status-error')
   })
 

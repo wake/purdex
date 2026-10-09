@@ -2,6 +2,7 @@
 //
 // Monochrome on purpose: color belongs to the lights. (Ported from the prototype at f61748aa.)
 
+import { ringGeometry, ringTransform, type UsageTone } from '../../lib/usage-display'
 import { MODEL_LABEL, type ModelFamily } from './model-family'
 
 const PATHS: Record<ModelFamily, string> = {
@@ -30,26 +31,32 @@ export function ModelIcon({ model, size = 11 }: { model: ModelFamily | undefined
   )
 }
 
-/** Context usage as a ring; the model shape sits in the middle. */
+const TONE_CLASS: Record<UsageTone, string> = { ok: 'stroke-status-success', warn: 'stroke-status-warning', danger: 'stroke-status-error' }
+
+/** Context usage as a USED ring (grows counterclockwise from 12 o'clock, coloured by used %); the model shape sits in the middle. */
 export function ContextRing({ pct, model, size = 22 }: { pct: number | undefined; model: ModelFamily | undefined; size?: number }) {
   const r = size / 2 - 2
   const c = 2 * Math.PI * r
-  const v = Math.max(0, Math.min(100, pct ?? 0)) / 100 * c
+  const geo = pct === undefined ? null : ringGeometry(pct, 'used')
   return (
     <span className="relative inline-grid place-items-center flex-shrink-0" style={{ width: size, height: size }} data-testid="context-ring">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="absolute inset-0">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border-default)" strokeWidth={2} />
-        {pct !== undefined && (
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border-default)" strokeWidth={2.5} opacity={0.6} />
+        {geo && (
           <circle
+            data-testid="context-ring-arc"
+            data-shown={geo.sharePct}
+            data-tone={geo.tone}
+            data-direction={geo.direction}
+            className={TONE_CLASS[geo.tone]}
             cx={size / 2}
             cy={size / 2}
             r={r}
             fill="none"
-            stroke="var(--text-secondary)"
-            strokeWidth={2}
+            strokeWidth={2.5}
             strokeLinecap="round"
-            strokeDasharray={`${v.toFixed(2)} ${c.toFixed(2)}`}
-            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+            strokeDasharray={`${(geo.sharePct / 100 * c).toFixed(2)} ${c.toFixed(2)}`}
+            transform={ringTransform(size, geo.direction)}
           />
         )}
       </svg>

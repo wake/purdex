@@ -39,6 +39,13 @@ export interface Seat {
   /** Pre-order index of the pane showing the seat in its chosen `tabId` (0 = the primary pane); null with `tabId`.
    *  About the chosen tab only — another tab may show the seat too (`teamOfTab` reads each tab's own panes). */
   paneIndex: number | null
+  /** The tab a team surface (bead, panel row, one-line cell) switches to for this seat. The lead: its `tabId`. A member:
+   *  the tab of its session in the LEAD TAB's workspace (the group), else null: a tab of the same session in another
+   *  workspace stays a plain tab and is not used (user 2026-10-10). A member whose lead has no tab: its `tabId`
+   *  (there is no group yet). */
+  groupTabId: string | null
+  /** `paneIndex` of the seat inside `groupTabId`; null with it. */
+  groupPaneIndex: number | null
 }
 
 export interface TeamView {
@@ -207,17 +214,24 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
   const seat = (
     team: TeamRoster, leadHostId: string, role: Seat['role'], session: RosterSession,
     extra: { origin: string | null; state: string; joinedAt: number }, preferred: ReadonlyArray<string | null>,
+    group?: { leadHasTab: boolean; workspaceId: string | null },
   ): Seat => {
     // A member whose `host_id` is another host's lives there: the SPA host that daemon id maps to, else null (not configured).
     const untrusted = session.host_untrusted === true // a host_id was sent but cannot be trusted: another host, unnamed
     const remote = untrusted || (!!session.host_id && session.host_id !== team.host_id)
     const hostId = untrusted ? null : remote ? input.hostIdByDaemonId?.[session.host_id!] ?? null : leadHostId
-    const found = session.tmux_session && hostId !== null
-      ? chooseTab(index.get(sessionKey(hostId, session.tmux_session)), preferred, workspaceOrder)
-      : null
+    const candidates = session.tmux_session && hostId !== null
+      ? index.get(sessionKey(hostId, session.tmux_session))
+      : undefined
+    const found = chooseTab(candidates, preferred, workspaceOrder)
+    // A member with a lead tab in a workspace: only the tab inside that workspace is the group's.
+    const inGroup = group?.leadHasTab && group.workspaceId !== null
+      ? chooseTab(candidates?.filter((c) => c.workspaceId === group.workspaceId), [group.workspaceId], [])
+      : found
     return {
       role, session, ...extra, label: labelOf(session), hostId, remote, hostAlias: remote ? session.host_alias ?? '' : '',
       tabId: found?.tabId ?? null, workspaceId: found?.workspaceId ?? null, paneIndex: found?.paneIndex ?? null,
+      groupTabId: inGroup?.tabId ?? null, groupPaneIndex: inGroup?.paneIndex ?? null,
     }
   }
 
@@ -234,7 +248,8 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
         colorIndex: team.team_color ?? fnv1a32(team.id) % COLOR_COUNT,
         lead,
         members: orderMembers(team, input.memberOrder?.[key]).map((m) =>
-          seat(team, hostId, 'member', m, { origin: m.origin, state: m.state, joinedAt: m.joined_at }, preferred)),
+          seat(team, hostId, 'member', m, { origin: m.origin, state: m.state, joinedAt: m.joined_at }, preferred,
+            { leadHasTab: lead.tabId !== null, workspaceId: lead.workspaceId })),
       })
     }
   }

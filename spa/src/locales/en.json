@@ -2245,5 +2245,20 @@
   "unattended.cap.failed": "{{host}}: the cap of {{session}} was not changed ({{code}})",
   "unattended.held.title": "Out of quota, waiting for you",
   "unattended.held.row_member": "{{host}}: {{lead}} wants to relay member {{member}} · {{time}}",
-  "unattended.held.row": "{{host}}: {{session}} · relay request · {{time}}"
+  "unattended.held.row": "{{host}}: {{session}} · relay request · {{time}}",
+  "peers.team.allow": "Allow {{alias}} to open members on this host",
+  "peers.team.roots": "Folders its members may use",
+  "peers.team.roots_empty": "No folders set",
+  "peers.team.root_add": "Add",
+  "peers.team.root_remove": "Remove",
+  "peers.team.root_placeholder": "Absolute path, e.g. /Users/me/Workspace",
+  "peers.team.end_title": "Turn off team consent for {{alias}}",
+  "peers.team.end_body": "{{alias}} has {{count}} member(s) still running on this host. End them too?",
+  "peers.team.end_confirm": "End these members and turn off",
+  "peers.team.end_keep": "Turn off only, keep these members",
+  "peers.team.leftover": "Consent for {{alias}} is off, but {{count}} member(s) are still live.",
+  "peers.team.leftover_error": "Consent for {{alias}} is off, but members may still be live ({{details}}).",
+  "peers.team.retry": "Retry ending",
+  "peers.team.row_gone": "Peer no longer listed: {{alias}}",
+  "peers.team.leftover_gone": "Consent for {{alias}} is off, but the host could not be found, so members could not be confirmed ended."
 }

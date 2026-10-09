@@ -1,5 +1,22 @@
 import { describe, it, expect } from 'vitest'
-import { epochToMs, formatResetsIn, parseCcUsage, remainingPct, usedPct, usageTone } from './usage-display'
+import { epochToMs, formatResetsIn, parseCcUsage, remainingPct, ringGeometry, ringTransform, usedPct, usageTone } from './usage-display'
+
+describe('ringGeometry', () => {
+  it.each([
+    [15, 'ok'], [50, 'ok'], [75, 'warn'], [95, 'danger'],
+  ] as const)('used %i: used ring grows ccw by used, remaining ring runs cw by what is left, tone %s for both', (u, tone) => {
+    expect(ringGeometry(u, 'used')).toEqual({ sharePct: u, direction: 'ccw', tone })
+    expect(ringGeometry(u, 'remaining')).toEqual({ sharePct: 100 - u, direction: 'cw', tone })
+  })
+  it('clamps', () => {
+    expect(ringGeometry(120, 'used').sharePct).toBe(100)
+    expect(ringGeometry(-5, 'remaining').sharePct).toBe(100)
+  })
+  it('ccw mirrors about the centre after the 12 o clock rotation; cw only rotates', () => {
+    expect(ringTransform(12, 'cw')).toBe('rotate(-90 6 6)')
+    expect(ringTransform(12, 'ccw')).toBe('translate(12 0) scale(-1 1) rotate(-90 6 6)')
+  })
+})
 
 describe('parseCcUsage', () => {
   it('reads the real payload field names; resets_at is epoch seconds', () => {

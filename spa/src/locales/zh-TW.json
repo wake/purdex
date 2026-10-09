@@ -2245,5 +2245,20 @@
   "unattended.cap.failed": "{{host}}：{{session}} 的上限沒有調整（{{code}}）",
   "unattended.held.title": "額度用完，等你核准",
   "unattended.held.row_member": "{{host}}：{{lead}} 要幫 member {{member}} 接力 · {{time}}",
-  "unattended.held.row": "{{host}}：{{session}} · 接力申請 · {{time}}"
+  "unattended.held.row": "{{host}}：{{session}} · 接力申請 · {{time}}",
+  "peers.team.allow": "允許 {{alias}} 在這台開 member",
+  "peers.team.roots": "member 可使用的資料夾",
+  "peers.team.roots_empty": "尚未設定資料夾",
+  "peers.team.root_add": "新增",
+  "peers.team.root_remove": "移除",
+  "peers.team.root_placeholder": "絕對路徑，例如 /Users/me/Workspace",
+  "peers.team.end_title": "關閉 {{alias}} 的 team 同意",
+  "peers.team.end_body": "{{alias}} 目前在這台有 {{count}} 個 member 仍在執行。要一併結束它們嗎？",
+  "peers.team.end_confirm": "結束這些 member 並關閉",
+  "peers.team.end_keep": "只關閉，保留這些 member",
+  "peers.team.leftover": "{{alias}} 的同意已關閉，但仍有 {{count}} 個 member 在線。",
+  "peers.team.leftover_error": "{{alias}} 的同意已關閉，但可能仍有 member 在線（{{details}}）。",
+  "peers.team.retry": "重試結束",
+  "peers.team.row_gone": "這個 peer 已不在清單中：{{alias}}",
+  "peers.team.leftover_gone": "{{alias}} 的同意已關閉，但找不到該主機，無法確認 member 是否已結束。"
 }
