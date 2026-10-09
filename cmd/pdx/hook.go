@@ -264,7 +264,9 @@ func hookDecision(ctx context.Context, in hookDecideInput) (out []byte, asked bo
 		// lock answer needs only the ids, and a body over the daemon's 1 MiB
 		// cap would be a 400 — i.e. no decision, and a lock silently
 		// bypassed for exactly the biggest writes.
-		req.ToolInput, req.Raw = nil, nil
+		// What stays is the file_path alone: the relay lock allows exactly the handoff Write, and the handoff is the
+		// biggest write of all (P6-3b-2 attacker), so the daemon must still see where it goes.
+		req.ToolInput, req.Raw = filePathOnly(stdin.ToolInput), nil
 	}
 	var resp team.HookDecideResponse
 	// The decision is a read in POST clothing (the daemon writes nothing
@@ -283,6 +285,21 @@ func hookDecision(ctx context.Context, in hookDecideInput) (out []byte, asked bo
 		return nil, true
 	}
 	return append(out, '\n'), true
+}
+
+// filePathOnly is {"file_path": <path>} when tool_input has a string file_path of a sane length, else nil.
+func filePathOnly(toolInput json.RawMessage) json.RawMessage {
+	var in struct {
+		FilePath string `json:"file_path"`
+	}
+	if json.Unmarshal(toolInput, &in) != nil || in.FilePath == "" || len(in.FilePath) > 4096 {
+		return nil
+	}
+	b, err := json.Marshal(map[string]string{"file_path": in.FilePath})
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // queryTmuxSession runs `tmux display-message -p '#{session_name}'` and returns

@@ -156,7 +156,7 @@ func TestHookDecision_FlagAndDenyPrintsPreToolUseJSONOnly(t *testing.T) {
 }
 
 // A Write of a large file: the stdin is far over 64 KiB, the request goes
-// out with the ids only (no tool_input, no raw) and the deny still lands.
+// out with the ids and the file_path only (no content, no raw) and the deny still lands; the relay lock needs the path.
 // Without the cap a > 1 MiB body would be a 400 from the daemon — no
 // decision, the lock bypassed for the biggest writes exactly.
 func TestHookDecision_LargeStdinSendsIdsOnly(t *testing.T) {
@@ -173,7 +173,7 @@ func TestHookDecision_LargeStdinSendsIdsOnly(t *testing.T) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	got := d.decides[0]
-	if got.SessionID != "cc-sid-1" || got.ToolName != "Write" || got.ToolUseID != "toolu_big" || len(got.ToolInput) != 0 || len(got.Raw) != 0 {
+	if got.SessionID != "cc-sid-1" || got.ToolName != "Write" || got.ToolUseID != "toolu_big" || string(got.ToolInput) != `{"file_path":"/w/big.txt"}` || len(got.Raw) != 0 {
 		t.Fatalf("decide body must carry the ids only: session=%q tool=%q use=%q input=%d raw=%d", got.SessionID, got.ToolName, got.ToolUseID, len(got.ToolInput), len(got.Raw))
 	}
 }
