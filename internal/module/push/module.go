@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/core"
@@ -53,20 +54,22 @@ type Module struct {
 	// The trigger side (started in Start, only when ready). events / newAPNs / presence are seams: nil = the real ones.
 	events   team.ApprovalEvents
 	newAPNs  func() apnsClient
-	presence presenceChecker
+	presence presenceChecker        // what the gates ask; nil = pres
+	pres     *Presence              // what PUT /api/push/presence feeds
 	sender   atomic.Pointer[sender] // read by the approval callback, which Stop does not wait for
 	unsub    func()
 }
 
-// presenceChecker answers "does a present Mac show this tmux session" (push spec R6, §5.4). The presence reports arrive
-// in PU-3; until then nothing is ever shown.
-type presenceChecker interface{ ShowsName(tmuxSession string) bool }
+// presenceChecker answers "does a present Mac show this session" (push spec R6, §5.4): by tmux session name for an
+// approval, by session code for an agent event.
+type presenceChecker interface {
+	ShowsName(tmuxSession string) bool
+	ShowsCode(code string) bool
+}
 
-type noPresence struct{}
-
-func (noPresence) ShowsName(string) bool { return false }
-
-func New() *Module { return &Module{home: os.UserHomeDir, devices: map[string]push.Device{}} }
+func New() *Module {
+	return &Module{home: os.UserHomeDir, devices: map[string]push.Device{}, pres: NewPresence(time.Now)}
+}
 
 func (m *Module) Name() string           { return "push" }
 func (m *Module) Dependencies() []string { return []string{"team"} }
@@ -151,6 +154,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/push/devices", m.handlePost)
 	mux.HandleFunc("GET /api/push/devices", m.handleList)
 	mux.HandleFunc("DELETE /api/push/devices/{device_id}", m.handleDelete)
+	mux.HandleFunc("PUT /api/push/presence", m.handlePresence)
 }
 
 // Start arms the approval trigger: the sender goroutine, then the subscription to the team module's approval feed. A
@@ -172,7 +176,7 @@ func (m *Module) Start(ctx context.Context) error {
 		m.newAPNs = func() apnsClient { return &apns.Client{HTTP: &http.Client{}, Signer: signer} }
 	}
 	if m.presence == nil {
-		m.presence = noPresence{}
+		m.presence = m.pres
 	}
 	m.core.CfgMu.RLock()
 	hostID := m.core.Cfg.HostID

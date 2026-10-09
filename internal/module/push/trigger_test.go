@@ -46,6 +46,7 @@ func (f *fakeEvents) emit(op string, a team.Approval) {
 type presenceFake struct{ shows map[string]bool }
 
 func (p presenceFake) ShowsName(name string) bool { return p.shows[name] }
+func (p presenceFake) ShowsCode(code string) bool { return p.shows[code] }
 
 func leadApproval(id string) team.Approval {
 	raw, _ := json.Marshal(map[string]any{"reason": "split the work"})
