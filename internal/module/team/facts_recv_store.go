@@ -31,6 +31,10 @@ type FactPlan struct {
 	FromHostID string // the authenticated member host (the principal's host id)
 	Body       json.RawMessage
 	Now        int64
+	// Refusal, when set, is the decision the route already took from the fact's addressing or kind (wrong_host,
+	// unsupported_kind): it is stored like any other answer (§3.1 rule 3, refusals included), so a copy resent after an
+	// upgrade meets the stored refusal instead of being applied for the first time.
+	Refusal *CommandResult
 
 	fact team.TeamFact
 	hash string
@@ -71,8 +75,10 @@ func (s *Store) ApplyTeamFact(p FactPlan) (CommandResult, error) {
 		return fail(err)
 	}
 
-	switch p.fact.Kind {
-	case team.FactEnded:
+	switch {
+	case p.Refusal != nil:
+		res, err = *p.Refusal, nil
+	case p.fact.Kind == team.FactEnded:
 		res, err = s.applyEndedIn(tx, p)
 	default:
 		return CommandResult{}, ErrCommandUnsupported

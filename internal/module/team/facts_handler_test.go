@@ -109,16 +109,50 @@ func TestFacts_ShapeAndAddressing(t *testing.T) {
 		"no mk":          {noMK, 400, "bad_request"},
 		"bad id":         {badID, 400, "bad_request"},
 		"not JSON":       {"{", 400, "bad_request"},
-		"reserved moved": {team.TeamFact{ID: factUUID1, Kind: "moved", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
-		"registered":     {team.TeamFact{ID: factUUID1, Kind: "registered", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
+		"reserved moved": {team.TeamFact{ID: factUUID2, Kind: "moved", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
+		"registered":     {team.TeamFact{ID: factUUID3, Kind: "registered", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
 	} {
 		code, body := f.postFact(leadPrincipal(), tc.body)
 		if code != tc.status || errCode(t, body) != tc.code {
 			t.Fatalf("%s: %d %s, want %d %s", name, code, body, tc.status, tc.code)
 		}
 	}
-	if factLogCount(t, f) != 0 {
-		t.Fatal("a malformed or unsupported fact was logged")
+	// wrong_host and unsupported_kind are stored decisions (wrong host, moved, registered); bad_request is not.
+	if n := factLogCount(t, f); n != 3 {
+		t.Fatalf("%d logged, want 3", n)
+	}
+}
+
+// Rule 3 (codex): an unsupported_kind refusal is stored; a copy resent after this host learned the kind meets the stored
+// refusal, and another body under the id is id_conflict. Mutation gate: do not store the refusal → red.
+func TestFacts_AnUnsupportedKindRefusalIsStoredAndSurvivesAnUpgrade(t *testing.T) {
+	f := factFixture(t)
+	f.remoteRow("abc12", "lead:1", "mk1", rowActive)
+	reg := team.TeamFact{ID: factUUID1, Kind: "registered", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}
+	code, first := f.postFact(leadPrincipal(), reg)
+	if code != 400 || errCode(t, first) != "unsupported_kind" || factLogCount(t, f) != 1 {
+		t.Fatalf("first = %d %s, logged %d", code, first, factLogCount(t, f))
+	}
+	// the upgrade: the same copy would now be an applicable kind; the stored refusal still answers
+	if _, err := f.m.store.db.Exec(`UPDATE team_fact_log SET kind = kind`); err != nil {
+		t.Fatal(err)
+	}
+	code, again := f.postFact(leadPrincipal(), reg)
+	if code != 400 || !bytes.Equal(first, again) {
+		t.Fatalf("replay = %d %s, want the stored %s", code, again, first)
+	}
+	other := reg
+	other.MK = "mk2"
+	if code, body := f.postFact(leadPrincipal(), other); code != 409 || errCode(t, body) != "id_conflict" {
+		t.Fatalf("other body = %d %s", code, body)
+	}
+	// wrong_host is stored the same way
+	wrong := endedFact(factUUID2, "mk1")
+	wrong.ToHostID = "other:1"
+	_, w1 := f.postFact(leadPrincipal(), wrong)
+	_, w2 := f.postFact(leadPrincipal(), wrong)
+	if !bytes.Equal(w1, w2) || factLogCount(t, f) != 2 {
+		t.Fatalf("wrong_host replay %s vs %s, logged %d", w1, w2, factLogCount(t, f))
 	}
 }
 

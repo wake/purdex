@@ -65,15 +65,17 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandBadRequest, "id (a UUID v4), kind and team_id are required")
 		return
 	}
-	if fact.ToHostID != ourHostID {
-		m.writeCommandErr(w, http.StatusConflict, team.ErrCommandWrongHost, "this fact is addressed to another host")
-		return
-	}
-	switch fact.Kind {
-	case team.FactEnded:
-	default:
-		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(fact.Kind)+" facts")
-		return
+	// An addressing or kind refusal is a decision of this host about an identified fact (valid id, bound sender): it is
+	// stored with the fact's content hash, so the same copy later gets the same answer and another body under the id is
+	// id_conflict (rule 3). validateFact (below) stays unstored: a malformed fact has no content worth keeping.
+	var refusalPlan *CommandResult
+	switch {
+	case fact.ToHostID != ourHostID:
+		r := refusal(http.StatusConflict, team.ErrCommandWrongHost, "this fact is addressed to another host")
+		refusalPlan = &r
+	case fact.Kind != team.FactEnded:
+		r := refusal(http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(fact.Kind)+" facts")
+		refusalPlan = &r
 	}
 	if msg := validateFact(fact); msg != "" {
 		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandBadRequest, msg)
@@ -85,7 +87,7 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 		m.writeCommandErr(w, http.StatusForbidden, ipeers.ErrHostUnverified, "host entry no longer matches the authenticated host")
 		return
 	}
-	res, err := m.store.ApplyTeamFact(FactPlan{FromHostID: entry.HostID, Body: raw, Now: m.now()})
+	res, err := m.store.ApplyTeamFact(FactPlan{FromHostID: entry.HostID, Body: raw, Now: m.now(), Refusal: refusalPlan})
 	switch {
 	case errors.Is(err, ErrCommandIDConflict):
 		m.writeCommandErr(w, http.StatusConflict, team.ErrCommandIDConflict, "the id is already used by a different fact")
