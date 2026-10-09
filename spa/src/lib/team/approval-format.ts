@@ -27,7 +27,7 @@ export function formatOriginAddress(host: string, o: Origin): string {
 }
 
 export function approvalKindLabel(t: T, kind: ApprovalKind): string {
-  return t(kind === 'self_relay' ? 'approval.kind.self_relay' : 'approval.kind.lead')
+  return t(kind === 'self_relay' ? 'approval.kind.self_relay' : kind === 'adopt' ? 'approval.kind.adopt' : 'approval.kind.lead')
 }
 
 /**

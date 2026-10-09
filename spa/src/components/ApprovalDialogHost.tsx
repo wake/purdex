@@ -29,7 +29,7 @@ import { ApprovalPill } from './ApprovalPill'
 import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH, TEAM_NAME_CHARS } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
-import { leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { submitDecision } from '../lib/team/approval-decide'
@@ -80,6 +80,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const queued = useApprovalStore((s) => s.queued[approvalKey(hostId, approval.id)])
   const openCount = useApprovalStore(selectOpenCount)
   const isSelfRelay = approval.kind === 'self_relay'
+  // An adoption (U24): the lead asks to take a session in. One click, like a relay: no grant inputs.
+  const isAdopt = approval.kind === 'adopt'
+  const adopt = adoptPayloadOf(approval)
   const payload = leadPayloadOf(approval)
   const relay = selfRelayPayloadOf(approval)
   const [maxMembers, setMaxMembers] = useState(String(DEFAULT_MAX_MEMBERS)) // U25: always 3; the lead's request is only named beside the field
@@ -194,11 +197,11 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const membersErrorId = useId()
   const roots = parseRoots(rootsText)
   const rootsOk = roots.length > 0
-  const nameShown = !isSelfRelay && payload.team_name !== undefined
+  const nameShown = !isSelfRelay && !isAdopt && payload.team_name !== undefined
   const trimmedName = goTrim(teamName)
   const nameOk = !nameShown || teamNameOk(trimmedName)
   const nameErrorId = useId()
-  const labelShown = !isSelfRelay && payload.team_label !== undefined
+  const labelShown = !isSelfRelay && !isAdopt && payload.team_label !== undefined
   const trimmedLabel = goTrim(teamLabel)
   const labelBad = labelShown ? labelProblem(trimmedLabel) : null
   const labelOk = labelBad === null
@@ -206,15 +209,15 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const labelCountId = useId()
   // What an empty label becomes (D-L3): derived from the name as it stands in the dialog (edited or not), else 「（無）」.
   const derivedLabel = labelShown ? deriveTeamLabel(nameShown ? trimmedName : (payload.team_name ?? '')) : ''
-  // A self relay carries no grant (U13a: one click); only the lead kind validates its fields.
-  const grantOk = isSelfRelay || (membersOk && rootsOk && nameOk && labelOk)
+  // A self relay and an adoption carry no grant (U13a: one click); only the lead kind validates its fields.
+  const grantOk = isSelfRelay || isAdopt || (membersOk && rootsOk && nameOk && labelOk)
   const locked = busy || queued !== undefined
   const session = approvalSessionLabel(approval.origin)
 
   const decide = async (decision: Decision) => {
     if (inFlight.current || locked) return
     if (decision === 'approve' && !grantOk) return
-    const grant: Grant | undefined = !isSelfRelay && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}), ...(labelShown ? { team_label: trimmedLabel } : {}) } : undefined
+    const grant: Grant | undefined = !isSelfRelay && !isAdopt && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}), ...(labelShown ? { team_label: trimmedLabel } : {}) } : undefined
     if (!connected) {
       // A second click in the same tick still sees locked=false (React has not re-rendered the queued state):
       // the store is read synchronously so the FIRST queued decision wins (PR #1742 attacker A-2).
@@ -270,8 +273,10 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
       >
         <div className="border-b border-border-subtle px-4 py-3">
           <div className="flex items-start justify-between gap-3">
-            <h3 id={titleId} className="text-sm font-medium text-text-primary">
-              {t(isSelfRelay ? 'approval.dialog.title_self_relay' : 'approval.dialog.title_lead', { host: hostName, session })}
+            <h3 id={titleId} className="break-words text-sm font-medium text-text-primary">
+              {isAdopt
+                ? t('approval.dialog.title_adopt', { host: hostName, lead: session, target: clipForDisplay(adoptTargetLabel(adopt), 60) })
+                : t(isSelfRelay ? 'approval.dialog.title_self_relay' : 'approval.dialog.title_lead', { host: hostName, session })}
             </h3>
             {/* Never disabled: minimizing during a send is harmless (the outcome lands in the store either way). */}
             <button
@@ -299,7 +304,26 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             )}
             <dt className="text-text-muted">{t('approval.dialog.cwd')}</dt>
             <dd data-testid="approval-cwd" className="font-mono break-all text-text-primary">{approval.origin.cwd}</dd>
-            {isSelfRelay ? (
+            {isAdopt ? (
+              <>
+                <dt className="text-text-muted">{t('approval.dialog.adopt_target')}</dt>
+                {/* The title and name are written by the target session: an alias, never the identity. The ref and the
+                    session id are the daemon's, shown beside it; every string is clipped and may wrap anywhere. */}
+                <dd data-testid="approval-adopt-target" dir="auto" className="break-all text-text-primary">{clipForDisplay(adoptTargetLabel(adopt), 80)}</dd>
+                <dt className="text-text-muted">{t('approval.dialog.adopt_target_ref')}</dt>
+                <dd data-testid="approval-adopt-ref" className="font-mono break-all text-text-primary">{adopt.target_ref !== '' ? clipForDisplay(adopt.target_ref, 40) : '—'}</dd>
+                <dt className="text-text-muted">{t('approval.dialog.adopt_target_session')}</dt>
+                <dd data-testid="approval-adopt-session" className="font-mono break-all text-text-primary">{adopt.target_session_id !== '' ? clipForDisplay(adopt.target_session_id, 64) : '—'}</dd>
+                <dt className="text-text-muted">{t('approval.dialog.adopt_target_address')}</dt>
+                <dd data-testid="approval-adopt-address" dir="auto" className="font-mono break-all text-text-primary">{adopt.target_address !== '' ? clipForDisplay(adopt.target_address) : '—'}</dd>
+                <dt className="text-text-muted">{t('approval.dialog.adopt_target_cwd')}</dt>
+                <dd data-testid="approval-adopt-cwd" dir="auto" className="font-mono break-all text-text-primary">{adopt.target_cwd !== '' ? clipForDisplay(adopt.target_cwd) : '—'}</dd>
+                <dt className="text-text-muted">{t('approval.dialog.adopt_target_tmux')}</dt>
+                <dd data-testid="approval-adopt-tmux" dir="auto" className="font-mono break-all text-text-primary">{adopt.target_tmux !== '' ? clipForDisplay(adopt.target_tmux) : '—'}</dd>
+                <dt className="text-text-muted">{t('approval.dialog.adopt_team')}</dt>
+                <dd data-testid="approval-adopt-team" className="font-mono break-all text-text-primary">{adopt.team_id !== '' ? clipForDisplay(adopt.team_id, 64) : '—'}</dd>
+              </>
+            ) : isSelfRelay ? (
               <>
                 <dt className="text-text-muted">{t('approval.dialog.usage')}</dt>
                 <dd data-testid="approval-usage" className="text-text-primary">{t('approval.dialog.usage_value', { pct: Math.round(relay.used_percentage) })}</dd>
@@ -315,7 +339,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             <dt className="text-text-muted">{t('approval.dialog.deadline')}</dt>
             <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
           </dl>
-          {isSelfRelay ? (
+          {isAdopt ? (
+            <p data-testid="approval-adopt-note" className="mt-3 text-xs text-text-secondary">{t('approval.dialog.adopt_note')}</p>
+          ) : isSelfRelay ? (
             <>
               <p data-testid="approval-self-relay-note" className="mt-3 text-xs text-text-secondary">{t('approval.dialog.self_relay_note')}</p>
               <label className="mt-2 flex items-center gap-2 text-xs text-text-secondary">

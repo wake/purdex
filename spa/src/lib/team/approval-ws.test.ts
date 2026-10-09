@@ -145,6 +145,16 @@ describe('approval-ws reconnect (spec §9.4)', () => {
 
 // U22 (a), plan v3 P9b-1 rules 1–2: the queue is per renderer, so a click queued while the daemon was away switches
 // this window to the requester when its resend lands; a `closed` from another client never switches. Real tab stores.
+describe('approval-ws: an adopt row (U24)', () => {
+  // Mutation gate: leave 'adopt' out of APPROVAL_KINDS → the row is skipped as unknown → red.
+  it('an adopt row in a snapshot is kept, not skipped as an unknown kind', () => {
+    const adopt = approval({ kind: 'adopt', id: 'req-adopt', payload: { team_id: 'T', target_ref: '_t', target_session_id: 'S2' } })
+    handleApprovalEvent(H, snapshot([adopt, approval({ id: 'req-lead' })]))
+    const kinds = Object.values(useApprovalStore.getState().entries ?? {}).map((e) => (e as { approval: Approval }).approval.id)
+    expect(kinds.sort()).toEqual(['req-adopt', 'req-lead'])
+  })
+})
+
 describe('approval-ws: back to the requester (U22)', () => {
   const PAYLOADS = {
     lead: { reason: 'r', max_members: 3, roots: ['/w/purdex'] },

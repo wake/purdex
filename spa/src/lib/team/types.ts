@@ -9,7 +9,7 @@ export const APPROVAL_EVENT_TYPE = 'approval.request'
 
 /** The two 分流 kinds (spec §6.6, U19) ride the same event; the Mac App draws no card for them (U19 (b)) and drops them at the WS boundary (approval-ws.ts). */
 export type HookKind = 'hook_ask' | 'hook_permission'
-export type ApprovalKind = 'lead' | 'self_relay' | HookKind
+export type ApprovalKind = 'lead' | 'self_relay' | 'adopt' | HookKind
 
 /** `answered_local`, `terminal_override` and `dismissed` close hook kinds only; `approved` on a hook kind means "answered remotely". */
 export type ApprovalState = 'open' | 'approved' | 'denied' | 'timeout' | 'cancelled' | 'abandoned' | 'answered_local' | 'terminal_override' | 'dismissed'
@@ -93,6 +93,24 @@ export interface SelfRelayPayload {
   effort?: string
 }
 
+/**
+ * `Approval.payload` for kind `adopt` (adopt spec D-U24-2; daemon `team.AdoptPayload`): the lead that asks and the
+ * session it wants to take in. The target fields are what the dialog shows; the daemon re-checks every refusal at approve.
+ */
+export interface AdoptPayload {
+  team_id: string
+  lead_session_id: string
+  /** The target's current ref, `_xxxxxx`. */
+  target_ref: string
+  target_session_id: string
+  title: string
+  target_name: string
+  target_address: string
+  target_cwd: string
+  /** `<session>:@<win>.%<pane>` or ''. */
+  target_tmux: string
+}
+
 /** What the user approved, as edited in the dialog. */
 export interface Grant {
   max_members: number
@@ -131,6 +149,8 @@ export interface Approval {
   decided_by?: Client
   /** Any close; `omitempty`, so absent while open. */
   decided_at?: number
+  /** A request the daemon cancelled at approve (an adopt whose re-check failed): the refusal's code, e.g. `adopt_target_is_lead`. */
+  close_reason?: string
   /** approved only. */
   grant?: Grant
   /** Hook kinds only: the answer (`answers` for hook_ask; `behavior` for hook_permission). Never read by the Mac App. */
@@ -169,7 +189,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
-const APPROVAL_KINDS: readonly string[] = ['lead', 'self_relay', 'hook_ask', 'hook_permission'] satisfies ApprovalKind[]
+const APPROVAL_KINDS: readonly string[] = ['lead', 'self_relay', 'adopt', 'hook_ask', 'hook_permission'] satisfies ApprovalKind[]
 
 /**
  * A row whose kind this build does not know (a later daemon's): a record with a string `kind` outside
@@ -233,6 +253,33 @@ export function selfRelayPayloadOf(a: Approval): SelfRelayPayload {
     ...(typeof p.model_id === 'string' && p.model_id !== '' ? { model_id: p.model_id } : {}),
     ...(typeof p.effort === 'string' && p.effort !== '' ? { effort: p.effort } : {}),
   }
+}
+
+/** The adopt payload, defensively: every field a string, '' when missing or of another type. */
+export function adoptPayloadOf(a: Approval): AdoptPayload {
+  const p = isRecord(a.payload) ? a.payload : {}
+  const s = (k: string): string => (typeof p[k] === 'string' ? (p[k] as string) : '')
+  return {
+    team_id: s('team_id'), lead_session_id: s('lead_session_id'), target_ref: s('target_ref'),
+    target_session_id: s('target_session_id'), title: s('title'), target_name: s('target_name'),
+    target_address: s('target_address'), target_cwd: s('target_cwd'), target_tmux: s('target_tmux'),
+  }
+}
+
+/**
+ * A payload string for display: cut to `max` characters (the target session writes these, so they can be any length),
+ * with an ellipsis when cut. The dialog shows the trusted identifiers (ref, session id) beside the label it calls the target.
+ */
+export function clipForDisplay(s: string, max = 200): string {
+  // Control characters and the invisible direction / zero-width marks (RLO, LRI, PDI, ...) are dropped first: a target
+  // session could use them to reorder what the person reads around it (host, lead) in a heading that mixes runs.
+  const chars = Array.from(s.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, ''))
+  return chars.length <= max ? chars.join('') : `${chars.slice(0, max).join('')}…`
+}
+
+/** The label of an adopt target: its title, else its name, else its ref (what the dialog and the notification call it). */
+export function adoptTargetLabel(p: AdoptPayload): string {
+  return p.title !== '' ? p.title : p.target_name !== '' ? p.target_name : p.target_ref
 }
 
 /** The lead payload, normalised as the daemon normalises it: `max_members` 0 → 3, cap 8; roots default `[origin.cwd]`. */

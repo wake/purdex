@@ -136,7 +136,7 @@ describe('unattended-api', () => {
     })
 
     it('a row of a kind this build does not know (a later daemon\'s) is skipped, the page still shown', async () => {
-      testGlobal.fetch.mockResolvedValueOnce(json(view({ approved: [row('a2', 3_000), { ...row('a1', 2_000), kind: 'adopt' }] })))
+      testGlobal.fetch.mockResolvedValueOnce(json(view({ approved: [row('a2', 3_000), { ...row('a1', 2_000), kind: 'future_kind' }] })))
       expect((await getUnattended(hostId)).approved.map((a) => a.id)).toEqual(['a2'])
     })
 
