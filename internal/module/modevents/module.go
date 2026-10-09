@@ -18,6 +18,7 @@ import (
 
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/modevents"
+	"github.com/wake/purdex/internal/team"
 )
 
 // ServiceName is the core ServiceRegistry key of the *modevents.Registry.
@@ -28,6 +29,7 @@ const evictEvery = time.Minute
 
 // Module is the modevents daemon module.
 type Module struct {
+	core *core.Core
 	reg  *modevents.Registry
 	path string
 
@@ -58,6 +60,7 @@ func (m *Module) Dependencies() []string { return nil }
 // socket path from the data dir: the resolved path Listen binds at, which
 // pdx.json names too. Whether it fits is Listen's call.
 func (m *Module) Init(c *core.Core) error {
+	m.core = c
 	m.reg = modevents.NewRegistry(m.now)
 	c.Registry.Register(ServiceName, m.reg)
 	c.CfgMu.RLock()
@@ -90,7 +93,7 @@ func (m *Module) Start(ctx context.Context) error {
 		return nil
 	}
 
-	m.srv = modevents.NewServer(modevents.NewHandler(m.reg))
+	m.srv = modevents.NewServer(modevents.NewHandler(m.reg, modevents.WithTeamReader(m.teamRead)))
 	srv, ln := m.srv, m.ln
 	m.spawn(func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
@@ -113,6 +116,24 @@ func (m *Module) Start(ctx context.Context) error {
 	})
 	m.logf("[modevents] socket %s", m.path)
 	return nil
+}
+
+// teamRead asks the team module, looked up at request time so this module needs no dependency on it (team depends on
+// peers and others; the socket may be up before the team module has registered).
+func (m *Module) teamRead(sessionID string) (modevents.TeamRead, error) {
+	svc, ok := m.core.Registry.Get(team.ModReadKey)
+	if !ok {
+		return modevents.TeamRead{}, modevents.ErrTeamUnavailable
+	}
+	rd, ok := svc.(team.ModReader)
+	if !ok {
+		return modevents.TeamRead{}, modevents.ErrTeamUnavailable
+	}
+	got, err := rd.ModTeamRead(sessionID)
+	if err != nil {
+		return modevents.TeamRead{}, err
+	}
+	return modevents.TeamRead{Role: got.Role, Members: got.Members, TeamLabel: got.TeamLabel}, nil
 }
 
 func (m *Module) spawn(f func()) {
