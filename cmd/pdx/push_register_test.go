@@ -79,10 +79,19 @@ func TestRegisterServeModules_PushOn(t *testing.T) {
 	assert.Equal(t, http.StatusOK, list.Code)
 
 	info := serve(t, c, http.MethodGet, "/api/info")
-	var body struct{ Capabilities []string }
+	var body struct {
+		Capabilities []string
+		Push         map[string]any
+	}
 	require.NoError(t, json.Unmarshal(info.Body.Bytes(), &body))
 	assert.Contains(t, body.Capabilities, "push.v1")
-	assert.Contains(t, info.Body.String(), `"push":{"configured":true,"init_error":"","ready":true}`)
+	assert.Equal(t, true, body.Push["configured"])
+	assert.Equal(t, "", body.Push["init_error"])
+	assert.Equal(t, true, body.Push["ready"])
+	// How many Mac windows are reporting, as numbers only (the deploy check: presence_entries > 0 after a restart).
+	assert.EqualValues(t, 0, body.Push["presence_entries"])
+	assert.EqualValues(t, 0, body.Push["presence_active"])
+	assert.Len(t, body.Push, 5, "the push status carries nothing else: no client id, no session name")
 }
 
 // A key that cannot be loaded does not stop the daemon: core init succeeds, /api/info says why push is off, push.v1 is

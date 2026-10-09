@@ -135,9 +135,10 @@ func (m *Module) load(c *core.Core) error {
 
 // Status is what /api/info reports under "push" (alongside the core's "configured").
 func (m *Module) Status() map[string]any {
+	entries, active := m.pres.Counts() // its own lock; taken before m.mu, never inside it
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return map[string]any{"ready": m.ready, "init_error": m.initErr}
+	return map[string]any{"ready": m.ready, "init_error": m.initErr, "presence_entries": entries, "presence_active": active}
 }
 
 func (m *Module) isReady() bool {
