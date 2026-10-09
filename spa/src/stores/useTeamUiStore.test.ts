@@ -9,7 +9,7 @@ const k = (host: string, team: string) => teamKeyOf(host, team)
 
 beforeEach(() => {
   localStorage.clear()
-  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamDrill: {}, workbookTabs: {}, panel: { width: 312, expanded: false }, teamBeadHost: true })
+  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamDrill: {}, workbookTabs: {}, panel: { width: 312, expanded: false }, teamBeadHost: true, groupShadow: 'v2' })
 })
 
 describe('useTeamUiStore', () => {
@@ -23,7 +23,7 @@ describe('useTeamUiStore', () => {
     const raw = JSON.parse(localStorage.getItem('purdex-team-ui')!)
     expect(raw.state).toEqual({
       memberOrder: { [key]: ['b', 'a'] }, collapsed: { [key]: true }, panelMode: { [key]: 'line' }, ghostWorkspace: { [key]: 'w9' },
-      teamBeadHost: true, teamDrill: {}, panel: { width: 312, expanded: false }, workbookTabs: {},
+      teamBeadHost: true, groupShadow: 'v2', teamDrill: {}, panel: { width: 312, expanded: false }, workbookTabs: {},
     })
     const saved = localStorage.getItem('purdex-team-ui')!
     useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {} }) // persists the empty state too
@@ -132,6 +132,34 @@ describe('useTeamUiStore', () => {
     expect(s.collapsed).toEqual({})
     expect(s.panelMode).toEqual({})
     expect(s.ghostWorkspace).toEqual({})
+  })
+})
+
+describe('the group-shadow trial setting (TI-6, device-local)', () => {
+  it('defaults to v2, persists in purdex-team-ui', () => {
+    useTeamUiStore.persist.rehydrate()
+    expect(useTeamUiStore.getState().groupShadow).toBe('v2')
+    useTeamUiStore.getState().setGroupShadow('v3')
+    expect(JSON.parse(localStorage.getItem('purdex-team-ui')!).state.groupShadow).toBe('v3')
+    const saved = localStorage.getItem('purdex-team-ui')!
+    useTeamUiStore.setState({ groupShadow: 'v0' })
+    localStorage.setItem('purdex-team-ui', saved)
+    useTeamUiStore.persist.rehydrate()
+    expect(useTeamUiStore.getState().groupShadow).toBe('v3')
+  })
+  it.each([['v9'], [3], [null], ['']])('a bad persisted value (%j) heals to v2', (bad) => {
+    localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { groupShadow: bad }, version: 0 }))
+    useTeamUiStore.persist.rehydrate()
+    expect(useTeamUiStore.getState().groupShadow).toBe('v2')
+  })
+  it('ignores a bad variant passed in and does not notify for the same value', () => {
+    let calls = 0
+    const unsub = useTeamUiStore.subscribe(() => { calls++ })
+    useTeamUiStore.getState().setGroupShadow('v2')
+    useTeamUiStore.getState().setGroupShadow('v9' as never)
+    unsub()
+    expect(calls).toBe(0)
+    expect(useTeamUiStore.getState().groupShadow).toBe('v2')
   })
 })
 

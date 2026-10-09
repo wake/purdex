@@ -10,6 +10,8 @@ import { useTabStore } from '../stores/useTabStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
+import { useThemeStore } from '../stores/useThemeStore'
+import { groupShadow } from './team/group-shadow'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { teamKeyOf } from '../lib/team/team-views'
@@ -85,7 +87,8 @@ beforeEach(() => {
   dnd.onDragEnd = null
   clearModuleRegistry()
   registerModule({ id: 'session', name: 'Session', panes: [{ kind: 'tmux-session', component: () => null }] })
-  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamBeadHost: true })
+  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamBeadHost: true, groupShadow: 'v2' })
+  useThemeStore.setState({ activeThemeId: 'dark' })
   useTeamRosterStore.getState().reset()
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'H1', ip: '1', port: 1, daemonId: 'daemon' } } as never, hostOrder: ['h1'], runtime: {} })
 })
@@ -145,12 +148,33 @@ describe('TabBar — team group (TI-2)', () => {
       const overlay = container.querySelector(`[data-tab-id="${id}"] [data-testid="team-tab-shadow"]`) as HTMLElement
       expect(overlay, id).not.toBeNull()
       expect(overlay.className).toContain('pointer-events-none')
-      expect(overlay.getAttribute('data-shadow')).toBe('1px -1px 0 color-mix(in oklab, #a78bfa 70%, transparent)'.replace('#a78bfa', overlay.getAttribute('data-team-color')!))
+      expect(overlay.getAttribute('data-shadow')).toBe(groupShadow('v2', overlay.getAttribute('data-team-color')!, 'dark'))
       expect(overlay.getAttribute('data-wash')).toBe('6')
     }
     for (const id of ['plain', 'p2']) {
       expect(container.querySelector(`[data-tab-id="${id}"] [data-testid="team-tab-shadow"]`), id).toBeNull()
     }
+  })
+
+  it('the group-shadow setting changes the shadow the group tabs actually render (default v2)', () => {
+    const tabs = baseTabs()
+    seed([roster()], tabs)
+    const { container } = bar(tabs)
+    const read = (id: string) => (container.querySelector(`[data-tab-id="${id}"] [data-testid="team-tab-shadow"]`) as HTMLElement).getAttribute('data-shadow')!
+    const color = (container.querySelector('[data-tab-id="lead"] [data-testid="team-tab-shadow"]') as HTMLElement).getAttribute('data-team-color')!
+    expect(useTeamUiStore.getState().groupShadow).toBe('v2')
+    expect(read('lead')).toBe(groupShadow('v2', color, 'dark'))
+    const seen = new Set<string>()
+    for (const v of ['v0', 'v1', 'v2', 'v3'] as const) {
+      act(() => useTeamUiStore.getState().setGroupShadow(v))
+      for (const id of ['lead', 'ma', 'mb']) expect(read(id), `${v} ${id}`).toBe(groupShadow(v, color, 'dark'))
+      seen.add(read('lead'))
+    }
+    expect(seen.size).toBe(4)
+    // light theme: darkened base (the data-team-color is the raw colour in dark)
+    act(() => useThemeStore.setState({ activeThemeId: 'light' }))
+    expect(read('lead')).toBe(groupShadow('v3', color, 'light'))
+    expect(read('lead')).not.toBe(groupShadow('v3', color, 'dark'))
   })
 
   it('no separator inside the group or after it', () => {
