@@ -439,7 +439,9 @@ func (m *Module) Init(c *core.Core) error {
 // RegisterRoutes mounts the /api/team/* routes, the hook decision route,
 // the relay routes and the 分流 routes (Go method patterns).
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST "+CommandsRoute, m.handleTeamCommand) // cross-host team commands (X2b); a host principal's, not the admin's
+	mux.HandleFunc("POST "+CommandsRoute, m.handleTeamCommand)               // cross-host team commands (X2b); a host principal's, not the admin's
+	mux.HandleFunc("GET "+team.RemoteMembersRoute, m.handleRemoteMembersGet) // the admin's view of remote members (X2c)
+	mux.HandleFunc("POST "+team.RemoteMembersEndRoute, m.handleRemoteMembersEnd)
 	mux.HandleFunc("POST /api/team/approvals", m.handleCreate)
 	mux.HandleFunc("GET /api/team/approvals", m.handleList)
 	mux.HandleFunc("GET /api/team/approvals/{id}", m.handleGet)
