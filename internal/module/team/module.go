@@ -105,7 +105,8 @@ type Module struct {
 	sweepWG    sync.WaitGroup
 	// unsubTurnEnd ends the subscription to the agent module's turn ends (T-3a2); nil when none.
 	unsubTurnEnd func()
-	tickN        int // sweeper ticks so far; only the sweeper goroutine (or a test) touches it
+	turnEndMu    sync.RWMutex // held (read) by a turn-end write in flight; Stop takes it once to wait for them
+	tickN        int          // sweeper ticks so far; only the sweeper goroutine (or a test) touches it
 	// bootAt is when Start ran (unix ms): no team ends before bootAt +
 	// BootGraceS, the grace open requests get (spec §9.2). 0 for a module
 	// that never started (most tests): no grace.
@@ -435,6 +436,8 @@ func (m *Module) Stop(context.Context) error {
 		m.unsubTurnEnd()
 		m.unsubTurnEnd = nil
 	}
+	m.turnEndMu.Lock() // a turn-end write already past its stopping() check finishes first; later ones see stopping()
+	m.turnEndMu.Unlock()
 	m.dropSessionSubs()
 	m.sweepWG.Wait()
 	m.spawnWG.Wait()

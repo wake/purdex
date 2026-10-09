@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/team"
@@ -315,4 +316,58 @@ func TestLastTurn_ALateEventNeverReappearsWhenTheTargetMoves(t *testing.T) {
 	if sum, at, _ := w.rowTurn(w.ma.SpawnOp); at != 200 || sum != "newer, on the row." {
 		t.Fatalf("row = %q @%d", sum, at)
 	}
+}
+
+// Stop does not return while a turn-end write is in flight (the agent hub may deliver a queued event
+// after unsubscribe), and nothing writes after it. Mutation gate: drop the turnEndMu wait → red.
+func TestLastTurn_StopWaitsForAWriteInFlight(t *testing.T) {
+	w := newTaskWorld(t)
+	inTx := make(chan struct{})
+	release := make(chan struct{})
+	w.m.store.beforeTaskCommit = func() error { close(inTx); <-release; return nil }
+	done := make(chan struct{})
+	go func() { w.turn("sid-ma", "slow write.", 100, 1); close(done) }()
+	<-inTx
+	stopped := make(chan struct{})
+	go func() { _ = w.m.Stop(nil); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while a turn-end write was in flight")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	<-done
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop never returned")
+	}
+	w.m.store.beforeTaskCommit = nil
+	w.turn("sid-ma", "after stop.", 200, 2)
+	if sum, at, _ := w.rowTurn(w.ma.SpawnOp); at != 100 || sum != "slow write." {
+		t.Fatalf("a write after Stop: %q @%d", sum, at)
+	}
+}
+
+// A session that is not a member never takes the write lock: a write transaction held open by someone
+// else does not delay it. Mutation gate: begin the transaction before looking → red.
+func TestLastTurn_ANonMemberDoesNotWaitForTheWriteLock(t *testing.T) {
+	w := newTaskWorld(t)
+	inTx := make(chan struct{})
+	release := make(chan struct{})
+	w.m.store.beforeTaskCommit = func() error { close(inTx); <-release; return nil }
+	go func() { w.turn("sid-mb", "holds the lock.", 100, 1) }()
+	<-inTx
+	done := make(chan struct{})
+	go func() {
+		w.m.store.beforeTaskCommit = nil
+		_, _ = w.m.store.SetLastTurn("sid-not-a-member", "x.", 5, 5)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("a non-member waited for the write lock")
+	}
+	close(release)
 }

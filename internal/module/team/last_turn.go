@@ -67,8 +67,20 @@ const (
 // changes nothing. updated_at is not touched: it ranks the tasks, and a turn is
 // not an edit of the task.
 func (s *Store) SetLastTurn(sessionID, summary string, at, seq int64) (lastTurnWrite, error) {
+	// Every turn of every session on the host comes here, almost all of them not a member's: a plain
+	// read says so without taking SQLite's one write lock (610: work in a serialised place is measured
+	// by its frequency). Only a candidate member enters the write transaction, which looks again.
+	var isMember int
+	err := s.db.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0 LIMIT 1`, sessionID).Scan(&isMember)
+	if errors.Is(err, sql.ErrNoRows) {
+		return lastTurnNone, nil
+	}
+	if err != nil {
+		return lastTurnNone, fmt.Errorf("last turn: is %s a member: %w", sessionID, err)
+	}
 	out := lastTurnNone
-	err := s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	err = s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		var key, teamID string
 		err := conn.QueryRowContext(ctx, `SELECT m.spawn_op, m.team_id FROM team_members m JOIN teams t ON t.id = m.team_id
 			WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, sessionID).Scan(&key, &teamID)
@@ -165,7 +177,14 @@ func (m *Module) subscribeTurnEnd(svc any) {
 // nothing: this fires for every turn of every session on the host.
 func (m *Module) onTurnEnd(ev agent.TurnEndEvent) {
 	summary := lastTurnSummary(ev.Text)
-	if summary == "" || m.store == nil || m.stopping() {
+	if summary == "" || m.store == nil {
+		return
+	}
+	// Stop waits for a callback that got past this check (turnEndMu): after Stop returns nothing writes,
+	// so Close never meets a late write. The agent hub may deliver a queued event after unsubscribe.
+	m.turnEndMu.RLock()
+	defer m.turnEndMu.RUnlock()
+	if m.stopping() {
 		return
 	}
 	where, err := m.store.SetLastTurn(ev.SessionID, summary, ev.At, ev.Seq)
