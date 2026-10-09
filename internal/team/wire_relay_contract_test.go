@@ -95,6 +95,8 @@ func TestRelayContract_DTOJSON(t *testing.T) {
 		{"MemberRelayPayload minimal", MemberRelayPayload{OpID: "o", TeamID: "t", LeadRef: "_l", MemberSessionID: "s", MemberRef: "_m"},
 			`{"op_id":"o","team_id":"t","lead_ref":"_l","member_session_id":"s","member_ref":"_m"}`},
 		{"RelaySeenRequest", RelaySeenRequest{SessionID: "s"}, `{"session_id":"s"}`},
+		{"RelayCompactedRequest", RelayCompactedRequest{SessionID: "s", Trigger: "auto"}, `{"session_id":"s","trigger":"auto"}`},
+		{"RelayCompactedResponse", RelayCompactedResponse{Noticed: true}, `{"noticed":true}`},
 		{"RelayClaimRequest", RelayClaimRequest{SessionID: "s"}, `{"session_id":"s"}`},
 		{"RelayClaimResponse with lead", RelayClaimResponse{Op: RelayOp{ID: "op", State: RelayClaimed}, Lead: &RelayLead{Address: "a/b", Ref: "_r", TeamID: "t"}},
 			`{"op":{"id":"op","kind":"","host_id":"","session_id":"","ref":"","state":"claimed","handoff_path":"","created_at":0,"updated_at":0},"lead":{"address":"a/b","ref":"_r","team_id":"t"}}`},
