@@ -2180,6 +2180,8 @@
   "approval.dialog.member_ref": "Member ref",
   "approval.dialog.member_relay_note": "Once approved, this member writes its relay file, clears, and takes over in place (about 1 minute); nothing more is deducted. If you deny it, the member does not relay.",
   "approval.dialog.adopt_note": "Once approved, this session becomes a member: its own relays are off and the lead arranges them; its model does not change.",
+  "approval.dialog.adopt_note_remote": "This session is on {{alias}}: approving means you agree, and it is taken in only once {{alias}} answers. Then it becomes a member: its own relays are off and the lead arranges them; its model does not change.",
+  "approval.dialog.adopt_wait.title": "Adding to team: {{target}}",
   "approval.dialog.adopt_target": "Session to take in",
   "approval.dialog.adopt_target_ref": "Ref (from the daemon)",
   "approval.dialog.adopt_target_session": "Session id",

@@ -69,6 +69,16 @@ describe('adopt card — remote target', () => {
     expect(screen.queryByTestId('approval-adopt-host')).toBeNull()
   })
 
+  it('the note says consent comes first for a remote target, and stays the old sentence for a local one', () => {
+    render(<ApprovalDialogHost />)
+    open(adopt(REMOTE))
+    expect(text('approval-adopt-note')).toContain('這個 session 在 air26 上：核准代表你同意，要等 air26 回覆後才算收進。')
+    expect(text('approval-adopt-note')).toContain('自我接力關閉')
+    act(() => { useApprovalStore.getState().reset() })
+    open(adopt())
+    expect(text('approval-adopt-note')).toBe('核准後這個 session 會成為 member：自我接力關閉，接力由 lead 安排；它的模型不變。')
+  })
+
   it('clips a long alias like the other payload strings', () => {
     render(<ApprovalDialogHost />)
     open(adopt({ target_host_id: 'hid-b', target_host_alias: 'x'.repeat(300) }))
@@ -82,6 +92,7 @@ describe('adopt card — remote target', () => {
     await click('approval-approve')
     expect(screen.queryByTestId('approval-dialog')).toBeNull()
     expect(text('adoption-wait-text')).toBe('等待 air26 回覆…')
+    expect(text('adoption-wait-target')).toBe('納入 team：寫文件的那個')
     expect(mockedPoll).toHaveBeenCalledWith(H, 'req-1', 30, expect.any(AbortSignal))
   })
 

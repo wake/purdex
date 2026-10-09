@@ -2180,6 +2180,8 @@
   "approval.dialog.member_ref": "Member Ref",
   "approval.dialog.member_relay_note": "核准後這個 member 會寫接力檔、清空並在原處接手（約 1 分鐘）；這次不扣額度。拒絕則 member 不接力。",
   "approval.dialog.adopt_note": "核准後這個 session 會成為 member：自我接力關閉，接力由 lead 安排；它的模型不變。",
+  "approval.dialog.adopt_note_remote": "這個 session 在 {{alias}} 上：核准代表你同意，要等 {{alias}} 回覆後才算收進。收進後它會成為 member：自我接力關閉，接力由 lead 安排；它的模型不變。",
+  "approval.dialog.adopt_wait.title": "納入 team：{{target}}",
   "approval.dialog.adopt_target": "要納入的 session",
   "approval.dialog.adopt_target_ref": "Ref（系統給的）",
   "approval.dialog.adopt_target_session": "Session id",

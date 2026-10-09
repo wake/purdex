@@ -21,7 +21,7 @@ function Card({ entry }: { entry: AdoptionWaitEntry }) {
       data-state={entry.state}
       className="w-[320px] rounded-lg border border-border-default bg-surface-primary p-3 shadow-lg"
     >
-      <p data-testid="adoption-wait-target" dir="auto" className="break-words text-xs font-medium text-text-primary">{entry.target}</p>
+      <p data-testid="adoption-wait-target" dir="auto" className="break-words text-xs font-medium text-text-primary">{t('approval.dialog.adopt_wait.title', { target: entry.target })}</p>
       <p data-testid="adoption-wait-text" dir="auto" className={`mt-1 flex items-center gap-1.5 break-words text-xs ${tone}`}>
         {waiting && <ArrowsClockwise size={12} aria-hidden="true" className="shrink-0 animate-spin" />}
         {adoptionWaitText(entry)}

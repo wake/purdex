@@ -365,7 +365,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
           </dl>
           {isAdopt ? (
-            <p data-testid="approval-adopt-note" className="mt-3 text-xs text-text-secondary">{t('approval.dialog.adopt_note')}</p>
+            <p data-testid="approval-adopt-note" className="mt-3 text-xs text-text-secondary">{adopt.target_host_id !== '' ? t('approval.dialog.adopt_note_remote', { alias: adoptionAlias(adopt) }) : t('approval.dialog.adopt_note')}</p>
           ) : isMemberRelay ? (
             <p data-testid="approval-member-relay-note" className="mt-3 text-xs text-text-secondary">{t('approval.dialog.member_relay_note')}</p>
           ) : isSelfRelay ? (
