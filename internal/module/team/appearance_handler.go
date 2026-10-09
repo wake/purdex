@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -126,12 +127,22 @@ func (m *Module) appearanceFanout(ctx context.Context, teamID string) *Appearanc
 		}
 	}
 	m.core.CfgMu.RUnlock()
+	// asked at once: a slow or offline host costs one probe's wait, not one per host
 	announcing := map[string]bool{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	for _, h := range paired {
-		if caps, err := m.cmdCaller.TeamCaps(ctx, h); err == nil && slices.Contains(caps.Kinds, CmdAppearance) && caps.AllowTeam {
-			announcing[h] = true
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if caps, err := m.cmdCaller.TeamCaps(ctx, h); err == nil && slices.Contains(caps.Kinds, CmdAppearance) && caps.AllowTeam {
+				mu.Lock()
+				announcing[h] = true
+				mu.Unlock()
+			}
+		}()
 	}
+	wg.Wait()
 	if len(announcing) == 0 {
 		return nil
 	}
