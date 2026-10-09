@@ -12,7 +12,8 @@ export const CAPS = ['workbook.v2'] // announced on every events batch; no `work
 export const WAIT_MS = 15_000 // the long poll after a main turn ends
 export const REQUEST_DEADLINE_MS = 5000 // slack over the wait for a request to be answered ($.http.fetch has no timeout)
 export const REASONS = new Set(['api-error', 'empty-reply', 'aborted'])
-export const MODEL_SLACK_MS = 10_000 // a call that outlives its own timeout_ms by this much is cut by the mod
+export const MODEL_SLACK_MS = 5000 // a call that outlives its own timeout_ms by this much is cut by the mod — and the
+// daemon's lease lasts timeout_ms + 10 s, so the abort report still has 5 s to arrive before the lease runs out
 export const DEFAULT_TIMEOUT_MS = 30_000 // the deadline of a job that names none
 export const MAX_JOBS_PER_DRAIN = 8 // jobs one run of the loop takes before it stops and waits for the next trigger
 
@@ -20,7 +21,7 @@ export const MAX_JOBS_PER_DRAIN = 8 // jobs one run of the loop takes before it 
 const MODEL_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const MAX_TEXT = 200_000 // characters of the prompt, and of each system block
 const MAX_BLOCKS = 8
-const MAX_TOKENS = 8192
+const MAX_TOKENS = 4096 // the daemon's contract; 4096 tokens is far below the 64 KiB the result route takes as text
 const MAX_TIMEOUT_MS = 120_000
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max'])
 

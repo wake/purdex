@@ -1327,7 +1327,7 @@ test('after session.end nothing asks', async ($, on) => {
 })
 
 // Mutation gate: no mod-owned deadline → a call that never settles blocks the executor for good (codex attack).
-test('a model call that never settles is cut at timeout_ms + 10 s, reported aborted, and the executor works again', async ($, on) => {
+test('a model call that never settles is cut at timeout_ms + 5 s (before the daemon's lease at + 10 s), reported aborted, and the executor works again', async ($, on) => {
   const w = evWorld(on, {
     wbNext: (_b, n) => (n === 1 ? jobAnswer(JOB()) : n === 2 ? jobAnswer(JOB({ id: 'wbj-2' })) : { status: 204 }),
     model: (_e, n) => (n === 1 ? new Promise(() => {}) : { isAnswered: true, text: '{}', usage: USAGE }),
@@ -1338,8 +1338,8 @@ test('a model call that never settles is cut at timeout_ms + 10 s, reported abor
   await w.clock.settle()
   expect(w.modelCalls.length).toBe(1)
   expect(resultReqs(w)).toEqual([])
-  await w.clock.advance(39_999)
-  expect(resultReqs(w)).toEqual([]) // timeout_ms 30 000 + 10 000 of slack
+  await w.clock.advance(34_999)
+  expect(resultReqs(w)).toEqual([]) // timeout_ms 30 000 + 5 000 of slack
   await w.clock.advance(2)
   expect(resultReqs(w)[0].body).toMatchObject({ job_id: 'wbj-1', answered: false, reason: 'aborted' })
   expect(resultReqs(w)[0].body.latency_ms).toBeGreaterThanOrEqual(30_000) // the daemon reads that as failed:timeout
@@ -1379,6 +1379,7 @@ const badJobs: [string, any][] = [
   ['a system block that is not text', { model: 'haiku', prompt: 'p', system: [{ text: 5 }] }],
   ['an absurd max_tokens', { model: 'haiku', prompt: 'p', max_tokens: 1e9 }],
   ['a negative max_tokens', { model: 'haiku', prompt: 'p', max_tokens: -1 }],
+  ['a max_tokens above the daemon contract', { model: 'haiku', prompt: 'p', max_tokens: 4097 }],
   ['a zero timeout', { model: 'haiku', prompt: 'p', timeout_ms: 0 }],
   ['an hour-long timeout', { model: 'haiku', prompt: 'p', timeout_ms: 3_600_000 }],
   ['an unknown effort', { model: 'haiku', prompt: 'p', effort: 'ludicrous' }],
