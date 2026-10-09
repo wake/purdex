@@ -109,7 +109,7 @@ func TestTick_MarksAGoneMemberButNotOneMidRelay(t *testing.T) {
 			t.Fatal(err)
 		}
 		if tc.relay != "" {
-			op := selfOp(fmt.Sprintf("relay-%d", i), tc.sid, row.Ref, 1)
+			op := selfOp(fmt.Sprintf("relay-%d", i), tc.sid, row.Ref, f.clock.Load()) // fresh: the relay timeouts (P6-4b) judge an old op
 			op.State = tc.relay
 			if err := f.m.store.CreateRelayOp(op); err != nil {
 				t.Fatal(err)

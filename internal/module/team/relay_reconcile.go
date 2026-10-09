@@ -104,7 +104,7 @@ func (m *Module) applyReconcile(op team.RelayOp, rep RelayReport) (team.RelayOp,
 	if res != ReportApplied {
 		return after, nil
 	}
-	m.logf("[team] relay op %s → %s%s (reconciled from the pane's frame)", op.ID, after.State, reasonSuffix(after))
+	m.logf("[team] relay op %s → %s%s (a report the daemon made itself)", op.ID, after.State, reasonSuffix(after))
 	m.afterReport(after)
 	m.handoverNoticeAsync(after)
 	m.outcomeNoticeAsync(after)
