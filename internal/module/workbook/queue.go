@@ -323,18 +323,20 @@ func (e *Engine) reap() {
 	e.qmu.Lock()
 	now := e.d.Now()
 	for _, l := range e.leases {
-		if !l.processing && !now.Before(l.expires) {
+		if !e.qstopped && !l.processing && !now.Before(l.expires) {
 			lost = append(lost, l)
 		}
 	}
 	for _, l := range lost {
 		l.processing = true
+		e.inflight.Add(1) // under qmu with qstopped false: Stop's Wait never races an Add
 	}
 	e.qmu.Unlock()
 	for _, l := range lost {
 		e.d.Logf("[workbook] a job ran out of its lease (kind %s)", l.job.kind)
 		e.finishUnrun(l.job, StateFailed, ReasonLost)
 		e.release(l, nil)
+		e.inflight.Done()
 	}
 }
 
@@ -348,7 +350,9 @@ func (e *Engine) Result(stream, jobID string, r Result) (bool, error) {
 		return false, ErrNotLeased
 	}
 	l.processing = true
+	e.inflight.Add(1)
 	e.qmu.Unlock()
+	defer e.inflight.Done() // Stop waits for a result that is being applied: nothing writes after it returns
 
 	follow := e.apply(l, r)
 
@@ -397,6 +401,7 @@ func (e *Engine) Stop() {
 	for _, j := range queued {
 		e.finishUnrun(j, StateSkipped, ReasonStopped)
 	}
+	e.inflight.Wait() // the results and reaps that had already started
 }
 
 // RunReaper looks for leases that ran out until ctx ends.

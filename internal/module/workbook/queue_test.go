@@ -110,6 +110,38 @@ func TestQueue_BacklogKeepsTheNewestThree(t *testing.T) {
 	}
 }
 
+// Stop waits for a result that is already being applied, so nothing writes after it returns (codex R1).
+// Mutation gate: drop the inflight Wait → red.
+func TestQueue_StopWaitsForAResultBeingApplied(t *testing.T) {
+	k := kitWith(t, "s1", "t1")
+	j := mustNext(t, k, "m", "s1")
+	entered, release := make(chan struct{}), make(chan struct{})
+	k.st.SetObserver(func(Event) {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+	})
+	resultDone, stopDone := make(chan struct{}), make(chan struct{})
+	go func() { k.e.Result("m", j.ID, Result{Reason: "refused"}); close(resultDone) }()
+	<-entered // the result is inside its store write
+	go func() { k.e.Stop(); close(stopDone) }()
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned while a result was still being applied")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after the result finished")
+	}
+	<-resultDone
+}
+
 // A long poll returns the job as soon as one is queued, and gives up at its wait or when the context ends.
 func TestQueue_NextWaits(t *testing.T) {
 	k := newKit(t)

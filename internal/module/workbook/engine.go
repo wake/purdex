@@ -61,6 +61,7 @@ type Engine struct {
 
 	qmu      sync.Mutex // the queue structures only; never held across a store call
 	qstopped bool
+	inflight sync.WaitGroup // results and reaps being applied; Stop waits for them
 	convs    map[string]*convQ
 	leases   map[string]*lease
 	seq      int64
