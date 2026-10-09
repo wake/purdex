@@ -271,3 +271,10 @@ func TestCache_RunSweepsUntilCancelled(t *testing.T) {
 		t.Fatal("Run did not reclaim the idle entry")
 	}
 }
+
+func TestCache_RunWithANonPositiveIntervalDoesNotPanic(t *testing.T) {
+	c, _ := newTestCache(16)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.Run(ctx, 0) // returns at once: the context is done
+}

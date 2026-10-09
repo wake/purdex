@@ -109,8 +109,11 @@ func (c *Cache) Sweep() {
 	c.sweepIdle(c.now())
 }
 
-// Run sweeps every interval until ctx is done.
+// Run sweeps every interval (a minute when interval is not positive) until ctx is done.
 func (c *Cache) Run(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
