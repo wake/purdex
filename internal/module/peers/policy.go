@@ -44,6 +44,9 @@ func HostRoutePolicy(r *http.Request) bool {
 	if r.Method == http.MethodPost && r.URL.Path == "/api/peers/team/commands" { // cross-host team commands (X2b)
 		return true
 	}
+	if r.Method == http.MethodPost && r.URL.Path == "/api/peers/team/facts" { // cross-host team facts (X3b-2)
+		return true
+	}
 	if r.Method != http.MethodGet || r.URL.Path != "/api/peers" {
 		return false
 	}

@@ -1,6 +1,8 @@
 // internal/team/wire_fact.go
 package team
 
+import "encoding/json"
+
 // Cross-host team facts (M → L), spec docs/specs/2026-10-09-cross-host-team-spec-plan.md §6.3.
 // POST /api/peers/team/facts carries one TeamFact: something that happened on the member host. The lead host's
 // daemon applies it; the member host queues it in its facts outbox in the transaction of the change that caused it.
@@ -24,3 +26,17 @@ type TeamFact struct {
 	MK       string `json:"mk"`
 	Reason   string `json:"reason,omitempty"`
 }
+
+// TeamFactAnswer is the 200 body: the receiver's host id (the sender checks it is who it addressed) and the fact's
+// outcome — {"state":"applied"} or {"state":"ignored"} (the row had already moved on, or its team had ended).
+type TeamFactAnswer struct {
+	ID      string          `json:"id"`
+	HostID  string          `json:"host_id"`
+	Outcome json.RawMessage `json:"outcome"`
+}
+
+// Outcome states of a fact.
+const (
+	FactApplied = "applied"
+	FactIgnored = "ignored"
+)

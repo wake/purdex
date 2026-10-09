@@ -32,6 +32,8 @@ type Store struct {
 	// failBeforeCommandLog, when set, fails ApplyTeamCommand after the command's changes and before its log insert
 	// (test seam for the one-transaction crash cut). nil in production.
 	failBeforeCommandLog func() error
+	// failBeforeFactLog is the same seam for ApplyTeamFact (the fact's row change and its log entry are one transaction).
+	failBeforeFactLog func() error
 	// failAfterFactInsert, when set, fails EndRemoteMemberLocally after its fact is queued and before it commits
 	// (test seam for the one-transaction crash cut). nil in production.
 	failAfterFactInsert func() error
@@ -200,6 +202,10 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := db.Exec(commandSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (commands): %w", err)
+	}
+	if _, err := db.Exec(factLogSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (fact log): %w", err)
 	}
 	if _, err := db.Exec(modHelloSchema); err != nil {
 		db.Close()
