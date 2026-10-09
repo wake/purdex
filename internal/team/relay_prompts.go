@@ -25,8 +25,9 @@ const RelayPromptMaxBytes = 16 << 10
 
 // RelayPromptVariables are the {{name}}s a body may use (U21 (d)); the mod
 // fills them. The fixed parts also use {{op}}, {{nonce}} and {{missing}},
-// which only the mod knows, and {{tasks}} (the seed's tail, T-2). P6-3a appends "git".
-var RelayPromptVariables = []string{"path", "old_ref", "old_session", "context", "whoami"}
+// which only the mod knows, and {{tasks}} (the seed's tail, T-2). "git" is the mod's own run of read-only git commands
+// (P6-3a): the relay lock allows only the handoff Write, so the model cannot run them itself.
+var RelayPromptVariables = []string{"path", "old_ref", "old_session", "context", "whoami", "git"}
 
 // RelayPromptBodies is one body per prompt: the stored values (where "" is
 // unset) or the defaults.
@@ -74,8 +75,10 @@ var DefaultRelayPromptBodies = RelayPromptBodies{
 		"請先停下手邊工作，用你完整的工具撰寫接力檔：{{path}}",
 		"",
 		"要求：",
-		"- 自己跑 `git status`、`git diff --stat`、`git log --oneline -10` 取得檔案狀態，不要憑記憶寫。",
 		"- 接力檔必須自成一體：讀它的是一個完全沒有這段對話記憶的新對話。",
+		"",
+		"機器提供的 git 狀態（照抄進 §3）：",
+		"{{git}}",
 	),
 	Fix: "接力檔 {{path}} 不完整。",
 	Seed: lines(
@@ -97,6 +100,8 @@ var RelayPromptFixedParts = RelayPromptSkeleton{
 	Write: RelayPromptFixed{
 		Head: "[pdx-relay op={{op}} n={{nonce}}] ",
 		Tail: lines(
+			"",
+			"- 只用 Write 工具一次寫入整個接力檔；這一輪不要執行其他工具（接力期間其他工具會被拒絕）。",
 			"- 寫完後只回一行「HANDOFF-WRITTEN」，不要繼續原本的工作。",
 			"",
 			"格式（每一段都要有，沒有內容就寫「無」）：",
@@ -119,7 +124,7 @@ var RelayPromptFixedParts = RelayPromptSkeleton{
 	},
 	Fix: RelayPromptFixed{
 		Head: "[pdx-relay op={{op}} n={{nonce}}] ",
-		Tail: "缺少段落：{{missing}}。請補齊後只回「HANDOFF-WRITTEN」。",
+		Tail: "缺少段落：{{missing}}。請用 Write 重寫整個接力檔（不要用 Edit），補齊後只回「HANDOFF-WRITTEN」。",
 	},
 	Seed: RelayPromptFixed{
 		Head: "↪ 接手自 {{old_ref}}\n[pdx-relay seed op={{op}} n={{nonce}}] ",

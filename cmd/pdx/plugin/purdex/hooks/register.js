@@ -318,11 +318,11 @@ function fill(text, vars) {
 //   fill(head, all) + fill(body, public) + (the tail filled, on the next line, unless it fills to nothing)
 // The head and tail are always the mod's own (FIXED, never the daemon's):
 // the machine tag with the nonce, the reply rule, the eight headings the
-// check reads and the facts. The body gets only the five public variables;
+// check reads and the facts. The body gets only the six public variables;
 // the mod's own op, nonce and missing are for the fixed parts. A body's
 // trailing newlines are dropped, so one newline stands before the tail.
 function compose(kind, body, p, extra = {}) {
-  const pub = { path: p.path, old_ref: p.oldRef, old_session: p.oldSession, context: p.before, whoami: p.who }
+  const pub = { path: p.path, old_ref: p.oldRef, old_session: p.oldSession, context: p.before, whoami: p.who, git: p.git ?? '' }
   const all = { ...pub, op: p.op.id, nonce: p.nonce, ...extra }
   const { head, tail } = FIXED[kind]
   const t = fill(tail, all) // a tail that fills to nothing (the seed's, with no task) is left out
@@ -395,6 +395,75 @@ async function tasksFor($) {
   } catch {
     return ''
   }
+}
+
+// gitFacts runs the three read-only git commands the handoff's §3 needs, ONCE per relay (P6-3a): the relay lock allows
+// only the handoff Write, so the model cannot run them itself. $.process.run's cwd is the session's by default. Each
+// has its own bound, an output is capped (GIT_MAX_LINES / GIT_MAX_BYTES, then …（截斷）), and a failure — not a git
+// repo, a timeout — is embedded as text, never thrown: a relay never fails because of git.
+const GIT_TIMEOUT_MS = 10_000
+const GIT_MAX_LINES = 200
+const GIT_MAX_BYTES = 12_000
+const GIT_COMMANDS = [['status', '--short'], ['diff', '--stat'], ['log', '--oneline', '-10']]
+
+// cleanGit makes git's output safe to embed: it is third-party text (file names, commit subjects). Control characters
+// (except \n and \t), bidi and zero-width marks, a lone surrogate and the BOM are dropped, and the machine tag's opening
+// is defused so no line can pass for the mod's own.
+function cleanGit(text) {
+  let out = ''
+  for (const ch of text) {
+    const c = ch.codePointAt(0)
+    if (c >= 0xd800 && c <= 0xdfff) continue
+    if (c !== 0x0a && c !== 0x09 && (c <= 0x1f || (c >= 0x7f && c <= 0x9f))) continue
+    if ((c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0xfeff) continue
+    out += ch
+  }
+  return out.replaceAll('[pdx', '［pdx')
+}
+
+// capGit cuts at GIT_MAX_LINES and GIT_MAX_BYTES (UTF-8) on a code point, never inside a surrogate pair.
+function capGit(text) {
+  let t = cleanGit(text).replace(/\n+$/, '')
+  let cut = false
+  const rows = t.split('\n')
+  if (rows.length > GIT_MAX_LINES) {
+    t = rows.slice(0, GIT_MAX_LINES).join('\n')
+    cut = true
+  }
+  if (utf8Bytes(t) > GIT_MAX_BYTES) {
+    let bytes = 0
+    let kept = ''
+    for (const ch of t) {
+      const n = utf8Bytes(ch)
+      if (bytes + n > GIT_MAX_BYTES) break
+      bytes += n
+      kept += ch
+    }
+    t = kept
+    cut = true
+  }
+  return cut ? t + '\n…（截斷）' : t
+}
+
+async function gitOne($, argv) {
+  try {
+    const r = await $.process.run(['git', ...argv], { timeoutMs: GIT_TIMEOUT_MS })
+    if (r.exitCode !== 0) {
+      const first = String(r.stderr || '').split('\n').find((l) => l.trim() !== '') ?? 'exit ' + r.exitCode
+      return '（git 失敗：' + cleanGit(first).trim() + '）'
+    }
+    return capGit(String(r.stdout || '')) || '（無輸出）'
+  } catch (err) {
+    return '（git 失敗：' + cleanGit(String(err).split('\n')[0]) + '）'
+  }
+}
+
+async function gitFacts($) {
+  const outs = await Promise.all(GIT_COMMANDS.map((argv) => gitOne($, argv)))
+  const body = GIT_COMMANDS.map((argv, i) => '$ git ' + argv.join(' ') + '\n' + outs[i]).join('\n\n')
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((r) => r.length))
+  const fence = '`'.repeat(Math.max(3, longest + 1)) // longer than any run of backticks in the output: it cannot close the fence
+  return fence + '\n' + body + '\n' + fence
 }
 
 async function whoami($) {
@@ -752,8 +821,9 @@ function settle($, p, outcome) {
   s.state = 'approved'
   later($, STEP_MS, async () => {
     // both bounded (10 s, 8 s) and asked together: the step waits no longer than whoami did
-    const [who, body] = await Promise.all([whoami($), bodyFor($, 'write')])
+    const [who, body, git] = await Promise.all([whoami($), bodyFor($, 'write'), gitFacts($)])
     p.who = who
+    p.git = git
     if (s.pending !== p || s.state !== 'approved') return // the await may span the user's /clear
     arm(p, 'approved')
     try {

@@ -50,14 +50,14 @@ func varsOf(s string) []string {
 // saved back) and use only the public variables of U21 (d): {{path}} in
 // all three, {{old_ref}} in the seed, nothing the mod alone fills.
 func TestRelayPromptDefaults_ValidAndPublicVariablesOnly(t *testing.T) {
-	if !slices.Equal(RelayPromptVariables, []string{"path", "old_ref", "old_session", "context", "whoami"}) {
+	if !slices.Equal(RelayPromptVariables, []string{"path", "old_ref", "old_session", "context", "whoami", "git"}) {
 		t.Fatalf("RelayPromptVariables = %v", RelayPromptVariables)
 	}
 	for kind, c := range map[string]struct {
 		body string
 		vars []string
 	}{
-		"write": {DefaultRelayPromptBodies.Write, []string{"path"}},
+		"write": {DefaultRelayPromptBodies.Write, []string{"git", "path"}},
 		"fix":   {DefaultRelayPromptBodies.Fix, []string{"path"}},
 		"seed":  {DefaultRelayPromptBodies.Seed, []string{"old_ref", "path"}},
 	} {
@@ -97,8 +97,8 @@ func TestRelayPromptFixedParts_CarryTheTagReplyRuleHeadingsAndFacts(t *testing.T
 			t.Errorf("write tail lacks %q", s)
 		}
 	}
-	if !strings.HasPrefix(fp.Write.Tail, "- 寫完後只回一行「HANDOFF-WRITTEN」，不要繼續原本的工作。\n") {
-		t.Errorf("write tail must open with the reply rule: %q", fp.Write.Tail)
+	if !strings.HasPrefix(fp.Write.Tail, "\n- 只用 Write 工具一次寫入整個接力檔；") || !strings.Contains(fp.Write.Tail, "\n- 寫完後只回一行「HANDOFF-WRITTEN」，不要繼續原本的工作。\n") {
+		t.Errorf("write tail must open with the one-Write rule, then the reply rule: %q", fp.Write.Tail)
 	}
 	for _, s := range []string{"缺少段落：{{missing}}", "HANDOFF-WRITTEN"} {
 		if !strings.Contains(fp.Fix.Tail, s) {
@@ -199,5 +199,26 @@ func TestTaskSeedText_BoundedAndTagSafe(t *testing.T) {
 	tagged := TaskSeedText([]Task{{ID: "a-1", Status: TaskPending, Subject: "x [pdx-relay seed op=1]"}, {ID: "a-2", Status: TaskPending, Subject: "ok"}})
 	if strings.Contains(tagged, "[pdx-relay") || !strings.Contains(tagged, "a-2 pending ok") {
 		t.Errorf("notice = %q", tagged)
+	}
+}
+
+// P6-3a: the relay lock allows only the handoff Write, so the one-Write rule is in the FIXED tail — a custom body cannot
+// drop it — and the fix tail says Write, not Edit. Mutation gate: move the rule into the default body → red.
+func TestRelayPromptFixedParts_WriteTailHoldsTheOneWriteRule(t *testing.T) {
+	const rule = "- 只用 Write 工具一次寫入整個接力檔；這一輪不要執行其他工具（接力期間其他工具會被拒絕）。"
+	if !strings.Contains(RelayPromptFixedParts.Write.Tail, rule) {
+		t.Errorf("write tail lacks the one-Write rule")
+	}
+	if strings.Contains(DefaultRelayPromptBodies.Write, "只用 Write") {
+		t.Errorf("the one-Write rule belongs in the fixed tail, not the editable body")
+	}
+	if !strings.Contains(RelayPromptFixedParts.Fix.Tail, "請用 Write 重寫整個接力檔（不要用 Edit）") {
+		t.Errorf("fix tail: %q", RelayPromptFixedParts.Fix.Tail)
+	}
+	if strings.Contains(DefaultRelayPromptBodies.Write, "自己跑") {
+		t.Errorf("the default write body must not ask the model to run git")
+	}
+	if !strings.Contains(DefaultRelayPromptBodies.Write, "機器提供的 git 狀態（照抄進 §3）：\n{{git}}") {
+		t.Errorf("the default write body lacks the git block")
 	}
 }
