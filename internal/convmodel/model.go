@@ -88,6 +88,9 @@ type Turn struct {
 	Outcome   Outcome    `json:"outcome"`
 	Error     *TurnError `json:"error,omitempty"`
 	Items     []Item     `json:"items"`
+	// OmittedItems is how many of the turn's oldest items a size-capped window
+	// left out (U1-6, spec §8.2); 0 and absent for a whole turn.
+	OmittedItems int `json:"omitted_items,omitempty"`
 
 	// Offset is the byte offset of the row that opened the turn. It is for
 	// Go callers (cursors) and never on the wire.
