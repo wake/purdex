@@ -2659,3 +2659,14 @@ RQ-2's rule: *while unattended is on and the quota rule is on, a lead's member r
 Also: **P6-0 is not done** (P6-5 opens new files anyway). **P6-8** stays on the A line, after P6-6, low priority. Before any `ensureColumn` on `relay_ops`, read the host DB with `sqlite3 -readonly` first (§2 item 9).
 
 **Order:** P6-1′ → P6-2a → P6-2b-1 → P6-2b-2 → RQ-2 → P6-3a → P6-3b-1 → P6-3b-2 → P6-3c → P6-4a → P6-4b → P6-5 → P6-6.
+
+### 7. Contracts from the RQ-2 small spec (1f, 2026-10-09)
+
+Binding; they replace the plan text they name. Source: `docs/specs/2026-10-09-rq2-member-relay-approval-spec.md` (§6 there), reviewed by codex `task-mv0qures-y4l1ub` and `task-mv0rapcf-5y2z93`.
+
+- **Order:** RQ-2 is two PRs, **RQ-2a** (the `member_relay` state machine, deployable alone — nothing opens such a row yet) and **RQ-2b** (the create gate and the pool; deployed only after 88's `member_relay` card is merged and fast-forwarded). The §6 order becomes: P6-1′ → P6-2a → P6-2b-1 → P6-2b-2 → **RQ-2a → RQ-2b** → P6-3a → … → P6-6. P6-6 is deployed only after RQ-2b is.
+- **P6-2b-1:** a member op created `requested` has `RequestID = ""`; an op created `awaiting_approval` (RQ-2b) has `RequestID` = its `member_relay` row's id. `CreateMemberRelayOp(op, gate)` takes the write lock first and is all-or-nothing. `sendMemberControl` is idempotent on the op id and sends from the team's **current** lead's inbox. The `cleared` binding of a member op compares pid **and** `proc_start` (P6-2a attacker #1, ruled into this PR).
+- **P6-2b-2:** every committed change of a member op's state wakes the op's waiters from **one choke point after the commit**, whatever path made it (report, claim, an approval's close, reconciliation) — not from the HTTP report handler only.
+- **P6-4b (replaces "`created_at + 60 s`" in P6-4 branch A and in §3 row 11):** the "unseen" claim timer is `updated_at + 60 s` while `state = 'requested' AND seen_at = 0`; no write other than the transition into `requested` touches `updated_at` of a requested, unseen op. The test includes an op approved nine minutes after its creation.
+- **P6-4a:** the boot re-send of the control message for `requested` member ops is RQ-2a's; P6-4a reuses it (its own boot work is the frame reconciliation and #1735).
+- **P6-5:** the CLI stays as planned; RQ-2 adds the line `等待核准：member 額度用完（無人值守）` while the op is `awaiting_approval`, exit 10 for `cancelled{denied}`, exit 11 for `cancelled{timeout}` **and** for the bound reached while the op is still `awaiting_approval`, exit 12 for any other `cancelled`.
