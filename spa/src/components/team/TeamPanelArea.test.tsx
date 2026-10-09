@@ -13,6 +13,7 @@ import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
+import { CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
 
 // The light, the subagent dots and the host chip are TI-3's pieces over the agent store; here they are stand-ins that show
 // what the panel asked of them.
@@ -283,6 +284,60 @@ describe('full mode', () => {
   })
 })
 
+describe('header height (TI-6)', () => {
+  const header = () => screen.getByTestId('team-panel-header')
+  const scene5 = (extra: number) => seedScene({
+    members: Array.from({ length: extra }, (_, i) => [`M${i}`, `m${i}-tm`] as [string, string]),
+    tabs: [['lead', 'lead-tm']],
+    workspaces: [{ id: 'w1', tabs: ['lead'] }],
+    activeTabId: 'lead',
+  })
+
+  it('both modes use the same fixed header height', () => {
+    scene()
+    mount()
+    const full = header().style.height
+    expect(full).toBe(`${HEADER_H}px`)
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    expect(header().style.height).toBe(full)
+  })
+
+  it('lead + 3 members stay in the header row; there is no region under it', () => {
+    scene()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    mount()
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(4)
+    expect(screen.queryByTestId('team-panel-more')).toBeNull()
+  })
+
+  it('the 5th seat wraps into a region under the header, which keeps its height', () => {
+    scene5(4)
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    mount()
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(4)
+    const more = screen.getByTestId('team-panel-more')
+    expect(header().contains(more)).toBe(false)
+    expect(more.className).toContain('flex-wrap')
+    expect(within(more).getAllByTestId('team-panel-cell')).toHaveLength(1)
+    expect(header().style.height).toBe(`${HEADER_H}px`)
+  })
+
+  it('a big team keeps the header row to the capacity and wraps the rest', () => {
+    scene5(8)
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    mount()
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(firstRowCapacity(312))
+    expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(9 - firstRowCapacity(312))
+  })
+
+  it('a cell is a fixed height inside the header row', () => {
+    scene()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    mount()
+    expect(screen.getAllByTestId('team-panel-cell')[0].style.height).toBe(`${CELL_H}px`)
+  })
+})
+
 describe('one-line mode', () => {
   it('one-line cells + name, wraps', () => {
     scene()
@@ -292,7 +347,7 @@ describe('one-line mode', () => {
     const cells = screen.getAllByTestId('team-panel-cell')
     expect(cells.map((c) => c.getAttribute('data-session-id'))).toEqual(['L', 'A', 'B', 'C'])
     expect(screen.getByTestId('team-panel-name').textContent).toBeTruthy()
-    expect(screen.getByTestId('team-panel-cells').className).toContain('flex-wrap')
+    expect(screen.getByTestId('team-panel-cells').className).not.toContain('flex-wrap') // the first row never wraps
     expect(within(cells[0]).getByTestId('seat-icon').getAttribute('data-subagents')).toBe('false')
     expect(within(cells[0]).getByTestId('context-ring')).toBeTruthy()
     expect(within(cells[0]).getByTestId('model-icon-opus')).toBeTruthy()

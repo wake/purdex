@@ -15,11 +15,14 @@ import { MODEL_LABEL } from './model-family'
 import { useSeatReading } from './team-readings'
 import { useMemberDrag } from './useMemberDrag'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { CELL_GAP, CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
 
 interface Props {
   team: TeamPanelTeam
   activeTabId: string | null
   expanded: boolean
+  /** The area's width while it floats (draft included); undefined when enlarged (everything fits in the header row). */
+  width?: number
   onSetMode: (mode: 'full' | 'line') => void
   onToggleExpanded: () => void
   onOpen: (sessionId: string) => void
@@ -34,6 +37,10 @@ export function TeamPanel(props: Props) {
     </div>
   )
 }
+
+/** The header row both modes share: one fixed height, capsule | middle | buttons in the same places. */
+const HEADER_CLASS = 'flex items-center'
+const headerStyle = { height: HEADER_H, paddingInline: HEADER_PX, columnGap: HEADER_GAP } as const
 
 /** Buttons keep the terminal's focus: a mousedown on them does not move it. */
 const keepFocus = (e: React.MouseEvent) => e.preventDefault()
@@ -93,12 +100,12 @@ function ExpandButton({ expanded, onToggle }: { expanded: boolean; onToggle: () 
   )
 }
 
-function NameCapsule({ team, className = '' }: { team: TeamPanelTeam; className?: string }) {
+function NameCapsule({ team, className = '', style }: { team: TeamPanelTeam; className?: string; style?: React.CSSProperties }) {
   return (
     <span
       data-testid="team-panel-name"
       className={`px-1.5 rounded text-[11px] font-semibold leading-[18px] truncate ${team.unnamed ? 'italic opacity-80' : ''} ${className}`}
-      style={{ background: team.color, color: '#14141f' }}
+      style={{ background: team.color, color: '#14141f', ...style }}
       title={team.tooltip}
     >
       {team.name}
@@ -114,7 +121,7 @@ function FullPanel({ team, activeTabId, expanded, onSetMode, onToggleExpanded, o
   const { propsFor, over, draggingId } = useMemberDrag(teamKey, order, reorder, 'y')
   return (
     <>
-      <div className="flex items-center gap-2 px-2.5 py-2">
+      <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle}>
         <NameCapsule team={team} />
         <span data-testid="team-panel-count" className="text-text-muted whitespace-nowrap">· {t('team.panel.members', { count: members.length })}</span>
         <span className="ml-auto flex items-center gap-0.5">
@@ -227,29 +234,39 @@ function Cell({ teamKey, seat, isActive, onOpen }: { teamKey: string; seat: Team
       onMouseDown={keepFocus}
       onClick={() => onOpen(seat.sessionId)}
       title={`${seat.title} · ${model} · ${t('team.panel.context')} ${r.ctx !== undefined ? `${r.ctx}%` : '—'}${seat.tabId ? '' : ` · ${t('team.panel.unopened')}`}`}
-      className={`flex items-center gap-1 h-7 px-1 rounded-md cursor-pointer ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
+      style={{ height: CELL_H, paddingInline: CELL_PX, columnGap: CELL_INNER_GAP }}
+      className={`flex items-center rounded-md cursor-pointer ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
     >
-      <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} />
-      <ContextRing pct={r.ctx} model={r.model} />
+      <span className="inline-flex" style={{ marginLeft: CELL_ICON_PULL }}>
+        <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} size={CELL_ICON} />
+      </span>
+      <ContextRing pct={r.ctx} model={r.model} size={CELL_RING} />
     </button>
   )
 }
 
-function LinePanel({ team, activeTabId, expanded, onSetMode, onToggleExpanded, onOpen }: Props) {
+function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpanded, onOpen }: Props) {
   const t = useI18nStore((s) => s.t)
   const seats = [team.lead, ...team.members]
+  // The header row holds as many cells as the width allows (4 at the default 312); the rest wrap into a region UNDER it,
+  // so the first row (capsule, cells, buttons) never changes height.
+  const cap = width === undefined ? seats.length : firstRowCapacity(width)
+  const first = seats.slice(0, cap)
+  const more = seats.slice(cap)
+  const cell = (s: TeamSeatView) => <Cell key={s.sessionId} teamKey={team.teamKey} seat={s} isActive={s.tabId !== null && s.tabId === activeTabId} onOpen={onOpen} />
   return (
-    <div className="flex items-start gap-2 px-2.5 py-2">
-      <NameCapsule team={team} className="mt-[5px] max-w-[84px] flex-shrink-0" />
-      <div data-testid="team-panel-cells" className="flex flex-wrap items-center gap-0.5 flex-1 min-w-0">
-        {seats.map((s, i) => (
+    <>
+    <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle}>
+      <NameCapsule team={team} className="flex-shrink-0" style={{ maxWidth: CAPSULE_MAX_W }} />
+      <div data-testid="team-panel-cells" className="flex items-center flex-1 min-w-0" style={{ columnGap: CELL_GAP }}>
+        {first.map((s, i) => (
           <span key={s.sessionId} className="flex items-center">
-            {i === 1 && <span className="w-px h-4 bg-border-default mx-1" />}
-            <Cell teamKey={team.teamKey} seat={s} isActive={s.tabId !== null && s.tabId === activeTabId} onOpen={onOpen} />
+            {i === 1 && <span className="w-px h-4 bg-border-default" style={{ marginInline: 2 }} />}
+            {cell(s)}
           </span>
         ))}
       </div>
-      <span className="mt-[5px] flex items-center gap-0.5 flex-shrink-0">
+      <span className="flex items-center gap-0.5 flex-shrink-0">
         <button
           type="button"
           data-testid="team-panel-to-full"
@@ -264,5 +281,11 @@ function LinePanel({ team, activeTabId, expanded, onSetMode, onToggleExpanded, o
         <ExpandButton expanded={expanded} onToggle={onToggleExpanded} />
       </span>
     </div>
+    {more.length > 0 && (
+      <div data-testid="team-panel-more" className="flex flex-wrap items-center border-t border-border-subtle py-1" style={{ paddingInline: HEADER_PX, gap: CELL_GAP }}>
+        {more.map(cell)}
+      </div>
+    )}
+    </>
   )
 }
