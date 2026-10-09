@@ -2,13 +2,17 @@
 // lead and a non-team session open as they always did.
 import { describe, it, expect, beforeEach } from 'vitest'
 import { openSessionTab } from './open-session-tab'
-import { KEY, resetTeamStores, seedScene, tabShowing, wsTabs } from './team/__tests__/team-fixture'
+import { HOST, KEY, resetTeamStores, seedScene, tabShowing, wsTabs } from './team/__tests__/team-fixture'
+import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import type { Session } from './host-api'
 
-beforeEach(resetTeamStores)
+beforeEach(() => {
+  resetTeamStores()
+  useShownHostsStore.setState({ ids: [HOST] })
+})
 
 const session = (name: string): Session => ({ code: `code-${name}`, name, mode: 'terminal', cwd: '~' }) as Session
 

@@ -9,9 +9,12 @@ import { useWorkspaceStore } from '../../features/workspace/store'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { usePaneFocusStore } from '../../stores/usePaneFocusStore'
 import { tabOn } from './__tests__/team-fixture'
-import { KEY, resetTeamStores, seedScene, tabShowing, wsTabs } from './__tests__/team-fixture'
+import { HOST, KEY, resetTeamStores, seedScene, tabShowing, wsTabs } from './__tests__/team-fixture'
 
-beforeEach(resetTeamStores)
+beforeEach(() => {
+  resetTeamStores()
+  useShownHostsStore.setState({ ids: [HOST] })
+})
 
 const members: Array<[string, string]> = [['A', 'a-tm'], ['B', 'b-tm'], ['C', 'c-tm']]
 

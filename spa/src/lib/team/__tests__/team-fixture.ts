@@ -1,9 +1,9 @@
 // spa/src/lib/team/__tests__/team-fixture.ts — one team on one host over the REAL stores, for the action / shortcut /
-// menu tests of the team interface (plan TI-1b…). Tab ids are what the test names them; a tab's session is a tmux
+// menu tests of the team interface (plan TI-1b…). It does NOT set the shown hosts (the import guard counts this file as
+// source): a test that opens tabs does `useShownHostsStore.setState({ ids: [HOST] })` itself. Tab ids are what the test names them; a tab's session is a tmux
 // session NAME (`lead-tm`, `a-tm`); a listed session has the code `code-<name>`.
 import { useHostStore } from '../../../stores/useHostStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
-import { useShownHostsStore } from '../../../stores/useShownHostsStore'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useTeamRosterStore } from '../../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../../stores/useTeamUiStore'
@@ -54,7 +54,6 @@ export function seedScene(scene: Scene): void {
   }
   const listed = scene.listed ?? [lead, ...members.map(([, tm]) => tm)]
   useHostStore.setState({ hostOrder: [HOST] })
-  useShownHostsStore.setState({ ids: [HOST] })
   useTeamRosterStore.setState({ byHost: { [HOST]: [roster] } })
   useSessionStore.setState({ sessions: { [HOST]: listed.map((name) => ({ code: `code-${name}`, name, mode: 'terminal', cwd: '~' })) as never } })
   const tabs = scene.tabs.map(([id, tm]) => tabOn(id, tm))
