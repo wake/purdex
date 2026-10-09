@@ -24,15 +24,18 @@ func NonTmuxAgentCode(sessionID string) string { return nonTmuxCodePrefix + sess
 // inside tmux. There is no pane, so no frame, projection or activity watcher
 // exists for it: the status the provider derives is broadcast under the
 // session-id-derived code, which is what the SPA's agent store consumes.
+// stamp is the hook's arrival (handleEvent's entry), for the turn-end event.
 // It always finishes the trace and writes the response.
-func (m *Module) handleNonTmuxEvent(w http.ResponseWriter, req EventRequest, trace *hookTraceCollector) {
+func (m *Module) handleNonTmuxEvent(w http.ResponseWriter, req EventRequest, trace *hookTraceCollector, stamp turnEndStamp) {
 	respond := func() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}
 	var result agentpkg.DeriveResult
+	var provider agentpkg.AgentProvider
 	if m.registry != nil {
-		if provider, ok := m.registry.Get(req.AgentType); ok {
+		if p, ok := m.registry.Get(req.AgentType); ok {
+			provider = p
 			result = provider.DeriveStatus(req.PurdexName, req.RawEvent)
 		}
 	}
@@ -47,6 +50,9 @@ func (m *Module) handleNonTmuxEvent(w http.ResponseWriter, req EventRequest, tra
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "reason": reason})
 		return
 	}
+	// The event is accepted and derived (nothing below can fail it): the turn end goes out here, before the
+	// emit, with no lock held. A rejected or invalid event returned above and publishes nothing (#2115).
+	m.publishTurnEnd(req, provider, m.classifyLifecycleForReq(req), FrameTraceMeta{}, stamp)
 	if m.core == nil || m.core.Events == nil {
 		trace.Finish("completed", "emit_skipped")
 		respond()
