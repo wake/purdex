@@ -21,6 +21,8 @@ export const PRESENCE_PATH = '/api/push/presence'
 export const PRESENCE_TTL_MS = 45_000
 export const HEARTBEAT_MS = 20_000
 export const DEBOUNCE_MS = 300
+/** A request that has not answered by then is given up on, so one stuck connection cannot silence a host for good. */
+export const REQUEST_TIMEOUT_MS = 10_000
 
 export interface PresenceBody {
   client_id: string
@@ -56,11 +58,19 @@ export function defaultReporterDeps(): ReporterDeps {
     async put(hostId, body) {
       const res = await pinnedHostFetch(hostId, PRESENCE_PATH, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       })
-      if (!res.ok) throw new Error(`presence ${res.status}`)
+      // A 4xx is the daemon refusing this body for good: sending the same body again cannot change it (the next change
+      // or heartbeat sends what is then shown). Only a network failure or a 5xx is worth an early retry.
+      if (res.status >= 500) throw new Error(`presence ${res.status}`)
+      if (!res.ok) console.warn(`[presence] ${hostId} refused the report (${res.status})`)
     },
     async supportsPush(hostId) {
-      const caps: unknown = (await fetchHostInfo(hostId))?.capabilities
+      const info = await Promise.race([
+        fetchHostInfo(hostId),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('info timeout')), REQUEST_TIMEOUT_MS)),
+      ])
+      const caps: unknown = info?.capabilities
       return Array.isArray(caps) && caps.includes(PUSH_CAPABILITY)
     },
     connectedHosts() {
@@ -83,7 +93,7 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
   // push.v1 per host and identity; absent = not asked yet. A re-point forgets it (and what was sent).
   const support = new Map<string, { identity: string; supported: boolean | null }>()
   const sent = new Map<string, Sent>()
-  const inflight = new Set<string>()
+  const inflight = new Map<string, unknown>() // host -> the support entry (host identity) the request was made under
   const skipped = new Set<string>() // changes that came while that host's PUT was out: sent when it settles
   let debounce: ReturnType<typeof setTimeout> | undefined
   let stopped = false
@@ -114,7 +124,8 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
     const shown = deps.visible()
     for (const [hostId, s] of support) {
       if (s.supported !== true) continue
-      if (inflight.has(hostId)) { skipped.add(hostId); continue }
+      // A request under the host's previous identity is the old daemon's: it does not hold up the new one.
+      if (inflight.has(hostId) && inflight.get(hostId) === s) { skipped.add(hostId); continue }
       const last = sent.get(hostId)
       let body: PresenceBody
       let next: Sent
@@ -129,13 +140,13 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
         body = { client_id: deps.clientId(), active: true, sessions, ttl_ms: PRESENCE_TTL_MS }
         next = { active: true, signature }
       }
-      inflight.add(hostId)
+      inflight.set(hostId, s)
       const entry = s
       deps.put(hostId, body).then(
         () => { if (!stopped && support.get(hostId) === entry) sent.set(hostId, next) },
         () => { /* ignored: the next tick retries */ },
       ).finally(() => {
-        inflight.delete(hostId)
+        if (inflight.get(hostId) === entry) inflight.delete(hostId)
         if (skipped.delete(hostId)) schedule() // what changed during the request is not lost until the next heartbeat
       })
     }

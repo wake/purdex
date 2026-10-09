@@ -214,6 +214,22 @@ describe('push presence reporter', () => {
     expect(e.puts.map((p) => p.body.active)).toEqual([true, false])
   })
 
+  it('a request that never settles does not silence the host: a re-pointed host is reported to at once', async () => {
+    const e = makeEnv()
+    e.capable.delete('h2')
+    const inner = e.deps.put
+    let hang = true
+    e.deps.put = (hostId, body) => (hang ? (inner(hostId, body), new Promise<void>(() => {})) : inner(hostId, body))
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2)
+    expect(e.puts).toHaveLength(1)
+    hang = false
+    e.hosts = [{ id: 'h1', identity: 'e1b:t1' }, { id: 'h2', identity: 'e2:t2' }]
+    e.change()
+    await tick(DEBOUNCE_MS * 2)
+    expect(e.puts).toHaveLength(2) // the new daemon is not held up by the old request
+  })
+
   it('a failed active:false is retried', async () => {
     const e = makeEnv()
     stop = startPushPresence(e.deps)
