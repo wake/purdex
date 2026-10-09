@@ -265,7 +265,7 @@ function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpa
     if (!el) return
     const measure = () => {
       const avail = el.clientWidth
-      const key = `${avail}|${indicatorStyle}`
+      const key = `${team.teamKey}|${seats.map((x) => x.sessionId).join(",")}|${avail}|${indicatorStyle}`
       if (seen.current.key !== key) seen.current = { key, unit: 0 }
       let unit = seen.current.unit
       el.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]').forEach((c) => { unit = Math.max(unit, c.offsetWidth) })

@@ -375,6 +375,47 @@ describe('header height (TI-6)', () => {
       expect(err).not.toHaveBeenCalled() // no "Maximum update depth exceeded"
     })
 
+    describe('the remembered widest cell resets with its premises', () => {
+      let widths: Record<string, number> = {}
+      beforeEach(() => {
+        vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+          return this.getAttribute('data-testid') === 'team-panel-cell' ? widths[this.getAttribute('data-session-id') ?? ''] ?? 38 : 0
+        })
+        availW = 165
+      })
+      const seed = (ids: string[]) => seedScene({
+        members: ids.map((id) => [id, `${id}-tm`] as [string, string]),
+        tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead',
+      })
+      const count = () => within(header()).getAllByTestId('team-panel-cell').length
+
+      it('removing the widest seat brings the capacity back', () => {
+        widths = { M2: 50 }
+        seed(['M0', 'M1', 'M2', 'M3', 'M4', 'M5'])
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        mount()
+        expect(count()).toBe(3)
+        act(() => seed(['M0', 'M1', 'M3', 'M4', 'M5']))
+        expect(count()).toBe(4)
+      })
+
+      it('another team in the same box and style starts from scratch', () => {
+        widths = { M2: 50 }
+        seed(['M0', 'M1', 'M2', 'M3', 'M4', 'M5'])
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        mount()
+        expect(count()).toBe(3)
+        widths = {}
+        act(() => {
+          const roster = structuredClone(useTeamRosterStore.getState().byHost[HOST])
+          roster[0].id = 't2'
+          useTeamRosterStore.setState({ byHost: { [HOST]: roster } })
+          useTeamUiStore.getState().setPanelMode(`${HOST}\u0000t2`, 'line')
+        })
+        expect(count()).toBe(4)
+      })
+    })
+
     it('an enlarged panel with a narrow box and a big team wraps under the header', () => {
       scene5(8)
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
