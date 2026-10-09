@@ -34,7 +34,7 @@ Revision 2 (2026-10-09 23:xx): codex plan review `task-mv12whuc-yxlm33` (15 find
   `ChainRoots()` scans the whole table (`relay_store_lineage.go:74`); no per-id `RootSessionOf`. Registry key
   `team.LineageReaderKey` (`internal/team/wire_relay.go:199`); key names are pinned by `wire_relay_contract_test.go:46`.
   The team module registers its services at `module.go:406-408`.
-- **Team seat.** No per-session reader of team / role. The roster is built by `(*Module).buildRoster()`
+- **Team seat.** No per-session reader of team / role. X2a's single role gate `(*Store).SessionRole` (`remote_members_store.go:274`) answers lead / member_local / member_remote / none, without the team id. The roster is built by `(*Module).buildRoster()`
   (`internal/module/team/roster.go:54`). A peer ref is the pure `peers.RefID(sessionID)` (`internal/peers/ref.go:114`).
 - **Push.** The Stop push comes from the notify hub (`agent.NotifyFeedKey`), not from `TurnEndEvent`, unordered against
   it. `onNotify` (`internal/module/push/agent_trigger.go:24-73`) → `gate.Decide` → `send()` = `snd.Enqueue(Job{Make})`.
@@ -101,11 +101,15 @@ Revision 2 (2026-10-09 23:xx): codex plan review `task-mv12whuc-yxlm33` (15 find
    { RootSessionOf(sessionID string) (string, error) }` in `internal/team`, registered on the same store under a new key
    `team.lineage-root` (contract test updated). Tests: no lineage → itself; a 3-hop chain → the root; a cycle (raw insert)
    → stops, returns the last unseen; DB error surfaces.
-2. **`SeatOf`.** `team.SeatReader { SeatOf(sessionID string) (Seat{TeamID, Role string}, error) }` under a new key
-   `team.seat-reader`, answered from the team stores with one indexed query (not `buildRoster`); `Role` is `lead`,
-   `member` or `""`; an ended member returns what the store holds now (the workbook stores its own snapshot at insert).
-   Tests: lead, member, solo (`""`), unknown session (`""`, nil), DB error. Measure one call on the real mlab
-   `team.db` copy and state it in the PR (it runs once per inserted entry, outside any lock).
+2. **`SeatOf`** (purdex-1f's requirement). `team.SeatReader { SeatOf(sessionID string) (Seat{TeamID, Role string},
+   error) }` under a new key `team.seat-reader`, **built on X2a's single role gate** `(*Store).SessionRole`
+   (`remote_members_store.go:274`, `sessionRoleIn` / `roleChecks`, merged 717dc40d) — no separate query over `teams` /
+   `team_members` — plus the team id of the row that role came from: `lead` → `teams.id` of the live team it leads,
+   `member_local` → `team_members.team_id`, `member_remote` → `remote_members.team_id` (the team id on the lead's
+   host). `Role` on the wire is `lead | member | member_remote | none`. An ended member returns what the store holds now
+   (the workbook keeps its own snapshot from insert time). Tests: lead, local member, remote member (its lead-host team
+   id), solo (`none`), unknown session (`none`, nil), DB error. Measure one call on a copy of mlab's `team.db` and state
+   it in the PR (it runs once per inserted entry, never inside a lock).
 3. **Failure turn-end (D4).** `TurnEndEvent.Failed`; `publishTurnEnd` accepts `PdxStopFailure` + `LifecycleStopFailure`
    for a main turn; team `onTurnEnd` returns on `Failed`. Tests: a main StopFailure publishes `Failed: true`; a subagent
    StopFailure does not; team records nothing for a failed event; the existing Stop path is unchanged.

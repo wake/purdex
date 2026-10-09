@@ -122,7 +122,7 @@ wb_entries(
   reason TEXT NOT NULL DEFAULT '', -- failed: timeout|format|exit|auth ; skipped: no_text|backlog|cap|model
   thing TEXT, push TEXT, entry TEXT, thing_done INTEGER NOT NULL DEFAULT 0,
   push_ready_at INTEGER NOT NULL DEFAULT 0,   -- when thing/push were final (§5.4); the push hold waits on it
-  team_id TEXT, role TEXT, ref TEXT,   -- who the session was at that moment (employee workbook later)
+  team_id TEXT, role TEXT, ref TEXT,   -- who the session was at that moment (employee workbook later); role lead|member|member_remote|none (team's role gate, 1f)
   prompt_ver INTEGER NOT NULL, latency_ms INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
   UNIQUE(session_id, turn_id))
 wb_status(conv_key TEXT PRIMARY KEY, status TEXT NOT NULL, entry_id INTEGER NOT NULL, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL)
