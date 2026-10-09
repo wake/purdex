@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 
 	"github.com/wake/purdex/internal/team"
@@ -204,6 +205,11 @@ func (m *Module) handleTaskList(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	m.listTasksAs(w, c, q)
+}
+
+// listTasksAs is the task list for the caller c (see createReportAs): its own query decides member / mine / all.
+func (m *Module) listTasksAs(w http.ResponseWriter, c taskCaller, q url.Values) {
 	owner := ""
 	switch target := q.Get("member"); {
 	case q.Get("mine") == "1" && c.member == nil:
@@ -300,11 +306,16 @@ func (m *Module) handleTaskStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	m.setTaskStatusAs(w, c, r.PathValue("id"), req)
+}
+
+// setTaskStatusAs is the status change of task id for the caller c (see createReportAs).
+func (m *Module) setTaskStatusAs(w http.ResponseWriter, c taskCaller, id string, req team.TaskStatusRequest) {
 	if !slices.Contains([]team.TaskStatus{team.TaskPending, team.TaskInProgress, team.TaskCompleted, team.TaskDeleted}, req.Status) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, fmt.Sprintf("status must be pending, in_progress, completed or deleted, got %q", string(req.Status)), nil)
 		return
 	}
-	row, ok := m.lookupTask(w, c, r.PathValue("id"))
+	row, ok := m.lookupTask(w, c, id)
 	if !ok {
 		return
 	}
@@ -318,7 +329,7 @@ func (m *Module) handleTaskStatus(w http.ResponseWriter, r *http.Request) {
 		updated, err = m.store.SetTaskStatus(c.team.ID, row.Seq, req.Status, team.TaskByLead, m.now())
 	}
 	if err != nil {
-		m.taskStoreErr(w, "status of "+r.PathValue("id"), err)
+		m.taskStoreErr(w, "status of "+id, err)
 		return
 	}
 	m.respondTask(w, http.StatusOK, c, updated, "status:"+string(req.Status))

@@ -124,6 +124,8 @@ type Module struct {
 	cmdLimit *peersmod.HostLimiter
 	// factLimit is the same for the facts route (a flood of fresh fact ids is rate-limited before decode).
 	factLimit *peersmod.HostLimiter
+	// proxyLimit is the same for the member-report proxy route (X6).
+	proxyLimit *peersmod.HostLimiter
 	// afterTargetResolved, when set, runs in the commands route between the target's resolution and the apply (test
 	// seam for a consent revoked meanwhile). nil in production.
 	afterTargetResolved func()
@@ -367,6 +369,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	m.cmdLimit = newCommandLimiter()
 	m.factLimit = newCommandLimiter()
+	m.proxyLimit = newCommandLimiter()
 	svc, ok := c.Registry.Get(peersmod.OriginResolverKey)
 	if !ok {
 		return fmt.Errorf("team: service %q not registered", peersmod.OriginResolverKey)
@@ -470,6 +473,7 @@ func (m *Module) Init(c *core.Core) error {
 // the relay routes and the 分流 routes (Go method patterns).
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+FactsRoute, m.handleTeamFact)                     // cross-host team facts (X3b-2); a host principal's, not the admin's
+	mux.HandleFunc("POST "+team.ProxyRoute, m.handleTeamProxy)               // a remote member's report / task calls, owner-scoped (X6)
 	mux.HandleFunc("POST "+CommandsRoute, m.handleTeamCommand)               // cross-host team commands (X2b); a host principal's, not the admin's
 	mux.HandleFunc("GET "+team.RemoteMembersRoute, m.handleRemoteMembersGet) // the admin's view of remote members (X2c)
 	mux.HandleFunc("POST "+team.RemoteMembersEndRoute, m.handleRemoteMembersEnd)
