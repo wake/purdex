@@ -146,6 +146,39 @@ func TestCatchUp_ACursorOutsideTheWindowTakesTheNewestThree(t *testing.T) {
 	}
 }
 
+// The Stop hook fires before Claude Code writes the turn's duration row, so the turn that just ended still reads as
+// running in the transcript (measured on a real session, WB-1c gate). The newest turn counts as the one that ended when
+// its last words are the hook's last_assistant_message; a newer turn that has only just begun does not.
+// Mutation gate: drop the running-last rule → the summary lags one turn behind → red.
+func TestCatchUp_TheTurnThatJustEndedStillReadsRunning(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	justEnded := runningTurn("t2")
+	justEnded.Items = []convmodel.Item{userItem("做 t2"), agentItem("全部完成了")}
+	k.turns.set("s1", endedTurn("t1", 100, "a"), justEnded)
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "全部完成了", At: 5000, Seq: 1})
+	rows := k.entries("s1")
+	if turnIDs(rows) != "t2" || rows[0].TurnAt != 5000 {
+		t.Fatalf("recorded %q at %d, want t2 at 5000", turnIDs(rows), rows[0].TurnAt)
+	}
+	// the next prompt has begun: it is running with other words, and the ended turn is the one before it
+	k2 := newKit(t)
+	k2.capable["s1"] = true
+	k2.turns.set("s1", endedTurn("t1", 100, "第一輪的結論"), runningTurn("t2")) // t2 says "working"
+	k2.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "第一輪的結論", At: 6000, Seq: 1})
+	if got := turnIDs(k2.entries("s1")); got != "t1" {
+		t.Fatalf("recorded %q, want t1 (t2 only began)", got)
+	}
+	// a hook with no text (a failure, a tool-only turn): the running last turn that did something is taken
+	k3 := newKit(t)
+	k3.capable["s1"] = true
+	k3.turns.set("s1", endedTurn("t1", 100, "a"), runningTurn("t2"))
+	k3.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "", At: 7000, Seq: 1, Failed: true})
+	if got := turnIDs(k3.entries("s1")); got != "t2" {
+		t.Fatalf("recorded %q, want t2", got)
+	}
+}
+
 // A turn with no assistant text and no tool step is not summarised: no entry.
 func TestCatchUp_ATurnWithNothingToSummariseIsNotRecorded(t *testing.T) {
 	k := newKit(t)
