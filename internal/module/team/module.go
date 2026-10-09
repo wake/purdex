@@ -126,8 +126,9 @@ type Module struct {
 	eventMu sync.Mutex
 	// sessionSubs are the SubscribeSession subscriptions (approval_feed.go), under eventMu; responderHolds counts
 	// the HoldResponder holders.
-	sessionSubs    map[uint64]sessionSub
+	sessionSubs    map[string]map[uint64]func(op string, a team.Approval) // by session id, then subscription id
 	nextSessionSub uint64
+	sessionSubN    int // subscriptions in all
 	responderHolds atomic.Int64
 
 	// rosterMu orders the team.roster stream (plan PL-1f′): held across
@@ -425,6 +426,7 @@ func (m *Module) Stop(context.Context) error {
 	m.createMu.Lock()
 	m.stopCancel()
 	m.createMu.Unlock()
+	m.dropSessionSubs()
 	m.sweepWG.Wait()
 	m.spawnWG.Wait()
 	return nil

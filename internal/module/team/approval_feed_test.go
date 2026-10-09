@@ -1,6 +1,8 @@
 package teammod
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"testing"
@@ -133,7 +135,7 @@ func TestSubscribeSession_CancelStopsDeliveryAndIsIdempotent(t *testing.T) {
 		t.Fatalf("ops after cancel: %+v", ops)
 	}
 	f.m.eventMu.Lock() // cancel never leaves a subscription behind
-	n := len(f.m.sessionSubs)
+	n := f.m.sessionSubN + len(f.m.sessionSubs)
 	f.m.eventMu.Unlock()
 	if n != 0 {
 		t.Fatalf("%d subscriptions left", n)
@@ -204,5 +206,67 @@ func TestSubscribeSession_SessionIdsAreCaseSensitive(t *testing.T) {
 	f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil) // a closed op of sid-1
 	if len(open) != 0 || len(c.got()) != 0 {
 		t.Fatalf("SID-1 received sid-1's approvals: open %+v ops %+v", open, c.got())
+	}
+}
+
+// A callback that panics is dropped and the others still get every op; the host's approval stream goes on.
+func TestSubscribeSession_APanickingCallbackDoesNotStopTheOthers(t *testing.T) {
+	f := newFixture(t)
+	bad := func(string, team.Approval) { panic("consumer bug") }
+	good := &collector{}
+	for _, fn := range []func(string, team.Approval){bad, good.fn, bad} {
+		if _, _, err := f.m.SubscribeSession("sid-1", fn); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := f.createFrom(uid(1), "/tmp/10.sock")
+	f.do(http.MethodDelete, "/api/team/approvals/"+a.ID, nil)
+	if ops := good.got(); len(ops) != 2 {
+		t.Fatalf("the healthy subscription saw %d ops, want opened and closed", len(ops))
+	}
+	f.m.eventMu.Lock()
+	n := f.m.sessionSubN
+	f.m.eventMu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d subscriptions left, want only the healthy one", n)
+	}
+}
+
+func TestSubscribeSession_IsBoundedAndStopClearsIt(t *testing.T) {
+	f := newFixture(t)
+	var cancels []func()
+	for i := 0; i < maxSessionSubs; i++ {
+		_, cancel, err := f.m.SubscribeSession("sid-1", (&collector{}).fn)
+		if err != nil {
+			t.Fatalf("subscription %d: %v", i, err)
+		}
+		cancels = append(cancels, cancel)
+	}
+	if _, _, err := f.m.SubscribeSession("sid-1", (&collector{}).fn); !errors.Is(err, ErrTooManySubscriptions) {
+		t.Fatalf("over the bound: %v", err)
+	}
+	cancels[0]()
+	if _, cancel, err := f.m.SubscribeSession("sid-1", (&collector{}).fn); err != nil {
+		t.Fatalf("after a cancel there is room again: %v", err)
+	} else {
+		cancel()
+	}
+	if err := f.m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f.m.eventMu.Lock()
+	n := f.m.sessionSubN
+	f.m.eventMu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d subscriptions survive Stop", n)
+	}
+	for _, c := range cancels { // late cancels after Stop are harmless
+		c()
+	}
+	f.m.eventMu.Lock()
+	n = f.m.sessionSubN
+	f.m.eventMu.Unlock()
+	if n != 0 {
+		t.Fatalf("count %d after late cancels", n)
 	}
 }
