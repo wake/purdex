@@ -73,7 +73,7 @@ func TestOwnership_APhoneListsAndRemovesOnlyItsOwnRegistrations(t *testing.T) {
 		t.Fatalf("the admin sees %v, want all three", got)
 	}
 	// Another phone's, the admin's and a made-up id are all the same 404 to a phone, and nothing is removed.
-	for _, id := range []string{idB, idAdmin, push.DeviceID(strings.Repeat("d4", 32))} {
+	for _, id := range []string{idB, idAdmin, push.DeviceID(strings.Repeat("d4", 32)), "not-an-id", "x"} {
 		if rec := e.as(phoneA, "DELETE", "/api/push/devices/"+id, ""); rec.Code != http.StatusNotFound {
 			t.Fatalf("phone A deleting %s: %d", id, rec.Code)
 		}

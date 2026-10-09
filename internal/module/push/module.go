@@ -415,11 +415,15 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 
 func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("device_id")
+	p, isDevice := devices.PrincipalFrom(r.Context())
 	if !push.ValidDeviceID(id) { // not an id this module ever issued: nothing to remove, and nothing of it is logged
+		if isDevice { // to a paired phone every id that is not its own is the same 404, well-formed or not
+			writeError(w, http.StatusNotFound, "not_found")
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	p, isDevice := devices.PrincipalFrom(r.Context())
 	m.mu.Lock()
 	if isDevice { // someone else's registration (or none) is the same 404 to a paired phone
 		if d, ok := m.devices[id]; !ok || d.OwnerDeviceID != p.ID {
