@@ -510,3 +510,39 @@ func TestOwnerAdapter_MapsPanesToOwnersAndPassesErrors(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A Stop that gave up waiting (its context ended) must not leave the module unable to start again.
+func TestModule_StartWorksAfterATimedOutStop(t *testing.T) {
+	e := newEnv(t)
+	if err := e.mod.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = e.mod.Stop(ctx) // may return before the sweeper has (the context is already done)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		e.mod.mu.Lock()
+		running := e.mod.cancel != nil
+		e.mod.mu.Unlock()
+		if !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the module still counts as running after its sweeper returned")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := e.mod.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.mod.mu.Lock()
+	running := e.mod.cancel != nil
+	e.mod.mu.Unlock()
+	if !running {
+		t.Fatal("Start after a timed-out Stop did not start the sweeper")
+	}
+	if err := e.mod.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

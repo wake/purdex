@@ -90,8 +90,13 @@ func (m *Module) Start(ctx context.Context) error {
 	done := make(chan struct{})
 	m.cancel, m.done = cancel, done
 	go func() {
-		defer close(done)
 		m.cache.Run(ctx, sweepEvery)
+		m.mu.Lock() // the module is no longer running: a later Start may begin again, whoever stopped this one
+		if m.done == done {
+			m.cancel, m.done = nil, nil
+		}
+		m.mu.Unlock()
+		close(done)
 	}()
 	log.Println("[conversation] endpoints enabled")
 	return nil
@@ -109,15 +114,10 @@ func (m *Module) Stop(ctx context.Context) error {
 	cancel()
 	select {
 	case <-done:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	m.mu.Lock()
-	if m.done == done {
-		m.cancel, m.done = nil, nil
-	}
-	m.mu.Unlock()
-	return nil
 }
 
 // ownerAdapter maps the agent module's panes to the resolver's owners.
