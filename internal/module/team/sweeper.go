@@ -170,13 +170,14 @@ func (m *Module) endGoneTeams() {
 		if m.beforeEndTeam != nil {
 			m.beforeEndTeam(t)
 		}
-		ended, err := m.store.EndTeam(t.ID, t.LeadSessionID, team.TeamEndLeadGone, m.now())
+		ended, err := m.store.EndTeamWithCommands(t, team.TeamEndLeadGone, m.now(), m.leadTuple(t), m.newID)
 		if err != nil {
 			m.logf("[team] sweep team %s: %v", t.ID, err)
 			continue
 		}
 		if ended {
 			m.logf("[team] team %s ended (%s): its lead %s (%s) is gone", t.ID, team.TeamEndLeadGone, t.LeadRef, t.LeadSessionID)
+			m.kickCommands()
 			m.rosterChanged()
 		}
 	}

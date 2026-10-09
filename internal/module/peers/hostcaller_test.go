@@ -309,3 +309,15 @@ func TestHostCaller_TeamCapsAnOlderDaemonSupportsNothing(t *testing.T) {
 		t.Fatalf("caps = %+v err=%v, want none", caps, err)
 	}
 }
+
+// X3b-1b: a target "<alias>/<ref>" names a host by alias; the row is found by host id.
+func TestHostCaller_HostIDAndAliasLookups(t *testing.T) {
+	h := newHolder(config.PeerHost{Alias: "air26", URL: "http://x", HostID: "hostB", Token: "t"}, config.PeerHost{Alias: "noid", URL: "http://y", Token: "t"})
+	c := callerFor(h)
+	if c.HostIDOf("air26") != "hostB" || c.HostIDOf("noid") != "" || c.HostIDOf("zzz") != "" {
+		t.Fatal("HostIDOf")
+	}
+	if c.AliasOf("hostB") != "air26" || c.AliasOf("hostZ") != "" {
+		t.Fatal("AliasOf")
+	}
+}

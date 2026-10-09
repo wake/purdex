@@ -185,6 +185,24 @@ func (c *HostCaller) Paired(hostID string) bool {
 	return ok
 }
 
+// HostIDOf is the host id of the live peer entry whose alias is alias ("" when there is none or it carries no host id).
+func (c *HostCaller) HostIDOf(alias string) string {
+	for _, h := range c.hosts() {
+		if h.Alias == alias && h.HostID != "" {
+			return h.HostID
+		}
+	}
+	return ""
+}
+
+// AliasOf is the alias of the live peer entry carrying hostID ("" when unpaired).
+func (c *HostCaller) AliasOf(hostID string) string {
+	if e, ok := c.entry(hostID); ok {
+		return e.Alias
+	}
+	return ""
+}
+
 // TeamCaps fetches the paired host's GET /api/peers envelope and returns its team capabilities as they apply to us
 // (rule 7). An older daemon (no "team" in the envelope) supports nothing: empty kinds, allow_team false. An unpaired
 // host id, a transport failure, a non-ok envelope or an envelope naming another host is an error.

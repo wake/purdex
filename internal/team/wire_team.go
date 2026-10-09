@@ -17,6 +17,7 @@ const (
 	ErrTeamFull        = "team_full"         // live members plus running spawns reached grant.max_members
 	ErrCwdOutsideGrant = "cwd_outside_grant" // the cwd, symlinks evaluated, is under no granted root
 	ErrNotYourMember   = "not_your_member"   // kill: the target is no member of the caller's team
+	ErrCommandPending  = "command_pending"   // a remote member has an adopt, release or kill in flight that a kill / release must wait for (cross-host spec §4.2)
 )
 
 // Spawn failure reasons: SpawnOp.Reason when State is SpawnFailed. The CLI

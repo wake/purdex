@@ -201,6 +201,13 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 	if err != nil || res != ReportApplied {
 		return op, res, err
 	}
+	if r.State == team.RelayCleared && s.newID != nil {
+		// the lead moved: every host with a live remote member of its team is told, in this very transaction (X3b-1b)
+		lead := team.TeamLead{SessionID: r.NewSessionID, Ref: r.NewRef, Address: s.alias() + "/" + r.NewRef, PID: op.PID, ProcStart: op.ProcStart}
+		if err := s.enqueueLeadMovedTx(tx, lead, s.newID, r.At); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lead_moved: %w", id, err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: commit: %w", id, err)
 	}
