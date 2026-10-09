@@ -98,6 +98,22 @@ describe('startAdoptionWait', () => {
     expect(entry().state).toBe('active')
   })
 
+  it.each([[404, 'unsupported'], [404, 'not_found'], [409, 'not_approved'], [400, 'bad_request'], [0, 'host_removed']])('HTTP %i %s is permanent: no retry, ends failed with the reason', async (status, code) => {
+    mocked.mockRejectedValue(new ApprovalApiError(status, code))
+    startAdoptionWait('lead', 'ap-1', payload)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(mocked).toHaveBeenCalledTimes(1)
+    expect(entry()).toMatchObject({ state: 'failed', code })
+  })
+
+  it.each([[429, 'http_429'], [500, 'http_500'], [503, 'http_503']])('HTTP %i is retried', async (status, code) => {
+    mocked.mockRejectedValueOnce(new ApprovalApiError(status, code)).mockResolvedValueOnce(ans('active'))
+    startAdoptionWait('lead', 'ap-1', payload)
+    await vi.advanceTimersByTimeAsync(2_500)
+    expect(mocked).toHaveBeenCalledTimes(2)
+    expect(entry().state).toBe('active')
+  })
+
   it('a second start for the same approval does not open a second loop', async () => {
     mocked.mockImplementation(() => new Promise(() => {}))
     startAdoptionWait('lead', 'ap-1', payload)

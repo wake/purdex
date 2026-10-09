@@ -154,7 +154,9 @@ async function run(key: string, hostId: string, approvalId: string): Promise<voi
       answer = await ask(hostId, approvalId, waitS, timeoutMs)
     } catch (e: unknown) {
       if (!useAdoptionWait.getState().entries[key]) return
-      if (e instanceof ApprovalApiError && e.code === 'host_removed') { finish(key, 'timeout'); return }
+      // Only a transport failure, 429 and 5xx can pass: a 404 (unsupported / not_found), a 409 not_approved, the host
+      // forgotten or any other 4xx will answer the same next time, so it ends here with its code.
+      if (e instanceof ApprovalApiError && !(e.code === 'network' || e.status === 429 || e.status >= 500)) { finish(key, 'failed', e.code); return }
       if (last) { finish(key, 'timeout'); return }
       // Not yet at the deadline: back off (never past it); at it, the next turn is the final ask.
       if (Date.now() < deadline) {
