@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.627] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版讓對話的即時推送帶上燈號變化，並為之後「把執行中的 session 收進 team」打好資料層基礎（目前沒有可見的行為變化）。
+
+### Changed：對話推送帶上即時燈號，任務摘要正確解碼 — 介面語言 U1-6f（#2129，介面線）
+
+- 對話的 WS 連線每次輪詢時會重新讀取這個 session 的燈號；燈號一變，就推送一則對話標頭更新，不用重連。
+- 任務通知的摘要裡的 `&amp;`、`&gt;` 等字元改為正確顯示。
+
+### Added：收編與釋放 member 的資料層 — U24 PL-1b（#2128、#2130）
+
+- team.db 自動補上新欄位：member 怎麼加入（派出或收編）、何時離開、欠它什麼通知，以及申請被取消的原因。既有的 member 一律視為派出，行為不變。
+- 核准收編時，會在寫鎖內重新檢查所有條件，並以資料庫裡存的申請內容為準。
+- `pdx kill` 不會再對已被釋放的 member 動手：那個 session 已經不屬於任何 team，會被拒絕，tmux 完全不會被碰到。
+- 收編與釋放的 API、CLI 尚未開放（之後的 PR）。
+
 ## [1.0.0-alpha.626] - 2026-10-09
 
 > 動 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主 checkout 快轉生效（Mac App 按 Cmd+R）；Electron 不必更新。這一版修正 daemon 與新 tmux session 帶著別的 Claude Code session 身分的問題，並換上新的狀態列用量顯示。
