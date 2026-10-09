@@ -212,6 +212,9 @@ type Device struct {
 	UpdatedAt  int64
 	LastSentAt int64
 	LastError  string
+	// OwnerDeviceID is the paired phone (a devices-module id) whose token registered this APNs token; "" when the admin
+	// token did. A device principal sees and removes only its own; registering an APNs token again moves it to the caller.
+	OwnerDeviceID string
 }
 
 // DeviceView is the debugging view of a Device (spec §4.3): the token masked, the tabs counted.

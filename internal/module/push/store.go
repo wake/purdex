@@ -22,7 +22,7 @@ type Store struct {
 }
 
 const columns = `token, device_id, bundle_id, env, platform, device_name, host_label, locale, prefs,
-	created_at, updated_at, last_sent_at, last_error`
+	created_at, updated_at, last_sent_at, last_error, owner_device_id`
 
 // OpenStore opens (or creates) the store at path. Use ":memory:" for tests.
 func OpenStore(path string) (*Store, error) {
@@ -60,6 +60,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate push db: %w", err)
 	}
+	if err := addOwnerColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if path != ":memory:" {
 		restrictSidecars(path)
 	}
@@ -68,6 +72,34 @@ func OpenStore(path string) (*Store, error) {
 		st.path = path
 	}
 	return st, nil
+}
+
+// addOwnerColumn adds owner_device_id to a push.db created before QR pairing (the table is deployed, so the schema moves
+// by migration): existing registrations belong to no paired phone ("" = registered with the admin token).
+func addOwnerColumn(db *sql.DB) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('push_devices')`)
+	if err != nil {
+		return errors.New("migrate push db: cannot read the schema")
+	}
+	has := false
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) == nil && name == "owner_device_id" {
+			has = true
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return errors.New("migrate push db: cannot read the schema")
+	}
+	if has {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE push_devices ADD COLUMN owner_device_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return errors.New("migrate push db: cannot add owner_device_id")
+	}
+	return nil
 }
 
 // dbFileMode: owner-only for push.db and its WAL sidecars.
@@ -84,7 +116,7 @@ func restrictSidecars(path string) {
 func (s *Store) Close() error { return s.db.Close() }
 
 // Upsert stores d (keyed by its token) and returns the stored row. The same token again replaces every registration
-// field and bumps updated_at; created_at and the send history (last_sent_at, last_error) stay.
+// field (the owner too: whoever holds the APNs token is that phone) and bumps updated_at; created_at and the send history (last_sent_at, last_error) stay.
 func (s *Store) Upsert(d push.Device) (push.Device, error) {
 	prefs, err := json.Marshal(d.Prefs)
 	if err != nil {
@@ -93,13 +125,13 @@ func (s *Store) Upsert(d push.Device) (push.Device, error) {
 	now := s.now()
 	if _, err := s.db.Exec(`
 		INSERT INTO push_devices (token, device_id, bundle_id, env, platform, device_name, host_label, locale, prefs,
-			created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			created_at, updated_at, owner_device_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(token) DO UPDATE SET
 			bundle_id = excluded.bundle_id, env = excluded.env, platform = excluded.platform,
 			device_name = excluded.device_name, host_label = excluded.host_label, locale = excluded.locale,
-			prefs = excluded.prefs, updated_at = excluded.updated_at`,
-		d.Token, d.DeviceID, d.BundleID, d.Env, d.Platform, d.DeviceName, d.HostLabel, d.Locale, string(prefs), now, now,
+			prefs = excluded.prefs, updated_at = excluded.updated_at, owner_device_id = excluded.owner_device_id`,
+		d.Token, d.DeviceID, d.BundleID, d.Env, d.Platform, d.DeviceName, d.HostLabel, d.Locale, string(prefs), now, now, d.OwnerDeviceID,
 	); err != nil {
 		return push.Device{}, errors.New("store device: write failed")
 	}
@@ -161,7 +193,7 @@ func scan(r scanner) (push.Device, error) {
 	var d push.Device
 	var prefs string
 	if err := r.Scan(&d.Token, &d.DeviceID, &d.BundleID, &d.Env, &d.Platform, &d.DeviceName, &d.HostLabel, &d.Locale, &prefs,
-		&d.CreatedAt, &d.UpdatedAt, &d.LastSentAt, &d.LastError); err != nil {
+		&d.CreatedAt, &d.UpdatedAt, &d.LastSentAt, &d.LastError, &d.OwnerDeviceID); err != nil {
 		return push.Device{}, errors.New("read device: scan failed")
 	}
 	if err := json.Unmarshal([]byte(prefs), &d.Prefs); err != nil {

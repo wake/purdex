@@ -29,6 +29,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/push/apns"
@@ -381,6 +382,9 @@ func (m *Module) handlePost(w http.ResponseWriter, r *http.Request) {
 		DeviceID: push.DeviceID(req.Token), Token: req.Token, BundleID: req.BundleID, Env: req.Env, Platform: req.Platform,
 		DeviceName: req.DeviceName, HostLabel: req.HostLabel, Locale: req.Locale, Prefs: req.Prefs,
 	}
+	if p, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
+		d.OwnerDeviceID = p.ID // a paired phone registers as itself; the same APNs token again moves to whoever sends it
+	}
 	m.mu.Lock()
 	stored, err := m.store.Upsert(d)
 	if err == nil {
@@ -396,10 +400,14 @@ func (m *Module) handlePost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stored.View())
 }
 
-func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
+func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
+	p, isDevice := devices.PrincipalFrom(r.Context())
 	devs := m.snapshot()
 	views := make([]push.DeviceView, 0, len(devs))
 	for _, d := range devs {
+		if isDevice && d.OwnerDeviceID != p.ID {
+			continue // a paired phone sees only its own registrations
+		}
 		views = append(views, d.View())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
@@ -411,7 +419,15 @@ func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	p, isDevice := devices.PrincipalFrom(r.Context())
 	m.mu.Lock()
+	if isDevice { // someone else's registration (or none) is the same 404 to a paired phone
+		if d, ok := m.devices[id]; !ok || d.OwnerDeviceID != p.ID {
+			m.mu.Unlock()
+			writeError(w, http.StatusNotFound, "not_found")
+			return
+		}
+	}
 	gone, err := m.store.DeleteByID(id)
 	if err == nil {
 		delete(m.devices, id)
