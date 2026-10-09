@@ -12,6 +12,7 @@ import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { pinnedLeaseRelease } from './nex/nex-api'
 import { usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
+import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useApprovalStore } from '../stores/useApprovalStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { wireIdOfHost } from './profile/host-identity'
@@ -83,6 +84,7 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
     agentStatuses: {},
     agentUnread: {},
     agentModels: {},
+    teamUi: useTeamUiStore.getState().snapshotHostTeams(hostId),
   }
   for (const [k, v] of Object.entries(agentStore.lastEvents)) {
     if (k.startsWith(prefix)) snapshot.agentEvents[k] = v
@@ -179,6 +181,7 @@ const CASCADE_STORES: readonly WholeStore[] = [
   useNexHostStore,
   usePeerStore,
   useSessionCwdStore,
+  useTeamUiStore,
   useHostStore,
 ] as unknown as WholeStore[]
 
@@ -204,6 +207,9 @@ function cascadeSteps(hostId: string, wireId: string): void {
   // from one daemon says nothing about another.
   usePeerStore.getState().forgetHost(hostId)
   useSessionCwdStore.getState().forgetHost(hostId)
+  // The person's arrangement of this host's teams (order, collapse, panel mode, ghost workspace) is device-local state
+  // about a host that is leaving: it goes with it (the only places that prune it are a roster frame and this).
+  useTeamUiStore.getState().forgetHostTeams(hostId)
   useHostStore.getState().removeHost(hostId)
 }
 
@@ -217,6 +223,8 @@ interface UndoSnapshot {
   agentStatuses: Record<string, AgentStatus>
   agentUnread: Record<string, boolean>
   agentModels: Record<string, string>
+  /** The host's team arrangement (useTeamUiStore), put back by undo. */
+  teamUi: ReturnType<ReturnType<typeof useTeamUiStore.getState>['snapshotHostTeams']>
 }
 
 function makeUndo(hostId: string, wireId: string, snapshot: UndoSnapshot, grant: OperationLockGrant | null): () => void {
@@ -235,6 +243,9 @@ function makeUndo(hostId: string, wireId: string, snapshot: UndoSnapshot, grant:
 
     // --- Restore sessions ---
     if (snapshot.sessions) useSessionStore.getState().replaceHost(hostId, snapshot.sessions)
+
+    // --- Restore the team arrangement ---
+    useTeamUiStore.getState().restoreHostTeams(snapshot.teamUi)
 
     // --- Restore AgentStore data ---
     const ag = useAgentStore.getState()

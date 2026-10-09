@@ -59,6 +59,16 @@ describe('selectTeamViews — shape and order', () => {
     expect(v.members.map((m) => [m.role, m.session.session_id, m.joinedAt])).toEqual([['member', 'A', 10], ['member', 'C', 20], ['member', 'B', 30]])
   })
 
+  it('carries the team name and label; both are "" when the roster has none (a daemon that predates them)', () => {
+    const named = { ...team('t1', sess('L')), team_name: 'Release train', team_label: '發版' }
+    const bare = { ...team('t2', sess('L2')) } as Partial<TeamRoster> as TeamRoster
+    delete (bare as Partial<TeamRoster>).team_name
+    delete (bare as Partial<TeamRoster>).team_label
+    const [a, b] = selectTeamViews(input({ rosterByHost: { h1: [named, bare] } }))
+    expect([a.name, a.label]).toEqual(['Release train', '發版'])
+    expect([b.name, b.label]).toEqual(['', ''])
+  })
+
   it('colorIndex is FNV-1a 32 of the team id mod 8: in 0..7, the same on every call, host-independent', () => {
     const views = selectTeamViews(input({ rosterByHost: { h1: [team('alpha', sess('L1')), team('beta', sess('L2'))], h2: [team('alpha', sess('L3'))] } }))
     expect(views.map((v) => v.colorIndex)).toEqual([fnv1a32('alpha') % 8, fnv1a32('beta') % 8, fnv1a32('alpha') % 8])

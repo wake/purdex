@@ -15,6 +15,7 @@ import { useLayoutStore } from './stores/useLayoutStore'
 import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
+import { TeamDisplayProvider } from './components/team/TeamDisplayProvider'
 import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useWorkerAgentProjection } from './hooks/useWorkerAgentProjection'
@@ -187,6 +188,7 @@ export default function App() {
   return (
     <ErrorBoundary>
     <Router>
+      <TeamDisplayProvider>
       <ThemeInjector />
       <div className="h-screen flex flex-col bg-surface-primary text-text-primary">
         <TitleBar title={titleText} />
@@ -284,6 +286,7 @@ export default function App() {
         </div>
       </div>
       <GlobalUndoToast />
+      </TeamDisplayProvider>
     </Router>
     </ErrorBoundary>
   )

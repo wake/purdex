@@ -18,6 +18,8 @@ import { getPrimaryPane, scanPaneTree } from './pane-tree'
 import { HOST_DELETE_LOCK_OWNER, HostDeleteRollbackIncompleteError, deleteHostCascade, deleteHostWithUndoToast, startPeerCacheInvalidation } from './host-lifecycle'
 import { emptyPeerHostEntry, usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
+import { useTeamUiStore } from '../stores/useTeamUiStore'
+import { teamKeyOf } from './team/team-views'
 import { approvalKey, useApprovalStore } from '../stores/useApprovalStore'
 import type { Approval } from './team/types'
 import { useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
@@ -1476,5 +1478,47 @@ describe('host delete cascade — parked worlds', () => {
     expect(contentIn(lp.parkedMaster, master.a.id)).toMatchObject({ hostId: HOST_A })
     expect(contentIn(lp.slaves.off.world, off.a.id)).toMatchObject({ hostId: HOST_A })
     expect(getPrimaryPane(useTabStore.getState().tabs[live.a.id].layout).content).toMatchObject({ hostId: HOST_A })
+  })
+})
+
+describe('host delete cascade — the team arrangement (team interface plan TI-1a)', () => {
+  beforeEach(() => {
+    resetAllStores()
+    useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {} })
+  })
+  const arrange = (key: string) => {
+    useTeamUiStore.getState().setMemberOrder(key, ['m1', 'm2'])
+    useTeamUiStore.getState().setCollapsed(key, true)
+    useTeamUiStore.getState().setPanelMode(key, 'line')
+    useTeamUiStore.getState().setGhostWorkspace(key, 'w1')
+  }
+
+  it('deleting a host drops its teams\' arrangement and only its', () => {
+    const mine = teamKeyOf(HOST_B, 't1'), theirs = teamKeyOf(HOST_A, 't1')
+    arrange(mine)
+    arrange(theirs)
+    deleteHostCascade(HOST_B)
+    const s = useTeamUiStore.getState()
+    for (const slice of [s.memberOrder, s.collapsed, s.panelMode, s.ghostWorkspace]) expect(Object.keys(slice)).toEqual([theirs])
+  })
+
+  it('undo puts the arrangement back', () => {
+    const mine = teamKeyOf(HOST_B, 't1')
+    arrange(mine)
+    const undo = deleteHostCascade(HOST_B)
+    expect(useTeamUiStore.getState().collapsed[mine]).toBeUndefined()
+    undo()
+    const s = useTeamUiStore.getState()
+    expect(s.memberOrder[mine]).toEqual(['m1', 'm2'])
+    expect(s.collapsed[mine]).toBe(true)
+    expect(s.panelMode[mine]).toBe('line')
+    expect(s.ghostWorkspace[mine]).toBe('w1')
+  })
+
+  it('a refused deletion (the last host / an unknown one) leaves the arrangement alone', () => {
+    const key = teamKeyOf(HOST_B, 't1')
+    arrange(key)
+    deleteHostCascade('no-such-host')
+    expect(useTeamUiStore.getState().collapsed[key]).toBe(true)
   })
 })

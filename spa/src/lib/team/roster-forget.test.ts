@@ -4,6 +4,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { startRosterForget } from './roster-forget'
+import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { teamKeyOf } from './team-views'
 
 const host = (id: string, ip = '1.2.3.4', token: string | null = null) => ({ id, name: id, ip, port: 7860, order: 0, token })
 
@@ -50,5 +52,22 @@ describe('startRosterForget', () => {
     stop = undefined
     useHostStore.setState({ hosts: {}, hostOrder: [] })
     expect(Object.keys(useTeamRosterStore.getState().byHost).sort()).toEqual(['h1', 'h2'])
+  })
+})
+
+describe('the arrangement outlives the roster (plan review #5)', () => {
+  it('is kept when the host is re-pointed at another endpoint or token (forgetHost does not prune it)', () => {
+    const key = teamKeyOf('h1', 't1')
+    useTeamUiStore.setState({ memberOrder: { [key]: ['a'] }, collapsed: { [key]: true }, panelMode: {}, ghostWorkspace: {} })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: host('h1', '5.6.7.8') } }))
+    expect(Object.keys(useTeamRosterStore.getState().byHost)).toEqual(['h2']) // the roster went
+    expect(useTeamUiStore.getState().collapsed[key]).toBe(true) // the arrangement did not
+    expect(useTeamUiStore.getState().memberOrder[key]).toEqual(['a'])
+  })
+  it('is kept on a disconnect (the roster store forgetting a host)', () => {
+    const key = teamKeyOf('h1', 't1')
+    useTeamUiStore.setState({ memberOrder: {}, collapsed: { [key]: true }, panelMode: {}, ghostWorkspace: {} })
+    useTeamRosterStore.getState().forgetHost('h1')
+    expect(useTeamUiStore.getState().collapsed[key]).toBe(true)
   })
 })
