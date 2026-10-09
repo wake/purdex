@@ -435,7 +435,7 @@ func TestUnattendedView_QuotasNullWhenUnreadableEmptyWhenNone(t *testing.T) {
 }
 
 // The table is deployed without rev (RQ-1a, alpha.634): a database of that shape gets the column when it is opened,
-// keeps its rows (rev 0) and counts from there. Mutation gate: drop migrateRelayQuotaRev → red.
+// keeps its rows lifted to rev 1 (0 means "no row") and counts from there. Mutation gate: drop migrateRelayQuotaRev → red.
 func TestOpenStore_AddsRelayQuotaRevToTheDeployedShape(t *testing.T) {
 	path := t.TempDir() + "/team.db"
 	s, err := OpenStore(path)
@@ -460,11 +460,11 @@ func TestOpenStore_AddsRelayQuotaRevToTheDeployedShape(t *testing.T) {
 	}
 	defer s.Close()
 	q, _, err := s.RelayQuotaOf("r")
-	if err != nil || q != (team.RelayQuota{SelfLeft: 3, MemberPoolLeft: 1, Rev: 0}) {
-		t.Fatalf("after the migration: %+v (%v), want the row kept at rev 0", q, err)
+	if err != nil || q != (team.RelayQuota{SelfLeft: 3, MemberPoolLeft: 1, Rev: 1}) {
+		t.Fatalf("after the migration: %+v (%v), want the row kept and lifted to rev 1 (0 is \"no row\")", q, err)
 	}
-	if _, row, err := s.SetRelayQuota("r", ip(2), nil, 9, "app"); err != nil || row.Rev != 1 || row.SelfLeft != 2 || row.MemberPoolLeft != 1 {
-		t.Fatalf("first write after: %+v (%v), want rev 1", row, err)
+	if _, row, err := s.SetRelayQuota("r", ip(2), nil, 9, "app"); err != nil || row.Rev != 2 || row.SelfLeft != 2 || row.MemberPoolLeft != 1 {
+		t.Fatalf("first write after: %+v (%v), want rev 2", row, err)
 	}
 	// and opening it once more is a no-op
 	_ = s.Close()
@@ -495,3 +495,68 @@ func TestUnattendedView_QuotasNullWhenTheStoreCannotBeRead(t *testing.T) {
 		t.Fatalf("looping chain: %s, want \"quotas\":null", raw)
 	}
 }
+
+// Rows an older daemon inserts after a rollback have rev 0 (the column default): the next open lifts them too.
+func TestOpenStore_LiftsRev0RowsOnEveryOpen(t *testing.T) {
+	path := t.TempDir() + "/team.db"
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO relay_quotas (root_session_id, self_left, member_pool_left, updated_at, updated_by) VALUES ('old', 4, 0, 1, 'app')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if s, err = OpenStore(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if q, _, _ := s.RelayQuotaOf("old"); q.Rev != 1 || q.SelfLeft != 4 {
+		t.Fatalf("%+v, want rev 1 with the value kept", q)
+	}
+}
+
+// Writers racing for one chain get distinct, gapless versions: the read-increment-write is one write-locked
+// transaction. Mutation gate: read the version before the lock (outside the transaction) → duplicates → red.
+func TestSetRelayQuota_ConcurrentWritersGetDistinctRevs(t *testing.T) {
+	s := openTestStore(t)
+	const n = 20
+	var wg sync.WaitGroup
+	revs := make([]int64, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, row, err := s.SetRelayQuota("r", ip(i%90), nil, int64(i), "app")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			revs[i] = row.Rev
+		}()
+	}
+	wg.Wait()
+	seen := map[int64]bool{}
+	for _, r := range revs {
+		seen[r] = true
+	}
+	for want := int64(1); want <= n; want++ {
+		if !seen[want] {
+			t.Fatalf("revs = %v, want each of 1..%d exactly once", revs, n)
+		}
+	}
+}
+
+// The PUT of the switch answers quotas the same way the GET does: null when unreadable.
+func TestUnattendedPut_QuotasNullWhenTheStoreCannotBeRead(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.m.store.db.Exec(`DROP TABLE relay_quotas`); err != nil {
+		t.Fatal(err)
+	}
+	code, raw := f.do(http.MethodPut, UnattendedRoute, team.UnattendedPutRequest{On: ptr(true), Client: appClient2})
+	if code != http.StatusOK || !strings.Contains(string(raw), `"quotas":null`) {
+		t.Fatalf("PUT = %d %s, want 200 with \"quotas\":null", code, raw)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
