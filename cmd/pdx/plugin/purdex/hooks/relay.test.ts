@@ -338,7 +338,105 @@ test('a member does not self-relay', async ($, on) => {
   const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 180000, window: 200000, percent: 90 } })
   await start($, f)
   await turnAndSettle($, f, 't1')
-  expect(f.argvs.length).toBe(1)
+  expect(count(f, 'begin')).toBe(0)
+  expect(f.argvs.length).toBe(2) // the start's hello, and PL-1g's one re-check at the threshold: nothing else is called
+})
+
+// U24 PL-1g: a cached `member` role is re-read at the threshold, once a minute at most, by sending hello again.
+const helloCount = (f: Fake) => f.argvs.filter((a) => a[1] === 'relay' && a[2] === 'hello').length
+
+test('a member at the threshold sends hello again, and asks at the next turn end when the role is now none', async ($, on) => {
+  let role = 'member'
+  const f = relayWorld(on, { usage: { tokens: 180000, window: 200000, percent: 90 } })
+  f.pdx = (argv) => argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO(role) } : argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : { exitCode: 0, stdout: '{}' }
+  await start($, f)
+  expect(helloCount(f)).toBe(1)
+  role = 'none' // released, or its team ended, since
+  await turnAndSettle($, f, 't1') // the threshold turn: the re-check goes out, the role comes back none
+  expect(helloCount(f)).toBe(2)
+  expect(count(f, 'begin')).toBe(0)
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(1)
+})
+
+// Mutation gate: re-check below the threshold → red.
+test('a member below the threshold sends nothing', async ($, on) => {
+  const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 20000, window: 200000, percent: 10 } })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await turnAndSettle($, f, 't2')
+  expect(helloCount(f)).toBe(1)
+})
+
+// Mutation gate: no rate limit → red.
+test('the re-check runs at most once a minute', async ($, on) => {
+  const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 180000, window: 200000, percent: 90 } })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await turnAndSettle($, f, 't2')
+  await turnAndSettle($, f, 't3')
+  expect(helloCount(f)).toBe(2) // the start's, and one re-check
+  await f.clock.advance(61_000)
+  await turnAndSettle($, f, 't4')
+  expect(helloCount(f)).toBe(3)
+})
+
+// Mutation gate: drop the look-again after the awaits → a third hello goes out and the /clear's is superseded → red.
+test('a /clear while the threshold check reads the engine: the re-check sends no hello of its own', async ($, on) => {
+  let open!: () => void
+  const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 180000, window: 200000, percent: 90 }, usageGate: new Promise<void>((r) => { open = r }) })
+  await start($, f)
+  const t = turn($, 't1') // maybeBegin reads the engine and waits on the gate
+  await $.classic.SessionStart({ source: 'clear' }) // the new conversation's own hello is queued
+  open()
+  await t
+  await f.clock.settle()
+  expect(helloCount(f)).toBe(2) // the start's, and the /clear's: not a third from the re-check
+})
+
+// Mutation gate: keep lastAskPct when the role turns none → the +10 guard blocks the ask → red.
+test('a member the daemon refused at 95%, released since, asks again at the next turn end', async ($, on) => {
+  let role = 'none'
+  let refuse = true
+  const f = relayWorld(on, { usage: { tokens: 190000, window: 200000, percent: 95 } })
+  f.pdx = (argv) => argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO(role) }
+    : argv[1] === 'begin' ? (refuse ? { exitCode: 13, stderr: 'pdx relay: member_relay_is_leads' } : { exitCode: 0, stdout: BEGIN_OK })
+    : { exitCode: 0, stdout: '{}' }
+  await start($, f)
+  await turnAndSettle($, f, 't1') // begin is refused: the mod learns member, lastAskPct is 95
+  expect(count(f, 'begin')).toBe(1)
+  refuse = false // released since
+  await turnAndSettle($, f, 't2') // the re-check: hello answers none
+  await turnAndSettle($, f, 't3')
+  expect(count(f, 'begin')).toBe(2)
+})
+
+// Mutation gate: keep roleCheckedAt when the hello went unanswered → the second turn waits out the minute → red.
+test('a re-check hello the daemon did not answer is tried again at the next turn end', async ($, on) => {
+  let answer = false
+  const f = relayWorld(on, { usage: { tokens: 180000, window: 200000, percent: 90 } })
+  f.pdx = (argv) => argv[1] === 'hello' ? (answer || helloCount(f) === 1 ? { exitCode: 0, stdout: HELLO('member') } : { exitCode: 20, stderr: 'daemon unavailable' }) : { exitCode: 0, stdout: '{}' }
+  await start($, f)
+  await turnAndSettle($, f, 't1') // the re-check: not answered
+  expect(helloCount(f)).toBe(2)
+  await turnAndSettle($, f, 't2')
+  expect(helloCount(f)).toBe(3)
+})
+
+// The engine clock refusing: the real clock rate-limits the same way.
+test('with the engine clock refused, the re-check still runs at most once a minute', async ($, on) => {
+  const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 180000, window: 200000, percent: 90 }, refuseNow: true })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await turnAndSettle($, f, 't2')
+  expect(helloCount(f)).toBe(2)
+})
+
+test('a member whose hello still says member never begins', async ($, on) => {
+  const f = relayWorld(on, { pdx: pdxWith([], 'member'), usage: { tokens: 180000, window: 200000, percent: 90 } })
+  await start($, f)
+  for (const id of ['t1', 't2', 't3']) await turnAndSettle($, f, id)
+  expect(count(f, 'begin')).toBe(0)
 })
 
 test('self_relay_off / self_relay_paused (exit 13) are respected: no wait, idle, asks again only at +10', async ($, on) => {
