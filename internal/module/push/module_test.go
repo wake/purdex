@@ -2,12 +2,14 @@ package push
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -201,18 +203,68 @@ func TestNothingEverCarriesTheFullToken(t *testing.T) {
 	}
 }
 
-func TestInit_ARefusedKeyFailsTheModuleWithoutKeyMaterial(t *testing.T) {
+// A broken key does not fail the daemon: Init succeeds, the module reports why it is off, serves no route, opens no
+// store, and nothing it says carries key material (push spec §3).
+func TestInit_ABrokenKeySoftFailsWithoutKeyMaterial(t *testing.T) {
 	secret := "SUPERSECRETPEMCONTENT0123456789"
 	dir := t.TempDir()
 	must(t, os.WriteFile(filepath.Join(dir, "config.env"), []byte("APNS_KEY_ID=K\nAPNS_TEAM_ID=T\nAPNS_KEY_FILE=k.p8\n"), 0o600))
 	must(t, os.WriteFile(filepath.Join(dir, "k.p8"), []byte(secret), 0o600))
-	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir(), Push: &config.PushConfig{APNsDir: dir}}})
-	err := New().Init(c)
-	if err == nil {
-		t.Fatal("want an Init error")
+	data := t.TempDir()
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: data, Push: &config.PushConfig{APNsDir: dir}}})
+	logs := &bytes.Buffer{}
+	log.SetOutput(logs)
+	defer log.SetOutput(os.Stderr)
+
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatalf("a broken key must not fail Init: %v", err)
 	}
-	if strings.Contains(err.Error(), secret) {
-		t.Fatalf("the error carries key file content: %v", err)
+	st := m.Status()
+	if st["ready"] != false || st["init_error"] == "" {
+		t.Fatalf("status = %v", st)
+	}
+	mux := http.NewServeMux()
+	m.RegisterRoutes(mux)
+	for _, call := range [][2]string{{"GET", "/api/push/devices"}, {"POST", "/api/push/devices"}, {"DELETE", "/api/push/devices/abc"}} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(call[0], call[1], strings.NewReader("{}")))
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s %s: %d, want no such route", call[0], call[1], rec.Code)
+		}
+	}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(data, "push.db")); !os.IsNotExist(err) {
+		t.Fatalf("a module that is off must not create push.db (stat err = %v)", err)
+	}
+	if strings.Contains(logs.String(), secret) || strings.Contains(fmt.Sprint(st), secret) {
+		t.Fatal("the log or the status carries key file content")
+	}
+}
+
+func TestStatus_ReadyWhenTheKeyLoaded(t *testing.T) {
+	e := newEnv(t)
+	if st := e.mod.Status(); st["ready"] != true || st["init_error"] != "" {
+		t.Fatalf("status = %v", st)
+	}
+}
+
+// A store that cannot open is the same soft failure (the module is off, the daemon stays up).
+func TestInit_AStoreThatCannotOpenSoftFails(t *testing.T) {
+	data := filepath.Join(t.TempDir(), "not-a-dir")
+	must(t, os.WriteFile(data, []byte("x"), 0o600)) // DataDir is a file: push.db cannot be created under it
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: data, Push: &config.PushConfig{APNsDir: keyDirOf(t)}}})
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if st := m.Status(); st["ready"] != false || st["init_error"] == "" {
+		t.Fatalf("status = %v", st)
 	}
 }
 

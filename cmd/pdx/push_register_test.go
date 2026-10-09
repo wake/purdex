@@ -82,4 +82,32 @@ func TestRegisterServeModules_PushOn(t *testing.T) {
 	var body struct{ Capabilities []string }
 	require.NoError(t, json.Unmarshal(info.Body.Bytes(), &body))
 	assert.Contains(t, body.Capabilities, "push.v1")
+	assert.Contains(t, info.Body.String(), `"push":{"configured":true,"init_error":"","ready":true}`)
+}
+
+// A key that cannot be loaded does not stop the daemon: core init succeeds, /api/info says why push is off, push.v1 is
+// not announced and /api/push/* is a 404 (push spec §3).
+func TestRegisterServeModules_PushWithABrokenKeyLeavesTheDaemonUp(t *testing.T) {
+	dir := t.TempDir() // no config.env at all
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir(), Token: "t", Push: &config.PushConfig{APNsDir: dir}}})
+	require.NoError(t, registerServeModules(c, nil, nil))
+	require.NoError(t, c.InitModules(), "a broken push key must not fail core init")
+
+	info := serve(t, c, http.MethodGet, "/api/info")
+	require.Equal(t, http.StatusOK, info.Code)
+	var body struct {
+		Capabilities []string
+		Push         struct {
+			Configured bool   `json:"configured"`
+			Ready      bool   `json:"ready"`
+			InitError  string `json:"init_error"`
+		}
+	}
+	require.NoError(t, json.Unmarshal(info.Body.Bytes(), &body))
+	assert.NotContains(t, body.Capabilities, "push.v1")
+	assert.True(t, body.Push.Configured)
+	assert.False(t, body.Push.Ready)
+	assert.NotEmpty(t, body.Push.InitError)
+
+	assert.Equal(t, http.StatusNotFound, serve(t, c, http.MethodGet, "/api/push/devices").Code)
 }

@@ -2,6 +2,10 @@
 // docs/specs/2026-10-09-push-spec.md). It is mounted only when config.toml has a [push] section (cmd/pdx/main.go), so
 // its routes, and the `push.v1` capability, exist only then.
 //
+// Push is not a required feature, so a key that cannot be loaded does not stop the daemon: Init records why in init_error
+// and returns nil, the module serves no route, announces nothing (/api/info reports push.ready=false and the error) and
+// does nothing at Start. Nothing it says carries key material.
+//
 // This step (PU-1) holds the device registry: the key is loaded and validated at Init, devices are registered through
 // POST/GET /api/push/devices and DELETE /api/push/devices/{device_id}, stored in push.db and mirrored in memory. The
 // full token never leaves the module: responses carry the masked token and the device id, log lines the masked token.
@@ -39,6 +43,8 @@ type Module struct {
 	// holds a row the store does not.
 	mu      sync.Mutex
 	devices map[string]push.Device // by device id
+	ready   bool                   // the key loaded and the store opened; false = soft-failed (initErr says why)
+	initErr string
 }
 
 func New() *Module { return &Module{home: os.UserHomeDir, devices: map[string]push.Device{}} }
@@ -46,10 +52,24 @@ func New() *Module { return &Module{home: os.UserHomeDir, devices: map[string]pu
 func (m *Module) Name() string           { return "push" }
 func (m *Module) Dependencies() []string { return nil }
 
-// Init loads the APNs key (a failure refuses the module, logged without key material), opens push.db and reads every
-// device into the cache.
+// Init loads the APNs key, opens push.db and reads every device into the cache. Any failure is recorded (without key
+// material) and leaves the module off; Init itself returns nil so the daemon starts (push spec §3).
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	if err := m.load(c); err != nil {
+		m.mu.Lock()
+		m.ready, m.initErr = false, err.Error()
+		m.mu.Unlock()
+		log.Printf("[push] disabled: %v", err)
+		return nil
+	}
+	m.mu.Lock()
+	m.ready, m.initErr = true, ""
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Module) load(c *core.Core) error {
 	c.CfgMu.RLock()
 	dir, dataDir := c.Cfg.PushAPNsDir(), c.Cfg.DataDir
 	c.CfgMu.RUnlock()
@@ -60,24 +80,38 @@ func (m *Module) Init(c *core.Core) error {
 	if err != nil {
 		return fmt.Errorf("push: %w", err)
 	}
-	m.key, err = apnskey.Load(dir)
+	key, err := apnskey.Load(dir)
 	if err != nil {
 		return fmt.Errorf("push: %w", err)
 	}
-	m.store, err = OpenStore(filepath.Join(dataDir, "push.db"))
+	store, err := OpenStore(filepath.Join(dataDir, "push.db"))
 	if err != nil {
-		return fmt.Errorf("push: %w", err)
+		return errors.New("push: the device store cannot be opened")
 	}
-	list, err := m.store.List()
+	list, err := store.List()
 	if err != nil {
-		m.store.Close()
-		return fmt.Errorf("push: %w", err)
+		store.Close()
+		return errors.New("push: the device store cannot be read")
 	}
+	m.key, m.store = key, store
 	m.devices = make(map[string]push.Device, len(list))
 	for _, d := range list {
 		m.devices[d.DeviceID] = d
 	}
 	return nil
+}
+
+// Status is what /api/info reports under "push" (alongside the core's "configured").
+func (m *Module) Status() map[string]any {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return map[string]any{"ready": m.ready, "init_error": m.initErr}
+}
+
+func (m *Module) isReady() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ready
 }
 
 func (m *Module) expand(dir string) (string, error) {
@@ -92,12 +126,18 @@ func (m *Module) expand(dir string) (string, error) {
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
+	if !m.isReady() {
+		return // soft-failed: the routes do not exist (404), as if push were not configured
+	}
 	mux.HandleFunc("POST /api/push/devices", m.handlePost)
 	mux.HandleFunc("GET /api/push/devices", m.handleList)
 	mux.HandleFunc("DELETE /api/push/devices/{device_id}", m.handleDelete)
 }
 
 func (m *Module) Start(context.Context) error {
+	if !m.isReady() {
+		return nil
+	}
 	log.Printf("[push] enabled (%v, %d device(s))", m.key, len(m.snapshot()))
 	return nil
 }

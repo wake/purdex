@@ -53,12 +53,22 @@ var capabilities = []string{
 	"conversations.v1",       // GET /api/conversations/{provider}/{session_id} (snapshot, ?after= increments, ?around=) and .../subagents/{agent_id}
 }
 
-// capabilityList is the static list plus the one conditional capability: push.v1 while the push module is mounted
-// (push spec §3: `[push]` is boot-only, so "mounted" is "configured" for the life of the process). Every other name
-// above is unconditional; keep it that way unless a feature really can be switched off at boot.
+// pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose
+// key could not be loaded is soft-failed: its routes do not exist and nothing is announced (push spec §3).
+func (c *Core) pushReady() bool {
+	st, ok := c.ModuleStatus("push")
+	if !ok {
+		return false
+	}
+	ready, _ := st["ready"].(bool)
+	return ready
+}
+
+// capabilityList is the static list plus the one conditional capability: push.v1 while the push module is ready.
+// Every other name above is unconditional; keep it that way unless a feature really can be switched off at boot.
 func (c *Core) capabilityList() []string {
 	out := append([]string(nil), capabilities...)
-	if c.Mounted("push") {
+	if c.pushReady() {
 		out = append(out, "push.v1") // POST/GET /api/push/devices, DELETE /api/push/devices/{device_id}, PUT /api/push/presence
 	}
 	return out
@@ -91,6 +101,19 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	nex["mounted"] = mounted
 	nex["restart_required"] = restartRequired
 
+	// push: {configured, ready, init_error}, the same shape as nex's. configured is the boot value (spec §3: [push] is
+	// boot-only) and the core's to set; ready / init_error are the module's own report.
+	c.CfgMu.RLock()
+	pushConfigured := c.Cfg.PushAPNsDir() != ""
+	c.CfgMu.RUnlock()
+	push := map[string]any{"ready": false, "init_error": ""}
+	if st, ok := c.ModuleStatus("push"); ok {
+		for k, v := range st {
+			push[k] = v
+		}
+	}
+	push["configured"] = pushConfigured
+
 	info := map[string]any{
 		"host_id":        hostID,
 		"tmux_instance":  config.GetTmuxInstance(),
@@ -99,6 +122,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"os":             runtime.GOOS,
 		"arch":           runtime.GOARCH,
 		"nex":            nex,
+		"push":           push,
 		"capabilities":   c.capabilityList(),
 		"last_shutdown":  nil,
 	}
