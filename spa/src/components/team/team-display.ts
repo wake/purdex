@@ -35,12 +35,6 @@ export interface TeamSeatView {
 export interface TeamTabMark {
   teamKey: string
   color: string
-  /** The capsule text (the label, or the lead title cut to 10 wide) and the whole text for a tooltip. */
-  label: string
-  full: string
-  truncated: boolean
-  /** Tooltip of the capsule: `"<name> (<label>)"` when both exist. */
-  tooltip: string
   role: 'lead' | 'member'
   /** The seat's roster state (`active` | `joining` | `releasing` | `killing`) and the alias of the host a remote member lives on ('' = local). */
   seatState: string
@@ -51,18 +45,12 @@ export interface TeamTabMark {
   collapsed: boolean
   /** A member tab hidden by the collapse (the surface draws nothing for it). */
   hidden: boolean
-  /** Member tabs hidden by the collapse in this workspace (shown on the capsule as `+N`). */
-  hiddenCount: number
 }
-
-/** What the label capsule needs of a team (the tab bar's and the sidebar's are the same capsule). */
-export type TeamCapsule = Pick<TeamTabMark, 'teamKey' | 'color' | 'label' | 'full' | 'truncated' | 'tooltip' | 'collapsed'>
 
 export interface TeamBeads {
   teamKey: string
   color: string
   collapsed: boolean
-  capsule: TeamCapsule
   /** The members in team order, opened or not. */
   members: TeamSeatView[]
 }
@@ -71,11 +59,8 @@ export interface TeamBeads {
 export interface TeamGhostLead {
   teamKey: string
   color: string
-  label: string
-  full: string
   /** The team's shared fold state: the ghost's beads fold like a live lead's. */
   collapsed: boolean
-  capsule: TeamCapsule
   lead: TeamSeatView
   members: TeamSeatView[]
 }

@@ -4,8 +4,8 @@ import { groupSegments } from './groupSegments'
 import type { TeamTabMark } from './team-display'
 
 const mark = (teamKey: string, role: 'lead' | 'member'): TeamTabMark => ({
-  teamKey, color: '#a78bfa', label: teamKey, full: teamKey, truncated: false, tooltip: teamKey, role,
-  first: false, last: false, collapsed: false, hidden: false, hiddenCount: 0, seatState: 'active', hostAlias: '',
+  teamKey, color: '#a78bfa', role,
+  first: false, last: false, collapsed: false, hidden: false, seatState: 'active', hostAlias: '',
 })
 const marks: Record<string, TeamTabMark> = {
   lead: mark('T', 'lead'), a: mark('T', 'member'), b: mark('T', 'member'),
@@ -14,7 +14,7 @@ const marks: Record<string, TeamTabMark> = {
 const tabMark = (id: string) => marks[id] ?? null
 const t = (...ids: string[]) => ids.map((id) => ({ id }))
 const shape = (segs: ReturnType<typeof groupSegments<{ id: string }>>) =>
-  segs.map((s) => (s.kind === 'tab' ? s.tab.id : `[${s.tabs.map((x) => x.id).join(',')}${s.hidden ? `+${s.hidden}` : ''}]`))
+  segs.map((s) => (s.kind === 'tab' ? s.tab.id : `[${s.tabs.map((x) => x.id).join(',')}]`))
 
 describe('groupSegments', () => {
   it('a team run is the lead plus the members after it; other tabs are single segments', () => {
@@ -25,8 +25,8 @@ describe('groupSegments', () => {
     expect(shape(groupSegments(t('lead', 'a', 'lead2', 'c'), tabMark, {}))).toEqual(['[lead,a]', '[lead2,c]'])
   })
 
-  it('collapsed: the lead only, the hidden members counted', () => {
-    expect(shape(groupSegments(t('lead', 'a', 'b', 'y'), tabMark, { T: true }))).toEqual(['[lead+2]', 'y'])
+  it('collapsed: the lead only', () => {
+    expect(shape(groupSegments(t('lead', 'a', 'b', 'y'), tabMark, { T: true }))).toEqual(['[lead]', 'y'])
   })
 
   it('a member with no lead right before it stays an ordinary tab', () => {

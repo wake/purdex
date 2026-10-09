@@ -3,13 +3,13 @@
 // call. The provider rebuilds only when the signature does, so a roster frame that moves a seat's model / effort /
 // context (live readings, not structure) re-renders nothing.
 import type { Session } from '../../lib/host-api'
-import { groupLabel, panelName, tooltipOf } from '../../lib/team/team-names'
+import { panelName, tooltipOf } from '../../lib/team/team-names'
 import type { TeamIndex } from '../../lib/team/team-index'
 import { runMemberIds } from '../../lib/team/team-runs'
 import type { Seat, TeamView } from '../../lib/team/team-views'
 import type { PanelMode } from '../../stores/useTeamUiStore'
 import {
-  teamColor, type TeamBeads, type TeamCapsule, type TeamDisplay, type TeamGhostLead, type TeamPanelTeam, type TeamSeatView, type TeamTabMark,
+  teamColor, type TeamBeads, type TeamDisplay, type TeamGhostLead, type TeamPanelTeam, type TeamSeatView, type TeamTabMark,
 } from './team-display'
 
 export interface StructureInput {
@@ -71,11 +71,6 @@ export function structureSignature(input: StructureInput): string {
   ])
 }
 
-function capsuleOf(view: TeamView, collapsed: boolean): TeamCapsule {
-  const label = groupLabel(view)
-  return { teamKey: view.key, color: teamColor(view.colorIndex), label: label.text, full: label.full, truncated: label.truncated, tooltip: tooltipOf(view), collapsed }
-}
-
 const NOOP = () => {}
 
 export interface TeamActions {
@@ -106,13 +101,10 @@ export function buildTeamDisplay(input: StructureInput, actions: TeamActions = N
     const inWorkspace = workspaceOf.get(tabId) ?? [tabId]
     const group = inWorkspace.filter((id) => index.byTabId.get(id)?.key === hit.key)
     const visible = group.filter((id) => !(isCollapsed && index.byTabId.get(id)?.role === 'member'))
-    const label = groupLabel(view)
     marks.set(tabId, {
-      teamKey: hit.key, color: teamColor(view.colorIndex), label: label.text, full: label.full, truncated: label.truncated,
-      tooltip: tooltipOf(view), role: hit.role, seatState: hit.seat.state, hostAlias: hit.seat.hostAlias,
+      teamKey: hit.key, color: teamColor(view.colorIndex), role: hit.role, seatState: hit.seat.state, hostAlias: hit.seat.hostAlias,
       first: visible[0] === tabId, last: visible[visible.length - 1] === tabId,
       collapsed: isCollapsed, hidden: isCollapsed && hit.role === 'member',
-      hiddenCount: isCollapsed ? group.filter((id) => index.byTabId.get(id)?.role === 'member').length : 0,
     })
   }
 
@@ -121,7 +113,7 @@ export function buildTeamDisplay(input: StructureInput, actions: TeamActions = N
     if (hit.role !== 'lead') continue
     const view = index.byKey.get(hit.key)
     if (!view) continue
-    beads.set(tabId, { teamKey: hit.key, color: teamColor(view.colorIndex), collapsed: collapsed[hit.key] === true, capsule: capsuleOf(view, collapsed[hit.key] === true), members: seatsOf(view).members })
+    beads.set(tabId, { teamKey: hit.key, color: teamColor(view.colorIndex), collapsed: collapsed[hit.key] === true, members: seatsOf(view).members })
   }
 
   const panels = new Map<string, TeamPanelTeam>()
@@ -144,10 +136,9 @@ export function buildTeamDisplay(input: StructureInput, actions: TeamActions = N
   for (const v of views) {
     const at = ghostWorkspace[v.key]
     if (at === undefined || v.lead.tabId !== null) continue
-    const label = groupLabel(v)
     const { lead, members } = seatsOf(v)
     const list = ghosts.get(at) ?? []
-    list.push({ teamKey: v.key, color: teamColor(v.colorIndex), label: label.text, full: label.full, collapsed: collapsed[v.key] === true, capsule: capsuleOf(v, collapsed[v.key] === true), lead, members })
+    list.push({ teamKey: v.key, color: teamColor(v.colorIndex), collapsed: collapsed[v.key] === true, lead, members })
     ghosts.set(at, list)
   }
 

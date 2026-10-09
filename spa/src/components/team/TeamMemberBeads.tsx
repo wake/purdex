@@ -13,7 +13,6 @@ import { useI18nStore } from '../../stores/useI18nStore'
 
 interface Props {
   teamKey: string
-  color: string
   members: TeamSeatView[]
   activeTabId: string | null
   withHost: boolean
@@ -29,7 +28,7 @@ function tooltipOf(m: TeamSeatView, t: (key: string, params?: Record<string, str
   return `${m.title} · ${m.hostAlias !== '' ? t('team.seat_state_suffix', { alias: m.hostAlias, state: word }) : word}`
 }
 
-export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost, onOpen, onReorder, onBlankClick }: Props) {
+export function TeamMemberBeads({ teamKey, members, activeTabId, withHost, onOpen, onReorder, onBlankClick }: Props) {
   const t = useI18nStore((s) => s.t)
   const box = useRef<HTMLDivElement>(null)
   const [rows, setRows] = useState(1)
@@ -81,8 +80,9 @@ export function TeamMemberBeads({ teamKey, color, members, activeTabId, withHost
           >
             {ins && (
               <span
-                className="absolute top-1 bottom-1 w-0.5 rounded"
-                style={{ background: color, [ins === 'before' ? 'left' : 'right']: -2 }}
+                data-testid="team-bead-insert"
+                className="absolute top-1 bottom-1 w-0.5 rounded bg-accent-base"
+                style={{ [ins === 'before' ? 'left' : 'right']: -2 }}
               />
             )}
             <TeamSeatIcon hostId={m.hostId} sessionCode={m.sessionCode} isActive={isActive} />
