@@ -79,6 +79,16 @@ describe('UnattendedPanel', () => {
     expect(screen.queryByTestId('unattended-more')).toBeNull()
   })
 
+  // #2063 (the user's screenshot): nothing inside is focusable, so the panel itself holds focus and must not draw a ring.
+  it('empty state: the container holds focus and carries no focus outline', async () => {
+    mockedGet.mockResolvedValue(page([]))
+    open([A, B])
+    await screen.findByTestId('unattended-empty')
+    const panel = screen.getByTestId('unattended-panel')
+    expect(document.activeElement === panel || panel.contains(document.activeElement)).toBe(true)
+    expect(panel).toHaveClass('outline-none')
+  })
+
   it('shows nothing, not the empty state, until every first page has answered', async () => {
     let release: (v: UnattendedView) => void = () => {}
     mockedGet.mockImplementation(() => new Promise((res) => { release = res }))
