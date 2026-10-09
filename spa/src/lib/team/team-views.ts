@@ -70,12 +70,15 @@ export interface TeamViewsInput {
 
 export const COLOR_COUNT = 8
 
-/** Wire (daemon) id → SPA host id over the configured hosts. A host without a `daemonId` is ignored; an id two hosts
- *  claim is left out (unmapped) rather than guessed. */
-export function daemonIdMap(hosts: Record<string, { daemonId?: string }>): Record<string, string> {
+/** Wire (daemon) id → SPA host id over the configured hosts. A host without a `daemonId`, or one in `excluded` (the
+ *  runtime saw another daemon answer there), is ignored; an id two hosts claim is left out (unmapped) rather than guessed. */
+export function daemonIdMap(
+  hosts: Record<string, { daemonId?: string }>, excluded?: (hostId: string) => boolean,
+): Record<string, string> {
   const map: Record<string, string> = {}
   const clash = new Set<string>()
   for (const [hostId, h] of Object.entries(hosts)) {
+    if (excluded?.(hostId)) continue
     const d = h.daemonId
     if (!d) continue
     if (d in map) clash.add(d)
@@ -241,7 +244,7 @@ export interface SeatHit {
 }
 
 /**
- * Session key (`<hostId>\0<tmux session name>`) → the seat that session is, over every view. A session two views claim
+ * Session key (`<the SEAT's hostId>\0<tmux session name>`; a remote member's host, not the view's) → the seat that session is, over every view. A session two views claim
  * belongs to the first view (view order). One pass over the seats: `teamOfTab` reads it per call and `buildTeamIndex`
  * (team-index.ts) once for every tab.
  */

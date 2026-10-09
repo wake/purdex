@@ -9,7 +9,8 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import { daemonIdMap, selectTeamViews, type TeamView } from '../lib/team/team-views'
+import { teamHostMap } from '../lib/team/team-state'
+import { selectTeamViews, type TeamView } from '../lib/team/team-views'
 
 /** `memberOrder` (per team key) is the interface PRs' to persist; pass a stable reference or `undefined`. */
 export function useTeamViews(memberOrder?: Record<string, readonly string[]>): TeamView[] {
@@ -19,12 +20,15 @@ export function useTeamViews(memberOrder?: Record<string, readonly string[]>): T
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const sessionsByHost = useSessionStore((s) => s.sessions)
   const hostOrder = useHostStore((s) => s.hostOrder)
-  const hosts = useHostStore((s) => s.hosts)
+  // The map as a string: `runtime` changes with every latency sample, the map almost never, and a primitive selector result
+  // keeps this hook from re-rendering (and rebuilding the views) on writes that leave the map alone.
+  const hostMapKey = useHostStore((s) => JSON.stringify(teamHostMap(s)))
+  const hostIdByDaemonId = useMemo<Record<string, string>>(() => JSON.parse(hostMapKey), [hostMapKey])
   return useMemo(
     () => selectTeamViews({
       rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost, memberOrder, hostOrder,
-      hostIdByDaemonId: daemonIdMap(hosts),
+      hostIdByDaemonId,
     }),
-    [rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost, memberOrder, hostOrder, hosts],
+    [rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost, memberOrder, hostOrder, hostIdByDaemonId],
   )
 }

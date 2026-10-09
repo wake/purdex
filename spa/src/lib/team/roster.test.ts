@@ -31,6 +31,25 @@ describe('parseRosterEvent', () => {
     expect(parseRosterEvent(v({ op: 'snapshot', teams: [team] }))).toEqual({ op: 'snapshot', teams: [team] })
   })
 
+  it('host_alias is bounded and printable; host_id bounded and control-free; invalid ones are dropped, never the frame', () => {
+    const parse = (extra: Record<string, unknown>) => {
+      const r = parseRosterEvent(v({ op: 'snapshot', teams: [{ ...team, members: [{ ...member, ...extra }] }] }))
+      if (typeof r === 'string') throw new Error(r)
+      return r.teams[0].members[0]
+    }
+    expect(parse({ host_alias: '工作站 B-26' }).host_alias).toBe('工作站 B-26') // a clean CJK alias is kept intact
+    expect(parse({ host_alias: 'a'.repeat(64) }).host_alias).toHaveLength(64)
+    for (const bad of [
+      'a'.repeat(65), '', '   ', 'x\ny', 'x\u0000y', 'x\u001by', 'x\u007fy', 'x\u0085y', 'x​y', 'x‮y', 'x⁦y', 'x﻿y',
+    ]) {
+      expect('host_alias' in parse({ host_alias: bad }), JSON.stringify(bad)).toBe(false)
+    }
+    expect(parse({ host_id: 'd'.repeat(128) }).host_id).toHaveLength(128)
+    expect('host_id' in parse({ host_id: 'd'.repeat(129) })).toBe(false)
+    expect('host_id' in parse({ host_id: 'a\nb' })).toBe(false)
+    expect(parse({ host_id: '' }).host_id).toBe('') // "" is the lead's host and stays
+  })
+
   it('accepts an already-parsed value', () => {
     expect(parseRosterEvent({ op: 'changed', teams: [team] })).toEqual({ op: 'changed', teams: [team] })
   })

@@ -99,13 +99,24 @@ function isTeamRoster(v: unknown): v is TeamRoster {
     && Array.isArray(v.members) && v.members.every(isRosterMember)
 }
 
-/** `host_id` / `host_alias` are kept only when strings (a stray type is ignored, never a reason to drop the frame). */
+// C0 controls, DEL, C1 controls, and the bidi / zero-width formatting characters: none of them belongs in a host name that
+// is printed into a toast (a bidi override could make one alias read as another).
+// eslint-disable-next-line no-control-regex -- matching control characters is the point
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/
+const HOST_ALIAS_MAX = 64
+const HOST_ID_MAX = 128
+
+/** `host_id` / `host_alias` cross the trust boundary into UI text and host matching: kept only when a string within bounds
+ *  and free of control / formatting characters (the alias also non-blank). Anything else is dropped (the field is absent),
+ *  never a reason to drop the frame. */
 function cleanHost<T extends RosterSession>(s: T): T {
   const { host_id, host_alias, ...rest } = s
+  const idOk = isStr(host_id) && host_id.length <= HOST_ID_MAX && !UNPRINTABLE.test(host_id)
+  const aliasOk = isStr(host_alias) && host_alias.length <= HOST_ALIAS_MAX && !UNPRINTABLE.test(host_alias) && host_alias.trim() !== ''
   return {
     ...rest,
-    ...(isStr(host_id) ? { host_id } : {}),
-    ...(isStr(host_alias) ? { host_alias } : {}),
+    ...(idOk ? { host_id } : {}),
+    ...(aliasOk ? { host_alias } : {}),
   } as T
 }
 

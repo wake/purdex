@@ -1,6 +1,8 @@
 // spa/src/lib/team/team-actions.test.ts — what a click on a team surface does (spec R3, R8–R11, §4.5; plan TI-1b). Real
 // stores throughout.
 import { describe, it, expect, beforeEach } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
+import { useTeamViews } from '../../hooks/useTeamViews'
 import { openTeamSeat, toggleTeamCollapse, visibleTabIds } from './team-actions'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -119,7 +121,8 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
     const t = useTeamRosterStore.getState().byHost[HOST][0]
     useTeamRosterStore.setState({ byHost: { [HOST]: [{ ...t, members: [...t.members, remoteMember()] }] } })
     useHostStore.setState({
-      hosts: (mapped ? { h2: { id: 'h2', name: 'b26', daemonId: 'dm-b' } } : {}) as never,
+      hosts: (mapped ? { h2: { id: 'h2', name: 'b26', ip: '10.0.0.2', port: 7860, daemonId: 'dm-b' } } : {}) as never,
+      runtime: {},
     })
     useSessionStore.setState({
       sessions: {
@@ -149,6 +152,63 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
     expect(r.outcome).toBe('opened')
     expect(wsTabs('w1')).toEqual(['lead', 'ma', r.tabId])
     expect(useTabStore.getState().tabs[r.tabId!].layout).toMatchObject({ pane: { content: { kind: 'tmux-session', hostId: 'h2', sessionCode: 'code-r-tm', cachedName: 'r-tm' } } })
+  })
+})
+
+describe('openTeamSeat — a host whose daemon changed (TI-2a review)', () => {
+  const remoteMember = () => ({ ...member('R', 9, 'r-tm'), host_id: 'dm-b', host_alias: 'b26' })
+  const mismatch = { stored: 'dm-b', observed: 'dm-c', endpoint: '10.0.0.2:7860' }
+  function seedMismatch() {
+    seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead', 'ma'] }, { id: 'w2', tabs: [] }], activeWorkspaceId: 'w2' })
+    const t = useTeamRosterStore.getState().byHost[HOST][0]
+    useTeamRosterStore.setState({ byHost: { [HOST]: [{ ...t, members: [...t.members, remoteMember()] }] } })
+    // h2 is configured as daemon B, but the endpoint answered as daemon C, which has a same-named session and an open tab.
+    useHostStore.setState({
+      hosts: { h2: { id: 'h2', name: 'b26', ip: '10.0.0.2', port: 7860, daemonId: 'dm-b' } } as never,
+      runtime: { h2: { daemonIdMismatch: mismatch } } as never,
+    })
+    useSessionStore.setState({
+      sessions: { ...useSessionStore.getState().sessions, h2: [{ code: 'code-r-tm', name: 'r-tm', mode: 'terminal', cwd: '~' }] as never },
+    })
+    const onC = { ...tabOn('onC', null), layout: { type: 'leaf', pane: { id: 'p-onC', content: { kind: 'tmux-session', hostId: 'h2', sessionCode: 'code-r-tm', mode: 'terminal', cachedName: 'r-tm', tmuxInstance: 'i' } } } } as never
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, onC }, tabOrder: [...useTabStore.getState().tabOrder, 'onC'] })
+    useWorkspaceStore.setState({ workspaces: useWorkspaceStore.getState().workspaces.map((w) => (w.id === 'w1' ? { ...w, tabs: [...w.tabs, 'onC'] } : w)) })
+    useShownHostsStore.setState({ ids: [HOST, 'h2'] })
+  }
+  const seatR = () => currentTeamState().views[0].members.find((m) => m.session.session_id === 'R')!
+
+  it('a stored daemon id the runtime saw contradicted leaves the seat unmapped: no tab, not classified, nothing opened', () => {
+    seedMismatch()
+    useTeamUiStore.getState().setCollapsed(KEY, true)
+    useTeamUiStore.getState().setGhostWorkspace(KEY, 'w2')
+    const before = Object.keys(useTabStore.getState().tabs)
+    expect(seatR()).toMatchObject({ hostId: null, tabId: null })
+    expect(currentTeamState().index.byTabId.has('onC')).toBe(false)
+    expect(openTeamSeat(KEY, 'R')).toEqual({ outcome: 'no-host', tabId: null })
+    expect(Object.keys(useTabStore.getState().tabs)).toEqual(before)
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true)
+    expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBe('w2')
+  })
+
+  it('when the mismatch clears the seat maps again', () => {
+    seedMismatch()
+    expect(seatR().hostId).toBeNull()
+    useHostStore.setState({ runtime: {} as never })
+    expect(seatR()).toMatchObject({ hostId: 'h2', tabId: 'onC' })
+  })
+
+  it('the render path and the action path agree', () => {
+    seedMismatch()
+    const { result, rerender } = renderHook(() => useTeamViews())
+    const hostIds = () => [result.current[0].members.map((m) => m.hostId), currentTeamState().views[0].members.map((m) => m.hostId)]
+    const [render1, action1] = hostIds()
+    expect(render1).toEqual(action1)
+    expect(render1).toEqual(['h1', null])
+    act(() => useHostStore.setState({ runtime: {} as never }))
+    rerender()
+    const [render2, action2] = hostIds()
+    expect(render2).toEqual(action2)
+    expect(render2).toEqual(['h1', 'h2'])
   })
 })
 
