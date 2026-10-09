@@ -31,12 +31,18 @@ type RosterSession struct {
 	Context *MemberContext `json:"context,omitempty"`
 	// RelayQuota is the numbers of the session's relay chain (#2062); always present.
 	RelayQuota RelayQuota `json:"relay_quota"`
+	// HostID and HostAlias name the host a remote member runs on (cross-host team spec §8); both absent for a session on
+	// the lead's own host. A remote member's Address is "<host_alias>/<ref>". ContextUnavailable: its host did not answer,
+	// so Model / Context are blank for that reason.
+	HostID             string `json:"host_id,omitempty"`
+	HostAlias          string `json:"host_alias,omitempty"`
+	ContextUnavailable bool   `json:"context_unavailable,omitempty"`
 }
 
 // RosterMember is an active member: its session plus how it joined.
 type RosterMember struct {
 	RosterSession
-	State    MemberState `json:"state"`  // always MemberActive: the others leave the roster
+	State    MemberState `json:"state"`  // MemberActive; a REMOTE member also joining / releasing / killing (cross-host spec §4.2), the others leave the roster
 	Origin   string      `json:"origin"` // MemberOriginSpawned | MemberOriginAdopted
 	JoinedAt int64       `json:"joined_at"`
 	// Task is the member's current task as the lead set it (plan T-3b, D-7): its in_progress task (the

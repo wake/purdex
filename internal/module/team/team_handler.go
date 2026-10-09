@@ -49,6 +49,8 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 	for _, tk := range open {
 		byOwner[tk.OwnerKey] = append(byOwner[tk.OwnerKey], tk)
 	}
+	// An explicit question: the stale remote hosts are asked now (all at once, 3 s at most) so the table is complete.
+	m.refreshRemoteReadings(r.Context(), m.remoteHostsOf(rows))
 	v := team.TeamView{Team: t, Members: make([]team.Member, 0, len(rows))}
 	if n, err := seatsTaken(m.store.db, t.ID, ""); err != nil {
 		m.logf("[team] team %s in use: %v", t.ID, err) // omitted: the reader counts the active members
@@ -127,6 +129,15 @@ func (m *Module) memberView(mr memberRow) team.Member {
 		Origin: team.MemberOriginSpawned, EndedAt: mr.EndedAt}
 	if mr.Origin == team.MemberOriginAdopted { // the row's key is the adoption's request id; the wire says so in its own field
 		v.Origin, v.SpawnOp, v.AdoptRequest = team.MemberOriginAdopted, "", mr.SpawnOp
+	}
+	if m.isRemoteRow(mr) {
+		// A member on another host (cross-host team spec §8): addressed by the host's alias and its ref, its context and
+		// model what that host's GET /api/peers last said (remote_view.go), blank and flagged when it did not answer.
+		v.HostAlias = m.remoteHostAlias(mr.HostID)
+		v.Address = firstNonEmpty(v.HostAlias, mr.HostID) + "/" + mr.Ref
+		v.Context, v.ContextUnavailable = m.remoteContextOf(mr.HostID, mr.SessionID)
+		v.RelayQuota = m.relayQuotaOf(mr.SessionID)
+		return v
 	}
 	if mr.State == team.MemberActive {
 		if o, ok, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && ok {

@@ -20,6 +20,7 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/module/hostconfig"
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -308,6 +309,10 @@ type Module struct {
 	// its pump (X3d-2).
 	teamNotices     peersmod.TeamNoticeDeliverer
 	remoteNoticeSig chan struct{}
+	// peerRecords reads a member host's GET /api/peers (the host caller's PeerRecords; nil → remote members show no
+	// context) and remote caches what it read (remote_view.go, X5).
+	peerRecords func(ctx context.Context, hostID string) ([]ipeers.PeerRecord, error)
+	remote      remoteReadings
 	// beforeCloseExpired, when set, runs in closeExpired before the CAS;
 	// an error fails that close there (tests). nil in production.
 	beforeCloseExpired func(id string) error
@@ -411,6 +416,9 @@ func (m *Module) Init(c *core.Core) error {
 	if svc, ok := c.Registry.Get(peersmod.HostCallerKey); ok {
 		if hc, ok := svc.(hostCaller); ok {
 			m.cmdCaller = hc
+		}
+		if pr, ok := svc.(peerRecordReader); ok {
+			m.peerRecords = pr.PeerRecords
 		}
 	}
 	if svc, ok := c.Registry.Get(peersmod.TeamNoticeKey); ok {
