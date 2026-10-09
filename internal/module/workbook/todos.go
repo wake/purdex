@@ -54,10 +54,11 @@ type TodoChanges struct {
 }
 
 // TodoResult is what applying a TodoChanges did: the rows that changed (closings first, in the order given, then the
-// adds), and how many adds the 30-open cap turned away.
+// adds), how many adds the 30-open cap turned away, and how many had no title.
 type TodoResult struct {
 	Changed    []Todo
 	CapIgnored int
+	EmptyTitle int
 }
 
 // Usage is the token count of a call (or of both calls of an entry).
@@ -186,7 +187,11 @@ func applyTodoChanges(tx execer, convKey string, entryID int64, ch TodoChanges, 
 	for _, a := range adds {
 		title := cutRunes(strings.TrimSpace(redact.String(a.Title)), maxTodoTitle)
 		title = strings.TrimSpace(title)
-		if title == "" || titles[title] {
+		if title == "" { // an add with no title (absent or blank) is nothing; the caller logs the count
+			res.EmptyTitle++
+			continue
+		}
+		if titles[title] {
 			continue
 		}
 		if openCount >= maxOpenTodos {

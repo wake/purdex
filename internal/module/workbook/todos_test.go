@@ -183,6 +183,9 @@ func TestTodos_RefreshAddsTenAndEmptyTitleIsDropped(t *testing.T) {
 	if len(res.Changed) != 9 {
 		t.Fatalf("changed = %d, want 9", len(res.Changed))
 	}
+	if res.EmptyTitle != 1 { // counted, so the caller can log the one line (88)
+		t.Fatalf("empty titles counted = %d, want 1", res.EmptyTitle)
+	}
 }
 
 // An add equal (trimmed) to an open title is ignored — also one added earlier in the same batch.
