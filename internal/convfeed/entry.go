@@ -193,7 +193,7 @@ func (e *Entry) feedFrom(ctx context.Context, f File, size int64) error {
 				return err
 			}
 			e.bump(changes)
-			e.rollFingerprint(line)
+			e.rollFingerprint(off, line)
 			return nil
 		},
 		skip: func(off, length int64) error {
@@ -210,8 +210,11 @@ func (e *Entry) feedFrom(ctx context.Context, f File, size int64) error {
 // rollFingerprint keeps the last fingerprintBytes of what was actually fed, line by line, so the fingerprint is
 // right at every point: a read cut short by cancellation or an error still leaves one for the offset reached,
 // built from the bytes the model was built from, not from whatever the file holds by then.
-func (e *Entry) rollFingerprint(line []byte) {
+func (e *Entry) rollFingerprint(off int64, line []byte) {
 	end := e.norm.Next()
+	if e.fpEnd != off {
+		e.fp = nil // a skipped (oversize) line sits between: the bytes must be contiguous, so start again from this line
+	}
 	buf := make([]byte, 0, len(e.fp)+len(line)+1)
 	buf = append(buf, e.fp...)
 	buf = append(buf, line...)

@@ -100,3 +100,22 @@ func TestWindow_UnsatisfiableBudgetReturnsNothingOverTheCap(t *testing.T) {
 		t.Fatalf("window = %+v", w)
 	}
 }
+
+// An oversize line in the middle, normal lines after it: the fingerprint is rebuilt from the lines after the skip, so
+// an unchanged file is not mistaken for a rewrite on every refresh.
+func TestEntry_UnchangedFileWithAnOversizeMiddleLineKeepsItsEpoch(t *testing.T) {
+	big := append([]byte(`{"type":"user","blob":"`), bytes.Repeat([]byte{'A'}, 9<<20)...)
+	big = append(big, '"', '}')
+	m := &memFile{}
+	m.Append(userRow("u0", 0, "before"), big, []byte(`{"type":"x"}`)) // the line after the skip is shorter than the fingerprint
+	e := NewEntry(sidA)
+	refresh(t, e, src(m, "f1", false))
+	old := e.Epoch()
+	if r := refresh(t, e, src(m, "f1", false)); r.Reset || e.Epoch() != old {
+		t.Fatalf("an unchanged file was treated as rewritten: %+v", r)
+	}
+	m.Append(userRow("u2", 4, "later"))
+	if r := refresh(t, e, src(m, "f1", false)); r.Reset || e.Epoch() != old {
+		t.Fatalf("an append was treated as a rewrite: %+v", r)
+	}
+}
