@@ -21,6 +21,12 @@ const (
 	failWindow = 60 * time.Second
 	genTries   = 5
 	codeLen    = 8
+
+	// Pairing entries (QR pairing spec §4): the 16-code cap counts only entries that can still be taken; claimed ones live
+	// on as status tombstones until their original expiry, at most maxTombstones, oldest dropped first.
+	maxTombstones = 64
+	// A claim's failure limiter is per source address; the table of sources is bounded so a flood of addresses cannot grow it.
+	maxClaimSources = 4096
 )
 
 // alphabet is Crockford base32: no I, L, O, U.
@@ -31,6 +37,8 @@ var (
 	ErrUnavailable = errors.New("hosttransfer: could not allocate a code")
 	ErrInvalidCode = errors.New("hosttransfer: invalid code")
 	ErrRateLimited = errors.New("hosttransfer: rate limited")
+	// ErrClaimed is Delete of a pairing whose claim came first (nothing removed).
+	ErrClaimed = errors.New("hosttransfer: already claimed")
 	// ErrStopped is Redeem on a stopped store. It is not ErrInvalidCode: it
 	// does not depend on the code (so it reveals nothing about one), it is
 	// not counted as a failure, and it tells the client the relay is going
@@ -40,6 +48,9 @@ var (
 
 type entry struct {
 	payload   json.RawMessage
+	pairing   bool      // a pairing entry (spec §4), not a Share-hosts transfer
+	claimed   bool      // a claimed pairing: a status tombstone, payload dropped
+	claimedAt time.Time // when it was claimed
 	expiresAt time.Time
 	seq       uint64  // unique per Create: a late timer spares a newer entry under the same code
 	timer     stopper // drops the entry at expiry even if no request ever sweeps
@@ -56,7 +67,9 @@ type Store struct {
 	seq         uint64
 	stopped     bool // permanent once set (Stop)
 	failures    int
-	windowStart time.Time // zero = no window open
+	windowStart time.Time               // zero = no window open
+	claimFails  map[string]*claimWindow // per source address: the claim's own failure limiter (Redeem's is untouched)
+	tombs       []tombRef               // claim order, oldest first
 	now         func() time.Time
 	gen         func() (string, error)
 	afterFunc   func(time.Duration, func()) stopper
@@ -70,7 +83,17 @@ func newStore(now func() time.Time, gen func() (string, error)) *Store {
 }
 
 func newStoreWith(now func() time.Time, gen func() (string, error), after func(time.Duration, func()) stopper) *Store {
-	return &Store{entries: map[string]entry{}, now: now, gen: gen, afterFunc: after}
+	return &Store{entries: map[string]entry{}, claimFails: map[string]*claimWindow{}, now: now, gen: gen, afterFunc: after}
+}
+
+type claimWindow struct {
+	failures int
+	start    time.Time
+}
+
+type tombRef struct {
+	code string
+	seq  uint64
 }
 
 // stopper is the part of *time.Timer the store uses; tests inject fakes.
@@ -154,6 +177,26 @@ func (s *Store) expire(code string, seq uint64) {
 // Create parks payload under a fresh code for codeTTL. It is not
 // rate-limited; maxLive bounds it. A stopped store is ErrUnavailable.
 func (s *Store) Create(payload json.RawMessage) (string, time.Time, error) {
+	return s.create(payload, codeTTL, false)
+}
+
+// CreatePairing parks a pairing entry (spec §4.1) for ttl. Transfers and unclaimed pairings share the 16 live codes.
+func (s *Store) CreatePairing(payload json.RawMessage, ttl time.Duration) (string, time.Time, error) {
+	return s.create(payload, ttl, true)
+}
+
+// takeableLocked counts the entries that can still be taken: tombstones are not among them.
+func (s *Store) takeableLocked() int {
+	n := 0
+	for _, e := range s.entries {
+		if !e.claimed {
+			n++
+		}
+	}
+	return n
+}
+
+func (s *Store) create(payload json.RawMessage, ttl time.Duration, pairing bool) (string, time.Time, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopped {
@@ -161,7 +204,7 @@ func (s *Store) Create(payload json.RawMessage) (string, time.Time, error) {
 	}
 	now := s.now()
 	s.sweepLocked(now)
-	if len(s.entries) >= maxLive {
+	if s.takeableLocked() >= maxLive {
 		return "", time.Time{}, ErrCapacity
 	}
 	for i := 0; i < genTries; i++ {
@@ -172,11 +215,11 @@ func (s *Store) Create(payload json.RawMessage) (string, time.Time, error) {
 		if _, live := s.entries[code]; live {
 			continue
 		}
-		exp := now.Add(codeTTL)
+		exp := now.Add(ttl)
 		s.seq++
 		seq := s.seq
-		timer := s.afterFunc(codeTTL, func() { s.expire(code, seq) })
-		s.entries[code] = entry{payload: payload, expiresAt: exp, seq: seq, timer: timer}
+		timer := s.afterFunc(ttl, func() { s.expire(code, seq) })
+		s.entries[code] = entry{payload: payload, pairing: pairing, expiresAt: exp, seq: seq, timer: timer}
 		return code, exp, nil
 	}
 	return "", time.Time{}, ErrUnavailable
@@ -212,7 +255,7 @@ func (s *Store) Redeem(raw string) (json.RawMessage, time.Duration, error) {
 
 	code := normalise(raw)
 	e, ok := s.entries[code]
-	if !ok {
+	if !ok || e.pairing { // a pairing code is not a transfer: a miss, and left as it is
 		if s.windowStart.IsZero() {
 			s.windowStart = now
 		}
@@ -245,4 +288,112 @@ func (s *Store) clearLocked() {
 	for code, e := range s.entries {
 		s.dropLocked(code, e)
 	}
+}
+
+// Claim takes a pairing entry for the phone at source (spec §4.2): one-time, the entry becomes a status tombstone and the
+// rows are returned. Its failure limiter is its own, per source address (failLimit per failWindow; over it nothing is taken,
+// even a right code), so claim traffic cannot lock out the admin's Redeem and one node can only lock out itself. A transfer
+// code, an unknown, expired or already claimed code is ErrInvalidCode and counts as a failure; a transfer is left alone.
+func (s *Store) Claim(source, raw string) (json.RawMessage, time.Duration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return nil, 0, ErrStopped
+	}
+	now := s.now()
+	s.sweepLocked(now)
+
+	w := s.claimFails[source]
+	if w != nil && !now.Before(w.start.Add(failWindow)) {
+		delete(s.claimFails, source)
+		w = nil
+	}
+	if w != nil && w.failures >= failLimit {
+		return nil, w.start.Add(failWindow).Sub(now), ErrRateLimited
+	}
+	if w == nil && len(s.claimFails) >= maxClaimSources {
+		s.purgeClaimWindowsLocked(now)
+		if len(s.claimFails) >= maxClaimSources {
+			return nil, failWindow, ErrRateLimited // the table is full of live windows: refuse rather than grow
+		}
+	}
+
+	code := normalise(raw)
+	e, ok := s.entries[code]
+	if !ok || !e.pairing || e.claimed {
+		if w == nil {
+			w = &claimWindow{start: now}
+			s.claimFails[source] = w
+		}
+		w.failures++
+		return nil, 0, ErrInvalidCode
+	}
+	rows := e.payload
+	e.payload, e.claimed, e.claimedAt = nil, true, now
+	s.entries[code] = e // the timer and expiry stay: the tombstone lives until the original expiry
+	s.tombs = append(s.tombs, tombRef{code, e.seq})
+	s.trimTombstonesLocked()
+	return rows, 0, nil
+}
+
+func (s *Store) purgeClaimWindowsLocked(now time.Time) {
+	for src, w := range s.claimFails {
+		if !now.Before(w.start.Add(failWindow)) {
+			delete(s.claimFails, src)
+		}
+	}
+}
+
+// trimTombstonesLocked keeps at most maxTombstones status tombstones, dropping the oldest claimed first.
+func (s *Store) trimTombstonesLocked() {
+	live := s.tombs[:0]
+	for _, t := range s.tombs {
+		if e, ok := s.entries[t.code]; ok && e.seq == t.seq && e.claimed {
+			live = append(live, t)
+		}
+	}
+	for len(live) > maxTombstones {
+		if e, ok := s.entries[live[0].code]; ok && e.seq == live[0].seq {
+			s.dropLocked(live[0].code, e)
+		}
+		live = live[1:]
+	}
+	s.tombs = live
+}
+
+// PairingStatus is the answer of GET /api/host-transfer/pairings/{code}.
+type PairingStatus struct {
+	Claimed   bool
+	ClaimedAt time.Time
+	ExpiresAt time.Time
+}
+
+// Status reports a pairing entry (live or tombstone); ok is false for a transfer, an unknown, expired or dropped code.
+func (s *Store) Status(raw string) (PairingStatus, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepLocked(s.now())
+	e, ok := s.entries[normalise(raw)]
+	if !ok || !e.pairing {
+		return PairingStatus{}, false
+	}
+	return PairingStatus{Claimed: e.claimed, ClaimedAt: e.claimedAt, ExpiresAt: e.expiresAt}, true
+}
+
+// DeletePairing is decided under the same lock as Claim: an unclaimed pairing is removed (nil), a claimed one stays
+// (ErrClaimed), anything else — a transfer included — is ErrInvalidCode and untouched.
+func (s *Store) DeletePairing(raw string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepLocked(s.now())
+	code := normalise(raw)
+	e, ok := s.entries[code]
+	if !ok || !e.pairing {
+		return ErrInvalidCode
+	}
+	if e.claimed {
+		return ErrClaimed
+	}
+	s.dropLocked(code, e)
+	return nil
 }

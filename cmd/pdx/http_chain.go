@@ -8,6 +8,7 @@ import (
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/middleware"
 	devicesmod "github.com/wake/purdex/internal/module/devices"
+	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 )
 
@@ -78,7 +79,13 @@ func newOuterHandler(c *core.Core, routes *http.ServeMux, inner http.Handler, al
 	general := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
 		middleware.TokenAuthWith(tokenFn, c.Tickets, registryDevices{c})(registryTracker{c}.Track(deviceScope(routes, inner))))))
 
+	// The pairing claim (QR pairing spec §4.2) is the one route that takes no bearer: the phone has no credential yet and the
+	// code is it. It skips TokenAuth and so never carries a principal (the device scope has nothing to scope); the route checks
+	// its own source (tailnet / loopback) and keeps its own failure limiter. The exemption is this one exact path and method.
+	claim := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(inner)))
+
 	outer := http.NewServeMux()
+	outer.Handle("POST "+hosttransfermod.ClaimRoute, claim)
 	outer.Handle("GET /api/health", middleware.CORS(http.HandlerFunc(c.HandleHealth)))
 	outer.Handle("/api/peers", peerChain)
 	outer.Handle("/api/peers/", peerChain)

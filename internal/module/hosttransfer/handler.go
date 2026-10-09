@@ -28,6 +28,7 @@ const (
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/host-transfer", m.handleCreate)
 	mux.HandleFunc("POST /api/host-transfer/redeem", m.handleRedeem)
+	m.registerPairingRoutes(mux)
 }
 
 // writeJSONStatus answers v as JSON. Every response of this module carries
