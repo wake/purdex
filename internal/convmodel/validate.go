@@ -93,7 +93,7 @@ func validateItem(it Item, ids map[string]bool) error {
 		}
 	case ItemSystem:
 		id = it.System.ID
-		if !slices.Contains([]SystemKind{SystemInterrupted, SystemCompacted, SystemHandoff, SystemModelChanged, SystemResumed, SystemCommandOutput}, it.System.Kind) {
+		if !slices.Contains([]SystemKind{SystemInterrupted, SystemCompacted, SystemHandoff, SystemModelChanged, SystemResumed, SystemCommandOutput, SystemNotice}, it.System.Kind) {
 			err = fmt.Errorf("unknown system kind %q", it.System.Kind)
 		}
 	case ItemStep:

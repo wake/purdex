@@ -72,6 +72,7 @@ type apiTurn struct {
 	EndedAt      *int64               `json:"ended_at,omitempty"`
 	Outcome      convmodel.Outcome    `json:"outcome"`
 	Error        *convmodel.TurnError `json:"error,omitempty"`
+	DurationMS   *int64               `json:"duration_ms,omitempty"`
 	Items        []indexedItem        `json:"items"`
 	OmittedItems int                  `json:"omitted_items,omitempty"`
 }
@@ -81,7 +82,7 @@ func apiTurns(turns []convmodel.Turn) []apiTurn {
 	out := make([]apiTurn, len(turns))
 	for i, t := range turns {
 		out[i] = apiTurn{ID: t.ID, Index: t.Index, StartedAt: t.StartedAt, EndedAt: t.EndedAt, Outcome: t.Outcome,
-			Error: t.Error, Items: indexItems(t.Items, t.OmittedItems), OmittedItems: t.OmittedItems}
+			Error: t.Error, DurationMS: t.DurationMS, Items: indexItems(t.Items, t.OmittedItems), OmittedItems: t.OmittedItems}
 	}
 	return out
 }

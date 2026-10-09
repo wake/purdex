@@ -664,6 +664,7 @@ const rawSample = `{"type":"custom-title","customTitle":"t"}
 {"type":"assistant","uuid":"a2","message":{"model":"m","content":"plain string content"}}
 {"type":"user","uuid":"u3","toolDenialKind":"user-rejected","toolUseResult":{"structuredPatch":[{"oldStart":1,"lines":["+b"]}],"filePath":"/work/a","backgroundTaskId":"b","agentId":"g","description":"d","subagent_type":"s","isAsync":true,"stdout":"decoy"},"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":true,"content":[{"type":"text","text":"no"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}]}}
 {"type":"system","subtype":"turn_duration","uuid":"s1","timestamp":"2026-10-07T13:00:02.000Z","durationMs":2000,"content":"c"}
+{"type":"system","subtype":"informational","uuid":"s3","timestamp":"2026-10-07T13:00:02.500Z","content":"n","level":"notice","isMeta":false}
 {"type":"system","subtype":"compact_boundary","uuid":"s2","compactMetadata":{"trigger":"manual","preTokens":1}}
 {"type":"attachment","uuid":"q1","attachment":{"type":"queued_command","commandMode":"prompt","origin":{"kind":"human","name":"n"},"prompt":[{"type":"text","text":"later"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}
 `
