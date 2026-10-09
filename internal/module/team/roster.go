@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/wake/purdex/internal/team"
@@ -57,6 +58,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		return team.Roster{}, err
 	}
 	active := make([][]memberRow, len(teams))
+	var remoteHosts []string
 	ids := make([]string, 0, 2*len(teams))
 	for i, t := range teams {
 		rows, err := m.store.MembersOf(t.ID)
@@ -65,12 +67,23 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		}
 		ids = append(ids, t.LeadSessionID)
 		for _, mr := range rows {
-			if mr.State == team.MemberActive && !m.isRemoteRow(mr) { // remote rows are X5's (display with their host)
+			// A remote member shows while it is in play (joining / active / releasing / killing, spec §4.2 and §8);
+			// a local one only while active. A remote session id never goes to this host's registry or quota readers
+			// (a same-looking id here would leak its data).
+			switch {
+			case m.isRemoteRow(mr):
+				if remoteLiveState(mr.State) {
+					active[i] = append(active[i], mr)
+					remoteHosts = append(remoteHosts, mr.HostID)
+				}
+			case mr.State == team.MemberActive:
 				active[i] = append(active[i], mr)
 				ids = append(ids, mr.SessionID)
 			}
 		}
 	}
+	// Remote members' context is read from the cache; stale hosts are asked in the background, never here.
+	m.kickRemoteReadings(slices.Compact(slices.Sorted(slices.Values(remoteHosts))))
 	var origins map[string]team.Origin
 	if len(ids) > 0 {
 		if origins, err = m.origins.ResolveOriginsBySession(ids); err != nil {
@@ -110,6 +123,10 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		}
 		tr.Lead.RelayQuota = quotas[t.LeadSessionID]
 		for _, mr := range active[i] {
+			if m.isRemoteRow(mr) {
+				tr.Members = append(tr.Members, m.remoteRosterMember(mr, tasks[t.ID], t.ID))
+				continue
+			}
 			s := rosterSession(origins, mr.SessionID, func() team.RosterSession {
 				return team.RosterSession{SessionID: mr.SessionID, Ref: mr.Ref, Address: alias + "/" + mr.Ref,
 					Title: mr.Title, TmuxSession: mr.TmuxSession}

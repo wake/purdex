@@ -19,8 +19,9 @@ func hostScopeFixture(t *testing.T) *fixture {
 	return f
 }
 
-// roster: the lead's roster lists local members only until X5 shows remote ones with their host; seats still count them.
-func TestHostScope_RosterListsOnlyLocalMembers(t *testing.T) {
+// roster: a remote member is listed only WITH its host (X5), never as if it were a local session — no local registry,
+// usage or quota reading, not live; seats count it.
+func TestHostScope_RosterListsRemoteMembersOnlyWithTheirHost(t *testing.T) {
 	f := hostScopeFixture(t)
 	seedMember(t, f.m.store, "op-local", uid(1), "sid-local", f.clock.Load())
 	r := f.getRoster()
@@ -29,12 +30,16 @@ func TestHostScope_RosterListsOnlyLocalMembers(t *testing.T) {
 		for _, mem := range tm.Members {
 			n++
 			if mem.SessionID == "sid-abc12" {
-				t.Fatal("a remote member was listed as if it were a local session")
+				if mem.HostID != "hostM" || mem.HostAlias != "air26" || mem.Live || mem.Address != "air26/"+remoteRef {
+					t.Fatalf("remote member = %+v", mem.RosterSession)
+				}
+			} else if mem.HostID != "" || mem.HostAlias != "" {
+				t.Fatalf("local member carries host fields: %+v", mem.RosterSession)
 			}
 		}
 	}
-	if n != 1 {
-		t.Fatalf("%d members listed, want the one local member", n)
+	if n != 2 {
+		t.Fatalf("%d members listed, want the local and the remote one", n)
 	}
 	if used, _ := seatsTaken(f.m.store.db, uid(1), ""); used != 2 {
 		t.Fatalf("seats = %d, want 2 (the remote member still holds one)", used)

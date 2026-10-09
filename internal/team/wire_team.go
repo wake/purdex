@@ -176,23 +176,28 @@ type MemberContext struct {
 
 // Member is one member of a team (spec §7.2 step 6, §7.3).
 type Member struct {
-	SessionID    string         `json:"session_id"`
-	Ref          string         `json:"ref"`     // "_xxxxxx"
-	Address      string         `json:"address"` // "<alias>/<name>" for a routable name, else "<alias>/_<ref>"
-	TeamID       string         `json:"team_id"`
-	HostID       string         `json:"host_id"` // the host the member runs on
-	Title        string         `json:"title,omitempty"`
-	Cwd          string         `json:"cwd"`
-	TmuxSession  string         `json:"tmux_session"` // SpawnTmuxName(SpawnOp)
-	State        MemberState    `json:"state"`
-	Origin       string         `json:"origin"`           // MemberOriginSpawned | MemberOriginAdopted; always present (a view without it is an older daemon's: spawned)
-	Model        string         `json:"model,omitempty"`  // as asked at spawn (U20); "" = the host's default
-	Effort       string         `json:"effort,omitempty"` // as asked at spawn (U20)
-	Context      *MemberContext `json:"context,omitempty"`
-	SpawnOp      string         `json:"spawn_op"`                // "" for an adopted member
-	AdoptRequest string         `json:"adopt_request,omitempty"` // adopted only: the approval that took it in
-	CreatedAt    int64          `json:"created_at"`              // unix ms
-	EndedAt      int64          `json:"ended_at,omitempty"`      // unix ms; 0 while the member is active
+	SessionID string `json:"session_id"`
+	Ref       string `json:"ref"`     // "_xxxxxx"
+	Address   string `json:"address"` // "<alias>/<name>" for a routable name, else "<alias>/_<ref>"
+	TeamID    string `json:"team_id"`
+	HostID    string `json:"host_id"` // the host the member runs on
+	// HostAlias is that host's alias as the lead host calls it; "" = the lead's own host. A remote member's Address is
+	// "<host_alias>/<ref>". ContextUnavailable: a remote member whose host did not answer (the CLI says so); never set
+	// for a member on the lead's own host. Both additive (cross-host team spec §8).
+	HostAlias          string         `json:"host_alias,omitempty"`
+	ContextUnavailable bool           `json:"context_unavailable,omitempty"`
+	Title              string         `json:"title,omitempty"`
+	Cwd                string         `json:"cwd"`
+	TmuxSession        string         `json:"tmux_session"` // SpawnTmuxName(SpawnOp)
+	State              MemberState    `json:"state"`
+	Origin             string         `json:"origin"`           // MemberOriginSpawned | MemberOriginAdopted; always present (a view without it is an older daemon's: spawned)
+	Model              string         `json:"model,omitempty"`  // as asked at spawn (U20); "" = the host's default
+	Effort             string         `json:"effort,omitempty"` // as asked at spawn (U20)
+	Context            *MemberContext `json:"context,omitempty"`
+	SpawnOp            string         `json:"spawn_op"`                // "" for an adopted member
+	AdoptRequest       string         `json:"adopt_request,omitempty"` // adopted only: the approval that took it in
+	CreatedAt          int64          `json:"created_at"`              // unix ms
+	EndedAt            int64          `json:"ended_at,omitempty"`      // unix ms; 0 while the member is active
 	// RelayQuota is the numbers of the member's relay chain (#2062); a member relays only through its lead, so its own
 	// self_left matters again only after a release. Always present.
 	RelayQuota RelayQuota `json:"relay_quota"`

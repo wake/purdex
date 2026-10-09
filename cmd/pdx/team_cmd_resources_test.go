@@ -47,13 +47,13 @@ func TestTeam_CPUMEMJoined(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 	lines := teamRows(t, stdout)
-	if got, want := fieldsOf(lines[0]), "ADDRESS REF TITLE STATE CTX CPU MEM MODEL EFFORT TASK LAST CWD TMUX"; got != want {
+	if got, want := fieldsOf(lines[0]), "ADDRESS HOST REF TITLE STATE CTX CPU MEM MODEL EFFORT TASK LAST CWD TMUX"; got != want {
 		t.Errorf("header = %q, want %q", got, want)
 	}
-	if got, want := fieldsOf(lines[1]), "mlab/_m1m1m1 _m1m1m1 p4 tester active 42% 4% 2% claude-sonnet-4-5 low - - /w/a tm-1111111122"; got != want {
+	if got, want := fieldsOf(lines[1]), "mlab/_m1m1m1 - _m1m1m1 p4 tester active 42% 4% 2% claude-sonnet-4-5 low - - /w/a tm-1111111122"; got != want {
 		t.Errorf("row 1 = %q, want %q", got, want)
 	}
-	if got, want := fieldsOf(lines[2]), "mlab/_m2m2m2 _m2m2m2 - killed - - - - - - - /w/b tm-2222222222"; got != want {
+	if got, want := fieldsOf(lines[2]), "mlab/_m2m2m2 - _m2m2m2 - killed - - - - - - - /w/b tm-2222222222"; got != want {
 		t.Errorf("row 2 = %q, want %q", got, want)
 	}
 	if d.hits() != 1 {
@@ -85,10 +85,10 @@ func TestTeam_ResourcesFailureShowsDash(t *testing.T) {
 				t.Fatalf("code=%d stderr=%q, want a clean exit 0", code, stderr)
 			}
 			lines := teamRows(t, stdout)
-			if got, want := fieldsOf(lines[1]), "mlab/_m1m1m1 _m1m1m1 p4 tester active 42% - - claude-sonnet-4-5 low - - /w/a tm-1111111122"; got != want {
+			if got, want := fieldsOf(lines[1]), "mlab/_m1m1m1 - _m1m1m1 p4 tester active 42% - - claude-sonnet-4-5 low - - /w/a tm-1111111122"; got != want {
 				t.Errorf("row 1 = %q, want %q", got, want)
 			}
-			if got, want := fieldsOf(lines[2]), "mlab/_m2m2m2 _m2m2m2 - killed - - - - - - - /w/b tm-2222222222"; got != want {
+			if got, want := fieldsOf(lines[2]), "mlab/_m2m2m2 - _m2m2m2 - killed - - - - - - - /w/b tm-2222222222"; got != want {
 				t.Errorf("row 2 = %q, want %q", got, want)
 			}
 		})
@@ -115,7 +115,7 @@ func TestTeam_ResourcesRestartDiagnosticStaysSilent(t *testing.T) {
 	if code != ExitOK || stderr != "" {
 		t.Fatalf("code=%d stderr=%q, want exit 0 and a silent stderr", code, stderr)
 	}
-	if got, want := fieldsOf(teamRows(t, stdout)[1]), "mlab/_m1m1m1 _m1m1m1 p4 tester active 42% - - claude-sonnet-4-5 low - - /w/a tm-1111111122"; got != want {
+	if got, want := fieldsOf(teamRows(t, stdout)[1]), "mlab/_m1m1m1 - _m1m1m1 p4 tester active 42% - - claude-sonnet-4-5 low - - /w/a tm-1111111122"; got != want {
 		t.Errorf("row 1 = %q, want %q", got, want)
 	}
 }
@@ -134,7 +134,7 @@ func TestTeam_DuplicateSessionKeepsTheLargerShare(t *testing.T) {
 			if code != ExitOK || stderr != "" {
 				t.Fatalf("code=%d stderr=%q", code, stderr)
 			}
-			if got, want := fieldsOf(teamRows(t, stdout)[1]), "mlab/_m1m1m1 _m1m1m1 p4 tester active 42% 30% 9% claude-sonnet-4-5 low - - /w/a tm-1111111122"; got != want {
+			if got, want := fieldsOf(teamRows(t, stdout)[1]), "mlab/_m1m1m1 - _m1m1m1 p4 tester active 42% 30% 9% claude-sonnet-4-5 low - - /w/a tm-1111111122"; got != want {
 				t.Errorf("row 1 = %q, want %q", got, want)
 			}
 		})
