@@ -204,7 +204,7 @@ func TestPayload_Shape(t *testing.T) {
 			ThreadID          string `json:"thread-id"`
 			InterruptionLevel string `json:"interruption-level"`
 		}
-		Purdex map[string]string
+		Purdex map[string]any
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		t.Fatal(err)
