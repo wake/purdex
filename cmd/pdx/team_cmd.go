@@ -594,7 +594,7 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		}
 		cpu, mem := "", ""
 		// CPU / MEM are this host's numbers: a member on another host never takes them (session ids are not unique across hosts).
-		if u, ok := shares[m.SessionID]; ok && m.HostAlias == "" {
+		if u, ok := shares[m.SessionID]; ok && m.HostAlias == "" && (m.HostID == "" || v.Team.HostID == "" || m.HostID == v.Team.HostID) {
 			cpu, mem = fmt.Sprintf("%.0f%%", u.CPU), fmt.Sprintf("%.0f%%", u.Mem)
 		}
 		// TASK: "<id> <status> <subject>", the subject cut to 30 display columns; LAST:

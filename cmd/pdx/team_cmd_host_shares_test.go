@@ -32,3 +32,25 @@ func TestTeamCmd_RemoteMemberNeverTakesLocalCPUMEM(t *testing.T) {
 		t.Fatalf("the remote member took the local numbers: %q", lines[len(lines)-1])
 	}
 }
+
+// The same when the remote member's host alias is unknown here (unpaired, not resolvable): the host id still tells it
+// is not on the team's host.
+func TestTeamCmd_RemoteMemberWithoutAliasNeverTakesLocalCPUMEM(t *testing.T) {
+	snap := fakeSnapshot()
+	snap.Sessions = []resources.SessionUse{{SessionID: "cc-sid-member-1", CPU: 4.4, Mem: 2.2, Use: 5}}
+	v := teamViewTwoSessions()
+	v.Team.HostID = "host-mlab"
+	remote := fakeMember(team.SpawnRequest{ID: "op-3", Cwd: "/r", Model: "sonnet"})
+	remote.SessionID, remote.Ref, remote.Address, remote.HostID = "cc-sid-member-1", "_r3r3r3", "hostM/_r3r3r3", "hostM"
+	v.Members = append(v.Members, *remote)
+	d := &fakeResourcesDaemon{next: &fakeTeamCmdDaemon{view: answer{body: v}}, res: answer{body: snap}}
+	code, stdout, stderr := driveTeamCmd(t, runTeamCmd, d)
+	if code != ExitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	local, rem := strings.Fields(lines[1]), strings.Fields(lines[len(lines)-1])
+	if local[7] != "4%" || rem[7] != "-" || rem[8] != "-" {
+		t.Fatalf("local %q, remote %q", lines[1], lines[len(lines)-1])
+	}
+}
