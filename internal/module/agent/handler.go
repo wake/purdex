@@ -1491,6 +1491,9 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 // paneNameTimeout bounds the one tmux read that names a session from its pane.
 const paneNameTimeout = 2 * time.Second
 
+// paneNameWait is how long an event waits for one of those slots.
+var paneNameWait = 750 * time.Millisecond
+
 // paneNameSlots caps how many of those reads run at once, so a caller cannot turn event requests into a pile of
 // `tmux list-panes -a`.
 var paneNameSlots = make(chan struct{}, 4)
@@ -1500,11 +1503,17 @@ var paneNameSlots = make(chan struct{}, 4)
 // several sessions and the listing cannot tell which one the hook ran in (the event stays refused rather than land in a
 // guess).
 func (m *Module) sessionNameOfPane(ctx context.Context, paneID string) string {
+	// A short, bounded wait for a slot: a burst of real hooks (several panes starting at once) must not lose an event the
+	// hook sends only once, while a flood still cannot queue for long.
+	wait := time.NewTimer(paneNameWait)
+	defer wait.Stop()
 	select {
 	case paneNameSlots <- struct{}{}:
 		defer func() { <-paneNameSlots }()
-	default:
-		return "" // enough of these in flight already; this event is refused like one from an unplaceable pane
+	case <-wait.C:
+		return "" // still full after the wait; this event is refused like one from an unplaceable pane
+	case <-ctx.Done():
+		return ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, paneNameTimeout)
 	defer cancel()

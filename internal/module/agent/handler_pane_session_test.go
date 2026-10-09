@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -153,23 +154,47 @@ func TestHandleEvent_PaneNamingIsNotTriedForAnObviouslyBadRequest(t *testing.T) 
 	}
 }
 
-// At most paneNameSlots listings at once: with all slots taken a further event is refused without asking tmux.
+func fillPaneNameSlots(t *testing.T) (release func()) {
+	t.Helper()
+	for i := 0; i < cap(paneNameSlots); i++ {
+		paneNameSlots <- struct{}{}
+	}
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			for i := 0; i < cap(paneNameSlots); i++ {
+				<-paneNameSlots
+			}
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
+// At most paneNameSlots listings at once: with every slot taken for longer than the wait, a further event is refused
+// without asking tmux.
 func TestHandleEvent_PaneNamingIsCapped(t *testing.T) {
 	m, fake := paneOnlyModule(t)
 	var n atomic.Int32
 	m.tmux = listingCounter{fake, &n}
-	for i := 0; i < cap(paneNameSlots); i++ {
-		paneNameSlots <- struct{}{}
-	}
-	defer func() {
-		for i := 0; i < cap(paneNameSlots); i++ {
-			<-paneNameSlots
-		}
-	}()
+	orig := paneNameWait
+	paneNameWait = 50 * time.Millisecond
+	defer func() { paneNameWait = orig }()
+	fillPaneNameSlots(t)
 	if w := postEvent(m, `{"tmux_session":"","tmux_pane_id":"%9",`+paneOnlyTail+`}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
 	if n.Load() != 0 {
 		t.Fatalf("tmux was listed %d times with every slot taken", n.Load())
+	}
+}
+
+// ... but a burst that clears within the wait loses nothing: the event waits for a slot and is processed.
+func TestHandleEvent_AShortBurstWaitsForASlotInsteadOfLosingTheEvent(t *testing.T) {
+	m, _ := paneOnlyModule(t)
+	release := fillPaneNameSlots(t)
+	time.AfterFunc(100*time.Millisecond, release)
+	if got := hookSession(t, m, `{"tmux_session":"","tmux_pane_id":"%9",`+paneOnlyTail+`}`); got != "dev-code" {
+		t.Fatalf("broadcast under %q, want dev-code", got)
 	}
 }
