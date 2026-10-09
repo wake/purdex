@@ -52,7 +52,7 @@ function Stepper({ hostId, row, field, label }: { hostId: string; row: SessionQu
     <span className="inline-flex items-center gap-1" data-testid="quota-stepper" data-field={field}>
       <span className="text-text-muted">{label}</span>
       <button type="button" aria-label={t('unattended.quota.minus')} disabled={value <= 0} onClick={() => write(value - 1)} className={btn}>−</button>
-      <span data-testid="quota-value" className="min-w-[1.5ch] text-center tabular-nums text-text-primary">{value}</span>
+      <span data-testid="quota-value" className="min-w-[2ch] text-center tabular-nums text-text-primary">{value}</span>
       <button type="button" aria-label={t('unattended.quota.plus')} disabled={value >= MAX} onClick={() => write(value + 1)} className={btn}>+</button>
     </span>
   )
@@ -82,14 +82,14 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
           body = rows.length === 0
             ? <div data-testid="quota-none" className="text-text-muted">{t('unattended.quota.none')}</div>
             : (
-              <ul className="flex flex-col gap-1">
+              <ul className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-1">
                 {rows.map((r) => (
-                  <li key={`${r.session_id}`} data-testid="quota-row" data-session={r.session_id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                    <span className="truncate text-text-primary" title={r.address}>{nameOf(r)}</span>
-                    <span className="inline-flex items-center gap-3">
-                      <Stepper hostId={h.hostId} row={r} field="self_left" label={t('unattended.quota.self')} />
-                      {r.is_lead && <Stepper hostId={h.hostId} row={r} field="member_pool_left" label={t('unattended.quota.pool')} />}
-                    </span>
+                  <li key={`${r.session_id}`} data-testid="quota-row" data-session={r.session_id} className="contents">
+                    <span className="block min-w-0 truncate text-text-primary" title={r.address}>{nameOf(r)}</span>
+                    <Stepper hostId={h.hostId} row={r} field="self_left" label={t('unattended.quota.self')} />
+                    {r.is_lead
+                      ? <Stepper hostId={h.hostId} row={r} field="member_pool_left" label={t('unattended.quota.pool')} />
+                      : <span data-testid="quota-pool-cell-empty" />}
                   </li>
                 ))}
               </ul>

@@ -30,7 +30,7 @@ import { registerRefetch } from '../lib/team/relay-quota-writer'
 import { sinceText } from '../lib/team/time-text'
 import type { Approval, SessionQuota, UnattendedView } from '../lib/team/types'
 
-const PANEL_WIDTH = 360
+const PANEL_WIDTH = 420
 
 /** One host's share of the list. */
 interface HostPages {
@@ -207,45 +207,49 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
 
   return (
     <FloatingPanel title={t('unattended.panel.title')} anchorRef={anchorRef} onClose={onClose} width={PANEL_WIDTH} placement="below" testId="unattended-panel">
-      <div aria-busy={busy} className="flex flex-col gap-2 text-xs">
+      {/* Three blocks, a line between those that are there: 接力額度, 額度用完，等你核准, and the automatically approved list. */}
+      <div aria-busy={busy} className="flex flex-col text-xs divide-y divide-border-subtle [&>*]:py-2 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
         <UnattendedQuotaSection hosts={quotaHosts} headings={quotaHosts.length > 1} />
         <UnattendedHeldSection rows={held} />
-        {Number.isFinite(since) && (
-          <div data-testid="unattended-since" className="text-text-muted">{t('unattended.panel.since', { time: sinceText(since) })}</div>
-        )}
-        {settled && merged.length === 0 && failed.length === 0 && unreachable.length === 0 && (
-          <div data-testid="unattended-empty" className="text-text-muted">{t('unattended.panel.empty')}</div>
-        )}
-        {unreachable.map((hostId) => (
-          <div key={hostId} data-testid="unattended-host-unreachable" className="text-status-warning">
-            {t('unattended.panel.host_unreachable', { host: label(hostId) })}
-          </div>
-        ))}
-        {merged.length > 0 && (
-          <ul className="flex flex-col gap-1">
-            {merged.map(({ hostId, a }) => (
-              <li key={`${hostId}:${a.id}`} data-testid="unattended-row" className="text-text-primary">
-                {t('unattended.panel.row', { host: label(hostId), session: approvalSessionLabel(a.origin), kind: approvalKindLabel(t, a.kind), time: sinceText(timeOf(a)) })}
-              </li>
-            ))}
-          </ul>
-        )}
-        {failed.map((hostId) => (
-          <div key={hostId} data-testid="unattended-host-failed" className="text-status-warning">
-            {t('unattended.panel.host_failed', { host: label(hostId), code: pages[hostId].failed! })}
-          </div>
-        ))}
-        {hasMore && (
-          <button
-            type="button"
-            data-testid="unattended-more"
-            disabled={paging}
-            onClick={() => { void more() }}
-            className="self-start px-2 py-1 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
-          >
-            {t('unattended.panel.more')}
-          </button>
-        )}
+        <section data-testid="unattended-approved-section" className="flex flex-col gap-2">
+          <div data-testid="unattended-approved-title" className="font-medium text-text-primary">{t('unattended.approved.title')}</div>
+          {Number.isFinite(since) && (
+            <div data-testid="unattended-since" className="text-text-muted">{t('unattended.panel.since', { time: sinceText(since) })}</div>
+          )}
+          {settled && merged.length === 0 && failed.length === 0 && unreachable.length === 0 && (
+            <div data-testid="unattended-empty" className="text-text-muted">{t('unattended.panel.empty')}</div>
+          )}
+          {unreachable.map((hostId) => (
+            <div key={hostId} data-testid="unattended-host-unreachable" className="text-status-warning">
+              {t('unattended.panel.host_unreachable', { host: label(hostId) })}
+            </div>
+          ))}
+          {merged.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {merged.map(({ hostId, a }) => (
+                <li key={`${hostId}:${a.id}`} data-testid="unattended-row" className="text-text-primary">
+                  {t('unattended.panel.row', { host: label(hostId), session: approvalSessionLabel(a.origin), kind: approvalKindLabel(t, a.kind), time: sinceText(timeOf(a)) })}
+                </li>
+              ))}
+            </ul>
+          )}
+          {failed.map((hostId) => (
+            <div key={hostId} data-testid="unattended-host-failed" className="text-status-warning">
+              {t('unattended.panel.host_failed', { host: label(hostId), code: pages[hostId].failed! })}
+            </div>
+          ))}
+          {hasMore && (
+            <button
+              type="button"
+              data-testid="unattended-more"
+              disabled={paging}
+              onClick={() => { void more() }}
+              className="self-start px-2 py-1 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+            >
+              {t('unattended.panel.more')}
+            </button>
+          )}
+        </section>
       </div>
     </FloatingPanel>
   )

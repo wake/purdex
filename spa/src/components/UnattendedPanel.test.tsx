@@ -467,7 +467,7 @@ describe('UnattendedPanel', () => {
     mockedGet.mockResolvedValue(page([]))
     const { onClose } = open([A])
     const panel = await screen.findByTestId('unattended-panel')
-    expect(within(panel).getByText('無人值守期間自動通過')).toBeInTheDocument()
+    expect(within(panel).getByText('無人值守')).toBeInTheDocument()
     fireEvent.click(within(panel).getByTestId('floating-panel-close'))
     expect(onClose).toHaveBeenCalled()
   })
@@ -586,6 +586,54 @@ describe('UnattendedPanel relay quota', () => {
     mockedGet.mockClear()
     refetchHost(A)
     expect(mockedGet).not.toHaveBeenCalled()
+  })
+})
+
+// 88's ruling (2026-10-09): the panel is 「無人值守」, three blocks with a line between those that are there, and the old list
+// has its own title with the "since" line under it.
+describe('UnattendedPanel layout', () => {
+  beforeEach(() => {
+    useUnattendedStore.getState().reset()
+    useTeamRosterStore.getState().reset()
+    useRelayQuotaStore.getState().reset()
+    resetWriter()
+  })
+
+  it('titled 「無人值守」; the approved list has its own title and the since line sits under it', async () => {
+    mockedGet.mockResolvedValue(page([approved('a1', at(9, 30))]))
+    open([A])
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    const panel = screen.getByTestId('unattended-panel')
+    expect(within(panel).getByText('無人值守')).toBeInTheDocument()
+    expect(within(panel).queryByText('無人值守期間自動通過')).toBeNull()
+    const approvedSection = screen.getByTestId('unattended-approved-section')
+    expect(within(approvedSection).getByTestId('unattended-approved-title')).toHaveTextContent('自動通過的申請')
+    expect(within(approvedSection).getByTestId('unattended-since')).toBeInTheDocument()
+    const children = Array.from(approvedSection.children)
+    expect(children[0]).toBe(screen.getByTestId('unattended-approved-title'))
+    expect(children[1]).toBe(screen.getByTestId('unattended-since'))
+  })
+
+  it('the blocks come in order (quota, held, approved), separated by lines', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([approved('a1', at(9, 30))], { quotas: [quota('p1')], held: [approved('h1', at(10, 0), { state: 'open', decided_by: undefined, decided_at: undefined })] }))
+    open([A])
+    await waitFor(() => expect(screen.getByTestId('held-section')).toBeInTheDocument())
+    const blocks = Array.from(screen.getByTestId('unattended-panel').querySelector('[aria-busy]')!.children).map((c) => c.getAttribute('data-testid'))
+    expect(blocks).toEqual(['quota-section', 'held-section', 'unattended-approved-section'])
+    expect(screen.getByTestId('quota-section').parentElement!.className).toContain('divide-y')
+  })
+
+  it('is 420 px wide', async () => {
+    mockedGet.mockResolvedValue(page([]))
+    open([A])
+    await flush()
+    expect(screen.getByTestId('unattended-panel').style.width).toBe('420px')
+  })
+
+  const quota = (id: string): SessionQuota => ({
+    session_id: id, root_session_id: `root-${id}`, title: `T-${id}`, address: `mlab/${id}-xx`, is_lead: false, self_left: 1, member_pool_left: 0, rev: 3,
   })
 })
 

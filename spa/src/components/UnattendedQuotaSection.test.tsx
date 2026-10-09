@@ -169,3 +169,37 @@ describe('what the section says instead of rows', () => {
     expect(container).toBeEmptyDOMElement()
   })
 })
+
+// 88's ruling (2026-10-09): aligned columns - name | 自動接力 | member (blank for a non-lead) - so every row's 自動接力
+// lines up, a lead is still one line, and a long name is cut with its address as the hint.
+describe('layout: aligned columns', () => {
+  beforeEach(() => useTeamRosterStore.getState().apply(A, []))
+
+  it('every row has the same three cells: the name, the auto-relay stepper, then the member stepper or an empty cell', () => {
+    show([{ hostId: A, rows: [q('l1', { is_lead: true }), q('p1')] }])
+    for (const id of ['l1', 'p1']) expect(rowFor(id).children).toHaveLength(3)
+    const lead = Array.from(rowFor('l1').children)
+    expect(lead[1].getAttribute('data-field')).toBe('self_left')
+    expect(lead[2].getAttribute('data-field')).toBe('member_pool_left')
+    const plain = Array.from(rowFor('p1').children)
+    expect(plain[1].getAttribute('data-field')).toBe('self_left')
+    expect(plain[2].getAttribute('data-testid')).toBe('quota-pool-cell-empty')
+  })
+
+  it('the rows are one grid (so the columns line up across rows) and the rows themselves add no box', () => {
+    show([{ hostId: A, rows: [q('l1', { is_lead: true }), q('p1')] }])
+    const grid = rowFor('p1').parentElement!
+    expect(grid.className).toContain('grid')
+    expect(grid.className).toMatch(/grid-cols-\[minmax\(0,1fr\)_auto_auto\]/)
+    expect(rowFor('p1').className).toContain('contents')
+  })
+
+  it('a long name is truncated with the address as its hint', () => {
+    show([{ hostId: A, rows: [q('p1', { title: 'a very long session title that cannot fit in one line of the panel at all', address: 'mlab/p1-xx' })] }])
+    const name = rowFor('p1').children[0] as HTMLElement
+    expect(name.className).toContain('truncate')
+    expect(name.className).toContain('min-w-0')
+    expect(name).toHaveAttribute('title', 'mlab/p1-xx')
+  })
+})
+
