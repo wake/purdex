@@ -404,6 +404,11 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "client.kind and client.label are required", nil)
 		return
 	}
+	if strings.EqualFold(strings.TrimSpace(req.Client.Kind), team.ClientKindUnattended) {
+		// Reserved for the daemon's own approvals (RQ-0): a person's click, a terminal or an agent never decides as it.
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, `client.kind "unattended" is reserved for the daemon`, nil)
+		return
+	}
 	client := req.Client
 	client.Addr = r.RemoteAddr
 	a, ok, err := m.store.Get(id)
