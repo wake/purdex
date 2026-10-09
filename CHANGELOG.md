@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.0-alpha.669] - 2026-10-10
+
+> 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。部署時 team.db 的 remote_members 自動加 `team_label`、`team_color` 欄。跨主機的修正要**兩台都部署**才會生效。
+
+### Added：team 改名同步到被收進的那台 — #2288（#2347，A 線）
+
+- 在 lead 那台改 team 的名稱、短標籤或顏色時，同一筆交易裡對有遠端 member（或正在開 member）的主機排出 `team.appearance` 指令；那台更新自己的紀錄，通知與畫面改用新名稱。沒有遠端 member 的 team 改名完全不連網路；那台沒宣告支援或連不上時略過並記一行 log（那台停在舊名，直到下次改名）。
+
+### Fixed：team 結束時收掉還沒開好的遠端 member — #2327（#2337，A 線）
+
+- lead 那台結束 team 時，「結束」也送到只有開人中的主機，並釋放座位；被收進的那台收到後把還沒開好的那筆標成放棄、關掉它的 tmux session，不會留下沒有 lead 的 member。
+
+### Fixed：開機清掉沒有紀錄的 spawn tmux session — #2341（#2344，A 線）
+
+- daemon 啟動時，帶開人標記、而本機紀錄已失敗的 tmux session 會被關掉（動手前再確認一次是同一個 session）；找不到紀錄的只記 log、不動。
+
+### Changed：介面 — X5-App-b（#2338）、#2339、#2349（介面線）
+
+- 主機頁可設定每台配對主機的 team 同意（允許開 member）與可用資料夾。
+- 用量環：已用的環改成逆時針長，team 的 context 環用「已用」的顏色。
+- 從 team 面板點 member，分頁開在 lead 的工作區、群組旁邊。
+
+### Docs
+
+- 跨主機 team spec 補 §14：實作期間定下的 11 條修正（#2343）；介面 U3 spec（#2345）。
+
 ## [1.0.0-alpha.668] - 2026-10-10
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。跨主機的新功能要**兩台都部署**才會生效。部署時 team.db 自動加 `remote_spawns` 表與欄位。
