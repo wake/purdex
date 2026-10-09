@@ -53,6 +53,17 @@ var capabilities = []string{
 	"conversations.v1",       // GET /api/conversations/{provider}/{session_id} (snapshot, ?after= increments, ?around=) and .../subagents/{agent_id}
 }
 
+// capabilityList is the static list plus the one conditional capability: push.v1 while the push module is mounted
+// (push spec §3: `[push]` is boot-only, so "mounted" is "configured" for the life of the process). Every other name
+// above is unconditional; keep it that way unless a feature really can be switched off at boot.
+func (c *Core) capabilityList() []string {
+	out := append([]string(nil), capabilities...)
+	if c.Mounted("push") {
+		out = append(out, "push.v1") // POST/GET /api/push/devices, DELETE /api/push/devices/{device_id}, PUT /api/push/presence
+	}
+	return out
+}
+
 // handleInfo returns daemon metadata: host ID, tmux instance, version, OS, and architecture.
 func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 	c.CfgMu.RLock()
@@ -88,7 +99,7 @@ func (c *Core) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"os":             runtime.GOOS,
 		"arch":           runtime.GOARCH,
 		"nex":            nex,
-		"capabilities":   append([]string(nil), capabilities...),
+		"capabilities":   c.capabilityList(),
 		"last_shutdown":  nil,
 	}
 	if r := c.LastShutdown; r != nil {

@@ -35,6 +35,7 @@ import (
 	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	profilesmod "github.com/wake/purdex/internal/module/profiles"
+	pushmod "github.com/wake/purdex/internal/module/push"
 	resourcesmod "github.com/wake/purdex/internal/module/resources"
 	"github.com/wake/purdex/internal/module/session"
 	teammod "github.com/wake/purdex/internal/module/team"
@@ -443,6 +444,18 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		c.AddModule(nexMod)
 	} else {
 		log.Printf("nex: disabled")
+	}
+
+	// push is mounted only when [push] names an APNs directory (boot-only: spec §3), so its routes and the push.v1
+	// capability exist only then. A bad key fails the module's Init, and a failed Init stops the daemon at boot like any
+	// module's (core init: ...): someone who set apns_dir wants to hear about a broken key, not find push silently off.
+	c.CfgMu.RLock()
+	pushDir := c.Cfg.PushAPNsDir()
+	c.CfgMu.RUnlock()
+	if pushDir != "" {
+		c.AddModule(pushmod.New())
+	} else {
+		log.Printf("push: disabled")
 	}
 
 	return nil
