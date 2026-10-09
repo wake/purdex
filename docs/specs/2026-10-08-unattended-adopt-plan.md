@@ -1659,10 +1659,11 @@ Total remaining ≈ 4 700 lines / ~60 files (was ≈ 8 600 for the same PRs in t
 | kill of an adopted member | PL-1d2 | TI-1b "open a seat" must not offer kill for an adopted member? (not in the TI plan) | **ask 88**: the App's seat actions should know `origin` (already on `RosterMember.origin`) |
 | `Member.origin` label (被釋出 / 納入) | PL-1f″ column | TI-3/TI-4 | the field is on the wire since PL-1f′ (constant `spawned`); after PL-1f″ it can be `adopted` — 88's surfaces should treat any non-`spawned` value as adopted |
 
-### 6. Open points for the coordinator
+### 6. Rulings (coordinator purdex-1f, 2026-10-09)
 
-1. Released members' tasks: leave as is (recommended) or auto-`delete`? (section 2 item 4)
-2. Does the App need `origin` before PL-1f″ to hide kill for adopted seats? (section 5)
-3. Fold PL-1c2 into PL-1c, or keep it separate (recommended: separate)?
-4. Keep PL-1g at all, or drop it now that `/relay now` and `/lead` bypass the cache and the cache goes stale only for the threshold path (recommended: keep, small).
-5. The adopt plan's "Codex review" tables stay as history; this section replaces only the **status and estimates** of the PR table, not the contracts.
+1. A released member's tasks are left as they are; the lead `reassign`s or `delete`s them.
+2. **PL-1c2** (non-tmux TurnEnd, #2115) is its own PR.
+3. **PL-1g** stays (≈ 100 lines, threshold path only).
+4. The App needs no `origin` before PL-1f″: adopt deploys in the same batch as PL-1f″, so no adopted member exists before it. The kill of an adopted member is PL-1d2's (it ends only the Claude Code process and leaves the user's tmux session alone), so the App may offer kill as usual.
+5. **PL-1b adds `AND state = 'active'` to `MemberLastTurnAts`.**
+6. This section is pure docs (no codex). It replaces only the **status and estimates** of the PR table, not the contracts; the earlier "Codex review" tables stay as history.
