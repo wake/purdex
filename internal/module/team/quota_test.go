@@ -560,3 +560,14 @@ func TestUnattendedPut_QuotasNullWhenTheStoreCannotBeRead(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// RQ-1c: GET /api/team carries the lead's own chain numbers (what `pdx team` prints in its header).
+func TestTeamGet_CarriesTheLeadsRelayQuota(t *testing.T) {
+	f := newFixture(t)
+	f.approveLead(uid(1))
+	f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-1", SelfLeft: ip(3), MemberPoolLeft: ip(2), Client: appClient2})
+	code, tv, e := f.teamView("/tmp/10.sock")
+	if code != http.StatusOK || tv.LeadRelayQuota == nil || *tv.LeadRelayQuota != (team.RelayQuota{SelfLeft: 3, MemberPoolLeft: 2, Rev: 1}) {
+		t.Fatalf("GET /api/team = %d lead quota %+v %+v, want 3 / 2 at rev 1", code, tv.LeadRelayQuota, e)
+	}
+}

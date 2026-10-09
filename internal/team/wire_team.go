@@ -253,6 +253,9 @@ type KillRequest struct {
 type TeamView struct {
 	Team    Team     `json:"team"`
 	Members []Member `json:"members"` // never null: MarshalJSON emits [] for none
+	// LeadRelayQuota is the lead's own relay chain's numbers (#2062; the lead's self_left and the member pool);
+	// nil from a daemon that predates it. Members have none of their own to show.
+	LeadRelayQuota *RelayQuota `json:"lead_relay_quota,omitempty"`
 }
 
 // MarshalJSON keeps the struct tags' shape and makes "no members" an

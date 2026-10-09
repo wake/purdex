@@ -29,7 +29,8 @@ func TestPdx_NothingWritesARelayQuota(t *testing.T) {
 		slash := filepath.ToSlash(path)
 		switch {
 		case strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go"):
-			if strings.Contains(s, team.RelayQuotaRoute) || strings.Contains(s, "RelayQuotaRoute") || strings.Contains(s, "RelayQuotaPutRequest") {
+			if strings.Contains(s, team.RelayQuotaRoute) || strings.Contains(s, "RelayQuotaRoute") || strings.Contains(s, "RelayQuotaPutRequest") ||
+				strings.Contains(s, "/api/hostconfig/relay_quota") {
 				t.Errorf("%s names the relay quota route: no pdx code may write a quota", path)
 			}
 		case strings.HasPrefix(slash, "plugin/purdex/hooks/") && strings.HasSuffix(path, ".js"):
@@ -37,8 +38,8 @@ func TestPdx_NothingWritesARelayQuota(t *testing.T) {
 				t.Errorf("%s mentions the relay quota: the mod never writes it", path)
 			}
 		case slash == "plugin/purdex/skills/pdx-team/SKILL.md":
-			if strings.Contains(s, team.RelayQuotaRoute) {
-				t.Errorf("%s teaches the relay quota route", path)
+			if strings.Contains(s, team.RelayQuotaRoute) || strings.Contains(s, "hostconfig/relay_quota") {
+				t.Errorf("%s teaches a relay quota route", path)
 			}
 		}
 		return nil

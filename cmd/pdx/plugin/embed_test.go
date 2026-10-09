@@ -593,6 +593,8 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		"`/relay` (or `/relay now`) is the user's way to relay early: **you never run it**",
 		// /lead (lead-command spec §3): requested at once, not judged.
 		"When the user runs `/lead` or plainly asks you to become a lead, request it at once",
+		// #2062: the relay quota and its switch are the user's.
+		"**The relay quota is the user's.**", "you never ask for more quota", "`pdx team` shows yours, read-only",
 		// U24 (adopt spec D-U24-2/3): the commands, the foreground wait and the ambiguity hint.
 		"`pdx adopt <ref>` takes a **running session on this host**", "**in the foreground with Bash `timeout: 600000`**",
 		"`adopt_target_ambiguous` means two sessions share that ref", "`pdx release <ref>` lets a member go",
