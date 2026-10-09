@@ -27,19 +27,8 @@ func appearanceCmds(f *fixture) map[string]team.TeamCommand {
 	return out
 }
 
-// pairHosts makes the config carry the member hosts the fake caller answers for (the fan-out asks every paired host).
-func pairHosts(f *fixture, ids ...string) {
-	f.core.CfgMu.Lock()
-	defer f.core.CfgMu.Unlock()
-	f.core.Cfg.Peers.Hosts = nil
-	for _, id := range ids {
-		f.core.Cfg.Peers.Hosts = append(f.core.Cfg.Peers.Hosts, config.PeerHost{Alias: "a-" + id, URL: "https://" + id, HostID: id, InboundToken: "i"})
-	}
-}
-
 func TestAppearance_TheRenameIsQueuedForEveryAnnouncingMemberHost(t *testing.T) {
 	f, fc := remoteFixture(t)
-	pairHosts(f, "hostM", "hostN", "hostO")
 	fc.aliases["old"] = "hostO"
 	fc.caps["hostM"] = ipeers.TeamCaps{Kinds: append(append([]string{}, allKinds...), CmdAppearance), AllowTeam: true}
 	fc.caps["hostN"] = ipeers.TeamCaps{Kinds: append(append([]string{}, allKinds...), CmdAppearance), AllowTeam: true}
@@ -78,13 +67,22 @@ func TestAppearance_TheRenameIsQueuedForEveryAnnouncingMemberHost(t *testing.T) 
 
 func TestAppearance_NoMemberHostQueuesNothingAndTheRenameStands(t *testing.T) {
 	f, fc := remoteFixture(t)
-	pairHosts(f, "hostM")
+	// a paired host that answers, and no remote member or spawn of this team anywhere: the network is not touched
+	f.core.CfgMu.Lock()
+	f.core.Cfg.Peers.Hosts = []config.PeerHost{{Alias: "air26", URL: "https://air26.example", HostID: "hostM", InboundToken: "i"}}
+	f.core.CfgMu.Unlock()
 	fc.caps["hostM"] = ipeers.TeamCaps{Kinds: append(append([]string{}, allKinds...), CmdAppearance), AllowTeam: true}
 	if code, body := f.putAppearance(appearanceBody(nil)); code != http.StatusOK {
 		t.Fatalf("put = %d %s", code, body)
 	}
 	if n := len(f.commandsOf(CmdAppearance)); n != 0 {
 		t.Fatalf("%d commands", n)
+	}
+	fc.mu.Lock()
+	asks := fc.capsAsks
+	fc.mu.Unlock()
+	if asks != 0 {
+		t.Fatalf("TeamCaps asked %d times for a team with no remote member", asks)
 	}
 	if f.teamRow().TeamName != "資源線：租約" {
 		t.Fatal("rename lost")

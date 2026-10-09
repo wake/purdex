@@ -117,29 +117,41 @@ func (m *Module) appearanceFanout(ctx context.Context, teamID string) *Appearanc
 	if err != nil || !ok || tm.EndedAt != 0 {
 		return nil
 	}
-	// every paired host is asked, not only the ones that hold a row now: the transaction decides who is a member host,
-	// and a host that joins between this look and that transaction must still hear of the rename
-	var paired []string
-	m.core.CfgMu.RLock()
-	for _, h := range m.core.Cfg.Peers.Hosts {
-		if h.HostID != "" {
-			paired = append(paired, h.HostID)
-		}
+	// the hosts the team has a live remote row or a running forwarded spawn on (the transaction's own condition): none, and
+	// the network is not touched at all
+	hosts, err := m.store.LiveRemoteHosts(teamID, true)
+	if err != nil {
+		m.logf("[team] appearance of %s: member hosts: %v", teamID, err)
+		return nil
 	}
-	m.core.CfgMu.RUnlock()
+	if len(hosts) == 0 {
+		return nil
+	}
 	// asked at once: a slow or offline host costs one probe's wait, not one per host
 	announcing := map[string]bool{}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for _, h := range paired {
+	for _, h := range hosts {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if caps, err := m.cmdCaller.TeamCaps(ctx, h); err == nil && slices.Contains(caps.Kinds, CmdAppearance) && caps.AllowTeam {
-				mu.Lock()
-				announcing[h] = true
-				mu.Unlock()
+			caps, err := m.cmdCaller.TeamCaps(ctx, h)
+			why := ""
+			switch {
+			case err != nil:
+				why = "its capabilities could not be read: " + err.Error()
+			case !slices.Contains(caps.Kinds, CmdAppearance):
+				why = "it does not announce " + CmdAppearance
+			case !caps.AllowTeam:
+				why = "it has not allowed this host (allow_team off)"
 			}
+			if why != "" {
+				m.logf("[team] appearance of team %s: host %s skipped, it keeps the old look until the next rename: %s", teamID, h, why)
+				return
+			}
+			mu.Lock()
+			announcing[h] = true
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
