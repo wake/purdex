@@ -266,7 +266,7 @@ describe('TabBar — team group (TI-2)', () => {
           h1: { id: 'h1', name: 'H1', ip: '1', port: 1, daemonId: 'daemon' },
           h2: { id: 'h2', name: 'b26', ip: '2', port: 1, daemonId: 'dm-b' },
         } as never,
-        hostOrder: ['h1', 'h2'], runtime: {},
+        hostOrder: ['h1', 'h2'], runtime: { h2: { daemonIdVerified: { endpoint: '2:1', daemonId: 'dm-b' } } } as never,
       })
       const tabs = [mk('lead', 'lead-tm'), mk('mr', 'r-tm', 'h2')]
       seed([remote(state)], tabs)
