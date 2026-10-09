@@ -93,3 +93,42 @@ func TestHostScope_ARemoteRowsAddressIsItsHostsAlias(t *testing.T) {
 		t.Fatalf("view = %d address %q, want air26/%s", code, mem.Address, remoteRef)
 	}
 }
+
+// codex attack: the caller gates (task / report / compacted callers) look a LOCAL session up; a remote row that happens to
+// carry the same session id is nobody's caller identity. Mutation gate: drop the scope in ActiveMemberInLiveTeam → red.
+func TestHostScope_ACallerGateNeverResolvesToARemoteRow(t *testing.T) {
+	f := hostScopeFixture(t)
+	if _, _, ok, err := f.m.store.ActiveMemberInLiveTeam("sid-abc12"); err != nil || ok {
+		t.Fatalf("a remote row answered as a member by session id: ok=%v err=%v", ok, err)
+	}
+	seedMember(t, f.m.store, "op-local", uid(1), "sid-local", f.clock.Load())
+	if _, _, ok, _ := f.m.store.ActiveMemberInLiveTeam("sid-local"); !ok {
+		t.Fatal("a local member was not found")
+	}
+}
+
+// codex attack: a remote row's view never reads this host's usage / quota for its session id, and an unresolved alias never
+// falls back to the local alias.
+func TestHostScope_ARemoteViewUsesNoLocalReaders(t *testing.T) {
+	f, fc := remoteFixture(t)
+	f.remoteRow("abc12", "hostM", "mk1", rowActive)
+	f.usage.setPct("sid-abc12", 99) // a LOCAL reading under the same session id
+	rows, _ := f.m.store.MembersOf(uid(1))
+	var mr memberRow
+	for _, r := range rows {
+		if r.SpawnOp == "abc12" {
+			mr = r
+		}
+	}
+	v := f.m.memberView(mr)
+	if v.Context != nil {
+		t.Fatalf("a remote view took this host's reading: %+v", v.Context)
+	}
+	if v.Address != "air26/"+remoteRef {
+		t.Fatalf("address = %q", v.Address)
+	}
+	fc.aliases = map[string]string{} // the peer entry is gone
+	if v := f.m.memberView(mr); v.Address != "hostM/"+remoteRef {
+		t.Fatalf("unresolved alias: address = %q, want the host id form", v.Address)
+	}
+}

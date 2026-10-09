@@ -128,11 +128,18 @@ func (m *Module) memberView(mr memberRow) team.Member {
 	if mr.Origin == team.MemberOriginAdopted { // the row's key is the adoption's request id; the wire says so in its own field
 		v.Origin, v.SpawnOp, v.AdoptRequest = team.MemberOriginAdopted, "", mr.SpawnOp
 	}
-	if m.isRemoteRow(mr) { // its address is the member host's alias and its ref, not this host's registry's
+	if m.isRemoteRow(mr) {
+		// A remote row never goes through this host's registry, usage or quota readers (a same-looking session id here would
+		// leak its data): its address is its host's alias (else its host id) and its ref, its context what was synced.
 		if a := m.remoteAlias(mr.HostID); a != "" {
 			v.Address = a + "/" + mr.Ref
+		} else {
+			v.Address = mr.HostID + "/" + mr.Ref
 		}
-	} else if mr.State == team.MemberActive {
+		v.Context = mr.Usage
+		return v
+	}
+	if mr.State == team.MemberActive {
 		if o, ok, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && ok {
 			v.Address = o.Address
 		}
