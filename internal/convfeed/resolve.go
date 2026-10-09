@@ -103,14 +103,14 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 	}
 
 	if owner != nil && owner.TranscriptPath != "" {
-		if f, p := r.openCandidate(root, owner.TranscriptPath); f != nil {
+		if f, p := r.openCandidate(root, owner.TranscriptPath, sessionID); f != nil {
 			return finish(f, p)
 		}
 	}
 	if r.Index != nil {
 		p, ok, ierr := r.Index.TranscriptPath(ctx, sessionID)
 		if ierr == nil && ok && p != "" {
-			if f, rp := r.openCandidate(root, p); f != nil {
+			if f, rp := r.openCandidate(root, p, sessionID); f != nil {
 				return finish(f, rp)
 			}
 		}
@@ -130,8 +130,13 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 // openCandidate checks a path that came from outside (a hook, the index): it must exist, resolve to a regular .jsonl
 // file under the symlink-resolved root; then it is opened by the descriptor-relative walk, so a directory swapped for
 // a symlink after the check is refused at that component. nil when the candidate is not usable.
-func (r *Resolver) openCandidate(root, path string) (*os.File, string) {
+func (r *Resolver) openCandidate(root, path, sessionID string) (*os.File, string) {
 	path = filepath.Clean(path)
+	// A transcript is named after its session: an owner or index answer that points at another file (stale,
+	// mismatched) is not this conversation, and the search goes on.
+	if filepath.Base(path) != sessionID+".jsonl" {
+		return nil, ""
+	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return nil, ""
@@ -206,11 +211,6 @@ func (r *Resolver) OpenSubagent(ctx context.Context, sessionID, agentID string) 
 		return nil, err
 	}
 	src.Closer.Close() // only the path is wanted; the file is opened below by the same walk
-	// The sibling directory is named after the transcript file: an owner or index answer that points at another
-	// file (stale, mismatched) must not make this session read some other conversation's subagents.
-	if filepath.Base(src.Path) != sessionID+".jsonl" {
-		return nil, ErrNotFound
-	}
 	root, err := transcriptpath.Root(r.Home)
 	if err != nil {
 		return nil, ErrNotFound

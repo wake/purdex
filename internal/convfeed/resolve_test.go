@@ -366,3 +366,22 @@ func TestResolve_CancelledBeforeTheOpenOfAnExistingCandidate(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
+
+// An owner or index answer naming another session's file is skipped, and the later sources still run.
+func TestResolve_CandidateOfAnotherSessionIsSkipped(t *testing.T) {
+	e := newResEnv(t)
+	wrong := filepath.Join(e.root, "-other", "99999999-9999-4999-8999-999999999999.jsonl")
+	if err := os.MkdirAll(filepath.Dir(wrong), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(wrong, []byte("not this one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.put("-right", "this one")
+	r := &Resolver{Home: e.home, Index: fakeIndex{path: wrong, ok: true},
+		Owners: fakeOwners{owners: []Owner{{TranscriptPath: wrong, Status: "idle"}}}}
+	s, err := resolve(t, r)
+	if err != nil || readAll(t, s) != "this one" || filepath.Base(s.Path) != sidR+".jsonl" {
+		t.Fatalf("got %+v err %v, want the file named after the session", s, err)
+	}
+}
