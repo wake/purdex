@@ -26,6 +26,8 @@ import { useHostStore } from '../stores/useHostStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { approvalKey, selectCurrent, selectOpenCount, useApprovalStore, type ApprovalEntry, type Decision } from '../stores/useApprovalStore'
 import { ApprovalPill } from './ApprovalPill'
+import { AdoptionWaitCard } from './AdoptionWaitCard'
+import { adoptionAlias } from '../lib/team/adoption-wait'
 import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH, TEAM_NAME_CHARS } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
@@ -61,13 +63,15 @@ const buttonBase = 'px-3 py-1 rounded-md text-xs cursor-pointer disabled:opacity
 export function ApprovalDialogHost() {
   const current = useApprovalStore(selectCurrent)
   const minimized = useApprovalStore((s) => s.minimized)
-  if (!current) return null
+  // The remote-adopt wait card outlives the (closed) approval, so it is mounted whether or not a request is open.
+  if (!current) return <AdoptionWaitCard />
   // Keyed by the request: the next one is a fresh dialog (the payload's defaults, nothing in flight). Minimizing does
   // not change the key, so the dialog is hidden, not unmounted.
   return (
     <>
       <OpenApprovalDialog key={approvalKey(current.hostId, current.approval.id)} entry={current} minimized={minimized} />
       {minimized && <ApprovalPill />}
+      <AdoptionWaitCard />
     </>
   )
 }
@@ -315,6 +319,12 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 {/* The title and name are written by the target session: an alias, never the identity. The ref and the
                     session id are the daemon's, shown beside it; every string is clipped and may wrap anywhere. */}
                 <dd data-testid="approval-adopt-target" dir="auto" className="break-all text-text-primary">{clipForDisplay(adoptTargetLabel(adopt), 80)}</dd>
+                {adopt.target_host_id !== '' && (
+                  <>
+                    <dt className="text-text-muted">{t('approval.dialog.adopt_target_host')}</dt>
+                    <dd data-testid="approval-adopt-host" dir="auto" className="break-all text-text-primary">{t('approval.dialog.adopt_on_host', { alias: adoptionAlias(adopt) })}</dd>
+                  </>
+                )}
                 <dt className="text-text-muted">{t('approval.dialog.adopt_target_ref')}</dt>
                 <dd data-testid="approval-adopt-ref" className="font-mono break-all text-text-primary">{adopt.target_ref !== '' ? clipForDisplay(adopt.target_ref, 40) : '—'}</dd>
                 <dt className="text-text-muted">{t('approval.dialog.adopt_target_session')}</dt>
