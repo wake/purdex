@@ -14,9 +14,12 @@ import { ContextRing, ModelIcon } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { useSeatReading } from './team-readings'
 import { useMemberDrag } from './useMemberDrag'
+import { TeamEditPopover } from './TeamEditPopover'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { CELL_GAP, CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, SEP_W, firstRowCapacity } from './panel-layout'
+import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { NAME_CLICK_DELAY_MS, CELL_GAP, CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, SEP_W, firstRowCapacity } from './panel-layout'
 
 interface Props {
   team: TeamPanelTeam
@@ -32,11 +35,59 @@ interface Props {
 
 export function TeamPanel(props: Props) {
   const { team } = props
+  const [hostId, teamId = ''] = team.teamKey.split('\u0000')
+  // The edit needs the lead's host to list `team.edit.v1` and the roster to hold the team (its values are the form's start).
+  const editable = useUnattendedStore((s) => s.byHost[hostId]?.editSupport === 'yes')
+  const roster = useTeamRosterStore((s) => s.byHost[hostId]?.find((r) => r.id === teamId))
+  const [editing, setEditing] = useState<{ teamKey: string; left: number; bottom: number } | null>(null)
+  const latest = useRef({ mode: team.mode, onSetMode: props.onSetMode })
+  useEffect(() => { latest.current = { mode: team.mode, onSetMode: props.onSetMode } })
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const clearTimer = () => { if (timer.current !== undefined) { clearTimeout(timer.current); timer.current = undefined } }
+  useEffect(() => clearTimer, [])
+  const toggle = () => latest.current.onSetMode(latest.current.mode === 'full' ? 'line' : 'full')
+
+  const hdr: HeaderHandlers = {
+    // Press on the header does not move the terminal's focus (and a double-click does not select the name's text).
+    onMouseDown: keepFocus,
+    onClick: (e) => {
+      const el = e.target as HTMLElement
+      if (el.closest('button')) return // the switch, enlarge and the cells keep their own meaning
+      if (el.closest('[data-testid="team-panel-name"]')) {
+        clearTimer() // a second click restarts the wait; the double-click cancels it
+        timer.current = setTimeout(() => { timer.current = undefined; toggle() }, NAME_CLICK_DELAY_MS)
+        return
+      }
+      toggle()
+    },
+    onDoubleClick: (e) => {
+      const el = e.target as HTMLElement
+      if (!el.closest('[data-testid="team-panel-name"]')) return
+      clearTimer()
+      if (!editable || roster === undefined) return
+      const r = e.currentTarget.getBoundingClientRect()
+      setEditing({ teamKey: team.teamKey, left: r.left, bottom: r.bottom })
+    },
+  }
+  const close = useCallback(() => setEditing(null), [])
   return (
     <div data-testid="team-panel" data-mode={team.mode} className="text-xs text-text-primary">
-      {team.mode === 'full' ? <FullPanel {...props} /> : <LinePanel {...props} />}
+      {team.mode === 'full' ? <FullPanel {...props} hdr={hdr} /> : <LinePanel {...props} hdr={hdr} />}
+      {editing !== null && editing.teamKey === team.teamKey && editable && roster !== undefined && (
+        <TeamEditPopover
+          target={{ hostId, teamId, name: roster.team_name, label: roster.team_label, color: roster.team_color ?? null }}
+          anchor={editing}
+          onClose={close}
+        />
+      )}
     </div>
   )
+}
+
+interface HeaderHandlers {
+  onMouseDown: (e: React.MouseEvent) => void
+  onClick: (e: React.MouseEvent<HTMLElement>) => void
+  onDoubleClick: (e: React.MouseEvent<HTMLElement>) => void
 }
 
 /** The header row both modes share: one fixed height, capsule | middle | buttons in the same places. */
@@ -114,7 +165,7 @@ function NameCapsule({ team, className = '', style }: { team: TeamPanelTeam; cla
   )
 }
 
-function FullPanel({ team, activeTabId, expanded, onSetMode, onToggleExpanded, onOpen, onReorder }: Props) {
+function FullPanel({ team, activeTabId, expanded, onSetMode, onToggleExpanded, onOpen, onReorder, hdr }: Props & { hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
   const { teamKey, color, lead, members } = team
   const order = members.map((m) => m.sessionId)
@@ -122,7 +173,7 @@ function FullPanel({ team, activeTabId, expanded, onSetMode, onToggleExpanded, o
   const { propsFor, over, draggingId } = useMemberDrag(teamKey, order, reorder, 'y')
   return (
     <>
-      <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle}>
+      <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle} {...hdr}>
         <NameCapsule team={team} />
         <span data-testid="team-panel-count" className="text-text-muted whitespace-nowrap">· {t('team.panel.members', { count: members.length })}</span>
         <span className="ml-auto flex items-center gap-0.5">
@@ -246,7 +297,7 @@ function Cell({ teamKey, seat, isActive, onOpen }: { teamKey: string; seat: Team
   )
 }
 
-function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpanded, onOpen }: Props) {
+function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpanded, onOpen, hdr }: Props & { hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
   const seats = [team.lead, ...team.members]
   // The header row holds as many cells as it really has room for; the rest wrap into a region UNDER it, so the first row
@@ -284,7 +335,7 @@ function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpa
   const cell = (s: TeamSeatView) => <Cell key={s.sessionId} teamKey={team.teamKey} seat={s} isActive={s.tabId !== null && s.tabId === activeTabId} onOpen={onOpen} />
   return (
     <>
-    <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle}>
+    <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle} {...hdr}>
       <NameCapsule team={team} className="flex-shrink-0" style={{ maxWidth: CAPSULE_MAX_W }} />
       <div ref={box} data-testid="team-panel-cells" className="flex items-center flex-1 min-w-0" style={{ columnGap: CELL_GAP }}>
         {first.map((s, i) => (

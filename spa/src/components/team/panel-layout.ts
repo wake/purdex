@@ -8,6 +8,8 @@ export const HEADER_H = 34
 /** The header's side padding and the gap between its parts (capsule | cells or count | buttons). */
 export const HEADER_PX = 6
 export const HEADER_GAP = 4
+/** A single click on the team name waits this long for a second one (a double-click edits instead of toggling). */
+export const NAME_CLICK_DELAY_MS = 280
 /** The name capsule's cap in one-line mode. */
 export const CAPSULE_MAX_W = 84
 /** Mode toggle (11px caret + px-1) and enlarge (12px icon + px-1) buttons, and the gap-0.5 between them. */
