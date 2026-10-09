@@ -18,7 +18,7 @@ Out of scope: approval cards in the dock (P8b — user 2026-10-08 and 2026-10-10
 6. **Unreadable conversation: no automatic switch.** The deck / chat says it cannot read the conversation correctly and offers a button to the terminal (2026-10-10).
 7. **Enter sends, Shift+Enter breaks a line** (2026-10-10).
 8. **Approval cards are not in U3** (P8b; 2026-10-10 kept the 10-08 decision).
-9. Chat wording and behaviour already decided with iOS: one row per turn's work, 「處理了 N 分 N 秒」; a click on that row shows the turn's detail (2026-10-09/10).
+9. Chat wording and behaviour already decided with iOS: **one row per chain of work (一串工作一列** — consecutive steps; *corrected 2026-10-10 from "per turn", which misquoted the decision*), 「處理了 N 分 N 秒」; a click on that row shows the turn's detail (2026-10-09/10).
 
 ## 3. Views and the pane
 
@@ -37,7 +37,7 @@ Rendering — **Collie's look**, our words (zh-TW), every item shown:
 | Item | Drawn as |
 |---|---|
 | user | the only tinted block: a framed well, caption 「你 · HH:mm」; other sources get their caption (「你 · 排隊中」, 「來自 <name>」, 「背景任務回報」, 「排程喚醒」); bash-mode input and `command_output` sit under it, output folded to 「輸出 · N 行」 that opens to the last 10 lines (「…已截斷」 when cut) |
-| agent_text | unframed Markdown; streaming text grows in place with a cursor (the mod's live source; deltas merged every 150 ms) |
+| agent_text | unframed Markdown; streaming text grows in place with a cursor (the mod's live source; deltas merged every 150 ms). *Amended (plan, 2026-10-10): the API is transcript-only today (U1-5 not wired), so a message appears whole; the renderer honours `streaming: true` so U1-5 lights it up without a client change.* |
 | thinking | a collapsed 「思考」 disclosure (duration when known) |
 | step · edit | a card: icon (pencil / new file), 「編輯」／「新增」, path, green `+n` / red `−n`, the hunks up to 16 lines, 「顯示全部 N 行」 |
 | step · execute | a 「執行」 card: `$ command` in a dark box clamped to 6 lines; its output folded to 「輸出 · N 行」, opening to the last 10 lines, 「顯示全部」 |
@@ -56,21 +56,21 @@ Rendering — **Collie's look**, our words (zh-TW), every item shown:
 ## 5. Chat (聊天) and the right panel
 
 - Same conversation, less detail. A header with the agent's icon, the tab's title and one line of what it is doing (the live status). The user on the right in accent bubbles, the agent on the left.
-- **One row per turn's work**, above the agent's reply: 「處理了 2 分 13 秒 · 3 個指令、2 個編輯 · 1 失敗 ›」 — the categories in the fixed order 指令、編輯、讀取、搜尋、網頁、子 agent、其他, then failed (red) and 已拒絕／已中斷 (grey) counts. While a turn runs, one progress message updates in place; a turn that changed files adds a chip 「3 個檔案 +29 −12」.
-- **A click on the turn row** opens the **right panel** with that turn drawn as the deck draws it. The right panel is one component inside the pane, shared with the deck's 「顯示全部」 and subagent steps; it closes with Esc or its close button and keeps its open state per tab (tab-hosted rule).
+- **One row per chain of work** (consecutive steps; thinking does not break a chain, user / agent text / system items do — as iOS), above the agent's text that follows it: 「處理了 2 分 13 秒 · 3 個指令、2 個編輯 · 1 失敗 ›」 — the categories in the fixed order 指令、編輯、讀取、搜尋、網頁、子 agent、其他, then failed (red) and 已拒絕／已中斷 (grey) counts. While a turn runs, one progress message updates in place; a turn that changed files adds a chip 「3 個檔案 +29 −12」.
+- **A click on a work row** opens the **right panel** with **that chain's steps** drawn as the deck draws them (the user / agent text around it stays in the chat; the panel's header names the turn and the chain's position in it). The right panel is one component inside the pane, shared with the deck's 「顯示全部」 and subagent steps; it closes with Esc or its close button and keeps its open state per tab (tab-hosted rule).
 - The counting of categories is the same in iOS and the Mac: one shared fixture (input items → expected turn row), produced from the iOS implementation and checked by both apps' tests.
 
 ## 6. Breaking the transcript into items (拆資料)
 
-The daemon's normalizer (`internal/convmodel/ccnorm`, U1-4) is what both apps read. U3-0 compares it with Collie's parser on the same transcripts and aligns ours where Collie splits finer or summarises better — at least: deletion and move steps (Collie has `delete` / `move` kinds; ours folds them into `other`), the AskUserQuestion tool as a question item, image attachments as a notice, the compaction line, and each kind's one-line summary text. New kinds and fields are additive (U1 §8.1 evolution rule): older clients show them as `other`. The golden fixtures are updated and shared with iOS.
+The daemon's normalizer (`internal/convmodel/ccnorm`, U1-4) is what both apps read. U3-0 compares it with Collie's parser on the same transcripts and aligns ours where Collie splits finer or summarises better — at least: the AskUserQuestion tool as a question item (questions, options, answers), the read range, a created file, the search scope, the compaction summary, and each kind's one-line summary text (a side-by-side table against Collie). *Amended (plan, 2026-10-10): Collie's `delete` / `move` kinds come from tool names Claude Code does not have (`rm` / `mv` inside Bash stay commands in Collie too), so they are dropped; image attachments are already on the items and the apps draw them as a notice.* New kinds and fields are additive (U1 §8.1 evolution rule): older clients show them as `other`. The golden fixtures are updated and shared with iOS.
 
 ## 7. Input and the dock
 
 **Input** (deck and chat, below the stream):
 - Enter sends, Shift+Enter breaks a line.
-- Sending goes through the daemon's `POST /api/sessions/{code}/send-keys` with the expected tmux instance (as iOS does), with Collie's safeguards: the text is typed **without** Enter, the pane's screen is read until the input box visibly holds it (a `[Pasted text #N +M lines]` placeholder counts, with exact arithmetic), and only then is Enter pressed; if it never appears, Enter is withheld and the draft is kept. Text over 800 characters is sent as one bracketed paste. A draft that looks destructive (e.g. `rm -rf`) needs a second press (「真的要送出？」). Where the screen is read from (the pane's terminal the App keeps connected, or a daemon read) is the plan's choice.
-- While the agent works, a sent message is shown as 「你 · 排隊中」 until its turn starts; a 「中斷」 button (Esc to the pane) sits by the send button.
-- Without the mod, a draft starting with `/` or `!` is blocked with 「這個指令要在終端機輸入」; interactive menus (`/model`, Rewind) always say so.
+- **Sending goes through the Purdex mod, never by keystrokes** (*plan review 2026-10-10, rev 4; the design document's own channel*): the App posts the text to the daemon, which hands it to that session's mod; the mod calls `$.prompt.submit` inside Claude Code (no typing, so no Enter can land on a dialog). The text follows iOS's `SendPlan` rules (≤ 4000 UTF-8 bytes; new lines kept; no bracketed paste). A draft that looks destructive (e.g. `rm -rf`) needs a second press (「真的要送出？」). **Without the mod the input is disabled** — 「這個 session 沒有 Purdex mod，請在終端機輸入」 with a 「切到終端機」 button.
+- While the agent works, a sent message is shown as 「你 · 排隊中」 until its turn starts (*rev 4: if the mod reports that `$.prompt.submit` refuses while a turn runs, the App keeps the message and resends it when the agent is idle*); a 「中斷」 button (the mod's `$.turn.abort`) sits by the send button.
+- A draft starting with `/` or `!` is blocked with 「這個指令要在終端機輸入」; interactive menus (`/model`, Rewind) always say so.
 - The draft survives a tab switch (tab-hosted rule).
 
 **The dock** (above the input, shared by deck and chat; questions only — P8a):
@@ -106,6 +106,6 @@ U3-1 and U3-2 together make the deck usable day to day; the user tries it from t
 
 ## 10. Open for the plan (technical, 88 decides)
 
-- Where the send verification reads the screen (the App's live terminal buffer for the pane vs a daemon read).
+- ~~Where the send verification reads the screen~~ — decided: the daemon's `/submit` route (§7 amendment, plan D7); the App never verifies from its own terminal buffer.
 - The deck's virtualisation for long conversations (paging by turns is given; whether rows are virtualised).
 - Which existing execution-view pieces are reused (diff view, output folding, scroll memory, transcript search) and how they take `convmodel` items.
