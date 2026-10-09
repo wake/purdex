@@ -279,3 +279,50 @@ func migrateRelayOpBinding(db *sql.DB) error {
 func migrateNoticeArmed(db *sql.DB) error {
 	return ensureColumn(db, "team_members", "notice_armed", "INTEGER NOT NULL DEFAULT 1")
 }
+
+// migrateCrossHostL is L's side of the cross-host team (spec §4.1, plan X3a). It only ADDS: `team_commands` is the
+// commands outbox; `team_members` gains `mk` (the member key — the adopt command id or the spawn op id; for a local row
+// it is the spawn_op, kept so by a trigger for every insert path, older rows are backfilled) and `end_reason` (why a row
+// left `active` on L's side: unpaired, remote_unreachable, …). Existing rows read as they were.
+func migrateCrossHostL(db *sql.DB) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS team_commands (
+		id            TEXT PRIMARY KEY,
+		kind          TEXT    NOT NULL,
+		team_id       TEXT    NOT NULL,
+		mk            TEXT    NOT NULL DEFAULT '',
+		host_id       TEXT    NOT NULL,
+		body_json     TEXT    NOT NULL,
+		body_hash     TEXT    NOT NULL,
+		state         TEXT    NOT NULL DEFAULT 'pending',
+		outcome_json  TEXT    NOT NULL DEFAULT '',
+		attempts      INTEGER NOT NULL DEFAULT 0,
+		next_at       INTEGER NOT NULL DEFAULT 0,
+		first_401_at  INTEGER NOT NULL DEFAULT 0,
+		created_at    INTEGER NOT NULL,
+		updated_at    INTEGER NOT NULL
+	)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS team_commands_host ON team_commands (host_id, state)`); err != nil {
+		return err
+	}
+	// The expiry's predicate, served without a scan of the terminal history.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS team_commands_expiry ON team_commands (created_at) WHERE state = 'pending' AND kind IN ('adopt', 'spawn')`); err != nil {
+		return err
+	}
+	for _, c := range [][2]string{
+		{"mk", "TEXT NOT NULL DEFAULT ''"},
+		{"end_reason", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureColumn(db, "team_members", c[0], c[1]); err != nil {
+			return err
+		}
+	}
+	// The trigger first, then the backfill: a row inserted between the two is covered by the one or the other.
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS team_members_mk AFTER INSERT ON team_members WHEN NEW.mk = ''
+		BEGIN UPDATE team_members SET mk = NEW.spawn_op WHERE spawn_op = NEW.spawn_op; END`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`UPDATE team_members SET mk = spawn_op WHERE mk = ''`)
+	return err
+}

@@ -67,6 +67,7 @@ func (m *Module) tick() {
 		m.rosterChanged()
 		m.kickNotices() // a notice whose send failed, or a lead whose inbox was not up yet
 	}
+	m.expireCommands() // a spawn or adopt not delivered within 10 minutes is void (X3a)
 	open, err := m.store.ListOpen()
 	if err != nil {
 		m.logf("[team] sweep: %v", err)
