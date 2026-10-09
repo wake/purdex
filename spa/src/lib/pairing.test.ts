@@ -149,7 +149,7 @@ describe('mintAndPackage', () => {
       expect(res.deadline).toBe(T0 + PAIRING_TTL_MS)
       expect(res.mintedHostIds.sort()).toEqual([sot, air].sort())
       expect(res.leftOut).toEqual([])
-      expect(res.qrUrl).toBe('purdex://pair?v=1&relay=100.64.0.2%3A7860&code=ABCD2345')
+      expect(res.qrUrl).toBe('purdex://pair?v=1&relay=100.64.0.2:7860&code=ABCD2345')
     }
     expectNoTokenLeak(res)
   })

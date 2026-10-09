@@ -310,7 +310,8 @@ export async function mintAndPackage(input: PairingInput, opts: { isCancelled?: 
 
   // A left-out host whose mint outcome was unknown may hold a token nobody will use: clean it up now.
   const revokeFailed = strayed.length > 0 ? await revokeHosts(strayed, pairingId) : []
-  const relayAt = encodeURIComponent(`${relay.ip}:${relay.port}`)
+  // The colon stays literal, exactly as the spec's `relay=<ip:port>`; everything else a URL could trip on is encoded.
+  const relayAt = encodeURIComponent(`${relay.ip}:${relay.port}`).replace(/%3A/gi, ':')
   return {
     kind: 'ok',
     code: j.code,
