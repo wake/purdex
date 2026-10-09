@@ -110,6 +110,8 @@ Screenshot gate: dark, one and two bead rows, collapsed, ghost row.
 
 ## TI-4 — floating team panel
 
+*Amended 2026-10-09:* built as WA-2a of `docs/plans/2026-10-09-session-workbook-plan.md` (the panel area shared with the workbook, TI spec §4.4 amended). The bullets and tests below remain the team-view part; "same width" means the area's current width, and a full row's click follows the amended §4.4.
+
 Files: new ported `spa/src/components/team/{TeamPanel,ModelIcon,model-family}.tsx|ts`, the shell mount (where the pane area is laid out — next to the tab bar region in `App.tsx`), tests.
 
 - Mounted once; shows `panelTeam(activeTabId)`'s team (spec §4.4) or nothing; anchored to the top of the content area, never over the tab bar; does not steal focus from the terminal.
