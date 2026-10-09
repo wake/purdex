@@ -52,7 +52,7 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 	v := team.TeamView{Team: t, Members: make([]team.Member, 0, len(rows))}
 	for _, mr := range rows {
 		mv := m.memberView(mr)
-		if mr.SpawnOp != "" { // an adopted member has no key, so no tasks
+		if mr.SpawnOp != "" { // every row has a key: a spawned member's is its spawn op, an adopted one's the adoption's request id (the wire's SpawnOp is empty for it)
 			if cur, ok := currentTaskOf(byOwner[mr.SpawnOp]); ok {
 				mv.Task = &team.MemberTask{ID: team.TaskDisplayID(t.ID, cur.Seq), Subject: cur.Subject, Status: cur.Status}
 				mv.LastAt = max(cur.LastTurnAt, cur.LastReportAt, memberTurns[mr.SpawnOp]) // a pending task keeps the turns the row took

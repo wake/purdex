@@ -96,7 +96,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 			s.Model, s.Effort = mr.Model, mr.Effort // what it was spawned with
 			s.Context = m.sessionContext(mr.SessionID, mr.Usage)
 			rm := team.RosterMember{RosterSession: s, State: mr.State, Origin: rosterMemberOrigin, JoinedAt: mr.CreatedAt}
-			if mr.SpawnOp != "" { // an adopted member has no key, so no tasks
+			if mr.SpawnOp != "" { // every row has a key (an adopted member's is the adoption's request id), so adopted members have tasks too
 				if cur, ok := currentTaskOf(tasks[t.ID][mr.SpawnOp]); ok {
 					rm.Task = &team.RosterTask{ID: team.TaskDisplayID(t.ID, cur.Seq), Subject: cur.Subject, Status: cur.Status}
 				}

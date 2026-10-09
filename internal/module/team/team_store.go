@@ -69,7 +69,8 @@ const teamSchema = `
 
 const teamCols = `id, host_id, lead_session_id, lead_ref, grant_json, request_id, created_at, ended_at, end_reason, team_name, team_label`
 
-const memberCols = `spawn_op, team_id, host_id, session_id, ref, title, cwd, tmux_session, tmux_id, tmux_instance, pane_id, pid, proc_start, model, effort, state, created_at, updated_at`
+const memberCols = `spawn_op, team_id, host_id, session_id, ref, title, cwd, tmux_session, tmux_id, tmux_instance, pane_id, pid, proc_start, model, effort, state, created_at, updated_at,
+	origin, ended_at, notice_pending, notice_since`
 
 // qualify prefixes every column of cols with alias, for a join.
 func qualify(alias, cols string) string {
@@ -115,6 +116,14 @@ type memberRow struct {
 	ProcStart, Model, Effort                            string
 	State                                               team.MemberState
 	CreatedAt, UpdatedAt                                int64
+	// Origin is how the member joined (team.MemberOriginSpawned | MemberOriginAdopted; "" is spawned). For an adopted
+	// row SpawnOp holds the adoption's request id (the member key), the wire's SpawnOp stays empty. EndedAt is when the
+	// row left `active` (0 while it is). NoticePending is the notice the session is owed ("" | team.NoticeAdopted |
+	// team.NoticeReleased) since NoticeSince; the outbox (PL-1d1) drains it.
+	Origin        string
+	EndedAt       int64
+	NoticePending string
+	NoticeSince   int64
 	// Usage is the persisted statusline reading (P4-6, spec §8.5), nil when
 	// none was stored. Only MembersOf reads it.
 	Usage *team.MemberContext
@@ -123,12 +132,12 @@ type memberRow struct {
 func (m *memberRow) dest() []any {
 	return []any{&m.SpawnOp, &m.TeamID, &m.HostID, &m.SessionID, &m.Ref, &m.Title, &m.Cwd, &m.TmuxSession,
 		&m.TmuxID, &m.TmuxInstance, &m.PaneID, &m.PID, &m.ProcStart, &m.Model, &m.Effort, &m.State,
-		&m.CreatedAt, &m.UpdatedAt}
+		&m.CreatedAt, &m.UpdatedAt, &m.Origin, &m.EndedAt, &m.NoticePending, &m.NoticeSince}
 }
 
 func validMemberState(s team.MemberState) bool {
 	switch s {
-	case team.MemberActive, team.MemberKilled, team.MemberGone:
+	case team.MemberActive, team.MemberKilled, team.MemberGone, team.MemberReleased:
 		return true
 	}
 	return false
@@ -153,10 +162,15 @@ type execer interface {
 }
 
 func insertMemberIn(ctx context.Context, q execer, m memberRow) error {
+	origin := m.Origin
+	if origin == "" {
+		origin = team.MemberOriginSpawned
+	}
 	if _, err := q.ExecContext(ctx, `INSERT INTO team_members (`+memberCols+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (spawn_op) DO NOTHING`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (spawn_op) DO NOTHING`,
 		m.SpawnOp, m.TeamID, m.HostID, m.SessionID, m.Ref, m.Title, m.Cwd, m.TmuxSession, m.TmuxID,
-		m.TmuxInstance, m.PaneID, m.PID, m.ProcStart, m.Model, m.Effort, string(m.State), m.CreatedAt, m.UpdatedAt); err != nil {
+		m.TmuxInstance, m.PaneID, m.PID, m.ProcStart, m.Model, m.Effort, string(m.State), m.CreatedAt, m.UpdatedAt,
+		origin, m.EndedAt, m.NoticePending, m.NoticeSince); err != nil {
 		return fmt.Errorf("insert member %s: %w", m.SpawnOp, err)
 	}
 	return nil

@@ -129,6 +129,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (team label): %w", err)
 	}
+	if err := migrateAdopt(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (adopt): %w", err)
+	}
 	if err := migrateMemberLastTurn(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (member last turn): %w", err)
@@ -144,7 +148,7 @@ func OpenStore(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 const selectCols = `id, kind, host_id, origin_json, payload_json, request_hash, state,
-	created_at, deadline_at, lease_until, decided_by_json, decided_at, grant_json`
+	created_at, deadline_at, lease_until, decided_by_json, decided_at, grant_json, close_reason`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -161,7 +165,7 @@ func scanRow(r rowScanner) (team.Approval, string, error) {
 	var hash, originJSON, payloadJSON string
 	var decidedBy, grant sql.NullString
 	if err := r.Scan(&a.ID, &a.Kind, &a.HostID, &originJSON, &payloadJSON, &hash, &a.State,
-		&a.CreatedAt, &a.DeadlineAt, &a.LeaseUntil, &decidedBy, &a.DecidedAt, &grant); err != nil {
+		&a.CreatedAt, &a.DeadlineAt, &a.LeaseUntil, &decidedBy, &a.DecidedAt, &grant, &a.CloseReason); err != nil {
 		return team.Approval{}, "", err
 	}
 	if err := json.Unmarshal([]byte(originJSON), &a.Origin); err != nil {
@@ -333,6 +337,8 @@ type Close struct {
 	// sweeper's timeout or abandonment, in the same statement. A click
 	// leaves it 0 and runs today's SQL.
 	UnexpiredAt int64
+	// Reason is the code an adopt request cancelled at approve carries (close_reason); empty for every other close.
+	Reason string
 }
 
 // CloseIfOpen is the compare-and-set every close goes through: the UPDATE
@@ -400,7 +406,7 @@ func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int6
 		}
 		grant = string(b)
 	}
-	args := []any{string(c.State), c.DecidedAt, decidedBy, grant, id}
+	args := []any{string(c.State), c.DecidedAt, decidedBy, grant, c.Reason, id}
 	if guard != "" {
 		args = append(args, guardArg)
 	}
@@ -410,7 +416,7 @@ func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int6
 	}
 	res, err := ex.Exec(`
 		UPDATE approval_requests
-		SET state = ?, decided_at = ?, decided_by_json = ?, grant_json = ?
+		SET state = ?, decided_at = ?, decided_by_json = ?, grant_json = ?, close_reason = ?
 		WHERE id = ? AND state = 'open'`+guard, args...)
 	if err != nil {
 		return 0, fmt.Errorf("close approval %s: %w", id, err)

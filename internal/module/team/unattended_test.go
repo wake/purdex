@@ -145,7 +145,7 @@ func TestCreate_UnattendedRefusalInTheTransactionIs409NothingWritten(t *testing.
 			return err
 		}
 		m := newMember("op-x", "team-x", "sid-1", "_abc123", 1)
-		_, err := tx.Exec(`INSERT INTO team_members (`+memberCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.dest()...)
+		_, err := tx.Exec(`INSERT INTO team_members (`+memberCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, m.dest()...)
 		return err
 	}
 	code, body := f.do(http.MethodPost, "/api/team/approvals", f.createReq(uid(1)))
