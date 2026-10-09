@@ -241,3 +241,16 @@ func migrateUsage(db *sql.DB) error {
 	}
 	return nil
 }
+
+// migrateRelayQuotaRev gives relay_quotas its row version (#2062 RQ-1a2). The table is deployed without it (RQ-1a,
+// alpha.634), so it is a column migration. rev 0 means "no row" on the wire, so a row that exists is never 0: rows from
+// before the column (or inserted by an older daemon after a rollback) are lifted to 1 — on every open, idempotently.
+func migrateRelayQuotaRev(db *sql.DB) error {
+	if err := ensureColumn(db, "relay_quotas", "rev", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`UPDATE relay_quotas SET rev = 1 WHERE rev = 0`); err != nil {
+		return fmt.Errorf("lift relay quota rows to rev 1: %w", err)
+	}
+	return nil
+}
