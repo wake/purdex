@@ -34,6 +34,8 @@ type outboxEntry struct {
 	Path     string
 	Body     json.RawMessage // the request body; it names to_host_id (HostCaller checks it)
 	Attempts int
+	// Kind is the entry's kind when the peer must announce it before it is sent (a kindGate store); "" otherwise.
+	Kind string
 	// First401At is when the current run of 401s began (unix ms), 0 when the last attempt was not a 401.
 	First401At int64
 }
@@ -52,6 +54,18 @@ type outboxStore interface {
 	// Unpaired ends the relation with the host on this side (rule 6, §3.2): reason is "unpaired" or "unpaired_by_peer".
 	Unpaired(hostID, reason string) error
 }
+
+// kindGate is an optional part of an outboxStore whose entries carry a Kind the receiving host has to announce before
+// the entry is sent (the symmetric half of rule 7: a lead host announces the fact kinds it applies, X4a-3). Without it a
+// kind the peer does not know comes back as a JSON 400, which the pump reads as a permanent refusal and settles — the fact
+// would be lost. An entry whose kind is not announced is held, not settled: it backs off like any other failure, with no
+// attempt limit, and goes out in the first round after the peer announces it.
+type kindGate interface {
+	Announces(caps ipeers.TeamCaps, kind string) bool
+}
+
+// capsTTL is how long a host's capabilities are reused by the gate (ms).
+const capsTTL = 30_000
 
 // hostCaller is *peersmod.HostCaller as the pump uses it (a test seam).
 type hostCaller interface {
@@ -72,6 +86,7 @@ type outboxPump struct {
 	wg     *sync.WaitGroup
 
 	sig     chan struct{}
+	caps    map[string]cachedCaps
 	mu      sync.Mutex
 	running map[string]bool
 	// stuck remembers, per host, the last error text logged, so a host that stays down logs once per change.
@@ -80,7 +95,31 @@ type outboxPump struct {
 
 func newOutboxPump(name string, caller hostCaller, store outboxStore, now func() int64, logf func(string, ...any), ctx context.Context, wg *sync.WaitGroup) *outboxPump {
 	return &outboxPump{name: name, caller: caller, store: store, now: now, logf: logf, ctx: ctx, wg: wg,
-		sig: make(chan struct{}, 1), running: map[string]bool{}, stuck: map[string]string{}}
+		sig: make(chan struct{}, 1), running: map[string]bool{}, stuck: map[string]string{}, caps: map[string]cachedCaps{}}
+}
+
+// cachedCaps is a host's capabilities and when they were read.
+type cachedCaps struct {
+	caps ipeers.TeamCaps
+	at   int64
+}
+
+// capsOf is the host's capabilities, reused for capsTTL: a queue of facts asks once, not once per fact.
+func (p *outboxPump) capsOf(hostID string) (ipeers.TeamCaps, error) {
+	p.mu.Lock()
+	c, ok := p.caps[hostID]
+	p.mu.Unlock()
+	if ok && p.now()-c.at < capsTTL {
+		return c.caps, nil
+	}
+	caps, err := p.caller.TeamCaps(p.ctx, hostID)
+	if err != nil {
+		return ipeers.TeamCaps{}, err
+	}
+	p.mu.Lock()
+	p.caps[hostID] = cachedCaps{caps: caps, at: p.now()}
+	p.mu.Unlock()
+	return caps, nil
 }
 
 // pumpBackoff is the wait after the n-th failed attempt (n ≥ 1): 30 s, 60 s, 120 s … capped at 10 min.
@@ -178,6 +217,17 @@ func (p *outboxPump) drain(hostID string) {
 // attempt makes one call for the head entry and acts on its class; true means the entry was settled and the next one
 // may go at once.
 func (p *outboxPump) attempt(e outboxEntry) bool {
+	if g, ok := p.store.(kindGate); ok && e.Kind != "" {
+		caps, err := p.capsOf(e.HostID)
+		switch {
+		case err != nil:
+			p.backoff(e, 0, "its capabilities are unavailable: "+err.Error())
+			return false
+		case !g.Announces(caps, e.Kind):
+			p.backoff(e, 0, "the host does not announce "+e.Kind+" yet; held")
+			return false
+		}
+	}
 	res := p.caller.Call(p.ctx, e.HostID, e.Path, e.Body)
 	now := p.now()
 	switch res.Class {

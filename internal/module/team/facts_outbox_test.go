@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -18,7 +19,7 @@ import (
 func factsFixture(t *testing.T) (*fixture, *fakeHostCaller) {
 	t.Helper()
 	f := newFixture(t)
-	fc := &fakeHostCaller{}
+	fc := &fakeHostCaller{caps: map[string]ipeers.TeamCaps{"host-L": {FactKinds: []string{team.FactEnded}}}}
 	f.m.cmdCaller = fc
 	f.m.factPump = newOutboxPump("facts", fc, f.m.newFactOutbox(), f.m.now, f.m.logf, f.m.stopCtx, &f.m.sweepWG)
 	return f, fc
