@@ -21,6 +21,8 @@ interface IconProps {
   size?: number
   /** Draw the seat's subagent dots to the icon's left (the panel's full rows); the beads leave them off. */
   subagents?: boolean
+  /** The panel's one-line cell: iconDot draws its light on the icon's corner instead of in a slot beside it (no extra width). */
+  compact?: boolean
 }
 
 /** The icon of a seat whose agent type is not known (no store key, or none yet): a bead is never visually empty. */
@@ -28,13 +30,13 @@ function DefaultBot({ size, className }: { size: number; className?: string }) {
   return <Robot size={size} className={className} data-testid="team-bead-bot" />
 }
 
-export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false }: IconProps) {
+export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false, compact = false }: IconProps) {
   const { agentIcon, agentStatus, isUnread, tabIndicatorStyle, subagentRefs } = useSessionAgentIndicator(hostId, sessionCode)
   return (
     <TabIcon
       IconComponent={agentIcon ?? DefaultBot}
       agentStatus={agentStatus}
-      tabIndicatorStyle={tabIndicatorStyle}
+      tabIndicatorStyle={compact && tabIndicatorStyle === 'iconDot' ? 'badge' : tabIndicatorStyle}
       isActive={isActive}
       iconSize={size}
       subagentRefs={subagents ? subagentRefs : []}

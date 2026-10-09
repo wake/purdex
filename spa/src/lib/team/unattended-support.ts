@@ -15,7 +15,7 @@ import { hostEndpoint, useHostStore, type HostConfig } from '../../stores/useHos
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { quotaHostIds, useRelayQuotaStore } from './relay-quota'
 import { useMaxMembersStore } from './max-members'
-import { RELAY_QUOTA_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
+import { RELAY_QUOTA_CAPABILITY, TEAM_EDIT_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
 
 const identity = (h: HostConfig): string => `${hostEndpoint(h)}:${h.token ?? ''}`
 
@@ -27,6 +27,7 @@ export function startUnattendedSupport(): () => void {
   const probe = (hostId: string) => {
     const generation = ++counter
     current.set(hostId, generation)
+    useUnattendedStore.getState().invalidateEditSupport(hostId) // what the last connection said is not this one's answer
     fetchHostInfo(hostId).then(
       (info) => {
         if (current.get(hostId) !== generation) return
@@ -35,8 +36,11 @@ export function startUnattendedSupport(): () => void {
         useUnattendedStore.getState().setSupport(hostId, listed.includes(UNATTENDED_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setQuotaSupport(hostId, listed.includes(RELAY_QUOTA_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setMaxMembersSupport(hostId, listed.includes(TEAM_MAX_MEMBERS_CAPABILITY) ? 'yes' : 'no')
+        useUnattendedStore.getState().setEditSupport(hostId, listed.includes(TEAM_EDIT_CAPABILITY) ? 'yes' : 'no')
       },
-      () => { /* not retried until the next trigger */ },
+      () => { // not retried until the next trigger; the edit capability stays unknown rather than keeping an old 'yes'
+        if (current.get(hostId) === generation) useUnattendedStore.getState().invalidateEditSupport(hostId)
+      },
     )
   }
 
@@ -68,7 +72,15 @@ export function startUnattendedSupport(): () => void {
         useRelayQuotaStore.getState().forgetHost(hostId) // and so are the quota numbers it confirmed
         useMaxMembersStore.getState().forgetHost(hostId) // and a cap request still out to it
       }
-      if (next.runtime[hostId]?.status !== 'connected') continue
+      if (next.runtime[hostId]?.status !== 'connected') {
+        // The connection the edit capability was learned on is gone: it is unknown until the next probe answers, and an
+        // answer still on its way from that connection must not set it.
+        if (prev.runtime[hostId]?.status === 'connected') {
+          current.delete(hostId)
+          store.invalidateEditSupport(hostId)
+        }
+        continue
+      }
       if (repointed || !before || prev.runtime[hostId]?.status !== 'connected') probe(hostId)
     }
   })

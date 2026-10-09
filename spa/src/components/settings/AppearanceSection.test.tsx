@@ -117,18 +117,6 @@ describe('AppearanceSection', () => {
     expect(sw.getAttribute('aria-checked')).toBe('false')
   })
 
-  it('has a trial group-shadow selector with four options, default V2 (TI-6)', () => {
-    useTeamUiStore.setState({ groupShadow: 'v2' })
-    render(<AppearanceSection />)
-    expect(screen.getByText('(Trial) Group shadow')).toBeTruthy()
-    for (const name of ['Current', 'Soft glow', 'Spread bottom-left', 'Floating all round']) expect(screen.getByRole('button', { name })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Spread bottom-left' }).className).toContain('bg-surface-elevated')
-    fireEvent.click(screen.getByRole('button', { name: 'Floating all round' }))
-    expect(useTeamUiStore.getState().groupShadow).toBe('v3')
-    fireEvent.click(screen.getByRole('button', { name: 'Current' }))
-    expect(useTeamUiStore.getState().groupShadow).toBe('v0')
-  })
-
   it('does not show export/delete buttons for preset themes', () => {
     render(<AppearanceSection />)
     expect(screen.queryByLabelText('Export theme')).toBeNull()

@@ -15,7 +15,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
-import { DEFAULT_GROUP_SHADOW, isGroupShadowVariant, type GroupShadowVariant } from '../components/team/group-shadow'
 
 export type PanelMode = 'full' | 'line'
 
@@ -53,8 +52,6 @@ interface TeamUiState extends Slices {
   teamBeadHost: boolean
   setTeamBeadHost: (v: boolean) => void
   /** Trial (TI-6, spec §4.2): which box-shadow the group tabs wear; removed once the user picks. Default `v2`. */
-  groupShadow: GroupShadowVariant
-  setGroupShadow: (v: GroupShadowVariant) => void
   setMemberOrder: (teamKey: string, order: readonly string[]) => void
   setCollapsed: (teamKey: string, collapsed: boolean) => void
   setPanelMode: (teamKey: string, mode: PanelMode) => void
@@ -143,8 +140,6 @@ export const useTeamUiStore = create<TeamUiState>()(
       }),
       teamBeadHost: true,
       setTeamBeadHost: (v) => set((s) => (s.teamBeadHost === v ? s : { teamBeadHost: v })),
-      groupShadow: DEFAULT_GROUP_SHADOW,
-      setGroupShadow: (v) => set((s) => (s.groupShadow === v || !isGroupShadowVariant(v) ? s : { groupShadow: v })),
       setMemberOrder: (teamKey, order) => set((s) => {
         const current = s.memberOrder[teamKey]
         if (current && current.length === order.length && current.every((id, i) => id === order[i])) return s
@@ -200,11 +195,10 @@ export const useTeamUiStore = create<TeamUiState>()(
     {
       name: STORAGE_KEYS.TEAM_UI,
       storage: purdexStorage,
-      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, ghostWorkspace: s.ghostWorkspace, teamDrill: s.teamDrill, panel: s.panel, workbookTabs: s.workbookTabs, teamBeadHost: s.teamBeadHost, groupShadow: s.groupShadow }),
+      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, ghostWorkspace: s.ghostWorkspace, teamDrill: s.teamDrill, panel: s.panel, workbookTabs: s.workbookTabs, teamBeadHost: s.teamBeadHost }),
       merge: (persisted, current) => ({
         ...current, ...heal(persisted),
         teamBeadHost: isRecord(persisted) && typeof persisted.teamBeadHost === 'boolean' ? persisted.teamBeadHost : true,
-        groupShadow: isRecord(persisted) && isGroupShadowVariant(persisted.groupShadow) ? persisted.groupShadow : DEFAULT_GROUP_SHADOW,
       }),
     },
   ),

@@ -228,7 +228,7 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
       views.push({
         key, hostId, teamId: team.id, createdAt: team.created_at,
         name: team.team_name ?? '', label: team.team_label ?? '',
-        colorIndex: fnv1a32(team.id) % COLOR_COUNT,
+        colorIndex: team.team_color ?? fnv1a32(team.id) % COLOR_COUNT,
         lead,
         members: orderMembers(team, input.memberOrder?.[key]).map((m) =>
           seat(team, hostId, 'member', m, { origin: m.origin, state: m.state, joinedAt: m.joined_at }, preferred)),
