@@ -117,6 +117,9 @@ type Module struct {
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
 	sweepWG    sync.WaitGroup
+	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
+	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
+	noticeMu sync.Mutex
 	// unsubTurnEnd ends the subscription to the agent module's turn ends (T-3a2); nil when none.
 	unsubTurnEnd func()
 	turnEndMu    sync.RWMutex // held (read) by a turn-end write in flight; Stop takes it once to wait for them
@@ -486,6 +489,8 @@ func (m *Module) Stop(context.Context) error {
 	m.createMu.Lock()
 	m.stopCancel()
 	m.createMu.Unlock()
+	m.noticeMu.Lock() // an Add that passed its check finishes before the Wait below; later ones see stopping()
+	m.noticeMu.Unlock()
 	if m.unsubTurnEnd != nil { // before the sweepers join: no turn end writes once Stop has begun
 		m.unsubTurnEnd()
 		m.unsubTurnEnd = nil

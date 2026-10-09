@@ -29,7 +29,7 @@ Vocabulary (spec §4): a **lead** runs a **team** of **members**. A member is ne
 - If `pdx spawn` ends with `spawn_wait_timeout` (exit 1, after 9 minutes of waiting), the member may still be starting: check `pdx team` first and do not spawn again.
 - Hand each piece of work to a member as a task: `pdx task add --to <ref> --subject … --brief-file …` (or `pdx spawn … --task-subject …`, whose brief becomes the member's first task); `pdx task ls` and `pdx team` show what each member is on.
 - **Recommend a worktree** to each member — have it `EnterWorktree`, or prepare one for it. Where the member works is your call (U10).
-- When a `[pdx team] <ref> context 已用 NN%` notice arrives, **you decide** whether and when to relay that member: `pdx relay <ref>`. The daemon only detects and reports (U9).
+- **The member-relay command is not available yet.** When a member's context runs high (`pdx team` shows CTX), check it there and tell the user; whether and when a member is relayed is the lead's call (U9) once the command ships.
 - Write the team roster (each member's ref, address, task and worktree) into §8 「協作關係」 of your own handoff, so the conversation that takes over from you still knows its team.
 
 ## As a member

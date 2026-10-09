@@ -258,6 +258,16 @@ func (f *fakeOrigins) InboxOf(sid string) (string, bool, error) {
 			return inbox, true, nil
 		}
 	}
+	f.mu.Lock()
+	pid, cleared := f.cleared[sid] // a /clear keeps the process, and with it the inbox socket
+	f.mu.Unlock()
+	if cleared {
+		for inbox, o := range fixtureOrigins {
+			if o.PID == pid {
+				return inbox, true, nil
+			}
+		}
+	}
 	return "", false, nil
 }
 
