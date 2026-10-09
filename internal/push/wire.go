@@ -1,6 +1,6 @@
 // Package push holds the wire types and rules of phone push notifications (spec docs/specs/2026-10-09-push-spec.md):
 // the device registration request and its validation, the stored device and its masked view, and the presence request
-// the Mac App reports (used from PU-3). The module that serves them is internal/module/push.
+// the Mac App reports (PU-3). The module that serves them is internal/module/push.
 package push
 
 import (
@@ -248,4 +248,40 @@ type PresenceRequest struct {
 	Active   bool              `json:"active"`
 	Sessions []PresenceSession `json:"sessions"`
 	TTLMs    int               `json:"ttl_ms"`
+}
+
+const (
+	maxPresenceSessions = 200
+	minPresenceTTLMs    = 1000
+	maxPresenceTTLMs    = 60000
+	maxClientIDRunes    = 64
+)
+
+// Validate checks the report (spec §5.4): a client id of 1-64 printable characters, at most 200 sessions each with a
+// printable code of 1-64 and a printable name of at most 64, and a ttl of 1-60 s.
+func (r *PresenceRequest) Validate() error {
+	if r.ClientID == "" {
+		return errors.New("client_id: required")
+	}
+	if err := printable("client_id", r.ClientID, maxClientIDRunes); err != nil {
+		return err
+	}
+	if r.TTLMs < minPresenceTTLMs || r.TTLMs > maxPresenceTTLMs {
+		return fmt.Errorf("ttl_ms: want %d-%d", minPresenceTTLMs, maxPresenceTTLMs)
+	}
+	if len(r.Sessions) > maxPresenceSessions {
+		return fmt.Errorf("sessions: at most %d", maxPresenceSessions)
+	}
+	for _, s := range r.Sessions {
+		if s.Code == "" {
+			return errors.New("sessions: every code is required")
+		}
+		if err := printable("sessions.code", s.Code, maxCodeLen); err != nil {
+			return err
+		}
+		if err := printable("sessions.name", s.Name, maxNameLen); err != nil {
+			return err
+		}
+	}
+	return nil
 }
