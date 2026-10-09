@@ -69,6 +69,9 @@ export function healAdoptionWaits(persisted: unknown): Record<string, AdoptionWa
     if (typeof hostId !== 'string' || hostId === '' || typeof approvalId !== 'string' || approvalId === '') continue
     if (typeof alias !== 'string' || typeof target !== 'string' || typeof code !== 'string') continue
     if (typeof startedAt !== 'number' || !Number.isFinite(startedAt) || startedAt <= 0) continue
+    // Older than the bound plus how long a tombstone is kept: a copy this stale can only be a window that slept through
+    // its own removal — never brought back, tombstone or not.
+    if (Date.now() - startedAt > ADOPTION_WAIT_BOUND_MS + GONE_TTL_MS) continue
     if (typeof state !== 'string' || !STATES.includes(state) || typeof dismissed !== 'boolean') continue
     // A finished entry the person has dealt with (closed, or toasted) is never kept.
     if (dismissed && state !== 'waiting') continue
@@ -79,7 +82,8 @@ export function healAdoptionWaits(persisted: unknown): Record<string, AdoptionWa
 }
 
 /** Removed keys with when: a removal must survive the merge below (else the other window's copy would bring the entry back). */
-const GONE_TTL_MS = 60 * 60_000
+export const STORAGE_LOCK = 'purdex-adoption-waits-storage'
+const GONE_TTL_MS =24 * 60 * 60_000
 
 function healGone(persisted: unknown, now = Date.now()): Record<string, number> {
   const raw = isRecord(persisted) && isRecord(persisted.gone) ? Object.entries(persisted.gone) : []
@@ -134,8 +138,15 @@ const stateOfRaw = (raw: string | null): unknown => {
 const mergingStorage = createJSONStorage(() => ({
   getItem: (name: string) => browserStorage.getItem(name),
   setItem: (name: string, value: string) => {
-    const merged = mergeAdoptionWaitImages(stateOfRaw(browserStorage.getItem(name) as string | null), stateOfRaw(value))
-    browserStorage.setItem(name, JSON.stringify({ state: merged, version: 0 }))
+    const write = () => {
+      const merged = mergeAdoptionWaitImages(stateOfRaw(browserStorage.getItem(name) as string | null), stateOfRaw(value))
+      browserStorage.setItem(name, JSON.stringify({ state: merged, version: 0 }))
+    }
+    // Read, merge and write are one step against the other windows (separate renderer processes): one exclusive lock
+    // around all three, so two writers cannot both read the old image. Without Web Locks it is the plain sequence.
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+    if (locks) void locks.request(STORAGE_LOCK, {}, write).catch(() => {})
+    else write()
   },
   removeItem: (name: string) => browserStorage.removeItem(name),
 }))

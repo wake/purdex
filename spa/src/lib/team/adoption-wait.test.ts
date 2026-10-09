@@ -1,8 +1,9 @@
 // adoption-wait.ts — the wait after a remote adopt is approved: every terminal answer, the 11 minute bound, retry on
 // errors, one poll loop per approval, and a toast when the card was closed first. fetchAdoption is the only mock.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { useAdoptionWait, startAdoptionWait, resumeAdoptionWaits, resetAdoptionWaitForTests, ADOPTION_WAIT_BOUND_MS } from './adoption-wait'
+import { useAdoptionWait, startAdoptionWait, resumeAdoptionWaits, resetAdoptionWaitForTests, STORAGE_LOCK, ADOPTION_WAIT_BOUND_MS } from './adoption-wait'
 import { STORAGE_KEYS } from '../storage'
+import { FakeLockManager, navigatorWithLocks } from '../storage/__tests__/fake-web-locks'
 import { ApprovalApiError, fetchAdoption } from './approval-api'
 import { adoptPayloadOf, type Approval } from './types'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -282,13 +283,40 @@ describe('two windows write the same key', () => {
     expect(useAdoptionWait.getState().entries).toEqual({})
   })
 
+  it('read-merge-write runs under one exclusive lock: writers queue behind a holder and land in order, both kept', async () => {
+    const locks = new FakeLockManager()
+    vi.stubGlobal('navigator', navigatorWithLocks(locks))
+    try {
+      let release!: () => void
+      const holder = locks.request(STORAGE_LOCK, {}, () => new Promise<void>((r) => { release = r })) // another window mid-write
+      await Promise.resolve()
+      otherWindowWrites({ [k('b')]: e('b') })
+      otherWindowWrites({ [k('c')]: e('c') })
+      await flush()
+      expect(localStorage.getItem(STORAGE_KEYS.ADOPTION_WAITS)).toBeNull() // neither has touched storage yet
+      release()
+      await holder
+      await flush()
+      expect(Object.keys(stored().entries).sort()).toEqual([k('b'), k('c')])
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('a tombstone past its keep time plus a stale entry from a sleeping window do not bring a wait back', async () => {
+    const day = 24 * 60 * 60_000
+    otherWindowWrites({ [k('old')]: e('old', { startedAt: Date.now() - day - ADOPTION_WAIT_BOUND_MS - 1_000 }) }, { [k('old')]: Date.now() - day - 1_000 })
+    await useAdoptionWait.persist.rehydrate()
+    expect(useAdoptionWait.getState().entries).toEqual({})
+    expect(stored().entries[k('old')]).toBeUndefined()
+  })
+
   it('an adoption another window already owns is not polled here', async () => {
-    const request = vi.fn((_n: string, _o: unknown, cb: (l: unknown) => unknown) => Promise.resolve(cb(null)))
+    // Someone else holds the per-adoption lock (ifAvailable → null); the storage lock is free.
+    const request = vi.fn((n: string, _o: unknown, cb: (l: unknown) => unknown) => Promise.resolve(cb(n.startsWith('purdex-adoption-wait:') ? null : {})))
     vi.stubGlobal('navigator', { ...navigator, locks: { request } })
     try {
       startAdoptionWait('lead', 'a', payload)
       await flush()
-      expect(request).toHaveBeenCalledTimes(1)
+      expect(request.mock.calls.filter((c) => c[0].startsWith('purdex-adoption-wait:'))).toHaveLength(1)
       expect(mocked).not.toHaveBeenCalled()
     } finally { vi.unstubAllGlobals() }
   })
