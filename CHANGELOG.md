@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.619] - 2026-10-09
+
+> 動 mod：**要重跑 `pdx setup --agent cc`**（daemon 一起換新，程式沒有改）；SPA、Electron 不必更新。
+
+### Fixed：Monitor 工具的背景符號（介面語言 U1-3，#2087）
+
+- 用 Monitor 工具開的背景任務，外掛原本沒有回報成「監控」，所以分頁角落的眼睛符號不會出現。現在會正確回報並顯示。
+
 ## [1.0.0-alpha.618] - 2026-10-09
 
 > 動 mod：**要重跑 `pdx setup --agent cc`**（daemon 一起換新，內容沒有改）；SPA、Electron 不必更新。資源租約仍是「只記錄、不攔」（advise），「只記錄一天」從這一版部署時重新起算。
