@@ -67,6 +67,7 @@ type Module struct {
 	// The agent-event side (agent_trigger.go).
 	gate        *Gate
 	asks        *openAsks
+	approvals   *openApprovals // open approvals of the pushed kinds: purdex.open_approvals on every push
 	holds       holdSet
 	holdFor     time.Duration // how long a waiting event waits for its hook_ask (spec §5.2 rule 8); a test seam
 	unsubNotify func()
@@ -81,7 +82,7 @@ type presenceChecker interface {
 
 func New() *Module {
 	return &Module{home: os.UserHomeDir, devices: map[string]push.Device{}, pres: NewPresence(time.Now),
-		gate: NewGate(time.Now), asks: newOpenAsks(time.Now), holdFor: waitingHold}
+		gate: NewGate(time.Now), asks: newOpenAsks(time.Now), approvals: newOpenApprovals(), holdFor: waitingHold}
 }
 
 func (m *Module) Name() string           { return "push" }
@@ -198,9 +199,11 @@ func (m *Module) Start(ctx context.Context) error {
 	m.core.CfgMu.RUnlock()
 	snd := newSender(m, m.newAPNs(), hostID, push.BundleID)
 	snd.Start(ctx)
+	snd.openCount = m.approvals.Count
 	m.sender.Store(snd)
 	m.holds.reset()
 	m.asks.Clear() // a restart begins from the feed's snapshot, not from asks an earlier run saw open
+	m.approvals.Clear()
 	if m.events != nil {
 		// The feed arms the callback in the same step that returns the snapshot, and may run an event before this goroutine
 		// has loaded the snapshot. Events wait for it: a `closed` that outruns the load would otherwise be lost, and the
@@ -212,6 +215,7 @@ func (m *Module) Start(ctx context.Context) error {
 			m.onApproval(op, a)
 		})
 		m.asks.Load(open)
+		m.approvals.Load(open)
 		close(ready)
 	}
 	if m.notify == nil {
@@ -326,8 +330,10 @@ func (m *Module) onApproval(op string, a team.Approval) {
 	switch op { // the open hook_ask set is kept whether or not this approval is pushed (rule 8 reads it)
 	case "opened":
 		m.asks.Opened(a)
+		m.approvals.Opened(a)
 	case "closed":
 		m.asks.Closed(a.ID)
+		m.approvals.Closed(a.ID)
 	}
 	snd := m.sender.Load() // one read: Stop may clear it at any moment
 	if op != "opened" || snd == nil {

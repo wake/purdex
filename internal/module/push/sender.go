@@ -47,6 +47,8 @@ type sender struct {
 	hostID string
 	topic  string
 
+	openCount func() int // the open-approval count each payload carries (spec §6); nil = 0
+
 	queue   chan Job
 	dropped atomic.Int64
 	lastLog atomic.Int64 // unix ms of the last "queue full" log line
@@ -129,6 +131,9 @@ func (s *sender) process(ctx context.Context, j Job) {
 		content, ok := j.Make(d)
 		if !ok {
 			continue
+		}
+		if s.openCount != nil {
+			content.OpenApprovals = s.openCount()
 		}
 		payload, err := content.Payload(s.hostID)
 		if err != nil {
