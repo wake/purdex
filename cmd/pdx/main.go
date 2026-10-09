@@ -116,6 +116,20 @@ func main() {
 
 func runServe(args []string) *reexecPlan {
 	bootStart := time.Now() // monotonic; feeds the "startup: ready in" line
+	// First of all, before this image starts any child of its own (#2137): collect what the previous image left.
+	reaped, survivors, listErr := reapInheritedChildren()
+	if listErr != nil {
+		log.Printf("startup: WARNING could not list the previous image's children (%v); the ones still running will not be collected when they end", listErr)
+	}
+	if reaped > 0 || len(survivors) > 0 {
+		log.Printf("startup: reaped %d exited child process(es) left by the previous image, %d still running (watched until they end)", reaped, len(survivors))
+	}
+	if len(survivors) > 0 {
+		go func() {
+			n := reapSurvivors(survivors, time.Second, 0, log.Printf)
+			log.Printf("startup: reaped %d more child process(es) of the previous image after they ended", n)
+		}()
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			home, _ := os.UserHomeDir()

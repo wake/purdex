@@ -46,8 +46,13 @@ type SessionModule struct {
 	// the resolve-command deadline like everything else on the path.
 	passwdShell func(ctx context.Context) string
 	cancelWatch context.CancelFunc
-	wstate      watcherState
-	waitForGate chan bool
+	// watchWG counts the watcher goroutines (the tmux wait-for loop and the 5 s ticker): Stop joins them, so the
+	// `tmux wait-for` child killed by the cancel is REAPED before the daemon execs itself in place (#2137).
+	// afterWaitForRun is a test seam called right after the wait-for child returned.
+	watchWG         sync.WaitGroup
+	afterWaitForRun func()
+	wstate          watcherState
+	waitForGate     chan bool
 
 	// hooksMu serialises every tmux hook mutation — the watcher's
 	// ensureHooks, Stop's remove and the manual setup API — with the
@@ -325,6 +330,11 @@ func (m *SessionModule) Stop(_ context.Context) error {
 	// Cancel watcher goroutines.
 	if m.cancelWatch != nil {
 		m.cancelWatch()
+		// The wait-for child dies by the cancel (CommandContext kills it) and exec.Cmd.Run reaps it in the
+		// goroutine that started it. A restart execs in place right after Stop: a child not yet reaped by then
+		// is a zombie of this pid for good (#2137), so wait for the goroutines. Bounded: a broadcast stuck on
+		// something else must not hold the shutdown.
+		m.joinWatchers(watchJoinTimeout)
 	}
 	// Wait for any watcher recovery in flight; one that starts later sees
 	// runCtx cancelled or hooksStopped (lifeMu, #1474 spec D4).
@@ -337,4 +347,23 @@ func (m *SessionModule) Stop(_ context.Context) error {
 	m.hooksStopped = true
 	m.removeTmuxHooks()
 	return nil
+}
+
+// watchJoinTimeout bounds Stop's wait for the watcher goroutines.
+const watchJoinTimeout = 2 * time.Second
+
+// joinWatchers waits for the watcher goroutines, at most d.
+func (m *SessionModule) joinWatchers(d time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		m.watchWG.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		log.Printf("session: watcher goroutines still running after %v; stopping anyway", d)
+	}
 }
