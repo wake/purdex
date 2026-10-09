@@ -17,6 +17,7 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/convfeed"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent"
 )
 
 const sid = "7e7f214b-c4e3-48cd-ab15-62a3471bd4fd"
@@ -486,5 +487,26 @@ func TestModule_StartIsIdempotentAndStopWaitsForTheSweeper(t *testing.T) {
 	}
 	if err := e.mod.Stop(context.Background()); err != nil { // stopping twice is fine
 		t.Fatal(err)
+	}
+}
+
+type fakePanes struct {
+	panes []agent.PaneOwner
+	err   error
+}
+
+func (f fakePanes) ConfirmedOwners(context.Context, string) ([]agent.PaneOwner, error) {
+	return f.panes, f.err
+}
+
+func TestOwnerAdapter_MapsPanesToOwnersAndPassesErrors(t *testing.T) {
+	a := ownerAdapter{fakePanes{panes: []agent.PaneOwner{{TranscriptPath: "/p/a.jsonl", Status: "waiting", LastSeenAt: 7, SessionID: sid}}}}
+	got, err := a.LiveSessions(context.Background(), sid)
+	if err != nil || len(got) != 1 || got[0] != (convfeed.Owner{TranscriptPath: "/p/a.jsonl", Status: "waiting", SeenAt: 7}) {
+		t.Fatalf("got %+v err %v", got, err)
+	}
+	boom := errors.New("boom")
+	if _, err := (ownerAdapter{fakePanes{err: boom}}).LiveSessions(context.Background(), sid); !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
 	}
 }

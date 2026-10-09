@@ -97,11 +97,11 @@ func (m *Module) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop ends the sweeper and waits for it to return (or for ctx).
+// Stop ends the sweeper and waits for it to return (or for ctx). The module counts as running until the sweeper has
+// returned, so a concurrent Stop waits for the same exit and a concurrent Start does not start a second sweeper.
 func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	cancel, done := m.cancel, m.done
-	m.cancel, m.done = nil, nil
 	m.mu.Unlock()
 	if cancel == nil {
 		return nil
@@ -109,10 +109,15 @@ func (m *Module) Stop(ctx context.Context) error {
 	cancel()
 	select {
 	case <-done:
-		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	m.mu.Lock()
+	if m.done == done {
+		m.cancel, m.done = nil, nil
+	}
+	m.mu.Unlock()
+	return nil
 }
 
 // ownerAdapter maps the agent module's panes to the resolver's owners.
