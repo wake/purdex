@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.670] - 2026-10-10
+
+> 動到 daemon 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；已開著的 session 要重新載入 mod（`/reload-plugins` 或開新 session）才會開始寫工作簿。
+
+### Added：工作簿開始寫紀錄 — WB-1c（#2348）、#2351（介面線）
+
+- 每個帶 Purdex mod 的 Claude Code session，每結束一輪（有回覆或出錯的那種，不含 subagent），mod 會向 daemon 領一份整理工作，用這個 session 自己的帳號跑一次 Haiku（effort low），把結果交回 daemon；daemon 檢查、去除秘密後寫進工作簿（事名、推播短句、紀錄、目前狀況、待辦）。整理在背景進行，session 從不等它。
+- 修正：Stop 當下剛結束的那一輪在轉錄檔裡還沒標成結束，原本會被跳過、讓紀錄慢一輪；現在那一輪會被正確納入。
+- 推播還沒改用工作簿的短句（之後的 WB-3）；App 的工作簿面板也還在做。
+
+### Docs
+
+- 介面 U3 plan（#2352）。
+
 ## [1.0.0-alpha.669] - 2026-10-10
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。部署時 team.db 的 remote_members 自動加 `team_label`、`team_color` 欄。跨主機的修正要**兩台都部署**才會生效。
