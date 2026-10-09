@@ -72,6 +72,58 @@ func TestRemoteMembers_CASFromAllowedStatesOnly(t *testing.T) {
 	}
 }
 
+// Only active → a terminal state is a move (§5.2); nothing comes back to active
+// and one terminal state never overwrites another (codex attack).
+func TestRemoteMembers_CASRefusesIllegalTransitions(t *testing.T) {
+	s := openTestStore(t)
+	seedRemote(t, s, "mk-1", "sid-1", 1000)
+	if _, err := s.SetRemoteMemberState("mk-1", []string{remoteActive}, remoteActive, 2000); err == nil {
+		t.Fatal("active → active accepted")
+	}
+	for _, from := range []string{remoteReleased, remoteKilled, remoteGone, remoteEnded} {
+		if _, err := s.SetRemoteMemberState("mk-1", []string{from}, remoteActive, 2000); err == nil {
+			t.Fatalf("%s → active accepted", from)
+		}
+		if _, err := s.SetRemoteMemberState("mk-1", []string{from}, remoteEnded, 2000); err == nil {
+			t.Fatalf("%s → ended accepted", from)
+		}
+	}
+	if _, err := s.SetRemoteMemberState("mk-1", []string{remoteActive, remoteReleased}, remoteGone, 2000); err == nil {
+		t.Fatal("a from-set holding a terminal state accepted")
+	}
+	if got, _, _ := s.RemoteMember("mk-1"); got.State != remoteActive || got.UpdatedAt != 1000 {
+		t.Fatalf("row = %+v, want untouched", got)
+	}
+}
+
+// A replay of the same membership is a no-op; the same mk naming another
+// session, team, host or origin is an id_conflict, not a silent success.
+func TestRemoteMembers_InsertSameMKOtherContentIsAConflict(t *testing.T) {
+	s := openTestStore(t)
+	r := seedRemote(t, s, "mk-1", "sid-1", 1000)
+	// The lead fields and state may differ on a replay (lead_moved, a later state).
+	moved := r
+	moved.LeadSessionID, moved.LeadRef, moved.UpdatedAt = "lead-2", "_lead02", 5000
+	if err := s.InsertRemoteMember(moved); err != nil {
+		t.Fatalf("replay with moved lead: %v", err)
+	}
+	for name, mut := range map[string]func(*remoteMemberRow){
+		"session":   func(x *remoteMemberRow) { x.MemberSessionID = "sid-other" },
+		"team":      func(x *remoteMemberRow) { x.TeamID = "team-other" },
+		"lead host": func(x *remoteMemberRow) { x.LeadHostID = "host-other" },
+		"origin":    func(x *remoteMemberRow) { x.Origin = "spawned" },
+	} {
+		x := r
+		mut(&x)
+		if err := s.InsertRemoteMember(x); !errors.Is(err, ErrRemoteMemberConflict) {
+			t.Fatalf("%s: err = %v, want ErrRemoteMemberConflict", name, err)
+		}
+	}
+	if got, _, _ := s.RemoteMember("mk-1"); got.MemberSessionID != "sid-1" || got.UpdatedAt != 1000 {
+		t.Fatalf("row = %+v, want untouched", got)
+	}
+}
+
 func TestSessionRole(t *testing.T) {
 	s := openTestStore(t)
 	seedTeam(t, s, "team-1", "lead-1", 1000)
@@ -168,6 +220,24 @@ func TestGates_RemoteMemberIsAMember(t *testing.T) {
 		}
 		if tm, ok, _ := s.LiveTeamByLead("L1"); !ok || tm.ID != "team-1" {
 			t.Fatal("the lead moved although the cleared was refused")
+		}
+	})
+
+	// A relay claimed before the session was adopted remotely: its cleared would
+	// leave remote_members bound to the old session, so it is refused whole.
+	t.Run("cleared of a remote member's own session is refused", func(t *testing.T) {
+		s := openTestStore(t)
+		seedRemote(t, s, "mk-1", "sid-r", 1000)
+		claimedOp(t, s, "op-r", "sid-r", "_abc123")
+		_, _, err := s.ReportRelay("op-r", RelayReport{State: team.RelayCleared, NewSessionID: "sid-new", NewRef: "_nnn222", At: 5000})
+		if !errors.Is(err, ErrClearedRemoteMember) {
+			t.Fatalf("err = %v, want ErrClearedRemoteMember", err)
+		}
+		if op, ok, _ := s.GetRelayOp("op-r"); !ok || op.State == team.RelayCleared {
+			t.Fatalf("op = %+v ok=%v, want it left as it was", op, ok)
+		}
+		if got, _, _ := s.RemoteMember("mk-1"); got.MemberSessionID != "sid-r" || got.State != remoteActive {
+			t.Fatalf("remote row = %+v", got)
 		}
 	})
 

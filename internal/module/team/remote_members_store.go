@@ -114,7 +114,7 @@ func insertRemoteMemberIn(q dbtx, r remoteMemberRow) error {
 		return fmt.Errorf("insert remote member: mk %q, session %q, team %q, lead host %q and state %q must all be set and the state known",
 			r.MK, r.MemberSessionID, r.TeamID, r.LeadHostID, r.State)
 	}
-	_, err := q.Exec(`INSERT INTO remote_members (`+remoteMemberCols+`)
+	res, err := q.Exec(`INSERT INTO remote_members (`+remoteMemberCols+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (mk) DO NOTHING`,
 		r.MK, r.MemberSessionID, r.Ref, r.TeamID, r.TeamName, r.LeadHostID, r.LeadSessionID, r.LeadRef,
 		r.LeadAddress, r.LeadTitle, r.LeadPID, r.LeadProcStart, r.Origin, r.State, r.PID, r.ProcStart, r.PaneID,
@@ -122,8 +122,29 @@ func insertRemoteMemberIn(q dbtx, r remoteMemberRow) error {
 	if err != nil {
 		return fmt.Errorf("insert remote member %s: %w", r.MK, err)
 	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("insert remote member %s rows affected: %w", r.MK, err)
+	} else if n == 1 {
+		return nil
+	}
+	// The mk is taken. Only a replay of the same membership is a success; the
+	// lead fields, state and times may have moved on since (lead_moved, a
+	// later state), the identity may not.
+	var have remoteMemberRow
+	if err := q.QueryRow(`SELECT member_session_id, team_id, lead_host_id, origin FROM remote_members WHERE mk = ?`, r.MK).
+		Scan(&have.MemberSessionID, &have.TeamID, &have.LeadHostID, &have.Origin); err != nil {
+		return fmt.Errorf("insert remote member %s: read the stored row: %w", r.MK, err)
+	}
+	if have.MemberSessionID != r.MemberSessionID || have.TeamID != r.TeamID || have.LeadHostID != r.LeadHostID || have.Origin != r.Origin {
+		return fmt.Errorf("%w (%s)", ErrRemoteMemberConflict, r.MK)
+	}
 	return nil
 }
+
+// ErrRemoteMemberConflict: the member key is stored for another membership
+// (session, team, lead host or origin differ) — key reuse, never an
+// idempotent replay (spec §3.1 rule 3: id_conflict).
+var ErrRemoteMemberConflict = errors.New("the member key is stored for a different membership")
 
 // RemoteMember returns the row with member key mk, in any state.
 func (s *Store) RemoteMember(mk string) (remoteMemberRow, bool, error) {
@@ -146,10 +167,12 @@ func (s *Store) SetRemoteMemberState(mk string, from []string, to string, at int
 // casRemoteMemberStateIn moves the row mk to `to` only if it is now in one
 // of the `from` states (spec §3.1 rule 5, §5.2): a change whose CAS finds
 // another state changes nothing and reports false — the caller ignores it,
-// it never forces. An unknown state, or an empty from, is an error.
+// it never forces. Every move in §5.2 leaves active for a terminal state, so
+// that is all this accepts: from must be {active} and to a terminal state;
+// terminal → active, or one terminal over another, is an error.
 func casRemoteMemberStateIn(q dbtx, mk string, from []string, to string, at int64) (bool, error) {
-	if !validRemoteState(to) || len(from) == 0 || slices.ContainsFunc(from, func(f string) bool { return !validRemoteState(f) }) {
-		return false, fmt.Errorf("set remote member %s: unknown state in %v → %q", mk, from, to)
+	if !validRemoteState(to) || to == remoteActive || len(from) == 0 || slices.ContainsFunc(from, func(f string) bool { return f != remoteActive }) {
+		return false, fmt.Errorf("set remote member %s: %v → %q is not a move of §5.2 (only active → a terminal state)", mk, from, to)
 	}
 	marks := strings.TrimSuffix(strings.Repeat("?, ", len(from)), ", ")
 	args := []any{to, at, mk}
