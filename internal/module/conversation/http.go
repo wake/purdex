@@ -151,7 +151,7 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if q.Has("after") {
 		inc := entry.Increment(afterEpoch, afterRev)
 		if !inc.Stale {
-			if body, ok := m.encodeIncrement(inc, hostID); ok {
+			if body, ok := m.encodeIncrement(inc, hostID, 0); ok {
 				writeJSON(w, http.StatusOK, body)
 				return
 			}
@@ -260,7 +260,7 @@ type incrementJSON struct {
 
 // encodeIncrement is the answer to a valid cursor; ok is false when it would pass the body cap (the caller then
 // answers a reset with a snapshot, which has its own way to fit).
-func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string) (body []byte, ok bool) {
+func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string, overhead int) (body []byte, ok bool) {
 	resp := incrementJSON{Changes: make([]changeJSON, 0, len(inc.Changes)), Header: headerOf(inc.Header), Cursor: inc.Cursor}
 	for _, c := range inc.Changes {
 		t := c.Turn
@@ -274,7 +274,7 @@ func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string) (body []
 		})
 	}
 	body, err := json.Marshal(resp)
-	if err != nil || len(body) > m.maxBody {
+	if err != nil || len(body)+overhead > m.maxBody { // overhead: what a WebSocket frame adds around the body
 		return nil, false
 	}
 	return body, true

@@ -79,14 +79,21 @@ func (m *Module) queueCap() int {
 	return sendQueue
 }
 
-// runCtx is the lifetime context of connections: the module's once started, else Background (tests).
-func (m *Module) runCtx() context.Context {
+// admitWS counts one more live WebSocket and returns the context it lives in: the module's once started (and not yet
+// stopped), else Background (tests that never Start). ok is false once Stop has begun; the caller must call
+// wsWG.Done when ok.
+func (m *Module) admitWS() (ctx context.Context, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.run != nil {
-		return m.run
+	if m.run == nil {
+		m.wsWG.Add(1)
+		return context.Background(), true
 	}
-	return context.Background()
+	if m.run.Err() != nil {
+		return nil, false
+	}
+	m.wsWG.Add(1)
+	return m.run, true
 }
 
 // New returns the module.
@@ -163,11 +170,13 @@ func (m *Module) Start(ctx context.Context) error {
 func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	cancel, done := m.cancel, m.done
+	if cancel != nil {
+		cancel() // under m.mu: admitWS sees the module stopped, or its connection was counted before the wait below
+	}
 	m.mu.Unlock()
 	if cancel == nil {
 		return nil
 	}
-	cancel() // the sweeper and every WebSocket (their context is a child of this one) end
 	wsDone := make(chan struct{})
 	go func() { m.wsWG.Wait(); close(wsDone) }()
 	for _, ch := range []chan struct{}{done, wsDone} {

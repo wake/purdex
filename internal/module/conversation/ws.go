@@ -23,6 +23,9 @@ const (
 	pingEvery             = 25 * time.Second
 	pongWait              = 60 * time.Second
 	writeWait             = 10 * time.Second
+	// frameOverhead is what {"type":…,"seq":…,"value":…} adds around a body (the longest type name and a 20-digit seq
+	// fit in it): a changes frame is cut over to reset + snapshot by its whole size, not the body's.
+	frameOverhead = 128
 )
 
 type frame struct {
@@ -218,16 +221,22 @@ func (m *Module) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A connection is admitted only while the module runs: Stop and this check share m.mu, so no connection can start
+	// (or be counted) after Stop began waiting for them.
+	runCtx, ok := m.admitWS()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "stopping")
+		return
+	}
+	defer m.wsWG.Done()
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	conn, err := up.Upgrade(w, r, nil)
 	if err != nil {
 		return // Upgrade has answered
 	}
-	ctx, cancel := context.WithCancel(m.runCtx())
+	ctx, cancel := context.WithCancel(runCtx)
 	c := &wsConn{m: m, conn: conn, entry: entry, sid: sid, hostID: m.hostID(), turns: turns,
 		ctx: ctx, cancel: cancel, out: make(chan []byte, m.queueCap())}
-	m.wsWG.Add(1)
-	defer m.wsWG.Done()
 	defer c.shutdown()
 
 	go c.writeLoop()
@@ -254,7 +263,7 @@ func (c *wsConn) sendFirst(hasAfter bool, afterEpoch string, afterRev uint64) bo
 	if hasAfter {
 		inc := c.entry.Increment(afterEpoch, afterRev)
 		if !inc.Stale {
-			if body, ok := c.m.encodeIncrement(inc, c.hostID); ok {
+			if body, ok := c.m.encodeIncrement(inc, c.hostID, frameOverhead); ok {
 				c.setPosition(inc.Cursor)
 				return c.enqueue("conversation.changes", json.RawMessage(body))
 			}
@@ -341,7 +350,7 @@ func (c *wsConn) push() bool {
 	if err != nil || rev == c.sentRev {
 		return true
 	}
-	body, ok := c.m.encodeIncrement(inc, c.hostID)
+	body, ok := c.m.encodeIncrement(inc, c.hostID, frameOverhead)
 	if !ok { // too big for one frame
 		return c.enqueue("conversation.reset", map[string]any{}) && c.sendSnapshot()
 	}

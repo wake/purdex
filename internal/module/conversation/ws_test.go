@@ -596,3 +596,63 @@ func TestWS_RealOverflowClosesAndFrees(t *testing.T) {
 	srv.Close()
 	settled(t, "goroutines back", func() bool { return runtime.NumGoroutine() <= before+2 })
 }
+
+// A changes frame is cut over to reset + snapshot by its whole size: a body that fits the cap alone but not with the
+// frame around it is refused by encodeIncrement.
+func TestWS_ChangesBodyIsMeasuredWithTheFrameAroundIt(t *testing.T) {
+	e, _ := wsEnv(t)
+	p := e.transcript(idleTurns(2))
+	entry, release, err := e.mod.cache.Acquire(context.Background(), sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := entry.Exclusive(context.Background(), func() error { return e.mod.refresh(context.Background(), entry, sid) }); err != nil {
+		t.Fatal(err)
+	}
+	cur := entry.Cursor()
+	epoch, rev, _ := convfeed.ParseCursor(cur)
+	appendRows(t, p, userRow("u9", 60, "a row"))
+	if err := entry.Exclusive(context.Background(), func() error { return e.mod.refresh(context.Background(), entry, sid) }); err != nil {
+		t.Fatal(err)
+	}
+	inc := entry.Increment(epoch, rev)
+	body, ok := e.mod.encodeIncrement(inc, "h", 0)
+	if !ok {
+		t.Fatal("setup")
+	}
+	e.mod.maxBody = len(body) + frameOverhead - 1
+	if _, ok := e.mod.encodeIncrement(inc, "h", frameOverhead); ok {
+		t.Fatal("a body that fits only without its frame was accepted")
+	}
+	if _, ok := e.mod.encodeIncrement(inc, "h", 0); !ok {
+		t.Fatal("the HTTP form (no frame) must still fit")
+	}
+	// and the frame really is smaller than the allowance
+	f, _ := json.Marshal(frame{Type: "conversation.changes", Seq: 1<<64 - 1, Value: json.RawMessage(`{}`)})
+	if len(f)-2 > frameOverhead {
+		t.Fatalf("a frame adds %d bytes, the allowance is %d", len(f)-2, frameOverhead)
+	}
+}
+
+// Once the module is stopping, a new connection is refused before the upgrade (and none is left behind).
+func TestWS_NoConnectionIsAdmittedAfterStop(t *testing.T) {
+	e, feed := wsEnv(t)
+	e.transcript(idleTurns(1))
+	if err := e.mod.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	srv := e.server()
+	c := e.connect(srv, "")
+	c.expect("conversation.snapshot")
+	if err := e.mod.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, resp, err := e.dial(srv, "")
+	if err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("after Stop: err %v resp %v, want a plain 503", err, resp)
+	}
+	if h, s := feed.state(); h != 0 || s != 0 {
+		t.Fatalf("holds %d subs %d after Stop", h, s)
+	}
+}
