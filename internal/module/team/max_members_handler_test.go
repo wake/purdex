@@ -111,3 +111,22 @@ func TestMaxMembersPut_RaisingLetsATeamFullSpawnPass(t *testing.T) {
 		t.Fatalf("after: %d %+v, want the cap check to pass", code, e)
 	}
 }
+
+// Mutation gate: do not signal the roster -> red. The event and GET /api/team/roster carry max_members and in_use.
+func TestMaxMembersPut_AnnouncesTheRosterWithTheNewNumbers(t *testing.T) {
+	f, _ := newSpawnFixture(t, 3)
+	seedMember(t, f.m.store, "op-1", uid(1), "sid-m1", 1)
+	f.rosterBaselineNow()
+	w := f.watchRoster()
+	w.drain() // stale pending signals give false greens
+	if code, body := f.putMax(uid(1), 5, appClientMM); code != 200 {
+		t.Fatalf("put: %d %s", code, body)
+	}
+	ev := w.one("max members")
+	if len(ev.Teams) != 1 || ev.Teams[0].MaxMembers != 5 || ev.Teams[0].InUse != 1 {
+		t.Fatalf("roster event = %+v, want max_members 5 in_use 1", ev.Teams)
+	}
+	if r := f.getRoster(); len(r.Teams) != 1 || r.Teams[0].MaxMembers != 5 || r.Teams[0].InUse != 1 {
+		t.Fatalf("GET roster = %+v", r.Teams)
+	}
+}

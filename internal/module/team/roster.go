@@ -91,10 +91,15 @@ func (m *Module) buildRoster() (team.Roster, error) {
 	if qerr != nil {
 		m.logf("[team] roster relay quotas: %v", qerr)
 	}
+	inUse, err := m.store.InUseOfTeams(teamIDs)
+	if err != nil {
+		return team.Roster{}, err
+	}
 	alias, _ := m.selfHost()
 	out := team.Roster{Teams: make([]team.TeamRoster, 0, len(teams))}
 	for i, t := range teams {
 		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, TeamName: t.TeamName, TeamLabel: t.TeamLabel, CreatedAt: t.CreatedAt,
+			MaxMembers: t.Grant.MaxMembers, InUse: inUse[t.ID],
 			Lead: m.rosterLead(t.Team, origins, alias, t.leadUsage), Members: []team.RosterMember{}}
 		tr.Lead.RelayQuota = quotas[t.LeadSessionID]
 		for _, mr := range active[i] {

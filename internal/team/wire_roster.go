@@ -54,13 +54,17 @@ type RosterTask struct {
 
 // TeamRoster is one live team.
 type TeamRoster struct {
-	ID        string         `json:"id"`
-	HostID    string         `json:"host_id"`
-	TeamName  string         `json:"team_name"`  // always present, "" = none
-	TeamLabel string         `json:"team_label"` // always present, "" = none
-	CreatedAt int64          `json:"created_at"`
-	Lead      RosterSession  `json:"lead"`
-	Members   []RosterMember `json:"members"` // active members, join order; never null (MarshalJSON)
+	ID        string `json:"id"`
+	HostID    string `json:"host_id"`
+	TeamName  string `json:"team_name"`  // always present, "" = none
+	TeamLabel string `json:"team_label"` // always present, "" = none
+	CreatedAt int64  `json:"created_at"`
+	// MaxMembers is the team's member limit and InUse the places taken: active members plus spawns still starting,
+	// the count spawn and adopt compare with it. Both always present (the App's stepper reads them).
+	MaxMembers int            `json:"max_members"`
+	InUse      int            `json:"in_use"`
+	Lead       RosterSession  `json:"lead"`
+	Members    []RosterMember `json:"members"` // active members, join order; never null (MarshalJSON)
 }
 
 // MarshalJSON writes no members as members:[], not null.

@@ -60,10 +60,10 @@ func TestRoster_LiveTeamsActiveMembersWithTmuxNames(t *testing.T) {
 			State:         team.MemberActive, Origin: team.MemberOriginSpawned, JoinedAt: at}
 	}
 	want := team.Roster{Teams: []team.TeamRoster{
-		{ID: uid(2), HostID: "h:1", CreatedAt: 500, // a lead the registry lists without an address: <self alias>/<ref>
+		{ID: uid(2), HostID: "h:1", CreatedAt: 500, MaxMembers: 3, // a lead the registry lists without an address: <self alias>/<ref>
 			Lead:    team.RosterSession{SessionID: "sid-2", Ref: "_def456", Address: "h/_def456", Live: true},
 			Members: []team.RosterMember{}},
-		{ID: uid(1), HostID: "h:1", CreatedAt: 1000,
+		{ID: uid(1), HostID: "h:1", CreatedAt: 1000, MaxMembers: 3, InUse: 2,
 			Lead: team.RosterSession{SessionID: "sid-1", Ref: "_abc123", Address: "self/boss", Title: "boss", Name: "n10", TmuxSession: "mt0", Live: true},
 			Members: []team.RosterMember{
 				member("sid-m2", "_mem002", "two", "self/w-two", "tm-0000000200", 2000),

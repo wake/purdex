@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // MaxMembersOutcome is what SetMaxMembers did.
@@ -55,4 +56,37 @@ func (s *Store) SetMaxMembers(teamID string, max int) (MaxMembersResult, error) 
 		return MaxMembersResult{}, fmt.Errorf("set max members of team %s: %w", teamID, err)
 	}
 	return res, nil
+}
+
+// InUseOfTeams is the in_use count (running spawns + active members, as the spawn cap check counts) of each team id;
+// a team with none is absent. One read for the whole roster.
+func (s *Store) InUseOfTeams(ids []string) (map[string]int, error) {
+	out := map[string]int{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, 2*len(ids))
+	for i := 0; i < 2; i++ {
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	rows, err := s.db.Query(`SELECT team_id, COUNT(*) FROM (
+		SELECT team_id FROM spawn_ops WHERE state = 'running' AND team_id IN (`+marks+`)
+		UNION ALL
+		SELECT team_id FROM team_members WHERE state = 'active' AND team_id IN (`+marks+`)) GROUP BY team_id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("in use of teams: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, fmt.Errorf("in use of teams: %w", err)
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
 }
