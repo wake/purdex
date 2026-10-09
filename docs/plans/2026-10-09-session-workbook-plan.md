@@ -515,7 +515,9 @@ Deploy: WB-1b′-* are inert until WB-1c (no mod announces `workbook.v2`, so eve
   mod that can run it, so WB-2b-i may deploy before WB-2b-ii); the refresh row's `session_id` / `turn_id = "r:…"`
   (spec §6's NOT NULL / UNIQUE kept); `refresh_available` on the conversation answer + host event
   `workbook.refresh_available` (the Mac needs it to enable 「重整」, spec §10.1); `stream` on `next` / `result`; turn
-  jobs may go to any capable session of the conversation, a refresh only to its own session; wire job kinds stay
+  jobs may go to any capable session of the conversation, a refresh to any `workbook.refresh`-capable session of the
+  conversation, preferring the session it was asked for (rev 4.2, D10 / D14 — rev 4.1 had bound it to that one
+  session); wire job kinds stay
   `turn | rewrite | refresh` (a retry is `attempt` 2).
 
 Earlier revisions:
