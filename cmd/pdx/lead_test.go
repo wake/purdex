@@ -177,7 +177,8 @@ type fakeTeamDaemon struct {
 	startOnce       sync.Once
 	bootID          string
 	onFirstPoll     func()
-	noOrigin        bool // answer create without origin.session_id (an older daemon)
+	noOrigin        bool           // answer create without origin.session_id (an older daemon)
+	deleteResp      *team.Approval // what DELETE answers instead of the cancelled row (the request closed first)
 }
 
 func newFakeTeamDaemon(final team.Approval) *fakeTeamDaemon {
@@ -270,7 +271,12 @@ func (f *fakeTeamDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/api/team/approvals/")
 		f.mu.Lock()
 		f.deletes = append(f.deletes, id)
+		resp := f.deleteResp
 		f.mu.Unlock()
+		if resp != nil {
+			json.NewEncoder(w).Encode(*resp)
+			return
+		}
 		json.NewEncoder(w).Encode(team.Approval{ID: id, State: team.StateCancelled})
 	default:
 		http.NotFound(w, r)

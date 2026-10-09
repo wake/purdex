@@ -128,20 +128,20 @@ func runAdoptCmd(ctx context.Context, args []string, getenv func(string) string,
 	// The id is a client UUID and the daemon's create is idempotent on it, so a dropped POST may be replayed.
 	if _, err := client.Do(ctx, http.MethodPost, "/api/team/approvals", create, &ap, daemonclient.Idempotent()); err != nil {
 		if ctx.Err() != nil {
-			return leadCancel(client, id, stderr, onCancelled)
+			return adoptCancel(client, id, stdout, stderr, onCancelled)
 		}
 		return adoptReportErr(err, stderr)
 	}
 	hung := 0
 	for ap.State == team.StateOpen {
 		if ctx.Err() != nil {
-			return leadCancel(client, id, stderr, onCancelled)
+			return adoptCancel(client, id, stdout, stderr, onCancelled)
 		}
 		var polled team.Approval
 		_, err := client.Do(ctx, http.MethodGet, fmt.Sprintf("/api/team/approvals/%s?wait=%d", id, team.MaxPollWaitS), nil, &polled)
 		if err != nil {
 			if ctx.Err() != nil {
-				return leadCancel(client, id, stderr, onCancelled)
+				return adoptCancel(client, id, stdout, stderr, onCancelled)
 			}
 			if errors.Is(err, daemonclient.ErrNoAnswer) || errors.Is(err, context.DeadlineExceeded) {
 				hung++
@@ -157,6 +157,26 @@ func runAdoptCmd(ctx context.Context, args []string, getenv func(string) string,
 		ap = polled
 	}
 	return adoptFinish(ap, stdout, stderr)
+}
+
+// adoptCancel is leadCancel for an adoption, whose approval has a side effect: the DELETE answers the row as it is
+// now, so a request the daemon had already closed (approved at the same moment the signal came) is reported as
+// what it became, never as cancelled. Only a row that really is cancelled (or still open, which the DELETE
+// cannot leave) exits 12.
+func adoptCancel(client *daemonclient.Client, id string, stdout, stderr io.Writer, onCancelled func()) int {
+	if onCancelled != nil {
+		onCancelled()
+	}
+	dctx, cancel := context.WithTimeout(context.Background(), leadCancelTimeout)
+	defer cancel()
+	var ap team.Approval
+	if _, err := client.Once(dctx, http.MethodDelete, "/api/team/approvals/"+id, nil, &ap); err != nil {
+		fmt.Fprintf(stderr, "pdx adopt: 取消申請時 daemon 回應：%v\n", err)
+	} else if ap.State != "" && ap.State != team.StateCancelled && ap.State != team.StateOpen {
+		return adoptFinish(ap, stdout, stderr)
+	}
+	fmt.Fprintf(stderr, "pdx adopt: 已取消申請（%s）\n", id)
+	return ExitCancelled
 }
 
 // adoptReportErr maps a client error of the create or a poll: the shared team table (exit 13 for a rule),

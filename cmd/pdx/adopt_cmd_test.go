@@ -125,6 +125,26 @@ func TestAdoptCmd_SignalCancels(t *testing.T) {
 	}
 }
 
+// The signal came while the daemon was approving: the DELETE answers the row as it became, and the command reports
+// that — the member exists, so exit 12 would be a lie. Mutation gate: always exit 12 after a cancel → red.
+func TestAdoptCmd_SignalAfterApprovalReportsTheApproval(t *testing.T) {
+	d := newFakeTeamDaemon(team.Approval{})
+	d.hold = true
+	won := adoptApproved()
+	d.deleteResp = &won
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-d.pollStarted
+		cancel()
+	}()
+	code, stdout, stderr := driveAdopt(t, ctx, d, "_def456")
+	var out adoptOutput
+	if code != ExitOK || json.Unmarshal([]byte(stdout), &out) != nil || out.TeamID != "team-1" {
+		t.Fatalf("code=%d stdout=%q stderr=%q, want the approval reported", code, stdout, stderr)
+	}
+}
+
 // ---- pdx release ----
 
 func TestReleaseCmd_ReleasedAndRefusals(t *testing.T) {
