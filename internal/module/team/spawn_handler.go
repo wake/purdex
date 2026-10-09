@@ -29,8 +29,8 @@ const errInternal = "internal"
 // answers 200 with it once it leaves running, or after spawnWait while it
 // still runs; the CLI then posts the same body again.
 func (m *Module) handleSpawn(w http.ResponseWriter, r *http.Request) {
-	if m.stopping() || m.tmux == nil {
-		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping or has no tmux", nil)
+	if m.stopping() {
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping", nil)
 		return
 	}
 	var req team.SpawnRequest
@@ -48,6 +48,14 @@ func (m *Module) handleSpawn(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		m.writeErr(w, http.StatusBadRequest, team.ErrOriginUnknown, "origin_inbox is not a live Claude Code session on this host", nil)
+		return
+	}
+	if req.Host != "" { // run by a paired member host (cross-host team spec §5.5)
+		m.handleRemoteSpawn(w, r, req, origin)
+		return
+	}
+	if m.tmux == nil {
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon has no tmux", nil)
 		return
 	}
 	row, ok := m.acceptSpawn(w, req, origin)

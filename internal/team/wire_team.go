@@ -224,6 +224,9 @@ type SpawnRequest struct {
 	Title       string `json:"title,omitempty"`  // the member's title (pdx msg name)
 	Model       string `json:"model,omitempty"`  // ValidModel; "" = the host's default model (U20)
 	Effort      string `json:"effort,omitempty"` // ValidEffort; "" = the host's default effort (U20)
+	// Host, when set, is the alias (or host id) of a PAIRED member host that runs the spawn (cross-host team spec §5.5): the
+	// cwd is then a path on THAT host, under the roots it granted.
+	Host string `json:"host,omitempty"`
 	// Task, when set, is the member's first task (T-2): the daemon creates it
 	// in the transaction that inserts the member row. Its description is the brief.
 	Task *SpawnTask `json:"task,omitempty"`

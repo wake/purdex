@@ -15,7 +15,7 @@ import (
 
 const remoteRef = "_rabc12" // newMember's "_r"+spawnOp for spawn op "abc12"
 
-var allKinds = []string{CmdAdopt, CmdRelease, CmdKill, CmdEnd, CmdLeadMoved, CmdVoid}
+var allKinds = []string{CmdAdopt, CmdRelease, CmdKill, CmdSpawn, CmdEnd, CmdLeadMoved, CmdVoid}
 
 func remoteFixture(t *testing.T) (*fixture, *fakeHostCaller) {
 	t.Helper()

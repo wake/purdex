@@ -47,6 +47,13 @@ func (o remoteOutcomes) ApplyOutcome(tx *sql.Tx, c commandRow, res peersmod.Call
 		return o.cas(tx, c, `state = ?, end_reason = ?, updated_at = ?, ended_at = ?`, []any{string(team.MemberReleased), reason, now, now}, rowReleasing)
 	case CmdKill:
 		return o.killAnswer(tx, c, res, refused, now)
+	case CmdSpawn:
+		// `accepted` changes nothing (the result comes as a fact). A refusal (host_not_allowed, cwd_outside_grant,
+		// capacity_exceeded, bad_request, unsupported_kind, …) fails the forwarded op with its code: the seat is free.
+		if refused {
+			return failRemoteSpawnIn(tx, c.MK, c.HostID, res.Code, now)
+		}
+		return nil
 	}
 	// end, lead_moved, void (and spawn, X4b): nothing on a member row; a refusal is logged once
 	if refused {
