@@ -103,15 +103,13 @@ interface ShouldNotifyParams {
   /** Some pane of some tab shows this agent (#1840: any leaf, not only a tab's primary pane). */
   hasTab: boolean
   settings: NotificationSettings
-  /** A session that is not tmux-backed (`cc-<id>`): it can never have a Purdex tab, so "no tab" is not a reason to stay quiet. */
-  nonTmux?: boolean
   notificationSilent?: boolean
   /** Caller extracts from event.detail?.error before passing in (spec §4, option A). */
   errorString?: string
 }
 
 export function shouldNotify(params: ShouldNotifyParams): boolean {
-  const { derived, eventName: rawEventName, compositeKey: ck, visibleInActiveTab, hasTab, settings, nonTmux = false, notificationSilent = false, errorString } = params
+  const { derived, eventName: rawEventName, compositeKey: ck, visibleInActiveTab, hasTab, settings, notificationSilent = false, errorString } = params
   // W2 transition: cc broadcasts PdxXxx; legacy literal keys live in shouldNotify
   // suppression checks and NotificationSettings.events. Normalize once at entry.
   const eventName = normalizeEventName(rawEventName)
@@ -122,7 +120,7 @@ export function shouldNotify(params: ShouldNotifyParams): boolean {
   if (derived === 'idle' && eventName === 'Notification') return false
   if (!settings.enabled) return false
   if (settings.events[eventName] === false) return false
-  if (!hasTab && !nonTmux && !settings.notifyWithoutTab) return false
+  if (!hasTab && !settings.notifyWithoutTab) return false
   // Only suppress when user is actively looking at this session:
   // both the app window must be focused AND a pane of the active tab must show it.
   if (visibleInActiveTab && document.hasFocus()) return false

@@ -36,20 +36,34 @@ describe('non-tmux (cc-<session id>) sessions', () => {
     localStorage.removeItem(STORAGE_KEYS.NOTIFICATION_SEEN)
   })
 
-  it('notifies without a tab although notifyWithoutTab is false', () => {
-    expect(shouldNotify({ ...base, nonTmux: true })).toBe(true)
+  it('stays quiet without a tab when notifyWithoutTab is false (no non-tmux exception)', () => {
+    expect(shouldNotify(base)).toBe(false)
   })
-  it('a tmux session with no tab stays quiet (behaviour unchanged)', () => {
-    expect(shouldNotify({ ...base, nonTmux: false })).toBe(false)
+  it('notifies without a tab when notifyWithoutTab is on', () => {
+    expect(shouldNotify({ ...base, settings: { ...defaultSettings, notifyWithoutTab: true } })).toBe(true)
+  })
+  it('notifies when the session has a tab', () => {
+    expect(shouldNotify({ ...base, hasTab: true })).toBe(true)
   })
   it('keeps the active-tab + focused-window suppression and the per-event/enabled switches', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true)
-    expect(shouldNotify({ ...base, nonTmux: true, visibleInActiveTab: true })).toBe(false)
-    expect(shouldNotify({ ...base, nonTmux: true, settings: { ...defaultSettings, enabled: false } })).toBe(false)
-    expect(shouldNotify({ ...base, nonTmux: true, settings: { ...defaultSettings, events: { Stop: false } } })).toBe(false)
+    const on = { ...base, settings: { ...defaultSettings, notifyWithoutTab: true } }
+    expect(shouldNotify({ ...on, visibleInActiveTab: true })).toBe(false)
+    expect(shouldNotify({ ...on, settings: { ...on.settings, enabled: false } })).toBe(false)
+    expect(shouldNotify({ ...on, settings: { ...on.settings, events: { Stop: false } } })).toBe(false)
   })
 
-  it('dispatches a desktop notification for a keyed non-tmux session with no tab', () => {
+  it('raises nothing for a keyed non-tmux session with no tab by default', () => {
+    const showNotification = vi.fn()
+    Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
+    const { unmount } = renderHook(() => useNotificationDispatcher())
+    useAgentStore.getState().handleNormalizedEvent(HOST, CODE, { agent_type: 'cc', status: 'idle', raw_event_name: 'PdxStop', broadcast_ts: 2 } as never)
+    expect(showNotification).not.toHaveBeenCalled()
+    unmount()
+  })
+
+  it('dispatches for a keyed non-tmux session with no tab when notifyWithoutTab is on', () => {
+    useNotificationSettingsStore.setState({ agents: { cc: { ...defaultSettings, notifyWithoutTab: true } } })
     const showNotification = vi.fn()
     Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
     const { unmount } = renderHook(() => useNotificationDispatcher())

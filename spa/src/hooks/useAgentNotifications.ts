@@ -11,7 +11,6 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { buildNotificationContent } from '../lib/notification-content'
 import { findPane, findTabAndPaneBySessionCode } from '../lib/pane-tree'
 import { executionIdOfAgentCode } from '../lib/nex/worker-agent-status'
-import { isNonTmuxAgentCode } from '../lib/non-tmux-agent'
 import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { clearSeenTs, requestBroadcastTs, requestIdOf, shouldDispatch, shouldDispatchRequest } from '../lib/notification-dedup'
@@ -67,7 +66,6 @@ export function useAgentNotifications(): void {
           visibleInActiveTab,
           hasTab,
           settings,
-          nonTmux: isNonTmuxAgentCode(sessionCode),
           notificationSilent: event.detail?.notification_silent === true,
           errorString,
         })) continue
