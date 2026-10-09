@@ -447,8 +447,8 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	}
 
 	// push is mounted only when [push] names an APNs directory (boot-only: spec §3), so its routes and the push.v1
-	// capability exist only then. A bad key fails the module's Init, and a failed Init stops the daemon at boot like any
-	// module's (core init: ...): someone who set apns_dir wants to hear about a broken key, not find push silently off.
+	// capability exist only then. A key that cannot be loaded soft-fails the module (it reports init_error through
+	// /api/info and serves nothing) instead of stopping the daemon: push is not a required feature.
 	c.CfgMu.RLock()
 	pushDir := c.Cfg.PushAPNsDir()
 	c.CfgMu.RUnlock()
