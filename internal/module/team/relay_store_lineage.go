@@ -90,15 +90,8 @@ func (s *Store) ChainRoots() (map[string]string, error) {
 	}
 	roots := make(map[string]string, len(pred)*2)
 	rootOf := func(sid string) string {
-		seen := map[string]bool{sid: true}
-		for {
-			p, ok := pred[sid]
-			if !ok || seen[p] {
-				return sid
-			}
-			seen[p] = true
-			sid = p
-		}
+		root, _ := chainRoot(sid, func(s string) (string, bool, error) { p, ok := pred[s]; return p, ok, nil })
+		return root
 	}
 	for sid, p := range pred {
 		roots[sid] = rootOf(sid)

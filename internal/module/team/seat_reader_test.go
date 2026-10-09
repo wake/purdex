@@ -24,15 +24,15 @@ func TestRootSessionOf(t *testing.T) {
 			t.Fatalf("root(%s) = %q err=%v", sid, got, err)
 		}
 	}
-	// a cycle (raw insert) stops at the last unseen session
+	// a cycle (raw insert) has one answer from every starting point, with a tail leading into it
 	lineage(t, s, "x", "y")
-	lineage(t, s, "y", "x")
-	got, err := s.RootSessionOf("x")
-	if err != nil || (got != "x" && got != "y") {
-		t.Fatalf("cycle = %q err=%v", got, err)
-	}
-	if want, _ := s.RootSessionOf("x"); want != got {
-		t.Fatal("cycle answer must be stable")
+	lineage(t, s, "y", "z")
+	lineage(t, s, "z", "x")
+	lineage(t, s, "tail", "z")
+	for _, sid := range []string{"x", "y", "z", "tail"} {
+		if got, err := s.RootSessionOf(sid); err != nil || got != "x" {
+			t.Fatalf("cycle root(%s) = %q err=%v, want x", sid, got, err)
+		}
 	}
 }
 
@@ -40,6 +40,8 @@ func TestRootSessionOf_AgreesWithChainRoots(t *testing.T) {
 	s := openTestStore(t)
 	lineage(t, s, "c", "b")
 	lineage(t, s, "b", "a")
+	lineage(t, s, "x", "y") // a damaged cycle must agree too
+	lineage(t, s, "y", "x")
 	roots, err := s.ChainRoots()
 	if err != nil {
 		t.Fatal(err)

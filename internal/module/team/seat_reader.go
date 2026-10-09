@@ -9,23 +9,46 @@ import (
 )
 
 // RootSessionOf walks one session's predecessors to the root of its relay chain; a session absent from lineage is
-// its own root. A cycle (never written, but a raw row could) stops at the last unseen session, as ChainRoots does.
+// its own root. Same answer as ChainRoots (both walk with chainRoot).
 func (s *Store) RootSessionOf(sessionID string) (string, error) {
-	seen := map[string]bool{sessionID: true}
-	sid := sessionID
-	for {
+	return chainRoot(sessionID, func(sid string) (string, bool, error) {
 		var p string
 		err := s.db.QueryRow(`SELECT predecessor_session_id FROM session_lineage WHERE session_id = ?`, sid).Scan(&p)
 		if errors.Is(err, sql.ErrNoRows) {
-			return sid, nil
+			return "", false, nil
 		}
 		if err != nil {
-			return "", fmt.Errorf("read lineage %s: %w", sid, err)
+			return "", false, fmt.Errorf("read lineage %s: %w", sid, err)
 		}
-		if seen[p] {
+		return p, true, nil
+	})
+}
+
+// chainRoot follows predecessors to the session that has none. A cycle (never written, but a damaged row could be)
+// has no root: it answers the smallest session id on the cycle, so every session of one chain gets the same key
+// whichever one the walk starts from.
+func chainRoot(sid string, pred func(string) (string, bool, error)) (string, error) {
+	pos := map[string]int{sid: 0}
+	path := []string{sid}
+	for {
+		p, ok, err := pred(sid)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
 			return sid, nil
 		}
-		seen[p] = true
+		if at, seen := pos[p]; seen {
+			root := path[at]
+			for _, c := range path[at:] {
+				if c < root {
+					root = c
+				}
+			}
+			return root, nil
+		}
+		pos[p] = len(path)
+		path = append(path, p)
 		sid = p
 	}
 }
