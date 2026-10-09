@@ -30,6 +30,7 @@ type fakeHostCaller struct {
 	paired  map[string]bool
 	caps    map[string]ipeers.TeamCaps
 	capsErr error
+	aliases map[string]string // alias → host id
 }
 
 func (f *fakeHostCaller) Call(_ context.Context, host, path string, body any) peersmod.CallResult {
@@ -49,6 +50,15 @@ func (f *fakeHostCaller) Paired(h string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.paired == nil || f.paired[h]
+}
+func (f *fakeHostCaller) HostIDOf(alias string) string { return f.aliases[alias] }
+func (f *fakeHostCaller) AliasOf(host string) string {
+	for a, h := range f.aliases {
+		if h == host {
+			return a
+		}
+	}
+	return ""
 }
 func (f *fakeHostCaller) TeamCaps(_ context.Context, h string) (ipeers.TeamCaps, error) {
 	f.mu.Lock()

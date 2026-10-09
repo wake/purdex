@@ -23,6 +23,11 @@ type Store struct {
 	db *sql.DB
 	// localHostID is this daemon's host id (set at Init): the sweepers look at the rows that live on it.
 	localHostID string
+	// newID and aliasFn let the store build the commands a transaction of its own enqueues (the lead moved, X3b-1b); set at Init.
+	newID func() string
+	// onCommands wakes the commands pump after a store transaction enqueued commands (set at Init).
+	onCommands func()
+	aliasFn    func() string
 
 	// failBeforeCommandLog, when set, fails ApplyTeamCommand after the command's changes and before its log insert
 	// (test seam for the one-transaction crash cut). nil in production.
@@ -583,4 +588,12 @@ func (s *Store) OpenByOrigin(sessionID string, kind team.Kind) (team.Approval, b
 		return team.Approval{}, false, fmt.Errorf("open approval by origin %s: %w", sessionID, err)
 	}
 	return a, true, nil
+}
+
+// alias is this host's peer alias for the addresses commands carry ("" before Init).
+func (s *Store) alias() string {
+	if s.aliasFn == nil {
+		return ""
+	}
+	return s.aliasFn()
 }

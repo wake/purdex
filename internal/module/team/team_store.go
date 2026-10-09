@@ -456,7 +456,25 @@ func (s *Store) ListLiveTeams() ([]team.Team, error) {
 // a relay claimed after the caller looked still wins. ended says whether
 // this call ended it. Members are not touched (D4).
 func (s *Store) EndTeam(id, leadSessionID, reason string, at int64) (bool, error) {
-	res, err := s.db.Exec(`UPDATE teams SET ended_at = ?, end_reason = ?
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("end team %s: %w", id, err)
+	}
+	defer tx.Rollback()
+	ended, err := endTeamTx(tx, id, leadSessionID, reason, at)
+	if err != nil || !ended {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("end team %s: %w", id, err)
+	}
+	return true, nil
+}
+
+// endTeamTx is EndTeam's one guarded UPDATE on the caller's transaction — the only copy of that SQL, shared with
+// EndTeamWithCommands (which enqueues the `end` commands in the same transaction).
+func endTeamTx(tx *sql.Tx, id, leadSessionID, reason string, at int64) (bool, error) {
+	res, err := tx.Exec(`UPDATE teams SET ended_at = ?, end_reason = ?
 		WHERE id = ? AND lead_session_id = ? AND ended_at = 0
 		  AND NOT EXISTS (SELECT 1 FROM relay_ops
 			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,

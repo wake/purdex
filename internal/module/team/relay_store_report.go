@@ -197,14 +197,38 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: begin: %w", id, err)
 	}
 	defer tx.Rollback()
+	var led []string // the teams this cleared will move: read before it runs (X3b-1b)
+	if r.State == team.RelayCleared && s.newID != nil {
+		// reportRelayIn's first statement is a write, so a concurrent report waits instead of failing on a stale snapshot:
+		// this read must not come first — a no-op write takes the lock
+		if _, err := tx.Exec(`UPDATE relay_ops SET updated_at = updated_at WHERE id = ?`, id); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lock: %w", id, err)
+		}
+		var old string
+		if err := tx.QueryRow(`SELECT session_id FROM relay_ops WHERE id = ?`, id).Scan(&old); err == nil {
+			if led, err = ledTeamsTx(tx, old); err != nil {
+				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: led teams: %w", id, err)
+			}
+		}
+	}
 	op, res, err := reportRelayIn(tx, id, r)
 	if err != nil || res != ReportApplied {
 		return op, res, err
+	}
+	if r.State == team.RelayCleared && s.newID != nil && len(led) > 0 {
+		// the lead moved: every host with a live remote member of its team is told, in this very transaction (X3b-1b)
+		lead := team.TeamLead{SessionID: r.NewSessionID, Ref: r.NewRef, Address: s.alias() + "/" + r.NewRef, PID: op.PID, ProcStart: op.ProcStart}
+		if err := s.enqueueLeadMovedTx(tx, led, lead, s.newID, r.At); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lead_moved: %w", id, err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: commit: %w", id, err)
 	}
 	s.notifyOp(id)
+	if len(led) > 0 && s.onCommands != nil {
+		s.onCommands() // lead_moved may have been enqueued: the pump goes now
+	}
 	return op, res, nil
 }
 

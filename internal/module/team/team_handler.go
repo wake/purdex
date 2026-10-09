@@ -186,6 +186,10 @@ func (m *Module) handleKill(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, fmt.Sprintf("%q is no member of team %s", req.Target, t.ID), nil)
 		return
 	}
+	if m.isRemoteRow(mr) {
+		m.killRemote(w, t, mr)
+		return
+	}
 	if mr.State == team.MemberReleased {
 		// Let go: the session is nobody's member and lives on. Refused before any tmux call (codex attack on PL-1b2).
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, fmt.Sprintf("%q was released from team %s", req.Target, t.ID), nil)
@@ -313,6 +317,11 @@ func (m *Module) killMember(mr memberRow) (int, string, string) {
 // member's live address (membersNamed); "<name> [<ref>]" must match both. No
 // match, or more than one, is ok=false.
 func (m *Module) matchMember(t team.Team, target string) (memberRow, bool, error) {
+	if host, sess, qualified := ipeers.SplitAddress(target); qualified {
+		if alias, hostID := m.selfHost(); !ipeers.HostMatches(host, alias, hostID) {
+			return m.matchRemoteMember(t, host, sess)
+		}
+	}
 	name, ref, ok := m.parseKillTarget(target)
 	if !ok {
 		return memberRow{}, false, nil
@@ -409,7 +418,7 @@ func (m *Module) membersByRef(rows []memberRow, ref string) ([]memberRow, error)
 func (m *Module) membersNamed(rows []memberRow, name string) ([]memberRow, error) {
 	var hits []memberRow
 	for _, r := range rows {
-		if r.State != team.MemberActive {
+		if r.State != team.MemberActive || m.isRemoteRow(r) { // a remote member has no name in this host's registry
 			continue
 		}
 		o, ok, err := m.origins.ResolveOriginBySession(r.SessionID)
@@ -421,4 +430,47 @@ func (m *Module) membersNamed(rows []memberRow, name string) ([]memberRow, error
 		}
 	}
 	return hits, nil
+}
+
+// matchRemoteMember is matchMember for "<other host's alias>/<ref>" (cross-host spec §4.2): the alias names a paired host, the
+// rows looked at are the team's rows on THAT host (by host id, never by alias), and only a ref names one — a remote member's
+// name lives in its own host's registry. No such host, no such ref, or more than one is ok=false.
+func (m *Module) matchRemoteMember(t team.Team, hostAlias, sess string) (memberRow, bool, error) {
+	ref := asRef(sess)
+	if m.cmdCaller == nil || ref == "" {
+		return memberRow{}, false, nil
+	}
+	// the host part is a peer alias or a peer host id (ipeers address rules)
+	hostID := m.cmdCaller.HostIDOf(hostAlias)
+	if hostID == "" && m.cmdCaller.AliasOf(hostAlias) != "" {
+		hostID = hostAlias
+	}
+	if hostID == "" {
+		return memberRow{}, false, nil
+	}
+	rows, err := m.store.MembersOf(t.ID)
+	if err != nil {
+		return memberRow{}, false, err
+	}
+	var hits []memberRow
+	for _, r := range rows {
+		if r.HostID == hostID && r.Ref == ref {
+			hits = append(hits, r)
+		}
+	}
+	if len(hits) > 1 { // a session released and adopted again leaves two rows with one ref: the one in play is the member
+		var live []memberRow
+		for _, h := range hits {
+			if h.State == team.MemberActive || h.State == team.MemberJoining || h.State == team.MemberReleasing || h.State == team.MemberKilling {
+				live = append(live, h)
+			}
+		}
+		if len(live) == 1 {
+			hits = live
+		}
+	}
+	if len(hits) != 1 {
+		return memberRow{}, false, nil
+	}
+	return hits[0], true, nil
 }

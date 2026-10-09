@@ -35,6 +35,10 @@ func (m *Module) handleRelease(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, fmt.Sprintf("%q is no member of team %s", req.Target, t.ID), nil)
 		return
 	}
+	if m.isRemoteRow(mr) {
+		m.releaseRemote(w, t, mr)
+		return
+	}
 	if mr.State != team.MemberActive {
 		m.writeJSON(w, http.StatusOK, m.memberView(mr))
 		return

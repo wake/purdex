@@ -57,6 +57,8 @@ type outboxStore interface {
 type hostCaller interface {
 	Call(ctx context.Context, targetHostID, path string, body any) peersmod.CallResult
 	Paired(hostID string) bool
+	HostIDOf(alias string) string
+	AliasOf(hostID string) string
 	TeamCaps(ctx context.Context, hostID string) (ipeers.TeamCaps, error)
 }
 
