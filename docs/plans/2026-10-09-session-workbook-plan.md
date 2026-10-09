@@ -107,17 +107,27 @@ Revision 2 (2026-10-09 23:xx): codex plan review `task-mv12whuc-yxlm33` (15 find
   toward the hourly cap; at the cap → no re-write, cut) → `Finish(ok)`. The next job of that conversation is handed out
   only after `Finish`, so its input (`previous_status`, `recent_entries`, `open_todos`) never reads a provisional entry;
   the push never waits for the re-write; one `ok` event per entry.
-- **D10 Jobs** (spec §5.1). A job = `{id, conv_key, entry_id, kind: turn | rewrite | retry | refresh, input built at
-  hand-out}`, in memory (a restart re-derives nothing: D9 fails the rows). `next` hands out the head job of the asking
-  session's conversation only when no job of that conversation is leased; a lease lasts `timeout_ms` + 10 s (30 + 10 s);
-  a lease that runs out → the entry `failed: lost` (not retried) and the queue moves on; a `result` whose job id is not
-  leased (expired, unknown, twice) → 409 `not_leased`, ignored. One `next` long-poll per stream at a time (a second waits
-  for the first to return). The outcome table of spec §5.1 maps the result; `empty-reply` / non-JSON → one `retry` job
-  for the same entry, then `failed: format`.
+- **D10 Jobs** (spec §5.1). A job = `{id, conv_key, entry_id, kind: turn | rewrite | refresh, attempt, input built at
+  hand-out}` — the wire kinds are exactly the spec's three; a retry is the same kind with `attempt` 2, never a new kind.
+  In memory (a restart re-derives nothing: D9 fails the rows). `next` hands out the head job of the asking session's
+  conversation only when no job of that conversation is leased, and only to an **eligible** session: a `turn` /
+  `rewrite` job (no transcript involved, the input is prebuilt) to any capable live session of the conversation,
+  preferring the entry's own session; a `refresh` job only to the session it was asked for (D14) — any other session
+  gets 204 for it. A lease lasts `timeout_ms` + 10 s (30 + 10 s); a lease that runs out → the entry `failed: lost` (not
+  retried) and the queue moves on; a `result` whose job id is not leased (expired, unknown, twice, or from another
+  stream) → 409 `not_leased`, ignored. `next` and `result` carry the mod's **`stream`** id (D11) besides `session_id`:
+  one `next` long-poll per stream at a time (a second from the same stream waits for the first to return); a reloaded
+  mod's new stream is a new poller; a lease is bound to the stream that took it. The outcome table of spec §5.1 maps the
+  result; `empty-reply` / non-JSON → the same job again with `attempt` 2, then `failed: format`.
 - **D11 Capability by envelope** (spec §5.1, §10.4 point 4). Wire v1 gains an optional envelope field `caps: [string]`
-  (absent = none) — the mod sends `["workbook.v2"]` on every batch (the 10 s heartbeat keeps it fresh); the registry keeps
-  `caps` + the time per stream, and a session counts as capable when the stream whose current sid it is announced it
-  within 30 s. A turn of an incapable session → `skipped: no_mod` at insert (no job). The events answer gains
+  (absent = none) — the mod sends `["workbook.v2"]` on every batch from WB-1c, and **`"workbook.refresh"` too from
+  WB-2b-ii** (a mod that can run a `refresh` job); the 10 s heartbeat keeps it fresh; the registry keeps `caps` + the time
+  per stream, and a session counts as capable (for turns: `workbook.v2`; for a refresh: `workbook.refresh`) when the
+  stream whose current sid it is announced it within 30 s. So the daemon of WB-2b-i never hands a refresh to a mod of
+  WB-1c (the refresh route answers 409 `not_live` until a `workbook.refresh` mod is live). A turn of an incapable session →
+  `skipped: no_mod` at insert (no job). A change of a conversation's refresh availability (a capable stream appears, or
+  its 30 s run out — checked on each envelope and by a 10 s sweep) emits `workbook.refresh_available {conv_key,
+  available}`; the conversation answer carries `refresh_available` (WB-2b-i). The events answer gains
   `workbook: true` when the conversation of any of the stream's sessions has a job waiting that nobody leased (a refresh,
   or a left-over), so the mod asks `next` (b). Both are additive (an older daemon ignores `caps`; an older mod ignores
   `workbook`). The U1 spec §6.2 gets both lines in WB-1b′-c.
@@ -126,13 +136,19 @@ Revision 2 (2026-10-09 23:xx): codex plan review `task-mv12whuc-yxlm33` (15 find
   `dropped_titles: []` always; `redact.String` on every string; the system block = the prompt_ver 2 constant, marked
   `cache: true`.
 - **D13 Todos** (spec §5.4–§5.5): applied through the job's map in the push-line transaction (D3); unknown `n` ignored;
-  a todo no longer open stays; `done` wins over `dropped`; the first 2 adds (10 for a refresh), title cut at 30, detail at
-  the last sentence end ≤ 100 (none → 100), an add equal (trimmed) to an open title ignored, none added at 30 open (one
-  log line); `skip: true` → the entry `skipped: model` and its todo changes still applied. Each change records
+  a todo no longer open stays; `done` wins over `dropped`; closings apply first, then the adds one by one — the first 2
+  adds (10 for a refresh), title cut at 30, detail at the last sentence end ≤ 100 (none → 100), an add equal (trimmed) to
+  an open title (including one added earlier in the same batch) ignored, and the 30-open cap re-checked before each add
+  (29 open + 2 adds → 30; the rest ignored with one log line); `skip: true` → the entry `skipped: model` and its todo changes still applied. Each change records
   `added_entry_id` / `closed_entry_id` / `closed_by` (`model` | `refresh`).
 - **D14 Refresh** (spec §5.6): `POST …/refresh` (Mac) or the mod's `/workbook refresh` → a `refresh` entry
-  (`kind: refresh`, `pending`) and job at the queue's tail; only when the conversation has a capable live session (else 409
-  `not_live`); one at a time (409 `refresh_pending`). Its result: `{status, todos}` validated as D13 (≤ 10 adds, no push,
+  (`kind: refresh`, `pending`) and job at the queue's tail; only when the conversation has a `workbook.refresh`-capable
+  live session (else 409 `not_live`); one at a time (409 `refresh_pending`). **Its row** (the deployed schema keeps
+  `session_id` / `turn_id` NOT NULL and `UNIQUE(session_id, turn_id)`): `session_id` = the session it runs in — the
+  `/workbook refresh` caller, or for the Mac route the capable session whose stream announced `workbook.refresh` most
+  recently; `turn_id = "r:" + <request unix ms> + "-" + <per-daemon seq>` (unique); `turn_at` = the request time,
+  `turn_seq` 0. The job goes only to that session (D10); if that session's capability lapses before the job is leased →
+  `failed: lost`. Its result: `{status, todos}` validated as D13 (≤ 10 adds, no push,
   no thing) → one transaction writes the status, the todo changes and the entry (`ok`, `thing` = the current thing,
   `entry` = 「重整：完成 a、移除 b、新增 c」) — no push hold involved.
 - **D4 StopFailure gets a turn-end event.** `TurnEndEvent` gains `Failed bool`; `publishTurnEnd` also publishes an accepted
@@ -213,7 +229,7 @@ returns as WB-1b′-b with jobs instead of runner calls.
 2. **Todo store**: `OpenTodos(conv, 30)` (oldest first), `Todos(conv, state, limit, beforeID)`, `ApplyTodoChanges(tx,
    conv, entryID, done, dropped []int64, adds []TodoAdd, by string)` (D13; returns the changed rows for the event), and
    the push-line transaction `SetPushLineV2(entryID, out, todoChanges)` = thing + push + status + todo changes + usage in
-   one transaction (D3). Tests: D13's rules one by one; the done record order; a todo closed by a refresh keeps
+   one transaction (D3). Tests: D13's rules one by one, incl. 29 open + 2 adds → 30 and a duplicate title inside one batch; the done record order; a todo closed by a refresh keeps
    `closed_by: refresh`.
 3. **Prompt v2 constants**: turn, re-write, refresh — `PromptVersion = 2`; a test asserts each equals its fenced block in
    `docs/specs/2026-10-10-session-workbook-prompt-v2.md` byte for byte (the v1 test stays for the v1 file). Start writes
@@ -245,15 +261,18 @@ Size ~750 lines incl. tests.
 
 ## WB-1b′-c daemon: the mod socket routes and the events wire
 
-1. `POST /mod/v1/workbook/next` `{session_id, wait_ms}` (0–15 000; out of range or a bad session id → 400) → 200
-   `{job}` / 204; the handler extends its write deadline to `wait_ms` + 5 s (the server's 10 s `WriteTimeout`, §0) and
-   returns at once on the request context's end. `POST /mod/v1/workbook/result` `{job_id, answered, text?, reason?,
-   status?, error?, usage, latency_ms}` → 200 `{more}` / 409 `not_leased` / 400. Same peer-uid gate; never on the TCP
-   mux; body cap as the socket's.
+1. `POST /mod/v1/workbook/next` `{stream, session_id, wait_ms}` (0–15 000; out of range, a bad stream id or session id →
+   400) → 200 `{job}` / 204; the handler extends its write deadline to `wait_ms` + 5 s (the server's 10 s
+   `WriteTimeout`, §0) and returns at once on the request context's end. `POST /mod/v1/workbook/result` `{stream, job_id,
+   answered, text?, reason?, status?, error?, usage, latency_ms}` → 200 `{more}` / 409 `not_leased` (incl. a lease held by
+   another stream) / 400. Same peer-uid gate; never on the TCP mux; body cap as the socket's.
 2. Wire v1 additions (D11): envelope `caps` recorded per stream; answer `workbook: true`; the U1 spec §6.1 / §6.2 lines.
 3. Tests: a 15 s long-poll answered at 14 s is delivered whole (the write deadline); 204 at the end of the wait; a client
-   that goes away ends the wait; one long-poll per stream; `caps` freshness (30 s) gates jobs; the answer flag appears for
-   a waiting refresh and not otherwise; an older mod (no `caps`) → `no_mod`; the TCP mux does not serve the routes.
+   that goes away ends the wait; one long-poll per stream, and a reloaded mod (new stream, same session) polls alongside
+   the old stream until it ends without either getting the same job; a result from another stream → 409; `caps`
+   freshness (30 s) gates jobs; turn jobs go to any capable session of the conversation (old and new session of a relay
+   both polling → one of them gets it once); the answer flag appears for a waiting refresh and not otherwise; an older mod
+   (no `caps`) → `no_mod`; the TCP mux does not serve the routes.
 
 Size ~500 lines incl. tests.
 
@@ -265,10 +284,11 @@ In `cmd/pdx/plugin/purdex/hooks/` — a `workbook.js` module required by `events
 2. Ask `next` (spec §5.1 when-to-ask): after a main-thread `turn.complete` with reason `answer` or `error` (wait 15 000);
    when an events answer has `workbook: true`; after a result answered `more`. Always from a `$.clock.after(0)` timer,
    never inside a hook; one job at a time (a flag; a second trigger while busy only marks "ask again after").
-3. Run: `turn` / `rewrite` / `retry` → `$.model.complete` with the job's `complete` (keys mapped to the API's:
+3. Run: `turn` / `rewrite` → `$.model.complete` with the job's `complete` (keys mapped to the API's:
    `max_tokens` → `maxTokens`, `timeout_ms` → `timeoutMs`, `cache` kept); a refused call (rejection) → result
-   `{answered: false, reason: "refused"}`; post the result with `usage` and `latency_ms`; on a socket failure drop the job
-   (the lease runs out → `failed: lost`).
+   `{answered: false, reason: "refused"}`; post the result with `stream`, `usage` and `latency_ms`; on a socket failure
+   drop the job (the lease runs out → `failed: lost`). A `refresh` job never reaches this mod (it does not announce
+   `workbook.refresh`, D11); if one did, it answers `refused`.
 4. Tests in the mod's test harness (the one `events.js` uses): the trigger set (subagent `turn.complete` ignored); one at a
    time; the key mapping; each outcome mapped; nothing runs inside a hook; the caps field on every batch.
 5. **Real-session gate** (before merge): one disposable tmux session (`-L`, `unset TMUX`) with the built mod: a turn → an
@@ -281,15 +301,20 @@ Size ~450 lines incl. tests.
 
 1. Entries gain `kind`, `usage {in, out, cache_read}`, `todo_changes {added, done, dropped: [{id, title}]}` (from the
    todo rows by entry id); the conversation answer gains `todos {open, done (newest 20)}`; `GET …/todos?state=&limit=&
-   before=`; `POST …/refresh` → 202 `{entry_id}` / 409 `not_live` / 409 `refresh_pending` (D14); host event
-   `workbook.todos` `{conv_key, session_id, todos}` from the store hook that applies todo changes; capability
-   `workbook.v2` when the module is ready; `deviceAllowed` gains the todos GET (not the refresh).
-2. Tests: shapes; paging by todo id; refresh 202 / 409s; the todos event per change; device scope pinned list.
-Size ~500 lines.
+   before=`; `POST …/refresh` → 202 `{entry_id}` / 409 `not_live` / 409 `refresh_pending` (D14: the refresh row's
+   `session_id` / `turn_id`); the conversation answer gains `refresh_available` and host event
+   `workbook.refresh_available {conv_key, available}` on a change (D11); host event `workbook.todos` `{conv_key,
+   session_id, todos}` from the store hook that applies todo changes; capability `workbook.v2` when the module is ready;
+   `deviceAllowed` gains the todos GET (not the refresh).
+2. Tests: shapes; paging by todo id; refresh 202 / 409s; two refresh rows of one session never collide (`r:` ids); a
+   session with only `workbook.v2` (a WB-1c mod) → 409 `not_live`; `refresh_available` true / false and its event on the
+   transitions (a capable stream appears, its 30 s lapse); the todos event per change; device scope pinned list.
+Size ~550 lines.
 
 ## WB-2b-ii mod: refresh
 
-`workbook.js`: a `refresh` job → `$.model.fork({prompt})` (`nothing-to-fork` → result reason, daemon maps it); the
+`workbook.js`: announce `"workbook.refresh"` in `caps` (D11); a `refresh` job → `$.model.fork({prompt})`
+(`nothing-to-fork` → result reason, daemon maps it); the
 `/workbook refresh` slash command (registered from `events.js` / `workbook.js`, not `register.js`) asks the daemon through
 the socket (a small `POST /mod/v1/workbook/refresh {session_id}` on the socket, same semantics as the TCP route) and then
 asks `next`. Tests: fork mapping; the command's three answers (202 / not_live / pending) as a one-line notice in the
@@ -382,11 +407,19 @@ Size ~650 lines.
    `fetchTodos(hostId, sessionId, {state, limit, before})` for the done record's paging; `workbook.todos` events upsert
    todos by id; `postRefresh(hostId, sessionId)` → 202 `{entry_id}` / 409 `not_live` / 409 `refresh_pending` (returned as
    typed results, not thrown); the store keeps `byConv[...].todos {open (oldest first), done (newest first), doneOldestId}`
-   and `refreshPending`.
+   and `refreshAvailable` (from the conversation answer and `workbook.refresh_available` events). **Refresh pending is
+   derived, not stored**: true while the conversation holds an entry with `kind: refresh` and `state: pending` (the 202's
+   `entry_id` is upserted as such at once), so it ends with that entry's terminal event or the next refetch, and a
+   reconnect cannot leave it stuck.
+7. **Load to an entry** (codex v4 #8–#9): `loadUntil(hostId, convKey, entryId)` pages `before=` from the oldest loaded
+   entry until the entry is loaded, at most 5 pages (100 entries); not found → `false` (the caller shows 「找不到這筆紀錄」
+   and stays at the top).
 Tests: parsers (ms units, v2 fields optional on a v1 daemon); upsert / dedupe / ordering; first-appearance fetch once per
 seat; reconnect refetch once per seat; 404 → missing → an entry event fills it **without** a fetch (fetch count unchanged
 after 50 entry events); status event after a reload maps through `session_id`; todos event moves an item open → done;
-refresh results typed; host forget; capability off → no fetch at all.
+refresh results typed; refresh pending true after the 202 and false after the entry's `ok` / `failed` event and after a
+refetch that finds it terminal; `refreshAvailable` follows its event; `loadUntil` finds an entry on page 3, gives up
+after 5; host forget; capability off → no fetch at all.
 Size ~650 lines.
 
 ## WA-2b-1 SPA: team panel rows to the prototype, task line, drill-in, ended list, toolbar
@@ -421,15 +454,17 @@ Size ~650 lines.
    entry its todo changes 「＋ title」 / 「✓ title」 / 「－ title」; a refresh entry reads 「重整：完成 a、移除 b、新增 c」;
    `pending` 「整理中…」, `failed` 「整理失敗」 + reason on hover, `skipped` hidden; 「更多」 pages.
 3. v2: a 「紀錄｜待辦」 switch in the header — 「待辦」 = open todos, then 「已完成」 (done record, newest first: time,
-   title, the closing entry's thing or 「重整」; a click shows that entry in 「紀錄」, highlighted).
-4. v2: 「重整」 (`ArrowsClockwise`) in the header, enabled when the conversation has a capable live session (the 409
-   `not_live` answer disables it with a tooltip until the next roster / events change); 「重整中…」 while its entry is
-   `pending`; tooltip: 「用主模型讀完整段對話重整狀況與待辦（會用較多 token）」; `refresh_pending` → shows 「重整中…」.
+   title, the closing entry's thing or 「重整」; a click switches to 「紀錄」 and `loadUntil(closed_entry_id)` → scroll and
+   highlight, or 「找不到這筆紀錄」).
+4. v2: 「重整」 (`ArrowsClockwise`) in the header, enabled iff `refreshAvailable` (WA-1.6; disabled tooltip 「這段對話目前
+   沒有可重整的 session」); 「重整中…」 while refresh pending is derived true (WA-1.6); a 409 `not_live` refetches the
+   conversation (the flag corrects itself), `refresh_pending` shows 「重整中…」; tooltip when enabled:
+   「用主模型讀完整段對話重整狀況與待辦（會用較多 token）」.
 5. Back control when `from:'team'`. Tab-hosted rule: view (紀錄 / 待辦) and scroll per `convKey` in module-level memos
    (`transcript-scroll-memory.ts` pattern); a real `TabContent` switch-away-and-back test.
-Tests: grouping and collapse; todo change lines; refresh entry text; the switch and the done record's jump into 紀錄;
-refresh enabled / disabled / pending; v1 daemon → no 待辦, no switch, no 重整; scroll and view restored after a real tab
-switch.
+Tests: grouping and collapse; todo change lines; refresh entry text; the switch and the done record's jump into 紀錄
+(loaded, on a later page, not found); refresh enabled / disabled / pending → done; v1 daemon → no 待辦, no switch, no 重整;
+scroll and view restored after a real tab switch.
 Screenshot gate (zh-TW, dark): 紀錄 with todo lines and a refresh entry, 待辦 + 已完成, 重整中…, expanded mode.
 Size ~700 lines.
 
@@ -441,7 +476,11 @@ sessions); a 「資訊」 button opens the old Tab-info content (a host without 
 itself); a pinned 「目前狀況」 card; a segmented 「紀錄｜待辦｜已完成」 (default 紀錄, remembered on the device); 紀錄
 grouped as on the Mac with todo change lines and refresh entries; 待辦 title + detail (two lines, tap to expand), read-only;
 已完成 newest first, a tap jumps into 紀錄; a workbook push opens 紀錄 at the entry, highlighted; no refresh; v2 parts
-behind `workbook.v2` on fixtures until WB-2b-i deploys.
+behind `workbook.v2` on fixtures until WB-2b-i deploys. Shipped in purdex-ios 0.6.32 (#68). **Paging rules** (codex v4
+#8): 紀錄 and 已完成 page with `before=` (entry id / todo id); a push or a done item pointing at an entry not loaded pages
+back at most 5 pages (100 entries), then shows 「找不到這筆紀錄」 at the top. **iOS acceptance** (88's screenshot gate,
+then on a real device after WB-2b-i): the seven screenshots of #68 redone with real data; a push opened from the lock
+screen lands on its entry; a done item older than the first page is found.
 
 ## 7. Order
 
@@ -461,6 +500,12 @@ Deploy: WB-1b′-* are inert until WB-1c (no mod announces `workbook.v2`, so eve
 - A result for a job that is not leased → 409 `not_leased` (spec §5.1 is silent).
 - The TI spec §4.4 line-2 wording (model / effort / context) is amended to the prototype in WA-2b-1 (the user deferred
   it to the task line, 2026-10-10).
+- From the v4 plan review (`task-mv18hq0h-fz5f1l`): a second mod capability `workbook.refresh` (a refresh goes only to a
+  mod that can run it, so WB-2b-i may deploy before WB-2b-ii); the refresh row's `session_id` / `turn_id = "r:…"`
+  (spec §6's NOT NULL / UNIQUE kept); `refresh_available` on the conversation answer + host event
+  `workbook.refresh_available` (the Mac needs it to enable 「重整」, spec §10.1); `stream` on `next` / `result`; turn
+  jobs may go to any capable session of the conversation, a refresh only to its own session; wire job kinds stay
+  `turn | rewrite | refresh` (a retry is `attempt` 2).
 
 Earlier revisions:
 
