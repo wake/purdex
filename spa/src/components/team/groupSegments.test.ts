@@ -4,8 +4,8 @@ import { groupSegments } from './groupSegments'
 import type { TeamTabMark } from './team-display'
 
 const mark = (teamKey: string, role: 'lead' | 'member'): TeamTabMark => ({
-  teamKey, color: '#a78bfa', label: teamKey, full: teamKey, truncated: false, tooltip: teamKey, role,
-  first: false, last: false, collapsed: false, hidden: false, hiddenCount: 0, seatState: 'active', hostAlias: '',
+  teamKey, color: '#a78bfa', role,
+  first: false, last: false, collapsed: false, hidden: false, seatState: 'active', hostAlias: '',
 })
 const marks: Record<string, TeamTabMark> = {
   lead: mark('T', 'lead'), a: mark('T', 'member'), b: mark('T', 'member'),

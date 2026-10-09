@@ -1,6 +1,6 @@
 // spa/src/components/TabBar.team.test.tsx — the team group on the top tab bar (plan TI-2, spec §4.2, §5).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import type { DragEndEvent } from '@dnd-kit/core'
 import { TabBar } from './TabBar'
 import { TeamDisplayProvider } from './team/TeamDisplayProvider'
