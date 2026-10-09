@@ -178,7 +178,7 @@ nav.toc a{display:block;padding:2px 0}
       transcript、hook、statusline 降成「沒有 mod 時」的退路。</li>
     <li><b>用量是正式元件</b>（§7）：model、effort、context、5 小時與 7 天額度、成本。桌機放在狀態列；手機放在輸入框上方一條，點開是抽屜。</li>
     <li><b>指揮台</b>採用 Collie 式「從 terminal 轉化的語言」。iOS 的 chat-v2 已經是它的現況版，Mac App 的 room 也是同一個方向。</li>
-    <li><b>聊天＝對話式介面</b>：主角是對話，工作過程退到背景。標竿是 agent chat 類產品。</li>
+    <li><b>聊天＝資訊更簡略的對談模式</b>（10-09 使用者更正）：同一份對話、同一個 dock，只留你說的和 agent 回的，每回合的工作收成一列；比指揮台簡略，不是另一種資料，也不必等其他底層。多人同房只是延伸的例子。</li>
     <li><b>燈號 v2</b>（§12）：現在的 16 種不準情況中，11 種可以靠 mod 事件、序號和心跳修掉，另外 3 種要改 daemon 和 SPA 的聚合與重連。</li>
     <li><b>dock</b>：提問、核准、計畫放在輸入列上方；指揮台和聊天畫，終端機模式只顯示一條提示列（§8）。資料通道是 P8a、P8b（CC 終端機）、Nexen 權限通道（執行體）、app-server（Codex）。</li>
     <li><b>決策紀錄</b>（§17）：使用者 10-08 已全部定案，下一步轉成 <code>docs/specs/</code> 的正式 spec，從 U1 開始。</li>
@@ -214,7 +214,7 @@ nav.toc a{display:block;padding:2px 0}
 <tr class="grp"><td colspan="3">控制模式：使用者怎麼看、怎麼操作</td></tr>
 <tr><td>終端機 terminal</td><td>真終端（xterm.js、SwiftTerm）。只有終端機底層才有</td><td><span class="tag o">定案</span></td></tr>
 <tr><td><b>指揮台</b> deck</td><td>看 agent 做事、也指揮它的模式，以「做了什麼」為主角。取代 room（指揮室）、Worker，以及 iOS 的「對話模式」</td><td><span class="tag o">定案</span></td></tr>
-<tr><td><b>聊天</b> chat</td><td>以「對話」為主角的介面，工作過程退到背景</td><td><span class="tag o">定案</span>（定義）</td></tr>
+<tr><td><b>聊天</b> chat</td><td>資訊更簡略的對談模式：同一份對話，以一來一回為主角，工作過程收成每回合一列（細節點開看指揮台）</td><td><span class="tag o">定案</span>（定義，10-09 更正）</td></tr>
 <tr class="grp"><td colspan="3">內容與狀態</td></tr>
 <tr><td>對話</td><td>一個 session 的主體（E1）。<b>只當實體名，不當介面名</b></td><td><span class="tag o">定案</span>（E1）</td></tr>
 <tr><td>回合 turn</td><td>使用者送出一則訊息，到 agent 停下來為止</td><td><span class="tag p">建議</span></td></tr>
@@ -428,7 +428,7 @@ nav.toc a{display:block;padding:2px 0}
 
 <!-- 10 -->
 <h2 id="s10"><span class="n">10</span>聊天介面</h2>
-<p><span class="tag o">定案</span> <b>聊天＝對話式介面</b>：主角是對話本身，你說一句、它回一句；工作過程退到背景，想看細節就點開指揮台。標竿是 agent chat 類產品：Grok Bot、Meta Muse、OpenAI Dots、OpenClaw。多人、多 agent 同房是聊天介面自然容納得下的情境，但不是聊天的定義。</p>
+<p><span class="tag o">定案</span> <b>聊天＝資訊更簡略的對談模式</b>（Mac App、iOS App；10-09 使用者更正）：跟指揮台看的是<b>同一份對話</b>、用同一個 dock，只是細節更少——你說一句、它回一句，每回合的工作收成一列，想看細節就點開指揮台。三種控制模式只差在細節多寡：終端機（原樣）＞指揮台（每一步）＞聊天（只留對談）。所以聊天不需要新的資料，也不必等執行體或 Codex 底層，跟指揮台同一期做。下表的標竿產品（Grok Bot、Meta Muse、OpenAI Dots、OpenClaw）只參考呈現方式；多人、多 agent 同房只是舉例，不是聊天的定義，也不在 v1。</p>
 <div class="tw"><table>
 <tr><th>元件</th><th>規則</th><th>標竿</th></tr>
 <tr><td>頂部身分列</td><td>agent 的頭像（provider 圖示加主機色）、名稱，名稱下面一行目前在做什麼</td><td>Dots、Muse</td></tr>
@@ -616,18 +616,18 @@ POST /api/mod/events                         ← mod 批次上報（Unix socket�
 <tr><th>階段</th><th>內容</th><th>誰做</th></tr>
 <tr><td>U1</td><td>daemon 對話模型 v1（CC 終端機底層）：<code>/api/mod/events</code> 接收端、Purdex mod 加上事件上報（turn.step、tool.call、tool.check、session.measure、session.append、session.receive），以及沒有 mod 時的 transcript＋hook 退路。用量也在這一期。<b>燈號 v2 全部在這一期</b>（含不需要 mod 的那幾項：SPA 重連、Esc 中斷、subagent 錯誤、背景工作；不另出修正 PR）。附 fixtures</td><td>Purdex</td></tr>
 <tr><td>U2</td><td>iOS 改接對話模型，加上用量列；送出改走 mod 通道，沒有 mod 時由 daemon 代打字；推播（APNs 裝置登記、focus 回報，daemon 端由 Purdex 做）。iOS 10-08 自評：改動幅度大（資料層整個換掉、指揮台每一列重寫），沒有做不到的項目</td><td>iOS</td></tr>
-<tr><td>U3</td><td>Mac App 指揮台接上終端機底層，用量放進狀態列，dock 接 P8a（指揮台、聊天畫，終端機不畫）；狀態列三顆鈕改純換畫面＋換底層獨立一顆鈕</td><td>Purdex</td></tr>
+<tr><td>U3</td><td>Mac App 指揮台<b>與聊天</b>接上終端機底層（同一份對話的兩種細節程度，10-09 更正：聊天併入這一期），用量放進狀態列，dock 接 P8a（指揮台、聊天畫，終端機不畫）；狀態列三顆鈕改純換畫面＋換底層獨立一顆鈕</td><td>Purdex</td></tr>
 <tr><td>U3b</td><td>P8b：dock 可以回答權限；計畫分流的驗證。<b>不提前</b>（10-08 定案），需要時再排</td><td>Purdex（lead／team 線）</td></tr>
 <tr><td>U4</td><td>執行體底層接進同一個模型（Nexen 帶 mod；開工時先找 Nexen 方定 <code>--plugin-dir</code>）</td><td>Purdex</td></tr>
 <tr><td>U5</td><td>Codex：共用 app-server 接進對話模型</td><td>Purdex</td></tr>
-<tr><td>U6</td><td>聊天介面</td><td>兩邊</td></tr>
+<tr><td><s>U6</s></td><td><s>聊天介面</s>——10-09 使用者更正：聊天只是資訊更簡略的對談模式，不是放最後的獨立一期。Mac 併入 U3，iOS 併入 U2 線（排在指揮台之後）。多人同房是延伸，未排</td><td>—</td></tr>
 <tr><td>C1</td><td>通訊線（<b>放最後</b>，10-08 定案：同時用 Codex 終端機的情況太少，多半只委派 review）：<code>pdx peers</code> 列出執行體、<code>pdx msg</code> 送進執行體（接 Nexen peer mailbox）</td><td>Purdex</td></tr>
 <tr><td>C2</td><td>通訊線：<code>pdx msg</code> 送進 Codex（共用 app-server＋<code>thread/queue/add</code>，先實測 TUI 呈現；mlab Codex 0.153.4 可能要先升級）</td><td>Purdex</td></tr>
 </table></div>
 
 <!-- 17 -->
 <h2 id="s17"><span class="n">17</span>決策紀錄</h2>
-<p>已定案（10-08）：名詞（底層 終端機／執行體 execution；控制模式 終端機／指揮台 deck／聊天）、mod 成為 CC 的主要資料來源（終端機底層，執行體底層也要用）、燈號不另出修正 PR（全部跟 U1 一起做）、mod 落地時程（a26 等 U1 上線再裝；P8b 不提前；Nexen 開不開放 <code>--plugin-dir</code> 等 U4 開工時再找 Nexen 方定）、狀態詞彙與燈號優先序（黃＝等你回答，不分回答／核准；不加待檢閱、失聯；失敗 ＞ 等你回答 ＞ 工作中 ＞ 閒置）、背景工作（背景指令不顯示；workflow／monitor／排程喚醒在 agent 圖示左上角打一顆符號、只顯示一種、不動主燈，§12.2）、Mac App 的 dock（指揮台和聊天畫、終端機不畫，U19(b) 縮限為終端機模式，§8）、狀態列三顆鈕（純換畫面、換底層另一顆鈕、跟 U3 一起上，§15）、分期（U1 → U2 ∥ U3 → U4 → U5 → U6，通訊線 C1／C2 放最後，§16）。§17 已全部定案。</p>
+<p>已定案（10-08）：名詞（底層 終端機／執行體 execution；控制模式 終端機／指揮台 deck／聊天）、mod 成為 CC 的主要資料來源（終端機底層，執行體底層也要用）、燈號不另出修正 PR（全部跟 U1 一起做）、mod 落地時程（a26 等 U1 上線再裝；P8b 不提前；Nexen 開不開放 <code>--plugin-dir</code> 等 U4 開工時再找 Nexen 方定）、狀態詞彙與燈號優先序（黃＝等你回答，不分回答／核准；不加待檢閱、失聯；失敗 ＞ 等你回答 ＞ 工作中 ＞ 閒置）、背景工作（背景指令不顯示；workflow／monitor／排程喚醒在 agent 圖示左上角打一顆符號、只顯示一種、不動主燈，§12.2）、Mac App 的 dock（指揮台和聊天畫、終端機不畫，U19(b) 縮限為終端機模式，§8）、狀態列三顆鈕（純換畫面、換底層另一顆鈕、跟 U3 一起上，§15）、分期（U1 → U2 ∥ U3 → U4 → U5，通訊線 C1／C2 放最後，§16；原本的 U6 聊天在 10-09 更正後併入 U2／U3）。§17 已全部定案。</p>
 
 </div>
 </body>
