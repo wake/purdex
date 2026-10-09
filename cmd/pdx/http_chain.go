@@ -27,6 +27,20 @@ func (r registryDevices) AuthenticateToken(token string) (devices.Principal, boo
 	return a.AuthenticateToken(token)
 }
 
+// RefreshPrincipal is what a redeemed device ticket is held to (devices.Refresher): the module's current answer for the
+// device id. Without it the middleware would refuse every device ticket.
+func (r registryDevices) RefreshPrincipal(deviceID string) (devices.Principal, bool) {
+	svc, ok := r.c.Registry.Get(devicesmod.RegistryKey)
+	if !ok {
+		return devices.Principal{}, false
+	}
+	ref, ok := svc.(devices.Refresher)
+	if !ok {
+		return devices.Principal{}, false
+	}
+	return ref.RefreshPrincipal(deviceID)
+}
+
 // registryTracker is the devices module's WebSocket tracker as the chain reaches it: through the service registry, looked
 // up on every request; with no module mounted the request passes through.
 type registryTracker struct{ c *core.Core }
