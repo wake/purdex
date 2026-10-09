@@ -22,6 +22,7 @@ type TurnEndEvent struct {
 	Text      string // last_assistant_message of the hook; "" when it had none
 	At        int64  // unix ms at the hook's arrival
 	Seq       int64  // per-daemon arrival order; breaks a tie of At
+	Failed    bool   // the main turn ended in a StopFailure, not a Stop
 }
 
 // turnEndStamp is the arrival stamp handleEvent takes before anything waits.
@@ -143,12 +144,15 @@ func boundText(s string) string {
 }
 
 // publishTurnEnd publishes the turn end of an accepted cc PdxStop whose frame
-// event applied. Not for SubagentStop, another provider, an event whose frame
+// event applied, and of a main-turn PdxStopFailure (Failed: true). Not for
+// SubagentStop, a StopFailure that names a subagent, another provider, an event whose frame
 // application was skipped, or one with no session id: the id is the
 // provider's IdentifyEvent of the raw hook (it is not in the status detail).
 // No lock is held by the caller; this takes none but the hub's.
 func (m *Module) publishTurnEnd(req EventRequest, provider agentpkg.AgentProvider, lifecycle agentpkg.LifecycleEventKind, meta FrameTraceMeta, st turnEndStamp) {
-	if req.AgentType != "cc" || req.PurdexName != "PdxStop" || lifecycle != agentpkg.LifecycleStop || meta.Decision == "skipped" {
+	failed := req.PurdexName == "PdxStopFailure" && lifecycle == agentpkg.LifecycleStopFailure
+	stopped := req.PurdexName == "PdxStop" && lifecycle == agentpkg.LifecycleStop
+	if req.AgentType != "cc" || (!failed && !stopped) || meta.Decision == "skipped" {
 		return
 	}
 	ident, ok := provider.(agentpkg.SessionIdentifier)
@@ -160,8 +164,12 @@ func (m *Module) publishTurnEnd(req EventRequest, provider agentpkg.AgentProvide
 		return
 	}
 	var raw struct {
-		Last string `json:"last_assistant_message"`
+		Last    string `json:"last_assistant_message"`
+		AgentID string `json:"agent_id"`
 	}
 	_ = json.Unmarshal(req.RawEvent, &raw)
-	m.turnEnds.publish(TurnEndEvent{SessionID: sid, Text: boundText(raw.Last), At: st.at, Seq: st.seq})
+	if failed && raw.AgentID != "" {
+		return // a StopFailure that names a subagent is that subagent's, not the main turn's
+	}
+	m.turnEnds.publish(TurnEndEvent{SessionID: sid, Text: boundText(raw.Last), At: st.at, Seq: st.seq, Failed: failed})
 }

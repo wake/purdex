@@ -297,6 +297,11 @@ type Module struct {
 	sender      peersmod.Sender
 	noticeSig   chan struct{}
 	noticeLogAt map[string]int64
+	// cmdCaller is the peers module's HostCaller (peers.HostCallerKey; nil → cross-host commands are unavailable) and cmdPump
+	// L's commands outbox pump (cross-host team spec X3a); outcomes applies a command's answer (X3b-1; nil → recorded only).
+	cmdCaller hostCaller
+	cmdPump   *outboxPump
+	outcomes  commandOutcomes
 	// beforeCloseExpired, when set, runs in closeExpired before the CAS;
 	// an error fails that close there (tests). nil in production.
 	beforeCloseExpired func(id string) error
@@ -396,6 +401,11 @@ func (m *Module) Init(c *core.Core) error {
 		}
 	}
 	m.noticeAt = noticeThreshold()
+	if svc, ok := c.Registry.Get(peersmod.HostCallerKey); ok {
+		if hc, ok := svc.(hostCaller); ok {
+			m.cmdCaller = hc
+		}
+	}
 	store, err := OpenStore(filepath.Join(c.Cfg.DataDir, "team.db"))
 	if err != nil {
 		return fmt.Errorf("team: %w", err)
@@ -418,6 +428,9 @@ func (m *Module) Init(c *core.Core) error {
 	m.relayDir = filepath.Join(c.Cfg.DataDir, team.RelayDir)
 	// The peers inventory reads the relay lineage through this (spec §8.4).
 	c.Registry.Register(team.LineageReaderKey, store)
+	// The session workbook reads one chain root and one team seat at a time.
+	c.Registry.Register(team.LineageRootKey, store)
+	c.Registry.Register(team.SeatReaderKey, store)
 	c.Registry.Register(team.ApprovalFeedKey, team.ApprovalFeed(m))
 	c.Registry.Register(team.ApprovalEventsKey, team.ApprovalEvents(m))
 	return nil
@@ -515,6 +528,7 @@ func (m *Module) Start(context.Context) error {
 	go m.runSweeper()
 	go m.runRetention()
 	go m.runRoster() // after the boot's own writes signalled: it publishes what they left
+	m.startCommandPump()
 	m.logf("[team] endpoints enabled")
 	return nil
 }

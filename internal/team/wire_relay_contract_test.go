@@ -44,6 +44,7 @@ func TestRelayContract_Literals(t *testing.T) {
 		"KindMemberRelay":       string(KindMemberRelay),
 
 		"LineageReaderKey": LineageReaderKey, "ApprovalFeedKey": ApprovalFeedKey,
+		"LineageRootKey": LineageRootKey, "SeatReaderKey": SeatReaderKey,
 		"RelayDir": RelayDir,
 	} {
 		want := map[string]string{
@@ -60,6 +61,7 @@ func TestRelayContract_Literals(t *testing.T) {
 			"ErrUnknownSession": "unknown_session", "ErrBadTransition": "bad_transition",
 			"ErrRelayUnsupported": "relay_unsupported", "ErrNotYourOp": "not_your_op", "RelayControlPrefix": "[pdx-relay:control] op=", "KindMemberRelay": "member_relay",
 			"LineageReaderKey": "team.lineage", "ApprovalFeedKey": "team.approval-feed", "RelayDir": "relay",
+			"LineageRootKey": "team.lineage-root", "SeatReaderKey": "team.seat-reader",
 		}[name]
 		if got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
