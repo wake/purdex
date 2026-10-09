@@ -876,10 +876,19 @@ function startWrite($, p) {
     // does not wait for a turn.start hook's await, so the model's first tool call can run before a lock raised there
     // (measured, docs/testing/member-relay-acceptance.md). Fix rounds do not lock again.
     if (!p.lockTried) {
+      // A user turn that is running (or starts while the lock call is out) must not run under the lock: the write
+      // waits for its turn.complete, as the claim does (turn.complete restarts this step, which then locks afresh).
+      if (s.turnRunning) { s.writeDeferred = p; return }
       p.lockTried = true
       await lockRelay($, p)
       if (s.pending !== p || s.state !== 'approved') {
         await unlockRelay($, p) // the relay ended while the call was out: nothing else will lower it
+        return
+      }
+      if (s.turnRunning) {
+        await unlockRelay($, p)
+        p.lockTried = false
+        s.writeDeferred = p
         return
       }
     }
