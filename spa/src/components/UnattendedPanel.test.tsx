@@ -8,7 +8,11 @@ import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { ApprovalApiError } from '../lib/team/approval-api'
 import { getUnattended } from '../lib/team/unattended-api'
-import type { Approval, UnattendedView } from '../lib/team/types'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
+import { useTeamRosterStore } from '../stores/useTeamRosterStore'
+import { useRelayQuotaStore, quotaKey } from '../lib/team/relay-quota'
+import { refetchHost, resetWriter } from '../lib/team/relay-quota-writer'
+import type { Approval, SessionQuota, UnattendedView } from '../lib/team/types'
 
 vi.mock('../lib/team/unattended-api', () => ({ getUnattended: vi.fn() }))
 const mockedGet = vi.mocked(getUnattended)
@@ -468,3 +472,120 @@ describe('UnattendedPanel', () => {
     expect(onClose).toHaveBeenCalled()
   })
 })
+
+// ---- relay quota (plan RQ-A Task 6) ----
+describe('UnattendedPanel relay quota', () => {
+  const quota = (id: string, over: Partial<SessionQuota> = {}): SessionQuota => ({
+    session_id: id, root_session_id: `root-${id}`, title: `T-${id}`, address: `mlab/${id}-xx`, is_lead: false,
+    self_left: 1, member_pool_left: 0, rev: 3, ...over,
+  })
+  const heldRow = (id: string, createdAt: number): Approval =>
+    approved(id, createdAt + 1_000, { state: 'open', created_at: createdAt, decided_by: undefined, decided_at: undefined })
+
+  beforeEach(() => {
+    useUnattendedStore.getState().reset()
+    useTeamRosterStore.getState().reset()
+    useRelayQuotaStore.getState().reset()
+    resetWriter()
+  })
+
+  it('no quota section for a host without the capability, even if its view happens to carry rows', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'no')
+    mockedGet.mockResolvedValue(page([], { quotas: [quota('p1')] }))
+    open([A])
+    await flush()
+    expect(screen.queryByTestId('quota-section')).toBeNull()
+    expect(useRelayQuotaStore.getState().confirmed).toEqual({})
+  })
+
+  it('with the capability: rows from the first page, the numbers seeded into the store by (host, root)', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([], { quotas: [quota('p1', { self_left: 4, rev: 9 })] }))
+    open([A])
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-p1')
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'root-p1')]).toEqual({ self_left: 4, member_pool_left: 0, rev: 9 })
+  })
+
+  it('events that arrive while the GET is out are applied after it, by the rev rule', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    let release!: (v: UnattendedView) => void
+    mockedGet.mockReturnValue(new Promise<UnattendedView>((r) => { release = r }))
+    open([A])
+    act(() => { useRelayQuotaStore.getState().applyEvent(A, { op: 'changed', root_session_id: 'root-p1', self_left: 8, member_pool_left: 0, rev: 12 }) })
+    expect(useRelayQuotaStore.getState().confirmed).toEqual({}) // buffered
+    await act(async () => { release(page([], { quotas: [quota('p1', { self_left: 2, rev: 10 })] })) })
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'root-p1')]).toEqual({ self_left: 8, member_pool_left: 0, rev: 12 })
+    expect(await screen.findByTestId('quota-value')).toHaveTextContent('8')
+  })
+
+  it('a failed read still releases the buffered events', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    let fail!: (e: unknown) => void
+    mockedGet.mockReturnValue(new Promise<UnattendedView>((_, rej) => { fail = rej }))
+    open([A])
+    act(() => { useRelayQuotaStore.getState().applyEvent(A, { op: 'changed', root_session_id: 'r', self_left: 5, member_pool_left: 0, rev: 2 }) })
+    await act(async () => { fail(new ApprovalApiError(500, 'http_500')) })
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'r')]?.self_left).toBe(5)
+    expect(useRelayQuotaStore.getState().gets).toEqual({})
+  })
+
+  it('「讀不到額度」 when the daemon\'s quotas were null or malformed; 「沒有可設定的 session」 for []', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useUnattendedStore.getState().setQuotaSupport(B, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    useTeamRosterStore.getState().apply(B, [])
+    mockedGet.mockImplementation(async (hostId) => hostId === A ? page([], { quotasFailed: true }) : page([], { quotas: [] }))
+    open([A, B])
+    expect(await screen.findByTestId('quota-unreadable')).toHaveTextContent('mlab：讀不到額度')
+    expect(screen.getByTestId('quota-none')).toHaveTextContent('沒有可設定的 session')
+    expect(screen.getAllByTestId('quota-host-heading').map((h) => h.textContent)).toEqual(['mlab', 'air26'])
+  })
+
+  it('the held section only when held is non-empty, newest first; the approved list below is unchanged', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([approved('a1', at(9, 30))], { quotas: [], held: [heldRow('h1', at(10, 0)), heldRow('h2', at(10, 30))] }))
+    open([A])
+    await waitFor(() => expect(screen.getAllByTestId('held-row')).toHaveLength(2))
+    expect(screen.getByTestId('held-title')).toHaveTextContent('額度用完，等你核准')
+    expect(screen.getAllByTestId('held-row').map((r) => r.textContent)).toEqual(['mlab：sess-h2 · 接力申請 · 10:30', 'mlab：sess-h1 · 接力申請 · 10:00'])
+    expect(rows()).toEqual(['mlab：sess-a1 · 接力申請 · 09:30'])
+  })
+
+  it('no held section when held is absent or empty', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([], { quotas: [], held: [] }))
+    open([A])
+    await flush()
+    expect(screen.queryByTestId('held-section')).toBeNull()
+  })
+
+  it('a re-read (after pending_lineage) replaces the host\'s rows, clears an old failure, and releases its events', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValueOnce(page([], { quotasFailed: true }))
+    open([A])
+    expect(await screen.findByTestId('quota-unreadable')).toBeInTheDocument()
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('p9', { root_session_id: 'real-root', self_left: 6 })] }))
+    await act(async () => { refetchHost(A) })
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-p9')
+    expect(screen.queryByTestId('quota-unreadable')).toBeNull()
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'real-root')]?.self_left).toBe(6)
+  })
+
+  it('closing the panel unregisters the re-read', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([], { quotas: [] }))
+    const view = open([A])
+    await flush()
+    view.unmount()
+    mockedGet.mockClear()
+    refetchHost(A)
+    expect(mockedGet).not.toHaveBeenCalled()
+  })
+})
+

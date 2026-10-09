@@ -39,7 +39,7 @@ export interface WriterDeps {
 }
 
 const defaultDeps = (): WriterDeps => ({
-  put: putRelayQuota,
+  put: (hostId, sessionId, field, value) => putRelayQuota(hostId, sessionId, field, value), // resolved at call time
   toast: (m) => useUndoToast.getState().show(m),
   message: (key, params) => useI18nStore.getState().t(key, params),
   hostLabel: (hostId) => hostLabel(hostId, hostLookOf(hostId)),
@@ -61,6 +61,11 @@ const lineageTimers = new Set<ReturnType<typeof setTimeout>>()
 export function registerRefetch(hostId: string, fn: () => void): () => void {
   refetchers.set(hostId, fn)
   return () => { if (refetchers.get(hostId) === fn) refetchers.delete(hostId) }
+}
+
+/** Re-read one host's view through the panel that registered for it (a no-op when none is open). */
+export function refetchHost(hostId: string): void {
+  refetchers.get(hostId)?.()
 }
 
 /** Test seam: replace some of the dependencies. */

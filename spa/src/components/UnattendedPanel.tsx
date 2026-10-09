@@ -7,17 +7,28 @@
 // A shown host that cannot be reached (`unreachableIds`) is not asked but named above the list: its daemon may still be
 // approving. When no host can be reached there is no list to be empty, so only those lines show.
 //
+// Above that list (relay quota spec §3.5, plan RQ-A): 「接力額度」 (UnattendedQuotaSection: a stepper per session, for hosts
+// whose daemon lists `team.relay_quota.v1`) and 「額度用完，等你核准」 (UnattendedHeldSection, only when the daemon sent held
+// requests). The first page's `quotas` seed the quota store (relay-quota.ts) between its beginGet / endGet, so events
+// that arrive while the GET is out are applied after it.
+//
 // Not tab-hosted: opened by a click of UnattendedButton's ▾ and gone when closed. The loaded pages are this
 // component's own state — closing drops them and every open fetches afresh (a stale list would hide what the daemon
 // approved in between). Which hosts to read is fixed at open (`hostIds`).
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { FloatingPanel } from './FloatingPanel'
+import { UnattendedQuotaSection, type QuotaHostData } from './UnattendedQuotaSection'
+import { UnattendedHeldSection, type HeldRow } from './UnattendedHeldSection'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
 import { ApprovalApiError } from '../lib/team/approval-api'
 import { approvalKindLabel, approvalSessionLabel } from '../lib/team/approval-format'
 import { getUnattended } from '../lib/team/unattended-api'
-import type { Approval, UnattendedView } from '../lib/team/types'
+import { useRelayQuotaStore } from '../lib/team/relay-quota'
+import { registerRefetch } from '../lib/team/relay-quota-writer'
+import { sinceText } from '../lib/team/time-text'
+import type { Approval, SessionQuota, UnattendedView } from '../lib/team/types'
 
 const PANEL_WIDTH = 360
 
@@ -30,15 +41,10 @@ interface HostPages {
   since: number
   /** The code of the last failed read (kept with the rows loaded before it); absent = the last read worked. */
   failed?: string
-}
-
-const pad2 = (n: number) => (n < 10 ? `0${n}` : String(n))
-const clock = (ms: number) => { const d = new Date(ms); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}` }
-const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-/** `HH:mm` today, `M/D HH:mm` on another day (the list can span days: the "since" line and every row use it). */
-function sinceText(ms: number): string {
-  const d = new Date(ms)
-  return sameDay(d, new Date()) ? clock(ms) : `${d.getMonth() + 1}/${d.getDate()} ${clock(ms)}`
+  /** Relay quota (the first page's): the rows, or `quotasFailed` when the daemon's array was null / malformed; `held` rows. */
+  quotas?: readonly SessionQuota[]
+  quotasFailed?: boolean
+  held?: readonly Approval[]
 }
 
 const timeOf = (a: Approval) => a.decided_at ?? a.created_at
@@ -96,9 +102,19 @@ function readPage(life: Lifecycle, hostId: string, before: number | undefined): 
   })
 }
 
-function firstPage(v: UnattendedView): HostPages {
-  return { rows: v.approved, ...(v.truncated ? { nextBefore: v.next_before } : {}), since: v.since }
+function quotaPart(v: UnattendedView): Pick<HostPages, 'quotas' | 'quotasFailed' | 'held'> {
+  return {
+    ...(v.quotas !== undefined ? { quotas: v.quotas } : {}),
+    ...(v.quotasFailed ? { quotasFailed: true } : {}),
+    ...(v.held !== undefined ? { held: v.held } : {}),
+  }
 }
+
+function firstPage(v: UnattendedView): HostPages {
+  return { rows: v.approved, ...(v.truncated ? { nextBefore: v.next_before } : {}), since: v.since, ...quotaPart(v) }
+}
+
+const quotaHostOf = (hostId: string): boolean => useUnattendedStore.getState().byHost[hostId]?.quotaSupport === 'yes'
 
 export interface UnattendedPanelProps {
   /** The hosts to read, fixed at open. */
@@ -125,13 +141,26 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
   useEffect(() => {
     const life = new Lifecycle()
     lifeRef.current = life
+    const disposers: Array<() => void> = []
     for (const hostId of hosts) {
+      const quotas = quotaHostOf(hostId)
+      if (quotas) useRelayQuotaStore.getState().beginGet(hostId)
       void readPage(life, hostId, undefined).then(
-        (v) => firstPage(v),
-        (e: unknown): HostPages => ({ rows: [], since: 0, failed: codeOf(e) }),
+        (v) => { if (quotas) useRelayQuotaStore.getState().endGet(hostId, v.quotas ?? null); return firstPage(v) },
+        (e: unknown): HostPages => { if (quotas) useRelayQuotaStore.getState().endGet(hostId, null); return { rows: [], since: 0, failed: codeOf(e) } },
       ).then((p) => { if (!life.cancelled) setPages((cur) => ({ ...cur, [hostId]: p })) })
+      if (quotas) {
+        // After a write that went to a provisional root (`pending_lineage`) the writer asks for this host's view again.
+        disposers.push(registerRefetch(hostId, () => {
+          useRelayQuotaStore.getState().beginGet(hostId)
+          void readPage(life, hostId, undefined).then(
+            (v) => { useRelayQuotaStore.getState().endGet(hostId, v.quotas ?? null); if (!life.cancelled) setPages((cur) => ({ ...cur, [hostId]: { ...cur[hostId], quotas: v.quotas, quotasFailed: v.quotasFailed, held: v.held } })) },
+            () => { useRelayQuotaStore.getState().endGet(hostId, null) },
+          )
+        }))
+      }
     }
-    return () => { life.cancel(); if (lifeRef.current === life) lifeRef.current = null }
+    return () => { life.cancel(); for (const d of disposers) d(); if (lifeRef.current === life) lifeRef.current = null }
   }, [hosts])
 
   const more = useCallback(async () => {
@@ -168,10 +197,19 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
   const failed = answered.filter((h) => pages[h].failed !== undefined)
   const since = Math.min(...answered.map((h) => pages[h].since).filter((s) => s > 0))
   const hasMore = answered.some((h) => pages[h].nextBefore !== undefined)
+  const supportOf = useUnattendedStore((s) => s.byHost)
+  const quotaHosts: QuotaHostData[] = answered.filter((h) => supportOf[h]?.quotaSupport === 'yes' && pages[h].failed === undefined)
+    .flatMap((hostId): QuotaHostData[] => {
+      const p = pages[hostId]
+      return p.quotasFailed ? [{ hostId, failed: true }] : p.quotas !== undefined ? [{ hostId, rows: p.quotas }] : []
+    })
+  const held: HeldRow[] = answered.flatMap((hostId) => (pages[hostId].held ?? []).map((a) => ({ hostId, a })))
 
   return (
     <FloatingPanel title={t('unattended.panel.title')} anchorRef={anchorRef} onClose={onClose} width={PANEL_WIDTH} placement="below" testId="unattended-panel">
       <div aria-busy={busy} className="flex flex-col gap-2 text-xs">
+        <UnattendedQuotaSection hosts={quotaHosts} headings={quotaHosts.length > 1} />
+        <UnattendedHeldSection rows={held} />
         {Number.isFinite(since) && (
           <div data-testid="unattended-since" className="text-text-muted">{t('unattended.panel.since', { time: sinceText(since) })}</div>
         )}
