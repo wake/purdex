@@ -46,6 +46,8 @@ func (m *Module) Init(c *core.Core) error {
 	// ... and reads and writes the unattended switch through this one
 	// (unattended spec D-U23-1), its only writer.
 	c.Registry.Register(UnattendedKey, m)
+	// ... and the relay-quota rule's switch through this one (#2062).
+	c.Registry.Register(RelayQuotaKey, m)
 	return nil
 }
 
@@ -58,6 +60,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/quick-replies", m.putHandler(KeyQuickReplies, func(raw []byte) (any, error) { return normalizeQuickReplies(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/relay", m.putHandler(KeyRelay, func(raw []byte) (any, error) { return normalizeRelay(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte) (any, error) { return normalizeTeam(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/relay_quota", m.putHandler(KeyRelayQuota, func(raw []byte) (any, error) { return normalizeRelayQuota(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/resources", m.putHandler(KeyResources, func(raw []byte) (any, error) { return normalizeResources(raw) }))
 	mux.HandleFunc("POST /api/hostconfig/check-path", m.handleCheckPath)
 }

@@ -320,9 +320,8 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: now, DeadlineAt: now + team.SelfRelayDeadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
 	}
 	hash := requestHash(team.KindSelfRelay, origin.SessionID, team.SelfRelayDeadlineS, payload)
-	if m.unattendedOn() {
-		m.beginApproved(w, op, row, hash)
-		return
+	if m.unattendedOn() && m.beginApproved(w, op, row, hash) {
+		return // approved at begin, or refused; false: the chain has no quota left, so it opens for a person below
 	}
 	if err := m.store.CreateRelayOp(op); err != nil {
 		// The table's one-open-op index caught a creator the check above

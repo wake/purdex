@@ -44,7 +44,8 @@ func TestHandlerGet_UnreadableValueIsInvalidOthersIntact(t *testing.T) {
 		"quickReplies":{"items":[{"id":"q1","text":"go"}],"revision":1},
 		"relay":{"items":{"self_solo":false,"self_lead":false},"revision":1,"invalid":true},
 		"team":{"items":{},"revision":1,"invalid":true},
-		"resources":{"items":{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},"deadline_s":300,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30},"revision":0}
+		"resources":{"items":{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},"deadline_s":300,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30},"revision":0},
+		"relayQuota":{"items":{"rule":false},"revision":0}
 	}`, rr.Body.String())
 }
 

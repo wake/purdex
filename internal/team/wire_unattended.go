@@ -64,6 +64,10 @@ type UnattendedView struct {
 	// null when the quotas could not be read (the page above stays valid); [] when they were read and the host has no
 	// live session; never absent. A client keeps what it had on null and replaces it on [].
 	Quotas []SessionQuota `json:"quotas"`
+	// Held is the open self_relay requests the daemon could not approve because their chain's quota is 0 (the rule is on):
+	// they wait for a person, or for the quota to be raised (approved within one tick). Independent of the approved page
+	// above. null when it could not be read, [] when read and none; never absent.
+	Held []Approval `json:"held"`
 	// ListFailed (PUT only): the write took effect — the state above is
 	// what is stored — but the list could not be read, so Approved is
 	// empty and says nothing; the client GETs the list.

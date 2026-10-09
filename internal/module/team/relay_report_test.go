@@ -275,7 +275,7 @@ func (f *fixture) reboot(titles TitleMover) *fixture {
 	f.t.Helper()
 	_ = f.m.Stop(context.Background())
 	_ = f.m.Close()
-	g := &fixture{t: f.t, core: f.core, origins: f.origins, switches: f.switches, usage: f.usage, sender: f.sender}
+	g := &fixture{t: f.t, core: f.core, origins: f.origins, switches: f.switches, usage: f.usage, sender: f.sender, qrule: f.qrule}
 	g.clock.Store(f.clock.Load())
 	g.m = New().WithTitles(titles)
 	g.m.logf = func(string, ...any) {}

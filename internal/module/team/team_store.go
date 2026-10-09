@@ -255,6 +255,11 @@ func (s *Store) closeSelfRelayApprovedIn(tx *sql.Tx, id string, c Close, session
 	if err == nil {
 		n, err = closeRowIn(tx, id, c, "", 0)
 	}
+	// The relay-quota rule (#2062): only a close the daemon makes itself (Auto), of a row that is really approved
+	// (not the member's cancel above), and only when the module asked for it, spends — in this transaction.
+	if err == nil && !member && n == 1 && c.Auto && c.SpendQuota {
+		err = spendSelfQuotaIn(tx, sessionID, c.DecidedAt)
+	}
 	if err == nil && member && n == 1 && s.beforeMemberCancelOp != nil {
 		err = s.beforeMemberCancelOp()
 	}
