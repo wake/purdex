@@ -50,6 +50,13 @@ func TestWorkbookRoutes_ServedOnTheSocketFromTheWorkbookService(t *testing.T) {
 		t.Fatalf("before the workbook module: %d %s", code, body)
 	}
 	c.Registry.Register(workbookJobsKey, modevents.WorkbookService(&fakeWBService{}))
+	if code, _ := socketPost(t, m.path, modevents.WorkbookNextPath, next); code != 204 {
+		t.Fatalf("a stream that never announced the capability: %d", code)
+	}
+	if _, err := m.reg.Apply(modevents.Batch{V: 1, Stream: wbStream, Agent: "cc", Caps: []string{modevents.CapWorkbookV2},
+		Events: []modevents.Event{{Seq: 1, SID: wbSID, Type: "heartbeat", Data: []byte(`{}`)}}}); err != nil {
+		t.Fatal(err)
+	}
 	code, body := socketPost(t, m.path, modevents.WorkbookNextPath, next)
 	if code != 200 || strings.TrimSpace(body) != `{"job":{"id":"j1"}}` {
 		t.Fatalf("%d %s", code, body)

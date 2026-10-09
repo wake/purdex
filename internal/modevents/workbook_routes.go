@@ -64,6 +64,19 @@ func WithWorkbook(get func() WorkbookService) HandlerOption {
 	return func(h *handler) { h.workbook = get }
 }
 
+// Capabilities of the workbook, and how many long polls the socket serves at once.
+const (
+	CapWorkbookV2      = "workbook.v2"
+	CapWorkbookRefresh = "workbook.refresh"
+	defaultMaxPolls    = 64
+)
+
+// streamMayPoll: the stream is live, its current session is sid, and it announced a workbook capability within CapsFresh.
+func (h *handler) streamMayPoll(stream, sid string) bool {
+	return h.reg != nil && (h.reg.StreamCapable(stream, sid, CapWorkbookV2, CapsFresh) ||
+		h.reg.StreamCapable(stream, sid, CapWorkbookRefresh, CapsFresh))
+}
+
 func (h *handler) service() WorkbookService {
 	if h.workbook == nil {
 		return nil
@@ -130,6 +143,18 @@ func (h *handler) workbookNext(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "unavailable"})
 		return
 	}
+	// Only the stream that is the session's own, live and capable, may take its work: a made-up or someone else's stream
+	// gets "no job" at once and never holds a poll.
+	if !h.streamMayPoll(in.Stream, in.SessionID) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if h.activePolls.Add(1) > int32(h.maxPolls) {
+		h.activePolls.Add(-1)
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "busy"})
+		return
+	}
+	defer h.activePolls.Add(-1)
 	wait := time.Duration(*in.WaitMS) * time.Millisecond
 	// The server's WriteTimeout is 10 s; a 15 s poll must be able to answer, so this request carries its own deadline.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait + waitWriteSlack))

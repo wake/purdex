@@ -63,13 +63,23 @@ func (f *fakeWB) JobResult(_ string, r WorkbookResult) (bool, error) {
 
 func (f *fakeWB) JobWaiting(string) bool { return f.waiting }
 
-func wbHandler(f *fakeWB) http.Handler {
-	return NewHandler(NewRegistry(time.Now), WithWorkbook(func() WorkbookService {
+// capableReg is a registry where the test streams are live, on testSID, and announced workbook.v2.
+func capableReg() *Registry {
+	reg := NewRegistry(time.Now)
+	for _, st := range []string{testStream, "Zz9_-other1"} {
+		_, _ = reg.Apply(Batch{V: 1, Stream: st, Agent: "cc", Caps: []string{CapWorkbookV2},
+			Events: []Event{{Seq: 1, SID: testSID, Type: "heartbeat", Data: json.RawMessage(`{}`)}}})
+	}
+	return reg
+}
+
+func wbHandler(f *fakeWB, opts ...HandlerOption) http.Handler {
+	return NewHandler(capableReg(), append([]HandlerOption{WithWorkbook(func() WorkbookService {
 		if f == nil {
 			return nil
 		}
 		return f
-	}))
+	})}, opts...)...)
 }
 
 func nextBody(stream, sid string, wait any) string {
@@ -216,6 +226,53 @@ func TestWorkbookNext_OnePollPerStream(t *testing.T) {
 	}
 }
 
+// Only the session's own live, capable stream may poll for its work: an unknown stream, one bound to another session, an
+// ended one, or one that never announced the capability gets 204 at once and never reaches the service (codex attack).
+// Mutation gate: drop the stream check → the service is called → red.
+func TestWorkbookNext_OnlyTheSessionsOwnCapableStreamMayPoll(t *testing.T) {
+	f := &fakeWB{job: map[string]string{"id": "j1"}}
+	reg := capableReg()
+	_, _ = reg.Apply(Batch{V: 1, Stream: "Plain-0001", Agent: "cc", // never announced
+		Events: []Event{{Seq: 1, SID: testSID, Type: "heartbeat", Data: json.RawMessage(`{}`)}}})
+	_, _ = reg.Apply(Batch{V: 1, Stream: "Other-0002", Agent: "cc", Caps: []string{CapWorkbookV2}, // another session's
+		Events: []Event{{Seq: 1, SID: sidB, Type: "heartbeat", Data: json.RawMessage(`{}`)}}})
+	_, _ = reg.Apply(Batch{V: 1, Stream: "Ended-0003", Agent: "cc", Caps: []string{CapWorkbookV2},
+		Events: []Event{{Seq: 1, SID: testSID, Type: TypeSessionEnd, Data: json.RawMessage(`{"reason":"exit"}`)}}})
+	h := NewHandler(reg, WithWorkbook(func() WorkbookService { return f }))
+	for _, stream := range []string{"Unknown-99", "Plain-0001", "Other-0002", "Ended-0003"} {
+		if rec := post(t, h, http.MethodPost, WorkbookNextPath, nextBody(stream, testSID, 0)); rec.Code != http.StatusNoContent {
+			t.Errorf("%s: %d %s", stream, rec.Code, rec.Body)
+		}
+	}
+	if f.maxSeen.Load() != 0 {
+		t.Fatal("the service was asked for a stream that is not the session's")
+	}
+	if rec := post(t, h, http.MethodPost, WorkbookNextPath, nextBody(testStream, testSID, 0)); rec.Code != 200 {
+		t.Fatalf("the session's own stream: %d", rec.Code)
+	}
+}
+
+// More than the cap of polls at once: the extra one is told to back off (429), never queued without bound.
+// Mutation gate: drop the cap → red.
+func TestWorkbookNext_PollsAreCapped(t *testing.T) {
+	f := &fakeWB{delay: 400 * time.Millisecond}
+	h := wbHandler(f, withMaxPolls(2))
+	var wg sync.WaitGroup
+	codes := make(chan int, 3)
+	for _, st := range []string{testStream, "Zz9_-other1"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes <- post(t, h, http.MethodPost, WorkbookNextPath, nextBody(st, testSID, 5000)).Code
+		}()
+	}
+	time.Sleep(100 * time.Millisecond)
+	if rec := post(t, h, http.MethodPost, WorkbookNextPath, nextBody(testStream, testSID, 5000)); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third poll: %d", rec.Code)
+	}
+	wg.Wait()
+}
+
 func TestWorkbookResult(t *testing.T) {
 	f := &fakeWB{more: true}
 	h := wbHandler(f)
@@ -264,6 +321,10 @@ func TestEvents_AnswerHintsAWaitingJob(t *testing.T) {
 		t.Fatalf("no job: %s", rec.Body)
 	}
 	f.waiting = true
+	// a stream that is not the session's own is not told (it could learn that a conversation has work)
+	if rec := post(t, h, http.MethodPost, EventsPath, batchJSON(1, "Spoofer-01", evs(ev(1, testSID, "heartbeat")))); strings.Contains(rec.Body.String(), "workbook") {
+		t.Fatalf("a stream that never announced the capability was told: %s", rec.Body)
+	}
 	rec := post(t, h, http.MethodPost, EventsPath, batchJSON(1, testStream, evs(ev(2, testSID, "heartbeat"))))
 	var got map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)

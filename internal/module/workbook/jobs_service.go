@@ -12,7 +12,7 @@ import (
 const JobsKey = "workbook.jobs"
 
 // CapV2 is the capability a mod announces on its events batches once it can run turn and re-write jobs (plan D11).
-const CapV2 = "workbook.v2"
+const CapV2 = modevents.CapWorkbookV2
 
 // jobsService adapts the module's engine to the socket routes. The engine exists only while the module runs, so each
 // call reads it fresh: a stopped module answers "no job" and "not leased".

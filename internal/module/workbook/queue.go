@@ -2,8 +2,9 @@ package workbook
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
-	"strconv"
 	"time"
 
 	"github.com/wake/purdex/internal/convmodel"
@@ -96,6 +97,14 @@ type convQ struct {
 	wake    chan struct{} // closed and replaced when the conversation's state changes
 }
 
+// newJobID is unguessable: the id doubles as the lease's credential, so a caller that holds the stream string still
+// cannot finish a job it was not handed.
+func newJobID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:]) // never fails on the platforms we run on
+	return "wbj-" + hex.EncodeToString(b[:])
+}
+
 func (e *Engine) queueOf(conv string) *convQ {
 	q := e.convs[conv]
 	if q == nil {
@@ -118,8 +127,7 @@ func (e *Engine) enqueue(j *job) {
 		e.finishUnrun(j, StateSkipped, ReasonStopped)
 		return
 	}
-	e.seq++
-	j.id = "wbj-" + strconv.FormatInt(e.seq, 10)
+	j.id = newJobID()
 	q := e.queueOf(j.conv)
 	q.waiting = append(q.waiting, j)
 	var dropped []*job
@@ -318,8 +326,7 @@ func (e *Engine) release(l *lease, follow *job) {
 		q.lease = nil
 	}
 	if follow != nil {
-		e.seq++
-		follow.id = "wbj-" + strconv.FormatInt(e.seq, 10)
+		follow.id = newJobID()
 		q.waiting = append([]*job{follow}, q.waiting...)
 	}
 	q.signal()

@@ -283,6 +283,20 @@ func (r *Registry) SessionCapable(sid, c string, within time.Duration) bool {
 	return false
 }
 
+// StreamCapable is SessionCapable for one named stream: that stream is live, its current session is sid, and it announced
+// c within `within`. The workbook routes use it so a caller cannot take work for a session through a stream that is not
+// that session's.
+func (r *Registry) StreamCapable(stream, sid, c string, within time.Duration) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.streams[stream]
+	if !ok {
+		return false
+	}
+	in := &s.info
+	return in.SID == sid && !in.Ended && !in.CapsAt.IsZero() && r.now().Sub(in.CapsAt) <= within && slices.Contains(in.Caps, c)
+}
+
 // Evict drops ended streams EndedTTL after session.end and any stream
 // IdleTTL after its last batch. Apply and Reject run it too; the module
 // also runs it on a ticker.

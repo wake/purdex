@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -41,7 +42,13 @@ type handler struct {
 	team     TeamReader
 	workbook func() WorkbookService
 	polls    pollGate
+	// activePolls counts the long polls being served (hard cap maxPolls).
+	activePolls atomic.Int32
+	maxPolls    int
 }
+
+// withMaxPolls lowers the poll cap (tests).
+func withMaxPolls(n int) HandlerOption { return func(h *handler) { h.maxPolls = n } }
 
 // MaxBody caps a request body; larger bodies get 413.
 const MaxBody = 1 << 20
@@ -53,7 +60,7 @@ const MaxBody = 1 << 20
 // 500 {"error":"internal"} for any other Apply error. Any other path is
 // 404, any other method 405.
 func NewHandler(reg *Registry, opts ...HandlerOption) http.Handler {
-	h := &handler{reg: reg}
+	h := &handler{reg: reg, maxPolls: defaultMaxPolls}
 	for _, o := range opts {
 		o(h)
 	}
@@ -137,7 +144,7 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	default:
 		// `workbook: true` tells the mod a job of its session's conversation waits that nobody holds, so it asks `next`
 		// (wire additive: an older mod ignores the field). Without a waiting job the answer is the bare ack.
-		if svc := h.service(); svc != nil && svc.JobWaiting(b.Events[len(b.Events)-1].SID) {
+		if svc, sid := h.service(), b.Events[len(b.Events)-1].SID; svc != nil && h.streamMayPoll(b.Stream, sid) && svc.JobWaiting(sid) {
 			writeJSON(w, http.StatusOK, map[string]any{"ack": ack, "workbook": true})
 			return
 		}
