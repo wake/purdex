@@ -12,11 +12,12 @@ import (
 // Adopt error codes (APIError.Error on /api/team/*, and Approval.CloseReason
 // when a re-check at decide time cancels the request); 409 and CLI exit 13.
 const (
-	ErrAdoptSelf           = "adopt_self"           // the target is the caller itself
-	ErrAdoptTargetIsLead   = "adopt_target_is_lead" // the target leads a live team
-	ErrAdoptAlreadyMember  = "adopt_already_member" // the target is already a live member
-	ErrAdoptTargetNotFound = "adopt_target_not_found"
-	ErrRemoteUnsupported   = "remote_unsupported" // the target lives on another host; plan v3 P4b-4 reuses it
+	ErrAdoptSelf            = "adopt_self"           // the target is the caller itself
+	ErrAdoptTargetIsLead    = "adopt_target_is_lead" // the target leads a live team
+	ErrAdoptAlreadyMember   = "adopt_already_member" // the target is already a live member
+	ErrAdoptTargetNotFound  = "adopt_target_not_found"
+	ErrAdoptTargetAmbiguous = "adopt_target_ambiguous" // two live conversations carry the target's ref; name it by session id or full address
+	ErrRemoteUnsupported    = "remote_unsupported"     // the target lives on another host; plan v3 P4b-4 reuses it
 )
 
 // Member origins: Member.Origin, how a member joined its team.

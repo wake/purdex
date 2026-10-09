@@ -108,12 +108,12 @@ func TestWireUnattended_JSONShapes(t *testing.T) {
 	}
 }
 
-// Only the two kinds the user put under the switch (U23); never the hook
-// kinds, which stay with the person (U23 "不在範圍內"). PL-1a adds adopt.
-func TestAutoApprovable_LeadAndSelfRelayOnly(t *testing.T) {
+// Only the kinds the user put under the switch (U23, adopt U24 PL-1c); never the hook
+// kinds, which stay with the person (U23 "不在範圍內").
+func TestAutoApprovable_LeadSelfRelayAndAdoptOnly(t *testing.T) {
 	for k, want := range map[Kind]bool{
-		KindLead: true, KindSelfRelay: true,
-		KindHookAsk: false, KindHookPermission: false, "adopt": false, "": false, "LEAD": false,
+		KindLead: true, KindSelfRelay: true, KindAdopt: true,
+		KindHookAsk: false, KindHookPermission: false, "adopt ": false, "": false, "LEAD": false,
 	} {
 		if got := AutoApprovable(k); got != want {
 			t.Errorf("AutoApprovable(%q) = %v, want %v", k, got, want)

@@ -139,12 +139,15 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	req.ID = u.String()
 	switch req.Kind {
 	case team.KindLead:
+	case team.KindAdopt:
+		m.handleCreateAdopt(w, req)
+		return
 	case team.KindSelfRelay:
 		// A self relay opens an op with its row; that is POST /api/relay/begin (P5a).
 		m.writeErr(w, http.StatusBadRequest, team.ErrUnsupportedKind, "kind self_relay opens through POST /api/relay/begin", nil)
 		return
 	default:
-		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "kind must be lead", nil)
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "kind must be lead or adopt", nil)
 		return
 	}
 	if req.WaitS < 0 || req.MaxMembers < 0 {
@@ -492,6 +495,16 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, ErrMemberCannotLead) { // as already_lead: rolled back, the row stays open
 		m.logf("[team] approval %s: approve by %s %q refused: origin %s is a member of a live team", id, client.Kind, client.Label, a.Origin.Ref)
 		m.writeErr(w, http.StatusConflict, team.ErrMemberCannotLead, "this session is a member of a live team; the request stays open", nil)
+		return
+	}
+	var refused *adoptRefusedError
+	if errors.As(err, &refused) { // committed and announced: the request is cancelled with this code (no approval in the body, as above)
+		m.logf("[team] approval %s: approve by %s %q refused: %s; request cancelled", id, client.Kind, client.Label, refused.Code)
+		m.writeErr(w, http.StatusConflict, refused.Code, "the request cannot be approved ("+refused.Code+"); it is cancelled", nil)
+		return
+	}
+	if errors.Is(err, errRegistry) {
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry", nil)
 		return
 	}
 	if err != nil {
