@@ -306,16 +306,20 @@ function LinePanel({ team, activeTabId, expanded, width, onSetMode, onToggleExpa
   useLayoutEffect(() => {
     const el = box.current
     if (!el) return
+    const cells = () => [...el.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]'), ...(moreBox.current?.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]') ?? [])]
     const measure = () => {
       const avail = el.clientWidth
-      const cells = [...el.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]'), ...(moreBox.current?.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]') ?? [])]
-      const widths = cells.map((c) => c.offsetWidth)
+      const widths = cells().map((c) => c.offsetWidth)
       setMeasured(avail > 0 && widths.length > 0 && widths.every((w) => w > 0) ? capacityFromWidths(widths, avail) : null)
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
+    // A cell can change width by itself (e.g. its host badge's size setting), with neither a LinePanel re-render nor a
+    // container resize: observe every cell too. The effect re-runs each render, so a changed cell set is re-bound. measure()
+    // only changes state when the capacity really differs (setState bails out on an equal value), so this cannot oscillate.
     const ro = new ResizeObserver(measure)
     ro.observe(el)
+    cells().forEach((c) => ro.observe(c))
     return () => ro.disconnect()
   })
   const cap = measured ?? (width === undefined ? seats.length : firstRowCapacity(width))

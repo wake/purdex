@@ -430,13 +430,20 @@ describe('header height (TI-6)', () => {
     describe('capacity from each cell\'s own width', () => {
       let widths: Record<string, number> = {}
       let roCallbacks: Array<() => void> = []
+      let roLive: Array<{ cb: () => void; targets: Set<Element>; live: boolean }> = []
       beforeEach(() => {
         widths = {}
         roCallbacks = []
+        roLive = []
         vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
           return this.getAttribute('data-testid') === 'team-panel-cell' ? widths[this.getAttribute('data-session-id') ?? ''] ?? 38 : 0
         })
-        vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { roCallbacks.push(cb) } observe() {} disconnect() {} })
+        vi.stubGlobal('ResizeObserver', class {
+          rec = { cb: () => {}, targets: new Set<Element>(), live: true }
+          constructor(cb: () => void) { this.rec.cb = cb; roCallbacks.push(cb); roLive.push(this.rec) }
+          observe(t: Element) { this.rec.targets.add(t) }
+          disconnect() { this.rec.live = false }
+        })
       })
       afterEach(() => vi.unstubAllGlobals())
 
@@ -500,6 +507,37 @@ describe('header height (TI-6)', () => {
         act(() => seed(8))
         expect(inHeader()).toBe(3)
         expect(err).not.toHaveBeenCalled()
+      })
+
+      it('a cell resizing by itself (container unchanged) updates the capacity, wrapped cells included', () => {
+        widths = { M3: 20, M4: 3 }
+        scene5(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        availW = 190 // 4*38 + 20 + 3 + 5*2 + 5 = 190 -> 6 fit
+        mount()
+        expect(inHeader()).toBe(6)
+        widths = { M3: 20, M4: 20 } // e.g. a host badge got wider; no container resize
+        act(() => roLive.filter((r) => r.live).forEach((r) => r.cb()))
+        expect(inHeader()).toBe(5)
+      })
+
+      it('every cell, in the row and in the wrapped region, is observed; new seats get bound', () => {
+        const seed = (n: number) => seedScene({
+          members: Array.from({ length: n }, (_, i) => [`M${i}`, `m${i}-tm`] as [string, string]),
+          tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead',
+        })
+        availW = 165
+        seed(8)
+        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+        mount()
+        const observed = () => new Set(roLive.filter((r) => r.live).flatMap((r) => [...r.targets]))
+        const cells = () => screen.getAllByTestId('team-panel-cell')
+        expect(cells().length).toBe(9)
+        expect(inHeader()).toBeLessThan(9) // some wrap
+        cells().forEach((c) => expect(observed().has(c)).toBe(true))
+        act(() => seed(10))
+        expect(cells().length).toBe(11)
+        cells().forEach((c) => expect(observed().has(c)).toBe(true))
       })
 
       it('an enlarged panel uses the same widths', () => {
