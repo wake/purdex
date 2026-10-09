@@ -44,11 +44,11 @@ type windowJSON struct {
 }
 
 type snapshotJSON struct {
-	Reset        bool                   `json:"reset,omitempty"`
-	Conversation convmodel.Conversation `json:"conversation"`
-	Header       headerJSON             `json:"header"`
-	Window       windowJSON             `json:"window"`
-	Cursor       string                 `json:"cursor"`
+	Reset        bool             `json:"reset,omitempty"`
+	Conversation conversationJSON `json:"conversation"`
+	Header       headerJSON       `json:"header"`
+	Window       windowJSON       `json:"window"`
+	Cursor       string           `json:"cursor"`
 }
 
 func headerOf(h convfeed.Header) headerJSON {
@@ -198,9 +198,9 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, turns, 
 		}
 		return snapshotJSON{
 			Reset: reset,
-			Conversation: convmodel.Conversation{
+			Conversation: conversationJSON{
 				Key:      convmodel.Key{HostID: hostID, Provider: "claude", SessionID: sid},
-				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Usage: cu, Turns: turnList,
+				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Usage: cu, Turns: apiTurns(turnList),
 			},
 			Header: headerOf(h),
 			Window: windowJSON{FirstIndex: win.FirstIndex, LastIndex: win.LastIndex, TotalTurns: win.TotalTurns, HasMoreBefore: win.HasMoreBefore},
@@ -216,13 +216,13 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, turns, 
 	var view convfeed.View
 	if hasAround {
 		var found, shown bool
-		if view, found, shown = entry.ViewAround(turns, around, envelope); !found {
+		if view, found, shown = entry.ViewAround(turns, around, envelope, encodeAPITurn); !found {
 			return nil, "", http.StatusNotFound, "item_not_found"
 		} else if !shown && !view.OverBudget {
 			return nil, "", http.StatusUnprocessableEntity, "item_not_shown" // its turn is over the cap and the item was dropped
 		}
 	} else {
-		view = entry.View(turns, before, envelope)
+		view = entry.View(turns, before, envelope, encodeAPITurn)
 	}
 	if view.OverBudget {
 		return nil, "", http.StatusInternalServerError, "too_large"
@@ -248,8 +248,8 @@ type turnHeaderJSON struct {
 }
 
 type changeJSON struct {
-	Turn  turnHeaderJSON   `json:"turn"`
-	Items []convmodel.Item `json:"items"`
+	Turn  turnHeaderJSON `json:"turn"`
+	Items []indexedItem  `json:"items"`
 }
 
 type incrementJSON struct {
@@ -264,10 +264,7 @@ func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string, overhead
 	resp := incrementJSON{Changes: make([]changeJSON, 0, len(inc.Changes)), Header: headerOf(inc.Header), Cursor: inc.Cursor}
 	for _, c := range inc.Changes {
 		t := c.Turn
-		items := c.Items
-		if items == nil {
-			items = []convmodel.Item{}
-		}
+		items := indexedItemsAt(c.Items, c.Indexes)
 		resp.Changes = append(resp.Changes, changeJSON{
 			Turn:  turnHeaderJSON{ID: t.ID, Index: t.Index, StartedAt: t.StartedAt, EndedAt: t.EndedAt, Outcome: t.Outcome, Error: t.Error, OmittedItems: t.OmittedItems},
 			Items: items,

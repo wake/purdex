@@ -29,7 +29,7 @@ type WindowResult struct {
 func (e *Entry) Window(turns, before int, budget func([]byte) bool) WindowResult {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.windowLocked(turns, before, budget)
+	return e.windowLocked(turns, before, budget, nil)
 }
 
 // View is a window, the header and the cursor taken under one hold of the entry's lock: a refresh by another request
@@ -43,11 +43,14 @@ type View struct {
 // View is Window plus the header and cursor of the same instant. envelope is given that header and cursor and returns
 // the budget for the turn array (it knows what else the encoded body carries, which depends on the title); it runs
 // under the entry's lock, so it must be quick.
-func (e *Entry) View(turns, before int, envelope func(h Header, cursor string) func([]byte) bool) View {
+//
+// enc encodes one turn the way the caller will put it on the wire (so the budget measures what is really sent, e.g. with
+// the API's per-item index); nil is the model's own JSON.
+func (e *Entry) View(turns, before int, envelope func(h Header, cursor string) func([]byte) bool, enc TurnEncoder) View {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	h, cur := e.headerLocked(), e.cursorLocked()
-	return View{WindowResult: e.windowLocked(turns, before, envelope(h, cur)), Header: h, Cursor: cur}
+	return View{WindowResult: e.windowLocked(turns, before, envelope(h, cur), enc), Header: h, Cursor: cur}
 }
 
 // ViewAround is View centred on the turn that holds the item itemID: the `turns` turns around it, as close to the middle
@@ -55,7 +58,7 @@ func (e *Entry) View(turns, before int, envelope func(h Header, cursor string) f
 // is among them, the window is taken again with the target as its newest turn. shown is false when the item itself is
 // not in the window: its turn alone is over the cap and the oldest items that were dropped include it (the caller says
 // so instead of answering with a window that silently lacks what was asked for).
-func (e *Entry) ViewAround(turns int, itemID string, envelope func(h Header, cursor string) func([]byte) bool) (v View, ok, shown bool) {
+func (e *Entry) ViewAround(turns int, itemID string, envelope func(h Header, cursor string) func([]byte) bool, enc TurnEncoder) (v View, ok, shown bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	all := e.conv().Turns
@@ -85,9 +88,9 @@ find:
 	}
 	h, cur := e.headerLocked(), e.cursorLocked()
 	budget := envelope(h, cur)
-	w := e.windowLocked(turns, all[end-1].Index+1, budget)
+	w := e.windowLocked(turns, all[end-1].Index+1, budget, enc)
 	if !w.OverBudget && (w.FirstIndex < 0 || all[pos].Index < w.FirstIndex) {
-		w = e.windowLocked(turns, all[pos].Index+1, budget)
+		w = e.windowLocked(turns, all[pos].Index+1, budget, enc)
 	}
 	v = View{WindowResult: w, Header: h, Cursor: cur}
 	target := all[pos].Index
@@ -104,7 +107,18 @@ find:
 	return v, true, shown
 }
 
-func (e *Entry) windowLocked(turns, before int, budget func([]byte) bool) WindowResult {
+// TurnEncoder encodes one turn for the size budget.
+type TurnEncoder func(convmodel.Turn) ([]byte, error)
+
+func encodeOrModel(enc TurnEncoder) TurnEncoder {
+	if enc != nil {
+		return enc
+	}
+	return func(t convmodel.Turn) ([]byte, error) { return json.Marshal(t) }
+}
+
+func (e *Entry) windowLocked(turns, before int, budget func([]byte) bool, enc TurnEncoder) WindowResult {
+	enc = encodeOrModel(enc)
 	all := e.conv().Turns
 	res := WindowResult{FirstIndex: -1, LastIndex: -1, TotalTurns: len(all)}
 	if turns < 1 || len(all) == 0 {
@@ -123,16 +137,16 @@ func (e *Entry) windowLocked(turns, before int, budget func([]byte) bool) Window
 	}
 	cand := all[start:end]
 
-	enc := make([][]byte, len(cand))
+	encoded := make([][]byte, len(cand))
 	for i, t := range cand {
-		b, err := json.Marshal(t)
+		b, err := enc(t)
 		if err != nil {
 			b = []byte("null")
 		}
-		enc[i] = b
+		encoded[i] = b
 	}
 	fits := func(k int) bool { // the newest k turns
-		return budget(joinArray(enc[len(enc)-k:]))
+		return budget(joinArray(encoded[len(encoded)-k:]))
 	}
 	k := len(cand)
 	if !fits(k) {
@@ -154,7 +168,7 @@ func (e *Entry) windowLocked(turns, before int, budget func([]byte) bool) Window
 	}
 	chosen := append([]convmodel.Turn(nil), cand[len(cand)-k:]...)
 	if k == 1 && !fits(1) {
-		t, ok := dropOldestItems(chosen[0], budget)
+		t, ok := dropOldestItems(chosen[0], budget, enc)
 		if !ok {
 			res.OverBudget = true
 			res.HasMoreBefore = true
@@ -172,13 +186,13 @@ func (e *Entry) windowLocked(turns, before int, budget func([]byte) bool) Window
 // dropOldestItems keeps the fewest-dropped suffix of the turn's items that
 // fits (the smallest d such that dropping d oldest items fits); d = all items
 // when none does (then ok is false: the turn cannot fit at all).
-func dropOldestItems(t convmodel.Turn, budget func([]byte) bool) (convmodel.Turn, bool) {
+func dropOldestItems(t convmodel.Turn, budget func([]byte) bool, enc TurnEncoder) (convmodel.Turn, bool) {
 	n := len(t.Items)
 	try := func(d int) (convmodel.Turn, bool) {
 		c := t
 		c.Items = t.Items[d:]
 		c.OmittedItems = d
-		b, err := json.Marshal(c)
+		b, err := enc(c)
 		if err != nil {
 			return c, false
 		}
