@@ -1,0 +1,88 @@
+package agent
+
+import (
+	"context"
+	"strings"
+
+	"github.com/wake/purdex/internal/module/session"
+)
+
+// ConfirmedOwners returns the live panes that run the Claude Code session sessionID, each confirmed by the same
+// owner resolution every other caller uses (process generation, pane membership, the second pane listing): the
+// conversation API's "live pane" source (spec §8.2).
+//
+// The frames store finds the candidates by session id (cheap, no tmux); with none it stops there. Otherwise one pane
+// listing maps those panes to their tmux sessions and one OwnerPass confirms each session; an owner counts only when
+// its own SessionID is sessionID (a tmux session's owner may be another conversation). Several confirmed panes are
+// all returned, oldest-seen first is not promised: the caller picks by LastSeenAt.
+//
+// The error is returned only when nothing was confirmed and some part of the walk failed (a listing, the process
+// view, the deadline): "could not tell", which the caller reports as status "unknown"; a confirmed pane next to a
+// failed one is still an answer.
+func (m *Module) ConfirmedOwners(ctx context.Context, sessionID string) ([]PaneOwner, error) {
+	if m == nil || m.frames == nil || m.tmux == nil || sessionID == "" {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	frames, err := m.frames.ListRootsBySessionID(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	panes := map[string]bool{}
+	for _, f := range frames {
+		if f.AgentType != "cc" {
+			continue
+		}
+		if _, ok := liveFrame(f); ok {
+			panes[f.PaneID] = true
+		}
+	}
+	if len(panes) == 0 {
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, provenanceTimeout)
+	defer cancel()
+	listing, err := m.tmux.ListAllPanes(ctx)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		return nil, err
+	}
+	codes := map[string]bool{}
+	for _, row := range listing {
+		if !panes[row.PaneID] {
+			continue
+		}
+		if code, err := session.EncodeSessionID(row.SessionID); err == nil {
+			codes[code] = true
+		}
+	}
+	if len(codes) == 0 {
+		return nil, nil
+	}
+
+	pass := m.NewOwnerPass(nil)
+	for code := range codes {
+		pass.Resolve(ctx, code)
+	}
+	var owners []PaneOwner
+	var firstErr error
+	for _, res := range pass.Confirm(ctx) {
+		switch {
+		case res.Err != nil:
+			if firstErr == nil {
+				firstErr = res.Err
+			}
+		case res.Found && strings.EqualFold(res.Owner.SessionID, sessionID):
+			owners = append(owners, res.Owner)
+		}
+	}
+	if len(owners) > 0 {
+		return owners, nil
+	}
+	return nil, firstErr
+}
