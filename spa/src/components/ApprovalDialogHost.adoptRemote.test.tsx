@@ -9,9 +9,9 @@ import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { decideApproval, fetchAdoption } from '../lib/team/approval-api'
-import { resetAdoptionWaitForTests } from '../lib/team/adoption-wait'
+import { resetAdoptionWaitForTests, startAdoptionWait } from '../lib/team/adoption-wait'
 import { __resetClientDescriptorForTests } from '../lib/team/client-label'
-import type { Approval } from '../lib/team/types'
+import { adoptPayloadOf, type Approval } from '../lib/team/types'
 
 vi.mock('../lib/team/approval-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/team/approval-api')>()),
@@ -137,6 +137,36 @@ describe('adopt card — remote target', () => {
     await click('approval-deny')
     expect(mockedPoll).not.toHaveBeenCalled()
     expect(screen.queryByTestId('adoption-wait-card')).toBeNull()
+  })
+})
+
+describe('adopt cards — several waits at once', () => {
+  const pending = new Map<string, (v: { approval_id: string; state: string; code?: string }) => void>()
+  beforeEach(() => {
+    pending.clear()
+    mockedPoll.mockImplementation((_h, id) => new Promise((r) => { pending.set(id, r) }))
+  })
+  const startTwo = () => {
+    for (const id of ['a-1', 'a-2']) {
+      startAdoptionWait(H, id, adoptPayloadOf({ ...adopt(REMOTE), id } as Approval))
+    }
+  }
+
+  it('a finished-but-open card does not hide the others', async () => {
+    render(<ApprovalDialogHost />)
+    act(() => { startTwo() })
+    expect(screen.getAllByTestId('adoption-wait-card')).toHaveLength(2)
+    await act(async () => { pending.get('a-1')!({ approval_id: 'a-1', state: 'failed', code: 'x' }) })
+    await act(async () => { pending.get('a-2')!({ approval_id: 'a-2', state: 'active' }) })
+    const texts = screen.getAllByTestId('adoption-wait-text').map((n) => n.textContent)
+    expect(texts).toEqual(['納入失敗（x）', '已納入'])
+  })
+
+  it('shows at most three and counts the rest', () => {
+    render(<ApprovalDialogHost />)
+    act(() => { for (const id of ['a', 'b', 'c', 'd', 'e']) startAdoptionWait(H, id, adoptPayloadOf(adopt(REMOTE))) })
+    expect(screen.getAllByTestId('adoption-wait-card')).toHaveLength(3)
+    expect(text('adoption-wait-more')).toBe('另有 2 筆納入等待中')
   })
 })
 
