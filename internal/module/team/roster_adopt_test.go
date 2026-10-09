@@ -124,3 +124,37 @@ func TestTeamGet_AdoptedMemberOriginIsAdopted(t *testing.T) {
 		t.Fatalf("member = %+v, want origin adopted, adopt_request %s, no spawn_op", m, key)
 	}
 }
+
+// A team with a spawned member and an adopted one lists both, each with its own origin, in the order they joined.
+// Mutation gate: a roster that rebuilds Members at the adopted row, or branches on one origin → red.
+func TestRoster_MixedTeamListsSpawnedAndAdoptedInJoinOrder(t *testing.T) {
+	f := newFixture(t)
+	f.showTarget()
+	f.approveLead(uid(1))
+	seedMember(t, f.m.store, "op-1", uid(1), "sid-m1", f.clock.Load()) // spawned, joins first
+	f.liveMember("sid-m1", "_mem001", "one", "self/w-one", "tm-0000000001")
+	f.clock.Add(10)
+	a := f.adoptOK(uid(10), "_def456")
+	if code, body := f.decide(a.ID, "approve"); code != http.StatusOK {
+		t.Fatalf("approve: %d %s", code, body)
+	}
+	f.clock.Add(10)
+	seedMember(t, f.m.store, "op-3", uid(1), "sid-m3", f.clock.Load()) // spawned, joins last
+	ms := f.getRoster().Teams[0].Members
+	got := make([]string, len(ms))
+	for i, m := range ms {
+		got[i] = m.SessionID + ":" + m.Origin
+	}
+	want := []string{"sid-m1:spawned", "sid-2:adopted", "sid-m3:spawned"}
+	if len(got) != len(want) {
+		t.Fatalf("members = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("members = %v, want %v", got, want)
+		}
+	}
+	if ms[0].TmuxSession != "tm-0000000001" || ms[1].TmuxSession != "mine" {
+		t.Errorf("tmux sessions = %q, %q, want the spawned one's own and the adopted user's \"mine\"", ms[0].TmuxSession, ms[1].TmuxSession)
+	}
+}
