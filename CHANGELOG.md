@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.628] - 2026-10-09
+
+> 動 daemon 與 SPA：**要部署 daemon**，並在 mlab 的 `~/.config/pdx/config.toml` 加上 `[push]` 一段（`apns_dir = "~/.config/apns"`）；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主 checkout 快轉生效；Electron 不必更新。這一版準備好手機推播的裝置登記（還不會送出推播），把「收編執行中的 session 進 team」的 API 接上（CLI 之後才開放），並調整 team 分頁與桌面通知。
+
+### Added：手機推播的裝置登記 — 推播 PU-1（#2141，介面線）
+
+- 新的 `[push]` 設定段（只在 daemon 啟動時讀取，不經 `PUT /api/config`），指向 APNs 金鑰所在目錄。
+- 手機 App 可以登記與移除自己的裝置；`/api/info` 會回報推播是否已設定、是否就緒，就緒時才宣告 `push.v1`。
+- 金鑰缺漏或損壞時 daemon 照常啟動，只是推播顯示未就緒並說明原因。
+- 這一版還不會送出任何推播（PU-2 才會）。
+
+### Added：收編執行中的 session 進 team 的 API — U24 PL-1c0、PL-1c、PL-1c2（#2136、#2139、#2145）
+
+- lead 可以申請把一個執行中的 session 收進自己的 team：申請、核准、無人值守時自動核准都已接上，App 會顯示收編核准卡片（PL-2a，#2132）。
+- 用 6 碼 ref 指定對象時，若剛好有兩個對話同一個 ref，會明確回報「有歧義」，請改用 session id。
+- 不在 tmux 裡執行的 session 也會記錄每一輪的最後一句，被收編後 lead 一樣看得到（#2115）。
+- CLI（`pdx adopt`、`pdx release`）與通知尚未開放，會在之後的 PR 一起上線並驗收。
+
+### Changed：team 分頁的排列與關閉 — TI-1c（#2135，介面線）
+
+- 同一個 team 的分頁（lead 在前、member 依序在後）會排在一起；離開 team 的 member 分頁會排到群組後面。
+- 關掉 lead 的分頁時，同一個工作區裡這個 team 的其他分頁會一起關閉。
+
+### Changed：桌面通知只發給有開分頁的 session（#2134，介面線）
+
+- 所有 session 一律「有開分頁才通知」，不再對不在 tmux 裡的 session 例外。
+
+### 其他
+
+- 手機推播的 spec 與 plan（#2133，文件）。
+
 ## [1.0.0-alpha.627] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版讓對話的即時推送帶上燈號變化，並為之後「把執行中的 session 收進 team」打好資料層基礎（目前沒有可見的行為變化）。
