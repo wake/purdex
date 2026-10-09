@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -25,10 +27,21 @@ import (
 //   - reapSurvivors then waits for exactly those pids (wait4(pid, WNOHANG): targeted, so it can never touch a
 //     child of this image), once a second, until each has been collected.
 
+// psPath is the process lister (a var so a test can break it).
+var psPath = "/bin/ps"
+
 // reapInheritedChildren returns how many exited children it collected and the pids of the children that are
-// still running. It never blocks.
-func reapInheritedChildren() (reaped int, survivors []int) {
-	listed := directChildren() // before the loop: the zombies it collects are in it too
+// still running. listErr is set when the children could not be listed (ps failed, three tries): the exited ones
+// are still collected, but the running ones are then unknown and will not be watched — the caller says so. It
+// never blocks (the lister is bounded by a short timeout).
+func reapInheritedChildren() (reaped int, survivors []int, listErr error) {
+	var listed []int
+	for try := 0; try < 3; try++ {
+		if listed, listErr = directChildren(); listErr == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	for {
 		var ws syscall.WaitStatus
 		pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
@@ -44,7 +57,7 @@ func reapInheritedChildren() (reaped int, survivors []int) {
 					survivors = append(survivors, p)
 				}
 			}
-			return reaped, survivors
+			return reaped, survivors, listErr
 		}
 		reaped++
 		// a pid collected by the loop is no longer a child: probeChild answers "gone" for it
@@ -72,11 +85,13 @@ func probeChild(pid int) (collected, alive bool) {
 
 // directChildren lists the pids whose parent is this process, through ps. The ps child it starts is waited for
 // by os/exec and is not in the result.
-func directChildren() []int {
-	cmd := exec.Command("/bin/ps", "-A", "-o", "pid=,ppid=")
+func directChildren() ([]int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, psPath, "-A", "-o", "pid=,ppid=")
 	out, err := cmd.Output()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("list children with %s: %w", psPath, err)
 	}
 	self := os.Getpid()
 	var pids []int
@@ -92,7 +107,7 @@ func directChildren() []int {
 		}
 		pids = append(pids, pid)
 	}
-	return pids
+	return pids, nil
 }
 
 // reapSurvivors collects each of pids once it has exited, polling every interval for at most maxWait; it

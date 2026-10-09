@@ -23,6 +23,10 @@ func TestReapInheritedChildren_SurvivorIsCollectedLaterWithoutTouchingNewChildre
 	reapScenario(t, "survivor")
 }
 
+func TestReapInheritedChildren_ListingFailureIsReportedAndTheExitedAreStillCollected(t *testing.T) {
+	reapScenario(t, "pslost")
+}
+
 // reapScenario runs the scenario in a fresh copy of the test binary: wait4(-1) takes the exit status of ANY
 // child of the process, so in this package's own test process it could steal one from a test that is still
 // waiting for its command. The copy has no children but its own.
@@ -45,6 +49,8 @@ func TestReapHelperProcess(t *testing.T) {
 		reapRunning(t)
 	case "survivor":
 		reapSurvivor(t)
+	case "pslost":
+		reapPSLost(t)
 	}
 }
 
@@ -58,7 +64,7 @@ func reapCollect(t *testing.T) {
 		pids = append(pids, cmd.Process.Pid)
 	}
 	waitUntil(t, func() bool { return zombieCount(pids) == len(pids) })
-	if n, _ := reapInheritedChildren(); n < 3 {
+	if n, _, _ := reapInheritedChildren(); n < 3 {
 		t.Fatalf("reaped %d, want at least the 3 zombies", n)
 	}
 	for _, pid := range pids {
@@ -66,7 +72,7 @@ func reapCollect(t *testing.T) {
 			t.Errorf("pid %d: kill(0) = %v, want ESRCH (reaped)", pid, err)
 		}
 	}
-	if n, _ := reapInheritedChildren(); n != 0 {
+	if n, _, _ := reapInheritedChildren(); n != 0 {
 		t.Errorf("a second pass reaped %d, want 0", n)
 	}
 }
@@ -79,7 +85,7 @@ func reapRunning(t *testing.T) {
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 	done := make(chan int, 1)
 	var survivors []int
-	go func() { n, s := reapInheritedChildren(); survivors = s; done <- n }()
+	go func() { n, s, _ := reapInheritedChildren(); survivors = s; done <- n }()
 	select {
 	case n := <-done:
 		if n != 0 {
@@ -104,7 +110,7 @@ func reapSurvivor(t *testing.T) {
 	if err := old.Start(); err != nil { // the previous image's child, unwaited
 		t.Fatal(err)
 	}
-	reaped, survivors := reapInheritedChildren()
+	reaped, survivors, _ := reapInheritedChildren()
 	if reaped != 0 || len(survivors) != 1 || survivors[0] != old.Process.Pid {
 		t.Fatalf("reaped=%d survivors=%v, want the one running child %d", reaped, survivors, old.Process.Pid)
 	}
@@ -160,4 +166,23 @@ func waitUntil(t *testing.T, cond func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("condition not reached")
+}
+
+func reapPSLost(t *testing.T) {
+	psPath = "/nonexistent/ps"
+	cmd := exec.Command("/bin/sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return zombieCount([]int{cmd.Process.Pid}) == 1 })
+	reaped, survivors, err := reapInheritedChildren()
+	if err == nil {
+		t.Fatal("a failing lister was not reported")
+	}
+	if reaped < 1 || len(survivors) != 0 {
+		t.Fatalf("reaped=%d survivors=%v, want the exited child collected and no survivors known", reaped, survivors)
+	}
+	if err := syscall.Kill(cmd.Process.Pid, 0); err != syscall.ESRCH {
+		t.Errorf("the exited child was not collected: %v", err)
+	}
 }
