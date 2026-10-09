@@ -1,6 +1,7 @@
 # Phone pairing by QR code (hosts + profile) — spec
 
-Date: 2026-10-09 · Owner: interface line lead (`mlab/purdex-88-b8`) · Status: draft for plan review
+Date: 2026-10-09 · Owner: interface line lead (`mlab/purdex-88-b8`) · Status: revised after plan review
+(`task-mv0shz3e-31lcty`, 24 findings folded in — table at the end of the plan)
 
 The phone (Purdex iOS) is paired by scanning a QR code shown by the Mac App. After the scan the phone reaches every
 host the Mac has a token for, with **its own token per host** (revocable on its own), and follows one profile of the
@@ -16,102 +17,118 @@ Mac one way. The iOS part is built in purdex-ios against this contract.
 | R4 | The profile flows **one way, Mac → phone**: workspaces, tabs, the appearance settings the phone understands. | User, 2026-10-09 |
 | R5 | The only thing the phone writes back is **a tab it adds**, placed **at the end of the same workspace**. | User, 2026-10-09 |
 | R6 | Closing, on the phone, a tab that came from the Mac **hides it on the phone only**; the phone has "show hidden tabs". | User, 2026-10-09 |
-| R7 | A phone token cannot use arbitrary-path file access (and the other routes in §3.3). | purdex-ios brief §4a (user, 2026-10-07) |
+| R7 | A phone token cannot use arbitrary-path file access, nor the other routes outside its allow-list (§3.3). | purdex-ios brief §4a (user, 2026-10-07) |
 
 Facts this spec stands on (main @ 2026-10-09, measured):
-- The daemon knows **one** token for its general routes, `Cfg.Token` (`cmd/pdx/http_chain.go`, `internal/middleware/middleware.go`); a peer's `pdxp_` token is accepted only on `/api/peers*` (`internal/middleware/peer_auth.go`, policy `internal/module/peers/policy.go`). There is no per-device token, no scope, no revocation on the general routes.
-- Host transfer (`internal/module/hosttransfer`): the Mac uploads opaque host rows to a relay daemon (`POST /api/host-transfer`, admin token), gets an 8-char Crockford code (40 bits, 10 min, one-time, 16 live codes, 10 failed redeems per minute per daemon), and the receiver redeems it (`POST /api/host-transfer/redeem`, **admin token of the relay**). The rows carry the sharer's admin tokens (`spa/src/lib/host-transfer-plan.ts`). Kept in memory only.
-- Profiles (`internal/module/profiles`): sections `workspaces`, `tabs.<ws>`, `settings` on the SOT (dev host) daemon; writes are whole-section CAS with `clientId`, `baseRev`, `hash`, `fingerprint`, `ordinal` (`handler_sections.go`); a change emits the `profile` host event. A wrong fingerprint / ordinal answers a schema 409 or locks other clients out.
-- No QR library in `spa/package.json`; the Share hosts dialog (`spa/src/components/hosts/ShareHostsDialog.tsx`) shows the code as text.
+- The daemon knows **one** token for its general routes, `Cfg.Token` (`cmd/pdx/http_chain.go`, `internal/middleware/middleware.go`); a peer's `pdxp_` token is accepted only on `/api/peers*` (`internal/middleware/peer_auth.go`, `internal/module/peers/policy.go`). No per-device token, scope or revocation on the general routes. WebSockets authenticate by bearer or by a one-time ticket from `POST /api/ws-ticket` (`internal/core/core.go`, `internal/core/ticket.go`; the validator answers only a bool today).
+- `IPWhitelist` allows every source when its `allow` list is empty (`internal/middleware/middleware.go`).
+- Host transfer (`internal/module/hosttransfer`): opaque rows uploaded with the relay's admin token, an 8-char Crockford code (40 bits, 10 min, one-time take inside one critical section, 16 live codes, 10 failed attempts per minute per daemon), redeemed with the **relay's admin token**. The Share-hosts rows carry the sharer's admin tokens. Memory only.
+- Profiles (`internal/module/profiles`): sections `workspaces`, `tabs.<ws>`, `settings` on the SOT (dev host) daemon; whole-section CAS writes (`clientId`, `baseRev`, `hash`, `fingerprint`, `ordinal`); a `profile` host event per section change. In the SPA the master profile may be parked while another is shown (`spa/src/lib/profile/master-world.ts`: `readMasterWorld`, `writeMasterWorld` → `'ok' | 'unsettled'`); profile sync runs only in the leader window, with the host connected and the attachment confirmed (`spa/src/lib/profile/start.ts`, `leader.ts`).
+- Go's `ServeMux.Handler(r)` returns the pattern a request would be dispatched to; `ServeMux` cannot list its patterns.
+- No QR library in `spa/package.json`.
 
 ## 2. Flow
 
-1. **Mac, "配對手機"** (Hosts page): the person picks the profile (default: this Mac's master profile) and the relay
-   (default: the active host, as Share hosts does).
-2. **Mint.** For every host that has a token on this Mac, the Mac calls `POST /api/devices` on that host with its admin
-   token → a fresh device token for the phone (§3), all sharing one `pairing_id` (a UUID the Mac makes) and label
-   「手機（配對中）」. A host that fails is left out and listed in the dialog; zero hosts → nothing is shown.
-3. **Package.** The Mac uploads to the relay, through the existing `POST /api/host-transfer`, a payload of **pair rows**
-   (§4.1) — one per host: name, address, daemon id, look, the **device token**, plus a `profile` pointer — and gets a
-   code.
-4. **Show.** The dialog shows the QR (`purdex://pair?v=1&relay=<ip:port>&code=<code>`), the code as text under it (for
-   typing), and the 10-minute countdown. Closing the dialog before a scan revokes the minted tokens (§3.4).
-5. **Phone, scan.** The phone parses the QR and calls the relay's **`POST /api/host-transfer/claim`** `{code}` — no
-   token: the code is the credential (§4.2). It gets the pair rows.
-6. **Verify and add.** For each row the phone calls `GET /api/info` on that host with the row's device token, keeps the
-   rows whose `host_id` matches `daemon_id`, adds them (replacing a host it already had with the same daemon id), and
-   sets its own name on each: `PUT /api/devices/self {label: "<device name>"}`. Rows that fail are shown, not added.
-7. **Profile.** From the row whose daemon id is the profile's SOT, the phone reads the profile (§5) and keeps following
-   it.
-8. **Push.** The phone re-registers for push (push spec §4) on every host that announces `push.v1`, now with the device
-   token.
+1. **Mac, 「配對手機」** (Hosts page): the person picks the profile (default: this Mac's master profile) and the relay
+   (default: the active host).
+2. **Mint.** The Mac makes a `pairing_id` (UUID) and, for every host it has a token for, calls `POST /api/devices` with
+   its admin token → a device token for the phone (§3). On the profile's **SOT host** the token is bound to that profile
+   (`profile_id`); on the other hosts it is bound to none. **If the SOT host fails, the pairing is aborted** (everything
+   minted is revoked) — the phone could not read the profile. Other hosts that fail are left out and listed.
+3. **Package.** The Mac creates a **pairing entry** on the relay, `POST /api/host-transfer/pairings` (§4.1), with one pair
+   row per minted host, and gets a code.
+4. **Show.** The dialog shows the QR (`purdex://pair?v=1&relay=<ip:port>&code=<code>`), the code as text, and the
+   countdown, and polls `GET /api/host-transfer/pairings/{code}` (§4.3) every 2 s: once claimed it shows 「已配對」 and
+   closing the dialog revokes nothing. Closing **before** a claim (or the countdown running out) deletes the entry
+   (`DELETE /api/host-transfer/pairings/{code}`) and revokes the minted tokens (`DELETE /api/devices?pairing_id=` on each
+   host).
+5. **Phone, scan.** The phone parses the QR and calls the relay's `POST /api/host-transfer/pairings/claim` `{code}` —
+   no token; the code is the credential (§4.2). It gets the pair rows.
+6. **Verify and add** (§7): for each row, `GET /api/info` with the row's device token; keep the rows whose `host_id`
+   equals the row's `daemonId`; add them; set the phone's name on each host with `PUT /api/devices/self`.
+7. **Profile** (§5) from the SOT row.
+8. **Push**: re-register on every host that announces `push.v1`, now with the device token.
 
 ## 3. Device tokens (daemon)
 
 ### 3.1 Store
 
-New module `devices`, `devices.db` in the data dir (owner-only permissions), one table:
+New module `devices`, `devices.db` in the data dir (owner-only), one table:
 
 ```sql
 CREATE TABLE IF NOT EXISTS device_tokens (
-  id TEXT PRIMARY KEY,            -- "d_" + 12 hex
-  pairing_id TEXT NOT NULL,       -- the Mac's pairing UUID, the same on every host of one pairing
+  id TEXT PRIMARY KEY,             -- "d_" + 12 hex
+  pairing_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL DEFAULT '', -- the one profile this token may read (SOT host only); '' = none
   label TEXT NOT NULL,
-  token_hash TEXT NOT NULL UNIQUE,-- SHA-256 hex of the token; the token itself is never stored
+  token_hash TEXT NOT NULL UNIQUE, -- SHA-256 hex; the token itself is never stored
   created_at INTEGER NOT NULL,
-  created_by TEXT NOT NULL,       -- client label of the Mac that minted it
+  created_by TEXT NOT NULL,
+  use_by INTEGER NOT NULL,         -- created_at + 15 min: a token first used after this is refused
   first_used_at INTEGER NOT NULL DEFAULT 0,
   last_used_at INTEGER NOT NULL DEFAULT 0,
   revoked_at INTEGER NOT NULL DEFAULT 0
 );
 ```
 
-- Token format `pdxd_` + 32 hex (16 bytes, `crypto/rand`). Returned **once**, by `POST /api/devices`.
-- **Unused expiry:** a token never used within 15 minutes of its creation is revoked by a sweep (a QR that was never
-  scanned leaves nothing behind).
-- `last_used_at` is written at most once a minute per token (no write per request).
+- Token format `pdxd_` + 32 hex (16 bytes, `crypto/rand`), returned **once** by `POST /api/devices`.
+- **First use** is decided at lookup, in one statement: `UPDATE … SET first_used_at = now WHERE id = ? AND
+  first_used_at = 0 AND use_by >= now AND revoked_at = 0` — a token never used by `use_by` is refused at once (not at the
+  next sweep), and a token that was used is never taken for unused. A sweep only deletes rows that can no longer work
+  (unused past `use_by`, or revoked more than 30 days ago).
+- `last_used_at` is written at most once a minute per token.
+- The lookup is by the indexed hash. (The hash of a 128-bit random token gives an attacker nothing to time; no separate
+  constant-time compare is claimed.)
 
 ### 3.2 Authentication
 
-- The general chain's `TokenAuth` accepts the admin token as today, **or** a live (not revoked) device token, matched
-  by hashing the bearer and looking the hash up (constant-time compare of the hash). The request then carries a
-  device principal (id, pairing id).
-- WebSocket tickets: a ticket minted by a device principal carries the same principal.
-- `/api/peers*` is unchanged (device tokens are not peer tokens).
-- An empty `Cfg.Token` (today: everything allowed) is unchanged; device tokens add nothing there.
+- `TokenAuth` accepts the admin token as today, **or**, for a bearer starting `pdxd_`, a device token that is live
+  (not revoked, used or still before `use_by`). The request carries a **device principal** `{id, pairing_id,
+  profile_id}`.
+- **Tickets carry principals:** `POST /api/ws-ticket` records the caller's principal with the ticket; validating a
+  ticket consumes it and returns the principal (the validator's contract changes from `bool` to `(Principal, bool)`), and
+  the WS handlers register each connection with that principal.
+- `/api/peers*` is unchanged; an empty `Cfg.Token` is unchanged (device tokens add nothing there).
 
-### 3.3 Scope (R7)
+### 3.3 Scope: default-deny allow-list (R7)
 
-Every route the daemon registers is classified in one table, `deviceRoutes`, as **allowed** or **denied** for a device
-principal; a device request to a denied route answers 403 `device_forbidden`. A test enumerates every registered route
-(method + pattern) and fails when one is not in the table, so a new route is never open to phones by default.
-
-Allowed in v1 (what the iOS App uses): `GET /api/info`, `GET /api/health`; sessions list and per-session reads and
-terminal / mirror WS; host events WS; conversations (`/api/conversations/*`, `/ws/conversations`); team approvals list /
-get / decide, `GET /api/team/roster`, `GET /api/team`, unattended `GET`/`PUT`, `PUT /api/team/relay-quota`; push
-(`/api/push/*`); profiles **read** (`GET /api/profiles*`) and `POST /api/profiles/{id}/tab-requests` (§5.2);
-`PUT /api/devices/self`; session create / send-keys if the phone's quick-new-tab uses them today.
-
-Denied: everything else, explicitly including the `fs` module (arbitrary paths), `PUT /api/config`, `/api/dev/*`,
-daemon restart, peers host management, host-transfer **create**, device-token management (`/api/devices` other than
-`self`), profile section writes and deletes, hostconfig writes other than those listed.
+- A device principal may reach **only** the patterns in `deviceAllowed` (exact pattern strings as registered); every
+  other route answers 403 `device_forbidden`. The check runs after auth, on the inner mux, using
+  `ServeMux.Handler(r)` to learn the pattern the mux itself would dispatch to — the same matching, wildcards and
+  method rules as the dispatch. A new route is therefore denied to phones until it is added.
+- `deviceAllowed` v1 is exactly what the iOS App uses (the plan lists the patterns and a test pins the set):
+  `GET /api/info`; `POST /api/ws-ticket`; the sessions list and the per-session reads the App uses; the terminal / mirror
+  WS; the host-events WS; conversations (snapshot, increments, subagents) and `/ws/conversations`; team approvals list /
+  get / decide, `GET /api/team/roster`, `GET /api/team`, unattended `GET` and `PUT`; `PUT /api/team/relay-quota`;
+  `POST /api/push/devices`, `GET /api/push/devices`, `DELETE /api/push/devices/{device_id}`; profile **read** routes;
+  `POST /api/profiles/{id}/tab-requests`; `PUT /api/devices/self`; plus session create / send-keys **only if** the iOS
+  quick-new-tab uses them (purdex-ios confirms before QP-1 merges). `GET /api/health` and `/api/peers*` sit on the outer
+  mux and never see a device principal.
+- **Ownership inside allowed routes:**
+  - push: a registration made with a device token records that device id; a device principal lists and deletes only its
+    own registrations (others are invisible / 404);
+  - profiles: a device principal reads only its `profile_id` (other ids → 404) and posts tab requests only to it; a token
+    with no `profile_id` reads no profile.
 
 ### 3.4 Management routes (admin token only)
 
-- `POST /api/devices` `{pairing_id, label, client}` → `{id, token, pairing_id, label, created_at}`.
-- `GET /api/devices` → rows without the token or its hash (`id`, `pairing_id`, `label`, `created_at`, `created_by`,
-  `first_used_at`, `last_used_at`, `revoked_at`).
-- `DELETE /api/devices/{id}` and `DELETE /api/devices?pairing_id=<uuid>` → revoke (idempotent, 204). A revoked token
-  stops working on its next request; open WebSockets of that principal are closed.
-- `PUT /api/devices/self` `{label}` (device token) → sets its own label (1–64 printable runes).
+- `POST /api/devices` `{pairing_id, profile_id?, label, client}` → `{id, token, pairing_id, profile_id, label,
+  created_at, use_by}`.
+- `GET /api/devices` → rows without token or hash.
+- `DELETE /api/devices/{id}`, `DELETE /api/devices?pairing_id=<uuid>` → revoke (idempotent, 204). Revocation closes
+  every open connection of that principal — host-events, terminal and conversation WebSockets alike — through one
+  registry the WS handlers register with (§3.2).
+- `PUT /api/devices/self` `{label}` (device token) → its own label, 1–64 printable runes.
 - Capability `devices.v1`.
 
-## 4. Pairing transport (daemon)
+## 4. Pairing entries on the relay (daemon)
 
-### 4.1 Pair rows
+Pairing entries are **separate** from Share-hosts transfers: own create route, own validation, own claim; a Share-hosts
+code can never be claimed or touched without the relay's admin token.
 
-The host-transfer payload stays opaque to the daemon. The Mac writes rows of this shape (the iOS parser accepts only
-`v: 1`):
+### 4.1 Create (admin)
+
+`POST /api/host-transfer/pairings` `{rows: [...]}` → `{code, expiresAt}`. Every row must be exactly:
 
 ```json
 { "v": 1, "kind": "pair",
@@ -120,81 +137,100 @@ The host-transfer payload stays opaque to the daemon. The Mac writes rows of thi
   "profile": { "hostDaemonId": "<SOT host id>", "profileId": "p_…", "name": "<profile name>" } }
 ```
 
-`profile` is the same on every row of one pairing.
+— no other fields (a row with any unknown key, a token not starting `pdxd_`, mixed `pairingId`s or `profile`s, or
+`v != 1` → 400). Same limits as transfers (32 rows, 64 KiB, 16 live codes shared with transfers, 10 minutes).
 
-### 4.2 Claim
+### 4.2 Claim (no bearer)
 
-- `POST /api/host-transfer/claim` `{code}` — **no bearer**: the code is the credential. Same store, same one-time take,
-  same 10 failed attempts per minute per daemon (shared with redeem), same answers (`invalid_code` 404, `rate_limited`
-  429). It answers only payloads whose rows are all `kind: "pair"` (a Share-hosts payload with admin tokens is never
-  handed out without the relay's admin token: 404 `invalid_code`).
-- The general chain's IP whitelist still applies (tailnet only, R1). The route is exempt from `TokenAuth` and from the
-  device scope (it has no principal).
-- `redeem` (admin) is unchanged.
+`POST /api/host-transfer/pairings/claim` `{code}`:
+- **Tailnet or loopback source only**, checked by the route itself whatever `IPWhitelist`'s `allow` says (100.64.0.0/10,
+  fd7a:115c:a1e0::/48, 127.0.0.0/8, ::1); anything else → 403. Exempt from `TokenAuth` and from the device scope (exact
+  path match in `http_chain.go`).
+- Takes only pairing entries (a transfer code answers 404 `invalid_code` and is **not** consumed). One-time: the take
+  marks the entry claimed and returns the rows; a second claim → 404.
+- Shares the failed-attempt limiter with redeem (10 per minute per daemon).
+
+### 4.3 Status and delete (admin)
+
+- `GET /api/host-transfer/pairings/{code}` → `{claimed: bool, claimedAt?, expiresAt}`; a claimed entry keeps its status
+  (rows dropped) until its original expiry, then disappears (404).
+- `DELETE /api/host-transfer/pairings/{code}` → removes an unclaimed entry (204; claimed or unknown → 204 too).
 
 ## 5. Profile, one way (R4–R6)
 
 ### 5.1 Reading
 
-The phone reads, on the SOT host with its device token, `GET /api/profiles/{id}` (sections `workspaces`, `tabs.<ws>`,
-`settings`), re-reads a section when the `profile` host event names it, and on every return to the foreground. It keeps
-the Mac's order. From `settings` it applies only the keys it understands (appearance); the rest is ignored. It never
-writes a section.
+The phone reads, on the SOT host with its device token, `GET /api/profiles/{id}` (its `profile_id` only), re-reads a
+section when the `profile` host event names it, and on every return to the foreground. It keeps the Mac's order. From
+`settings` it applies only the keys it understands (appearance). It never writes a section.
 
-### 5.2 Adding a tab (R5) — a request the Mac applies
+### 5.2 Adding a tab (R5) — a request one Mac applies
 
-The phone does not write profile sections (it would have to reproduce the Mac's hash, fingerprint and ordinal; a
-mistake locks other clients out). Instead:
+The phone does not write sections (it would have to reproduce the Mac's hash, fingerprint and ordinal). Instead:
 
-- `POST /api/profiles/{id}/tab-requests` `{request_id, workspace_id, host_id, session_code, session_name}` (device
-  token): stored in a small table on the SOT daemon (idempotent by `request_id`, at most 200 open per profile,
-  dropped after 7 days unapplied); emits the `profile.tab_request` host event.
-- The Mac App attached to that profile takes open requests (on connect and on the event), appends a tab for that
-  session **at the end of that workspace** through its normal profile write, then `DELETE`s the request (admin). If the
-  workspace no longer exists, it uses the first workspace. A request for a session the Mac already shows as a tab in
-  that workspace is just deleted.
-- The phone shows its new tab at once, locally; when the Mac's profile write arrives it becomes the synced tab (matched
-  by host id + session code).
-- No Mac online: the request waits; nothing is lost.
+- **Post** (device): `POST /api/profiles/{id}/tab-requests` `{request_id, workspace_id, host_id, session_code,
+  session_name}` — idempotent by `request_id`; ≤ 200 open per profile (429); dropped after 7 days unapplied; emits
+  `profile.tab_request` `{profile_id, request_id}`.
+- **Claim** (admin): `POST /api/profiles/{id}/tab-requests/claim` `{client_id}` → the open requests not leased to
+  someone else, now leased to this client for 60 s (atomic in the daemon). Only a client attached to the profile may
+  claim (404 otherwise).
+- **Apply** (SPA, §6): only the **profile leader window**, only while its profile sync is running (host connected,
+  attachment confirmed). It reads the master world (`readMasterWorld`, which works whether the master is shown or
+  parked), and for each claimed request: if that workspace already has a tab for `host_id + session_code` → just
+  delete the request; else append a tmux-session tab at the end of that workspace (if the workspace is gone: the Mac's
+  usual fallback for a tab with no workspace — active, else first, else Unsorted) and write it with
+  `writeMasterWorld`; on `'unsettled'` keep the lease running out and try again later. After the profile write is
+  confirmed, `DELETE /api/profiles/{id}/tab-requests/{request_id}` (admin).
+- **Exactly-once in practice:** the claim lease stops two windows or two Macs from applying the same request at the same
+  time; the "already has a tab for this session" check makes a re-apply after a crash (lease expired before the delete)
+  a no-op. A Mac that applied but lost the delete simply deletes it next time.
+- The phone shows its added tab at once, locally; when the profile update arrives it becomes the synced tab (matched by
+  host id + session code). No Mac online: the request waits.
 
 ### 5.3 Hiding (R6)
 
-Phone-only: closing a synced tab adds its tab id to the phone's hidden set (device-local); synced tabs in the set are
-not shown, also after later profile updates; "show hidden tabs" lists them and unhides one or all. A tab the phone added
-and the Mac has not applied yet is simply removed (and its request deleted if still open).
+Phone-only: closing a synced tab adds its tab id to the phone's hidden set (device-local); hidden synced tabs stay
+hidden after later profile updates; "show hidden tabs" lists them and unhides one or all. A tab the phone added that no
+Mac has applied yet is simply removed (its open request is left to expire; the phone does not delete requests).
 
 ## 6. Mac App
 
-- Hosts page: **配對手機** next to Share hosts → the pairing dialog (§2 steps 1–4): profile and relay pickers, the list
-  of hosts that will be included (and those left out, with why), the QR, the code, the countdown; closing early revokes.
+- Hosts page: **配對手機** beside Share hosts → the pairing dialog (§2 steps 1–4): profile and relay pickers, included /
+  left-out hosts, the QR, the code, the countdown, 「已配對」 once claimed; close before claim deletes the entry and revokes.
 - Hosts page: **已配對的手機** — one row per `pairing_id` across hosts (label, hosts it reaches, last used), **撤銷**
-  revokes it on every host (`DELETE ?pairing_id=`); a host that is not reachable is shown as "not revoked yet" and
-  retried when it connects.
-- The tab-request consumer (§5.2).
-- QR rendering: a small QR library (generates an SVG locally; nothing leaves the machine).
+  revokes on every host; an unreachable host shows "not revoked yet" and is retried when it connects.
+- The tab-request consumer (§5.2): listens for `profile.tab_request` (a new branch of the profile WS dispatch), claims
+  on connect, on the event, and every 60 s while leader.
+- QR rendering by a small local library (SVG; nothing leaves the machine).
 
 ## 7. iOS (contract only)
 
-Scan; parse `purdex://pair?v=1&relay=&code=`; claim; verify each row with `/api/info`; add hosts, set label; read and
-follow the profile; tab requests for added tabs; hidden tabs; re-register push with the device tokens. The hidden
-developer-mode manual entry stays for development.
+Scan; parse `purdex://pair?v=1&relay=&code=` (other versions → "update the App"); claim; for each row `GET /api/info`
+with its token — keep the row only when `host_id` equals `daemonId` (missing or different `host_id` → shown as failed,
+not added); **a row whose daemon id the phone already has replaces that host entirely** (address, token, look, name: the
+phone does no host management, R3); two rows with one daemon id → the first wins, the rest are reported; set the label;
+read and follow the profile; tab requests for added tabs; hidden tabs; re-register push with the device tokens. The
+developer-mode manual entry stays.
 
 ## 8. Delivery plan
 
-1. **QP-1 daemon: devices module** — store, auth integration, route classification table + exhaustive test, management
-   routes, `self`, unused-expiry sweep, ticket principal, WS close on revoke. (~750 lines incl. tests)
-2. **QP-2 daemon: claim + tab requests** — `POST /api/host-transfer/claim`, the tab-request table, routes and event.
-   (~450)
-3. **QP-3 SPA: pairing dialog + paired phones list.** (~600)
-4. **QP-4 SPA: tab-request consumer.** (~300)
-5. iOS in parallel against §2, §4.1, §5, §7.
+1. **QP-1 daemon: devices module + scope** — store, first-use rule, auth, ticket principal, WS connection registry,
+   default-deny allow-list via `ServeMux.Handler`, ownership rules (push, profiles), management routes. (~800 lines incl.
+   tests; split QP-1a store+auth+routes / QP-1b scope+tickets+WS registry if it runs over.)
+2. **QP-2 daemon: pairing entries + tab requests** — create / claim / status / delete with tailnet enforcement, row
+   validation; tab-request table, post / claim-lease / delete, event. (~550)
+3. **QP-3 SPA: pairing dialog + paired phones.** (~600)
+4. **QP-4 SPA: tab-request consumer** (leader-only, master world, event wiring). (~350)
+5. iOS in parallel against §2, §4, §5, §7.
 
 ## 9. Acceptance
 
-- Unit: token hashing and lookup; revoked / unused-expired tokens refused; every registered route classified; a device
-  token on `fs` / `PUT /api/config` / section PUT → 403; claim refuses a non-pair payload; claim is one-time and
-  rate-limited; tab requests idempotent and capped.
-- Real devices: on the Mac, 配對手機 for mlab + a26 → scan on the iPhone 8 → both hosts appear with their colors, the
-  profile's workspaces and tabs appear; the phone's tokens are listed under 已配對的手機; a tab added on the phone
-  appears at the end of the same workspace on the Mac; closing a synced tab on the phone hides it there only and
-  "show hidden tabs" brings it back; 撤銷 on the Mac → the phone gets 401 on both hosts while the Mac keeps working.
+- Unit: first-use rule (used / unused past `use_by` / revoked), tickets return principals, every allowed pattern is
+  registered and nothing else is reachable with a device token (pinned set), push and profile ownership, claim refuses
+  transfer codes without consuming them, claim enforces tailnet with an empty `allow`, pairing rows strictly validated,
+  status after claim, tab-request lease (two claimants, one wins), apply idempotent, parked master, revoke closes every
+  WS kind.
+- Real devices: 配對手機 for mlab + a26 → scan on the iPhone 8 → both hosts with their colors, the profile's workspaces and
+  tabs; the dialog shows 「已配對」; a tab added on the phone appears at the end of the same workspace on the Mac; closing a
+  synced tab on the phone hides it there only and "show hidden tabs" brings it back; 撤銷 → the phone gets 401 on both
+  hosts (and its open views close) while the Mac keeps working.
