@@ -340,6 +340,8 @@
   "team.edit.name": "名稱",
   "team.edit.label": "短標籤",
   "team.edit.label_width": "寬度 {{used}} / {{max}}",
+  "team.edit.label_placeholder": "留空＝依名稱自動",
+  "team.edit.label_hint": "留空後儲存，會依名稱重新產生",
   "team.edit.label_too_wide": "太寬：最多 {{max}}（一個中文字算 2）",
   "team.edit.color": "顏色",
   "team.edit.color_auto": "自動",

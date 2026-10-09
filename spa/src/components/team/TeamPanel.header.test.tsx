@@ -12,6 +12,7 @@ import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { ApprovalApiError } from '../../lib/team/approval-api'
 import { NAME_CLICK_DELAY_MS } from './panel-layout'
@@ -306,6 +307,20 @@ describe('the label width hint', () => {
     expect(screen.getByTestId('team-edit-label-width').textContent).toMatch(/2.*10/)
     fireEvent.change(label(), { target: { value: '發版發' } })
     expect(screen.getByTestId('team-edit-label-width').textContent).toMatch(/6.*10/)
+  })
+
+  it('says an empty label is derived from the name: hint always, placeholder when the roster label is empty', () => {
+    act(() => useI18nStore.getState().setLocale('zh-TW'))
+    open()
+    expect(screen.getByTestId('team-edit-label-hint').textContent).toBe('留空後儲存，會依名稱重新產生')
+    expect(label().getAttribute('placeholder')).toBeNull() // the roster has a label
+    fireEvent.change(label(), { target: { value: '' } })
+    expect(screen.getByTestId('team-edit-label-hint')).not.toBeNull()
+    fireEvent.keyDown(label(), { key: 'Escape' })
+    patchRoster((t) => { t.team_label = '' })
+    dblClickName()
+    expect(label().getAttribute('placeholder')).toBe('留空＝依名稱自動')
+    act(() => useI18nStore.getState().setLocale('en'))
   })
 
   it('10 is allowed; over 10 blocks Save and says why', async () => {

@@ -155,7 +155,14 @@ export function TeamEditPopover({ target, anchor, onClose }: Props) {
             {t('team.edit.label_width', { used: String(width), max: String(TEAM_LABEL_MAX_WIDTH) })}
           </span>
         </span>
-        <input data-testid="team-edit-label" className={input} value={label} onChange={(e) => setLabel(e.target.value)} />
+        <input
+          data-testid="team-edit-label"
+          className={input}
+          value={label}
+          placeholder={target.label === '' ? t('team.edit.label_placeholder') : undefined}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+        <span data-testid="team-edit-label-hint" className="text-text-muted">{t('team.edit.label_hint')}</span>
         {tooWide && <span data-testid="team-edit-label-wide" role="alert" className="text-red-400">{t('team.edit.label_too_wide', { max: String(TEAM_LABEL_MAX_WIDTH) })}</span>}
         {errors.label && <span data-testid="team-edit-label-error" role="alert" className="text-red-400">{errors.label}</span>}
       </label>
