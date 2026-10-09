@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.649] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。接力卡住太久時 daemon 會自己收尾；daemon 多了裝置 token 的地基。
+
+### Added：接力逾時 — P6-4b（#2218，A 線）
+
+- lead 幫 member 接力時，member 60 秒內沒回應就算失敗（「member 沒有回應」）；member 回應了但 15 分鐘內沒開始，也算失敗。計時從接力真正開始的那一刻算起，等你核准的時間不算。
+- 接力開始後 15 分鐘都沒有進展，daemon 先看終端機面板確認，還是沒動靜才記成失敗。
+- 接力其實已完成（新 session 已在跑），只是新 session 的第一輪做很久時，記成「完成」，不會誤判成失敗。
+- daemon 剛重啟的頭一段時間不判逾時。
+
+### Added：裝置 token 模組 — QP-1a（#2216，介面線）
+
+- daemon 新增裝置管理（`devices.db`）：管理者可以替裝置建立專用 token。目前裝置 token 只能讀主機資訊、更新自己的裝置資料；還沒有任何 App 會使用它（之後的 QP-3 才會）。
+
 ## [1.0.0-alpha.648] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。接力做到一半時 daemon 重啟或漏了回報，現在 daemon 會自己從終端機狀態補判。
