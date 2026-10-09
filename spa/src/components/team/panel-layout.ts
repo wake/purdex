@@ -54,3 +54,16 @@ export function firstRowCapacity(width: number): number {
 export function cellsWidth(n: number): number {
   return n * CELL_W + Math.max(0, n - 1) * CELL_GAP + (n >= 2 ? SEP_W : 0)
 }
+
+/** The edit form under the header (TI-7): its width, the gap to the viewport edge and to the header. */
+export const POPOVER_W = 260
+const EDGE = 8
+const GAP = 4
+
+/** Where the form goes for a header at `r`: under its left edge, kept inside the viewport on the left, right and bottom. */
+export function placeBelow(r: { left: number; bottom: number }, size: { w: number; h: number }, view: { w: number; h: number }): { left: number; top: number } {
+  const left = Math.max(EDGE, Math.min(r.left, view.w - size.w - EDGE))
+  let top = r.bottom + GAP
+  if (top + size.h > view.h - EDGE) top = Math.max(EDGE, view.h - size.h - EDGE)
+  return { left, top }
+}

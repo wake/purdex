@@ -42,14 +42,13 @@ export function TeamPanel(props: Props) {
   const roster = useTeamRosterStore((s) => s.byHost[hostId]?.find((r) => r.id === teamId))
   const canEdit = editable && roster !== undefined
   const { rootRef, hdr, editOpen, close, anchor } = useHeaderGestures({ teamKey: team.teamKey, mode: team.mode, onSetMode: props.onSetMode, canEdit })
-  const box = editOpen ? anchor()?.getBoundingClientRect() : undefined
   return (
     <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className="text-xs text-text-primary">
       {team.mode === 'full' ? <FullPanel {...props} hdr={hdr} /> : <LinePanel {...props} hdr={hdr} />}
-      {editOpen && canEdit && box !== undefined && (
+      {editOpen && canEdit && (
         <TeamEditPopover
           target={{ hostId, teamId, name: roster.team_name, label: roster.team_label, color: roster.team_color ?? null }}
-          anchor={{ left: box.left, bottom: box.bottom }}
+          anchor={anchor}
           onClose={close}
         />
       )}

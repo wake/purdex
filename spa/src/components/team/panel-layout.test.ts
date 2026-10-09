@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { PANEL_DEFAULT_WIDTH } from '../../stores/useTeamUiStore'
 import {
-  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, cellWidthFor, cellsWidth, firstRowCapacity,
+  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, POPOVER_W, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
 } from './panel-layout'
 
 describe('panel header budget', () => {
@@ -28,6 +28,16 @@ describe('panel header budget', () => {
     expect(CELL_RING).toBe(20)
     expect(CELL_H).toBeLessThanOrEqual(HEADER_H)
     expect(CELL_H).toBeGreaterThanOrEqual(CELL_RING)
+  })
+
+  it('the edit form is kept inside the viewport on the left, right and bottom', () => {
+    const size = { w: POPOVER_W, h: 200 }
+    const view = { w: 1000, h: 700 }
+    expect(placeBelow({ left: 100, bottom: 34 }, size, view)).toEqual({ left: 100, top: 38 })
+    expect(placeBelow({ left: 900, bottom: 34 }, size, view)).toEqual({ left: 1000 - POPOVER_W - 8, top: 38 }) // right
+    expect(placeBelow({ left: -50, bottom: 34 }, size, view)).toEqual({ left: 8, top: 38 }) // left
+    expect(placeBelow({ left: 100, bottom: 650 }, size, view)).toEqual({ left: 100, top: 700 - 200 - 8 }) // bottom
+    expect(placeBelow({ left: 0, bottom: 0 }, { w: POPOVER_W, h: 900 }, view).top).toBe(8) // taller than the viewport: top edge wins
   })
 
   it.each(['icon', 'dot', 'iconDot', 'badge'] as const)('a cell under the %s light style is at most 44px and 4 of them fit the 312 budget', (style) => {

@@ -4,9 +4,10 @@
 // It never keeps a display copy: the form starts from the roster's values, Save sends all three to the lead's host and
 // the panel keeps rendering whatever the roster's next frame says. Save / Enter sends; Cancel / Esc / a click outside
 // drops the draft. The terminal's focus is remembered on open and handed back on close; the form's own inputs may take it.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { TEAM_COLORS } from './team-display'
+import { POPOVER_W, placeBelow } from './panel-layout'
 import { saveAppearance, type AppearanceField } from '../../lib/team/appearance-api'
 import { TEAM_LABEL_MAX_WIDTH, goTrim } from '../../lib/team/label'
 import { cellWidth } from '../../lib/textwidth'
@@ -24,14 +25,12 @@ export interface TeamEditTarget {
 
 interface Props {
   target: TeamEditTarget
-  /** Viewport box of the header the form hangs under. */
-  anchor: { left: number; bottom: number }
+  /** The live header element the form hangs under (it is a different element in each mode, so it is asked for each time). */
+  anchor: () => HTMLElement | null
   onClose: () => void
 }
 
 type FieldErrors = Partial<Record<AppearanceField, string>>
-
-const POPOVER_W = 260
 
 export function TeamEditPopover({ target, anchor, onClose }: Props) {
   const t = useI18nStore((s) => s.t)
@@ -54,6 +53,39 @@ export function TeamEditPopover({ target, anchor, onClose }: Props) {
       if (prev?.isConnected) prev.focus()
     }
   }, [])
+
+  // The form follows its header: placed after every render (the panel's width / mode / enlarge re-render it), and again when
+  // the window resizes, anything scrolls, or the header's own box changes. A header that is gone closes the form.
+  useLayoutEffect(() => {
+    const el = box.current
+    const head = anchor()
+    if (!el || !head) return
+    const r = head.getBoundingClientRect()
+    const at = placeBelow(r, { w: POPOVER_W, h: el.offsetHeight }, { w: window.innerWidth, h: window.innerHeight })
+    el.style.left = `${at.left}px`
+    el.style.top = `${at.top}px`
+  })
+  useEffect(() => {
+    const place = () => {
+      const el = box.current
+      const head = anchor()
+      if (!head) { onClose(); return }
+      if (!el) return
+      const at = placeBelow(head.getBoundingClientRect(), { w: POPOVER_W, h: el.offsetHeight }, { w: window.innerWidth, h: window.innerHeight })
+      el.style.left = `${at.left}px`
+      el.style.top = `${at.top}px`
+    }
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    const head = anchor()
+    const ro = head && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
+    if (head) ro?.observe(head)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+      ro?.disconnect()
+    }
+  }, [anchor, onClose])
 
   // A press outside drops the draft.
   useEffect(() => {
@@ -99,7 +131,7 @@ export function TeamEditPopover({ target, anchor, onClose }: Props) {
       data-testid="team-edit-popover"
       onKeyDown={onKeyDown}
       className="fixed z-50 flex flex-col gap-2 p-2.5 rounded-lg border border-border-default bg-surface-elevated shadow-xl text-xs text-text-primary font-sans"
-      style={{ left: Math.max(8, anchor.left), top: anchor.bottom + 4, width: POPOVER_W }}
+      style={{ width: POPOVER_W }}
     >
       <label className="flex flex-col gap-1">
         <span className="text-text-secondary">{t('team.edit.name')}</span>

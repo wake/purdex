@@ -143,6 +143,41 @@ describe('double-click the name', () => {
   })
 })
 
+describe('the form follows its header', () => {
+  const rectOf = (left: number, bottom: number) => ({ left, bottom, right: left + 312, top: bottom - 34, width: 312, height: 34, x: left, y: bottom - 34, toJSON: () => ({}) })
+  let box = rectOf(900, 34)
+  const pos = () => { const el = popover() as HTMLElement; return [el.style.left, el.style.top] }
+  beforeEach(() => {
+    box = rectOf(900, 34)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return (this.getAttribute('data-testid') === 'team-panel-header' ? box : rectOf(0, 0)) as DOMRect
+    })
+    scene(); setEdit('yes'); mount(); dblClickName()
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('hangs under the live header, clamped at the right edge', () => {
+    expect(window.innerWidth).toBe(1024)
+    expect(pos()).toEqual([`${1024 - 260 - 8}px`, '38px'])
+  })
+
+  it('moves when the window resizes', () => {
+    box = rectOf(100, 34)
+    fireEvent(window, new Event('resize'))
+    expect(pos()).toEqual(['100px', '38px'])
+  })
+
+  it('moves when the panel is enlarged or its mode changes (the header is another element then)', () => {
+    box = rectOf(40, 60)
+    fireEvent.click(screen.getByTestId('team-panel-expand'))
+    expect(pos()).toEqual(['40px', '64px'])
+    box = rectOf(50, 70)
+    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    expect(popover()).not.toBeNull()
+    expect(pos()).toEqual(['50px', '74px'])
+  })
+})
+
 describe('Save', () => {
   const open = () => { scene(); patchRoster((t) => { t.team_color = 3 }); setEdit('yes'); mount(); dblClickName() }
 
