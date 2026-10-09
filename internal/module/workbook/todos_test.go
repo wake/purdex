@@ -250,14 +250,14 @@ func TestSetPushLineV2_OneTransactionEntryStaysPending(t *testing.T) {
 	seed := seedTodos(t, s, "c", prev, "舊待辦")
 	id := readyEntry(t, s, "t1")
 	r.take()
-	changed, ok, err := s.SetPushLineV2(id, PushLineV2{
+	res, ok, err := s.SetPushLineV2(id, PushLineV2{
 		Thing: "事", Push: "推播", Status: "進行中",
 		Usage: Usage{In: 100, Out: 20, CacheRead: 80},
 		Todos: TodoChanges{Done: []int64{seed[0].ID}, Adds: []TodoAdd{{Title: "新待辦"}}},
 		By:    ClosedByModel,
 	})
-	if err != nil || !ok || len(changed) != 2 {
-		t.Fatalf("ok=%v err=%v changed=%+v", ok, err, changed)
+	if err != nil || !ok || len(res.Changed) != 2 {
+		t.Fatalf("ok=%v err=%v changed=%+v", ok, err, res.Changed)
 	}
 	e, _ := s.Entry(id)
 	if e.State != StatePending || e.Thing != "事" || e.Push != "推播" || e.PushReadyAt != 5000 ||
@@ -283,9 +283,9 @@ func TestSetPushLineV2_NotPendingChangesNothing(t *testing.T) {
 	id := readyEntry(t, s, "t1")
 	s.Finish(id, StateFailed, ReasonStopped, Output{})
 	r.take()
-	changed, ok, err := s.SetPushLineV2(id, PushLineV2{Thing: "x", Status: "不該寫入", Todos: TodoChanges{Adds: []TodoAdd{{Title: "不該有"}}}, By: ClosedByModel})
-	if err != nil || ok || len(changed) != 0 {
-		t.Fatalf("ok=%v changed=%v err=%v", ok, changed, err)
+	res, ok, err := s.SetPushLineV2(id, PushLineV2{Thing: "x", Status: "不該寫入", Todos: TodoChanges{Adds: []TodoAdd{{Title: "不該有"}}}, By: ClosedByModel})
+	if err != nil || ok || len(res.Changed) != 0 || res.CapIgnored != 0 {
+		t.Fatalf("ok=%v changed=%v err=%v", ok, res.Changed, err)
 	}
 	if _, has, _ := s.Status("c"); has {
 		t.Fatal("a status was written for a final entry")
@@ -318,6 +318,28 @@ func TestSetPushLineV2_FailureRollsEverythingBack(t *testing.T) {
 	}
 }
 
+// The cap's turned-away adds reach the caller through both public writes, so it can log them once (spec §5.4).
+// Mutation gate: drop CapIgnored from the returned result → red.
+func TestPublicWrites_ReportWhatTheCapTurnedAway(t *testing.T) {
+	s := openTest(t)
+	prev := readyEntry(t, s, "t0")
+	var names []string
+	for i := 0; i < 30; i++ {
+		names = append(names, fmt.Sprintf("滿%d", i))
+	}
+	seedTodos(t, s, "c", prev, names...)
+	a := readyEntry(t, s, "t1")
+	res, ok, err := s.SetPushLineV2(a, PushLineV2{Thing: "x", Status: "s", Todos: TodoChanges{Adds: []TodoAdd{{Title: "多1"}, {Title: "多2"}}}, By: ClosedByModel})
+	if err != nil || !ok || len(res.Changed) != 0 || res.CapIgnored != 2 {
+		t.Fatalf("turn: %+v ok=%v err=%v", res, ok, err)
+	}
+	b := readyEntry(t, s, "t2")
+	res, ok, err = s.FinishSkippedV2(b, "model", Usage{}, 0, TodoChanges{Adds: []TodoAdd{{Title: "多3"}}}, ClosedByModel)
+	if err != nil || !ok || res.CapIgnored != 1 {
+		t.Fatalf("skipped: %+v ok=%v err=%v", res, ok, err)
+	}
+}
+
 // skip: true → the entry is skipped: model and its todos are still applied, in one transaction.
 func TestFinishSkippedV2_AppliesTheTodosToo(t *testing.T) {
 	s, r := observed(t)
@@ -325,9 +347,9 @@ func TestFinishSkippedV2_AppliesTheTodosToo(t *testing.T) {
 	seed := seedTodos(t, s, "c", prev, "等回覆")
 	id := readyEntry(t, s, "t1")
 	r.take()
-	changed, ok, err := s.FinishSkippedV2(id, "model", Usage{In: 7}, 2300, TodoChanges{Done: []int64{seed[0].ID}}, ClosedByModel)
-	if err != nil || !ok || len(changed) != 1 {
-		t.Fatalf("ok=%v err=%v changed=%v", ok, err, changed)
+	res, ok, err := s.FinishSkippedV2(id, "model", Usage{In: 7}, 2300, TodoChanges{Done: []int64{seed[0].ID}}, ClosedByModel)
+	if err != nil || !ok || len(res.Changed) != 1 {
+		t.Fatalf("ok=%v err=%v changed=%v", ok, err, res.Changed)
 	}
 	e, _ := s.Entry(id)
 	if e.State != StateSkipped || e.Reason != "model" || e.UsageIn != 7 || e.LatencyMS != 2300 {
