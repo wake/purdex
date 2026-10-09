@@ -16,6 +16,10 @@ export function RegionResize({ onResize, resizeEdge, onResizeEnd }: Props) {
     onResizeEndRef.current = onResizeEnd
   })
 
+  // Tears down the gesture in flight (document listeners, body cursor/userSelect); set on mousedown, cleared on teardown.
+  const teardownRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => teardownRef.current?.(), []) // unmounted mid-drag: clean up, and do not fire onResizeEnd
+
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     startX.current = e.clientX
@@ -27,16 +31,25 @@ export function RegionResize({ onResize, resizeEdge, onResizeEnd }: Props) {
       startX.current = moveEvent.clientX
     }
 
-    const handleMouseUp = () => {
+    const teardown = () => {
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
+      window.removeEventListener('blur', handleMouseUp)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
+      teardownRef.current = null
+    }
+    // mouseup, or the window losing focus (the mouseup may never arrive): finish the gesture once.
+    const handleMouseUp = () => {
+      teardown()
       onResizeEndRef.current?.()
     }
 
+    teardownRef.current?.() // a stray earlier gesture must not leak its listeners
+    teardownRef.current = teardown
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
+    window.addEventListener('blur', handleMouseUp)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
   }, [resizeEdge])
