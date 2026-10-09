@@ -55,6 +55,45 @@ type PeerHost struct {
 	// rotate/cancel (restore the old as the only one).
 	InboundTokenPrev string `toml:"inbound_token_prev" json:"inbound_token_prev"`
 	AllowBypass      bool   `toml:"allow_bypass"  json:"allow_bypass"`
+	// AllowTeam: this host (the peer) may run team commands on us — it may
+	// make our sessions its team members (cross-host team spec §5.4).
+	// TeamRoots are the only directories it may ask us to spawn in (X-U7);
+	// none means no spawn. Absolute, canonical (CanonicalTeamRoots).
+	AllowTeam bool     `toml:"allow_team"  json:"allow_team"`
+	TeamRoots []string `toml:"team_roots"  json:"team_roots"`
+}
+
+// MaxTeamRoots bounds how many roots one peer entry may carry.
+const MaxTeamRoots = 16
+
+// CanonicalTeamRoots validates and normalises a list of spawn roots: each
+// must be an absolute path (the CLI expands ~ — tmux does not) naming an
+// existing directory; symlinks are resolved, duplicates dropped, order kept.
+// The result is never nil.
+func CanonicalTeamRoots(in []string) ([]string, error) {
+	if len(in) > MaxTeamRoots {
+		return nil, fmt.Errorf("at most %d team roots", MaxTeamRoots)
+	}
+	out := make([]string, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, p := range in {
+		if !filepath.IsAbs(p) {
+			return nil, fmt.Errorf("team root %q is not an absolute path", p)
+		}
+		real, err := filepath.EvalSymlinks(filepath.Clean(p))
+		if err != nil {
+			return nil, fmt.Errorf("team root %q: %w", p, err)
+		}
+		st, err := os.Stat(real)
+		if err != nil || !st.IsDir() {
+			return nil, fmt.Errorf("team root %q is not a directory", p)
+		}
+		if !seen[real] {
+			seen[real] = true
+			out = append(out, real)
+		}
+	}
+	return out, nil
 }
 
 type PeersConfig struct {
