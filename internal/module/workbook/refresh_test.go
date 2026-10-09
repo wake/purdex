@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wake/purdex/internal/peers"
 )
 
 // WB-2b-i (b): the refresh request, its job, its result and the refresh_available sweep (spec §5.6, plan D10 / D11 / D14).
@@ -166,7 +168,28 @@ func TestRefresh_RepointedToTheSessionThatLeases(t *testing.T) {
 	id := mustRefresh(t, k, "a", "")
 	k.canRefresh("b") // a's mod went away; b (a later session of the same conversation) can
 	mustNext(t, k, "m", "b")
-	if e, _ := k.st.Entry(id); e.SessionID != "b" || e.State != StatePending {
+	if e, _ := k.st.Entry(id); e.SessionID != "b" || e.State != StatePending || e.Ref != peers.RefID("b") {
+		t.Fatalf("row = %+v", e)
+	}
+}
+
+// If the row cannot be re-pointed the job is not handed out (it would run in a session the row does not name): it goes
+// back to the head and the next ask, once the store works, gets it. Mutation gate: ignore the error → red.
+func TestRefresh_NotHandedOutWhenTheRowCannotFollow(t *testing.T) {
+	k := newKit(t)
+	k.lineage["b"] = "a"
+	k.canRefresh("a")
+	id := mustRefresh(t, k, "a", "")
+	k.canRefresh("b")
+	k.st.failRepoint = func() error { return errors.New("disk") }
+	if _, ok := k.next("m", "b"); ok {
+		t.Fatal("handed out although the row could not follow")
+	}
+	k.st.failRepoint = nil
+	if j, ok := k.next("m", "b"); !ok || j.Kind != JobRefresh {
+		t.Fatalf("retry: %+v %v", j, ok)
+	}
+	if e, _ := k.st.Entry(id); e.SessionID != "b" {
 		t.Fatalf("row = %+v", e)
 	}
 }

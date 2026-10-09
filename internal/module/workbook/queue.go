@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/convmodel"
+	"github.com/wake/purdex/internal/peers"
 )
 
 // Job kinds on the wire (spec §5.1). A retry is the same kind with attempt 2, never a new kind.
@@ -310,8 +311,17 @@ func (e *Engine) Next(ctx context.Context, stream, sessionID string, wait time.D
 			}
 			if handed.kind == JobRefresh && handed.session != sessionID {
 				// the capable session that actually took it is the one it runs in (D14)
-				if err := e.d.Store.RepointSession(handed.entryID, sessionID); err != nil {
+				ref, teamID, role := peers.RefID(sessionID), "", ""
+				if e.d.Seats != nil {
+					if seat, err := e.d.Seats.SeatOf(sessionID); err == nil {
+						teamID, role = seat.TeamID, seat.Role
+					}
+				}
+				if err := e.d.Store.RepointSession(handed.entryID, sessionID, ref, teamID, role); err != nil {
+					// never run it in a session the row does not say: put the job back at the head and try again
 					e.d.Logf("[workbook] re-point a refresh: %v", err)
+					e.release(l, handed)
+					return Job{}, false
 				}
 				handed.session = sessionID
 			}
