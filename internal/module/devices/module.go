@@ -116,6 +116,16 @@ func (m *Module) SetOnRevoke(fn func(ids []string)) {
 	m.mu.Unlock()
 }
 
+// notifyRevoked runs one subscriber; a panic in it must not skip the others or the revoke's own answer.
+func notifyRevoked(fn func(ids []string), ids []string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[devices] a revoke subscriber panicked: %v", r)
+		}
+	}()
+	fn(ids)
+}
+
 // SubscribeRevoked implements devices.RevokeFeed.
 func (m *Module) SubscribeRevoked(fn func(ids []string)) {
 	m.mu.Lock()
@@ -132,7 +142,7 @@ func (m *Module) revoked(ids []string) {
 	m.mu.Unlock()
 	conns.CloseDevices(ids) // every WebSocket the revoked devices hold, whatever route and however they authenticated
 	for _, s := range subs {
-		s(ids)
+		notifyRevoked(s, ids)
 	}
 	if fn != nil {
 		fn(ids)

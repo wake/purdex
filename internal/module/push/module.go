@@ -42,10 +42,11 @@ const maxBody = 64 << 10 // device registration body cap (spec §4.1)
 
 // Module is the push module.
 type Module struct {
-	core  *core.Core
-	store *Store
-	key   apnskey.Key
-	home  func() (string, error) // the daemon user's home; injectable for tests
+	followed atomic.Bool // the revoke feed is subscribed (once per module)
+	core     *core.Core
+	store    *Store
+	key      apnskey.Key
+	home     func() (string, error) // the daemon user's home; injectable for tests
 
 	// mu orders every write: the store first, the cache after it succeeds, both under the lock, so the cache never
 	// holds a row the store does not.
@@ -233,7 +234,7 @@ func (m *Module) Start(ctx context.Context) error {
 // are no paired phones to follow and the registrations of phones are dropped as unverifiable.
 func (m *Module) followRevokes() {
 	svc, _ := m.core.Registry.Get(devicesmod.RevokeFeedKey)
-	if feed, ok := svc.(devices.RevokeFeed); ok {
+	if feed, ok := svc.(devices.RevokeFeed); ok && m.followed.CompareAndSwap(false, true) { // once, however often Start runs
 		feed.SubscribeRevoked(m.dropOwned)
 	}
 	live, _ := m.core.Registry.Get(devicesmod.RegistryKey)
@@ -277,6 +278,17 @@ func (m *Module) dropOwned(owners []string) {
 	gone, err := m.store.DeleteByOwners(owners)
 	for _, id := range gone {
 		delete(m.devices, id)
+	}
+	// Fail closed: whatever the database said, nothing owned by a revoked phone stays in the send cache (a failed delete is
+	// retried by the reconcile at the next Start).
+	revoked := make(map[string]bool, len(owners))
+	for _, o := range owners {
+		revoked[o] = true
+	}
+	for id, d := range m.devices {
+		if d.OwnerDeviceID != "" && revoked[d.OwnerDeviceID] {
+			delete(m.devices, id)
+		}
 	}
 	if err != nil {
 		log.Printf("[push] drop registrations of revoked phones: %v", err)
