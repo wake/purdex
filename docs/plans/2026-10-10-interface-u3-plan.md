@@ -37,15 +37,20 @@ Daemon (`internal/module/conversation/`, U1 spec §8.2):
 
 SPA (`spa/src`):
 - `SessionPaneContent.tsx:97-107` renders `<TerminalView key={pane.id} …>`; the xterm lives in `useTerminal` (created on
-  mount) — unmounting it drops the terminal and its WS. Inactive tabs stay mounted (`TabContent.tsx:43-69`,
-  `visibility:hidden` + `inert`); `tmux-session` is a heavy pane (`lib/pane-weight.ts`) so state must live outside React.
+  mount) — unmounting it drops the terminal and its WS. `tmux-session` is a **heavy** pane (`lib/pane-weight.ts:10`):
+  with `keepAliveCount: 0` only the active heavy tab stays mounted (`hooks/useTabAlivePool.ts:61`), so a tab switch
+  unmounts and remounts it — every view state must live outside React (CLAUDE.md tab-hosted rule).
 - `PaneModeButtons.tsx` (`terminal | room | chat`; on a tmux pane room / chat open the handoff dialog via
   `useHandoffGate` + `useHandoffDialogStore`; on an execution pane terminal = take-to-terminal).
 - No terminal registry (only `useTerminal.ts:56` creates xterms). No SPA client of `/api/conversations`.
-- `sendKeys` exists only in `lib/rebuild/transport.ts:130-142` (pinned transport, `{keys: cmd+'\n', …}`).
-- `lib/team/approval-ws.ts:77-78` **drops** `hook_ask` / `hook_permission` at the host WS boundary; `DecideRequest`
-  has no `hook` field; `AskUserQuestion.tsx` handles `questions[0]` only.
-- Reusable: `components/room/ToolDiffView.tsx`, `FoldContext` (`fold-context.tsx`), `useTranscriptScroll`
+- `sendKeys` exists only in `lib/rebuild/transport.ts:130-142` (pinned transport, `{keys: cmd+'\n', …}`). The daemon's
+  send-keys checks only the tmux generation (`internal/module/session/handler.go:313,335`) — not the pane's owner,
+  its Claude Code session or its UI state.
+- `lib/team/approval-ws.ts:77-78` **drops** `hook_ask` / `hook_permission` at the host WS boundary. The daemon decide
+  already takes `hook` (`internal/team/wire.go:136` `Hook *HookDecision`; `ask_handler.go:435` accepts approve +
+  `hook.answers` and deny + `hook.message`) — only the SPA `DecideRequest` type lacks it (`spa/src/lib/team/types.ts:180`); `AskUserQuestion.tsx` handles `questions[0]` only.
+- Reusable: `components/room/ToolDiffView.tsx`, `FoldContext` (`fold-context.tsx` — its expanded set is component `useState`, `:42,54`, so it does not survive a
+  remount), `useTranscriptScroll`
   (`{paneId, view}`), `lib/nex/transcript-scroll-memory.ts`, `lib/nex/worker-draft-memory.ts`. Not reusable as is:
   `OperationBlock`, `TranscriptSearch` (Nex `StreamMessage` shapes).
 - Capability selectors: `useNexHostStore` (`selectConversationsScope` pattern, `ensure(hostId)` fetches `/api/info`).
@@ -62,35 +67,51 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
 
 ## 1. Decisions (technical, 88)
 
-- **D1 View state** — `TmuxSessionContent.view?: 'terminal' | 'deck' | 'chat'` (absent = terminal), written with a
-  guarded `setPaneContent` like `lib/nex/view-mode.ts`; persisted with the tab, so per tab / per pane and surviving a
-  reload. Check every equality / rewrite of `TmuxSessionContent` (rebuild, terminated) keeps the field.
+- **D1 View state** — **device-local**, not in pane content (pane content travels with profile sync,
+  `lib/profile/sections.ts:184-189`): `stores/useSessionViewStore.ts`, zustand `persist` (localStorage), key
+  `${tabId}\0${paneId}`, value `{view: 'terminal'|'deck'|'chat', sessionCode}` (the binding: a pane rebound to another
+  session starts at terminal); pruned when the tab / pane closes (the tab store's close path). Absent = terminal.
 - **D2 Swap without unmounting** — `SessionPaneContent` keeps `<TerminalView>` mounted in a relative wrapper; when the
   view is not terminal the terminal wrapper gets `visibility:hidden` (not `display:none`: the fit observer skips
   zero-size boxes) and `inert`, `visible={isActive && view === 'terminal'}`; the deck / chat render as an absolute
   sibling. Focus: switching to deck / chat focuses its input; back to terminal focuses the terminal.
 - **D3 Conversation of a pane** — provenance (`found`, `session_id`, `agent_type === 'cc'`); re-read on the agent
   events' session change. No session id → the unreadable state (D11).
-- **D4 Client and store** — `lib/conversations/` (types mirroring U1 §8.1 + `index`; REST; WS with a ticket;
-  reconnect with the WS cursor; `reset`; `seq` gap → reconnect) and `stores/useConversationStore.ts` keyed by
-  `${hostId}\0${sessionId}`: turns by index, items upserted by id and ordered by `index`, the `omitted_items` rule,
-  `has_more_before` + `loadBefore()`, `around` for jumps, subagent children loaded on demand. One WS per conversation
-  shown, ref-counted by the panes showing it; closed 30 s after the last pane leaves.
+- **D4 Client and store** — `lib/conversations/` (types mirroring U1 §8.1 + `index`; REST; WS with a **fresh
+  one-time ticket on every (re)connect**; `seq` restarts at 1 per connection and a gap → reconnect; the cursor moves
+  only on `conversation.*` frames, never on paging answers; `reset` replaces) and `stores/useConversationStore.ts` keyed
+  by `${hostId}\0${sessionId}`: turns by index, items upserted by id and ordered by `index`, the `omitted_items` rule,
+  `has_more_before` + `loadBefore()`, `around` for jumps, subagent children loaded on demand. **Subscription owner:
+  every mounted `tmux-session` pane whose agent is Claude Code holds one, in all three views** (the terminal view needs
+  the approvals for its 「● 等你回答」 strip); one WS per conversation, ref-counted by those panes, closed 30 s after
+  the last one unmounts.
 - **D5 Rendering** — new light components under `components/deck/` (one per item kind, Collie's look, spec §4);
-  reuse `ToolDiffView` through an adapter from `diff{path, added, removed, hunks[]}`, `FoldContext` for 「顯示全部」 /
-  outputs, `useTranscriptScroll` with a new `'deck'` and `'chat'` view key. No `OperationBlock` / `TranscriptSearch`.
+  reuse `ToolDiffView` through an adapter from `diff{path, added, removed, hunks[]}`; expansion (「顯示全部」,
+  outputs, thinking) in a **pane-keyed external fold memory** (`lib/conversations/fold-memory.ts`, a module map like
+  `transcript-scroll-memory.ts`; `FoldContext` gets an optional external backing store rather than its `useState`);
+  `useTranscriptScroll` with new `'deck'` and `'chat'` view keys. No `OperationBlock` / `TranscriptSearch`.
 - **D6 Streaming** — the API is transcript-only today: agent text appears per message. The renderer honours
   `streaming: true` (cursor ▍) so U1-5 lights it up without a client change. (Spec §4 amended.)
-- **D7 Send** — `lib/conversations/send.ts`: iOS `SendPlan` rules exactly (fact list above; no bracketed paste — spec
-  §7 amended), then **verify before Enter**: send the body, read the pane's screen through a new
-  `lib/terminal-registry.ts` (registered by `TerminalView` with its pane id; `readVisibleLines(paneId)`), poll every
-  150 ms up to 2 s for the body's last non-empty line (whitespace-normalised, a trailing ≤ 40-char slice for long
-  lines); seen → send `"\r"`; not seen → no Enter, keep the draft, message 「沒有確認到終端機收到文字，未送出」.
-  The pane being in the deck / chat keeps its xterm alive (D2), so the screen is readable. Destructive guard: a draft
-  with a line matching `rm -rf`, `git push --force|-f`, `git reset --hard`, `DROP TABLE`, `mkfs`, `dd if=` → a second
-  press within 5 s (「真的要送出？」). Queue: iOS `SendQueue` (3 s undo, serial chain, local echo matched to the
-  transcript's user item within 30 s, 「你 · 排隊中」 while the agent is running). Interrupt: ESC only while the
-  header status is `running`, never twice in a row.
+- **D7 Send** — **one daemon route does the checking and the typing (U3-0b)**; the App never decides "the text
+  arrived" from what it sees (text anywhere on the screen proves nothing — an agent's output can contain it; plan
+  review 2026-10-10). `POST /api/sessions/{code}/submit {text, expected_tmux_instance, expected_session_id}`, under a
+  per-session mutex: (1) validate `text` with iOS `SendPlan` rules (control chars but `\n` stripped, tabs → 4 spaces,
+  blank head / tail lines and trailing spaces trimmed, 1 … 4000 UTF-8 bytes; a leading `!` or `/` → 400
+  `needs_terminal`, U3 has no mod path); (2) **pre-check**: tmux instance, the pane's owner in the agent registry is a
+  live Claude Code process whose session id is `expected_session_id` (process identity pid + start), and the pane's UI
+  state equals the measured prompt state (`#{pane_in_mode}` = 0 and `#{alternate_on}` as measured for Claude Code at
+  its prompt — U3-0b task 1 measures it before coding); (3) type the text (no Enter; new lines as a literal LF, no
+  bracketed paste); (4) **verify in the input region only**: capture the rows from the input box's top rule down to
+  the cursor row (bounded to 12 rows; the layout measured in task 1), and wait ≤ 2 s (every 100 ms) for the text's last
+  non-empty line (whitespace-normalised; its last 40 chars when longer) there; (5) **re-check** (2), then send `\r`.
+  Any check failing → no Enter, `409 {reason: instance | owner_changed | session_mismatch | in_mode |
+  alternate_screen | not_seen}` (JSON); the typed text stays in the input box and the App says so
+  (「文字已在終端機輸入框，沒有按 Enter：<原因>」). Capability `sessions.submit.v1` in `/api/info`; iOS may adopt it
+  later. The App side, `lib/conversations/send.ts`: the destructive guard (a line matching `rm -rf`, a forced push,
+  a hard reset, `DROP TABLE`, `mkfs`, `dd if=` → a second press within 5 s, 「真的要送出？」), iOS's `SendQueue` (3 s
+  undo, one serial chain, local echo matched to the transcript's user item within 30 s, 「你 · 排隊中」 while the agent
+  is running), interrupt = ESC through the existing send-keys with the instance, only while the header status is
+  `running`, never twice in a row.
 - **D8 Questions** — the dock reads the **conversation WS approvals** (not the host store, which drops hook kinds — keep
   that drop, so the app-wide dialog never shows them). `decideApproval` gains `hook?: {answers?: Record<string,string>,
   message?: string}`. A card is bound to its approval id: `approval op: closed` or a snapshot without it → the card
@@ -102,9 +123,11 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
   「處理了 <span>」 where span = max(started_at + duration_ms) − min(started_at) over the run's steps, rounded to
   seconds, rendered 「N 秒」 / 「N 分」 / 「N 分 M 秒」 / 「N 時」 / 「N 時 M 分」; then 「· N 失敗」 (failed),
   「· N 已拒絕」 (denied, denial ≠ interrupted), 「· N 已中斷」 (denied, interrupted), each only when > 0. A chat
-  "run" = consecutive steps (thinking does not break it; user / agent_text / system do). Parity: iOS generates
-  `testdata/conversation/v1/render/turn-rows.json` (per golden case: runs → expected row text) from its code; the
-  Mac test reads it from the repo.
+  "run" = consecutive steps (thinking does not break it; user / agent_text / system do). Spec §2.9 / §5 say the same (corrected:
+  the decision was 一串工作一列, per chain, not per turn). Parity: iOS generates
+  `testdata/conversation/v1/render/turn-rows.json` (per golden case: runs → expected row text) from its own code and
+  tests it in purdex-ios; **that committed file is a gate for U3-3** — the Mac test reads only it, never a local
+  replacement.
 - **D10 Right panel** — inside the pane, right side, width 42 % (min 320 px, max 640 px), Esc / ✕ closes; content =
   a turn (chat row click), a full output / diff (deck 「顯示全部」), or a subagent's steps; state per pane in a memory
   module (`lib/conversations/panel-memory.ts`, tab-hosted rule).
@@ -112,11 +135,14 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
   「對話紀錄還沒出現」; `provider_unsupported` 「這個 agent 不支援」; a first turn with no items 「還沒有內容」;
   WS / fetch failure 「連不上主機」 (with retry). Always 「切到終端機」. Never auto-switch.
 - **D12 U3-0 (daemon)** — additive only (U1 §8.1 rule): `step.question{questions[{question, header?, multiple,
-  options[{label, description?}]}], answers?[[]string]}` for AskUserQuestion (answers from `toolUseResult.answers`,
-  multi-select matched to labels, free text kept whole; `dismissed the question` → `denied` / `user-rejected`);
-  `step.read{offset, limit}`; `diff.created`; `step.search{where}`; `system compacted.detail.summary` (capped like
-  user text). Fixtures regenerated (`go test ./internal/convmodel/ccnorm -update`), new cases for question and
-  read-range; U1 spec §8.1 gets the fields; iOS re-pins.
+  options[{label, description?}]}], answers?[[]string]}` for AskUserQuestion (answers read from
+  `toolUseResult.answers` keyed by question text, multi-select matched to labels, free text kept whole, scrubbed like
+  user text; `dismissed the question` → `denied` / `user-rejected`); `step.read{offset, limit}`; `diff.created`;
+  `step.search{where}`; `system compacted.detail.summary` (capped like user text); **each kind's `summary` checked
+  against Collie's `summarizeToolInput` in a side-by-side table test** (differences adopted unless they lose
+  information; the table is the record). Collie's `delete` / `move` are dropped (tool names Claude Code lacks — spec §6
+  amended); images stay as they are (the apps draw a notice). Fixtures regenerated (`go test ./internal/convmodel/ccnorm
+  -update`), new cases `ask-question` and `read-range`; U1 spec §8.1 gets the fields; iOS re-pins.
 - **D13 U3-5** — prototype first (a real SPA page with fixtures, shown to the user); usage keeps today's statusline
   source (agent store) since U1-7 is not wired.
 
@@ -126,22 +152,38 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
 1. `internal/convmodel/item.go`: `StepQuestion`, `StepRead`, `StepSearch`, `Diff.Created`; JSON tags; `Validate`.
    Tests: round-trip, omitted when empty.
 2. `internal/convmodel/ccnorm`: AskUserQuestion → `question` (+ answers, multi-select matching, free text, dismissed →
-   user-rejected); Read offset / limit; Write creating a file → `created`; Grep / Glob `where`; `compacted` summary.
-   Tests per rule, Collie's examples as cases.
+   user-rejected); Read offset / limit; Write creating a file → `created`; Grep / Glob `where`; `compacted` summary;
+   the summary side-by-side table test (D12). Tests per rule, Collie's examples as cases.
 3. Fixtures: new `cc-transcript/ask-question` and `read-range` cases (scrubbed, `fixtureguard` passes), `-update`,
    `facts.json`; U1 spec §8.1 additive paragraph; README note for iOS re-pin.
 Review focus: an AskUserQuestion with no result (still running), with "Other" text equal to an option label, a
 multi-select answer whose label contains a comma.
 
+### U3-0b daemon — the submit route (~400 lines)
+1. **Measure first** (write the numbers into the PR and this plan's §0): on mlab, a live Claude Code 2.1.29x pane at its
+   prompt, in a dialog (AskUserQuestion, a permission prompt), in `/model`, and after exiting to the shell — record
+   `#{pane_in_mode}`, `#{alternate_on}`, `#{cursor_y}`, and the capture of the rows around the cursor (the input box's
+   rules / prompt glyph). The verify region and the UI-state check are built from these numbers. Use a throwaway
+   session on an isolated tmux socket (`-L <label>`, `unset TMUX`), never the user's sessions.
+2. `internal/module/session`: `POST /api/sessions/{code}/submit` (D7) with the per-session mutex, the owner / session
+   check through the agent registry, the UI-state check, typing, the input-region verify, the re-check, JSON errors;
+   `sessions.submit.v1` in `/api/info`; not in the phones' `deviceAllowed` for now. Tests with a fake tmux: each check
+   failing before typing and before Enter; hostile output above the input box containing the text → `not_seen`;
+   Claude Code exiting to the shell between typing and Enter → `owner_changed`, no Enter; wrapped multi-line text found;
+   concurrent submits serialised.
+Review focus: the owner changing between the re-check and Enter (keep that window to one tmux call); a text whose last
+line is also the prompt's placeholder; CJK width in the captured rows.
+
 ### U3-1a SPA — view buttons, handoff control, the swap (~400)
-1. `types/tab.ts` `TmuxSessionContent.view`; `lib/session-view.ts` (`viewOf`, `setSessionView`); keep it across
-   rebuild / terminated rewrites. Tests.
+1. `stores/useSessionViewStore.ts` (D1: device-local persisted, key tab + pane, binding = session code, pruned on
+   close; never in pane content, so profile sync never carries it). Tests: persist / restore, rebind → terminal, prune.
 2. `PaneModeButtons.tsx`: tmux pane → 終端機／指揮台／聊天 view-only (deck / chat disabled with a reason without
    `conversations.v1` or for a non-cc agent); a separate handoff button (arrow icon, 「交給執行體」, the old gate and
    dialog); execution pane unchanged + its take-back as that separate control (「拿回終端機」). `useNexHostStore`
    `selectConversationsV1`. Tests incl. the old handoff path.
-3. `SessionPaneContent.tsx`: D2 swap with a placeholder deck / chat; focus rules; real `TabContent` switch test
-   (view kept, terminal not re-created — assert the xterm instance is the same object).
+3. `SessionPaneContent.tsx`: D2 swap with a placeholder deck / chat; focus rules. Tests: switching views **within the
+   pane** keeps the same xterm instance (no reconnect); a real `TabContent` switch away and back (the heavy tab
+   unmounts and remounts) restores the view from `useSessionViewStore`.
 
 ### U3-1b SPA — the conversation client and store (~600)
 1. `lib/conversations/types.ts`, `api.ts` (snapshot, before, around, subagent; error codes), tests with fixtures from
@@ -156,18 +198,17 @@ multi-select answer whose label contains a comma.
    reach), scroll memory (`'deck'`), the unreadable state (D11). Tests per kind with golden expected items;
    screenshot gate (zh-TW, dark) of a real-session turn with every kind next to Collie's card shapes.
 
-### U3-2 SPA — input (~600)
-1. `lib/terminal-registry.ts` + `TerminalView` registration (`paneId` prop); `readVisibleLines`. Tests.
-2. `lib/conversations/send.ts` (SendPlan rules, verify-before-Enter, destructive guard, 409 → 「終端機已重建，請重送」)
-   and `SendQueue` port (`stores` or module) + `components/deck/SessionInput.tsx` (Enter / Shift+Enter, 中斷, draft
-   memory per pane, `/` `!` block message). Tests: each SendPlan rule, verify seen / not seen, 409, queue order and
-   undo, ESC rules, draft survives a real tab switch.
-Review focus: the text appears in the terminal but wrapped (long line) — the slice match still finds it; a draft
-that is only whitespace; two quick sends while the first is verifying.
+### U3-2 SPA — input (~500; needs U3-0b for real use, tests mock the route)
+1. `lib/conversations/send.ts` (calls `/submit`; maps each 409 reason to its message; the destructive guard; the
+   `SendQueue` port; interrupt) + `components/deck/SessionInput.tsx` (Enter / Shift+Enter, 中斷, draft memory per pane,
+   the `/` `!` message, disabled with a reason without `sessions.submit.v1`). Tests: each 409 reason, queue order and
+   undo, ESC rules, destructive guard, draft survives a real `TabContent` remount.
+Review focus: a draft that is only whitespace; two quick sends while the first is in flight; the host restarting
+mid-submit.
 
 ### U3-3 SPA — chat and the right panel (~700)
-1. `lib/conversations/turn-row.ts` (D9) tested against `render/turn-rows.json` (iOS produces it first; until it lands
-   the test reads a local copy generated from iOS's rules and is switched to the repo file in the same PR).
+1. **Gate: iOS has committed `testdata/conversation/v1/render/turn-rows.json`** (generated and tested in purdex-ios).
+   `lib/conversations/turn-row.ts` (D9) tested against that file only.
 2. `components/deck/ChatView.tsx` (bubbles, header with the live status line, one progress message in place, the
    file chip from edit steps), `SessionRightPanel.tsx` (D10) used by chat rows, deck 「顯示全部」 and subagents.
    Tests + screenshot gate.
@@ -177,15 +218,20 @@ that is only whitespace; two quick sends while the first is verifying.
    of `decideApproval`. Tests: snapshot replace, closed → lock → close, answered in the terminal text, terminal_only,
    ask-chat gating and validation (mirror the daemon's 1–4000 runes / no bidi rules).
 2. `components/deck/QuestionDock.tsx` + multi-question `AskUserQuestion`; the input's placeholder while a card is open;
-   the terminal view's 「● 等你回答」 strip; per-card 「終端機」 button. Tests + screenshot gate.
+   the terminal view's 「● 等你回答」 strip (the pane's subscription, D4); per-card 「終端機」 button. Tests: opened /
+   closed / snapshot replacement seen from the terminal view; + screenshot gate.
+3. **The tab-hosted integration test** (CLAUDE.md): one real `TabContent` test that switches away and back (heavy-tab
+   unmount / remount) in the middle of each state — deck scrolled and outputs expanded, a draft, the right panel open,
+   chat, an open dock card — and finds each restored.
 
 ### U3-5 SPA — the status row (prototype first)
 1. Prototype page (fixtures, real components) → user decision → its own short plan addendum.
 
 ## 3. Order and owners
 
-U3-0 (daemon) and U3-1a … U3-1c can run in parallel. Then U3-2 → U3-3 → U3-4 → U3-5. iOS: `render/turn-rows.json`
-before U3-3, and re-pin after U3-0. Owner: a U3 member (Sonnet) under 88 — needs the 介面線 cap raised to 4 (user), or
+Daemon U3-0 → U3-0b and SPA U3-1a … U3-1c run in parallel. Then U3-2 (U3-0b deployed for real use) → U3-3 (gate:
+iOS `render/turn-rows.json`) → U3-4 → U3-5. iOS: the fixture before U3-3, the re-pin after U3-0, `/submit` adoption
+optional. Owner: a U3 member (Sonnet) under 88 — needs the 介面線 cap raised to 4 (user), or
 U3 waits for the solo seat after WA-2b-2.
 
 ## 4. Review focus (whole plan)
@@ -195,3 +241,14 @@ U3 waits for the solo seat after WA-2b-2.
 3. The host restarts mid-view (WS closes, reconnect with cursor, `reset`).
 4. Sending while the terminal is in copy mode / a dialog (the text never appears → no Enter, draft kept).
 5. Two tabs showing the same session in different views (one WS, two views, independent scroll / draft).
+
+## 5. Review map (codex plan review `task-mv1gmhpu-9o374w`, 9 findings)
+
+1 (critical, App-side screen check spoofable) → D7 / U3-0b: the daemon submit route, input-region verify, owner /
+session / UI-state checks before typing and before Enter, fail closed. 2 (view in synced pane content) → D1
+device-local store. 3 (heavy tabs unmount) → §0 fact and U3-1a tests. 4 (FoldContext local state) → D5 external fold
+memory. 5 (per turn vs per run) → spec corrected to the user's 一串工作一列 (the plan was right). 6 (parity fixture
+replaceable) → D9 / U3-3 gate. 7 (U3-0 gaps) → D12 summary table, question answers; delete / move dropped and images
+left to the apps (spec §6 amended with the evidence). 8 (terminal view without a subscription) → D4 owner = every CC
+pane in all views, ticket per reconnect, cursor only from conversation frames; U3-4 tests. 9 (stale DecideRequest fact)
+→ §0 corrected; D8 extends only the SPA type. Plus the tab-hosted integration test (U3-4 task 3).
