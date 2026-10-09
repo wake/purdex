@@ -204,24 +204,27 @@ func (s *Store) KnownSession(sid string) (bool, error) {
 	return true, nil
 }
 
-// ProcessOfSession is the pid team.db recorded for a session that is a member (its row) or leads a team (its lead
-// request's origin); 0 when it knows none. pendingLineage uses it to tie a new session id to a relay in flight.
-func (s *Store) ProcessOfSession(sid string) (int, error) {
-	var pid sql.NullInt64
-	err := s.db.QueryRow(`SELECT pid FROM team_members WHERE session_id = ? AND pid > 0 ORDER BY created_at DESC LIMIT 1`, sid).Scan(&pid)
-	if err == nil && pid.Valid {
-		return int(pid.Int64), nil
+// ProcessOfSession is the process team.db recorded for a session that is a member (its row) or leads a team (its lead
+// request's origin): pid and start time, 0 and "" when it knows none. pendingLineage uses it to tie a new session id to
+// a relay in flight; the start time guards against a pid the OS has reused.
+func (s *Store) ProcessOfSession(sid string) (pid int, procStart string, err error) {
+	var p sql.NullInt64
+	var ps sql.NullString
+	err = s.db.QueryRow(`SELECT pid, proc_start FROM team_members WHERE session_id = ? AND pid > 0 ORDER BY created_at DESC LIMIT 1`, sid).Scan(&p, &ps)
+	if err == nil && p.Valid {
+		return int(p.Int64), ps.String, nil
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("process of %s: %w", sid, err)
+		return 0, "", fmt.Errorf("process of %s: %w", sid, err)
 	}
-	err = s.db.QueryRow(`SELECT CASE WHEN json_valid(a.origin_json) THEN json_extract(a.origin_json, '$.pid') END
-		FROM teams t JOIN approval_requests a ON a.id = t.request_id WHERE t.lead_session_id = ? LIMIT 1`, sid).Scan(&pid)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !pid.Valid) {
-		return 0, nil
+	err = s.db.QueryRow(`SELECT CASE WHEN json_valid(a.origin_json) THEN json_extract(a.origin_json, '$.pid') END,
+		CASE WHEN json_valid(a.origin_json) THEN json_extract(a.origin_json, '$.proc_start') END
+		FROM teams t JOIN approval_requests a ON a.id = t.request_id WHERE t.lead_session_id = ? LIMIT 1`, sid).Scan(&p, &ps)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !p.Valid) {
+		return 0, "", nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("process of %s: %w", sid, err)
+		return 0, "", fmt.Errorf("process of %s: %w", sid, err)
 	}
-	return int(pid.Int64), nil
+	return int(p.Int64), ps.String, nil
 }

@@ -108,7 +108,7 @@ func (m *Module) pendingLineage(sid, root string) bool {
 			if op.SessionID == sid || m.origins.LiveSession(op.SessionID) {
 				continue
 			}
-			if pid, err := m.store.ProcessOfSession(op.SessionID); err == nil && pid == cur.PID {
+			if pid, ps, err := m.store.ProcessOfSession(op.SessionID); err == nil && pid == cur.PID && ps != "" && ps == cur.ProcStart {
 				return true
 			}
 		}

@@ -227,6 +227,11 @@ func TestRelayQuotaPut_PendingLineageFlagsAProvisionalRoot(t *testing.T) {
 	if code != http.StatusOK || !v.PendingLineage || v.RootSessionID != "sid-1b" {
 		t.Fatalf("put = %d %s, want pending_lineage on the provisional root", code, body)
 	}
+	// the same pid with another start time is another process (the OS reused the pid): not flagged
+	f.origins.show(team.Origin{SessionID: "sid-1b", Ref: "_1b0000", PID: 10, ProcStart: "Mon Sep 14 09:00:00 2026"})
+	if _, v, _ := f.putQuota(team.RelayQuotaPutRequest{SessionID: "sid-1b", SelfLeft: ip(5), Client: appClient2}); v.PendingLineage {
+		t.Fatal("a reused pid (another start time) was flagged pending_lineage")
+	}
 	// once the lineage is written the real root is read, and the orphan is never looked at
 	lineage(t, f.m.store, "sid-1b", "sid-1")
 	if q, root, _ := f.m.store.RelayQuotaOf("sid-1b"); root != "sid-1" || q.SelfLeft != 1 {

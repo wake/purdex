@@ -284,7 +284,7 @@ func (f *fakeOrigins) lookup(sid string) (team.Origin, bool, error) {
 	pid, ok := f.cleared[sid]
 	f.mu.Unlock()
 	if ok {
-		return team.Origin{SessionID: sid, Ref: ipeers.RefID(sid), PID: pid}, true, nil
+		return team.Origin{SessionID: sid, Ref: ipeers.RefID(sid), PID: pid, ProcStart: "Sun Sep 13 15:22:36 2026"}, true, nil // a /clear keeps the process: same pid, same start
 	}
 	return team.Origin{}, false, nil
 }
