@@ -179,6 +179,133 @@ func TestCatchUp_TheTurnThatJustEndedStillReadsRunning(t *testing.T) {
 	}
 }
 
+// The Stop hook can fire before Claude Code has written the turn's last assistant row (measured on a real session: the
+// row was stamped 52 ms before the hook arrived and still was not in the file). The event is looked at again every 100 ms
+// for up to 1.5 s; when the words appear the real turn is used, and only if they never do are the hook's own words.
+
+// runLater runs the timers the engine has set (the After seam), up to n rounds, and returns how many ran.
+func runLater(k *kit, rounds int) int {
+	ran := 0
+	for i := 0; i < rounds && len(k.afters) > 0; i++ {
+		fs := k.afters
+		k.afters = nil
+		for _, f := range fs {
+			f()
+			ran++
+		}
+	}
+	return ran
+}
+
+func unflushedTurn(id, prompt string) convmodel.Turn {
+	t := runningTurn(id)
+	t.Items = []convmodel.Item{userItem(prompt)} // the answer is not in the file yet
+	return t
+}
+
+// Mutation gate: record at once from the half-written turn, or never wait → red.
+func TestCatchUp_WaitsForTheTranscriptToCatchUp(t *testing.T) {
+	for name, polls := range map[string]int{"50ms": 1, "500ms": 5, "1.4s": 14} {
+		t.Run(name, func(t *testing.T) {
+			k := newKit(t)
+			k.capable["s1"] = true
+			k.turns.set("s1", endedTurn("t1", 100, "第一輪"))
+			k.event("s1", 1000)
+			k.turns.set("s1", endedTurn("t1", 100, "第一輪"), unflushedTurn("t2", "第二輪的問題"))
+			k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "第二輪的回答", At: 5000, Seq: 2})
+			if got := turnIDs(k.entries("s1")); got != "t1" || len(k.afters) != 1 {
+				t.Fatalf("recorded %q with %d timers: the event must wait, not record a half turn", got, len(k.afters))
+			}
+			if n := runLater(k, polls-1); n != polls-1 {
+				t.Fatalf("ran %d timers, want %d", n, polls-1)
+			}
+			// the file catches up: the answer is there now, in its own (longer) words
+			flushed := runningTurn("t2")
+			flushed.Items = []convmodel.Item{userItem("第二輪的問題"), agentItem("第二輪的回答，還有檔案裡才有的後半段")}
+			k.turns.set("s1", endedTurn("t1", 100, "第一輪"), flushed)
+			runLater(k, 1)
+			rows := k.entries("s1")
+			if turnIDs(rows) != "t1,t2" || rows[1].TurnAt != 5000 {
+				t.Fatalf("recorded %q", turnIDs(rows))
+			}
+			if strings.Contains(k.logs.text(), "had not caught up") {
+				t.Fatalf("the hook's words were used although the file caught up: %s", k.logs.text())
+			}
+			j1 := mustNext(t, k, "m", "s1")
+			k.finish("m", j1, Result{Reason: "refused"})
+			if j2 := mustNext(t, k, "m", "s1"); !strings.Contains(j2.Complete.Prompt, "後半段") {
+				t.Fatalf("the job must carry the file's words: %s", j2.Complete.Prompt)
+			}
+		})
+	}
+}
+
+// After 1.5 s the file still has nothing: the hook's own words stand in, and one log line says so.
+// Mutation gate: wait forever, or drop the adoption → red.
+func TestCatchUp_AfterTheLimitTheHookWordsStandIn(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "第一輪"))
+	k.event("s1", 1000)
+	k.turns.set("s1", endedTurn("t1", 100, "第一輪"), unflushedTurn("t2", "第二輪的問題"))
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "第二輪的回答", At: 5000, Seq: 2})
+	if n := runLater(k, 40); n != settleRetries {
+		t.Fatalf("looked again %d times, want %d (1.5 s at 100 ms)", n, settleRetries)
+	}
+	rows := k.entries("s1")
+	if turnIDs(rows) != "t1,t2" || rows[1].TurnAt != 5000 {
+		t.Fatalf("recorded %q", turnIDs(rows))
+	}
+	if strings.Count(k.logs.text(), "had not caught up") != 1 {
+		t.Fatalf("log = %s", k.logs.text())
+	}
+	j1 := mustNext(t, k, "m", "s1")
+	k.finish("m", j1, Result{Reason: "refused"})
+	if j2 := mustNext(t, k, "m", "s1"); !strings.Contains(j2.Complete.Prompt, "第二輪的問題") || !strings.Contains(j2.Complete.Prompt, "第二輪的回答") {
+		t.Fatalf("the job must carry the prompt and the hook's words: %s", j2.Complete.Prompt)
+	}
+}
+
+// Waiting is a timer, never a sleep: the call returns at once and other sessions go on.
+func TestCatchUp_WaitingDoesNotBlockOtherSessions(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"], k.capable["s2"] = true, true
+	k.turns.set("s1", endedTurn("t1", 100, "一"), unflushedTurn("t2", "問"))
+	k.turns.set("s2", endedTurn("u1", 100, "甲"))
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "答", At: 5000, Seq: 1})
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s2", Text: "甲", At: 5001, Seq: 2})
+	if got := turnIDs(k.entries("s2")); got != "u1" {
+		t.Fatalf("s2 recorded %q while s1 waits", got)
+	}
+}
+
+// Two answers in a row with the same words: the older turn matches the hook text too, but it is recorded already, so the
+// newest (not flushed) turn is the one the event is about.
+func TestCatchUp_RepeatedWordsStillFindTheNewTurn(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "收到"))
+	k.event("s1", 1000)
+	k.turns.set("s1", endedTurn("t1", 100, "收到"), unflushedTurn("t2", "再說一次"))
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "收到", At: 6000, Seq: 2})
+	runLater(k, 40)
+	if got := turnIDs(k.entries("s1")); got != "t1,t2" {
+		t.Fatalf("recorded %q, want t1,t2", got)
+	}
+}
+
+// A hook that carries no last_assistant_message gives nothing to wait for or to adopt: a turn that has done something is
+// the one that ended; a turn with only the user's prompt is not recorded (and nothing waits).
+func TestCatchUp_AHookWithNoWords(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "a"), unflushedTurn("t2", "問"))
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "", At: 5000, Seq: 1})
+	if len(k.afters) != 0 || turnIDs(k.entries("s1")) != "t1" {
+		t.Fatalf("recorded %q with %d timers", turnIDs(k.entries("s1")), len(k.afters))
+	}
+}
+
 // A turn with no assistant text and no tool step is not summarised: no entry.
 func TestCatchUp_ATurnWithNothingToSummariseIsNotRecorded(t *testing.T) {
 	k := newKit(t)

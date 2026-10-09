@@ -25,16 +25,18 @@ const (
 
 // Limits of the engine (spec §5.1, plan D1 / D2 / D10).
 const (
-	catchUpWindow   = 6                // turns read per turn-end event
-	catchUpKeep     = 3                // ended turns recorded at most per event (the backlog limit)
-	busyRetries     = 3                // transcript cache busy: re-queue the event this many times
-	busyDelay       = 2 * time.Second  // ... this far apart
-	fallbackBucket  = 120_000          // ms: the time bucket of a fallback turn id
-	maxWaitingTurns = 3                // waiting turn jobs per conversation
-	defaultCallCap  = 300              // calls per host per hour
-	leaseSlack      = 10 * time.Second // a lease lasts timeout_ms + this
-	completeTimeout = 30_000           // ms: timeout_ms of a job's call
-	reapEvery       = 5 * time.Second  // how often leases that ran out are looked for
+	catchUpWindow   = 6                      // turns read per turn-end event
+	catchUpKeep     = 3                      // ended turns recorded at most per event (the backlog limit)
+	busyRetries     = 3                      // transcript cache busy: re-queue the event this many times
+	settleDelay     = 100 * time.Millisecond // a Stop that comes before the transcript is written: look again this often ...
+	settleRetries   = 15                     // ... this many times (1.5 s), then use the hook's own words
+	busyDelay       = 2 * time.Second        // ... this far apart
+	fallbackBucket  = 120_000                // ms: the time bucket of a fallback turn id
+	maxWaitingTurns = 3                      // waiting turn jobs per conversation
+	defaultCallCap  = 300                    // calls per host per hour
+	leaseSlack      = 10 * time.Second       // a lease lasts timeout_ms + this
+	completeTimeout = 30_000                 // ms: timeout_ms of a job's call
+	reapEvery       = 5 * time.Second        // how often leases that ran out are looked for
 )
 
 // Deps are the engine's collaborators. Every one but Store may be nil (a daemon, or a test, without that module).
