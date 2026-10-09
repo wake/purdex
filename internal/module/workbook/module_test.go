@@ -63,6 +63,30 @@ func TestModule_InitSoftFailsOnABrokenDataDir(t *testing.T) {
 	}
 }
 
+// If the leftover entries cannot be settled the module must not claim to be ready (codex attack).
+// Mutation gate: log and return nil without disabling → red.
+func TestModule_StartDisablesItselfWhenFailPendingFails(t *testing.T) {
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir()}})
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatal(err)
+	}
+	m.live().db.Close() // the next statement fails
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatalf("Start = %v, want nil (soft)", err)
+	}
+	st := m.Status()
+	if st["ready"] != false || st["init_error"] == "" {
+		t.Fatalf("status = %v", st)
+	}
+	if m.live() != nil {
+		t.Fatal("a disabled module handed out a store")
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop after disable = %v", err)
+	}
+}
+
 // A restart settles what a crash left pending. Mutation gate: drop the FailPending call in Start → red.
 func TestModule_StartFailsLeftoverPending(t *testing.T) {
 	dir := t.TempDir()

@@ -8,6 +8,7 @@ package workbook
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -81,13 +82,28 @@ func (m *Module) Start(context.Context) error {
 	}
 	n, err := st.FailPending()
 	if err != nil {
-		log.Printf("[workbook] fail pending: %v", err)
+		// Entries may still read pending from the last run: the module must not look ready (the invariant of D9 is
+		// "none pending after a start"), so it turns itself off like a failed Init and says why.
+		m.disable(fmt.Errorf("start: %w", err))
 		return nil
 	}
 	if n > 0 {
 		log.Printf("[workbook] %d entries were pending at the last stop; marked failed (stopped)", n)
 	}
 	return nil
+}
+
+// disable turns the module off after a failure that happened once it was running: not ready, the reason recorded, the
+// store closed.
+func (m *Module) disable(err error) {
+	m.mu.Lock()
+	st := m.store
+	m.store, m.ready, m.initErr = nil, false, err.Error()
+	m.mu.Unlock()
+	log.Printf("[workbook] disabled: %v", err)
+	if st != nil {
+		st.Close()
+	}
 }
 
 // Stop releases the store. Nothing writes after it returns.
