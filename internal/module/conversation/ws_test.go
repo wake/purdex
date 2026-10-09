@@ -170,20 +170,16 @@ func (c *wsClient) expect(typ string) wsFrame {
 	return f
 }
 
-// closed reports whether the server ends the connection (draining frames) within the time.
+// closed reports whether the server ends the connection (draining frames) within the time. A read that times out
+// poisons a gorilla connection, so there is one deadline for the whole wait: a timeout means it is still open.
 func (c *wsClient) closed(within time.Duration) bool {
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		_ = c.conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	_ = c.conn.SetReadDeadline(time.Now().Add(within))
+	for {
 		if _, _, err := c.conn.ReadMessage(); err != nil {
 			var ne interface{ Timeout() bool }
-			if errors.As(err, &ne) && ne.Timeout() {
-				continue
-			}
-			return true
+			return !(errors.As(err, &ne) && ne.Timeout())
 		}
 	}
-	return false
 }
 
 func settled(t *testing.T, what string, cond func() bool) {
@@ -654,5 +650,74 @@ func TestWS_NoConnectionIsAdmittedAfterStop(t *testing.T) {
 	}
 	if h, s := feed.state(); h != 0 || s != 0 {
 		t.Fatalf("holds %d subs %d after Stop", h, s)
+	}
+}
+
+// The callback the team module runs under its event lock only queues: a huge approval costs it nothing (the writer
+// encodes), so it cannot hold up another approval event.
+func TestWS_ApprovalCallbackDoesNoEncodingUnderTheLock(t *testing.T) {
+	e, feed := wsEnv(t)
+	e.transcript(idleTurns(1))
+	srv := e.server()
+	c := e.connect(srv, "")
+	c.expect("conversation.snapshot")
+	c.expect("approvals.snapshot")
+	huge := approval("huge")
+	huge.Payload = json.RawMessage(`{"pad":"` + strings.Repeat("x", 8<<20) + `"}`)
+	t0 := time.Now()
+	feed.emit("opened", huge)
+	if d := time.Since(t0); d > 20*time.Millisecond {
+		t.Fatalf("the callback took %v for an 8 MiB approval: it is encoding under the lock", d)
+	}
+	op := c.expect("approval") // and it still arrives, whole
+	if !strings.Contains(string(op.Value), `"huge"`) || len(op.Value) < 8<<20 {
+		t.Fatalf("approval frame of %d bytes", len(op.Value))
+	}
+}
+
+// A Stop that is still waiting for its lifetime's connections is not disturbed by a connection of the next lifetime.
+func TestModule_StopWaitsOnlyForItsOwnLifetimesConnections(t *testing.T) {
+	e, _ := wsEnv(t)
+	e.transcript(idleTurns(1))
+	if err := e.mod.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e.mod.mu.Lock()
+	old := e.mod.cur
+	e.mod.mu.Unlock()
+	old.ws.Add(1) // a connection of the first lifetime that is slow to leave
+	stopped := make(chan error, 1)
+	go func() { stopped <- e.mod.Stop(context.Background()) }()
+	settled(t, "the first lifetime is cancelled", func() bool { return old.ctx.Err() != nil })
+	settled(t, "its sweeper returned (the module may start again)", func() bool {
+		e.mod.mu.Lock()
+		defer e.mod.mu.Unlock()
+		return !e.mod.running
+	})
+	if err := e.mod.Start(context.Background()); err != nil { // the next lifetime
+		t.Fatal(err)
+	}
+	srv := e.server()
+	c := e.connect(srv, "") // a connection of the next lifetime
+	c.expect("conversation.snapshot")
+	select {
+	case err := <-stopped:
+		t.Fatalf("Stop returned (%v) while its own lifetime's connection was still there", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	old.ws.Done() // the slow connection leaves: the first Stop completes without waiting for the new one
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the first Stop waited for a connection of the next lifetime")
+	}
+	if c.closed(200 * time.Millisecond) {
+		t.Fatal("the first Stop closed the next lifetime's connection")
+	}
+	if err := e.mod.Stop(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

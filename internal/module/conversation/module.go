@@ -42,14 +42,20 @@ type Module struct {
 	maxBody  int // tests lower it
 	subSem   chan struct{}
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   chan struct{} // closed when the sweeper has returned
+	mu      sync.Mutex
+	cur     *generation // the latest Start's (kept after Stop: its context is cancelled, so nothing is admitted)
+	running bool        // a Start whose sweeper has not returned yet
+	idle    sync.WaitGroup
+	tweak   wsTuning
+}
 
-	// run is the module's lifetime: Stop cancels it and every WebSocket ends with it (wsWG counts the live ones).
-	run   context.Context
-	wsWG  sync.WaitGroup
-	tweak wsTuning
+// generation is one Start..Stop lifetime: its sweeper, and the WebSockets that live in it. A later Start makes a new
+// one, so an earlier Stop never waits for (or cancels) connections of the next lifetime.
+type generation struct {
+	ctx         context.Context
+	cancel      context.CancelFunc
+	sweeperDone chan struct{}
+	ws          sync.WaitGroup
 }
 
 // wsTuning lets tests shorten the live stream's timings and queue; zero values are the spec's.
@@ -79,21 +85,21 @@ func (m *Module) queueCap() int {
 	return sendQueue
 }
 
-// admitWS counts one more live WebSocket and returns the context it lives in: the module's once started (and not yet
-// stopped), else Background (tests that never Start). ok is false once Stop has begun; the caller must call
-// wsWG.Done when ok.
-func (m *Module) admitWS() (ctx context.Context, ok bool) {
+// admitWS counts one more live WebSocket and returns the context it lives in and the counter to call Done on: the
+// current lifetime's (refused once its Stop has begun), or Background for a module that was never started (tests).
+// Stop cancels under the same lock, so a connection is either refused or counted before Stop starts to wait.
+func (m *Module) admitWS() (ctx context.Context, wg *sync.WaitGroup, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.run == nil {
-		m.wsWG.Add(1)
-		return context.Background(), true
+	if m.cur == nil {
+		m.idle.Add(1)
+		return context.Background(), &m.idle, true
 	}
-	if m.run.Err() != nil {
-		return nil, false
+	if m.cur.ctx.Err() != nil {
+		return nil, nil, false
 	}
-	m.wsWG.Add(1)
-	return m.run, true
+	m.cur.ws.Add(1)
+	return m.cur.ctx, &m.cur.ws, true
 }
 
 // New returns the module.
@@ -142,44 +148,44 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ws/conversations/{provider}/{session_id}", m.handleWS)
 }
 
-// Start runs the cache sweeper; a second Start while it runs does nothing.
+// Start runs the cache sweeper in a new lifetime; a second Start while one runs does nothing.
 func (m *Module) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.cancel != nil {
+	if m.running {
 		return nil
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	m.cancel, m.done, m.run = cancel, done, ctx
+	gctx, cancel := context.WithCancel(ctx)
+	g := &generation{ctx: gctx, cancel: cancel, sweeperDone: make(chan struct{})}
+	m.cur, m.running = g, true
 	go func() {
-		m.cache.Run(ctx, sweepEvery)
-		m.mu.Lock() // the module is no longer running: a later Start may begin again, whoever stopped this one
-		if m.done == done {
-			m.cancel, m.done = nil, nil
+		m.cache.Run(gctx, sweepEvery)
+		m.mu.Lock() // the sweeper is gone: a later Start may begin again, whoever stopped this one
+		if m.cur == g {
+			m.running = false
 		}
 		m.mu.Unlock()
-		close(done)
+		close(g.sweeperDone)
 	}()
 	log.Println("[conversation] endpoints enabled")
 	return nil
 }
 
-// Stop ends the sweeper and waits for it to return (or for ctx). The module counts as running until the sweeper has
-// returned, so a concurrent Stop waits for the same exit and a concurrent Start does not start a second sweeper.
+// Stop ends the current lifetime: its sweeper and its WebSockets, and waits for both (or for ctx). The module counts as
+// running until the sweeper has returned, so a concurrent Start does not start a second one.
 func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
-	cancel, done := m.cancel, m.done
-	if cancel != nil {
-		cancel() // under m.mu: admitWS sees the module stopped, or its connection was counted before the wait below
+	g := m.cur
+	if g != nil {
+		g.cancel() // under m.mu: admitWS refuses afterwards, or its connection was counted before the wait below
 	}
 	m.mu.Unlock()
-	if cancel == nil {
+	if g == nil {
 		return nil
 	}
 	wsDone := make(chan struct{})
-	go func() { m.wsWG.Wait(); close(wsDone) }()
-	for _, ch := range []chan struct{}{done, wsDone} {
+	go func() { g.ws.Wait(); close(wsDone) }()
+	for _, ch := range []chan struct{}{g.sweeperDone, wsDone} {
 		select {
 		case <-ch:
 		case <-ctx.Done():

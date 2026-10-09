@@ -44,8 +44,15 @@ type heldOp struct {
 	a  team.Approval
 }
 
-// wsConn is one live connection. Everything that reaches the client goes through enqueue, which numbers the frame and
-// puts it on the bounded send queue under one lock, so seq is contiguous in queue order across frame types.
+// outFrame is one queued frame: its type and an immutable value (or already-encoded JSON). The writer numbers and
+// encodes it, so nothing expensive runs on the goroutine that queues (which may hold the team module's event lock).
+type outFrame struct {
+	typ   string
+	value any
+}
+
+// wsConn is one live connection. Everything that reaches the client goes through enqueue onto the bounded send queue;
+// the single writer numbers frames as it writes them, so seq is contiguous in queue order across frame types.
 type wsConn struct {
 	m      *Module
 	conn   *websocket.Conn
@@ -56,12 +63,11 @@ type wsConn struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	out    chan []byte
+	out    chan outFrame
 
-	mu       sync.Mutex // guards seq, closed, ready, held, cleanups, done
-	seq      uint64
-	closed   bool // no more frames are accepted
-	ready    bool // the approvals snapshot is queued: later ops go straight to the queue
+	mu       sync.Mutex // guards closed, ready, held, cleanups, done
+	closed   bool       // no more frames are accepted
+	ready    bool       // the approvals snapshot is queued: later ops go straight to the queue
 	held     []heldOp
 	cleanups []func()
 	done     bool // shutdown has run its cleanups
@@ -84,15 +90,8 @@ func (c *wsConn) enqueueLocked(typ string, value any) bool {
 	if c.closed {
 		return false
 	}
-	c.seq++
-	b, err := json.Marshal(frame{Type: typ, Seq: c.seq, Value: value})
-	if err != nil {
-		c.seq--
-		log.Printf("[conversation] encode %s frame: %v", typ, err)
-		return false
-	}
 	select {
-	case c.out <- b:
+	case c.out <- outFrame{typ, value}:
 		return true
 	default:
 		c.overflowLocked()
@@ -223,12 +222,12 @@ func (m *Module) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// A connection is admitted only while the module runs: Stop and this check share m.mu, so no connection can start
 	// (or be counted) after Stop began waiting for them.
-	runCtx, ok := m.admitWS()
+	runCtx, wg, ok := m.admitWS()
 	if !ok {
 		writeError(w, http.StatusServiceUnavailable, "stopping")
 		return
 	}
-	defer m.wsWG.Done()
+	defer wg.Done()
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	conn, err := up.Upgrade(w, r, nil)
 	if err != nil {
@@ -236,7 +235,7 @@ func (m *Module) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(runCtx)
 	c := &wsConn{m: m, conn: conn, entry: entry, sid: sid, hostID: m.hostID(), turns: turns,
-		ctx: ctx, cancel: cancel, out: make(chan []byte, m.queueCap())}
+		ctx: ctx, cancel: cancel, out: make(chan outFrame, m.queueCap())}
 	defer c.shutdown()
 
 	go c.writeLoop()
@@ -364,13 +363,20 @@ func (c *wsConn) push() bool {
 // writeLoop is the only writer: it drains the queue and keeps the connection alive with pings.
 func (c *wsConn) writeLoop() {
 	defer c.shutdown()
+	var seq uint64
 	ping := time.NewTicker(pingEvery)
 	defer ping.Stop()
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
-		case b := <-c.out:
+		case f := <-c.out:
+			seq++
+			b, err := json.Marshal(frame{Type: f.typ, Seq: seq, Value: f.value})
+			if err != nil { // cannot happen for our own types; never leave a gap in seq
+				log.Printf("[conversation] encode %s frame: %v", f.typ, err)
+				return
+			}
 			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.TextMessage, b); err != nil {
 				return

@@ -486,7 +486,7 @@ func TestModule_StartIsIdempotentAndStopWaitsForTheSweeper(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.mod.mu.Lock()
-	done := e.mod.done
+	done := e.mod.cur.sweeperDone
 	e.mod.mu.Unlock()
 	if err := e.mod.Stop(context.Background()); err != nil {
 		t.Fatal(err)
@@ -534,7 +534,7 @@ func TestModule_StartWorksAfterATimedOutStop(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		e.mod.mu.Lock()
-		running := e.mod.cancel != nil
+		running := e.mod.running
 		e.mod.mu.Unlock()
 		if !running {
 			break
@@ -548,7 +548,7 @@ func TestModule_StartWorksAfterATimedOutStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.mod.mu.Lock()
-	running := e.mod.cancel != nil
+	running := e.mod.running
 	e.mod.mu.Unlock()
 	if !running {
 		t.Fatal("Start after a timed-out Stop did not start the sweeper")
