@@ -15,11 +15,13 @@ interface Input {
   key: string
   /** How many seats there are. */
   total: number
+  /** Px of the box taken by things beside the cells (the strip's team name); 0 for the header row, whose box is the cells'. */
+  base?: number
   /** Px kept free at the end when not everyone fits (the strip's 「+N」); 0 for the header row. */
   reserve?: number
 }
 
-export function useCellCapacity(box: RefObject<HTMLElement | null>, { key, total, reserve = 0 }: Input): number | null {
+export function useCellCapacity(box: RefObject<HTMLElement | null>, { key, total, base = 0, reserve = 0 }: Input): number | null {
   const [measured, setMeasured] = useState<number | null>(null)
   const indicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
   const seen = useRef({ key: '', unit: 0 })
@@ -34,8 +36,9 @@ export function useCellCapacity(box: RefObject<HTMLElement | null>, { key, total
       el.querySelectorAll<HTMLElement>('[data-testid="team-panel-cell"]').forEach((c) => { unit = Math.max(unit, c.offsetWidth) })
       seen.current.unit = unit
       if (!(unit > 0 && avail > 0)) { setMeasured(null); return }
-      const all = capacityOf(avail, unit)
-      setMeasured(total <= all ? all : capacityOf(avail, unit, reserve))
+      const room = avail - base
+      const all = capacityOf(room, unit)
+      setMeasured(total <= all ? all : capacityOf(room, unit, reserve))
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
