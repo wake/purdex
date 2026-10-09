@@ -29,6 +29,7 @@ const (
 	logRotateMaxBytes = 50 << 20 // rotate when pdx.log reaches this
 	logRotateKeep     = 5        // compressed generations kept: pdx.log.1.gz ... pdx.log.5.gz
 	logRotateEvery    = 30 * time.Second
+	logRotateStopWait = 5 * time.Second // how long stop() waits for a compression in flight
 )
 
 // rotWriter is the daemon's log output: it writes to the stderr descriptor under a mutex that a rotation also holds
@@ -66,6 +67,7 @@ type logRotator struct {
 	logf     func(format string, args ...any)
 
 	mu          sync.Mutex  // one rotation at a time
+	stopped     bool        // under mu: no rotation after stop()
 	compressing atomic.Bool // one compression at a time
 	compressWG  sync.WaitGroup
 }
@@ -98,6 +100,9 @@ func (r *logRotator) check() bool {
 func (r *logRotator) rotate() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.stopped {
+		return fmt.Errorf("stopped")
+	}
 	tmp := r.path + ".rotating"
 	if _, err := os.Stat(tmp); err == nil {
 		// the previous compression has not finished (or was cut short): compress it first, rotate on the next check
@@ -120,17 +125,42 @@ func (r *logRotator) rotate() error {
 		return err
 	}
 	nfd := int(nf.Fd())
-	var dupErrs []error
+	// The descriptors are switched as ONE commit: the originals are saved first, and if any dup2 fails every one is put
+	// back, the old file gets its name again and nothing is compressed — no descriptor is left on a file about to go.
+	saved := make([]int, len(r.fds))
+	for i, fd := range r.fds {
+		d, err := syscall.Dup(fd)
+		if err != nil {
+			for _, s := range saved[:i] {
+				_ = syscall.Close(s)
+			}
+			_ = nf.Close()
+			_ = os.Rename(tmp, r.path)
+			r.logf("log rotation: save fd %d: %v", fd, err)
+			return err
+		}
+		saved[i] = d
+	}
+	var failed error
 	r.w.mu.Lock() // no logged line is in flight while the descriptors are replaced
-	for _, fd := range r.fds {
+	for i, fd := range r.fds {
 		if err := syscall.Dup2(nfd, fd); err != nil {
-			dupErrs = append(dupErrs, fmt.Errorf("fd %d: %w", fd, err))
+			failed = fmt.Errorf("dup2 onto fd %d: %w", fd, err)
+			for k := 0; k < i; k++ { // put back the ones already switched
+				_ = syscall.Dup2(saved[k], r.fds[k])
+			}
+			break
 		}
 	}
 	r.w.mu.Unlock()
+	for _, d := range saved {
+		_ = syscall.Close(d)
+	}
 	_ = nf.Close()
-	for _, err := range dupErrs {
-		r.logf("log rotation: dup2 onto %v", err) // lands in the old file; never silent
+	if failed != nil {
+		_ = os.Rename(tmp, r.path) // replaces the empty new file: the descriptors point at this one again
+		r.logf("log rotation: %v; not rotated", failed)
+		return failed
 	}
 	r.logf("log rotation: %s reached %d bytes; rotated to %s.1.gz, keeping %d", filepath.Base(r.path), size, filepath.Base(r.path), r.keep)
 	r.compressAsync()
@@ -161,13 +191,8 @@ func (r *logRotator) compress() error {
 		return err
 	}
 	defer src.Close()
-	// shift the older generations up; the last one falls off
-	_ = os.Remove(r.gz(r.keep))
-	for i := r.keep - 1; i >= 1; i-- {
-		if err := os.Rename(r.gz(i), r.gz(i+1)); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
+	// Compress to a part file FIRST: the retained generations are not touched until a complete .1.gz exists, so a
+	// failure (a full disk, a crash, an exec) loses nothing and a retry starts from the same state.
 	part := r.gz(1) + ".part"
 	out, err := os.OpenFile(part, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -178,12 +203,23 @@ func (r *logRotator) compress() error {
 	if err := zw.Close(); cerr == nil {
 		cerr = err
 	}
+	if err := out.Sync(); cerr == nil {
+		cerr = err
+	}
 	if err := out.Close(); cerr == nil {
 		cerr = err
 	}
 	if cerr != nil {
 		_ = os.Remove(part)
 		return cerr
+	}
+	// then shift the older generations up (the last falls off) and commit the new one
+	_ = os.Remove(r.gz(r.keep))
+	for i := r.keep - 1; i >= 1; i-- {
+		if err := os.Rename(r.gz(i), r.gz(i+1)); err != nil && !os.IsNotExist(err) {
+			_ = os.Remove(part)
+			return err
+		}
 	}
 	if err := os.Rename(part, r.gz(1)); err != nil {
 		return err
@@ -216,5 +252,19 @@ func (r *logRotator) start() (stop func()) {
 			}
 		}
 	}()
-	return func() { once.Do(func() { close(done) }) }
+	return func() {
+		once.Do(func() {
+			close(done)
+			r.mu.Lock() // no rotation starts after this
+			r.stopped = true
+			r.mu.Unlock()
+			// a compression in flight finishes before the process execs itself (bounded: it is idempotent to retry)
+			wait := make(chan struct{})
+			go func() { r.compressWG.Wait(); close(wait) }()
+			select {
+			case <-wait:
+			case <-time.After(logRotateStopWait):
+			}
+		})
+	}
 }

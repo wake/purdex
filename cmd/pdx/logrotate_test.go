@@ -239,3 +239,99 @@ func TestLogRotator_StartFinishesAnInterruptedCompression(t *testing.T) {
 		t.Error("the temporary file is still there")
 	}
 }
+
+// A compression that fails (a full disk, a part file that cannot be written) leaves the retained generations as they
+// were and the .rotating file in place for the retry. Mutation gate: shift before the gzip succeeds → red.
+func TestLogRotator_AFailedCompressionLosesNoGeneration(t *testing.T) {
+	r, x, dir := logFixture(t, 5)
+	for n := 1; n <= 5; n++ { // five retained generations
+		if err := os.WriteFile(r.gz(n), []byte(fmt.Sprintf("generation %d", n)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(r.gz(1)+".part", 0o755); err != nil { // the part file cannot be created
+		t.Fatal(err)
+	}
+	writeFD(t, x, "to be rotated out\n")
+	if !r.check() {
+		t.Fatal("did not rotate")
+	}
+	r.compressWG.Wait()
+	for n := 1; n <= 5; n++ {
+		if b, err := os.ReadFile(r.gz(n)); err != nil || string(b) != fmt.Sprintf("generation %d", n) {
+			t.Fatalf("generation %d = %q (%v), want it untouched", n, b, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pdx.log.rotating")); err != nil {
+		t.Fatalf("the .rotating file is gone: %v", err)
+	}
+	// the retry, once the obstacle is gone, succeeds and shifts exactly once
+	if err := os.Remove(r.gz(1) + ".part"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.compress(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readGz(t, r.gz(1)); !strings.Contains(got, "to be rotated out") {
+		t.Fatalf(".1.gz = %q", got)
+	}
+	if b, _ := os.ReadFile(r.gz(2)); string(b) != "generation 1" {
+		t.Fatalf(".2.gz = %q, want the old generation 1", b)
+	}
+	if _, err := os.Stat(r.gz(6)); err == nil {
+		t.Error("a sixth generation exists")
+	}
+}
+
+// A descriptor that cannot be saved or repointed aborts the rotation as a whole: the file keeps its name and content,
+// the descriptors keep pointing at it, nothing is compressed. Mutation gate: carry on after the failure → red.
+func TestLogRotator_AFailedRepointAbortsTheWholeRotation(t *testing.T) {
+	r, x, dir := logFixture(t, 5)
+	r.fds = []int{x, 987654} // the second is not a descriptor
+	writeFD(t, x, "keep me where I am\n")
+	if r.check() {
+		t.Fatal("rotated although a descriptor could not be switched")
+	}
+	r.compressWG.Wait()
+	b, err := os.ReadFile(filepath.Join(dir, "pdx.log"))
+	if err != nil || !strings.Contains(string(b), "keep me where I am\n") {
+		t.Fatalf("pdx.log = %q (%v), want its content under its name", b, err)
+	}
+	for _, name := range []string{"pdx.log.rotating", "pdx.log.1.gz"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Errorf("%s exists after an aborted rotation", name)
+		}
+	}
+	writeFD(t, x, "still writing\n") // the descriptor still reaches pdx.log
+	if b, _ := os.ReadFile(filepath.Join(dir, "pdx.log")); !strings.Contains(string(b), "still writing\n") {
+		t.Fatalf("a later write did not reach pdx.log: %q", b)
+	}
+}
+
+// After stop() nothing rotates any more. Mutation gate: ignore stopped → red.
+func TestLogRotator_NothingRotatesAfterStop(t *testing.T) {
+	r, x, dir := logFixture(t, 5)
+	stop := r.start()
+	stop()
+	writeFD(t, x, "a long enough line to pass the limit\n")
+	if r.check() {
+		t.Fatal("rotated after stop")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pdx.log.rotating")); err == nil {
+		t.Fatal("a rotation started after stop")
+	}
+}
+
+// The rotator starts after the pid lock: before it, two daemons starting together could both rename and compress the
+// same files. Mutation gate: move newLogRotator above the lock → red.
+func TestRunServe_StartsTheLogRotationAfterThePidLock(t *testing.T) {
+	b, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	lock, rot := strings.Index(src, "mustAcquirePidLock(pidPath"), strings.Index(src, "newLogRotator(")
+	if lock < 0 || rot < 0 || rot < lock {
+		t.Fatalf("pid lock at %d, log rotation at %d: the rotation must come after the lock", lock, rot)
+	}
+}
