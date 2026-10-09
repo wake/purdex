@@ -67,7 +67,7 @@ const HOLD_MAX_MS = 660_000 // a held prompt waits for the request's answer at m
 const BEGIN_HOLD_MS = 40_000 // … and for begin's answer at most 40 s: begin's own bound (CALL_TIMEOUT_MS, 35 s) and slack
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
 const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
-const MAX_CONTROLS = 8 // control messages kept at once; a peer's forged marker costs one failed claim, never the real op
+const MAX_CONTROLS = 8 // verified (seen) control ops kept at once; a forged marker is refused by `seen` and never kept
 const MAX_OUTBOX = 50 // reports queued at once; one more pushes out the oldest
 const REQUIRED = ['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.']
 const STATUS_WAITING = '接力等待核准中'
@@ -899,8 +899,7 @@ async function teamFacts($, p) {
 async function claim($, gen) {
   if (s.turnRunning || s.state !== 'idle' || s.gen !== gen) return // turn.complete, an idle return or the next control asks again
   const sid = await $.session.id()
-  // Any peer can send the marker: the daemon is the judge of whose op it is, so each kept op is tried in turn
-  // (oldest first) until one is the member's own (`not_your_op` for the others).
+  // Only ops the daemon accepted as `seen` are kept; more than one is a re-send or a newer op: tried oldest first.
   let body, op
   while (s.control.length > 0) {
     const opId = s.control.shift()
@@ -1030,12 +1029,17 @@ export function register(on) {
     const opId = controlOp(e)
     if (!opId) return next(e)
     if (!(s.pending && s.pending.op.id === opId)) {
-      if (!s.control.includes(opId)) s.control = [...s.control, opId].slice(-MAX_CONTROLS)
+      // Branch A: the daemon learns the mod has the message now, not at the claim. Its answer is also the proof the
+      // op is this member's (any peer can send the marker; `seen` is refused for an op that is not): only an op
+      // that was seen is kept for the claim.
+      const gen = s.gen
       later($, 0, async () => {
         const sid = await $.session.id()
-        await pdx($, ['relay', 'seen', opId, '--session', sid], CALL_TIMEOUT_MS)
+        const r = await pdx($, ['relay', 'seen', opId, '--session', sid], CALL_TIMEOUT_MS)
+        if (r.exitCode !== 0 || s.gen !== gen) return log($, 'relay control ' + opId + ' dropped (seen exit ' + r.exitCode + ')')
+        if (!s.control.includes(opId)) s.control = [...s.control, opId].slice(-MAX_CONTROLS)
+        if (!s.turnRunning && s.state === 'idle') claimLater($)
       })
-      if (!s.turnRunning && s.state === 'idle') claimLater($)
     }
     return { consumed: CONSUMED }
   })
