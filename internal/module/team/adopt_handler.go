@@ -245,7 +245,11 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 	} else if tgt, ok = m.localAdoptTarget(w, target, origin, failStore); !ok {
 		return
 	}
-	if open, isOpen, err := m.store.OpenAdoptForTarget(tgt.SessionID); err != nil {
+	openHost := ""
+	if remote != nil {
+		openHost = remote.hostID
+	}
+	if open, isOpen, err := m.store.OpenAdoptForTargetOn(openHost, tgt.SessionID); err != nil {
 		failStore(err)
 		return
 	} else if isOpen {

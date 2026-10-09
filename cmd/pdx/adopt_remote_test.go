@@ -14,8 +14,10 @@ import (
 
 // A remote adopt (cross-host team spec §4.3): after the approval the CLI waits on the membership.
 
+const rtSession = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
 func remoteAdoptApproved() team.Approval {
-	p, _ := json.Marshal(team.AdoptPayload{TeamID: "team-1", LeadSessionID: "sid-lead", TargetRef: "_rt1234", TargetSessionID: "sid-rt",
+	p, _ := json.Marshal(team.AdoptPayload{TeamID: "team-1", LeadSessionID: "sid-lead", TargetRef: "_rt1234", TargetSessionID: rtSession,
 		TargetAddress: "air26/_rt1234", TargetHostID: "hostM", TargetHostAlias: "air26"})
 	return team.Approval{ID: "11111111-1111-4111-8111-111111111111", Kind: team.KindAdopt, State: team.StateApproved, Payload: p}
 }
@@ -64,7 +66,7 @@ func TestAdoptCmd_RemoteWaitsOnTheMembership(t *testing.T) {
 			}
 			if c.wantStdout {
 				var out adoptOutput
-				if err := json.Unmarshal([]byte(stdout), &out); err != nil || out.SessionID != "sid-rt" || out.Address != "air26/_rt1234" || out.Ref != "_rt1234" {
+				if err := json.Unmarshal([]byte(stdout), &out); err != nil || out.SessionID != rtSession || out.Address != "air26/_rt1234" || out.Ref != "_rt1234" {
 					t.Fatalf("output = %+v (%v)", out, err)
 				}
 			}

@@ -15,7 +15,10 @@ import (
 // The remote adopt on L (cross-host team spec §4.3, plan X3c). remoteFixture: air26 = hostM, announcing every kind and
 // allowing us; sid-1 leads team uid(1). The target is sid-rt on air26, ref _rt1234.
 
-const remoteTarget = "air26/_rt1234"
+const (
+	remoteTarget = "air26/_rt1234"
+	rtSession    = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+)
 
 func remoteSession(sid, ref string) ipeers.PeerRecord {
 	return ipeers.PeerRecord{RowKind: "session", Ref: ref, Name: "ios", Title: "iOS", Cwd: "/w/ios",
@@ -30,7 +33,7 @@ func adoptFixture(t *testing.T) (*fixture, *fakeHostCaller) {
 		if host != "hostM" {
 			return nil, errors.New("unexpected host " + host)
 		}
-		return []ipeers.PeerRecord{remoteSession("sid-rt", "_rt1234"), remoteSession("sid-other", "_ot5678")}, nil
+		return []ipeers.PeerRecord{remoteSession(rtSession, "_rt1234"), remoteSession("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "_ot5678")}, nil
 	}
 	return f, fc
 }
@@ -68,7 +71,7 @@ func TestRemoteAdopt_ClickWritesJoiningRowAndCommandTogether(t *testing.T) {
 	f, _ := adoptFixture(t)
 	ap := f.adoptOK(uid(30), remoteTarget)
 	p, err := team.AdoptPayloadOf(ap)
-	if err != nil || p.TargetHostID != "hostM" || p.TargetHostAlias != "air26" || p.TargetSessionID != "sid-rt" || p.TargetRef != "_rt1234" {
+	if err != nil || p.TargetHostID != "hostM" || p.TargetHostAlias != "air26" || p.TargetSessionID != rtSession || p.TargetRef != "_rt1234" {
 		t.Fatalf("payload = %+v err=%v", p, err)
 	}
 	if code, _ := f.adoptionOf(uid(30)); code != http.StatusConflict {
@@ -87,7 +90,7 @@ func TestRemoteAdopt_ClickWritesJoiningRowAndCommandTogether(t *testing.T) {
 	if err := f.m.store.db.QueryRow(`SELECT host_id, session_id, notice_pending FROM team_members WHERE spawn_op = ?`, uid(30)).Scan(&host, &sid, &notice); err != nil {
 		t.Fatal(err)
 	}
-	if host != "hostM" || sid != "sid-rt" || notice != "" {
+	if host != "hostM" || sid != rtSession || notice != "" {
 		t.Fatalf("row host=%q session=%q notice=%q", host, sid, notice)
 	}
 	cmds := f.commandsOf(CmdAdopt)
@@ -96,7 +99,7 @@ func TestRemoteAdopt_ClickWritesJoiningRowAndCommandTogether(t *testing.T) {
 	}
 	var tc team.TeamCommand
 	_ = json.Unmarshal(cmds[0].Body, &tc)
-	if tc.TargetSessionID != "sid-rt" || tc.TargetRef != "_rt1234" || tc.MK != uid(30) || tc.ToHostID != "hostM" || tc.Lead.SessionID != "sid-1" {
+	if tc.TargetSessionID != rtSession || tc.TargetRef != "_rt1234" || tc.MK != uid(30) || tc.ToHostID != "hostM" || tc.Lead.SessionID != "sid-1" {
 		t.Fatalf("command body = %+v", tc)
 	}
 	if code, ad := f.adoptionOf(uid(30)); code != http.StatusOK || ad.State != team.AdoptionJoining {

@@ -70,7 +70,9 @@ func (m *Module) resolveRemoteAdopt(ctx context.Context, t adoptTarget) (*remote
 	var hits []ipeers.PeerRecord
 	for _, r := range rows {
 		a := r.Agent
-		if r.RowKind != "session" || a == nil || a.Type != "cc" || a.SessionID == "" || r.Ref == "" {
+		// Identity from another host is checked, not trimmed: a session id is a UUID and a ref "_xxxxxx"; anything else is
+		// not a session this host can name (and nothing large is stored on a paired host's say-so).
+		if r.RowKind != "session" || a == nil || a.Type != "cc" || !isSessionID(a.SessionID) || !ipeers.IsRef(r.Ref) {
 			continue
 		}
 		if (t.SessionID != "" && a.SessionID == t.SessionID) || (t.SessionID == "" && r.Ref == t.Ref) {

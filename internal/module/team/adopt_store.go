@@ -46,9 +46,16 @@ func (s *Store) SeatsUsed(teamID string) (used, limit int, err error) {
 // OpenAdoptForTarget is the open adopt request for the target session, if any: at most one may be open
 // per target (the create invariant).
 func (s *Store) OpenAdoptForTarget(targetSessionID string) (team.Approval, bool, error) {
+	return s.OpenAdoptForTargetOn("", targetSessionID)
+}
+
+// OpenAdoptForTargetOn is OpenAdoptForTarget for the session of the host targetHostID ("" = a session of the lead's own
+// host): a session id is only meaningful together with its host, so another host announcing the same id cannot block it.
+func (s *Store) OpenAdoptForTargetOn(targetHostID, targetSessionID string) (team.Approval, bool, error) {
 	a, _, err := scanRow(s.db.QueryRow(`SELECT `+selectCols+` FROM approval_requests
 		WHERE kind = ? AND state = 'open' AND json_extract(payload_json, '$.target_session_id') = ?
-		ORDER BY created_at, id LIMIT 1`, string(team.KindAdopt), targetSessionID))
+		AND COALESCE(json_extract(payload_json, '$.target_host_id'), '') = ?
+		ORDER BY created_at, id LIMIT 1`, string(team.KindAdopt), targetSessionID, targetHostID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return team.Approval{}, false, nil
 	}
@@ -75,7 +82,7 @@ func adoptRefusal(tx *sql.Tx, id, rowHostID string, p team.AdoptPayload, chk ado
 		return team.ErrRemoteUnsupported, nil
 	case !chk.TargetLive:
 		return team.ErrAdoptTargetNotFound, nil
-	case p.TargetSessionID == p.LeadSessionID:
+	case !remote && p.TargetSessionID == p.LeadSessionID: // another host's session is never the lead, whatever id it announces
 		return team.ErrAdoptSelf, nil
 	}
 	if remote {
@@ -105,7 +112,8 @@ func adoptRefusal(tx *sql.Tx, id, rowHostID string, p team.AdoptPayload, chk ado
 		}
 	}
 	err = tx.QueryRow(`SELECT 1 FROM approval_requests WHERE kind = ? AND state = 'open' AND id <> ?
-		AND json_extract(payload_json, '$.target_session_id') = ?`, string(team.KindAdopt), id, p.TargetSessionID).Scan(&one)
+		AND json_extract(payload_json, '$.target_session_id') = ? AND COALESCE(json_extract(payload_json, '$.target_host_id'), '') = ?`,
+		string(team.KindAdopt), id, p.TargetSessionID, p.TargetHostID).Scan(&one)
 	switch {
 	case err == nil:
 		return team.ErrRequestOpen, nil
