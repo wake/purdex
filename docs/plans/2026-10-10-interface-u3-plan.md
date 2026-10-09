@@ -250,8 +250,10 @@ Review focus: a draft that is only whitespace; two quick sends; the host restart
 
 Daemon U3-0 → U3-0b and SPA U3-1a … U3-1c run in parallel. Then U3-2 (U3-0b deployed for real use) → U3-3 (gate:
 iOS `render/turn-rows.json`) → U3-4 → U3-5. iOS: the fixture before U3-3, the re-pin after U3-0, `/submit` adoption
-optional. Owner: a U3 member (Sonnet) under 88 — needs the 介面線 cap raised to 4 (user), or
-U3 waits for the solo seat after WA-2b-2.
+optional. **Owners (user 2026-10-10: no new seat, U3 queues behind the current work):** the daemon + mod phases
+U3-0 → U3-0b go to the second seat (purdex-iface-wb) after WB-3 → WB-2b-i → WB-2b-ii; the SPA phases U3-1a → … →
+U3-5 go to the solo seat (purdex-iface-solo) after WA-2a′ → WA-1 → WA-2b-1 → WA-2b-2; iOS (purdex-iface-ios) makes
+`render/turn-rows.json` now, so U3-3 never waits for it, and re-pins after U3-0.
 
 ## 4. Review focus (whole plan)
 
