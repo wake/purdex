@@ -74,7 +74,9 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	if !m.holds.after(m.holdFor, func() {
 		if !m.asks.Overlaps(ev.SessionID, ev.SessionName, arrival, windowEnd) {
 			// a Stop whose reply asks the person something comes as `waiting` too: it waits for its workbook line as well
-			send()
+			if !m.holdForWorkbook(ev, content, sendWith) {
+				send()
+			}
 		}
 	}) {
 		send()
