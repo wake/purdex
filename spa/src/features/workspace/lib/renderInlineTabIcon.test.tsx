@@ -189,9 +189,9 @@ describe('renderInlineTabIcon', () => {
       expect(q(container, 'inline-tab-unread-pip')!.getAttribute('style')).toBe(plainPip)
     })
 
-    it('badge + unread: the dot turns red (as for any unread waiting light) and the hand stays beside it', () => {
+    it('badge + unread: the dot stays yellow (unread never overrides ask) and the hand stays beside it', () => {
       const { container } = renderAwaiting('badge', { isUnread: true })
-      expect(q(container, 'tab-status-indicator')!.style.backgroundColor).toBe('rgb(239, 68, 68)')
+      expect(q(container, 'tab-status-indicator')!.style.backgroundColor).toBe('rgb(250, 204, 21)')
       expect(q(container, 'tab-status-awaiting-hand')!.getAttribute('fill')).toBe('#facc15')
     })
 

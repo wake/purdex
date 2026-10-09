@@ -86,14 +86,14 @@ describe('TabStatusIndicator — awaiting approval', () => {
     expect(screen.queryByTestId('tab-status-awaiting')).toBeNull()
   })
 
-  it('overlay + unread: the dot turns red like any unread waiting light; the hand keeps the warning colour', () => {
+  it('overlay + unread: a waiting dot stays yellow (unread never overrides ask); the hand keeps the warning colour', () => {
     cleanup()
     const { rerender } = render(<TabStatusIndicator status="waiting" mode="overlay" isActive={false} isUnread />)
     const plainStyle = screen.getByTestId('tab-status-indicator').getAttribute('style')
     rerender(<TabStatusIndicator status="waiting" mode="overlay" isActive={false} isUnread awaitingApproval />)
     const dot = screen.getByTestId('tab-status-indicator')
     expect(dot.getAttribute('style')).toBe(plainStyle)
-    expect(dot.style.backgroundColor).toBe('rgb(239, 68, 68)')
+    expect(dot.style.backgroundColor).toBe('rgb(250, 204, 21)')
     expect(screen.getByTestId('tab-status-awaiting-hand').getAttribute('fill')).toBe('#facc15')
   })
 
@@ -221,6 +221,24 @@ describe('TabStatusIndicator', () => {
     )
     const dot = screen.getByTestId('tab-status-indicator')
     expect(dot.style.backgroundColor).toBe('rgb(239, 68, 68)')
+  })
+
+  it('overlay mode: waiting + unread stays yellow', () => {
+    cleanup()
+    render(<TabStatusIndicator status="waiting" mode="overlay" isActive={false} isUnread />)
+    expect(screen.getByTestId('tab-status-indicator').style.backgroundColor).toBe('rgb(250, 204, 21)')
+  })
+
+  it('overlay mode: running + unread is red', () => {
+    cleanup()
+    render(<TabStatusIndicator status="running" mode="overlay" isActive={false} isUnread />)
+    expect(screen.getByTestId('tab-status-indicator').style.backgroundColor).toBe('rgb(239, 68, 68)')
+  })
+
+  it('replace mode: waiting + unread keeps the yellow dot', () => {
+    cleanup()
+    render(<TabStatusIndicator status="waiting" mode="replace" isActive={false} isUnread />)
+    expect(screen.getByTestId('tab-status-indicator').style.backgroundColor).toBe('rgb(250, 204, 21)')
   })
 
   it('overlay mode: running animates breathe when not unread', () => {
