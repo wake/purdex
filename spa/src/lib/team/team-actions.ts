@@ -37,13 +37,14 @@ const seatOf = (view: TeamView, sessionId: string): Seat | undefined =>
  * split tab), and the workspace on screen follows when the tab is in another one.
  */
 function showSeatTab(seat: Seat): string | null {
-  const tab = seat.tabId === null ? undefined : useTabStore.getState().tabs[seat.tabId]
-  if (seat.tabId === null || !tab) return null
+  const tabId = seat.groupTabId
+  const tab = tabId === null ? undefined : useTabStore.getState().tabs[tabId]
+  if (tabId === null || !tab) return null
   const leaves = collectLeaves(tab.layout)
-  const pane = leaves[seat.paneIndex ?? 0] ?? leaves[0]
-  if (pane) activateTabPane(seat.tabId, pane.id)
-  else activateTab(seat.tabId)
-  return seat.tabId
+  const pane = leaves[seat.groupPaneIndex ?? 0] ?? leaves[0]
+  if (pane) activateTabPane(tabId, pane.id)
+  else activateTab(tabId)
+  return tabId
 }
 
 function notListed(): void {
@@ -63,7 +64,8 @@ function listedSession(seat: Seat) {
 
 /**
  * Open a team seat (R3, R10, §4.5). The group is expanded first when collapsed (R10). A seat with a tab is switched to
- * (never a second tab). Otherwise a tab is opened for its tmux session, right after the group's last tab in the LEAD
+ * (never a second tab) — a member's tab means one in the lead tab's workspace (`groupTabId`); a tab of the same session in
+ * another workspace is left alone and a new one opens beside the group (user 2026-10-10). Otherwise a tab is opened for its tmux session, right after the group's last tab in the LEAD
  * tab's workspace; a lead with no tab is opened first, in the ghost row's workspace (else the active one), and the
  * ghost entry cleared. A seat whose session the host's list does not hold yet opens nothing and says so.
  */
