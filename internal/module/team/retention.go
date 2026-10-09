@@ -52,9 +52,10 @@ func (m *Module) runRetention() {
 // however old (PR #1733 attacker A-2): its handoff is the only copy of the
 // conversation the relay is carrying — after a /clear (cleared) it is what
 // seeds the new session. A stuck op must be ended by the state machine
-// first, and its file then follows that state's rule. Until P6's frame
-// reconciliation, an op stuck in claimed / writing / written because its
-// process died keeps its file (issue #1735).
+// first, and its file then follows that state's rule. The boot's frame
+// reconciliation (reconcileFromFrames, P6-4a) ends an op stuck in claimed /
+// writing / written because its process died or cleared unseen (issue
+// #1735), and its file then follows its new state's rule.
 func retentionVictims(ops []team.RelayOp, chainOf func(team.RelayOp) string, now int64) []team.RelayOp {
 	var out []team.RelayOp
 	seen := map[string]bool{}

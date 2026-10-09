@@ -145,6 +145,7 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 		m.logf("[team] relay op %s → %s%s", id, op.State, reasonSuffix(op))
 		m.afterReport(op)
 		m.handoverNoticeAsync(op) // only on Applied, never on a re-send (Noop)
+		m.outcomeNoticeAsync(op)  // the lead hears a member op end, once per transition
 	case ReportNoop:
 		// The idempotent re-send is also the retry of the follow-ups: a
 		// title move or a row close that failed after the first report
@@ -340,6 +341,7 @@ func (m *Module) reconcileRelays() {
 		}
 	}
 	m.reconcileMemberRelays(ops)
+	m.reconcileOpsFromFrames(ops) // past claimed: the pane's frame says whether it cleared or died (#1735)
 }
 
 // removeRelayFlag is the safety net for a mod that died holding the relay lock (plan v3 P6-3b): the daemon never

@@ -134,6 +134,10 @@ type Module struct {
 	// BootGraceS, the grace open requests get (spec §9.2). 0 for a module
 	// that never started (most tests): no grace.
 	bootAt int64
+	// bootReconciled is set once the frame reconciliation has run after the boot grace; only the sweeper's goroutine (or a test) touches it.
+	bootReconciled bool
+	// listActiveOps replaces the store's ListActiveRelayOps for the after-grace reconciliation (tests: a failing list).
+	listActiveOps func() ([]team.RelayOp, error)
 
 	// createMu serialises create's check-then-insert (idempotent retry,
 	// request_open, insert) and Stop's cancel of stopCtx: a create either
