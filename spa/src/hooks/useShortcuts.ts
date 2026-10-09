@@ -5,6 +5,9 @@ import { useHistoryStore } from '../stores/useHistoryStore'
 import { createTab } from '../types/tab'
 import { getVisibleTabIds as getVisibleTabIdsShared } from '../features/workspace'
 import { activateTab } from '../lib/open-session-tab'
+import { visibleTabIds } from '../lib/team/team-actions'
+import { currentTeamState } from '../lib/team/team-state'
+import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { closeTab } from '../lib/tab-lifecycle'
 import { getTabShortcutHandler } from '../lib/tab-shortcut-registry'
 import { collectLeaves, getPrimaryPane } from '../lib/pane-tree'
@@ -19,13 +22,17 @@ export function useShortcuts(): void {
     const cleanup = window.electronAPI.onShortcut(({ action }) => {
       const tabState = useTabStore.getState()
 
-      const visibleIds = getVisibleTabIdsShared({
+      const inBar = getVisibleTabIdsShared({
         tabs: tabState.tabs,
         tabOrder: tabState.tabOrder,
         activeTabId: tabState.activeTabId,
         workspaces: useWorkspaceStore.getState().workspaces,
         activeWorkspaceId: useWorkspaceStore.getState().activeWorkspaceId,
       })
+      // The tabs stepping and ⌘1–8 / ⌘9 act on: the bar's, minus the member tabs of collapsed teams (spec R8). `inBar` is
+      // what close-tab and its guard look at (a hidden member is still a tab of this workspace).
+      const { index } = currentTeamState()
+      const visibleIds = visibleTabIds(inBar, useTeamUiStore.getState().collapsed, (id) => index.byTabId.get(id))
 
       if (action.startsWith('switch-tab-')) {
         if (action === 'switch-tab-last') {
@@ -60,7 +67,7 @@ export function useShortcuts(): void {
         // In the bar — or in NO bar: a tab nobody has adopted yet (adopt-standalone.ts waits 500 ms) has no
         // close button anywhere, so this shortcut is the only way out. A stale pointer at a tab of ANOTHER
         // workspace is still left alone. `closeTab` refuses a locked tab.
-        const ownedElsewhere = !visibleIds.includes(activeTabId)
+        const ownedElsewhere = !inBar.includes(activeTabId)
           && useWorkspaceStore.getState().findWorkspaceByTab(activeTabId) !== null
         if (ownedElsewhere) return
         closeTab(activeTabId)

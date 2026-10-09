@@ -215,3 +215,17 @@ describe('structureSignature cost', () => {
     expect(perCall).toBeLessThan(10)
   })
 })
+
+describe('TeamDisplayProvider — the actions are wired (TI-1b)', () => {
+  it('onToggleCollapse / onOpenSeat / onReorderMembers act on the stores', () => {
+    render(<TeamDisplayProvider><Probe /></TeamDisplayProvider>)
+    seed([roster()], tabs)
+    act(() => display!.onToggleCollapse(KEY))
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true)
+    act(() => display!.onOpenSeat(KEY, 'A')) // expands and switches to A's tab
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBeUndefined()
+    expect(useTabStore.getState().activeTabId).toBe('ma')
+    act(() => display!.onReorderMembers(KEY, ['C', 'B', 'A']))
+    expect(useTeamUiStore.getState().memberOrder[KEY]).toEqual(['C', 'B', 'A'])
+  })
+})

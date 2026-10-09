@@ -12,7 +12,15 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { TeamDisplayContext, type TeamDisplay } from './team-display'
-import { buildTeamDisplay, structureSignature } from './team-structure'
+import { buildTeamDisplay, structureSignature, type TeamActions } from './team-structure'
+import { openTeamSeat, toggleTeamCollapse } from '../../lib/team/team-actions'
+
+// The actions read the stores when they run, so one set serves every structure.
+const ACTIONS: TeamActions = {
+  onToggleCollapse: toggleTeamCollapse,
+  onOpenSeat: (teamKey, sessionId) => { openTeamSeat(teamKey, sessionId) },
+  onReorderMembers: (teamKey, sessionIds) => useTeamUiStore.getState().setMemberOrder(teamKey, sessionIds),
+}
 
 export function TeamDisplayProvider({ children }: { children: ReactNode }) {
   const memberOrder = useTeamUiStore((s) => s.memberOrder)
@@ -33,6 +41,6 @@ export function TeamDisplayProvider({ children }: { children: ReactNode }) {
   // purpose: the value built from inputs with this signature is the value for any inputs with the same one, because the
   // readers use nothing the signature leaves out (a seat's model / effort / context are not read).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const value: TeamDisplay = useMemo(() => buildTeamDisplay(input), [signature])
+  const value: TeamDisplay = useMemo(() => buildTeamDisplay(input, ACTIONS), [signature])
   return <TeamDisplayContext.Provider value={value}>{children}</TeamDisplayContext.Provider>
 }

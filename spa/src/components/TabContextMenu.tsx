@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
+import { useTeamDisplay } from './team/team-display'
 import type { Tab } from '../types/tab'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { useClickOutside } from '../hooks/useClickOutside'
@@ -28,6 +29,8 @@ interface MenuItem {
   action: ContextMenuAction
   show: boolean
   disabled?: boolean
+  /** Why it is disabled (shown as the tooltip). */
+  title?: string
   payload?: string
 }
 
@@ -70,6 +73,8 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     return () => document.removeEventListener('keydown', escHandler)
   }, [onClose])
 
+  // Spec R12: a tab in a team group cannot be pinned (the store refuses it too).
+  const inTeam = useTeamDisplay()?.tabMark(tab.id) != null
   const primary = getPrimaryPane(tab.layout)
   const isSession = primary.content.kind === 'tmux-session'
   const isTerminated = isSession && !!(primary.content as { terminated?: string }).terminated
@@ -80,7 +85,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
     // Lock/Pin section
     { label: t('tab.lock'), action: 'lock' as const, show: !tab.locked },
     { label: t('tab.unlock'), action: 'unlock' as const, show: tab.locked },
-    { label: t('tab.pin'), action: 'pin' as const, show: !tab.pinned },
+    { label: t('tab.pin'), action: 'pin' as const, show: !tab.pinned, disabled: inTeam, title: inTeam ? t('tab.pin_team_disabled') : undefined },
     { label: t('tab.unpin'), action: 'unpin' as const, show: tab.pinned },
     // Tear-off section (the 'tearOff' handler checks window.electronAPI)
     'separator',
@@ -129,6 +134,7 @@ export function TabContextMenu({ tab, position, onClose, onAction, hasOtherUnloc
           <button
             key={item.payload ? `${item.action}-${item.payload}` : item.action}
             disabled={item.disabled}
+            title={item.title}
             onClick={() => { onAction(item.action, item.payload); onClose() }}
             className={`w-full text-left px-3 py-1.5 transition-colors ${
               item.disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:bg-surface-hover'
