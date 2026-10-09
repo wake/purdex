@@ -23,7 +23,7 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 **Left list** (exists only when the tab position is left or both)
 - R1 Under the lead row, one horizontal row of **every** member (with or without a tab).
 - R2 *(v1 round, replaced)* each bead = bot icon + light, no capsule, no name (name in the tooltip).
-- R3 Clicking a member: no tab → open it in the lead's group; has a tab → switch to it (never a second tab).
+- R3 Clicking a member: no tab → open it in the lead's group; has a tab → switch to it (never a second tab). *(user 2026-10-10)* "a tab" means the member's tab in the lead tab's workspace (the group): a tab of the same session in another workspace is left alone and does not count, so a new tab opens beside the group and both coexist.
 - R4 Drag only within one lead; dropped outside it snaps back; never into another workspace.
 - R5 One member order shared by the left beads, the top group and the panel; dragging anywhere updates all three; the lead is always first.
 - R6 A member that is released or ends: with a tab → the tab leaves the group and becomes a normal tab (not closed); without a tab → it disappears.
@@ -125,7 +125,7 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - Values missing from the roster (a lead's model, an unknown context) show as "—", never as 0.
 
 ### 4.5 Opening and closing tabs
-- **Open a member** (bead, panel, session list — R3, R10, R11): if it has a tab → activate it; else open a tab for its tmux session inserted after the group's last tab in the **lead tab's workspace**; if the lead has no tab, the lead's tab is opened first (in the ghost row's workspace, else the active one) and the member after it.
+- **Open a member** (bead, panel, session list — R3, R10, R11): if it has a tab in the lead tab's workspace → activate it *(user 2026-10-10: a tab of the same session in another workspace is not used)*; else open a tab for its tmux session inserted after the group's last tab in the **lead tab's workspace**; if the lead has no tab, the lead's tab is opened first (in the ghost row's workspace, else the active one) and the member after it.
 - **Session list** (R11): `openSessionTab` learns where a member goes; a non-team session opens as today.
 - **Close the lead tab** (P2), by **any** path (tab ✕, ⌘W, context menu, a terminated / ended pane's close, closing a workspace): every tab of the group closes too (no history entries for the members); sessions keep running; the team becomes a ghost row (§4.6). A **locked** member tab is not closed (the lock wins); it stays open as a normal tab until the lead's tab is back, then rejoins the group. Closing a member's tab only closes that tab; it stays a member (bead unchanged — P8).
 
