@@ -139,6 +139,8 @@ func (h *handler) workbookNext(w http.ResponseWriter, r *http.Request) {
 		return // the client went away while queued behind its own earlier poll
 	}
 	defer release()
+	// Queued behind its own earlier poll, this one's clock starts now: the deadline above covered the queue time only.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait + waitWriteSlack))
 	job, ok := svc.NextJob(ctx, in.Stream, in.SessionID, wait)
 	if !ok || ctx.Err() != nil {
 		w.WriteHeader(http.StatusNoContent)

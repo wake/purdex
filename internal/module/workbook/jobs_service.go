@@ -26,6 +26,9 @@ func (s jobsService) engine() *Engine {
 	return s.m.engine
 }
 
+// Ready: the module runs. The socket answers 503 for a module that is registered but off.
+func (s jobsService) Ready() bool { return s.engine() != nil }
+
 func (s jobsService) NextJob(ctx context.Context, stream, sessionID string, wait time.Duration) (any, bool) {
 	eng := s.engine()
 	if eng == nil {

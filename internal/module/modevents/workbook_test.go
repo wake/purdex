@@ -56,6 +56,21 @@ func TestWorkbookRoutes_ServedOnTheSocketFromTheWorkbookService(t *testing.T) {
 	}
 }
 
+type offWBService struct{ fakeWBService }
+
+func (offWBService) Ready() bool { return false }
+
+// A workbook module that is registered but off answers 503, not "no job" (codex R1).
+// Mutation gate: ignore Ready → red.
+func TestWorkbookRoutes_ARegisteredButOffModuleIs503(t *testing.T) {
+	m, c, _ := started(t, shortDir(t))
+	c.Registry.Register(workbookJobsKey, modevents.WorkbookService(&offWBService{}))
+	next := `{"stream":"` + wbStream + `","session_id":"` + wbSID + `","wait_ms":0}`
+	if code, body := socketPost(t, m.path, modevents.WorkbookNextPath, next); code != 503 {
+		t.Fatalf("%d %s", code, body)
+	}
+}
+
 // The job routes exist on the mod socket only: the daemon's TCP mux (token-guarded, remote) does not serve them.
 // Mutation gate: add the routes to RegisterRoutes → red.
 func TestWorkbookRoutes_NotServedOnTheTCPMux(t *testing.T) {

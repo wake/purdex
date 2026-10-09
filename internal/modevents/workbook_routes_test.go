@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -131,6 +132,43 @@ func TestWorkbookNext_TheWriteDeadlineIsExtended(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != 200 || !strings.Contains(string(b), `"late"`) {
 		t.Fatalf("%d %s", res.StatusCode, b)
+	}
+}
+
+type deadlineWriter struct {
+	*httptest.ResponseRecorder
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (d *deadlineWriter) SetWriteDeadline(t time.Time) error {
+	d.mu.Lock()
+	d.deadlines = append(d.deadlines, t)
+	d.mu.Unlock()
+	return nil
+}
+
+// A poll queued behind its stream's earlier poll gets a fresh write deadline once it runs, covering its own whole wait
+// (codex R1: the first deadline was spent in the queue).
+// Mutation gate: drop the second SetWriteDeadline → red.
+func TestWorkbookNext_AQueuedPollGetsItsDeadlineWhenItRuns(t *testing.T) {
+	f := &fakeWB{delay: 300 * time.Millisecond}
+	h := wbHandler(f)
+	var wg sync.WaitGroup
+	ws := make([]*deadlineWriter, 2)
+	for i := range ws {
+		ws[i] = &deadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.ServeHTTP(ws[i], httptest.NewRequest(http.MethodPost, WorkbookNextPath, strings.NewReader(nextBody(testStream, testSID, 15000))))
+		}()
+		time.Sleep(50 * time.Millisecond) // the first takes the gate before the second arrives
+	}
+	wg.Wait()
+	second := ws[1]
+	if len(second.deadlines) != 2 || !second.deadlines[1].After(second.deadlines[0].Add(200*time.Millisecond)) {
+		t.Fatalf("deadlines = %v", second.deadlines)
 	}
 }
 

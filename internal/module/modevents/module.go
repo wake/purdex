@@ -145,7 +145,14 @@ func (m *Module) workbookService() modevents.WorkbookService {
 	if !ok {
 		return nil
 	}
-	ws, _ := svc.(modevents.WorkbookService)
+	ws, ok := svc.(modevents.WorkbookService)
+	if !ok {
+		return nil
+	}
+	// A module that is registered but off (its store would not open) is "unavailable", not "no work".
+	if r, has := svc.(interface{ Ready() bool }); has && !r.Ready() {
+		return nil
+	}
 	return ws
 }
 
