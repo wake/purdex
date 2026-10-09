@@ -14,6 +14,7 @@ const (
 	CommandEnd       = "end"
 	CommandLeadMoved = "lead_moved"
 	CommandVoid      = "void"
+	CommandKill      = "kill"
 	CommandSpawn     = "spawn" // not applied by this version (X4a)
 )
 

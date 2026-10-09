@@ -87,7 +87,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch cmd.Kind {
-	case team.CommandAdopt, team.CommandRelease, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid:
+	case team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid:
 	default:
 		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(cmd.Kind)+" commands")
 		return
@@ -107,6 +107,12 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		}
 		if found && o.Ref == cmd.TargetRef {
 			plan.Target = &o
+		}
+	}
+	if cmd.Kind == team.CommandKill && plan.Consent {
+		if status, code, detail := m.prepareKill(&plan, cmd); status != 0 {
+			m.writeCommandErr(w, status, code, detail)
+			return
 		}
 	}
 	// The work above took time (a registry read): the binding and the consent are the entry's as of now, not as of
@@ -172,9 +178,9 @@ func validateCommand(c team.TeamCommand) string {
 		case !completeLead(c.Lead):
 			return "adopt: the lead's origin tuple (session_id, ref, address, pid, proc_start) is required"
 		}
-	case team.CommandRelease:
+	case team.CommandRelease, team.CommandKill:
 		if c.MK == "" {
-			return "release: mk is required"
+			return c.Kind + ": mk is required"
 		}
 	case team.CommandVoid:
 		if !uuidV4.MatchString(c.CommandID) || c.CommandID == c.ID {

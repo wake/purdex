@@ -13,10 +13,10 @@ import (
 
 // teamKinds is what this daemon announces it applies (spec §3.1 rule 7): a lead host sends a kind only after reading
 // it here, so this list is the switch that lets a remote lead act on this host. A kind is listed once a route applies it
-// and the notice it owes is delivered (X3d): adopt, release, end, lead_moved and void. spawn and kill stay off until
-// X4a applies them.
+// and the notice it owes is delivered (X3d): adopt, release, end, lead_moved, void and kill. spawn stays off until
+// X4a applies it.
 func teamKinds() []string {
-	return []string{team.CommandAdopt, team.CommandRelease, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid}
+	return []string{team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid}
 }
 
 // teamEntryFor is the live entry a host principal stands for, under the
