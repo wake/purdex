@@ -137,6 +137,22 @@ Tests: no label on the top bar, in the left list or on a ghost row; the top bar 
 Mutation gates: render the label again → "no label" red; shadow function ignores the variant → variant test red.
 Screenshot gate (zh-TW): the top bar with one group under each variant V0–V3 (dark), V2 in light; the left list expanded, collapsed and ghost without the capsule.
 
+## TR-1 — daemon: edit a team's name, label and colour (user 2026-10-10)
+
+Team module (A-line files; owner and wire agreed with purdex-1f before the PR). TI spec §4.12.
+- Migration: `ensureColumn(teams, team_color, INTEGER NULL)` (NULL = automatic).
+- `PATCH /api/team/teams/{team_id}` (admin): body any of `team_name`, `team_label` (the existing `team.NormaliseTeamName` / `NormaliseTeamLabel`), `team_color` (`0–7` or `null`); only a live team (`ended_at = 0`) → else 409 `not_live`; unknown → 404; bad field → 400 naming it; 200 → `{team_id, team_name, team_label, team_color}`; one UPDATE, then `rosterChanged()`. `Roster` / `TeamRoster` gain `team_color` (omitted when NULL). Capability `team.edit.v1`.
+Tests: each field alone and together; normalisation errors per field; colour out of range / non-integer → 400; `null` clears; ended → 409; unknown → 404; the roster frame after the PATCH carries the new values; migration on an existing `team.db` copy.
+
+## TI-7 — panel header: click toggles mode, double-click edits (user 2026-10-10)
+
+After TR-1 is deployed (capability-gated otherwise). TI spec §4.4 header click, §4.12.
+- `TeamRoster.team_color` parsed (0–7 or absent); `TeamView.colorIndex` = it when set, else today's hash.
+- Header: single click toggles full ⇄ one-line (not on the expand / switch controls or the resize edge); on the name, the toggle waits the double-click interval and is cancelled by a double-click.
+- Double-click the name (when the lead's host has `team.edit.v1`) → popover: name, label (live display-width hint, `lib/textwidth.ts`), eight swatches + 自動; save sends only changed fields to the lead's host; close on 200, inline error on 400, toast + close on 409; the panel always renders the roster's values.
+Tests: header click toggles, controls do not; a double-click on the name opens the popover and does not toggle; save sends only the changed fields; 400 shows the message on its field; 409 closes with a toast; no capability → no popover; a roster `team_color` recolours the panel and the group shadow; absent → hash colour.
+Screenshot gate (zh-TW, dark): popover open (name, label with width hint, swatches), a recoloured team on the top bar and the panel.
+
 ## TI-5a — daemon: the mod's team read
 
 Files: the mod socket handler (`internal/modevents`, U1-1a), a narrow interface the team module implements (`TeamRoleOf(sessionID) (role string, activeMembers int, ok bool)`), wiring where the modules are assembled, tests. **Agreed with purdex-1f first** (its module answers).
