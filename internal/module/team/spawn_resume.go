@@ -4,14 +4,17 @@ package teammod
 // there, a step at a time, and never waits for lost hooks.
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // resumeSpawns continues every running op from its recorded step. An op
@@ -26,6 +29,7 @@ func (m *Module) resumeSpawns() {
 	if m.tmux == nil {
 		return
 	}
+	m.reapOrphanSpawnSessions() // before any runner starts: a running op's session is then the runner's alone
 	ops, err := m.store.ListRunningSpawnOps(m.now())
 	if err != nil {
 		m.logf("[team] boot: spawn ops: %v", err)
@@ -63,5 +67,57 @@ func (m *Module) ensurePluginTree() {
 	}
 	if err != nil {
 		m.logf("[team] spawn: extract the plugin tree: %v", err)
+	}
+}
+
+// reapOrphanSpawnSessions kills the tmux sessions that carry the spawn tag (spawnTagOption) but belong to no spawn that could
+// still use them (#2341): the leftover of a crash between a runner's lost record and its kill (recordSession), or between
+// CreateSessionTagged and the record. The op the tag names decides:
+//   - running  → the runner's (resumed right after this); left alone;
+//   - done     → a LIVE member's session — its tag stays for good; left alone;
+//   - failed or no such op → nobody will ever use or kill it; killed.
+//
+// Only a session that carries the tag is looked at, and each is killed through the generation guard of the very read that
+// found it (KillSessionIfInstance): a tmux server that restarted meanwhile, or a session that was replaced, is never hit. A
+// session of the user's own has no such tag. Anything tmux cannot answer is skipped and logged, never guessed.
+func (m *Module) reapOrphanSpawnSessions() {
+	ctx, cancel := context.WithTimeout(m.stopCtx, 30*time.Second)
+	defer cancel()
+	sessions, err := m.tmux.ListSessions(ctx)
+	if err != nil {
+		m.logf("[team] boot: orphan spawn sessions: list tmux sessions: %v", err)
+		return
+	}
+	reaped := 0
+	for _, s := range sessions {
+		rctx, rcancel := context.WithTimeout(ctx, tmuxReadTimeout)
+		id, err := m.tmux.PaneIdentity(rctx, "="+s.Name+":", spawnTagOption)
+		rcancel()
+		if err != nil {
+			m.logf("[team] boot: orphan spawn sessions: read %s: %v", s.Name, err)
+			continue
+		}
+		if id.Tag == "" {
+			continue // not a spawn session
+		}
+		op, found, err := m.store.GetSpawnOp(id.Tag)
+		if err != nil {
+			m.logf("[team] boot: orphan spawn sessions: op %s: %v", id.Tag, err)
+			continue
+		}
+		if found && op.State != team.SpawnFailed {
+			continue // running (a runner's) or done (a member's)
+		}
+		killed, err := m.tmux.KillSessionIfInstance(id.SessionID, id.Instance)
+		switch {
+		case err != nil && !errors.Is(err, tmux.ErrNoSession):
+			m.logf("[team] boot: orphan spawn sessions: kill %s (op %s): %v", s.Name, id.Tag, err)
+		case killed:
+			reaped++
+			m.logf("[team] boot: killed tmux session %s of spawn op %s (%s)", s.Name, id.Tag, map[bool]string{true: "failed", false: "unknown"}[found])
+		}
+	}
+	if reaped > 0 {
+		m.logf("[team] boot: killed %d orphan spawn session(s)", reaped)
 	}
 }

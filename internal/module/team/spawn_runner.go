@@ -26,6 +26,7 @@ type sessionCreator interface {
 // tmuxOps is the generation-guarded part of the tmux executor (c.Tmux).
 type tmuxOps interface {
 	PaneIdentity(ctx context.Context, target, option string) (tmux.PaneIdentity, error)
+	ListSessions(ctx context.Context) ([]tmux.TmuxSession, error)
 	SendKeysIfInstanceTarget(sessionID, window, expectedInstance string, keys ...string) (bool, error)
 	KillSessionIfInstance(sessionID, expectedInstance string) (bool, error)
 }
