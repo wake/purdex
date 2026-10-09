@@ -227,3 +227,44 @@ func TestPresenceRoute_AbsentWhenPushIsOff(t *testing.T) {
 		t.Fatalf("answered %d, want the route absent", rec)
 	}
 }
+
+// /api/info shows whether the Macs are reporting: how many windows are known and how many say the user is there. Numbers
+// only. Mutation gates: count expired entries → red; count inactive ones as active → red.
+func TestPresence_CountsAreOnlyNumbersOfLiveWindows(t *testing.T) {
+	p, c := newClockPresence()
+	if e, a := p.Counts(); e != 0 || a != 0 {
+		t.Fatalf("empty: %d/%d", e, a)
+	}
+	p.Put(put("mac-1", true, 45000, sess("c1", "dev")))
+	p.Put(put("mac-2", false, 45000, sess("c2", "ops")))
+	p.Put(put("mac-3", true, 2000, sess("c3", "x")))
+	if e, a := p.Counts(); e != 3 || a != 2 {
+		t.Fatalf("counts = %d/%d, want 3/2", e, a)
+	}
+	c.advance(3 * time.Second) // mac-3 expired
+	if e, a := p.Counts(); e != 2 || a != 1 {
+		t.Fatalf("counts after expiry = %d/%d, want 2/1", e, a)
+	}
+}
+
+func TestModuleStatus_ReportsPresenceCountsAndNothingIdentifying(t *testing.T) {
+	e := newEnv(t)
+	st := e.mod.Status()
+	if st["presence_entries"] != 0 || st["presence_active"] != 0 {
+		t.Fatalf("status = %v", st)
+	}
+	e.do("PUT", "/api/push/presence", presenceBody(nil))
+	st = e.mod.Status()
+	if st["presence_entries"] != 1 || st["presence_active"] != 1 {
+		t.Fatalf("status = %v", st)
+	}
+	b, _ := json.Marshal(st)
+	for _, secret := range []string{"mac-1", "dev", "c1"} {
+		if strings.Contains(string(b), `"`+secret+`"`) {
+			t.Fatalf("the status carries %q: %s", secret, b)
+		}
+	}
+	if st["ready"] != true {
+		t.Fatalf("ready = %v", st["ready"])
+	}
+}

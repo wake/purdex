@@ -83,13 +83,14 @@ func TestRelayContract_DTOJSON(t *testing.T) {
 		want string
 	}{
 		{"RelayOp full", RelayOp{ID: "op", Kind: RelayKindMember, HostID: "h", SessionID: "s", NewSessionID: "s2", Ref: "_a", NewRef: "_b",
-			TeamID: "t", RequestID: "r", State: RelayFailed, Reason: RelayReasonMemberGone, HandoffPath: "/p", Pruned: true, UsedPercentage: &pct, CreatedAt: 1, UpdatedAt: 2, PID: 7, PaneID: "%3", ProcStart: "t0"},
-			`{"id":"op","kind":"member","host_id":"h","session_id":"s","new_session_id":"s2","ref":"_a","new_ref":"_b","team_id":"t","request_id":"r","state":"failed","reason":"member_gone","handoff_path":"/p","pid":7,"pane_id":"%3","proc_start":"t0","pruned":true,"used_percentage":0,"created_at":1,"updated_at":2}`},
+			TeamID: "t", RequestID: "r", State: RelayFailed, Reason: RelayReasonMemberGone, HandoffPath: "/p", Pruned: true, UsedPercentage: &pct, CreatedAt: 1, UpdatedAt: 2, PID: 7, PaneID: "%3", ProcStart: "t0", SeenAt: 5},
+			`{"id":"op","kind":"member","host_id":"h","session_id":"s","new_session_id":"s2","ref":"_a","new_ref":"_b","team_id":"t","request_id":"r","state":"failed","reason":"member_gone","handoff_path":"/p","pid":7,"pane_id":"%3","seen_at":5,"proc_start":"t0","pruned":true,"used_percentage":0,"created_at":1,"updated_at":2}`},
 		{"RelayOp minimal (optional fields omitted, required zero values kept)", RelayOp{},
 			`{"id":"","kind":"","host_id":"","session_id":"","ref":"","state":"","handoff_path":"","created_at":0,"updated_at":0}`},
 		{"RelayCreateRequest", RelayCreateRequest{ID: "i", OriginInbox: "/x.sock", Target: "_abc123"}, `{"id":"i","origin_inbox":"/x.sock","target":"_abc123"}`},
 		{"RelayCreateResponse", RelayCreateResponse{Op: RelayOp{ID: "op", State: RelayRequested}},
 			`{"op":{"id":"op","kind":"","host_id":"","session_id":"","ref":"","state":"requested","handoff_path":"","created_at":0,"updated_at":0}}`},
+		{"RelaySeenRequest", RelaySeenRequest{SessionID: "s"}, `{"session_id":"s"}`},
 		{"RelayClaimRequest", RelayClaimRequest{SessionID: "s"}, `{"session_id":"s"}`},
 		{"RelayClaimResponse with lead", RelayClaimResponse{Op: RelayOp{ID: "op", State: RelayClaimed}, Lead: &RelayLead{Address: "a/b", Ref: "_r", TeamID: "t"}},
 			`{"op":{"id":"op","kind":"","host_id":"","session_id":"","ref":"","state":"claimed","handoff_path":"","created_at":0,"updated_at":0},"lead":{"address":"a/b","ref":"_r","team_id":"t"}}`},

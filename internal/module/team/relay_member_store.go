@@ -58,5 +58,36 @@ func (s *Store) CreateMemberRelayOp(op team.RelayOp, gate MemberRelayGate) (team
 	if err := tx.Commit(); err != nil {
 		return fail(fmt.Errorf("commit: %w", err))
 	}
+	s.notifyOp(op.ID)
 	return op, needs, nil
+}
+
+// notifyOp tells the module an op changed, after the commit that changed it.
+func (s *Store) notifyOp(opID string) {
+	if s.opChanged != nil {
+		s.opChanged(opID)
+	}
+}
+
+// MarkRelaySeen records that the member's mod saw the op's control message: seen_at = at, once, while the op is still
+// requested (a compare-and-set on seen_at = 0). It touches nothing else — updated_at stays, so the unseen timer's
+// anchor (the entry into requested, P6-4b) is not moved by it. seen says whether this call set it; the op is returned
+// as it is after the call.
+func (s *Store) MarkRelaySeen(id string, at int64) (op team.RelayOp, seen bool, err error) {
+	res, err := s.db.Exec(`UPDATE relay_ops SET seen_at = ? WHERE id = ? AND kind = 'member' AND state = 'requested' AND seen_at = 0`, at, id)
+	if err != nil {
+		return team.RelayOp{}, false, fmt.Errorf("mark relay %s seen: %w", id, err)
+	}
+	n, _ := res.RowsAffected()
+	op, ok, err := s.GetRelayOp(id)
+	if err == nil && !ok {
+		err = ErrNoSuchRelayOp
+	}
+	if err != nil {
+		return team.RelayOp{}, false, err
+	}
+	if n == 1 {
+		s.notifyOp(id)
+	}
+	return op, n == 1, nil
 }

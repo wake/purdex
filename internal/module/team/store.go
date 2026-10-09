@@ -22,6 +22,11 @@ var ErrNoSuchApproval = errors.New("no such approval")
 type Store struct {
 	db *sql.DB
 
+	// opChanged, when set, is called with a relay op's id AFTER a transaction that changed the op committed — the one
+	// choke point for waking its long-polls (P6-2b-2, plan v3 §7), whatever path wrote it (report, claim, an approval's
+	// close, a create). The module sets it at Init (wake); it must not block and must not call back into the store.
+	opChanged func(opID string)
+
 	// beforeReplaceInsert, when set, runs in ReplaceTerminalOnly's
 	// transaction after the old row's close and before the new row's
 	// insert; a non-nil error fails the replace there. Tests use it to

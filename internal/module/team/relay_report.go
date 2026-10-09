@@ -11,21 +11,6 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-// handleRelayOp is GET /api/relay/ops/{id} (debug).
-func (m *Module) handleRelayOp(w http.ResponseWriter, r *http.Request) {
-	op, ok, err := m.store.GetRelayOp(r.PathValue("id"))
-	if err != nil {
-		m.logf("[team] relay op %s: %v", r.PathValue("id"), err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-		return
-	}
-	if !ok {
-		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no such relay op", nil)
-		return
-	}
-	m.writeJSON(w, http.StatusOK, op)
-}
-
 // handleRelayReport is POST /api/relay/ops/{id}/report (spec §8.3): one
 // transition from the mod, idempotent per (op, state). cleared needs
 // new_session_id and writes the lineage (store, one tx) and moves the

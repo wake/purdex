@@ -74,9 +74,10 @@ type RelayOp struct {
 	RequestID      string     `json:"request_id,omitempty"` // the self_relay approval row
 	State          RelayState `json:"state"`
 	Reason         string     `json:"reason,omitempty"`
-	HandoffPath    string     `json:"handoff_path"`      // <data_dir>/relay/<op id>.md
-	PID            int        `json:"pid,omitempty"`     // the process the op is bound to (P6-2a); 0 on an op from before it
-	PaneID         string     `json:"pane_id,omitempty"` // the tmux pane "%N" it runs in, "" when none
+	HandoffPath    string     `json:"handoff_path"`         // <data_dir>/relay/<op id>.md
+	PID            int        `json:"pid,omitempty"`        // the process the op is bound to (P6-2a); 0 on an op from before it
+	PaneID         string     `json:"pane_id,omitempty"`    // the tmux pane "%N" it runs in, "" when none
+	SeenAt         int64      `json:"seen_at,omitempty"`    // when the member's mod first saw the control message (P6-2b-2); 0 = not yet
 	ProcStart      string     `json:"proc_start,omitempty"` // the process's start time as the registry shows it; pid + proc_start is the identity (a pid is reused)
 	Pruned         bool       `json:"pruned,omitempty"`
 	UsedPercentage *float64   `json:"used_percentage,omitempty"`

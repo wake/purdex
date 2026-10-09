@@ -83,6 +83,24 @@ func (p *Presence) Len() int {
 	return len(p.entries)
 }
 
+// Counts is the number of unexpired windows and how many of them say the user is there: numbers only (no client id, no
+// session name), for /api/info, so an operator can see that the Macs are reporting.
+func (p *Presence) Counts() (entries, active int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := p.now()
+	for _, e := range p.entries {
+		if !now.Before(e.expires) {
+			continue
+		}
+		entries++
+		if e.active {
+			active++
+		}
+	}
+	return entries, active
+}
+
 // ShowsCode: some unexpired, active window shows the session with this code (an agent event, §5.4).
 func (p *Presence) ShowsCode(code string) bool {
 	return code != "" && p.shows(func(e presenceEntry) bool { _, ok := e.codes[code]; return ok })
