@@ -255,6 +255,17 @@ func (m *Module) followRevokes() {
 	m.dropOwned(dead)
 }
 
+// phoneLive: the devices module still knows the phone (not revoked). With no devices module, no phone is live.
+func (m *Module) phoneLive(id string) bool {
+	svc, _ := m.core.Registry.Get(devicesmod.RegistryKey)
+	ref, ok := svc.(devices.Refresher)
+	if !ok {
+		return false
+	}
+	_, live := ref.RefreshPrincipal(id)
+	return live
+}
+
 // dropOwned removes the registrations of revoked paired phones from the store and the cache; a push already queued for one
 // finds no device when it is sent.
 func (m *Module) dropOwned(owners []string) {
@@ -431,10 +442,18 @@ func (m *Module) handlePost(w http.ResponseWriter, r *http.Request) {
 		DeviceID: push.DeviceID(req.Token), Token: req.Token, BundleID: req.BundleID, Env: req.Env, Platform: req.Platform,
 		DeviceName: req.DeviceName, HostLabel: req.HostLabel, Locale: req.Locale, Prefs: req.Prefs,
 	}
-	if p, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
+	p, isDevice := devices.PrincipalFrom(r.Context())
+	if isDevice {
 		d.OwnerDeviceID = p.ID // a paired phone registers as itself; the same APNs token again moves to whoever sends it
 	}
 	m.mu.Lock()
+	if isDevice && !m.phoneLive(p.ID) {
+		// Revoked after this request passed authentication. The revoke's drop runs under this same mutex, so checking here
+		// (not earlier) means either the phone is still live and the drop follows, or it is refused.
+		m.mu.Unlock()
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 	stored, err := m.store.Upsert(d)
 	if err == nil {
 		m.devices[stored.DeviceID] = stored

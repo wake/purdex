@@ -50,13 +50,22 @@ func listed(t *testing.T, rec *httptest.ResponseRecorder) []string {
 	return ids
 }
 
-var (
-	phoneA = &devices.Principal{ID: "d_aaaaaaaaaaaa", PairingID: "pa", ProfileID: "p_0123456789ab"}
-	phoneB = &devices.Principal{ID: "d_bbbbbbbbbbbb", PairingID: "pb", ProfileID: "p_0123456789ab"}
-)
+// as lets the revoke environment (real devices module, real paired phones) use the same call shape.
+func (e *revokeEnv) as(p *devices.Principal, method, path, body string) *httptest.ResponseRecorder {
+	if body == "" {
+		return e.call(p, method, path, nil)
+	}
+	return e.call(p, method, path, body)
+}
+
+func (e *revokeEnv) phones(t *testing.T) (a, b *devices.Principal) {
+	pa, pb := e.pair(t, pairA), e.pair(t, pairB)
+	return &pa, &pb
+}
 
 func TestOwnership_APhoneListsAndRemovesOnlyItsOwnRegistrations(t *testing.T) {
-	e := newEnv(t)
+	e := newRevokeEnv(t)
+	phoneA, phoneB := e.phones(t)
 	idA, idB, idAdmin := push.DeviceID(tokA), push.DeviceID(tokB), push.DeviceID(strings.Repeat("c3", 32))
 	for _, r := range []struct {
 		p   *devices.Principal
@@ -99,7 +108,8 @@ func TestOwnership_APhoneListsAndRemovesOnlyItsOwnRegistrations(t *testing.T) {
 // Registering an APNs token that is already registered moves it to the caller (a re-paired phone keeps its pushes), both
 // ways: admin → phone, phone A → phone B, phone → admin.
 func TestOwnership_ReRegisteringAnAPNsTokenMovesItToTheCaller(t *testing.T) {
-	e := newEnv(t)
+	e := newRevokeEnv(t)
+	phoneA, phoneB := e.phones(t)
 	id := push.DeviceID(tokA)
 	e.as(nil, "POST", "/api/push/devices", regBody(tokA))
 	for i, caller := range []*devices.Principal{phoneA, phoneB, nil, phoneA} {
