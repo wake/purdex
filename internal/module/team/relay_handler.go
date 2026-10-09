@@ -105,6 +105,7 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "role or switches unreadable; see the daemon log", nil)
 		return
 	}
+	m.helloMu.Lock() // memory and the row are written in one order, so a slow older hello cannot overwrite a newer row
 	m.mu.Lock()
 	if _, known := m.modSeen[req.SessionID]; !known && len(m.modSeen) >= modSeenCap {
 		oldest, oldestAt := "", int64(0)
@@ -121,6 +122,7 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 	if err := m.store.UpsertModHello(req.SessionID, h, modSeenCap); err != nil { // the memory answers; a lost row only costs a hello after a restart
 		m.logf("[team] relay hello %s: %v", req.SessionID, err)
 	}
+	m.helloMu.Unlock()
 	m.writeJSON(w, http.StatusOK, team.RelayHelloResponse{
 		OK: true, Role: role, SelfRelay: state,
 		Threshold: team.RelayThresholdPct, MinGrowth: team.RelayMinGrowth,
