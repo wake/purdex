@@ -240,6 +240,11 @@ gates; failing one of 1–3 → 403 `device_append_only`, gate 4 → 400 `hash_m
    device write with a stale or wrong hash would be invisible to the Macs and later overwritten. Admin writes are not
    checked (unchanged).
 
+The ordinary gates run first, as for every writer: a payload that is not a JSON object is a 400, and a changed
+fingerprint without a higher ordinal is the ordinary 409 `schema` (nothing written); only a higher ordinal reaches gate 2,
+which then refuses it with the 403. A stale `baseRev` is the ordinary 409 `conflict` (or `converged` when the stored row
+already holds the same content) and never reaches the gates.
+
 Gates 2–4 run inside `PutSection`, on the live row whose `rev` equals `baseRev`, right before the conditional
 `UPDATE … WHERE rev = baseRev` — so the row that was checked is the row that is replaced. Everything else is the ordinary
 CAS: a stale `baseRev` gets 409 `conflict` with the SOT payload (the phone re-reads and retries, at most 4 times), an
