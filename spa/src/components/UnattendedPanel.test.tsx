@@ -666,6 +666,21 @@ describe('UnattendedPanel and a re-pointed host', () => {
     expect(useRelayQuotaStore.getState().gets).toEqual({})
   })
 
+  it('a next page of the old daemon that arrives after a re-point is not appended', async () => {
+    let oldPage!: (v: UnattendedView) => void
+    mockedGet.mockImplementation(async (_h, q) => {
+      if (q?.before !== undefined) return new Promise<UnattendedView>((r) => { oldPage = r })
+      return page([approved('first', at(9, 0))], { truncated: true, next_before: 5 })
+    })
+    open([A])
+    fireEvent.click(await screen.findByTestId('unattended-more'))
+    repoint()
+    await act(async () => { oldPage(page([approved('old-secret', at(8, 0))])) })
+    await flush()
+    expect(screen.queryByText(/old-secret/)).toBeNull()
+    expect(rows()).toHaveLength(1)
+  })
+
   it('removed host: its rows go and nothing is read', async () => {
     mockedGet.mockResolvedValue(page([], { quotas: [quota('p1')] }))
     open([A])

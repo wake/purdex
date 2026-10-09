@@ -56,6 +56,9 @@ interface Slot {
   target: QuotaTarget
   /** The daemon this slot's writes are meant for (the host's identity at the first click). */
   identity: string | null
+  /** Counts clicks. A PUT remembers the count it was sent at, so "clicked since" is a fact, not a guess from the values
+   * (7 -> 8 -> 7 during a flight is a newer intent whose value happens to equal the one sent). */
+  seq: number
 }
 const slots = new Map<string, Slot>()
 const lineageTimers = new Set<ReturnType<typeof setTimeout>>()
@@ -100,8 +103,9 @@ export function setQuota(target: QuotaTarget, field: RelayQuotaField, value: num
     slot = undefined
     store.setWrite(target.hostId, target.root, field, { desired: clamp(value) }) // and its half-done write with it
   }
-  if (slot === undefined) slot = { target, identity }
+  if (slot === undefined) slot = { target, identity, seq: 0 }
   slot.target = target
+  slot.seq += 1
   if (slot.timer !== undefined) clearTimeout(slot.timer)
   slot.timer = setTimeout(() => { slot.timer = undefined; flush(key, field) }, DEBOUNCE_MS)
   slots.set(key, slot)
@@ -120,14 +124,15 @@ function flush(key: string, field: RelayQuotaField): void {
   const w = store.writes[key]
   if (w === undefined || w.inflight !== undefined || w.desired === undefined) return // in flight: its settle sends the newer value
   const sent = w.desired
+  const sentSeq = slot.seq
   store.setWrite(hostId, root, field, { inflight: sent })
   deps.put(hostId, sessionId, field, sent).then(
-    (view) => settled(slot, key, field, sent, view, null),
-    (e: unknown) => settled(slot, key, field, sent, null, e),
+    (view) => settled(slot, key, field, sent, sentSeq, view, null),
+    (e: unknown) => settled(slot, key, field, sent, sentSeq, null, e),
   )
 }
 
-function settled(slot: Slot, key: string, field: RelayQuotaField, sent: number, view: RelayQuotaView | null, error: unknown): void {
+function settled(slot: Slot, key: string, field: RelayQuotaField, sent: number, sentSeq: number, view: RelayQuotaView | null, error: unknown): void {
   // This PUT's own slot, not whatever is under the key now: a slot dropped (reset, re-point) and rebuilt is another
   // generation, and this late answer is none of its business.
   if (slots.get(key) !== slot) return
@@ -144,7 +149,7 @@ function settled(slot: Slot, key: string, field: RelayQuotaField, sent: number, 
     // A click made while this PUT was out is a later intent, not the failed request's: it stays and is sent now. Only the
     // value that was sent is dropped (the stepper falls back to the confirmed one when nothing newer is pending).
     const newer = useRelayQuotaStore.getState().writes[key]?.desired
-    if (newer !== undefined && newer !== sent) {
+    if (newer !== undefined && slot.seq !== sentSeq) {
       store.setWrite(hostId, root, field, { desired: newer })
       if (slot.timer !== undefined) { clearTimeout(slot.timer); slot.timer = undefined }
       flush(key, field)
@@ -168,7 +173,7 @@ function settled(slot: Slot, key: string, field: RelayQuotaField, sent: number, 
   }
   store.applyAnswer(hostId, view.root_session_id, { self_left: view.self_left, member_pool_left: view.member_pool_left }, view.rev)
   const after = useRelayQuotaStore.getState().writes[key]
-  if (after?.desired !== undefined && after.desired !== sent) {
+  if (after?.desired !== undefined && after.desired !== sent) { // on success the server holds `sent`, so equal values need nothing
     // clicked again during the flight: send the new value now (the debounce timer, if still pending, finds nothing to do)
     store.setWrite(hostId, root, field, { desired: after.desired })
     if (slot.timer !== undefined) { clearTimeout(slot.timer); slot.timer = undefined }

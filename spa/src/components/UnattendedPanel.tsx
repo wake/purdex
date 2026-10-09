@@ -197,7 +197,9 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
     await Promise.all(todo.map(async (hostId) => {
       let patch: (cur: HostPages) => HostPages
       try {
+        const identity = hostIdentityNow(hostId)
         const v = await readPage(life, hostId, pages[hostId].nextBefore)
+        if (hostIdentityNow(hostId) !== identity) return // re-pointed while the page was out: it is the old daemon's
         patch = (cur) => ({ ...cur, rows: [...cur.rows, ...v.approved], nextBefore: v.truncated ? v.next_before : undefined, failed: undefined })
       } catch (e) {
         const failed = codeOf(e)

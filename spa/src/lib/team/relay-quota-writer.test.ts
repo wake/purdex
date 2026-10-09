@@ -244,6 +244,18 @@ describe('failure', () => {
     expect(st().writes).toEqual({})
   })
 
+  it('a click back to the value that was sent is still a newer intent (7 -> 8 -> 7 while the first PUT fails)', async () => {
+    setQuota(target(), 'self_left', 7)
+    vi.advanceTimersByTime(DEBOUNCE_MS)
+    setQuota(target(), 'self_left', 8)
+    setQuota(target(), 'self_left', 7)
+    calls[0].reject(new ApprovalApiError(0, 'network'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(shown('self_left')).toBe(7)
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({ value: 7 })
+  })
+
   it('a failure with no newer click falls back to the confirmed value as before', async () => {
     st().applyAnswer(H, ROOT, { self_left: 2, member_pool_left: 0 }, 1)
     setQuota(target(), 'self_left', 7)
