@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.639] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版沒有你看得到的變化，是之後「推播通知」的地基。
+
+### Added：daemon 內部的 hook 事件分發點 — 推播 PU-3a（#2180，介面線）
+
+- daemon 收到 tmux 裡 agent 的每一個 hook 事件時，會多送一份給 daemon 內部的訂閱者，之後的推播功能會從這裡接收「哪個 session 發生了什麼」。
+- 這一版還沒有任何訂閱者，所以燈號、狀態與 log 的行為都和上一版一樣。
+- 訂閱者處理太慢時只會丟掉它自己的事件並記一筆 log，不會拖慢燈號更新。
+
 ## [1.0.0-alpha.638] - 2026-10-09
 
 > 動 daemon 與 SPA：**要部署 daemon**（log 輪替重啟後生效）；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主 checkout 快轉生效（Mac App 按 Cmd+R）；Electron 不必更新。這一版可以在 App 設定每個 session 的自動接力額度，daemon 的 log 也會自動輪替。
