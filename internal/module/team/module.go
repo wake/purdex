@@ -381,6 +381,7 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: %w", err)
 	}
 	m.store = store
+	store.opChanged = m.wake                    // the one choke point: every committed change of an op wakes its long-polls
 	seen, err := store.LoadModHello(modSeenCap) // presence outlives a restart (P6-2a)
 	if err != nil {
 		return fmt.Errorf("team: %w", err)
@@ -438,6 +439,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
 	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)
 	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
+	mux.HandleFunc("POST /api/relay/ops/{id}/claim", m.handleRelayClaim)
+	mux.HandleFunc("POST /api/relay/ops/{id}/seen", m.handleRelaySeen)
 	mux.HandleFunc("GET /api/relay/prompts", m.handleRelayPrompts) // P9a, spec §8.8
 	// P8a 分流 routes (spec §6.6); TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/ask/begin", m.handleAskBegin)
