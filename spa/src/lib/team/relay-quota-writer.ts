@@ -6,7 +6,7 @@
 // has. A failure drops the desired value (the stepper falls back to the confirmed one) and toasts; `pending_lineage` (the
 // value went to a provisional root that will be orphaned) drops it, toasts, does not take the provisional numbers, and
 // re-reads the host 5 s later when the rows carry the real root.
-import { hostExistsNow } from './quota-host'
+import { hostIdentityNow } from './quota-host'
 import { ApprovalApiError } from './approval-api'
 import { fieldKey, useRelayQuotaStore } from './relay-quota'
 import { putRelayQuota } from './unattended-api'
@@ -35,7 +35,8 @@ export interface WriterDeps {
   hostLabel: (hostId: string) => string
   /** Re-read the host's unattended view (the panel registers the real one; see `registerRefetch`). */
   refetch: (hostId: string) => void
-  hostExists: (hostId: string) => boolean
+  /** Which daemon the host id means now (endpoint + token), null when removed. */
+  identity: (hostId: string) => string | null
 }
 
 const defaultDeps = (): WriterDeps => ({
@@ -44,7 +45,7 @@ const defaultDeps = (): WriterDeps => ({
   message: (key, params) => useI18nStore.getState().t(key, params),
   hostLabel: (hostId) => hostLabel(hostId, hostLookOf(hostId)),
   refetch: (hostId) => refetchers.get(hostId)?.(),
-  hostExists: hostExistsNow,
+  identity: hostIdentityNow,
 })
 
 let deps: WriterDeps = defaultDeps()
@@ -53,6 +54,8 @@ interface Slot {
   timer?: ReturnType<typeof setTimeout>
   /** The row whose click was last: what the PUT and the toasts name. */
   target: QuotaTarget
+  /** The daemon this slot's writes are meant for (the host's identity at the first click). */
+  identity: string | null
 }
 const slots = new Map<string, Slot>()
 const lineageTimers = new Set<ReturnType<typeof setTimeout>>()
@@ -90,7 +93,7 @@ export function setQuota(target: QuotaTarget, field: RelayQuotaField, value: num
   const store = useRelayQuotaStore.getState()
   const cur = store.writes[key]
   store.setWrite(target.hostId, target.root, field, { ...cur, desired: clamp(value) })
-  const slot = slots.get(key) ?? { target }
+  const slot = slots.get(key) ?? { target, identity: deps.identity(target.hostId) }
   slot.target = target
   if (slot.timer !== undefined) clearTimeout(slot.timer)
   slot.timer = setTimeout(() => { slot.timer = undefined; flush(key, field) }, DEBOUNCE_MS)
@@ -102,6 +105,11 @@ function flush(key: string, field: RelayQuotaField): void {
   if (slot === undefined) return
   const { hostId, root, sessionId } = slot.target
   const store = useRelayQuotaStore.getState()
+  if (slot.identity === null || deps.identity(hostId) !== slot.identity) { // re-pointed or removed: not this daemon's write any more
+    store.clearWrite(hostId, root, field)
+    drop(key)
+    return
+  }
   const w = store.writes[key]
   if (w === undefined || w.inflight !== undefined || w.desired === undefined) return // in flight: its settle sends the newer value
   const sent = w.desired
@@ -117,7 +125,7 @@ function settled(key: string, field: RelayQuotaField, sent: number, view: RelayQ
   if (slot === undefined) return // reset meanwhile
   const { hostId, root, label } = slot.target
   const store = useRelayQuotaStore.getState()
-  if (!deps.hostExists(hostId)) { // removed while the PUT was out: its answer is nobody's
+  if (slot.identity === null || deps.identity(hostId) !== slot.identity) { // removed or re-pointed while the PUT was out: its answer is the old daemon's
     store.clearWrite(hostId, root, field)
     drop(key)
     return
@@ -133,9 +141,10 @@ function settled(key: string, field: RelayQuotaField, sent: number, view: RelayQ
     store.clearWrite(hostId, root, field)
     drop(key)
     deps.toast(deps.message('unattended.quota.pending_lineage', { session: label }))
+    const meant = slot.identity
     const timer = setTimeout(() => {
       lineageTimers.delete(timer)
-      if (deps.hostExists(hostId)) deps.refetch(hostId)
+      if (deps.identity(hostId) === meant) deps.refetch(hostId)
     }, LINEAGE_REFETCH_MS)
     lineageTimers.add(timer)
     return

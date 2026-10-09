@@ -116,6 +116,13 @@ export const useRelayQuotaStore = create<RelayQuotaState>()((set) => ({
   reset: () => set({ confirmed: {}, writes: {}, gets: {} }),
 }))
 
+/** Every host the store holds something for: a confirmed row, a write, or a GET in flight. */
+export function quotaHostIds(s: Pick<RelayQuotaState, 'confirmed' | 'writes' | 'gets'>): Set<string> {
+  const ids = new Set<string>(Object.keys(s.gets))
+  for (const k of [...Object.keys(s.confirmed), ...Object.keys(s.writes)]) ids.add(k.split(SEP)[0])
+  return ids
+}
+
 /**
  * What the stepper of `field` shows: its desired value while one is set, else the in-flight one, else the confirmed one
  * (else `fallback`, the GET row's own number before anything was confirmed).

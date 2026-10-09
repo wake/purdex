@@ -190,6 +190,17 @@ describe('startUnattendedSupport', () => {
       expect(useRelayQuotaStore.getState().confirmed).toEqual({})
     })
 
+    it('a removed host with only a GET in flight (nothing confirmed yet) is forgotten too, and its late answer is ignored', async () => {
+      stop = startUnattendedSupport()
+      useRelayQuotaStore.getState().beginGet('h2') // the panel's first read, still out
+      useRelayQuotaStore.getState().setWrite('h2', 'r1', 'self_left', { desired: 4 })
+      useHostStore.setState({ hosts: { h1: host('h1') }, hostOrder: ['h1'] }) // h2 removed
+      expect(useRelayQuotaStore.getState().gets).toEqual({})
+      expect(useRelayQuotaStore.getState().writes).toEqual({})
+      useRelayQuotaStore.getState().endGet('h2', [{ session_id: 's', root_session_id: 'r1', address: 'x/y', is_lead: false, self_left: 9, member_pool_left: 0, rev: 1 }])
+      expect(useRelayQuotaStore.getState().confirmed).toEqual({})
+    })
+
     it('a re-point forgets it with the rest of the entry', async () => {
       fetchHostInfo.mockResolvedValue(info(['relay.unattended.v1', 'team.relay_quota.v1']))
       stop = startUnattendedSupport()

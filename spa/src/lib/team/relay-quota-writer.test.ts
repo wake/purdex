@@ -19,7 +19,7 @@ interface Call { hostId: string; sessionId: string; field: RelayQuotaField; valu
 let calls: Call[]
 let toasts: string[]
 let refetches: string[]
-let hostExists = true
+let identity: string | null = 'ep1:tok'
 
 const st = () => useRelayQuotaStore.getState()
 const shown = (field: RelayQuotaField, fallback = 3) => shownValue(st(), H, ROOT, field, fallback)
@@ -30,7 +30,7 @@ beforeEach(() => {
   calls = []
   toasts = []
   refetches = []
-  hostExists = true
+  identity = 'ep1:tok'
   resetWriter()
   configureWriter({
     put: (hostId, sessionId, field, value) => new Promise<RelayQuotaView>((resolve, reject) => { calls.push({ hostId, sessionId, field, value, resolve, reject }) }),
@@ -38,7 +38,7 @@ beforeEach(() => {
     message: (key, params) => `${key}|${JSON.stringify(params)}`,
     hostLabel: (id) => `label:${id}`,
     refetch: (id) => { refetches.push(id) },
-    hostExists: () => hostExists,
+    identity: () => identity,
   })
 })
 afterEach(() => vi.useRealTimers())
@@ -128,12 +128,56 @@ describe('one write in flight per field', () => {
   it('an answer for a host removed meanwhile is dropped', async () => {
     setQuota(target(), 'self_left', 4)
     vi.advanceTimersByTime(DEBOUNCE_MS)
-    hostExists = false
+    identity = null
     st().forgetHost(H)
     calls[0].resolve(answer({ self_left: 4, rev: 2 }))
     await vi.advanceTimersByTimeAsync(0)
     expect(st().confirmed).toEqual({})
     expect(toasts).toEqual([])
+  })
+})
+
+// codex R1: a host re-pointed (same id, another endpoint or token) is another daemon. What was started against the old one
+// must not be applied to, resent to, or re-read from the new one.
+describe('a host re-pointed meanwhile', () => {
+  it('its answer is dropped (not applied to the new daemon\'s numbers) and nothing is toasted', async () => {
+    setQuota(target(), 'self_left', 4)
+    vi.advanceTimersByTime(DEBOUNCE_MS)
+    identity = 'ep2:tok' // re-pointed while the PUT is out
+    calls[0].resolve(answer({ self_left: 4, rev: 9 }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(st().confirmed).toEqual({})
+    expect(st().writes).toEqual({})
+    expect(toasts).toEqual([])
+  })
+
+  it('a click made during the flight is not resent to the new daemon', async () => {
+    setQuota(target(), 'self_left', 4)
+    vi.advanceTimersByTime(DEBOUNCE_MS)
+    setQuota(target(), 'self_left', 6)
+    identity = 'ep2:tok'
+    calls[0].resolve(answer({ self_left: 4, rev: 9 }))
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS * 2)
+    expect(calls).toHaveLength(1)
+    expect(st().writes).toEqual({})
+  })
+
+  it('a pending write is not sent at all once the host was re-pointed before the debounce ended', () => {
+    setQuota(target(), 'self_left', 4)
+    identity = 'ep2:tok'
+    vi.advanceTimersByTime(DEBOUNCE_MS)
+    expect(calls).toHaveLength(0)
+    expect(st().writes).toEqual({})
+  })
+
+  it('the delayed re-read after pending_lineage is not made against the new endpoint', async () => {
+    setQuota(target(), 'self_left', 7)
+    vi.advanceTimersByTime(DEBOUNCE_MS)
+    calls[0].resolve(answer({ pending_lineage: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    identity = 'ep2:tok'
+    await vi.advanceTimersByTimeAsync(LINEAGE_REFETCH_MS)
+    expect(refetches).toEqual([])
   })
 })
 
@@ -195,7 +239,7 @@ describe('pending_lineage', () => {
     vi.advanceTimersByTime(DEBOUNCE_MS)
     calls[0].resolve(answer({ pending_lineage: true }))
     await vi.advanceTimersByTimeAsync(0)
-    hostExists = false
+    identity = null
     await vi.advanceTimersByTimeAsync(LINEAGE_REFETCH_MS)
     expect(refetches).toEqual([])
   })

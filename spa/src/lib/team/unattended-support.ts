@@ -13,7 +13,7 @@
 import { fetchHostInfo } from '../host-api'
 import { hostEndpoint, useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
-import { useRelayQuotaStore } from './relay-quota'
+import { quotaHostIds, useRelayQuotaStore } from './relay-quota'
 import { RELAY_QUOTA_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
 
 const identity = (h: HostConfig): string => `${hostEndpoint(h)}:${h.token ?? ''}`
@@ -51,7 +51,7 @@ export function startUnattendedSupport(): () => void {
     for (const hostId of Object.keys(store.byHost)) {
       if (!next.hosts[hostId]) store.forgetHost(hostId)
     }
-    for (const hostId of Object.keys(useRelayQuotaStore.getState().confirmed).map((k) => k.split('\u0000')[0])) {
+    for (const hostId of quotaHostIds(useRelayQuotaStore.getState())) {
       if (!next.hosts[hostId]) useRelayQuotaStore.getState().forgetHost(hostId) // a removed host's numbers go with it
     }
     for (const [hostId, host] of Object.entries(next.hosts)) {

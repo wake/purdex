@@ -3,7 +3,7 @@
 // App keeps whichever has the NOT SMALLER rev, so no arrival order can roll a number back. A stepper shows its field's
 // desired value while that field has a write pending or in flight, the confirmed value otherwise.
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useRelayQuotaStore, shownValue, quotaKey } from './relay-quota'
+import { useRelayQuotaStore, shownValue, quotaKey, quotaHostIds } from './relay-quota'
 import type { RelayQuotaEvent, SessionQuota } from './types'
 
 const H = 'h1'
@@ -150,3 +150,15 @@ describe('forgetting', () => {
     expect(confirmed().self_left).toBe(3) // not buffered by the forgotten GET
   })
 })
+
+describe('quotaHostIds', () => {
+  it('names every host the store holds anything for: confirmed rows, writes, or a GET in flight', () => {
+    st().applyEvent('a', ev({ rev: 1 }))
+    st().setWrite('b', 'r', 'self_left', { desired: 3 })
+    st().beginGet('c')
+    expect([...quotaHostIds(st())].sort()).toEqual(['a', 'b', 'c'])
+    st().forgetHost('b')
+    expect([...quotaHostIds(st())].sort()).toEqual(['a', 'c'])
+  })
+})
+
