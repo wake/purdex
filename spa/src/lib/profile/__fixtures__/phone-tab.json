@@ -1,5 +1,5 @@
 {
-  "hash": "66b71a1c9a38d82f391d8caa0ee18fec05137b46b56bb924eb5d9f264e7762b8",
+  "hash": "083f6ca5b84df416d911d11b25498a532c8e8909b67141ebc53a5dd2f05e2ebc",
   "payload": {
     "order": [
       "phtab1"
@@ -15,6 +15,13 @@
               "hostId": "d1_aaaaaaaaaaaaaaaa",
               "kind": "tmux-session",
               "mode": "terminal",
+              "rebuild": {
+                "capturedAt": 0,
+                "cwd": "/tmp/fixture-cwd",
+                "cwdSource": "pane-probe",
+                "sessionName": "fixture-1",
+                "tmuxInstance": "12345:1790000000"
+              },
               "sessionCode": "fix001",
               "tmuxInstance": "12345:1790000000"
             },
