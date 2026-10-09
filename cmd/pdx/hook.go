@@ -234,7 +234,7 @@ type hookSpecificOutput struct {
 // an event other than the two, a stdin without a session id, no flag file
 // (the gate: then the daemon is not called at all), the daemon unreachable
 // or restarting past the 5 s grace, silent, a 404, any other error, and a
-// {} or PermissionRequest answer. Only a PreToolUse deny prints. asked is
+// {} or PermissionRequest answer. Only a PreToolUse deny or allow prints. asked is
 // true once the gate passed and the daemon was called: runHook then treats
 // the decision's return as the end of the hook's budget.
 func hookDecision(ctx context.Context, in hookDecideInput) (out []byte, asked bool) {
@@ -273,11 +273,11 @@ func hookDecision(ctx context.Context, in hookDecideInput) (out []byte, asked bo
 	if _, err := client.Do(ctx, http.MethodPost, "/api/hooks/decide", req, &resp, daemonclient.Idempotent()); err != nil {
 		return nil, true
 	}
-	if resp.Decision != "deny" || event != team.HookEventPreToolUse {
+	if (resp.Decision != "deny" && resp.Decision != "allow") || event != team.HookEventPreToolUse {
 		return nil, true
 	}
 	out, err := json.Marshal(hookDecisionOutput{HookSpecificOutput: hookSpecificOutput{
-		HookEventName: event, PermissionDecision: "deny", PermissionDecisionReason: resp.Reason,
+		HookEventName: event, PermissionDecision: resp.Decision, PermissionDecisionReason: resp.Reason,
 	}})
 	if err != nil {
 		return nil, true

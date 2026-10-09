@@ -30,7 +30,8 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 	"       pdx relay self off|on|status --session <sid> [--config <path>]\n" +
 	"       pdx relay report <op> <state> [--new-session <sid>] [--error <e>] [--config <path>]\n" +
 	"       pdx relay op <id> [--config <path>]\n" +
-	"       pdx relay prompts [--config <path>]"
+	"       pdx relay prompts [--config <path>]\n" +
+	"       pdx relay lock|unlock <op> --session <sid> [--config <path>]"
 
 const (
 	// relayAttemptTimeout bounds one long-poll (team.MaxPollWaitS plus room), as lead's does.
@@ -109,6 +110,10 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		return runRelayOp(ctx, args[1:], stdout, stderr, clientOpts)
 	case "prompts":
 		return runRelayPrompts(ctx, args[1:], stdout, stderr, clientOpts)
+	case "lock":
+		return runRelayLock(args[1:], stdout, stderr, true)
+	case "unlock":
+		return runRelayLock(args[1:], stdout, stderr, false)
 	default:
 		fmt.Fprintf(stderr, "pdx relay: unknown subcommand %q\n%s\n", args[0], relayUsage)
 		return ExitUsage

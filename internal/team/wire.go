@@ -216,6 +216,12 @@ const (
 // open (spec §6.6); the argument is the request id.
 const LeadLockReasonFmt = "lead 申請等待核准中（%s），核准或拒絕前這個 session 不能執行工具；請在 Purdex 介面處理"
 
+// The relay lock's PreToolUse answers (spec §6.6, P6-3b): only the handoff Write is allowed, everything else is denied.
+const (
+	RelayLockAllowReason = "Purdex 接力檔"
+	RelayLockDenyReason  = "接力進行中，這一輪只寫接力檔"
+)
+
 // HookDecideRequest is POST /api/hooks/decide: what `pdx hook` read on
 // stdin, for the two events that wait. Raw is the whole stdin, for later
 // kinds (P8a).
@@ -232,7 +238,7 @@ type HookDecideRequest struct {
 // HookDecideResponse is the 200 body. The empty struct ({}) is "no
 // decision": the hook prints nothing and the normal permission flow runs.
 type HookDecideResponse struct {
-	Decision string `json:"decision,omitempty"` // "deny" | ""
+	Decision string `json:"decision,omitempty"` // "deny" | "allow" (the relay lock's handoff Write, P6-3b) | ""
 	Reason   string `json:"reason,omitempty"`
 	Lock     string `json:"lock,omitempty"` // "lead_request" | "relay" | ""
 	ID       string `json:"id,omitempty"`   // the request / op that holds the lock
