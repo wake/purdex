@@ -66,27 +66,42 @@ type PeerHost struct {
 // MaxTeamRoots bounds how many roots one peer entry may carry.
 const MaxTeamRoots = 16
 
+// RootError names the one team root that failed and why. Reason is one of
+// the fixed codes not_absolute, not_found, not_a_directory, too_many (Root
+// is empty for too_many).
+type RootError struct {
+	Root   string
+	Reason string
+}
+
+func (e *RootError) Error() string {
+	if e.Root == "" {
+		return "team roots: " + e.Reason
+	}
+	return fmt.Sprintf("team root %q: %s", e.Root, e.Reason)
+}
+
 // CanonicalTeamRoots validates and normalises a list of spawn roots: each
 // must be an absolute path (the CLI expands ~ — tmux does not) naming an
-// existing directory; symlinks are resolved, duplicates dropped, order kept.
-// The result is never nil.
+// existing directory; symlinks are resolved (the grant is the real
+// directory), duplicates dropped, order kept. The result is never nil;
+// errors are *RootError.
 func CanonicalTeamRoots(in []string) ([]string, error) {
 	if len(in) > MaxTeamRoots {
-		return nil, fmt.Errorf("at most %d team roots", MaxTeamRoots)
+		return nil, &RootError{Reason: "too_many"}
 	}
 	out := make([]string, 0, len(in))
 	seen := make(map[string]bool, len(in))
 	for _, p := range in {
 		if !filepath.IsAbs(p) {
-			return nil, fmt.Errorf("team root %q is not an absolute path", p)
+			return nil, &RootError{Root: p, Reason: "not_absolute"}
 		}
 		real, err := filepath.EvalSymlinks(filepath.Clean(p))
 		if err != nil {
-			return nil, fmt.Errorf("team root %q: %w", p, err)
+			return nil, &RootError{Root: p, Reason: "not_found"}
 		}
-		st, err := os.Stat(real)
-		if err != nil || !st.IsDir() {
-			return nil, fmt.Errorf("team root %q is not a directory", p)
+		if st, err := os.Stat(real); err != nil || !st.IsDir() {
+			return nil, &RootError{Root: p, Reason: "not_a_directory"}
 		}
 		if !seen[real] {
 			seen[real] = true

@@ -2,6 +2,7 @@
 package config_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -84,16 +85,18 @@ func TestCanonicalTeamRoots(t *testing.T) {
 			t.Fatalf("got %#v err %v", got, err)
 		}
 	})
-	for name, in := range map[string][]string{
-		"relative":     {"rel/dir"},
-		"tilde":        {"~/work"},
-		"missing":      {filepath.Join(base, "nope")},
-		"not a dir":    {file},
-		"empty string": {""},
+	for name, tc := range map[string]struct{ in, reason string }{
+		"relative":     {"rel/dir", "not_absolute"},
+		"tilde":        {"~/work", "not_absolute"},
+		"missing":      {filepath.Join(base, "nope"), "not_found"},
+		"not a dir":    {file, "not_a_directory"},
+		"empty string": {"", "not_absolute"},
 	} {
 		t.Run("rejects "+name, func(t *testing.T) {
-			if _, err := config.CanonicalTeamRoots(in); err == nil {
-				t.Fatal("want error")
+			_, err := config.CanonicalTeamRoots([]string{tc.in})
+			var re *config.RootError
+			if !errors.As(err, &re) || re.Reason != tc.reason || re.Root != tc.in {
+				t.Fatalf("err = %#v, want root %q reason %s", err, tc.in, tc.reason)
 			}
 		})
 	}
@@ -106,8 +109,10 @@ func TestCanonicalTeamRoots(t *testing.T) {
 			}
 			in[i] = p
 		}
-		if _, err := config.CanonicalTeamRoots(in); err == nil {
-			t.Fatal("want error")
+		_, err := config.CanonicalTeamRoots(in)
+		var re *config.RootError
+		if !errors.As(err, &re) || re.Reason != "too_many" {
+			t.Fatalf("err = %#v", err)
 		}
 	})
 }

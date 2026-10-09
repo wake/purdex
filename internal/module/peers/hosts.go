@@ -39,6 +39,10 @@ type hostRow struct {
 	HasToken        bool   `json:"has_token"`
 	HasInboundToken bool   `json:"has_inbound_token"`
 	AllowBypass     bool   `json:"allow_bypass"`
+	// Cross-host team consent for this peer (spec §5.4); team_roots is
+	// never null.
+	AllowTeam bool     `json:"allow_team"`
+	TeamRoots []string `json:"team_roots"`
 	// Rotation state (spec §6.1): pending = inbound_token_prev is set;
 	// last_inbound_auth = "" | "current" | "prev" — which token the peer
 	// most recently presented in this epoch (in memory, rotation.go).
@@ -55,6 +59,8 @@ func toHostRow(h config.PeerHost) hostRow {
 		HasToken:        h.Token != "",
 		HasInboundToken: h.InboundToken != "",
 		AllowBypass:     h.AllowBypass,
+		AllowTeam:       h.AllowTeam,
+		TeamRoots:       append([]string{}, h.TeamRoots...),
 	}
 }
 
@@ -90,6 +96,25 @@ type putHostRequest struct {
 	Token       string `json:"token"`
 	AllowBypass *bool  `json:"allow_bypass"`
 	Alias       string `json:"alias"`
+	// AllowTeam / TeamRoots: nil = unchanged; an empty TeamRoots clears
+	// them. Roots are canonicalised before anything is applied.
+	AllowTeam *bool     `json:"allow_team"`
+	TeamRoots *[]string `json:"team_roots"`
+}
+
+// writeBadRoot answers a rejected team root: 400 {"error":"bad_root",
+// "root":<input>,"detail":<fixed code>}.
+func writeBadRoot(w http.ResponseWriter, err error) {
+	body := map[string]string{"error": "bad_root", "detail": err.Error()}
+	var re *config.RootError
+	if errors.As(err, &re) {
+		body["detail"] = re.Reason
+		if re.Root != "" {
+			body["root"] = re.Root
+		}
+	}
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
@@ -464,6 +489,15 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var teamRoots []string
+	if req.TeamRoots != nil {
+		var err error
+		if teamRoots, err = config.CanonicalTeamRoots(*req.TeamRoots); err != nil {
+			writeBadRoot(w, err)
+			return
+		}
+	}
+
 	// A rename is validated before the verify below dials anyone, for the
 	// same reason handleAddHost validates an explicit alias first: a
 	// request this host will refuse anyway must not cost a network round
@@ -545,6 +579,12 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.AllowBypass != nil {
 			h.AllowBypass = *req.AllowBypass
+		}
+		if req.AllowTeam != nil {
+			h.AllowTeam = *req.AllowTeam
+		}
+		if req.TeamRoots != nil {
+			h.TeamRoots = teamRoots
 		}
 		if renaming {
 			// The record is keyed by the STORED alias; the path's spelling
