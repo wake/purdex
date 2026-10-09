@@ -48,20 +48,22 @@ func write(w http.ResponseWriter, a answer) {
 // for which hold(n) is true is held until the client goes, after onSpawn(n)
 // ran. Every request body is recorded.
 type fakeTeamCmdDaemon struct {
-	mu       sync.Mutex
-	requests int
-	spawnReq []team.SpawnRequest
-	spawns   []func(team.SpawnRequest) answer
-	hold     func(n int) bool
-	onSpawn  func(n int)
-	sendReq  []ipeers.SendRequest
-	send     answer
-	dropSend bool
-	holdSend bool
-	killReq  []team.KillRequest
-	kill     answer
-	queries  []string
-	view     answer
+	mu         sync.Mutex
+	requests   int
+	spawnReq   []team.SpawnRequest
+	spawns     []func(team.SpawnRequest) answer
+	hold       func(n int) bool
+	onSpawn    func(n int)
+	sendReq    []ipeers.SendRequest
+	send       answer
+	dropSend   bool
+	holdSend   bool
+	killReq    []team.KillRequest
+	kill       answer
+	releaseReq []team.ReleaseRequest
+	release    answer
+	queries    []string
+	view       answer
 }
 
 func (f *fakeTeamCmdDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +113,11 @@ func (f *fakeTeamCmdDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		f.killReq = append(f.killReq, req)
 		write(w, f.kill)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/team/release":
+		var req team.ReleaseRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.releaseReq = append(f.releaseReq, req)
+		write(w, f.release)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/team":
 		f.queries = append(f.queries, r.URL.RawQuery)
 		write(w, f.view)

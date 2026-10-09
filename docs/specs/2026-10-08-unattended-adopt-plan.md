@@ -1229,6 +1229,8 @@ type RosterEventValue struct { Op string `json:"op"`; Teams []TeamRoster `json:"
 
   If either case can take longer than 10 s, PL-1d2 adds the bounded wait and SIGKILL of rule 4, and this plan is amended before PL-1d2.
 
+  **Measured 2026-10-09** (coordinator; Claude Code 2.1.29x, Haiku, a private `-L` tmux, `CLAUDE_*` cleared): **idle** — SIGTERM → the process was gone in **0.86 s**; **busy** (a foreground Bash `sleep 45` running) — SIGTERM → gone in **0.87 s**, the `sleep` child was cleaned up with it, and the pane printed Claude Code's `claude --resume` hint and returned to the shell. Neither case came near 10 s, so PL-1d2 sends **SIGTERM only**: no bounded wait and no SIGKILL, and no follow-up PR.
+
 No other new behaviour of Claude Code is relied on: an approved request needs no mod change (PU-1 facts), and PL-1g only re-sends the existing hello.
 
 ## Intersections with other lines
