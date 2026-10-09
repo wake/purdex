@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.633] - 2026-10-09
+
+> 動 daemon、CLI（hook）與 SPA：**要部署**（`bin/pdx` 換新，hook 呼叫的就是它）；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主 checkout 快轉生效；Electron 不必更新。
+
+### Fixed：PATH 裡沒有 tmux 的 pane 也能註冊 session（#2158，#2123，介面線）
+
+- 從 iOS 以非互動 ssh 開的 session，pane 的 PATH 只有 `/usr/bin:/bin`，找不到 Homebrew 的 tmux，`pdx hook` 因此無法辨識自己在哪個 tmux session，這個 session 就不會出現在 Purdex。現在 hook 會改用已知的 tmux 路徑。
+
+### Fixed：浮動面板不再整圈畫出焦點框（#2162，#2063）
+
+- 無人值守面板等浮動面板裡沒有可聚焦的按鈕時，整個面板外圍會出現一圈橘色框；現在不會了。面板內的按鈕照常有自己的焦點樣式，高對比模式下仍看得到焦點。
+
+### 其他
+
+- 每個 session 的自動接力額度（#2062）的 spec 與 plan（#2164，文件）。
+
 ## [1.0.0-alpha.632] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**（與 alpha.631 一起部署時照 631 的說明重跑 `pdx setup`）；SPA、Electron 不必更新。這一版修正 daemon 每次重啟就多留一個殭屍子行程的問題。
