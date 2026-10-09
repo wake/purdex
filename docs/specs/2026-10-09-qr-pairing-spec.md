@@ -156,7 +156,10 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 - `GET /api/devices` → rows without token or hash.
 - `DELETE /api/devices/{id}`, `DELETE /api/devices?pairing_id=<uuid>` → revoke (idempotent, 204). Revocation closes
   every open connection of that principal — host-events, terminal and conversation WebSockets alike — which the outer
-  chain tracked when the handshake was upgraded (§3.2).
+  chain tracked when the handshake was upgraded (§3.2). Revocation also deletes the push registrations of those devices
+  (push follows a revoke feed the devices module publishes, and reconciles at daemon start for phones revoked while push
+  was down; a phone revoked mid-request cannot register). The one APNs request already in flight at the instant of the
+  revoke cannot be recalled.
 - `PUT /api/devices/self` `{label}` (device token) → its own label, 1–64 printable runes.
 - Capability `devices.v1`.
 
