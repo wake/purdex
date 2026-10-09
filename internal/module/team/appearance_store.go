@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/wake/purdex/internal/team"
 )
 
 // migrateTeamColor gives teams the colour the user picked in the panel (TR-1): an index 0–7, NULL = automatic (the App's
@@ -30,9 +32,29 @@ type AppearanceResult struct {
 	OldColor          *int
 }
 
+// dbtxq is dbtx that can also run a multi-row query (a *sql.Tx, or a connection inside an immediate transaction).
+type dbtxq interface {
+	dbtx
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func (c connTx) Query(q string, args ...any) (*sql.Rows, error) {
+	return c.conn.QueryContext(c.ctx, q, args...)
+}
+
+// AppearanceFanout is what a rename sends to the member hosts (#2288): the hosts that announce team.appearance, the lead's
+// tuple and the id source. Nil = nothing to send (a team with no member host, or no host caller).
+type AppearanceFanout struct {
+	Hosts map[string]bool
+	Lead  team.TeamLead
+	NewID func() string
+	Now   int64
+}
+
 // SetAppearance stores a live team's name, label and colour (nil = automatic) in one immediate transaction, so it
-// serialises with every other writer of the row.
-func (s *Store) SetAppearance(teamID, name, label string, color *int) (AppearanceResult, error) {
+// serialises with every other writer of the row. With a fanout the same transaction enqueues team.appearance for every
+// announcing host that holds a live remote row of the team or a running forwarded spawn (spec rule 2).
+func (s *Store) SetAppearance(teamID, name, label string, color *int, fan *AppearanceFanout) (AppearanceResult, error) {
 	var res AppearanceResult
 	err := s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		var endedAt int64
@@ -58,7 +80,15 @@ func (s *Store) SetAppearance(teamID, name, label string, color *int) (Appearanc
 		if color != nil {
 			col = *color
 		}
-		_, err = conn.ExecContext(ctx, `UPDATE teams SET team_name = ?, team_label = ?, team_color = ? WHERE id = ? AND ended_at = 0`, name, label, col, teamID)
+		if _, err = conn.ExecContext(ctx, `UPDATE teams SET team_name = ?, team_label = ?, team_color = ? WHERE id = ? AND ended_at = 0`, name, label, col, teamID); err != nil {
+			return err
+		}
+		if fan == nil || len(fan.Hosts) == 0 {
+			return nil
+		}
+		_, err = s.enqueueTeamLevelTx(connTx{ctx, conn}, team.Team{ID: teamID, TeamName: name}, CmdAppearance, fan.Lead, func(c *team.TeamCommand) {
+			c.TeamLabel, c.TeamColor = label, color
+		}, fan.NewID, fan.Now, fan.Hosts)
 		return err
 	})
 	if err != nil {

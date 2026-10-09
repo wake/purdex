@@ -30,7 +30,12 @@ func (m *Module) handleRemoteMembersGet(w http.ResponseWriter, r *http.Request) 
 	m.core.CfgMu.RUnlock()
 	out := team.RemoteMembersResponse{Members: make([]team.RemoteMemberView, 0, len(rows))}
 	for _, r := range rows {
-		out.Members = append(out.Members, team.RemoteMemberView{MK: r.MK, MemberSessionID: r.MemberSessionID, Ref: r.Ref,
+		var color *int
+		if r.TeamColor.Valid {
+			c := int(r.TeamColor.Int64)
+			color = &c
+		}
+		out.Members = append(out.Members, team.RemoteMemberView{TeamLabel: r.TeamLabel, TeamColor: color, MK: r.MK, MemberSessionID: r.MemberSessionID, Ref: r.Ref,
 			Title: r.Title, Cwd: r.Cwd, TeamID: r.TeamID, TeamName: r.TeamName, LeadHostID: r.LeadHostID,
 			LeadAlias: alias[r.LeadHostID], LeadAddress: r.LeadAddress, Origin: r.Origin, State: r.State, CreatedAt: r.CreatedAt})
 	}

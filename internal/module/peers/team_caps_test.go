@@ -25,7 +25,7 @@ func teamHosts() []config.PeerHost {
 
 // wantTeamKinds is written out, not derived from teamKinds(): taking one away (or announcing spawn before X4a applies
 // it) must fail here.
-var wantTeamKinds = []string{"adopt", "release", "kill", "spawn", "end", "lead_moved", "void"}
+var wantTeamKinds = []string{"adopt", "release", "kill", "spawn", "end", "lead_moved", "void", "team.appearance"}
 
 // wantFactKinds is written out too: registered / spawn_failed are announced only once the lead host applies them (X4b), moved never (reserved).
 var wantFactKinds = []string{"ended", "registered", "spawn_failed"}

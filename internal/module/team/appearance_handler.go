@@ -2,11 +2,14 @@ package teammod
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -54,7 +57,7 @@ func (m *Module) handleAppearancePut(w http.ResponseWriter, r *http.Request) {
 	if label == "" {
 		label = team.DeriveTeamLabel(name) // the creation rule: empty means derived, not cleared
 	}
-	res, err := m.store.SetAppearance(req.TeamID, name, label, color)
+	res, err := m.store.SetAppearance(req.TeamID, name, label, color, m.appearanceFanout(r.Context(), req.TeamID))
 	if err != nil {
 		m.logf("[team] appearance of %s: %v", req.TeamID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
@@ -69,6 +72,7 @@ func (m *Module) handleAppearancePut(w http.ResponseWriter, r *http.Request) {
 		m.logf("[team] appearance of team %s: name %q -> %q, label %q -> %q, colour %s -> %s by client %q from %s",
 			req.TeamID, res.OldName, name, res.OldLabel, label, colourText(res.OldColor), colourText(color), clientKind(req.Client), r.RemoteAddr)
 		m.rosterChanged()
+		m.kickCommands() // team.appearance, if the rename queued any
 		m.writeJSON(w, http.StatusOK, team.AppearanceView{TeamID: req.TeamID, TeamName: name, TeamLabel: label, TeamColor: color})
 	}
 }
@@ -100,4 +104,59 @@ func clientKind(c team.Client) string {
 		return k
 	}
 	return "unknown"
+}
+
+// appearanceFanout is who hears of a rename (#2288): the member hosts of the team that announce team.appearance. A host
+// that cannot be asked, or does not announce it (an older daemon), is left out — the rename never waits for it, and it
+// learns the new look at the next one. Nil when the team has no such host or this daemon has no host caller.
+func (m *Module) appearanceFanout(ctx context.Context, teamID string) *AppearanceFanout {
+	if m.cmdCaller == nil {
+		return nil
+	}
+	tm, ok, err := m.store.TeamByID(teamID)
+	if err != nil || !ok || tm.EndedAt != 0 {
+		return nil
+	}
+	// the hosts the team has a live remote row or a running forwarded spawn on (the transaction's own condition): none, and
+	// the network is not touched at all
+	hosts, err := m.store.LiveRemoteHosts(teamID, true)
+	if err != nil {
+		m.logf("[team] appearance of %s: member hosts: %v", teamID, err)
+		return nil
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	// asked at once: a slow or offline host costs one probe's wait, not one per host
+	announcing := map[string]bool{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, h := range hosts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			caps, err := m.cmdCaller.TeamCaps(ctx, h)
+			why := ""
+			switch {
+			case err != nil:
+				why = "its capabilities could not be read: " + err.Error()
+			case !slices.Contains(caps.Kinds, CmdAppearance):
+				why = "it does not announce " + CmdAppearance
+			case !caps.AllowTeam:
+				why = "it has not allowed this host (allow_team off)"
+			}
+			if why != "" {
+				m.logf("[team] appearance of team %s: host %s skipped, it keeps the old look until the next rename: %s", teamID, h, why)
+				return
+			}
+			mu.Lock()
+			announcing[h] = true
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if len(announcing) == 0 {
+		return nil
+	}
+	return &AppearanceFanout{Hosts: announcing, Lead: m.leadTuple(tm), NewID: m.newID, Now: m.now()}
 }

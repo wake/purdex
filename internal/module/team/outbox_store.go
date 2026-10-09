@@ -25,6 +25,9 @@ const (
 	CmdLeadMoved = "lead_moved"
 	CmdSpawn     = "spawn"
 	CmdVoid      = "void"
+	// CmdAppearance is team.appearance (#2288): sent only to hosts that announce it, so a lead host's rename never waits
+	// for an older member host.
+	CmdAppearance = "team.appearance"
 )
 
 // commandsPath is the one route every command goes to.

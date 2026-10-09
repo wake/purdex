@@ -16,6 +16,8 @@ const (
 	CommandVoid      = "void"
 	CommandKill      = "kill"
 	CommandSpawn     = "spawn" // not applied by this version (X4a)
+	// CommandAppearance carries the team's current name, short label and colour to a member host (#2288).
+	CommandAppearance = "team.appearance"
 )
 
 // Command refusal codes (JSON 4xx bodies, {"error": code}).
@@ -61,6 +63,10 @@ type TeamCommand struct {
 	// lead_moved: the lead's new session (Lead carries the rest of its tuple)
 	LeadSessionID string `json:"lead_session_id,omitempty"`
 	LeadRef       string `json:"lead_ref,omitempty"`
+	// team.appearance: TeamName above is the new name; the label is always set (derived when not explicit), the colour is
+	// absent for "automatic" (the App's hash)
+	TeamLabel string `json:"team_label,omitempty"`
+	TeamColor *int   `json:"team_color,omitempty"`
 	// void
 	CommandID string `json:"command_id,omitempty"`
 	// spawn: where and what to start on the member host (the cwd must lie under the roots that host granted)

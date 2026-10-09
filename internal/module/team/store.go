@@ -199,6 +199,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (remote members): %w", err)
 	}
+	if err := migrateRemoteAppearance(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (remote appearance): %w", err)
+	}
 	if _, err := db.Exec(factSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (facts): %w", err)
