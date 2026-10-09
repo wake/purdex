@@ -294,6 +294,23 @@ func TestCatchUp_RepeatedWordsStillFindTheNewTurn(t *testing.T) {
 	}
 }
 
+// A late event with no words does not end a newer turn that began after its Stop, even one that has already done something
+// (codex critic).
+// Mutation gate: drop the started-after check from the no-words branch → red.
+func TestCatchUp_ALateEventWithNoWordsDoesNotEndANewerTurn(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "答1"))
+	k.event("s1", 900) // t1 is recorded
+	busy := runningTurn("t2")
+	busy.StartedAt = 6000 // began after the old Stop at 5000, and has a reply row already
+	k.turns.set("s1", endedTurn("t1", 100, "答1"), busy)
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "", At: 5000, Seq: 3})
+	if got := turnIDs(k.entries("s1")); got != "t1" {
+		t.Fatalf("recorded %q: a newer turn was ended by an older event", got)
+	}
+}
+
 // The first record of a session keeps only its newest ended turn (no history backfill) — but never loses the turn the event
 // is about, nor drops it when a second event comes close behind a waiting one (codex R1).
 // Mutation gate: trim to the newest turn regardless of the event's turn, or let the newer event overtake → red.

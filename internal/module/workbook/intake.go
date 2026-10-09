@@ -230,7 +230,8 @@ func adoptEvent(turns []convmodel.Turn, ev agent.TurnEndEvent, from int, force b
 	out = append([]convmodel.Turn(nil), turns...)
 	want := strings.TrimSpace(ev.Text)
 	if want == "" {
-		if t := out[last]; t.Outcome == convmodel.OutcomeRunning && summarisable(t) {
+		// a running turn that began after this Stop is a newer turn's: never ended by an older event
+		if t := out[last]; t.Outcome == convmodel.OutcomeRunning && summarisable(t) && !(ev.At > 0 && t.StartedAt >= ev.At) {
 			out[last].Outcome = convmodel.OutcomeDone
 		}
 		return out, last, true
