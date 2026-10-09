@@ -172,6 +172,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// ranked by (hookedge.go). Taken before anything that waits, so a mod
 	// event that lands while this hook is processed counts as newer.
 	recv := m.modClock()
+	stamp := m.stampTurnEnd() // the hook's arrival, for the turn-end event (T-3a1)
 	var req EventRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
@@ -557,6 +558,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	trace.Frame(req, frameMeta)
+	m.publishTurnEnd(req, provider, lifecycle, frameMeta, stamp) // after the frame write, before every emit; no lock held
 	// Keep the hook-sourced background symbol in step before the projection
 	// this event emits is built (a Stop sets it, a SessionStart clears it).
 	m.noteHookBackground(req, lifecycle, broadcastTs)

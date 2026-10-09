@@ -818,6 +818,8 @@ func (s *stubTerminals) LiveSessions(_ context.Context, _ string) ([]agent.Termi
 	return out, nil
 }
 
+func (s *stubTerminals) SubscribeTurnEnd(func(agent.TurnEndEvent)) func() { return func() {} }
+
 func (s *stubTerminals) SubscribeSessionStart(fn func(agent.SessionStartEvent)) func() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
