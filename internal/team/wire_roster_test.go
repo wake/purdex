@@ -23,7 +23,7 @@ func TestWireRoster_JSONShapes(t *testing.T) {
 		{"empty roster", Roster{}, `{"teams":[]}`},
 		{"empty event", RosterEventValue{Op: "snapshot"}, `{"op":"snapshot","teams":[]}`},
 		{"team without members", TeamRoster{ID: "t", HostID: "h", CreatedAt: 5, Lead: RosterSession{SessionID: "s", Ref: "_abc123", Address: "a/_abc123"}},
-			`{"id":"t","host_id":"h","team_name":"","team_label":"","created_at":5,"lead":{"session_id":"s","ref":"_abc123","address":"a/_abc123","live":false,"relay_quota":{"self_left":0,"member_pool_left":0,"rev":0}},"members":[]}`},
+			`{"id":"t","host_id":"h","team_name":"","team_label":"","created_at":5,"max_members":0,"in_use":0,"lead":{"session_id":"s","ref":"_abc123","address":"a/_abc123","live":false,"relay_quota":{"self_left":0,"member_pool_left":0,"rev":0}},"members":[]}`},
 	} {
 		raw, err := json.Marshal(c.v)
 		if err != nil {
@@ -73,7 +73,7 @@ func TestWireRoster_JSONShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]any{"op": "changed", "teams": []any{map[string]any{
-		"id": "t", "host_id": "h", "team_name": "build", "team_label": "", "created_at": 5.0,
+		"id": "t", "host_id": "h", "team_name": "build", "team_label": "", "created_at": 5.0, "max_members": 0.0, "in_use": 0.0,
 		"lead": map[string]any{"session_id": "s0", "ref": "_lead01", "address": "a/lead", "title": "lead", "name": "n0", "tmux_session": "main", "live": true, "relay_quota": map[string]any{"self_left": 0.0, "member_pool_left": 0.0, "rev": 0.0}},
 		"members": []any{map[string]any{
 			"session_id": "s1", "ref": "_mem001", "address": "a/_mem001", "tmux_session": "tm-0123456789", "live": true, "relay_quota": map[string]any{"self_left": 0.0, "member_pool_left": 0.0, "rev": 0.0},

@@ -253,6 +253,9 @@ type KillRequest struct {
 type TeamView struct {
 	Team    Team     `json:"team"`
 	Members []Member `json:"members"` // never null: MarshalJSON emits [] for none
+	// InUse is the places the limit counts: active members plus spawns still starting (the count spawn and adopt check);
+	// nil from a daemon that predates it, and then a reader counts the active members itself.
+	InUse *int `json:"in_use,omitempty"`
 	// LeadRelayQuota is the lead's own relay chain's numbers (#2062; the lead's self_left and the member pool);
 	// nil from a daemon that predates it. Members have none of their own to show.
 	LeadRelayQuota *RelayQuota `json:"lead_relay_quota,omitempty"`

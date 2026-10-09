@@ -115,6 +115,7 @@ func (m *Module) failSpawn(id, reason string) {
 	}
 	if won {
 		m.logf("[team] spawn %s failed: %s", id, reason)
+		m.rosterChanged() // the failure is committed: the seat is free again (in_use)
 		m.wake(id)
 	}
 }

@@ -50,6 +50,11 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 		byOwner[tk.OwnerKey] = append(byOwner[tk.OwnerKey], tk)
 	}
 	v := team.TeamView{Team: t, Members: make([]team.Member, 0, len(rows))}
+	if n, err := seatsTaken(m.store.db, t.ID, ""); err != nil {
+		m.logf("[team] team %s in use: %v", t.ID, err) // omitted: the reader counts the active members
+	} else {
+		v.InUse = &n
+	}
 	if lq, _, err := m.store.RelayQuotaOf(t.LeadSessionID); err != nil {
 		m.logf("[team] relay quota of lead %s: %v", t.LeadSessionID, err) // omitted, not a trusted 0 / 0
 	} else {
