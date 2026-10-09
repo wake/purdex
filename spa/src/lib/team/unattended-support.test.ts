@@ -39,6 +39,15 @@ beforeEach(() => {
 afterEach(() => { stop(); vi.restoreAllMocks() })
 
 describe('startUnattendedSupport', () => {
+  it('team.max_members.v1 in the capabilities → the cap stepper is supported; without it, not', async () => {
+    useHostStore.setState({ runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } })
+    fetchHostInfo.mockImplementation(async (id) => info(id === 'h1' ? ['relay.unattended.v1', 'team.max_members.v1'] : ['relay.unattended.v1']))
+    stop = startUnattendedSupport()
+    await flush()
+    expect(useUnattendedStore.getState().byHost.h1?.maxMembersSupport).toBe('yes')
+    expect(useUnattendedStore.getState().byHost.h2?.maxMembersSupport).toBe('no')
+  })
+
   it('probes the hosts already connected at start', async () => {
     useHostStore.setState({ runtime: { h2: { status: 'connected' } } })
     stop = startUnattendedSupport()
