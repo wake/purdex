@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -306,4 +307,21 @@ func TestPublishTurnEnd_NotWhenTheFrameEventWasSkipped(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("an updated_frame Stop was not published")
 	}
+}
+
+// A hook the daemon answers 500 is retried by the sender; the turn end of a request that failed
+// must not have been published, or the retry publishes it twice (codex R1). Mutation gate: publish
+// right after the frame write → red.
+func TestHandler_TurnEndNotPublishedWhenTheRequestFails500(t *testing.T) {
+	m := newTurnEndModule(t)
+	got := make(chan TurnEndEvent, 4)
+	defer m.SubscribeTurnEnd(func(ev TurnEndEvent) { got <- ev })()
+	startSession(t, m, "S8")
+	old := eventsDeleteFn
+	eventsDeleteFn = func(*Module, string) error { return errors.New("disk I/O error") }
+	defer func() { eventsDeleteFn = old }()
+	if code := postStop(t, m, `{"hook_event_name":"Stop","session_id":"S8","last_assistant_message":"x"}`); code != http.StatusInternalServerError {
+		t.Fatalf("answered %d, want 500", code)
+	}
+	wantNoTurnEnd(t, got)
 }
