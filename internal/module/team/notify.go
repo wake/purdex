@@ -58,6 +58,11 @@ func (m *Module) drainNotices() {
 	if m.sender == nil || m.stopping() {
 		return
 	}
+	if n, err := m.store.DropStaleAdoptNotices(); err != nil {
+		m.logf("[team] notices: %v", err)
+	} else if n > 0 {
+		m.logf("[team] dropped %d adopt notice(s) of members that left before they were told", n)
+	}
 	rows, err := m.store.PendingNotices()
 	if err != nil {
 		m.logf("[team] notices: %v", err)
@@ -117,8 +122,11 @@ func (m *Module) sendNotice(r memberRow) {
 	}
 	ctx, cancel := context.WithTimeout(m.stopCtx, noticeSendTimeout)
 	defer cancel()
-	_, err = m.sender.Send(ctx, ipeers.SendRequest{To: alias + "/" + r.Ref, Text: noticeText(r.NoticePending, leadAddress, t.ID), OriginInbox: inbox})
+	resp, err := m.sender.Send(ctx, ipeers.SendRequest{To: alias + "/" + r.Ref, Text: noticeText(r.NoticePending, leadAddress, t.ID), OriginInbox: inbox})
 	var se *peersmod.SendError
+	if err == nil && resp.Result != ipeers.ResultDelivered { // delivery_uncertain: the write was not confirmed, so it is sent again
+		err = fmt.Errorf("result %q", resp.Result)
+	}
 	if err != nil {
 		if errors.As(err, &se) {
 			fail("send refused", se)

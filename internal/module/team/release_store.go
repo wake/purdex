@@ -37,6 +37,18 @@ func (s *Store) PendingNotices() ([]memberRow, error) {
 		ORDER BY notice_since, spawn_op`, team.NoticeAdopted, team.NoticeReleased)
 }
 
+// DropStaleAdoptNotices clears the `adopted` notice of every row that is no longer active (killed or gone
+// before it was sent): the session is no member any more, so the notice is not owed and PendingNotices would
+// never read it again. n is how many rows it cleared.
+func (s *Store) DropStaleAdoptNotices() (n int64, err error) {
+	res, err := s.db.Exec(`UPDATE team_members SET notice_pending = '', notice_since = 0
+		WHERE notice_pending = ? AND state <> 'active'`, team.NoticeAdopted)
+	if err != nil {
+		return 0, fmt.Errorf("drop stale adopt notices: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // ClearNotice clears the notice of kind owed since `since` on the row, once it was sent. It is conditional on
 // both, so a newer notice (a release after an adoption) is never cleared by the older one's send. cleared
 // says whether this call changed the row.

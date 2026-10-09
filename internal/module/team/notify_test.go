@@ -17,17 +17,22 @@ import (
 
 // fakeSender records every send; err (set before the send) makes it fail, block makes it wait.
 type fakeSender struct {
-	mu    sync.Mutex
-	sent  []ipeers.SendRequest
-	err   error
-	block chan struct{}
-	in    chan struct{}
+	mu   sync.Mutex
+	sent []ipeers.SendRequest
+	err  error
+	// result is what a successful send reports ("" → delivered).
+	result string
+	block  chan struct{}
+	in     chan struct{}
 }
 
 func (s *fakeSender) Send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
 	s.mu.Lock()
-	err, block, in := s.err, s.block, s.in
+	err, block, in, result := s.err, s.block, s.in, s.result
 	s.mu.Unlock()
+	if result == "" {
+		result = ipeers.ResultDelivered
+	}
 	if in != nil {
 		in <- struct{}{}
 	}
@@ -40,7 +45,7 @@ func (s *fakeSender) Send(ctx context.Context, req ipeers.SendRequest) (ipeers.S
 	s.mu.Lock()
 	s.sent = append(s.sent, req)
 	s.mu.Unlock()
-	return ipeers.SendResponse{Result: ipeers.ResultDelivered}, nil
+	return ipeers.SendResponse{Result: result}, nil
 }
 
 func (s *fakeSender) setErr(err error) {
@@ -278,5 +283,42 @@ func TestStop_JoinsTheDrain(t *testing.T) {
 	case <-stopped:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Stop did not return after the send finished")
+	}
+}
+
+// delivery_uncertain is not a delivery: the notice stays owed and is sent again (at least once).
+// Mutation gate: clear on any 2xx → red.
+func TestNotice_UncertainDeliveryStaysOwed(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	f.sender.mu.Lock()
+	f.sender.result = ipeers.ResultDeliveryUncertain
+	f.sender.mu.Unlock()
+	f.m.drainNotices()
+	if kind, _ := f.noticeOf(t, key); kind != team.NoticeAdopted {
+		t.Fatalf("notice_pending = %q after an uncertain delivery, want kept", kind)
+	}
+	f.sender.mu.Lock()
+	f.sender.result = ""
+	f.sender.mu.Unlock()
+	f.m.drainNotices()
+	if kind, _ := f.noticeOf(t, key); kind != "" {
+		t.Fatalf("notice_pending = %q after a confirmed delivery, want cleared", kind)
+	}
+}
+
+// A member that left (gone) before it was told owes no adopt notice, and the row does not keep it forever.
+func TestNotice_AdoptNoticeOfAMemberThatLeftIsDropped(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'gone' WHERE spawn_op = ?`, key); err != nil {
+		t.Fatal(err)
+	}
+	f.m.drainNotices()
+	if n := len(f.sender.calls()); n != 0 {
+		t.Fatalf("sent %d notice(s) to a member that left", n)
+	}
+	if kind, _ := f.noticeOf(t, key); kind != "" {
+		t.Fatalf("notice_pending = %q, want dropped", kind)
 	}
 }
