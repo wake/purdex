@@ -273,6 +273,10 @@ type Header struct {
 func (e *Entry) Header() Header {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.headerLocked()
+}
+
+func (e *Entry) headerLocked() Header {
 	var u *convmodel.Usage
 	if e.usage != nil {
 		c := *e.usage
@@ -306,6 +310,10 @@ func (e *Entry) HeaderChangedSince(rev uint64) bool {
 func (e *Entry) Cursor() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.cursorLocked()
+}
+
+func (e *Entry) cursorLocked() string {
 	return e.epoch + ":" + strconv.FormatUint(e.rev, 10)
 }
 

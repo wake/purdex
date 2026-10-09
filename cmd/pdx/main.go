@@ -24,6 +24,7 @@ import (
 	"github.com/wake/purdex/internal/locale"
 	"github.com/wake/purdex/internal/module/agent"
 	backupmod "github.com/wake/purdex/internal/module/backup"
+	conversationmod "github.com/wake/purdex/internal/module/conversation"
 	"github.com/wake/purdex/internal/module/dev"
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
@@ -408,6 +409,13 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(resourcesmod.New())
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
+	// conversation serves GET /api/conversations/{provider}/{session_id}; its resolver consults the conversation
+	// index when there is one (nil meta store in tests: the bounded lookup only).
+	convMod := conversationmod.New()
+	if meta != nil {
+		convMod.WithIndex(meta.Conversations())
+	}
+	c.AddModule(convMod)
 	c.AddModule(profilesmod.New())
 	c.AddModule(hostconfigmod.New())
 	c.AddModule(hosttransfermod.New())

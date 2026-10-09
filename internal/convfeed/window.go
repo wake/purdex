@@ -28,6 +28,28 @@ type WindowResult struct {
 func (e *Entry) Window(turns, before int, budget func([]byte) bool) WindowResult {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.windowLocked(turns, before, budget)
+}
+
+// View is a window, the header and the cursor taken under one hold of the entry's lock: a refresh by another request
+// cannot slip between them, so the cursor never claims changes the window does not show.
+type View struct {
+	WindowResult
+	Header Header
+	Cursor string
+}
+
+// View is Window plus the header and cursor of the same instant. envelope is given that header and cursor and returns
+// the budget for the turn array (it knows what else the encoded body carries, which depends on the title); it runs
+// under the entry's lock, so it must be quick.
+func (e *Entry) View(turns, before int, envelope func(h Header, cursor string) func([]byte) bool) View {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	h, cur := e.headerLocked(), e.cursorLocked()
+	return View{WindowResult: e.windowLocked(turns, before, envelope(h, cur)), Header: h, Cursor: cur}
+}
+
+func (e *Entry) windowLocked(turns, before int, budget func([]byte) bool) WindowResult {
 	all := e.conv().Turns
 	res := WindowResult{FirstIndex: -1, LastIndex: -1, TotalTurns: len(all)}
 	if turns < 1 || len(all) == 0 {

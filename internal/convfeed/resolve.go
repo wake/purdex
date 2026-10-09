@@ -34,7 +34,7 @@ type Owner struct {
 
 // OwnerLookup finds the confirmed live panes of a session. An error means "could not tell", not "none".
 type OwnerLookup interface {
-	LiveSessions(sessionID string) ([]Owner, error)
+	LiveSessions(ctx context.Context, sessionID string) ([]Owner, error)
 }
 
 // IndexLookup finds the transcript path the conversation index recorded for a session.
@@ -73,7 +73,7 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 	var owner *Owner
 	status := "ended"
 	if r.Owners != nil {
-		owners, oerr := r.Owners.LiveSessions(sessionID)
+		owners, oerr := r.Owners.LiveSessions(ctx, sessionID)
 		switch {
 		case oerr != nil:
 			status = "unknown"

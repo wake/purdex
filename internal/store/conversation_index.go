@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
 
 // ConversationIndexRow is one conversation_index row: what the scanner has
@@ -83,6 +84,19 @@ func (s *ConversationStore) All(ctx context.Context) ([]ConversationIndexRow, er
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// TranscriptPath is the transcript path the index recorded for sessionID (lowercase UUID); ok is false when there is
+// no row.
+func (s *ConversationStore) TranscriptPath(ctx context.Context, sessionID string) (path string, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT transcript_path FROM conversation_index WHERE session_id = ?`, sessionID).Scan(&path)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return path, true, nil
 }
 
 // UpsertBatch writes rows in one transaction. On conflict it updates every
