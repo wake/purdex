@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -34,6 +36,8 @@ const commandSchema = `
 		mk         TEXT    NOT NULL,
 		kind       TEXT    NOT NULL,
 		cause_id   TEXT    NOT NULL,
+		lead_address TEXT  NOT NULL DEFAULT '',
+		team_name  TEXT    NOT NULL DEFAULT '',
 		state      TEXT    NOT NULL,
 		attempts   INTEGER NOT NULL DEFAULT 0,
 		next_at    INTEGER NOT NULL DEFAULT 0,
@@ -58,24 +62,30 @@ var ErrCommandIDConflict = errors.New("the command id is already used by a diffe
 // ErrCommandUnsupported: a kind this version does not apply (the route refuses it before the store).
 var ErrCommandUnsupported = errors.New("unsupported command kind")
 
-// commandHash is the content hash of a command: its decoded form re-marshalled, so spacing and key order of the
-// sender's JSON do not matter.
-func commandHash(c team.TeamCommand) string {
-	raw, _ := json.Marshal(c)
-	sum := sha256.Sum256(raw)
+// ErrCommandBadBody: the plan's body is not a command.
+var ErrCommandBadBody = errors.New("the command body is not a TeamCommand")
+
+// bodyHash is the content hash of a command: its bytes as the sender wrote them. The sender resends the very
+// bytes it stored, so a replay hashes the same; and a field this version does not know still counts (a
+// version-skewed sender cannot slip a different command in under an old id as a "replay").
+func bodyHash(body []byte) string {
+	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
 }
 
-// CommandPlan is one command to decide. Consent (the lead host's AllowTeam, read by the route from the live
-// entry) and Target (the live session the adopt names, nil when none) are inputs the route resolved; the store
-// stays free of config and registry.
+// CommandPlan is one command to decide. Body is the command as received; the store decodes it and hashes it
+// itself — a caller cannot name a hash or a kind. Consent (the lead host's AllowTeam, read by the route from the
+// live entry) and Target (the live session the adopt names, nil when none) are inputs the route resolved; the
+// store stays free of config and registry.
 type CommandPlan struct {
 	LeadHostID string
-	Cmd        team.TeamCommand
-	Hash       string
+	Body       json.RawMessage
 	Consent    bool
 	Target     *team.Origin
 	Now        int64
+
+	cmd  team.TeamCommand // decoded from Body by ApplyTeamCommand
+	hash string
 }
 
 // CommandResult is the decided answer: the HTTP status and JSON body to send (a 200 body is the kind's outcome, a
@@ -91,8 +101,12 @@ type CommandResult struct {
 // the row changes, the owed notices and the log entry (refusals included) committed together, so a crash leaves
 // all of it or none and the retry meets the stored answer (spec §3.1 rules 2–3).
 func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
+	if err := json.Unmarshal(p.Body, &p.cmd); err != nil || p.cmd.ID == "" || p.cmd.Kind == "" {
+		return CommandResult{}, ErrCommandBadBody
+	}
+	p.hash = bodyHash(p.Body)
 	fail := func(err error) (CommandResult, error) {
-		return CommandResult{}, fmt.Errorf("apply command %s %s: %w", p.Cmd.Kind, p.Cmd.ID, err)
+		return CommandResult{}, fmt.Errorf("apply command %s %s: %w", p.cmd.Kind, p.cmd.ID, err)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -100,19 +114,19 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 	}
 	defer tx.Rollback()
 	// A write first, so SQLite takes the write lock before the reads below.
-	if _, err := tx.Exec(`UPDATE team_command_log SET id = id WHERE lead_host_id = ? AND id = ?`, p.LeadHostID, p.Cmd.ID); err != nil {
+	if _, err := tx.Exec(`UPDATE team_command_log SET id = id WHERE lead_host_id = ? AND id = ?`, p.LeadHostID, p.cmd.ID); err != nil {
 		return fail(err)
 	}
 
 	// (X2b-2: the void table is read here, before the log.)
 
-	var hash string
+	var hash, kind string
 	var res CommandResult
-	err = tx.QueryRow(`SELECT body_hash, status, outcome_json FROM team_command_log WHERE lead_host_id = ? AND id = ?`,
-		p.LeadHostID, p.Cmd.ID).Scan(&hash, &res.Status, (*rawString)(&res.Body))
+	err = tx.QueryRow(`SELECT kind, body_hash, status, outcome_json FROM team_command_log WHERE lead_host_id = ? AND id = ?`,
+		p.LeadHostID, p.cmd.ID).Scan(&kind, &hash, &res.Status, (*rawString)(&res.Body))
 	switch {
 	case err == nil:
-		if hash != p.Hash {
+		if hash != p.hash || kind != p.cmd.Kind {
 			return CommandResult{}, ErrCommandIDConflict
 		}
 		res.Replayed = true
@@ -121,7 +135,7 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 		return fail(err)
 	}
 
-	switch p.Cmd.Kind {
+	switch p.cmd.Kind {
 	case team.CommandAdopt:
 		res, err = applyAdoptIn(tx, p)
 	case team.CommandRelease:
@@ -140,7 +154,7 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 		}
 	}
 	if _, err := tx.Exec(`INSERT INTO team_command_log (lead_host_id, id, kind, body_hash, status, outcome_json, at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		p.LeadHostID, p.Cmd.ID, p.Cmd.Kind, p.Hash, res.Status, string(res.Body), p.Now); err != nil {
+		p.LeadHostID, p.cmd.ID, p.cmd.Kind, p.hash, res.Status, string(res.Body), p.Now); err != nil {
 		return fail(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -177,7 +191,7 @@ func okResult(v any) (CommandResult, error) {
 // applyAdoptIn is the adopt command (spec §5.2 "—, adopt → active"): consent, a live target, no role, then the
 // remote row and its owed `adopted` notice.
 func applyAdoptIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
-	c := p.Cmd
+	c := p.cmd
 	switch {
 	case !p.Consent:
 		return refusal(http.StatusForbidden, team.ErrCommandHostNotAllowed, "this host does not accept team commands from the lead host"), nil
@@ -211,7 +225,7 @@ func applyAdoptIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	if err := insertRemoteMemberIn(tx, row); err != nil {
 		return CommandResult{}, err
 	}
-	if err := oweNoticeIn(tx, c.MK, noticeAdopted, c.ID, p.Now); err != nil {
+	if err := oweNoticeIn(tx, c.MK, noticeAdopted, c.ID, c.Lead.Address, c.TeamName, p.Now); err != nil {
 		return CommandResult{}, err
 	}
 	return okResult(team.AdoptOutcome{State: "applied", MemberSession: o.SessionID, Ref: o.Ref, PID: o.PID,
@@ -221,9 +235,10 @@ func applyAdoptIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 // applyReleaseIn is `release` (active → released, notice `released`). Only the lead host's own live row of that
 // team is releasable; anything else is not_your_member.
 func applyReleaseIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
-	c := p.Cmd
-	var host, teamID, state string
-	err := tx.QueryRow(`SELECT lead_host_id, team_id, state FROM remote_members WHERE mk = ?`, c.MK).Scan(&host, &teamID, &state)
+	c := p.cmd
+	var host, teamID, state, leadAddr, teamName string
+	err := tx.QueryRow(`SELECT lead_host_id, team_id, state, lead_address, team_name FROM remote_members WHERE mk = ?`, c.MK).
+		Scan(&host, &teamID, &state, &leadAddr, &teamName)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && (host != p.LeadHostID || teamID != c.TeamID || state != remoteActive)) {
 		return refusal(http.StatusConflict, team.ErrCommandNotYourMember, "no live member of that team here"), nil
 	}
@@ -235,7 +250,7 @@ func applyReleaseIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	} else if !ok {
 		return refusal(http.StatusConflict, team.ErrCommandNotYourMember, "no live member of that team here"), nil
 	}
-	if err := oweNoticeIn(tx, c.MK, noticeReleased, c.ID, p.Now); err != nil {
+	if err := oweNoticeIn(tx, c.MK, noticeReleased, c.ID, leadAddr, teamName, p.Now); err != nil {
 		return CommandResult{}, err
 	}
 	return okResult(map[string]string{"state": "ok"})
@@ -245,32 +260,34 @@ func applyReleaseIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 // its state and takes the new lead tuple, notice `handover`): team-level, so no mk — the rows are the team's from
 // the sending lead host. No live row is not an error; the command is simply already true.
 func applyTeamLevelIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
-	c := p.Cmd
-	rows, err := tx.Query(`SELECT mk FROM remote_members WHERE lead_host_id = ? AND team_id = ? AND state = ? ORDER BY created_at, mk`,
+	c := p.cmd
+	rows, err := tx.Query(`SELECT mk, lead_address, team_name FROM remote_members WHERE lead_host_id = ? AND team_id = ? AND state = ? ORDER BY created_at, mk`,
 		p.LeadHostID, c.TeamID, remoteActive)
 	if err != nil {
 		return CommandResult{}, err
 	}
-	var mks []string
+	type live struct{ mk, leadAddr, teamName string }
+	var mks []live
 	for rows.Next() {
-		var mk string
-		if err := rows.Scan(&mk); err != nil {
+		var l live
+		if err := rows.Scan(&l.mk, &l.leadAddr, &l.teamName); err != nil {
 			rows.Close()
 			return CommandResult{}, err
 		}
-		mks = append(mks, mk)
+		mks = append(mks, l)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
 		return CommandResult{}, err
 	}
 	rows.Close()
-	for _, mk := range mks {
+	for _, l := range mks {
+		mk := l.mk
 		if c.Kind == team.CommandEnd {
 			if _, err := casRemoteMemberStateIn(tx, mk, []string{remoteActive}, remoteEnded, p.Now); err != nil {
 				return CommandResult{}, err
 			}
-			if err := oweNoticeIn(tx, mk, noticeTeamEnded, c.ID, p.Now); err != nil {
+			if err := oweNoticeIn(tx, mk, noticeTeamEnded, c.ID, l.leadAddr, l.teamName, p.Now); err != nil {
 				return CommandResult{}, err
 			}
 			continue
@@ -280,7 +297,7 @@ func applyTeamLevelIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 			c.LeadSessionID, c.LeadRef, c.Lead.Address, c.Lead.Title, c.Lead.PID, c.Lead.ProcStart, p.Now, mk, remoteActive); err != nil {
 			return CommandResult{}, err
 		}
-		if err := oweNoticeIn(tx, mk, noticeHandover, c.ID, p.Now); err != nil {
+		if err := oweNoticeIn(tx, mk, noticeHandover, c.ID, c.Lead.Address, l.teamName, p.Now); err != nil {
 			return CommandResult{}, err
 		}
 	}
@@ -288,14 +305,36 @@ func applyTeamLevelIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 }
 
 // oweNoticeIn writes the notice a command owes its member, in the command's own transaction (spec §4.4). One
-// per (member, kind, causing command), so a re-applied transaction cannot double it.
-func oweNoticeIn(tx dbtx, mk, kind, causeID string, at int64) error {
-	_, err := tx.Exec(`INSERT INTO remote_notices (mk, kind, cause_id, state, attempts, next_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 0, ?, ?, ?) ON CONFLICT (mk, kind, cause_id) DO NOTHING`, mk, kind, causeID, noticeOwed, at, at, at)
+// per (member, kind, causing command), so a re-applied transaction cannot double it. The two strings are the
+// snapshot the notice is about — the lead address and team name as THIS event left them, cleaned and bounded —
+// so a later lead_moved cannot change what an earlier notice says; delivery (X3d) fills M's fixed template
+// from them.
+func oweNoticeIn(tx dbtx, mk, kind, causeID, leadAddress, teamName string, at int64) error {
+	_, err := tx.Exec(`INSERT INTO remote_notices (mk, kind, cause_id, lead_address, team_name, state, attempts, next_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?) ON CONFLICT (mk, kind, cause_id) DO NOTHING`,
+		mk, kind, causeID, cleanNoticeField(leadAddress), cleanNoticeField(teamName), noticeOwed, at, at, at)
 	if err != nil {
 		return fmt.Errorf("owe %s notice to %s: %w", kind, mk, err)
 	}
 	return nil
+}
+
+// cleanNoticeField is s as a notice may carry it: control characters dropped, cut to 64 bytes on a rune boundary.
+func cleanNoticeField(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) <= 64 {
+		return s
+	}
+	cut := 64
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // splitTmux splits a registry "<session>:@<win>.%<pane>" into its session name and pane id; either may be "".
@@ -313,18 +352,20 @@ func splitTmux(t string) (session, pane string) {
 
 // remoteNoticeRow is one remote_notices row.
 type remoteNoticeRow struct {
-	ID       int64
-	MK       string
-	Kind     string
-	CauseID  string
-	State    string
-	Attempts int
-	NextAt   int64
+	ID          int64
+	MK          string
+	Kind        string
+	CauseID     string
+	LeadAddress string
+	TeamName    string
+	State       string
+	Attempts    int
+	NextAt      int64
 }
 
 // RemoteNotices lists the notices owed to (or sent to) the member mk, oldest first.
 func (s *Store) RemoteNotices(mk string) ([]remoteNoticeRow, error) {
-	rows, err := s.db.Query(`SELECT id, mk, kind, cause_id, state, attempts, next_at FROM remote_notices WHERE mk = ? ORDER BY id`, mk)
+	rows, err := s.db.Query(`SELECT id, mk, kind, cause_id, lead_address, team_name, state, attempts, next_at FROM remote_notices WHERE mk = ? ORDER BY id`, mk)
 	if err != nil {
 		return nil, fmt.Errorf("remote notices %s: %w", mk, err)
 	}
@@ -332,7 +373,7 @@ func (s *Store) RemoteNotices(mk string) ([]remoteNoticeRow, error) {
 	out := []remoteNoticeRow{}
 	for rows.Next() {
 		var n remoteNoticeRow
-		if err := rows.Scan(&n.ID, &n.MK, &n.Kind, &n.CauseID, &n.State, &n.Attempts, &n.NextAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.MK, &n.Kind, &n.CauseID, &n.LeadAddress, &n.TeamName, &n.State, &n.Attempts, &n.NextAt); err != nil {
 			return nil, err
 		}
 		out = append(out, n)

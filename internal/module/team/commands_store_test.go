@@ -23,14 +23,15 @@ func targetOrigin(sid string) *team.Origin {
 }
 
 func plan(cmd team.TeamCommand, consent bool, target *team.Origin) CommandPlan {
-	return CommandPlan{LeadHostID: leadHostA, Cmd: cmd, Hash: commandHash(cmd), Consent: consent, Target: target, Now: 1000}
+	body, _ := json.Marshal(cmd)
+	return CommandPlan{LeadHostID: leadHostA, Body: body, Consent: consent, Target: target, Now: 1000}
 }
 
 func mustApply(t *testing.T, s *Store, p CommandPlan) CommandResult {
 	t.Helper()
 	res, err := s.ApplyTeamCommand(p)
 	if err != nil {
-		t.Fatalf("apply %s %s: %v", p.Cmd.Kind, p.Cmd.ID, err)
+		t.Fatalf("apply %s: %v", p.Body, err)
 	}
 	return res
 }
@@ -100,6 +101,63 @@ func TestApplyCommand_IdempotentByIDAndContent(t *testing.T) {
 	pb.LeadHostID = "host-B"
 	if res := mustApply(t, s, pb); res.Replayed || res.Status != http.StatusOK {
 		t.Fatalf("host B's c1: %+v", res)
+	}
+}
+
+// The hash is over the bytes as received: a field this version does not know still makes a different command
+// (a version-skewed sender cannot pass one off as a replay), and the same id under another kind is a conflict
+// (codex attack).
+func TestApplyCommand_HashCoversUnknownFieldsAndKind(t *testing.T) {
+	s := openTestStore(t)
+	cmd := adoptCmd("c1", "mk-1", "sid-t")
+	body, _ := json.Marshal(cmd)
+	p := plan(cmd, true, targetOrigin("sid-t"))
+	mustApply(t, s, p)
+
+	var m map[string]any
+	_ = json.Unmarshal(body, &m)
+	m["a_field_of_a_newer_version"] = "x"
+	skewed, _ := json.Marshal(m)
+	q := p
+	q.Body = skewed
+	if _, err := s.ApplyTeamCommand(q); !errors.Is(err, ErrCommandIDConflict) {
+		t.Fatalf("unknown field: err = %v, want ErrCommandIDConflict", err)
+	}
+
+	m = nil
+	_ = json.Unmarshal(body, &m)
+	m["kind"] = team.CommandRelease
+	other, _ := json.Marshal(m)
+	q.Body = other
+	if _, err := s.ApplyTeamCommand(q); !errors.Is(err, ErrCommandIDConflict) {
+		t.Fatalf("other kind: err = %v, want ErrCommandIDConflict", err)
+	}
+	if again := mustApply(t, s, p); !again.Replayed {
+		t.Fatalf("the original bytes no longer replay: %+v", again)
+	}
+	if _, err := s.ApplyTeamCommand(CommandPlan{LeadHostID: leadHostA, Body: []byte(`{"id":""}`)}); !errors.Is(err, ErrCommandBadBody) {
+		t.Fatalf("empty id: err = %v, want ErrCommandBadBody", err)
+	}
+}
+
+// A notice carries the lead and team as its own event left them: a later lead_moved does not rewrite it.
+func TestApplyCommand_NoticeSnapshotsItsEvent(t *testing.T) {
+	s := openTestStore(t)
+	mustApply(t, s, plan(adoptCmd("c1", "mk-1", "sid-t"), true, targetOrigin("sid-t")))
+	for i, addr := range []string{"lead/second [l2]", "lead/third [l3]\x07"} {
+		mv := relCmd("m"+string(rune('1'+i)), team.CommandLeadMoved, "")
+		mv.LeadSessionID, mv.LeadRef = "lead-"+addr[5:6], "_lead0"+addr[6:7]
+		mv.Lead.Address = addr
+		mustApply(t, s, plan(mv, false, nil))
+	}
+	n := noticesOf(t, s, "mk-1")
+	if len(n) != 3 {
+		t.Fatalf("notices = %+v", n)
+	}
+	for i, want := range []string{"lead/x [lead01]", "lead/second [l2]", "lead/third [l3]"} { // control chars are stripped
+		if n[i].LeadAddress != want || n[i].TeamName != "T" {
+			t.Fatalf("notice %d = %+v, want lead %q team T", i, n[i], want)
+		}
 	}
 }
 
