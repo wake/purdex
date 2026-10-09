@@ -97,6 +97,19 @@ func TestQueue_TheLogCarriesKindsNotText(t *testing.T) {
 	}
 }
 
+// A re-write's failure reason is text from the mod too: only a kind reaches the log (codex attack).
+// Mutation gate: log r.Reason as it is → red.
+func TestQueue_TheLogCarriesKindsForARewriteToo(t *testing.T) {
+	k := kitWith(t, "s1", "t1")
+	j := mustNext(t, k, "m", "s1")
+	k.finish("m", j, answerJSON("事", "推", longEntry(), "狀", ""))
+	rw := mustNext(t, k, "m", "s1")
+	k.finish("m", rw, Result{Reason: "Bearer abc123SECRET"})
+	if strings.Contains(k.logs.text(), "SECRET") {
+		t.Fatalf("log = %s", k.logs.text())
+	}
+}
+
 // Not JSON (or an empty reply) gets one retry — the same kind, attempt 2, at the same place — then failed:format.
 // Mutation gate: retry twice, or put the retry at the tail → red.
 func TestQueue_FormatRetriesOnceThenFails(t *testing.T) {

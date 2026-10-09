@@ -76,7 +76,7 @@ func (e *Engine) applyRewrite(j *job, r Result) *job {
 			j.entry = t
 		}
 	} else {
-		e.d.Logf("[workbook] a re-write did not answer (%s); the entry is cut", r.Reason)
+		e.d.Logf("[workbook] a re-write did not answer (%s); the entry is cut", logKind(r.Reason))
 	}
 	e.finishCut(j)
 	return nil
