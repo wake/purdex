@@ -195,3 +195,13 @@ Tab requests were dropped in the same revision (the phone appends under a daemon
 | 8 | §5.1 "never writes" contradicts §5.2 | Reworded |
 | A | A device token can still run commands through sessions + send-keys | Stated in spec §3.3 ("what R7 is and is not"); revoking is the stop |
 | D | Default label | The model name, renamable on the phone (lead ruling) |
+
+## QP-1b fold-in (implementation, 2026-10-09)
+
+| # | Finding | Change |
+|---|---------|--------|
+| 1 | Per-handler registration of connections would miss any route added later | The outer chain wraps the ResponseWriter of a device's WebSocket handshake (`ConnRegistry.Track`) and tracks the hijacked connection; revoke by id / pairing closes them (spec §3.2, §3.4; QP-1 task 4) |
+| 2 | A device ticket is a snapshot taken up to 30 s earlier | Redemption re-checks the device through `Refresher`: revoked or unknown → 401 before the handler; live → the current principal (QP-1 task 3) |
+| 3 | An unscoped device token reaching the daemon before the allow-list exists | Interim scope in QP-1b-i, replaced in QP-1b-ii by `deviceAllowed` (QP-1 task 5) |
+| 4 | QP-1b-ii leaves no way for a phone to write a profile before the §5.2 guard exists | Until QP-1c a device PUT of any section is 403 `device_append_only`; QP-1c replaces it with the guard (QP-1 tasks 6–7) |
+| 5 | The `push_devices` table is deployed | `owner_device_id` is added by an idempotent migration; existing rows belong to no phone (QP-1 task 6) |

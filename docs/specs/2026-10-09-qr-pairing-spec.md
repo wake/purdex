@@ -99,8 +99,10 @@ CREATE TABLE IF NOT EXISTS device_tokens (
   profile_id}`.
 - **Tickets carry principals:** `POST /api/ws-ticket` records the caller's principal with the ticket; validating a
   ticket consumes it and returns the principal (the validator's contract changes from `bool` to `(Principal, bool)`), and
-  the WS handlers register each connection with the request's principal — however it authenticated, bearer header
-  (what the iOS App uses today) or ticket — so revocation closes it either way.
+  the daemon's outer chain tracks each device WebSocket's connection with the request's principal — however it
+  authenticated, bearer header (what the iOS App uses today) or ticket — so revocation closes it either way (no handler
+  registers anything). Redeeming a device's ticket asks the devices store again: a revoked device's ticket is refused
+  (401) before any handler work, and a live one carries the device's current bindings, not the 30-second-old snapshot.
 - `/api/peers*` is unchanged; an empty `Cfg.Token` is unchanged (device tokens add nothing there).
 
 ### 3.3 Scope: default-deny allow-list (R7)
@@ -153,8 +155,8 @@ CREATE TABLE IF NOT EXISTS device_tokens (
   `{id, token, pairing_id, profile_id, label, created_at, use_by}`.
 - `GET /api/devices` → rows without token or hash.
 - `DELETE /api/devices/{id}`, `DELETE /api/devices?pairing_id=<uuid>` → revoke (idempotent, 204). Revocation closes
-  every open connection of that principal — host-events, terminal and conversation WebSockets alike — through one
-  registry the WS handlers register with (§3.2).
+  every open connection of that principal — host-events, terminal and conversation WebSockets alike — which the outer
+  chain tracked when the handshake was upgraded (§3.2).
 - `PUT /api/devices/self` `{label}` (device token) → its own label, 1–64 printable runes.
 - Capability `devices.v1`.
 
