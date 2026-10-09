@@ -16,6 +16,21 @@ describe('parseRosterEvent', () => {
     expect(parseRosterEvent(v({ op: 'changed', teams: [] }))).toEqual({ op: 'changed', teams: [] })
   })
 
+  it('host_alias and host_id are parsed only when strings', () => {
+    const good = { ...member, host_id: 'dm-b', host_alias: 'b26' }
+    const bad = { ...member, session_id: 's-m2', host_id: 7, host_alias: { x: 1 } }
+    const t = { ...team, lead: { ...lead, host_id: '', host_alias: null }, members: [good, bad] }
+    const r = parseRosterEvent(v({ op: 'snapshot', teams: [t] }))
+    if (typeof r === 'string') throw new Error(r)
+    const [g, b] = r.teams[0].members
+    expect(g).toMatchObject({ host_id: 'dm-b', host_alias: 'b26' })
+    expect('host_id' in b || 'host_alias' in b).toBe(false)
+    expect(r.teams[0].lead.host_id).toBe('')
+    expect('host_alias' in r.teams[0].lead).toBe(false)
+    // an old roster without them parses exactly as before
+    expect(parseRosterEvent(v({ op: 'snapshot', teams: [team] }))).toEqual({ op: 'snapshot', teams: [team] })
+  })
+
   it('accepts an already-parsed value', () => {
     expect(parseRosterEvent({ op: 'changed', teams: [team] })).toEqual({ op: 'changed', teams: [team] })
   })

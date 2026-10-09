@@ -1,7 +1,7 @@
 // spa/src/lib/team/team-views.test.ts — the team views the interface PRs draw from (plan PL-2b′): who is on each team,
 // in which order, and which open tab (if any) shows each seat.
 import { describe, it, expect } from 'vitest'
-import { selectTeamViews, teamOfTab, teamKeyOf, type TeamViewsInput } from './team-views'
+import { selectTeamViews, seatLookup, daemonIdMap, teamOfTab, teamKeyOf, type TeamViewsInput } from './team-views'
 import { fnv1a32 } from './fnv1a'
 import type { RosterMember, RosterSession, TeamRoster } from './roster'
 import type { PaneLayout, Tab } from '../../types/tab'
@@ -344,5 +344,68 @@ describe('teamOfTab', () => {
     }))
     expect(of('dead-first')?.key).toBe(k2)
     expect(of('dead-only')).toBeNull()
+  })
+})
+
+describe('selectTeamViews — a seat knows its own host (TI-2a)', () => {
+  const remote = (id: string, tmux: string): RosterMember => ({
+    ...mem(id, 1, tmux), host_id: 'dm-b', host_alias: 'b26', address: `b26/_${id}`,
+  })
+  const t1 = () => team('t1', sess('L', 'lead-tm'), [remote('R', 'same-tm'), mem('A', 2, 'a-tm')])
+
+  it('a remote seat matches the tab on its own host, not a same-named session on the lead\'s host', () => {
+    const views = selectTeamViews(input({
+      rosterByHost: { h1: [t1()] },
+      hostIdByDaemonId: { 'dm-b': 'h2' },
+      tabs: [tab('onLead', leaf('h1', 'same-tm')), tab('onB', leaf('h2', 'same-tm')), tab('tl', leaf('h1', 'lead-tm'))],
+      workspaces: [ws('w1', ['tl', 'onLead', 'onB'])],
+    }))
+    const r = views[0].members.find((m) => m.session.session_id === 'R')!
+    expect(r).toMatchObject({ hostId: 'h2', hostAlias: 'b26', tabId: 'onB', workspaceId: 'w1', paneIndex: 0 })
+    expect(views[0].hostId).toBe('h1') // the team key stays the lead's host
+    expect(views[0].lead).toMatchObject({ hostId: 'h1', hostAlias: '' })
+  })
+
+  it('a remote seat on a host this Mac does not have is unmapped: hostId null, matches no tab', () => {
+    const views = selectTeamViews(input({
+      rosterByHost: { h1: [t1()] },
+      tabs: [tab('onLead', leaf('h1', 'same-tm')), tab('onB', leaf('h2', 'same-tm'))],
+      workspaces: [ws('w1', ['onLead', 'onB'])],
+    }))
+    expect(views[0].members[0]).toMatchObject({ hostId: null, hostAlias: 'b26', tabId: null, workspaceId: null, paneIndex: null })
+  })
+
+  it('two hosts sharing a daemon id leave the seat unmapped', () => {
+    const map = daemonIdMap({
+      h2: { daemonId: 'dm-b' }, h3: { daemonId: 'dm-b' }, h4: { daemonId: 'dm-c' }, h5: {},
+    } as never)
+    expect(map).toEqual({ 'dm-c': 'h4' })
+    const views = selectTeamViews(input({
+      rosterByHost: { h1: [t1()] }, hostIdByDaemonId: map,
+      tabs: [tab('onB', leaf('h2', 'same-tm'))], workspaces: [ws('w1', ['onB'])],
+    }))
+    expect(views[0].members[0]).toMatchObject({ hostId: null, tabId: null })
+  })
+
+  it('today\'s roster without host_id behaves exactly as before (existing tests stay green)', () => {
+    const views = selectTeamViews(input({
+      rosterByHost: { h1: [team('t1', sess('L', 'lead-tm'), [mem('A', 1, 'a-tm')])] },
+      tabs: [tab('ta', leaf('h1', 'a-tm'))], workspaces: [ws('w1', ['ta'])],
+    }))
+    expect(views[0].members[0]).toMatchObject({ hostId: 'h1', hostAlias: '', tabId: 'ta' })
+    expect(views[0].lead).toMatchObject({ hostId: 'h1', hostAlias: '' })
+  })
+
+  it('seatLookup / teamOfTab use the seat\'s host (a remote member\'s tab resolves to its team and role)', () => {
+    const { views, of } = viewsOf(input({
+      rosterByHost: { h1: [t1()] },
+      hostIdByDaemonId: { 'dm-b': 'h2' },
+      tabs: [tab('onLead', leaf('h1', 'same-tm')), tab('onB', leaf('h2', 'same-tm'))],
+      workspaces: [ws('w1', ['onLead', 'onB'])],
+    }))
+    expect(of('onB')).toMatchObject({ key: teamKeyOf('h1', 't1'), role: 'member' })
+    expect(of('onB')?.seat.session.session_id).toBe('R')
+    expect(of('onLead')).toBeNull() // the lead's host has no such member
+    expect([...seatLookup(views).keys()].sort()).toEqual(['h1\u0000a-tm', 'h1\u0000lead-tm', 'h2\u0000same-tm'])
   })
 })

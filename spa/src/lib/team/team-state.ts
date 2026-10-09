@@ -8,7 +8,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { buildTeamIndex, type TeamIndex } from './team-index'
-import { selectTeamViews, type TeamView } from './team-views'
+import { daemonIdMap, selectTeamViews, type TeamView } from './team-views'
 
 export interface TeamState {
   views: TeamView[]
@@ -25,7 +25,7 @@ export function currentTeamState(): TeamState {
   const sessionsByHost = useSessionStore.getState().sessions
   const { workspaces, activeWorkspaceId } = useWorkspaceStore.getState()
   const views = selectTeamViews({
-    rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost,
+    rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost, hostIdByDaemonId: daemonIdMap(useHostStore.getState().hosts),
     memberOrder: useTeamUiStore.getState().memberOrder, hostOrder: useHostStore.getState().hostOrder,
   })
   return { views, index: buildTeamIndex(views, tabsById, sessionsByHost) }

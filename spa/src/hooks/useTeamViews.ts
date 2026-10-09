@@ -9,7 +9,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { useWorkspaceStore } from '../features/workspace/store'
-import { selectTeamViews, type TeamView } from '../lib/team/team-views'
+import { daemonIdMap, selectTeamViews, type TeamView } from '../lib/team/team-views'
 
 /** `memberOrder` (per team key) is the interface PRs' to persist; pass a stable reference or `undefined`. */
 export function useTeamViews(memberOrder?: Record<string, readonly string[]>): TeamView[] {
@@ -19,8 +19,12 @@ export function useTeamViews(memberOrder?: Record<string, readonly string[]>): T
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId)
   const sessionsByHost = useSessionStore((s) => s.sessions)
   const hostOrder = useHostStore((s) => s.hostOrder)
+  const hosts = useHostStore((s) => s.hosts)
   return useMemo(
-    () => selectTeamViews({ rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost, memberOrder, hostOrder }),
-    [rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost, memberOrder, hostOrder],
+    () => selectTeamViews({
+      rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost, memberOrder, hostOrder,
+      hostIdByDaemonId: daemonIdMap(hosts),
+    }),
+    [rosterByHost, tabsById, workspaces, activeWorkspaceId, sessionsByHost, memberOrder, hostOrder, hosts],
   )
 }

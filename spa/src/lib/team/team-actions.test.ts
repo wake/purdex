@@ -3,6 +3,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { openTeamSeat, toggleTeamCollapse, visibleTabIds } from './team-actions'
 import { useTabStore } from '../../stores/useTabStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useSessionStore } from '../../stores/useSessionStore'
+import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { currentTeamState } from './team-state'
+import { member } from './__tests__/team-fixture'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useWorkspaceStore } from '../../features/workspace/store'
@@ -104,6 +109,46 @@ describe('openTeamSeat', () => {
     seedScene({ members, tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }] })
     expect(openTeamSeat('nope', 'A').outcome).toBe('unknown')
     expect(openTeamSeat(KEY, 'ZZZ').outcome).toBe('unknown')
+  })
+})
+
+describe('openTeamSeat — a member on another host (TI-2a)', () => {
+  const remoteMember = () => ({ ...member('R', 9, 'r-tm'), host_id: 'dm-b', host_alias: 'b26' })
+  function seedRemote(mapped: boolean) {
+    seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead', 'ma'] }, { id: 'w2', tabs: [] }], activeWorkspaceId: 'w2' })
+    const t = useTeamRosterStore.getState().byHost[HOST][0]
+    useTeamRosterStore.setState({ byHost: { [HOST]: [{ ...t, members: [...t.members, remoteMember()] }] } })
+    useHostStore.setState({
+      hosts: (mapped ? { h2: { id: 'h2', name: 'b26', daemonId: 'dm-b' } } : {}) as never,
+    })
+    useSessionStore.setState({
+      sessions: {
+        ...useSessionStore.getState().sessions,
+        h2: [{ code: 'code-r-tm', name: 'r-tm', mode: 'terminal', cwd: '~' }] as never,
+      },
+    })
+    useShownHostsStore.setState({ ids: [HOST, 'h2'] })
+  }
+
+  it('a remote seat on a host this Mac lacks has hostId null, no tab, and openTeamSeat is a no-op with the toast', () => {
+    seedRemote(false)
+    useTeamUiStore.getState().setCollapsed(KEY, true)
+    useTeamUiStore.getState().setGhostWorkspace(KEY, 'w2')
+    const tabsBefore = Object.keys(useTabStore.getState().tabs)
+    expect(currentTeamState().views[0].members.find((m) => m.session.session_id === 'R')).toMatchObject({ hostId: null, tabId: null })
+    expect(openTeamSeat(KEY, 'R')).toEqual({ outcome: 'no-host', tabId: null })
+    expect(Object.keys(useTabStore.getState().tabs)).toEqual(tabsBefore)
+    expect(useUndoToast.getState().toast?.message).toContain('b26')
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true) // collapse state untouched
+    expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBe('w2')
+  })
+
+  it('a remote seat with a mapped host opens its tab on that host, after the group\'s last tab in the lead\'s workspace', () => {
+    seedRemote(true)
+    const r = openTeamSeat(KEY, 'R')
+    expect(r.outcome).toBe('opened')
+    expect(wsTabs('w1')).toEqual(['lead', 'ma', r.tabId])
+    expect(useTabStore.getState().tabs[r.tabId!].layout).toMatchObject({ pane: { content: { kind: 'tmux-session', hostId: 'h2', sessionCode: 'code-r-tm', cachedName: 'r-tm' } } })
   })
 })
 

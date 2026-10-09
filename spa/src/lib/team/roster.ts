@@ -29,9 +29,15 @@ export interface RosterSession {
   model?: string
   effort?: string
   context?: RosterContext
+  /** Cross-host teams: the wire (daemon) id of the host this session lives on, and that host's alias (the address of a
+   *  remote member is `<host_alias>/<ref>`). Absent or "" = the lead's own host. A daemon that predates cross-host teams
+   *  sends neither. */
+  host_id?: string
+  host_alias?: string
 }
 
-/** An active member: its session plus how it joined. */
+/** An active member: its session plus how it joined. `state` is `active` today; a cross-host team adds `joining` /
+ *  `releasing` / `killing` rows. */
 export interface RosterMember extends RosterSession {
   state: string
   origin: string
@@ -93,6 +99,16 @@ function isTeamRoster(v: unknown): v is TeamRoster {
     && Array.isArray(v.members) && v.members.every(isRosterMember)
 }
 
+/** `host_id` / `host_alias` are kept only when strings (a stray type is ignored, never a reason to drop the frame). */
+function cleanHost<T extends RosterSession>(s: T): T {
+  const { host_id, host_alias, ...rest } = s
+  return {
+    ...rest,
+    ...(isStr(host_id) ? { host_id } : {}),
+    ...(isStr(host_alias) ? { host_alias } : {}),
+  } as T
+}
+
 /** The event's `value` (a JSON string, or already parsed) → the checked event, or the reason it is not one. */
 export function parseRosterEvent(value: unknown): RosterEventValue | string {
   let o: unknown = value
@@ -116,6 +132,8 @@ export function parseRosterEvent(value: unknown): RosterEventValue | string {
       const { max_members, in_use, ...rest } = t
       return {
         ...rest,
+        lead: cleanHost(t.lead),
+        members: t.members.map(cleanHost),
         team_name: typeof t.team_name === 'string' ? t.team_name : '',
         team_label: typeof t.team_label === 'string' ? t.team_label : '',
         // Both or neither: a cap without its usage (or the reverse) is not a number to build a stepper on.

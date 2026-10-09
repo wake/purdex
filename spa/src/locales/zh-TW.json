@@ -317,6 +317,7 @@
   "tab.unpin": "取消固定",
   "tab.pin_team_disabled": "團隊群組中的分頁無法固定",
   "team.seat_not_listed": "session 尚未出現在清單",
+  "team.seat_no_host": "這台 Mac 沒有設定 {{alias}}，無法開啟這個分頁",
   "tab.close": "關閉分頁",
   "tab.close_others": "關閉其他分頁",
   "tab.close_right": "關閉右側分頁",

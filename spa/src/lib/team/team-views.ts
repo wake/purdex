@@ -24,6 +24,12 @@ export interface Seat {
   /** A member's `joined_at`; the lead's is its team's `created_at`. */
   joinedAt: number
   label: string
+  /** The SPA host id where the seat's tmux session lives: the team's host for a local seat; for a remote member (cross-host
+   *  team) the configured host whose `daemonId` is the roster's `host_id`; null when this Mac has no such host (or two).
+   *  A seat with a null host matches no tab. NOT the team key's host (`TeamView.hostId` is the lead's). */
+  hostId: string | null
+  /** The alias of the host a remote member lives on (the roster's `host_alias`); '' for a local seat. */
+  hostAlias: string
   /** The open tab standing for this seat, or null when none shows its session. */
   tabId: string | null
   workspaceId: string | null
@@ -58,9 +64,26 @@ export interface TeamViewsInput {
   memberOrder?: Record<string, readonly string[]>
   /** Hosts listed here come first, in this order; the others follow. */
   hostOrder?: readonly string[]
+  /** Wire (daemon) id → SPA host id, for the members of a cross-host team that live on another host. Absent = none. */
+  hostIdByDaemonId?: Record<string, string>
 }
 
 export const COLOR_COUNT = 8
+
+/** Wire (daemon) id → SPA host id over the configured hosts. A host without a `daemonId` is ignored; an id two hosts
+ *  claim is left out (unmapped) rather than guessed. */
+export function daemonIdMap(hosts: Record<string, { daemonId?: string }>): Record<string, string> {
+  const map: Record<string, string> = {}
+  const clash = new Set<string>()
+  for (const [hostId, h] of Object.entries(hosts)) {
+    const d = h.daemonId
+    if (!d) continue
+    if (d in map) clash.add(d)
+    else map[d] = hostId
+  }
+  for (const d of clash) delete map[d]
+  return map
+}
 
 export function teamKeyOf(hostId: string, teamId: string): string {
   return `${hostId}\u0000${teamId}`
@@ -176,14 +199,17 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
   ]
 
   const seat = (
-    hostId: string, role: Seat['role'], session: RosterSession,
+    team: TeamRoster, leadHostId: string, role: Seat['role'], session: RosterSession,
     extra: { origin: string | null; state: string; joinedAt: number }, preferred: ReadonlyArray<string | null>,
   ): Seat => {
-    const found = session.tmux_session
+    // A member whose `host_id` is another host's lives there: the SPA host that daemon id maps to, else null (not configured).
+    const remote = !!session.host_id && session.host_id !== team.host_id
+    const hostId = remote ? input.hostIdByDaemonId?.[session.host_id!] ?? null : leadHostId
+    const found = session.tmux_session && hostId !== null
       ? chooseTab(index.get(sessionKey(hostId, session.tmux_session)), preferred, workspaceOrder)
       : null
     return {
-      role, session, ...extra, label: labelOf(session),
+      role, session, ...extra, label: labelOf(session), hostId, hostAlias: remote ? session.host_alias ?? '' : '',
       tabId: found?.tabId ?? null, workspaceId: found?.workspaceId ?? null, paneIndex: found?.paneIndex ?? null,
     }
   }
@@ -192,7 +218,7 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
   for (const hostId of ordered) {
     for (const team of input.rosterByHost[hostId] ?? []) {
       const key = teamKeyOf(hostId, team.id)
-      const lead = seat(hostId, 'lead', team.lead,
+      const lead = seat(team, hostId, 'lead', team.lead,
         { origin: null, state: 'active', joinedAt: team.created_at }, [input.activeWorkspaceId])
       const preferred = [lead.workspaceId, input.activeWorkspaceId]
       views.push({
@@ -201,7 +227,7 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
         colorIndex: fnv1a32(team.id) % COLOR_COUNT,
         lead,
         members: orderMembers(team, input.memberOrder?.[key]).map((m) =>
-          seat(hostId, 'member', m, { origin: m.origin, state: m.state, joinedAt: m.joined_at }, preferred)),
+          seat(team, hostId, 'member', m, { origin: m.origin, state: m.state, joinedAt: m.joined_at }, preferred)),
       })
     }
   }
@@ -224,8 +250,8 @@ export function seatLookup(views: readonly TeamView[]): Map<string, SeatHit> {
   for (const v of views) {
     for (const seat of [v.lead, ...v.members]) {
       const name = seat.session.tmux_session
-      if (!name) continue
-      const k = sessionKey(v.hostId, name)
+      if (!name || seat.hostId === null) continue // a seat on a host this Mac lacks shows in no tab
+      const k = sessionKey(seat.hostId, name)
       if (!seats.has(k)) seats.set(k, { key: v.key, role: seat.role, seat })
     }
   }
