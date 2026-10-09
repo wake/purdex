@@ -16,6 +16,7 @@ import (
 	"github.com/wake/purdex/internal/convfeed"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
+	"github.com/wake/purdex/internal/team"
 )
 
 // OwnerSource finds the confirmed live panes of a Claude Code session: the agent module.
@@ -35,6 +36,7 @@ const (
 type Module struct {
 	core     *core.Core
 	index    convfeed.IndexLookup
+	feed     team.ApprovalFeed
 	cache    *convfeed.Cache
 	resolver *convfeed.Resolver
 	maxBody  int // tests lower it
@@ -43,6 +45,48 @@ type Module struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{} // closed when the sweeper has returned
+
+	// run is the module's lifetime: Stop cancels it and every WebSocket ends with it (wsWG counts the live ones).
+	run   context.Context
+	wsWG  sync.WaitGroup
+	tweak wsTuning
+}
+
+// wsTuning lets tests shorten the live stream's timings and queue; zero values are the spec's.
+type wsTuning struct {
+	poll, reresolve time.Duration
+	queue           int
+}
+
+func (m *Module) pollEvery() time.Duration {
+	if m.tweak.poll > 0 {
+		return m.tweak.poll
+	}
+	return defaultPollEvery
+}
+
+func (m *Module) reresolveEvery() time.Duration {
+	if m.tweak.reresolve > 0 {
+		return m.tweak.reresolve
+	}
+	return defaultReresolveEvery
+}
+
+func (m *Module) queueCap() int {
+	if m.tweak.queue > 0 {
+		return m.tweak.queue
+	}
+	return sendQueue
+}
+
+// runCtx is the lifetime context of connections: the module's once started, else Background (tests).
+func (m *Module) runCtx() context.Context {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.run != nil {
+		return m.run
+	}
+	return context.Background()
 }
 
 // New returns the module.
@@ -55,7 +99,7 @@ func (m *Module) WithIndex(idx convfeed.IndexLookup) *Module {
 }
 
 func (m *Module) Name() string           { return "conversation" }
-func (m *Module) Dependencies() []string { return []string{"agent"} }
+func (m *Module) Dependencies() []string { return []string{"agent", "team"} }
 
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
@@ -67,6 +111,15 @@ func (m *Module) Init(c *core.Core) error {
 	if !ok {
 		return fmt.Errorf("conversation: service %q does not implement OwnerSource (%T)", agentKey, svc)
 	}
+	fsvc, ok := c.Registry.Get(team.ApprovalFeedKey)
+	if !ok {
+		return fmt.Errorf("conversation: service %q not registered", team.ApprovalFeedKey)
+	}
+	feed, ok := fsvc.(team.ApprovalFeed)
+	if !ok {
+		return fmt.Errorf("conversation: service %q does not implement team.ApprovalFeed (%T)", team.ApprovalFeedKey, fsvc)
+	}
+	m.feed = feed
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("conversation: home directory: %w", err)
@@ -79,6 +132,7 @@ func (m *Module) Init(c *core.Core) error {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/conversations/{provider}/{session_id}", m.handleSnapshot)
 	mux.HandleFunc("GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}", m.handleSubagent)
+	mux.HandleFunc("GET /ws/conversations/{provider}/{session_id}", m.handleWS)
 }
 
 // Start runs the cache sweeper; a second Start while it runs does nothing.
@@ -90,7 +144,7 @@ func (m *Module) Start(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	m.cancel, m.done = cancel, done
+	m.cancel, m.done, m.run = cancel, done, ctx
 	go func() {
 		m.cache.Run(ctx, sweepEvery)
 		m.mu.Lock() // the module is no longer running: a later Start may begin again, whoever stopped this one
@@ -113,13 +167,17 @@ func (m *Module) Stop(ctx context.Context) error {
 	if cancel == nil {
 		return nil
 	}
-	cancel()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	cancel() // the sweeper and every WebSocket (their context is a child of this one) end
+	wsDone := make(chan struct{})
+	go func() { m.wsWG.Wait(); close(wsDone) }()
+	for _, ch := range []chan struct{}{done, wsDone} {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	return nil
 }
 
 // ownerAdapter maps the agent module's panes to the resolver's owners.

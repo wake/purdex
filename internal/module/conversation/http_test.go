@@ -128,7 +128,7 @@ func newEnv(t *testing.T) *env {
 	}
 	owners := &fakeOwners{}
 	c := core.New(core.CoreDeps{Config: &config.Config{HostID: "h1:abc"}})
-	m := &Module{core: c, maxBody: maxBody, subSem: make(chan struct{}, maxSubagentReads),
+	m := &Module{core: c, maxBody: maxBody, subSem: make(chan struct{}, maxSubagentReads), feed: &fakeFeed{},
 		cache:    convfeed.NewCache(convfeed.CacheOptions{}),
 		resolver: &convfeed.Resolver{Home: home, Owners: owners}}
 	mux := http.NewServeMux()
