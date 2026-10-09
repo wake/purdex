@@ -119,7 +119,7 @@ export function PairedPhonesSection() {
   const handleRevoke = async (phone: PairedPhone) => {
     const { pairingId } = phone
     const label = labelOf(phone)
-    const tokenless = tokenlessIds.map(nameOf).join(', ')
+    const tokenless = tokenlessIds.map(nameOf).join(t('hosts.pairedPhones.separator'))
     const msg =
       tokenless === ''
         ? t('hosts.pairedPhones.revoke_confirm', { label })
@@ -222,12 +222,12 @@ export function PairedPhonesSection() {
               )}
               {hostIds.length > 0 && (
                 <p data-testid="paired-hosts" className="text-xs text-text-muted">
-                  {t('hosts.pairedPhones.hosts', { hosts: hostIds.map(nameOf).join(', ') })}
+                  {t('hosts.pairedPhones.hosts', { hosts: hostIds.map(nameOf).join(t('hosts.pairedPhones.separator')) })}
                 </p>
               )}
               {pendingHosts.length > 0 && (
                 <p data-testid="paired-pending" className="text-xs text-yellow-400">
-                  {t('hosts.pairedPhones.pending', { hosts: pendingHosts.join(', ') })}
+                  {t('hosts.pairedPhones.pending', { hosts: pendingHosts.join(t('hosts.pairedPhones.separator')) })}
                 </p>
               )}
               {attention.map(({ item, target, name }) => (
@@ -243,7 +243,7 @@ export function PairedPhonesSection() {
               ))}
               {tokenlessIds.length > 0 && (
                 <p data-testid="paired-no-token" className="text-xs text-yellow-400">
-                  {t('hosts.pairedPhones.no_token', { hosts: tokenlessIds.map(nameOf).join(', ') })}
+                  {t('hosts.pairedPhones.no_token', { hosts: tokenlessIds.map(nameOf).join(t('hosts.pairedPhones.separator')) })}
                 </p>
               )}
             </li>

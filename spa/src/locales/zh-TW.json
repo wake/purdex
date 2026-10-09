@@ -982,6 +982,7 @@
   "hosts.pairedPhones.first_used": "首次使用：{{time}}",
   "hosts.pairedPhones.last_used": "最近使用：{{time}}",
   "hosts.pairedPhones.hosts": "可連到的主機：{{hosts}}",
+  "hosts.pairedPhones.separator": "、",
   "hosts.pairedPhones.revoke": "撤銷",
   "hosts.pairedPhones.revoke_confirm": "要在所有主機上撤銷「{{label}}」嗎？這支手機會立刻失去存取權。",
   "hosts.pairedPhones.pending": "尚未在 {{hosts}} 撤銷",
