@@ -318,6 +318,17 @@ func (s *Store) HasEntries(convKey string) (bool, error) {
 	return true, nil
 }
 
+// Known reports whether the workbook has ever written anything for the conversation: an entry (whatever its state) or a
+// status. The conversation route's 404 rule, shared by the todos route.
+func (s *Store) Known(convKey string) (bool, error) {
+	has, err := s.HasEntries(convKey)
+	if err != nil || has {
+		return has, err
+	}
+	_, ok, err := s.Status(convKey)
+	return ok, err
+}
+
 // Entries lists entries across conversations newest first. since is inclusive and until exclusive, on turn_at (0 = no
 // bound); thingDone keeps only the entries whose turn finished a thing.
 func (s *Store) Entries(since, until int64, thingDone bool, limit int) ([]Entry, error) {

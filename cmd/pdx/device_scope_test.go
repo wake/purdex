@@ -69,6 +69,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"GET /api/profiles", "GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
 		"PUT /api/devices/self",
 		"GET /api/workbook/conversations/{provider}/{session_id}", "GET /api/workbook/entries",
+		"GET /api/workbook/conversations/{provider}/{session_id}/todos", // not the refresh: that is the Mac App's
 	}
 	got := make([]string, 0, len(deviceAllowed))
 	for p := range deviceAllowed {
