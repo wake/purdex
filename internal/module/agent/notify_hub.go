@@ -71,7 +71,9 @@ func (h *notifyHub) subscribe(fn func(NotifyEvent)) func() {
 	}
 }
 
-// publish never waits: a full queue drops the event for that subscriber.
+// publish never waits: a full queue drops the event for that subscriber. It runs under emit.mu, the lock every
+// frame source shares, so it does memory work only: the overflow log is written from its own goroutine, never
+// while a slow log target could hold emit.mu or h.mu.
 func (h *notifyHub) publish(ev NotifyEvent) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -80,7 +82,7 @@ func (h *notifyHub) publish(ev NotifyEvent) {
 		case ch <- ev:
 		default:
 			if n := h.dropped.Add(1); n == 1 || n%100 == 0 {
-				log.Printf("[agent] notify subscriber queue full (cap %d); %d event(s) dropped so far", notifySubBuffer, n)
+				go log.Printf("[agent] notify subscriber queue full (cap %d); %d event(s) dropped so far", notifySubBuffer, n)
 			}
 		}
 	}
@@ -95,17 +97,41 @@ func (m *Module) SubscribeNotify(fn func(NotifyEvent)) func() {
 	return m.notifies.subscribe(fn)
 }
 
+// hookAgentSessionID is the agent session id a hook payload names, via its provider ("" when it cannot tell).
+func (m *Module) hookAgentSessionID(req EventRequest) string {
+	if m.registry == nil {
+		return ""
+	}
+	provider, ok := m.registry.Get(req.AgentType)
+	if !ok {
+		return ""
+	}
+	ident, ok := provider.(agentpkg.SessionIdentifier)
+	if !ok {
+		return ""
+	}
+	sid, _ := ident.IdentifyEvent(req.PurdexName, req.RawEvent)
+	return sid
+}
+
 // NotifyDropped is the number of deliveries lost to full subscriber queues.
 func (m *Module) NotifyDropped() int64 { return m.notifies.Dropped() }
 
 // publishNotify publishes a frame that was just put on the bus. Under emit.mu, so it only does memory work.
 // A non-tmux frame (kindNonTmux) is not published, and neither is one with no session name to say whose it is.
-func (m *Module) publishNotify(kind slotKind, code, notifyName string, p *SessionProjection, n agentpkg.NormalizedEvent) {
+//
+// SessionID is whose agent session the frame is about. A hook frame is the agent's own report, so it carries the
+// id the hook names (hookSID, "" when the provider cannot tell): the projection's top frame is only the pane's
+// winner, and can be another agent's (several frames per pane; a SessionEnd has just deleted the sender's own).
+// A mod / sweep / probe frame describes the projection itself, so it takes the projection's frame.
+func (m *Module) publishNotify(kind slotKind, code, notifyName, hookSID string, p *SessionProjection, n agentpkg.NormalizedEvent) {
 	if kind == kindNonTmux || notifyName == "" {
 		return
 	}
 	sid := ""
-	if p != nil {
+	if kind == kindHook {
+		sid = hookSID
+	} else if p != nil {
 		switch {
 		case p.TopFrame != nil && p.TopFrame.SessionID != "":
 			sid = p.TopFrame.SessionID

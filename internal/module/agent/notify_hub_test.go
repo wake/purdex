@@ -2,7 +2,10 @@ package agent
 
 import (
 	"errors"
+	"log"
 	"net/http"
+	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,7 +80,7 @@ func TestNotify_EverySourcePublishesOnce(t *testing.T) {
 func TestNotify_MinimalProbeFramePublishesUnderTheProbedSession(t *testing.T) {
 	m, got := notifyModule(t)
 	m.sessions = fakeProviderWithInstance("inst-1")
-	if !m.emitSlot(kindProbe, "code-p", "", "probed", frameOf("idle")) {
+	if !m.emitSlot(kindProbe, "code-p", "", "probed", "", frameOf("idle")) {
 		t.Fatal("the frame did not go out")
 	}
 	if ev := wantNotify(t, got); ev.SessionName != "probed" || ev.SessionCode != "code-p" {
@@ -95,7 +98,7 @@ func TestNotify_NonTmuxFrameIsNotPublished(t *testing.T) {
 	}
 	wantNoNotify(t, got)
 	// The kind alone excludes it, even if a caller handed a name (the empty name is a second line of defence).
-	m.emitSlot(kindNonTmux, "n-code", "", "named", frameOf("waiting"))
+	m.emitSlot(kindNonTmux, "n-code", "", "named", "", frameOf("waiting"))
 	wantNoNotify(t, got)
 }
 
@@ -112,20 +115,48 @@ func TestNotify_NothingPublishedWhenNothingWasBroadcast(t *testing.T) {
 	wantNoNotify(t, got)
 }
 
-// The agent's own session id comes from the projection's top frame. Mutation gate: leave SessionID "" → red.
-func TestNotify_CarriesTheAgentsSessionID(t *testing.T) {
+// A mod / sweep / probe frame describes the projection, so its session id is the projection's frame (top, then
+// primary); a hook frame carries the id the hook names, whatever the projection says. Mutation gates: leave the id
+// empty, ignore the top frame, or read a hook's id from the projection → red.
+func TestNotify_SessionIDSource(t *testing.T) {
 	m, got := notifyModule(t)
-	m.publishNotify(kindHook, "c", "s", &SessionProjection{TopFrame: &store.Frame{SessionID: "top"}, PrimaryFrame: &store.Frame{SessionID: "primary"}}, agentpkg.NormalizedEvent{})
+	proj := &SessionProjection{TopFrame: &store.Frame{SessionID: "top"}, PrimaryFrame: &store.Frame{SessionID: "primary"}}
+	m.publishNotify(kindSweep, "c", "s", "", proj, agentpkg.NormalizedEvent{})
 	if ev := wantNotify(t, got); ev.SessionID != "top" {
-		t.Fatalf("session id = %q, want the top frame's", ev.SessionID)
+		t.Fatalf("sweep id = %q, want the top frame's", ev.SessionID)
 	}
-	m.publishNotify(kindHook, "c", "s", &SessionProjection{PrimaryFrame: &store.Frame{SessionID: "primary"}}, agentpkg.NormalizedEvent{})
+	m.publishNotify(kindProbe, "c", "s", "", &SessionProjection{PrimaryFrame: &store.Frame{SessionID: "primary"}}, agentpkg.NormalizedEvent{})
 	if ev := wantNotify(t, got); ev.SessionID != "primary" {
-		t.Fatalf("session id = %q, want the primary frame's", ev.SessionID)
+		t.Fatalf("probe id = %q, want the primary frame's", ev.SessionID)
 	}
-	m.publishNotify(kindHook, "c", "s", nil, agentpkg.NormalizedEvent{})
+	m.publishNotify(kindWorker, "c", "s", "", nil, agentpkg.NormalizedEvent{})
 	if ev := wantNotify(t, got); ev.SessionID != "" {
-		t.Fatalf("session id = %q, want empty without a projection", ev.SessionID)
+		t.Fatalf("worker id = %q, want empty without a projection", ev.SessionID)
+	}
+	m.publishNotify(kindHook, "c", "s", "from-hook", proj, agentpkg.NormalizedEvent{})
+	if ev := wantNotify(t, got); ev.SessionID != "from-hook" {
+		t.Fatalf("hook id = %q, want the id the hook names, not the projection's", ev.SessionID)
+	}
+	m.publishNotify(kindHook, "c", "s", "", proj, agentpkg.NormalizedEvent{})
+	if ev := wantNotify(t, got); ev.SessionID != "" {
+		t.Fatalf("hook id = %q, want empty when the hook names none (never a guess from the projection)", ev.SessionID)
+	}
+}
+
+// The real hook path: session A owns the pane's projection, a detail-only hook from session B arrives. The event
+// is B's. Mutation gate: take the id from the projection in the hook path → red.
+func TestNotify_HookFrameCarriesTheSenderSessionNotTheProjectionWinner(t *testing.T) {
+	m, got := notifyModule(t)
+	startSession(t, m, "A")
+	if ev := wantNotify(t, got); ev.SessionID != "A" {
+		t.Fatalf("SessionStart event = %+v", ev)
+	}
+	req := EventRequest{AgentType: "cc", PurdexName: "PdxStop", TmuxSession: "work", RawEvent: []byte(`{"session_id":"B","hook_event_name":"Stop"}`)}
+	m.emitHookSession(req, func(*SessionProjection) (agentpkg.NormalizedEvent, bool) {
+		return agentpkg.NormalizedEvent{AgentType: "cc", Status: "idle"}, true
+	})
+	if ev := wantNotify(t, got); ev.SessionID != "B" {
+		t.Fatalf("session id = %q, want B (the sender), not A (the pane's winner)", ev.SessionID)
 	}
 }
 
@@ -210,4 +241,35 @@ func TestNotify_PanicIsolatedAndUnsubscribeIdempotent(t *testing.T) {
 	unsub()
 	m.emitSessionWith(kindHook, "code-1", "sess-1", frameOf("idle"))
 	wantNotify(t, got)
+}
+
+type gatedWriter struct{ gate chan struct{} }
+
+func (w gatedWriter) Write(p []byte) (int, error) { <-w.gate; return len(p), nil }
+
+// The overflow log is written outside emit.mu and the hub's lock: a log target that blocks does not hold up the
+// emitter. Mutation gate: log synchronously in publish → the emitter hangs on the first overflow.
+func TestNotify_ABlockedLogTargetDoesNotHoldUpTheEmitter(t *testing.T) {
+	m, _ := notifyModule(t)
+	gate := make(chan struct{})
+	var open sync.Once
+	openGate := func() { open.Do(func() { close(gate) }) } // a failing run must not deadlock its own cleanup
+	log.SetOutput(gatedWriter{gate})
+	defer func() { openGate(); time.Sleep(50 * time.Millisecond); log.SetOutput(os.Stderr) }()
+	release := make(chan struct{})
+	defer m.SubscribeNotify(func(NotifyEvent) { <-release })()
+	defer close(release)
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < notifySubBuffer*2; i++ {
+			m.emitSessionWith(kindHook, "code-1", "sess-1", frameOf("running"))
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		openGate()
+		t.Fatal("the emitter was held up by a blocked log target")
+	}
 }
