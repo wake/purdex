@@ -201,21 +201,23 @@ func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail
 	if !ok {
 		return 0, "" // the store's 404 below
 	}
-	// The binding is the op's approval row's origin PID; without it there
-	// is nothing to vouch for the new session, so the report is refused
-	// rather than waved through (fail closed). A member op (P6) will bring
-	// its own binding.
-	if op.RequestID == "" {
-		return http.StatusBadRequest, "relay op " + opID + " has no approval row to bind new_session_id to"
+	// The binding is the op's own pid (P6-2a), for any kind. An op from before it (pid 0) falls back to its approval
+	// row's origin pid, as before; with neither there is nothing to vouch for the new session, so the report is
+	// refused rather than waved through (fail closed) — a member op has no approval row, so its pid 0 ends here.
+	wantPID := op.PID
+	if wantPID == 0 {
+		if op.Kind == team.RelayKindMember || op.RequestID == "" {
+			return http.StatusBadRequest, "relay op " + opID + " has no process binding (pid) for new_session_id"
+		}
+		row, ok, err := m.store.Get(op.RequestID)
+		if err != nil {
+			return http.StatusServiceUnavailable, "team.db failed; retry: " + err.Error()
+		}
+		if !ok || row.Origin.PID == 0 {
+			return http.StatusBadRequest, "relay op " + opID + ": its approval row (" + op.RequestID + ") or origin pid is missing; cannot bind new_session_id"
+		}
+		wantPID = row.Origin.PID
 	}
-	row, ok, err := m.store.Get(op.RequestID)
-	if err != nil {
-		return http.StatusServiceUnavailable, "team.db failed; retry: " + err.Error()
-	}
-	if !ok || row.Origin.PID == 0 {
-		return http.StatusBadRequest, "relay op " + opID + ": its approval row (" + op.RequestID + ") or origin pid is missing; cannot bind new_session_id"
-	}
-	wantPID := row.Origin.PID
 	deadline := time.Now().Add(m.clearedWait)
 	for {
 		target, live, err := m.origins.ResolveOriginBySession(newSessionID)

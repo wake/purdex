@@ -105,18 +105,24 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "role or switches unreadable; see the daemon log", nil)
 		return
 	}
+	m.helloMu.Lock() // memory and the row are written in one order: the last hello to take the lock wins in both
 	m.mu.Lock()
-	if _, known := m.modSeen[req.SessionID]; !known && len(m.modSeen) >= modSeenCap {
-		oldest, oldestAt := "", int64(0)
-		for sid, h := range m.modSeen {
-			if oldest == "" || h.At < oldestAt {
-				oldest, oldestAt = sid, h.At
+	h := helloInfo{ModVersion: req.ModVersion, Agent: req.Agent, At: m.now()}
+	m.modSeen[req.SessionID] = h
+	if len(m.modSeen) > modSeenCap { // the same victim the table picks: the oldest At, the greatest session id among ties
+		victim, v := "", helloInfo{}
+		for sid, e := range m.modSeen {
+			if victim == "" || e.At < v.At || (e.At == v.At && sid > victim) {
+				victim, v = sid, e
 			}
 		}
-		delete(m.modSeen, oldest)
+		delete(m.modSeen, victim)
 	}
-	m.modSeen[req.SessionID] = helloInfo{ModVersion: req.ModVersion, Agent: req.Agent, At: m.now()}
 	m.mu.Unlock()
+	if err := m.store.UpsertModHello(req.SessionID, h, modSeenCap); err != nil { // the memory answers; a lost row only costs a hello after a restart
+		m.logf("[team] relay hello %s: %v", req.SessionID, err)
+	}
+	m.helloMu.Unlock()
 	m.writeJSON(w, http.StatusOK, team.RelayHelloResponse{
 		OK: true, Role: role, SelfRelay: state,
 		Threshold: team.RelayThresholdPct, MinGrowth: team.RelayMinGrowth,
@@ -311,7 +317,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	op := team.RelayOp{
 		ID: opID, Kind: team.RelayKindSelf, HostID: m.hostID(), SessionID: origin.SessionID, Ref: origin.Ref,
 		RequestID: reqID, State: team.RelayAwaitingApproval, HandoffPath: filepath.Join(m.relayDir, opID+".md"),
-		UsedPercentage: &pct, CreatedAt: now, UpdatedAt: now,
+		UsedPercentage: &pct, CreatedAt: now, UpdatedAt: now, PID: origin.PID, PaneID: paneOf(origin.Tmux),
 	}
 	sp.OpID = opID
 	payload, _ = json.Marshal(sp) // encoded above already; now with its op id
@@ -509,4 +515,12 @@ func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bo
 		return false
 	}
 	return sp.Window == req.Window
+}
+
+// paneOf is the "%N" pane id at the end of an Origin.Tmux ("<session>:@<win>.%<pane>"), "" when there is none.
+func paneOf(tmux string) string {
+	if i := strings.LastIndex(tmux, ".%"); i >= 0 {
+		return tmux[i+1:]
+	}
+	return ""
 }

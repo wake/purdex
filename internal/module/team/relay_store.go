@@ -73,14 +73,14 @@ const relaySchema = `
 	);`
 
 const relayCols = `id, kind, host_id, session_id, new_session_id, ref, new_ref, team_id, request_id,
-	state, reason, handoff_path, pruned, used_percentage, created_at, updated_at`
+	state, reason, handoff_path, pruned, used_percentage, created_at, updated_at, pid, pane_id`
 
 func scanRelayOp(r rowScanner) (team.RelayOp, error) {
 	var op team.RelayOp
 	var pruned int
 	var used sql.NullFloat64
 	if err := r.Scan(&op.ID, &op.Kind, &op.HostID, &op.SessionID, &op.NewSessionID, &op.Ref, &op.NewRef, &op.TeamID, &op.RequestID,
-		&op.State, &op.Reason, &op.HandoffPath, &pruned, &used, &op.CreatedAt, &op.UpdatedAt); err != nil {
+		&op.State, &op.Reason, &op.HandoffPath, &pruned, &used, &op.CreatedAt, &op.UpdatedAt, &op.PID, &op.PaneID); err != nil {
 		return team.RelayOp{}, err
 	}
 	op.Pruned = pruned != 0
@@ -105,10 +105,10 @@ func insertRelayOpIn(ex dbtx, op team.RelayOp) error {
 	}
 	if _, err := ex.Exec(`
 		INSERT INTO relay_ops (id, kind, host_id, session_id, new_session_id, ref, new_ref, team_id, request_id,
-			state, reason, handoff_path, pruned, used_percentage, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+			state, reason, handoff_path, pruned, used_percentage, created_at, updated_at, pid, pane_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
 		op.ID, string(op.Kind), op.HostID, op.SessionID, op.NewSessionID, op.Ref, op.NewRef, op.TeamID, op.RequestID,
-		string(op.State), op.Reason, op.HandoffPath, used, op.CreatedAt, op.UpdatedAt); err != nil {
+		string(op.State), op.Reason, op.HandoffPath, used, op.CreatedAt, op.UpdatedAt, op.PID, op.PaneID); err != nil {
 		if strings.Contains(err.Error(), "relay_ops.session_id") { // the partial unique index relay_ops_one_open
 			return fmt.Errorf("insert relay op %s: %w", op.ID, ErrRelayOpOpen)
 		}
