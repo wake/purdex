@@ -36,9 +36,17 @@ const RING_STROKE = 2
 const RING_R = (RING_SIZE - RING_STROKE) / 2
 const RING_C = 2 * Math.PI * RING_R
 
-/** A ring that fills clockwise from 12 o'clock to the USED share; its colour follows `usageTone` of the used share. */
-function Ring({ used }: { used: number }) {
+/** What a segment's ring and number show: the context window reads USED, the 5-hour / weekly limits read REMAINING. */
+export type UsageMode = 'used' | 'remaining'
+
+function shownPct(used: number, mode: UsageMode): number {
+  return mode === 'used' ? usedPct(used) : remainingPct(used)
+}
+
+/** A ring that fills clockwise from 12 o'clock to the shown share (per `mode`); its colour always follows `usageTone` of the USED share. */
+function Ring({ used, mode }: { used: number; mode: UsageMode }) {
   const u = usedPct(used)
+  const shown = shownPct(used, mode)
   const tone = usageTone(u)
   return (
     <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} aria-hidden="true" className="shrink-0">
@@ -46,6 +54,7 @@ function Ring({ used }: { used: number }) {
       <circle
         data-testid="usage-ring-arc"
         data-used={u}
+        data-shown={shown}
         data-tone={tone}
         className={RING_TONE_CLASS[tone]}
         cx={RING_SIZE / 2}
@@ -53,19 +62,21 @@ function Ring({ used }: { used: number }) {
         r={RING_R}
         fill="none"
         strokeWidth={RING_STROKE}
-        strokeDasharray={`${(u / 100) * RING_C} ${RING_C}`}
+        strokeDasharray={`${(shown / 100) * RING_C} ${RING_C}`}
         transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
       />
     </svg>
   )
 }
 
-/** icon + ring + remaining %. No text label: the tooltip (and aria-label) names which limit this is. */
-export function UsageSegment({ testId, icon: IconCmp, used, title, stale, className = '' }: {
+/** icon + ring + % (used or remaining per `mode`). No text label: the tooltip (and aria-label) names which limit this is. */
+export function UsageSegment({ testId, icon: IconCmp, used, mode, title, stale, className = '' }: {
   testId: string
   icon: Icon
-  /** Used share, 0-100. The ring fills to it; the number shown is what is left. */
+  /** Used share, 0-100. Colour always follows it. */
   used: number
+  /** 'used': ring and number show the used share; 'remaining': they show what is left. */
+  mode: UsageMode
   title: string
   stale: boolean
   className?: string
@@ -80,8 +91,8 @@ export function UsageSegment({ testId, icon: IconCmp, used, title, stale, classN
       className={`flex shrink-0 items-center gap-1 tabular-nums select-none ${stale ? 'opacity-50' : ''} ${className}`}
     >
       <IconCmp size={10} className="text-text-muted" aria-hidden="true" />
-      <Ring used={used} />
-      <span className="text-text-secondary">{remainingPct(used)}%</span>
+      <Ring used={used} mode={mode} />
+      <span className="text-text-secondary">{shownPct(used, mode)}%</span>
     </span>
   )
 }
@@ -112,6 +123,7 @@ function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
           testId={`${idPrefix}-five-hour`}
           icon={Clock}
           used={fiveHour.pct}
+          mode="remaining"
           title={windowTitle(t, 'status.usage.five_hour', fiveHour, now, stale)}
           stale={stale}
           className="max-[700px]:hidden"
@@ -122,6 +134,7 @@ function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
           testId={`${idPrefix}-seven-day`}
           icon={CalendarBlank}
           used={sevenDay.pct}
+          mode="remaining"
           title={windowTitle(t, 'status.usage.seven_day', sevenDay, now, stale)}
           stale={stale}
           className="max-[700px]:hidden"
@@ -147,6 +160,7 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
           testId="status-seg-usage-context"
           icon={Brain}
           used={usage.context}
+          mode="used"
           title={[t('status.usage.context', { left: remainingPct(usage.context), pct: usedPct(usage.context) }), stale ? t('status.usage.stale') : ''].filter(Boolean).join(' — ')}
           stale={stale}
           className="max-[600px]:hidden"
