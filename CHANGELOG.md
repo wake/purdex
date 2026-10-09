@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.646] - 2026-10-09
+
+> 只動 daemon（與 SPA）：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主 checkout 快轉生效（Mac App 按 Cmd+R）；Electron 不必更新。「lead 幫 member 接力時扣 member 額度」的規則上線，但要等 member 端的 mod 更新（P6-6）才會實際用到。
+
+### Added：lead 幫 member 接力時扣 member 額度 — #2062 RQ-2b（#2202，A 線）
+
+- 無人值守開著、而且額度規則開著時，lead 每幫一個 member 接力，就從 lead 的「member 額度」扣 1；額度用完時，這次接力會掛著等你在 App 核准。
+- 你在場（無人值守關著）或額度規則關著時，lead 幫 member 接力不需要核准、也不扣額度，和原本的設計一樣。
+- 等你核准的這種接力會列在無人值守面板「額度用完，等你核准」的清單裡，手機也會收到推播。
+- 目前 member 端的 mod 還不支援被接力（P6-6），所以 lead 發起的接力一律回「member 的 mod 版本不支援」——**現在沒有任何行為改變**。
+
+### Added：App 的 member 接力核准卡片與推播 — #2207，介面線
+
+- App 認得新的「member 額度用完」核准卡片：寫明哪個 lead 要幫哪個 member 接力、member 的 context 用了多少，可以核准或拒絕；手機推播也會送這種核准。
+
+### Added：接力寫交接檔時的工具鎖（判斷部分）— P6-3b-2（#2208，A 線）
+
+- daemon 與 `pdx hook` 學會「接力鎖」：鎖住時只放行寫交接檔的那一次 Write，其他工具一律擋下。新增 `pdx relay lock|unlock` 指令。
+- 鎖由 mod 在寫交接檔那一輪舉起（下一版 P6-3c），**這一版還不會有 session 被鎖**，行為不變。
+
 ## [1.0.0-alpha.645] - 2026-10-09
 
 > 動 daemon 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 改了）；SPA、Electron 不必更新。在手機上遇到 Claude 的選擇題時，可以不選選項、直接回一段話給它。
