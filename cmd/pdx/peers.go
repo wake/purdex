@@ -73,7 +73,7 @@ const peersUsage = "usage: pdx peers [--json] [--all] [--config <path>]\n" +
 	"       pdx peers host verify <alias> [--json] [--config <path>]\n" +
 	"       pdx peers host rename <alias> <new-alias> [--config <path>]\n" +
 	"       pdx peers host rotate <alias> [--commit|--cancel] [--force] [--config <path>]\n" +
-	"       pdx peers host allow-team <alias> on|off [--root <dir>]... [--config <path>]\n" +
+	"       pdx peers host allow-team <alias> on|off [--root <dir>]... [--end-members (off only)] [--config <path>]\n" +
 	"       pdx peers host remove <alias> [--config <path>]\n" +
 	"       pdx peers host list [--config <path>]\n" +
 	"       pdx peers alias [--config <path>]\n" +
@@ -129,6 +129,7 @@ type peersInvocation struct {
 	hasToken    bool
 	allowBypass *bool
 	roots       []string // `host allow-team`'s repeatable --root, as typed
+	endMembers  bool     // `host allow-team <alias> off --end-members`
 
 	// aliasMode selects `pdx peers alias` (self-alias spec §4.2). Exactly
 	// one of its three forms applies: aliasSet with aliasValue (`alias
@@ -219,6 +220,8 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 			i++
 			inv.token = args[i]
 			inv.hasToken = true
+		case a == "--end-members":
+			inv.endMembers = true
 		case a == "--root":
 			if i+1 >= len(args) {
 				return peersInvocation{}, "", false
@@ -248,7 +251,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		// Top-level query form: no positionals at all, and none of the
 		// host-only flags (--token, --allow-bypass, --commit/--cancel/
 		// --force — the last three are rotate-only).
-		if len(positionals) != 0 || inv.hasToken || inv.allowBypass != nil || inv.roots != nil ||
+		if len(positionals) != 0 || inv.hasToken || inv.allowBypass != nil || inv.roots != nil || inv.endMembers ||
 			inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
@@ -261,7 +264,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		// switches with nothing to switch here) and with every host-only
 		// flag; <name> together with --clear would be two instructions.
 		inv.aliasMode = true
-		if inv.all || inv.jsonOutput || inv.hasToken || inv.allowBypass != nil || inv.roots != nil ||
+		if inv.all || inv.jsonOutput || inv.hasToken || inv.allowBypass != nil || inv.roots != nil || inv.endMembers ||
 			inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
@@ -306,7 +309,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 	}
 
 	// --root is allow-team's alone.
-	if inv.roots != nil && inv.verb != "allow-team" {
+	if (inv.roots != nil || inv.endMembers) && inv.verb != "allow-team" {
 		return peersInvocation{}, "", false
 	}
 
@@ -315,7 +318,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		if inv.hasToken || inv.allowBypass != nil || inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
-		if v := inv.positionals[1]; v != "on" && v != "off" {
+		if v := inv.positionals[1]; v != "on" && v != "off" || (inv.endMembers && v != "off") {
 			return peersInvocation{}, "", false
 		}
 	case "add":
@@ -953,7 +956,8 @@ func runPeersHostList(cfg config.Config, base string, stdout, stderr io.Writer) 
 		return 1
 	}
 
-	fmt.Fprint(stdout, formatHostsTable(listResp.Hosts))
+	counts, _ := remoteMemberCounts(cfg)
+	fmt.Fprint(stdout, hostsTable(listResp.Hosts, true, counts))
 	return 0
 }
 
@@ -1243,12 +1247,27 @@ func acceptSettingsResponse(inv peersInvocation, s peers.SettingsResponse) strin
 // formatHostsTable renders hosts as a text/tabwriter table with columns
 // ALIAS URL HOST_ID VERIFIED TOKEN INBOUND ALLOW_BYPASS (rendered as
 // yes/no) ROTATION (rotationCell: "-" | "pending" | "pending, confirmed").
-func formatHostsTable(hosts []cliHostRow) string {
+func formatHostsTable(hosts []cliHostRow) string { return hostsTable(hosts, false, nil) }
+
+// hostsTable is the hosts table; withMembers appends the MEMBERS column — how many remote members each lead host has
+// on this host (counts keyed by host id; a nil map means the count could not be read: "-").
+func hostsTable(hosts []cliHostRow, withMembers bool, counts map[string]int) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ALIAS\tURL\tHOST_ID\tVERIFIED\tTOKEN\tINBOUND\tALLOW_BYPASS\tROTATION")
+	header := "ALIAS\tURL\tHOST_ID\tVERIFIED\tTOKEN\tINBOUND\tALLOW_BYPASS\tROTATION"
+	if withMembers {
+		header += "\tMEMBERS"
+	}
+	fmt.Fprintln(w, header)
 	for _, h := range hosts {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		tail := ""
+		if withMembers {
+			tail = "\t-"
+			if counts != nil {
+				tail = fmt.Sprintf("\t%d", counts[h.HostID])
+			}
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s"+tail+"\n",
 			sanitizeCell(h.Alias),
 			sanitizeCell(h.URL),
 			sanitizeCell(h.HostID),

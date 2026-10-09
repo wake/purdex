@@ -1084,6 +1084,10 @@ func TestRunPeersCmd_HostList(t *testing.T) {
 	var gotMethod, gotPath, gotAuth string
 	body := `{"hosts":[{"alias":"air","url":"https://air.mlab.host","host_id":"air:def456","verified":true,"has_token":true,"has_inbound_token":true,"allow_bypass":false}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/peers/hosts" { // the best-effort MEMBERS lookup (X2c) is a second request
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		gotMethod = r.Method
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
