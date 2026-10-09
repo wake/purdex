@@ -28,7 +28,7 @@ func (m *Module) unpairHost(hostID, reason string) error {
 	}
 	dropped, _ := r.RowsAffected()
 	r, err = tx.Exec(`UPDATE team_members SET state = 'gone', end_reason = ?, updated_at = ?, ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
-		WHERE host_id = ? AND host_id <> ? AND state IN `+liveRemoteStates, reason, now, now, hostID, m.hostID())
+		WHERE host_id = ? AND host_id <> ? AND state IN `+liveRemoteStates+` AND `+liveTeamOfRow, reason, now, now, hostID, m.hostID())
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func (m *Module) voidCommand(c commandRow, now int64) error {
 	}
 	if c.Kind == CmdAdopt {
 		if _, err := tx.Exec(`UPDATE team_members SET state = 'failed', end_reason = 'remote_unreachable', updated_at = ?, ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
-			WHERE mk = ? AND host_id = ? AND state = 'joining'`, now, now, c.MK, c.HostID); err != nil {
+			WHERE mk = ? AND host_id = ? AND state = 'joining' AND `+liveTeamOfRow, now, now, c.MK, c.HostID); err != nil {
 			return err
 		}
 	}

@@ -2,6 +2,8 @@
 
 Owner: interface line (purdex-88). Status: user-confirmed 2026-10-08 → 10-09 (19 rulings + prototype rounds v2 – v5k). Plan: `docs/plans/2026-10-09-team-interface-plan.md`.
 
+**Round 2 (user 2026-10-10):** no team pills on the top bar or in the left list, no top-bar collapse, a live trial of the group shadow (R7, R8, P6, P11, §4.1, §4.2, §4.3, §4.8, §5; each marked *round 2*).
+
 **Amended 2026-10-09** by the session workbook spec (`docs/specs/2026-10-09-session-workbook-spec.md` §10.1, a later user decision): the team panel shares one resizable panel area with the workbook. Changed here: R16, R19, P3, P5, §3, §4.4, §4.11, §5, §6 (each marked *amended*); the TI-3 screenshot gate (same day) amended §4.1, §4.3 and §5 to the prototype (left-list capsule, collapse plate, muted tick). The panel part is built as workbook plan WA-2a (`docs/plans/2026-10-09-session-workbook-plan.md`), which replaces TI-4.
 
 **Supersedes** (display parts only; the data parts stay): `docs/specs/2026-10-08-lead-adopt-release-spec.md` D-U24-5 / D-U24-6; `docs/specs/2026-10-08-unattended-adopt-plan.md` PL-2c, PL-3a, PL-3b and "User-visible behaviour" 31–45 (its "Display-first reorder" section already pointed here); `docs/specs/2026-10-08-team-display-confirm-pack.md` (never answered — the user stated the requirements directly instead); `docs/pages/team-groups-mock.html` (hand-drawn, replaced by the SPA prototype).
@@ -27,8 +29,8 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - R6 A member that is released or ends: with a tab → the tab leaves the group and becomes a normal tab (not closed); without a tab → it disappears.
 
 **Top group**
-- R7 The group starts with the team's **label** (§4.8), then the lead's tab, then the members' tabs.
-- R8 Collapsible: collapsed shows the label and the lead only; stepping through tabs (left / right) skips the hidden members.
+- R7 The group starts with the team's **label** (§4.8), then the lead's tab, then the members' tabs. *Round 2 (user 2026-10-10): no label on the top bar — the group starts with the lead's tab.*
+- R8 Collapsible: collapsed shows the label and the lead only; stepping through tabs (left / right) skips the hidden members. *Round 2 (user 2026-10-10): the top bar has no collapse control; the group collapses only from the left list (§4.3), and the top bar follows that shared state (collapsed → only the lead's tab shows, stepping skips the hidden members).*
 - R9 Collapsing while a member tab is active switches to the lead.
 - R10 Opening a member (beads, panel) while collapsed expands the group and switches to it.
 - R11 A member opened by hand from the session list also opens inside the lead's group.
@@ -51,12 +53,12 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - P3 The panel cannot be closed (one line is the minimum). *Amended (workbook §10.1): this holds for the team view; a workbook opened from a tab's 「工作簿」 toggle closes with that toggle (§4.4).*
 - P4 Left: the hang-under mark is not a left border line; beads hang from the lead's **bot icon**; with several rows each row has its own tick at the same x.
 - P5 Panel = a sidebar-like list, top to bottom, not a table; layout "C": line 1 subagent dots → bot → host chip → title; line 2 model / context; active row styled like the sidebar's active row (no side line); no host name; normal text brightness; no top colour bar; full and one-line have the same width; one-line wraps to a second row when the team is large. *Amended (workbook §10.1): the panel area is resizable and has an expanded mode, so "the same width" now means full and one-line both take the area's current width.*
-- P6 Team name: given with the lead request, editable by the approver, shown at the group's start (Chrome-group style). **Team label** (short, ≤ 10 display width) is on the group; the **name** is in the panel (§4.8).
+- P6 Team name: given with the lead request, editable by the approver, shown at the group's start (Chrome-group style). **Team label** (short, ≤ 10 display width) is on the group; the **name** is in the panel (§4.8). *Round 2 (user 2026-10-10): name and label pills are no longer shown on the top bar or in the left list; they stay in the team panel's header.*
 - P7 "bot / bot + host icon" for beads is a **user setting**; default **bot + host icon**.
 - P8 Beads use normal colour whether or not the member has a tab (no fading), and **no** "has a tab" mark.
 - P9 Sidebar collapse style: no caret; collapsed = a members icon + one main light per member; clicking that line expands; clicking the tick or the blank part of the bead area collapses.
 - P10 Hang-under mark = **tree tick** (one stem, a tick per row, the last row turns), **small rounded corner**, starting at the lead block's lower edge (not blended into it).
-- P11 Group cue on the top bar = **team-coloured narrow "lifted button" shadow toward the top-right**, 1 px, colour depth 70 %, on **every** tab of the group; plus a **very faint** team-colour wash on those tabs; **no separator lines** inside the group or after its last tab. Rejected and not to be revived: underlines, tinted plates, frames, top bars, coloured dots, corner folds, badges, bookmarks, edge lines, glow shadows, a bottom-left companion shadow.
+- P11 Group cue on the top bar = **team-coloured narrow "lifted button" shadow toward the top-right**, 1 px, colour depth 70 %, on **every** tab of the group; plus a **very faint** team-colour wash on those tabs; **no separator lines** inside the group or after its last tab. Rejected and not to be revived: underlines, tinted plates, frames, top bars, coloured dots, corner folds, badges, bookmarks, edge lines, glow shadows, a bottom-left companion shadow. *Round 2 (user 2026-10-10): "the top-right-only shadow looks like it floats; let the shadow spread a little to the left and bottom — just a try". The user reopened the shadow's spread (glow / bottom-left) for a live trial: §4.2 Cue lists the variants; the others in the rejected list stay rejected.*
 - P12 Empty label fallback = the lead's title, cut to ≤ 10 display width with "…", full title in the tooltip (user chose "C" 2026-10-09).
 
 ## 3. Data (what the App reads)
@@ -74,14 +76,15 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 
 ### 4.1 Membership and colour
 - A tab belongs to a team iff `teamOfTab` says so. Role = that result's role.
-- Colour = `TEAM_COLORS[colorIndex]` — eight colours away from the host blue and the four light colours (`#a78bfa #2dd4bf #f472b6 #fb923c #e879f9 #a3a3ff #5eead4 #fda4af`). The label capsules (top bar and left list), the shadow, the wash and the panel accents use it. The left list's tick does not (§5, muted; *amended at the TI-3 screenshot gate*).
+- Colour = `TEAM_COLORS[colorIndex]` — eight colours away from the host blue and the four light colours (`#a78bfa #2dd4bf #f472b6 #fb923c #e879f9 #a3a3ff #5eead4 #fda4af`). The shadow, the wash and the panel accents use it (round 2: no label capsule on the top bar or in the left list). The left list's tick does not (§5, muted; *amended at the TI-3 screenshot gate*).
 - A team with no open tab and a closed lead tab still exists in the sidebar as a ghost row (§4.6) and in no other surface.
 
 ### 4.2 Top tab bar group
 - Order inside a workspace's normal (unpinned) zone: the group sits where its lead tab is; inside it: label → lead → members in team order (R5). The workspace's own tab order is kept equal to what is shown: the group's tabs are one contiguous run starting at the lead, in team order (re-normalised whenever membership, team order or the tab list changes), so tab stepping, ⌘1–8 and the sidebar all agree with the bar. Member tabs of a team whose lead tab is in another workspace are not grouped (they stay where they are; `chooseTab` already prefers the lead's workspace).
-- **Label**: a capsule in team colour, text = §4.8 label; clicking it toggles collapse (R8). Collapsed: the label shows `+N` (hidden member tabs) next to the text.
-- **Cue** (P11): every tab of the group gets the narrow shadow and the wash (§5); separators inside the group and after its last tab are hidden; the separators before the label and after the group follow today's rule (hidden next to the group).
-- **Collapse** (R8–R10): one collapse state per team, shared with the sidebar (§4.3). Collapsed hides member tabs; left/right tab stepping skips them; collapsing while a member is active activates the lead (R9); any open-member action expands first (R10).
+- ~~**Label**: a capsule in team colour, text = §4.8 label; clicking it toggles collapse (R8). Collapsed: the label shows `+N` (hidden member tabs) next to the text.~~ *Round 2: removed — no label and no collapse control on the top bar.*
+- **Cue** (P11): every tab of the group gets the narrow shadow and the wash (§5); separators inside the group and after its last tab are hidden; the separators before the group's first tab and after the group follow today's rule (hidden next to the group).
+- **Shadow trial** *(round 2, user 2026-10-10)*: a temporary setting 設定 → 介面 → 分頁 「（試用）群組陰影」 (device-local, `useTeamUiStore`) switches the group shadow live between: **V0** today's `1px -1px 0 <c70>`; **V1** V0 + a soft halo `0 0 4px <c30>`; **V2** V0 + a bottom-left spread `-1px 1px 3px <c40>`; **V3** a fuller lift `1px -1px 0 <c60>, -2px 2px 5px <c35>` (`<cNN>` = the team colour at NN % in oklab, the §5 light-theme darkening applies). Default V2. Wash and separators unchanged. After the user picks, the setting is removed and the pick becomes §5's value.
+- **Collapse** (R8–R10, *round 2*): one collapse state per team, set only from the sidebar (§4.3); the top bar has no control and follows it. Collapsed hides member tabs on the top bar; left/right tab stepping skips them; collapsing while a member is active activates the lead (R9); any open-member action expands first (R10).
 - **Drag**: tabs reorder within the group only (members; the lead stays first); a drop outside snaps back; dragging a non-group tab into the group is refused (snap back); the group as a whole is not draggable in v1.
 - **Pin** (R12): the context menu's pin item is disabled for group tabs (tooltip: why). A pinned tab is never grouped.
 - **Release / end** (R6): the tab leaves the group at the next roster frame and becomes a normal tab right after the group (a consequence of the normalised order); never closed by this.
@@ -89,7 +92,7 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 
 ### 4.3 Left tab list (tab position left or both)
 - The lead's row is today's row. Member tabs are **not** listed as rows; they are beads (R1).
-- **Label capsule** *(amended at the TI-3 screenshot gate, as in the prototype)*: the team's label capsule (§4.8, the top bar's component) sits above the lead's row; clicking it toggles the shared collapse; tooltip "<name> (<label>)"; on a ghost row it is faded like the row.
+- ~~**Label capsule** *(amended at the TI-3 screenshot gate, as in the prototype)*: the team's label capsule sits above the lead's row; clicking it toggles the shared collapse; tooltip "<name> (<label>)"; on a ghost row it is faded like the row.~~ *Round 2 (user 2026-10-10): removed. Two teams are told apart by structure (lead row, tick, beads); no team colour in the left list. Collapse stays here only (P9: the collapse line, the tick, the blank bead area).*
 - **Beads**: one row of beads under the lead row, team order, wrapping to more rows; bead = bot icon (agent type icon) with its light dot, plus the host icon when the setting says so (P7); unread overlays as today; tooltip = the member's title. No opened/unopened difference (P8).
 - **Tick** (P4, P10): one stem from just under the lead's bot icon, starting at the lead block's lower edge; a horizontal tick per bead row; the last row turns with a 3 px radius; 1 px line in the muted text colour at 70 %.
 - **Click** a bead: R3 (open into the group / switch), R10 (expand if collapsed).
@@ -126,6 +129,7 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - **Group label** = `team_label`; if `""`: the lead's title (`Seat.label`) cut to ≤ 10 display width by the shared width rule (`spa/src/lib/textwidth.ts`, team-label D-L1) with "…" appended (the "…" counts within the 10), full title in the tooltip. A label that is not `""` is shown whole (the daemon guarantees ≤ 10).
 - **Panel name** = `team_name`; if `""`: the lead's title, not cut.
 - Tooltips on the label and the panel header show both: "<name> (<label>)" when both exist.
+- *Round 2 (user 2026-10-10):* the label is shown only in the team panel's header (the top bar and the left list carry no pill); the fallback rule above still applies there.
 
 ### 4.9 Settings
 - 設定 → 介面 → 分頁: "member 顆粒顯示主機圖示" (bot + host icon), default on (P7). Stored in `useTeamUiStore` — device-local, not synced by Profile Sync (unlike the other interface settings); moving it into the synced UI settings needs a settings-ordinal bump and is left for later.
@@ -143,12 +147,12 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 
 | What | Value |
 |---|---|
-| Shadow direction / width | top-right, crisp `1px -1px 0 <c>` (no blur) |
+| Shadow direction / width | top-right, crisp `1px -1px 0 <c>` (no blur) — *round 2: under trial (§4.2 Shadow trial), default V2* |
 | Shadow colour depth | `color-mix(in oklab, <team> 70%, transparent)`; light theme first darkens the team colour `color-mix(in oklab, <team>, black 25%)` |
 | Shadow scope | every tab of the group (lead included) |
 | Wash | dark `color-mix(in oklab, <team> 6%, transparent)`, light 8 % |
 | Separators | hidden inside the group and after its last tab |
-| Label | team-colour capsule, dark text; `+N` when collapsed; on the top bar and above the lead in the left list |
+| Label | team-colour capsule, dark text — *round 2: team panel header only (not on the top bar, not in the left list)* |
 | Tick | rail, 3 px corner, from the block's lower edge, muted text colour at 70 %, 1 px; no team colour (the capsule carries it) |
 | Beads | bot + host icon (setting), no open mark |
 | Sidebar collapse | members icon + one light per member, rounded hover plate, none at rest (prototype value) |

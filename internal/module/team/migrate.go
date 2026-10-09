@@ -318,6 +318,10 @@ func migrateCrossHostL(db *sql.DB) error {
 			return err
 		}
 	}
+	// One membership per (host, member key): an answer can only ever name one row.
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS team_members_host_mk ON team_members (host_id, mk) WHERE mk <> ''`); err != nil {
+		return err
+	}
 	// The trigger first, then the backfill: a row inserted between the two is covered by the one or the other.
 	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS team_members_mk AFTER INSERT ON team_members WHEN NEW.mk = ''
 		BEGIN UPDATE team_members SET mk = NEW.spawn_op WHERE spawn_op = NEW.spawn_op; END`); err != nil {

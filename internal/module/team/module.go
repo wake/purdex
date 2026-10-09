@@ -413,6 +413,7 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: %w", err)
 	}
 	m.store = store
+	store.localHostID = c.Cfg.HostID
 	store.opChanged = m.wake                    // the one choke point: every committed change of an op wakes its long-polls
 	seen, err := store.LoadModHello(modSeenCap) // presence outlives a restart (P6-2a)
 	if err != nil {

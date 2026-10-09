@@ -66,7 +66,7 @@ export function seedScene(scene: Scene): void {
 
 export function resetTeamStores(): void {
   useTeamRosterStore.getState().reset()
-  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamBeadHost: true })
+  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamDrill: {}, workbookTabs: {}, panel: { width: 312, expanded: false }, teamBeadHost: true })
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useWorkspaceStore.getState().reset()
   useUndoToast.setState({ toast: null, notice: null })
