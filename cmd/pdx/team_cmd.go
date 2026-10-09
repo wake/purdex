@@ -29,8 +29,9 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-const spawnUsage = "usage: pdx spawn [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>] [--task-subject <s> [--done-when <line>]…] [--config <path>]\n" +
-	"       (--cwd defaults to this directory; --effort is low, medium, high, xhigh or max;\n" +
+const spawnUsage = "usage: pdx spawn [--host <alias> --cwd <dir on that host>] [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>] [--task-subject <s> [--done-when <line>]…] [--config <path>]\n" +
+	"       (--cwd defaults to this directory; --host runs the member on a paired host, where --cwd is a required absolute path\n" +
+	"        under the roots that host granted; --effort is low, medium, high, xhigh or max;\n" +
 	"        without --model the member runs this host's default model, which is not fixed;\n" +
 	"        --task-subject makes the brief that member's first task, and --done-when needs it)"
 
@@ -67,6 +68,15 @@ const (
 	spawnWaitTimeout = "spawn_wait_timeout"
 )
 
+// remoteSpawnReasonExit is the exit code of a spawn --host that failed with a reason only a member host (or the lead host's
+// own clean-up) gives: the member host did not answer, or its refusal of the command (cross-host spec §6.2, §3.3).
+var remoteSpawnReasonExit = map[string]int{
+	"remote_unreachable":    ExitMemberFailed,
+	team.ErrCwdOutsideGrant: ExitRefused,
+	"host_not_allowed":      ExitRefused,
+	"capacity_exceeded":     ExitRefused,
+}
+
 // teamRefusalCodes are the team-rule refusals these commands can meet: exit
 // 13 (spec §14). relay_open is a kill of a member mid-relay (P4-6 review).
 // Any other API code is exit 1.
@@ -83,6 +93,7 @@ var teamRefusalCodes = map[string]bool{
 	team.ErrAdoptTargetNotFound:  true,
 	team.ErrAdoptTargetAmbiguous: true,
 	team.ErrRemoteUnsupported:    true,
+	"host_not_allowed":           true, // the member host has not allowed this host (rule 7)
 	team.ErrRequestOpen:          true,
 	// The task routes' refusals (plan T-1c).
 	team.ErrNotMember:         true,
@@ -187,6 +198,7 @@ func teamReportErr(cmd string, err error, stderr io.Writer) int {
 // spawnArgs is a parsed, validated `pdx spawn`.
 type spawnArgs struct {
 	cfgPath, cwd, title, model, effort string
+	host                               string // a paired member host's alias ("" = this host)
 	brief                              string
 	hasBrief                           bool
 	taskSubject                        string   // T-2: "" = no task
@@ -201,6 +213,7 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 	var briefFile string
 	fs.StringVar(&a.cfgPath, "config", "", "")
 	fs.StringVar(&a.cwd, "cwd", "", "")
+	fs.StringVar(&a.host, "host", "", "")
 	fs.StringVar(&a.title, "title", "", "")
 	fs.StringVar(&a.model, "model", "", "")
 	fs.StringVar(&a.effort, "effort", "", "")
@@ -222,6 +235,10 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 	switch {
 	case len(pos) != 0:
 		return reject(fmt.Sprintf("unexpected argument %q", pos[0]))
+	case set["host"] && (a.host == "" || strings.ContainsAny(a.host, " \t\r\n/")):
+		return reject("--host 必須是已配對主機的別名")
+	case set["host"] && (!set["cwd"] || !filepath.IsAbs(a.cwd)):
+		return reject("--host 需要 --cwd，且必須是那台主機上的絕對路徑")
 	case set["model"] && !team.ValidModel(a.model):
 		return reject(fmt.Sprintf("--model %q 不是模型名稱（別名如 sonnet、opus，或完整名稱，可加 [1m]）", a.model))
 	case set["effort"] && !team.ValidEffort(a.effort):
@@ -314,7 +331,7 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 	if !ok {
 		return ExitError
 	}
-	cwd, err := filepath.Abs(a.cwd) // "" is the working directory (coordinator decision 6)
+	cwd, err := filepath.Abs(a.cwd) // "" is the working directory (coordinator decision 6); a --host cwd is absolute already
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx spawn: %v\n", err)
 		return ExitError
@@ -322,7 +339,7 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 	if a.model == "" {
 		fmt.Fprintln(stderr, team.ReminderNoModel) // U20 (c): the spawn goes on
 	}
-	req := team.SpawnRequest{ID: spawnNewID(), OriginInbox: inbox, Cwd: cwd, Title: a.title, Model: a.model, Effort: a.effort}
+	req := team.SpawnRequest{ID: spawnNewID(), OriginInbox: inbox, Cwd: cwd, Title: a.title, Model: a.model, Effort: a.effort, Host: a.host}
 	if a.taskSubject != "" {
 		req.Task = &team.SpawnTask{Subject: a.taskSubject, Description: a.brief, DoneWhen: a.doneWhen}
 	}
@@ -334,6 +351,10 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 	case op.State == team.SpawnFailed && op.Reason == team.SpawnReasonStartTimeout:
 		fmt.Fprintf(stderr, "pdx spawn: %s %s\n", spawnStartTimeoutHint, team.SpawnReasonStartTimeout)
 		return ExitMemberFailed
+	case op.State == team.SpawnFailed && remoteSpawnReasonExit[op.Reason] != 0:
+		// what the member host (or the 10 minute void, or an unpairing) said, for a spawn --host
+		fmt.Fprintf(stderr, "pdx spawn: spawn %s 失敗 %s\n", sanitizeCell(op.ID), sanitizeCell(op.Reason))
+		return remoteSpawnReasonExit[op.Reason]
 	case op.State == team.SpawnFailed:
 		fmt.Fprintf(stderr, "pdx spawn: spawn %s 失敗 %s\n", sanitizeCell(op.ID), sanitizeCell(op.Reason))
 		return ExitError

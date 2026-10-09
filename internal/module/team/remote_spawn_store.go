@@ -2,7 +2,9 @@
 package teammod
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -100,4 +102,59 @@ func failRemoteSpawnIn(q dbtx, id, hostID, reason string, now int64) error {
 	_, err := q.Exec(`UPDATE remote_spawns SET state = 'failed', reason = ?, updated_at = ? WHERE id = ? AND host_id = ? AND state = 'running'`,
 		reason, now, id, hostID)
 	return err
+}
+
+// GetRemoteSpawn returns the forwarded op with id; ok is false when there is none.
+func (s *Store) GetRemoteSpawn(id string) (remoteSpawnRow, bool, error) {
+	var r remoteSpawnRow
+	err := s.db.QueryRow(`SELECT `+remoteSpawnCols+` FROM remote_spawns WHERE id = ?`, id).Scan(r.dest()...)
+	if errors.Is(err, sql.ErrNoRows) {
+		return remoteSpawnRow{}, false, nil
+	}
+	if err != nil {
+		return remoteSpawnRow{}, false, fmt.Errorf("remote spawn %s: %w", id, err)
+	}
+	return r, true, nil
+}
+
+// AcceptRemoteSpawn writes the op, takes its seat and enqueues its `spawn` command in ONE transaction (spec §3.1 rule 2): the
+// lead is checked (and the write lock taken) first, then the seat limit — the same two checks as a local spawn — so an op
+// never exists without its command and a team never goes over its limit.
+func (s *Store) AcceptRemoteSpawn(op remoteSpawnRow, cmd Command, now int64) (remoteSpawnRow, error) {
+	fail := func(err error) (remoteSpawnRow, error) {
+		return remoteSpawnRow{}, fmt.Errorf("accept remote spawn %s: %w", op.ID, err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE teams SET id = id WHERE id = ? AND lead_session_id = ? AND ended_at = 0`, op.TeamID, op.OriginSessionID)
+	lead, err := oneRow(res, err, "lead check")
+	if err == nil && !lead {
+		err = ErrSpawnNotLead
+	}
+	var limit, used int
+	if err == nil {
+		err = tx.QueryRow(`SELECT json_extract(grant_json, '$.max_members') FROM teams WHERE id = ?`, op.TeamID).Scan(&limit)
+		if err == nil {
+			used, err = seatsTaken(tx, op.TeamID, op.ID)
+		}
+	}
+	if err == nil && used >= limit {
+		err = ErrSpawnTeamFull
+	}
+	if err == nil {
+		err = InsertRemoteSpawnIn(tx, op)
+	}
+	if err == nil {
+		err = s.EnqueueCommand(tx, cmd, now) // the op does not exist without its command
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		return fail(err)
+	}
+	return op, nil
 }
