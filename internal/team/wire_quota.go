@@ -13,10 +13,14 @@ const (
 	MaxRelayQuota       = 99                      // a quota is 0..99
 )
 
-// RelayQuota is the pair of numbers; always present on the displays that carry it (the App shows 0).
+// RelayQuota is the pair of numbers plus Rev, the chain row's version; always present on the displays that carry it
+// (the App shows 0). Rev counts the writes of the row (0: no row yet), per chain root and strictly increasing: a
+// client that holds a frame with a higher Rev for the same root must ignore one with a lower Rev (an event, a roster,
+// a list and a PUT answer can reach it in any order).
 type RelayQuota struct {
-	SelfLeft       int `json:"self_left"`
-	MemberPoolLeft int `json:"member_pool_left"`
+	SelfLeft       int   `json:"self_left"`
+	MemberPoolLeft int   `json:"member_pool_left"`
+	Rev            int64 `json:"rev"`
 }
 
 // RelayQuotaPutRequest is PUT /api/team/relay-quota: absolute values for the chain of SessionID (a field left out

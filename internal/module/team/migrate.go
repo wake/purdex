@@ -241,3 +241,9 @@ func migrateUsage(db *sql.DB) error {
 	}
 	return nil
 }
+
+// migrateRelayQuotaRev gives relay_quotas its row version (#2062 RQ-1a2). The table is deployed without it (RQ-1a,
+// alpha.634), so it is a column migration: a row written before it reads rev 0.
+func migrateRelayQuotaRev(db *sql.DB) error {
+	return ensureColumn(db, "relay_quotas", "rev", "INTEGER NOT NULL DEFAULT 0")
+}
