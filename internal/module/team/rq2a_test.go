@@ -417,3 +417,23 @@ func TestCloseMemberRelayApproved_AfterADenyIsALostCASNotAnError(t *testing.T) {
 		t.Fatalf("approve after a deny: row=%s won=%v refused=%q err=%v spent=%v op=%s", a.State, won, refused, err, spent, f.op(op.ID).State)
 	}
 }
+
+// An overdue row is never decided by the daemon's approve, not even to cancel it for a gone member: it is the
+// sweeper's (timeout). Mutation gate: drop UnexpiredAt from the re-check cancel → the auto approve closes it (red).
+func TestMemberRelay_AnOverdueRowWithAGoneMemberIsTheSweepersNotTheAutoApproves(t *testing.T) {
+	f := newFixture(t)
+	op, row := f.awaitingMemberRelay(rid(210), rid(211))
+	f.unatt.set(true)
+	f.m.store.db.Exec(`UPDATE team_members SET state = 'killed'`)
+	f.clock.Add(600_001)
+	f.m.createMu.Lock()
+	ok, _ := f.m.autoApprove(row)
+	f.m.createMu.Unlock()
+	if ok || f.rowState(row.ID) != team.StateOpen || f.op(op.ID).State != team.RelayAwaitingApproval {
+		t.Fatalf("auto approve of an overdue row: ok=%v row=%s op=%s", ok, f.rowState(row.ID), f.op(op.ID).State)
+	}
+	f.m.tick()
+	if f.rowState(row.ID) != team.StateTimeout || f.op(op.ID).Reason != team.RelayReasonTimeout {
+		t.Fatalf("the sweeper: row=%s op=%+v", f.rowState(row.ID), f.op(op.ID))
+	}
+}

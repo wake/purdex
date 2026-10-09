@@ -428,7 +428,11 @@ func (s *Store) CloseIfExpired(id string, now int64, c Close) (team.Approval, bo
 // closeWhere runs the close UPDATE guarded by state='open' and, when guard
 // is non-empty, that extra SQL condition (one ? bound to guardArg).
 func (s *Store) closeWhere(id string, c Close, guard string, guardArg int64) (team.Approval, bool, error) {
-	if kind, ok := s.kindOf(id); ok && kind == team.KindMemberRelay {
+	kind, found, err := s.kindOf(id)
+	if err != nil {
+		return team.Approval{}, false, err
+	}
+	if found && kind == team.KindMemberRelay {
 		return s.closeMemberRelay(id, c, guard, guardArg) // the row and its op move in one transaction (RQ-2 §4.4)
 	}
 	n, err := closeRowIn(s.db, id, c, guard, guardArg)

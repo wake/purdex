@@ -18,14 +18,18 @@ const (
 	memberRelayTeamEnded  = "team_ended"
 )
 
-// kindOf is the kind of approval id; false when there is no such row or it cannot be read (the caller then takes the
-// generic close, whose own statement reports the same problem).
-func (s *Store) kindOf(id string) (team.Kind, bool) {
+// kindOf is the kind of approval id; found is false when there is no such row. A read failure is an error — the caller
+// must not fall back to the generic close, which would close a member_relay row without its op.
+func (s *Store) kindOf(id string) (kind team.Kind, found bool, err error) {
 	var k string
-	if err := s.db.QueryRow(`SELECT kind FROM approval_requests WHERE id = ?`, id).Scan(&k); err != nil {
-		return "", false
+	err = s.db.QueryRow(`SELECT kind FROM approval_requests WHERE id = ?`, id).Scan(&k)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
 	}
-	return team.Kind(k), true
+	if err != nil {
+		return "", false, fmt.Errorf("kind of approval %s: %w", id, err)
+	}
+	return team.Kind(k), true, nil
 }
 
 // lockApproval takes the write lock before any read (a no-op write), as closeSelfRelayApprovedIn does.
@@ -163,7 +167,7 @@ func (s *Store) CloseMemberRelayApproved(id string, c Close) (a team.Approval, w
 		return fail(err)
 	}
 	if reason != "" {
-		n, err := closeRowIn(tx, id, Close{State: team.StateCancelled, DecidedAt: c.DecidedAt, Reason: reason}, "", 0)
+		n, err := closeRowIn(tx, id, Close{State: team.StateCancelled, DecidedAt: c.DecidedAt, Reason: reason, UnexpiredAt: c.UnexpiredAt}, "", 0)
 		if err != nil {
 			return fail(err)
 		}
