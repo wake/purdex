@@ -188,6 +188,18 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// (round-2 A3).
 	req.SenderStartTime = strings.TrimSpace(req.SenderStartTime)
 
+	// A hook that knows its pane but could not name its tmux session (#2123: `tmux` was not on the PATH of a pane that an
+	// ssh login without a login shell started, so the hook's own lookup failed) is named by the daemon from the pane.
+	// Without this the event was refused as schema_invalid - which the hook swallows - and the session never appeared.
+	// A name the hook did send is trusted as before; a pane the daemon cannot place stays refused.
+	//
+	// This costs a `tmux list-panes -a`, so it only runs for a request that already passes the cheap schema checks
+	// (agent, event name, a sender pid with its start time or the uncertain flag), and under a small global limit.
+	if req.TmuxSession == "" && req.TmuxPaneID != "" && m.tmux != nil &&
+		req.AgentType != "" && req.PurdexName != "" && req.SenderPID != 0 && (req.SenderStartTime != "" || req.SenderUncertain) {
+		req.TmuxSession = m.sessionNameOfPane(r.Context(), req.TmuxPaneID)
+	}
+
 	// A session outside tmux (an sdk-cli session, a Nexen worker's `claude -p`)
 	// has no pane identity; it is keyed by its agent session id instead.
 	if req.TmuxSession == "" && req.TmuxPaneID == "" && req.AgentType == "cc" {
@@ -1474,4 +1486,44 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+// paneNameTimeout bounds the one tmux read that names a session from its pane.
+const paneNameTimeout = 2 * time.Second
+
+// paneNameWait is how long an event waits for one of those slots.
+var paneNameWait = 750 * time.Millisecond
+
+// paneNameSlots caps how many of those reads run at once, so a caller cannot turn event requests into a pile of
+// `tmux list-panes -a`.
+var paneNameSlots = make(chan struct{}, 4)
+
+// sessionNameOfPane is the tmux session that owns paneID, or "" when it cannot be said for sure: tmux does not answer
+// within paneNameTimeout (a stuck server must not hold the hook's request), the pane is unknown, or it is linked into
+// several sessions and the listing cannot tell which one the hook ran in (the event stays refused rather than land in a
+// guess).
+func (m *Module) sessionNameOfPane(ctx context.Context, paneID string) string {
+	// A short, bounded wait for a slot: a burst of real hooks (several panes starting at once) must not lose an event the
+	// hook sends only once, while a flood still cannot queue for long.
+	wait := time.NewTimer(paneNameWait)
+	defer wait.Stop()
+	select {
+	case paneNameSlots <- struct{}{}:
+		defer func() { <-paneNameSlots }()
+	case <-wait.C:
+		return "" // still full after the wait; this event is refused like one from an unplaceable pane
+	case <-ctx.Done():
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, paneNameTimeout)
+	defer cancel()
+	placements, err := m.tmux.ListPanePlacements(ctx)
+	if err != nil {
+		return ""
+	}
+	p, ok := placements[paneID]
+	if !ok || p.Ambiguous {
+		return ""
+	}
+	return p.SessionName
 }
