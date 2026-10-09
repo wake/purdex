@@ -1,5 +1,5 @@
 // spa/src/lib/devices-api.ts — the client of a daemon's device management routes (QR pairing spec §3.4; handler in
-// internal/module/devices/handler.go). Admin token only, which is what `hostFetch` sends.
+// internal/module/devices/handler.go). Admin token only, which is what `pinnedHostFetch` sends.
 //
 //   GET    /api/devices                    200 {devices: [row]}   (rows carry no token and no hash)
 //   DELETE /api/devices?pairing_id=<uuid>  204 (idempotent: every device of the pairing, whether or not any was live)
@@ -9,11 +9,11 @@
 //
 // NOTHING HERE THROWS OR REJECTS. Each exchange is raced against a 10 s timer (an AbortController + setTimeout, the
 // host-transfer-api.ts pattern: fake timers cannot advance `AbortSignal.timeout`, and a transport that ignores its
-// signal must still end on time). An unknown host id is never sent to: `hostFetch` falls back to another host's
-// address for an id that is not in the store.
+// signal must still end on time). An unknown host id is never sent to: `pinnedHostFetch` (not `hostFetch`, which would fall back
+// to another host's address) rejects for an id that is not in the store, and a rejection is just `network`.
 
 import { useHostStore } from '../stores/useHostStore'
-import { hostFetch } from './host-api'
+import { pinnedHostFetch } from './host-api'
 
 /** One device token row as the daemon lists it (times in ms; 0 = never). */
 export interface DeviceRow {
@@ -88,7 +88,7 @@ async function call(hostId: string, method: 'GET' | 'DELETE', path: string): Pro
   const run = async (): Promise<Raw> => {
     let res: Response
     try {
-      res = await hostFetch(hostId, path, { method, signal: controller.signal })
+      res = await pinnedHostFetch(hostId, path, { method, signal: controller.signal })
     } catch {
       return fail('network', 0)
     }

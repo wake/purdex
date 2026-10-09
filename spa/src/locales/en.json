@@ -985,6 +985,8 @@
   "hosts.pairedPhones.revoke": "Revoke",
   "hosts.pairedPhones.revoke_confirm": "Revoke \"{{label}}\" on every host? The phone loses access right away.",
   "hosts.pairedPhones.pending": "Not yet revoked on {{hosts}}",
+  "hosts.pairedPhones.revoke_confirm_no_token": "Revoke \"{{label}}\" on every host? {{hosts}} has no admin access, so the phone cannot be revoked there.",
+  "hosts.pairedPhones.no_token": "Cannot revoke on {{hosts}}: no admin access",
   "hosts.pair.error.sot_failed": "The profile's host could not issue a phone token, so nothing was paired.",
   "hosts.pair.error.too_late": "Issuing the tokens took too long. Try again.",
   "hosts.pair.error.cancelled": "Cancelled.",

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
-import { hostFetch } from './host-api'
+import { pinnedHostFetch } from './host-api'
 import {
   createPairingSession,
   mintAndPackage,
@@ -10,7 +10,7 @@ import {
   type PairingState,
 } from './pairing'
 
-vi.mock('./host-api', () => ({ hostFetch: vi.fn() }))
+vi.mock('./host-api', () => ({ pinnedHostFetch: vi.fn() }))
 
 const T0 = 1_700_000_000_000
 const FAKE_TOKENS = ['pdxd_fake_mac', 'pdxd_fake_air', 'pdxd_fake_relay', 'host-secret-token']
@@ -74,8 +74,9 @@ beforeEach(() => {
   relay = sot
   calls = []
   responders = []
-  vi.mocked(hostFetch).mockReset()
-  vi.mocked(hostFetch).mockImplementation(async (hostId: string, path: string, init?: RequestInit) => {
+  vi.mocked(pinnedHostFetch).mockReset()
+  vi.mocked(pinnedHostFetch).mockImplementation(async (hostId: string, path: string, init?: RequestInit) => {
+    if (!Object.hasOwn(useHostStore.getState().hosts, hostId)) throw new Error(`host ${hostId} is not configured`) // what the real pinnedHostFetch does
     const c: Call = {
       hostId,
       method: init?.method ?? 'GET',
@@ -223,7 +224,7 @@ describe('mintAndPackage', () => {
   })
 
   it('an SOT network error is an SOT failure too', async () => {
-    vi.mocked(hostFetch).mockImplementation(async (hostId, path, init) => {
+    vi.mocked(pinnedHostFetch).mockImplementation(async (hostId, path, init) => {
       const c: Call = { hostId, method: init?.method ?? 'GET', path, body: typeof init?.body === 'string' ? JSON.parse(init.body) : null }
       calls.push(c)
       if (hostId === sot && path === '/api/devices') throw new Error('boom pdxd_fake_leak')
@@ -353,6 +354,20 @@ describe('createPairingSession', () => {
     await vi.advanceTimersByTimeAsync(PAIRING_POLL_MS)
     expect(polls()).toHaveLength(2)
     await s.close()
+  })
+
+  it('a relay removed from the host store mid-mint: nothing is sent to it, the session fails without throwing, tokens on the other hosts are revoked', async () => {
+    input.relay = useHostStore.getState().hosts[air]
+    responders.push((c) => {
+      if (c.method === 'POST' && c.path === '/api/devices' && c.hostId === sot) useHostStore.getState().removeHost(air)
+      return undefined
+    })
+    const s = createPairingSession(input)
+    await expect(s.start()).resolves.toBeUndefined()
+    expect(s.getState().phase).toBe('failed')
+    expect(calls.filter((c) => c.hostId === air && c.path.startsWith('/api/host-transfer'))).toHaveLength(0)
+    expect(revokes().some((c) => c.hostId === sot)).toBe(true)
+    expectNoTokenLeak(s.getState())
   })
 
   it('a failed mint ends in failed with the reason, and polls nothing', async () => {

@@ -11,6 +11,7 @@ import { listDevices, revokePairing, type DeviceRow } from '../../lib/devices-ap
 import { groupPairedPhones } from '../../lib/paired-phones'
 import { retryPendingRevocations } from '../../lib/pending-revocation-retry'
 
+type PairedPhone = ReturnType<typeof groupPairedPhones>[number]
 type HostRows = { hostId: string; rows: DeviceRow[] }
 type Loaded = { perHost: HostRows[]; unreachable: number; at: number }
 
@@ -77,21 +78,51 @@ export function PairedPhonesSection() {
     [],
   )
 
-  const phones = useMemo(() => (loaded ? groupPairedPhones(loaded.perHost, loaded.at) : []), [loaded])
+  const [retained, setRetained] = useState<Record<string, PairedPhone>>({})
+  const listed = useMemo(() => (loaded ? groupPairedPhones(loaded.perHost, loaded.at) : []), [loaded])
+  const phones = useMemo(() => {
+    const ids = new Set(listed.map((p) => p.pairingId))
+    const stillPending = new Set(pending.map((i) => i.pairingId))
+    const kept = Object.values(retained).filter((p) => !ids.has(p.pairingId) && stillPending.has(p.pairingId))
+    return [...listed, ...kept]
+  }, [listed, retained, pending])
 
   const nameOf = (id: string) => (hosts[id] ? (lookOf(id).name ?? id) : id)
   const timeText = (ms: number) => new Date(ms).toLocaleString(dateLocale)
 
-  const handleRevoke = async (pairingId: string, label: string, hostIds: string[]) => {
-    if (!window.confirm(t('hosts.pairedPhones.revoke_confirm', { label }))) return
+  // Every configured host with an admin token is a target, whether or not it listed rows of the phone: the revoke is
+  // idempotent, and a host that failed to list (or is offline right now) may still hold the pairing.
+  const targetIds = hostOrder.filter((id) => hosts[id] && hasToken(hosts[id]))
+  const tokenlessIds = hostOrder.filter((id) => hosts[id] && !hasToken(hosts[id]))
+
+  const handleRevoke = async (phone: PairedPhone) => {
+    const { pairingId, label } = phone
+    const tokenless = tokenlessIds.map(nameOf).join(', ')
+    const msg =
+      tokenless === ''
+        ? t('hosts.pairedPhones.revoke_confirm', { label })
+        : t('hosts.pairedPhones.revoke_confirm_no_token', { label, hosts: tokenless })
+    if (!window.confirm(msg)) return
     setRevoking((s) => new Set(s).add(pairingId))
-    const results = await Promise.all(hostIds.map(async (hostId) => ({ hostId, r: await revokePairing(hostId, pairingId) })))
+    const results = await Promise.all(
+      targetIds.map(async (hostId) => {
+        if (useHostStore.getState().runtime[hostId]?.status !== 'connected') return { hostId, done: false }
+        const r = await revokePairing(hostId, pairingId)
+        return { hostId, done: r.kind === 'ok' || r.kind === 'unsupported' }
+      }),
+    )
     const done = new Set<string>()
-    for (const { hostId, r } of results) {
-      if (r.kind === 'ok' || r.kind === 'unsupported') done.add(hostId)
-      else usePendingRevocationsStore.getState().add(hostId, pairingId)
+    let anyPending = false
+    for (const { hostId, done: ok } of results) {
+      if (ok) done.add(hostId)
+      else {
+        anyPending = true
+        usePendingRevocationsStore.getState().add(hostId, pairingId)
+      }
     }
     if (!mounted.current) return
+    // The card must outlive the loaded rows while any host is still pending (it may have had no rows to begin with).
+    if (anyPending) setRetained((m) => ({ ...m, [pairingId]: phone }))
     setRevoking((s) => {
       const next = new Set(s)
       next.delete(pairingId)
@@ -132,7 +163,7 @@ export function PairedPhonesSection() {
                   <span data-testid="paired-state" className="text-xs text-text-secondary">{t(`hosts.pairedPhones.state.${p.state}`)}</span>
                 </div>
                 <button
-                  onClick={() => void handleRevoke(p.pairingId, p.label, hostIds)}
+                  onClick={() => void handleRevoke(p)}
                   disabled={revoking.has(p.pairingId)}
                   className="px-3 py-1.5 rounded text-xs border border-red-400/50 text-red-400 hover:bg-red-400/10 cursor-pointer disabled:opacity-50"
                 >
@@ -151,6 +182,11 @@ export function PairedPhonesSection() {
               {pendingHosts.length > 0 && (
                 <p data-testid="paired-pending" className="text-xs text-yellow-400">
                   {t('hosts.pairedPhones.pending', { hosts: pendingHosts.join(', ') })}
+                </p>
+              )}
+              {tokenlessIds.length > 0 && (
+                <p data-testid="paired-no-token" className="text-xs text-yellow-400">
+                  {t('hosts.pairedPhones.no_token', { hosts: tokenlessIds.map(nameOf).join(', ') })}
                 </p>
               )}
             </li>

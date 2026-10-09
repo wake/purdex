@@ -33,7 +33,7 @@ beforeEach(() => {
       a: { id: 'a', name: 'mlab', ip: '1.1.1.1', port: 1, order: 0, token: 'ta' },
       b: { id: 'b', name: 'air26', ip: '1.1.1.2', port: 1, order: 1, token: 'tb' },
       c: { id: 'c', name: 'offline', ip: '1.1.1.3', port: 1, order: 2, token: 'tc' },
-      d: { id: 'd', name: 'tokenless', ip: '1.1.1.4', port: 1, order: 3 },
+      d: { id: 'd', name: 'noauth', ip: '1.1.1.4', port: 1, order: 3 },
     },
     hostOrder: ['a', 'b', 'c', 'd'],
     runtime: { a: { status: 'connected' }, b: { status: 'connected' }, c: { status: 'disconnected' }, d: { status: 'connected' } },
@@ -47,6 +47,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks()
 })
+
+function connect(id: string) {
+  useHostStore.setState((s) => ({ runtime: { ...s.runtime, [id]: { status: 'connected' } } }))
+}
 
 function ok(rows: DeviceRow[]): devicesApi.ListResult {
   return { kind: 'ok', rows }
@@ -111,18 +115,20 @@ describe('PairedPhonesSection', () => {
   })
 
   it('Revoke calls every host that has rows of the pairing, then the card goes away', async () => {
+    connect('c')
     byHost.a = ok([row({ id: 'a1' })])
     byHost.b = ok([row({ id: 'b1' })])
     render(<PairedPhonesSection />)
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }))
     await waitFor(() => expect(screen.queryByTestId('paired-phone-P1')).toBeNull())
-    expect(revoke.mock.calls.map((c: unknown[]) => [c[0], c[1]]).sort()).toEqual([['a', 'P1'], ['b', 'P1']])
+    expect(revoke.mock.calls.map((c: unknown[]) => [c[0], c[1]]).sort()).toEqual([['a', 'P1'], ['b', 'P1'], ['c', 'P1']])
     expect(usePendingRevocationsStore.getState().items).toEqual([])
   })
 
   it('a host that cannot be reached for the revoke is recorded as pending and the row says so', async () => {
     byHost.a = ok([row({ id: 'a1' })])
     byHost.b = ok([row({ id: 'b1' })])
+    connect('c')
     revoke.mockImplementation(async (h: string) => (h === 'b' ? { kind: 'failed', reason: 'network', status: 0 } : { kind: 'ok' }))
     render(<PairedPhonesSection />)
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }))
@@ -134,12 +140,60 @@ describe('PairedPhonesSection', () => {
   })
 
   it('treats unsupported as done', async () => {
+    connect('c')
     byHost.a = ok([row({})])
     revoke.mockResolvedValue({ kind: 'unsupported' })
     render(<PairedPhonesSection />)
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }))
     await waitFor(() => expect(screen.queryByTestId('paired-phone-P1')).toBeNull())
     expect(usePendingRevocationsStore.getState().items).toEqual([])
+  })
+
+  it('B goes offline after listing: A is revoked, B is recorded pending without a request, the row stays; the retry on connect completes it', async () => {
+    byHost.a = ok([row({ id: 'a1' })])
+    byHost.b = ok([row({ id: 'b1' })])
+    connect('c')
+    render(<PairedPhonesSection />)
+    const btn = await screen.findByRole('button', { name: 'Revoke' })
+    useHostStore.setState((s) => ({ runtime: { ...s.runtime, b: { status: 'disconnected' } } }))
+    fireEvent.click(btn)
+    await waitFor(() => expect(usePendingRevocationsStore.getState().has('b', 'P1')).toBe(true))
+    expect(revoke.mock.calls.map((c: unknown[]) => c[0]).sort()).toEqual(['a', 'c'])
+    const card = await screen.findByTestId('paired-phone-P1')
+    expect(within(card).getByTestId('paired-pending').textContent).toBe('Not yet revoked on air26')
+
+    // B connects: the real retry runs against the same (mocked) transport and clears the entry.
+    vi.mocked(retry.retryPendingRevocations).mockRestore()
+    byHost.a = ok([])
+    byHost.b = ok([])
+    connect('b')
+    await retry.retryPendingRevocations('b')
+    expect(usePendingRevocationsStore.getState().items).toEqual([])
+    expect(revoke).toHaveBeenLastCalledWith('b', 'P1')
+    await waitFor(() => expect(screen.queryByTestId('paired-phone-P1')).toBeNull())
+  })
+
+  it('a host whose list failed is still targeted, and keeps the row while it is pending', async () => {
+    byHost.a = ok([row({ id: 'a1' })])
+    byHost.b = { kind: 'failed', reason: 'network', status: 0 }
+    revoke.mockImplementation(async (h: string) => (h === 'b' ? { kind: 'failed', reason: 'network', status: 0 } : { kind: 'ok' }))
+    render(<PairedPhonesSection />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }))
+    await waitFor(() => expect(usePendingRevocationsStore.getState().has('b', 'P1')).toBe(true))
+    expect(revoke.mock.calls.map((c: unknown[]) => c[0]).sort()).toEqual(['a', 'b'])
+    const card = await screen.findByTestId('paired-phone-P1')
+    expect(within(card).getByTestId('paired-pending').textContent).toMatch(/air26/)
+  })
+
+  it('hosts without a token are named in the confirm text and on the row', async () => {
+    byHost.a = ok([row({})])
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    render(<PairedPhonesSection />)
+    const card = await screen.findByTestId('paired-phone-P1')
+    expect(within(card).getByTestId('paired-no-token').textContent).toMatch(/noauth/)
+    fireEvent.click(within(card).getByRole('button', { name: 'Revoke' }))
+    expect(String(confirm.mock.calls[0][0])).toMatch(/noauth/)
+    expect(revoke).not.toHaveBeenCalled()
   })
 
   it('shows a pending note for a host recorded earlier (e.g. by the pairing dialog)', async () => {

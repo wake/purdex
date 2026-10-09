@@ -24,19 +24,19 @@ afterEach(() => {
 
 describe('listDevices', () => {
   it('200 returns the rows', async () => {
-    const spy = vi.spyOn(hostApi, 'hostFetch').mockResolvedValue(res(200, { devices: [row] }))
+    const spy = vi.spyOn(hostApi, 'pinnedHostFetch').mockResolvedValue(res(200, { devices: [row] }))
     const r = await listDevices('h')
     expect(r).toEqual({ kind: 'ok', rows: [row] })
     expect(spy.mock.calls[0][1]).toBe('/api/devices')
   })
 
   it('drops rows that are not objects with string ids', async () => {
-    vi.spyOn(hostApi, 'hostFetch').mockResolvedValue(res(200, { devices: [row, 5, { id: 1 }] }))
+    vi.spyOn(hostApi, 'pinnedHostFetch').mockResolvedValue(res(200, { devices: [row, 5, { id: 1 }] }))
     expect(await listDevices('h')).toEqual({ kind: 'ok', rows: [row] })
   })
 
   it('404 is unsupported, 401/403 unauthorized, 500 malformed, bad 200 malformed', async () => {
-    const spy = vi.spyOn(hostApi, 'hostFetch')
+    const spy = vi.spyOn(hostApi, 'pinnedHostFetch')
     spy.mockResolvedValueOnce(res(404))
     expect(await listDevices('h')).toMatchObject({ kind: 'failed', reason: 'unsupported', status: 404 })
     spy.mockResolvedValueOnce(res(401))
@@ -50,7 +50,7 @@ describe('listDevices', () => {
   })
 
   it('a rejected fetch is network; an unknown host is never sent to', async () => {
-    const spy = vi.spyOn(hostApi, 'hostFetch').mockRejectedValue(new Error('boom'))
+    const spy = vi.spyOn(hostApi, 'pinnedHostFetch').mockRejectedValue(new Error('boom'))
     expect(await listDevices('h')).toMatchObject({ kind: 'failed', reason: 'network' })
     spy.mockClear()
     expect(await listDevices('ghost')).toMatchObject({ kind: 'failed', reason: 'unknown_host' })
@@ -59,7 +59,7 @@ describe('listDevices', () => {
 
   it('times out even when the transport ignores its signal', async () => {
     vi.useFakeTimers()
-    vi.spyOn(hostApi, 'hostFetch').mockReturnValue(new Promise(() => {}))
+    vi.spyOn(hostApi, 'pinnedHostFetch').mockReturnValue(new Promise(() => {}))
     const p = listDevices('h')
     await vi.advanceTimersByTimeAsync(DEVICES_TIMEOUT_MS)
     expect(await p).toMatchObject({ kind: 'failed', reason: 'timeout' })
@@ -69,19 +69,19 @@ describe('listDevices', () => {
 
 describe('revokePairing', () => {
   it('204 is ok and the request is DELETE with the pairing id in the query', async () => {
-    const spy = vi.spyOn(hostApi, 'hostFetch').mockResolvedValue(res(204))
+    const spy = vi.spyOn(hostApi, 'pinnedHostFetch').mockResolvedValue(res(204))
     expect(await revokePairing('h', PID)).toEqual({ kind: 'ok' })
     expect(spy.mock.calls[0][1]).toBe(`/api/devices?pairing_id=${PID}`)
     expect(spy.mock.calls[0][2]).toMatchObject({ method: 'DELETE' })
   })
 
   it('404 is unsupported (a daemon without devices.v1), not an error to retry', async () => {
-    vi.spyOn(hostApi, 'hostFetch').mockResolvedValue(res(404))
+    vi.spyOn(hostApi, 'pinnedHostFetch').mockResolvedValue(res(404))
     expect(await revokePairing('h', PID)).toEqual({ kind: 'unsupported' })
   })
 
   it('other statuses and transport errors are failures', async () => {
-    const spy = vi.spyOn(hostApi, 'hostFetch')
+    const spy = vi.spyOn(hostApi, 'pinnedHostFetch')
     spy.mockResolvedValueOnce(res(503))
     expect(await revokePairing('h', PID)).toMatchObject({ kind: 'failed', reason: 'malformed', status: 503 })
     spy.mockResolvedValueOnce(res(401))
@@ -93,7 +93,7 @@ describe('revokePairing', () => {
 
   it('times out', async () => {
     vi.useFakeTimers()
-    vi.spyOn(hostApi, 'hostFetch').mockReturnValue(new Promise(() => {}))
+    vi.spyOn(hostApi, 'pinnedHostFetch').mockReturnValue(new Promise(() => {}))
     const p = revokePairing('h', PID)
     await vi.advanceTimersByTimeAsync(DEVICES_TIMEOUT_MS)
     expect(await p).toMatchObject({ kind: 'failed', reason: 'timeout' })

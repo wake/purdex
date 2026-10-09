@@ -16,7 +16,7 @@
 
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { isValidDaemonId } from './daemon-id'
-import { hostFetch } from './host-api'
+import { pinnedHostFetch } from './host-api'
 import type { HostLook } from './host-look'
 import { payloadRowsOf, isTransferHost, parseTransferRows } from './host-transfer-plan'
 import type { TransferLook } from './host-transfer-api'
@@ -117,7 +117,7 @@ async function call(hostId: string, method: string, path: string, body?: unknown
   const run = async (): Promise<Raw> => {
     let res: Response
     try {
-      res = await hostFetch(hostId, path, {
+      res = await pinnedHostFetch(hostId, path, {
         method,
         ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
         signal: controller.signal,

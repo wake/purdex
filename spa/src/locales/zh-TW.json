@@ -985,6 +985,8 @@
   "hosts.pairedPhones.revoke": "撤銷",
   "hosts.pairedPhones.revoke_confirm": "要在所有主機上撤銷「{{label}}」嗎？這支手機會立刻失去存取權。",
   "hosts.pairedPhones.pending": "尚未在 {{hosts}} 撤銷",
+  "hosts.pairedPhones.revoke_confirm_no_token": "要在所有主機上撤銷「{{label}}」嗎？{{hosts}} 沒有管理權限，無法在那裡撤銷。",
+  "hosts.pairedPhones.no_token": "無法在 {{hosts}} 撤銷：沒有管理權限",
   "hosts.pair.error.sot_failed": "設定檔所在的主機無法為手機發出 token，因此沒有配對。",
   "hosts.pair.error.too_late": "發出 token 花了太久，請再試一次。",
   "hosts.pair.error.cancelled": "已取消。",
