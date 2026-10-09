@@ -164,3 +164,24 @@ func TestNotice70_AFailedSendIsRetried(t *testing.T) {
 		t.Fatalf("%d delivered notices after the retry, want 1", n)
 	}
 }
+
+// Looked at again before the send: a member that started a turn between the check and the send is not told about, and
+// stays armed. Mutation gate: drop the re-check in usageNotice → red.
+func TestNotice70_ReChecksIdleRightBeforeTheSend(t *testing.T) {
+	f := noticeFixture(t)
+	f.usage.setStatus("tm-op-a", "running") // it started a turn after the check that disarmed it
+	rows, err := f.m.store.ActiveMembersOfLiveTeams()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("members = %v, %v", rows, err)
+	}
+	if won, err := f.m.store.DisarmNotice("op-a", "sid-ma"); err != nil || !won {
+		t.Fatalf("disarm = %v, %v", won, err)
+	}
+	f.m.usageNotice(rows[0], 80)
+	if n := len(f.sender.calls()); n != 0 {
+		t.Fatalf("%d notices for a member that is running again, want 0", n)
+	}
+	if won, _ := f.m.store.DisarmNotice("op-a", "sid-ma"); !won {
+		t.Fatal("the member was not armed again after the skipped send")
+	}
+}

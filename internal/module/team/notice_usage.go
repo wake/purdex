@@ -2,6 +2,8 @@ package teammod
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -95,8 +97,16 @@ func (m *Module) noticeUsage() {
 }
 
 // usageNotice sends the notice to the lead's live address from the member's inbox (else the lead's own), and arms the
-// member again when the send did not go, so the next check tries once more.
+// member again when the send did not go, so the next check tries once more. It is an advisory, at-least-once notice: the
+// armed flag is persisted before the send, so a crash between the two loses it (the lead still sees CTX in `pdx team`),
+// and a send that failed after the transport took it may be sent twice; neither is worth an outbox.
 func (m *Module) usageNotice(mr memberRow, pct int) {
+	// Looked at again right before the send: the member may have started a turn, or a relay op may have been created,
+	// since the check (the claim's statement only covers an op that existed before it).
+	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) {
+		_, _ = m.store.ArmNotice(mr.SpawnOp, mr.SessionID)
+		return
+	}
 	if !m.sendUsageNotice(mr, pct) {
 		if _, err := m.store.ArmNotice(mr.SpawnOp, mr.SessionID); err != nil {
 			m.logf("[team] usage notice: %v", err)
@@ -136,6 +146,16 @@ func (m *Module) sendUsageNotice(mr memberRow, pct int) bool {
 	defer cancel()
 	if _, err := m.sender.Send(ctx, ipeers.SendRequest{To: to, Text: text, OriginInbox: inbox}); err != nil {
 		m.logf("[team] usage notice (member %s) to %s: %v", mr.Ref, to, err)
+		return false
+	}
+	return true
+}
+
+// relayOpen says whether the session has a relay op in a non-terminal state; an unreadable store counts as open (no notice).
+func (m *Module) relayOpen(sessionID string) bool {
+	var one int
+	err := m.store.db.QueryRow(`SELECT 1 FROM relay_ops WHERE session_id = ? AND state NOT IN ('done', 'failed', 'cancelled') LIMIT 1`, sessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
 		return false
 	}
 	return true
