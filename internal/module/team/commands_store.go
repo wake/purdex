@@ -92,6 +92,9 @@ type CommandPlan struct {
 	Consent    bool
 	Target     *team.Origin
 	Now        int64
+	// KillState is what the handler found when it signalled a kill's target: "killed" (signalled), "gone" (nothing was
+	// left to signal) or the state an earlier kill left the row in; "" = no live row to kill (the store refuses).
+	KillState string
 
 	cmd  team.TeamCommand // decoded from Body by ApplyTeamCommand
 	hash string
@@ -162,6 +165,8 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 		res, err = applyAdoptIn(tx, p)
 	case team.CommandRelease:
 		res, err = applyReleaseIn(tx, p)
+	case team.CommandKill:
+		res, err = applyKillIn(tx, p)
 	case team.CommandEnd, team.CommandLeadMoved:
 		res, err = applyTeamLevelIn(tx, p)
 	case team.CommandVoid:

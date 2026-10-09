@@ -125,8 +125,10 @@ type Module struct {
 	// afterTargetResolved, when set, runs in the commands route between the target's resolution and the apply (test
 	// seam for a consent revoked meanwhile). nil in production.
 	afterTargetResolved func()
-	stopCancel          context.CancelFunc
-	sweepWG             sync.WaitGroup
+	// beforeKillSignal, when set, runs in the commands route between a kill's committed decision and its signal (test).
+	beforeKillSignal func()
+	stopCancel       context.CancelFunc
+	sweepWG          sync.WaitGroup
 	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
 	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
 	noticeMu sync.Mutex
