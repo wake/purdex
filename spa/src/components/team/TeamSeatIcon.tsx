@@ -19,6 +19,8 @@ interface IconProps {
   sessionCode: string
   isActive?: boolean
   size?: number
+  /** Draw the seat's subagent dots to the icon's left (the panel's full rows); the beads leave them off. */
+  subagents?: boolean
 }
 
 /** The icon of a seat whose agent type is not known (no store key, or none yet): a bead is never visually empty. */
@@ -26,8 +28,8 @@ function DefaultBot({ size, className }: { size: number; className?: string }) {
   return <Robot size={size} className={className} data-testid="team-bead-bot" />
 }
 
-export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14 }: IconProps) {
-  const { agentIcon, agentStatus, isUnread, tabIndicatorStyle } = useSessionAgentIndicator(hostId, sessionCode)
+export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false }: IconProps) {
+  const { agentIcon, agentStatus, isUnread, tabIndicatorStyle, subagentRefs } = useSessionAgentIndicator(hostId, sessionCode)
   return (
     <TabIcon
       IconComponent={agentIcon ?? DefaultBot}
@@ -35,7 +37,7 @@ export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14 
       tabIndicatorStyle={tabIndicatorStyle}
       isActive={isActive}
       iconSize={size}
-      subagentRefs={[]}
+      subagentRefs={subagents ? subagentRefs : []}
       isUnread={isUnread}
     />
   )
