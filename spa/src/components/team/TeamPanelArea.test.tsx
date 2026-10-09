@@ -355,6 +355,26 @@ describe('header height (TI-6)', () => {
       expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(6)
     })
 
+    it('a wider boundary cell does not make the capacity oscillate (the widest seen only grows)', () => {
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const widths: Record<string, number> = { L: 38, M0: 38, M1: 38, M2: 50 } // the 4th seat is the wide one (status light)
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.getAttribute('data-testid') === 'team-panel-cell' ? widths[this.getAttribute('data-session-id') ?? ''] ?? 38 : 0
+      })
+      scene5(8)
+      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+      availW = 165
+      const { rerender } = mount()
+      const count = () => within(header()).getAllByTestId('team-panel-cell').length
+      const first = count()
+      expect(first).toBe(3) // (165 - 5 + 2) / (50 + 2) -> 3, and it stays
+      for (let i = 0; i < 5; i++) {
+        rerender(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
+        expect(count()).toBe(first)
+      }
+      expect(err).not.toHaveBeenCalled() // no "Maximum update depth exceeded"
+    })
+
     it('an enlarged panel with a narrow box and a big team wraps under the header', () => {
       scene5(8)
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
