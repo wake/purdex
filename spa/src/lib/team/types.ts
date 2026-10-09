@@ -371,6 +371,9 @@ export const RELAY_QUOTA_CAPABILITY = 'team.relay_quota.v1'
 /** The daemon lets the App raise or lower a team's member cap (`PUT /api/team/max-members`). */
 export const TEAM_MAX_MEMBERS_CAPABILITY = 'team.max_members.v1'
 
+/** The daemon lets the App edit a live team's name, label and colour (`PUT /api/team/appearance`, TR-1). */
+export const TEAM_EDIT_CAPABILITY = 'team.edit.v1'
+
 /** The cap's range (the daemon's `TeamMaxMembers`): a person may go up to 8, never below 1. */
 export const MAX_MEMBERS_MIN = 1
 export const MAX_MEMBERS_MAX = 8
