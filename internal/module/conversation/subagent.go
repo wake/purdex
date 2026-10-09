@@ -59,7 +59,7 @@ func (m *Module) handleSubagent(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
-	items, _, readErr := ccnorm.NormalizeSubagent(f, agentID)
+	items, stats, readErr := ccnorm.NormalizeSubagent(f, agentID)
 	if readErr != nil && len(items) == 0 {
 		writeError(w, http.StatusInternalServerError, "read_failed")
 		return
@@ -67,7 +67,8 @@ func (m *Module) handleSubagent(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []convmodel.Item{}
 	}
-	resp := subagentJSON{Items: items, Partial: readErr != nil}
+	// partial: the read failed after some items, or the normalizer stopped at one of its totals (bytes, lines, items)
+	resp := subagentJSON{Items: items, Partial: readErr != nil || stats.Skipped["subagent:truncated"] > 0}
 	body, err := json.Marshal(resp)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encode_failed")

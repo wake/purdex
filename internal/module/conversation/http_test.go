@@ -679,3 +679,18 @@ func TestSubagent_BusyWhenTooManyReads(t *testing.T) {
 		t.Fatalf("code %q", got)
 	}
 }
+
+// The normalizer stops at its own totals without an error: the answer must still say it is not the whole file.
+func TestSubagent_NormalizerTruncationIsPartial(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	e.subagentFile(childID, childFixture(t)+strings.Repeat("{}\n", 50_001)) // past the 50,000-line total
+	w := e.get("/api/conversations/claude/" + sid + "/subagents/" + childID)
+	var got subagentResp
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("%v: %.200s", err, w.Body.String())
+	}
+	if w.Code != 200 || len(got.Items) == 0 || !got.Partial {
+		t.Fatalf("status %d items %d partial %v, want items and partial", w.Code, len(got.Items), got.Partial)
+	}
+}
