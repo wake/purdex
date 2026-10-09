@@ -24,23 +24,32 @@ export function TeamTitleStrip({ team }: { team: TeamPanelTeam }) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const box = useRef<HTMLDivElement>(null)
   const seats = [team.lead, ...team.members]
-  // The room is measured: the strip's width, less the team name's worst case, and 「+N」 when someone does not fit. Where
+  // The room is measured from every seat's own cell width: the strip's width, less the team name's worst case, and 「+N」
+  // when someone does not fit. The seats that do not fit are still rendered, in a hidden row, so their widths count; where
   // nothing can be measured (no layout) everyone is drawn.
   const cap = useCellCapacity(box, {
-    key: `${team.teamKey}|${seats.map((s) => s.sessionId).join(',')}`,
-    total: seats.length,
     base: CAPSULE_MAX_W + HEADER_GAP,
     reserve: PLUS_CHIP_W + HEADER_GAP,
     min: 0,
   }) ?? seats.length
   const shown = seats.slice(0, cap)
-  const hidden = seats.length - shown.length
+  const rest = seats.slice(shown.length)
+  const hidden = rest.length
+  const cell = (s: TeamPanelTeam['lead']) => (
+    <TeamCell
+      key={s.sessionId}
+      teamKey={team.teamKey}
+      seat={s}
+      isActive={s.tabId !== null && s.tabId === activeTabId}
+      onOpen={(sessionId) => display?.onOpenSeat(team.teamKey, sessionId)}
+    />
+  )
   const back = () => useTeamUiStore.getState().toggleTitleBar(team.teamKey)
   return (
     <div
       ref={box}
       data-testid="team-title-strip"
-      className="flex items-center justify-center min-w-0 w-full max-w-[calc(100%-27rem)] overflow-hidden pointer-events-none"
+      className="flex items-center justify-center relative min-w-0 w-full max-w-[calc(100%-27rem)] overflow-hidden pointer-events-none"
       style={{ columnGap: HEADER_GAP }}
     >
       <TeamStripButton testId="team-strip-name" onClick={back} label={team.tooltip} className="min-w-0 shrink overflow-hidden">
@@ -50,15 +59,16 @@ export function TeamTitleStrip({ team }: { team: TeamPanelTeam }) {
         {shown.map((s, i) => (
           <span key={s.sessionId} className="flex items-center">
             {i === 1 && <CellSep />}
-            <TeamCell
-              teamKey={team.teamKey}
-              seat={s}
-              isActive={s.tabId !== null && s.tabId === activeTabId}
-              onOpen={(sessionId) => display?.onOpenSeat(team.teamKey, sessionId)}
-            />
+            {cell(s)}
           </span>
         ))}
       </div>
+      {hidden > 0 && (
+        // Out of sight and out of reach (not focusable, not clickable): only here so their widths can be measured.
+        <div data-testid="team-strip-measure" aria-hidden="true" className="absolute left-0 top-0 flex items-center whitespace-nowrap" style={{ visibility: 'hidden', pointerEvents: 'none', height: 0, overflow: 'hidden', width: 'max-content', columnGap: CELL_GAP }}>
+          {rest.map((s) => <span key={s.sessionId} className="flex items-center">{cell(s)}</span>)}
+        </div>
+      )}
       {hidden > 0 && <MoreChip count={hidden} onClick={back} />}
     </div>
   )

@@ -6,8 +6,8 @@
 /** The header row of both modes (content box; no vertical padding). Full mode used to be py-2 around an 18px row = 34. */
 export const HEADER_H = 34
 /** The header's side padding and the gap between its parts (capsule | cells or count | buttons). */
-export const HEADER_PX = 4
-export const HEADER_GAP = 2
+export const HEADER_PX = 6
+export const HEADER_GAP = 4
 /** A single click on the team name waits this long for a second one (a double-click edits instead of toggling). */
 export const NAME_CLICK_DELAY_MS = 280
 /** The name capsule's cap in one-line mode. */
@@ -30,7 +30,7 @@ export const CELL_ICON = 12
 export const CELL_ICON_SLOT = 16
 export const CELL_ICON_PULL = -1.5
 export const CELL_RING = 20
-export const CELL_PX = 0
+export const CELL_PX = 1
 export const CELL_INNER_GAP = 0
 export const CELL_W = CELL_PX * 2 + SUBAGENT_SLOT_W + CELL_ICON_SLOT + CELL_INNER_GAP + CELL_RING
 /** The widest a one-line cell may be under any light style (iconDot used to be 50: dot slot + icon side by side). */
@@ -43,9 +43,9 @@ export function cellWidthFor(_style: 'icon' | 'dot' | 'iconDot' | 'badge'): numb
   return CELL_W
 }
 export const CELL_H = 26
-export const CELL_GAP = 1
+export const CELL_GAP = 2
 /** The 1px divider after the lead, with its side margin. */
-export const SEP_MARGIN = 1
+export const SEP_MARGIN = 2
 export const SEP_W = 1 + 2 * SEP_MARGIN
 
 /** The area's own 1px border on each side. */
@@ -54,35 +54,33 @@ export const AREA_BORDER = 2
 /** Cells (lead included) that fit in the header's first row at panel width `width`; at least 1. */
 export function firstRowCapacity(width: number): number {
   const avail = width - AREA_BORDER - 2 * HEADER_PX - CAPSULE_MAX_W - 2 * HEADER_GAP - BUTTONS_W
-  return capacityOf(avail, CELL_W)
+  return Math.max(1, Math.floor((avail - SEP_W + CELL_GAP) / (CELL_W + CELL_GAP)))
 }
 
 /** The strip's 「+N」 chip (title bar): reserved at the end of the cells when some seats do not fit. */
 export const PLUS_CHIP_W = 28
 
 /**
- * How many cells of width `unit` fit in `avail` px (lead's divider included), at least `min`. `reserve` px are kept free
- * at the end (the strip's 「+N」); the header row passes 0. The header row's first row never goes below 1 (`min` 1, the
- * default); the title-bar strip passes 0: a seat that does not fit goes into 「+N」 however narrow the bar is.
- */
-export function capacityOf(avail: number, unit: number, reserve = 0, min = 1): number {
-  return Math.max(min, Math.floor((avail - reserve - SEP_W + CELL_GAP) / (unit + CELL_GAP)))
-}
-
-/**
  * How many cells fit in `avail` px, given every seat's REAL cell width in seat order (cells differ: a remote seat draws a
- * host icon). Adds width + CELL_GAP per cell, and the divider after the lead once there are 2+; the largest k that fits, at
- * least 1. It depends only on the widths and `avail`, never on how many cells are currently shown.
+ * host icon). Adds width + CELL_GAP per cell, and the divider after the lead once there are 2+; the largest prefix that
+ * fits, at least `min`. It depends only on the widths and `avail`, never on how many cells are currently shown.
+ * The header row keeps `min` 1 (the default): its first row always holds the lead. The title-bar strip passes 0, so a seat
+ * that does not fit goes into 「+N」 however narrow the bar is, and `reserve` px (the chip) when not everyone fits.
  */
-export function capacityFromWidths(widths: readonly number[], avail: number): number {
-  let used = 0
-  let k = 1
-  for (let i = 0; i < widths.length; i++) {
-    used += widths[i] + (i > 0 ? CELL_GAP : 0) + (i === 1 ? SEP_W : 0)
-    if (used > avail) break
-    k = i + 1
+export function capacityFromWidths(widths: readonly number[], avail: number, opts: { reserve?: number; min?: number } = {}): number {
+  const { reserve = 0, min = 1 } = opts
+  const fit = (room: number): number => {
+    let used = 0
+    let k = 0
+    for (let i = 0; i < widths.length; i++) {
+      used += widths[i] + (i > 0 ? CELL_GAP : 0) + (i === 1 ? SEP_W : 0)
+      if (used > room) break
+      k = i + 1
+    }
+    return k
   }
-  return Math.max(1, k)
+  const all = fit(avail)
+  return Math.max(min, all >= widths.length ? all : fit(avail - reserve))
 }
 
 /** Width the first row's cells take for `n` seats (divider after the lead when there are 2 or more). */

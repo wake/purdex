@@ -302,19 +302,19 @@ describe('header height (TI-6)', () => {
     expect(header().style.height).toBe(full)
   })
 
-  it('lead + 3 members stay in the header row; there is no region under it', () => {
-    scene()
+  it('lead + 2 members stay in the header row (what 312px holds without squeezing a cell); a smaller team has no region under it', () => {
+    seedScene({ members: [['A', 'a-tm'], ['B', 'b-tm']], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
-    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(4)
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(3)
     expect(screen.queryByTestId('team-panel-more')).toBeNull()
   })
 
-  it('the 5th seat wraps into a region under the header, which keeps its height', () => {
-    scene5(4)
+  it('the 4th seat wraps into a region under the header, which keeps its height', () => {
+    scene5(3)
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
-    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(4)
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(3)
     const more = screen.getByTestId('team-panel-more')
     expect(header().contains(more)).toBe(false)
     expect(more.className).toContain('flex-wrap')

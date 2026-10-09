@@ -34,6 +34,8 @@ const mode = (key = KEY) => useTeamUiStore.getState().panelMode[key] ?? 'full'
 const setActive = (id: string | null) => act(() => { useTabStore.setState({ activeTabId: id }) })
 const noDrag = (el: HTMLElement) => (el.style as unknown as { WebkitAppRegion?: string }).WebkitAppRegion === 'no-drag'
 const strip = () => screen.queryByTestId('team-title-strip')
+/** The cells the strip really shows (the hidden measuring row holds the ones that went into +N). */
+const shownCells = () => within(screen.getByTestId('team-strip-cells')).queryAllByTestId('team-panel-cell')
 const button = () => screen.queryByTestId('team-notebook-button')
 const press = () => fireEvent.click(screen.getByTestId('team-notebook-button'))
 const mountBar = () => render(<TeamDisplayProvider><TitleBar title={TITLE} /><TeamPanelArea /></TeamDisplayProvider>)
@@ -155,17 +157,17 @@ describe('the strip', () => {
     let avail = 0
     beforeEach(() => {
       const id = (el: Element) => el.getAttribute('data-testid')
-      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) { return id(this) === 'team-panel-cell' ? 41 : 0 })
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) { return id(this) === 'team-panel-cell' ? 43 : 0 })
       vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) { return id(this) === 'team-title-strip' ? avail : 0 })
     })
 
     it('shows as many cells as fit, then 「+N」 for the rest', () => {
       scene()
-      avail = 190 // less the name (84 + 2): 104 -> two cells; with the chip kept free (30): one
+      avail = 190 // less the name (84 + 2): 104 -> two cells (43 + 2 + 5 + 43 = 93); with the chip kept free (30): one
       mountBar()
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
       const s = strip()!
-      expect(within(s).getAllByTestId('team-panel-cell')).toHaveLength(1)
+      expect(shownCells()).toHaveLength(1)
       const more = within(s).getByTestId('team-strip-more')
       expect(more.textContent).toBe('+3')
       expect(noDrag(more)).toBe(true)
@@ -178,7 +180,7 @@ describe('the strip', () => {
       mountBar()
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
       const s = strip()!
-      expect(within(s).queryAllByTestId('team-panel-cell')).toHaveLength(0)
+      expect(shownCells()).toHaveLength(0)
       expect(within(s).getByTestId('team-strip-more').textContent).toBe('+1')
       // structure: capped to the allotted width, clipped, and the name is the part that gives way
       expect(s.className).toContain('max-w-[calc(100%-27rem)]')
@@ -200,25 +202,30 @@ describe('the strip', () => {
       expect(more.getAttribute('title')).not.toContain('{')
     })
 
-    it('a wider seat that joins past the capacity is measured too: the capacity is decided again with its width', () => {
-      const wide: Record<string, number> = { W: 70 }
+    it.each([[20, 4, null], [70, 3, '+1']] as const)('a seat that joins is counted at its own width, hidden or not (%ipx -> %i shown)', (width, shown, chip) => {
       vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
-        return this.getAttribute('data-testid') === 'team-panel-cell' ? wide[this.getAttribute('data-session-id') ?? ''] ?? 41 : 0
+        return this.getAttribute('data-testid') === 'team-panel-cell' ? (this.getAttribute('data-session-id') === 'W' ? width : 43) : 0
       })
-      scene()
-      avail = 256 // less the name: 170 -> all four fit
+      seedScene({ members: [['A', 'a-tm'], ['B', 'b-tm']], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
+      avail = 264 // less the name: 178 -> 43 + 50 + 45 = 138 for three, 160 with a 20px fourth
       mountBar()
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
-      expect(within(strip()!).getAllByTestId('team-panel-cell')).toHaveLength(4)
-      act(() => { // a fifth, wider (remote-looking) seat joins
+      expect(shownCells()).toHaveLength(3)
+      act(() => { // a fourth seat joins
         const roster = structuredClone(useTeamRosterStore.getState().byHost[HOST])
         roster[0].members.push(member('W', 9, 'w-tm'))
         useTeamRosterStore.setState({ byHost: { [HOST]: roster } })
         useSessionStore.setState({ sessions: { [HOST]: [...useSessionStore.getState().sessions[HOST], { code: 'code-w-tm', name: 'w-tm', mode: 'terminal', cwd: '~' }] as never } })
       })
-      // with W's 70px counted: floor((170 - 30 - 3 + 1) / 71) = 1 cell, the other four in 「+N」 (the old 41px unit said 3)
-      expect(within(strip()!).getAllByTestId('team-panel-cell')).toHaveLength(1)
-      expect(within(strip()!).getByTestId('team-strip-more').textContent).toBe('+4')
+      expect(shownCells()).toHaveLength(shown)
+      expect(screen.queryByTestId('team-strip-more')?.textContent ?? null).toBe(chip)
+      // a seat past the capacity is still drawn, hidden and out of reach, so its width counts
+      if (chip) {
+        const measure = screen.getByTestId('team-strip-measure')
+        expect(within(measure).getByTestId('team-panel-cell').getAttribute('data-session-id')).toBe('W')
+        expect(measure.getAttribute('aria-hidden')).toBe('true')
+        expect(measure.style.visibility).toBe('hidden')
+      }
     })
 
     it('「+N」 brings the area back to the pane', () => {
@@ -236,8 +243,9 @@ describe('the strip', () => {
       avail = 400
       mountBar()
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
-      expect(within(strip()!).getAllByTestId('team-panel-cell')).toHaveLength(4)
+      expect(shownCells()).toHaveLength(4)
       expect(screen.queryByTestId('team-strip-more')).toBeNull()
+      expect(screen.queryByTestId('team-strip-measure')).toBeNull()
     })
   })
 })

@@ -3,19 +3,20 @@
 import { describe, it, expect } from 'vitest'
 import { PANEL_DEFAULT_WIDTH } from '../../stores/useTeamUiStore'
 import {
-  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_GAP, SEP_W, POPOVER_W, SUBAGENT_SLOT_W, PLUS_CHIP_W, capacityOf, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
+  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_PX, CELL_GAP, SEP_W, POPOVER_W, SUBAGENT_SLOT_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
 } from './panel-layout'
 
 describe('panel header budget', () => {
-  it('lead + 3 members (4 cells), the 84px capsule and both buttons fit in 312px', () => {
-    const total = AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + cellsWidth(4) + BUTTONS_W
-    expect(total).toBeLessThanOrEqual(PANEL_DEFAULT_WIDTH)
-  })
+  // The room the cells have at the default width: the area's borders, the header's padding and gaps, the name capsule at its
+  // cap and the two buttons come off 312. A cell is [subagent slot] + bot + ring (no squeezing: the content keeps its size).
+  const ROOM = PANEL_DEFAULT_WIDTH - (AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + BUTTONS_W)
 
-  it('5 cells do not fit in 312px, so the 5th wraps', () => {
-    const total = AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + cellsWidth(5) + BUTTONS_W
-    expect(total).toBeGreaterThan(PANEL_DEFAULT_WIDTH)
-    expect(firstRowCapacity(PANEL_DEFAULT_WIDTH)).toBe(4)
+  it('at 312 the first row holds lead + 2 members (3 cells); the 4th wraps under the header', () => {
+    expect(cellsWidth(3)).toBeLessThanOrEqual(ROOM)
+    expect(cellsWidth(4)).toBeGreaterThan(ROOM)
+    expect(firstRowCapacity(PANEL_DEFAULT_WIDTH)).toBe(3)
+    // the per-cell sum agrees with the closed form
+    expect(capacityFromWidths(Array(9).fill(CELL_W), ROOM)).toBe(3)
   })
 
   it('capacity grows with the width and never drops below one', () => {
@@ -51,18 +52,17 @@ describe('panel header budget', () => {
     expect(CELL_H).toBeGreaterThanOrEqual(CELL_RING)
   })
 
-  it('a cell includes the subagent slot, and 4 cells still leave room at 312 with the slot in', () => {
-    expect(CELL_W).toBeGreaterThanOrEqual(SUBAGENT_SLOT_W + 16 + CELL_RING)
-    const room = PANEL_DEFAULT_WIDTH - (AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + BUTTONS_W)
-    expect(room - cellsWidth(4)).toBeGreaterThanOrEqual(0)
+  it('a cell includes the subagent slot at its full size: nothing is squeezed to fit', () => {
+    expect(CELL_W).toBe(2 * CELL_PX + SUBAGENT_SLOT_W + 16 + CELL_RING)
   })
 
-  it('capacityOf keeps `reserve` px free for the strip\'s +N chip, and never drops below one', () => {
+  it('reserve keeps px free for the strip\'s +N chip only when someone does not fit; min 0 lets the strip show none', () => {
+    const w = Array(5).fill(CELL_W)
     const avail = cellsWidth(5)
-    expect(capacityOf(avail, CELL_W)).toBe(5)
-    expect(capacityOf(avail, CELL_W, PLUS_CHIP_W)).toBeLessThan(5)
-    expect(capacityOf(10, CELL_W, PLUS_CHIP_W)).toBe(1) // the header row never goes below one
-    expect(capacityOf(10, CELL_W, PLUS_CHIP_W, 0)).toBe(0) // the strip may: 「+N」 takes the rest
+    expect(capacityFromWidths(w, avail, { reserve: PLUS_CHIP_W })).toBe(5) // everyone fits: no chip, nothing reserved
+    expect(capacityFromWidths(w, avail - 1, { reserve: PLUS_CHIP_W })).toBeLessThan(5)
+    expect(capacityFromWidths(w, 10, { reserve: PLUS_CHIP_W })).toBe(1) // the header row never goes below one
+    expect(capacityFromWidths(w, 10, { reserve: PLUS_CHIP_W, min: 0 })).toBe(0) // the strip may: 「+N」 takes the rest
   })
 
   it('the edit form is kept inside the viewport on the left, right and bottom', () => {
@@ -75,12 +75,17 @@ describe('panel header budget', () => {
     expect(placeBelow({ left: 0, bottom: 0 }, { w: POPOVER_W, h: 900 }, view).top).toBe(8) // taller than the viewport: top edge wins
   })
 
-  it.each(['icon', 'dot', 'iconDot', 'badge'] as const)('a cell under the %s light style is at most 44px and 4 of them fit the 312 budget', (style) => {
+  it.each(['icon', 'dot', 'iconDot', 'badge'] as const)('a cell under the %s light style is the same CELL_W (at most 44px)', (style) => {
     expect(CELL_W_MAX).toBe(44)
-    const w = cellWidthFor(style)
-    expect(w).toBeLessThanOrEqual(CELL_W_MAX)
-    const total = AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + cellsWidth(4) + BUTTONS_W
-    expect(total).toBeLessThanOrEqual(PANEL_DEFAULT_WIDTH)
-    expect(w).toBe(CELL_W)
+    expect(cellWidthFor(style)).toBe(CELL_W)
+    expect(CELL_W).toBeLessThanOrEqual(CELL_W_MAX)
+  })
+
+  it('a remote seat\'s cell is wider (host icon): the capacity counts its real width', () => {
+    const remote = CELL_W + 12
+    const plain = [CELL_W, CELL_W, CELL_W, CELL_W]
+    expect(capacityFromWidths(plain, ROOM)).toBe(3)
+    expect(capacityFromWidths([CELL_W, CELL_W, remote, CELL_W], ROOM)).toBe(3) // 12px wider still fits in the 3rd place
+    expect(capacityFromWidths([CELL_W, remote, remote, remote], ROOM)).toBeLessThanOrEqual(3)
   })
 })

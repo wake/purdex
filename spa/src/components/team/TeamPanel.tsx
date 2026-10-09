@@ -250,7 +250,8 @@ function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props &
   // (capsule, cells, buttons) never changes height. The room is measured (useCellCapacity); where nothing can be measured
   // (no layout) it falls back to the constants: the stored width's capacity, or everything when enlarged.
   const box = useRef<HTMLDivElement>(null)
-  const measured = useCellCapacity(box, { key: `${team.teamKey}|${seats.map((x) => x.sessionId).join(',')}`, total: seats.length })
+  const moreBox = useRef<HTMLDivElement>(null)
+  const measured = useCellCapacity(box, { extra: moreBox })
   const cap = measured ?? (width === undefined ? seats.length : firstRowCapacity(width))
   const first = seats.slice(0, cap)
   const more = seats.slice(cap)
