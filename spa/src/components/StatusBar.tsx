@@ -336,8 +336,6 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
               ? t('hosts.error_tmux_down')
               : status}
         </span>
-        {/* Context window and 5h / weekly limits from the agent's latest statusLine snapshot. */}
-        <CcUsageSegments hostId={agentHostId} sessionCode={agentSessionCode} />
       </>}
       controls={<>
         {/* The model badge. It sits in the `shrink-0` controls group, so
@@ -365,6 +363,8 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
             {paneTitle}
           </span>
         )}
+        {/* Context window and 5h / weekly limits from the agent's latest statusLine snapshot: icon + ring + % left. */}
+        <CcUsageSegments hostId={agentHostId} sessionCode={agentSessionCode} />
         {/* Where the split buttons were (spec D.3, §9.6; splitting stays in the title bar and the pane menu). */}
         <PaneModeButtons tabId={activeTab.id} pane={target} />
       </>}

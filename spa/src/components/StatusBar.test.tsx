@@ -275,9 +275,44 @@ describe('StatusBar agent label badge', () => {
         rate_limits: { five_hour: { used_percentage: 25, resets_at: Date.now() / 1000 + 3600 }, seven_day: { used_percentage: 73, resets_at: Date.now() / 1000 + 86400 } },
       })
     })
-    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('ctx 36%')
-    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('5h 25%')
-    expect(screen.getByTestId('status-seg-usage-seven-day').textContent).toBe('7d 73%')
+    // The number is what is LEFT (100 - used); no text label.
+    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('64%')
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('75%')
+    expect(screen.getByTestId('status-seg-usage-seven-day').textContent).toBe('27%')
+  })
+
+  it('puts the usage in the controls, after the pane title and before the mode buttons, in ctx, 5h, 7d order', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useSessionStore.setState({
+      sessions: { [HOST_ID]: [{ code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', tmux_instance: '', pane_title: 'plan review' }] },
+      activeHostId: HOST_ID,
+      activeCode: null,
+    })
+    useAgentStore.setState({ agentTypes: { [ck]: 'cc' } })
+    useUISettingsStore.setState({ showAgentTitleInStatusBar: true })
+    useAgentStore.getState().setCcStatus(HOST_ID, 'dev001', {
+      context_window: { used_percentage: 36 },
+      rate_limits: { five_hour: { used_percentage: 25 }, seven_day: { used_percentage: 73 } },
+    })
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} />)
+    const controls = screen.getByTestId('status-controls')
+    const ids = ['agent-pane-title', 'status-seg-usage-context', 'status-seg-usage-five-hour', 'status-seg-usage-seven-day', 'status-mode-buttons']
+    const els = ids.map((id) => screen.getByTestId(id))
+    els.forEach((el, i) => {
+      expect(controls.contains(el), ids[i]).toBe(true)
+      if (i > 0) expect(els[i - 1].compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING, ids[i]).toBeTruthy()
+    })
+    expect(screen.getByTestId('status-segments').querySelector('[data-testid^="status-seg-usage"]')).toBeNull()
+  })
+
+  it('without a pane title the usage still sits before the mode buttons', () => {
+    useAgentStore.getState().setCcStatus(HOST_ID, 'dev001', { rate_limits: { five_hour: { used_percentage: 25 } } })
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} />)
+    const five = screen.getByTestId('status-seg-usage-five-hour')
+    expect(screen.queryByTestId('agent-pane-title')).toBeNull()
+    expect(five.compareDocumentPosition(screen.getByTestId('status-mode-buttons')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('reactively shows badge when models updates after mount', async () => {
@@ -940,8 +975,14 @@ describe('StatusBar status target pane', () => {
   it('a worker pane shows the host quota, and a terminal beside it does not leak ccStatus into it', async () => {
     render(<StatusBar activeTab={splitTab('t1', { id: 'term', content: plainTerminal }, { id: 'w', content: workerContent })} />)
     await act(async () => {})
-    expect(screen.getByTestId('status-seg-quota-five-hour').textContent).toBe('5h 41%')
-    expect(screen.getByTestId('status-seg-quota-seven-day').textContent).toBe('7d 72%')
+    expect(screen.getByTestId('status-seg-quota-five-hour').textContent).toBe('59%')
+    expect(screen.getByTestId('status-seg-quota-seven-day').textContent).toBe('28%')
+    // Both are in the controls, ahead of the mode buttons.
+    const controls = screen.getByTestId('status-controls')
+    const five = screen.getByTestId('status-seg-quota-five-hour')
+    expect(controls.contains(five)).toBe(true)
+    expect(five.compareDocumentPosition(screen.getByTestId('status-mode-buttons')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('status-segments').querySelector('[data-testid^="status-seg-quota"]')).toBeNull()
     expect(screen.queryByTestId('status-seg-usage-context')).toBeNull()
   })
 

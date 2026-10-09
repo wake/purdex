@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { epochToMs, formatResetsIn, parseCcUsage, usageTone } from './usage-display'
+import { epochToMs, formatResetsIn, parseCcUsage, remainingPct, usedPct, usageTone } from './usage-display'
 
 describe('parseCcUsage', () => {
   it('reads the real payload field names; resets_at is epoch seconds', () => {
@@ -39,9 +39,23 @@ describe('epochToMs', () => {
   })
 })
 
+describe('remainingPct / usedPct', () => {
+  it('remaining is 100 - used, rounded and clamped to 0-100', () => {
+    expect(remainingPct(15)).toBe(85)
+    expect(remainingPct(15.4)).toBe(85)
+    expect(remainingPct(120)).toBe(0)
+    expect(remainingPct(-5)).toBe(100)
+  })
+  it('used is clamped to 0-100 (the ring never over- or under-draws)', () => {
+    expect(usedPct(15)).toBe(15)
+    expect(usedPct(120)).toBe(100)
+    expect(usedPct(-5)).toBe(0)
+  })
+})
+
 describe('usageTone', () => {
-  it('shifts at 70 and 90', () => {
-    expect(usageTone(69.9)).toBe('ok')
+  it('shifts at 70 and 90 (inclusive)', () => {
+    expect(usageTone(69)).toBe('ok')
     expect(usageTone(70)).toBe('warn')
     expect(usageTone(89)).toBe('warn')
     expect(usageTone(90)).toBe('danger')

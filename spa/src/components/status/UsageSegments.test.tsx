@@ -44,29 +44,54 @@ describe('CcUsageSegments', () => {
     expect(container.innerHTML).toBe('')
   })
 
-  it('shows context, 5h and weekly with tone and the reset time in the tooltip', () => {
+  it('shows icon + ring + remaining %, with no text label, and names the limit in tooltip and aria-label', () => {
     seed(payload())
     render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
     const ctx = screen.getByTestId('status-seg-usage-context')
-    expect(ctx.textContent).toBe('ctx 23%')
-    expect(ctx.dataset.tone).toBe('ok')
+    expect(ctx.textContent).toBe('77%')
+    expect(ctx.title).toBe('Context window: 77% left (23% used)')
+    expect(ctx.getAttribute('aria-label')).toBe(ctx.title)
     const five = screen.getByTestId('status-seg-usage-five-hour')
-    expect(five.textContent).toBe('5h 24%')
+    expect(five.textContent).toBe('76%')
+    expect(five.title).toContain('5-hour limit: 76% left (24% used)')
     expect(five.title).toContain('resets in 2h13m')
     const week = screen.getByTestId('status-seg-usage-seven-day')
-    expect(week.textContent).toBe('7d 93%')
-    expect(week.dataset.tone).toBe('danger')
+    expect(week.textContent).toBe('7%')
+    expect(week.title).toContain('Weekly limit: 7% left (93% used)')
     expect(week.title).toContain('resets in 3d0h')
+    for (const el of [ctx, five, week]) {
+      expect(el.textContent).not.toMatch(/ctx|5h|7d/)
+      expect(el.querySelector('svg')).toBeTruthy()
+    }
   })
 
-  it('shifts the context tone at 70 and 90', () => {
-    seed(payload({ context_window: { used_percentage: 70 } }))
-    const { rerender } = render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
-    expect(screen.getByTestId('status-seg-usage-context').dataset.tone).toBe('warn')
-    seed(payload({ context_window: { used_percentage: 90 } }))
-    rerender(<CcUsageSegments hostId="h1" sessionCode="s1" />)
-    expect(screen.getByTestId('status-seg-usage-context').dataset.tone).toBe('danger')
+  it('shows what is left: used 15 -> 85%, used 120 -> 0%, used -5 -> 100%', () => {
+    for (const [used, shown] of [[15, '85%'], [120, '0%'], [-5, '100%']] as const) {
+      cleanup()
+      seed(payload({ context_window: { used_percentage: used } }))
+      render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+      expect(screen.getByTestId('status-seg-usage-context').textContent).toBe(shown)
+    }
   })
+
+  it('draws the ring to the USED share, clockwise from 12 o\'clock', () => {
+    seed(payload({ context_window: { used_percentage: 25 } }))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    const arc = screen.getByTestId('status-seg-usage-context').querySelector('[data-testid="usage-ring-arc"]')!
+    expect(arc.getAttribute('data-used')).toBe('25')
+    const [on, total] = arc.getAttribute('stroke-dasharray')!.split(' ').map(Number)
+    expect(on / total).toBeCloseTo(0.25, 5)
+    expect(arc.getAttribute('transform')).toContain('rotate(-90')
+  })
+
+  it.each([[69, 'ok', 'stroke-status-success'], [70, 'warn', 'stroke-status-warning'], [89, 'warn', 'stroke-status-warning'], [90, 'danger', 'stroke-status-error']])(
+    'ring tone at used %i is %s', (used, tone, cls) => {
+      seed(payload({ context_window: { used_percentage: used } }))
+      render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+      const arc = screen.getByTestId('status-seg-usage-context').querySelector('[data-testid="usage-ring-arc"]')!
+      expect(arc.getAttribute('data-tone')).toBe(tone)
+      expect(arc.getAttribute('class')).toContain(cls)
+    })
 
   it('omits the limit segments when rate_limits is absent', () => {
     seed({ context_window: { used_percentage: 10 } })
@@ -76,10 +101,11 @@ describe('CcUsageSegments', () => {
     expect(screen.queryByTestId('status-seg-usage-seven-day')).toBeNull()
   })
 
-  it('dims a snapshot older than 10 minutes, and ages into dim while mounted', () => {
+  it('dims a snapshot older than 10 minutes (opacity-50), and ages into dim while mounted', () => {
     seed(payload(), NOW - 11 * 60_000)
     render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
     expect(screen.getByTestId('status-seg-usage-context').dataset.dim).toBe('true')
+    expect(screen.getByTestId('status-seg-usage-context').className).toContain('opacity-50')
     cleanup()
     seed(payload(), NOW - 9 * 60_000)
     render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
@@ -111,11 +137,10 @@ describe('HostQuotaSegments', () => {
     await act(async () => {})
     expect(mockFetchNexHost).toHaveBeenCalledWith('h1')
     const five = screen.getByTestId('status-seg-quota-five-hour')
-    expect(five.textContent).toBe('5h 41%')
+    expect(five.textContent).toBe('59%')
     expect(five.title).toContain('resets in 1h30m')
     const week = screen.getByTestId('status-seg-quota-seven-day')
-    expect(week.textContent).toBe('7d 72%')
-    expect(week.dataset.tone).toBe('warn')
+    expect(week.textContent).toBe('28%')
     // Nexen reports one reset time; it is not claimed for the weekly window.
     expect(week.title).not.toContain('resets in')
   })
