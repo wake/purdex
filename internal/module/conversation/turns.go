@@ -9,7 +9,7 @@ import (
 )
 
 // LastTurns implements convturns.Reader: acquire the session's entry, refresh it from the transcript, take the newest n
-// turns and release. The turns are the model's own (items are not size-capped here; the caller picks what it needs).
+// turns and release. The turns are a deep copy of the model's (items are not size-capped here; the caller picks what it needs and may change them).
 func (m *Module) LastTurns(ctx context.Context, provider, sessionID string, n int) ([]convmodel.Turn, error) {
 	if provider != "claude" {
 		return nil, convturns.ErrUnsupportedProvider
@@ -25,6 +25,5 @@ func (m *Module) LastTurns(ctx context.Context, provider, sessionID string, n in
 	if err := entry.Exclusive(ctx, func() error { return m.refresh(ctx, entry, sessionID) }); err != nil {
 		return nil, err
 	}
-	win := entry.Window(n, -1, func([]byte) bool { return true })
-	return win.Turns, nil
+	return entry.CopyLastTurns(n), nil // a deep copy: the cache's own model never leaves the package
 }

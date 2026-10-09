@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/convfeed"
@@ -84,6 +85,41 @@ func TestLastTurns_BusyWhenEveryEntryIsInUse(t *testing.T) {
 	defer release()
 	if _, err := e.mod.LastTurns(context.Background(), "claude", sid, 3); !errors.Is(err, convfeed.ErrBusy) {
 		t.Fatalf("err = %v, want ErrBusy", err)
+	}
+}
+
+// What a caller does to the answer never reaches the cache: the HTTP snapshot and the next read still show the original.
+func TestLastTurns_TheAnswerIsACopy(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(3))
+	first, err := e.mod.LastTurns(context.Background(), "claude", sid, 2)
+	if err != nil || len(first) != 2 {
+		t.Fatalf("first: %d %v", len(first), err)
+	}
+	for _, it := range first[1].Items {
+		if it.User != nil {
+			it.User.Text = "scribbled"
+		}
+		if it.AgentText != nil {
+			it.AgentText.Markdown = "scribbled"
+		}
+	}
+	first[1].Items = nil
+	second, _ := e.mod.LastTurns(context.Background(), "claude", sid, 2)
+	var texts []string
+	for _, it := range second[1].Items {
+		if it.User != nil {
+			texts = append(texts, it.User.Text)
+		}
+		if it.AgentText != nil {
+			texts = append(texts, it.AgentText.Markdown)
+		}
+	}
+	if len(texts) != 2 || texts[0] != "question 2" || texts[1] != "answer 2" {
+		t.Fatalf("the cache was changed through the answer: %v", texts)
+	}
+	if body := e.get("/api/conversations/claude/" + sid).Body.String(); !strings.Contains(body, "question 2") || strings.Contains(body, "scribbled") {
+		t.Fatalf("the HTTP snapshot was changed: %s", body)
 	}
 }
 
