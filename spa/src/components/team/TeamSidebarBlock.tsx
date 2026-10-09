@@ -65,18 +65,17 @@ export function TeamSidebarBlock({ team, teamKey, color, collapsed, capsule, mem
         />
       )}
       {!showBeads && members.length > 0 && (
-        <div data-testid="team-sidebar-plate" className="mx-2 mb-0.5 h-6 rounded-lg bg-surface-secondary">
-          <button
-            type="button"
-            data-testid="team-sidebar-collapsed"
-            title={t('team.sidebar.collapsed', { count: members.length })}
-            onClick={() => team.onToggleCollapse(teamKey)}
-            className="flex items-center gap-1.5 w-full h-full pl-[26px] pr-1.5 rounded-lg text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
-          >
-            <UsersThree size={14} />
-            <span className="flex items-center gap-1">{members.map((m) => <MemberLightDot key={m.sessionId} member={m} />)}</span>
-          </button>
-        </div>
+        // The prototype's value (f61748aa TeamSidebarBlock): a rounded plate that appears on hover only, none at rest.
+        <button
+          type="button"
+          data-testid="team-sidebar-collapsed"
+          title={t('team.sidebar.collapsed', { count: members.length })}
+          onClick={() => team.onToggleCollapse(teamKey)}
+          className="flex items-center gap-1.5 ml-[36px] mr-2 mb-0.5 h-6 px-1.5 rounded-md text-text-muted hover:bg-surface-hover hover:text-text-primary cursor-pointer"
+        >
+          <UsersThree size={14} />
+          <span className="flex items-center gap-1">{members.map((m) => <MemberLightDot key={m.sessionId} member={m} />)}</span>
+        </button>
       )}
     </div>
   )

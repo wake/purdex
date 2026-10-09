@@ -245,18 +245,20 @@ describe('InlineTabList — team beads', () => {
     expect(screen.getAllByTestId('team-bead')).toHaveLength(3)
   })
 
-  it('the collapsed line sits on a plate; the expanded block has none', () => {
+  it('the collapsed line has a rounded hover plate and none at rest; the expanded block has no such line', () => {
     seedScene(base)
     mount()
-    expect(screen.queryByTestId('team-sidebar-plate')).toBeNull()
+    expect(screen.queryByTestId('team-sidebar-collapsed')).toBeNull()
     act(() => useTeamUiStore.getState().setCollapsed(KEY, true))
-    const plate = screen.getByTestId('team-sidebar-plate')
-    expect(within(plate).getByTestId('team-sidebar-collapsed')).toBeInTheDocument()
-    expect(plate.className).toMatch(/rounded/)
-    expect(plate.className).toMatch(/bg-/)
-    fireEvent.click(within(plate).getByTestId('team-sidebar-collapsed')) // still expands
+    expect(screen.queryByTestId('team-sidebar-plate')).toBeNull() // no resting plate element
+    const line = screen.getByTestId('team-sidebar-collapsed')
+    expect(line.className).toMatch(/rounded-md/)
+    expect(line.className).toMatch(/hover:bg-surface-hover/)
+    expect(line.className.split(/\s+/).some((c) => /^bg-/.test(c))).toBe(false) // nothing painted at rest
+    expect(line.className).toMatch(/ml-\[36px\]/)
+    fireEvent.click(line) // still expands
     expect(useTeamUiStore.getState().collapsed[KEY]).toBeUndefined()
-    expect(screen.queryByTestId('team-sidebar-plate')).toBeNull()
+    expect(screen.queryByTestId('team-sidebar-collapsed')).toBeNull()
   })
 
   it('tick / blank click collapses', () => {

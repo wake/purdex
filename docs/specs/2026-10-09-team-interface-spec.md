@@ -94,7 +94,7 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - **Tick** (P4, P10): one stem from just under the lead's bot icon, starting at the lead block's lower edge; a horizontal tick per bead row; the last row turns with a 3 px radius; 1 px line in the muted text colour at 70 %.
 - **Click** a bead: R3 (open into the group / switch), R10 (expand if collapsed).
 - **Drag** beads to reorder (R4, R5): within the row(s) of that lead; outside snaps back.
-- **Collapse** (P9): collapsed = a members icon followed by one main light dot per member, on the line under the lead, on a rounded plate as wide as the row (*amended, as in the prototype*); clicking that line expands; clicking the tick or blank bead area collapses. Shared state with the top group.
+- **Collapse** (P9): collapsed = a members icon followed by one main light dot per member, on the line under the lead, with a rounded hover plate (none at rest), as in the prototype; clicking that line expands; clicking the tick or blank bead area collapses. Shared state with the top group.
 - A member whose lead has no tab: shown as beads under the ghost lead row (§4.6).
 
 ### 4.4 Floating team panel *(amended: one panel area shared with the workbook, workbook §10.1)*
@@ -151,7 +151,7 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 | Label | team-colour capsule, dark text; `+N` when collapsed; on the top bar and above the lead in the left list |
 | Tick | rail, 3 px corner, from the block's lower edge, muted text colour at 70 %, 1 px; no team colour (the capsule carries it) |
 | Beads | bot + host icon (setting), no open mark |
-| Sidebar collapse | members icon + one light per member, on a rounded plate (prototype value) |
+| Sidebar collapse | members icon + one light per member, rounded hover plate, none at rest (prototype value) |
 | Panel | full by default, layout C; both modes take the resizable area's current width *(amended)* |
 | Model icons | ◆ Opus ● Sonnet ▲ Haiku ★ Fable |
 
