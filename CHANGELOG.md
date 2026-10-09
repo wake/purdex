@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.623] - 2026-10-09
+
+> 只動 mod 與 pdx-team skill（daemon 行為不變，但 mod 隨執行檔打包）：**要部署並重跑 `pdx setup --agent cc`**；SPA、Electron 不必更新。這一版新增兩個 Claude Code 指令：`/relay now` 立刻接力、`/lead` 立刻申請成為 lead。
+
+### Added：`/relay now` 立刻接力（#2108）
+
+- 只打 `/relay`（不帶參數）等於 `/relay now`：不管 context 用了多少，立刻申請接力，之後的流程與到達門檻時相同（核准 → 寫接力檔 → 換新對話）。原本不帶參數是查狀態，現在要打 `/relay status`。
+- 這個 session 已經用 `/relay off` 暫停時不會接力，會提示先 `/relay on`。
+- member 的接力由 lead 安排；主機的自我接力開關關著、或接力已在進行中時，也不會接力，各自回一句原因。
+- 回覆只說「已送出接力申請，等待核准」，不預設由誰核准（無人值守模式下會自動核准）。
+
+### Added：`/lead` 立刻申請成為 lead（#2111）
+
+- `/lead [補充]`：請這個 session 立刻申請成為 lead，不再先判斷工作夠不夠大。補充可以用自然語言寫名稱、短名或人數上限，例如「/lead 叫 B 線、上限 2」；超過 200 bytes 會截斷並告知。
+- 已經是 lead 時直接回「已經是 lead：<名稱> ［<短名>］（上限 N）」，不會再申請。
+- member、已有申請在等待等情況，由 daemon 的回應決定，agent 會轉告原因。
+- 接力進行中時不受理 `/lead`。
+- pdx-team skill 補上兩行：使用者打 `/lead` 時立刻申請；`/relay` 是使用者的指令，agent 不會自己執行。
+
+### 其他
+
+- 對話 API 的真機驗收腳本 `scripts/acceptance/u1-6.sh`（#2110，介面語言 U1-6）；只是測試腳本，不影響執行。
+
 ## [1.0.0-alpha.622] - 2026-10-09
 
 > 動 daemon、CLI 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 與 pdx-team skill 都有改）；SPA、Electron 不必更新。這一版讓 lead 派 member 時可以同時交辦第一個任務，member 接力後的新對話也會看到自己手上還沒做完的任務。
