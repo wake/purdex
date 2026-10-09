@@ -271,8 +271,10 @@ export function adoptPayloadOf(a: Approval): AdoptPayload {
  * with an ellipsis when cut. The dialog shows the trusted identifiers (ref, session id) beside the label it calls the target.
  */
 export function clipForDisplay(s: string, max = 200): string {
-  const chars = Array.from(s)
-  return chars.length <= max ? s : `${chars.slice(0, max).join('')}…`
+  // Control characters and the invisible direction / zero-width marks (RLO, LRI, PDI, ...) are dropped first: a target
+  // session could use them to reorder what the person reads around it (host, lead) in a heading that mixes runs.
+  const chars = Array.from(s.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, ''))
+  return chars.length <= max ? chars.join('') : `${chars.slice(0, max).join('')}…`
 }
 
 /** The label of an adopt target: its title, else its name, else its ref (what the dialog and the notification call it). */

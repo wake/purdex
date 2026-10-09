@@ -9,7 +9,7 @@ import { hostLabel, hostLookOf } from '../host-look'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { fnv1a32, FNV_OFFSET_32 } from './fnv1a'
 import { approvalSessionLabel } from './approval-format'
-import { adoptPayloadOf, adoptTargetLabel, leadPayloadOf, selfRelayPayloadOf, type Approval } from './types'
+import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, type Approval } from './types'
 
 /**
  * The dedup key Electron gets for a request's notification: a stable 53-bit non-negative integer (a safe integer, so
@@ -34,7 +34,7 @@ export function notifyApprovalOpened(hostId: string, approval: Approval): void {
   // An adopt request names the lead that asks and the session it wants (its cwd is the body).
   const adopt = approval.kind === 'adopt' ? adoptPayloadOf(approval) : null
   void window.electronAPI.showNotification({
-    title: adopt ? t('approval.notify.title_adopt', { host, lead: session, target: adoptTargetLabel(adopt) })
+    title: adopt ? t('approval.notify.title_adopt', { host, lead: session, target: clipForDisplay(adoptTargetLabel(adopt), 60) })
       : selfRelay ? t('approval.notify.title_self_relay', { host, session, pct }) : t('approval.notify.title', { host, session }),
     body: adopt ? adopt.target_cwd : selfRelay ? t('approval.dialog.self_relay_note') : leadPayloadOf(approval).reason,
     sessionCode: '',

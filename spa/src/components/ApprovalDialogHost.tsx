@@ -273,7 +273,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
       >
         <div className="border-b border-border-subtle px-4 py-3">
           <div className="flex items-start justify-between gap-3">
-            <h3 id={titleId} className="text-sm font-medium text-text-primary">
+            <h3 id={titleId} className="break-words text-sm font-medium text-text-primary">
               {isAdopt
                 ? t('approval.dialog.title_adopt', { host: hostName, lead: session, target: clipForDisplay(adoptTargetLabel(adopt), 60) })
                 : t(isSelfRelay ? 'approval.dialog.title_self_relay' : 'approval.dialog.title_lead', { host: hostName, session })}

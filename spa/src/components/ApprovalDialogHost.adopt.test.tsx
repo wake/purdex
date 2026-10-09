@@ -157,3 +157,16 @@ describe('ApprovalDialogHost — the adopt card cannot be spoofed or blown up by
     expect(screen.getByRole('heading').textContent!.length).toBeLessThan(200)
   })
 })
+
+// codex incremental: the heading mixes the target's own words with the trusted host and lead, so direction and
+// invisible marks are dropped before they reach it, and a long unbroken run may wrap.
+// Mutation gate: skip the sanitising in clipForDisplay → red.
+describe('ApprovalDialogHost — the adopt heading cannot be reordered by the target', () => {
+  it('drops bidi overrides, isolates, zero-width marks and control characters from the target label everywhere', () => {
+    render(<ApprovalDialogHost />)
+    open(adopt({ title: '‮evil⁦x⁩​\u0007', target_name: '' }))
+    expect(screen.getByTestId('approval-adopt-target').textContent).toBe('evilx')
+    expect(screen.getByRole('heading').textContent).toBe('mlab：purdex-7c 想把 evilx 納入 team')
+    expect(screen.getByRole('heading').className).toContain('break-words')
+  })
+})
