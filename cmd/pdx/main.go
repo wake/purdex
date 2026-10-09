@@ -200,6 +200,10 @@ func runServe(args []string) *reexecPlan {
 		log.Fatalf("data dir: %v", err)
 	}
 
+	// The daemon's log is bounded (#2163): size-rotated and compressed, only when its stdout/stderr is that file.
+	stopLogRotation := newLogRotator(filepath.Join(cfg.DataDir, "logs", "pdx.log"), log.Printf).start()
+	defer stopLogRotation()
+
 	// 1b. Ensure stable host ID
 	resolvedCfgPath := *cfgPath
 	if resolvedCfgPath == "" {
