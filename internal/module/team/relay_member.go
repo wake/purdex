@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -129,14 +128,24 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 	if m.beforeMemberRelayInsert != nil {
 		m.beforeMemberRelayInsert(mr)
 	}
+	// The lead's origin is read once, here, for the team callerTeam found; the gate checks inside the transaction that it
+	// still leads (a relay between the two would otherwise stamp the card with a session that no longer does).
+	leadOrigin, lok, lerr := m.origins.ResolveOriginBySession(t.LeadSessionID)
+	if lerr != nil || !lok {
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "the lead is not in the registry; retry", nil)
+		return
+	}
 	var (
 		spent bool
 		held  *team.Approval // the member_relay row this create opened (pool spent out), for the announce after the commit
 	)
-	op, _, err = m.store.CreateMemberRelayOp(op, m.memberRelayGate(req.OriginInbox, mr, &spent, &held))
+	op, _, err = m.store.CreateMemberRelayOp(op, m.memberRelayGate(leadOrigin, mr, &spent, &held))
 	switch {
 	case errors.Is(err, ErrMemberNotActive):
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, "member "+mr.Ref+" left the team while the relay was being opened", nil)
+		return
+	case errors.Is(err, errLeadChanged):
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "the team's lead changed; retry", nil)
 		return
 	case errors.Is(err, ErrRelayOpOpen):
 		if !m.writeRelayOpen(w, mr.SessionID) {
@@ -199,12 +208,15 @@ func (m *Module) sendMemberControl(op team.RelayOp) {
 	}
 }
 
+// errLeadChanged: the team's lead moved between the create's read and its transaction; the caller retries.
+var errLeadChanged = errors.New("the team's lead changed during the request")
+
 // memberRelayGate is CreateMemberRelayOp's gate (RQ-2 §4.1), run in the create's transaction under createMu. Unattended
 // off, or the quota rule off: the op stays `requested` and nothing is spent (a member's relay needs no approval, U13).
 // Both on: one unit of the lead's pool is spent in this transaction (spent is set); at 0 the op becomes
 // awaiting_approval with RequestID = the member_relay row's id, and that row (held) is inserted open in the same
 // transaction. Any failure rolls everything back.
-func (m *Module) memberRelayGate(inbox string, mr memberRow, spent *bool, held **team.Approval) MemberRelayGate {
+func (m *Module) memberRelayGate(lead team.Origin, mr memberRow, spent *bool, held **team.Approval) MemberRelayGate {
 	return func(tx *sql.Tx, op *team.RelayOp) (bool, error) {
 		if !m.unattendedOn() || !m.quotaRuleOn() {
 			return false, nil
@@ -222,9 +234,12 @@ func (m *Module) memberRelayGate(inbox string, mr memberRow, spent *bool, held *
 		if !errors.Is(err, ErrQuotaExhausted) {
 			return false, err
 		}
-		lead, ok, err := m.origins.ResolveOrigin(inbox)
-		if err != nil || !ok {
-			return false, fmt.Errorf("the lead's origin: ok=%v err=%v", ok, err)
+		var cur string
+		if err := tx.QueryRow(`SELECT lead_session_id FROM teams WHERE id = ?`, op.TeamID).Scan(&cur); err != nil {
+			return false, err
+		}
+		if cur != lead.SessionID {
+			return false, errLeadChanged
 		}
 		p := team.MemberRelayPayload{OpID: op.ID, TeamID: op.TeamID, LeadRef: lead.Ref, LeadTitle: lead.Title,
 			MemberSessionID: op.SessionID, MemberRef: mr.Ref, MemberTitle: mr.Title}

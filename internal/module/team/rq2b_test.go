@@ -184,3 +184,16 @@ func TestRelayCreate_HeldRowApprovedByAClickSendsTheControl(t *testing.T) {
 		t.Fatalf("op %s pool %d", f.op(op.ID).State, f.poolLeft("sid-1"))
 	}
 }
+
+// The lead moved between the create's read and its transaction: the gate refuses (503, retry), nothing persisted, no
+// spend. Mutation gate: drop the comparison → a card for a session that no longer leads (red).
+func TestRelayCreate_ALeadThatMovedBeforeTheTransactionRefuses(t *testing.T) {
+	f := gateFixture(t, true, true, 0)
+	f.m.beforeMemberRelayInsert = func(memberRow) {
+		f.m.store.db.Exec(`UPDATE teams SET lead_session_id = 'sid-1b' WHERE id = ?`, uid(1))
+	}
+	code, _, ae := f.createRelay(rid(360), "/tmp/10.sock", "_mem001")
+	if code != 503 || ae.Error != team.ErrNotReady || countRelayOps(t, f) != 0 || f.rowCount("member_relay") != 0 {
+		t.Fatalf("%d %+v ops=%d rows=%d", code, ae, countRelayOps(t, f), f.rowCount("member_relay"))
+	}
+}
