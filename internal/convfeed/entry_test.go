@@ -395,6 +395,26 @@ func TestEntry_AnOlderStatusReadingDoesNotReplaceANewerOne(t *testing.T) {
 		t.Fatalf("a newer reading was refused: %+v", e.Header())
 	}
 
+	// the watermark moves with every accepted reading, also one that changes nothing
+	s.Status, s.StatusAt = "waiting", t0.Add(5*time.Second)
+	refresh(t, e, s)
+	s.Status, s.StatusAt = "idle", t0.Add(4*time.Second)
+	refresh(t, e, s)
+	if e.Header().Status != "waiting" {
+		t.Fatalf("a reading older than an unchanged newer one was applied: %+v", e.Header())
+	}
+
+	// live / status / backend are one reading: an older one changes none of them
+	live := src(m, "f1", false)
+	live.Status, live.Backend, live.StatusAt = "ended", "", t0.Add(7*time.Second)
+	refresh(t, e, live)
+	stale := src(m, "f1", true)
+	stale.Status, stale.Backend, stale.StatusAt = "running", "terminal", t0.Add(6*time.Second)
+	refresh(t, e, stale)
+	if h := e.Header(); h.Live || h.Status != "ended" || h.Backend != "" {
+		t.Fatalf("an older reading changed the header tuple: %+v", h)
+	}
+
 	s.Status, s.StatusAt = "idle", time.Time{} // no timestamp: always applies (sources that do not carry one)
 	refresh(t, e, s)
 	if e.Header().Status != "idle" {

@@ -188,14 +188,18 @@ func (e *Entry) Refresh(ctx context.Context, src Source) (RefreshResult, error) 
 	if err != nil {
 		return res, err
 	}
-	e.bump(e.norm.SetLive(src.Live))
-	e.live = src.Live
-	if !src.StatusAt.IsZero() && src.StatusAt.Before(e.statusAt) {
-		// an older reading than the one held: ignore it
-	} else if src.Status != e.status || src.Backend != e.backend {
-		e.status, e.backend, e.statusAt = src.Status, src.Backend, src.StatusAt
-		e.rev++
-		e.headRev = e.rev
+	// live, status and backend are one reading of the owner: a reading older than the one held changes none of them
+	if stale := !src.StatusAt.IsZero() && src.StatusAt.Before(e.statusAt); !stale {
+		e.bump(e.norm.SetLive(src.Live))
+		e.live = src.Live
+		if src.Status != e.status || src.Backend != e.backend {
+			e.status, e.backend = src.Status, src.Backend
+			e.rev++
+			e.headRev = e.rev
+		}
+		if !src.StatusAt.IsZero() {
+			e.statusAt = src.StatusAt // every accepted reading moves the watermark, also one that changed nothing
+		}
 	}
 	e.refreshHeader()
 	res.Changed = res.Reset || e.rev != startRev
