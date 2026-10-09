@@ -161,7 +161,13 @@ var claimNets = func() []netip.Prefix {
 	return out
 }()
 
-// sourceOf returns the request's source address (no port, IPv4-mapped IPv6 unmapped) and whether it may claim.
+// loopbackKey is the one limiter bucket of every loopback source. 127.0.0.0/8 is a whole network of addresses a local process
+// can bind at will, so keyed by address it would let that process fill the limiter table (or dodge the limit by cycling); a
+// tailnet address, in contrast, is assigned by the control server and cannot be made up.
+const loopbackKey = "loopback"
+
+// sourceOf returns the request's limiter key (the address without port, IPv4-mapped IPv6 unmapped, every loopback address
+// folded into loopbackKey) and whether it may claim.
 func sourceOf(r *http.Request) (string, bool) {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -174,6 +180,9 @@ func sourceOf(r *http.Request) (string, bool) {
 	a = a.Unmap().WithZone("")
 	for _, p := range claimNets {
 		if p.Contains(a) {
+			if a.IsLoopback() {
+				return loopbackKey, true
+			}
 			return a.String(), true
 		}
 	}

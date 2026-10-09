@@ -225,9 +225,11 @@ All times are Unix milliseconds. Every answer carries `Cache-Control: no-store`.
   (relay stopping).
 - status → `200 {claimed, claimedAt?, expiresAt}` (`claimedAt` only when claimed); `404 not_found`.
 - delete → `204` / `409 claimed` / `404 not_found` as above.
-- The source is the TCP peer address (never a forwarded header); an IPv4-mapped IPv6 address is read as its IPv4 form. The
-  limiter table is bounded at 4096 sources: when it is full of live windows a new source is answered `429` rather than
-  growing it.
+- The source is the TCP peer address (never a forwarded header); an IPv4-mapped IPv6 address is read as its IPv4 form. All
+  loopback addresses (127.0.0.0/8 and ::1) are **one** limiter source — a local process can bind any 127.x address, so
+  per-address buckets would let it fill the table or dodge the limit; tailnet addresses are assigned by the control
+  server and stay per address. The limiter table is bounded at 4096 sources: when it is full of live windows a new source
+  is answered `429` rather than growing it.
 
 ## 5. Profile, one way (R4–R6)
 

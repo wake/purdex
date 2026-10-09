@@ -437,3 +437,20 @@ func TestPairing_StoppedStoreTakesNothing(t *testing.T) {
 	_, _, err = s.CreatePairing(json.RawMessage(`[{}]`), pairingMaxTTL)
 	require.ErrorIs(t, err, ErrUnavailable)
 }
+
+// Every loopback address is one limiter source: a local process cannot fill the table with 127.x aliases, nor dodge the limit
+// by cycling through them, and a tailnet phone still claims afterwards.
+func TestPairingClaim_LoopbackAliasesShareOneBucket(t *testing.T) {
+	h := newPairHarness(t)
+	code := codeOf(t, h.create(pairRowJSON(nil)))
+	for i := 0; i < maxClaimSources+50; i++ {
+		src := fmt.Sprintf("127.%d.%d.%d:9", (i>>16)&255, (i>>8)&255, i&255+1)
+		h.claim(src, "ZZZZZZZZ")
+	}
+	assert.LessOrEqual(t, len(h.store.claimFails), 1, "all loopback attempts are one source")
+	assertReason(t, h.claim("127.5.5.5:9", code), http.StatusTooManyRequests, "rate_limited") // the loopback bucket is spent
+	rec := h.claim("[::1]:9", code)
+	assertReason(t, rec, http.StatusTooManyRequests, "rate_limited") // ::1 is the same bucket
+	ok := h.claim(tailnetSrc, code)
+	require.Equal(t, http.StatusOK, ok.Code, ok.Body.String())
+}
