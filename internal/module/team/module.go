@@ -474,6 +474,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT "+UnattendedRoute, m.handleUnattendedPut)
 	mux.HandleFunc("PUT "+team.RelayQuotaRoute, m.handleRelayQuotaPut)
 	mux.HandleFunc("PUT "+team.MaxMembersRoute, m.handleMaxMembersPut)
+	mux.HandleFunc("PUT "+team.AppearanceRoute, m.handleAppearancePut)
 	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
