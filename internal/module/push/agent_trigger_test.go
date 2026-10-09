@@ -217,6 +217,21 @@ func TestAgentTrigger_AnAskOpenedAndClosedInsideTheWindowHidesTheWaitingFrame(t 
 	}
 }
 
+// The window is fixed at arrival + 2 s: an ask that opens after it is a new question even if the hold's timer runs late.
+// Mutation gate: take the window end from the clock when the hold ends → red.
+func TestAgentTrigger_AnAskOpenedAfterTheWindowDoesNotHideAFrameWhoseTimerRanLate(t *testing.T) {
+	e := newAgentEnv(t, 200*time.Millisecond)
+	e.device(tokA, "en", "mlab", tabsOf("c1"))
+	e.feed.emit(nev("c1", "PdxPermissionRequest", "waiting", nil))
+	e.clock.advance(3 * time.Second) // the timer has not run yet, and the clock is already past arrival + 2 s
+	e.events.emit("opened", askApproval("ask1", "sid-1", "dev:@1.%2", false))
+	calls := e.waitSends(t, 2) // the ask's push and the waiting frame's own
+	kinds := calls[0].Payload + calls[1].Payload
+	if !strings.Contains(kinds, `"kind":"hook_ask"`) || !strings.Contains(kinds, `"kind":"agent"`) {
+		t.Fatalf("pushes = %s", kinds)
+	}
+}
+
 // Matched by the tmux session name when the ids differ or are missing.
 func TestAgentTrigger_TheAskIsMatchedByTmuxNameToo(t *testing.T) {
 	e := newAgentEnv(t, 60*time.Millisecond)
