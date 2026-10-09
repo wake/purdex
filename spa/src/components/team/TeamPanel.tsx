@@ -239,7 +239,7 @@ function Cell({ teamKey, seat, isActive, onOpen }: { teamKey: string; seat: Team
       className={`flex items-center rounded-md cursor-pointer ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
     >
       <span className="inline-flex" style={{ marginLeft: CELL_ICON_PULL }}>
-        <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} size={CELL_ICON} />
+        <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} size={CELL_ICON} compact />
       </span>
       <ContextRing pct={r.ctx} model={r.model} size={CELL_RING} />
     </button>

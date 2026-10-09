@@ -25,6 +25,15 @@ export const CELL_RING = 20
 export const CELL_PX = 1
 export const CELL_INNER_GAP = 0
 export const CELL_W = CELL_PX * 2 + CELL_ICON_SLOT + CELL_INNER_GAP + CELL_RING
+/** The widest a one-line cell may be under any light style (iconDot used to be 50: dot slot + icon side by side). */
+export const CELL_W_MAX = 44
+/**
+ * A cell's width under a light style. Every style takes CELL_W: the panel draws iconDot as the corner-overlay light
+ * (TeamSeatIcon `compact`), so the status dot sits on the icon instead of taking a 16px slot of its own.
+ */
+export function cellWidthFor(_style: 'icon' | 'dot' | 'iconDot' | 'badge'): number {
+  return CELL_W
+}
 export const CELL_H = 26
 export const CELL_GAP = 2
 /** The 1px divider after the lead, with its side margin. */
