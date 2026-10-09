@@ -71,6 +71,8 @@ type Module struct {
 	reader      team.OpenApprovalsReader                                         // fresh read of the open set at send time (purdex.open_approvals); nil = unknown
 	sessions    func(ctx context.Context) (map[string]session.SessionRef, error) // ONE read of every tmux session (name -> code, creation time); nil = from the session module
 	sessBudget  time.Duration                                                    // how long a snapshot waits for that read; 0 = sessionBudget
+	sessBusy    atomic.Bool                                                      // a session read is still running: never more than one outstanding
+	sessStalled atomic.Bool                                                      // the "still busy" line was already logged for this stall
 	holds       holdSet
 	holdFor     time.Duration // how long a waiting event waits for its hook_ask (spec §5.2 rule 8); a test seam
 	unsubNotify func()
@@ -358,6 +360,13 @@ func (m *Module) readSessions(ctx context.Context) map[string]session.SessionRef
 	if budget <= 0 {
 		budget = sessionBudget
 	}
+	// Single flight: a reader that ignores its context keeps its goroutine, so while one is outstanding no other starts.
+	if !m.sessBusy.CompareAndSwap(false, true) {
+		if m.sessStalled.CompareAndSwap(false, true) { // once per stall, not per Job
+			log.Printf("[push] the previous tmux session read has not returned; not starting another (badge keys fall back to approval ids)")
+		}
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	type result struct {
@@ -367,6 +376,8 @@ func (m *Module) readSessions(ctx context.Context) map[string]session.SessionRef
 	ch := make(chan result, 1)
 	go func() {
 		refs, err := m.sessions(ctx)
+		m.sessStalled.Store(false)
+		m.sessBusy.Store(false)
 		ch <- result{refs, err}
 	}()
 	select {
