@@ -1,16 +1,25 @@
 package workbook
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 )
 
 // migrations are the schema steps, in order: step i takes a file at version i to version i+1. A step runs in ONE
 // transaction together with its version write, so a failure half way leaves the file at the old version with the old
-// shape and the next start retries from there. Never edit a step that has shipped (the file exists on a host as soon as
-// the module has run): add the next one.
-var migrations = []func(tx *sql.Tx) error{migrateV1, migrateV2}
+// shape and the next start retries from there. The transaction is BEGIN IMMEDIATE and the version is read again inside
+// it: a second opener (a daemon started twice, a rolling restart) waits for the first, then finds the step done and
+// skips it. Never edit a step that has shipped (the file exists on a host as soon as the module has run): add the next one.
+var migrations = []func(x stepExec) error{migrateV1, migrateV2}
+
+// stepExec is what a step runs its statements on: the open migration transaction.
+type stepExec interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
 
 func init() {
 	if len(migrations) != schemaVersion {
@@ -19,41 +28,90 @@ func init() {
 }
 
 func migrate(db *sql.DB) error {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`); err != nil {
+	err := retryBusy(func() error {
+		_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)`)
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("migrate workbook db: %w", err)
 	}
-	var have int
-	err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&have)
-	if errors.Is(err, sql.ErrNoRows) {
-		have = 0
-	} else if err != nil {
-		return fmt.Errorf("migrate workbook db: %w", err)
-	}
-	if have > schemaVersion {
-		return fmt.Errorf("migrate workbook db: schema version %d is newer than this daemon's %d", have, schemaVersion)
-	}
-	for ; have < schemaVersion; have++ {
-		if err := runStep(db, migrations[have]); err != nil {
-			return fmt.Errorf("migrate workbook db (to version %d): %w", have+1, err)
+	for i := range migrations {
+		if err := retryBusy(func() error { return runStep(db, i) }); err != nil {
+			return fmt.Errorf("migrate workbook db (to version %d): %w", i+1, err)
 		}
 	}
 	return nil
 }
 
-func runStep(db *sql.DB, step func(*sql.Tx) error) error {
-	tx, err := db.Begin()
+// retryBusy repeats f for up to 5 s while SQLite answers "database is locked". The busy timeout covers a statement
+// waiting for a lock, but not a new connection switching a file to WAL while another opener does the same; whatever f
+// did is rolled back by its own failure, so running it again is safe.
+func retryBusy(f func() error) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := f()
+		if err == nil || time.Now().After(deadline) || !(strings.Contains(err.Error(), "SQLITE_BUSY") || strings.Contains(err.Error(), "database is locked")) {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// connTx is a BEGIN IMMEDIATE transaction on one connection, as a stepExec.
+type connTx struct {
+	ctx  context.Context
+	conn *sql.Conn
+}
+
+func (c connTx) Exec(query string, args ...any) (sql.Result, error) {
+	return c.conn.ExecContext(c.ctx, query, args...)
+}
+
+// runStep applies step i if the file is at version i: it takes the write lock first, reads the version under it, and
+// skips the step when another opener has done it meanwhile. A file newer than this daemon is refused.
+func runStep(db *sql.DB, i int) (err error) {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	if err := step(tx); err != nil {
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	done := false
+	defer func() {
+		if !done {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+	have := 0
+	switch e := conn.QueryRowContext(ctx, `SELECT version FROM schema_version`).Scan(&have); {
+	case errors.Is(e, sql.ErrNoRows):
+		have = 0
+	case e != nil:
+		return e
+	}
+	if have > schemaVersion {
+		return fmt.Errorf("schema version %d is newer than this daemon's %d", have, schemaVersion)
+	}
+	if have < i {
+		return fmt.Errorf("schema version %d is behind step %d", have, i+1)
+	}
+	if have == i {
+		if err := migrations[i](connTx{ctx, conn}); err != nil {
+			return err
+		}
+	} // have > i: another opener did this step while we waited for the lock
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	done = true
+	return nil
 }
 
 // migrateV1 creates the first schema (spec §6, WB-1a-ii).
-func migrateV1(tx *sql.Tx) error {
+func migrateV1(tx stepExec) error {
 	_, err := tx.Exec(`
 		CREATE TABLE wb_entries (
 			id INTEGER PRIMARY KEY,
@@ -89,7 +147,7 @@ func migrateV1(tx *sql.Tx) error {
 
 // migrateV2 is the v2 schema (spec §6 v2, plan WB-1b′-a): the entry kind and the call's token usage, and the todo list.
 // The new reasons (failed: api | lost | refused | nothing_to_fork, skipped: no_mod) are values only.
-func migrateV2(tx *sql.Tx) error {
+func migrateV2(tx stepExec) error {
 	_, err := tx.Exec(`
 		ALTER TABLE wb_entries ADD COLUMN kind TEXT NOT NULL DEFAULT 'turn';
 		ALTER TABLE wb_entries ADD COLUMN usage_in INTEGER;

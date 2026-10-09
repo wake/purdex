@@ -177,3 +177,49 @@ func TestMigrate_RefusesANewerVersion(t *testing.T) {
 		t.Fatal("a version 99 file was opened")
 	}
 }
+
+// Two daemons (or a restart that overlaps its predecessor) opening the same file at once: both succeed and the file ends at
+// version 2 with its single version row. Before the fix the second saw an old version outside the transaction and ran the
+// step again (a duplicate column). Mutation gate: read the version outside the lock → red (run with -count).
+func TestMigrate_ConcurrentOpenersBothSucceed(t *testing.T) {
+	for _, fromV1 := range []bool{false, true} {
+		for round := 0; round < 5; round++ {
+			path := filepath.Join(t.TempDir(), "workbook.db")
+			if fromV1 {
+				writeV1(t, path)
+			}
+			const n = 6
+			errs := make(chan error, n)
+			stores := make(chan *Store, n)
+			start := make(chan struct{})
+			for i := 0; i < n; i++ {
+				go func() {
+					<-start
+					s, err := OpenStore(path)
+					errs <- err
+					stores <- s
+				}()
+			}
+			close(start)
+			for i := 0; i < n; i++ {
+				if err := <-errs; err != nil {
+					t.Fatalf("fromV1=%v round %d: an opener failed: %v", fromV1, round, err)
+				}
+			}
+			var last *Store
+			for i := 0; i < n; i++ {
+				if s := <-stores; s != nil {
+					if last != nil {
+						last.Close()
+					}
+					last = s
+				}
+			}
+			var rows, v int
+			if err := last.db.QueryRow(`SELECT count(*), max(version) FROM schema_version`).Scan(&rows, &v); err != nil || rows != 1 || v != 2 {
+				t.Fatalf("fromV1=%v: version rows=%d max=%d err=%v", fromV1, rows, v, err)
+			}
+			last.Close()
+		}
+	}
+}
