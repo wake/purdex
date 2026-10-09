@@ -23,7 +23,8 @@ import { dispatchNexHostEvent, NEX_OPT_IN } from '../lib/nex/nex-host-events'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { handleApprovalEvent } from '../lib/team/approval-ws'
 import { handleUnattendedEvent } from '../lib/team/unattended-ws'
-import { UNATTENDED_EVENT_TYPE } from '../lib/team/types'
+import { handleRelayQuotaEvent } from '../lib/team/relay-quota-ws'
+import { RELAY_QUOTA_EVENT_TYPE, UNATTENDED_EVENT_TYPE } from '../lib/team/types'
 import { handleRosterEvent } from '../lib/team/roster-ws'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
 import { connectionKey } from '../lib/host-connection-key'
@@ -277,6 +278,16 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleUnattendedEvent(hostId, event.value)
+            return
+          }
+          if (event.type === RELAY_QUOTA_EVENT_TYPE) {
+            // A quota changed (relay quota spec §3.2; plan RQ-A Task 5). Bound to the connection exactly like
+            // `team.unattended` above: a frame is dropped unless the host still exists under the endpoint and token
+            // this socket was opened with, so the old daemon's numbers are never written back after a removal or a
+            // re-point (unattended-support.ts has already forgotten them).
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleRelayQuotaEvent(hostId, event.value)
             return
           }
           if (event.type === ROSTER_EVENT_TYPE) {

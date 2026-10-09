@@ -9,6 +9,7 @@ vi.mock('../host-api', () => ({ fetchHostInfo: (hostId: string) => fetchHostInfo
 import { startUnattendedSupport } from './unattended-support'
 import { useHostStore } from '../../stores/useHostStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { useRelayQuotaStore } from './relay-quota'
 
 const host = (id: string, ip = '100.64.0.2') => ({ id, name: id, ip, port: 7860, token: 't', order: 0 })
 const info = (capabilities?: unknown): HostInfo =>
@@ -30,6 +31,7 @@ let stop: () => void = () => {}
 beforeEach(() => {
   useHostStore.getState().reset()
   useUnattendedStore.getState().reset()
+  useRelayQuotaStore.getState().reset()
   fetchHostInfo.mockReset()
   fetchHostInfo.mockResolvedValue(WITH)
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2', '100.64.0.4') }, hostOrder: ['h1', 'h2'], runtime: {} })
@@ -175,6 +177,17 @@ describe('startUnattendedSupport', () => {
       useHostStore.getState().setRuntime('h1', { status: 'connected' })
       await flush()
       expect(quotaSupport('h1')).toBeUndefined()
+    })
+
+    it('the quota numbers a host confirmed are forgotten when the host is removed or re-pointed', async () => {
+      stop = startUnattendedSupport()
+      useRelayQuotaStore.getState().applyAnswer('h1', 'r1', { self_left: 2, member_pool_left: 1 }, 3)
+      useRelayQuotaStore.getState().applyAnswer('h2', 'r1', { self_left: 5, member_pool_left: 0 }, 1)
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: host('h1', '100.64.0.9') } }) // re-point h1
+      expect(Object.keys(useRelayQuotaStore.getState().confirmed).some((k) => k.startsWith('h1'))).toBe(false)
+      expect(Object.keys(useRelayQuotaStore.getState().confirmed).some((k) => k.startsWith('h2'))).toBe(true)
+      useHostStore.setState({ hosts: { h1: host('h1', '100.64.0.9') }, hostOrder: ['h1'] }) // remove h2
+      expect(useRelayQuotaStore.getState().confirmed).toEqual({})
     })
 
     it('a re-point forgets it with the rest of the entry', async () => {

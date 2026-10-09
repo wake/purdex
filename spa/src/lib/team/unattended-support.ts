@@ -13,6 +13,7 @@
 import { fetchHostInfo } from '../host-api'
 import { hostEndpoint, useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { useRelayQuotaStore } from './relay-quota'
 import { RELAY_QUOTA_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
 
 const identity = (h: HostConfig): string => `${hostEndpoint(h)}:${h.token ?? ''}`
@@ -50,12 +51,16 @@ export function startUnattendedSupport(): () => void {
     for (const hostId of Object.keys(store.byHost)) {
       if (!next.hosts[hostId]) store.forgetHost(hostId)
     }
+    for (const hostId of Object.keys(useRelayQuotaStore.getState().confirmed).map((k) => k.split('\u0000')[0])) {
+      if (!next.hosts[hostId]) useRelayQuotaStore.getState().forgetHost(hostId) // a removed host's numbers go with it
+    }
     for (const [hostId, host] of Object.entries(next.hosts)) {
       const before = prev.hosts[hostId]
       const repointed = before !== undefined && identity(before) !== identity(host)
       if (repointed) {
         current.delete(hostId) // an answer still on its way is the old daemon's
         store.forgetHost(hostId)
+        useRelayQuotaStore.getState().forgetHost(hostId) // and so are the quota numbers it confirmed
       }
       if (next.runtime[hostId]?.status !== 'connected') continue
       if (repointed || !before || prev.runtime[hostId]?.status !== 'connected') probe(hostId)
