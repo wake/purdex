@@ -9,6 +9,7 @@ import (
 
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/workbooksettings"
 )
 
 // Module serves per-host launcher config over /api/hostconfig*.
@@ -48,6 +49,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(UnattendedKey, m)
 	// ... and the relay-quota rule's switch through this one (#2062).
 	c.Registry.Register(RelayQuotaKey, m)
+	// ... and the session workbook setting through this one (workbook plan WB-1b.1).
+	c.Registry.Register(workbooksettings.Key, m)
 	return nil
 }
 
@@ -61,6 +64,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/relay", m.putHandler(KeyRelay, func(raw []byte) (any, error) { return normalizeRelay(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte) (any, error) { return normalizeTeam(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/relay_quota", m.putHandler(KeyRelayQuota, func(raw []byte) (any, error) { return normalizeRelayQuota(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/workbook", m.putHandler(KeyWorkbook, func(raw []byte) (any, error) { return normalizeWorkbook(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/resources", m.putHandler(KeyResources, func(raw []byte) (any, error) { return normalizeResources(raw) }))
 	mux.HandleFunc("POST /api/hostconfig/check-path", m.handleCheckPath)
 }

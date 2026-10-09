@@ -81,6 +81,8 @@ func emptyFor(key string) string {
 		return teamSettingsJSON
 	case KeyResources:
 		return resourcesDefaultJSON
+	case KeyWorkbook:
+		return workbookDefaultJSON
 	case KeyRelayQuota:
 		return relayQuotaJSON
 	}
@@ -99,6 +101,7 @@ func (m *Module) handleGet(w http.ResponseWriter, _ *http.Request) {
 		"team":            KeyTeam,
 		"resources":       KeyResources,
 		"relayQuota":      KeyRelayQuota,
+		"workbook":        KeyWorkbook,
 	} {
 		e, err := m.store.Get(key)
 		if err != nil {
