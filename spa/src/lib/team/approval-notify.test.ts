@@ -39,6 +39,16 @@ afterEach(() => {
   useHostStore.getState().reset()
 })
 
+describe('notifyApprovalOpened — adopt', () => {
+  it('an adopt request names the lead and the target, and its body is the target’s cwd', () => {
+    notifyApprovalOpened(H, approval({
+      kind: 'adopt',
+      payload: { team_id: 'T', lead_session_id: 'S1', target_ref: '_tgt001', target_session_id: 'S2', title: '', target_name: 'doc-writer', target_address: '', target_cwd: '/w/docs', target_tmux: '' },
+    }))
+    expect(showNotification.mock.calls[0][0]).toMatchObject({ title: 'mlab：purdex-7c 想納入 doc-writer', body: '/w/docs', eventName: 'ApprovalRequest' })
+  })
+})
+
 describe('notifyApprovalOpened', () => {
   it('raises the Electron notification: title per spec §6.3, the reason as body, open-approval action, a per-request broadcastTs', () => {
     notifyApprovalOpened(H, approval())
