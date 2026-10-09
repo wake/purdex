@@ -227,6 +227,7 @@ function apply(outcome, batch, $, ask) {
 async function flush($) {
   if (ev.inflight || ev.queue.length === 0) return
   const batch = ev.queue.slice(0, BATCH_MAX)
+  const wbGen = wb.gen
   ev.inflight = true
   let outcome
   try {
@@ -234,7 +235,8 @@ async function flush($) {
   } finally {
     ev.inflight = false
   }
-  if (apply(outcome, batch, $, true)) {
+  // A hint that comes back after the session ended or switched is for a session that is gone: it asks nothing.
+  if (apply(outcome, batch, $, wbGen === wb.gen)) {
     ev.backoffMs = 0
     schedule($, FLUSH_MS)
     return

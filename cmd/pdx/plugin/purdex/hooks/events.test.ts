@@ -1298,6 +1298,25 @@ test('a result that cannot be reported drops the job: no further asking', async 
   expect(nextReqs(w).length).toBe(1)
 })
 
+// Mutation gate: ask on whatever hint arrives → red (codex R1).
+test('a workbook hint that arrives after the session ended asks nothing', async ($, on) => {
+  let answer: (a: Answer) => void = () => {}
+  let held = false
+  const w = evWorld(on, {
+    daemon: (body, n) => {
+      if (n === 1) { held = true; return new Promise<Answer>((resolve) => { answer = resolve }) } // the first batch stays in flight
+      return ackAll(body)
+    },
+  })
+  await start($, w)
+  await w.clock.advance(150) // the batch goes out and waits
+  expect(held).toBe(true)
+  await end($, 'exit')
+  answer({ status: 200, text: JSON.stringify({ ack: 1, workbook: true }) })
+  await w.clock.settle()
+  expect(w.wbReqs).toEqual([])
+})
+
 test('after session.end nothing asks', async ($, on) => {
   const w = evWorld(on)
   await start($, w)
