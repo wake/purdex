@@ -72,6 +72,26 @@ export function usageTone(pct: number): UsageTone {
   return 'ok'
 }
 
+/** What a ring shows. 'used': bright arc grows counterclockwise from 12 o'clock. 'remaining': bright arc runs clockwise from 12 o'clock (it disappears counterclockwise). Both share one bright/dark boundary angle. */
+export type RingMode = 'used' | 'remaining'
+export type RingDirection = 'ccw' | 'cw'
+
+export function ringGeometry(used: number, mode: RingMode): { sharePct: number; direction: RingDirection; tone: UsageTone } {
+  const u = usedPct(used)
+  return {
+    sharePct: mode === 'used' ? u : 100 - u,
+    direction: mode === 'used' ? 'ccw' : 'cw',
+    tone: usageTone(u),
+  }
+}
+
+/** SVG transform for a ring's arc circle: start at 12 o'clock, and mirror about the vertical axis for counterclockwise. */
+export function ringTransform(size: number, direction: RingDirection): string {
+  const c = size / 2
+  const rot = `rotate(-90 ${c} ${c})`
+  return direction === 'ccw' ? `translate(${size} 0) scale(-1 1) ${rot}` : rot
+}
+
 /** "2h13m", "45m", "3d4h"; null once the reset has passed (the window already rolled over). */
 export function formatResetsIn(resetsAtMs: number, nowMs: number): string | null {
   const mins = Math.floor((resetsAtMs - nowMs) / 60_000)
