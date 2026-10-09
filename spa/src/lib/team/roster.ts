@@ -47,6 +47,10 @@ export interface TeamRoster {
   team_label: string
   lead: RosterSession
   members: RosterMember[]
+  /** The team's member cap and how many of it are used (active members + spawns still starting). Absent on a daemon
+   *  that predates `team.max_members.v1`. */
+  max_members?: number
+  in_use?: number
 }
 
 export interface RosterEventValue {
@@ -104,5 +108,17 @@ export function parseRosterEvent(value: unknown): RosterEventValue | string {
   if (!teams.every(isTeamRoster)) return `${op}: a team is not the wire shape`
   // The guard stays tolerant of a missing `team_name` (a daemon that predates names), so give the field its
   // declared type here instead of handing the parsed objects back as-is.
-  return { op, teams: (teams as TeamRoster[]).map((t) => ({ ...t, team_name: typeof t.team_name === 'string' ? t.team_name : '', team_label: typeof t.team_label === 'string' ? t.team_label : '' })) }
+  return {
+    op,
+    teams: (teams as TeamRoster[]).map((t) => {
+      const { max_members, in_use, ...rest } = t
+      return {
+        ...rest,
+        team_name: typeof t.team_name === 'string' ? t.team_name : '',
+        team_label: typeof t.team_label === 'string' ? t.team_label : '',
+        // Both or neither: a cap without its usage (or the reverse) is not a number to build a stepper on.
+        ...(Number.isInteger(max_members) && Number.isInteger(in_use) ? { max_members, in_use } : {}),
+      }
+    }),
+  }
 }

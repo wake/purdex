@@ -339,6 +339,20 @@ export interface UnattendedView extends UnattendedState {
 
 /** `/api/info` capabilities entry of a daemon that stores and serves relay quotas. */
 export const RELAY_QUOTA_CAPABILITY = 'team.relay_quota.v1'
+
+/** The daemon lets the App raise or lower a team's member cap (`PUT /api/team/max-members`). */
+export const TEAM_MAX_MEMBERS_CAPABILITY = 'team.max_members.v1'
+
+/** The cap's range (the daemon's `TeamMaxMembers`): a person may go up to 8, never below 1. */
+export const MAX_MEMBERS_MIN = 1
+export const MAX_MEMBERS_MAX = 8
+
+/** The answer of `PUT /api/team/max-members`. */
+export interface MaxMembersView {
+  team_id: string
+  max_members: number
+  in_use: number
+}
 /** `HostEvent.type` of a quota change. */
 export const RELAY_QUOTA_EVENT_TYPE = 'team.relay_quota'
 

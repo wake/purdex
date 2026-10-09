@@ -15,6 +15,8 @@ export interface UnattendedHostEntry {
   support: UnattendedSupport
   /** Whether the daemon lists `team.relay_quota.v1` (relay quota, plan RQ-A): absent until the probe answered. */
   quotaSupport?: UnattendedSupport
+  /** Whether the daemon lists `team.max_members.v1` (the team cap stepper): absent until the probe answered. */
+  maxMembersSupport?: UnattendedSupport
   /** Absent until the daemon's snapshot arrived. */
   state?: UnattendedState
 }
@@ -23,6 +25,7 @@ interface UnattendedStoreState {
   byHost: Record<string, UnattendedHostEntry>
   setSupport: (hostId: string, support: UnattendedSupport) => void
   setQuotaSupport: (hostId: string, support: UnattendedSupport) => void
+  setMaxMembersSupport: (hostId: string, support: UnattendedSupport) => void
   applyState: (hostId: string, state: UnattendedState) => void
   forgetHost: (hostId: string) => void
   reset: () => void
@@ -39,6 +42,11 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
     const cur = s.byHost[hostId]
     if (cur?.quotaSupport === quotaSupport) return s
     return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', quotaSupport } } }
+  }),
+  setMaxMembersSupport: (hostId, maxMembersSupport) => set((s) => {
+    const cur = s.byHost[hostId]
+    if (cur?.maxMembersSupport === maxMembersSupport) return s
+    return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', maxMembersSupport } } }
   }),
   applyState: (hostId, state) => set((s) => {
     const cur = s.byHost[hostId]

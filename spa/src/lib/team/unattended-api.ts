@@ -9,7 +9,7 @@
 import { ApprovalApiError, send } from './approval-api'
 import { clientDescriptor } from './client-label'
 import { parseRelayQuotaView, parseSessionQuotas } from './relay-quota-wire'
-import { isApproval, isUnattendedState, isUnknownKindRow, type Approval, type RelayQuotaField, type RelayQuotaView, type UnattendedState, type UnattendedView } from './types'
+import { isApproval, isUnattendedState, isUnknownKindRow, type Approval, type MaxMembersView, type RelayQuotaField, type RelayQuotaView, type UnattendedState, type UnattendedView } from './types'
 
 export const UNATTENDED_PATH = '/api/team/unattended'
 
@@ -109,6 +109,27 @@ export async function putUnattended(hostId: string, on: boolean): Promise<Unatte
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ on, client }),
   }))
+}
+
+export const MAX_MEMBERS_PATH = '/api/team/max-members'
+
+/**
+ * `PUT /api/team/max-members`: set a team's member cap to an absolute value, signed with this app's client descriptor.
+ * The answer is `{team_id, max_members, in_use}`; anything else is `bad_response`, never a number to show. 409
+ * `max_below_in_use` keeps its body on the error (`in_use`), 404 `not_found` means the team ended.
+ */
+export async function putMaxMembers(hostId: string, teamId: string, maxMembers: number): Promise<MaxMembersView> {
+  const client = await clientDescriptor()
+  const raw = await send<unknown>(hostId, MAX_MEMBERS_PATH, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ team_id: teamId, max_members: maxMembers, client }),
+  })
+  const r = raw as Partial<MaxMembersView> | null
+  if (typeof r !== 'object' || r === null || typeof r.team_id !== 'string' || !Number.isInteger(r.max_members) || !Number.isInteger(r.in_use)) {
+    throw new ApprovalApiError(200, 'bad_response', 'the max-members answer is not the wire shape')
+  }
+  return { team_id: r.team_id, max_members: r.max_members as number, in_use: r.in_use as number }
 }
 
 export const RELAY_QUOTA_PATH = '/api/team/relay-quota'

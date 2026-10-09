@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { ApprovalApiError } from './approval-api'
 import { __resetClientDescriptorForTests } from './client-label'
-import { getUnattended, putUnattended, putRelayQuota } from './unattended-api'
+import { getUnattended, putUnattended, putRelayQuota, putMaxMembers } from './unattended-api'
 import type { Approval } from './types'
 
 const testGlobal = globalThis as typeof globalThis & { fetch: ReturnType<typeof vi.fn> }
@@ -284,6 +284,43 @@ describe('unattended-api', () => {
 
     it('an unconfigured host is refused before any request', async () => {
       expect((await rejection(putRelayQuota('no-such-host', 's1', 'self_left', 5))).code).toBe('host_removed')
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('putMaxMembers', () => {
+    it('PUTs the absolute cap with the team id and this app\'s client, and returns the answer', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ team_id: 't1', max_members: 4, in_use: 2 }))
+      const v = await putMaxMembers(hostId, 't1', 4)
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/team/max-members')
+      expect(init.method).toBe('PUT')
+      expect(JSON.parse(init.body)).toEqual({ team_id: 't1', max_members: 4, client: { kind: 'app', label: 'Purdex.app' } })
+      expect(v).toEqual({ team_id: 't1', max_members: 4, in_use: 2 })
+    })
+
+    it('an answer that is not the wire shape is bad_response, never a number', async () => {
+      for (const bad of [{ team_id: 't1', max_members: 4 }, { team_id: 't1', max_members: '4', in_use: 1 }, { max_members: 4, in_use: 1 }, null]) {
+        testGlobal.fetch.mockResolvedValueOnce(json(bad))
+        expect((await rejection(putMaxMembers(hostId, 't1', 4))).code).toBe('bad_response')
+      }
+    })
+
+    it('409 max_below_in_use keeps its body (in_use), 404 not_found and 400 are codes', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'max_below_in_use', detail: 'x', in_use: 3 }, 409))
+      const a = await rejection(putMaxMembers(hostId, 't1', 2))
+      expect(a.code).toBe('max_below_in_use')
+      expect(a.body?.in_use).toBe(3)
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'not_found', detail: 'no live team' }, 404))
+      expect((await rejection(putMaxMembers(hostId, 't1', 2))).code).toBe('not_found')
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'bad_request', detail: 'max_members outside 1-8' }, 400))
+      expect((await rejection(putMaxMembers(hostId, 't1', 9))).code).toBe('bad_request')
+      testGlobal.fetch.mockResolvedValueOnce(new Response('404 page not found\n', { status: 404 }))
+      expect((await rejection(putMaxMembers(hostId, 't1', 2))).code).toBe('unsupported')
+    })
+
+    it('an unconfigured host is refused before any request', async () => {
+      expect((await rejection(putMaxMembers('no-such-host', 't1', 2))).code).toBe('host_removed')
       expect(testGlobal.fetch).not.toHaveBeenCalled()
     })
   })

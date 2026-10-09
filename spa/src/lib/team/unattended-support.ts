@@ -14,7 +14,7 @@ import { fetchHostInfo } from '../host-api'
 import { hostEndpoint, useHostStore, type HostConfig } from '../../stores/useHostStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { quotaHostIds, useRelayQuotaStore } from './relay-quota'
-import { RELAY_QUOTA_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
+import { RELAY_QUOTA_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
 
 const identity = (h: HostConfig): string => `${hostEndpoint(h)}:${h.token ?? ''}`
 
@@ -33,6 +33,7 @@ export function startUnattendedSupport(): () => void {
         const listed = Array.isArray(caps) ? caps : []
         useUnattendedStore.getState().setSupport(hostId, listed.includes(UNATTENDED_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setQuotaSupport(hostId, listed.includes(RELAY_QUOTA_CAPABILITY) ? 'yes' : 'no')
+        useUnattendedStore.getState().setMaxMembersSupport(hostId, listed.includes(TEAM_MAX_MEMBERS_CAPABILITY) ? 'yes' : 'no')
       },
       () => { /* not retried until the next trigger */ },
     )
