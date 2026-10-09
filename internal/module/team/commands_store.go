@@ -315,6 +315,15 @@ func applyTeamLevelIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 		return CommandResult{}, err
 	}
 	rows.Close()
+	if c.Kind == team.CommandEnd {
+		// A forwarded spawn of the team that has not registered yet ends with it (#2327), in this transaction: the
+		// runner's registration is a compare-and-set on a running op, so it can no longer add a member after the end.
+		// No fact is queued — the lead host's team is over and it would answer `ignored`. The caller kills the sessions.
+		if _, err := tx.Exec(`UPDATE spawn_ops SET state = 'failed', reason = ?, updated_at = ? WHERE lead_host_id = ? AND team_id = ? AND state = 'running'`,
+			team.SpawnReasonAbandoned, p.Now, p.LeadHostID, c.TeamID); err != nil {
+			return CommandResult{}, err
+		}
+	}
 	for _, l := range mks {
 		mk := l.mk
 		if c.Kind == team.CommandEnd {

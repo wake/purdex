@@ -4,6 +4,7 @@ package teammod
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/wake/purdex/internal/config"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // A spawn forwarded from a lead host (cross-host team spec §5.5, §6.2, plan X4a-2). The `spawn` command is accepted on
@@ -134,6 +136,30 @@ func (m *Module) startRemoteSpawn(id string) {
 		return // the op stays running at its step: the next boot resumes it
 	}
 	m.startSpawn(id)
+}
+
+// killEndedSpawnSessions kills the tmux sessions of the forwarded ops a committed `end` failed (#2327), each only under
+// the generation it was created in. An error (listing them, or the kill itself) is returned so the handler answers a
+// retryable failure and the lead host sends the same command again, which lists them again; a generation that moved or
+// a session already gone is not an error.
+func (m *Module) killEndedSpawnSessions(leadHost, teamID string) error {
+	ops, err := m.store.AbandonedSpawnSessions(leadHost, teamID)
+	if err != nil {
+		return err
+	}
+	if len(ops) > 0 && m.tmux == nil { // a daemon without tmux cannot kill them now; the retry finds them again
+		return fmt.Errorf("%d abandoned spawn session(s) of team %s and no tmux on this daemon", len(ops), teamID)
+	}
+	var first error
+	for _, op := range ops {
+		if _, err := m.tmux.KillSessionIfInstance(op.TmuxID, op.TmuxInstance); err != nil && !errors.Is(err, tmux.ErrNoSession) { // gone already: a replay after a lost answer
+			m.logf("[team] spawn %s: tmux session %s not killed on end: %v", op.ID, op.TmuxID, err)
+			if first == nil {
+				first = err
+			}
+		}
+	}
+	return first
 }
 
 // validSpawnCommand is the shape of a `spawn` command ("" = fine).

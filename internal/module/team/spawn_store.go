@@ -435,6 +435,27 @@ func (s *Store) ListRunningSpawnOps(now int64) ([]spawnRow, error) {
 	return out, nil
 }
 
+// AbandonedSpawnSessions are the tmux sessions (id, generation) of the forwarded ops of leadHost's team that `end`
+// failed abandoned (#2327): what the handler kills once the end is committed. A replay lists the same rows again, which
+// the generation-guarded kill answers as gone.
+func (s *Store) AbandonedSpawnSessions(leadHost, teamID string) ([]spawnRow, error) {
+	rows, err := s.db.Query(`SELECT `+spawnCols+` FROM spawn_ops WHERE lead_host_id = ? AND team_id = ? AND state = 'failed' AND reason = ? AND tmux_id <> '' ORDER BY created_at, id`,
+		leadHost, teamID, team.SpawnReasonAbandoned)
+	if err != nil {
+		return nil, fmt.Errorf("list abandoned spawn sessions: %w", err)
+	}
+	defer rows.Close()
+	var out []spawnRow
+	for rows.Next() {
+		var r spawnRow
+		if err := rows.Scan(r.dest()...); err != nil {
+			return nil, fmt.Errorf("list abandoned spawn sessions: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // CountRunningSpawns counts the team's running ops other than exceptID
 // (the op asking): with the live members, what the team limit counts.
 func (s *Store) CountRunningSpawns(teamID, exceptID string) (int, error) {
