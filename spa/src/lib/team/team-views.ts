@@ -38,6 +38,10 @@ export interface TeamView {
   hostId: string
   teamId: string
   createdAt: number
+  /** The team's current name (`team_name`); '' = unnamed. */
+  name: string
+  /** The team's short label (`team_label`); '' = none (the lead's title stands in, see team-names.ts). */
+  label: string
   /** FNV-1a 32 of `teamId` mod 8: stable across windows and restarts. The palette belongs to the interface PRs. */
   colorIndex: number
   lead: Seat
@@ -90,7 +94,7 @@ interface ShownSession {
  * `tmux-session` panes count. The single place that decides "which session does this pane show": `indexTabs` (which tab
  * stands for a seat) and `teamOfTab` (which seat does a tab's pane show) both read it, so they cannot disagree.
  */
-function shownSessions(
+export function shownSessions(
   layout: Pick<Tab, 'layout'>['layout'],
   sessionsByHost: TeamViewsInput['sessionsByHost'],
 ): ShownSession[] {
@@ -193,6 +197,7 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
       const preferred = [lead.workspaceId, input.activeWorkspaceId]
       views.push({
         key, hostId, teamId: team.id, createdAt: team.created_at,
+        name: team.team_name ?? '', label: team.team_label ?? '',
         colorIndex: fnv1a32(team.id) % COLOR_COUNT,
         lead,
         members: orderMembers(team, input.memberOrder?.[key]).map((m) =>
@@ -201,6 +206,30 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
     }
   }
   return views
+}
+
+export interface SeatHit {
+  key: string
+  role: Seat['role']
+  seat: Seat
+}
+
+/**
+ * Session key (`<hostId>\0<tmux session name>`) → the seat that session is, over every view. A session two views claim
+ * belongs to the first view (view order). One pass over the seats: `teamOfTab` reads it per call and `buildTeamIndex`
+ * (team-index.ts) once for every tab.
+ */
+export function seatLookup(views: readonly TeamView[]): Map<string, SeatHit> {
+  const seats = new Map<string, SeatHit>()
+  for (const v of views) {
+    for (const seat of [v.lead, ...v.members]) {
+      const name = seat.session.tmux_session
+      if (!name) continue
+      const k = sessionKey(v.hostId, name)
+      if (!seats.has(k)) seats.set(k, { key: v.key, role: seat.role, seat })
+    }
+  }
+  return seats
 }
 
 export interface TeamOfTabInput {
@@ -219,18 +248,10 @@ export interface TeamOfTabInput {
  */
 export function teamOfTab(
   { views, tabId, tabsById, sessionsByHost }: TeamOfTabInput,
-): { key: string; role: Seat['role']; seat: Seat } | null {
+): SeatHit | null {
   const tab = tabsById[tabId]
   if (!tab) return null
-  const seats = new Map<string, { key: string; role: Seat['role']; seat: Seat }>()
-  for (const v of views) {
-    for (const seat of [v.lead, ...v.members]) {
-      const name = seat.session.tmux_session
-      if (!name) continue
-      const k = sessionKey(v.hostId, name)
-      if (!seats.has(k)) seats.set(k, { key: v.key, role: seat.role, seat })
-    }
-  }
+  const seats = seatLookup(views)
   for (const { key } of shownSessions(tab.layout, sessionsByHost)) {
     const hit = seats.get(key)
     if (hit) return hit

@@ -45,6 +45,9 @@ export const STORAGE_KEYS = {
   PLACEHOLDER_FILES: 'purdex-placeholder-files',
   DEVICE_STATE: 'purdex-device-state',
   HEADLESS_LAUNCHER: 'purdex-headless-launcher',
+  /** 團隊介面的排列（useTeamUiStore）：每個 team key（`<hostId>\0<teamId>`）的成員順序、收合、面板模式、ghost lead 所在的工作區；
+   *  device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、不走 syncManager；只被 roster frame 與刪除主機清掉 */
+  TEAM_UI: 'purdex-team-ui',
   /** 手動管理（非 Zustand store）：lib/client-identity.ts 經 browserStorage 直接讀寫，值是裸字串 id */
   CLIENT_IDENTITY: 'purdex-client-identity',
   /** Profile Sync control plane（useProfileStore）：master 與 autoSync，走 syncManager 讓每個視窗一致 */

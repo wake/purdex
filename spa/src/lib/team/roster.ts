@@ -81,7 +81,9 @@ function isRosterMember(v: unknown): v is RosterMember {
 
 function isTeamRoster(v: unknown): v is TeamRoster {
   if (!isRecord(v)) return false
-  return isStr(v.id) && isStr(v.host_id) && isNum(v.created_at) && isRosterSession(v.lead)
+  // A team key is `<hostId>\0<teamId>` (team-views `teamKeyOf`): an id carrying the separator could make two teams' keys
+  // collide and one host's frame prune another's arrangement, so such a frame is not the wire shape.
+  return isStr(v.id) && !v.id.includes('\u0000') && isStr(v.host_id) && isNum(v.created_at) && isRosterSession(v.lead)
     && Array.isArray(v.members) && v.members.every(isRosterMember)
 }
 
