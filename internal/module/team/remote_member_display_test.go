@@ -144,3 +144,28 @@ func TestRemoteMember_NoTitleInTheAnswerKeepsTheRows(t *testing.T) {
 		t.Fatalf("host down: title = %q", m.Title)
 	}
 }
+
+// codex attacker (medium): a failed read keeps the last good TITLES (the host named it; a timeout does not un-name it), while
+// the context numbers are still flagged unavailable. A later good read replaces them, and a session the host no longer lists
+// drops out then. Mutation gate: a failed reading replaces the titles → red.
+func TestRemoteMember_AFailedReadKeepsTheLastGoodTitle(t *testing.T) {
+	f, _ := remoteFixture(t)
+	f.remoteRow("a1", "hostM", "mk1", rowActive)
+	f.setRowText("a1", "title", "old-row-title")
+	f.cachePeers(titledRecord("sid-a1", "renamed-by-host"))
+	f.m.peerRecords = func(context.Context, string) ([]ipeers.PeerRecord, error) { return nil, context.DeadlineExceeded }
+	f.m.readRemoteHost(context.Background(), "hostM")
+	r, _ := f.m.buildRoster()
+	m, _ := rosterMemberOf(t, r, "sid-a1")
+	if m.Title != "renamed-by-host" || !m.ContextUnavailable {
+		t.Fatalf("after a timeout: title=%q contextUnavailable=%v, want the host's title kept and the context flagged", m.Title, m.ContextUnavailable)
+	}
+	if v := memberOf(t, f.leadTeamView(), "sid-a1"); v.Title != "renamed-by-host" {
+		t.Fatalf("GET /api/team title = %q", v.Title)
+	}
+	// a good read that no longer lists the session ends the kept title
+	f.cachePeers()
+	if v := memberOf(t, f.leadTeamView(), "sid-a1"); v.Title != "old-row-title" {
+		t.Fatalf("after a good read without the session: title = %q, want the row's", v.Title)
+	}
+}

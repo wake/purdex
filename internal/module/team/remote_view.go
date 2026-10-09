@@ -107,6 +107,11 @@ func (m *Module) readRemoteHost(ctx context.Context, hostID string) {
 	if m.remote.by == nil {
 		m.remote.by = map[string]remoteReading{}
 	}
+	// A failed read keeps the last good titles: the host named the session, and a timeout does not un-name it. (The context
+	// numbers are not kept — a stale percentage misleads; they are flagged unavailable instead.)
+	if rr.failed {
+		rr.titles = m.remote.by[hostID].titles
+	}
 	// Two reads of one host can overlap (a background refresh and a GET /api/team): the one that STARTED later wins,
 	// whichever finishes last.
 	if have, ok := m.remote.by[hostID]; !ok || have.gen < rr.gen {
