@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -339,6 +340,35 @@ type Close struct {
 	UnexpiredAt int64
 	// Reason is the code an adopt request cancelled at approve carries (close_reason); empty for every other close.
 	Reason string
+	// Auto marks a close the DAEMON makes itself (U23: autoApprove, beginApproved, the create-time approves). It is an
+	// internal flag, set only by daemonClose — nothing an HTTP body carries can produce it — and it is the truth of
+	// "automatic": the stored decided_by of an Auto close is always UnattendedClient, and a close that is not Auto
+	// is refused if it names that kind (RQ-0, #2062 plan review: a decide request posing as `unattended` must
+	// neither pass for the daemon in the audit nor, later, spend a quota).
+	Auto bool
+}
+
+// ErrReservedDecider is a non-Auto close that names the daemon's own decider kind.
+var ErrReservedDecider = errors.New("decided_by kind \"unattended\" is reserved for the daemon's own approvals")
+
+// decidedByOf is the decided_by_json of c (nil: NULL). The Auto flag decides: an Auto close is recorded as the
+// unattended decider whatever DecidedBy says; any other close naming that kind is refused.
+func decidedByOf(c Close) (any, error) {
+	by := c.DecidedBy
+	if c.Auto {
+		u := team.UnattendedClient()
+		by = &u
+	} else if by != nil && strings.EqualFold(strings.TrimSpace(by.Kind), team.ClientKindUnattended) {
+		return nil, ErrReservedDecider
+	}
+	if by == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(by)
+	if err != nil {
+		return nil, fmt.Errorf("encode decided_by: %w", err)
+	}
+	return string(b), nil
 }
 
 // CloseIfOpen is the compare-and-set every close goes through: the UPDATE
@@ -384,13 +414,10 @@ func (s *Store) closeWhere(id string, c Close, guard string, guardArg int64) (te
 // closeRowIn runs closeWhere's guarded UPDATE on ex and returns how many
 // rows it changed (1: this close won).
 func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int64, error) {
-	var decidedBy, grant any // NULL unless set
-	if c.DecidedBy != nil {
-		b, err := json.Marshal(c.DecidedBy)
-		if err != nil {
-			return 0, fmt.Errorf("encode decided_by: %w", err)
-		}
-		decidedBy = string(b)
+	var grant any // NULL unless set
+	decidedBy, err := decidedByOf(c)
+	if err != nil {
+		return 0, err
 	}
 	if c.Grant != nil {
 		b, err := json.Marshal(c.Grant)

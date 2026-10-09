@@ -129,7 +129,7 @@ func (m *Module) unattendedOn() bool {
 // decided by {kind unattended, label 無人值守模式}, no addr.
 func daemonClose(at int64, g *team.Grant) Close {
 	by := team.UnattendedClient()
-	return Close{State: team.StateApproved, DecidedAt: at, DecidedBy: &by, Grant: g}
+	return Close{State: team.StateApproved, DecidedAt: at, DecidedBy: &by, Grant: g, Auto: true}
 }
 
 // unattendedGrant is the grant of a daemon approval (U25 / D-U24-7): for a

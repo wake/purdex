@@ -16,7 +16,7 @@ import (
 // by {kind unattended, label 無人值守模式}, no addr.
 func unattendedClose(at int64, g *team.Grant) Close {
 	by := team.UnattendedClient()
-	return Close{State: team.StateApproved, DecidedAt: at, DecidedBy: &by, Grant: g}
+	return Close{State: team.StateApproved, DecidedAt: at, DecidedBy: &by, Grant: g, Auto: true}
 }
 
 // leadApproveIn is the create-time approve of lead request id from sid:
@@ -362,7 +362,7 @@ func closedAt(t *testing.T, s *Store, id string, at int64, by team.Client, state
 	if _, _, _, err := s.Create(openApproval(id, "sid-"+id, at-100), "h-"+id); err != nil {
 		t.Fatal(err)
 	}
-	if _, won, err := s.CloseIfOpen(id, Close{State: state, DecidedAt: at, DecidedBy: &by}); err != nil || !won {
+	if _, won, err := s.CloseIfOpen(id, Close{State: state, DecidedAt: at, DecidedBy: &by, Auto: by.Kind == team.ClientKindUnattended}); err != nil || !won { // a test close naming the daemon stands for the daemon (RQ-0)
 		t.Fatalf("close %s: won=%v err=%v", id, won, err)
 	}
 }
