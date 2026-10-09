@@ -232,6 +232,22 @@ func TestAgentTrigger_AProbeOrSweepFrameHasNoContent(t *testing.T) {
 	e.noSends(t)
 }
 
+// Freshness is recorded for a frame that has no content too: a probe's newer timestamp is seen, so an older Stop that
+// arrives behind it is not pushed (rule 0 runs on every frame, rule 9 last). Mutation gate: check the content first → red.
+func TestAgentTrigger_ANewerFrameWithNoContentStillRecordsFreshness(t *testing.T) {
+	e := newAgentEnv(t, time.Hour)
+	e.device(tokA, "en", "mlab", tabsOf("c1"))
+	probe := nev("c1", "screen_probe", "idle", nil)
+	older := nev("c1", "PdxStop", "idle", stopDetail("late"))
+	older.Event.BroadcastTs = probe.Event.BroadcastTs - 1
+	e.feed.emit(probe)
+	e.feed.emit(older)
+	e.noSends(t)
+	newer := nev("c1", "PdxStop", "idle", stopDetail("fresh"))
+	e.feed.emit(newer)
+	e.waitSends(t, 1)
+}
+
 // A mod turn end and the hook Stop each make a frame for one turn; both push, and the phone shows one: they share the
 // collapse id agent-<code>, so the later replaces the earlier there. Pinned here so a change to either is deliberate.
 func TestAgentTrigger_ModAndHookFramesOfOneTurnShareACollapseID(t *testing.T) {

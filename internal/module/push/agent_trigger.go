@@ -32,11 +32,13 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 		Silent: ev.Event.Detail["notification_silent"] == true, ErrorString: jsString(ev.Event.Detail["error"]),
 	}
 	content := push.AgentInput{SessionCode: ev.SessionCode, SessionID: ev.SessionID, SessionName: ev.SessionName, EventName: ev.Event.RawEventName, Detail: ev.Event.Detail}
-	if _, has := push.AgentContent(content, "en"); !has { // rule 9, checked first: a frame that says nothing is no event
+	// Rules 0-7 first, for every frame: freshness (rule 0) records a probe's or sweep's newer timestamp too, so an older
+	// frame that arrives late is not pushed behind it. Rule 9 (there is something to say) comes last, as in the spec.
+	recipients := m.gate.Decide(in, m.snapshot(), m.presence.ShowsCode)
+	if len(recipients) == 0 {
 		return
 	}
-	recipients := m.gate.Decide(in, m.snapshot(), m.presence.ShowsCode) // rules 0-7
-	if len(recipients) == 0 {
+	if _, has := push.AgentContent(content, "en"); !has {
 		return
 	}
 	ids := make([]string, len(recipients))
