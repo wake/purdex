@@ -72,6 +72,7 @@ type Output struct {
 	Thing, Push, Entry string
 	ThingDone          bool
 	LatencyMS          int64
+	Usage              Usage // tokens of the call(s); zero leaves what the push line recorded
 }
 
 // StatusRow is a conversation's current one-line status.
@@ -88,8 +89,9 @@ type Store struct {
 	db          *sql.DB
 	now         func() int64 // unix ms; injectable for tests
 	obs         atomic.Pointer[func(Event)]
-	afterCommit func()     // test seam: between InsertPending's commit and its event; nil in production
-	wmu         sync.Mutex // serialises the writes together with their events; an observer must not write to the store
+	failFinish  func() error // test seam: makes Finish fail; nil in production
+	afterCommit func()       // test seam: between InsertPending's commit and its event; nil in production
+	wmu         sync.Mutex   // serialises the writes together with their events; an observer must not write to the store
 }
 
 // OpenStore opens (or creates) the store at path. The file and its WAL siblings are owner-only.
@@ -210,14 +212,21 @@ func (s *Store) SetPushLine(id int64, thing, push string) (bool, error) {
 func (s *Store) Finish(id int64, state, reason string, out Output) (bool, error) {
 	s.wmu.Lock() // one writer at a time, and its event goes out before the next write starts: events follow commit order
 	defer s.wmu.Unlock()
+	if s.failFinish != nil { // test seam
+		if err := s.failFinish(); err != nil {
+			return false, err
+		}
+	}
 	now := s.now()
 	var res sql.Result
 	var err error
 	switch state {
 	case StateOK:
 		res, err = s.db.Exec(`UPDATE wb_entries SET state = 'ok', reason = '', thing = ?, push = ?, entry = ?, thing_done = ?,
-				latency_ms = ?, updated_at = ? WHERE id = ? AND state = 'pending'`,
-			out.Thing, out.Push, out.Entry, boolInt(out.ThingDone), out.LatencyMS, now, id)
+				latency_ms = ?, usage_in = COALESCE(?, usage_in), usage_out = COALESCE(?, usage_out),
+				usage_cache_read = COALESCE(?, usage_cache_read), updated_at = ? WHERE id = ? AND state = 'pending'`,
+			out.Thing, out.Push, out.Entry, boolInt(out.ThingDone), out.LatencyMS,
+			nullInt(out.Usage.In), nullInt(out.Usage.Out), nullInt(out.Usage.CacheRead), now, id)
 	case StateFailed, StateSkipped:
 		res, err = s.db.Exec(`UPDATE wb_entries SET state = ?, reason = ?, latency_ms = ?, updated_at = ? WHERE id = ? AND state = 'pending'`,
 			state, reason, out.LatencyMS, now, id)

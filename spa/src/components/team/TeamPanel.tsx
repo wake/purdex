@@ -57,7 +57,7 @@ export function TeamPanel(props: Props) {
 }
 
 /** The header row both modes share: one fixed height, capsule | middle | buttons in the same places. */
-const HEADER_CLASS = 'flex items-center'
+const HEADER_CLASS = 'flex items-center cursor-pointer select-none'
 const headerStyle = { height: HEADER_H, paddingInline: HEADER_PX, columnGap: HEADER_GAP } as const
 
 /** Buttons keep the terminal's focus: a mousedown on them does not move it. */

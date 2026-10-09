@@ -125,6 +125,10 @@ export interface AdoptPayload {
   target_cwd: string
   /** `<session>:@<win>.%<pane>` or ''. */
   target_tmux: string
+  /** The member host's id when the target lives on another host (cross-host spec §4.3); '' = the lead's own host. */
+  target_host_id: string
+  /** That host's alias as the lead host knows it; '' when absent. */
+  target_host_alias: string
 }
 
 /** What the user approved, as edited in the dialog. */
@@ -291,6 +295,7 @@ export function adoptPayloadOf(a: Approval): AdoptPayload {
     team_id: s('team_id'), lead_session_id: s('lead_session_id'), target_ref: s('target_ref'),
     target_session_id: s('target_session_id'), title: s('title'), target_name: s('target_name'),
     target_address: s('target_address'), target_cwd: s('target_cwd'), target_tmux: s('target_tmux'),
+    target_host_id: s('target_host_id'), target_host_alias: s('target_host_alias'),
   }
 }
 
