@@ -11,6 +11,7 @@ import (
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/modevents"
 	"github.com/wake/purdex/internal/module/agent"
+	"github.com/wake/purdex/internal/workbooklines"
 )
 
 func TestModule_NameAndDependencies(t *testing.T) {
@@ -220,6 +221,43 @@ func TestModule_TheModSocketPathEndToEnd(t *testing.T) {
 	m.Stop(context.Background())
 	if _, err := jobs.JobResult("stream-aaaa", modevents.WorkbookResult{JobID: id}); err != modevents.ErrNotLeased || jobs.JobWaiting(sid) {
 		t.Fatal("a stopped module hands nothing out")
+	}
+}
+
+// The push module finds the waiter in the registry from Init on (it looks it up per decision), and it is wired to the
+// engine: an event for a session with nothing to summarise releases a wait.
+// Mutation gate: drop the registration, or SetWaiter → red.
+func TestModule_PublishesThePushLines(t *testing.T) {
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir()}})
+	sessions := &fakeSessions{}
+	c.Registry.Register(agent.TerminalSessionsKey, sessions)
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Stop(context.Background()) })
+	svc, ok := c.Registry.Get(workbooklines.Key)
+	lines, isLines := svc.(workbooklines.Lines)
+	if !ok || !isLines {
+		t.Fatalf("registry: %v %v", ok, isLines)
+	}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan bool, 1)
+	go func() {
+		_, got := lines.Await(context.Background(), "s9", 5000, time.Now().Add(20*time.Second))
+		done <- got
+	}()
+	time.Sleep(50 * time.Millisecond)
+	sessions.fn(agent.TurnEndEvent{SessionID: "s9", Text: "", At: 5000, Seq: 1}) // no text, no transcript: no entry
+	select {
+	case got := <-done:
+		if got {
+			t.Fatal("a line out of nothing")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the intake did not release the wait")
 	}
 }
 

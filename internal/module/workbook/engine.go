@@ -80,6 +80,7 @@ type Engine struct {
 	// pushLine tells the push hold that an entry's line is final: ready true at the push line, false when the entry
 	// ended without one. Nil until the push module's waiter (WB-3) is wired.
 	pushLine func(entryID int64, ready bool)
+	waiter   *PushLines
 }
 
 // NewEngine builds an engine over the deps.
@@ -99,7 +100,14 @@ func NewEngine(d Deps) *Engine {
 // SetPushLineHook registers the push-line notification (see Engine.pushLine).
 func (e *Engine) SetPushLineHook(fn func(entryID int64, ready bool)) { e.pushLine = fn }
 
+// SetWaiter wires the push hold's waiter (lines.go): it is woken at every push line and every final state, and told when
+// an event's intake is done. Set before the engine is subscribed.
+func (e *Engine) SetWaiter(w *PushLines) { e.waiter = w }
+
 func (e *Engine) notifyLine(entryID int64, ready bool) {
+	if e.waiter != nil {
+		e.waiter.wake()
+	}
 	if e.pushLine != nil {
 		e.pushLine(entryID, ready)
 	}

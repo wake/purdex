@@ -56,11 +56,20 @@ func (e *Engine) catchUp(ev agent.TurnEndEvent, try tries) {
 	// interleave between their insert and their enqueue, or a newer turn would queue before an older one.
 	e.intakeMu.Lock()
 	defer e.intakeMu.Unlock()
+	// Whatever this event came to (entries, none, an error), the push hold may now stop waiting for an entry that was
+	// never going to appear - except while the event is only waiting (re-queued, or queued behind a waiting one).
+	settled := true
+	defer func() {
+		if settled && e.waiter != nil {
+			e.waiter.intakeDone(ev.SessionID, ev.At)
+		}
+	}()
 	ws := e.waiting[ev.SessionID]
 	if !try.cont && ws != nil { // an earlier event of this session is still waiting for the transcript: behind it
 		if len(ws.queue) < maxQueued {
 			ws.queue = append(ws.queue, ev)
 		}
+		settled = false
 		return
 	}
 	retrying := false
@@ -85,6 +94,7 @@ func (e *Engine) catchUp(ev agent.TurnEndEvent, try tries) {
 	picks, later := e.pickTurns(ev, try)
 	if later != nil {
 		retrying = true
+		settled = false
 		if e.waiting[ev.SessionID] == nil {
 			e.waiting[ev.SessionID] = &waitState{}
 		}
