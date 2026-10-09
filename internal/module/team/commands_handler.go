@@ -138,6 +138,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(res.Body)
 		return
 	}
+	m.kickRemoteNotices() // the command's notice (if it owed one) is committed: tell the member now
 	m.writeJSON(w, http.StatusOK, team.TeamCommandAnswer{ID: cmd.ID, HostID: ourHostID, Outcome: res.Body})
 }
 

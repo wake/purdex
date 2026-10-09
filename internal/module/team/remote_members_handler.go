@@ -60,6 +60,7 @@ func (m *Module) handleRemoteMembersEnd(w http.ResponseWriter, r *http.Request) 
 	switch res {
 	case remoteEndEnded:
 		m.kickFacts() // the ended{local_end} fact is committed: send it now
+		m.kickRemoteNotices()
 		m.writeJSON(w, http.StatusOK, team.RemoteMemberEndResponse{MK: req.MK, State: remoteEnded})
 	case remoteEndNotFound:
 		m.writeJSON(w, http.StatusNotFound, team.RemoteMemberEndError{Error: "not_found", Detail: "no remote member with that mk"})
