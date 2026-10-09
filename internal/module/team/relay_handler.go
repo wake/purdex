@@ -42,14 +42,13 @@ const (
 // (an ended team's lead or member, D4). A store error is an error, never
 // none (plan v3 deviation 12): the caller answers 500 (fail closed).
 func (m *Module) relayRole(sessionID string) (string, error) {
-	if _, ok, err := m.store.LiveTeamByLead(sessionID); err != nil {
+	role, err := m.store.SessionRole(sessionID)
+	switch {
+	case err != nil:
 		return "", err
-	} else if ok {
+	case role == sessionRoleLead:
 		return roleLead, nil
-	}
-	if _, _, ok, err := m.store.ActiveMemberInLiveTeam(sessionID); err != nil {
-		return "", err
-	} else if ok {
+	case role.isMember(): // a remote member too: self relay off, status member:true (cross-host team spec §5.3)
 		return roleMember, nil
 	}
 	return roleNone, nil

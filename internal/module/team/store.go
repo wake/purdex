@@ -167,6 +167,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (relay op binding): %w", err)
 	}
+	if _, err := db.Exec(remoteMemberSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (remote members): %w", err)
+	}
 	if _, err := db.Exec(modHelloSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (mod hello): %w", err)

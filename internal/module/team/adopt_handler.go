@@ -247,6 +247,13 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 		m.writeErr(w, http.StatusConflict, team.ErrAdoptAlreadyMember, "the target is already a member of team "+t.ID, nil)
 		return
 	}
+	if role, err := m.store.SessionRole(tgt.SessionID); err != nil {
+		failStore(err)
+		return
+	} else if role == sessionRoleMemberRemote {
+		m.writeErr(w, http.StatusConflict, team.ErrAdoptAlreadyMember, "the target is already a member of a team led on another host", nil)
+		return
+	}
 	if open, isOpen, err := m.store.OpenAdoptForTarget(tgt.SessionID); err != nil {
 		failStore(err)
 		return

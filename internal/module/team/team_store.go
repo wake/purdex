@@ -285,18 +285,15 @@ func (s *Store) closeSelfRelayApprovedIn(tx *sql.Tx, id string, c Close, session
 }
 
 // isLiveMemberIn reports, on q (a transaction's read under its write lock),
-// whether sessionID is an active member of a live team.
+// whether sessionID is an active member of a live team — of a team on this
+// host or, through remote_members, of one led on another (sessionRoleIn,
+// cross-host team spec §5.3). A session that leads is not a member.
 func isLiveMemberIn(q dbtx, sessionID string) (bool, error) {
-	var one int
-	err := q.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
-		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, sessionID).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
+	role, err := memberRoleIn(q, sessionID)
 	if err != nil {
-		return false, fmt.Errorf("member check %s: %w", sessionID, err)
+		return false, err
 	}
-	return true, nil
+	return role.isMember(), nil
 }
 
 // MembersOf returns every member row of the team, in any state, with its
