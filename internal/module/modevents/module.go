@@ -93,7 +93,7 @@ func (m *Module) Start(ctx context.Context) error {
 		return nil
 	}
 
-	m.srv = modevents.NewServer(modevents.NewHandler(m.reg, modevents.WithTeamReader(m.teamRead)))
+	m.srv = modevents.NewServer(modevents.NewHandler(m.reg, modevents.WithTeamReader(m.teamRead), modevents.WithWorkbook(m.workbookService)))
 	srv, ln := m.srv, m.ln
 	m.spawn(func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
@@ -134,6 +134,19 @@ func (m *Module) teamRead(sessionID string) (modevents.TeamRead, error) {
 		return modevents.TeamRead{}, err
 	}
 	return modevents.TeamRead{Role: got.Role, Members: got.Members, TeamLabel: got.TeamLabel}, nil
+}
+
+// workbookJobsKey is the workbook module's service name for the job routes (workbook.JobsKey); a string here so the
+// socket module does not depend on the workbook module. Looked up per request: the workbook module may be absent or late.
+const workbookJobsKey = "workbook.jobs"
+
+func (m *Module) workbookService() modevents.WorkbookService {
+	svc, ok := m.core.Registry.Get(workbookJobsKey)
+	if !ok {
+		return nil
+	}
+	ws, _ := svc.(modevents.WorkbookService)
+	return ws
 }
 
 func (m *Module) spawn(f func()) {
