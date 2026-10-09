@@ -54,6 +54,8 @@ A record belongs to a **conversation**, not a session id: a relay (self or membe
 
 The workbook module subscribes to the agent module's `TurnEndEvent` (`internal/module/agent/turn_end_hub.go:20`, `SubscribeTurnEnd`): one per accepted Claude Code main-turn `Stop`, at-least-once, tmux sessions only. Consumers must be idempotent: the module keys a turn by `(session_id, At, Seq)` and drops a repeat.
 
+*Clarified by the plan (2026-10-09, codex plan review):* a retried hook is published again with a **newer** stamp, and a full subscriber queue drops events, so `(session_id, At, Seq)` cannot be the key. A turn is keyed by its **transcript turn id** (`convmodel.Turn.ID`; when the transcript cannot be read, a hash of `Text` plus a 2-minute time bucket, so a retry dedupes and two same-text turns minutes apart do not), and each event is read as "this session has new ended turns": the module records the ended turns newer than the session's newest recorded one (the newest 3 at most, oldest first; a session with no record yet records only its newest). A dropped event is recovered by the next one. An accepted main-turn `StopFailure` also publishes a `TurnEndEvent` (`Failed: true`), so §7's StopFailure push has an entry to wait for; the team module ignores failed events.
+
 The turn's input is read from the conversation module's normalised model (U1-6, `internal/convmodel`): the last turn's `user` item(s), `step` summaries and final `agent_text`. If the model is not available in process, the plan adds a read accessor; `TurnEndEvent.Text` (the hook's `last_assistant_message`) is the fallback for the assistant text.
 
 ### 4.3 What is summarised, what is not
@@ -104,6 +106,7 @@ The prompt is the measured round-5 prompt, kept verbatim in `docs/specs/2026-10-
 - `thing` > 16 → cut at 16.
 - `entry` > 150 → **one background re-write** with the sentence-shape prompt (the re-write prompt in the same file; measured average 113, 4/25 over 120); still > 150 → cut at the last sentence end ≤ 150. The push never waits for this step.
 - `status` > 200 → cut at the last sentence end ≤ 200.
+- *Clarified by the plan:* the call's `thing`, `push` and `status` are written (and the push released) as soon as they are validated, with the entry still `pending`; the re-write runs in the same job, holding the conversation's place in its queue, and the entry becomes `ok` only after it. So the next turn's prompt never reads a provisional entry, and there is one `ok` per entry.
 
 ## 6. Storage — `workbook.db` (new module `workbook`, file mode 0600, the devices/push pattern)
 
@@ -113,15 +116,19 @@ wb_entries(
   conv_key TEXT NOT NULL,          -- root session id (§4.1)
   host_id TEXT NOT NULL, provider TEXT NOT NULL,   -- 'claude'
   session_id TEXT NOT NULL,        -- the session the turn ran in
-  turn_at INTEGER NOT NULL, turn_seq INTEGER NOT NULL,   -- TurnEndEvent At / Seq (idempotency key with session_id)
+  turn_id TEXT NOT NULL,           -- transcript turn id (§4.2); the idempotency key with session_id
+  turn_at INTEGER NOT NULL, turn_seq INTEGER NOT NULL,   -- unix ms: the event's At for the newest turn, EndedAt for a caught-up one
   state TEXT NOT NULL,             -- pending | ok | failed | skipped
-  reason TEXT NOT NULL DEFAULT '', -- failed: timeout|format|exit|auth ; skipped: no_text|backlog|cap|model
+  reason TEXT NOT NULL DEFAULT '', -- failed: timeout|format|exit|auth|stopped ; skipped: no_text|backlog|cap|model|stopped (stopped: daemon stop or restart, plan D9)
   thing TEXT, push TEXT, entry TEXT, thing_done INTEGER NOT NULL DEFAULT 0,
-  team_id TEXT, role TEXT, ref TEXT,   -- who the session was at that moment (employee workbook later)
+  push_ready_at INTEGER NOT NULL DEFAULT 0,   -- when thing/push were final (§5.4); the push hold waits on it
+  team_id TEXT, role TEXT, ref TEXT,   -- who the session was at that moment (employee workbook later); role lead|member|member_remote|none (team's role gate, 1f)
   prompt_ver INTEGER NOT NULL, latency_ms INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-  UNIQUE(session_id, turn_at, turn_seq))
-wb_status(conv_key TEXT PRIMARY KEY, status TEXT NOT NULL, entry_id INTEGER NOT NULL, updated_at INTEGER NOT NULL)
+  UNIQUE(session_id, turn_id))
+wb_status(conv_key TEXT PRIMARY KEY, status TEXT NOT NULL, entry_id INTEGER NOT NULL, session_id TEXT NOT NULL, updated_at INTEGER NOT NULL)
 ```
+
+Every time is unix milliseconds (*clarified by the plan*).
 
 - Raw prompts and assistant texts are **not** stored (the transcript already holds them); only the outputs.
 - Retention: kept (≈ 0.5 KB per entry; a busy day ≈ 1,000 entries ≈ 0.5 MB). No automatic deletion in v1.
@@ -133,6 +140,7 @@ wb_status(conv_key TEXT PRIMARY KEY, status TEXT NOT NULL, entry_id INTEGER NOT 
 - When the push gate (`internal/module/push/gate.go`) has decided to push a Stop, the push module **holds it up to N = 8 s** (a timer, the `holdSet` pattern of `agent_trigger.go:101`; never a sleep in `onNotify`) for that turn's entry. Ready with a `push` → title `{session name}・{thing}` (cut to the title limit), body `push`, and the payload gains `purdex.workbook = {conv_key, entry_id}` so iOS can open that entry (§10.3). Not ready, failed, skipped or no `push` → today's title and body, unchanged.
 - Covered by the hold: the measured p90 ≈ 10 s means roughly 8 in 10 Stop pushes get the workbook line. N is a host setting (`workbook.push_wait_s`, 0 = never wait).
 - A present Mac still suppresses the push (gate rule 4); the entry is written either way.
+- *Clarified by the plan:* the hold waits for the entry's push line (§5.4), not for `ok`; holds are a capped (256), cancellable set — at the cap the push goes at once, and stopping the module cancels every hold without sending. The frame's `BroadcastTs` is nanoseconds and `turn_at` milliseconds; the match converts.
 
 ## 8. Secrets and personal data (daemon's job)
 
@@ -146,6 +154,7 @@ wb_status(conv_key TEXT PRIMARY KEY, status TEXT NOT NULL, entry_id INTEGER NOT 
 - `GET /api/workbook/entries?since=&until=&thing_done=1&limit=` → entries across conversations of this host, newest first (C: "what got done in this period").
 - Host event `workbook.entry` `{conv_key, session_id, entry}` on insert and on every state change (pending → ok / failed / skipped, re-write); host event `workbook.status` `{conv_key, status, updated_at}`.
 - Errors: 404 `not_found` (no workbook for that session), 400 `bad_request`.
+- *Clarified by the plan (and told to purdex-ios, whose data layer follows it):* every time is unix ms (`since` / `until` filter `turn_at`); `before=<entry id>` returns entries with `id < before`, newest first; `skipped` entries are returned (the Apps hide them) and `failed` ones carry `reason`; event values are JSON strings, like every host event; `workbook.status` also carries `session_id`, the session whose turn produced it, so a client can place it without a prior fetch. One `ok` event per entry (§5.4).
 
 ## 10. Where it is seen (user decision 2026-10-09) and what 88 gets
 
