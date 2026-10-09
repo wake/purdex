@@ -420,6 +420,8 @@ async function recheckMember($) {
   if (u.percent === undefined || u.percent < s.threshold) return
   // One time domain per throttle: the engine's clock, or the real one when the engine refuses. A reading from
   // the other domain, or one that went backwards, is never "recent" (two domains must not block the check for good).
+  // The trade-off (ruled by the lead): when the clock source flips between two turns, the throttle is bypassed once —
+  // at worst one extra hello per flip, which is cheap, idempotent and side-effect free; remembering both clocks is not worth it.
   let at = 0
   let domain = 'engine'
   try {
