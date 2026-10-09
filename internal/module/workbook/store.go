@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -73,6 +74,7 @@ type StatusRow struct {
 type Store struct {
 	db  *sql.DB
 	now func() int64 // unix ms; injectable for tests
+	obs atomic.Pointer[func(Event)]
 }
 
 // OpenStore opens (or creates) the store at path. The file and its WAL siblings are owner-only.
@@ -214,6 +216,9 @@ func (s *Store) InsertPending(e Entry) (id int64, inserted bool, err error) {
 	}
 	if n, _ := res.RowsAffected(); n == 1 {
 		id, err = res.LastInsertId()
+		if err == nil {
+			s.emitEntry(id)
+		}
 		return id, true, err
 	}
 	if err := s.db.QueryRow(`SELECT id FROM wb_entries WHERE session_id = ? AND turn_id = ?`, e.SessionID, e.TurnID).Scan(&id); err != nil {
@@ -255,6 +260,9 @@ func (s *Store) Finish(id int64, state, reason string, out Output) (bool, error)
 		return false, fmt.Errorf("finish workbook entry: %w", err)
 	}
 	n, _ := res.RowsAffected()
+	if n == 1 {
+		s.emitEntry(id)
+	}
 	return n == 1, nil
 }
 
@@ -334,12 +342,15 @@ func (s *Store) RecentForPrompt(convKey string, n int) ([]Entry, error) {
 
 // SetStatus writes a conversation's current status.
 func (s *Store) SetStatus(convKey, status string, entryID int64, sessionID string) error {
+	at := s.now()
 	_, err := s.db.Exec(`INSERT INTO wb_status (conv_key, status, entry_id, session_id, updated_at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (conv_key) DO UPDATE SET status = excluded.status, entry_id = excluded.entry_id,
-			session_id = excluded.session_id, updated_at = excluded.updated_at`, convKey, status, entryID, sessionID, s.now())
+			session_id = excluded.session_id, updated_at = excluded.updated_at`, convKey, status, entryID, sessionID, at)
 	if err != nil {
 		return fmt.Errorf("set workbook status: %w", err)
 	}
+	s.emit(Event{Kind: EventStatus, ConvKey: convKey, SessionID: sessionID,
+		Status: StatusRow{ConvKey: convKey, Status: status, EntryID: entryID, SessionID: sessionID, UpdatedAt: at}})
 	return nil
 }
 
