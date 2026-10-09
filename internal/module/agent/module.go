@@ -44,7 +44,9 @@ type Module struct {
 
 	// turnEnds fans accepted main-turn Stops out to in-process subscribers (T-3a1);
 	// turnEndSeq numbers the hooks as they arrive (stampTurnEnd).
-	turnEnds   turnEndHub
+	turnEnds turnEndHub
+	// notifies fans every live tmux `hook` frame out to in-process subscribers (push, PU-3a).
+	notifies   notifyHub
 	turnEndSeq atomic.Int64
 
 	prober    *probe.Prober

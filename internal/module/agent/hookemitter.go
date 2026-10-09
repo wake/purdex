@@ -111,6 +111,14 @@ func (m *Module) emitSession(kind slotKind, code, sessionName string, build buil
 // An empty code sends nothing: the in-memory view is still synced (steps
 // 1-3), as the callers did before the slot existed.
 func (m *Module) emitSessionWith(kind slotKind, code, sessionName string, build buildTolerantFn) bool {
+	return m.emitSlot(kind, code, sessionName, sessionName, "", build)
+}
+
+// emitSlot is emitSessionWith for a caller whose frame belongs to a tmux session it does not read a projection
+// of (the minimal probe frame passes sessionName "" so nothing is read or synced): notifyName is the tmux session
+// the notify hub says the frame is about. "" with kindNonTmux means a session outside tmux. hookSID is the agent
+// session id the hook itself names; only a kindHook frame uses it (see publishNotify).
+func (m *Module) emitSlot(kind slotKind, code, sessionName, notifyName, hookSID string, build buildTolerantFn) bool {
 	e := &m.emit
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -151,6 +159,7 @@ func (m *Module) emitSessionWith(kind slotKind, code, sessionName string, build 
 	if kind == kindNonTmux {
 		m.noteNonTmuxLocked(code, n)
 	}
+	m.publishNotify(kind, code, notifyName, hookSID, p, n)
 	return true
 }
 
@@ -203,7 +212,7 @@ func (m *Module) emitHookSessionWith(req EventRequest, build buildTolerantFn) (s
 	if m.core != nil {
 		code, path = m.resolveSessionCodeFromHook(req)
 	}
-	if m.emitSessionWith(kindHook, code, req.TmuxSession, build) {
+	if m.emitSlot(kindHook, code, req.TmuxSession, req.TmuxSession, m.hookAgentSessionID(req), build) {
 		return "broadcasted", string(path)
 	}
 	switch {
