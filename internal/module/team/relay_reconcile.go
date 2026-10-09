@@ -77,7 +77,8 @@ func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team
 		if !ok || o.PID != pid || start == "" || o.ProcStart != start {
 			continue // another process's session, or no start time to prove it is ours: never written
 		}
-		return m.applyReconcile(op, RelayReport{State: team.RelayCleared, NewSessionID: f.SessionID, NewRef: ipeers.RefID(f.SessionID), At: m.now()})
+		after, _, err := m.applyReconcile(op, RelayReport{State: team.RelayCleared, NewSessionID: f.SessionID, NewRef: ipeers.RefID(f.SessionID), At: m.now()})
+		return after, err
 	}
 	if unverified || m.origins.LiveSession(op.SessionID) {
 		return op, nil
@@ -87,28 +88,29 @@ func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team
 		// failure is irreversible, so it waits for the grace; the first liveness tick after it runs this again.
 		return op, nil
 	}
-	return m.applyReconcile(op, RelayReport{State: team.RelayFailed, Reason: team.RelayReasonMemberGone, At: m.now()})
+	after, _, err := m.applyReconcile(op, RelayReport{State: team.RelayFailed, Reason: team.RelayReasonMemberGone, At: m.now()})
+	return after, err
 }
 
 // applyReconcile is a report the daemon makes itself: the same store path and the same follow-ups as the mod's report
 // (afterReport, the handover notice, the lead's outcome notice), on Applied only.
-func (m *Module) applyReconcile(op team.RelayOp, rep RelayReport) (team.RelayOp, error) {
+func (m *Module) applyReconcile(op team.RelayOp, rep RelayReport) (team.RelayOp, bool, error) {
 	after, res, err := m.store.ReportRelay(op.ID, rep)
 	if errors.Is(err, ErrBadRelayReport) {
 		m.logf("[team] reconcile op %s: %v", op.ID, err)
-		return op, nil
+		return op, false, nil
 	}
 	if err != nil {
-		return op, err
+		return op, false, err
 	}
 	if res != ReportApplied {
-		return after, nil
+		return after, false, nil
 	}
-	m.logf("[team] relay op %s → %s%s (reconciled from the pane's frame)", op.ID, after.State, reasonSuffix(after))
+	m.logf("[team] relay op %s → %s%s (a report the daemon made itself)", op.ID, after.State, reasonSuffix(after))
 	m.afterReport(after)
 	m.handoverNoticeAsync(after)
 	m.outcomeNoticeAsync(after)
-	return after, nil
+	return after, true, nil
 }
 
 // reconcileOpsFromFrames is the boot's part: every op past claimed.

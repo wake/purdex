@@ -19,7 +19,7 @@ func (f *fixture) claimedMemberOp() team.RelayOp {
 	if op.ID == "" {
 		f.t.Fatalf("create: %+v", ae)
 	}
-	if _, res, err := f.m.store.ReportRelay(op.ID, RelayReport{State: team.RelayClaimed, At: 5}); err != nil || res != ReportApplied {
+	if _, res, err := f.m.store.ReportRelay(op.ID, RelayReport{State: team.RelayClaimed, At: f.clock.Load()}); err != nil || res != ReportApplied {
 		f.t.Fatalf("claim: %v %v", res, err)
 	}
 	return f.op(op.ID)

@@ -147,6 +147,17 @@ type RelayReport struct {
 	NewRef       string
 	Reason       string
 	At           int64
+	// Expect, when set, makes the report conditional on the op still being as the caller judged it (state, updated_at,
+	// seen_at): the sweeper's timeouts decide from a snapshot, and progress that landed since must win. A mismatch
+	// answers ReportBadTransition with the op as it is, and writes nothing.
+	Expect *RelayExpect
+}
+
+// RelayExpect is what a conditional report requires of the op's current row.
+type RelayExpect struct {
+	State     team.RelayState
+	UpdatedAt int64
+	SeenAt    int64
 }
 
 // ReportResult says what ReportRelay did.
@@ -201,6 +212,9 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	}
 	if err != nil {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
+	}
+	if r.Expect != nil && (cur.State != r.Expect.State || cur.UpdatedAt != r.Expect.UpdatedAt || cur.SeenAt != r.Expect.SeenAt) {
+		return cur, ReportBadTransition, nil // progress landed since the caller looked: it wins
 	}
 	if cur.State == r.State {
 		return cur, ReportNoop, nil

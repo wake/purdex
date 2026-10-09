@@ -55,6 +55,7 @@ func (m *Module) tick() {
 		// cadence as the liveness check, whether or not anything is open.
 		// With no flag on disk this is one ReadDir that answers ENOENT.
 		m.reconcileAfterBootGrace()
+		m.sweepRelayTimeouts()
 		m.pruneHookLocks()
 		m.pruneAskFlags()
 		m.persistUsage()
