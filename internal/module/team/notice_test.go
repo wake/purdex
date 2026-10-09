@@ -89,7 +89,8 @@ func TestHandover_AFailedSendIsLoggedNotFatal(t *testing.T) {
 	waitFor(t, func() bool { return countLines(logs(), "handover notice to") == 1 })
 }
 
-// Mutation gate: drop the stopping() check under noticeMu → a notice is sent after Stop (red).
+// Pins the observable half only (no send once Stop has begun; the loop's own stopping() check also guards it). The
+// WaitGroup ordering (Add under noticeMu vs Stop's cancel) cannot be observed from here; it is held by construction.
 func TestHandover_NothingStartsOnceStopHasBegun(t *testing.T) {
 	f := newFixture(t)
 	f.approveLead(uid(1))
