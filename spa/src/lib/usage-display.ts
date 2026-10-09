@@ -51,9 +51,21 @@ export function parseCcUsage(raw: Record<string, unknown> | null | undefined): C
   return usage.context === null && !usage.fiveHour && !usage.sevenDay ? null : usage
 }
 
+const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
+
+/** The one normalised used share: rounded, clamped to 0-100. Ring, tone, tooltip and remaining all derive from it. */
+export function usedPct(used: number): number {
+  return clamp(Math.round(used), 0, 100)
+}
+
+/** Remaining share shown as the number: 100 - used, rounded, clamped to 0-100. */
+export function remainingPct(used: number): number {
+  return 100 - usedPct(used)
+}
+
 export type UsageTone = 'ok' | 'warn' | 'danger'
 
-/** Shifts at 70 and 90 (inclusive). */
+/** Shifts at 70 and 90 of the USED share (inclusive). */
 export function usageTone(pct: number): UsageTone {
   if (pct >= 90) return 'danger'
   if (pct >= 70) return 'warn'

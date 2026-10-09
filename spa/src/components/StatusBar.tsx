@@ -67,25 +67,6 @@ function peerIdText(row: PeerRow | null): { display: string; value: string } {
   return { display: name + bracketed, value: address + bracketed }
 }
 
-/**
- * The agent segment's two strings: the conversation's name as its address
- * carries it, and the address a click copies.
- *
- * Under Peer Address v5 that name is the virtual one pdx assigned, fixed for
- * the conversation's life. It used to be `agent.peerName` — Claude Code's own
- * session name — which was the address's name then, but now changes on every
- * start and routes nothing: copied into `pdx msg send` it is a 404. A ref-form
- * address (`_q34psn`) has no name to show (the peer id segment already shows
- * the ref), and neither has a retired `cc:`/`tmux:` form.
- */
-function peerNameText(row: PeerRow | null): { display: string; value: string } {
-  const address = row?.address ?? ''
-  const slash = address.indexOf('/')
-  const name = slash === -1 ? '' : address.slice(slash + 1)
-  if (name === '' || name.startsWith('_') || name.includes(':')) return { display: '', value: '' }
-  return { display: name, value: address }
-}
-
 interface Props {
   activeTab: Tab | null
   onNavigateToHost?: (hostId: string) => void
@@ -279,7 +260,6 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
   const peerIdDisplay = peerId.display && peerTitle ? `${peerId.display} · ${peerTitle}` : peerId.display
   const peerUncertain = peerRow?.reason === 'inbox_dead' || peerRow?.reason === 'ambiguous'
   const peerDim = !peer.connected || peer.stale || peerUncertain
-  const peerName = peerNameText(peerRow)
 
   return (
     <StatusBarLayout
@@ -305,17 +285,6 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
           title={peer.cwdError ? t('peer.error', { error: peer.cwdError }) : (peer.cwd || t('peer.copy_hint'))}
           rtl
           className="max-w-[32ch] max-[600px]:hidden"
-          onCopy={handleCopy}
-        />
-        <Separator className="max-[700px]:hidden" />
-        <CopySegment
-          testId="status-seg-agent"
-          display={peerName.display || '\u2014'}
-          value={peerName.value}
-          what={t('peer.label.address')}
-          title={peerName.value ? t('peer.copy_hint') : peerIdTitle(peer, t)}
-          dim={peerDim}
-          className="max-w-[20ch] max-[700px]:hidden"
           onCopy={handleCopy}
         />
         <Separator />
@@ -367,8 +336,6 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
               ? t('hosts.error_tmux_down')
               : status}
         </span>
-        {/* Context window and 5h / weekly limits from the agent's latest statusLine snapshot. */}
-        <CcUsageSegments hostId={agentHostId} sessionCode={agentSessionCode} />
       </>}
       controls={<>
         {/* The model badge. It sits in the `shrink-0` controls group, so
@@ -396,6 +363,8 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
             {paneTitle}
           </span>
         )}
+        {/* Context window and 5h / weekly limits from the agent's latest statusLine snapshot: icon + ring + % left. */}
+        <CcUsageSegments hostId={agentHostId} sessionCode={agentSessionCode} />
         {/* Where the split buttons were (spec D.3, §9.6; splitting stays in the title bar and the pane menu). */}
         <PaneModeButtons tabId={activeTab.id} pane={target} />
       </>}

@@ -79,11 +79,15 @@ export function WorkerStatusBar({ tabId, pane, onNavigateToHost }: {
               />
             </>
           )}
-          {/* The host's 5h / weekly quota. Per-worker context % waits on Nexen exposing it. */}
-          <HostQuotaSegments hostId={hostId} />
         </>
       )}
-      controls={<PaneModeButtons tabId={tabId} pane={pane} />}
+      controls={(
+        <>
+          {/* The host's 5h / weekly quota. Per-worker context % waits on Nexen exposing it. */}
+          <HostQuotaSegments hostId={hostId} />
+          <PaneModeButtons tabId={tabId} pane={pane} />
+        </>
+      )}
     />
   )
 }

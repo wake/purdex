@@ -8,16 +8,11 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useNexHostQuota } from '../../hooks/useNexHostQuota'
 import { compositeKey } from '../../lib/composite-key'
 import {
-  USAGE_STALE_MS, epochToMs, formatResetsIn, parseCcUsage, usageTone,
+  USAGE_STALE_MS, epochToMs, formatResetsIn, parseCcUsage, remainingPct, usedPct, usageTone,
   type UsageTone, type UsageWindow,
 } from '../../lib/usage-display'
-import { Separator } from './StatusSegments'
-
-const TONE_CLASS: Record<UsageTone, string> = {
-  ok: 'text-text-secondary',
-  warn: 'text-status-warning',
-  danger: 'text-status-error',
-}
+import type { Icon } from '@phosphor-icons/react'
+import { Brain, CalendarBlank, Clock } from '@phosphor-icons/react'
 
 /** Re-renders the caller every `ms` so "stale" and "resets in" age without a new snapshot arriving. */
 function useNow(ms = 30_000): number {
@@ -29,24 +24,64 @@ function useNow(ms = 30_000): number {
   return now
 }
 
-export function UsageSegment({ testId, label, pct, title, stale, className = '' }: {
+/** Ring colour per tone (on the USED share). The "ok" colour is the one to change if green gives way to neutral. */
+const RING_TONE_CLASS: Record<UsageTone, string> = {
+  ok: 'stroke-status-success',
+  warn: 'stroke-status-warning',
+  danger: 'stroke-status-error',
+}
+
+const RING_SIZE = 12
+const RING_STROKE = 2
+const RING_R = (RING_SIZE - RING_STROKE) / 2
+const RING_C = 2 * Math.PI * RING_R
+
+/** A ring that fills clockwise from 12 o'clock to the USED share; its colour follows `usageTone` of the used share. */
+function Ring({ used }: { used: number }) {
+  const u = usedPct(used)
+  const tone = usageTone(u)
+  return (
+    <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} aria-hidden="true" className="shrink-0">
+      <circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RING_R} fill="none" strokeWidth={RING_STROKE} stroke="currentColor" className="text-border-subtle" />
+      <circle
+        data-testid="usage-ring-arc"
+        data-used={u}
+        data-tone={tone}
+        className={RING_TONE_CLASS[tone]}
+        cx={RING_SIZE / 2}
+        cy={RING_SIZE / 2}
+        r={RING_R}
+        fill="none"
+        strokeWidth={RING_STROKE}
+        strokeDasharray={`${(u / 100) * RING_C} ${RING_C}`}
+        transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+      />
+    </svg>
+  )
+}
+
+/** icon + ring + remaining %. No text label: the tooltip (and aria-label) names which limit this is. */
+export function UsageSegment({ testId, icon: IconCmp, used, title, stale, className = '' }: {
   testId: string
-  label: string
-  pct: number
+  icon: Icon
+  /** Used share, 0-100. The ring fills to it; the number shown is what is left. */
+  used: number
   title: string
   stale: boolean
   className?: string
 }) {
-  const tone = usageTone(pct)
   return (
     <span
       data-testid={testId}
-      data-tone={tone}
       data-dim={stale ? 'true' : undefined}
+      role="img"
       title={title}
-      className={`shrink-0 tabular-nums select-none ${TONE_CLASS[tone]} ${stale ? 'opacity-50' : ''} ${className}`}
+      aria-label={title}
+      className={`flex shrink-0 items-center gap-1 tabular-nums select-none ${stale ? 'opacity-50' : ''} ${className}`}
     >
-      {label} {Math.round(pct)}%
+      <IconCmp size={10} className="text-text-muted" aria-hidden="true" />
+      <Ring used={used} />
+      <span className="text-text-secondary">{remainingPct(used)}%</span>
     </span>
   )
 }
@@ -54,14 +89,14 @@ export function UsageSegment({ testId, label, pct, title, stale, className = '' 
 type T = (key: string, params?: Record<string, string | number>) => string
 
 function windowTitle(t: T, nameKey: string, w: UsageWindow, now: number, stale: boolean): string {
-  const parts = [t(nameKey, { pct: Math.round(w.pct) })]
+  const parts = [t(nameKey, { left: remainingPct(w.pct), pct: usedPct(w.pct) })]
   const left = w.resetsAtMs === null ? null : formatResetsIn(w.resetsAtMs, now)
   if (left) parts.push(t('status.usage.resets_in', { time: left }))
   if (stale) parts.push(t('status.usage.stale'))
   return parts.join(' — ')
 }
 
-/** The 5h and 7d segments, each preceded by a separator; shared by both bars. */
+/** The 5h and 7d rings; shared by both bars. */
 function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
   fiveHour: UsageWindow | null
   sevenDay: UsageWindow | null
@@ -73,30 +108,24 @@ function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
   return (
     <>
       {fiveHour && (
-        <>
-          <Separator className="max-[700px]:hidden" />
-          <UsageSegment
-            testId={`${idPrefix}-five-hour`}
-            label={t('status.usage.five_hour_short')}
-            pct={fiveHour.pct}
-            title={windowTitle(t, 'status.usage.five_hour', fiveHour, now, stale)}
-            stale={stale}
-            className="max-[700px]:hidden"
-          />
-        </>
+        <UsageSegment
+          testId={`${idPrefix}-five-hour`}
+          icon={Clock}
+          used={fiveHour.pct}
+          title={windowTitle(t, 'status.usage.five_hour', fiveHour, now, stale)}
+          stale={stale}
+          className="max-[700px]:hidden"
+        />
       )}
       {sevenDay && (
-        <>
-          <Separator className="max-[700px]:hidden" />
-          <UsageSegment
-            testId={`${idPrefix}-seven-day`}
-            label={t('status.usage.seven_day_short')}
-            pct={sevenDay.pct}
-            title={windowTitle(t, 'status.usage.seven_day', sevenDay, now, stale)}
-            stale={stale}
-            className="max-[700px]:hidden"
-          />
-        </>
+        <UsageSegment
+          testId={`${idPrefix}-seven-day`}
+          icon={CalendarBlank}
+          used={sevenDay.pct}
+          title={windowTitle(t, 'status.usage.seven_day', sevenDay, now, stale)}
+          stale={stale}
+          className="max-[700px]:hidden"
+        />
       )}
     </>
   )
@@ -112,22 +141,19 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
 
   const stale = now - entry.receivedAt > USAGE_STALE_MS
   return (
-    <>
+    <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${usage.context !== null ? 'max-[600px]:hidden' : 'max-[700px]:hidden'}`}>
       {usage.context !== null && (
-        <>
-          <Separator className="max-[600px]:hidden" />
-          <UsageSegment
-            testId="status-seg-usage-context"
-            label={t('status.usage.context_short')}
-            pct={usage.context}
-            title={[t('status.usage.context', { pct: Math.round(usage.context) }), stale ? t('status.usage.stale') : ''].filter(Boolean).join(' — ')}
-            stale={stale}
-            className="max-[600px]:hidden"
-          />
-        </>
+        <UsageSegment
+          testId="status-seg-usage-context"
+          icon={Brain}
+          used={usage.context}
+          title={[t('status.usage.context', { left: remainingPct(usage.context), pct: usedPct(usage.context) }), stale ? t('status.usage.stale') : ''].filter(Boolean).join(' — ')}
+          stale={stale}
+          className="max-[600px]:hidden"
+        />
       )}
       <LimitSegments fiveHour={usage.fiveHour} sevenDay={usage.sevenDay} stale={stale} now={now} idPrefix="status-seg-usage" />
-    </>
+    </div>
   )
 }
 
@@ -140,12 +166,14 @@ export function HostQuotaSegments({ hostId }: { hostId: string }) {
   // Nexen reports one reset time for the reading; it is shown on the 5-hour window, the one it belongs to.
   const stale = now - fetchedAt > USAGE_STALE_MS
   return (
-    <LimitSegments
-      fiveHour={{ pct: quota.five_hour_pct, resetsAtMs }}
-      sevenDay={{ pct: quota.seven_day_pct, resetsAtMs: null }}
-      stale={stale}
-      now={now}
-      idPrefix="status-seg-quota"
-    />
+    <div data-testid="status-usage" className="flex shrink-0 items-center gap-2 max-[700px]:hidden">
+      <LimitSegments
+        fiveHour={{ pct: quota.five_hour_pct, resetsAtMs }}
+        sevenDay={{ pct: quota.seven_day_pct, resetsAtMs: null }}
+        stale={stale}
+        now={now}
+        idPrefix="status-seg-quota"
+      />
+    </div>
   )
 }

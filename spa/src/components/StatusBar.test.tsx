@@ -275,9 +275,44 @@ describe('StatusBar agent label badge', () => {
         rate_limits: { five_hour: { used_percentage: 25, resets_at: Date.now() / 1000 + 3600 }, seven_day: { used_percentage: 73, resets_at: Date.now() / 1000 + 86400 } },
       })
     })
-    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('ctx 36%')
-    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('5h 25%')
-    expect(screen.getByTestId('status-seg-usage-seven-day').textContent).toBe('7d 73%')
+    // The number is what is LEFT (100 - used); no text label.
+    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('64%')
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('75%')
+    expect(screen.getByTestId('status-seg-usage-seven-day').textContent).toBe('27%')
+  })
+
+  it('puts the usage in the controls, after the pane title and before the mode buttons, in ctx, 5h, 7d order', () => {
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useSessionStore.setState({
+      sessions: { [HOST_ID]: [{ code: 'dev001', name: 'dev-server', cwd: '/tmp', mode: 'terminal', tmux_instance: '', pane_title: 'plan review' }] },
+      activeHostId: HOST_ID,
+      activeCode: null,
+    })
+    useAgentStore.setState({ agentTypes: { [ck]: 'cc' } })
+    useUISettingsStore.setState({ showAgentTitleInStatusBar: true })
+    useAgentStore.getState().setCcStatus(HOST_ID, 'dev001', {
+      context_window: { used_percentage: 36 },
+      rate_limits: { five_hour: { used_percentage: 25 }, seven_day: { used_percentage: 73 } },
+    })
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} />)
+    const controls = screen.getByTestId('status-controls')
+    const ids = ['agent-pane-title', 'status-seg-usage-context', 'status-seg-usage-five-hour', 'status-seg-usage-seven-day', 'status-mode-buttons']
+    const els = ids.map((id) => screen.getByTestId(id))
+    els.forEach((el, i) => {
+      expect(controls.contains(el), ids[i]).toBe(true)
+      if (i > 0) expect(els[i - 1].compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING, ids[i]).toBeTruthy()
+    })
+    expect(screen.getByTestId('status-segments').querySelector('[data-testid^="status-seg-usage"]')).toBeNull()
+  })
+
+  it('without a pane title the usage still sits before the mode buttons', () => {
+    useAgentStore.getState().setCcStatus(HOST_ID, 'dev001', { rate_limits: { five_hour: { used_percentage: 25 } } })
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} />)
+    const five = screen.getByTestId('status-seg-usage-five-hour')
+    expect(screen.queryByTestId('agent-pane-title')).toBeNull()
+    expect(five.compareDocumentPosition(screen.getByTestId('status-mode-buttons')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('reactively shows badge when models updates after mount', async () => {
@@ -372,7 +407,6 @@ describe('StatusBar peer segments', () => {
     render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-host').textContent).toBe('mlab')
     expect(screen.getByTestId('status-seg-cwd').textContent).toBe('/Users/wake/Workspace/wake/purdex')
-    expect(screen.getByTestId('status-seg-agent').textContent).toBe('purdex-b0')
     // The *name* is displayed with its ref; the full address is what a click copies.
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('purdex-b0 [q34psn]')
     expect(screen.getByTestId('status-seg-status').textContent).toContain('connected')
@@ -390,27 +424,13 @@ describe('StatusBar peer segments', () => {
     await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0 [q34psn]'))
   })
 
-  // Peer Address v5 (peer mailbox spec §3.4): the agent segment is the
-  // conversation's name as its address carries it — the virtual name — and a
-  // click copies that address. Claude Code's own session name no longer routes,
-  // so it is neither shown nor copied: pasted into `pdx msg send` it is a 404.
-  it('shows the virtual name and copies the virtual address, never the CLI name', async () => {
+  // The address segment (name only, no ref) duplicated the peer id segment, which already carries the name, the ref
+  // and the title. It is gone; the peer id segment is the one place the address is shown and copied from.
+  it('has no separate address segment, and the peer id segment stays', () => {
     render(<StatusBar activeTab={sessionTab()} />)
-    const seg = screen.getByTestId('status-seg-agent')
-    expect(seg.textContent).toBe('purdex-b0')
+    expect(screen.queryByTestId('status-seg-agent')).toBeNull()
+    expect(screen.getByTestId('status-seg-peer-id')).toBeTruthy()
     expect(screen.getByTestId('status-segments').textContent).not.toContain('ai-chat-story-3a')
-    fireEvent.click(seg)
-    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0'))
-    expect(copyTextMock).not.toHaveBeenCalledWith('ai-chat-story-3a')
-  })
-
-  // A conversation with no virtual name is addressed by its ref, which the
-  // peer id segment already shows: the agent segment has no name to offer.
-  it('shows no name for a conversation addressed by its ref', () => {
-    seedPeers({}, { ...PEER_ROW, address: 'mlab/_q34psn' })
-    render(<StatusBar activeTab={sessionTab()} />)
-    expect(screen.getByTestId('status-seg-agent').textContent).toBe('—')
-    expect(screen.getByTestId('status-seg-agent')).toBeDisabled()
   })
 
   // The old guard declined to render a row whose *title* was empty. Under v4 a
@@ -465,7 +485,6 @@ describe('StatusBar peer segments', () => {
   it.each([
     ['status-seg-host', 'mlab', 'copied: host'],
     ['status-seg-cwd', '/Users/wake/Workspace/wake/purdex', 'copied: cwd'],
-    ['status-seg-agent', 'mlab/purdex-b0', 'copied: address'],
     ['status-seg-peer-id', 'mlab/purdex-b0 [q34psn]', 'copied: peer id'],
   ])('%s copies its value and confirms in the fixed slot', async (testId, value, message) => {
     render(<StatusBar activeTab={sessionTab()} />)
@@ -593,7 +612,7 @@ describe('StatusBar peer segments', () => {
   // `keepFocus`; the helper itself is proven in a real browser (spec §5).
   it('a mouse press on a copy segment keeps focus where it was; a press then a click still copies', async () => {
     render(<StatusBar activeTab={sessionTab()} />)
-    for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-agent', 'status-seg-peer-id']) {
+    for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-peer-id']) {
       const seg = screen.getByTestId(testId)
       expect(fireEvent.mouseDown(seg), testId).toBe(false)
       expect(seg.tabIndex, testId).toBeGreaterThanOrEqual(0)
@@ -635,7 +654,6 @@ describe('StatusBar peer segments', () => {
     useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
     render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-peer-id')).toHaveAttribute('data-dim', 'true')
-    expect(screen.getByTestId('status-seg-agent')).toHaveAttribute('data-dim', 'true')
   })
 
   // Uncertainty is signalled beside the value, not by darkening it. Two
@@ -687,14 +705,12 @@ describe('StatusBar peer segments', () => {
     const seg = screen.getByTestId('status-seg-peer-id')
     expect(seg.textContent).toBe('—')
     expect(seg.getAttribute('title')).toMatch(/connection refused/)
-    expect(screen.getByTestId('status-seg-agent').textContent).toBe('—')
-    expect(screen.getByTestId('status-seg-agent').getAttribute('title')).toMatch(/connection refused/)
   })
 
   it('offers nothing to copy while the refresh is failing', () => {
     seedPeers({ error: 'connection refused' })
     render(<StatusBar activeTab={sessionTab()} />)
-    for (const testId of ['status-seg-peer-id', 'status-seg-agent']) {
+    for (const testId of ['status-seg-peer-id']) {
       const seg = screen.getByTestId(testId)
       expect(seg, testId).toBeDisabled()
       fireEvent.click(seg)
@@ -719,7 +735,7 @@ describe('StatusBar peer segments', () => {
 
   it('each copy control is a native focusable button (Enter/Space activation is the platform’s — jsdom does not simulate it)', () => {
     render(<StatusBar activeTab={sessionTab()} />)
-    for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-agent', 'status-seg-peer-id', 'status-peer-refresh']) {
+    for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-peer-id', 'status-peer-refresh']) {
       const el = screen.getByTestId(testId)
       expect(el.tagName, testId).toBe('BUTTON')
       expect(el.getAttribute('tabindex'), testId).toBeNull()
@@ -753,7 +769,6 @@ describe('StatusBar peer segments', () => {
 
     // Dropped, in the order spec §4.3 gives up on them.
     expect(screen.getByTestId('status-seg-cwd').className).toContain('max-[600px]:hidden')
-    expect(screen.getByTestId('status-seg-agent').className).toContain('max-[700px]:hidden')
     expect(screen.getByTestId('agent-pane-title').className).toContain('max-[700px]:hidden')
     // The model badge is the third of the agent-identity decorations, and it
     // sits in the `shrink-0` group, so without a rule of its own a long model
@@ -770,7 +785,7 @@ describe('StatusBar peer segments', () => {
     // Host survives by shrinking to 8ch, not by disappearing.
     expect(screen.getByTestId('status-seg-host').className).toContain('max-[500px]:max-w-[8ch]')
     // Truncation, per segment.
-    for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-agent', 'status-seg-peer-id', 'status-seg-session-name']) {
+    for (const testId of ['status-seg-host', 'status-seg-cwd', 'status-seg-peer-id', 'status-seg-session-name']) {
       expect(screen.getByTestId(testId).className, testId).toContain('truncate')
     }
     // cwd truncates from the *left*: its tail is the informative end.
@@ -846,7 +861,6 @@ describe('StatusBar peer generation', () => {
     seedPeers({}, { ...PEER_ROW, tmuxInstance: rowGen })
     render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.getByTestId('status-seg-peer-id').textContent).toBe('—')
-    expect(screen.getByTestId('status-seg-agent').textContent).toBe('—')
   })
 
   it('offers nothing to copy for a row from another generation', () => {
@@ -961,8 +975,14 @@ describe('StatusBar status target pane', () => {
   it('a worker pane shows the host quota, and a terminal beside it does not leak ccStatus into it', async () => {
     render(<StatusBar activeTab={splitTab('t1', { id: 'term', content: plainTerminal }, { id: 'w', content: workerContent })} />)
     await act(async () => {})
-    expect(screen.getByTestId('status-seg-quota-five-hour').textContent).toBe('5h 41%')
-    expect(screen.getByTestId('status-seg-quota-seven-day').textContent).toBe('7d 72%')
+    expect(screen.getByTestId('status-seg-quota-five-hour').textContent).toBe('59%')
+    expect(screen.getByTestId('status-seg-quota-seven-day').textContent).toBe('28%')
+    // Both are in the controls, ahead of the mode buttons.
+    const controls = screen.getByTestId('status-controls')
+    const five = screen.getByTestId('status-seg-quota-five-hour')
+    expect(controls.contains(five)).toBe(true)
+    expect(five.compareDocumentPosition(screen.getByTestId('status-mode-buttons')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('status-segments').querySelector('[data-testid^="status-seg-quota"]')).toBeNull()
     expect(screen.queryByTestId('status-seg-usage-context')).toBeNull()
   })
 
@@ -1089,7 +1109,7 @@ describe('StatusBar worker bar', () => {
 
   it('has no tmux-only segments: no session name, peer, refresh, status or upload', () => {
     render(<StatusBar activeTab={workerTab()} />)
-    for (const id of ['status-seg-session-name', 'status-seg-agent', 'status-seg-peer-id', 'status-peer-refresh', 'status-seg-status', 'upload-status']) {
+    for (const id of ['status-seg-session-name', 'status-seg-peer-id', 'status-peer-refresh', 'status-seg-status', 'upload-status']) {
       expect(screen.queryByTestId(id), id).toBeNull()
     }
     expect(screen.queryByText('execution')).toBeNull()
