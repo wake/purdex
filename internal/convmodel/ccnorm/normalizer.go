@@ -127,6 +127,33 @@ func (n *Normalizer) skipOversize(size int64) {
 	n.skip("line:oversize")
 }
 
+// Skip advances past a line of length bytes (without its newline) whose first
+// byte is at offset and that the caller did not read, because it is over the
+// line cap (the transcript API never buffers such a line). Contiguity is
+// checked like Feed: an offset below Next is a replay and ignored, one beyond
+// it is refused with ErrGap, changing nothing. The line is counted in
+// Stats.Skipped["line:oversize"].
+func (n *Normalizer) Skip(offset, length int64) error {
+	switch {
+	case offset < n.next:
+		n.stats.Replayed++
+		return nil
+	case offset > n.next:
+		return fmt.Errorf("%w: line at %d, next expected %d", ErrGap, offset, n.next)
+	}
+	n.skipOversize(length)
+	return nil
+}
+
+// Header is the title and the usage the conversation shows; both are cheap to
+// read, unlike Conversation, which copies every turn.
+func (n *Normalizer) Header() (title string, usage *convmodel.Usage) {
+	if n.model != "" || n.effort != "" {
+		usage = &convmodel.Usage{Model: n.model, Effort: n.effort}
+	}
+	return n.title(), usage
+}
+
 // Next is the offset the next line must have.
 func (n *Normalizer) Next() int64 { return n.next }
 
@@ -285,6 +312,9 @@ func (n *Normalizer) upsert(turnID string, it convmodel.Item, off int64) bool {
 	n.add(Change{turnID, id, off})
 	return true
 }
+
+// ItemID is the id a normalizer keys an item by ("" for an unknown type).
+func ItemID(it convmodel.Item) string { return idOf(it) }
 
 // idOf is the id of an item's variant ("" for an unknown type).
 func idOf(it convmodel.Item) string {
