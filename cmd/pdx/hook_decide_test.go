@@ -91,7 +91,7 @@ func hookInput(dataDir, base, agent, purdexName, raw string, opts ...daemonclien
 }
 
 // Spec §15 "no flag ⇒ no daemon call and empty stdout". Mutation gate:
-// drop the hookLockExists check in hookDecision → red (the daemon is called).
+// drop the HookLockExists check in hookDecision → red (the daemon is called).
 func TestHookDecision_NoFlagMeansNoCallAndNoOutput(t *testing.T) {
 	d := newFakeHookDaemon(team.HookDecideResponse{Decision: "deny", Reason: "r"})
 	srv := httptest.NewServer(d)

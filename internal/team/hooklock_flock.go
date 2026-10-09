@@ -1,4 +1,4 @@
-package main
+package team
 
 import (
 	"bytes"
@@ -16,11 +16,11 @@ import (
 // exclusive flock on the flag's inode: A never deletes B's flag. The daemon
 // and the hook only stat the path; the content is for the CLI alone.
 
-// openHookLockLocked opens the flag at path and returns it holding
+// OpenHookLockLocked opens the flag at path and returns it holding
 // flock(LOCK_EX), re-opening until the locked inode is the one the path
 // names (another process may have removed or recreated the file while this
 // one waited for the lock). With create false, a missing file is ErrNotExist.
-func openHookLockLocked(path string, create bool) (*os.File, error) {
+func OpenHookLockLocked(path string, create bool) (*os.File, error) {
 	flags := os.O_RDWR
 	if create {
 		flags |= os.O_CREATE
@@ -50,16 +50,16 @@ func openHookLockLocked(path string, create bool) (*os.File, error) {
 	}
 }
 
-// writeHookLock raises the flag at path for request id, making its
+// WriteHookLock raises the flag at path for request id, making its
 // directory first. Best effort: a failure is one stderr line and the
 // request goes on with the soft lock only — the hard lock is an extra
 // guard, never a reason to refuse a lead request.
-func writeHookLock(path, id string, stderr io.Writer) {
+func WriteHookLock(path, id string, stderr io.Writer) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		fmt.Fprintf(stderr, "pdx lead: 無法建立硬鎖旗標（%v），這次只有軟鎖\n", err)
 		return
 	}
-	f, err := openHookLockLocked(path, true)
+	f, err := OpenHookLockLocked(path, true)
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx lead: 無法建立硬鎖旗標（%v），這次只有軟鎖\n", err)
 		return
@@ -73,13 +73,13 @@ func writeHookLock(path, id string, stderr io.Writer) {
 	}
 }
 
-// removeHookLock lowers the flag at path if it still belongs to request
+// RemoveHookLock lowers the flag at path if it still belongs to request
 // id. A file already gone (the daemon removed it with a {} answer), a flag
 // another request of the same session has since raised, and any other
 // failure are silent: the command is exiting and the daemon's sweeper
 // prunes what is left.
-func removeHookLock(path, id string) {
-	f, err := openHookLockLocked(path, false)
+func RemoveHookLock(path, id string) {
+	f, err := OpenHookLockLocked(path, false)
 	if err != nil {
 		return
 	}
@@ -91,9 +91,9 @@ func removeHookLock(path, id string) {
 	_ = os.Remove(path)
 }
 
-// hookLockExists is the gate `pdx hook` checks before it calls the daemon
+// HookLockExists is the gate `pdx hook` checks before it calls the daemon
 // (spec §6.6): one stat, no daemon round trip when the flag is absent.
-func hookLockExists(path string) bool {
+func HookLockExists(path string) bool {
 	if path == "" {
 		return false
 	}
