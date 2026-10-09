@@ -61,6 +61,7 @@ const (
 	noticeReleased  = "released"
 	noticeHandover  = "handover"
 	noticeTeamEnded = "team_ended"
+	noticeLocalEnd  = "local_end" // the operator on this host ended the membership
 	noticeOwed      = "owed"
 )
 
