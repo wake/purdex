@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wake/purdex/internal/claudeenv"
 	"github.com/wake/purdex/internal/execstat"
 )
 
@@ -469,12 +470,19 @@ func sanitizeTmuxMetadata(s string) string {
 	return strings.Join(strings.Fields(mapped), " ")
 }
 
+// newSessionCommand is new-session behind claudeenv's global unset, in the one tmux invocation: a server that
+// was started from inside a Claude Code session holds that session's identity in its global environment, and
+// every session created on it inherits it (#2122). Nothing else about the call changes.
+func newSessionCommand(args ...string) []string {
+	return append(claudeenv.TmuxGlobalUnsetArgs(), args...)
+}
+
 func (r *RealExecutor) NewSession(name, cwd string) error {
-	return tmuxCmd("new-session", "-d", "-s", name, "-c", cwd).Run()
+	return tmuxCmd(newSessionCommand("new-session", "-d", "-s", name, "-c", cwd)...).Run()
 }
 
 func (r *RealExecutor) NewSessionContext(ctx context.Context, name, cwd string) error {
-	err := boundedRead(ctx, "new-session", "-d", "-s", name, "-c", cwd).Run()
+	err := boundedRead(ctx, newSessionCommand("new-session", "-d", "-s", name, "-c", cwd)...).Run()
 	if err == nil {
 		return nil
 	}

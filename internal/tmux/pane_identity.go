@@ -67,8 +67,8 @@ func newSessionTaggedArgs(name, cwd, option, value string) ([]string, error) {
 	if !userOptionPattern.MatchString(option) || !instancePattern.MatchString(value) {
 		return nil, fmt.Errorf("tmux: option %q = %q cannot tag a session", option, value)
 	}
-	return []string{"new-session", "-d", "-s", name, "-c", cwd, "-P", "-F", "#{session_id} #{pid}:#{start_time}",
-		";", "set-option", option, value}, nil
+	return newSessionCommand("new-session", "-d", "-s", name, "-c", cwd, "-P", "-F", "#{session_id} #{pid}:#{start_time}",
+		";", "set-option", option, value), nil
 }
 
 // parseCreatedSession reads new-session's -P line; "" for anything else.
