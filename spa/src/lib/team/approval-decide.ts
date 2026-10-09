@@ -28,7 +28,8 @@ import { ApprovalApiError, decideApproval, setSelfRelayPause } from './approval-
 import { closedToastText } from './approval-format'
 import { gotoRequester } from './approval-goto'
 import { clientDescriptor } from './client-label'
-import type { Approval, Grant } from './types'
+import { startAdoptionWait } from './adoption-wait'
+import { adoptPayloadOf, type Approval, type Grant } from './types'
 
 export type DecideOutcome = 'closed' | 'decided_elsewhere' | 'queued' | 'failed'
 
@@ -93,6 +94,12 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
       gotoRequester(hostId, closed)
     } catch (e: unknown) {
       console.warn('[approval-decide] could not switch to the requester:', e)
+    }
+    // A REMOTE adopt (X3c): the approve only recorded consent (a `joining` membership); the outcome is waited on outside
+    // the dialog, which this 200 has just closed. A local target is done at the approve, as before.
+    if (decision === 'approve' && approval.kind === 'adopt') {
+      const adopt = adoptPayloadOf(approval)
+      if (adopt.target_host_id !== '') startAdoptionWait(hostId, approval.id, adopt)
     }
     if (pauseLeft) {
       // The pause hit the network but the decision went through (PR #1742 attacker A-1): say so, as the
