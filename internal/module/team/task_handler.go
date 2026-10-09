@@ -354,6 +354,7 @@ func (m *Module) handleTaskReassign(w http.ResponseWriter, r *http.Request) {
 
 // respondTask logs one line for a successful mutation and answers the task.
 func (m *Module) respondTask(w http.ResponseWriter, status int, c taskCaller, row TaskRow, verb string) {
+	m.rosterChanged() // a created, started, finished, deleted or reassigned task changes a member's current task (T-3b)
 	v, ok := m.newTaskView(w, c.team.ID, c.ownerKey())
 	if !ok {
 		return

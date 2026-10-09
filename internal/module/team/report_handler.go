@@ -71,6 +71,7 @@ func (m *Module) handleReportCreate(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	} else {
 		m.logf("[team] report %s %s by %s", row.Kind, out.Report.Task, c.ref())
+		m.rosterChanged() // a report moves its task (ack starts it, done finishes it): the member's current task may change (T-3b)
 	}
 	m.writeJSON(w, status, out)
 }

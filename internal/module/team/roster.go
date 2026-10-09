@@ -77,6 +77,15 @@ func (m *Module) buildRoster() (team.Roster, error) {
 	alias, _ := m.selfHost()
 	out := team.Roster{Teams: make([]team.TeamRoster, 0, len(teams))}
 	for i, t := range teams {
+		// One read of the team's open tasks, before its members (not one per member).
+		open, err := m.store.ListTasks(t.ID, "", false)
+		if err != nil {
+			return team.Roster{}, err
+		}
+		byOwner := map[string][]TaskRow{}
+		for _, tk := range open {
+			byOwner[tk.OwnerKey] = append(byOwner[tk.OwnerKey], tk)
+		}
 		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, TeamName: t.TeamName, TeamLabel: t.TeamLabel, CreatedAt: t.CreatedAt,
 			Lead: m.rosterLead(t.Team, origins, alias, t.leadUsage), Members: []team.RosterMember{}}
 		for _, mr := range active[i] {
@@ -86,8 +95,13 @@ func (m *Module) buildRoster() (team.Roster, error) {
 			}, mr.Ref, alias)
 			s.Model, s.Effort = mr.Model, mr.Effort // what it was spawned with
 			s.Context = m.sessionContext(mr.SessionID, mr.Usage)
-			tr.Members = append(tr.Members, team.RosterMember{RosterSession: s, State: mr.State,
-				Origin: rosterMemberOrigin, JoinedAt: mr.CreatedAt})
+			rm := team.RosterMember{RosterSession: s, State: mr.State, Origin: rosterMemberOrigin, JoinedAt: mr.CreatedAt}
+			if mr.SpawnOp != "" { // an adopted member has no key, so no tasks
+				if cur, ok := currentTaskOf(byOwner[mr.SpawnOp]); ok {
+					rm.Task = &team.RosterTask{ID: team.TaskDisplayID(t.ID, cur.Seq), Subject: cur.Subject, Status: cur.Status}
+				}
+			}
+			tr.Members = append(tr.Members, rm)
 		}
 		out.Teams = append(out.Teams, tr)
 	}
