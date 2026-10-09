@@ -37,7 +37,7 @@ Rendering — **Collie's look**, our words (zh-TW), every item shown:
 | Item | Drawn as |
 |---|---|
 | user | the only tinted block: a framed well, caption 「你 · HH:mm」; other sources get their caption (「你 · 排隊中」, 「來自 <name>」, 「背景任務回報」, 「排程喚醒」); bash-mode input and `command_output` sit under it, output folded to 「輸出 · N 行」 that opens to the last 10 lines (「…已截斷」 when cut) |
-| agent_text | unframed Markdown; streaming text grows in place with a cursor (the mod's live source; deltas merged every 150 ms) |
+| agent_text | unframed Markdown; streaming text grows in place with a cursor (the mod's live source; deltas merged every 150 ms). *Amended (plan, 2026-10-10): the API is transcript-only today (U1-5 not wired), so a message appears whole; the renderer honours `streaming: true` so U1-5 lights it up without a client change.* |
 | thinking | a collapsed 「思考」 disclosure (duration when known) |
 | step · edit | a card: icon (pencil / new file), 「編輯」／「新增」, path, green `+n` / red `−n`, the hunks up to 16 lines, 「顯示全部 N 行」 |
 | step · execute | a 「執行」 card: `$ command` in a dark box clamped to 6 lines; its output folded to 「輸出 · N 行」, opening to the last 10 lines, 「顯示全部」 |
@@ -68,7 +68,7 @@ The daemon's normalizer (`internal/convmodel/ccnorm`, U1-4) is what both apps re
 
 **Input** (deck and chat, below the stream):
 - Enter sends, Shift+Enter breaks a line.
-- Sending goes through the daemon's `POST /api/sessions/{code}/send-keys` with the expected tmux instance (as iOS does), with Collie's safeguards: the text is typed **without** Enter, the pane's screen is read until the input box visibly holds it (a `[Pasted text #N +M lines]` placeholder counts, with exact arithmetic), and only then is Enter pressed; if it never appears, Enter is withheld and the draft is kept. Text over 800 characters is sent as one bracketed paste. A draft that looks destructive (e.g. `rm -rf`) needs a second press (「真的要送出？」). Where the screen is read from (the pane's terminal the App keeps connected, or a daemon read) is the plan's choice.
+- Sending goes through the daemon's `POST /api/sessions/{code}/send-keys` with the expected tmux instance (as iOS does), with Collie's safeguards: the text is typed **without** Enter, the pane's screen is read until the input box visibly holds it and only then is Enter pressed; if it never appears, Enter is withheld and the draft is kept. *Amended (plan, 2026-10-10): **no bracketed paste** — Claude Code wraps pasted text in `<pasted_content>` (iOS measured, 2026-10-07), so the text is sent as iOS sends it (a literal LF for new lines, ≤ 4000 UTF-8 bytes, iOS `SendPlan` rules), and Collie's paste-placeholder and 800-character rules do not apply.* A draft that looks destructive (e.g. `rm -rf`) needs a second press (「真的要送出？」). Where the screen is read from (the pane's terminal the App keeps connected, or a daemon read) is the plan's choice.
 - While the agent works, a sent message is shown as 「你 · 排隊中」 until its turn starts; a 「中斷」 button (Esc to the pane) sits by the send button.
 - Without the mod, a draft starting with `/` or `!` is blocked with 「這個指令要在終端機輸入」; interactive menus (`/model`, Rewind) always say so.
 - The draft survives a tab switch (tab-hosted rule).
