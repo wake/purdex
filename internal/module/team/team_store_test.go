@@ -59,7 +59,7 @@ func seedTeam(t *testing.T, s *Store, id, sid string, at int64) {
 func newMember(spawnOp, teamID, sid, ref string, at int64) memberRow {
 	return memberRow{SpawnOp: spawnOp, TeamID: teamID, HostID: "h:1", SessionID: sid, Ref: ref, Title: "worker",
 		Cwd: "/w/x", TmuxSession: "tm-" + spawnOp, PID: 42, Model: "sonnet", Effort: "high",
-		State: team.MemberActive, CreatedAt: at, UpdatedAt: at}
+		State: team.MemberActive, Origin: team.MemberOriginSpawned, CreatedAt: at, UpdatedAt: at}
 }
 
 // seedMember stores an active member row of team teamID for session sid.

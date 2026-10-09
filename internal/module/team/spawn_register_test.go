@@ -24,7 +24,7 @@ func TestSpawn_AMemberThatRegistersIsStoredAndTitled(t *testing.T) {
 	rows, _ := f.m.store.MembersOf(uid(1))
 	want := memberRow{SpawnOp: spawnID(1), TeamID: uid(1), HostID: "h:1", SessionID: "sid-m1", Ref: ipeers.RefID("sid-m1"),
 		Title: "worker", Cwd: root, TmuxSession: "tm-0000000100", TmuxID: "$0", TmuxInstance: "4242:1700000000", PaneID: "%0",
-		PID: 31, ProcStart: "p31", Model: "opus[1m]", Effort: "high", State: team.MemberActive}
+		PID: 31, ProcStart: "p31", Model: "opus[1m]", Effort: "high", State: team.MemberActive, Origin: team.MemberOriginSpawned}
 	if len(rows) != 1 {
 		t.Fatalf("member rows = %+v", rows)
 	}

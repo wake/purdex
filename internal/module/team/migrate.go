@@ -116,6 +116,27 @@ func migrateMemberLastTurn(db *sql.DB) error {
 	return nil
 }
 
+// migrateAdopt gives the store what adopt and release write (adopt plan PL-1b, 2026-10-09 alignment): the code a
+// request closed cancelled with at approve, and on team_members how a member joined, when it left `active`, and
+// the notice the session is owed (the outbox PL-1d1 drains). Every column has a default, so a row written before
+// reads as it was (spawned, not ended, nothing owed) and an older daemon's INSERTs, which name their columns, still work.
+func migrateAdopt(db *sql.DB) error {
+	if err := ensureColumn(db, "approval_requests", "close_reason", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	for _, c := range [][2]string{
+		{"origin", "TEXT NOT NULL DEFAULT 'spawned'"},
+		{"ended_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"notice_pending", "TEXT NOT NULL DEFAULT ''"},
+		{"notice_since", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := ensureColumn(db, "team_members", c[0], c[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // afterReportsPKRead, when set, runs in migrateReportsPK between the unlocked
 // check that found the old key and the write lock; tests let a second opener
 // migrate there. nil in production.

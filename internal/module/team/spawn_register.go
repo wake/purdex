@@ -144,7 +144,7 @@ func (m *Module) spawnFinish(op spawnRow, o *team.Origin) {
 	mem := memberRow{SpawnOp: op.ID, TeamID: op.TeamID, HostID: op.HostID, SessionID: op.SessionID,
 		Ref: o.Ref, Title: op.Title, Cwd: op.Cwd, TmuxSession: op.TmuxName, TmuxID: op.TmuxID, TmuxInstance: op.TmuxInstance,
 		PaneID: op.PaneID, PID: o.PID, ProcStart: o.ProcStart, Model: op.Model, Effort: op.Effort,
-		State: team.MemberActive, CreatedAt: now, UpdatedAt: now}
+		State: team.MemberActive, Origin: team.MemberOriginSpawned, CreatedAt: now, UpdatedAt: now}
 	var first *TaskRow
 	if op.TaskSubject != "" {
 		// The spawn's task, created with the member row in one transaction (T-2).

@@ -141,7 +141,7 @@ func (s *Store) SetLastTurn(sessionID, summary string, at, seq int64) (lastTurnW
 // MemberLastTurnAts is the last_turn_at of each of the team's members that has
 // one, by member key (spawn_op): the display's LAST for a member with no task.
 func (s *Store) MemberLastTurnAts(teamID string) (map[string]int64, error) {
-	rows, err := s.db.Query(`SELECT spawn_op, last_turn_at FROM team_members WHERE team_id = ? AND last_turn_at > 0`, teamID)
+	rows, err := s.db.Query(`SELECT spawn_op, last_turn_at FROM team_members WHERE team_id = ? AND state = 'active' AND last_turn_at > 0`, teamID)
 	if err != nil {
 		return nil, fmt.Errorf("member last turns of %s: %w", teamID, err)
 	}
