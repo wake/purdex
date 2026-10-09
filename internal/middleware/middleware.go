@@ -56,6 +56,14 @@ type TicketValidator interface {
 	Validate(ticket string) bool
 }
 
+// CallerTicketValidator is a TicketValidator whose tickets remember who asked for them: a valid ticket then gives the
+// caller back (validate-and-consume, one step), and the request carries that caller exactly as if it had come with the
+// bearer. TokenAuth uses this when the validator has it.
+type CallerTicketValidator interface {
+	TicketValidator
+	ValidateCaller(ticket string) (devices.Caller, bool)
+}
+
 // TokenAuth checks Bearer token or one-time ticket (?ticket=).
 // tokenFn is called on each request to support runtime token changes.
 // Bearer prefix is case-insensitive, token value is case-sensitive.
@@ -105,7 +113,13 @@ func TokenAuthWith(tokenFn func() string, tickets TicketValidator, devs devices.
 			// WebSocket handshake is a GET; anything else with upgrade
 			// headers is a REST call wearing a costume.
 			if tickets != nil && isWebSocketHandshake(r) {
-				if ticket := r.URL.Query().Get("ticket"); tickets.Validate(ticket) {
+				ticket := r.URL.Query().Get("ticket")
+				if ct, ok := tickets.(CallerTicketValidator); ok {
+					if caller, valid := ct.ValidateCaller(ticket); valid {
+						next.ServeHTTP(w, r.WithContext(devices.WithCaller(r.Context(), caller)))
+						return
+					}
+				} else if tickets.Validate(ticket) {
 					next.ServeHTTP(w, r)
 					return
 				}

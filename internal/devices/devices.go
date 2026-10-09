@@ -86,6 +86,34 @@ func PrincipalFrom(ctx context.Context) (Principal, bool) {
 	return p, ok
 }
 
+// Caller is who a request, or a one-time ticket recorded at its creation, speaks for: the admin, one device, or nobody in
+// particular (the zero value: a ticket made without a context, an anonymous authenticated request).
+type Caller struct {
+	Admin  bool
+	Device *Principal
+}
+
+// CallerFrom reads the caller off a request's context. The device principal is a copy.
+func CallerFrom(ctx context.Context) Caller {
+	c := Caller{Admin: IsAdmin(ctx)}
+	if p, ok := PrincipalFrom(ctx); ok {
+		c.Device = &p
+	}
+	return c
+}
+
+// WithCaller returns ctx carrying exactly c: the admin mark when it is the admin, the principal when it is a device (and
+// then never the admin mark, whatever ctx held), neither when it is nobody.
+func WithCaller(ctx context.Context, c Caller) context.Context {
+	switch {
+	case c.Device != nil:
+		return context.WithValue(context.WithValue(ctx, adminKey{}, false), ctxKey{}, *c.Device)
+	case c.Admin:
+		return WithAdmin(ctx)
+	}
+	return ctx
+}
+
 // Authenticator turns a bearer into a principal. The middleware holds one; the devices module implements it.
 type Authenticator interface {
 	// AuthenticateToken: ok only for a live device token (not revoked, used before or still before its use_by).
