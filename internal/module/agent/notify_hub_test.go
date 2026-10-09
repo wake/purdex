@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -271,5 +272,14 @@ func TestNotify_ABlockedLogTargetDoesNotHoldUpTheEmitter(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		openGate()
 		t.Fatal("the emitter was held up by a blocked log target")
+	}
+	// Sustained overflow against a log target that stays blocked does not pile goroutines up (one log write waits at a time).
+	before := runtime.NumGoroutine()
+	for i := 0; i < 2000; i++ {
+		m.emitSessionWith(kindHook, "code-1", "sess-1", frameOf("running"))
+	}
+	if grew := runtime.NumGoroutine() - before; grew > 5 {
+		openGate()
+		t.Fatalf("%d goroutines accumulated behind a blocked log target", grew)
 	}
 }

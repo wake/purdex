@@ -36,6 +36,7 @@ type notifyHub struct {
 	next    int
 	subs    map[int]chan NotifyEvent
 	dropped atomic.Int64
+	logging atomic.Bool // an overflow log write is pending or running
 }
 
 func (h *notifyHub) subscribe(fn func(NotifyEvent)) func() {
@@ -81,8 +82,11 @@ func (h *notifyHub) publish(ev NotifyEvent) {
 		select {
 		case ch <- ev:
 		default:
-			if n := h.dropped.Add(1); n == 1 || n%100 == 0 {
-				go log.Printf("[agent] notify subscriber queue full (cap %d); %d event(s) dropped so far", notifySubBuffer, n)
+			if n := h.dropped.Add(1); (n == 1 || n%100 == 0) && h.logging.CompareAndSwap(false, true) {
+				go func() { // at most one log write waits at a time: a blocked log target cannot pile goroutines up
+					log.Printf("[agent] notify subscriber queue full (cap %d); %d event(s) dropped so far", notifySubBuffer, h.dropped.Load())
+					h.logging.Store(false)
+				}()
 			}
 		}
 	}
