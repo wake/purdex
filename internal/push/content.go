@@ -49,6 +49,10 @@ type Content struct {
 	// OpenApprovalKeys are the badge keys of those approvals ("s:<session_code>" or "a:<approval_id>", sorted, de-duplicated,
 	// at most 32). nil = unknown (left out); a non-nil empty slice is a known "none".
 	OpenApprovalKeys []string
+	// WorkbookConv / WorkbookEntry name the session workbook entry a Stop push was built from, so a phone can open it
+	// (payload purdex.workbook = {conv_key, entry_id}); zero = none, the block is left out.
+	WorkbookConv  string
+	WorkbookEntry int64
 }
 
 var (
@@ -229,6 +233,9 @@ func (c Content) payload(hostID, body string) ([]byte, error) {
 		if v != "" {
 			purdex[k] = v
 		}
+	}
+	if c.WorkbookEntry != 0 {
+		purdex["workbook"] = map[string]any{"conv_key": c.WorkbookConv, "entry_id": c.WorkbookEntry}
 	}
 	if c.OpenApprovals != nil {
 		purdex["open_approvals"] = *c.OpenApprovals
