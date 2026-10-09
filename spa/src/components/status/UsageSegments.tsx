@@ -48,7 +48,7 @@ function Ring({ used, mode }: { used: number; mode: UsageMode }) {
   const { sharePct: shown, direction, tone } = ringGeometry(used, mode)
   return (
     <svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} aria-hidden="true" className="shrink-0">
-      <circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RING_R} fill="none" strokeWidth={RING_STROKE} stroke="currentColor" className="text-border-subtle" opacity={0.6} />
+      <circle cx={RING_SIZE / 2} cy={RING_SIZE / 2} r={RING_R} fill="none" strokeWidth={RING_STROKE} stroke="currentColor" className="text-border-default" />
       <circle
         data-testid="usage-ring-arc"
         data-used={usedPct(used)}
