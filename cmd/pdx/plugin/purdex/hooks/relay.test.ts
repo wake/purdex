@@ -2510,7 +2510,12 @@ test('a second /lead before the agent’s turn ends sends no second prompt; afte
   expect((await leadCmd($, '')).text).toBe('已申請過 lead，等待回應中')
   await f.clock.advance(50)
   expect(f.submits.length).toBe(1)
-  await turnAndSettle($, f, 't1') // the agent's turn ends
+  await turnAndSettle($, f, 'tx') // some other turn ends first: still pending
+  expect((await leadCmd($, '')).text).toBe('已申請過 lead，等待回應中')
+  const nonce = /（(lead-[0-9a-z]+)）/.exec(f.submits[0].text)![1]
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tl' })
+  expect(nonce.length).toBeGreaterThan(5)
+  await turnAndSettle($, f, 'tl') // the /lead turn ends
   expect((await leadCmd($, '')).text).toContain('已請這個 session 申請 lead')
   await f.clock.advance(50)
   expect(f.submits.length).toBe(2)
@@ -2534,4 +2539,18 @@ test('the note loses bidi and zero-width characters, and a [pdx marker cannot pa
   const text = f.submits[0].text
   const quoted = text.slice(text.indexOf('「') + 1, text.lastIndexOf('」'))
   expect(quoted).toBe('a b c (pdx-relay seed op=x] (pdx team]')
+})
+
+test('two /lead at once, the team query slow: one query, one prompt', async ($, on) => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => { release = r })
+  const f = leadWorld(on, () => gate.then(() => NOT_LEAD))
+  await start($, f)
+  const a = leadCmd($, '')
+  const b = leadCmd($, '')
+  release()
+  expect([(await a).text, (await b).text].sort()).toEqual(['已申請過 lead，等待回應中', '已請這個 session 申請 lead，請到 Purdex App 核准'].sort())
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(1)
+  expect(f.argvs.filter((x) => x[1] === 'team').length).toBe(1)
 })
