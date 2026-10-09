@@ -34,10 +34,11 @@ var errNoProcessView = errors.New("process source returned no view")
 // means the pass takes its own through takeProcSnapshotFn.
 func (m *Module) NewOwnerPass(src ProcessSource) OwnerPass {
 	return &ownerPass{
-		m:       m,
-		src:     src,
-		results: make(map[string]OwnerResult),
-		pending: make(map[string][]paneCandidates),
+		m:               m,
+		src:             src,
+		results:         make(map[string]OwnerResult),
+		pending:         make(map[string][]paneCandidates),
+		confirmedOwners: make(map[string][]PaneOwner),
 	}
 }
 
@@ -89,6 +90,10 @@ type ownerPass struct {
 	// waits on Confirm's re-check.
 	results map[string]OwnerResult
 	pending map[string][]paneCandidates
+	// confirmedOwners keeps, per session code, every owner of every pane Confirm confirmed, before the session-wide
+	// winner is picked: a caller that asks about one conversation among several in a tmux session (ConfirmedOwners)
+	// needs the ones that did not win.
+	confirmedOwners map[string][]PaneOwner
 }
 
 // passPane is one framed pane and its own process, as the first listing gave
@@ -230,6 +235,7 @@ func (p *ownerPass) Confirm(ctx context.Context) map[string]OwnerResult {
 				if owner.SessionID == "" {
 					continue
 				}
+				p.confirmedOwners[code] = append(p.confirmedOwners[code], owner)
 				if !found || betterOwner(owner, best) {
 					best, found = owner, true
 				}
@@ -304,6 +310,12 @@ func (p *ownerPass) enumerate(ctx context.Context) error {
 		p.panes[code] = append(p.panes[code], pane)
 	}
 	return nil
+}
+
+// ConfirmedOwners returns every owner (one per root frame that reported a session id) of the panes Confirm confirmed
+// for the session behind code, not only the session-wide winner. Valid after Confirm.
+func (p *ownerPass) ConfirmedOwners(code string) []PaneOwner {
+	return p.confirmedOwners[code]
 }
 
 // processView returns the pass's one process view, calling the source the

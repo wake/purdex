@@ -12,9 +12,10 @@ import (
 // conversation API's "live pane" source (spec §8.2).
 //
 // The frames store finds the candidates by session id (cheap, no tmux); with none it stops there. Otherwise one pane
-// listing maps those panes to their tmux sessions and one OwnerPass confirms each session; an owner counts only when
-// its own SessionID is sessionID (a tmux session's owner may be another conversation). Several confirmed panes are
-// all returned, oldest-seen first is not promised: the caller picks by LastSeenAt.
+// listing maps those panes to their tmux sessions and one OwnerPass confirms each session. Every confirmed pane whose
+// root frame reports sessionID counts, even when a sibling pane of the same tmux session runs a newer conversation (the
+// pass's session-wide winner is not the question here). Several confirmed panes are all returned, unordered: the
+// caller picks by LastSeenAt.
 //
 // The error is returned only when nothing was confirmed and some part of the walk failed (a listing, the process
 // view, the deadline): "could not tell", which the caller reports as status "unknown"; a confirmed pane next to a
@@ -65,20 +66,33 @@ func (m *Module) ConfirmedOwners(ctx context.Context, sessionID string) ([]PaneO
 		return nil, nil
 	}
 
-	pass := m.NewOwnerPass(nil)
+	pass := m.NewOwnerPass(nil).(*ownerPass)
 	for code := range codes {
 		pass.Resolve(ctx, code)
 	}
-	var owners []PaneOwner
+	results := pass.Confirm(ctx)
+	// One owner per pane: the pane's own winner across every conversation its root frames report (an older frame of
+	// another conversation must not make this one look live, nor the reverse); then the pane counts when that winner
+	// is this conversation.
+	byPane := map[string]PaneOwner{}
 	var firstErr error
-	for _, res := range pass.Confirm(ctx) {
-		switch {
-		case res.Err != nil:
+	for code, res := range results {
+		if res.Err != nil {
 			if firstErr == nil {
 				firstErr = res.Err
 			}
-		case res.Found && strings.EqualFold(res.Owner.SessionID, sessionID):
-			owners = append(owners, res.Owner)
+			continue
+		}
+		for _, o := range pass.ConfirmedOwners(code) {
+			if cur, ok := byPane[o.TmuxPaneID]; !ok || betterOwner(o, cur) {
+				byPane[o.TmuxPaneID] = o
+			}
+		}
+	}
+	var owners []PaneOwner
+	for _, o := range byPane {
+		if strings.EqualFold(o.SessionID, sessionID) {
+			owners = append(owners, o)
 		}
 	}
 	if len(owners) > 0 {

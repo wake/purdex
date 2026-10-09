@@ -133,3 +133,25 @@ func TestConfirmedOwners_NoLiveCandidateNeverAsksTmux(t *testing.T) {
 		t.Fatalf("got %+v err %v, want nobody and no error", got, err)
 	}
 }
+
+// Two panes of one tmux session run different conversations, the other one newer: the session-wide winner is the
+// other conversation, but this conversation's own pane is still live.
+func TestConfirmedOwners_ASiblingPaneWithANewerConversationDoesNotHideIt(t *testing.T) {
+	m, fake, _ := newProvenanceQueryModule(t)
+	fake.AddSession("work", "/w")
+	attachPane(fake, "%5", "$0", "200")
+	attachPane(fake, "%6", "$0", "300")
+	seedIdentityFrame(t, m, "%5", "cc", 100, "t100", 42, "sess-1", "/w")
+	seedIdentityFrame(t, m, "%6", "cc", 101, "t101", 99, "sess-2", "/w")
+	withProcessTree(t, map[int]int{100: 200, 200: 1, 101: 300, 300: 1})
+	withLivePids(t, map[int]string{100: "t100", 101: "t101"})
+
+	got, err := m.ConfirmedOwners(context.Background(), "sess-1")
+	if err != nil || len(got) != 1 || got[0].TmuxPaneID != "%5" {
+		t.Fatalf("got %+v err %v, want the owner in %%5", got, err)
+	}
+	got, err = m.ConfirmedOwners(context.Background(), "sess-2")
+	if err != nil || len(got) != 1 || got[0].TmuxPaneID != "%6" {
+		t.Fatalf("got %+v err %v, want the owner in %%6", got, err)
+	}
+}
