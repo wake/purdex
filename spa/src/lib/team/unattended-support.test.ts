@@ -148,4 +148,45 @@ describe('startUnattendedSupport', () => {
     useHostStore.getState().setRuntime('h1', { status: 'connected' })
     expect(fetchHostInfo).not.toHaveBeenCalled()
   })
+
+  describe('team.relay_quota.v1 (relay quota, plan RQ-A Task 2)', () => {
+    const quotaSupport = (id: string) => useUnattendedStore.getState().byHost[id]?.quotaSupport
+
+    it('listed → yes; the same probe sets the switch\'s support', async () => {
+      fetchHostInfo.mockResolvedValue(info(['relay.unattended.v1', 'team.relay_quota.v1']))
+      stop = startUnattendedSupport()
+      useHostStore.getState().setRuntime('h1', { status: 'connected' })
+      await flush()
+      expect(quotaSupport('h1')).toBe('yes')
+      expect(support('h1')).toBe('yes')
+    })
+
+    it('not listed → no (a daemon with the switch but without quotas keeps its switch)', async () => {
+      stop = startUnattendedSupport() // WITH has only the unattended capability
+      useHostStore.getState().setRuntime('h1', { status: 'connected' })
+      await flush()
+      expect(quotaSupport('h1')).toBe('no')
+      expect(support('h1')).toBe('yes')
+    })
+
+    it('a failed probe leaves it unknown', async () => {
+      fetchHostInfo.mockRejectedValue(new Error('down'))
+      stop = startUnattendedSupport()
+      useHostStore.getState().setRuntime('h1', { status: 'connected' })
+      await flush()
+      expect(quotaSupport('h1')).toBeUndefined()
+    })
+
+    it('a re-point forgets it with the rest of the entry', async () => {
+      fetchHostInfo.mockResolvedValue(info(['relay.unattended.v1', 'team.relay_quota.v1']))
+      stop = startUnattendedSupport()
+      useHostStore.getState().setRuntime('h1', { status: 'connected' })
+      await flush()
+      expect(quotaSupport('h1')).toBe('yes')
+      fetchHostInfo.mockReset()
+      fetchHostInfo.mockReturnValue(new Promise(() => {}))
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: host('h1', '100.64.0.9') } })
+      expect(quotaSupport('h1')).toBeUndefined()
+    })
+  })
 })

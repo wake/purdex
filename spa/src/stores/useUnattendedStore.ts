@@ -13,6 +13,8 @@ export type UnattendedSupport = 'unknown' | 'yes' | 'no'
 
 export interface UnattendedHostEntry {
   support: UnattendedSupport
+  /** Whether the daemon lists `team.relay_quota.v1` (relay quota, plan RQ-A): absent until the probe answered. */
+  quotaSupport?: UnattendedSupport
   /** Absent until the daemon's snapshot arrived. */
   state?: UnattendedState
 }
@@ -20,6 +22,7 @@ export interface UnattendedHostEntry {
 interface UnattendedStoreState {
   byHost: Record<string, UnattendedHostEntry>
   setSupport: (hostId: string, support: UnattendedSupport) => void
+  setQuotaSupport: (hostId: string, support: UnattendedSupport) => void
   applyState: (hostId: string, state: UnattendedState) => void
   forgetHost: (hostId: string) => void
   reset: () => void
@@ -32,9 +35,15 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
     if (cur?.support === support) return s
     return { byHost: { ...s.byHost, [hostId]: { ...cur, support } } }
   }),
-  applyState: (hostId, state) => set((s) => ({
-    byHost: { ...s.byHost, [hostId]: { support: s.byHost[hostId]?.support ?? 'unknown', state } },
-  })),
+  setQuotaSupport: (hostId, quotaSupport) => set((s) => {
+    const cur = s.byHost[hostId]
+    if (cur?.quotaSupport === quotaSupport) return s
+    return { byHost: { ...s.byHost, [hostId]: { support: cur?.support ?? 'unknown', ...cur, quotaSupport } } }
+  }),
+  applyState: (hostId, state) => set((s) => {
+    const cur = s.byHost[hostId]
+    return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', state } } }
+  }),
   forgetHost: (hostId) => set((s) => {
     if (!Object.hasOwn(s.byHost, hostId)) return s
     const { [hostId]: _gone, ...rest } = s.byHost
