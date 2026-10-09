@@ -2,6 +2,8 @@
 
 Owner: interface line (purdex-88). Status: user-confirmed 2026-10-08 → 10-09 (19 rulings + prototype rounds v2 – v5k). Plan: `docs/plans/2026-10-09-team-interface-plan.md`.
 
+**Amended 2026-10-09** by the session workbook spec (`docs/specs/2026-10-09-session-workbook-spec.md` §10.1, a later user decision): the team panel shares one resizable panel area with the workbook. Changed here: R16, R19, P3, P5, §3, §4.4, §4.11, §5, §6 (each marked *amended*); the TI-3 screenshot gate (same day) amended §4.1, §4.3 and §5 to the prototype (left-list capsule, collapse plate, muted tick). The panel part is built as workbook plan WA-2a (`docs/plans/2026-10-09-session-workbook-plan.md`), which replaces TI-4.
+
 **Supersedes** (display parts only; the data parts stay): `docs/specs/2026-10-08-lead-adopt-release-spec.md` D-U24-5 / D-U24-6; `docs/specs/2026-10-08-unattended-adopt-plan.md` PL-2c, PL-3a, PL-3b and "User-visible behaviour" 31–45 (its "Display-first reorder" section already pointed here); `docs/specs/2026-10-08-team-display-confirm-pack.md` (never answered — the user stated the requirements directly instead); `docs/pages/team-groups-mock.html` (hand-drawn, replaced by the SPA prototype).
 
 **Visual reference:** the SPA prototype on branch `worktree-team-ui` at `f61748aa` (`spa/proto-team.html`, `spa/src/proto/team/*`, real components in `spa/src/components/team/*`). Every value in §5 is that prototype's default after 重設. Where this text and the prototype disagree, this text wins and the prototype is fixed.
@@ -38,17 +40,17 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 
 **Floating team panel**
 - R15 Hangs from the top of the content area; lists lead + members; shown while the active tab is any tab of the group (lead or member); the active tab's row is marked active.
-- R16 Each row: tab title, model, context use, light + state, how many subagents it is running; clicking a row opens / switches to that tab.
+- R16 Each row: tab title, model, context use, light + state, how many subagents it is running; clicking a row opens / switches to that tab. *Amended (workbook §10.1): where the host has the workbook, clicking a row opens that seat's workbook and the row's bot icon opens / switches to the tab (§4.4).*
 - R17 Expanded by default when a lead is created; expanded / one-line is remembered **per team, on this device only**.
 - R18 One-line mode: one cell per person (light, model icon, context ring) + the team name.
-- R19 "Current task" (Haiku summary) is **not** in scope — moved to the separate "session workbook" idea.
+- R19 *(replaced 2026-10-09 by workbook §10.1)* Full-mode rows carry 「正在做的任務」: the first sentence of the conversation's latest workbook `status`; no workbook → no line (§4.4).
 
 **Prototype rounds (2026-10-09)**
 - P1 Model icon shapes: ◆ Opus, ● Sonnet, ▲ Haiku, ★ Fable (may be tuned later).
 - P2 Closing the lead's tab closes the group's tabs; every session keeps running; reopening the lead brings the group back with the members unopened.
-- P3 The panel cannot be closed (one line is the minimum).
+- P3 The panel cannot be closed (one line is the minimum). *Amended (workbook §10.1): this holds for the team view; a workbook opened from a tab's 「工作簿」 toggle closes with that toggle (§4.4).*
 - P4 Left: the hang-under mark is not a left border line; beads hang from the lead's **bot icon**; with several rows each row has its own tick at the same x.
-- P5 Panel = a sidebar-like list, top to bottom, not a table; layout "C": line 1 subagent dots → bot → host chip → title; line 2 model / context; active row styled like the sidebar's active row (no side line); no host name; normal text brightness; no top colour bar; full and one-line have the same width; one-line wraps to a second row when the team is large.
+- P5 Panel = a sidebar-like list, top to bottom, not a table; layout "C": line 1 subagent dots → bot → host chip → title; line 2 model / context; active row styled like the sidebar's active row (no side line); no host name; normal text brightness; no top colour bar; full and one-line have the same width; one-line wraps to a second row when the team is large. *Amended (workbook §10.1): the panel area is resizable and has an expanded mode, so "the same width" now means full and one-line both take the area's current width.*
 - P6 Team name: given with the lead request, editable by the approver, shown at the group's start (Chrome-group style). **Team label** (short, ≤ 10 display width) is on the group; the **name** is in the panel (§4.8).
 - P7 "bot / bot + host icon" for beads is a **user setting**; default **bot + host icon**.
 - P8 Beads use normal colour whether or not the member has a tab (no fading), and **no** "has a tab" mark.
@@ -64,14 +66,15 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - **Tab membership**: `teamOfTab({views, tabId, tabsById, sessionsByHost})` (same file) — decided from the tab's own panes; the primary pane's team wins.
 - **Name / label**: `TeamRoster.team_name` (parsed today), `TeamRoster.team_label` (parsed by the team-label line's TL-2, `docs/specs/2026-10-09-team-label-spec.md` D-L10; `""` when absent). This spec adds both to `TeamView` (`name`, `label`).
 - **Per-seat readings**: `RosterSession.model`, `.effort`, `.context{used_percentage, window, model_id, effort}`; lights, unread and subagents from `useAgentStore` keyed by `(hostId, tmux session code)` — the code is the session list entry whose `name` equals `RosterSession.tmux_session` (the same match `shownSessions` makes).
-- **Device-local UI state** (new, persisted on this device, never synced): member order per team, collapse per team, panel mode per team, the ghost row's workspace per team, the bead setting (§4.9). Entries of a team are pruned when a roster frame from its connected host no longer lists it (the team ended) or when its host is deleted — never on a disconnect, an endpoint change or an App reload.
+- **Device-local UI state** (new, persisted on this device, never synced): member order per team, collapse per team, panel mode per team, the ghost row's workspace per team, the bead setting (§4.9). Entries of a team are pruned when a roster frame from its connected host no longer lists it (the team ended) or when its host is deleted — never on a disconnect, an endpoint change or an App reload. *Amended (workbook §10.1):* also the panel area's width and expanded flag (one pair for the area), the workbook drilled into per team (§4.4; pruned with the team's other entries and by the back control), and the 「工作簿」 toggle per tab (pruned when the tab closes).
+- **Workbook readings** *(amended)*: the latest `status` per conversation and the entries, from the workbook data layer (workbook plan WA-1, `useWorkbookStore`, host events `workbook.entry` / `workbook.status`); present only on a host whose `/api/info` lists `workbook.v1`.
 - **Mod read (new, §4.10)**: `GET /mod/v1/team?session_id=<sid>` on the mod socket → `{role: "lead" | "member" | "none", members: <active member count>}`.
 
 ## 4. Behaviour
 
 ### 4.1 Membership and colour
 - A tab belongs to a team iff `teamOfTab` says so. Role = that result's role.
-- Colour = `TEAM_COLORS[colorIndex]` — eight colours away from the host blue and the four light colours (`#a78bfa #2dd4bf #f472b6 #fb923c #e879f9 #a3a3ff #5eead4 #fda4af`). The label capsule, the shadow, the wash, the tick's team accents and the panel accents use it.
+- Colour = `TEAM_COLORS[colorIndex]` — eight colours away from the host blue and the four light colours (`#a78bfa #2dd4bf #f472b6 #fb923c #e879f9 #a3a3ff #5eead4 #fda4af`). The label capsules (top bar and left list), the shadow, the wash and the panel accents use it. The left list's tick does not (§5, muted; *amended at the TI-3 screenshot gate*).
 - A team with no open tab and a closed lead tab still exists in the sidebar as a ghost row (§4.6) and in no other surface.
 
 ### 4.2 Top tab bar group
@@ -86,21 +89,27 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 
 ### 4.3 Left tab list (tab position left or both)
 - The lead's row is today's row. Member tabs are **not** listed as rows; they are beads (R1).
+- **Label capsule** *(amended at the TI-3 screenshot gate, as in the prototype)*: the team's label capsule (§4.8, the top bar's component) sits above the lead's row; clicking it toggles the shared collapse; tooltip "<name> (<label>)"; on a ghost row it is faded like the row.
 - **Beads**: one row of beads under the lead row, team order, wrapping to more rows; bead = bot icon (agent type icon) with its light dot, plus the host icon when the setting says so (P7); unread overlays as today; tooltip = the member's title. No opened/unopened difference (P8).
 - **Tick** (P4, P10): one stem from just under the lead's bot icon, starting at the lead block's lower edge; a horizontal tick per bead row; the last row turns with a 3 px radius; 1 px line in the muted text colour at 70 %.
 - **Click** a bead: R3 (open into the group / switch), R10 (expand if collapsed).
 - **Drag** beads to reorder (R4, R5): within the row(s) of that lead; outside snaps back.
-- **Collapse** (P9): collapsed = a members icon followed by one main light dot per member, on the line under the lead; clicking that line expands; clicking the tick or blank bead area collapses. Shared state with the top group.
+- **Collapse** (P9): collapsed = a members icon followed by one main light dot per member, on the line under the lead, on a rounded plate as wide as the row (*amended, as in the prototype*); clicking that line expands; clicking the tick or blank bead area collapses. Shared state with the top group.
 - A member whose lead has no tab: shown as beads under the ghost lead row (§4.6).
 
-### 4.4 Floating team panel
-- Shown while the **active tab** is a tab of a team (R15), anchored at the top of the content area, above the pane, never covering the tab bar; one panel (the active tab's team).
-- **Full mode** (P5): header = team colour accent + team **name** (§4.8) + member count + a control to switch to one-line; rows top to bottom: lead (fixed first), then members in team order; row line 1 = subagent dots → bot icon (light) → host chip → title; line 2 = model icon + model name, effort, context (ring + percent). Active row (the active tab's seat) styled as the sidebar's active row. Members draggable (R5); the lead is not.
-- **One-line mode** (R18): one cell per person — bot + light, context ring around the model shape (P1) — then the team name; wraps to a second row when it does not fit; same width as full mode (P5).
-- **Click** a row / cell: R3 + R10.
-- **Mode memory** (R17): per team key, device-local; a team not seen before starts in full mode. No close control (P3).
+### 4.4 Floating team panel *(amended: one panel area shared with the workbook, workbook §10.1)*
+- **Panel area**: one area anchored at the top of the content area, above the pane, never covering the tab bar. It shows a **team view** (below) or a **workbook view** (workbook spec §10.1). Its width is set by dragging its edge (clamped; the bounds are in the plan) and an **expanded** mode, toggled from the area's header, takes most of the content area; width and expanded are one device-local pair for the whole area and survive tab switches and reloads.
+- **What the area shows** for the active tab, first match wins:
+  1. the tab's 「工作簿」 toggle is on → that tab's conversation's workbook;
+  2. the tab is a tab of a team (R15) → that team's team view, or the workbook drilled into from it (remembered per team);
+  3. otherwise nothing.
+  Switching tabs never clears either memory, so switching away and back shows the same thing (tab-hosted rule).
+- **Full mode** (P5): header = team colour accent + team **name** (§4.8) + member count + a control to switch to one-line; rows top to bottom: lead (fixed first), then members in team order; row line 1 = subagent dots → bot icon (light) → host chip → title; line 2 = model icon + model name, effort, context (ring + percent); *amended (R19)* line 3 = 「正在做的任務」, the first sentence of the conversation's latest `status`, one line with an ellipsis, the whole `status` on hover; no line when the conversation has no workbook or its host lacks `workbook.v1`. Active row (the active tab's seat) styled as the sidebar's active row. Members draggable (R5); the lead is not.
+- **One-line mode** (R18): one cell per person — bot + light, context ring around the model shape (P1) — then the team name; wraps to a second row when it does not fit; takes the area's current width, like full mode (P5).
+- **Click** *(amended)*: a full-mode row on a host with `workbook.v1` → that seat's workbook in the same area, with a back control to the team view; the row's bot icon → R3 + R10 (open / switch the tab). A row on a host without `workbook.v1`, and every one-line cell → R3 + R10 as before.
+- **Ended members** (workbook §10.1: an ended member still opens its workbook): a seat that leaves the team's roster (released, killed, gone — R6) is remembered on this device per team (newest first, at most 20, forgotten with the team's other entries, §3). Full mode shows them as a collapsed 「已結束 (N)」 group at the bottom of the team view; clicking one opens its workbook (back returns). A drilled-in seat that ends keeps its workbook view until back. A team that ended entirely has no panel, so its members' workbooks have no way in in v1 (no standalone page, workbook spec §10). *(88's ruling, shown to the user.)*
+- **Mode memory** (R17): per team key, device-local; a team not seen before starts in full mode. The team view has no close control (P3); a workbook opened by a tab's toggle closes with that toggle, which returns a team tab to its team view.
 - Values missing from the roster (a lead's model, an unknown context) show as "—", never as 0.
-- Not in v1: the "current task" line (R19).
 
 ### 4.5 Opening and closing tabs
 - **Open a member** (bead, panel, session list — R3, R10, R11): if it has a tab → activate it; else open a tab for its tmux session inserted after the group's last tab in the **lead tab's workspace**; if the lead has no tab, the lead's tab is opened first (in the ghost row's workspace, else the active one) and the member after it.
@@ -128,7 +137,7 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - Mod rules M-U1-2 / M-U1-3 / M-U1-5 hold: the hook lives in `events.js` (the interface line's file, which already owns the socket client and a `ui.render{component:'ToolUse'}` hook) and registers `ui.render` **with** the `{component: 'SessionMode'}` matcher; `register.js` is not touched. The daemon read is a small addition to the mod socket (the team module answers it; agreed with purdex-1f, whose module it reads).
 
 ### 4.11 Not in v1
-- Current task line (R19); renaming a team after approval (team-name D-N5); syncing order / collapse / panel mode across devices; dragging a whole group; light-theme polish (the user does not use it); merging dots across panes (spec U1 §7 limit).
+- Renaming a team after approval (team-name D-N5); syncing order / collapse / panel mode across devices; dragging a whole group; light-theme polish (the user does not use it); merging dots across panes (spec U1 §7 limit).
 
 ## 5. Final visual values (prototype defaults at `f61748aa`)
 
@@ -139,11 +148,11 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 | Shadow scope | every tab of the group (lead included) |
 | Wash | dark `color-mix(in oklab, <team> 6%, transparent)`, light 8 % |
 | Separators | hidden inside the group and after its last tab |
-| Label | team-colour capsule, dark text; `+N` when collapsed |
-| Tick | rail, 3 px corner, from the block's lower edge, muted text colour at 70 %, 1 px |
+| Label | team-colour capsule, dark text; `+N` when collapsed; on the top bar and above the lead in the left list |
+| Tick | rail, 3 px corner, from the block's lower edge, muted text colour at 70 %, 1 px; no team colour (the capsule carries it) |
 | Beads | bot + host icon (setting), no open mark |
-| Sidebar collapse | members icon + one light per member |
-| Panel | full by default, layout C, same width both modes |
+| Sidebar collapse | members icon + one light per member, on a rounded plate (prototype value) |
+| Panel | full by default, layout C; both modes take the resizable area's current width *(amended)* |
 | Model icons | ◆ Opus ● Sonnet ▲ Haiku ★ Fable |
 
 ## 6. Coordination
@@ -151,3 +160,4 @@ Numbered as recorded (memory `kickoff_team_interface`); later rounds override ea
 - Data: team-label TL-2 (1f line) parses `team_label` before the interface reads it; the interface PR that needs it waits for TL-2 or reads `""`.
 - U1-3c (lights over all panes, corner symbol) touches `SortableTab`, `TabIcon`, `useTabDisplay`, `renderInlineTabIcon`, `InlineTab`; the interface PRs that touch the same files start after U1-3 merges.
 - The mod line (§4.10) adds a read to the mod socket answered by the team module (purdex-1f's) → agreed with purdex-1f before its PR; `register.js` is not touched.
+- *Amended:* the panel area (§4.4) is built as workbook plan WA-2a in place of TI-4, after WA-1 (the workbook data layer); without a `workbook.v1` host it behaves as the team panel alone.

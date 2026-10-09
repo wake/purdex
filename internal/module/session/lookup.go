@@ -72,3 +72,31 @@ func (m *SessionModule) invalidateNameCache() {
 	m.nameCacheAt = time.Time{}
 	m.nameCacheMu.Unlock()
 }
+
+// SessionRef is one tmux session as SessionsByName reports it.
+type SessionRef struct {
+	Code    string
+	Created int64 // tmux #{session_created}, unix seconds; 0 = unknown
+}
+
+// SessionsByName is every tmux session's code and creation time, keyed by name, from ONE `tmux list-sessions` call bounded
+// by ctx (and by listReadTimeout). It is not cached and takes no lock, so a caller with a short budget (the push sender)
+// can never wait on someone else's refresh. A name is the key, so a session killed and recreated under the same name shows
+// the new session's code and creation time: callers that must tell the two apart compare Created.
+func (m *SessionModule) SessionsByName(ctx context.Context) (map[string]SessionRef, error) {
+	ctx, cancel := context.WithTimeout(ctx, m.readTimeout())
+	defer cancel()
+	sessions, err := m.tmux.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]SessionRef, len(sessions))
+	for _, s := range sessions {
+		code, err := EncodeSessionID(s.ID)
+		if err != nil {
+			continue
+		}
+		out[s.Name] = SessionRef{Code: code, Created: s.Created}
+	}
+	return out, nil
+}

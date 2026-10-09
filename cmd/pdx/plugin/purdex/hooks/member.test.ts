@@ -26,6 +26,7 @@ type World = {
   sessionId: string
   switchTo?: string
   failComplete?: boolean
+  skipCompact?: boolean
   pdx: (argv: string[]) => R | Promise<R>
 }
 
@@ -67,7 +68,7 @@ function memberWorld(on: any, role: string, pdx?: (argv: string[]) => R | undefi
   on('classic.SessionStart', async () => { if (f.switchTo) { f.sessionId = f.switchTo; f.switchTo = undefined } return {} })
   on('prompt.submit', async (_$: any, e: any) => { f.submits.push(e); f.order.push('submit'); return { text: e.text, context: e.context } })
   on('command.run', async (_$: any, e: any) => { f.commands.push(e.command); f.order.push('command ' + e.command); return { text: 'ran ' + e.command } })
-  on('session.compact', async (_$: any, e: any) => ({ messages: e.messages }))
+  on('session.compact', async (_$: any, e: any) => (f.skipCompact ? { skip: 'another hook skipped it' } : { messages: e.messages }))
   return f
 }
 
@@ -339,4 +340,54 @@ test('a turn that starts while the lock call is out is unlocked and the write wa
   expect(calls(f, 'lock').length).toBe(2) // locked afresh
   expect(f.submits.length).toBe(1)
   expect(f.order.indexOf('submit')).toBeGreaterThan(f.order.lastIndexOf('pdx relay lock ' + OPID + ' --session sid-old'))
+})
+
+// ---- P7-2: the mod reports every compaction it does not intercept ----
+const MSGS = [{ role: 'user' as const, text: 'hi', toolUses: [] }]
+const compactOf = ($: any, trigger: string) => $.session.compact({ trigger, messages: MSGS })
+
+for (const role of ['none', 'member', 'lead']) {
+  test(`an auto compaction in idle reports once from a timer, whatever the role (${role})`, async ($, on) => {
+    const f = memberWorld(on, role)
+    await start($, f)
+    expect(await compactOf($, 'auto')).toEqual({ messages: MSGS })
+    expect(calls(f, 'compacted')).toEqual([]) // from a timer, not inside the hook
+    await f.clock.advance(10)
+    expect(calls(f, 'compacted')).toEqual(['relay compacted --session sid-old --trigger auto'])
+  })
+}
+
+test('a manual compaction is reported too (the daemon decides); a precompute is not', async ($, on) => {
+  const f = memberWorld(on, 'member')
+  await start($, f)
+  await compactOf($, 'manual')
+  await compactOf($, 'precompute')
+  await f.clock.advance(10)
+  expect(calls(f, 'compacted')).toEqual(['relay compacted --session sid-old --trigger manual'])
+})
+
+// Mutation gate: await the report inside the hook → the compaction is still pending while the report is out → red.
+test('the compaction never waits for the report', async ($, on) => {
+  let release: (r: R) => void = () => {}
+  const gate = new Promise<R>((r) => { release = r })
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'compacted' ? (gate as any) : undefined))
+  await start($, f)
+  let done = false
+  const p = compactOf($, 'auto').then((r: any) => { done = true; return r })
+  await f.clock.advance(10)
+  expect(done).toBe(true) // the report is out and unanswered
+  expect(calls(f, 'compacted').length).toBe(1)
+  release({ exitCode: 0, stdout: '{"noticed":true}' })
+  expect(await p).toEqual({ messages: MSGS })
+})
+
+// R2 (codex attack): a compaction that a hook beneath skipped did not happen: nothing is reported.
+// Mutation gate: report before next(e) → red.
+test('a compaction skipped beneath the mod is not reported', async ($, on) => {
+  const f = memberWorld(on, 'member')
+  await start($, f)
+  f.skipCompact = true
+  await compactOf($, 'auto')
+  await f.clock.advance(50)
+  expect(calls(f, 'compacted')).toEqual([])
 })

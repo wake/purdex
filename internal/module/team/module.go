@@ -118,9 +118,14 @@ type Module struct {
 	// stopCtx is cancelled first in Stop: long-polls return, the sweeper
 	// exits and POST create answers 503 not_ready. The DB stays open until
 	// Close (PD6): in-flight handlers still read it during srv.Shutdown.
-	stopCtx    context.Context
-	stopCancel context.CancelFunc
-	sweepWG    sync.WaitGroup
+	stopCtx context.Context
+	// cmdLimit is the per-lead-host admission of the cross-host commands route (spent before the body is decoded).
+	cmdLimit *peersmod.HostLimiter
+	// afterTargetResolved, when set, runs in the commands route between the target's resolution and the apply (test
+	// seam for a consent revoked meanwhile). nil in production.
+	afterTargetResolved func()
+	stopCancel          context.CancelFunc
+	sweepWG             sync.WaitGroup
 	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
 	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
 	noticeMu sync.Mutex
@@ -339,6 +344,7 @@ func (m *Module) Dependencies() []string { return []string{"agent", "peers", "ho
 // attribute or persist a single request.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	m.cmdLimit = newCommandLimiter()
 	svc, ok := c.Registry.Get(peersmod.OriginResolverKey)
 	if !ok {
 		return fmt.Errorf("team: service %q not registered", peersmod.OriginResolverKey)
@@ -420,6 +426,7 @@ func (m *Module) Init(c *core.Core) error {
 // RegisterRoutes mounts the /api/team/* routes, the hook decision route,
 // the relay routes and the 分流 routes (Go method patterns).
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST "+CommandsRoute, m.handleTeamCommand) // cross-host team commands (X2b); a host principal's, not the admin's
 	mux.HandleFunc("POST /api/team/approvals", m.handleCreate)
 	mux.HandleFunc("GET /api/team/approvals", m.handleList)
 	mux.HandleFunc("GET /api/team/approvals/{id}", m.handleGet)
@@ -456,7 +463,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
 	mux.HandleFunc("POST /api/relay/ops/{id}/claim", m.handleRelayClaim)
 	mux.HandleFunc("POST /api/relay/ops/{id}/seen", m.handleRelaySeen)
-	mux.HandleFunc("GET /api/relay/prompts", m.handleRelayPrompts) // P9a, spec §8.8
+	mux.HandleFunc("POST /api/relay/compacted", m.handleRelayCompacted) // P7-2
+	mux.HandleFunc("GET /api/relay/prompts", m.handleRelayPrompts)      // P9a, spec §8.8
 	// P8a 分流 routes (spec §6.6); TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/ask/begin", m.handleAskBegin)
 	mux.HandleFunc("GET /api/ask/wait/{id}", m.handleAskWait)

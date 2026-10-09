@@ -33,6 +33,7 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 	"       pdx relay prompts [--config <path>]\n" +
 	"       pdx relay lock|unlock <op> --session <sid> [--config <path>]\n" +
 	"       pdx relay claim|seen <op> --session <sid> [--config <path>]\n" +
+	"       pdx relay compacted --session <sid> --trigger auto|manual [--config <path>]\n" +
 	"       pdx relay <ref|address> [--wait <dur>] [--config <path>]"
 
 const (
@@ -120,6 +121,8 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		return runRelayClaim(ctx, args[1:], stdout, stderr, clientOpts)
 	case "seen":
 		return runRelaySeen(ctx, args[1:], stdout, stderr, clientOpts)
+	case "compacted":
+		return runRelayCompacted(ctx, args[1:], stdout, stderr, clientOpts)
 	case "lock":
 		return runRelayLock(args[1:], stdout, stderr, true)
 	case "unlock":
@@ -131,6 +134,37 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		fmt.Fprintf(stderr, "pdx relay: unknown subcommand %q\n%s\n", args[0], relayUsage)
 		return ExitUsage
 	}
+}
+
+// runRelayCompacted is `pdx relay compacted --session <sid> --trigger auto|manual` (P7-2): the mod reports a compaction it
+// did not intercept; the daemon decides whether the lead is told. Not retried (Idempotent is left off): a retry could tell
+// the lead twice. stdout is the daemon's {"noticed":bool}.
+func runRelayCompacted(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
+	fs := flag.NewFlagSet("pdx relay compacted", flag.ContinueOnError)
+	var req team.RelayCompactedRequest
+	fs.StringVar(&req.SessionID, "session", "", "")
+	fs.StringVar(&req.Trigger, "trigger", "", "")
+	cfgPath, ok := relayFlags(fs, args, stderr)
+	if !ok {
+		return ExitUsage
+	}
+	switch {
+	case fs.NArg() != 0:
+		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
+	case strings.TrimSpace(req.SessionID) == "":
+		return relayUsageErr(stderr, "--session 不能為空")
+	case req.Trigger != "auto" && req.Trigger != "manual":
+		return relayUsageErr(stderr, "--trigger must be auto or manual")
+	}
+	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
+	if code != ExitOK {
+		return code
+	}
+	var res team.RelayCompactedResponse
+	if _, err := client.Do(ctx, http.MethodPost, "/api/relay/compacted", req, &res); err != nil {
+		return relayReportErr(err, stdout, stderr)
+	}
+	return relayPrintJSON(stdout, stderr, res)
 }
 
 func relayUsageErr(stderr io.Writer, msg string) int {

@@ -55,6 +55,12 @@ func (s *Store) DisarmNotice(spawnOp, sessionID string) (bool, error) {
 	return oneRow(res, err, "disarm notice "+spawnOp)
 }
 
+// DisarmNoticeForce disarms the row whatever its flag was (a compaction's notice stands in for the 70% one); ok says a row changed.
+func (s *Store) DisarmNoticeForce(spawnOp, sessionID string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE team_members SET notice_armed = 0 WHERE spawn_op = ? AND session_id = ? AND state = 'active' AND notice_armed = 1`, spawnOp, sessionID)
+	return oneRow(res, err, "disarm notice "+spawnOp)
+}
+
 // noticeUsage is the check: called on the liveness tick, after the readings are stored.
 func (m *Module) noticeUsage() {
 	if m.usage == nil || m.status == nil || m.sender == nil || m.stopping() {
@@ -135,13 +141,19 @@ func (m *Module) sendUsageNotice(mr memberRow, pct int) bool {
 		title = mr.TmuxSession
 	}
 	ref := strings.TrimPrefix(mr.Ref, "_")
-	text := fmt.Sprintf(UsageNoticeFmt, address, ref, title, pct, ref)
+	return m.noticeToLead(mr, t, fmt.Sprintf(UsageNoticeFmt, address, ref, title, pct, ref), "usage notice")
+}
+
+// noticeToLead sends text to the team's lead at its live address, from the member's inbox (else the lead's own); false
+// when it did not go.
+func (m *Module) noticeToLead(mr memberRow, t team.Team, text, what string) bool {
+	alias, _ := m.selfHost()
 	inbox, ok, err := m.origins.InboxOf(mr.SessionID)
 	if err != nil || !ok {
 		inbox, ok, err = m.origins.InboxOf(t.LeadSessionID)
 	}
 	if err != nil || !ok {
-		m.logf("[team] usage notice (member %s): no live inbox to send from (%v)", mr.Ref, err)
+		m.logf("[team] %s (member %s): no live inbox to send from (%v)", what, mr.Ref, err)
 		return false
 	}
 	to := alias + "/" + ipeers.RefID(t.LeadSessionID)
@@ -151,7 +163,7 @@ func (m *Module) sendUsageNotice(mr memberRow, pct int) bool {
 	ctx, cancel := context.WithTimeout(m.stopCtx, noticeSendTimeout)
 	defer cancel()
 	if _, err := m.sender.Send(ctx, ipeers.SendRequest{To: to, Text: text, OriginInbox: inbox}); err != nil {
-		m.logf("[team] usage notice (member %s) to %s: %v", mr.Ref, to, err)
+		m.logf("[team] %s (member %s) to %s: %v", what, mr.Ref, to, err)
 		return false
 	}
 	return true

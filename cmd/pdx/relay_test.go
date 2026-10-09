@@ -93,6 +93,8 @@ func (f *fakeRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ap := f.final
 		ap.ID = id
 		_ = json.NewEncoder(w).Encode(ap)
+	case r.URL.Path == "/api/relay/compacted":
+		_ = json.NewEncoder(w).Encode(team.RelayCompactedResponse{Noticed: strings.Contains(b.String(), `"auto"`)})
 	case r.URL.Path == "/api/relay/self":
 		_ = json.NewEncoder(w).Encode(team.RelaySelfResponse{SelfRelay: "paused", HostSwitch: true})
 	case strings.HasSuffix(r.URL.Path, "/report"):
@@ -145,6 +147,9 @@ func TestRelayCmd_UsageErrorsExit2BeforeAnyRequest(t *testing.T) {
 		// claimed is not a reportable state (P5a-2b codex R1): a self op is
 		// claimed by its approval's close, a member op by P6's claim route.
 		{"report", "op", "claimed"},
+		// P7-2: compacted needs both flags and a known trigger
+		{"compacted"}, {"compacted", "--session", "s"}, {"compacted", "--trigger", "auto"}, {"compacted", "--session", "s", "--trigger", "sideways"},
+		{"compacted", "--session", "s", "--trigger", "auto", "extra"},
 	} {
 		code, _, stderr := driveRelay(t, context.Background(), d, args...)
 		if code != ExitUsage || !strings.Contains(stderr, "usage: pdx relay") {
@@ -488,5 +493,28 @@ func TestRelayCmd_WaitBoundReadsTheFinalState(t *testing.T) {
 	code, stdout, _ = driveRelayWith(t, context.Background(), open, nil, "wait", "req-1", "--wait", "300ms")
 	if err := json.Unmarshal([]byte(stdout), &ap); err != nil || code != ExitOK || ap.State != team.StateOpen || ap.ID != "req-1" {
 		t.Fatalf("still open at the bound: code=%d stdout=%q err=%v", code, stdout, err)
+	}
+}
+
+// P7-2: the compacted call posts the session and the trigger and prints the daemon's answer.
+func TestRelayCmd_Compacted(t *testing.T) {
+	d := &fakeRelayDaemon{}
+	code, stdout, stderr := driveRelay(t, context.Background(), d, "compacted", "--session", "sid-1", "--trigger", "auto")
+	if code != ExitOK || strings.TrimSpace(stdout) != `{"noticed":true}` {
+		t.Fatalf("auto: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, _ = driveRelay(t, context.Background(), d, "compacted", "--session", "sid-1", "--trigger", "manual")
+	if code != ExitOK || strings.TrimSpace(stdout) != `{"noticed":false}` {
+		t.Fatalf("manual: code=%d stdout=%q", code, stdout)
+	}
+	paths, bodies := d.snapshot()
+	var sent team.RelayCompactedRequest
+	for i, p := range paths {
+		if strings.HasSuffix(p, "/api/relay/compacted") && sent.Trigger == "" {
+			_ = json.Unmarshal([]byte(bodies[i]), &sent)
+		}
+	}
+	if sent.SessionID != "sid-1" || sent.Trigger != "auto" {
+		t.Fatalf("sent = %+v", sent)
 	}
 }

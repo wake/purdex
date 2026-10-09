@@ -1,5 +1,46 @@
 # Changelog
 
+## [1.0.0-alpha.660] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。
+
+### Changed：核准推播可以直接打開對應的 session — #2256（介面線）
+
+- 核准類推播現在帶上該 session 的代碼與「目前還在等哪幾張核准」的清單，讓 iOS 點推播時能直接打開那個 session，並在核准被別處處理掉時更新通知（iOS 端隨之後的版本）。
+- daemon 讀 tmux session 清單時多讀一個「建立時間」欄位；沒有 UTF-8 語系時的防護與以前相同。
+
+### Added：跨主機 team：被收進 team 的那台記得身分 — X2a（#2257，A 線）
+
+- 被別台主機收進 team 的 session 會被記下來，所有「一個 session 只能有一種身分」的檢查都會算進去（例如它不能當 lead、不能被本機再收一次、自己接力會關閉）。目前還沒有路由能建立這種紀錄，使用上沒有變化。
+
+## [1.0.0-alpha.659] - 2026-10-09
+
+> 改了 mod 與 pdx-team skill：**要部署 daemon，並重跑 `pdx setup`**；SPA、Electron 不必更新。
+
+### Added：member 被自動壓縮時通知 lead — P7-2（#2258，A 線）
+
+- 同一台主機上的 member 被 Claude Code 自動壓縮對話時，lead 會收到 `[pdx team] <ref> 已自動壓縮（lead 未在 70% 時接力）`，表示錯過了在 70% 幫它接力的時機。手動 `/compact` 不通知。
+- 收到這則之後，70% 的提醒會先停用，等接力完成或用量降下來才恢復，避免拿壓縮前的舊讀數再提醒一次。
+- pdx-team skill 裡兩則通知的文字改成與實際送出的一字不差。
+
+## [1.0.0-alpha.658] - 2026-10-09
+
+> 動到 daemon、`pdx` 指令與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Added：member 用到 70% 且閒置時通知 lead — P7-1（#2253，A 線）
+
+- 同一台主機上的 member，context 用到 70% 而且停下來時，lead 會收到一則通知：`[pdx team] member <地址> [<ref>]「<名稱>」已用 N%，目前閒置。要接力請執行：pdx relay _<ref>`。要不要接力由 lead 決定，daemon 不會自己動手。
+- 每個 member 只通知一次；接力完成或用量降回門檻以下才會再提醒。正在接力的 member 不會被提醒。
+
+### Added：允許別台主機把這台的 session 收進 team — X1b（#2252，A 線）
+
+- 新指令 `pdx peers host allow-team <別名> on|off [--root <目錄>]…`：決定某台主機能不能把這台的 session 收進它的 team，以及它能在哪些目錄開 member（沒設目錄就不能開）。主機設定頁之後也會有這個開關。
+- 只有驗證過身分的主機才能打開；目前跨主機 team 還沒有任何動作能用，這只是先把同意的設定存起來。
+
+### Changed：上方分頁的 team 群組外觀 — TI-2b（#2250，介面線）
+
+- 上方分頁列裡，同一個 team 的分頁會用標籤膠囊、陰影與底色框成一組，可以收合，也能在組內拖曳排序。
+
 ## [1.0.0-alpha.657] - 2026-10-09
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。

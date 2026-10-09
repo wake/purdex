@@ -550,7 +550,7 @@ func TestRealExecutorListSessions_DeadlineKillsHungRead(t *testing.T) {
 	assertChildReaped(t, pidFile)
 
 	// The next read against a working tmux succeeds: nothing is left wedged.
-	working := "#!/bin/sh\nprintf '$0\\tdev\\t/tmp\\n'\n"
+	working := "#!/bin/sh\nprintf '$0\\tdev\\t1\\t/tmp\\n'\n"
 	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(working), 0o755); err != nil {
 		t.Fatal(err)
 	}
