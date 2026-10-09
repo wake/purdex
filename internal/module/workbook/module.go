@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"path/filepath"
 	"sync"
 
@@ -26,6 +25,9 @@ type Module struct {
 	ready   bool
 	initErr string
 	prompts PromptFiles // where Start wrote the prompts
+
+	// broadcast sends a host event (type, JSON-string value); the core's event hub, replaced in tests.
+	broadcast func(eventType, value string)
 }
 
 func New() *Module { return &Module{} }
@@ -52,6 +54,13 @@ func (m *Module) Init(c *core.Core) error {
 		return nil
 	}
 	m.store, m.ready, m.initErr = st, true, ""
+	// The host events follow the store's own transitions (no session: like backup:done and the profile events).
+	m.broadcast = func(eventType, value string) {
+		if m.core != nil && m.core.Events != nil {
+			m.core.Events.Broadcast("", eventType, value)
+		}
+	}
+	st.SetObserver(m.announce)
 	return nil
 }
 
@@ -71,9 +80,6 @@ func (m *Module) live() *Store {
 	}
 	return m.store
 }
-
-// RegisterRoutes: the API arrives with WB-2.
-func (m *Module) RegisterRoutes(*http.ServeMux) {}
 
 // Start turns the entries a crash left pending into failed:stopped (plan D9); no events (clients refetch on reconnect).
 func (m *Module) Start(context.Context) error {
