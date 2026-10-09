@@ -212,3 +212,65 @@ func TestRemote_UnpairingLeavesAnEndedTeamsRowsAlone(t *testing.T) {
 		t.Fatalf("row of an ended team = %s, want unchanged", st)
 	}
 }
+
+// codex R1/attack: a kill answer is killed or gone, nothing else is a result. Mutation gate: default to killed → red.
+func TestRemote_AnUnknownKillAnswerIsNotSettled(t *testing.T) {
+	for name, res := range map[string]peersmod.CallResult{
+		"unknown state": answerOf("k1", map[string]string{"state": "maybe"}),
+		"no outcome":    {Class: peersmod.ClassDone, Body: json.RawMessage(`{"id":"k1","host_id":"hostM"}`)},
+	} {
+		f, _ := cmdFixture(t)
+		f.remoteRow("op-k", "hostM", "mk1", rowKilling)
+		f.enqueue(f.cmd("k1", CmdKill, "hostM", "mk1"))
+		if _, err := f.m.store.SettleCommand("k1", res, 1, remoteOutcomes{m: f.m}); err == nil {
+			t.Fatalf("%s: settled", name)
+		}
+		if st, _ := f.memberRowState("op-k"); st != rowKilling || f.cmdState("k1").State != cmdPending {
+			t.Fatalf("%s: row=%s command=%s", name, st, f.cmdState("k1").State)
+		}
+	}
+}
+
+// A remote session id equal to a LOCAL active session must not wedge the settle forever (the unique index would roll it
+// back each time): the membership fails session_conflict.
+func TestRemote_ASessionIdAlreadyActiveHereFailsTheMembership(t *testing.T) {
+	f, _ := cmdFixture(t)
+	seedMember(t, f.m.store, "op-local", uid(1), "sid-same", f.clock.Load())
+	f.remoteRow("op-j", "hostM", "mk1", rowJoining)
+	f.settleRemote(CmdAdopt, "a1", "mk1", answerOf("a1", applied("sid-same", "_dup123")))
+	if st, why := f.memberRowState("op-j"); st != rowFailed || why != "session_conflict" {
+		t.Fatalf("row = %s/%s, want failed/session_conflict", st, why)
+	}
+	if f.cmdState("a1").State != cmdDone {
+		t.Fatal("the command stayed pending: it would be sent again forever")
+	}
+}
+
+// An answer is bound to its command's team: the same member key in another team's row is not touched.
+func TestRemote_AnOutcomeIsBoundToItsCommandsTeam(t *testing.T) {
+	f, _ := cmdFixture(t)
+	f.remoteRow("op-j", "hostM", "mk1", rowReleasing)
+	c := f.cmd("r1", CmdRelease, "hostM", "mk1")
+	body, _ := json.Marshal(map[string]any{"id": "r1", "kind": CmdRelease, "to_host_id": "hostM", "team_id": "other-team", "mk": "mk1"})
+	c.TeamID, c.Body = "other-team", body
+	f.enqueue(c)
+	if _, err := f.m.store.SettleCommand("r1", answerOf("r1", map[string]string{"state": "ok"}), 1, remoteOutcomes{m: f.m}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := f.memberRowState("op-j"); st != rowReleasing {
+		t.Fatalf("another team's command moved the row to %s", st)
+	}
+}
+
+// Seats: a running spawn op whose member row is already in flight counts once.
+func TestRemote_ARunningSpawnWithAnInFlightRowIsOneSeat(t *testing.T) {
+	f, _ := cmdFixture(t)
+	if _, err := f.m.store.db.Exec(`INSERT INTO spawn_ops (id, team_id, host_id, request_hash, origin_session_id, cwd, tmux_name, step, state, created_at, updated_at)
+		VALUES ('op-s', ?, 'h:1', 'x', 'sid-1', '/w', 'tm', 'launch', 'running', 1, 1)`, uid(1)); err != nil {
+		t.Skipf("spawn_ops insert: %v", err)
+	}
+	f.remoteRow("op-s", "hostM", "mk1", rowReleasing)
+	if n, _ := seatsTaken(f.m.store.db, uid(1), ""); n != 1 {
+		t.Fatalf("seats = %d, want 1", n)
+	}
+}

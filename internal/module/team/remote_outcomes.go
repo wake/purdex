@@ -63,6 +63,13 @@ func (o remoteOutcomes) adoptApplied(tx *sql.Tx, c commandRow, res peersmod.Call
 	if err := json.Unmarshal(res.Body, &ans); err != nil || json.Unmarshal(ans.Outcome, &out) != nil || out.State != "applied" || out.MemberSession == "" || out.Ref == "" {
 		return fmt.Errorf("adopt answer of command %s is not an applied outcome", c.ID)
 	}
+	// A remote session id equal to a LOCAL active session would break team_members_one_active for good (the settle would
+	// roll back and the adopt would be sent again forever): it fails the membership instead.
+	var taken int
+	if err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state = 'active' AND NOT (mk = ? AND host_id = ?)`, out.MemberSession, c.MK, c.HostID).Scan(&taken); err == nil {
+		o.m.logf("[team] adopt %s: session %s is already an active member here; the membership fails session_conflict", c.ID, out.MemberSession)
+		return o.cas(tx, c, `state = ?, end_reason = 'session_conflict', updated_at = ?, ended_at = ?`, []any{rowFailed, now, now}, rowJoining)
+	}
 	return o.cas(tx, c, `state = 'active', session_id = ?, ref = ?, pid = ?, proc_start = ?,
 		title = CASE WHEN ? <> '' THEN ? ELSE title END, cwd = CASE WHEN ? <> '' THEN ? ELSE cwd END,
 		tmux_session = CASE WHEN ? <> '' THEN ? ELSE tmux_session END, updated_at = ?`,
@@ -82,20 +89,20 @@ func (o remoteOutcomes) killAnswer(tx *sql.Tx, c commandRow, res peersmod.CallRe
 	var out struct {
 		State string `json:"state"`
 	}
-	_ = json.Unmarshal(res.Body, &ans)
-	_ = json.Unmarshal(ans.Outcome, &out)
-	to := string(team.MemberKilled)
-	if out.State == "gone" {
-		to = string(team.MemberGone)
+	// only an explicit killed or gone is a result; anything else is a broken or newer peer: nothing is settled and the
+	// command is sent again (a kill is never recorded as done on a guess)
+	if err := json.Unmarshal(res.Body, &ans); err != nil || json.Unmarshal(ans.Outcome, &out) != nil || (out.State != "killed" && out.State != "gone") {
+		return fmt.Errorf("kill answer of command %s is neither killed nor gone", c.ID)
 	}
+	to := out.State
 	return o.cas(tx, c, `state = ?, updated_at = ?, ended_at = ?`, []any{to, now, now}, rowKilling)
 }
 
 // cas moves the command's row from the state `from` with set, while its team is live. No row changed: logged once
 // (rule 5), not an error.
 func (o remoteOutcomes) cas(tx *sql.Tx, c commandRow, set string, args []any, from string) error {
-	args = append(args, c.MK, c.HostID, from)
-	r, err := tx.Exec(`UPDATE team_members SET `+set+` WHERE mk = ? AND host_id = ? AND state = ? AND `+liveTeamOfRow, args...)
+	args = append(args, c.MK, c.HostID, c.TeamID, from)
+	r, err := tx.Exec(`UPDATE team_members SET `+set+` WHERE mk = ? AND host_id = ? AND team_id = ? AND state = ? AND `+liveTeamOfRow, args...)
 	if err != nil {
 		return err
 	}

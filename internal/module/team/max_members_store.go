@@ -63,7 +63,7 @@ func (s *Store) SetMaxMembers(teamID string, max int) (MaxMembersResult, error) 
 // because spawnFinish inserts the member before it moves the op to done, and in that window one seat is both.
 const seatsExpr = `(SELECT COUNT(*) FROM team_members WHERE team_id = TEAM AND state IN ('active', 'joining', 'releasing', 'killing')) +
 	(SELECT COUNT(*) FROM spawn_ops o WHERE o.team_id = TEAM AND o.state = 'running' AND o.id <> EXCEPT
-		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.spawn_op = o.id AND m.state = 'active'))`
+		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.spawn_op = o.id AND m.state IN ('active', 'joining', 'releasing', 'killing')))`
 
 // seatsTakenSQL is the seat count shared by SetMaxMembers, the spawn cap check, the adopt seat check and the roster's
 // in_use. ?1 is the team, ?2 a spawn op id to leave out (the op asking; "" for none).
