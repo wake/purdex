@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 )
 
 // MaxMembersOutcome is what SetMaxMembers did.
@@ -37,9 +36,7 @@ func (s *Store) SetMaxMembers(teamID string, max int) (MaxMembersResult, error) 
 			res.Outcome = MaxNoTeam
 			return nil
 		}
-		if err := conn.QueryRowContext(ctx, `SELECT
-			(SELECT COUNT(*) FROM spawn_ops WHERE team_id = ? AND state = 'running') +
-			(SELECT COUNT(*) FROM team_members WHERE team_id = ? AND state = 'active')`, teamID, teamID).Scan(&res.InUse); err != nil {
+		if err := conn.QueryRowContext(ctx, seatsTakenSQL, teamID, "").Scan(&res.InUse); err != nil {
 			return err
 		}
 		if s.afterMaxMembersCount != nil {
@@ -58,35 +55,35 @@ func (s *Store) SetMaxMembers(teamID string, max int) (MaxMembersResult, error) 
 	return res, nil
 }
 
-// InUseOfTeams is the in_use count (running spawns + active members, as the spawn cap check counts) of each team id;
-// a team with none is absent. One read for the whole roster.
+// seatsTakenSQL is THE seat count, shared by SetMaxMembers, the spawn cap check, the adopt seat check and the roster's
+// in_use. ?1 is the team, ?2 a spawn op id to leave out (the op asking; "" for none). Each active member counts once;
+// a running spawn op counts only while no active member row carries its spawn_op, because spawnFinish inserts the
+// member before it moves the op to done, and in that window one seat is both.
+const seatsTakenSQL = `SELECT
+	(SELECT COUNT(*) FROM team_members WHERE team_id = ?1 AND state = 'active') +
+	(SELECT COUNT(*) FROM spawn_ops o WHERE o.team_id = ?1 AND o.state = 'running' AND o.id <> ?2
+		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.spawn_op = o.id AND m.state = 'active'))`
+
+// seatsTaken is seatsTakenSQL's count of team teamID, leaving out spawn op exceptOp.
+func seatsTaken(q dbtx, teamID, exceptOp string) (int, error) {
+	var n int
+	if err := q.QueryRow(seatsTakenSQL, teamID, exceptOp).Scan(&n); err != nil {
+		return 0, fmt.Errorf("seats taken of team %s: %w", teamID, err)
+	}
+	return n, nil
+}
+
+// InUseOfTeams is the in_use count (seatsTakenSQL) of each team id; a team with none is absent.
 func (s *Store) InUseOfTeams(ids []string) (map[string]int, error) {
 	out := map[string]int{}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	marks := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	args := make([]any, 0, 2*len(ids))
-	for i := 0; i < 2; i++ {
-		for _, id := range ids {
-			args = append(args, id)
+	for _, id := range ids {
+		n, err := seatsTaken(s.db, id, "")
+		if err != nil {
+			return nil, err
+		}
+		if n > 0 {
+			out[id] = n
 		}
 	}
-	rows, err := s.db.Query(`SELECT team_id, COUNT(*) FROM (
-		SELECT team_id FROM spawn_ops WHERE state = 'running' AND team_id IN (`+marks+`)
-		UNION ALL
-		SELECT team_id FROM team_members WHERE state = 'active' AND team_id IN (`+marks+`)) GROUP BY team_id`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("in use of teams: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		var n int
-		if err := rows.Scan(&id, &n); err != nil {
-			return nil, fmt.Errorf("in use of teams: %w", err)
-		}
-		out[id] = n
-	}
-	return out, rows.Err()
+	return out, nil
 }

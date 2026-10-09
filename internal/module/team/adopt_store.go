@@ -22,18 +22,17 @@ type adoptCheck struct {
 	TargetLive bool
 }
 
-// adoptSeatsUsed counts the places a team holds: its running spawns plus its active members. The
-// statement of AcceptSpawnOp, without an op to except.
+// adoptSeatsUsed counts the places a team holds (seatsTakenSQL, the spawn cap check's count).
 func adoptSeatsUsed(q dbtx, teamID string) (used, limit int, err error) {
-	err = q.QueryRow(`SELECT json_extract(grant_json, '$.max_members'),
-		(SELECT COUNT(*) FROM spawn_ops WHERE team_id = t.id AND state = 'running') +
-		(SELECT COUNT(*) FROM team_members WHERE team_id = t.id AND state = 'active')
-		FROM teams t WHERE t.id = ?`, teamID).Scan(&limit, &used)
+	err = q.QueryRow(`SELECT json_extract(grant_json, '$.max_members') FROM teams WHERE id = ?`, teamID).Scan(&limit)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, 0, nil
 	}
 	if err != nil {
 		return 0, 0, fmt.Errorf("seats of team %s: %w", teamID, err)
+	}
+	if used, err = seatsTaken(q, teamID, ""); err != nil {
+		return 0, 0, err
 	}
 	return used, limit, nil
 }

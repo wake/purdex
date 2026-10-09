@@ -195,10 +195,10 @@ func (s *Store) AcceptSpawnOp(op spawnRow, hash string) (spawnRow, string, bool,
 	}
 	var limit, used int
 	if err == nil {
-		err = tx.QueryRow(`SELECT json_extract(grant_json, '$.max_members'),
-			(SELECT COUNT(*) FROM spawn_ops WHERE team_id = t.id AND state = 'running' AND id <> ?) +
-			(SELECT COUNT(*) FROM team_members WHERE team_id = t.id AND state = 'active')
-			FROM teams t WHERE t.id = ?`, op.ID, op.TeamID).Scan(&limit, &used)
+		err = tx.QueryRow(`SELECT json_extract(grant_json, '$.max_members') FROM teams WHERE id = ?`, op.TeamID).Scan(&limit)
+		if err == nil {
+			used, err = seatsTaken(tx, op.TeamID, op.ID)
+		}
 	}
 	if err == nil && used >= limit {
 		err = ErrSpawnTeamFull
