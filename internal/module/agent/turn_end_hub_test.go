@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 	agentcc "github.com/wake/purdex/internal/agent/cc"
@@ -324,4 +326,37 @@ func TestHandler_TurnEndNotPublishedWhenTheRequestFails500(t *testing.T) {
 		t.Fatalf("answered %d, want 500", code)
 	}
 	wantNoTurnEnd(t, got)
+}
+
+func TestBoundText(t *testing.T) {
+	long := strings.Repeat("接", 3000) // 9000 bytes
+	got := boundText(long)
+	if len(got) > turnEndTextMaxBytes || !utf8.ValidString(got) || !strings.HasPrefix(long, got) || len(got) < turnEndTextMaxBytes-3 {
+		t.Fatalf("len %d, valid %v", len(got), utf8.ValidString(got))
+	}
+	if boundText("短") != "短" {
+		t.Fatal("a short text changed")
+	}
+}
+
+// The sequence starts high and only rises: a restarted daemon's first stamp is not below a
+// stamp the old one made at the same millisecond. Mutation gate: start at 0 → red.
+func TestStampTurnEnd_SequenceStartsHighAndRises(t *testing.T) {
+	m := newTurnEndModule(t)
+	a, b := m.stampTurnEnd(), m.stampTurnEnd()
+	if a.seq < time.Now().Add(-time.Minute).UnixMicro() || b.seq != a.seq+1 {
+		t.Fatalf("stamps = %+v %+v", a, b)
+	}
+}
+
+func TestPublishTurnEnd_TextIsBounded(t *testing.T) {
+	m := newTurnEndModule(t)
+	got := make(chan TurnEndEvent, 2)
+	defer m.SubscribeTurnEnd(func(ev TurnEndEvent) { got <- ev })()
+	p, _ := m.registry.Get("cc")
+	raw, _ := json.Marshal(map[string]string{"session_id": "S", "last_assistant_message": strings.Repeat("x", 1<<20)})
+	m.publishTurnEnd(EventRequest{AgentType: "cc", PurdexName: "PdxStop", RawEvent: raw}, p, agentpkg.LifecycleStop, FrameTraceMeta{Decision: "updated_frame"}, turnEndStamp{at: 1, seq: 1})
+	if ev := <-got; len(ev.Text) != turnEndTextMaxBytes {
+		t.Fatalf("text is %d bytes", len(ev.Text))
+	}
 }

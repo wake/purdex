@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
 )
@@ -32,6 +33,11 @@ type turnEndStamp struct {
 const turnEndSubBuffer = 64
 
 // turnEndHub fans an accepted Stop out to in-process subscribers.
+//
+// It is at-least-once: a hook the daemon answered 500 (or whose answer was lost) is retried by the
+// sender and published again with a newer stamp; consumers must be idempotent (T-3a2 keeps the newest
+// turn by (At, Seq)). Only the tmux hook path publishes: a member is a tmux session, and a headless
+// (non-tmux) Claude Code session's turns are not part of this feed.
 //
 // Delivery contract: every subscriber owns a fixed-capacity channel and one
 // consumer goroutine that calls its callback (recovered). publish is a
@@ -112,9 +118,28 @@ func (m *Module) SubscribeTurnEnd(fn func(TurnEndEvent)) func() {
 	return m.turnEnds.subscribe(fn)
 }
 
-// stampTurnEnd takes the arrival stamp: time and the next sequence number.
+// stampTurnEnd takes the arrival stamp: time and the next sequence number. The sequence starts at the
+// daemon's first hook in microseconds since the epoch, not at 0, so it keeps rising across a restart
+// (a consumer comparing (At, Seq) never ranks a new daemon's turn below an old one's at the same ms).
 func (m *Module) stampTurnEnd() turnEndStamp {
-	return turnEndStamp{at: time.Now().UnixMilli(), seq: m.turnEndSeq.Add(1)}
+	now := time.Now()
+	m.turnEndSeq.CompareAndSwap(0, now.UnixMicro())
+	return turnEndStamp{at: now.UnixMilli(), seq: m.turnEndSeq.Add(1)}
+}
+
+// turnEndTextMaxBytes bounds the text a queue holds: a consumer needs the first sentence of the turn,
+// not the whole message, and a stuck subscriber's 64 slots must not pin 64 huge messages.
+const turnEndTextMaxBytes = 4096
+
+func boundText(s string) string {
+	if len(s) <= turnEndTextMaxBytes {
+		return s
+	}
+	cut := turnEndTextMaxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // publishTurnEnd publishes the turn end of an accepted cc PdxStop whose frame
@@ -138,5 +163,5 @@ func (m *Module) publishTurnEnd(req EventRequest, provider agentpkg.AgentProvide
 		Last string `json:"last_assistant_message"`
 	}
 	_ = json.Unmarshal(req.RawEvent, &raw)
-	m.turnEnds.publish(TurnEndEvent{SessionID: sid, Text: raw.Last, At: st.at, Seq: st.seq})
+	m.turnEnds.publish(TurnEndEvent{SessionID: sid, Text: boundText(raw.Last), At: st.at, Seq: st.seq})
 }
