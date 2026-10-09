@@ -37,8 +37,10 @@ type HandlerOption func(*handler)
 func WithTeamReader(r TeamReader) HandlerOption { return func(h *handler) { h.team = r } }
 
 type handler struct {
-	reg  *Registry
-	team TeamReader
+	reg      *Registry
+	team     TeamReader
+	workbook func() WorkbookService
+	polls    pollGate
 }
 
 // MaxBody caps a request body; larger bodies get 413.
@@ -61,6 +63,10 @@ func NewHandler(reg *Registry, opts ...HandlerOption) http.Handler {
 			h.events(w, r)
 		case TeamPath:
 			h.teamRead(w, r)
+		case WorkbookNextPath:
+			h.workbookNext(w, r)
+		case WorkbookResultPath:
+			h.workbookResult(w, r)
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 		}
@@ -129,6 +135,12 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
 	default:
+		// `workbook: true` tells the mod a job of its session's conversation waits that nobody holds, so it asks `next`
+		// (wire additive: an older mod ignores the field). Without a waiting job the answer is the bare ack.
+		if svc := h.service(); svc != nil && svc.JobWaiting(b.Events[len(b.Events)-1].SID) {
+			writeJSON(w, http.StatusOK, map[string]any{"ack": ack, "workbook": true})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]int64{"ack": ack})
 	}
 }
