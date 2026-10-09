@@ -44,6 +44,13 @@ func isPushedAsk(a team.Approval) bool {
 	return pushed
 }
 
+// Clear forgets everything: a (re)start begins from the feed's snapshot, not from what an earlier run last saw.
+func (o *openAsks) Clear() {
+	o.mu.Lock()
+	o.byID = map[string]askEntry{}
+	o.mu.Unlock()
+}
+
 // Load adds the snapshot of open approvals the feed returned when it was subscribed. It adds, never clears: the feed
 // arms its callback in the same step that returns the snapshot, so an event may already have run by the time this does.
 func (o *openAsks) Load(open []team.Approval) {

@@ -45,11 +45,9 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	for i, d := range recipients {
 		ids[i] = d.DeviceID
 	}
+	// The sender of this run, not whatever is current when a hold ends: a held event of a run that was stopped must not
+	// be delivered by the next run (enqueueing onto a stopped sender is harmless).
 	send := func() {
-		snd := m.sender.Load()
-		if snd == nil {
-			return
-		}
 		snd.Enqueue(Job{DeviceIDs: ids, Make: func(d push.Device) (push.Content, bool) {
 			c := content
 			c.HostLabel = d.HostLabel

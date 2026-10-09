@@ -195,10 +195,19 @@ func (m *Module) Start(ctx context.Context) error {
 	snd.Start(ctx)
 	m.sender.Store(snd)
 	m.holds.reset()
+	m.asks.Clear() // a restart begins from the feed's snapshot, not from asks an earlier run saw open
 	if m.events != nil {
+		// The feed arms the callback in the same step that returns the snapshot, and may run an event before this goroutine
+		// has loaded the snapshot. Events wait for it: a `closed` that outruns the load would otherwise be lost, and the
+		// snapshot would then reopen an ask that is closed.
+		ready := make(chan struct{})
 		var open []team.Approval
-		open, m.unsub = m.events.SubscribeApprovals(m.onApproval)
+		open, m.unsub = m.events.SubscribeApprovals(func(op string, a team.Approval) {
+			<-ready
+			m.onApproval(op, a)
+		})
 		m.asks.Load(open)
+		close(ready)
 	}
 	if m.notify == nil {
 		svc, ok := m.core.Registry.Get(agent.NotifyFeedKey)

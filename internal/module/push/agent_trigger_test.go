@@ -364,3 +364,87 @@ func askApproval(id, sid, tmux string, terminalOnly bool) team.Approval {
 	}
 	return team.Approval{ID: id, Kind: team.KindHookAsk, Payload: json.RawMessage(payload), Origin: team.Origin{SessionID: sid, Ref: "_abc123", Name: "worker-1", Tmux: tmux}}
 }
+
+// The approval feed runs an event before the snapshot is loaded: a `closed` that outruns the load must not be lost, or
+// the snapshot would reopen a closed ask and suppress the session's waiting events for good. Mutation gate: apply
+// events without waiting for the load → red.
+type racingEvents struct{ ask team.Approval }
+
+func (r *racingEvents) SubscribeApprovals(fn func(string, team.Approval)) ([]team.Approval, func()) {
+	done := make(chan struct{})
+	go func() { fn("closed", r.ask); close(done) }()
+	time.Sleep(60 * time.Millisecond) // the callback goroutine is first
+	return []team.Approval{r.ask}, func() {}
+}
+
+func TestAgentTrigger_AClosedEventThatOutrunsTheSnapshotIsNotLost(t *testing.T) {
+	e := newEnv(t)
+	apnsFake := &fakeAPNS{script: []apns.Result{{Class: apns.OK, Status: 200}}}
+	feed := &fakeNotifyFeed{}
+	e.mod.events = &racingEvents{ask: askApproval("ask1", "sid-1", "dev:@1.%2", false)}
+	e.mod.notify = feed
+	e.mod.newAPNs = func() apnsClient { return apnsFake }
+	e.mod.holdFor = 40 * time.Millisecond
+	if err := e.mod.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.mod.Stop(context.Background()) })
+	e.do("POST", "/api/push/devices", reqBody(tokA, tabsOf2("c1")))
+	time.Sleep(100 * time.Millisecond) // the closed event has been applied
+	e.mod.asks.mu.Lock()               // age the ask past the 10 s window the simple way
+	for id, a := range e.mod.asks.byID {
+		a.opened = a.opened.Add(-time.Minute)
+		e.mod.asks.byID[id] = a
+	}
+	e.mod.asks.mu.Unlock()
+	feed.emit(nev("c1", "PdxPermissionRequest", "waiting", nil))
+	deadline := time.Now().Add(2 * time.Second)
+	for apnsFake.count() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if apnsFake.count() != 1 {
+		t.Fatal("the closed ask was reopened by the snapshot: the waiting event was swallowed")
+	}
+}
+
+func tabsOf2(codes ...string) func(*push.DeviceRequest) { return tabsOf(codes...) }
+
+// A restart starts from the snapshot: an ask an earlier run saw open does not outlive it. Mutation gate: no Clear → red.
+func TestAgentTrigger_AStartForgetsAsksOfAnEarlierRun(t *testing.T) {
+	e := newEnv(t)
+	e.mod.asks.Opened(askApproval("stale", "sid-1", "dev:@1.%2", false))
+	e.mod.events = &fakeEvents{} // an empty snapshot: nothing is open now
+	e.mod.newAPNs = func() apnsClient { return &fakeAPNS{} }
+	e.mod.notify = &fakeNotifyFeed{}
+	if err := e.mod.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.mod.Stop(context.Background()) })
+	e.mod.asks.mu.Lock()
+	for id, a := range e.mod.asks.byID {
+		a.opened = a.opened.Add(-time.Minute)
+		e.mod.asks.byID[id] = a
+	}
+	e.mod.asks.mu.Unlock()
+	if e.mod.asks.Has("sid-1", "dev") {
+		t.Fatal("an ask of an earlier run is still open")
+	}
+}
+
+// A waiting event held by one run is delivered by that run's sender, not by whatever sender is current when the hold
+// ends. Mutation gate: reload the sender in the hold's callback → the new sender gets it → red.
+func TestAgentTrigger_AHeldEventIsDeliveredByTheSenderOfItsRun(t *testing.T) {
+	e := newAgentEnv(t, 120*time.Millisecond)
+	e.device(tokA, "en", "mlab", tabsOf("c1"))
+	e.feed.emit(nev("c1", "PdxPermissionRequest", "waiting", nil))
+	other := &fakeAPNS{script: []apns.Result{{Class: apns.OK, Status: 200}}}
+	next := newSender(e.mod, other, "host", push.BundleID)
+	next.Start(context.Background())
+	defer next.Stop()
+	e.mod.sender.Store(next) // a restart installed another sender while the event was held
+	e.waitSends(t, 1)
+	time.Sleep(100 * time.Millisecond)
+	if other.count() != 0 {
+		t.Fatal("the held event was delivered by the next run's sender")
+	}
+}
