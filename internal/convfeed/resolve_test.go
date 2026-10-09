@@ -351,3 +351,18 @@ func TestResolve_FIFOIsNeitherOpenedNorBlocksTheLookup(t *testing.T) {
 		t.Fatal("the resolver blocked on a FIFO")
 	}
 }
+
+// Cancelled just before a candidate that exists would be opened: still the cancellation, never a success.
+func TestResolve_CancelledBeforeTheOpenOfAnExistingCandidate(t *testing.T) {
+	e := newResEnv(t)
+	e.put("-only", "content")
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &Resolver{Home: e.home, onDir: cancel}
+	s, err := r.Resolve(ctx, sidR)
+	if err == nil {
+		s.Closer.Close()
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}

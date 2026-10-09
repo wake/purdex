@@ -182,6 +182,9 @@ func (r *Resolver) lookup(ctx context.Context, root, sessionID string) (*os.File
 			if r.onDir != nil {
 				r.onDir()
 			}
+			if ctx.Err() != nil { // cancelled between the check above and the open
+				return nil, visited
+			}
 			f, oerr := transcriptpath.Open(root, filepath.Join(root, de.Name(), sessionID+".jsonl"))
 			if oerr == nil {
 				return f, visited
