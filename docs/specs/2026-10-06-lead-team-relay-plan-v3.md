@@ -712,6 +712,8 @@ pdx team [--json] [--config <path>]
 
 # Phase P4b — host selection (spec §7.4 (a)(b), selection rule; U15; M13–M15)
 
+> **Superseded (2026-10-09)** for cross-host members by `docs/specs/2026-10-09-cross-host-team-spec-plan.md` (lead-side outbox, member-side record, adopt / release / spawn across hosts). Kept for history.
+
 ## PR P4b-1 — `rate_limits`, the account, the weekly reading, `GET /api/peers/team/usage`
 
 **Goal.** Spec §7.4 (b): parse `rate_limits` (M13); keep one host-level reading per account (M14); stale after 60 minutes; expose it to paired hosts.
@@ -922,6 +924,8 @@ pdx team [--json] [--config <path>]
 ---
 
 # Phase P4c — cross-host execution (spec §7.4 (c)(d), U15, U20 (f), M16)
+
+> **Superseded (2026-10-09)** for cross-host members by `docs/specs/2026-10-09-cross-host-team-spec-plan.md` (lead-side outbox, member-side record, adopt / release / spawn across hosts). Kept for history.
 
 ## PR P4c-1 — `AllowTeam`: config, CLI, Hosts toggle
 
