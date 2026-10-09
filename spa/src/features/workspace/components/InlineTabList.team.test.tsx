@@ -245,6 +245,20 @@ describe('InlineTabList — team beads', () => {
     expect(screen.getAllByTestId('team-bead')).toHaveLength(3)
   })
 
+  it('the collapsed line sits on a plate; the expanded block has none', () => {
+    seedScene(base)
+    mount()
+    expect(screen.queryByTestId('team-sidebar-plate')).toBeNull()
+    act(() => useTeamUiStore.getState().setCollapsed(KEY, true))
+    const plate = screen.getByTestId('team-sidebar-plate')
+    expect(within(plate).getByTestId('team-sidebar-collapsed')).toBeInTheDocument()
+    expect(plate.className).toMatch(/rounded/)
+    expect(plate.className).toMatch(/bg-/)
+    fireEvent.click(within(plate).getByTestId('team-sidebar-collapsed')) // still expands
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBeUndefined()
+    expect(screen.queryByTestId('team-sidebar-plate')).toBeNull()
+  })
+
   it('tick / blank click collapses', () => {
     seedScene(base)
     mount()
