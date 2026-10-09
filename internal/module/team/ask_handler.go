@@ -155,7 +155,7 @@ func (m *Module) handleAskBegin(w http.ResponseWriter, r *http.Request) {
 	// No remote responder ⇒ no row at all: the native dialog runs alone and
 	// the mod pays nothing more (step 1). Checked before the origin lookup,
 	// which reads the registry.
-	if !m.responders.Any() {
+	if !m.anyResponder() {
 		m.writeErr(w, http.StatusConflict, team.ErrNoResponders, "no client is connected to this host", nil)
 		return
 	}

@@ -84,7 +84,7 @@ func terminalOnlyPayload(req team.HookDecideRequest, kind team.Kind) ([]byte, st
 }
 
 func (m *Module) openTerminalOnly(req team.HookDecideRequest, kind team.Kind) {
-	if m.modPresent(req.SessionID) || !m.responders.Any() || m.stopping() {
+	if m.modPresent(req.SessionID) || !m.anyResponder() || m.stopping() {
 		return
 	}
 	payload, bad := terminalOnlyPayload(req, kind)

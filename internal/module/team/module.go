@@ -124,6 +124,12 @@ type Module struct {
 	// never loses a just-opened request or revives a just-closed one. No
 	// store write happens under it: each broadcast follows its own write.
 	eventMu sync.Mutex
+	// sessionSubs are the SubscribeSession subscriptions (approval_feed.go), under eventMu; responderHolds counts
+	// the HoldResponder holders.
+	sessionSubs    map[string]map[uint64]func(op string, a team.Approval) // by session id, then subscription id
+	nextSessionSub uint64
+	sessionSubN    int // subscriptions in all
+	responderHolds atomic.Int64
 
 	// rosterMu orders the team.roster stream (plan PL-1f′): held across
 	// rosterSync's read + send and across sendRosterSnapshot's, so a
@@ -322,6 +328,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.relayDir = filepath.Join(c.Cfg.DataDir, team.RelayDir)
 	// The peers inventory reads the relay lineage through this (spec §8.4).
 	c.Registry.Register(team.LineageReaderKey, store)
+	c.Registry.Register(team.ApprovalFeedKey, team.ApprovalFeed(m))
 	return nil
 }
 
@@ -419,6 +426,7 @@ func (m *Module) Stop(context.Context) error {
 	m.createMu.Lock()
 	m.stopCancel()
 	m.createMu.Unlock()
+	m.dropSessionSubs()
 	m.sweepWG.Wait()
 	m.spawnWG.Wait()
 	return nil
@@ -512,6 +520,9 @@ func (m *Module) broadcast(op string, a *team.Approval) {
 	m.eventMu.Lock()
 	defer m.eventMu.Unlock()
 	m.core.Events.BroadcastStrict(core.HostEvent{Type: team.EventType, Value: string(v)})
+	if a != nil {
+		m.deliverToSessionSubs(op, a)
+	}
 }
 
 // sendSnapshot queues {op:"snapshot", approvals:[…]} to a new subscriber
