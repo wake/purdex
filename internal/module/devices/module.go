@@ -22,6 +22,10 @@ import (
 // middleware reads it; the module is not imported by it).
 const RegistryKey = "devices.authenticator"
 
+// ConnsKey is the service-registry key the module publishes its devices.Tracker under (the daemon's handler chain wraps
+// itself with it; it closes a revoked device's WebSocket connections).
+const ConnsKey = "devices.conns"
+
 // sweepEvery: how often rows that can no longer work are deleted.
 const sweepEvery = time.Hour
 
@@ -34,7 +38,8 @@ type Module struct {
 	ready   bool
 	initErr string
 
-	onRevoke func(ids []string) // set by whoever must close what the revoked device has open (QP-1b's connection registry)
+	conns    *devices.ConnRegistry
+	onRevoke func(ids []string) // an extra hook after a revoke (the connections are closed by the module itself)
 	cancel   context.CancelFunc
 	done     chan struct{}
 }
@@ -59,7 +64,9 @@ func (m *Module) Init(c *core.Core) error {
 		return nil
 	}
 	m.store, m.ready, m.initErr = st, true, ""
+	m.conns = devices.NewConnRegistry(st.IsLive)
 	c.Registry.Register(RegistryKey, devices.Authenticator(m))
+	c.Registry.Register(ConnsKey, devices.Tracker(m.conns))
 	return nil
 }
 
@@ -88,6 +95,15 @@ func (m *Module) AuthenticateToken(token string) (devices.Principal, bool) {
 	return st.Authenticate(devices.Hash(token))
 }
 
+// RefreshPrincipal implements devices.Refresher for redeemed device tickets.
+func (m *Module) RefreshPrincipal(deviceID string) (devices.Principal, bool) {
+	st := m.live()
+	if st == nil {
+		return devices.Principal{}, false
+	}
+	return st.PrincipalByID(deviceID)
+}
+
 // SetOnRevoke registers what runs after devices were revoked, with their ids (nil clears it).
 func (m *Module) SetOnRevoke(fn func(ids []string)) {
 	m.mu.Lock()
@@ -100,8 +116,9 @@ func (m *Module) revoked(ids []string) {
 		return
 	}
 	m.mu.Lock()
-	fn := m.onRevoke
+	fn, conns := m.onRevoke, m.conns
 	m.mu.Unlock()
+	conns.CloseDevices(ids) // every WebSocket the revoked devices hold, whatever route and however they authenticated
 	if fn != nil {
 		fn(ids)
 	}

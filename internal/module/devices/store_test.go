@@ -490,3 +490,24 @@ func TestOpenStore_AnUnrestrictableSidecarFailsTheOpen(t *testing.T) {
 	}
 	st.Close()
 }
+
+// What a redeemed device ticket is held to: the device is live and has been used; its bindings are the stored ones.
+func TestPrincipalByID(t *testing.T) {
+	s, _ := openTest(t)
+	row, tok := mint(t, s, time.Minute, func(r *MintRequest) { r.ProfileID = "p_0123456789ab" })
+	if _, ok := s.PrincipalByID(row.ID); ok {
+		t.Fatal("a device that was never used has a principal (it cannot have minted a ticket)")
+	}
+	s.Authenticate(devices.Hash(tok))
+	p, ok := s.PrincipalByID(row.ID)
+	if !ok || p.ID != row.ID || p.PairingID != row.PairingID || p.ProfileID != "p_0123456789ab" {
+		t.Fatalf("principal = %+v ok %v", p, ok)
+	}
+	if _, ok := s.PrincipalByID("d_000000000000"); ok {
+		t.Fatal("an unknown id has a principal")
+	}
+	s.RevokeID(row.ID)
+	if _, ok := s.PrincipalByID(row.ID); ok {
+		t.Fatal("a revoked device has a principal")
+	}
+}

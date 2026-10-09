@@ -27,6 +27,36 @@ func (r registryDevices) AuthenticateToken(token string) (devices.Principal, boo
 	return a.AuthenticateToken(token)
 }
 
+// RefreshPrincipal is what a redeemed device ticket is held to (devices.Refresher): the module's current answer for the
+// device id. Without it the middleware would refuse every device ticket.
+func (r registryDevices) RefreshPrincipal(deviceID string) (devices.Principal, bool) {
+	svc, ok := r.c.Registry.Get(devicesmod.RegistryKey)
+	if !ok {
+		return devices.Principal{}, false
+	}
+	ref, ok := svc.(devices.Refresher)
+	if !ok {
+		return devices.Principal{}, false
+	}
+	return ref.RefreshPrincipal(deviceID)
+}
+
+// registryTracker is the devices module's WebSocket tracker as the chain reaches it: through the service registry, looked
+// up on every request; with no module mounted the request passes through.
+type registryTracker struct{ c *core.Core }
+
+func (r registryTracker) Track(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if svc, ok := r.c.Registry.Get(devicesmod.ConnsKey); ok {
+			if t, ok := svc.(devices.Tracker); ok {
+				t.Track(next).ServeHTTP(w, req)
+				return
+			}
+		}
+		next.ServeHTTP(w, req)
+	})
+}
+
 // interimDeviceScope keeps a device principal to two routes until QP-1b's default-deny allow-list replaces it: reading
 // /api/info (how a phone checks a host) and renaming itself. Everything else answers 403 device_forbidden, so a token
 // minted before the real scope exists reaches no config, file, restart, session or team route and cannot fetch a WebSocket
@@ -63,7 +93,7 @@ func newOuterHandler(c *core.Core, mux http.Handler, allow []string) http.Handle
 	peerChain := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
 		middleware.PeerAuth(tokenFn, peersmod.HostMatcher(c), peersmod.HostRoutePolicy)(mux))))
 	general := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
-		middleware.TokenAuthWith(tokenFn, c.Tickets, registryDevices{c})(interimDeviceScope(mux)))))
+		middleware.TokenAuthWith(tokenFn, c.Tickets, registryDevices{c})(registryTracker{c}.Track(interimDeviceScope(mux))))))
 
 	outer := http.NewServeMux()
 	outer.Handle("GET /api/health", middleware.CORS(http.HandlerFunc(c.HandleHealth)))
