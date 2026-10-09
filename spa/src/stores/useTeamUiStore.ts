@@ -93,6 +93,12 @@ function healPanel(v: unknown): PanelArea {
   return { width, expanded: v.expanded === true }
 }
 
+/** The host of a `<hostId>\0<teamId>` key, or null when the key is not that shape (either part empty / extra separator). */
+function keyHost(key: string): string | null {
+  const parts = key.split('\0')
+  return parts.length === 2 && parts[0] !== '' && parts[1] !== '' ? parts[0] : null
+}
+
 /** Persisted data is untrusted: keep only well-formed entries of each slice. */
 function heal(persisted: unknown): Slices & { panel: PanelArea; workbookTabs: Record<string, true> } {
   const p = isRecord(persisted) ? persisted : {}
@@ -102,8 +108,8 @@ function heal(persisted: unknown): Slices & { panel: PanelArea; workbookTabs: Re
     collapsed: Object.fromEntries(entries(p.collapsed).filter(([, v]) => v === true)) as Slices['collapsed'],
     panelMode: Object.fromEntries(entries(p.panelMode).filter(([, v]) => v === 'line')) as Slices['panelMode'],
     ghostWorkspace: Object.fromEntries(entries(p.ghostWorkspace).filter(([, v]) => typeof v === 'string' && v !== '')) as Slices['ghostWorkspace'],
-    teamDrill: Object.fromEntries(entries(p.teamDrill).filter(([, v]) => isRecord(v) && typeof v.hostId === 'string' && v.hostId !== ''
-      && typeof v.sessionId === 'string' && v.sessionId !== '').map(([k, v]) => [k, { hostId: (v as DrillSeat).hostId, sessionId: (v as DrillSeat).sessionId }])),
+    teamDrill: Object.fromEntries(entries(p.teamDrill).filter(([key, v]) => isRecord(v) && typeof v.hostId === 'string' && v.hostId !== ''
+      && keyHost(key) === v.hostId && typeof v.sessionId === 'string' && v.sessionId !== '').map(([k, v]) => [k, { hostId: (v as DrillSeat).hostId, sessionId: (v as DrillSeat).sessionId }])),
     workbookTabs: Object.fromEntries(entries(p.workbookTabs).filter(([, v]) => v === true)) as Record<string, true>,
     panel: healPanel(p.panel),
   }

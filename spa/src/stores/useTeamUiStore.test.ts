@@ -210,12 +210,26 @@ describe('the panel area (WA-2a)', () => {
     expect(useTeamUiStore.getState().teamDrill).toEqual({})
     expect(useTeamUiStore.getState().workbookTabs).toEqual({})
     localStorage.setItem('purdex-team-ui', JSON.stringify({ state: {
-      teamDrill: { good: { hostId: 'h', sessionId: 's' }, bad1: { hostId: 1, sessionId: 's' }, bad2: 'x', bad3: { hostId: '', sessionId: 's' } },
+      teamDrill: { [k('h', 't')]: { hostId: 'h', sessionId: 's' }, bad1: { hostId: 1, sessionId: 's' }, bad2: 'x', bad3: { hostId: '', sessionId: 's' } },
       workbookTabs: { a: true, b: false, c: 'yes' },
     }, version: 0 }))
     useTeamUiStore.persist.rehydrate()
-    expect(useTeamUiStore.getState().teamDrill).toEqual({ good: { hostId: 'h', sessionId: 's' } })
+    expect(useTeamUiStore.getState().teamDrill).toEqual({ [k('h', 't')]: { hostId: 'h', sessionId: 's' } })
     expect(useTeamUiStore.getState().workbookTabs).toEqual({ a: true })
+  })
+  it('heal drops teamDrill entries with a malformed key, a cross-host value or a non-string session', () => {
+    const ok = k('h1', 't1')
+    localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { teamDrill: {
+      [ok]: { hostId: 'h1', sessionId: 's' },
+      'no-separator': { hostId: 'no-separator', sessionId: 's' },
+      [k('', 't')]: { hostId: '', sessionId: 's' },
+      [k('h1', '')]: { hostId: 'h1', sessionId: 's' },
+      [k('h2', 't2')]: { hostId: 'h1', sessionId: 's' },
+      [k('h1', 't3')]: { hostId: 'h1', sessionId: 5 },
+      [k('h1', 't4')]: { hostId: 'h1', sessionId: '' },
+    } }, version: 0 }))
+    useTeamUiStore.persist.rehydrate()
+    expect(useTeamUiStore.getState().teamDrill).toEqual({ [ok]: { hostId: 'h1', sessionId: 's' } })
   })
   it('forgetTeams / forgetHostTeams drop the teamDrill of a team that is gone', () => {
     const live = k('h1', 'live'), gone = k('h1', 'gone'), other = k('h2', 'x')
