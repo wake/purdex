@@ -289,3 +289,28 @@ func TestOpenStore_BrokenPathFails(t *testing.T) {
 		t.Fatal("a path that cannot be created must fail")
 	}
 }
+
+// Finish(ok) records the tokens of the call(s) when it is given some, and leaves a recorded count alone when it is not.
+// Mutation gate: drop the usage columns from the ok UPDATE → red.
+func TestFinish_OKRecordsUsage(t *testing.T) {
+	s := openTest(t)
+	a := mustInsert(t, s, pending("c", "s1", "a", 1))
+	if ok, err := s.Finish(a, StateOK, "", Output{Thing: "t", Entry: "e", Usage: Usage{In: 10, Out: 4, CacheRead: 7}}); err != nil || !ok {
+		t.Fatalf("finish: %v %v", ok, err)
+	}
+	got, _ := s.Entry(a)
+	if got.UsageIn != 10 || got.UsageOut != 4 || got.UsageCacheRead != 7 {
+		t.Fatalf("usage = %d/%d/%d", got.UsageIn, got.UsageOut, got.UsageCacheRead)
+	}
+	b := mustInsert(t, s, pending("c", "s1", "b", 2))
+	if _, ok, err := s.SetPushLineV2(b, PushLineV2{Thing: "t", Usage: Usage{In: 5, Out: 2}}); err != nil || !ok {
+		t.Fatal(err)
+	}
+	if ok, err := s.Finish(b, StateOK, "", Output{Thing: "t", Entry: "e"}); err != nil || !ok {
+		t.Fatal(err)
+	}
+	got, _ = s.Entry(b)
+	if got.UsageIn != 5 || got.UsageOut != 2 {
+		t.Fatalf("a Finish without usage must keep the push line's: %d/%d", got.UsageIn, got.UsageOut)
+	}
+}

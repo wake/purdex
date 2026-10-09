@@ -72,6 +72,7 @@ type Output struct {
 	Thing, Push, Entry string
 	ThingDone          bool
 	LatencyMS          int64
+	Usage              Usage // tokens of the call(s); zero leaves what the push line recorded
 }
 
 // StatusRow is a conversation's current one-line status.
@@ -216,8 +217,10 @@ func (s *Store) Finish(id int64, state, reason string, out Output) (bool, error)
 	switch state {
 	case StateOK:
 		res, err = s.db.Exec(`UPDATE wb_entries SET state = 'ok', reason = '', thing = ?, push = ?, entry = ?, thing_done = ?,
-				latency_ms = ?, updated_at = ? WHERE id = ? AND state = 'pending'`,
-			out.Thing, out.Push, out.Entry, boolInt(out.ThingDone), out.LatencyMS, now, id)
+				latency_ms = ?, usage_in = COALESCE(?, usage_in), usage_out = COALESCE(?, usage_out),
+				usage_cache_read = COALESCE(?, usage_cache_read), updated_at = ? WHERE id = ? AND state = 'pending'`,
+			out.Thing, out.Push, out.Entry, boolInt(out.ThingDone), out.LatencyMS,
+			nullInt(out.Usage.In), nullInt(out.Usage.Out), nullInt(out.Usage.CacheRead), now, id)
 	case StateFailed, StateSkipped:
 		res, err = s.db.Exec(`UPDATE wb_entries SET state = ?, reason = ?, latency_ms = ?, updated_at = ? WHERE id = ? AND state = 'pending'`,
 			state, reason, out.LatencyMS, now, id)
