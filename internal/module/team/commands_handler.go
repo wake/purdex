@@ -108,18 +108,19 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		if found && o.Ref == cmd.TargetRef {
 			plan.Target = &o
 		}
-		// The registry read took time: the consent and the binding are the entry's as of now, not as of the bind
-		// (an admin may have turned AllowTeam off or re-created the alias for another host meanwhile).
-		if m.afterTargetResolved != nil {
-			m.afterTargetResolved()
-		}
-		fresh, _, ok := m.peerEntry(principal.Alias)
-		if !ok || fresh.HostID != entry.HostID {
-			m.writeCommandErr(w, http.StatusForbidden, ipeers.ErrHostUnverified, "host entry no longer matches the authenticated host")
-			return
-		}
-		plan.Consent = fresh.AllowTeam
 	}
+	// The work above took time (a registry read): the binding and the consent are the entry's as of now, not as of
+	// the bind — for EVERY kind, an admin may have turned AllowTeam off or re-created the alias for another host
+	// meanwhile. The remaining window is the store call itself.
+	if m.afterTargetResolved != nil {
+		m.afterTargetResolved()
+	}
+	fresh, _, ok := m.peerEntry(principal.Alias)
+	if !ok || fresh.HostID != entry.HostID {
+		m.writeCommandErr(w, http.StatusForbidden, ipeers.ErrHostUnverified, "host entry no longer matches the authenticated host")
+		return
+	}
+	plan.Consent = fresh.AllowTeam
 	res, err := m.store.ApplyTeamCommand(plan)
 	switch {
 	case errors.Is(err, ErrCommandIDConflict):

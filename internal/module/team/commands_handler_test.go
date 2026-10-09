@@ -282,6 +282,30 @@ func TestCommands_ConsentAndBindingAreReadAgainBeforeTheApply(t *testing.T) {
 	}
 }
 
+// The binding is read again before the apply for EVERY kind, not just adopt (codex re-review): a release from a
+// host whose alias was re-created for another host while the request was in flight does nothing.
+func TestCommands_EveryKindRechecksTheBindingBeforeTheApply(t *testing.T) {
+	f := newFixture(t)
+	f.setLeadHost(true)
+	f.origins.show(team.Origin{SessionID: "sid-t", Ref: "_tgt001", PID: 42, ProcStart: "ps2", Cwd: "/w"})
+	if code, body := f.postCmd(leadPrincipal(), wireAdopt(cmdUUID1, cmdUUID1, "sid-t")); code != http.StatusOK {
+		t.Fatalf("adopt: %d %s", code, body)
+	}
+	f.m.afterTargetResolved = func() {
+		f.core.CfgMu.Lock()
+		f.core.Cfg.Peers.Hosts[0].HostID = "someone-else:9"
+		f.core.CfgMu.Unlock()
+	}
+	rel := relCmd(cmdUUID2, team.CommandRelease, cmdUUID1)
+	rel.ToHostID = "h:1"
+	if code, body := f.postCmd(leadPrincipal(), rel); code != http.StatusForbidden || errCode(t, body) != "host_unverified" {
+		t.Fatalf("release after a re-bind: %d %s", code, body)
+	}
+	if row, _, _ := f.m.store.RemoteMember(cmdUUID1); row.State != remoteActive {
+		t.Fatalf("the re-bound host released a member: %+v", row)
+	}
+}
+
 // §6.1: the binding comes first. A stopping daemon answers an admin or a re-bound host 403, not a retryable 503.
 func TestCommands_BindingBeforeStopping(t *testing.T) {
 	f := newFixture(t)
