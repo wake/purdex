@@ -40,6 +40,7 @@ import (
 	resourcesmod "github.com/wake/purdex/internal/module/resources"
 	"github.com/wake/purdex/internal/module/session"
 	teammod "github.com/wake/purdex/internal/module/team"
+	workbookmod "github.com/wake/purdex/internal/module/workbook"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 	"github.com/wake/purdex/internal/tmuxenv"
@@ -486,6 +487,10 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// devices (paired phones' tokens, QR pairing spec §3) is always mounted: it costs one small file and serves nothing
 	// until a Mac mints a token. A store that cannot be opened soft-fails the module (no route, no capability).
 	c.AddModule(devicesmod.New())
+
+	// workbook (session summaries, spec 2026-10-09-session-workbook) is always mounted: one small file, and it soft-fails
+	// like devices. It reads the agent's turn ends, the team's seats, the conversation's turns and the host settings.
+	c.AddModule(workbookmod.New())
 
 	return nil
 }
