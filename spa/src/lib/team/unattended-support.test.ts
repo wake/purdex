@@ -9,6 +9,7 @@ vi.mock('../host-api', () => ({ fetchHostInfo: (hostId: string) => fetchHostInfo
 import { startUnattendedSupport } from './unattended-support'
 import { useHostStore } from '../../stores/useHostStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { useRelayQuotaStore } from './relay-quota'
 
 const host = (id: string, ip = '100.64.0.2') => ({ id, name: id, ip, port: 7860, token: 't', order: 0 })
 const info = (capabilities?: unknown): HostInfo =>
@@ -30,6 +31,7 @@ let stop: () => void = () => {}
 beforeEach(() => {
   useHostStore.getState().reset()
   useUnattendedStore.getState().reset()
+  useRelayQuotaStore.getState().reset()
   fetchHostInfo.mockReset()
   fetchHostInfo.mockResolvedValue(WITH)
   useHostStore.setState({ hosts: { h1: host('h1'), h2: host('h2', '100.64.0.4') }, hostOrder: ['h1', 'h2'], runtime: {} })
@@ -147,5 +149,68 @@ describe('startUnattendedSupport', () => {
     stop()
     useHostStore.getState().setRuntime('h1', { status: 'connected' })
     expect(fetchHostInfo).not.toHaveBeenCalled()
+  })
+
+  describe('team.relay_quota.v1 (relay quota, plan RQ-A Task 2)', () => {
+    const quotaSupport = (id: string) => useUnattendedStore.getState().byHost[id]?.quotaSupport
+
+    it('listed → yes; the same probe sets the switch\'s support', async () => {
+      fetchHostInfo.mockResolvedValue(info(['relay.unattended.v1', 'team.relay_quota.v1']))
+      stop = startUnattendedSupport()
+      useHostStore.getState().setRuntime('h1', { status: 'connected' })
+      await flush()
+      expect(quotaSupport('h1')).toBe('yes')
+      expect(support('h1')).toBe('yes')
+    })
+
+    it('not listed → no (a daemon with the switch but without quotas keeps its switch)', async () => {
+      stop = startUnattendedSupport() // WITH has only the unattended capability
+      useHostStore.getState().setRuntime('h1', { status: 'connected' })
+      await flush()
+      expect(quotaSupport('h1')).toBe('no')
+      expect(support('h1')).toBe('yes')
+    })
+
+    it('a failed probe leaves it unknown', async () => {
+      fetchHostInfo.mockRejectedValue(new Error('down'))
+      stop = startUnattendedSupport()
+      useHostStore.getState().setRuntime('h1', { status: 'connected' })
+      await flush()
+      expect(quotaSupport('h1')).toBeUndefined()
+    })
+
+    it('the quota numbers a host confirmed are forgotten when the host is removed or re-pointed', async () => {
+      stop = startUnattendedSupport()
+      useRelayQuotaStore.getState().applyAnswer('h1', 'r1', { self_left: 2, member_pool_left: 1 }, 3)
+      useRelayQuotaStore.getState().applyAnswer('h2', 'r1', { self_left: 5, member_pool_left: 0 }, 1)
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: host('h1', '100.64.0.9') } }) // re-point h1
+      expect(Object.keys(useRelayQuotaStore.getState().confirmed).some((k) => k.startsWith('h1'))).toBe(false)
+      expect(Object.keys(useRelayQuotaStore.getState().confirmed).some((k) => k.startsWith('h2'))).toBe(true)
+      useHostStore.setState({ hosts: { h1: host('h1', '100.64.0.9') }, hostOrder: ['h1'] }) // remove h2
+      expect(useRelayQuotaStore.getState().confirmed).toEqual({})
+    })
+
+    it('a removed host with only a GET in flight (nothing confirmed yet) is forgotten too, and its late answer is ignored', async () => {
+      stop = startUnattendedSupport()
+      useRelayQuotaStore.getState().beginGet('h2') // the panel's first read, still out
+      useRelayQuotaStore.getState().setWrite('h2', 'r1', 'self_left', { desired: 4 })
+      useHostStore.setState({ hosts: { h1: host('h1') }, hostOrder: ['h1'] }) // h2 removed
+      expect(useRelayQuotaStore.getState().gets).toEqual({})
+      expect(useRelayQuotaStore.getState().writes).toEqual({})
+      useRelayQuotaStore.getState().endGet('h2', [{ session_id: 's', root_session_id: 'r1', address: 'x/y', is_lead: false, self_left: 9, member_pool_left: 0, rev: 1 }], 0)
+      expect(useRelayQuotaStore.getState().confirmed).toEqual({})
+    })
+
+    it('a re-point forgets it with the rest of the entry', async () => {
+      fetchHostInfo.mockResolvedValue(info(['relay.unattended.v1', 'team.relay_quota.v1']))
+      stop = startUnattendedSupport()
+      useHostStore.getState().setRuntime('h1', { status: 'connected' })
+      await flush()
+      expect(quotaSupport('h1')).toBe('yes')
+      fetchHostInfo.mockReset()
+      fetchHostInfo.mockReturnValue(new Promise(() => {}))
+      useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: host('h1', '100.64.0.9') } })
+      expect(quotaSupport('h1')).toBeUndefined()
+    })
   })
 })

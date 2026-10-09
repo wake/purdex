@@ -239,7 +239,7 @@ describe('UnattendedButton', () => {
       setup([A], { [A]: up }, { [A]: yes(OFF) })
       render(<UnattendedButton />)
       expect(list().closest('[data-testid="unattended-buttons"]')).toBe(toggle().closest('[data-testid="unattended-buttons"]'))
-      expect(list()).toHaveAccessibleName('無人值守期間自動通過的申請')
+      expect(list()).toHaveAccessibleName('無人值守：額度與自動通過的申請')
       expect(list()).toHaveAttribute('aria-expanded', 'false')
       fireEvent.click(list())
       expect(list()).toHaveAttribute('aria-expanded', 'true')

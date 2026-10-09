@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
 import { ApprovalApiError } from './approval-api'
 import { __resetClientDescriptorForTests } from './client-label'
-import { getUnattended, putUnattended } from './unattended-api'
+import { getUnattended, putUnattended, putRelayQuota } from './unattended-api'
 import type { Approval } from './types'
 
 const testGlobal = globalThis as typeof globalThis & { fetch: ReturnType<typeof vi.fn> }
@@ -148,6 +148,56 @@ describe('unattended-api', () => {
       expect(v.next_before).toBeUndefined()
     })
 
+    describe('quotas and held (relay quota, daemon D1 / D3)', () => {
+      const q = (over: Record<string, unknown> = {}) => ({
+        session_id: 's1', root_session_id: 'r1', title: 'Lead A', address: 'mlab/lead-a-xx', is_lead: true, self_left: 3, member_pool_left: 2, rev: 4, ...over,
+      })
+
+      it('an older daemon sends neither: no quota section, not a failure', async () => {
+        testGlobal.fetch.mockResolvedValueOnce(json(view()))
+        const v = await getUnattended(hostId)
+        expect(v.quotas).toBeUndefined()
+        expect(v.quotasFailed).toBeUndefined()
+        expect(v.held).toBeUndefined()
+      })
+
+      it('rows are read whole; [] is a successful read of no session', async () => {
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ quotas: [q(), q({ session_id: 's2', is_lead: false })] })))
+        const v = await getUnattended(hostId)
+        expect(v.quotas?.map((r) => r.session_id)).toEqual(['s1', 's2'])
+        expect(v.quotasFailed).toBeUndefined()
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ quotas: [] })))
+        const empty = await getUnattended(hostId)
+        expect(empty.quotas).toEqual([])
+        expect(empty.quotasFailed).toBeUndefined()
+      })
+
+      it('null (the daemon could not read) and a malformed row are quotasFailed, with no rows (never a partial list)', async () => {
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ quotas: null })))
+        const a = await getUnattended(hostId)
+        expect(a.quotasFailed).toBe(true)
+        expect(a.quotas).toBeUndefined()
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ quotas: [q(), q({ self_left: 100 })] })))
+        const b = await getUnattended(hostId)
+        expect(b.quotasFailed).toBe(true)
+        expect(b.quotas).toBeUndefined()
+        // the rest of the view still reads: a broken quotas array does not make the whole answer bad
+        expect(b.approved.map((x) => x.id)).toEqual(['a2', 'a1'])
+      })
+
+      it('held rows go through the approval parser; a later daemon\'s kind is skipped; a malformed list is not shown', async () => {
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ held: [{ ...row('h1', 5_000), kind: 'self_relay', state: 'open' }, { kind: 'member_relay', id: 'x' }] })))
+        const v = await getUnattended(hostId)
+        expect(v.held?.map((a) => a.id)).toEqual(['h1'])
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ held: [{ id: 'bad' }] })))
+        expect((await getUnattended(hostId)).held).toBeUndefined()
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ held: null })))
+        expect((await getUnattended(hostId)).held).toBeUndefined()
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ held: [] })))
+        expect((await getUnattended(hostId)).held).toEqual([])
+      })
+    })
+
     it('an unconfigured host is refused before any request (`host_removed`)', async () => {
       const err = await rejection(getUnattended('no-such-host'))
       expect(err.code).toBe('host_removed')
@@ -198,6 +248,43 @@ describe('unattended-api', () => {
     it('a plain-text 404 is `unsupported`', async () => {
       testGlobal.fetch.mockResolvedValueOnce(new Response('404 page not found\n', { status: 404 }))
       expect((await rejection(putUnattended(hostId, true))).code).toBe('unsupported')
+    })
+  })
+
+  describe('putRelayQuota', () => {
+    const ans = (over: Record<string, unknown> = {}) => ({
+      session_id: 's1', root_session_id: 'r1', self_left: 5, member_pool_left: 2, rev: 9, updated_at: 123, updated_by: 'Purdex.app', ...over,
+    })
+
+    it('PUTs only the changed field with this app\'s client and returns the answer', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(ans()))
+      const v = await putRelayQuota(hostId, 's1', 'self_left', 5)
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/team/relay-quota')
+      expect(init.method).toBe('PUT')
+      expect(JSON.parse(init.body)).toEqual({ session_id: 's1', self_left: 5, client: { kind: 'app', label: 'Purdex.app' } })
+      expect(v.rev).toBe(9)
+      testGlobal.fetch.mockResolvedValueOnce(json(ans({ member_pool_left: 0 })))
+      await putRelayQuota(hostId, 's1', 'member_pool_left', 0)
+      expect(JSON.parse(testGlobal.fetch.mock.calls[1][1].body)).toEqual({ session_id: 's1', member_pool_left: 0, client: { kind: 'app', label: 'Purdex.app' } })
+    })
+
+    it('an answer that is not the wire shape is bad_response, never a number', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(ans({ rev: undefined })))
+      expect((await rejection(putRelayQuota(hostId, 's1', 'self_left', 5))).code).toBe('bad_response')
+    })
+
+    it('errors map like the other team routes (a code, a plain-text 404 = unsupported)', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'bad_request', detail: 'self_left must be 0-99' }, 400))
+      const a = await rejection(putRelayQuota(hostId, 's1', 'self_left', 5))
+      expect(a.code).toBe('bad_request')
+      testGlobal.fetch.mockResolvedValueOnce(new Response('404 page not found\n', { status: 404 }))
+      expect((await rejection(putRelayQuota(hostId, 's1', 'self_left', 5))).code).toBe('unsupported')
+    })
+
+    it('an unconfigured host is refused before any request', async () => {
+      expect((await rejection(putRelayQuota('no-such-host', 's1', 'self_left', 5))).code).toBe('host_removed')
+      expect(testGlobal.fetch).not.toHaveBeenCalled()
     })
   })
 })

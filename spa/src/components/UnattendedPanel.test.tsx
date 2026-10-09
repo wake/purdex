@@ -8,7 +8,11 @@ import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { ApprovalApiError } from '../lib/team/approval-api'
 import { getUnattended } from '../lib/team/unattended-api'
-import type { Approval, UnattendedView } from '../lib/team/types'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
+import { useTeamRosterStore } from '../stores/useTeamRosterStore'
+import { useRelayQuotaStore, quotaKey } from '../lib/team/relay-quota'
+import { refetchHost, resetWriter } from '../lib/team/relay-quota-writer'
+import type { Approval, SessionQuota, UnattendedView } from '../lib/team/types'
 
 vi.mock('../lib/team/unattended-api', () => ({ getUnattended: vi.fn() }))
 const mockedGet = vi.mocked(getUnattended)
@@ -463,8 +467,278 @@ describe('UnattendedPanel', () => {
     mockedGet.mockResolvedValue(page([]))
     const { onClose } = open([A])
     const panel = await screen.findByTestId('unattended-panel')
-    expect(within(panel).getByText('無人值守期間自動通過')).toBeInTheDocument()
+    expect(within(panel).getByText('無人值守')).toBeInTheDocument()
     fireEvent.click(within(panel).getByTestId('floating-panel-close'))
     expect(onClose).toHaveBeenCalled()
   })
 })
+
+// ---- relay quota (plan RQ-A Task 6) ----
+describe('UnattendedPanel relay quota', () => {
+  const quota = (id: string, over: Partial<SessionQuota> = {}): SessionQuota => ({
+    session_id: id, root_session_id: `root-${id}`, title: `T-${id}`, address: `mlab/${id}-xx`, is_lead: false,
+    self_left: 1, member_pool_left: 0, rev: 3, ...over,
+  })
+  const heldRow = (id: string, createdAt: number): Approval =>
+    approved(id, createdAt + 1_000, { state: 'open', created_at: createdAt, decided_by: undefined, decided_at: undefined })
+
+  beforeEach(() => {
+    useUnattendedStore.getState().reset()
+    useTeamRosterStore.getState().reset()
+    useRelayQuotaStore.getState().reset()
+    resetWriter()
+  })
+
+  it('no quota section for a host without the capability, even if its view happens to carry rows', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'no')
+    mockedGet.mockResolvedValue(page([], { quotas: [quota('p1')] }))
+    open([A])
+    await flush()
+    expect(screen.queryByTestId('quota-section')).toBeNull()
+    expect(useRelayQuotaStore.getState().confirmed).toEqual({})
+  })
+
+  it('with the capability: rows from the first page, the numbers seeded into the store by (host, root)', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([], { quotas: [quota('p1', { self_left: 4, rev: 9 })] }))
+    open([A])
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-p1')
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'root-p1')]).toEqual({ self_left: 4, member_pool_left: 0, rev: 9 })
+  })
+
+  it('events that arrive while the GET is out are applied after it, by the rev rule', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    let release!: (v: UnattendedView) => void
+    mockedGet.mockReturnValue(new Promise<UnattendedView>((r) => { release = r }))
+    open([A])
+    act(() => { useRelayQuotaStore.getState().applyEvent(A, { op: 'changed', root_session_id: 'root-p1', self_left: 8, member_pool_left: 0, rev: 12 }) })
+    expect(useRelayQuotaStore.getState().confirmed).toEqual({}) // buffered
+    await act(async () => { release(page([], { quotas: [quota('p1', { self_left: 2, rev: 10 })] })) })
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'root-p1')]).toEqual({ self_left: 8, member_pool_left: 0, rev: 12 })
+    expect(await screen.findByTestId('quota-value')).toHaveTextContent('8')
+  })
+
+  it('a failed read still releases the buffered events', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    let fail!: (e: unknown) => void
+    mockedGet.mockReturnValue(new Promise<UnattendedView>((_, rej) => { fail = rej }))
+    open([A])
+    act(() => { useRelayQuotaStore.getState().applyEvent(A, { op: 'changed', root_session_id: 'r', self_left: 5, member_pool_left: 0, rev: 2 }) })
+    await act(async () => { fail(new ApprovalApiError(500, 'http_500')) })
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'r')]?.self_left).toBe(5)
+    expect(useRelayQuotaStore.getState().gets).toEqual({})
+  })
+
+  it('「讀不到額度」 when the daemon\'s quotas were null or malformed; 「沒有可設定的 session」 for []', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useUnattendedStore.getState().setQuotaSupport(B, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    useTeamRosterStore.getState().apply(B, [])
+    mockedGet.mockImplementation(async (hostId) => hostId === A ? page([], { quotasFailed: true }) : page([], { quotas: [] }))
+    open([A, B])
+    expect(await screen.findByTestId('quota-unreadable')).toHaveTextContent('mlab：讀不到額度')
+    expect(screen.getByTestId('quota-none')).toHaveTextContent('沒有可設定的 session')
+    expect(screen.getAllByTestId('quota-host-heading').map((h) => h.textContent)).toEqual(['mlab', 'air26'])
+  })
+
+  it('the held section only when held is non-empty, newest first; the approved list below is unchanged', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([approved('a1', at(9, 30))], { quotas: [], held: [heldRow('h1', at(10, 0)), heldRow('h2', at(10, 30))] }))
+    open([A])
+    await waitFor(() => expect(screen.getAllByTestId('held-row')).toHaveLength(2))
+    expect(screen.getByTestId('held-title')).toHaveTextContent('額度用完，等你核准')
+    expect(screen.getAllByTestId('held-row').map((r) => r.textContent)).toEqual(['mlab：sess-h2 · 接力申請 · 10:30', 'mlab：sess-h1 · 接力申請 · 10:00'])
+    expect(rows()).toEqual(['mlab：sess-a1 · 接力申請 · 09:30'])
+  })
+
+  it('no held section when held is absent or empty', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([], { quotas: [], held: [] }))
+    open([A])
+    await flush()
+    expect(screen.queryByTestId('held-section')).toBeNull()
+  })
+
+  it('a re-read (after pending_lineage) replaces the host\'s rows, clears an old failure, and releases its events', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValueOnce(page([], { quotasFailed: true }))
+    open([A])
+    expect(await screen.findByTestId('quota-unreadable')).toBeInTheDocument()
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('p9', { root_session_id: 'real-root', self_left: 6 })] }))
+    await act(async () => { refetchHost(A) })
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-p9')
+    expect(screen.queryByTestId('quota-unreadable')).toBeNull()
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'real-root')]?.self_left).toBe(6)
+  })
+
+  it('closing the panel unregisters the re-read', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([], { quotas: [] }))
+    const view = open([A])
+    await flush()
+    view.unmount()
+    mockedGet.mockClear()
+    refetchHost(A)
+    expect(mockedGet).not.toHaveBeenCalled()
+  })
+})
+
+// 88's ruling (2026-10-09): the panel is 「無人值守」, three blocks with a line between those that are there, and the old list
+// has its own title with the "since" line under it.
+describe('UnattendedPanel layout', () => {
+  beforeEach(() => {
+    useUnattendedStore.getState().reset()
+    useTeamRosterStore.getState().reset()
+    useRelayQuotaStore.getState().reset()
+    resetWriter()
+  })
+
+  it('titled 「無人值守」; the approved list has its own title and the since line sits under it', async () => {
+    mockedGet.mockResolvedValue(page([approved('a1', at(9, 30))]))
+    open([A])
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    const panel = screen.getByTestId('unattended-panel')
+    expect(within(panel).getByText('無人值守')).toBeInTheDocument()
+    expect(within(panel).queryByText('無人值守期間自動通過')).toBeNull()
+    const approvedSection = screen.getByTestId('unattended-approved-section')
+    expect(within(approvedSection).getByTestId('unattended-approved-title')).toHaveTextContent('自動通過的申請')
+    expect(within(approvedSection).getByTestId('unattended-since')).toBeInTheDocument()
+    const children = Array.from(approvedSection.children)
+    expect(children[0]).toBe(screen.getByTestId('unattended-approved-title'))
+    expect(children[1]).toBe(screen.getByTestId('unattended-since'))
+  })
+
+  it('the blocks come in order (quota, held, approved), separated by lines', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValue(page([approved('a1', at(9, 30))], { quotas: [quota('p1')], held: [approved('h1', at(10, 0), { state: 'open', decided_by: undefined, decided_at: undefined })] }))
+    open([A])
+    await waitFor(() => expect(screen.getByTestId('held-section')).toBeInTheDocument())
+    const blocks = Array.from(screen.getByTestId('unattended-panel').querySelector('[aria-busy]')!.children).map((c) => c.getAttribute('data-testid'))
+    expect(blocks).toEqual(['quota-section', 'held-section', 'unattended-approved-section'])
+    expect(screen.getByTestId('quota-section').parentElement!.className).toContain('divide-y')
+  })
+
+  it('is 420 px wide', async () => {
+    mockedGet.mockResolvedValue(page([]))
+    open([A])
+    await flush()
+    expect(screen.getByTestId('unattended-panel').style.width).toBe('420px')
+  })
+
+  const quota = (id: string): SessionQuota => ({
+    session_id: id, root_session_id: `root-${id}`, title: `T-${id}`, address: `mlab/${id}-xx`, is_lead: false, self_left: 1, member_pool_left: 0, rev: 3,
+  })
+})
+
+// codex attack: the panel's GET is bound to the daemon it was asked of. A host re-pointed while it is out (same id, another
+// endpoint) must not show the old daemon's sessions, quotas or held requests, and its late end must not eat the new GET's.
+describe('UnattendedPanel and a re-pointed host', () => {
+  const quota = (id: string, over: Partial<SessionQuota> = {}): SessionQuota => ({
+    session_id: id, root_session_id: `root-${id}`, title: `T-${id}`, address: `mlab/${id}-xx`, is_lead: false, self_left: 1, member_pool_left: 0, rev: 3, ...over,
+  })
+  beforeEach(() => {
+    useUnattendedStore.getState().reset()
+    useTeamRosterStore.getState().reset()
+    useRelayQuotaStore.getState().reset()
+    resetWriter()
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+  })
+  const repoint = () => act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: { ...s.hosts[A], ip: '9.9.9.9' } } })) })
+
+  it('the old daemon\'s late answer is not shown; the new daemon\'s is, from a fresh read', async () => {
+    let old!: (v: UnattendedView) => void
+    mockedGet.mockReturnValueOnce(new Promise<UnattendedView>((r) => { old = r }))
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('new', { self_left: 5, rev: 1 })] }))
+    open([A])
+    repoint()
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-new')
+    await act(async () => { old(page([], { quotas: [quota('old', { self_left: 9, rev: 99 })] })) }) // late
+    expect(screen.getAllByTestId('quota-row').map((r) => r.getAttribute('data-session'))).toEqual(['new'])
+    expect(useRelayQuotaStore.getState().confirmed[quotaKey(A, 'root-old')]).toBeUndefined()
+    expect(useRelayQuotaStore.getState().gets).toEqual({})
+  })
+
+  it('a next page of the old daemon that arrives after a re-point is not appended', async () => {
+    let oldPage!: (v: UnattendedView) => void
+    mockedGet.mockImplementation(async (_h, q) => {
+      if (q?.before !== undefined) return new Promise<UnattendedView>((r) => { oldPage = r })
+      return page([approved('first', at(9, 0))], { truncated: true, next_before: 5 })
+    })
+    open([A])
+    fireEvent.click(await screen.findByTestId('unattended-more'))
+    repoint()
+    await act(async () => { oldPage(page([approved('old-secret', at(8, 0))])) })
+    await flush()
+    expect(screen.queryByText(/old-secret/)).toBeNull()
+    expect(rows()).toHaveLength(1)
+  })
+
+  it('a next page of the old daemon that fails after a re-point does not mark the new daemon failed', async () => {
+    let oldFail!: (e: unknown) => void
+    mockedGet.mockImplementation(async (_h, q) => {
+      if (q?.before !== undefined) return new Promise<UnattendedView>((_r, rej) => { oldFail = rej })
+      return page([approved('first', at(9, 0))], { truncated: true, next_before: 5 })
+    })
+    open([A])
+    fireEvent.click(await screen.findByTestId('unattended-more'))
+    repoint()
+    await flush()
+    await act(async () => { oldFail(new ApprovalApiError(0, 'network')) })
+    await flush()
+    expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
+    expect(rows()).toHaveLength(1)
+  })
+
+  it('a next page that fails after the host was removed neither crashes nor leaves a half page', async () => {
+    let oldFail!: (e: unknown) => void
+    mockedGet.mockImplementation(async (_h, q) => {
+      if (q?.before !== undefined) return new Promise<UnattendedView>((_r, rej) => { oldFail = rej })
+      return page([approved('first', at(9, 0))], { truncated: true, next_before: 5 })
+    })
+    open([A])
+    fireEvent.click(await screen.findByTestId('unattended-more'))
+    act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: undefined as never }, hostOrder: s.hostOrder.filter((h) => h !== A) })) })
+    await act(async () => { oldFail(new ApprovalApiError(0, 'network')) })
+    await flush()
+    expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
+  })
+
+  it('A -> B -> A while a page is out: the old failure still does not land on the reloaded host', async () => {
+    let oldFail!: (e: unknown) => void
+    let first = true
+    mockedGet.mockImplementation(async (_h, q) => {
+      if (q?.before !== undefined && first) { first = false; return new Promise<UnattendedView>((_r, rej) => { oldFail = rej }) }
+      return page([approved('first', at(9, 0))], { truncated: true, next_before: 5 })
+    })
+    open([A])
+    fireEvent.click(await screen.findByTestId('unattended-more'))
+    const ip = useHostStore.getState().hosts[A].ip
+    repoint()
+    await flush()
+    act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: { ...s.hosts[A], ip } } })) })
+    await flush()
+    await act(async () => { oldFail(new ApprovalApiError(0, 'network')) })
+    await flush()
+    expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
+  })
+
+  it('removed host: its rows go and nothing is read', async () => {
+    mockedGet.mockResolvedValue(page([], { quotas: [quota('p1')] }))
+    open([A])
+    expect(await screen.findByTestId('quota-row')).toBeInTheDocument()
+    mockedGet.mockClear()
+    act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: undefined as never }, hostOrder: s.hostOrder.filter((h) => h !== A) })) })
+    await flush()
+    expect(screen.queryByTestId('quota-row')).toBeNull()
+    expect(mockedGet).not.toHaveBeenCalled()
+  })
+})
+

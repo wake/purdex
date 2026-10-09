@@ -325,6 +325,55 @@ export interface UnattendedView extends UnattendedState {
   pending?: number
   /** PUT only: the write took effect but the list could not be read — `approved` is `[]` and says nothing. */
   list_failed?: boolean
+  /**
+   * GET only (daemon D1): every live session of the host with its quota. Absent = an older daemon (no section);
+   * `[]` = a successful read of no session. A `null` or malformed array from the daemon is `quotasFailed`, with no rows.
+   */
+  quotas?: SessionQuota[]
+  quotasFailed?: boolean
+  /** GET only (daemon D3): the open self_relay requests held for quota. Absent = none sent; `[]` = none held. */
+  held?: Approval[]
+}
+
+// ---- RQ-A: per-session relay quota (spec docs/specs/2026-10-09-relay-quota-spec-plan.md; daemon `wire_quota.go`) ----
+
+/** `/api/info` capabilities entry of a daemon that stores and serves relay quotas. */
+export const RELAY_QUOTA_CAPABILITY = 'team.relay_quota.v1'
+/** `HostEvent.type` of a quota change. */
+export const RELAY_QUOTA_EVENT_TYPE = 'team.relay_quota'
+
+/** The two numbers of a chain: the session's own auto-relay quota and (leads) the pool for its members' relays. Integers 0-99. */
+export interface RelayQuotaPair {
+  self_left: number
+  member_pool_left: number
+}
+export type RelayQuotaField = keyof RelayQuotaPair
+
+/** One live session of a host in `UnattendedView.quotas`. `rev` is the chain root row's write counter (daemon D2). */
+export interface SessionQuota extends RelayQuotaPair {
+  session_id: string
+  root_session_id: string
+  title?: string
+  address: string
+  is_lead: boolean
+  rev: number
+}
+
+/** The answer of `PUT /api/team/relay-quota`. `pending_lineage`: the value went to a provisional root that will be orphaned. */
+export interface RelayQuotaView extends RelayQuotaPair {
+  session_id: string
+  root_session_id: string
+  rev: number
+  pending_lineage?: boolean
+  updated_at: number
+  updated_by?: string
+}
+
+/** `HostEvent.value` of a `team.relay_quota` event. */
+export interface RelayQuotaEvent extends RelayQuotaPair {
+  op: 'changed'
+  root_session_id: string
+  rev: number
 }
 
 /** `HostEvent.value` (JSON text) of a `team.unattended` event: a snapshot to each new subscriber, `changed` after every change. */

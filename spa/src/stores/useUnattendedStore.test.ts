@@ -53,3 +53,27 @@ describe('useUnattendedStore', () => {
     expect(useUnattendedStore.getState().byHost).toBe(before)
   })
 })
+
+describe('quotaSupport (relay quota)', () => {
+  beforeEach(() => useUnattendedStore.getState().reset())
+
+  it('is stored per host, is unaffected by a state frame, and goes with the host', () => {
+    const st = useUnattendedStore.getState()
+    st.setQuotaSupport('h1', 'yes')
+    expect(useUnattendedStore.getState().byHost.h1.quotaSupport).toBe('yes')
+    st.applyState('h1', { on: true, since: 1, changed_at: 1 })
+    expect(useUnattendedStore.getState().byHost.h1.quotaSupport).toBe('yes') // a snapshot must not forget what the probe said
+    st.setSupport('h1', 'yes')
+    expect(useUnattendedStore.getState().byHost.h1.quotaSupport).toBe('yes')
+    st.forgetHost('h1')
+    expect(useUnattendedStore.getState().byHost.h1).toBeUndefined()
+  })
+
+  it('setting the same value does not change the store object', () => {
+    const st = useUnattendedStore.getState()
+    st.setQuotaSupport('h1', 'no')
+    const before = useUnattendedStore.getState().byHost
+    st.setQuotaSupport('h1', 'no')
+    expect(useUnattendedStore.getState().byHost).toBe(before)
+  })
+})
