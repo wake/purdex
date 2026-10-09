@@ -136,6 +136,20 @@ func (m *Module) startRemoteSpawn(id string) {
 	m.startSpawn(id)
 }
 
+// killEndedSpawnSessions kills the tmux sessions of the forwarded ops a committed `end` failed (#2327), each only under
+// the generation it was created in. A failure to list them is logged: the lead host's retry of the same command lists
+// again.
+func (m *Module) killEndedSpawnSessions(leadHost, teamID string) {
+	ops, err := m.store.AbandonedSpawnSessions(leadHost, teamID)
+	if err != nil {
+		m.logf("[team] end of team %s from %s: %v", teamID, leadHost, err)
+		return
+	}
+	for _, op := range ops {
+		m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
+	}
+}
+
 // validSpawnCommand is the shape of a `spawn` command ("" = fine).
 func validSpawnCommand(c team.TeamCommand) string {
 	switch {

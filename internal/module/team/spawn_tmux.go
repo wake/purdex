@@ -75,6 +75,13 @@ func (m *Module) recordSession(op spawnRow, id tmux.PaneIdentity) bool {
 	if err != nil {
 		m.abortSpawn(op.ID, id.SessionID, id.Instance, err)
 	}
+	if err == nil && !won {
+		// the op ended while its session was being created (a team's `end`, #2327): nothing recorded this session, so
+		// nobody else will kill it. A runner that merely lost to another runner of the same op leaves it alone.
+		if cur, ok, gerr := m.store.GetSpawnOp(op.ID); gerr == nil && (!ok || cur.State != team.SpawnRunning) {
+			m.killSpawnSession(op.ID, id.SessionID, id.Instance)
+		}
+	}
 	return err == nil && won
 }
 

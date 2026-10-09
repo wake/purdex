@@ -187,8 +187,14 @@ func (m *Module) finishRemote(w http.ResponseWriter, t team.Team, mr memberRow, 
 }
 
 // liveRemoteHostsTx are the hosts that hold a live remote row of the team (§4.2), read in tx.
-func (s *Store) liveRemoteHostsTx(tx *sql.Tx, teamID string) ([]string, error) {
-	rows, err := tx.Query(`SELECT DISTINCT host_id FROM team_members WHERE team_id = ? AND host_id <> ? AND state IN `+liveRemoteStates+` ORDER BY host_id`, teamID, s.localHostID)
+// withSpawns adds the hosts that hold only a running forwarded spawn of the team (#2327): `end` has to reach them too, to
+// abort the op before it registers a member nobody leads.
+func (s *Store) liveRemoteHostsTx(tx *sql.Tx, teamID string, withSpawns bool) ([]string, error) {
+	q, args := `SELECT host_id FROM team_members WHERE team_id = ? AND host_id <> ? AND state IN `+liveRemoteStates, []any{teamID, s.localHostID}
+	if withSpawns {
+		q, args = q+` UNION SELECT host_id FROM remote_spawns WHERE team_id = ? AND host_id <> ? AND state = 'running'`, append(args, teamID, s.localHostID)
+	}
+	rows, err := tx.Query(`SELECT DISTINCT host_id FROM (`+q+`) ORDER BY host_id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +212,7 @@ func (s *Store) liveRemoteHostsTx(tx *sql.Tx, teamID string) ([]string, error) {
 
 // enqueueTeamLevelTx enqueues one team-level command (no mk) per host with a live remote row of the team, in tx.
 func (s *Store) enqueueTeamLevelTx(tx *sql.Tx, t team.Team, kind string, lead team.TeamLead, extra func(*team.TeamCommand), newID func() string, now int64) (int, error) {
-	hosts, err := s.liveRemoteHostsTx(tx, t.ID)
+	hosts, err := s.liveRemoteHostsTx(tx, t.ID, kind == CmdEnd)
 	if err != nil {
 		return 0, err
 	}

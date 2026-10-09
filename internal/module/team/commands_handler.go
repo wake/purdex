@@ -154,6 +154,9 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 	if cmd.Kind == team.CommandSpawn && !res.Replayed {
 		m.startRemoteSpawn(cmd.ID)
 	}
+	if cmd.Kind == team.CommandEnd {
+		m.killEndedSpawnSessions(entry.HostID, cmd.TeamID)
+	}
 	if cmd.Kind == team.CommandKill && plan.Consent && killedOutcome(res.Body) {
 		// Decided and logged (or replayed): now the signal, which a failure here leaves to the lead host's retry of this
 		// very command (a replay signals again). The consent is read once more right before it (the window left is the
