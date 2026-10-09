@@ -30,6 +30,24 @@ func (k *kit) finish(stream string, j Job, r Result) bool {
 	return more
 }
 
+// A job id is the lease's credential: 128 random bits, never a counter an outsider could guess (codex attack).
+// Mutation gate: go back to a sequence → red.
+func TestQueue_JobIDsAreUnguessable(t *testing.T) {
+	k := kitWith(t, "s1", "t1")
+	k.capable["s2"] = true
+	k.turns.set("s2", endedTurn("b", 100, "b"))
+	k.event("s2", 3000)
+	a, b := mustNext(t, k, "m1", "s1"), mustNext(t, k, "m2", "s2")
+	for _, id := range []string{a.ID, b.ID} {
+		if len(id) != len("wbj-")+32 || !strings.HasPrefix(id, "wbj-") {
+			t.Fatalf("id = %q", id)
+		}
+	}
+	if a.ID == b.ID {
+		t.Fatal("same id twice")
+	}
+}
+
 func TestQueue_ConversationsAreIndependent(t *testing.T) {
 	k := kitWith(t, "s1", "a")
 	k.capable["s2"] = true

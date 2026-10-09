@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,9 +38,17 @@ type HandlerOption func(*handler)
 func WithTeamReader(r TeamReader) HandlerOption { return func(h *handler) { h.team = r } }
 
 type handler struct {
-	reg  *Registry
-	team TeamReader
+	reg      *Registry
+	team     TeamReader
+	workbook func() WorkbookService
+	polls    pollGate
+	// activePolls counts the long polls being served (hard cap maxPolls).
+	activePolls atomic.Int32
+	maxPolls    int
 }
+
+// withMaxPolls lowers the poll cap (tests).
+func withMaxPolls(n int) HandlerOption { return func(h *handler) { h.maxPolls = n } }
 
 // MaxBody caps a request body; larger bodies get 413.
 const MaxBody = 1 << 20
@@ -51,7 +60,7 @@ const MaxBody = 1 << 20
 // 500 {"error":"internal"} for any other Apply error. Any other path is
 // 404, any other method 405.
 func NewHandler(reg *Registry, opts ...HandlerOption) http.Handler {
-	h := &handler{reg: reg}
+	h := &handler{reg: reg, maxPolls: defaultMaxPolls}
 	for _, o := range opts {
 		o(h)
 	}
@@ -61,6 +70,10 @@ func NewHandler(reg *Registry, opts ...HandlerOption) http.Handler {
 			h.events(w, r)
 		case TeamPath:
 			h.teamRead(w, r)
+		case WorkbookNextPath:
+			h.workbookNext(w, r)
+		case WorkbookResultPath:
+			h.workbookResult(w, r)
 		default:
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 		}
@@ -129,6 +142,12 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
 	default:
+		// `workbook: true` tells the mod a job of its session's conversation waits that nobody holds, so it asks `next`
+		// (wire additive: an older mod ignores the field). Without a waiting job the answer is the bare ack.
+		if svc, sid := h.service(), b.Events[len(b.Events)-1].SID; svc != nil && h.streamMayPoll(b.Stream, sid) && svc.JobWaiting(sid) {
+			writeJSON(w, http.StatusOK, map[string]any{"ack": ack, "workbook": true})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]int64{"ack": ack})
 	}
 }

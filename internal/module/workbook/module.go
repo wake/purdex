@@ -15,6 +15,7 @@ import (
 
 	"github.com/wake/purdex/internal/convturns"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/modevents"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/team"
 )
@@ -49,6 +50,7 @@ func (m *Module) Dependencies() []string {
 // Init opens workbook.db. A failure leaves the module off (recorded, logged, nil returned).
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	c.Registry.Register(JobsKey, jobsService{m: m}) // the mod socket's routes find the job queue here
 	c.CfgMu.RLock()
 	dataDir := c.Cfg.DataDir
 	c.CfgMu.RUnlock()
@@ -142,6 +144,13 @@ func (m *Module) startEngine(st *Store) {
 		}
 		if svc, ok := reg.Get(team.SeatReaderKey); ok {
 			d.Seats, _ = svc.(team.SeatReader)
+		}
+		// A session is capable when a live stream of it announced workbook.v2 within the last 30 s (plan D11); the
+		// registry is the mod event channel's ("modevents" is its service name).
+		if svc, ok := reg.Get("modevents"); ok {
+			if mr, ok := svc.(*modevents.Registry); ok {
+				d.Capable = func(sid string) bool { return mr.SessionCapable(sid, CapV2, modevents.CapsFresh) }
+			}
 		}
 	}
 	eng := NewEngine(d)

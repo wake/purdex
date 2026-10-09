@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -44,6 +45,8 @@ type StreamInfo struct {
 	LastSeq      int64
 	Gaps         int64
 	DroppedTotal int64
+	Caps         []string  // from the latest batch that named any
+	CapsAt       time.Time // when that batch arrived
 	Rejected     int64
 	Ended        bool // a session.end other than /clear or /resume; a later event clears it
 	EndedAt      time.Time
@@ -52,6 +55,7 @@ type StreamInfo struct {
 
 func (i StreamInfo) clone() StreamInfo {
 	i.Counts = maps.Clone(i.Counts)
+	i.Caps = slices.Clone(i.Caps)
 	return i
 }
 
@@ -145,6 +149,10 @@ func (r *Registry) Apply(b Batch) (ack int64, err error) {
 	in.Agent, in.CCVersion, in.ModVersion = b.Agent, b.CCVersion, b.ModVersion
 	in.LastSeen = now
 	in.DroppedTotal = max(in.DroppedTotal, b.DroppedTotal)
+	// A batch without caps (an older mod, or a mod that lost the feature) leaves the last ones to age out.
+	if len(b.Caps) > 0 {
+		in.Caps, in.CapsAt = slices.Clone(b.Caps), now
+	}
 	// Every batch of a U1-2a-1 mod names the cwd and that the session is
 	// interactive, so a stream first heard after a daemon restart (no
 	// session.start) has both from its first delivery. An older mod sends
@@ -256,6 +264,37 @@ func (r *Registry) admitLocked(id string) (s *stream, ok bool) {
 	s = &stream{info: StreamInfo{Stream: id, FirstSeen: now, LastSeen: now, Counts: map[string]int64{}}}
 	r.streams[id] = s
 	return s, true
+}
+
+// CapsFresh is how recently a stream must have announced a capability for it to count (plan D11).
+const CapsFresh = 30 * time.Second
+
+// SessionCapable reports whether a live stream whose current session id is sid announced capability c within `within`.
+func (r *Registry) SessionCapable(sid, c string, within time.Duration) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	for _, s := range r.streams {
+		in := &s.info
+		if in.SID == sid && !in.Ended && !in.CapsAt.IsZero() && now.Sub(in.CapsAt) <= within && slices.Contains(in.Caps, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// StreamCapable is SessionCapable for one named stream: that stream is live, its current session is sid, and it announced
+// c within `within`. The workbook routes use it so a caller cannot take work for a session through a stream that is not
+// that session's.
+func (r *Registry) StreamCapable(stream, sid, c string, within time.Duration) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.streams[stream]
+	if !ok {
+		return false
+	}
+	in := &s.info
+	return in.SID == sid && !in.Ended && !in.CapsAt.IsZero() && r.now().Sub(in.CapsAt) <= within && slices.Contains(in.Caps, c)
 }
 
 // Evict drops ended streams EndedTTL after session.end and any stream

@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/modevents"
 	"github.com/wake/purdex/internal/module/agent"
 )
 
@@ -158,6 +160,66 @@ func TestModule_StartSubscribesTheEngineAndStopLetsGo(t *testing.T) {
 	}
 	if sessions.unsub != 1 || m.Jobs() != nil {
 		t.Fatalf("unsub = %d, jobs = %v", sessions.unsub, m.Jobs())
+	}
+}
+
+// The whole path through the registry services: a mod that announced workbook.v2 on its stream is capable, its session's
+// turn becomes a job the socket service hands out, and the result finishes the entry; a session with no fresh
+// announcement is skipped:no_mod (plan D11).
+// Mutation gate: drop the Capable wiring, or the JobsKey registration → red.
+func TestModule_TheModSocketPathEndToEnd(t *testing.T) {
+	sid := "0f8e2c1a-1b2c-4d3e-8f90-a1b2c3d4e5f6"
+	other := "11111111-1111-4111-8111-111111111111"
+	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir()}})
+	sessions := &fakeSessions{}
+	c.Registry.Register(agent.TerminalSessionsKey, sessions)
+	modReg := modevents.NewRegistry(time.Now)
+	c.Registry.Register("modevents", modReg)
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Stop(context.Background()) })
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := modReg.Apply(modevents.Batch{V: 1, Stream: "stream-aaaa", Agent: "cc", Caps: []string{CapV2},
+		Events: []modevents.Event{{Seq: 1, SID: sid, Type: "heartbeat", Data: []byte(`{}`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	svc, ok := c.Registry.Get(JobsKey)
+	if !ok {
+		t.Fatal("no job service registered")
+	}
+	jobs := svc.(modevents.WorkbookService)
+	sessions.fn(agent.TurnEndEvent{SessionID: other, Text: "沒有 mod", At: 1000, Seq: 1})
+	sessions.fn(agent.TurnEndEvent{SessionID: sid, Text: "做完了", At: 2000, Seq: 2})
+	if !jobs.JobWaiting(sid) || jobs.JobWaiting(other) {
+		t.Fatal("only the capable session is told a job waits")
+	}
+	job, ok := jobs.NextJob(context.Background(), "stream-aaaa", sid, 0)
+	if !ok {
+		t.Fatal("no job")
+	}
+	id := job.(Job).ID
+	if _, err := jobs.JobResult("stream-bbbb", modevents.WorkbookResult{JobID: id}); err != modevents.ErrNotLeased {
+		t.Fatalf("another stream: %v", err)
+	}
+	text := `{"skip":false,"thing":"事","push":"推","entry":"句。","status":"狀","thing_done":false,"todos":{"done":[],"dropped":[],"add":[]}}`
+	if _, err := jobs.JobResult("stream-aaaa", modevents.WorkbookResult{JobID: id, Answered: true, Text: text,
+		Usage: modevents.WorkbookUsage{Input: 9}, LatencyMS: 5}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := m.live().Conversation(sid, 10, 0)
+	if len(rows) != 1 || rows[0].State != StateOK || rows[0].Thing != "事" || rows[0].UsageIn != 9 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if rows, _ := m.live().Conversation(other, 10, 0); len(rows) != 1 || rows[0].Reason != ReasonNoMod {
+		t.Fatalf("other = %+v", rows)
+	}
+	m.Stop(context.Background())
+	if _, err := jobs.JobResult("stream-aaaa", modevents.WorkbookResult{JobID: id}); err != modevents.ErrNotLeased || jobs.JobWaiting(sid) {
+		t.Fatal("a stopped module hands nothing out")
 	}
 }
 
