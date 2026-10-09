@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -237,5 +238,34 @@ func TestReconcile_NeedsAStartTimeToWriteACleared(t *testing.T) {
 	g.setFrames(frameOf("sid-1b", "%1", true))
 	if got, _ := g.m.reconcileFromFrames(context.Background(), g.op(out.Op.ID)); got.State != team.RelayCleared || got.NewSessionID != "sid-1b" {
 		t.Fatalf("old self op: %+v", got)
+	}
+}
+
+// A list that fails does not use up the after-grace run: the next liveness tick tries again, or an op whose verdict
+// the grace deferred would be stuck for good. Mutation gate: set the flag before the list → red.
+func TestReconcile_AfterGraceTriesAgainWhenTheListFails(t *testing.T) {
+	f := newFixture(t)
+	op := f.claimedMemberOp()
+	f.setFrames()
+	f.origins.markDead("sid-m1")
+	f.m.bootAt = f.clock.Load()
+	f.clock.Add(team.BootGraceS*1000 + 1)
+	fail := true
+	f.m.listActiveOps = func() ([]team.RelayOp, error) {
+		if fail {
+			return nil, errors.New("team.db busy")
+		}
+		return f.m.store.ListActiveRelayOps()
+	}
+	f.m.tickN = livenessEvery - 1
+	f.m.tick()
+	if f.op(op.ID).State != team.RelayClaimed || f.m.bootReconciled {
+		t.Fatalf("a failed list: op %s, reconciled=%v", f.op(op.ID).State, f.m.bootReconciled)
+	}
+	fail = false
+	f.m.tickN = livenessEvery - 1
+	f.m.tick()
+	if got := f.op(op.ID); got.State != team.RelayFailed || !f.m.bootReconciled {
+		t.Fatalf("the next tick: op %+v, reconciled=%v", got, f.m.bootReconciled)
 	}
 }

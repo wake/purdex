@@ -191,11 +191,15 @@ func (m *Module) reconcileAfterBootGrace() {
 	if m.bootReconciled || m.now() < m.bootAt+team.BootGraceS*1000 {
 		return
 	}
-	m.bootReconciled = true
-	ops, err := m.store.ListActiveRelayOps()
+	list := m.store.ListActiveRelayOps
+	if m.listActiveOps != nil {
+		list = m.listActiveOps
+	}
+	ops, err := list()
 	if err != nil {
-		m.logf("[team] after the boot grace: list relay ops: %v", err)
-		return
+		m.logf("[team] after the boot grace: list relay ops (tried again at the next liveness tick): %v", err)
+		return // bootReconciled stays false: the deferred verdicts must not be lost
 	}
 	m.reconcileOpsFromFrames(ops)
+	m.bootReconciled = true
 }
