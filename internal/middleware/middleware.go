@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/wake/purdex/internal/devices"
 )
 
 // IPWhitelist restricts access by IP. Empty list = allow all.
@@ -69,6 +71,14 @@ type TicketValidator interface {
 // never stand in for the bearer on a REST route (e.g. /api/nex/...
 // mutations).
 func TokenAuth(tokenFn func() string, tickets TicketValidator) func(http.Handler) http.Handler {
+	return TokenAuthWith(tokenFn, tickets, nil)
+}
+
+// TokenAuthWith is TokenAuth that also accepts a live device token (a paired phone's, QR pairing spec §3.2): a bearer
+// shaped like one (and only such a bearer) is offered to devs, and when it is live the request goes on carrying the
+// device principal in its context. The admin token is checked first and carries no principal; an empty admin token leaves
+// auth off exactly as before (device tokens add nothing there); a nil devs makes this TokenAuth.
+func TokenAuthWith(tokenFn func() string, tickets TicketValidator, devs devices.Authenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := tokenFn()
@@ -77,9 +87,19 @@ func TokenAuth(tokenFn func() string, tickets TicketValidator) func(http.Handler
 				return
 			}
 			// Check Authorization header first
-			if auth := r.Header.Get("Authorization"); len(auth) >= 7 && strings.EqualFold(auth[:7], "bearer ") && subtle.ConstantTimeCompare([]byte(auth[7:]), []byte(token)) == 1 {
-				next.ServeHTTP(w, r)
-				return
+			auth := r.Header.Get("Authorization")
+			if len(auth) >= 7 && strings.EqualFold(auth[:7], "bearer ") {
+				bearer := auth[7:]
+				if subtle.ConstantTimeCompare([]byte(bearer), []byte(token)) == 1 {
+					next.ServeHTTP(w, r)
+					return
+				}
+				if devs != nil && devices.IsDeviceToken(bearer) {
+					if p, ok := devs.AuthenticateToken(bearer); ok {
+						next.ServeHTTP(w, r.WithContext(devices.WithPrincipal(r.Context(), p)))
+						return
+					}
+				}
 			}
 			// Check one-time ticket — real WebSocket handshakes only: a
 			// WebSocket handshake is a GET; anything else with upgrade
