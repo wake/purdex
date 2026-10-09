@@ -10,6 +10,12 @@ import (
 // this far behind is stuck, and its overflow is dropped (counted) rather than allowed to slow the approval paths.
 const approvalSubQueue = 256
 
+// OpenApprovals implements team.OpenApprovalsReader: a fresh read of the open set from the store (no event lock; it is a
+// point-in-time read for a consumer that keeps no copy). The store error is returned as is.
+func (m *Module) OpenApprovals() ([]team.Approval, error) {
+	return m.store.ListOpen()
+}
+
 type approvalEvent struct {
 	op string
 	a  team.Approval

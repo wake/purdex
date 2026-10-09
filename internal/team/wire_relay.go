@@ -186,6 +186,13 @@ type ApprovalEvents interface {
 	SubscribeApprovals(fn func(op string, a Approval)) (open []Approval, unsubscribe func())
 }
 
+// OpenApprovalsReader is a fresh read of the open approval set, for a consumer that needs the truth now rather than a
+// copy it kept from the stream (push spec §6: the badge count). The team module also implements it, on the same object
+// it registers under ApprovalEventsKey. The read may fail; a caller treats that as "unknown", never as an empty set.
+type OpenApprovalsReader interface {
+	OpenApprovals() ([]Approval, error)
+}
+
 // LineageReaderKey is the service-registry key under which the team module
 // publishes its LineageReader; the peers module reads it at request time
 // (team depends on peers, so peers cannot import the team module).
