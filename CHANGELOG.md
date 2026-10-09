@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.645] - 2026-10-09
+
+> 動 daemon 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 改了）；SPA、Electron 不必更新。在手機上遇到 Claude 的選擇題時，可以不選選項、直接回一段話給它。
+
+### Added：在手機上用一段話回覆 AskUserQuestion（ask chat）— #2205，介面線
+
+- Claude 用 AskUserQuestion 問你時，手機的 ask 小卡多了「改成跟 agent 聊聊」：你打的話會直接送回給 Claude，當作你的回覆（等同原生的 Chat about this），電腦上那個原生對話框也會自動關掉。
+- 原本的選選項回覆、在電腦上直接回答、推播都不變。
+- 舊版 mod 遇到新版 daemon 時會退回原本的對話框，不會出錯。
+
+### Changed：接力用的鎖檔工具搬到共用位置 — P6-3b-1（#2206，A 線）
+
+- 純搬移，行為不變；為之後「接力寫交接檔時鎖住其他工具」做準備。
+
 ## [1.0.0-alpha.644] - 2026-10-09
 
 > 動 mod、daemon 與 pdx-team skill：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 與 skill 改了）；SPA、Electron 不必更新。接力時，交接檔裡的 git 狀態改由 mod 自動抓好給 Claude 照抄。
