@@ -320,18 +320,20 @@ func TestFacts_AFloodOfFreshIdsIsRateLimited(t *testing.T) {
 	}
 }
 
-// codex re-review: the stored answer is consulted before the shape check, and the shape check before the addressing
-// refusal (§6.1 order). A malformed fact is answered 400 and never stored — even when it is also addressed to another
-// host; a stored answer survives a validation that later rejects the same copy.
-// Mutation gate: validate before the stored lookup → the replay answers bad_request → red.
-func TestFacts_AStoredAnswerPrecedesValidationAndShapePrecedesAddressing(t *testing.T) {
+// codex re-review: the stored answer is consulted first, then the addressing / kind refusal, then the field validation —
+// the commands route's order (§6.1). A fact addressed to another host is wrong_host (stored) even when it is also
+// malformed; a malformed fact addressed to us is answered 400 and not stored; a stored answer survives a validation that
+// later rejects the same copy. Mutation gate: validation before the addressing refusal → red.
+func TestFacts_StoredAnswerThenAddressingThenValidation(t *testing.T) {
 	f := factFixture(t)
 	f.remoteRow("abc12", "lead:1", "mk1", rowActive)
-	// malformed AND addressed elsewhere: bad_request, not stored
 	both := endedFact(factUUID1, "")
 	both.ToHostID = "other:1"
-	if code, body := f.postFact(leadPrincipal(), both); code != 400 || errCode(t, body) != "bad_request" || factLogCount(t, f) != 0 {
+	if code, body := f.postFact(leadPrincipal(), both); code != 409 || errCode(t, body) != "wrong_host" || factLogCount(t, f) != 1 {
 		t.Fatalf("malformed+wrong host = %d %s, logged %d", code, body, factLogCount(t, f))
+	}
+	if code, body := f.postFact(leadPrincipal(), endedFact(factUUID3, "")); code != 400 || errCode(t, body) != "bad_request" || factLogCount(t, f) != 1 {
+		t.Fatalf("malformed = %d %s, logged %d", code, body, factLogCount(t, f))
 	}
 	// a stored decision whose copy would now fail validation keeps its answer
 	stored := endedFact(factUUID2, "mk1")

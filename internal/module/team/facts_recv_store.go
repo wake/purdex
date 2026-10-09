@@ -80,10 +80,10 @@ func (s *Store) ApplyTeamFact(p FactPlan) (CommandResult, error) {
 	}
 
 	switch {
-	case p.Invalid != "": // shape before addressing (spec §6.1), after the stored answer above
-		return refusal(http.StatusBadRequest, team.ErrCommandBadRequest, p.Invalid), nil
-	case p.Refusal != nil:
+	case p.Refusal != nil: // addressing and kind first, as the commands route (§6.1), after the stored answer above
 		res, err = *p.Refusal, nil
+	case p.Invalid != "":
+		return refusal(http.StatusBadRequest, team.ErrCommandBadRequest, p.Invalid), nil
 	case p.fact.Kind == team.FactEnded:
 		res, err = s.applyEndedIn(tx, p)
 	default:
