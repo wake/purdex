@@ -24,6 +24,12 @@ type OwnerSource interface {
 	ConfirmedOwners(ctx context.Context, sessionID string) ([]agent.PaneOwner, error)
 }
 
+// LightSource reads the current light of one confirmed frame without the full owner lookup (no tmux, no process
+// walk): the agent module. Optional: without it the light is only as fresh as the last full lookup.
+type LightSource interface {
+	LightStatus(sessionID, frameID string) (status string, ok bool)
+}
+
 const (
 	// maxBody is the largest encoded response body (spec §8.2).
 	maxBody = 4 << 20
@@ -39,7 +45,8 @@ type Module struct {
 	feed     team.ApprovalFeed
 	cache    *convfeed.Cache
 	resolver *convfeed.Resolver
-	maxBody  int // tests lower it
+	light    LightSource // nil: no cheap light
+	maxBody  int         // tests lower it
 	subSem   chan struct{}
 
 	mu      sync.Mutex
@@ -124,6 +131,7 @@ func (m *Module) Init(c *core.Core) error {
 	if !ok {
 		return fmt.Errorf("conversation: service %q does not implement OwnerSource (%T)", agentKey, svc)
 	}
+	m.light, _ = svc.(LightSource)
 	fsvc, ok := c.Registry.Get(team.ApprovalFeedKey)
 	if !ok {
 		return fmt.Errorf("conversation: service %q not registered", team.ApprovalFeedKey)
@@ -205,7 +213,7 @@ func (a ownerAdapter) LiveSessions(ctx context.Context, sessionID string) ([]con
 	}
 	out := make([]convfeed.Owner, 0, len(panes))
 	for _, p := range panes {
-		out = append(out, convfeed.Owner{TranscriptPath: p.TranscriptPath, Status: p.Status, SeenAt: p.LastSeenAt})
+		out = append(out, convfeed.Owner{TranscriptPath: p.TranscriptPath, Status: p.Status, SeenAt: p.LastSeenAt, FrameID: p.FrameID})
 	}
 	return out, nil
 }

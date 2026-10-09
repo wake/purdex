@@ -310,6 +310,10 @@ func (c *wsConn) follow() {
 			return
 		case <-tick.C:
 		}
+		// The cheap light is read before the entry gate (a store query must not hold up other followers of the entry)
+		// for the frame the last full lookup confirmed, and applied only to that same source.
+		lightAt := time.Now() // before the query: the Entry compares readings by this
+		light, lightOK, lightFrame := c.m.cheapLight(src, have, c.sid)
 		err := c.entry.Exclusive(c.ctx, func() error {
 			if !have || time.Since(resolvedAt) >= c.m.reresolveEvery() {
 				dropSrc()
@@ -318,6 +322,8 @@ func (c *wsConn) follow() {
 					return err
 				}
 				src, have, resolvedAt = s, true, time.Now()
+			} else if lightOK && src.Live && src.FrameID == lightFrame {
+				src.Status, src.StatusAt = light, lightAt
 			}
 			_, err := c.entry.Refresh(c.ctx, src)
 			return err
@@ -402,4 +408,19 @@ func (c *wsConn) readLoop() {
 			return
 		}
 	}
+}
+
+// cheapLight reads the current light of the frame the last full lookup confirmed, so a change of the pane's light
+// reaches the stream within one poll instead of one full re-resolve. A source that is not live keeps what the
+// resolver said ("ended" / "unknown"), and so does one the cheap lookup cannot place; a source resolved in the same
+// tick is already current and ignores the reading.
+func (m *Module) cheapLight(src convfeed.Source, have bool, sid string) (status string, ok bool, frameID string) {
+	if m.light == nil || !have || !src.Live || src.FrameID == "" {
+		return "", false, ""
+	}
+	st, ok := m.light.LightStatus(sid, src.FrameID)
+	if !ok || st == "" {
+		return "", false, ""
+	}
+	return st, true, src.FrameID
 }

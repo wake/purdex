@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/convmodel"
 	"github.com/wake/purdex/internal/convmodel/ccnorm"
@@ -371,6 +372,56 @@ func TestEntry_ModelStaysValid(t *testing.T) {
 
 // The resolver's status and backend are part of the header: a change bumps the revision (an increment or a WebSocket
 // frame reports it) and two reads of one entry never mix two requests' statuses.
+// A reading taken before the entry's current one never replaces it: a follower that read the light, then waited for
+// the gate while another follower refreshed a newer reading, must not move the status backwards.
+func TestEntry_AnOlderStatusReadingDoesNotReplaceANewerOne(t *testing.T) {
+	m := newMem(idle(1)...)
+	e := NewEntry(sidA)
+	t0 := time.Unix(1000, 0)
+	s := src(m, "f1", true)
+	s.Status, s.Backend, s.StatusAt = "running", "terminal", t0.Add(2*time.Second)
+	refresh(t, e, s)
+	rev := e.Revision()
+
+	s.Status, s.StatusAt = "idle", t0.Add(time.Second) // read earlier, applied later
+	refresh(t, e, s)
+	if e.Header().Status != "running" || e.Revision() != rev {
+		t.Fatalf("an older reading moved the entry: %+v rev %d (was %d)", e.Header(), e.Revision(), rev)
+	}
+
+	s.Status, s.StatusAt = "waiting", t0.Add(3*time.Second)
+	refresh(t, e, s)
+	if e.Header().Status != "waiting" {
+		t.Fatalf("a newer reading was refused: %+v", e.Header())
+	}
+
+	// the watermark moves with every accepted reading, also one that changes nothing
+	s.Status, s.StatusAt = "waiting", t0.Add(5*time.Second)
+	refresh(t, e, s)
+	s.Status, s.StatusAt = "idle", t0.Add(4*time.Second)
+	refresh(t, e, s)
+	if e.Header().Status != "waiting" {
+		t.Fatalf("a reading older than an unchanged newer one was applied: %+v", e.Header())
+	}
+
+	// live / status / backend are one reading: an older one changes none of them
+	live := src(m, "f1", false)
+	live.Status, live.Backend, live.StatusAt = "ended", "", t0.Add(7*time.Second)
+	refresh(t, e, live)
+	stale := src(m, "f1", true)
+	stale.Status, stale.Backend, stale.StatusAt = "running", "terminal", t0.Add(6*time.Second)
+	refresh(t, e, stale)
+	if h := e.Header(); h.Live || h.Status != "ended" || h.Backend != "" {
+		t.Fatalf("an older reading changed the header tuple: %+v", h)
+	}
+
+	s.Status, s.StatusAt = "idle", time.Time{} // no timestamp: always applies (sources that do not carry one)
+	refresh(t, e, s)
+	if e.Header().Status != "idle" {
+		t.Fatalf("an untimed source was refused: %+v", e.Header())
+	}
+}
+
 func TestEntry_StatusAndBackendAreHeaderFields(t *testing.T) {
 	m := newMem(idle(1)...)
 	e := NewEntry(sidA)
