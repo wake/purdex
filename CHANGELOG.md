@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.641] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版沒有你看得到的變化，是「lead 幫 member 接力」的地基。
+
+### Added：member 接力的資料準備 — P6-2a（#2188，A 線）
+
+- daemon 會把每個 session 載入的 Purdex mod 版本記進資料庫，重啟後仍然記得（之前只放在記憶體裡）。之後 lead 幫 member 接力前，會用它確認 member 的 mod 夠新。
+- 接力紀錄多記 member 的行程編號與 tmux pane，之後用來確認接力完成的是同一個 member。
+- 開機時會替既有的接力紀錄表加兩個欄位、建一張新表，舊資料不受影響。
+
 ## [1.0.0-alpha.640] - 2026-10-09
 
 > 動 daemon 與 pdx-team skill：**要部署 daemon，並重跑 `pdx setup --agent cc`**（skill 改了）；SPA、Electron 不必更新。lead 接力後，它的 member 會收到新 lead 的地址。
