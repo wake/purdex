@@ -142,25 +142,55 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	defer release()
 
 	if err := entry.Exclusive(r.Context(), func() error { return m.refresh(r.Context(), entry, sid) }); err != nil {
-		var re resolveError
-		switch {
-		case r.Context().Err() != nil: // the request is gone: nobody to answer
-		case errors.Is(err, convfeed.ErrNotFound):
-			writeError(w, http.StatusNotFound, "not_found")
-		case errors.Is(err, convfeed.ErrFileChanged):
-			writeError(w, http.StatusServiceUnavailable, "file_changed")
-		case errors.As(err, &re):
-			writeError(w, http.StatusInternalServerError, "resolve_failed")
-		default:
-			writeError(w, http.StatusInternalServerError, "read_failed")
-		}
+		m.writeRefreshError(w, r, err)
 		return
 	}
 
-	m.core.CfgMu.RLock()
-	hostID := m.core.Cfg.HostID
-	m.core.CfgMu.RUnlock()
+	hostID := m.hostID()
+	reset := false
+	if q.Has("after") {
+		inc := entry.Increment(afterEpoch, afterRev)
+		if !inc.Stale {
+			if body, ok := m.encodeIncrement(inc, hostID, 0); ok {
+				writeJSON(w, http.StatusOK, body)
+				return
+			}
+		}
+		reset = true // a cursor of another epoch, or a catch-up too big for one answer: a fresh snapshot instead
+	}
+	body, _, status, code := m.snapshotBody(entry, sid, hostID, turns, before, around, q.Has("around"), reset)
+	if code != "" {
+		writeError(w, status, code)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
+}
 
+// writeRefreshError answers a failed resolve-and-refresh (nothing for a request that is already gone).
+func (m *Module) writeRefreshError(w http.ResponseWriter, r *http.Request, err error) {
+	var re resolveError
+	switch {
+	case r.Context().Err() != nil: // the request is gone: nobody to answer
+	case errors.Is(err, convfeed.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found")
+	case errors.Is(err, convfeed.ErrFileChanged):
+		writeError(w, http.StatusServiceUnavailable, "file_changed")
+	case errors.As(err, &re):
+		writeError(w, http.StatusInternalServerError, "resolve_failed")
+	default:
+		writeError(w, http.StatusInternalServerError, "read_failed")
+	}
+}
+
+func (m *Module) hostID() string {
+	m.core.CfgMu.RLock()
+	defer m.core.CfgMu.RUnlock()
+	return m.core.Cfg.HostID
+}
+
+// snapshotBody builds the snapshot answer (the same body for HTTP and for a WebSocket's snapshot frame): the window
+// under the 4 MiB cap, the header and the cursor of one instant. On failure it returns the HTTP status and error code.
+func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, turns, before int, around string, hasAround, reset bool) (body []byte, cursor string, status int, code string) {
 	build := func(h convfeed.Header, cursor string, turnList []convmodel.Turn, win convfeed.WindowResult, reset bool) snapshotJSON {
 		var cu *convmodel.Usage
 		if h.Usage != nil {
@@ -177,20 +207,6 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 			Cursor: cursor,
 		}
 	}
-
-	reset := false
-	if q.Has("after") {
-		inc := entry.Increment(afterEpoch, afterRev)
-		if !inc.Stale {
-			body, ok := m.encodeIncrement(inc, hostID)
-			if ok {
-				writeJSON(w, http.StatusOK, body)
-				return
-			}
-		}
-		reset = true // a cursor of another epoch, or a catch-up too big for one answer: a fresh snapshot instead
-	}
-
 	envelope := func(h convfeed.Header, cursor string) func([]byte) bool {
 		empty, _ := json.Marshal(build(h, cursor, []convmodel.Turn{}, convfeed.WindowResult{}, reset))
 		return func(turnArray []byte) bool { // the array replaces the "[]" of the empty body
@@ -198,31 +214,27 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var view convfeed.View
-	if q.Has("around") {
+	if hasAround {
 		var found, shown bool
 		if view, found, shown = entry.ViewAround(turns, around, envelope); !found {
-			writeError(w, http.StatusNotFound, "item_not_found")
-			return
+			return nil, "", http.StatusNotFound, "item_not_found"
 		} else if !shown && !view.OverBudget {
-			writeError(w, http.StatusUnprocessableEntity, "item_not_shown") // its turn is over the cap and the item was dropped
-			return
+			return nil, "", http.StatusUnprocessableEntity, "item_not_shown" // its turn is over the cap and the item was dropped
 		}
 	} else {
 		view = entry.View(turns, before, envelope)
 	}
 	if view.OverBudget {
-		writeError(w, http.StatusInternalServerError, "too_large")
-		return
+		return nil, "", http.StatusInternalServerError, "too_large"
 	}
 	if view.Turns == nil {
 		view.Turns = []convmodel.Turn{}
 	}
 	body, err := json.Marshal(build(view.Header, view.Cursor, view.Turns, view.WindowResult, reset))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "encode_failed")
-		return
+		return nil, "", http.StatusInternalServerError, "encode_failed"
 	}
-	writeJSON(w, http.StatusOK, body)
+	return body, view.Cursor, http.StatusOK, ""
 }
 
 type turnHeaderJSON struct {
@@ -248,7 +260,7 @@ type incrementJSON struct {
 
 // encodeIncrement is the answer to a valid cursor; ok is false when it would pass the body cap (the caller then
 // answers a reset with a snapshot, which has its own way to fit).
-func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string) (body []byte, ok bool) {
+func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string, overhead int) (body []byte, ok bool) {
 	resp := incrementJSON{Changes: make([]changeJSON, 0, len(inc.Changes)), Header: headerOf(inc.Header), Cursor: inc.Cursor}
 	for _, c := range inc.Changes {
 		t := c.Turn
@@ -262,7 +274,7 @@ func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string) (body []
 		})
 	}
 	body, err := json.Marshal(resp)
-	if err != nil || len(body) > m.maxBody {
+	if err != nil || len(body)+overhead > m.maxBody { // overhead: what a WebSocket frame adds around the body
 		return nil, false
 	}
 	return body, true
