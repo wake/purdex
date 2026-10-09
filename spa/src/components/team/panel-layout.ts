@@ -61,11 +61,12 @@ export function firstRowCapacity(width: number): number {
 export const PLUS_CHIP_W = 28
 
 /**
- * How many cells of width `unit` fit in `avail` px (lead's divider included), at least 1. `reserve` px are kept free
- * at the end (the strip's 「+N」); the header row passes 0.
+ * How many cells of width `unit` fit in `avail` px (lead's divider included), at least `min`. `reserve` px are kept free
+ * at the end (the strip's 「+N」); the header row passes 0. The header row's first row never goes below 1 (`min` 1, the
+ * default); the title-bar strip passes 0: a seat that does not fit goes into 「+N」 however narrow the bar is.
  */
-export function capacityOf(avail: number, unit: number, reserve = 0): number {
-  return Math.max(1, Math.floor((avail - reserve - SEP_W + CELL_GAP) / (unit + CELL_GAP)))
+export function capacityOf(avail: number, unit: number, reserve = 0, min = 1): number {
+  return Math.max(min, Math.floor((avail - reserve - SEP_W + CELL_GAP) / (unit + CELL_GAP)))
 }
 
 /**

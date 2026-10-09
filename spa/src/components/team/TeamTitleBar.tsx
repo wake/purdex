@@ -31,6 +31,7 @@ export function TeamTitleStrip({ team }: { team: TeamPanelTeam }) {
     total: seats.length,
     base: CAPSULE_MAX_W + HEADER_GAP,
     reserve: PLUS_CHIP_W + HEADER_GAP,
+    min: 0,
   }) ?? seats.length
   const shown = seats.slice(0, cap)
   const hidden = seats.length - shown.length
@@ -39,10 +40,10 @@ export function TeamTitleStrip({ team }: { team: TeamPanelTeam }) {
     <div
       ref={box}
       data-testid="team-title-strip"
-      className="flex items-center justify-center min-w-0 w-full max-w-[calc(100%-27rem)] pointer-events-none"
+      className="flex items-center justify-center min-w-0 w-full max-w-[calc(100%-27rem)] overflow-hidden pointer-events-none"
       style={{ columnGap: HEADER_GAP }}
     >
-      <TeamStripButton testId="team-strip-name" onClick={back} label={team.tooltip} className="flex-shrink-0 min-w-0">
+      <TeamStripButton testId="team-strip-name" onClick={back} label={team.tooltip} className="min-w-0 shrink overflow-hidden">
         <NameCapsule team={team} className="block" style={{ maxWidth: CAPSULE_MAX_W }} />
       </TeamStripButton>
       <div data-testid="team-strip-cells" className="pointer-events-auto flex items-center min-w-0" style={{ ...NO_DRAG, columnGap: CELL_GAP }}>

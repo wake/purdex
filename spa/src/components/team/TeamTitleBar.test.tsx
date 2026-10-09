@@ -171,6 +171,22 @@ describe('the strip', () => {
       expect(PLUS_CHIP_W).toBeGreaterThan(0)
     })
 
+    it('a single seat that does not fit at all goes into 「+N」: no cell, and the strip stays inside its allotted width', () => {
+      seedScene({ members: [], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead', teamName: 'A very long team name indeed' })
+      avail = 60 // narrower than the team name's worst case alone
+      mountBar()
+      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
+      const s = strip()!
+      expect(within(s).queryAllByTestId('team-panel-cell')).toHaveLength(0)
+      expect(within(s).getByTestId('team-strip-more').textContent).toBe('+1')
+      // structure: capped to the allotted width, clipped, and the name is the part that gives way
+      expect(s.className).toContain('max-w-[calc(100%-27rem)]')
+      expect(s.className).toContain('overflow-hidden')
+      expect(screen.getByTestId('team-strip-name').className).not.toContain('flex-shrink-0')
+      expect(screen.getByTestId('team-strip-name').className).toContain('min-w-0')
+      expect(screen.getByTestId('team-strip-more').className).toContain('flex-shrink-0')
+    })
+
     it('「+N」 brings the area back to the pane', () => {
       scene()
       avail = 190

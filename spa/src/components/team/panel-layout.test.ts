@@ -61,7 +61,8 @@ describe('panel header budget', () => {
     const avail = cellsWidth(5)
     expect(capacityOf(avail, CELL_W)).toBe(5)
     expect(capacityOf(avail, CELL_W, PLUS_CHIP_W)).toBeLessThan(5)
-    expect(capacityOf(10, CELL_W, PLUS_CHIP_W)).toBe(1)
+    expect(capacityOf(10, CELL_W, PLUS_CHIP_W)).toBe(1) // the header row never goes below one
+    expect(capacityOf(10, CELL_W, PLUS_CHIP_W, 0)).toBe(0) // the strip may: 「+N」 takes the rest
   })
 
   it('the edit form is kept inside the viewport on the left, right and bottom', () => {

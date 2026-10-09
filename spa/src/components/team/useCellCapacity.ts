@@ -19,9 +19,11 @@ interface Input {
   base?: number
   /** Px kept free at the end when not everyone fits (the strip's 「+N」); 0 for the header row. */
   reserve?: number
+  /** The fewest cells the box may be left with: 1 for the header row (the default), 0 for the strip (「+N」 takes the rest). */
+  min?: number
 }
 
-export function useCellCapacity(box: RefObject<HTMLElement | null>, { key, total, base = 0, reserve = 0 }: Input): number | null {
+export function useCellCapacity(box: RefObject<HTMLElement | null>, { key, total, base = 0, reserve = 0, min = 1 }: Input): number | null {
   const [measured, setMeasured] = useState<number | null>(null)
   const indicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
   const seen = useRef({ key: '', unit: 0 })
@@ -37,8 +39,8 @@ export function useCellCapacity(box: RefObject<HTMLElement | null>, { key, total
       seen.current.unit = unit
       if (!(unit > 0 && avail > 0)) { setMeasured(null); return }
       const room = avail - base
-      const all = capacityOf(room, unit)
-      setMeasured(total <= all ? all : capacityOf(room, unit, reserve))
+      const all = capacityOf(room, unit, 0, min)
+      setMeasured(total <= all ? all : capacityOf(room, unit, reserve, min))
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
