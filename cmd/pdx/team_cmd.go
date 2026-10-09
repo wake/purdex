@@ -568,6 +568,14 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 	if line := teamLine(v.Team); line != "" {
 		fmt.Fprintln(stdout, line)
 	}
+	// The member limit is the user's (set in Purdex.app): active members over it, read-only.
+	active := 0
+	for _, m := range v.Members {
+		if m.State == team.MemberActive {
+			active++
+		}
+	}
+	fmt.Fprintf(stdout, "members %d/%d\n", active, v.Team.Grant.MaxMembers)
 	// #2062: the lead's own automatic-relay quota and its member pool, read-only (the user sets them in Purdex.app).
 	if line := quotaLine(v.LeadRelayQuota); line != "" {
 		fmt.Fprintln(stdout, line)

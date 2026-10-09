@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,8 +166,13 @@ type teamCmdFunc func(context.Context, []string, func(string) string, io.Writer,
 // and --config appended.
 func driveTeamCmd(t *testing.T, run teamCmdFunc, d http.Handler, args ...string) (int, string, string) {
 	t.Helper()
-	return driveTeamCmdWith(t, run, d, leadEnv(), []daemonclient.Option{leadClockOpt()}, args...)
+	code, stdout, stderr := driveTeamCmdWith(t, run, d, leadEnv(), []daemonclient.Option{leadClockOpt()}, args...)
+	return code, membersLine.ReplaceAllString(stdout, ""), stderr
 }
+
+// membersLine is `pdx team`'s `members M/N` header line. driveTeamCmd drops it so the tests of the table's shape keep
+// reading the table alone; TestTeamCmd_PrintsMembersOverTheLimit drives the command without that and reads the line.
+var membersLine = regexp.MustCompile(`(?m)^members \d+/\d+\n`)
 
 func driveTeamCmdWith(t *testing.T, run teamCmdFunc, d http.Handler, getenv func(string) string, opts []daemonclient.Option, args ...string) (int, string, string) {
 	t.Helper()
