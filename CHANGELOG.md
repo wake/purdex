@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.652] - 2026-10-09
+
+> 改了 mod：**要部署 daemon，並重跑 `pdx setup`**；SPA、Electron 不必更新。部署後，lead 可以幫 member 接力了。
+
+### Added：member 端的接力 — P6-6（#2224，A 線）
+
+- lead 用 `pdx relay <member>` 幫 member 接力時，member 的 mod 會自己收下 lead 的通知（member 的對話看不到這則訊息）。member 正在做事的話，等這一輪做完才開始接力，不會打斷。
+- 接力的步驟跟自己接力一樣：寫交接檔 → 檢查 → 清空對話 → 新對話讀交接檔接著做；lead 會收到完成或失敗的通知。member 的舊地址照樣送得到。
+- 交接檔的「協作關係」一節會自動帶入：member 寫上自己的 lead 與 team；lead 寫上自己管理的 members。
+- 其他 peer 冒用接力通知沒有作用：只有 daemon 確認屬於這個 member 的接力才會執行。
+
 ## [1.0.0-alpha.651] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。推播資料庫會自動加一個欄位，既有的手機推播登記不受影響。
