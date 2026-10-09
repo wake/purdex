@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
@@ -26,22 +27,38 @@ func (e *adoptRefusedError) Error() string { return "adopt refused: " + e.Code }
 
 // adoptTarget is a parsed `target`: the ref that decides, and whether the address named another host.
 type adoptTarget struct {
-	Ref    string
-	Remote bool
+	Ref       string
+	SessionID string // a session id given instead of a ref: the way out of a ref two live sessions share
+	Remote    bool
+}
+
+// label is the target as the refusal names it.
+func (t adoptTarget) label() string {
+	if t.SessionID != "" {
+		return t.SessionID
+	}
+	return t.Ref
 }
 
 // parseAdoptTarget reads "_xxxxxx", "xxxxxx", "<host>/_xxxxxx", "<host>/xxxxxx" and
-// "<host>/<name> [xxxxxx]" (the name is display only). ok is false for anything else — a bare name
+// "<host>/<name> [xxxxxx]" (the name is display only), and a session id (UUID) with or without the host. ok is false for anything else — a bare name
 // included. A host that is not this one is Remote (the ref is still read).
 func (m *Module) parseAdoptTarget(target string) (t adoptTarget, ok bool) {
 	target = strings.TrimSpace(target)
 	host, sess, qualified := ipeers.SplitAddress(target)
 	if !qualified {
+		if isSessionID(target) {
+			return adoptTarget{SessionID: target}, true
+		}
 		ref := asRef(target)
 		return adoptTarget{Ref: ref}, ref != ""
 	}
 	alias, hostID := m.selfHost()
 	t.Remote = !ipeers.HostMatches(host, alias, hostID)
+	if isSessionID(sess) {
+		t.SessionID = sess
+		return t, true
+	}
 	if i := strings.LastIndex(sess, " ["); i > 0 && strings.HasSuffix(sess, "]") {
 		t.Ref = asRef(sess[i+2 : len(sess)-1])
 		return t, t.Ref != "" && ipeers.RoutableName(sess[:i])
@@ -50,10 +67,20 @@ func (m *Module) parseAdoptTarget(target string) (t adoptTarget, ok bool) {
 	return t, t.Ref != ""
 }
 
+// isSessionID reports whether s is a Claude Code session id (a UUID, any version).
+func isSessionID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil && len(s) == 36
+}
+
 // resolveAdoptTarget is the live conversation the ref names: its current ref, else the one that
 // took over from it through relays (the lineage, spec §8.4). found false is no such live
 // conversation; peersmod.ErrAmbiguousRef is returned as is; any other error is a registry failure.
-func (m *Module) resolveAdoptTarget(ref string) (o team.Origin, found bool, err error) {
+func (m *Module) resolveAdoptTarget(t adoptTarget) (o team.Origin, found bool, err error) {
+	if t.SessionID != "" {
+		return m.origins.ResolveOriginBySession(t.SessionID)
+	}
+	ref := t.Ref
 	o, found, err = m.origins.ResolveOriginByRef(ref)
 	if err != nil || found {
 		return o, found, err
@@ -187,10 +214,10 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 		m.writeErr(w, http.StatusConflict, team.ErrRemoteUnsupported, "adopt is same-host only in v1", nil)
 		return
 	}
-	tgt, found, err := m.resolveAdoptTarget(target.Ref)
+	tgt, found, err := m.resolveAdoptTarget(target)
 	switch {
 	case errors.Is(err, peersmod.ErrAmbiguousRef):
-		m.writeErr(w, http.StatusConflict, team.ErrAdoptTargetAmbiguous, "two live sessions carry "+target.Ref+"; name the target by its session id or full address", nil)
+		m.writeErr(w, http.StatusConflict, team.ErrAdoptTargetAmbiguous, "two live sessions carry "+target.Ref+"; name the target by its session id", nil)
 		return
 	case errors.Is(err, errStorageRead):
 		failStore(err)
@@ -199,7 +226,7 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry", nil)
 		return
 	case !found:
-		m.writeErr(w, http.StatusConflict, team.ErrAdoptTargetNotFound, "no live session answers to "+target.Ref, nil)
+		m.writeErr(w, http.StatusConflict, team.ErrAdoptTargetNotFound, "no live session answers to "+target.label(), nil)
 		return
 	}
 	if tgt.SessionID == origin.SessionID {

@@ -212,3 +212,18 @@ func TestAdoptCreate_UnattendedRefusalInTheTransactionIs409(t *testing.T) {
 		t.Errorf("events = %v, want none", ops)
 	}
 }
+
+// A ref two live sessions share is ambiguous (409 adopt_target_ambiguous, no row); the session id, bare or
+// behind the host, names exactly one of them and opens the request.
+func TestAdoptCreate_AmbiguousRefIsNamedBySessionID(t *testing.T) {
+	f := newFixture(t)
+	f.approveLead(uid(1))
+	f.origins.setRefAmbiguous("_def456")
+	f.wantAdoptRefusal(uid(10), "_def456", http.StatusConflict, team.ErrAdoptTargetAmbiguous)
+	f.origins.show(team.Origin{SessionID: uid(77), Ref: "_def456", PID: 77, Cwd: "/w7"})
+	a := f.adoptOK(uid(11), "h:1/"+uid(77))
+	if p, _ := team.AdoptPayloadOf(a); p.TargetSessionID != uid(77) {
+		t.Fatalf("payload = %+v, want the session named by id", p)
+	}
+	f.wantAdoptRefusal(uid(12), uid(78), http.StatusConflict, team.ErrAdoptTargetNotFound)
+}
