@@ -20,6 +20,7 @@ func (f *fakeWBService) NextJob(context.Context, string, string, time.Duration) 
 }
 func (f *fakeWBService) JobResult(string, modevents.WorkbookResult) (bool, error) { return true, nil }
 func (f *fakeWBService) JobWaiting(string) bool                                   { return f.waiting }
+func (f *fakeWBService) RequestRefresh(string, string) (int64, error)             { return 0, nil }
 
 func socketPost(t *testing.T, path, target, body string) (int, string) {
 	t.Helper()
