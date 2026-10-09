@@ -144,7 +144,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(res.Body)
 		return
 	}
-	if cmd.Kind == team.CommandKill && killedOutcome(res.Body) {
+	if cmd.Kind == team.CommandKill && plan.Consent && killedOutcome(res.Body) {
 		// Decided and logged (or replayed): now the signal, which a failure here leaves to the lead host's retry of this
 		// very command (a replay signals again).
 		if status, code, detail := m.signalKill(cmd.MK); status != 0 {

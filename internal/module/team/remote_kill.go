@@ -35,8 +35,8 @@ func (m *Module) killTarget(r remoteMemberRow) (pid int, live bool, status int, 
 	if !found {
 		return 0, false, 0, "", ""
 	}
-	if r.PID != 0 && (o.PID != r.PID || o.ProcStart != r.ProcStart) {
-		return 0, false, 0, "", "" // the session id now belongs to another process than the member's
+	if r.PID == 0 || r.ProcStart == "" || o.PID != r.PID || o.ProcStart != r.ProcStart {
+		return 0, false, 0, "", "" // the row recorded no process, or the session id now belongs to another process than the member's
 	}
 	same, err := m.origins.SameProcess(o.PID, o.ProcStart)
 	if err != nil {
