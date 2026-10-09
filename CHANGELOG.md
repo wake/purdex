@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.622] - 2026-10-09
+
+> 動 daemon、CLI 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 與 pdx-team skill 都有改）；SPA、Electron 不必更新。這一版讓 lead 派 member 時可以同時交辦第一個任務，member 接力後的新對話也會看到自己手上還沒做完的任務。
+
+### Added：開 member 時一併交辦第一個任務 — 派工／回報 T-2a（#2104）
+
+- `pdx spawn --task-subject <主旨> [--done-when <完成條件>]…`：開 member 的同時建立它的第一個任務（brief 就是任務說明）。member 與任務在同一筆交易裡建立，重送同一個 spawn 不會重複建任務；不帶 `--task-subject` 時行為完全不變。
+- `pdx task mine [--all] [--json | --seed]`：member 查自己手上的任務；lead 會被拒絕（exit 13）。`--seed` 印出接力通知用的幾行文字，沒有未完成的任務時什麼都不印。
+- pdx-team skill 補上新旗標的用法。
+- 舊的 team.db 會自動補欄位，不必手動遷移。
+
+### Added：接力後的新對話看得到手上的任務 — 派工／回報 T-2b（#2106）
+
+- member 接力時，交給新對話的第一則訊息最後多一段「你手上的任務：」，列出還沒完成的任務（最多 10 項，其餘顯示「另有 N 項」）。
+- 這段是固定附加的，使用者自訂過接力訊息內容也一樣會列；沒有任務、lead、舊版 pdx、查詢失敗或逾時時這段整個省略，訊息與之前逐字相同。
+
 ## [1.0.0-alpha.621] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版加上對話的即時推送（給之後 Mac App 指揮台與 iOS 用），目前還沒有畫面使用它。
