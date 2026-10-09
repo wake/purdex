@@ -160,6 +160,16 @@ func (f *FakeExecutor) AddSession(name, cwd string) {
 	f.sessionOrder = append(f.sessionOrder, name)
 }
 
+// SetSessionCreated sets a session's #{session_created} (unix seconds) for tests.
+func (f *FakeExecutor) SetSessionCreated(name string, unix int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.sessions[name]; ok {
+		s.Created = unix
+		f.sessions[name] = s
+	}
+}
+
 // AddSessionWithID adds a session with an explicit ID (for test control).
 func (f *FakeExecutor) AddSessionWithID(id, name, cwd string) {
 	f.mu.Lock()
