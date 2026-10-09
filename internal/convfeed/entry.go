@@ -51,6 +51,8 @@ var ErrBadCursor = errors.New("convfeed: bad cursor")
 type Entry struct {
 	mu        sync.Mutex
 	sessionID string
+	// gate serializes whole resolve-and-refresh runs (Exclusive); unlike mu it can be waited on with a context.
+	gate chan struct{}
 
 	epoch    string
 	norm     *ccnorm.Normalizer
@@ -61,6 +63,11 @@ type Entry struct {
 	title    string
 	usage    *convmodel.Usage
 	live     bool
+	// status and backend are the resolver's answer as of the last Refresh (the pane's light or ended / unknown, and
+	// "terminal" while a pane runs the session). They live in the entry so that a header, a window and a cursor read
+	// together never mix two requests' views; a change bumps the revision like a title change does.
+	status  string
+	backend string
 
 	fp    []byte // the bytes before the last fed offset
 	fpEnd int64  // the offset fp ends at
@@ -76,9 +83,22 @@ type Entry struct {
 // NewEntry returns an empty entry for the session; the first Refresh reads
 // the file from zero.
 func NewEntry(sessionID string) *Entry {
-	e := &Entry{sessionID: sessionID}
+	e := &Entry{sessionID: sessionID, gate: make(chan struct{}, 1)}
 	e.newEpoch()
 	return e
+}
+
+// Exclusive runs fn with the entry's refresh gate held: one resolve-and-refresh at a time per conversation. Waiting
+// for the gate ends with the context, so a request that is queued behind a long first read holds nothing (no open
+// file) and goes away when its caller does.
+func (e *Entry) Exclusive(ctx context.Context, fn func() error) error {
+	select {
+	case e.gate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-e.gate }()
+	return fn()
 }
 
 func newEpochID() string {
@@ -97,6 +117,7 @@ func (e *Entry) newEpoch() {
 	e.headRev = 0
 	e.changed = map[string]uint64{}
 	e.title, e.usage = "", nil
+	e.status, e.backend = "", ""
 	e.fp, e.fpEnd = nil, 0
 	e.snapOK = false
 }
@@ -159,6 +180,11 @@ func (e *Entry) Refresh(ctx context.Context, src Source) (RefreshResult, error) 
 	}
 	e.bump(e.norm.SetLive(src.Live))
 	e.live = src.Live
+	if src.Status != e.status || src.Backend != e.backend {
+		e.status, e.backend = src.Status, src.Backend
+		e.rev++
+		e.headRev = e.rev
+	}
 	e.refreshHeader()
 	res.Changed = res.Reset || e.rev != startRev
 	return res, nil
@@ -264,21 +290,27 @@ func (e *Entry) conv() *convmodel.Conversation {
 
 // Header is the title and usage as of the current revision.
 type Header struct {
-	Title string
-	Usage *convmodel.Usage
-	Live  bool
+	Title   string
+	Usage   *convmodel.Usage
+	Live    bool
+	Status  string // the pane's light, "ended" without a pane, "unknown" when the owner lookup failed
+	Backend string // "terminal" while a pane runs the session
 }
 
 // Header returns the conversation-level fields.
 func (e *Entry) Header() Header {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.headerLocked()
+}
+
+func (e *Entry) headerLocked() Header {
 	var u *convmodel.Usage
 	if e.usage != nil {
 		c := *e.usage
 		u = &c
 	}
-	return Header{Title: e.title, Usage: u, Live: e.live}
+	return Header{Title: e.title, Usage: u, Live: e.live, Status: e.status, Backend: e.backend}
 }
 
 // Epoch is the random id of the current normalizer instance.
@@ -306,6 +338,10 @@ func (e *Entry) HeaderChangedSince(rev uint64) bool {
 func (e *Entry) Cursor() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.cursorLocked()
+}
+
+func (e *Entry) cursorLocked() string {
 	return e.epoch + ":" + strconv.FormatUint(e.rev, 10)
 }
 

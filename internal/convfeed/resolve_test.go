@@ -20,7 +20,7 @@ type fakeOwners struct {
 	err    error
 }
 
-func (f fakeOwners) LiveSessions(string) ([]Owner, error) { return f.owners, f.err }
+func (f fakeOwners) LiveSessions(context.Context, string) ([]Owner, error) { return f.owners, f.err }
 
 type fakeIndex struct {
 	path string

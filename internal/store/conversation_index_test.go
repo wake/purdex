@@ -119,3 +119,20 @@ func TestConversationIndex_EmptyBatchNoop(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, got)
 }
+
+func TestConversationIndex_TranscriptPath(t *testing.T) {
+	m, _ := openConvStore(t)
+	cs := m.Conversations()
+	ctx := context.Background()
+	require.NoError(t, cs.UpsertBatch(ctx, []ConversationIndexRow{convRow("aaaa")}))
+
+	p, ok, err := cs.TranscriptPath(ctx, "aaaa")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "/root/slug/aaaa.jsonl", p)
+
+	p, ok, err = cs.TranscriptPath(ctx, "bbbb")
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, p)
+}

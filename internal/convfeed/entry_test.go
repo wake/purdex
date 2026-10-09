@@ -368,3 +368,34 @@ func TestEntry_ModelStaysValid(t *testing.T) {
 		t.Fatalf("the windowed conversation does not validate: %v", err)
 	}
 }
+
+// The resolver's status and backend are part of the header: a change bumps the revision (an increment or a WebSocket
+// frame reports it) and two reads of one entry never mix two requests' statuses.
+func TestEntry_StatusAndBackendAreHeaderFields(t *testing.T) {
+	m := newMem(idle(1)...)
+	e := NewEntry(sidA)
+	s := src(m, "f1", true)
+	s.Status, s.Backend = "running", "terminal"
+	refresh(t, e, s)
+	if h := e.Header(); h.Status != "running" || h.Backend != "terminal" || !h.Live {
+		t.Fatalf("header = %+v", h)
+	}
+	rev := e.Revision()
+
+	refresh(t, e, s) // the same answer again: nothing moves
+	if e.Revision() != rev {
+		t.Fatalf("revision moved from %d to %d on an unchanged status", rev, e.Revision())
+	}
+
+	s.Status = "idle"
+	r := refresh(t, e, s)
+	if !r.Changed || e.Revision() != rev+1 || !e.HeaderChangedSince(rev) || e.Header().Status != "idle" {
+		t.Fatalf("status change: %+v rev %d header %+v", r, e.Revision(), e.Header())
+	}
+
+	s.Status, s.Backend = "ended", ""
+	refresh(t, e, s)
+	if h := e.Header(); h.Status != "ended" || h.Backend != "" {
+		t.Fatalf("header = %+v", h)
+	}
+}
