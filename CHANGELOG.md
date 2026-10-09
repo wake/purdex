@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.654] - 2026-10-09
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。
+
+### Changed：配對手機可以調整接力額度與 member 上限 — QP-1b-iii（#2230，介面線）
+
+- 依你 20:2x 的決定：配對手機（裝置 token）可以修改 team 的接力額度與 member 上限，跟在 Mac App 上一樣。手機仍看不到 team 名單。目前還沒有手機使用裝置 token（要等之後的 QP-2／QP-3）。
+
+### Added：手機配對碼 — QP-2（#2234，介面線）
+
+- daemon 可以產生一次性的配對碼（有效 1～10 分鐘），手機用它向 daemon 領取配對；領取這一步不需要 token，但只接受 tailnet 或本機來的連線，且每個來源每分鐘最多試 10 次。同時最多 16 組有效配對碼。
+- 這是 QR 配對流程的 daemon 端；手機端（QP-3）上線前，使用上沒有可見變化。
+
 ## [1.0.0-alpha.653] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。對現在的使用沒有可見變化（配對手機的流程還沒上線）。
