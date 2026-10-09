@@ -389,7 +389,7 @@ var anyTag = regexp.MustCompile(`</?[A-Za-z][A-Za-z0-9_-]*>`)
 // one, else the text with every bare tag stripped (prelude/classify.go:493).
 func taskText(text string) string {
 	if v, ok := tagValue(text, "summary"); ok {
-		return strings.TrimSpace(v)
+		return strings.TrimSpace(html.UnescapeString(v)) // the harness HTML-escapes it (&amp; &gt;)
 	}
 	return strings.TrimSpace(anyTag.ReplaceAllString(text, ""))
 }

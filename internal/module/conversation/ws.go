@@ -319,6 +319,7 @@ func (c *wsConn) follow() {
 				}
 				src, have, resolvedAt = s, true, time.Now()
 			}
+			c.m.freshLight(&src, c.sid)
 			_, err := c.entry.Refresh(c.ctx, src)
 			return err
 		})
@@ -401,5 +402,17 @@ func (c *wsConn) readLoop() {
 		if _, _, err := c.conn.ReadMessage(); err != nil {
 			return
 		}
+	}
+}
+
+// freshLight brings the light of a live source up to date from the cheap lookup, so a change of the pane's light
+// reaches the stream within one poll instead of one full re-resolve. A source that is not live keeps what the
+// resolver said ("ended" / "unknown"), and so does one the cheap lookup cannot place.
+func (m *Module) freshLight(src *convfeed.Source, sid string) {
+	if m.light == nil || !src.Live {
+		return
+	}
+	if st, ok := m.light.LightStatus(sid); ok && st != "" {
+		src.Status = st
 	}
 }

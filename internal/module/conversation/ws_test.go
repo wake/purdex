@@ -358,6 +358,101 @@ func TestWS_HeaderOnlyChangeIsAHeaderFrame(t *testing.T) {
 	}
 }
 
+type fakeLight struct {
+	mu sync.Mutex
+	st string
+	ok bool
+}
+
+func (f *fakeLight) LightStatus(string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.st, f.ok
+}
+
+func (f *fakeLight) set(st string, ok bool) {
+	f.mu.Lock()
+	f.st, f.ok = st, ok
+	f.mu.Unlock()
+}
+
+func headerStatus(t *testing.T, f wsFrame) string {
+	t.Helper()
+	var hv struct {
+		Header struct {
+			Status string `json:"status"`
+		} `json:"header"`
+	}
+	if err := json.Unmarshal(f.Value, &hv); err != nil {
+		t.Fatalf("header frame %v: %s", err, f.Value)
+	}
+	return hv.Header.Status
+}
+
+// A live pane's light changing between two full lookups reaches the stream as a header frame within a poll.
+func TestWS_LightChangeIsAHeaderFrame(t *testing.T) {
+	e, _ := wsEnv(t)
+	p := e.transcript(idleTurns(1))
+	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "idle", SeenAt: 1}}
+	e.mod.tweak.reresolve = time.Hour // only the cheap lookup can move the light
+	light := &fakeLight{st: "idle", ok: true}
+	e.mod.light = light
+	srv := e.server()
+	c := e.connect(srv, "")
+	if got := headerStatus(t, c.expect("conversation.snapshot")); got != "idle" {
+		t.Fatalf("snapshot status %q", got)
+	}
+	c.expect("approvals.snapshot")
+	light.set("running", true)
+	if got := headerStatus(t, c.expect("conversation.header")); got != "running" {
+		t.Fatalf("header status %q", got)
+	}
+	light.set("waiting", true)
+	if got := headerStatus(t, c.expect("conversation.header")); got != "waiting" {
+		t.Fatalf("header status %q", got)
+	}
+	// an unchanged light sends nothing
+	_ = c.conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+	if _, b, err := c.conn.ReadMessage(); err == nil {
+		t.Fatalf("an unexpected frame: %s", b)
+	}
+}
+
+// The cheap lookup never overrules "no live pane" and never invents a light it cannot place.
+func TestWS_LightIsIgnoredWithoutALivePaneOrAnAnswer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		owners []convfeed.Owner
+		light  *fakeLight
+		want   string
+	}{
+		"no pane":      {nil, &fakeLight{st: "running", ok: true}, "ended"},
+		"cannot place": {[]convfeed.Owner{{Status: "idle", SeenAt: 1}}, &fakeLight{ok: false}, "idle"},
+		"empty light":  {[]convfeed.Owner{{Status: "idle", SeenAt: 1}}, &fakeLight{st: "", ok: true}, "idle"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, _ := wsEnv(t)
+			p := e.transcript(idleTurns(1))
+			for i := range tc.owners {
+				tc.owners[i].TranscriptPath = p
+			}
+			e.owners.own = tc.owners
+			e.mod.light = tc.light
+			srv := e.server()
+			c := e.connect(srv, "")
+			got := headerStatus(t, c.expect("conversation.snapshot"))
+			c.expect("approvals.snapshot")
+			time.Sleep(80 * time.Millisecond) // several polls
+			_ = c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			if _, b, err := c.conn.ReadMessage(); err == nil {
+				t.Fatalf("an unexpected frame: %s", b)
+			}
+			if got != tc.want {
+				t.Fatalf("status %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWS_ApprovalOpsFollowTheSnapshotInOrder(t *testing.T) {
 	e, feed := wsEnv(t)
 	e.transcript(idleTurns(1))

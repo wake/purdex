@@ -350,6 +350,15 @@ func TestSource_PeerQueuedCommand(t *testing.T) {
 	}
 }
 
+func TestSource_TaskNotificationSummaryIsUnescaped(t *testing.T) {
+	// the harness writes the summary HTML-escaped (measured on real transcripts: &amp; and &gt;)
+	row := userRow("t1", 1, taskNotification(`Background command "cd x &amp;&amp; make &gt; out" completed`),
+		with("origin", obj{"kind": "task-notification", "producer": "session-task"}), turnOrigin("task_notification"), promptSource("system"))
+	if got := userOf(t, conv(t, row), 0, 0).Text; got != `Background command "cd x && make > out" completed` {
+		t.Errorf("summary text = %q", got)
+	}
+}
+
 func TestSource_TaskNotificationUsesSummary(t *testing.T) {
 	row := userRow("t1", 1, taskNotification(`Background command "sleep" completed`),
 		with("origin", obj{"kind": "task-notification", "producer": "session-task"}), turnOrigin("task_notification"), promptSource("system"))
