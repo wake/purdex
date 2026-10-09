@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.644] - 2026-10-09
+
+> 動 mod、daemon 與 pdx-team skill：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 與 skill 改了）；SPA、Electron 不必更新。接力時，交接檔裡的 git 狀態改由 mod 自動抓好給 Claude 照抄。
+
+### Changed：接力交接檔自動帶入 git 狀態 — P6-3a（#2203，A 線）
+
+- 寫交接檔時，mod 會先在那個 session 的資料夾跑 `git status --short`、`git diff --stat`、`git log --oneline -10`，把結果放進寫作指示裡，Claude 照抄進交接檔的「檔案異動」一節，不必自己再跑一次。
+- 每個指令最多等 10 秒，輸出最多 200 行；不是 git 資料夾或指令失敗時只寫一行原因，不會讓接力失敗。
+- 檔名或 commit 訊息裡的控制字元、看不見的方向字元會先清掉，不會混進指示裡。
+- 交接檔要求一次寫完整份（不要分段修改），修正時也是整份重寫。
+- 你在 App 自訂過寫作指示的主機，保留你的版本（設定頁會標「已自訂」）。
+
+### Note：alpha.643 已一併上線 RQ-2a（#2199，A 線）
+
+- 「lead 幫 member 接力、member 額度用完時等你核准」的核准狀態機已在 daemon 裡，但目前沒有任何路徑會開出這種核准，行為沒有變化；等介面線的核准卡片上線後才會啟用。
+
 ## [1.0.0-alpha.643] - 2026-10-09
 
 > 動 daemon、CLI 與 pdx-team skill：**要部署 daemon，並重跑 `pdx setup --agent cc`**（skill 改了）；SPA、Electron 不必更新。alpha.642 沒有單獨部署，它的內容（手機推播等）隨這一版一起上線。team 核准後也能調整人數上限了（App 的調整按鈕由介面線接著做）。
