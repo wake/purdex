@@ -32,7 +32,12 @@ type W = {
   pdx: (argv: string[]) => { exitCode: number; stdout?: string; stderr?: string } | Promise<{ exitCode: number; stdout?: string; stderr?: string }>
   clock: any
   logs: string[]
+  gets: { url: string; init: any }[] // the GETs of /mod/v1/team (TI-5b)
+  team: (sid: string, n: number) => Answer | Promise<Answer> // the daemon's answer to that read
+  invalidated: number // ui.invalidate calls (a redraw requested)
 }
+
+const teamAnswer = (role: string, members = 0, label = ''): Answer => ({ status: 200, text: JSON.stringify({ role, members, team_label: label }) })
 
 // The daemon's answer to a batch it applied whole: the highest seq it holds.
 const ackAll = (body: any): Answer => ({ status: 200, text: JSON.stringify({ ack: body.events[body.events.length - 1].seq }) })
@@ -41,6 +46,7 @@ const never = () => new Promise<never>(() => {})
 function evWorld(on: any, opts: Partial<W> = {}): W {
   const w: W = {
     posts: [], sid: SID1, agents: [], pdxJSON: PDX_JSON, decision: 'allow', logs: [],
+    gets: [], invalidated: 0, team: () => teamAnswer('none'),
     daemon: ackAll,
     bash: () => BASH_OK,
     compact: (e: any) => ({ messages: e.messages }),
@@ -49,6 +55,13 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   } as W
   if (!w.clock) w.clock = mock.clock(on)
   on('http.fetch', async (_$: any, e: any) => {
+    if (e.init?.method === 'GET') { // the team read (TI-5b): never mixed with the event POSTs
+      w.gets.push({ url: e.url, init: e.init })
+      const sid = new URL(e.url).searchParams.get('session_id') ?? ''
+      const a = await w.team(sid, w.gets.length)
+      if ('deny' in a) return { deny: a.deny }
+      return { value: { status: a.status, ok: a.status >= 200 && a.status < 300, headers: { 'content-type': 'application/json' }, text: a.text ?? '' } }
+    }
     const body = JSON.parse(e.init.body)
     w.posts.push({ url: e.url, init: e.init, body, at: w.clock.now ? w.clock.now() : 0 })
     const a = await w.daemon(body, w.posts.length)
@@ -74,6 +87,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
   })
   on('command.register', async (_$: any, e: any) => ({ value: { command: e.name } }))
   on('ui.log', async (_$: any, e: any) => { w.logs.push(e.text); return { value: undefined } })
+  on('ui.invalidate', async () => { w.invalidated += 1; return { value: undefined } })
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   on('turn.start', async (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
@@ -931,4 +945,168 @@ test('AskUserQuestion, dismissed: tool.end once, result unchanged', async ($, on
   const t = toolEvents(w)
   expect(t.map((e) => e.type)).toEqual(['tool.start', 'tool.end'])
   expect(t[1].data.error).toBe(true)
+})
+
+// ---- TI-5b: `lead mode · N members` in the SessionMode footer (team-interface spec §4.10) ----
+//
+// The mod reads GET /mod/v1/team?session_id= on the mod socket at session.start and every 15 s, never from the render
+// hook; the render hook only reads the cached answer. A SessionMode instance has props {modes: string[]}.
+
+const modeRow = (modes: string[] = []) => ({ surface: 'terminal', component: 'SessionMode', requestId: 'sm', props: { modes } }) as any
+let engineModes: string[] = []
+function modeWorld(on: any, opts: Partial<W> = {}) {
+  // beneath the mod: the engine's own footer; it records the modes the mod handed down
+  engineModes = []
+  on('ui.render', { component: 'SessionMode' }, async (_$: any, e: any) => { engineModes = [...e.props.modes]; return DRAWN })
+  return { w: evWorld(on, opts) }
+}
+// drawn renders the footer once and returns the modes the engine drew
+const drawn = async ($: any, modes: string[] = []) => { await $.ui.render(modeRow(modes)); return engineModes }
+
+test('a lead gets the label appended to the footer modes', async ($, on) => {
+  const { w } = modeWorld(on, { team: () => teamAnswer('lead', 3, '資源線') })
+  await start($, w)
+  expect(w.gets.length).toBe(1)
+  expect(w.gets[0].url).toBe('http://pdx/mod/v1/team?session_id=' + SID1)
+  expect(w.gets[0].init).toMatchObject({ method: 'GET', socketPath: SOCK })
+  expect(await drawn($, ['focus'])).toEqual(['focus', 'lead mode · 3 members'])
+})
+
+test('1 member is singular and 0 members still shows', async ($, on) => {
+  let n = 1
+  const { w } = modeWorld(on, { team: () => teamAnswer('lead', n) })
+  await start($, w)
+  expect(await drawn($)).toEqual(['lead mode · 1 member'])
+  n = 0
+  await w.clock.advance(15_000)
+  expect(await drawn($)).toEqual(['lead mode · 0 members'])
+})
+
+// Mutation gate: append for every role → red.
+for (const role of ['member', 'none']) {
+  test(`a ${role} session leaves the modes unchanged`, async ($, on) => {
+    const { w } = modeWorld(on, { team: () => teamAnswer(role, 2) })
+    await start($, w)
+    expect(await drawn($, ['focus'])).toEqual(['focus'])
+  })
+}
+
+test('no label before the first good read, and a failed read keeps the last good value', async ($, on) => {
+  let mode: 'fail' | 'ok' | 'down' = 'fail'
+  const { w } = modeWorld(on, { team: () => (mode === 'fail' ? { status: 503, text: '{"error":"unavailable"}' } : mode === 'down' ? { deny: 'ECONNREFUSED' } : teamAnswer('lead', 2)) })
+  await start($, w)
+  expect(await drawn($)).toEqual([]) // the first read failed: nothing to show yet
+  mode = 'ok'
+  await w.clock.advance(15_000)
+  expect(await drawn($)).toEqual(['lead mode · 2 members'])
+  for (const m of ['fail', 'down'] as const) {
+    mode = m
+    await w.clock.advance(15_000)
+    expect(await drawn($)).toEqual(['lead mode · 2 members']) // the last good value stands
+  }
+})
+
+test('a good read of another role takes the label away, a changed count redraws', async ($, on) => {
+  let ans = teamAnswer('lead', 1)
+  const { w } = modeWorld(on, { team: () => ans })
+  await start($, w)
+  const base = w.invalidated
+  expect(base).toBeGreaterThan(0) // the first good read asked for a redraw
+  await w.clock.advance(15_000)
+  expect(w.invalidated).toBe(base) // nothing changed, nothing redrawn
+  ans = teamAnswer('lead', 2)
+  await w.clock.advance(15_000)
+  expect(w.invalidated).toBe(base + 1)
+  expect(await drawn($)).toEqual(['lead mode · 2 members'])
+  ans = teamAnswer('none')
+  await w.clock.advance(15_000)
+  expect(w.invalidated).toBe(base + 2)
+  expect(await drawn($)).toEqual([])
+})
+
+// The 15 s timer is the reader; the render hook never goes to the socket.
+// Mutation gate: read from the render hook → red.
+test('the render hook never calls fetch', async ($, on) => {
+  const { w } = modeWorld(on, { team: () => teamAnswer('lead', 3) })
+  await start($, w)
+  const before = w.gets.length
+  for (let i = 0; i < 5; i++) await drawn($)
+  expect(w.gets.length).toBe(before)
+  await w.clock.advance(15_000)
+  expect(w.gets.length).toBe(before + 1)
+  await w.clock.advance(45_000)
+  expect(w.gets.length).toBe(before + 4)
+})
+
+test('session.end clears the timer', async ($, on) => {
+  const { w } = modeWorld(on, { team: () => teamAnswer('lead', 3) })
+  await start($, w)
+  await end($, 'prompt_input_exit')
+  const n = w.gets.length
+  await w.clock.advance(60_000)
+  expect(w.gets.length).toBe(n)
+})
+
+// A /clear or a relay changes the session id: the cached answer is the old session's, so it goes and the new id is read.
+// Mutation gate: keep asking with the old id / keep the old label → red.
+test('session.switch drops the cache and reads again with the new id', async ($, on) => {
+  const { w } = modeWorld(on, { team: (sid) => (sid === SID1 ? teamAnswer('lead', 3) : teamAnswer('none')) })
+  await start($, w)
+  expect(await drawn($)).toEqual(['lead mode · 3 members'])
+  await end($, 'clear')
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' } as any)
+  await w.clock.settle()
+  expect(w.gets[w.gets.length - 1].url).toBe('http://pdx/mod/v1/team?session_id=' + SID2)
+  expect(await drawn($)).toEqual([]) // the new conversation is no lead
+  await w.clock.advance(15_000)
+  expect(w.gets[w.gets.length - 1].url).toBe('http://pdx/mod/v1/team?session_id=' + SID2)
+})
+
+test('an answer for the old session that lands after a switch is dropped', async ($, on) => {
+  let release: (a: Answer) => void = () => {}
+  const slow = new Promise<Answer>((r) => { release = r })
+  const { w } = modeWorld(on, { team: (_sid, n) => (n === 1 ? slow : teamAnswer('none')) })
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  await end($, 'clear')
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' } as any)
+  await w.clock.settle()
+  release(teamAnswer('lead', 9)) // the first read, for SID1, answers late
+  await w.clock.settle()
+  expect(await drawn($)).toEqual([])
+})
+
+// $.http.fetch cannot be cancelled: a daemon that takes the request and never answers must not collect one more per tick.
+// Mutation gate: drop the one-in-flight guard → red.
+test('a read that never answers is the only one in flight, and a switch may read again', async ($, on) => {
+  const { w } = modeWorld(on, { team: () => never() })
+  await start($, w)
+  expect(w.gets.length).toBe(1)
+  await w.clock.advance(120_000) // eight ticks, the 5 s deadline long gone
+  expect(w.gets.length).toBe(1)
+  expect(await drawn($, ['focus'])).toEqual(['focus'])
+  await end($, 'clear')
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' } as any)
+  await w.clock.settle()
+  expect(w.gets.length).toBe(2) // the new session is a new generation
+  expect(w.gets[1].url).toBe('http://pdx/mod/v1/team?session_id=' + SID2)
+})
+
+test('a headless session asks nothing and leaves the footer alone', async ($, on) => {
+  const { w } = modeWorld(on, { team: () => teamAnswer('lead', 3) })
+  await start($, w, false)
+  await w.clock.advance(60_000)
+  expect(w.gets).toEqual([])
+  expect(await drawn($, ['focus'])).toEqual(['focus'])
+})
+
+test('without a mod_socket the footer is untouched', async ($, on) => {
+  const { w } = modeWorld(on, { pdxJSON: PDX_JSON_OLD, team: () => teamAnswer('lead', 3) })
+  await start($, w)
+  await w.clock.advance(60_000)
+  expect(w.gets).toEqual([])
+  expect(await drawn($, ['focus'])).toEqual(['focus'])
 })
