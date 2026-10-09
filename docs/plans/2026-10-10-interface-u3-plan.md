@@ -92,47 +92,29 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
   `useTranscriptScroll` with new `'deck'` and `'chat'` view keys. No `OperationBlock` / `TranscriptSearch`.
 - **D6 Streaming** — the API is transcript-only today: agent text appears per message. The renderer honours
   `streaming: true` (cursor ▍) so U1-5 lights it up without a client change. (Spec §4 amended.)
-- **D7 Send** — **one daemon route does the checking and the typing (U3-0b)**; the App never decides "the text
-  arrived" from what it sees (text anywhere on the screen proves nothing — an agent's output can contain it; plan
-  review 2026-10-10). `POST /api/sessions/{code}/submit {text, expected_tmux_instance, expected_session_id}`, under a
-  per-session mutex:
-  1. **validate** `text` with iOS `SendPlan` rules (control chars but `\n` stripped, tabs → 4 spaces, blank head / tail
-     lines and trailing spaces trimmed, 1 … 4000 UTF-8 bytes; a leading `!` or `/` → 400 `needs_terminal`, U3 has no
-     mod path);
-  2. **pre-check** — all must hold, else nothing is typed: the tmux instance; the pane's owner in the agent registry is
-     a live Claude Code process whose session id is `expected_session_id` (process identity pid + start); the pane's
-     UI state equals the measured prompt state (`#{pane_in_mode}` = 0, `#{alternate_on}` as measured for Claude Code
-     at its prompt — U3-0b task 1 measures it before coding); **the agent is idle** — its status (the owner's
-     `Status`, `internal/module/agent/pane_owner.go`) is `idle` and no `hook_ask` / `hook_permission` approval is open
-     for it (`OpenApprovals()`); while the agent is running the App keeps the message in its own queue
-     (「你 · 排隊中」) and submits when the status turns idle — the daemon never types into a busy Claude Code; **the input box is recognised and empty** — the rows from the box's top rule down to the cursor
-     match the measured empty-prompt layout (prompt glyph, nothing typed), else `input_not_empty`
-     (「終端機輸入框裡已經有文字，請先在終端機清掉或送出」 — this also stops a retry from appending to text a failed
-     attempt left; the App never retypes into a non-empty box);
-  3. **type** the text (no Enter; new lines as a literal LF; no bracketed paste);
-  4. **verify the box holds exactly the text**: capture the box rows (top rule → cursor row, ≤ 12 rows, the measured
-     layout) and wait ≤ 2 s (every 100 ms) until their content — prompt glyph and padding removed, wrapped rows joined —
-     equals the whitespace-normalised text, or, when the text is longer than the box shows, the box holds nothing but a
-     contiguous tail of the text of at least min(len, 200) characters;
-  5. **re-check** step 2 (owner, session, idle, no open approval), then send Enter as **one guarded tmux command**
-     within **50 ms** of that re-check (else abort with `not_seen`) — `if-shell -F` (the pattern of
-     `internal/tmux/send_keys_conditional.go`) on the tmux instance, `#{pane_in_mode}`, `#{alternate_on}` and
-     `#{pane_current_command}` equal to the measured Claude Code foreground command, with `send-keys Enter` as its only
-     branch. Why this closes the races codex named: Claude Code leaving the foreground (exit, crash, a shell) fails the
-     tmux condition atomically; a dialog needs a running turn and a model round-trip (hundreds of ms at least) after an
-     idle re-check, so it cannot appear within the 50 ms; a session change needs `/clear` or a relay typed or triggered
-     in that pane. **The residual, accepted and written in the PR: a person (or another client of this daemon) acting
-     on the same pane within those 50 ms.** U3-0b task 1 also measures the re-check → Enter time (p99 must be well
-     under 50 ms on mlab).
-
-  Any check failing → no Enter, `409 {reason: instance | owner_changed | session_mismatch | in_mode | alternate_screen |
-  busy | dialog_open | input_not_empty | not_seen}` (JSON); when the text was already typed the App says so
-  (「文字已在終端機輸入框，沒有按 Enter：<原因>」). Capability `sessions.submit.v1` in `/api/info`; iOS may adopt it
-  later. The App side, `lib/conversations/send.ts`: the destructive guard (a line matching `rm -rf`, a forced push, a
-  hard reset, `DROP TABLE`, `mkfs`, `dd if=` → a second press within 5 s, 「真的要送出？」), iOS's `SendQueue` (3 s
-  undo, one serial chain; **a message waits in this queue while the agent is running** and is submitted when the
-  header status turns idle — 「你 · 排隊中」 until then; local echo matched to the transcript's user item within 30 s), interrupt = ESC through the existing send-keys with the instance, only while the header status is
-  `running`, never twice in a row.
+- **D7 Send — through the mod, never by keystrokes** (rev 4, after four review rounds on a keystroke route: an
+  outside check followed by an Enter cannot be made atomic with Claude Code's own state — dialogs, background wake-ups,
+  a hook lagging the TUI — so the residual never closes). The design document already chose this channel
+  (`docs/pages/interface-language.html` §8–§13: 「寫入走 `$.prompt.submit`，不必打字」, 「`$.turn.abort`：中斷」);
+  the Purdex mod already calls `$.prompt.submit({text})` (`~/.config/pdx/cc-plugin/purdex/hooks/register.js:985`;
+  a result with `drop` means the prompt did not enter). So:
+  - daemon `POST /api/conversations/claude/{session_id}/submit {text, client_msg_id}` and `…/interrupt {}`: validate
+    `text` with iOS `SendPlan` rules (control chars but `\n` stripped, tabs → 4 spaces, blank head / tail lines and
+    trailing spaces trimmed, 1 … 4000 UTF-8 bytes; a leading `/` or `!` → 400 `needs_terminal`); find the live mod
+    stream of that session (the WB-1b′-c registry: a stream that announced the capability `prompt.v1`, current session
+    id, not ended); none → 409 `no_mod`; else hand the request to that mod (the mod-socket job pattern of WB-1b′-c —
+    `next` long-poll + `result`, a separate `prompt` queue) and answer when the mod reports: `accepted` (a turn
+    started, or the prompt is queued by Claude Code itself), `dropped` (with the mod's `drop` reason), `busy` (if the
+    measurement shows `$.prompt.submit` refuses while a turn runs), or `timeout` (10 s, nothing reported). Interrupt →
+    the mod's `$.turn.abort()`. `client_msg_id` makes a retry idempotent (the mod reports the id it already ran).
+  - The App (`lib/conversations/send.ts`): the destructive guard (a line matching `rm -rf`, a forced push, a hard
+    reset, `DROP TABLE`, `mkfs`, `dd if=` → a second press within 5 s, 「真的要送出？」); iOS's `SendQueue` (3 s undo,
+    one serial chain, local echo matched to the transcript's user item by `client_msg_id` or text within 30 s,
+    「你 · 排隊中」 until its turn starts; if the mod reports `busy`, the message waits in the App and is resent when the
+    header status turns idle); 中斷 → `/interrupt`. **No mod → the input is disabled** with 「這個 session 沒有
+    Purdex mod，請在終端機輸入」 and a 「切到終端機」 button; nothing is ever typed into the pane by U3.
+  - Capability: host `conversations.submit.v1` in `/api/info`; the conversation's `capabilities.send` / `interrupt`
+    become `prompt` when a `prompt.v1` mod stream is live (else stay `not_wired`).
 - **D8 Questions** — the dock reads the **conversation WS approvals** (not the host store, which drops hook kinds — keep
   that drop, so the app-wide dialog never shows them). `decideApproval` gains `hook?: {answers?: Record<string,string>,
   message?: string}`. A card is bound to its approval id: `approval op: closed` or a snapshot without it → the card
@@ -181,24 +163,20 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
 Review focus: an AskUserQuestion with no result (still running), with "Other" text equal to an option label, a
 multi-select answer whose label contains a comma.
 
-### U3-0b daemon — the submit route (~400 lines)
-1. **Measure first** (write the numbers into the PR and this plan's §0): on mlab, a live Claude Code 2.1.29x pane at its
-   prompt, in a dialog (AskUserQuestion, a permission prompt), in `/model`, and after exiting to the shell — record
-   `#{pane_in_mode}`, `#{alternate_on}`, `#{cursor_y}`, `#{pane_current_command}`, and the capture of the rows around
-   the cursor (the input box's rules / prompt glyph); and the time from an idle re-check to the guarded Enter. The verify region and the UI-state check are built from these numbers. Use a throwaway
-   session on an isolated tmux socket (`-L <label>`, `unset TMUX`), never the user's sessions.
-2. `internal/module/session`: `POST /api/sessions/{code}/submit` (D7) with the per-session mutex, the owner / session
-   check through the agent registry, the UI-state check, typing, the input-region verify, the re-check, JSON errors;
-   `sessions.submit.v1` in `/api/info`; not in the phones' `deviceAllowed` for now. Tests with a fake tmux: each check
-   failing before typing and before Enter; hostile output above the input box containing the text → `not_seen`;
-   a permission / question dialog open → `dialog_open`, nothing typed; a pre-filled box → `input_not_empty`, nothing
-   typed; a running agent → nothing typed (`busy`, the App queues); the re-check → Enter deadline exceeded → no Enter;
-   Claude Code exiting to the shell between typing and Enter → the guarded Enter does not fire (the
-   `pane_current_command` condition); wrapped
-   multi-line text and a text longer than the box found; concurrent submits serialised; a retry after `not_seen` hits
-   `input_not_empty` (no duplicate text).
-Review focus: the owner changing between the re-check and Enter (keep that window to one tmux call); a text whose last
-line is also the prompt's placeholder; CJK width in the captured rows.
+### U3-0b daemon + mod — submit and interrupt through the mod (~550 lines; split daemon / mod PRs if larger)
+1. **Measure first** (numbers into the PR and §0), on a throwaway session on an isolated tmux socket (`-L <label>`,
+   `unset TMUX`): `$.prompt.submit({text})` when idle, while a turn runs, while a permission / question dialog is
+   open, and right after `/clear` — the return value, whether a turn starts or Claude Code queues it, and what the
+   transcript records (the user item, `client_msg_id` absent / present); `$.turn.abort()` while running and while idle.
+2. daemon: the two routes (D7), the per-session prompt queue on the mod socket (`/mod/v1/prompt/next`,
+   `/mod/v1/prompt/result`, stream-bound like WB-1b′-c's jobs), `prompt.v1` in the stream capabilities, the
+   conversation capabilities, `conversations.submit.v1`; not in the phones' `deviceAllowed` for now. Tests: validation
+   rules; `no_mod`; accepted / dropped / busy / timeout; a retry with the same `client_msg_id` runs once; a stream that
+   ends mid-request → `timeout` and the next stream does not replay it.
+3. mod (`events.js` area, as WB-1c): announce `prompt.v1`; poll `prompt/next` with the workbook pattern; run
+   `$.prompt.submit` / `$.turn.abort`; report. Tests in the mod suite; `validate --strict`. Deploy needs `pdx setup`.
+Review focus: two Apps submitting to the same session at once (one queue, in order); a prompt arriving while the mod
+is reloading; a `/clear` between request and run (the session id no longer matches → `dropped`).
 
 ### U3-1a SPA — view buttons, handoff control, the swap (~400)
 1. `stores/useSessionViewStore.ts` (D1: device-local persisted, key tab + pane, binding = session code, pruned on
@@ -224,13 +202,14 @@ line is also the prompt's placeholder; CJK width in the captured rows.
    reach), scroll memory (`'deck'`), the unreadable state (D11). Tests per kind with golden expected items;
    screenshot gate (zh-TW, dark) of a real-session turn with every kind next to Collie's card shapes.
 
-### U3-2 SPA — input (~500; needs U3-0b for real use, tests mock the route)
-1. `lib/conversations/send.ts` (calls `/submit`; maps each 409 reason to its message; the destructive guard; the
-   `SendQueue` port; interrupt) + `components/deck/SessionInput.tsx` (Enter / Shift+Enter, 中斷, draft memory per pane,
-   the `/` `!` message, disabled with a reason without `sessions.submit.v1`). Tests: each 409 reason, queue order and
-   undo, ESC rules, destructive guard, draft survives a real `TabContent` remount.
-Review focus: a draft that is only whitespace; two quick sends while the first is in flight; the host restarting
-mid-submit.
+### U3-2 SPA — input (~450; real use needs U3-0b deployed, tests mock the routes)
+1. `lib/conversations/send.ts` (`/submit`, `/interrupt`, each outcome's message, the destructive guard, the
+   `SendQueue` port with the `busy` wait) + `components/deck/SessionInput.tsx` (Enter / Shift+Enter, 中斷, draft memory
+   per pane, the `/` `!` message, disabled with its reason when the conversation's `send` is not `prompt`). Tests: each
+   outcome, queue order and undo, `busy` → resend on idle, `client_msg_id` reuse on retry, destructive guard, draft
+   survives a real `TabContent` remount.
+Review focus: a draft that is only whitespace; two quick sends; the host restarting mid-submit (retry with the same
+`client_msg_id`).
 
 ### U3-3 SPA — chat and the right panel (~700)
 1. **Gate: iOS has committed `testdata/conversation/v1/render/turn-rows.json`** (generated and tested in purdex-ios).
@@ -293,3 +272,9 @@ re-check. → D7: submit only while the agent is **idle** (the App queues while 
 follow the re-check within 50 ms (measured). A dialog needs a model round-trip after idle and a session change needs a
 `/clear` or relay in that pane, so neither fits the window; the residual is a person or another client acting on that
 pane within the 50 ms, written in the PR.
+
+Round 4 (`task-mv1h441b-kw5sxw`): the keystroke route still had a critical (the 50 ms bound cannot be enforced; an idle
+hook status can lag the TUI; Claude Code's background tasks / cron wake-ups can start a turn on their own). → **rev 4
+drops keystrokes from U3 altogether: sending and interrupting go through the mod (`$.prompt.submit` /
+`$.turn.abort`), as the design document had chosen; without the mod the input is disabled and points to the
+terminal.** No residual from the Enter race remains because no Enter is sent.
