@@ -53,7 +53,11 @@ func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team
 	if err != nil {
 		return op, fmt.Errorf("reconcile op %s: frames: %w", op.ID, err)
 	}
+	unverified := false
 	for _, f := range frames {
+		if f.PaneID == pane && !f.Verified {
+			unverified = true // alive, identity unreadable: not proof that the member is gone
+		}
 		if f.PaneID != pane || !f.Verified || f.SessionID == "" {
 			continue
 		}
@@ -69,7 +73,7 @@ func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team
 		}
 		return m.applyReconcile(op, RelayReport{State: team.RelayCleared, NewSessionID: f.SessionID, NewRef: ipeers.RefID(f.SessionID), At: m.now()})
 	}
-	if m.origins.LiveSession(op.SessionID) {
+	if unverified || m.origins.LiveSession(op.SessionID) {
 		return op, nil
 	}
 	return m.applyReconcile(op, RelayReport{State: team.RelayFailed, Reason: team.RelayReasonMemberGone, At: m.now()})

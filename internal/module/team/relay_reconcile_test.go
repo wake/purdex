@@ -73,6 +73,18 @@ func TestReconcile_AnUnverifiedFrameIsIgnored(t *testing.T) {
 	}
 }
 
+// A process alive on the pane whose identity cannot be read is not proof that the member is gone. Mutation gate: ignore
+// the unverified frame at the member_gone step → the op fails (red).
+func TestReconcile_AnUnverifiedFrameOnThePaneNeverFailsMemberGone(t *testing.T) {
+	f := newFixture(t)
+	op := f.claimedMemberOp()
+	f.setFrames(frameOf("sid-unknown", "%2", false))
+	f.origins.markDead("sid-m1")
+	if got, _ := f.m.reconcileFromFrames(context.Background(), op); got.State != team.RelayClaimed {
+		t.Fatalf("op = %+v", got)
+	}
+}
+
 func TestReconcile_NoFrameAndSessionGoneFailsMemberGone(t *testing.T) {
 	f := newFixture(t)
 	op := f.claimedMemberOp()
