@@ -53,6 +53,7 @@ var capabilities = []string{
 	"conversations.v1",       // GET /api/conversations/{provider}/{session_id} (snapshot, ?after= increments, ?around=) and .../subagents/{agent_id}
 	"team.adopt.v1",          // lead request kind adopt (POST /api/team/approvals {kind:"adopt", target}), adopt members (U24)
 	"team.relay_quota.v1",    // PUT /api/team/relay-quota, team.relay_quota events, relay_quota on Member / RosterSession, UnattendedView.quotas (#2062)
+	"team.max_members.v1",    // PUT /api/team/max-members, max_members and in_use on TeamRoster
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose
