@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.659] - 2026-10-09
+
+> 改了 mod 與 pdx-team skill：**要部署 daemon，並重跑 `pdx setup`**；SPA、Electron 不必更新。
+
+### Added：member 被自動壓縮時通知 lead — P7-2（#2258，A 線）
+
+- 同一台主機上的 member 被 Claude Code 自動壓縮對話時，lead 會收到 `[pdx team] <ref> 已自動壓縮（lead 未在 70% 時接力）`，表示錯過了在 70% 幫它接力的時機。手動 `/compact` 不通知。
+- 收到這則之後，70% 的提醒會先停用，等接力完成或用量降下來才恢復，避免拿壓縮前的舊讀數再提醒一次。
+- pdx-team skill 裡兩則通知的文字改成與實際送出的一字不差。
+
 ## [1.0.0-alpha.658] - 2026-10-09
 
 > 動到 daemon、`pdx` 指令與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
