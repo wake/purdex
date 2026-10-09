@@ -17,7 +17,7 @@
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
 import { isValidDaemonId } from './daemon-id'
 import { pinnedHostFetch } from './host-api'
-import type { HostLook } from './host-look'
+import { hostLookOf, type HostLook } from './host-look'
 import { payloadRowsOf, isTransferHost, parseTransferRows } from './host-transfer-plan'
 import type { TransferLook } from './host-transfer-api'
 
@@ -199,20 +199,6 @@ function planOf(host: HostConfig, lookOf: (id: string) => HostLook): Plan | Left
   return { host, name: parsed.name, ip: parsed.ip, port: parsed.port, daemonId: host.daemonId, look: parsed.look ?? {} }
 }
 
-function defaultLookOf(hosts: readonly HostConfig[]): (id: string) => HostLook {
-  const byId = new Map(hosts.map((h) => [h.id, h]))
-  return (id) => {
-    const h = byId.get(id)
-    if (!h) return {}
-    const look: HostLook = { name: h.name }
-    if (h.colors !== undefined) look.colors = h.colors
-    if (h.color !== undefined) look.color = h.color
-    if (h.icon !== undefined) look.icon = h.icon
-    if (h.iconWeight !== undefined) look.iconWeight = h.iconWeight
-    return look
-  }
-}
-
 function failed(reason: PairingFailureReason, revokeFailed: string[] = [], pairingId?: string): PairingFailure {
   return pairingId === undefined ? { kind: 'failed', reason, revokeFailed } : { kind: 'failed', reason, revokeFailed, pairingId }
 }
@@ -226,7 +212,7 @@ export async function mintAndPackage(input: PairingInput, opts: { isCancelled?: 
   const { profile, relay } = input
   if (!useHostStore.getState().hosts[relay.id]) return failed('unknown_host')
   const deadline = clock() + PAIRING_TTL_MS
-  const lookOf = input.lookOf ?? defaultLookOf(input.hosts)
+  const lookOf = input.lookOf ?? ((id: string) => hostLookOf(id)) // the look of a host is read through the resolver, never off its config
 
   const plans: Plan[] = []
   const leftOut: LeftOut[] = []

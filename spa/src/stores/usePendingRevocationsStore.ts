@@ -6,6 +6,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
 import { canonicalEndpoint, useHostStore } from './useHostStore'
+import { hostLookOf } from '../lib/host-look'
 
 /** An entry is bound to the daemon it was made on: `endpoint` ("ip:port") and `daemonId` are the host's identity at the
  *  moment of creation, so a retry never goes to whatever the same hostId points at later (lib/pending-revocation-retry.ts).
@@ -61,7 +62,7 @@ export const usePendingRevocationsStore = create<State>()(
         if (host) {
           item.endpoint = canonicalEndpoint(host)
           if (host.daemonId) item.daemonId = host.daemonId
-          item.hostName = host.name
+          item.hostName = hostLookOf(hostId).name
         }
         if (meta?.label) item.label = meta.label
         set((s) => ({ items: [...s.items, item] }))
