@@ -221,7 +221,7 @@ func (m *Module) handleList(w http.ResponseWriter, _ *http.Request) {
 
 func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("device_id")
-	if false { // not an id this module ever issued: nothing to remove, and nothing of it is logged
+	if !push.ValidDeviceID(id) { // not an id this module ever issued: nothing to remove, and nothing of it is logged
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

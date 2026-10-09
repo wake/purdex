@@ -75,9 +75,10 @@ func (r *DeviceRequest) Validate() error {
 	if err := printable("host_label", r.HostLabel, maxHostLabelRunes); err != nil {
 		return err
 	}
-	// Both come back in responses: neither may carry (a long enough slice of) the token itself.
-	for _, v := range []string{r.DeviceName, r.HostLabel} {
-		if containsTokenSlice(lower(v), r.Token) {
+	// Both come back in responses: together they may not carry the token, whole or split (separators are ignored).
+	n, l := hexOnly(r.DeviceName), hexOnly(r.HostLabel)
+	for _, v := range []string{n, l, n + l, l + n} {
+		if containsTokenSlice(v, r.Token) {
 			return errors.New("device_name / host_label: must not contain the token")
 		}
 	}
@@ -113,6 +114,17 @@ func (p *Prefs) validate() error {
 		}
 	}
 	return nil
+}
+
+// hexOnly keeps the hex digits of s, lowercased: what is left of a name once separators are taken out.
+func hexOnly(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if r >= '0' && r <= '9' || r >= 'a' && r <= 'f' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // containsTokenSlice reports whether v holds 16 or more consecutive characters of token.

@@ -310,6 +310,14 @@ func TestTheTokenCannotBeSmuggledBackThroughAnotherField(t *testing.T) {
 		"device_name":                  func(r *push.DeviceRequest) { r.DeviceName = tokA[:60] },
 		"host_label":                   func(r *push.DeviceRequest) { r.HostLabel = tokA[:30] },
 		"name holding the whole token": func(r *push.DeviceRequest) { r.DeviceName = strings.ToUpper(tokA) },
+		"token split in pieces of 15 across name and label": func(r *push.DeviceRequest) {
+			r.DeviceName = tokA[:15] + "-" + tokA[15:30] + "-" + tokA[30:45]
+			r.HostLabel = tokA[45:60] + " " + tokA[60:]
+		},
+		"token split over the label then the name": func(r *push.DeviceRequest) {
+			r.HostLabel = tokA[:15] + " " + tokA[15:30]
+			r.DeviceName = tokA[30:45] + "." + tokA[45:60] + "." + tokA[60:]
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := e.do("POST", "/api/push/devices", reqBody(tokA, mut))
@@ -325,6 +333,15 @@ func TestTheTokenCannotBeSmuggledBackThroughAnotherField(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), tokA) || strings.Contains(e.logs.String(), tokA) {
 		t.Fatal("the token leaked through the DELETE path")
+	}
+	// ... also when the store is failing: a path that is not a device id is answered 204 without reaching the store
+	e.mod.store.Close()
+	e.logs.Reset()
+	if rec := e.do("DELETE", "/api/push/devices/"+tokA, ""); rec.Code != 204 {
+		t.Fatalf("delete by token with a failing store: %d", rec.Code)
+	}
+	if strings.Contains(e.logs.String(), tokA) {
+		t.Fatal("the token leaked into the log when the store failed")
 	}
 	// a registered device's name is never logged raw
 	e.do("POST", "/api/push/devices", reqBody(tokA, func(r *push.DeviceRequest) { r.DeviceName = "NAME-MARKER" }))
