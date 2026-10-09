@@ -360,3 +360,26 @@ func TestLoad_KeyFileErrorDoesNotEchoTheConfiguredPath(t *testing.T) {
 		}
 	}
 }
+
+// A relative (or empty) HOME must never expand a value: it would turn into a relative name and skip the directory check.
+func TestLoad_RelativeOrEmptyHomeNeverExpands(t *testing.T) {
+	dir := t.TempDir()
+	priv := filepath.Join(dir, "sub", "private")
+	if err := os.MkdirAll(priv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, priv, "AuthKey.p8", pemOf(t, p256(t)))
+	for _, home := range []string{"sub", ""} {
+		t.Setenv("HOME", home)
+		for _, prefix := range []string{"$HOME/", "${HOME}/", "~/"} {
+			envWith(t, dir, prefix+"private/AuthKey.p8")
+			_, err := Load(dir)
+			if err == nil {
+				t.Fatalf("HOME=%q %s: must fail", home, prefix)
+			}
+			if strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "AuthKey") {
+				t.Fatalf("error echoes the configured path: %v", err)
+			}
+		}
+	}
+}

@@ -93,7 +93,7 @@ func keyName(dir, value string) (string, error) {
 	for _, prefix := range []string{"$HOME/", "${HOME}/", "~/"} {
 		if rest, ok := strings.CutPrefix(value, prefix); ok {
 			home, err := os.UserHomeDir()
-			if err != nil || home == "" {
+			if err != nil || !filepath.IsAbs(home) {
 				return "", errors.New("no home directory")
 			}
 			value = filepath.Join(home, rest)
