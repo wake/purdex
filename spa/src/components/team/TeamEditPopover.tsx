@@ -65,6 +65,8 @@ export function TeamEditPopover({ target, anchor, onClose }: Props) {
     el.style.left = `${at.left}px`
     el.style.top = `${at.top}px`
   })
+  const ro = useRef<ResizeObserver | null>(null)
+  const observed = useRef<HTMLElement | null>(null)
   useEffect(() => {
     const place = () => {
       const el = box.current
@@ -77,15 +79,23 @@ export function TeamEditPopover({ target, anchor, onClose }: Props) {
     }
     window.addEventListener('resize', place)
     window.addEventListener('scroll', place, true)
-    const head = anchor()
-    const ro = head && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
-    if (head) ro?.observe(head)
+    ro.current = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
     return () => {
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
-      ro?.disconnect()
+      ro.current?.disconnect()
+      ro.current = null
+      observed.current = null
     }
   }, [anchor, onClose])
+  // A mode switch replaces the header element: watch the one that is there now, not the one that was.
+  useEffect(() => {
+    const head = anchor()
+    if (head === observed.current) return
+    if (observed.current) ro.current?.unobserve(observed.current)
+    if (head) ro.current?.observe(head)
+    observed.current = head
+  })
 
   // A press outside drops the draft.
   useEffect(() => {
@@ -151,16 +161,17 @@ export function TeamEditPopover({ target, anchor, onClose }: Props) {
       </label>
       <div className="flex flex-col gap-1">
         <span className="text-text-secondary">{t('team.edit.color')}</span>
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-col gap-1.5">
           <button
             type="button"
             data-testid="team-edit-color-auto"
             aria-pressed={color === null}
             onClick={() => setColor(null)}
-            className={`px-1.5 py-0.5 rounded border cursor-pointer ${color === null ? 'border-text-primary text-text-primary' : 'border-border-default text-text-secondary'}`}
+            className={`self-start px-1.5 py-0.5 rounded border cursor-pointer ${color === null ? 'border-text-primary text-text-primary' : 'border-border-default text-text-secondary'}`}
           >
             {t('team.edit.color_auto')}
           </button>
+          <div data-testid="team-edit-swatches" className="grid grid-cols-8 justify-items-center gap-1">
           {TEAM_COLORS.map((c, i) => (
             <button
               key={c}
@@ -173,6 +184,7 @@ export function TeamEditPopover({ target, anchor, onClose }: Props) {
               style={{ background: c }}
             />
           ))}
+          </div>
         </div>
         {errors.color && <span data-testid="team-edit-color-error" role="alert" className="text-red-400">{errors.color}</span>}
       </div>

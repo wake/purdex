@@ -167,6 +167,40 @@ describe('the form follows its header', () => {
     expect(pos()).toEqual(['100px', '38px'])
   })
 
+  it('after a mode switch it watches the NEW header: its resize moves the form', () => {
+    const watchers: Array<{ cb: () => void; seen: Set<Element> }> = []
+    class FakeRO {
+      seen = new Set<Element>()
+      constructor(public cb: () => void) { watchers.push({ cb, seen: this.seen }) }
+      observe(el: Element) { this.seen.add(el) }
+      unobserve(el: Element) { this.seen.delete(el) }
+      disconnect() { this.seen.clear() }
+    }
+    vi.stubGlobal('ResizeObserver', FakeRO)
+    // the form was opened before the stub: re-open it so it creates its observer
+    fireEvent.keyDown(screen.getByTestId('team-edit-name'), { key: 'Escape' })
+    dblClickName()
+    const oldHeader = header()
+    fireEvent.click(screen.getByTestId('team-panel-to-line')) // the header element is replaced
+    const fresh = header()
+    expect(fresh).not.toBe(oldHeader)
+    box = rectOf(30, 80) // the new header's geometry changed
+    const live = watchers.filter((w) => w.seen.has(fresh))
+    expect(live.length).toBeGreaterThan(0)
+    expect(watchers.some((w) => w.seen.has(oldHeader))).toBe(false) // nothing keeps watching the detached one
+    act(() => live.forEach((w) => w.cb()))
+    expect(pos()).toEqual(['30px', '84px'])
+    vi.unstubAllGlobals()
+  })
+
+  it('the colour choices are one "auto" row and a fixed 8-column grid of the 8 swatches (no orphan at any width)', () => {
+    const grid = screen.getByTestId('team-edit-swatches')
+    expect(grid.className).toContain('grid-cols-8')
+    expect(grid.children.length).toBe(8)
+    expect(grid.contains(screen.getByTestId('team-edit-color-auto'))).toBe(false)
+    expect((popover() as HTMLElement).style.width).toBe('260px') // the form's width does not follow the panel's
+  })
+
   it('moves when the panel is enlarged or its mode changes (the header is another element then)', () => {
     box = rectOf(40, 60)
     fireEvent.click(screen.getByTestId('team-panel-expand'))
