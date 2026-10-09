@@ -1,6 +1,6 @@
 # Phone pairing by QR code — plan
 
-Spec: `docs/specs/2026-10-09-qr-pairing-spec.md`. Three PRs (QP-1 splits into 1a / 1b); the iOS work runs in
+Spec: `docs/specs/2026-10-09-qr-pairing-spec.md`. Three steps (QP-1 splits into 1a / 1b / 1c); the iOS work runs in
 parallel in purdex-ios.
 
 Rules for every task: TDD (failing test first), one commit per task, mutation check before release, only the affected
@@ -11,7 +11,8 @@ messages; logs show a device id, never a token. Review per PR: codex R1 + R2 (at
 ## QP-1 daemon: devices module + scope
 
 1. **Token + store.** `internal/devices`: `NewToken()` (`pdxd_` + 32 hex), `Hash`. Module `internal/module/devices`:
-   `devices.db` (0600), the table of spec §3.1 with `profile_id` and `use_by`; `Mint`, `List`, `RevokeID`,
+   `devices.db` (0600), the table of spec §3.1 with `profile_id` and `use_by` (= created_at + `use_within`, default 15
+   min, 60 s–20 min); `Mint`, `List`, `RevokeID`,
    `RevokePairing`, `SetLabel`, `Authenticate(hash, now)` = lookup + the single-statement first-use rule +
    `last_used_at` throttled to once a minute; a sweep deleting rows that can no longer work. Tests: format; only the hash
    stored; first use before `use_by` succeeds and sticks across a restart (it is in the DB); unused past `use_by` →
@@ -26,9 +27,12 @@ messages; logs show a device id, never a token. Review per PR: codex R1 + R2 (at
    ticket each come back with their principal; a ticket is consumed once.
 4. **Connection registry.** A small registry (`internal/core` or `internal/devices`) where every WS handler registers
    `(principal id, close func)` for the life of the connection: host-events, terminal / mirror, conversations. Revoking a
-   device closes all of its connections. Tests: revoke closes one connection of each kind; admin connections untouched.
-5. **Scope.** `deviceAllowed` = the exact pattern strings of spec §3.3 (the iOS list, confirmed by purdex-ios — including
-   whether session create / send-keys are in). `newOuterHandler(c, routes *http.ServeMux, inner http.Handler, allow)`:
+   device closes all of its connections; the principal comes from the request context, so a bearer-authenticated WS
+   registers like a ticket one. Tests: revoke closes one connection of each kind, opened by bearer and by ticket; admin
+   connections untouched.
+5. **Scope.** `deviceAllowed` = the exact pattern strings of spec §3.3 (the iOS list, purdex-ios 2026-10-09), plus the
+   one sub-rule for the nex engine mount `/api/nex/`: allowed only for `GET` with a path matching
+   `^/api/nex/v1/executions/[^/]+/(prelude|events)$`. `newOuterHandler(c, routes *http.ServeMux, inner http.Handler, allow)`:
    `main.go` passes its mux as both; the existing tests pass `nil` routes and their wrappers as `inner`. The scope
    middleware sits after `TokenAuth` in the general chain: for a device principal, `_, pattern := routes.Handler(r)`
    (nil `routes` → refuse), allow only `deviceAllowed[pattern]`, otherwise 403 `device_forbidden`; then
@@ -36,11 +40,14 @@ messages; logs show a device id, never a token. Review per PR: codex R1 + R2 (at
    pattern is really registered** (for each, a synthetic request whose `mux.Handler` pattern equals it, built with the
    real modules in the nex on/off and push ready/soft-failed/off configurations); **the allowed set equals the pinned
    iOS list**; a device token on `fs` list/read/write, `PUT /api/config`, `/api/dev/*`, restart, section DELETE,
-   device management, a team mutation not in the list → 403; methodless WS patterns handled (the pattern string as
+   device management, `GET /api/profiles`, a team mutation not in the list → 403; the nex mount: the two read paths
+   pass, a `POST` to an engine route and any other engine `GET` → 403 (nex on), and with nex off the mount's
+   unavailable handler is never reached by a device; methodless WS patterns handled (the pattern string as
    registered); nil `routes` refuses a device and leaves admin requests alone; a wrapper `inner` still serves.
 6. **Ownership.** push: registrations made by a device principal store its device id; device principals see / delete
-   only their own (others 404). profiles: a device principal reads and writes only its `profile_id` (else 404); a token
-   with no `profile_id` reaches no profile. Tests for both, cross-device.
+   only their own (others 404); registering an APNs token already registered by the admin or another device moves it
+   to the caller. profiles: a device principal reads and writes only its `profile_id` (else 404); a token with no
+   `profile_id` reaches no profile. Tests for both, cross-device, including the move.
 7. **Device tab append (spec §5.2).** `internal/module/profiles`: `handlePutSection` refuses a device principal before
    the store when the section is not `tabs.<ws>` or `clientId` ≠ `c_` + the device id's 12 hex (403
    `device_append_only`); `PutSection` gains an optional guard `func(row sectionRow, in Section) error` called only on
@@ -48,23 +55,34 @@ messages; logs show a device id, never a token. Review per PR: codex R1 + R2 (at
    the `!found` and tombstone paths refuse when a guard is set. The device guard: fingerprint and ordinal equal the row's;
    the append rule on the two payloads (decode with `json.Unmarshal` into `any`; `order` a strict prefix extension with
    fresh, non-repeating ids; stored `tabs` entries `reflect.DeepEqual`; exactly one object per new id; other top-level
-   members equal). Admin writes pass no guard and are unchanged. Tests: append one / two tabs → applied, event sent;
-   each refusal (other profile 404; `settings` / `workspaces` section; foreign `clientId`; missing / tombstoned
-   section; changed fingerprint; changed ordinal; reordered, removed or edited existing tab; repeated or reused id;
-   non-object new entry; changed extra top-level member); stale `baseRev` → 409 with payload; a Mac write landing
-   between the device's read and write → the device gets 409, nothing appended over it; equal hash → converged.
-8. **Management routes.** `POST /api/devices` (with `profile_id?`), `GET /api/devices`, `DELETE /api/devices/{id}`,
-   `DELETE /api/devices?pairing_id=`, `PUT /api/devices/self`; capability `devices.v1`. Tests: admin only (device → 403);
-   self only for its own id; list never shows token or hash; revoke → connections closed (task 4).
-9. **Registration.** `cmd/pdx/main.go` registers the module unconditionally.
+   members equal; then gate 4: `hash` equals `profilehash.Sum(payload)`, else 400 `hash_mismatch`). Admin writes pass
+   no guard and are unchanged. Tests: append one / two tabs → applied, event sent; each refusal (other profile 404;
+   `settings` / `workspaces` section; foreign `clientId`; missing / tombstoned section; changed fingerprint; changed
+   ordinal; reordered, removed or edited existing tab; repeated or reused id; non-object new entry; changed extra
+   top-level member; the stored row's hash resent; a wrong hash); stale `baseRev` → 409 with payload; a Mac write
+   landing between the device's read and write → the device gets 409, nothing appended over it; equal hash →
+   converged.
+8. **Canonical hash, Go port.** `internal/profilehash`: `Sum(raw json.RawMessage) (string, error)` — the canonical form
+   of `spa/src/lib/profile/hash.ts` (keys sorted by UTF-16 code units at every depth, as JS `sort()` does; arrays in
+   order; strings escaped exactly as `JSON.stringify`; numbers formatted as ECMAScript `Number#toString`; `-0` → `0`;
+   a lone surrogate or anything the port cannot reproduce → error), SHA-256 lowercase hex. Shared fixtures
+   `spa/src/lib/profile/__fixtures__/canonical-hash.json` (inputs as JSON text + expected hashes: key order, nested
+   arrays, integers, floats, 1e21 / 1e-7 boundaries, unicode, escapes, the `__proto__` key, a real tabs payload):
+   a vitest pins `hash.ts` to it and a Go test (reading the same file by relative path) pins the port.
+9. **Management routes.** `POST /api/devices` (with `profile_id?`, `use_within_s?` 60–1200), `GET /api/devices`,
+   `DELETE /api/devices/{id}`, `DELETE /api/devices?pairing_id=`, `PUT /api/devices/self`; capability `devices.v1`.
+   Tests: admin only (device → 403); self only for its own id; list never shows token or hash; `use_within_s` bounds;
+   revoke → connections closed (task 4).
+10. **Registration.** `cmd/pdx/main.go` registers the module unconditionally.
 
-Split: QP-1a = tasks 1, 2, 8, 9; QP-1b = tasks 3–7.
+Split: QP-1a = tasks 1, 2, 9, 10; QP-1b = tasks 3–6; QP-1c = tasks 7–8.
 
 ## QP-2 daemon: pairing entries
 
 1. **Pairing entries.** `internal/module/hosttransfer`: a pairing kind in the store (separate from transfers);
    `POST /api/host-transfer/pairings` (admin) with strict row validation (spec §4.1: exact keys, `v == 1`,
-   `kind == "pair"`, `pdxd_` token, one `pairingId` and one `profile` across rows); `POST
+   `kind == "pair"`, `pdxd_` token, one `pairingId` and one `profile` across rows) and `expires_in_s` (60–600, default
+   600; out of range → 400); `POST
    /api/host-transfer/pairings/claim` (no bearer; the route enforces tailnet / loopback source itself; exempt from
    `TokenAuth` and the device scope by exact path in `http_chain.go`; takes only pairing entries, turns the entry into a
    tombstone, returns rows); `GET` / `DELETE /api/host-transfer/pairings/{code}` (admin). Tests: strict validation
@@ -84,18 +102,25 @@ Split: QP-1a = tasks 1, 2, 8, 9; QP-1b = tasks 3–7.
 ## QP-3 SPA: pairing dialog + paired phones
 
 1. **QR.** A QR generator dependency (SVG, no network); `QrCode` component. Test: SVG for a string; nothing fetched.
-2. **Mint + package.** `spa/src/lib/pairing.ts`: mint on every host with a token (pairing id shared; `profile_id` on the
-   SOT host); **abort and revoke all when the SOT host fails**; build rows; create the pairing entry; poll status every
-   2 s; on close without a seen claim / at expiry: `DELETE` the entry and revoke on every host that minted **only on
-   204**; 409 → 「已配對」; 404 or a failed request → revoke nothing. Tests: rows exact shape; SOT failure aborts and
-   revokes; another host failing is left out and reported; closed after a seen claim sends no DELETE; close → 204 →
-   revokes; close → 409 (claimed between polls) → no revoke, 「已配對」; close → 404 / network error → no revoke; no
-   token in logs.
+2. **Mint + package.** `spa/src/lib/pairing.ts`: deadline D = now + 10 min; mint on every host with a token (pairing id
+   shared; `profile_id` on the SOT host; `use_within_s` = (D − now) + 300 at each call); **abort and revoke all when
+   the SOT host fails**; build rows; create the pairing entry with `expires_in_s` = D − now (< 60 → abort and revoke);
+   poll status every 2 s; on close without a seen claim / at expiry: `DELETE` the entry and revoke on every host that
+   minted **only on 204**; 409 → 「已配對」; 404 or a failed request → revoke nothing, and the dialog says
+   「配對碼已失效；手機若已完成配對，會出現在「已配對的手機」」. Tests: rows exact shape; the durations (a slow
+   mint shortens the entry, never the tokens' margin; < 60 s left aborts); SOT failure aborts and revokes; another host
+   failing is left out and reported; closed after a seen claim sends no DELETE; close → 204 → revokes; close → 409
+   (claimed between polls) → no revoke, 「已配對」; close → 404 / network error → no revoke, the 404 text; no token in
+   logs.
 3. **Dialog.** `PairPhoneDialog.tsx` from the Hosts page: profile picker (default master profile), relay picker
    (default active host), included / left-out hosts, QR + code + countdown, 「已配對」. i18n. Tests: defaults; states.
 4. **Paired phones.** A Hosts-page section: rows by `pairing_id` across hosts; 撤銷 on every host; unreachable host →
    "not revoked yet", retried on connect (pending revocations, device-local). Tests: grouping; revoke; retry.
-5. **Screenshot gate:** the dialog with a QR and 「已配對」, and the paired-phones list, zh-TW, to the lead.
+5. **Phone-built tab fixture.** `spa/src/lib/profile/__fixtures__/phone-tab.json`: a `tabs.<ws>` payload with one tab
+   appended as purdex-ios builds it (agreed with purdex-ios before this task; it pins the same file in its tests). A
+   vitest: the Mac's tabs guard accepts it and applying it puts the tab at the end of the workspace. (Lands in QP-1c
+   if that merges first.)
+6. **Screenshot gate:** the dialog with a QR and 「已配對」, and the paired-phones list, zh-TW, to the lead.
 
 ## Follow-ups
 
@@ -146,3 +171,27 @@ Tab requests were dropped in the same revision (the phone appends under a daemon
 | 4 | important: bearer-less claim shares the store-wide limiter, so anyone on the tailnet can lock out the admin redeem | Claim has its own limiter, per source address; redeem's is untouched (spec §4.2, QP-2 task 2) |
 | 5 | important: claimed entries kept to expiry fill the shared 16-code cap | Tombstones do not count toward the cap; at most 64, oldest dropped (spec §4.1, §4.3, QP-2 task 3) |
 | 6 | important: `mux.Handler` wiring — `newOuterHandler` takes an `http.Handler`, tests pass wrappers, and `Handler` returns two values | `newOuterHandler(c, routes *http.ServeMux, inner http.Handler, allow)`; `_, pattern := routes.Handler(r)`; nil routes refuse devices (spec §3.3, QP-1 task 5) |
+
+## Third review fold-in (codex `task-mv0t6ul0-wqmv7l`, incremental, 2026-10-09)
+
+| # | Finding | Fold-in |
+|---|---------|---------|
+| 1 | important: the daemon not checking the device's hash is worse than one corrective write — a Mac fast-forwards on an equal hash without pulling (`sync-state.ts` `finish`), so the tab is never seen and later overwritten | Gate 4: the daemon recomputes the hash with a Go port of `hash.ts`, pinned to shared fixtures; mismatch → 400 `hash_mismatch` (spec §5.2, QP-1 tasks 7–8) |
+| 2 | important: `use_by` counts from each mint, the entry's 10 minutes from packaging; a slow mint could leave a claimable code with dead tokens | One deadline D; tokens get `use_within_s` = (D − now) + 300, the entry `expires_in_s` = D − now; < 60 s left aborts (spec §2, §3.4, §4.1, QP-1 task 9, QP-2 task 1, QP-3 task 2) |
+| 3 | important: an evicted tombstone turns a successful pairing into "unconfirmed" in the dialog | A 404 never says "not paired": the dialog points to 已配對的手機, whose `first_used_at` does not depend on a tombstone (spec §4.3, QP-3 task 2) |
+
+## iOS review fold-in (purdex-ios `air26/_6cf3ft`, 2026-10-09)
+
+| # | Point | Fold-in |
+|---|-------|---------|
+| 1 | The allow-list missed routes the App uses: session create and send-keys, hostconfig, relay/self, provenance, transcript, three nex reads; roster / relay-quota / profile list / fs unused | Exact list in spec §3.3 (with the nex engine-mount sub-rule, since `/api/nex/` is one pattern for the whole engine); the unused ones left out |
+| 1′ | The App opens WebSockets with a bearer header, not a ticket | WS principal from the request context, bearer or ticket (spec §3.2, QP-1 task 4) |
+| 2 | clientId must come from the SOT row's device id | Spec §7 |
+| 3 | Host replacement keeps the phone's local record id | Spec §7 |
+| 4 | Unreachable rows vs `host_id` mismatch | Unverified (retry 5 min after the claim, then 「請在桌機重新配對」) vs failed (spec §7) |
+| 5 | Re-pairing must be able to take over an APNs registration | A registered APNs token moves to the caller (spec §3.3, QP-1 task 6) |
+| 6 | 401 → stop reconnecting, mark revoked | Spec §7; a revoked host offers 「移除」 (lead ruling: removing a dead entry is not host management) |
+| 7 | Pending tabs: drop when the section is gone? | Yes; also when the workspace is gone (spec §5.2) |
+| 8 | §5.1 "never writes" contradicts §5.2 | Reworded |
+| A | A device token can still run commands through sessions + send-keys | Stated in spec §3.3 ("what R7 is and is not"); revoking is the stop |
+| D | Default label | The model name, renamable on the phone (lead ruling) |
