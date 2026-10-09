@@ -167,6 +167,7 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 	if err := tx.Commit(); err != nil {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: commit: %w", id, err)
 	}
+	s.notifyOp(id)
 	return op, res, nil
 }
 

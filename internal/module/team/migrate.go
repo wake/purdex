@@ -266,5 +266,9 @@ func migrateRelayOpBinding(db *sql.DB) error {
 		return err
 	}
 	// proc_start (P6-2b-1) completes the identity: a pid is reused, pid + start time is not.
-	return ensureColumn(db, "relay_ops", "proc_start", "TEXT NOT NULL DEFAULT ''")
+	if err := ensureColumn(db, "relay_ops", "proc_start", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// seen_at (P6-2b-2): when the member's mod first saw the control message; the unseen claim timer (P6-4b) reads it.
+	return ensureColumn(db, "relay_ops", "seen_at", "INTEGER NOT NULL DEFAULT 0")
 }

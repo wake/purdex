@@ -73,14 +73,14 @@ const relaySchema = `
 	);`
 
 const relayCols = `id, kind, host_id, session_id, new_session_id, ref, new_ref, team_id, request_id,
-	state, reason, handoff_path, pruned, used_percentage, created_at, updated_at, pid, pane_id, proc_start`
+	state, reason, handoff_path, pruned, used_percentage, created_at, updated_at, pid, pane_id, proc_start, seen_at`
 
 func scanRelayOp(r rowScanner) (team.RelayOp, error) {
 	var op team.RelayOp
 	var pruned int
 	var used sql.NullFloat64
 	if err := r.Scan(&op.ID, &op.Kind, &op.HostID, &op.SessionID, &op.NewSessionID, &op.Ref, &op.NewRef, &op.TeamID, &op.RequestID,
-		&op.State, &op.Reason, &op.HandoffPath, &pruned, &used, &op.CreatedAt, &op.UpdatedAt, &op.PID, &op.PaneID, &op.ProcStart); err != nil {
+		&op.State, &op.Reason, &op.HandoffPath, &pruned, &used, &op.CreatedAt, &op.UpdatedAt, &op.PID, &op.PaneID, &op.ProcStart, &op.SeenAt); err != nil {
 		return team.RelayOp{}, err
 	}
 	op.Pruned = pruned != 0

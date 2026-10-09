@@ -14,6 +14,12 @@ type RelayClaimRequest struct {
 	SessionID string `json:"session_id"`
 }
 
+// RelaySeenRequest is POST /api/relay/ops/{id}/seen: the member's mod saw the control message (it may be mid-turn and
+// claim later). Only the target session may say so.
+type RelaySeenRequest struct {
+	SessionID string `json:"session_id"`
+}
+
 // RelayClaimResponse answers claim: the op and who leads the member's team.
 type RelayClaimResponse struct {
 	Op   RelayOp    `json:"op"`

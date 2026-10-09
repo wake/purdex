@@ -66,6 +66,7 @@ func (s *Store) CreateSelfRelayApproved(op team.RelayOp, a team.Approval, hash s
 	if err := tx.Commit(); err != nil {
 		return fail(fmt.Errorf("commit: %w", err))
 	}
+	s.notifyOp(claimed.ID)
 	return after, claimed, nil
 }
 

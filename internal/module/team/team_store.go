@@ -234,6 +234,11 @@ func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (a 
 	if err != nil {
 		return team.Approval{}, false, false, fmt.Errorf("approve self relay %s: %w", id, err)
 	}
+	if memberCancelled { // the awaiting op was cancelled in the same transaction
+		if op, ok, err := s.RelayOpByRequest(id); err == nil && ok {
+			s.notifyOp(op.ID)
+		}
+	}
 	return a, n == 1, memberCancelled, nil
 }
 

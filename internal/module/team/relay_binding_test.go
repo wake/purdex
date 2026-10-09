@@ -104,7 +104,7 @@ func TestOpenStore_AddsTheBindingColumnsToADeployedRelayOps(t *testing.T) {
 	}
 	defer s.Close()
 	op, ok, err := s.GetRelayOp("old")
-	if err != nil || !ok || op.PID != 0 || op.PaneID != "" {
+	if err != nil || !ok || op.PID != 0 || op.PaneID != "" || op.ProcStart != "" || op.SeenAt != 0 {
 		t.Fatalf("old op after migration: %+v ok=%v err=%v", op, ok, err)
 	}
 }
