@@ -32,6 +32,8 @@ type remoteReading struct {
 	at     int64
 	failed bool
 	ctx    map[string]*team.MemberContext
+	// seen are the CC session ids the host listed at all (with or without a context reading): a listed session is live.
+	seen map[string]bool
 }
 
 type remoteReadings struct {
@@ -82,10 +84,14 @@ func (m *Module) readRemoteHost(ctx context.Context, hostID string) {
 	} else if rows, err := m.peerRecords(ctx, hostID); err != nil {
 		rr.failed = true
 	} else {
-		rr.ctx = map[string]*team.MemberContext{}
+		rr.ctx, rr.seen = map[string]*team.MemberContext{}, map[string]bool{}
 		for _, row := range rows {
 			a := row.Agent
-			if a == nil || a.SessionID == "" || a.Context == nil {
+			if a == nil || a.SessionID == "" {
+				continue
+			}
+			rr.seen[a.SessionID] = true
+			if a.Context == nil {
 				continue
 			}
 			c := team.MemberContext{UsedPercentage: a.Context.UsedPercentage, Window: a.Context.Window,
@@ -97,7 +103,11 @@ func (m *Module) readRemoteHost(ctx context.Context, hostID string) {
 	if m.remote.by == nil {
 		m.remote.by = map[string]remoteReading{}
 	}
-	m.remote.by[hostID] = rr
+	// Two reads of one host can overlap (a background refresh and a GET /api/team): the one that STARTED later wins,
+	// whichever finishes last.
+	if have, ok := m.remote.by[hostID]; !ok || have.at <= rr.at {
+		m.remote.by[hostID] = rr
+	}
 	m.remote.mu.Unlock()
 }
 
@@ -144,6 +154,13 @@ func (m *Module) kickRemoteReadings(hostIDs []string) {
 	}
 }
 
+// remoteListed says whether the host's last answer listed the session (live on its host).
+func (m *Module) remoteListed(hostID, sessionID string) bool {
+	m.remote.mu.Lock()
+	defer m.remote.mu.Unlock()
+	return m.remote.by[hostID].seen[sessionID]
+}
+
 // remoteContextOf is a remote member's cached context, and whether its host failed to answer (then blank).
 // Not yet read: nil, false.
 func (m *Module) remoteContextOf(hostID, sessionID string) (c *team.MemberContext, unavailable bool) {
@@ -176,7 +193,7 @@ func (m *Module) remoteRosterMember(mr memberRow, quota team.RelayQuota, open ma
 	s := team.RosterSession{SessionID: mr.SessionID, Ref: mr.Ref, Address: firstNonEmpty(alias, mr.HostID) + "/" + mr.Ref,
 		Title: mr.Title, TmuxSession: mr.TmuxSession, HostID: mr.HostID, HostAlias: alias, RelayQuota: quota}
 	s.Context, s.ContextUnavailable = m.remoteContextOf(mr.HostID, mr.SessionID)
-	s.Live = s.Context != nil
+	s.Live = m.remoteListed(mr.HostID, mr.SessionID)
 	s.Model, s.Effort = mr.Model, mr.Effort
 	if s.Context != nil {
 		s.Model, s.Effort = firstNonEmpty(s.Model, s.Context.ModelID), firstNonEmpty(s.Effort, s.Context.Effort)
