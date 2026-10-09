@@ -71,7 +71,12 @@ const TOAST_WAITING = '接力等待核准：請在 Purdex App 按核准或拒絕
 const NOTE = '接力已核准，這一輪只做簡短回應；如果這是一件新工作，不要開始做，把它寫進接力檔「下一步」的第一項，由接手後的新對話處理。'
 const SKIP_COMPACT = '接力已核准，略過壓縮，改為寫接力檔'
 const RELAY_UNREACHABLE = 'Purdex daemon 連不上，無法變更自我接力'
-const RELAY_USAGE = '用法：/relay off|on|status'
+const RELAY_USAGE = '用法：/relay [now|off|on|status]（不帶參數＝now）'
+const RELAY_BUSY = '接力進行中'
+const RELAY_HOST_OFF = '主機的自我接力開關是關的，不接力'
+const RELAY_PAUSED = '這個 session 已用 /relay off 暫停自我接力；要立刻接力請先 /relay on 再 /relay'
+const RELAY_NO_USAGE = '目前讀不到 context 用量，稍後再試'
+const RELAY_NOT_STARTED = '接力沒有開始（這個 session 剛換過或被清除）'
 const RELAY_MEMBER = 'member 的接力由 lead 安排'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
 const toastSeedFailed = (path) => '接力未完成：接力檔在 ' + path + '，可手動貼給新 session'
@@ -409,6 +414,7 @@ async function maybeBegin($) {
   if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
   if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
   const sid = await $.session.id()
+  if (s.state !== 'idle') return // a /relay now took the state while the engine was read
   s.state = 'beginning'
   s.lastAskPct = u.percent
   const gen = s.gen
@@ -424,6 +430,11 @@ async function maybeBegin($) {
 // generation that is gone is reported cancelled{abandoned} at once, so the
 // daemon closes its approval row and no dialog is left without a mod.
 // `adopted(p)` hands the request it opened to prompts held while beginning.
+//
+// It answers a typed outcome, which the threshold caller (maybeBegin) ignores and `/relay now`
+// maps to a message: { kind: 'opened' } | { kind: 'abandoned' } | { kind: 'unreachable' } |
+// { kind: 'refused', code } (a 409 with the daemon's code: member_relay_is_leads,
+// self_relay_off, self_relay_paused, relay_open, …) | { kind: 'failed', detail }.
 async function begin($, sid, gen, u, adopted) {
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
@@ -434,12 +445,17 @@ async function begin($, sid, gen, u, adopted) {
   if (!mine || now !== sid) {
     if (opened) report($, body.op.id, 'cancelled', ['--error', 'abandoned'])
     if (mine) toIdle() // same generation, another session id: nothing will ever answer for this begin
-    return
+    return { kind: 'abandoned' }
   }
   if (!opened) {
-    if (r.exitCode === 13 && stderrCode(r) === 'member_relay_is_leads') s.role = 'member'
+    const code = r.exitCode === 13 ? stderrCode(r) : ''
+    if (code === 'member_relay_is_leads') s.role = 'member'
     toIdle()
-    return // 13 self_relay_off | self_relay_paused | relay_open, 20, 21, 1: nothing (§8.1, §8.7 (d)); ask again at +10
+    // 13 self_relay_off | self_relay_paused | relay_open, 20, 21, 1: the threshold caller does nothing
+    // (§8.1, §8.7 (d)) and asks again at +10; `/relay now` says why.
+    if (r.exitCode === 13) return { kind: 'refused', code }
+    if (r.exitCode === 20 || r.exitCode === 21) return { kind: 'unreachable' }
+    return { kind: 'failed', detail: (r.stderr || '').trim() }
   }
   s.pending = {
     op: body.op,
@@ -466,6 +482,58 @@ async function begin($, sid, gen, u, adopted) {
     if (s.pending === p) await waitLoop($)
     else p.answer.resolve('cancelled') // dropped before its loop started (the user's /clear, a compaction)
   })
+  return { kind: 'opened' }
+}
+
+// relayNow is `/relay` (and `/relay now`): the self relay at once, whatever the context use, by the
+// threshold's own begin — the same request, approval, handoff, /clear and seed — with the threshold,
+// the growth floor and the +10 re-ask not asked, and s.lastAskPct left alone. Not a second state
+// machine: it only moves to `beginning` as maybeBegin does and awaits begin's typed outcome. The
+// session's own pause is not overridden (the daemon answers self_relay_paused, spec U23 D-U23-4);
+// a member is told by the daemon's answer, not by the cached hello role.
+async function relayNow($) {
+  if (s.state !== 'idle') return { text: RELAY_BUSY }
+  if (!hasCSPRNG()) return { text: 'Purdex 接力無法啟動：這個環境沒有 crypto.getRandomValues' }
+  // Taken before any await, so a second /relay or a turn's threshold check meanwhile sees
+  // `beginning`; a preflight that fails gives it back, if it is still this attempt's.
+  s.state = 'beginning'
+  const gen = s.gen
+  const begun = deferred() // a prompt that arrives while begin is out waits on it (P5b-3)
+  s.begun = begun
+  const giveBack = () => {
+    begun.resolve(undefined)
+    if (s.gen === gen && s.state === 'beginning') toIdle()
+  }
+  let u, sid
+  try {
+    u = (await $.session.usage()).context
+    sid = await $.session.id()
+  } catch (err) {
+    giveBack()
+    return { text: RELAY_NO_USAGE }
+  }
+  if (!u || u.percent === undefined) {
+    giveBack()
+    return { text: RELAY_NO_USAGE }
+  }
+  if (s.gen !== gen || s.state !== 'beginning' || s.begun !== begun) {
+    // a /clear, a compaction or a session start took the attempt while the engine was read
+    begun.resolve(undefined)
+    return { text: RELAY_NOT_STARTED }
+  }
+  const out = await begin($, sid, gen, u, begun.resolve).finally(() => begun.resolve(undefined))
+  switch (out.kind) {
+    case 'opened': return { text: '已送出接力申請（context ' + u.percent + '%），請在 Purdex App 核准' }
+    case 'unreachable': return { text: RELAY_UNREACHABLE }
+    case 'abandoned': return { text: RELAY_NOT_STARTED }
+    case 'failed': return { text: 'pdx relay begin 失敗：' + (out.detail || '(無訊息)') }
+    default:
+      if (out.code === 'member_relay_is_leads') return { text: RELAY_MEMBER }
+      if (out.code === 'self_relay_off') return { text: RELAY_HOST_OFF }
+      if (out.code === 'self_relay_paused') return { text: RELAY_PAUSED }
+      if (out.code === 'relay_open') return { text: RELAY_BUSY }
+      return { text: 'pdx relay begin 被拒：' + (out.code || '(無代碼)') }
+  }
 }
 
 // waitAnswer reads one `pdx relay wait`. P5a-2c's shape: exit 0 + Approval
@@ -654,7 +722,7 @@ export function register(on) {
     const cfg = parseJSON(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
     if (cfg && cfg.pdx) s.pdx = cfg.pdx // written beside VERSION by the extractor; absent in `claude plugin test`
     s.config = cfg && typeof cfg.config === 'string' ? cfg.config : ''
-    await $.command.register({ name: 'relay', description: 'Purdex 自我接力：off 暫停、on 恢復、status 查看', argumentHint: 'off|on|status' })
+    await $.command.register({ name: 'relay', description: 'Purdex 自我接力：now 立刻接力（不帶參數＝now）、off 暫停、on 恢復、status 查看', argumentHint: 'now|off|on|status（不帶＝now）' })
       .catch((err) => log($, '/relay not registered: ' + String(err)))
     helloLater($)
     return next(e)
@@ -820,7 +888,8 @@ export function register(on) {
   // one daemon call is awaited in the hook, bounded at SELF_TIMEOUT_MS; a
   // timeout (read as 20), 20 or 21 says the daemon is unreachable.
   on('command.run', { command: 'relay' }, async ($, e) => {
-    const action = (e.args || 'status').trim()
+    const action = (e.args || '').trim() || 'now'
+    if (action === 'now') return relayNow($)
     if (!['off', 'on', 'status'].includes(action)) return { text: RELAY_USAGE }
     const r = await pdx($, ['relay', 'self', action, '--session', await $.session.id()], SELF_TIMEOUT_MS)
     if (r.exitCode === 20 || r.exitCode === 21) return { text: RELAY_UNREACHABLE }

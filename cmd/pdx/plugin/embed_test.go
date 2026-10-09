@@ -589,6 +589,8 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		// T-2: the task flags come after the pinned grammar, and the two one-line rules.
 		"[--task-subject <s> [--done-when <line>]…]", "Hand each piece of work to a member as a task: `pdx task add --to <ref>",
 		"Report with `pdx report <kind>`", "`pdx task mine` lists your tasks",
+		// /relay now (lead-command spec §2b): the user's early relay, never the agent's.
+		"`/relay` (or `/relay now`) is the user's way to relay early: **you never run it**",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md lacks %q", want)

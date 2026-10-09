@@ -169,6 +169,7 @@ type Fake = {
   // The session id the engine moves to while it handles the next classic.SessionStart (a
   // /clear): a hook sees it only after its next(e), as in a session.
   switchTo?: string
+  usageGate?: Promise<void> // session.usage waits on it (the race tests)
 }
 
 // The clock of `refuseNow`: the one way to make the prompt hold throw (its
@@ -226,7 +227,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', async () => ({ value: f.sessionId }))
-  on('session.usage', async () => ({ value: { startedAt: 0, context: f.usage, rateLimits: [] } }))
+  on('session.usage', async () => { if (f.usageGate) await f.usageGate; return { value: { startedAt: 0, context: f.usage, rateLimits: [] } } })
   on('fs.read', async (_$: any, e: any) => {
     if (e.path.endsWith('/pdx.json')) return f.pdxJSON ? { value: f.pdxJSON } : { deny: 'ENOENT' }
     return e.path in f.files ? { value: f.files[e.path] } : { deny: 'ENOENT' }
@@ -1801,7 +1802,7 @@ test('/relay status|off|on call pdx relay self; on resets the +10 guard; a membe
     return { exitCode: 0, stdout: HELLO() }
   }
   await start($, f)
-  expect(f.registered.map((r) => [r.name, r.argumentHint])).toEqual([['relay', 'off|on|status']])
+  expect(f.registered.map((r) => [r.name, r.argumentHint])).toEqual([['relay', 'now|off|on|status（不帶＝now）']])
   expect((await relayCmd($, 'status')).text).toBe('自我接力：開啟（主機開關 開；門檻 70%）')
   expect(f.argvs.map(sub)).toContain('relay self status --session sid-old')
   selfBody = { self_relay: 'paused', host_switch: true, member: false }
@@ -1814,7 +1815,7 @@ test('/relay status|off|on call pdx relay self; on resets the +10 guard; a membe
   expect(count(f, 'begin')).toBe(2)
   selfBody = { self_relay: 'off', host_switch: true, member: true }
   expect((await relayCmd($, 'status')).text).toBe('member 的接力由 lead 安排') // status answers 200 with member
-  expect((await relayCmd($, 'maybe')).text).toBe('用法：/relay off|on|status')
+  expect((await relayCmd($, 'maybe')).text).toBe('用法：/relay [now|off|on|status]（不帶參數＝now）')
 })
 
 // P5b-3 review item 3 (R1 P2): the daemon refuses `self on|off` for a member
@@ -2255,3 +2256,139 @@ for (const [name, answer] of [
     expect(reports(f)).toEqual(DONE)
   })
 }
+
+
+// ---- /relay now, and bare /relay = now (lead-command spec §2b): the threshold's own begin, asked at once ----
+
+const NOW_BELOW = { tokens: 10000, window: 200000, percent: 5 }
+const LOW = (argv: string[]) => argv[1] === 'begin'
+// nowWorld: below the threshold, hello answered, `begin` answered by `begin`; everything else as pdxWith.
+function nowWorld(on: any, begin: (argv: string[]) => any, role = 'none', more: Partial<Fake> = {}) {
+  const base = pdxWith([], role)
+  const f = relayWorld(on, { usage: NOW_BELOW, pdx: (argv) => (LOW(argv) ? begin(argv) : base(argv)), ...more })
+  return f
+}
+const REFUSE = (code: string) => ({ exitCode: 13, stderr: 'pdx relay: refused ' + code + '\n' })
+
+for (const args of ['', 'now', '  now ']) {
+  test(`/relay ${JSON.stringify(args)} below the threshold starts the relay at once: one begin with the current use, then awaiting approval`, async ($, on) => {
+    const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }))
+    await start($, f)
+    const r = await relayCmd($, args)
+    expect(r.text).toBe('已送出接力申請（context 5%），請在 Purdex App 核准')
+    const begins = f.argvs.filter((a) => a[1] === 'relay' && a[2] === 'begin')
+    expect(begins.length).toBe(1)
+    expect(begins[0]).toEqual(expect.arrayContaining(['--self', '--session', 'sid-old', '--used', '5', '--window', '200000']))
+    expect(f.statuses).toContain('接力等待核准中')
+    await f.clock.advance(50)
+    expect(count(f, 'wait')).toBe(1) // the same wait loop the threshold path runs
+  })
+}
+
+// Answers, and starts nothing: the cases of §2b. The state returns to idle (a second /relay asks again),
+// and the +10 guard is not set (a 72 % turn still asks). Mutation gate: set lastAskPct in relayNow → red.
+for (const [name, ans, text] of [
+  ['the session paused with /relay off (U23 D-U23-4: pause comes first)', REFUSE('self_relay_paused'), '這個 session 已用 /relay off 暫停自我接力；要立刻接力請先 /relay on 再 /relay'],
+  ['the host switch off', REFUSE('self_relay_off'), '主機的自我接力開關是關的，不接力'],
+  ['a relay already open at the daemon', REFUSE('relay_open'), '接力進行中'],
+  ['a member (the daemon says so)', REFUSE('member_relay_is_leads'), 'member 的接力由 lead 安排'],
+  ['the daemon unreachable (20)', { exitCode: 20, stderr: 'unreachable' }, 'Purdex daemon 連不上，無法變更自我接力'],
+  ['another failure', { exitCode: 1, stderr: 'boom\n' }, 'pdx relay begin 失敗：boom'],
+  ['a refusal with a code the mod does not know', REFUSE('something_new'), 'pdx relay begin 被拒：something_new'],
+] as const) {
+  test(`/relay now answers and starts nothing when the daemon says ${name}`, async ($, on) => {
+    const f = nowWorld(on, () => ans)
+    await start($, f)
+    expect((await relayCmd($, 'now')).text).toBe(text)
+    expect(f.statuses).not.toContain('接力等待核准中')
+    expect(count(f, 'wait')).toBe(0)
+    expect(f.argvs.some((a) => a[1] === 'relay' && a[2] === 'self')).toBe(false) // the pause is not touched
+    // the guard is not set and the state is idle: a turn at the threshold asks on its own
+    f.usage = AT72
+    await turnAndSettle($, f, 't1')
+    // a member is learned from the daemon's answer, so the threshold path leaves it alone from then on
+    expect(f.argvs.filter((a) => a[1] === 'relay' && a[2] === 'begin').length).toBe(text === 'member 的接力由 lead 安排' ? 1 : 2)
+  })
+}
+
+test('/relay now is answered by the daemon, not by the cached hello role: a session hello called a member still asks', async ($, on) => {
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'member')
+  await start($, f)
+  expect((await relayCmd($, 'now')).text).toBe('已送出接力申請（context 5%），請在 Purdex App 核准')
+  expect(f.argvs.filter((a) => a[1] === 'relay' && a[2] === 'begin').length).toBe(1)
+})
+
+test('a relay in progress is not started twice', async ($, on) => {
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }))
+  await start($, f)
+  await relayCmd($, 'now')
+  expect((await relayCmd($, 'now')).text).toBe('接力進行中')
+  expect(f.argvs.filter((a) => a[1] === 'relay' && a[2] === 'begin').length).toBe(1)
+})
+
+test('/relay now with no context reading asks nothing', async ($, on) => {
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'none', { usage: { window: 200000 } as any })
+  await start($, f)
+  expect((await relayCmd($, 'now')).text).toBe('目前讀不到 context 用量，稍後再試')
+  expect(count(f, 'begin')).toBe(0)
+})
+
+test('/relay status|on|off are unchanged, and a word the mod does not know is the usage line, not a relay', async ($, on) => {
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }))
+  f.pdx = (argv) => (argv[1] === 'self' ? { exitCode: 0, stdout: JSON.stringify({ self_relay: 'on', host_switch: true, member: false }) } : { exitCode: 0, stdout: HELLO() })
+  await start($, f)
+  expect((await relayCmd($, 'status')).text).toBe('自我接力：開啟（主機開關 開；門檻 70%）')
+  expect((await relayCmd($, 'nowish')).text).toBe('用法：/relay [now|off|on|status]（不帶參數＝now）')
+  expect(count(f, 'begin')).toBe(0)
+})
+
+
+// codex attack on PR B: the idle guard and the state change are one step. Two /relay now, or a turn's
+// threshold check and a /relay now, with the engine slow to answer, open one request.
+// Mutation gate: take `beginning` after the awaits (or drop maybeBegin's second look) → two begins → red.
+test('two /relay now at once, the engine slow: one begin, one answer opened and one busy', async ($, on) => {
+  let open!: () => void
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'none', { usageGate: new Promise<void>((r) => { open = r }) })
+  await start($, f)
+  const a = relayCmd($, 'now')
+  const b = relayCmd($, 'now')
+  open()
+  const texts = [(await a).text, (await b).text].sort()
+  expect(texts).toEqual(['已送出接力申請（context 5%），請在 Purdex App 核准', '接力進行中'].sort())
+  expect(f.argvs.filter((x) => x[1] === 'relay' && x[2] === 'begin').length).toBe(1)
+})
+
+test('a /relay now while the turn’s threshold check is reading the engine: one begin', async ($, on) => {
+  let open!: () => void
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'none', { usage: AT72, usageGate: new Promise<void>((r) => { open = r }) })
+  await start($, f)
+  const turnDone = turnAndSettle($, f, 't1') // maybeBegin reads usage, parked on the gate
+  const now = relayCmd($, 'now')
+  open()
+  await turnDone
+  await now
+  await f.clock.advance(50)
+  expect(f.argvs.filter((x) => x[1] === 'relay' && x[2] === 'begin').length).toBe(1)
+})
+
+test('a /relay now whose usage read fails gives the state back: the next one asks', async ($, on) => {
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'none', { usage: { window: 200000 } as any })
+  await start($, f)
+  expect((await relayCmd($, 'now')).text).toBe('目前讀不到 context 用量，稍後再試')
+  f.usage = NOW_BELOW
+  expect((await relayCmd($, 'now')).text).toBe('已送出接力申請（context 5%），請在 Purdex App 核准')
+})
+
+// A /clear while the first /relay now is still reading the engine hands the state back: the attempt
+// that is no longer current must not send its begin. Mutation gate: drop the recheck before begin → two begins → red.
+test('a /clear while /relay now reads the engine: the old attempt sends nothing, the new one opens the request', async ($, on) => {
+  let open!: () => void
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'none', { usageGate: new Promise<void>((r) => { open = r }) })
+  await start($, f)
+  const a = relayCmd($, 'now')
+  await $.classic.SessionStart({ source: 'clear' }) // the user's own: toIdle, a new generation
+  const b = relayCmd($, 'now')
+  open()
+  expect([(await a).text, (await b).text]).toEqual(['接力沒有開始（這個 session 剛換過或被清除）', '已送出接力申請（context 5%），請在 Purdex App 核准'])
+  expect(f.argvs.filter((x) => x[1] === 'relay' && x[2] === 'begin').length).toBe(1)
+})
