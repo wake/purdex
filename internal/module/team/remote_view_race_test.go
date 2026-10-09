@@ -34,7 +34,9 @@ func TestRemoteView_OlderOverlappingReadDoesNotOverwrite(t *testing.T) {
 	slow := make(chan struct{})
 	answers := []func() ([]ipeers.PeerRecord, error){
 		func() ([]ipeers.PeerRecord, error) { <-slow; return nil, errors.New("stale failure") }, // started first
-		func() ([]ipeers.PeerRecord, error) { return []ipeers.PeerRecord{remoteRecord("sid-a1", 20, "m", "")}, nil },
+		func() ([]ipeers.PeerRecord, error) {
+			return []ipeers.PeerRecord{remoteRecord("sid-a1", 20, "m", "")}, nil
+		},
 	}
 	var n atomic.Int32
 	f.m.peerRecords = func(context.Context, string) ([]ipeers.PeerRecord, error) {
