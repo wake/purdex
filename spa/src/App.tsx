@@ -16,6 +16,7 @@ import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
 import { TeamDisplayProvider } from './components/team/TeamDisplayProvider'
+import { TeamPanelArea } from './components/team/TeamPanelArea'
 import { startTeamTabLifecycle } from './lib/team/team-tab-lifecycle'
 import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
@@ -233,7 +234,7 @@ export default function App() {
                 onRenameTab={handleRenameTab}
               />
             )}
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex overflow-hidden relative">
               {visibleTabIds.length === 0 && activeWorkspaceId !== null ? (
                 <WorkspaceEmptyState />
               ) : (
@@ -242,6 +243,7 @@ export default function App() {
                   allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
                 />
               )}
+              <TeamPanelArea />
             </div>
             <StatusBar
               activeTab={activeTab ?? null}
