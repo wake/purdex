@@ -91,7 +91,22 @@ func (o *factOutbox) Unpaired(hostID, reason string) error { return o.unpair(hos
 // unpairLeadHost is spec §3.2 on the member host for one lead host, called when the pump finds it unpaired (no live
 // entry carries its id) or unpaired_by_peer (its 401 lasted 10 minutes): its live members end locally, its queued
 // facts are dropped, nobody is told.
+//
+// "unpaired" is a verdict the pump reached a moment ago, and the cleanup is irreversible: it is made with the config
+// read-locked until it commits, and only while no live entry carries the host id (a host added or re-verified since
+// keeps its members). "unpaired_by_peer" is the peer's own refusal of our token for 10 minutes; nothing in the config
+// can contradict it.
 func (m *Module) unpairLeadHost(hostID, reason string) error {
+	m.core.CfgMu.RLock()
+	defer m.core.CfgMu.RUnlock()
+	if reason == "unpaired" {
+		for _, h := range m.core.Cfg.Peers.Hosts {
+			if h.HostID == hostID {
+				m.logf("[team] lead host %s is paired again; its remote members and facts are kept", hostID)
+				return nil
+			}
+		}
+	}
 	n, err := m.store.EndRemoteMembersOfHost(hostID, m.now())
 	if err != nil {
 		return err

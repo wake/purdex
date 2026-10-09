@@ -157,6 +157,31 @@ func TestFactPump_A401ForTenMinutesIsUnpairedByPeer(t *testing.T) {
 	}
 }
 
+// "unpaired" is a verdict on a pairing that may have been restored since the pump looked (codex R1): the cleanup is
+// irreversible, so it is made only while the config still carries no entry for the host.
+func TestFactPump_UnpairedCleanupSkipsAHostThatIsPairedAgain(t *testing.T) {
+	f, _ := factsFixture(t)
+	f.queueEnded("mk-gone", "sid-gone")
+	seedRemote(t, f.m.store, "mk-live", "sid-live", f.clock.Load())
+	f.pairHosts("host-L") // re-added between the verdict and the cleanup
+	if err := f.m.unpairLeadHost("host-L", "unpaired"); err != nil {
+		t.Fatal(err)
+	}
+	if row, _, _ := f.m.store.RemoteMember("mk-live"); row.State != remoteActive {
+		t.Fatalf("a re-paired host's member was ended: %s", row.State)
+	}
+	if f.factState("fact-mk-gone").State != factPending {
+		t.Fatal("a re-paired host's fact was dropped")
+	}
+	f.pairHosts("somebody-else") // really unpaired
+	if err := f.m.unpairLeadHost("host-L", "unpaired"); err != nil {
+		t.Fatal(err)
+	}
+	if row, _, _ := f.m.store.RemoteMember("mk-live"); row.State != remoteEnded {
+		t.Fatalf("an unpaired host's member is %s, want ended", row.State)
+	}
+}
+
 // Rule 1: the fact is addressed to the host id it was queued for, never re-resolved by alias.
 func TestFactPump_AnAnswerForAnotherFactIsNotApplied(t *testing.T) {
 	f, fc := factsFixture(t)
