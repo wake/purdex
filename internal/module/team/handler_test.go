@@ -383,8 +383,38 @@ type fixture struct {
 // production (the team module type-asserts the reader on that service,
 // as peers does).
 type fakeUsage struct {
-	mu sync.Mutex
-	by map[string]agent.ContextUsage
+	mu     sync.Mutex
+	by     map[string]agent.ContextUsage
+	status map[string]string // tmux session -> AgentStatus (P7-1)
+}
+
+// setPct stores a reading of used percent pct for sid (P7-1).
+func (f *fakeUsage) setPct(sid string, pct float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.by == nil {
+		f.by = map[string]agent.ContextUsage{}
+	}
+	u := f.by[sid]
+	u.UsedPercentage = &pct
+	f.by[sid] = u
+}
+
+// setStatus is the agent module's status of a tmux session ("idle", "running", ...).
+func (f *fakeUsage) setStatus(tmux, st string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.status == nil {
+		f.status = map[string]string{}
+	}
+	f.status[tmux] = st
+}
+
+func (f *fakeUsage) AgentStatus(tmux string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st, ok := f.status[tmux]
+	return st, ok
 }
 
 func (f *fakeUsage) set(sid, model, effort string) {

@@ -272,3 +272,10 @@ func migrateRelayOpBinding(db *sql.DB) error {
 	// seen_at (P6-2b-2): when the member's mod first saw the control message; the unseen claim timer (P6-4b) reads it.
 	return ensureColumn(db, "relay_ops", "seen_at", "INTEGER NOT NULL DEFAULT 0")
 }
+
+// migrateNoticeArmed gives team_members the 70% idle notice's arm flag (plan v3 P7-1): 1 = the member may be reported to
+// its lead when it crosses the threshold while idle, 0 = it was reported and has not relayed or dropped below since.
+// An existing row reads armed; a row written by an older daemon's INSERT (which names its columns) is armed too.
+func migrateNoticeArmed(db *sql.DB) error {
+	return ensureColumn(db, "team_members", "notice_armed", "INTEGER NOT NULL DEFAULT 1")
+}

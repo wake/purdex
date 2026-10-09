@@ -151,6 +151,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (member last turn): %w", err)
 	}
+	if err := migrateNoticeArmed(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (notice armed): %w", err)
+	}
 	if err := migrateRelayQuotaRev(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (relay quota rev): %w", err)
