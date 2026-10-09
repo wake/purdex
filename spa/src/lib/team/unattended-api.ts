@@ -8,7 +8,8 @@
 // (`bad_response`), never read as "off" or as an empty page; only a row of a later daemon's kind is skipped.
 import { ApprovalApiError, send } from './approval-api'
 import { clientDescriptor } from './client-label'
-import { isApproval, isUnattendedState, isUnknownKindRow, type Approval, type UnattendedState, type UnattendedView } from './types'
+import { parseRelayQuotaView, parseSessionQuotas } from './relay-quota-wire'
+import { isApproval, isUnattendedState, isUnknownKindRow, type Approval, type RelayQuotaField, type RelayQuotaView, type UnattendedState, type UnattendedView } from './types'
 
 export const UNATTENDED_PATH = '/api/team/unattended'
 
@@ -49,6 +50,25 @@ function viewOf(raw: unknown): UnattendedView {
     if (!isApproval(a)) badResponse(`approved[${i}]`)
     approved.push(a)
   }
+  // The quota rows are accepted whole or not at all, and a broken array does not make the rest of the answer bad: the
+  // panel names the host 「讀不到額度」 instead (plan RQ-A). Absent = an older daemon, nothing to say.
+  let quotas: UnattendedView['quotas']
+  let quotasFailed = false
+  if (Object.hasOwn(r, 'quotas')) {
+    quotas = parseSessionQuotas(r.quotas) ?? undefined
+    quotasFailed = quotas === undefined
+  }
+  let held: Approval[] | undefined
+  if (Array.isArray(r.held)) {
+    const rows: Approval[] = []
+    let ok = true
+    for (const a of r.held) {
+      if (isUnknownKindRow(a)) continue
+      if (!isApproval(a)) { ok = false; break }
+      rows.push(a)
+    }
+    if (ok) held = rows
+  }
   return {
     on: r.on,
     since: r.since,
@@ -60,6 +80,9 @@ function viewOf(raw: unknown): UnattendedView {
     ...(r.swept !== undefined ? { swept: r.swept as number } : {}),
     ...(r.pending !== undefined ? { pending: r.pending as number } : {}),
     ...(r.list_failed !== undefined ? { list_failed: r.list_failed as boolean } : {}),
+    ...(quotas !== undefined ? { quotas } : {}),
+    ...(quotasFailed ? { quotasFailed: true } : {}),
+    ...(held !== undefined ? { held } : {}),
   }
 }
 
@@ -86,4 +109,23 @@ export async function putUnattended(hostId: string, on: boolean): Promise<Unatte
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ on, client }),
   }))
+}
+
+export const RELAY_QUOTA_PATH = '/api/team/relay-quota'
+
+/**
+ * `PUT /api/team/relay-quota`: set ONE field of the session's chain (the other is left out of the body, so it keeps
+ * whatever the daemon has), signed with this app's client descriptor. The answer carries both numbers and the root's
+ * `rev`; a body that is not the wire shape is `bad_response`, never a number to show.
+ */
+export async function putRelayQuota(hostId: string, sessionId: string, field: RelayQuotaField, value: number): Promise<RelayQuotaView> {
+  const client = await clientDescriptor()
+  const raw = await send<unknown>(hostId, RELAY_QUOTA_PATH, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, [field]: value, client }),
+  })
+  const v = parseRelayQuotaView(raw)
+  if (v === null) throw new ApprovalApiError(200, 'bad_response', 'the relay-quota answer is not the wire shape')
+  return v
 }
