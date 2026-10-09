@@ -278,3 +278,11 @@ func (s *Store) enqueueLeadMovedTx(tx *sql.Tx, teamIDs []string, newLead team.Te
 	}
 	return nil
 }
+
+// remoteAlias is the peer alias of a remote row's host ("" when it is no longer paired).
+func (m *Module) remoteAlias(hostID string) string {
+	if m.cmdCaller == nil {
+		return ""
+	}
+	return m.cmdCaller.AliasOf(hostID)
+}

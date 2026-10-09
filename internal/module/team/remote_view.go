@@ -44,14 +44,6 @@ type remoteReadings struct {
 	inFlight map[string]bool
 }
 
-// remoteHostAlias is the alias this host calls hostID by; "" for its own host or one it does not know.
-func (m *Module) remoteHostAlias(hostID string) string {
-	if hostID == "" || hostID == m.hostID() || m.cmdCaller == nil {
-		return ""
-	}
-	return m.cmdCaller.AliasOf(hostID)
-}
-
 // remoteHostsOf is the distinct remote host ids of rows.
 func (m *Module) remoteHostsOf(rows []memberRow) []string {
 	var out []string
@@ -195,11 +187,14 @@ func remoteLiveState(s team.MemberState) bool {
 // remoteRosterMember is a remote member's roster entry: addressed by its host's alias, its state as the lead host holds
 // it (joining / releasing / killing show as such), context and model from the cache. It is not "live" in the registry
 // sense (the registry is this host's); Live follows whether its host answered with the session.
-func (m *Module) remoteRosterMember(mr memberRow, quota team.RelayQuota, open map[string][]TaskRow, teamID string) team.RosterMember {
-	alias := m.remoteHostAlias(mr.HostID)
+func (m *Module) remoteRosterMember(mr memberRow, open map[string][]TaskRow, teamID string) team.RosterMember {
+	alias := m.remoteAlias(mr.HostID)
 	s := team.RosterSession{SessionID: mr.SessionID, Ref: mr.Ref, Address: firstNonEmpty(alias, mr.HostID) + "/" + mr.Ref,
-		Title: mr.Title, TmuxSession: mr.TmuxSession, HostID: mr.HostID, HostAlias: alias, RelayQuota: quota}
+		Title: mr.Title, TmuxSession: mr.TmuxSession, HostID: mr.HostID, HostAlias: alias}
 	s.Context, s.ContextUnavailable = m.remoteContextOf(mr.HostID, mr.SessionID)
+	if s.Context == nil && !s.ContextUnavailable {
+		s.Context = mr.Usage // the reading synced onto the row, when the host's answer has none
+	}
 	s.Live = m.remoteListed(mr.HostID, mr.SessionID)
 	s.Model, s.Effort = mr.Model, mr.Effort
 	if s.Context != nil {

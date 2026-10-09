@@ -71,8 +71,9 @@ func (s *Store) SetLastTurn(sessionID, summary string, at, seq int64) (lastTurnW
 	// read says so without taking SQLite's one write lock (610: work in a serialised place is measured
 	// by its frequency). Only a candidate member enters the write transaction, which looks again.
 	var isMember int
+	loc, locArgs := s.local("m.host_id")
 	err := s.db.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
-		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0 LIMIT 1`, sessionID).Scan(&isMember)
+		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0 AND `+loc+` LIMIT 1`, append([]any{sessionID}, locArgs...)...).Scan(&isMember)
 	if errors.Is(err, sql.ErrNoRows) {
 		return lastTurnNone, nil
 	}
@@ -83,7 +84,7 @@ func (s *Store) SetLastTurn(sessionID, summary string, at, seq int64) (lastTurnW
 	err = s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		var key, teamID string
 		err := conn.QueryRowContext(ctx, `SELECT m.spawn_op, m.team_id FROM team_members m JOIN teams t ON t.id = m.team_id
-			WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, sessionID).Scan(&key, &teamID)
+			WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0 AND `+loc, append([]any{sessionID}, locArgs...)...).Scan(&key, &teamID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}

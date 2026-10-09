@@ -131,12 +131,16 @@ func (m *Module) memberView(mr memberRow) team.Member {
 		v.Origin, v.SpawnOp, v.AdoptRequest = team.MemberOriginAdopted, "", mr.SpawnOp
 	}
 	if m.isRemoteRow(mr) {
-		// A member on another host (cross-host team spec §8): addressed by the host's alias and its ref, its context and
-		// model what that host's GET /api/peers last said (remote_view.go), blank and flagged when it did not answer.
-		v.HostAlias = m.remoteHostAlias(mr.HostID)
+		// A remote row never goes through this host's registry, usage or quota readers (a same-looking session id here would
+		// leak its data): its address is its host's alias (else its host id) and its ref. Its context is what the member
+		// host's GET /api/peers last said (remote_view.go; blank and flagged when that host did not answer), else the
+		// reading synced onto the row.
+		v.HostAlias = m.remoteAlias(mr.HostID)
 		v.Address = firstNonEmpty(v.HostAlias, mr.HostID) + "/" + mr.Ref
 		v.Context, v.ContextUnavailable = m.remoteContextOf(mr.HostID, mr.SessionID)
-		v.RelayQuota = m.relayQuotaOf(mr.SessionID)
+		if v.Context == nil && !v.ContextUnavailable {
+			v.Context = mr.Usage
+		}
 		return v
 	}
 	if mr.State == team.MemberActive {

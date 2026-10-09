@@ -68,13 +68,17 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		ids = append(ids, t.LeadSessionID)
 		for _, mr := range rows {
 			// A remote member shows while it is in play (joining / active / releasing / killing, spec §4.2 and §8);
-			// a local one only while active.
-			if mr.State == team.MemberActive || (m.isRemoteRow(mr) && remoteLiveState(mr.State)) {
-				active[i] = append(active[i], mr)
-				ids = append(ids, mr.SessionID)
-				if m.isRemoteRow(mr) {
+			// a local one only while active. A remote session id never goes to this host's registry or quota readers
+			// (a same-looking id here would leak its data).
+			switch {
+			case m.isRemoteRow(mr):
+				if remoteLiveState(mr.State) {
+					active[i] = append(active[i], mr)
 					remoteHosts = append(remoteHosts, mr.HostID)
 				}
+			case mr.State == team.MemberActive:
+				active[i] = append(active[i], mr)
+				ids = append(ids, mr.SessionID)
 			}
 		}
 	}
@@ -120,7 +124,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		tr.Lead.RelayQuota = quotas[t.LeadSessionID]
 		for _, mr := range active[i] {
 			if m.isRemoteRow(mr) {
-				tr.Members = append(tr.Members, m.remoteRosterMember(mr, quotas[mr.SessionID], tasks[t.ID], t.ID))
+				tr.Members = append(tr.Members, m.remoteRosterMember(mr, tasks[t.ID], t.ID))
 				continue
 			}
 			s := rosterSession(origins, mr.SessionID, func() team.RosterSession {

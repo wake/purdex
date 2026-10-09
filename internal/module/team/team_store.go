@@ -192,14 +192,16 @@ func insertMemberRowIn(ctx context.Context, q execer, m memberRow) (bool, error)
 // ActiveMemberInLiveTeam returns the session's active member row and its
 // team, read in one statement, when that team is live: a killed or gone
 // member, or a member of an ended team (D4), is no member (spec §8.7,
-// §6.2 member_cannot_lead).
+// §6.2 member_cannot_lead). Local rows only: the caller is a session of THIS host (a remote member's calls come through
+// the proxy, X6, keyed by its member key).
 func (s *Store) ActiveMemberInLiveTeam(sessionID string) (memberRow, team.Team, bool, error) {
 	var m memberRow
 	var t team.Team
 	var grantJSON string
+	loc, locArgs := s.local("m.host_id")
 	err := s.db.QueryRow(`SELECT `+qualify("m", memberCols)+`, `+qualify("t", teamCols)+`
 		FROM team_members m JOIN teams t ON t.id = m.team_id
-		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, sessionID).
+		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0 AND `+loc, append([]any{sessionID}, locArgs...)...).
 		Scan(append(m.dest(), teamDest(&t, &grantJSON)...)...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return memberRow{}, team.Team{}, false, nil
