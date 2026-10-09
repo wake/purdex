@@ -25,9 +25,29 @@ interface Slices {
   /** Absent = `full` (R17). */
   panelMode: Record<string, PanelMode>
   ghostWorkspace: Record<string, string>
+  /** Per team key, the seat whose workbook the panel area shows in place of the team view (WA-2b writes it). */
+  teamDrill: Record<string, DrillSeat>
 }
 
+export interface DrillSeat { hostId: string; sessionId: string }
+
+/** The panel area (one pair for the whole area): width in px and whether it takes most of the content area. */
+export interface PanelArea { width: number; expanded: boolean }
+
+export const PANEL_MIN_WIDTH = 280
+export const PANEL_MAX_WIDTH = 720
+export const PANEL_DEFAULT_WIDTH = 312
+
+const clampWidth = (w: number): number => Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, Math.round(w)))
+
 interface TeamUiState extends Slices {
+  panel: PanelArea
+  /** Tabs whose 「工作簿」 toggle is on (WA-2b writes it). */
+  workbookTabs: Record<string, true>
+  setPanelWidth: (width: number) => void
+  setPanelExpanded: (expanded: boolean) => void
+  setTeamDrill: (teamKey: string, seat: DrillSeat | null) => void
+  setWorkbookTab: (tabId: string, on: boolean) => void
   /** Show the host icon next to each member bead (spec P7); default on. */
   teamBeadHost: boolean
   setTeamBeadHost: (v: boolean) => void
@@ -41,7 +61,8 @@ interface TeamUiState extends Slices {
   restoreHostTeams: (snapshot: Slices) => void
 }
 
-const EMPTY: Slices = { memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {} }
+const EMPTY: Slices = { memberOrder: {}, collapsed: {}, panelMode: {}, ghostWorkspace: {}, teamDrill: {} }
+const DEFAULT_PANEL: PanelArea = { width: PANEL_DEFAULT_WIDTH, expanded: false }
 
 /** A team key is `<hostId>\0<teamId>` (team-views `teamKeyOf`); a host's keys start with `<hostId>\0`. */
 const hostPrefix = (hostId: string) => `${hostId}\u0000`
@@ -66,8 +87,14 @@ function pick<T>(record: Record<string, T>, keep: (key: string) => boolean): Rec
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const DANGEROUS = new Set(['__proto__', 'prototype', 'constructor'])
 
+function healPanel(v: unknown): PanelArea {
+  if (!isRecord(v)) return DEFAULT_PANEL
+  const width = typeof v.width === 'number' && Number.isFinite(v.width) ? clampWidth(v.width) : PANEL_DEFAULT_WIDTH
+  return { width, expanded: v.expanded === true }
+}
+
 /** Persisted data is untrusted: keep only well-formed entries of each slice. */
-function heal(persisted: unknown): Slices {
+function heal(persisted: unknown): Slices & { panel: PanelArea; workbookTabs: Record<string, true> } {
   const p = isRecord(persisted) ? persisted : {}
   const entries = (v: unknown) => (isRecord(v) ? Object.entries(v).filter(([k]) => !DANGEROUS.has(k)) : [])
   return {
@@ -75,6 +102,10 @@ function heal(persisted: unknown): Slices {
     collapsed: Object.fromEntries(entries(p.collapsed).filter(([, v]) => v === true)) as Slices['collapsed'],
     panelMode: Object.fromEntries(entries(p.panelMode).filter(([, v]) => v === 'line')) as Slices['panelMode'],
     ghostWorkspace: Object.fromEntries(entries(p.ghostWorkspace).filter(([, v]) => typeof v === 'string' && v !== '')) as Slices['ghostWorkspace'],
+    teamDrill: Object.fromEntries(entries(p.teamDrill).filter(([, v]) => isRecord(v) && typeof v.hostId === 'string' && v.hostId !== ''
+      && typeof v.sessionId === 'string' && v.sessionId !== '').map(([k, v]) => [k, { hostId: (v as DrillSeat).hostId, sessionId: (v as DrillSeat).sessionId }])),
+    workbookTabs: Object.fromEntries(entries(p.workbookTabs).filter(([, v]) => v === true)) as Record<string, true>,
+    panel: healPanel(p.panel),
   }
 }
 
@@ -82,6 +113,24 @@ export const useTeamUiStore = create<TeamUiState>()(
   persist(
     (set, get) => ({
       ...EMPTY,
+      panel: DEFAULT_PANEL,
+      workbookTabs: {},
+      setPanelWidth: (width) => set((s) => {
+        if (!Number.isFinite(width)) return s
+        const next = clampWidth(width)
+        return next === s.panel.width ? s : { panel: { ...s.panel, width: next } }
+      }),
+      setPanelExpanded: (expanded) => set((s) => (s.panel.expanded === expanded ? s : { panel: { ...s.panel, expanded } })),
+      setTeamDrill: (teamKey, seat) => set((s) => {
+        if (seat === null) return teamKey in s.teamDrill ? { teamDrill: without(s.teamDrill, (k) => k === teamKey) } : s
+        const cur = s.teamDrill[teamKey]
+        if (cur && cur.hostId === seat.hostId && cur.sessionId === seat.sessionId) return s
+        return { teamDrill: { ...s.teamDrill, [teamKey]: { hostId: seat.hostId, sessionId: seat.sessionId } } }
+      }),
+      setWorkbookTab: (tabId, on) => set((s) => {
+        if (on === (s.workbookTabs[tabId] === true)) return s
+        return { workbookTabs: on ? { ...s.workbookTabs, [tabId]: true } : without(s.workbookTabs, (k) => k === tabId) }
+      }),
       teamBeadHost: true,
       setTeamBeadHost: (v) => set((s) => (s.teamBeadHost === v ? s : { teamBeadHost: v })),
       setMemberOrder: (teamKey, order) => set((s) => {
@@ -111,9 +160,10 @@ export const useTeamUiStore = create<TeamUiState>()(
         const next = {
           memberOrder: without(s.memberOrder, stale), collapsed: without(s.collapsed, stale),
           panelMode: without(s.panelMode, stale), ghostWorkspace: without(s.ghostWorkspace, stale),
+          teamDrill: without(s.teamDrill, stale),
         }
         const same = next.memberOrder === s.memberOrder && next.collapsed === s.collapsed
-          && next.panelMode === s.panelMode && next.ghostWorkspace === s.ghostWorkspace
+          && next.panelMode === s.panelMode && next.ghostWorkspace === s.ghostWorkspace && next.teamDrill === s.teamDrill
         return same ? s : next
       }),
       forgetHostTeams: (hostId) => get().forgetTeams(hostId, []),
@@ -124,6 +174,7 @@ export const useTeamUiStore = create<TeamUiState>()(
         return {
           memberOrder: pick(s.memberOrder, mine), collapsed: pick(s.collapsed, mine),
           panelMode: pick(s.panelMode, mine), ghostWorkspace: pick(s.ghostWorkspace, mine),
+          teamDrill: pick(s.teamDrill, mine),
         }
       },
       restoreHostTeams: (snapshot) => set((s) => ({
@@ -131,12 +182,13 @@ export const useTeamUiStore = create<TeamUiState>()(
         collapsed: { ...s.collapsed, ...snapshot.collapsed },
         panelMode: { ...s.panelMode, ...snapshot.panelMode },
         ghostWorkspace: { ...s.ghostWorkspace, ...snapshot.ghostWorkspace },
+        teamDrill: { ...s.teamDrill, ...snapshot.teamDrill },
       })),
     }),
     {
       name: STORAGE_KEYS.TEAM_UI,
       storage: purdexStorage,
-      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, ghostWorkspace: s.ghostWorkspace, teamBeadHost: s.teamBeadHost }),
+      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, ghostWorkspace: s.ghostWorkspace, teamDrill: s.teamDrill, panel: s.panel, workbookTabs: s.workbookTabs, teamBeadHost: s.teamBeadHost }),
       merge: (persisted, current) => ({
         ...current, ...heal(persisted),
         teamBeadHost: isRecord(persisted) && typeof persisted.teamBeadHost === 'boolean' ? persisted.teamBeadHost : true,
