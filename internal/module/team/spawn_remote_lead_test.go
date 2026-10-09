@@ -213,3 +213,80 @@ func TestSpawnHost_AFailedOpAnswersFailedWithTheReason(t *testing.T) {
 		t.Fatalf("answer = %d %+v", code, op)
 	}
 }
+
+// codex R1 P1: a command the member host accepted is no longer pending, yet its op still holds a seat until a fact arrives. If
+// the host is unpaired in that interval the liveness scan must still find it. Mutation gate: scan only members and commands → red.
+func TestSpawnHost_TheUnpairScanFindsAHostWithOnlyARunningOp(t *testing.T) {
+	f, fc := leadSpawnFixture(t)
+	f.remoteSpawn("op1", "hostM", "")
+	fc.mu.Lock()
+	fc.paired = map[string]bool{"hostM": false}
+	fc.mu.Unlock()
+	f.m.scanUnpaired()
+	if st, reason := f.spawnState("op1"); st != "failed" || reason != "unpaired" {
+		t.Fatalf("op = %s{%s}", st, reason)
+	}
+}
+
+// codex R1 P2: a POST woken by a fact leaves nothing registered for its op. Mutation gate: remove the stale channel only → red.
+func TestSpawnHost_ThePostLeavesNoWaiterBehind(t *testing.T) {
+	f, fc := leadSpawnFixture(t)
+	f.setLeadHost(true)
+	fc.aliases["air26"], fc.caps["lead:1"] = "lead:1", ipeers.TeamCaps{Kinds: allKinds, AllowTeam: true}
+	f.m.spawnWait = 5 * time.Second
+	done := make(chan int, 1)
+	go func() {
+		code, _, _ := f.spawnRemote(1, "air26", nil)
+		done <- code
+	}()
+	for i := 0; i < 200; i++ {
+		var n int
+		_ = f.m.store.db.QueryRow(`SELECT COUNT(*) FROM remote_spawns`).Scan(&n)
+		if n == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if code, body := f.postFact(leadPrincipal(), registeredFact(factUUID1, spawnID(1))); code != 200 {
+		t.Fatalf("fact %d %s", code, body)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the POST was not woken")
+	}
+	f.m.mu.Lock()
+	left := len(f.m.waiters[spawnID(1)])
+	f.m.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d waiter(s) left registered for the finished op", left)
+	}
+}
+
+// codex attacker (high): a finished op is read back by its id even after the host is unpaired, the alias gone — the CLI whose
+// first answer was lost must see the stored end (and its exit code), not bad_request. A request that does NOT match the op is
+// still a conflict. Mutation gate: resolve the host before looking the id up → red.
+func TestSpawnHost_AReplayAfterUnpairingReadsTheStoredEnd(t *testing.T) {
+	f, fc := leadSpawnFixture(t)
+	if code, _, e := f.spawnRemote(1, "air26", nil); code != 200 {
+		t.Fatalf("%d %+v", code, e)
+	}
+	if err := f.m.unpairHost("hostM", "unpaired"); err != nil {
+		t.Fatal(err)
+	}
+	fc.mu.Lock()
+	delete(fc.aliases, "air26")
+	fc.paired = map[string]bool{"hostM": false}
+	fc.mu.Unlock()
+	code, op, e := f.spawnRemote(1, "air26", nil)
+	if code != 200 || op.State != team.SpawnFailed || op.Reason != "unpaired" {
+		t.Fatalf("replay = %d %+v %+v", code, op, e)
+	}
+	if code, _, e := f.spawnRemote(1, "air26", func(r *team.SpawnRequest) { r.Title = "other" }); code != 409 || e.Error != team.ErrIDConflict {
+		t.Fatalf("other body = %d %+v", code, e)
+	}
+	// a NEW id for the unpaired host is still refused
+	if code, _, e := f.spawnRemote(2, "air26", nil); code != 400 || e.Error != team.ErrBadRequest {
+		t.Fatalf("new id = %d %+v", code, e)
+	}
+}

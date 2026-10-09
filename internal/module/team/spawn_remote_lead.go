@@ -35,22 +35,20 @@ func (m *Module) handleRemoteSpawn(w http.ResponseWriter, r *http.Request, req t
 		m.writeErr(w, http.StatusConflict, team.ErrRemoteUnsupported, "cross-host team is not available on this daemon", nil)
 		return
 	}
-	hostID := m.cmdCaller.HostIDOf(req.Host)
-	if hostID == "" && m.cmdCaller.AliasOf(req.Host) != "" {
-		hostID = req.Host // the host part was a host id
-	}
-	if hostID == "" || !m.cmdCaller.Paired(hostID) {
-		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "no paired host answers to "+req.Host, nil)
-		return
-	}
-	want := remoteSpawnRow{ID: req.ID, HostID: hostID, OriginSessionID: origin.SessionID, Cwd: req.Cwd, Title: req.Title, Model: req.Model,
+	want := remoteSpawnRow{ID: req.ID, OriginSessionID: origin.SessionID, Cwd: req.Cwd, Title: req.Title, Model: req.Model,
 		Effort: req.Effort, TaskSubject: taskSubjectOf(req.Task), TaskDescription: taskDescriptionOf(req.Task), TaskDoneJSON: taskDoneJSONOf(req.Task)}
 
 	m.createMu.Lock()
 	op, found, err := m.store.GetRemoteSpawn(req.ID)
 	if err == nil && found {
 		m.createMu.Unlock()
-		want.TeamID = op.TeamID // the team is the lead's at creation; a replay is judged on the rest
+		// A replay is read back by its id whatever the pairing is NOW (the host may have been unpaired since, which is what
+		// ended the op): the stored end must stay readable. The host named in the request is compared when it still resolves;
+		// when it no longer does, it cannot be compared and the rest of the request must match.
+		want.TeamID, want.HostID = op.TeamID, m.remoteHostID(req.Host)
+		if want.HostID == "" {
+			want.HostID = op.HostID
+		}
 		if !sameRemoteSpawn(op, want) {
 			m.writeErr(w, http.StatusConflict, team.ErrIDConflict, "id already used by a different spawn", nil)
 			return
@@ -63,12 +61,30 @@ func (m *Module) handleRemoteSpawn(w http.ResponseWriter, r *http.Request, req t
 		m.failRemoteSpawn(w, req.ID, err)
 		return
 	}
+	want.HostID = m.remoteHostID(req.Host)
+	if want.HostID == "" || !m.cmdCaller.Paired(want.HostID) {
+		m.createMu.Unlock()
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "no paired host answers to "+req.Host, nil)
+		return
+	}
 	row, ok := m.acceptRemoteSpawn(w, r, req, origin, want) // holds createMu until it returns
 	m.createMu.Unlock()
 	if !ok {
 		return
 	}
 	m.answerRemoteSpawn(w, r, row.ID, origin)
+}
+
+// remoteHostID is the host id the request's --host names: an alias of a configured host, or a host id; "" when neither
+// resolves (never paired, or since unpaired).
+func (m *Module) remoteHostID(host string) string {
+	if id := m.cmdCaller.HostIDOf(host); id != "" {
+		return id
+	}
+	if m.cmdCaller.AliasOf(host) != "" {
+		return host // the host part was a host id
+	}
+	return ""
 }
 
 // acceptRemoteSpawn is the create path under createMu: the lead's live team, the member host's capability (rule 7: spawn
@@ -125,7 +141,7 @@ func (m *Module) failRemoteSpawn(w http.ResponseWriter, id string, err error) {
 // poll), then answers with the op.
 func (m *Module) answerRemoteSpawn(w http.ResponseWriter, r *http.Request, id string, origin team.Origin) {
 	ch := m.addWaiter(id)
-	defer m.removeWaiter(id, ch)
+	defer func() { m.removeWaiter(id, ch) }() // the CURRENT channel: a wake takes one and the loop registers the next
 	deadline := time.NewTimer(m.spawnWait)
 	defer deadline.Stop()
 	tick := time.NewTicker(remoteSpawnPoll)
