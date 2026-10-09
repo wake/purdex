@@ -137,7 +137,8 @@ func (m *memberRow) dest() []any {
 
 func validMemberState(s team.MemberState) bool {
 	switch s {
-	case team.MemberActive, team.MemberKilled, team.MemberGone, team.MemberReleased:
+	case team.MemberActive, team.MemberKilled, team.MemberGone, team.MemberReleased,
+		team.MemberJoining, team.MemberReleasing, team.MemberKilling, team.MemberFailed:
 		return true
 	}
 	return false

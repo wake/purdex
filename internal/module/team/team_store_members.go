@@ -62,11 +62,12 @@ func (s *Store) queryMembers(what, query string, args ...any) ([]memberRow, erro
 
 // ActiveMembersOfLiveTeams returns every active member row of a live team,
 // with its reading, oldest first: what the sweeper looks after. A member of
-// an ended team is left as it ended (D4).
+// an ended team is left as it ended (D4). Local rows only: a remote member's liveness, usage and notices are its own host's
+// (cross-host spec §4.2); localHostID "" (tests that open a bare store) filters nothing.
 func (s *Store) ActiveMembersOfLiveTeams() ([]memberRow, error) {
 	return s.queryMembers("active members", `SELECT `+qualify("m", memberCols+", "+memberUsageCols)+`
 		FROM team_members m JOIN teams t ON t.id = m.team_id
-		WHERE m.state = 'active' AND t.ended_at = 0 ORDER BY m.created_at, m.spawn_op`)
+		WHERE m.state = 'active' AND t.ended_at = 0 AND (? = '' OR m.host_id = ?) ORDER BY m.created_at, m.spawn_op`, s.localHostID, s.localHostID)
 }
 
 // liveTeam is a live team with the reading its lead's statusline stored on
