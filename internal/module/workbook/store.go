@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -75,6 +76,7 @@ type Store struct {
 	db  *sql.DB
 	now func() int64 // unix ms; injectable for tests
 	obs atomic.Pointer[func(Event)]
+	wmu sync.Mutex // serialises the writes together with their events; an observer must not write to the store
 }
 
 // OpenStore opens (or creates) the store at path. The file and its WAL siblings are owner-only.
@@ -203,6 +205,8 @@ func (s *Store) queryEntries(query string, args ...any) ([]Entry, error) {
 // InsertPending records a turn as pending. It is idempotent on (session_id, turn_id): a turn that is already recorded
 // inserts nothing and answers the existing row's id with inserted false.
 func (s *Store) InsertPending(e Entry) (id int64, inserted bool, err error) {
+	s.wmu.Lock() // one writer at a time, and its event goes out before the next write starts: events follow commit order
+	defer s.wmu.Unlock()
 	if e.ConvKey == "" || e.SessionID == "" || e.TurnID == "" {
 		return 0, false, errors.New("insert workbook entry: conversation key, session and turn id are required")
 	}
@@ -230,6 +234,8 @@ func (s *Store) InsertPending(e Entry) (id int64, inserted bool, err error) {
 // SetPushLine writes the final thing and push of a pending entry and stamps push_ready_at; the entry stays pending
 // (spec §5.4). push may be "" when validation dropped it. false: the entry is not pending any more.
 func (s *Store) SetPushLine(id int64, thing, push string) (bool, error) {
+	s.wmu.Lock() // one writer at a time, and its event goes out before the next write starts: events follow commit order
+	defer s.wmu.Unlock()
 	now := s.now()
 	res, err := s.db.Exec(`UPDATE wb_entries SET thing = ?, push = ?, push_ready_at = ?, updated_at = ? WHERE id = ? AND state = 'pending'`,
 		thing, push, now, now, id)
@@ -242,6 +248,8 @@ func (s *Store) SetPushLine(id int64, thing, push string) (bool, error) {
 
 // Finish moves a pending entry to ok, failed or skipped. false: it was not pending (a final entry never moves again).
 func (s *Store) Finish(id int64, state, reason string, out Output) (bool, error) {
+	s.wmu.Lock() // one writer at a time, and its event goes out before the next write starts: events follow commit order
+	defer s.wmu.Unlock()
 	now := s.now()
 	var res sql.Result
 	var err error
@@ -275,6 +283,8 @@ func boolInt(b bool) int {
 
 // FailPending turns every pending entry into failed:stopped (a crash or restart left them; plan D9). It returns how many.
 func (s *Store) FailPending() (int, error) {
+	s.wmu.Lock() // one writer at a time, and its event goes out before the next write starts: events follow commit order
+	defer s.wmu.Unlock()
 	res, err := s.db.Exec(`UPDATE wb_entries SET state = 'failed', reason = ?, updated_at = ? WHERE state = 'pending'`, ReasonStopped, s.now())
 	if err != nil {
 		return 0, fmt.Errorf("fail pending workbook entries: %w", err)
@@ -355,6 +365,8 @@ func (s *Store) RecentForPrompt(convKey string, n int) ([]Entry, error) {
 
 // SetStatus writes a conversation's current status.
 func (s *Store) SetStatus(convKey, status string, entryID int64, sessionID string) error {
+	s.wmu.Lock() // one writer at a time, and its event goes out before the next write starts: events follow commit order
+	defer s.wmu.Unlock()
 	at := s.now()
 	_, err := s.db.Exec(`INSERT INTO wb_status (conv_key, status, entry_id, session_id, updated_at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (conv_key) DO UPDATE SET status = excluded.status, entry_id = excluded.entry_id,

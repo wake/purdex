@@ -128,6 +128,52 @@ func TestObserver_MayReadTheStoreBack(t *testing.T) {
 	}
 }
 
+// Concurrent writers: each entry's events are its pending followed by exactly one final, and the last status event is the
+// status the database holds (codex attack: events follow commit order).
+// Mutation gate: drop the writer lock → red (run with -count).
+func TestObserver_ConcurrentWritersKeepCommitOrder(t *testing.T) {
+	s, r := observed(t)
+	const n = 40
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id, _, err := s.InsertPending(pending("c", "s1", "t"+itoa(int64(i)), int64(i)))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			s.Finish(id, StateOK, "", Output{Entry: "x"})
+			s.SetStatus("c", "v"+itoa(int64(i)), id, "s1")
+		}(i)
+	}
+	wg.Wait()
+
+	perEntry := map[int64][]string{}
+	var lastStatus string
+	for _, ev := range r.take() {
+		switch ev.Kind {
+		case EventEntry:
+			perEntry[ev.Entry.ID] = append(perEntry[ev.Entry.ID], ev.Entry.State)
+		case EventStatus:
+			lastStatus = ev.Status.Status
+		}
+	}
+	if len(perEntry) != n {
+		t.Fatalf("%d entries had events, want %d", len(perEntry), n)
+	}
+	for id, states := range perEntry {
+		if len(states) != 2 || states[0] != StatePending || states[1] != StateOK {
+			t.Fatalf("entry %d events = %v, want [pending ok]", id, states)
+		}
+	}
+	st, _, _ := s.Status("c")
+	if st.Status != lastStatus {
+		t.Fatalf("the last status event %q is not the stored status %q", lastStatus, st.Status)
+	}
+}
+
 // A panicking observer must not take the write path down.
 func TestObserver_APanicDoesNotBreakTheWrite(t *testing.T) {
 	s := openTest(t)
