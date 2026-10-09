@@ -5,7 +5,8 @@
 // `pdx ask wait` long-polls it in bounded rounds (each ≤ 9 min, inside $.process.run's
 // ten-minute cap), and whichever answers first wins. Terminal first ⇒ the native result
 // is returned unchanged and reported as answered_local; remote first ⇒ `{ result }` is
-// returned, which closes the native dialog at once; Esc ⇒ dismissed. No responder, a
+// returned, which closes the native dialog at once (a reply in words instead of answers
+// returns `{ deny }` the same way); Esc ⇒ dismissed. No responder, a
 // daemon that is down, or any failure ⇒ the native dialog runs alone.
 //
 // This module runs in every interactive Claude Code session on the host, so it fails
@@ -29,6 +30,11 @@ const CALL_TIMEOUT_MS = 40_000 // begin / report: the daemon client's 30 s resta
 // report is then handed to a process of its own that lands it after the hook returned
 // (detachReport below) — the engine may end a hook's children once it returns.
 const SETTLE_MS = 3_000
+
+// CHAT_PREFIX heads the person's reply when they answered in words instead of picking
+// (the phone's "chat about this"). The model reads `prefix + blank line + reply` as the
+// tool's error result — the channel the native "Chat about this" ends in.
+const CHAT_PREFIX = 'The user did not pick an answer and replied instead:'
 
 const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -209,6 +215,9 @@ export function register(on) {
         if (isObject(out) && out.state === 'answered_remote') {
           const answers = isObject(out.hook) && out.hook.answers
           if (answersFit(e.questions, answers)) return { who: 'remote', answers }
+          // No answers, but the person replied in words (the daemon never sends both).
+          const message = isObject(out.hook) && out.hook.message
+          if (!answers && typeof message === 'string' && message) return { who: 'remote-chat', message }
           return { who: 'remote-error', why: 'answered_remote whose answers do not fit the questions' }
         }
         if (isObject(out) && out.state === 'closed') return { who: 'remote-closed', why: 'closed ' + out.reason }
@@ -229,6 +238,11 @@ export function register(on) {
     if (w.who === 'remote') {
       // Step 4: returning with next(e) pending closes the native dialog (M24 P-B).
       return { result: { questions: e.questions, answers: w.answers } }
+    }
+    if (w.who === 'remote-chat') {
+      // As for an answer, the daemon holds the outcome: nothing to report. `deny` closes the
+      // native dialog and the model reads the reply as the tool's error result.
+      return { deny: CHAT_PREFIX + '\n\n' + w.message }
     }
     // Closed another way (abandoned, dismissed by the backstop, …) or the loop failed:
     // the dialog runs on alone. A row the daemon still holds open is told how the

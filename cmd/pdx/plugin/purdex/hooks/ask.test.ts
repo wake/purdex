@@ -280,6 +280,67 @@ test('remote first answering only some of the questions ⇒ the native dialog ru
   expect(calls.map(sub)).toEqual(['begin', 'wait', 'report'])
 })
 
+// Chat about this: the phone replied in words instead of picking answers (hook.message).
+// The dialog closes and the model reads the reply as the tool's error result, behind the
+// fixed prefix and a blank line. Mutation gates: drop the prefix, or take a message over
+// answers that fit, or accept an empty message ⇒ red.
+const CHAT_PREFIX = 'The user did not pick an answer and replied instead:'
+function chatRig(on: any, hook: unknown, calls: Call[] = []) {
+  session(on)
+  on('process.run', (_$: any, e: any) => {
+    calls.push([...e.argv])
+    if (sub(e.argv) === 'begin') return ok('{"id":"rc"}')
+    if (sub(e.argv) === 'wait') return ok(JSON.stringify({ state: 'answered_remote', hook }))
+    return ok('')
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, never)
+}
+
+test('chat reply (hook.message) ⇒ { deny: prefix + blank line + message }, the native dialog left pending, nothing reported', async ($, on) => {
+  const calls: Call[] = []
+  chatRig(on, { message: '先別選，我想問一下' }, calls)
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+  expect(r.deny).toBe(CHAT_PREFIX + '\n\n' + '先別選，我想問一下')
+  expect(r.result).toBeUndefined()
+  expect(calls.map(sub)).toEqual(['begin', 'wait'])
+})
+
+test('chat reply with newlines and a tab, parsed from the CLI\'s JSON output, reaches the model verbatim', async ($, on) => {
+  const msg = '第一行\n\t第二行 "quoted"\n第三行'
+  chatRig(on, { message: msg })
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+  expect(r.deny).toBe(CHAT_PREFIX + '\n\n' + msg)
+})
+
+test('chat reply alongside fitting answers ⇒ the answers win (the daemon never sends both)', async ($, on) => {
+  chatRig(on, { answers: { '紅還是藍？': '藍' }, message: 'hi' })
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+  expect(r.result).toEqual({ questions: Q, answers: { '紅還是藍？': '藍' } })
+  expect(r.deny).toBeUndefined()
+})
+
+for (const [name, hook] of [['an empty message', { message: '' }], ['a non-string message', { message: 7 }], ['no message and no answers', {}], ['answers that do not fit and no message', { answers: { '別的問題': 'x' } }]] as const) {
+  test(`answered_remote with ${name} ⇒ remote-error: the native dialog runs on alone and its answer is reported`, async ($, on) => {
+    session(on)
+    const calls: Call[] = []
+    let answerNative: Resolver = null
+    on('process.run', (_$: any, e: any) => {
+      calls.push([...e.argv])
+      if (sub(e.argv) === 'begin') return ok('{"id":"rc2"}')
+      if (sub(e.argv) === 'wait') {
+        setTimeout(() => answerNative && answerNative(NATIVE_RED), 50)
+        return ok(JSON.stringify({ state: 'answered_remote', hook }))
+      }
+      return ok('{}')
+    })
+    on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = res }))
+    const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+    expect(r.result).toEqual(NATIVE_RED.result)
+    expect(r.deny).toBeUndefined()
+    expect(calls.map(sub)).toEqual(['begin', 'wait', 'report'])
+  })
+}
+
 // Mutation gate 5: replace `continue` with a return → red (`expected 12, received 1`).
 test('still_open loops without returning: N rounds, then the remote answer', async ($, on) => {
   session(on)
