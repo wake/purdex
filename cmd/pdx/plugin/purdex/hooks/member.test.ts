@@ -220,3 +220,23 @@ test('the full member path reports written, cleared (new id), done under the mem
   expect(at('pdx relay unlock ' + OPID)).toBeGreaterThan(at('pdx relay lock ' + OPID))
   expect(nonceOf(write)).toBeTruthy()
 })
+
+// R1 (codex): a turn that starts while the claim is out must finish before the write prompt goes out.
+// Mutation gate: startWrite at once after the claim → the submit appears before turn.complete → red.
+test('a turn that starts while the claim is out is not overlapped: the write prompt waits for its turn.complete', async ($, on) => {
+  let release: (r: R) => void = () => {}
+  const gate = new Promise<R>((r) => { release = r })
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'claim' ? (gate as any) : undefined))
+  await start($, f)
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(10) // the claim is out
+  await $.turn.start({ text: 'the user typed something', turnId: 't1' })
+  release({ exitCode: 0, stdout: CLAIM })
+  await f.clock.advance(500)
+  expect(calls(f, 'claim').length).toBe(1)
+  expect(f.submits).toEqual([]) // not while t1 runs
+  await complete($, 't1')
+  await f.clock.advance(200)
+  expect(f.submits.length).toBe(1)
+  expect(reports(f)).toEqual(['relay report ' + OPID + ' writing'])
+})

@@ -101,6 +101,7 @@ const fresh = () => ({
   begun: undefined, // while beginning: a deferred resolving to the request begin opened and adopted, or undefined
   turnRunning: false, // a main-conversation turn is between turn.start and turn.complete (P6-6)
   control: undefined, // { opId }: the newest member-relay control message not yet claimed
+  writeDeferred: undefined, // a claimed request whose write prompt waits for the running turn to end
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
   leadAsk: undefined, // { gen, sid }: a /lead prompt is out until the agent's turn ends or the session moves on
@@ -914,7 +915,10 @@ async function claim($, gen) {
   s.pending = p
   s.state = 'approved'
   s.fixRounds = 0
-  startWrite($, p)
+  // A turn the user started while the claim was out (id, the daemon, usage) is not interrupted: the write
+  // waits for its turn.complete (P6-6 R1).
+  if (s.turnRunning) s.writeDeferred = p
+  else startWrite($, p)
 }
 
 function claimLater($) {
@@ -1073,6 +1077,11 @@ export function register(on) {
     s.turnRunning = false
     if (s.leadAsk && s.leadAsk.turnId !== undefined && e.turnId === s.leadAsk.turnId) s.leadAsk = undefined // the /lead turn has ended: it may be asked again
     try {
+      if (s.writeDeferred) {
+        const d = s.writeDeferred
+        s.writeDeferred = undefined
+        if (s.pending === d && s.state === 'approved') startWrite($, d)
+      }
       if (s.control && s.state === 'idle') claimLater($) // a member-relay control that waited for this turn (P6-6)
       if (!s.helloOK && !s.helloBusy) helloLater($) // the last hello failed (daemon down): say it again
       if (s.outbox.length) { s.held.clear(); pump($) } // re-send what did not land (§8.3)
