@@ -29,6 +29,8 @@ export interface TeamSeatView {
   /** The seat's roster state (`active` | `joining` | `releasing` | `killing`) and the alias of the host a remote member lives on ('' = local). */
   state: string
   hostAlias: string
+  /** The seat lives on another host than its lead's. With `hostId === ''` this Mac has no verified host for it ("not in this App"). */
+  remote: boolean
 }
 
 /** How one tab sits in a team group on the TabBar. */

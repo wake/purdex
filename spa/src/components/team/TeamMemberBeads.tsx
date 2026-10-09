@@ -7,6 +7,7 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import type { TeamSeatView } from './team-display'
 import { HOOK_PAD, TeamHook } from './TeamHook'
+import { notInApp } from './seat-flags'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { useMemberDrag } from './useMemberDrag'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -23,9 +24,10 @@ interface Props {
 
 /** The member's title; a seat that is still joining / being released / killed adds the state, with the host alias only when remote. */
 function tooltipOf(m: TeamSeatView, t: (key: string, params?: Record<string, string | number>) => string): string {
-  if (m.role !== 'member' || !['joining', 'releasing', 'killing'].includes(m.state)) return m.title
+  const gone = notInApp(m) ? ` — ${t('team.seat_not_in_app')}` : ''
+  if (m.role !== 'member' || !['joining', 'releasing', 'killing'].includes(m.state)) return `${m.title}${gone}`
   const word = t(`team.seat_state.${m.state}`)
-  return `${m.title} · ${m.hostAlias !== '' ? t('team.seat_state_suffix', { alias: m.hostAlias, state: word }) : word}`
+  return `${m.title} · ${m.hostAlias !== '' ? t('team.seat_state_suffix', { alias: m.hostAlias, state: word }) : word}${gone}`
 }
 
 export function TeamMemberBeads({ teamKey, members, activeTabId, withHost, onOpen, onReorder, onBlankClick }: Props) {

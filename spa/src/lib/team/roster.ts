@@ -34,13 +34,16 @@ export interface RosterSession {
    *  sends neither. */
   host_id?: string
   host_alias?: string
+  /** Cross-host teams: the session's host did not answer, so model / context are blank for that reason (not because they
+   *  were never reported). Kept only as `true`; absent otherwise. */
+  context_unavailable?: boolean
   /** Set by parsing (never on the wire) when a non-empty `host_id` was sent but failed validation: the member lives on
    *  SOME other host that cannot be named, so it is never attributed to the lead's host. Absent otherwise. */
   host_untrusted?: boolean
 }
 
-/** An active member: its session plus how it joined. `state` is `active` today; a cross-host team adds `joining` /
- *  `releasing` / `killing` rows. */
+/** An active member: its session plus how it joined. `state` is `active`; a REMOTE member of a cross-host team can also be
+ *  `joining` / `releasing` / `killing` (other values are kept as sent and drawn as `active`). */
 export interface RosterMember extends RosterSession {
   state: string
   origin: string
@@ -111,11 +114,11 @@ const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066
 const HOST_ALIAS_MAX = 64
 const HOST_ID_MAX = 128
 
-/** `host_id` / `host_alias` cross the trust boundary into UI text and host matching: kept only when a string within bounds
+/** `host_id` / `host_alias` / `context_unavailable` cross the trust boundary into UI text and host matching: kept only when a string within bounds
  *  and free of control / formatting characters (the alias also non-blank). Anything else is dropped (the field is absent),
  *  never a reason to drop the frame. */
 function cleanHost<T extends RosterSession>(s: T): T {
-  const { host_id, host_alias, host_untrusted: _wire, ...rest } = s
+  const { host_id, host_alias, host_untrusted: _wire, context_unavailable, ...rest } = s
   void _wire // computed here, never taken from the wire
   const idOk = isStr(host_id) && host_id.length <= HOST_ID_MAX && !UNPRINTABLE.test(host_id)
   // A host_id that was sent (not absent, not "") but failed the check says "another host, whom we cannot name": dropping it
@@ -127,6 +130,7 @@ function cleanHost<T extends RosterSession>(s: T): T {
     ...(idOk ? { host_id } : {}),
     ...(untrusted ? { host_untrusted: true } : {}),
     ...(aliasOk ? { host_alias } : {}),
+    ...(context_unavailable === true ? { context_unavailable: true } : {}),
   } as T
 }
 
