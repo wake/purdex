@@ -264,6 +264,15 @@ func (s *Store) Authenticate(tokenHash string) (devices.Principal, bool) {
 	return p, true
 }
 
+// IsLive: the device exists and is not revoked (what a WebSocket hijack asks, so a revoke that raced the open is caught).
+func (s *Store) IsLive(id string) bool {
+	var revoked int64
+	if err := s.db.QueryRow(`SELECT revoked_at FROM device_tokens WHERE id = ?`, id).Scan(&revoked); err != nil {
+		return false
+	}
+	return revoked == 0
+}
+
 // Sweep deletes the rows that can no longer work: never used and past use_by, or revoked more than 30 days ago. It returns
 // how many. (Authenticate never depends on it: an expired unused token is refused at lookup.)
 func (s *Store) Sweep() (int, error) {
