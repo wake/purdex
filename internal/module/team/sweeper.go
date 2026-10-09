@@ -86,6 +86,16 @@ func (m *Module) tick() {
 			after, won, err = m.closeExpired(a.ID, now, team.StateTimeout)
 		case a.LeaseUntil <= now:
 			after, won, err = m.closeExpired(a.ID, now, team.StateAbandoned)
+		case a.Kind == team.KindMemberRelay:
+			// Liveness is the TEAM's (RQ-2 §4.2): the origin is the lead at create, which the lead's own relay ends while
+			// the row is rightly still open. A gone member is the approve's re-check, not the sweeper's.
+			if live, err := m.memberRelayTeamLive(a); err != nil || live {
+				if err != nil {
+					m.logf("[team] sweep %s: %v", a.ID, err)
+				}
+				continue
+			}
+			after, won, err = m.closeAs(a.ID, Close{State: team.StateAbandoned, DecidedAt: now})
 		case checkLive && !m.origins.LiveSession(a.Origin.SessionID):
 			after, won, err = m.closeAs(a.ID, Close{State: team.StateAbandoned, DecidedAt: now})
 		default:

@@ -112,7 +112,7 @@ func TestWireUnattended_JSONShapes(t *testing.T) {
 // kinds, which stay with the person (U23 "不在範圍內").
 func TestAutoApprovable_LeadSelfRelayAndAdoptOnly(t *testing.T) {
 	for k, want := range map[Kind]bool{
-		KindLead: true, KindSelfRelay: true, KindAdopt: true,
+		KindLead: true, KindSelfRelay: true, KindAdopt: true, KindMemberRelay: true,
 		KindHookAsk: false, KindHookPermission: false, "adopt ": false, "": false, "LEAD": false,
 	} {
 		if got := AutoApprovable(k); got != want {

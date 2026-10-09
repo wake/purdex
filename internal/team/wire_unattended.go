@@ -33,7 +33,9 @@ func UnattendedClient() Client {
 // AutoApprovable reports whether the switch approves requests of kind k:
 // lead and self_relay (U23) and adopt (U24 PL-1c). The hook kinds are never
 // approved by the daemon (U23 "不在範圍內").
-func AutoApprovable(k Kind) bool { return k == KindLead || k == KindSelfRelay || k == KindAdopt }
+func AutoApprovable(k Kind) bool {
+	return k == KindLead || k == KindSelfRelay || k == KindAdopt || k == KindMemberRelay
+}
 
 // UnattendedState is the switch as stored and as answered.
 type UnattendedState struct {

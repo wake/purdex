@@ -15,6 +15,9 @@ const (
 	KindLead      Kind = "lead"
 	KindSelfRelay Kind = "self_relay" // accepted from P5a on; P2 answers 400 unsupported_kind
 	KindAdopt     Kind = "adopt"      // U24: the lead asks to take a running session into its team
+	// KindMemberRelay is the approval a lead's member relay waits on when the lead's pool is spent (RQ-2). RQ-2a is its
+	// state machine; no path opens such a row until RQ-2b, and an older SPA skips an unknown kind row by row.
+	KindMemberRelay Kind = "member_relay"
 )
 
 type State string

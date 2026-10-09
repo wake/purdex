@@ -32,6 +32,9 @@ type Store struct {
 	// insert; a non-nil error fails the replace there. Tests use it to
 	// prove the close rolls back with a failed insert. nil in production.
 	beforeReplaceInsert func() error
+	// beforeMemberOpMove, when set, runs in a member_relay row's transaction after the row's close and before its op's
+	// move; an error fails (and rolls back) the whole close (tests: fault injection). nil in production.
+	beforeMemberOpMove func() error
 	// beforeMemberCancelOp, when set, runs in CloseSelfRelayApproved's
 	// transaction after the row's cancel and before the op's; an error
 	// fails the call there (tests). nil in production.
@@ -428,6 +431,13 @@ func (s *Store) CloseIfExpired(id string, now int64, c Close) (team.Approval, bo
 // closeWhere runs the close UPDATE guarded by state='open' and, when guard
 // is non-empty, that extra SQL condition (one ? bound to guardArg).
 func (s *Store) closeWhere(id string, c Close, guard string, guardArg int64) (team.Approval, bool, error) {
+	kind, found, err := s.kindOf(id)
+	if err != nil {
+		return team.Approval{}, false, err
+	}
+	if found && kind == team.KindMemberRelay {
+		return s.closeMemberRelay(id, c, guard, guardArg) // the row and its op move in one transaction (RQ-2 §4.4)
+	}
 	n, err := closeRowIn(s.db, id, c, guard, guardArg)
 	if err != nil {
 		return team.Approval{}, false, err
