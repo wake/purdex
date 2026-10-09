@@ -35,18 +35,25 @@ type apnsClient interface {
 // Job is one thing to tell some devices about. Make builds the content for one device (its host label and locale are the
 // device's) at send time, from the device as it is then; false means "nothing for this one".
 type Job struct {
-	DeviceIDs  []string
-	ApprovalID string // an approval's push: its session_code comes from the sender's snapshot at send time
-	Make       func(push.Device) (push.Content, bool)
+	DeviceIDs []string
+	Approval  *JobApproval // an approval's push: what the sender needs to resolve its session_code at send time
+	Make      func(push.Device) (push.Content, bool)
+}
+
+// JobApproval is what an approval's Job carries to resolve its own tmux session, whether or not the approval is still open.
+type JobApproval struct {
+	ID          string
+	TmuxSession string // "" = no tmux origin
+	CreatedAt   int64  // unix ms
 }
 
 // openSnap is what one Job's payloads share (spec §6): the open-approval count and badge keys, and the session code of each
 // open approval's own tmux session. ok=false = unknown, left out.
 type openSnap struct {
-	n     int
-	keys  []string
-	codes map[string]string // approval id -> session code
-	ok    bool
+	n    int
+	keys []string
+	code string // the Job's own approval's session code; "" = unresolved
+	ok   bool
 }
 
 // sender is the push module's one sending goroutine (spec §7). Triggers call Enqueue and never wait; everything that can
@@ -57,7 +64,7 @@ type sender struct {
 	hostID string
 	topic  string
 
-	openState func(ctx context.Context) openSnap // read ONCE per Job, before its device loop; nil or !ok = unknown, left out
+	openState func(ctx context.Context, j Job) openSnap // read ONCE per Job, before its device loop; nil or !ok = unknown, left out
 
 	queue   chan Job
 	dropped atomic.Int64
@@ -132,7 +139,7 @@ func (s *sender) Stop() {
 func (s *sender) process(ctx context.Context, j Job) {
 	var snap openSnap
 	if s.openState != nil {
-		snap = s.openState(ctx)
+		snap = s.openState(ctx, j)
 	}
 	for _, id := range j.DeviceIDs {
 		if ctx.Err() != nil {
@@ -151,8 +158,8 @@ func (s *sender) process(ctx context.Context, j Job) {
 			content.OpenApprovals = &n
 			content.OpenApprovalKeys = snap.keys
 		}
-		if j.ApprovalID != "" {
-			content.SessionCode = snap.codes[j.ApprovalID]
+		if j.Approval != nil {
+			content.SessionCode = snap.code
 		}
 		payload, err := content.Payload(s.hostID)
 		if err != nil {

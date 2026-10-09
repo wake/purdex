@@ -20,13 +20,25 @@ type readerCalls struct {
 	refs map[string]session.SessionRef
 	err  error
 	hang bool // never returns, and ignores its context
+	// release, when set, blocks every read (ignoring its context) until unblock closes it.
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *readerCalls) unblock() {
+	if r.release != nil {
+		r.once.Do(func() { close(r.release) })
+	}
 }
 
 func (r *readerCalls) read(ctx context.Context) (map[string]session.SessionRef, error) {
 	r.mu.Lock()
 	r.n++
-	hang, refs, err := r.hang, r.refs, r.err
+	hang, refs, err, rel := r.hang, r.refs, r.err, r.release
 	r.mu.Unlock()
+	if rel != nil {
+		<-rel
+	}
 	if hang {
 		select {} // an uncooperative reader: the snapshot must not wait for it
 	}
@@ -108,18 +120,77 @@ func TestSnapshot_SharedAcrossDevices(t *testing.T) {
 	}
 }
 
-// The approval callback runs on the feed's goroutine and must only enqueue: it never reads the sessions itself. With no
-// open-approvals reader the sender's snapshot has nothing to resolve either, so any read here would be the callback's.
+// The approval callback runs on the feed's goroutine and must only enqueue: a session read there would block the feed for as
+// long as the reader takes. The reader here blocks until released, so a callback that read would not return in time.
 func TestCallback_NeverReadsSessions(t *testing.T) {
+	te := newTriggerEnv(t, nil)
+	rc := &readerCalls{release: make(chan struct{}), refs: map[string]session.SessionRef{"dev": {Code: "c0de01", Created: sessionAt}}}
+	t.Cleanup(rc.unblock)
+	te.mod.sessions = rc.read
+	te.mod.sessBudget = 2 * time.Second
+	te.register(tokA, "en", "mlab")
+	start := time.Now()
+	te.events.emit("opened", leadApproval("ap1"))
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Fatalf("the approval callback took %v: it read the sessions", d)
+	}
+	rc.unblock()
+	te.waitSends(t, 1)
+}
+
+// An approval that closed while its Job was queued is gone from the open set, yet its push still names its session.
+func TestSessionCode_ApprovalClosedBeforeSendStillResolves(t *testing.T) {
+	te := newTriggerEnv(t, nil)
+	te.mod.sessions = fakeCodes(map[string]string{"dev": "c0de01"})
+	te.register(tokA, "en", "mlab")
+	te.events.readOpen = func() ([]team.Approval, error) { return nil, nil }
+	te.events.emit("opened", leadApproval("ap1"))
+	p := te.waitSends(t, 1)[0].Payload
+	if code, ok := sessionCodeOf(t, p); !ok || code != "c0de01" {
+		t.Fatalf("session_code = %q (present %v): %s", code, ok, p)
+	}
+}
+
+// The open-set read failing, or no reader at all, costs the count and keys but not the push's own session_code.
+func TestSessionCode_SurvivesOpenSetFailureAndNilReader(t *testing.T) {
+	for _, name := range []string{"read error", "nil reader"} {
+		t.Run(name, func(t *testing.T) {
+			te := newTriggerEnv(t, nil)
+			te.mod.sessions = fakeCodes(map[string]string{"dev": "c0de01"})
+			te.register(tokA, "en", "mlab")
+			if name == "read error" {
+				te.events.readOpen = func() ([]team.Approval, error) { return nil, errors.New("db down") }
+			} else {
+				te.mod.reader = nil
+			}
+			te.events.emit("opened", leadApproval("ap1"))
+			p := te.waitSends(t, 1)[0].Payload
+			if code, ok := sessionCodeOf(t, p); !ok || code != "c0de01" {
+				t.Fatalf("session_code = %q (present %v): %s", code, ok, p)
+			}
+			if _, ok := payloadOf(t, p); ok {
+				t.Fatalf("open_approvals present: %s", p)
+			}
+			if _, ok := keysOf(t, p); ok {
+				t.Fatalf("keys present: %s", p)
+			}
+		})
+	}
+}
+
+// No tmux origin on the Job's approval and none among the open ones: nothing to resolve, so no session read at all.
+func TestSnapshot_NoTmuxOriginAnywhereReadsNothing(t *testing.T) {
 	te := newTriggerEnv(t, nil)
 	rc := &readerCalls{refs: map[string]session.SessionRef{"dev": {Code: "c0de01", Created: sessionAt}}}
 	te.mod.sessions = rc.read
-	te.mod.reader = nil
 	te.register(tokA, "en", "mlab")
-	te.events.emit("opened", leadApproval("ap1"))
+	a := leadApproval("ap1")
+	a.Origin.Tmux = ""
+	te.events.readOpen = func() ([]team.Approval, error) { return []team.Approval{a}, nil }
+	te.events.emit("opened", a)
 	te.waitSends(t, 1)
 	if rc.count() != 0 {
-		t.Fatalf("sessions read %d times with no open set to resolve", rc.count())
+		t.Fatalf("sessions read %d times", rc.count())
 	}
 }
 

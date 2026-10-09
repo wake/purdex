@@ -365,7 +365,10 @@ func (m *Module) readSessions(ctx context.Context) map[string]session.SessionRef
 		err  error
 	}
 	ch := make(chan result, 1)
-	go func() { refs, err := m.sessions(ctx); ch <- result{refs, err} }()
+	go func() {
+		refs, err := m.sessions(ctx)
+		ch <- result{refs, err}
+	}()
 	select {
 	case r := <-ch:
 		if r.err != nil {
@@ -396,26 +399,29 @@ func ownSession(refs map[string]session.SessionRef, name string, approvalAtMs in
 // openState reads the open approval set now: the count of the pushed kinds (lead, self_relay, member_relay, an
 // answerable hook_ask) for `purdex.open_approvals`, and the sorted, de-duplicated badge keys for
 // `purdex.open_approval_keys` ("s:<session_code>" when the approval's own tmux session resolves, else "a:<approval_id>",
-// at most maxOpenKeys), plus each approval's session code for the push that announces it. The sender asks once per Job and
-// shares the answer across its devices; the tmux read is a single bounded call. Nothing is kept between sends, so there is
-// nothing to drift. ok=false (no reader, or the read failed) means unknown: the payload then leaves both fields out.
-func (m *Module) openState(ctx context.Context) openSnap {
-	r := m.reader
-	if r == nil {
-		return openSnap{}
-	}
-	open, err := r.OpenApprovals()
-	if err != nil {
-		log.Printf("[push] could not read the open approvals: %v (open_approvals left out of this push)", err)
-		return openSnap{}
-	}
+// at most maxOpenKeys). The Job's own approval is resolved from what the Job carries, independently of the open set (it may
+// have closed while the Job was queued, or the open-set read may have failed): its session_code is snap.code. The sender
+// asks once per Job and shares the answer across its devices; the tmux read is a single bounded call, made only if the Job's
+// approval or a pushed open approval has a tmux origin. Nothing is kept between sends, so there is nothing to drift.
+// ok=false (no reader, or the read failed) means the count and keys are unknown: the payload then leaves both fields out.
+func (m *Module) openState(ctx context.Context, j Job) openSnap {
 	var pushed []team.Approval
-	needSessions := false
-	for _, a := range open {
-		if _, ok := push.ApprovalContent(toPushApproval(a), "", "en"); !ok {
-			continue
+	openOK := false
+	if r := m.reader; r != nil {
+		open, err := r.OpenApprovals()
+		if err != nil {
+			log.Printf("[push] could not read the open approvals: %v (open_approvals left out of this push)", err)
+		} else {
+			openOK = true
+			for _, a := range open {
+				if _, ok := push.ApprovalContent(toPushApproval(a), "", "en"); ok {
+					pushed = append(pushed, a)
+				}
+			}
 		}
-		pushed = append(pushed, a)
+	}
+	needSessions := j.Approval != nil && j.Approval.TmuxSession != ""
+	for _, a := range pushed {
 		if tmuxSessionOf(a.Origin.Tmux) != "" {
 			needSessions = true
 		}
@@ -424,12 +430,18 @@ func (m *Module) openState(ctx context.Context) openSnap {
 	if needSessions {
 		refs = m.readSessions(ctx)
 	}
-	snap := openSnap{ok: true, n: len(pushed), codes: map[string]string{}}
+	snap := openSnap{ok: openOK}
+	if j.Approval != nil {
+		snap.code = ownSession(refs, j.Approval.TmuxSession, j.Approval.CreatedAt)
+	}
+	if !openOK {
+		return snap
+	}
+	snap.n = len(pushed)
 	set := map[string]struct{}{}
 	for _, a := range pushed {
 		if code := ownSession(refs, tmuxSessionOf(a.Origin.Tmux), a.CreatedAt); code != "" {
 			set["s:"+code] = struct{}{}
-			snap.codes[a.ID] = code
 		} else {
 			set["a:"+a.ID] = struct{}{}
 		}
@@ -475,8 +487,9 @@ func (m *Module) onApproval(op string, a team.Approval) {
 	for i, d := range devs {
 		ids[i] = d.DeviceID
 	}
-	// ApprovalID: the sender fills session_code (#2235) from its one snapshot; nothing here may touch tmux.
-	snd.Enqueue(Job{DeviceIDs: ids, ApprovalID: a.ID, Make: func(d push.Device) (push.Content, bool) {
+	// Approval: the sender resolves session_code (#2235) from its one snapshot; nothing here may touch tmux.
+	ja := &JobApproval{ID: a.ID, TmuxSession: tmuxSessionOf(a.Origin.Tmux), CreatedAt: a.CreatedAt}
+	snd.Enqueue(Job{DeviceIDs: ids, Approval: ja, Make: func(d push.Device) (push.Content, bool) {
 		return push.ApprovalContent(pa, d.HostLabel, d.Locale)
 	}})
 }
