@@ -151,9 +151,9 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return snapshotJSON{
 			Conversation: convmodel.Conversation{
 				Key:      convmodel.Key{HostID: hostID, Provider: "claude", SessionID: sid},
-				Provider: "claude", Backend: src.Backend, Title: h.Title, Status: src.Status, Usage: cu, Turns: turnList,
+				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Usage: cu, Turns: turnList,
 			},
-			Header: headerJSON{Title: h.Title, Status: src.Status, Backend: src.Backend, Usage: u, Live: src.Live},
+			Header: headerJSON{Title: h.Title, Status: h.Status, Backend: h.Backend, Usage: u, Live: h.Live},
 			Window: windowJSON{FirstIndex: w.FirstIndex, LastIndex: w.LastIndex, TotalTurns: w.TotalTurns, HasMoreBefore: w.HasMoreBefore},
 			Cursor: cursor,
 		}

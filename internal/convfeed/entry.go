@@ -61,6 +61,11 @@ type Entry struct {
 	title    string
 	usage    *convmodel.Usage
 	live     bool
+	// status and backend are the resolver's answer as of the last Refresh (the pane's light or ended / unknown, and
+	// "terminal" while a pane runs the session). They live in the entry so that a header, a window and a cursor read
+	// together never mix two requests' views; a change bumps the revision like a title change does.
+	status  string
+	backend string
 
 	fp    []byte // the bytes before the last fed offset
 	fpEnd int64  // the offset fp ends at
@@ -97,6 +102,7 @@ func (e *Entry) newEpoch() {
 	e.headRev = 0
 	e.changed = map[string]uint64{}
 	e.title, e.usage = "", nil
+	e.status, e.backend = "", ""
 	e.fp, e.fpEnd = nil, 0
 	e.snapOK = false
 }
@@ -159,6 +165,11 @@ func (e *Entry) Refresh(ctx context.Context, src Source) (RefreshResult, error) 
 	}
 	e.bump(e.norm.SetLive(src.Live))
 	e.live = src.Live
+	if src.Status != e.status || src.Backend != e.backend {
+		e.status, e.backend = src.Status, src.Backend
+		e.rev++
+		e.headRev = e.rev
+	}
 	e.refreshHeader()
 	res.Changed = res.Reset || e.rev != startRev
 	return res, nil
@@ -264,9 +275,11 @@ func (e *Entry) conv() *convmodel.Conversation {
 
 // Header is the title and usage as of the current revision.
 type Header struct {
-	Title string
-	Usage *convmodel.Usage
-	Live  bool
+	Title   string
+	Usage   *convmodel.Usage
+	Live    bool
+	Status  string // the pane's light, "ended" without a pane, "unknown" when the owner lookup failed
+	Backend string // "terminal" while a pane runs the session
 }
 
 // Header returns the conversation-level fields.
@@ -282,7 +295,7 @@ func (e *Entry) headerLocked() Header {
 		c := *e.usage
 		u = &c
 	}
-	return Header{Title: e.title, Usage: u, Live: e.live}
+	return Header{Title: e.title, Usage: u, Live: e.live, Status: e.status, Backend: e.backend}
 }
 
 // Epoch is the random id of the current normalizer instance.
