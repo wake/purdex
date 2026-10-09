@@ -76,7 +76,7 @@ func init() {
 // workbookTitle appends "・{thing}" to the title; when the whole is over the title limit it is the thing that is cut (with an
 // ellipsis), never the host or the session name. A title already over the limit on its own is cut as today.
 func workbookTitle(title, thing string) string {
-	thing = strings.TrimSpace(thing)
+	thing = Normalise(thing, maxNamedRunes) // model text on a lock screen: no newlines, control or bidi characters
 	if thing == "" {
 		return cutRunes(title, maxTitleRunes)
 	}

@@ -162,3 +162,71 @@ func TestAwait_DeadlineAndCancel(t *testing.T) {
 		t.Fatal("a line from a stopped module")
 	}
 }
+
+// Two Stops of one session a moment apart each get their own entry: the match is the nearest turn_at within the bounds.
+// Mutation gate: take the newest entry in range (the old match) → both waiters get the second → red.
+func TestAwait_TwoRapidStopsEachFindTheirOwnEntry(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	pl := NewPushLines(func() *Store { return k.st })
+	k.e.SetWaiter(pl)
+	first := mustInsert(t, k.st, pending("s1", "s1", "a", 10_000))
+	second := mustInsert(t, k.st, pending("s1", "s1", "b", 10_300))
+	for _, id := range []int64{first, second} {
+		if _, ok, err := k.st.SetPushLineV2(id, PushLineV2{Thing: "事", Push: "推" + string(rune('0'+id))}); err != nil || !ok {
+			t.Fatal(err)
+		}
+	}
+	a := wait(t, awaitAsync(pl, context.Background(), "s1", 10_000, time.Second), time.Second)
+	b := wait(t, awaitAsync(pl, context.Background(), "s1", 10_300, time.Second), time.Second)
+	if !a.ok || a.line.EntryID != first || !b.ok || b.line.EntryID != second {
+		t.Fatalf("first stop got %+v, second %+v", a.line, b.line)
+	}
+	// nothing within the bounds of a much later stop
+	if c := wait(t, awaitAsync(pl, context.Background(), "s1", 60_000, 200*time.Millisecond), 3*time.Second); c.ok {
+		t.Fatalf("a later stop took an old entry: %+v", c.line)
+	}
+}
+
+// An earlier event of the session that made no entry must not release the hold of a later Stop whose own intake has not
+// happened yet (codex attack): intake times are matched to the push's stamp, not just "some intake at or after".
+// Mutation gate: a monotonic per-session time → the hold is released early → red.
+func TestAwait_AnEarlierIntakeDoesNotReleaseALaterStop(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	pl := NewPushLines(func() *Store { return k.st })
+	k.e.SetWaiter(pl)
+	empty := endedTurn("t0", 100, "")
+	empty.Items = empty.Items[:1]
+	k.turns.set("s1", empty)
+	k.event("s1", 5_000)                                                   // an event with nothing to summarise: its intake is done
+	ch := awaitAsync(pl, context.Background(), "s1", 7_000, 5*time.Second) // a Stop 2 s later, its own intake still to come
+	select {
+	case a := <-ch:
+		t.Fatalf("released by the earlier event: %+v", a)
+	case <-time.After(300 * time.Millisecond):
+	}
+	// its own intake arrives (this one also has nothing to summarise)
+	k.event("s1", 7_000)
+	if a := wait(t, ch, 3*time.Second); a.ok {
+		t.Fatal("no model ran, so no line")
+	}
+}
+
+func TestPushLines_IntakeTimesAreBounded(t *testing.T) {
+	pl := NewPushLines(func() *Store { return nil })
+	for i := 0; i < 1000; i++ {
+		pl.intakeDone("s1", int64(i))
+	}
+	for i := 0; i < 500; i++ {
+		pl.intakeDone(string(rune('a'+i%26))+string(rune('A'+i/26)), int64(1_000_000+i))
+	}
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	if n := len(pl.intakeAt["s1"]); n > maxIntakeKept {
+		t.Fatalf("%d times kept for one session", n)
+	}
+	if n := len(pl.intakeAt); n > maxIntakeSessions {
+		t.Fatalf("%d sessions kept", n)
+	}
+}

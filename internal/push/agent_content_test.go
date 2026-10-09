@@ -214,3 +214,16 @@ func TestContent_PayloadCarriesTheWorkbookBlock(t *testing.T) {
 		t.Fatalf("payload = %s", raw)
 	}
 }
+
+// The thing is model text on a lock screen: newlines, control and bidi characters are removed like the body's (codex attack).
+// Mutation gate: only TrimSpace the thing → red.
+func TestAgentContent_WorkbookThingIsSanitised(t *testing.T) {
+	line := &WorkbookLine{Thing: "推播\n整合\u202eevil\u200b\u0007", Push: "x", ConvKey: "r", EntryID: 1}
+	c, _ := AgentContent(wbIn("Stop", "mlab", "dev", line), "en")
+	if strings.ContainsAny(c.Title, "\n\u202e\u200b\u0007") {
+		t.Fatalf("title = %q", c.Title)
+	}
+	if !strings.HasPrefix(c.Title, "mlab: dev・推播") {
+		t.Fatalf("title = %q", c.Title)
+	}
+}
