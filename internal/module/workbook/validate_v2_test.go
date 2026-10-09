@@ -49,6 +49,10 @@ func TestParseModelJSON_TodosAreRequiredAndShaped(t *testing.T) {
 		"title number":   `{"add":[{"title":5}]}`,
 		"dup done":       `{"done":[1],"done":[2]}`,
 		"dup in an add":  `{"add":[{"title":"a","title":"b"}]}`,
+		"null add item":  `{"add":[null]}`,
+		"number add":     `{"add":[3]}`,
+		"string add":     `{"add":["x"]}`,
+		"null among ok":  `{"add":[{"title":"a","detail":""},null]}`,
 	} {
 		if _, err := ParseModelJSON(turnJSON(todos)); !errors.Is(err, ErrFormat) {
 			t.Errorf("%s: err = %v, want ErrFormat", name, err)

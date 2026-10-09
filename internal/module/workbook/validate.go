@@ -83,7 +83,8 @@ func checkTodos(raw json.RawMessage) error {
 			return ErrFormat
 		}
 		for _, it := range items {
-			if hasDuplicateMember(string(it)) {
+			// every add is an object {title, detail}: null decodes into a struct without an error, so look at the byte
+			if b := bytes.TrimSpace(it); len(b) == 0 || b[0] != '{' || hasDuplicateMember(string(it)) {
 				return ErrFormat
 			}
 		}
