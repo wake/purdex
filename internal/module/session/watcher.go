@@ -344,7 +344,9 @@ func (m *SessionModule) watchSessions(ctx context.Context) {
 	m.waitForGate = make(chan bool, 1)
 
 	// Goroutine A: tmux wait-for loop with pause/resume gate
+	m.watchWG.Add(2)
 	go func() {
+		defer m.watchWG.Done()
 		active := m.wstate.getTmuxAlive()
 		for {
 			if !active {
@@ -358,6 +360,9 @@ func (m *SessionModule) watchSessions(ctx context.Context) {
 
 			cmd := exec.CommandContext(ctx, "tmux", "wait-for", waitForChannel)
 			err := cmd.Run()
+			if m.afterWaitForRun != nil {
+				m.afterWaitForRun()
+			}
 
 			if ctx.Err() != nil {
 				return
@@ -387,6 +392,7 @@ func (m *SessionModule) watchSessions(ctx context.Context) {
 
 	// Goroutine B: polling fallback with 5s ticker
 	go func() {
+		defer m.watchWG.Done()
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
