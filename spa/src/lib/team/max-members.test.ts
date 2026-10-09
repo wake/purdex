@@ -83,6 +83,48 @@ describe('setMaxMembers', () => {
     expect(capOf('t1')).toMatchObject({ max_members: 3, in_use: 2 })
   })
 
+  it('an A -> B -> A change of this team during the flight still counts as an event newer than the answer', async () => {
+    const p = setMaxMembers(target, 3)
+    useTeamRosterStore.getState().apply(H, [team('t1', { max_members: 3, in_use: 1 }), team('t2')]) // A: (2,1) -> (3,1)
+    useTeamRosterStore.getState().apply(H, [team('t1', { max_members: 2, in_use: 1 }), team('t2')]) // back to (2,1): newer still
+    calls[0].resolve({ team_id: 't1', max_members: 3, in_use: 1 }) // the older answer
+    await p
+    expect(capOf('t1')).toMatchObject({ max_members: 2, in_use: 1 })
+  })
+
+  it('a change of only the members in use during the flight also counts', async () => {
+    const p = setMaxMembers(target, 3)
+    useTeamRosterStore.getState().apply(H, [team('t1', { max_members: 2, in_use: 2 }), team('t2')]) // a member joined: (2,1) -> (2,2)
+    calls[0].resolve({ team_id: 't1', max_members: 3, in_use: 1 })
+    await p
+    expect(capOf('t1')).toMatchObject({ max_members: 2, in_use: 2 })
+  })
+
+  it('the roster watch is released when the flight ends (answer, failure or ignored)', async () => {
+    const unsub = vi.fn()
+    const spy = vi.spyOn(useTeamRosterStore, 'subscribe').mockImplementation(() => unsub)
+    const ok = setMaxMembers(target, 3)
+    calls[0].resolve({ team_id: 't1', max_members: 3, in_use: 1 })
+    await ok
+    const bad = setMaxMembers(target, 3)
+    calls[1].reject(new ApprovalApiError(0, 'network'))
+    await bad
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(unsub).toHaveBeenCalledTimes(2)
+    spy.mockRestore()
+  })
+
+  it('the watch ends with the flight: a later roster change does not leak into the next request', async () => {
+    const first = setMaxMembers(target, 3)
+    calls[0].resolve({ team_id: 't1', max_members: 3, in_use: 1 })
+    await first
+    useTeamRosterStore.getState().apply(H, [team('t1', { max_members: 5, in_use: 1 }), team('t2')]) // between requests
+    const second = setMaxMembers(target, 6)
+    calls[1].resolve({ team_id: 't1', max_members: 6, in_use: 1 })
+    await second
+    expect(capOf('t1')).toMatchObject({ max_members: 6 }) // applied: nothing changed during the second flight
+  })
+
   it('an event about ANOTHER team while the request is out does not discard the answer', async () => {
     const p = setMaxMembers(target, 3)
     useTeamRosterStore.getState().apply(H, [team('t1'), team('t2', { in_use: 2 })]) // t2 changed; t1 did not

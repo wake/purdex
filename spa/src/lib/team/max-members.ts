@@ -99,8 +99,8 @@ const teamOf = (hostId: string, teamId: string): TeamRoster | undefined => useTe
 /**
  * Send the cap. Ignored while a request for the team is out, when the host is gone, or for a value the daemon would
  * refuse anyway (outside 1-8, or below the members in use). The answer is shown through the roster; if a roster event
- * changed THIS team's numbers while the request was out, that event is at least as new as this answer (the daemon emits
- * it after the write) and the answer is not applied over it. Events about other teams do not matter.
+ * changed THIS team's numbers at any moment while the request was out, that event is at least as new as this answer (the
+ * daemon emits it after the write) and the answer is not applied over it. Events about other teams do not matter.
  */
 export async function setMaxMembers(target: MaxMembersTarget, value: number): Promise<void> {
   const { hostId, teamId } = target
@@ -114,11 +114,21 @@ export async function setMaxMembers(target: MaxMembersTarget, value: number): Pr
   if (store.inflight[key]?.identity === identity) return
   const token = ++nextToken
   store.begin(key, { token, identity })
+  // Watch THIS team's numbers for the whole flight: a change at any moment (even one that was later changed back, an
+  // A -> B -> A) is an event newer than the request, and the answer must not be put over it.
+  let touched = false
+  let seen = { max: before?.max_members, used: before?.in_use }
+  const unwatch = useTeamRosterStore.subscribe(() => {
+    const t = teamOf(hostId, teamId)
+    if (t?.max_members !== seen.max || t?.in_use !== seen.used) {
+      touched = true
+      seen = { max: t?.max_members, used: t?.in_use }
+    }
+  })
   try {
     const view = await deps.put(hostId, teamId, value)
     if (deps.identity(hostId) !== identity) return // re-pointed or removed meanwhile: the answer is the old daemon's
-    const now = teamOf(hostId, teamId)
-    if (now?.max_members === before?.max_members && now?.in_use === before?.in_use) applyAnswer(hostId, view)
+    if (!touched) applyAnswer(hostId, view)
   } catch (e: unknown) {
     if (deps.identity(hostId) !== identity) return
     const code = e instanceof ApprovalApiError ? e.code : 'error'
@@ -131,6 +141,7 @@ export async function setMaxMembers(target: MaxMembersTarget, value: number): Pr
       deps.toast(deps.message('unattended.cap.failed', { host: deps.hostLabel(hostId), session: target.label, code }))
     }
   } finally {
+    unwatch()
     useMaxMembersStore.getState().end(key, token)
   }
 }
