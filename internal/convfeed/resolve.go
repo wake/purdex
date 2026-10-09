@@ -53,9 +53,6 @@ type Resolver struct {
 
 	// afterCheck runs between a candidate's containment check and its open (tests swap a directory there).
 	afterCheck func()
-	// lookupVisits counts the directories the last lookup opened (tests check the bound; directory order is the
-	// file system's, so a test cannot rely on which directory comes last).
-	lookupVisits int
 }
 
 // Resolve returns the current Source of the session, with its file open: the caller closes Source.Closer. The order
@@ -119,7 +116,7 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 	if err := ctx.Err(); err != nil {
 		return Source{}, err
 	}
-	if f := r.lookup(ctx, root, sessionID); f != nil {
+	if f, _ := r.lookup(ctx, root, sessionID); f != nil {
 		return finish(f)
 	}
 	return Source{}, ErrNotFound
@@ -148,8 +145,10 @@ func (r *Resolver) openCandidate(root, path string) *os.File {
 }
 
 // lookup searches <slug>/<session_id>.jsonl across the root's slug directories (depth 1 only), bounded by directory
-// count, time and the context; unreadable directories are skipped.
-func (r *Resolver) lookup(ctx context.Context, root, sessionID string) *os.File {
+// count, time and the context; unreadable directories are skipped. Only directories count toward the bound (files and
+// sockets in the root cost nothing). It also returns how many directories it opened (tests check the bound; the
+// directory order is the file system's).
+func (r *Resolver) lookup(ctx context.Context, root, sessionID string) (*os.File, int) {
 	maxDirs, limit := r.MaxLookupDirs, r.LookupTime
 	if maxDirs <= 0 {
 		maxDirs = DefaultLookupDirs
@@ -161,26 +160,27 @@ func (r *Resolver) lookup(ctx context.Context, root, sessionID string) *os.File 
 	defer cancel()
 	d, err := os.Open(root)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
 	defer d.Close()
 	visited := 0
-	r.lookupVisits = 0
 	for {
-		names, err := d.Readdirnames(256)
-		for _, n := range names {
+		entries, err := d.ReadDir(256)
+		for _, de := range entries {
+			if !de.IsDir() {
+				continue
+			}
 			if ctx.Err() != nil || visited >= maxDirs {
-				return nil
+				return nil, visited
 			}
 			visited++
-			r.lookupVisits = visited
-			f, oerr := transcriptpath.Open(root, filepath.Join(root, n, sessionID+".jsonl"))
+			f, oerr := transcriptpath.Open(root, filepath.Join(root, de.Name(), sessionID+".jsonl"))
 			if oerr == nil {
-				return f
+				return f, visited
 			}
 		}
 		if err != nil { // io.EOF, or an unreadable directory: nothing more to visit
-			return nil
+			return nil, visited
 		}
 	}
 }

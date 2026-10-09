@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -235,18 +236,28 @@ func TestResolve_LookupIsBoundedByDirectoryCount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r := &Resolver{Home: e.home, MaxLookupDirs: 4}
-	if _, err := resolve(t, r); !errors.Is(err, ErrNotFound) || r.lookupVisits != 4 {
-		t.Fatalf("bound 4 over 10 directories: err %v, visited %d, want ErrNotFound after exactly 4", err, r.lookupVisits)
+	for i := 0; i < 7; i++ { // plain files in the root cost nothing
+		if err := os.WriteFile(filepath.Join(e.root, fmt.Sprintf("f%d", i)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	r.MaxLookupDirs = 0 // the default is far above 10: all of them are visited
-	if _, err := resolve(t, r); !errors.Is(err, ErrNotFound) || r.lookupVisits != 10 {
-		t.Fatalf("default bound: err %v, visited %d, want all 10", err, r.lookupVisits)
+	look := func(max int) (*os.File, int) {
+		r := &Resolver{Home: e.home, MaxLookupDirs: max}
+		f, n := r.lookup(context.Background(), e.root, sidR)
+		if f != nil {
+			t.Cleanup(func() { f.Close() })
+		}
+		return f, n
+	}
+	if f, n := look(4); f != nil || n != 4 {
+		t.Fatalf("bound 4 over 10 directories: file %v, visited %d, want nothing after exactly 4", f != nil, n)
+	}
+	if f, n := look(0); f != nil || n != 10 { // the default is far above 10: all directories, no file
+		t.Fatalf("default bound: file %v, visited %d, want all 10 directories", f != nil, n)
 	}
 	e.put("-zzz", "late")
-	r.MaxLookupDirs = 11
-	if _, err := resolve(t, r); err != nil {
-		t.Fatalf("bound above the directory count: %v", err)
+	if f, _ := look(11); f == nil {
+		t.Fatal("bound above the directory count did not find the file")
 	}
 }
 
@@ -267,4 +278,25 @@ func TestResolve_LookupIsBoundedByTimeAndContext(t *testing.T) {
 	if _, err := (&Resolver{Home: e.home}).Resolve(ctx, sidR); !errors.Is(err, context.Canceled) {
 		t.Fatalf("a cancelled request: err = %v, want context.Canceled", err)
 	}
+}
+
+// One resolver serves concurrent requests (go test -race).
+func TestResolve_ConcurrentResolutionsShareOneResolver(t *testing.T) {
+	e := newResEnv(t)
+	e.put("-x", "content")
+	r := &Resolver{Home: e.home, Owners: fakeOwners{}}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := r.Resolve(context.Background(), sidR)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			s.Closer.Close()
+		}()
+	}
+	wg.Wait()
 }
