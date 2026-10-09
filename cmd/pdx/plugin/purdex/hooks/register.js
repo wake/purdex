@@ -414,6 +414,7 @@ async function maybeBegin($) {
   if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
   if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
   const sid = await $.session.id()
+  if (s.state !== 'idle') return // a /relay now took the state while the engine was read
   s.state = 'beginning'
   s.lastAskPct = u.percent
   const gen = s.gen
@@ -493,13 +494,28 @@ async function begin($, sid, gen, u, adopted) {
 async function relayNow($) {
   if (s.state !== 'idle') return { text: RELAY_BUSY }
   if (!hasCSPRNG()) return { text: 'Purdex 接力無法啟動：這個環境沒有 crypto.getRandomValues' }
-  const u = (await $.session.usage()).context
-  if (u.percent === undefined) return { text: RELAY_NO_USAGE }
-  const sid = await $.session.id()
+  // Taken before any await, so a second /relay or a turn's threshold check meanwhile sees
+  // `beginning`; a preflight that fails gives it back, if it is still this attempt's.
   s.state = 'beginning'
   const gen = s.gen
   const begun = deferred() // a prompt that arrives while begin is out waits on it (P5b-3)
   s.begun = begun
+  const giveBack = () => {
+    begun.resolve(undefined)
+    if (s.gen === gen && s.state === 'beginning') toIdle()
+  }
+  let u, sid
+  try {
+    u = (await $.session.usage()).context
+    sid = await $.session.id()
+  } catch (err) {
+    giveBack()
+    return { text: RELAY_NO_USAGE }
+  }
+  if (!u || u.percent === undefined) {
+    giveBack()
+    return { text: RELAY_NO_USAGE }
+  }
   const out = await begin($, sid, gen, u, begun.resolve).finally(() => begun.resolve(undefined))
   switch (out.kind) {
     case 'opened': return { text: '已送出接力申請（context ' + u.percent + '%），請在 Purdex App 核准' }

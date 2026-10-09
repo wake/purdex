@@ -169,6 +169,7 @@ type Fake = {
   // The session id the engine moves to while it handles the next classic.SessionStart (a
   // /clear): a hook sees it only after its next(e), as in a session.
   switchTo?: string
+  usageGate?: Promise<void> // session.usage waits on it (the race tests)
 }
 
 // The clock of `refuseNow`: the one way to make the prompt hold throw (its
@@ -226,7 +227,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', async () => ({ value: f.sessionId }))
-  on('session.usage', async () => ({ value: { startedAt: 0, context: f.usage, rateLimits: [] } }))
+  on('session.usage', async () => { if (f.usageGate) await f.usageGate; return { value: { startedAt: 0, context: f.usage, rateLimits: [] } } })
   on('fs.read', async (_$: any, e: any) => {
     if (e.path.endsWith('/pdx.json')) return f.pdxJSON ? { value: f.pdxJSON } : { deny: 'ENOENT' }
     return e.path in f.files ? { value: f.files[e.path] } : { deny: 'ENOENT' }
@@ -2339,4 +2340,41 @@ test('/relay status|on|off are unchanged, and a word the mod does not know is th
   expect((await relayCmd($, 'status')).text).toBe('自我接力：開啟（主機開關 開；門檻 70%）')
   expect((await relayCmd($, 'nowish')).text).toBe('用法：/relay [now|off|on|status]（不帶參數＝now）')
   expect(count(f, 'begin')).toBe(0)
+})
+
+
+// codex attack on PR B: the idle guard and the state change are one step. Two /relay now, or a turn's
+// threshold check and a /relay now, with the engine slow to answer, open one request.
+// Mutation gate: take `beginning` after the awaits (or drop maybeBegin's second look) → two begins → red.
+test('two /relay now at once, the engine slow: one begin, one answer opened and one busy', async ($, on) => {
+  let open!: () => void
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'none', { usageGate: new Promise<void>((r) => { open = r }) })
+  await start($, f)
+  const a = relayCmd($, 'now')
+  const b = relayCmd($, 'now')
+  open()
+  const texts = [(await a).text, (await b).text].sort()
+  expect(texts).toEqual(['已送出接力申請（context 5%），請在 Purdex App 核准', '接力進行中'].sort())
+  expect(f.argvs.filter((x) => x[1] === 'relay' && x[2] === 'begin').length).toBe(1)
+})
+
+test('a /relay now while the turn’s threshold check is reading the engine: one begin', async ($, on) => {
+  let open!: () => void
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'none', { usage: AT72, usageGate: new Promise<void>((r) => { open = r }) })
+  await start($, f)
+  const turnDone = turnAndSettle($, f, 't1') // maybeBegin reads usage, parked on the gate
+  const now = relayCmd($, 'now')
+  open()
+  await turnDone
+  await now
+  await f.clock.advance(50)
+  expect(f.argvs.filter((x) => x[1] === 'relay' && x[2] === 'begin').length).toBe(1)
+})
+
+test('a /relay now whose usage read fails gives the state back: the next one asks', async ($, on) => {
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }), 'none', { usage: { window: 200000 } as any })
+  await start($, f)
+  expect((await relayCmd($, 'now')).text).toBe('目前讀不到 context 用量，稍後再試')
+  f.usage = NOW_BELOW
+  expect((await relayCmd($, 'now')).text).toBe('已送出接力申請（context 5%），請在 Purdex App 核准')
 })
