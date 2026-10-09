@@ -106,8 +106,7 @@ func TestCloseAdoptApproved_EachRefusalCancelsWithItsCode(t *testing.T) {
 			return adoptCheck{HostID: "h:1", TargetLive: false}
 		}},
 		{"adopt_self", team.ErrAdoptSelf, func(t *testing.T, s *Store, p *team.AdoptPayload) adoptCheck {
-			p.TargetSessionID = p.LeadSessionID
-			return chkOK()
+			return chkOK() // the stored request names the lead itself as the target (see below)
 		}},
 		{"adopt_target_is_lead", team.ErrAdoptTargetIsLead, func(t *testing.T, s *Store, p *team.AdoptPayload) adoptCheck {
 			seedTeam(t, s, "team-2", "sid-t", 1500)
@@ -132,6 +131,9 @@ func TestCloseAdoptApproved_EachRefusalCancelsWithItsCode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := adoptWorld(t)
 			p := adoptPayload("team-1", "lead-1", "sid-t")
+			if tc.name == "adopt_self" {
+				p.TargetSessionID = p.LeadSessionID // a request the create would have refused, stored directly
+			}
 			openAdopt(t, s, "ad-1", p) // created while everything was fine
 			chk := tc.setup(t, s, &p)
 			a, won, refused, err := s.CloseAdoptApproved("ad-1", adoptClose(), p, chk, adoptedRow("ad-1", p))
@@ -341,5 +343,34 @@ func TestCloseAdoptApproved_ATakenKeyRollsBack(t *testing.T) {
 	}
 	if a, _, _ := s.Get("ad-1"); a.State != team.StateOpen {
 		t.Fatalf("the request closed: %+v", a)
+	}
+}
+
+// The approve acts on the STORED request: a payload that is not the row's (another target, another team,
+// another lead), or a row that is not an adopt, is an error and nothing is written (codex attack on PL-1b1).
+// Mutation gate: skip the comparison → red.
+func TestCloseAdoptApproved_ActsOnlyOnTheStoredRequest(t *testing.T) {
+	s := adoptWorld(t)
+	seedTeam(t, s, "team-2", "lead-2", 1100)
+	p := adoptPayload("team-1", "lead-1", "sid-t")
+	openAdopt(t, s, "ad-1", p)
+	for name, bad := range map[string]team.AdoptPayload{
+		"another target": adoptPayload("team-1", "lead-1", "sid-other"),
+		"another team":   adoptPayload("team-2", "lead-1", "sid-t"),
+		"another lead":   adoptPayload("team-1", "lead-2", "sid-t"),
+	} {
+		if _, _, _, err := s.CloseAdoptApproved("ad-1", adoptClose(), bad, chkOK(), adoptedRow("ad-1", bad)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// a request that is not an adopt (a lead request id)
+	if _, _, _, err := s.CloseAdoptApproved("team-2", adoptClose(), p, chkOK(), adoptedRow("team-2", p)); err == nil {
+		t.Error("a lead request taken as an adopt")
+	}
+	if a, _, _ := s.Get("ad-1"); a.State != team.StateOpen {
+		t.Fatalf("the request changed: %+v", a)
+	}
+	if rows, _ := s.MembersOf("team-1"); len(rows) != 0 {
+		t.Fatalf("members written: %+v", rows)
 	}
 }

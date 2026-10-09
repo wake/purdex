@@ -3,6 +3,7 @@ package teammod
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -132,9 +133,19 @@ func adoptApprovedIn(tx *sql.Tx, id string, c Close, p team.AdoptPayload, chk ad
 	if _, err = tx.Exec(`UPDATE approval_requests SET id = id WHERE id = ?`, id); err != nil {
 		return 0, "", fmt.Errorf("lock adopt %s: %w", id, err)
 	}
-	var rowHostID string
-	if err = tx.QueryRow(`SELECT host_id FROM approval_requests WHERE id = ?`, id).Scan(&rowHostID); err != nil {
+	// The caller's payload must be the stored one: every re-check, the retirement and the insert below act on
+	// p, and the approval is about what the row says (a wrong or stale p would put another session in another team).
+	var rowHostID, kind, payloadJSON, originSession string
+	if err = tx.QueryRow(`SELECT host_id, kind, payload_json, origin_session_id FROM approval_requests WHERE id = ?`, id).
+		Scan(&rowHostID, &kind, &payloadJSON, &originSession); err != nil {
 		return 0, "", fmt.Errorf("read adopt %s: %w", id, err)
+	}
+	stored, perr := team.AdoptPayloadOf(team.Approval{ID: id, Kind: team.Kind(kind), Payload: json.RawMessage(payloadJSON)})
+	if perr != nil {
+		return 0, "", fmt.Errorf("stored adopt %s: %w", id, perr)
+	}
+	if stored != p || originSession != p.LeadSessionID {
+		return 0, "", fmt.Errorf("adopt %s: the payload given is not the stored one (or its lead is not the request's origin)", id)
 	}
 	if refused, err = adoptRefusal(tx, id, rowHostID, p, chk); err != nil {
 		return 0, "", err
