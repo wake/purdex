@@ -171,7 +171,7 @@ describe('the form follows its header', () => {
     const watchers: Array<{ cb: () => void; seen: Set<Element> }> = []
     class FakeRO {
       seen = new Set<Element>()
-      constructor(public cb: () => void) { watchers.push({ cb, seen: this.seen }) }
+      constructor(cb: () => void) { watchers.push({ cb, seen: this.seen }) }
       observe(el: Element) { this.seen.add(el) }
       unobserve(el: Element) { this.seen.delete(el) }
       disconnect() { this.seen.clear() }
