@@ -96,3 +96,14 @@ func TestCompacted_NoticeIsNotFollowedByA70NoticeOnTheNextTick(t *testing.T) {
 		t.Fatalf("%d notices after 30%% then 75%% idle, want 2 (one 70%% notice)", n)
 	}
 }
+
+// A compaction notice that did not go gives the 70% notice back (the lead is not left with neither).
+func TestCompacted_AFailedSendRearmsTheUsageNotice(t *testing.T) {
+	f := noticeFixture(t)
+	f.sender.setErr(fmt.Errorf("lead inbox down"))
+	f.compacted("sid-ma", "auto")
+	waitFor(t, func() bool {
+		won, _ := f.m.store.DisarmNotice("op-a", "sid-ma") // armed again → this call flips it
+		return won
+	})
+}

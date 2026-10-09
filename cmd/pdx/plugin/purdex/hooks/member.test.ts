@@ -26,6 +26,7 @@ type World = {
   sessionId: string
   switchTo?: string
   failComplete?: boolean
+  skipCompact?: boolean
   pdx: (argv: string[]) => R | Promise<R>
 }
 
@@ -67,7 +68,7 @@ function memberWorld(on: any, role: string, pdx?: (argv: string[]) => R | undefi
   on('classic.SessionStart', async () => { if (f.switchTo) { f.sessionId = f.switchTo; f.switchTo = undefined } return {} })
   on('prompt.submit', async (_$: any, e: any) => { f.submits.push(e); f.order.push('submit'); return { text: e.text, context: e.context } })
   on('command.run', async (_$: any, e: any) => { f.commands.push(e.command); f.order.push('command ' + e.command); return { text: 'ran ' + e.command } })
-  on('session.compact', async (_$: any, e: any) => ({ messages: e.messages }))
+  on('session.compact', async (_$: any, e: any) => (f.skipCompact ? { skip: 'another hook skipped it' } : { messages: e.messages }))
   return f
 }
 
@@ -378,4 +379,15 @@ test('the compaction never waits for the report', async ($, on) => {
   expect(calls(f, 'compacted').length).toBe(1)
   release({ exitCode: 0, stdout: '{"noticed":true}' })
   expect(await p).toEqual({ messages: MSGS })
+})
+
+// R2 (codex attack): a compaction that a hook beneath skipped did not happen: nothing is reported.
+// Mutation gate: report before next(e) → red.
+test('a compaction skipped beneath the mod is not reported', async ($, on) => {
+  const f = memberWorld(on, 'member')
+  await start($, f)
+  f.skipCompact = true
+  await compactOf($, 'auto')
+  await f.clock.advance(50)
+  expect(calls(f, 'compacted')).toEqual([])
 })

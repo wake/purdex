@@ -47,13 +47,26 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
 		return
 	}
-	if _, err := m.store.DisarmNoticeForce(mr.SpawnOp, mr.SessionID); err != nil {
+	disarmed, err := m.store.DisarmNoticeForce(mr.SpawnOp, mr.SessionID)
+	if err != nil {
 		m.logf("[team] compacted %s: %v", req.SessionID, err)
 	}
 	text := fmt.Sprintf(CompactedNoticeFmt, mr.Ref)
-	if !m.goTracked(func() { m.noticeToLead(mr, t, text, "compaction notice") }) {
+	if !m.goTracked(func() {
+		// a notice that did not go gives the 70% notice back, so the lead is not left with neither
+		if !m.noticeToLead(mr, t, text, "compaction notice") && disarmed {
+			m.rearm(mr)
+		}
+	}) {
+		m.rearmIf(disarmed, mr)
 		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
 		return
 	}
 	m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{Noticed: true})
+}
+
+func (m *Module) rearmIf(cond bool, mr memberRow) {
+	if cond {
+		m.rearm(mr)
+	}
 }
