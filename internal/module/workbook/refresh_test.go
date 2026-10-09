@@ -194,6 +194,86 @@ func TestRefresh_NotHandedOutWhenTheRowCannotFollow(t *testing.T) {
 	}
 }
 
+// The lease runs out while the row is being re-pointed: the job is not handed out (the call would find no lease) and the
+// entry stays failed:lost. Mutation gate: re-point after the lease check, as before → red (codex attack).
+func TestRefresh_LeaseReapedDuringRepointIsNotHandedOut(t *testing.T) {
+	k := newKit(t)
+	k.lineage["b"] = "a"
+	k.canRefresh("a")
+	id := mustRefresh(t, k, "a", "")
+	k.canRefresh("b")
+	k.st.failRepoint = func() error {
+		k.clock.Add(refreshTimeout*time.Millisecond + leaseSlack + time.Second)
+		k.e.reap()
+		return nil
+	}
+	if j, ok := k.next("m", "b"); ok {
+		t.Fatalf("a dead job was handed out: %+v", j)
+	}
+	if e, _ := k.st.Entry(id); e.State != StateFailed || e.Reason != ReasonLost {
+		t.Fatalf("entry = %+v", e)
+	}
+}
+
+// Stop lands while the row is being re-pointed and the re-point fails: nothing is put back into the stopped queue.
+func TestRefresh_StopDuringRepointLeavesNothingQueued(t *testing.T) {
+	k := newKit(t)
+	k.lineage["b"] = "a"
+	k.canRefresh("a")
+	id := mustRefresh(t, k, "a", "")
+	k.canRefresh("b")
+	k.st.failRepoint = func() error {
+		k.e.Stop()
+		return errors.New("disk")
+	}
+	if _, ok := k.next("m", "b"); ok {
+		t.Fatal("handed out")
+	}
+	if e, _ := k.st.Entry(id); e.State != StateFailed || e.Reason != ReasonStopped {
+		t.Fatalf("entry = %+v", e)
+	}
+	k.e.qmu.Lock()
+	n := len(k.e.convs["a"].waiting)
+	k.e.qmu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d jobs queued in a stopped engine", n)
+	}
+}
+
+// A job released into an engine that has stopped is ended (stopped), not queued.
+func TestRefresh_ReleaseIntoAStoppedEngineEndsTheJob(t *testing.T) {
+	k := newKit(t)
+	k.canRefresh("s1")
+	id := mustRefresh(t, k, "s1", "")
+	j := mustNext(t, k, "m", "s1")
+	k.e.qmu.Lock()
+	l := k.e.leases[j.ID]
+	k.e.qmu.Unlock()
+	k.e.qstopped = true // Stop's flag, without Stop's own cleanup: the race is Stop landing between a caller's checks
+	k.e.release(l, l.job)
+	if e, _ := k.st.Entry(id); e.State != StateFailed || e.Reason != ReasonStopped {
+		t.Fatalf("entry = %+v", e)
+	}
+	if len(k.e.convs["s1"].waiting) != 0 {
+		t.Fatal("queued into a stopped engine")
+	}
+}
+
+// A request that reaches a stopped engine is refused, not answered 202 with an already-failed row.
+func TestRefresh_RequestOnAStoppedEngineIsRefused(t *testing.T) {
+	k := newKit(t)
+	k.canRefresh("s1")
+	k.e.Stop()
+	if _, err := k.e.RequestRefresh("s1", ""); !errors.Is(err, ErrStopped) {
+		t.Fatalf("err = %v", err)
+	}
+	for _, e := range k.entries("s1") {
+		if e.State == StatePending {
+			t.Fatalf("a pending row was left: %+v", e)
+		}
+	}
+}
+
 // At the head with nobody able for 40 s → failed lost, and the turn behind it goes out. Before that, it waits.
 // Mutation gate: never fail it → red.
 func TestRefresh_HeadTimesOutWithoutACapableSession(t *testing.T) {

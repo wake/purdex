@@ -23,6 +23,8 @@ const ReasonNothingToFork = "nothing_to_fork"
 var (
 	// ErrNotLive: no live session of the conversation whose mod announced workbook.refresh (a 409 not_live).
 	ErrNotLive = errors.New("workbook: no live session of the conversation can run a refresh")
+	// ErrStopped: the module is stopping and takes no new work.
+	ErrStopped = errors.New("workbook: the module is stopping")
 	// ErrRefreshPending: the conversation has a refresh under way (a 409 refresh_pending).
 	ErrRefreshPending = errors.New("workbook: a refresh of the conversation is already pending")
 )
@@ -130,8 +132,24 @@ func (e *Engine) RequestRefresh(sessionID, caller string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	e.enqueue(&job{conv: conv, entryID: id, session: run, kind: JobRefresh, attempt: 1})
+	if !e.enqueue(&job{conv: conv, entryID: id, session: run, kind: JobRefresh, attempt: 1}) {
+		return 0, ErrStopped // the engine stopped between the request and the queue: the row is already failed (stopped)
+	}
 	return id, nil
+}
+
+// repoint moves a pending refresh's row to the session that takes the job: session, ref, team and role together (the row
+// says who ran it). moved is false when the entry is no longer pending.
+func (e *Engine) repoint(j *job, sessionID string) (moved bool, err error) {
+	teamID, role := "", ""
+	if e.d.Seats != nil {
+		if seat, err := e.d.Seats.SeatOf(sessionID); err != nil {
+			e.d.Logf("[workbook] seat of a session: %v", err)
+		} else {
+			teamID, role = seat.TeamID, seat.Role
+		}
+	}
+	return e.d.Store.RepointSession(j.entryID, sessionID, peers.RefID(sessionID), teamID, role)
 }
 
 // applyRefresh maps a refresh job's result onto its entry (spec §5.6): the status replaced, the todo changes applied and

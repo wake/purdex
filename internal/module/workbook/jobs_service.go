@@ -70,7 +70,7 @@ func (s jobsService) RequestRefresh(_, sessionID string) (int64, error) {
 	}
 	id, err := eng.RequestRefresh(sessionID, sessionID)
 	switch err {
-	case ErrNotLive:
+	case ErrNotLive, ErrStopped:
 		return 0, modevents.ErrNotLive
 	case ErrRefreshPending:
 		return 0, modevents.ErrRefreshPending

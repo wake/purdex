@@ -21,19 +21,21 @@ func (s *Store) PendingRefresh(convKey string) (bool, error) {
 
 // RepointSession moves a pending entry to the session that actually runs it (plan D14: a refresh asked for one session
 // may be taken by another capable session of the conversation). No event: the entry's text did not change.
-func (s *Store) RepointSession(entryID int64, sessionID, ref, teamID, role string) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	if s.failRepoint != nil { // test seam
+func (s *Store) RepointSession(entryID int64, sessionID, ref, teamID, role string) (moved bool, err error) {
+	if s.failRepoint != nil { // test seam: runs before the write lock so a test may end entries meanwhile
 		if err := s.failRepoint(); err != nil {
-			return err
+			return false, err
 		}
 	}
-	if _, err := s.db.Exec(`UPDATE wb_entries SET session_id = ?, ref = ?, team_id = ?, role = ?, updated_at = ? WHERE id = ? AND state = 'pending'`,
-		sessionID, ref, teamID, role, s.now(), entryID); err != nil {
-		return fmt.Errorf("re-point workbook entry: %w", err)
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	res, err := s.db.Exec(`UPDATE wb_entries SET session_id = ?, ref = ?, team_id = ?, role = ?, updated_at = ? WHERE id = ? AND state = 'pending'`,
+		sessionID, ref, teamID, role, s.now(), entryID)
+	if err != nil {
+		return false, fmt.Errorf("re-point workbook entry: %w", err)
 	}
-	return nil
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 // RefreshDone is a refresh job's validated result.

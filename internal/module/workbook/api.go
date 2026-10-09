@@ -174,6 +174,8 @@ func (m *Module) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "not_live")
 	case errors.Is(err, ErrRefreshPending):
 		writeError(w, http.StatusConflict, "refresh_pending")
+	case errors.Is(err, ErrStopped):
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
 	case err != nil:
 		log.Printf("[workbook] request a refresh: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal")
