@@ -273,9 +273,10 @@ func TestSetPushLineV2_OneTransactionEntryStaysPending(t *testing.T) {
 	if o, _ := s.OpenTodos("c", 30); titles(o) != "新待辦" {
 		t.Fatalf("open = %s", titles(o))
 	}
-	// a status event, and no entry event (the entry is still pending)
+	// a status event, then one todos event (closings first, then the add), and no entry event (the entry is still pending)
 	ev := r.take()
-	if len(ev) != 1 || ev[0].Kind != EventStatus || ev[0].Status.Status != "進行中" {
+	if len(ev) != 2 || ev[0].Kind != EventStatus || ev[0].Status.Status != "進行中" ||
+		ev[1].Kind != EventTodos || len(ev[1].Todos) != 2 || ev[1].Todos[0].State != TodoDone || ev[1].Todos[1].Title != "新待辦" {
 		t.Fatalf("events = %+v", ev)
 	}
 }
@@ -361,7 +362,8 @@ func TestFinishSkippedV2_AppliesTheTodosToo(t *testing.T) {
 	if d, _ := s.Todos("c", TodoDone, 10, 0); titles(d) != "等回覆" {
 		t.Fatalf("done = %s", titles(d))
 	}
-	if ev := r.take(); len(ev) != 1 || ev[0].Kind != EventEntry || ev[0].Entry.State != StateSkipped {
+	if ev := r.take(); len(ev) != 2 || ev[0].Kind != EventEntry || ev[0].Entry.State != StateSkipped ||
+		ev[1].Kind != EventTodos || len(ev[1].Todos) != 1 || ev[1].Todos[0].Title != "等回覆" {
 		t.Fatalf("events = %+v", ev)
 	}
 }

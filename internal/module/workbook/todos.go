@@ -264,6 +264,7 @@ func (s *Store) SetPushLineV2(entryID int64, p PushLineV2) (res TodoResult, ok b
 	}
 	s.emit(Event{Kind: EventStatus, ConvKey: conv, SessionID: session,
 		Status: StatusRow{ConvKey: conv, Status: p.Status, EntryID: entryID, SessionID: session, UpdatedAt: now}})
+	s.emitTodos(conv, session, res.Changed)
 	return res, true, nil
 }
 
@@ -273,7 +274,7 @@ func (s *Store) SetPushLineV2(entryID int64, p PushLineV2) (res TodoResult, ok b
 func (s *Store) FinishSkippedV2(entryID int64, reason string, u Usage, latencyMS int64, ch TodoChanges, by string) (res TodoResult, ok bool, err error) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	var conv string
+	var conv, session string
 	now := s.now()
 	err = s.inTx(func(tx execer) error {
 		r, err := tx.Exec(`UPDATE wb_entries SET state = 'skipped', reason = ?, usage_in = ?, usage_out = ?, usage_cache_read = ?, latency_ms = ?, updated_at = ?
@@ -284,7 +285,7 @@ func (s *Store) FinishSkippedV2(entryID int64, reason string, u Usage, latencyMS
 		if n, _ := r.RowsAffected(); n != 1 {
 			return errNotPending
 		}
-		if err := tx.QueryRow(`SELECT conv_key FROM wb_entries WHERE id = ?`, entryID).Scan(&conv); err != nil {
+		if err := tx.QueryRow(`SELECT conv_key, session_id FROM wb_entries WHERE id = ?`, entryID).Scan(&conv, &session); err != nil {
 			return fmt.Errorf("read workbook entry %d: %w", entryID, err)
 		}
 		res, err = applyTodoChanges(tx, conv, entryID, ch, by, now)
@@ -297,7 +298,54 @@ func (s *Store) FinishSkippedV2(entryID int64, reason string, u Usage, latencyMS
 		return TodoResult{}, false, err
 	}
 	s.emitEntry(entryID)
+	s.emitTodos(conv, session, res.Changed)
 	return res, true, nil
+}
+
+// EntryTodoChanges is what one entry did to the list (spec §9): the todos it added, and the ones it closed.
+type EntryTodoChanges struct {
+	Added, Done, Dropped []Todo
+}
+
+// TodoChangesByEntry reads, for the given entries, the todos each added and closed. An entry that changed nothing has no
+// key. Both lists are in todo id order (the order the entry applied them in is closings first, but ids keep it stable).
+func (s *Store) TodoChangesByEntry(entryIDs []int64) (map[int64]EntryTodoChanges, error) {
+	out := map[int64]EntryTodoChanges{}
+	if len(entryIDs) == 0 {
+		return out, nil
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(entryIDs)), ",")
+	args := make([]any, 0, 2*len(entryIDs))
+	for i := 0; i < 2; i++ {
+		for _, id := range entryIDs {
+			args = append(args, id)
+		}
+	}
+	rows, err := queryTodos(s.db, `SELECT `+todoCols+` FROM wb_todos WHERE added_entry_id IN (`+marks+`) OR closed_entry_id IN (`+marks+`) ORDER BY id ASC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	want := map[int64]bool{}
+	for _, id := range entryIDs {
+		want[id] = true
+	}
+	for _, t := range rows {
+		if want[t.AddedEntryID] {
+			c := out[t.AddedEntryID]
+			c.Added = append(c.Added, t)
+			out[t.AddedEntryID] = c
+		}
+		if t.ClosedEntryID != 0 && want[t.ClosedEntryID] {
+			c := out[t.ClosedEntryID]
+			if t.State == TodoDone {
+				c.Done = append(c.Done, t)
+			} else if t.State == TodoDropped {
+				c.Dropped = append(c.Dropped, t)
+			}
+			out[t.ClosedEntryID] = c
+		}
+	}
+	return out, nil
 }
 
 var errNotPending = errors.New("workbook entry is not pending")

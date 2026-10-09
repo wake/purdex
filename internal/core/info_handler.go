@@ -92,6 +92,7 @@ func (c *Core) capabilityList() []string {
 	}
 	if c.moduleReady("workbook") {
 		out = append(out, "workbook.v1") // GET /api/workbook/conversations/{provider}/{session_id}, GET /api/workbook/entries, workbook.entry / workbook.status events
+		out = append(out, "workbook.v2") // entries' kind / usage / todo_changes, the conversation's todos, GET …/todos, POST …/refresh, workbook.todos / workbook.refresh_available events
 	}
 	return out
 }

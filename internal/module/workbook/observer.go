@@ -8,6 +8,7 @@ import (
 const (
 	EventEntry  = "entry"  // an entry was inserted, or reached a final state
 	EventStatus = "status" // a conversation's status was written
+	EventTodos  = "todos"  // a turn or a refresh changed the todo list (v2)
 )
 
 // Event is one change the store has just committed. It is about the store's rows, not about who wrote them: a daemon
@@ -18,6 +19,7 @@ type Event struct {
 	SessionID string    // the session whose turn produced the change
 	Entry     Entry     // EventEntry: the row as it is now
 	Status    StatusRow // EventStatus: the row as it is now
+	Todos     []Todo    // EventTodos: the todos that changed, closings first then the adds
 }
 
 // SetObserver registers fn to be told of every committed change (nil clears it). It runs on the writer's goroutine after
@@ -44,6 +46,14 @@ func (s *Store) emit(e Event) {
 		}
 	}()
 	(*p)(e)
+}
+
+// emitTodos announces the todos a committed write changed; nothing changed, nothing is sent.
+func (s *Store) emitTodos(conv, session string, changed []Todo) {
+	if len(changed) == 0 {
+		return
+	}
+	s.emit(Event{Kind: EventTodos, ConvKey: conv, SessionID: session, Todos: changed})
 }
 
 // emitEntry announces the row id as it is now.
