@@ -186,9 +186,15 @@ describe('unattended-api', () => {
       })
 
       it('held rows go through the approval parser; a later daemon\'s kind is skipped; a malformed list is not shown', async () => {
-        testGlobal.fetch.mockResolvedValueOnce(json(view({ held: [{ ...row('h1', 5_000), kind: 'self_relay', state: 'open' }, { kind: 'member_relay', id: 'x' }] })))
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ held: [{ ...row('h1', 5_000), kind: 'self_relay', state: 'open' }, { kind: 'something_new', id: 'x' }] })))
         const v = await getUnattended(hostId)
         expect(v.held?.map((a) => a.id)).toEqual(['h1'])
+        // RQ-2: a member relay is a kind this build knows, and a well-formed row is kept beside the self relay ones
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ held: [{ ...row('h1', 5_000), kind: 'self_relay', state: 'open' }, { ...row('h2', 6_000), kind: 'member_relay', state: 'open', payload: { op_id: 'o', team_id: 't', member_ref: '_b' } }] })))
+        expect((await getUnattended(hostId)).held?.map((a) => a.id)).toEqual(['h1', 'h2'])
+        // a malformed member_relay row is the whole list not shown, like any other malformed row
+        testGlobal.fetch.mockResolvedValueOnce(json(view({ held: [{ kind: 'member_relay', id: 'x' }] })))
+        expect((await getUnattended(hostId)).held).toBeUndefined()
         testGlobal.fetch.mockResolvedValueOnce(json(view({ held: [{ id: 'bad' }] })))
         expect((await getUnattended(hostId)).held).toBeUndefined()
         testGlobal.fetch.mockResolvedValueOnce(json(view({ held: null })))

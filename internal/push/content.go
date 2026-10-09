@@ -7,12 +7,14 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
 const (
 	maxBodyRunes  = 240
 	maxTitleRunes = 120
+	maxNamedRunes = 40 // a session's title inside a longer title
 	maxPayload    = 4096
 )
 
@@ -63,8 +65,22 @@ func Normalise(s string, maxRunes int) string {
 	s = reQuote.ReplaceAllString(s, "")
 	s = reBullet.ReplaceAllString(s, "")
 	s = strings.NewReplacer("`", "", "**", "", "__", "").Replace(s)
+	s = strings.Map(plainRune, s)
 	s = strings.TrimSpace(reSpace.ReplaceAllString(s, " "))
 	return cutRunes(s, maxRunes)
+}
+
+// plainRune keeps a text honest on a lock screen: every kind of space (a line or paragraph separator included) becomes a
+// plain space, and control and format characters (direction marks such as RLO / LRI / PDI, zero-width marks, the BOM)
+// are dropped, so a title written by a session cannot reorder or hide the words around it.
+func plainRune(r rune) rune {
+	switch {
+	case unicode.IsSpace(r):
+		return ' '
+	case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+		return -1
+	}
+	return r
 }
 
 func cutRunes(s string, max int) string {
@@ -88,16 +104,20 @@ func originLabel(o ApprovalOrigin) string {
 
 var texts = map[string]map[string]string{
 	"zh-TW": {
-		"lead":          "%s：%s 申請成為 lead",
-		"self_relay":    "%s：%s 申請接力（已用 %d%%）",
-		"self_relay_by": "核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）",
-		"hook_ask":      "%s：%s 在等你回答",
+		"lead":            "%s：%s 申請成為 lead",
+		"self_relay":      "%s：%s 申請接力（已用 %d%%）",
+		"self_relay_by":   "核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）",
+		"member_relay":    "%s：%s 要幫 member %s 接力（context %d%%）",
+		"member_relay_by": "member 額度用完，要核准嗎？",
+		"hook_ask":        "%s：%s 在等你回答",
 	},
 	"en": {
-		"lead":          "%s: %s requests to become lead",
-		"self_relay":    "%s: %s requests a relay (%d%% used)",
-		"self_relay_by": "Once approved, this session writes its relay file, clears, and takes over in place (about 1 minute)",
-		"hook_ask":      "%s: %s is waiting for your answer",
+		"lead":            "%s: %s requests to become lead",
+		"self_relay":      "%s: %s requests a relay (%d%% used)",
+		"self_relay_by":   "Once approved, this session writes its relay file, clears, and takes over in place (about 1 minute)",
+		"member_relay":    "%s: %s wants to relay member %s (context %d%%)",
+		"member_relay_by": "The member quota is used up. Approve?",
+		"hook_ask":        "%s: %s is waiting for your answer",
 	},
 }
 
@@ -109,7 +129,7 @@ func table(locale string) map[string]string {
 }
 
 // ApprovalContent is the push for a newly opened approval, or false when this approval is not pushed: only lead,
-// self_relay and an answerable hook_ask (not terminal_only) are (spec §5.1).
+// self_relay, member_relay and an answerable hook_ask (not terminal_only) are (spec §5.1).
 func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 	t := table(locale)
 	who := originLabel(a.Origin)
@@ -129,6 +149,29 @@ func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 		_ = json.Unmarshal(a.Payload, &p)
 		c.Title = fmt.Sprintf(t["self_relay"], hostLabel, who, int(math.Round(p.Used)))
 		c.Body = t["self_relay_by"]
+	case "member_relay":
+		// A lead's member relay that waits for a person because the lead's member pool is out (RQ-2): who asks, for whom.
+		// The titles are written by the sessions, so they are normalised and cut like any text from outside.
+		var p struct {
+			LeadTitle   string  `json:"lead_title"`
+			MemberTitle string  `json:"member_title"`
+			MemberRef   string  `json:"member_ref"`
+			Used        float64 `json:"used_percentage"`
+		}
+		_ = json.Unmarshal(a.Payload, &p)
+		lead := Normalise(p.LeadTitle, maxNamedRunes)
+		if lead == "" {
+			lead = Normalise(who, maxNamedRunes) // the origin's own label, written by the session too
+		}
+		if lead == "" {
+			lead = Normalise(a.Origin.Ref, maxNamedRunes)
+		}
+		member := Normalise(p.MemberTitle, maxNamedRunes)
+		if member == "" {
+			member = Normalise(p.MemberRef, maxNamedRunes)
+		}
+		c.Title = fmt.Sprintf(t["member_relay"], hostLabel, lead, member, int(math.Round(p.Used)))
+		c.Body = t["member_relay_by"]
 	case "hook_ask":
 		var p struct {
 			TerminalOnly bool            `json:"terminal_only"`

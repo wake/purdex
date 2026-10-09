@@ -4,9 +4,9 @@
 // this request" action the approval store does not have (a follow-up).
 import { useI18nStore } from '../stores/useI18nStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
-import { approvalSessionLabel } from '../lib/team/approval-format'
+import { approvalSessionLabel, memberRelayNames } from '../lib/team/approval-format'
 import { sinceText } from '../lib/team/time-text'
-import type { Approval } from '../lib/team/types'
+import { clipForDisplay, type Approval } from '../lib/team/types'
 
 export interface HeldRow {
   hostId: string
@@ -23,7 +23,12 @@ export function UnattendedHeldSection({ rows }: { rows: readonly HeldRow[] }) {
       <ul className="flex flex-col gap-1">
         {sorted.map(({ hostId, a }) => (
           <li key={`${hostId}:${a.id}`} data-testid="held-row" className="text-text-primary">
-            {t('unattended.held.row', { host: hostLabel(hostId, hostLookOf(hostId)), session: approvalSessionLabel(a.origin), time: sinceText(a.created_at) })}
+            {a.kind === 'member_relay'
+              ? (() => {
+                  const n = memberRelayNames(a)
+                  return t('unattended.held.row_member', { host: hostLabel(hostId, hostLookOf(hostId)), lead: clipForDisplay(n.lead, 40), member: clipForDisplay(n.member, 40), time: sinceText(a.created_at) })
+                })()
+              : t('unattended.held.row', { host: hostLabel(hostId, hostLookOf(hostId)), session: approvalSessionLabel(a.origin), time: sinceText(a.created_at) })}
           </li>
         ))}
       </ul>

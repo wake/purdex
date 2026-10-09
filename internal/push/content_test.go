@@ -83,6 +83,86 @@ func TestApprovalContent_ThreeKindsInBothLocales(t *testing.T) {
 	}
 }
 
+// RQ-2: a lead's member relay that waits for a person (the lead's member pool is out).
+func TestApprovalContent_MemberRelayInBothLocales(t *testing.T) {
+	a := approvalOpened("member_relay", map[string]any{
+		"op_id": "o", "team_id": "t", "lead_title": "iface-lead", "member_title": "iface-solo", "member_ref": "_bbbbbb", "used_percentage": 72.6,
+	}, "origin-title", "origin-name")
+	c, ok := ApprovalContent(a, "mlab", "zh-TW")
+	if !ok || c.Title != "mlab：iface-lead 要幫 member iface-solo 接力（context 73%）" || c.Body != "member 額度用完，要核准嗎？" || c.Kind != "member_relay" || c.CollapseID != "ap1" || c.ApprovalID != "ap1" {
+		t.Fatalf("member_relay zh-TW = %+v ok %v", c, ok)
+	}
+	c, _ = ApprovalContent(a, "mlab", "en")
+	if c.Title != "mlab: iface-lead wants to relay member iface-solo (context 73%)" || c.Body != "The member quota is used up. Approve?" {
+		t.Fatalf("member_relay en = %+v", c)
+	}
+}
+
+// The lead falls back to the origin's own label, the member to its ref; titles written by a session are normalised and cut.
+func TestApprovalContent_MemberRelayNamesFallBackAndAreCleaned(t *testing.T) {
+	a := approvalOpened("member_relay", map[string]any{"lead_title": "  ", "member_title": "", "member_ref": "_bbbbbb", "used_percentage": 0}, "", "worker-7")
+	c, ok := ApprovalContent(a, "mlab", "en")
+	if !ok || c.Title != "mlab: worker-7 wants to relay member _bbbbbb (context 0%)" {
+		t.Fatalf("fallbacks = %+v", c)
+	}
+	messy := approvalOpened("member_relay", map[string]any{
+		"lead_title": "**bold**\n# head " + strings.Repeat("L", 200), "member_title": "`code`\r\n" + strings.Repeat("M", 200), "used_percentage": 5,
+	}, "", "x")
+	c, _ = ApprovalContent(messy, "mlab", "en")
+	if strings.ContainsAny(c.Title, "\n\r*`#") {
+		t.Fatalf("markup or a newline reached the title: %q", c.Title)
+	}
+	if n := len([]rune(c.Title)); n > maxTitleRunes+1 {
+		t.Fatalf("title has %d runes", n)
+	}
+	// A payload that is not the wire shape still gives a card, not a panic.
+	bad := Approval{ID: "ap2", Kind: "member_relay", Payload: json.RawMessage(`"not an object"`), Origin: ApprovalOrigin{Name: "n"}}
+	if c, ok := ApprovalContent(bad, "mlab", "en"); !ok || !strings.Contains(c.Title, "wants to relay member") {
+		t.Fatalf("bad payload = %+v ok %v", c, ok)
+	}
+}
+
+// Titles are written by sessions: direction and zero-width marks and control characters never reach a lock screen, and a
+// title made only of them is empty (the fallback), not a way to blank the identity. Mutation gate: Normalise keeps them → red.
+func TestNormalise_DropsControlAndFormatCharacters(t *testing.T) {
+	cases := map[string]string{
+		"a\u202eb\u2066c\u2069d":   "abcd", // RLO, LRI, PDI
+		"a\u200bb\u200dc\ufeffd":   "abcd", // zero width space, joiner, BOM
+		"a\x00b\x07c":              "abc",
+		"line one\u2028line two":   "line one line two", // a separator is a space, not a deletion
+		"para\u2029two\u00a0three": "para two three",
+		"tab\tand\nnewline":        "tab and newline",
+		"\u202e":                   "",
+		"\u202e \u200b":            "",
+		"接力\u202e中":                "接力中",
+	}
+	for in, want := range cases {
+		if got := Normalise(in, 100); got != want {
+			t.Errorf("Normalise(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestApprovalContent_MemberRelayAliasesMadeOfControlsFallBackToTrustedNames(t *testing.T) {
+	a := approvalOpened("member_relay", map[string]any{"lead_title": "\u202e\u200b", "member_title": "\u2066", "member_ref": "_bbbbbb", "used_percentage": 1}, "", "worker-7")
+	c, ok := ApprovalContent(a, "mlab", "en")
+	if !ok || c.Title != "mlab: worker-7 wants to relay member _bbbbbb (context 1%)" {
+		t.Fatalf("title = %q ok %v", c.Title, ok)
+	}
+	// The origin's own label is session-written too: cleaned and cut like the payload's titles; a label that is nothing
+	// but controls falls through to the ref the daemon made.
+	evil := approvalOpened("member_relay", map[string]any{"lead_title": "", "member_title": "m", "used_percentage": 1}, "\u202e"+strings.Repeat("X", 200), "")
+	c, _ = ApprovalContent(evil, "mlab", "en")
+	if strings.ContainsRune(c.Title, '\u202e') || len([]rune(c.Title)) > maxTitleRunes+1 {
+		t.Fatalf("title = %q", c.Title)
+	}
+	onlyControls := approvalOpened("member_relay", map[string]any{"member_title": "m", "used_percentage": 1}, "\u202e", "\u200b")
+	c, _ = ApprovalContent(onlyControls, "mlab", "en")
+	if c.Title != "mlab: _abc123 wants to relay member m (context 1%)" {
+		t.Fatalf("title = %q", c.Title)
+	}
+}
+
 func TestApprovalContent_OtherKindsAndTerminalOnlyAreNotPushed(t *testing.T) {
 	for _, kind := range []string{"hook_permission", "adopt", "unknown"} {
 		if _, ok := ApprovalContent(approvalOpened(kind, nil, "t", "n"), "mlab", "en"); ok {

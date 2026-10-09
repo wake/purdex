@@ -1,7 +1,7 @@
 // spa/src/lib/team/approval-format.test.ts — the pdx address the dialog prints for the requesting session, including
 // an origin an unexpected daemon left incomplete: the formatter must not throw on a missing `ref` (F2).
 import { describe, it, expect } from 'vitest'
-import { approvalKindLabel, approvalSessionLabel, closedToastText, formatOriginAddress } from './approval-format'
+import { approvalKindLabel, approvalSessionLabel, closedToastText, formatOriginAddress, memberRelayNames } from './approval-format'
 import type { Origin } from './types'
 
 const origin = (over: Partial<Origin> = {}): Origin => ({
@@ -40,5 +40,41 @@ describe('adopt (U24)', () => {
     } as const
     expect(closedToastText(t, 'mlab', a)).toContain('approval.kind.adopt')
     expect(closedToastText(t, 'mlab', a)).toContain('approval.state.cancelled')
+  })
+})
+
+describe('member_relay', () => {
+  const t = (k: string, vars?: Record<string, unknown>) => (vars ? `${k} ${JSON.stringify(vars)}` : k)
+  const base = { id: 'r', kind: 'member_relay', host_id: 'd', origin: origin(), state: 'open', created_at: 1, deadline_at: 2, lease_until: 3 } as const
+  it('has its own kind label', () => {
+    expect(approvalKindLabel(t, 'member_relay')).toBe('approval.kind.member_relay')
+  })
+  it('names the lead and the member from the payload, falling back to the origin and the member ref', () => {
+    expect(memberRelayNames({ ...base, payload: { lead_title: ' L ', member_title: ' M ', member_ref: '_b', used_percentage: 41.6 } }))
+      .toMatchObject({ lead: 'L', member: 'M', pct: 42 })
+    expect(memberRelayNames({ ...base, payload: { lead_title: '', member_title: '', member_ref: '_b', used_percentage: 0 } }))
+      .toMatchObject({ lead: approvalSessionLabel(origin()), member: '_b', pct: 0 })
+  })
+  it('an alias made only of control or direction characters falls back to the trusted name (it must not display blank)', () => {
+    const n = memberRelayNames({ ...base, payload: { lead_title: '\u202e', member_title: '\u200b \u2066', member_ref: '_b', used_percentage: 5 } })
+    expect(n.lead).toBe(approvalSessionLabel(origin()))
+    expect(n.member).toBe('_b')
+  })
+  it('a session-written origin label of only controls falls through to the ref', () => {
+    const n = memberRelayNames({ ...base, origin: origin({ title: '\u202e', name: '\u200b', ref: '_aaaaaa' }), payload: { lead_title: '', member_title: 'm', member_ref: '_b', used_percentage: 5 } })
+    expect(n.lead).toBe('_aaaaaa')
+  })
+  it('direction characters inside an alias are removed from what is shown', () => {
+    const n = memberRelayNames({ ...base, payload: { lead_title: 'a\u202eb', member_title: 'c\u2066d', member_ref: '_b', used_percentage: 5 } })
+    expect(n.lead).toBe('ab')
+    expect(n.member).toBe('cd')
+  })
+  it('a payload of the wrong shape reads as empty strings and 0%', () => {
+    const n = memberRelayNames({ ...base, payload: { lead_title: 5, member_title: null, used_percentage: Number.NaN } as never })
+    expect(n.member).toBe('')
+    expect(n.pct).toBe(0)
+  })
+  it('a closed member_relay toasts its state, naming the kind', () => {
+    expect(closedToastText(t, 'mlab', { ...base, payload: {}, state: 'timeout' })).toContain('approval.kind.member_relay')
   })
 })
