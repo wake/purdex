@@ -40,6 +40,6 @@ TEST_RUNNER_WRITE_TURN_ROWS=<out path> xcodebuild -project Purdex.xcodeproj -sch
 ```
 
 Made from the fixtures at purdex `0ed33056` (iOS pins the same commit) with purdex-ios commit
-`8c0b09d032f90a0943824b640553daf50fdbb88a` (`github.com/wake/purdex-ios`, `App/Tests/TurnRowsFixtureTests.swift`).
+`8c0b09d032f9` (`github.com/wake/purdex-ios`, PRs #77 / #78, `App/Tests/TurnRowsFixtureTests.swift`).
 When the golden cases change or iOS changes the row rules, regenerate and re-commit this file; the iOS test fails
 until both sides agree.
