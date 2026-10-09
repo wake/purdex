@@ -2,7 +2,6 @@ package teammod
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -134,7 +133,7 @@ func (m *Module) broadcastRelayQuota(root string, q team.RelayQuota) {
 // not fail for it, and the numbers are never used for a decision here).
 func (m *Module) relayQuotaOf(sid string) team.RelayQuota {
 	q, _, err := m.store.RelayQuotaOf(sid)
-	if err != nil && !errors.Is(err, ErrLineageCycle) {
+	if err != nil {
 		m.logf("[team] relay quota of %s: %v", sid, err)
 	}
 	return q

@@ -568,6 +568,10 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 	if line := teamLine(v.Team); line != "" {
 		fmt.Fprintln(stdout, line)
 	}
+	// #2062: the lead's own automatic-relay quota and its member pool, read-only (the user sets them in Purdex.app).
+	if line := quotaLine(v.LeadRelayQuota); line != "" {
+		fmt.Fprintln(stdout, line)
+	}
 	rows := [][]string{strings.Split("ADDRESS\tREF\tTITLE\tSTATE\tCTX\tCPU\tMEM\tMODEL\tEFFORT\tTASK\tLAST\tCWD\tTMUX", "\t")}
 	for _, m := range v.Members {
 		pct, model, effort := "", "", ""
@@ -604,6 +608,16 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		return ExitError
 	}
 	return ExitOK
+}
+
+// quotaLine is `pdx team`'s relay-quota line: the lead's own self_left (automatic relays left while unattended mode is
+// on, with the quota rule) and its member pool; "" from a daemon that does not send it. Numbers only: nothing in it is
+// text from elsewhere.
+func quotaLine(q *team.RelayQuota) string {
+	if q == nil {
+		return ""
+	}
+	return fmt.Sprintf("relay quota: 自己 %d 次 · member 池 %d 次", q.SelfLeft, q.MemberPoolLeft)
 }
 
 // teamLine is the first line of `pdx team` (name D-N9, label D-L8): the name,

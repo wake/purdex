@@ -214,3 +214,23 @@ func TestTeamCmd_ShowsReleasedState(t *testing.T) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
+
+// RQ-1c: `pdx team` prints the lead's relay quota under the name line, numbers only; a daemon that does not send it
+// prints no such line; --json is the daemon's view as it is.
+func TestTeamCmd_PrintsTheLeadsRelayQuota(t *testing.T) {
+	v := fakeView()
+	v.LeadRelayQuota = &team.RelayQuota{SelfLeft: 3, MemberPoolLeft: 1, Rev: 4}
+	d := &fakeTeamCmdDaemon{view: answer{body: v}}
+	code, stdout, stderr := driveTeamCmd(t, runTeamCmd, d)
+	if code != ExitOK || !strings.Contains(stdout, "relay quota: 自己 3 次 · member 池 1 次\n") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, _ = driveTeamCmd(t, runTeamCmd, d, "--json")
+	if code != ExitOK || !strings.Contains(stdout, `"lead_relay_quota":{"self_left":3,"member_pool_left":1,"rev":4}`) {
+		t.Fatalf("--json = %q", stdout)
+	}
+	old := &fakeTeamCmdDaemon{view: answer{body: fakeView()}} // no lead_relay_quota
+	if _, stdout, _ := driveTeamCmd(t, runTeamCmd, old); strings.Contains(stdout, "relay quota") {
+		t.Fatalf("an older daemon's view printed a quota line: %q", stdout)
+	}
+}
