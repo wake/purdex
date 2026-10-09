@@ -59,6 +59,34 @@ func revisionOf(t *testing.T, m *Module) string {
 
 // A stored value that does not read is an error for the reader (the caller picks its own fallback), never a silent 8,
 // and the GET shows it as invalid with the default items.
+// Strictness is the same for a stored value as for a PUT body: a duplicate member is invalid, not "the last one wins".
+// Mutation gate: drop rejectDuplicateKeys from normalizeWorkbook → red.
+func TestWorkbook_AStoredDuplicateKeyIsInvalid(t *testing.T) {
+	m := newTestModule(t)
+	_, _, err := m.store.Put(KeyWorkbook, 0, func() (json.RawMessage, error) {
+		return json.RawMessage(`{"push_wait_s":0,"push_wait_s":30}`), nil
+	})
+	require.NoError(t, err)
+	_, err = m.WorkbookSettings()
+	assert.Error(t, err)
+	rr := serve(m, http.MethodGet, "/api/hostconfig", "")
+	var got map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	assert.JSONEq(t, `{"items":{"push_wait_s":8},"revision":1,"invalid":true}`, string(got["workbook"]))
+	// and a duplicate PUT body is a 400
+	rr = serve(m, http.MethodPut, "/api/hostconfig/workbook", `{"items":{"push_wait_s":1,"push_wait_s":2},"baseRevision":1}`)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+// 8.0 and 1e1 are numbers that are not plain integers in the wire format: refused with the fractions.
+func TestWorkbook_RefusesNonIntegerSpellings(t *testing.T) {
+	m := newTestModule(t)
+	for _, v := range []string{`8.0`, `1e1`, `99999999999999999999`, `0x8`, `"8"`} {
+		rr := serve(m, http.MethodPut, "/api/hostconfig/workbook", `{"items":{"push_wait_s":`+v+`},"baseRevision":0}`)
+		assert.Equal(t, http.StatusBadRequest, rr.Code, v)
+	}
+}
+
 func TestWorkbook_AStoredGarbageValueIsAnError(t *testing.T) {
 	m := newTestModule(t)
 	_, _, err := m.store.Put(KeyWorkbook, 0, func() (json.RawMessage, error) { return json.RawMessage(`{"push_wait_s":"x"}`), nil })

@@ -24,6 +24,9 @@ var workbookDefaultJSON = func() string {
 // normalizeWorkbook validates a PUT body (and a stored value): an object of exactly {"push_wait_s": integer 0–30}. A
 // misspelt or missing field is refused, so a save never means "left out = default".
 func normalizeWorkbook(raw json.RawMessage) (workbooksettings.Settings, error) {
+	if err := rejectDuplicateKeys(raw); err != nil { // a stored value is checked like a PUT body: the last duplicate must not win
+		return workbooksettings.Settings{}, err
+	}
 	var fields map[string]json.RawMessage
 	if firstByte(raw) != '{' || json.Unmarshal(raw, &fields) != nil {
 		return workbooksettings.Settings{}, errors.New("items must be a JSON object")
