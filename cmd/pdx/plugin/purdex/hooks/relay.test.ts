@@ -2435,7 +2435,7 @@ test('/lead with the daemon unreachable says so and submits nothing', async ($, 
 test('/lead otherwise answers and submits one prompt: foreground, timeout 600000, at once, the skill', async ($, on) => {
   const f = leadWorld(on, () => NOT_LEAD)
   await start($, f)
-  expect((await leadCmd($, '')).text).toBe('已請這個 session 申請 lead，請到 Purdex App 核准')
+  expect((await leadCmd($, '')).text).toBe('已請這個 session 申請 lead，等待核准')
   await f.clock.advance(50)
   expect(f.submits.length).toBe(1)
   const text = f.submits[0].text
@@ -2444,6 +2444,7 @@ test('/lead otherwise answers and submits one prompt: foreground, timeout 600000
   expect(text).toContain('timeout: 600000')
   expect(text).toContain('不要放背景')
   expect(text).toContain('不要先判斷工作夠不夠大')
+  expect(text).toContain('[--max-members N]')
   expect(text).not.toContain('使用者打在 /lead 後的補充') // no note, no block
 })
 
@@ -2463,7 +2464,7 @@ test('a note over 200 bytes is cut at a character boundary and the reply says so
   const f = leadWorld(on, () => NOT_LEAD)
   await start($, f)
   const r = await leadCmd($, '接'.repeat(100)) // 300 bytes
-  expect(r.text).toBe('已請這個 session 申請 lead，請到 Purdex App 核准（補充超過 200 bytes，已截斷）')
+  expect(r.text).toBe('已請這個 session 申請 lead，等待核准（補充超過 200 bytes，已截斷）')
   await f.clock.advance(50)
   const quoted = f.submits[0].text.split('「')[1].replace('」', '')
   expect(quoted).toBe('接'.repeat(66)) // 198 bytes: the 67th character would be 201
@@ -2475,7 +2476,7 @@ test('/lead asks the daemon even when hello once said member: the daemon’s ans
   const base = pdxWith([], 'member')
   const f = relayWorld(on, { pdx: (argv) => (argv[0] === 'team' ? NOT_LEAD : base(argv)) })
   await start($, f)
-  expect((await leadCmd($, '')).text).toBe('已請這個 session 申請 lead，請到 Purdex App 核准')
+  expect((await leadCmd($, '')).text).toBe('已請這個 session 申請 lead，等待核准')
   await f.clock.advance(50)
   expect(f.submits.length).toBe(1)
 })
@@ -2549,7 +2550,7 @@ test('two /lead at once, the team query slow: one query, one prompt', async ($, 
   const a = leadCmd($, '')
   const b = leadCmd($, '')
   release()
-  expect([(await a).text, (await b).text].sort()).toEqual(['已申請過 lead，等待回應中', '已請這個 session 申請 lead，請到 Purdex App 核准'].sort())
+  expect([(await a).text, (await b).text].sort()).toEqual(['已申請過 lead，等待回應中', '已請這個 session 申請 lead，等待核准'].sort())
   await f.clock.advance(50)
   expect(f.submits.length).toBe(1)
   expect(f.argvs.filter((x) => x[1] === 'team').length).toBe(1)
