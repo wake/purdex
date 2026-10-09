@@ -21,6 +21,8 @@ var ErrNoSuchApproval = errors.New("no such approval")
 // Store is the SQLite persistence of approval requests.
 type Store struct {
 	db *sql.DB
+	// localHostID is this daemon's host id (set at Init): the sweepers look at the rows that live on it.
+	localHostID string
 
 	// failBeforeCommandLog, when set, fails ApplyTeamCommand after the command's changes and before its log insert
 	// (test seam for the one-transaction crash cut). nil in production.

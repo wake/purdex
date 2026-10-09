@@ -41,6 +41,15 @@ const (
 	MemberReleased MemberState = "released"
 )
 
+// The states of a REMOTE member row on the lead's host (cross-host team spec §4.2): the lead host is the source of truth
+// and a command to the member host is in flight in each of the first three. Seats count all of them.
+const (
+	MemberJoining   MemberState = "joining"   // the adopt is approved and sent; the member host has not answered
+	MemberReleasing MemberState = "releasing" // the lead let it go; the release is in flight
+	MemberKilling   MemberState = "killing"   // the lead killed it; the kill is in flight
+	MemberFailed    MemberState = "failed"    // the adopt was refused or void; the seat is free
+)
+
 // SpawnState is a spawn op's state. A running op is resumed at boot from
 // its Step (spec §9.3).
 type SpawnState string

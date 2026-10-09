@@ -51,7 +51,7 @@ func (m *Module) startCommandPump() {
 		return
 	}
 	if m.outcomes == nil {
-		m.outcomes = noOutcomes{}
+		m.outcomes = remoteOutcomes{m: m}
 	}
 	out := &commandOutbox{s: m.store, out: m.outcomes, now: m.now, unpair: m.unpairHost, onChange: m.rosterChanged}
 	m.cmdPump = newOutboxPump("commands", m.cmdCaller, out, m.now, m.logf, m.stopCtx, &m.sweepWG)

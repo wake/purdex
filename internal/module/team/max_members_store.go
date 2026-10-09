@@ -58,9 +58,10 @@ func (s *Store) SetMaxMembers(teamID string, max int) (MaxMembersResult, error) 
 
 // seatsExpr is THE seat rule, with TEAM and EXCEPT standing for the team id expression and the spawn op id to leave
 // out. seatsTakenSQL (one team) and seatsAllLiveSQL (every live team) are both made from it, so they cannot drift.
-// Each active member counts once; a running spawn op counts only while no active member row carries its spawn_op,
+// Each active member counts once, and so does a remote row whose command is in flight (joining, releasing, killing: cross-host
+// spec §4.2 — the seat is taken until the member host has answered); a running spawn op counts only while no active member row carries its spawn_op,
 // because spawnFinish inserts the member before it moves the op to done, and in that window one seat is both.
-const seatsExpr = `(SELECT COUNT(*) FROM team_members WHERE team_id = TEAM AND state = 'active') +
+const seatsExpr = `(SELECT COUNT(*) FROM team_members WHERE team_id = TEAM AND state IN ('active', 'joining', 'releasing', 'killing')) +
 	(SELECT COUNT(*) FROM spawn_ops o WHERE o.team_id = TEAM AND o.state = 'running' AND o.id <> EXCEPT
 		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.spawn_op = o.id AND m.state = 'active'))`
 
