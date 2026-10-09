@@ -50,6 +50,22 @@ describe('parseRosterEvent', () => {
     expect(parse({ host_id: '' }).host_id).toBe('') // "" is the lead's host and stays
   })
 
+  it('a host_id that was sent but cannot be trusted is marked host_untrusted, never read as local', () => {
+    const parse = (extra: Record<string, unknown>) => {
+      const r = parseRosterEvent(v({ op: 'snapshot', teams: [{ ...team, members: [{ ...member, ...extra }] }] }))
+      if (typeof r === 'string') throw new Error(r)
+      return r.teams[0].members[0]
+    }
+    for (const bad of ['d'.repeat(129), 'a\nb', 'a\u202eb', 7, true, { x: 1 }, ['d']]) {
+      const m = parse({ host_id: bad, host_alias: 'b26' })
+      expect(m.host_untrusted, JSON.stringify(bad)).toBe(true)
+      expect('host_id' in m).toBe(false)
+    }
+    for (const fine of [{}, { host_id: '' }, { host_id: 'dm-b' }, { host_alias: 'only-alias' }]) {
+      expect('host_untrusted' in parse(fine), JSON.stringify(fine)).toBe(false)
+    }
+  })
+
   it('accepts an already-parsed value', () => {
     expect(parseRosterEvent({ op: 'changed', teams: [team] })).toEqual({ op: 'changed', teams: [team] })
   })

@@ -375,6 +375,17 @@ describe('selectTeamViews — a seat knows its own host (TI-2a)', () => {
     expect(views[0].members[0]).toMatchObject({ hostId: null, hostAlias: 'b26', tabId: null, workspaceId: null, paneIndex: null })
   })
 
+  it('a member whose host_id was sent but untrusted is hostId null, never the lead\'s host', () => {
+    const bad: RosterMember = { ...mem('R', 1, 'same-tm'), host_untrusted: true, host_alias: 'b26' }
+    const { views, of } = viewsOf(input({
+      rosterByHost: { h1: [team('t1', sess('L', 'lead-tm'), [bad])] }, hostIdByDaemonId: { 'dm-b': 'h2' },
+      tabs: [tab('onLead', leaf('h1', 'same-tm'))], workspaces: [ws('w1', ['onLead'])],
+    }))
+    expect(views[0].members[0]).toMatchObject({ hostId: null, hostAlias: 'b26', tabId: null })
+    expect(of('onLead')).toBeNull()
+    expect([...seatLookup(views).keys()]).toEqual(['h1\u0000lead-tm'])
+  })
+
   it('two hosts sharing a daemon id leave the seat unmapped', () => {
     const map = daemonIdMap({
       h2: { daemonId: 'dm-b' }, h3: { daemonId: 'dm-b' }, h4: { daemonId: 'dm-c' }, h5: {},

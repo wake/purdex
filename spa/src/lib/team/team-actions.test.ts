@@ -146,6 +146,20 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
     expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBe('w2')
   })
 
+  it('an untrusted host_id opens nothing, even when the lead\'s host has a session of that name', () => {
+    seedRemote(true)
+    const t = useTeamRosterStore.getState().byHost[HOST][0]
+    const bad = { ...member('R', 9, 'a-tm'), host_untrusted: true } // no alias: the toast still says something
+    useTeamRosterStore.setState({ byHost: { [HOST]: [{ ...t, members: [...t.members.filter((m) => m.session_id !== 'R'), bad] }] } })
+    const before = Object.keys(useTabStore.getState().tabs)
+    expect(currentTeamState().views[0].members.find((m) => m.session.session_id === 'R')).toMatchObject({ hostId: null, tabId: null })
+    expect(currentTeamState().index.bySession.get(`${HOST}\u0000a-tm`)?.seat.session.session_id).toBe('A') // never R
+    expect(openTeamSeat(KEY, 'R')).toEqual({ outcome: 'no-host', tabId: null })
+    expect(Object.keys(useTabStore.getState().tabs)).toEqual(before)
+    expect(useUndoToast.getState().toast?.message).toMatch(/\S/)
+    expect(useUndoToast.getState().toast?.message).not.toContain('{{')
+  })
+
   it('a remote seat with a mapped host opens its tab on that host, after the group\'s last tab in the lead\'s workspace', () => {
     seedRemote(true)
     const r = openTeamSeat(KEY, 'R')

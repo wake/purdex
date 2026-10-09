@@ -34,6 +34,9 @@ export interface RosterSession {
    *  sends neither. */
   host_id?: string
   host_alias?: string
+  /** Set by parsing (never on the wire) when a non-empty `host_id` was sent but failed validation: the member lives on
+   *  SOME other host that cannot be named, so it is never attributed to the lead's host. Absent otherwise. */
+  host_untrusted?: boolean
 }
 
 /** An active member: its session plus how it joined. `state` is `active` today; a cross-host team adds `joining` /
@@ -110,12 +113,17 @@ const HOST_ID_MAX = 128
  *  and free of control / formatting characters (the alias also non-blank). Anything else is dropped (the field is absent),
  *  never a reason to drop the frame. */
 function cleanHost<T extends RosterSession>(s: T): T {
-  const { host_id, host_alias, ...rest } = s
+  const { host_id, host_alias, host_untrusted: _wire, ...rest } = s
+  void _wire // computed here, never taken from the wire
   const idOk = isStr(host_id) && host_id.length <= HOST_ID_MAX && !UNPRINTABLE.test(host_id)
+  // A host_id that was sent (not absent, not "") but failed the check says "another host, whom we cannot name": dropping it
+  // would read as the lead's own host, so the seat is marked instead.
+  const untrusted = host_id !== undefined && host_id !== '' && !idOk
   const aliasOk = isStr(host_alias) && host_alias.length <= HOST_ALIAS_MAX && !UNPRINTABLE.test(host_alias) && host_alias.trim() !== ''
   return {
     ...rest,
     ...(idOk ? { host_id } : {}),
+    ...(untrusted ? { host_untrusted: true } : {}),
     ...(aliasOk ? { host_alias } : {}),
   } as T
 }

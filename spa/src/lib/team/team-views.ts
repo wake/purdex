@@ -206,8 +206,9 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
     extra: { origin: string | null; state: string; joinedAt: number }, preferred: ReadonlyArray<string | null>,
   ): Seat => {
     // A member whose `host_id` is another host's lives there: the SPA host that daemon id maps to, else null (not configured).
-    const remote = !!session.host_id && session.host_id !== team.host_id
-    const hostId = remote ? input.hostIdByDaemonId?.[session.host_id!] ?? null : leadHostId
+    const untrusted = session.host_untrusted === true // a host_id was sent but cannot be trusted: another host, unnamed
+    const remote = untrusted || (!!session.host_id && session.host_id !== team.host_id)
+    const hostId = untrusted ? null : remote ? input.hostIdByDaemonId?.[session.host_id!] ?? null : leadHostId
     const found = session.tmux_session && hostId !== null
       ? chooseTab(index.get(sessionKey(hostId, session.tmux_session)), preferred, workspaceOrder)
       : null

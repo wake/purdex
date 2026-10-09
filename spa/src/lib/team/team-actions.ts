@@ -50,7 +50,8 @@ function notListed(): void {
 }
 
 function noHost(seat: Seat): void {
-  useUndoToast.getState().show(useI18nStore.getState().t('team.seat_no_host', { alias: seat.hostAlias }))
+  const { t } = useI18nStore.getState()
+  useUndoToast.getState().show(t('team.seat_no_host', { alias: seat.hostAlias || t('team.seat_host_unknown') }))
 }
 
 /** The seat's session as ITS host lists it (by tmux name), or null while the list does not hold it. */
