@@ -89,6 +89,19 @@ describe('who the panel shows for', () => {
 })
 
 describe('full mode', () => {
+  it('pressing a row keeps the keyboard in the terminal (mousedown is default-prevented, Enter still opens)', () => {
+    scene()
+    mount()
+    const term = document.createElement('textarea') // a stand-in for the terminal's input
+    document.body.appendChild(term)
+    term.focus()
+    const row = rows()[0]
+    // A browser moves focus to the focusable row unless mousedown is default-prevented; jsdom does not, so do it by hand.
+    if (fireEvent.mouseDown(row)) row.focus()
+    expect(document.activeElement).toBe(term)
+    term.remove()
+  })
+
   it('lead row is first and not draggable; members are', () => {
     scene()
     mount()
@@ -228,6 +241,31 @@ describe('resize and enlarge', () => {
     fireEvent.mouseUp(document)
     expect(useTeamUiStore.getState().panel.width).toBe(392)
     expect(area().style.width).toBe('392px')
+  })
+
+  it('a drag cut short by the panel going away leaves no draft and commits nothing later', () => {
+    scene()
+    const { unmount } = mount()
+    drag(500, 420, false)
+    unmount()
+    fireEvent.mouseMove(document, { clientX: 100 })
+    fireEvent.mouseUp(document)
+    expect(useTeamUiStore.getState().panel.width).toBe(312)
+    expect(document.body.style.cursor).toBe('')
+    mount()
+    expect(area().style.width).toBe('312px')
+  })
+
+  it('enlarging in the middle of a drag drops the draft: nothing commits and the width is unchanged', () => {
+    scene()
+    mount()
+    drag(500, 420, false)
+    act(() => { useTeamUiStore.getState().setPanelExpanded(true) })
+    fireEvent.mouseMove(document, { clientX: 100 })
+    fireEvent.mouseUp(document)
+    act(() => { useTeamUiStore.getState().setPanelExpanded(false) })
+    expect(useTeamUiStore.getState().panel.width).toBe(312)
+    expect(area().style.width).toBe('312px')
   })
 
   it('resize clamps to 280-720', () => {

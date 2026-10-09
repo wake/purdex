@@ -7,7 +7,7 @@
 //
 // Resize: the LEFT edge, draft-then-commit (the ActivityBarWide pattern): a drag only moves a local draft width and the
 // store is written once on mouseup. The area never calls focus(): the terminal keeps the keyboard.
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RegionResize } from '../RegionResize'
 import { useTabStore } from '../../stores/useTabStore'
 import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, useTeamUiStore } from '../../stores/useTeamUiStore'
@@ -25,6 +25,10 @@ export function TeamPanelArea() {
   const { width, expanded } = useTeamUiStore((s) => s.panel)
   const [draft, setDraft] = useState<number | null>(null)
   const draftRef = useRef<number | null>(null)
+  // The handle unmounts when the panel is enlarged (or goes away): a half-done drag is abandoned, so drop its draft.
+  useEffect(() => {
+    if (expanded) { draftRef.current = null; setDraft(null) }
+  }, [expanded])
 
   const view = display ? panelView(activeTabId, { workbookTabs, panelTeam: display.panelTeam(activeTabId), teamDrill }) : null
   if (!display || !view || view.kind !== 'team') return null
