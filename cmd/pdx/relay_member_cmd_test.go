@@ -96,7 +96,8 @@ func TestRelayCmd_RefDispatchAndUnknownWordIs2(t *testing.T) {
 		}
 	}
 	n := len(d.creates)
-	for _, bad := range []string{"dance", "abc123", "_" + "abc12", "_ABC123", "_" + "abc1234", "purdex-x"} // the two short/long refs are built, not spelled: fixture_shapes_test forbids v3-length ref literals {
+	// the short and the long ref are built, not spelled: fixture_shapes_test forbids v3-length ref literals
+	for _, bad := range []string{"dance", "abc123", "_" + "abc12", "_ABC123", "_" + "abc1234", "purdex-x"} {
 		if code, out, errs := driveMemberRelay(t, d, "/tmp/x.sock", bad); code != ExitUsage || out != "" || !strings.Contains(errs, "unknown subcommand") {
 			t.Errorf("%q: exit %d out=%q err=%q, want 2", bad, code, out, errs)
 		}
