@@ -58,7 +58,7 @@ func TestNewOuterHandler_RelayQuotaIsAdminOnly(t *testing.T) {
 	stub := func(w http.ResponseWriter, _ *http.Request) { ran++; w.WriteHeader(http.StatusOK) }
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT "+team.RelayQuotaRoute, stub)
-	outer := newOuterHandler(c, mux, nil)
+	outer := newOuterHandler(c, mux, mux, nil)
 	for _, tc := range []struct {
 		bearer string
 		want   int

@@ -57,29 +57,12 @@ func (r registryTracker) Track(next http.Handler) http.Handler {
 	})
 }
 
-// interimDeviceScope keeps a device principal to two routes until QP-1b's default-deny allow-list replaces it: reading
-// /api/info (how a phone checks a host) and renaming itself. Everything else answers 403 device_forbidden, so a token
-// minted before the real scope exists reaches no config, file, restart, session or team route and cannot fetch a WebSocket
-// ticket (a ticket carries no principal yet). Admin requests carry no principal and are untouched.
-func interimDeviceScope(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
-			ok := (r.Method == http.MethodGet && r.URL.Path == "/api/info") || (r.Method == http.MethodPut && r.URL.Path == "/api/devices/self")
-			if !ok {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				_, _ = w.Write([]byte(`{"error":"device_forbidden","detail":"this route is not available to a paired phone"}`))
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 // newOuterHandler builds the daemon's outer http.Handler: /api/health
 // (CORS only), the /api/peers prefix chain (PeerAuth, no TokenAuth) and the
 // general chain (today's, minus PeerRouteAuth) for everything else.
-func newOuterHandler(c *core.Core, mux http.Handler, allow []string) http.Handler {
+// routes is the ServeMux the modules register on (the device scope asks it which pattern a request would reach); inner is
+// what serves the request (normally the same mux). A nil routes refuses every device request.
+func newOuterHandler(c *core.Core, routes *http.ServeMux, inner http.Handler, allow []string) http.Handler {
 	tokenFn := func() string {
 		c.CfgMu.RLock()
 		defer c.CfgMu.RUnlock()
@@ -91,9 +74,9 @@ func newOuterHandler(c *core.Core, mux http.Handler, allow []string) http.Handle
 	// peers module's rotation note) are one critical section under
 	// CfgMu.RLock, so a config writer cannot interleave between them.
 	peerChain := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
-		middleware.PeerAuth(tokenFn, peersmod.HostMatcher(c), peersmod.HostRoutePolicy)(mux))))
+		middleware.PeerAuth(tokenFn, peersmod.HostMatcher(c), peersmod.HostRoutePolicy)(inner))))
 	general := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(
-		middleware.TokenAuthWith(tokenFn, c.Tickets, registryDevices{c})(registryTracker{c}.Track(interimDeviceScope(mux))))))
+		middleware.TokenAuthWith(tokenFn, c.Tickets, registryDevices{c})(registryTracker{c}.Track(deviceScope(routes, inner))))))
 
 	outer := http.NewServeMux()
 	outer.Handle("GET /api/health", middleware.CORS(http.HandlerFunc(c.HandleHealth)))

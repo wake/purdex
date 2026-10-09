@@ -33,6 +33,8 @@ func TestPdx_NoCommandOrModCallTurnsUnattendedOn(t *testing.T) {
 		}
 		s := string(b)
 		switch {
+		case path == "device_scope.go":
+			// The phone allow-list names the route it lets the App use; that is a permission, not a caller.
 		case strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go"):
 			if strings.Contains(s, route) || strings.Contains(s, "UnattendedRoute") {
 				t.Errorf("%s names the unattended route: no pdx code may call it", path)

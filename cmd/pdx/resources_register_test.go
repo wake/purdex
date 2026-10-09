@@ -23,7 +23,7 @@ func TestRegisterServeModules_MountsResources(t *testing.T) {
 	mux := http.NewServeMux()
 	c.RegisterCoreRoutes(mux)
 	c.RegisterRoutes(mux)
-	outer := newOuterHandler(c, mux, nil)
+	outer := newOuterHandler(c, mux, mux, nil)
 
 	res := doRequest(t, outer, http.MethodGet, "/api/resources", "t")
 	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())

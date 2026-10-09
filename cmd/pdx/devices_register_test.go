@@ -23,7 +23,7 @@ func callWith(t *testing.T, c *core.Core, method, path, bearer string, body any)
 	mux := http.NewServeMux()
 	c.RegisterCoreRoutes(mux)
 	c.RegisterRoutes(mux)
-	outer := newOuterHandler(c, mux, []string{"127.0.0.1"})
+	outer := newOuterHandler(c, mux, mux, []string{"127.0.0.1"})
 	var raw []byte
 	if body != nil {
 		raw, _ = json.Marshal(body)
@@ -88,34 +88,4 @@ func TestRegisterServeModules_DevicesSoftFailKeepsTheDaemonUp(t *testing.T) {
 	var body struct{ Capabilities []string }
 	require.NoError(t, json.Unmarshal(info.Body.Bytes(), &body))
 	assert.NotContains(t, body.Capabilities, "devices.v1")
-}
-
-// Until QP-1b's allow-list, a device token reaches /api/info and its own rename and nothing else: no config, no file
-// access, no restart, no sessions, no team routes, no WebSocket ticket, no device management. The admin token reaches all.
-// Mutation gates: drop the interim scope → red; allow ws-ticket → red.
-func TestDeviceTokenInterimScope(t *testing.T) {
-	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir(), Token: "t"}})
-	require.NoError(t, registerServeModules(c, nil, nil))
-	require.NoError(t, c.InitModules())
-	mint := callWith(t, c, http.MethodPost, "/api/devices", "t", map[string]any{
-		"pairing_id": "00000000-0000-4000-8000-00000000000a", "label": "iPhone", "client": map[string]any{"kind": "app", "label": "Purdex.app"},
-	})
-	require.Equal(t, http.StatusCreated, mint.Code, mint.Body.String())
-	var m struct{ ID, Token string }
-	require.NoError(t, json.Unmarshal(mint.Body.Bytes(), &m))
-
-	assert.Equal(t, http.StatusOK, callWith(t, c, http.MethodGet, "/api/info", m.Token, nil).Code)
-	assert.Equal(t, http.StatusOK, callWith(t, c, http.MethodPut, "/api/devices/self", m.Token, map[string]any{"label": "iPhone 8"}).Code)
-	for _, rt := range [][2]string{
-		{http.MethodPut, "/api/config"}, {http.MethodPost, "/api/ws-ticket"}, {http.MethodGet, "/api/sessions"}, {http.MethodPost, "/api/sessions"},
-		{http.MethodPost, "/api/fs/delete"}, {http.MethodGet, "/api/devices"}, {http.MethodPost, "/api/devices"}, {http.MethodDelete, "/api/devices/" + m.ID},
-		{http.MethodGet, "/api/team/approvals"}, {http.MethodPost, "/api/dev/restart"}, {http.MethodGet, "/api/info/extra"}, {http.MethodPost, "/api/info"},
-	} {
-		rec := callWith(t, c, rt[0], rt[1], m.Token, map[string]any{})
-		assert.Equal(t, http.StatusForbidden, rec.Code, "%s %s with a device token: %s", rt[0], rt[1], rec.Body.String())
-		assert.Contains(t, rec.Body.String(), "device_forbidden")
-	}
-	// The admin token is not scoped.
-	assert.Equal(t, http.StatusOK, callWith(t, c, http.MethodGet, "/api/devices", "t", nil).Code)
-	assert.NotEqual(t, http.StatusForbidden, callWith(t, c, http.MethodPost, "/api/ws-ticket", "t", nil).Code)
 }

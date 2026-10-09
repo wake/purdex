@@ -42,7 +42,7 @@ func TestRegisterServeModules_NexDisabled(t *testing.T) {
 	c.RegisterCoreRoutes(mux)
 	c.RegisterRoutes(mux)
 
-	outer := newOuterHandler(c, mux, []string{"127.0.0.1"})
+	outer := newOuterHandler(c, mux, mux, []string{"127.0.0.1"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/nex/v1/capabilities", nil)
 	req.RemoteAddr = "127.0.0.1:54321"

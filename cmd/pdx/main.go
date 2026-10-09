@@ -353,7 +353,7 @@ func runServe(args []string) *reexecPlan {
 	// It still needs CORS so cross-origin SPA requests succeed.
 	// /api/peers gets its own chain (PeerAuth, no TokenAuth) so a
 	// configured peer host's inbound token can authenticate.
-	outerMux := newOuterHandler(c, mux, cfg.Allow)
+	outerMux := newOuterHandler(c, mux, mux, cfg.Allow)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Bind, cfg.Port)
 	srv := newHTTPServer(addr, outerMux)
