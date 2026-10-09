@@ -2256,5 +2256,7 @@
   "peers.team.end_body": "{{alias}} has {{count}} member(s) still running on this host. End them too?",
   "peers.team.end_confirm": "End these members and turn off",
   "peers.team.end_keep": "Turn off only, keep these members",
-  "peers.team.end_failed": "Turned off, but some members could not be ended: {{details}}"
+  "peers.team.leftover": "Consent for {{alias}} is off, but {{count}} member(s) are still live.",
+  "peers.team.leftover_error": "Consent for {{alias}} is off, but members may still be live ({{details}}).",
+  "peers.team.retry": "Retry ending"
 }

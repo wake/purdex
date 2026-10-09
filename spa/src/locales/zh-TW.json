@@ -2256,5 +2256,7 @@
   "peers.team.end_body": "{{alias}} 目前在這台有 {{count}} 個 member 仍在執行。要一併結束它們嗎？",
   "peers.team.end_confirm": "結束這些 member 並關閉",
   "peers.team.end_keep": "只關閉，保留這些 member",
-  "peers.team.end_failed": "已關閉，但有 member 結束失敗：{{details}}"
+  "peers.team.leftover": "{{alias}} 的同意已關閉，但仍有 {{count}} 個 member 在線。",
+  "peers.team.leftover_error": "{{alias}} 的同意已關閉，但可能仍有 member 在線（{{details}}）。",
+  "peers.team.retry": "重試結束"
 }

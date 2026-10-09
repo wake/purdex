@@ -16,6 +16,8 @@ import {
 import { ConfirmDialog } from '../../ConfirmDialog'
 import { errText, type BoundRunFlow } from './flow'
 
+const CLEANUP_ROUNDS = 3
+
 interface Props {
   hostId: string
   row: PeerHostRow
@@ -29,6 +31,7 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
   const [rootsError, setRootsError] = useState('')
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<RemoteMemberView[] | null>(null)
+  const [leftover, setLeftover] = useState('')
   const alias = row.alias
   const allowed = row.allow_team === true
   // Lenient: a daemon without the field (or a null) means off / no folders.
@@ -52,9 +55,43 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
     })
   }
 
-  const turnOff = (members: RemoteMemberView[], end: boolean) => {
+  // The cleanup after consent is off, in the CLI's order: list what is live NOW (not what the confirm dialog saw -
+  // a member may have opened meanwhile), keep this peer's, end each (409 = already ended), then list again to
+  // confirm. At most CLEANUP_ROUNDS end rounds; whatever is still there afterwards, or any listing/ending failure,
+  // is left as an explicit "consent is off but members may remain" with a Retry that runs only this cleanup.
+  const cleanup = async (): Promise<string> => {
+    try {
+      for (let round = 0; ; round++) {
+        const live = row.host_id ? (await listRemoteMembers(hostId)).filter((m) => m.lead_host_id === row.host_id) : []
+        if (live.length === 0) return ''
+        if (round === CLEANUP_ROUNDS) return t('peers.team.leftover', { alias, count: live.length })
+        const failed: string[] = []
+        for (const m of live) {
+          try {
+            await endRemoteMember(hostId, m.mk)
+          } catch (e) {
+            if (e instanceof HostApiError && e.status === 409) continue // no longer live: already what was asked
+            failed.push(`${m.title || m.mk}: ${errText(e)}`)
+          }
+        }
+        if (failed.length) return t('peers.team.leftover_error', { alias, details: failed.join('; ') })
+      }
+    } catch (e) {
+      return t('peers.team.leftover_error', { alias, details: errText(e) })
+    }
+  }
+
+  const retryCleanup = () => {
+    void runFlow(async () => {
+      setLeftover(await cleanup())
+      return {}
+    })
+  }
+
+  const turnOff = (end: boolean) => {
     setPending(null)
     setToggleError('')
+    setLeftover('')
     void runFlow(async () => {
       try {
         await updatePeerHost(hostId, alias, { allow_team: false })
@@ -62,17 +99,7 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
         setToggleError(errText(e))
         return {}
       }
-      if (!end) return {}
-      const failed: string[] = []
-      for (const m of members) {
-        try {
-          await endRemoteMember(hostId, m.mk)
-        } catch (e) {
-          if (e instanceof HostApiError && e.status === 409) continue // no longer live: already what was asked
-          failed.push(`${m.title || m.mk}: ${errText(e)}`)
-        }
-      }
-      if (failed.length) setToggleError(t('peers.team.end_failed', { details: failed.join('; ') }))
+      if (end) setLeftover(await cleanup())
       return {}
     })
   }
@@ -104,6 +131,16 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
         {t('peers.team.allow', { alias })}
       </label>
       {toggleError && <p data-testid="peer-team-error" className="text-xs text-status-error whitespace-pre-wrap">{toggleError}</p>}
+
+      {leftover && (
+        <div className="flex items-center gap-2">
+          <p data-testid="peer-team-leftover" className="text-xs text-status-warning whitespace-pre-wrap">{leftover}</p>
+          <button type="button" data-testid="peer-team-retry" disabled={busy} onClick={retryCleanup}
+            className="text-xs px-2 py-0.5 rounded bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer disabled:opacity-50 disabled:cursor-default">
+            {t('peers.team.retry')}
+          </button>
+        </div>
+      )}
 
       <div className="text-xs text-text-secondary">{t('peers.team.roots')}</div>
       {roots.length === 0
@@ -138,11 +175,11 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
           title={t('peers.team.end_title', { alias })}
           body={t('peers.team.end_body', { alias, count: pending.length })}
           confirmLabel={t('peers.team.end_confirm')}
-          onCancel={() => setPending(null)} onConfirm={() => turnOff(pending, true)}>
+          onCancel={() => setPending(null)} onConfirm={() => turnOff(true)}>
           <ul className="mt-2 text-xs text-text-secondary list-disc pl-4">
             {pending.map((m) => <li key={m.mk} className="break-all">{m.title || m.mk}</li>)}
           </ul>
-          <button type="button" data-testid="peer-team-end-keep" onClick={() => turnOff(pending, false)}
+          <button type="button" data-testid="peer-team-end-keep" onClick={() => turnOff(false)}
             className="mt-2 text-xs px-2 py-1 rounded bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer">
             {t('peers.team.end_keep')}
           </button>

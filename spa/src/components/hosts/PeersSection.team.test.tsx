@@ -157,7 +157,11 @@ describe('PeersSection — team consent (allow_team / team_roots)', () => {
     beforeEach(() => {
       airRow = { ...AIR, allow_team: true }
       // one member of another lead host must not be counted
-      vi.mocked(api.listRemoteMembers).mockResolvedValue([member('mk1'), member('mk2'), member('other', 'someone-else:zzzzzz')])
+      // the daemon's list drops a member once it was ended
+      const gone = new Set<string>()
+      vi.mocked(api.listRemoteMembers).mockImplementation(async () =>
+        [member('mk1'), member('mk2'), member('other', 'someone-else:zzzzzz')].filter((m) => !gone.has(m.mk)))
+      vi.mocked(api.endRemoteMember).mockImplementation(async (_h, mk) => { gone.add(mk) })
     })
 
     it('asks first; confirming turns it off then ends exactly that peer members', async () => {
@@ -175,6 +179,50 @@ describe('PeersSection — team consent (allow_team / team_roots)', () => {
       expect(vi.mocked(api.updatePeerHost).mock.invocationCallOrder[0])
         .toBeLessThan(vi.mocked(api.endRemoteMember).mock.invocationCallOrder[0])
       await waitFor(() => expect(screen.queryByTestId('peer-team-end-dialog')).toBeNull())
+    })
+
+    it('ends members that appeared after the dialog opened (re-lists after the PUT)', async () => {
+      let late = false
+      vi.mocked(api.listRemoteMembers).mockImplementation(async () =>
+        (late ? [member('mk1'), member('mk2'), member('late')] : [member('mk1'), member('mk2')])
+          .filter((m) => !ended.has(m.mk)))
+      const ended = new Set<string>()
+      vi.mocked(api.endRemoteMember).mockImplementation(async (_h, mk) => { ended.add(mk) })
+      const row = await openRow()
+      fireEvent.click(within(row).getByTestId('peer-team-toggle'))
+      await screen.findByTestId('peer-team-end-dialog')
+      late = true // a member opens while the dialog is up
+      fireEvent.click(screen.getByTestId('peer-team-end-confirm'))
+      await waitFor(() => expect(api.endRemoteMember).toHaveBeenCalledWith(M, 'late'))
+      expect(vi.mocked(api.updatePeerHost).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(api.listRemoteMembers).mock.invocationCallOrder[1])
+    })
+
+    it('members left after the rounds: says consent is off but N remain, and Retry cleans up', async () => {
+      let stuck = true
+      vi.mocked(api.listRemoteMembers).mockImplementation(async () => (stuck ? [member('mk1'), member('mk2')] : []))
+      const row = await openRow()
+      fireEvent.click(within(row).getByTestId('peer-team-toggle'))
+      await screen.findByTestId('peer-team-end-dialog')
+      fireEvent.click(screen.getByTestId('peer-team-end-confirm'))
+      const left = await within(screen.getByTestId('peer-row-air')).findByTestId('peer-team-leftover')
+      expect(left).toHaveTextContent('2')
+      stuck = false
+      fireEvent.click(within(screen.getByTestId('peer-row-air')).getByTestId('peer-team-retry'))
+      await waitFor(() => expect(within(screen.getByTestId('peer-row-air')).queryByTestId('peer-team-leftover')).toBeNull())
+    })
+
+    it('re-listing fails after the PUT: says consent is off but members may remain, with Retry', async () => {
+      vi.mocked(api.listRemoteMembers)
+        .mockResolvedValueOnce([member('mk1')])
+        .mockRejectedValueOnce(new HostApiError(500, 'x', 'list boom'))
+      const row = await openRow()
+      fireEvent.click(within(row).getByTestId('peer-team-toggle'))
+      await screen.findByTestId('peer-team-end-dialog')
+      fireEvent.click(screen.getByTestId('peer-team-end-confirm'))
+      const left = await within(screen.getByTestId('peer-row-air')).findByTestId('peer-team-leftover')
+      expect(left).toHaveTextContent('list boom')
+      expect(within(screen.getByTestId('peer-row-air')).getByTestId('peer-team-retry')).toBeInTheDocument()
     })
 
     it('cancel changes nothing', async () => {
@@ -199,13 +247,14 @@ describe('PeersSection — team consent (allow_team / team_roots)', () => {
 
     it('a member that is no longer live (409) is not an error; another failure is shown', async () => {
       vi.mocked(api.endRemoteMember).mockImplementation(async (_h, mk) => {
-        throw mk === 'mk1' ? new HostApiError(409, 'Conflict', 'not live') : new HostApiError(500, 'x', 'boom')
+        if (mk === 'mk1') throw new HostApiError(409, 'Conflict', 'not live')
+        throw new HostApiError(500, 'x', 'boom')
       })
       const row = await openRow()
       fireEvent.click(within(row).getByTestId('peer-team-toggle'))
       await screen.findByTestId('peer-team-end-dialog')
       fireEvent.click(screen.getByTestId('peer-team-end-confirm'))
-      const err = await within(screen.getByTestId('peer-row-air')).findByTestId('peer-team-error')
+      const err = await within(screen.getByTestId('peer-row-air')).findByTestId('peer-team-leftover')
       expect(err).toHaveTextContent('boom')
       expect(err).not.toHaveTextContent('not live')
     })
