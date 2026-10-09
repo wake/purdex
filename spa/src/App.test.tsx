@@ -31,6 +31,9 @@ vi.mock('./features/workspace', () => ({
   WorkspaceEmptyState: () => null,
 }))
 vi.mock('./lib/browser-shortcuts', () => ({}))
+const stopLifecycle = vi.hoisted(() => vi.fn())
+const startLifecycle = vi.hoisted(() => vi.fn())
+vi.mock('./lib/team/team-tab-lifecycle', () => ({ startTeamTabLifecycle: startLifecycle }))
 vi.mock('./hooks/useMultiHostEventWs', () => ({ useMultiHostEventWs: vi.fn() }))
 vi.mock('./hooks/useRouteSync', () => ({ useRouteSync: vi.fn() }))
 vi.mock('./hooks/useShortcuts', () => ({ useShortcuts: vi.fn() }))
@@ -65,6 +68,20 @@ beforeEach(() => {
 
 afterEach(() => {
   setElectronApi(false)
+})
+
+describe('App — team tab lifecycle', () => {
+  it('starts the subscriber once on mount and stops it on unmount', () => {
+    startLifecycle.mockReset()
+    stopLifecycle.mockReset()
+    startLifecycle.mockReturnValue(stopLifecycle)
+    const { rerender, unmount } = render(<App />)
+    rerender(<App />)
+    expect(startLifecycle).toHaveBeenCalledTimes(1)
+    expect(stopLifecycle).not.toHaveBeenCalled()
+    unmount()
+    expect(stopLifecycle).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('App — title bar', () => {
