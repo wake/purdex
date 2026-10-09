@@ -63,7 +63,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"/ws/host-events", "/ws/terminal/{code}", "GET /ws/conversations/{provider}/{session_id}",
 		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
 		"GET /api/conversations/{provider}/{session_id}", "GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}",
-		"GET /api/team/approvals/{id}", "POST /api/team/approvals/{id}/decide", "GET /api/team/unattended", "PUT /api/team/unattended", "POST /api/relay/self",
+		"GET /api/team/approvals/{id}", "POST /api/team/approvals/{id}/decide", "GET /api/team/unattended", "PUT /api/team/unattended", "PUT /api/team/relay-quota", "PUT /api/team/max-members", "POST /api/relay/self",
 		"GET /api/nex/v1/executions", "/api/nex/",
 		"POST /api/push/devices", "GET /api/push/devices", "DELETE /api/push/devices/{device_id}",
 		"GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
@@ -106,7 +106,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/profiles"}, {"POST", "/api/profiles"}, {"DELETE", "/api/profiles/p_0123456789ab"},
 		{"PUT", "/api/profiles/p_0123456789ab/attachment"},
 		{"GET", "/api/team/approvals"}, {"POST", "/api/team/approvals"}, {"DELETE", "/api/team/approvals/x"},
-		{"GET", "/api/team/roster"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"},
+		{"GET", "/api/team/roster"}, {"POST", "/api/team/relay-quota"}, {"POST", "/api/team/max-members"}, {"GET", "/api/team/relay-quota"},
 		{"PUT", "/api/push/presence"},
 		{"POST", "/api/devices"}, {"GET", "/api/devices"}, {"DELETE", "/api/devices/d_aaaaaaaaaaaa"},
 		{"GET", "/api/fs/read"}, {"POST", "/api/host-transfer/redeem"}, {"GET", "/api/nothing-here"},
@@ -115,7 +115,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 	}
 	// Reachable: the scope lets these through to their own handlers (whatever those answer, not device_forbidden).
 	for _, r := range []struct{ method, path string }{
-		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
+		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
 		{"GET", "/api/push/devices"}, {"GET", "/api/profiles/p_0123456789ab"}, {"PUT", "/api/devices/self"},
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 	} {

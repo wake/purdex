@@ -33,6 +33,8 @@ var deviceAllowed = map[string]bool{
 	"POST /api/team/approvals/{id}/decide": true,
 	"GET /api/team/unattended":             true,
 	"PUT /api/team/unattended":             true,
+	"PUT /api/team/relay-quota":            true, // the user's call (2026-10-09 20:2x): the phone may set the relay quota ...
+	"PUT /api/team/max-members":            true, // ... and the team size cap
 	"POST /api/relay/self":                 true,
 	// nex: the executions list; the engine mount is narrowed by deviceNexAllowed
 	"GET /api/nex/v1/executions": true,

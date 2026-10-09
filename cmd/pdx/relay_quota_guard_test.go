@@ -28,6 +28,8 @@ func TestPdx_NothingWritesARelayQuota(t *testing.T) {
 		s := string(b)
 		slash := filepath.ToSlash(path)
 		switch {
+		case path == "device_scope.go":
+			// The phone allow-list names the route it lets the App use; that is a permission, not a caller.
 		case strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, "_test.go"):
 			if strings.Contains(s, team.RelayQuotaRoute) || strings.Contains(s, "RelayQuotaRoute") || strings.Contains(s, "RelayQuotaPutRequest") ||
 				strings.Contains(s, "/api/hostconfig/relay_quota") {

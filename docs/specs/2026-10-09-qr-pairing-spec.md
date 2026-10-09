@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS device_tokens (
     `GET /api/sessions/{code}/transcript`;
   - conversations: `GET /api/conversations/claude/{sid}` (with its query forms) and `…/subagents/{agent_id}`;
   - team: `GET /api/team/approvals/{id}`, `POST /api/team/approvals/{id}/decide`, `GET` and `PUT /api/team/unattended`,
-    `POST /api/relay/self`;
+    `PUT /api/team/relay-quota`, `PUT /api/team/max-members` (the phone may set the relay quota and the team size cap —
+    the user's decision, 2026-10-09), `POST /api/relay/self`;
   - nex (reads only): `GET /api/nex/v1/executions`; and on the engine mount `/api/nex/` — one pattern for the whole
     embedded engine — **only** `GET` with a path matching `/api/nex/v1/executions/{id}/prelude` or
     `/api/nex/v1/executions/{id}/events` (the one place the scope looks past the pattern; every other engine request
@@ -136,7 +137,7 @@ CREATE TABLE IF NOT EXISTS device_tokens (
 
   Left out on purpose: `fs` (the App's old fallback for daemons without a transcript API — a daemon with `devices.v1`
   always has it), `POST /api/host-transfer/redeem` (developer-mode entry, admin token), `GET /api/profiles` (the phone
-  uses the profile from the QR), team roster / relay quota (unused today). `GET /api/health` and `/api/peers*` sit on
+  uses the profile from the QR), team roster (unused today). `GET /api/health` and `/api/peers*` sit on
   the outer mux and never see a device principal.
 - **What R7 is and is not.** The allow-list keeps a phone token away from arbitrary-path file access, configuration and
   management routes. It is not a sandbox: creating a session and sending keys is the App's purpose, so a phone token can
