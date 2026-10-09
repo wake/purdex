@@ -41,6 +41,7 @@ func (m *Module) handleUnattendedGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.fillQuotas(&v)
+	m.fillHeld(&v)
 	m.writeJSON(w, http.StatusOK, v)
 }
 
@@ -130,6 +131,7 @@ func (m *Module) handleUnattendedPut(w http.ResponseWriter, r *http.Request) {
 		v.ListFailed = true
 	}
 	m.fillQuotas(&v)
+	m.fillHeld(&v)
 	m.writeJSON(w, http.StatusOK, v)
 }
 

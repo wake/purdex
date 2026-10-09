@@ -12,6 +12,10 @@ import (
 // by the CHAIN ROOT of a session: a relay never copies or moves it, so every session of the chain reads one row.
 // The rule that spends it is RQ-1b and lives behind its own host switch; nothing here spends anything.
 
+// ErrQuotaExhausted is an automatic approval of a self relay that found the chain's self_left at 0: the transaction
+// rolls back and the row stays open for a person (RQ-1b).
+var ErrQuotaExhausted = errors.New("relay quota exhausted")
+
 // ErrLineageCycle is a session_lineage that loops (impossible by construction, guarded anyway).
 var ErrLineageCycle = errors.New("session_lineage has a cycle")
 
@@ -228,4 +232,135 @@ func (s *Store) ProcessOfSession(sid string) (pid int, procStart string, err err
 		return 0, "", fmt.Errorf("process of %s: %w", sid, err)
 	}
 	return int(p.Int64), ps.String, nil
+}
+
+// spendSelfQuotaIn spends one of the self_left of sid's chain on tx (the approve's own transaction, write lock already
+// taken). The chain root is walked on the same transaction; the UPDATE is guarded by self_left >= 1, so of two
+// automatic approvals racing for the last one exactly one succeeds. Zero rows is ErrQuotaExhausted: the caller returns
+// it and the transaction rolls back with the row still open.
+func spendSelfQuotaIn(tx *sql.Tx, sid string, at int64) error {
+	root, _, err := chainRootIn(tx, sid)
+	if err != nil {
+		return err
+	}
+	// rev + 1 in the same statement: a spend is a write of the chain's row like a PUT, and the App orders by rev.
+	res, err := tx.Exec(`UPDATE relay_quotas SET self_left = self_left - 1, updated_at = ?, rev = rev + 1
+		WHERE root_session_id = ? AND self_left >= 1`, at, root)
+	if err != nil {
+		return fmt.Errorf("spend relay quota of %s: %w", root, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("spend relay quota of %s: %w", root, err)
+	}
+	if n == 0 {
+		return ErrQuotaExhausted
+	}
+	return nil
+}
+
+// quotaRuleOn reads the rule's switch, once per decision (flipping it needs no restart). Off when the module has no
+// reader, and off — logged once per distinct error — when the stored value does not read: the host then behaves as it
+// did before the rule existed.
+func (m *Module) quotaRuleOn() bool {
+	if m.quotaRule == nil {
+		return false
+	}
+	on, err := m.quotaRule.RelayQuotaRule()
+	if err != nil {
+		if err.Error() != m.quotaRuleErr {
+			m.quotaRuleErr = err.Error()
+			m.logf("[team] relay_quota switch unreadable, treated as off: %v", err)
+		}
+		return false
+	}
+	m.quotaRuleErr = ""
+	return on
+}
+
+// withQuotaRule marks c to spend a self relay's quota when the rule is on. Only the daemon's own closes (Auto) are
+// ever honoured by the store, so a click never reaches the rule.
+func (m *Module) withQuotaRule(c Close, kind team.Kind) Close {
+	if kind == team.KindSelfRelay && c.Auto && m.quotaRuleOn() {
+		c.SpendQuota = true
+		c.SpentOut = new(bool)
+	}
+	return c
+}
+
+// holdForQuota / unhold keep the set of open rows waiting for quota. hold returns whether the row is newly held.
+func (m *Module) holdForQuota(id string) bool {
+	m.heldMu.Lock()
+	defer m.heldMu.Unlock()
+	if _, was := m.heldQuota[id]; was {
+		return false
+	}
+	if m.heldQuota == nil {
+		m.heldQuota = map[string]struct{}{}
+	}
+	m.heldQuota[id] = struct{}{}
+	return true
+}
+
+func (m *Module) unhold(id string) {
+	m.heldMu.Lock()
+	delete(m.heldQuota, id)
+	m.heldMu.Unlock()
+}
+
+// fillHeld fills v.Held: the open self_relay rows waiting for quota (the panel says "額度用完，等你核准"). [] when
+// none; left nil — null on the wire — when the open rows could not be read.
+func (m *Module) fillHeld(v *team.UnattendedView) {
+	m.heldMu.Lock()
+	ids := make(map[string]struct{}, len(m.heldQuota))
+	for id := range m.heldQuota {
+		ids[id] = struct{}{}
+	}
+	m.heldMu.Unlock()
+	held := []team.Approval{}
+	if v.On && len(ids) > 0 { // with the switch off nothing is "held for quota": every request waits for a person anyway
+		open, err := m.store.ListOpen()
+		if err != nil {
+			m.logf("[team] unattended held: %v", err)
+			return
+		}
+		for _, a := range open {
+			if _, ok := ids[a.ID]; ok && a.Kind == team.KindSelfRelay {
+				held = append(held, a)
+			}
+		}
+	}
+	v.Held = held
+}
+
+// markSpent / takeSpent carry "this approval's transaction spent a unit" from the approve (which knows) to the winner
+// point afterApproved (which publishes), without re-reading a mutable switch.
+func (m *Module) markSpent(approvalID string) {
+	m.heldMu.Lock()
+	defer m.heldMu.Unlock()
+	if m.spent == nil {
+		m.spent = map[string]struct{}{}
+	}
+	m.spent[approvalID] = struct{}{}
+}
+
+func (m *Module) takeSpent(approvalID string) bool {
+	m.heldMu.Lock()
+	defer m.heldMu.Unlock()
+	_, ok := m.spent[approvalID]
+	delete(m.spent, approvalID)
+	return ok
+}
+
+// announceSpend publishes the new numbers of sid's chain after a spend. It runs in the PUT's section (quotaMu) and
+// reads the CURRENT row there, so the events of spends and PUTs leave in lock order carrying nondecreasing revs — an
+// older snapshot can never follow a newer PUT.
+func (m *Module) announceSpend(sid string) {
+	m.quotaMu.Lock()
+	defer m.quotaMu.Unlock()
+	if q, root, err := m.store.RelayQuotaOf(sid); err == nil {
+		m.broadcastRelayQuota(root, q)
+	} else {
+		m.logf("[team] relay quota event after a spend (%s): %v", sid, err)
+	}
 }

@@ -88,6 +88,7 @@ type Module struct {
 	// read error logged, so a corrupt value logs once, not every tick.
 	unattended    hostconfig.UnattendedStore
 	unattendedErr string
+	quotaRuleErr  string // under createMu like unattendedErr: the last unreadable-switch error logged
 	// notAutoApproved (under createMu) is, per open row the daemon could
 	// not approve, the reason last logged (autoApprove): a refusal retried
 	// every tick logs once. A sweep, and every tick while it is not empty,
@@ -257,6 +258,13 @@ type Module struct {
 	// noticeKick is a test seam called after kickNotices when an adopt approval won; afterApproved is its
 	// only caller. nil until then (tests count it).
 	noticeKick func()
+	// quotaRule reads the relay-quota rule's switch (hostconfig key relay_quota, #2062); nil → the rule is off. heldQuota
+	// is the set of open self_relay rows the daemon could not approve because their chain's self_left is 0 (under heldMu,
+	// written by the approve paths, read by the unattended GET without createMu).
+	quotaRule hostconfig.RelayQuotaReader
+	heldMu    sync.Mutex
+	heldQuota map[string]struct{}
+	spent     map[string]struct{} // approval ids whose transaction spent a unit, until afterApproved publishes (under heldMu)
 	// quotaMu serialises a relay-quota PUT's commit, event and roster signal (quota_handler.go); afterQuotaSet is a test seam.
 	quotaMu       sync.Mutex
 	afterQuotaSet func()
@@ -344,6 +352,11 @@ func (m *Module) Init(c *core.Core) error {
 	m.prompts = prompts
 	if m.unattended, err = lookup[hostconfig.UnattendedStore](c, hostconfig.UnattendedKey); err != nil {
 		return err
+	}
+	if svc, ok := c.Registry.Get(hostconfig.RelayQuotaKey); ok { // optional: without it the rule is off
+		if r, ok := svc.(hostconfig.RelayQuotaReader); ok {
+			m.quotaRule = r
+		}
 	}
 	if err := m.initSpawn(c); err != nil {
 		return err
@@ -550,6 +563,7 @@ func (m *Module) closeWithOp(id string, cas func() (team.Approval, bool, error),
 func (m *Module) announceClosed(after team.Approval, rep *RelayReport) {
 	m.broadcast("closed", &after)
 	m.wake(after.ID)
+	m.unhold(after.ID) // closed, however: no longer waiting for quota
 	m.afterClose(after, rep)
 	if after.State == team.StateApproved {
 		m.afterApproved(after)

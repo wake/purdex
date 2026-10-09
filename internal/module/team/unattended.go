@@ -38,6 +38,9 @@ func (m *Module) approve(a team.Approval, c Close) (after team.Approval, won, me
 	case team.KindSelfRelay:
 		after, won, err = m.closeWith(a.ID, func() (row team.Approval, won bool, err error) {
 			row, won, memberCancelled, err = m.store.CloseSelfRelayApproved(a.ID, c, a.Origin.SessionID)
+			if err == nil && won && c.SpentOut != nil && *c.SpentOut {
+				m.markSpent(a.ID) // before closeWith announces the close
+			}
 			return row, won, err
 		})
 	default:
@@ -100,6 +103,9 @@ func teamNote(a team.Approval) string {
 // which rosterChanged's hash gate makes free.
 func (m *Module) afterApproved(a team.Approval) {
 	m.rosterChanged()
+	if a.Kind == team.KindSelfRelay && m.takeSpent(a.ID) {
+		m.announceSpend(a.Origin.SessionID) // the approval's own transaction spent a unit: announce the chain's new numbers
+	}
 	if a.Kind == team.KindAdopt {
 		m.kickNotices() // the adopted member is owed its notice
 		if m.noticeKick != nil {
@@ -181,23 +187,34 @@ func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, ha
 // beginApproved is handleRelayBegin's write while the switch is on (PU-1b2
 // rule 2): the op (claimed) and its row (approved) in one transaction,
 // announced as closed only; the 201 carries the claimed op, and the mod's
-// wait answers approved at once. Caller holds createMu.
-func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.Approval, hash string) {
-	after, claimed, err := m.store.CreateSelfRelayApproved(op, row, hash, daemonClose(row.CreatedAt, nil))
+// wait answers approved at once. done says it answered; (false, true) is the one case it did not: the relay-quota rule
+// is on and the chain's self_left is 0 — nothing was written and nothing answered, and the caller opens the request
+// for a person as with unattended mode off, and lists it as held for quota. Caller holds createMu.
+func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.Approval, hash string) (done, exhausted bool) {
+	c := m.withQuotaRule(daemonClose(row.CreatedAt, nil), team.KindSelfRelay)
+	after, claimed, err := m.store.CreateSelfRelayApproved(op, row, hash, c)
 	switch {
+	case errors.Is(err, ErrQuotaExhausted):
+		// The chain has no quota left (the rule is on): nothing was written; the caller opens the request for a person
+		// exactly as with unattended mode off. The sweeps hold it quietly and approve it once the quota is raised.
+		return false, true
 	case errors.Is(err, ErrMemberRelayIsLeads):
 		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
-		return
+		return true, false
 	case errors.Is(err, ErrRelayOpOpen) && m.writeRelayOpen(w, op.SessionID):
-		return
+		return true, false
 	case err != nil:
 		m.logf("[team] relay begin %s: %v", op.SessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-		return
+		return true, false
+	}
+	if c.SpentOut != nil && *c.SpentOut {
+		m.markSpent(after.ID)
 	}
 	m.logf("[team] relay op %s claimed: self, origin=%s (%s), request %s approved by unattended at begin", op.ID, op.Ref, op.SessionID, after.ID)
 	m.announceClosed(after, nil)
 	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: claimed, RequestID: after.ID})
+	return true, false
 }
 
 // autoApprove is the daemon's approve of an open AutoApprovable row (U23):
@@ -220,7 +237,7 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 		var after team.Approval
 		var won, memberCancelled bool
 		now := m.now()
-		c := daemonClose(now, g)
+		c := m.withQuotaRule(daemonClose(now, g), a.Kind)
 		c.UnexpiredAt = now
 		after, won, memberCancelled, err = m.approve(a, c)
 		var refused *adoptRefusedError
@@ -245,6 +262,11 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 		m.rememberRefusal(a.ID, err.Error())
 		m.logf("[team] approval %s not auto-approved: %v", a.ID, err)
 	}
+	if errors.Is(err, ErrQuotaExhausted) {
+		m.holdForQuota(a.ID) // listed in UnattendedView.Held until it is approved, closed or the quota is raised
+	} else {
+		m.unhold(a.ID)
+	}
 	return false, true
 }
 
@@ -261,6 +283,7 @@ func (m *Module) rememberRefusal(id, reason string) {
 }
 
 func (m *Module) forgetRefusal(id string) {
+	m.unhold(id)
 	delete(m.notAutoApproved, id)
 	m.notAutoApprovedN.Store(int64(len(m.notAutoApproved)))
 }

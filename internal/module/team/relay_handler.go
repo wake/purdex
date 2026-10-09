@@ -320,9 +320,12 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: now, DeadlineAt: now + team.SelfRelayDeadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
 	}
 	hash := requestHash(team.KindSelfRelay, origin.SessionID, team.SelfRelayDeadlineS, payload)
+	exhausted := false // the chain has no quota left: the request opens for a person below and is listed as held at once
 	if m.unattendedOn() {
-		m.beginApproved(w, op, row, hash)
-		return
+		var done bool
+		if done, exhausted = m.beginApproved(w, op, row, hash); done {
+			return // approved at begin, or refused
+		}
 	}
 	if err := m.store.CreateRelayOp(op); err != nil {
 		// The table's one-open-op index caught a creator the check above
@@ -344,6 +347,9 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.logf("[team] relay begin %s: approval row: inserted=%v err=%v", req.SessionID, inserted, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
+	}
+	if exhausted {
+		m.holdForQuota(stored.ID) // only now that the row exists; the sweeps keep it quiet and approve it once the quota is raised
 	}
 	m.logf("[team] relay op %s opened: self, origin=%s (%s) used=%.0f%% request=%s", opID, origin.Ref, origin.SessionID, req.UsedPercentage, reqID)
 	m.broadcast("opened", &stored)

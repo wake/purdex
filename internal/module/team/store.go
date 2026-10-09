@@ -350,6 +350,14 @@ type Close struct {
 	// is refused if it names that kind (RQ-0, #2062 plan review: a decide request posing as `unattended` must
 	// neither pass for the daemon in the audit nor, later, spend a quota).
 	Auto bool
+	// SpendQuota asks an Auto close of a self_relay row to spend one of the chain's self_left in the same transaction
+	// (the relay-quota rule, #2062; set by the module only while the hostconfig switch relay_quota is on). Never honoured
+	// for a close that is not Auto: a person's click spends nothing.
+	SpendQuota bool
+	// SpentOut, when non-nil, is set true by the store when the close won AND spent a unit in its transaction: the
+	// module publishes the new numbers only for a close that really spent, not by re-reading a switch that may have
+	// changed since.
+	SpentOut *bool
 }
 
 // ErrReservedDecider is a non-Auto close that names the daemon's own decider kind.
