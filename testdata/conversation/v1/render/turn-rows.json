@@ -1,0 +1,690 @@
+{
+  "cases" : [
+    {
+      "name" : "api-error",
+      "source" : "cc-transcript",
+      "turns" : [
+
+      ]
+    },
+    {
+      "name" : "bash-fail-and-background",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01NKWyU76Gj63hS6KG9dznmd"
+              ],
+              "text" : "處理了 23 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "3528a92f-c87f-4f14-8807-a455c07d2d47"
+        },
+        {
+          "index" : 1,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01Austw3RXHvweuceuaB6KxZ"
+              ],
+              "text" : "處理了 17 秒 · 1 個指令 · 1 失敗"
+            }
+          ],
+          "turn_id" : "116ed138-0a53-40a6-bae3-901a4d6d2393"
+        },
+        {
+          "index" : 2,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01693LPNQciTk6MVYRNQsRfN"
+              ],
+              "text" : "處理了 4 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "e7b92d4d-f349-430e-8389-fe0a4f88143f"
+        }
+      ]
+    },
+    {
+      "name" : "compact",
+      "source" : "cc-transcript",
+      "turns" : [
+
+      ]
+    },
+    {
+      "name" : "denial-kinds",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01DenyErr0100000000000",
+                "toolu_01DenyErr0200000000000",
+                "toolu_01DenyErr0300000000000",
+                "toolu_01DenyErr0400000000000"
+              ],
+              "text" : "處理了 7 秒 · 4 個指令 · 3 已拒絕 · 1 已中斷"
+            }
+          ],
+          "turn_id" : "de000000-0000-4000-8000-000000000001"
+        },
+        {
+          "index" : 1,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01DenyOk01000000000000",
+                "toolu_01DenyOk02000000000000",
+                "toolu_01DenyOk03000000000000",
+                "toolu_01DenyOk04000000000000"
+              ],
+              "text" : "處理了 7 秒 · 4 個指令 · 3 已拒絕 · 1 已中斷"
+            }
+          ],
+          "turn_id" : "de000000-0000-4000-8000-000000000012"
+        },
+        {
+          "index" : 2,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01Killed0000000000000"
+              ],
+              "text" : "處理了 0 秒 · 1 個指令 · 1 已中斷"
+            }
+          ],
+          "turn_id" : "de000000-0000-4000-8000-000000000023"
+        },
+        {
+          "index" : 4,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01Failed0000000000000"
+              ],
+              "text" : "處理了 1 秒 · 1 個指令 · 1 失敗"
+            }
+          ],
+          "turn_id" : "de000000-0000-4000-8000-000000000028"
+        },
+        {
+          "index" : 5,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01OldRefuse00000000000"
+              ],
+              "text" : "處理了 1 秒 · 1 個讀取 · 1 已拒絕"
+            }
+          ],
+          "turn_id" : "de000000-0000-4000-8000-000000000033"
+        }
+      ]
+    },
+    {
+      "name" : "edit-write-multiedit",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01M4PsfQqtoB8cdfowKL65k1"
+              ],
+              "text" : "處理了 2 秒 · 1 個編輯"
+            }
+          ],
+          "turn_id" : "06aaa560-d20c-4370-a207-d55bbacc2156"
+        },
+        {
+          "index" : 1,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01UmLJ3h1yd2DV9ZBYbnjdmP"
+              ],
+              "text" : "處理了 2 秒 · 1 個編輯"
+            }
+          ],
+          "turn_id" : "907b926f-103d-4cbd-9098-e449da4889b2"
+        },
+        {
+          "index" : 2,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01BWbh6VR5RXo8QbBo43xKGs",
+                "toolu_0193T2pao4FwUFfDyNqjQ2sc",
+                "toolu_01GsKZdaFcw3m9tEc1RXEKAZ"
+              ],
+              "text" : "處理了 16 秒 · 2 個編輯、1 個讀取"
+            }
+          ],
+          "turn_id" : "9caa2892-ea71-4707-b77d-aa406ef63a37"
+        },
+        {
+          "index" : 3,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01KKczVrfEEKiHBy6sr5jbmb",
+                "toolu_015UEUGC7oWyQvKDZFXKR1vw"
+              ],
+              "text" : "處理了 9 秒 · 1 個編輯、1 個讀取"
+            }
+          ],
+          "turn_id" : "82627382-fb58-4892-9463-78fbd14c17a1"
+        }
+      ]
+    },
+    {
+      "name" : "image-result",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_018vRUEjFJQ3GknHxQUAsvKP"
+              ],
+              "text" : "處理了 4 秒 · 1 個讀取"
+            }
+          ],
+          "turn_id" : "1260b599-c1fb-40ec-8988-4df537251300"
+        }
+      ]
+    },
+    {
+      "name" : "interrupt-running-tool",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01EoTWRRhmpSGWtbA6Cv2nqv"
+              ],
+              "text" : "處理了 0 秒 · 1 個指令 · 1 失敗"
+            },
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01561zzDRfhH3wBhm8WbaVeW"
+              ],
+              "text" : "處理了 6 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "f9c28c01-5168-478c-8b2e-e053aad6e897"
+        },
+        {
+          "index" : 2,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_017ZqKRjb2YWirEJFpB6yhTS"
+              ],
+              "text" : "處理了 17 秒 · 1 個指令 · 1 已拒絕"
+            }
+          ],
+          "turn_id" : "f05ffe58-db6d-419f-96b5-b51e88635b5a"
+        },
+        {
+          "index" : 3,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_016SDT52sASWi8UMA2THq5jX"
+              ],
+              "text" : "處理了 2 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "21f0ade7-7f70-4f84-bf41-2d845907e2ff"
+        },
+        {
+          "index" : 4,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01K3n9h6kHJoWQMqpT31CJZs"
+              ],
+              "text" : "處理了 10 秒 · 1 個指令 · 1 已拒絕"
+            }
+          ],
+          "turn_id" : "7988e4a6-3032-4c30-9275-bf1486e2fe62"
+        }
+      ]
+    },
+    {
+      "name" : "ios-c2-send-keys",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 8,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_018nY4gHmai6cqhpZvpiwrZ7"
+              ],
+              "text" : "處理了 4 秒 · 1 個指令 · 1 已拒絕"
+            }
+          ],
+          "turn_id" : "91441df3-bb73-48eb-879c-42935a9f3800"
+        },
+        {
+          "index" : 9,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01C93fT13N4kF3MBCwWz1Bwa"
+              ],
+              "text" : "處理了 38 秒 · 1 個其他"
+            }
+          ],
+          "turn_id" : "95b9b343-2455-491b-af6b-690561b847e2"
+        },
+        {
+          "index" : 14,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_017vNxcyb6esotPk8BTYkD6d"
+              ],
+              "text" : "處理了 1 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "9c6eeb85-a17f-40b8-8a9a-9e39e3715aed"
+        }
+      ]
+    },
+    {
+      "name" : "ios-f2b-queue-interrupt",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01PVAPkx4DJV7AJcTjCAE9MU"
+              ],
+              "text" : "處理了 2 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "c0300df3-be8e-433b-9288-032ed8a84b1d"
+        }
+      ]
+    },
+    {
+      "name" : "ios-f3-ask-permission",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01M3GPKxmDg8g3BTXRVBKinh"
+              ],
+              "text" : "處理了 9 秒 · 1 個其他"
+            }
+          ],
+          "turn_id" : "d7c1057b-b651-4de2-bc47-315902434bc4"
+        },
+        {
+          "index" : 1,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_015KoijohJUMzCvukQi7Vzas"
+              ],
+              "text" : "處理了 23 秒 · 1 個其他"
+            }
+          ],
+          "turn_id" : "7f0c2225-11cc-42f2-ba8a-8927fc5f08d9"
+        },
+        {
+          "index" : 2,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_018pwDC9GNBB79d9NybRdtBP"
+              ],
+              "text" : "處理了 15 秒 · 1 個其他"
+            }
+          ],
+          "turn_id" : "7de03112-95b9-4fca-9c4b-e13979121442"
+        },
+        {
+          "index" : 3,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01FKKRXQxnW3JFJRsSUGTXgc"
+              ],
+              "text" : "處理了 32 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "2159b95a-9cf4-4035-96e9-e65880e8dcf4"
+        },
+        {
+          "index" : 4,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01KVWvWPk8pHZDUstKppFLuB"
+              ],
+              "text" : "處理了 9 秒 · 1 個指令 · 1 已拒絕"
+            }
+          ],
+          "turn_id" : "d034ffa2-e285-4d9e-addc-bd2da8ff0e2f"
+        },
+        {
+          "index" : 5,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_0162BTqRp1S62gs1iys3aZd3"
+              ],
+              "text" : "處理了 28 秒 · 1 個其他 · 1 已拒絕"
+            }
+          ],
+          "turn_id" : "98e77547-fe44-480f-8b11-93503f8391c1"
+        },
+        {
+          "index" : 6,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01SgdcSiDbnZYTjPQ2PK9k5U"
+              ],
+              "text" : "處理了 44 秒 · 1 個其他"
+            }
+          ],
+          "turn_id" : "a8551387-6d2c-4e6d-84b7-dd60ca3d7931"
+        },
+        {
+          "index" : 7,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01RaoN7rCQRMVQgPnpquCzmE"
+              ],
+              "text" : "處理了 15 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "b4a90f91-285a-4585-b6cc-c509132d5e1d"
+        },
+        {
+          "index" : 8,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01T28DZ1i7kka5Ctkn7s2UVM"
+              ],
+              "text" : "處理了 4 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "e0b2de26-3b98-47b2-9723-18766054c7d1"
+        },
+        {
+          "index" : 9,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01EUmXj4pZLHGs3njVcTB4vw"
+              ],
+              "text" : "處理了 4 秒 · 1 個指令 · 1 已拒絕"
+            }
+          ],
+          "turn_id" : "df9035b6-71ea-4241-8a77-f04f8c725c72"
+        },
+        {
+          "index" : 10,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01RHxnfsSY6F8BpaL5AJrWo7"
+              ],
+              "text" : "處理了 18 秒 · 1 個其他"
+            }
+          ],
+          "turn_id" : "a73fa710-6f1f-4705-b0ae-b67888d46d83"
+        },
+        {
+          "index" : 11,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01HNga6DqNmSg5cX1dtteEho"
+              ],
+              "text" : "處理了 17 秒 · 1 個其他"
+            }
+          ],
+          "turn_id" : "7d9f73c3-0719-4dea-9f5a-ebcdb5fe9871"
+        }
+      ]
+    },
+    {
+      "name" : "large-output",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01NADokYo841fpA6dFaUiEAP"
+              ],
+              "text" : "處理了 6 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "1ef216aa-7796-4945-afec-d09ce35c0fed"
+        }
+      ]
+    },
+    {
+      "name" : "output-caps",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01ReadBig000000000000"
+              ],
+              "text" : "處理了 1 秒 · 1 個讀取"
+            }
+          ],
+          "turn_id" : "0c000000-0000-4000-8000-000000000001"
+        },
+        {
+          "index" : 1,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01BashBig000000000000"
+              ],
+              "text" : "處理了 1 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "0c000000-0000-4000-8000-000000000006"
+        }
+      ]
+    },
+    {
+      "name" : "peer-message",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01PyuQkUpWNdqBfgNMbsnAqL"
+              ],
+              "text" : "處理了 1 分 46 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "b0519bf4-4fc2-44df-b7cf-24df6a7633be"
+        }
+      ]
+    },
+    {
+      "name" : "queued-mid-turn",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01JnERBSriPfo1Rn6EU4ba3w"
+              ],
+              "text" : "處理了 37 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "a5283c47-0016-4b74-9970-e31b0c48c381"
+        },
+        {
+          "index" : 1,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01NGbLzMN15by4apo8HbAPoF"
+              ],
+              "text" : "處理了 29 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "e379852f-a79b-413e-82b4-711fdedce938"
+        }
+      ]
+    },
+    {
+      "name" : "read-grep-glob-webfetch",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01YBrrGuuVPnJ1DfXR7hyv96",
+                "toolu_0172dBvtB8Au96irufM8oe6A",
+                "toolu_01HP8q3NoETEMyu11sD4S5pt",
+                "toolu_01N2brymETtrPNsNWJQW2riJ"
+              ],
+              "text" : "處理了 23 秒 · 1 個指令、1 個讀取、1 個網頁、1 個其他"
+            }
+          ],
+          "turn_id" : "8e7ca735-586b-46e6-a5e4-a50dd7a21fe4"
+        }
+      ]
+    },
+    {
+      "name" : "slash-and-local-command",
+      "source" : "cc-transcript",
+      "turns" : [
+
+      ]
+    },
+    {
+      "name" : "source-kinds",
+      "source" : "cc-transcript",
+      "turns" : [
+
+      ]
+    },
+    {
+      "children" : [
+        {
+          "agent_id" : "a7a639d97d57c6f43",
+          "turns" : [
+            {
+              "index" : 0,
+              "runs" : [
+                {
+                  "running" : false,
+                  "step_ids" : [
+                    "toolu_01ACmSwsZd5nw2Uy33rssf6V"
+                  ],
+                  "text" : "處理了 6 秒 · 1 個指令"
+                }
+              ],
+              "turn_id" : "0736154e-c55b-4175-96ca-852bba616cb0"
+            }
+          ]
+        }
+      ],
+      "name" : "subagent",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01R2cprP5o4tDUDwZ3RikzsL"
+              ],
+              "text" : "處理了 4 秒 · 1 個子 agent"
+            }
+          ],
+          "turn_id" : "d8fc1753-9be5-47f2-b993-c00bdc7b3673"
+        }
+      ]
+    }
+  ],
+  "rules" : "A run = consecutive steps in a turn (thinking does not break it; user / agent_text / system / notes do). Finished run text = DialogueWork.summary: 「處理了 <span> · N 個<類別>、… · N 失敗 · N 已拒絕 · N 已中斷」 (ASCII spaces; iOS draws U+00A0 around the numbers of the last three parts, which is only a line-break hint). A run with a running step is the live progress message on screen (「正在：<latest>」 plus a ticking clock): text is null, latest is given.",
+  "version" : 1
+}
