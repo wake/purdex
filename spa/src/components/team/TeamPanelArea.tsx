@@ -26,8 +26,13 @@ export function TeamPanelArea() {
   const [draft, setDraft] = useState<number | null>(null)
   const draftRef = useRef<number | null>(null)
   // The handle unmounts when the panel is enlarged (or goes away): a half-done drag is abandoned, so drop its draft.
+  const [wasExpanded, setWasExpanded] = useState(expanded)
+  if (expanded !== wasExpanded) { // adjust state during render (no effect round trip)
+    setWasExpanded(expanded)
+    if (expanded) setDraft(null)
+  }
   useEffect(() => {
-    if (expanded) { draftRef.current = null; setDraft(null) }
+    if (expanded) draftRef.current = null
   }, [expanded])
 
   const view = display ? panelView(activeTabId, { workbookTabs, panelTeam: display.panelTeam(activeTabId), teamDrill }) : null
