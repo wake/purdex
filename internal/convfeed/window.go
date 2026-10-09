@@ -52,8 +52,10 @@ func (e *Entry) View(turns, before int, envelope func(h Header, cursor string) f
 
 // ViewAround is View centred on the turn that holds the item itemID: the `turns` turns around it, as close to the middle
 // as the ends allow. ok is false when no turn holds the item. When the size budget drops the older turns and the target
-// is among them, the window is taken again with the target as its newest turn, so the item asked for is always there.
-func (e *Entry) ViewAround(turns int, itemID string, envelope func(h Header, cursor string) func([]byte) bool) (v View, ok bool) {
+// is among them, the window is taken again with the target as its newest turn. shown is false when the item itself is
+// not in the window: its turn alone is over the cap and the oldest items that were dropped include it (the caller says
+// so instead of answering with a window that silently lacks what was asked for).
+func (e *Entry) ViewAround(turns int, itemID string, envelope func(h Header, cursor string) func([]byte) bool) (v View, ok, shown bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	all := e.conv().Turns
@@ -68,7 +70,7 @@ find:
 		}
 	}
 	if pos < 0 {
-		return View{}, false
+		return View{}, false, false
 	}
 	start := pos - (turns-1)/2
 	if start+turns > len(all) {
@@ -87,7 +89,19 @@ find:
 	if !w.OverBudget && (w.FirstIndex < 0 || all[pos].Index < w.FirstIndex) {
 		w = e.windowLocked(turns, all[pos].Index+1, budget)
 	}
-	return View{WindowResult: w, Header: h, Cursor: cur}, true
+	v = View{WindowResult: w, Header: h, Cursor: cur}
+	target := all[pos].Index
+	for _, t := range w.Turns {
+		if t.Index != target {
+			continue
+		}
+		for _, it := range t.Items {
+			if ccnorm.ItemID(it) == itemID {
+				shown = true
+			}
+		}
+	}
+	return v, true, shown
 }
 
 func (e *Entry) windowLocked(turns, before int, budget func([]byte) bool) WindowResult {

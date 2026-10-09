@@ -988,3 +988,26 @@ func TestAround_TheTargetSurvivesTheCap(t *testing.T) {
 		t.Fatalf("turn 2 is not in the window %+v", s.Window)
 	}
 }
+
+// The item exists but its turn is over the cap and the item is among the dropped oldest: say so, never a window
+// that silently lacks what was asked for.
+func TestAround_AnItemDroppedByTheCapIsAnExplicitError(t *testing.T) {
+	e := newEnv(t)
+	e.mod.maxBody = 6000
+	e.transcript(stepsTurn(40, 300))
+	_, s := itemIDs(t, e.get("/api/conversations/claude/"+sid+"?turns=1"))
+	if s.Conversation.Turns[0].OmittedItems == 0 {
+		t.Fatal("setup: the turn must be over the cap")
+	}
+	// the very first item of the turn (the user message) is the oldest: it was dropped
+	e.mod.maxBody = maxBody
+	_, full := itemIDs(t, e.get("/api/conversations/claude/"+sid))
+	var first struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(full.Conversation.Turns[0].Items[0], &first)
+	e.mod.maxBody = 6000
+	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"?around="+first.ID), 422); got != "item_not_shown" {
+		t.Fatalf("code %q", got)
+	}
+}

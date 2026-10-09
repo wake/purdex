@@ -199,9 +199,12 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	var view convfeed.View
 	if q.Has("around") {
-		var found bool
-		if view, found = entry.ViewAround(turns, around, envelope); !found {
+		var found, shown bool
+		if view, found, shown = entry.ViewAround(turns, around, envelope); !found {
 			writeError(w, http.StatusNotFound, "item_not_found")
+			return
+		} else if !shown && !view.OverBudget {
+			writeError(w, http.StatusUnprocessableEntity, "item_not_shown") // its turn is over the cap and the item was dropped
 			return
 		}
 	} else {
