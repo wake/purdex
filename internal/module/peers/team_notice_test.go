@@ -171,6 +171,40 @@ func TestTeamNotice_RefusesAnIncompleteNotice(t *testing.T) {
 	}
 }
 
+// The lead's address is the lead host's text: it goes through the wire address grammar like an inbound sender's. One that
+// does not fit (extra slash, control character, bad suffix, too long) names the helper after the ref instead; if the ref is
+// no good either, the notice is refused as bad before anything is written (codex attack).
+func TestTeamNotice_LeadAddressFollowsTheWireGrammar(t *testing.T) {
+	e := newDeliverEnv(t, envOpts{})
+	for name, address := range map[string]string{
+		"extra slash":  "air/forged/name",
+		"control char": "air/lead\x07x",
+		"bad suffix":   "air/lead:??",
+		"too long":     "air/" + strings.Repeat("a", 300),
+		"newline":      "air/lead\nforged",
+	} {
+		n := e.notice("hi")
+		n.Lead.Address = address
+		if _, err := e.m.DeliverTeamNotice(context.Background(), n); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if w, _ := wrapperOf(t, e.recvLine()); w.FromName != remoteAlias+"/_lead01" {
+			t.Fatalf("%s: from-name = %q, want the ref's air/_lead01", name, w.FromName)
+		}
+	}
+	bad := e.notice("hi")
+	bad.Lead.Address, bad.Lead.Ref = "air/a/b", "no good ref"
+	before := len(e.rows())
+	_, err := e.m.DeliverTeamNotice(context.Background(), bad)
+	if ne := noticeErr(t, err); ne.Retryable() {
+		t.Fatalf("%+v, want a permanent bad request", ne)
+	}
+	if len(e.rows()) != before {
+		t.Fatal("a refused notice wrote an audit row")
+	}
+	e.assertNoLine()
+}
+
 // With no address the helper falls back to the lead's ref: a name that always exists.
 func TestTeamNotice_HelperNameFallsBackToTheRef(t *testing.T) {
 	e := newDeliverEnv(t, envOpts{})

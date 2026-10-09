@@ -76,6 +76,24 @@ func (m *Module) DeliverTeamNotice(ctx context.Context, n TeamNotice) (string, e
 	case m.stopCtx.Err() != nil:
 		return "", &NoticeError{Code: ipeers.ErrNotReady, Detail: "daemon is stopping", retryable: true}
 	}
+	// The lead's address is the lead host's text, recorded from its command: it is held to the wire address grammar an
+	// inbound sender's is. It names the helper under the lead host's alias in THIS daemon's config, after the part that
+	// follows the lead host's own alias; one that does not fit (or none) names it after the ref.
+	address := n.Lead.Address
+	if i := strings.Index(address, "/"); i >= 0 {
+		address = address[i+1:]
+	}
+	if address == "" || ipeers.ValidateWireAddress(address) != nil {
+		address = n.Lead.Ref
+	}
+	from := ipeers.WireFrom{
+		HostID: n.LeadHostID, AgentSessionID: n.Lead.SessionID, PID: n.Lead.PID, ProcStart: n.Lead.ProcStart,
+		DeclaredMode: ipeers.ModePrompting, Address: address,
+	}
+	// Everything else goes through the validation /deliver applies to its request, before anything is written.
+	if err := (ipeers.DeliverRequest{MsgID: n.MsgID, From: from, To: n.Target, Text: n.Text}).Validate(); err != nil {
+		return "", &NoticeError{Code: ipeers.ValidationCode(err), Detail: err.Error()}
+	}
 	snap, ok := m.snapshotForLeadHost(n.LeadHostID)
 	if !ok {
 		return "", ErrNoticeNotBound
@@ -103,21 +121,8 @@ func (m *Module) DeliverTeamNotice(ctx context.Context, n TeamNotice) (string, e
 		return "", &NoticeError{Code: ipeers.ErrAuditUnavailable, Detail: "audit insert failed", retryable: true}
 	}
 
-	// The helper is named under the lead host's alias in THIS daemon's config, after the part of the lead's address that
-	// follows its own alias (that alias is the lead host's name for itself); no address falls back to the ref.
-	address := n.Lead.Address
-	if i := strings.Index(address, "/"); i >= 0 {
-		address = address[i+1:]
-	}
-	if address == "" {
-		address = n.Lead.Ref
-	}
 	result, errText, ref := m.deliverToLocalTarget(ctx, snap, localDelivery{
-		msgID: n.MsgID, text: n.Text, to: n.Target, senderAlias: snap.entry.Alias,
-		from: ipeers.WireFrom{
-			HostID: n.LeadHostID, AgentSessionID: n.Lead.SessionID, PID: n.Lead.PID, ProcStart: n.Lead.ProcStart,
-			DeclaredMode: ipeers.ModePrompting, Address: address,
-		},
+		msgID: n.MsgID, text: n.Text, to: n.Target, senderAlias: snap.entry.Alias, from: from,
 		effective: ipeers.ModePrompting,
 		oneWay:    snap.entry.Token == "", // D12: no verified route back to the lead
 	})
