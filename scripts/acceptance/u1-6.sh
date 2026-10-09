@@ -219,11 +219,21 @@ OLDSID=$SID
 rec ws4; R4=$REC_PID; sleep 2
 send "/clear"; sleep 6
 send "reply with the single word: cleared"
-sleep 3
-find_sid
-for i in $(seq 1 30); do [[ "$(snap | jq -r .header.status)" == ended ]] && break; sleep 1; done
+# the old conversation is polled by ITS id; the new transcript is searched for meanwhile (it appears with the first
+# prompt after /clear, a moment later than the clear itself)
+NEWSID=""
+for i in $(seq 1 30); do
+  find_sid; [[ -n $SID && $SID != $OLDSID ]] && NEWSID=$SID
+  [[ "$(api "/api/conversations/claude/$OLDSID" | jq -r .header.status)" == ended && -n $NEWSID ]] && break
+  sleep 1
+done
+SID=${NEWSID:-$OLDSID}
 H=$(api "/api/conversations/claude/$OLDSID" | jq -c '.header | {live, status}')
 [[ "$H" == '{"live":false,"status":"ended"}' ]] && pass "5a after /clear the old conversation is $H" || fail "5a old conversation header: $H"
+# the stream follows every 500 ms: give the frame a few seconds to arrive and be recorded
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  jq -e 'select(.type=="conversation.header" or .type=="conversation.changes") | (.value.header.live == false and .value.header.status == "ended")' "$OUT/ws4.ndjson" >/dev/null 2>&1 && break; sleep 1
+done
 jq -e 'select(.type=="conversation.header" or .type=="conversation.changes") | (.value.header.live == false and .value.header.status == "ended")' "$OUT/ws4.ndjson" >/dev/null 2>&1 && pass "5b the old conversation's stream reported it" || fail "5b the old stream never reported live:false/ended"
 unrec "$R4"
 if [[ -n $SID && $SID != $OLDSID ]]; then
