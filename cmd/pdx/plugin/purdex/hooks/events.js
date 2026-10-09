@@ -45,6 +45,13 @@ const STREAM_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 const MONITORS_MAX = 64 // monitor ids kept at once; one more drops the oldest
 const ASK_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']) // tools that wait on the person by themselves
 const TIMEOUT = Symbol('timeout')
+const TEAM_URL = 'http://pdx/mod/v1/team' // GET ?session_id=<sid> on the same socket (TI-5a)
+const TEAM_MS = 15_000 // how often the lead's member count is read
+
+// team is the last good answer of the daemon's team read for the CURRENT session id. The ui.render hook below only
+// looks at it (never at the socket); a change asks for a redraw. `gen` counts the session changes: an answer that left
+// before one and lands after it belongs to the old session and is dropped.
+const team = { good: false, role: 'none', members: 0, gen: 0, timer: null }
 
 // ev is the reporter's whole state; one per mod load. `stream` and `seq` live as long as the
 // load (a /clear or a resume goes on in the same stream), the queue holds every event not yet
@@ -272,6 +279,74 @@ function stopBeat() {
   ev.beatGen += 1
 }
 
+// ---- the lead's footer (TI-5b, spec §4.10) ----
+
+// teamLabel is the footer mode for a lead, '' for any other role and before the first good read.
+function teamLabel() {
+  if (!team.good || team.role !== 'lead') return ''
+  return 'lead mode · ' + team.members + (team.members === 1 ? ' member' : ' members')
+}
+
+// teamAnswer reads the daemon's {"role","members","team_label"}; null for anything else.
+function teamAnswer(res) {
+  if (!res || res.status !== 200) return null
+  const o = parse(res.text)
+  if (!isObject(o) || !['lead', 'member', 'none'].includes(o.role)) return null
+  if (!Number.isInteger(o.members) || o.members < 0) return null
+  return { role: o.role, members: o.members }
+}
+
+// readTeam asks the daemon about the current session and keeps the answer. A failed or late read changes nothing (the last
+// good value stands); an answer for a session that is gone is dropped. Only a change of the label asks for a redraw.
+async function readTeam($) {
+  if (!ev.on) return
+  const gen = team.gen
+  const url = TEAM_URL + '?session_id=' + encodeURIComponent(ev.sid)
+  let timer = null
+  const deadline = new Promise((resolve) => { timer = $.clock.after(POST_DEADLINE_MS, () => resolve(TIMEOUT)) })
+  let out
+  try {
+    out = await Promise.race([$.http.fetch(url, { method: 'GET', socketPath: ev.sock }).then((res) => ({ res }), (err) => ({ err })), deadline])
+  } finally {
+    if (timer) timer.cancel()
+  }
+  if (gen !== team.gen || !out || out === TIMEOUT) return
+  const a = teamAnswer(out.res)
+  if (!a) return
+  const before = teamLabel()
+  team.good = true
+  team.role = a.role
+  team.members = a.members
+  if (teamLabel() !== before) $.ui.invalidate('ui.render')
+}
+
+function teamTick($) {
+  void readTeam($).catch((err) => log($, 'team read failed: ' + String(err)))
+}
+
+// forgetTeam drops what was read for the session that is gone; the label goes with it.
+function forgetTeam($) {
+  team.gen += 1
+  const had = teamLabel() !== ''
+  team.good = false
+  team.role = 'none'
+  team.members = 0
+  if (had) $.ui.invalidate('ui.render')
+}
+
+function stopTeam() {
+  if (team.timer) team.timer.cancel()
+  team.timer = null
+  team.gen += 1
+}
+
+// startTeam reads at once and then every TEAM_MS, with the id the session has by then.
+function startTeam($) {
+  stopTeam()
+  teamTick($)
+  team.timer = $.clock.every(TEAM_MS, () => teamTick($))
+}
+
 // ---- the session ----
 
 // startReporter turns the reporter on for an interactive session whose pdx.json names the
@@ -280,6 +355,7 @@ function stopBeat() {
 // same load.
 async function startReporter($, e) {
   stopBeat()
+  stopTeam()
   ev.on = false
   ev.switching = false
   const cfg = parse(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
@@ -305,6 +381,8 @@ async function startReporter($, e) {
   ev.on = true
   enqueue($, 'session.start', { cwd: e.cwd, surface: e.surface })
   ev.beat = $.clock.every(HEARTBEAT_MS, () => beatTick($))
+  forgetTeam($) // a second session.start in this load: nothing read for an earlier session stays
+  startTeam($)
 }
 
 // sessionSwitch follows a /clear or a resume: the process goes on under a new session id,
@@ -322,6 +400,8 @@ async function sessionSwitch($, source) {
     ev.lastError = false
     ev.monitors.clear()
     enqueue($, 'session.switch', { prev_sid: prev, source })
+    forgetTeam($) // the lead of the old conversation says nothing about the new one
+    teamTick($)
   } finally {
     ev.switching = false
   }
@@ -341,6 +421,7 @@ async function sessionEnd($, e) {
     ev.beatGen += 1
   } else {
     stopBeat()
+    stopTeam()
   }
   enqueue($, 'session.end', { reason: e.reason }, e.sessionId)
   await finalFlush($)
@@ -548,6 +629,14 @@ async function onToolUseRender($, e, next) {
   return next(e)
 }
 
+// onSessionModeRender adds the lead's label to the footer's modes while the last good read says this session leads a
+// team; for anything else the footer is the engine's, unchanged. It reads the cache only, never the socket.
+async function onSessionModeRender($, e, next) {
+  const label = ev.on ? teamLabel() : ''
+  if (!label) return next(e)
+  return next({ ...e, props: { ...e.props, modes: [...e.props.modes, label] } })
+}
+
 async function onToolCheck($, e, next) {
   const r = await next(e)
   toolChecked($, e, r)
@@ -596,4 +685,5 @@ export function registerEvents(on) {
   on('session.end', onSessionEnd).catch(($, e, next) => next(e))
   on('classic.Stop', onStop).catch(($, e, next) => next(e))
   on('ui.render', { component: 'ToolUse' }, onToolUseRender).catch(($, e, next) => next(e))
+  on('ui.render', { component: 'SessionMode' }, onSessionModeRender).catch(($, e, next) => next(e))
 }

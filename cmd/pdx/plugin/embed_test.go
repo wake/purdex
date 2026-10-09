@@ -391,6 +391,7 @@ func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
 		{"hooks/register.js", "turn.complete", ""},
 		{"hooks/ask.js", "tool.call", "{ tool: 'AskUserQuestion' }"},
 		{"hooks/lease.js", "tool.call", "{ tool: 'Bash' }"},
+		{"hooks/events.js", "ui.render", "{ component: 'SessionMode' }"},
 	} {
 		found := false
 		for _, r := range regs {
@@ -399,6 +400,38 @@ func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
 		if !found {
 			t.Errorf("the scan did not find %+v among %d registrations", want, len(regs))
 		}
+	}
+}
+
+// TestHooks_UIRenderIsOnlyEverMatched (TI-5b, M-U1-3): `ui.render` is registered with a component matcher, and only for
+// the components this mod draws on — ToolUse (the reporter's tool row) and SessionMode (the lead's footer label); an
+// unmatched ui.render would be asked about every component the engine draws.
+func TestHooks_UIRenderIsOnlyEverMatched(t *testing.T) {
+	f := Files()
+	names, err := fs.Glob(f, "hooks/*.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"{ component: 'ToolUse' }": true, "{ component: 'SessionMode' }": true}
+	seen := 0
+	for _, name := range names {
+		b, err := fs.ReadFile(f, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		regs, _ := scanRegistrations(name, string(b))
+		for _, r := range regs {
+			if r.event != "ui.render" {
+				continue
+			}
+			seen++
+			if !allowed[r.matcher] {
+				t.Errorf("%s registers on(\"ui.render\") with matcher %q: only a ToolUse or SessionMode matcher is allowed", r.file, r.matcher)
+			}
+		}
+	}
+	if seen != 2 {
+		t.Errorf("found %d ui.render registrations, want 2 (ToolUse and SessionMode)", seen)
 	}
 }
 
