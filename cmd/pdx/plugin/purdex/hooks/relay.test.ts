@@ -255,6 +255,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
   on('classic.SessionStart', async () => { if (f.switchTo) { f.sessionId = f.switchTo; f.switchTo = undefined } return {} })
   on('prompt.submit', async (_$: any, e: any) => {
     f.submits.push(e)
+    ;(f.order ??= []).push('submit')
     const fail = f.failSubmit?.(e.text)
     if (fail === 'drop') return { drop: 'blocked by a settings hook' }
     if (fail === 'reject') throw new Error('the session refused the prompt')
@@ -2774,22 +2775,23 @@ test('the byte cap cuts on a code point: a pair of surrogates is never split', a
 
 const lockCalls = (f: Fake) => f.argvs.map(sub).filter((c) => c.startsWith('relay lock') || c.startsWith('relay unlock'))
 
-// Mutation gate: lock at approval/claim instead of at the write turn → the released-prompt test is red.
-test('the write turn\'s turn.start runs pdx relay lock before next(e)', async ($, on) => {
+// The real engine does not wait for a turn.start hook's await (measured, P6-6 acceptance): the lock goes up before the
+// write prompt is submitted. Mutation gate: lock in turn.start again (after the submit) → red.
+test('the relay lock is raised before the write prompt is submitted, once', async ($, on) => {
   const { f } = await approvedRelay($, on)
-  expect(lockCalls(f)).toEqual([]) // not at approval, not at the prompt's submit
-  let lockedWhenTheTurnEntered: string[] | undefined
-  f.atTurnStart = () => { lockedWhenTheTurnEntered = lockCalls(f) }
-  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
-  expect(lockedWhenTheTurnEntered).toEqual(['relay lock op-1 --session sid-old'])
+  expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old'])
+  const o = f.order!
+  expect(o.indexOf('pdx relay lock op-1 --session sid-old')).toBeLessThan(o.indexOf('submit'))
   expect(f.timeouts[f.argvs.findIndex((a) => sub(a).startsWith('relay lock'))]).toBe(8000)
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old']) // the turn itself does not lock
 })
 
 test('a released prompt\'s turn does not lock', async ($, on) => {
   const { f } = await approvedRelay($, on)
   await $.turn.start({ text: 'a released prompt that ran first', turnId: 'tx' })
   await $.turn.start({ text: 'the op id alone: op-1', turnId: 'ty' })
-  expect(lockCalls(f)).toEqual([])
+  expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old']) // only the one raised before the submit
 })
 
 // Mutation gate: unlock after the /clear → red.

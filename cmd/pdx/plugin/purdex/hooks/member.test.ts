@@ -188,7 +188,7 @@ test('a lead’s write prompt carries the roster from pdx team --json; an empty 
   team = { exitCode: 0, stdout: JSON.stringify({ team: {}, members: [] }) }
 })
 
-test('the full member path reports written, cleared (new id), done under the member op id; lock before the write turn, unlock before /clear', async ($, on) => {
+test('the full member path reports written, cleared (new id), done under the member op id; lock before the write prompt, unlock before /clear', async ($, on) => {
   const f = memberWorld(on, 'member', memberPdx())
   await start($, f)
   await receive($, ENVELOPE(CONTROL))
@@ -215,8 +215,8 @@ test('the full member path reports written, cleared (new id), done under the mem
     'relay report ' + OPID + ' done',
   ])
   const at = (needle: string) => f.order.findIndex((o) => o.startsWith(needle))
-  expect(at('pdx relay lock ' + OPID)).toBeGreaterThan(at('submit'))
-  expect(at('pdx relay lock ' + OPID)).toBeLessThan(at('turn.start')) // …and the lock is up before the write turn enters (the first turn.start here is the write turn's)
+  expect(at('pdx relay lock ' + OPID)).toBeGreaterThan(-1)
+  expect(at('pdx relay lock ' + OPID)).toBeLessThan(at('submit')) // the lock is up before the write prompt goes out (the engine does not wait for turn.start's await)
   expect(at('pdx relay unlock ' + OPID)).toBeLessThan(at('command clear'))
   expect(at('pdx relay unlock ' + OPID)).toBeGreaterThan(at('pdx relay lock ' + OPID))
   expect(nonceOf(write)).toBeTruthy()

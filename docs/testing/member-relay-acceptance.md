@@ -53,7 +53,7 @@
 
 ## Relay-lock timing: does the real engine wait for `turn.start`'s await?
 
-The mod raises the relay lock in its `turn.start` hook: `await pdx relay lock …`, then `next(e)` (`register.js`). The question is whether the engine really holds the model's first tool call until that await is done. A real sample (a self relay, op `02325587`) had 49 s between the write prompt and its only tool call, which proves nothing; this test makes the await long enough to tell.
+P6-3c raised the relay lock in the write turn's `turn.start` hook: `await pdx relay lock …`, then `next(e)`. The question was whether the engine really holds the model's first tool call until that await is done. A real sample (a self relay, op `02325587`) had 49 s between the write prompt and its only tool call, which proves nothing; this test makes the await long enough to tell.
 
 **Method (scratch plugin copy, a `pdx` shim):**
 
@@ -84,11 +84,20 @@ The mod raises the relay lock in its `turn.start` hook: `await pdx relay lock �
    - the first PreToolUse is **after** `lock-done` → the engine waits for the `turn.start` await; the main path stands (lock before `next(e)`). Record the method and the three timestamps below.
    - the first PreToolUse is **before** `lock-done` → the engine does not wait. Switch to the fallback of plan P6-3c rule 1: `await lockRelay` right **before** the write prompt's `$.prompt.submit` (in `startWrite`), say so in the PR, and tell 88 that their ask paths are unaffected (the lock only matters for the relay's own turn).
 
-**Result (fill in when run):**
+**Result (run 2026-10-09, alpha.652, op `c64e5a82-35d3-4370-9671-c5dcfca451a9`, a scratch member adopted into a throwaway team; times local UTC+8, the shim log is UTC):**
 
 | | |
 |---|---|
-| Date, build | |
-| `lock-start` / `lock-done` | |
-| first PreToolUse of the write turn | |
-| Conclusion | |
+| `lock-start` / `lock-done` (shim, 20 s delay) | 21:52:35.9 / 21:52:55.99 |
+| write prompt submitted (`UserPromptSubmit`) | 21:52:35 |
+| first `PreToolUse` of the write turn (daemon log) | 21:52:43 |
+| handoff file written (mtime) / `Stop` | 21:52:44 / 21:52:46 |
+| daemon log "hook allow … holds the lock" for the op | none (the flag was not up) |
+| Conclusion | **The engine does not hold a turn for `turn.start`'s awaited call.** The model's Write ran 12 s before the lock finished. Plan P6-3c rule 1's fallback is taken: the lock is raised in `startWrite`, before the write prompt's `$.prompt.submit`. |
+
+After the fix the same measurement needs no shim: a relay's write turn must log `hook allow: … tool "Write" while relay op <op> holds the lock` in the daemon log.
+
+## Not verified on a real session
+
+- A lead's own relay carrying its roster in §8 (needs a lead self relay, another approval card); covered by `member.test.ts`.
+- A daemon restart mid-relay (step 7; the lead's, on the shared daemon).

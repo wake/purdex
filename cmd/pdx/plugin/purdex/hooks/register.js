@@ -478,8 +478,9 @@ async function whoami($) {
 }
 
 // The relay lock (P6-3c; spec §6.6): the flag file that makes `pdx hook` ask the daemon, which then allows only the
-// handoff Write. It is raised by the turn.start of THE turn that writes the handoff (after any running or released
-// turn has completed, so those are never denied) and lowered before the mod's own /clear. Fail-open both ways: a lock
+// handoff Write. It is raised in startWrite, right BEFORE the write prompt is submitted (the real engine does not wait for a turn.start
+// hook's await, so a lock raised in the write turn's turn.start came too late: measured in P6-6's acceptance), and lowered
+// before the mod's own /clear. Fail-open both ways: a lock
 // that cannot be raised is one log line and the write goes on; an unlock that fails is one log line and the daemon's
 // safety net removes the flag at `cleared` or at a terminal state.
 async function lockRelay($, p) {
@@ -871,6 +872,17 @@ function startWrite($, p) {
     p.git = git
     p.team = team
     if (s.pending !== p || s.state !== 'approved') return // the await may span the user's /clear
+    // The relay lock goes up BEFORE the write prompt is submitted, not in the write turn's turn.start: the real engine
+    // does not wait for a turn.start hook's await, so the model's first tool call can run before a lock raised there
+    // (measured, docs/testing/member-relay-acceptance.md). Fix rounds do not lock again.
+    if (!p.lockTried) {
+      p.lockTried = true
+      await lockRelay($, p)
+      if (s.pending !== p || s.state !== 'approved') {
+        await unlockRelay($, p) // the relay ended while the call was out: nothing else will lower it
+        return
+      }
+    }
     arm(p, 'approved')
     try {
       await submit($, compose('write', body, p))
@@ -1079,11 +1091,6 @@ export function register(on) {
       if (writing) s.writeTurnId = e.turnId
       else s.seedTurnId = e.turnId
       p.nonce = undefined
-      if (writing && !p.lockTried) {
-        p.lockTried = true // fix rounds do not lock again
-        await lockRelay($, p) // before next(e): the turn enters locked
-        if (s.pending !== p) await unlockRelay($, p) // the relay ended while the call was out: nothing will lower it
-      }
     }
     return next(e)
   })
