@@ -1,7 +1,6 @@
 package teammod
 
 import (
-	"strings"
 	"sync"
 
 	"github.com/wake/purdex/internal/team"
@@ -80,6 +79,6 @@ func (m *Module) anyResponder() bool {
 	return m.responderHolds.Load() > 0 || m.responders.Any()
 }
 
-func sameSession(a, b string) bool { return a != "" && strings.EqualFold(a, b) }
+func sameSession(a, b string) bool { return a != "" && a == b } // exact: session ids are opaque
 
 var _ team.ApprovalFeed = (*Module)(nil)

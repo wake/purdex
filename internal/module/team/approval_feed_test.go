@@ -190,3 +190,19 @@ func TestHoldResponder_CountsAndNeverGoesNegative(t *testing.T) {
 		t.Fatalf("holds = %d, want 0", got)
 	}
 }
+
+// Session ids are opaque and case-sensitive: an id that differs only by case is another session.
+func TestSubscribeSession_SessionIdsAreCaseSensitive(t *testing.T) {
+	f := newFixture(t)
+	f.createFrom(uid(1), "/tmp/10.sock") // sid-1
+	c := &collector{}
+	open, cancel, err := f.m.SubscribeSession("SID-1", c.fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	f.do(http.MethodDelete, "/api/team/approvals/"+uid(1), nil) // a closed op of sid-1
+	if len(open) != 0 || len(c.got()) != 0 {
+		t.Fatalf("SID-1 received sid-1's approvals: open %+v ops %+v", open, c.got())
+	}
+}
