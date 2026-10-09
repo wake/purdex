@@ -88,7 +88,7 @@ func TestRelayPromptFixedParts_CarryTheTagReplyRuleHeadingsAndFacts(t *testing.T
 		t.Errorf("seed tail = %q, want {{tasks}} (T-2)", fp.Seed.Tail)
 	}
 	want := []string{"- 寫完後只回一行「HANDOFF-WRITTEN」", "\n# HANDOFF\n",
-		"{{old_session}}", "{{old_ref}}", "{{context}}", "{{whoami}}"}
+		"{{old_session}}", "{{old_ref}}", "{{context}}", "{{whoami}}{{team}}"}
 	for i := 1; i <= 8; i++ {
 		want = append(want, "\n## "+string(rune('0'+i))+". ")
 	}
@@ -106,7 +106,7 @@ func TestRelayPromptFixedParts_CarryTheTagReplyRuleHeadingsAndFacts(t *testing.T
 		}
 	}
 	// Only the mod's three own values and the public ones.
-	allowed := append([]string{"op", "nonce", "missing"}, RelayPromptVariables...)
+	allowed := append([]string{"op", "nonce", "missing", "team"}, RelayPromptVariables...)
 	for _, s := range []string{fp.Write.Head, fp.Write.Tail, fp.Fix.Head, fp.Fix.Tail, fp.Seed.Head} {
 		for _, v := range varsOf(s) {
 			if !slices.Contains(allowed, v) {

@@ -24,8 +24,8 @@ import (
 const RelayPromptMaxBytes = 16 << 10
 
 // RelayPromptVariables are the {{name}}s a body may use (U21 (d)); the mod
-// fills them. The fixed parts also use {{op}}, {{nonce}} and {{missing}},
-// which only the mod knows, and {{tasks}} (the seed's tail, T-2). "git" is the mod's own run of read-only git commands
+// fills them. The fixed parts also use {{op}}, {{nonce}}, {{missing}} and {{team}}
+// (P6-6: the member's lead / the lead's roster lines, or nothing), which only the mod knows, and {{tasks}} (the seed's tail, T-2). "git" is the mod's own run of read-only git commands
 // (P6-3a): the relay lock allows only the handoff Write, so the model cannot run them itself.
 var RelayPromptVariables = []string{"path", "old_ref", "old_session", "context", "whoami", "git"}
 
@@ -119,7 +119,7 @@ var RelayPromptFixedParts = RelayPromptSkeleton{
 			"- 舊 session id：{{old_session}}",
 			"- 舊 ref：{{old_ref}}",
 			"- 接力時 context：{{context}}",
-			"- pdx 身分：{{whoami}}",
+			"- pdx 身分：{{whoami}}{{team}}",
 		),
 	},
 	Fix: RelayPromptFixed{

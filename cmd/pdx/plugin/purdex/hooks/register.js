@@ -46,9 +46,10 @@
 import { register as registerAsk } from './ask.js'
 import { registerEvents } from './events.js'
 import { registerLease } from './lease.js'
+import { CONSUMED, claimOp, controlOp, leadLine, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
-const VERSION = '1' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
+const VERSION = '2' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
@@ -66,6 +67,7 @@ const HOLD_MAX_MS = 660_000 // a held prompt waits for the request's answer at m
 const BEGIN_HOLD_MS = 40_000 // … and for begin's answer at most 40 s: begin's own bound (CALL_TIMEOUT_MS, 35 s) and slack
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
 const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
+const MAX_CONTROLS = 8 // verified (seen) control ops kept at once; a forged marker is refused by `seen` and never kept
 const MAX_OUTBOX = 50 // reports queued at once; one more pushes out the oldest
 const REQUIRED = ['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.']
 const STATUS_WAITING = '接力等待核准中'
@@ -98,6 +100,9 @@ const fresh = () => ({
   gen: 0, // bumped at every return to idle and every session change: a begin answers only for its own
   state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
   begun: undefined, // while beginning: a deferred resolving to the request begin opened and adopted, or undefined
+  turnRunning: false, // a main-conversation turn is between turn.start and turn.complete (P6-6)
+  control: [], // op ids of member-relay control messages not yet claimed, oldest first (MAX_CONTROLS)
+  writeDeferred: undefined, // a claimed request whose write prompt waits for the running turn to end
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
   leadAsk: undefined, // { gen, sid }: a /lead prompt is out until the agent's turn ends or the session moves on
@@ -324,7 +329,7 @@ function fill(text, vars) {
 // trailing newlines are dropped, so one newline stands before the tail.
 function compose(kind, body, p, extra = {}) {
   const pub = { path: p.path, old_ref: p.oldRef, old_session: p.oldSession, context: p.before, whoami: p.who, git: p.git ?? '' }
-  const all = { ...pub, op: p.op.id, nonce: p.nonce, ...extra }
+  const all = { ...pub, op: p.op.id, nonce: p.nonce, team: p.team ?? '', ...extra }
   const { head, tail } = FIXED[kind]
   const t = fill(tail, all) // a tail that fills to nothing (the seed's, with no task) is left out
   return fill(head, all) + fill(body.replace(/\n+$/, ''), pub) + (t === '' ? '' : '\n' + t)
@@ -509,6 +514,7 @@ function toIdle($) {
   if (p && p.locked) later($, 0, () => unlockRelay($, p))
   letGo()
   Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
+  if (s.control.length > 0) claimLater($) // a control that came while a relay ran (claim checks the turn) is not left waiting for a later turn
 }
 
 // recheckMember is U24 PL-1g: a cached `member` role is the daemon's answer of a moment ago, and a released
@@ -852,11 +858,18 @@ function settle($, p, outcome) {
   if (s.state !== 'awaiting') return
   if (outcome !== 'approved') return toIdle($)
   s.state = 'approved'
+  startWrite($, p)
+}
+
+// startWrite is the step after an approval — a self relay's (settle) or a claimed member relay's (claim): the
+// write prompt, composed at use, from a timer. The state is already 'approved'.
+function startWrite($, p) {
   later($, STEP_MS, async () => {
-    // both bounded (10 s, 8 s) and asked together: the step waits no longer than whoami did
-    const [who, body, git] = await Promise.all([whoami($), bodyFor($, 'write'), gitFacts($)])
+    // all bounded (10 s, 8 s) and asked together: the step waits no longer than whoami did
+    const [who, body, git, team] = await Promise.all([whoami($), bodyFor($, 'write'), gitFacts($), teamFacts($, p)])
     p.who = who
     p.git = git
+    p.team = team
     if (s.pending !== p || s.state !== 'approved') return // the await may span the user's /clear
     arm(p, 'approved')
     try {
@@ -867,6 +880,62 @@ function settle($, p, outcome) {
     }
     report($, p.op.id, 'writing')
   })
+}
+
+// teamFacts is the write prompt's `{{team}}` (§8.2 step 4): a member's lead (from its claim), a lead's roster
+// (`pdx team --json`), nothing for anyone else. Called from the step's timer, never inside a hook.
+async function teamFacts($, p) {
+  if (p.lead) return leadLine(p.lead, cleanGit)
+  if (s.role !== 'lead') return ''
+  const r = await pdx($, ['team', '--json'], PROMPTS_TIMEOUT_MS)
+  return rosterLines(r.exitCode === 0 ? parseJSON(r.stdout) : undefined, cleanGit)
+}
+
+// ---- member relay (P6-6): the control message, the claim ----
+
+// claim takes the op the newest control message named, from a timer, when nothing else is going on; it checks
+// again here, since the state may have moved since it was scheduled. A claim that fails does nothing: the
+// daemon's timeout reports it.
+async function claim($, gen) {
+  if (s.turnRunning || s.state !== 'idle' || s.gen !== gen) return // turn.complete, an idle return or the next control asks again
+  const sid = await $.session.id()
+  // Only ops the daemon accepted as `seen` are kept; more than one is a re-send or a newer op: tried oldest first.
+  let body, op
+  while (s.control.length > 0) {
+    const opId = s.control.shift()
+    const r = await pdx($, ['relay', 'claim', opId, '--session', sid], CALL_TIMEOUT_MS)
+    if (r.exitCode !== 0) {
+      log($, 'relay claim ' + opId + ' not taken (exit ' + r.exitCode + '): ' + String(r.stderr || '').trim().split('\n')[0])
+    } else {
+      body = parseJSON(r.stdout)
+      op = claimOp(body)
+      if (op) break
+      log($, 'relay claim ' + opId + ': the answer is not a claim')
+    }
+    if (s.turnRunning || s.state !== 'idle' || s.gen !== gen) return // the state moved while the claim was out
+  }
+  if (!op) return
+  s.control = [] // the rest named ops that are not this member's, or the same one again
+  const u = (await $.session.usage()).context
+  if (s.gen !== gen || s.state !== 'idle' || s.pending) return log($, 'relay claim ' + op.id + ' taken, but the session moved on; the daemon times it out')
+  const answer = deferred()
+  answer.resolve('approved')
+  const p = {
+    op, requestId: undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: usageLine(u),
+    nonce: undefined, nonceState: undefined, who: '', lead: body.lead && typeof body.lead === 'object' ? body.lead : undefined, answer,
+  }
+  s.pending = p
+  s.state = 'approved'
+  s.fixRounds = 0
+  // A turn the user started while the claim was out (id, the daemon, usage) is not interrupted: the write
+  // waits for its turn.complete (P6-6 R1).
+  if (s.turnRunning) s.writeDeferred = p
+  else startWrite($, p)
+}
+
+function claimLater($) {
+  const gen = s.gen
+  later($, 0, () => claim($, gen))
 }
 
 // submit sends a prompt of the mod's; a prompt that did not enter — the
@@ -953,6 +1022,28 @@ export function register(on) {
   registerEvents(on)
   registerLease(on)
 
+  // The member-relay control message (P6-6, M1): consumed whatever the state (codex finding 1), so the model never
+  // sees it. The daemon is told the mod has it now (Q2 branch A); the claim waits for the running turn.
+  on('session.receive', async ($, e, next) => {
+    if (!s.interactive) return next(e)
+    const opId = controlOp(e)
+    if (!opId) return next(e)
+    if (!(s.pending && s.pending.op.id === opId)) {
+      // Branch A: the daemon learns the mod has the message now, not at the claim. Its answer is also the proof the
+      // op is this member's (any peer can send the marker; `seen` is refused for an op that is not): only an op
+      // that was seen is kept for the claim.
+      later($, 0, async () => {
+        const sid = await $.session.id()
+        const r = await pdx($, ['relay', 'seen', opId, '--session', sid], CALL_TIMEOUT_MS)
+        // s.gen moves at every return to idle, so the conversation is told by its session id (a /clear changes it)
+        if (r.exitCode !== 0 || (await $.session.id().catch(() => undefined)) !== sid) return log($, 'relay control ' + opId + ' dropped (seen exit ' + r.exitCode + ')')
+        if (!s.control.includes(opId)) s.control = [...s.control, opId].slice(-MAX_CONTROLS)
+        if (!s.turnRunning && s.state === 'idle') claimLater($)
+      })
+    }
+    return { consumed: CONSUMED }
+  })
+
   on('session.start', async ($, e, next) => {
     const stale = s.pending
     if (stale && stale.locked) later($, 0, () => unlockRelay($, stale)) // the reset forgets the relay: lower its lock first
@@ -981,6 +1072,7 @@ export function register(on) {
   // the relay's.
   on('turn.start', async ($, e, next) => {
     const p = s.pending
+    if (s.interactive && !e.agentId) s.turnRunning = true
     if (s.interactive && s.leadAsk && s.leadAsk.turnId === undefined && typeof e.text === 'string' && e.text.includes(s.leadAsk.nonce)) s.leadAsk.turnId = e.turnId
     if (s.interactive && p && p.nonce && s.state === p.nonceState && typeof e.text === 'string' && e.text.includes(p.nonce)) {
       const writing = s.state === 'approved'
@@ -997,10 +1089,21 @@ export function register(on) {
   })
 
   on('turn.complete', async ($, e, next) => {
-    const r = await next(e)
+    let r
+    try {
+      r = await next(e)
+    } finally {
+      if (s.interactive && !e.agentId) s.turnRunning = false // a hook beneath that throws must not leave the turn running for good
+    }
     if (!s.interactive || e.agentId) return r
     if (s.leadAsk && s.leadAsk.turnId !== undefined && e.turnId === s.leadAsk.turnId) s.leadAsk = undefined // the /lead turn has ended: it may be asked again
     try {
+      if (s.writeDeferred) {
+        const d = s.writeDeferred
+        s.writeDeferred = undefined
+        if (s.pending === d && s.state === 'approved') startWrite($, d)
+      }
+      if (s.control.length > 0 && s.state === 'idle') claimLater($) // a member-relay control that waited for this turn (P6-6)
       if (!s.helloOK && !s.helloBusy) helloLater($) // the last hello failed (daemon down): say it again
       if (s.outbox.length) { s.held.clear(); pump($) } // re-send what did not land (§8.3)
       if (s.pending && s.writeTurnId !== undefined && e.turnId === s.writeTurnId) await onWriteTurnDone($)
@@ -1021,6 +1124,7 @@ export function register(on) {
     if (!s.interactive || e.source !== 'clear') return r
     const p = s.pending
     s.gen += 1 // a new session id: no begin sent under the old one answers for it
+    s.control = [] // a control message named the old session id: it is the old conversation's
     s.helloOK = false // nor does the old session's hello: the new one is sent below
     if (s.state === 'clearing' && p) {
       s.state = 'seeding'
