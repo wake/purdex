@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { PANEL_DEFAULT_WIDTH } from '../../stores/useTeamUiStore'
 import {
-  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_GAP, SEP_W, POPOVER_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
+  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_GAP, SEP_W, POPOVER_W, SUBAGENT_SLOT_W, PLUS_CHIP_W, capacityOf, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
 } from './panel-layout'
 
 describe('panel header budget', () => {
@@ -51,6 +51,19 @@ describe('panel header budget', () => {
     expect(CELL_H).toBeGreaterThanOrEqual(CELL_RING)
   })
 
+  it('a cell includes the subagent slot, and 4 cells still leave room at 312 with the slot in', () => {
+    expect(CELL_W).toBeGreaterThanOrEqual(SUBAGENT_SLOT_W + 16 + CELL_RING)
+    const room = PANEL_DEFAULT_WIDTH - (AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + BUTTONS_W)
+    expect(room - cellsWidth(4)).toBeGreaterThanOrEqual(0)
+  })
+
+  it('capacityOf keeps `reserve` px free for the strip\'s +N chip, and never drops below one', () => {
+    const avail = cellsWidth(5)
+    expect(capacityOf(avail, CELL_W)).toBe(5)
+    expect(capacityOf(avail, CELL_W, PLUS_CHIP_W)).toBeLessThan(5)
+    expect(capacityOf(10, CELL_W, PLUS_CHIP_W)).toBe(1)
+  })
+
   it('the edit form is kept inside the viewport on the left, right and bottom', () => {
     const size = { w: POPOVER_W, h: 200 }
     const view = { w: 1000, h: 700 }
@@ -65,7 +78,7 @@ describe('panel header budget', () => {
     expect(CELL_W_MAX).toBe(44)
     const w = cellWidthFor(style)
     expect(w).toBeLessThanOrEqual(CELL_W_MAX)
-    const total = AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + 4 * w + 3 * 2 + 5 + BUTTONS_W
+    const total = AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + cellsWidth(4) + BUTTONS_W
     expect(total).toBeLessThanOrEqual(PANEL_DEFAULT_WIDTH)
     expect(w).toBe(CELL_W)
   })

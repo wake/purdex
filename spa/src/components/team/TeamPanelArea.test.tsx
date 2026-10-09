@@ -18,8 +18,8 @@ import { CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
 // The light, the subagent dots and the host chip are TI-3's pieces over the agent store; here they are stand-ins that show
 // what the panel asked of them.
 vi.mock('./TeamSeatIcon', () => ({
-  TeamSeatIcon: ({ sessionCode, subagents }: { sessionCode: string; subagents?: boolean }) => (
-    <span data-testid="seat-icon" data-code={sessionCode} data-subagents={String(subagents === true)} />
+  TeamSeatIcon: ({ sessionCode, subagents, subagentSlot }: { sessionCode: string; subagents?: boolean; subagentSlot?: boolean }) => (
+    <span data-testid="seat-icon" data-code={sessionCode} data-subagents={String(subagents === true)} data-slot={String(subagentSlot === true)} />
   ),
   TeamSeatHostBadge: ({ hostId }: { hostId: string }) => <span data-testid="seat-host" data-host={hostId} />,
 }))
@@ -560,7 +560,9 @@ describe('one-line mode', () => {
     expect(cells.map((c) => c.getAttribute('data-session-id'))).toEqual(['L', 'A', 'B', 'C'])
     expect(screen.getByTestId('team-panel-name').textContent).toBeTruthy()
     expect(screen.getByTestId('team-panel-cells').className).not.toContain('flex-wrap') // the first row never wraps
-    expect(within(cells[0]).getByTestId('seat-icon').getAttribute('data-subagents')).toBe('false')
+    // the cell draws the seat's subagent dots, in the slot that is always reserved for them
+    expect(within(cells[0]).getByTestId('seat-icon').getAttribute('data-subagents')).toBe('true')
+    expect(within(cells[0]).getByTestId('seat-icon').getAttribute('data-slot')).toBe('true')
     expect(within(cells[0]).getByTestId('context-ring')).toBeTruthy()
     expect(within(cells[0]).getByTestId('model-icon-opus')).toBeTruthy()
     expect(within(cells[1]).getByTestId('model-icon-unknown')).toBeTruthy() // no reading: the dashed "?"

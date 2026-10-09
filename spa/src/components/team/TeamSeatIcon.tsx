@@ -13,6 +13,7 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { compositeKey } from '../../lib/composite-key'
 import { hasHostBadge, isIconWeight, isPhosphorIconName, resolveHostColors } from '../../lib/host-color'
+import { SUBAGENT_SLOT_W } from './panel-layout'
 
 interface IconProps {
   hostId: string
@@ -23,6 +24,11 @@ interface IconProps {
   subagents?: boolean
   /** The panel's one-line cell: iconDot draws its light on the icon's corner instead of in a slot beside it (no extra width). */
   compact?: boolean
+  /**
+   * Reserve a fixed-width slot left of the icon for the subagent dots (the one-line cell, in the pane and in the title bar):
+   * always there, with or without subagents, so the cell's width never depends on them.
+   */
+  subagentSlot?: boolean
 }
 
 /** The icon of a seat whose agent type is not known (no store key, or none yet): a bead is never visually empty. */
@@ -30,9 +36,9 @@ function DefaultBot({ size, className }: { size: number; className?: string }) {
   return <Robot size={size} className={className} data-testid="team-bead-bot" />
 }
 
-export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false, compact = false }: IconProps) {
+export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false, compact = false, subagentSlot = false }: IconProps) {
   const { agentIcon, agentStatus, isUnread, tabIndicatorStyle, subagentRefs } = useSessionAgentIndicator(hostId, sessionCode)
-  return (
+  const icon = (
     <TabIcon
       IconComponent={agentIcon ?? DefaultBot}
       agentStatus={agentStatus}
@@ -42,6 +48,14 @@ export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14,
       subagentRefs={subagents ? subagentRefs : []}
       isUnread={isUnread}
     />
+  )
+  if (!subagentSlot) return icon
+  // The dots hang off the icon's own box (absolute), so the slot only has to hold the room for them.
+  return (
+    <span className="inline-flex items-center">
+      <span data-testid="seat-subagent-slot" aria-hidden="true" className="flex-shrink-0" style={{ width: SUBAGENT_SLOT_W }} />
+      {icon}
+    </span>
   )
 }
 
