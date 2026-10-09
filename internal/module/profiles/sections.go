@@ -202,6 +202,26 @@ func (s *Store) requireProfile(profileID string) error {
 // up. The same holds for a read that goes stale before a response is sent at
 // all; no locking could close that window anyway.
 func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResult, error) {
+	return s.PutSectionGuarded(profileID, in, baseRev, nil)
+}
+
+// SectionGuard vets a write against the live row it is about to replace: it runs after the schema gate and the
+// row.Rev == baseRev check, right before the conditional UPDATE, so the row that was checked is the row that is replaced.
+// A non-nil error (a *GuardError) refuses the write; nothing is written.
+type SectionGuard func(stored Section, in Section) error
+
+// GuardError is a guard's refusal: the HTTP status and the machine-readable code the client sees.
+type GuardError struct {
+	Status int
+	Code   string
+	Detail string
+}
+
+func (e *GuardError) Error() string { return e.Code + ": " + e.Detail }
+
+// PutSectionGuarded is PutSection with an optional guard (nil = none, the ordinary write). A guarded write never creates
+// or recreates a section: a missing or tombstoned row refuses it.
+func (s *Store) PutSectionGuarded(profileID string, in Section, baseRev int64, guard SectionGuard) (PutResult, error) {
 	payload := string(in.Payload)
 
 	for attempt := 0; attempt < maxPutAttempts; attempt++ {
@@ -216,6 +236,9 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 
 		switch {
 		case !found:
+			if guard != nil {
+				return PutResult{}, &GuardError{Status: 403, Code: "device_append_only", Detail: "the section does not exist"}
+			}
 			// Step 2, never-seen section: no stored shape, so no schema gate.
 			if baseRev != 0 {
 				// "Deleted under the client" only makes sense inside a profile
@@ -251,6 +274,9 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 			}
 
 		case row.deleted:
+			if guard != nil {
+				return PutResult{}, &GuardError{Status: 403, Code: "device_append_only", Detail: "the section does not exist"}
+			}
 			// Step 1 — before any look at the revision, exactly as for a live
 			// row. The tombstone kept the deleted row's shape (DeleteSection
 			// clears only payload and hash), and that shape still binds:
@@ -292,6 +318,11 @@ func (s *Store) PutSection(profileID string, in Section, baseRev int64) (PutResu
 				// Step 5.
 				current := row.Section
 				return PutResult{Outcome: PutConflict, Rev: row.Rev, Current: &current}, nil
+			}
+			if guard != nil {
+				if err := guard(row.Section, in); err != nil {
+					return PutResult{}, err
+				}
 			}
 			// Step 3. ordinal = MAX(ordinal, ?): with equal fingerprints an
 			// older client may write (§4.5 row 1), but its lower ordinal must

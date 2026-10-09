@@ -13,7 +13,7 @@ import (
 )
 
 // QP-1b-ii task 6: a paired phone reaches only the profile its token names; everything else is the 404 of a profile that
-// does not exist. (The append-only write of spec §5.2 is QP-1c; until then a phone writes nothing.)
+// does not exist. (The append-only write of spec §5.2 is device_append_test.go.)
 
 func serveAs(m *Module, p *devices.Principal, method, path string, body []byte) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
@@ -48,7 +48,7 @@ func TestOwnership_APhoneReadsOnlyItsOwnProfile(t *testing.T) {
 	}
 }
 
-func TestOwnership_APhoneWritesNothingYetAndNotAnotherProfileAtAll(t *testing.T) {
+func TestOwnership_APhoneNeverCreatesASectionNorWritesAnotherProfile(t *testing.T) {
 	m, rec := newTestModule(t)
 	mine, other := createProfile(t, m, "mine"), createProfile(t, m, "other")
 	phone := &devices.Principal{ID: "d_aaaaaaaaaaaa", ProfileID: mine}
@@ -57,7 +57,7 @@ func TestOwnership_APhoneWritesNothingYetAndNotAnotherProfileAtAll(t *testing.T)
 	body := sectionBody(t, "c_aaaaaaaaaaaa", 0, hashOf("a"), `{"order":[],"tabs":{}}`)
 	assert.Equal(t, http.StatusNotFound, serveAs(m, phone, "PUT", sectionPath(other, "tabs.w1"), body).Code, "another profile")
 	rr := serveAs(m, phone, "PUT", sectionPath(mine, "tabs.w1"), body)
-	assert.Equal(t, http.StatusForbidden, rr.Code, "its own, until QP-1c")
+	assert.Equal(t, http.StatusForbidden, rr.Code, "its own: a section that does not exist is never created by a device")
 	assert.Contains(t, rr.Body.String(), "device_append_only")
 	assert.Equal(t, before, len(rec.events), "nothing was written, nothing announced")
 	require.Equal(t, http.StatusNotFound, serveAs(m, nil, "GET", sectionPath(mine, "tabs.w1"), nil).Code, "the section was not created")

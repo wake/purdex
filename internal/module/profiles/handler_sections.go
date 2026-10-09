@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/wake/purdex/internal/devices"
 )
@@ -77,6 +78,11 @@ func pathSection(w http.ResponseWriter, r *http.Request) (profileID, section str
 		return "", "", false
 	}
 	return profileID, section, true
+}
+
+// writeGuardError answers a guard's refusal: {"error": code, "detail": ...} with the guard's status.
+func writeGuardError(w http.ResponseWriter, e *GuardError) {
+	writeJSONStatus(w, e.Status, map[string]string{"error": e.Code, "detail": e.Detail})
 }
 
 // deviceOwns reports whether the request may touch profile id (QR pairing spec §3.3): the admin any, a paired phone only
@@ -177,9 +183,11 @@ func (m *Module) handlePutSection(w http.ResponseWriter, r *http.Request) {
 	if !ok || !deviceOwns(w, r, id) {
 		return
 	}
-	// Until the append-only guard of spec §5.2 lands (QP-1c), a paired phone writes nothing at all.
-	if _, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
-		writeJSONStatus(w, http.StatusForbidden, map[string]string{"error": "device_append_only"})
+	// A paired phone writes one thing (spec §5.2): the tabs.<ws> section of its own profile, by appending. Gate 1 (where) is
+	// here and in the store (a section that does not exist is refused); gates 2-4 run inside PutSection on the live row.
+	dev, isDevice := devices.PrincipalFrom(r.Context())
+	if isDevice && !strings.HasPrefix(section, "tabs.") {
+		writeGuardError(w, &GuardError{Status: http.StatusForbidden, Code: "device_append_only", Detail: "a device writes only tabs.<workspace> sections"})
 		return
 	}
 	body, ok := readBody(w, r, putBodyCap)
@@ -231,14 +239,28 @@ func (m *Module) handlePutSection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := m.store.PutSection(id, Section{
+	in := Section{
 		Section:     section,
 		Hash:        req.Hash,
 		Fingerprint: req.Fingerprint,
 		Ordinal:     int(*req.Ordinal),
 		Payload:     req.Payload,
 		Writer:      req.ClientID,
-	}, *req.BaseRev)
+	}
+	var guard SectionGuard
+	if isDevice {
+		if want := deviceClientID(dev.ID); req.ClientID != want {
+			writeGuardError(w, &GuardError{Status: http.StatusForbidden, Code: "device_append_only", Detail: "clientId must be " + want})
+			return
+		}
+		guard = deviceAppendGuard
+	}
+	res, err := m.store.PutSectionGuarded(id, in, *req.BaseRev, guard)
+	var ge *GuardError
+	if errors.As(err, &ge) {
+		writeGuardError(w, ge)
+		return
+	}
 	if err != nil {
 		writeStoreError(w, "put section "+id+"/"+section, err)
 		return
