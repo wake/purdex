@@ -98,17 +98,55 @@ describe('typeface', () => {
 })
 
 describe('full mode', () => {
-  it('pressing a row keeps the keyboard in the terminal (mousedown is default-prevented, Enter still opens)', () => {
+  // A browser moves focus to the focusable row unless mousedown is default-prevented; jsdom does not, so do it by hand.
+  const pressRow = (row: HTMLElement) => { if (fireEvent.mouseDown(row)) row.focus() }
+  const withTerm = (fn: (term: HTMLTextAreaElement) => void) => {
     scene()
     mount()
     const term = document.createElement('textarea') // a stand-in for the terminal's input
     document.body.appendChild(term)
     term.focus()
-    const row = rows()[0]
-    // A browser moves focus to the focusable row unless mousedown is default-prevented; jsdom does not, so do it by hand.
-    if (fireEvent.mouseDown(row)) row.focus()
-    expect(document.activeElement).toBe(term)
-    term.remove()
+    try { fn(term) } finally { term.remove() }
+  }
+
+  it('pressing the lead row (not draggable) keeps the keyboard in the terminal', () => {
+    withTerm((term) => {
+      pressRow(rows()[0])
+      expect(document.activeElement).toBe(term)
+    })
+  })
+
+  it('pressing a draggable row does not prevent mousedown (HTML5 drag needs it); click gives focus back to the terminal', () => {
+    withTerm((term) => {
+      const row = rows()[1]
+      pressRow(row)
+      expect(document.activeElement).toBe(row)
+      fireEvent.mouseUp(row)
+      expect(document.activeElement).toBe(term)
+      pressRow(row)
+      fireEvent.click(row)
+      expect(document.activeElement).toBe(term)
+    })
+  })
+
+  it('a finished drag (dragend) gives focus back to the terminal', () => {
+    withTerm((term) => {
+      const row = rows()[1]
+      pressRow(row)
+      fireEvent.dragStart(row, { dataTransfer: { setData: vi.fn(), effectAllowed: '' } })
+      fireEvent.dragEnd(row)
+      expect(document.activeElement).toBe(term)
+    })
+  })
+
+  it('focus is not restored to a terminal that has been removed', () => {
+    withTerm((term) => {
+      const row = rows()[1]
+      pressRow(row)
+      term.remove()
+      fireEvent.mouseUp(row)
+      expect(document.activeElement).toBe(row)
+    })
   })
 
   it('lead row is first and not draggable; members are', () => {

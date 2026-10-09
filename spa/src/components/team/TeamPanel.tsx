@@ -6,7 +6,7 @@
 // second row when the team is big. Both take the width of the area they sit in; the area (TeamPanelArea) owns the frame.
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretUp } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
@@ -37,6 +37,22 @@ export function TeamPanel(props: Props) {
 
 /** Buttons keep the terminal's focus: a mousedown on them does not move it. */
 const keepFocus = (e: React.MouseEvent) => e.preventDefault()
+
+/** A draggable row cannot preventDefault on mousedown (the browser would never start the HTML5 drag), so it lets the focus
+ *  move, remembers where it was, and hands it back when the press ends (mouseup / click / dragend). */
+function useReturnFocus() {
+  const prev = useRef<HTMLElement | null>(null)
+  const remember = useCallback((e: React.MouseEvent) => {
+    const a = document.activeElement
+    prev.current = a instanceof HTMLElement && a !== e.currentTarget ? a : null
+  }, [])
+  const restore = useCallback(() => {
+    const el = prev.current
+    prev.current = null
+    if (el && el.isConnected) el.focus()
+  }, [])
+  return { remember, restore }
+}
 
 function ExpandButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
   const t = useI18nStore((s) => s.t)
@@ -132,6 +148,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
   const ctxText = r.ctx !== undefined ? `${r.ctx}%` : '—'
+  const { remember, restore } = useReturnFocus()
   return (
     <div
       role="button"
@@ -140,10 +157,12 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
       data-session-id={seat.sessionId}
       data-role={seat.role}
       data-active={String(isActive)}
-      onMouseDown={keepFocus}
-      onClick={() => onOpen(seat.sessionId)}
+      onMouseDown={drag ? remember : keepFocus}
+      onMouseUp={drag ? restore : undefined}
+      onClick={() => { restore(); onOpen(seat.sessionId) }}
       onKeyDown={(e) => { if (e.key === 'Enter') onOpen(seat.sessionId) }}
       {...drag}
+      onDragEnd={drag ? () => { drag.onDragEnd(); restore() } : undefined}
       className={`group relative mx-1.5 px-2 py-2 rounded-md cursor-pointer transition-colors ${
         isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
       } ${dragging ? 'opacity-30' : ''}`}
