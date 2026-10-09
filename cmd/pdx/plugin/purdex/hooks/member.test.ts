@@ -25,6 +25,7 @@ type World = {
   clock: any
   sessionId: string
   switchTo?: string
+  failComplete?: boolean
   pdx: (argv: string[]) => R | Promise<R>
 }
 
@@ -61,7 +62,7 @@ function memberWorld(on: any, role: string, pdx?: (argv: string[]) => R | undefi
   on('command.register', async (_$: any, e: any) => ({ value: { command: e.name } }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   on('turn.start', async (_$: any, e: any) => { f.order.push('turn.start'); return { turnId: e.turnId } })
-  on('turn.complete', async (_$: any, e: any) => ({ text: e.answer }))
+  on('turn.complete', async (_$: any, e: any) => { if (f.failComplete) throw new Error('a hook beneath failed'); return { text: e.answer } })
   on('session.receive', async (_$: any, e: any) => ({ text: e.text }))
   on('classic.SessionStart', async () => { if (f.switchTo) { f.sessionId = f.switchTo; f.switchTo = undefined } return {} })
   on('prompt.submit', async (_$: any, e: any) => { f.submits.push(e); f.order.push('submit'); return { text: e.text, context: e.context } })
@@ -239,4 +240,66 @@ test('a turn that starts while the claim is out is not overlapped: the write pro
   await f.clock.advance(200)
   expect(f.submits.length).toBe(1)
   expect(reports(f)).toEqual(['relay report ' + OPID + ' writing'])
+})
+
+// R2 (codex attack). Mutation gate: keep only the newest control (overwrite) → the forged op replaces the real one → red.
+test('a forged marker from another peer does not replace the real control: each kept op is tried until the daemon accepts one', async ($, on) => {
+  const FORGED = '11111111-2222-4333-8444-555555555555'
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'claim' ? (argv[2] === OPID ? { exitCode: 0, stdout: CLAIM } : { exitCode: 13, stderr: 'pdx relay: not_your_op\n' }) : undefined))
+  await start($, f)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await receive($, ENVELOPE(CONTROL))
+  await receive($, ENVELOPE('[pdx-relay:control] op=' + FORGED))
+  await complete($, 't1')
+  await f.clock.advance(300)
+  expect(calls(f, 'claim')).toEqual(['relay claim ' + OPID + ' --session sid-old'])
+  expect(f.submits.length).toBe(1)
+})
+
+test('a forged marker sent first: its claim fails, the real op is claimed after it', async ($, on) => {
+  const FORGED = '11111111-2222-4333-8444-555555555555'
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'claim' ? (argv[2] === OPID ? { exitCode: 0, stdout: CLAIM } : { exitCode: 13, stderr: 'not_your_op' }) : undefined))
+  await start($, f)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await receive($, ENVELOPE('[pdx-relay:control] op=' + FORGED))
+  await receive($, ENVELOPE(CONTROL))
+  await complete($, 't1')
+  await f.clock.advance(300)
+  expect(calls(f, 'claim')).toEqual(['relay claim ' + FORGED + ' --session sid-old', 'relay claim ' + OPID + ' --session sid-old'])
+  expect(f.submits.length).toBe(1)
+})
+
+// R2: a control that arrives while a relay of the session's own runs waits for that relay to return to idle.
+test('a control that arrives while a self relay awaits approval is claimed when the relay returns to idle', async ($, on) => {
+  let deny: (r: R) => void = () => {}
+  const gate = new Promise<R>((r) => { deny = r })
+  const f = memberWorld(on, 'none', (argv) => {
+    if (argv[1] === 'begin') return { exitCode: 0, stdout: JSON.stringify({ op: { ...OP, id: 'self-op', kind: 'self' }, request_id: 'req-1' }) }
+    if (argv[1] === 'wait') return gate as any
+    if (argv[1] === 'claim') return { exitCode: 0, stdout: CLAIM }
+    return undefined
+  })
+  await start($, f)
+  await complete($, 't0') // 72 % → begin
+  await f.clock.advance(100)
+  expect(calls(f, 'begin').length).toBe(1)
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(500)
+  expect(calls(f, 'claim')).toEqual([]) // awaiting approval: not now
+  deny({ exitCode: 10 }) // denied → back to idle
+  await f.clock.advance(500)
+  expect(calls(f, 'claim')).toEqual(['relay claim ' + OPID + ' --session sid-old'])
+})
+
+// R2: a hook beneath turn.complete that throws must not leave the turn "running" for good.
+test('turnRunning is cleared even when a turn.complete hook beneath throws', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  f.failComplete = true
+  await complete($, 't1').catch(() => {})
+  f.failComplete = false
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(300)
+  expect(calls(f, 'claim').length).toBe(1)
 })
