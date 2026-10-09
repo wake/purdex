@@ -9,10 +9,10 @@ import { useI18nStore } from '../../stores/useI18nStore'
 
 export function TeamGhostLeadRow({ ghost, team, activeTabId }: { ghost: TeamGhostLead; team: TeamDisplay; activeTabId: string | null }) {
   const t = useI18nStore((s) => s.t)
-  const { lead, color, teamKey, members } = ghost
+  const { lead, color, teamKey, members, collapsed } = ghost
   const open = () => team.onOpenSeat(teamKey, lead.sessionId)
   return (
-    <TeamSidebarBlock team={team} teamKey={teamKey} color={color} collapsed={false} members={members} activeTabId={activeTabId} ghost>
+    <TeamSidebarBlock team={team} teamKey={teamKey} color={color} collapsed={collapsed} members={members} activeTabId={activeTabId} ghost>
       <div
         role="button"
         tabIndex={0}

@@ -32,7 +32,8 @@ export function InlineTabList({
   const t = useI18nStore((s) => s.t)
   const team = useTeamDisplay()
   // With a team provider, a member's tab is not a row: it is a bead under its lead's row (team interface R1).
-  const validIds = tabIds.filter((id) => !!tabsById[id] && !team?.sidebarHidden(id))
+  const folded = team?.sidebarHidden(tabIds)
+  const validIds = tabIds.filter((id) => !!tabsById[id] && !folded?.has(id))
   const ghosts = team ? team.ghostLeads(sourceWsId) : []
 
   if (validIds.length === 0 && ghosts.length === 0) {

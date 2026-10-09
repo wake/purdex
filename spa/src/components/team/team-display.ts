@@ -69,6 +69,8 @@ export interface TeamGhostLead {
   color: string
   label: string
   full: string
+  /** The team's shared fold state: the ghost's beads fold like a live lead's. */
+  collapsed: boolean
   lead: TeamSeatView
   members: TeamSeatView[]
 }
@@ -90,8 +92,12 @@ export interface TeamDisplay {
   /** Show the host icon next to each bead (the user setting, spec P7). */
   beadHost: boolean
   tabMark: (tabId: string) => TeamTabMark | null
-  /** Member tabs are folded into the bead row under their lead row. */
-  sidebarHidden: (tabId: string) => boolean
+  /**
+   * The member tabs of THIS tab list that are folded into the bead row under their lead row: those in a run behind
+   * their lead (team-runs), whatever the collapse. A member whose lead is in another workspace, or that stayed open
+   * after the lead closed, is not among them: it is an ordinary row.
+   */
+  sidebarHidden: (tabIds: readonly string[]) => Set<string>
   /** The bead row under a lead tab's row; null for any other tab. */
   sidebarBeads: (tabId: string) => TeamBeads | null
   ghostLeads: (workspaceId: string | null) => TeamGhostLead[]

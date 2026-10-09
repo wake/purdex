@@ -58,6 +58,48 @@ describe('InlineTabList — team beads', () => {
     expect(screen.getAllByTestId('team-lead-block')).toHaveLength(1)
   })
 
+  it('a member whose lead is in another workspace is an ordinary row, the active one visible', () => {
+    seedScene({ members, tabs: [['lead', 'lead-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }, { id: 'w2', tabs: ['ma'] }] })
+    mount(<><div data-testid="one"><List ws="w1" /></div><div data-testid="two"><List ws="w2" active="ma" /></div></>)
+    const two = within(screen.getByTestId('two'))
+    expect(two.getAllByTestId('inline-tab-row')).toHaveLength(1)
+    expect(two.getByTestId('inline-tab-row').getAttribute('data-active')).toBe('true')
+    expect(two.queryByTestId('team-lead-block')).toBeNull()
+    expect(within(screen.getByTestId('one')).getAllByTestId('team-bead')).toHaveLength(3)
+  })
+
+  it('a locked member that survived the lead close is an ordinary row and the ghost row still lists it', () => {
+    seedScene({ members, tabs: [['ma', 'a-tm'], ['plain', null]], workspaces: [{ id: 'w1', tabs: ['ma', 'plain'] }] })
+    act(() => useTeamUiStore.getState().setGhostWorkspace(KEY, 'w1'))
+    mount()
+    expect(screen.getAllByTestId('inline-tab-row')).toHaveLength(2) // ma and plain
+    expect(within(screen.getByTestId('team-ghost-lead')).getAllByTestId('team-bead')).toHaveLength(3)
+  })
+
+  it('a collapsed team whose lead tab is closed shows the collapsed line on the ghost; the toggle sticks; reopening keeps it', () => {
+    seedScene({ members, tabs: [['plain', null]], workspaces: [{ id: 'w1', tabs: ['plain'] }] })
+    act(() => {
+      useTeamUiStore.getState().setGhostWorkspace(KEY, 'w1')
+      useTeamUiStore.getState().setCollapsed(KEY, true)
+    })
+    mount()
+    const ghost = within(screen.getByTestId('team-ghost-lead'))
+    expect(ghost.queryByTestId('team-bead')).toBeNull()
+    expect(ghost.getAllByTestId('team-fold-dot')).toHaveLength(3)
+    fireEvent.click(ghost.getByTestId('team-sidebar-collapsed'))
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBeUndefined()
+    expect(within(screen.getByTestId('team-ghost-lead')).getAllByTestId('team-bead')).toHaveLength(3) // stays expanded
+    fireEvent.click(within(screen.getByTestId('team-ghost-lead')).getByTestId('team-beads')) // blank click folds again
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true)
+    expect(within(screen.getByTestId('team-ghost-lead')).queryByTestId('team-bead')).toBeNull()
+    // Reopening the lead goes through openTeamSeat, which expands a collapsed group first (R10); the live block then
+    // draws the one shared state (no stale copy on the ghost).
+    fireEvent.click(within(screen.getByTestId('team-ghost-lead')).getByRole('button', { name: /title L/ }))
+    expect(tabShowing('lead-tm')).toBeDefined()
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBeUndefined()
+    expect(within(screen.getByTestId('team-lead-block')).getAllByTestId('team-bead')).toHaveLength(3)
+  })
+
   it('beads in team order, wrap to rows', () => {
     seedScene(base)
     act(() => useTeamUiStore.getState().setMemberOrder(KEY, ['C', 'A']))

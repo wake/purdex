@@ -5,6 +5,7 @@
 import type { Session } from '../../lib/host-api'
 import { groupLabel, panelName, tooltipOf } from '../../lib/team/team-names'
 import type { TeamIndex } from '../../lib/team/team-index'
+import { runMemberIds } from '../../lib/team/team-runs'
 import type { Seat, TeamView } from '../../lib/team/team-views'
 import type { PanelMode } from '../../stores/useTeamUiStore'
 import {
@@ -141,14 +142,14 @@ export function buildTeamDisplay(input: StructureInput, actions: TeamActions = N
     const label = groupLabel(v)
     const { lead, members } = seatsOf(v)
     const list = ghosts.get(at) ?? []
-    list.push({ teamKey: v.key, color: teamColor(v.colorIndex), label: label.text, full: label.full, lead, members })
+    list.push({ teamKey: v.key, color: teamColor(v.colorIndex), label: label.text, full: label.full, collapsed: collapsed[v.key] === true, lead, members })
     ghosts.set(at, list)
   }
 
   return {
     beadHost: input.beadHost,
     tabMark: (tabId) => marks.get(tabId) ?? null,
-    sidebarHidden: (tabId) => index.byTabId.get(tabId)?.role === 'member',
+    sidebarHidden: (tabIds) => runMemberIds(tabIds, (id) => index.byTabId.get(id)),
     sidebarBeads: (tabId) => beads.get(tabId) ?? null,
     ghostLeads: (workspaceId) => (workspaceId === null ? [] : ghosts.get(workspaceId) ?? []),
     panelTeam: (activeTabId) => {
