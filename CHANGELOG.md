@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.0.0-alpha.667] - 2026-10-10
+
+> 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。部署時 team.db（spawn_ops 新欄、team_fact_log 新表）與 workbook.db（結構第 2 版、待辦表）自動遷移。跨主機的新指令與回報要**兩台都部署**才會生效。
+
+### Added：把別台主機的 session 收進 team — X3c（#2305，A 線）
+
+- `pdx adopt <別台別名>/_<ref>`：先向那台確認它接受收進、允許我們、找得到那個 session，才建立核准；核准＝使用者同意，在同一筆交易裡建立「加入中」的 member 並把指令排進送出佇列。新路由 `GET /api/team/adoptions/{id}` 可等到結果（加入、失敗、作廢）；CLI 依結果結束（0 加入、13 失敗、14 作廢、11 等到上限仍在加入中）。
+
+### Added：lead 那台接收對方的回報 — X3b-2（#2306，A 線）
+
+- 新路由 `POST /api/peers/team/facts`：被收進的那台回報「已結束」時，lead 那台把對應 member 標成結束（team 還在進行時才改）；同一回報重送回同一結果、內容不同回 409，拒絕也記錄。這版開始宣告接受的回報種類（`fact_kinds`）。
+
+### Added：被收進的那台可以 kill 與開 member — X4a（#2308、#2314，A 線）
+
+- 收到 lead 的 kill：先在交易裡決定並記錄，再確認仍允許 team，才對記錄中的那個行程送 SIGTERM（行程號碼與啟動時間都要對得上）。
+- 收到 lead 的開 member 指令：工作目錄必須在這台授權給那台 lead 的資料夾內（每次都重新解析、被換成捷徑的資料夾不算），每台 lead 最多 16 個；用這台自己的啟動指令開 session，成功或失敗都在同一筆交易裡回報給 lead。這版開始宣告接受 kill 與 spawn。lead 那台的 `pdx spawn --host` 在下一步（X4b）。
+
+### Changed：工作簿 daemon 第一段 — WB-1b′-a（#2310、#2311、#2312，介面線）
+
+- workbook.db 升到第 2 版：紀錄多了種類與用量欄、新增待辦表；內建 prompt 第 2 版（含待辦，effort low）與七個欄位的回覆檢查、整理用的輸入組裝。還沒有開始整理紀錄（要等 mod 端執行器）。
+
+### Changed：team 面板 — TI-7（#2300）、#2313（介面線）
+
+- 面板標題點一下切換模式，雙擊可改 team 名稱、短標籤與顏色；分頁群組陰影固定為 V0，試用設定移除。
+
+### Fixed：燈號與用量環 — #2317、#2307（介面線）
+
+- session 在問你問題時，燈號維持等待中的黃色，不再被「未讀」蓋成紅色。
+- context 的數字改回顯示「剩餘」，環仍顯示「已用」。
+
+### Docs
+
+- 工作簿 plan 第 4 版（#2301）、spec 修正（#2316）。
+
 ## [1.0.0-alpha.666] - 2026-10-10
 
 > 動到 daemon、mod、`pdx` 指令與 SPA：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；SPA 已隨主機上的 dev server 生效。
