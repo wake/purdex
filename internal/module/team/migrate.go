@@ -100,6 +100,21 @@ func migrateSpawnTask(db *sql.DB) error {
 	return nil
 }
 
+// migrateSpawnRemote gives spawn_ops what a spawn FORWARDED from a lead host needs (cross-host team spec §5.5, plan X4a):
+// the lead host's id (empty = a local spawn) and the lead's tuple with the team's name (JSON), which the member row of the
+// remote member is written from when the session registers. A row written before it is a local spawn.
+func migrateSpawnRemote(db *sql.DB) error {
+	for _, c := range [][2]string{
+		{"lead_host_id", "TEXT NOT NULL DEFAULT ''"},
+		{"lead_json", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := ensureColumn(db, "spawn_ops", c[0], c[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // migrateMemberLastTurn gives team_members the member's last turn (plan T-3a2): the
 // summary and its (at, seq) stamp, written when the member has no in_progress task. A row
 // written before it reads no turn. Never reset on a relay (resetMemberUsage leaves it).

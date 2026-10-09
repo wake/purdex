@@ -95,6 +95,9 @@ type CommandPlan struct {
 	// KillState is what the handler found when it signalled a kill's target: "killed" (signalled), "gone" (nothing was
 	// left to signal) or the state an earlier kill left the row in; "" = no live row to kill (the store refuses).
 	KillState string
+	// HostID is this host's id (a spawn's op belongs to it); SpawnCwd the canonical cwd of a spawn, "" when it lies under
+	// none of the roots the lead host's entry grants.
+	HostID, SpawnCwd string
 
 	cmd  team.TeamCommand // decoded from Body by ApplyTeamCommand
 	hash string
@@ -167,6 +170,8 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 		res, err = applyReleaseIn(tx, p)
 	case team.CommandKill:
 		res, err = applyKillIn(tx, p)
+	case team.CommandSpawn:
+		res, err = applySpawnIn(tx, p)
 	case team.CommandEnd, team.CommandLeadMoved:
 		res, err = applyTeamLevelIn(tx, p)
 	case team.CommandVoid:

@@ -104,6 +104,7 @@ func (m *Module) timeOutSpawn(op spawnRow) {
 	}
 	m.logf("[team] spawn %s failed: %s", op.ID, team.SpawnReasonStartTimeout)
 	m.rosterChanged() // the timeout is committed: the seat is free again (in_use)
+	m.kickFacts()     // a forwarded op's spawn_failed fact is committed with it
 	m.wake(op.ID)
 	m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
 }
@@ -130,6 +131,10 @@ func (m *Module) memberOnPane(pane string) (team.Origin, bool) {
 // registry entry the registration saw (nil when resumed at registered: read
 // again, or the ref alone if gone).
 func (m *Module) spawnFinish(op spawnRow, o *team.Origin) {
+	if op.LeadHostID != "" { // forwarded from a lead host: its member row is a remote one, its end a fact
+		m.spawnFinishRemote(op, o)
+		return
+	}
 	if o == nil || o.SessionID != op.SessionID {
 		r, ok, err := m.origins.ResolveOriginBySession(op.SessionID)
 		if err != nil {

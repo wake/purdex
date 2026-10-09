@@ -62,6 +62,11 @@ type TeamCommand struct {
 	LeadRef       string `json:"lead_ref,omitempty"`
 	// void
 	CommandID string `json:"command_id,omitempty"`
+	// spawn: where and what to start on the member host (the cwd must lie under the roots that host granted)
+	Cwd    string `json:"cwd,omitempty"`
+	Title  string `json:"title,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // TeamCommandAnswer is the 200 body: the receiver's host id (the sender checks it is who it addressed) and the
