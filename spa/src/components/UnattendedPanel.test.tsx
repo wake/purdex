@@ -681,6 +681,36 @@ describe('UnattendedPanel and a re-pointed host', () => {
     expect(rows()).toHaveLength(1)
   })
 
+  it('a next page of the old daemon that fails after a re-point does not mark the new daemon failed', async () => {
+    let oldFail!: (e: unknown) => void
+    mockedGet.mockImplementation(async (_h, q) => {
+      if (q?.before !== undefined) return new Promise<UnattendedView>((_r, rej) => { oldFail = rej })
+      return page([approved('first', at(9, 0))], { truncated: true, next_before: 5 })
+    })
+    open([A])
+    fireEvent.click(await screen.findByTestId('unattended-more'))
+    repoint()
+    await flush()
+    await act(async () => { oldFail(new ApprovalApiError(0, 'network')) })
+    await flush()
+    expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
+    expect(rows()).toHaveLength(1)
+  })
+
+  it('a next page that fails after the host was removed neither crashes nor leaves a half page', async () => {
+    let oldFail!: (e: unknown) => void
+    mockedGet.mockImplementation(async (_h, q) => {
+      if (q?.before !== undefined) return new Promise<UnattendedView>((_r, rej) => { oldFail = rej })
+      return page([approved('first', at(9, 0))], { truncated: true, next_before: 5 })
+    })
+    open([A])
+    fireEvent.click(await screen.findByTestId('unattended-more'))
+    act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: undefined as never }, hostOrder: s.hostOrder.filter((h) => h !== A) })) })
+    await act(async () => { oldFail(new ApprovalApiError(0, 'network')) })
+    await flush()
+    expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
+  })
+
   it('removed host: its rows go and nothing is read', async () => {
     mockedGet.mockResolvedValue(page([], { quotas: [quota('p1')] }))
     open([A])

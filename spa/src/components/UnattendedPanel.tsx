@@ -196,16 +196,17 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
     // Each host's page is committed as it arrives, on top of the rows then held (not the ones held at the click).
     await Promise.all(todo.map(async (hostId) => {
       let patch: (cur: HostPages) => HostPages
+      // The daemon this page was asked of: whatever it answers (rows or a failure), a host re-pointed or removed since is not it.
+      const identity = hostIdentityNow(hostId)
       try {
-        const identity = hostIdentityNow(hostId)
         const v = await readPage(life, hostId, pages[hostId].nextBefore)
-        if (hostIdentityNow(hostId) !== identity) return // re-pointed while the page was out: it is the old daemon's
         patch = (cur) => ({ ...cur, rows: [...cur.rows, ...v.approved], nextBefore: v.truncated ? v.next_before : undefined, failed: undefined })
       } catch (e) {
         const failed = codeOf(e)
         patch = (cur) => ({ ...cur, failed }) // the rows and the cursor stay: 「顯示更多」 retries
       }
-      if (!life.cancelled) setPages((cur) => ({ ...cur, [hostId]: patch(cur[hostId]) }))
+      if (life.cancelled || identity === null || hostIdentityNow(hostId) !== identity) return
+      setPages((cur) => (cur[hostId] === undefined ? cur : { ...cur, [hostId]: patch(cur[hostId]) }))
     }))
     pagingNow.current = false
     if (!life.cancelled) setPaging(false)
