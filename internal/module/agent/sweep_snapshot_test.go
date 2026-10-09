@@ -52,6 +52,9 @@ type forkCounter struct {
 
 func (c *forkCounter) install(t *testing.T, alive map[int]bool, start map[int]string, ppid map[int]int, table *fakeTable) {
 	t.Helper()
+	if tableReading.Load() { // a previous test left a table read running: it would make this sweep skip its own
+		t.Fatal("tableReading leaked from an earlier test")
+	}
 	installSweepCanonicalSeams(t, alive, start, ppid)
 	baseStart, baseInfo := processStartTimeFn, readProcessInfoFn
 	processStartTimeFn = func(pid int) (string, error) { c.startAsks = append(c.startAsks, pid); return baseStart(pid) }
@@ -330,7 +333,18 @@ func TestSweep_Snapshot_AHungReadFallsBackAndIsNotStackedUp(t *testing.T) {
 	var fc forkCounter
 	fc.install(t, map[int]bool{100: true}, map[int]string{100: "t100"}, map[int]int{100: 1}, nil)
 	release := make(chan struct{})
-	defer close(release)
+	// teardown: let the stuck read go and wait until its worker has cleared the shared flag, so a later test's sweep is
+	// not made to skip its own table read
+	defer func() {
+		close(release)
+		deadline := time.Now().Add(2 * time.Second)
+		for tableReading.Load() && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if tableReading.Load() {
+			t.Error("the abandoned table read never finished")
+		}
+	}()
 	var reads atomic.Int32
 	snapshotProcessesFn = func(context.Context) (procTable, error) {
 		reads.Add(1)
