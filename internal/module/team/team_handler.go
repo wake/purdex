@@ -154,10 +154,6 @@ func (m *Module) selfHost() (alias, hostID string) {
 // read marked killed (killAndMark). A killed member answers 200 again with
 // no tmux call. Worktrees are the lead's.
 func (m *Module) handleKill(w http.ResponseWriter, r *http.Request) {
-	if m.tmux == nil {
-		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon has no tmux", nil)
-		return
-	}
 	var req team.KillRequest
 	if !m.decodeBody(w, r, &req) {
 		return
@@ -218,20 +214,37 @@ func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (
 	} else if open && (op.State == team.RelayClaimed || op.State == team.RelayWriting || op.State == team.RelayWritten) {
 		return relayOpen(op, true, "is relaying; nothing was killed")
 	}
-	if status, code, why := m.killMember(mr); why != "" {
-		m.writeErr(w, status, code, why, nil)
-		return memberRow{}, false
+	mark, want := m.store.MarkMemberKilled, team.MemberKilled
+	if mr.Origin == team.MemberOriginAdopted {
+		// An adopted member's tmux session is the user's: only its re-verified Claude Code process is signalled.
+		ended, status, code, why := m.killAdopted(mr)
+		if why != "" {
+			m.writeErr(w, status, code, why, nil)
+			return memberRow{}, false
+		}
+		if ended && mr.State == team.MemberActive { // it had already ended: nothing was killed by this call
+			mark, want = m.store.MarkMemberGone, team.MemberGone
+		}
+	} else {
+		if m.tmux == nil {
+			m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon has no tmux", nil)
+			return memberRow{}, false
+		}
+		if status, code, why := m.killMember(mr); why != "" {
+			m.writeErr(w, status, code, why, nil)
+			return memberRow{}, false
+		}
 	}
 	if m.beforeKillMark != nil {
 		m.beforeKillMark(mr)
 	}
-	killed, err := m.store.MarkMemberKilled(mr.SpawnOp, mr.SessionID, m.now())
+	killed, err := mark(mr.SpawnOp, mr.SessionID, m.now())
 	if err != nil {
 		return failStore(err)
 	}
 	if killed {
-		m.logf("[team] member %s (%s) of team %s killed", mr.Ref, mr.SessionID, t.ID)
-		mr.State = team.MemberKilled
+		m.logf("[team] member %s (%s) of team %s %s", mr.Ref, mr.SessionID, t.ID, want)
+		mr.State = want
 		m.rosterChanged()
 		return mr, true
 	}
@@ -240,7 +253,7 @@ func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (
 		return failStore(err)
 	}
 	for _, now := range rows {
-		if now.SpawnOp == mr.SpawnOp && now.State == team.MemberKilled {
+		if now.SpawnOp == mr.SpawnOp && (now.State == team.MemberKilled || now.State == want) {
 			return now, true // another kill marked it first
 		}
 	}
@@ -299,6 +312,19 @@ func (m *Module) matchMember(t team.Team, target string) (memberRow, bool, error
 	}
 	if err == nil && name != "" {
 		hits, err = m.membersNamed(hits, name)
+	}
+	if err == nil && len(hits) > 1 {
+		// A session released and adopted again leaves two rows that share its ref: the one that is active is the
+		// member the lead means (a session is an active member at most once, team_members_one_active).
+		var active []memberRow
+		for _, h := range hits {
+			if h.State == team.MemberActive {
+				active = append(active, h)
+			}
+		}
+		if len(active) == 1 {
+			hits = active
+		}
 	}
 	if err != nil || len(hits) != 1 {
 		return memberRow{}, false, err

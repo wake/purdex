@@ -17,6 +17,7 @@ const (
 	ErrAdoptAlreadyMember   = "adopt_already_member" // the target is already a live member
 	ErrAdoptTargetNotFound  = "adopt_target_not_found"
 	ErrAdoptTargetAmbiguous = "adopt_target_ambiguous" // two live conversations carry the target's ref; name it by session id or full address
+	ErrKillFailed           = "kill_failed"            // 500: signalling an adopted member's process failed (EPERM...); nothing was marked
 	ErrRemoteUnsupported    = "remote_unsupported"     // the target lives on another host; plan v3 P4b-4 reuses it
 )
 

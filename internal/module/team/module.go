@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +47,10 @@ type OriginResolver interface {
 	// InboxOf is the messaging socket of the session's live entry, for the notice outbox (PL-1d1).
 	InboxOf(sessionID string) (inbox string, ok bool, err error)
 	LiveSession(sessionID string) bool
+	// SameProcess reports whether pid is alive and started at procStart (LeadPresence's step 2 alone): the
+	// re-verification right before a signal is sent to an adopted member's process. A start time that cannot
+	// be read, or a procStart that cannot be parsed, is an error — never "same".
+	SameProcess(pid int, procStart string) (bool, error)
 	// LeadPresence is a team lead's presence for the team end (spec §7.1),
 	// which cannot be undone: tied to the lead's own process (pid and start
 	// time as its request recorded them), PresenceGone only when that
@@ -245,6 +250,8 @@ type Module struct {
 	// noticeKick is a test seam called after kickNotices when an adopt approval won; afterApproved is its
 	// only caller. nil until then (tests count it).
 	noticeKick func()
+	// killProcess signals an adopted member's Claude Code process (SIGTERM; tests inject).
+	killProcess func(pid int) error
 	// sender sends the notices (peers.SenderKey; nil → notices stay owed); noticeSig wakes the drain
 	// (kickNotices); noticeLogAt is the drain's own record of when a row's failure was last logged.
 	sender      peersmod.Sender
@@ -270,6 +277,7 @@ func New() *Module {
 		rosterSig:     make(chan struct{}, 1),
 		rosterBarrier: make(chan chan struct{}),
 		noticeSig:     make(chan struct{}, 1),
+		killProcess:   func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) },
 		// A cleared report waits this long for the registry to show the new
 		// session id (measured ~0.6 s after /clear), polling every 100 ms.
 		clearedWait: 3 * time.Second,
@@ -367,6 +375,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/team", m.handleTeam)          // P4-6, spec §7.3
 	mux.HandleFunc("GET "+RosterRoute, m.handleRosterGet)  // PL-1f′: every live team (D-U24-5)
 	mux.HandleFunc("POST /api/team/kill", m.handleKill)
+	mux.HandleFunc("POST /api/team/release", m.handleRelease)
 	// T-1b1: tasks (plan "Routes"); a lead sees its team's, a member its own.
 	mux.HandleFunc("POST /api/team/tasks", m.handleTaskCreate)
 	mux.HandleFunc("GET /api/team/tasks", m.handleTaskList)
