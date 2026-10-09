@@ -60,10 +60,13 @@ func (s *Store) SetMaxMembers(teamID string, max int) (MaxMembersResult, error) 
 // out. seatsTakenSQL (one team) and seatsAllLiveSQL (every live team) are both made from it, so they cannot drift.
 // Each active member counts once, and so does a remote row whose command is in flight (joining, releasing, killing: cross-host
 // spec §4.2 — the seat is taken until the member host has answered); a running spawn op counts only while no active member row carries its spawn_op,
-// because spawnFinish inserts the member before it moves the op to done, and in that window one seat is both.
+// because spawnFinish inserts the member before it moves the op to done, and in that window one seat is both. A spawn
+// forwarded to another host (remote_spawns) holds its seat while it runs; the fact that registers it writes the member and
+// closes the op in one transaction, so the two never count together.
 const seatsExpr = `(SELECT COUNT(*) FROM team_members WHERE team_id = TEAM AND state IN ('active', 'joining', 'releasing', 'killing')) +
 	(SELECT COUNT(*) FROM spawn_ops o WHERE o.team_id = TEAM AND o.state = 'running' AND o.id <> EXCEPT
-		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.spawn_op = o.id AND m.state IN ('active', 'joining', 'releasing', 'killing')))`
+		AND NOT EXISTS (SELECT 1 FROM team_members m WHERE m.spawn_op = o.id AND m.state IN ('active', 'joining', 'releasing', 'killing'))) +
+	(SELECT COUNT(*) FROM remote_spawns r WHERE r.team_id = TEAM AND r.state = 'running' AND r.id <> EXCEPT)`
 
 // seatsTakenSQL is the seat count shared by SetMaxMembers, the spawn cap check, the adopt seat check and the roster's
 // in_use. ?1 is the team, ?2 a spawn op id to leave out (the op asking; "" for none).

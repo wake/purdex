@@ -13,8 +13,8 @@ import (
 const liveRemoteStates = `('joining', 'active', 'releasing', 'killing')`
 
 // unpairHost ends every team relation with hostID on L's side (§3.2): its live remote rows go `gone{reason}` (terminal
-// rows are not rewritten), its pending commands are dropped. One transaction. Pending forwarded spawns of that host
-// fail `unpaired` too — X4b adds that table and joins this transaction.
+// rows are not rewritten), its pending commands are dropped, and its running forwarded spawns fail with the same reason.
+// One transaction.
 func (m *Module) unpairHost(hostID, reason string) error {
 	now := m.now()
 	tx, err := m.store.db.Begin()
@@ -33,10 +33,14 @@ func (m *Module) unpairHost(hostID, reason string) error {
 		return err
 	}
 	gone, _ := r.RowsAffected()
+	spawns, err := failRemoteSpawnsOfHostIn(tx, hostID, reason, now)
+	if err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if dropped+gone > 0 {
+	if dropped+gone+spawns > 0 {
 		m.logf("[team] host %s %s: %d command(s) dropped, %d remote member(s) gone", hostID, reason, dropped, gone)
 		m.rosterChanged()
 	}
@@ -94,7 +98,11 @@ func (m *Module) voidCommand(c commandRow, now int64) error {
 			return err
 		}
 	}
-	// A spawn's forwarded op fails `remote_unreachable` in the same transaction once X4b adds it.
+	if c.Kind == CmdSpawn { // the forwarded op fails in the same transaction: its seat is free
+		if err := failRemoteSpawnIn(tx, c.MK, c.HostID, "remote_unreachable", now); err != nil {
+			return err
+		}
+	}
 	void, err := m.voidFor(c)
 	if err != nil {
 		return err

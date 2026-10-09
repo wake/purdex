@@ -28,7 +28,7 @@ func teamHosts() []config.PeerHost {
 var wantTeamKinds = []string{"adopt", "release", "kill", "spawn", "end", "lead_moved", "void"}
 
 // wantFactKinds is written out too: registered / spawn_failed are announced only once the lead host applies them (X4b), moved never (reserved).
-var wantFactKinds = []string{"ended"}
+var wantFactKinds = []string{"ended", "registered", "spawn_failed"}
 
 func TestInventory_TeamCapsPerPrincipal(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", teamHosts())

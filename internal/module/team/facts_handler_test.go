@@ -111,147 +111,51 @@ func TestFacts_ShapeAndAddressing(t *testing.T) {
 		"bad id":         {badID, 400, "bad_request"},
 		"not JSON":       {"{", 400, "bad_request"},
 		"reserved moved": {team.TeamFact{ID: factUUID2, Kind: "moved", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
-		"registered":     {team.TeamFact{ID: factUUID3, Kind: "registered", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
+		"unknown kind":   {team.TeamFact{ID: factUUID3, Kind: "made_up", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
 	} {
 		code, body := f.postFact(leadPrincipal(), tc.body)
 		if code != tc.status || errCode(t, body) != tc.code {
 			t.Fatalf("%s: %d %s, want %d %s", name, code, body, tc.status, tc.code)
 		}
 	}
-	// wrong_host and unsupported_kind are stored decisions (wrong host, moved, registered); bad_request is not.
-	if n := factLogCount(t, f); n != 3 {
-		t.Fatalf("%d logged, want 3", n)
+	// wrong_host is a stored decision; unsupported_kind and bad_request are not.
+	if n := factLogCount(t, f); n != 1 {
+		t.Fatalf("%d logged, want 1 (the wrong_host)", n)
 	}
 }
 
-// Rule 3 (codex): an unsupported_kind refusal is stored; a copy resent after this host learned the kind meets the stored
-// refusal, and another body under the id is id_conflict. Mutation gate: do not store the refusal → red.
-func TestFacts_AnUnsupportedKindRefusalIsStoredAndSurvivesAnUpgrade(t *testing.T) {
+// unsupported_kind is NOT stored (X4b-1, f4-ra): the member host drops a fact on a permanent refusal, so a stored refusal
+// would lose a true fact that a later version applies. The id is not burned: the same id resent after the upgrade (here: as
+// a kind this version applies) completes. Mutation gate: store the refusal → the resend answers id_conflict → red.
+func TestFacts_AnUnsupportedKindIsNotStoredSoAResendAfterTheUpgradeCompletes(t *testing.T) {
 	f := factFixture(t)
 	f.remoteRow("abc12", "lead:1", "mk1", rowActive)
-	reg := team.TeamFact{ID: factUUID1, Kind: "registered", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}
-	code, first := f.postFact(leadPrincipal(), reg)
-	if code != 400 || errCode(t, first) != "unsupported_kind" || factLogCount(t, f) != 1 {
-		t.Fatalf("first = %d %s, logged %d", code, first, factLogCount(t, f))
+	moved := team.TeamFact{ID: factUUID1, Kind: "moved", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}
+	if code, body := f.postFact(leadPrincipal(), moved); code != 400 || errCode(t, body) != "unsupported_kind" || factLogCount(t, f) != 0 {
+		t.Fatalf("first = %d %s, logged %d", code, body, factLogCount(t, f))
 	}
-	// the upgrade: the same copy would now be an applicable kind; the stored refusal still answers
-	if _, err := f.m.store.db.Exec(`UPDATE team_fact_log SET kind = kind`); err != nil {
-		t.Fatal(err)
+	if code, body := f.postFact(leadPrincipal(), endedFact(factUUID1, "mk1")); code != 200 {
+		t.Fatalf("resend after the upgrade = %d %s", code, body)
 	}
-	code, again := f.postFact(leadPrincipal(), reg)
-	if code != 400 || !bytes.Equal(first, again) {
-		t.Fatalf("replay = %d %s, want the stored %s", code, again, first)
+	if st, _ := f.memberRowState("abc12"); st != "gone" {
+		t.Fatalf("row = %s: the resent fact was not applied", st)
 	}
-	other := reg
-	other.MK = "mk2"
-	if code, body := f.postFact(leadPrincipal(), other); code != 409 || errCode(t, body) != "id_conflict" {
-		t.Fatalf("other body = %d %s", code, body)
-	}
-	// wrong_host is stored the same way
+}
+
+// Rule 3: wrong_host is stored with the fact's hash: a replay answers it, another body under the id is id_conflict.
+func TestFacts_AWrongHostRefusalIsStored(t *testing.T) {
+	f := factFixture(t)
 	wrong := endedFact(factUUID2, "mk1")
 	wrong.ToHostID = "other:1"
 	_, w1 := f.postFact(leadPrincipal(), wrong)
-	_, w2 := f.postFact(leadPrincipal(), wrong)
-	if !bytes.Equal(w1, w2) || factLogCount(t, f) != 2 {
-		t.Fatalf("wrong_host replay %s vs %s, logged %d", w1, w2, factLogCount(t, f))
+	code, w2 := f.postFact(leadPrincipal(), wrong)
+	if code != 409 || !bytes.Equal(w1, w2) || factLogCount(t, f) != 1 {
+		t.Fatalf("replay = %d %s vs %s, logged %d", code, w2, w1, factLogCount(t, f))
 	}
-}
-
-func TestFacts_EndedMovesALiveRowToGoneAndAnswersApplied(t *testing.T) {
-	for _, from := range []string{rowJoining, rowActive, "releasing", "killing"} {
-		f := factFixture(t)
-		f.remoteRow("abc12", "lead:1", "mk1", from)
-		code, body := f.postFact(leadPrincipal(), endedFact(factUUID1, "mk1"))
-		if code != 200 {
-			t.Fatalf("from %s: %d %s", from, code, body)
-		}
-		var ans team.TeamFactAnswer
-		if err := json.Unmarshal(body, &ans); err != nil || ans.ID != factUUID1 || ans.HostID != "h:1" {
-			t.Fatalf("answer = %+v %v", ans, err)
-		}
-		if st, reason := f.memberRowState("abc12"); st != "gone" || reason != team.FactReasonSessionGone {
-			t.Fatalf("from %s: row = %s{%s}, want gone{session_gone}", from, st, reason)
-		}
-		if factLogCount(t, f) != 1 {
-			t.Fatalf("from %s: fact not logged", from)
-		}
-	}
-}
-
-// §4.2: `ended` may arrive before the adopt's own answer; the late `applied` then finds `gone` and is ignored (the
-// monotonic CAS of §3.1 rule 5). Mutation gate: ended only from active → the joining case is red.
-func TestFacts_EndedBeforeTheAdoptAnswerLeavesTheRowGone(t *testing.T) {
-	f := factFixture(t)
-	f.remoteRow("abc12", "lead:1", "mk1", rowJoining)
-	if code, body := f.postFact(leadPrincipal(), endedFact(factUUID1, "mk1")); code != 200 {
-		t.Fatalf("%d %s", code, body)
-	}
-	if st, _ := f.memberRowState("abc12"); st != "gone" {
-		t.Fatalf("row = %s", st)
-	}
-}
-
-// Rule 5 / D4: terminal rows and ended teams are not rewritten; the fact is answered and logged (ignored).
-func TestFacts_EndedLeavesTerminalRowsAndEndedTeamsAlone(t *testing.T) {
-	f := factFixture(t)
-	f.remoteRow("abc12", "lead:1", "mk1", "released")
-	f.remoteRow("def34", "lead:1", "mk2", rowActive)
-	if _, err := f.m.store.db.Exec(`UPDATE teams SET ended_at = 5 WHERE id = ?`, uid(1)); err != nil {
-		t.Fatal(err)
-	}
-	for i, mk := range []string{"mk1", "mk2"} {
-		id := []string{factUUID1, factUUID2}[i]
-		code, body := f.postFact(leadPrincipal(), endedFact(id, mk))
-		if code != 200 {
-			t.Fatalf("%s: %d %s", mk, code, body)
-		}
-	}
-	if st, _ := f.memberRowState("abc12"); st != "released" {
-		t.Fatalf("terminal row = %s", st)
-	}
-	if st, _ := f.memberRowState("def34"); st != rowActive {
-		t.Fatalf("row of an ended team = %s, want it left as it was", st)
-	}
-}
-
-// §4.5 binding: the row must be THIS host's, with this mk and team. Another host's mk, another team, or a local row is
-// not_your_member (stored: a refusal is a stored answer too).
-func TestFacts_EndedBindsToHostMKAndTeam(t *testing.T) {
-	f := factFixture(t)
-	f.remoteRow("abc12", "hostN", "mk1", rowActive) // another host's membership with the same mk
-	f.remoteRow("def34", "lead:1", "mk2", rowActive)
-	wrongTeam := endedFact(factUUID2, "mk2")
-	wrongTeam.TeamID = uid(2)
-	for name, fact := range map[string]team.TeamFact{
-		"another host's mk": endedFact(factUUID1, "mk1"),
-		"another team":      wrongTeam,
-		"unknown mk":        endedFact(factUUID3, "nope"),
-	} {
-		code, body := f.postFact(leadPrincipal(), fact)
-		if code != 409 || errCode(t, body) != "not_your_member" {
-			t.Fatalf("%s: %d %s", name, code, body)
-		}
-	}
-	for _, op := range []string{"abc12", "def34"} {
-		if st, _ := f.memberRowState(op); st != rowActive {
-			t.Fatalf("row %s = %s: a fact moved a row it is not bound to", op, st)
-		}
-	}
-	if factLogCount(t, f) != 3 {
-		t.Fatalf("%d logged, want 3 (refusals are stored)", factLogCount(t, f))
-	}
-}
-
-// Membership generation (§11): an old `ended` for a previous mk does not touch a re-adopted row of the same session.
-func TestFacts_AnOldMKDoesNotTouchTheReAdoptedRow(t *testing.T) {
-	f := factFixture(t)
-	f.remoteRow("abc12", "lead:1", "mk-old", "released")
-	f.remoteRow("def34", "lead:1", "mk-new", rowActive)
-	if code, body := f.postFact(leadPrincipal(), endedFact(factUUID1, "mk-old")); code != 200 {
-		t.Fatalf("%d %s", code, body)
-	}
-	if st, _ := f.memberRowState("def34"); st != rowActive {
-		t.Fatalf("re-adopted row = %s", st)
+	other := wrong
+	other.MK = "mk2"
+	if code, body := f.postFact(leadPrincipal(), other); code != 409 || errCode(t, body) != "id_conflict" {
+		t.Fatalf("other body = %d %s", code, body)
 	}
 }
 
