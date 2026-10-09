@@ -2644,3 +2644,18 @@ RQ-2's rule: *while unattended is on and the quota rule is on, a lead's member r
 4. **P6-7a/b** — formally defer until P4b/P4c exist? (Recommended; nothing in U23/U24/RQ needs them.)
 5. **RQ-2 timing** — merge right after P6-2b-1 (the create route answers `relay_unsupported` until a protocol-2 mod exists) or after P6-6? Recommended: after P6-6, so every RQ-2 test can run against a real end-to-end relay.
 6. **Skill line (§2 item 7)** — soften now or accept until P6-5.
+
+### 6. 裁定（1f，2026-10-09）
+
+η's draft (§1–§4) is accepted with the slicing table. The six questions of §5, as ruled:
+
+- **Q1 — adopted.** Drop the virtual peer and the auto-reply; the control message and the handover notice both go through the PL-1d1 sender. Reasons: no new process-level component; the handover notice leaves from the *new lead's* inbox, so a member's reply reaches the real lead instead of the daemon. The gap at boot (a `requested` op's control cannot be re-sent while the lead is not live) is closed by the claim timeout (`member_unresponsive`) — accepted. **Precondition:** a forged control message can at most make a member claim an op that already names it and is `requested`; the claim route must therefore verify "only the target session may claim" **and** be a CAS, and the tests must cover both.
+- **Q2 — branch A confirmed.** Branch B, and P7-1's dependence on P6-4, are retired together. When P7-1 needs the `AgentStatus` accessor, tell 88 before touching the agent module.
+- **Q3 — a new file `hooks/member.js`.** `register.js` keeps one wiring line; the shared `s` and the helpers are imported. `TestHooks_NoEventRegisteredTwiceWithoutMatcher` must keep passing.
+- **Q4 — P6-7a / P6-7b formally deferred** until P4b / P4c start; they are not on this line.
+- **Q5 — not as recommended; instead: RQ-2 goes after P6-2b-2 and before P6-3a.** `relay_quota.rule` has been on since 16:56, and the user's rule (4) says that under unattended mode a member's relay spends the lead's member pool and waits for a person at 0. If P6-6 shipped before RQ-2, an unattended lead could relay its members without limit — against a decided rule. The daemon side is fully testable from the create and claim routes (the claim exists after P6-2b-2; no mod is needed); the end-to-end acceptance is repeated once at P6-6. **Two deploy gates:** (a) RQ-2 opens `member_relay` approval rows, so 88's SPA card must merge and be fast-forwarded before RQ-2's daemon is deployed (the PL-2a lesson; 1f tells 88); (b) P6-6 may only be deployed after RQ-2 is. RQ-2's state-machine mini-spec is written by 1f and sent to codex, on the basis of §4 above, while η does P6-2a / P6-2b.
+- **Q6 — soften now.** Folded into P6-1′: the `SKILL.md` line becomes plain words along the lines of "the member-relay command is not available yet; when a member's context is high, check `pdx team` and tell the user"; P6-5 changes it back to `pdx relay <ref>`. P6-1′ therefore deploys with `pdx setup`.
+
+Also: **P6-0 is not done** (P6-5 opens new files anyway). **P6-8** stays on the A line, after P6-6, low priority. Before any `ensureColumn` on `relay_ops`, read the host DB with `sqlite3 -readonly` first (§2 item 9).
+
+**Order:** P6-1′ → P6-2a → P6-2b-1 → P6-2b-2 → RQ-2 → P6-3a → P6-3b-1 → P6-3b-2 → P6-3c → P6-4a → P6-4b → P6-5 → P6-6.
