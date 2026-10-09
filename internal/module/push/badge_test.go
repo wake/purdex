@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/team"
 )
@@ -138,12 +139,20 @@ func keysOf(t *testing.T, payload string) (keys []string, ok bool) {
 
 func withTmux(a team.Approval, tmux string) team.Approval { a.Origin.Tmux = tmux; return a }
 
-// fakeCodes is the name -> code table of the fake session lookup.
-func fakeCodes(m map[string]string) func(string) string { return func(n string) string { return m[n] } }
+// fakeCodes is the fake session read: name -> code, every session created at sessionAt, before the fixture approvals.
+func fakeCodes(m map[string]string) func(context.Context) (map[string]session.SessionRef, error) {
+	return func(context.Context) (map[string]session.SessionRef, error) {
+		out := map[string]session.SessionRef{}
+		for n, c := range m {
+			out[n] = session.SessionRef{Code: c, Created: sessionAt}
+		}
+		return out, nil
+	}
+}
 
 func TestKeys_SameSessionDedupedAndNoTmuxUsesApprovalID(t *testing.T) {
 	te := newTriggerEnv(t, nil)
-	te.mod.codeOf = fakeCodes(map[string]string{"dev": "c0de01", "ops": "c0de02"})
+	te.mod.sessions = fakeCodes(map[string]string{"dev": "c0de01", "ops": "c0de02"})
 	te.register(tokA, "en", "mlab")
 	te.events.readOpen = func() ([]team.Approval, error) {
 		return []team.Approval{
@@ -219,11 +228,13 @@ func TestApprovalPushCarriesSessionCode(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%v", name, resolvable), func(t *testing.T) {
 				te := newTriggerEnv(t, nil)
 				if resolvable {
-					te.mod.codeOf = fakeCodes(map[string]string{"dev": "c0de01"})
+					te.mod.sessions = fakeCodes(map[string]string{"dev": "c0de01"})
 				} else {
-					te.mod.codeOf = fakeCodes(nil)
+					te.mod.sessions = fakeCodes(nil)
 				}
 				te.register(tokA, "en", "mlab")
+				a.CreatedAt = approvalAtMs
+				te.events.readOpen = func() ([]team.Approval, error) { return []team.Approval{a}, nil }
 				te.events.emit("opened", a)
 				p := te.waitSends(t, 1)[0].Payload
 				var pl struct {

@@ -35,8 +35,18 @@ type apnsClient interface {
 // Job is one thing to tell some devices about. Make builds the content for one device (its host label and locale are the
 // device's) at send time, from the device as it is then; false means "nothing for this one".
 type Job struct {
-	DeviceIDs []string
-	Make      func(push.Device) (push.Content, bool)
+	DeviceIDs  []string
+	ApprovalID string // an approval's push: its session_code comes from the sender's snapshot at send time
+	Make       func(push.Device) (push.Content, bool)
+}
+
+// openSnap is what one Job's payloads share (spec §6): the open-approval count and badge keys, and the session code of each
+// open approval's own tmux session. ok=false = unknown, left out.
+type openSnap struct {
+	n     int
+	keys  []string
+	codes map[string]string // approval id -> session code
+	ok    bool
 }
 
 // sender is the push module's one sending goroutine (spec §7). Triggers call Enqueue and never wait; everything that can
@@ -47,7 +57,7 @@ type sender struct {
 	hostID string
 	topic  string
 
-	openState func() (int, []string, bool) // the open-approval count and badge keys each payload carries (spec §6); nil or !ok = unknown, left out
+	openState func(ctx context.Context) openSnap // read ONCE per Job, before its device loop; nil or !ok = unknown, left out
 
 	queue   chan Job
 	dropped atomic.Int64
@@ -120,6 +130,10 @@ func (s *sender) Stop() {
 }
 
 func (s *sender) process(ctx context.Context, j Job) {
+	var snap openSnap
+	if s.openState != nil {
+		snap = s.openState(ctx)
+	}
 	for _, id := range j.DeviceIDs {
 		if ctx.Err() != nil {
 			return
@@ -132,11 +146,13 @@ func (s *sender) process(ctx context.Context, j Job) {
 		if !ok {
 			continue
 		}
-		if s.openState != nil {
-			if n, keys, ok := s.openState(); ok {
-				content.OpenApprovals = &n
-				content.OpenApprovalKeys = keys
-			}
+		if snap.ok {
+			n := snap.n
+			content.OpenApprovals = &n
+			content.OpenApprovalKeys = snap.keys
+		}
+		if j.ApprovalID != "" {
+			content.SessionCode = snap.codes[j.ApprovalID]
 		}
 		payload, err := content.Payload(s.hostID)
 		if err != nil {

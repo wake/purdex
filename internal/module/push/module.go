@@ -68,8 +68,9 @@ type Module struct {
 	// The agent-event side (agent_trigger.go).
 	gate        *Gate
 	asks        *openAsks
-	reader      team.OpenApprovalsReader        // fresh read of the open set at send time (purdex.open_approvals); nil = unknown
-	codeOf      func(tmuxSession string) string // tmux session name -> session code; "" = unresolvable; nil = from the session module
+	reader      team.OpenApprovalsReader                                         // fresh read of the open set at send time (purdex.open_approvals); nil = unknown
+	sessions    func(ctx context.Context) (map[string]session.SessionRef, error) // ONE read of every tmux session (name -> code, creation time); nil = from the session module
+	sessBudget  time.Duration                                                    // how long a snapshot waits for that read; 0 = sessionBudget
 	holds       holdSet
 	holdFor     time.Duration // how long a waiting event waits for its hook_ask (spec §5.2 rule 8); a test seam
 	unsubNotify func()
@@ -195,12 +196,12 @@ func (m *Module) Start(ctx context.Context) error {
 	if m.reader == nil {
 		log.Printf("[push] no open-approvals reader: open_approvals is left out of pushes")
 	}
-	if m.codeOf == nil {
+	if m.sessions == nil {
 		svc, _ := m.core.Registry.Get(session.RegistryKey)
 		if l, ok := svc.(interface {
-			LookupCodeByName(string) (string, bool)
+			SessionsByName(context.Context) (map[string]session.SessionRef, error)
 		}); ok {
-			m.codeOf = func(name string) string { c, _ := l.LookupCodeByName(name); return c }
+			m.sessions = l.SessionsByName
 		} else {
 			log.Printf("[push] no session lookup: approval pushes carry no session_code and badge keys fall back to approval ids")
 		}
@@ -341,50 +342,107 @@ func (m *Module) Stop(context.Context) error {
 // maxOpenKeys caps purdex.open_approval_keys (spec §6); open_approvals still reports the full count.
 const maxOpenKeys = 32
 
-// sessionCode resolves a tmux session name to its session code; "" when unknown.
-func (m *Module) sessionCode(name string) string {
-	if name == "" || m.codeOf == nil {
+// sessionBudget bounds the one session read a snapshot makes; past it every approval falls back to its id.
+const sessionBudget = time.Second
+
+// sessionSkew is how much later than an approval a tmux session may have been created and still be the approval's own
+// (tmux's #{session_created} has one-second resolution; the approval's clock is the daemon's).
+const sessionSkew = 2 * time.Second
+
+// readSessions is the one tmux read of a snapshot, bounded by the budget even when the reader ignores its context.
+func (m *Module) readSessions(ctx context.Context) map[string]session.SessionRef {
+	if m.sessions == nil {
+		return nil
+	}
+	budget := m.sessBudget
+	if budget <= 0 {
+		budget = sessionBudget
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	type result struct {
+		refs map[string]session.SessionRef
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() { refs, err := m.sessions(ctx); ch <- result{refs, err} }()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			log.Printf("[push] could not read the tmux sessions: %v (badge keys fall back to approval ids)", r.err)
+			return nil
+		}
+		return r.refs
+	case <-ctx.Done():
+		log.Printf("[push] the tmux session read took over %v (badge keys fall back to approval ids)", budget)
+		return nil
+	}
+}
+
+// ownSession is the session code of the tmux session an approval was raised in; "" when it cannot be vouched for. The name
+// alone is not enough: a session killed and recreated under the same name is another session, and it was created after the
+// approval. An unknown creation time on either side is not vouched for either.
+func ownSession(refs map[string]session.SessionRef, name string, approvalAtMs int64) string {
+	ref, ok := refs[name]
+	if !ok || name == "" || ref.Created <= 0 || approvalAtMs <= 0 {
 		return ""
 	}
-	return m.codeOf(name)
+	if ref.Created*1000 > approvalAtMs+sessionSkew.Milliseconds() {
+		return ""
+	}
+	return ref.Code
 }
 
 // openState reads the open approval set now: the count of the pushed kinds (lead, self_relay, member_relay, an
 // answerable hook_ask) for `purdex.open_approvals`, and the sorted, de-duplicated badge keys for
-// `purdex.open_approval_keys` ("s:<session_code>" when the approval's tmux session resolves, else "a:<approval_id>",
-// at most maxOpenKeys). Nothing is kept between sends, so there is nothing to drift. ok=false (no reader, or the read
-// failed) means unknown: the payload then leaves both fields out.
-func (m *Module) openState() (n int, keys []string, ok bool) {
+// `purdex.open_approval_keys` ("s:<session_code>" when the approval's own tmux session resolves, else "a:<approval_id>",
+// at most maxOpenKeys), plus each approval's session code for the push that announces it. The sender asks once per Job and
+// shares the answer across its devices; the tmux read is a single bounded call. Nothing is kept between sends, so there is
+// nothing to drift. ok=false (no reader, or the read failed) means unknown: the payload then leaves both fields out.
+func (m *Module) openState(ctx context.Context) openSnap {
 	r := m.reader
 	if r == nil {
-		return 0, nil, false
+		return openSnap{}
 	}
 	open, err := r.OpenApprovals()
 	if err != nil {
 		log.Printf("[push] could not read the open approvals: %v (open_approvals left out of this push)", err)
-		return 0, nil, false
+		return openSnap{}
 	}
-	set := map[string]struct{}{}
+	var pushed []team.Approval
+	needSessions := false
 	for _, a := range open {
-		if _, pushed := push.ApprovalContent(toPushApproval(a), "", "en"); !pushed {
+		if _, ok := push.ApprovalContent(toPushApproval(a), "", "en"); !ok {
 			continue
 		}
-		n++
-		if code := m.sessionCode(tmuxSessionOf(a.Origin.Tmux)); code != "" {
+		pushed = append(pushed, a)
+		if tmuxSessionOf(a.Origin.Tmux) != "" {
+			needSessions = true
+		}
+	}
+	var refs map[string]session.SessionRef
+	if needSessions {
+		refs = m.readSessions(ctx)
+	}
+	snap := openSnap{ok: true, n: len(pushed), codes: map[string]string{}}
+	set := map[string]struct{}{}
+	for _, a := range pushed {
+		if code := ownSession(refs, tmuxSessionOf(a.Origin.Tmux), a.CreatedAt); code != "" {
 			set["s:"+code] = struct{}{}
+			snap.codes[a.ID] = code
 		} else {
 			set["a:"+a.ID] = struct{}{}
 		}
 	}
-	keys = make([]string, 0, len(set))
+	snap.keys = make([]string, 0, len(set))
 	for k := range set {
-		keys = append(keys, k)
+		snap.keys = append(snap.keys, k)
 	}
-	sort.Strings(keys)
-	if len(keys) > maxOpenKeys {
-		keys = keys[:maxOpenKeys]
+	sort.Strings(snap.keys)
+	if len(snap.keys) > maxOpenKeys {
+		snap.keys = snap.keys[:maxOpenKeys]
 	}
-	return n, keys, true
+	return snap
 }
 
 // onApproval runs on the approval feed's own goroutine (never under the team module's lock). Only an `opened` approval of
@@ -413,15 +471,13 @@ func (m *Module) onApproval(op string, a team.Approval) {
 	if len(devs) == 0 {
 		return
 	}
-	code := m.sessionCode(tmuxSessionOf(a.Origin.Tmux)) // #2235: the phone opens the right tab without a GET
 	ids := make([]string, len(devs))
 	for i, d := range devs {
 		ids[i] = d.DeviceID
 	}
-	snd.Enqueue(Job{DeviceIDs: ids, Make: func(d push.Device) (push.Content, bool) {
-		c, ok := push.ApprovalContent(pa, d.HostLabel, d.Locale)
-		c.SessionCode = code
-		return c, ok
+	// ApprovalID: the sender fills session_code (#2235) from its one snapshot; nothing here may touch tmux.
+	snd.Enqueue(Job{DeviceIDs: ids, ApprovalID: a.ID, Make: func(d push.Device) (push.Content, bool) {
+		return push.ApprovalContent(pa, d.HostLabel, d.Locale)
 	}})
 }
 
