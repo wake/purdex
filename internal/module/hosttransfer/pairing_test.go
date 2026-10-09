@@ -166,7 +166,7 @@ func TestPairingCreate_ExpiresInBounds(t *testing.T) {
 	cases := map[string]struct {
 		in   any
 		want int
-	}{"default": {nil, 600}, "min": {60, 60}, "max": {600, 600}, "mid": {120, 120}, "below": {59, 0}, "above": {601, 0}, "zero": {0, 0}, "negative": {-5, 0}}
+	}{"default": {nil, 600}, "min": {60, 60}, "max": {600, 600}, "mid": {120, 120}, "below": {59, 0}, "wraps to 60s": {36028797018964028, 0}, "wraps to 600s": {36028797018964568, 0}, "huge": {9223372036854775807, 0}, "above": {601, 0}, "zero": {0, 0}, "negative": {-5, 0}}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			h := newPairHarness(t)

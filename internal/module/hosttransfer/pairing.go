@@ -111,11 +111,12 @@ func (m *Module) handlePairingCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	ttl := pairingMaxTTL
 	if req.ExpiresIn != nil {
-		ttl = time.Duration(*req.ExpiresIn) * time.Second
-		if ttl < pairingMinTTL || ttl > pairingMaxTTL {
+		// Compared as integers first: multiplying a huge value by time.Second would wrap into the accepted range.
+		if secs := *req.ExpiresIn; secs < int(pairingMinTTL/time.Second) || secs > int(pairingMaxTTL/time.Second) {
 			writeReason(w, http.StatusBadRequest, "bad_expiry")
 			return
 		}
+		ttl = time.Duration(*req.ExpiresIn) * time.Second
 	}
 	var firstID string
 	var firstProfile pairProfile
