@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.642] - 2026-10-09
+
+> 動 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主 checkout 快轉生效（Mac App 按 Cmd+R）；Electron 不必更新。**手機開始會收到 agent 的推播**：你不在 Mac 前時，Claude 停下來等你、做完或出錯，會推到已登記的 iPhone。
+
+### Added：agent 事件推播到手機 — 推播 PU-3b2（#2187）＋PU-4（#2193），介面線
+
+- daemon 收到 agent 的 hook 事件（等你回覆、做完、出錯）時，依和 Mac 相同的規則決定要不要推到手機：同一個事件只推一次、靜音的通知不推、出錯在 60 秒內只推一次、只推手機上設定過的分頁。
+- **Mac 有視窗正顯示那個 session、而且你在用 Mac 時，就不推到手機**：Mac App 會每 20 秒回報一次你正在看哪些 session。
+- 已經用 AskUserQuestion 推過的問題，同一段等待不會再推一次。
+
+### Added：推播在場狀態讀數（#2196，介面線）
+
+- `/api/info` 的 push 區段多兩個數字：目前回報中的 Mac 視窗數、其中你正在使用的視窗數。只有數字，不含任何名稱。
+
+### Added：對話 API 補欄位 — U1-6g（#2192，介面線）
+
+- 對話 API 的每一輪多了耗時（毫秒），系統訊息多了「mod 通知」這一類。只加不改，舊的 App 不受影響。
+
+### Added：lead 幫 member 接力的路由與認領 — P6-2b-1（#2191）＋P6-2b-2（#2194），A 線
+
+- daemon 新增「lead 要求 member 接力」的路由、寄給 member 的控制訊息、member 認領接力的路由與等待結果的長輪詢。
+- 這些路徑要等 member 端的 mod 更新（P6-6）才會真的被用到；在那之前，要求一律回「member 的 mod 版本不支援」，**現在沒有任何行為改變**。
+- 開機時會替接力紀錄表再加兩個欄位（行程啟動時間、已讀時間），舊資料不受影響。
+
 ## [1.0.0-alpha.641] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版沒有你看得到的變化，是「lead 幫 member 接力」的地基。
