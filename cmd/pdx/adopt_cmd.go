@@ -161,8 +161,8 @@ func runAdoptCmd(ctx context.Context, args []string, getenv func(string) string,
 
 // adoptCancel is leadCancel for an adoption, whose approval has a side effect: the DELETE answers the row as it is
 // now, so a request the daemon had already closed (approved at the same moment the signal came) is reported as
-// what it became, never as cancelled. Only a row that really is cancelled (or still open, which the DELETE
-// cannot leave) exits 12.
+// what it became, never as cancelled. A cancelled row that carries a close_reason was cancelled by a rule's re-check
+// (adoptFinish: exit 13); only a plain cancel (or a row still open, which the DELETE cannot leave) exits 12.
 func adoptCancel(client *daemonclient.Client, id string, stdout, stderr io.Writer, onCancelled func()) int {
 	if onCancelled != nil {
 		onCancelled()
@@ -172,7 +172,7 @@ func adoptCancel(client *daemonclient.Client, id string, stdout, stderr io.Write
 	var ap team.Approval
 	if _, err := client.Once(dctx, http.MethodDelete, "/api/team/approvals/"+id, nil, &ap); err != nil {
 		fmt.Fprintf(stderr, "pdx adopt: 取消申請時 daemon 回應：%v\n", err)
-	} else if ap.State != "" && ap.State != team.StateCancelled && ap.State != team.StateOpen {
+	} else if ap.State != "" && ap.State != team.StateOpen && (ap.State != team.StateCancelled || ap.CloseReason != "") {
 		return adoptFinish(ap, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "pdx adopt: 已取消申請（%s）\n", id)

@@ -145,6 +145,23 @@ func TestAdoptCmd_SignalAfterApprovalReportsTheApproval(t *testing.T) {
 	}
 }
 
+// ... and a DELETE that answers the row cancelled BY A RULE (close_reason) is the refusal, exit 13 code last.
+func TestAdoptCmd_SignalAfterRuleCancelReportsTheRefusal(t *testing.T) {
+	d := newFakeTeamDaemon(team.Approval{})
+	d.hold = true
+	d.deleteResp = &team.Approval{Kind: team.KindAdopt, State: team.StateCancelled, CloseReason: team.ErrAdoptAlreadyMember}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-d.pollStarted
+		cancel()
+	}()
+	code, stdout, stderr := driveAdopt(t, ctx, d, "_def456")
+	if code != ExitRefused || stdout != "" || lastToken(stderr) != team.ErrAdoptAlreadyMember {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
 // ---- pdx release ----
 
 func TestReleaseCmd_ReleasedAndRefusals(t *testing.T) {
