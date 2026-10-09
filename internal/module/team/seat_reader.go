@@ -30,10 +30,15 @@ func (s *Store) RootSessionOf(sessionID string) (string, error) {
 	}
 }
 
-// SeatOf is SessionRole (the single role gate) plus the id of the team that role came from. The team id is read
-// after the role: a row that ended in between answers none rather than a role with no team.
+// SeatOf is the single role gate (sessionRoleIn) plus the id of the team that role came from, both read in one
+// transaction so the answer is one point in time (a remote member that just joined a local team is never half of each).
 func (s *Store) SeatOf(sessionID string) (team.Seat, error) {
-	role, err := s.SessionRole(sessionID)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return team.Seat{}, fmt.Errorf("seat %s: %w", sessionID, err)
+	}
+	defer tx.Rollback()
+	role, err := sessionRoleIn(tx, sessionID)
 	if err != nil {
 		return team.Seat{}, err
 	}
@@ -50,7 +55,7 @@ func (s *Store) SeatOf(sessionID string) (team.Seat, error) {
 		return team.Seat{Role: team.SeatNone}, nil
 	}
 	var teamID string
-	err = s.db.QueryRow(query, sessionID).Scan(&teamID)
+	err = tx.QueryRow(query, sessionID).Scan(&teamID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return team.Seat{Role: team.SeatNone}, nil
 	}
