@@ -335,7 +335,7 @@
   "team.panel.restore": "還原面板大小",
   "team.titlebar.to_pane": "把面板放回窗格",
   "team.titlebar.to_titlebar": "把面板收進標題列",
-  "team.titlebar.more": "還有 {count} 位，點開面板",
+  "team.titlebar.more": "還有 {{count}} 位，點開面板",
   "team.panel.resize": "拖曳調整寬度",
   "team.panel.lead": "lead",
   "team.panel.unopened": "未開",

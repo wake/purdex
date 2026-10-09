@@ -335,7 +335,7 @@
   "team.panel.restore": "Restore the panel size",
   "team.titlebar.to_pane": "Put the panel back in the pane",
   "team.titlebar.to_titlebar": "Move the panel into the title bar",
-  "team.titlebar.more": "{count} more — open the panel",
+  "team.titlebar.more": "{{count}} more — open the panel",
   "team.panel.resize": "Drag to resize",
   "team.panel.lead": "lead",
   "team.panel.unopened": "not open",

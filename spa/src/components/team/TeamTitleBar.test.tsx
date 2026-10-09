@@ -13,6 +13,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { PLUS_CHIP_W } from './panel-layout'
@@ -44,7 +45,7 @@ beforeEach(() => {
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); act(() => useI18nStore.getState().setLocale('en')) })
 
 describe('the Notebook button', () => {
   it('is absent when the active tab has no team (and with no active tab)', () => {
@@ -185,6 +186,18 @@ describe('the strip', () => {
       expect(screen.getByTestId('team-strip-name').className).not.toContain('flex-shrink-0')
       expect(screen.getByTestId('team-strip-name').className).toContain('min-w-0')
       expect(screen.getByTestId('team-strip-more').className).toContain('flex-shrink-0')
+    })
+
+    it.each([['zh-TW', '還有 3 位，點開面板'], ['en', '3 more — open the panel']])('「+N」 title and aria-label carry the real number (%s)', (locale, text) => {
+      scene()
+      avail = 190
+      act(() => useI18nStore.getState().setLocale(locale))
+      mountBar()
+      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
+      const more = screen.getByTestId('team-strip-more')
+      expect(more.getAttribute('title')).toBe(text)
+      expect(more.getAttribute('aria-label')).toBe(text)
+      expect(more.getAttribute('title')).not.toContain('{')
     })
 
     it('「+N」 brings the area back to the pane', () => {
