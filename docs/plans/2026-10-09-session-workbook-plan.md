@@ -112,8 +112,9 @@ Revision 2 (2026-10-09 23:xx): codex plan review `task-mv12whuc-yxlm33` (15 find
   In memory (a restart re-derives nothing: D9 fails the rows). `next` hands out the head job of the asking session's
   conversation only when no job of that conversation is leased, and only to an **eligible** session: a `turn` /
   `rewrite` job (no transcript involved, the input is prebuilt) to any capable live session of the conversation,
-  preferring the entry's own session; a `refresh` job only to the session it was asked for (D14) — any other session
-  gets 204 for it. A lease lasts `timeout_ms` + 10 s (30 + 10 s); a lease that runs out → the entry `failed: lost` (not
+  preferring the entry's own session; a `refresh` job to a `workbook.refresh`-capable session of the conversation,
+  preferring the session it was asked for, else the one whose stream announced `workbook.refresh` most recently (D14) —
+  any other session gets 204 for it. A lease lasts `timeout_ms` + 10 s (30 + 10 s); a lease that runs out → the entry `failed: lost` (not
   retried) and the queue moves on; a `result` whose job id is not leased (expired, unknown, twice, or from another
   stream) → 409 `not_leased`, ignored. `next` and `result` carry the mod's **`stream`** id (D11) besides `session_id`:
   one `next` long-poll per stream at a time (a second from the same stream waits for the first to return); a reloaded
@@ -125,9 +126,13 @@ Revision 2 (2026-10-09 23:xx): codex plan review `task-mv12whuc-yxlm33` (15 find
   per stream, and a session counts as capable (for turns: `workbook.v2`; for a refresh: `workbook.refresh`) when the
   stream whose current sid it is announced it within 30 s. So the daemon of WB-2b-i never hands a refresh to a mod of
   WB-1c (the refresh route answers 409 `not_live` until a `workbook.refresh` mod is live). A turn of an incapable session →
-  `skipped: no_mod` at insert (no job). A change of a conversation's refresh availability (a capable stream appears, or
-  its 30 s run out — checked on each envelope and by a 10 s sweep) emits `workbook.refresh_available {conv_key,
-  available}`; the conversation answer carries `refresh_available` (WB-2b-i). The events answer gains
+  `skipped: no_mod` at insert (no job). **Refresh availability** is per conversation: `available(conv)` = some session
+  of the conversation (by `RootSessionOf`) is the current sid of a stream that announced `workbook.refresh` within 30 s.
+  The workbook module owns `lastAvail map[conv_key]bool`; it recomputes the conversations touched by each envelope's
+  stream and, in a 10 s sweep, every conversation in `lastAvail` or with a live stream; it emits
+  `workbook.refresh_available {conv_key, available}` only when the computed value differs from `lastAvail` (then stores
+  it), so repeated sweeps send nothing and one stream lapsing while another still serves the conversation sends nothing.
+  The conversation answer carries `refresh_available` (computed on read) (WB-2b-i). The events answer gains
   `workbook: true` when the conversation of any of the stream's sessions has a job waiting that nobody leased (a refresh,
   or a left-over), so the mod asks `next` (b). Both are additive (an older daemon ignores `caps`; an older mod ignores
   `workbook`). The U1 spec §6.2 gets both lines in WB-1b′-c.
@@ -146,9 +151,10 @@ Revision 2 (2026-10-09 23:xx): codex plan review `task-mv12whuc-yxlm33` (15 find
   live session (else 409 `not_live`); one at a time (409 `refresh_pending`). **Its row** (the deployed schema keeps
   `session_id` / `turn_id` NOT NULL and `UNIQUE(session_id, turn_id)`): `session_id` = the session it runs in — the
   `/workbook refresh` caller, or for the Mac route the capable session whose stream announced `workbook.refresh` most
-  recently; `turn_id = "r:" + <request unix ms> + "-" + <per-daemon seq>` (unique); `turn_at` = the request time,
-  `turn_seq` 0. The job goes only to that session (D10); if that session's capability lapses before the job is leased →
-  `failed: lost`. Its result: `{status, todos}` validated as D13 (≤ 10 adds, no push,
+  recently — and **re-pointed** (one UPDATE) to the session that actually leases the job (D10 lets another capable
+  session of the conversation take it when the first one is gone); `turn_id = "r:" + <request unix ms> + "-" +
+  <per-daemon seq>` (unique, so re-pointing never collides); `turn_at` = the request time, `turn_seq` 0. A refresh at the
+  queue's head with no capable session for 40 s → `failed: lost` (the turns behind it wait at most that long). Its result: `{status, todos}` validated as D13 (≤ 10 adds, no push,
   no thing) → one transaction writes the status, the todo changes and the entry (`ok`, `thing` = the current thing,
   `entry` = 「重整：完成 a、移除 b、新增 c」) — no push hold involved.
 - **D4 StopFailure gets a turn-end event.** `TurnEndEvent` gains `Failed bool`; `publishTurnEnd` also publishes an accepted
@@ -249,7 +255,7 @@ Size ~750 lines incl. tests.
    turn is `skipped: no_mod` and gets no job. Tests as old WB-1b.2 / .3 + `no_mod`.
 2. **Queue + jobs** (D3, D10): per conversation FIFO of entries, at most 3 waiting (older `skipped: backlog`); hourly
    cap 300 (`skipped: cap`, one log line per hour); **no host-wide concurrency limit** (spec §5.1: nothing is spawned).
-   A `JobSource` interface — `Next(ctx, sessionID, wait) (Job, bool)`, `Result(jobID, Result) (more bool, err)` — that
+   A `JobSource` interface — `Next(ctx, stream, sessionID, wait) (Job, bool)`, `Result(stream, jobID, Result) (more bool, err)` (the lease records its stream; a result from another stream → `ErrNotLeased`) — that
    WB-1b′-c puts on the socket; leases (40 s) with a clock seam; the outcome table; `retry` once; re-write as a job;
    `Finish`; D9 at Stop / Start. Tests with a fake clock and a fake mod: order within a conversation; the next job only
    after `Finish`; two conversations independent; a relay hands the job to the new session (same `conv_key`); lease
@@ -302,13 +308,18 @@ Size ~450 lines incl. tests.
 1. Entries gain `kind`, `usage {in, out, cache_read}`, `todo_changes {added, done, dropped: [{id, title}]}` (from the
    todo rows by entry id); the conversation answer gains `todos {open, done (newest 20)}`; `GET …/todos?state=&limit=&
    before=`; `POST …/refresh` → 202 `{entry_id}` / 409 `not_live` / 409 `refresh_pending` (D14: the refresh row's
-   `session_id` / `turn_id`); the conversation answer gains `refresh_available` and host event
+   `session_id` / `turn_id`, re-pointing at lease, 40 s head timeout); **the socket twin** `POST
+   /mod/v1/workbook/refresh {stream, session_id}` on the mod socket (same handler, the caller's session preferred) for
+   the mod's `/workbook refresh` (WB-2b-ii only calls it); the conversation answer gains `refresh_available` and host event
    `workbook.refresh_available {conv_key, available}` on a change (D11); host event `workbook.todos` `{conv_key,
    session_id, todos}` from the store hook that applies todo changes; capability `workbook.v2` when the module is ready;
    `deviceAllowed` gains the todos GET (not the refresh).
-2. Tests: shapes; paging by todo id; refresh 202 / 409s; two refresh rows of one session never collide (`r:` ids); a
-   session with only `workbook.v2` (a WB-1c mod) → 409 `not_live`; `refresh_available` true / false and its event on the
-   transitions (a capable stream appears, its 30 s lapse); the todos event per change; device scope pinned list.
+2. Tests: shapes; paging by todo id; refresh 202 / 409s on both routes; two refresh rows of one session never collide
+   (`r:` ids); a session with only `workbook.v2` (a WB-1c mod) → 409 `not_live`; the asked session gone → another capable
+   session of the conversation leases the refresh and the row is re-pointed; no capable session for 40 s at the head →
+   `failed: lost` and the next turn job goes out; `refresh_available` per conversation: one stream appears → one event;
+   two streams, one lapses while the other is fresh → no event; both lapse → one event; ten sweeps in a row → no
+   duplicate event; the todos event per change; device scope pinned list (the refresh routes are not device routes).
 Size ~550 lines.
 
 ## WB-2b-ii mod: refresh
@@ -316,7 +327,7 @@ Size ~550 lines.
 `workbook.js`: announce `"workbook.refresh"` in `caps` (D11); a `refresh` job → `$.model.fork({prompt})`
 (`nothing-to-fork` → result reason, daemon maps it); the
 `/workbook refresh` slash command (registered from `events.js` / `workbook.js`, not `register.js`) asks the daemon through
-the socket (a small `POST /mod/v1/workbook/refresh {session_id}` on the socket, same semantics as the TCP route) and then
+the socket (`POST /mod/v1/workbook/refresh {stream, session_id}`, the daemon route added in WB-2b-i) and then
 asks `next`. Tests: fork mapping; the command's three answers (202 / not_live / pending) as a one-line notice in the
 session. **M5** (below) before merge.
 Size ~300 lines.
