@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -261,14 +263,15 @@ func (m *Module) pollRow(w http.ResponseWriter, r *http.Request, id string) (tea
 
 // askWaitOf maps a hook row to the wait body (spec §6.6 step 2). A remote
 // answer is answered_remote with its hook: approved for either kind, and
-// denied for a hook_permission (hook.behavior "deny"; a hook_ask cannot be
-// denied — decideHook refuses it).
+// denied for both — a hook_permission (hook.behavior "deny") and a hook_ask
+// (hook.message, the person's reply instead of answers; decideHook only
+// closes a hook_ask denied with one).
 func askWaitOf(a team.Approval) team.AskWaitResponse {
 	switch {
 	case a.State == team.StateOpen:
 		return team.AskWaitResponse{State: team.AskStillOpen}
 	case a.State == team.StateApproved,
-		a.State == team.StateDenied && a.Kind == team.KindHookPermission:
+		a.State == team.StateDenied && (a.Kind == team.KindHookPermission || a.Kind == team.KindHookAsk):
 		return team.AskWaitResponse{State: team.AskAnsweredRemote, Hook: a.Hook}
 	default:
 		return team.AskWaitResponse{State: team.AskClosed, Reason: string(a.State)}
@@ -399,10 +402,41 @@ func labelOf(c *team.Client) string {
 	return c.Label
 }
 
+// chatReplyMax is the longest reply (in runes, after trimming) a phone can
+// send back instead of picking answers.
+const chatReplyMax = 4000
+
+// chatReply validates the person's reply to a hook_ask: trimmed, 1..chatReplyMax
+// runes, valid UTF-8. Per rune only \n and \t may be control characters; refused
+// are every other control character (\r, NUL, ESC), Unicode bidi controls
+// (U+061C, U+200E/F, U+202A-E, U+2066-9), U+2028/U+2029 and every other format
+// character (Cf, e.g. U+200B, U+FEFF) except ZWNJ/ZWJ (U+200C/D, emoji
+// sequences) and the tag characters U+E0020-E007F (flag sequences). Variation
+// selectors are Mn and stay legal. This blocks display spoofing in terminals.
+func chatReply(raw string) (string, bool) {
+	msg := strings.TrimSpace(raw)
+	if msg == "" || !utf8.ValidString(msg) || utf8.RuneCountInString(msg) > chatReplyMax {
+		return "", false
+	}
+	for _, r := range msg {
+		if r == '\n' || r == '\t' {
+			continue
+		}
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) || r == 0x2028 || r == 0x2029 {
+			return "", false
+		}
+		if unicode.Is(unicode.Cf, r) && r != 0x200C && r != 0x200D && (r < 0xE0020 || r > 0xE007F) {
+			return "", false
+		}
+	}
+	return msg, true
+}
+
 // decideHook is handleDecide's branch for a hook row (spec §6.6 steps 4–5):
 // the remote client's answer rides in `hook`; a terminal_only card is
-// read-only; hook_ask takes approve with answers only, hook_permission takes
-// approve (allow) or deny. The close goes through the same closeAs.
+// read-only; hook_ask takes approve with answers, or deny with the person's
+// reply in hook.message (never both), hook_permission takes approve (allow)
+// or deny. The close goes through the same closeAs.
 func (m *Module) decideHook(w http.ResponseWriter, a team.Approval, req team.DecideRequest, state team.State, client team.Client) {
 	if isTerminalOnly(a) {
 		m.writeErr(w, http.StatusConflict, team.ErrTerminalOnly, "這題只能在終端機回答", &a)
@@ -414,8 +448,17 @@ func (m *Module) decideHook(w http.ResponseWriter, a team.Approval, req team.Dec
 	}
 	switch a.Kind {
 	case team.KindHookAsk:
+		if state == team.StateDenied {
+			msg, ok := chatReply(hook.Message)
+			if !ok || hook.Answers != nil {
+				m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a denied hook_ask needs hook.message (1-4000 runes; no control, bidi or invisible format characters except \\n, \\t, ZWJ/ZWNJ and emoji tags) and no hook.answers", nil)
+				return
+			}
+			hook = &team.HookDecision{Message: msg}
+			break
+		}
 		if state != team.StateApproved {
-			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a hook_ask is answered with decision approve and hook.answers", nil)
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a hook_ask is answered with decision approve and hook.answers, or deny and hook.message", nil)
 			return
 		}
 		if len(hook.Answers) == 0 {

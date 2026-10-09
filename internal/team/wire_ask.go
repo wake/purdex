@@ -70,7 +70,7 @@ type HookDecision struct {
 	Answers      map[string]string `json:"answers,omitempty"`       // hook_ask: question text → answer (multi-select comma-joined)
 	Behavior     string            `json:"behavior,omitempty"`      // hook_permission: allow | deny
 	UpdatedInput json.RawMessage   `json:"updated_input,omitempty"` // hook_permission
-	Message      string            `json:"message,omitempty"`       // hook_permission deny reason
+	Message      string            `json:"message,omitempty"`       // hook_permission deny reason; hook_ask deny: the person's reply instead of answers (never with Answers)
 }
 
 // AskBeginRequest is POST /api/ask/begin (the mod, through `pdx ask begin`).
