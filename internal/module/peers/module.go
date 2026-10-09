@@ -381,6 +381,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(SenderKey, moduleSender{m: m})
 	// The team module's commands outbox pump (cross-host team spec X3a) calls paired hosts through this.
 	c.Registry.Register(HostCallerKey, m.HostCaller())
+	// The team module delivers a remote member's notices through this narrow seam (cross-host team spec §4.4, X3d).
+	c.Registry.Register(TeamNoticeKey, TeamNoticeDeliverer(m))
 
 	return nil
 }
