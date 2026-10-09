@@ -4,7 +4,7 @@
 // without a tab still shows its agent icon and light. A seat on a host this Mac has not configured (hostId '') has no key
 // at all: no light, and a neutral host glyph in place of the host icon.
 import { useMemo } from 'react'
-import { Desktop } from '@phosphor-icons/react'
+import { Desktop, Robot } from '@phosphor-icons/react'
 import { TabIcon } from '../TabIcon'
 import { HostBadge } from '../HostBadge'
 import { useSessionAgentIndicator } from '../../hooks/useSessionAgentIndicator'
@@ -21,11 +21,16 @@ interface IconProps {
   size?: number
 }
 
+/** The agent icon of a seat whose host this Mac lacks: it has no agent store key, so nothing else would draw. */
+function UnmappedBot({ size, className }: { size: number; className?: string }) {
+  return <Robot size={size} className={className} data-testid="team-bead-bot" />
+}
+
 export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14 }: IconProps) {
   const { agentIcon, agentStatus, isUnread, tabIndicatorStyle } = useSessionAgentIndicator(hostId, sessionCode)
   return (
     <TabIcon
-      IconComponent={agentIcon}
+      IconComponent={hostId === '' ? UnmappedBot : agentIcon}
       agentStatus={agentStatus}
       tabIndicatorStyle={tabIndicatorStyle}
       isActive={isActive}

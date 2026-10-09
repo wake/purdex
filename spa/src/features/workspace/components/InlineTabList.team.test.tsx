@@ -291,6 +291,22 @@ describe('InlineTabList — team beads', () => {
     expect(useUndoToast.getState().toast?.message).toContain('b26')
   })
 
+  it('an unmapped-host bead always draws the bot icon; the neutral glyph only with the setting on', () => {
+    seedScene(base)
+    const t = useTeamRosterStore.getState().byHost[HOST][0]
+    act(() => useTeamRosterStore.setState({ byHost: { [HOST]: [{ ...t, members: [...t.members, { ...member('R', 9, 'r-tm'), host_id: 'dm-b', host_alias: 'b26' }] }] } }))
+    act(() => useTeamUiStore.getState().setTeamBeadHost(false))
+    mount()
+    const r = bead('R')
+    expect(within(r).getByTestId('team-bead-bot')).toBeInTheDocument() // visible, not an empty click target
+    expect(within(r).queryByTestId('tab-status-indicator')).toBeNull() // no agent store key, so no light
+    expect(within(r).queryByTestId('team-bead-host-unknown')).toBeNull()
+    expect(r.getAttribute('title')).toBe('title R')
+    act(() => useTeamUiStore.getState().setTeamBeadHost(true))
+    expect(within(bead('R')).getByTestId('team-bead-bot')).toBeInTheDocument()
+    expect(within(bead('R')).getByTestId('team-bead-host-unknown')).toBeInTheDocument()
+  })
+
   it("a joining member's tooltip carries the state, alias only when remote", () => {
     seedScene(base)
     const t = useTeamRosterStore.getState().byHost[HOST][0]
