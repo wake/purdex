@@ -143,6 +143,7 @@ func TestAgentTrigger_AWaitingFrameBeforeItsHookAskPushesOnlyTheAsk(t *testing.T
 	e.device(tokA, "en", "mlab", tabsOf("c1"))
 	e.feed.emit(nev("c1", "PdxPermissionRequest", "waiting", map[string]any{"tool_name": "AskUserQuestion"}))
 	time.Sleep(40 * time.Millisecond) // the ask is later than the waiting frame, but inside the hold
+	e.clock.advance(time.Second)      // and a second later on the clock the intervals are kept on
 	e.events.emit("opened", askApproval("ask1", "sid-1", "dev:@1.%2", false))
 	calls := e.waitSends(t, 1)
 	time.Sleep(300 * time.Millisecond) // past the hold
@@ -169,22 +170,51 @@ func TestAgentTrigger_AWaitingFrameWithNoAskIsPushedAfterTheHold(t *testing.T) {
 	}
 }
 
-// The waiting frame comes after the ask was opened and already answered, but within 10 s: still the same question.
-func TestAgentTrigger_AnAskOpenedAndClosedWithin10SecondsStillSuppresses(t *testing.T) {
+// An ask that was opened and answered before the waiting frame arrived does not hide it, however soon after: the
+// permission prompt that follows the user's answer is a new thing that needs them. Mutation gate: a recent-window rule
+// (suppress for 10 s after an open) → the 3 s case is swallowed → red.
+func TestAgentTrigger_AnAskAnsweredBeforeTheWaitingFrameDoesNotHideIt(t *testing.T) {
 	e := newAgentEnv(t, 60*time.Millisecond)
 	e.device(tokA, "en", "mlab", tabsOf("c1"))
 	e.events.emit("opened", askApproval("ask1", "sid-1", "dev:@1.%2", false))
 	e.waitSends(t, 1)
 	e.clock.advance(3 * time.Second)
 	e.events.emit("closed", askApproval("ask1", "sid-1", "dev:@1.%2", false))
+	e.clock.advance(3 * time.Second) // the agent goes on and asks for a permission 3 s later
+	e.feed.emit(nev("c1", "PdxPermissionRequest", "waiting", map[string]any{"tool_name": "Bash"}))
+	calls := e.waitSends(t, 2)
+	if !strings.Contains(calls[1].Payload, "Permission required: Bash") {
+		t.Fatalf("second push = %s", calls[1].Payload)
+	}
+}
+
+// The ask is open when the waiting frame arrives and stays open across its whole window: the same question, one push.
+func TestAgentTrigger_AnAskOpenAcrossTheWholeWindowHidesTheWaitingFrame(t *testing.T) {
+	e := newAgentEnv(t, 80*time.Millisecond)
+	e.device(tokA, "en", "mlab", tabsOf("c1"))
+	e.events.emit("opened", askApproval("ask1", "sid-1", "dev:@1.%2", false))
+	e.waitSends(t, 1)
 	e.feed.emit(nev("c1", "PdxPermissionRequest", "waiting", nil))
 	time.Sleep(250 * time.Millisecond)
 	if got := e.apns.count(); got != 1 {
 		t.Fatalf("sends = %d, want only the ask's", got)
 	}
-	e.clock.advance(20 * time.Second) // long after: a new waiting event is its own
+}
+
+// The ask opens and is answered inside the waiting frame's window (answered from the phone within the 2 s): the same
+// question still, so the frame is hidden.
+func TestAgentTrigger_AnAskOpenedAndClosedInsideTheWindowHidesTheWaitingFrame(t *testing.T) {
+	e := newAgentEnv(t, 200*time.Millisecond)
+	e.device(tokA, "en", "mlab", tabsOf("c1"))
 	e.feed.emit(nev("c1", "PdxPermissionRequest", "waiting", nil))
-	e.waitSends(t, 2)
+	e.events.emit("opened", askApproval("ask1", "sid-1", "dev:@1.%2", false))
+	e.waitSends(t, 1)
+	e.clock.advance(time.Second) // answered a second later, still inside the 2 s window
+	e.events.emit("closed", askApproval("ask1", "sid-1", "dev:@1.%2", false))
+	time.Sleep(400 * time.Millisecond)
+	if got := e.apns.count(); got != 1 {
+		t.Fatalf("sends = %d, want only the ask's", got)
+	}
 }
 
 // Matched by the tmux session name when the ids differ or are missing.
@@ -390,13 +420,7 @@ func TestAgentTrigger_AClosedEventThatOutrunsTheSnapshotIsNotLost(t *testing.T) 
 	}
 	t.Cleanup(func() { e.mod.Stop(context.Background()) })
 	e.do("POST", "/api/push/devices", reqBody(tokA, tabsOf2("c1")))
-	time.Sleep(100 * time.Millisecond) // the closed event has been applied
-	e.mod.asks.mu.Lock()               // age the ask past the 10 s window the simple way
-	for id, a := range e.mod.asks.byID {
-		a.opened = a.opened.Add(-time.Minute)
-		e.mod.asks.byID[id] = a
-	}
-	e.mod.asks.mu.Unlock()
+	time.Sleep(100 * time.Millisecond) // the closed event has been applied; the waiting frame below arrives after it
 	feed.emit(nev("c1", "PdxPermissionRequest", "waiting", nil))
 	deadline := time.Now().Add(2 * time.Second)
 	for apnsFake.count() < 1 && time.Now().Before(deadline) {
@@ -420,13 +444,7 @@ func TestAgentTrigger_AStartForgetsAsksOfAnEarlierRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { e.mod.Stop(context.Background()) })
-	e.mod.asks.mu.Lock()
-	for id, a := range e.mod.asks.byID {
-		a.opened = a.opened.Add(-time.Minute)
-		e.mod.asks.byID[id] = a
-	}
-	e.mod.asks.mu.Unlock()
-	if e.mod.asks.Has("sid-1", "dev") {
+	if now := e.mod.asks.Now(); e.mod.asks.Overlaps("sid-1", "dev", now, now) {
 		t.Fatal("an ask of an earlier run is still open")
 	}
 }

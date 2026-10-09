@@ -8,31 +8,35 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-// recentAskWindow: an ask that opened this recently still counts after it closed, because the agent's own `waiting`
-// event for the same question can arrive after the ask has already been answered (spec §5.2 rule 8).
-const recentAskWindow = 10 * time.Second
+// askRetention is how long a closed ask's interval is kept: a `waiting` event is held for 2 s, so an interval that
+// ended more than a minute ago can never overlap one.
+const askRetention = time.Minute
 
-// openAsks is the set of hook_ask approvals that the phone was (or is being) told about, for rule 8: a `waiting`
-// event of the same session is the same question and must not push twice. It holds only an answerable hook_ask (a
-// terminal_only ask is not pushed, so the agent's own event stays the phone's only notice). Rebuilt from the approval
-// feed's open snapshot, kept by its opened / closed events; in memory.
+// maxAskIntervals bounds the intervals kept; the oldest closed one goes first.
+const maxAskIntervals = 1024
+
+// openAsks records, per session, when the answerable hook_ask approvals were open (push spec §5.2 rule 8): an interval
+// [opened, closed) per ask, still running while it is open. A `waiting` event is a duplicate of an AskUserQuestion push
+// exactly when its own window (its arrival until its hold ends) overlaps one of those intervals; an ask that was
+// opened and answered before the event arrived does not hide it. Only an answerable hook_ask counts (a terminal_only
+// ask is not pushed, so the agent's own event stays the phone's only notice). Rebuilt from the approval feed's open
+// snapshot, kept by its opened / closed events; in memory.
 type openAsks struct {
 	mu   sync.Mutex
 	now  func() time.Time
-	byID map[string]askEntry
+	byID map[string]askInterval
 }
 
-type askEntry struct {
-	sid, name string
-	opened    time.Time
-	open      bool
+type askInterval struct {
+	sid, name      string
+	opened, closed time.Time // closed is the zero time while the ask is open
 }
 
 func newOpenAsks(now func() time.Time) *openAsks {
 	if now == nil {
 		now = time.Now
 	}
-	return &openAsks{now: now, byID: map[string]askEntry{}}
+	return &openAsks{now: now, byID: map[string]askInterval{}}
 }
 
 // isPushedAsk: an answerable hook_ask, the only kind that has a phone push to duplicate.
@@ -47,12 +51,11 @@ func isPushedAsk(a team.Approval) bool {
 // Clear forgets everything: a (re)start begins from the feed's snapshot, not from what an earlier run last saw.
 func (o *openAsks) Clear() {
 	o.mu.Lock()
-	o.byID = map[string]askEntry{}
+	o.byID = map[string]askInterval{}
 	o.mu.Unlock()
 }
 
-// Load adds the snapshot of open approvals the feed returned when it was subscribed. It adds, never clears: the feed
-// arms its callback in the same step that returns the snapshot, so an event may already have run by the time this does.
+// Load adds the snapshot of open approvals the feed returned when it was subscribed. It adds, never clears.
 func (o *openAsks) Load(open []team.Approval) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -65,43 +68,47 @@ func (o *openAsks) Load(open []team.Approval) {
 		if a.CreatedAt > 0 {
 			opened = time.UnixMilli(a.CreatedAt)
 		}
-		o.byID[a.ID] = askEntry{sid: a.Origin.SessionID, name: tmuxSessionOf(a.Origin.Tmux), opened: opened, open: true}
+		o.byID[a.ID] = askInterval{sid: a.Origin.SessionID, name: tmuxSessionOf(a.Origin.Tmux), opened: opened}
 	}
 }
 
-// Opened records a newly opened ask.
+// Opened starts the ask's interval.
 func (o *openAsks) Opened(a team.Approval) {
 	if !isPushedAsk(a) {
 		return
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.pruneLocked(o.now())
-	o.byID[a.ID] = askEntry{sid: a.Origin.SessionID, name: tmuxSessionOf(a.Origin.Tmux), opened: o.now(), open: true}
+	now := o.now()
+	o.pruneLocked(now)
+	o.byID[a.ID] = askInterval{sid: a.Origin.SessionID, name: tmuxSessionOf(a.Origin.Tmux), opened: now}
 }
 
-// Closed takes an ask out of the open set; it keeps counting only until its recent window ends.
+// Closed ends the ask's interval (the first close wins).
 func (o *openAsks) Closed(id string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if e, ok := o.byID[id]; ok {
-		e.open = false
+	now := o.now()
+	if e, ok := o.byID[id]; ok && e.closed.IsZero() {
+		e.closed = now
 		o.byID[id] = e
 	}
-	o.pruneLocked(o.now())
+	o.pruneLocked(now)
 }
 
-// Has: some ask is open, or opened within the last 10 s, for the session with this agent session id or this tmux
-// session name. An empty identifier never matches.
-func (o *openAsks) Has(sessionID, tmuxName string) bool {
+// Now is the clock the intervals are on, for a caller that stamps an arrival.
+func (o *openAsks) Now() time.Time { return o.now() }
+
+// Overlaps: some ask of the session with this agent session id or this tmux session name was open at some moment of
+// [from, to] — it opened by `to` and had not closed by `from`. An empty identifier never matches.
+func (o *openAsks) Overlaps(sessionID, tmuxName string, from, to time.Time) bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	now := o.now()
 	for _, e := range o.byID {
-		if !e.open && now.Sub(e.opened) >= recentAskWindow {
+		if !((sessionID != "" && e.sid == sessionID) || (tmuxName != "" && e.name == tmuxName)) {
 			continue
 		}
-		if (sessionID != "" && e.sid == sessionID) || (tmuxName != "" && e.name == tmuxName) {
+		if !e.opened.After(to) && (e.closed.IsZero() || e.closed.After(from)) {
 			return true
 		}
 	}
@@ -110,13 +117,26 @@ func (o *openAsks) Has(sessionID, tmuxName string) bool {
 
 func (o *openAsks) pruneLocked(now time.Time) {
 	for id, e := range o.byID {
-		if !e.open && now.Sub(e.opened) >= recentAskWindow {
+		if !e.closed.IsZero() && now.Sub(e.closed) >= askRetention {
 			delete(o.byID, id)
 		}
 	}
+	for len(o.byID) > maxAskIntervals { // over the cap: the oldest closed interval goes
+		var oldest string
+		var oldestClosed time.Time
+		for id, e := range o.byID {
+			if !e.closed.IsZero() && (oldest == "" || e.closed.Before(oldestClosed)) {
+				oldest, oldestClosed = id, e.closed
+			}
+		}
+		if oldest == "" {
+			return // all of them are open: nothing may be dropped
+		}
+		delete(o.byID, oldest)
+	}
 }
 
-// Len is the number of entries held (open ones and recently closed ones).
+// Len is the number of intervals held (open ones and recently closed ones).
 func (o *openAsks) Len() int {
 	o.mu.Lock()
 	defer o.mu.Unlock()

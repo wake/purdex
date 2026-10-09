@@ -26,6 +26,7 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	if snd == nil {
 		return
 	}
+	arrival := m.asks.Now() // the start of this event's window for rule 8
 	in := AgentEvent{
 		AgentType: ev.Event.AgentType, SessionCode: ev.SessionCode, SessionName: ev.SessionName, SessionID: ev.SessionID,
 		EventName: ev.Event.RawEventName, Status: ev.Event.Status, BroadcastTs: ev.Event.BroadcastTs,
@@ -58,9 +59,11 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 		send()
 		return
 	}
-	// Rule 8: a waiting event is held, then dropped if it is the AskUserQuestion that already pushed (or is about to).
+	// Rule 8: a waiting event is held, then dropped if an AskUserQuestion of the same session was open at any moment
+	// between its arrival and the end of its hold: that is the question this event is about, and it already pushed.
+	// An ask that was opened and answered before the event arrived does not hide it.
 	if !m.holds.after(m.holdFor, func() {
-		if !m.asks.Has(ev.SessionID, ev.SessionName) {
+		if !m.asks.Overlaps(ev.SessionID, ev.SessionName, arrival, m.asks.Now()) {
 			send()
 		}
 	}) {
