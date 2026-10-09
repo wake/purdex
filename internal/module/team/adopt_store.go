@@ -153,8 +153,12 @@ func adoptApprovedIn(tx *sql.Tx, id string, c Close, p team.AdoptPayload, chk ad
 		WHERE session_id = ? AND state = 'active'`, string(team.MemberReleased), c.DecidedAt, c.DecidedAt, p.TargetSessionID); err != nil {
 		return 0, "", fmt.Errorf("retire the target's row of an ended team: %w", err)
 	}
-	if err = insertMemberIn(context.Background(), tx, m); err != nil {
+	inserted, err := insertMemberRowIn(context.Background(), tx, m)
+	if err != nil {
 		return 0, "", err
+	}
+	if !inserted { // the key is taken: committing the close without the member would report an adoption that did not happen
+		return 0, "", fmt.Errorf("adopt member key %s is already a team_members row", id)
 	}
 	return n, "", nil
 }

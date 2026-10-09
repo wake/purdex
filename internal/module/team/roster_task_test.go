@@ -196,3 +196,23 @@ func TestOpenTaskBriefs_OneReadKeyedByTeamAndOnlyOpenTasks(t *testing.T) {
 		t.Fatalf("no teams: %+v %v", empty, err)
 	}
 }
+
+// An adopted row's wire shape: its key is the adoption's request id and says so in adopt_request, the wire's
+// spawn_op stays empty, ended_at is carried, and the roster names its origin (codex R1 on PL-1b1).
+// Mutation gate: put the row's key in SpawnOp for an adopted member → red.
+func TestMemberView_AnAdoptedRowIsAdoptedOnTheWire(t *testing.T) {
+	w := newTaskWorld(t)
+	row := newMember("ad-9", uid(1), "sid-ad", "_ad9", 3000)
+	row.Origin, row.EndedAt = team.MemberOriginAdopted, 4000
+	v := w.m.memberView(row)
+	if v.Origin != team.MemberOriginAdopted || v.SpawnOp != "" || v.AdoptRequest != "ad-9" || v.EndedAt != 4000 {
+		t.Fatalf("view = %+v", v)
+	}
+	sp := w.m.memberView(newMember("op-s", uid(1), "sid-sp", "_sp", 3000))
+	if sp.Origin != team.MemberOriginSpawned || sp.SpawnOp != "op-s" || sp.AdoptRequest != "" {
+		t.Fatalf("spawned view = %+v", sp)
+	}
+	if rosterOriginOf(row) != team.MemberOriginAdopted || rosterOriginOf(newMember("x", uid(1), "s", "_x", 1)) != team.MemberOriginSpawned {
+		t.Fatal("roster origin")
+	}
+}

@@ -324,3 +324,22 @@ func TestMemberLastTurnAts_OnlyActiveRows(t *testing.T) {
 		t.Fatalf("last turns = %v err=%v", got, err)
 	}
 }
+
+// A request id that is already a team_members key must not leave an approved request without its member
+// (codex R1): the whole transaction rolls back and the request stays open.
+// Mutation gate: ignore the insert's RowsAffected → red.
+func TestCloseAdoptApproved_ATakenKeyRollsBack(t *testing.T) {
+	s := adoptWorld(t)
+	seedMember(t, s, "ad-1", "team-1", "sid-old", 1500) // a row that already holds the key
+	if _, err := s.db.Exec(`UPDATE team_members SET state = 'gone' WHERE spawn_op = 'ad-1'`); err != nil {
+		t.Fatal(err)
+	}
+	p := adoptPayload("team-1", "lead-1", "sid-t")
+	openAdopt(t, s, "ad-1", p)
+	if _, _, _, err := s.CloseAdoptApproved("ad-1", adoptClose(), p, chkOK(), adoptedRow("ad-1", p)); err == nil {
+		t.Fatal("an approve whose member key is taken succeeded")
+	}
+	if a, _, _ := s.Get("ad-1"); a.State != team.StateOpen {
+		t.Fatalf("the request closed: %+v", a)
+	}
+}

@@ -162,18 +162,30 @@ type execer interface {
 }
 
 func insertMemberIn(ctx context.Context, q execer, m memberRow) error {
+	_, err := insertMemberRowIn(ctx, q, m)
+	return err
+}
+
+// insertMemberRowIn is insertMemberIn that also says whether a row was inserted (false: the spawn_op was taken
+// and the stored row was left as it is).
+func insertMemberRowIn(ctx context.Context, q execer, m memberRow) (bool, error) {
 	origin := m.Origin
 	if origin == "" {
 		origin = team.MemberOriginSpawned
 	}
-	if _, err := q.ExecContext(ctx, `INSERT INTO team_members (`+memberCols+`)
+	res, err := q.ExecContext(ctx, `INSERT INTO team_members (`+memberCols+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (spawn_op) DO NOTHING`,
 		m.SpawnOp, m.TeamID, m.HostID, m.SessionID, m.Ref, m.Title, m.Cwd, m.TmuxSession, m.TmuxID,
 		m.TmuxInstance, m.PaneID, m.PID, m.ProcStart, m.Model, m.Effort, string(m.State), m.CreatedAt, m.UpdatedAt,
-		origin, m.EndedAt, m.NoticePending, m.NoticeSince); err != nil {
-		return fmt.Errorf("insert member %s: %w", m.SpawnOp, err)
+		origin, m.EndedAt, m.NoticePending, m.NoticeSince)
+	if err != nil {
+		return false, fmt.Errorf("insert member %s: %w", m.SpawnOp, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("insert member %s rows affected: %w", m.SpawnOp, err)
+	}
+	return n == 1, nil
 }
 
 // ActiveMemberInLiveTeam returns the session's active member row and its

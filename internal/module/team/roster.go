@@ -18,10 +18,13 @@ import (
 // token only, like the other /api/team/* routes.
 const RosterRoute = "/api/team/roster"
 
-// rosterMemberOrigin is the origin of every roster member: the one writer
-// of team_members rows today is the spawn runner. PL-1f″ replaces it with
-// the team_members.origin column once adopt can write another value.
-const rosterMemberOrigin = team.MemberOriginSpawned
+// rosterOriginOf is how a roster member joined: its row's origin, spawned for a row that never named one.
+func rosterOriginOf(mr memberRow) string {
+	if mr.Origin == team.MemberOriginAdopted {
+		return team.MemberOriginAdopted
+	}
+	return team.MemberOriginSpawned
+}
 
 // handleRosterGet is GET /api/team/roster: the roster as the event shows it.
 func (m *Module) handleRosterGet(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +98,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 			}, mr.Ref, alias)
 			s.Model, s.Effort = mr.Model, mr.Effort // what it was spawned with
 			s.Context = m.sessionContext(mr.SessionID, mr.Usage)
-			rm := team.RosterMember{RosterSession: s, State: mr.State, Origin: rosterMemberOrigin, JoinedAt: mr.CreatedAt}
+			rm := team.RosterMember{RosterSession: s, State: mr.State, Origin: rosterOriginOf(mr), JoinedAt: mr.CreatedAt}
 			if mr.SpawnOp != "" { // every row has a key (an adopted member's is the adoption's request id), so adopted members have tasks too
 				if cur, ok := currentTaskOf(tasks[t.ID][mr.SpawnOp]); ok {
 					rm.Task = &team.RosterTask{ID: team.TaskDisplayID(t.ID, cur.Seq), Subject: cur.Subject, Status: cur.Status}
