@@ -44,9 +44,14 @@ export function cellWidthFor(_style: 'icon' | 'dot' | 'iconDot' | 'badge'): numb
 }
 export const CELL_H = 26
 export const CELL_GAP = 8
-/** The 1px divider after the lead, with its side margin. */
-export const SEP_MARGIN = 8
-export const SEP_W = 1 + 2 * SEP_MARGIN
+/**
+ * The 1px divider after the lead. It is an ordinary flex child of the cells row, so the row's CELL_GAP leaves 8px on EACH
+ * side of it and it carries no margin of its own (a margin inside a cell's wrapper stacked on the gap: 16 / 8). Between the lead
+ * and the next cell the row therefore spends CELL_GAP + line + CELL_GAP; SEP_W is what that adds beyond the one CELL_GAP
+ * every pair of cells has anyway.
+ */
+export const SEP_LINE_W = 1
+export const SEP_W = SEP_LINE_W + CELL_GAP
 
 /** The area's own 1px border on each side. */
 export const AREA_BORDER = 2

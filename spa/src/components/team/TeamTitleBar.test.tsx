@@ -138,6 +138,19 @@ describe('the strip', () => {
     expect(mode()).toBe('titlebar')
   })
 
+  it('the divider is a flex child of the cells row with no margin: the row gap leaves 8px on each side of it', () => {
+    scene()
+    mountBar()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
+    const row = screen.getByTestId('team-strip-cells')
+    expect(row.style.columnGap).toBe('8px')
+    const sep = row.querySelector<HTMLElement>('[data-testid="cell-sep"]')!
+    expect(sep.parentElement).toBe(row)
+    expect(sep.style.marginInline).toBe('')
+    expect(sep.previousElementSibling?.querySelector('[data-session-id="L"]')).not.toBeNull()
+    expect(sep.nextElementSibling?.querySelector('[data-session-id="A"]')).not.toBeNull()
+  })
+
   it('only the strip\'s content is no-drag: the box and its blank space keep dragging the window', () => {
     scene()
     mountBar()
@@ -163,7 +176,7 @@ describe('the strip', () => {
 
     it('shows as many cells as fit, then 「+N」 for the rest', () => {
       scene()
-      avail = 190 // less the name (84 + 2): 104 -> two cells (43 + 2 + 5 + 43 = 93); with the chip kept free (30): one
+      avail = 190 // less the name (84 + 2): 104 -> two cells (43 + 8 + 9 + 43 = 103); with the chip kept free (32): one
       mountBar()
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
       const s = strip()!
@@ -207,7 +220,7 @@ describe('the strip', () => {
         return this.getAttribute('data-testid') === 'team-panel-cell' ? (this.getAttribute('data-session-id') === 'W' ? width : 43) : 0
       })
       seedScene({ members: [['A', 'a-tm'], ['B', 'b-tm']], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
-      avail = 286 // less the name: 200 -> three cells take 3 x 43 + 2 x 8 + 17 = 162, a 20px fourth makes 190; a 70px one would make 240
+      avail = 286 // less the name: 200 -> three cells take 3 x 43 + 2 x 8 + 9 = 154, a 20px fourth makes 182; a 70px one would make 232
       mountBar()
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
       expect(shownCells()).toHaveLength(3)

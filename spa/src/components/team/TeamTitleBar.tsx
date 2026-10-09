@@ -4,7 +4,7 @@
 //
 // Only the strip's content is no-drag: the strip box itself ignores the pointer, so the empty part of the title bar still
 // drags the window. The state lives in `useTeamUiStore` (per team), so a tab switch or a reload comes back the same.
-import { useRef } from 'react'
+import { Fragment, useRef } from 'react'
 import { Notebook } from '@phosphor-icons/react'
 import { useTeamDisplay, type TeamPanelTeam } from './team-display'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
@@ -57,10 +57,10 @@ export function TeamTitleStrip({ team }: { team: TeamPanelTeam }) {
       </TeamStripButton>
       <div data-testid="team-strip-cells" className="pointer-events-auto flex items-center min-w-0" style={{ ...NO_DRAG, columnGap: CELL_GAP }}>
         {shown.map((s, i) => (
-          <span key={s.sessionId} className="flex items-center">
+          <Fragment key={s.sessionId}>
             {i === 1 && <CellSep />}
-            {cell(s)}
-          </span>
+            <span className="flex items-center">{cell(s)}</span>
+          </Fragment>
         ))}
       </div>
       {hidden > 0 && (

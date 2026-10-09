@@ -9,7 +9,7 @@ import { useSeatReading } from './team-readings'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { keepFocus } from '../../lib/keep-focus'
-import { SEP_MARGIN, CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING } from './panel-layout'
+import { CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING } from './panel-layout'
 
 export function NameCapsule({ team, className = '', style }: { team: TeamPanelTeam; className?: string; style?: React.CSSProperties }) {
   return (
@@ -59,7 +59,7 @@ export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string;
   )
 }
 
-/** The 1px divider after the lead. */
+/** The 1px divider after the lead. Place it as a direct child of the cells row (gap = CELL_GAP): the gap is its spacing. */
 export function CellSep() {
-  return <span className="w-px h-4 bg-border-default" style={{ marginInline: SEP_MARGIN }} />
+  return <span data-testid="cell-sep" className="w-px h-4 flex-shrink-0 bg-border-default" />
 }

@@ -3,14 +3,18 @@
 import { describe, it, expect } from 'vitest'
 import { PANEL_DEFAULT_WIDTH } from '../../stores/useTeamUiStore'
 import {
-  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_PX, CELL_GAP, SEP_MARGIN, SEP_W, POPOVER_W, SUBAGENT_SLOT_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
+  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_PX, CELL_GAP, SEP_LINE_W, SEP_W, POPOVER_W, SUBAGENT_SLOT_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
 } from './panel-layout'
 
 describe('panel header budget', () => {
   it('spacing: 8px between cells and either side of the divider; header padding, gap and cell padding are back at their old values', () => {
     expect(CELL_GAP).toBe(8)
-    expect(SEP_MARGIN).toBe(8)
-    expect(SEP_W).toBe(1 + 2 * 8)
+    // The divider is an ordinary flex child of the cells row: the row's gap gives it 8 on EACH side, so it carries no margin
+    // of its own. SEP_W is what it adds beyond the one gap every pair of cells has anyway: its line plus the second gap.
+    expect(SEP_LINE_W).toBe(1)
+    expect(SEP_W).toBe(SEP_LINE_W + CELL_GAP)
+    expect(CELL_GAP + SEP_LINE_W + CELL_GAP).toBe(17) // lead's edge -> line 8, line -> the next cell 8
+    expect(cellsWidth(2)).toBe(2 * CELL_W + 8 + 1 + 8) // two cells with the divider between them: 17 apart
     expect([HEADER_PX, HEADER_GAP, CELL_PX]).toEqual([6, 4, 1])
     expect(CELL_W).toBe(43) // 2 x 1 padding + 5 subagent slot + 16 bot + 20 ring: nothing squeezed
   })
@@ -35,7 +39,7 @@ describe('panel header budget', () => {
 
   describe('capacityFromWidths', () => {
     it('adds the real widths in seat order, with the gaps and the divider after the lead', () => {
-      const three = 3 * 38 + 2 * CELL_GAP + SEP_W // 147: three plain cells
+      const three = 3 * 38 + 2 * CELL_GAP + SEP_W // 139: three plain cells
       expect(capacityFromWidths([38, 38, 38, 50, 38], three)).toBe(3)
       expect(capacityFromWidths([38, 38, 38, 50, 38], three - 1)).toBe(2)
       expect(capacityFromWidths([38, 38, 38, 50, 38], three + CELL_GAP + 50)).toBe(4)
@@ -95,10 +99,10 @@ describe('panel header budget', () => {
     const remote = CELL_W + 12
     const plain = [CELL_W, CELL_W, CELL_W, CELL_W]
     expect(capacityFromWidths(plain, ROOM)).toBe(3)
-    // 312: 43 + (8 + 17 + 43) + (8 + 43) = 162 of 165 for three plain cells; one remote cell (+12) anywhere pushes the 3rd out
+    // 312: 43 + (8 + 1 + 8 + 43) + (8 + 43) = 154 of 165 for three plain cells; one remote cell (+12) anywhere pushes the 3rd out (166)
     expect(capacityFromWidths([CELL_W, CELL_W, remote, CELL_W], ROOM)).toBe(2)
     expect(capacityFromWidths([CELL_W, remote, CELL_W, CELL_W], ROOM)).toBe(2)
     expect(capacityFromWidths([remote, CELL_W, CELL_W, CELL_W], ROOM)).toBe(2)
-    expect(capacityFromWidths([remote, remote, remote, remote], ROOM)).toBe(2) // 55 + 80 = 135 <= 165; the 3rd: 198 > 165
+    expect(capacityFromWidths([remote, remote, remote, remote], ROOM)).toBe(2) // 55 + 17 + 55 = 127 <= 165; the 3rd: 190 > 165
   })
 })

@@ -6,7 +6,7 @@
 // second row when the team is big. Both take the width of the area they sit in; the area (TeamPanelArea) owns the frame.
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretUp } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
@@ -262,10 +262,10 @@ function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props &
       <NameCapsule team={team} className="flex-shrink-0" style={{ maxWidth: CAPSULE_MAX_W }} />
       <div ref={box} data-testid="team-panel-cells" className="flex items-center flex-1 min-w-0" style={{ columnGap: CELL_GAP }}>
         {first.map((s, i) => (
-          <span key={s.sessionId} className="flex items-center">
+          <Fragment key={s.sessionId}>
             {i === 1 && <CellSep />}
-            {cell(s)}
-          </span>
+            <span className="flex items-center">{cell(s)}</span>
+          </Fragment>
         ))}
       </div>
       <span className="flex items-center gap-0.5 flex-shrink-0">

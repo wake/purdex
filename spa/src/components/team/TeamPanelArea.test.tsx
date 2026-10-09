@@ -13,7 +13,7 @@ import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
-import { CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
+import { CELL_GAP, CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
 
 // The light, the subagent dots and the host chip are TI-3's pieces over the agent store; here they are stand-ins that show
 // what the panel asked of them.
@@ -347,11 +347,11 @@ describe('header height (TI-6)', () => {
       availW = 165
       cellW = 38
       const { unmount } = mount()
-      expect(inHeader()).toBe(3) // 3 x 38 + 2 x 8 + 17 = 147 of 165; a 4th would make 193
+      expect(inHeader()).toBe(3) // 3 x 38 + 2 x 8 + 9 = 139 of 165; a 4th would make 185
       unmount()
       cellW = 50 // the iconDot style: ~12px wider per cell
       mount()
-      expect(inHeader()).toBe(2) // 2 x 50 + 8 + 17 = 125; a 3rd would make 183
+      expect(inHeader()).toBe(2) // 2 x 50 + 8 + 9 = 117; a 3rd would make 175
       expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(7)
     })
 
@@ -367,7 +367,7 @@ describe('header height (TI-6)', () => {
       const { rerender } = mount()
       const count = () => within(header()).getAllByTestId('team-panel-cell').length
       const first = count()
-      expect(first).toBe(3) // 3 x 38 + 16 + 17 = 147 of 165; the 4th (50) would make 205; and it stays
+      expect(first).toBe(3) // 3 x 38 + 16 + 9 = 139 of 165; the 4th (50) would make 197; and it stays
       for (let i = 0; i < 5; i++) {
         rerender(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
         expect(count()).toBe(first)
@@ -381,7 +381,7 @@ describe('header height (TI-6)', () => {
         vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
           return this.getAttribute('data-testid') === 'team-panel-cell' ? widths[this.getAttribute('data-session-id') ?? ''] ?? 38 : 0
         })
-        availW = 200
+        availW = 190 // with M2 (50): 4 cells need 197; without: 38 x 4 + 24 + 9 = 185
       })
       const seed = (ids: string[]) => seedScene({
         members: ids.map((id) => [id, `${id}-tm`] as [string, string]),
@@ -440,7 +440,7 @@ describe('header height (TI-6)', () => {
         widths = { M2: 50 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 210 // 38*3 + 50 + 3*8 + 17 = 205
+        availW = 200 // 38*3 + 50 + 3*8 + 9 = 197
         mount()
         expect(inHeader()).toBe(4)
       })
@@ -449,7 +449,7 @@ describe('header height (TI-6)', () => {
         widths = { M2: 50 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 200
+        availW = 190
         mount()
         expect(inHeader()).toBe(3)
       })
@@ -458,7 +458,7 @@ describe('header height (TI-6)', () => {
         widths = { M3: 20 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 225 // 4 * 38 + 20 + 4*8 + 17 = 221
+        availW = 225 // 4 * 38 + 20 + 4*8 + 9 = 213
         mount()
         expect(inHeader()).toBe(5)
       })
@@ -502,7 +502,7 @@ describe('header height (TI-6)', () => {
         widths = { M3: 20, M4: 3 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 235 // 4*38 + 20 + 3 + 5*8 + 17 = 232 -> 6 fit
+        availW = 235 // 4*38 + 20 + 3 + 5*8 + 9 = 224 -> 6 fit (with M4 at 20: 241 -> 5)
         mount()
         expect(inHeader()).toBe(6)
         widths = { M3: 20, M4: 20 } // e.g. a host badge got wider; no container resize
@@ -540,6 +540,21 @@ describe('header height (TI-6)', () => {
       expect(inHeader()).toBe(9)
       expect(screen.queryByTestId('team-panel-more')).toBeNull()
     })
+  })
+
+  it('the divider after the lead is a flex child of the cells row with no margin: the row gap leaves 8px on each side of it', () => {
+    scene()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    mount()
+    const row = screen.getByTestId('team-panel-cells')
+    expect(row.style.columnGap).toBe(`${CELL_GAP}px`)
+    const sep = row.querySelector<HTMLElement>('[data-testid="cell-sep"]')!
+    expect(sep.parentElement).toBe(row) // not inside a cell's wrapper, where its margin would stack on the gap
+    expect(sep.style.marginInline).toBe('')
+    expect(sep.style.margin).toBe('')
+    expect(sep.previousElementSibling?.querySelector('[data-session-id="L"]')).not.toBeNull() // lead | line | first member
+    expect(sep.nextElementSibling?.querySelector('[data-session-id="A"]')).not.toBeNull()
+    expect(row.querySelectorAll('[data-testid="cell-sep"]')).toHaveLength(1)
   })
 
   it('a cell is a fixed height inside the header row', () => {
