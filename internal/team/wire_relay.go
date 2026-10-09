@@ -71,7 +71,7 @@ type RelayOp struct {
 	Ref            string     `json:"ref"`                      // old ref
 	NewRef         string     `json:"new_ref,omitempty"`
 	TeamID         string     `json:"team_id,omitempty"`    // member relays (P6)
-	RequestID      string     `json:"request_id,omitempty"` // the self_relay approval row
+	RequestID      string     `json:"request_id,omitempty"` // the self_relay or member_relay approval row (a member op created requested has none)
 	State          RelayState `json:"state"`
 	Reason         string     `json:"reason,omitempty"`
 	HandoffPath    string     `json:"handoff_path"`         // <data_dir>/relay/<op id>.md

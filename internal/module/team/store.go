@@ -32,6 +32,8 @@ type Store struct {
 	// insert; a non-nil error fails the replace there. Tests use it to
 	// prove the close rolls back with a failed insert. nil in production.
 	beforeReplaceInsert func() error
+	// afterMemberOpInsert, when set, fails CreateMemberRelayOp right after the op's insert, before the commit (tests).
+	afterMemberOpInsert func() error
 	// beforeMemberOpMove, when set, runs in a member_relay row's transaction after the row's close and before its op's
 	// move; an error fails (and rolls back) the whole close (tests: fault injection). nil in production.
 	beforeMemberOpMove func() error
