@@ -335,6 +335,53 @@ func TestCatchUp_ANewerEventQueuesBehindAWaitingOne(t *testing.T) {
 	}
 }
 
+// A new prompt that began after this Stop is not this event's turn: it stays running and gets none of the old words
+// (codex attack). The previous turn is recorded as the file shows it.
+// Mutation gate: drop the started-after-the-Stop check → the old words land on the new turn → red.
+func TestCatchUp_ANewerPromptDoesNotInheritTheOldWords(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t0", 50, "更早的"))
+	k.event("s1", 900) // t0 is recorded: the next event has a cursor, and only the new prompt is newer than it
+	fresh := unflushedTurn("t2", "下一個問題")
+	fresh.StartedAt = 6000 // the user typed it after the Stop at 5000
+	k.turns.set("s1", endedTurn("t0", 50, "更早的"), fresh)
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "完全不同的文字", At: 5000, Seq: 1})
+	runLater(k, 40)
+	if got := turnIDs(k.entries("s1")); got != "t0" {
+		t.Fatalf("recorded %q, want t0 only", got)
+	}
+}
+
+// The file's own words differ from the hook's (no prefix relation) and the turn is the only one newer than the cursor:
+// it is this event's turn, recorded as the file has it.
+func TestCatchUp_DifferentWordsInTheFileStillAreTheEventsTurn(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "舊"))
+	k.event("s1", 1000)
+	odd := runningTurn("t2")
+	odd.Items = []convmodel.Item{userItem("問"), agentItem("檔案裡的版本")}
+	k.turns.set("s1", endedTurn("t1", 100, "舊"), odd)
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "hook 的版本", At: 5000, Seq: 2})
+	if got := turnIDs(k.entries("s1")); got != "t1,t2" {
+		t.Fatalf("recorded %q", got)
+	}
+}
+
+// A delayed event whose turn is older than later ended ones gives its own time and order to that turn, not to the newest.
+// Mutation gate: always stamp the newest → red.
+func TestCatchUp_TheEventsTimeGoesToItsOwnTurn(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "答1"), endedTurn("t2", 200, "答2"))
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "答1", At: 5000, Seq: 7})
+	rows := k.entries("s1")
+	if turnIDs(rows) != "t1,t2" || rows[0].TurnAt != 5000 || rows[0].TurnSeq != 7 || rows[1].TurnAt != 200 {
+		t.Fatalf("rows = %+v", rows)
+	}
+}
+
 // A hook that carries no last_assistant_message gives nothing to wait for or to adopt: a turn that has done something is
 // the one that ended; a turn with only the user's prompt is not recorded (and nothing waits).
 func TestCatchUp_AHookWithNoWords(t *testing.T) {

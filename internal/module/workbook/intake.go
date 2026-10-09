@@ -198,9 +198,15 @@ func (e *Engine) pickTurns(ev agent.TurnEndEvent, try tries) (picks []pick, late
 	if len(keep) > catchUpKeep {
 		keep = keep[len(keep)-catchUpKeep:]
 	}
+	// The turn this event is about carries the event's time and order (the push hold matches on it); with no known target
+	// it is the newest one. The others, caught up, keep their own end times.
+	targetID := ""
+	if target >= 0 && target < len(turns) {
+		targetID = turns[target].ID
+	}
 	for i, t := range keep {
 		p := pick{turnID: t.ID, turn: t, at: turnEndedAt(t, ev.At)}
-		if i == len(keep)-1 { // the newest one is the turn this event is about
+		if (targetID != "" && t.ID == targetID) || (targetID == "" && i == len(keep)-1) {
 			p.at, p.seq = ev.At, ev.Seq
 		}
 		picks = append(picks, p)
@@ -238,8 +244,19 @@ func adoptEvent(turns []convmodel.Turn, ev agent.TurnEndEvent, from int, force b
 		}
 	}
 	t := out[last]
-	if t.Outcome != convmodel.OutcomeRunning || lastWords(t) != "" {
-		return out, -1, true // an ended turn, or a newer turn already speaking in its own words: not this event's
+	if t.Outcome != convmodel.OutcomeRunning {
+		return out, -1, true // an ended turn: recorded as the file shows it
+	}
+	if ev.At > 0 && t.StartedAt >= ev.At {
+		return out, -1, true // it began after this Stop: a newer turn's, left running (its own Stop will come)
+	}
+	onlyNewer := last == from // the one turn newer than the newest recorded: the event can only be about it
+	if !onlyNewer {
+		return out, -1, true
+	}
+	if lastWords(t) != "" { // the file has words of its own that differ from the hook's (normalised, cut): still this turn
+		out[last].Outcome = convmodel.OutcomeDone
+		return out, last, true
 	}
 	if !force {
 		return out, -1, false
