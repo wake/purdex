@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.640] - 2026-10-09
+
+> 動 daemon 與 pdx-team skill：**要部署 daemon，並重跑 `pdx setup --agent cc`**（skill 改了）；SPA、Electron 不必更新。lead 接力後，它的 member 會收到新 lead 的地址。
+
+### Added：lead 接力後通知 member — P6-1′（#2185，A 線）
+
+- lead 接力完成時，daemon 會從**新 lead** 寄一則訊息給每個還在職的 member：`[pdx team] 你的 lead 已換手：<新地址> [<ref>]（舊 ref 仍可用）`。member 回覆會直接送到新的 lead。
+- 只寄一次；通知寄送失敗只記 log，不影響接力本身。原本的舊 ref 照樣送得到，所以漏收通知也不會斷線。
+
+### Changed：pdx-team skill 不再叫 lead 跑還不存在的指令
+
+- skill 原本叫 lead 在 member context 偏高時跑 `pdx relay <ref>`，但那個指令還沒做（P6-5 才有）。現在改成：在 `pdx team` 看到 member 的 CTX 偏高時，先告訴使用者。
+
+### Added：推播的 Mac 在場回報與事件閘門 — 推播 PU-3b1（#2184，介面線）
+
+- daemon 新增一條路由，讓 Mac App 回報「使用者正在 Mac 前」；之後的推播會依這個判斷要不要送到手機，同一個 session 短時間內的重複事件也只送一次。
+- 這一版還沒接上 agent 的事件，所以不會送出任何新推播。
+
 ## [1.0.0-alpha.639] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。這一版沒有你看得到的變化，是之後「推播通知」的地基。
