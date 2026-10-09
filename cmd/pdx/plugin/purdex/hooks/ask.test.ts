@@ -319,7 +319,7 @@ test('chat reply alongside fitting answers ⇒ the answers win (the daemon never
   expect(r.deny).toBeUndefined()
 })
 
-for (const [name, hook] of [['an empty message', { message: '' }], ['a non-string message', { message: 7 }], ['no message and no answers', {}], ['answers that do not fit and no message', { answers: { '別的問題': 'x' } }]] as const) {
+for (const [name, hook] of [['an empty message', { message: '' }], ['a non-string message', { message: 7 }], ['no message and no answers', {}], ['answers that do not fit and no message', { answers: { '別的問題': 'x' } }], ['answers that do not fit and a message (the answers win, so it is not a reply)', { answers: { '別的問題': 'x' }, message: 'hi' }]] as const) {
   test(`answered_remote with ${name} ⇒ remote-error: the native dialog runs on alone and its answer is reported`, async ($, on) => {
     session(on)
     const calls: Call[] = []
