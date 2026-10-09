@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.662] - 2026-10-10
+
+> 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。會新建 `workbook.db`，team.db 多一張表；使用上沒有可見變化。
+
+### Added：跨主機 team：lead 那台開始會送指令 — X3a-2（#2270，A 線）
+
+- lead 那台的指令佇列有了送出的程式：每台目標主機一條先進先出的佇列，失敗會從 30 秒起倍增重試（最長 10 分鐘），對方 10 分鐘都不認得我方 token 就視為對方已解除配對。目前佇列裡不會有指令（對方主機還沒宣告支援），所以不會真的送出任何東西。
+
+### Added：跨主機 team：被收進 team 的那台會回報「session 不在了」 — X2c-1a（#2272，A 線）
+
+- 被別台收進 team 的 session 結束時，這台會記下並排一則「已結束」的回報給 lead 那台（實際送出在下一步）；lead 那台被解除配對時，這台的相關 member 會在本機結束。
+
+### Added：工作簿模組與資料庫 — WB-1a-ii（#2273、#2274，介面線）
+
+- daemon 多了 workbook 模組與 `workbook.db`（權限 0600），以及去除 token、金鑰等秘密的共用過濾、讀取對話最近幾輪的介面。還沒有開始整理任何紀錄（下一步才接上）。
+
 ## [1.0.0-alpha.661] - 2026-10-09
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。team.db 會自動加幾張跨主機用的表與 `team_members` 的兩個欄位，既有資料不變。
