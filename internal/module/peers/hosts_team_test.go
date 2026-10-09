@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/wake/purdex/internal/config"
+	ipeers "github.com/wake/purdex/internal/peers"
 )
 
 type teamRow struct {
@@ -172,6 +173,29 @@ func TestHandlePutHost_AllowTeamNeedsVerifiedEntry(t *testing.T) {
 	rr = doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"allow_team": false}, adminPrincipal())
 	if rr.Code != http.StatusOK {
 		t.Fatalf("off: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+// A consent already stored on an entry with no host id (hand-edited config)
+// is dropped when the entry first binds, not inherited by whoever verifies.
+func TestHandlePutHost_FirstVerifyDropsPreexistingConsent(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "i", AllowTeam: true, TeamRoots: []string{"/srv/a"}}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: true}, nil))
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"token": "new-tok"}, adminPrincipal())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body.String())
+	}
+	if h := loadCfg(t, cfgPath).Peers.Hosts[0]; h.HostID != "air:1" || h.AllowTeam {
+		t.Fatalf("persisted = %+v", h)
+	}
+	// Verify and consent in one request is still fine: the user named both.
+	hosts2 := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "i"}}
+	c2, cfgPath2 := newHostsTestCore(t, "local:1", "local", "", hosts2)
+	m2 := newHostsTestModule(t, c2, fixedEnvelopeFetch(ipeers.Envelope{HostID: "air:1", OK: true}, nil))
+	rr = doHostsRequest(t, m2, http.MethodPut, "/api/peers/hosts/air", map[string]any{"token": "new-tok", "allow_team": true}, adminPrincipal())
+	if rr.Code != http.StatusOK || !loadCfg(t, cfgPath2).Peers.Hosts[0].AllowTeam {
+		t.Fatalf("%d %s", rr.Code, rr.Body.String())
 	}
 }
 

@@ -574,6 +574,13 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if verifying {
+			if h.HostID == "" {
+				// First bind: consent stored before there was an identity
+				// (a hand-edited config) is not inherited by whoever
+				// verifies first. A request that also sets allow_team below
+				// still wins.
+				h.AllowTeam = false
+			}
 			h.Token = req.Token
 			h.HostID = learnedHostID
 		}
