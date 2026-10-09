@@ -75,6 +75,16 @@ describe('buildTeamIndex', () => {
     expect(index.byTabId.get('member1')?.seat.session.session_id).toBe('A')
   })
 
+  it('a pinned tab is never grouped: it is absent from byTabId even when it shows a team session', () => {
+    const { inp, views } = fixture()
+    const pinned = { ...inp.tabsById, member1: { ...inp.tabsById.member1, pinned: true }, lead1: { ...inp.tabsById.lead1, pinned: true } }
+    const index = buildTeamIndex(views, pinned, inp.sessionsByHost)
+    expect(index.byTabId.has('member1')).toBe(false)
+    expect(index.byTabId.has('lead1')).toBe(false)
+    expect(index.byTabId.get('dup')?.role).toBe('member') // an unpinned tab on the same session is still grouped
+    expect(index.bySession.get('h1\u0000a-tm')).toBeDefined() // the seat itself is still a seat
+  })
+
   it('an empty input gives empty maps', () => {
     const index = buildTeamIndex([], {}, {})
     expect(index.byTabId.size + index.byKey.size + index.bySession.size).toBe(0)

@@ -49,6 +49,11 @@ export function openSessionTabAt(hostId: string, session: Session, place?: TabPl
     tmuxInstance: session.tmux_instance ?? '',
   })
   useWorkspaceStore.getState().insertTab(tabId, place?.workspaceId, place?.afterTabId)
+  // `insertTab` does nothing for a workspace that is gone: a tab no workspace owns is unreachable, so it goes where a tab
+  // with no place goes (the active workspace, else the first, else Unsorted).
+  if (place !== undefined && useWorkspaceStore.getState().findWorkspaceByTab(tabId) === null) {
+    useWorkspaceStore.getState().insertTab(tabId)
+  }
   useTabStore.getState().setActiveTab(tabId)
   return tabId
 }

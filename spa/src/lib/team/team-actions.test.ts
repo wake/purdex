@@ -158,3 +158,29 @@ describe('the pane and the workspace follow (codex review of TI-1b)', () => {
     expect(useWorkspaceStore.getState().activeWorkspaceId).toBe('w1')
   })
 })
+
+describe('codex attack review of TI-1b', () => {
+  it('collapsing from a member whose lead has no tab reopens the lead and shows it (the active tab is never hidden)', () => {
+    seedScene({ members, tabs: [['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['ma'] }], activeTabId: 'ma' })
+    toggleTeamCollapse(KEY)
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true)
+    const lead = tabShowing('lead-tm')
+    expect(lead).toBeDefined()
+    expect(useTabStore.getState().activeTabId).toBe(lead)
+  })
+
+  it('...and when the lead cannot be shown (not listed) the group stays open', () => {
+    seedScene({ members, tabs: [['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['ma'] }], activeTabId: 'ma', listed: ['a-tm'] })
+    toggleTeamCollapse(KEY)
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBeUndefined()
+    expect(useTabStore.getState().activeTabId).toBe('ma')
+  })
+
+  it('a placement in a workspace that is gone falls back to the active workspace (no orphan tab)', async () => {
+    seedScene({ members, tabs: [['x', null]], workspaces: [{ id: 'w1', tabs: ['x'] }] })
+    const { openSessionTabAt } = await import('../open-session-tab')
+    const id = openSessionTabAt('h1', { code: 'code-a-tm', name: 'a-tm', mode: 'terminal', cwd: '~' } as never, { workspaceId: 'gone', afterTabId: 'x' })
+    expect(id).not.toBeNull()
+    expect(useWorkspaceStore.getState().findWorkspaceByTab(id!)?.id).toBe('w1')
+  })
+})

@@ -138,8 +138,13 @@ export function toggleTeamCollapse(teamKey: string): void {
   const view = index.byKey.get(teamKey)
   const activeId = useTabStore.getState().activeTabId
   const activeHit = activeId === null ? undefined : index.byTabId.get(activeId)
-  ui.setCollapsed(teamKey, true)
-  if (view && activeHit?.key === teamKey && activeHit.role === 'member') showSeatTab(view.lead)
+  if (view && activeHit?.key === teamKey && activeHit.role === 'member') {
+    // The active tab is about to be hidden: the lead must be on screen first (reopened when its tab is gone, §4.5). When it
+    // cannot be shown (its session not listed, its host hidden) the group stays open — the active tab is never hidden.
+    const shown = view.lead.tabId !== null ? showSeatTab(view.lead) : openTeamSeat(teamKey, view.lead.session.session_id).tabId
+    if (shown === null) return
+  }
+  useTeamUiStore.getState().setCollapsed(teamKey, true)
 }
 
 /**
