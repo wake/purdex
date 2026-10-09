@@ -58,6 +58,25 @@ func TestDecide_HookAskDenyCarriesTheReply(t *testing.T) {
 	reject("answers", &team.HookDecision{Message: "hi", Answers: map[string]string{"紅還是藍？": "藍"}})
 }
 
+// answers: {} on the wire (not a Go struct: omitempty would drop it) is still
+// "answers present", so a message beside it is refused; absent answers pass.
+func TestDecide_HookAskDenyEmptyAnswersObject(t *testing.T) {
+	f := newFixture(t)
+	raw := func(id, hook string) (int, []byte) {
+		return f.do(http.MethodPost, "/api/team/approvals/"+id+"/decide", map[string]any{"decision": "deny", "hook": json.RawMessage(hook), "client": appClient()})
+	}
+	id := f.askBegin("toolu_empty_obj")
+	if code, body := raw(id, `{"message":"hi","answers":{}}`); code != http.StatusBadRequest {
+		t.Fatalf("answers {} = %d %s, want 400", code, body)
+	}
+	if a, _, _ := f.m.store.Get(id); a.State != team.StateOpen {
+		t.Fatalf("row = %s, want still open", a.State)
+	}
+	if code, body := raw(id, `{"message":"hi"}`); code != http.StatusOK {
+		t.Fatalf("answers absent = %d %s, want 200", code, body)
+	}
+}
+
 // The chat reply is an answer like any other: a second decide loses, the
 // terminal's own answer still stands over it, and a terminal_only row stays
 // read-only.

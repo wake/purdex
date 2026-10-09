@@ -441,7 +441,7 @@ func (m *Module) decideHook(w http.ResponseWriter, a team.Approval, req team.Dec
 	case team.KindHookAsk:
 		if state == team.StateDenied {
 			msg, ok := chatReply(hook.Message)
-			if !ok || len(hook.Answers) > 0 {
+			if !ok || hook.Answers != nil {
 				m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a denied hook_ask needs hook.message (1-4000 printable runes, \\n and \\t allowed) and no hook.answers", nil)
 				return
 			}
