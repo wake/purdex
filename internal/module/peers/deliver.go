@@ -139,26 +139,19 @@ func (m *Module) handleDeliver(w http.ResponseWriter, r *http.Request) {
 		m.logf("peers: deliver refused (%s) for host %q: %s", code, principal.Alias, detail)
 		writeWireError(w, status, ipeers.APIError{Error: code, Detail: detail})
 	}
-	switch {
-	case ok && principal.Kind == middleware.PrincipalAdmin:
-		refuseUnaudited(http.StatusForbidden, ipeers.ErrAdminNotAllowed, "deliver is for peer hosts, not the admin token")
-		return
-	case !ok || principal.Kind != middleware.PrincipalHost:
-		refuseUnaudited(http.StatusForbidden, ipeers.ErrHostUnverified, "no host principal")
-		return
-	case principal.HostID == "":
-		refuseUnaudited(http.StatusForbidden, ipeers.ErrHostUnverified, "host entry is unverified")
-		return
-	}
-
 	// 2. Bind the principal to the config entry it was authenticated for
 	// (M1): the alias must still name the same host_id, or a host entry
 	// deleted and recreated for another host between auth and handling
 	// would inherit this request. AllowBypass and the return-route token
-	// come from this same entry and nowhere else.
-	snap := m.snapshotForDeliver(principal.Alias)
-	if !snap.found || snap.entry.HostID == "" || snap.entry.HostID != principal.HostID {
-		refuseUnaudited(http.StatusForbidden, ipeers.ErrHostUnverified, "host entry no longer matches the authenticated host")
+	// come from this same entry and nowhere else. The binding is shared
+	// with the team routes (BindHostPrincipal); snap is the one config
+	// snapshot the rest of this handler reads.
+	var snap deliverSnapshot
+	if _, _, berr := BindHostPrincipal(r, "deliver", func(alias string) (config.PeerHost, bool) {
+		snap = m.snapshotForDeliver(alias)
+		return snap.entry, snap.found
+	}); berr != nil {
+		refuseUnaudited(berr.Status, berr.Code, berr.Detail)
 		return
 	}
 	if !snap.deliver {

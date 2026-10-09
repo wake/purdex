@@ -22,6 +22,10 @@ var ErrNoSuchApproval = errors.New("no such approval")
 type Store struct {
 	db *sql.DB
 
+	// failBeforeCommandLog, when set, fails ApplyTeamCommand after the command's changes and before its log insert
+	// (test seam for the one-transaction crash cut). nil in production.
+	failBeforeCommandLog func() error
+
 	// opChanged, when set, is called with a relay op's id AFTER a transaction that changed the op committed — the one
 	// choke point for waking its long-polls (P6-2b-2, plan v3 §7), whatever path wrote it (report, claim, an approval's
 	// close, a create). The module sets it at Init (wake); it must not block and must not call back into the store.
@@ -170,6 +174,10 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := db.Exec(remoteMemberSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (remote members): %w", err)
+	}
+	if _, err := db.Exec(commandSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (commands): %w", err)
 	}
 	if _, err := db.Exec(modHelloSchema); err != nil {
 		db.Close()
