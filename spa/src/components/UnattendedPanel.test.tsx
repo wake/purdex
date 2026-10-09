@@ -86,7 +86,7 @@ describe('UnattendedPanel', () => {
     await screen.findByTestId('unattended-empty')
     const panel = screen.getByTestId('unattended-panel')
     expect(document.activeElement === panel || panel.contains(document.activeElement)).toBe(true)
-    expect(panel).toHaveClass('outline-none')
+    expect(panel).toHaveClass('outline-hidden')
   })
 
   it('shows nothing, not the empty state, until every first page has answered', async () => {

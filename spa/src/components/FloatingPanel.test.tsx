@@ -258,12 +258,12 @@ describe('FloatingPanel', () => {
     expect(document.activeElement).toBe(screen.getByTestId('floating-panel'))
   })
 
-  // #2063: the panel taking focus itself must not draw a ring around the whole panel. Mutation gate: drop outline-none → red.
+  // #2063: the panel taking focus itself must not draw a ring around the whole panel. Mutation gate: drop outline-hidden → red.
   it('has no focus outline on the container when it holds focus itself', () => {
     render(<NoFocusableHarness onClose={() => {}} />)
     const panel = screen.getByTestId('floating-panel')
     expect(document.activeElement).toBe(panel)
-    expect(panel).toHaveClass('outline-none')
+    expect(panel).toHaveClass('outline-hidden')
   })
 
   it('re-anchors on scroll when it has not been dragged (follows the anchor to its new rect)', () => {
