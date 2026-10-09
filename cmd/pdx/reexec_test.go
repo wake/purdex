@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/wake/purdex/internal/claudeenv"
 )
 
 func TestCaptureReexecPlan_CopiesBootState(t *testing.T) {
@@ -206,5 +209,32 @@ func TestReexec_FailedExecRestoresCloseOnExec(t *testing.T) {
 	}
 	if int(fl)&syscall.FD_CLOEXEC == 0 {
 		t.Fatal("fd not close-on-exec again after a failed exec")
+	}
+}
+
+// #2122: a daemon started from inside a Claude Code session drops that session's identity before it
+// captures the plan a restart re-execs, so neither the daemon's children nor its next image carry it.
+// Mutation gate: capture before the scrub (or skip it) → red.
+func TestCaptureCleanReexecPlan_DropsTheSessionIdentityFromTheProcessAndThePlan(t *testing.T) {
+	t.Setenv("CLAUDECODE", "1")
+	t.Setenv("CLAUDE_CODE_MESSAGING_TOKEN", "tok")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sid")
+	t.Setenv("CLAUDE_CONFIG_DIR", "/keep")
+	plan, err := captureCleanReexecPlan(func() (string, error) { return "/bin/pdx", nil }, []string{"pdx", "serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kv := range plan.env {
+		if name, _, _ := strings.Cut(kv, "="); claudeenv.IsSessionVar(name) {
+			t.Errorf("the re-exec plan carries %s", name)
+		}
+	}
+	if !slices.Contains(plan.env, "CLAUDE_CONFIG_DIR=/keep") {
+		t.Error("configuration was dropped from the plan")
+	}
+	for _, name := range []string{"CLAUDECODE", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_SESSION_ID"} {
+		if _, ok := os.LookupEnv(name); ok {
+			t.Errorf("%s is still in the daemon's own environment", name)
+		}
 	}
 }

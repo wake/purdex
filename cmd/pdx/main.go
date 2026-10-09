@@ -122,7 +122,9 @@ func runServe(args []string) *reexecPlan {
 
 	// Before locale.EnsureUTF8 / tmuxenv.Prepare / nex PATH policy mutate the
 	// process env: a restart must re-exec the boot command, not the mutated one.
-	boot, bootErr := captureReexecPlan(os.Executable, os.Args, os.Environ())
+	// The daemon is no Claude Code session (#2122): drop an inherited session identity first, so the re-exec plan
+	// below captures the clean environment too.
+	boot, bootErr := captureCleanReexecPlan(os.Executable, os.Args)
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/pdx/config.toml)")

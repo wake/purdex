@@ -2,10 +2,13 @@
 package main
 
 import (
+	"log"
 	"os"
 	"runtime"
 	"strings"
 	"syscall"
+
+	"github.com/wake/purdex/internal/claudeenv"
 )
 
 // reexecPlan is how this serve process was started — captured at the top of
@@ -45,6 +48,17 @@ func captureReexecPlan(executable func() (string, error), args, env []string) (*
 		argv: append([]string(nil), args...),
 		env:  kept,
 	}, nil
+}
+
+// captureCleanReexecPlan removes the Claude Code session-identity variables from this process's environment
+// (a daemon started, or restarted, from inside a Claude Code session carries that session's id, messaging
+// socket and token, pid, ... and would hand them to every process it starts, #2122), logs their names, and
+// captures the plan from the environment that is left: a restart re-execs clean too.
+func captureCleanReexecPlan(executable func() (string, error), args []string) (*reexecPlan, error) {
+	if removed := claudeenv.ScrubProcess(); len(removed) > 0 {
+		log.Printf("env: dropped %d inherited Claude Code session variable(s): %s", len(removed), strings.Join(removed, ", "))
+	}
+	return captureReexecPlan(executable, args, os.Environ())
 }
 
 // reexec replaces this process with the plan. It runs after runServe has

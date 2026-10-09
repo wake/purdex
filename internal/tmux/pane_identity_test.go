@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"errors"
+	"github.com/wake/purdex/internal/claudeenv"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -76,8 +77,8 @@ func TestIdentityReadErr_OnlyANoSessionAnswerIsErrNoSession(t *testing.T) {
 // measured, tmux 3.6a).
 func TestNewSessionTaggedArgs(t *testing.T) {
 	got, err := newSessionTaggedArgs("tm-abc", "/w", "@pdx_spawn_op", testTag)
-	want := []string{"new-session", "-d", "-s", "tm-abc", "-c", "/w", "-P", "-F", "#{session_id} #{pid}:#{start_time}",
-		";", "set-option", "@pdx_spawn_op", testTag}
+	want := append(claudeenv.TmuxGlobalUnsetArgs(), "new-session", "-d", "-s", "tm-abc", "-c", "/w", "-P", "-F", "#{session_id} #{pid}:#{start_time}",
+		";", "set-option", "@pdx_spawn_op", testTag) // behind the Claude session variables' global unset (#2122)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %q, %v", got, err)
 	}
