@@ -1596,7 +1596,6 @@
   "workers.list.none": "沒有開啟 Nexen 的主機",
   "peer.label.host": "主機",
   "peer.label.cwd": "工作目錄",
-  "peer.label.address": "位址",
   "peer.label.peer_id": "peer 位址",
   "peer.copied": "已複製：{{what}}",
   "peer.copy_failed": "複製失敗",

@@ -1596,7 +1596,6 @@
   "workers.list.none": "No hosts with Nexen",
   "peer.label.host": "host",
   "peer.label.cwd": "cwd",
-  "peer.label.address": "address",
   "peer.label.peer_id": "peer id",
   "peer.copied": "copied: {{what}}",
   "peer.copy_failed": "copy failed",
