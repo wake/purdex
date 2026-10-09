@@ -39,6 +39,12 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
+	memberTurns, err := m.store.MemberLastTurnAts(t.ID)
+	if err != nil {
+		m.logf("[team] team %s: %v", t.ID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
 	byOwner := map[string][]TaskRow{}
 	for _, tk := range open {
 		byOwner[tk.OwnerKey] = append(byOwner[tk.OwnerKey], tk)
@@ -49,8 +55,9 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 		if mr.SpawnOp != "" { // an adopted member has no key, so no tasks
 			if cur, ok := currentTaskOf(byOwner[mr.SpawnOp]); ok {
 				mv.Task = &team.MemberTask{ID: team.TaskDisplayID(t.ID, cur.Seq), Subject: cur.Subject, Status: cur.Status}
-				// T-3a2 adds the member row's own last_turn_at to this max.
-				mv.LastAt = max(cur.LastTurnAt, cur.LastReportAt)
+				mv.LastAt = max(cur.LastTurnAt, cur.LastReportAt, memberTurns[mr.SpawnOp]) // a pending task keeps the turns the row took
+			} else {
+				mv.LastAt = memberTurns[mr.SpawnOp] // no task: the member row's own last turn (T-3a2)
 			}
 		}
 		v.Members = append(v.Members, mv)

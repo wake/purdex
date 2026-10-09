@@ -129,6 +129,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (team label): %w", err)
 	}
+	if err := migrateMemberLastTurn(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (member last turn): %w", err)
+	}
 	if err := migrateSpawnTask(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (spawn task): %w", err)
