@@ -301,7 +301,9 @@ type Module struct {
 	// L's commands outbox pump (cross-host team spec X3a); outcomes applies a command's answer (X3b-1; nil → recorded only).
 	cmdCaller hostCaller
 	cmdPump   *outboxPump
-	outcomes  commandOutcomes
+	// factPump is M's facts outbox pump (X2c-2): the same generic pump, over team_facts.
+	factPump *outboxPump
+	outcomes commandOutcomes
 	// beforeCloseExpired, when set, runs in closeExpired before the CAS;
 	// an error fails that close there (tests). nil in production.
 	beforeCloseExpired func(id string) error
@@ -531,6 +533,7 @@ func (m *Module) Start(context.Context) error {
 	go m.runRetention()
 	go m.runRoster() // after the boot's own writes signalled: it publishes what they left
 	m.startCommandPump()
+	m.startFactPump()
 	m.logf("[team] endpoints enabled")
 	return nil
 }

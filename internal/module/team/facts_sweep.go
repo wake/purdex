@@ -31,6 +31,7 @@ func (m *Module) markGoneRemoteMembers() {
 		}
 		if gone {
 			m.logf("[team] remote member %s (%s) of team %s is gone", r.Ref, r.MemberSessionID, r.TeamID)
+			m.kickFacts() // the ended fact is committed: send it now
 		}
 	}
 }
