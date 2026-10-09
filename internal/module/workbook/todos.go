@@ -44,7 +44,10 @@ type Todo struct {
 }
 
 // TodoAdd is what a result asks to add.
-type TodoAdd struct{ Title, Detail string }
+type TodoAdd struct {
+	Title  string `json:"title"`
+	Detail string `json:"detail"`
+}
 
 // TodoChanges are a result's todo changes with the numbers already read through the job's map: Done and Dropped are
 // todo ids.
