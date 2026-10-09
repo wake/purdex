@@ -8,11 +8,16 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
 )
 
-// teamKinds is what this daemon announces it applies. Empty until X3d: a
-// route that applies a kind is what makes it announceable (spec §3.1 rule 7).
-func teamKinds() []string { return []string{} }
+// teamKinds is what this daemon announces it applies (spec §3.1 rule 7): a lead host sends a kind only after reading
+// it here, so this list is the switch that lets a remote lead act on this host. A kind is listed once a route applies it
+// and the notice it owes is delivered (X3d): adopt, release, end, lead_moved and void. spawn and kill stay off until
+// X4a applies them.
+func teamKinds() []string {
+	return []string{team.CommandAdopt, team.CommandRelease, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid}
+}
 
 // teamEntryFor is the live entry a host principal stands for, under the
 // same binding as the other host routes (spec §6.1): present, verified, and
