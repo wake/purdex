@@ -58,7 +58,9 @@ type TeamRoster struct {
 	HostID    string `json:"host_id"`
 	TeamName  string `json:"team_name"`  // always present, "" = none
 	TeamLabel string `json:"team_label"` // always present, "" = none
-	CreatedAt int64  `json:"created_at"`
+	// TeamColor is the colour the user picked in the panel (0–7, TR-1); absent = automatic (the App's hash).
+	TeamColor *int  `json:"team_color,omitempty"`
+	CreatedAt int64 `json:"created_at"`
 	// MaxMembers is the team's member limit and InUse the places taken: active members plus spawns still starting,
 	// the count spawn and adopt compare with it. Both always present (the App's stepper reads them).
 	MaxMembers int            `json:"max_members"`

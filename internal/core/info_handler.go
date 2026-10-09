@@ -54,6 +54,7 @@ var capabilities = []string{
 	"team.adopt.v1",          // lead request kind adopt (POST /api/team/approvals {kind:"adopt", target}), adopt members (U24)
 	"team.relay_quota.v1",    // PUT /api/team/relay-quota, team.relay_quota events, relay_quota on Member / RosterSession, UnattendedView.quotas (#2062)
 	"team.max_members.v1",    // PUT /api/team/max-members, max_members and in_use on TeamRoster
+	"team.edit.v1",           // PUT /api/team/appearance (name, label, colour of a live team), team_color on TeamRoster (TR-1)
 	"team.ask_chat.v1",       // decide a hook_ask with decision deny + hook.message (the reply instead of answers); its wait is answered_remote with hook.message
 }
 
