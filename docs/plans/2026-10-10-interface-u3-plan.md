@@ -102,9 +102,10 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
   2. **pre-check** — all must hold, else nothing is typed: the tmux instance; the pane's owner in the agent registry is
      a live Claude Code process whose session id is `expected_session_id` (process identity pid + start); the pane's
      UI state equals the measured prompt state (`#{pane_in_mode}` = 0, `#{alternate_on}` as measured for Claude Code
-     at its prompt — U3-0b task 1 measures it before coding); **no dialog is open for that session** — no open
-     `hook_ask` / `hook_permission` approval for it and its agent status is not `waiting` (a dialog is where an Enter
-     picks an option); **the input box is recognised and empty** — the rows from the box's top rule down to the cursor
+     at its prompt — U3-0b task 1 measures it before coding); **the agent is idle** — its status (the owner's
+     `Status`, `internal/module/agent/pane_owner.go`) is `idle` and no `hook_ask` / `hook_permission` approval is open
+     for it (`OpenApprovals()`); while the agent is running the App keeps the message in its own queue
+     (「你 · 排隊中」) and submits when the status turns idle — the daemon never types into a busy Claude Code; **the input box is recognised and empty** — the rows from the box's top rule down to the cursor
      match the measured empty-prompt layout (prompt glyph, nothing typed), else `input_not_empty`
      (「終端機輸入框裡已經有文字，請先在終端機清掉或送出」 — this also stops a retry from appending to text a failed
      attempt left; the App never retypes into a non-empty box);
@@ -113,19 +114,24 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
      layout) and wait ≤ 2 s (every 100 ms) until their content — prompt glyph and padding removed, wrapped rows joined —
      equals the whitespace-normalised text, or, when the text is longer than the box shows, the box holds nothing but a
      contiguous tail of the text of at least min(len, 200) characters;
-  5. **re-check** step 2's owner / session / no-dialog conditions, then send Enter as **one guarded tmux command** —
-     `if-shell -F` on `#{pane_in_mode}`, `#{alternate_on}` and `#{pane_pid}` (the owner's pid) with `send-keys Enter`
-     as its only branch — so those conditions and the Enter are atomic in the tmux server. The one window left is a
-     person typing into that same pane between step 4 and the Enter: that is the user's own input, accepted and
-     written in the PR.
+  5. **re-check** step 2 (owner, session, idle, no open approval), then send Enter as **one guarded tmux command**
+     within **50 ms** of that re-check (else abort with `not_seen`) — `if-shell -F` (the pattern of
+     `internal/tmux/send_keys_conditional.go`) on the tmux instance, `#{pane_in_mode}`, `#{alternate_on}` and
+     `#{pane_current_command}` equal to the measured Claude Code foreground command, with `send-keys Enter` as its only
+     branch. Why this closes the races codex named: Claude Code leaving the foreground (exit, crash, a shell) fails the
+     tmux condition atomically; a dialog needs a running turn and a model round-trip (hundreds of ms at least) after an
+     idle re-check, so it cannot appear within the 50 ms; a session change needs `/clear` or a relay typed or triggered
+     in that pane. **The residual, accepted and written in the PR: a person (or another client of this daemon) acting
+     on the same pane within those 50 ms.** U3-0b task 1 also measures the re-check → Enter time (p99 must be well
+     under 50 ms on mlab).
 
   Any check failing → no Enter, `409 {reason: instance | owner_changed | session_mismatch | in_mode | alternate_screen |
-  dialog_open | input_not_empty | not_seen}` (JSON); when the text was already typed the App says so
+  busy | dialog_open | input_not_empty | not_seen}` (JSON); when the text was already typed the App says so
   (「文字已在終端機輸入框，沒有按 Enter：<原因>」). Capability `sessions.submit.v1` in `/api/info`; iOS may adopt it
   later. The App side, `lib/conversations/send.ts`: the destructive guard (a line matching `rm -rf`, a forced push, a
   hard reset, `DROP TABLE`, `mkfs`, `dd if=` → a second press within 5 s, 「真的要送出？」), iOS's `SendQueue` (3 s
-  undo, one serial chain, local echo matched to the transcript's user item within 30 s, 「你 · 排隊中」 while the agent
-  is running), interrupt = ESC through the existing send-keys with the instance, only while the header status is
+  undo, one serial chain; **a message waits in this queue while the agent is running** and is submitted when the
+  header status turns idle — 「你 · 排隊中」 until then; local echo matched to the transcript's user item within 30 s), interrupt = ESC through the existing send-keys with the instance, only while the header status is
   `running`, never twice in a row.
 - **D8 Questions** — the dock reads the **conversation WS approvals** (not the host store, which drops hook kinds — keep
   that drop, so the app-wide dialog never shows them). `decideApproval` gains `hook?: {answers?: Record<string,string>,
@@ -178,15 +184,17 @@ multi-select answer whose label contains a comma.
 ### U3-0b daemon — the submit route (~400 lines)
 1. **Measure first** (write the numbers into the PR and this plan's §0): on mlab, a live Claude Code 2.1.29x pane at its
    prompt, in a dialog (AskUserQuestion, a permission prompt), in `/model`, and after exiting to the shell — record
-   `#{pane_in_mode}`, `#{alternate_on}`, `#{cursor_y}`, and the capture of the rows around the cursor (the input box's
-   rules / prompt glyph). The verify region and the UI-state check are built from these numbers. Use a throwaway
+   `#{pane_in_mode}`, `#{alternate_on}`, `#{cursor_y}`, `#{pane_current_command}`, and the capture of the rows around
+   the cursor (the input box's rules / prompt glyph); and the time from an idle re-check to the guarded Enter. The verify region and the UI-state check are built from these numbers. Use a throwaway
    session on an isolated tmux socket (`-L <label>`, `unset TMUX`), never the user's sessions.
 2. `internal/module/session`: `POST /api/sessions/{code}/submit` (D7) with the per-session mutex, the owner / session
    check through the agent registry, the UI-state check, typing, the input-region verify, the re-check, JSON errors;
    `sessions.submit.v1` in `/api/info`; not in the phones' `deviceAllowed` for now. Tests with a fake tmux: each check
    failing before typing and before Enter; hostile output above the input box containing the text → `not_seen`;
    a permission / question dialog open → `dialog_open`, nothing typed; a pre-filled box → `input_not_empty`, nothing
-   typed; Claude Code exiting to the shell between typing and Enter → the guarded Enter does not fire; wrapped
+   typed; a running agent → nothing typed (`busy`, the App queues); the re-check → Enter deadline exceeded → no Enter;
+   Claude Code exiting to the shell between typing and Enter → the guarded Enter does not fire (the
+   `pane_current_command` condition); wrapped
    multi-line text and a text longer than the box found; concurrent submits serialised; a retry after `not_seen` hits
    `input_not_empty` (no duplicate text).
 Review focus: the owner changing between the re-check and Enter (keep that window to one tmux call); a text whose last
@@ -277,3 +285,11 @@ an exact box-content match; (critical) re-check → Enter not atomic → Enter i
 mode, alternate screen and owner pid; the remaining window (a person typing into the same pane) is accepted and
 documented; (important) spec §10 still open → closed; (important) retry duplication → `input_not_empty`; (5, partly)
 chat row click scope → the chain (spec §5, D10).
+
+Round 3 (`task-mv1h112l-igerxq`): spec §10, retry duplication and the chat row scope resolved; still critical — the
+Enter guard checked the pane's pid (the shell), not Claude Code, and owner / session / dialog could change after the
+re-check. → D7: submit only while the agent is **idle** (the App queues while it runs), the guarded Enter checks
+`#{pane_current_command}` (Claude Code still in front) with the instance / mode / alternate screen, and the Enter must
+follow the re-check within 50 ms (measured). A dialog needs a model round-trip after idle and a session change needs a
+`/clear` or relay in that pane, so neither fits the window; the residual is a person or another client acting on that
+pane within the 50 ms, written in the PR.
