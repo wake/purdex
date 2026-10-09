@@ -1,6 +1,7 @@
 package workbook
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -109,6 +110,45 @@ func TestQueue_TheLogCarriesKindsForARewriteToo(t *testing.T) {
 		t.Fatalf("log = %s", k.logs.text())
 	}
 }
+
+// A store that refuses an entry's final state does not stall the conversation or lose the entry: the queue moves on and
+// the reaper fails the row (store) as soon as the store takes it (issue #2324).
+// Mutation gate: drop the orphan record, or the retry in reap → red.
+func TestQueue_AFinishTheStoreRefusesIsRetriedAndFailsTheRow(t *testing.T) {
+	k := kitWith(t, "s1", "t1")
+	k.turns.set("s1", endedTurn("t1", 100, "a"), endedTurn("t2", 200, "b"))
+	k.event("s1", 2000)
+	broken := true
+	k.st.failFinish = func() error {
+		if broken {
+			return errTestStore
+		}
+		return nil
+	}
+	j := mustNext(t, k, "m", "s1")
+	k.finish("m", j, answerJSON("事", "推", "短。", "狀", ""))
+	if k.entries("s1")[0].State != StatePending {
+		t.Fatal("the store refused: the row is still pending")
+	}
+	mustNext(t, k, "m", "s1") // the conversation moved on
+	k.e.reap()                // still refused: stays remembered
+	if k.entries("s1")[0].State != StatePending {
+		t.Fatal("failed while the store still refuses")
+	}
+	broken = false
+	k.e.reap()
+	if e := k.entries("s1")[0]; e.State != StateFailed || e.Reason != ReasonStore {
+		t.Fatalf("entry = %s/%s", e.State, e.Reason)
+	}
+	k.e.omu.Lock()
+	n := len(k.e.orphans)
+	k.e.omu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d orphans left", n)
+	}
+}
+
+var errTestStore = errors.New("test: store refuses")
 
 // Not JSON (or an empty reply) gets one retry — the same kind, attempt 2, at the same place — then failed:format.
 // Mutation gate: retry twice, or put the retry at the tail → red.

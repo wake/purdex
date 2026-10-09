@@ -158,9 +158,7 @@ func (e *Engine) finishUnrun(j *job, state, reason string) {
 		e.finishCut(j) // its thing and push are out already: keep them, cut the entry
 		return
 	}
-	if _, err := e.d.Store.Finish(j.entryID, state, reason, Output{LatencyMS: j.lat}); err != nil {
-		e.d.Logf("[workbook] end an entry: %v", err)
-	}
+	e.finishRow(j.entryID, state, reason, Output{LatencyMS: j.lat})
 	e.notifyLine(j.entryID, false)
 }
 
@@ -170,9 +168,7 @@ func (e *Engine) finishCut(j *job) {
 	out.Entry = CutEntry(j.entry)
 	out.LatencyMS = j.lat
 	out.Usage = j.usage
-	if _, err := e.d.Store.Finish(j.entryID, StateOK, "", out); err != nil {
-		e.d.Logf("[workbook] end an entry: %v", err)
-	}
+	e.finishRow(j.entryID, StateOK, "", out)
 }
 
 // admit counts one call against the hour's cap; false when the cap is reached (one log line per hour).
@@ -331,6 +327,7 @@ func (e *Engine) release(l *lease, follow *job) {
 
 // reap ends the leases that ran out: the call is lost, and the queue moves on.
 func (e *Engine) reap() {
+	e.retryOrphans()
 	var lost []*lease
 	e.qmu.Lock()
 	now := e.d.Now()
