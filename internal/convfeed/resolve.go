@@ -206,6 +206,11 @@ func (r *Resolver) OpenSubagent(ctx context.Context, sessionID, agentID string) 
 		return nil, err
 	}
 	src.Closer.Close() // only the path is wanted; the file is opened below by the same walk
+	// The sibling directory is named after the transcript file: an owner or index answer that points at another
+	// file (stale, mismatched) must not make this session read some other conversation's subagents.
+	if filepath.Base(src.Path) != sessionID+".jsonl" {
+		return nil, ErrNotFound
+	}
 	root, err := transcriptpath.Root(r.Home)
 	if err != nil {
 		return nil, ErrNotFound

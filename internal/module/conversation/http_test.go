@@ -92,16 +92,20 @@ func stepsTurn(n, pad int) string {
 // ---- fixtures ----
 
 type fakeOwners struct {
-	mu    sync.Mutex
-	calls int
-	own   []convfeed.Owner
-	err   error
+	mu     sync.Mutex
+	calls  int
+	own    []convfeed.Owner
+	err    error
+	onCall func() // runs inside every lookup (tests cancel the request there)
 }
 
 func (f *fakeOwners) LiveSessions(context.Context, string) ([]convfeed.Owner, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	if f.onCall != nil {
+		f.onCall()
+	}
 	return f.own, f.err
 }
 
@@ -669,28 +673,73 @@ func TestSubagent_AnswerIsCappedAndMarkedPartial(t *testing.T) {
 	}
 }
 
-func TestSubagent_BusyWhenTooManyReads(t *testing.T) {
+func TestSubagent_BusyOnlyForAnOpenedFile(t *testing.T) {
 	e := newEnv(t)
 	e.transcript(idleTurns(1))
+	e.subagentFile(childID, childFixture(t))
 	for i := 0; i < maxSubagentReads; i++ {
 		e.mod.subSem <- struct{}{}
+	}
+	// a session that does not exist is a plain 404: lookups never queue for the read slots
+	if got := errCode(t, e.get("/api/conversations/claude/0e7f214b-c4e3-48cd-ab15-62a3471bd4fd/subagents/"+childID), 404); got != "not_found" {
+		t.Fatalf("code %q", got)
 	}
 	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"/subagents/"+childID), 503); got != "busy" {
 		t.Fatalf("code %q", got)
 	}
 }
 
-// The normalizer stops at its own totals without an error: the answer must still say it is not the whole file.
-func TestSubagent_NormalizerTruncationIsPartial(t *testing.T) {
+// The request ends while its file is being read: the parse stops, nothing is written, the slot is released.
+func TestSubagent_CancelledDuringTheReadStopsAndReleasesItsSlot(t *testing.T) {
 	e := newEnv(t)
-	e.transcript(idleTurns(1))
-	e.subagentFile(childID, childFixture(t)+strings.Repeat("{}\n", 50_001)) // past the 50,000-line total
-	w := e.get("/api/conversations/claude/" + sid + "/subagents/" + childID)
-	var got subagentResp
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("%v: %.200s", err, w.Body.String())
+	p := e.transcript(idleTurns(1))
+	e.subagentFile(childID, childFixture(t)+strings.Repeat("{}\n", 40_000))
+	ctx, cancel := context.WithCancel(context.Background())
+	e.owners.own = []convfeed.Owner{{TranscriptPath: p, Status: "idle"}}
+	e.owners.onCall = cancel // the pane lookup cancels the request: the file is found, then read on a dead context
+	w := httptest.NewRecorder()
+	e.mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/conversations/claude/"+sid+"/subagents/"+childID, nil).WithContext(ctx))
+	if w.Body.Len() != 0 {
+		t.Fatalf("a cancelled request was answered: %d %s", w.Code, w.Body.String())
 	}
-	if w.Code != 200 || len(got.Items) == 0 || !got.Partial {
-		t.Fatalf("status %d items %d partial %v, want items and partial", w.Code, len(got.Items), got.Partial)
+	if len(e.mod.subSem) != 0 {
+		t.Fatal("the read slot was not released")
+	}
+}
+
+// An owner (or index) answer that names another transcript file must not choose the subagents directory.
+func TestSubagent_TranscriptOfAnotherNameIsRefused(t *testing.T) {
+	e := newEnv(t)
+	other := filepath.Join(e.home, ".claude", "projects", "-work-y", "11111111-1111-4111-8111-111111111111.jsonl")
+	if err := os.MkdirAll(filepath.Dir(other), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, []byte(idleTurns(1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the subagent file exists under the *requested* session id in the other project's directory
+	dir := filepath.Join(filepath.Dir(other), sid, "subagents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-"+childID+".jsonl"), []byte(childFixture(t)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.owners.own = []convfeed.Owner{{TranscriptPath: other, Status: "idle"}}
+	if got := errCode(t, e.get("/api/conversations/claude/"+sid+"/subagents/"+childID), 404); got != "not_found" {
+		t.Fatalf("code %q", got)
+	}
+}
+
+func TestCtxReader_StopsWithTheContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	r := ctxReader{ctx: ctx, r: strings.NewReader("abcdef")}
+	buf := make([]byte, 3)
+	if n, err := r.Read(buf); n != 3 || err != nil {
+		t.Fatalf("read before cancel: %d %v", n, err)
+	}
+	cancel()
+	if n, err := r.Read(buf); n != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("read after cancel: %d %v, want context.Canceled", n, err)
 	}
 }

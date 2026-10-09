@@ -1,8 +1,10 @@
 package conversation
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 
@@ -38,14 +40,6 @@ func (m *Module) handleSubagent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_agent_id")
 		return
 	}
-	select {
-	case m.subSem <- struct{}{}:
-		defer func() { <-m.subSem }()
-	default:
-		writeError(w, http.StatusServiceUnavailable, "busy")
-		return
-	}
-
 	f, err := m.resolver.OpenSubagent(r.Context(), sid, agentID)
 	if err != nil {
 		switch {
@@ -59,7 +53,19 @@ func (m *Module) handleSubagent(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
-	items, stats, readErr := ccnorm.NormalizeSubagent(f, agentID)
+	// The slots bound the reads of opened files (up to 64 MiB each); a lookup that finds nothing never takes one.
+	select {
+	case m.subSem <- struct{}{}:
+		defer func() { <-m.subSem }()
+	default:
+		writeError(w, http.StatusServiceUnavailable, "busy")
+		return
+	}
+
+	items, stats, readErr := ccnorm.NormalizeSubagent(ctxReader{ctx: r.Context(), r: f}, agentID)
+	if r.Context().Err() != nil { // the request ended during the read: nobody to answer
+		return
+	}
 	if readErr != nil && len(items) == 0 {
 		writeError(w, http.StatusInternalServerError, "read_failed")
 		return
@@ -93,4 +99,18 @@ func (m *Module) handleSubagent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// ctxReader ends a read with the request: the normalizer reads in chunks, so a cancelled request stops at the next one
+// instead of parsing the rest of a file nobody waits for.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
