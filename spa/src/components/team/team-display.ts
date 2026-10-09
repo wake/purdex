@@ -26,6 +26,9 @@ export interface TeamSeatView {
   role: 'lead' | 'member'
   /** The tab showing this seat, or null when it has none (an unopened member). */
   tabId: string | null
+  /** The seat's roster state (`active` | `joining` | `releasing` | `killing`) and the alias of the host a remote member lives on ('' = local). */
+  state: string
+  hostAlias: string
 }
 
 /** How one tab sits in a team group on the TabBar. */

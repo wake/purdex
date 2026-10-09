@@ -43,7 +43,7 @@ function seatView(seat: Seat, codeOf: CodeLookup): TeamSeatView {
   // The seat's own host (a remote member lives elsewhere); '' while this Mac has no such host, so no light is keyed to it.
   const hostId = seat.hostId ?? ''
   const code = name && seat.hostId !== null ? codeOf(seat.hostId, name) : ''
-  return { sessionId: seat.session.session_id, title: seat.label, hostId, sessionCode: code, role: seat.role, tabId: seat.tabId }
+  return { sessionId: seat.session.session_id, title: seat.label, hostId, sessionCode: code, role: seat.role, tabId: seat.tabId, state: seat.state, hostAlias: seat.hostAlias }
 }
 
 /**
