@@ -638,6 +638,19 @@ test('at most 64 monitor ids are kept: the oldest goes first', async ($, on) => 
   expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([['shell', 'monitor']])
 })
 
+test('a reused monitor id counts as the newest for the cap', async ($, on) => {
+  let n = 0
+  const ids = [...Array.from({ length: 64 }, (_, i) => 'm' + i), 'm0', 'extra']
+  const w = evWorld(on)
+  on('tool.call', { tool: 'Monitor' }, async () => ({ ref: 1, result: { taskId: ids[n++] }, text: 't' }))
+  await start($, w)
+  for (let i = 0; i < ids.length; i++) await $.tool.call({ tool: 'Monitor', description: 'd', command: 'x', timeout_ms: 1000, tool_use_id: 'tu-' + i } as any)
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [{ id: 'm0', type: 'shell', status: 'running' }, { id: 'm1', type: 'shell', status: 'running' }, { id: 'extra', type: 'shell', status: 'running' }] } as any)
+  await w.clock.advance(150)
+  // m0 was reused (newest), so the cap evicted m1, the oldest left
+  expect(ofType(w, 'background').map((e) => e.data.tasks.map((t: any) => t.type))).toEqual([['monitor', 'shell', 'monitor']])
+})
+
 test('the monitor ids are forgotten at session.end', async ($, on) => {
   const w = monitorWorld(on)
   await start($, w)

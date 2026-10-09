@@ -405,6 +405,7 @@ function monitorStarted(e, r) {
     id = m ? m[1] : undefined
   }
   if (typeof id !== 'string' || !id) return
+  ev.monitors.delete(id) // a reused id is the newest again (Map keeps insertion order)
   ev.monitors.set(id, false)
   while (ev.monitors.size > MONITORS_MAX) ev.monitors.delete(ev.monitors.keys().next().value)
 }
