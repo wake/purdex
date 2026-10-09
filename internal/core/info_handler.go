@@ -89,6 +89,9 @@ func (c *Core) capabilityList() []string {
 	if c.moduleReady("devices") {
 		out = append(out, "devices.v1") // POST/GET/DELETE /api/devices, PUT /api/devices/self; device tokens (pdxd_) as bearers
 	}
+	if c.moduleReady("workbook") {
+		out = append(out, "workbook.v1") // GET /api/workbook/conversations/{provider}/{session_id}, GET /api/workbook/entries, workbook.entry / workbook.status events
+	}
 	return out
 }
 
