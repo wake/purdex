@@ -47,7 +47,7 @@ type sender struct {
 	hostID string
 	topic  string
 
-	openCount func() int // the open-approval count each payload carries (spec §6); nil = 0
+	openCount func() (int, bool) // the open-approval count each payload carries (spec §6); nil or !ok = unknown, left out
 
 	queue   chan Job
 	dropped atomic.Int64
@@ -133,7 +133,9 @@ func (s *sender) process(ctx context.Context, j Job) {
 			continue
 		}
 		if s.openCount != nil {
-			content.OpenApprovals = s.openCount()
+			if n, ok := s.openCount(); ok {
+				content.OpenApprovals = &n
+			}
 		}
 		payload, err := content.Payload(s.hostID)
 		if err != nil {

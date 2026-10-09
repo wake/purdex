@@ -22,6 +22,7 @@ type fakeEvents struct {
 	mu          sync.Mutex
 	fn          func(op string, a team.Approval)
 	open        []team.Approval
+	readOpen    func() ([]team.Approval, error) // the fresh read at send time; nil = the open list
 	subscribed  int
 	unsubscribe int
 }
@@ -32,6 +33,17 @@ func (f *fakeEvents) SubscribeApprovals(fn func(string, team.Approval)) ([]team.
 	f.fn = fn
 	f.subscribed++
 	return f.open, func() { f.mu.Lock(); f.unsubscribe++; f.fn = nil; f.mu.Unlock() }
+}
+
+// OpenApprovals makes the fake the team module's reader too (the real module is one object for both).
+func (f *fakeEvents) OpenApprovals() ([]team.Approval, error) {
+	f.mu.Lock()
+	rd, open := f.readOpen, f.open
+	f.mu.Unlock()
+	if rd != nil {
+		return rd()
+	}
+	return open, nil
 }
 
 func (f *fakeEvents) emit(op string, a team.Approval) {

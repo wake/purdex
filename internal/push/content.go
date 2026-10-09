@@ -42,9 +42,10 @@ type Content struct {
 	SessionName string
 	Event       string
 	CollapseID  string
-	// OpenApprovals is how many approvals of the pushed kinds are open on this host; the sender fills it in at send time
-	// (the iOS notification extension sets the app-icon badge from it, spec §6).
-	OpenApprovals int
+	// OpenApprovals is how many approvals of the pushed kinds are open on this host, read by the sender at send time (the
+	// iOS notification extension sets the app-icon badge from it, spec §6). nil = unknown (the read failed): the field is
+	// left out of the payload, never sent as 0.
+	OpenApprovals *int
 }
 
 var (
@@ -226,7 +227,9 @@ func (c Content) payload(hostID, body string) ([]byte, error) {
 			purdex[k] = v
 		}
 	}
-	purdex["open_approvals"] = c.OpenApprovals
+	if c.OpenApprovals != nil {
+		purdex["open_approvals"] = *c.OpenApprovals
+	}
 	return json.Marshal(map[string]any{
 		"aps": map[string]any{
 			"alert":              map[string]string{"title": c.Title, "body": body},
