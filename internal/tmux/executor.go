@@ -19,9 +19,10 @@ import (
 var ErrNoSession = errors.New("no such session")
 
 type TmuxSession struct {
-	ID   string // tmux session ID, e.g. "$0"
-	Name string
-	Cwd  string
+	ID      string // tmux session ID, e.g. "$0"
+	Name    string
+	Created int64 // #{session_created}, unix seconds; 0 = unknown
+	Cwd     string
 }
 
 // PaneLocation is one pane as ListAllPanes reports it, every value as tmux
@@ -256,7 +257,7 @@ func readCtxErr(ctx context.Context, op string, err error) error {
 }
 
 func (r *RealExecutor) ListSessions(ctx context.Context) ([]TmuxSession, error) {
-	out, err := boundedRead(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_path}").Output()
+	out, err := boundedRead(ctx, "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_created}\t#{session_path}").Output()
 	if err != nil {
 		if cerr := readCtxErr(ctx, "tmux list-sessions", err); cerr != nil {
 			return nil, cerr
@@ -276,9 +277,9 @@ func (r *RealExecutor) ListSessions(ctx context.Context) ([]TmuxSession, error) 
 }
 
 // parseListSessionsOutput parses the TAB-separated
-// "#{session_id}\t#{session_name}\t#{session_path}" lines from list-sessions.
+// "#{session_id}\t#{session_name}\t#{session_created}\t#{session_path}" lines from list-sessions.
 //
-// A line with fewer than 3 fields is malformed and skipped — never filled
+// A line with fewer than 4 fields is malformed and skipped — never filled
 // with empty Name/Cwd — so a bad line cannot take down the sessions API nor
 // hand a bogus ID to orphan cleanup. The usual cause is a non-UTF-8 client
 // locale, under which tmux sanitises the TAB separators to "_". Malformed
@@ -291,23 +292,25 @@ func parseListSessionsOutput(out string) []TmuxSession {
 		if line == "" {
 			continue
 		}
-		// SplitN(…, 3) on purpose: session_id and session_name can never
-		// contain a TAB (tmux's session_check_name vis-encodes it), but
-		// session_path is a raw filesystem path and may — so the third
-		// field must absorb the rest of the line. Do not "fix" this into
+		// SplitN(…, 4) on purpose: session_id, session_name and
+		// session_created can never contain a TAB (tmux's session_check_name
+		// vis-encodes it), but session_path is a raw filesystem path and may
+		// — so the last field must absorb the rest of the line; that is also
+		// why the path comes last. Do not "fix" this into
 		// Split + len != 3.
-		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) < 3 {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) < 4 {
 			if malformed == 0 {
 				firstBad = line
 			}
 			malformed++
 			continue
 		}
-		sessions = append(sessions, TmuxSession{ID: parts[0], Name: parts[1], Cwd: parts[2]})
+		created, _ := strconv.ParseInt(parts[2], 10, 64) // unreadable = 0 = unknown
+		sessions = append(sessions, TmuxSession{ID: parts[0], Name: parts[1], Created: created, Cwd: parts[3]})
 	}
 	if malformed > 0 {
-		log.Printf("tmux list-sessions: %d malformed line(s), e.g. %q (expected 3 tab-separated fields; is a UTF-8 locale exported?)", malformed, firstBad)
+		log.Printf("tmux list-sessions: %d malformed line(s), e.g. %q (expected 4 tab-separated fields; is a UTF-8 locale exported?)", malformed, firstBad)
 	}
 	return sessions
 }

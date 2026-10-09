@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -147,4 +148,28 @@ func TestLookupCodeByName_RenameInvalidatesCache(t *testing.T) {
 	missCode, ok := mod.LookupCodeByName("oldname")
 	assert.False(t, ok)
 	assert.Equal(t, "", missCode, "old name must no longer resolve after rename + invalidate")
+}
+
+func TestSessionsByName_OneListCallWithCodeAndCreated(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("alpha", "/tmp")
+	fake.AddSession("beta", "/tmp")
+	fake.SetSessionCreated("alpha", 1700000000)
+
+	got, err := mod.SessionsByName(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, fake.ListCallCount(), "one tmux read for the whole map")
+	wantA, _ := EncodeSessionID("$0")
+	assert.Equal(t, SessionRef{Code: wantA, Created: 1700000000}, got["alpha"])
+	assert.Equal(t, int64(0), got["beta"].Created)
+	assert.Len(t, got, 2)
+}
+
+func TestSessionsByName_CancelledContextIsAnError(t *testing.T) {
+	mod, _, fake := newTestModule(t)
+	fake.AddSession("alpha", "/tmp")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := mod.SessionsByName(ctx)
+	assert.Error(t, err)
 }

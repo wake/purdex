@@ -60,9 +60,13 @@ type presenceFake struct{ shows map[string]bool }
 func (p presenceFake) ShowsName(name string) bool { return p.shows[name] }
 func (p presenceFake) ShowsCode(code string) bool { return p.shows[code] }
 
+// approvalAtMs is when the fixture approvals were raised (unix ms); fake sessions are created at sessionAt (unix s).
+const approvalAtMs = 1_700_000_000_000
+const sessionAt = 1_699_999_000
+
 func leadApproval(id string) team.Approval {
 	raw, _ := json.Marshal(map[string]any{"reason": "split the work"})
-	return team.Approval{ID: id, Kind: team.KindLead, Payload: raw,
+	return team.Approval{ID: id, Kind: team.KindLead, Payload: raw, CreatedAt: approvalAtMs,
 		Origin: team.Origin{SessionID: "sid-1", Ref: "_abc123", Name: "worker-1", Tmux: "dev:@1.%2"}}
 }
 
