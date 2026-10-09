@@ -73,6 +73,7 @@ const peersUsage = "usage: pdx peers [--json] [--all] [--config <path>]\n" +
 	"       pdx peers host verify <alias> [--json] [--config <path>]\n" +
 	"       pdx peers host rename <alias> <new-alias> [--config <path>]\n" +
 	"       pdx peers host rotate <alias> [--commit|--cancel] [--force] [--config <path>]\n" +
+	"       pdx peers host allow-team <alias> on|off [--root <dir>]... [--config <path>]\n" +
 	"       pdx peers host remove <alias> [--config <path>]\n" +
 	"       pdx peers host list [--config <path>]\n" +
 	"       pdx peers alias [--config <path>]\n" +
@@ -127,6 +128,7 @@ type peersInvocation struct {
 	token       string
 	hasToken    bool
 	allowBypass *bool
+	roots       []string // `host allow-team`'s repeatable --root, as typed
 
 	// aliasMode selects `pdx peers alias` (self-alias spec §4.2). Exactly
 	// one of its three forms applies: aliasSet with aliasValue (`alias
@@ -151,13 +153,14 @@ type peersInvocation struct {
 // optional (spec §7.2): `<alias> <url>` names the host locally, and `<url>`
 // alone lets the daemon adopt the alias the peer publishes for itself.
 var peersHostVerbArity = map[string][]int{
-	"add":       {1, 2},
-	"set-token": {2},
-	"verify":    {1},
-	"rename":    {2},
-	"rotate":    {1},
-	"remove":    {1},
-	"list":      {0},
+	"add":        {1, 2},
+	"set-token":  {2},
+	"verify":     {1},
+	"rename":     {2},
+	"rotate":     {1},
+	"allow-team": {2},
+	"remove":     {1},
+	"list":       {0},
 }
 
 // addArgs splits `host add`'s positionals into alias and URL. The alias is
@@ -216,6 +219,12 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 			i++
 			inv.token = args[i]
 			inv.hasToken = true
+		case a == "--root":
+			if i+1 >= len(args) {
+				return peersInvocation{}, "", false
+			}
+			i++
+			inv.roots = append(inv.roots, args[i])
 		case strings.HasPrefix(a, "--allow-bypass="):
 			v := strings.TrimPrefix(a, "--allow-bypass=")
 			b, valid := parseStrictBool(v)
@@ -239,7 +248,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		// Top-level query form: no positionals at all, and none of the
 		// host-only flags (--token, --allow-bypass, --commit/--cancel/
 		// --force — the last three are rotate-only).
-		if len(positionals) != 0 || inv.hasToken || inv.allowBypass != nil ||
+		if len(positionals) != 0 || inv.hasToken || inv.allowBypass != nil || inv.roots != nil ||
 			inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
@@ -252,7 +261,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		// switches with nothing to switch here) and with every host-only
 		// flag; <name> together with --clear would be two instructions.
 		inv.aliasMode = true
-		if inv.all || inv.jsonOutput || inv.hasToken || inv.allowBypass != nil ||
+		if inv.all || inv.jsonOutput || inv.hasToken || inv.allowBypass != nil || inv.roots != nil ||
 			inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
@@ -296,7 +305,19 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		return peersInvocation{}, "", false
 	}
 
+	// --root is allow-team's alone.
+	if inv.roots != nil && inv.verb != "allow-team" {
+		return peersInvocation{}, "", false
+	}
+
 	switch inv.verb {
+	case "allow-team":
+		if inv.hasToken || inv.allowBypass != nil || inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
+			return peersInvocation{}, "", false
+		}
+		if v := inv.positionals[1]; v != "on" && v != "off" {
+			return peersInvocation{}, "", false
+		}
 	case "add":
 		if inv.allowBypass != nil || inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
@@ -760,15 +781,17 @@ func deliverableField(rec peers.PeerRecord) string {
 // of a configured host served by GET /api/peers/hosts and as PUT
 // /api/peers/hosts/{alias}'s response body.
 type cliHostRow struct {
-	Alias           string `json:"alias"`
-	URL             string `json:"url"`
-	HostID          string `json:"host_id"`
-	Verified        bool   `json:"verified"`
-	HasToken        bool   `json:"has_token"`
-	HasInboundToken bool   `json:"has_inbound_token"`
-	AllowBypass     bool   `json:"allow_bypass"`
-	RotationPending bool   `json:"rotation_pending"`
-	LastInboundAuth string `json:"last_inbound_auth"`
+	Alias           string   `json:"alias"`
+	URL             string   `json:"url"`
+	HostID          string   `json:"host_id"`
+	Verified        bool     `json:"verified"`
+	HasToken        bool     `json:"has_token"`
+	HasInboundToken bool     `json:"has_inbound_token"`
+	AllowBypass     bool     `json:"allow_bypass"`
+	AllowTeam       bool     `json:"allow_team"`
+	TeamRoots       []string `json:"team_roots"`
+	RotationPending bool     `json:"rotation_pending"`
+	LastInboundAuth string   `json:"last_inbound_auth"`
 }
 
 // cliRotateResponse mirrors internal/module/peers.rotateResponse — with
@@ -813,6 +836,10 @@ type cliPutHostRequest struct {
 	Token       string `json:"token"`
 	AllowBypass *bool  `json:"allow_bypass,omitempty"`
 	Alias       string `json:"alias,omitempty"`
+	// AllowTeam / TeamRoots are `host allow-team`'s: nil is omitted so every
+	// other verb's body stays byte-identical.
+	AllowTeam *bool     `json:"allow_team,omitempty"`
+	TeamRoots *[]string `json:"team_roots,omitempty"`
 }
 
 // cliVerifyHostResponse mirrors internal/module/peers.verifyHostResponse:
@@ -900,6 +927,8 @@ func runPeersHostCmd(inv peersInvocation, stdout, stderr io.Writer) int {
 		return runPeersHostRename(cfg, base, inv, stdout, stderr)
 	case "rotate":
 		return runPeersHostRotate(cfg, base, inv, stdout, stderr)
+	case "allow-team":
+		return runPeersHostAllowTeam(cfg, base, inv, stdout, stderr)
 	case "remove":
 		return runPeersHostRemove(cfg, base, inv, stdout, stderr)
 	default:
@@ -1336,9 +1365,14 @@ func reportPeersAPIError(result peersHTTPResult, stderr io.Writer) int {
 // when it isn't that shape.
 func extractPeersErrorMessage(body []byte) string {
 	var errResp struct {
-		Error string `json:"error"`
+		Error  string `json:"error"`
+		Root   string `json:"root"`
+		Detail string `json:"detail"`
 	}
 	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
+		if errResp.Error == "bad_root" {
+			return fmt.Sprintf("bad_root: %s (%s)", errResp.Root, errResp.Detail)
+		}
 		return errResp.Error
 	}
 	detail := strings.TrimSpace(string(body))
