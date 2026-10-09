@@ -68,6 +68,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"POST /api/push/devices", "GET /api/push/devices", "DELETE /api/push/devices/{device_id}",
 		"GET /api/profiles", "GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
 		"PUT /api/devices/self",
+		"GET /api/workbook/conversations/{provider}/{session_id}", "GET /api/workbook/entries",
 	}
 	got := make([]string, 0, len(deviceAllowed))
 	for p := range deviceAllowed {
@@ -106,7 +107,8 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"POST", "/api/profiles"}, {"DELETE", "/api/profiles/p_0123456789ab"},
 		{"PUT", "/api/profiles/p_0123456789ab/attachment"},
 		{"GET", "/api/team/approvals"}, {"POST", "/api/team/approvals"}, {"DELETE", "/api/team/approvals/x"},
-		{"GET", "/api/team/roster"}, {"POST", "/api/team/relay-quota"}, {"POST", "/api/team/max-members"}, {"GET", "/api/team/relay-quota"},
+		{"GET", "/api/team/roster"}, {"PUT", "/api/team/appearance"}, // TR-1: the panel edit is the Mac App's (admin), not a phone's
+		{"POST", "/api/team/relay-quota"}, {"POST", "/api/team/max-members"}, {"GET", "/api/team/relay-quota"},
 		{"PUT", "/api/push/presence"},
 		{"POST", "/api/devices"}, {"GET", "/api/devices"}, {"DELETE", "/api/devices/d_aaaaaaaaaaaa"},
 		{"GET", "/api/fs/read"}, {"POST", "/api/host-transfer/redeem"}, {"GET", "/api/nothing-here"},

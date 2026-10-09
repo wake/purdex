@@ -54,6 +54,7 @@ var capabilities = []string{
 	"team.adopt.v1",          // lead request kind adopt (POST /api/team/approvals {kind:"adopt", target}), adopt members (U24)
 	"team.relay_quota.v1",    // PUT /api/team/relay-quota, team.relay_quota events, relay_quota on Member / RosterSession, UnattendedView.quotas (#2062)
 	"team.max_members.v1",    // PUT /api/team/max-members, max_members and in_use on TeamRoster
+	"team.edit.v1",           // PUT /api/team/appearance (name, label, colour of a live team), team_color on TeamRoster (TR-1)
 	"team.ask_chat.v1",       // decide a hook_ask with decision deny + hook.message (the reply instead of answers); its wait is answered_remote with hook.message
 }
 
@@ -88,6 +89,9 @@ func (c *Core) capabilityList() []string {
 	}
 	if c.moduleReady("devices") {
 		out = append(out, "devices.v1") // POST/GET/DELETE /api/devices, PUT /api/devices/self; device tokens (pdxd_) as bearers
+	}
+	if c.moduleReady("workbook") {
+		out = append(out, "workbook.v1") // GET /api/workbook/conversations/{provider}/{session_id}, GET /api/workbook/entries, workbook.entry / workbook.status events
 	}
 	return out
 }

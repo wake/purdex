@@ -70,8 +70,8 @@ func (m *Module) handoverNotice(op team.RelayOp) {
 	}
 	text := fmt.Sprintf(HandoverNoticeFmt, address, newRef)
 	for _, mr := range rows {
-		if mr.State != team.MemberActive || m.stopping() {
-			continue
+		if mr.State != team.MemberActive || m.isRemoteRow(mr) || m.stopping() {
+			continue // a remote member's notices are written by its own host (cross-host spec §4.4)
 		}
 		ctx, cancel := context.WithTimeout(m.stopCtx, noticeSendTimeout)
 		_, err := m.sender.Send(ctx, ipeers.SendRequest{To: alias + "/" + mr.Ref, Text: text, OriginInbox: inbox})
