@@ -6,7 +6,7 @@
 // second row when the team is big. Both take the width of the area they sit in; the area (TeamPanelArea) owns the frame.
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretUp } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
@@ -39,19 +39,39 @@ export function TeamPanel(props: Props) {
 const keepFocus = (e: React.MouseEvent) => e.preventDefault()
 
 /** A draggable row cannot preventDefault on mousedown (the browser would never start the HTML5 drag), so it lets the focus
- *  move, remembers where it was, and hands it back when the press ends (mouseup / click / dragend). */
+ *  move, remembers where it was, and hands it back when the press ends: mouseup / click / dragend on the row, or a mouseup
+ *  anywhere (the pointer left the row without reaching the drag threshold), the window losing focus, or the row unmounting.
+ *  It only hands back while the focus is still on the row (or nowhere): a focusable the person moved to is left alone. */
 function useReturnFocus() {
-  const prev = useRef<HTMLElement | null>(null)
-  const remember = useCallback((e: React.MouseEvent) => {
-    const a = document.activeElement
-    prev.current = a instanceof HTMLElement && a !== e.currentTarget ? a : null
-  }, [])
-  const restore = useCallback(() => {
-    const el = prev.current
-    prev.current = null
-    if (el && el.isConnected) el.focus()
-  }, [])
-  return { remember, restore }
+  const [api] = useState(() => {
+    let held: { prev: HTMLElement; row: HTMLElement } | null = null
+    let listening = false
+    function restore() {
+      if (listening) {
+        listening = false
+        document.removeEventListener('mouseup', restore)
+        window.removeEventListener('blur', restore)
+      }
+      const h = held
+      held = null
+      if (!h || !h.prev.isConnected) return
+      const a = document.activeElement
+      if (a === h.row || a === document.body || a === null) h.prev.focus()
+    }
+    function remember(e: React.MouseEvent) {
+      const a = document.activeElement
+      const row = e.currentTarget as HTMLElement
+      held = a instanceof HTMLElement && a !== row ? { prev: a, row } : null
+      if (held && !listening) {
+        listening = true
+        document.addEventListener('mouseup', restore)
+        window.addEventListener('blur', restore)
+      }
+    }
+    return { remember, restore }
+  })
+  useEffect(() => api.restore, [api])
+  return api
 }
 
 function ExpandButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {

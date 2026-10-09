@@ -139,6 +139,42 @@ describe('full mode', () => {
     })
   })
 
+  it('releasing the mouse outside the row (no mouseup / click / dragend on it) still gives focus back', () => {
+    withTerm((term) => {
+      pressRow(rows()[1])
+      fireEvent.mouseUp(document.body)
+      expect(document.activeElement).toBe(term)
+    })
+  })
+
+  it('the window losing focus mid-press gives focus back', () => {
+    withTerm((term) => {
+      pressRow(rows()[1])
+      fireEvent.blur(window)
+      expect(document.activeElement).toBe(term)
+    })
+  })
+
+  it('a row unmounted mid-press gives focus back', () => {
+    withTerm((term) => {
+      pressRow(rows()[1])
+      cleanup()
+      expect(document.activeElement).toBe(term)
+    })
+  })
+
+  it('does not take focus from a focusable the person deliberately landed on', () => {
+    withTerm(() => {
+      const other = document.createElement('button')
+      document.body.appendChild(other)
+      pressRow(rows()[1])
+      other.focus()
+      fireEvent.mouseUp(document.body)
+      expect(document.activeElement).toBe(other)
+      other.remove()
+    })
+  })
+
   it('focus is not restored to a terminal that has been removed', () => {
     withTerm((term) => {
       const row = rows()[1]
