@@ -237,6 +237,12 @@ func runServe(args []string) *reexecPlan {
 		}
 	}()
 
+	// The daemon's log is bounded (#2163): size-rotated and compressed, only when its stdout/stderr is that file. After
+	// the pid lock, so only the daemon that owns this data_dir renames or compresses anything; stopped (and its
+	// compression waited for, bounded) before the in-place exec.
+	stopLogRotation := newLogRotator(filepath.Join(cfg.DataDir, "logs", "pdx.log"), log.Printf).start()
+	defer stopLogRotation()
+
 	// Files of modules that no longer exist (sync.db, device_state.db + -wal/-shm; #1303).
 	// After the PID lock, so only the daemon that owns this data_dir touches it.
 	removeLegacyDataFiles(cfg.DataDir, log.Printf)
