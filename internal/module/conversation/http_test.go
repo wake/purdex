@@ -429,3 +429,62 @@ func TestSnapshot_ReleasesItsPin(t *testing.T) {
 		release()
 	}
 }
+
+// A request queued behind a long read holds no file and leaves with its caller.
+func TestSnapshot_QueuedRequestHoldsNothingAndLeavesWithItsContext(t *testing.T) {
+	e := newEnv(t)
+	e.transcript(idleTurns(1))
+	entry, release, err := e.mod.cache.Acquire(context.Background(), sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	held := make(chan struct{})
+	unblock := make(chan struct{})
+	go entry.Exclusive(context.Background(), func() error { close(held); <-unblock; return nil })
+	<-held
+	defer close(unblock)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		req := httptest.NewRequest("GET", "/api/conversations/claude/"+sid, nil).WithContext(ctx)
+		e.mux.ServeHTTP(w, req)
+		close(done)
+	}()
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the queued request did not leave when its context ended")
+	}
+	if e.owners.calls != 0 {
+		t.Fatalf("the queued request resolved the transcript (%d owner lookups): it would hold an open file while it waits", e.owners.calls)
+	}
+}
+
+func TestModule_StartIsIdempotentAndStopWaitsForTheSweeper(t *testing.T) {
+	e := newEnv(t)
+	if err := e.mod.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.mod.Start(context.Background()); err != nil { // no second sweeper, no lost cancel
+		t.Fatal(err)
+	}
+	e.mod.mu.Lock()
+	done := e.mod.done
+	e.mod.mu.Unlock()
+	if err := e.mod.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	default:
+		t.Fatal("Stop returned before the sweeper did")
+	}
+	if err := e.mod.Stop(context.Background()); err != nil { // stopping twice is fine
+		t.Fatal(err)
+	}
+}

@@ -41,6 +41,7 @@ type Module struct {
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
+	done   chan struct{} // closed when the sweeper has returned
 }
 
 // New returns the module.
@@ -78,24 +79,40 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/conversations/{provider}/{session_id}", m.handleSnapshot)
 }
 
+// Start runs the cache sweeper; a second Start while it runs does nothing.
 func (m *Module) Start(ctx context.Context) error {
-	ctx, cancel := context.WithCancel(ctx)
 	m.mu.Lock()
-	m.cancel = cancel
-	m.mu.Unlock()
-	go m.cache.Run(ctx, sweepEvery)
+	defer m.mu.Unlock()
+	if m.cancel != nil {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	m.cancel, m.done = cancel, done
+	go func() {
+		defer close(done)
+		m.cache.Run(ctx, sweepEvery)
+	}()
 	log.Println("[conversation] endpoints enabled")
 	return nil
 }
 
-func (m *Module) Stop(_ context.Context) error {
+// Stop ends the sweeper and waits for it to return (or for ctx).
+func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
+	cancel, done := m.cancel, m.done
+	m.cancel, m.done = nil, nil
+	m.mu.Unlock()
+	if cancel == nil {
+		return nil
 	}
-	return nil
+	cancel()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ownerAdapter maps the agent module's panes to the resolver's owners.

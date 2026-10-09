@@ -51,6 +51,8 @@ var ErrBadCursor = errors.New("convfeed: bad cursor")
 type Entry struct {
 	mu        sync.Mutex
 	sessionID string
+	// gate serializes whole resolve-and-refresh runs (Exclusive); unlike mu it can be waited on with a context.
+	gate chan struct{}
 
 	epoch    string
 	norm     *ccnorm.Normalizer
@@ -81,9 +83,22 @@ type Entry struct {
 // NewEntry returns an empty entry for the session; the first Refresh reads
 // the file from zero.
 func NewEntry(sessionID string) *Entry {
-	e := &Entry{sessionID: sessionID}
+	e := &Entry{sessionID: sessionID, gate: make(chan struct{}, 1)}
 	e.newEpoch()
 	return e
+}
+
+// Exclusive runs fn with the entry's refresh gate held: one resolve-and-refresh at a time per conversation. Waiting
+// for the gate ends with the context, so a request that is queued behind a long first read holds nothing (no open
+// file) and goes away when its caller does.
+func (e *Entry) Exclusive(ctx context.Context, fn func() error) error {
+	select {
+	case e.gate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-e.gate }()
+	return fn()
 }
 
 func newEpochID() string {

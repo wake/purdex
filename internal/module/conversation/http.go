@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -107,30 +108,16 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	// A file that shrinks under a read is retried once against the fresh resolution.
-	var src convfeed.Source
-	for attempt := 0; ; attempt++ {
-		src, err = m.resolver.Resolve(r.Context(), sid)
-		if err != nil {
-			if errors.Is(err, convfeed.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "not_found")
-			} else if r.Context().Err() == nil {
-				writeError(w, http.StatusInternalServerError, "resolve_failed")
-			}
-			return
-		}
-		_, err = entry.Refresh(r.Context(), src)
-		src.Closer.Close()
-		if err == nil {
-			break
-		}
-		if errors.Is(err, convfeed.ErrFileChanged) && attempt == 0 {
-			continue
-		}
+	if err := entry.Exclusive(r.Context(), func() error { return m.refresh(r.Context(), entry, sid) }); err != nil {
+		var re resolveError
 		switch {
-		case r.Context().Err() != nil:
+		case r.Context().Err() != nil: // the request is gone: nobody to answer
+		case errors.Is(err, convfeed.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found")
 		case errors.Is(err, convfeed.ErrFileChanged):
 			writeError(w, http.StatusServiceUnavailable, "file_changed")
+		case errors.As(err, &re):
+			writeError(w, http.StatusInternalServerError, "resolve_failed")
 		default:
 			writeError(w, http.StatusInternalServerError, "read_failed")
 		}
@@ -177,4 +164,32 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// resolveError marks a resolver failure that is not "not found".
+type resolveError struct{ error }
+
+// refresh resolves the transcript and feeds the entry from it. A file that shrinks under a read is retried once
+// against a fresh resolution. Every opened file is closed on every path, panics included.
+func (m *Module) refresh(ctx context.Context, entry *convfeed.Entry, sid string) error {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if err = m.refreshOnce(ctx, entry, sid); !errors.Is(err, convfeed.ErrFileChanged) {
+			return err
+		}
+	}
+	return err
+}
+
+func (m *Module) refreshOnce(ctx context.Context, entry *convfeed.Entry, sid string) error {
+	src, err := m.resolver.Resolve(ctx, sid)
+	if err != nil {
+		if errors.Is(err, convfeed.ErrNotFound) || ctx.Err() != nil {
+			return err
+		}
+		return resolveError{err}
+	}
+	defer src.Closer.Close()
+	_, err = entry.Refresh(ctx, src)
+	return err
 }
