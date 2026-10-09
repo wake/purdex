@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.650] - 2026-10-09
+
+> 動到 daemon、`pdx` 指令與內建的 pdx-team skill：**要部署 daemon，並重跑 `pdx setup`**（skill 更新）；mod 沒有改；SPA、Electron 不必更新。
+
+### Added：lead 幫 member 接力的指令 — P6-5（#2222，A 線）
+
+- 新指令 `pdx relay <member> [--wait 9m]`：lead 決定要幫哪個 member 接力時用它。member 可以用 ref、地址或名字指定；同一個要求重送不會開出第二次接力。
+- 加 `--wait` 會等到接力有結果。結束碼分別代表：完成、被拒絕、逾時（或還在等你核准）、取消（或只是等待被中斷，接力其實還在進行）、被拒收（不是 lead、不是自己的 member、對方沒裝 Purdex mod）、member 沒回應或已不在。
+- 無人值守且 member 接力額度用完時，指令會顯示「等待核准：member 額度用完（無人值守）」；核准一律由你決定，lead 不能自己核准。
+- pdx-team skill 改回「member context 高時由 lead 用 `pdx relay` 決定接力」。member 端的 mod 還沒支援（下一版 P6-6），在那之前這個指令會回「對方沒有 Purdex mod」。
+
+### Changed：裝置連線可以即時撤銷 — QP-1b-i（#2221，介面線）
+
+- 裝置換取的一次性連線票，現在記得是誰申請的；兌換時會重新確認裝置還有效，已撤銷的裝置直接拒絕。
+- 裝置開著的所有即時連線（終端機、事件、對話等）統一登記；撤銷裝置時，它的連線會立刻被關掉。管理者自己的連線不受影響。目前還沒有 App 使用裝置 token（之後的 QP-3 才會）。
+
 ## [1.0.0-alpha.649] - 2026-10-09
 
 > 只動 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA、Electron 不必更新。接力卡住太久時 daemon 會自己收尾；daemon 多了裝置 token 的地基。
