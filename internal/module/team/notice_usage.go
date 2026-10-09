@@ -91,7 +91,7 @@ func (m *Module) noticeUsage() {
 		}
 		mr, pct := mr, pct
 		if !m.goTracked(func() { m.usageNotice(mr, int(pct)) }) {
-			_, _ = m.store.ArmNotice(mr.SpawnOp, mr.SessionID)
+			m.rearm(mr)
 		}
 	}
 }
@@ -104,13 +104,19 @@ func (m *Module) usageNotice(mr memberRow, pct int) {
 	// Looked at again right before the send: the member may have started a turn, or a relay op may have been created,
 	// since the check (the claim's statement only covers an op that existed before it).
 	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) {
-		_, _ = m.store.ArmNotice(mr.SpawnOp, mr.SessionID)
+		m.rearm(mr)
 		return
 	}
 	if !m.sendUsageNotice(mr, pct) {
-		if _, err := m.store.ArmNotice(mr.SpawnOp, mr.SessionID); err != nil {
-			m.logf("[team] usage notice: %v", err)
-		}
+		m.rearm(mr)
+	}
+}
+
+// rearm gives the member's notice back; a store error is logged, and the member then stays quiet until a relay or a
+// reading under the threshold arms it (the row is not retried here).
+func (m *Module) rearm(mr memberRow) {
+	if _, err := m.store.ArmNotice(mr.SpawnOp, mr.SessionID); err != nil {
+		m.logf("[team] usage notice: member %s could not be armed again (it stays quiet until a relay or a reading under the threshold): %v", mr.Ref, err)
 	}
 }
 
