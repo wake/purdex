@@ -16,6 +16,8 @@ const (
 	ErrProxyForbidden       = "route_not_allowed" // 403: a method / path outside the allow-list
 	ErrProxyOriginInbox     = "origin_inbox_forbidden"
 	ErrProxyLeadUnreachable = "lead_unreachable" // 503, answered by the member host's CLI path when the lead host cannot be reached
+	ErrProxyLeadUnpaired    = "lead_unpaired"    // 409: this host no longer has a paired entry for the lead host (permanent)
+	ErrProxyLeadRefused     = "lead_refused"     // 502: the lead host refused the proxy call itself (a version skew or a bug; permanent)
 )
 
 // ProxyRequest is the request body. ToHostID is the lead host's own host id (409 wrong_host otherwise); MK the member key
