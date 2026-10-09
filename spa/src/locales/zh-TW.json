@@ -2259,5 +2259,6 @@
   "peers.team.leftover": "{{alias}} 的同意已關閉，但仍有 {{count}} 個 member 在線。",
   "peers.team.leftover_error": "{{alias}} 的同意已關閉，但可能仍有 member 在線（{{details}}）。",
   "peers.team.retry": "重試結束",
-  "peers.team.row_gone": "這個 peer 已不在清單中：{{alias}}"
+  "peers.team.row_gone": "這個 peer 已不在清單中：{{alias}}",
+  "peers.team.leftover_gone": "{{alias}} 的同意已關閉，但找不到該主機，無法確認 member 是否已結束。"
 }

@@ -61,8 +61,13 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
   // is left as an explicit "consent is off but members may remain" with a Retry that runs only this cleanup.
   const cleanup = async (): Promise<string> => {
     try {
+      // Who the peer is NOW: the alias may have been re-paired (new host id) since this component rendered, and the
+      // render-time id would end the old identity's members and leave the current peer's.
+      const fresh = (await listPeerHosts(hostId)).find((r) => r.alias.toLowerCase() === alias.toLowerCase())
+      if (!fresh || !fresh.host_id) return t('peers.team.leftover_gone', { alias })
+      const leadId = fresh.host_id
       for (let round = 0; ; round++) {
-        const live = row.host_id ? (await listRemoteMembers(hostId)).filter((m) => m.lead_host_id === row.host_id) : []
+        const live = (await listRemoteMembers(hostId)).filter((m) => m.lead_host_id === leadId)
         if (live.length === 0) return ''
         if (round === CLEANUP_ROUNDS) return t('peers.team.leftover', { alias, count: live.length })
         const failed: string[] = []
@@ -81,10 +86,16 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
     }
   }
 
+  // Keep the notice (and Retry) on the row; when the peer is not listed any more the row itself may be gone on the
+  // next refresh, so the same sentence also goes to the page's flow note, which outlives it.
+  const settle = (text: string) => {
+    setLeftover(text)
+    return text === t('peers.team.leftover_gone', { alias }) ? { error: text } : {}
+  }
+
   const retryCleanup = () => {
     void runFlow(async () => {
-      setLeftover(await cleanup())
-      return {}
+      return settle(await cleanup())
     })
   }
 
@@ -99,8 +110,7 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
         setToggleError(errText(e))
         return {}
       }
-      if (end) setLeftover(await cleanup())
-      return {}
+      return end ? settle(await cleanup()) : {}
     })
   }
 

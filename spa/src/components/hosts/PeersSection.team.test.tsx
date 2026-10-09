@@ -259,6 +259,56 @@ describe('PeersSection — team consent (allow_team / team_roots)', () => {
       expect(within(screen.getByTestId('peer-row-air')).getByTestId('peer-team-retry')).toBeInTheDocument()
     })
 
+    it('filters by the peer host id as of the cleanup, not the one at render time (re-paired meanwhile)', async () => {
+      const NEW_ID = 'air-reinstalled:nnnnnn'
+      const gone = new Set<string>()
+      vi.mocked(api.listRemoteMembers).mockImplementation(async () =>
+        [member('old1'), member('new1', NEW_ID)].filter((m) => !gone.has(m.mk)))
+      vi.mocked(api.endRemoteMember).mockImplementation(async (_h, mk) => { gone.add(mk) })
+      const row = await openRow()
+      fireEvent.click(within(row).getByTestId('peer-team-toggle'))
+      await screen.findByTestId('peer-team-end-dialog')
+      airRow = { ...airRow, host_id: NEW_ID } // same alias, new identity, while the dialog is open
+      fireEvent.click(screen.getByTestId('peer-team-end-confirm'))
+      await waitFor(() => expect(api.endRemoteMember).toHaveBeenCalledWith(M, 'new1'))
+      expect(api.endRemoteMember).not.toHaveBeenCalledWith(M, 'old1')
+    })
+
+    it('the row vanished after the PUT: consent-is-off notice on the page, nothing ended', async () => {
+      const row = await openRow()
+      fireEvent.click(within(row).getByTestId('peer-team-toggle'))
+      await screen.findByTestId('peer-team-end-dialog')
+      vi.mocked(api.updatePeerHost).mockImplementation(async () => {
+        const prev = airRow
+        vi.mocked(api.listPeerHosts).mockImplementation(async (h) => (h === M ? [] : [MLAB]))
+        return prev
+      })
+      fireEvent.click(screen.getByTestId('peer-team-end-confirm'))
+      const note = await screen.findByTestId('peer-flow-error')
+      expect(note).toHaveTextContent('air')
+      expect(api.endRemoteMember).not.toHaveBeenCalled()
+    })
+
+    it('Retry re-reads the row: a host id changed since the first cleanup is the one filtered on', async () => {
+      const NEW_ID = 'air-reinstalled:nnnnnn'
+      let stuck = true
+      const gone = new Set<string>()
+      vi.mocked(api.listRemoteMembers).mockImplementation(async () =>
+        (stuck ? [member('mk1')] : [member('mk1'), member('new1', NEW_ID)]).filter((m) => !gone.has(m.mk)))
+      vi.mocked(api.endRemoteMember).mockImplementation(async (_h, mk) => { if (!stuck) gone.add(mk) })
+      const row = await openRow()
+      fireEvent.click(within(row).getByTestId('peer-team-toggle'))
+      await screen.findByTestId('peer-team-end-dialog')
+      fireEvent.click(screen.getByTestId('peer-team-end-confirm'))
+      await screen.findByTestId('peer-team-leftover')
+      stuck = false
+      airRow = { ...airRow, host_id: NEW_ID }
+      vi.mocked(api.endRemoteMember).mockClear()
+      fireEvent.click(await screen.findByTestId('peer-team-retry'))
+      await waitFor(() => expect(api.endRemoteMember).toHaveBeenCalledWith(M, 'new1'))
+      expect(api.endRemoteMember).not.toHaveBeenCalledWith(M, 'mk1')
+    })
+
     it('cancel changes nothing', async () => {
       const row = await openRow()
       fireEvent.click(within(row).getByTestId('peer-team-toggle'))

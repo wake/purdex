@@ -2259,5 +2259,6 @@
   "peers.team.leftover": "Consent for {{alias}} is off, but {{count}} member(s) are still live.",
   "peers.team.leftover_error": "Consent for {{alias}} is off, but members may still be live ({{details}}).",
   "peers.team.retry": "Retry ending",
-  "peers.team.row_gone": "Peer no longer listed: {{alias}}"
+  "peers.team.row_gone": "Peer no longer listed: {{alias}}",
+  "peers.team.leftover_gone": "Consent for {{alias}} is off, but the host could not be found, so members could not be confirmed ended."
 }
