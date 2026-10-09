@@ -254,3 +254,13 @@ func migrateRelayQuotaRev(db *sql.DB) error {
 	}
 	return nil
 }
+
+// migrateRelayOpBinding gives relay_ops the process binding of P6-2a: the pid and the tmux pane the op's session ran
+// in when the op opened. The table is deployed without them, so it is a column migration; an op from before reads
+// pid 0 / pane "" (a self op then falls back to its approval row's origin pid; a member op with pid 0 is refused).
+func migrateRelayOpBinding(db *sql.DB) error {
+	if err := ensureColumn(db, "relay_ops", "pid", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return ensureColumn(db, "relay_ops", "pane_id", "TEXT NOT NULL DEFAULT ''")
+}

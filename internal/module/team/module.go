@@ -377,6 +377,15 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("team: %w", err)
 	}
 	m.store = store
+	seen, err := store.LoadModHello(modSeenCap) // presence outlives a restart (P6-2a)
+	if err != nil {
+		return fmt.Errorf("team: %w", err)
+	}
+	m.mu.Lock()
+	for sid, h := range seen {
+		m.modSeen[sid] = h
+	}
+	m.mu.Unlock()
 	if m.responders == nil {
 		m.responders = wsResponders{events: c.Events}
 	}
