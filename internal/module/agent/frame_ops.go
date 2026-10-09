@@ -2239,12 +2239,12 @@ func pidIsAncestorOfWithCap(descendantPID, ancestorPID, maxDepth int) bool {
 // pruneDeadProxyRefs anyway, so dropping them with the row is
 // equivalent to letting prune detach them later.
 func candidateHasOwnedState(candidate store.Frame) bool {
-	return candidateHasOwnedStateIn(processStartTimeFn, candidate)
+	return candidateHasOwnedStateIn(func(pid int, _ string) (string, error) { return processStartTimeFn(pid) }, candidate)
 }
 
 // candidateHasOwnedStateIn is candidateHasOwnedState with the start-time lookup passed in: the sweep answers it from
 // its tick's process table, the hot path from the per-PID reader.
-func candidateHasOwnedStateIn(startTime func(pid int) (string, error), candidate store.Frame) bool {
+func candidateHasOwnedStateIn(startTime func(pid int, want string) (string, error), candidate store.Frame) bool {
 	for _, ref := range candidate.Subagents {
 		if !ref.IsProxy {
 			// Native ref → real owned state.
@@ -2255,7 +2255,7 @@ func candidateHasOwnedStateIn(startTime func(pid int) (string, error), candidate
 		if !isPidAliveFn(ref.SourcePID) {
 			continue
 		}
-		actualStart, sterr := startTime(ref.SourcePID)
+		actualStart, sterr := startTime(ref.SourcePID, ref.SourceStartTime)
 		if sterr != nil {
 			// Read error → defensive; treat as owned (don't drop
 			// state on uncertainty). Mirrors findProxyParent's

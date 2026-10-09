@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
@@ -62,7 +63,7 @@ func (m *Module) sweepOnce() error {
 			}
 			continue
 		}
-		startTime, err := procs.startTime(frame.PID)
+		startTime, err := procs.startTime(frame.PID, frame.ProcessStartTime)
 		if err != nil {
 			// Codex round 3 #R2 fix: identity unverifiable for this
 			// frame's owner — keep it as a survivor so the pane still
@@ -137,7 +138,7 @@ func (m *Module) sweepOnce() error {
 // Best-effort: any storage error / failed gate / failed Upsert / failed
 // DeleteIfUnchanged makes this candidate skip; next sweep tick (2s)
 // retries. No rollback on partial.
-func (m *Module) canonicalizePane(paneID string, broadcastTs int64, procs sweepProcs) {
+func (m *Module) canonicalizePane(paneID string, broadcastTs int64, procs *sweepProcs) {
 	if m.frames == nil {
 		return
 	}
@@ -157,7 +158,7 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64, procs sweepP
 		if !isPidAliveFn(candidate.PID) {
 			continue
 		}
-		actualStart, sterr := procs.startTime(candidate.PID)
+		actualStart, sterr := procs.startTime(candidate.PID, candidate.ProcessStartTime)
 		if sterr != nil || actualStart != candidate.ProcessStartTime {
 			continue
 		}
@@ -249,7 +250,7 @@ func (m *Module) canonicalizePane(paneID string, broadcastTs int64, procs sweepP
 			anyAncestor = parentStored
 			continue
 		}
-		actualAncestorStart, ancestorErr := procs.startTime(parentStored.PID)
+		actualAncestorStart, ancestorErr := procs.startTime(parentStored.PID, parentStored.ProcessStartTime)
 		if ancestorErr != nil || actualAncestorStart != parentStored.ProcessStartTime {
 			agentpkg.MetricPartialCanonicalizationCreated.Add(1)
 			canonicalizedAny = true
@@ -315,12 +316,12 @@ func (m *Module) broadcastProxyCanonicalized(reference store.Frame) {
 // only frames from a single pane (ListByPane), so cross-pane PID
 // collision is impossible.
 func (m *Module) findCanonicalAncestor(candidate store.Frame, framesByPID map[int]store.Frame) (store.Frame, bool) {
-	return m.findCanonicalAncestorIn(sweepProcs{}, candidate, framesByPID)
+	return m.findCanonicalAncestorIn(nil, candidate, framesByPID)
 }
 
 // findCanonicalAncestorIn is findCanonicalAncestor over a sweep's process view: each step of the PPID walk is answered
 // from the tick's table (no fork), and only a pid the table lacks is read singly.
-func (m *Module) findCanonicalAncestorIn(procs sweepProcs, candidate store.Frame, framesByPID map[int]store.Frame) (store.Frame, bool) {
+func (m *Module) findCanonicalAncestorIn(procs *sweepProcs, candidate store.Frame, framesByPID map[int]store.Frame) (store.Frame, bool) {
 	ppid, err := procs.ppid(candidate.PID)
 	if err != nil {
 		return store.Frame{}, false
@@ -337,7 +338,7 @@ func (m *Module) findCanonicalAncestorIn(procs sweepProcs, candidate store.Frame
 				return store.Frame{}, false
 			}
 			if isPidAliveFn(ancestor.PID) {
-				actualStart, sterr := procs.startTime(ancestor.PID)
+				actualStart, sterr := procs.startTime(ancestor.PID, ancestor.ProcessStartTime)
 				if sterr == nil && actualStart == ancestor.ProcessStartTime {
 					return ancestor, true
 				}
@@ -394,7 +395,7 @@ func uniquePaneIDs(frames []store.Frame) []string {
 // emit. Per-pane (not per-detach) so multiple stale refs in the same pane
 // coalesce into one broadcast — matches afterFrameCleared's per-frame
 // granularity.
-func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64, procs sweepProcs) {
+func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64, procs *sweepProcs) {
 	if m.frames == nil {
 		return
 	}
@@ -418,7 +419,7 @@ func (m *Module) pruneDeadProxyRefs(paneID string, broadcastTs int64, procs swee
 			if !isPidAliveFn(ref.SourcePID) {
 				shouldPrune = true // confirmed dead source
 			} else {
-				actualStart, sterr := procs.startTime(ref.SourcePID)
+				actualStart, sterr := procs.startTime(ref.SourcePID, ref.SourceStartTime)
 				if sterr != nil {
 					// Read error → keep, retry next sweep.
 					continue
@@ -575,12 +576,11 @@ func (m *Module) afterFrameCleared(frame store.Frame, reason string, exit *Exit)
 	return cleanupErr
 }
 
-// snapshotTimeout bounds the one process-table read of a sweep tick (a read is a sysctl on macOS and a /proc walk on
-// Linux; it only runs long when the machine is in trouble, and then the tick falls back instead of hanging).
-const snapshotTimeout = 3 * time.Second
+// snapshotTimeout bounds the one process-table read of a sweep tick. It is a var so a test can shorten it.
+var snapshotTimeout = 3 * time.Second
 
-// procTable is what a sweep asks of one process-table read: a pid's start text (what store.Frame.ProcessStartTime
-// holds) and its parent. *agentpkg.ProcessSnapshot is one; tests stage others.
+// procTable is what a sweep asks of one process-table read: a pid's start text and its parent.
+// *agentpkg.ProcessSnapshot is one; tests stage others.
 type procTable interface {
 	StartTime(pid int) (string, error)
 	PPID(pid int) (int, error)
@@ -595,44 +595,82 @@ var snapshotProcessesFn = func(ctx context.Context) (procTable, error) {
 	return snap, nil
 }
 
+// tableReading is set while a table read started by an earlier tick has not returned: a sysctl cannot be cancelled, so
+// a stuck one is abandoned (the tick falls back) and no second one is started until it comes back.
+var tableReading atomic.Bool
+
 // sweepProcs answers the process questions of ONE sweep tick. Until #2138 every one of them was its own `ps` fork - a
 // start time per frame, a parent per ancestor walked, a start time per proxy ref - about 15-25 forks a second on a busy
 // host; now they are answered from a single read of the table. The identity rules are unchanged (alive + start text
-// match; a read error keeps the frame): only where the answer comes from differs. A pid the table does not have (it
-// started after the read) is asked of the per-PID reader, and nothing else is, so a stale table can only ever cost one
-// read, never give a wrong answer for a pid it does not know. The zero value (no table) asks the per-PID readers for
-// everything, which is also what a failed table read leaves.
+// match; a read error keeps the frame): only where the answer comes from differs.
+//
+//   - A pid the table does not have (it started after the read) is asked of the per-PID reader, and only that pid.
+//   - The table's start text only ever CONFIRMS a frame. `ps -o lstart=` prints in the caller's locale and the table
+//     builds English text, so where they differ the table says nothing: the answer is the single per-PID read, which is
+//     what the sweep always did. A destructive decision (pid_reused, a prune, dropping owned state) is therefore never
+//     taken from the table's text alone, and in a non-English locale the sweep costs what it cost before instead of
+//     clearing every live frame.
+//   - The zero value (no table) asks the per-PID readers for everything, which is also what a failed or abandoned table
+//     read leaves.
+//
+// The table is a point-in-time view taken at the top of the tick, like the owner pass's, and liveness (a signal-0
+// probe) is asked live. A pid that exits and is reused between the two within one tick (milliseconds) would keep its
+// frame until the next tick, whose fresh table shows the new start text and clears it as pid_reused: the window is
+// bounded by one sweep interval and heals itself, and the old per-PID reads had the same shape at a finer grain.
 type sweepProcs struct{ table procTable }
 
 // sweepProcsFor reads the table for this tick - only if some frame is there to verify, so an idle daemon forks nothing.
-func (m *Module) sweepProcsFor(frames []store.Frame) sweepProcs {
+func (m *Module) sweepProcsFor(frames []store.Frame) *sweepProcs {
+	p := &sweepProcs{}
+	any := false
 	for _, f := range frames {
-		if !f.Verified {
-			continue
+		if f.Verified {
+			any = true
+			break
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
-		defer cancel()
-		table, err := snapshotProcessesFn(ctx)
-		if err != nil || table == nil {
-			return sweepProcs{}
-		}
-		return sweepProcs{table: table}
 	}
-	return sweepProcs{}
+	if !any || !tableReading.CompareAndSwap(false, true) {
+		return p
+	}
+	type result struct {
+		table procTable
+		err   error
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), snapshotTimeout)
+	defer cancel()
+	ch := make(chan result, 1)
+	go func() {
+		defer tableReading.Store(false)
+		table, err := snapshotProcessesFn(ctx)
+		ch <- result{table, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err == nil && r.table != nil {
+			p.table = r.table
+		}
+		return p
+	case <-ctx.Done():
+		return p
+	}
 }
 
-func (p sweepProcs) startTime(pid int) (string, error) {
+// startTime is pid's start text, given the text the caller expects (the frame's, the proxy ref's). The table settles it
+// only by agreeing; anything else is the per-PID read.
+func (p *sweepProcs) startTime(pid int, want string) (string, error) {
+	if p == nil {
+		return processStartTimeFn(pid)
+	}
 	if p.table != nil {
-		s, err := p.table.StartTime(pid)
-		if err == nil || !errors.Is(err, agentpkg.ErrNotInSnapshot) {
-			return s, err
+		if s, err := p.table.StartTime(pid); err == nil && s == want {
+			return s, nil
 		}
 	}
 	return processStartTimeFn(pid)
 }
 
-func (p sweepProcs) ppid(pid int) (int, error) {
-	if p.table != nil {
+func (p *sweepProcs) ppid(pid int) (int, error) {
+	if p != nil && p.table != nil {
 		ppid, err := p.table.PPID(pid)
 		if err == nil || !errors.Is(err, agentpkg.ErrNotInSnapshot) {
 			return ppid, err

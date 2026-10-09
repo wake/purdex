@@ -197,15 +197,13 @@ func TestSweep_Snapshot_StartTimeMismatchStillClearsAReusedPid(t *testing.T) {
 	m := newSweepTestModule(t)
 	seedCC(t, m, "%5", 100, "old-start")
 	var fc forkCounter
-	fc.install(t, map[int]bool{100: true}, nil, nil, &fakeTable{start: map[int]string{100: "new-start"}, ppid: map[int]int{100: 1}})
+	fc.install(t, map[int]bool{100: true}, map[int]string{100: "new-start"}, map[int]int{100: 1},
+		&fakeTable{start: map[int]string{100: "new-start"}, ppid: map[int]int{100: 1}})
 	if err := m.sweepOnce(); err != nil {
 		t.Fatal(err)
 	}
 	if frames, _ := m.frames.ListByPane("%5"); len(frames) != 0 {
 		t.Fatalf("frames = %+v, want the reused pid's frame cleared", frames)
-	}
-	if len(fc.startAsks) != 0 {
-		t.Fatalf("per-PID start asks %v", fc.startAsks)
 	}
 }
 
@@ -224,8 +222,8 @@ func TestSweep_Snapshot_AnUnreadableStartKeepsTheFrame(t *testing.T) {
 	}
 }
 
-// The prune pass answers the proxy source's identity from the table too.
-func TestSweep_Snapshot_PruneUsesTheTable(t *testing.T) {
+// The prune pass answers a proxy source's identity from the table when it agrees, and confirms a mismatch with the single read.
+func TestSweep_Snapshot_PruneConfirmsAMismatchBeforeDetaching(t *testing.T) {
 	m := newSweepTestModule(t)
 	if _, err := m.frames.Upsert(store.Frame{PaneID: "%5", AgentType: "cc", PID: 100, PPID: 1, ProcessStartTime: "t100",
 		Status: agentpkg.StatusIdle, StartedAt: 50, LastSeenAt: 50, Verified: true,
@@ -234,7 +232,7 @@ func TestSweep_Snapshot_PruneUsesTheTable(t *testing.T) {
 	}
 	var fc forkCounter
 	// pid 200 is alive but is now a different process (start text differs): the proxy ref is stale
-	fc.install(t, map[int]bool{100: true, 200: true}, nil, nil,
+	fc.install(t, map[int]bool{100: true, 200: true}, map[int]string{200: "other"}, nil,
 		&fakeTable{start: map[int]string{100: "t100", 200: "other"}, ppid: map[int]int{100: 1, 200: 1}})
 	if err := m.sweepOnce(); err != nil {
 		t.Fatal(err)
@@ -242,9 +240,6 @@ func TestSweep_Snapshot_PruneUsesTheTable(t *testing.T) {
 	frames, _ := m.frames.ListByPane("%5")
 	if len(frames) != 1 || len(frames[0].Subagents) != 0 {
 		t.Fatalf("frames = %+v, want the stale proxy ref pruned", frames)
-	}
-	if len(fc.startAsks) != 0 {
-		t.Fatalf("per-PID start asks %v", fc.startAsks)
 	}
 }
 
@@ -269,6 +264,100 @@ func TestSweep_Snapshot_OwnedStateCheckUsesTheTable(t *testing.T) {
 	}
 	if len(fc.startAsks) != 0 || len(fc.infoAsks) != 0 {
 		t.Fatalf("per-PID reads: start %v, info %v", fc.startAsks, fc.infoAsks)
+	}
+}
+
+// The table's start text is only ever used to CONFIRM a frame. `ps -o lstart=` prints in the caller's locale and the
+// table builds English text, so in a non-English locale every text would differ though no pid was reused: a mismatch
+// is settled by the single per-PID read (what the sweep always did), never taken as pid reuse by itself.
+func TestSweep_Snapshot_ATextThatDiffersOnlyInLocaleIsNotPidReuse(t *testing.T) {
+	m := newSweepTestModule(t)
+	seedCC(t, m, "%5", 100, "五 10月/ 9 13:09:20 2026") // stored by a ps that printed Chinese
+	var fc forkCounter
+	fc.install(t, map[int]bool{100: true}, map[int]string{100: "五 10月/ 9 13:09:20 2026"}, map[int]int{100: 1},
+		&fakeTable{start: map[int]string{100: "Fri Oct  9 13:09:20 2026"}, ppid: map[int]int{100: 1}})
+	if err := m.sweepOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if frames, _ := m.frames.ListByPane("%5"); len(frames) != 1 {
+		t.Fatalf("frames = %+v, want the live frame kept (the per-PID read agrees with it)", frames)
+	}
+	if len(fc.startAsks) == 0 {
+		t.Fatal("the mismatch was not settled by a per-PID read")
+	}
+	for _, pid := range fc.startAsks {
+		if pid != 100 {
+			t.Fatalf("per-PID start asks %v, want only pid 100", fc.startAsks)
+		}
+	}
+}
+
+// ... and a table mismatch that the per-PID read also shows is real reuse.
+func TestSweep_Snapshot_AMismatchConfirmedByThePerPidReadIsReuse(t *testing.T) {
+	m := newSweepTestModule(t)
+	seedCC(t, m, "%5", 100, "old-start")
+	var fc forkCounter
+	fc.install(t, map[int]bool{100: true}, map[int]string{100: "new-start"}, map[int]int{100: 1},
+		&fakeTable{start: map[int]string{100: "new-start"}, ppid: map[int]int{100: 1}})
+	if err := m.sweepOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if frames, _ := m.frames.ListByPane("%5"); len(frames) != 0 {
+		t.Fatalf("frames = %+v, want the reused pid's frame cleared", frames)
+	}
+}
+
+// ... and when that confirming read fails, the frame stays (no destructive cleanup on uncertainty).
+func TestSweep_Snapshot_AMismatchTheConfirmingReadCannotSettleKeepsTheFrame(t *testing.T) {
+	m := newSweepTestModule(t)
+	seedCC(t, m, "%5", 100, "old-start")
+	var fc forkCounter
+	fc.install(t, map[int]bool{100: true}, map[int]string{}, map[int]int{100: 1}, // the per-PID read fails for 100
+		&fakeTable{start: map[int]string{100: "new-start"}, ppid: map[int]int{100: 1}})
+	if err := m.sweepOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if frames, _ := m.frames.ListByPane("%5"); len(frames) != 1 {
+		t.Fatalf("frames = %+v, want the frame kept", frames)
+	}
+}
+
+// A table read that does not come back in time is abandoned: the tick goes on over the per-PID reads, and the next tick
+// does not start a second read while the first is still stuck.
+func TestSweep_Snapshot_AHungReadFallsBackAndIsNotStackedUp(t *testing.T) {
+	m := newSweepTestModule(t)
+	seedCC(t, m, "%5", 100, "t100")
+	var fc forkCounter
+	fc.install(t, map[int]bool{100: true}, map[int]string{100: "t100"}, map[int]int{100: 1}, nil)
+	release := make(chan struct{})
+	defer close(release)
+	var reads atomic.Int32
+	snapshotProcessesFn = func(context.Context) (procTable, error) {
+		reads.Add(1)
+		<-release // a sysctl that never returns
+		return nil, errors.New("late")
+	}
+	orig := snapshotTimeout
+	snapshotTimeout = 50 * time.Millisecond
+	defer func() { snapshotTimeout = orig }()
+
+	for i := 0; i < 3; i++ {
+		done := make(chan error, 1)
+		go func() { done <- m.sweepOnce() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("tick %d hung on the table read", i)
+		}
+	}
+	if frames, _ := m.frames.ListByPane("%5"); len(frames) != 1 {
+		t.Fatalf("frames = %+v, want the frame kept via the per-PID path", frames)
+	}
+	if reads.Load() != 1 {
+		t.Fatalf("table reads started = %d, want 1 (no second worker while the first is stuck)", reads.Load())
 	}
 }
 
