@@ -888,7 +888,10 @@ function startWrite($, p) {
       if (s.turnRunning) {
         await unlockRelay($, p)
         p.lockTried = false
-        s.writeDeferred = p
+        if (s.pending !== p || s.state !== 'approved') return
+        // that turn may have ended while the unlock was out (its turn.complete found nothing deferred): go on at once
+        if (s.turnRunning) s.writeDeferred = p
+        else startWrite($, p)
         return
       }
     }
