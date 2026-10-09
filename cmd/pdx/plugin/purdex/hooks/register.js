@@ -962,6 +962,17 @@ function claimLater($) {
   later($, 0, () => claim($, gen))
 }
 
+// compactedLater reports a compaction the mod did NOT intercept (P7-2, spec §8.5): from a timer, never awaited, so the
+// compaction never waits for it. Whatever the role (coordinator decision 12: the first hello may answer before the member
+// row exists), the daemon decides whether the lead is told (a member's auto one only). The session id is read in the timer.
+function compactedLater($, trigger) {
+  if (trigger !== 'auto' && trigger !== 'manual') return
+  later($, 0, async () => {
+    const sid = await $.session.id()
+    await pdx($, ['relay', 'compacted', '--session', sid, '--trigger', trigger], CALL_TIMEOUT_MS)
+  })
+}
+
 // submit sends a prompt of the mod's; a prompt that did not enter — the
 // call rejected, or a hook beneath dropped it — throws, since no turn of it
 // will ever start.
@@ -1245,6 +1256,7 @@ export function register(on) {
     if (!s.interactive || e.agentId || e.trigger === 'precompute') return next(e)
     if (s.state === 'approved') {
       if (e.trigger === 'auto') return { skip: SKIP_COMPACT }
+      compactedLater($, e.trigger)
       return next(e)
     }
     if (s.state === 'awaiting' && s.pending) {
@@ -1256,6 +1268,7 @@ export function register(on) {
       toIdle($) // the begin still out answers for a gone generation: its op is cancelled{abandoned}
     }
     s.lastAskPct = undefined // after a compaction the next ask needs ≥ threshold again
+    compactedLater($, e.trigger)
     return next(e)
   })
 

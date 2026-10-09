@@ -456,7 +456,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
 	mux.HandleFunc("POST /api/relay/ops/{id}/claim", m.handleRelayClaim)
 	mux.HandleFunc("POST /api/relay/ops/{id}/seen", m.handleRelaySeen)
-	mux.HandleFunc("GET /api/relay/prompts", m.handleRelayPrompts) // P9a, spec §8.8
+	mux.HandleFunc("POST /api/relay/compacted", m.handleRelayCompacted) // P7-2
+	mux.HandleFunc("GET /api/relay/prompts", m.handleRelayPrompts)      // P9a, spec §8.8
 	// P8a 分流 routes (spec §6.6); TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/ask/begin", m.handleAskBegin)
 	mux.HandleFunc("GET /api/ask/wait/{id}", m.handleAskWait)

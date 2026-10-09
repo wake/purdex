@@ -340,3 +340,42 @@ test('a turn that starts while the lock call is out is unlocked and the write wa
   expect(f.submits.length).toBe(1)
   expect(f.order.indexOf('submit')).toBeGreaterThan(f.order.lastIndexOf('pdx relay lock ' + OPID + ' --session sid-old'))
 })
+
+// ---- P7-2: the mod reports every compaction it does not intercept ----
+const MSGS = [{ role: 'user' as const, text: 'hi', toolUses: [] }]
+const compactOf = ($: any, trigger: string) => $.session.compact({ trigger, messages: MSGS })
+
+for (const role of ['none', 'member', 'lead']) {
+  test(`an auto compaction in idle reports once from a timer, whatever the role (${role})`, async ($, on) => {
+    const f = memberWorld(on, role)
+    await start($, f)
+    expect(await compactOf($, 'auto')).toEqual({ messages: MSGS })
+    expect(calls(f, 'compacted')).toEqual([]) // from a timer, not inside the hook
+    await f.clock.advance(10)
+    expect(calls(f, 'compacted')).toEqual(['relay compacted --session sid-old --trigger auto'])
+  })
+}
+
+test('a manual compaction is reported too (the daemon decides); a precompute is not', async ($, on) => {
+  const f = memberWorld(on, 'member')
+  await start($, f)
+  await compactOf($, 'manual')
+  await compactOf($, 'precompute')
+  await f.clock.advance(10)
+  expect(calls(f, 'compacted')).toEqual(['relay compacted --session sid-old --trigger manual'])
+})
+
+// Mutation gate: await the report inside the hook → the compaction is still pending while the report is out → red.
+test('the compaction never waits for the report', async ($, on) => {
+  let release: (r: R) => void = () => {}
+  const gate = new Promise<R>((r) => { release = r })
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'compacted' ? (gate as any) : undefined))
+  await start($, f)
+  let done = false
+  const p = compactOf($, 'auto').then((r: any) => { done = true; return r })
+  await f.clock.advance(10)
+  expect(done).toBe(true) // the report is out and unanswered
+  expect(calls(f, 'compacted').length).toBe(1)
+  release({ exitCode: 0, stdout: '{"noticed":true}' })
+  expect(await p).toEqual({ messages: MSGS })
+})

@@ -20,6 +20,18 @@ type RelaySeenRequest struct {
 	SessionID string `json:"session_id"`
 }
 
+// RelayCompactedRequest is POST /api/relay/compacted (P7-2): a session's mod reports a compaction it did not intercept.
+// Trigger is "auto" or "manual"; the daemon decides whether anyone is told.
+type RelayCompactedRequest struct {
+	SessionID string `json:"session_id"`
+	Trigger   string `json:"trigger"`
+}
+
+// RelayCompactedResponse says whether the lead was told.
+type RelayCompactedResponse struct {
+	Noticed bool `json:"noticed"`
+}
+
 // RelayClaimResponse answers claim: the op and who leads the member's team.
 type RelayClaimResponse struct {
 	Op   RelayOp    `json:"op"`

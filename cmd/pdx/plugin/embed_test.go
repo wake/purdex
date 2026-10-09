@@ -601,6 +601,9 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		"**The relay quota is the user's.**", "you never ask for more quota", "a lead sees its own in the header of `pdx team`, read-only",
 		// The team's member limit is the user's too.
 		"**The team's member limit is the user's.**", "you never ask for a larger team", "`members M/N` in the header of `pdx team`",
+		// P7-1 / P7-2: the notices' texts are the daemon's, word for word (spec §8.5).
+		"`[pdx team] member <address> [<ref>]「<title>」已用 <N>%，目前閒置。要接力請執行：pdx relay _<ref>`",
+		"`[pdx team] <ref> 已自動壓縮（lead 未在 70% 時接力）`",
 		// P6-6: a member never sees the control message; it writes the handoff with one Write when the prompt arrives.
 		"When the lead relays you, the Purdex mod does it all", "write the handoff file it names with **one `Write`** and answer `HANDOFF-WRITTEN`", "your old ref still reaches you",
 		// U24 (adopt spec D-U24-2/3): the commands, the foreground wait and the ambiguity hint.
@@ -610,6 +613,9 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md lacks %q", want)
 		}
+	}
+	if strings.Contains(s, "context 已用 NN%") {
+		t.Error("SKILL.md still paraphrases the 70% notice (P7-2: the text must match spec §8.5)")
 	}
 	if strings.Contains(s, "The member-relay command is not available yet") {
 		t.Error("SKILL.md still says the member-relay command is not available (P6-5 brought it)")
