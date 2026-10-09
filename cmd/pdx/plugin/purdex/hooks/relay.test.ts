@@ -2554,3 +2554,17 @@ test('two /lead at once, the team query slow: one query, one prompt', async ($, 
   expect(f.submits.length).toBe(1)
   expect(f.argvs.filter((x) => x[1] === 'team').length).toBe(1)
 })
+
+// codex attack 3: an ask whose turn never reports (a prompt cancelled before its turn) lets go after 10 minutes.
+// Mutation gate: no expiry → the second /lead after 10 minutes is still refused → red.
+test('a /lead whose turn never ends is not refused for good: after 10 minutes it asks again', async ($, on) => {
+  const f = leadWorld(on, () => NOT_LEAD)
+  await start($, f)
+  expect((await leadCmd($, '')).text).toContain('已請這個 session 申請 lead')
+  await f.clock.advance(50)
+  expect((await leadCmd($, '')).text).toBe('已申請過 lead，等待回應中')
+  await f.clock.advance(10 * 60_000)
+  expect((await leadCmd($, '')).text).toContain('已請這個 session 申請 lead')
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(2)
+})

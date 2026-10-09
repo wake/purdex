@@ -496,6 +496,7 @@ async function begin($, sid, gen, u, adopted) {
 
 const LEAD_UNREACHABLE = 'daemon 連不上，無法申請 lead'
 const LEAD_NOTE_MAX_BYTES = 200
+const LEAD_ASK_TTL_MS = 10 * 60_000
 const LEAD_RELAY_BUSY = '接力進行中，等接力完成後再 /lead'
 const LEAD_PENDING = '已申請過 lead，等待回應中'
 const LEAD_UNREADABLE = 'pdx team 的回應無法判讀，沒有申請 lead；稍後再試'
@@ -534,11 +535,14 @@ function leadPrompt(note, nonce) {
 async function leadCommand($, e) {
   // A relay in flight owns the turn order (its write, /clear and seed turns): a /lead prompt now would be
   // held with the user's prompts, or slip between its turns.
+  const at = await $.clock.now().catch(() => 0)
   if (s.state !== 'idle') return { text: LEAD_RELAY_BUSY }
-  if (s.leadAsk && s.leadAsk.gen === s.gen) return { text: LEAD_PENDING }
-  // Taken before any await, with a token of its own: only the attempt that holds it clears it, and only
-  // the turn that carries its nonce ends it.
-  const ask = { gen: s.gen, nonce: 'lead-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), turnId: undefined }
+  // An ask the turn events never ended (a prompt cancelled before its turn, a turn without text) lets go
+  // after LEAD_ASK_TTL_MS, so a /lead is never refused for good.
+  if (s.leadAsk && s.leadAsk.gen === s.gen && at - s.leadAsk.at < LEAD_ASK_TTL_MS) return { text: LEAD_PENDING }
+  // Taken before any further await, with a token of its own: only the attempt that holds it clears it,
+  // and only the turn that carries its nonce ends it.
+  const ask = { at, gen: s.gen, nonce: 'lead-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), turnId: undefined }
   s.leadAsk = ask
   const drop = () => { if (s.leadAsk === ask) s.leadAsk = undefined }
   let sid
