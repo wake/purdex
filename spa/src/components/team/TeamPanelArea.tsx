@@ -72,6 +72,7 @@ export function TeamPanelArea() {
           team={team}
           activeTabId={activeTabId}
           expanded={expanded}
+          width={expanded ? undefined : draft ?? width}
           onSetMode={(mode) => useTeamUiStore.getState().setPanelMode(team.teamKey, mode)}
           onToggleExpanded={() => useTeamUiStore.getState().setPanelExpanded(!expanded)}
           onOpen={(sessionId) => display.onOpenSeat(team.teamKey, sessionId)}

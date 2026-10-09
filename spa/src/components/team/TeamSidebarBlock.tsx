@@ -6,8 +6,7 @@
 // The fold shares the team's `collapsed` state with the TabBar group (useTeamUiStore), nothing is kept here.
 import type { ReactNode } from 'react'
 import { UsersThree } from '@phosphor-icons/react'
-import type { TeamCapsule, TeamDisplay, TeamSeatView } from './team-display'
-import { TeamGroupLabel } from './TeamTabGroup'
+import type { TeamDisplay, TeamSeatView } from './team-display'
 import { TeamMemberBeads } from './TeamMemberBeads'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -32,10 +31,7 @@ function MemberLightDot({ member }: { member: TeamSeatView }) {
 interface Props {
   team: TeamDisplay
   teamKey: string
-  color: string
   collapsed: boolean
-  /** The label capsule above the lead row: the tab bar's own, here without the `+N` (the beads show the members). */
-  capsule: TeamCapsule
   members: TeamSeatView[]
   /** The lead row itself. */
   children: ReactNode
@@ -43,19 +39,15 @@ interface Props {
   activeTabId: string | null
 }
 
-export function TeamSidebarBlock({ team, teamKey, color, collapsed, capsule, members, children, ghost = false, activeTabId }: Props) {
+export function TeamSidebarBlock({ team, teamKey, collapsed, members, children, ghost = false, activeTabId }: Props) {
   const t = useI18nStore((s) => s.t)
   const showBeads = !collapsed
   return (
     <div data-testid={ghost ? 'team-ghost-lead' : 'team-lead-block'} data-team-key={teamKey} className="flex flex-col gap-0.5">
-      <div data-testid="team-sidebar-label" className={`flex items-center mx-2 pl-[18px] ${ghost ? 'opacity-50' : ''}`}>
-        <TeamGroupLabel mark={capsule} hidden={0} onToggle={team.onToggleCollapse} />
-      </div>
       {children}
       {showBeads && (
         <TeamMemberBeads
           teamKey={teamKey}
-          color={color}
           members={members}
           activeTabId={activeTabId}
           withHost={team.beadHost}

@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.665] - 2026-10-10
+
+> 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。跨主機的「宣告指令種類」要**兩台都部署**才會生效（被收進 team 的那台也要升級）。
+
+### Added：被收進 team 的那台會通知自己的 session — X3d-2（#2291，A 線）
+
+- 被別台 lead 收進、放出、換 lead、team 結束或在本機結束時，這台會以 lead 的身分把固定文字的通知送進那個 session；文字只填 lead 位址與 team 名稱（投遞當下讀，改名後也是新名字），不用對方傳來的文字。送不到會退避重試、不放棄；session 已不在或狀態已變就作廢並記 log。
+
+### Added：開始接受跨主機 team 指令 — X3d-3（#2294，A 線）
+
+- 這台對配對主機宣告可接受「收進、放出、結束、換 lead、撤回」五種 team 指令；lead 那台要先讀到宣告才會送。開 member（spawn）與 kill 仍不接受（之後的 X4a）。
+
+### Added：mod 可以查自己的 team 角色 — TI-5a（#2295，介面線）
+
+- mod socket 新增 `GET /mod/v1/team?session_id=…`（只在本機 socket，不在網路埠）：回這個 session 是 lead／member／都不是，lead 另回 member 數（含別台的）與 team 短標籤。之後 mod 底部的「lead 模式 · N 位 member」會用它。
+
+### Changed：team 介面第二輪 — TI-6（#2284，介面線）
+
+- 上方列與左側清單拿掉 team 膠囊、上方列不再有收合按鈕（跟側欄共用狀態）；分頁群組陰影提供四種試用樣式（設定 → 介面 → 分頁，預設第三種）。
+
+### Docs
+
+- 工作簿 spec v2（#2296）：整理改由 session 自己的 mod 呼叫 Haiku、待辦清單與完成紀錄（只讀）、手動「分岔重整」、iOS 詳情頁；新 prompt 文件（prompt_ver 2）。
+
 ## [1.0.0-alpha.664] - 2026-10-10
 
 > 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`。部署後 team.db 的 teams 表多一欄 `team_color`（自動加，可重入）。

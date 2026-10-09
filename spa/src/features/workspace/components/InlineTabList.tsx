@@ -68,9 +68,7 @@ export function InlineTabList({
               key={id}
               team={team}
               teamKey={beads.teamKey}
-              color={beads.color}
               collapsed={beads.collapsed}
-              capsule={beads.capsule}
               members={beads.members}
               activeTabId={activeTabId}
             >

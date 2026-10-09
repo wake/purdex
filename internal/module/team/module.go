@@ -455,6 +455,7 @@ func (m *Module) Init(c *core.Core) error {
 	// The session workbook reads one chain root and one team seat at a time.
 	c.Registry.Register(team.LineageRootKey, store)
 	c.Registry.Register(team.SeatReaderKey, store)
+	c.Registry.Register(team.ModReadKey, team.ModReader(store)) // the mod socket's team read (TI-5a)
 	c.Registry.Register(team.ApprovalFeedKey, team.ApprovalFeed(m))
 	c.Registry.Register(team.ApprovalEventsKey, team.ApprovalEvents(m))
 	return nil

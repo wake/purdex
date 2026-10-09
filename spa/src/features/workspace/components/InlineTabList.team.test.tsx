@@ -100,43 +100,29 @@ describe('InlineTabList — team beads', () => {
     expect(within(screen.getByTestId('team-lead-block')).getAllByTestId('team-bead')).toHaveLength(3)
   })
 
-  it('label capsule above the lead row: text and tooltip from the label / name, no +N, click toggles the shared collapse', () => {
+  it('no label capsule in the left list (round 2): live lead block, with and without a team label / name', () => {
     seedScene({ ...base, teamLabel: '發版', teamName: 'Release train' })
     mount()
-    const capsule = within(screen.getByTestId('team-lead-block')).getByTestId('team-group-label')
-    expect(capsule.textContent).toBe('發版')
-    expect(capsule.getAttribute('title')).toBe('Release train (發版)')
-    // Above the lead's row.
     const block = screen.getByTestId('team-lead-block')
-    expect(capsule.compareDocumentPosition(within(block).getAllByTestId('inline-tab-row')[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    fireEvent.click(capsule)
-    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true) // the top bar's state
-    expect(screen.queryByTestId('team-group-hidden')).toBeNull() // no +N in the sidebar (the beads show the members)
-    expect(screen.getByTestId('team-sidebar-collapsed')).toBeInTheDocument()
-    fireEvent.click(screen.getByTestId('team-group-label'))
+    expect(within(block).queryByTestId('team-group-label')).toBeNull()
+    expect(screen.queryByTestId('team-sidebar-label')).toBeNull()
+    expect(block.textContent).not.toContain('發版')
+    // collapse still comes from the collapse line / blank bead area (P9), and the top bar's state is the same one
+    fireEvent.click(within(block).getByTestId('team-beads'))
+    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true)
+    expect(screen.queryByTestId('team-group-label')).toBeNull()
+    fireEvent.click(screen.getByTestId('team-sidebar-collapsed'))
     expect(useTeamUiStore.getState().collapsed[KEY]).toBeUndefined()
     expect(screen.getAllByTestId('team-bead')).toHaveLength(3)
   })
 
-  it('an empty label shows the lead title cut to 10 wide, the tooltip carrying the whole title', () => {
-    seedScene(base)
-    const t = useTeamRosterStore.getState().byHost[HOST][0]
-    act(() => useTeamRosterStore.setState({ byHost: { [HOST]: [{ ...t, lead: { ...t.lead, title: 'abcdefghijklmnop' } }] } }))
-    mount()
-    const capsule = screen.getByTestId('team-group-label')
-    expect(capsule.textContent).toBe('abcdefghi…')
-    expect(capsule.getAttribute('title')).toContain('abcdefghijklmnop')
-  })
-
-  it('the ghost lead row has the same capsule, faded like the ghost; clicking it toggles collapse', () => {
+  it('no label on the ghost lead row either', () => {
     seedScene({ members, tabs: [['plain', null]], workspaces: [{ id: 'w1', tabs: ['plain'] }], teamLabel: '發版' })
     act(() => useTeamUiStore.getState().setGhostWorkspace(KEY, 'w1'))
     mount()
-    const capsule = within(screen.getByTestId('team-ghost-lead')).getByTestId('team-group-label')
-    expect(capsule.textContent).toBe('發版')
-    expect(capsule.closest('[data-testid="team-sidebar-label"]')!.className).toMatch(/opacity-/)
-    fireEvent.click(capsule)
-    expect(useTeamUiStore.getState().collapsed[KEY]).toBe(true)
+    const ghost = screen.getByTestId('team-ghost-lead')
+    expect(within(ghost).queryByTestId('team-group-label')).toBeNull()
+    expect(ghost.textContent).not.toContain('發版')
   })
 
   it('beads in team order, wrap to rows', () => {
@@ -217,6 +203,34 @@ describe('InlineTabList — team beads', () => {
     stop()
     expect(useTeamUiStore.getState().memberOrder[KEY]).toEqual(['A', 'B', 'C'])
     expect(wsTabs('w1')).toEqual(['lead', 'ma', 'mc', 'plain'])
+  })
+
+  it('the bead drag insert line is neutral (accent token), never the team color - live and ghost', () => {
+    const check = (block: HTMLElement) => {
+      const bd = within(block).getAllByTestId('team-bead')
+      fireEvent.dragStart(bd[0], dt())
+      fireEvent.dragOver(bd[2], { ...dt(), clientX: 0 })
+      const line = within(block).getByTestId('team-bead-insert')
+      expect(line.className).toContain('bg-accent-base')
+      expect(line.getAttribute('style') ?? '').not.toMatch(/background/)
+      fireEvent.dragEnd(bd[0])
+    }
+    seedScene(base)
+    mount()
+    check(screen.getByTestId('team-lead-block'))
+  })
+
+  it('the ghost bead insert line is neutral too', () => {
+    seedScene({ members, tabs: [['plain', null]], workspaces: [{ id: 'w1', tabs: ['plain'] }] })
+    act(() => useTeamUiStore.getState().setGhostWorkspace(KEY, 'w1'))
+    mount()
+    const block = screen.getByTestId('team-ghost-lead')
+    const bd = within(block).getAllByTestId('team-bead')
+    fireEvent.dragStart(bd[0], dt())
+    fireEvent.dragOver(bd[2], { ...dt(), clientX: 0 })
+    const line = within(block).getByTestId('team-bead-insert')
+    expect(line.className).toContain('bg-accent-base')
+    expect(line.getAttribute('style') ?? '').not.toMatch(/background/)
   })
 
   it('drop outside the block snaps back', () => {

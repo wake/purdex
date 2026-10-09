@@ -384,6 +384,12 @@
   "settings.appearance.tab_position.left_hint": "左側／都顯示會讓側邊欄維持寬版",
   "settings.appearance.team_bead_host.label": "member 顆粒顯示主機圖示",
   "settings.appearance.team_bead_host.desc": "左側分頁列裡，team 每位 member 的顆粒旁多顯示它所在主機的圖示",
+  "settings.appearance.group_shadow.label": "（試用）群組陰影",
+  "settings.appearance.group_shadow.desc": "上方分頁列裡，team 群組各分頁的浮起樣式。挑定樣式前的暫時設定",
+  "settings.appearance.group_shadow.v0": "現行",
+  "settings.appearance.group_shadow.v1": "加柔光",
+  "settings.appearance.group_shadow.v2": "往左下延伸",
+  "settings.appearance.group_shadow.v3": "整圈浮起",
   "nav.collapse_locked_tooltip": "當分頁顯示在左側時，側邊欄會維持寬版",
 
   "page.newtab.title": "新增分頁",

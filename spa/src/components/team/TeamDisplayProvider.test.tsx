@@ -62,11 +62,11 @@ const tabs = [tab('lead', 'lead-tm'), tab('ma', 'a-tm'), tab('mb', 'b-tm'), tab(
 const roster = () => team([mem('A', 1, 'a-tm'), mem('B', 2, 'b-tm'), mem('C', 3, 'c-tm')])
 
 describe('TeamDisplayProvider — marks, fold, panel', () => {
-  it('tabMark: the lead and members of a team get its colour, label and role; a non-team tab none', () => {
+  it('tabMark: the lead and members of a team get its colour and role; a non-team tab none', () => {
     render(<TeamDisplayProvider><Probe /></TeamDisplayProvider>)
     seed([roster()], tabs)
     const lead = display!.tabMark('lead')!
-    expect(lead).toMatchObject({ teamKey: KEY, role: 'lead', color: teamColor(fnv1a32('t1') % 8), label: 'title L', collapsed: false, hidden: false, hiddenCount: 0 })
+    expect(lead).toMatchObject({ teamKey: KEY, role: 'lead', color: teamColor(fnv1a32('t1') % 8), collapsed: false, hidden: false })
     expect(display!.tabMark('ma')).toMatchObject({ role: 'member', teamKey: KEY })
     expect(display!.tabMark('plain')).toBeNull()
     expect([display!.tabMark('lead')!.first, display!.tabMark('lead')!.last]).toEqual([true, false])
@@ -74,19 +74,18 @@ describe('TeamDisplayProvider — marks, fold, panel', () => {
     expect([display!.tabMark('mb')!.first, display!.tabMark('mb')!.last]).toEqual([false, true])
   })
 
-  it('the team label / name win over the lead title; the tooltip carries both', () => {
+  it('the team name wins over the lead title in the panel header', () => {
     render(<TeamDisplayProvider><Probe /></TeamDisplayProvider>)
     seed([team([mem('A', 1, 'a-tm')], { team_name: 'Release train', team_label: '發版' })], tabs)
-    expect(display!.tabMark('lead')).toMatchObject({ label: '發版', tooltip: 'Release train (發版)' })
     expect(display!.panelTeam('lead')).toMatchObject({ name: 'Release train', unnamed: false })
   })
 
-  it('a collapsed team hides its member tabs: they are marked hidden, the lead counts them, first/last skip them', () => {
+  it('a collapsed team hides its member tabs: they are marked hidden, first/last skip them', () => {
     render(<TeamDisplayProvider><Probe /></TeamDisplayProvider>)
     seed([roster()], tabs)
     act(() => useTeamUiStore.getState().setCollapsed(KEY, true))
     expect(display!.tabMark('ma')).toMatchObject({ hidden: true, collapsed: true })
-    expect(display!.tabMark('lead')).toMatchObject({ collapsed: true, hiddenCount: 2, first: true, last: true })
+    expect(display!.tabMark('lead')).toMatchObject({ collapsed: true, first: true, last: true })
   })
 
   it('sidebarHidden is the member tabs in a run behind their lead in the given tab list', () => {
@@ -126,7 +125,7 @@ describe('TeamDisplayProvider — marks, fold, panel', () => {
     act(() => useTeamUiStore.getState().setGhostWorkspace(KEY, 'w1'))
     const ghosts = display!.ghostLeads('w1')
     expect(ghosts).toHaveLength(1)
-    expect(ghosts[0]).toMatchObject({ teamKey: KEY, lead: { sessionId: 'L', tabId: null }, label: 'title L' })
+    expect(ghosts[0]).toMatchObject({ teamKey: KEY, lead: { sessionId: 'L', tabId: null } })
     expect(ghosts[0].members.map((m) => m.sessionId)).toEqual(['A', 'B', 'C'])
     expect(display!.ghostLeads('w2')).toEqual([])
     seed([roster()], tabs) // the lead has a tab again: no ghost
