@@ -62,7 +62,7 @@ export function renderInlineTabIcon({
   }
 
   // error already louder than unread — don't also stack a pip. The 「等待核准」
-  // hand does not: it is a waiting light, and useAgentStore marks waiting unread.
+  // hand does not: it is a waiting light, which still gets the pip when unread.
   const showDotUnreadPip = isUnread && !isActive && status !== 'error'
 
   if (tabIndicatorStyle === 'dot') {
@@ -103,7 +103,7 @@ export function renderInlineTabIcon({
   }
 
   // badge: icon + small overlay dot. Unread tints the overlay dot red
-  // instead of stacking a separate pip (parity with TabIcon badge mode).
+  // (running / idle only; waiting stays yellow) instead of stacking a separate pip (parity with TabIcon badge mode).
   return (
     <span
       data-testid="inline-tab-dot-overlay"

@@ -16,8 +16,8 @@ interface Props {
    * `status` says, which may not have caught up yet — plus a warning-coloured HandPalm, with 「等待核准」 as the
    * tooltip and accessible name. The light keeps its exact geometry (a request arriving or being answered never
    * moves or resizes it): overlay keeps the waiting dot and adds the hand immediately to its left; replace draws the
-   * hand inside the dot's own 8×8 slot. Unread marks it like any waiting light (overlay: the dot turns red; replace:
-   * the caller's pip) — the hand itself stays the warning colour.
+   * hand inside the dot's own 8×8 slot. Unread never overrides ask: in overlay (single-dot) the waiting dot stays yellow even when unread (unread tints
+   * only running / idle); replace shows the caller's separate pip. The hand itself stays the warning colour.
    */
   awaitingApproval?: boolean
 }
@@ -70,11 +70,13 @@ export function TabStatusIndicator({ status, mode, isActive, isUnread = false, a
       )
     }
 
-    const color = isUnread ? UNREAD_COLOR : STATUS_COLORS[shown]
+    // Unread never overrides ask: a waiting dot stays yellow; unread tints only running / idle.
+    const tintUnread = isUnread && shown !== 'waiting'
+    const color = tintUnread ? UNREAD_COLOR : STATUS_COLORS[shown]
     const dot = (
       <span
         data-testid="tab-status-indicator"
-        className={`rounded-full flex-shrink-0 ${isRunning && !isUnread ? 'animate-breathe' : ''}`}
+        className={`rounded-full flex-shrink-0 ${isRunning && !tintUnread ? 'animate-breathe' : ''}`}
         style={{
           width: `${OVERLAY_DOT.size}px`,
           height: `${OVERLAY_DOT.size}px`,

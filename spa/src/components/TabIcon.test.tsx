@@ -50,9 +50,9 @@ describe('TabIcon — awaiting approval', () => {
     expect(screen.getByTestId('tab-unread-pip').getAttribute('style')).toBe(plainPip)
   })
 
-  it('badge + unread: the dot turns red (as for any unread waiting light) and the hand stays beside it', () => {
+  it('badge + unread: the dot stays yellow (unread never overrides ask) and the hand stays beside it', () => {
     renderIcon('badge', { isUnread: true, awaitingApproval: true })
-    expect(screen.getByTestId('tab-status-indicator').style.backgroundColor).toBe('rgb(239, 68, 68)')
+    expect(screen.getByTestId('tab-status-indicator').style.backgroundColor).toBe('rgb(250, 204, 21)')
     expect(screen.getByTestId('tab-status-awaiting-hand').getAttribute('fill')).toBe('#facc15')
   })
 

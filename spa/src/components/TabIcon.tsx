@@ -66,7 +66,7 @@ export function TabIcon({
 
   // error warning diamond suppresses the overlayed unread pip on dot wrappers —
   // error itself is already a louder signal than unread. The 「等待核准」 hand
-  // does not: it is a waiting light, and useAgentStore marks waiting unread.
+  // does not: it is a waiting light, which still gets the pip when unread.
   const showDotUnreadPip = isUnread && !isActive && status !== 'error'
 
   if (tabIndicatorStyle === 'dot') {
@@ -100,7 +100,8 @@ export function TabIcon({
     )
   }
 
-  // Unread tints the badge dot red instead of overlaying a separate pip.
+  // Unread tints the badge dot red (running / idle only; a waiting light stays
+  // yellow — unread never overrides ask) instead of overlaying a separate pip.
   // Margins: badge `ml-px mr-[0.5px]`, non-badge `ml-[1.5px]` — picks up the
   // icon column alignment + a tiny trailing gap on retina. `lowdpi:` snaps
   // sub-pixel values back to integers below @2x. Subagent dots park at left:-4.
