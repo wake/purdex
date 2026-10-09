@@ -154,6 +154,7 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 	case ReportApplied:
 		m.logf("[team] relay op %s → %s%s", id, op.State, reasonSuffix(op))
 		m.afterReport(op)
+		m.handoverNoticeAsync(op) // only on Applied, never on a re-send (Noop)
 	case ReportNoop:
 		// The idempotent re-send is also the retry of the follow-ups: a
 		// title move or a row close that failed after the first report
