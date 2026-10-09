@@ -7,6 +7,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -64,8 +65,22 @@ func Normalise(s string, maxRunes int) string {
 	s = reQuote.ReplaceAllString(s, "")
 	s = reBullet.ReplaceAllString(s, "")
 	s = strings.NewReplacer("`", "", "**", "", "__", "").Replace(s)
+	s = strings.Map(plainRune, s)
 	s = strings.TrimSpace(reSpace.ReplaceAllString(s, " "))
 	return cutRunes(s, maxRunes)
+}
+
+// plainRune keeps a text honest on a lock screen: every kind of space (a line or paragraph separator included) becomes a
+// plain space, and control and format characters (direction marks such as RLO / LRI / PDI, zero-width marks, the BOM)
+// are dropped, so a title written by a session cannot reorder or hide the words around it.
+func plainRune(r rune) rune {
+	switch {
+	case unicode.IsSpace(r):
+		return ' '
+	case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+		return -1
+	}
+	return r
 }
 
 func cutRunes(s string, max int) string {
@@ -146,7 +161,10 @@ func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 		_ = json.Unmarshal(a.Payload, &p)
 		lead := Normalise(p.LeadTitle, maxNamedRunes)
 		if lead == "" {
-			lead = who
+			lead = Normalise(who, maxNamedRunes) // the origin's own label, written by the session too
+		}
+		if lead == "" {
+			lead = Normalise(a.Origin.Ref, maxNamedRunes)
 		}
 		member := Normalise(p.MemberTitle, maxNamedRunes)
 		if member == "" {

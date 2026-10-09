@@ -1,7 +1,7 @@
 // spa/src/lib/team/approval-format.ts — the strings the approval dialog and its toasts are built from
 // (lead-team spec §6.3, §6.5). Pure; the i18n `t` is passed in so lib code and tests do not depend on the
 // store's locale.
-import { memberRelayPayloadOf, type Approval, type ApprovalKind, type MemberRelayPayload, type Origin } from './types'
+import { clipForDisplay, memberRelayPayloadOf, type Approval, type ApprovalKind, type MemberRelayPayload, type Origin } from './types'
 
 export type T = (key: string, params?: Record<string, string | number>) => string
 
@@ -38,8 +38,11 @@ export function approvalKindLabel(t: T, kind: ApprovalKind): string {
  */
 export function memberRelayNames(a: Approval): { lead: string; member: string; pct: number; payload: MemberRelayPayload } {
   const payload = memberRelayPayloadOf(a)
-  const lead = payload.lead_title.trim() !== '' ? payload.lead_title.trim() : approvalSessionLabel(a.origin)
-  const member = payload.member_title.trim() !== '' ? payload.member_title.trim() : payload.member_ref
+  // The aliases are written by the sessions: control and direction characters are taken out BEFORE asking whether one is
+  // empty, or an alias made of nothing but them (an RLO) would win over the trusted fallback and then display as blank.
+  const plain = (s: string): string => clipForDisplay(s, Number.MAX_SAFE_INTEGER).trim()
+  const lead = plain(payload.lead_title) || plain(approvalSessionLabel(a.origin)) || plain(a.origin.ref)
+  const member = plain(payload.member_title) || plain(payload.member_ref)
   return { lead, member, pct: Math.round(payload.used_percentage), payload }
 }
 

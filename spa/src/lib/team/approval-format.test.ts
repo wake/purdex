@@ -55,6 +55,20 @@ describe('member_relay', () => {
     expect(memberRelayNames({ ...base, payload: { lead_title: '', member_title: '', member_ref: '_b', used_percentage: 0 } }))
       .toMatchObject({ lead: approvalSessionLabel(origin()), member: '_b', pct: 0 })
   })
+  it('an alias made only of control or direction characters falls back to the trusted name (it must not display blank)', () => {
+    const n = memberRelayNames({ ...base, payload: { lead_title: '\u202e', member_title: '\u200b \u2066', member_ref: '_b', used_percentage: 5 } })
+    expect(n.lead).toBe(approvalSessionLabel(origin()))
+    expect(n.member).toBe('_b')
+  })
+  it('a session-written origin label of only controls falls through to the ref', () => {
+    const n = memberRelayNames({ ...base, origin: origin({ title: '\u202e', name: '\u200b', ref: '_aaaaaa' }), payload: { lead_title: '', member_title: 'm', member_ref: '_b', used_percentage: 5 } })
+    expect(n.lead).toBe('_aaaaaa')
+  })
+  it('direction characters inside an alias are removed from what is shown', () => {
+    const n = memberRelayNames({ ...base, payload: { lead_title: 'a\u202eb', member_title: 'c\u2066d', member_ref: '_b', used_percentage: 5 } })
+    expect(n.lead).toBe('ab')
+    expect(n.member).toBe('cd')
+  })
   it('a payload of the wrong shape reads as empty strings and 0%', () => {
     const n = memberRelayNames({ ...base, payload: { lead_title: 5, member_title: null, used_percentage: Number.NaN } as never })
     expect(n.member).toBe('')

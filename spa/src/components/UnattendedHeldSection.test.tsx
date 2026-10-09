@@ -48,6 +48,11 @@ describe('UnattendedHeldSection', () => {
     expect(within(screen.getByTestId('held-row')).getByText(/iface-lead 要幫 member _b 接力/)).toBeInTheDocument()
   })
 
+  it('aliases made only of direction marks do not blank the line: the trusted names stand in', () => {
+    render(<UnattendedHeldSection rows={[{ hostId: H, a: memberRelay('m1', 1_000, { lead_title: '\u202e', member_title: '\u200b' }) }]} />)
+    expect(screen.getByTestId('held-row').textContent).toContain('mlab：iface-lead 要幫 member _b 接力')
+  })
+
   it('the English line says the same', () => {
     useI18nStore.getState().setLocale('en')
     render(<UnattendedHeldSection rows={[{ hostId: H, a: memberRelay('m1', 1_000) }]} />)

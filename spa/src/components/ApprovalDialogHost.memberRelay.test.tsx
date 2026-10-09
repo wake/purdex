@@ -81,6 +81,13 @@ describe('ApprovalDialogHost — member_relay', () => {
     expect(screen.getByText('purdex-iface-lead 要幫 member _bbbbbb 接力（context 10%）；member 額度用完，要核准嗎？')).toBeTruthy()
   })
 
+  it('aliases made only of direction marks do not blank the heading', () => {
+    render(<ApprovalDialogHost />)
+    open(memberRelay({ payload: { op_id: 'o', team_id: 't', lead_ref: '_a', lead_title: '\u202e', member_session_id: 'M', member_ref: '_bbbbbb', member_title: '\u200b', used_percentage: 30 } }))
+    expect(screen.getByText('purdex-iface-lead 要幫 member _bbbbbb 接力（context 30%）；member 額度用完，要核准嗎？')).toBeTruthy()
+    expect(screen.getByTestId('approval-member').textContent).toBe('_bbbbbb')
+  })
+
   it('a payload that is not the wire shape does not blank the screen', () => {
     render(<ApprovalDialogHost />)
     open(memberRelay({ payload: { used_percentage: 'lots', member_title: 7 } as never }))
