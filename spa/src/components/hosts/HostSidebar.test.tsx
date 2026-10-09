@@ -150,6 +150,13 @@ describe('HostSidebar', () => {
     expect(onReceiveHosts).toHaveBeenCalledTimes(1)
   })
 
+  it('"Pair a phone" calls onPairPhone (QR pairing QP-3)', () => {
+    const onPairPhone = vi.fn()
+    render(<HostSidebar {...defaultProps} onPairPhone={onPairPhone} />)
+    fireEvent.click(screen.getByText('Pair a phone'))
+    expect(onPairPhone).toHaveBeenCalledTimes(1)
+  })
+
   it('sub-page items are clickable and call onSelect', () => {
     render(<HostSidebar {...defaultProps} />)
     // The selected host is expanded by default, so sub-pages are visible

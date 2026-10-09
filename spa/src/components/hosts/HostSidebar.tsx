@@ -1,4 +1,4 @@
-import { Plus, CaretDown, CaretRight, Circle, DownloadSimple, LockSimple, ShareNetwork, Spinner, Warning } from '@phosphor-icons/react'
+import { Plus, CaretDown, CaretRight, Circle, DeviceMobile, DownloadSimple, LockSimple, ShareNetwork, Spinner, Warning } from '@phosphor-icons/react'
 import { ModuleOwnedPuzzleIcon } from '../settings/ModuleOwnedPuzzleIcon'
 import { useState } from 'react'
 import { listContributions } from '../../lib/settings-contribution-registry'
@@ -15,6 +15,7 @@ interface Props {
   onAddHost?: () => void
   onShareHosts?: () => void
   onReceiveHosts?: () => void
+  onPairPhone?: () => void
 }
 
 function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
@@ -28,7 +29,7 @@ function StatusIcon({ runtime }: { runtime?: HostRuntime }) {
   return <Circle size={8} weight="fill" className="text-red-400" />
 }
 
-export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost, onShareHosts, onReceiveHosts }: Props) {
+export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHost, onShareHosts, onReceiveHosts, onPairPhone }: Props) {
   const t = useI18nStore((s) => s.t)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -179,6 +180,15 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
           >
             <DownloadSimple size={14} />
             <span>{t('hosts.transfer.receive_button')}</span>
+          </button>
+        )}
+        {onPairPhone && (
+          <button
+            onClick={onPairPhone}
+            className="w-full text-left px-2 py-1.5 rounded text-sm cursor-pointer flex items-center gap-2 text-text-muted hover:text-text-secondary"
+          >
+            <DeviceMobile size={14} />
+            <span>{t('hosts.pair.button')}</span>
           </button>
         )}
       </div>

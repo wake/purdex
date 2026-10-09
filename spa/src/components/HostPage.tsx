@@ -11,6 +11,7 @@ import { HostSidebar } from './hosts/HostSidebar'
 import { AddHostDialog } from './hosts/AddHostDialog'
 import { ReceiveHostsDialog } from './hosts/ReceiveHostsDialog'
 import { ShareHostsDialog } from './hosts/ShareHostsDialog'
+import { PairPhoneDialog } from './hosts/PairPhoneDialog'
 
 export type { HostSubPage } from '../lib/host-routes'
 
@@ -263,6 +264,7 @@ export function HostPage({ isActive }: PaneRendererProps) {
   const activeHostId = useHostStore((s) => s.activeHostId)
   const [showAddHost, setShowAddHost] = useState(false)
   const [showShare, setShowShare] = useState(false)
+  const [showPair, setShowPair] = useState(false)
   const [showReceive, setShowReceive] = useState(false)
   const t = useI18nStore((s) => s.t)
 
@@ -370,12 +372,14 @@ export function HostPage({ isActive }: PaneRendererProps) {
         onAddHost={() => setShowAddHost(true)}
         onShareHosts={() => setShowShare(true)}
         onReceiveHosts={() => setShowReceive(true)}
+        onPairPhone={() => setShowPair(true)}
       />
       <div className="flex-1 overflow-y-auto p-6">
         {renderContent()}
       </div>
       {showAddHost && <AddHostDialog onClose={() => setShowAddHost(false)} />}
       {showShare && <ShareHostsDialog onClose={() => setShowShare(false)} />}
+      {showPair && <PairPhoneDialog onClose={() => setShowPair(false)} />}
       {showReceive && <ReceiveHostsDialog onClose={() => setShowReceive(false)} />}
     </div>
   )
