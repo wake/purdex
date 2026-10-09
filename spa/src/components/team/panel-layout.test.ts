@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { PANEL_DEFAULT_WIDTH } from '../../stores/useTeamUiStore'
 import {
-  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, POPOVER_W, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
+  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_GAP, SEP_W, POPOVER_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
 } from './panel-layout'
 
 describe('panel header budget', () => {
@@ -22,6 +22,27 @@ describe('panel header budget', () => {
     expect(firstRowCapacity(720)).toBeGreaterThan(firstRowCapacity(312))
     expect(firstRowCapacity(280)).toBeGreaterThanOrEqual(1)
     expect(firstRowCapacity(0)).toBe(1)
+  })
+
+  describe('capacityFromWidths', () => {
+    it('adds the real widths in seat order, with the gaps and the divider after the lead', () => {
+      // [38,38,38,50,38] at 170: 4 cells = 164 + 3*2 gaps + 5 divider = 175 > 170; 3 cells = 114 + 4 + 5 = 123
+      expect(capacityFromWidths([38, 38, 38, 50, 38], 170)).toBe(3)
+      expect(capacityFromWidths([38, 38, 38, 50, 38], 175)).toBe(4)
+      expect(capacityFromWidths([38, 38, 38, 38, 38], 170)).toBe(4)
+    })
+    it('a wider cell later in the row costs only its own extra width', () => {
+      const avail = 38 * 4 + 3 * CELL_GAP + SEP_W // exactly 4 plain cells
+      expect(capacityFromWidths([38, 38, 38, 38, 38], avail)).toBe(4)
+      expect(capacityFromWidths([38, 38, 38, 50, 38], avail)).toBe(3)
+      expect(capacityFromWidths([38, 38, 38, 50, 38], avail + 12)).toBe(4)
+    })
+    it('never drops below one and handles all seats fitting', () => {
+      expect(capacityFromWidths([60, 60], 10)).toBe(1)
+      expect(capacityFromWidths([38], 500)).toBe(1)
+      expect(capacityFromWidths([38, 38], 500)).toBe(2)
+      expect(capacityFromWidths([], 500)).toBe(1)
+    })
   })
 
   it('a cell (ring at the full mode 20px) sits inside the header row', () => {
