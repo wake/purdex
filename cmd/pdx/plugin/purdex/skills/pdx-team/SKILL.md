@@ -38,4 +38,5 @@ Vocabulary (spec §4): a **lead** runs a **team** of **members**. A member is ne
 
 - The **Purdex mod asks the user on its own** when this session's context passes the threshold. **You never ask for a relay and never approve one.** When the mod's prompt arrives, write the handoff file it names and answer `HANDOFF-WRITTEN`, nothing else.
 - `/relay off` / `/relay on` / `/relay status` is **the user's switch, not yours**. Do not run it.
+- `/relay` (or `/relay now`) is the user's way to relay early: **you never run it**. A session paused with `/relay off` is not relayed by it; the user runs `/relay on` first.
 - **Never turn on 無人值守模式 (unattended mode).** It is the user's switch in Purdex.app: there is no `pdx` command for it, and you must not call the daemon's route or edit host config to get around that.
