@@ -1,7 +1,7 @@
 // Package apnskey loads the APNs auth key of the push module (push spec docs/specs/2026-10-09-push-spec.md §3).
 //
 // APNS_KEY_FILE may be a plain name or, as a shell-style config.env writes it, "$HOME/...", "${HOME}/...", "~/..." or an
-// absolute path; those must resolve to a file directly inside the directory (a symlinked directory is compared resolved).
+// absolute path; those must resolve to a file directly inside the directory (directories are compared by identity).
 //
 // The directory is opened as an os.Root and config.env and the key file are read through it: a name the root refuses
 // (absolute, "..", a symlink that leaves the directory, a swap between check and open) is an error. Only
@@ -87,8 +87,7 @@ func Load(dir string) (Key, error) {
 
 // keyName turns the APNS_KEY_FILE value into the name handed to the root. A value without "/" or a relative path is
 // passed through unchanged (the root decides). A "$HOME/", "${HOME}/" or "~/" prefix is replaced by the home directory;
-// the resulting absolute path must be exactly one level below dir (compared as written, then with symlinks resolved on
-// both sides) and then only its base name is used. Errors carry no text from the value.
+// the resulting absolute path must be exactly one level below dir (same text, or the same directory by os.SameFile) and then only its base name is used. Errors carry no text from the value.
 func keyName(dir, value string) (string, error) {
 	for _, prefix := range []string{"$HOME/", "${HOME}/", "~/"} {
 		if rest, ok := strings.CutPrefix(value, prefix); ok {
@@ -106,9 +105,10 @@ func keyName(dir, value string) (string, error) {
 	p := filepath.Clean(value)
 	parent := filepath.Dir(p)
 	if parent != filepath.Clean(dir) {
-		a, errA := filepath.EvalSymlinks(parent)
-		b, errB := filepath.EvalSymlinks(dir)
-		if errA != nil || errB != nil || a != b {
+		// directory identity, not text: covers symlinked directories and case-insensitive filesystems
+		a, errA := os.Stat(parent)
+		b, errB := os.Stat(dir)
+		if errA != nil || errB != nil || !os.SameFile(a, b) {
 			return "", errors.New("not directly in the directory")
 		}
 	}

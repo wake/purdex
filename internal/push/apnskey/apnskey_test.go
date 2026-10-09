@@ -383,3 +383,17 @@ func TestLoad_RelativeOrEmptyHomeNeverExpands(t *testing.T) {
 		}
 	}
 }
+
+// On a case-insensitive filesystem a directory that differs from apns_dir only in case is the same directory.
+func TestLoad_DirectoryComparedByIdentityNotText(t *testing.T) {
+	_, dir := homeDir(t)
+	base := filepath.Base(dir) // "apns"
+	variant := filepath.Join(filepath.Dir(dir), strings.ToUpper(base))
+	if _, err := os.Stat(variant); err != nil {
+		t.Skip("filesystem is case-sensitive")
+	}
+	envWith(t, dir, filepath.Join(variant, "AuthKey.p8"))
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("case variant of the same directory must work: %v", err)
+	}
+}
