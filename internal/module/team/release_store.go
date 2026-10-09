@@ -19,11 +19,12 @@ import (
 // later redirects through lineage (the old ref still reaches it), so a relay right after the release loses
 // nothing. released says whether this call did it; a false answer leaves the row as it is.
 func (s *Store) ReleaseMember(rowKey, sessionID string, at int64) (released bool, err error) {
+	loc, locArgs := s.local("host_id")
 	res, err := s.db.Exec(`UPDATE team_members
 		SET state = ?, ended_at = ?, updated_at = ?, notice_pending = ?, notice_since = ?
-		WHERE spawn_op = ? AND session_id = ? AND state = 'active'
+		WHERE spawn_op = ? AND session_id = ? AND state = 'active' AND `+loc+`
 		  AND NOT EXISTS (SELECT 1 FROM relay_ops WHERE session_id = ? AND state NOT IN ('done', 'failed', 'cancelled'))`,
-		string(team.MemberReleased), at, at, team.NoticeReleased, at, rowKey, sessionID, sessionID)
+		append([]any{string(team.MemberReleased), at, at, team.NoticeReleased, at, rowKey, sessionID}, append(locArgs, sessionID)...)...)
 	return oneRow(res, err, "release member "+rowKey)
 }
 

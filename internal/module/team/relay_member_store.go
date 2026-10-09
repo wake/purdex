@@ -38,8 +38,9 @@ func (s *Store) CreateMemberRelayOp(op team.RelayOp, gate MemberRelayGate) (team
 		return fail(err)
 	}
 	var one int
+	loc, locArgs := s.local("m.host_id")
 	err = tx.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
-		WHERE m.session_id = ? AND m.team_id = ? AND m.state = 'active' AND t.ended_at = 0`, op.SessionID, op.TeamID).Scan(&one)
+		WHERE m.session_id = ? AND m.team_id = ? AND m.state = 'active' AND t.ended_at = 0 AND `+loc, append([]any{op.SessionID, op.TeamID}, locArgs...)...).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fail(ErrMemberNotActive)
 	}

@@ -128,7 +128,11 @@ func (m *Module) memberView(mr memberRow) team.Member {
 	if mr.Origin == team.MemberOriginAdopted { // the row's key is the adoption's request id; the wire says so in its own field
 		v.Origin, v.SpawnOp, v.AdoptRequest = team.MemberOriginAdopted, "", mr.SpawnOp
 	}
-	if mr.State == team.MemberActive {
+	if m.isRemoteRow(mr) { // its address is the member host's alias and its ref, not this host's registry's
+		if a := m.remoteAlias(mr.HostID); a != "" {
+			v.Address = a + "/" + mr.Ref
+		}
+	} else if mr.State == team.MemberActive {
 		if o, ok, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && ok {
 			v.Address = o.Address
 		}

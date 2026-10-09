@@ -91,6 +91,10 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, req.Target+" is no active member of team "+t.ID, nil)
 		return
 	}
+	if m.isRemoteRow(mr) { // a member relay is local-only (P6-7 would carry it across hosts; out of scope)
+		m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, "member "+mr.Ref+" lives on another host; a cross-host member relay is not supported", nil)
+		return
+	}
 	origin, live, err := m.origins.ResolveOriginBySession(mr.SessionID)
 	if err != nil {
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry", nil)
