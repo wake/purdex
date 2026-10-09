@@ -309,7 +309,8 @@ function compose(kind, body, p, extra = {}) {
   const pub = { path: p.path, old_ref: p.oldRef, old_session: p.oldSession, context: p.before, whoami: p.who }
   const all = { ...pub, op: p.op.id, nonce: p.nonce, ...extra }
   const { head, tail } = FIXED[kind]
-  return fill(head, all) + fill(body.replace(/\n+$/, ''), pub) + (tail === '' ? '' : '\n' + fill(tail, all))
+  const t = fill(tail, all) // a tail that fills to nothing (the seed's, with no task) is left out
+  return fill(head, all) + fill(body.replace(/\n+$/, ''), pub) + (t === '' ? '' : '\n' + t)
 }
 
 // utf8Bytes is text's length in UTF-8, as the daemon counts a body.
@@ -364,6 +365,20 @@ async function bodyFor($, kind) {
 
 function usageLine(u) {
   return (u.tokens ?? '?') + ' tokens / ' + u.window + ' (' + (u.percent ?? '?') + '%)'
+}
+
+// The member's open tasks for the seed's tail (T-2): the lines `pdx task mine --seed` prints
+// (internal/team TaskSeedText), '' for anything else — no task, a lead (exit 13), an old pdx,
+// a failure, a timeout, or text that is not that notice (it would be put into a prompt).
+const TASKS_HEADER = '你手上的任務：'
+async function tasksFor($) {
+  try {
+    const r = await pdx($, ['task', 'mine', '--seed'], PROMPTS_TIMEOUT_MS)
+    const text = r.exitCode === 0 ? String(r.stdout || '').trim() : ''
+    return text.startsWith(TASKS_HEADER) && !text.includes('[pdx-relay') ? text : ''
+  } catch {
+    return ''
+  }
 }
 
 async function whoami($) {
@@ -695,11 +710,11 @@ export function register(on) {
         if (s.pending !== p) return
         // The new conversation is idle while the body is asked for (≤ 8 s;
         // M29 with the daemon up): a prompt typed meanwhile runs first.
-        const body = await bodyFor($, 'seed')
+        const [body, tasks] = await Promise.all([bodyFor($, 'seed'), tasksFor($)])
         if (s.pending !== p || s.state !== 'seeding') return // the user's own /clear meanwhile
         arm(p, 'seeding')
         try {
-          await submit($, compose('seed', body, p))
+          await submit($, compose('seed', body, p, { tasks }))
         } catch (err) {
           if (!giveUp($, p, 'seeding', 'failed', 'handoff_incomplete', 'seed prompt: ' + String(err))) return
           // the /clear did happen: this is a new conversation, asked afresh
