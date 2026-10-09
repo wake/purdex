@@ -42,6 +42,9 @@ func (m *Module) endUnpairedRemoteMembers() {
 	if m.stopping() {
 		return
 	}
+	// The config is held (read-locked) until the cleanup has committed: the cleanup is irreversible, and a host
+	// that is added or re-verified between a snapshot and the commit must not have its rows ended on the old list.
+	// A pairing change simply waits the few milliseconds the transaction takes.
 	m.core.CfgMu.RLock()
 	paired := make([]string, 0, len(m.core.Cfg.Peers.Hosts))
 	for _, h := range m.core.Cfg.Peers.Hosts {
@@ -49,8 +52,8 @@ func (m *Module) endUnpairedRemoteMembers() {
 			paired = append(paired, h.HostID)
 		}
 	}
-	m.core.CfgMu.RUnlock()
 	n, err := m.store.EndUnpairedRemoteMembers(paired, m.now())
+	m.core.CfgMu.RUnlock()
 	if err != nil {
 		m.logf("[team] end unpaired remote members: %v", err)
 		return
