@@ -123,7 +123,7 @@ func (m *Module) reapOrphanSpawnSessions() {
 			m.afterOrphanIdentity(s.Name)
 		}
 		again, err := read(s.Name)
-		if err != nil || again != id {
+		if err != nil || again.Instance != id.Instance || again.SessionID != id.SessionID || again.Tag != id.Tag { // ownership only: pane and cwd move with ordinary activity
 			m.logf("[team] boot: orphan spawn sessions: %s changed before the kill (%v); left alone", s.Name, err)
 			continue
 		}

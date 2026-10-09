@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // Boot sweep of spawn sessions nobody knows (#2341, from the #2337 attack review): a session that carries the spawn tag but
@@ -157,5 +158,31 @@ func TestOrphanSweep_RunsAtBoot(t *testing.T) {
 	f.m.resumeSpawns()
 	if f.hasSession("orphan") {
 		t.Fatal("resumeSpawns did not sweep")
+	}
+}
+
+// codex re-review P2: the second read compares who owns the session (generation, id, tag), not where its pane is — a pane
+// that moved or a shell that changed directory between the two reads is ordinary activity. Mutation gate: compare the whole
+// identity → red.
+func TestOrphanSweep_APaneThatMovedBetweenTheReadsStillGetsReaped(t *testing.T) {
+	f, root := newSpawnFixture(t, 4)
+	failed := f.acceptOp(1, root, nil)
+	if _, err := f.m.store.FailSpawnOp(failed, team.SpawnReasonAbandoned, f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	f.taggedSession("moving", failed)
+	ss, _ := f.tmux.ListSessions(context.Background())
+	var sid string
+	for _, x := range ss {
+		if x.Name == "moving" {
+			sid = x.ID
+		}
+	}
+	f.m.afterOrphanIdentity = func(name string) { // another pane became the active one: same session, same generation, same tag
+		f.tmux.SetActivePaneMetadata(name, tmux.TmuxPaneMetadata{SessionID: sid, PaneID: "%99"})
+	}
+	f.m.reapOrphanSpawnSessions()
+	if f.hasSession("moving") {
+		t.Fatal("an orphan whose pane moved between the reads survived")
 	}
 }
