@@ -1,0 +1,114 @@
+{
+  "cases": [
+    {
+      "name": "empty object",
+      "json": "{}",
+      "hash": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "empty array",
+      "json": "[]",
+      "hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "scalars in an array",
+      "json": "[null,true,false,0,\"\",1]",
+      "hash": "215abc07e0eef21dba0503aaa096f476a6862115026124cc8e47abe6177c40d4"
+    },
+    {
+      "name": "key order is sorted at every depth",
+      "json": "{\"b\":1,\"a\":{\"z\":1,\"y\":[{\"d\":1,\"c\":2}]},\"A\":0}",
+      "hash": "13fa82225350024c7f3f2d0bfb9f2908094ac9ce128d71bc91951f01de634fac"
+    },
+    {
+      "name": "integer-like keys sort as strings",
+      "json": "{\"10\":1,\"9\":2,\"a\":3,\"1\":4}",
+      "hash": "4a82616d6651b6d178cdf77f0fdde6d42e330a64c4b9c92876f1b0d56dfbf3ea"
+    },
+    {
+      "name": "nested arrays keep their order",
+      "json": "[[3,2,1],[[],[{}]],[\"b\",\"a\"]]",
+      "hash": "36a1e0ca57e8ceac85410f6705bbd5bb6bc66830b6104cdbb9168d75843c0430"
+    },
+    {
+      "name": "integers",
+      "json": "[0,1,-1,42,9007199254740991,-9007199254740991,9007199254740992]",
+      "hash": "a115180e8d8d4121e0eed94f73d2b25d2463482c8d884398e596e02d2700c324"
+    },
+    {
+      "name": "negative zero is zero",
+      "json": "[-0,0,-0.0]",
+      "hash": "2a08979e8002252124e861b2816490b04fe03b6b779f9287fb7c25652bbc4052"
+    },
+    {
+      "name": "fractions",
+      "json": "[0.1,0.5,1.5,-2.25,3.141592653589793,0.30000000000000004,100.5]",
+      "hash": "a3adfbb4bf1e66d52169a23cfa87fe34c953f69fa7bf4b436d3cb4c8facc6b5a"
+    },
+    {
+      "name": "exponent form accepted on input, ES form on output",
+      "json": "[1e2,1E2,1e+2,25e-1,1.5e3,0.000001,1e-6]",
+      "hash": "1100dc45552dc66f84a69338f05b5bc2bc57801f19d0211bf3abdb1f40c57dff"
+    },
+    {
+      "name": "upper boundary 1e21",
+      "json": "[1e20,123456789012345680000,1e21,1.5e21,1e22]",
+      "hash": "c0705cc50a7751fad3b10c228c4d3bb1c279be1c19ee890b16bbf9e6fb486096"
+    },
+    {
+      "name": "lower boundary 1e-7",
+      "json": "[0.000001,0.0000001,1e-7,1.5e-7,1e-10,123e-9]",
+      "hash": "83b9549288b0fa5b60bb8c33cfeeac81ad2ceb692f1b2c25a273db6ca363436a"
+    },
+    {
+      "name": "float extremes",
+      "json": "[1.7976931348623157e308,5e-324,2.2250738585072014e-308]",
+      "hash": "090a8da686b4dea1f01eb8bc2bc4b8ce1e66d22d603f3da4726e6d62278e33be"
+    },
+    {
+      "name": "unicode text",
+      "json": "{\"é\":\"é\",\"中文\":\"字\",\"emoji\":\"😀\",\"mixed\":\"a😀b\"}",
+      "hash": "a826f3db701726f4a255b92e5b9a16a8ea75d8ca3df659a3f5e843f4117ebcb6"
+    },
+    {
+      "name": "keys ordered by UTF-16 code unit, not by UTF-8 byte",
+      "json": "{\"\\uff5e\":1,\"\\ud83d\\ude00\":2,\"\\ue000\":3,\"z\":4}",
+      "hash": "7c365dd7d91080f405678ad2171866d727d6e3bdf68603a4cdd9f4aa65db4c62"
+    },
+    {
+      "name": "string escapes",
+      "json": "[\"\\\"\",\"\\\\\",\"\\/\",\"\\b\",\"\\f\",\"\\n\",\"\\r\",\"\\t\",\"\\u0001\",\"\\u001f\",\"\\u007f\",\"\\u2028\",\"\\u2029\"]",
+      "hash": "fa28d4e16f526b1ef96116d1663775bb4041e6777dded6a7fe295e86e11d7e13"
+    },
+    {
+      "name": "raw non-ASCII and escaped forms are the same string",
+      "json": "[\"\\u00e9\",\"é\",\"\\ud83d\\ude00\",\"😀\"]",
+      "hash": "0b2cb80e318330c55a6cfedeaaf958dd64651d5b0d701cc336be38b1265153b0"
+    },
+    {
+      "name": "__proto__ is an ordinary key",
+      "json": "{\"__proto__\":{\"x\":1},\"a\":2}",
+      "hash": "7c158980e2edf2d7af19a3947db16b89496f65904f3afec66faac72999e05ce9"
+    },
+    {
+      "name": "repeated key: the last one wins",
+      "json": "{\"a\":1,\"b\":2,\"a\":3}",
+      "hash": "493df656a590967c84d643bdd55ee956fb53262c51b154115083c9bcc4c992e3"
+    },
+    {
+      "name": "whitespace is irrelevant",
+      "json": " {\n  \"b\" : [ 1 , 2 ] ,\t\"a\" : null } ",
+      "hash": "ee743f2fa2570a1b5e3270cc405d0456b983ba03ab9cb27552fc6c1a720183c7"
+    },
+    {
+      "name": "a phone-built tab appended to a tabs section (iOS fixture)",
+      "json": "{\"order\":[\"phtab1\"],\"tabs\":{\"phtab1\":{\"createdAt\":1790000000000,\"id\":\"phtab1\",\"layout\":{\"pane\":{\"content\":{\"cachedName\":\"fixture-1\",\"hostId\":\"d1_aaaaaaaaaaaaaaaa\",\"kind\":\"tmux-session\",\"mode\":\"terminal\",\"sessionCode\":\"fix001\",\"tmuxInstance\":\"12345:1790000000\"},\"id\":\"phpan1\"},\"type\":\"leaf\"},\"locked\":false,\"pinned\":false}}}",
+      "hash": "66b71a1c9a38d82f391d8caa0ee18fec05137b46b56bb924eb5d9f264e7762b8"
+    },
+    {
+      "name": "a tabs section with a Mac tab and a phone tab",
+      "json": "{\"order\":[\"t1\",\"phtab1\"],\"tabs\":{\"t1\":{\"id\":\"t1\",\"kind\":\"tmux-session\",\"pinned\":true,\"locked\":false,\"createdAt\":1789999999999,\"layout\":{\"type\":\"leaf\",\"pane\":{\"id\":\"p1\",\"content\":{\"kind\":\"tmux-session\",\"hostId\":\"h_0123456789abcdef\",\"sessionCode\":\"abc123\",\"mode\":\"terminal\",\"cachedName\":\"工作 ✓\",\"tmuxInstance\":\"1:2\"}}}},\"phtab1\":{\"createdAt\":1790000000000,\"id\":\"phtab1\",\"layout\":{\"pane\":{\"content\":{\"cachedName\":\"fixture-1\",\"hostId\":\"d1_aaaaaaaaaaaaaaaa\",\"kind\":\"tmux-session\",\"mode\":\"terminal\",\"sessionCode\":\"fix001\",\"tmuxInstance\":\"12345:1790000000\"},\"id\":\"phpan1\"},\"type\":\"leaf\"},\"locked\":false,\"pinned\":false}}}",
+      "hash": "3ab39c73e960c24e801fad4083e9d8ac0f15187d213949d790071f1f91c3f8b7"
+    }
+  ]
+}
