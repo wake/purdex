@@ -53,6 +53,26 @@ func TestRemoteEnd_AHostWithOnlyARunningSpawnGetsTheEnd(t *testing.T) {
 	}
 }
 
+// A daemon with no tmux cannot kill what an end abandoned: a retryable answer, never a nil dereference.
+func TestRemoteSpawn_TeamEndWithoutTmuxIsRetryable(t *testing.T) {
+	f, root := remoteSpawnFixture(t)
+	waitReached, releaseRunner := holdAt(f, team.StepLaunched)
+	if code, body := f.postCmd(leadPrincipal(), spawnCommand(cmdUUID1, root)); code != http.StatusOK {
+		t.Fatalf("spawn = %d %s", code, body)
+	}
+	waitReached()
+	f.tmux.FailKillIfInstance = true
+	if code, _ := f.postCmd(leadPrincipal(), endOf(cmdUUID3, "team-L")); code != http.StatusServiceUnavailable {
+		t.Fatalf("end = %d, want 503", code)
+	}
+	releaseRunner()
+	f.m.spawnWG.Wait()
+	f.m.tmux = nil
+	if code, body := f.postCmd(leadPrincipal(), endOf(cmdUUID3, "team-L")); code != http.StatusServiceUnavailable {
+		t.Fatalf("replayed end without tmux = %d %s, want 503", code, body)
+	}
+}
+
 // A kill that fails is not an answered `end`: the lead host retries the same command, which kills it then.
 func TestRemoteSpawn_TeamEndRetriesAFailedKill(t *testing.T) {
 	f, root := remoteSpawnFixture(t)

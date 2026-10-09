@@ -145,6 +145,9 @@ func (m *Module) killEndedSpawnSessions(leadHost, teamID string) error {
 	if err != nil {
 		return err
 	}
+	if len(ops) > 0 && m.tmux == nil { // a daemon without tmux cannot kill them now; the retry finds them again
+		return fmt.Errorf("%d abandoned spawn session(s) of team %s and no tmux on this daemon", len(ops), teamID)
+	}
 	var first error
 	for _, op := range ops {
 		if _, err := m.tmux.KillSessionIfInstance(op.TmuxID, op.TmuxInstance); err != nil {
