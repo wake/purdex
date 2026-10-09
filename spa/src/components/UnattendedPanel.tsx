@@ -139,6 +139,8 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
   // the lifecycle they started under, never this ref, so an old setup's answer cannot commit.
   const lifeRef = useRef<Lifecycle | null>(null)
   const pagingNow = useRef(false)
+  // Per host, moves every time its identity changes, so A -> B -> A is still a different lifetime for a request in flight.
+  const lifetimes = useRef<Record<string, number>>({})
 
   useEffect(() => {
     const life = new Lifecycle()
@@ -166,6 +168,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
         const now = hostIdentityNow(hostId)
         if (now === seen) return
         seen = now
+        lifetimes.current[hostId] = (lifetimes.current[hostId] ?? 0) + 1
         useRelayQuotaStore.getState().forgetHost(hostId)
         load()
       }))
@@ -198,6 +201,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
       let patch: (cur: HostPages) => HostPages
       // The daemon this page was asked of: whatever it answers (rows or a failure), a host re-pointed or removed since is not it.
       const identity = hostIdentityNow(hostId)
+      const lifetime = lifetimes.current[hostId] ?? 0
       try {
         const v = await readPage(life, hostId, pages[hostId].nextBefore)
         patch = (cur) => ({ ...cur, rows: [...cur.rows, ...v.approved], nextBefore: v.truncated ? v.next_before : undefined, failed: undefined })
@@ -205,7 +209,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
         const failed = codeOf(e)
         patch = (cur) => ({ ...cur, failed }) // the rows and the cursor stay: 「顯示更多」 retries
       }
-      if (life.cancelled || identity === null || hostIdentityNow(hostId) !== identity) return
+      if (life.cancelled || identity === null || hostIdentityNow(hostId) !== identity || (lifetimes.current[hostId] ?? 0) !== lifetime) return
       setPages((cur) => (cur[hostId] === undefined ? cur : { ...cur, [hostId]: patch(cur[hostId]) }))
     }))
     pagingNow.current = false

@@ -711,6 +711,25 @@ describe('UnattendedPanel and a re-pointed host', () => {
     expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
   })
 
+  it('A -> B -> A while a page is out: the old failure still does not land on the reloaded host', async () => {
+    let oldFail!: (e: unknown) => void
+    let first = true
+    mockedGet.mockImplementation(async (_h, q) => {
+      if (q?.before !== undefined && first) { first = false; return new Promise<UnattendedView>((_r, rej) => { oldFail = rej }) }
+      return page([approved('first', at(9, 0))], { truncated: true, next_before: 5 })
+    })
+    open([A])
+    fireEvent.click(await screen.findByTestId('unattended-more'))
+    const ip = useHostStore.getState().hosts[A].ip
+    repoint()
+    await flush()
+    act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: { ...s.hosts[A], ip } } })) })
+    await flush()
+    await act(async () => { oldFail(new ApprovalApiError(0, 'network')) })
+    await flush()
+    expect(screen.queryByTestId('unattended-host-failed')).toBeNull()
+  })
+
   it('removed host: its rows go and nothing is read', async () => {
     mockedGet.mockResolvedValue(page([], { quotas: [quota('p1')] }))
     open([A])
