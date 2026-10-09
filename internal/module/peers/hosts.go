@@ -581,6 +581,11 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 			h.AllowBypass = *req.AllowBypass
 		}
 		if req.AllowTeam != nil {
+			// Consent belongs to a verified host: on an entry that has not
+			// learned its host id, whoever verified first would inherit it.
+			if *req.AllowTeam && h.HostID == "" {
+				return &apiError{http.StatusConflict, ipeers.ErrHostUnverified}
+			}
 			h.AllowTeam = *req.AllowTeam
 		}
 		if req.TeamRoots != nil {

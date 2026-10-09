@@ -58,7 +58,7 @@ func TestHostsList_RowsCarryTeamFieldsNeverNull(t *testing.T) {
 
 func TestHandlePutHost_TeamFields(t *testing.T) {
 	r1, r2 := realDir(t, "one"), realDir(t, "two")
-	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", InboundToken: "inbound-a"}}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 	put := func(body map[string]any) (int, teamRow, string) {
@@ -110,7 +110,7 @@ func TestHandlePutHost_BadRootNamesTheRoot(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "i", TeamRoots: []string{"/keep"}}}
+			hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", InboundToken: "i", TeamRoots: []string{"/keep"}}}
 			c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
 			m := newHostsTestModule(t, c, failIfCalledFetch(t))
 			rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air",
@@ -131,16 +131,17 @@ func TestHandlePutHost_BadRootNamesTheRoot(t *testing.T) {
 // A consent for one peer must never land on a different entry that took the
 // alias meanwhile (codex R1) — even one re-created at the same URL.
 func TestHandlePutHost_TeamFieldsNotAppliedToRecreatedEntry(t *testing.T) {
-	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "inbound-a"}}
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", InboundToken: "inbound-a"}}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 	m.putHostAfterSnapshot = func() {
-		if rr := doHostsRequest(t, m, http.MethodDelete, "/api/peers/hosts/air", nil, adminPrincipal()); rr.Code != http.StatusNoContent {
-			t.Fatalf("delete: %d", rr.Code)
-		}
-		if rr := doHostsRequest(t, m, http.MethodPost, "/api/peers/hosts",
-			map[string]string{"alias": "air", "url": "https://a.example"}, adminPrincipal()); rr.Code != http.StatusCreated {
-			t.Fatalf("re-add: %d %s", rr.Code, rr.Body.String())
+		// Same alias, URL and even host id — only the minted inbound token differs.
+		err := c.UpdateConfig(func(cfg *config.Config) error {
+			cfg.Peers.Hosts[0].InboundToken = "inbound-new"
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"allow_team": true}, adminPrincipal())
@@ -149,6 +150,28 @@ func TestHandlePutHost_TeamFieldsNotAppliedToRecreatedEntry(t *testing.T) {
 	}
 	if h := loadCfg(t, cfgPath).Peers.Hosts[0]; h.AllowTeam {
 		t.Fatalf("consent landed on the re-created entry: %+v", h)
+	}
+}
+
+// Consent is for a verified host: an entry that has not learned its host id
+// cannot be switched on, or whoever verifies first would inherit it (codex attack).
+func TestHandlePutHost_AllowTeamNeedsVerifiedEntry(t *testing.T) {
+	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", InboundToken: "i"}}
+	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
+	m := newHostsTestModule(t, c, failIfCalledFetch(t))
+	rr := doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"allow_team": true}, adminPrincipal())
+	var e struct{ Error string }
+	_ = json.Unmarshal(rr.Body.Bytes(), &e)
+	if rr.Code != http.StatusConflict || e.Error != "host_unverified" {
+		t.Fatalf("%d %s", rr.Code, rr.Body.String())
+	}
+	if loadCfg(t, cfgPath).Peers.Hosts[0].AllowTeam {
+		t.Fatal("consent stored on an unverified entry")
+	}
+	// Turning it off, and setting roots (inert without consent), stay possible.
+	rr = doHostsRequest(t, m, http.MethodPut, "/api/peers/hosts/air", map[string]any{"allow_team": false}, adminPrincipal())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("off: %d %s", rr.Code, rr.Body.String())
 	}
 }
 
