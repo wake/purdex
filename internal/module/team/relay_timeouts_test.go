@@ -130,8 +130,8 @@ func TestSweep_SelfOpStalledFailsHandoffIncomplete(t *testing.T) {
 	}
 }
 
-// A stalled cleared op (the seed never finished) fails too; a fresh claim and a terminal op are left alone.
-func TestSweep_ClearedStallsAndFreshOpsAreHandledRight(t *testing.T) {
+// A cleared op is left alone until its 15 minutes; then (its new session being live here) it is done.
+func TestSweep_AClearedOpIsLeftAloneUntilItsStallTimeout(t *testing.T) {
 	f := newFixture(t)
 	op := f.claimedMemberOp()
 	f.origins.cleared = map[string]int{"sid-new": 42}
@@ -145,7 +145,7 @@ func TestSweep_ClearedStallsAndFreshOpsAreHandledRight(t *testing.T) {
 	}
 	f.clock.Add(minute)
 	f.sweepTimeouts()
-	if got := f.op(op.ID); got.State != team.RelayFailed {
+	if got := f.op(op.ID); got.State != team.RelayDone {
 		t.Fatalf("stalled cleared: %+v", got)
 	}
 }
@@ -208,5 +208,46 @@ func TestSweep_ProgressThatLandsAfterTheSnapshotWins(t *testing.T) {
 	f2.m.judgeRelayTimeout(stale2, f2.clock.Load())
 	if f2.op(op2.ID).State != team.RelayClaimed {
 		t.Fatalf("a stale judgement failed a claimed op: %+v", f2.op(op2.ID))
+	}
+}
+
+// A stalled cleared op: the seed turn runs on after a successful relay, so a live new session means done; a new session
+// that is not there fails. Mutation gate: cleared always failed → the live case is red.
+func TestSweep_StalledClearedWithALiveNewSessionIsDone(t *testing.T) {
+	f := newFixture(t)
+	op := f.claimedMemberOp()
+	f.origins.cleared = map[string]int{"sid-new": 42}
+	for _, s := range []team.RelayReportRequest{{State: team.RelayWriting}, {State: team.RelayWritten}, {State: team.RelayCleared, NewSessionID: "sid-new"}} {
+		f.report(op.ID, s)
+	}
+	f.setFrames(frameOf("sid-new", "%2", true))
+	f.clock.Add(15 * minute)
+	f.sweepTimeouts()
+	if got := f.op(op.ID); got.State != team.RelayDone {
+		t.Fatalf("stalled cleared, new session live: %+v", got)
+	}
+	waitFor(t, func() bool { return len(f.leadNotices()) == 1 })
+	if n := f.leadNotices(); !strings.Contains(n[0], "接力完成") {
+		t.Fatalf("the lead's notice = %v", n)
+	}
+}
+
+func TestSweep_StalledClearedWithoutItsNewSessionFails(t *testing.T) {
+	f := newFixture(t)
+	op := f.claimedMemberOp()
+	f.origins.cleared = map[string]int{"sid-new": 42}
+	for _, s := range []team.RelayReportRequest{{State: team.RelayWriting}, {State: team.RelayWritten}, {State: team.RelayCleared, NewSessionID: "sid-new"}} {
+		f.report(op.ID, s)
+	}
+	f.setFrames()
+	f.origins.markDead("sid-new")
+	f.clock.Add(15 * minute)
+	f.sweepTimeouts()
+	if got := f.op(op.ID); got.State != team.RelayFailed || got.Reason != team.RelayReasonMemberUnresponsive {
+		t.Fatalf("stalled cleared, new session gone: %+v", got)
+	}
+	waitFor(t, func() bool { return len(f.leadNotices()) == 1 })
+	if n := f.leadNotices(); !strings.Contains(n[0], "接力失敗") {
+		t.Fatalf("the lead's notice = %v", n)
 	}
 }

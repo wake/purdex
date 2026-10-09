@@ -45,17 +45,30 @@ func (m *Module) judgeRelayTimeout(op team.RelayOp, now int64) {
 		if due {
 			m.failOnTimeout(op, team.RelayReasonMemberUnresponsive)
 		}
-	case pastClaimed(op) || op.State == team.RelayCleared:
+	case op.State == team.RelayCleared:
 		if now < op.UpdatedAt+stallMs {
 			return
 		}
-		cur := op
-		if pastClaimed(op) { // the frame may say it cleared or died; a cleared op has no pane to ask about
-			var err error
-			if cur, err = m.reconcileFromFrames(context.Background(), op); err != nil {
-				m.logf("[team] stall of op %s: %v", op.ID, err)
-				return // unknown is not a verdict
-			}
+		// The mod reports done when the SEED turn ends, and the seed sends the new session on with the original work, so
+		// its first turn often runs past 15 minutes. If the new session is alive the relay itself succeeded: report done
+		// (amends coordinator decision 4, 1f 2026-10-09). Only a new session that is not there fails the op.
+		if m.newSessionLive(op) {
+			m.settleOnTimeout(op, RelayReport{State: team.RelayDone, At: now})
+			return
+		}
+		reason := team.RelayReasonHandoffIncomplete
+		if op.Kind == team.RelayKindMember {
+			reason = team.RelayReasonMemberUnresponsive
+		}
+		m.failOnTimeout(op, reason)
+	case pastClaimed(op):
+		if now < op.UpdatedAt+stallMs {
+			return
+		}
+		cur, err := m.reconcileFromFrames(context.Background(), op) // the frame may say it cleared or died
+		if err != nil {
+			m.logf("[team] stall of op %s: %v", op.ID, err)
+			return // unknown is not a verdict
 		}
 		if cur.State.Terminal() || cur.State != op.State {
 			return // reconciled: the frame decided
@@ -71,14 +84,37 @@ func (m *Module) judgeRelayTimeout(op team.RelayOp, now int64) {
 // failOnTimeout fails op with reason through the same path as a report (CAS on the state, the updated_at and the
 // seen_at of the snapshot; the follow-ups and the lead's notice on Applied only).
 func (m *Module) failOnTimeout(op team.RelayOp, reason string) {
-	// Conditional on the snapshot the judgement used: a seen, a claim or a report that landed since wins.
-	exp := &RelayExpect{State: op.State, UpdatedAt: op.UpdatedAt, SeenAt: op.SeenAt}
-	_, applied, err := m.applyReconcile(op, RelayReport{State: team.RelayFailed, Reason: reason, At: m.now(), Expect: exp})
+	m.settleOnTimeout(op, RelayReport{State: team.RelayFailed, Reason: reason, At: m.now()})
+}
+
+// newSessionLive says whether a cleared op's new session is there: a verified frame on the op's pane, or the registry.
+func (m *Module) newSessionLive(op team.RelayOp) bool {
+	if op.NewSessionID == "" {
+		return false
+	}
+	if _, pane, _ := m.opBinding(op); pane != "" && m.frames != nil {
+		if frames, err := m.frames.LiveSessions(context.Background(), "cc"); err == nil {
+			for _, f := range frames {
+				if f.PaneID == pane && f.Verified && f.SessionID == op.NewSessionID {
+					return true
+				}
+			}
+		}
+	}
+	return m.origins.LiveSession(op.NewSessionID)
+}
+
+// settleOnTimeout applies rep (failed, or done for a stalled cleared) to op, conditional on the snapshot the judgement
+// used: a seen, a claim or a report that landed since wins.
+func (m *Module) settleOnTimeout(op team.RelayOp, rep RelayReport) {
+	reason := rep.Reason
+	rep.Expect = &RelayExpect{State: op.State, UpdatedAt: op.UpdatedAt, SeenAt: op.SeenAt}
+	_, applied, err := m.applyReconcile(op, rep)
 	switch {
 	case err != nil:
 		m.logf("[team] relay op %s timeout: %v", op.ID, err)
 	case applied:
-		m.logf("[team] relay op %s timed out (%s)", op.ID, reason)
+		m.logf("[team] relay op %s timed out → %s (%s)", op.ID, rep.State, reason)
 	default:
 		m.logf("[team] relay op %s: a timeout judged from a stale read was skipped (progress landed first)", op.ID)
 	}
