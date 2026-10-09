@@ -95,20 +95,35 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
 - **D7 Send** — **one daemon route does the checking and the typing (U3-0b)**; the App never decides "the text
   arrived" from what it sees (text anywhere on the screen proves nothing — an agent's output can contain it; plan
   review 2026-10-10). `POST /api/sessions/{code}/submit {text, expected_tmux_instance, expected_session_id}`, under a
-  per-session mutex: (1) validate `text` with iOS `SendPlan` rules (control chars but `\n` stripped, tabs → 4 spaces,
-  blank head / tail lines and trailing spaces trimmed, 1 … 4000 UTF-8 bytes; a leading `!` or `/` → 400
-  `needs_terminal`, U3 has no mod path); (2) **pre-check**: tmux instance, the pane's owner in the agent registry is a
-  live Claude Code process whose session id is `expected_session_id` (process identity pid + start), and the pane's UI
-  state equals the measured prompt state (`#{pane_in_mode}` = 0 and `#{alternate_on}` as measured for Claude Code at
-  its prompt — U3-0b task 1 measures it before coding); (3) type the text (no Enter; new lines as a literal LF, no
-  bracketed paste); (4) **verify in the input region only**: capture the rows from the input box's top rule down to
-  the cursor row (bounded to 12 rows; the layout measured in task 1), and wait ≤ 2 s (every 100 ms) for the text's last
-  non-empty line (whitespace-normalised; its last 40 chars when longer) there; (5) **re-check** (2), then send `\r`.
-  Any check failing → no Enter, `409 {reason: instance | owner_changed | session_mismatch | in_mode |
-  alternate_screen | not_seen}` (JSON); the typed text stays in the input box and the App says so
+  per-session mutex:
+  1. **validate** `text` with iOS `SendPlan` rules (control chars but `\n` stripped, tabs → 4 spaces, blank head / tail
+     lines and trailing spaces trimmed, 1 … 4000 UTF-8 bytes; a leading `!` or `/` → 400 `needs_terminal`, U3 has no
+     mod path);
+  2. **pre-check** — all must hold, else nothing is typed: the tmux instance; the pane's owner in the agent registry is
+     a live Claude Code process whose session id is `expected_session_id` (process identity pid + start); the pane's
+     UI state equals the measured prompt state (`#{pane_in_mode}` = 0, `#{alternate_on}` as measured for Claude Code
+     at its prompt — U3-0b task 1 measures it before coding); **no dialog is open for that session** — no open
+     `hook_ask` / `hook_permission` approval for it and its agent status is not `waiting` (a dialog is where an Enter
+     picks an option); **the input box is recognised and empty** — the rows from the box's top rule down to the cursor
+     match the measured empty-prompt layout (prompt glyph, nothing typed), else `input_not_empty`
+     (「終端機輸入框裡已經有文字，請先在終端機清掉或送出」 — this also stops a retry from appending to text a failed
+     attempt left; the App never retypes into a non-empty box);
+  3. **type** the text (no Enter; new lines as a literal LF; no bracketed paste);
+  4. **verify the box holds exactly the text**: capture the box rows (top rule → cursor row, ≤ 12 rows, the measured
+     layout) and wait ≤ 2 s (every 100 ms) until their content — prompt glyph and padding removed, wrapped rows joined —
+     equals the whitespace-normalised text, or, when the text is longer than the box shows, the box holds nothing but a
+     contiguous tail of the text of at least min(len, 200) characters;
+  5. **re-check** step 2's owner / session / no-dialog conditions, then send Enter as **one guarded tmux command** —
+     `if-shell -F` on `#{pane_in_mode}`, `#{alternate_on}` and `#{pane_pid}` (the owner's pid) with `send-keys Enter`
+     as its only branch — so those conditions and the Enter are atomic in the tmux server. The one window left is a
+     person typing into that same pane between step 4 and the Enter: that is the user's own input, accepted and
+     written in the PR.
+
+  Any check failing → no Enter, `409 {reason: instance | owner_changed | session_mismatch | in_mode | alternate_screen |
+  dialog_open | input_not_empty | not_seen}` (JSON); when the text was already typed the App says so
   (「文字已在終端機輸入框，沒有按 Enter：<原因>」). Capability `sessions.submit.v1` in `/api/info`; iOS may adopt it
-  later. The App side, `lib/conversations/send.ts`: the destructive guard (a line matching `rm -rf`, a forced push,
-  a hard reset, `DROP TABLE`, `mkfs`, `dd if=` → a second press within 5 s, 「真的要送出？」), iOS's `SendQueue` (3 s
+  later. The App side, `lib/conversations/send.ts`: the destructive guard (a line matching `rm -rf`, a forced push, a
+  hard reset, `DROP TABLE`, `mkfs`, `dd if=` → a second press within 5 s, 「真的要送出？」), iOS's `SendQueue` (3 s
   undo, one serial chain, local echo matched to the transcript's user item within 30 s, 「你 · 排隊中」 while the agent
   is running), interrupt = ESC through the existing send-keys with the instance, only while the header status is
   `running`, never twice in a row.
@@ -129,7 +144,8 @@ Collie 1.17.2 (`~/Library/Caches/purdex-research/collie-1.17.2/`): parser `bridg
   tests it in purdex-ios; **that committed file is a gate for U3-3** — the Mac test reads only it, never a local
   replacement.
 - **D10 Right panel** — inside the pane, right side, width 42 % (min 320 px, max 640 px), Esc / ✕ closes; content =
-  a turn (chat row click), a full output / diff (deck 「顯示全部」), or a subagent's steps; state per pane in a memory
+  a chain's steps (a chat work-row click — the chain, not the whole turn; the header names the turn and the chain's
+  position), a full output / diff (deck 「顯示全部」), or a subagent's steps; state per pane in a memory
   module (`lib/conversations/panel-memory.ts`, tab-hosted rule).
 - **D11 Unreadable** — reasons: provenance `found:false` 「找不到這個分頁的 Claude Code 對話」; `not_found`
   「對話紀錄還沒出現」; `provider_unsupported` 「這個 agent 不支援」; a first turn with no items 「還沒有內容」;
@@ -169,8 +185,10 @@ multi-select answer whose label contains a comma.
    check through the agent registry, the UI-state check, typing, the input-region verify, the re-check, JSON errors;
    `sessions.submit.v1` in `/api/info`; not in the phones' `deviceAllowed` for now. Tests with a fake tmux: each check
    failing before typing and before Enter; hostile output above the input box containing the text → `not_seen`;
-   Claude Code exiting to the shell between typing and Enter → `owner_changed`, no Enter; wrapped multi-line text found;
-   concurrent submits serialised.
+   a permission / question dialog open → `dialog_open`, nothing typed; a pre-filled box → `input_not_empty`, nothing
+   typed; Claude Code exiting to the shell between typing and Enter → the guarded Enter does not fire; wrapped
+   multi-line text and a text longer than the box found; concurrent submits serialised; a retry after `not_seen` hits
+   `input_not_empty` (no duplicate text).
 Review focus: the owner changing between the re-check and Enter (keep that window to one tmux call); a text whose last
 line is also the prompt's placeholder; CJK width in the captured rows.
 
@@ -252,3 +270,10 @@ replaceable) → D9 / U3-3 gate. 7 (U3-0 gaps) → D12 summary table, question a
 left to the apps (spec §6 amended with the evidence). 8 (terminal view without a subscription) → D4 owner = every CC
 pane in all views, ticket per reconnect, cursor only from conversation frames; U3-4 tests. 9 (stale DecideRequest fact)
 → §0 corrected; D8 extends only the SPA type. Plus the tab-hosted integration test (U3-4 task 3).
+
+Round 2 (incremental re-review `task-mv1gvzr8-oh74e8`): 7 of 9 resolved; new — (critical) no "safe to submit" state →
+D7 step 2 adds no-open-dialog (hook approvals + agent status) and an empty, recognised input box before typing, step 4
+an exact box-content match; (critical) re-check → Enter not atomic → Enter is one `if-shell -F` tmux command guarded by
+mode, alternate screen and owner pid; the remaining window (a person typing into the same pane) is accepted and
+documented; (important) spec §10 still open → closed; (important) retry duplication → `input_not_empty`; (5, partly)
+chat row click scope → the chain (spec §5, D10).

@@ -57,7 +57,7 @@ Rendering — **Collie's look**, our words (zh-TW), every item shown:
 
 - Same conversation, less detail. A header with the agent's icon, the tab's title and one line of what it is doing (the live status). The user on the right in accent bubbles, the agent on the left.
 - **One row per chain of work** (consecutive steps; thinking does not break a chain, user / agent text / system items do — as iOS), above the agent's text that follows it: 「處理了 2 分 13 秒 · 3 個指令、2 個編輯 · 1 失敗 ›」 — the categories in the fixed order 指令、編輯、讀取、搜尋、網頁、子 agent、其他, then failed (red) and 已拒絕／已中斷 (grey) counts. While a turn runs, one progress message updates in place; a turn that changed files adds a chip 「3 個檔案 +29 −12」.
-- **A click on the turn row** opens the **right panel** with that turn drawn as the deck draws it. The right panel is one component inside the pane, shared with the deck's 「顯示全部」 and subagent steps; it closes with Esc or its close button and keeps its open state per tab (tab-hosted rule).
+- **A click on a work row** opens the **right panel** with **that chain's steps** drawn as the deck draws them (the user / agent text around it stays in the chat; the panel's header names the turn and the chain's position in it). The right panel is one component inside the pane, shared with the deck's 「顯示全部」 and subagent steps; it closes with Esc or its close button and keeps its open state per tab (tab-hosted rule).
 - The counting of categories is the same in iOS and the Mac: one shared fixture (input items → expected turn row), produced from the iOS implementation and checked by both apps' tests.
 
 ## 6. Breaking the transcript into items (拆資料)
@@ -106,6 +106,6 @@ U3-1 and U3-2 together make the deck usable day to day; the user tries it from t
 
 ## 10. Open for the plan (technical, 88 decides)
 
-- Where the send verification reads the screen (the App's live terminal buffer for the pane vs a daemon read).
+- ~~Where the send verification reads the screen~~ — decided: the daemon's `/submit` route (§7 amendment, plan D7); the App never verifies from its own terminal buffer.
 - The deck's virtualisation for long conversations (paging by turns is given; whether rows are virtualised).
 - Which existing execution-view pieces are reused (diff view, output folding, scroll memory, transcript search) and how they take `convmodel` items.
