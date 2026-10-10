@@ -16,7 +16,8 @@ var LockWait = 5 * time.Second
 
 // canonPath is the one name every writer uses for a config file: absolute, with symlinks resolved (the file itself if it
 // exists, else its nearest resolvable directory), so two names of one file name one lock file and a symlinked config stays a
-// symlink — the write goes to what it points at.
+// symlink — the write goes to what it points at. Known limit: a config reached through a dangling symlink whose target holds
+// ".." after another symlink, or through a dangling symlink to a directory, is not resolved component by component.
 func canonPath(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
