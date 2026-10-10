@@ -363,6 +363,11 @@ describe('malformed question payloads', () => {
     expect(screen.getAllByTestId('deck-question-option')).toHaveLength(1)
     expect(screen.getByTestId('deck-question-option').getAttribute('data-chosen')).toBe('true')
   })
+  it('options that are null or have a non-string label are skipped', () => {
+    draw({ questions: [{ question: 'a?', options: [null, { label: { x: 1 } }, { label: 'ok', description: 9 }] }] })
+    expect(screen.getAllByTestId('deck-question-option')).toHaveLength(1)
+    expect(screen.getByTestId('deck-question-option')).toHaveTextContent('ok')
+  })
   it('answers that is not a list counts as unanswered', () => {
     draw({ questions: [{ question: 'a?', options: [{ label: 'x' }] }], answers: 'x' })
     expect(screen.queryByTestId('deck-question-free')).toBeNull()

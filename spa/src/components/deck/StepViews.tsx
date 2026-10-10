@@ -99,7 +99,9 @@ function QuestionCard({ step }: { step: StepItem }) {
     <Card step={step} icon={<Question className={ICON} size={16} />} title={<span className="text-text-muted">{t('deck.step.question')}</span>}>
       {q.questions.map((qq, i) => {
         // Daemon data is not validated at the API edge: a wrong-typed field reads as empty rather than throwing a render.
-        const options = Array.isArray(qq?.options) ? qq.options : []
+        const options = (Array.isArray(qq?.options) ? qq.options : [])
+          .filter((o) => o && typeof o.label === 'string')
+          .map((o) => ({ label: o.label, description: typeof o.description === 'string' ? o.description : undefined }))
         const given = answered ? q.answers![i] : undefined
         const chosen = Array.isArray(given) ? given.filter((c): c is string => typeof c === 'string') : []
         // An answer that is none of the options is what the user typed.
