@@ -158,6 +158,44 @@ type Step struct {
 	Command        *Command        `json:"command,omitempty"`
 	Subagent       *Subagent       `json:"subagent,omitempty"`
 	Children       []Item          `json:"children,omitempty"`
+
+	// Additive (U3-0, U1 spec §8.1): older clients ignore them.
+	Question *StepQuestion `json:"question,omitempty"` // an AskUserQuestion-shaped call and, once answered, what was chosen
+	Read     *ReadRange    `json:"read,omitempty"`     // the range a Read asked for
+	Search   *SearchScope  `json:"search,omitempty"`   // where a Grep / Glob / web search looked
+}
+
+// StepQuestion is what the agent asked the person (AskUserQuestion), recognised by the SHAPE of the input. Answers, once
+// the call completed with them, has one entry per question: the chosen labels, or the free text kept whole.
+type StepQuestion struct {
+	Questions []QuestionItem `json:"questions"`
+	Answers   [][]string     `json:"answers,omitempty"`
+}
+
+// QuestionItem is one question of the call.
+type QuestionItem struct {
+	Question string           `json:"question"`
+	Header   string           `json:"header,omitempty"`
+	Multiple bool             `json:"multiple"`
+	Options  []QuestionOption `json:"options"`
+}
+
+// QuestionOption is one choice.
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// ReadRange is the offset (first line) and limit (number of lines) a Read asked for; a member is omitted when the call
+// gave none. The step has a read only when the call gave at least one.
+type ReadRange struct {
+	Offset int `json:"offset,omitempty"`
+	Limit  int `json:"limit,omitempty"`
+}
+
+// SearchScope is where a search looked: the path, else the glob, else "web".
+type SearchScope struct {
+	Where string `json:"where"`
 }
 
 // Output is a step's result text, capped. Keep is set exactly when Truncated.
@@ -179,6 +217,7 @@ type Diff struct {
 	Exact     bool   `json:"exact"`
 	Hunks     []Hunk `json:"hunks,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
+	Created   bool   `json:"created,omitempty"` // the file did not exist before (a Write whose result says it created it)
 }
 
 // Hunk is one unified-diff hunk.

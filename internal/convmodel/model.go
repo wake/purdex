@@ -21,6 +21,9 @@ const (
 	MaxInputDepth  = 32       // container levels of a step input (the input object is level 1)
 	MaxOutput      = 16 << 10 // step output text
 	MaxDiffLines   = 400      // hunk lines of one diff, in total
+
+	MaxQuestions       = 9  // questions one step may carry
+	MaxQuestionOptions = 20 // options one question may carry
 )
 
 // Outcome is how a turn ended.

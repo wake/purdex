@@ -3,6 +3,7 @@ package convmodel
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -156,6 +157,9 @@ func validateStep(s *Step) error {
 			return fmt.Errorf("output keep %q must be set exactly when truncated (%v)", o.Keep, o.Truncated)
 		}
 	}
+	if err := validateStepExtras(s); err != nil {
+		return err
+	}
 	if d := s.Diff; d != nil && d.Truncated {
 		lines := 0
 		for _, h := range d.Hunks {
@@ -230,6 +234,40 @@ func inputOverCap(raw json.RawMessage) error {
 	}
 	if n := walk(v); n > 0 {
 		return fmt.Errorf("holds a string of %d bytes, over the %d cap", n, MaxInputString)
+	}
+	return nil
+}
+
+// validateStepExtras checks the additive members of a step (U3-0).
+func validateStepExtras(s *Step) error {
+	if q := s.Question; q != nil {
+		if len(q.Questions) == 0 || len(q.Questions) > MaxQuestions {
+			return fmt.Errorf("question has %d questions, want 1 to %d", len(q.Questions), MaxQuestions)
+		}
+		for i, it := range q.Questions {
+			if it.Question == "" {
+				return fmt.Errorf("question %d has no text", i)
+			}
+			if len(it.Options) > MaxQuestionOptions {
+				return fmt.Errorf("question %d has %d options, over the %d cap", i, len(it.Options), MaxQuestionOptions)
+			}
+		}
+		if q.Answers != nil {
+			if len(q.Answers) != len(q.Questions) {
+				return fmt.Errorf("question has %d answers for %d questions", len(q.Answers), len(q.Questions))
+			}
+			for i, a := range q.Answers {
+				if len(a) == 0 {
+					return fmt.Errorf("answer %d is empty", i)
+				}
+			}
+		}
+	}
+	if r := s.Read; r != nil && (r.Offset < 0 || r.Limit < 0 || (r.Offset == 0 && r.Limit == 0)) {
+		return fmt.Errorf("read range offset %d limit %d: negative, or neither given", r.Offset, r.Limit)
+	}
+	if sc := s.Search; sc != nil && sc.Where == "" {
+		return errors.New("search scope is empty")
 	}
 	return nil
 }
