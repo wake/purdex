@@ -133,7 +133,7 @@ export function OwnNotebookButton() {
 
 /**
  * The strip of a tab of no team, while the shared value is `titlebar`: one line, the first sentence of the conversation's
- * latest status; a click brings the area into the pane at full. Same box and sizing contract as `TeamTitleStrip`.
+ * latest status; a click brings the area back into the pane at the mode it left (the same move as the Notebook button). Same box and sizing contract as `TeamTitleStrip`.
  */
 export function OwnTitleStrip({ target, room = null, onContentWidth }: { target: OwnWorkbookTarget; room?: number | null; onContentWidth?: (w: number) => void }) {
   const inner = useRef<HTMLDivElement>(null)
@@ -156,7 +156,7 @@ export function OwnTitleStrip({ target, room = null, onContentWidth }: { target:
       style={{ ...(room === null ? null : { width: room }), marginRight: HEADER_GAP }}
     >
       <div ref={inner} className="flex items-center min-w-0 max-w-full">
-        <TeamStripButton testId="own-strip-line" onClick={() => useTeamUiStore.getState().setSharedPanelMode('full')} label={line.full !== '' ? line.full : open} className="min-w-0 shrink overflow-hidden">
+        <TeamStripButton testId="own-strip-line" onClick={() => useTeamUiStore.getState().toggleSharedTitleBar()} label={line.full !== '' ? line.full : open} className="min-w-0 shrink overflow-hidden">
           <span className="block truncate text-[11px] leading-[18px] text-text-secondary">{line.text}</span>
         </TeamStripButton>
       </div>

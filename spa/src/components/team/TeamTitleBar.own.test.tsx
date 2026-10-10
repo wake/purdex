@@ -94,13 +94,31 @@ describe('the strip for a tab of no team', () => {
     expect(screen.getByText('T')).toBeTruthy()
     expect(screen.queryByTestId('team-title-strip')).toBeNull()
   })
-  it('a click brings the area into the pane at full', () => {
+  it('a click restores the mode the area left', () => {
     setActive('cc1')
     mountBar()
     fireEvent.click(screen.getByTestId('own-strip-line'))
     expect(shared()).toBe('full')
     expect(screen.queryByTestId('own-title-strip')).toBeNull()
     expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
+  })
+  it.each(['line', 'max'] as const)('from %s: the strip and the Notebook button both give back that mode, again on a second round trip', (mode) => {
+    setActive('cc1')
+    mountBar()
+    act(() => useTeamUiStore.getState().setSharedPanelMode(mode))
+    for (const press of [() => fireEvent.click(button()!), () => fireEvent.click(screen.getByTestId('own-strip-line'))]) {
+      fireEvent.click(button()!) // into the title bar
+      expect(shared()).toBe('titlebar')
+      press()
+      expect(shared()).toBe(mode)
+      expect(useTeamUiStore.getState().sharedPanelLast).toBe(mode)
+    }
+    // the strip then the button, back to back, still lands on the same mode
+    fireEvent.click(button()!)
+    fireEvent.click(screen.getByTestId('own-strip-line'))
+    fireEvent.click(button()!)
+    fireEvent.click(button()!)
+    expect(shared()).toBe(mode)
   })
   it('is absent while the area is in the pane, and for a tab with no workbook', () => {
     act(() => useTeamUiStore.getState().setSharedPanelMode('line'))
