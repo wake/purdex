@@ -55,13 +55,14 @@ const (
 	backupPattern  = PluginName + ".old-*"
 )
 
-// ExtractPlugin writes src into PluginRoot(dataDir) when the VERSION stamp
-// there differs from version (or is missing), or when a managed file there
-// is missing or differs from src (treeMatches), then writes VERSION and
-// pdx.json {pdx, data_dir, config}. It returns the root and whether files were
-// written. Extraction goes to a fresh staging sibling and is swapped into
-// place (publishDir), so a session loading the folder sees the old tree or
-// the new one, never a half-written or missing one.
+// ExtractPlugin writes src into PluginRoot(dataDir) when the folder there is not the embedded tree (treeIdentical: a
+// managed file missing or different, a file src does not have, or no VERSION), then VERSION — the daemon version the
+// tree last changed at — and pdx.json {pdx, data_dir, config}. An identical tree is left alone whatever the daemon
+// version: Claude Code watches the folder and prints a "reloaded" line in every open session for each file that changes
+// (#2403), so a release that does not touch the mod writes nothing, and pdx.json only when its content differs. It
+// returns the root and whether the tree was replaced. Extraction goes to a fresh staging sibling and is swapped into
+// place (publishDir), so a session loading the folder sees the old tree or the new one, never a half-written or
+// missing one.
 func ExtractPlugin(src fs.FS, dataDir, version, pdxPath, cfgPath string) (root string, changed bool, err error) {
 	root = PluginRoot(dataDir)
 	if src == nil {
@@ -76,9 +77,8 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath, cfgPath string) (root s
 	defer unlock()
 	// A binary built without ldflags reports "unknown"; such a dev build always
 	// re-extracts, so an edited mod reaches the next session without a bump.
-	// A same VERSION is not proof the tree is whole: a managed file that is
-	// missing or edited also re-extracts.
-	if cur, err := os.ReadFile(filepath.Join(root, "VERSION")); err == nil && version != "" && version != "unknown" && strings.TrimSpace(string(cur)) == version && treeMatches(src, root) {
+	// A VERSION of "unknown" is a dev build's stamp: a release replaces it once, so VERSION always names a real daemon version.
+	if cur, err := os.ReadFile(filepath.Join(root, "VERSION")); err == nil && strings.TrimSpace(string(cur)) != "unknown" && version != "" && version != "unknown" && treeIdentical(src, root) {
 		if err := writePdxJSON(root, pdxPath, dataDir, cfgPath); err != nil {
 			return root, false, err
 		}
@@ -148,6 +148,50 @@ func treeMatches(src fs.FS, root string) bool {
 }
 
 var errTreeDiffers = errors.New("extracted tree differs from the embedded one")
+
+// installedIgnored says whether a path under the installed folder is not part of the comparison with the embedded tree:
+// the two files we write ourselves (VERSION, pdx.json) and what Claude Code's own engine generates in a watched plugin
+// folder (everything under .claude-plugin/types/ and the root tsconfig.json). The embedded tree has none of them.
+func installedIgnored(rel string) bool {
+	switch rel {
+	case "VERSION", "pdx.json", "tsconfig.json", ".claude-plugin/types":
+		return true
+	}
+	return strings.HasPrefix(rel, ".claude-plugin/types/")
+}
+
+// treeIdentical reports whether the folder at root is exactly the embedded tree: every embedded file there with the same
+// bytes (treeMatches), and no file there that src lacks, apart from installedIgnored ones. A file a newer mod dropped
+// (a removed skill) makes the tree different, so the swap that replaces the whole folder clears it away.
+func treeIdentical(src fs.FS, root string) bool {
+	if !treeMatches(src, root) {
+		return false
+	}
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil || rel == "." {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if installedIgnored(rel) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if _, err := fs.Stat(src, rel); err != nil {
+			return errTreeDiffers
+		}
+		return nil
+	})
+	return err == nil
+}
 
 // lockFileName is the cross-process lock beside the extracted tree: the
 // daemon's setup route and a `pdx setup` run without the daemon are two
@@ -274,6 +318,10 @@ func writePdxJSON(root, pdxPath, dataDir, cfgPath string) error {
 		m["mod_socket"] = sock
 	}
 	b, _ := json.Marshal(m)
+	// Unchanged content is not written: a write would reload the mod in every open session (#2403).
+	if cur, err := os.ReadFile(filepath.Join(root, "pdx.json")); err == nil && bytes.Equal(cur, append(b, '\n')) {
+		return nil
+	}
 	// Written beside and renamed in, so a session starting meanwhile reads
 	// the old file or the new one, never a half-written one (which the mod
 	// would read as absent: pdx from PATH, no --config).

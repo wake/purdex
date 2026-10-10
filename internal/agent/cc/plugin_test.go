@@ -183,14 +183,21 @@ func TestExtractPlugin_SameVersionIsNoop_NewVersionReplaces(t *testing.T) {
 	if _, _, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", ""); err != nil {
 		t.Fatal(err)
 	}
-	// A file of our own beside the managed ones may stay (the same-version
-	// check compares the embedded files only)…
-	stale := filepath.Join(PluginRoot(dataDir), "hooks", "stale.js")
-	os.WriteFile(stale, []byte("old"), 0o644)
 	_, changed, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", "")
 	if err != nil || changed {
 		t.Fatalf("same version: changed=%v err=%v", changed, err)
 	}
+	// A file the embedded tree does not have is a difference now (#2403): a mod that dropped it must not leave it for
+	// Claude Code to load, so the folder is replaced — the same-version run clears it.
+	stale := filepath.Join(PluginRoot(dataDir), "hooks", "stale.js")
+	os.WriteFile(stale, []byte("old"), 0o644)
+	if _, changed, err := ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", ""); err != nil || !changed {
+		t.Fatalf("same version, stray file: changed=%v err=%v", changed, err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatal("the stray file stayed")
+	}
+	os.WriteFile(stale, []byte("old"), 0o644) // and a replaced tree drops it again below
 	// …but a managed file that went missing is put back (attacker high).
 	os.Remove(filepath.Join(PluginRoot(dataDir), "hooks", "register.js"))
 	_, changed, err = ExtractPlugin(fakePlugin("a"), dataDir, "a", "/opt/pdx", "")
@@ -475,10 +482,20 @@ func TestCCCheckHooks_PluginMissingOrOutdatedIsNotInstalled(t *testing.T) {
 	}
 
 	root := PluginRoot(dataDir)
+	// VERSION is the daemon version the tree last changed at (#2403): an older one with the same files is not outdated…
 	os.WriteFile(filepath.Join(root, "VERSION"), []byte("1.0.0-alpha.599\n"), 0o644)
 	status, _ = p.CheckHooks()
-	if got := pluginIssues(status.Issues); status.Installed || len(got) != 1 || !strings.Contains(got[0], "outdated (installed 1.0.0-alpha.599, want 1.0.0-alpha.600)") {
-		t.Fatalf("stale VERSION: Installed=%v issues=%v", status.Installed, status.Issues)
+	if !status.Installed || len(pluginIssues(status.Issues)) != 0 {
+		t.Fatalf("older VERSION, same files: Installed=%v issues=%v", status.Installed, status.Issues)
+	}
+	// …a mod whose files differ is.
+	os.WriteFile(filepath.Join(root, "hooks", "hooks.json"), []byte(`{"modules":[]}`), 0o644)
+	status, _ = p.CheckHooks()
+	if got := pluginIssues(status.Issues); status.Installed || len(got) != 1 || !strings.Contains(got[0], "outdated (installed 1.0.0-alpha.599") {
+		t.Fatalf("changed file: Installed=%v issues=%v", status.Installed, status.Issues)
+	}
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatal(err)
 	}
 
 	// A dev build ("unknown") accepts whatever VERSION is there.

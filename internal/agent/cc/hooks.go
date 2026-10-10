@@ -207,7 +207,8 @@ func (p *Provider) CheckHooks() (agent.HookStatus, error) {
 // pluginIssue says why the Purdex plugin is not usable as installed, or ""
 // when it is: settings env CLAUDE_CODE_PLUGIN_DIRS must name
 // PluginRoot(dataDir), and the tree there must hold hooks/register.js and a
-// VERSION equal to this binary's (a dev build, "unknown", accepts any).
+// VERSION, and equal the embedded tree (treeIdentical; without a PluginSource, a VERSION equal to this binary's). A dev
+// build, "unknown", accepts any.
 func pluginIssue(settings map[string]any, dataDir string) string {
 	const notInstalled = "Purdex plugin not installed"
 	root := PluginRoot(dataDir)
@@ -231,7 +232,18 @@ func pluginIssue(settings map[string]any, dataDir string) string {
 		return notInstalled
 	}
 	got, want := strings.TrimSpace(string(b)), buildinfo.Version
-	if want != "" && want != "unknown" && got != want {
+	if want == "" || want == "unknown" {
+		return ""
+	}
+	// With the embedded tree to compare, the mod is outdated when its CONTENT differs — the same test ExtractPlugin uses
+	// to decide a swap (#2403): VERSION is the daemon version the tree last changed at, not this binary's.
+	if PluginSource != nil {
+		if !treeIdentical(PluginSource, root) {
+			return fmt.Sprintf("Purdex plugin outdated (installed %s, the mod's files differ from this version's)", got)
+		}
+		return ""
+	}
+	if got != want {
 		return fmt.Sprintf("Purdex plugin outdated (installed %s, want %s)", got, want)
 	}
 	return ""
