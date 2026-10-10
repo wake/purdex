@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -71,17 +70,7 @@ func resolveUnderRoots(roots []string, dir string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	var live []string
-	for _, root := range roots {
-		// A granted root is stored canonical (config.CanonicalTeamRoots). One that no longer resolves to itself was
-		// replaced by a symlink (or sits behind one) since: it is not the directory that was granted.
-		if r, err := filepath.EvalSymlinks(root); err != nil || r != filepath.Clean(root) {
-			continue
-		}
-		if st, err := os.Stat(root); err == nil && st.IsDir() {
-			live = append(live, root)
-		}
-	}
+	live := liveRoots(roots)
 	if !underRoots(resolved, live) {
 		return "", false
 	}

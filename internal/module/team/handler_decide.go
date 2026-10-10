@@ -79,7 +79,7 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 					m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, err.Error(), nil)
 					return
 				}
-				g.Roots = roots
+				g.Roots, g.RootsCanonical = canonicalRoots(roots), true
 			}
 			// D-N3: an absent key keeps the requested name (an older App
 			// never wipes it); present, "" clears it.

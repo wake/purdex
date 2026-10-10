@@ -168,7 +168,7 @@ func (m *Module) underTeamRoots(teamID, dir string) (string, bool) {
 	if dir == "" || rerr != nil || !found {
 		return "", false
 	}
-	return resolved, underRoots(resolved, t.Grant.Roots)
+	return resolved, underGrant(resolved, t.Grant)
 }
 
 // underRoots reports whether dir (symlinks evaluated) is a root or below
