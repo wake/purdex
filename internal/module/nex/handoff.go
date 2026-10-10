@@ -310,6 +310,9 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// U18: the session's model and effort, read while its Claude Code is still the one reporting them. They ride the execution as
+	// labels (the take-back reads them back) and the rollback resumes with them.
+	reading := m.readingOf(owner.SessionID, "")
 	if step, err := m.stopCC(target); err != nil {
 		writeHandoffError(w, http.StatusGatewayTimeout, "cc_exit_timeout", step+" Claude Code: "+err.Error(),
 			map[string]any{"step": step})
@@ -333,7 +336,7 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		SandboxProfile:  profile,
 		Mounts:          []execution.Mount{{Path: owner.Cwd, Role: "cwd", Writable: true}},
 		Origin:          handoffOrigin(m.opts.Config.HostID, code),
-		Labels:          map[string]string{"source": "purdex", handoffSessionLabel: code, purdexSessionLabel: owner.SessionID},
+		Labels:          handoffLabels(code, owner.SessionID, reading),
 		ResumeSessionID: owner.SessionID,
 		// 0 (absent) leaves it unset: a request that never asked waits forever.
 		PermissionTimeoutS: permissionTimeout,
@@ -356,7 +359,7 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		if result.ID != "" {
 			extra["execution_id"] = result.ID
 		}
-		rolled := m.rollbackHandoff(sess, expected, body.RollbackCommand, owner.SessionID, target)
+		rolled := m.rollbackHandoff(sess, expected, applySessionFlags(body.RollbackCommand, reading), owner.SessionID, target)
 		extra["rolled_back"] = rolled
 		// D7: rolled back, the terminal owns S again, so the rejected row
 		// exits (one state). Not rolled back, it stays as the start-failed

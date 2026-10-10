@@ -286,7 +286,7 @@ func (m *Module) handleNexTakeback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if herr := m.resumeInWindow(sess, expected, body.ResumeCommand, sid); herr != nil {
+	if herr := m.resumeInWindow(sess, expected, applySessionFlags(body.ResumeCommand, m.readingOf(sid, exec.Labels)), sid); herr != nil {
 		fail(herr)
 		return
 	}

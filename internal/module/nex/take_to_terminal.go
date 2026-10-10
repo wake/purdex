@@ -282,7 +282,7 @@ func (m *Module) handleTakeToTerminal(w http.ResponseWriter, r *http.Request) {
 	// name is left alone (I3) — and nothing is exited: the worker is as it
 	// was (settled), for a retry. The detail carries the session id for a
 	// manual resume.
-	if herr := m.resumeInWindow(info, info.TmuxInstance, body.ResumeCommand, sid); herr != nil {
+	if herr := m.resumeInWindow(info, info.TmuxInstance, applySessionFlags(body.ResumeCommand, m.readingOf(sid, exec.Labels)), sid); herr != nil {
 		killed := m.killCreatedSession(execID, info, herr.code)
 		if herr.detail == nil {
 			herr.detail = map[string]any{}

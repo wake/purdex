@@ -49,11 +49,12 @@ func TestApplySessionFlags_LeavesWhatIsNotAClaudeResumeAlone(t *testing.T) {
 
 // What the user's template already says wins, flag by flag. Mutation: add them anyway → duplicated flags (red).
 func TestApplySessionFlags_TheTemplatesOwnFlagsWin(t *testing.T) {
-	assert.Equal(t, "claude --resume {id} --model sonnet --effort xhigh",
+	// what is added goes right after the id, so it comes before the user's own flags
+	assert.Equal(t, "claude --resume {id} --effort xhigh --model sonnet",
 		applySessionFlags("claude --resume {id} --model sonnet", sessionReading{Model: opusID, Effort: "xhigh"}))
-	assert.Equal(t, "claude --resume {id} --model=sonnet"+" --effort xhigh",
+	assert.Equal(t, "claude --resume {id} --effort xhigh --model=sonnet",
 		applySessionFlags("claude --resume {id} --model=sonnet", sessionReading{Model: opusID, Effort: "xhigh"}))
-	assert.Equal(t, "claude --resume {id} --effort low --model 'claude-opus-5-5'",
+	assert.Equal(t, "claude --resume {id} --model 'claude-opus-5-5' --effort low",
 		applySessionFlags("claude --resume {id} --effort low", sessionReading{Model: opusID, Effort: "xhigh"}))
 	assert.Equal(t, "claude --resume {id} --model a --effort low",
 		applySessionFlags("claude --resume {id} --model a --effort low", opusXhigh))
