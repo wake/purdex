@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Paperclip, PaperPlaneRight, Stop } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { expandPlaceholders, removePlaceholderText } from '../../lib/conversations/image-placeholder'
 import { readAttachments, removeAttachment, removeAttachmentText, forgetAttachmentsWhere, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { startUploads, subscribeUploads, takeUnseenFailures, uploadsOf } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
@@ -14,6 +15,7 @@ import { sendQueueFor } from '../../lib/conversations/send-queue'
 import type { Capabilities } from '../../lib/conversations/types'
 import { useFsImage } from '../../lib/conversations/fs-image'
 import { AttachmentThumb } from './AttachmentThumb'
+import { DraftTags } from './DraftTags'
 import { QueuedMessages } from './QueuedMessages'
 
 interface Props {
@@ -123,7 +125,8 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const dropChip = (a: Attachment) => {
     removeAttachment(dKey, a.id)
     setChips(readAttachments(dKey))
-    const next = removeAttachmentText(readDraft(dKey) ?? '', a.text)
+    const current = readDraft(dKey) ?? ''
+    const next = a.seq === undefined ? removeAttachmentText(current, a.text) : removePlaceholderText(current, a.text)
     writeDraft(dKey, next)
     setDraft(next)
   }
@@ -131,7 +134,8 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const send = () => {
     // a message sent while a file is still on its way would leave without it
     if (uploading.length > 0) { setHint({ key: 'deck.attach.busy', tone: 'warn' }); return }
-    const plan = planSend(draft)
+    // the draft holds the short `[Image #N]`; what is sent is the marker the agent reads (the draft itself stays as it is until it is sent)
+    const plan = planSend(expandPlaceholders(draft, shown))
     if (!plan.ok) { if (plan.refusal !== 'empty') setHint({ key: REFUSAL_KEY[plan.refusal], tone: 'warn' }); return }
     if (guard.current.check(plan.text) === 'confirm') { setHint({ key: 'deck.send.confirm', tone: 'warn' }); return }
     queue.enqueue(plan.text)
@@ -187,6 +191,8 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               attach(files)
             }}
           >
+            <div className="relative min-w-0 flex-1">
+              <DraftTags draft={draft} seqs={new Set(shown.flatMap((a) => (a.seq === undefined ? [] : [a.seq])))} box={box} />
             <textarea
               ref={box}
               value={draft}
@@ -205,11 +211,12 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
               }}
               style={{ overflowWrap: 'anywhere' }}
-              className={`flex-1 resize-none rounded-none border-0 px-0 pb-1.5 pt-0 text-sm leading-5 text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
+              className={`relative block w-full resize-none rounded-none border-0 px-0 pb-1.5 pt-0 text-sm leading-5 text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
                 // proto v2: no border, radius, outline or ring (focused or not); a drag over tints the row
                 dragging ? 'bg-accent/10' : 'bg-transparent'
               }`}
             />
+            </div>
             {sessionCode && (
               <>
                 <input ref={fileInput} data-testid="attach-file-input" type="file" multiple hidden onChange={(e) => { attach([...(e.target.files ?? [])]); e.target.value = '' }} />

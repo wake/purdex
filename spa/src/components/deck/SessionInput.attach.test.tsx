@@ -44,15 +44,15 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearAllUploads(); clearAllDrafts(); clearAllAttachments(); clearAllSendQueues() })
 
 describe('SessionInput attachments', () => {
-  it('pasting an image uploads it to the tmux session code and writes [Image: source: path] into the draft', async () => {
+  it('pasting an image uploads it to the tmux session code and writes a short [Image #1] into the draft', async () => {
     render(ui())
     paste({ files: [png()] })
     await flush()
     expect(mocks.upload).toHaveBeenCalledTimes(1)
     const [hostId, file, code] = mocks.upload.mock.calls[0]
     expect([hostId, (file as File).name, code]).toEqual(['h', 'shot.png', 'dev001'])
-    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
-    expect(readDraft(KEY)).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('[Image #1]')
+    expect(readDraft(KEY)).toBe('[Image #1]')
     expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
   })
 
@@ -90,7 +90,7 @@ describe('SessionInput attachments', () => {
     expect(paste({ files: [png()], text: 'caption' })).toBe(true)
     await flush()
     expect(mocks.upload).toHaveBeenCalledTimes(1)
-    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('[Image #1]')
   })
 
   it('a file paste is intercepted (the browser does not also paste it)', () => {
@@ -103,7 +103,7 @@ describe('SessionInput attachments', () => {
     fireEvent.drop(screen.getByTestId('session-input-drop'), { dataTransfer: { files: [png(), pdf()], types: ['Files'] } })
     await flush()
     expect(mocks.upload).toHaveBeenCalledTimes(2)
-    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]\n/up/dev001/doc.pdf')
+    expect(box().value).toBe('[Image #1]\n/up/dev001/doc.pdf')
     expect(screen.getAllByTestId('attachment-chip')).toHaveLength(2)
   })
 
@@ -136,7 +136,7 @@ describe('SessionInput attachments', () => {
     up.resolve({ filename: 'shot.png', path: '/up/dev001/shot.png' })
     await flush()
     expect(screen.queryByTestId('attachment-uploading')).toBeNull()
-    expect(box().value).toBe('hello\n[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('hello [Image #1]')
     fireEvent.keyDown(box(), { key: 'Enter' })
     expect(screen.getByTestId('queued-message')).toHaveTextContent('[Image: source: /up/dev001/shot.png]')
   })
@@ -149,7 +149,7 @@ describe('SessionInput attachments', () => {
     fireEvent.change(box(), { target: { value: 'typed meanwhile' } })
     up.resolve({ filename: 'shot.png', path: '/up/dev001/shot.png' })
     await flush()
-    expect(box().value).toBe('typed meanwhile\n[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('typed meanwhile [Image #1]')
   })
 
   it.each([
@@ -194,15 +194,15 @@ describe('SessionInput attachments', () => {
     expect(readAttachments(KEY)).toEqual([])
   })
 
-  it('two identical markers: removing one chip takes out one line and leaves the other chip', async () => {
+  it('two images of the same file: each has its own number, and removing one chip leaves the other', async () => {
     mocks.upload.mockImplementation(() => Promise.resolve({ filename: 'shot.png', path: '/up/dev001/shot.png' }))
     render(ui())
     paste({ files: [png()] }); paste({ files: [png()] })
     await flush()
-    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]\n[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('[Image #1] [Image #2]')
     expect(screen.getAllByTestId('attachment-chip')).toHaveLength(2)
     fireEvent.click(screen.getAllByRole('button', { name: /Remove attachment/ })[0])
-    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('[Image #2]')
     expect(screen.getAllByTestId('attachment-chip')).toHaveLength(1)
   })
 
@@ -214,10 +214,10 @@ describe('SessionInput attachments', () => {
     view.unmount()
     up.resolve({ filename: 'shot.png', path: '/up/dev001/shot.png' })
     await flush()
-    expect(readDraft(KEY)).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(readDraft(KEY)).toBe('[Image #1]')
     expect(readAttachments(KEY)).toHaveLength(1)
     render(ui())
-    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('[Image #1]')
     expect(screen.getByTestId('attachment-chip')).toBeInTheDocument()
   })
 
@@ -236,7 +236,7 @@ describe('SessionInput attachments', () => {
     up.resolve({ filename: 'shot.png', path: '/up/dev001/shot.png' })
     await flush()
     expect(screen.queryByTestId('attachment-uploading')).toBeNull()
-    expect(box().value).toBe('hi\n[Image: source: /up/dev001/shot.png]') // the live input picked the landing up
+    expect(box().value).toBe('hi [Image #1]') // the live input picked the landing up
   })
 
   it('a failure while the input was away is shown when it comes back', async () => {
@@ -290,7 +290,7 @@ describe('SessionInput attachments', () => {
     await flush()
     first.unmount()
     render(ui())
-    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('[Image #1]')
     expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
     expect(readAttachments(KEY)).toHaveLength(1)
   })

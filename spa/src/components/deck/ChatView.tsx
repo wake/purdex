@@ -12,6 +12,7 @@ import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import { FoldContext } from '../room/fold-context'
 import { AgentBubble, UserBubble } from './ChatBubbles'
+import { ConversationHostContext } from './conversation-host'
 import { PeerLine } from './ChatPeerLine'
 import { ChatHeader } from './ChatHeader'
 import { ChatWorkRow, FileChip } from './ChatWorkRow'
@@ -71,7 +72,7 @@ export function ChatView(props: ChatViewProps) {
   return <ChatViewBody key={binding} binding={binding} {...props} />
 }
 
-function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active }: ChatViewProps & { binding: string }) {
+function ChatViewBody({ binding, paneKey, hostId, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active }: ChatViewProps & { binding: string }) {
   const t = useI18nStore((s) => s.t)
   const fold = usePaneFoldStore(`${paneKey}\0${binding}`)
   const entries = useMemo(() => buildChat(turns), [turns])
@@ -86,6 +87,7 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
   useEffect(() => { follow() }, [follow, entries])
 
   return (
+    <ConversationHostContext.Provider value={hostId}>
     <FoldContext.Provider value={fold}>
       <div data-testid="chat-view" className="h-full min-h-0">
         {reason ? (
@@ -110,6 +112,7 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
         )}
       </div>
     </FoldContext.Provider>
+    </ConversationHostContext.Provider>
   )
 }
 

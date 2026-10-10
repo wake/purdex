@@ -3,7 +3,8 @@
 // chip memory whether or not an input is mounted; a remounted input reads what is still on its way from here. Only a release of the
 // pane (`forgetAttachmentsWhere`, via `pane-release`) aborts an upload, and an aborted one writes nothing back. Keyed like the draft.
 import { agentUploadToPath } from '../host-api'
-import { addAttachment, attachmentText, insertAttachmentText, isImageFile, makePreviewUrl, revokePreviewUrl, trackUpload } from './attachment-memory'
+import { addAttachment, attachmentText, insertAttachmentText, isImageFile, makePreviewUrl, nextAttachmentSeq, revokePreviewUrl, trackUpload } from './attachment-memory'
+import { imagePlaceholder, insertPlaceholderText } from './image-placeholder'
 import { readDraft, writeDraft } from './draft-memory'
 
 export interface Uploading { id: string; name: string; percent: number; image: boolean; size: number; /** The local file's blob: URL for the thumbnail (images only); handed to the chip when the upload lands, revoked otherwise. */ previewUrl?: string }
@@ -40,7 +41,7 @@ function setRunning(key: string, next: readonly Uploading[]): void {
   notify(key)
 }
 
-/** Starts saving `files`; each one's path goes into the draft (on its own line) and a chip when it lands. */
+/** Starts saving `files`; each one's placeholder (an image) or path (any other file) goes into the draft and a chip when it lands. */
 export function startUploads(key: string, hostId: string, sessionCode: string, files: readonly File[]): void {
   for (const file of files) {
     const id = `att-${++seq}`
@@ -61,10 +62,12 @@ export function startUploads(key: string, hostId: string, sessionCode: string, f
     }).then(({ path }) => {
       // released while the answer was on its way: nothing may be rebuilt
       if (ctl.signal.aborted) return done()
-      const text = attachmentText(path, image)
-      writeDraft(key, insertAttachmentText(readDraft(key) ?? '', text))
+      // an image leaves a short `[Image #N]` (sending expands it); any other file its path on a line of its own
+      const seq = image ? nextAttachmentSeq(key) : undefined
+      const text = seq === undefined ? attachmentText(path, false) : imagePlaceholder(seq)
+      writeDraft(key, seq === undefined ? insertAttachmentText(readDraft(key) ?? '', text) : insertPlaceholderText(readDraft(key) ?? '', text))
       handedOver = true
-      addAttachment(key, { id, name: file.name, path, text, image, mime: file.type, size: file.size, previewUrl })
+      addAttachment(key, { id, name: file.name, path, text, image, mime: file.type, size: file.size, previewUrl, seq })
       done() // notifies after the memories are written
     }, (error) => {
       done()

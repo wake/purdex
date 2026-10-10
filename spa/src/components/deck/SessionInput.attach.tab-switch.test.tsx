@@ -57,11 +57,11 @@ describe('session input attachments across tab switches', () => {
 
     rerender(<TabContent activeTab={dashTab} allTabs={all} />)
     expect(screen.queryByTestId('session-input')).toBeNull() // really unmounted
-    expect(readDraft(key)).toBe('look\n[Image: source: /up/dev001/shot.png]')
+    expect(readDraft(key)).toBe('look [Image #1]')
     expect(readAttachments(key)).toHaveLength(1)
 
     rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
-    expect(box().value).toBe('look\n[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('look [Image #1]')
     expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
   })
 
@@ -87,6 +87,24 @@ describe('session input attachments across tab switches', () => {
     expect(revoked).toEqual(['blob:test/1'])
   })
 
+  it('the placeholder, its chip and its number are there after a tab switch, and sending still expands them', async () => {
+    const { rerender } = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    fireEvent.paste(box(), { clipboardData: { files: [new File(['x'], 'a.png', { type: 'image/png' }), new File(['x'], 'b.png', { type: 'image/png' })], getData: () => '', types: ['Files'] } })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    fireEvent.change(box(), { target: { value: 'see [Image #2] and [Image #1]' } })
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('session-input')).toBeNull()
+    rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(box().value).toBe('see [Image #2] and [Image #1]')
+    expect(screen.getAllByTestId('attachment-chip')).toHaveLength(2)
+    expect(screen.getAllByRole('img').map((i) => i.getAttribute('alt')).sort()).toEqual(['a.png', 'b.png'])
+    expect(screen.getByTestId('draft-tags').querySelectorAll('mark')).toHaveLength(2)
+
+    fireEvent.keyDown(box(), { key: 'Enter' })
+    expect(screen.getByTestId('queued-message')).toHaveTextContent('see [Image: source: /up/dev001/b.png] and [Image: source: /up/dev001/a.png]')
+  })
+
   // an upload settled by hand
   function pending() {
     let resolve!: (v: { filename: string; path: string }) => void
@@ -109,9 +127,9 @@ describe('session input attachments across tab switches', () => {
     expect(screen.queryByTestId('session-input')).toBeNull()
     up.resolve('/up/dev001/shot.png')
     await flush()
-    expect(readDraft(key)).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(readDraft(key)).toBe('[Image #1]')
     rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
-    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('[Image #1]')
     expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
   })
 
@@ -131,7 +149,7 @@ describe('session input attachments across tab switches', () => {
     up.resolve('/up/dev001/shot.png')
     await flush()
     expect(screen.queryByTestId('attachment-uploading')).toBeNull()
-    expect(box().value).toBe('hello\n[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('hello [Image #1]')
   })
 
   it('releasing the pane while the tab is away aborts the upload and writes nothing back', async () => {

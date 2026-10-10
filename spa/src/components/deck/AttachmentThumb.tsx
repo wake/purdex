@@ -51,12 +51,12 @@ export function AttachmentThumb({ name, image, src, loading, size, percent, prog
   ) : skeleton ? (
     <span data-testid="attachment-skeleton" aria-hidden className="block h-full w-full animate-pulse bg-text-primary/10" />
   ) : (
-    <span className={`flex h-full items-center gap-1 text-xs text-text-primary ${image ? 'flex-col justify-center px-1' : 'px-2'}`}>
+    <span className={`flex h-full items-center gap-1 text-xs text-text-primary ${image ? 'flex-col justify-center px-2' : 'px-2'}`}>
       <FileIcon size={image ? 18 : 20} aria-hidden className="shrink-0 text-text-muted" />
-      <span data-testid="attachment-name" className="whitespace-nowrap">{shortName(name, image ? 8 : 14)}</span>
+      <span data-testid="attachment-name" className="whitespace-nowrap">{shortName(name, image ? 10 : 14)}</span>
     </span>
   )
-  const box = `block h-12 overflow-hidden rounded-md border border-border-subtle bg-surface-secondary ${image ? 'w-12' : ''}`
+  const box = `block h-12 overflow-hidden rounded-md border border-border-subtle bg-surface-secondary ${showsPicture || skeleton ? 'w-12' : 'min-w-12'}`
 
   return (
     <span
