@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
-import { DndContext } from '@dnd-kit/core'
+import { DndContext, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 import { WorkspaceRow } from './WorkspaceRow'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
@@ -225,6 +225,45 @@ describe('WorkspaceRow header is not a Tab stop (#2525)', () => {
     expect(header).not.toHaveAttribute('role', 'button')
     const focusables = container.querySelectorAll<HTMLElement>('[tabindex], button, a[href], input')
     expect(focusables[0]).toBe(screen.getByText('Purdex').closest('button'))
+  })
+})
+
+// Dropping dnd-kit's `attributes` must not drop its `listeners`: the header is still the mouse drag handle. Real PointerSensor,
+// real useSortable: a pointer-down + move on the header must start a drag of this workspace.
+describe('WorkspaceRow header still starts a mouse drag (#2525)', () => {
+  it('pointer-down then move on the header fires onDragStart for the workspace', async () => {
+    const onDragStart = vi.fn()
+    function Harness() {
+      const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+      return (
+        <DndContext sensors={sensors} onDragStart={onDragStart}>
+          <SortableContext items={['ws-1']}>
+            <WorkspaceRow
+              workspace={mkWs('ws-1', 'Purdex')}
+              isActive={false}
+              tabsById={{}}
+              activeTabId={null}
+              onSelectWorkspace={() => {}}
+              onSelectTab={() => {}}
+              onCloseTab={() => {}}
+              onMiddleClickTab={() => {}}
+              onContextMenuTab={() => {}}
+              onAddTabToWorkspace={() => {}}
+            />
+          </SortableContext>
+        </DndContext>
+      )
+    }
+    render(<Harness />)
+    const header = screen.getByTestId('ws-header-ws-1')
+    fireEvent.pointerDown(header, { button: 0, isPrimary: true, clientX: 10, clientY: 10 })
+    fireEvent.pointerMove(document, { clientX: 10, clientY: 30 })
+    expect(onDragStart).toHaveBeenCalledTimes(1)
+    expect(onDragStart.mock.calls[0][0].active.id).toBe('ws-1')
+    fireEvent.pointerUp(document)
+    // dnd-kit swallows the next click for one macrotask after a drag; let it expire so later tests' clicks aren't eaten.
+    await new Promise((r) => setTimeout(r, 50))
+    cleanup()
   })
 })
 

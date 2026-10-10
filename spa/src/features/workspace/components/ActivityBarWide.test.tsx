@@ -524,9 +524,8 @@ describe('ActivityBarWide — drag and drop with the worker list open', () => {
     renderBar()
     expect(dnd.props).not.toBeNull()
     expect(screen.getByTestId('worker-list-section')).toBeInTheDocument()
-    // The workspace rows are still real sortables: the reorder tests below drive them through this DndContext. (The row no
-    // longer carries dnd-kit's aria-roledescription, so it can't be told apart by DOM attribute — #2525.)
-    expect(screen.getByTestId('ws-header-w1')).toBeInTheDocument()
+    // That the rows are still real sortables (header keeps dnd-kit's drag listeners) is pinned in WorkspaceRow.test.tsx
+    // ('header still starts a mouse drag', #2525); the row has no sortable DOM attribute to assert on here.
   })
 
   it('a workspace reorder still calls onReorderWorkspaces', () => {
