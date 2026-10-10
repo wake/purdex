@@ -1,10 +1,11 @@
 // The beads and the ghost lead row draw the seat's subagent dots, like the sidebar's tab rows (spec §4.3, user 2026-10-10).
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, within } from '@testing-library/react'
 import { TeamMemberBeads } from './TeamMemberBeads'
 import { TeamGhostLeadRow } from './TeamGhostLeadRow'
 import type { TeamSeatView } from './team-display'
 import { useAgentStore } from '../../stores/useAgentStore'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { compositeKey } from '../../lib/composite-key'
 
 vi.mock('./TeamSidebarBlock', () => ({
@@ -17,6 +18,8 @@ const seat = (id: string, code: string): TeamSeatView => ({
 const ref = { id: 'a', type: 'cc', started_at: 1, source_pid: 0, source_start_time: '' }
 
 describe('subagent dots on beads and the ghost lead', () => {
+  const savedStyle = useUISettingsStore.getState().tabIndicatorStyle
+  afterEach(() => useUISettingsStore.setState({ tabIndicatorStyle: savedStyle }))
   beforeEach(() => {
     useAgentStore.setState({
       statuses: { [compositeKey('h1', 's1')]: 'running', [compositeKey('h1', 's2')]: 'running' }, agentTypes: { [compositeKey('h1', 's1')]: 'cc', [compositeKey('h1', 's2')]: 'cc' },
@@ -24,12 +27,21 @@ describe('subagent dots on beads and the ghost lead', () => {
     } as never)
   })
 
-  it('a bead draws the dots of its own seat only', () => {
-    const { getAllByTestId } = render(
-      <TeamMemberBeads teamKey="t" members={[seat('m1', 's1'), seat('m2', 's2')]} activeTabId={null} withHost={false} onOpen={() => {}} onReorder={() => {}} onBlankClick={() => {}} />,
-    )
-    const [b1, b2] = getAllByTestId('team-bead')
+  const renderBeads = () => render(
+    <TeamMemberBeads teamKey="t" members={[seat('m1', 's1'), seat('m2', 's2')]} activeTabId={null} withHost={false} onOpen={() => {}} onReorder={() => {}} onBlankClick={() => {}} />,
+  )
+
+  it.each(['badge', 'dot', 'iconDot'] as const)('a bead draws the dots of its own seat only (%s)', (style) => {
+    useUISettingsStore.setState({ tabIndicatorStyle: style })
+    const [b1, b2] = renderBeads().getAllByTestId('team-bead')
     expect(within(b1).queryAllByTestId('subagent-dot')).toHaveLength(1)
+    expect(within(b2).queryAllByTestId('subagent-dot')).toHaveLength(0)
+  })
+
+  it('lights off (icon): no dots on any bead', () => {
+    useUISettingsStore.setState({ tabIndicatorStyle: 'icon' })
+    const [b1, b2] = renderBeads().getAllByTestId('team-bead')
+    expect(within(b1).queryAllByTestId('subagent-dot')).toHaveLength(0)
     expect(within(b2).queryAllByTestId('subagent-dot')).toHaveLength(0)
   })
 
