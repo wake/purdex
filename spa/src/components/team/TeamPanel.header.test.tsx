@@ -98,7 +98,7 @@ describe('a click on the header', () => {
     expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
     fireEvent.click(screen.getByTestId('team-panel-expand'))
     expect(mode()).toBe('full')
-    fireEvent.click(screen.getByTestId('team-panel-to-line')) // the switch is its own move too: to the title bar, once
+    fireEvent.click(screen.getByTestId('team-panel-to-titlebar')) // the switch is its own move too: to the title bar, once
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
   })
 

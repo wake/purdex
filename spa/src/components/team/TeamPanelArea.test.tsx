@@ -3,6 +3,8 @@
 // (survives a tab switch through the real TabContent and a reload). Real stores and the real provider.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { ArrowLineUp } from '@phosphor-icons/react'
 import { TabContent } from '../TabContent'
 import { TeamDisplayProvider } from './TeamDisplayProvider'
 import { TeamPanelArea } from './TeamPanelArea'
@@ -305,7 +307,7 @@ describe('full mode', () => {
     fireEvent.click(screen.getByTestId('team-panel-count')) // a header click: full -> line
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('line')
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
-    fireEvent.click(screen.getByTestId('team-panel-to-full'))
+    fireEvent.click(screen.getByTestId('team-panel-header')) // a header click again: line -> full (the button no longer does this)
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('full')
   })
 })
@@ -740,12 +742,62 @@ describe('resize and enlarge', () => {
   })
 })
 
+describe('the header\'s move-to-title-bar button (round 5)', () => {
+  const btn = () => screen.getByTestId('team-panel-to-titlebar')
+  const setMode = (m: 'full' | 'line' | 'max') => act(() => { useTeamUiStore.getState().setPanelMode(KEY, m) })
+
+  it('line, full and max all draw the same icon (ArrowLineUp, not a caret) with the same tooltip, and none has the old expand-list control', () => {
+    scene()
+    mount()
+    const icons: string[] = []
+    for (const m of ['full', 'line', 'max'] as const) {
+      setMode(m)
+      expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe(m)
+      icons.push(btn().querySelector('svg')!.innerHTML)
+      expect(btn().getAttribute('title')).toBe('收進標題列')
+      expect(btn().getAttribute('aria-label')).toBe('收進標題列')
+      expect(screen.queryByTestId('team-panel-to-full')).toBeNull()
+    }
+    expect(new Set(icons).size).toBe(1)
+    // it is Phosphor's ArrowLineUp, not a caret
+    expect(icons[0]).toBe(renderToStaticMarkup(<ArrowLineUp size={11} />).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, ''))
+  })
+
+  it('the tooltip reads 「Move to title bar」 in English', () => {
+    scene()
+    mount()
+    act(() => useI18nStore.getState().setLocale('en'))
+    expect(btn().getAttribute('title')).toBe('Move to title bar')
+  })
+
+  it('in every state a click moves the area into the title bar and back to the state it left', () => {
+    scene()
+    mount()
+    for (const m of ['line', 'full', 'max'] as const) {
+      setMode(m)
+      fireEvent.click(btn())
+      expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
+      expect(screen.queryByTestId('team-panel-area')).toBeNull()
+      act(() => useTeamUiStore.getState().toggleTitleBar(KEY))
+      expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe(m)
+    }
+  })
+
+  it('line <-> full is only the header click: the button never expands a one-line panel', () => {
+    scene()
+    mount()
+    setMode('line')
+    fireEvent.click(btn())
+    expect(useTeamUiStore.getState().panelMode[KEY]).not.toBe('full')
+  })
+})
+
 describe('the title bar state', () => {
   it('⌃ hands the area to the title bar: the pane draws nothing, and the way back is the state it left', () => {
     scene()
     mount()
     fireEvent.click(screen.getByTestId('team-panel-expand')) // max
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    fireEvent.click(screen.getByTestId('team-panel-to-titlebar'))
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
     expect(screen.queryByTestId('team-panel-area')).toBeNull()
     act(() => useTeamUiStore.getState().toggleTitleBar(KEY))

@@ -7,7 +7,7 @@
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretUp } from '@phosphor-icons/react'
+import { ArrowsInSimple, ArrowsOutSimple, ArrowLineUp } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
@@ -101,6 +101,28 @@ function useReturnFocus() {
   return api
 }
 
+/**
+ * The header's one move-to-title-bar control (round 5): the same icon and the same action in line, full and max. Going
+ * line <-> full is the header click's job, not this button's.
+ */
+function ToTitleBarButton({ onClick }: { onClick: () => void }) {
+  const t = useI18nStore((s) => s.t)
+  const label = t('team.panel.to_titlebar')
+  return (
+    <button
+      type="button"
+      data-testid="team-panel-to-titlebar"
+      onMouseDown={keepFocus}
+      onClick={onClick}
+      className="px-1 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
+      title={label}
+      aria-label={label}
+    >
+      <ArrowLineUp size={11} />
+    </button>
+  )
+}
+
 function ExpandButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
   const t = useI18nStore((s) => s.t)
   const label = t(expanded ? 'team.panel.restore' : 'team.panel.enlarge')
@@ -133,17 +155,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Pro
         <NameCapsule team={team} />
         <span data-testid="team-panel-count" className="text-text-muted whitespace-nowrap">· {t('team.panel.members', { count: members.length })}</span>
         <span className="ml-auto flex items-center gap-0.5">
-          <button
-            type="button"
-            data-testid="team-panel-to-line"
-            onMouseDown={keepFocus}
-            onClick={() => onSetMode('titlebar')}
-            className="px-1 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
-            title={t('team.panel.to_line')}
-            aria-label={t('team.panel.to_line')}
-          >
-            <CaretUp size={11} />
-          </button>
+          <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
           <ExpandButton expanded={expanded} onToggle={() => onSetMode(expanded ? 'full' : 'max')} />
         </span>
       </div>
@@ -269,17 +281,7 @@ function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props &
         ))}
       </div>
       <span className="flex items-center gap-0.5 flex-shrink-0">
-        <button
-          type="button"
-          data-testid="team-panel-to-full"
-          onMouseDown={keepFocus}
-          onClick={() => onSetMode('full')}
-          className="px-1 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
-          title={t('team.panel.to_full')}
-          aria-label={t('team.panel.to_full')}
-        >
-          <CaretDown size={11} />
-        </button>
+        <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
         <ExpandButton expanded={false} onToggle={() => onSetMode('max')} />
       </span>
     </div>
