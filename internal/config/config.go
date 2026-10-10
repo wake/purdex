@@ -282,6 +282,7 @@ func (c Config) Redacted() Config {
 	out.Nex.RepoRoots = nonNil(out.Nex.RepoRoots)
 	out.Nex.ServiceRoots = nonNil(out.Nex.ServiceRoots)
 	out.Nex.PathPrepend = nonNil(out.Nex.PathPrepend)
+	out.Nex.Sandbox.ExtraProfiles = nonNil(out.Nex.Sandbox.ExtraProfiles)
 	out.Token = ""
 	out.HostID = ""
 	for i := range out.Peers.Hosts {
@@ -312,6 +313,7 @@ func (c Config) Clone() Config {
 	out.Nex.RepoRoots = slices.Clone(c.Nex.RepoRoots)
 	out.Nex.ServiceRoots = slices.Clone(c.Nex.ServiceRoots)
 	out.Nex.PathPrepend = slices.Clone(c.Nex.PathPrepend)
+	out.Nex.Sandbox.ExtraProfiles = slices.Clone(c.Nex.Sandbox.ExtraProfiles)
 
 	if c.Push != nil {
 		p := *c.Push

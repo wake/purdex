@@ -744,3 +744,78 @@ func TestPutConfigRollsBackOnWriteFailure(t *testing.T) {
 	assert.Equal(t, []string{"aider"}, c.Cfg.Detect.CCCommands)
 	c.CfgMu.RUnlock()
 }
+
+// c933b0-122: extra_profiles survives a PUT that does not name it (an older SPA form sends sandbox without it), and only an
+// explicit [] / null clears it.
+func TestPutConfigNexExtraProfilesIsPresenceAware(t *testing.T) {
+	cases := []struct {
+		name    string
+		sandbox string
+		want    []string
+	}{
+		{"sandbox without the key keeps it", `{"max_profile":"handoff","default_profile":"trusted"}`, []string{"confined"}},
+		{"no sandbox key keeps it", ``, []string{"confined"}},
+		{"sandbox null clears the whole section", `null`, nil},
+		{"empty list clears it", `{"max_profile":"trusted","default_profile":"trusted","extra_profiles":[]}`, nil},
+		{"null clears it", `{"max_profile":"trusted","default_profile":"trusted","extra_profiles":null}`, nil},
+		{"a list replaces it", `{"max_profile":"trusted","default_profile":"trusted","extra_profiles":["confined"]}`, []string{"confined"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, cfgPath := newPeerTestCore(t, config.NexPeerConfig{})
+			c.CfgMu.Lock()
+			c.Cfg.Nex.Sandbox.ExtraProfiles = []string{"confined"}
+			require.NoError(t, config.WriteFile(cfgPath, *c.Cfg))
+			c.CfgMu.Unlock()
+
+			body := `{"nex":{"enabled":false}}`
+			if tc.sandbox != "" {
+				body = `{"nex":{"enabled":false,"sandbox":` + tc.sandbox + `}}`
+			}
+			rec := httptest.NewRecorder()
+			c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(body)))
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+			c.CfgMu.RLock()
+			assert.ElementsMatch(t, tc.want, c.Cfg.Nex.Sandbox.ExtraProfiles, "in memory") // [] and nil both mean "none"
+			c.CfgMu.RUnlock()
+			loaded, err := config.Load(cfgPath)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.want, loaded.Nex.Sandbox.ExtraProfiles, "persisted")
+		})
+	}
+}
+
+// A bad extra_profiles is a 400 and writes nothing.
+func TestPutConfigNexBadExtraProfilesIs400(t *testing.T) {
+	c, cfgPath := newPeerTestCore(t, config.NexPeerConfig{})
+	before, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	body := `{"nex":{"enabled":false,"sandbox":{"max_profile":"trusted","default_profile":"trusted","extra_profiles":["trusted"]}}}`
+	c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(body)))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "extra_profiles")
+	after, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+}
+
+// confined is an opt-in profile: nexen refuses it as ceiling or default, so the PUT does too (400, nothing written).
+func TestPutConfigNexOptInProfileAsCeilingOrDefaultIs400(t *testing.T) {
+	for _, sb := range []string{
+		`{"max_profile":"confined","default_profile":"trusted"}`,
+		`{"max_profile":"trusted","default_profile":"confined"}`,
+	} {
+		c, cfgPath := newPeerTestCore(t, config.NexPeerConfig{})
+		before, err := os.ReadFile(cfgPath)
+		require.NoError(t, err)
+		rec := httptest.NewRecorder()
+		c.handlePutConfig(rec, httptest.NewRequest("PUT", "/api/config", strings.NewReader(`{"nex":{"enabled":false,"sandbox":`+sb+`}}`)))
+		assert.Equal(t, http.StatusBadRequest, rec.Code, sb)
+		assert.Contains(t, rec.Body.String(), "extra_profiles")
+		after, err := os.ReadFile(cfgPath)
+		require.NoError(t, err)
+		assert.Equal(t, string(before), string(after))
+	}
+}

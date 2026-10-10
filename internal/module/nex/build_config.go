@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -85,6 +86,7 @@ func buildOptions(hostID, dataDir string, n pdxconfig.NexConfig, shutdownBudget 
 		Sandbox: sandbox.Policy{
 			MaxProfile:     n.Sandbox.MaxProfile,
 			DefaultProfile: n.Sandbox.DefaultProfile,
+			ExtraProfiles:  slices.Clone(n.Sandbox.ExtraProfiles),
 		},
 		LeaseTTL:         nexconfig.Duration(leaseTTL),
 		InterruptTimeout: nexconfig.Duration(interrupt),

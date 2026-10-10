@@ -48,6 +48,9 @@ type NexPeerConfig struct {
 type NexSandboxConfig struct {
 	MaxProfile     string `toml:"max_profile"     json:"max_profile"`
 	DefaultProfile string `toml:"default_profile" json:"default_profile"`
+	// ExtraProfiles lists the opt-in profiles outside the clamp order a request may ask for (nexen sandbox.Policy.ExtraProfiles; the
+	// only legal element today is "confined"). Empty by default, so omitempty is safe: an absent key reads back as empty.
+	ExtraProfiles []string `toml:"extra_profiles,omitempty" json:"extra_profiles"`
 }
 
 // NexTimeoutsConfig holds Nexen turn/lease timeouts as duration strings
@@ -94,11 +97,29 @@ func (n *NexConfig) Validate(home string) error {
 		return fmt.Errorf("nex.repo_roots / nex.service_roots: at least one root required when nex.enabled")
 	}
 
+	// nexen refuses an opt-in profile as the ceiling or the default (it belongs in extra_profiles); say so on PUT instead of
+	// persisting a section the next boot cannot assemble.
+	for _, f := range []struct{ key, value string }{
+		{"max_profile", n.Sandbox.MaxProfile},
+		{"default_profile", n.Sandbox.DefaultProfile},
+	} {
+		if sandbox.IsExtraProfile(f.value) {
+			return fmt.Errorf("nex.sandbox.%s: %q is an opt-in profile outside the clamp order; list it in nex.sandbox.extra_profiles instead", f.key, f.value)
+		}
+	}
 	if n.Sandbox.MaxProfile != "" && !sandbox.ValidName(n.Sandbox.MaxProfile) {
 		return fmt.Errorf("nex.sandbox.max_profile: unknown profile %q", n.Sandbox.MaxProfile)
 	}
 	if n.Sandbox.DefaultProfile != "" && !sandbox.ValidName(n.Sandbox.DefaultProfile) {
 		return fmt.Errorf("nex.sandbox.default_profile: unknown profile %q", n.Sandbox.DefaultProfile)
+	}
+
+	// nexen decides which opt-in profiles exist in this build (sandbox.IsExtraProfile), so a bad name is a 400 on PUT and not a
+	// start-up failure of the next boot.
+	for i, e := range n.Sandbox.ExtraProfiles {
+		if !sandbox.IsExtraProfile(e) {
+			return fmt.Errorf("nex.sandbox.extra_profiles[%d]: %q is not a known opt-in profile", i, e)
+		}
 	}
 
 	if n.ClaudeBin != "" {
@@ -242,7 +263,9 @@ func (n NexConfig) Equal(o NexConfig) bool {
 		slices.Equal(n.ServiceRoots, o.ServiceRoots) &&
 		slices.Equal(n.PathPrepend, o.PathPrepend) &&
 		n.ClaudeBin == o.ClaudeBin &&
-		n.Sandbox == o.Sandbox &&
+		n.Sandbox.MaxProfile == o.Sandbox.MaxProfile &&
+		n.Sandbox.DefaultProfile == o.Sandbox.DefaultProfile &&
+		slices.Equal(n.Sandbox.ExtraProfiles, o.Sandbox.ExtraProfiles) &&
 		n.Timeouts == o.Timeouts &&
 		n.Peer == o.Peer
 }
