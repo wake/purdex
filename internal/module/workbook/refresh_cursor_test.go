@@ -3,6 +3,7 @@ package workbook
 import (
 	"testing"
 
+	"github.com/wake/purdex/internal/convmodel"
 	"github.com/wake/purdex/internal/module/agent"
 )
 
@@ -65,5 +66,38 @@ func TestRefreshEntryIsNotAPreviousTurnInThePrompt(t *testing.T) {
 	rows, err := k.st.RecentForPrompt("s1", 5)
 	if err != nil || len(rows) != 1 || rows[0].Kind != KindTurn {
 		t.Fatalf("recent = %+v err %v", rows, err)
+	}
+}
+
+// A cursor that is a real turn but has aged out of the 6-turn window (or no record at all: a session with history the
+// workbook never saw) is the same hole: the Stop that beats the transcript must still find the newest, running turn
+// (codex attack on the hotfix). Mutation gate: onlyNewer without the lost-cursor case → red.
+func TestStopBeforeTranscriptWithTheCursorOutsideTheWindow(t *testing.T) {
+	for name, record := range map[string]bool{"cursor aged out of the window": true, "no record yet": false} {
+		k := newKit(t)
+		k.capable["s1"] = true
+		if record {
+			mustInsert(t, k.st, pending("s1", "s1", "gone-from-the-window", 1))
+		}
+		var turns []convmodel.Turn
+		for i := 0; i < 5; i++ {
+			turns = append(turns, endedTurn("old"+string(rune('a'+i)), int64(10*(i+1)), "older"))
+		}
+		// the Stop beat the file: the newest turn has its prompt and nothing else yet
+		turns = append(turns, convmodel.Turn{ID: "new", Outcome: convmodel.OutcomeRunning, Items: []convmodel.Item{userItem("go")}})
+		k.turns.set("s1", turns...)
+		k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "newest words", At: 2000, Seq: 2000})
+		for i := 0; i < settleRetries+1 && len(k.afters) > 0; i++ {
+			f := k.afters[0]
+			k.afters = k.afters[1:]
+			f()
+		}
+		found := false
+		for _, e := range k.entries("s1") {
+			found = found || e.TurnID == "new"
+		}
+		if !found {
+			t.Errorf("%s: the newest turn was not recorded: %+v", name, k.entries("s1"))
+		}
 	}
 }
