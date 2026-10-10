@@ -53,6 +53,15 @@ describe('todos', () => {
     expect(st().convOfSession.h1.s1).toBe('c1')
   })
 
+  it('keeps every open todo the daemon sends (well past the old 50), and marks openCapped only past MAX_OPEN_TODOS', () => {
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: Array.from({ length: 60 }, (_, i) => todo(i + 1)) })
+    expect(conv()?.todos.open).toHaveLength(60)
+    expect(conv()?.todos.openCapped).toBe(false)
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: Array.from({ length: MAX_OPEN_TODOS }, (_, i) => todo(1000 + i)) })
+    expect(conv()?.todos.open).toHaveLength(MAX_OPEN_TODOS)
+    expect(conv()?.todos.openCapped).toBe(true)
+  })
+
   it('a done todo is never reopened by an open copy', () => {
     st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1, 'done')] })
     st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1)] })

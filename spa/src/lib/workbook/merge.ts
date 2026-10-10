@@ -3,7 +3,10 @@
 // state and the fetches; the rules live here so they can be tested on their own.
 import type { TodoLists, WorkbookEntry, WorkbookTodo } from './types'
 
-export const MAX_OPEN_TODOS = 50
+/** Safety ceiling on the open todos kept per conversation. The daemon's own list holds ≤ 30 open (and the answer's `open` is the
+ *  whole list, spec §9), so nothing the daemon sends reaches this; only a flood does, and then the oldest are dropped AND
+ *  `openCapped` says so. */
+export const MAX_OPEN_TODOS = 500
 /** A safety ceiling on the done record kept per conversation, not a retention policy (spec §6 keeps every record, §9 pages it,
  *  and the daemon holds them all): ~2000 todos is far above what a conversation's list reaches (the model adds ≤ 2 a turn and
  *  closes most), and only there does the store stop paging (`doneCapped`) and drop the oldest to bound memory. */
@@ -15,6 +18,8 @@ export interface TodoBook {
   open: WorkbookTodo[]
   /** Newest first. */
   done: WorkbookTodo[]
+  /** The open list hit MAX_OPEN_TODOS and the oldest open todos were dropped (never silently: the UI can say so). */
+  openCapped: boolean
   /** The oldest done todo RETAINED (null while none is). */
   doneOldestId: number | null
   /** The next page's `before=`: the oldest id the last page brought, kept even when retention dropped that page; null: use `doneOldestId`. */
@@ -30,7 +35,7 @@ export interface TodoBook {
   touchFloor: number
 }
 
-export const emptyTodos = (): TodoBook => ({ open: [], done: [], doneOldestId: null, doneCursor: null, doneExhausted: false, doneCapped: false, loading: false, touches: [], touchFloor: 0 })
+export const emptyTodos = (): TodoBook => ({ open: [], done: [], openCapped: false, doneOldestId: null, doneCursor: null, doneExhausted: false, doneCapped: false, loading: false, touches: [], touchFloor: 0 })
 
 /** Merge `incoming` into a conversation's entries: newest first, one per id, a stale copy never replaces a newer one. */
 export function mergeEntries(have: WorkbookEntry[], incoming: WorkbookEntry[]): WorkbookEntry[] {
@@ -55,12 +60,13 @@ export function upsertTodos(t: TodoBook, incoming: WorkbookTodo[]): TodoBook {
     else open.delete(x.id)
   }
   let openList = [...open.values()].sort((a, b) => a.id - b.id)
-  if (openList.length > MAX_OPEN_TODOS) openList = openList.slice(openList.length - MAX_OPEN_TODOS)
+  let openCapped = t.openCapped
+  if (openList.length > MAX_OPEN_TODOS) { openList = openList.slice(openList.length - MAX_OPEN_TODOS); openCapped = true }
   let doneList = [...done.values()].sort((a, b) => b.id - a.id)
   let doneCapped = t.doneCapped
   if (doneList.length > MAX_DONE_TODOS) { doneList = doneList.slice(0, MAX_DONE_TODOS); doneCapped = true }
   return {
-    ...t, open: openList, done: doneList, doneCapped,
+    ...t, open: openList, openCapped, done: doneList, doneCapped,
     doneOldestId: doneList.length ? doneList[doneList.length - 1].id : null,
   }
 }
