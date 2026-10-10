@@ -94,24 +94,30 @@ let uninstallCleanup: (() => void) | null = null
  */
 export function installSessionViewCleanup(): () => void {
   uninstallCleanup?.()
-  const unsubscribe = useTabStore.subscribe((next, prev) => {
-    if (next.tabs === prev.tabs) return
-    // An empty tab world is real after the last tab closed, but also what the store looks like before it has hydrated.
-    if (Object.keys(next.tabs).length === 0 && !useTabStore.persist.hasHydrated()) return
+  const prune = (tabs: ReturnType<typeof useTabStore.getState>['tabs']) => {
     const { byPane } = useSessionViewStore.getState()
     let gone: string[] | null = null
     for (const key of Object.keys(byPane)) {
       const [tabId, paneId] = key.split('\0')
-      const tab = Object.hasOwn(next.tabs, tabId) ? next.tabs[tabId] : undefined
+      const tab = Object.hasOwn(tabs, tabId) ? tabs[tabId] : undefined
       if (!tab || !findPane(tab.layout, paneId)) (gone ??= []).push(key)
     }
     if (!gone) return
     const kept = { ...byPane }
     for (const key of gone) delete kept[key]
     useSessionViewStore.setState({ byPane: kept })
+  }
+  const unsubscribe = useTabStore.subscribe((next, prev) => {
+    if (next.tabs === prev.tabs) return
+    // An empty tab world is real after the last tab closed, but also what the store looks like before it has hydrated.
+    if (Object.keys(next.tabs).length === 0 && !useTabStore.persist.hasHydrated()) return
+    prune(next.tabs)
   })
+  // The write that skipped above may have been the last one: when hydration ends, settle against what it produced.
+  const offHydration = useTabStore.persist.onFinishHydration((state) => prune(state.tabs))
   const uninstall = () => {
     unsubscribe()
+    offHydration()
     if (uninstallCleanup === uninstall) uninstallCleanup = null
   }
   uninstallCleanup = uninstall

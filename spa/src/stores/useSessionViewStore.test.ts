@@ -130,6 +130,26 @@ describe('cleanup when a tab or a pane goes away', () => {
     }
   })
 
+  it('when hydration ends with an empty tab world, the records it left behind go', () => {
+    let finish: (() => void) | undefined
+    const hydrated = vi.spyOn(useTabStore.persist, 'hasHydrated').mockReturnValue(false)
+    const onFinish = vi.spyOn(useTabStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useTabStore.getState())
+      return () => {}
+    })
+    try {
+      installSessionViewCleanup()
+      useSessionViewStore.getState().setView('t1', 'p1', 'c', 'deck')
+      useTabStore.setState({ tabs: {}, tabOrder: ['x'] }) // skipped: not hydrated yet
+      expect(Object.keys(useSessionViewStore.getState().byPane)).toHaveLength(1)
+      finish!()
+      expect(useSessionViewStore.getState().byPane).toEqual({})
+    } finally {
+      hydrated.mockRestore()
+      onFinish.mockRestore()
+    }
+  })
+
   it('closing the last tab clears its records', () => {
     const only = createTab({ kind: 'dashboard' })
     installSessionViewCleanup()
