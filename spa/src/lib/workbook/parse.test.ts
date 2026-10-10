@@ -40,6 +40,16 @@ describe('parseConversation', () => {
   })
 })
 
+describe('parseConversation envelope consistency', () => {
+  it('rejects the whole answer when one entry belongs to another conversation, warning once', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const body = { conv_key: 'c1', entries: [wireEntry({ id: 1 }), wireEntry({ id: 2, conv_key: 'other' })] }
+    expect(parseConversation(body)).toBeNull()
+    expect(parseConversation(body)).toBeNull()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('events', () => {
   it('parses a workbook.entry value (JSON string)', () => {
     const ev = parseEntryEvent(JSON.stringify({ conv_key: 'c1', session_id: 's9', entry: wireEntry() }))

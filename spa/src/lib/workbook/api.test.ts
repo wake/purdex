@@ -33,6 +33,10 @@ describe('fetchConversation', () => {
     pinned.mockResolvedValueOnce(json({ nope: 1 }))
     await expect(fetchConversation('h1', 'claude', 's')).rejects.toMatchObject({ code: 'bad_response' })
   })
+  it('an answer holding another conversation\'s entry is bad_response', async () => {
+    pinned.mockResolvedValueOnce(json({ conv_key: 'c1', entries: [wireEntry({ conv_key: 'other' })] }))
+    await expect(fetchConversation('h1', 'claude', 's')).rejects.toMatchObject({ code: 'bad_response' })
+  })
   it('an unknown host rejects without touching the network (host_removed)', async () => {
     await expect(fetchConversation('ghost', 'claude', 's')).rejects.toMatchObject({ code: 'host_removed' })
     expect(pinned).not.toHaveBeenCalled()

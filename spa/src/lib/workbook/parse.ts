@@ -57,10 +57,13 @@ export function parseConversation(v: unknown): ConversationPage | null {
   if (!isRec(v) || !isStr(v.conv_key) || v.conv_key === '') return null
   if (v.status !== undefined && !isStr(v.status)) return null
   if (v.status_at !== undefined && !isMs(v.status_at)) return null
-  return {
-    convKey: v.conv_key, status: (v.status as string | undefined) ?? '', statusAt: (v.status_at as number | undefined) ?? 0,
-    entries: parseEntries(v.entries),
+  const entries = parseEntries(v.entries)
+  // One conversation per answer: an entry of another conversation means the answer is not to be trusted at all.
+  if (entries.some((e) => e.convKey !== v.conv_key)) {
+    warnOnce('rejecting a conversation answer: an entry.conv_key differs from the envelope')
+    return null
   }
+  return { convKey: v.conv_key, status: (v.status as string | undefined) ?? '', statusAt: (v.status_at as number | undefined) ?? 0, entries }
 }
 
 export function parseJson(value: unknown): unknown {
