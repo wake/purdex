@@ -62,7 +62,7 @@ const (
 )
 
 // expiring says whether a kind is subject to the 10 minute void (release / kill / end / lead_moved / void queue forever).
-func expiring(kind string) bool { return kind == CmdAdopt || kind == CmdSpawn }
+func expiring(kind string) bool { return kind == CmdAdopt || kind == CmdSpawn || kind == CmdRelay }
 
 // Command is what a cause enqueues. Body is the request JSON as it will be sent: it must carry the same id, kind and
 // to_host_id (the receiver refuses what is not addressed to it, rule 1).
