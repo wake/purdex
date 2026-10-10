@@ -21,8 +21,19 @@ export function panelTitle(view: PanelView, t: (k: string, p?: Record<string, st
   }
 }
 
+/** A step by id among items, descending into a subagent step's loaded children (they nest as deep as agents spawn agents). */
+const findIn = (items: ReadonlyArray<{ type: string; id: string }>, id: string): StepItem | null => {
+  for (const it of items) {
+    if (it.type !== 'step') continue
+    const s = it as StepItem
+    if (s.id === id) return s
+    const hit = s.children ? findIn(s.children, id) : null
+    if (hit) return hit
+  }
+  return null
+}
 const findStep = (turns: PanelTurn[], id: string): StepItem | null => {
-  for (const t of turns) for (const it of t.items) if (it.type === 'step' && it.id === id) return it as StepItem
+  for (const t of turns) { const hit = findIn(t.items, id); if (hit) return hit }
   return null
 }
 
