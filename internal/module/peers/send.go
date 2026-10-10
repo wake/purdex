@@ -17,8 +17,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
@@ -139,30 +141,48 @@ func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer strin
 	httpReq.Header.Set("Authorization", "Bearer "+bearer)
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	// Whether the request went out in full decides what a later failure means (DeliveryUncertainError).
+	var wrote atomic.Bool
+	httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				wrote.Store(true)
+			}
+		},
+	}))
+	failed := func(err error) error {
+		if wrote.Load() {
+			return &DeliveryUncertainError{Err: err}
+		}
+		return err
+	}
+
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return ipeers.DeliverResponse{}, nil, err
+		return ipeers.DeliverResponse{}, nil, failed(err)
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDeliverRespBytes+1))
-	if err != nil {
-		return ipeers.DeliverResponse{}, nil, fmt.Errorf("read response body: %w", err)
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxDeliverRespBytes+1))
+	// A status line other than 200 already says the receiver refused: that is known whether or not the rest of its body arrives,
+	// so only a failure to get a 200 answer through is uncertain.
+	if readErr != nil && resp.StatusCode == http.StatusOK {
+		return ipeers.DeliverResponse{}, nil, failed(fmt.Errorf("read response body: %w", readErr))
 	}
-	if len(raw) > maxDeliverRespBytes {
-		return ipeers.DeliverResponse{}, nil, fmt.Errorf("response body exceeds %d bytes", maxDeliverRespBytes)
-	}
-
 	if resp.StatusCode != http.StatusOK {
+		// The status line is the refusal; the body only names it, and is read when it arrived whole and within the cap.
 		remote := &ipeers.RemoteError{Status: resp.StatusCode, Error: fmt.Sprintf("http_%d", resp.StatusCode)}
 		var ae ipeers.APIError
-		if json.Unmarshal(raw, &ae) == nil && ae.Error != "" {
+		if readErr == nil && len(raw) <= maxDeliverRespBytes && json.Unmarshal(raw, &ae) == nil && ae.Error != "" {
 			// The receiver holds bearer (it is its inbound token) and can
 			// echo it in either field (#1152).
 			remote.Error = boundRemote(ae.Error, bearer)
 			remote.Detail = boundRemote(ae.Detail, bearer)
 		}
 		return ipeers.DeliverResponse{}, remote, nil
+	}
+	if len(raw) > maxDeliverRespBytes {
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("response body exceeds %d bytes", maxDeliverRespBytes)
 	}
 
 	var out ipeers.DeliverResponse
@@ -591,7 +611,23 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	postCtx, cancelPost := context.WithTimeout(m.stopCtx, ipeers.InterDaemonTimeout)
 	defer cancelPost()
 	resp, remote, err := m.post(postCtx, m.deliverClient, entry.URL, entry.Token, dreq)
+	var uncertain *DeliveryUncertainError
 	switch {
+	case errors.As(err, &uncertain):
+		// The request went out in full and the answer never came: the receiver may have delivered. Answer what the contract
+		// promises — delivery_uncertain, 200 — so the caller does not resend; the audit row keeps the cause.
+		text := boundRemote(err.Error(), entry.Token)
+		m.setResult(id, "", ipeers.ResultDeliveryUncertain, text)
+		m.logf("peers: send %s to %q: no answer to the deliver call (it may have been delivered): %s", msgID, targetAlias, text)
+		_ = json.NewEncoder(w).Encode(ipeers.SendResponse{
+			MsgID:     msgID,
+			ToHostID:  targetHostID,
+			ToAddress: toAddress,
+			To:        to,
+			Result:    ipeers.ResultDeliveryUncertain,
+			// EffectiveMode stays empty: no receiver answered, so nobody knows whether it lowered bypass to prompting.
+		})
+		return
 	case err != nil:
 		text := boundRemote(err.Error(), entry.Token)
 		m.setResult(id, "", "", text)
@@ -634,3 +670,12 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		OneWay:        resp.OneWay,
 	})
 }
+
+// DeliveryUncertainError is a /deliver call that failed AFTER the whole request had been written — the client timed out waiting
+// for the answer, or the connection dropped before it: the receiver may have delivered, so the caller must not resend and the
+// answer is delivery_uncertain, not a failure (#1009, spec §4.4). A call that never got the request out (the connection was
+// refused, the dial timed out) is a plain error: nothing reached the receiver.
+type DeliveryUncertainError struct{ Err error }
+
+func (e *DeliveryUncertainError) Error() string { return e.Err.Error() }
+func (e *DeliveryUncertainError) Unwrap() error { return e.Err }

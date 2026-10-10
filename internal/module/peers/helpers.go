@@ -27,7 +27,7 @@ const (
 	// direction for this long or longer.
 	HelperIdleReap = 30 * time.Minute
 	// HelperReadyTimeout bounds the wait for a helper's ready line.
-	HelperReadyTimeout = 3 * time.Second
+	HelperReadyTimeout = ipeers.HelperReadyTimeout
 	// HelperTermGrace is the SIGTERM→SIGKILL grace for a helper being
 	// stopped (Release) and for a recorded pid being swept.
 	HelperTermGrace = 2 * time.Second

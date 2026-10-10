@@ -402,9 +402,32 @@ delivers into the origin session exactly as above. The chain is symmetric.
 | `hop_chain` | when the frame that reached a helper carries a `hop-chain` attribute, its value is sent as `hop_chain` and written back verbatim into the outgoing wrapper; it is Claude Code's loop marker and the bridge only carries it |
 | Pair rate limit | a daemon refuses more than 30 deliveries per minute for one `(from tuple, to tuple)` pair with `rate_limited`, audited. Beyond that, conversation loops are bounded only by Claude Code's own per-sender throttles and repeat suppression — the bridge makes no stronger claim |
 | Text size | UTF-8 `text` ≤ 64 KiB; refused at `/send` and `/deliver` |
-| HTTP | 10 s per inter-daemon call, no retry |
+| HTTP | one inter-daemon call waits `InterDaemonTimeout` = receiver worst case + 2 s margin (12 s), no retry — see **Budget chain** below |
 | Socket write | 5 s; success means the full frame was written and the connection closed cleanly |
-| Timeout after write | reported to the caller as `delivery_uncertain`; the caller does not resend |
+| Timeout after write | reported to the caller as `delivery_uncertain`; the caller does not resend. This holds at every layer: a sender whose `/deliver` call timed out (or dropped) AFTER the whole request was written answers `delivery_uncertain` (200, `effective_mode` empty — the receiver never said what it applied), not `remote_error`; a refusal whose body is cut is still the refusal; a call that never got the request out (refused, dial timeout) is still a plain failure (#1009) |
+
+**Budget chain (#1009).** Every layer waits longer than the worst case of what it waits for, and each number is derived from
+the one below in `internal/peers/wire.go` (asserted by `internal/peers/budget_test.go`; the daemon's own constants are tied to
+them in `internal/module/peers/budget_chain_test.go` and `cmd/pdx/msg_budget_test.go`), so a delivery that lands is never
+reported as failed because a layer above gave up first:
+
+| Layer | Worst case | Made of |
+|---|---|---|
+| receiver `/deliver` | `ReceiverWorstCase` 10 s | inventory `InventoryBudget` 2 s + helper ready `HelperReadyTimeout` 3 s + socket write `SocketWriteTimeout` 5 s |
+| sender daemon → receiver | `InterDaemonTimeout` 12 s | `ReceiverWorstCase` + `TimeoutMargin` 2 s |
+| sender daemon `/send` | `SenderWorstCase` 17 s | inventory 2 s + peer inventory fetch `RemoteFetchTimeout` 3 s + `InterDaemonTimeout` 12 s |
+| `pdx msg send` (and the spawn brief) | `SendRequestTimeout` 19 s | `SenderWorstCase` + `TimeoutMargin` |
+
+The 2 s margin is also what covers the steps that have no bound of their own here — the audit writes at both ends, the JSON
+encoding and the network round trip; it is a margin, not a proof, and the `delivery_uncertain` classification above is the
+backstop when it is ever exceeded.
+
+Older peers: no wire format changes, only numbers. An old receiver (worst case 10 s) is simply waited for 12 s. An old CLI keeps
+its 15 s against a new sender daemon whose worst case is 17 s; the tail in between (a delivery that lands after 15 s) is shown by
+the old CLI as a timeout — the same visible failure it got before, when the daemon answered `remote_error` — so it is no worse,
+and `pdx` is one binary per host, so CLI and daemon move together. The 200 `delivery_uncertain` answer is the same one a receiver's
+post-write socket timeout has always produced; callers that drop the response body (`pdx spawn` brief, `pdx report`, `pdx task`)
+already treated that as sent and do now for a sender-side timeout too.
 
 **Audit.** Table `peer_messages` in `meta.db`: `msg_id, ts, direction
 (out|in|reply), from_host_id, from_session_id, to_host_id, to_session_id,
