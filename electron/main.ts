@@ -171,13 +171,13 @@ function registerIpcHandlers(): void {
     const release = () => { activeNotifications.delete(notification) }
     notification.on('click', () => {
       release()
-      // To the window that showed it (every window when that one is gone) — see notification-router.ts.
-      // The SPA will call focusMyWindow IPC when it handles the click
+      // An approval click goes to the window that showed it; every other click is broadcast and the SPA of the window that
+      // has the tab handles it (see notification-router.ts). The SPA will call focusMyWindow IPC when it handles the click
       const payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } } = {
         sessionCode: opts.sessionCode,
       }
       if (opts.action) payload.action = opts.action
-      deliverNotificationClick(ownerId, windowManager.getAllWindows().map((win) => ({
+      deliverNotificationClick(ownerId, opts.action?.kind, windowManager.getAllWindows().map((win) => ({
         id: win.webContents.id,
         isDestroyed: () => win.isDestroyed(),
         send: (channel, p) => win.webContents.send(channel, p),
