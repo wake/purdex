@@ -122,7 +122,7 @@ func TestPeerWrapper_TextOnlySenderIsUnverified(t *testing.T) {
 }
 
 func TestSenderName_IsCleaned(t *testing.T) {
-	zw := string(rune(0x202e)) + string(rune(0x200b))
+	zw := string(rune(0x202e)) + string(rune(0x200b)) + string(rune(0x061c)) + string(rune(0x2060)) + string(rune(0xfeff)) + string(rune(0x200d)) + string(rune(0x2028))
 	name := "lead" + zw + "\x07" + strings.Repeat("x", 200)
 	text := `<cross-session-message from="uds:/x" from-name="` + name + `">hi</cross-session-message>`
 	u := firstUser(t, conv(t, userRow("u1", 1, text)))

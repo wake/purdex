@@ -75,13 +75,14 @@ func pluginBody(text, name string) string {
 	return strings.TrimSuffix(rest, "\n\n"+pluginFooter)
 }
 
-// cleanName makes a sender name fit to display: control and invisible formatting characters dropped, at most 80 characters.
+// cleanName makes a sender name fit to display: control characters, every Unicode format character (bidi, zero-width, word
+// joiner, BOM, ...) and line separators dropped, at most 80 characters.
 // The name of a peer comes from a message attribute, which anyone who can write text can set.
 func cleanName(s string) string {
 	var b strings.Builder
 	n := 0
 	for _, r := range s {
-		if unicode.IsControl(r) || (r >= 0x200B && r <= 0x200F) || (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) || r == 0xFEFF {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) { // control, format (bidi, zero-width, joiners), separators
 			continue
 		}
 		if n++; n > 80 {

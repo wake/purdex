@@ -309,7 +309,7 @@ Everything until the next opening belongs to the turn. An absorbed queued prompt
 |---|---|---|
 | `<command-name>` prompt row or local command | `slash` (text `/name args`) | — |
 | `<bash-input>` | `bash` (text = the command) | — |
-| `origin.kind: "peer"` (prompt row, `isMeta` row or `queued_command`) | `peer` (text = the message body, the `<cross-session-message>` wrapper removed) | `{kind: "peer", name: from-name, unverified: true}` — the sender is only what the text says, so a client must not show it as an authenticated peer (any name is cut to 80 characters, control and invisible characters dropped) |
+| `origin.kind: "peer"` (prompt row, `isMeta` row or `queued_command`) | `peer` (text = the message body, the `<cross-session-message>` wrapper removed) | `{kind: "peer", name: from-name}` (names are cut to 80 characters; control and format characters dropped) |
 | `origin.kind: "task-notification"` (or `queued_command` with `commandMode: "task-notification"`) | `task` (text = the `<summary>`, else the text without tags) | — |
 | `turnOrigin: "scheduled"` | `scheduled` | — |
 | `promptSource: "queued"` or an absorbed `queued_command` from a human (origin `human` or none, `commandMode: "prompt"`) | `queued` | — |
