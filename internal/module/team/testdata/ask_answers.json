@@ -1,0 +1,646 @@
+{
+ "about": "decide's hook_ask answers rule and the mod's answersFit (hooks/ask.js) must agree on every case; both tests read this file. 'fit' is whether the answers answer exactly the questions asked.",
+ "cases": [
+  {
+   "name": "one question, answered",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "紅"
+   },
+   "fit": true
+  },
+  {
+   "name": "two questions, both answered",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    },
+    {
+     "question": "要不要加辣？",
+     "header": "辛辣",
+     "options": [
+      {
+       "label": "要",
+       "description": ""
+      },
+      {
+       "label": "不要",
+       "description": ""
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "藍",
+    "要不要加辣？": "不要"
+   },
+   "fit": true
+  },
+  {
+   "name": "multi-select is the comma-joined labels",
+   "questions": [
+    {
+     "question": "選配料",
+     "header": "配料",
+     "options": [
+      {
+       "label": "A",
+       "description": ""
+      },
+      {
+       "label": "B",
+       "description": ""
+      }
+     ],
+     "multiSelect": true
+    }
+   ],
+   "answers": {
+    "選配料": "A, B"
+   },
+   "fit": true
+  },
+  {
+   "name": "free text is any non-empty string (the answer need not be an option)",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "綠色，其實"
+   },
+   "fit": true
+  },
+  {
+   "name": "an answer with inner and edge spaces that is not only whitespace",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "  紅  "
+   },
+   "fit": true
+  },
+  {
+   "name": "an answer of only U+2003 EM SPACE is empty",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": " "
+   },
+   "fit": false,
+   "note": "Zs: whitespace in both"
+  },
+  {
+   "name": "duplicate question texts collapse to one key",
+   "questions": [
+    {
+     "question": "同一題",
+     "header": "a",
+     "options": [],
+     "multiSelect": false
+    },
+    {
+     "question": "同一題",
+     "header": "b",
+     "options": [],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "同一題": "x"
+   },
+   "fit": true
+  },
+  {
+   "name": "duplicate question texts, two keys is one too many",
+   "questions": [
+    {
+     "question": "同一題",
+     "header": "a",
+     "options": [],
+     "multiSelect": false
+    },
+    {
+     "question": "同一題",
+     "header": "b",
+     "options": [],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "同一題": "x",
+    "別的": "y"
+   },
+   "fit": false
+  },
+  {
+   "name": "missing question",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    },
+    {
+     "question": "要不要加辣？",
+     "header": "辛辣",
+     "options": [
+      {
+       "label": "要",
+       "description": ""
+      },
+      {
+       "label": "不要",
+       "description": ""
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "紅"
+   },
+   "fit": false
+  },
+  {
+   "name": "extra key",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "紅",
+    "要不要加辣？": "要"
+   },
+   "fit": false
+  },
+  {
+   "name": "a key that is not a question text (case differs)",
+   "questions": [
+    {
+     "question": "Pick one",
+     "header": "h",
+     "options": [],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "pick one": "x"
+   },
+   "fit": false
+  },
+  {
+   "name": "empty string answer",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": ""
+   },
+   "fit": false
+  },
+  {
+   "name": "ascii whitespace-only answer",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": " \t\n "
+   },
+   "fit": false
+  },
+  {
+   "name": "NBSP-only answer",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": " "
+   },
+   "fit": false
+  },
+  {
+   "name": "ideographic-space-only answer",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "　"
+   },
+   "fit": false
+  },
+  {
+   "name": "BOM-only answer is whitespace for ECMAScript trim (Go's TrimSpace is not)",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "﻿"
+   },
+   "fit": false
+  },
+  {
+   "name": "NEL-only answer is NOT whitespace for ECMAScript trim (Go's TrimSpace says it is)",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": ""
+   },
+   "fit": true
+  },
+  {
+   "name": "zero-width space is not whitespace",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "​"
+   },
+   "fit": true
+  },
+  {
+   "name": "U+180E is not whitespace (not Zs any more)",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "᠎"
+   },
+   "fit": true
+  },
+  {
+   "name": "no answers at all",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {},
+   "fit": false
+  },
+  {
+   "name": "a number is not an answer",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": 1
+   },
+   "fit": false,
+   "note": "not a string"
+  },
+  {
+   "name": "null is not an answer",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": null
+   },
+   "fit": false,
+   "note": "not a string"
+  },
+  {
+   "name": "an array is not an answer",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "紅還是藍？": [
+     "紅"
+    ]
+   },
+   "fit": false,
+   "note": "not a string"
+  },
+  {
+   "name": "a question without text can never be answered",
+   "questions": [
+    {
+     "header": "h",
+     "options": [],
+     "multiSelect": false
+    }
+   ],
+   "answers": {
+    "x": "y"
+   },
+   "fit": false
+  },
+  {
+   "name": "a question whose text is not a string can never be answered",
+   "questions": [
+    {
+     "question": 7,
+     "header": "h"
+    }
+   ],
+   "answers": {
+    "7": "y"
+   },
+   "fit": false
+  },
+  {
+   "name": "a question with an empty text can never be answered",
+   "questions": [
+    {
+     "question": "",
+     "header": "h"
+    }
+   ],
+   "answers": {
+    "": "y"
+   },
+   "fit": false
+  },
+  {
+   "name": "one good question and one without text",
+   "questions": [
+    {
+     "question": "紅還是藍？",
+     "header": "顏色",
+     "options": [
+      {
+       "label": "紅",
+       "description": "r"
+      },
+      {
+       "label": "藍",
+       "description": "b"
+      }
+     ],
+     "multiSelect": false
+    },
+    {
+     "header": "h"
+    }
+   ],
+   "answers": {
+    "紅還是藍？": "紅"
+   },
+   "fit": false
+  }
+ ]
+}
