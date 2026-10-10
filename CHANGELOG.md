@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.678] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`。
+
+### Fixed：Claude Code 底下代跑的 codex 不再狂發「任務完成」推播 — #2397（介面線）
+
+- Claude Code 的背景 subagent 去跑 `codex exec` 時，每個 codex 結束都被當成那個 session 結束，一分鐘可以收到好幾則「任務完成」。現在認得出這是代跑的 subagent，它們的結束（Stop／StopFailure）不再推播；session 自己的結束照舊推播。
+
+### Changed：App 經由 mod 送出的訊息會出現在對話裡 — U3-0b 第一部分（#2394，介面線）
+
+- App 透過 session 的 mod 以使用者身分送出的訊息（`asUser`），轉錄檔裡標的是 plugin 來源，原本整筆被略過，對話裡看不到、App 也對不上自己先顯示的那一則。現在當成使用者訊息；plugin 自己發的提示（例如接力）照舊略過。
+
+### Fixed：kill 本機 member 時先佔住、再送訊號 — #2152（#2386）
+
+- kill adopted 或 spawned 的本機 member，改成先把它標成「kill 進行中」（killing）才送訊號或關 tmux；這段期間同一個 lead 的 release、接力與第二次 kill 都會被擋，不會出現「行程已經被殺、卻回報 release 成功」。送不出去就退回 active；daemon 在中間當機的話，開機時只把行程還在的退回 active，不會在開機時替它送訊號；卡住的由 sweeper 收尾。killing 期間這個 session 不能被加成另一個 member。
+
+### Fixed：本機 spawn 收尾的三個舊問題 — #2384（#2392）
+
+- team 結束時，還在進行的本機 spawn 一起標成失敗，等待中的請求會立刻拿到結果，tmux 由 runner 收掉；原本可能在已結束的 team 裡長出一個 active member。
+- 收尾時遇到舊版留下的同一筆 member，要 team、session、主機、pane、tmux 身分都相符而且還是 active 才沿用，否則整筆退回。
+- 中止 spawn 時改成先把 op 標成失敗、搶到的人才關 tmux，不會誤關另一個已經成功的 runner 的 session。
+
 ## [1.0.0-alpha.677] - 2026-10-10
 
 > 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`。
