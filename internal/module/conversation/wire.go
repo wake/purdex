@@ -14,10 +14,19 @@ import (
 type indexedItem struct {
 	convmodel.Item
 	index int
+	// clientMsgID names, on a user item, the client_msg_id of the request the daemon sent to the mod that wrote it (U3-2);
+	// the model does not carry it, the transcript does not have it.
+	clientMsgID string
 }
 
 func (i indexedItem) MarshalJSON() ([]byte, error) {
-	b, err := i.Item.MarshalJSON()
+	item := i.Item
+	if i.clientMsgID != "" && item.User != nil {
+		u := *item.User // never the cached item itself
+		u.ClientMsgID = i.clientMsgID
+		item.User = &u
+	}
+	b, err := item.MarshalJSON()
 	if err != nil {
 		return nil, err
 	}
@@ -46,19 +55,27 @@ func (i indexedItem) MarshalJSON() ([]byte, error) {
 }
 
 // indexItems numbers items that start at position first of their turn's full list.
-func indexItems(items []convmodel.Item, first int) []indexedItem {
+func indexItems(items []convmodel.Item, first int, echo map[string]string) []indexedItem {
 	out := make([]indexedItem, len(items))
 	for i, it := range items {
-		out[i] = indexedItem{Item: it, index: first + i}
+		out[i] = indexedItem{Item: it, index: first + i, clientMsgID: echoOf(it, echo)}
 	}
 	return out
 }
 
+// echoOf is the client_msg_id named for a user item ("" for any other item or no pairing).
+func echoOf(it convmodel.Item, echo map[string]string) string {
+	if it.User == nil || echo == nil {
+		return ""
+	}
+	return echo[it.User.ID]
+}
+
 // indexedItemsAt pairs items with the positions the entry computed for them.
-func indexedItemsAt(items []convmodel.Item, at []int) []indexedItem {
+func indexedItemsAt(items []convmodel.Item, at []int, echo map[string]string) []indexedItem {
 	out := make([]indexedItem, len(items))
 	for i, it := range items {
-		out[i] = indexedItem{Item: it, index: at[i]}
+		out[i] = indexedItem{Item: it, index: at[i], clientMsgID: echoOf(it, echo)}
 	}
 	return out
 }
@@ -78,18 +95,18 @@ type apiTurn struct {
 }
 
 // apiTurns converts a window's turns: the first shown item of a turn that carries omitted_items N is at index N.
-func apiTurns(turns []convmodel.Turn) []apiTurn {
+func apiTurns(turns []convmodel.Turn, echo map[string]string) []apiTurn {
 	out := make([]apiTurn, len(turns))
 	for i, t := range turns {
 		out[i] = apiTurn{ID: t.ID, Index: t.Index, StartedAt: t.StartedAt, EndedAt: t.EndedAt, Outcome: t.Outcome,
-			Error: t.Error, DurationMS: t.DurationMS, Items: indexItems(t.Items, t.OmittedItems), OmittedItems: t.OmittedItems}
+			Error: t.Error, DurationMS: t.DurationMS, Items: indexItems(t.Items, t.OmittedItems, echo), OmittedItems: t.OmittedItems}
 	}
 	return out
 }
 
 // encodeAPITurn is how a turn is encoded on the wire, for the window's size budget (the index per item included).
 func encodeAPITurn(t convmodel.Turn) ([]byte, error) {
-	return json.Marshal(apiTurns([]convmodel.Turn{t})[0])
+	return json.Marshal(apiTurns([]convmodel.Turn{t}, nil)[0])
 }
 
 // conversationJSON is convmodel.Conversation on the wire with indexed items.

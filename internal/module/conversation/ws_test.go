@@ -769,15 +769,15 @@ func TestWS_ChangesBodyIsMeasuredWithTheFrameAroundIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	inc := entry.Increment(epoch, rev)
-	body, ok := e.mod.encodeIncrement(inc, "h", 0)
+	body, ok := e.mod.encodeIncrement(inc, sid, "h", 0)
 	if !ok {
 		t.Fatal("setup")
 	}
 	e.mod.maxBody = len(body) + frameOverhead - 1
-	if _, ok := e.mod.encodeIncrement(inc, "h", frameOverhead); ok {
+	if _, ok := e.mod.encodeIncrement(inc, sid, "h", frameOverhead); ok {
 		t.Fatal("a body that fits only without its frame was accepted")
 	}
-	if _, ok := e.mod.encodeIncrement(inc, "h", 0); !ok {
+	if _, ok := e.mod.encodeIncrement(inc, sid, "h", 0); !ok {
 		t.Fatal("the HTTP form (no frame) must still fit")
 	}
 	// and the frame really is smaller than the allowance

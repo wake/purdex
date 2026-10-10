@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -23,6 +24,45 @@ type PromptSender interface {
 	Submit(ctx context.Context, sessionID, clientMsgID, text string) (promptq.Result, error)
 	Interrupt(ctx context.Context, sessionID string) (promptq.Result, error)
 	HasOwner(sessionID string) bool
+	Match(sessionID string, items []promptq.EchoItem) []string
+}
+
+// turnItems is the items of the turns, one group per turn.
+func turnItems(turns []convmodel.Turn) [][]convmodel.Item {
+	out := make([][]convmodel.Item, len(turns))
+	for i, t := range turns {
+		out[i] = t.Items
+	}
+	return out
+}
+
+// echoIDs pairs the user messages in the item groups with the client_msg_ids of the requests that sent them (U3-2): user item
+// id -> client_msg_id. Only the person's own messages (source user) are looked at.
+func (m *Module) echoIDs(sessionID string, groups ...[]convmodel.Item) map[string]string {
+	ps := m.promptSender()
+	if ps == nil {
+		return nil
+	}
+	var items []promptq.EchoItem
+	var ids []string
+	for _, g := range groups {
+		for _, it := range g {
+			if it.User != nil && it.User.Source == convmodel.SourceUser {
+				items = append(items, promptq.EchoItem{Text: it.User.Text, At: time.UnixMilli(it.User.At)})
+				ids = append(ids, it.User.ID)
+			}
+		}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for i, cm := range ps.Match(sessionID, items) {
+		if cm != "" {
+			out[ids[i]] = cm
+		}
+	}
+	return out
 }
 
 const (
@@ -109,6 +149,10 @@ func (m *Module) promptSender() PromptSender {
 // while a mod stream that announced prompt.v1 is live for the session (else they stay not_wired, fail-closed).
 func (m *Module) capabilitiesFor(sessionID string) *convmodel.Capabilities {
 	c := convmodel.TranscriptCapabilities()
+	// a question the agent asks is answered through the approvals channel (the conversation stream's approvals and the decide
+	// API with hook answers), whatever the mod does
+	c.AnswerQuestion = "approval"
+	delete(c.Reasons, "answer_question")
 	if ps := m.promptSender(); ps != nil && ps.HasOwner(sessionID) {
 		c.Send, c.Interrupt = "prompt", "prompt"
 		delete(c.Reasons, "send")
