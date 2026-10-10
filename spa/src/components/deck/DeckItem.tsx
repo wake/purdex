@@ -19,8 +19,8 @@ export function DeckItem({ item, actions, light, agentModel, agentHeader }: { it
         <div data-testid="deck-agent-text" className="deck-md">
           {agentHeader && <AgentHeader model={agentModel} at={item.at} />}
           {light && !item.streaming
-            ? <RoomProseLight content={item.markdown} />
-            : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} />}
+            ? <RoomProseLight content={item.markdown} cjk />
+            : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} cjk />}
           {item.truncated && <div className="text-xs text-text-muted">{t('deck.output.cut')}</div>}
         </div>
       )

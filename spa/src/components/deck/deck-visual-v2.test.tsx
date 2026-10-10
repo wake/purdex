@@ -140,9 +140,11 @@ describe('agent prose typography (index.css)', () => {
 })
 
 describe('agent text leading (pt 10)', () => {
-  it('1.65 for the deck and the chat, one pixel under the pane size and 1px apart, and the block / list-item gaps follow it', () => {
+  it('1.65 for the deck and the chat, one pixel under the pane size, and the block / list-item gaps follow it', () => {
     const block = css.slice(css.indexOf('=== deck / chat agent text'))
-    expect(block).toMatch(/\.chat-md \.worker-prose \{\s*line-height: 1\.65;\s*font-size: calc\(var\(--wt-font-size\) - 1px\);[^\n]*\n\s*letter-spacing: 1px/)
+    expect(block).toMatch(/\.chat-md \.worker-prose \{\s*line-height: 1\.65;\s*font-size: calc\(var\(--wt-font-size\) - 1px\);/)
+    // no letter-spacing on the container: only Chinese runs (span.cjk) are spaced
+    expect(block.slice(0, block.indexOf('.deck-md .worker-prose :where(p, li'))).not.toContain('letter-spacing')
     expect(block).not.toMatch(/line-height: 1\.5/)
     expect(css).toMatch(/\.deck-md \.worker-prose :where\(p, ul, ol, pre, table, blockquote[^{]*\{ margin-bottom: 0\.75em/)
     expect(css).toMatch(/\.chat-md \.worker-prose :where\(p, ul, ol, pre, table, blockquote[^{]*\{ margin-bottom: 0\.75em/)
@@ -154,19 +156,14 @@ describe('agent text leading (pt 10)', () => {
     expect(css.slice(reset)).toMatch(/\.chat-md \.worker-prose :where\(li > ul, li > ol, li > p\)/)
     expect(css).toMatch(/\.deck-md \.worker-prose :where\(li \+ li\)/)
     expect(css).toMatch(/\.chat-md \.worker-prose :where\(li \+ li\)/)
-    // code keeps its own spacing, and the rule comes after the 1px so it wins (same specificity)
-    expect(css.lastIndexOf(':where(pre, code)')).toBeGreaterThan(css.indexOf('letter-spacing: 1px'))
-    expect(css).toMatch(/\.chat-md \.worker-prose :where\(pre, code\) \{ letter-spacing: normal; \}/)
+    expect(css).toMatch(/\.cjk \{ letter-spacing: 1px; \}/)
   })
-  it('the person\'s words are spaced like the agent\'s (a bash input, which is code, is not)', () => {
+  it('Latin letters are not spaced: no tracking class on the person\'s words', () => {
     render(<UserBlock item={user({ text: 'hello' })} />)
-    expect(screen.getByTestId('deck-user').querySelector('.tracking-\\[1px\\]')).not.toBeNull()
-    cleanup()
-    render(<UserBlock item={user({ source: 'bash', text: 'ls' })} />)
-    expect(screen.getByTestId('deck-user').querySelector('.tracking-\\[1px\\]')).toBeNull()
+    expect(screen.getByTestId('deck-user').querySelector('[class*="tracking"]')).toBeNull()
     cleanup()
     render(<UserBubble item={user({ text: 'hi' })} />)
-    expect(screen.getByTestId('chat-user-bubble')).toHaveClass('tracking-[1px]')
+    expect(screen.getByTestId('chat-user-bubble').className).not.toContain('tracking')
   })
 })
 
@@ -180,8 +177,9 @@ describe('terminal-style input', () => {
     expect(src).toMatch(/flex items-end gap-2 border-t px-3 py-1\.5/)
     expect(src).not.toContain('border-y')
   })
-  it('types at the agent text\'s size, spacing and leading (13px, 1px, 1.65); the placeholder inherits', () => {
-    expect(src).toContain('text-[13px] leading-[1.65] tracking-[1px]')
+  it('types at the agent text\'s size and leading (13px, 1.65); the placeholder inherits; no letter-spacing (a textarea cannot space Chinese only)', () => {
+    expect(src).toContain('text-[13px] leading-[1.65] text-text-primary')
+    expect(src).not.toContain('tracking-')
     expect(src).not.toMatch(/resize-none[^`]*text-sm/)
   })
 })
