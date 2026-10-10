@@ -347,10 +347,8 @@ func (m *Module) applyModOverlay(projections []SessionProjection) {
 		}
 		if l != nil {
 			lit[i] = *l
-			// A turn-boundary hook newer than the mod's last light event
-			// decides the status for now (hookedge.go).
-			if e, ok := m.hookEdge[top.FrameID]; ok && e.wins(top.SessionID, l.statusEventAt, now) {
-				edged[i] = e.status
+			if es, ok := m.edgeStatusLocked(top.FrameID, top.SessionID, l.statusEventAt, now); ok {
+				edged[i] = es
 			}
 		}
 	}
@@ -372,6 +370,39 @@ func (m *Module) applyModOverlay(projections []SessionProjection) {
 		p.Background = string(l.background)
 		p.Subagents = overlayDots(p.Subagents, l.dots, p.TopFrame.AgentType)
 	}
+}
+
+// overlayStatus is the light of one frame as the pane shows it: the status the frame's hooks derived (hookStatus), laid
+// under the mod's light for the conversation when a live stream reports it, the same rule applyModOverlay applies to the
+// pane's broadcast (a turn-boundary hook newer than the mod's last light event still decides). The conversation's header
+// reads the frame store directly (LightStatus, ConfirmedOwners), not the broadcast, so without this a turn the hooks
+// never close — Esc runs no Stop hook — stays 'running' in the header while the pane's own light is idle. With no live
+// stream, or with the overlay off, it is hookStatus unchanged.
+func (m *Module) overlayStatus(sessionID, frameID, hookStatus string) string {
+	if m == nil || sessionID == "" || !m.modOverlayOn.Load() {
+		return hookStatus
+	}
+	now := m.modClock()
+	m.modMu.Lock()
+	defer m.modMu.Unlock()
+	st := m.modStreams[m.modBySID[sessionID]]
+	if st == nil || st.SID != sessionID || !st.Live(now) {
+		return hookStatus
+	}
+	if es, ok := m.edgeStatusLocked(frameID, sessionID, st.StatusEventAt, now); ok {
+		return string(es)
+	}
+	return string(st.Status())
+}
+
+// edgeStatusLocked is the status a turn-boundary hook decides for the frame for now, when that hook is newer than the
+// mod's last light event of the stream (hookedge.go); ok is false when no edge wins. The one rule both the pane's
+// broadcast (applyModOverlay) and the conversation's header (overlayStatus) apply. modMu must be held.
+func (m *Module) edgeStatusLocked(frameID, sessionID string, statusEventAt, now time.Time) (agentpkg.Status, bool) {
+	if e, ok := m.hookEdge[frameID]; ok && e.wins(sessionID, statusEventAt, now) {
+		return e.status, true
+	}
+	return "", false
 }
 
 // overlayDots is the projection's proxy refs followed by one native ref per

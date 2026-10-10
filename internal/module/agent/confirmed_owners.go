@@ -88,6 +88,7 @@ func (m *Module) ConfirmedOwners(ctx context.Context, sessionID string) ([]PaneO
 	}
 	var owners []PaneOwner
 	for _, o := range byPane {
+		o.Status = m.overlayStatus(sessionID, o.FrameID, o.Status) // the mod's light, as LightStatus gives it
 		owners = append(owners, o)
 	}
 	if len(owners) > 0 {
