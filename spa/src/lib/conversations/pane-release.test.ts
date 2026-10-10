@@ -5,6 +5,7 @@ import type { Tab } from '../../types/tab'
 import { useTabStore } from '../../stores/useTabStore'
 import { readScrollMemo, writeScrollMemo } from '../nex/transcript-scroll-memory'
 import { draftKey, readDraft, writeDraft, clearAllDrafts } from './draft-memory'
+import { addAttachment, clearAllAttachments, readAttachments } from './attachment-memory'
 import { deckPanes, isFolded, noteDeckPane, setOpen } from './fold-memory'
 import { chatScrollKey, clearAllPanels, conversationBinding, openPanel, readPanel } from './panel-memory'
 import { commitTabWorld } from '../profile/master-world'
@@ -35,6 +36,7 @@ function fakePort() {
 function fill(pane: string, s: string, port: SendPort = fakePort().port) {
   const dk = draftKey(pane, H, s)
   writeDraft(dk, 'typing')
+  addAttachment(dk, { id: 'a1', name: 'a.png', path: '/up/a.png', text: '[Image: source: /up/a.png]' })
   sendQueueFor(dk, () => port)
   openPanel(pane, conversationBinding(H, s), { kind: 'chain', turnId: 't0', firstStepId: 'x' })
   setOpen(`${pane}\0${s}`, 'deck-fold', true) // deck
@@ -47,6 +49,7 @@ function fill(pane: string, s: string, port: SendPort = fakePort().port) {
 }
 const has = (pane: string, s: string) => ({
   draft: readDraft(draftKey(pane, H, s)) !== undefined,
+  attachments: readAttachments(draftKey(pane, H, s)).length > 0,
   queue: hasSendQueue(draftKey(pane, H, s)),
   panel: readPanel(pane) !== undefined,
   deckFold: isFolded(`${pane}\0${s}`, 'deck-fold'),
@@ -55,7 +58,7 @@ const has = (pane: string, s: string) => ({
   chatScroll: readScrollMemo(chatScrollKey(pane, conversationBinding(H, s))) !== undefined,
   deckPane: deckPanes().includes(pane),
 })
-const ALL = { draft: true, queue: true, panel: true, deckFold: true, chatFold: true, deckScroll: true, chatScroll: true, deckPane: true }
+const ALL = { draft: true, attachments: true, queue: true, panel: true, deckFold: true, chatFold: true, deckScroll: true, chatScroll: true, deckPane: true }
 const NONE = Object.fromEntries(Object.keys(ALL).map((k) => [k, false]))
 
 /** The release is evaluated once the synchronous write that caused it has finished (a microtask later). */
@@ -64,14 +67,14 @@ const settle = () => Promise.resolve()
 let off: () => void
 beforeEach(() => {
   vi.useFakeTimers()
-  clearAllSendQueues(); clearAllDrafts(); clearAllPanels()
+  clearAllSendQueues(); clearAllDrafts(); clearAllAttachments(); clearAllPanels()
   useTabStore.setState({ tabs: { [tabA.id]: tabA, [tabB.id]: tabB }, tabOrder: [tabA.id, tabB.id], activeTabId: tabA.id, visitHistory: [] })
   useHistoryStore.setState({ closedTabs: [] })
   vi.spyOn(useHistoryStore.persist, 'hasHydrated').mockReturnValue(true) // the test storage hydrates asynchronously
   useLocalProfilesStore.setState({ activeProfileId: 'master', parkedMaster: null, slaves: {}, slaveOrder: [] })
   off = installPaneRelease()
 })
-afterEach(() => { off(); vi.restoreAllMocks(); vi.useRealTimers(); clearAllSendQueues(); clearAllDrafts(); clearAllPanels() })
+afterEach(() => { off(); vi.restoreAllMocks(); vi.useRealTimers(); clearAllSendQueues(); clearAllDrafts(); clearAllAttachments(); clearAllPanels() })
 
 describe('releasePane', () => {
   it('frees every memory of the pane and leaves another pane\'s alone', () => {
