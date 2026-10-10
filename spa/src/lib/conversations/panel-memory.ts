@@ -27,6 +27,9 @@ export interface PanelState {
 /** The conversation a pane's memories (panel, scroll) belong to: host + session id, as the store keys it. */
 export const conversationBinding = (hostId: string, sessionId: string | null | undefined): string => `${hostId}\0${sessionId ?? ''}`
 
+/** The key of a pane's chat scroll memo (`lib/nex/transcript-scroll-memory`): per pane AND conversation. */
+export const chatScrollKey = (paneKey: string, binding: string): string => `${paneKey}\0${binding}\0chat`
+
 export const PANEL_MIN_PX = 320
 export const PANEL_MAX_PX = 640
 export const PANEL_FRACTION = 0.42

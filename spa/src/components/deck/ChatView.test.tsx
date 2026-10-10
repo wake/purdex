@@ -10,7 +10,7 @@ import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
-import { clearAllPanels, readPanel } from '../../lib/conversations/panel-memory'
+import { chatScrollKey, conversationBinding, clearAllPanels, readPanel } from '../../lib/conversations/panel-memory'
 import { forgetFolds } from '../../lib/conversations/fold-memory'
 import { forgetScrollMemo, readScrollMemo } from '../../lib/nex/transcript-scroll-memory'
 import { buildChat, fileSummary } from '../../lib/conversations/chat-model'
@@ -23,6 +23,7 @@ import editWrite from '../../../../testdata/conversation/v1/cc-transcript/edit-w
 import denial from '../../../../testdata/conversation/v1/cc-transcript/denial-kinds/expected.json'
 
 const PANE = 'chat-test'
+const BIND = conversationBinding('h', 'session-1')
 type Fx = { conversation: { turns: Array<{ id: string; index: number; items: unknown[] }> } }
 const turnsOf = (f: unknown): PanelTurn[] =>
   (f as Fx).conversation.turns.map((t) => ({ id: t.id, index: t.index, items: t.items.map((it, index) => ({ ...(it as object), index }) as ConversationItem) }))
@@ -37,7 +38,7 @@ const step = (id: string, over: Partial<StepItem> = {}): StepItem =>
 const peer = (id: string, over: Partial<UserItem> = {}): UserItem => ({ type: 'user', id, at: 1, index: 0, text: `msg ${id}`, source: 'peer', from: { kind: 'peer', name: 'host/a' }, ...over })
 const turn = (id: string, index: number, items: ConversationItem[]): PanelTurn => ({ id, index, items })
 
-beforeEach(() => { cleanup(); clearAllPanels(); forgetFolds(PANE); forgetScrollMemo(`${PANE}:chat`) })
+beforeEach(() => { cleanup(); clearAllPanels(); forgetFolds(PANE); forgetScrollMemo(chatScrollKey(PANE, BIND)); forgetScrollMemo(chatScrollKey(PANE, conversationBinding("h", "session-2"))) })
 afterEach(() => { vi.useRealTimers() })
 
 describe('bubbles and work rows', () => {
@@ -99,6 +100,52 @@ describe('a different session in the same pane', () => {
     expect(screen.queryByTestId('session-right-panel')).toBeNull()
     rerender(<ChatView {...props({ sessionId: 'session-1' })} />)
     expect(screen.queryByTestId('session-right-panel')).toBeNull()
+  })
+})
+
+describe('scroll memory belongs to the conversation', () => {
+  const scrollTo = vi.fn()
+  beforeEach(() => {
+    scrollTo.mockClear()
+    Element.prototype.scrollTo = scrollTo as unknown as Element['scrollTo']
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 1000 })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 })
+  })
+  afterEach(() => {
+    delete (Element.prototype as { scrollTo?: unknown }).scrollTo
+    delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight
+    delete (HTMLElement.prototype as { clientHeight?: unknown }).clientHeight
+  })
+  const lastTop = () => (scrollTo.mock.calls[scrollTo.mock.calls.length - 1][0] as { top: number }).top
+  const readerAt300 = () => {
+    const first = mount()
+    const sc = screen.getByTestId('chat-scroll')
+    Object.defineProperty(sc, 'scrollTop', { configurable: true, writable: true, value: 300 })
+    fireEvent.scroll(sc)
+    first.unmount()
+    scrollTo.mockClear()
+  }
+
+  it('the same session comes back where it was left (the control)', () => {
+    readerAt300()
+    mount()
+    expect(lastTop()).not.toBe(1000)
+  })
+
+  it('a new session id in the same pane (/clear, relay, rebuild) starts at the bottom, not at the old position', () => {
+    readerAt300()
+    mount({ sessionId: 'session-2' })
+    expect(lastTop()).toBe(1000)
+  })
+
+  it('a session replaced while mounted starts afresh too', () => {
+    const { rerender } = mount()
+    const sc = screen.getByTestId('chat-scroll')
+    Object.defineProperty(sc, 'scrollTop', { configurable: true, writable: true, value: 300 })
+    fireEvent.scroll(sc)
+    scrollTo.mockClear()
+    rerender(<ChatView {...props({ sessionId: 'session-2' })} />)
+    expect(lastTop()).toBe(1000)
   })
 })
 
@@ -272,7 +319,7 @@ describe('chat across tab switches', () => {
     useUISettingsStore.setState({ keepAliveCount: 0 })
     useShownHostsStore.setState({ ids: [H] })
     useHostConfigStore.setState({ byHost: {}, ensureLoaded: async () => {} })
-    forgetScrollMemo(`${paneIdOf}:chat`)
+    forgetScrollMemo(chatScrollKey(paneIdOf, BIND))
     clearAllPanels()
   })
 
@@ -286,7 +333,7 @@ describe('chat across tab switches', () => {
     Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 200 })
     Object.defineProperty(scroller, 'scrollTop', { configurable: true, writable: true, value: 300 })
     fireEvent.scroll(scroller)
-    expect(readScrollMemo(`${paneIdOf}:chat`)).toMatchObject({ scrollTop: 300, atBottom: false })
+    expect(readScrollMemo(chatScrollKey(paneIdOf, BIND))).toMatchObject({ scrollTop: 300, atBottom: false })
 
     rerender(<TabContent activeTab={dashTab} allTabs={all} />)
     expect(screen.queryByTestId('chat-view')).toBeNull() // really unmounted
@@ -294,6 +341,6 @@ describe('chat across tab switches', () => {
 
     rerender(<TabContent activeTab={chatTab} allTabs={all} />)
     expect(screen.getByTestId('panel-title').textContent).toBe(title)
-    expect(readScrollMemo(`${paneIdOf}:chat`)).toMatchObject({ scrollTop: 300, atBottom: false })
+    expect(readScrollMemo(chatScrollKey(paneIdOf, BIND))).toMatchObject({ scrollTop: 300, atBottom: false })
   })
 })

@@ -6,7 +6,7 @@ import { useEffect, useMemo, type ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { buildChat, type ChatEntry } from '../../lib/conversations/chat-model'
 import { usePaneFoldStore } from '../../lib/conversations/fold-memory'
-import { conversationBinding, openPanel } from '../../lib/conversations/panel-memory'
+import { chatScrollKey, conversationBinding, openPanel } from '../../lib/conversations/panel-memory'
 import type { PanelTurn } from '../../lib/conversations/panel-resolve'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
@@ -51,10 +51,18 @@ function Entry({ entry, paneKey, binding }: { entry: ChatEntry; paneKey: string;
   }
 }
 
-export function ChatView({ paneKey, hostId, sessionId, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active = true }: ChatViewProps) {
+/**
+ * Re-keyed by the conversation: a pane whose session changes (/clear, relay, rebuild) mounts a fresh chat that reads no
+ * scroll, fold or panel state of the old one (all three memories are keyed by pane AND binding).
+ */
+export function ChatView(props: ChatViewProps) {
+  const binding = conversationBinding(props.hostId, props.sessionId)
+  return <ChatViewBody key={binding} binding={binding} {...props} />
+}
+
+function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active = true }: ChatViewProps & { binding: string }) {
   const t = useI18nStore((s) => s.t)
-  const binding = conversationBinding(hostId, sessionId)
-  const fold = usePaneFoldStore(paneKey)
+  const fold = usePaneFoldStore(`${paneKey}\0${binding}`)
   const entries = useMemo(() => buildChat(turns), [turns])
   const hasItems = turns.some((x) => x.items.length > 0)
   const reason: UnreadableReason | null = unreadable ?? (hasItems ? null : 'empty')
@@ -62,7 +70,7 @@ export function ChatView({ paneKey, hostId, sessionId, title, status, turns, unr
   const latest = progress?.kind === 'work' ? progress.run.latest : undefined
 
   // Placed from the pane's memory on the first run (a remount), then follows growth only for a reader at the bottom.
-  const scroll = useTranscriptScroll(undefined, false, { paneId: `${paneKey}:chat`, view: 'chat' })
+  const scroll = useTranscriptScroll(undefined, false, { paneId: chatScrollKey(paneKey, binding), view: 'chat' })
   const { attach, onScroll, follow } = scroll
   useEffect(() => { follow() }, [follow, entries])
 
