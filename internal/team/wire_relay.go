@@ -17,13 +17,16 @@ type RelayState string
 const (
 	RelayAwaitingApproval RelayState = "awaiting_approval"
 	RelayRequested        RelayState = "requested"
-	RelayClaimed          RelayState = "claimed"
-	RelayWriting          RelayState = "writing"
-	RelayWritten          RelayState = "written"
-	RelayCleared          RelayState = "cleared"
-	RelayDone             RelayState = "done"
-	RelayFailed           RelayState = "failed"
-	RelayCancelled        RelayState = "cancelled"
+	// RelayForwarded is a lead's relay of a member that lives on another host: the op is recorded here and the `relay`
+	// command is on its way (member relay spec D10). Not terminal; it ends only by a compare-and-set from this state.
+	RelayForwarded RelayState = "forwarded"
+	RelayClaimed   RelayState = "claimed"
+	RelayWriting   RelayState = "writing"
+	RelayWritten   RelayState = "written"
+	RelayCleared   RelayState = "cleared"
+	RelayDone      RelayState = "done"
+	RelayFailed    RelayState = "failed"
+	RelayCancelled RelayState = "cancelled"
 )
 
 // Terminal reports whether s is a final state (done, failed, cancelled).

@@ -50,6 +50,11 @@ type Store struct {
 	// choke point for waking its long-polls (P6-2b-2, plan v3 §7), whatever path wrote it (report, claim, an approval's
 	// close, a create). The module sets it at Init (wake); it must not block and must not call back into the store.
 	opChanged func(opID string)
+	// onCommandSettled, when set, runs after a command's settle transaction committed (the relay ops it ended: their long-polls and
+	// the lead's notice).
+	onCommandSettled func(tx *sql.Tx)
+	// onSettleAborted runs when that transaction rolled back or failed to commit.
+	onSettleAborted func(tx *sql.Tx)
 
 	// beforeReplaceInsert, when set, runs in ReplaceTerminalOnly's
 	// transaction after the old row's close and before the new row's
@@ -58,6 +63,8 @@ type Store struct {
 	beforeReplaceInsert func() error
 	// afterMemberOpInsert, when set, fails CreateMemberRelayOp right after the op's insert, before the commit (tests).
 	afterMemberOpInsert func() error
+	// afterRelayCommandEnqueue, when set, fails a remote member relay right after its command was enqueued, before the commit (tests).
+	afterRelayCommandEnqueue func() error
 	// afterAskAccept, when set, fails CreateMemberRelayOp right after the open ask was marked accepted, before the commit (tests).
 	afterAskAccept func(tx *sql.Tx) error
 	// beforeMemberOpMove, when set, runs in a member_relay row's transaction after the row's close and before its op's
