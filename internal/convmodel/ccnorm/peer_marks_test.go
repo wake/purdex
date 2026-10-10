@@ -93,6 +93,12 @@ func TestPluginPrompt_UnknownFrameKeepsTheText(t *testing.T) {
 	if u.Source != convmodel.SourcePeer || u.From == nil || u.From.Name != "p" || u.Text != text {
 		t.Fatalf("user = %+v from %+v", u, u.From)
 	}
+	// a final paragraph that only starts like the footer is the plugin's own text, not the footer
+	body2 := "keep\n\nThis is how Claude Code surfaces a prompt a plugin submits between turns, said the plugin."
+	u = firstUser(t, conv(t, userRow("u1", 1, "The p plugin sent a message:\n"+body2, with("origin", obj{"kind": "plugin", "name": "p"}))))
+	if u.Text != body2 {
+		t.Fatalf("a footer-like paragraph was cut: %q", u.Text)
+	}
 	// a trailing paragraph the user wrote themselves is not cut
 	body := "keep this\n\nThis is how I would do it."
 	u = firstUser(t, conv(t, userRow("u1", 1, framedPlugin("p", body), with("origin", obj{"kind": "plugin", "name": "p"}))))

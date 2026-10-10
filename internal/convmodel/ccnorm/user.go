@@ -61,9 +61,9 @@ func leadingPeerWrapper(text string) bool {
 	return opens(strings.TrimLeftFunc(rest, unicode.IsSpace))
 }
 
-// pluginFooterStart opens the paragraph Claude Code appends to a framed plugin prompt (2.1.296); a text that does not end in
-// it keeps its tail.
-const pluginFooterStart = "This is how Claude Code surfaces a prompt a plugin submits between turns"
+// pluginFooter is the paragraph Claude Code 2.1.296 appends to a framed plugin prompt. It is matched whole: a text that
+// does not end in exactly this keeps its tail (another version may word it differently - then it stays in the message).
+const pluginFooter = "This is how Claude Code surfaces a prompt a plugin submits between turns — it starts this turn in the user's place. Address the message above."
 
 // pluginBody takes the frame off a plugin's prompt: the first line "The <name> plugin sent a message:" and the footer
 // paragraph. A text in another shape is returned whole.
@@ -72,10 +72,7 @@ func pluginBody(text, name string) string {
 	if !ok || first != "The "+name+" plugin sent a message:" {
 		return text
 	}
-	if i := strings.LastIndex(rest, "\n\n"+pluginFooterStart); i >= 0 && !strings.Contains(rest[i+2:], "\n\n") {
-		rest = rest[:i]
-	}
-	return rest
+	return strings.TrimSuffix(rest, "\n\n"+pluginFooter)
 }
 
 // pluginAsUser: the row's origin says a plugin submitted the text as the person's own (origin.asUser).
