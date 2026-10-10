@@ -124,6 +124,53 @@ describe('openConversationSocket', () => {
     }
   })
 
+  it('past the deadline the pending ticket request is aborted, not just abandoned', async () => {
+    vi.useFakeTimers()
+    try {
+      let seen: AbortSignal | undefined
+      openConversationSocket({
+        hostId: 'h1', sessionId: SID, WebSocketImpl: Impl, connectTimeoutMs: 1000,
+        getTicket: (_h, signal) => { seen = signal; return new Promise(() => {}) }, onFrame: () => {}, onClose: () => {},
+      })
+      await vi.advanceTimersByTimeAsync(1001)
+      expect(seen?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('close() during a pending ticket aborts the request and leaves no timer', async () => {
+    vi.useFakeTimers()
+    try {
+      let seen: AbortSignal | undefined
+      const closes: unknown[] = []
+      const sock = openConversationSocket({
+        hostId: 'h1', sessionId: SID, WebSocketImpl: Impl, connectTimeoutMs: 1000,
+        getTicket: (_h, signal) => { seen = signal; return new Promise(() => {}) }, onFrame: () => {}, onClose: (w) => closes.push(w),
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      sock.close()
+      expect(seen?.aborted).toBe(true)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(closes).toEqual([]) // closing is not a failure to report
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('close() while the upgrade is pending clears the upgrade deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const sock = openConversationSocket({ hostId: 'h1', sessionId: SID, WebSocketImpl: Impl, connectTimeoutMs: 1000, onFrame: () => {}, onClose: () => {} })
+      await vi.advanceTimersByTimeAsync(0)
+      sock.close()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('an upgrade that never completes is closed after the deadline and reported as failed', async () => {
     vi.useFakeTimers()
     try {

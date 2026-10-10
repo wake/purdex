@@ -257,8 +257,8 @@ export function hostWsUrl(hostId: string, path: string): string {
   return `${base}${path}`
 }
 
-export async function fetchWsTicket(hostId: string): Promise<string> {
-  const res = await pinnedHostFetch(hostId, '/api/ws-ticket', { method: 'POST' })
+export async function fetchWsTicket(hostId: string, signal?: AbortSignal): Promise<string> {
+  const res = await pinnedHostFetch(hostId, '/api/ws-ticket', { method: 'POST', signal })
   if (!res.ok) throw new Error(`ws-ticket failed: ${res.status}`)
   const data = await res.json()
   return data.ticket

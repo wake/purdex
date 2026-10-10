@@ -21,7 +21,7 @@ export interface ConversationSocketOptions {
   connectTimeoutMs?: number
   /** Tests. */
   WebSocketImpl?: typeof WebSocket
-  getTicket?: (hostId: string) => Promise<string>
+  getTicket?: (hostId: string, signal?: AbortSignal) => Promise<string>
 }
 
 export interface ConversationSocket {
@@ -37,6 +37,10 @@ export function openConversationSocket(opts: ConversationSocketOptions): Convers
   let ws: WebSocket | null = null
   let opened = false
   let last = 0
+  // owned by this socket: the deadline and close() abort a ticket request that is still out, and clear its timer
+  const ticketAbort = new AbortController()
+  let ticketTimer: ReturnType<typeof setTimeout> | undefined
+  let openTimer: ReturnType<typeof setTimeout> | undefined
 
   const end = (why: { gap: boolean; failed: boolean }) => {
     if (ended || closed) return
@@ -47,18 +51,18 @@ export function openConversationSocket(opts: ConversationSocketOptions): Convers
   void (async () => {
     const limit = opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS
     let ticket: string
-    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      // a ticket request over a half-open connection neither answers nor fails
+      // a ticket request over a half-open connection neither answers nor fails: past the deadline it is aborted
+      ticketTimer = setTimeout(() => ticketAbort.abort(), limit)
       ticket = await Promise.race([
-        (opts.getTicket ?? fetchWsTicket)(opts.hostId),
-        new Promise<never>((_r, rej) => { timer = setTimeout(() => rej(new Error('ticket timeout')), limit) }),
+        (opts.getTicket ?? fetchWsTicket)(opts.hostId, ticketAbort.signal),
+        new Promise<never>((_r, rej) => ticketAbort.signal.addEventListener('abort', () => rej(new Error('ticket aborted')))),
       ])
     } catch {
       end({ gap: false, failed: true })
       return
     } finally {
-      clearTimeout(timer)
+      clearTimeout(ticketTimer)
     }
     if (closed) return
     let url: string
@@ -76,7 +80,7 @@ export function openConversationSocket(opts: ConversationSocketOptions): Convers
     const sock = new Impl(url)
     ws = sock
     // ... and so can the upgrade: a socket that has not opened by the deadline is closed (reported as failed)
-    const openTimer = setTimeout(() => { if (!opened) { try { sock.close() } catch { /* already closing */ } } }, limit)
+    openTimer = setTimeout(() => { if (!opened) { try { sock.close() } catch { /* already closing */ } } }, limit)
     sock.onopen = () => {
       clearTimeout(openTimer)
       if (closed || ended) return
@@ -108,6 +112,9 @@ export function openConversationSocket(opts: ConversationSocketOptions): Convers
     close: () => {
       if (closed) return
       closed = true
+      clearTimeout(ticketTimer)
+      clearTimeout(openTimer)
+      ticketAbort.abort()
       try { ws?.close() } catch { /* already closing */ }
     },
   }
