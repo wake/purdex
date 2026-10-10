@@ -59,10 +59,12 @@ func canonPath(path string) string {
 
 // WithLock runs fn holding the exclusive lock every writer of the config file at path takes (waiting at most LockWait). A
 // caller that holds other locks of its own (the daemon's CfgMu) takes this one FIRST, so waiting for another process never
-// holds them; inside fn it writes with UpdateChangedHeld. Not reentrant: a nested WithLock/Update on the same file waits
-// out LockWait and fails.
-func WithLock(path string, fn func() error) error {
-	return withFileLock(canonPath(path), fn)
+// holds them; inside fn it writes with UpdateChangedHeld. fn is given the path that was locked (the config's canonical name,
+// resolved once): it must read and write THAT path, not resolve its own again, which a retargeted symlink could point
+// elsewhere. Not reentrant: a nested WithLock/Update on the same file waits out LockWait and fails.
+func WithLock(path string, fn func(locked string) error) error {
+	locked := canonPath(path)
+	return withFileLock(locked, func() error { return fn(locked) })
 }
 
 // withFileLock runs fn holding an exclusive flock on "<path>.lock", the one lock every writer of the config file takes
@@ -131,9 +133,9 @@ func UpdateChanged(path string, before, after Config) (Config, error) {
 	})
 }
 
-// UpdateChangedHeld is UpdateChanged for a caller that already holds the file's lock (inside WithLock).
+// UpdateChangedHeld is UpdateChanged for a caller that already holds the file's lock (inside WithLock): path is the locked
+// path WithLock handed to it, used as it is.
 func UpdateChangedHeld(path string, before, after Config) (Config, error) {
-	path = canonPath(path)
 	cfg, err := Load(path)
 	if err != nil {
 		return Config{}, err

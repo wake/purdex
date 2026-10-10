@@ -288,3 +288,44 @@ func TestUpdate_ADanglingConfigSymlinkIsFilledNotReplaced(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "h:1", back.HostID)
 }
+
+// The path that is locked is the path that is written: a config symlink retargeted while a writer waits for the lock does not
+// send that writer to the new target under the old target's lock. (codex, #2556.)
+func TestWithLock_WritesThePathItLocked(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a.toml"), filepath.Join(dir, "b.toml")
+	require.NoError(t, os.WriteFile(a, []byte(richConfig), 0o600))
+	require.NoError(t, os.WriteFile(b, []byte(richConfig), 0o600))
+	link := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.Symlink(a, link))
+
+	hold, err := os.OpenFile(a+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	defer hold.Close()
+	require.NoError(t, syscall.Flock(int(hold.Fd()), syscall.LOCK_EX))
+
+	done := make(chan error, 1)
+	var lockedPath string
+	go func() {
+		done <- WithLock(link, func(locked string) error {
+			lockedPath = locked
+			mem, _ := Load(locked)
+			after := mem.Clone()
+			after.UploadDir = "/tmp/written"
+			_, err := UpdateChangedHeld(locked, mem, after)
+			return err
+		})
+	}()
+	time.Sleep(100 * time.Millisecond) // the writer is waiting for a.toml.lock
+	require.NoError(t, os.Remove(link))
+	require.NoError(t, os.Symlink(b, link)) // retargeted
+	require.NoError(t, syscall.Flock(int(hold.Fd()), syscall.LOCK_UN))
+	require.NoError(t, <-done)
+
+	wantA, _ := filepath.EvalSymlinks(a)
+	require.Equal(t, wantA, lockedPath)
+	gotA, _ := Load(a)
+	gotB, _ := Load(b)
+	require.Equal(t, "/tmp/written", gotA.UploadDir)
+	require.NotEqual(t, "/tmp/written", gotB.UploadDir, "wrote the new target while holding the old target's lock")
+}

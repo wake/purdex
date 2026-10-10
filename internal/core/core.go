@@ -267,11 +267,11 @@ func (c *Core) CloseModules() error {
 func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error {
 	var err error
 	if c.CfgPath == "" {
-		err = c.updateConfig(mutate, false)
+		err = c.updateConfig(mutate, "")
 	} else {
 		// The file's lock first, CfgMu inside it: waiting for another process that holds the lock (up to config.LockWait)
 		// must not hold CfgMu, which the auth path and every module read.
-		err = config.WithLock(c.CfgPath, func() error { return c.updateConfig(mutate, true) })
+		err = config.WithLock(c.CfgPath, func(locked string) error { return c.updateConfig(mutate, locked) })
 	}
 	if err != nil {
 		return err
@@ -281,8 +281,9 @@ func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error {
 	return nil
 }
 
-// updateConfig is UpdateConfig's body; persist says the file's lock is held and the file is to be written.
-func (c *Core) updateConfig(mutate func(cfg *config.Config) error, persist bool) error {
+// updateConfig is UpdateConfig's body; lockedPath is the config file whose lock is held and which is to be written ("" for
+// none).
+func (c *Core) updateConfig(mutate func(cfg *config.Config) error, lockedPath string) error {
 	c.CfgMu.Lock()
 	next := c.Cfg.Clone()
 
@@ -291,8 +292,8 @@ func (c *Core) updateConfig(mutate func(cfg *config.Config) error, persist bool)
 		return err
 	}
 
-	if persist {
-		onDisk, err := config.UpdateChangedHeld(c.CfgPath, *c.Cfg, next)
+	if lockedPath != "" {
+		onDisk, err := config.UpdateChangedHeld(lockedPath, *c.Cfg, next)
 		if err != nil {
 			c.CfgMu.Unlock()
 			return err
