@@ -144,21 +144,23 @@ func containsRoot(roots []string, r string) bool {
 	return false
 }
 
-// cwdUnder reports whether cwd is root or below it, as written or with its symlinks evaluated (a member's cwd is stored
-// as it was announced, a spawn's already resolved).
-func cwdUnder(cwd, root string) bool {
-	if within(filepath.Clean(cwd), root) {
-		return true
-	}
+// realCwd is cwd with its symlinks evaluated; one that cannot be (gone, unreadable) is judged as written, which can only
+// make it hold a root, never free one.
+func realCwd(cwd string) string {
 	if real, err := filepath.EvalSymlinks(cwd); err == nil {
-		return within(real, root)
+		return real
 	}
-	return false
+	return filepath.Clean(cwd)
 }
 
+// cwdUnder reports whether cwd, by its real path (a member's cwd is stored as it was announced, so a link under a kept root
+// may lead into a root being removed), is root or below it.
+func cwdUnder(cwd, root string) bool { return within(realCwd(cwd), root) }
+
 func cwdUnderAny(cwd string, roots []string) bool {
+	real := realCwd(cwd)
 	for _, r := range roots {
-		if cwdUnder(cwd, r) {
+		if within(real, r) {
 			return true
 		}
 	}
