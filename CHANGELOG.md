@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.0.0-alpha.675] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`。跨主機 team 的修正要兩端都升級才完整（舊版收件端會忽略新欄位，不會出錯）。
+
+### Added：對話內容多了提問、讀取範圍、搜尋範圍、新建檔案與壓縮摘要 — U3-0（#2379，介面線）
+
+- `/api/conversations` 的 step 新增：`question`（AskUserQuestion 這類提問與使用者的回答；拒答記成被使用者拒絕）、`read` 的 offset／limit、`search` 的範圍（路徑、glob 或 `web`）、`diff.created`（Write 新建的檔案）、`system compacted` 帶壓縮摘要。
+- 工具摘要的寫法改成跟 Collie 一致：檔案類工具顯示**完整路徑**（原本只有檔名）、換行與連續空白收成一格、超過 200 字截斷加 `…`。**App 端顯示的摘要文字會變**，iOS 要重新釘 fixtures。
+
+### Fixed：team 改名後才加入的 member 立刻顯示正確的名稱與顏色 — #2346（#2378）
+
+- adopt／spawn 的跨主機命令會帶上 team 目前的短名與顏色，member 主機一收到就存下；原本要等到下一次改名才更新。外觀在寫入命令的同一個交易裡讀取，改名跟加入同時發生也不會讓舊外觀蓋掉新外觀。
+
+### Fixed：開機清理孤兒 tmux 時，只在標記沒變的當下才關 — #2350（#2380）
+
+- 開機清理 spawn 留下的孤兒 tmux session，改成在同一次 tmux 呼叫裡由 tmux 自己比對「還是同一個 tmux server、標記還是那個 spawn」才關；使用者剛好在那一刻清掉標記、把 session 留給自己用時，不會被誤關。
+
+## [1.0.0-alpha.674] - 2026-10-10
+
+> 只動到 SPA：**不必部署 daemon、不必重跑 `pdx setup`**；SPA 已隨主機上的 dev server 生效。
+
+### Added：工作簿資料層（第 1 版）— WA-1a（#2372，介面線）
+
+- App 端開始接收工作簿：讀取對話與紀錄的型別與嚴格解析（格式壞掉的單筆整筆丟掉、只警告一次；紀錄的對話跟外層對不上也丟掉）、工作簿 store（每台主機、每段對話各自一份，最新在前、依 id 去重，最多留 500 筆，最近用的對話優先保留）。
+- 收到 `workbook.entry`／`workbook.status` 事件直接更新，事件不會觸發重新抓取；只有 team 席位或打開的畫面才抓，每席每次連線抓一次。偵測主機是否支援 `workbook.v1`／`v2`，主機移除或改指向時清掉它的資料。
+- 這一版還沒有畫面；待辦、重整等第 2 版功能另見 WA-1b。
+
 ## [1.0.0-alpha.673] - 2026-10-10
 
 > 動到 daemon 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；已開著的 session 要重新載入 mod 才會有 `/workbook refresh`。
@@ -11,6 +38,10 @@
 ### Added：分岔重整（手動）— WB-2b-i、WB-2b-ii（#2370、#2373）
 
 - `POST /api/workbook/conversations/{provider}/{session_id}/refresh` 與 session 內的 `/workbook refresh`：用主模型讀整段對話，重寫目前狀況並整理待辦，結果記成一筆「重整」紀錄。只有手動觸發；session 還在、mod 宣告支援時才可按（`refresh_available` 與 `workbook.refresh_available` 事件）。**注意耗用**：重整用的是主模型、帶整段對話，長對話在快取冷掉時一次可達數十萬 token。
+
+### Changed：team 珠子與「代理 lead 列」也顯示 subagent 點點 — #2374（補記：已隨本版出去，當時漏記）
+
+- 側邊欄 team 的珠子跟分頁列一樣，會畫出那一席的 subagent 點點（浮在機器人圖示左邊、不佔寬度，沒有 subagent 就不畫）；lead 分頁關掉時代替它的那一列也照樣畫。收合時的細條不變。
 
 ### Docs
 

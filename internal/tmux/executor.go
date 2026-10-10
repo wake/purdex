@@ -106,6 +106,9 @@ type Executor interface {
 	// invocation could not be completed and nothing was killed (err wraps
 	// ErrNoSession when the id is gone on the matching server).
 	KillSessionIfInstance(sessionID, expectedInstance string) (killed bool, err error)
+	// KillSessionIfTagged is KillSessionIfInstance that also requires the session's user option to still equal value (a spawn op
+	// id), judged by the same server in the same invocation. See kill_session_conditional.go.
+	KillSessionIfTagged(sessionID, expectedInstance, option, value string) (killed bool, err error)
 	PasteText(target, text string) error
 	PaneCurrentPath(target string) (string, error)
 	PaneSessionName(target string) (string, error)

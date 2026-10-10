@@ -415,7 +415,7 @@
             "tool": "Read",
             "status": "denied",
             "denial": "user-rejected",
-            "summary": "notes.txt",
+            "summary": "/work/fixture/notes.txt",
             "started_at": 1791378034000,
             "duration_ms": 1000,
             "input": {

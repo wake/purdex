@@ -325,6 +325,25 @@
               "total_lines": 1,
               "total_bytes": 126,
               "truncated": false
+            },
+            "question": {
+              "questions": [
+                {
+                  "question": "你喜歡紅色還是藍色？",
+                  "header": "顏色",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "label": "紅色",
+                      "description": "選擇紅色"
+                    },
+                    {
+                      "label": "藍色",
+                      "description": "選擇藍色"
+                    }
+                  ]
+                }
+              ]
             }
           },
           {

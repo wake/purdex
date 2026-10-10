@@ -14,6 +14,7 @@ package tmux
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -36,6 +37,53 @@ func conditionalKillArgs(sessionID, expectedInstance string) ([]string, error) {
 	}, nil
 }
 
+// spawnOpValuePattern is what a tag value may be where it is put into a tmux format: a spawn op id, a lower-case UUID. A format
+// is parsed by tmux — a `}`, `,`, `#` or quote in a value could rewrite the condition — so the value is not escaped but
+// refused unless it is of this one shape, which has none of them.
+var spawnOpValuePattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// conditionalKillTaggedArgs is conditionalKillArgs with the session's user option in the same condition: the kill happens only
+// if the server is still the expected generation AND the session still carries option=value. `-t '$N:'` is what lets the format
+// read THAT session's option (without a target it would read whatever session the server calls current).
+func conditionalKillTaggedArgs(sessionID, expectedInstance, option, value string) ([]string, error) {
+	if !sessionIDPattern.MatchString(sessionID) {
+		return nil, fmt.Errorf("tmux kill-session: %q is not a session id", sessionID)
+	}
+	if !instancePattern.MatchString(expectedInstance) {
+		return nil, fmt.Errorf("%w: %q", ErrUnsafeInstance, expectedInstance)
+	}
+	if !userOptionPattern.MatchString(option) {
+		return nil, fmt.Errorf("tmux kill-session: %q is not a user option name", option)
+	}
+	if !spawnOpValuePattern.MatchString(value) {
+		return nil, fmt.Errorf("tmux kill-session: %q is not a spawn op id", value)
+	}
+	condition := fmt.Sprintf("#{&&:#{==:#{pid}:#{start_time},%s},#{==:#{%s},%s}}", expectedInstance, option, value)
+	return []string{
+		"if-shell", "-F", "-t", sessionID + ":", condition,
+		fmt.Sprintf("kill-session -t '%s'", sessionID),
+		"display-message -p " + generationRefusedSentinel,
+	}, nil
+}
+
+// KillSessionIfTagged kills the session with the given id only if the tmux server is still the expected generation AND the
+// session still carries the user option set to value, the comparison and the kill being ONE tmux invocation. It is for a
+// caller that decided to kill from a read of the owner (the boot sweep of orphan spawn sessions): between that read and a plain
+// KillSessionIfInstance the owner could change — the user clears the tag, taking the session over — and the kill would still
+// land. Here the server evaluates the tag where it kills.
+//
+// Returns as KillSessionIfInstance does: (true, nil) killed; (false, nil) the server declined (another generation, the tag is
+// not value any more, or the session is gone — the kill names its target by id, so it can land on that session alone);
+// (false, err) nothing was killed — a value that is not a spawn op id (a lower-case UUID) or a name that is not a user option
+// is refused before tmux runs.
+func (r *RealExecutor) KillSessionIfTagged(sessionID, expectedInstance, option, value string) (bool, error) {
+	args, err := conditionalKillTaggedArgs(sessionID, expectedInstance, option, value)
+	if err != nil {
+		return false, err
+	}
+	return r.runConditionalKill(sessionID, args)
+}
+
 // KillSessionIfInstance kills the session with the given id only if the tmux
 // server's generation equals expectedInstance, with the comparison and the
 // kill performed by one server connection.
@@ -52,6 +100,12 @@ func (r *RealExecutor) KillSessionIfInstance(sessionID, expectedInstance string)
 	if err != nil {
 		return false, err
 	}
+	return r.runConditionalKill(sessionID, args)
+}
+
+// runConditionalKill runs the one invocation and reads its answer: the refusal sentinel is a decline, a missing session is
+// ErrNoSession, any other failure an error; nothing was killed in either of the last two.
+func (r *RealExecutor) runConditionalKill(sessionID string, args []string) (bool, error) {
 	cmd := tmuxCmd(args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr

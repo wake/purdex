@@ -1,0 +1,18 @@
+{
+  "live": true,
+  "turns": 4,
+  "per_turn": [
+    {"id": "f64551fc-d6f0-4823-8b87-971cfb914464", "outcome": "done", "user_source": "user"},
+    {"id": "3946ca64-ff78-493c-8610-90a437cbb6b3", "outcome": "done", "user_source": "user"},
+    {"id": "43bb00d0-ce77-40a5-8b91-256b370c887b", "outcome": "done", "user_source": "user"},
+    {"id": "ab71fc4c-8a1c-4d62-8920-2b36ee7c07dd", "outcome": "running", "user_source": "user"}
+  ],
+  "steps": [
+    {"id": "toolu_0149aec0bc315f7eaa443d16", "kind": "other", "status": "done"},
+    {"id": "toolu_01c9cfbccd9b4a8a3d8a78e1", "kind": "other", "status": "done"},
+    {"id": "toolu_01f5a5bd2907076de6674a11", "kind": "other", "status": "denied", "denial": "user-rejected"},
+    {"id": "toolu_01509be8a6f1ba86892767cd", "kind": "other", "status": "running"}
+  ],
+  "outputs": [],
+  "shapes": []
+}

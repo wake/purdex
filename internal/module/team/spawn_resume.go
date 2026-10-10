@@ -79,11 +79,9 @@ func (m *Module) ensurePluginTree() {
 //   - unknown to this daemon → NOT ours to judge: the tag is an ordinary tmux user option (a user can type anything into it,
 //     and a tmux server can be shared with another daemon's sessions), so it only earns a log line.
 //
-// Only a session that carries the tag is looked at. The kill goes through the generation guard (KillSessionIfInstance) after a
-// second identity read, taken right before it, still shows the very session, generation AND tag of the first: an owner that
-// changed in between (the user cleared the tag) is left alone. What stays is one tmux round trip between that read and the
-// kill; closing it needs a kill that also compares the tag inside the one tmux invocation (a tmux executor change, tracked
-// apart). Anything tmux cannot answer is skipped and logged, never guessed.
+// Only a session that carries the tag is looked at. The kill is KillSessionIfTagged: the tmux server compares the generation AND
+// the tag in the very invocation that kills, so an owner that changed after the read above (the user cleared or rewrote the tag)
+// is left alone, however short the gap. Anything tmux cannot answer is skipped and logged, never guessed.
 func (m *Module) reapOrphanSpawnSessions() {
 	ctx, cancel := context.WithTimeout(m.stopCtx, 30*time.Second)
 	defer cancel()
@@ -122,12 +120,9 @@ func (m *Module) reapOrphanSpawnSessions() {
 		if m.afterOrphanIdentity != nil {
 			m.afterOrphanIdentity(s.Name)
 		}
-		again, err := read(s.Name)
-		if err != nil || again.Instance != id.Instance || again.SessionID != id.SessionID || again.Tag != id.Tag { // ownership only: pane and cwd move with ordinary activity
-			m.logf("[team] boot: orphan spawn sessions: %s changed before the kill (%v); left alone", s.Name, err)
-			continue
-		}
-		killed, err := m.tmux.KillSessionIfInstance(id.SessionID, id.Instance)
+		// The server compares the tag where it kills (#2350): an owner that changed since the read above — the user cleared the
+		// tag, taking the session over — makes it decline, so nothing needs re-reading here.
+		killed, err := m.tmux.KillSessionIfTagged(id.SessionID, id.Instance, spawnTagOption, id.Tag)
 		switch {
 		case err != nil && !errors.Is(err, tmux.ErrNoSession):
 			m.logf("[team] boot: orphan spawn sessions: kill %s (op %s): %v", s.Name, id.Tag, err)

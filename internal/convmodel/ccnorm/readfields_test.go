@@ -18,6 +18,8 @@ var toolInputKeys = map[string]bool{
 	"edits": true, "command": true, "description": true, "pattern": true, "url": true,
 	"query": true, "skill": true, "questions": true, "question": true,
 	"subagent_type": true,
+	"offset":        true, "limit": true, "path": true, "glob": true, "header": true, "options": true, "label": true,
+	"multiSelect": true, "multiple": true,
 }
 
 func pathSegments(p string) []string {

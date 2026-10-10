@@ -107,7 +107,7 @@ func TestSystem_Compacted(t *testing.T) {
 	if len(items) != 2 || items[1].System == nil || items[1].System.Kind != convmodel.SystemCompacted {
 		t.Fatalf("items = %v", sigs(items))
 	}
-	if s := items[1].System; s.ID != "cb1" || string(s.Detail) != `{"trigger":"manual"}` {
+	if s := items[1].System; s.ID != "cb1" || string(s.Detail) != `{"trigger":"manual","summary":"summary text"}` {
 		t.Errorf("system = %+v detail %s", s, s.Detail)
 	}
 }
