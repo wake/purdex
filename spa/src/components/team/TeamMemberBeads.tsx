@@ -87,7 +87,7 @@ export function TeamMemberBeads({ teamKey, members, activeTabId, withHost, onOpe
                 style={{ [ins === 'before' ? 'left' : 'right']: -2 }}
               />
             )}
-            <TeamSeatIcon hostId={m.hostId} sessionCode={m.sessionCode} isActive={isActive} />
+            <TeamSeatIcon hostId={m.hostId} sessionCode={m.sessionCode} isActive={isActive} subagents />
             {withHost && <TeamSeatHostBadge hostId={m.hostId} sessionCode={m.sessionCode} />}
           </button>
         )

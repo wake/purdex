@@ -22,7 +22,7 @@ export function TeamGhostLeadRow({ ghost, team, activeTabId }: { ghost: TeamGhos
         className="group relative flex items-center gap-1.5 mx-2 pl-[18px] pr-1.5 py-1 rounded-md text-xs cursor-pointer text-text-muted border border-dashed border-border-default hover:bg-surface-hover"
       >
         <span className="opacity-50 flex items-center gap-1.5">
-          <TeamSeatIcon hostId={lead.hostId} sessionCode={lead.sessionCode} />
+          <TeamSeatIcon hostId={lead.hostId} sessionCode={lead.sessionCode} subagents />
           <TeamSeatHostBadge hostId={lead.hostId} sessionCode={lead.sessionCode} />
         </span>
         <span className="flex-1 truncate italic">{lead.title}</span>
