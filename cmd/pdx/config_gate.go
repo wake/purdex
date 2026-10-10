@@ -29,7 +29,7 @@ func openConfigGate(cfgPath string, logf func(string, ...any)) (cfg config.Confi
 	var loadErr error
 	werr := config.WithLock(gate, func(locked string) error {
 		entered = true
-		if cfg, loadErr = config.Load(cfgPath); loadErr != nil {
+		if cfg, loadErr = config.Load(locked); loadErr != nil { // the path that is locked, not the name it was reached by
 			return loadErr
 		}
 		if haveHanded {
