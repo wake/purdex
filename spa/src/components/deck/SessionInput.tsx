@@ -197,7 +197,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
               }}
               style={{ overflowWrap: 'anywhere' }}
-              className={`flex-1 resize-none rounded-none border-0 px-0 pb-1.5 pt-0 font-mono text-sm leading-5 text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
+              className={`flex-1 resize-none rounded-none border-0 px-0 pb-1.5 pt-0 text-sm leading-5 text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
                 // proto v2: no border, radius, outline or ring (focused or not); a drag over tints the row
                 dragging ? 'bg-accent/10' : 'bg-transparent'
               }`}

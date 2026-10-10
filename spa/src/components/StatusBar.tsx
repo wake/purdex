@@ -6,7 +6,6 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useIsRefShown } from '../lib/shown-hosts'
 import { useAgentStore } from '../stores/useAgentStore'
-import { parseCcExtras } from '../lib/usage-display'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useUploadStore } from '../stores/useUploadStore'
 import { compositeKey } from '../lib/composite-key'
@@ -173,7 +172,6 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
   )
   const hostRuntime = useHostStore((s) => agentHostId ? s.runtime[agentHostId] : null)
   const agentLabel = useAgentStore((s) => agentCk ? s.models[agentCk] ?? null : null)
-  const agentEffort = useAgentStore((s) => agentCk ? parseCcExtras(s.ccStatus[agentCk]?.raw).effort : null)
   const agentType = useAgentStore((s) => agentCk ? s.agentTypes[agentCk] ?? null : null)
   const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
 
@@ -350,18 +348,18 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
             700 px, above which the row still has room for all three. */}
         {agentLabel && (
           <span
-            className="inline-block max-w-[22ch] shrink-0 truncate px-[7px] rounded-[3px] border text-[10px] leading-4 bg-[rgba(154,96,56,0.15)] text-[#e8956a] border-[rgba(180,110,65,0.3)] max-[700px]:hidden"
+            className="inline-block max-w-[16ch] truncate px-[7px] rounded-[3px] border text-[10px] leading-4 bg-[rgba(154,96,56,0.15)] text-[#e8956a] border-[rgba(180,110,65,0.3)] max-[700px]:hidden"
             data-testid="agent-label"
             title={agentLabel}
           >
-            {agentLabel}{agentEffort ? ` · ${agentEffort}` : ''}
+            {agentLabel}
           </span>
         )}
         <UploadStatus hostId={agentHostId} sessionCode={agentSessionCode} t={t} />
         {paneTitle && (
           <span
             data-testid="agent-pane-title"
-            className="max-w-[24ch] truncate text-text-secondary max-[700px]:hidden"
+            className="max-w-[40ch] truncate text-text-secondary max-[700px]:hidden"
             title={paneTitle}
           >
             {paneTitle}

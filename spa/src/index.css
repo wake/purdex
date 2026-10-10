@@ -277,13 +277,10 @@ button:disabled {
   content: none;
 }
 
-/* === proto v2 (deck / chat agent text): one face, one size, one weight, one colour, one leading. ===
-   The face and size are the terminal pane's (hooks/useTerminal.ts: Menlo, Monaco, monospace / 14px). Headings are body-size and
-   bold only; strong is bold only; lists keep marker and indent at body size / leading; inline code stays a chip (rule above). */
+/* === deck / chat agent text: one size, one weight, one colour, one leading, in the normal (sans) face. ===
+   Headings are body-size and bold only; strong is bold only; lists keep marker and indent at body size / leading; inline code stays a chip (rule above). */
 .deck-md .worker-prose,
 .chat-md .worker-prose {
-  font-family: Menlo, Monaco, monospace;
-  font-size: 14px;
   line-height: 1.5;
   font-weight: 400;
   color: var(--text-primary);

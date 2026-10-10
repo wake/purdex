@@ -138,7 +138,7 @@ describe('DeckView defers far-off markdown', () => {
     vi.spyOn(item, 'getBoundingClientRect').mockReturnValue({ top: -200, bottom: 300 } as DOMRect)
     const light = item.querySelector('[data-testid="room-prose-light"]')!.textContent!
     expect(light).toContain('zebra')
-    const text = [...(function* () { const w = document.createTreeWalker(item, NodeFilter.SHOW_TEXT); for (let n = w.nextNode(); n; n = w.nextNode()) yield n })()][0]
+    const text = [...(function* () { const w = document.createTreeWalker(item.querySelector('[data-testid="room-prose-light"]')!, NodeFilter.SHOW_TEXT); for (let n = w.nextNode(); n; n = w.nextNode()) yield n })()][0]
     const range = document.createRange()
     range.setStart(text, 0)
     Object.defineProperty(document, 'caretRangeFromPoint', { configurable: true, value: () => range })

@@ -8,7 +8,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useNexHostQuota } from '../../hooks/useNexHostQuota'
 import { compositeKey } from '../../lib/composite-key'
 import {
-  USAGE_STALE_MS, epochToMs, formatResetsIn, parseCcExtras, parseCcUsage, remainingPct, ringGeometry, ringTransform, usedPct,
+  USAGE_STALE_MS, epochToMs, formatResetsIn, parseCcUsage, remainingPct, ringGeometry, ringTransform, usedPct,
   type UsageTone, type UsageWindow,
 } from '../../lib/usage-display'
 import type { Icon } from '@phosphor-icons/react'
@@ -162,13 +162,12 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
   const entry = useAgentStore((s) => hostId && sessionCode ? s.ccStatus[compositeKey(hostId, sessionCode)] : undefined)
   const now = useNow()
   const usage = parseCcUsage(entry?.raw)
-  const cost = parseCcExtras(entry?.raw).cost
-  if (!entry || (!usage && cost === null)) return null
+  if (!entry || !usage) return null
 
   const stale = now - entry.receivedAt > USAGE_STALE_MS
   return (
-    <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${usage?.context != null ? 'max-[600px]:hidden' : 'max-[700px]:hidden'}`}>
-      {usage && usage.context !== null && (
+    <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${usage.context !== null ? 'max-[600px]:hidden' : 'max-[700px]:hidden'}`}>
+      {usage.context !== null && (
         <UsageSegment
           testId="status-seg-usage-context"
           icon={Brain}
@@ -180,13 +179,7 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
           className="max-[600px]:hidden"
         />
       )}
-      {usage && <LimitSegments fiveHour={usage.fiveHour} sevenDay={usage.sevenDay} stale={stale} now={now} idPrefix="status-seg-usage" />}
-      {/* proto v2: the session's cost so far, right of the usage rings (it used to sit in the pane's status row) */}
-      {cost !== null && (
-        <span data-testid="status-seg-cost" title={t('statusrow.cost', { cost: cost.toFixed(2) })} className={`shrink-0 tabular-nums select-none text-text-secondary ${stale ? 'opacity-50' : ''}`}>
-          ${cost.toFixed(2)}
-        </span>
-      )}
+      <LimitSegments fiveHour={usage.fiveHour} sevenDay={usage.sevenDay} stale={stale} now={now} idPrefix="status-seg-usage" />
     </div>
   )
 }

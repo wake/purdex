@@ -39,11 +39,11 @@ export interface ChatViewProps {
   active: boolean
 }
 
-function Entry({ entry, paneKey, binding, agentHeader }: { entry: ChatEntry; paneKey: string; binding: string; agentHeader?: boolean }) {
+function Entry({ entry, paneKey, binding }: { entry: ChatEntry; paneKey: string; binding: string }) {
   switch (entry.kind) {
     case 'user': return <UserBubble item={entry.item} />
     case 'peer': return <PeerLine items={entry.items} />
-    case 'agent': return <AgentBubble item={entry.item} header={agentHeader} />
+    case 'agent': return <AgentBubble item={entry.item} />
     case 'system': return <SystemRow item={entry.item} />
     case 'work':
       return <ChatWorkRow run={entry.run} onOpen={() => openPanel(paneKey, binding, { kind: 'chain', turnId: entry.turnId, firstStepId: entry.run.stepIds[0] })} />
@@ -101,7 +101,7 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
             <div ref={attach} onScroll={onScroll} data-testid="chat-scroll" aria-label={t('chat.transcript')} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               {groupByTurn(entries).map((g) => (
                 <div key={g.turnIndex} data-turn-index={g.turnIndex} className={`${SCROLL_ANCHOR_CLASS} space-y-3`}>
-                  {g.entries.map((e) => <Entry key={e.key} entry={e} paneKey={paneKey} binding={binding} agentHeader={e === g.entries.find((x) => x.kind === 'agent')} />)}
+                  {g.entries.map((e) => <Entry key={e.key} entry={e} paneKey={paneKey} binding={binding} />)}
                 </div>
               ))}
             </div>
