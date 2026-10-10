@@ -237,10 +237,18 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, caps *c
 	}
 	// paired again now that the view is taken: a message that landed after the first pairing and is in the view (its cursor is
 	// past it, so no increment would carry it) still gets its id; the first pairing only sized the envelope
+	sized := make(map[string]string, len(echo))
+	for id, cm := range echo {
+		sized[id] = cm
+	}
 	for id, cm := range m.echoIDs(sid, entry) {
 		echo[id] = cm
 	}
 	body, err := json.Marshal(build(view.Header, view.Cursor, view.Turns, view.WindowResult, reset))
+	if err == nil && len(body) > m.maxBody { // the late ids were not part of the budget: drop them rather than pass the cap
+		echo = sized
+		body, err = json.Marshal(build(view.Header, view.Cursor, view.Turns, view.WindowResult, reset))
+	}
 	if err != nil {
 		return nil, "", http.StatusInternalServerError, "encode_failed"
 	}
