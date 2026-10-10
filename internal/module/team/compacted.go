@@ -43,7 +43,16 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
-	if !ok || m.sender == nil || m.stopping() {
+	if !ok {
+		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
+		return
+	}
+	// The member compacted on its own, so an open ask is moot (member relay ask §3.3); the compaction notice below is the
+	// only message, the withdrawal adds none.
+	if _, err := m.store.WithdrawRelayAsk(mr.SessionID, team.RelayAskWithdrawCompacted, m.now()); err != nil {
+		m.logf("[team] compacted %s: withdraw the relay ask: %v", req.SessionID, err)
+	}
+	if m.sender == nil || m.stopping() {
 		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
 		return
 	}

@@ -123,6 +123,24 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 	}
 }
 
+// settleAsks is the sweeper's liveness-tick step for relay asks (§3.3), in this order: an ask whose window has passed is
+// expired; an ask whose member is no longer an active member of a live team is withdrawn (member_left); then every
+// open ask still owing its notice is sent again. Nobody is told about an expiry or a withdrawal.
+func (m *Module) settleAsks() {
+	now := m.now()
+	if n, err := m.store.ExpireRelayAsks(now); err != nil {
+		m.logf("[team] sweep relay asks: %v", err)
+	} else if n > 0 {
+		m.logf("[team] %d relay ask(s) expired", n)
+	}
+	if n, err := m.store.WithdrawAsksOfInactiveMembers(now); err != nil {
+		m.logf("[team] sweep relay asks: %v", err)
+	} else if n > 0 {
+		m.logf("[team] %d relay ask(s) withdrawn: the member left", n)
+	}
+	m.retryAskNotices()
+}
+
 // retryAskNotices is the sweeper's step (liveness tick): every open ask whose notice has not been delivered is sent
 // again, with the minutes left. The window is not extended.
 func (m *Module) retryAskNotices() {
