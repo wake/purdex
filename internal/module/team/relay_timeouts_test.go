@@ -251,3 +251,24 @@ func TestSweep_StalledClearedWithoutItsNewSessionFails(t *testing.T) {
 		t.Fatalf("the lead's notice = %v", n)
 	}
 }
+
+// codex re-review: a cleared refused because the remote member's kill already committed must not leave the op claimed for
+// good — every reconcile re-reads the new session's frame and meets the same refusal; the stall timer still ends the op.
+func TestSweep_AStalledOpWhoseClearedIsRefusedByAKillStillFails(t *testing.T) {
+	f := newFixture(t)
+	op := f.claimedMemberOp()
+	if _, err := f.m.store.db.Exec(`DELETE FROM team_members WHERE session_id = 'sid-m1'`); err != nil {
+		t.Fatal(err)
+	}
+	seedRemote(t, f.m.store, "mk-k", "sid-m1", f.clock.Load())
+	if _, err := f.m.store.db.Exec(`UPDATE remote_members SET state = 'killed' WHERE mk = 'mk-k'`); err != nil {
+		t.Fatal(err)
+	}
+	f.origins.cleared = map[string]int{"sid-new": 42}
+	f.setFrames(frameOf("sid-new", "%2", true))
+	f.clock.Add(15 * minute)
+	f.sweepTimeouts()
+	if got := f.op(op.ID); got.State != team.RelayFailed {
+		t.Fatalf("op = %+v, want failed by the stall timer", got)
+	}
+}

@@ -96,7 +96,9 @@ func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team
 // (afterReport, the handover notice, the lead's outcome notice), on Applied only.
 func (m *Module) applyReconcile(op team.RelayOp, rep RelayReport) (team.RelayOp, bool, error) {
 	after, res, err := m.store.ReportRelay(op.ID, rep)
-	if errors.Is(err, ErrBadRelayReport) {
+	// A cleared refused because the member's kill already committed is no verdict either: the op is as it was, and the stall
+	// timer that called this goes on to fail it (returning the error would stop it, and the op would stay claimed for good).
+	if errors.Is(err, ErrBadRelayReport) || errors.Is(err, ErrClearedMemberKilled) {
 		m.logf("[team] reconcile op %s: %v", op.ID, err)
 		return op, false, nil
 	}
