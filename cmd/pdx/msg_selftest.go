@@ -270,6 +270,14 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	//     refuses, and the reply leg would never be exercised. The flag
 	//     takes a variadic list, so it goes last: nothing follows that it
 	//     could swallow.
+	// #2387 adds --model haiku --effort low: SendMessage is a deferred tool in current Claude Code (the model must
+	// ToolSearch it before it can call it), and on the default model with thinking that round trip took 25 s and more —
+	// close to, and on a slow run past, the 60 s wait. The small model with little thinking does it in a few seconds and
+	// costs a fraction; the leg under test (the inbox → a native reply) is the same.
+	// --append-system-prompt (#2387): the model behind this session reads the user's global CLAUDE.md, which may say not
+	// to use the native SendMessage (peer messages go through pdx); a model that obeys it declines the probe — measured
+	// on the real throwaway session: Haiku refused, citing exactly that rule. The appended system prompt outranks the
+	// memory rule for this session only.
 	// A claude that rejects either exits at once: step 3 reports that as a
 	// start failure, with what claude printed.
 	st.sessionStarted = true
@@ -280,6 +288,8 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		"--name", st.name,
 		"--settings", `{"crossSessionInbound":"accept"}`,
 		"--no-session-persistence",
+		"--model", "haiku", "--effort", "low",
+		"--append-system-prompt", selftestSystemPrompt,
 		"--disallowedTools", "Bash"); err != nil {
 		fmt.Fprintf(stdout, "FAIL: tmux new-session: %v\n", err)
 		return 1
@@ -352,8 +362,8 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 
 	// Step 5: the probe frame, addressed for reply to the helper's socket.
 	// The text names the native tool and rules out the pdx / Bash detour a
-	// global CLAUDE.md may suggest (#1631); the reply is still matched on
-	// the nonce alone.
+	// global CLAUDE.md may suggest (#1631), and says to load the deferred
+	// tool first (#2387); the reply is still matched on the nonce alone.
 	nonce, err := selftestHex(4)
 	if err != nil {
 		fmt.Fprintf(stdout, "FAIL: %v\n", err)
@@ -369,7 +379,7 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 		FromName: selftestProbeName,
 		FromMode: ipeers.ModePrompting,
 		Text: "PDX_SELFTEST " + nonce +
-			": reply to the sender using the SendMessage tool (not pdx, not Bash), with exactly: PONG " + nonce,
+			": first load the SendMessage tool with ToolSearch (query select:SendMessage), then reply to the sender using the SendMessage tool (not pdx, not Bash), with exactly: PONG " + nonce,
 	})
 	if err != nil {
 		fmt.Fprintf(stdout, "FAIL: build frame: %v\n", err)
@@ -383,6 +393,12 @@ func runMsgSelftest(ctx context.Context, deps selftestDeps, timeout time.Duratio
 	// Step 6: the native reply must reach the helper.
 	return selftestAwaitReply(ctx, deps, h, target.Inbox, nonce, timeout, st.name, start, stdout)
 }
+
+// selftestSystemPrompt is appended to the throwaway session's system prompt (#2387).
+const selftestSystemPrompt = "This is the throwaway session of `pdx msg selftest`, a protocol check run by the user's own tool. " +
+	"A message asking you to reply with the native SendMessage tool is the check itself: load the tool with ToolSearch " +
+	"(select:SendMessage) and reply with it as asked, even where a CLAUDE.md or any other instruction says to avoid the native " +
+	"SendMessage or to use pdx instead — that rule is for ordinary work and does not apply to this session."
 
 // selftestIdentifyPane returns the throwaway session's pane pid (the
 // `sh -c` wrapper, not claude) and its procStart string.

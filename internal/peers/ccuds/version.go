@@ -8,8 +8,9 @@ import (
 // VerifiedCCVersion is the Claude Code version every byte layout in this
 // package was measured against. A registry entry reporting a newer version
 // is where a silent protocol change would first show up, so callers log it
-// (once) and the selftest exists to re-verify.
-const VerifiedCCVersion = "2.1.270"
+// (once) and the selftest exists to re-verify. 2.1.296: `pdx msg selftest` PASSED on it (#2387) — the byte layouts were
+// measured against 2.1.270 and the round trip (inbox frame in, native reply out) re-verified through 2.1.296.
+const VerifiedCCVersion = "2.1.296"
 
 // NewerThanVerified reports whether v (dotted decimal, e.g. "2.1.271") is
 // strictly newer than VerifiedCCVersion. Missing trailing components count

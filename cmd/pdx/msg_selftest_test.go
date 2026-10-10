@@ -416,6 +416,7 @@ func TestSelftest_TmuxArgvGoldens(t *testing.T) {
 		"--name", name, "--settings", `{"crossSessionInbound":"accept"}`,
 		"--no-session-persistence",
 		"--model", "haiku", "--effort", "low", // #2387: the small model with little thinking; Opus took 25 s+ to get through ToolSearch
+		"--append-system-prompt", selftestSystemPrompt, // #2387: the user's CLAUDE.md says not to use the native SendMessage; this session must
 		"--disallowedTools", "Bash"}
 	if got := f.calls("new-session"); len(got) != 1 || !equalArgs(got[0].args, wantNew) {
 		t.Errorf("new-session argv = %v\nwant %q", got, wantNew)
@@ -1712,5 +1713,16 @@ func TestSelftestTmuxNoSession_AbsentSocket(t *testing.T) {
 	}
 	if !selftestTmuxNoSession(err) {
 		t.Errorf("selftestTmuxNoSession(%q) = false, want true", ee.Stderr)
+	}
+}
+
+// #2387: the throwaway session reads the user's global CLAUDE.md, which may forbid the native SendMessage (peer messages go
+// through pdx); a model that obeys it refuses the probe and the reply leg is never exercised. The system prompt the selftest
+// appends outranks that rule for this session only, and says so in words the model can act on.
+func TestSelftest_SystemPromptOverridesAGlobalSendMessageBan(t *testing.T) {
+	for _, must := range []string{"SendMessage", "CLAUDE.md", "pdx msg selftest", "ToolSearch"} {
+		if !strings.Contains(selftestSystemPrompt, must) {
+			t.Errorf("selftestSystemPrompt does not mention %q: %q", must, selftestSystemPrompt)
+		}
 	}
 }
