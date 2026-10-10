@@ -3,7 +3,7 @@
 // measure only. Carried over from MessageBubble's assistant arm (T4.3).
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
-import RoomProse from './RoomProse'
+import RoomProse, { RoomProseLight } from './RoomProse'
 
 beforeEach(() => { cleanup() })
 
@@ -118,5 +118,58 @@ describe('RoomProse streaming cursor (R1)', () => {
       render(<RoomProse content="- a" />)
       expect(screen.getByTestId('room-prose').style.getPropertyValue('--wt-list-indent')).toBe('3em')
     } finally { useWorkerSettingsStore.setState({ theme: before }) }
+  })
+})
+
+describe('RoomProse cacheKey (#2469)', () => {
+  it('draws the same DOM with and without a cache key, and again from the kept tree', () => {
+    const md = 'a **b** `c`\n\n- x\n- y\n\n```ts\nconst n = 1\n```'
+    const plain = render(<RoomProse content={md} />)
+    const want = plain.container.innerHTML
+    cleanup()
+    const first = render(<RoomProse content={md} cacheKey="prose-k1" />)
+    expect(first.container.innerHTML).toBe(want)
+    first.unmount()
+    const second = render(<RoomProse content={md} cacheKey="prose-k1" />)
+    expect(second.container.innerHTML).toBe(want)
+  })
+
+  it('follows a changed text under the same key', () => {
+    const { rerender } = render(<RoomProse content="one" cacheKey="prose-k2" />)
+    rerender(<RoomProse content="two" cacheKey="prose-k2" />)
+    expect(screen.getByTestId('room-prose')).toHaveTextContent('two')
+  })
+})
+
+describe('RoomProse when streaming stops (#2469)', () => {
+  it('keeps the very same DOM nodes: a selection or a code block scrolled sideways survives', () => {
+    const md = 'a **b** `c`\n\n```ts\nconst long = 1\n```'
+    const { rerender } = render(<RoomProse content={md} streaming cacheKey="prose-s1" />)
+    const body = screen.getByTestId('room-prose')
+    const strong = body.querySelector('strong')!
+    const pre = body.querySelector('pre')!
+    const code = body.querySelector('pre code')!
+
+    rerender(<RoomProse content={md} cacheKey="prose-s1" />)
+    expect(screen.getByTestId('room-prose')).toBe(body)
+    expect(body.querySelector('strong')).toBe(strong)
+    expect(body.querySelector('pre')).toBe(pre)
+    expect(body.querySelector('pre code')).toBe(code)
+
+    // and from the kept tree on a later mount it still draws the same markup
+    rerender(<RoomProse content={md} streaming cacheKey="prose-s1" />)
+    expect(body.querySelector('strong')).toBe(strong)
+  })
+})
+
+describe('RoomProseLight', () => {
+  it('keeps the whole markdown source as text, in a pre-wrap box, and is no search unit', () => {
+    const md = '# Title\n\n- one\n- `two`\n\n```ts\nconst needle = 1\n```'
+    render(<RoomProseLight content={md} />)
+    const light = screen.getByTestId('room-prose-light')
+    expect(light.textContent).toBe(md)
+    expect(light.querySelector('.whitespace-pre-wrap')).not.toBeNull()
+    expect(light.querySelector('[data-search-unit]')).toBeNull()
+    expect(light.querySelector('pre, code, li, h1')).toBeNull()
   })
 })

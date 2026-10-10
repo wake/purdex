@@ -2,12 +2,13 @@
 // does not know draws nothing (the daemon may add kinds; older clients skip them, U1 §8.1).
 import { useI18nStore } from '../../stores/useI18nStore'
 import { isKnownItem, type ConversationItem } from '../../lib/conversations/types'
-import RoomProse from '../room/RoomProse'
+import RoomProse, { RoomProseLight } from '../room/RoomProse'
 import { StepView, type StepActions } from './StepViews'
 import { SystemRow, ThinkingRow } from './ThinkingSystem'
 import { UserBlock } from './UserBlock'
 
-export function DeckItem({ item, actions }: { item: ConversationItem; actions?: StepActions }) {
+/** `light`: the agent text is drawn as plain text (a turn far off screen, #2469); streaming text is always drawn in full. */
+export function DeckItem({ item, actions, light }: { item: ConversationItem; actions?: StepActions; light?: boolean }) {
   const t = useI18nStore((s) => s.t)
   if (!isKnownItem(item)) return null
   switch (item.type) {
@@ -15,7 +16,9 @@ export function DeckItem({ item, actions }: { item: ConversationItem; actions?: 
     case 'agent_text':
       return (
         <div data-testid="deck-agent-text" className="deck-md">
-          <RoomProse content={item.markdown} streaming={item.streaming} />
+          {light && !item.streaming
+            ? <RoomProseLight content={item.markdown} />
+            : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} />}
           {item.truncated && <div className="text-xs text-text-muted">{t('deck.output.cut')}</div>}
         </div>
       )
