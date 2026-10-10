@@ -20,7 +20,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { forgetDraftsWhere, draftKey } from './draft-memory'
 import { forgetDeckPane, forgetFoldsOfPane } from './fold-memory'
 import { chatScrollKey, conversationBinding, forgetPanel } from './panel-memory'
-import { releaseSendQueues } from './send-queue'
+import { releaseSendQueues, retireSendQueues } from './send-queue'
 
 /** Everything the pane keeps in memory, for good. */
 export function releasePane(paneId: string): void {
@@ -35,13 +35,14 @@ export function releasePane(paneId: string): void {
 }
 
 /**
- * The pane now shows `sessionId`: what it kept for its OTHER conversations will not be read again. A queue that still has a
- * message waiting (in its undo window, in flight, or waiting for idle) is left to finish; it goes with the pane.
+ * The pane now shows `sessionId`: what it kept for its OTHER conversations will not be read again. Their queued messages (in the
+ * undo window, waiting for idle) are dropped: nobody is left to drive them and the old text must not reach another session. A
+ * request already in flight runs to its end, then its queue frees itself (`SendQueue.retire`), so nothing stays in the registry.
  */
 export function retireStaleSessions(paneId: string, hostId: string, sessionId: string): void {
   if (!sessionId) return
   const now = draftKey(paneId, hostId, sessionId)
-  releaseSendQueues((key) => key.startsWith(`${paneId}|`) && key !== now, { keepPending: true })
+  retireSendQueues((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetDraftsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   const binding = conversationBinding(hostId, sessionId)
   const chatFold = `${paneId}\0${binding}`

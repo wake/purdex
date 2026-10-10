@@ -410,22 +410,35 @@ describe('dispose (the pane is gone for good)', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('hasPending: in the undo window, in flight and waiting for idle count; a settled message does not', async () => {
+  it('retire: undo and waiting entries are dropped and never sent; nothing in flight frees the queue at once', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
-    expect(q.hasPending()).toBe(false)
-    q.enqueue('a')
-    expect(q.hasPending()).toBe(true)
+    const done = vi.fn()
+    q.enqueue('in the undo window')
+    q.retire(done)
+    expect(done).toHaveBeenCalledTimes(1)
+    expect(q.entries()).toEqual([])
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
+    expect(calls).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('retire: a message in flight runs to its end, the one behind it is dropped, then the queue frees itself (no resend of a busy answer)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const done = vi.fn()
+    q.enqueue('first')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    expect(q.hasPending()).toBe(true) // in flight
+    q.enqueue('second')
+    q.retire(done)
+    expect(done).not.toHaveBeenCalled()
     calls[0].resolve({ kind: 'busy' } as SendOutcome)
-    await flush()
-    expect(q.hasPending()).toBe(true) // waiting for idle
-    q.setIdle(true)
     await vi.advanceTimersByTimeAsync(0)
-    calls[1].resolve({ kind: 'accepted' })
-    await flush()
-    expect(q.hasPending()).toBe(false)
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
+    expect(done).toHaveBeenCalledTimes(1)
+    expect(calls).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 

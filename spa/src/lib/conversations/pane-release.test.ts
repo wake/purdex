@@ -209,14 +209,50 @@ describe('retireStaleSessions: the pane shows another conversation now', () => {
     expect(has(B, 's1')).toEqual(ALL)
   })
 
-  it('an old session\'s queue that still has a message waiting is left to finish', async () => {
+  it('an old session\'s undo / waiting messages are dropped and never sent; one in flight finishes and its queue leaves the registry', async () => {
     const { calls, port } = fakePort()
     const dk = fill(A, 's1', port)
-    sendQueueFor(dk, () => port).enqueue('in the undo window')
-    retireStaleSessions(A, H, 's2')
-    expect(hasSendQueue(dk)).toBe(true)
+    const q = sendQueueFor(dk, () => port)
+    q.enqueue('in flight')
     await vi.advanceTimersByTimeAsync(3000)
-    expect(calls.map((c) => c.text)).toEqual(['in the undo window'])
+    q.enqueue('in the undo window')
+    retireStaleSessions(A, H, 's2')
+    expect(hasSendQueue(dk)).toBe(true) // the request is still out
+    calls[0].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(hasSendQueue(dk)).toBe(false)
+    expect(calls.map((c) => c.text)).toEqual(['in flight'])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a waiting (busy) message of the old session is dropped, not stranded', async () => {
+    const { calls, port } = fakePort()
+    const dk = fill(A, 's1', port)
+    const q = sendQueueFor(dk, () => port)
+    q.enqueue('busy one')
+    await vi.advanceTimersByTimeAsync(3000)
+    calls[0].resolve({ kind: 'busy' } as SendOutcome)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q.entries()[0].state).toBe('waiting')
+    retireStaleSessions(A, H, 's2')
+    expect(hasSendQueue(dk)).toBe(false)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('switching session over and over leaves the registry bounded, and going back finds a fresh start', async () => {
+    const { calls, port } = fakePort()
+    for (let i = 0; i < 20; i++) {
+      const dk = fill(A, 's' + i, port)
+      sendQueueFor(dk, () => port).enqueue('m' + i)
+      retireStaleSessions(A, H, 's' + i)
+    }
+    retireStaleSessions(A, H, 's20')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(sendQueueCount()).toBe(0)
+    expect(calls).toHaveLength(0)
+    const q = sendQueueFor(draftKey(A, H, 's0'), () => port)
+    expect(q.entries()).toEqual([])
+    expect(readDraft(draftKey(A, H, 's0'))).toBeUndefined()
   })
 
   it('the same session again is no change (a view switch, a remount)', () => {
