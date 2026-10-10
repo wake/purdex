@@ -20,7 +20,7 @@ func (m *Module) LightStatus(sessionID, frameID string) (status string, ok bool)
 	}
 	for _, f := range frames {
 		if f.FrameID == frameID && f.AgentType == "cc" && isPidAliveFn(f.PID) {
-			return string(f.Status), true
+			return m.overlayStatus(f.SessionID, f.FrameID, string(f.Status)), true
 		}
 	}
 	return "", false
