@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 )
 
@@ -68,11 +69,12 @@ type hostCPUPercentSource interface {
 type HostMetricsState struct {
 	collector HostCollector
 	previous  *HostCPUSample
-	// cpuInterval is the monitor's refresh interval, the pace of a background CPU sampler.
-	cpuInterval time.Duration
+	// cpuInterval is the monitor's refresh interval in nanoseconds, the pace of a background CPU sampler. Atomic: the
+	// snapshot that sets it and the one that reads it are not ordered by anything this type owns.
+	cpuInterval atomic.Int64
 }
 
-func (s *HostMetricsState) setCPUInterval(d time.Duration) { s.cpuInterval = d }
+func (s *HostMetricsState) setCPUInterval(d time.Duration) { s.cpuInterval.Store(int64(d)) }
 
 func NewHostMetricsState(collector HostCollector) *HostMetricsState {
 	return &HostMetricsState{collector: collector}
@@ -96,7 +98,7 @@ func collectHostMetrics(ctx context.Context, state *HostMetricsState) HostMetric
 
 func collectHostCPU(ctx context.Context, state *HostMetricsState) *HostCPUMetrics {
 	if src, ok := state.collector.(hostCPUPercentSource); ok {
-		interval := state.cpuInterval
+		interval := time.Duration(state.cpuInterval.Load())
 		if interval <= 0 {
 			interval = DefaultRefreshIntervalMS * time.Millisecond
 		}
