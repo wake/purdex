@@ -161,7 +161,7 @@ func (c reportCall) post(kind team.ReportKind, args []string) int {
 // whole command and sends again.
 func (c reportCall) notify(client *daemonclient.Client, inbox, cfgPath string, resp team.ReportResponse, compact string, asJSON bool) int {
 	r := resp.Report
-	detail, code := sendReportMessage(c.ctx, client, inbox, resp)
+	sr, detail, code := sendReportMessage(c.ctx, client, inbox, resp)
 	if code != "" {
 		fmt.Fprintln(c.stdout, compact)
 		id, reason := sanitizeCell(r.ID), sanitizeCell(detail)
@@ -180,23 +180,26 @@ func (c reportCall) notify(client *daemonclient.Client, inbox, cfgPath string, r
 		fmt.Fprintf(c.stdout, "reported %s %s (%s) → %s: %s\n", sanitizeCell(string(r.Kind)), sanitizeCell(r.Task),
 			sanitizeCell(string(resp.Task.Status)), sanitizeCell(resp.Lead.Ref), sanitizeCell(r.Summary))
 	}
+	noteUncertainSend(c.stderr, "pdx report", sr, true)
 	return ExitOK
 }
 
 // sendReportMessage sends the up message through POST /api/peers/send, from
 // the member's inbox. One request, never replayed (client.Once): a send that
 // may have arrived must not arrive twice. code "" is success.
-func sendReportMessage(ctx context.Context, client *daemonclient.Client, inbox string, resp team.ReportResponse) (detail, code string) {
+func sendReportMessage(ctx context.Context, client *daemonclient.Client, inbox string, resp team.ReportResponse) (sr ipeers.SendResponse, detail, code string) {
 	if resp.Lead.Address == "" {
-		return "daemon 沒有回 lead 的地址", "no_address"
+		return sr, "daemon 沒有回 lead 的地址", "no_address"
 	}
 	sctx, cancel := context.WithTimeout(ctx, briefTimeout)
 	defer cancel()
 	req := ipeers.SendRequest{To: resp.Lead.Address, Text: team.ReportUpMessage(resp.Report), OriginInbox: inbox}
-	if _, err := client.Once(sctx, http.MethodPost, "/api/peers/send", req, nil); err != nil {
-		return briefErr(err)
+	sr, err := postPeerMessage(sctx, client, req)
+	if err != nil {
+		detail, code = briefErr(err)
+		return sr, detail, code
 	}
-	return "", ""
+	return sr, "", ""
 }
 
 // reportResendCommand is the command that sends a report's up message by
