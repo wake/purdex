@@ -500,6 +500,18 @@ func (m *Module) decideHook(w http.ResponseWriter, a team.Approval, req team.Dec
 			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "hook.answers is required", nil)
 			return
 		}
+		// The mod takes a remote answer only if it answers exactly the questions asked (its answersFit); say so now rather than
+		// approving what the terminal will not take (#1845).
+		var p team.HookAskPayload
+		if err := json.Unmarshal(a.Payload, &p); err != nil {
+			m.logf("[team] decide %s: unreadable hook_ask payload: %v", a.ID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "the stored request is unreadable; see the daemon log", nil)
+			return
+		}
+		if fit, why := answersFit(p.Questions, hook.Answers); !fit {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, why, nil)
+			return
+		}
 		hook = &team.HookDecision{Answers: hook.Answers}
 	case team.KindHookPermission:
 		if state == team.StateApproved {

@@ -8,6 +8,8 @@
 // pin one rule above all: whatever fails or is slow on our side, the native dialog's answer
 // comes back unchanged, and within a few seconds of the person answering.
 import { test, expect } from 'claude-code/testing'
+// The cases the daemon's decide check (internal/module/team/ask_answers.go) and this file's answersFit must agree on (#1845).
+import answersFixture from './ask_answers.fixture.js'
 
 const Q = [{ question: '紅還是藍？', header: '顏色', options: [{ label: '紅', description: 'r' }, { label: '藍', description: 'b' }], multiSelect: false }]
 const NATIVE_RED = { ref: 1, result: { questions: Q, answers: { '紅還是藍？': '紅' }, annotations: {} }, text: 'Your questions have been answered', isReadOnly: true }
@@ -698,6 +700,26 @@ test('begin refused before the person answers ⇒ nothing to report', async ($, 
   await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
   expect(calls.map(sub)).toEqual(['begin'])
 })
+
+// #1845: the shared fixture. A remote answer is taken only when it answers exactly the questions asked: then `{ result }` is
+// returned and the native dialog is closed; otherwise the native dialog runs on and its answer comes back. The daemon refuses
+// the same misfits at decide (Go reads the same file), so the phone is told before the mod would have to refuse.
+for (const c of (answersFixture as any).cases) {
+  test('remote answer, shared case: ' + c.name, { timeoutMs: 15000 }, async ($, on) => {
+    session(on)
+    on('process.run', (_$: any, e: any) => {
+      const a = e.argv
+      if (sub(a) === 'begin') return ok('{"id":"rf"}')
+      if (sub(a) === 'wait') return ok(JSON.stringify({ state: 'answered_remote', hook: { answers: c.answers } }))
+      return ok('{}')
+    })
+    // the native dialog is answered only after the remote answer has had its say
+    on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => setTimeout(() => res(NATIVE_RED), 300)))
+    const r: any = await $.tool.call({ tool: 'AskUserQuestion', questions: c.questions })
+    if (c.fit) expect(r).toEqual({ result: { questions: c.questions, answers: c.answers } })
+    else expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, isReadOnly: true, ref: 1 }))
+  })
+}
 
 // The mod's own failure: its `.catch` answers next(e), which replays the native call as it
 // settled — the dialog is never drawn twice.

@@ -218,7 +218,7 @@ func TestAsk_DecideAndReportRaceExactlyOneWins(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			codes[0], _ = f.do(http.MethodPost, "/api/team/approvals/"+id+"/decide",
-				team.DecideRequest{Decision: "approve", Hook: &team.HookDecision{Answers: map[string]string{"q": "藍"}}, Client: appClient()})
+				team.DecideRequest{Decision: "approve", Hook: &team.HookDecision{Answers: map[string]string{"紅還是藍？": "藍"}}, Client: appClient()})
 		}()
 		go func() {
 			defer wg.Done()
