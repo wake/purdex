@@ -330,6 +330,28 @@ func TestNext_ExpiredRequestIsNotHandedOut(t *testing.T) {
 	take(t, ch)
 }
 
+// One long poll that sits through a lease's expiry wakes for it and hands the next request out, well before the poll's own
+// end (codex critic). Mutation gate: no expiry timer in Next's select → red.
+func TestNext_LongPollWakesAtTheLeaseExpiry(t *testing.T) {
+	q, _ := newQ(t)
+	q.Wait, q.HandTimeout = 5*time.Second, 150*time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _, _ = q.Submit(ctx, "s1", "c1", "first") }()
+	next(t, q, "mod1", "s1") // handed out, never answered
+	cancel()
+	second := submitAsync(q, "s1", "c2", "second")
+	start := time.Now()
+	j, ok := q.Next(context.Background(), "mod1", "s1", 3*time.Second) // ONE long poll across the expiry
+	if !ok || j.Text != "second" {
+		t.Fatalf("job = %+v ok=%v", j, ok)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("the poll slept through the expiry: %v", took)
+	}
+	q.Result("mod1", j.ID, Outcome{Status: Accepted})
+	take(t, second)
+}
+
 // A flood of distinct ids forgets the OLDEST settled rows first and never an open one: a request that may still run is
 // not sent a second time. Mutation gate: drop any settled row (map order), or an open one → red (codex attack).
 func TestLedger_FloodForgetsTheOldestSettledAndNeverAnOpenRow(t *testing.T) {

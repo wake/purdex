@@ -348,7 +348,7 @@ func (q *Queue) Next(ctx context.Context, stream, sessionID string, wait time.Du
 		owner, ok := q.owners.OwnerOf(sessionID)
 		// A handed-out request whose result never came is unknown after HandTimeout whether or not its caller is still
 		// waiting (a caller that went away leaves nobody to enforce it): the session must not stay blocked for good.
-		if b := q.busy[sessionID]; b != nil && q.Now().Sub(b.handedAt) > q.handTimeout() {
+		if b := q.busy[sessionID]; b != nil && q.Now().Sub(b.handedAt) >= q.handTimeout() {
 			q.finish(b, Result{Status: Unknown, Reason: "no_result"})
 		}
 		if ok && owner == stream && q.busy[sessionID] == nil {
@@ -374,16 +374,40 @@ func (q *Queue) Next(ctx context.Context, stream, sessionID string, wait time.Du
 			}
 		}
 		ch := q.waitCh(sessionID)
+		// a poll that sits through a lease's expiry must wake for it, or the request behind waits out the whole poll
+		var expire <-chan time.Time
+		var expireTimer *time.Timer
+		if b := q.busy[sessionID]; b != nil {
+			left := q.handTimeout() - q.Now().Sub(b.handedAt)
+			if left < 0 {
+				left = 0
+			}
+			expireTimer = time.NewTimer(left)
+			expire = expireTimer.C
+		}
 		q.mu.Unlock()
 		if wait <= 0 {
+			if expireTimer != nil {
+				expireTimer.Stop()
+			}
 			return Job{}, false
 		}
 		select {
 		case <-ch:
+		case <-expire:
 		case <-timer.C:
+			if expireTimer != nil {
+				expireTimer.Stop()
+			}
 			return Job{}, false
 		case <-ctx.Done():
+			if expireTimer != nil {
+				expireTimer.Stop()
+			}
 			return Job{}, false
+		}
+		if expireTimer != nil {
+			expireTimer.Stop()
 		}
 	}
 }
