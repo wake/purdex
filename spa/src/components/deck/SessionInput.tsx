@@ -148,8 +148,8 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
         <div>
           {hintText && <div data-testid="session-input-hint" role="status" className={`mb-1 px-3 pt-1 text-xs ${hint?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{hintText}</div>}
           {shown.length > 0 && (
-            // v3: lined and tinted, apart from the messages above
-            <div data-testid="attachment-area" className="flex flex-wrap gap-1 border-t border-[#808080] bg-text-primary/5 px-3 py-1">
+            // v3: tinted only, apart from the messages above (a top line would double the input row's own line)
+            <div data-testid="attachment-area" className="flex flex-wrap gap-1 bg-text-primary/5 px-3 py-1">
               {shown.map((a) => (
                 <span key={a.id} data-testid="attachment-chip" className="inline-flex items-center gap-1 rounded border border-border-subtle bg-surface-secondary px-2 py-0.5 text-xs text-text-primary">
                   {t('deck.attach.attached', { name: a.name })}
