@@ -375,7 +375,7 @@ func (s *StreamState) reconcileDots(agents []heartbeatAgent, at int64) {
 // completion of a turn the mod already closed (its own interrupt), arriving after the next turn began. It must not end
 // that next turn. A completion with no turn id, or one that arrives with no turn running, is never stale.
 func (s *StreamState) staleComplete(turnID string) bool {
-	return turnID != "" && turnID != s.TurnID && slices.Contains(s.Closed, turnID)
+	return turnID != "" && s.TurnID != "" && turnID != s.TurnID && slices.Contains(s.Closed, turnID)
 }
 
 // closeTurn remembers a main turn that has ended, so a later completion naming it is known to be late. Bounded: only the

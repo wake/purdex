@@ -727,7 +727,7 @@ function turnCompleted($, e) {
   if (!ev.on) return
   // A completion that names an earlier turn (the engine's own, arriving after the mod closed that turn itself and a new
   // one began) does not end the one now running.
-  const late = !e.agentId && !!e.turnId && e.turnId !== ev.turnId && ev.closed.includes(e.turnId)
+  const late = !e.agentId && !!ev.turnId && !!e.turnId && e.turnId !== ev.turnId && ev.closed.includes(e.turnId)
   if (!e.agentId && !late) {
     rememberClosed(e.turnId)
     ev.turnId = ''
