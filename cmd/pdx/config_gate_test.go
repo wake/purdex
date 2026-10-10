@@ -279,3 +279,53 @@ func TestCaptureReexecPlan_DropsRunLockFD(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"A=1", "B=2"}, p.env)
 }
+
+// A restart has no launcher to try again: the new image inherits the run lock, so a writer that keeps "<config>.lock" busy cannot
+// slip a token change in (generate sees the run lock held) and the daemon starts, from the file, on the inherited lock.
+// Mutation gate: refuse on a timeout even with a hand-over -> red. (lead review, #2562.)
+func TestOpenConfigGate_AHandedOverRunLockStartsDespiteABusyConfigLock(t *testing.T) {
+	path, _ := gateCfg(t)
+	locked, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	old, err := config.HoldRunLock(locked) // the previous image's lock
+	require.NoError(t, err)
+	defer old.Close()
+	dup, err := syscall.Dup(int(old.Fd())) // what the new image inherits: the same open file description
+	require.NoError(t, err)
+	t.Setenv(runLockFDEnv, fmt.Sprint(dup))
+
+	oldWait := config.LockWait
+	config.LockWait = 100 * time.Millisecond
+	defer func() { config.LockWait = oldWait }()
+	busy, release := make(chan struct{}), make(chan struct{})
+	go func() { _ = config.WithLock(path, func(string) error { close(busy); <-release; return nil }) }()
+	<-busy
+	defer close(release)
+
+	var logs []string
+	cfg, run, err := openConfigGate(path, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
+	require.NoError(t, err)
+	require.NotNil(t, run, "the inherited run lock was not adopted")
+	defer run.Close()
+	require.Equal(t, 7860, cfg.Port)
+	require.Contains(t, strings.Join(logs, "\n"), "adopted from the previous image")
+	held, err := config.RunLockHeld(locked)
+	require.NoError(t, err)
+	require.True(t, held)
+}
+
+// A hand-over that cannot be adopted is no hand-over: with the lock busy too, the start is refused as a cold start is.
+func TestOpenConfigGate_ABrokenHandOverAndABusyLockRefuses(t *testing.T) {
+	path, _ := gateCfg(t)
+	t.Setenv(runLockFDEnv, "9999") // not an open fd
+	oldWait := config.LockWait
+	config.LockWait = 100 * time.Millisecond
+	defer func() { config.LockWait = oldWait }()
+	busy, release := make(chan struct{}), make(chan struct{})
+	go func() { _ = config.WithLock(path, func(string) error { close(busy); <-release; return nil }) }()
+	<-busy
+	defer close(release)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.ErrorIs(t, err, config.ErrLockTimeout)
+	require.Nil(t, run)
+}
