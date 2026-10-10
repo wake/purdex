@@ -637,6 +637,45 @@
       ]
     },
     {
+      "name" : "plugin-submit",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 2,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01S5q1Y5QtuMFE2qqyntcqjZ"
+              ],
+              "text" : "處理了 0 秒 · 1 個指令 · 1 失敗"
+            },
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01Fe6Kx6dtEdh7mEHn3VX47V"
+              ],
+              "text" : "處理了 2 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "f3236e8d-7531-41bf-ac48-9950b41aa539"
+        },
+        {
+          "index" : 5,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_018Zxa1UBqfxSm9uJJ8zLZrr"
+              ],
+              "text" : "處理了 25 秒 · 1 個指令"
+            }
+          ],
+          "turn_id" : "86b80a64-e6b7-448e-8496-2c76ec995e75"
+        }
+      ]
+    },
+    {
       "name" : "queued-mid-turn",
       "source" : "cc-transcript",
       "turns" : [
