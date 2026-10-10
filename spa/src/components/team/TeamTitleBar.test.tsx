@@ -70,6 +70,14 @@ describe('the Notebook button', () => {
     expect(button()!.className).toContain('p-1 rounded') // title-bar-styles BUTTON
   })
 
+  it('sits on the bar centre like the strip: items-center and no vertical offset', () => {
+    scene()
+    mountBar()
+    const cls = screen.getByTestId('team-notebook-wrap').className
+    expect(cls).toContain('items-center')
+    expect(cls).not.toMatch(/translate-y|(^|\s)-?m[tby]-|(^|\s)p[tb]-/)
+  })
+
   it('is dim while the area is in the pane and lit while it is in the title bar', () => {
     scene()
     mountBar()

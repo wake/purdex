@@ -76,3 +76,43 @@ type MemberRelayPayload struct {
 	MemberTitle     string   `json:"member_title,omitempty"`
 	UsedPercentage  *float64 `json:"used_percentage,omitempty"`
 }
+
+// ---- Member relay ask (spec 2026-10-10-member-relay-ask-spec-plan §3.5) ----
+
+// Member-relay-ask constants. The hold window is the user's decision D4: five minutes from the request.
+const (
+	RelayAskHoldS          = 300 // an ask the lead does not accept within this many seconds is closed as expired
+	MinMemberAskModVersion = 3   // the mod protocol that asks for itself; older mods keep the 70%-and-idle notice
+)
+
+// RelayAskNoticeFmt takes the member's address, its bare 6-character ref, its title, the integer percentage, the minutes
+// left (rounded up) and the ref again.
+const RelayAskNoticeFmt = "[pdx team] member %s [%s]「%s」已用 %d%%，申請接力。\n%d 分鐘內同意請執行：pdx relay _%s（不同意不用回覆，過期即作罷）"
+
+// Relay ask states (relay_asks.state) and the reasons of a withdrawal.
+const (
+	RelayAskOpen      = "open"
+	RelayAskAccepted  = "accepted"
+	RelayAskExpired   = "expired"
+	RelayAskWithdrawn = "withdrawn"
+
+	RelayAskWithdrawCompacted  = "compacted"
+	RelayAskWithdrawMemberLeft = "member_left"
+)
+
+// RelayAskRequest is POST /api/relay/ask: a member's mod asks its lead to relay it. RequestID is the mod's UUID, so a
+// replay is the same ask.
+type RelayAskRequest struct {
+	RequestID string `json:"request_id"`
+	SessionID string `json:"session_id"`
+	UsedPct   int    `json:"used_pct"`
+	Window    int    `json:"window"`
+}
+
+// RelayAskResponse answers an ask: the ask's id and state, when it expires (unix ms), and whether this was a replay.
+type RelayAskResponse struct {
+	ID        string `json:"id"`
+	State     string `json:"state"`
+	ExpiresAt int64  `json:"expires_at"`
+	Replay    bool   `json:"replay,omitempty"`
+}

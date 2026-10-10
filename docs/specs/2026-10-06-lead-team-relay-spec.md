@@ -786,6 +786,8 @@ The `peer_not_found` hint stops saying a ref "never changes" (M3). It says a ref
 - **The daemon decides nothing (U9).** Past 70% a member keeps working until its lead acts.
 - **Daemon notices come from the daemon's own virtual peer** (`ccuds.StartVirtualPeer`). A reply to it gets one line back: `這是 pdx daemon 的自動通知，不會讀取回覆`.
 
+> **Update 2026-10-10 (member relay ask, `2026-10-10-member-relay-ask-spec-plan.md`):** a member's mod now asks its lead for a relay at 70% on a turn boundary (a protocol-3 mod; the idle-only notice above remains for older mods). This is U9 unchanged: the daemon still decides nothing and the relay is still the lead's command (`pdx relay _<ref>`).
+
 **⟲ derived: auto-compact.**
 - **Solo session or lead:** see §8.7. Only an already-approved relay skips the compaction.
 - **Member:** never intercepted. It cannot self-relay (U9, U13), so its mod lets compaction run and reports `compacted`. The lead hears: `[pdx team] <ref> 已自動壓縮（lead 未在 70% 時接力）`.

@@ -139,6 +139,9 @@ type Module struct {
 	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
 	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
 	noticeMu sync.Mutex
+	// askMu serialises the lead's relay-ask notices (member relay ask §3.1) and the withdrawal a compaction makes (§3.3):
+	// the first send and the sweeper's retry never both tell the lead, and no ask notice follows a withdrawal.
+	askMu sync.Mutex
 	// beforeMemberRelayInsert, when set, runs in the member-relay create between its checks and the insert's transaction (tests race a release there).
 	beforeMemberRelayInsert func(mr memberRow)
 	// afterPoolSpend and afterMemberRowInsert fail the member-relay create's gate at that point (tests: fault injection).
@@ -519,6 +522,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
 	mux.HandleFunc("POST /api/relay/begin", m.handleRelayBegin)
+	mux.HandleFunc("POST /api/relay/ask", m.handleRelayAsk) // a member's mod asks its lead to relay it (member relay ask §3.1)
 	mux.HandleFunc("GET /api/relay/wait/{id}", m.handleRelayWait)
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
 	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)

@@ -628,6 +628,10 @@ func runTeamCmd(ctx context.Context, args []string, getenv func(string) string, 
 		if m.LastAt != 0 {
 			last = taskAge(m.LastAt)
 		}
+		// An open relay ask of the member (member relay ask §3.6): the minutes left of its five, rounded up.
+		if left := time.UnixMilli(m.RelayAskUntil).Sub(taskNow()); m.RelayAskUntil != 0 && left > 0 {
+			task = strings.TrimSpace(task + fmt.Sprintf(" 接力申請 (剩 %d 分)", int((left+time.Minute-1)/time.Minute)))
+		}
 		if m.ContextUnavailable { // a remote member whose host did not answer (cross-host team spec §8)
 			pct = "(主機無回應)"
 		}

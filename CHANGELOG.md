@@ -1,5 +1,65 @@
 # Changelog
 
+## [1.0.0-alpha.682] - 2026-10-10
+
+> 動到 daemon、mod 與 SPA：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改，協定升到 3）；開著的 session 會自動重新載入 mod（會印一次 reloaded 提示）。team.db 新增 `relay_asks` 表（新表，不需遷移）。SPA 已隨主機上的 dev server 生效。
+
+### Added：member 自動接力改成「問 lead」 — member relay ask（#2428、#2429、#2431）
+
+- member 的用量到 70% 時，它的 mod 會在回合邊界自動向 lead 送一則接力申請：`[pdx team] member … 已用 N%，申請接力。M 分鐘內同意請執行：pdx relay _<ref>（不同意不用回覆，過期即作罷）`。送出後 member 照常工作、不暫停。
+- lead 在 5 分鐘內執行 `pdx relay _<ref>` 就算同意，接力在 member 的下一個回合邊界進行；額度規則照舊（無人值守時從 member 池扣）。5 分鐘內沒同意就作罷，member 照舊一路走到自動壓縮；之後要再多用 10 個百分點才會再申請（最多 70／80／90% 各一次）。
+- 通知送失敗會由 daemon 每輪重送，直到送達或過期；申請與 lead 的 `pdx relay` 同時發生時嚴格排序；自動壓縮或 member 離開 team 會撤回申請（只發原本那則壓縮通知）。
+- `pdx team` 的 TASK 欄顯示「接力申請（剩 N 分）」，`GET /api/team` 帶 `relay_ask_until`；新的 mod 內部指令 `pdx relay ask`。
+- 會自己申請的 mod（協定 3）不再收到舊的「70% 且閒置」通知；舊版 mod 照舊。跨主機的 member 不申請（跨主機接力目前不支援）。
+
+### Added：對話的型別、REST client 與文件模型 — U3-1b-i（#2427，介面線）
+
+- App 端對話功能的資料層（還沒有畫面）。
+
+## [1.0.0-alpha.681] - 2026-10-10
+
+> 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：代跑 subagent 的結束不再跳 Mac「任務完成」通知 — #2424（介面線）
+
+- Claude Code 的背景 subagent 去跑 codex 時，每個 codex 結束都會在 Mac 上跳一則「任務完成」桌面通知並標成未讀（678 只擋了 iPhone 推播；Mac 的通知是 App 自己依廣播事件跳的）。daemon 廣播的 agent 事件現在帶 `from_proxy`，App 對這類結束不跳通知、不標未讀；session 自己的結束照舊通知。
+
+### Fixed：daemon 重啟不再多等約 10 秒 — #2420（#2426，介面線）
+
+- 680 起每次重啟，關機時都要等各 session 的 mod 掛著的長輪詢（App 送訊息用的 prompt/next、工作簿的 next）逾時，多花約 10 秒。現在關機時立刻回應這些長輪詢，mod 會自己重試。
+
+### Changed：App 送出的訊息能精確對上對話裡的那一則 — U3（#2411，介面線）
+
+- 對話的使用者訊息帶上 `client_msg_id`（依文字與時間一對一配對），App 先顯示的那則可以精確對到；送出／中斷／回答提問的能力變動時即時推給 App；有核准通道時 `answer_question` 標成 approval。
+
+### Fixed：`pdx msg selftest` 在新版 Claude Code 上通過 — #2387（#2419）
+
+- 臨時 session 改用 Haiku、先用 ToolSearch 載入 SendMessage，並註明全域 CLAUDE.md 對原生 SendMessage 的禁令不適用於這次檢查；只綁這次的探針、關掉 MCP 與 skills。2.1.294／2.1.296 不再出現「版本比驗過的新」的提醒（提醒門檻改用 selftest 通過的版本；peer 協定量測的版本不變）。
+
+### Changed：分頁可以切換 終端機／指揮台／聊天 — U3-1a（#2421，介面線）
+
+- 每個分頁有自己的 view 按鈕（終端機／指揮台／聊天），交接與拿回分成兩個按鈕；切換 view 時終端機不會被卸載。view 只記在這台裝置上。
+
+### Changed：team 面板第 6 輪 — #2422（介面線）
+
+- 標題列的 team 條移到右邊、視窗標題保持置中並先被截短；面板最小寬度隨燈號樣式與圓環大小調整（徽章 356／圖示點 412），拖曳過的寬度會被記住；每種模式只留一個「移到標題列」按鈕。
+
+### Added：工作簿畫面第一批 — WA-2b-1a（#2412，介面線）
+
+- team 面板接上工作簿：每席的目前事項一行、Notebook 按鈕、點進去的詳情（先放佔位）、已結束的清單（接上 674／679 的工作簿資料層）。
+
+### Refactor：拆開過大的 team store 檔案 — #2381（#2415、#2416）
+
+- 純搬移：命令 store 依領域拆成六個檔，spawn 收尾的交易搬到專責檔案；逐宣告位元組比對零差異，行為不變。
+
+### Tests
+
+- 修好高負載下會偶發失敗的 `TestRoster_SpawnAnnouncesTheClaimedTitle`（#2210、#2425）。
+
+### Docs
+
+- member 自動接力改成問 lead 的 spec＋plan（#2423）。
+
 ## [1.0.0-alpha.680] - 2026-10-10
 
 > 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`（mod 沒變，`pdx setup` 也不會再重寫 mod 資料夾）。跨主機 team 的修正要 member 主機也升級才生效。

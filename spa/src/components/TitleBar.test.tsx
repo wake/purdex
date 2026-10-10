@@ -91,17 +91,19 @@ describe('TitleBar', () => {
     }
   })
 
-  // The TitleBar sits flush with the window's top edge; without an offset the
-  // buttons optically collide with the traffic-light row. Shift both button
-  // clusters down 2.5px so they sit on the content-side of the bar instead.
-  it('sidebar-toggle cluster is shifted down 2.5px', () => {
+  // The left and right icon groups sit on the bar's vertical centre, the same line as the team strip: the bar is one
+  // fixed height with `items-center`, and no group is nudged by a translate / margin / padding offset (jsdom cannot
+  // measure layout, so this is a class check; the real-browser numbers were taken in the PR).
+  it('centres the icon groups: the bar is a fixed-height items-center row and no group carries a vertical offset', () => {
     render(<TitleBar title="test" />)
-    expect(screen.getByTestId('sidebar-toggle').className).toMatch(/translate-y-\[2\.5px\]/)
-  })
-
-  it('layout-buttons cluster is shifted down 2.5px', () => {
-    render(<TitleBar title="test" />)
-    expect(screen.getByTestId('layout-buttons').className).toMatch(/translate-y-\[2\.5px\]/)
+    const bar = screen.getByTestId('title-bar')
+    expect(bar.className).toContain('items-center')
+    expect(bar.style.height).toBe('36px')
+    for (const id of ['sidebar-toggle', 'layout-buttons', 'unattended-buttons', 'title-bar-right']) {
+      const cls = screen.getByTestId(id).className
+      expect(cls, id).toContain('items-center')
+      expect(cls, id).not.toMatch(/translate-y|(^|\s)-?m[tby]-|(^|\s)p[tb]-/)
+    }
   })
 })
 

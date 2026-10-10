@@ -43,7 +43,22 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
-	if !ok || m.sender == nil || m.stopping() {
+	if !ok {
+		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
+		return
+	}
+	// The member compacted on its own, so an open ask is moot (member relay ask §3.3); the compaction notice below is the
+	// only message, the withdrawal adds none. A withdrawal that fails fails the call, before anything is sent: the ask
+	// would stay open and be notified again, so the mod retries (disarming and withdrawing are both idempotent).
+	m.askMu.Lock() // behind an ask notice that is on the wire (see sendAskNotice)
+	_, err = m.store.WithdrawRelayAsk(mr.SessionID, team.RelayAskWithdrawCompacted, m.now())
+	m.askMu.Unlock()
+	if err != nil {
+		m.logf("[team] compacted %s: withdraw the relay ask: %v", req.SessionID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	if m.sender == nil || m.stopping() {
 		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
 		return
 	}

@@ -51,7 +51,8 @@ func (s *Store) ArmNotice(spawnOp, sessionID string) (bool, error) {
 func (s *Store) DisarmNotice(spawnOp, sessionID string) (bool, error) {
 	res, err := s.db.Exec(`UPDATE team_members SET notice_armed = 0
 		WHERE spawn_op = ? AND session_id = ? AND state = 'active' AND notice_armed = 1
-		  AND NOT EXISTS (SELECT 1 FROM relay_ops WHERE session_id = ? AND state NOT IN ('done', 'failed', 'cancelled'))`, spawnOp, sessionID, sessionID)
+		  AND NOT EXISTS (SELECT 1 FROM relay_ops WHERE session_id = ? AND state NOT IN ('done', 'failed', 'cancelled'))
+		  AND NOT EXISTS (SELECT 1 FROM relay_asks WHERE session_id = ? AND state = 'open')`, spawnOp, sessionID, sessionID, sessionID)
 	return oneRow(res, err, "disarm notice "+spawnOp)
 }
 
@@ -78,6 +79,9 @@ func (m *Module) noticeUsage() {
 			continue
 		}
 		pct := *u.UsedPercentage
+		if m.asksForItself(mr.SessionID) {
+			continue // its mod asks the lead at a turn boundary (member relay ask, D11); this notice is the fallback for older mods
+		}
 		if pct < threshold {
 			if _, err := m.store.ArmNotice(mr.SpawnOp, mr.SessionID); err != nil {
 				m.logf("[team] usage notice: %v", err)
@@ -109,7 +113,7 @@ func (m *Module) noticeUsage() {
 func (m *Module) usageNotice(mr memberRow, pct int) {
 	// Looked at again right before the send: the member may have started a turn, or a relay op may have been created,
 	// since the check (the claim's statement only covers an op that existed before it).
-	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) {
+	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.asksForItself(mr.SessionID) || m.askOpen(mr.SessionID) {
 		m.rearm(mr)
 		return
 	}
@@ -131,17 +135,24 @@ func (m *Module) sendUsageNotice(mr memberRow, pct int) bool {
 	if err != nil || !ok || t.EndedAt != 0 {
 		return true // no live team to tell: nothing to retry
 	}
+	address, title := m.memberNoticeName(mr)
+	ref := strings.TrimPrefix(mr.Ref, "_")
+	return m.noticeToLead(mr, t, fmt.Sprintf(UsageNoticeFmt, address, ref, title, pct, ref), "usage notice")
+}
+
+// memberNoticeName is how a notice to the lead names the member: its live address (else host/ref) and its title (else
+// its tmux session).
+func (m *Module) memberNoticeName(mr memberRow) (address, title string) {
 	alias, _ := m.selfHost()
-	address := alias + "/" + mr.Ref
+	address = alias + "/" + mr.Ref
 	if o, live, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && live && o.Address != "" {
 		address = o.Address
 	}
-	title := mr.Title
+	title = mr.Title
 	if title == "" {
 		title = mr.TmuxSession
 	}
-	ref := strings.TrimPrefix(mr.Ref, "_")
-	return m.noticeToLead(mr, t, fmt.Sprintf(UsageNoticeFmt, address, ref, title, pct, ref), "usage notice")
+	return address, title
 }
 
 // noticeToLead sends text to the team's lead at its live address, from the member's inbox (else the lead's own); false
@@ -167,6 +178,19 @@ func (m *Module) noticeToLead(mr memberRow, t team.Team, text, what string) bool
 		return false
 	}
 	return true
+}
+
+// asksForItself says whether the session's mod speaks the protocol that asks its lead by itself (member relay ask D11).
+// The hello is persisted and reloaded at start, so this holds across a daemon restart.
+func (m *Module) asksForItself(sessionID string) bool {
+	return m.modProtocolAtLeast(sessionID, team.MinMemberAskModVersion)
+}
+
+// askOpen says whether the session has an open relay ask; an unreadable store counts as open (no notice).
+func (m *Module) askOpen(sessionID string) bool {
+	var one int
+	err := m.store.db.QueryRow(`SELECT 1 FROM relay_asks WHERE session_id = ? AND state = 'open' LIMIT 1`, sessionID).Scan(&one)
+	return !errors.Is(err, sql.ErrNoRows)
 }
 
 // relayOpen says whether the session has a relay op in a non-terminal state; an unreadable store counts as open (no notice).

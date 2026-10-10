@@ -66,6 +66,7 @@ func (m *Module) tick() {
 		m.endUnpairedRemoteMembers()  // a lead host that is no longer paired (§3.2)
 		m.scanUnpaired()              // a host whose pairing is gone: its remote members are gone, its commands dropped (X3a)
 		m.noticeUsage()               // after the gone teams and members are settled: a member at the threshold and idle tells its lead once (P7-1)
+		m.settleAsks()                // expire / withdraw relay asks after the settlements above, then resend unsent notices (member relay ask §3.3)
 		// Titles and names change in the registry without a write of ours:
 		// the hash gate in rosterChanged makes the unchanged case a read.
 		m.rosterChanged()
