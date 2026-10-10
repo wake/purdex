@@ -9,7 +9,7 @@
 // Asked only when the answer is known to be missing: the host is configured, its Nexen is ready, and its list has
 // answered (phase `ready`) without the row — the list subscription itself is the worker projection's, held for every
 // host with a worker tab (useWorkerAgentProjection.ts). Bounded:
-// - once per (host, execution) per session, success or failure: a 404 or a network error keeps the pane label and is
+// - once per (host, execution) while a pane shows it (a reopen after the last pane closed asks again, see below), success or failure: a 404 or a network error keeps the pane label and is
 //   never retried (a host removed or re-pointed is forgotten, answers and marks: they came from the old daemon);
 // - one request in flight per host, so of the two REST lanes subscription-slots.ts keeps free for lease renew / send
 //   this never takes both.
@@ -18,6 +18,9 @@
 // one's answer is not its answer. Forgetting a host also orphans its request in flight (hostFetch has no timeout, so
 // it may never settle): the host is free for the new incarnation at once, and the orphan, whenever it settles, leaves
 // the new request's in-flight mark alone.
+// Evicted when unreferenced (#1831): on every pass, the marks and the stored summaries of executions no pane shows any
+// more are dropped, so a long session that opens and closes many archived workers does not grow with the number seen, and
+// reopening one asks again. An answer that lands after its worker's last pane closed is dropped too.
 // An answer is also dropped when a live summary or a list row turned up for the execution — those are fresher, and
 // they win the read anyway — and then the execution is not marked asked: that row may leave the list again (the worker
 // archived since, #1557's own case), and the tab must then be able to ask.
@@ -84,6 +87,18 @@ function untitled(w: WorkerRef): boolean {
 
 const generationOf = (hostId: string) => generation.get(hostId) ?? 0
 
+/** Drops the marks and stored summaries of every execution that is not in `open` (no pane references it any more). */
+function evictUnreferenced(open: readonly WorkerRef[]): void {
+  const referenced = new Set(open.map((w) => executionKey(w.hostId, w.executionId)))
+  for (const key of requested) {
+    if (!referenced.has(key)) requested.delete(key)
+  }
+  useWorkerTitlePrefetchStore.setState((s) => {
+    const kept = Object.entries(s.byKey).filter(([key]) => referenced.has(key))
+    return kept.length === Object.keys(s.byKey).length ? s : { byKey: Object.fromEntries(kept) }
+  })
+}
+
 function request(w: WorkerRef): void {
   const key = executionKey(w.hostId, w.executionId)
   const at = epoch
@@ -101,6 +116,14 @@ function request(w: WorkerRef): void {
         requested.delete(key)
         return
       }
+      // Its last pane closed while the request was out: nothing shows it, so nothing keeps the answer, and a reopen asks again.
+      if (!openWorkers().some((o) => o.hostId === w.hostId && o.executionId === w.executionId)) {
+        requested.delete(key)
+        return
+      }
+      // Answered: marked asked again, as the eviction may have cleared the mark while the request was out (the pane closed
+      // and came back before the answer), and the next pass would otherwise fetch it a second time.
+      requested.add(key)
       useWorkerTitlePrefetchStore.setState((s) => ({ byKey: { ...s.byKey, [key]: summary } }))
     })
     .catch(() => {
@@ -135,7 +158,9 @@ export function startWorkerTitlePrefetch(): () => void {
   let stopped = false
   const scan = () => {
     if (stopped) return
-    for (const w of openWorkers()) {
+    const open = openWorkers()
+    evictUnreferenced(open)
+    for (const w of open) {
       if (busy.has(w.hostId) || requested.has(executionKey(w.hostId, w.executionId)) || !untitled(w)) continue
       request(w)
     }
