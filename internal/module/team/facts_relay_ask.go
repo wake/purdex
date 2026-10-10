@@ -54,6 +54,18 @@ func (s *Store) applyRelayAskIn(tx dbtx, p FactPlan) (CommandResult, error) {
 	if window > maxMirrorWindowS {
 		window = maxMirrorWindowS
 	}
+	// An id that another row owns is refused BEFORE anything is written (a refusal has no side effect); this very ask's id is the
+	// dedupe below.
+	var ownTeam, ownSession string
+	switch err := tx.QueryRow(`SELECT team_id, session_id FROM relay_asks WHERE id = ?`, f.AskID).Scan(&ownTeam, &ownSession); {
+	case err == nil:
+		if ownTeam != f.TeamID || ownSession != sessionID {
+			return refusal(http.StatusConflict, team.ErrCommandIDConflict, "that ask id is already used by another ask here"), nil
+		}
+		return okResult(map[string]string{"state": team.FactIgnored})
+	case !errors.Is(err, sql.ErrNoRows):
+		return CommandResult{}, err
+	}
 	// The member host allows one open ask per session, so a mirror of the session that is still open belongs to an ask the member
 	// host has closed since: this is its new one, and the old mirror goes (the one-open index would swallow the new one otherwise).
 	// The same ask id again is the dedupe below, not a replacement.
@@ -68,15 +80,7 @@ func (s *Store) applyRelayAskIn(tx dbtx, p FactPlan) (CommandResult, error) {
 		return CommandResult{}, err
 	}
 	if n, _ := r.RowsAffected(); n == 0 {
-		// the id is taken: by this very ask (a second fact for it) or by another row, which must not be mistaken for it
-		var team_, session string
-		if err := tx.QueryRow(`SELECT team_id, session_id FROM relay_asks WHERE id = ?`, f.AskID).Scan(&team_, &session); err != nil {
-			return CommandResult{}, err
-		}
-		if team_ != f.TeamID || session != sessionID {
-			return refusal(http.StatusConflict, team.ErrCommandIDConflict, "that ask id is already used by another ask here"), nil
-		}
-		return okResult(map[string]string{"state": team.FactIgnored})
+		return okResult(map[string]string{"state": team.FactIgnored}) // taken meanwhile (the id was free above, this tx holds the write lock: not reachable)
 	}
 	return okResult(map[string]string{"state": team.FactApplied})
 }
