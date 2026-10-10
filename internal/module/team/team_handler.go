@@ -62,8 +62,13 @@ func (m *Module) handleTeam(w http.ResponseWriter, r *http.Request) {
 	} else {
 		v.LeadRelayQuota = &lq
 	}
+	askUntil, err := m.store.OpenAskDeadlines(t.ID, m.now())
+	if err != nil {
+		m.logf("[team] team %s relay asks: %v", t.ID, err) // omitted: the column shows no ask
+	}
 	for _, mr := range rows {
 		mv := m.memberView(mr)
+		mv.RelayAskUntil = askUntil[mr.SessionID]
 		if mr.SpawnOp != "" { // every row has a key: a spawned member's is its spawn op, an adopted one's the adoption's request id (the wire's SpawnOp is empty for it)
 			if cur, ok := currentTaskOf(byOwner[mr.SpawnOp]); ok {
 				mv.Task = &team.MemberTask{ID: team.TaskDisplayID(t.ID, cur.Seq), Subject: cur.Subject, Status: cur.Status}

@@ -26,6 +26,7 @@ import (
 // (the lead's member relay, P6-5).
 const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]\n" +
 	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--config <path>]\n" +
+	"       pdx relay ask --session <sid> --used <pct> --window <n> [--request-id <uuid>] [--config <path>]\n" +
 	"       pdx relay wait <request_id> [--wait 9m] [--config <path>]\n" +
 	"       pdx relay self off|on|status --session <sid> [--config <path>]\n" +
 	"       pdx relay report <op> <state> [--new-session <sid>] [--error <e>] [--config <path>]\n" +
@@ -60,6 +61,7 @@ var relayRefusalCodes = map[string]bool{
 	team.ErrNotYourMember:      true,
 	team.ErrRelayUnsupported:   true,
 	team.ErrNotYourOp:          true,
+	team.ErrNotMember:          true, // a member's ask from a session that is no member
 }
 
 // runRelay is the `pdx relay` switch target. SIGINT/SIGTERM cancel ctx;
@@ -107,6 +109,8 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		return runRelayHello(ctx, args[1:], stdout, stderr, clientOpts)
 	case "begin":
 		return runRelayBegin(ctx, args[1:], stdout, stderr, clientOpts)
+	case "ask":
+		return runRelayAsk(ctx, args[1:], stdout, stderr, clientOpts)
 	case "wait":
 		return runRelayWait(ctx, args[1:], stdout, stderr, clientOpts)
 	case "self":
@@ -280,6 +284,47 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 		return relayReportErr(err, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "接力申請已送出（%s），等待核准；接著執行 pdx relay wait %s\n", res.Op.ID, res.RequestID)
+	return relayPrintJSON(stdout, stderr, res)
+}
+
+// runRelayAsk is the member's mod asking its lead to relay it (member relay ask §5; mod-internal, listed with begin).
+// The request id is minted here when not given, so a retry of one call carries the same id and is the same ask. It
+// prints the daemon's answer as one JSON line; refusals (not_member, relay_open, relay_unsupported) are exit 13.
+func runRelayAsk(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
+	fs := flag.NewFlagSet("pdx relay ask", flag.ContinueOnError)
+	var req team.RelayAskRequest
+	used := fs.Int("used", -1, "")
+	fs.StringVar(&req.SessionID, "session", "", "")
+	fs.IntVar(&req.Window, "window", -1, "") // -1: not given (the grammar requires it)
+	fs.StringVar(&req.RequestID, "request-id", "", "")
+	cfgPath, ok := relayFlags(fs, args, stderr)
+	if !ok {
+		return ExitUsage
+	}
+	switch {
+	case fs.NArg() != 0:
+		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
+	case strings.TrimSpace(req.SessionID) == "":
+		return relayUsageErr(stderr, "--session 不能為空")
+	case *used < 0 || *used > 100:
+		return relayUsageErr(stderr, "--used 必須是 0 到 100 之間的整數")
+	case req.Window < 0:
+		return relayUsageErr(stderr, "--window <n> 是必要的，且不能是負數")
+	}
+	if req.RequestID == "" {
+		req.RequestID = relayNewID()
+	} else if u, err := uuid.Parse(req.RequestID); err != nil || u.Version() != 4 {
+		return relayUsageErr(stderr, "--request-id 必須是 UUID v4")
+	}
+	req.UsedPct = *used
+	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
+	if code != ExitOK {
+		return code
+	}
+	var res team.RelayAskResponse
+	if _, err := client.Do(ctx, http.MethodPost, "/api/relay/ask", req, &res, daemonclient.Idempotent()); err != nil {
+		return relayReportErr(err, stdout, stderr)
+	}
 	return relayPrintJSON(stdout, stderr, res)
 }
 

@@ -73,27 +73,19 @@ func (m *Module) notifyAskAsync(a RelayAsk) bool {
 }
 
 // sendAskNotice tells the lead about an open, unnotified ask, with the minutes left of its window (rounded up), and
-// records the delivery. Safe to call again and from two places: one send per ask at a time, and nothing once the ask is
-// notified, closed or past its window.
+// records the delivery. Safe to call again and from two places: one send at a time, and nothing once the ask is
+// notified, closed or past its window. The notice is at-least-once, like the 70% one: a crash between the send and the
+// mark sends it once more after the restart (with the minutes then left), which is harmless — the lead's answer is the
+// same command; an outbox is not worth it for an advisory.
 func (m *Module) sendAskNotice(a RelayAsk) {
 	if m.sender == nil || m.stopping() {
 		return
 	}
+	// One send at a time, from the state check to the delivery mark; a second sender waits and then finds the ask
+	// notified. A compaction takes the same lock to withdraw (handleRelayCompacted), so "approve within N minutes" is
+	// never sent after the compaction notice's withdrawal.
 	m.askMu.Lock()
-	if _, busy := m.askSending[a.ID]; busy {
-		m.askMu.Unlock()
-		return
-	}
-	if m.askSending == nil {
-		m.askSending = map[string]struct{}{}
-	}
-	m.askSending[a.ID] = struct{}{}
-	m.askMu.Unlock()
-	defer func() {
-		m.askMu.Lock()
-		delete(m.askSending, a.ID)
-		m.askMu.Unlock()
-	}()
+	defer m.askMu.Unlock()
 
 	cur, ok, err := m.store.GetRelayAsk(a.ID)
 	if err != nil {
@@ -121,6 +113,32 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 	if _, err := m.store.MarkAskNotified(cur.ID, m.now()); err != nil {
 		m.logf("[team] relay ask notice %s: %v", a.ID, err)
 	}
+}
+
+// settleAsks is the sweeper's liveness-tick step for relay asks (§3.3), in this order: an ask whose window has passed is
+// expired; an ask whose member is no longer an active member of a live team is withdrawn (member_left); then every
+// open ask still owing its notice is sent again. Nobody is told about an expiry or a withdrawal.
+func (m *Module) settleAsks() {
+	// Behind a notice that is on the wire (askMu, see sendAskNotice): an ask is not closed between a notice's state
+	// check and its delivery. Released before the retry below, whose senders take it themselves. The time is read after
+	// the wait, so the decisions and the closed_at stamps are those of the moment the sweep runs.
+	m.askMu.Lock()
+	now := m.now()
+	expired, errE := m.store.ExpireRelayAsks(now)
+	left, errW := m.store.WithdrawAsksOfInactiveMembers(now)
+	m.askMu.Unlock()
+	for _, err := range []error{errE, errW} {
+		if err != nil {
+			m.logf("[team] sweep relay asks: %v", err)
+		}
+	}
+	if expired > 0 {
+		m.logf("[team] %d relay ask(s) expired", expired)
+	}
+	if left > 0 {
+		m.logf("[team] %d relay ask(s) withdrawn: the member left", left)
+	}
+	m.retryAskNotices()
 }
 
 // retryAskNotices is the sweeper's step (liveness tick): every open ask whose notice has not been delivered is sent

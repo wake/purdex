@@ -139,10 +139,9 @@ type Module struct {
 	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
 	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
 	noticeMu sync.Mutex
-	// askSending is the set of relay asks whose notice is being sent right now, under askMu: the first send and the
-	// sweeper's retry never both tell the lead (member relay ask §3.1).
-	askMu      sync.Mutex
-	askSending map[string]struct{}
+	// askMu serialises the lead's relay-ask notices (member relay ask §3.1) and the withdrawal a compaction makes (§3.3):
+	// the first send and the sweeper's retry never both tell the lead, and no ask notice follows a withdrawal.
+	askMu sync.Mutex
 	// beforeMemberRelayInsert, when set, runs in the member-relay create between its checks and the insert's transaction (tests race a release there).
 	beforeMemberRelayInsert func(mr memberRow)
 	// afterPoolSpend and afterMemberRowInsert fail the member-relay create's gate at that point (tests: fault injection).

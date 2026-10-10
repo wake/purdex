@@ -207,6 +207,8 @@ type Member struct {
 	// predates them ignores them, so either pairing works (the table prints "-").
 	Task   *MemberTask `json:"task,omitempty"`    // the member's current task (D-T6); nil when it has none
 	LastAt int64       `json:"last_at,omitempty"` // unix ms of its latest turn or report on that task; 0 = none
+	// RelayAskUntil is when the member's open relay ask runs out (unix ms); 0 = no ask is open (member relay ask §3.6).
+	RelayAskUntil int64 `json:"relay_ask_until,omitempty"`
 }
 
 // MemberTask is the member's current task as `pdx team` shows it.
