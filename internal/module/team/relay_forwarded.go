@@ -49,22 +49,8 @@ func (m *Module) createRemoteMemberRelay(w http.ResponseWriter, req team.RelayCr
 	}
 	var spent bool
 	var held *team.Approval
-	lead := m.leadTuple(t)
-	op, _, err := m.store.CreateRemoteMemberRelayOp(op, m.memberRelayGate(leadOrigin, mr, &spent, &held), func(tx *sql.Tx, op team.RelayOp) error {
-		var mk string
-		if err := tx.QueryRow(`SELECT mk FROM team_members WHERE spawn_op = ? AND host_id = ?`, mr.SpawnOp, mr.HostID).Scan(&mk); err != nil {
-			return err
-		}
-		cmd, err := remoteCommand(m.newID(), CmdRelay, mr.HostID, t, mk, lead, func(tc *team.TeamCommand) { tc.OpID, tc.CreatedAt = op.ID, op.CreatedAt })
-		if err != nil {
-			return err
-		}
-		return m.store.EnqueueCommand(tx, cmd, op.CreatedAt)
-	})
+	op, _, err := m.store.CreateRemoteMemberRelayOp(op, m.memberRelayGate(leadOrigin, mr, &spent, &held), m.relayEnqueuer(t, mr.HostID, mr.SpawnOp))
 	switch {
-	case errors.Is(err, ErrRemoteRelayHeld):
-		m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, "the lead's relay pool is spent out; a remote member's relay cannot wait for an approval yet", nil)
-		return
 	case errors.Is(err, ErrMemberNotActive):
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, "member "+mr.Ref+" left the team while the relay was being opened", nil)
 		return
@@ -86,8 +72,45 @@ func (m *Module) createRemoteMemberRelay(w http.ResponseWriter, req team.RelayCr
 	if spent {
 		m.announceSpend(t.LeadSessionID)
 	}
-	m.kickCommands()
+	if held != nil { // the pool is spent out: a person decides (RQ-2 §4.1); the approve forwards the op
+		m.holdForQuota(held.ID)
+		m.broadcast("opened", held)
+	} else {
+		m.kickCommands()
+	}
 	m.writeJSON(w, http.StatusCreated, team.RelayCreateResponse{Op: op})
+}
+
+// relayEnqueuer builds the closure that queues op's `relay` command in the op's transaction: the team, the lead's tuple and the
+// host are read now (outside it), the member's key inside it. at is when the command is queued — its created_at, which the
+// member host's age check reads (an op that waited for a card is not 'old').
+func (m *Module) relayEnqueuer(t team.Team, hostID, spawnOp string) func(tx *sql.Tx, op team.RelayOp, at int64) error {
+	lead := m.leadTuple(t)
+	return func(tx *sql.Tx, op team.RelayOp, at int64) error {
+		var mk string
+		if err := tx.QueryRow(`SELECT mk FROM team_members WHERE spawn_op = ? AND host_id = ?`, spawnOp, hostID).Scan(&mk); err != nil {
+			return err
+		}
+		cmd, err := remoteCommand(m.newID(), CmdRelay, hostID, t, mk, lead, func(tc *team.TeamCommand) { tc.OpID, tc.CreatedAt = op.ID, at })
+		if err != nil {
+			return err
+		}
+		return m.store.EnqueueCommand(tx, cmd, at)
+	}
+}
+
+// forwardEnqueuerFor is relayEnqueuer for an op that already exists (the approve's, the boot's): the team and the member's row
+// are read from the op. Read BEFORE the transaction that uses it.
+func (m *Module) forwardEnqueuerFor(op team.RelayOp) (func(tx *sql.Tx, op team.RelayOp, at int64) error, error) {
+	t, ok, err := m.store.TeamByID(op.TeamID)
+	if err != nil || !ok {
+		return nil, fmt.Errorf("forward op %s: team %s (found=%v): %v", op.ID, op.TeamID, ok, err)
+	}
+	var spawnOp string
+	if err := m.store.db.QueryRow(`SELECT spawn_op FROM team_members WHERE session_id = ? AND team_id = ? AND host_id = ?`, op.SessionID, op.TeamID, op.HostID).Scan(&spawnOp); err != nil {
+		return nil, fmt.Errorf("forward op %s: its member row: %w", op.ID, err)
+	}
+	return m.relayEnqueuer(t, op.HostID, spawnOp), nil
 }
 
 // endForwardedOpIn ends the forwarded op opID — of THIS host's member — as a compare-and-set from `forwarded`. The op is bound
@@ -198,4 +221,53 @@ func (m *Module) noticeForwardedOpEnded(opID string) {
 	if op, ok, err := m.store.GetRelayOp(opID); err == nil && ok && op.State.Terminal() {
 		m.outcomeNoticeAsync(op)
 	}
+}
+
+// endForwardedOpsOfHostIn ends every forwarded op of hostID failed{unpaired} (D11): nothing else would — the command is dropped
+// with the host's outbox, no fact can come — and relay_ops_one_open would keep the session's next relay out. It returns the ids.
+func endForwardedOpsOfHostIn(tx dbtxq, hostID string, now int64) ([]string, error) {
+	rows, err := tx.Query(`UPDATE relay_ops SET state = 'failed', reason = 'unpaired', updated_at = ?
+		WHERE kind = 'member' AND host_id = ? AND state = 'forwarded' RETURNING id`, now, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// relayVoidAnswered applies a void's outcome to the relay op of the voided command: the command never ran (not_applied) or was
+// undone → the op ends failed{remote_unreachable} if it is still forwarded; too_late → nothing (the fact ends it, or already did).
+func (o remoteOutcomes) relayVoidAnswered(tx *sql.Tx, c commandRow, voided commandRow, res []byte, now int64) error {
+	var ans team.TeamCommandAnswer
+	var out team.VoidOutcome
+	if err := json.Unmarshal(res, &ans); err != nil || ans.ID != c.ID || json.Unmarshal(ans.Outcome, &out) != nil {
+		return fmt.Errorf("void answer of command %s is not a void outcome", c.ID)
+	}
+	switch out.State {
+	case team.VoidTooLate:
+		return nil
+	case team.VoidNotApplied, team.VoidUndone:
+	default:
+		return fmt.Errorf("void answer of command %s: unknown state %q", c.ID, out.State)
+	}
+	var body team.TeamCommand
+	if err := json.Unmarshal(voided.Body, &body); err != nil || body.OpID == "" {
+		return fmt.Errorf("relay command %s carries no op id", voided.ID)
+	}
+	ended, err := endForwardedOpIn(tx, voided.HostID, voided.TeamID, voided.MK, body.OpID, team.RelayFailed, "remote_unreachable", "", "", now)
+	if err != nil {
+		return err
+	}
+	if ended {
+		o.m.noteOpEnded(tx, body.OpID)
+	}
+	return nil
 }

@@ -104,8 +104,8 @@ func TestForwardedCard_ARecheckThatFindsTheMemberGoneQueuesNothing(t *testing.T)
 func TestForwardedCard_TheBootForwardsAnOpWhoseRowWasApproved(t *testing.T) {
 	f, _ := fwdRelayFixture(t)
 	op := f.heldRemoteRelay(fwdOp)
-	if _, won, err := f.m.store.CloseIfOpen(op.RequestID, Close{State: team.StateApproved, DecidedAt: f.clock.Load()}); err != nil || !won {
-		t.Fatalf("close the row by hand: won=%v err=%v", won, err)
+	if _, err := f.m.store.db.Exec(`UPDATE approval_requests SET state = 'approved', decided_at = ? WHERE id = ?`, f.clock.Load(), op.RequestID); err != nil {
+		t.Fatal(err)
 	}
 	f.m.reconcileRelays()
 	if got := f.op(op.ID); got.State != team.RelayForwarded || len(f.relayCommands()) != 1 {
@@ -293,5 +293,22 @@ func TestForwardedUnpair_ALateMovedDoesNotReviveTheOp(t *testing.T) {
 	f.postFact(memberPrincipal(), movedOf(fwdOp, factUUID1))
 	if got := f.op(op.ID); got.State != team.RelayFailed || got.Reason != "unpaired" {
 		t.Fatalf("op = %+v", got)
+	}
+}
+
+// The boot's forward is a compare-and-set from awaiting_approval: an op that is already forwarded gets no second command.
+func TestForwardedCard_ForwardingAnOpThatIsNotAwaitingQueuesNothing(t *testing.T) {
+	f, _ := fwdRelayFixture(t)
+	op := f.heldRemoteRelay(fwdOp)
+	f.decide(op.RequestID, "approve")
+	forward, err := f.m.forwardEnqueuerFor(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.store.ForwardAwaitingOp(op, forward, f.clock.Load()); err == nil {
+		t.Fatal("an op that is already forwarded was forwarded again")
+	}
+	if n := len(f.relayCommands()); n != 1 {
+		t.Fatalf("%d commands, want 1", n)
 	}
 }
