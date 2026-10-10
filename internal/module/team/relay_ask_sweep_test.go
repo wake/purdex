@@ -169,6 +169,40 @@ func TestRelayAsk_CompactionWaitsForAnAskNoticeInFlight(t *testing.T) {
 	}
 }
 
+// The sweeper's closes wait for a notice on the wire too (codex critic): an ask is never expired or withdrawn between a
+// notice's state check and its delivery. Mutation gate: take no lock in settleAsks → closed while on the wire (red).
+func TestRelayAsk_SweeperClosesWaitForAnAskNoticeInFlight(t *testing.T) {
+	for name, leave := range map[string]func(f *fixture){
+		"expiry":      func(f *fixture) { f.clock.Add(team.RelayAskHoldS * 1000) },
+		"member left": func(f *fixture) { f.m.store.ReleaseMember("op-m1", "sid-m1", f.clock.Load()) },
+	} {
+		f := newFixture(t)
+		f.memberTeam("3")
+		a := f.openAsk(rid(840))
+		f.sender.mu.Lock()
+		f.sender.block, f.sender.in = make(chan struct{}), make(chan struct{}, 4)
+		block, in := f.sender.block, f.sender.in
+		f.sender.mu.Unlock()
+		var release sync.Once
+		unblock := func() { release.Do(func() { close(block) }) }
+		t.Cleanup(unblock)
+		go f.m.sendAskNotice(a)
+		<-in
+		leave(f)
+		done := make(chan struct{})
+		go func() { f.m.settleAsks(); close(done) }()
+		time.Sleep(150 * time.Millisecond)
+		if got := f.ask(a.ID); got.State != team.RelayAskOpen {
+			t.Errorf("%s: the ask was closed while its notice was on the wire: %+v", name, got)
+		}
+		unblock()
+		<-done
+		if got := f.ask(a.ID); got.State == team.RelayAskOpen {
+			t.Errorf("%s: the ask is still open after the send: %+v", name, got)
+		}
+	}
+}
+
 // A withdrawal that fails fails the request (the mod can retry) and sends no compaction notice: the ask would stay open
 // and be notified again later, and the compaction notice must be the only message (codex R1).
 func TestRelayAsk_AFailedWithdrawalOnCompactionSendsNothing(t *testing.T) {
