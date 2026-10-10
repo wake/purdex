@@ -13,7 +13,7 @@ const MAX_CARDS = 3
 function Card({ entry }: { entry: AdoptionWaitEntry }) {
   const t = useI18nStore((s) => s.t)
   const waiting = entry.state === 'waiting'
-  const tone = entry.state === 'active' ? 'text-status-success' : waiting ? 'text-text-secondary' : 'text-status-warning'
+  const tone = entry.state === 'active' ? 'text-status-success' : waiting ? 'text-text-secondary' : 'text-status-warning-text'
   return (
     <div
       role="status"

@@ -5,7 +5,7 @@ import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { registerTheme, unregisterTheme, getTheme, getAllThemes } from '../lib/theme-registry'
 import type { ThemeDefinition } from '../lib/theme-registry'
 import { registerBuiltinThemes } from '../lib/register-themes'
-import type { ThemeTokens } from '../lib/theme-tokens'
+import { backfillTokens, type ThemeTokens } from '../lib/theme-tokens'
 
 export interface ThemeImportPayload {
   name: string
@@ -130,9 +130,14 @@ export const useThemeStore = create<ThemeState>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (!state) return
-        for (const def of Object.values(state.customThemes)) {
+        // A custom theme saved before a token existed lacks it: fill it in, in the store too (the editor reads it from there).
+        const customThemes = Object.fromEntries(
+          Object.entries(state.customThemes).map(([id, def]) => [id, { ...def, tokens: backfillTokens(def.tokens) }]),
+        )
+        for (const def of Object.values(customThemes)) {
           registerTheme(def)
         }
+        setThemeState({ customThemes })
         const themeId = getTheme(state.activeThemeId) ? state.activeThemeId : 'dark'
         applyThemeToDom(themeId)
         if (themeId !== state.activeThemeId) {

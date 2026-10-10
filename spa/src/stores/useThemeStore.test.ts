@@ -14,6 +14,23 @@ describe('useThemeStore', () => {
     useThemeStore.setState({ activeThemeId: 'dark', customThemes: {} })
   })
 
+  it('a custom theme saved before status-warning-text existed gets it from its own status-warning on rehydrate (#2006)', () => {
+    const { 'status-warning-text': _gone, ...old } = makeTokens('#222')
+    old['status-warning'] = '#abcdef'
+    const def = { id: 'custom-old', name: 'Old', tokens: old as ThemeTokens, builtin: false }
+    const onRehydrate = useThemeStore.persist.getOptions().onRehydrateStorage?.(useThemeStore.getState())
+    onRehydrate?.({ ...useThemeStore.getState(), customThemes: { 'custom-old': def } })
+    expect(getTheme('custom-old')?.tokens['status-warning-text']).toBe('#abcdef')
+    expect(useThemeStore.getState().customThemes['custom-old'].tokens['status-warning-text']).toBe('#abcdef')
+  })
+
+  it('a theme that already has the token keeps its own value on rehydrate', () => {
+    const tokens = { ...makeTokens('#222'), 'status-warning-text': '#123456' }
+    const onRehydrate = useThemeStore.persist.getOptions().onRehydrateStorage?.(useThemeStore.getState())
+    onRehydrate?.({ ...useThemeStore.getState(), customThemes: { c: { id: 'c', name: 'C', tokens, builtin: false } } })
+    expect(getTheme('c')?.tokens['status-warning-text']).toBe('#123456')
+  })
+
   it('defaults to dark theme', () => {
     expect(useThemeStore.getState().activeThemeId).toBe('dark')
   })

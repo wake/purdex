@@ -79,10 +79,6 @@ func checkLineage(tx *sql.Tx, cur team.RelayOp, r RelayReport) error {
 // re-sends, and the op stays written for reconciliation (P6-4, #1735).
 var ErrClearedTargetHasRole = errors.New("the new session already leads or is a member of a live team")
 
-// ErrClearedRemoteMember refuses a cleared whose old session is a remote
-// member (a team led on another host): nothing moves, the op is left as it was.
-var ErrClearedRemoteMember = errors.New("the session is a member of a team led on another host; its relay cannot move that membership")
-
 // The stored statusline reading belongs to the session that sent it, so a
 // row that moves to a new session goes back to "no reading" (usage_at = 0,
 // usage_pct NULL, the rest empty: what usageScan.reading treats as absent).
@@ -101,14 +97,12 @@ const (
 // session has a live role, a new session that already has one, either
 // role, fails the whole cleared with ErrClearedTargetHasRole (R1).
 func moveTeamRoles(tx *sql.Tx, oldSessionID string, r RelayReport) error {
-	// A remote member's membership is bound to the session on this host and
-	// to the lead host's command log; moving it needs a protocol this version
-	// does not have, so a cleared of such a session fails whole (cross-host
-	// team spec §12: no cross-host member relay yet).
+	// A remote member's row (a team led on another host) is moved by ReportRelay after this, together with the `moved`
+	// fact that tells the lead host (moveRemoteMemberIn): there is no team of this host to move here.
 	if role, err := memberRoleIn(tx, oldSessionID); err != nil {
 		return err
 	} else if role == sessionRoleMemberRemote {
-		return fmt.Errorf("%w (%s)", ErrClearedRemoteMember, oldSessionID)
+		return nil
 	}
 	moving, err := hasLiveRoleIn(tx, oldSessionID)
 	if err != nil {
@@ -215,6 +209,14 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 	if err != nil || res != ReportApplied {
 		return op, res, err
 	}
+	movedFact := false
+	if r.State == team.RelayCleared {
+		// a remote member's row follows the new session in this very transaction, and the lead host is told by a fact queued
+		// in it (member relay spec D4, §3.2)
+		if movedFact, err = s.moveRemoteMemberIn(tx, op, r); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
+		}
+	}
 	if r.State == team.RelayCleared && s.newID != nil && len(led) > 0 {
 		// the lead moved: every host with a live remote member of its team is told, in this very transaction (X3b-1b)
 		lead := team.TeamLead{SessionID: r.NewSessionID, Ref: r.NewRef, Address: s.alias() + "/" + r.NewRef, PID: op.PID, ProcStart: op.ProcStart}
@@ -228,6 +230,9 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 	s.notifyOp(id)
 	if len(led) > 0 && s.onCommands != nil {
 		s.onCommands() // lead_moved may have been enqueued: the pump goes now
+	}
+	if movedFact && s.onFacts != nil {
+		s.onFacts() // the moved fact is committed: tell the lead host now
 	}
 	return op, res, nil
 }
@@ -252,6 +257,17 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	}
 	if r.Expect != nil && (cur.State != r.Expect.State || cur.UpdatedAt != r.Expect.UpdatedAt || cur.SeenAt != r.Expect.SeenAt) {
 		return cur, ReportBadTransition, nil // progress landed since the caller looked: it wins
+	}
+	if r.State == team.RelayClaimed && cur.Kind == team.RelayKindSelf && cur.State == team.RelayAwaitingApproval {
+		// MR-1: a kill may start (ClaimMemberKilling) while the card is open; cleared moves active rows only, so a claim
+		// of a killing member's op would strand the seat. Decided here, under the write lock, not by the caller's earlier read.
+		var one int
+		switch err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state = 'killing'`, cur.SessionID).Scan(&one); {
+		case err == nil:
+			r.State, r.Reason = team.RelayCancelled, team.ErrMemberRelayIsLeads
+		case !errors.Is(err, sql.ErrNoRows):
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: killing member: %w", id, err)
+		}
 	}
 	if cur.State == r.State {
 		return cur, ReportNoop, nil
@@ -284,8 +300,25 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 			VALUES (?, ?, ?, ?, ?)`, r.NewSessionID, cur.SessionID, cur.Ref, id, r.At); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lineage: %w", id, err)
 		}
+		// A self relay that moves a MEMBER row (only a person's manual relay can: MR-1, D3) carries that row's team, so the
+		// lead can be told when it is done. The team is the OLD session's row, read before the move: a lead's or a solo
+		// session's self op has no member row (no stamp), and the target's own role never counts.
+		var memberTeam string
+		if cur.Kind == team.RelayKindSelf {
+			err := tx.QueryRow(`SELECT m.team_id FROM team_members m JOIN teams t ON t.id = m.team_id
+				WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, cur.SessionID).Scan(&memberTeam)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: member team: %w", id, err)
+			}
+		}
 		if err := moveTeamRoles(tx, cur.SessionID, r); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
+		}
+		if memberTeam != "" {
+			if _, err := tx.Exec(`UPDATE relay_ops SET team_id = ? WHERE id = ?`, memberTeam, id); err != nil {
+				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: stamp team: %w", id, err)
+			}
+			next.TeamID = memberTeam
 		}
 	}
 	return next, ReportApplied, nil

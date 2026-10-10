@@ -39,7 +39,7 @@ export function LayoutClosingList({ testIdPrefix, panes }: { testIdPrefix: strin
         ))}
       </ul>
       {panes.some((p) => p.content.kind === 'editor') && (
-        <p data-testid={`${testIdPrefix}-editor-note`} className="mt-1 text-xs text-status-warning">
+        <p data-testid={`${testIdPrefix}-editor-note`} className="mt-1 text-xs text-status-warning-text">
           {t('pane.layout_confirm_editor')}
         </p>
       )}

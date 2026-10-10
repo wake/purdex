@@ -4,7 +4,7 @@
 //
 // Triggers, per host and only while connected: the transition to `connected`, or a change of its endpoint or token.
 // Each trigger is one `/api/info`: `capabilities` an array holding `relay.unattended.v1` → 'yes', any other answer →
-// 'no'. A failed request leaves the support as it was ('unknown' for a new host) until the next trigger; nothing here
+// 'no'. A failed request leaves every flag unknown (never the last connection's value) until the next trigger; nothing here
 // polls. Only the newest request per host may apply (host-daemon-id.ts's generation guard), and a removed host's
 // answer never does.
 //
@@ -12,7 +12,7 @@
 // its switch — is not the new one's. The new connection's snapshot and this probe fill it again.
 import { fetchHostInfo } from '../host-api'
 import { hostEndpoint, useHostStore, type HostConfig } from '../../stores/useHostStore'
-import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { PROBE_ONLY_FLAGS, useUnattendedStore } from '../../stores/useUnattendedStore'
 import { quotaHostIds, useRelayQuotaStore } from './relay-quota'
 import { useMaxMembersStore } from './max-members'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
@@ -29,7 +29,7 @@ export function startUnattendedSupport(): () => void {
   const probe = (hostId: string) => {
     const generation = ++counter
     current.set(hostId, generation)
-    useUnattendedStore.getState().invalidateEditSupport(hostId) // what the last connection said is not this one's answer
+    useUnattendedStore.getState().invalidateSupport(hostId) // what the last connection said is not this one's answer (every flag: #2309)
     useWorkbookStore.getState().fence(hostId) // same for the workbook: a new connection generation, support unknown until this answer
     fetchHostInfo(hostId).then(
       (info) => {
@@ -44,8 +44,10 @@ export function startUnattendedSupport(): () => void {
         // (a seat is loaded once per generation, workbook-loader.ts).
         useWorkbookStore.getState().setSupport(hostId, { v1: listed.includes(WORKBOOK_V1_CAPABILITY), v2: listed.includes(WORKBOOK_V2_CAPABILITY) })
       },
-      () => { // not retried until the next trigger; the edit capability stays unknown rather than keeping an old 'yes'
-        if (current.get(hostId) === generation) useUnattendedStore.getState().invalidateEditSupport(hostId)
+      () => { // not retried until the next trigger; the probe's flags stay unknown rather than keeping an old 'yes'
+        // `support` was made unknown when this probe started; a `team.unattended` frame that proved it since is live
+        // evidence from this connection and stays, so only the flags nothing but the probe can answer are dropped again.
+        if (current.get(hostId) === generation) useUnattendedStore.getState().invalidateSupport(hostId, PROBE_ONLY_FLAGS)
       },
     )
   }
@@ -79,11 +81,11 @@ export function startUnattendedSupport(): () => void {
         useMaxMembersStore.getState().forgetHost(hostId) // and a cap request still out to it
       }
       if (next.runtime[hostId]?.status !== 'connected') {
-        // The connection the edit capability was learned on is gone: it is unknown until the next probe answers, and an
-        // answer still on its way from that connection must not set it.
+        // The connection the capabilities were learned on is gone: they are unknown until the next probe answers, and an
+        // answer still on its way from that connection must not set them.
         if (prev.runtime[hostId]?.status === 'connected') {
           current.delete(hostId)
-          store.invalidateEditSupport(hostId)
+          store.invalidateSupport(hostId)
           useWorkbookStore.getState().fence(hostId) // the connection is gone: requests still out must not land
         }
         continue

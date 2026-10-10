@@ -1,5 +1,60 @@
 # Changelog
 
+## [1.0.0-alpha.690] - 2026-10-10
+
+> 動到 daemon、mod 與 Electron：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod protocol 升到 4）；Electron 已重新打包，Mac App 用 dev update 更新；SPA 已隨主機上的 dev server 生效。
+
+### Added：member 的 session 裡親手打 /relay 一律放行 — MR-1（#2491）、MR-2（#2489）
+
+- 使用者在 member 的 session 打 `/relay`（或 `/relay now`）不再被「member 的接力由 lead 安排」擋住，照一般 session 的流程開核准卡片；接力完它仍是同一個 lead 的 member，lead 收到「member 由使用者手動接力：舊 ref → 新 ref」。開著無人值守也一樣要人按卡片，不會自動核准、不扣任何額度。mod 自己在 70% 發起的接力仍由 lead 決定。
+- 跨主機的 member（例如 air26 上的 iOS member）也適用：接力在 member 那台進行，完成後 lead 那台的名單換成新 ref，舊 ref 照樣找得到它。lead 那台若是舊版、不認得這個通知，member 那台會丟掉它而不卡住其他通知。
+- 正在被 kill 的 member 不能手動接力。
+
+### Fixed：核准通知點擊只送到發出它的視窗 — #1919（#2508，介面線）
+
+- Mac App 有多個視窗時，點核准通知只會在發出它的那個視窗開卡片；「開啟 session」照舊會到有那個分頁的視窗。
+
+### Fixed：介面 — #2511（介面線）
+
+- Worker 已消失／測試用分頁按「重試」後，鍵盤焦點留在原地。
+
+### Refactor
+
+- pairing.ts 純搬移拆成 types／transport／mint／session（#2509）。
+
+## [1.0.0-alpha.689] - 2026-10-10
+
+> 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Added：輸入框可以附檔案 — #2483、#2490、#2500、#2502（介面線）
+
+- 指揮台與聊天的輸入框可以貼上、拖放或按附件鈕附加檔案（#2483）；輸入框有焦點時拖放也看得到高亮（#2490）；超過 256 MiB 的檔案送出前就擋下（#2500）；終端機拖放上傳失敗時，狀態列說明原因（#2502）。
+
+### Added：問題卡與終端機薄條 — U3-4 dock（#2488、#2494，介面線）
+
+- 輸入框上方顯示待回答的問題卡，綁定它的核准；「已在終端機回答」提示從出現起算停留 3 秒（#2494）。
+
+### Changed：手機上傳的限制 — #2466（#2492）、#2493（#2498）（介面線）
+
+- 每支裝置的 token 同時最多 2 筆上傳，多的回 429（#2492）。撤銷裝置會中止它正在進行的上傳；裝置上傳有整體期限（#2498）。
+
+### Fixed：tmux 卡住時不再拖住事件處理 — #2039（#2486）
+
+- 查 pane 屬於哪個 session 的後援查詢原本沒有期限，tmux 不回應時會卡住事件處理與 mod。現在整次讀取共用一個期限，逾時就當這次讀取失敗、什麼都不廣播，下一輪重來。
+
+### Fixed：介面 — #2496、#2497、#2499、#2503、#2504（介面線）
+
+- lead 分頁拆出或合併視窗後不留殘影列（#2496）；對話內文的清單縮排與程式碼字型（#2497）、行內程式碼改成 chip（#2499）；主機的各項能力旗標斷線時不留舊值（#2503）；淺色主題的警告文字看得清楚（#2504）。
+
+### Refactor
+
+- TeamPanel.tsx 純搬移拆檔（#2495）、ApprovalDialogHost 的 helper 搬到 approval-dialog-helpers.ts（#2506），行為不變。
+
+### Docs
+
+- member 接力 spec＋plan：member 親手 /relay 一律放行、跨主機 member 接力（#2487）。
+- 專案 CLAUDE.md：codex 仲裁改用 gpt-5.6-sol effort high，永遠不用 astra（#2505）。
+
 ## [1.0.0-alpha.688] - 2026-10-10
 
 > 只動到 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 沒有變更。

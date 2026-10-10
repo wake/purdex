@@ -37,7 +37,7 @@ export function StateSlot({ state, exitCode = 1, elapsedMs = 0, className = '' }
   )
   // The agent is waiting for the person (an approval, a question): the same yellow as the tab's light, and ask is never dimmed.
   const waiting = (
-    <span className="flex items-center gap-1.5 text-status-warning">
+    <span className="flex items-center gap-1.5 text-status-warning-text">
       <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-status-warning" />
       <span>{t('deck.status.waiting')}</span>
     </span>

@@ -49,6 +49,7 @@ import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
 import { applySettings, applyTabs, applyWorkspaces, isWellFormedSection, settingsFromWire, tabsFromWire, upcastLegacySettings, upcastLegacyTabs } from './applier'
 import { getPrimaryPane } from '../pane-tree'
+import { withoutSecondarySettingsPanes } from '../workspace-settings-panes'
 import { identityOfSync } from './host-identity'
 import { hashSection } from './hash'
 import { masterWorkspaceIds, readMasterWorld, writeMasterWorld } from './master-world'
@@ -315,7 +316,10 @@ async function applyWorkspacesSection(payload: unknown): Promise<ApplyOutcome> {
       }
       const tabs: Record<string, Tab> = {}
       for (const [id, tab] of Object.entries(local.tabs)) {
-        if (!gone.has(id)) tabs[id] = tab
+        if (gone.has(id)) continue
+        // A settings page of the removed workspace in a secondary pane of a split tab that stays: only that pane goes (#1955).
+        const layout = removedWorkspaceIds.length > 0 ? withoutSecondarySettingsPanes(tab.layout, removedWorkspaceIds) : tab.layout
+        tabs[id] = layout === tab.layout ? tab : { ...tab, layout }
       }
       // No kept workspace keeps a pointer at a tab that went.
       const workspaces = next.workspaces.map((w) => {

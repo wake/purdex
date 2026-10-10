@@ -93,7 +93,7 @@ export function SelfAliasLine({ hostId, hostName, self, busy, flow, runFlow }: S
           <span data-testid="peers-self-from-host-id">{t('peers.self_alias_from_host_id')}</span>
         )}
         {source === undefined && (
-          <span data-testid="peers-self-too-old" className="font-sans text-status-warning">{t('peers.self_alias_too_old')}</span>
+          <span data-testid="peers-self-too-old" className="font-sans text-status-warning-text">{t('peers.self_alias_too_old')}</span>
         )}
         {source !== undefined && !editing && (
           <button type="button" data-testid="peers-self-edit" disabled={busy} onClick={edit}

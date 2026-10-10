@@ -91,6 +91,14 @@ const (
 	MinMemberAskModVersion = 3   // the mod protocol that asks for itself; older mods keep the 70%-and-idle notice
 )
 
+// MinManualRelayModVersion is the mod protocol that sends `begin --manual` for a person's /relay (MR-1); an older mod
+// answers a member's /relay with its own refusal.
+const MinManualRelayModVersion = 4
+
+// RelayManualNoticeFmt is the lead's notice that a person relayed one of its members by hand (MR-1, D3): the old and
+// the new ref.
+const RelayManualNoticeFmt = "[pdx team] member 由使用者手動接力：%s → %s"
+
 // RelayAskNoticeFmt takes the member's address, its bare 6-character ref, its title, the integer percentage, the minutes
 // left (rounded up) and the ref again.
 const RelayAskNoticeFmt = "[pdx team] member %s [%s]「%s」已用 %d%%，申請接力。\n%d 分鐘內同意請執行：pdx relay _%s（不同意不用回覆，過期即作罷）"

@@ -30,7 +30,7 @@ import { TeamConsent } from './peers/TeamConsent'
 
 const STATUS_CLASS: Record<PairStatus, string> = {
   bidirectional: 'text-status-success',
-  'one-way': 'text-status-warning',
+  'one-way': 'text-status-warning-text',
   unpaired: 'text-status-error',
   'outbound-only': 'text-text-muted',     // half-verifiable, never green (spec D-4)
   'return-unknown': 'text-text-muted',    // transient, never green
@@ -384,12 +384,12 @@ function DirectionLine({ testId, from, to, side, note, drift, renameTarget, busy
       {/* The peer's self alias, spec §5.3: shown whenever it is known, with a
           separate drift marker + Rename only when it disagrees with the entry name. */}
       {side !== 'pending' && side.ok && side.self_alias && (
-        <span data-testid={`${testId}-self-alias`} className={`text-xs ${drift ? 'text-status-warning' : 'text-text-muted'}`}>
+        <span data-testid={`${testId}-self-alias`} className={`text-xs ${drift ? 'text-status-warning-text' : 'text-text-muted'}`}>
           {t('peers.calls_itself', { alias: side.self_alias })}
         </span>
       )}
       {drift && (
-        <span data-testid={`${testId}-drift`} className="text-xs text-status-warning">
+        <span data-testid={`${testId}-drift`} className="text-xs text-status-warning-text">
           ({t('peers.drift')})
         </span>
       )}

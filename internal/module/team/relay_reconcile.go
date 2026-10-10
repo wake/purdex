@@ -96,7 +96,9 @@ func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team
 // (afterReport, the handover notice, the lead's outcome notice), on Applied only.
 func (m *Module) applyReconcile(op team.RelayOp, rep RelayReport) (team.RelayOp, bool, error) {
 	after, res, err := m.store.ReportRelay(op.ID, rep)
-	if errors.Is(err, ErrBadRelayReport) {
+	// A cleared refused because the member's kill already committed is no verdict either: the op is as it was, and the stall
+	// timer that called this goes on to fail it (returning the error would stop it, and the op would stay claimed for good).
+	if errors.Is(err, ErrBadRelayReport) || errors.Is(err, ErrClearedMemberKilled) {
 		m.logf("[team] reconcile op %s: %v", op.ID, err)
 		return op, false, nil
 	}
@@ -136,7 +138,15 @@ const (
 // Callers pass an op they just applied (ReportApplied) — a re-send (Noop) never calls it, so there is one notice per
 // transition. Best effort: a failure is logged.
 func (m *Module) outcomeNoticeAsync(op team.RelayOp) {
-	if m.sender == nil || op.Kind != team.RelayKindMember || op.TeamID == "" {
+	if m.sender == nil || op.TeamID == "" {
+		return
+	}
+	switch {
+	case op.Kind == team.RelayKindMember:
+	case op.Kind == team.RelayKindSelf && op.State == team.RelayDone:
+		// a person's manual relay of a member (MR-1, D3): its `cleared` stamped the member's team on the op. Failed and
+		// cancelled ones are not announced: the person who typed /relay sees them.
+	default:
 		return
 	}
 	switch op.State {
@@ -155,6 +165,10 @@ func (m *Module) outcomeNotice(op team.RelayOp) {
 	var text string
 	switch op.State {
 	case team.RelayDone:
+		if op.Kind == team.RelayKindSelf {
+			text = fmt.Sprintf(team.RelayManualNoticeFmt, op.Ref, op.NewRef)
+			break
+		}
 		text = fmt.Sprintf(RelayDoneNoticeFmt, op.Ref, op.NewRef)
 	case team.RelayFailed:
 		text = fmt.Sprintf(RelayFailedNoticeFmt, op.Ref, op.Reason)

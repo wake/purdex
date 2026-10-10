@@ -29,6 +29,7 @@ const stubTokens: ThemeTokens = {
   'terminal-cursor': '#fff',
   'status-error': '#f00',
   'status-warning': '#ff0',
+  'status-warning-text': '#ff0',
   'status-success': '#0f0',
 }
 

@@ -55,7 +55,7 @@ function QuickReplyEditor({ initial, busy, error, onSave, onCancel }: {
         <button type="button" data-testid="quick-reply-cancel" title={t('common.cancel')} onClick={onCancel}
           className={iconBtn}><X size={14} /></button>
       </div>
-      {shown && <p data-testid="quick-reply-error" className="text-xs text-status-warning whitespace-pre-wrap">{shown}</p>}
+      {shown && <p data-testid="quick-reply-error" className="text-xs text-status-warning-text whitespace-pre-wrap">{shown}</p>}
     </div>
   )
 }
@@ -111,7 +111,7 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
         <p data-testid="quick-replies-limit" className="mb-3 text-xs text-text-muted">{t('host_config.limit', { max: MAX_QUICK_REPLIES })}</p>
       )}
       {saveError?.target === 'list' && (
-        <p data-testid="quick-replies-save-error" className="mb-3 text-xs text-status-warning whitespace-pre-wrap">{saveError.text}</p>
+        <p data-testid="quick-replies-save-error" className="mb-3 text-xs text-status-warning-text whitespace-pre-wrap">{saveError.text}</p>
       )}
       {items.length === 0 && !(editing && isNew) ? (
         <p data-testid="quick-replies-empty" className="text-sm text-text-muted">{t('hosts.quick_replies.empty')}</p>

@@ -87,7 +87,7 @@ export function RotationControls({ holder, row, stale, evidenceDialled, push, la
   if (offer !== null) {
     return (
       <>
-        <span data-testid={`${testId}-rotation`} data-offer={offer} className="text-xs text-status-warning">
+        <span data-testid={`${testId}-rotation`} data-offer={offer} className="text-xs text-status-warning-text">
           {t('peers.rotation_pending')} — {t(NOTE[row.last_inbound_auth])}
         </span>
         {stale ? (

@@ -106,7 +106,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **第二輪 R2：「攻擊 → critic 反駁」串行兩次**（不再三平行；依據 ICML 2026 Adversarial Review：agent 數不是變因，「必須引用證據才能反對」才是）
 1. **攻擊方** `/codex:adversarial-review`：找 bug / 安全漏洞 / race / 邊界條件；focus 末段附一句「另外列出過大檔案 / SRP 違反（低優先，獨立一節）」，原本的「檔案體質」視角併進來
 2. **critic 反駁方** `/codex:adversarial-review`：focus 內嵌 R1 ＋ 攻擊方的 findings 清單與 spec 路徑，要求**逐條**判定「同意／有證據反對（必引 file:line）／疑慮」，**禁止新增沒有證據的 finding**。critic 同時是 spec drift 防線（原「防守方」的職責）
-3. 攻擊方與 critic 對**同一個 critical** 互不同意時，才用 `--model gpt-6-astra` 派一次仲裁；其他情況不用 astra
+3. 攻擊方與 critic 對**同一個 critical** 互不同意時，才派一次仲裁：`task --model gpt-5.6-sol --effort high`（仲裁是 effort 不維持 low 的唯一例外）。**永遠不用 `gpt-6-astra`**（2026-10-10 使用者定案）
 
 兩段 focus 模板在 `~/.claude/skills/codex-dispatch/SKILL.md`。輪詢 `/codex:status` → `/codex:result <job-id>` 讀回 3 份輸出。Focus text 越具體越好（指定檔案 / 具體風險點 / 設計疑問）。
 

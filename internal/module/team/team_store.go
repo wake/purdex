@@ -286,11 +286,15 @@ func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (a 
 func (s *Store) closeSelfRelayApprovedIn(tx *sql.Tx, id string, c Close, sessionID string) (n int64, memberCancelled bool, err error) {
 	// A write first, so SQLite takes the write lock before the member read.
 	_, err = tx.Exec(`UPDATE approval_requests SET id = id WHERE id = ?`, id)
-	var member bool
+	var member, cancel bool
 	if err == nil {
-		member, err = isLiveMemberIn(tx, sessionID)
+		member, cancel, err = selfRelayMemberIn(tx, id, sessionID)
 	}
-	if member {
+	if err == nil && member && !cancel && c.Auto {
+		// A person's manual relay of a member (MR-1, D2): the daemon never approves it, whatever the unattended mode.
+		err = ErrManualMemberNeedsPerson
+	}
+	if cancel {
 		c = Close{State: team.StateCancelled, DecidedAt: c.DecidedAt, UnexpiredAt: c.UnexpiredAt}
 	}
 	if err == nil {
@@ -303,17 +307,43 @@ func (s *Store) closeSelfRelayApprovedIn(tx *sql.Tx, id string, c Close, session
 			*c.SpentOut = true
 		}
 	}
-	if err == nil && member && n == 1 && s.beforeMemberCancelOp != nil {
+	if err == nil && cancel && n == 1 && s.beforeMemberCancelOp != nil {
 		err = s.beforeMemberCancelOp()
 	}
-	if err == nil && member && n == 1 {
+	if err == nil && cancel && n == 1 {
 		_, err = tx.Exec(`UPDATE relay_ops SET state = ?, reason = ?, updated_at = ? WHERE request_id = ? AND state = ?`,
 			string(team.RelayCancelled), team.ErrMemberRelayIsLeads, c.DecidedAt, id, string(team.RelayAwaitingApproval))
 	}
 	if err != nil {
 		return 0, false, err
 	}
-	return n, member && n == 1, nil
+	return n, cancel && n == 1, nil
+}
+
+// ErrManualMemberNeedsPerson is returned when the daemon itself (unattended mode) would approve a member's manual
+// self relay: that one always waits for a person's click (MR-1, D2), so nothing was written.
+var ErrManualMemberNeedsPerson = errors.New("a member's manual relay is approved by a person, never automatically")
+
+// selfRelayMemberIn says whether sessionID is a live member and whether the row's approve cancels for that (U13). A
+// member is cancelled unless the ROW's payload says manual (read from the row, never from a caller): a person's relay of
+// a member, local or of a team led on another host (MR-2), goes on.
+func selfRelayMemberIn(tx *sql.Tx, rowID, sessionID string) (member, cancel bool, err error) {
+	role, err := memberRoleIn(tx, sessionID)
+	if err != nil || !role.isMember() {
+		return false, false, err
+	}
+	var raw string
+	if err := tx.QueryRow(`SELECT payload_json FROM approval_requests WHERE id = ?`, rowID).Scan(&raw); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return true, false, err
+	}
+	var sp team.SelfRelayPayload
+	manual := json.Unmarshal([]byte(raw), &sp) == nil && sp.Manual
+	// A member whose kill started after the card opened is cancelled too: the cleared moves active rows only.
+	var killing int
+	if err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state = 'killing'`, sessionID).Scan(&killing); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return true, false, err
+	}
+	return true, !manual || killing == 1, nil
 }
 
 // isLiveMemberIn reports, on q (a transaction's read under its write lock),
@@ -326,6 +356,20 @@ func isLiveMemberIn(q dbtx, sessionID string) (bool, error) {
 		return false, err
 	}
 	return role.isMember(), nil
+}
+
+// IsKillingMember reports whether sessionID is a member of a live team whose kill is in flight.
+func (s *Store) IsKillingMember(sessionID string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.session_id = ? AND m.state = 'killing' AND t.ended_at = 0`, sessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("killing member %s: %w", sessionID, err)
+	}
+	return true, nil
 }
 
 // MembersOf returns every member row of the team, in any state, with its

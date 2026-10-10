@@ -147,7 +147,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
           </div>
           {status.managed === 'none' && <div>{t('settings.dev.local.none')}</div>}
           {status.managed === 'external' && (
-            <div className="text-status-warning">
+            <div className="text-status-warning-text">
               {t('settings.dev.local.external', { url: externalUrl })}
               {status.reason && <div>{t('settings.dev.local.external_reason', { reason: status.reason })}</div>}
             </div>
@@ -162,10 +162,10 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
                 <span>{running ? t('settings.dev.local.running') : t('settings.dev.local.stopped')}</span>
                 <span className="font-mono">{running ? `${running.version} (${running.hash}) ${running.url}` : '-'}</span>
               </div>
-              {alive && !running && <div className="text-status-warning">{t('settings.dev.local.alive_unhealthy', { pid: alive.pid })}</div>}
-              {restartPending && <div className="text-status-warning">{t('settings.dev.local.restart_pending', { hash: installed.hash })}</div>}
+              {alive && !running && <div className="text-status-warning-text">{t('settings.dev.local.alive_unhealthy', { pid: alive.pid })}</div>}
+              {restartPending && <div className="text-status-warning-text">{t('settings.dev.local.restart_pending', { hash: installed.hash })}</div>}
               {updateAvailable
-                ? <div className="text-status-warning">{t('settings.dev.local.update_available')}</div>
+                ? <div className="text-status-warning-text">{t('settings.dev.local.update_available')}</div>
                 : (running && !restartPending && <div>{t('settings.dev.local.up_to_date')}</div>)}
             </>
           )}
@@ -178,7 +178,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
               <div className="flex items-center justify-between">
                 <span>{t('settings.dev.local.token')}</span>
                 {cfg.token === null ? (
-                  <span className="text-status-warning">{t('settings.dev.local.token_missing')}</span>
+                  <span className="text-status-warning-text">{t('settings.dev.local.token_missing')}</span>
                 ) : (
                   <span className="flex items-center gap-1">
                     <span className="font-mono text-text-primary">{revealed ? cfg.token : '••••••••••••'}</span>
@@ -205,7 +205,7 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
               </div>
             </>
           )}
-          {status.tools.tmux === null && <div className="text-status-warning">{t('settings.dev.local.tmux_missing')}</div>}
+          {status.tools.tmux === null && <div className="text-status-warning-text">{t('settings.dev.local.tmux_missing')}</div>}
         </div>
       )}
 
@@ -213,17 +213,17 @@ export function LocalDaemonSection({ daemonBase, token, latestHash, refreshKey }
         <div className="space-y-1 mb-3 text-xs text-text-secondary">
           <div className="font-semibold text-text-primary">{t('settings.dev.local.cli.heading')}</div>
           {cli.resolved === null ? (
-            <div className="text-status-warning">{t('settings.dev.local.cli.unresolved')}</div>
+            <div className="text-status-warning-text">{t('settings.dev.local.cli.unresolved')}</div>
           ) : (
             <>
               <div className="flex items-center justify-between gap-2">
                 <span>{t('settings.dev.local.cli.resolved')}</span>
                 <span className="font-mono text-text-primary select-text break-all">{cli.resolved}</span>
               </div>
-              {!cli.isManagedBinary && <div className="text-status-warning">{t('settings.dev.local.cli.not_managed')}</div>}
+              {!cli.isManagedBinary && <div className="text-status-warning-text">{t('settings.dev.local.cli.not_managed')}</div>}
             </>
           )}
-          {cli.pathSource === 'fallback' && <div className="text-status-warning">{t('settings.dev.local.cli.fallback')}</div>}
+          {cli.pathSource === 'fallback' && <div className="text-status-warning-text">{t('settings.dev.local.cli.fallback')}</div>}
           <div className="flex gap-2 pt-1">
             <button type="button" onClick={() => void runPath('path-link')} disabled={disabled} className={btnSecondary}>
               {t('settings.dev.local.cli.btn.link')}

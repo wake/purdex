@@ -27,7 +27,12 @@ type Store struct {
 	newID func() string
 	// onCommands wakes the commands pump after a store transaction enqueued commands (set at Init).
 	onCommands func()
-	aliasFn    func() string
+	// onFacts wakes the facts pump after a store transaction queued a fact (set at Init), as onCommands does for commands.
+	onFacts func()
+	// failAfterMovedFact, when set, fails a cleared of a remote member after its row moved and its `moved` fact was queued,
+	// before the commit (test seam for the one-transaction rule, member relay spec §6). nil in production.
+	failAfterMovedFact func() error
+	aliasFn            func() string
 
 	// failBeforeCommandLog, when set, fails ApplyTeamCommand after the command's changes and before its log insert
 	// (test seam for the one-transaction crash cut). nil in production.
@@ -231,6 +236,10 @@ func OpenStore(path string) (*Store, error) {
 	if err := ensureColumn(db, "remote_spawns", "host_ref", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (remote spawns host_ref): %w", err)
+	}
+	if _, err := db.Exec(remoteRefSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (remote member refs): %w", err)
 	}
 	if _, err := db.Exec(factLogSchema); err != nil {
 		db.Close()

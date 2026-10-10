@@ -7,6 +7,7 @@ import { useI18nStore } from '../../../stores/useI18nStore'
 import { getPrimaryPane } from '../../../lib/pane-tree'
 import { getPaneLabel } from '../../../lib/pane-labels'
 import { closeTab } from '../../../lib/tab-lifecycle'
+import { secondarySettingsPaneIds } from '../../../lib/workspace-settings-panes'
 import { listContributions } from '../../../lib/settings-contribution-registry'
 import {
   isModuleOwnedContribution,
@@ -198,6 +199,11 @@ export function WorkspaceSettingsPage({ workspaceId }: Props) {
                   if (content.kind !== 'settings' || content.scope === 'global' || content.scope.workspaceId !== workspaceId) continue
                   if (tab.locked) useTabStore.getState().toggleLock(tab.id)
                   closeTab(tab.id, { skipHistory: true })
+                }
+                // And in a split tab that stays, a secondary pane showing one: only that pane goes, the tab and its primary
+                // pane stay (#1955).
+                for (const tab of Object.values(useTabStore.getState().tabs)) {
+                  for (const paneId of secondarySettingsPaneIds(tab.layout, [workspaceId])) useTabStore.getState().closePane(tab.id, paneId)
                 }
                 // Every tab belongs to a workspace: the tabs that are left move to the next one (store.ts).
                 const kept = ws.tabs.filter((id) => useTabStore.getState().tabs[id])
