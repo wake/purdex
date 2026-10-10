@@ -531,3 +531,32 @@ describe('loadUntil', () => {
     expect(fetchConversation).not.toHaveBeenCalled()
   })
 })
+
+describe('resnapshot (the refresh path asks again even while a page load is out)', () => {
+  const seedLoading = async () => {
+    st().setSupport('h1', V2)
+    await st().openWorkbook('h1', 's1') // learns c1
+    useWorkbookStore.setState((s) => ({ byHost: { h1: { byConv: { c1: { ...s.byHost.h1.byConv.c1, loading: true } } } } }))
+    fetchConversation.mockClear()
+  }
+  it('openWorkbook is skipped while the conversation is loading (unchanged), resnapshot is not', async () => {
+    await seedLoading()
+    await st().openWorkbook('h1', 's1')
+    expect(fetchConversation).not.toHaveBeenCalled()
+    fetchConversation.mockResolvedValue(page([entry(3), refreshEntry(4, 'pending')], { refreshAvailable: true }))
+    await st().resnapshot('h1', 's1')
+    expect(fetchConversation).toHaveBeenCalledTimes(1)
+    expect(selectRefreshPending(conv())).toBe(true)
+    expect(conv()?.refreshAvailable).toBe(true)
+  })
+  it('does nothing on a host without workbook.v2', async () => {
+    st().setSupport('h1', V1)
+    await st().resnapshot('h1', 's1')
+    expect(fetchConversation).not.toHaveBeenCalled()
+  })
+  it('answers false when the request failed', async () => {
+    st().setSupport('h1', V2)
+    fetchConversation.mockRejectedValue(new Error('offline'))
+    expect(await st().resnapshot('h1', 's1')).toBe(false)
+  })
+})

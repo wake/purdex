@@ -43,7 +43,7 @@ function RefreshButton({ hostId, sessionId, convKey, conv }: Pick<Props, 'hostId
       const r = await useWorkbookStore.getState().requestRefresh(hostId, convKey)
       // Not live (the flag was stale) or already pending (we had not seen it): the conversation is asked again and the
       // flag / the pending entry come back from the answer.
-      if (r.kind === 'not_live' || r.kind === 'refresh_pending') await useWorkbookStore.getState().openWorkbook(hostId, sessionId)
+      if (r.kind === 'not_live' || r.kind === 'refresh_pending') await useWorkbookStore.getState().resnapshot(hostId, sessionId)
     } finally {
       setAsking(false)
     }

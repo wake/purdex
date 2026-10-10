@@ -104,6 +104,8 @@ interface WorkbookState {
   /** 'failed': the ask did not reach an answer (network / 5xx) and the seat is NOT marked loaded for this generation, so a later ask retries. */
   loadSeat: (hostId: string, sessionId: string) => Promise<'ok' | 'failed'>
   openWorkbook: (hostId: string, sessionId: string) => Promise<void>
+  /** v2: ask for the conversation again NOW (limit 20), whatever else is loading it; the refresh path's way to correct `refreshAvailable` / learn a pending refresh entry. false: the request itself failed. No-op (true) without `workbook.v2`. */
+  resnapshot: (hostId: string, sessionId: string) => Promise<boolean>
   /** The seats the team views show now: a seat that is gone stops holding its conversation (and counts as new if it returns). */
   syncSeats: (targets: ReadonlyArray<{ hostId: string; sessionId: string }>) => void
   /** A workbook view opened (true) or closed (false) on a conversation: it is not evicted while open. */
@@ -332,6 +334,13 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       const conv = get().convOfSession[hostId]?.[sessionId]
       if (conv && get().byHost[hostId]?.byConv[conv]?.loading) return
       await runFetch(hostId, sessionId, { limit: VIEW_PAGE })
+    },
+
+    resnapshot: async (hostId, sessionId) => {
+      if (!get().support[hostId]?.v2) return true
+      // Not `openWorkbook`: a page load of the same conversation (loadMore / loadUntil) must not swallow this, and a request
+      // already out may predate what the caller just learned (a 409), so it is never joined — its own start stamp decides what lands.
+      return fetchOnce(hostId, sessionId, { limit: VIEW_PAGE })
     },
 
     loadMore: async (hostId, convKey) => {

@@ -77,6 +77,20 @@ describe('重整', () => {
     await act(async () => { fireEvent.click(btn()) })
     expect(fetchConversation.mock.calls.length).toBe(before + 1)
   })
+  it.each(['not_live', 'refresh_pending'] as const)('409 %s while a page load of the conversation is out: still asked again; 重整中… holds until the answer lands', async (kind) => {
+    seed({ refreshAvailable: true }); mount(); await settle()
+    patchConv({ loading: true }) // a loadMore / loadUntil is in flight
+    const before = fetchConversation.mock.calls.length
+    let land: (v: unknown) => void = () => {}
+    fetchConversation.mockReturnValue(new Promise((res) => { land = res }))
+    stubRefresh({ kind })
+    await act(async () => { fireEvent.click(btn()) })
+    expect(fetchConversation.mock.calls.length).toBe(before + 1)
+    expect(btn().textContent).toContain('重整中…')
+    expect(btn().disabled).toBe(true)
+    await act(async () => { land({ kind: 'ok', page: { convKey: 'c-S', status: 's', statusAt: 5, entries: [entry(7, { kind: 'refresh', state: 'pending' })], todos: null, refreshAvailable: true } }) })
+    expect(btn().textContent).toContain('重整中…') // now because the conversation holds the pending entry
+  })
   it('409 refresh_pending: shows 重整中… while the conversation is asked again, then follows the store', async () => {
     seed({ refreshAvailable: true }); mount(); await settle()
     const before = fetchConversation.mock.calls.length
