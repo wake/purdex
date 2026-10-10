@@ -2,7 +2,7 @@
 // no team whose first live `cc` tmux-session pane has a recorded session id (`rebuild.agent`, the same id the daemon's
 // workbook is keyed by) and whose host lists `workbook.v1` with a workbook for it. Other agents and sessions with no
 // workbook yet have none (the area is then absent too). There is no per-tab toggle.
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { collectLeaves } from '../../lib/pane-tree'
@@ -10,6 +10,9 @@ import type { PaneLayout } from '../../types/tab'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { firstSentence, useSeatWorkbook } from './seat-workbook'
 import type { OwnWorkbookTarget } from './panel-view'
+
+const OWN_MAX_RETRIES = 3
+const OWN_RETRY_BASE_MS = 1000
 
 /** The conversation a layout's first live `cc` tmux-session pane (pre-order) belongs to; null when there is none. */
 export function ownSessionOf(layout: PaneLayout): OwnWorkbookTarget | null {
@@ -43,8 +46,25 @@ export function useOwnWorkbook(): OwnWorkbookTarget | null {
   const gen = useWorkbookStore((s) => s.gens[hostId])
   const v1 = useWorkbookStore((s) => s.support[hostId]?.v1 === true)
   const seated = useWorkbookStore((s) => s.seatGen[hostId]?.[sessionId])
+  // A probe that got no answer (network / 5xx) is retried with a bounded backoff: the store hands the seat back (it is not
+  // marked loaded), and `retry` holds the count and the earliest next ask so that hand-back does not turn into a hot loop.
+  const retry = useRef({ key: '', tries: 0, notBefore: 0, busy: '' })
+  const [tick, setTick] = useState(0)
   useEffect(() => {
-    if (hostId !== '' && v1) void useWorkbookStore.getState().loadSeat(hostId, sessionId)
-  }, [hostId, sessionId, gen, v1, seated])
+    if (hostId === '' || !v1) return
+    const key = `${hostId}\u0000${sessionId}\u0000${gen ?? 0}`
+    const r = retry.current
+    if (r.key !== key) { r.key = key; r.tries = 0; r.notBefore = 0 }
+    if (r.busy === key) return // the answer of the ask in flight decides what happens next
+    if (Date.now() < r.notBefore) return
+    r.busy = key
+    void Promise.resolve(useWorkbookStore.getState().loadSeat(hostId, sessionId)).then((res) => {
+      if (retry.current.busy === key) retry.current.busy = ''
+      if (res !== 'failed' || retry.current.key !== key || retry.current.tries >= OWN_MAX_RETRIES) return
+      const delay = OWN_RETRY_BASE_MS * 2 ** retry.current.tries++
+      retry.current.notBefore = Date.now() + delay
+      setTimeout(() => setTick((n) => n + 1), delay)
+    })
+  }, [hostId, sessionId, gen, v1, seated, tick])
   return target !== null && wb.has ? target : null
 }
