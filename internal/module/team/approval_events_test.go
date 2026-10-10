@@ -56,6 +56,7 @@ func TestSubscribeApprovals_SnapshotHasEveryOpenApprovalOfEverySession(t *testin
 
 // A callback that never returns must not slow the approval stream: broadcast only does a non-blocking send.
 func TestSubscribeApprovals_ABlockedCallbackDoesNotSlowBroadcast(t *testing.T) {
+	captureEventsLog(t) // the hub logs the drop it is asked to make: expected output, not a failure (#2210)
 	f := newFixture(t)
 	release := make(chan struct{})
 	defer close(release)

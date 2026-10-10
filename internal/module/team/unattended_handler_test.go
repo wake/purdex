@@ -298,6 +298,7 @@ func TestUnattendedPut_AuditLineAndChangedBy(t *testing.T) {
 // off; a subscriber with room gets it. Mutation gate: broadcast changed
 // best-effort (BroadcastEvent) → red.
 func TestUnattendedPut_ChangedClosesASubscriberThatCannotTakeIt(t *testing.T) {
+	captureEventsLog(t) // the hub logs the drop it is asked to make: expected output, not a failure (#2210)
 	f := newFixture(t)
 	f.realUnattended()
 	full := f.core.Events.AddTestSubscriber()

@@ -151,6 +151,7 @@ func TestStart_RunsTheSweeperUntilStop(t *testing.T) {
 // room still gets the frame. Mutation gate: broadcast with BroadcastEvent
 // (best-effort) in Module.broadcast → red, for both ops.
 func TestApprovalEvents_AreStrictForASubscriberThatCannotTakeThem(t *testing.T) {
+	captureEventsLog(t) // the hub logs the drop it is asked to make: expected output, not a failure (#2210)
 	for _, op := range []string{"opened", "closed"} {
 		t.Run(op, func(t *testing.T) {
 			f := newFixture(t)
