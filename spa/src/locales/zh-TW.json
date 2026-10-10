@@ -2378,6 +2378,7 @@
   "deck.loading": "載入中…",
   "deck.empty": "還沒有內容",
   "deck.paging": "載入較早的內容…",
+  "deck.history_start": "已到對話開頭",
   "deck.reconnecting": "重新連線中…",
   "deck.back_live": "正在看較早的內容，回到最新",
   "deck.retry": "重試",

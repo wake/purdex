@@ -23,6 +23,9 @@ const entry = (turns: Turn[], over: Partial<ConversationEntry> = {}, doc: object
 const props = { paneId: 'p-deck', hostId: 'h', sessionId: 's', onSwitchToTerminal: () => {} }
 const loadBefore = vi.fn(async () => {})
 
+// jsdom has no scrollTo; a browser does, and the first placement (which the automatic paging waits for) goes through it.
+HTMLElement.prototype.scrollTo = function () {} as never
+
 beforeEach(() => {
   cleanup()
   forgetFolds('p-deck\0s')
@@ -129,12 +132,22 @@ describe('DeckView', () => {
     vi.useRealTimers()
   })
 
-  it('does not ask on its own when the content already overflows the box', () => {
+  it('does not ask on its own when the content already overflows the box and the reader is away from the top', () => {
     const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(5000)
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockReturnValue(1000)
     render(<DeckView {...props} entry={entry([turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })} />)
     expect(loadBefore).not.toHaveBeenCalled()
     spy.mockRestore()
+    vi.restoreAllMocks()
+  })
+
+  it('asks on its own when the content overflows but the reader is already at the top (no scroll event would come)', () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(5000)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockReturnValue(0)
+    render(<DeckView {...props} entry={entry([turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })} />)
+    expect(loadBefore).toHaveBeenCalledTimes(1)
     vi.restoreAllMocks()
   })
 

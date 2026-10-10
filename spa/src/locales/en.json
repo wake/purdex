@@ -2378,6 +2378,7 @@
   "deck.loading": "Loading…",
   "deck.empty": "Nothing here yet",
   "deck.paging": "Loading earlier…",
+  "deck.history_start": "Start of the conversation",
   "deck.reconnecting": "Reconnecting…",
   "deck.back_live": "Viewing earlier content — back to latest",
   "deck.retry": "Retry",

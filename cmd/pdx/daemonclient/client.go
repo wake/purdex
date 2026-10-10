@@ -343,6 +343,10 @@ func (c *Client) boundedOut(ctx, actx context.Context, err error) (error, bool) 
 // effort, 3 s, no retry). Status and error follow Do's contract minus
 // ErrUnavailable / ErrNoAnswer / ErrSentNoResponse; a transport error is
 // returned as is.
+// RawBody as Once's out receives a 2xx answer's body undecoded and unchecked — for a caller that must tell a body it cannot read
+// from one it never looked at (#2595).
+type RawBody []byte
+
 func (c *Client) Once(ctx context.Context, method, path string, body, out any) (int, error) {
 	var rd io.Reader
 	var payload []byte
@@ -374,6 +378,10 @@ func (c *Client) Once(ctx context.Context, method, path string, body, out any) (
 	}
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if rb, ok := out.(*RawBody); ok { // the caller reads the body itself, whatever it holds
+			*rb = append((*rb)[:0], raw...)
+			return resp.StatusCode, nil
+		}
 		if out != nil && len(bytes.TrimSpace(raw)) > 0 {
 			if err := json.Unmarshal(raw, out); err != nil {
 				return resp.StatusCode, fmt.Errorf("decode response: %w", err)
