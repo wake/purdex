@@ -174,6 +174,13 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 	if rid != "" {
 		labels[rebuildOfLabel] = rid
 	}
+	// U18: a rebuilt stint is the same hand-over of the same session: it keeps the model and effort too, and records them as the
+	// handoff does so the take-back reads them back.
+	// The replaced stint's labels are the authoritative copy of what it was started with; the statusline fills what they lack.
+	reading := m.readingOf(sid, replaced.Labels)
+	for k, v := range reading.labels() {
+		labels[k] = v
+	}
 	req := execution.Request{
 		PrincipalID:     principal,
 		Provider:        "claude",
@@ -184,6 +191,8 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 		Origin:          "purdex://host/" + m.opts.Config.HostID + "/rebuild",
 		Labels:          labels,
 		ResumeSessionID: sid,
+		Model:           reading.Model,
+		Effort:          reading.Effort,
 		// An asking row's rebuild resends its timeout (plan Task 7); 0 leaves it unset.
 		PermissionTimeoutS: permissionTimeout,
 	}

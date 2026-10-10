@@ -18,8 +18,10 @@
 //    imported `closeTab` (its close-tab shortcut); every other file referenced none.
 import { describe, expect, it } from 'vitest'
 
-// Every non-test source file, raw. Keys are `/src/…` paths.
-const SOURCES = import.meta.glob<string>(['/src/**/*.{ts,tsx}', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.d.ts'], {
+// Every non-test source file, raw. Keys are `/src/…` paths. A shared test helper (`X.test-helpers.ts`, e.g.
+// `components/StatusBar.test-helpers.ts`, which seeds the shown-hosts store) is test code too: it is not a production
+// importer, and its name must not contain `.test.` (vitest would run it as a suite), so it is excluded by its own suffix.
+const SOURCES = import.meta.glob<string>(['/src/**/*.{ts,tsx}', '!/src/**/*.test.{ts,tsx}', '!/src/**/*.test-helpers.{ts,tsx}', '!/src/**/*.d.ts'], {
   query: '?raw',
   import: 'default',
   eager: true,
@@ -137,6 +139,7 @@ describe('shown hosts — import guard (H2d-5 T5)', () => {
     expect(keys).toContain(`/${READER}.ts`)
     expect(keys).toContain(`/${STORE}.ts`)
     expect(keys.some((k) => k.includes('.test.'))).toBe(false)
+    expect(keys.some((k) => k.includes('.test-helpers.'))).toBe(false)
     // the parser handles the forms in use: a multi-line clause, a type-only import, a dynamic import
     expect(importsOf("import {\n  a,\n  type B as C,\n} from './x'\nimport type { D } from \"../y\"\nconst e = await import('./z')"))
       .toEqual([{ specifier: './x', names: ['a', 'B'] }, { specifier: '../y', names: ['D'] }, { specifier: './z', names: [] }])
