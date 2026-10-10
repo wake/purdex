@@ -71,12 +71,51 @@ func TestRunPeersCmd_AllowTeamOnWithRoots(t *testing.T) {
 		t.Fatalf("body = %v", body)
 	}
 	// ~ is expanded and a relative root made absolute by the CLI; the API gets absolute paths only.
+	// #2340: --root ADDS (a read-modify-write of the whole set could drop another writer's root); the whole-set field is never sent.
 	want := []any{"/r/a", filepath.Join(home, "w"), filepath.Join(cwd, "rel")}
-	if !reflect.DeepEqual(body["team_roots"], want) {
-		t.Fatalf("team_roots = %v want %v", body["team_roots"], want)
+	if !reflect.DeepEqual(body["add_team_roots"], want) {
+		t.Fatalf("add_team_roots = %v want %v", body["add_team_roots"], want)
+	}
+	if _, has := body["team_roots"]; has {
+		t.Fatalf("the whole-set team_roots was sent: %v", body)
+	}
+	if _, has := body["remove_team_roots"]; has {
+		t.Fatalf("remove_team_roots sent without --remove-root: %v", body)
 	}
 	if !strings.Contains(out, "air") || !strings.Contains(out, "on") {
 		t.Fatalf("stdout = %q", out)
+	}
+}
+
+// #2340: revoking a root is `--remove-root <dir>` (repeatable), sent as remove_team_roots; it can be combined with --root.
+func TestRunPeersCmd_AllowTeamRemoveRootSendsAnAtomicRemoval(t *testing.T) {
+	code, body, _, _, _, errOut := runAllowTeam(t, 200, map[string]any{"alias": "air", "allow_team": true, "team_roots": []string{"/r/b"}},
+		"air", "on", "--remove-root", "/r/a", "--root", "/r/b")
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+	if !reflect.DeepEqual(body["remove_team_roots"], []any{"/r/a"}) || !reflect.DeepEqual(body["add_team_roots"], []any{"/r/b"}) {
+		t.Fatalf("body = %v", body)
+	}
+	if _, has := body["team_roots"]; has {
+		t.Fatalf("the whole-set team_roots was sent: %v", body)
+	}
+}
+
+func TestParsePeersInvocation_RemoveRoot(t *testing.T) {
+	inv, _, ok := parsePeersInvocation([]string{"host", "allow-team", "air", "off", "--remove-root", "/a", "--remove-root", "/b"})
+	if !ok || !reflect.DeepEqual(inv.removeRoots, []string{"/a", "/b"}) || inv.roots != nil {
+		t.Fatalf("inv=%+v ok=%v", inv, ok)
+	}
+	for _, args := range [][]string{
+		{"host", "allow-team", "air", "on", "--remove-root"}, // missing value
+		{"host", "rename", "a", "b", "--remove-root", "/x"},  // allow-team's alone
+		{"host", "list", "--remove-root", "/x"},
+		{"--remove-root", "/x"},
+	} {
+		if _, _, ok := parsePeersInvocation(args); ok {
+			t.Errorf("accepted %v", args)
+		}
 	}
 }
 
