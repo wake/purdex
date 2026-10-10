@@ -15,6 +15,7 @@ const (
 	CommandLeadMoved = "lead_moved"
 	CommandVoid      = "void"
 	CommandKill      = "kill"
+	CommandRelay     = "relay" // the lead relays a remote member (member relay spec §3.3)
 	CommandSpawn     = "spawn" // not applied by this version (X4a)
 	// CommandAppearance carries the team's current name, short label and colour to a member host (#2288).
 	CommandAppearance = "team.appearance"
@@ -72,6 +73,8 @@ type TeamCommand struct {
 	// absent for "automatic" (the App's hash)
 	TeamLabel string `json:"team_label,omitempty"`
 	TeamColor *int   `json:"team_color,omitempty"`
+	// relay: the op id the lead host minted (one id end to end)
+	OpID string `json:"op_id,omitempty"`
 	// void
 	CommandID string `json:"command_id,omitempty"`
 	// spawn: where and what to start on the member host (the cwd must lie under the roots that host granted)
@@ -99,6 +102,26 @@ type AdoptOutcome struct {
 	Title         string `json:"title,omitempty"`
 	Cwd           string `json:"cwd,omitempty"`
 	Tmux          string `json:"tmux,omitempty"`
+}
+
+// RelayCommandOutcome is the relay command's outcome when applied.
+type RelayCommandOutcome struct {
+	State string `json:"state"` // RelayCommandAccepted
+}
+
+// RelayCommandAccepted is the state of an applied relay command.
+const RelayCommandAccepted = "accepted"
+
+// Outcomes of a void of a relay command (member relay spec D9).
+const (
+	VoidNotApplied = "not_applied" // the command never arrived (or was refused): its late copy answers command_void
+	VoidUndone     = "undone"      // applied and the op still requested: cancelled (remote_unreachable)
+	VoidTooLate    = "too_late"    // the op was claimed or already ended: left alone
+)
+
+// VoidOutcome is a void's outcome for a relay command.
+type VoidOutcome struct {
+	State string `json:"state"`
 }
 
 // CommandRefusal is a refusal's body (and the shape stored for one).

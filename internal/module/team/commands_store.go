@@ -86,6 +86,10 @@ type CommandPlan struct {
 	// HostID is this host's id (a spawn's op belongs to it); SpawnCwd the canonical cwd of a spawn, "" when it lies under
 	// none of the roots the lead host's entry grants.
 	HostID, SpawnCwd string
+	// ModOK says whether the session's mod speaks a protocol the relay needs (MinMemberRelayModVersion), read by the handler
+	// from the hello it saw; nil means no. HandoffDir is the directory a relay's handoff file lives in.
+	ModOK      func(sessionID string) bool
+	HandoffDir string
 
 	cmd  team.TeamCommand // decoded from Body by ApplyTeamCommand
 	hash string
@@ -97,6 +101,8 @@ type CommandResult struct {
 	Status   int
 	Body     json.RawMessage
 	Replayed bool
+
+	changedOp string // a relay op this decision changed: the store tells its waiters once the transaction commits
 }
 
 // ApplyTeamCommand decides p in ONE transaction: the stored answer of an earlier copy (same lead host, same id)
@@ -125,7 +131,7 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 	// command_void, whatever a copy of it once stored. Not logged — the table is the answer.
 	// Only an adopt or a spawn can be voided; a void that arrived early did not know its target's kind, so it must
 	// not swallow a release, end or lead_moved carrying the same id.
-	if p.cmd.Kind == team.CommandAdopt || p.cmd.Kind == team.CommandSpawn {
+	if p.cmd.Kind == team.CommandAdopt || p.cmd.Kind == team.CommandSpawn || p.cmd.Kind == team.CommandRelay {
 		var voided int
 		switch err := tx.QueryRow(`SELECT 1 FROM team_command_voids WHERE lead_host_id = ? AND command_id = ? AND team_id = ?`,
 			p.LeadHostID, p.cmd.ID, p.cmd.TeamID).Scan(&voided); {
@@ -177,6 +183,7 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 	if err := tx.Commit(); err != nil {
 		return fail(fmt.Errorf("commit: %w", err))
 	}
+	s.notifyOp(res.changedOp)
 	return res, nil
 }
 
@@ -185,7 +192,10 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 // clock, is not too old. Zero is "absent" (the lead omits the field; an older lead never sends it); a negative value is
 // no time a lead can have written and counts as too old, checked before the subtraction so the extremes cannot overflow.
 func commandTooOld(c team.TeamCommand, now int64) bool {
-	if c.CreatedAt == 0 || (c.Kind != team.CommandAdopt && c.Kind != team.CommandSpawn) {
+	if c.Kind == team.CommandRelay && c.CreatedAt == 0 {
+		return true // a new kind: no older lead omits it, so omitting it is not a way round the refusal
+	}
+	if c.CreatedAt == 0 || (c.Kind != team.CommandAdopt && c.Kind != team.CommandSpawn && c.Kind != team.CommandRelay) {
 		return false
 	}
 	if c.CreatedAt < 0 {
@@ -205,6 +215,8 @@ func (s *Store) applyIn(tx *sql.Tx, p CommandPlan) (res CommandResult, err error
 		res, err = applyKillIn(tx, p)
 	case team.CommandSpawn:
 		res, err = applySpawnIn(tx, p)
+	case team.CommandRelay:
+		res, err = applyRelayIn(tx, p)
 	case team.CommandEnd, team.CommandLeadMoved:
 		res, err = applyTeamLevelIn(tx, p)
 	case team.CommandVoid:

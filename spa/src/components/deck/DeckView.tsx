@@ -2,15 +2,17 @@
 // order, older turns read when the reader reaches the top, the reader's place and unfolded parts kept per pane across a
 // tab switch (CLAUDE.md tab-hosted rule: `fold-memory` and the scroll memo are outside the component). The input and
 // whatever else lives under the stream is the caller's `footer`, drawn below the scrolling box.
-import { memo, useCallback, useEffect, useMemo, useRef, type ReactNode, type UIEvent } from 'react'
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type UIEvent } from 'react'
 import { FoldContext } from '../room/fold-context'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import { noteDeckPane, usePaneFoldStore } from '../../lib/conversations/fold-memory'
+import { isRevealed, markRevealed } from '../../lib/conversations/deck-reveal-memory'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import type { Turn } from '../../lib/conversations/types'
 import { useConversationStore, type ConversationEntry } from '../../stores/useConversationStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { DeckItem } from './DeckItem'
+import { DeckRevealContext, EAGER_TURNS, useDeckReveal } from './deck-reveal'
 import { footerContext, type DeckFooterContext } from './footer-context'
 import type { StepActions } from './StepViews'
 import type { PanelContent } from '../../lib/conversations/panel-memory'
@@ -35,18 +37,35 @@ const AUTO_PAGE_TRIES = 3
 const AUTO_PAGE_RETRY_MS = 1000
 
 // Memoized: the store keeps an unchanged turn's object, so a live update re-draws only the turn that changed.
-const TurnView = memo(function TurnView({ turn, onOpenPanel }: { turn: Turn; onOpenPanel?: (content: PanelContent) => void }) {
+// `eager`: one of the newest turns, always drawn in full. An older one draws its agent text as plain text until it comes near the
+// viewport (#2469), then in full for good — the swap is remembered outside the component (`deck-reveal-memory`), so a deck that
+// remounts with its tab does not start the far-off turns over.
+const TurnView = memo(function TurnView({ turn, eager, onOpenPanel }: { turn: Turn; eager: boolean; onOpenPanel?: (content: PanelContent) => void }) {
   const t = useI18nStore((s) => s.t)
+  const reveal = useContext(DeckRevealContext)
+  const [near, setNear] = useState(false)
+  const full = eager || near || !reveal || isRevealed(reveal.memKey, turn.id)
+  const ref = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (eager && reveal) markRevealed(reveal.memKey, turn.id)
+  }, [eager, reveal, turn.id])
+  // A turn without agent text looks the same either way: nothing to watch.
+  const hasProse = turn.items.some((item) => item.type === 'agent_text')
+  useEffect(() => {
+    const el = ref.current
+    if (full || !reveal || !el || !hasProse) return
+    return reveal.observe(el, () => { markRevealed(reveal.memKey, turn.id); setNear(true) })
+  }, [full, reveal, turn.id, hasProse])
   const actions = useMemo<StepActions | undefined>(() => onOpenPanel && ({
     onShowAll: (s) => onOpenPanel({ kind: 'output', turnId: turn.id, stepId: s.id }),
     onOpenSubagent: (s) => onOpenPanel({ kind: 'subagent', turnId: turn.id, stepId: s.id }),
   }), [onOpenPanel, turn.id])
   return (
-    <section data-testid="deck-turn" data-turn-index={turn.index} className={`space-y-3 ${SCROLL_ANCHOR_CLASS}`}>
+    <section ref={ref} data-testid="deck-turn" data-turn-index={turn.index} className={`space-y-3 ${SCROLL_ANCHOR_CLASS}`}>
       {turn.omitted_items ? (
         <div data-testid="deck-omitted" className="text-center text-xs text-text-muted">{t('deck.omitted', { n: turn.omitted_items })}</div>
       ) : null}
-      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} />)}
+      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} />)}
       {turn.error && <div data-testid="deck-turn-error" className="text-xs text-status-error">{turn.error.message}</div>}
     </section>
   )
@@ -62,6 +81,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   const { attach, onScroll: onBoxScroll, follow } = scroll
   const boxRef = useRef<HTMLDivElement | null>(null)
   const setBox = useCallback((node: HTMLDivElement | null) => { boxRef.current = node; attach(node) }, [attach])
+  const reveal = useDeckReveal(`${paneId}\0${sessionId}`, boxRef)
 
   // Placed from the pane's memory on the first run, then only a reader at the bottom is carried along as turns land.
   useEffect(() => { follow() }, [follow, doc.turns])
@@ -111,14 +131,16 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
       )}
       <div ref={setBox} onScroll={onScroll} data-testid="deck-scroll" className="flex-1 space-y-3 overflow-y-auto p-4">
         <FoldContext.Provider value={foldStore}>
-          {entry.paging && <div data-testid="deck-paging" className="text-center text-xs text-text-muted">{t('deck.paging')}</div>}
-          {empty ? (
-            <div data-testid="deck-empty" className="flex h-full items-center justify-center text-sm text-text-muted">
-              {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
-            </div>
-          ) : (
-            doc.turns.map((turn) => <TurnView key={turn.id} turn={turn} onOpenPanel={onOpenPanel} />)
-          )}
+          <DeckRevealContext.Provider value={reveal}>
+            {entry.paging && <div data-testid="deck-paging" className="text-center text-xs text-text-muted">{t('deck.paging')}</div>}
+            {empty ? (
+              <div data-testid="deck-empty" className="flex h-full items-center justify-center text-sm text-text-muted">
+                {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
+              </div>
+            ) : (
+              doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} />)
+            )}
+          </DeckRevealContext.Provider>
         </FoldContext.Provider>
       </div>
       {footer?.(footerContext(paneId, hostId, sessionId, doc, items, onSwitchToTerminal))}

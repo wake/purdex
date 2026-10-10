@@ -77,8 +77,17 @@ func (s *Store) moveRemoteMemberIn(tx *sql.Tx, op team.RelayOp, r RelayReport) (
 	if s.newID == nil {
 		return false, errors.New("no id source for the moved fact")
 	}
-	if err := writeFactIn(tx, team.TeamFact{ID: s.newID(), Kind: team.FactMoved, ToHostID: leadHost, TeamID: teamID, MK: mk,
-		NewSession: r.NewSessionID, NewRef: r.NewRef, PID: pid, ProcStart: procStart, Pane: pane, Title: title, Manual: true}, r.At); err != nil {
+	// A relay the lead host sent names its op (it closes it on the lead host); any other op here is a person's own /relay.
+	_, _, _, fromCommand, err := relayCommandOf(tx, op.ID)
+	if err != nil {
+		return false, err
+	}
+	moved := team.TeamFact{ID: s.newID(), Kind: team.FactMoved, ToHostID: leadHost, TeamID: teamID, MK: mk,
+		NewSession: r.NewSessionID, NewRef: r.NewRef, PID: pid, ProcStart: procStart, Pane: pane, Title: title, Manual: !fromCommand}
+	if fromCommand {
+		moved.OpID = op.ID
+	}
+	if err := writeFactIn(tx, moved, r.At); err != nil {
 		return false, err
 	}
 	if s.failAfterMovedFact != nil {

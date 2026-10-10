@@ -25,7 +25,7 @@ func teamHosts() []config.PeerHost {
 
 // wantTeamKinds is written out, not derived from teamKinds(): taking one away (or announcing spawn before X4a applies
 // it) must fail here.
-var wantTeamKinds = []string{"adopt", "release", "kill", "spawn", "end", "lead_moved", "void", "team.appearance"}
+var wantTeamKinds = []string{"adopt", "release", "kill", "relay", "spawn", "end", "lead_moved", "void", "team.appearance"}
 
 // wantFactKinds is written out too: registered / spawn_failed are announced only once the lead host applies them (X4b), moved once it applies a person's /relay (MR-2); relay_failed and relay_ask stay unannounced until their PRs.
 var wantFactKinds = []string{"ended", "registered", "spawn_failed", "moved"}

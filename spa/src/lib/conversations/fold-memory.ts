@@ -4,6 +4,7 @@
 // consumers (`useFold`, `ToolDiffView`). Memory only: a reload folds everything again.
 import { useMemo, useSyncExternalStore } from 'react'
 import type { FoldStore } from '../../components/room/fold-context'
+import { forgetRevealsOfPane } from './deck-reveal-memory'
 
 const panes = new Map<string, Set<string>>()
 const listeners = new Map<string, Set<() => void>>()
@@ -50,6 +51,7 @@ export const forgetDeckPane = (paneId: string): void => { shown.delete(paneId) }
  * `${paneId}\0${hostId}\0${sessionId}`). `keep` spares the keys it returns true for.
  */
 export function forgetFoldsOfPane(paneId: string, keep?: (key: string) => boolean): void {
+  forgetRevealsOfPane(paneId, keep) // the deck's drawn-in-full turns (#2469) share the key and the lifetime
   for (const key of [...panes.keys()]) if (key.startsWith(`${paneId}\0`) && !keep?.(key)) forgetFolds(key)
 }
 
