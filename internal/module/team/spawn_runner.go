@@ -118,6 +118,10 @@ func (m *Module) runSpawn(id string) {
 // (it was created after), or is gone. Generation-guarded; a session already gone is not an error. Other failure
 // reasons kill their own session before they fail the op.
 func (m *Module) reapFailedSpawn(op spawnRow, ok bool) {
+	if ok && op.State == team.SpawnFailed {
+		m.wake(op.ID) // whoever failed it (a team end writes no wake of its own) leaves the requests waiting on it to this runner
+		m.rosterChanged()
+	}
 	if _, mine := m.abortKilled.LoadAndDelete(op.ID); mine {
 		return // this runner's own abort killed it already
 	}

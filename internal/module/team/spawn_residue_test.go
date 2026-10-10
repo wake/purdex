@@ -4,6 +4,7 @@ package teammod
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -42,6 +43,32 @@ func TestSpawnTeamEnd_FailsTheRunningOpAndTheRunnerReapsItsSession(t *testing.T)
 				t.Fatalf("session %s left running (kills %+v)", name, f.tmux.KillIfInstanceCalls())
 			}
 		})
+	}
+}
+
+// A POST that waits on the op is answered when the team's end failed it, not after the long poll runs out.
+func TestSpawnTeamEnd_WakesTheWaitingRequest(t *testing.T) {
+	f, root := newSpawnFixture(t, 2)
+	f.m.spawnWait = 30 * time.Second
+	f.register("%0", "sid-m1")
+	waitReached, release := holdAt(f, team.StepLaunched)
+	answered := make(chan team.SpawnOp, 1)
+	go func() {
+		_, op, _ := f.spawn(1, root, nil)
+		answered <- op
+	}()
+	waitReached()
+	if ended, err := f.m.store.EndTeam(uid(1), "sid-1", team.TeamEndLeadGone, f.clock.Load()); err != nil || !ended {
+		t.Fatalf("end team: %v %v", ended, err)
+	}
+	release()
+	select {
+	case op := <-answered:
+		if op.State != team.SpawnFailed {
+			t.Fatalf("answer = %+v, want failed", op)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting request was not woken when its op was failed by the team end")
 	}
 }
 
