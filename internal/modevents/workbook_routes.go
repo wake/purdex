@@ -210,6 +210,7 @@ func (h *handler) workbookNext(w http.ResponseWriter, r *http.Request) {
 	release, ok := h.polls.acquire(ctx, in.Stream)
 	if !ok {
 		w.WriteHeader(http.StatusNoContent) // the client went away, or the daemon is stopping, while queued behind its own earlier poll
+		return
 	}
 	defer release()
 	// The stream may have switched session or ended while this poll was queued behind its earlier one (codex critic).
