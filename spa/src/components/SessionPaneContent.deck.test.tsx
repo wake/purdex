@@ -102,7 +102,7 @@ describe('the deck inside the session pane', () => {
     expect(screen.getByTestId('output-body')).toBeInTheDocument()
   })
 
-  it('#2457: a tab switch keeps the pane\'s draft and queue; a session change frees the old session\'s; closing the tab frees the rest', () => {
+  it('#2457: a tab switch keeps the pane\'s draft and queue; a session change frees the old session\'s; closing the tab frees the rest', async () => {
     const pane = paneIdOf(sessionTab)
     const dk1 = draftKey(pane, H, 's1')
     const dk2 = draftKey(pane, H, 's2')
@@ -123,7 +123,7 @@ describe('the deck inside the session pane', () => {
     expect(hasSendQueue(dk1)).toBe(false)
     expect(readDraft(dk2)).toBe('new session draft')
     // the tab is closed: the pane is gone for good
-    act(() => { useTabStore.setState({ tabs: { [dashTab.id]: dashTab }, tabOrder: [dashTab.id], activeTabId: dashTab.id }) })
+    await act(async () => { useTabStore.setState({ tabs: { [dashTab.id]: dashTab }, tabOrder: [dashTab.id], activeTabId: dashTab.id }) })
     expect(readDraft(dk2)).toBeUndefined()
   })
 

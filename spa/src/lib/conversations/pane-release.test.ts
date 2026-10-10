@@ -7,6 +7,8 @@ import { readScrollMemo, writeScrollMemo } from '../nex/transcript-scroll-memory
 import { draftKey, readDraft, writeDraft, clearAllDrafts } from './draft-memory'
 import { deckPanes, isFolded, noteDeckPane, setOpen } from './fold-memory'
 import { chatScrollKey, clearAllPanels, conversationBinding, openPanel, readPanel } from './panel-memory'
+import { commitTabWorld } from '../profile/master-world'
+import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import { installPaneRelease, releasePane, retireStaleSessions } from './pane-release'
 import { clearAllSendQueues, hasSendQueue, retiringQueueCount, sendQueueCount, sendQueueFor } from './send-queue'
 import type { SendOutcome, SendPort } from './send'
@@ -54,11 +56,15 @@ const has = (pane: string, s: string) => ({
 const ALL = { draft: true, queue: true, panel: true, deckFold: true, chatFold: true, deckScroll: true, chatScroll: true, deckPane: true }
 const NONE = Object.fromEntries(Object.keys(ALL).map((k) => [k, false]))
 
+/** The release is evaluated once the synchronous write that caused it has finished (a microtask later). */
+const settle = () => Promise.resolve()
+
 let off: () => void
 beforeEach(() => {
   vi.useFakeTimers()
   clearAllSendQueues(); clearAllDrafts(); clearAllPanels()
   useTabStore.setState({ tabs: { [tabA.id]: tabA, [tabB.id]: tabB }, tabOrder: [tabA.id, tabB.id], activeTabId: tabA.id, visitHistory: [] })
+  useLocalProfilesStore.setState({ activeProfileId: 'master', parkedMaster: null, slaves: {}, slaveOrder: [] })
   off = installPaneRelease()
 })
 afterEach(() => { off(); vi.useRealTimers(); clearAllSendQueues(); clearAllDrafts(); clearAllPanels() })
@@ -139,57 +145,134 @@ describe('releasePane', () => {
 })
 
 describe('what leaves the tab world is released; a tab switch is not', () => {
-  it('closing a tab releases its panes only', () => {
+  it('closing a tab releases its panes only', async () => {
     fill(A, 's1'); fill(B, 's1')
     useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
     expect(has(A, 's1')).toEqual(NONE)
     expect(has(B, 's1')).toEqual(ALL)
   })
 
-  it('closing the LAST tab releases too (an empty world is real once the store has hydrated)', () => {
+  it('closing the LAST tab releases too (an empty world is real once the store has hydrated)', async () => {
     fill(A, 's1')
     vi.spyOn(useTabStore.persist, 'hasHydrated').mockReturnValue(true)
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    await settle()
     expect(has(A, 's1')).toEqual(NONE)
   })
 
-  it('an empty world before hydration releases nothing', () => {
+  it('an empty world before hydration releases nothing', async () => {
     fill(A, 's1')
     vi.spyOn(useTabStore.persist, 'hasHydrated').mockReturnValue(false)
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
+    await settle()
     expect(has(A, 's1')).toEqual(ALL)
   })
 
-  it('switching the active tab, reordering and renaming release nothing (the pane merely unmounts)', () => {
+  it('switching the active tab, reordering and renaming release nothing (the pane merely unmounts)', async () => {
     fill(A, 's1')
     useTabStore.setState({ activeTabId: tabB.id })
     useTabStore.setState({ tabOrder: [tabB.id, tabA.id] })
     useTabStore.setState({ tabs: { [tabA.id]: { ...tabA, pinned: true }, [tabB.id]: tabB } })
+    await settle()
     expect(has(A, 's1')).toEqual(ALL)
   })
 
-  it('a pane that moves to another tab (same id) is not released', () => {
+  it('a pane that moves to another tab (same id) is not released', async () => {
     fill(A, 's1')
     const moved = { ...tabB, layout: tabA.layout }
     useTabStore.setState({ tabs: { [tabB.id]: moved }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
     expect(has(A, 's1')).toEqual(ALL)
   })
 
-  it('a wholesale replacement of the tabs (rehydrate, Profile Sync) releases the panes that are not in it', () => {
+  it('a wholesale replacement of the tabs (rehydrate, Profile Sync) releases the panes that are not in it', async () => {
     fill(A, 's1'); fill(B, 's1')
     const other = mkTab('tc', 'ccc003')
     useTabStore.setState({ tabs: { [tabB.id]: tabB, [other.id]: other }, tabOrder: [tabB.id, other.id] })
+    await settle()
     expect(has(A, 's1')).toEqual(NONE)
     expect(has(B, 's1')).toEqual(ALL)
   })
 
-  it('installing again replaces the subscription (one release, not two)', () => {
+  it('installing again replaces the subscription (one release, not two)', async () => {
     const second = installPaneRelease()
     const { port } = fakePort()
     fill(A, 's1', port)
     useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
     expect(has(A, 's1')).toEqual(NONE)
     second()
+  })
+})
+
+
+describe('a profile switch is not a deletion (the old world is parked, and may come back)', () => {
+  const world = (...tabs: Tab[]) => ({ tabs: Object.fromEntries(tabs.map((t) => [t.id, t])), workspaces: [], activeWorkspaceId: null, activeTabId: tabs[0]?.id ?? null })
+
+  it('to a slave world and back: the master\'s panes keep their draft, queue, folds, scroll and panel', async () => {
+    fill(A, 's1')
+    // switch: the live tabs become the slave\'s, the master is parked
+    useLocalProfilesStore.setState({ activeProfileId: 'slave-1', parkedMaster: world(tabA) })
+    useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+    // and back
+    useTabStore.setState({ tabs: { [tabA.id]: tabA }, tabOrder: [tabA.id], activeTabId: tabA.id })
+    useLocalProfilesStore.setState({ activeProfileId: 'master', parkedMaster: null })
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+  })
+
+  it('the order of the two writes does not matter (the tab store may change before the profile store parks the world)', async () => {
+    fill(A, 's1')
+    useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    useLocalProfilesStore.setState({ activeProfileId: 'slave-1', parkedMaster: world(tabA) })
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+  })
+
+  it('a pane parked in a SLAVE world is kept as well', async () => {
+    fill(A, 's1')
+    useLocalProfilesStore.setState({ slaves: { x: { id: 'x', name: 'x', createdAt: 0, shownHostIds: [], world: world(tabA) } }, slaveOrder: ['x'] })
+    useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+  })
+
+  it('a commitTabWorld that fails is rolled back and releases nothing', async () => {
+    fill(A, 's1')
+    expect(() => commitTabWorld({ tabs: { [tabB.id]: tabB }, workspaces: [], activeWorkspaceId: null, activeTabId: tabB.id }, () => { throw new Error('write failed') })).toThrow('write failed')
+    expect(Object.keys(useTabStore.getState().tabs)).toContain(tabA.id)
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+  })
+
+  it('closing a tab inside ONE world still releases it', async () => {
+    fill(A, 's1')
+    useLocalProfilesStore.setState({ parkedMaster: null, slaves: {}, slaveOrder: [] })
+    useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
+    expect(has(A, 's1')).toEqual(NONE)
+  })
+
+  it('a parked world that is thrown away finally releases its panes (no permanent leak)', async () => {
+    fill(A, 's1')
+    useLocalProfilesStore.setState({ activeProfileId: 'slave-1', parkedMaster: world(tabA) })
+    useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+    useLocalProfilesStore.setState({ parkedMaster: null }) // e.g. the slave was promoted over it / deleted
+    await settle()
+    expect(has(A, 's1')).toEqual(NONE)
+  })
+
+  it('a profile store that has not hydrated yet releases nothing (parked worlds are not visible yet)', async () => {
+    fill(A, 's1')
+    vi.spyOn(useLocalProfilesStore.persist, 'hasHydrated').mockReturnValue(false)
+    useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
   })
 })
 
