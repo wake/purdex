@@ -21,9 +21,13 @@
 //   * `loadUntil`      — pages `before=` from the oldest loaded entry until an entry is loaded, at most MAX_UNTIL_PAGES pages.
 import { create } from 'zustand'
 import { fetchConversation, fetchTodos, postRefresh } from '../lib/workbook/api'
+import { emptyTodos, mergeEntries, MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES, snapshotTodos, touched, upsertTodos, type TodoBook } from '../lib/workbook/merge'
 import {
-  WORKBOOK_PROVIDER, type EntryEvent, type RefreshAvailableEvent, type StatusEvent, type TodoLists, type TodosEvent, type WorkbookEntry, type WorkbookTodo,
+  WORKBOOK_PROVIDER, type EntryEvent, type RefreshAvailableEvent, type StatusEvent, type TodosEvent, type WorkbookEntry,
 } from '../lib/workbook/types'
+
+export { MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES }
+export type { TodoBook }
 
 export const SEAT_PAGE = 1
 export const VIEW_PAGE = 20
@@ -38,29 +42,6 @@ export const MAX_UNTIL_PAGES = 5
 export const MAX_CONVS = 200
 export const MAX_UNPINNED = 50
 export const MAX_ENTRIES = 500
-export const MAX_OPEN_TODOS = 50
-export const MAX_DONE_TODOS = 200
-export const MAX_TODO_TOUCHES = 200
-
-export interface TodoBook {
-  /** Oldest first. */
-  open: WorkbookTodo[]
-  /** Newest first. */
-  done: WorkbookTodo[]
-  /** The oldest done todo RETAINED (null while none is). */
-  doneOldestId: number | null
-  /** The next page's `before=`: the oldest id the last page brought, kept even when retention dropped that page; null: use `doneOldestId`. */
-  doneCursor: number | null
-  /** The record has no older page (a short page, or one that did not move the cursor). */
-  doneExhausted: boolean
-  /** Retention (MAX_DONE_TODOS) dropped older done todos: they are not kept and paging stops (the UI shows the cap, not 「更多」). */
-  doneCapped: boolean
-  loading: boolean
-  /** The todos `workbook.todos` events changed, with the store-clock stamp of the event (newest last, bounded). */
-  touches: { id: number; at: number }[]
-  /** Stamp up to which `touches` was discarded for the bound: an answer whose request started before it cannot be vouched for. */
-  touchFloor: number
-}
 
 export interface ConvState {
   status: string
@@ -135,7 +116,6 @@ interface WorkbookState {
 }
 
 const NO_SUPPORT: WorkbookSupport = { v1: false, v2: false }
-const emptyTodos = (): TodoBook => ({ open: [], done: [], doneOldestId: null, doneCursor: null, doneExhausted: false, doneCapped: false, loading: false, touches: [], touchFloor: 0 })
 const emptyConv = (): ConvState => ({
   status: '', statusAt: 0, entries: [], oldestId: null, exhausted: false, loading: false, touched: 0, missing: false,
   todos: emptyTodos(), refreshAvailable: false, availAt: 0,
@@ -152,64 +132,6 @@ export function selectWorkbookSupport(hostId: string, state: Pick<WorkbookState,
 
 export const selectConv = (state: Pick<WorkbookState, 'byHost'>, hostId: string, convKey: string): ConvState | undefined =>
   state.byHost[hostId]?.byConv[convKey]
-
-/** Merge `incoming` into a conversation's entries: newest first, one per id, a stale copy never replaces a newer one. */
-function mergeEntries(have: WorkbookEntry[], incoming: WorkbookEntry[]): WorkbookEntry[] {
-  const byId = new Map(have.map((e) => [e.id, e]))
-  for (const e of incoming) {
-    const cur = byId.get(e.id)
-    if (!cur || e.updatedAt >= cur.updatedAt) byId.set(e.id, e)
-  }
-  return [...byId.values()].sort((a, b) => b.id - a.id)
-}
-
-/** Fold `incoming` todos into the book by id. A done todo is never reopened or dropped (events arrive in the daemon's
- *  order, so a closed todo's open copy does not follow its close; the late copies that can are handled by `snapshotTodos`).
- *  Bounded: open keeps the newest, done keeps the newest and sets `doneCapped` when it drops older ones. */
-function upsertTodos(t: TodoBook, incoming: WorkbookTodo[]): TodoBook {
-  const open = new Map(t.open.map((x) => [x.id, x]))
-  const done = new Map(t.done.map((x) => [x.id, x]))
-  for (const x of incoming) {
-    if (done.has(x.id) && x.state !== 'done') continue
-    if (x.state === 'open') open.set(x.id, x)
-    else if (x.state === 'done') { open.delete(x.id); done.set(x.id, x) }
-    else open.delete(x.id)
-  }
-  let openList = [...open.values()].sort((a, b) => a.id - b.id)
-  if (openList.length > MAX_OPEN_TODOS) openList = openList.slice(openList.length - MAX_OPEN_TODOS)
-  let doneList = [...done.values()].sort((a, b) => b.id - a.id)
-  let doneCapped = t.doneCapped
-  if (doneList.length > MAX_DONE_TODOS) { doneList = doneList.slice(0, MAX_DONE_TODOS); doneCapped = true }
-  return {
-    ...t, open: openList, done: doneList, doneCapped,
-    doneOldestId: doneList.length ? doneList[doneList.length - 1].id : null,
-  }
-}
-
-/** An event changed these todos at `at`: remembered (bounded) so a late answer cannot undo them. */
-function touched(t: TodoBook, incoming: WorkbookTodo[], at: number): TodoBook {
-  let touches = [...t.touches, ...incoming.map((x) => ({ id: x.id, at }))]
-  let touchFloor = t.touchFloor
-  if (touches.length > MAX_TODO_TOUCHES) {
-    const cut = touches.length - MAX_TODO_TOUCHES
-    touchFloor = Math.max(touchFloor, touches[cut - 1].at)
-    touches = touches.slice(cut)
-  }
-  return { ...t, touches, touchFloor }
-}
-
-/** A conversation answer's todos are a snapshot as of when the daemon answered, which is after `startedAt` (the stamp of
- *  its request) — and an event that landed after `startedAt` can be newer than it. Monotonic by construction: its done
- *  list is always safe to merge (done is terminal); its open list is replaced into the book except (1) the ids an event
- *  touched after `startedAt` (the event wins) and (2) todos newer than anything in it. If the touch history reaches
- *  past `startedAt` (the bound discarded it), the answer's open list cannot be vouched for and is ignored. */
-function snapshotTodos(t: TodoBook, snap: TodoLists, startedAt: number): TodoBook {
-  if (startedAt < t.touchFloor) return upsertTodos(t, snap.done)
-  const newer = new Set(t.touches.filter((x) => x.at > startedAt).map((x) => x.id))
-  const newest = Math.max(0, ...snap.open.map((x) => x.id), ...snap.done.map((x) => x.id))
-  const base = { ...t, open: t.open.filter((x) => x.id > newest || newer.has(x.id)) }
-  return upsertTodos(upsertTodos(base, snap.done.filter((x) => !newer.has(x.id))), snap.open.filter((x) => !newer.has(x.id)))
-}
 
 type S = WorkbookState
 let clock = 0
