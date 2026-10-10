@@ -2410,5 +2410,6 @@
   "statusrow.five_hour": "5-hour limit: {{left}}% left",
   "statusrow.seven_day": "7-day limit: {{left}}% left",
   "statusrow.cost": "This session's cost so far ${{cost}}",
-  "split.close": "Close panel"
+  "split.close": "Close panel",
+  "split.panel": "Side panel"
 }

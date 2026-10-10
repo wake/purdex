@@ -86,3 +86,61 @@ describe('SessionSplit', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('SessionSplit overlay is modal', () => {
+  const twoBtn = (
+    <aside data-testid="the-panel"><button data-testid="pa">a</button><button data-testid="pb">b</button></aside>
+  )
+  const mount = (open: boolean, width = 500) => (
+    <SessionSplit panel={twoBtn} open={open} onClose={() => {}} widthOverride={width}>
+      <button data-testid="chat-btn">chat</button>
+    </SessionSplit>
+  )
+
+  it('overlay: the panel is a labelled modal dialog and the chat is inert + aria-hidden', () => {
+    render(mount(true))
+    const dlg = screen.getByRole('dialog')
+    expect(dlg.getAttribute('aria-modal')).toBe('true')
+    expect(dlg.getAttribute('aria-label')).toBeTruthy()
+    expect(dlg.contains(screen.getByTestId('the-panel'))).toBe(true)
+    const chat = screen.getByTestId('split-chat')
+    expect(chat.hasAttribute('inert')).toBe(true)
+    expect(chat.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  it('docked: no dialog role, nothing inert', () => {
+    render(mount(true, 900))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    const chat = screen.getByTestId('split-chat')
+    expect(chat.hasAttribute('inert')).toBe(false)
+    expect(chat.getAttribute('aria-hidden')).toBeNull()
+  })
+
+  it('moves focus into the panel on open and restores it to the opener on close', () => {
+    const { rerender } = render(mount(false))
+    screen.getByTestId('chat-btn').focus()
+    rerender(mount(true))
+    expect(document.activeElement).toBe(screen.getByTestId('pa'))
+    rerender(mount(false))
+    expect(document.activeElement).toBe(screen.getByTestId('chat-btn'))
+  })
+
+  it('Tab from the last control wraps to the first, Shift+Tab from the first wraps to the last', () => {
+    render(mount(true))
+    const a = screen.getByTestId('pa'), b = screen.getByTestId('pb')
+    b.focus()
+    expect(fireEvent.keyDown(b, { key: 'Tab' })).toBe(false) // default prevented
+    expect(document.activeElement).toBe(a)
+    expect(fireEvent.keyDown(a, { key: 'Tab', shiftKey: true })).toBe(false)
+    expect(document.activeElement).toBe(b)
+    a.focus() // in the middle the browser's own Tab order is left alone
+    expect(fireEvent.keyDown(a, { key: 'Tab' })).toBe(true)
+  })
+
+  it('a panel with nothing focusable takes focus itself and keeps Tab inside', () => {
+    render(<SessionSplit panel={<aside>text</aside>} open onClose={() => {}} widthOverride={500}><button>c</button></SessionSplit>)
+    const dlg = screen.getByRole('dialog')
+    expect(document.activeElement).toBe(dlg)
+    expect(fireEvent.keyDown(dlg, { key: 'Tab' })).toBe(false)
+  })
+})

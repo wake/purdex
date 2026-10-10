@@ -2410,5 +2410,6 @@
   "statusrow.five_hour": "5 小時額度剩 {{left}}%",
   "statusrow.seven_day": "7 天額度剩 {{left}}%",
   "statusrow.cost": "這個 session 的累計成本 ${{cost}}",
-  "split.close": "關閉面板"
+  "split.close": "關閉面板",
+  "split.panel": "側邊面板"
 }
