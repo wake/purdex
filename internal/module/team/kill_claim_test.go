@@ -413,3 +413,22 @@ func TestKillClaim_ARegisteredFactForAKillingSessionFailsTheOp(t *testing.T) {
 		t.Fatalf("op = %s{%s}, want failed{session_conflict}", st, reason)
 	}
 }
+
+// codex re-review P2: a claim that got stuck and whose team then ended is settled too — EndTeam leaves member rows as they are,
+// so nothing else would, and the row would sit in killing until a restart. Mutation gate: only live teams → red.
+func TestKillClaim_TheSweeperSettlesAStuckClaimOfAnEndedTeam(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	mr := memberBySpawn(t, f.m.store, key)
+	f.m.bootAt = f.m.now() - (team.BootGraceS+1)*1000
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing', updated_at = ? WHERE spawn_op = ?`, f.m.now()-killClaimStuckAfter.Milliseconds()-1, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE teams SET ended_at = 5 WHERE id = ?`, mr.TeamID); err != nil {
+		t.Fatal(err)
+	}
+	f.m.settleStuckKillingMembers()
+	if got := f.killRowState(key); got == team.MemberKilling {
+		t.Fatal("a stuck claim of an ended team stayed killing")
+	}
+}

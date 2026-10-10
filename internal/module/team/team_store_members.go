@@ -231,12 +231,13 @@ func (s *Store) LocalKillingMembers() ([]memberRow, error) {
 	return out, rows.Err()
 }
 
-// StaleKillingMembers lists the local rows of live teams that have been killing since before cutoff (ms): a kill claims and ends
-// within moments, so one this old lost its end — a store error after the signal, or a daemon that died — and the sweeper settles it.
+// StaleKillingMembers lists the local rows that have been killing since before cutoff (ms): a kill claims and ends within
+// moments, so one this old lost its end — a store error after the signal, or a daemon that died — and the sweeper settles it.
+// Teams that have ended are included: EndTeam leaves member rows as they are, so nothing else would settle theirs.
 func (s *Store) StaleKillingMembers(cutoff int64) ([]memberRow, error) {
 	return s.queryMembers("stale killing members", `SELECT `+qualify("m", memberCols+", "+memberUsageCols)+`
-		FROM team_members m JOIN teams t ON t.id = m.team_id
-		WHERE m.state = 'killing' AND m.updated_at < ? AND t.ended_at = 0 AND (? = '' OR m.host_id = ?) ORDER BY m.created_at, m.spawn_op`,
+		FROM team_members m
+		WHERE m.state = 'killing' AND m.updated_at < ? AND (? = '' OR m.host_id = ?) ORDER BY m.created_at, m.spawn_op`,
 		cutoff, s.localHostID, s.localHostID)
 }
 
