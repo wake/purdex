@@ -102,6 +102,8 @@ type Module struct {
 	usageFlushMu       sync.Mutex           // one flush or removal at a time, snapshot to write
 	usageDeleteFn      func([]string) error // test seam; nil = the store's Delete
 	usageAfterSnapshot func()               // test seam: runs in a flush after its snapshot, before it writes
+	usageDeleteAllFn   func() error         // test seam; nil = the store's DeleteAll
+	usageClearOwed     bool                 // a DeleteAll failed: the next flush does it (under usageFlushMu)
 	usageDeleted       map[string]struct{}
 	usagePersistedAt   map[string]int64
 

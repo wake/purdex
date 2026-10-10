@@ -270,3 +270,52 @@ func TestContextUsagePersist_ARemovalDuringAFlushIsNotUndone(t *testing.T) {
 		t.Fatalf("rows after the removal = %+v: the in-flight flush wrote them back", rows)
 	}
 }
+
+// A delete that fails and is queued again must not hit a session that got a newer reading meanwhile.
+func TestContextUsagePersist_ARequeuedDeleteSparesANewerReading(t *testing.T) {
+	m := moduleOn(t, filepath.Join(t.TempDir(), "agent.db"))
+	m.recordContextUsage(statusline("X", 1, "m"))
+	m.flushContextUsage()
+	m.snapshotMu.Lock()
+	m.usageDeleted["X"] = struct{}{}
+	delete(m.contextUsage, "X")
+	m.snapshotMu.Unlock()
+	calls := 0
+	m.usageDeleteFn = func(ids []string) error {
+		calls++
+		if calls == 1 {
+			m.recordContextUsage(statusline("X", 2, "m")) // a statusline arrives while the delete is failing
+			return fmt.Errorf("injected")
+		}
+		return m.usage.Delete(ids)
+	}
+	m.flushContextUsage()
+	m.flushContextUsage()
+	rows, _ := m.usage.LoadAll()
+	if len(rows) != 1 || rows[0].SessionID != "X" || rows[0].UsedPercentage == nil || *rows[0].UsedPercentage != 2 {
+		t.Fatalf("rows = %+v, want the newer reading of X", rows)
+	}
+}
+
+// A DeleteAll that fails is not forgotten: the next flush does it, so the removed readings cannot come back at a restart.
+func TestContextUsagePersist_AFailedClearIsRetriedByTheNextFlush(t *testing.T) {
+	m := moduleOn(t, filepath.Join(t.TempDir(), "agent.db"))
+	m.recordContextUsage(statusline("S", 5, "m"))
+	m.flushContextUsage()
+	fail := true
+	m.usageDeleteAllFn = func() error {
+		if fail {
+			return fmt.Errorf("injected")
+		}
+		return m.usage.DeleteAll()
+	}
+	m.clearContextUsage()
+	if rows, _ := m.usage.LoadAll(); len(rows) != 1 {
+		t.Fatalf("the failed clear removed the rows: %+v", rows)
+	}
+	fail = false
+	m.flushContextUsage()
+	if rows, _ := m.usage.LoadAll(); len(rows) != 0 {
+		t.Fatalf("rows after the retry = %+v, want none", rows)
+	}
+}
