@@ -58,22 +58,18 @@ func TestUpdateConfig_DoesNotPersistAMemoryOnlyOverride(t *testing.T) {
 	require.True(t, strings.Contains(back.UploadDir, "/tmp/x"))
 }
 
-// A mutate that fails changes neither memory nor file.
-func TestUpdateConfig_ADiskOnlyConflictRefusesAndChangesNothing(t *testing.T) {
+// Only the fields mutate changed are written: a host another writer added, and a setting the file has differently, stay.
+func TestUpdateConfig_WritesOnlyTheFieldsMutateChanged(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
-	body := "bind = \"127.0.0.1\"\ntoken = \"t\"\n\n[[peers.hosts]]\nalias = \"new\"\nhost_id = \"x:1\"\ninbound_token = \"i\"\n"
+	body := "bind = \"127.0.0.1\"\ntoken = \"t\"\nupload_dir = \"/tmp/file-has-this\"\n\n[[peers.hosts]]\nalias = \"new\"\nhost_id = \"x:1\"\ninbound_token = \"i\"\n"
 	require.NoError(t, os.WriteFile(p, []byte(body), 0o600))
 	c := newTestCore()
 	c.CfgPath = p
-	err := c.UpdateConfig(func(cfg *config.Config) error {
-		for _, h := range cfg.Peers.Hosts {
-			if h.Alias == "new" {
-				return os.ErrExist
-			}
-		}
-		return nil
-	})
-	require.ErrorIs(t, err, os.ErrExist)
-	got, _ := os.ReadFile(p)
-	require.Equal(t, body, string(got))
+	require.NoError(t, c.UpdateConfig(func(cfg *config.Config) error { cfg.Detect.PollInterval = 11; return nil }))
+	back, err := config.Load(p)
+	require.NoError(t, err)
+	require.Equal(t, 11, back.Detect.PollInterval)
+	require.Equal(t, "/tmp/file-has-this", back.UploadDir)
+	require.Len(t, back.Peers.Hosts, 1)
+	require.Equal(t, "new", back.Peers.Hosts[0].Alias)
 }

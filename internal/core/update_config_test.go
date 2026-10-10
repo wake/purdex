@@ -156,6 +156,7 @@ func TestUpdateConfigPreservesExplicitEmptySlice(t *testing.T) {
 func TestUpdateConfigDeepCopyIsolatesSlices(t *testing.T) {
 	c := newTestCoreWithPeers()
 	c.CfgPath = filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, config.WriteFile(c.CfgPath, *c.Cfg)) // the file holds what the daemon holds
 
 	c.CfgMu.RLock()
 	capturedHosts := c.Cfg.Peers.Hosts // slice header captured before the call

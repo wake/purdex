@@ -54,6 +54,7 @@ type Core struct {
 	Cfg           *config.Config
 	CfgMu         sync.RWMutex // protects Cfg
 	CfgPath       string       // path to config.toml for persistence
+	driftNoted    string       // the token drift last logged (under CfgMu)
 	Tmux          tmux.Executor
 	Registry      *ServiceRegistry
 	Events        *EventsBroadcaster
@@ -250,13 +251,19 @@ func (c *Core) CloseModules() error {
 // UpdateConfig is the single serialised writer of the runtime config:
 //  1. CfgMu.Lock(); next := c.Cfg.Clone()
 //  2. err := mutate(&next); if err != nil -> Unlock, return err (nothing changed)
-//  3. if CfgPath != "" { if err := config.WriteFile(CfgPath, next); err != nil -> Unlock, return err (c.Cfg untouched) }
+//  3. if CfgPath != "" { config.UpdateChanged(CfgPath, *c.Cfg, next) -> on error Unlock, return err (c.Cfg untouched) }
 //  4. *c.Cfg = next // commit: pointer identity preserved for other holders
 //  5. CfgMu.Unlock(); c.NotifyConfigChange() // AFTER unlock: agent callbacks take RLock
 //
 // mutate runs on a deep copy, so editing or deleting a Peers.Hosts element
 // (or any other slice) can never touch the live backing array, and neither
 // a mutate error nor a write error changes runtime state.
+//
+// The file is written on top of the FILE (#2556): under "<path>.lock" the fields mutate changed (and only those) are set on the
+// file as it is, so a token or a host another writer put in the file is not written back to an older value, and a flag override
+// that lives only in memory (--bind, --port) is not made permanent. mutate runs once, on the memory copy. The daemon does not
+// reload the file: when the token in the file is not the one it runs on it says so in its log, and the file's takes effect at
+// restart; a field that both the file and the daemon changed takes the daemon's value.
 func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error {
 	c.CfgMu.Lock()
 	next := c.Cfg.Clone()
@@ -267,10 +274,12 @@ func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error {
 	}
 
 	if c.CfgPath != "" {
-		if err := config.WriteFile(c.CfgPath, next); err != nil {
+		onDisk, err := config.UpdateChanged(c.CfgPath, *c.Cfg, next)
+		if err != nil {
 			c.CfgMu.Unlock()
 			return err
 		}
+		c.noteTokenDrift(onDisk.Token, next.Token)
 	}
 
 	*c.Cfg = next
@@ -278,6 +287,22 @@ func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error {
 
 	c.NotifyConfigChange()
 	return nil
+}
+
+// noteTokenDrift logs, once per distinct pair, that the token in the config file is not the one this daemon runs on (a
+// `pdx token generate` or an edit under a running daemon): clients keep using the daemon's until it restarts. Fingerprints only.
+func (c *Core) noteTokenDrift(onDisk, running string) {
+	if onDisk == running {
+		c.driftNoted = ""
+		return
+	}
+	key := config.TokenFingerprint(onDisk) + "/" + config.TokenFingerprint(running)
+	if key == c.driftNoted {
+		return
+	}
+	c.driftNoted = key
+	log.Printf("config: the token in the file (fingerprint %s, %d chars) is not the one this daemon runs on (fingerprint %s, %d chars); the file's takes effect at restart",
+		config.TokenFingerprint(onDisk), len(onDisk), config.TokenFingerprint(running), len(running))
 }
 
 // OnConfigChange registers a callback invoked after config is updated via PUT.

@@ -427,32 +427,26 @@ func (m *Module) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	m.core.CfgMu.Lock()
-	snapshot := *m.core.Cfg
-
-	current := EffectiveMonitorConfig(m.core.Cfg.Monitor).persistedConfig()
-	if req.RefreshIntervalMS != nil {
-		current.RefreshIntervalMS = *req.RefreshIntervalMS
-	}
-	if req.TopProcessLimit != nil {
-		current.TopProcessLimit = *req.TopProcessLimit
-	}
-
-	effective := ClampSubmittedMonitorConfig(current)
-	m.core.Cfg.Monitor = effective.persistedConfig()
-
-	if m.core.CfgPath != "" {
-		if err := config.WriteFile(m.core.CfgPath, *m.core.Cfg); err != nil {
-			*m.core.Cfg = snapshot
-			m.core.CfgMu.Unlock()
-			http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
-			return
+	// Through the daemon's one config writer (#2556); it also announces the change. The closure runs on the memory copy and on the
+	// file, each from its own current monitor section.
+	var effective EffectiveConfig
+	if err := m.core.UpdateConfig(func(cfg *config.Config) error {
+		current := EffectiveMonitorConfig(cfg.Monitor).persistedConfig()
+		if req.RefreshIntervalMS != nil {
+			current.RefreshIntervalMS = *req.RefreshIntervalMS
 		}
+		if req.TopProcessLimit != nil {
+			current.TopProcessLimit = *req.TopProcessLimit
+		}
+		effective = ClampSubmittedMonitorConfig(current)
+		cfg.Monitor = effective.persistedConfig()
+		return nil
+	}); err != nil {
+		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
-	m.core.CfgMu.Unlock()
 
 	m.invalidateSnapshot()
-	m.core.NotifyConfigChange()
 	writeJSON(w, http.StatusOK, effective)
 }
 

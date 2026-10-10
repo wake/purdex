@@ -161,3 +161,54 @@ func TestEnsureHostID_AdoptsOneAnotherProcessWrote(t *testing.T) {
 	require.Equal(t, "other:zzzzzz", id)
 	require.Equal(t, "other:zzzzzz", cfg.HostID)
 }
+
+// UpdateChanged writes only the fields that differ between before and after: a token another writer set, a host another
+// writer added and a setting the file has differently all stay; the changed field goes in. Mutation gate: write all of after
+// -> red.
+func TestUpdateChanged_WritesOnlyWhatChanged(t *testing.T) {
+	p := writeCfg(t, richConfig)
+	mem, err := Load(p) // what the daemon holds
+	require.NoError(t, err)
+	// another writer: a new token, a new host, a different upload_dir
+	require.NoError(t, SetToken(p, "pdx_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+	_, err = Update(p, func(c *Config) error {
+		c.UploadDir = "/tmp/file-has-this"
+		c.Peers.Hosts = append(c.Peers.Hosts, PeerHost{Alias: "extra", HostID: "x:1", InboundToken: "t"})
+		return nil
+	})
+	require.NoError(t, err)
+
+	after := mem.Clone()
+	after.Detect.PollInterval = 9 // the daemon's change
+	after.Bind = "9.9.9.9"        // ... and an override that is not a change of this writer's? it IS different, so it is written
+	before := mem.Clone()
+	_, err = UpdateChanged(p, before, after)
+	require.NoError(t, err)
+	back, err := Load(p)
+	require.NoError(t, err)
+	require.Equal(t, 9, back.Detect.PollInterval)
+	require.Equal(t, "pdx_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", back.Token)
+	require.Equal(t, "/tmp/file-has-this", back.UploadDir)
+	require.Len(t, back.Peers.Hosts, 2)
+	require.Equal(t, "9.9.9.9", back.Bind)
+}
+
+// A change inside a nested struct carries only that field: peers.deliver does not drag peers.hosts back to the writer's list.
+func TestUpdateChanged_ANestedFieldDoesNotCarryItsSiblings(t *testing.T) {
+	p := writeCfg(t, richConfig)
+	mem, err := Load(p)
+	require.NoError(t, err)
+	_, err = Update(p, func(c *Config) error {
+		c.Peers.Hosts = append(c.Peers.Hosts, PeerHost{Alias: "extra", HostID: "x:1", InboundToken: "t"})
+		return nil
+	})
+	require.NoError(t, err)
+	after := mem.Clone()
+	after.Peers.Deliver = true
+	_, err = UpdateChanged(p, mem.Clone(), after)
+	require.NoError(t, err)
+	back, err := Load(p)
+	require.NoError(t, err)
+	require.True(t, back.Peers.Deliver)
+	require.Len(t, back.Peers.Hosts, 2, "peers.hosts was written back from the writer's older list")
+}
