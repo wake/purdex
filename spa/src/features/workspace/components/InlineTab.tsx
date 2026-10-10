@@ -84,6 +84,17 @@ export function InlineTab({
    
   const { onPointerDown: _omit, ...otherListeners } = listeners ?? {}
 
+  // Same action as a click. Keyboard parity for the role=button row (#2538): Enter / Space select it.
+  const select = () => onSelect(tab.id)
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Only the row itself: keys pressed in an inner control (close button, rename input) bubble up here.
+    if (e.target !== e.currentTarget) return
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault() // Space would otherwise scroll the sidebar
+      select()
+    }
+  }
+
   const handleCloseClick = (e: React.MouseEvent) => {
     e.stopPropagation()
     onClose(tab.id)
@@ -112,7 +123,8 @@ export function InlineTab({
       onPointerDown={handlePointerDown}
       role="button"
       tabIndex={0}
-      onClick={() => onSelect(tab.id)}
+      onClick={select}
+      onKeyDown={handleKeyDown}
       onDoubleClick={() => onRename?.(tab.id)}
       onMouseDown={handleMouseDown}
       onContextMenu={(e) => onContextMenu(e, tab.id)}

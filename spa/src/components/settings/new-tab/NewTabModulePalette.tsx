@@ -16,7 +16,9 @@ interface Props {
 
 function Chip({ item, onClickAdd }: { item: PaletteItem; onClickAdd: (id: string) => void }) {
   const t = useI18nStore((s) => s.t)
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+  // `attributes` deliberately not spread (pointer-only sensors; its "press space to pick up" description would be
+  // false). The chip is a native <button>, already focusable (#2538).
+  const { listeners, setNodeRef, isDragging } = useDraggable({
     id: `palette:${item.id}`,
     disabled: item.inUse,
     data: { type: 'palette', providerId: item.id },
@@ -35,7 +37,6 @@ function Chip({ item, onClickAdd }: { item: PaletteItem; onClickAdd: (id: string
     <button
       ref={setNodeRef}
       {...listeners}
-      {...attributes}
       aria-label={t(item.label, item.labelParams)}
       data-testid={`palette-chip-${item.id}`}
       data-unavailable={item.unavailable ? 'true' : undefined}
