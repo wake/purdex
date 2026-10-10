@@ -342,3 +342,56 @@ func TestOneMemberIndex_TheBackstopChecksTheDefinitionNotTheName(t *testing.T) {
 		t.Fatal("a second active row for one session was accepted: the wrong-definition index was taken for protection")
 	}
 }
+
+// critic #1: the backstop of a failed swap used to CREATE the old index on its own, and on a db with no index at all that can hold two
+// active rows of one session it could not: the swap had rolled its resolution back with it, the duplicates were still there, the
+// CREATE failed and the boot went on with nothing guarding the seat. The backstop now resolves the duplicate active rows and creates
+// the index in ONE transaction. Mutation gate: the backstop without the resolution → red.
+func TestOneMemberIndex_TheBackstopResolvesActiveDuplicatesInTheSameTransaction(t *testing.T) {
+	path := bareDB(t, [4]any{"a1", "sid-1", "active", 5}, [4]any{"a2", "sid-1", "active", 8}, [4]any{"a3", "sid-2", "active", 5})
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE ` + newIndex + ` (x INTEGER)`); err != nil { // the swap cannot create its index and rolls back whole
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("the boot must not fail: %v", err)
+	}
+	defer s.Close()
+	if got, ok := indexSQL(t, s.db, oldIndex); !ok || !strings.Contains(got, "UNIQUE") {
+		t.Fatalf("no unique index guards the seat after the failed swap: %q ok=%v", got, ok)
+	}
+	if stateOf(t, s.db, "a2") != "active" || stateOf(t, s.db, "a1") != "gone" || stateOf(t, s.db, "a3") != "active" {
+		t.Errorf("a1=%s a2=%s a3=%s, want the newer active row of sid-1 kept and the older one gone", stateOf(t, s.db, "a1"), stateOf(t, s.db, "a2"), stateOf(t, s.db, "a3"))
+	}
+	if err := s.InsertMember(newMember("dup", "tm-1", "sid-2", "_dup", 9)); err == nil {
+		t.Error("a second active row for one session was accepted")
+	}
+}
+
+// The backstop is one transaction: when it cannot finish, nothing of it stays. The resolution of the duplicate rows succeeds here and
+// the CREATE fails (a table holds the old index's name), so only a transaction takes the resolution back — without one, rows are
+// ended gone for an index that never came. Mutation gate: statements on the bare db → red.
+func TestOneMemberIndex_AFailingBackstopLeavesNothingHalfDone(t *testing.T) {
+	path := bareDB(t, [4]any{"a1", "sid-1", "active", 5}, [4]any{"a2", "sid-1", "active", 8})
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE ` + newIndex + ` (x INTEGER); CREATE TABLE ` + oldIndex + ` (x INTEGER)`); err != nil { // neither index can be made
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("even a backstop that cannot finish must not fail the boot: %v", err)
+	}
+	defer s.Close()
+	if stateOf(t, s.db, "a1") != "active" || stateOf(t, s.db, "a2") != "active" {
+		t.Errorf("a1=%s a2=%s: a backstop that failed left rows half-resolved", stateOf(t, s.db, "a1"), stateOf(t, s.db, "a2"))
+	}
+}

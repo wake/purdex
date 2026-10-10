@@ -427,11 +427,16 @@ func swapOneMemberIndex(db *sql.DB) error {
 }
 
 // ensureSomeSeatIndex is the backstop of a failed swap: when no unique index that REALLY guards a session's seat is in force, the old
-// one is created. "Really" is the whole definition, not the name: an object called team_members_one_active or team_members_one_member
-// that is a plain index, or unique on another column or predicate, guards nothing — a wrong team_members_one_active is replaced, a
-// wrong team_members_one_member is left (the next swap replaces it). It cannot fail on duplicates: the old index forbade two active
-// rows of one session for as long as it existed; if it fails anyway it is logged and the boot goes on — the application guards
-// (insertMemberRowIn, the conflict checks) are then the only line.
+// one is made — and made to be creatable. "Really" is the whole definition, not the name (an object called team_members_one_active
+// or team_members_one_member that is a plain index, or unique on another column or predicate, guards nothing). Where the db had no
+// index at all it can hold two active rows of one session, which the old index would refuse and which the failed swap rolled back
+// with everything else; so the backstop resolves them (the newest stays, the rest end gone) and creates the index in ONE transaction,
+// and a backstop that cannot finish leaves nothing of itself behind — no wrong index dropped without its replacement, no
+// half-resolved rows.
+//
+// What is left, stated: a db that is already inconsistent AND whose rows the database itself refuses to update (a trigger, a full
+// disk) — there the boot still goes on, with the loud log line below, and the seat is guarded by the application only
+// (insertMemberRowIn, the conflict checks) until the next boot tries again. The daemon's boot is never what fails.
 func ensureSomeSeatIndex(db *sql.DB) {
 	definition := func(name string) string {
 		var q sql.NullString
@@ -444,12 +449,34 @@ func ensureSomeSeatIndex(db *sql.DB) {
 	if definition("team_members_one_member") == squashSpaces(oneMemberIndexSQL) || definition("team_members_one_active") == wantOld {
 		return
 	}
-	if _, err := db.Exec(`DROP INDEX IF EXISTS team_members_one_active`); err != nil { // one of that name that is not the index meant
-		log.Printf("[team] migrate: a team_members_one_active that guards nothing could not be dropped: %v", err)
+	fail := func(step string, err error) {
+		log.Printf("[team] migrate: NO unique index guards a session's seat and the backstop could not be made (%s): %v; the application guards are the only line until the next boot", step, err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		fail("begin", err)
 		return
 	}
-	if _, err := db.Exec(oneActiveIndexSQL); err != nil {
-		log.Printf("[team] migrate: no unique index guards a session's seat and the backstop could not be created: %v", err)
+	defer tx.Rollback()
+	now := time.Now().UnixMilli()
+	if _, err := tx.Exec(`UPDATE team_members SET state = 'gone', updated_at = ?, end_reason = 'duplicate_membership',
+			ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
+		WHERE state = 'active' AND EXISTS (SELECT 1 FROM team_members o
+			WHERE o.session_id = team_members.session_id AND o.spawn_op <> team_members.spawn_op AND o.state = 'active'
+			  AND (o.updated_at > team_members.updated_at OR (o.updated_at = team_members.updated_at AND o.spawn_op > team_members.spawn_op)))`, now, now); err != nil {
+		fail("resolve duplicate active rows", err)
+		return
+	}
+	if _, err := tx.Exec(`DROP INDEX IF EXISTS team_members_one_active`); err != nil { // one of that name that is not the index meant
+		fail("drop a team_members_one_active that guards nothing", err)
+		return
+	}
+	if _, err := tx.Exec(oneActiveIndexSQL); err != nil {
+		fail("create", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		fail("commit", err)
 		return
 	}
 	log.Printf("[team] migrate: created team_members_one_active as the backstop of the failed swap")
