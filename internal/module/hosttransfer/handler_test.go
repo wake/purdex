@@ -110,10 +110,9 @@ func TestBearerPrefixIsCaseInsensitive(t *testing.T) {
 	assert.Equal(t, http.StatusOK, h.redeem(code).Code)
 }
 
-// PR #1394 critic (TOCTOU): TokenAuth reads the token first and lets the
-// request through when it is empty; if the token is set before the handler
-// reads it, a request with no bearer must still be refused — 401, not 200
-// (nor 403: the handler's snapshot has a token).
+// PR #1394 critic (TOCTOU): TokenAuth used to let a request through on an empty
+// token. Since #1950 it refuses it (401) before the handler is reached, so the
+// window the token could be set in is shut: the handler never runs.
 func TestTokenSetBetweenOuterAuthAndHandlerStillNeedsBearer(t *testing.T) {
 	for _, path := range []string{"/api/host-transfer", "/api/host-transfer/redeem"} {
 		t.Run(path, func(t *testing.T) {
@@ -136,8 +135,8 @@ func TestTokenSetBetweenOuterAuthAndHandlerStillNeedsBearer(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 			outer.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
-			assertReason(t, rec, http.StatusUnauthorized, "unauthorized")
-			assert.GreaterOrEqual(t, calls.Load(), int32(2), "outer and handler each read the token")
+			assert.Equal(t, http.StatusUnauthorized, rec.Code)
+			assert.Equal(t, int32(1), calls.Load(), "only the outer auth read the token; the handler was not reached")
 			assertUntouched(t, s)
 		})
 	}

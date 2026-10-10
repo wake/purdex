@@ -105,18 +105,18 @@ func TestTokenAuthWith_OnlyDeviceShapedBearersAreLookedUp(t *testing.T) {
 	}
 }
 
-// An empty admin token leaves auth off as today: device tokens add nothing there, and nothing carries a principal.
-func TestTokenAuthWith_EmptyAdminTokenIsUnchanged(t *testing.T) {
+// An empty admin token refuses everyone (#1950): a device token does not stand in for it, and the authenticator is not consulted.
+func TestTokenAuthWith_EmptyAdminTokenFailsClosed(t *testing.T) {
 	tok := newDeviceToken(t)
 	devs := &fakeDevices{live: map[string]devices.Principal{tok: {ID: "d_aaaaaaaaaaaa"}}}
 	h := middleware.TokenAuthWith(func() string { return "" }, nil, devs)(echo)
 	for _, auth := range []string{"", "Bearer " + tok, "Bearer whatever"} {
-		if rec := do(h, auth); rec.Code != 200 || rec.Body.String() != "admin" {
+		if rec := do(h, auth); rec.Code != 401 {
 			t.Fatalf("auth %q: %d %q", auth, rec.Code, rec.Body.String())
 		}
 	}
 	if len(devs.calls) != 0 {
-		t.Fatal("the device authenticator was consulted with auth off")
+		t.Fatal("the device authenticator was consulted with no admin token")
 	}
 }
 
@@ -187,8 +187,8 @@ func TestTokenAuthWith_OnlyTheAdminAndAuthOffCarryTheAdminMark(t *testing.T) {
 		t.Fatalf("ticket: %d %q", rec.Code, rec.Body.String())
 	}
 	off := middleware.TokenAuthWith(func() string { return "" }, nil, devs)(probe)
-	if got := do(off, "").Body.String(); got != "admin|no-device" {
-		t.Fatalf("auth off: %q", got)
+	if rec := do(off, ""); rec.Code != 401 {
+		t.Fatalf("no admin token: %d", rec.Code)
 	}
 }
 

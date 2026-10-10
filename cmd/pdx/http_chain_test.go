@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -76,7 +77,7 @@ func wsUpgrade(req *http.Request) *http.Request {
 }
 
 // TestNewOuterHandler_EmptyAdminToken covers the empty-admin-token rows:
-// the general chain stays wide open (TokenAuth semantics), the peer chain
+// the general chain refuses everything (fail closed, #1950), the peer chain
 // still requires a matching bearer, and a valid host bearer still works.
 func TestNewOuterHandler_EmptyAdminToken(t *testing.T) {
 	cfg := &config.Config{
@@ -91,17 +92,16 @@ func TestNewOuterHandler_EmptyAdminToken(t *testing.T) {
 	rec := &muxRecorder{}
 	outer := newOuterHandler(c, nil, rec.handler(), nil)
 
-	t.Run("/api/sessions 200 via general chain", func(t *testing.T) {
-		rec.reset()
-		res := doRequest(t, outer, "GET", "/api/sessions", "")
-		if res.Code != 200 {
-			t.Fatalf("want 200, got %d", res.Code)
-		}
-		if !rec.called {
-			t.Fatal("want inner mux called")
-		}
-		if rec.hasPrincipal {
-			t.Fatalf("want no principal on general chain, got %+v", rec.principal)
+	t.Run("/api/sessions 401 via general chain", func(t *testing.T) {
+		for _, bearer := range []string{"", "host-a-token", "anything"} {
+			rec.reset()
+			res := doRequest(t, outer, "GET", "/api/sessions", bearer)
+			if res.Code != 401 {
+				t.Fatalf("bearer %q: want 401, got %d", bearer, res.Code)
+			}
+			if rec.called {
+				t.Fatal("want inner mux NOT called")
+			}
 		}
 	})
 
@@ -198,12 +198,12 @@ func TestNewOuterHandler_PeersHostsSubpathForbiddenForHost(t *testing.T) {
 // routing: "/api/peersx" is not a sub-path of "/api/peers/" and reaches the
 // general chain, which uses plain TokenAuth semantics (no Principal set).
 func TestNewOuterHandler_PeersXFallsThroughToGeneralChain(t *testing.T) {
-	cfg := &config.Config{Token: ""}
+	cfg := &config.Config{Token: "admin-secret"}
 	c := newTestCore(cfg)
 	rec := &muxRecorder{}
 	outer := newOuterHandler(c, nil, rec.handler(), nil)
 
-	res := doRequest(t, outer, "GET", "/api/peersx", "")
+	res := doRequest(t, outer, "GET", "/api/peersx", "admin-secret")
 	if res.Code != 200 {
 		t.Fatalf("want 200, got %d", res.Code)
 	}
@@ -664,9 +664,9 @@ func TestOuterChain_HostTransferBehindTokenAuth(t *testing.T) {
 }
 
 // TestOuterChain_HostTransferFailsClosedWithoutAdminToken (H4a attacker
-// finding): with no admin token configured TokenAuth lets every request
-// through, so the module itself refuses — 403 no_token, not 200 — rather
-// than park or hand out host credentials unauthenticated.
+// finding): with no admin token configured nothing is served — TokenAuth
+// itself refuses (401, #1950; the module's own 403 no_token stays as a second
+// line) — rather than park or hand out host credentials unauthenticated.
 func TestOuterChain_HostTransferFailsClosedWithoutAdminToken(t *testing.T) {
 	c := newTestCore(&config.Config{Token: ""})
 	mod := hosttransfermod.New()
@@ -684,14 +684,15 @@ func TestOuterChain_HostTransferFailsClosedWithoutAdminToken(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 		rec := httptest.NewRecorder()
 		outer.ServeHTTP(rec, req)
-		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"no_token"`) {
-			t.Fatalf("%s without admin token: want 403 no_token, got %d %s", path, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s without admin token: want 401, got %d %s", path, rec.Code, rec.Body.String())
 		}
 	}
 }
 
 // TestOuterChain_HostTransferTokenSetAfterOuterAuth (PR #1394 critic,
-// TOCTOU): the outer TokenAuth reads an empty admin token and lets the
+// TOCTOU; since #1950 the empty token is refused at the outer auth, so the window
+// no longer opens): the outer TokenAuth used to read an empty admin token and let the
 // request through; the token is set before the module handler reads it. The
 // handler re-authenticates against its own snapshot, so a request with no
 // bearer is 401 — not 200 (credentials parked or handed out) nor 403.
@@ -723,8 +724,15 @@ func TestOuterChain_HostTransferTokenSetAfterOuterAuth(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 			rec := httptest.NewRecorder()
 			outer.ServeHTTP(rec, req)
-			if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"unauthorized"`) {
-				t.Fatalf("%s with the token set after outer auth: want 401 unauthorized, got %d %s", path, rec.Code, rec.Body.String())
+			// The outer chain reads the empty token first and refuses (#1950): the inner handler, which would set the
+			// token, is never reached.
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("%s with an empty token at the outer auth: want 401, got %d %s", path, rec.Code, rec.Body.String())
+			}
+			c.CfgMu.RLock()
+			defer c.CfgMu.RUnlock()
+			if c.Cfg.Token != "" {
+				t.Fatalf("%s: the inner handler ran past the outer refusal", path)
 			}
 		})
 	}
@@ -814,6 +822,64 @@ func TestNewOuterHandler_UnattendedIsAdminOnly(t *testing.T) {
 			if reached := ran > before; rec.Code != tc.want || reached != (tc.want == 200) {
 				t.Errorf("%s bearer %q: got %d (stub ran %v), want %d", method, tc.bearer, rec.Code, reached, tc.want)
 			}
+		}
+	}
+}
+
+// A quick-mode daemon starts with an empty token and pairs: /api/pair/verify and /api/pair/setup must reach their handlers
+// without a bearer (they check the pairing secret / setup secret themselves), or the empty-token refusal (#1950) would
+// leave it unpairable. Once paired the same paths are behind the token like everything else.
+func TestOuterChain_PairingFlowWorksWithAnEmptyToken(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	c := newTestCore(&config.Config{Token: "", DataDir: t.TempDir()})
+	c.CfgPath = cfgPath
+	c.PairingSecret = "a1b2c3"
+	c.Pairing.Set(core.StatePairing)
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	outer := newOuterHandler(c, mux, mux, nil)
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		outer.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := post("/api/pair/verify", `{"secret":"ffffff"}`); rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "unauthorized") {
+		t.Fatalf("wrong secret: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := post("/api/pair/verify", `{"secret":"a1b2c3"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("verify without a bearer while pairing: want 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	var v struct {
+		SetupSecret string `json:"setupSecret"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || v.SetupSecret == "" {
+		t.Fatalf("verify body: %v %s", err, rec.Body.String())
+	}
+	tok := strings.Repeat("t", 32)
+	if rec := post("/api/pair/setup", `{"setupSecret":"`+v.SetupSecret+`","token":"`+tok+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("setup: want 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if c.Pairing.Get() != core.StateNormal {
+		t.Fatal("still pairing after setup")
+	}
+	// Paired: the exemption is gone, the same paths now need the token.
+	if rec := post("/api/pair/verify", `{"secret":"a1b2c3"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("verify after pairing without a bearer: want 401, got %d", rec.Code)
+	}
+	// And the exemption is those two paths only.
+	c2 := newTestCore(&config.Config{Token: ""})
+	c2.Pairing.Set(core.StatePairing)
+	outer2 := newOuterHandler(c2, nil, http.NotFoundHandler(), nil)
+	for _, p := range []string{"/api/pair/other", "/api/sessions"} {
+		req := httptest.NewRequest(http.MethodPost, p, nil)
+		rec := httptest.NewRecorder()
+		outer2.ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK || rec.Code == http.StatusNotFound {
+			t.Fatalf("%s while pairing with an empty token reached the inner handler: %d", p, rec.Code)
 		}
 	}
 }
