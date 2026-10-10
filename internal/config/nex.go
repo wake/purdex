@@ -19,10 +19,10 @@ type NexConfig struct {
 	Enabled      bool              `toml:"enabled"       json:"enabled"`
 	RepoRoots    []string          `toml:"repo_roots"    json:"repo_roots"`
 	ServiceRoots []string          `toml:"service_roots" json:"service_roots"`
-	ClaudeBin    string            `toml:"claude_bin"    json:"claude_bin"`
+	ClaudeBin    string            `toml:"claude_bin,omitempty" json:"claude_bin"`
 	PathPrepend  []string          `toml:"path_prepend"  json:"path_prepend"`
 	Sandbox      NexSandboxConfig  `toml:"sandbox"       json:"sandbox"`
-	Timeouts     NexTimeoutsConfig `toml:"timeouts"      json:"timeouts"`
+	Timeouts     NexTimeoutsConfig `toml:"timeouts,omitempty" json:"timeouts"`
 	Peer         NexPeerConfig     `toml:"peer"          json:"peer"`
 }
 
@@ -36,8 +36,8 @@ type NexConfig struct {
 type NexPeerConfig struct {
 	Enabled      bool   `toml:"enabled"       json:"enabled"`
 	MaxPending   int    `toml:"max_pending"   json:"max_pending"`
-	WakeTemplate string `toml:"wake_template" json:"wake_template"`
-	ReplyLine    string `toml:"reply_line"    json:"reply_line"`
+	WakeTemplate string `toml:"wake_template,omitempty" json:"wake_template"`
+	ReplyLine    string `toml:"reply_line,omitempty" json:"reply_line"`
 }
 
 // NexSandboxConfig names the sandbox profile ceiling (MaxProfile) and the
@@ -54,9 +54,9 @@ type NexSandboxConfig struct {
 // (e.g. "5m"). Empty means "use Nexen's own default"; a non-empty value
 // must parse with time.ParseDuration.
 type NexTimeoutsConfig struct {
-	LeaseTTL  string `toml:"lease_ttl" json:"lease_ttl"`
-	Interrupt string `toml:"interrupt" json:"interrupt"`
-	Turn      string `toml:"turn"      json:"turn"`
+	LeaseTTL  string `toml:"lease_ttl,omitempty" json:"lease_ttl"`
+	Interrupt string `toml:"interrupt,omitempty" json:"interrupt"`
+	Turn      string `toml:"turn,omitempty" json:"turn"`
 }
 
 // DefaultNexConfig returns the zero-config-friendly nex defaults: disabled,

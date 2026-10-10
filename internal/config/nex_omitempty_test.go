@@ -28,15 +28,16 @@ func writeAndRead(t *testing.T, cfg config.Config) (string, config.Config) {
 }
 
 // #1057: saving the Nex form must not add keys the user never set. The fields whose default is the zero value (claude_bin,
-// timeouts.*, peer.max_pending / wake_template / reply_line) are left out of the file when empty; an absent key reads back
-// as the zero value, so the section means the same. Mutation gate: drop omitempty from them → red.
+// timeouts.*, peer.wake_template / reply_line) are left out of the file when empty; an absent key reads back
+// as the zero value, so the section means the same. (peer.max_pending stays: BurntSushi has no omitempty for integers.)
+// Mutation gate: drop omitempty from them → red.
 func TestWriteFile_LeavesOutEmptyNexFieldsWhoseDefaultIsZero(t *testing.T) {
 	cfg, err := config.Load(filepath.Join(t.TempDir(), "absent.toml")) // the defaults
 	if err != nil {
 		t.Fatal(err)
 	}
 	text, got := writeAndRead(t, cfg)
-	for _, absent := range []string{"claude_bin", "[nex.timeouts]", "lease_ttl", "interrupt", "wake_template", "reply_line", "max_pending"} {
+	for _, absent := range []string{"claude_bin", "[nex.timeouts]", "lease_ttl", "interrupt", "wake_template", "reply_line"} {
 		if strings.Contains(text, absent) {
 			t.Errorf("an unset %q was written:\n%s", absent, text)
 		}
