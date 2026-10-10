@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.698] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：daemon 自己產生 token 時不再寫進 log、不再洗掉 config — #1950（#2554）
+
+- daemon 第一次啟動、config 沒有 token 而自己產生一個時，明文只顯示在終端機（前景啟動、要拿去配對 App 的那一次）；導向 log 或管線時只印 fingerprint 與 config 的路徑。
+- 寫回 config 時只改 token 那一行：其他設定、註解、未知的表格原樣保留，`--bind`／`--port` 這類啟動參數也不會被寫進去。寫不進去就拒絕啟動並說明怎麼修，不再帶著一個重啟就會換掉的 token 繼續跑。
+- `pdx token generate` 改用同一套只改一行的寫法；所有寫 config 的地方改用各自的暫存檔並先 fsync 再換上。
+
+### Changed：指揮台視覺 v2 — #2558（介面線）
+
+- agent 文字排版一致；系統訊息改成灰色靠左；使用者訊息框改成淡紫細框、極淡底色，聊天的使用者泡泡改白字；輸入框改成終端機式；狀態列改成「repo [worktree] [模型 · effort]」，右側顯示花費，StatusBar 右側同色。
+
+### Fixed：沒有 token 的 daemon 不再放行所有請求 — #1950（#2559）
+
+- daemon 的 token 是空的時候，`/api` 一律回 401（之前是全部放行）。正常啟動的 daemon 一定有 token（見上一條），這是多一層保險；只有快速配對進行中的 `POST /api/pair/verify` 與 `/api/pair/setup` 照舊不需要 token（它們各自驗配對密碼，配對完成後就跟其他路由一樣要 token）。
+
 ## [1.0.0-alpha.697] - 2026-10-11
 
 > 只動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
