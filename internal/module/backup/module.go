@@ -59,3 +59,6 @@ func (m *BackupModule) Stop(_ context.Context) error {
 	}
 	return nil
 }
+
+// Close is a stub until the implementation commit (#1033).
+func (m *BackupModule) Close() error { return nil }

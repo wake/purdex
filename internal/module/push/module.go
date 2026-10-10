@@ -696,3 +696,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeError(w http.ResponseWriter, status int, code string) {
 	writeJSON(w, status, map[string]string{"error": code})
 }
+
+// Close is a stub until the implementation commit (#1033).
+func (m *Module) Close() error { return nil }

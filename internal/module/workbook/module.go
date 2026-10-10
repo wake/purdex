@@ -226,3 +226,6 @@ func (m *Module) Stop(context.Context) error {
 	}
 	return st.Close()
 }
+
+// Close is a stub until the implementation commit (#1033).
+func (m *Module) Close() error { return nil }

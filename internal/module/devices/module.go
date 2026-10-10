@@ -209,3 +209,6 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/devices", m.handleRevokePairing)
 	mux.HandleFunc("PUT /api/devices/self", m.handleSelf)
 }
+
+// Close is a stub until the implementation commit (#1033).
+func (m *Module) Close() error { return nil }
