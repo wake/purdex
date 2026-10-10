@@ -21,6 +21,9 @@ const (
 	handoffEffortLabel = "purdex.effort"
 )
 
+// validModel is the guard on a model name this module passes on: nexen's own rule (scaffold: still team.ValidModel).
+func validModel(s string) bool { return team.ValidModel(s) }
+
 // sessionReading is the model id and effort level of a session, "" for what is not known.
 type sessionReading struct{ Model, Effort string }
 
