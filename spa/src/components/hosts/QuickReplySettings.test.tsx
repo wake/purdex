@@ -240,6 +240,17 @@ describe('QuickReplySettings', () => {
       expect(input().value).toBe('alpha')
     })
 
+    it('opening another item\'s editor WITHOUT closing the first drops the first draft: editing it again starts from its saved text', () => {
+      seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
+      render(<QuickReplySettings hostId={H} />)
+      fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+      fireEvent.change(input(), { target: { value: 'draft for a' } })
+      fireEvent.click(screen.getByTestId('quick-reply-edit-b')) // straight to b: no cancel, no save
+      expect(input().value).toBe('beta')
+      fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+      expect(input().value).toBe('alpha') // not 'draft for a'
+    })
+
     it('another item\'s edit does not inherit a previous item\'s draft', () => {
       seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
       render(<QuickReplySettings hostId={H} />)

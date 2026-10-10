@@ -73,9 +73,11 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
   const locked = !editable
   // The draft of the item being edited, kept here so it survives the editor's remount: after a 409 the store takes the daemon's
   // list, and an item another client deleted flips `isNew`, which moves the editor from its row to the new row (#1487). It
-  // belongs to one item (`id`) and is dropped when the editor closes (set during render, react.dev "adjusting state").
+  // belongs to one item (`id`) and is dropped when the editor closes or another item is opened — a row's edit button works
+  // while another item is being edited, which never passes through `editing === null` (set during render, react.dev
+  // "adjusting state").
   const [draft, setDraft] = useState<{ id: string; text: string } | null>(null)
-  if (editing === null && draft !== null) setDraft(null)
+  if (draft !== null && draft.id !== editing?.id) setDraft(null)
 
   // The host-wide gate only knows the host config loaded; a daemon older than
   // this collection loads fine and simply has no `quickReplies` (plan review #3).
