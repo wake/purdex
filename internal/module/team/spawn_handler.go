@@ -184,6 +184,8 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	switch {
 	case errors.Is(err, ErrSpawnNotLead):
 		return fail(http.StatusConflict, team.ErrNotLead, "this session no longer leads team "+t.ID)
+	case errors.Is(err, ErrSpawnCwdOutside):
+		return fail(http.StatusConflict, team.ErrCwdOutsideGrant, cwd+" is under none of the team's roots")
 	case errors.Is(err, ErrSpawnTeamFull):
 		return fail(http.StatusConflict, team.ErrTeamFull, fmt.Sprintf("team %s has its %d active or starting members", t.ID, t.Grant.MaxMembers))
 	case err != nil:
