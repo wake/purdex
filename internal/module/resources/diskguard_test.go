@@ -2,6 +2,7 @@ package resourcesmod
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,6 +39,23 @@ func put(t *testing.T, path string, age time.Duration, size int) {
 	}
 }
 
+// goCacheReadme is what `go` writes into a build cache it creates; the trim refuses a directory that does not have it.
+const goCacheReadme = "This directory holds cached build artifacts from the Go build system.\nRun \"go clean -cache\" if the directory is getting too large.\n"
+
+func putText(t *testing.T, path, text string, age time.Duration) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().Add(-age)
+	if err := os.Chtimes(path, at, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func exists(p string) bool { _, err := os.Lstat(p); return err == nil }
 
 // fakeCache lays out a build cache: old and recent entries in two-hex-digit directories, Go's own top-level files, and
@@ -56,7 +74,7 @@ func newFakeCache(t *testing.T) fakeCache {
 	put(t, filepath.Join(c.dir, "ab", "4567-d"), ageNew, 100) // recent: kept
 	put(t, filepath.Join(c.dir, "ff", "89ab-a"), ageOld, 100)
 	put(t, filepath.Join(c.dir, "trim.txt"), ageOld, 10) // Go's own top-level files are not entries
-	put(t, filepath.Join(c.dir, "README"), ageOld, 10)
+	putText(t, filepath.Join(c.dir, "README"), goCacheReadme, ageOld)
 	put(t, filepath.Join(c.dir, "zz", "x-a"), ageOld, 10)    // not a two-hex-digit directory
 	put(t, filepath.Join(c.dir, "abc", "x-a"), ageOld, 10)   // nor is this
 	put(t, filepath.Join(c.outside, "precious"), ageOld, 10) // the thing a symlink would point at
@@ -235,6 +253,44 @@ func TestDiskGuard_UnderTheHardFloorGrantsWithAWarning(t *testing.T) {
 }
 
 // A volume that frees up after the trim is judged on what is there after it.
+// After Stop no trim is started (and nothing is added to the wait group a Close is waiting on): a request still in flight
+// at shutdown must not start a goroutine behind it (codex attack). Run under -race.
+func TestDiskGuard_NoTrimStartsAfterStop(t *testing.T) {
+	f := newDiskFix(t, 10*diskGiB)
+	var walks atomic.Int32
+	f.m.trimHook = func() { walks.Add(1) }
+	f.m.markStopped()
+	f.m.wg.Wait() // what Close does
+	rec := f.post(cidA, "test-full", 0)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post: %d", rec.Code)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if walks.Load() != 0 || !exists(filepath.Join(f.cache.dir, "ab/0123-a")) {
+		t.Fatalf("a trim started after Stop (%d walks)", walks.Load())
+	}
+}
+
+// The warning is about now: a lease granted under the floor shows it while it is fresh, and it is gone from later answers
+// once nothing has confirmed it for a couple of minutes (the disk may have recovered).
+func TestDiskGuard_AStaleWarningIsNotServed(t *testing.T) {
+	f := newDiskFix(t, 2*diskGiB)
+	r := f.heavy(cidA)
+	if r.Warning == "" {
+		t.Fatal("no warning on the grant")
+	}
+	get := func() resources.LeaseResponse {
+		return decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+r.ID, nil))
+	}
+	if got := get(); got.Warning == "" {
+		t.Fatalf("the warning is gone at once: %+v", got)
+	}
+	f.clock.ms.Add((3 * time.Minute).Milliseconds())
+	if got := get(); got.Warning != "" {
+		t.Fatalf("a warning nobody has confirmed for 3 minutes is still served: %q", got.Warning)
+	}
+}
+
 func TestDiskGuard_TheWarningIsJudgedAfterTheTrim(t *testing.T) {
 	f := newDiskFix(t, 2*diskGiB)
 	f.m.trimHook = func() { f.free.Store(20 * diskGiB) } // the trim frees space
@@ -323,6 +379,45 @@ func TestTrimGoCache_NeverTouchesAnythingElse(t *testing.T) {
 		if !exists(keep) {
 			t.Errorf("%s was deleted", keep)
 		}
+	}
+}
+
+// Only a directory that is really a Go build cache is trimmed (codex attack): its README is the one `go` writes. A directory
+// with two-hex-digit subdirectories and old files but no such README (a project, a data folder, a GOCACHE pointed at the wrong
+// place) is refused and nothing in it is touched. Mutation gate: skip the marker check → the files go (red).
+func TestTrimGoCache_OnlyADirectoryThatIsAGoCache(t *testing.T) {
+	base, _ := filepath.EvalSymlinks(t.TempDir())
+	cases := map[string]func(dir string){
+		"no README":      func(string) {},
+		"another README": func(dir string) { putText(t, filepath.Join(dir, "README"), "my notes\n", ageOld) },
+		"a README that is a symlink": func(dir string) {
+			putText(t, filepath.Join(base, "elsewhere-README"), goCacheReadme, ageOld)
+			if err := os.Symlink(filepath.Join(base, "elsewhere-README"), filepath.Join(dir, "README")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a README that is a directory": func(dir string) { mustMkdirAll(t, filepath.Join(dir, "README")) },
+	}
+	i := 0
+	for name, setup := range cases {
+		i++
+		dir := filepath.Join(base, fmt.Sprintf("userdata%d", i))
+		put(t, filepath.Join(dir, "ab", "report.pdf"), ageOld, 10) // data of the user that happens to sit in a "ab" folder
+		setup(dir)
+		m := newTestModule(idleSampler(), nil)
+		if _, err := m.trimGoCache(context.Background(), dir, time.Now().Add(-2*time.Hour)); err == nil {
+			t.Errorf("%s: accepted as a Go cache", name)
+		}
+		if !exists(filepath.Join(dir, "ab", "report.pdf")) {
+			t.Errorf("%s: a file was deleted from a directory that is not a Go cache", name)
+		}
+	}
+}
+
+func mustMkdirAll(t *testing.T, p string) {
+	t.Helper()
+	if err := os.MkdirAll(p, 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 
