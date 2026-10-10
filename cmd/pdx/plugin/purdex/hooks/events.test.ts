@@ -43,6 +43,13 @@ type W = {
   fork: (e: any, n: number) => any // $.model.fork beneath the mod (WB-2b-ii)
   forkCalls: any[]
   registered: string[] // the slash commands the mod registered
+  pqReqs: { url: string; body: any }[] // the POSTs to the prompt routes (U3-0b), never mixed with the event batches
+  promptNext: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to prompt/next (default: a long poll that never answers)
+  promptResult: (body: any, n: number) => Answer | Promise<Answer> // ... to prompt/result (default 200)
+  submit: (e: any, n: number) => any // prompt.submit beneath the mod: { text } or { drop }, or { deny } for a refused call
+  submitCalls: any[]
+  abort: (e: any) => any // turn.abort beneath the mod: undefined, or { deny } when no turn is running
+  abortCalls: any[]
   wbRefresh: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to POST /workbook/refresh
 }
 
@@ -58,7 +65,8 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     gets: [], invalidated: 0, team: () => teamAnswer('none'),
     wbReqs: [], wbNext: () => ({ status: 204 }), wbResult: () => ({ status: 200, text: '{"more":false}' }),
     model: () => ({ isAnswered: true, text: '{}', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }), modelCalls: [],
-    fork: () => ({ isAnswered: true, text: '{"status":"s","todos":{"done":[],"dropped":[],"add":[]}}', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } }), forkCalls: [], registered: [],
+    fork: () => ({ isAnswered: true, text: '{"status":"s","todos":{"done":[],"dropped":[],"add":[]}}', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } }), forkCalls: [], registered: [], pqReqs: [], promptNext: () => never(), promptResult: () => ({ status: 200, text: '{"ok":true}' }),
+    submit: (e: any) => ({ text: e.text }), submitCalls: [], abort: () => undefined, abortCalls: [],
     wbRefresh: () => ({ status: 202, text: '{"entry_id":7}' }),
     daemon: ackAll,
     bash: () => BASH_OK,
@@ -74,6 +82,14 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
       const a = await w.team(sid, w.gets.length)
       if ('deny' in a) return { deny: a.deny }
       return { value: { status: a.status, ok: a.status >= 200 && a.status < 300, headers: { 'content-type': 'application/json' }, text: a.text ?? '' } }
+    }
+    if (String(e.url).includes('/mod/v1/prompt/')) { // the prompt routes (U3-0b)
+      const pb = JSON.parse(e.init.body)
+      w.pqReqs.push({ url: e.url, body: pb })
+      const isNext = String(e.url).endsWith('/next')
+      const pa = await (isNext ? w.promptNext(pb, w.pqReqs.filter((r) => r.url.endsWith('/next')).length) : w.promptResult(pb, w.pqReqs.filter((r) => r.url.endsWith('/result')).length))
+      if ('deny' in pa) return { deny: pa.deny }
+      return { value: { status: pa.status, ok: pa.status >= 200 && pa.status < 300, headers: { 'content-type': 'application/json' }, text: pa.text ?? '' } }
     }
     if (String(e.url).includes('/mod/v1/workbook/')) { // the job routes (WB-1c)
       const wbBody = JSON.parse(e.init.body)
@@ -115,6 +131,16 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     w.modelCalls.push(e)
     const r = await w.model(e, w.modelCalls.length)
     return r && 'deny' in r ? { deny: r.deny } : { value: r }
+  })
+  on('prompt.submit', async (_$: any, e: any) => {
+    w.submitCalls.push(e)
+    const r = await w.submit(e, w.submitCalls.length)
+    return r
+  })
+  on('turn.abort', async (_$: any, e: any) => {
+    w.abortCalls.push(e)
+    const r = await w.abort(e)
+    return r && 'deny' in r ? { deny: r.deny } : { value: undefined }
   })
   on('model.fork', async (_$: any, e: any) => {
     w.forkCalls.push(e)
@@ -178,7 +204,7 @@ test('posts session.start then turn events in seq order to the socket from pdx.j
     dropped_total: 0,
     cwd: '/work',
     interactive: true,
-    caps: ['workbook.v2', 'workbook.refresh'],
+    caps: ['workbook.v2', 'workbook.refresh', 'prompt.v1'],
     events: [
       { seq: 1, at: expect.any(Number), sid: SID1, type: 'session.start', data: { cwd: '/work', surface: 'terminal' } },
       { seq: 2, at: expect.any(Number), sid: SID1, type: 'turn.start', data: { turn_id: 't1' } },
@@ -1156,14 +1182,14 @@ const nextReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/next'))
 const resultReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/result'))
 const USAGE = { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 50, cache_creation_input_tokens: 7 }
 
-test('every batch announces workbook.v2 and workbook.refresh and nothing else', async ($, on) => {
+test('every batch announces workbook.v2, workbook.refresh and prompt.v1 and nothing else', async ($, on) => {
   const w = evWorld(on)
   await start($, w)
   await turnStart($, 't1')
   await w.clock.advance(150)
   await w.clock.advance(10_150) // a heartbeat batch
   expect(w.posts.length).toBeGreaterThanOrEqual(2)
-  for (const p of w.posts) expect(p.body.caps).toEqual(['workbook.v2', 'workbook.refresh'])
+  for (const p of w.posts) expect(p.body.caps).toEqual(['workbook.v2', 'workbook.refresh', 'prompt.v1'])
 })
 
 // Mutation gate: ask inside the hook, or for a subagent / interrupted turn → red.
@@ -1566,4 +1592,214 @@ test('an orphaned fork: /workbook refresh is refused with a reason; after 10 min
   await w.clock.settle()
   expect(w.modelCalls.length).toBe(1) // the executor works again: the second job ran
   expect((await wbCmd($, 'refresh')).text).toContain('已排入')
+})
+
+// ---- U3-0b: the Apps' send and interrupt (interface U3 plan D7) ----
+
+const PJ = '0'.repeat(32)
+const PJOB = (extra: any = {}) => ({ id: 'pj-' + PJ, kind: 'submit', session_id: SID1, text: 'hello from the app', ...extra })
+const nextOnce = (job: any) => (_b: any, n: number): Answer | Promise<Answer> => (n === 1 ? { status: 200, text: JSON.stringify({ job }) } : never())
+// gated: the job is held back until open() is called (so a test can start a turn first), then handed once.
+const gated = (job: any) => {
+  let open: () => void = () => {}
+  const door = new Promise<void>((r) => { open = r })
+  return { open, fn: (_b: any, n: number): Answer | Promise<Answer> => (n === 1 ? door.then(() => ({ status: 200, text: JSON.stringify({ job }) } as Answer)) : never()) }
+}
+const pqNext = (w: W) => w.pqReqs.filter((r) => r.url.endsWith('/next'))
+const pqResult = (w: W) => w.pqReqs.filter((r) => r.url.endsWith('/result'))
+
+// Mutation gate: poll before the reporter is on, or poll for another session id → red.
+test('the standing poll asks prompt/next for this session, once, and waits there', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await w.clock.advance(1000)
+  expect(pqNext(w)).toHaveLength(1)
+  expect(pqNext(w)[0].body).toEqual({ stream: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/), session_id: SID1, wait_ms: 15000 })
+})
+
+// Mutation gate: send it framed (no asUser), or report accepted without calling → red.
+test('a submit job is run as the person\'s own words and reported accepted; then the poll goes on', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(1)
+  expect(w.submitCalls[0]).toMatchObject({ text: 'hello from the app', origin: { kind: 'plugin', asUser: true } })
+  expect(pqResult(w)[0].body).toEqual({ stream: pqNext(w)[0].body.stream, job_id: 'pj-' + PJ, status: 'accepted' })
+  expect(pqNext(w).length).toBeGreaterThanOrEqual(2) // asked again after the result
+})
+
+// Mutation gate: call $.prompt.submit mid-turn (it would block until idle) → red.
+test('while a turn runs a submit is reported busy at once and nothing is submitted', async ($, on) => {
+  const g = gated(PJOB())
+  const w = evWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await turnStart($, 't1') // a turn is running
+  g.open()
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ job_id: 'pj-' + PJ, status: 'busy' })
+})
+
+// Mutation gate: skip the session comparison → red.
+test('a submit made for another session id (a /clear since) is dropped session_changed', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ session_id: SID2 })) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'session_changed' })
+})
+
+test('a prompt Claude Code drops is reported dropped with its reason', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), submit: () => ({ drop: 'blocked by a hook' }) })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'blocked by a hook' })
+})
+
+test('a submit the engine refuses is reported dropped refused', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), submit: () => { throw new Error('engine says no') } })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'refused' })
+})
+
+test('an interrupt aborts the running main turn', async ($, on) => {
+  const g = gated(PJOB({ kind: 'interrupt', text: undefined }))
+  const w = evWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await turnStart($, 't-run')
+  g.open()
+  await w.clock.settle()
+  expect(w.abortCalls).toHaveLength(1)
+  expect(w.abortCalls[0]).toMatchObject({ turnId: 't-run' })
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'accepted' })
+})
+
+test('an interrupt with no turn running is dropped not_running and aborts nothing', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'interrupt', text: undefined })) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.abortCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'not_running' })
+})
+
+test('an abort the engine refuses (the turn ended meanwhile) is dropped not_running', async ($, on) => {
+  const g = gated(PJOB({ kind: 'interrupt', text: undefined }))
+  const w = evWorld(on, { promptNext: g.fn, abort: () => ({ deny: 'no turn is running' }) })
+  await start($, w)
+  await turnStart($, 't-run')
+  g.open()
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'not_running' })
+})
+
+// Mutation gate: run a job outside the bounds → red (fail closed).
+for (const [name, job] of [
+  ['a bad job id', PJOB({ id: 'x' })],
+  ['a bad session id', PJOB({ session_id: 'nope' })],
+  ['an unknown kind', PJOB({ kind: 'steer' })],
+  ['blank text', PJOB({ text: '   ' })],
+  ['over-long text', PJOB({ text: 'x'.repeat(8001) })],
+  ['text that is not a string', PJOB({ text: 5 })],
+] as [string, any][]) {
+  test(`a job with ${name} is not run and not reported`, async ($, on) => {
+    const w = evWorld(on, { promptNext: nextOnce(job) })
+    await start($, w)
+    await w.clock.advance(1100)
+    await w.clock.settle()
+    expect(w.submitCalls).toHaveLength(0)
+    expect(w.abortCalls).toHaveLength(0)
+    expect(pqResult(w)).toHaveLength(0)
+  })
+}
+
+// Mutation gate: no pause after a failed or instant-empty poll → a busy loop → red.
+test('a failed poll backs off, and an instant empty answer waits before the next poll', async ($, on) => {
+  const w = evWorld(on, { promptNext: (_b, n) => (n === 1 ? { status: 500, text: '{}' } : n === 2 ? { status: 204 } : never()) })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqNext(w)).toHaveLength(1) // the failure: backing off
+  await w.clock.advance(2100)
+  expect(pqNext(w)).toHaveLength(2)
+  await w.clock.advance(500)
+  expect(pqNext(w)).toHaveLength(2) // the instant 204: waiting a second
+  await w.clock.advance(700)
+  expect(pqNext(w)).toHaveLength(3)
+})
+
+// Mutation gate: keep polling for the old session id after a /clear → red.
+test('after a /clear the poll is for the new session id', async ($, on) => {
+  const w = evWorld(on)
+  await start($, w)
+  await w.clock.advance(1000)
+  expect(pqNext(w)[0].body.session_id).toBe(SID1)
+  await end($, 'clear', SID1)
+  w.sid = SID2
+  await $.classic.SessionStart({ source: 'clear' })
+  await w.clock.advance(1000)
+  const last = pqNext(w)[pqNext(w).length - 1]
+  expect(last.body.session_id).toBe(SID2)
+})
+
+// session.end{clear} has been seen but the switch not yet: $.session.id() still says the old id, yet the conversation is
+// ending - a job that arrives then is dropped, never run (codex R1). Mutation gate: drop the ev.switching test → red.
+test('a job that arrives between session.end{clear} and the switch is dropped session_changed', async ($, on) => {
+  const g = gated(PJOB())
+  const w = evWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await end($, 'clear', SID1) // the switch is pending: ev.switching
+  g.open()
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'session_changed' })
+})
+
+// Every report POST hangs: the tries are bounded in time (2 s each, none started after 6.5 s from the job's arrival) so the
+// last one still reaches the daemon inside its 10 s lease and the poll loop is back soon (codex critic). Mutation gate: the
+// old 5 s per try and no budget → the third try starts after the lease / the loop is held ~17 s → red.
+test('a hanging prompt result is tried within the lease and the poll loop resumes', async ($, on) => {
+  const w = evWorld(on, { promptNext: (_b, n) => (n === 1 ? { status: 200, text: JSON.stringify({ job: PJOB() }) } : never()), promptResult: () => never() })
+  await start($, w)
+  await w.clock.settle()
+  await w.clock.advance(6600) // 2 s + 0.7 s + 2 s + 1.4 s: the third try starts at ~6.1 s
+  expect(pqResult(w)).toHaveLength(3)
+  await w.clock.advance(2200) // its 2 s deadline passed
+  expect(pqNext(w).length).toBeGreaterThanOrEqual(2) // back to polling, well inside 9 s
+})
+
+// A drop reason in Chinese or with emoji is cut by UTF-8 bytes (the daemon refuses > 128 bytes), on a character boundary, so
+// the report is accepted (codex R1). Mutation gate: slice by characters → red.
+test("a long non-ASCII drop reason is cut to fit the daemon's byte limit", async ($, on) => {
+  const long = '無法送出'.repeat(40) + '😀'
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), submit: () => ({ drop: long }) })
+  await start($, w)
+  await w.clock.settle()
+  const reason: string = pqResult(w)[0].body.reason
+  expect(new TextEncoder().encode(reason).length).toBeLessThanOrEqual(128)
+  expect(reason.length).toBeGreaterThan(10)
+  expect(long.startsWith(reason)).toBe(true) // a clean head, no split character
+})
+
+// A report that gets no 200 (a lost answer, a busy daemon) is sent again inside the daemon's hand timeout; a 409 (settled
+// already) is final and not repeated; after three tries it gives up (codex attack). Mutation gate: a single try → red.
+test('a prompt result that fails is sent again, bounded; a 409 is not retried', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), promptResult: (_b, n) => (n === 1 ? { status: 503, text: '{}' } : n === 2 ? { deny: 'socket gone' } : { status: 200, text: '{}' }) })
+  await start($, w)
+  await w.clock.advance(5000)
+  expect(pqResult(w)).toHaveLength(3)
+  expect(new Set(pqResult(w).map((r) => JSON.stringify(r.body))).size).toBe(1) // the same report each time
+})
+
+test('a 409 on the report ends the retries', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), promptResult: () => ({ status: 409, text: '{"error":"not_leased"}' }) })
+  await start($, w)
+  await w.clock.advance(5000)
+  expect(pqResult(w)).toHaveLength(1)
+})
+
+test('a report that never succeeds is tried three times and no more', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), promptResult: () => ({ status: 500, text: '{}' }) })
+  await start($, w)
+  await w.clock.advance(10_000)
+  expect(pqResult(w)).toHaveLength(3)
 })

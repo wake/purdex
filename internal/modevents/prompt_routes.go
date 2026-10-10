@@ -86,7 +86,7 @@ func (h *handler) promptNext(w http.ResponseWriter, r *http.Request) {
 	defer h.activePolls.Add(-1)
 	wait := time.Duration(*in.WaitMS) * time.Millisecond
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait + waitWriteSlack))
-	release, ok := h.promptPolls.acquire(r.Context(), in.Stream)
+	release, ok := h.promptPolls.acquire(r.Context(), in.Stream+"/"+in.SessionID) // per session: after a /clear the old session's poll must not hold up the new one
 	if !ok {
 		return
 	}

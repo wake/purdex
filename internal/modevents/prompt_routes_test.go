@@ -200,3 +200,49 @@ func TestRegistry_NewestCapableStream(t *testing.T) {
 		t.Fatal("a stale announcement still owns the session")
 	}
 }
+
+// After a /clear the old session's standing poll (up to 15 s, it cannot be cancelled) must not hold up the new session's:
+// the prompt gate is per stream AND session (codex attack). Mutation gate: key the gate by stream only → red.
+func TestPromptNext_ANewSessionOfTheSameStreamIsNotBlockedByTheOldPoll(t *testing.T) {
+	const other = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	reg := NewRegistry(time.Now)
+	_, _ = reg.Apply(Batch{V: 1, Stream: testStream, Agent: "cc", Caps: []string{CapPromptV1},
+		Events: []Event{{Seq: 1, SID: testSID, Type: "heartbeat", Data: json.RawMessage(`{}`)}}})
+	block := make(chan struct{})
+	svc := &blockingPrompt{block: block, started: make(chan struct{}, 1)}
+	h := NewHandler(reg, WithPrompt(func() PromptService { return svc }))
+	go func() { post(t, h, http.MethodPost, PromptNextPath, nextBody(testStream, testSID, 5000)) }()
+	<-svc.started // the old session's poll is parked in the queue
+	// the process switches session: the same stream now announces for the other id
+	_, _ = reg.Apply(Batch{V: 1, Stream: testStream, Agent: "cc", Caps: []string{CapPromptV1},
+		Events: []Event{{Seq: 2, SID: other, Type: "heartbeat", Data: json.RawMessage(`{}`)}}})
+	done := make(chan int, 1)
+	go func() { done <- post(t, h, http.MethodPost, PromptNextPath, nextBody(testStream, other, 0)).Code }()
+	select {
+	case code := <-done:
+		if code != http.StatusNoContent {
+			t.Fatalf("new session's poll: %d", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the new session's poll waited behind the old one")
+	}
+	close(block)
+}
+
+type blockingPrompt struct {
+	block   chan struct{}
+	started chan struct{}
+}
+
+func (b *blockingPrompt) NextPrompt(ctx context.Context, _, sid string, _ time.Duration) (any, bool) {
+	if sid == testSID {
+		b.started <- struct{}{}
+		select {
+		case <-b.block:
+		case <-ctx.Done():
+		}
+	}
+	return nil, false
+}
+
+func (b *blockingPrompt) PromptResult(string, PromptResult) error { return nil }
