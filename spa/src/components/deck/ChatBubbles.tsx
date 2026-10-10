@@ -1,0 +1,49 @@
+// spa/src/components/deck/ChatBubbles.tsx — the chat's bubbles (U3 spec §5): the user on the right in an accent bubble, the
+// agent on the left, a peer message as ONE line (iOS 0.6.44) with 「未驗證」 when the daemon could not verify the sender.
+// A user item that is not a plain message (a bash input, a schedule wake-up…) is the deck's block, as it reads best there.
+import { useI18nStore } from '../../stores/useI18nStore'
+import type { AgentTextItem, UserItem } from '../../lib/conversations/types'
+import RoomProse from '../room/RoomProse'
+import { UserBlock } from './UserBlock'
+
+export function UserBubble({ item }: { item: UserItem }) {
+  const t = useI18nStore((s) => s.t)
+  if (item.source !== 'user' && item.source !== 'queued') return <UserBlock item={item} />
+  return (
+    <div data-testid="chat-user" data-source={item.source} className="flex flex-col items-end">
+      <div className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm text-white">
+        {item.text}{item.truncated && '…'}
+      </div>
+      {item.source === 'queued' && <div data-testid="chat-user-queued" className="mt-0.5 text-xs text-text-muted">{t('deck.user.queued')}</div>}
+      {item.images && item.images.length > 0 && <div className="mt-0.5 text-xs text-text-muted">{t('deck.user.images', { n: item.images.length })}</div>}
+    </div>
+  )
+}
+
+export function AgentBubble({ item }: { item: AgentTextItem }) {
+  const t = useI18nStore((s) => s.t)
+  return (
+    <div data-testid="chat-agent" className="flex justify-start">
+      <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-surface-secondary px-3 py-2 text-sm text-text-primary">
+        <RoomProse content={item.markdown} streaming={item.streaming} />
+        {item.truncated && <div className="text-xs text-text-muted">{t('deck.output.cut')}</div>}
+      </div>
+    </div>
+  )
+}
+
+/** Consecutive peer messages as one line: 「來自 <name>：<text> · <text>」, 「未驗證」 if any of them is, a count when several. */
+export function PeerLine({ items }: { items: UserItem[] }) {
+  const t = useI18nStore((s) => s.t)
+  const names = [...new Set(items.map((i) => i.from?.name ?? i.from?.kind ?? '').filter(Boolean))].join('、')
+  const unverified = items.some((i) => i.from?.unverified === true)
+  const text = items.map((i) => i.text.replace(/\s+/g, ' ').trim()).join(' · ')
+  return (
+    <div data-testid="chat-peer" data-count={items.length} title={items.map((i) => i.text).join('\n')} className="flex items-center gap-2 text-xs text-text-muted">
+      <span className="shrink-0">{t('deck.user.from', { name: names })}</span>
+      {unverified && <span data-testid="chat-peer-unverified" className="shrink-0 rounded bg-surface-secondary px-1.5 text-status-warning">{t('chat.peer.unverified')}</span>}
+      {items.length > 1 && <span data-testid="chat-peer-count" className="shrink-0">{t('chat.peer.count', { n: items.length })}</span>}
+      <span data-testid="chat-peer-text" className="min-w-0 flex-1 truncate text-text-secondary">{text}</span>
+    </div>
+  )
+}
