@@ -16,6 +16,7 @@ import (
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/fsutil"
 	"github.com/wake/purdex/internal/middleware"
+	devicesmod "github.com/wake/purdex/internal/module/devices"
 	"github.com/wake/purdex/internal/module/session"
 )
 
@@ -39,8 +40,24 @@ const (
 	uploadRetryAfter  = "5"
 )
 
-// uploadRefuseDrainTimeout is the absolute time a refused upload's body may be drained for. A var so tests can shrink it.
-var uploadRefuseDrainTimeout = 10 * time.Second
+// A device upload also has an absolute deadline: uploadDeviceBaseTime plus the declared size at uploadDeviceMinRate
+// (128 KiB/s, about 1 Mbit/s, a weak cellular link; the 64 MiB cap then allows about 9 minutes), so one token cannot hold
+// its slots and temp files by trickling. Admin has no slots to hold: only the per-read stall timeout applies. Vars so
+// tests can shrink them. uploadRefuseDrainTimeout is the absolute time a refused upload's body may be drained for.
+var (
+	uploadDeviceBaseTime           = 30 * time.Second
+	uploadDeviceMinRate      int64 = 128 << 10 // bytes per second
+	uploadRefuseDrainTimeout       = 10 * time.Second
+)
+
+// uploadTotalDeadline: the whole-body deadline for a device upload of the declared length (unknown or beyond the cap:
+// the cap).
+func uploadTotalDeadline(declared, cap int64) time.Duration {
+	if declared <= 0 || declared > cap {
+		declared = cap
+	}
+	return uploadDeviceBaseTime + time.Duration(declared)*time.Second/time.Duration(uploadDeviceMinRate)
+}
 
 // drainRefusedBody reads and discards (never to disk) up to what a device may legitimately send, so the 429 reaches a
 // client that is still streaming: closing a connection with unread body makes the kernel RST, and the client then sees
@@ -58,8 +75,46 @@ func drainRefusedBody(w http.ResponseWriter, r *http.Request) {
 // uploadLimiter counts in-flight uploads per device id. A full device is refused at once (no queueing), and an entry
 // that drops to zero is deleted so the map does not grow with every device ever seen.
 type uploadLimiter struct {
-	mu sync.Mutex
-	n  map[string]int
+	mu     sync.Mutex
+	n      map[string]int
+	aborts map[string]map[*func()]struct{} // device id -> abort functions of its in-flight uploads (#2493)
+}
+
+// track registers an in-flight upload's abort for its device; call the result when the upload ends.
+func (l *uploadLimiter) track(id string, abort func()) (untrack func()) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.aborts == nil {
+		l.aborts = map[string]map[*func()]struct{}{}
+	}
+	if l.aborts[id] == nil {
+		l.aborts[id] = map[*func()]struct{}{}
+	}
+	key := &abort
+	l.aborts[id][key] = struct{}{}
+	return func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		delete(l.aborts[id], key)
+		if len(l.aborts[id]) == 0 {
+			delete(l.aborts, id)
+		}
+	}
+}
+
+// abortDevices aborts every in-flight upload of the given (revoked) device ids.
+func (l *uploadLimiter) abortDevices(ids []string) {
+	var fns []func()
+	l.mu.Lock()
+	for _, id := range ids {
+		for k := range l.aborts[id] {
+			fns = append(fns, *k)
+		}
+	}
+	l.mu.Unlock()
+	for _, fn := range fns {
+		fn()
+	}
 }
 
 func (l *uploadLimiter) acquire(id string) bool {
@@ -85,12 +140,26 @@ func (l *uploadLimiter) release(id string) {
 	l.n[id]--
 }
 
+// followRevokes makes a revoked device's uploads in flight stop at once (#2493). Once, however often Start runs.
+func (m *Module) followRevokes() {
+	if m.core == nil || m.core.Registry == nil {
+		return // a bare test module
+	}
+	svc, _ := m.core.Registry.Get(devicesmod.RevokeFeedKey)
+	if feed, ok := svc.(devices.RevokeFeed); ok && m.followedRevokes.CompareAndSwap(false, true) {
+		feed.SubscribeRevoked(m.uploadSlots.abortDevices)
+	}
+}
+
 // handleUpload handles POST /api/agent/upload.
 // It saves the uploaded file and injects the path into the tmux pane.
 func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	limit := uploadMaxFileBytes
-	if p, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
+	var total time.Duration // admin: no absolute deadline
+	p, isDevice := devices.PrincipalFrom(r.Context())
+	if isDevice {
 		limit = uploadMaxFileBytesDevice
+		total = uploadTotalDeadline(r.ContentLength, limit+uploadFormOverhead)
 		// Per-token slot, taken before the body is touched and released on every exit (success, error, disconnect).
 		if !m.uploadSlots.acquire(p.ID) {
 			w.Header().Set("Retry-After", uploadRetryAfter)
@@ -105,14 +174,26 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		defer m.uploadSlots.release(p.ID)
 	}
+	body := middleware.NewUploadBody(w, r, uploadStallTimeout, total)
+	if isDevice {
+		// A revoke aborts the blocked read: the handler returns, which frees the slot and the temp files (#2493).
+		defer m.uploadSlots.track(p.ID, body.Abort)()
+	}
 	// Hard body cap (ParseMultipartForm's argument is only the in-memory threshold); the stall wrapper stays inside it.
-	r.Body = http.MaxBytesReader(w, middleware.StallTimeoutBody(w, r, uploadStallTimeout), limit+uploadFormOverhead)
+	r.Body = http.MaxBytesReader(w, body, limit+uploadFormOverhead)
 	if err := r.ParseMultipartForm(uploadMemBytes); err != nil {
 		if r.MultipartForm != nil {
 			_ = r.MultipartForm.RemoveAll()
 		}
+		if body.Aborted() {
+			http.Error(w, `{"error":"token revoked"}`, http.StatusUnauthorized)
+			return
+		}
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
+			// No drain here (#2493): measured on real sockets, a client streaming 48 MiB past a 2 MiB cap saw the 413 in
+			// 20 of 20 runs without one (Go's server holds the connection half-open for 500 ms before closing it), and
+			// a drain would make an oversize upload send more and hold its slot longer. The 429 path is different.
 			http.Error(w, `{"error":"too large"}`, http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -120,6 +201,10 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
+	if body.Aborted() { // revoked just as the body finished: nothing is saved or injected
+		http.Error(w, `{"error":"token revoked"}`, http.StatusUnauthorized)
+		return
+	}
 
 	sessionCode := r.FormValue("session")
 	if sessionCode == "" {
@@ -171,6 +256,11 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// as a paste and auto-detects image file paths → [Image #N] chip.
 	// inject=0|false (the iOS deck / chat, which sends the path in its own message) only saves.
 	inject := uploadInjectWanted(r.FormValue("inject"))
+	if body.Aborted() { // revoked while the file was being saved: nothing is injected into a pane
+		os.Remove(destPath)
+		http.Error(w, `{"error":"token revoked"}`, http.StatusUnauthorized)
+		return
+	}
 	if inject {
 		if err := m.core.Tmux.PasteText(tmuxName, destPath); err != nil {
 			os.Remove(destPath) // Clean up orphaned file

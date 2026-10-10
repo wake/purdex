@@ -41,7 +41,9 @@ type Module struct {
 	uploadDir string
 	// uploadSlots caps concurrent uploads per paired device (#2466); the zero value is ready.
 	uploadSlots uploadLimiter
-	traceSink   *hookTraceSink
+	// followedRevokes: the revoke feed is subscribed once (#2493).
+	followedRevokes atomic.Bool
+	traceSink       *hookTraceSink
 
 	// sessionStarts fans granted SessionStarts out to in-process subscribers.
 	sessionStarts sessionStartHub
@@ -375,6 +377,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // → replayStatus so detectors see fully-hydrated state on first poll
 // (per spec §6.3 / §6.4).
 func (m *Module) Start(_ context.Context) error {
+	m.followRevokes()
 	// Step timings (#1767): observation only, same order as before.
 	execBase := execstat.Take()
 	st := core.NewStepTimer(nil)
