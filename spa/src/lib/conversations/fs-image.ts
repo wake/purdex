@@ -4,17 +4,12 @@
 // thumbnails show it, kept while any shows it and for a few more after (an LRU of unused ones), then revoked.
 import { useEffect, useReducer } from 'react'
 import { createDaemonBackendForHost } from '../fs-backend-daemon'
+import { isReadablePath, sniffImageMime } from './image-sniff'
 
 export const FS_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 const KEEP_UNUSED = 24
 
 export type FsImage = { status: 'idle' } | { status: 'loading' } | { status: 'ready'; url: string } | { status: 'failed' }
-
-const MIME: Record<string, string> = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
-  avif: 'image/avif', tif: 'image/tiff', tiff: 'image/tiff', heic: 'image/heic', heif: 'image/heif', svg: 'image/svg+xml',
-}
-const mimeOf = (path: string): string => MIME[path.slice(path.lastIndexOf('.') + 1).toLowerCase()] ?? 'application/octet-stream'
 
 interface Entry { snap: FsImage; refs: number; subs: Set<() => void> }
 const entries = new Map<string, Entry>()
@@ -33,12 +28,16 @@ function drop(key: string): void {
 }
 
 async function load(key: string, e: Entry, hostId: string, path: string): Promise<void> {
+  // a device, process or system node is never read
+  if (!isReadablePath(path)) return set(e, { status: 'failed' })
   set(e, { status: 'loading' })
   try {
     const bytes = await createDaemonBackendForHost(hostId).read(path)
     if (entries.get(key) !== e) return // dropped while the read was on its way
-    if (bytes.byteLength > FS_IMAGE_MAX_BYTES || typeof URL.createObjectURL !== 'function') return set(e, { status: 'failed' })
-    set(e, { status: 'ready', url: URL.createObjectURL(new Blob([bytes as BlobPart], { type: mimeOf(path) })) })
+    // shown only when the bytes ARE an image, typed by what they are (not by the name)
+    const mime = sniffImageMime(bytes)
+    if (bytes.byteLength > FS_IMAGE_MAX_BYTES || !mime || typeof URL.createObjectURL !== 'function') return set(e, { status: 'failed' })
+    set(e, { status: 'ready', url: URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime })) })
   } catch {
     if (entries.get(key) === e) set(e, { status: 'failed' })
   }
@@ -47,16 +46,13 @@ async function load(key: string, e: Entry, hostId: string, path: string): Promis
 /** Takes a share of the image at (host, path), starting the read if nobody has; `onChange` hears every change. Returns the release. */
 function acquire(hostId: string, path: string, onChange: () => void): () => void {
   const key = keyOf(hostId, path)
-  let e = entries.get(key)
-  if (!e) {
-    e = { snap: IDLE, refs: 0, subs: new Set() }
-    entries.set(key, e)
-    void load(key, e, hostId, path)
-  }
-  const mine = e
+  const fresh = !entries.has(key)
+  const mine = entries.get(key) ?? { snap: IDLE, refs: 0, subs: new Set<() => void>() }
+  entries.set(key, mine)
   mine.refs++
   mine.subs.add(onChange)
   unused = unused.filter((k) => k !== key)
+  if (fresh) void load(key, mine, hostId, path) // after the subscription: even an instant failure is heard
   return () => {
     mine.subs.delete(onChange)
     if (--mine.refs > 0 || entries.get(key) !== mine) return

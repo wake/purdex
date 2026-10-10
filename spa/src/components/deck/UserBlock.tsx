@@ -4,6 +4,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { textOutput, userCaption, userTone, type UserTone } from '../../lib/conversations/deck-format'
 import type { UserItem } from '../../lib/conversations/types'
 import { OutputFold } from './OutputFold'
+import { OWN_TEXT_SOURCES } from '../../lib/conversations/image-sniff'
 import { UserText } from './UserText'
 
 // Three tones (c9d9c7-52 pt 4/7): the person's words are the loudest — an accent frame on a firmer tint; a peer's message is a teal frame on a faint
@@ -38,7 +39,7 @@ export function UserBlock({ item }: { item: UserItem }) {
     <div data-testid="deck-user" data-source={item.source} data-tone={tone} className={`${c.box} px-3 py-2`}>
       <div data-testid="deck-user-caption" className={`mb-1 text-xs font-medium ${c.caption}`}>{caption}</div>
       <div className={`whitespace-pre-wrap break-words text-sm ${c.body} ${bash ? 'font-mono' : 'tracking-[1px]'}`}>
-        {bash ? `! ${item.text}` : <UserText text={item.text} />}
+        {bash ? `! ${item.text}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : item.text}
         {item.truncated && <span className="text-text-muted">…</span>}
       </div>
       {item.images && item.images.length > 0 && (

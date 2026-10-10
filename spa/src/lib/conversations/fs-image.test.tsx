@@ -1,6 +1,7 @@
 // The host's pictures behind thumbnails: one read per (host, path), pinned to the host, 10 MB at most, revoked when let go.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, render, renderHook } from '@testing-library/react'
+import { PNG_BYTES, JPEG_BYTES } from './image-fixtures'
 import { clearFsImages, FS_IMAGE_MAX_BYTES, useFsImage } from './fs-image'
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), backend: vi.fn() }))
@@ -13,7 +14,7 @@ beforeEach(() => {
   revoked = []; n = 0
   URL.createObjectURL = vi.fn(() => `blob:fs/${++n}`)
   URL.revokeObjectURL = vi.fn((u: string) => { revoked.push(u) })
-  mocks.read.mockReset().mockResolvedValue(new Uint8Array([1]))
+  mocks.read.mockReset().mockResolvedValue(PNG_BYTES)
   mocks.backend.mockReset()
 })
 afterEach(() => { cleanup(); clearFsImages() })
@@ -22,6 +23,7 @@ describe('useFsImage', () => {
   it('reads through the given host only, then is ready with a blob: URL typed by the extension', async () => {
     const blobs: Blob[] = []
     URL.createObjectURL = vi.fn((b: Blob) => { blobs.push(b); return 'blob:fs/x' })
+    mocks.read.mockResolvedValue(JPEG_BYTES)
     const { result } = renderHook(() => useFsImage('host-a', '/up/a.JPG'))
     expect(result.current.status).toBe('loading')
     await flush()
@@ -41,7 +43,7 @@ describe('useFsImage', () => {
   it('fails (no throw) when the read fails or the body is over 10 MB', async () => {
     mocks.read.mockRejectedValueOnce(new Error('413'))
     const a = renderHook(() => useFsImage('h', '/up/a.png'))
-    mocks.read.mockResolvedValueOnce(new Uint8Array(FS_IMAGE_MAX_BYTES + 1))
+    mocks.read.mockResolvedValueOnce(Object.assign(new Uint8Array(FS_IMAGE_MAX_BYTES + 1), { 0: 0x89, 1: 0x50, 2: 0x4e, 3: 0x47, 4: 0x0d, 5: 0x0a, 6: 0x1a, 7: 0x0a }))
     const b = renderHook(() => useFsImage('h', '/up/b.png'))
     await flush()
     expect(a.result.current.status).toBe('failed')

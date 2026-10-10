@@ -13,6 +13,7 @@ import { forgetFolds } from '../../lib/conversations/fold-memory'
 import { clearAllPanels } from '../../lib/conversations/panel-memory'
 import { forgetScrollMemosWithPrefix } from '../../lib/nex/transcript-scroll-memory'
 import type { ConversationItem, Turn, UserItem } from '../../lib/conversations/types'
+import { JPEG_BYTES, PNG_BYTES, TEXT_BYTES } from '../../lib/conversations/image-fixtures'
 import type { ConversationEntry } from '../../stores/useConversationStore'
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), backend: vi.fn() }))
@@ -30,7 +31,7 @@ beforeEach(() => {
   let n = 0
   URL.createObjectURL = vi.fn(() => { const u = `blob:sent/${++n}`; made.push(u); return u })
   URL.revokeObjectURL = vi.fn((u: string) => { revoked.push(u) })
-  mocks.read.mockReset().mockResolvedValue(new Uint8Array([1, 2, 3]))
+  mocks.read.mockReset().mockResolvedValue(PNG_BYTES)
   mocks.backend.mockReset()
 })
 afterEach(() => { vi.useRealTimers(); cleanup(); clearFsImages(); clearAllPanels() })
@@ -84,7 +85,7 @@ describe('the deck block', () => {
     mocks.read.mockReturnValueOnce(new Promise((res) => { done = res }))
     render(withHost(<UserBlock item={user(MSG)} />))
     expect(screen.getByTestId('attachment-skeleton')).toBeInTheDocument()
-    done(new Uint8Array([1]))
+    done(PNG_BYTES)
     await flush()
     expect(screen.queryByTestId('attachment-skeleton')).toBeNull()
   })
@@ -152,5 +153,62 @@ describe('in the whole views, whose host is the pane\'s', () => {
     await flush()
     expect(within(screen.getByTestId('chat-user-bubble')).getByRole('img', { name: 'a.png' })).toBeInTheDocument()
     expect(mocks.backend).toHaveBeenCalledWith('host-9')
+  })
+})
+
+describe('only the person\'s own messages are read for pictures', () => {
+  const MARK = '[Image: source: /up/dev001/a.png]'
+  it.each(['peer', 'background', 'task', 'schedule', 'scheduled', 'bash', 'brand-new-source'])('a %s message is plain text and reads nothing', async (source) => {
+    const { container } = render(withHost(<UserBlock item={user(`x ${MARK}`, { source })} />))
+    await flush()
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('sent-image-tag')).toBeNull()
+    if (source !== 'command_output') expect(container.textContent).toContain(MARK)
+  })
+  it.each(['user', 'queued'])('a %s message is parsed', async (source) => {
+    render(withHost(<UserBlock item={user(`x ${MARK}`, { source })} />))
+    await flush()
+    expect(mocks.read).toHaveBeenCalledTimes(1)
+  })
+  it('the chat bubble parses the person\'s only; an unknown source and the block-drawn ones stay plain', async () => {
+    render(withHost(<><UserBubble item={user(`x ${MARK}`, { id: 'p', source: 'peer' })} /><UserBubble item={user(`y ${MARK}`, { id: 'w', source: 'weird' })} /></>))
+    await flush()
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain(`y ${MARK}`)
+    cleanup()
+    render(withHost(<UserBubble item={user(`z ${MARK}`, { source: 'queued' })} />))
+    await flush()
+    expect(mocks.read).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('what may be read', () => {
+  it.each(['/etc/passwd', '/up/dev001/notes.txt', '/up/dev001/a.png.sh', '/up/dev001/a.svg'])('a path that is not an image file (%s) is plain text and reads nothing', async (p) => {
+    const { container } = render(withHost(<UserBlock item={user(`see [Image: source: ${p}]`)} />))
+    await flush()
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(container.textContent).toContain(`[Image: source: ${p}]`)
+  })
+  it.each(['/dev/zero.png', '/dev/fd/3.png', '/proc/self/mem.png', '/sys/x/y.png'])('%s is never read: icon and name', async (p) => {
+    render(withHost(<UserBlock item={user(`see [Image: source: ${p}]`)} />))
+    await flush()
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(within(screen.getByTestId('sent-image-tag')).getByTestId('attachment-name')).toBeInTheDocument()
+  })
+  it('a body that is not an image (wrong magic bytes) is an icon and the name, with no blob made', async () => {
+    mocks.read.mockResolvedValue(TEXT_BYTES)
+    render(withHost(<UserBlock item={user(MSG)} />))
+    await flush()
+    expect(made).toEqual([])
+    expect(within(screen.getByTestId('sent-image-tag')).queryByRole('img')).toBeNull()
+    expect(within(screen.getByTestId('sent-image-tag')).getByTestId('attachment-name')).toHaveTextContent('a.png')
+  })
+  it('the type of the blob is what the bytes are, not what the extension says', async () => {
+    const blobs: Blob[] = []
+    URL.createObjectURL = vi.fn((b: Blob) => { blobs.push(b); return 'blob:sniffed' })
+    mocks.read.mockResolvedValue(JPEG_BYTES)
+    render(withHost(<UserBlock item={user(MSG)} />)) // named .png
+    await flush()
+    expect(blobs[0].type).toBe('image/jpeg')
   })
 })

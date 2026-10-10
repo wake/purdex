@@ -1,9 +1,11 @@
 // spa/src/components/deck/UserText.tsx — the text of a sent message, with each `[Image: source: <path>]` drawn as a thumbnail tag
 // (v3 pt 5) in place, between the text before and after it. The path itself is not shown. The picture is read from the
-// conversation's host (`POST /api/fs/read`, 10 MB at most); one that cannot be read is an icon and the file name.
+// conversation's host (`POST /api/fs/read`, 10 MB at most); one that cannot be read is an icon and the file name. Only the
+// person's own messages come here (UserBlock / UserBubble decide): a peer's or a task's text can name any path.
 import { useContext } from 'react'
-import { splitImageRefs } from '../../lib/conversations/image-placeholder'
+import { imageMarker, splitImageRefs } from '../../lib/conversations/image-placeholder'
 import { baseName } from '../../lib/conversations/attachment-format'
+import { isImagePath } from '../../lib/conversations/image-sniff'
 import { useFsImage } from '../../lib/conversations/fs-image'
 import { AttachmentThumb } from './AttachmentThumb'
 import { ConversationHostContext } from './conversation-host'
@@ -21,5 +23,6 @@ function SentImageTag({ path }: { path: string }) {
 export function UserText({ text }: { text: string }) {
   const parts = splitImageRefs(text)
   if (!parts.some((p) => p.kind === 'image')) return <>{text}</>
-  return <>{parts.map((p, i) => (p.kind === 'text' ? p.text : <SentImageTag key={i} path={p.path} />))}</>
+  // only a path that names an image file becomes a tag; any other stays the text it was (and is never read)
+  return <>{parts.map((p, i) => (p.kind === 'text' ? p.text : isImagePath(p.path) ? <SentImageTag key={i} path={p.path} /> : imageMarker(p.path)))}</>
 }

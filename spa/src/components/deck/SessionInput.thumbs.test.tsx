@@ -9,6 +9,7 @@ import { clearAllUploads } from '../../lib/conversations/attachment-upload'
 import { clearFsImages } from '../../lib/conversations/fs-image'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
 import { releasePane } from '../../lib/conversations/pane-release'
+import { PNG_BYTES } from '../../lib/conversations/image-fixtures'
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), upload: vi.fn(), read: vi.fn() }))
 vi.mock('../../lib/host-api', () => ({ pinnedHostFetch: mocks.fetch, agentUploadToPath: mocks.upload }))
@@ -263,7 +264,7 @@ describe('a chip with no local file (restored after a reload)', () => {
   }
 
   it('reads the picture from the host (pinned to it) and shows it', async () => {
-    mocks.read.mockResolvedValue(new Uint8Array([1, 2, 3]))
+    mocks.read.mockResolvedValue(PNG_BYTES)
     restore()
     render(ui())
     await flush()

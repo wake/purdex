@@ -1,6 +1,7 @@
 // spa/src/lib/conversations/attachment-memory.ts — the attachments of a session pane's input: the "attached xxx" chips and the
 // text an attachment puts in the draft. Kept outside the component like the draft (the tab-hosted rule: a pane the alive pool
 // does not keep unmounts on a tab switch). Memory only; keyed like the draft (`draftKey`), freed by `pane-release`.
+import { IMAGE_EXT } from './image-sniff'
 
 export interface Attachment {
   id: string
@@ -93,8 +94,6 @@ export function visibleAttachments(draft: string, list: readonly Attachment[]): 
 export const clearAllAttachments = (): void => { for (const list of chips.values()) for (const a of list) revokePreviewUrl(a.previewUrl); chips.clear(); lastSeq.clear(); uploads.clear() }
 
 /* ─── the draft text an attachment stands for ─── */
-
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|heic|heif|tiff?|avif)$/i
 
 export const isImageFile = (f: File): boolean => f.type.startsWith('image/') || IMAGE_EXT.test(f.name)
 
