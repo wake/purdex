@@ -7,15 +7,18 @@ import { imageMarker, splitImageRefs } from '../../lib/conversations/image-place
 import { baseName } from '../../lib/conversations/attachment-format'
 import { isImagePath } from '../../lib/conversations/image-sniff'
 import { useFsImage } from '../../lib/conversations/fs-image'
+import { useInView } from './use-in-view'
 import { AttachmentThumb } from './AttachmentThumb'
 import { ConversationHostContext } from './conversation-host'
 
 function SentImageTag({ path }: { path: string }) {
   const hostId = useContext(ConversationHostContext)
-  const image = useFsImage(hostId ?? '', path, hostId !== null)
+  // read when it comes near the screen, not when the transcript mounts (a long one holds many tags far off screen)
+  const [ref, seen] = useInView<HTMLSpanElement>()
+  const image = useFsImage(hostId ?? '', path, hostId !== null && seen)
   return (
-    <span data-testid="sent-image-tag" className="mx-0.5 inline-block align-middle">
-      <AttachmentThumb name={baseName(path)} image src={image.status === 'ready' ? image.url : null} loading={image.status === 'loading'} />
+    <span ref={ref} data-testid="sent-image-tag" className="mx-0.5 inline-block align-middle">
+      <AttachmentThumb name={baseName(path)} image src={image.status === 'ready' ? image.url : null} loading={image.status === 'loading' || (!seen && hostId !== null)} />
     </span>
   )
 }

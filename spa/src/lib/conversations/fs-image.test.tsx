@@ -7,7 +7,7 @@ import { clearFsImages, FS_IMAGE_MAX_BYTES, useFsImage } from './fs-image'
 const mocks = vi.hoisted(() => ({ read: vi.fn(), backend: vi.fn() }))
 vi.mock('../fs-backend-daemon', () => ({ createDaemonBackendForHost: (h: string) => { mocks.backend(h); return { read: mocks.read } } }))
 
-const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve() })
+const flush = () => act(async () => { for (let i = 0; i < 80; i++) await Promise.resolve() })
 let revoked: string[] = []
 let n = 0
 beforeEach(() => {
@@ -76,6 +76,90 @@ describe('useFsImage', () => {
     for (let i = 0; i < 30; i++) render(<Probe path={`/up/${i}.png`} />).unmount()
     expect(revoked).not.toContain('blob:fs/1')
     keep.unmount()
+  })
+})
+
+describe('a failed read is not kept', () => {
+  it('when its last user lets go it is dropped (not cached), so a later user reads again', async () => {
+    mocks.read.mockRejectedValueOnce(new Error('503'))
+    const first = renderHook(() => useFsImage('h', '/up/a.png'))
+    await flush()
+    expect(first.result.current.status).toBe('failed')
+    first.unmount()
+    const second = renderHook(() => useFsImage('h', '/up/a.png'))
+    await flush()
+    expect(mocks.read).toHaveBeenCalledTimes(2)
+    expect(second.result.current.status).toBe('ready')
+  })
+  it('a failure shared by users stays until the last one lets go', async () => {
+    mocks.read.mockRejectedValueOnce(new Error('503'))
+    const a = renderHook(() => useFsImage('h', '/up/a.png'))
+    const b = renderHook(() => useFsImage('h', '/up/a.png'))
+    await flush()
+    a.unmount()
+    expect(b.result.current.status).toBe('failed')
+    expect(mocks.read).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('reads are limited and cancelled', () => {
+  const pending = () => {
+    const calls: Array<{ path: string; signal: AbortSignal | undefined; resolve: (b: Uint8Array) => void }> = []
+    mocks.read.mockImplementation((path: string, signal?: AbortSignal) => new Promise<Uint8Array>((resolve) => { calls.push({ path, signal, resolve }) }))
+    return calls
+  }
+
+  it('at most 4 run at once; the next starts when one is done', async () => {
+    const calls = pending()
+    for (let i = 0; i < 6; i++) render(<Probe path={`/up/${i}.png`} />)
+    await flush()
+    expect(calls).toHaveLength(4)
+    await act(async () => { calls[0].resolve(PNG_BYTES) })
+    await flush()
+    expect(calls).toHaveLength(5)
+    await act(async () => { calls[1].resolve(PNG_BYTES); calls[2].resolve(PNG_BYTES) })
+    await flush()
+    expect(calls).toHaveLength(6)
+  })
+
+  it('a read still running when its last user goes is aborted', async () => {
+    const calls = pending()
+    const v = render(<Probe path="/up/a.png" />)
+    await flush()
+    expect(calls[0].signal?.aborted).toBe(false)
+    v.unmount()
+    expect(calls[0].signal?.aborted).toBe(true)
+  })
+
+  it('a read still waiting for a turn is never started when its last user goes, and the turn goes to the next', async () => {
+    const calls = pending()
+    const views = Array.from({ length: 6 }, (_, i) => render(<Probe path={`/up/${i}.png`} />))
+    await flush()
+    views[4].unmount() // waiting
+    await act(async () => { calls[0].resolve(PNG_BYTES) })
+    await flush()
+    expect(calls.map((c) => c.path)).toEqual(['/up/0.png', '/up/1.png', '/up/2.png', '/up/3.png', '/up/5.png'])
+  })
+
+  it('an aborted read that settles later makes nothing (no blob, no state)', async () => {
+    const calls = pending()
+    const v = render(<Probe path="/up/a.png" />)
+    await flush()
+    v.unmount()
+    await act(async () => { calls[0].resolve(PNG_BYTES) })
+    await flush()
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('a slot freed by an aborted read is used by the next', async () => {
+    const calls = pending()
+    const views = Array.from({ length: 5 }, (_, i) => render(<Probe path={`/up/${i}.png`} />))
+    await flush()
+    expect(calls).toHaveLength(4)
+    views[0].unmount()
+    await act(async () => { calls[0].resolve(PNG_BYTES) })
+    await flush()
+    expect(calls).toHaveLength(5)
   })
 })
 

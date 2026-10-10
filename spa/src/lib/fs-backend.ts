@@ -5,7 +5,8 @@ export interface FsBackend {
   label: string
   available(): boolean
 
-  read(path: string): Promise<Uint8Array>
+  /** `signal` cancels the read where the backend can (the daemon's fetch does); a backend that cannot ignores it. */
+  read(path: string, signal?: AbortSignal): Promise<Uint8Array>
   write(path: string, content: Uint8Array): Promise<void>
   stat(path: string): Promise<FileStat>
   list(path: string): Promise<FileEntry[]>

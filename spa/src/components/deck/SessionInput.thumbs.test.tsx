@@ -268,7 +268,7 @@ describe('a chip with no local file (restored after a reload)', () => {
     restore()
     render(ui())
     await flush()
-    expect(mocks.read).toHaveBeenCalledWith('/up/dev001/old.png')
+    expect(mocks.read).toHaveBeenCalledWith('/up/dev001/old.png', expect.any(AbortSignal))
     expect(screen.getByRole('img', { name: 'old.png' })).toHaveAttribute('src', made[0])
   })
 

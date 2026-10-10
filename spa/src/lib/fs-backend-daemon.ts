@@ -17,11 +17,12 @@ export class DaemonBackend implements FsBackend {
     return !!this.baseUrl
   }
 
-  private async post(endpoint: string, body: unknown): Promise<Response> {
+  private async post(endpoint: string, body: unknown, signal?: AbortSignal): Promise<Response> {
     const res = await fetch(`${this.baseUrl}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...this.getHeaders() },
       body: JSON.stringify(body),
+      signal,
     })
     if (!res.ok) {
       const text = await res.text().catch(() => `HTTP ${res.status}`)
@@ -30,8 +31,8 @@ export class DaemonBackend implements FsBackend {
     return res
   }
 
-  async read(path: string): Promise<Uint8Array> {
-    const res = await this.post('/api/fs/read', { path })
+  async read(path: string, signal?: AbortSignal): Promise<Uint8Array> {
+    const res = await this.post('/api/fs/read', { path }, signal)
     const buf = await res.arrayBuffer()
     return new Uint8Array(buf)
   }
@@ -109,7 +110,7 @@ export function createDaemonBackendForHost(hostId: string): FsBackend {
     id: 'daemon',
     label: 'Remote Host',
     available: () => !!useHostStore.getState().hosts[hostId],
-    read: (path) => withDaemon((daemon) => daemon.read(path)),
+    read: (path, signal) => withDaemon((daemon) => daemon.read(path, signal)),
     write: (path, content) => withDaemon((daemon) => daemon.write(path, content)),
     stat: (path) => withDaemon((daemon) => daemon.stat(path)),
     list: (path) => withDaemon((daemon) => daemon.list(path)),

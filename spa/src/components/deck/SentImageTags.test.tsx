@@ -47,7 +47,7 @@ describe('the deck block', () => {
     expect(kinds).toEqual(['t:before ', 'sent-image-tag', 't: after'])
     expect(within(body).getByRole('img', { name: 'a.png' })).toHaveAttribute('src', made[0])
     expect(mocks.backend).toHaveBeenCalledWith('h')
-    expect(mocks.read).toHaveBeenCalledWith('/up/dev001/a.png')
+    expect(mocks.read).toHaveBeenCalledWith('/up/dev001/a.png', expect.any(AbortSignal))
   })
 
   it('several tags and text between them keep their order', async () => {
@@ -210,5 +210,42 @@ describe('what may be read', () => {
     render(withHost(<UserBlock item={user(MSG)} />)) // named .png
     await flush()
     expect(blobs[0].type).toBe('image/jpeg')
+  })
+})
+
+describe('a tag is read when it comes into view, not before', () => {
+  type Obs = { cb: (e: Array<{ isIntersecting: boolean }>) => void; target?: Element; disconnected: boolean }
+  let observers: Obs[] = []
+  const real = globalThis.IntersectionObserver
+  beforeEach(() => {
+    observers = []
+    globalThis.IntersectionObserver = class {
+      o: Obs
+      constructor(cb: Obs['cb']) { this.o = { cb, disconnected: false }; observers.push(this.o) }
+      observe(t: Element) { this.o.target = t }
+      unobserve() {}
+      disconnect() { this.o.disconnected = true }
+      takeRecords() { return [] }
+    } as unknown as typeof IntersectionObserver
+  })
+  afterEach(() => { globalThis.IntersectionObserver = real })
+
+  it('nothing is read while the tag is off screen; it is read once it intersects', async () => {
+    render(withHost(<UserBlock item={user(MSG)} />))
+    await flush()
+    expect(mocks.read).not.toHaveBeenCalled()
+    expect(screen.getByTestId('attachment-skeleton')).toBeInTheDocument()
+    act(() => { observers[0].cb([{ isIntersecting: true }]) })
+    await flush()
+    expect(mocks.read).toHaveBeenCalledTimes(1)
+    expect(observers[0].disconnected).toBe(true)
+  })
+
+  it('a tag that goes away before it was seen never reads', async () => {
+    const v = render(withHost(<UserBlock item={user(MSG)} />))
+    v.unmount()
+    await flush()
+    expect(observers[0].disconnected).toBe(true)
+    expect(mocks.read).not.toHaveBeenCalled()
   })
 })
