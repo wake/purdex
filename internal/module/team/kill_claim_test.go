@@ -209,32 +209,207 @@ func TestKillClaim_AKillingMemberIsStillAMemberForTheRoleGates(t *testing.T) {
 }
 
 // Crash between the claim and the end: at the next boot a killing row whose session the registry still lists goes back to
-// active (the lead kills again — nothing is signalled at boot, a pid read then may be stale); one it no longer lists is gone.
-func TestKillClaim_BootGivesBackOrEndsAKillingClaim(t *testing.T) {
+// active (the lead kills again — nothing is signalled at boot, a pid read then may be stale). One it does NOT list is left for
+// the sweeper: at boot a live session may not have registered again yet (codex R1 P1), which is why every other clean-up waits
+// out the boot grace.
+func TestKillClaim_BootGivesBackWhatIsListedAndLeavesTheRestToTheSweeper(t *testing.T) {
 	f := newFixture(t)
-	live := f.adoptedMember(t) // sid-10, listed by the registry
+	live := f.adoptedMember(t)
 	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing' WHERE spawn_op = ?`, live); err != nil {
 		t.Fatal(err)
 	}
 	f2, root := newTeamFixture(t, 4)
-	dead := f2.member(1, root, "sid-m1", "w-one", nil)
-	if _, err := f2.m.store.db.Exec(`UPDATE team_members SET state = 'killing' WHERE spawn_op = ?`, dead.SpawnOp); err != nil {
+	notYet := f2.member(1, root, "sid-m1", "w-one", nil)
+	if _, err := f2.m.store.db.Exec(`UPDATE team_members SET state = 'killing' WHERE spawn_op = ?`, notYet.SpawnOp); err != nil {
 		t.Fatal(err)
 	}
 	f2.so.mu.Lock()
-	delete(f2.so.members, "sid-m1") // the registry no longer lists it
+	delete(f2.so.members, "sid-m1") // not registered again (yet)
 	f2.so.mu.Unlock()
 
 	f.m.recoverKillingMembers()
 	f2.m.recoverKillingMembers()
 	if got := f.killRowState(live); got != team.MemberActive {
-		t.Errorf("a killing row whose session is still listed = %s, want active", got)
+		t.Errorf("a killing row whose session is listed = %s, want active", got)
 	}
-	if got := f2.killRowState(dead.SpawnOp); got != team.MemberGone {
-		t.Errorf("a killing row whose session is gone = %s, want gone", got)
+	if got := f2.killRowState(notYet.SpawnOp); got != team.MemberKilling {
+		t.Errorf("a killing row whose session is not listed at boot = %s, want it left for the sweeper (never gone on the boot's say-so)", got)
 	}
 	f.m.recoverKillingMembers() // idempotent
 	if got := f.killRowState(live); got != team.MemberActive {
 		t.Errorf("after a second pass = %s", got)
+	}
+}
+
+// The sweeper settles a claim that lost its end (codex attacker high 1: a store error after the signal, no restart): once it is
+// old enough and the boot grace is over, a process the table says is gone → gone; one still there → active again.
+// Mutation gate: no settlement → both stay killing for ever → red.
+func TestKillClaim_TheSweeperSettlesAStuckClaim(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	sid := memberBySpawn(t, f.m.store, key).SessionID
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing', updated_at = ? WHERE spawn_op = ?`, f.m.now(), key); err != nil {
+		t.Fatal(err)
+	}
+	f.m.bootAt = f.m.now() - (team.BootGraceS+1)*1000 // the boot grace is over
+	f.m.settleStuckKillingMembers()
+	if got := f.killRowState(key); got != team.MemberKilling {
+		t.Fatalf("a claim younger than %s was settled: %s", killClaimStuckAfter, got)
+	}
+	f.clock.Add(killClaimStuckAfter.Milliseconds() + 1)
+	f.m.settleStuckKillingMembers() // the process is still there
+	if got := f.killRowState(key); got != team.MemberActive {
+		t.Fatalf("a stuck claim whose process is alive = %s, want active again", got)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing', updated_at = ? WHERE spawn_op = ?`, f.m.now()-killClaimStuckAfter.Milliseconds()-1, key); err != nil {
+		t.Fatal(err)
+	}
+	f.origins.mu.Lock()
+	if f.origins.dead == nil {
+		f.origins.dead = map[string]bool{}
+	}
+	f.origins.dead[sid] = true
+	f.origins.mu.Unlock()
+	f.m.settleStuckKillingMembers() // the process is gone
+	if got := f.killRowState(key); got != team.MemberGone {
+		t.Fatalf("a stuck claim whose process is gone = %s, want gone", got)
+	}
+}
+
+func TestKillClaim_TheSweeperWaitsOutTheBootGrace(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing', updated_at = 1 WHERE spawn_op = ?`, key); err != nil {
+		t.Fatal(err)
+	}
+	f.m.bootAt = f.m.now() // just booted
+	f.m.settleStuckKillingMembers()
+	if got := f.killRowState(key); got != team.MemberKilling {
+		t.Fatalf("a claim settled within the boot grace: %s", got)
+	}
+}
+
+// codex attacker high 1, end to end: the signal went out and the terminal write failed — the row must not stay killing until a
+// restart. Here the mark fails; the sweeper settles it with no restart.
+func TestKillClaim_ATerminalWriteThatFailsConvergesWithoutARestart(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	f.m.killProcess = func(int) error { return nil }
+	f.m.beforeKillMark = func(memberRow) { // the store breaks right after the signal
+		_, _ = f.m.store.db.Exec(`CREATE TRIGGER fail_mark BEFORE UPDATE ON team_members WHEN NEW.state IN ('killed', 'gone') BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`)
+	}
+	code, _, _, _ := f.killTarget("_def456")
+	f.m.beforeKillMark = nil
+	_, _ = f.m.store.db.Exec(`DROP TRIGGER fail_mark`)
+	if code != http.StatusInternalServerError {
+		t.Fatalf("kill = %d, want 500 (the mark failed)", code)
+	}
+	if got := f.killRowState(key); got != team.MemberKilling {
+		t.Fatalf("row = %s, want killing (the failure is what this test makes)", got)
+	}
+	f.m.bootAt = f.m.now() - (team.BootGraceS+1)*1000
+	f.clock.Add(killClaimStuckAfter.Milliseconds() + 1)
+	f.m.settleStuckKillingMembers()
+	if got := f.killRowState(key); got == team.MemberKilling {
+		t.Fatal("the row stayed killing although the daemon never restarted")
+	}
+}
+
+// codex R1 P2: an adopted notice not yet sent survives a claim that is given back.
+func TestKillClaim_AnUnsentAdoptNoticeSurvivesAGivenBackClaim(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET notice_pending = ?, notice_since = 5 WHERE spawn_op = ?`, team.NoticeAdopted, key); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := f.noticeOf(t, key)
+	if before != team.NoticeAdopted {
+		t.Fatalf("test setup: the notice is %q, want it pending", before)
+	}
+	f.m.killProcess = func(int) error {
+		// the notice worker's housekeeping runs while the claim is held (the row is killing), then the signal fails
+		if _, err := f.m.store.DropStaleAdoptNotices(); err != nil {
+			t.Error(err)
+		}
+		return syscall.EPERM
+	}
+	f.killTarget("_def456") // claimed, failed, given back
+	if got := f.killRowState(key); got != team.MemberActive {
+		t.Fatalf("row = %s, want active again", got)
+	}
+	if after, _ := f.noticeOf(t, key); after != before {
+		t.Fatalf("the adopted notice %q became %q across a given-back claim", before, after)
+	}
+}
+
+// codex attacker high 2: while a row is killing the unique index on active rows does not cover it, so the paths that put a
+// session in a seat refuse a session that is killing. And if one slips through anyway, the give-back ends the row gone instead of
+// leaving it killing.
+func TestKillClaim_ASessionThatIsKillingIsNotAdoptedOrRegisteredAgain(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	sid := memberBySpawn(t, f.m.store, key).SessionID
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing' WHERE spawn_op = ?`, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, held, err := f.m.store.LiveMemberSeat(sid); err != nil || !held {
+		t.Fatalf("LiveMemberSeat = %v %v, want the seat held while killing", held, err)
+	}
+	var one int
+	err := f.m.store.db.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state IN ('active', 'killing')`, sid).Scan(&one)
+	if err != nil {
+		t.Fatalf("the conflict check does not see a killing row: %v", err)
+	}
+}
+
+func TestKillClaim_AGiveBackThatMeetsTheUniqueIndexEndsTheRowGone(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	mr := memberBySpawn(t, f.m.store, key)
+	if claimed, err := f.m.store.ClaimMemberKilling(mr.SpawnOp, mr.SessionID, 5); err != nil || !claimed {
+		t.Fatalf("claim = %v %v", claimed, err)
+	}
+	// a newer membership of the same session slips in while the row is killing (the index covers active rows only)
+	other := newMember("dup1", mr.TeamID, mr.SessionID, mr.Ref, 6)
+	if err := f.m.store.InsertMember(other); err != nil {
+		t.Fatalf("the competing membership could not be inserted: %v", err)
+	}
+	given, err := f.m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, 7)
+	if err != nil || given {
+		t.Fatalf("give back = %v %v, want not given and no error", given, err)
+	}
+	if got := f.killRowState(key); got != team.MemberGone {
+		t.Fatalf("row = %s, want gone (not stuck killing)", got)
+	}
+}
+
+// The sweeper's tick runs the settlement (the unit tests above call it directly). Mutation gate: drop it from tick → red.
+func TestKillClaim_TheSweeperTickSettlesAStuckClaim(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	f.m.bootAt = f.m.now() - (team.BootGraceS+1)*1000
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing', updated_at = ? WHERE spawn_op = ?`, f.m.now()-killClaimStuckAfter.Milliseconds()-1, key); err != nil {
+		t.Fatal(err)
+	}
+	f.m.tickN = livenessEvery - 1 // the next tick is a liveness tick
+	f.m.tick()
+	if got := f.killRowState(key); got != team.MemberActive {
+		t.Fatalf("after a liveness tick the stuck claim is %s, want active again", got)
+	}
+}
+
+// codex attacker high 2, the facts route: a registered fact whose session is killing here is a session_conflict (the op fails),
+// as for an active one. Mutation gate: look at active rows only → red.
+func TestKillClaim_ARegisteredFactForAKillingSessionFailsTheOp(t *testing.T) {
+	f := factFixture(t)
+	f.remoteRow("abc12", "hostN", "mkx", string(team.MemberKilling)) // session "sid-abc12", a kill in flight
+	f.remoteSpawn("op1", "lead:1", "")
+	fact := registeredFact(factUUID1, "op1")
+	fact.MemberSession = "sid-abc12"
+	if code, body := f.postFact(leadPrincipal(), fact); code != 200 {
+		t.Fatalf("%d %s", code, body)
+	}
+	if st, reason := f.spawnState("op1"); st != "failed" || reason != "session_conflict" {
+		t.Fatalf("op = %s{%s}, want failed{session_conflict}", st, reason)
 	}
 }

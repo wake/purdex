@@ -323,7 +323,7 @@ func (m *Module) localAdoptTarget(w http.ResponseWriter, target adoptTarget, ori
 		m.writeErr(w, http.StatusConflict, team.ErrAdoptTargetIsLead, "the target leads a live team", nil)
 		return team.Origin{}, false
 	}
-	if _, t, isMember, err := m.store.ActiveMemberInLiveTeam(tgt.SessionID); err != nil {
+	if t, isMember, err := m.store.LiveMemberSeat(tgt.SessionID); err != nil {
 		failStore(err)
 		return team.Origin{}, false
 	} else if isMember {

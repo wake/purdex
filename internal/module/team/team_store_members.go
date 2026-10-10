@@ -6,7 +6,9 @@ package teammod
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -158,12 +160,19 @@ func (s *Store) ClaimMemberKilling(spawnOp, sessionID string, at int64) (bool, e
 }
 
 // GiveBackMemberKilling returns a claim whose signal could not be sent: killing → active. given says whether this call did
-// (false: the row is no longer killing — a boot, a sweeper or another path ended it).
+// (false: the row is no longer killing — a boot, the sweeper or another path ended it). While a row is killing the unique
+// index on active rows does not cover it, so a competing membership could have taken the session meanwhile (every creation
+// path refuses a session that is killing, but the index is the last word): the give-back then violates it, and the row ends
+// gone instead of staying killing for good — the session belongs to the newer membership.
 func (s *Store) GiveBackMemberKilling(spawnOp, sessionID string, at int64) (bool, error) {
 	loc, locArgs := s.local("host_id")
 	res, err := s.db.Exec(`UPDATE team_members SET state = 'active', updated_at = ?
 		WHERE spawn_op = ? AND session_id = ? AND state = 'killing' AND `+loc,
 		append([]any{at, spawnOp, sessionID}, locArgs...)...)
+	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		_, gerr := s.MarkMemberGone(spawnOp, sessionID, at)
+		return false, gerr
+	}
 	return oneRow(res, err, "give back the kill claim of member "+spawnOp)
 }
 
@@ -220,4 +229,34 @@ func (s *Store) LocalKillingMembers() ([]memberRow, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// StaleKillingMembers lists the local rows of live teams that have been killing since before cutoff (ms): a kill claims and ends
+// within moments, so one this old lost its end — a store error after the signal, or a daemon that died — and the sweeper settles it.
+func (s *Store) StaleKillingMembers(cutoff int64) ([]memberRow, error) {
+	return s.queryMembers("stale killing members", `SELECT `+qualify("m", memberCols+", "+memberUsageCols)+`
+		FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.state = 'killing' AND m.updated_at < ? AND t.ended_at = 0 AND (? = '' OR m.host_id = ?) ORDER BY m.created_at, m.spawn_op`,
+		cutoff, s.localHostID, s.localHostID)
+}
+
+// LiveMemberSeat is the live team a local session holds a seat in — active, or killing (its kill may still be given back) —
+// for the checks that must refuse to put the session in a second one.
+func (s *Store) LiveMemberSeat(sessionID string) (team.Team, bool, error) {
+	var t team.Team
+	var grantJSON string
+	loc, locArgs := s.local("m.host_id")
+	err := s.db.QueryRow(`SELECT `+qualify("t", teamCols)+` FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.session_id = ? AND m.state IN ('active', 'killing') AND t.ended_at = 0 AND `+loc+` LIMIT 1`,
+		append([]any{sessionID}, locArgs...)...).Scan(teamDest(&t, &grantJSON)...)
+	if errors.Is(err, sql.ErrNoRows) {
+		return team.Team{}, false, nil
+	}
+	if err == nil {
+		err = decodeTeamGrant(&t, grantJSON)
+	}
+	if err != nil {
+		return team.Team{}, false, fmt.Errorf("live member seat of %s: %w", sessionID, err)
+	}
+	return t, true, nil
 }
