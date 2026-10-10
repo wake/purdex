@@ -1,7 +1,7 @@
 // spa/src/components/team/TeamPanel.tsx — the team view inside the panel area (team spec §4.4; ported from the prototype
 // at f61748aa).
 //
-// Full: a sidebar-like list, lead on top and fixed, members draggable; each person takes two lines.
+// Full: a sidebar-like list, lead on top and fixed, members draggable; each person takes one line (a second line only when the seat has a workbook: its task).
 // One-line: one cell per person (bot + light, context ring around the model shape) plus the team name; the cells wrap to a
 // second row when the team is big. Both take the width of the area they sit in; the area (TeamPanelArea) owns the frame.
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
@@ -11,10 +11,10 @@ import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretUp } from '@phosphor-i
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
-import { ContextRing, ModelIcon } from './ModelIcon'
+import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
-import { ctxLeftText, ctxTip, useSeatReading } from './team-readings'
+import { ctxTip, useSeatReading } from './team-readings'
 import { useMemberDrag } from './useMemberDrag'
 import { useCellCapacity } from './useCellCapacity'
 import { TeamEditPopover } from './TeamEditPopover'
@@ -182,11 +182,13 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
-  const ctxText = ctxLeftText(r.ctx)
   const { remember, restore } = useReturnFocus()
   const transition = transitionOf(seat)
   const away = notInApp(seat)
   const noAnswer = r.unavailable === true ? t('team.panel.context_unavailable') : undefined
+  // The row's tooltip: where the seat cannot be reached, then model · effort · context left (a missing value is a dash, never 0).
+  const readingTip = noAnswer ?? `${modelText} · ${r.effort ?? '—'} · ${ctxTip(r.ctx, t)}`
+  const rowTip = away ? `${t('team.seat_not_in_app')}\n${readingTip}` : readingTip
   const open = () => onOpen(seat.sessionId) // a seat on a host this Mac lacks toasts the reason (openTeamSeat)
   return (
     <div
@@ -197,7 +199,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
       data-role={seat.role}
       data-active={String(isActive)}
       data-seat-state={seat.state}
-      title={away ? t('team.seat_not_in_app') : undefined}
+      title={rowTip}
       onMouseDown={drag ? remember : keepFocus}
       onMouseUp={drag ? restore : undefined}
       onClick={() => { restore(); open() }}
@@ -226,17 +228,9 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
           <span className="text-[9.5px] px-1 rounded border flex-shrink-0 text-text-primary" style={{ borderColor: color }}>{t('team.panel.lead')}</span>
         )}
         {seat.tabId === null && <span className="text-[9.5px] text-text-secondary flex-shrink-0">{t('team.panel.unopened')}</span>}
-      </div>
-      {/* Line 2: model icon + name, effort, context ring + percent; a missing value is a dash, never 0 */}
-      <div className="flex items-center gap-2 pl-[26px] mt-1.5 text-[11px] leading-[16px] text-text-secondary min-w-0">
-        <span className="flex items-center gap-1 min-w-0">
-          <ModelIcon model={r.model} size={10} />
-          <span data-testid="team-panel-model" className="truncate" title={noAnswer ?? r.modelRaw}>{noAnswer ? '—' : modelText}</span>
-        </span>
-        <span data-testid="team-panel-effort" className="truncate">{r.effort ?? '—'}</span>
-        <span className="ml-auto flex items-center gap-1 flex-shrink-0 text-text-primary" title={noAnswer ?? ctxTip(r.ctx, t)}>
-          <ContextRing pct={r.ctx} model={r.model} size={16} />
-          <span data-testid="team-panel-ctx" className="tabular-nums text-text-secondary">{ctxText}</span>
+        {/* The ring is the right end of line 1: model shape inside, no number (model / effort / context left ride in the row's tooltip) */}
+        <span data-testid="team-panel-ring" className="flex items-center flex-shrink-0 text-text-primary">
+          <ContextRing pct={noAnswer ? undefined : r.ctx} model={noAnswer ? undefined : r.model} size={16} />
         </span>
       </div>
     </div>

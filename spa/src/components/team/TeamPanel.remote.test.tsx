@@ -119,7 +119,7 @@ describe('daemon id mapping is the only identity', () => {
       scene({ mapped })
       mount()
       expect(within(row('R')).getByTestId('seat-icon')).toHaveAttribute('data-host', '')
-      expect(row('R')).toHaveAttribute('title', ZH.notInApp)
+      expect(row('R').title.split('\n')[0]).toBe(ZH.notInApp)
     }
     cleanup(); resetTeamStores()
     scene({ mapped: 'none' })
@@ -130,33 +130,32 @@ describe('daemon id mapping is the only identity', () => {
     })
     mount()
     expect(within(row('R')).getByTestId('seat-icon')).toHaveAttribute('data-host', '')
-    expect(row('R')).toHaveAttribute('title', ZH.notInApp)
+    expect(row('R').title.split('\n')[0]).toBe(ZH.notInApp)
   })
 
   it('a verified host maps: no "not in App" tooltip', () => {
     scene()
     mount()
-    expect(row('R')).not.toHaveAttribute('title')
+    expect(row('R').title).not.toContain(ZH.notInApp)
   })
 })
 
 describe('context_unavailable', () => {
   const seedReadings = { model: 'claude-sonnet-5-5', effort: 'low', context: { used_percentage: 42, window: 1000, at: 1 } }
 
-  it('model and context read "—" with the tooltip; a row that answered shows its numbers', () => {
+  it('the row says the host did not answer, and its ring is blank; a row that answered shows its numbers', () => {
     scene({ extra: { ...seedReadings, context_unavailable: true } })
     mount()
-    expect(within(row('R')).getByTestId('team-panel-model')).toHaveTextContent('—')
-    expect(within(row('R')).getByTestId('team-panel-ctx')).toHaveTextContent('—')
-    expect(within(row('R')).getByTestId('team-panel-model')).toHaveAttribute('title', ZH.noAnswer)
-    expect(within(row('R')).getByTestId('team-panel-ctx').parentElement).toHaveAttribute('title', ZH.noAnswer)
+    expect(row('R')).toHaveAttribute('title', ZH.noAnswer)
+    expect(within(row('R')).queryByTestId('context-ring-arc')).toBeNull()
+    expect(within(row('R')).getByTestId('model-icon-unknown')).toBeTruthy()
   })
 
   it('without the flag the same readings are drawn', () => {
     scene({ extra: seedReadings })
     mount()
-    expect(within(row('R')).getByTestId('team-panel-ctx')).toHaveTextContent('58%')
-    expect(within(row('R')).getByTestId('team-panel-model')).not.toHaveTextContent('—')
+    expect(row('R')).toHaveAttribute('title', 'Sonnet · low · context 剩 58%')
+    expect(within(row('R')).getByTestId('model-icon-sonnet')).toBeTruthy()
   })
 })
 
