@@ -490,7 +490,12 @@ func (m *Module) closedRowReport(a team.Approval, at int64) (RelayReport, error)
 		// A person's manual relay of a LOCAL member goes on (MR-1): the ROW's payload says so, as at the approve.
 		var sp team.SelfRelayPayload
 		manual := json.Unmarshal(a.Payload, &sp) == nil && sp.Manual
-		if !(manual && sr == sessionRoleMemberLocal) {
+		// A member whose kill started after the card opened is cancelled too: the cleared moves active rows only.
+		killing, err := m.store.IsKillingMember(a.Origin.SessionID)
+		if err != nil {
+			return rep, err
+		}
+		if !(manual && sr == sessionRoleMemberLocal) || killing {
 			rep.State, rep.Reason = team.RelayCancelled, team.ErrMemberRelayIsLeads
 		}
 	}

@@ -338,7 +338,12 @@ func selfRelayMemberIn(tx *sql.Tx, rowID, sessionID string) (member, cancel bool
 	}
 	var sp team.SelfRelayPayload
 	manual := json.Unmarshal([]byte(raw), &sp) == nil && sp.Manual
-	return true, !(manual && role == sessionRoleMemberLocal), nil
+	// A member whose kill started after the card opened is cancelled too: the cleared moves active rows only.
+	var killing int
+	if err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state = 'killing'`, sessionID).Scan(&killing); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return true, false, err
+	}
+	return true, !(manual && role == sessionRoleMemberLocal) || killing == 1, nil
 }
 
 // isLiveMemberIn reports, on q (a transaction's read under its write lock),
