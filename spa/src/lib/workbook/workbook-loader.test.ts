@@ -40,7 +40,7 @@ beforeEach(() => {
 })
 afterEach(() => { stops.forEach((f) => f()); stops = [] })
 
-const verified = (id: string, daemonId: string, ip: string) => ({ endpoint: `${ip}:7860`, daemonId })
+const verified = (_id: string, daemonId: string, ip: string) => ({ endpoint: `${ip}:7860`, daemonId })
 describe('seatTargets', () => {
   it('lead and members on the roster\'s host; a remote member on the host its daemon id maps to; the unmappable and untrusted skipped', () => {
     useHostStore.setState({ runtime: { h1: { daemonIdVerified: verified('h1', 'd1', '100.64.0.2') }, h2: { daemonIdVerified: verified('h2', 'd2', '100.64.0.4') } } as never })

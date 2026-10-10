@@ -5,7 +5,7 @@ import type { WorkbookEntry } from '../lib/workbook/types'
 const fetchConversation = vi.fn<(hostId: string, provider: string, sessionId: string, q?: { limit?: number; before?: number }) => Promise<ConversationResult>>()
 vi.mock('../lib/workbook/api', () => ({ fetchConversation: (...a: Parameters<typeof fetchConversation>) => fetchConversation(...a) }))
 
-import { selectConv, selectWorkbookSupport, useWorkbookStore } from './useWorkbookStore'
+import { MAX_ENTRIES, MAX_UNPINNED, selectConv, selectWorkbookSupport, useWorkbookStore } from './useWorkbookStore'
 
 const entry = (id: number, over: Partial<WorkbookEntry> = {}): WorkbookEntry => ({
   id, convKey: 'c1', sessionId: 's1', turnId: `t${id}`, turnAt: id * 1000, state: 'ok', reason: '', thing: `thing ${id}`, push: '', entry: '',
@@ -208,5 +208,44 @@ describe('forget and fences', () => {
     await p2
     await flush()
     expect(st().byHost.h1).toBeUndefined()
+  })
+})
+
+describe('retention', () => {
+  const keys = () => Object.keys(st().byHost.h1?.byConv ?? {})
+
+  it('a flood of status and entry frames for other conversations stays within bounds, with no fetch', async () => {
+    st().setSupport('h1', V1)
+    await st().loadSeat('h1', 's1') // seat s1 → c1
+    fetchConversation.mockClear()
+    st().setViewing('h1', 'viewed', true)
+    st().applyStatus('h1', { convKey: 'viewed', sessionId: 'sv', status: 'v', updatedAt: 1 })
+    for (let i = 0; i < 400; i++) {
+      st().applyStatus('h1', { convKey: `x${i}`, sessionId: `sx${i}`, status: 's', updatedAt: 1 })
+      st().applyEntry('h1', { convKey: `y${i}`, sessionId: `sy${i}`, entry: entry(i + 1, { convKey: `y${i}`, sessionId: `sy${i}` }) })
+    }
+    expect(keys().length).toBeLessThanOrEqual(MAX_UNPINNED + 2)
+    expect(keys()).toEqual(expect.arrayContaining(['c1', 'viewed']))
+    expect(Object.keys(st().convOfSession.h1).length).toBeLessThanOrEqual(MAX_UNPINNED + 3) // mappings go with their conversation
+    expect(keys()).toContain('y399') // the most recent survive
+    expect(keys()).not.toContain('x0')
+    expect(fetchConversation).not.toHaveBeenCalled()
+  })
+
+  it('a closed view no longer holds its conversation', () => {
+    st().setViewing('h1', 'v', true)
+    st().applyStatus('h1', { convKey: 'v', sessionId: 'sv', status: 'v', updatedAt: 1 })
+    st().setViewing('h1', 'v', false)
+    for (let i = 0; i < MAX_UNPINNED + 5; i++) st().applyStatus('h1', { convKey: `x${i}`, sessionId: `sx${i}`, status: 's', updatedAt: 1 })
+    expect(keys()).not.toContain('v')
+  })
+
+  it('keeps the newest MAX_ENTRIES entries; the cursor points at the oldest kept and 「更多」 is open again', () => {
+    for (let i = 1; i <= MAX_ENTRIES + 30; i++) st().applyEntry('h1', { convKey: 'c1', sessionId: 's1', entry: entry(i) })
+    const c = conv()!
+    expect(c.entries).toHaveLength(MAX_ENTRIES)
+    expect(c.entries[0].id).toBe(MAX_ENTRIES + 30)
+    expect(c.oldestId).toBe(31)
+    expect(c.exhausted).toBe(false)
   })
 })

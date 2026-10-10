@@ -16,6 +16,13 @@ import { WORKBOOK_PROVIDER, type EntryEvent, type StatusEvent, type WorkbookEntr
 export const SEAT_PAGE = 1
 export const VIEW_PAGE = 20
 
+// Retention (events can name any conversation of the host, so the store must not grow with them). Per host: at most
+// MAX_CONVS conversations, of which at most MAX_UNPINNED are ones nobody holds (no seat maps to them and no view is
+// open on them), least recently touched out first; per conversation the MAX_ENTRIES newest entries.
+export const MAX_CONVS = 200
+export const MAX_UNPINNED = 50
+export const MAX_ENTRIES = 500
+
 export interface ConvState {
   status: string
   statusAt: number
@@ -26,6 +33,8 @@ export interface ConvState {
   /** The last older page came back short: there is nothing before `oldestId`. */
   exhausted: boolean
   loading: boolean
+  /** Recency stamp for eviction (a store-wide counter, bumped by every write to the conversation). */
+  touched: number
   /** The daemon had no workbook for a session of this conversation in this connection generation (404). */
   missing: boolean
 }
@@ -41,12 +50,16 @@ interface WorkbookState {
   missingSessions: Record<string, Record<string, true>>
   /** The generation each seat was last loaded in. */
   seatGen: Record<string, Record<string, number>>
+  /** Conversations a view is open on (reference counts): never evicted. */
+  viewing: Record<string, Record<string, number>>
   /** Bumped by `forgetHost`: tells a fetch still out that its host was forgotten. */
   epoch: Record<string, number>
 
   setSupport: (hostId: string, support: WorkbookSupport) => void
   loadSeat: (hostId: string, sessionId: string) => Promise<void>
   openWorkbook: (hostId: string, sessionId: string) => Promise<void>
+  /** A workbook view opened (true) or closed (false) on a conversation: it is not evicted while open. */
+  setViewing: (hostId: string, convKey: string, open: boolean) => void
   loadMore: (hostId: string, convKey: string) => Promise<void>
   applyEntry: (hostId: string, ev: EntryEvent) => void
   applyStatus: (hostId: string, ev: StatusEvent) => void
@@ -55,7 +68,7 @@ interface WorkbookState {
 }
 
 const NO_SUPPORT: WorkbookSupport = { v1: false, v2: false }
-const emptyConv = (): ConvState => ({ status: '', statusAt: 0, entries: [], oldestId: null, exhausted: false, loading: false, missing: false })
+const emptyConv = (): ConvState => ({ status: '', statusAt: 0, entries: [], oldestId: null, exhausted: false, loading: false, touched: 0, missing: false })
 
 /** What a host's daemon supports, as of its last `/api/info` answer; both false until it answered. */
 export function selectWorkbookSupport(hostId: string, state: Pick<WorkbookState, 'support'> = useWorkbookStore.getState()): WorkbookSupport {
@@ -76,9 +89,38 @@ function mergeEntries(have: WorkbookEntry[], incoming: WorkbookEntry[]): Workboo
 }
 
 type S = WorkbookState
+let clock = 0
+/** The newest MAX_ENTRIES entries; the paging cursor never points at a dropped one, and older entries exist again. */
+function capped(c: ConvState): ConvState {
+  if (c.entries.length <= MAX_ENTRIES) return c
+  const entries = c.entries.slice(0, MAX_ENTRIES)
+  return { ...c, entries, oldestId: entries[entries.length - 1].id, exhausted: false }
+}
 function withConv(s: S, hostId: string, convKey: string, fn: (c: ConvState) => ConvState): Pick<S, 'byHost'> {
   const host = s.byHost[hostId] ?? { byConv: {} }
-  return { byHost: { ...s.byHost, [hostId]: { byConv: { ...host.byConv, [convKey]: fn(host.byConv[convKey] ?? emptyConv()) } } } }
+  const next = capped({ ...fn(host.byConv[convKey] ?? emptyConv()), touched: ++clock })
+  return { byHost: { ...s.byHost, [hostId]: { byConv: { ...host.byConv, [convKey]: next } } } }
+}
+/** Drop the least recently touched conversations nobody holds until the host is within its bounds. */
+function evicted(s: S, hostId: string): Partial<S> {
+  const byConv = s.byHost[hostId]?.byConv
+  if (!byConv) return {}
+  const held = new Set<string>()
+  for (const sid of Object.keys(s.seatGen[hostId] ?? {})) { const k = s.convOfSession[hostId]?.[sid]; if (k) held.add(k) }
+  for (const k of Object.keys(s.viewing[hostId] ?? {})) held.add(k)
+  const keys = Object.keys(byConv)
+  const loose = keys.filter((k) => !held.has(k)).sort((a, b) => byConv[a].touched - byConv[b].touched)
+  const drop = Math.max(loose.length - MAX_UNPINNED, keys.length - MAX_CONVS, 0)
+  if (drop === 0) return {}
+  const gone = new Set(loose.slice(0, drop))
+  const nextConv = Object.fromEntries(Object.entries(byConv).filter(([k]) => !gone.has(k)))
+  const map = Object.fromEntries(Object.entries(s.convOfSession[hostId] ?? {}).filter(([, k]) => !gone.has(k)))
+  const miss = Object.fromEntries(Object.entries(s.missingSessions[hostId] ?? {}).filter(([sid]) => !(sid in (s.convOfSession[hostId] ?? {})) || sid in map))
+  return {
+    byHost: { ...s.byHost, [hostId]: { byConv: nextConv } },
+    convOfSession: { ...s.convOfSession, [hostId]: map },
+    missingSessions: { ...s.missingSessions, [hostId]: miss as Record<string, true> },
+  }
 }
 function withSessions(s: S, hostId: string, convKey: string, sessionIds: string[]): Pick<S, 'convOfSession' | 'missingSessions'> {
   const map = { ...s.convOfSession[hostId] }
@@ -130,10 +172,11 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
         }
       }),
     }))
+    set((s) => evicted(s, hostId))
   }
 
   return {
-    byHost: {}, convOfSession: {}, support: {}, missingSessions: {}, seatGen: {}, epoch: {},
+    byHost: {}, convOfSession: {}, support: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {},
 
     setSupport: (hostId, support) => set((s) => {
       // A new answer is a new connection generation: what 404'd or was loading on the last one is asked again.
@@ -167,7 +210,15 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       await runFetch(hostId, convKey, { limit: VIEW_PAGE, before: c.oldestId }) // a conversation key is a session of it
     },
 
-    applyEntry: (hostId, ev) => set((s) => ({
+    setViewing: (hostId, convKey, open) => set((s) => {
+      const cur = { ...s.viewing[hostId] }
+      const n = (cur[convKey] ?? 0) + (open ? 1 : -1)
+      if (n > 0) cur[convKey] = n
+      else delete cur[convKey]
+      return { viewing: { ...s.viewing, [hostId]: cur } }
+    }),
+
+    applyEntry: (hostId, ev) => { set((s) => ({
       ...withSessions(s, hostId, ev.convKey, uniq([ev.sessionId, ev.entry.sessionId])),
       ...withConv(s, hostId, ev.convKey, (c) => ({
         ...c,
@@ -175,21 +226,21 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
         oldestId: c.oldestId ?? ev.entry.id, // pages walk back from the first entry this window knew
         missing: false,
       })),
-    })),
+    })); set((s) => evicted(s, hostId)) },
 
-    applyStatus: (hostId, ev) => set((s) => ({
+    applyStatus: (hostId, ev) => { set((s) => ({
       ...withSessions(s, hostId, ev.convKey, [ev.sessionId]),
       ...withConv(s, hostId, ev.convKey, (c) => (ev.updatedAt >= c.statusAt ? { ...c, status: ev.status, statusAt: ev.updatedAt, missing: false } : c)),
-    })),
+    })); set((s) => evicted(s, hostId)) },
 
     forgetHost: (hostId) => set((s) => {
       const drop = <T>(m: Record<string, T>): Record<string, T> => { const { [hostId]: _g, ...rest } = m; return rest }
       return {
         byHost: drop(s.byHost), convOfSession: drop(s.convOfSession), support: drop(s.support),
-        missingSessions: drop(s.missingSessions), seatGen: drop(s.seatGen), epoch: { ...s.epoch, [hostId]: (s.epoch[hostId] ?? 0) + 1 },
+        missingSessions: drop(s.missingSessions), seatGen: drop(s.seatGen), viewing: drop(s.viewing), epoch: { ...s.epoch, [hostId]: (s.epoch[hostId] ?? 0) + 1 },
       }
     }),
 
-    reset: () => set({ byHost: {}, convOfSession: {}, support: {}, missingSessions: {}, seatGen: {}, epoch: {} }),
+    reset: () => set({ byHost: {}, convOfSession: {}, support: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {} }),
   }
 })
