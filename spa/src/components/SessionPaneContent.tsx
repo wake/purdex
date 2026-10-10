@@ -16,6 +16,7 @@ import { DeckPane } from './deck/DeckPane'
 import { SessionInput } from './deck/SessionInput'
 import { SessionStatusRow } from './deck/SessionStatusRow'
 import type { DeckFooterContext } from './deck/footer-context'
+import { retireStaleSessions } from '../lib/conversations/pane-release'
 import { findPane } from '../lib/pane-tree'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
@@ -88,6 +89,10 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // as it is a live Claude Code session on a host that serves conversations. Before the early returns (rules of hooks).
   const gate = useConversationViewGate(pane.content)
   const conversation = useConversationOfPane(pane.content, gate.ok)
+  // The pane now reads another conversation (/clear, relay, rebuild): what it kept for the old one will not be read again
+  // (#2457). Importing the module also installs the release of a pane that leaves the tab world.
+  const readSession = conversation.state === 'ready' ? conversation.sessionId : ''
+  useEffect(() => { retireStaleSessions(pane.id, hostId, readSession) }, [pane.id, hostId, readSession])
   const switchToTerminal = () => useSessionViewStore.getState().setView(tabId, pane.id, sessionBinding(hostId, sessionCode), 'terminal')
 
   // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → input → status row.

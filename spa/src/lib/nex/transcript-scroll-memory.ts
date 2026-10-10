@@ -48,6 +48,6 @@ export function forgetScrollMemo(paneId: string): void {
 }
 
 /** Forgets every memo whose key is `${prefix}\0…` (a view that keys its memo by pane and session). */
-export function forgetScrollMemosWithPrefix(prefix: string): void {
-  for (const key of [...memos.keys()]) if (key.startsWith(`${prefix}\0`)) memos.delete(key)
+export function forgetScrollMemosWithPrefix(prefix: string, keep?: (key: string) => boolean): void {
+  for (const key of [...memos.keys()]) if (key.startsWith(`${prefix}\0`) && !keep?.(key)) memos.delete(key)
 }

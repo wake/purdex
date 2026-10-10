@@ -17,5 +17,10 @@ export function writeDraft(key: string, text: string): void {
 
 export const forgetDraft = (key: string): void => { drafts.delete(key) }
 
+/** Forget every draft whose key matches (a pane that is gone, or a session it no longer shows). */
+export function forgetDraftsWhere(match: (key: string) => boolean): void {
+  for (const key of [...drafts.keys()]) if (match(key)) drafts.delete(key)
+}
+
 /** Tests only: module state outlives a test. */
 export const clearAllDrafts = (): void => { drafts.clear() }
