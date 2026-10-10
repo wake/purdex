@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -58,9 +59,18 @@ func (m *Module) judgeRelayTimeout(op team.RelayOp, now int64) {
 		// The mod reports done when the SEED turn ends, and the seed sends the new session on with the original work, so
 		// its first turn often runs past 15 minutes. If the new session is alive the relay itself succeeded: report done
 		// (amends coordinator decision 4, 1f 2026-10-09). Only a new session that is not there fails the op.
-		if m.newSessionLive(op) {
+		switch m.newSessionPresence(op) {
+		case peersmod.PresenceLive:
 			m.settleOnTimeout(op, RelayReport{State: team.RelayDone, At: now})
 			return
+		case peersmod.PresenceUnknown:
+			// Neither done nor failed can be told apart: both end the op for good. Wait, but only up to twice the stall since the op
+			// entered cleared (updated_at, the very field the stall is measured from; it survives a restart), so a registry file
+			// that never becomes verifiable cannot hold the op, and with it the session's next relay, for ever (#1857).
+			if now < op.UpdatedAt+2*stallMs {
+				m.logPresenceUnknown("the stalled relay op "+op.ID, op.NewSessionID)
+				return
+			}
 		}
 		reason := team.RelayReasonHandoffIncomplete
 		if op.Kind == team.RelayKindMember {
@@ -251,21 +261,22 @@ func (m *Module) failOnTimeout(op team.RelayOp, reason string) {
 	m.settleOnTimeout(op, RelayReport{State: team.RelayFailed, Reason: reason, At: m.now()})
 }
 
-// newSessionLive says whether a cleared op's new session is there: a verified frame on the op's pane, or the registry.
-func (m *Module) newSessionLive(op team.RelayOp) bool {
+// newSessionPresence is the presence of a cleared op's new session: Live when a verified frame on the op's pane (or the registry)
+// shows it, Gone when the registry was read and does not, Unknown when it could not be told (SessionPresence).
+func (m *Module) newSessionPresence(op team.RelayOp) peersmod.Presence {
 	if op.NewSessionID == "" {
-		return false
+		return peersmod.PresenceGone
 	}
 	if _, pane, _ := m.opBinding(op); pane != "" && m.frames != nil {
 		if frames, err := m.frames.LiveSessions(context.Background(), "cc"); err == nil {
 			for _, f := range frames {
 				if f.PaneID == pane && f.Verified && f.SessionID == op.NewSessionID {
-					return true
+					return peersmod.PresenceLive
 				}
 			}
 		}
 	}
-	return m.origins.LiveSession(op.NewSessionID)
+	return m.origins.SessionPresence(op.NewSessionID)
 }
 
 // settleOnTimeout applies rep (failed, or done for a stalled cleared) to op, conditional on the snapshot the judgement

@@ -199,6 +199,8 @@ func (m *Module) pruneHookLocks() int {
 			continue
 		}
 		sid := e.Name()
+		// The two-state check is enough here (#1857): the act is the removal of a flag file the next create rewrites, and a flag has
+		// a session id but no process to ask LeadPresence about. A registry that cannot be read already answers "live".
 		if m.origins.LiveSession(sid) {
 			continue
 		}
