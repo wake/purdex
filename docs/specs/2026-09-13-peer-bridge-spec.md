@@ -422,9 +422,12 @@ The 2 s margin is also what covers the steps that have no bound of their own her
 encoding and the network round trip; it is a margin, not a proof, and the `delivery_uncertain` classification above is the
 backstop when it is ever exceeded.
 
-Older peers: only the numbers differ, no wire format changes. A new sender waiting 12 s for an old receiver (whose worst case is
-10 s) and a new CLI waiting 19 s for an old daemon (worst case 15 s) are both at least as patient as before; an old sender or CLI
-keeps the old, tighter numbers it always had.
+Older peers: no wire format changes, only numbers. An old receiver (worst case 10 s) is simply waited for 12 s. An old CLI keeps
+its 15 s against a new sender daemon whose worst case is 17 s; the tail in between (a delivery that lands after 15 s) is shown by
+the old CLI as a timeout — the same visible failure it got before, when the daemon answered `remote_error` — so it is no worse,
+and `pdx` is one binary per host, so CLI and daemon move together. The 200 `delivery_uncertain` answer is the same one a receiver's
+post-write socket timeout has always produced; callers that drop the response body (`pdx spawn` brief, `pdx report`, `pdx task`)
+already treated that as sent and do now for a sender-side timeout too.
 
 **Audit.** Table `peer_messages` in `meta.db`: `msg_id, ts, direction
 (out|in|reply), from_host_id, from_session_id, to_host_id, to_session_id,

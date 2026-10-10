@@ -169,20 +169,20 @@ func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer strin
 	if readErr != nil && resp.StatusCode == http.StatusOK {
 		return ipeers.DeliverResponse{}, nil, failed(fmt.Errorf("read response body: %w", readErr))
 	}
-	if len(raw) > maxDeliverRespBytes {
-		return ipeers.DeliverResponse{}, nil, fmt.Errorf("response body exceeds %d bytes", maxDeliverRespBytes)
-	}
-
 	if resp.StatusCode != http.StatusOK {
+		// The status line is the refusal; the body only names it, and is read when it arrived whole and within the cap.
 		remote := &ipeers.RemoteError{Status: resp.StatusCode, Error: fmt.Sprintf("http_%d", resp.StatusCode)}
 		var ae ipeers.APIError
-		if json.Unmarshal(raw, &ae) == nil && ae.Error != "" {
+		if readErr == nil && len(raw) <= maxDeliverRespBytes && json.Unmarshal(raw, &ae) == nil && ae.Error != "" {
 			// The receiver holds bearer (it is its inbound token) and can
 			// echo it in either field (#1152).
 			remote.Error = boundRemote(ae.Error, bearer)
 			remote.Detail = boundRemote(ae.Detail, bearer)
 		}
 		return ipeers.DeliverResponse{}, remote, nil
+	}
+	if len(raw) > maxDeliverRespBytes {
+		return ipeers.DeliverResponse{}, nil, fmt.Errorf("response body exceeds %d bytes", maxDeliverRespBytes)
 	}
 
 	var out ipeers.DeliverResponse
