@@ -232,9 +232,10 @@ describe('full mode', () => {
     const line1 = lead.getByTestId('team-panel-ring').parentElement!
     expect(line1.lastElementChild).toBe(lead.getByTestId('team-panel-ring'))
     expect(line1.textContent).toContain('title L')
-    // no model / effort / percent text in the row, no second line without a workbook
-    for (const id of ['team-panel-model', 'team-panel-effort', 'team-panel-ctx']) expect(lead.queryByTestId(id)).toBeNull()
-    expect(leadRow.textContent).not.toMatch(/%|Opus|high/)
+    // the number beside the ring is what is LEFT (100 - 42); no model / effort text in the row, no second line without a workbook
+    expect(lead.getByTestId('team-panel-ctx')).toHaveTextContent('58%')
+    for (const id of ['team-panel-model', 'team-panel-effort']) expect(lead.queryByTestId(id)).toBeNull()
+    expect(leadRow.textContent).not.toMatch(/Opus|high/)
     expect(leadRow.querySelectorAll('[data-testid="team-panel-task"]').length).toBe(0)
     expect(leadRow.title).toBe('Opus · high · context 剩 58%') // REMAINING (100 - 42); the ring still draws the used 42
     expect(rows()[1].title).toBe('Sonnet · low · context 剩 93%') // model_id of the context sample
@@ -277,6 +278,7 @@ describe('full mode', () => {
     mount()
     for (const r of rows()) {
       expect(r.title).toBe('— · — · context —')
+      expect(within(r).getByTestId('team-panel-ctx')).toHaveTextContent(/^—$/) // a dash beside the ring, never 0%
       expect(within(r).getByTestId('model-icon-unknown')).toBeTruthy()
     }
     expect(area().textContent).not.toContain('0%')

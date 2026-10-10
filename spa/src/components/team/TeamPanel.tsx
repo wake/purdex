@@ -14,7 +14,7 @@ import { CellSep, NameCapsule, TeamCell } from './TeamCell'
 import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
-import { ctxTip, useSeatReading } from './team-readings'
+import { ctxLeftText, ctxTip, useSeatReading } from './team-readings'
 import { firstSentence, useSeatWorkbook } from './seat-workbook'
 import { useMemberDrag } from './useMemberDrag'
 import { useCellCapacity } from './useCellCapacity'
@@ -298,8 +298,10 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
           <span className="text-[9.5px] px-1 rounded border flex-shrink-0 text-text-primary" style={{ borderColor: color }}>{t('team.panel.lead')}</span>
         )}
         {seat.tabId === null && <span className="text-[9.5px] text-text-secondary flex-shrink-0">{t('team.panel.unopened')}</span>}
-        {/* The ring is the right end of line 1: model shape inside, no number (model / effort / context left ride in the row's tooltip) */}
-        <span data-testid="team-panel-ring" className="flex items-center flex-shrink-0 text-text-primary">
+        {/* The right end of line 1: the context LEFT beside the ring (user 2026-10-10: the number is the remainder; a missing value is a dash),
+            the model shape inside the ring; model / effort ride in the row's tooltip */}
+        <span data-testid="team-panel-ring" className="flex items-center gap-1 flex-shrink-0 text-text-primary">
+          <span data-testid="team-panel-ctx" className="text-[10.5px] tabular-nums text-text-muted">{ctxLeftText(noAnswer ? undefined : r.ctx)}</span>
           <ContextRing pct={noAnswer ? undefined : r.ctx} model={noAnswer ? undefined : r.model} size={16} />
         </span>
         {/* The workbook button follows the ring (only with a workbook); it drills in, the row itself still opens the seat */}
