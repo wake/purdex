@@ -9,7 +9,7 @@
 export const NEXT_URL = 'http://pdx/mod/v1/workbook/next'
 export const RESULT_URL = 'http://pdx/mod/v1/workbook/result'
 export const REFRESH_URL = 'http://pdx/mod/v1/workbook/refresh'
-export const CAPS = ['workbook.v2', 'workbook.refresh'] // announced on every events batch: turn / re-write jobs, and the refresh fork
+export const CAPS = ['workbook.v2', 'workbook.refresh', 'prompt.v1'] // announced on every events batch: turn / re-write jobs, the refresh fork, and the Apps' send / interrupt
 export const WAIT_MS = 15_000 // the long poll after a main turn ends
 export const REQUEST_DEADLINE_MS = 5000 // slack over the wait for a request to be answered ($.http.fetch has no timeout)
 export const REASONS = new Set(['api-error', 'empty-reply', 'aborted', 'nothing-to-fork'])
@@ -130,4 +130,42 @@ export function refusedBody(stream, jobId) {
 export function moreOf(res) {
   if (!res || res.status !== 200) return false
   try { return JSON.parse(res.text)?.more === true } catch { return false }
+}
+
+// ---- the prompt queue (interface U3 plan D7): the Apps' send and interrupt, run through this session's own process ----
+
+export const PROMPT_NEXT_URL = 'http://pdx/mod/v1/prompt/next'
+export const PROMPT_RESULT_URL = 'http://pdx/mod/v1/prompt/result'
+export const PROMPT_WAIT_MS = 15_000 // the standing long poll
+export const PROMPT_IDLE_MS = 1000 // a poll that comes back sooner than this with nothing waits this long before the next
+export const PROMPT_BACKOFF_MS = 2000 // after a failed poll
+const MAX_PROMPT_TEXT = 8000 // characters; the daemon sends at most 4000 bytes
+const JOB_ID_RE = /^pj-[0-9a-f]{32}$/
+const SID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+// promptNextBody is the request of `prompt/next` for the session this process is running now.
+export function promptNextBody(stream, sessionId, waitMs) {
+  return JSON.stringify({ stream, session_id: sessionId, wait_ms: waitMs })
+}
+
+// parsePromptJob reads the answer of `prompt/next`: the job, or null (204, an error, anything that is not a well-formed
+// job). Fail closed: a job outside the bounds is not run.
+export function parsePromptJob(res) {
+  if (!res || res.status !== 200) return null
+  let o
+  try { o = JSON.parse(res.text) } catch { return null }
+  const j = isObject(o) ? o.job : null
+  if (!isObject(j) || typeof j.id !== 'string' || !JOB_ID_RE.test(j.id) || typeof j.session_id !== 'string' || !SID_RE.test(j.session_id)) return null
+  if (j.kind === 'interrupt') return { id: j.id, kind: 'interrupt', sessionId: j.session_id, text: '' }
+  if (j.kind === 'submit' && typeof j.text === 'string' && j.text.trim() !== '' && j.text.length <= MAX_PROMPT_TEXT) {
+    return { id: j.id, kind: 'submit', sessionId: j.session_id, text: j.text }
+  }
+  return null
+}
+
+// promptResultBody is the request of `prompt/result`: status accepted | dropped | busy, and for dropped the reason.
+export function promptResultBody(stream, jobId, status, reason) {
+  const b = { stream, job_id: jobId, status }
+  if (reason) b.reason = String(reason).slice(0, 100)
+  return JSON.stringify(b)
 }

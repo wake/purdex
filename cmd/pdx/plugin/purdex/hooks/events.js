@@ -32,7 +32,7 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
+import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -63,6 +63,10 @@ const team = { good: false, role: 'none', members: 0, gen: 0, timer: null, pendi
 // whole conversation's tokens. While it runs no further model call is started (one job at a time is a cost promise, not
 // only a state); when it settles the executor asks again.
 const wb = { busy: false, again: false, scheduled: false, gen: 0, wait: 0, orphan: false }
+
+// pq is the Apps' send / interrupt loop (interface U3 plan D7): one standing long poll of `prompt/next` per session id.
+// `loop` is the wb.gen it runs under (0: none), so a session end or switch ends it and the new session starts its own.
+const pq = { loop: 0 }
 
 // ev is the reporter's whole state; one per mod load. `stream` and `seq` live as long as the
 // load (a /clear or a resume goes on in the same stream), the queue holds every event not yet
@@ -434,6 +438,77 @@ function wbOrphaned($, call) {
   cap = $.clock.after(ORPHAN_MAX_MS, settle)
 }
 
+// ---- the Apps' send and interrupt (interface U3 plan D7) ----
+
+// pqStart starts the standing poll for the current session id unless one runs under this generation. Called after the
+// reporter is on and after a session switch; never inside a hook (it starts from a timer).
+function pqStart($) {
+  if (!ev.on || pq.loop === wb.gen) return
+  const gen = wb.gen
+  pq.loop = gen
+  $.clock.after(0, () => {
+    void pqLoop($, gen).catch((err) => log($, 'prompt loop failed: ' + String(err))).finally(() => { if (pq.loop === gen) pq.loop = 0 })
+  })
+}
+
+// pqLoop polls `prompt/next` for the session this process runs now and runs what it is handed, one job at a time. A poll
+// that fails waits PROMPT_BACKOFF_MS; one that returns empty at once (the daemon does not know this stream yet) waits
+// PROMPT_IDLE_MS, so a daemon that answers fast never makes a busy loop.
+async function pqLoop($, gen) {
+  while (gen === wb.gen && ev.on) {
+    const t0 = await $.clock.now()
+    const out = await wbRequest($, PROMPT_NEXT_URL, promptNextBody(ev.stream, ev.sid, PROMPT_WAIT_MS), PROMPT_WAIT_MS)
+    if (gen !== wb.gen || !ev.on) return
+    const failed = !out || out === TIMEOUT || !out.res || (out.res.status !== 200 && out.res.status !== 204)
+    const job = failed ? null : parsePromptJob(out.res)
+    if (job) {
+      await pqRun($, job)
+      continue
+    }
+    if (failed) await $.clock.sleep(PROMPT_BACKOFF_MS)
+    else if ((await $.clock.now()) - t0 < PROMPT_IDLE_MS) await $.clock.sleep(PROMPT_IDLE_MS)
+  }
+}
+
+// pqRun runs one job and reports it. A submit goes only to the session it was made for (a /clear since then makes the id
+// differ: dropped session_changed) and only while no turn runs: $.prompt.submit does not refuse mid-turn, it blocks until
+// the session is idle, so a turn in progress is reported `busy` at once and the App sends again when it is idle. The text goes
+// in as the person's own words (asUser), which is also how the transcript shows it. An interrupt aborts the running main turn.
+async function pqRun($, job) {
+  let status = 'accepted'
+  let reason = ''
+  try {
+    if (job.kind === 'submit') {
+      if (job.sessionId !== String(await $.session.id())) {
+        status = 'dropped'
+        reason = 'session_changed'
+      } else if (ev.turnId) {
+        status = 'busy'
+      } else {
+        const r = await $.prompt.submit({ text: job.text, asUser: true })
+        if (isObject(r) && typeof r.drop === 'string') {
+          status = 'dropped'
+          reason = r.drop || 'dropped'
+        }
+      }
+    } else if (job.sessionId !== String(await $.session.id())) {
+      status = 'dropped'
+      reason = 'session_changed'
+    } else if (!ev.turnId) {
+      status = 'dropped'
+      reason = 'not_running'
+    } else {
+      await $.turn.abort({ turnId: ev.turnId })
+    }
+  } catch (err) {
+    status = 'dropped'
+    reason = job.kind === 'interrupt' ? 'not_running' : 'refused'
+    log($, 'prompt job ' + job.kind + ' failed: ' + String(err))
+  }
+  const out = await wbRequest($, PROMPT_RESULT_URL, promptResultBody(ev.stream, job.id, status, reason), 0)
+  if (!out || out === TIMEOUT || !out.res || out.res.status !== 200) log($, 'prompt result not accepted for ' + job.kind)
+}
+
 // ---- /workbook refresh (session workbook spec §5.6) ----
 
 const WORKBOOK_USAGE = '用法：/workbook refresh — 依整段對話重整這個 session 的工作簿（目前狀況與待辦）。'
@@ -559,6 +634,7 @@ async function startReporter($, e) {
   ev.background = null
   ev.monitors.clear()
   ev.on = true
+  pqStart($)
   await $.command.register({ name: 'workbook', description: 'Purdex 工作簿：refresh 依整段對話重整目前狀況與待辦', argumentHint: 'refresh' })
     .catch((err) => log($, '/workbook not registered: ' + String(err)))
   enqueue($, 'session.start', { cwd: e.cwd, surface: e.surface })
@@ -585,6 +661,7 @@ async function sessionSwitch($, source) {
     enqueue($, 'session.switch', { prev_sid: prev, source })
     forgetTeam($) // the lead of the old conversation says nothing about the new one
     teamTick($)
+    pqStart($) // the poll under the old session id ended with the generation: the new session polls for itself
   } finally {
     ev.switching = false
   }

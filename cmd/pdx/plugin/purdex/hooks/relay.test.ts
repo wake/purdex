@@ -212,6 +212,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
   mock.env(on, env)
   // The daemon's mod socket (the event reporter, interface U1): acks every batch whole.
   on('http.fetch', async (_$: any, e: any) => {
+    if (String(e.url).includes('/mod/v1/prompt/')) return new Promise(() => {}) // U3-0b: the standing long poll, never answered here
     if (String(e.url).includes('/mod/v1/workbook/')) return { value: { status: 204, ok: true, headers: {}, text: '' } } // WB-1c: no job
     const body = JSON.parse(e.init.body)
     f.posts.push(body)
