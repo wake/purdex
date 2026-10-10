@@ -7,17 +7,25 @@ import { useSyncExternalStore } from 'react'
 export type PanelContent =
   /** One chain (run) of a turn: the chat work-row click. `firstStepId` names the run, `turnId` its turn. */
   | { kind: 'chain'; turnId: string; firstStepId: string }
-  /** A step's whole output / diff (「顯示全部」). */
-  | { kind: 'output'; stepId: string }
-  /** A subagent step's own steps. */
-  | { kind: 'subagent'; stepId: string }
+  /** A step's whole output / diff (「顯示全部」). The step is looked up in `turnId` only: a step id alone is not unique. */
+  | { kind: 'output'; turnId: string; stepId: string }
+  /** A subagent step's own steps (same lookup rule). */
+  | { kind: 'subagent'; turnId: string; stepId: string }
 
 export interface PanelState {
+  /**
+   * Which conversation the references belong to (the caller's `hostId` + session id, re-derived when the pane's session
+   * changes: /clear, relay, rebuild). A state whose binding is not the live one is never shown and is dropped.
+   */
+  binding: string
   content: PanelContent
   /** Where the panel came from when it was opened from inside another panel view: ‹ goes back there. */
   back?: PanelContent
   scrollTop: number
 }
+
+/** The conversation a pane's memories (panel, scroll) belong to: host + session id, as the store keys it. */
+export const conversationBinding = (hostId: string, sessionId: string | null | undefined): string => `${hostId}\0${sessionId ?? ''}`
 
 export const PANEL_MIN_PX = 320
 export const PANEL_MAX_PX = 640
@@ -42,9 +50,10 @@ export function readPanel(paneId: string): PanelState | undefined {
 }
 
 /** Opens (or replaces) the panel's content. Replacing from an open panel remembers where it came from. */
-export function openPanel(paneId: string, content: PanelContent, opts: { keepBack?: boolean } = {}): void {
+export function openPanel(paneId: string, binding: string, content: PanelContent, opts: { keepBack?: boolean } = {}): void {
   const prev = states.get(paneId)
-  states.set(paneId, { content, back: opts.keepBack && prev ? prev.content : undefined, scrollTop: 0 })
+  const back = opts.keepBack && prev && prev.binding === binding ? prev.content : undefined
+  states.set(paneId, { binding, content, back, scrollTop: 0 })
   emit(paneId)
 }
 
@@ -56,7 +65,7 @@ export function closePanel(paneId: string): void {
 export function panelBack(paneId: string): void {
   const prev = states.get(paneId)
   if (!prev?.back) return
-  states.set(paneId, { content: prev.back, scrollTop: 0 })
+  states.set(paneId, { binding: prev.binding, content: prev.back, scrollTop: 0 })
   emit(paneId)
 }
 
@@ -87,6 +96,9 @@ function subscribe(paneId: string, fn: () => void): () => void {
 }
 
 /** The pane's panel state, live. `openPanel` / `closePanel` replace the object, so identity comparison is enough. */
-export function usePanel(paneId: string): PanelState | undefined {
-  return useSyncExternalStore((fn) => subscribe(paneId, fn), () => states.get(paneId))
+export function usePanel(paneId: string, binding: string): PanelState | undefined {
+  return useSyncExternalStore((fn) => subscribe(paneId, fn), () => {
+    const s = states.get(paneId)
+    return s && s.binding === binding ? s : undefined
+  })
 }

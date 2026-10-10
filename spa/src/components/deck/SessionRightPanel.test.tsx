@@ -11,7 +11,7 @@ import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
-import { clearAllPanels, closePanel, openPanel, panelWidth, readPanel } from '../../lib/conversations/panel-memory'
+import { conversationBinding, clearAllPanels, closePanel, openPanel, panelWidth, readPanel } from '../../lib/conversations/panel-memory'
 import { forgetFolds, usePaneFoldStore } from '../../lib/conversations/fold-memory'
 import { turnRows } from '../../lib/conversations/turn-row'
 import type { ConversationItem, StepItem } from '../../lib/conversations/types'
@@ -22,10 +22,13 @@ import subagent from '../../../../testdata/conversation/v1/cc-transcript/subagen
 import subChild from '../../../../testdata/conversation/v1/cc-transcript/subagent/children/a7a639d97d57c6f43.expected.json'
 
 const PANE = 'panel-test'
+const BIND = conversationBinding('h', 'session-1')
+/** The turn of outputCaps that holds a step. */
+const turnOf = (stepId: string) => turnsOf(outputCaps).find((t) => t.items.some((i) => i.id === stepId))!.id
 type Fx = { conversation: { turns: Array<{ id: string; index: number; items: unknown[] }> } }
 const turnsOf = (f: unknown) => (f as Fx).conversation.turns.map((t) => ({ ...t, items: t.items.map((it, index) => ({ ...(it as object), index }) as ConversationItem) }))
 const Fold = ({ children }: { children: ReactNode }) => <FoldContext.Provider value={usePaneFoldStore(PANE)}>{children}</FoldContext.Provider>
-const mount = (turns: ReturnType<typeof turnsOf>, active = true) => render(<Fold><SessionRightPanel paneKey={PANE} turns={turns} active={active} /></Fold>)
+const mount = (turns: ReturnType<typeof turnsOf>, active = true) => render(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={turns} active={active} /></Fold>)
 
 // The turn of plugin-submit with two work chains (a step, then text, then another step).
 const TWO = 'f3236e8d-7531-41bf-ac48-9950b41aa539'
@@ -45,7 +48,7 @@ describe('content', () => {
   it('a chain shows only that chain\'s steps, and its header names the turn and the position', () => {
     const runs = runsOfTwo()
     expect(runs.length).toBeGreaterThanOrEqual(2)
-    openPanel(PANE, { kind: 'chain', turnId: TWO, firstStepId: runs[1].stepIds[0] })
+    openPanel(PANE, BIND, { kind: 'chain', turnId: TWO, firstStepId: runs[1].stepIds[0] })
     mount(twoTurns())
     const body = screen.getByTestId('panel-chain')
     const shown = within(body).getAllByTestId(/deck-step-(line|card)|deck-step-task/)
@@ -55,7 +58,7 @@ describe('content', () => {
 
   it('a different chain of the same turn shows different steps (it is the chain, not the turn)', () => {
     const runs = runsOfTwo()
-    openPanel(PANE, { kind: 'chain', turnId: TWO, firstStepId: runs[0].stepIds[0] })
+    openPanel(PANE, BIND, { kind: 'chain', turnId: TWO, firstStepId: runs[0].stepIds[0] })
     mount(twoTurns())
     expect(screen.getByTestId('panel-title')).toHaveTextContent(/work 1 of/)
     const first = within(screen.getByTestId('panel-chain')).getAllByTestId(/deck-step-(line|card)|deck-step-task/).length
@@ -64,7 +67,7 @@ describe('content', () => {
 
   it('a full output shows every line the step has, not the deck\'s tail', () => {
     const step = bigStep()
-    openPanel(PANE, { kind: 'output', stepId: step.id })
+    openPanel(PANE, BIND, { kind: 'output', turnId: turnOf(step.id), stepId: step.id })
     mount(turnsOf(outputCaps))
     expect(screen.getByTestId('panel-output-text').textContent).toBe(step.output!.text)
   })
@@ -73,7 +76,7 @@ describe('content', () => {
     const turns = turnsOf(subagent)
     const step = turns[0].items.find((i): i is StepItem => i.type === 'step')!
     step.children = (subChild as { items: StepItem['children'] }).items
-    openPanel(PANE, { kind: 'subagent', stepId: step.id })
+    openPanel(PANE, BIND, { kind: 'subagent', turnId: turns[0].id, stepId: step.id })
     mount(turns)
     expect(screen.getByTestId('panel-subagent')).toBeInTheDocument()
     expect(screen.getByTestId('panel-title')).toHaveTextContent('Subagent')
@@ -81,7 +84,7 @@ describe('content', () => {
   })
 
   it('says so when what it pointed at is gone', () => {
-    openPanel(PANE, { kind: 'chain', turnId: 'no-such-turn', firstStepId: 'x' })
+    openPanel(PANE, BIND, { kind: 'chain', turnId: 'no-such-turn', firstStepId: 'x' })
     mount(twoTurns())
     expect(screen.getByTestId('panel-gone')).toBeInTheDocument()
   })
@@ -89,17 +92,50 @@ describe('content', () => {
   it('opening 「顯示全部」 from a chain keeps a way back', () => {
     const step = bigStep()
     const turn = turnsOf(outputCaps).find((t) => t.items.some((i) => i.id === step.id))!
-    openPanel(PANE, { kind: 'chain', turnId: turn.id, firstStepId: turnRows(turn).runs.find((r) => r.stepIds.includes(step.id))!.stepIds[0] })
+    openPanel(PANE, BIND, { kind: 'chain', turnId: turn.id, firstStepId: turnRows(turn).runs.find((r) => r.stepIds.includes(step.id))!.stepIds[0] })
     mount(turnsOf(outputCaps))
-    act(() => openPanel(PANE, { kind: 'output', stepId: step.id }, { keepBack: true }))
+    act(() => openPanel(PANE, BIND, { kind: 'output', turnId: turnOf(step.id), stepId: step.id }, { keepBack: true }))
     expect(screen.getByTestId('panel-output')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('panel-back'))
     expect(screen.getByTestId('panel-chain')).toBeInTheDocument()
   })
 })
 
+describe('a different conversation in the same pane (/clear, relay, rebuild)', () => {
+  const runs = () => runsOfTwo()
+  const openOn = () => openPanel(PANE, BIND, { kind: 'chain', turnId: TWO, firstStepId: runs()[0].stepIds[0] })
+  const NEXT = conversationBinding('h', 'session-2')
+
+  it('the panel opened under the old session is not shown under the new one, and is dropped from memory', () => {
+    openOn()
+    const { rerender } = render(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} /></Fold>)
+    expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
+    // /clear: the same pane, the same turn and step ids (a fixture replayed), a new session id
+    rerender(<Fold><SessionRightPanel paneKey={PANE} binding={NEXT} turns={twoTurns()} /></Fold>)
+    expect(screen.queryByTestId('session-right-panel')).toBeNull()
+    expect(readPanel(PANE)).toBeUndefined()
+    // and it does not come back if the old binding returns
+    rerender(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} /></Fold>)
+    expect(screen.queryByTestId('session-right-panel')).toBeNull()
+  })
+
+  it('a panel opened later under the new session works', () => {
+    openOn()
+    const { rerender } = render(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} /></Fold>)
+    rerender(<Fold><SessionRightPanel paneKey={PANE} binding={NEXT} turns={twoTurns()} /></Fold>)
+    act(() => openPanel(PANE, NEXT, { kind: 'chain', turnId: TWO, firstStepId: runs()[0].stepIds[0] }))
+    expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
+  })
+
+  it('a ‹ back target from the old session is not carried into the new one', () => {
+    openOn()
+    openPanel(PANE, NEXT, { kind: 'output', turnId: TWO, stepId: 'x' }, { keepBack: true })
+    expect(readPanel(PANE)?.back).toBeUndefined()
+  })
+})
+
 describe('closing and width', () => {
-  const open = () => openPanel(PANE, { kind: 'chain', turnId: TWO, firstStepId: runsOfTwo()[0].stepIds[0] })
+  const open = () => openPanel(PANE, BIND, { kind: 'chain', turnId: TWO, firstStepId: runsOfTwo()[0].stepIds[0] })
 
   it('✕ closes it', () => {
     open(); mount(twoTurns())
@@ -116,7 +152,7 @@ describe('closing and width', () => {
 
   it('Esc typed in a text field is the field\'s, and another key does nothing', () => {
     open()
-    render(<Fold><textarea data-testid="box" /><SessionRightPanel paneKey={PANE} turns={twoTurns()} /></Fold>)
+    render(<Fold><textarea data-testid="box" /><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} /></Fold>)
     fireEvent.keyDown(screen.getByTestId('box'), { key: 'Escape' })
     fireEvent.keyDown(document.body, { key: 'a' })
     expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
@@ -141,7 +177,7 @@ describe('closing and width', () => {
 // The real TabContent: the alive pool keeps nothing (keepAliveCount 0), so the pane unmounts when the tab is left.
 const H = 'h'
 function PanelPane({ pane }: PaneRendererProps) {
-  return <Fold><SessionRightPanel paneKey={pane.id} turns={twoTurns()} /></Fold>
+  return <Fold><SessionRightPanel paneKey={pane.id} binding={BIND} turns={twoTurns()} /></Fold>
 }
 const Other = () => <div data-testid="other-tab" />
 const paneTab: Tab = { ...createTab({ kind: 'execution', executionId: 'exc_1', host: H }), id: 't-panel' }
@@ -162,7 +198,7 @@ describe('panel across tab switches', () => {
   it('is still open, on the same chain and at the same scroll when the reader comes back', () => {
     const all = [paneTab, dashTab]
     const runs = runsOfTwo()
-    openPanel(paneIdOf, { kind: 'chain', turnId: TWO, firstStepId: runs[1].stepIds[0] })
+    openPanel(paneIdOf, BIND, { kind: 'chain', turnId: TWO, firstStepId: runs[1].stepIds[0] })
     const { rerender } = render(<TabContent activeTab={paneTab} allTabs={all} />)
     const sc = screen.getByTestId('panel-scroll')
     sc.scrollTop = 123
@@ -179,7 +215,7 @@ describe('panel across tab switches', () => {
 
   it('stays closed when it was closed', () => {
     const all = [paneTab, dashTab]
-    openPanel(paneIdOf, { kind: 'chain', turnId: TWO, firstStepId: runsOfTwo()[0].stepIds[0] })
+    openPanel(paneIdOf, BIND, { kind: 'chain', turnId: TWO, firstStepId: runsOfTwo()[0].stepIds[0] })
     const { rerender } = render(<TabContent activeTab={paneTab} allTabs={all} />)
     act(() => closePanel(paneIdOf))
     rerender(<TabContent activeTab={dashTab} allTabs={all} />)

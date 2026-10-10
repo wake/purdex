@@ -28,7 +28,7 @@ const turnsOf = (f: unknown): PanelTurn[] =>
   (f as Fx).conversation.turns.map((t) => ({ id: t.id, index: t.index, items: t.items.map((it, index) => ({ ...(it as object), index }) as ConversationItem) }))
 
 const props = (over: Partial<ChatViewProps> = {}): ChatViewProps =>
-  ({ paneKey: PANE, title: 'my tab', status: 'idle', turns: turnsOf(pluginSubmit), onSwitchToTerminal: vi.fn(), ...over })
+  ({ paneKey: PANE, hostId: 'h', sessionId: 'session-1', title: 'my tab', status: 'idle', turns: turnsOf(pluginSubmit), onSwitchToTerminal: vi.fn(), ...over })
 const mount = (over: Partial<ChatViewProps> = {}) => render(<ChatView {...props(over)} />)
 
 // hand-made helpers
@@ -86,6 +86,18 @@ describe('the right panel from a work row', () => {
     fireEvent.click(screen.getAllByTestId('chat-work')[0])
     expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
     fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(screen.queryByTestId('session-right-panel')).toBeNull()
+  })
+})
+
+describe('a different session in the same pane', () => {
+  it('/clear or relay (a new session id) closes an open panel; the old one does not come back', () => {
+    const { rerender } = mount()
+    fireEvent.click(screen.getAllByTestId('chat-work')[0])
+    expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
+    rerender(<ChatView {...props({ sessionId: 'session-2' })} />)
+    expect(screen.queryByTestId('session-right-panel')).toBeNull()
+    rerender(<ChatView {...props({ sessionId: 'session-1' })} />)
     expect(screen.queryByTestId('session-right-panel')).toBeNull()
   })
 })

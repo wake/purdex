@@ -4,29 +4,39 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { ArrowLeft, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { closePanel, openPanel, panelBack, PANEL_WIDTH_STYLE, setPanelScroll, usePanel } from '../../lib/conversations/panel-memory'
+import { closePanel, openPanel, panelBack, PANEL_WIDTH_STYLE, readPanel, setPanelScroll, usePanel } from '../../lib/conversations/panel-memory'
 import { panelTitle, resolvePanel, type PanelTurn } from '../../lib/conversations/panel-resolve'
 import type { StepItem } from '../../lib/conversations/types'
 import { PanelBody } from './PanelBody'
 
 interface Props {
   paneKey: string
+  /** The conversation the panel belongs to (host + session id); a change drops a panel opened under the old one. */
+  binding: string
   turns: PanelTurn[]
   /** False for a pane that is not the one in front: its Esc must not close another pane's panel. */
   active?: boolean
 }
 
-export function SessionRightPanel({ paneKey, turns, active = true }: Props) {
+export function SessionRightPanel({ paneKey, binding, turns, active = true }: Props) {
   const t = useI18nStore((s) => s.t)
-  const state = usePanel(paneKey)
+  const state = usePanel(paneKey, binding)
   const scroller = useRef<HTMLDivElement>(null)
   const view = useMemo(() => (state ? resolvePanel(state.content, turns) : null), [state, turns])
   const open = state !== undefined
+  const turnId = state?.content.turnId
 
+  // A panel left over from another conversation (the session changed: /clear, relay, rebuild) is not shown and is dropped.
+  useEffect(() => {
+    const raw = readPanel(paneKey)
+    if (raw && raw.binding !== binding) closePanel(paneKey)
+  }, [paneKey, binding])
+
+  // Steps opened from inside the panel belong to the turn the panel is on.
   const actions = useMemo(() => ({
-    onShowAll: (s: StepItem) => openPanel(paneKey, { kind: 'output', stepId: s.id }, { keepBack: true }),
-    onOpenSubagent: (s: StepItem) => openPanel(paneKey, { kind: 'subagent', stepId: s.id }, { keepBack: true }),
-  }), [paneKey])
+    onShowAll: (s: StepItem) => { if (turnId) openPanel(paneKey, binding, { kind: 'output', turnId, stepId: s.id }, { keepBack: true }) },
+    onOpenSubagent: (s: StepItem) => { if (turnId) openPanel(paneKey, binding, { kind: 'subagent', turnId, stepId: s.id }, { keepBack: true }) },
+  }), [paneKey, binding, turnId])
 
   // Esc closes — unless a text field has it (the input's own Esc is not ours to take).
   useEffect(() => {

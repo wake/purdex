@@ -32,9 +32,10 @@ const findIn = (items: ReadonlyArray<{ type: string; id: string }>, id: string):
   }
   return null
 }
-const findStep = (turns: PanelTurn[], id: string): StepItem | null => {
-  for (const t of turns) { const hit = findIn(t.items, id); if (hit) return hit }
-  return null
+/** Only inside the named turn: the same step id in another turn is another step. */
+const findStep = (turns: PanelTurn[], turnId: string, id: string): StepItem | null => {
+  const turn = turns.find((t) => t.id === turnId)
+  return turn ? findIn(turn.items, id) : null
 }
 
 export function resolvePanel(content: PanelContent, turns: PanelTurn[]): PanelView | null {
@@ -46,7 +47,7 @@ export function resolvePanel(content: PanelContent, turns: PanelTurn[]): PanelVi
     if (at < 0) return null
     return { kind: 'chain', turnIndex: turn.index, position: at + 1, count: runs.length, steps: runs[at].steps }
   }
-  const step = findStep(turns, content.stepId)
+  const step = findStep(turns, content.turnId, content.stepId)
   if (!step) return null
   if (content.kind === 'output') return { kind: 'output', step }
   // A subagent's items are loaded on demand and kept on the step (types.ts `children`); the placement `index` is not theirs.

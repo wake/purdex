@@ -6,7 +6,7 @@ import { useEffect, useMemo, type ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { buildChat, type ChatEntry } from '../../lib/conversations/chat-model'
 import { usePaneFoldStore } from '../../lib/conversations/fold-memory'
-import { openPanel } from '../../lib/conversations/panel-memory'
+import { conversationBinding, openPanel } from '../../lib/conversations/panel-memory'
 import type { PanelTurn } from '../../lib/conversations/panel-resolve'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
@@ -21,6 +21,9 @@ import { UnreadableState, type UnreadableReason } from './UnreadableState'
 export interface ChatViewProps {
   /** The pane's key: the panel, fold and scroll memories hang on it. */
   paneKey: string
+  /** Which conversation this is (the panel and the scroll memory belong to it; /clear, relay and rebuild change `sessionId`). */
+  hostId: string
+  sessionId: string | null
   title: string
   /** Header status: running | waiting | idle | error | ended | unknown. */
   status: string
@@ -35,21 +38,22 @@ export interface ChatViewProps {
   active?: boolean
 }
 
-function Entry({ entry, paneKey }: { entry: ChatEntry; paneKey: string }) {
+function Entry({ entry, paneKey, binding }: { entry: ChatEntry; paneKey: string; binding: string }) {
   switch (entry.kind) {
     case 'user': return <UserBubble item={entry.item} />
     case 'peer': return <PeerLine items={entry.items} />
     case 'agent': return <AgentBubble item={entry.item} />
     case 'system': return <SystemRow item={entry.item} />
     case 'work':
-      return <ChatWorkRow run={entry.run} onOpen={() => openPanel(paneKey, { kind: 'chain', turnId: entry.turnId, firstStepId: entry.run.stepIds[0] })} />
+      return <ChatWorkRow run={entry.run} onOpen={() => openPanel(paneKey, binding, { kind: 'chain', turnId: entry.turnId, firstStepId: entry.run.stepIds[0] })} />
     case 'files':
-      return <FileChip files={entry.files} added={entry.added} removed={entry.removed} onOpen={() => openPanel(paneKey, { kind: 'chain', turnId: entry.turnId, firstStepId: entry.firstStepId })} />
+      return <FileChip files={entry.files} added={entry.added} removed={entry.removed} onOpen={() => openPanel(paneKey, binding, { kind: 'chain', turnId: entry.turnId, firstStepId: entry.firstStepId })} />
   }
 }
 
-export function ChatView({ paneKey, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active = true }: ChatViewProps) {
+export function ChatView({ paneKey, hostId, sessionId, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active = true }: ChatViewProps) {
   const t = useI18nStore((s) => s.t)
+  const binding = conversationBinding(hostId, sessionId)
   const fold = usePaneFoldStore(paneKey)
   const entries = useMemo(() => buildChat(turns), [turns])
   const hasItems = turns.some((x) => x.items.length > 0)
@@ -73,14 +77,14 @@ export function ChatView({ paneKey, title, status, turns, unreadable, onRetry, o
             <div ref={attach} onScroll={onScroll} data-testid="chat-scroll" aria-label={t('chat.transcript')} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               {groupByTurn(entries).map((g) => (
                 <div key={g.turnIndex} data-turn-index={g.turnIndex} className={`${SCROLL_ANCHOR_CLASS} space-y-3`}>
-                  {g.entries.map((e) => <Entry key={e.key} entry={e} paneKey={paneKey} />)}
+                  {g.entries.map((e) => <Entry key={e.key} entry={e} paneKey={paneKey} binding={binding} />)}
                 </div>
               ))}
             </div>
           )}
           {input}
         </div>
-        {!reason && <SessionRightPanel paneKey={paneKey} turns={turns} active={active} />}
+        {!reason && <SessionRightPanel paneKey={paneKey} binding={binding} turns={turns} active={active} />}
       </div>
     </FoldContext.Provider>
   )
