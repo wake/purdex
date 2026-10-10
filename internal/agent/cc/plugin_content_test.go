@@ -287,3 +287,28 @@ func TestExtractPlugin_DSStoreIsNotADifference(t *testing.T) {
 		t.Fatalf("changed=%v err=%v: .DS_Store made the tree differ", changed, err)
 	}
 }
+
+// Even the files we ignore in the comparison are never symlinks: pdx.json and VERSION are ours to write as plain files.
+func TestExtractPlugin_ASymlinkedPdxJSONOrVersionIsReplaced(t *testing.T) {
+	for _, name := range []string{"pdx.json", "VERSION"} {
+		t.Run(name, func(t *testing.T) {
+			dataDir, outside := t.TempDir(), t.TempDir()
+			src := fakePlugin("same")
+			if _, _, err := ExtractPlugin(src, dataDir, vOld, "/opt/pdx", ""); err != nil {
+				t.Fatal(err)
+			}
+			p := filepath.Join(PluginRoot(dataDir), name)
+			b, _ := os.ReadFile(p)
+			target := filepath.Join(outside, name)
+			os.WriteFile(target, b, 0o644)
+			os.Remove(p)
+			os.Symlink(target, p)
+			if _, changed, err := ExtractPlugin(src, dataDir, vNew, "/opt/pdx", ""); err != nil || !changed {
+				t.Fatalf("changed=%v err=%v: a symlinked %s must be replaced", changed, err, name)
+			}
+			if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+				t.Fatalf("%s is still a symlink: %v %v", name, fi, err)
+			}
+		})
+	}
+}

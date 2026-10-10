@@ -165,7 +165,7 @@ func installedIgnored(rel string) bool {
 // bytes (treeMatches), and no file there that src lacks, apart from installedIgnored ones. A file a newer mod dropped
 // (a removed skill) makes the tree different, so the swap that replaces the whole folder clears it away.
 //
-// A symlink anywhere in the folder (the root included) outside the ignored paths is a difference: its target can change
+// A symlink anywhere in the folder (the root included), ignored paths too, is a difference: its target can change
 // behind the comparison and Claude Code would load whatever it points at. The walk comes first, so treeMatches never reads
 // through one. Finder's .DS_Store is not something Claude Code loads and is not a difference.
 func treeIdentical(src fs.FS, root string) bool {
@@ -181,14 +181,14 @@ func treeIdentical(src fs.FS, root string) bool {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		if d.Type()&fs.ModeSymlink != 0 { // before the ignore list: our own pdx.json / VERSION are plain files too
+			return errTreeDiffers
+		}
 		if installedIgnored(rel) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
-		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			return errTreeDiffers
 		}
 		if d.IsDir() {
 			return nil
