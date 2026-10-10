@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/wake/purdex/internal/config"
 )
@@ -55,11 +56,13 @@ func (e badRequestError) Unwrap() error { return e.err }
 // "peer" key at all keeps the whole section. An older client that never knew
 // the section — or a partial object — therefore cannot switch the mailbox
 // off (U4) or drop a saved cap/template by omission; this also matches TOML
-// Load, where a missing key keeps the default. It must run under
+// Load, where a missing key keeps the default. [nex.sandbox].extra_profiles is the same (c933b0-122). It must run under
 // UpdateConfig's write lock, so a concurrent PUT cannot slip in between the
-// read of currentPeer and the write. A null "peer" is refused earlier.
-func mergeNex(currentPeer config.NexPeerConfig, body json.RawMessage) (config.NexConfig, error) {
-	next := config.NexConfig{Peer: currentPeer}
+// read of the current section and the write. A null "peer" is refused earlier.
+func mergeNex(current config.NexConfig, body json.RawMessage) (config.NexConfig, error) {
+	// Sandbox.ExtraProfiles is presence-aware like peer: a body that does not name it (an older form) keeps the current list;
+	// only an explicit [] or null clears it. json.Unmarshal into a pre-filled nested struct leaves the keys it does not mention.
+	next := config.NexConfig{Peer: current.Peer, Sandbox: config.NexSandboxConfig{ExtraProfiles: slices.Clone(current.Sandbox.ExtraProfiles)}}
 	if err := json.Unmarshal(body, &next); err != nil {
 		return config.NexConfig{}, fmt.Errorf("invalid nex: %w", err)
 	}
@@ -142,7 +145,7 @@ func (c *Core) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 			cfg.UploadDir = *req.UploadDir
 		}
 		if len(req.Nex) > 0 {
-			next, err := mergeNex(cfg.Nex.Peer, req.Nex)
+			next, err := mergeNex(cfg.Nex, req.Nex)
 			if err != nil {
 				return badRequestError{err}
 			}

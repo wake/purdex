@@ -776,11 +776,11 @@ func TestPutConfigNexExtraProfilesIsPresenceAware(t *testing.T) {
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 
 			c.CfgMu.RLock()
-			assert.Equal(t, tc.want, c.Cfg.Nex.Sandbox.ExtraProfiles, "in memory")
+			assert.ElementsMatch(t, tc.want, c.Cfg.Nex.Sandbox.ExtraProfiles, "in memory") // [] and nil both mean "none"
 			c.CfgMu.RUnlock()
 			loaded, err := config.Load(cfgPath)
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, loaded.Nex.Sandbox.ExtraProfiles, "persisted")
+			assert.ElementsMatch(t, tc.want, loaded.Nex.Sandbox.ExtraProfiles, "persisted")
 		})
 	}
 }

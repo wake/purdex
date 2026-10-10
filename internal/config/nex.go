@@ -104,6 +104,14 @@ func (n *NexConfig) Validate(home string) error {
 		return fmt.Errorf("nex.sandbox.default_profile: unknown profile %q", n.Sandbox.DefaultProfile)
 	}
 
+	// nexen decides which opt-in profiles exist in this build (sandbox.IsExtraProfile), so a bad name is a 400 on PUT and not a
+	// start-up failure of the next boot.
+	for i, e := range n.Sandbox.ExtraProfiles {
+		if !sandbox.IsExtraProfile(e) {
+			return fmt.Errorf("nex.sandbox.extra_profiles[%d]: %q is not a known opt-in profile", i, e)
+		}
+	}
+
 	if n.ClaudeBin != "" {
 		if err := n.checkAbs("nex.claude_bin", n.ClaudeBin, home); err != nil {
 			return err
@@ -247,6 +255,7 @@ func (n NexConfig) Equal(o NexConfig) bool {
 		n.ClaudeBin == o.ClaudeBin &&
 		n.Sandbox.MaxProfile == o.Sandbox.MaxProfile &&
 		n.Sandbox.DefaultProfile == o.Sandbox.DefaultProfile &&
+		slices.Equal(n.Sandbox.ExtraProfiles, o.Sandbox.ExtraProfiles) &&
 		n.Timeouts == o.Timeouts &&
 		n.Peer == o.Peer
 }
