@@ -47,10 +47,14 @@ export interface TodoBook {
   open: WorkbookTodo[]
   /** Newest first. */
   done: WorkbookTodo[]
-  /** The cursor for paging the done record (`before=`): the oldest done todo loaded; null while none is. */
+  /** The oldest done todo RETAINED (null while none is). */
   doneOldestId: number | null
-  /** The last older done page came back short: there is nothing before `doneOldestId`. */
+  /** The next page's `before=`: the oldest id the last page brought, kept even when retention dropped that page; null: use `doneOldestId`. */
+  doneCursor: number | null
+  /** The record has no older page (a short page, or one that did not move the cursor). */
   doneExhausted: boolean
+  /** Retention (MAX_DONE_TODOS) dropped older done todos: they are not kept and paging stops (the UI shows the cap, not 「更多」). */
+  doneCapped: boolean
   loading: boolean
   /** Dropped todo ids, newest last (bounded). */
   droppedIds: number[]
@@ -114,7 +118,7 @@ interface WorkbookState {
   /** A workbook view opened (true) or closed (false) on a conversation: it is not evicted while open. */
   setViewing: (hostId: string, convKey: string, open: boolean) => void
   loadMore: (hostId: string, convKey: string) => Promise<void>
-  /** v2: the next older page of the done record (`before = doneOldestId`). */
+  /** v2: the next older page of the done record (`before = doneCursor ?? doneOldestId`). */
   loadMoreDone: (hostId: string, convKey: string) => Promise<void>
   /** v2: ask for a refresh; a 202 upserts its entry as pending (which is what makes refresh pending true). */
   requestRefresh: (hostId: string, convKey: string) => Promise<RefreshOutcome>
@@ -129,7 +133,7 @@ interface WorkbookState {
 }
 
 const NO_SUPPORT: WorkbookSupport = { v1: false, v2: false }
-const emptyTodos = (): TodoBook => ({ open: [], done: [], doneOldestId: null, doneExhausted: false, loading: false, droppedIds: [] })
+const emptyTodos = (): TodoBook => ({ open: [], done: [], doneOldestId: null, doneCursor: null, doneExhausted: false, doneCapped: false, loading: false, droppedIds: [] })
 const emptyConv = (): ConvState => ({
   status: '', statusAt: 0, entries: [], oldestId: null, exhausted: false, loading: false, touched: 0, missing: false,
   todos: emptyTodos(), refreshAvailable: false, availAt: 0,
@@ -174,10 +178,10 @@ function upsertTodos(t: TodoBook, incoming: WorkbookTodo[]): TodoBook {
   let openList = [...open.values()].sort((a, b) => a.id - b.id)
   if (openList.length > MAX_OPEN_TODOS) openList = openList.slice(openList.length - MAX_OPEN_TODOS)
   let doneList = [...done.values()].sort((a, b) => b.id - a.id)
-  let doneExhausted = t.doneExhausted
-  if (doneList.length > MAX_DONE_TODOS) { doneList = doneList.slice(0, MAX_DONE_TODOS); doneExhausted = false }
+  let doneCapped = t.doneCapped
+  if (doneList.length > MAX_DONE_TODOS) { doneList = doneList.slice(0, MAX_DONE_TODOS); doneCapped = true }
   return {
-    ...t, open: openList, done: doneList, doneExhausted, droppedIds: [...dropped].slice(-MAX_DROPPED_TOMBSTONES),
+    ...t, open: openList, done: doneList, doneCapped, droppedIds: [...dropped].slice(-MAX_DROPPED_TOMBSTONES),
     doneOldestId: doneList.length ? doneList[doneList.length - 1].id : null,
   }
 }
@@ -344,11 +348,11 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
 
     loadMoreDone: async (hostId, convKey) => {
       const c = get().byHost[hostId]?.byConv[convKey]
-      if (!get().support[hostId]?.v2 || !c || c.todos.loading || c.todos.doneExhausted) return
+      if (!get().support[hostId]?.v2 || !c || c.todos.loading || c.todos.doneExhausted || c.todos.doneCapped) return
       const epoch = get().epoch[hostId] ?? 0
       const gen = get().gens[hostId]
       const alive = () => (get().epoch[hostId] ?? 0) === epoch && get().gens[hostId] === gen
-      const before = c.todos.doneOldestId ?? undefined
+      const before = c.todos.doneCursor ?? c.todos.doneOldestId ?? undefined
       const setLoading = (loading: boolean) => set((s) => withConv(s, hostId, convKey, (x) => ({ ...x, todos: { ...x.todos, loading } })))
       setLoading(true)
       let r
@@ -361,8 +365,14 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       if (!alive()) return
       if (r.kind === 'not_found') { setLoading(false); return }
       const { todos } = r
+      // The cursor follows what the page brought, not what retention kept; a page that does not move it ends the paging.
+      const pageOldest = todos.length ? Math.min(...todos.map((x) => x.id)) : null
+      const moved = pageOldest !== null && (before === undefined || pageOldest < before)
       set((s) => withConv(s, hostId, convKey, (x) => ({
-        ...x, todos: { ...upsertTodos(x.todos, todos), loading: false, doneExhausted: x.todos.doneExhausted || todos.length < VIEW_PAGE },
+        ...x, todos: {
+          ...upsertTodos(x.todos, todos), loading: false, doneCursor: moved ? pageOldest : x.todos.doneCursor,
+          doneExhausted: x.todos.doneExhausted || !moved || todos.length < VIEW_PAGE,
+        },
       })))
     },
 

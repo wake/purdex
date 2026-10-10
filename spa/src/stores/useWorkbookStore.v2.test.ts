@@ -110,6 +110,32 @@ describe('loadMoreDone', () => {
     expect(fetchTodos).toHaveBeenCalledTimes(2)
   })
 
+  it('at MAX_DONE_TODOS the cursor still advances past an evicted page, never refetches the same page, and paging stops (doneCapped)', async () => {
+    st().setSupport('h1', V2)
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: Array.from({ length: MAX_DONE_TODOS }, (_, i) => todo(1201 - i, 'done')) }) // 1201..1002
+    expect(conv()?.todos.doneCapped).toBe(false)
+    const oldest = conv()?.todos.doneOldestId
+    fetchTodos.mockResolvedValueOnce({ kind: 'ok', todos: Array.from({ length: 20 }, (_, i) => todo(1001 - i, 'done')) }) // a full page, all older: retention drops it
+    await st().loadMoreDone('h1', 'c1')
+    expect(fetchTodos).toHaveBeenLastCalledWith('h1', 's1', { state: 'done', limit: 20, before: oldest })
+    expect(conv()?.todos.done).toHaveLength(MAX_DONE_TODOS)
+    expect(conv()?.todos.doneCursor).toBe(982) // advanced to the page's oldest even though the page was not kept
+    expect(conv()?.todos.doneCapped).toBe(true)
+    await st().loadMoreDone('h1', 'c1')
+    await st().loadMoreDone('h1', 'c1')
+    expect(fetchTodos).toHaveBeenCalledTimes(1) // stopped, not refetching
+  })
+
+  it('a page that does not move the cursor ends the paging (exhausted)', async () => {
+    st().setSupport('h1', V2)
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(50, 'done')] })
+    fetchTodos.mockResolvedValue({ kind: 'ok', todos: Array.from({ length: 20 }, (_, i) => todo(50 + i, 'done')) }) // nothing below 50 (a bad server)
+    await st().loadMoreDone('h1', 'c1')
+    expect(conv()?.todos.doneExhausted).toBe(true)
+    await st().loadMoreDone('h1', 'c1')
+    expect(fetchTodos).toHaveBeenCalledTimes(1)
+  })
+
   it('one load at a time; a failure releases it', async () => {
     st().setSupport('h1', V2)
     await st().openWorkbook('h1', 's1')
