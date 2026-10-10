@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 )
@@ -154,6 +160,85 @@ func TestLocalSetup(t *testing.T) {
 		err := localSetup("opencode", true)
 		if err != nil {
 			t.Fatalf("localSetup opencode remove: %v", err)
+		}
+	})
+}
+
+// pdx setup rewrites the mod folder, which reloads the mod of every session: over a relay in the middle of its
+// write that strands the op (#2441). The guard refuses (exit 13, relay_active, naming the ops) unless --force, and
+// it never blocks what it cannot see (a daemon without the field, or not answering).
+func TestSetupRelayGuard(t *testing.T) {
+	serve := func(status int, body string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/team/inflight" {
+				t.Errorf("guard asked %s", r.URL.Path)
+			}
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		}))
+	}
+	active := `{"approvals_open":0,"relays_active":2,"relays":[{"id":"op-1","kind":"self","state":"written","ref":"_abc123"},{"id":"op-2","kind":"member","state":"writing","ref":"_def456"}]}`
+	t.Run("an active relay refuses with exit 13, relay_active and the ops", func(t *testing.T) {
+		srv := serve(200, active)
+		defer srv.Close()
+		var stderr bytes.Buffer
+		if code := setupRelayGuard(srv.Client(), srv.URL, "", false, &stderr); code != ExitRefused {
+			t.Fatalf("code = %d, want %d", code, ExitRefused)
+		}
+		out := stderr.String()
+		for _, want := range []string{"relay_active", "op-1", "_abc123", "written", "op-2", "_def456", "writing", "--force"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("message lacks %q: %q", want, out)
+			}
+		}
+		if f := strings.Fields(out); f[len(f)-1] == "" {
+			t.Errorf("empty message")
+		}
+	})
+	t.Run("--force goes ahead", func(t *testing.T) {
+		srv := serve(200, active)
+		defer srv.Close()
+		if code := setupRelayGuard(srv.Client(), srv.URL, "", true, io.Discard); code != ExitOK {
+			t.Fatalf("code = %d", code)
+		}
+	})
+	t.Run("no active relay goes ahead", func(t *testing.T) {
+		srv := serve(200, `{"approvals_open":1,"relays_active":0}`)
+		defer srv.Close()
+		if code := setupRelayGuard(srv.Client(), srv.URL, "", false, io.Discard); code != ExitOK {
+			t.Fatalf("code = %d", code)
+		}
+	})
+	t.Run("a daemon that answers but cannot say refuses, and --force goes ahead", func(t *testing.T) {
+		for _, srv := range []*httptest.Server{serve(401, `nope`), serve(500, `{}`), serve(200, `not json`)} {
+			var stderr bytes.Buffer
+			if code := setupRelayGuard(srv.Client(), srv.URL, "", false, &stderr); code != ExitRefused || !strings.Contains(stderr.String(), "--force") {
+				t.Errorf("code = %d, stderr %q", code, stderr.String())
+			}
+			if code := setupRelayGuard(srv.Client(), srv.URL, "", true, io.Discard); code != ExitOK {
+				t.Errorf("--force: code = %d", code)
+			}
+			srv.Close()
+		}
+	})
+	t.Run("a daemon that does not answer at all goes ahead (nothing runs to strand)", func(t *testing.T) {
+		dead := httptest.NewServer(http.NotFoundHandler())
+		url := dead.URL
+		dead.Close()
+		if code := setupRelayGuard(&http.Client{Timeout: time.Second}, url, "", false, io.Discard); code != ExitOK {
+			t.Errorf("an unreachable daemon: code = %d", code)
+		}
+	})
+	t.Run("the token is sent", func(t *testing.T) {
+		var got string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Get("Authorization")
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		defer srv.Close()
+		setupRelayGuard(srv.Client(), srv.URL, "tok", false, io.Discard)
+		if got != "Bearer tok" {
+			t.Errorf("Authorization = %q", got)
 		}
 	})
 }

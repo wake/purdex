@@ -8,17 +8,20 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/agent/codex"
 	"github.com/wake/purdex/internal/agent/opencode"
 	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/team"
 )
 
 func runSetup(args []string) {
 	var agentType string
 	remove := false
+	force := false
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -29,6 +32,8 @@ func runSetup(args []string) {
 			}
 		case "--remove":
 			remove = true
+		case "--force":
+			force = true
 		}
 	}
 
@@ -49,6 +54,13 @@ func runSetup(args []string) {
 	action := "install"
 	if remove {
 		action = "remove"
+	}
+
+	// The mod folder is rewritten for cc, which reloads the mod of every session: not over a relay under way (#2441).
+	if agentType == "cc" {
+		if code := setupRelayGuard(&http.Client{Timeout: 5 * time.Second}, baseURL, token, force, os.Stderr); code != ExitOK {
+			os.Exit(code)
+		}
 	}
 
 	body, _ := json.Marshal(map[string]string{"action": action})
@@ -131,4 +143,43 @@ func localSetup(agentType string, remove bool) error {
 	default:
 		return fmt.Errorf("unknown agent type: %s (supported: cc, codex, opencode)", agentType)
 	}
+}
+
+// setupRelayGuard is ExitRefused (and says why on stderr) while the daemon reports relays under way, unless force.
+// A daemon that does not answer at all is not a reason to refuse (setup also installs before any daemon runs, and a
+// daemon that is down holds no mod to strand); one that answers an error is: the relays are then unknown.
+func setupRelayGuard(client *http.Client, baseURL, token string, force bool, stderr io.Writer) int {
+	if force {
+		return ExitOK
+	}
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/api/team/inflight", nil)
+	if err != nil {
+		return ExitOK
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ExitOK
+	}
+	defer resp.Body.Close()
+	var inf team.InflightResponse
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&inf) != nil {
+		// A daemon that answered but could not say (a storage failure, a wrong token, garbage): the relays are
+		// unknown, and unknown is not zero.
+		fmt.Fprintf(stderr, "setup: the daemon answered %d and could not say whether a relay is under way.\nrun again with --force to go ahead anyway.\nrelay_active\n", resp.StatusCode)
+		return ExitRefused
+	}
+	if inf.RelaysActive == 0 {
+		return ExitOK
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "setup: %d relay(s) under way would lose their mod:\n", inf.RelaysActive)
+	for _, r := range inf.Relays {
+		fmt.Fprintf(&b, "  %s  %s %s  %s\n", r.ID, r.Kind, r.Ref, r.State)
+	}
+	b.WriteString("wait for them to finish, or run again with --force.\nrelay_active\n")
+	fmt.Fprint(stderr, b.String())
+	return ExitRefused
 }
