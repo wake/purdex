@@ -108,7 +108,10 @@ var errMemberNotSettled = errors.New("member row still joining")
 // person's /relay cannot be refused (U-M1), so its `moved` cannot be checked before it happens, and a fact held at the head of
 // the host's FIFO would hold that host's `ended` facts with it. Unreachable is not "unannounced": only a capabilities answer
 // that lacks the kind drops it. (A kind table, not a column: it is a property of the kind, and team_facts needs no migration.)
-func dropIfUnannounced(kind string) bool { return kind == team.FactMoved }
+//
+// `relay_ask` is the other one (MR-4, D8): the mod's ask was checked against the lead host's capabilities before it was written, so
+// a fact that finds the kind gone was overtaken by a downgrade, and an ask is worth nothing held for hours.
+func dropIfUnannounced(kind string) bool { return kind == team.FactMoved || kind == team.FactRelayAsk }
 
 // applyMovedIn is `moved` on the lead host (spec §3.2, §4.5): the member's session moved on its host. The row is the one of THIS
 // host, in this team, with this mk — never another host's, never a local row. An active row of a live team takes the new session,
