@@ -32,6 +32,15 @@ func (m *Module) handleRelayAsk(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "session_id is required; used_pct must be 0–100 and window non-negative", nil)
 		return
 	}
+	// A member whose lead is on another host asks through the lead host's capabilities first (MR-4, D8).
+	if row, ok, err := m.store.ActiveRemoteMemberBySession(req.SessionID); err != nil {
+		m.logf("[team] relay ask %s: %v", req.RequestID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	} else if ok {
+		m.askRemote(w, req, row)
+		return
+	}
 	// The same mutex as the lead's relay create: an ask and a `pdx relay` for the same member are strictly ordered
 	// (ask first → the relay accepts it; relay first → the ask is refused relay_open).
 	m.createMu.Lock()
@@ -101,13 +110,27 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 		m.logf("[team] relay ask notice %s: %v", a.ID, err)
 		return
 	}
-	if !ok {
-		return // the member left: the sweeper withdraws the ask
-	}
-	address, title := m.memberNoticeName(mr)
-	ref := strings.TrimPrefix(mr.Ref, "_")
 	minutes := int((cur.ExpiresAt - now + 59_999) / 60_000)
-	if !m.noticeToLead(mr, t, fmt.Sprintf(team.RelayAskNoticeFmt, address, ref, title, cur.UsedPct, minutes, ref), "relay ask") {
+	var text string
+	if ok {
+		address, title := m.memberNoticeName(mr)
+		ref := strings.TrimPrefix(mr.Ref, "_")
+		text = fmt.Sprintf(team.RelayAskNoticeFmt, address, ref, title, cur.UsedPct, minutes, ref)
+	} else {
+		// a mirror of a remote member's ask (MR-4): the member is a row of another host, named as the lead can address it
+		var rok bool
+		if mr, t, rok, err = m.store.remoteAskMember(cur); err != nil {
+			m.logf("[team] relay ask notice %s: %v", a.ID, err)
+			return
+		} else if !rok {
+			return // the member left: the sweeper withdraws the ask
+		}
+		if text = m.remoteAskNoticeText(mr, minutes, cur.UsedPct); text == "" {
+			m.logf("[team] relay ask notice %s: host %s has no alias here; nothing the lead could type", a.ID, mr.HostID)
+			return
+		}
+	}
+	if !m.noticeToLead(mr, t, text, "relay ask") {
 		return
 	}
 	if _, err := m.store.MarkAskNotified(cur.ID, m.now()); err != nil {

@@ -3,12 +3,14 @@ package teammod
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
 )
 
 // M's facts outbox as the generic outbox pump's store (cross-host team spec §3.1 rules 1, 4, 6; plan X2c-2). The
@@ -77,6 +79,28 @@ func (o *factOutbox) Announces(caps ipeers.TeamCaps, kind string) bool {
 
 // DropIfUnannounced is the pump's kindDropper policy: see dropIfUnannounced.
 func (o *factOutbox) DropIfUnannounced(kind string) bool { return dropIfUnannounced(kind) }
+
+// Stale is the pump's entryStale policy: a `relay_ask` whose ask is not open on this host any more (accepted, expired, withdrawn,
+// or its window passed) is not sent — the lead would be asked to approve something nobody is waiting for.
+func (o *factOutbox) Stale(e outboxEntry) (bool, error) {
+	if e.Kind != team.FactRelayAsk {
+		return false, nil
+	}
+	var f team.TeamFact
+	if err := json.Unmarshal(e.Body, &f); err != nil {
+		return false, nil // a body that cannot be read is the receiver's to refuse
+	}
+	var state string
+	var expires int64
+	err := o.s.db.QueryRow(`SELECT state, expires_at FROM relay_asks WHERE id = ?`, f.AskID).Scan(&state, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("facts outbox ask %s: %w", f.AskID, err)
+	}
+	return state != team.RelayAskOpen || expires <= o.now(), nil
+}
 
 // Dropped ends a fact the lead host will never be told (it does not apply the kind). One statement, a CAS on pending.
 func (o *factOutbox) Dropped(e outboxEntry) error {

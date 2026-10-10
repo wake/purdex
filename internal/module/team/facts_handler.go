@@ -111,6 +111,11 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 				m.noticeForwardedOpEnded(fact.OpID)
 			}
 		}
+		if fact.Kind == team.FactRelayAsk && bodyHasState(res.Body, team.FactApplied) {
+			if a, ok, err := m.store.GetRelayAsk(fact.AskID); err == nil && ok {
+				m.notifyAskAsync(a) // after the commit; a send that fails is the sweeper's to retry
+			}
+		}
 		m.rosterChanged() // a seat may have been freed
 		if fact.Kind == team.FactRegistered || fact.Kind == team.FactSpawnFailed {
 			m.wake(fact.MK) // a `pdx spawn --host` POST is waiting on this op
@@ -122,7 +127,7 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 // factKindApplied: the fact kinds this version applies (the same list the inventory announces as fact_kinds).
 func factKindApplied(kind string) bool {
 	switch kind {
-	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved, team.FactRelayFailed:
+	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved, team.FactRelayFailed, team.FactRelayAsk:
 		return true
 	}
 	return false
@@ -136,13 +141,13 @@ func validateFact(f team.TeamFact) string {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
 	}
-	for _, s := range []string{f.MemberSession, f.Ref, f.ProcStart, f.Pane, f.Title, f.OpID, f.NewSession, f.NewRef} {
+	for _, s := range []string{f.MemberSession, f.Ref, f.ProcStart, f.Pane, f.Title, f.OpID, f.NewSession, f.NewRef, f.AskID} {
 		if len(s) > maxCommandField || !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
 	}
 	switch f.Kind {
-	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved, team.FactRelayFailed:
+	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved, team.FactRelayFailed, team.FactRelayAsk:
 		if f.MK == "" {
 			return f.Kind + ": mk is required"
 		}
@@ -163,6 +168,13 @@ func validateFact(f team.TeamFact) string {
 	case team.FactSpawnFailed:
 		if !spawnReasons[f.Reason] {
 			return "spawn_failed: reason is not a known spawn reason"
+		}
+	case team.FactRelayAsk:
+		switch {
+		case f.MK == "" || !uuidV4.MatchString(f.AskID):
+			return "relay_ask: mk and ask_id (a UUID v4) are required"
+		case f.UsedPct < 0 || f.UsedPct > 100 || f.Window < 0 || f.ExpiresInS <= 0:
+			return "relay_ask: used_pct is 0-100, window non-negative and expires_in_s positive"
 		}
 	}
 	return ""

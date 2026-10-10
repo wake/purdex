@@ -27,8 +27,8 @@ func teamHosts() []config.PeerHost {
 // it) must fail here.
 var wantTeamKinds = []string{"adopt", "release", "kill", "relay", "spawn", "end", "lead_moved", "void", "team.appearance"}
 
-// wantFactKinds is written out too: registered / spawn_failed are announced only once the lead host applies them (X4b), moved once it applies a person's /relay (MR-2), relay_failed once it applies a lead relay's failure (MR-3a); relay_ask stays unannounced until its PR.
-var wantFactKinds = []string{"ended", "registered", "spawn_failed", "moved", "relay_failed"}
+// wantFactKinds is written out too: registered / spawn_failed are announced only once the lead host applies them (X4b), moved once it applies a person's /relay (MR-2), relay_failed once it applies a lead relay's failure (MR-3a), relay_ask once it mirrors a remote member's ask (MR-4).
+var wantFactKinds = []string{"ended", "registered", "spawn_failed", "moved", "relay_failed", "relay_ask"}
 
 func TestInventory_TeamCapsPerPrincipal(t *testing.T) {
 	c, _ := newHostsTestCore(t, "local:1", "local", "", teamHosts())
