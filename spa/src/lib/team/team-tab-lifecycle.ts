@@ -16,6 +16,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { closeTab } from '../tab-lifecycle'
+import { clearTabMoving, isTabMoving } from './moving-tabs'
 import { currentTeamState, type TeamState } from './team-state'
 
 interface LedGroup {
@@ -68,6 +69,12 @@ function pass(prev: Map<string, LedGroup>): { changed: boolean; groups: Map<stri
   let changed = false
   for (const [leadTab, led] of prev) {
     if (Object.hasOwn(tabs, leadTab)) continue
+    // A tear-off / merge deleted it on purpose: the lead lives on in another window, so nothing closes here and no ghost
+    // row is left. The mark is spent by this look.
+    if (isTabMoving(leadTab)) {
+      clearTabMoving(leadTab)
+      continue
+    }
     // The snapshot is a pass old: a team that ended, or a member released, since then is not the group any more (R6 -
     // such a tab is a normal tab and is never closed by this), and a team that no longer exists leaves no ghost.
     if (!state.index.byKey.has(led.teamKey)) continue

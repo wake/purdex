@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { markTabsMoving } from '../lib/team/moving-tabs'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 
@@ -22,6 +23,7 @@ export function useWorkspaceWindowActions() {
     // Read fresh state via getState() to avoid stale closure after async IPC.
     // The IPC await in handleWsTearOff/handleWsMergeTo may take long enough for
     // store state to change; using closure values would cause lost updates.
+    markTabsMoving(tabIds) // a move, not a close: the team lifecycle must not close the group or leave a ghost (#2140)
     const { tabs: currentTabs, tabOrder: currentTabOrder } = useTabStore.getState()
     const newTabs = { ...currentTabs }
     const newTabOrder = currentTabOrder.filter(id => !tabIds.includes(id))

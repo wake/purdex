@@ -5,6 +5,7 @@ import { createTab } from '../../types/tab'
 import { getPrimaryPane, collectLeaves } from '../../lib/pane-tree'
 import { renameSession } from '../../lib/host-api'
 import { closeTab } from '../../lib/tab-lifecycle'
+import { clearTabMoving, markTabsMoving } from '../../lib/team/moving-tabs'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { Tab, PaneContent, PaneRebuildRecord, TerminatedReason } from '../../types/tab'
@@ -217,10 +218,13 @@ export function useTabWorkspaceActions(displayTabs: Tab[]) {
         const tabData = tabs[tab.id]
         if (!tabData) break
         // Must remove tab BEFORE IPC to avoid duplication if locked
+        markTabsMoving([tab.id]) // a move, not a close: no group close, no ghost lead row (#2140)
         handleCloseTab(tab.id)
         // Only send to new window if tab was actually removed
         if (!useTabStore.getState().tabs[tab.id]) {
           window.electronAPI.tearOffTab(JSON.stringify(tabData))
+        } else {
+          clearTabMoving(tab.id) // kept (locked / close declined): it did not move
         }
         break
       }
