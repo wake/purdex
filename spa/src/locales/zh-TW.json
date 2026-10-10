@@ -2410,6 +2410,7 @@
   "chat.unreadable.terminal": "切到終端機",
   "statusrow.model": "{{model}} · {{effort}}",
   "statusrow.none": "{{name}}：沒有資料",
+  "statusrow.name.model": "模型",
   "statusrow.name.context": "context",
   "statusrow.name.five_hour": "5 小時額度",
   "statusrow.name.seven_day": "7 天額度",

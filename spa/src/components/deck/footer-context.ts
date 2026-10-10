@@ -12,6 +12,10 @@ export interface DeckFooterContext {
   items: readonly ConversationItem[]
   /** The header status is idle. */
   idle: boolean
+  /** The header status: running | waiting | idle | error | ended | unknown (the status row's state cell). */
+  status: string
+  /** The model and effort the conversation itself reports (the status row's fallback when no statusLine snapshot has them). */
+  usage: { model?: string; effort?: string } | undefined
   onSwitchToTerminal: () => void
 }
 
@@ -20,6 +24,6 @@ export function footerContext(paneId: string, hostId: string, sessionId: string,
   return {
     paneKey: paneId, hostId, sessionId,
     capabilities: doc.capabilities ?? undefined,
-    items, idle: doc.header?.status === 'idle', onSwitchToTerminal,
+    items, idle: doc.header?.status === 'idle', status: doc.header?.status ?? 'unknown', usage: doc.header?.usage, onSwitchToTerminal,
   }
 }

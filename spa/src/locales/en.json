@@ -2410,6 +2410,7 @@
   "chat.unreadable.terminal": "Switch to terminal",
   "statusrow.model": "{{model}} · {{effort}}",
   "statusrow.none": "{{name}}: no data",
+  "statusrow.name.model": "Model",
   "statusrow.name.context": "Context",
   "statusrow.name.five_hour": "5-hour limit",
   "statusrow.name.seven_day": "7-day limit",
