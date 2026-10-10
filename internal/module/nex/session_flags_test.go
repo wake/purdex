@@ -27,11 +27,11 @@ var opusXhigh = sessionReading{Model: opusID, Effort: "xhigh"}
 // is red; no insertion → red.
 func TestApplySessionFlags_InsertedAfterTheResumeID(t *testing.T) {
 	cases := map[string]string{
-		"claude --resume {id}":          "claude --resume {id}" + flagsOpus,
-		"cld-yolo --resume {id} -v":     "cld-yolo --resume {id}" + flagsOpus + " -v",
-		"claude -r {id}":                "claude -r {id}" + flagsOpus,
-		"claude --resume={id} --x":      "claude --resume={id}" + flagsOpus + " --x",
-		"FOO=1 claude --resume {id};ls": "FOO=1 claude --resume {id}" + flagsOpus + ";ls",
+		"claude --resume {id}":       "claude --resume {id}" + flagsOpus,
+		"cld-yolo --resume {id} -v":  "cld-yolo --resume {id}" + flagsOpus + " -v",
+		"claude -r {id}":             "claude -r {id}" + flagsOpus,
+		"claude --resume={id} --x":   "claude --resume={id}" + flagsOpus + " --x",
+		"FOO=1 claude --resume {id}": "FOO=1 claude --resume {id}" + flagsOpus,
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, applySessionFlags(in, opusXhigh), in)
@@ -45,6 +45,31 @@ func TestApplySessionFlags_LeavesWhatIsNotAClaudeResumeAlone(t *testing.T) {
 		assert.Equal(t, in, applySessionFlags(in, opusXhigh), in)
 	}
 	assert.Equal(t, "claude --resume {id}", applySessionFlags("claude --resume {id}", sessionReading{}))
+}
+
+// codex attack: the rewrite is for ONE simple command only. A template with shell structure (pipes, lists, quotes, comments,
+// substitutions, redirections, escapes), two resume ids, or an option terminator is ambiguous — which command do the flags belong
+// to? — and is left exactly as the user wrote it. Mutation: the grammar guard dropped → each of these is changed (red).
+func TestApplySessionFlags_AmbiguousTemplatesAreLeftAlone(t *testing.T) {
+	for _, in := range []string{
+		"echo --resume {id} | claude",
+		"echo --resume {id}; claude --resume {id}",
+		"claude --resume {id}; ls",
+		"claude --resume {id} && ls",
+		"claude --resume {id} & ",
+		`claude --resume {id} "mention --model=sonnet"`,
+		`claude --resume {id} 'x'`,
+		"claude --resume {id} # --model x",
+		"claude --resume $(cat f) {id}",
+		"claude --resume {id} > out",
+		`claude --resume {id} \`,
+		"claude --resume {id} -- --model=sonnet",
+		"claude --resume {id}\nclaude --resume {id}",
+		"claude --resume {id} --resume {id}",
+		"(claude --resume {id})",
+	} {
+		assert.Equal(t, in, applySessionFlags(in, opusXhigh), in)
+	}
 }
 
 // What the user's template already says wins, flag by flag. Mutation: add them anyway → duplicated flags (red).
