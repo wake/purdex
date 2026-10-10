@@ -36,11 +36,17 @@ const (
 	RelayReasonHandoffIncomplete  = "handoff_incomplete"  // failed
 	RelayReasonMemberUnresponsive = "member_unresponsive" // failed (P6)
 	RelayReasonMemberGone         = "member_gone"         // failed (P6)
-	RelayReasonDaemonUnavailable  = "daemon_unavailable"  // failed
-	RelayReasonDenied             = "denied"              // cancelled
-	RelayReasonTimeout            = "timeout"             // cancelled
-	RelayReasonCompacted          = "compacted"           // cancelled
-	RelayReasonAbandoned          = "abandoned"           // cancelled
+	// #2439: why a member never answered. Unseen: its mod did not acknowledge the control message in RelayClaimTimeoutS
+	// (terminal stuck on a dialog, Claude Code not running); Blocked: the same, or a turn that never ended, while the agent
+	// says it waits on a prompt; BusyTimeout: seen, but the turn ran past RelayBusyCapS. All three exit 14 in the CLI.
+	RelayReasonMemberUnseen      = "member_unseen"       // failed
+	RelayReasonMemberBusyTimeout = "member_busy_timeout" // failed
+	RelayReasonMemberBlocked     = "member_blocked"      // failed
+	RelayReasonDaemonUnavailable = "daemon_unavailable"  // failed
+	RelayReasonDenied            = "denied"              // cancelled
+	RelayReasonTimeout           = "timeout"             // cancelled
+	RelayReasonCompacted         = "compacted"           // cancelled
+	RelayReasonAbandoned         = "abandoned"           // cancelled
 )
 
 // Relay error codes (APIError.Error on /api/relay/*); 409 unless noted.

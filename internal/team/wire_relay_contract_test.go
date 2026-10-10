@@ -26,6 +26,9 @@ func TestRelayContract_Literals(t *testing.T) {
 		"RelayReasonHandoffIncomplete":  RelayReasonHandoffIncomplete,
 		"RelayReasonMemberUnresponsive": RelayReasonMemberUnresponsive,
 		"RelayReasonMemberGone":         RelayReasonMemberGone,
+		"RelayReasonMemberUnseen":       RelayReasonMemberUnseen,
+		"RelayReasonMemberBusyTimeout":  RelayReasonMemberBusyTimeout,
+		"RelayReasonMemberBlocked":      RelayReasonMemberBlocked,
 		"RelayReasonDaemonUnavailable":  RelayReasonDaemonUnavailable,
 		"RelayReasonDenied":             RelayReasonDenied,
 		"RelayReasonTimeout":            RelayReasonTimeout,
@@ -53,7 +56,8 @@ func TestRelayContract_Literals(t *testing.T) {
 			"RelayWriting": "writing", "RelayWritten": "written", "RelayCleared": "cleared",
 			"RelayDone": "done", "RelayFailed": "failed", "RelayCancelled": "cancelled",
 			"RelayReasonHandoffIncomplete": "handoff_incomplete", "RelayReasonMemberUnresponsive": "member_unresponsive",
-			"RelayReasonMemberGone": "member_gone", "RelayReasonDaemonUnavailable": "daemon_unavailable",
+			"RelayReasonMemberGone": "member_gone", "RelayReasonMemberUnseen": "member_unseen",
+			"RelayReasonMemberBusyTimeout": "member_busy_timeout", "RelayReasonMemberBlocked": "member_blocked", "RelayReasonDaemonUnavailable": "daemon_unavailable",
 			"RelayReasonDenied": "denied", "RelayReasonTimeout": "timeout", "RelayReasonCompacted": "compacted",
 			"RelayReasonAbandoned":  "abandoned",
 			"ErrMemberRelayIsLeads": "member_relay_is_leads", "ErrSelfRelayOff": "self_relay_off",
@@ -67,7 +71,7 @@ func TestRelayContract_Literals(t *testing.T) {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
-	if MinMemberRelayModVersion != 2 || RelayClaimTimeoutS != 60 || RelayStallTimeoutS != 900 {
+	if MinMemberRelayModVersion != 2 || RelayClaimTimeoutS != 60 || RelayStallTimeoutS != 900 || RelayBusyCapS != 3600 || RelayIdleGraceS != 120 {
 		t.Errorf("member relay limits = %d / %d / %d, want 2 / 60 / 900", MinMemberRelayModVersion, RelayClaimTimeoutS, RelayStallTimeoutS)
 	}
 	if RelayThresholdPct != 70 || RelayMinGrowth != 20000 || SelfRelayDeadlineS != 600 {
