@@ -74,6 +74,15 @@ type fakeIostat struct {
 	out   func(n int64) (string, error)
 	block chan struct{} // when non-nil the run waits for it or its context
 	live  atomic.Int64  // runs in flight
+
+	delay  time.Duration // how long a run takes (iostat takes about a second)
+	starts []time.Time
+}
+
+func (f *fakeIostat) startTimes() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]time.Time(nil), f.starts...)
 }
 
 func (f *fakeIostat) run(ctx context.Context) (string, error) {
@@ -81,8 +90,16 @@ func (f *fakeIostat) run(ctx context.Context) (string, error) {
 	f.live.Add(1)
 	defer f.live.Add(-1)
 	f.mu.Lock()
-	block, out := f.block, f.out
+	block, out, delay := f.block, f.out, f.delay
+	f.starts = append(f.starts, time.Now())
 	f.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
 	if block != nil {
 		select {
 		case <-block:
@@ -160,6 +177,35 @@ func TestCPUSampler_SamplesEveryIntervalWhileAsked(t *testing.T) {
 	defer s.Close()
 	_, _ = s.CPUPercent(5 * time.Millisecond)
 	waitFor(t, "three runs", func() bool { _, _ = s.CPUPercent(5 * time.Millisecond); return f.runs.Load() >= 3 })
+}
+
+// The interval is the period between the starts of two runs, not the pause after one (codex R1 P2): a run that takes 40 ms
+// under a 70 ms interval starts again 70 ms after the last start, not 110. Mutation gate: waiting a full interval after
+// the run ends → the gap is about 110 ms (red).
+func TestCPUSampler_TheIntervalIsMeasuredFromTheStartOfARun(t *testing.T) {
+	f := &fakeIostat{delay: 40 * time.Millisecond}
+	s := newTestSampler(f, &logSink{})
+	defer s.Close()
+	waitFor(t, "five runs", func() bool { _, _ = s.CPUPercent(70 * time.Millisecond); return len(f.startTimes()) >= 5 })
+	st := f.startTimes()
+	for i := 1; i < len(st); i++ {
+		gap := st[i].Sub(st[i-1])
+		assert.Less(t, gap, 100*time.Millisecond, "run %d started %v after the previous start", i, gap)
+		assert.GreaterOrEqual(t, gap, 60*time.Millisecond)
+	}
+}
+
+// A shorter interval takes effect now, not after the old wait. Mutation gate: no wake-up on a shorter interval → the next
+// run waits out the hour (red).
+func TestCPUSampler_AShorterIntervalWakesTheWait(t *testing.T) {
+	f := &fakeIostat{}
+	s := newTestSampler(f, &logSink{})
+	defer s.Close()
+	_, _ = s.CPUPercent(time.Hour)
+	waitFor(t, "the first run", func() bool { return f.runs.Load() == 1 })
+	time.Sleep(20 * time.Millisecond) // it is now waiting an hour
+	_, _ = s.CPUPercent(10 * time.Millisecond)
+	waitFor(t, "a second run soon after", func() bool { return f.runs.Load() >= 2 })
 }
 
 // Mutation gate: no idle check → the runs go on with nobody asking (red). A restart must not serve the old value.
