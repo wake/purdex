@@ -58,6 +58,7 @@ const READER_IMPORTERS = [
   'src/components/hosts/SessionsSection.tsx',
   'src/components/hosts/nex/NexExecutionsTable.tsx',
   'src/components/settings/WorkerSettingsPage.tsx', // the host picker lists the shown hosts only
+  'src/hooks/useConversationViewGate.ts', // U3-1a: the deck / chat gate asks the pane gate first, like useHandoffCandidate (a hidden host has no conversation to read)
   'src/hooks/useHandoffCandidate.ts',
   'src/hooks/useRouteSync.ts',
   'src/hooks/useShortcuts.ts',
