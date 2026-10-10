@@ -89,16 +89,16 @@ func (s *Store) moveRemoteMemberIn(tx *sql.Tx, op team.RelayOp, r RelayReport) (
 	return true, nil
 }
 
-// dropIfUnannounced are the fact kinds that are dropped, not held, when the lead host does not announce them (§3.6, D8): a
-// person's /relay cannot be refused (U-M1), so its `moved` cannot be checked before it happens, and a fact held at the head of
-// the host's FIFO would hold that host's `ended` facts with it. Unreachable is not "unannounced": only a capabilities answer
-// that lacks the kind drops it. (A kind table, not a column: it is a property of the kind, and team_facts needs no migration.)
 // ErrClearedMemberKilled refuses a cleared whose old session is a remote member whose kill has committed.
 var ErrClearedMemberKilled = errors.New("the old session is a remote member whose kill is under way")
 
 // errMemberNotSettled: a moved fact met a row that is still joining; it is retried, not answered.
 var errMemberNotSettled = errors.New("member row still joining")
 
+// dropIfUnannounced are the fact kinds that are dropped, not held, when the lead host does not announce them (§3.6, D8): a
+// person's /relay cannot be refused (U-M1), so its `moved` cannot be checked before it happens, and a fact held at the head of
+// the host's FIFO would hold that host's `ended` facts with it. Unreachable is not "unannounced": only a capabilities answer
+// that lacks the kind drops it. (A kind table, not a column: it is a property of the kind, and team_facts needs no migration.)
 func dropIfUnannounced(kind string) bool { return kind == team.FactMoved }
 
 // applyMovedIn is `moved` on the lead host (spec §3.2, §4.5): the member's session moved on its host. The row is the one of THIS
