@@ -9,7 +9,8 @@ import { HOST_TINT_PCT, hostTintBackground } from './host-tint'
 
 const themes = readFileSync(resolve(__dirname, '../styles/themes.css'), 'utf8')
 const tokenOf = (theme: string, token: string): string => {
-  const block = themes.slice(themes.indexOf(`[data-theme="${theme}"] {`))
+  const from = themes.indexOf(`[data-theme="${theme}"] {`)
+  const block = themes.slice(from, themes.indexOf('\n}', from)) // this theme's block only: a missing token must fail, not read the next theme's
   return new RegExp(`${token}:\\s*(#[0-9a-fA-F]{6})`).exec(block)![1]
 }
 type Rgb = { r: number; g: number; b: number }

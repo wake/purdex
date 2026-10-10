@@ -4,7 +4,8 @@
 import { useHostLook } from './host-look'
 import { resolveHostColorSet, type HostColorMode } from './host-color'
 
-/** A middle tone: clearly the host's colour, still dark/light enough in each theme for --text-primary to read at 4.5:1. */
+/** A middle tone: clearly the host's colour, still dark/light enough in each theme for --text-primary to read at 4.5:1 for every preset
+ *  colour (pinned in host-tint.test.ts). A hand-typed extreme colour (pure white on nord, say) is not guaranteed that. */
 export const HOST_TINT_PCT = 34
 
 export function hostTintBackground(hex: string): string {
