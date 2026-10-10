@@ -103,6 +103,35 @@ describe('a different session in the same pane', () => {
   })
 })
 
+describe('no session id (plan D3)', () => {
+  for (const missing of [null, ''] as const) {
+    it(`sessionId ${JSON.stringify(missing)} with old turns still in hand is 「no_session」: no transcript, no panel, no memory`, () => {
+      const { rerender } = mount()
+      fireEvent.click(screen.getAllByTestId('chat-work')[0]) // a panel under session-1
+      // provenance clears the id during /clear, relay or rebuild while the old turns are still held
+      rerender(<ChatView {...props({ sessionId: missing })} />)
+      expect(screen.getByTestId('unreadable')).toHaveAttribute('data-reason', 'no_session')
+      expect(screen.queryByTestId('chat-scroll')).toBeNull()
+      expect(screen.queryByTestId('chat-work')).toBeNull()
+      expect(screen.queryByTestId('session-right-panel')).toBeNull()
+      expect(readScrollMemo(chatScrollKey(PANE, conversationBinding('h', missing)))).toBeUndefined()
+      expect(readPanel(PANE)?.binding).not.toBe(conversationBinding('h', missing)) // nothing was opened under the empty binding
+    })
+  }
+
+  it('an explicit unreadable reason does not outrank a missing session', () => {
+    mount({ sessionId: null, unreadable: 'offline' })
+    expect(screen.getByTestId('unreadable')).toHaveAttribute('data-reason', 'no_session')
+  })
+
+  it('the terminal button is still offered', () => {
+    const onSwitchToTerminal = vi.fn()
+    mount({ sessionId: null, onSwitchToTerminal })
+    fireEvent.click(screen.getByTestId('unreadable-terminal'))
+    expect(onSwitchToTerminal).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('scroll memory belongs to the conversation', () => {
   const scrollTo = vi.fn()
   beforeEach(() => {

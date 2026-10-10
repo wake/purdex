@@ -56,6 +56,16 @@ function Entry({ entry, paneKey, binding }: { entry: ChatEntry; paneKey: string;
  * scroll, fold or panel state of the old one (all three memories are keyed by pane AND binding).
  */
 export function ChatView(props: ChatViewProps) {
+  // No session id (provenance cleared it while /clear, relay or rebuild is under way) is unreadable whatever turns are still
+  // held (plan D3): nothing of the old transcript is drawn and no memory is read or written under an empty binding.
+  if (!props.sessionId) {
+    return (
+      <div data-testid="chat-view" className="flex h-full min-h-0 flex-col">
+        <ChatHeader title={props.title} status={props.status} />
+        <div className="min-h-0 flex-1"><UnreadableState reason="no_session" onSwitchToTerminal={props.onSwitchToTerminal} /></div>
+      </div>
+    )
+  }
   const binding = conversationBinding(props.hostId, props.sessionId)
   return <ChatViewBody key={binding} binding={binding} {...props} />
 }
