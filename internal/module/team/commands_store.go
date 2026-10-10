@@ -101,6 +101,8 @@ type CommandResult struct {
 	Status   int
 	Body     json.RawMessage
 	Replayed bool
+
+	changedOp string // a relay op this decision changed: the store tells its waiters once the transaction commits
 }
 
 // ApplyTeamCommand decides p in ONE transaction: the stored answer of an earlier copy (same lead host, same id)
@@ -181,6 +183,7 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 	if err := tx.Commit(); err != nil {
 		return fail(fmt.Errorf("commit: %w", err))
 	}
+	s.notifyOp(res.changedOp)
 	return res, nil
 }
 
@@ -189,6 +192,9 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 // clock, is not too old. Zero is "absent" (the lead omits the field; an older lead never sends it); a negative value is
 // no time a lead can have written and counts as too old, checked before the subtraction so the extremes cannot overflow.
 func commandTooOld(c team.TeamCommand, now int64) bool {
+	if c.Kind == team.CommandRelay && c.CreatedAt == 0 {
+		return true // a new kind: no older lead omits it, so omitting it is not a way round the refusal
+	}
 	if c.CreatedAt == 0 || (c.Kind != team.CommandAdopt && c.Kind != team.CommandSpawn && c.Kind != team.CommandRelay) {
 		return false
 	}

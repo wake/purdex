@@ -8,9 +8,9 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-func relayWire(id, mk, opID string) team.TeamCommand {
+func relayWire(f *fixture, id, mk, opID string) team.TeamCommand {
 	c := relayCmdFor(id, mk, opID)
-	c.ToHostID, c.CreatedAt = "h:1", 0 // no created_at: the age check is the store test's
+	c.ToHostID, c.CreatedAt = "h:1", f.m.now()
 	return c
 }
 
@@ -36,7 +36,7 @@ func relayHTTPFixture(t *testing.T) (*fixture, *fakeNoticeDeliverer) {
 // → red; control to another session → red.
 func TestCommands_RelayOverHTTPSendsTheControlThroughTheSeam(t *testing.T) {
 	f, d := relayHTTPFixture(t)
-	code, body := f.postCmd(leadPrincipal(), relayWire(cmdUUID1, "mk-1", relayOpID))
+	code, body := f.postCmd(leadPrincipal(), relayWire(f, cmdUUID1, "mk-1", relayOpID))
 	var ans team.TeamCommandAnswer
 	if err := json.Unmarshal(body, &ans); err != nil || code != http.StatusOK {
 		t.Fatalf("%d %s (%v)", code, body, err)
@@ -62,7 +62,7 @@ func TestCommands_RelayWithoutAModHelloIsUnsupported(t *testing.T) {
 	f.m.mu.Lock()
 	f.m.modSeen["sid-1"] = helloInfo{ModVersion: "1", At: f.clock.Load()}
 	f.m.mu.Unlock()
-	code, body := f.postCmd(leadPrincipal(), relayWire(cmdUUID1, "mk-1", relayOpID))
+	code, body := f.postCmd(leadPrincipal(), relayWire(f, cmdUUID1, "mk-1", relayOpID))
 	if code != http.StatusConflict || errCode(t, body) != team.ErrRelayUnsupported {
 		t.Fatalf("%d %s, want 409 %s", code, body, team.ErrRelayUnsupported)
 	}
@@ -75,7 +75,7 @@ func TestCommands_RelayWithoutAModHelloIsUnsupported(t *testing.T) {
 // after the claim sends nothing (the op is no longer requested). Mutation: send on every replay → red.
 func TestCommands_RelayReplayAfterTheClaimSendsNoSecondControl(t *testing.T) {
 	f, d := relayHTTPFixture(t)
-	cmd := relayWire(cmdUUID1, "mk-1", relayOpID)
+	cmd := relayWire(f, cmdUUID1, "mk-1", relayOpID)
 	f.postCmd(leadPrincipal(), cmd)
 	waitFor(t, func() bool { return len(d.calls()) == 1 })
 	mustReport(t, f.m.store, relayOpID, RelayReport{State: team.RelayClaimed, At: f.clock.Load() + 1})
@@ -91,7 +91,7 @@ func TestCommands_RelayReplayAfterTheClaimSendsNoSecondControl(t *testing.T) {
 // A relay needs the id of an op (a UUID v4) and an mk; a void names a relay too.
 func TestCommands_RelayValidation(t *testing.T) {
 	f, _ := relayHTTPFixture(t)
-	for _, c := range []team.TeamCommand{relayWire(cmdUUID1, "", relayOpID), relayWire(cmdUUID1, "mk-1", ""), relayWire(cmdUUID1, "mk-1", cmdBadUID)} {
+	for _, c := range []team.TeamCommand{relayWire(f, cmdUUID1, "", relayOpID), relayWire(f, cmdUUID1, "mk-1", ""), relayWire(f, cmdUUID1, "mk-1", cmdBadUID)} {
 		if code, body := f.postCmd(leadPrincipal(), c); code != http.StatusBadRequest || errCode(t, body) != team.ErrCommandBadRequest {
 			t.Fatalf("%+v: %d %s, want 400 bad_request", c, code, body)
 		}

@@ -52,6 +52,15 @@ func applyRelayIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	if p.ModOK == nil || !p.ModOK(m.MemberSessionID) {
 		return refusal(http.StatusConflict, team.ErrRelayUnsupported, "the member's Purdex mod is absent or too old to relay"), nil
 	}
+	// The op id is the lead host's, one id end to end: one already used here (by another command, or by an unrelated op) is a
+	// refusal that is logged like any other, not an error the lead host meets on every retry.
+	var used int
+	switch err := tx.QueryRow(`SELECT 1 FROM relay_ops WHERE id = ?`, c.OpID).Scan(&used); {
+	case err == nil:
+		return refusal(http.StatusConflict, team.ErrCommandIDConflict, "that op id is already used here"), nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return CommandResult{}, err
+	}
 	op := team.RelayOp{
 		ID: c.OpID, Kind: team.RelayKindMember, HostID: p.HostID, SessionID: m.MemberSessionID, Ref: m.Ref, TeamID: c.TeamID,
 		State: team.RelayRequested, HandoffPath: filepath.Join(p.HandoffDir, c.OpID+".md"),
@@ -83,9 +92,12 @@ func voidRelayIn(tx *sql.Tx, p CommandPlan, target string, status int) (CommandR
 	if status != http.StatusOK {
 		return okResult(team.VoidOutcome{State: team.VoidNotApplied}) // refused: nothing was applied, its stored refusal stands
 	}
-	var opID string
-	if err := tx.QueryRow(`SELECT op_id FROM team_relay_commands WHERE lead_host_id = ? AND command_id = ?`, p.LeadHostID, target).Scan(&opID); err != nil {
+	var opID, teamID string
+	if err := tx.QueryRow(`SELECT op_id, team_id FROM team_relay_commands WHERE lead_host_id = ? AND command_id = ?`, p.LeadHostID, target).Scan(&opID, &teamID); err != nil {
 		return CommandResult{}, fmt.Errorf("void of relay command %s: %w", target, err)
+	}
+	if teamID != c.TeamID { // a void belongs to a team like every command
+		return refusal(http.StatusConflict, team.ErrCommandNotYourMember, "that command belongs to another team"), nil
 	}
 	res, err := tx.Exec(`UPDATE relay_ops SET state = ?, reason = ?, updated_at = ? WHERE id = ? AND state = ?`,
 		string(team.RelayCancelled), relayRemoteUnreachable, p.Now, opID, string(team.RelayRequested))
@@ -98,7 +110,9 @@ func voidRelayIn(tx *sql.Tx, p CommandPlan, target string, status int) (CommandR
 	if err := recordVoidIn(tx, p.LeadHostID, target, c.TeamID, c.ID, p.Now); err != nil {
 		return CommandResult{}, err
 	}
-	return okResult(team.VoidOutcome{State: team.VoidUndone})
+	res2, err := okResult(team.VoidOutcome{State: team.VoidUndone})
+	res2.changedOp = opID // the long-poll on the op wakes once this commits
+	return res2, err
 }
 
 // relayCommandOf is the relay command that opened op, if one did (an op of the member's own /relay or of a local member has none).
@@ -112,14 +126,15 @@ func relayCommandOf(q dbtx, opID string) (leadHostID, mk, teamID string, ok bool
 
 // queueRelayFailedIn tells the lead host that its relay ended failed or cancelled on this host, in the caller's transaction. An op
 // that did not come from a relay command says nothing (a person's relay is the person's; a local member's has no lead host to tell).
-func (s *Store) queueRelayFailedIn(tx dbtx, op team.RelayOp, at int64) error {
+func (s *Store) queueRelayFailedIn(tx dbtx, op team.RelayOp, at int64) (queued bool, err error) {
 	leadHost, mk, teamID, ok, err := relayCommandOf(tx, op.ID)
 	if err != nil || !ok {
-		return err
+		return false, err
 	}
 	if s.newID == nil {
-		return errors.New("no id source for the relay_failed fact")
+		return false, errors.New("no id source for the relay_failed fact")
 	}
-	return writeFactIn(tx, team.TeamFact{ID: s.newID(), Kind: team.FactRelayFailed, ToHostID: leadHost, TeamID: teamID, MK: mk,
+	err = writeFactIn(tx, team.TeamFact{ID: s.newID(), Kind: team.FactRelayFailed, ToHostID: leadHost, TeamID: teamID, MK: mk,
 		OpID: op.ID, State: string(op.State), Reason: op.Reason}, at)
+	return err == nil, err
 }
