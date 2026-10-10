@@ -76,7 +76,7 @@ export function TeamMemberBeads({ teamKey, members, activeTabId, withHost, onOpe
             title={tooltipOf(m, t)}
             onClick={() => onOpen(m.sessionId)}
             {...propsFor(m.sessionId)}
-            className={`group relative flex items-center gap-1 h-6 px-1.5 rounded-md cursor-pointer transition-colors ${
+            className={`group relative flex items-center gap-1 h-6 pl-1.5 pr-[3px] rounded-md cursor-pointer transition-colors ${
               isActive ? 'bg-surface-active text-white' : 'text-text-muted hover:bg-surface-hover hover:text-text-primary'
             } ${draggingId === m.sessionId ? 'opacity-30' : ''}`}
           >

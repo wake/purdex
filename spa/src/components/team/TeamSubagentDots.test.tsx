@@ -33,6 +33,16 @@ describe('subagent dots on beads and the ghost lead', () => {
     expect(within(b2).queryAllByTestId('subagent-dot')).toHaveLength(0)
   })
 
+  it('a bead pads 6px left and 3px right', () => {
+    const { getAllByTestId } = render(
+      <TeamMemberBeads teamKey="t" members={[seat('m1', 's1')]} activeTabId={null} withHost={false} onOpen={() => {}} onReorder={() => {}} onBlankClick={() => {}} />,
+    )
+    const cls = getAllByTestId('team-bead')[0].className
+    expect(cls).toContain('pl-1.5')
+    expect(cls).toContain('pr-[3px]')
+    expect(cls).not.toContain('px-1.5')
+  })
+
   it('the ghost lead row draws the lead seat dots', () => {
     const lead = { ...seat('l', 's1'), role: 'lead' as const }
     const { queryAllByTestId } = render(
