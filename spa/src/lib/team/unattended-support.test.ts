@@ -148,6 +148,33 @@ describe('startUnattendedSupport', () => {
     })
   })
 
+  it('a failed probe does not drop a support a team.unattended frame proved on this connection; the probe-only flags stay unknown', async () => {
+    const all = info(['relay.unattended.v1', 'team.relay_quota.v1', 'team.max_members.v1', 'team.edit.v1'])
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    fetchHostInfo.mockResolvedValue(all)
+    stop = startUnattendedSupport()
+    await flush()
+    useHostStore.setState({ runtime: { h1: { status: 'disconnected' } } })
+    const d = deferred<HostInfo>()
+    fetchHostInfo.mockReturnValueOnce(d.promise)
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    useUnattendedStore.getState().setSupport('h1', 'yes') // the snapshot frame of the new connection (unattended-ws.ts)
+    d.reject(new Error('down'))
+    await flush()
+    const e = useUnattendedStore.getState().byHost.h1
+    expect(e?.support).toBe('yes')
+    expect([e?.quotaSupport, e?.maxMembersSupport, e?.editSupport]).toEqual(['unknown', 'unknown', 'unknown'])
+  })
+
+  it('invalidating an entry with some flags never learned leaves those undefined, and a host without an entry is untouched', () => {
+    useUnattendedStore.getState().setSupport('h1', 'yes')
+    useUnattendedStore.getState().invalidateSupport('h1')
+    expect(useUnattendedStore.getState().byHost.h1).toEqual({ support: 'unknown' })
+    const before = useUnattendedStore.getState().byHost
+    useUnattendedStore.getState().invalidateSupport('nobody')
+    expect(useUnattendedStore.getState().byHost).toBe(before)
+  })
+
   it('a disconnect keeps the switch\'s last state (it is not a capability)', async () => {
     useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
     fetchHostInfo.mockResolvedValue(WITH)

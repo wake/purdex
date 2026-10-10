@@ -25,6 +25,9 @@ export interface UnattendedHostEntry {
 
 /** The host's capability flags: all of them follow one rule (unknown on disconnect / before a probe / after a failed probe). */
 const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport'] as const
+/** Only the probe answers these three; `support` is also proven by a `team.unattended` frame (unattended-ws.ts). */
+export const PROBE_ONLY_FLAGS = ['quotaSupport', 'maxMembersSupport', 'editSupport'] as const
+export type SupportFlag = (typeof SUPPORT_FLAGS)[number]
 
 interface UnattendedStoreState {
   byHost: Record<string, UnattendedHostEntry>
@@ -34,7 +37,7 @@ interface UnattendedStoreState {
   setEditSupport: (hostId: string, support: UnattendedSupport) => void
   /** Every capability flag of the host (unattended, relay quota, max members, edit) is unknown again: the connection they were
    *  learned on is gone, and a daemon that came back may have lost one (#2309). A no-op for a flag never learned. */
-  invalidateSupport: (hostId: string) => void
+  invalidateSupport: (hostId: string, flags?: readonly SupportFlag[]) => void
   applyState: (hostId: string, state: UnattendedState) => void
   forgetHost: (hostId: string) => void
   reset: () => void
@@ -57,13 +60,13 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
     if (cur?.maxMembersSupport === maxMembersSupport) return s
     return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', maxMembersSupport } } }
   }),
-  invalidateSupport: (hostId) => set((s) => {
+  invalidateSupport: (hostId, flags = SUPPORT_FLAGS) => set((s) => {
     const cur = s.byHost[hostId]
     if (!cur) return s
     const known = (v: UnattendedSupport | undefined) => v !== undefined && v !== 'unknown'
-    if (!SUPPORT_FLAGS.some((k) => known(cur[k]))) return s
+    if (!flags.some((k) => known(cur[k]))) return s
     const next = { ...cur }
-    for (const k of SUPPORT_FLAGS) if (next[k] !== undefined) next[k] = 'unknown' // the switch's `state` is not a capability: it stays
+    for (const k of flags) if (next[k] !== undefined) next[k] = 'unknown' // the switch's `state` is not a capability: it stays
     return { byHost: { ...s.byHost, [hostId]: next } }
   }),
   setEditSupport: (hostId, editSupport) => set((s) => {

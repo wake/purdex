@@ -12,7 +12,7 @@
 // its switch — is not the new one's. The new connection's snapshot and this probe fill it again.
 import { fetchHostInfo } from '../host-api'
 import { hostEndpoint, useHostStore, type HostConfig } from '../../stores/useHostStore'
-import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { PROBE_ONLY_FLAGS, useUnattendedStore } from '../../stores/useUnattendedStore'
 import { quotaHostIds, useRelayQuotaStore } from './relay-quota'
 import { useMaxMembersStore } from './max-members'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
@@ -44,8 +44,10 @@ export function startUnattendedSupport(): () => void {
         // (a seat is loaded once per generation, workbook-loader.ts).
         useWorkbookStore.getState().setSupport(hostId, { v1: listed.includes(WORKBOOK_V1_CAPABILITY), v2: listed.includes(WORKBOOK_V2_CAPABILITY) })
       },
-      () => { // not retried until the next trigger; every capability stays unknown rather than keeping an old 'yes'
-        if (current.get(hostId) === generation) useUnattendedStore.getState().invalidateSupport(hostId)
+      () => { // not retried until the next trigger; the probe's flags stay unknown rather than keeping an old 'yes'
+        // `support` was made unknown when this probe started; a `team.unattended` frame that proved it since is live
+        // evidence from this connection and stays, so only the flags nothing but the probe can answer are dropped again.
+        if (current.get(hostId) === generation) useUnattendedStore.getState().invalidateSupport(hostId, PROBE_ONLY_FLAGS)
       },
     )
   }
