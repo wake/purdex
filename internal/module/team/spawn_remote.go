@@ -54,6 +54,11 @@ func (m *Module) peerEntryByHostID(hostID string) (config.PeerHost, bool) {
 // still a directory and still itself (a root replaced by a symlink, or behind one, since it was granted is skipped),
 // containment judged by path components on the canonical paths — else "", false.
 // No roots is no spawn.
+//
+// What this cannot close (#2254): the check and tmux's own chdir into the directory are two steps, and tmux takes a path,
+// not an open directory, so a directory swapped in that gap is not prevented here. It is caught afterwards: the runner reads
+// the new pane's real directory and judges it the same way (checkLaunchPane) before any key reaches the pane, and kills the
+// session if it left the roots. The residual window is the shell starting in the swapped directory with nothing typed.
 func resolveUnderRoots(roots []string, dir string) (string, bool) {
 	if dir == "" || !filepath.IsAbs(dir) {
 		return "", false
