@@ -42,7 +42,8 @@ function SessionInputBody({ paneKey, hostId, sessionId, capabilities, items, idl
   useEffect(() => { queue.setIdle(idle) }, [queue, idle])
   useEffect(() => { queue.reconcile(users) }, [queue, users, entries])
 
-  const noMod = capabilities?.send !== 'prompt' || queue.blocked === 'no_mod'
+  // the live capability is the only authority: a 409 no_mod fails that one message and disables nothing by itself
+  const noMod = capabilities?.send !== 'prompt'
   const change = (v: string) => { setDraft(v); writeDraft(dKey, v); setHint(null) }
 
   const send = () => {

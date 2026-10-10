@@ -361,7 +361,7 @@ describe('failures', () => {
     expect(calls.map((c) => c.text)).toEqual(['a', 'b'])
   })
 
-  it('no_mod blocks the queue and fails what is behind it', async () => {
+  it('no_mod fails the message and what is waiting behind it, and leaves nothing sticky: the next message is tried', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.enqueue('a')
@@ -369,9 +369,11 @@ describe('failures', () => {
     await vi.advanceTimersByTimeAsync(UNDO_MS)
     calls[0].resolve({ kind: 'no_mod' })
     await flush()
-    expect(q.blocked).toBe('no_mod')
     expect(q.entries().map((e) => e.state)).toEqual(['failed', 'failed'])
     expect(calls).toHaveLength(1)
+    q.enqueue('c') // the mod is back
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    expect(calls.map((c) => c.text)).toEqual(['a', 'c'])
   })
 
   it('interrupt goes to the port', async () => {

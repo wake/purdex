@@ -40,8 +40,6 @@ export class SendQueue {
   private timer: ReturnType<typeof setTimeout> | null = null
   private claimed = new Set<string>()
   private listeners = new Set<() => void>()
-  /** Set when the daemon says there is no mod: the input is disabled. */
-  blocked: 'no_mod' | null = null
 
   private readonly port: SendPort
   private readonly now: () => number
@@ -174,7 +172,6 @@ export class SendQueue {
     else {
       e.state = 'failed'
       if (o.kind === 'no_mod') {
-        this.blocked = 'no_mod'
         for (const x of this.list) if (x.state === 'undo' || x.state === 'waiting') { x.state = 'failed'; x.outcome = o }
       }
     }

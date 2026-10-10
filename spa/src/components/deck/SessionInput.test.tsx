@@ -186,13 +186,18 @@ describe('SessionInput outcomes', () => {
     expect(sends()[1].client_msg_id).not.toBe(sends()[0].client_msg_id)
   })
 
-  it('409 no_mod disables the input', async () => {
+  it('409 no_mod fails that message with the no-mod text; the live capability alone decides whether the input is disabled', async () => {
     fetchMock.mockImplementationOnce(() => answer(409, { error: 'no_mod' }))
-    render(ui())
+    const { rerender } = render(ui())
     type('x'); enter()
     await tick(3000)
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
+    expect(screen.getByTestId('queued-message')).toHaveTextContent('no Purdex mod')
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+    rerender(ui({ capabilities: { send: 'not_wired' } }))
     expect(screen.getByTestId('session-input-disabled')).toBeInTheDocument()
-    expect(screen.queryByRole('textbox')).toBeNull()
+    rerender(ui({ capabilities: PROMPT })) // the mod is back
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 
   it('Interrupt posts to /interrupt and says so', async () => {
