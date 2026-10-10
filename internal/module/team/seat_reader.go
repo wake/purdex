@@ -71,7 +71,7 @@ func (s *Store) SeatOf(sessionID string) (team.Seat, error) {
 		query, wire = `SELECT id FROM teams WHERE lead_session_id = ? AND ended_at = 0`, team.SeatLead
 	case sessionRoleMemberLocal:
 		query, wire = `SELECT m.team_id FROM team_members m JOIN teams t ON t.id = m.team_id
-			WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, team.SeatMember
+			WHERE m.session_id = ? AND m.state IN ('active', 'killing') AND t.ended_at = 0`, team.SeatMember
 	case sessionRoleMemberRemote:
 		query, wire = `SELECT team_id FROM remote_members WHERE member_session_id = ? AND state = 'active'`, team.SeatMemberRemote
 	default:

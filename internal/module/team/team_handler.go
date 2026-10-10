@@ -246,23 +246,64 @@ func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (
 	} else if open && (op.State == team.RelayClaimed || op.State == team.RelayWriting || op.State == team.RelayWritten) {
 		return relayOpen(op, true, "is relaying; nothing was killed")
 	}
+	// The claim comes BEFORE the signal (#2152 point 2): active → killing in one compare-and-set, and nothing is signalled
+	// unless it is held. A release or a relay claim by the same lead now meets a row that is not active and refuses by its
+	// own rules; they can no longer land between a signal that already went out and a mark that then loses. Only an active
+	// row is claimed: a gone one (its tmux shell may be left) is cleaned up as before.
+	claimed := false
+	if mr.State == team.MemberKilling { // a kill is in flight (or died with the daemon; the next boot settles it): never a second signal
+		return m.killClaimLost(w, t, mr)
+	}
+	if mr.State == team.MemberActive {
+		if m.beforeKillClaim != nil {
+			m.beforeKillClaim(mr)
+		}
+		ok, err := m.store.ClaimMemberKilling(mr.SpawnOp, mr.SessionID, m.now())
+		if err != nil {
+			return failStore(err)
+		}
+		if !ok {
+			return m.killClaimLost(w, t, mr)
+		}
+		claimed = true
+		mr.State = team.MemberKilling
+	}
+	// giveBack returns a claim whose signal could not be sent: the member is active again and the lead gets the error.
+	giveBack := func() {
+		if !claimed {
+			return
+		}
+		if ok, err := m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, m.now()); err != nil || !ok {
+			m.logf("[team] kill %s: could not give the claim back (%v, %v); the next boot decides", mr.SpawnOp, ok, err)
+		}
+		m.rosterChanged()
+	}
+	if claimed {
+		m.rosterChanged() // the member shows as killing from the claim on
+	}
+	if m.beforeMemberSignal != nil {
+		m.beforeMemberSignal(mr)
+	}
 	mark, want := m.store.MarkMemberKilled, team.MemberKilled
 	if mr.Origin == team.MemberOriginAdopted {
 		// An adopted member's tmux session is the user's: only its re-verified Claude Code process is signalled.
 		ended, status, code, why := m.killAdopted(mr)
 		if why != "" {
+			giveBack()
 			m.writeErr(w, status, code, why, nil)
 			return memberRow{}, false
 		}
-		if ended && mr.State == team.MemberActive { // it had already ended: nothing was killed by this call
+		if ended && (mr.State == team.MemberActive || mr.State == team.MemberKilling) { // it had already ended: nothing was killed by this call
 			mark, want = m.store.MarkMemberGone, team.MemberGone
 		}
 	} else {
 		if m.tmux == nil {
+			giveBack()
 			m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon has no tmux", nil)
 			return memberRow{}, false
 		}
 		if status, code, why := m.killMember(mr); why != "" {
+			giveBack()
 			m.writeErr(w, status, code, why, nil)
 			return memberRow{}, false
 		}
@@ -280,6 +321,7 @@ func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (
 		m.rosterChanged()
 		return mr, true
 	}
+	giveBack() // the mark lost (a state no kill path moves a claimed row to): the row must not stay killing
 	rows, err := m.store.MembersOf(t.ID)
 	if err != nil {
 		return failStore(err)
@@ -294,6 +336,46 @@ func (m *Module) killAndMark(w http.ResponseWriter, t team.Team, mr memberRow) (
 		return failStore(err)
 	}
 	return relayOpen(op, open, "relayed while it was being killed")
+}
+
+// killClaimLost answers a kill whose claim did not take (the row is not active, or a relay is open): nothing was signalled.
+// A kill in flight (killing) is 409 command_pending; a kill that finished meanwhile, or the sweeper's gone, is the same success
+// as a kill that marked it first; a release or a relay that won is refused by the rules a kill of such a member always had.
+func (m *Module) killClaimLost(w http.ResponseWriter, t team.Team, mr memberRow) (memberRow, bool) {
+	failStore := func(err error) (memberRow, bool) {
+		m.logf("[team] kill %s: %v", mr.SpawnOp, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return memberRow{}, false
+	}
+	rows, err := m.store.MembersOf(t.ID)
+	if err != nil {
+		return failStore(err)
+	}
+	for _, now := range rows {
+		if now.SpawnOp != mr.SpawnOp {
+			continue
+		}
+		switch now.State {
+		case team.MemberKilling:
+			m.writeErr(w, http.StatusConflict, team.ErrCommandPending, "member "+mr.Ref+" is being killed already; nothing was signalled by this call", nil)
+			return memberRow{}, false
+		case team.MemberKilled, team.MemberGone:
+			return now, true // another kill (or the sweeper) ended it first
+		case team.MemberReleased:
+			m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, fmt.Sprintf("%q was released from team %s", mr.Ref, t.ID), nil)
+			return memberRow{}, false
+		}
+	}
+	op, open, err := m.store.OpenRelayOpBySession(mr.SessionID)
+	if err != nil {
+		return failStore(err)
+	}
+	e := team.APIError{Error: team.ErrRelayOpen, Detail: "member " + mr.Ref + " is relaying or about to; its row is unchanged; nothing was killed; kill it again"}
+	if open {
+		e.Op = &op
+	}
+	m.writeJSON(w, http.StatusConflict, e)
+	return memberRow{}, false
 }
 
 // killMember ends the tmux session the member's spawn created, and no other

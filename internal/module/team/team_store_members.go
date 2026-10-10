@@ -143,23 +143,48 @@ func (s *Store) SetLeadUsage(teamID, leadSessionID string, c team.MemberContext)
 	return oneRow(res, err, "store the reading of the lead of team "+teamID)
 }
 
+// ClaimMemberKilling is the first step of pdx kill (#2152 point 2): active → killing, in one compare-and-set on the row read
+// — it still holds sessionID, is a local row of an active member, and its session has no relay op in flight. The kill signals
+// only if it holds the claim; a release or a relay claim finds a row that is not active and refuses by its usual rules.
+// claimed says whether this call took it.
+func (s *Store) ClaimMemberKilling(spawnOp, sessionID string, at int64) (bool, error) {
+	loc, locArgs := s.local("host_id")
+	res, err := s.db.Exec(`UPDATE team_members SET state = 'killing', updated_at = ?
+		WHERE spawn_op = ? AND session_id = ? AND state = 'active' AND `+loc+`
+		  AND NOT EXISTS (SELECT 1 FROM relay_ops
+			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
+		append([]any{at, spawnOp, sessionID}, append(locArgs, sessionID)...)...)
+	return oneRow(res, err, "claim member "+spawnOp+" for a kill")
+}
+
+// GiveBackMemberKilling returns a claim whose signal could not be sent: killing → active. given says whether this call did
+// (false: the row is no longer killing — a boot, a sweeper or another path ended it).
+func (s *Store) GiveBackMemberKilling(spawnOp, sessionID string, at int64) (bool, error) {
+	loc, locArgs := s.local("host_id")
+	res, err := s.db.Exec(`UPDATE team_members SET state = 'active', updated_at = ?
+		WHERE spawn_op = ? AND session_id = ? AND state = 'killing' AND `+loc,
+		append([]any{at, spawnOp, sessionID}, locArgs...)...)
+	return oneRow(res, err, "give back the kill claim of member "+spawnOp)
+}
+
 // MarkMemberKilled is pdx kill's mark (spec §7.3), a compare-and-set on the
 // row read: it still holds sessionID (a relay's cleared moves the row to a
-// new session, never to be marked killed; P4-6 review R1), it is active or
-// gone (the sweeper may mark it gone meanwhile), and that session has no
-// relay op in flight. killed says whether this call marked it.
+// new session, never to be marked killed; P4-6 review R1), it is killing (the
+// kill's own claim), active or gone (the sweeper may mark it gone meanwhile),
+// and that session has no relay op in flight. killed says whether this call
+// marked it.
 func (s *Store) MarkMemberKilled(spawnOp, sessionID string, at int64) (bool, error) {
 	// ended_at is when the row first left `active`: a row that went gone keeps its time.
 	loc, locArgs := s.local("host_id")
 	res, err := s.db.Exec(`UPDATE team_members SET state = 'killed', updated_at = ?, ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
-		WHERE spawn_op = ? AND session_id = ? AND state IN ('active', 'gone') AND `+loc+`
+		WHERE spawn_op = ? AND session_id = ? AND state IN ('active', 'gone', 'killing') AND `+loc+`
 		  AND NOT EXISTS (SELECT 1 FROM relay_ops
 			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
 		append([]any{at, at, spawnOp, sessionID}, append(locArgs, sessionID)...)...)
 	return oneRow(res, err, "mark member "+spawnOp+" killed")
 }
 
-// MarkMemberGone marks an active member gone (spec §7.3: its session ended
+// MarkMemberGone marks an active (or killing: the kill found nothing left to signal) member gone (spec §7.3: its session ended
 // without a kill) in one guarded UPDATE that leaves the row as it is when it
 // is no longer active, no longer holds sessionID (a relay moved it since the
 // caller looked), or its session has a relay op in claimed, writing or
@@ -170,9 +195,29 @@ func (s *Store) MarkMemberKilled(spawnOp, sessionID string, at int64) (bool, err
 func (s *Store) MarkMemberGone(spawnOp, sessionID string, at int64) (bool, error) {
 	loc, locArgs := s.local("host_id")
 	res, err := s.db.Exec(`UPDATE team_members SET state = 'gone', updated_at = ?, ended_at = ?
-		WHERE spawn_op = ? AND session_id = ? AND state = 'active' AND `+loc+`
+		WHERE spawn_op = ? AND session_id = ? AND state IN ('active', 'killing') AND `+loc+`
 		  AND NOT EXISTS (SELECT 1 FROM relay_ops
 			WHERE session_id = ? AND state IN ('claimed', 'writing', 'written'))`,
 		append([]any{at, at, spawnOp, sessionID}, append(locArgs, sessionID)...)...)
 	return oneRow(res, err, "mark member "+spawnOp+" gone")
+}
+
+// LocalKillingMembers lists the local member rows a kill claimed and never ended (the daemon died between the claim and the
+// end): the boot settles them (recoverKillingMembers).
+func (s *Store) LocalKillingMembers() ([]memberRow, error) {
+	loc, locArgs := s.local("host_id")
+	rows, err := s.db.Query(`SELECT `+memberCols+` FROM team_members WHERE state = 'killing' AND `+loc+` ORDER BY created_at, spawn_op`, locArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("list killing members: %w", err)
+	}
+	defer rows.Close()
+	var out []memberRow
+	for rows.Next() {
+		var r memberRow
+		if err := rows.Scan(r.dest()...); err != nil {
+			return nil, fmt.Errorf("list killing members: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

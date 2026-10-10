@@ -54,7 +54,7 @@ func TestKillClaim_AdoptedRowIsKillingWhenTheSignalGoesAndReleaseAndRelayAreRefu
 	key := f.adoptedMember(t)
 	var seen atSignal
 	var signals []int
-	observe := f.observeAt(key, "_def456", uid(1), "sid-10", &seen)
+	observe := f.observeAt(key, "_def456", uid(1), memberBySpawn(t, f.m.store, key).SessionID, &seen)
 	f.m.killProcess = func(pid int) error {
 		signals = append(signals, pid)
 		if len(signals) == 1 {
@@ -202,7 +202,7 @@ func TestKillClaim_AKillingMemberIsStillAMemberForTheRoleGates(t *testing.T) {
 	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing' WHERE spawn_op = ?`, key); err != nil {
 		t.Fatal(err)
 	}
-	role, err := sessionRoleIn(f.m.store.db, "sid-10")
+	role, err := sessionRoleIn(f.m.store.db, memberBySpawn(t, f.m.store, key).SessionID)
 	if err != nil || role != sessionRoleMemberLocal {
 		t.Fatalf("role = %q err=%v, want member_local", role, err)
 	}

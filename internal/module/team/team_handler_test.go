@@ -358,10 +358,12 @@ func TestKill_MarksOnlyTheRowItRead(t *testing.T) {
 		session string
 		at      int64 // updated_at, when checked
 	}{
-		{"a relay completes", func(mr memberRow) {
+		// #2152: the kill holds the claim (killing) by now, so a relay's cleared can no longer move the row to a new session —
+		// the interleaving this case used to prove the mark losing to cannot happen; the row stays the one the kill read.
+		{"a relay completes after the claim", func(mr memberRow) {
 			claimedOp(t, f.m.store, "relay-2", mr.SessionID, mr.Ref)
 			mustReport(t, f.m.store, "relay-2", RelayReport{State: team.RelayCleared, NewSessionID: "sid-m2b", NewRef: ipeers.RefID("sid-m2b"), At: 5})
-		}, 409, team.MemberActive, "sid-m2b", 0},
+		}, 200, team.MemberKilled, "sid-m2", 0},
 		{"a relay claims", func(mr memberRow) { claimedOp(t, f.m.store, "relay-3", mr.SessionID, mr.Ref) }, 409, team.MemberActive, "sid-m3", 0},
 		{"another kill marks it first", func(mr memberRow) {
 			if err := f.m.store.SetMemberState(mr.SpawnOp, team.MemberKilled, 6); err != nil {
