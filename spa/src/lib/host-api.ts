@@ -755,6 +755,57 @@ export async function agentUpload(
   return res.json()
 }
 
+export type AgentUploadErrorKind = 'too_large' | 'not_found' | 'http' | 'network' | 'aborted'
+
+export class AgentUploadError extends Error {
+  constructor(public kind: AgentUploadErrorKind, public status = 0) {
+    super(`agent upload failed: ${kind}${status ? ` ${status}` : ''}`)
+  }
+}
+
+/**
+ * Upload for the deck / chat input: the daemon only SAVES the file (`inject=0`, no paste into the pane) and answers its path,
+ * which the caller puts into the draft. `session` is the tmux session code. XMLHttpRequest, not fetch: fetch has no upload
+ * progress. Same base URL and auth headers as `hostFetch`. The terminal's paste keeps `agentUpload` (injects into the pane).
+ */
+export function agentUploadToPath(
+  hostId: string,
+  file: File,
+  sessionCode: string,
+  opts: { signal?: AbortSignal; onProgress?: (percent: number) => void } = {},
+): Promise<{ filename: string; path: string }> {
+  const { signal, onProgress } = opts
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new AgentUploadError('aborted')); return }
+    const { getDaemonBase, getAuthHeaders } = useHostStore.getState()
+    const form = new FormData()
+    form.append('session', sessionCode)
+    form.append('inject', '0')
+    form.append('file', file)
+    const xhr = new XMLHttpRequest()
+    const onAbort = () => xhr.abort()
+    const done = () => signal?.removeEventListener('abort', onAbort)
+    xhr.open('POST', `${getDaemonBase(hostId)}/api/agent/upload`)
+    for (const [k, v] of Object.entries(getAuthHeaders(hostId))) xhr.setRequestHeader(k, v)
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && e.total > 0) onProgress?.(Math.round((e.loaded / e.total) * 100)) }
+    xhr.onload = () => {
+      done()
+      if (xhr.status === 413) return reject(new AgentUploadError('too_large', 413))
+      if (xhr.status === 404) return reject(new AgentUploadError('not_found', 404))
+      if (xhr.status < 200 || xhr.status >= 300) return reject(new AgentUploadError('http', xhr.status))
+      try {
+        const body = JSON.parse(xhr.responseText) as { filename?: string; path?: string }
+        if (typeof body.path !== 'string' || !body.path) return reject(new AgentUploadError('http', xhr.status))
+        resolve({ filename: body.filename ?? file.name, path: body.path })
+      } catch { reject(new AgentUploadError('http', xhr.status)) }
+    }
+    xhr.onerror = () => { done(); reject(new AgentUploadError('network')) }
+    xhr.onabort = () => { done(); reject(new AgentUploadError('aborted')) }
+    signal?.addEventListener('abort', onAbort)
+    xhr.send(form)
+  })
+}
+
 /* ─── Monitor API ─── */
 
 export interface MonitorMetricBounds {
