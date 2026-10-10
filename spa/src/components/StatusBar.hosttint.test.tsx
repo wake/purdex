@@ -6,6 +6,8 @@ import { useHostStore } from '../stores/useHostStore'
 import { HOST_COLOR_PRESETS } from '../lib/host-color'
 import { hexToRgb } from '../lib/color-space'
 import { STATUS_BAR_HOST_TINT_PCT } from './status/StatusSegments'
+import { useAgentStore } from '../stores/useAgentStore'
+import { compositeKey } from '../lib/composite-key'
 import { HOST_ID, setupStores, makeTab } from './StatusBar.test-helpers'
 
 vi.mock('../lib/copy-text', () => ({ copyText: vi.fn(async () => {}) }))
@@ -28,6 +30,18 @@ describe('StatusBar host tint', () => {
     expect(bar.getAttribute('data-host-tinted')).toBe('true')
     // jsdom keeps the declaration it cannot parse out of the inline style attribute
     expect(bar.getAttribute('style')).toContain(`color-mix(in srgb, #3b82f6 ${STATUS_BAR_HOST_TINT_PCT}%, var(--surface-secondary))`)
+  })
+
+  it('a plain terminal reads the console colours, an agent session the terminal ones (as the tab badge does)', () => {
+    const colors = { console: { main: { color: '#ef4444', alpha: 1 } }, terminal: { main: { color: '#22c55e', alpha: 1 } } }
+    useHostStore.setState({ hosts: { [HOST_ID]: { id: HOST_ID, name: 'mlab', ip: '100.64.0.2', port: 7860, order: 0, colors } as never } })
+    render(<StatusBar activeTab={tab()} />)
+    expect(screen.getByTestId('status-bar').getAttribute('style')).toContain('#ef4444')
+    cleanup()
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useAgentStore.setState({ agentTypes: { [ck]: 'cc' } })
+    render(<StatusBar activeTab={tab()} />)
+    expect(screen.getByTestId('status-bar').getAttribute('style')).toContain('#22c55e')
   })
 
   // The tint is a fixed share of the host colour over the theme's surface, so the worst case is the brightest preset on each theme.
