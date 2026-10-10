@@ -35,6 +35,7 @@ function uploadFailure(err: unknown, name: string): OutcomeMessage {
   const e = err as { kind?: string; status?: number }
   switch (e?.kind) {
     case 'too_large': return { key: 'deck.attach.too_large', params: { name }, tone: 'error' }
+    case 'too_many': return { key: 'deck.attach.too_many', tone: 'error' }
     case 'not_found': return { key: 'deck.attach.not_found', tone: 'error' }
     case 'network': return { key: 'deck.attach.network', params: { name }, tone: 'error' }
     default: return { key: 'deck.attach.http', params: { name, status: e?.status || '-' }, tone: 'error' }

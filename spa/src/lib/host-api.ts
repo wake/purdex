@@ -757,7 +757,7 @@ export async function agentUpload(
   return res.json()
 }
 
-export type AgentUploadErrorKind = 'too_large' | 'not_found' | 'http' | 'network' | 'aborted' | 'host_missing'
+export type AgentUploadErrorKind = 'too_large' | 'too_many' | 'not_found' | 'http' | 'network' | 'aborted' | 'host_missing'
 
 export class AgentUploadError extends Error {
   kind: AgentUploadErrorKind
@@ -799,6 +799,7 @@ export function agentUploadToPath(
     xhr.onload = () => {
       done()
       if (xhr.status === 413) return reject(new AgentUploadError('too_large', 413))
+      if (xhr.status === 429) return reject(new AgentUploadError('too_many', 429))
       if (xhr.status === 404) return reject(new AgentUploadError('not_found', 404))
       if (xhr.status < 200 || xhr.status >= 300) return reject(new AgentUploadError('http', xhr.status))
       try {

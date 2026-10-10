@@ -139,6 +139,7 @@ describe('SessionInput attachments', () => {
 
   it.each([
     [kindErr('too_large', 413), 'File too large', '256'],
+    [kindErr('too_many', 429), 'Too many files', ''],
     [kindErr('not_found', 404), 'Session not found', ''],
     [kindErr('http', 500), 'Upload failed', '500'],
     [kindErr('network'), 'Connection lost', ''],
