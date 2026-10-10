@@ -139,6 +139,20 @@ function detachReport($, cfg, id, outcome) {
   }, (err) => log($, 'report --detach failed: ' + String(err)))
 }
 
+// detachReportByToolUse is detachReport for a row whose id the mod never learned: `pdx ask begin` had not replied when the person
+// answered, so there is no id — but begin may still open the row, and a remote client may answer it before the daemon hears of
+// the terminal's answer (#1848). The detached process reports by (session, tool use) and keeps asking for up to 45 s while the
+// daemon has no row yet (begin's own restart grace is 30 s); `since` is the time taken BEFORE begin was called, so a row of the
+// same tool use from before it is never the one reported. Never rejects.
+function detachReportByToolUse($, cfg, sid, toolUseId, since, outcome) {
+  const args = ['report', outcome.state, '--session', sid, '--tool-use', toolUseId, '--since', String(since)]
+  if (outcome.hook) args.push('--hook', JSON.stringify(outcome.hook))
+  args.push('--detach')
+  return ask($, cfg, args, DETACH_TIMEOUT_MS).then((r) => {
+    if (r.exitCode !== 0) log($, 'report --detach (by tool use) exit ' + r.exitCode + ' ' + stderrCode(r))
+  }, (err) => log($, 'report --detach (by tool use) failed: ' + String(err)))
+}
+
 // reportSettled reports, waits at most SETTLE_MS, and detaches the report when it has
 // not finished by then. Never rejects.
 async function reportSettled($, cfg, next, id, outcome) {
@@ -175,6 +189,10 @@ export function register(on) {
 
     const cfg = await pdxConfig($)
     const sid = await $.session.id()
+    // Taken before begin is called: a report by tool use (below) only looks at rows created after it. It is compared with the
+    // daemon's wall clock (created_at is time.Now in epoch ms), so it is the real clock, not the engine's: that one is another
+    // clock domain and may be ahead (never a 404 to the end) or behind (no filter at all), as register.js notes.
+    const since = Date.now()
     const begin = ask($, cfg, ['begin', '--session', String(sid || ''), '--tool-use', String(e.tool_use_id || ''), '--kind', 'hook_ask',
       '--payload', JSON.stringify({ questions: e.questions })], CALL_TIMEOUT_MS)
       .then((r) => ({ who: 'begin', r }), (err) => ({ who: 'begin-error', err }))
@@ -183,16 +201,20 @@ export function register(on) {
     if (first.who === 'native' || first.who === 'native-error') {
       // The person answered (or dismissed) before the daemon even replied: the native
       // outcome stands. A row begin does open is told, within SETTLE_MS or detached.
-      // A begin still out after SETTLE_MS (a daemon restarting, so no client is connected
-      // to answer either) leaves its row to the lease: abandoned 30 s after it opens.
+      // A begin still out after SETTLE_MS (a daemon busy or restarting) has its row reported
+      // by the tool use, detached (#1848); a row nobody reports is abandoned 30 s after it opens.
       const outcome = nativeOutcome(first)
-      let opened = '', reported = false
+      let opened = '', reported = false, answered = false
       await settle($, next, begin.then((b) => {
+        answered = true
         opened = openedId(b)
         if (!opened) { reported = true; return undefined }
         return report($, cfg, opened, outcome).then(() => { reported = true })
       }))
       if (opened && !reported) await detachReport($, cfg, opened, outcome)
+      // Begin has not replied at all: the row may still open (a daemon busy or restarting, the CLI waits up to 30 s) and a remote
+      // client may answer it first. Without an id the report goes by the tool use (#1848).
+      else if (!answered && sid && e.tool_use_id) await detachReportByToolUse($, cfg, String(sid), String(e.tool_use_id), since, outcome)
       return native(first)
     }
     const id = openedId(first)

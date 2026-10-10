@@ -31,8 +31,13 @@ type fakeAskDaemon struct {
 	waits          []team.AskWaitResponse
 	polls          int
 	reports        []team.AskReportRequest
-	begins         []team.AskBeginRequest
-	srv            *httptest.Server
+	// by-tool-use reports (POST /api/ask/report): the first notFound answer 404 not_found, a non-zero byToolUseStatus answers
+	// that status with a bad_request body.
+	byToolUse       []team.AskReportRequest
+	notFound        int
+	byToolUseStatus int
+	begins          []team.AskBeginRequest
+	srv             *httptest.Server
 }
 
 func newFakeAskDaemon(t *testing.T) *fakeAskDaemon {
@@ -75,6 +80,20 @@ func newFakeAskDaemon(t *testing.T) *fakeAskDaemon {
 				i = len(d.waits) - 1
 			}
 			_ = json.NewEncoder(w).Encode(d.waits[i])
+		case r.Method == http.MethodPost && r.URL.Path == "/api/ask/report":
+			var req team.AskReportRequest
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			d.byToolUse = append(d.byToolUse, req)
+			switch {
+			case d.byToolUseStatus != 0:
+				w.WriteHeader(d.byToolUseStatus)
+				_ = json.NewEncoder(w).Encode(team.APIError{Error: team.ErrBadRequest, Detail: "no"})
+			case len(d.byToolUse) <= d.notFound:
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(team.APIError{Error: team.ErrNotFound, Detail: "no hook row for that tool use yet"})
+			default:
+				_ = json.NewEncoder(w).Encode(team.Approval{ID: "ask-1", Kind: team.KindHookAsk, State: req.State, Hook: req.Hook})
+			}
 		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/ask/report/"):
 			var req team.AskReportRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)

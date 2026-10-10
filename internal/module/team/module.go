@@ -547,6 +547,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/ask/begin", m.handleAskBegin)
 	mux.HandleFunc("GET /api/ask/wait/{id}", m.handleAskWait)
 	mux.HandleFunc("POST /api/ask/report/{id}", m.handleAskReport)
+	mux.HandleFunc("POST /api/ask/report", m.handleAskReportByToolUse) // #1848
 }
 
 // Start runs the boot reconciliation (boot.go), which begins with the boot lease grace (spec §9.2: every open request's

@@ -300,11 +300,46 @@ func (m *Module) handleAskWait(w http.ResponseWriter, r *http.Request) {
 // open row (any hook it carries is ignored); against a closed one it is a
 // no-op. Both answer the row as it now is, so a repeat is idempotent.
 func (m *Module) handleAskReport(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
 	var req team.AskReportRequest
 	if !m.decodeBody(w, r, &req) {
 		return
 	}
+	m.reportHookRow(w, r.PathValue("id"), req)
+}
+
+// handleAskReportByToolUse is POST /api/ask/report (#1848): the same report, for a mod that never learned the row's id because
+// `pdx ask begin` had not answered when the person answered in the terminal. The row is the newest hook row of the session's tool
+// use created at or after `since` (the time the mod took before it called begin, so an earlier row of the same tool use is never
+// the one reported); none yet is 404 not_found, which the CLI retries until begin's row lands. The session is not looked up in
+// the registry: it may be over by now. Same auth as every /api/ask route (the daemon-wide token middleware).
+func (m *Module) handleAskReportByToolUse(w http.ResponseWriter, r *http.Request) {
+	var req team.AskReportRequest
+	if !m.decodeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.ToolUseID) == "" || req.Since <= 0 {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "session_id, tool_use_id and since are required", nil)
+		return
+	}
+	if req.State != team.StateAnsweredLocal && req.State != team.StateDismissed { // before the lookup: a bad state is never retried
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, `state must be "answered_local" or "dismissed"`, nil)
+		return
+	}
+	a, ok, err := m.store.LatestHookByToolUse(req.SessionID, req.ToolUseID, req.Since)
+	if err != nil {
+		m.logf("[team] ask report by tool use %s/%s: %v", req.SessionID, req.ToolUseID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	if !ok {
+		m.writeErr(w, http.StatusNotFound, team.ErrNotFound, "no hook request for that tool use yet", nil)
+		return
+	}
+	m.reportHookRow(w, a.ID, req)
+}
+
+// reportHookRow is the report of spec §6.6 steps 3, 5, 6 on row id (by id or by tool use).
+func (m *Module) reportHookRow(w http.ResponseWriter, id string, req team.AskReportRequest) {
 	if req.State != team.StateAnsweredLocal && req.State != team.StateDismissed {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, `state must be "answered_local" or "dismissed"`, nil)
 		return

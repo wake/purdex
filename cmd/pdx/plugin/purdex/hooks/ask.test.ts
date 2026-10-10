@@ -204,7 +204,8 @@ test('the person answers before begin has even returned ⇒ native result, and t
     on('process.run', (_$: any, e: any) => {
       const a = e.argv
       if (sub(a) === 'begin') return new Promise((res) => { answerBegin = res })
-      if (sub(a) === 'report') { resolve([...a]); return ok('{}') }
+      // (begin never replied within the settle cap, so a by-tool-use report is also detached, #1848; this test is about the id one)
+      if (sub(a) === 'report' && a[3] === 'r9') { resolve([...a]); return ok('{}') }
       return ok('')
     })
   })
@@ -539,7 +540,7 @@ test('a daemon that does not answer begin (down: exit 20 only after its 30 s gra
   on('process.run', (_$: any, e: any) => {
     calls.push([...e.argv])
     setTimeout(() => answerNative && answerNative(NATIVE_RED), 50)
-    return never()
+    return sub(e.argv) === 'begin' ? never() : ok('') // only begin hangs; `report --detach` exits at once
   })
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = res }))
   const t0 = Date.now()
@@ -547,7 +548,10 @@ test('a daemon that does not answer begin (down: exit 20 only after its 30 s gra
   const ms = Date.now() - t0
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, isReadOnly: true, ref: 1 }))
   expect(ms).toBeLessThan(5000)
-  expect(calls.map(sub)).toEqual(['begin'])
+  // begin never replied: the row it may still open is reported by the tool use, detached (#1848)
+  expect(calls.map(sub)).toEqual(['begin', 'report'])
+  expect(calls[1]).toContain('--detach')
+  expect(calls[1]).toContain('--since')
 })
 
 // The same bound for the report: the row is open, the person answers, and the daemon then stops
@@ -617,6 +621,82 @@ test('a healthy report is not detached', async ($, on) => {
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = res }))
   await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
   expect(calls.filter((c) => c.includes('--detach'))).toEqual([])
+})
+
+// #1848: the person answers in the terminal while `pdx ask begin` has not replied by the settle cap (a daemon busy or
+// restarting; the CLI waits up to 30 s). The row id is unknown, but begin may still open the row, and a remote client may
+// answer it first: the report goes out by the tool use, detached, with the time taken BEFORE begin was called (`--since`), so it
+// lands on the begin's row whenever that appears. Mutation gates: no by-tool-use report → `byToolUse` stays null (red); `--since`
+// taken after begin → the value differs (red).
+test('answered in the terminal while begin has not replied ⇒ back within 5 s, the report goes detached by the tool use with --since', { timeoutMs: 15000 }, async ($, on) => {
+  session(on)
+  // The engine's clock is another clock domain and can be far from the wall clock: --since is the REAL time (the daemon's
+  // created_at is), taken just before begin is called. Mutation gate: read the engine clock (or take it after begin) → red.
+  on('clock.now', () => ({ value: 42 }))
+  let beginArgv: Call | null = null
+  let byToolUse: Call | null = null
+  let realAtBegin = 0
+  on('process.run', (_$: any, e: any) => {
+    const a = e.argv
+    if (sub(a) === 'begin') { beginArgv = [...a]; realAtBegin = Date.now(); return never() }
+    if (sub(a) === 'report' && a.includes('--detach')) { byToolUse = [...a]; return ok('') }
+    return ok('')
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => setTimeout(() => res(NATIVE_RED), 50)))
+  const t0 = Date.now()
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+  expect(Date.now() - t0).toBeLessThan(5000)
+  expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, ref: 1 }))
+  expect(byToolUse).not.toBeNull()
+  const a = byToolUse!
+  expect(a.slice(2, 3)).toEqual(['report'])
+  const flag = (f: string) => a[a.indexOf(f) + 1]
+  expect(flag('--session')).toBe('sess-test')
+  expect(flag('--tool-use')).toBe(beginArgv![beginArgv!.indexOf('--tool-use') + 1])
+  const since = Number(flag('--since'))
+  expect(since).toBeGreaterThanOrEqual(t0)  // the real time, not the engine's 42
+  expect(since).toBeLessThanOrEqual(realAtBegin) // taken before begin was called
+  expect(a).toContain('answered_local')
+  expect(JSON.parse(flag('--hook'))).toEqual({ answers: { '紅還是藍？': '紅' } })
+})
+
+test('dismissed while begin has not replied ⇒ the by-tool-use report says dismissed', { timeoutMs: 15000 }, async ($, on) => {
+  session(on)
+  on('clock.now', () => ({ value: 1_700_000_000_000 }))
+  let byToolUse: Call | null = null
+  on('process.run', (_$: any, e: any) => {
+    const a = e.argv
+    if (sub(a) === 'begin') return never()
+    if (sub(a) === 'report' && a.includes('--detach')) { byToolUse = [...a]; return ok('') }
+    return ok('')
+  })
+  on('tool.call', { tool: 'AskUserQuestion' }, () => Promise.reject(new Error('esc')))
+  await $.tool.call({ tool: 'AskUserQuestion', questions: Q }).catch(() => {})
+  expect(byToolUse).not.toBeNull()
+  expect(byToolUse!).toContain('dismissed')
+  expect(byToolUse!).not.toContain('--hook')
+})
+
+// Begin that DID reply (an id, or a refusal) needs no by-tool-use report: the id route, or no row at all.
+test('begin replied with an id ⇒ the report goes by the id; begin refused (no_responders) ⇒ no report at all', async ($, on) => {
+  session(on)
+  on('clock.now', () => ({ value: 1_700_000_000_000 }))
+  const calls: Call[] = []
+  on('process.run', (_$: any, e: any) => { calls.push([...e.argv]); return sub(e.argv) === 'begin' ? ok('{"id":"r9"}') : ok('{}') })
+  on('tool.call', { tool: 'AskUserQuestion' }, () => Promise.resolve(NATIVE_RED))
+  await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+  expect(calls.filter((c) => c.includes('--session') && sub(c) === 'report')).toEqual([])
+  expect(calls.find((c) => sub(c) === 'report')!.slice(2, 5)).toEqual(['report', 'r9', 'answered_local'])
+})
+
+test('begin refused before the person answers ⇒ nothing to report', async ($, on) => {
+  session(on)
+  on('clock.now', () => ({ value: 1_700_000_000_000 }))
+  const calls: Call[] = []
+  on('process.run', (_$: any, e: any) => { calls.push([...e.argv]); return ok('', 13, 'pdx ask: x no_responders\n') })
+  on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => setTimeout(() => res(NATIVE_RED), 80)))
+  await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
+  expect(calls.map(sub)).toEqual(['begin'])
 })
 
 // The mod's own failure: its `.catch` answers next(e), which replays the native call as it

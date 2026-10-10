@@ -26,6 +26,24 @@ func (s *Store) OpenByToolUse(sessionID, toolUseID string) (team.Approval, bool,
 	return a, true, nil
 }
 
+// LatestHookByToolUse is the newest hook row (any state) that the mod's begin opened — never a terminal_only one, which the settings
+// hook makes and begin takes over — of sessionID's toolUseID created at or after since (unix ms): the row a report by tool use is
+// about (#1848). Newest by insertion (rowid) when the rows share their millisecond. ok is false when there is none.
+func (s *Store) LatestHookByToolUse(sessionID, toolUseID string, since int64) (team.Approval, bool, error) {
+	a, _, err := scanRow(s.db.QueryRow(`SELECT `+selectCols+` FROM approval_requests
+		WHERE origin_session_id = ? AND kind IN ('hook_ask', 'hook_permission') AND created_at >= ?
+		  AND json_extract(payload_json, '$.tool_use_id') = ?
+		  AND COALESCE(json_extract(payload_json, '$.terminal_only'), 0) <> 1
+		ORDER BY created_at DESC, rowid DESC LIMIT 1`, sessionID, since, toolUseID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return team.Approval{}, false, nil
+	}
+	if err != nil {
+		return team.Approval{}, false, fmt.Errorf("latest hook approval by tool use %s/%s: %w", sessionID, toolUseID, err)
+	}
+	return a, true, nil
+}
+
 // OpenTerminalOnlyBySession returns the open terminal_only hook rows of a
 // session, oldest first (the settings-hook backstop closes them by
 // tool_use_id, tool_name, or all at once on Stop).
