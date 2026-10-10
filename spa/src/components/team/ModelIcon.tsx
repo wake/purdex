@@ -5,14 +5,19 @@
 import { ringGeometry, ringTransform, type UsageTone } from '../../lib/usage-display'
 import { MODEL_LABEL, type ModelFamily } from './model-family'
 
-// Every shape's bbox is centred on (6,6) of the 12x12 box (r4b) — the ring draws them by that centre, so a shape that is
-// off-centre in its own box shows up as "偏上／偏下" no matter how exactly the box is placed. opus and sonnet were already
-// centred; haiku (y 1–10.6) and fable (y .5–11.2) were shifted down by .2 and .15.
+// Optical centring (r4b): the ring draws each shape by the point the eye reads as its middle, placed on the ring's centre
+// (6,6 of the 12x12 box). Bjango, "Formulas for optical adjustments": a triangle in a circle looks right when its CENTROID
+// (not its bbox centre) is on the circle's centre; a star likewise by its circumcentre. A bbox-centred triangle looks too
+// high, because most of its mass is in the lower part.
+//  - opus (diamond) and sonnet (circle) are symmetric: bbox centre = centre.
+//  - haiku: the mean of its 3 vertices = (6, (-.4+9.2+9.2)/3) = (6, 6). The apex pokes .4 above the box, so the standalone
+//    ModelIcon's svg is overflow-visible.
+//  - fable: the mean of its 5 outer vertices (= a regular star's circumcentre) = (6, (.08+4.18+10.78+10.78+4.18)/5) = (6, 6).
 const PATHS: Record<ModelFamily, string> = {
   opus: 'M6 .6 11.4 6 6 11.4.6 6Z',
   sonnet: 'M6 1.2a4.8 4.8 0 1 1 0 9.6a4.8 4.8 0 1 1 0-9.6Z',
-  haiku: 'M6 1.2 11.2 10.8H.8Z',
-  fable: 'M6 .65 7.6 4.45 11.6 4.75 8.6 7.35 9.5 11.35 6 9.25 2.5 11.35 3.4 7.35 .4 4.75 4.4 4.45Z',
+  haiku: 'M6 -.4 11.2 9.2 .8 9.2Z',
+  fable: 'M6 .08 7.6 3.88 11.6 4.18 8.6 6.78 9.5 10.78 6 8.68 2.5 10.78 3.4 6.78 .4 4.18 4.4 3.88Z',
 }
 
 export function ModelIcon({ model, size = 11 }: { model: ModelFamily | undefined; size?: number }) {
@@ -28,7 +33,7 @@ export function ModelIcon({ model, size = 11 }: { model: ModelFamily | undefined
     )
   }
   return (
-    <svg data-testid={`model-icon-${model}`} width={size} height={size} viewBox="0 0 12 12" fill="currentColor" className="flex-shrink-0" aria-label={MODEL_LABEL[model]}>
+    <svg data-testid={`model-icon-${model}`} width={size} height={size} viewBox="0 0 12 12" fill="currentColor" overflow="visible" className="flex-shrink-0" aria-label={MODEL_LABEL[model]}>
       <path d={PATHS[model]} />
     </svg>
   )

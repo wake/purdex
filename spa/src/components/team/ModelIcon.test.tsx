@@ -21,23 +21,30 @@ describe('ContextRing', () => {
 // r4b — the model shape is drawn INSIDE the ring's own <svg>, so its centre is the ring's centre by arithmetic, not by CSS snapping.
 describe('ContextRing symbol centring', () => {
   const nums = (s: string) => (s.match(/-?\d*\.?\d+/g) ?? []).map(Number)
-  // bbox of a path in its own 12x12 box. opus / haiku / fable are straight-edged polygons (M + implicit L), so the
-  // extremes of the vertices ARE the bbox. sonnet is a circle: `M cx cy-r a r r …` starts at the top, so cx = x0, cy = y0 + r.
-  function bbox(model: string, d: string): [number, number, number, number] {
+  // The point that must sit on the ring's centre, in the path's own 12x12 box (optical centring, Bjango "Formulas for optical
+  // adjustments"). opus (diamond) and sonnet (circle) are symmetric, so it is their bbox centre; sonnet is `M cx cy-r a r r …`,
+  // so cx = x0, cy = y0 + r. haiku is a triangle: the mean of its 3 vertices (the centroid). fable is a five-point star:
+  // the mean of its 5 outer vertices (even-numbered ones; = the circumcentre of a regular star).
+  function anchor(model: string, d: string): [number, number] {
     const n = nums(d)
-    if (model === 'sonnet') { const [x0, y0, r] = n; return [x0 - r, y0, x0 + r, y0 + 2 * r] }
-    const xs = n.filter((_, i) => i % 2 === 0), ys = n.filter((_, i) => i % 2 === 1)
-    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]
+    const pts: Array<[number, number]> = []
+    for (let i = 0; i + 1 < n.length; i += 2) pts.push([n[i], n[i + 1]])
+    const mean = (ps: Array<[number, number]>): [number, number] => [ps.reduce((a, p) => a + p[0], 0) / ps.length, ps.reduce((a, p) => a + p[1], 0) / ps.length]
+    if (model === 'sonnet') return [n[0], n[1] + n[2]]
+    if (model === 'haiku') return mean(pts)
+    if (model === 'fable') return mean(pts.filter((_, i) => i % 2 === 0))
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1])
+    return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2]
   }
   it.each(['opus', 'sonnet', 'haiku', 'fable'].flatMap((m) => [12, 16, 20].map((s) => [m, s] as const)))(
-    '%s in a %ipx ring: path bbox centre = (size/2, size/2)', (model, size) => {
+    '%s in a %ipx ring: optical centre (bbox / centroid / outer-vertex mean) = (size/2, size/2)', (model, size) => {
       const { container } = render(<ContextRing pct={40} model={model as never} size={size} />)
       const svg = container.querySelector('[data-testid="context-ring"] > svg')!
       const path = svg.querySelector(`[data-testid="model-icon-${model}"] path`)!
       const [tx, ty, k] = nums(path.getAttribute('transform')!)
-      const [x0, y0, x1, y1] = bbox(model, path.getAttribute('d')!)
-      expect(tx + k * (x0 + x1) / 2).toBeCloseTo(size / 2, 2)
-      expect(ty + k * (y0 + y1) / 2).toBeCloseTo(size / 2, 2)
+      const [ax, ay] = anchor(model, path.getAttribute('d')!)
+      expect(tx + k * ax).toBeCloseTo(size / 2, 2)
+      expect(ty + k * ay).toBeCloseTo(size / 2, 2)
     })
   it('unknown model: the "?" is in the same svg, anchored middle / central', () => {
     const { container } = render(<ContextRing pct={40} model={undefined} size={16} />)
