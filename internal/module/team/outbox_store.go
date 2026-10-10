@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	"github.com/wake/purdex/internal/team"
 )
 
 // L's commands outbox (cross-host team spec §3.1, §4.1; plan X3a). A command is written in the SAME transaction as the
@@ -102,10 +103,18 @@ func enqueueCommandIn(q dbtx, c Command, now int64) error {
 	if err := json.Unmarshal(c.Body, &head); err != nil || head.ID != c.ID || head.Kind != c.Kind || head.ToHost != c.HostID || head.TeamID != c.TeamID || head.MK != c.MK {
 		return fmt.Errorf("enqueue command %s: the body must carry the same id, kind, to_host_id, team_id and mk", c.ID)
 	}
-	hash := hashBody(c.Body)
+	hash, sent := hashBody(c.Body), c.Body
+	if c.Kind == CmdAdopt || c.Kind == CmdSpawn {
+		// the team's look is read HERE, in the transaction that stores the command (#2346): a rename lands wholly before
+		// this read (the command carries it) or after (its own team.appearance is queued behind this command)
+		var err error
+		if sent, err = withCurrentLook(q, c.Body); err != nil {
+			return fmt.Errorf("enqueue command %s: %w", c.ID, err)
+		}
+	}
 	res, err := q.Exec(`INSERT INTO team_commands (id, kind, team_id, mk, host_id, body_json, body_hash, state, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?) ON CONFLICT (id) DO NOTHING`,
-		c.ID, c.Kind, c.TeamID, c.MK, c.HostID, string(c.Body), hash, now, now)
+		c.ID, c.Kind, c.TeamID, c.MK, c.HostID, string(sent), hashBody(sent), now, now)
 	if err != nil {
 		return fmt.Errorf("enqueue command %s: %w", c.ID, err)
 	}
@@ -114,10 +123,14 @@ func enqueueCommandIn(q dbtx, c Command, now int64) error {
 	}
 	// A replay: the same id means the same command in every persisted field, not only the same bytes.
 	var stored Command
-	var storedHash string
-	if err := q.QueryRow(`SELECT kind, team_id, mk, host_id, body_hash FROM team_commands WHERE id = ?`, c.ID).
-		Scan(&stored.Kind, &stored.TeamID, &stored.MK, &stored.HostID, &storedHash); err != nil {
+	var storedHash, storedBody string
+	if err := q.QueryRow(`SELECT kind, team_id, mk, host_id, body_hash, body_json FROM team_commands WHERE id = ?`, c.ID).
+		Scan(&stored.Kind, &stored.TeamID, &stored.MK, &stored.HostID, &storedHash, &storedBody); err != nil {
 		return fmt.Errorf("enqueue command %s: %w", c.ID, err)
+	}
+	if c.Kind == CmdAdopt || c.Kind == CmdSpawn {
+		// the stored copy carries the look of its own time: the replay is the same command when all else is the same
+		hash, storedHash = hashBody(withoutLook(c.Body)), hashBody(withoutLook([]byte(storedBody)))
 	}
 	if storedHash != hash || stored.Kind != c.Kind || stored.TeamID != c.TeamID || stored.MK != c.MK || stored.HostID != c.HostID {
 		return fmt.Errorf("enqueue command %s: the id is taken by another command", c.ID)
@@ -184,4 +197,41 @@ func (s *Store) SettleCommand(id string, res peersmod.CallResult, now int64, out
 		return false, err
 	}
 	return true, tx.Commit()
+}
+
+// withCurrentLook is body with the team's name, label and colour as the teams row holds them now (read in q's transaction).
+// A team that is gone leaves the body as it was.
+func withCurrentLook(q dbtx, body []byte) ([]byte, error) {
+	var tc team.TeamCommand
+	if err := json.Unmarshal(body, &tc); err != nil {
+		return nil, err
+	}
+	var name, label string
+	var color sql.NullInt64
+	switch err := q.QueryRow(`SELECT team_name, team_label, team_color FROM teams WHERE id = ?`, tc.TeamID).Scan(&name, &label, &color); {
+	case errors.Is(err, sql.ErrNoRows):
+		return body, nil
+	case err != nil:
+		return nil, err
+	}
+	tc.TeamName, tc.TeamLabel, tc.TeamColor = name, label, nil
+	if color.Valid {
+		c := int(color.Int64)
+		tc.TeamColor = &c
+	}
+	return json.Marshal(tc)
+}
+
+// withoutLook is body with the look fields cleared: what two copies of one join command must agree on.
+func withoutLook(body []byte) []byte {
+	var tc team.TeamCommand
+	if json.Unmarshal(body, &tc) != nil {
+		return body
+	}
+	tc.TeamName, tc.TeamLabel, tc.TeamColor = "", "", nil
+	out, err := json.Marshal(tc)
+	if err != nil {
+		return body
+	}
+	return out
 }

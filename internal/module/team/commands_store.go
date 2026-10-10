@@ -257,7 +257,10 @@ func applyAdoptIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 		LeadHostID: p.LeadHostID, LeadSessionID: c.Lead.SessionID, LeadRef: c.Lead.Ref, LeadAddress: c.Lead.Address,
 		LeadTitle: c.Lead.Title, LeadPID: c.Lead.PID, LeadProcStart: c.Lead.ProcStart, Origin: team.MemberOriginAdopted,
 		State: remoteActive, PID: o.PID, ProcStart: o.ProcStart, PaneID: pane, TmuxSession: tmuxSession, Cwd: o.Cwd,
-		Title: o.Title, CreatedAt: p.Now, UpdatedAt: p.Now}
+		Title: o.Title, TeamLabel: c.TeamLabel, CreatedAt: p.Now, UpdatedAt: p.Now}
+	if c.TeamColor != nil { // absent = an older lead host, or automatic: the row starts without one either way
+		row.TeamColor = sql.NullInt64{Int64: int64(*c.TeamColor), Valid: true}
+	}
 	if err := insertRemoteMemberIn(tx, row); err != nil {
 		return CommandResult{}, err
 	}
