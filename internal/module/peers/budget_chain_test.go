@@ -104,8 +104,32 @@ func TestSend_ATimeoutAfterTheRequestWentOutIsDeliveryUncertain(t *testing.T) {
 	if resp.MsgID == "" || resp.ToAddress == "" {
 		t.Errorf("response = %+v", resp)
 	}
+	// The sender never heard what mode the receiver applied (it may have lowered bypass): it does not say.
+	if resp.EffectiveMode != "" {
+		t.Errorf("effective_mode = %q, want it unknown (\"\")", resp.EffectiveMode)
+	}
 	rows := s.rows()
-	if len(rows) != 1 || rows[0].Result != ipeers.ResultDeliveryUncertain {
-		t.Errorf("rows = %+v, want one audit row with result delivery_uncertain", rows)
+	if len(rows) != 1 || rows[0].Result != ipeers.ResultDeliveryUncertain || rows[0].EffectiveMode != "" {
+		t.Errorf("rows = %+v, want one audit row with result delivery_uncertain and no effective mode", rows)
+	}
+}
+
+// A receiver that already refused (a non-200 status line) is not "uncertain" even if its body never arrives: the refusal is
+// known. (codex attack, #1009.) Mutation gate: wrap every post-write read error -> red.
+func TestPostDeliver_ARefusalWhoseBodyIsCutIsStillARefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000") // promises more than it sends
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate`))
+		// the handler returns: the connection is closed with the body short
+	}))
+	defer srv.Close()
+	_, remote, err := postDeliver(context.Background(), newDeliverClient(), srv.URL, "tok", sampleDeliverRequest())
+	var unc *DeliveryUncertainError
+	if errors.As(err, &unc) {
+		t.Fatalf("a refusal with a cut body was called uncertain: %v", err)
+	}
+	if remote == nil || remote.Status != http.StatusTooManyRequests {
+		t.Fatalf("postDeliver = remote %+v err %v, want the 429 refusal", remote, err)
 	}
 }
