@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -198,6 +199,11 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 		} else {
 			writeError(w, http.StatusBadRequest, "bad_json")
 		}
+		return false
+	}
+	var extra json.RawMessage // exactly one JSON value: a second one, or trailing garbage, is a malformed request
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "bad_json")
 		return false
 	}
 	return true

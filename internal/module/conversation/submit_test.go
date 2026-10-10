@@ -153,6 +153,8 @@ func TestSubmit_Validation(t *testing.T) {
 		code       string
 	}{
 		"not json":          {submitPath(sid), `nope`, 400, "bad_json"},
+		"two values":        {submitPath(sid), `{"text":"x","client_msg_id":"c"}{"text":"y"}`, 400, "bad_json"},
+		"trailing garbage":  {submitPath(sid), `{"text":"x","client_msg_id":"c"} nope`, 400, "bad_json"},
 		"no client id":      {submitPath(sid), `{"text":"x"}`, 400, "bad_client_msg_id"},
 		"bad client id":     {submitPath(sid), `{"text":"x","client_msg_id":"has space"}`, 400, "bad_client_msg_id"},
 		"long client id":    {submitPath(sid), `{"text":"x","client_msg_id":"` + strings.Repeat("a", 129) + `"}`, 400, "bad_client_msg_id"},
