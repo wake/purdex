@@ -2,7 +2,7 @@
 // (SessionRightPanel, D10) on the right. When the pane is too narrow to keep the chat at CHAT_MIN_W next to the panel, the panel
 // becomes an OVERLAY on the right edge (scrim behind it; scrim click, the panel's ✕ or Esc closes it). Pure layout: the caller
 // hands the chat as `children`, the panel as `panel`, and whether it is open.
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { panelDocks } from './split-layout'
 
@@ -11,16 +11,24 @@ function focusables(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => !el.closest('[inert]'))
 }
 
-function useWidth(ref: React.RefObject<HTMLElement | null>, override?: number): number | null {
+const validWidth = (w: number | null | undefined): number | null => (typeof w === 'number' && Number.isFinite(w) && w > 0 ? w : null)
+
+/** The container's width: read synchronously when the element attaches (so the FIRST paint is already right), then followed by a ResizeObserver. */
+function useWidth(override?: number): [number | null, (el: HTMLDivElement | null) => void, React.RefObject<HTMLDivElement | null>] {
   const [w, setW] = useState<number | null>(null)
+  const node = useRef<HTMLDivElement | null>(null)
+  const attach = useCallback((el: HTMLDivElement | null) => {
+    node.current = el
+    if (el) setW(validWidth(el.getBoundingClientRect().width))
+  }, [])
   useLayoutEffect(() => {
-    if (override !== undefined || !ref.current) return
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver((entries) => setW(entries[entries.length - 1]?.contentRect.width ?? null))
-    ro.observe(ref.current)
+    const el = node.current
+    if (override !== undefined || !el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => setW(validWidth(entries[entries.length - 1]?.contentRect.width)))
+    ro.observe(el)
     return () => ro.disconnect()
-  }, [ref, override])
-  return override !== undefined ? override : w
+  }, [override])
+  return [override !== undefined ? validWidth(override) : w, attach, node]
 }
 
 interface Props {
@@ -36,9 +44,9 @@ interface Props {
 
 export function SessionSplit({ children, panel, open, onClose, widthOverride }: Props) {
   const t = useI18nStore((s) => s.t)
-  const root = useRef<HTMLDivElement>(null)
-  const width = useWidth(root, widthOverride)
-  const overlay = open && !panelDocks(width)
+  const [width, attach] = useWidth(widthOverride)
+  const measured = width !== null
+  const overlay = open && measured && !panelDocks(width)
 
   const dialog = useRef<HTMLDivElement>(null)
   const lastFocus = useRef<HTMLElement | null>(null)
@@ -78,11 +86,11 @@ export function SessionSplit({ children, panel, open, onClose, widthOverride }: 
   }, [overlay, onClose])
 
   return (
-    <div ref={root} data-testid="session-split" data-mode={!open ? 'closed' : overlay ? 'overlay' : 'docked'} className="relative flex h-full min-w-0"
+    <div ref={attach} data-testid="session-split" data-mode={!open ? 'closed' : !measured ? 'measuring' : overlay ? 'overlay' : 'docked'} className="relative flex h-full min-w-0"
       onFocusCapture={(e) => { if (!overlay) lastFocus.current = e.target as HTMLElement }}>
       <div data-testid="split-chat" inert={overlay} aria-hidden={overlay ? true : undefined} className="flex min-w-0 flex-1 flex-col">{children}</div>
-      {open && !overlay && panel}
-      {open && overlay && (
+      {open && measured && !overlay && panel}
+      {overlay && (
         <div data-testid="split-overlay" className="absolute inset-0 z-10">
           <button type="button" data-testid="split-scrim" tabIndex={-1} aria-label={t('split.close')} onClick={onClose}
             className="absolute inset-0 cursor-default bg-black/40" />

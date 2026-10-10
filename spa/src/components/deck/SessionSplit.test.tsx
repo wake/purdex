@@ -18,8 +18,8 @@ describe('panelDocks', () => {
     expect(panelDocks(680)).toBe(true) // 360 + 320
     expect(panelDocks(359)).toBe(false)
     expect(panelDocks(1000)).toBe(true) // 420 panel, 580 chat
-    expect(panelDocks(null)).toBe(true) // not measured yet
-    expect(panelDocks(0)).toBe(true)
+    // no valid measurement: never docks (the chat must keep 360)
+    for (const bad of [null, 0, -5, NaN, Infinity]) expect(panelDocks(bad)).toBe(false)
   })
 })
 
@@ -74,15 +74,37 @@ describe('SessionSplit', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('follows the observed width when not overridden', () => {
+  it('follows the observed width when not overridden; no valid width means no panel at all', () => {
     let cb: ResizeObserverCallback = () => {}
     vi.stubGlobal('ResizeObserver', class { constructor(c: ResizeObserverCallback) { cb = c } observe() {} disconnect() {} unobserve() {} })
     r(undefined)
-    expect(screen.getByTestId('session-split').dataset.mode).toBe('docked') // unmeasured
+    const mode = () => screen.getByTestId('session-split').dataset.mode
+    expect(mode()).toBe('measuring') // jsdom measures 0: not docked, not drawn
+    expect(screen.queryByTestId('the-panel')).toBeNull()
+    expect(screen.getByTestId('split-chat').hasAttribute('inert')).toBe(false)
     act(() => cb([{ contentRect: { width: 500 } } as ResizeObserverEntry], {} as ResizeObserver))
-    expect(screen.getByTestId('session-split').dataset.mode).toBe('overlay')
+    expect(mode()).toBe('overlay')
     act(() => cb([{ contentRect: { width: 900 } } as ResizeObserverEntry], {} as ResizeObserver))
-    expect(screen.getByTestId('session-split').dataset.mode).toBe('docked')
+    expect(mode()).toBe('docked')
+    act(() => cb([{ contentRect: { width: 0 } } as ResizeObserverEntry], {} as ResizeObserver))
+    expect(mode()).toBe('measuring')
+    expect(screen.queryByTestId('the-panel')).toBeNull()
+    act(() => cb([{ contentRect: { width: 900 } } as ResizeObserverEntry], {} as ResizeObserver))
+    expect(screen.getByTestId('the-panel')).toBeTruthy()
+    vi.unstubAllGlobals()
+  })
+
+  it('the first paint is already right: the width is read synchronously on mount (700 docks, 500 overlays, 679 / 680 edge)', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
+    let w = 700
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width: w, height: 300 } as DOMRect))
+    for (const [width, expected] of [[700, 'docked'], [500, 'overlay'], [679, 'overlay'], [680, 'docked']] as const) {
+      w = width
+      r(undefined)
+      expect(screen.getByTestId('session-split').dataset.mode).toBe(expected) // no act, no observer tick: the very first render result
+      cleanup()
+    }
+    spy.mockRestore()
     vi.unstubAllGlobals()
   })
 })
