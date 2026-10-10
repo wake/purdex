@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/fsutil"
@@ -37,6 +38,22 @@ const (
 	uploadDeviceSlots = 2
 	uploadRetryAfter  = "5"
 )
+
+// uploadRefuseDrainTimeout is the absolute time a refused upload's body may be drained for. A var so tests can shrink it.
+var uploadRefuseDrainTimeout = 10 * time.Second
+
+// drainRefusedBody reads and discards (never to disk) up to what a device may legitimately send, so the 429 reaches a
+// client that is still streaming: closing a connection with unread body makes the kernel RST, and the client then sees
+// a reset instead of the 429 (measured: 1 MiB of draining still lost 60-75% of 32 MB refusals; the full cap lost none).
+// A refused request holds no slot, so the drain has an absolute deadline (not a per-read stall one, which a 1-byte
+// trickle defeats); when it expires the 429 goes out anyway and may meet an RST. Best-effort by design.
+func drainRefusedBody(w http.ResponseWriter, r *http.Request) {
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Now().Add(uploadRefuseDrainTimeout)); err == nil {
+		defer rc.SetReadDeadline(time.Time{})
+	}
+	_, _ = io.CopyN(io.Discard, r.Body, uploadMaxFileBytesDevice+uploadFormOverhead)
+}
 
 // uploadLimiter counts in-flight uploads per device id. A full device is refused at once (no queueing), and an entry
 // that drops to zero is deleted so the map does not grow with every device ever seen.
@@ -77,11 +94,12 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 		// Per-token slot, taken before the body is touched and released on every exit (success, error, disconnect).
 		if !m.uploadSlots.acquire(p.ID) {
 			w.Header().Set("Retry-After", uploadRetryAfter)
-			w.Header().Set("Connection", "close")
-			// Read (and discard, never to disk) up to what a device may legitimately send before answering: closing a
-			// connection that still has unread body makes the kernel RST, and the client then sees a reset instead of
-			// the 429 (measured: 1 MiB of draining still lost 60-75% of 32 MB refusals; the full cap lost none).
-			_, _ = io.CopyN(io.Discard, middleware.StallTimeoutBody(w, r, uploadStallTimeout), uploadMaxFileBytesDevice+uploadFormOverhead)
+			// Connection: close only on HTTP/1: under h2 Go turns it into a GOAWAY for the whole connection, which would
+			// take the same client's legitimate uploads down with it.
+			if r.ProtoMajor == 1 {
+				w.Header().Set("Connection", "close")
+			}
+			drainRefusedBody(w, r)
 			http.Error(w, `{"error":"too many uploads"}`, http.StatusTooManyRequests)
 			return
 		}
