@@ -95,7 +95,7 @@ export function InlineTab({
     }
   }
 
-  const handleCloseClick =(e: React.MouseEvent) => {
+  const handleCloseClick = (e: React.MouseEvent) => {
     e.stopPropagation()
     onClose(tab.id)
   }
