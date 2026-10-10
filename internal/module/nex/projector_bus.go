@@ -204,6 +204,7 @@ func (m *Module) startProjector() {
 	}
 	logf := func(format string, args ...any) { m.logf(format, args...) }
 	p := newProjector(m.reads(), rowReader{handler: m.sys.handler, logf: logf}, m.core.Events, m.sys.bus, logf, m.projTiming)
+	p.notify = &m.workerHub
 	m.projMu.Lock()
 	m.proj = p
 	m.projMu.Unlock()

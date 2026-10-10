@@ -145,6 +145,7 @@ type Module struct {
 	// first thing in Stop (and in Close, should Stop not have run) so it
 	// never reads from an engine on its way down. projTiming is a test seam;
 	// zero values take the defaults.
+	workerHub  workerNotifyHub // worker transitions for the push module (worker_notify.go)
 	projMu     sync.Mutex
 	proj       *projector
 	projTiming projectorTiming
@@ -299,6 +300,7 @@ func (m *Module) Init(c *core.Core) error {
 	// §4.1). A soft-failed one publishes nothing: the peers module then lists
 	// no execution rows, instead of a listing failure on every request.
 	c.Registry.Register(execpeers.RegistryKey, &execPeers{m: m})
+	c.Registry.Register(WorkerNotifyKey, WorkerNotifyFeed(m))
 	return nil
 }
 
@@ -493,6 +495,7 @@ func profilesText(maxProfile, defaultProfile string) string {
 // walks this Module); the stop steps run either way.
 func (m *Module) Stop(ctx context.Context) error {
 	m.stopProjector(ctx)
+	m.workerHub.close() // after the projector: nothing publishes any more
 	m.stopManualResume(ctx)
 	m.stopConversations(ctx)
 	if m.sys.shutdown == nil {
@@ -507,6 +510,7 @@ func (m *Module) Stop(ctx context.Context) error {
 // store.
 func (m *Module) Close() error {
 	m.stopProjector(context.Background())
+	m.workerHub.close()
 	if m.sys.close == nil {
 		return nil
 	}

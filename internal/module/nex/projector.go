@@ -144,6 +144,10 @@ type rowDigest struct {
 	TurnCount         int64
 	LastTurnReason    string
 	TerminalReason    string
+	// PermissionBlank: pending_permission is present with an empty request_id. The SPA still reads that as
+	// awaiting approval (isAwaitingApproval tests `!= null`), so the worker classifier must too; kept apart
+	// from PermissionRequest so a digest with a request id is unchanged.
+	PermissionBlank bool
 }
 
 // pushedRow is lastPushed[id] (§3.7): what the clients were last given for
@@ -213,6 +217,8 @@ type projector struct {
 	rechecks   map[string]*recheckState // terminal rechecks in progress
 	wantSeed   bool                     // epoch work pending: seed lastPushed …
 	wantRotate bool                     // … after starting a new epoch
+
+	notify *workerNotifyHub // worker needs-you/done/failed transitions (worker_notify.go); nil: none published
 }
 
 func newProjector(slot *readSlot, rows rowReader, events *core.EventsBroadcaster, b frameBus, logf func(string, ...any), timing projectorTiming) *projector {
@@ -434,12 +440,16 @@ func (p *projector) push(id string, st slotStamp, cause []string, row json.RawMe
 		return pushedRow{}
 	}
 	p.events.BroadcastStrictTo(core.FeatureNexV1, core.HostEvent{Type: deltaEventType, Value: value})
-	return p.recordPushed(id, st.Ver, row, found)
+	rec, prev, had := p.recordPushed(id, st.Ver, row, found)
+	p.notifyWorker(id, prev, had, rec, row)
+	return rec
 }
 
-// recordPushed keeps lastPushed[id] current and returns what it recorded.
-func (p *projector) recordPushed(id string, ver uint64, row json.RawMessage, found bool) pushedRow {
-	rec := pushedRow{ver: ver, removed: !found}
+// recordPushed keeps lastPushed[id] current and returns what it recorded,
+// with the entry it replaced (had false: none, so the worker notifier takes
+// this read as a baseline).
+func (p *projector) recordPushed(id string, ver uint64, row json.RawMessage, found bool) (rec, prev pushedRow, had bool) {
+	rec = pushedRow{ver: ver, removed: !found}
 	if found {
 		d, err := digestOf(row)
 		if err != nil {
@@ -448,9 +458,10 @@ func (p *projector) recordPushed(id string, ver uint64, row json.RawMessage, fou
 		rec.digest = d
 	}
 	p.mu.Lock()
+	prev, had = p.pushed[id]
 	p.pushed[id] = rec
 	p.mu.Unlock()
-	return rec
+	return rec, prev, had
 }
 
 // digestOf extracts a row's status digest.
@@ -472,6 +483,7 @@ func digestOf(row json.RawMessage) (rowDigest, error) {
 		LastTurnReason: r.LastTurnReason, TerminalReason: r.TerminalReason}
 	if r.PendingPermission != nil {
 		d.PermissionRequest = r.PendingPermission.RequestID
+		d.PermissionBlank = r.PendingPermission.RequestID == ""
 	}
 	return d, nil
 }
