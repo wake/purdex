@@ -191,6 +191,63 @@ describe('unknown: at most once', () => {
     expect(q.entries()).toHaveLength(0)
   })
 
+  it('the text fallback never settles a message still in flight (sending), only its own id can', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const id = q.enqueue('in flight')
+    q.enqueue('behind')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.reconcile([user('u1', 'in flight', 1_003_100)])
+    expect(q.entries().map((e) => e.state)).toEqual(['sending', 'undo'])
+    expect(calls).toHaveLength(1) // and the chain did not advance
+    q.reconcile([user('u1', 'in flight', 1_003_100, { client_msg_id: id })])
+    expect(q.entries().map((e) => e.text)).toEqual(['behind'])
+  })
+
+  it('the window is 2 s before the request and 30 s after: earlier same text is not an echo', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('window')
+    await vi.advanceTimersByTimeAsync(UNDO_MS) // startedAt = 1_003_000
+    calls[0].resolve({ kind: 'unknown' })
+    await flush()
+    q.reconcile([user('early', 'window', 1_003_000 - 3000)])
+    expect(q.entries()[0].state).toBe('maybe')
+    q.reconcile([user('late', 'window', 1_003_000 + 41_000)])
+    expect(q.entries()[0].state).toBe('maybe')
+    q.reconcile([user('ok', 'window', 1_003_000 - 1500)])
+    expect(q.entries()).toHaveLength(0)
+  })
+
+  it('an id-carrying item is paired by id only, never by its text', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('words')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve({ kind: 'unknown' })
+    await flush()
+    q.reconcile([user('u1', 'words', 1_003_500, { client_msg_id: 'other-id' })])
+    expect(q.entries()[0].state).toBe('maybe')
+  })
+
+  it('two identical messages sent apart each pair with their own echo (the nearest)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('same') // started 1_003_000
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve({ kind: 'accepted' })
+    await flush()
+    await vi.advanceTimersByTimeAsync(10_000)
+    q.enqueue('same')
+    await vi.advanceTimersByTimeAsync(UNDO_MS) // started 1_016_000
+    calls[1].resolve({ kind: 'accepted' })
+    await flush()
+    q.reconcile([user('b', 'same', 1_016_500)]) // nearer to the second
+    expect(q.entries().map((e) => e.startedAt)).toEqual([1_003_000])
+    q.reconcile([user('b', 'same', 1_016_500), user('a', 'same', 1_003_400)])
+    expect(q.entries()).toHaveLength(0)
+  })
+
   it('one transcript message settles one entry, not two with the same text', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)

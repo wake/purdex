@@ -11,7 +11,11 @@ import { normalizePrompt } from './send-plan'
 import type { UserItem } from './types'
 
 export const UNDO_MS = 3000
-export const MATCH_WINDOW_MS = 30_000
+// The daemon's echo pairing window (internal/promptq/echo.go): a row may be stamped 2 s before the hand-out, up to 30 s after
+// a result that never came (the hand timeout, 10 s, plus 30 s).
+const ECHO_BEFORE_MS = 2000
+const ECHO_AFTER_MS = 30_000
+const HAND_TIMEOUT_MS = 10_000
 
 export type EntryState = 'undo' | 'sending' | 'waiting' | 'sent' | 'maybe' | 'failed' | 'superseded'
 
@@ -24,6 +28,8 @@ export interface QueueEntry {
   undoUntil: number
   /** When the latest submit started (the text-match window is around it). */
   startedAt: number
+  /** When the latest submit got its answer. */
+  settledAt?: number
   outcome?: SendOutcome
   /** The id of the message that replaced this one after a manual resend (the old entry is kept for the audit trail). */
   supersededBy?: string
@@ -111,18 +117,33 @@ export class SendQueue {
 
   /** The transcript's user messages: an entry whose echo is there is done (the transcript shows it from now on). */
   reconcile(items: readonly UserItem[]): void {
-    const users = items.filter((i) => i.source === 'user').sort((a, b) => a.at - b.at)
-    let changed = false
-    for (const e of this.list) {
-      if (e.state !== 'sent' && e.state !== 'maybe' && e.state !== 'sending') continue
-      const hit = users.find((u) => !this.claimed.has(u.id) && (u.client_msg_id === e.id ||
-        (u.client_msg_id === undefined && normalizePrompt(u.text) === e.text && Math.abs(u.at - e.startedAt) <= MATCH_WINDOW_MS)))
-      if (!hit) continue
-      this.claimed.add(hit.id)
-      this.list = this.list.filter((x) => x !== e)
-      changed = true
+    const users = items.filter((i) => i.source === 'user' && !this.claimed.has(i.id))
+    const open = this.list.filter((e) => e.state === 'sent' || e.state === 'maybe' || e.state === 'sending')
+    const done = new Set<QueueEntry>()
+    const take = (e: QueueEntry, u: UserItem) => { this.claimed.add(u.id); done.add(e) }
+    // 1. an item that carries a client_msg_id is paired by that id and by nothing else (the daemon already paired it)
+    for (const u of users) {
+      const e = u.client_msg_id !== undefined ? open.find((x) => x.id === u.client_msg_id && !done.has(x)) : undefined
+      if (e) take(e, u)
     }
-    if (changed) { this.emit(); this.pump() }
+    // 2. the rest by text, in the daemon's window (2 s before the request, 30 s after it was handed out), nearest first.
+    // A message still `sending` is never settled this way: only its own id or its transport outcome can.
+    const pairs: Array<{ e: QueueEntry; u: UserItem; d: number }> = []
+    for (const e of open) {
+      if (e.state === 'sending' || done.has(e)) continue
+      const to = e.state === 'sent' ? (e.settledAt ?? e.startedAt) + ECHO_BEFORE_MS : e.startedAt + HAND_TIMEOUT_MS + ECHO_AFTER_MS
+      for (const u of users) {
+        if (this.claimed.has(u.id) || u.client_msg_id !== undefined) continue
+        if (u.at < e.startedAt - ECHO_BEFORE_MS || u.at > to || normalizePrompt(u.text) !== e.text) continue
+        pairs.push({ e, u, d: Math.abs(u.at - e.startedAt) })
+      }
+    }
+    pairs.sort((a, b) => a.d - b.d)
+    for (const p of pairs) if (!done.has(p.e) && !this.claimed.has(p.u.id)) take(p.e, p.u)
+    if (done.size === 0) return
+    this.list = this.list.filter((x) => !done.has(x))
+    this.emit()
+    this.pump()
   }
 
   interrupt(): Promise<SendOutcome> { return this.port.interrupt() }
@@ -145,6 +166,7 @@ export class SendQueue {
   private settle(e: QueueEntry, o: SendOutcome): void {
     if (e.state !== 'sending' || !this.list.includes(e)) return // already echoed by the transcript
     e.outcome = o
+    e.settledAt = this.now()
     if (o.kind === 'accepted') e.state = 'sent'
     else if (o.kind === 'busy') e.state = 'waiting'
     else if (mayHaveRun(o)) e.state = 'maybe'
