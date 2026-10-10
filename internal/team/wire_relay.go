@@ -37,6 +37,7 @@ const (
 	RelayReasonMemberUnresponsive = "member_unresponsive" // failed (P6)
 	RelayReasonMemberGone         = "member_gone"         // failed (P6)
 	RelayReasonDaemonUnavailable  = "daemon_unavailable"  // failed
+	RelayReasonModReloaded        = "mod_reloaded"        // failed: the mod reloaded (pdx setup) while the write was under way (#2441)
 	RelayReasonDenied             = "denied"              // cancelled
 	RelayReasonTimeout            = "timeout"             // cancelled
 	RelayReasonCompacted          = "compacted"           // cancelled
@@ -108,6 +109,11 @@ type RelayHelloResponse struct {
 	SelfRelay string `json:"self_relay"` // "on" | "off" | "paused"
 	Threshold int    `json:"threshold"`  // RelayThresholdPct
 	MinGrowth int    `json:"min_growth"` // RelayMinGrowth
+	// ActiveRelay is the relay the session was in the middle of when its mod (re)loaded (#2441): its open op in
+	// claimed / writing / written, and the lead of a member op. A mod that holds no state of its own for that op
+	// picks it up (written: /clear and seed; claimed / writing: failed, mod_reloaded). Absent for every other
+	// state, and from a daemon older than this field (the mod then behaves as before).
+	ActiveRelay *RelayClaimResponse `json:"active_relay,omitempty"`
 }
 
 // RelayBeginRequest is POST /api/relay/begin. It carries no model or

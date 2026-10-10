@@ -156,6 +156,16 @@ type APIError struct {
 type InflightResponse struct {
 	ApprovalsOpen int `json:"approvals_open"`
 	RelaysActive  int `json:"relays_active"`
+	// Relays names the active relays (pdx setup refuses over them and says which, #2441); absent from an older daemon.
+	Relays []InflightRelay `json:"relays,omitempty"`
+}
+
+// InflightRelay is one active relay op in InflightResponse.
+type InflightRelay struct {
+	ID    string     `json:"id"`
+	Kind  RelayKind  `json:"kind"`
+	State RelayState `json:"state"`
+	Ref   string     `json:"ref"`
 }
 
 // EventValue is HostEvent.Value (JSON string) for EventType.

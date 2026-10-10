@@ -336,7 +336,11 @@ func (m *Module) handleInflight(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
-	m.writeJSON(w, http.StatusOK, team.InflightResponse{ApprovalsOpen: len(open), RelaysActive: len(active)})
+	relays := make([]team.InflightRelay, 0, len(active))
+	for _, op := range active {
+		relays = append(relays, team.InflightRelay{ID: op.ID, Kind: op.Kind, State: op.State, Ref: op.Ref})
+	}
+	m.writeJSON(w, http.StatusOK, team.InflightResponse{ApprovalsOpen: len(open), RelaysActive: len(active), Relays: relays})
 }
 
 // pollWait parses GET's ?wait= (seconds): "" is 0, a negative or non-numeric

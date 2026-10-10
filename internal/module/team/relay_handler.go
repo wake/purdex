@@ -122,10 +122,21 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 		m.logf("[team] relay hello %s: %v", req.SessionID, err)
 	}
 	m.helloMu.Unlock()
-	m.writeJSON(w, http.StatusOK, team.RelayHelloResponse{
+	resp := team.RelayHelloResponse{
 		OK: true, Role: role, SelfRelay: state,
 		Threshold: team.RelayThresholdPct, MinGrowth: team.RelayMinGrowth,
-	})
+	}
+	// A mod that reloaded mid-relay (pdx setup, #2441) holds no state for its op: hand it the op it must pick up. A
+	// failed read only costs the recovery (the stall rule still fails the op), never the hello.
+	if op, ok, err := m.store.OpenRelayOpBySession(req.SessionID); err != nil {
+		m.logf("[team] relay hello %s: open op: %v", req.SessionID, err)
+	} else if ok && (op.State == team.RelayClaimed || op.State == team.RelayWriting || op.State == team.RelayWritten) {
+		resp.ActiveRelay = &team.RelayClaimResponse{Op: op}
+		if op.Kind == team.RelayKindMember {
+			resp.ActiveRelay.Lead = m.leadOf(op)
+		}
+	}
+	m.writeJSON(w, http.StatusOK, resp)
 }
 
 // handleRelaySelf is POST /api/relay/self (spec §8.7): the per-session
