@@ -99,6 +99,28 @@ func TestBusy_ATransientLookupFailureDoesNotSuppressTheNotice(t *testing.T) {
 	waitFor(t, func() bool { return len(f.busyNotices()) == 1 })
 }
 
+// One failed member lookup is no verdict (codex attack): a member in its 20th minute of a turn keeps its op when the store
+// cannot be read for a sweep, instead of falling to the 15 minute no-status rule and failing for good.
+func TestBusy_AFailedMemberLookupSkipsTheSweepInsteadOfFailingTheOp(t *testing.T) {
+	f := newFixture(t)
+	op := f.seenMemberOp("running")
+	f.clock.Add(20 * minute)
+	if _, err := f.m.store.db.Exec(`ALTER TABLE teams RENAME TO teams_away`); err != nil {
+		t.Fatal(err)
+	}
+	f.sweepTimeouts()
+	if _, err := f.m.store.db.Exec(`ALTER TABLE teams_away RENAME TO teams`); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.op(op.ID); got.State != team.RelayRequested {
+		t.Fatalf("a lookup failure decided the op: %+v", got)
+	}
+	f.sweepTimeouts() // the store is back: still waiting, and the cap rule still applies
+	if f.op(op.ID).State != team.RelayRequested {
+		t.Fatal("failed at 20 min with a running member")
+	}
+}
+
 // Past the hard cap the op fails member_busy_timeout, and the lead is told by the usual failure notice.
 func TestBusy_ARunningMemberPastTheCapFailsMemberBusyTimeout(t *testing.T) {
 	f := newFixture(t)
