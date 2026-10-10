@@ -25,7 +25,7 @@ function readQuestion(v: unknown): AskQuestion | null {
   const options: AskOption[] = []
   if (Array.isArray(v.options)) {
     for (const o of v.options) {
-      if (isRecord(o) && typeof o.label === 'string') options.push({ label: o.label, ...(typeof o.description === 'string' ? { description: o.description } : {}) })
+      if (isRecord(o) && typeof o.label === 'string' && !options.some((x) => x.label === o.label)) options.push({ label: o.label, ...(typeof o.description === 'string' ? { description: o.description } : {}) })
     }
   }
   // AskUserQuestion's own input calls the flag `multiSelect`; the conversation model calls it `multiple`.

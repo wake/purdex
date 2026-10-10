@@ -2,10 +2,11 @@
 // the input, shared by the deck and the chat. Questions only (a `hook_ask`; permission prompts are P8b). Every card is bound to
 // its approval: when it closes or changes the card locks at once, with no queued taps and no retry. What the reader has picked or
 // typed lives in `dock-memory` (the dock unmounts with its tab; the question is still open when they return).
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChatCircleDots, Check } from '@phosphor-icons/react'
 import { answerAsk, buildAnswers, checkReply, replyToAsk, type AskDecideResult, type OpenAsk, type ReplyRefusal } from '../../lib/conversations/asks'
 import { dockKey, readDockDraft, writeDockDraft, type DockDraft } from '../../lib/conversations/dock-memory'
+import { noteDeckPane } from '../../lib/conversations/fold-memory'
 import { selectAskChatV1, useNexHostStore } from '../../stores/useNexHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { DeckFooterContext } from '../deck/footer-context'
@@ -16,15 +17,16 @@ const REPLY_REFUSAL_KEY: Record<ReplyRefusal, string> = {
 }
 
 export function QuestionDock({ ctx }: { ctx: DeckFooterContext }) {
-  const { cards, markAnswered, unmarkAnswered } = useDockCards(ctx.paneKey, ctx.approvals, ctx.items)
+  const { cards, markAnswered, finishAnswered } = useDockCards(ctx.paneKey, `${ctx.hostId}\0${ctx.sessionId}`, ctx.approvals, ctx.items)
   const askChat = useNexHostStore(selectAskChatV1(ctx.hostId))
+  useEffect(() => noteDeckPane(ctx.paneKey), [ctx.paneKey])
   const t = useI18nStore((s) => s.t)
   const card = cards[0]
   if (!card) return null
   return (
     <div data-testid="question-dock" className="border-t border-border-subtle px-3 pt-2">
-      {/* re-keyed by approval: a card for another request is another card, with its own draft and no state carried over */}
-      <AskCard key={card.ask.id} card={card} ctx={ctx} askChat={askChat} markAnswered={markAnswered} unmarkAnswered={unmarkAnswered} />
+      {/* re-keyed by approval and by its questions: a card for another request (or the same id asked anew) is another card, with its own draft */}
+      <AskCard key={`${card.ask.id}\0${card.ask.questions.map((q) => q.question).join('\0')}`} card={card} ctx={ctx} askChat={askChat} markAnswered={markAnswered} finishAnswered={finishAnswered} />
       {cards.length > 1 && <div data-testid="dock-more" className="mt-1 text-xs text-text-muted">{t('deck.dock.more', { n: cards.length - 1 })}</div>}
     </div>
   )
@@ -35,12 +37,12 @@ interface CardProps {
   ctx: DeckFooterContext
   askChat: boolean
   markAnswered: (id: string) => void
-  unmarkAnswered: (id: string) => void
+  finishAnswered: (id: string, ok: boolean) => void
 }
 
 type Failure = 'network' | 'failed' | ReplyRefusal
 
-function AskCard({ card, ctx, askChat, markAnswered, unmarkAnswered }: CardProps) {
+function AskCard({ card, ctx, askChat, markAnswered, finishAnswered }: CardProps) {
   const t = useI18nStore((s) => s.t)
   const { ask, phase } = card
   const key = dockKey(ctx.paneKey, ask.id)
@@ -65,8 +67,8 @@ function AskCard({ card, ctx, askChat, markAnswered, unmarkAnswered }: CardProps
     markAnswered(ask.id) // before the send: the approval's close can outrun the answer, and it must read as ours
     const r = await send()
     setPending(false)
+    finishAnswered(ask.id, r.ok)
     if (r.ok) return
-    unmarkAnswered(ask.id)
     if (r.reason === 'terminal_only') setTerminalOnly(true)
     else if (r.reason === 'network' || r.reason === 'failed') setFailure(r.reason)
     // 'changed': the approval closed under the card; the close lands as the lock, with no retry offered
@@ -90,7 +92,7 @@ function AskCard({ card, ctx, askChat, markAnswered, unmarkAnswered }: CardProps
       )}
       {draft.replying && !readOnly && (
         <textarea
-          data-testid="dock-reply" value={draft.reply} rows={3} disabled={pending} placeholder={t('deck.dock.reply_placeholder')}
+          data-testid="dock-reply" value={draft.reply} rows={3} disabled={pending} placeholder={t('deck.dock.reply_placeholder')} aria-label={t('deck.dock.reply_placeholder')}
           onChange={(e) => update({ ...draft, reply: e.target.value })}
           className="mb-2 w-full resize-none rounded border border-border-subtle bg-surface-primary px-2 py-1 text-sm text-text-primary"
         />
@@ -131,7 +133,7 @@ function ReadOnlyQuestions({ ask }: { ask: OpenAsk }) {
         <div key={i} data-testid="dock-question">
           {q.header && <div className="text-xs text-text-muted">{q.header}</div>}
           <div className="text-sm text-text-primary">{q.question}</div>
-          <ul className="text-xs text-text-secondary">{q.options.map((o) => <li key={o.label}>· {o.label}</li>)}</ul>
+          <ul className="text-xs text-text-secondary">{q.options.map((o, oi) => <li key={oi}>· {o.label}</li>)}</ul>
         </div>
       ))}
     </div>
@@ -144,7 +146,7 @@ function Questions({ ask, draft, disabled, onChange }: { ask: OpenAsk; draft: Do
   return (
     <div className="mb-2 space-y-3">
       {ask.questions.map((q, i) => {
-        const pick = draft.picks[i]
+        const pick = draft.picks[i] ?? { chosen: [], other: '' }
         const toggle = (label: string) => {
           const on = pick.chosen.includes(label)
           const chosen = q.multiple ? (on ? pick.chosen.filter((c) => c !== label) : [...pick.chosen, label]) : (on ? [] : [label])
@@ -152,18 +154,22 @@ function Questions({ ask, draft, disabled, onChange }: { ask: OpenAsk; draft: Do
           setPick(i, { chosen, other: q.multiple ? pick.other : '' })
         }
         return (
-          <div key={i} data-testid="dock-question">
+          <div key={i} data-testid="dock-question" role={q.multiple ? 'group' : 'radiogroup'} aria-label={q.question}>
             {q.header && <div className="text-xs text-text-muted">{q.header}</div>}
             <div className="text-sm text-text-primary">{q.question}{q.multiple && <span className="ml-1 text-xs text-text-muted">{t('deck.dock.multi')}</span>}</div>
             <div className="mt-1 flex flex-col gap-1">
-              {q.options.map((o) => {
+              {q.options.map((o, oi) => {
                 const on = pick.chosen.includes(o.label)
                 return (
                   <button
-                    key={o.label} type="button" data-testid="dock-option" data-chosen={on} aria-pressed={on} disabled={disabled} onClick={() => toggle(o.label)}
+                    key={oi} type="button" data-testid="dock-option" data-chosen={on} role={q.multiple ? 'checkbox' : 'radio'} aria-checked={on} disabled={disabled} onClick={() => toggle(o.label)}
                     className={`flex items-center gap-2 rounded border px-2 py-1 text-left text-sm ${on ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle text-text-secondary hover:text-text-primary'}`}
                   >
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border-subtle">{on && <Check size={10} weight="bold" />}</span>
+                    {q.multiple ? (
+                      <span data-testid="dock-mark" data-shape="check" className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border-subtle">{on && <Check size={10} weight="bold" />}</span>
+                    ) : (
+                      <span data-testid="dock-mark" data-shape="radio" className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-border-subtle">{on && <span className="h-2 w-2 rounded-full bg-accent" />}</span>
+                    )}
                     <span>{o.label}{o.description && <span className="ml-1 text-xs text-text-muted">— {o.description}</span>}</span>
                   </button>
                 )

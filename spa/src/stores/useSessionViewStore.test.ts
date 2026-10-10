@@ -3,6 +3,7 @@ import { useSessionViewStore, selectSessionView, sessionBinding, viewKey, instal
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import { STORAGE_KEYS } from '../lib/storage'
+import { readDockDraft, writeDockDraft } from '../lib/conversations/dock-memory'
 import { isFolded, noteDeckPane, setOpen } from '../lib/conversations/fold-memory'
 import { readScrollMemo, writeScrollMemo } from '../lib/nex/transcript-scroll-memory'
 
@@ -145,6 +146,16 @@ describe('cleanup when a tab or a pane goes away', () => {
     useTabStore.setState({ tabs: { [tab.id]: { ...tab } } })
     expect(isFolded('closed-pane\0sess', 'k')).toBe(false)
     expect(readScrollMemo('closed-pane')).toBeUndefined()
+  })
+
+  it('forgets the dock drafts of a pane that closed', () => {
+    const tab = createTab({ kind: 'dashboard' })
+    installSessionViewCleanup()
+    useTabStore.setState({ tabs: { [tab.id]: tab } })
+    noteDeckPane('dock-gone')
+    writeDockDraft('dock-gone\0a1', { picks: [{ chosen: ['甲'], other: '' }], replying: false, reply: '' })
+    useTabStore.setState({ tabs: { [tab.id]: { ...tab } } })
+    expect(readDockDraft('dock-gone\0a1', 1).picks[0].chosen).toEqual([])
   })
 
   it('keeps the memory of a pane that is still in a tab', () => {

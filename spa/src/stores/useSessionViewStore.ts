@@ -4,6 +4,7 @@
 // so a pane rebound to another session starts at the terminal again. The terminal is the absence of a record.
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { forgetDockDraftsOfPane } from '../lib/conversations/dock-memory'
 import { deckPanes, forgetDeckPane, forgetFoldsOfPane } from '../lib/conversations/fold-memory'
 import { forgetScrollMemo, forgetScrollMemosWithPrefix } from '../lib/nex/transcript-scroll-memory'
 import { findPane } from '../lib/pane-tree'
@@ -112,6 +113,7 @@ export function installSessionViewCleanup(): () => void {
       forgetScrollMemo(paneId)
       forgetScrollMemosWithPrefix(paneId)
       forgetFoldsOfPane(paneId)
+      forgetDockDraftsOfPane(paneId)
       forgetDeckPane(paneId)
     }
     if (!gone) return

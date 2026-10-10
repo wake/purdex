@@ -173,6 +173,82 @@ describe('bound to its question', () => {
   })
 })
 
+describe('races and re-announcements', () => {
+  it('our send loses to another client: the approval closes, the send says changed — the lock still shows', async () => {
+    let finish: (v: unknown) => void = () => {}
+    asks.answerAsk.mockReturnValue(new Promise((r) => { finish = r }))
+    const { rerender } = render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    pickAll()
+    fireEvent.click(screen.getByTestId('dock-submit')) // in flight
+    rerender(<QuestionDock ctx={ctxOf([])} />) // the terminal answered first: the approval closes
+    expect(screen.queryByTestId('dock-locked')).toBeNull() // not yet: our own answer may be the cause
+    await act(async () => { finish({ ok: false, reason: 'changed' }) })
+    expect(screen.getByTestId('dock-locked')).toHaveTextContent('The question has changed')
+  })
+
+  it('our send wins and the approval had already closed: no lock appears', async () => {
+    let finish: (v: unknown) => void = () => {}
+    asks.answerAsk.mockReturnValue(new Promise((r) => { finish = r }))
+    const { rerender } = render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    pickAll()
+    fireEvent.click(screen.getByTestId('dock-submit'))
+    rerender(<QuestionDock ctx={ctxOf([])} />)
+    await act(async () => { finish({ ok: true }) })
+    expect(screen.queryByTestId('dock-locked')).toBeNull()
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+  })
+
+  it('the same id announced again with other questions is a fresh card, not a crash', () => {
+    const one = approval('a1', {}, { questions: [{ question: '只有一題？', options: [{ label: '是' }] }] })
+    const { rerender } = render(<QuestionDock ctx={ctxOf([one])} />)
+    fireEvent.click(screen.getAllByTestId('dock-option')[0])
+    rerender(<QuestionDock ctx={ctxOf([approval('a1')])} />) // two questions now
+    expect(screen.getAllByTestId('dock-question')).toHaveLength(2)
+    expect(screen.getAllByTestId('dock-option').every((el) => el.getAttribute('data-chosen') === 'false')).toBe(true)
+  })
+
+  it('another conversation (/clear): the old one\'s approvals leaving make no lock', () => {
+    const { rerender } = render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    rerender(<QuestionDock ctx={ctxOf([], { sessionId: 's-new' })} />)
+    expect(screen.queryByTestId('dock-locked')).toBeNull()
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+  })
+
+  it('options with the same label are one option', () => {
+    const dup = approval('a1', {}, { questions: [{ question: 'q?', options: [{ label: '甲' }, { label: '甲' }, { label: '乙' }] }] })
+    render(<QuestionDock ctx={ctxOf([dup])} />)
+    expect(screen.getAllByTestId('dock-option')).toHaveLength(2)
+  })
+})
+
+describe('single and multiple choice look different', () => {
+  it('a single choice is a round radio in a radiogroup; several are square checkboxes in a group', () => {
+    render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    const groups = screen.getAllByTestId('dock-question')
+    expect(groups[0]).toHaveAttribute('role', 'radiogroup')
+    expect(groups[1]).toHaveAttribute('role', 'group')
+    const marks = screen.getAllByTestId('dock-mark')
+    expect(marks.slice(0, 2).every((m) => m.getAttribute('data-shape') === 'radio' && m.className.includes('rounded-full'))).toBe(true)
+    expect(marks.slice(2).every((m) => m.getAttribute('data-shape') === 'check' && !m.className.includes('rounded-full'))).toBe(true)
+    const options = screen.getAllByTestId('dock-option')
+    expect(options[0]).toHaveAttribute('role', 'radio')
+    expect(options[2]).toHaveAttribute('role', 'checkbox')
+  })
+
+  it('choosing one radio clears the other; checkboxes add up', () => {
+    render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    const options = screen.getAllByTestId('dock-option')
+    fireEvent.click(options[0])
+    fireEvent.click(screen.getAllByTestId('dock-option')[1])
+    expect(screen.getAllByTestId('dock-option')[0]).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getAllByTestId('dock-option')[1]).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getAllByTestId('dock-option')[2])
+    fireEvent.click(screen.getAllByTestId('dock-option')[3])
+    expect(screen.getAllByTestId('dock-option')[2]).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getAllByTestId('dock-option')[3]).toHaveAttribute('aria-checked', 'true')
+  })
+})
+
 describe('the terminal-only card', () => {
   it('is read-only, says why, and offers 開終端機 instead of answering', () => {
     const ctx = ctxOf([approval('a1', {}, { terminal_only: true })])
