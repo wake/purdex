@@ -1108,13 +1108,13 @@ describe('applySectionToStores — tabs.<id>', () => {
       expect((outcome as { hash: string }).hash).toBe(await hashSection(buildTabsSection(useWorkspaceStore.getState().workspaces[0], useTabStore.getState().tabs)))
     })
 
-    it('a local tab that is not part of the arriving order is not touched', async () => {
+    it('a local tab of another workspace is not touched', async () => {
       seedTabWorld()
-      const local = tab('a8', splitOf(tmuxLeaf('l-main', M), settingsLeaf('l-stale', 'deleted-ws'))) // a local-only layout, same id the payload mentions outside its order
-      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, a8: local } })
-      const payload = incomingFor([tab('a3', splitOf(tmuxLeaf('m', M), tmuxLeaf('n', M)))])
-      await applySectionToStores('tabs.wa', { ...payload, tabs: { ...payload.tabs, a8: payload.tabs.a3 } }, ctx)
-      expect(useTabStore.getState().tabs.a8?.layout ?? local.layout).toBe(local.layout)
+      const local = tab('b9', splitOf(tmuxLeaf('l-main', M), settingsLeaf('l-stale', 'deleted-ws'))) // device-local layout in workspace wb
+      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, b9: local } })
+      useWorkspaceStore.setState({ workspaces: [ws('wa', ['a1', 'a2'], 'a2'), ws('wb', ['b1', 'b9'], 'b1')], activeWorkspaceId: 'wb' })
+      await applySectionToStores('tabs.wa', incomingFor([tab('a3', splitOf(tmuxLeaf('m', M), tmuxLeaf('n', M)))]), ctx)
+      expect(useTabStore.getState().tabs.b9.layout).toBe(local.layout)
     })
 
     it('a tab whose PRIMARY pane is such a page is kept as it arrived (the current handling)', async () => {
