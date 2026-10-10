@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,26 +18,47 @@ import (
 // send it again (daemonclient.Once exists for that); the exit code stays what it was — the result is not an error, and a script
 // or an agent that re-ran a command on a non-zero exit would send the message twice (#2595).
 
-// peerSendAnswer decodes a /api/peers/send answer leniently: an answer that is not a SendResponse is an empty one (no note),
-// exactly as when these callers dropped the body.
-type peerSendAnswer struct{ ipeers.SendResponse }
+// resultUnreadable stands for an answer that is not JSON at all (a proxy's page, a body cut short): nothing says it was delivered.
+const resultUnreadable = "unreadable"
 
-func (a *peerSendAnswer) UnmarshalJSON(b []byte) error {
-	_ = json.Unmarshal(b, &a.SendResponse)
-	return nil
+// readPeerSendAnswer reads a /api/peers/send 200 body. Not JSON at all is resultUnreadable; JSON of another shape (an old daemon's,
+// a test's) is an empty answer with no note — as when these callers dropped the body.
+func readPeerSendAnswer(raw []byte) ipeers.SendResponse {
+	var sr ipeers.SendResponse
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return sr
+	}
+	if !json.Valid(raw) {
+		return ipeers.SendResponse{Result: resultUnreadable}
+	}
+	_ = json.Unmarshal(raw, &sr)
+	return sr
 }
 
 // postPeerMessage is one POST /api/peers/send through client.Once (never replayed) and the answer it got.
 func postPeerMessage(ctx context.Context, client *daemonclient.Client, req ipeers.SendRequest) (ipeers.SendResponse, error) {
-	var a peerSendAnswer
-	_, err := client.Once(ctx, http.MethodPost, "/api/peers/send", req, &a)
-	return a.SendResponse, err
+	var raw daemonclient.RawBody
+	_, err := client.Once(ctx, http.MethodPost, "/api/peers/send", req, &raw)
+	if err != nil {
+		return ipeers.SendResponse{}, err
+	}
+	return readPeerSendAnswer(raw), nil
 }
 
 // noteUncertainSend writes the stderr note when sr is delivery_uncertain: who (the command's name), that the message may not have
 // arrived, not to send it again, and how to look. zh picks the language of the command (the team commands speak Chinese, `pdx msg`
 // English).
 func noteUncertainSend(stderr io.Writer, who string, sr ipeers.SendResponse, zh bool) {
+	if sr.Result == resultUnreadable {
+		if zh {
+			fmt.Fprintf(stderr, "%s: 訊息送出了，但 daemon 的回應讀不懂（可能被截斷或被代理改寫），無法確認有沒有送達；不要重送（會重複）。"+
+				"用 pdx msg log --tail 10 查審計結果，或請對方確認。\n", who)
+		} else {
+			fmt.Fprintf(stderr, "%s: the message went out but the daemon's answer could not be read (cut short or rewritten on the way), so nobody knows whether it arrived. "+
+				"Do not send it again (it would arrive twice). Check its audit row with: pdx msg log --tail 10, or ask the receiver.\n", who)
+		}
+		return
+	}
 	if sr.Result != ipeers.ResultDeliveryUncertain {
 		return
 	}

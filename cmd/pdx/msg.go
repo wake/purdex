@@ -330,6 +330,9 @@ func runMsgSend(inv msgInvocation, getenv func(string) string, stdout, stderr io
 	}
 
 	if inv.jsonOutput {
+		if result.status == http.StatusOK { // stdout stays the daemon's JSON; the note is stderr's (#2595)
+			noteUncertainSend(stderr, "pdx msg", readPeerSendAnswer(result.body), false)
+		}
 		return writeMsgJSONPassthrough(result, stdout)
 	}
 
