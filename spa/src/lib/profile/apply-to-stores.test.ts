@@ -57,6 +57,7 @@ import { INVALID_REASONS, applySectionToStores, readSettingsSources } from './ap
 import { buildSectionPayload } from './collector'
 import { identityOfSync, syncIdOfSync } from './host-identity'
 import { isRefShownNow, setHostShown } from '../shown-hosts'
+import { collectLeaves } from '../pane-tree'
 
 // === fixtures ===
 
@@ -900,6 +901,31 @@ describe('applySectionToStores — workspaces', () => {
     expect(t.tabOrder).not.toContain('sa')
     expect(useWorkspaceStore.getState().workspaces[0]).toMatchObject({ id: 'wb', tabs: ['b1', 'sb'], activeTabId: 'b1' })
     expect(t.activeTabId).toBe('b1')
+  })
+
+  // #1955: the sync removal, like the interactive delete, only closes a tab whose PRIMARY pane is the settings page; a
+  // settings pane of the removed workspace in a split tab's secondary leaf goes alone, the tab and its primary pane stay.
+  it('a removed workspace\'s settings page in a SECONDARY pane of a split tab that stays: only that pane goes', async () => {
+    seedTabWorld()
+    const settingsLeaf = (id: string, workspaceId: string): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind: 'settings', scope: { workspaceId } } } })
+    const split: PaneLayout = { type: 'split', id: 's7', direction: 'h', sizes: [34, 33, 33], children: [tmuxLeaf('keep-main', M), settingsLeaf('gone-settings', 'wa'), settingsLeaf('other-settings', 'wb')] }
+    useTabStore.setState({
+      tabs: { ...useTabStore.getState().tabs, sp: tab('sp', split) },
+      tabOrder: [...useTabStore.getState().tabOrder, 'sp'],
+    })
+    useWorkspaceStore.setState({ workspaces: [ws('wa', ['a1', 'a2'], 'a2'), ws('wb', ['b1', 'sp'], 'b1')], activeWorkspaceId: 'wb' })
+    await applySectionToStores('workspaces', { order: ['wb'], workspaces: { wb: { name: 'WB' } } }, ctx) // wa removed
+    const kept = useTabStore.getState().tabs.sp
+    expect(kept).toBeDefined()
+    expect(collectLeaves(kept.layout).map((p) => p.id)).toEqual(['keep-main', 'other-settings'])
+    expect(useWorkspaceStore.getState().workspaces[0]).toMatchObject({ id: 'wb', tabs: ['b1', 'sp'] })
+  })
+
+  it('an untouched tab keeps its layout object when the removed workspace has no settings pane in it', async () => {
+    seedTabWorld()
+    const before = useTabStore.getState().tabs.b1
+    await applySectionToStores('workspaces', { order: ['wb'], workspaces: { wb: { name: 'WB' } } }, ctx)
+    expect(useTabStore.getState().tabs.b1.layout).toBe(before.layout)
   })
 
   it('a workspace whose id cannot sync is device-local: an apply keeps it, its tabs, its history and its scoped settings', async () => {
