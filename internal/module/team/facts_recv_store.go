@@ -217,7 +217,7 @@ func (s *Store) applyRegisteredIn(tx connTx, p FactPlan) (CommandResult, error) 
 		return okResult(map[string]string{"state": team.FactIgnored})
 	}
 	var taken int
-	switch err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state = 'active'`, f.MemberSession).Scan(&taken); {
+	switch err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state IN ('active', 'killing')`, f.MemberSession).Scan(&taken); {
 	case err == nil:
 		if _, err := tx.Exec(`UPDATE remote_spawns SET state = 'failed', reason = 'session_conflict', updated_at = ? WHERE id = ? AND state = 'running'`, p.Now, op.ID); err != nil {
 			return CommandResult{}, err

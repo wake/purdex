@@ -38,12 +38,13 @@ func (s *Store) PendingNotices() ([]memberRow, error) {
 		ORDER BY notice_since, spawn_op`, team.NoticeAdopted, team.NoticeReleased)
 }
 
-// DropStaleAdoptNotices clears the `adopted` notice of every row that is no longer active (killed or gone
+// DropStaleAdoptNotices clears the `adopted` notice of every row that is no longer active — or killing: a kill's claim may still
+// be given back, and the notice must be there when it is (killed or gone
 // before it was sent): the session is no member any more, so the notice is not owed and PendingNotices would
 // never read it again. n is how many rows it cleared.
 func (s *Store) DropStaleAdoptNotices() (n int64, err error) {
 	res, err := s.db.Exec(`UPDATE team_members SET notice_pending = '', notice_since = 0
-		WHERE notice_pending = ? AND state <> 'active'`, team.NoticeAdopted)
+		WHERE notice_pending = ? AND state NOT IN ('active', 'killing')`, team.NoticeAdopted)
 	if err != nil {
 		return 0, fmt.Errorf("drop stale adopt notices: %w", err)
 	}

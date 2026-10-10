@@ -248,6 +248,11 @@ type Module struct {
 	// session was ended and just before its row is marked killed; tests move
 	// or relay the member there and prove the mark loses. nil in production.
 	beforeKillMark func(mr memberRow)
+	// beforeKillClaim, when set, runs in handleKill just before the kill claims its member (active → killing); tests let a
+	// release or a relay win the claim there. beforeMemberSignal runs once the claim is held, just before the process is
+	// signalled (adopted) or the tmux session killed (spawned); tests read what the world looks like at that moment. nil in production.
+	beforeKillClaim    func(mr memberRow)
+	beforeMemberSignal func(mr memberRow)
 	// clearedWait / clearedPoll bound how long a cleared report waits for
 	// the registry to show the new session id (checkClearedTarget).
 	clearedWait, clearedPoll time.Duration
@@ -552,6 +557,7 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.rosterBaseline() // before the boot's own writes: each of them announces itself
 	m.reconcileRelays()
+	m.recoverKillingMembers() // a kill that died between its claim and its end (#2152)
 	m.resumeSpawns()
 	// U23 rule 7: requests left open across a restart while the switch is
 	// on are approved now, not at the first tick; createMu as every reader
