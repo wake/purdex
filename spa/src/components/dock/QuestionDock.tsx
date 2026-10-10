@@ -50,7 +50,8 @@ function AskCard({ card, ctx, askChat, markAnswered, finishAnswered }: CardProps
   const [pending, setPending] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
   const [terminalOnly, setTerminalOnly] = useState(false)
-  const update = (next: DockDraft) => { setDraft(next); writeDockDraft(key, next); setFailure(null) }
+  const [rejected, setRejected] = useState('')
+  const update = (next: DockDraft) => { setDraft(next); writeDockDraft(key, next); setFailure(null); setRejected('') }
 
   if (phase.kind === 'changed') {
     return <Shell><div data-testid="dock-locked" role="status" className="py-2 text-sm text-text-muted">{t('deck.dock.changed')}</div></Shell>
@@ -64,12 +65,15 @@ function AskCard({ card, ctx, askChat, markAnswered, finishAnswered }: CardProps
 
   const settle = async (send: () => Promise<AskDecideResult>) => {
     setPending(true)
+    setRejected('')
+    setFailure(null)
     markAnswered(ask.id) // before the send: the approval's close can outrun the answer, and it must read as ours
     const r = await send()
     setPending(false)
     finishAnswered(ask.id, r.ok)
     if (r.ok) return
     if (r.reason === 'terminal_only') setTerminalOnly(true)
+    else if (r.reason === 'rejected') setRejected(r.message) // the daemon's own words; the card stays open to be fixed
     else if (r.reason === 'network' || r.reason === 'failed') setFailure(r.reason)
     // 'changed': the approval closed under the card; the close lands as the lock, with no retry offered
   }
@@ -98,6 +102,7 @@ function AskCard({ card, ctx, askChat, markAnswered, finishAnswered }: CardProps
         />
       )}
       {readOnly && <div data-testid="dock-terminal-only" className="mb-2 text-xs text-text-muted">{t('deck.dock.terminal_only')}</div>}
+      {rejected && <div data-testid="dock-rejected" role="alert" className="mb-1 text-xs text-status-error">{rejected}</div>}
       {failure && <div data-testid="dock-failure" role="alert" className="mb-1 text-xs text-status-error">{t(failure === 'network' ? 'deck.dock.err_network' : failure === 'failed' ? 'deck.dock.err_failed' : REPLY_REFUSAL_KEY[failure])}</div>}
       <div className="flex flex-wrap items-center gap-2 pb-2">
         {readOnly ? (

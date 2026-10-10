@@ -330,6 +330,25 @@ describe('the terminal-only card', () => {
     expect(ctx.onSwitchToTerminal).toHaveBeenCalled()
   })
 
+  it('a question text the daemon cannot match is read-only from the start', () => {
+    const ctx = ctxOf([approval('a1', {}, { questions: [{ question: 'bad \uFFFD', options: [{ label: 'o' }] }] })])
+    render(<QuestionDock ctx={ctx} />)
+    expect(screen.queryByTestId('dock-submit')).toBeNull()
+    expect(screen.getByTestId('dock-terminal-only')).toBeInTheDocument()
+  })
+
+  it('a 400 bad_request shows the daemon\'s message and keeps the card open and editable', async () => {
+    asks.answerAsk.mockResolvedValue({ ok: false, reason: 'rejected', message: 'hook.answers has an empty answer for the question "Q"' })
+    render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    pickAll()
+    await act(async () => { fireEvent.click(screen.getByTestId('dock-submit')) })
+    expect(screen.getByTestId('dock-rejected')).toHaveTextContent('hook.answers has an empty answer')
+    expect(screen.getByTestId('dock-submit')).toBeEnabled()
+    expect(screen.getAllByTestId('dock-option').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getAllByTestId('dock-option')[0])
+    expect(screen.queryByTestId('dock-rejected')).toBeNull()
+  })
+
   it('a card that turns out terminal_only at send time becomes read-only', async () => {
     asks.answerAsk.mockResolvedValue({ ok: false, reason: 'terminal_only' })
     render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
