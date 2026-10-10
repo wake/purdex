@@ -29,14 +29,6 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	if snd == nil {
 		return
 	}
-	// A proxy subagent's Stop ends a tool the pane's main agent runs, not the task: the main agent's own Stop says that.
-	// Its waiting events still push: a stuck proxy needs a person.
-	if ev.FromProxy {
-		switch ev.Event.RawEventName {
-		case "PdxStop", "Stop", "PdxStopFailure", "StopFailure":
-			return
-		}
-	}
 	arrival := m.asks.Now()               // the start of this event's window for rule 8
 	windowEnd := arrival.Add(waitingHold) // its end is fixed now: a timer that runs late does not widen the window
 	in := AgentEvent{
@@ -53,6 +45,15 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	}
 	if _, has := push.AgentContent(content, "en"); !has {
 		return
+	}
+	// A proxy subagent's Stop ends a tool the pane's main agent runs, not the task: the main agent's own Stop says that.
+	// It went through the gate above (freshness and the error debounce record it); only the send is suppressed, and no
+	// workbook hold starts. Its waiting events still push: a stuck proxy needs a person.
+	if ev.FromProxy {
+		switch ev.Event.RawEventName {
+		case "PdxStop", "Stop", "PdxStopFailure", "StopFailure":
+			return
+		}
 	}
 	ids := make([]string, len(recipients))
 	for i, d := range recipients {
