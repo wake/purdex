@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	agentcc "github.com/wake/purdex/internal/agent/cc"
 	"github.com/wake/purdex/internal/core"
@@ -217,5 +219,54 @@ func TestContextUsagePersist_RemovingTheStatuslineDropsThePersistedRows(t *testi
 	}
 	if _, ok := m.ContextUsage("S"); ok {
 		t.Fatal("the in-memory reading stayed")
+	}
+}
+
+// A delete that fails is tried again at the next flush: an evicted session's row must not outlive the map for good.
+func TestContextUsagePersist_AFailedDeleteIsRetried(t *testing.T) {
+	m := moduleOn(t, filepath.Join(t.TempDir(), "agent.db"))
+	m.recordContextUsage(statusline("OLD", 1, "m"))
+	m.flushContextUsage()
+	m.snapshotMu.Lock()
+	m.usageDeleted["OLD"] = struct{}{}
+	delete(m.contextUsage, "OLD")
+	m.snapshotMu.Unlock()
+	fail := true
+	m.usageDeleteFn = func(ids []string) error {
+		if fail {
+			return fmt.Errorf("injected")
+		}
+		return m.usage.Delete(ids)
+	}
+	m.flushContextUsage()
+	if rows, _ := m.usage.LoadAll(); len(rows) != 1 {
+		t.Fatalf("rows after the failed delete = %d, want the row still there", len(rows))
+	}
+	fail = false
+	m.flushContextUsage()
+	if rows, _ := m.usage.LoadAll(); len(rows) != 0 {
+		t.Fatalf("rows after the retry = %+v, want none", rows)
+	}
+}
+
+// Removing the statusline while a flush is in flight: the flush that took its snapshot before the removal must not write
+// it back after the removal cleared the table.
+func TestContextUsagePersist_ARemovalDuringAFlushIsNotUndone(t *testing.T) {
+	m := moduleOn(t, filepath.Join(t.TempDir(), "agent.db"))
+	m.recordContextUsage(statusline("S", 5, "m"))
+	var removal sync.WaitGroup
+	m.usageAfterSnapshot = func() { // the flush holds its snapshot; the removal starts now
+		removal.Add(1)
+		go func() {
+			defer removal.Done()
+			m.clearContextUsage()
+		}()
+		time.Sleep(50 * time.Millisecond) // long enough for an unserialised removal to finish first
+	}
+	m.flushContextUsage()
+	m.usageAfterSnapshot = nil
+	removal.Wait()
+	if rows, _ := m.usage.LoadAll(); len(rows) != 0 {
+		t.Fatalf("rows after the removal = %+v: the in-flight flush wrote them back", rows)
 	}
 }
