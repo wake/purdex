@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -128,7 +129,7 @@ func TestWrite_AHeldLockDoesNotBlockForLong(t *testing.T) {
 // Mutations: no size bound / the cap counts junk / a symlink is read → red.
 func TestWrite_AFileIsBounded(t *testing.T) {
 	dir := t.TempDir()
-	big := []byte(fmt.Sprintf(`{"session_id":%q,"pad":%q}`, sidA, string(make([]byte, MaxFileBytes))))
+	big := []byte(fmt.Sprintf(`{"session_id":%q,"pad":%q}`, sidA, strings.Repeat("a", MaxFileBytes)))
 	if err := Write(dir, big, 1); err != ErrTooBig {
 		t.Fatalf("err = %v, want ErrTooBig", err)
 	}

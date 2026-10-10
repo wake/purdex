@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/config"
@@ -41,9 +42,6 @@ const lockName = ".lock"
 
 // testHook is a test seam: called at named points inside the locked steps.
 var testHook func(point string)
-
-// RemoveIfNotNewer deletes sid's file unless it is newer than atMs (the version the caller loaded). Scaffold.
-func RemoveIfNotNewer(dir, sid string, atMs int64) {}
 
 // safeIDRE is the alphabet a session id may have as a file name: no separator, no dot, nothing that hides or climbs.
 var safeIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -85,6 +83,11 @@ func SessionIDOf(raw []byte) string {
 }
 
 func read(path string) (file, bool) {
+	// Lstat, not Stat: a symlink named like a session is never followed, and a file over the bound is not read at all.
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > MaxFileBytes+1024 {
+		return file{}, false
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return file{}, false
@@ -96,52 +99,101 @@ func read(path string) (file, bool) {
 	return f, true
 }
 
+// lockTimeout is how long a render waits for the directory lock before giving up: a render never stalls on another process.
+const lockTimeout = 300 * time.Millisecond
+
+// withLock runs fn holding the directory's advisory lock (flock on <dir>/.lock) — the compare-and-replace of Write, the
+// compare-and-delete of CleanupOnSuccess and RemoveIfNotNewer are steps across processes (every render is its own process, and the
+// daemon reads the same files), so each is one critical section. The lock is released with the process if it dies. ErrBusy when
+// it cannot be taken within lockTimeout.
+func withLock(dir string, fn func() error) error {
+	f, err := os.OpenFile(filepath.Join(dir, lockName), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	deadline := time.Now().Add(lockTimeout)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if err != syscall.EWOULDBLOCK || time.Now().After(deadline) {
+			return ErrBusy
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
+func hook(point string) {
+	if testHook != nil {
+		testHook(point)
+	}
+}
+
 // Write keeps raw (taken at atMs) as its session's pending payload, unless a newer one is already there (two render processes
-// of one session can finish in either order). Atomic: a temp file in the same directory, renamed over. Private: 0700 / 0600.
+// of one session can finish in either order). The check and the replace are one step under the directory lock. Atomic: a temp
+// file in the same directory, renamed over. Private: 0700 / 0600. Bounded: a payload over MaxFileBytes is not kept.
 func Write(dir string, raw []byte, atMs int64) error {
 	sid := SessionIDOf(raw)
 	if dir == "" || !SafeID(sid) {
 		return ErrUnsafeID
+	}
+	if len(raw) > MaxFileBytes {
+		return ErrTooBig
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	_ = os.Chmod(dir, 0o700) // a directory made earlier under a looser umask
 	path := filepath.Join(dir, sid+ext)
-	if cur, ok := read(path); ok {
-		if cur.AtMs >= atMs {
-			return nil
+	return withLock(dir, func() error {
+		if cur, ok := read(path); ok {
+			if cur.AtMs >= atMs {
+				return nil
+			}
+		} else if entries, err := os.ReadDir(dir); err == nil && countFiles(dir, entries) >= Cap {
+			return ErrFull
 		}
-	} else if entries, err := os.ReadDir(dir); err == nil && countFiles(entries) >= Cap {
-		return ErrFull
-	}
-	body, err := json.Marshal(file{AtMs: atMs, RawStatus: bytes.TrimSpace(raw)})
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, tmpTag+"*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // a no-op once renamed
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(body); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+		hook("write-checked")
+		body, err := json.Marshal(file{AtMs: atMs, RawStatus: bytes.TrimSpace(raw)})
+		if err != nil {
+			return err
+		}
+		tmp, err := os.CreateTemp(dir, tmpTag+"*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(tmp.Name()) // a no-op once renamed
+		if err := tmp.Chmod(0o600); err != nil {
+			tmp.Close()
+			return err
+		}
+		if _, err := tmp.Write(body); err != nil {
+			tmp.Close()
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		return os.Rename(tmp.Name(), path)
+	})
 }
 
-func countFiles(entries []os.DirEntry) int {
+// countFiles counts the real entries: regular files named <safe id>.json that hold a payload of that very session. Junk names,
+// directories, links and files that are not entries do not count (and Load deletes them), so they cannot fill the quota. It reads
+// the directory, which only the failure path of a render that adds a new session does.
+func countFiles(dir string, entries []os.DirEntry) int {
 	n := 0
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ext) {
+		name := e.Name()
+		if !e.Type().IsRegular() || !strings.HasSuffix(name, ext) {
+			continue
+		}
+		sid := strings.TrimSuffix(name, ext)
+		if f, ok := read(filepath.Join(dir, name)); ok && SafeID(sid) && SessionIDOf(f.RawStatus) == sid {
 			n++
 		}
 	}
@@ -150,7 +202,8 @@ func countFiles(entries []os.DirEntry) int {
 
 // CleanupOnSuccess removes the pending file of raw's session when it is not newer than atMs (a delivery at atMs carries at least
 // what the file held; a file from a LATER failed render must stay). It costs one stat when there is no directory — the case of
-// every render but the ones after an outage — and parses the payload only when there is one.
+// every render but the ones after an outage — and parses the payload only when there is one; the lock is taken only when the
+// session has a file.
 func CleanupOnSuccess(dir string, raw []byte, atMs int64) {
 	if dir == "" {
 		return
@@ -163,10 +216,34 @@ func CleanupOnSuccess(dir string, raw []byte, atMs int64) {
 		return
 	}
 	path := filepath.Join(dir, sid+ext)
-	if cur, ok := read(path); ok && cur.AtMs > atMs {
+	if _, err := os.Lstat(path); err != nil {
 		return
 	}
-	_ = os.Remove(path)
+	_ = withLock(dir, func() error {
+		cur, ok := read(path)
+		hook("cleanup-checked")
+		if ok && cur.AtMs > atMs {
+			return nil
+		}
+		return os.Remove(path)
+	})
+}
+
+// RemoveIfNotNewer deletes sid's file unless it is newer than atMs — the version the caller loaded: a payload the proxy wrote
+// after the load stays. The check and the delete are one step under the directory lock.
+func RemoveIfNotNewer(dir, sid string, atMs int64) {
+	if dir == "" || !SafeID(sid) {
+		return
+	}
+	path := filepath.Join(dir, sid+ext)
+	_ = withLock(dir, func() error {
+		cur, ok := read(path)
+		hook("remove-checked")
+		if ok && cur.AtMs > atMs {
+			return nil
+		}
+		return os.Remove(path)
+	})
 }
 
 // Load reads every valid entry; a file that is not valid (not an entry, or named for another session) is deleted, and so is a
@@ -193,7 +270,7 @@ func Load(dir string) ([]Entry, error) {
 			continue
 		}
 		if !strings.HasSuffix(name, ext) {
-			continue
+			continue // .lock and anything that is not ours
 		}
 		f, ok := read(path)
 		sid := strings.TrimSuffix(name, ext)

@@ -87,8 +87,10 @@ func TestPendingStatuslines_DeadExpiredAndInvalidAreDroppedNotApplied(t *testing
 		}
 	}
 	entries, _ := os.ReadDir(dir)
-	if len(entries) != 0 {
-		t.Fatalf("files left: %v", entries)
+	for _, e := range entries {
+		if e.Name() != ".lock" {
+			t.Fatalf("file left: %s", e.Name())
+		}
 	}
 }
 
@@ -118,10 +120,7 @@ func TestPendingStatuslines_AreFlushedLikeAnyReading(t *testing.T) {
 	withLivePids(t, map[int]string{101: "st-101"})
 	a.pendingDir = filepath.Join(t.TempDir(), "p")
 	statuspending.Write(a.pendingDir, statusline("S", 7, "pending-model"), usageNow()-1000)
-	a.applyPendingStatuslines(context.Background())
-	if n := a.flushContextUsage(); n != 1 {
-		t.Fatalf("flush wrote %d rows, want 1", n)
-	}
+	a.applyPendingStatuslines(context.Background()) // flushes what it applied before deleting the file
 	b := moduleOn(t, path)
 	b.restoreContextUsage(context.Background())
 	if u, ok := b.ContextUsage("S"); !ok || u.ModelID != "pending-model" {

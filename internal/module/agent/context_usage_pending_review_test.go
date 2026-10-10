@@ -48,8 +48,13 @@ func TestPendingStatuslines_AreDeletedOnlyOnceTheyArePersisted(t *testing.T) {
 	b := moduleOn(t, path)
 	b.pendingDir = filepath.Join(t.TempDir(), "p")
 	statuspending.Write(b.pendingDir, statusline("S", 8, "second"), usageNow()-500)
-	b.events.Close() // the events DB (which holds the usage rows) is gone: Upsert fails
+	if _, err := b.events.ExecRawForTest(`DROP TABLE context_usage`); err != nil { // the rows' table is gone: Upsert fails
+		t.Fatal(err)
+	}
 	b.applyPendingStatuslines(context.Background())
+	if u, ok := b.ContextUsage("S"); !ok || u.ModelID != "second" {
+		t.Fatalf("the reading was not applied in memory: %+v ok=%v", u, ok)
+	}
 	if got, _ := statuspending.Load(b.pendingDir); len(got) != 1 {
 		t.Fatalf("the file was deleted although the reading never reached the disk: %+v", got)
 	}

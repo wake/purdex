@@ -71,7 +71,13 @@ func TestWrite_WritesAPrivateFile(t *testing.T) {
 		t.Fatalf("raw = %s", got[0].Raw)
 	}
 	entries, _ := os.ReadDir(dir)
-	if len(entries) != 1 {
+	n := 0
+	for _, e := range entries {
+		if e.Name() != lockName {
+			n++
+		}
+	}
+	if n != 1 {
 		t.Fatalf("a temp file was left: %v", entries)
 	}
 }
