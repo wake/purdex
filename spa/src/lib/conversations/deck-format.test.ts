@@ -13,7 +13,7 @@ describe('userCaption', () => {
     expect(userCaption({ source: 'user', at })).toEqual({ kind: 'you', time: '09:05' })
     expect(userCaption({ source: 'slash', at })).toEqual({ kind: 'you', time: '09:05' })
     expect(userCaption({ source: 'queued', at })).toEqual({ kind: 'queued' })
-    expect(userCaption({ source: 'peer', from: { kind: 'peer', name: 'host/x' }, at })).toEqual({ kind: 'from', name: 'host/x' })
+    expect(userCaption({ source: 'peer', from: { kind: 'peer', name: 'host/x' }, at })).toEqual({ kind: 'from', name: 'host/x', time: expect.any(String) })
     expect(userCaption({ source: 'task', at })).toEqual({ kind: 'background' })
     expect(userCaption({ source: 'scheduled', at })).toEqual({ kind: 'schedule' })
     expect(userCaption({ source: 'schedule', at })).toEqual({ kind: 'schedule' })

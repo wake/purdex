@@ -1,9 +1,17 @@
 // spa/src/components/deck/UserBlock.tsx — the deck's one tinted block (U3 spec §4): a framed well with a caption by source
 // (你 · HH:mm / 你 · 排隊中 / 來自 <name> / 背景任務回報 / 排程喚醒). A bash-mode input shows as `! command`.
 import { useI18nStore } from '../../stores/useI18nStore'
-import { textOutput, userCaption } from '../../lib/conversations/deck-format'
+import { textOutput, userCaption, userTone, type UserTone } from '../../lib/conversations/deck-format'
 import type { UserItem } from '../../lib/conversations/types'
 import { OutputFold } from './OutputFold'
+
+// Three tones (c9d9c7-52 pt 4/7): the person's words are the loudest — an accent frame on a firmer tint; a peer's message is a teal frame on a faint
+// tint with its body one step quieter; a system notice (task report, wake-up, a mod's notice) is the grey of the system rows, dashed and quieter still.
+const TONE: Record<UserTone, { box: string; caption: string; body: string }> = {
+  you: { box: 'rounded-md border border-accent bg-accent/12', caption: 'text-accent', body: 'text-text-primary' },
+  peer: { box: 'rounded-md border border-peer/70 bg-peer/5', caption: 'text-peer', body: 'text-text-secondary' },
+  notice: { box: 'rounded-md border border-dashed border-border-default', caption: 'text-text-system', body: 'text-text-system' },
+}
 
 export function UserBlock({ item }: { item: UserItem }) {
   const t = useI18nStore((s) => s.t)
@@ -11,7 +19,7 @@ export function UserBlock({ item }: { item: UserItem }) {
   const caption =
     cap.kind === 'you' ? t('deck.user.you', { time: cap.time })
     : cap.kind === 'queued' ? t('deck.user.queued')
-    : cap.kind === 'from' ? t('deck.user.from', { name: cap.name })
+    : cap.kind === 'from' ? t('deck.user.from', { name: cap.name, time: cap.time })
     : cap.kind === 'background' ? t('deck.user.background')
     : t('deck.user.schedule')
   const bash = item.source === 'bash'
@@ -23,10 +31,12 @@ export function UserBlock({ item }: { item: UserItem }) {
       </div>
     )
   }
+  const tone = userTone(item)
+  const c = TONE[tone]
   return (
-    <div data-testid="deck-user" data-source={item.source} className="rounded-md border border-accent bg-accent/5 px-3 py-2">
-      <div data-testid="deck-user-caption" className="mb-1 text-xs font-medium text-accent">{caption}</div>
-      <div className={`whitespace-pre-wrap break-words text-sm text-text-primary ${bash ? 'font-mono' : ''}`}>
+    <div data-testid="deck-user" data-source={item.source} data-tone={tone} className={`${c.box} px-3 py-2`}>
+      <div data-testid="deck-user-caption" className={`mb-1 text-xs font-medium ${c.caption}`}>{caption}</div>
+      <div className={`whitespace-pre-wrap break-words text-sm ${c.body} ${bash ? 'font-mono' : ''}`}>
         {bash ? `! ${item.text}` : item.text}
         {item.truncated && <span className="text-text-muted">…</span>}
       </div>
