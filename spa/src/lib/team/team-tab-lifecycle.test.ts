@@ -10,6 +10,7 @@ vi.mock('../../features/workspace/lib/icon-path-cache', () => ({
 
 import { renderHook } from '@testing-library/react'
 import { startTeamTabLifecycle } from './team-tab-lifecycle'
+import { MOVING_TTL_MS, markTabsMoving, resetMovingTabs } from './moving-tabs'
 import { useShortcuts } from '../../hooks/useShortcuts'
 import { closeTab } from '../tab-lifecycle'
 import { useTabStore } from '../../stores/useTabStore'
@@ -19,7 +20,7 @@ import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
-import { HOST, KEY, resetTeamStores, seedScene, wsTabs } from './__tests__/team-fixture'
+import { HOST, KEY, resetTeamStores, seedScene, tabOn, wsTabs } from './__tests__/team-fixture'
 
 let stop: () => void
 beforeEach(() => {
@@ -285,5 +286,81 @@ describe('the lead\'s tab goes', () => {
     closeTab('lead')
     await settle()
     expect(tabIds()).toEqual(['ma'])
+  })
+})
+
+describe('the lead\'s tab moves to another window (#2140)', () => {
+  const scene = () => seedScene({
+    members,
+    tabs: [['x', null], ['lead', 'lead-tm'], ['ma', 'a-tm'], ['mb', 'b-tm'], ['z', null]],
+    workspaces: [{ id: 'w1', tabs: ['x', 'lead', 'ma', 'mb', 'z'] }],
+    activeTabId: 'lead',
+  })
+  /** What a tab tear-off does to the tab store: the tab is deleted outright, after being marked. */
+  const tearOffLead = () => {
+    markTabsMoving(['lead'])
+    closeTab('lead', { skipHistory: true })
+  }
+
+  beforeEach(() => { resetMovingTabs() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('a torn-off lead leaves no ghost row and its members stay in this window', async () => {
+    scene()
+    await settle()
+    tearOffLead()
+    await settle()
+    expect(tabIds()).toEqual(['ma', 'mb', 'x', 'z'])
+    expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBeUndefined()
+  })
+
+  it('a merged workspace (all its tabs deleted at once) leaves no ghost row', async () => {
+    scene()
+    await settle()
+    const ids = [...wsTabs('w1')]
+    markTabsMoving(ids)
+    const { tabs, tabOrder } = useTabStore.getState()
+    const rest = { ...tabs }
+    for (const id of ids) delete rest[id]
+    useTabStore.setState({ tabs: rest, tabOrder: tabOrder.filter((id) => !ids.includes(id)), activeTabId: null })
+    useWorkspaceStore.getState().removeWorkspace('w1', { keepSettings: true })
+    await settle()
+    expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBeUndefined()
+  })
+
+  it('the mark is spent by the pass that sees the move: a later real close of the same tab id closes the group', async () => {
+    scene()
+    await settle()
+    tearOffLead()
+    await settle()
+    // the lead comes back (same id) and is then really closed
+    useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, lead: tabOn('lead', 'lead-tm') } })
+    useWorkspaceStore.getState().addTabToWorkspace('w1', 'lead')
+    await settle()
+    closeTab('lead', { skipHistory: true })
+    await settle()
+    expect(tabIds()).toEqual(['x', 'z'])
+    expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBe('w1')
+  })
+
+  it('an expired mark does not excuse a close', async () => {
+    vi.useFakeTimers()
+    scene()
+    await settle()
+    markTabsMoving(['lead'])
+    vi.advanceTimersByTime(MOVING_TTL_MS + 1)
+    closeTab('lead', { skipHistory: true })
+    await settle()
+    expect(tabIds()).toEqual(['x', 'z'])
+    expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBe('w1')
+  })
+
+  it('an ordinary close (no mark) is unchanged: group closes and a ghost is left', async () => {
+    scene()
+    await settle()
+    closeTab('lead', { skipHistory: true })
+    await settle()
+    expect(tabIds()).toEqual(['x', 'z'])
+    expect(useTeamUiStore.getState().ghostWorkspace[KEY]).toBe('w1')
   })
 })

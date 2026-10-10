@@ -7,6 +7,7 @@ import { useUndoToast } from '../../stores/useUndoToast'
 import { useTabWorkspaceActions } from './hooks'
 import { getVisibleTabIds } from './lib/getVisibleTabIds'
 import { closeTab } from '../../lib/tab-lifecycle'
+import { isTabMoving } from '../../lib/team/moving-tabs'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 
@@ -460,5 +461,6 @@ describe('tearOff and a preload without tearOffTab (#1816)', () => {
     expect(useTabStore.getState().tabs[tab.id]).toBeUndefined()
     expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === wsId)?.tabs).not.toContain(tab.id)
     expect(useUndoToast.getState().toast).toBeNull()
+    expect(isTabMoving(tab.id)).toBe(true) // #2140: a move, so the team lifecycle does not take it for a close
   })
 })
