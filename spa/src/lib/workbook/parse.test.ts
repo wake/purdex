@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { wireEntry } from './fixtures'
-import { parseConversation, parseEntries, parseEntry, parseEntryEvent, parseStatusEvent, resetWarned } from './parse'
+import { wireEntry, wireTodo } from './fixtures'
+import { parseConversation, parseEntries, parseEntry, parseEntryEvent, parseRefreshAvailableEvent, parseStatusEvent, parseTodo, parseTodos, parseTodosEvent, resetWarned } from './parse'
 
 beforeEach(() => { resetWarned(); vi.restoreAllMocks() })
 
@@ -55,6 +55,67 @@ describe('parseConversation, mismatch hidden behind a malformed entry', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const body = { conv_key: 'c1', entries: [wireEntry({ id: 1 }), wireEntry({ id: 0, conv_key: 'other' })] }
     expect(parseConversation(body)).toBeNull()
+  })
+})
+
+describe('v2 entry fields', () => {
+  it('a v1 entry (no kind / usage / todo_changes) reads as a turn with zero usage and no changes', () => {
+    expect(parseEntry(wireEntry())).toMatchObject({ kind: 'turn', usage: { in: 0, out: 0, cacheRead: 0 }, todoChanges: { added: [], done: [], dropped: [] } })
+  })
+  it('reads kind, usage and todo_changes', () => {
+    const e = parseEntry(wireEntry({
+      kind: 'refresh', usage: { in: 5, out: 6, cache_read: 7 },
+      todo_changes: { added: [{ id: 1, title: 'a' }], done: [{ id: 2, title: 'b' }], dropped: null },
+    }))
+    expect(e).toMatchObject({ kind: 'refresh', usage: { in: 5, out: 6, cacheRead: 7 }, todoChanges: { added: [{ id: 1, title: 'a' }], done: [{ id: 2, title: 'b' }], dropped: [] } })
+  })
+  it.each([
+    ['kind', { kind: 'weird' }], ['usage', { usage: 3 }], ['usage number', { usage: { in: -1 } }],
+    ['todo_changes', { todo_changes: [] }], ['todo_changes item', { todo_changes: { added: [{ id: 'x', title: 'a' }] } }],
+  ])('rejects a bad v2 %s', (_n, over) => { expect(typeof parseEntry(wireEntry(over))).toBe('string') })
+})
+
+describe('parseTodo / todo lists', () => {
+  it('reads a todo and defaults the optional fields', () => {
+    expect(parseTodo(wireTodo())).toMatchObject({ id: 1, title: 't', detail: 'd', state: 'open', closedAt: 0, addedEntryId: 3 })
+    expect(parseTodo(wireTodo({ detail: undefined, closed_by: undefined, closed_at: undefined }))).toMatchObject({ detail: '', closedBy: '', closedAt: 0 })
+  })
+  it.each([['id', { id: 0 }], ['state', { state: 'x' }], ['title', { title: 3 }], ['time', { created_at: -1 }]])('rejects a bad %s', (_n, over) => {
+    expect(typeof parseTodo(wireTodo(over))).toBe('string')
+  })
+  it('drops a malformed todo from a list and warns once', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(parseTodos([wireTodo({ id: 1 }), wireTodo({ id: 2, state: 'x' }), wireTodo({ id: 3, state: 'y' })]).map((t) => t.id)).toEqual([1])
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('parseConversation v2', () => {
+  it('a v1 answer has no todos and no refresh_available', () => {
+    expect(parseConversation({ conv_key: 'c1', entries: [] })).toMatchObject({ todos: null, refreshAvailable: null })
+  })
+  it('reads todos {open, done} and refresh_available', () => {
+    const p = parseConversation({ conv_key: 'c1', entries: [], todos: { open: [wireTodo({ id: 1 })], done: [wireTodo({ id: 2, state: 'done' })] }, refresh_available: true })
+    expect(p?.todos?.open.map((t) => t.id)).toEqual([1])
+    expect(p?.todos?.done.map((t) => t.id)).toEqual([2])
+    expect(p?.refreshAvailable).toBe(true)
+  })
+  it('a malformed todos block or flag is ignored (null) with a warning, the answer stands', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(parseConversation({ conv_key: 'c1', entries: [], todos: 'x', refresh_available: 'yes' })).toMatchObject({ todos: null, refreshAvailable: null })
+  })
+})
+
+describe('v2 events', () => {
+  it('workbook.todos', () => {
+    const v = JSON.stringify({ conv_key: 'c1', session_id: 's1', todos: [wireTodo({ id: 4, state: 'done' })] })
+    expect(parseTodosEvent(v)).toMatchObject({ convKey: 'c1', sessionId: 's1', todos: [{ id: 4, state: 'done' }] })
+    expect(typeof parseTodosEvent({ conv_key: 'c1', session_id: 's1', todos: 'x' })).toBe('string')
+    expect(typeof parseTodosEvent({ conv_key: '', session_id: 's1', todos: [] })).toBe('string')
+  })
+  it('workbook.refresh_available', () => {
+    expect(parseRefreshAvailableEvent(JSON.stringify({ conv_key: 'c1', available: true }))).toEqual({ convKey: 'c1', available: true })
+    expect(typeof parseRefreshAvailableEvent({ conv_key: 'c1', available: 1 })).toBe('string')
   })
 })
 
