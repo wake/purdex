@@ -69,6 +69,19 @@ func TestRelayCmd_AskRefusalsAreExit13WithTheCodeLast(t *testing.T) {
 	}
 }
 
+// The mod's usage percent is fractional (72.4), as begin's --used takes it: ask takes it too and sends the floor.
+func TestRelayCmd_AskUsedTakesADecimalAndSendsItsFloor(t *testing.T) {
+	for in, want := range map[string]int{"72.5": 72, "72.99": 72, "70": 70, "0": 0, "100": 100, "0.4": 0} {
+		d := &fakeRelayAskDaemon{body: team.RelayAskResponse{ID: "ask-1", State: team.RelayAskOpen}}
+		if code, _, stderr := driveRelay(t, context.Background(), d, "ask", "--session", "sid-m", "--used", in, "--window", "1"); code != ExitOK {
+			t.Fatalf("--used %s: code=%d stderr=%q", in, code, stderr)
+		}
+		if d.got.UsedPct != want {
+			t.Errorf("--used %s sent used_pct %d, want %d", in, d.got.UsedPct, want)
+		}
+	}
+}
+
 func TestRelayCmd_AskGrammar(t *testing.T) {
 	for _, args := range [][]string{
 		{"ask"},
@@ -78,6 +91,11 @@ func TestRelayCmd_AskGrammar(t *testing.T) {
 		{"ask", "--session", "s", "--used", "71"},                       // no --window
 		{"ask", "--session", "s", "--used", "71", "--window", "1", "x"}, // stray argument
 		{"ask", "--session", "s", "--used", "71", "--window", "1", "--request-id", "nope"},
+		{"ask", "--session", "s", "--used", "-0.5", "--window", "1"},  // negative
+		{"ask", "--session", "s", "--used", "100.5", "--window", "1"}, // over 100
+		{"ask", "--session", "s", "--used", "NaN", "--window", "1"},   // not a number
+		{"ask", "--session", "s", "--used", "Inf", "--window", "1"},   // infinite
+		{"ask", "--session", "s", "--used", "abc", "--window", "1"},   // not a number
 	} {
 		if code, _, _ := driveRelay(t, context.Background(), &fakeRelayAskDaemon{}, args...); code != ExitUsage {
 			t.Errorf("%v: code=%d, want %d", args, code, ExitUsage)

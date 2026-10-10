@@ -394,6 +394,15 @@ test('a member at the threshold asks its lead once: pdx relay ask with usage, a 
   expect(f.submits.length).toBe(sent + 1)
 })
 
+// The engine's percent is fractional (72.5); the ask goes out as whole points. Mutation gate: String(u.percent) → '72.5' → red.
+test('a fractional usage goes out as whole percent points: --used 72 for 72.5', async ($, on) => {
+  const f = memberWorld(on, () => ({ exitCode: 0, stdout: ASK_OK }), { tokens: 145000, window: 200000, percent: 72.5 })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  const ask = f.argvs.find((a) => a[2] === 'ask')!
+  expect(ask[ask.indexOf('--used') + 1]).toBe('72')
+})
+
 test('a member below the threshold asks nothing and sends no hello', async ($, on) => {
   const f = memberWorld(on, () => ({ exitCode: 0, stdout: ASK_OK }), { tokens: 20000, window: 200000, percent: 10 })
   await start($, f)

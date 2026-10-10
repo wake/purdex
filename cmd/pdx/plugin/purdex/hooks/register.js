@@ -590,7 +590,7 @@ async function maybeAsk($) {
 // answer is taken only by the epoch (no /clear, reset or compaction since) and the session it was sent from.
 async function ask($, sid, epoch, u) {
   const rid = uuid4()
-  const argv = ['relay', 'ask', '--session', sid, '--used', String(u.percent), '--window', String(u.window), ...(rid ? ['--request-id', rid] : [])]
+  const argv = ['relay', 'ask', '--session', sid, '--used', String(Math.floor(u.percent)), '--window', String(u.window), ...(rid ? ['--request-id', rid] : [])]
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
   const now = await $.session.id().catch(() => undefined)
   if (s.askEpoch !== epoch || now !== sid) return
@@ -645,7 +645,7 @@ async function maybeBegin($) {
 // { kind: 'refused', code } (a 409 with the daemon's code: member_relay_is_leads,
 // self_relay_off, self_relay_paused, relay_open, …) | { kind: 'failed', detail }.
 async function begin($, sid, gen, u, adopted) {
-  const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
+  const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(Math.floor(u.percent)), '--window', String(u.window)]
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
   const now = await $.session.id().catch(() => undefined)
   const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
