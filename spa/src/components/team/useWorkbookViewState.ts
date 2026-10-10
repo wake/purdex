@@ -1,7 +1,7 @@
 // spa/src/components/team/useWorkbookViewState.ts — the workbook view's own state (which tab, which finished groups are open, the
 // scroll of each tab), kept in the module-level memo so it survives the tab being switched away and back (WA-2b-2; the
 // tab-hosted rule: lib/workbook/view-memory.ts).
-import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { patchViewMemo, readViewMemo, type WorkbookTab } from '../../lib/workbook/view-memory'
 
 export interface WorkbookViewState {
@@ -9,9 +9,11 @@ export interface WorkbookViewState {
   setTab: (tab: WorkbookTab) => void
   openGroups: string[]
   toggleGroup: (key: string) => void
-  /** Put on the scrolling box: restores the remembered scroll when the box mounts or the tab changes, and remembers it as it moves. */
-  scrollRef: RefObject<HTMLDivElement | null>
+  /** Callback ref for the scrolling box: its remembered scroll is restored when the box mounts or the tab changes, and remembered as it moves (`onScroll`). */
+  bindBox: (el: HTMLDivElement | null) => void
   onScroll: () => void
+  /** The element inside the box matching `selector` (call from an effect or handler, not during render). */
+  find: (selector: string) => Element | null
 }
 
 /** `convKey` null: no conversation yet, nothing to remember (the frame is re-keyed when it appears). */
@@ -40,5 +42,7 @@ export function useWorkbookViewState(hostId: string, convKey: string | null): Wo
     if (scrollRef.current && convKey !== null) scrollRef.current.scrollTop = readViewMemo(hostId, convKey).scroll[tab]
   }, [hostId, convKey, tab])
 
-  return { tab, setTab, openGroups, toggleGroup, scrollRef, onScroll }
+  const bindBox = useCallback((el: HTMLDivElement | null) => { scrollRef.current = el }, [])
+  const find = useCallback((selector: string) => scrollRef.current?.querySelector(selector) ?? null, [])
+  return { tab, setTab, openGroups, toggleGroup, bindBox, onScroll, find }
 }

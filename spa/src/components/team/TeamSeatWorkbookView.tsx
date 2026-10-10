@@ -34,13 +34,13 @@ export function TeamSeatWorkbookView(props: Props) {
 
 function WorkbookFrame({ teamKey, hostId, sessionId, title, trailing, wb }: Props & { wb: SeatWorkbook }) {
   const t = useI18nStore((s) => s.t)
-  const vs = useWorkbookViewState(hostId, wb.convKey)
+  const { tab: savedTab, setTab, openGroups, toggleGroup, bindBox, onScroll, find } = useWorkbookViewState(hostId, wb.convKey)
   const conv = wb.conv
   const v2 = useWorkbookStore((s) => s.support[hostId]?.v2 === true)
-  const tab = v2 ? vs.tab : 'log' // a v1 daemon has no 待辦 (and a remembered 待辦 does not outlive the capability)
+  const tab = v2 ? savedTab : 'log' // a v1 daemon has no 待辦 (and a remembered 待辦 does not outlive the capability)
   const [highlightId, setHighlightId] = useState<number | null>(null)
   const [notFound, setNotFound] = useState(false)
-  const switchTab = (next: WorkbookTab) => { setHighlightId(null); setNotFound(false); vs.setTab(next) }
+  const switchTab = (next: WorkbookTab) => { setHighlightId(null); setNotFound(false); setTab(next) }
   /** A done todo → the entry that closed it: 紀錄, paged in if need be, scrolled to and marked; else say it is not there. */
   async function jump(todo: WorkbookTodo) {
     const id = todo.closedEntryId
@@ -53,9 +53,8 @@ function WorkbookFrame({ teamKey, hostId, sessionId, title, trailing, wb }: Prop
   const entryCount = conv?.entries.length ?? 0
   useEffect(() => {
     if (highlightId === null || tab !== 'log') return
-    const el = vs.scrollRef.current?.querySelector(`[data-entry-id="${highlightId}"]`)
-    el?.scrollIntoView?.({ block: 'center' })
-  }, [highlightId, tab, entryCount, vs.scrollRef])
+    find(`[data-entry-id="${highlightId}"]`)?.scrollIntoView?.({ block: 'center' })
+  }, [highlightId, tab, entryCount, find])
   const back = t('team.panel.workbook_back')
   const heading = teamKey === undefined ? t('team.workbook.own_title') : t('team.workbook.title', { title })
   return (
@@ -78,14 +77,14 @@ function WorkbookFrame({ teamKey, hostId, sessionId, title, trailing, wb }: Prop
         <WorkbookToolbar v2={v2} tab={tab} onTab={switchTab} hostId={hostId} sessionId={sessionId} convKey={wb.convKey} conv={conv} />
         {trailing !== undefined && <span className="flex items-center gap-0.5 flex-shrink-0">{trailing}</span>}
       </div>
-      <div ref={vs.scrollRef} onScroll={vs.onScroll} data-testid="workbook-body" className="px-3 py-2 flex flex-col gap-2 overflow-y-auto max-h-[70vh]">
+      <div ref={bindBox} onScroll={onScroll} data-testid="workbook-body" className="px-3 py-2 flex flex-col gap-2 overflow-y-auto max-h-[70vh]">
         <WorkbookStatus status={conv?.status ?? ''} statusAt={conv?.statusAt ?? 0} loading={!!conv?.loading} />
         {tab === 'todos' ? (
           <WorkbookTodos hostId={hostId} convKey={wb.convKey} conv={conv} onJump={(x) => { void jump(x) }} />
         ) : (
           <>
             {notFound && <div role="status" className="text-[11px] text-text-muted">{t('team.workbook.entry_not_found')}</div>}
-            <WorkbookLog hostId={hostId} convKey={wb.convKey} conv={conv} openGroups={vs.openGroups} onToggleGroup={vs.toggleGroup} highlightId={highlightId} />
+            <WorkbookLog hostId={hostId} convKey={wb.convKey} conv={conv} openGroups={openGroups} onToggleGroup={toggleGroup} highlightId={highlightId} />
           </>
         )}
       </div>
