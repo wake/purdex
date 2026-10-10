@@ -25,7 +25,7 @@ export type UserCaption =
 export function userCaption(item: Pick<UserItem, 'source' | 'from' | 'at'>): UserCaption {
   switch (item.source) {
     case 'queued': return { kind: 'queued' }
-    case 'peer': return { kind: 'from', name: item.from?.name ?? item.from?.kind ?? '', time: formatClock(item.at) }
+    case 'peer': return { kind: 'from', name: item.from?.name || item.from?.kind || '', time: formatClock(item.at) }
     case 'task': case 'background': return { kind: 'background' }
     case 'schedule': case 'scheduled': return { kind: 'schedule' }
     default: return { kind: 'you', time: formatClock(item.at) }

@@ -309,3 +309,5 @@ button:disabled {
 .chat-md .worker-prose > :last-child { margin-bottom: 0; }
 .deck-md .worker-prose :where(li + li),
 .chat-md .worker-prose :where(li + li) { margin-top: 0.3em; }
+.deck-md .worker-prose :where(li > ul, li > ol, li > p),
+.chat-md .worker-prose :where(li > ul, li > ol, li > p) { margin-top: 0; margin-bottom: 0; }
