@@ -167,8 +167,10 @@ func insertSpawnOp(q dbtx, op spawnRow, hash string) (stored spawnRow, storedHas
 
 // ErrSpawnNotLead and ErrSpawnTeamFull are AcceptSpawnOp's refusals.
 var (
-	ErrSpawnNotLead  = errors.New("the origin leads no live team")
-	ErrSpawnTeamFull = errors.New("the team has no place left")
+	ErrSpawnNotLead = errors.New("the origin leads no live team")
+	// ErrSpawnCwdOutside: the cwd is under none of the roots the grant has now (it changed after the caller read it).
+	ErrSpawnCwdOutside = errors.New("the cwd is under none of the team's roots")
+	ErrSpawnTeamFull   = errors.New("the team has no place left")
 )
 
 // AcceptSpawnOp is CreateSpawnOp in one write transaction with the two facts
@@ -200,7 +202,16 @@ func (s *Store) AcceptSpawnOp(op spawnRow, hash string) (spawnRow, string, bool,
 	}
 	var limit, used int
 	if err == nil {
-		err = tx.QueryRow(`SELECT json_extract(grant_json, '$.max_members') FROM teams WHERE id = ?`, op.TeamID).Scan(&limit)
+		// The cwd is judged against the grant as it is under this write lock: the caller's own read may be older than a
+		// roots change (#2561), and a spawn must not land under a root that was just removed.
+		var raw string
+		err = tx.QueryRow(`SELECT grant_json, json_extract(grant_json, '$.max_members') FROM teams WHERE id = ?`, op.TeamID).Scan(&raw, &limit)
+		if err == nil {
+			var g team.Grant
+			if err = json.Unmarshal([]byte(raw), &g); err == nil && !underGrant(op.Cwd, g) {
+				err = ErrSpawnCwdOutside
+			}
+		}
 		if err == nil {
 			used, err = seatsTaken(tx, op.TeamID, op.ID)
 		}

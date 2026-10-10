@@ -44,6 +44,8 @@ const (
 	ErrNotFound         = "not_found"
 	ErrNotReady         = "not_ready"        // 503 while stopping
 	ErrMaxBelowInUse    = "max_below_in_use" // 409 of PUT /api/team/max-members, carries in_use
+	ErrRootsInUse       = "roots_in_use"     // 409 of PUT /api/team/roots, carries the uses
+	ErrRevMismatch      = "rev_mismatch"     // 409 of PUT /api/team/roots, carries the stored roots and rev
 )
 
 // Limits (spec §6.1, §6.2, §9.1)
@@ -89,6 +91,8 @@ type Grant struct {
 	// RootsCanonical: Roots are real paths (#2450), so a spawn also requires each to still resolve to itself. A grant
 	// made before that (absent) resolves its roots at each spawn, as it always did.
 	RootsCanonical bool `json:"roots_canonical,omitempty"`
+	// RootsRev counts the App's edits of Roots (PUT /api/team/roots, #2561); absent = 0, a team never edited.
+	RootsRev int `json:"roots_rev,omitempty"`
 	// TeamName is the approved name. In a decide body nil (key absent) keeps the
 	// requested name and "" clears it (D-N3); a served grant always carries it
 	// once this version has decided the approval.
