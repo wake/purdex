@@ -438,6 +438,24 @@ describe('an idle observed while a request is in flight (the remount race)', () 
     expect(q2.entries()[0].state).toBe('waiting')
   })
 
+  it('the observation belongs to ITS entry: A in flight, idle seen, A echoed by the transcript, B goes out, A\'s answer lands, B answers busy -> B waits (no extra submit)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const a = q.enqueue('A')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.enqueue('B')
+    q.setIdle(true) // seen while A is in flight
+    q.reconcile([user('ua', 'A', 1_000_000, { client_msg_id: a })]) // the echo settles A early; B is pumped (undo window 3 s)
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    expect(calls.map((c) => c.text)).toEqual(['A', 'B'])
+    calls[0].resolve({ kind: 'accepted' }) // A's late answer
+    await vi.advanceTimersByTimeAsync(0)
+    calls[1].resolve(busy) // B refused because A is running
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
+    expect(calls).toHaveLength(2)
+    expect(q.entries().find((e) => e.text === 'B')!.state).toBe('waiting')
+  })
+
   it('an observation does not leak into a later request after an accepted answer', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)

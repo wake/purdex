@@ -33,6 +33,8 @@ export interface QueueEntry {
   outcome?: SendOutcome
   /** The id of the message that replaced this one after a manual resend (the old entry is kept for the audit trail). */
   supersededBy?: string
+  /** An idle was observed while THIS entry's request was in flight and not yet used: its busy answer is resent at once (once). Gone with the entry. */
+  idleSeen?: boolean
 }
 
 export class SendQueue {
@@ -41,8 +43,6 @@ export class SendQueue {
   private timer: ReturnType<typeof setTimeout> | null = null
   private claimed = new Set<string>()
   private disposed = false
-  /** An idle observed while a request was in flight and not yet used: the first busy answer after it is resent at once (once). */
-  private idleDuringFlight = false
   private retiredDone: (() => void) | null = null
   private listeners = new Set<() => void>()
 
@@ -114,12 +114,13 @@ export class SendQueue {
    * back to waiting if the mod says busy again, and needs a new observation.
    */
   setIdle(idle: boolean): void {
-    if (!idle) { this.idleDuringFlight = false; return }
+    if (!idle) { for (const e of this.list) e.idleSeen = false; return }
     const w = this.list.find((e) => e.state === 'waiting') // a waiting entry was refused before this observation, so it is "after the busy answer"
     if (w) { w.state = 'undo'; w.undoUntil = this.now(); this.emit(); this.pump(); return }
     // The observation came while a request is still out (a pane remounted mid-flight): when that request answers busy this idle
     // is "after the request started", so the answer is resent at once instead of waiting for an edge that will not come.
-    if (this.list.some((e) => e.state === 'sending')) this.idleDuringFlight = true
+    const flying = this.list.find((e) => e.state === 'sending')
+    if (flying) flying.idleSeen = true
   }
 
   /** The transcript's user messages: an entry whose echo is there is done (the transcript shows it from now on). */
@@ -209,8 +210,8 @@ export class SendQueue {
     if (e.state !== 'sending' || !this.list.includes(e)) return // already echoed by the transcript
     e.outcome = o
     e.settledAt = this.now()
-    const seenIdle = this.idleDuringFlight
-    this.idleDuringFlight = false // used by this answer or stale after it: one observation, at most one resend
+    const seenIdle = e.idleSeen === true
+    e.idleSeen = false // used by this answer or stale after it: one observation, at most one resend
     if (o.kind === 'accepted') e.state = 'sent'
     else if (o.kind === 'busy') {
       e.state = 'waiting'
