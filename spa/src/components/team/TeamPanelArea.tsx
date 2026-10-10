@@ -82,7 +82,7 @@ export function TeamPanelArea() {
           />
         </div>
       )}
-      <div className="flex-1 min-w-0 overflow-y-auto rounded-b-lg border border-t-0 border-border-default bg-surface-elevated shadow-xl">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-y-auto rounded-b-lg border border-t-0 border-border-default bg-surface-elevated shadow-xl">
         {shownTeam && display ? (
           <TeamPanel
             team={shownTeam}

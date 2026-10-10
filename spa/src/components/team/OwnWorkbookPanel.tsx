@@ -47,7 +47,7 @@ export function OwnWorkbookPanel({ hostId, sessionId, mode, onSetMode }: Props) 
     )
   }
   return (
-    <div data-testid="own-workbook" data-mode={mode}>
+    <div data-testid="own-workbook" data-mode={mode} className="flex flex-col flex-1 min-h-0">
       <TeamSeatWorkbookView hostId={hostId} sessionId={sessionId} title="" trailing={controls} />
     </div>
   )

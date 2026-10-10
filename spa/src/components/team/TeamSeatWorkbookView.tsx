@@ -64,7 +64,7 @@ function WorkbookFrame({ teamKey, hostId, sessionId, title, trailing, wb }: Prop
   const back = t('team.panel.workbook_back')
   const heading = teamKey === undefined ? t('team.workbook.own_title') : t('team.workbook.title', { title })
   return (
-    <div data-testid="team-seat-workbook" className="text-xs text-text-primary">
+    <div data-testid="team-seat-workbook" className="text-xs text-text-primary flex flex-col flex-1 min-h-0">
       <div className="flex items-center gap-1.5 px-2 h-8 border-b border-border-subtle">
         {teamKey !== undefined && (
           <button
@@ -83,7 +83,7 @@ function WorkbookFrame({ teamKey, hostId, sessionId, title, trailing, wb }: Prop
         <WorkbookToolbar v2={v2} tab={tab} onTab={switchTab} hostId={hostId} sessionId={sessionId} convKey={wb.convKey} conv={conv} />
         {trailing !== undefined && <span className="flex items-center gap-0.5 flex-shrink-0">{trailing}</span>}
       </div>
-      <div ref={bindBox} onScroll={onScroll} data-testid="workbook-body" className="px-3 py-2 flex flex-col gap-2 overflow-y-auto max-h-[70vh]">
+      <div ref={bindBox} onScroll={onScroll} data-testid="workbook-body" className="px-3 py-2 flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto">
         <WorkbookStatus status={conv?.status ?? ''} statusAt={conv?.statusAt ?? 0} loading={!!conv?.loading} />
         {tab === 'todos' ? (
           <WorkbookTodos hostId={hostId} convKey={wb.convKey} conv={conv} onJump={(x) => { void jump(x) }} />
