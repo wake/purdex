@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0-alpha.701] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：寫 config 不再蓋掉別人改過的值 — #2556（#2570）
+
+- daemon 改設定時，改成在 `<config>.lock` 檔案鎖裡、以磁碟上的檔案為底，只寫這次改動的欄位：別的寫入者（例如 `pdx token generate --force`）改過的 token 或 hosts 不會被 daemon 的下一次設定變更蓋回舊值。磁碟上的 token 與執行中的不同時，daemon 記一行（只有 fingerprint）提醒重啟才會採用；不會自動熱換 token。
+- `--bind`／`--port` 這類啟動參數不再被寫進 config；`--quick` 自己挑的 bind 照舊會寫。
+- 第二個 daemon 被 pid lock 擋下時不再先動 config（寫 host_id 移到取得 pid lock 之後）。monitor 的設定也改走同一條路。
+
+### Fixed：daemon 關閉或熱重啟時，進行中的請求不再打到已關的資料庫 — #1033（#2577）
+
+- backup、hostconfig、profiles、push、devices、workbook 六個模組原本在「停止」那一步就關掉 SQLite，但 daemon 要等進行中的請求跑完才真正收工，中間這段時間的請求會打到已關的資料庫而失敗。改成請求都排空之後才關資料庫；熱重啟在重新執行前一樣會正常關檔。
+
+### Fixed：介面 — #2569（介面線）
+
+- 切回指揮台／聊天分頁時不再從舊位置滑到底；內容分批到達時保持閱讀位置。
+
 ## [1.0.0-alpha.700] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
