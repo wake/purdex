@@ -115,7 +115,7 @@ func applySpawnIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	if err != nil {
 		return refusal(http.StatusBadRequest, team.ErrCommandBadRequest, "the command id gives no tmux name"), nil
 	}
-	lead, err := json.Marshal(remoteSpawnLead{Lead: c.Lead, TeamName: c.TeamName})
+	lead, err := json.Marshal(remoteSpawnLead{Lead: c.Lead, TeamName: c.TeamName, TeamLabel: c.TeamLabel, TeamColor: c.TeamColor})
 	if err != nil {
 		return CommandResult{}, err
 	}

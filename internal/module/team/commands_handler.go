@@ -204,6 +204,15 @@ func validateCommand(c team.TeamCommand) string {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
 	}
+	if c.Kind == team.CommandAdopt || c.Kind == team.CommandSpawn {
+		// the look a join command may carry (#2346) is optional; when present it is in the form the lead host stores
+		if l, err := team.NormaliseTeamLabel(c.TeamLabel); err != nil || l != c.TeamLabel {
+			return c.Kind + ": team_label is not a normalised team label"
+		}
+		if c.TeamColor != nil && (*c.TeamColor < 0 || *c.TeamColor > team.MaxTeamColor) {
+			return c.Kind + ": team_color is 0-" + strconv.Itoa(team.MaxTeamColor) + " or absent"
+		}
+	}
 	switch c.Kind {
 	case team.CommandAdopt:
 		switch {

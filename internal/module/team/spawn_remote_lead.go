@@ -109,6 +109,7 @@ func (m *Module) acceptRemoteSpawn(w http.ResponseWriter, r *http.Request, req t
 	want.TeamID, want.State, want.CreatedAt, want.UpdatedAt = t.ID, remoteSpawnRunning, now, now
 	cmd, err := remoteCommand(req.ID, CmdSpawn, want.HostID, t, req.ID, m.leadTuple(t), func(tc *team.TeamCommand) {
 		tc.Cwd, tc.Title, tc.Model, tc.Effort = req.Cwd, req.Title, req.Model, req.Effort
+		tc.TeamLabel, tc.TeamColor = m.joinLook(t)
 	})
 	if err != nil {
 		m.failRemoteSpawn(w, req.ID, err)

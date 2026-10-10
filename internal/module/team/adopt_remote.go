@@ -117,6 +117,7 @@ func (m *Module) adoptRemoteCommand(id string, p team.AdoptPayload) (*Command, e
 	}
 	cmd, err := remoteCommand(id, CmdAdopt, p.TargetHostID, t, id, m.leadTuple(t), func(tc *team.TeamCommand) {
 		tc.TargetSessionID, tc.TargetRef = p.TargetSessionID, p.TargetRef
+		tc.TeamLabel, tc.TeamColor = m.joinLook(t)
 	})
 	if err != nil {
 		return nil, err

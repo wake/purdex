@@ -68,6 +68,7 @@ func TestJoin_AdoptStoresTheLookAndAnOlderLeadHostLeavesIt(t *testing.T) {
 	}
 
 	old := wireAdopt(cmdUUID2, cmdUUID2, "sid-u") // no label, no colour
+	old.TargetRef = "_tgt002"
 	if code, body := f.postCmd(leadPrincipal(), old); code != http.StatusOK {
 		t.Fatalf("adopt: %d %s", code, body)
 	}

@@ -42,6 +42,21 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
+// joinLook is the label and colour a join command (adopt, spawn) carries (#2346): the team's stored look, so the member host
+// shows it at once. The colour is nil for "automatic". A failed read sends none — the optional fields' absence is the
+// older-lead-host case the receiver already handles, and the next team.appearance fills them.
+func (m *Module) joinLook(t team.Team) (label string, color *int) {
+	colors, err := m.store.TeamColors([]string{t.ID})
+	if err != nil {
+		m.logf("[team] join look of team %s: %v", t.ID, err)
+		return "", nil
+	}
+	if c, ok := colors[t.ID]; ok {
+		color = &c
+	}
+	return t.TeamLabel, color
+}
+
 // remoteCommand builds the command to host for a member row (mk != "") or the whole team (mk == "").
 func remoteCommand(id, kind, host string, t team.Team, mk string, lead team.TeamLead, extra func(*team.TeamCommand)) (Command, error) {
 	tc := team.TeamCommand{ID: id, Kind: kind, ToHostID: host, TeamID: t.ID, TeamName: t.TeamName, MK: mk, Lead: lead}
