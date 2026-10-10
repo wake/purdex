@@ -3,6 +3,7 @@
 // cost and (when it carries them) cwd / worktree / branch; the pane's rebuild record for the cwd otherwise. No new data path.
 import { useAgentStore } from '../../stores/useAgentStore'
 import { compositeKey } from '../../lib/composite-key'
+import { useHostTint } from '../../lib/host-tint'
 import { parseCcExtras } from '../../lib/usage-display'
 import type { DeckFooterContext } from './footer-context'
 import { StatusRow } from './StatusRow'
@@ -18,6 +19,9 @@ interface Props {
 
 export function SessionStatusRow({ sessionCode, cwd, ctx }: Props) {
   const entry = useAgentStore((s) => s.ccStatus[compositeKey(ctx.hostId, sessionCode)])
+  const agentType = useAgentStore((s) => s.agentTypes[compositeKey(ctx.hostId, sessionCode)])
+  // the same colour set the tab badge reads: an agent session's terminal colours, a plain terminal's console colours
+  const tint = useHostTint(ctx.hostId, agentType ? 'terminal' : 'console')
   const extras = parseCcExtras(entry?.raw)
   const where = readWhere(entry?.raw)
   return (
@@ -28,6 +32,7 @@ export function SessionStatusRow({ sessionCode, cwd, ctx }: Props) {
       model={extras.model ?? ctx.usage?.model ?? null}
       effort={extras.effort ?? ctx.usage?.effort ?? null}
       cost={extras.cost}
+      tint={tint}
     />
   )
 }

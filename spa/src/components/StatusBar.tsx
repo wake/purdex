@@ -265,8 +265,6 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
 
   return (
     <StatusBarLayout
-      hostId={agentHostId}
-      colorMode={agentType ? 'terminal' : 'console'}
       copyFeedback={copyFeedback}
       copyFailed={copyFailed}
       segments={<>

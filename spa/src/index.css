@@ -278,10 +278,11 @@ button:disabled {
 }
 
 /* === deck / chat agent text: one size, one weight, one colour, one leading, in the normal (sans) face. ===
-   Headings are body-size and bold only; strong is bold only; lists keep marker and indent at body size / leading; inline code stays a chip (rule above). */
+   Headings and strong are body-size and the same weight as the text (nothing is bold); lists keep marker and indent at body size / leading; inline code stays a chip (rule above). */
 .deck-md .worker-prose,
 .chat-md .worker-prose {
-  line-height: 1.7;
+  line-height: 1.8;
+  font-size: calc(var(--wt-font-size) - 1px);
   font-weight: 400;
   color: var(--text-primary);
 }
@@ -291,7 +292,7 @@ button:disabled {
 }
 .deck-md .worker-prose :where(h1, h2, h3, h4, h5, h6, strong, b),
 .chat-md .worker-prose :where(h1, h2, h3, h4, h5, h6, strong, b) {
-  font-size: 1em; font-weight: 700; color: inherit; line-height: inherit;
+  font-size: 1em; font-weight: 400; color: inherit; line-height: inherit;
 }
 .deck-md .worker-prose :where(li > ul, li > ol),
 .chat-md .worker-prose :where(li > ul, li > ol) { margin-top: 0; margin-bottom: 0; }
@@ -302,7 +303,7 @@ button:disabled {
 .deck-md .worker-prose :not(pre) > code,
 .chat-md .worker-prose :not(pre) > code { color: var(--text-primary); }
 
-/* Agent text breathes (c9d9c7-52 pt 10): leading 1.7, and the gaps between blocks and between list items follow it, the same in the deck and the chat. */
+/* Agent text breathes (c9d9c7-52 pt 10): leading 1.8 at one pixel under the pane's size, and the gaps between blocks and between list items follow it, the same in the deck and the chat. */
 .deck-md .worker-prose :where(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4, h5, h6),
 .chat-md .worker-prose :where(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4, h5, h6) { margin-bottom: 0.75em; }
 .deck-md .worker-prose > :last-child,

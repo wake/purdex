@@ -77,6 +77,18 @@ describe('the three voices are told apart (c9d9c7-52 pt 7)', () => {
     expect(box.className).not.toMatch(/accent|peer/)
     expect(screen.getByTestId('deck-user-caption')).toHaveClass('text-text-system')
   })
+  it('keeps a peer message\'s own line breaks, in the deck and in the chat (never folded into one line)', () => {
+    const multi = user({ source: 'peer', from: { kind: 'peer', name: 'mlab/x' }, text: 'line one\n  indented two\n\nline four' })
+    const { container, unmount } = render(<UserBlock item={multi} />)
+    const body = container.querySelector('[data-testid="deck-user"] > div:nth-child(2)') as HTMLElement
+    expect(body).toHaveClass('whitespace-pre-wrap')
+    expect(body.textContent).toBe('line one\n  indented two\n\nline four')
+    unmount()
+    const chat = render(<UserBubble item={multi} />)
+    const cbody = chat.container.querySelector('[data-testid="deck-user"] > div:nth-child(2)') as HTMLElement
+    expect(cbody).toHaveClass('whitespace-pre-wrap')
+    expect(cbody.textContent).toBe('line one\n  indented two\n\nline four')
+  })
   it('the chat shows a peer as the deck block, never as the person\'s bubble', () => {
     render(<UserBubble item={peer} />)
     expect(screen.queryByTestId('chat-user')).toBeNull()
@@ -117,8 +129,9 @@ describe('agent prose typography (index.css)', () => {
     expect(block).not.toMatch(/font-family\s*:\s*Menlo/)
     expect(block).not.toMatch(/font-size\s*:\s*14px/)
   })
-  it('headings are body-size and bold, strong is bold only, lists keep one size and leading', () => {
-    expect(block).toMatch(/h1, h2, h3, h4, h5, h6, strong, b\)[^{]*\{\s*font-size: 1em; font-weight: 700/)
+  it('headings and strong are body-size and the same weight as the text, lists keep one size and leading', () => {
+    expect(block).toMatch(/h1, h2, h3, h4, h5, h6, strong, b\)[^{]*\{\s*font-size: 1em; font-weight: 400/)
+    expect(block).not.toMatch(/font-weight: (700|600|bold)/)
     expect(block).toMatch(/p, li, ul, ol, blockquote, h1[^{]*\{\s*font-size: 1em; line-height: inherit/)
   })
   it('inline code stays a chip without backticks', () => {
@@ -127,9 +140,9 @@ describe('agent prose typography (index.css)', () => {
 })
 
 describe('agent text leading (pt 10)', () => {
-  it('1.7 for the deck and the chat, and the block / list-item gaps follow it', () => {
+  it('1.8 for the deck and the chat, one pixel under the pane size, and the block / list-item gaps follow it', () => {
     const block = css.slice(css.indexOf('=== deck / chat agent text'))
-    expect(block).toMatch(/\.chat-md \.worker-prose \{\s*line-height: 1\.7/)
+    expect(block).toMatch(/\.chat-md \.worker-prose \{\s*line-height: 1\.8;\s*font-size: calc\(var\(--wt-font-size\) - 1px\)/)
     expect(block).not.toMatch(/line-height: 1\.5/)
     expect(css).toMatch(/\.deck-md \.worker-prose :where\(p, ul, ol, pre, table, blockquote[^{]*\{ margin-bottom: 0\.75em/)
     expect(css).toMatch(/\.chat-md \.worker-prose :where\(p, ul, ol, pre, table, blockquote[^{]*\{ margin-bottom: 0\.75em/)

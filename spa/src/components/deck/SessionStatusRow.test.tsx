@@ -2,7 +2,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { useAgentStore } from '../../stores/useAgentStore'
+import { useHostStore } from '../../stores/useHostStore'
 import { SessionStatusRow } from './SessionStatusRow'
+import { hostTintBackground } from '../../lib/host-tint'
 
 const H = 'host-1'
 const CODE = 'dev001'
@@ -70,5 +72,20 @@ describe('SessionStatusRow', () => {
     expect(screen.queryByTestId('item-cost')).toBeNull()
     act(() => snapshot({ model: { display_name: 'Opus 5.5' }, cost: { total_cost_usd: 2 } }))
     expect(screen.getByTestId('item-cost').textContent).toBe('$2.00')
+  })
+
+  it('the row\'s ground is the host colour mixed into the surface; no colour, no tint', () => {
+    snapshot({ model: { display_name: 'Opus 5.5' } })
+    useHostStore.setState({ hosts: { [H]: { id: H, name: 'mlab', ip: '1.2.3.4', port: 1, order: 0 } }, hostOrder: [H] })
+    const { unmount } = render(<SessionStatusRow sessionCode={CODE} cwd={WT} ctx={ctx()} />)
+    expect(screen.getByTestId('status-row').getAttribute('data-host-tinted')).toBeNull()
+    expect(screen.getByTestId('status-row')).toHaveClass('text-text-secondary')
+    unmount()
+    useHostStore.setState({ hosts: { [H]: { id: H, name: 'mlab', ip: '1.2.3.4', port: 1, order: 0, color: '#3b82f6' } } })
+    render(<SessionStatusRow sessionCode={CODE} cwd={WT} ctx={ctx()} />)
+    const row = screen.getByTestId('status-row')
+    expect(row.getAttribute('data-host-tinted')).toBe('true')
+    expect(row.getAttribute('style')).toContain(hostTintBackground('#3b82f6'))
+    expect(row).toHaveClass('text-text-primary')
   })
 })
