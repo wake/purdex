@@ -3,9 +3,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 const pinned = vi.fn<(hostId: string, path: string, init?: RequestInit) => Promise<Response>>()
 vi.mock('../host-api', () => ({ pinnedHostFetch: (h: string, p: string, i?: RequestInit) => pinned(h, p, i) }))
 
-import { fetchConversation, fetchEntries } from './api'
+import { fetchConversation, fetchEntries, fetchTodos, postRefresh } from './api'
 import { useHostStore } from '../../stores/useHostStore'
-import { wireEntry } from './fixtures'
+import { wireEntry, wireTodo } from './fixtures'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 
@@ -44,6 +44,45 @@ describe('fetchConversation', () => {
   it('an unknown host rejects without touching the network (host_removed)', async () => {
     await expect(fetchConversation('ghost', 'claude', 's')).rejects.toMatchObject({ code: 'host_removed' })
     expect(pinned).not.toHaveBeenCalled()
+  })
+})
+
+describe('fetchTodos', () => {
+  it('asks the todos route with state, limit and before, and parses the todos', async () => {
+    pinned.mockResolvedValue(json({ todos: [wireTodo({ id: 9, state: 'done' }), wireTodo({ id: 0 })] }))
+    const r = await fetchTodos('h1', 'sess/1', { state: 'done', limit: 20, before: 30 })
+    expect(pinned.mock.calls[0][1]).toBe('/api/workbook/conversations/claude/sess%2F1/todos?state=done&limit=20&before=30')
+    expect(r).toMatchObject({ kind: 'ok' })
+    expect(r.kind === 'ok' && r.todos.map((t) => t.id)).toEqual([9])
+  })
+  it('a 404 is not_found; a broken envelope is bad_response', async () => {
+    pinned.mockResolvedValueOnce(json({ error: 'not_found' }, 404))
+    expect((await fetchTodos('h1', 's', { state: 'open' })).kind).toBe('not_found')
+    pinned.mockResolvedValueOnce(json({ nope: 1 }))
+    await expect(fetchTodos('h1', 's', { state: 'open' })).rejects.toMatchObject({ code: 'bad_response' })
+  })
+})
+
+describe('postRefresh', () => {
+  it('202 {entry_id} is accepted', async () => {
+    pinned.mockResolvedValue(json({ entry_id: 12 }, 202))
+    expect(await postRefresh('h1', 'sess/1')).toEqual({ kind: 'accepted', entryId: 12 })
+    expect(pinned.mock.calls[0][1]).toBe('/api/workbook/conversations/claude/sess%2F1/refresh')
+    expect(pinned.mock.calls[0][2]).toMatchObject({ method: 'POST' })
+  })
+  it('409 not_live and 409 refresh_pending are typed results, not throws', async () => {
+    pinned.mockResolvedValueOnce(json({ error: 'not_live' }, 409))
+    expect(await postRefresh('h1', 's')).toEqual({ kind: 'not_live' })
+    pinned.mockResolvedValueOnce(json({ error: 'refresh_pending' }, 409))
+    expect(await postRefresh('h1', 's')).toEqual({ kind: 'refresh_pending' })
+  })
+  it('anything else still throws (500, a 202 without an id, an unknown 409)', async () => {
+    pinned.mockResolvedValueOnce(json({ error: 'internal' }, 500))
+    await expect(postRefresh('h1', 's')).rejects.toMatchObject({ status: 500 })
+    pinned.mockResolvedValueOnce(json({}, 202))
+    await expect(postRefresh('h1', 's')).rejects.toMatchObject({ code: 'bad_response' })
+    pinned.mockResolvedValueOnce(json({ error: 'other' }, 409))
+    await expect(postRefresh('h1', 's')).rejects.toMatchObject({ status: 409 })
   })
 })
 

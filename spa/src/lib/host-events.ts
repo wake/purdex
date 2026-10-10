@@ -20,6 +20,8 @@ export interface HostEvent {
     | 'team.roster'
     | 'workbook.entry'
     | 'workbook.status'
+    | 'workbook.todos'
+    | 'workbook.refresh_available'
     | 'nex.executions.hello'
     | 'nex.execution'
   session: string

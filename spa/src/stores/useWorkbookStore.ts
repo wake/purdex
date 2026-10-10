@@ -9,16 +9,41 @@
 //     `missing`); `workbook.status` carries `session_id`, so it lands after a reload too. A status for a conversation no
 //     seat maps to yet is simply kept under its key.
 // A fetch that lands after its host was forgotten or moved to another connection generation is dropped.
+//
+// v2 (plan WA-1.6 / 1.7; needs `workbook.v2`, else nothing below is fetched or posted):
+//   * `todos`          — open (oldest first) and done (newest first, `loadMoreDone` pages it). The conversation answer is a
+//                        snapshot, `workbook.todos` events upsert by id; a todo only moves forward (open → done / dropped), so a
+//                        stale copy never revives a closed one. EVENTS STILL NEVER FETCH.
+//   * `refreshAvailable` — the conversation answer's flag, then `workbook.refresh_available`.
+//   * refresh pending  — DERIVED (`selectRefreshPending`): the conversation holds a `kind: refresh` entry that is `pending`.
+//                        Nothing is stored, so there is no flag to get stuck: the entry's terminal event or any refetch that
+//                        sees it terminal ends it, a reconnect included. `requestRefresh` upserts the 202's entry as pending.
+//   * `loadUntil`      — pages `before=` from the oldest loaded entry until an entry is loaded, at most MAX_UNTIL_PAGES pages.
 import { create } from 'zustand'
-import { fetchConversation } from '../lib/workbook/api'
-import { WORKBOOK_PROVIDER, type EntryEvent, type StatusEvent, type WorkbookEntry } from '../lib/workbook/types'
+import { fetchConversation, fetchTodos, postRefresh } from '../lib/workbook/api'
+import { emptyTodos, mergeEntries, MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES, snapshotTodos, touched, upsertTodos, type TodoBook } from '../lib/workbook/merge'
+import {
+  WORKBOOK_PROVIDER, type EntryEvent, type RefreshAvailableEvent, type StatusEvent, type TodosEvent, type WorkbookEntry,
+} from '../lib/workbook/types'
+
+export { MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES }
+export type { TodoBook }
 
 export const SEAT_PAGE = 1
 export const VIEW_PAGE = 20
+/** A conversation answer too old to reconcile with the events since (the touch history is bounded) is re-asked: at most one
+ *  pending re-ask per conversation, at most MAX_RESNAPS in a row (reset by the next answer that does reconcile), each after
+ *  RESNAP_BACKOFF_MS × 2^n. This repairs a stale ANSWER; it is not an event trigger (events still never fetch). */
+export const MAX_RESNAPS = 2
+export const RESNAP_BACKOFF_MS = 1000
+/** `loadUntil` gives up after this many pages (5 × VIEW_PAGE = 100 entries). */
+export const MAX_UNTIL_PAGES = 5
 
 // Retention (events can name any conversation of the host, so the store must not grow with them). Per host: at most
 // MAX_CONVS conversations, of which at most MAX_UNPINNED are ones nobody holds (no seat maps to them and no view is
-// open on them), least recently touched out first; per conversation the MAX_ENTRIES newest entries.
+// open on them), least recently touched out first; per conversation the MAX_ENTRIES newest entries, the MAX_OPEN_TODOS
+// newest open todos (the daemon keeps 30 open at most), the MAX_DONE_TODOS newest done ones and the last
+// MAX_TODO_TOUCHES todo ids an event changed (see `snapshotTodos`).
 export const MAX_CONVS = 200
 export const MAX_UNPINNED = 50
 export const MAX_ENTRIES = 500
@@ -37,7 +62,23 @@ export interface ConvState {
   touched: number
   /** The daemon had no workbook for a session of this conversation in this connection generation (404). */
   missing: boolean
+  /** v2: the todo list (empty on a v1 daemon). */
+  todos: TodoBook
+  /** v2: some live session of the conversation can run a refresh now (false until told, and again after a disconnect). */
+  refreshAvailable: boolean
+  /** Store clock stamp of the last `workbook.refresh_available` event: an answer whose request started before it is older than the event. */
+  availAt: number
+  /** The newest request stamp whose answer was applied as a snapshot (todos, refreshAvailable): an answer from an older request is not applied over it. */
+  appliedAt: number
 }
+
+/** What `requestRefresh` answers; it never throws. `unsupported`: the host does not list `workbook.v2` (nothing was posted). */
+export type RefreshOutcome =
+  | { kind: 'accepted'; entryId: number }
+  | { kind: 'not_live' }
+  | { kind: 'refresh_pending' }
+  | { kind: 'unsupported' }
+  | { kind: 'error'; code: string }
 
 export interface WorkbookSupport { v1: boolean; v2: boolean }
 
@@ -67,14 +108,34 @@ interface WorkbookState {
   /** A workbook view opened (true) or closed (false) on a conversation: it is not evicted while open. */
   setViewing: (hostId: string, convKey: string, open: boolean) => void
   loadMore: (hostId: string, convKey: string) => Promise<void>
+  /** v2: the next older page of the done record (`before = doneCursor ?? doneOldestId`). */
+  loadMoreDone: (hostId: string, convKey: string) => Promise<void>
+  /** v2: ask for a refresh; a 202 upserts its entry as pending (which is what makes refresh pending true). */
+  requestRefresh: (hostId: string, convKey: string) => Promise<RefreshOutcome>
+  /** Page `before=` from the oldest loaded entry until `entryId` is loaded: true when it is, false after MAX_UNTIL_PAGES pages or when it is not there. */
+  loadUntil: (hostId: string, convKey: string, entryId: number) => Promise<boolean>
   applyEntry: (hostId: string, ev: EntryEvent) => void
   applyStatus: (hostId: string, ev: StatusEvent) => void
+  applyTodos: (hostId: string, ev: TodosEvent) => void
+  applyRefreshAvailable: (hostId: string, ev: RefreshAvailableEvent) => void
   forgetHost: (hostId: string) => void
   reset: () => void
 }
 
 const NO_SUPPORT: WorkbookSupport = { v1: false, v2: false }
-const emptyConv = (): ConvState => ({ status: '', statusAt: 0, entries: [], oldestId: null, exhausted: false, loading: false, touched: 0, missing: false })
+const emptyConv = (): ConvState => ({
+  status: '', statusAt: 0, entries: [], oldestId: null, exhausted: false, loading: false, touched: 0, missing: false,
+  todos: emptyTodos(), refreshAvailable: false, availAt: 0, appliedAt: 0,
+})
+
+/** Refresh pending, derived: the conversation holds a refresh entry that is still pending (see the header). */
+export const selectRefreshPending = (c: Pick<ConvState, 'entries'> | undefined): boolean =>
+  !!c && c.entries.some((e) => e.kind === 'refresh' && e.state === 'pending')
+
+/** The caps the todo book hit (UI: say so instead of silently showing a partial list). `openCapped` resets when a reconciled
+ *  full snapshot replaces the open list; `doneCapped` stays (older done records were dropped; a snapshot does not bring them back). */
+export const selectTodoCaps = (c: Pick<ConvState, 'todos'> | undefined): { openCapped: boolean; doneCapped: boolean } =>
+  ({ openCapped: !!c?.todos.openCapped, doneCapped: !!c?.todos.doneCapped })
 
 /** What a host's daemon supports, as of its last `/api/info` answer; both false until it answered. */
 export function selectWorkbookSupport(hostId: string, state: Pick<WorkbookState, 'support'> = useWorkbookStore.getState()): WorkbookSupport {
@@ -84,16 +145,6 @@ export function selectWorkbookSupport(hostId: string, state: Pick<WorkbookState,
 export const selectConv = (state: Pick<WorkbookState, 'byHost'>, hostId: string, convKey: string): ConvState | undefined =>
   state.byHost[hostId]?.byConv[convKey]
 
-/** Merge `incoming` into a conversation's entries: newest first, one per id, a stale copy never replaces a newer one. */
-function mergeEntries(have: WorkbookEntry[], incoming: WorkbookEntry[]): WorkbookEntry[] {
-  const byId = new Map(have.map((e) => [e.id, e]))
-  for (const e of incoming) {
-    const cur = byId.get(e.id)
-    if (!cur || e.updatedAt >= cur.updatedAt) byId.set(e.id, e)
-  }
-  return [...byId.values()].sort((a, b) => b.id - a.id)
-}
-
 type S = WorkbookState
 let clock = 0
 /** The newest MAX_ENTRIES entries; the paging cursor never points at a dropped one, and older entries exist again. */
@@ -102,6 +153,7 @@ function capped(c: ConvState): ConvState {
   const entries = c.entries.slice(0, MAX_ENTRIES)
   return { ...c, entries, oldestId: entries[entries.length - 1].id, exhausted: false }
 }
+/** Any write that has todos in hand goes through `upsertTodos`/`snapshotTodos`, which bound them. */
 function withConv(s: S, hostId: string, convKey: string, fn: (c: ConvState) => ConvState): Pick<S, 'byHost'> {
   const host = s.byHost[hostId] ?? { byConv: {} }
   const next = capped({ ...fn(host.byConv[convKey] ?? emptyConv()), touched: ++clock })
@@ -152,6 +204,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
   async function fetchOnce(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<void> {
     const epoch = get().epoch[hostId] ?? 0
     const gen = get().gens[hostId]
+    const startedAt = ++clock // stamps the request: an event that lands after it is newer than the answer
     const known = get().convOfSession[hostId]?.[sessionId]
     if (known) set((s) => withConv(s, hostId, known, (c) => ({ ...c, loading: true })))
     const alive = () => (get().epoch[hostId] ?? 0) === epoch && get().gens[hostId] === gen
@@ -171,6 +224,8 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       return
     }
     const { page } = result
+    let untrusted = false
+    let reconciled = false // this answer was applied as the conversation's latest, reconcilable snapshot
     set((s) => ({
       ...withSessions(s, hostId, page.convKey, uniq([sessionId, ...page.entries.map((e) => e.sessionId)])),
       ...withConv(s, hostId, page.convKey, (c) => {
@@ -186,27 +241,65 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
           oldestId: older ? (pageOldest ?? c.oldestId) : (c.oldestId ?? pageOldest),
           exhausted: older || c.oldestId === null ? page.entries.length < q.limit : c.exhausted,
           loading: false, missing: false,
+          // v2 parts (null from a v1 daemon: left as they were)
+          // An answer older than one already applied (two queries in flight, the later request landed first) only adds done todos.
+          todos: !page.todos ? c.todos : startedAt < c.appliedAt ? upsertTodos(c.todos, page.todos.done)
+            : (() => { const r = snapshotTodos(c.todos, page.todos, startedAt); untrusted = !r.trusted; reconciled = r.trusted; return r.book })(),
+          refreshAvailable: page.refreshAvailable !== null && c.availAt < startedAt && startedAt >= c.appliedAt ? page.refreshAvailable : c.refreshAvailable,
+          appliedAt: Math.max(c.appliedAt, startedAt),
         }
       }),
     }))
     set((s) => evicted(s, hostId))
+    if (untrusted) scheduleResnap(hostId, page.convKey)
+    else if (reconciled) { const r = resnaps.get(resnapKey(hostId, page.convKey)); if (r) { if (r.timer !== undefined) clearTimeout(r.timer); resnaps.delete(resnapKey(hostId, page.convKey)) } }
+  }
+
+  /** conv → the pending re-ask (timer) and how many were made in a row. */
+  const resnaps = new Map<string, { tries: number; timer?: ReturnType<typeof setTimeout> }>()
+  const resnapKey = (hostId: string, convKey: string) => `${hostId}\u0000${convKey}`
+  function clearResnaps(hostId?: string): void {
+    for (const [k, v] of resnaps) {
+      if (hostId === undefined || k.startsWith(`${hostId}\u0000`)) { if (v.timer !== undefined) clearTimeout(v.timer); resnaps.delete(k) }
+    }
+  }
+  function scheduleResnap(hostId: string, convKey: string): void {
+    const key = resnapKey(hostId, convKey)
+    const cur = resnaps.get(key) ?? { tries: 0 }
+    resnaps.set(key, cur)
+    if (cur.timer !== undefined || cur.tries >= MAX_RESNAPS) return
+    const epoch = get().epoch[hostId] ?? 0
+    const gen = get().gens[hostId]
+    cur.timer = setTimeout(() => {
+      cur.timer = undefined
+      if ((get().epoch[hostId] ?? 0) !== epoch || get().gens[hostId] !== gen || !get().support[hostId]?.v2) return
+      void runFetch(hostId, sessionOf(hostId, convKey), { limit: SEAT_PAGE })
+    }, RESNAP_BACKOFF_MS * 2 ** cur.tries)
+    cur.tries++
+  }
+
+  /** A session of the conversation to name in a request: a known one (the daemon wants a real session for a refresh), else the key (any session of it resolves). */
+  function sessionOf(hostId: string, convKey: string): string {
+    const map = get().convOfSession[hostId] ?? {}
+    return Object.keys(map).find((sid) => map[sid] === convKey) ?? convKey
   }
 
   return {
     byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {},
 
-    fence: (hostId) => set((s) => {
+    fence: (hostId) => { clearResnaps(hostId); set((s) => {
       // What 404'd or was loading on the last connection is asked again on the next; entries already loaded stay (they
       // are history), but support is unknown until the new answer, so nothing is fetched and no view may rely on v1.
       const byConv = s.byHost[hostId]?.byConv ?? {}
-      const cleared = Object.fromEntries(Object.entries(byConv).map(([k, c]) => [k, { ...c, loading: false, missing: false }]))
+      // `refreshAvailable` is live state of the old connection: false until the new one says. Refresh pending needs no reset (derived).
+      const cleared = Object.fromEntries(Object.entries(byConv).map(([k, c]) => [k, { ...c, loading: false, missing: false, refreshAvailable: false, todos: { ...c.todos, loading: false } }]))
       const { [hostId]: _gone, ...support } = s.support
       return {
         support, gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 },
         missingSessions: { ...s.missingSessions, [hostId]: {} },
         ...(s.byHost[hostId] ? { byHost: { ...s.byHost, [hostId]: { byConv: cleared } } } : {}),
       }
-    }),
+    }) },
 
     setSupport: (hostId, support) => set((s) => {
       const cur = s.support[hostId]
@@ -233,6 +326,78 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       const c = get().byHost[hostId]?.byConv[convKey]
       if (!get().support[hostId]?.v1 || !c || c.loading || c.exhausted || c.oldestId === null) return
       await runFetch(hostId, convKey, { limit: VIEW_PAGE, before: c.oldestId }) // a conversation key is a session of it
+    },
+
+    loadMoreDone: async (hostId, convKey) => {
+      const c = get().byHost[hostId]?.byConv[convKey]
+      if (!get().support[hostId]?.v2 || !c || c.todos.loading || c.todos.doneExhausted || c.todos.doneCapped) return
+      const epoch = get().epoch[hostId] ?? 0
+      const gen = get().gens[hostId]
+      const alive = () => (get().epoch[hostId] ?? 0) === epoch && get().gens[hostId] === gen
+      const before = c.todos.doneCursor ?? c.todos.doneOldestId ?? undefined
+      const setLoading = (loading: boolean) => set((s) => withConv(s, hostId, convKey, (x) => ({ ...x, todos: { ...x.todos, loading } })))
+      setLoading(true)
+      let r
+      try {
+        r = await fetchTodos(hostId, sessionOf(hostId, convKey), { state: 'done', limit: VIEW_PAGE, before })
+      } catch {
+        if (alive()) setLoading(false)
+        return
+      }
+      if (!alive()) return
+      if (r.kind === 'not_found') { setLoading(false); return }
+      const { todos } = r
+      // The cursor follows what the page brought, not what retention kept; a page that does not move it ends the paging.
+      const pageOldest = todos.length ? Math.min(...todos.map((x) => x.id)) : null
+      const moved = pageOldest !== null && (before === undefined || pageOldest < before)
+      set((s) => withConv(s, hostId, convKey, (x) => ({
+        ...x, todos: {
+          ...upsertTodos(x.todos, todos), loading: false, doneCursor: moved ? pageOldest : x.todos.doneCursor,
+          doneExhausted: x.todos.doneExhausted || !moved || todos.length < VIEW_PAGE,
+        },
+      })))
+    },
+
+    requestRefresh: async (hostId, convKey) => {
+      if (!get().support[hostId]?.v2) return { kind: 'unsupported' }
+      const epoch = get().epoch[hostId] ?? 0
+      const gen = get().gens[hostId]
+      const sessionId = sessionOf(hostId, convKey)
+      let r
+      try {
+        r = await postRefresh(hostId, sessionId)
+      } catch (e) {
+        const code = (e as { code?: unknown } | null)?.code
+        return { kind: 'error', code: typeof code === 'string' ? code : 'network' }
+      }
+      if (r.kind !== 'accepted') return r
+      if ((get().epoch[hostId] ?? 0) === epoch && get().gens[hostId] === gen) {
+        // The 202's entry is pending until its terminal event (or a refetch) says otherwise: that IS "refresh pending".
+        // updatedAt 0, so any real copy of the entry (an event that outran this answer included) wins over this stand-in.
+        const stub: WorkbookEntry = {
+          id: r.entryId, convKey, sessionId, turnId: '', turnAt: 0, state: 'pending', reason: '', thing: '', push: '', entry: '', thingDone: false,
+          createdAt: Date.now(), updatedAt: 0, kind: 'refresh', usage: { in: 0, out: 0, cacheRead: 0 }, todoChanges: { added: [], done: [], dropped: [] },
+        }
+        set((s) => withConv(s, hostId, convKey, (c) => ({ ...c, entries: mergeEntries(c.entries, [stub]), oldestId: c.oldestId ?? stub.id })))
+        set((s) => evicted(s, hostId))
+      }
+      return r
+    },
+
+    loadUntil: async (hostId, convKey, entryId) => {
+      if (!get().support[hostId]?.v1) return false
+      const loaded = () => get().byHost[hostId]?.byConv[convKey]?.entries.some((e) => e.id === entryId) ?? false
+      for (let page = 0; page < MAX_UNTIL_PAGES; page++) {
+        if (loaded()) return true
+        const c = get().byHost[hostId]?.byConv[convKey]
+        // Ids only grow: past the id (or out of older entries) and still not loaded means it is not there.
+        if (c && (c.exhausted || (c.oldestId !== null && c.oldestId < entryId))) return false
+        const before = c?.oldestId ?? undefined
+        await runFetch(hostId, sessionOf(hostId, convKey), before === undefined ? { limit: VIEW_PAGE } : { limit: VIEW_PAGE, before })
+        const after = get().byHost[hostId]?.byConv[convKey]?.oldestId ?? null
+        if (after === null || after === before) return loaded() // the page did not move the cursor (failed, fenced, empty): stop
+      }
+      return loaded()
     },
 
     syncSeats: (targets) => set((s) => {
@@ -270,14 +435,21 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       ...withConv(s, hostId, ev.convKey, (c) => (ev.updatedAt >= c.statusAt ? { ...c, status: ev.status, statusAt: ev.updatedAt, missing: false } : c)),
     })); set((s) => evicted(s, hostId)) },
 
-    forgetHost: (hostId) => set((s) => {
+    applyTodos: (hostId, ev) => { set((s) => ({
+      ...withSessions(s, hostId, ev.convKey, [ev.sessionId]),
+      ...withConv(s, hostId, ev.convKey, (c) => ({ ...c, todos: touched(upsertTodos(c.todos, ev.todos), ev.todos, ++clock), missing: false })),
+    })); set((s) => evicted(s, hostId)) },
+
+    applyRefreshAvailable: (hostId, ev) => { set((s) => withConv(s, hostId, ev.convKey, (c) => ({ ...c, refreshAvailable: ev.available, availAt: ++clock }))); set((s) => evicted(s, hostId)) },
+
+    forgetHost: (hostId) => { clearResnaps(hostId); set((s) => {
       const drop = <T>(m: Record<string, T>): Record<string, T> => { const { [hostId]: _g, ...rest } = m; return rest }
       return {
         byHost: drop(s.byHost), convOfSession: drop(s.convOfSession), support: drop(s.support), gens: drop(s.gens),
         missingSessions: drop(s.missingSessions), seatGen: drop(s.seatGen), viewing: drop(s.viewing), epoch: { ...s.epoch, [hostId]: (s.epoch[hostId] ?? 0) + 1 },
       }
-    }),
+    }) },
 
-    reset: () => { inflight.clear(); set({ byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {} }) },
+    reset: () => { inflight.clear(); clearResnaps(); set({ byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {} }) },
   }
 })

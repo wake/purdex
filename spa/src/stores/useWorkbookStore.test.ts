@@ -9,10 +9,11 @@ import { MAX_CONVS, MAX_ENTRIES, MAX_UNPINNED, selectConv, selectWorkbookSupport
 
 const entry = (id: number, over: Partial<WorkbookEntry> = {}): WorkbookEntry => ({
   id, convKey: 'c1', sessionId: 's1', turnId: `t${id}`, turnAt: id * 1000, state: 'ok', reason: '', thing: `thing ${id}`, push: '', entry: '',
-  thingDone: false, createdAt: id * 1000, updatedAt: id * 1000, ...over,
+  thingDone: false, createdAt: id * 1000, updatedAt: id * 1000,
+  kind: 'turn', usage: { in: 0, out: 0, cacheRead: 0 }, todoChanges: { added: [], done: [], dropped: [] }, ...over,
 })
 const page = (entries: WorkbookEntry[], over: { status?: string; statusAt?: number; convKey?: string } = {}): ConversationResult =>
-  ({ kind: 'ok', page: { convKey: over.convKey ?? 'c1', status: over.status ?? 'doing', statusAt: over.statusAt ?? 5, entries } })
+  ({ kind: 'ok', page: { convKey: over.convKey ?? 'c1', status: over.status ?? 'doing', statusAt: over.statusAt ?? 5, entries, todos: null, refreshAvailable: null } })
 const st = () => useWorkbookStore.getState()
 const conv = (key = 'c1') => selectConv(st(), 'h1', key)
 const V1 = { v1: true, v2: false }
