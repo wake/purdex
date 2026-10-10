@@ -11,6 +11,7 @@ import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
 import { CELL_GAP, CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
@@ -49,6 +50,7 @@ beforeEach(() => {
   cleanup()
   localStorage.clear()
   resetTeamStores()
+  useI18nStore.getState().setLocale('zh-TW')
   useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {}, workbookTabs: {} })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
@@ -211,12 +213,36 @@ describe('full mode', () => {
     expect(lead.getAllByTestId('model-icon-opus').length).toBeGreaterThan(0)
     expect(lead.getByTestId('team-panel-model').textContent).toBe('Opus')
     expect(lead.getByTestId('team-panel-effort').textContent).toBe('high')
-    expect(lead.getByTestId('team-panel-ctx').textContent).toBe('42%')
+    expect(lead.getByTestId('team-panel-ctx').textContent).toBe('58%') // REMAINING (100 - 42), the ring below still draws the used 42
     expect(lead.getByTestId('context-ring')).toBeTruthy()
     const a = within(rows()[1])
     expect(a.getByTestId('team-panel-model').textContent).toBe('Sonnet') // model_id of the context sample
     expect(a.getByTestId('team-panel-effort').textContent).toBe('low')
-    expect(a.getByTestId('team-panel-ctx').textContent).toBe('7%')
+    expect(a.getByTestId('team-panel-ctx').textContent).toBe('93%')
+  })
+
+  it.each([[40, '60%'], [0, '100%'], [100, '0%']])('used %i%% -> ring draws used, the number reads %s left; the tooltips say so', (used, left) => {
+    scene()
+    readings((t) => { t.lead.model = 'claude-opus-5-5'; t.lead.context = { used_percentage: used, window: 1, at: 1 } })
+    mount()
+    const lead = within(rows()[0])
+    expect(lead.getByTestId('team-panel-ctx').textContent).toBe(left)
+    expect(lead.getByTestId('context-ring-arc').getAttribute('data-shown')).toBe(String(used))
+    expect(lead.getByTestId('team-panel-ctx').parentElement?.getAttribute('title')).toBe(`context 剩 ${left}`)
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    expect(screen.getAllByTestId('team-panel-cell')[0].getAttribute('title')).toContain(`context 剩 ${left}`)
+  })
+
+  it('the tooltips read "context N% left" in English, and a missing value stays a dash', () => {
+    act(() => useI18nStore.getState().setLocale('en'))
+    scene()
+    readings((t) => { t.lead.model = 'claude-opus-5-5'; t.lead.context = { used_percentage: 40, window: 1, at: 1 } })
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    mount()
+    const cells = screen.getAllByTestId('team-panel-cell')
+    expect(cells[0].getAttribute('title')).toContain('context 60% left')
+    expect(cells[1].getAttribute('title')).toContain('context —')
+    expect(cells[1].getAttribute('title')).not.toContain('left')
   })
 
   it('header shows panelName and its tooltip "<name> (<label>)"', () => {

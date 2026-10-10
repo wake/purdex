@@ -155,7 +155,7 @@ describe('context_unavailable', () => {
   it('without the flag the same readings are drawn', () => {
     scene({ extra: seedReadings })
     mount()
-    expect(within(row('R')).getByTestId('team-panel-ctx')).toHaveTextContent('42%')
+    expect(within(row('R')).getByTestId('team-panel-ctx')).toHaveTextContent('58%')
     expect(within(row('R')).getByTestId('team-panel-model')).not.toHaveTextContent('—')
   })
 })
