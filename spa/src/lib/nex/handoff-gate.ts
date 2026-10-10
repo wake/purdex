@@ -16,7 +16,7 @@
 //
 // The relay id the daemon used to publish on the session row was a third
 // fallback until P-D.3b; the daemon stopped sending it in alpha.396.
-import type { PaneContent } from '../../types/tab'
+import type { PaneContent, TmuxSessionContent } from '../../types/tab'
 
 export interface HandoffGateDeps {
   /** `useAgentStore.agentTypes[compositeKey(hostId, sessionCode)]`. */
@@ -37,15 +37,21 @@ export interface HandoffGateDeps {
  */
 export type HandoffBlockReason = 'not_session' | 'terminated' | 'not_agent' | 'nex_not_ready'
 
+/**
+ * Does the pane run Claude Code? An empty live type is no information and falls through to the record. The record counts
+ * only while its agent has not exited: Claude Code's exit clears the live type (`clearSession`) and marks the record
+ * `agentExited` (`writeExitRecord`), so an exited record is the one source left and must not keep saying `cc`
+ * (P6 re-review). Shared with the conversation views (U3-1a).
+ */
+export function runsClaudeCode(content: TmuxSessionContent, liveAgentType: string | undefined): boolean {
+  const recorded = content.rebuild?.agentExited ? undefined : content.rebuild?.agent?.type
+  return (liveAgentType || recorded) === 'cc'
+}
+
 export function handoffBlockReason(content: PaneContent, deps: HandoffGateDeps): HandoffBlockReason | null {
   if (content.kind !== 'tmux-session') return 'not_session'
   if (content.terminated) return 'terminated'
-  // An empty live type is no information and falls through to the record. The record counts only while its agent has
-  // not exited: Claude Code's exit clears the live type (`clearSession`) and marks the record `agentExited`
-  // (`writeExitRecord`), so an exited record is the one source left and must not keep saying `cc` (P6 re-review).
-  const recorded = content.rebuild?.agentExited ? undefined : content.rebuild?.agent?.type
-  const agent = deps.agentType || recorded
-  if (agent !== 'cc') return 'not_agent'
+  if (!runsClaudeCode(content, deps.agentType)) return 'not_agent'
   if (!deps.handoffReady) return 'nex_not_ready'
   return null
 }

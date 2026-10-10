@@ -723,6 +723,11 @@
   "status.mode.terminated": "This terminal's session is gone",
   "status.mode.cannot_take": "This worker can't be taken back to a terminal",
   "status.mode.busy": "Busy — try again in a moment",
+  "status.mode.deck": "Deck",
+  "status.mode.handoff": "Hand to worker",
+  "status.mode.take_back": "Take back to terminal",
+  "status.mode.no_conversations": "This host does not offer the conversation view",
+  "status.mode.not_session": "This pane is not a terminal",
 
   "stream.waiting": "Waiting for messages...",
   "stream.handoff.button": "Handoff",
