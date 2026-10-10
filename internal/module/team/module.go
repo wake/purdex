@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -146,6 +145,8 @@ type Module struct {
 	// busyMu guards the member-relay wait marks of relay_timeouts.go (#2439): the ops whose lead got the long-turn notice,
 	// and when each op's member was first seen idle.
 	busyMu sync.Mutex
+	// bootTrace, when set, is told the name of each boot reconciliation step as it starts (tests).
+	bootTrace func(step string)
 	// endedOps are the forwarded relay ops a command settle ended, until that settle has committed (relay_forwarded.go).
 	endedOpsMu  sync.Mutex
 	endedOps    map[*sql.Tx][]string
@@ -548,7 +549,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/ask/report/{id}", m.handleAskReport)
 }
 
-// Start applies the boot lease grace (spec §9.2: every open request's
+// Start runs the boot reconciliation (boot.go), which begins with the boot lease grace (spec §9.2: every open request's
 // lease becomes max(lease_until, boot + 30 s), so its pdx can reconnect;
 // teams get the same 30 s before an absent lead ends one, bootAt),
 // registers the snapshot for new subscribers and starts the sweeper. It
@@ -558,30 +559,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 // sweeper prunes on its 10th tick, and never a flag whose request is open.
 func (m *Module) Start(context.Context) error {
 	m.bootAt = m.now() // before the sweeper starts: endGoneTeams reads it
-	// <data_dir>/relay/ exists from boot (spec §8.3); begin re-creates it
-	// too. A failure is logged, not fatal: begin reports its own.
-	if err := os.MkdirAll(m.relayDir, 0o700); err != nil {
-		m.logf("[team] relay dir %s: %v", m.relayDir, err)
+	if err := m.bootReconcile(); err != nil {
+		return err
 	}
-	n, err := m.store.ExtendOpenLeases(m.now() + team.BootGraceS*1000)
-	if err != nil {
-		return fmt.Errorf("team: %w", err)
-	}
-	if n > 0 {
-		m.logf("[team] boot: extended the lease of %d open approval request(s) by %ds", n, team.BootGraceS)
-	}
-	m.rosterBaseline() // before the boot's own writes: each of them announces itself
-	m.reconcileRelays()
-	m.recoverKillingMembers() // a kill that died between its claim and its end (#2152)
-	m.resumeSpawns()
-	// U23 rule 7: requests left open across a restart while the switch is
-	// on are approved now, not at the first tick; createMu as every reader
-	// of the switch.
-	m.createMu.Lock()
-	if m.unattendedOn() {
-		m.sweepUnattended("boot")
-	}
-	m.createMu.Unlock()
 	if svc, ok := m.core.Registry.Get(agent.TerminalSessionsKey); ok {
 		m.subscribeTurnEnd(svc) // after every Init: the agent module's service is there
 	}
