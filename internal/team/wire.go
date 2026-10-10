@@ -77,12 +77,18 @@ type LeadPayload struct {
 	Roots      []string `json:"roots"`       // normalised: absolute, Clean; default [origin.Cwd]
 	TeamName   string   `json:"team_name"`   // normalised (NormaliseTeamName); always present, "" = none
 	TeamLabel  string   `json:"team_label"`  // normalised (NormaliseTeamLabel); always present, "" = none requested
+	// RootsCanonical: Roots were resolved to real paths when the request was made (#2450). Absent on a request an older
+	// daemon made, whose roots are only Clean.
+	RootsCanonical bool `json:"roots_canonical,omitempty"`
 }
 
 // Grant is what the user approved (edited in the dialog). P4 turns it into a team.
 type Grant struct {
 	MaxMembers int      `json:"max_members"`
 	Roots      []string `json:"roots"`
+	// RootsCanonical: Roots are real paths (#2450), so a spawn also requires each to still resolve to itself. A grant
+	// made before that (absent) resolves its roots at each spawn, as it always did.
+	RootsCanonical bool `json:"roots_canonical,omitempty"`
 	// TeamName is the approved name. In a decide body nil (key absent) keeps the
 	// requested name and "" clears it (D-N3); a served grant always carries it
 	// once this version has decided the approval.

@@ -1,0 +1,207 @@
+package teammod
+
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+
+	"github.com/wake/purdex/internal/team"
+)
+
+// #2450: a local grant stores the REAL path of each root (as a forwarded one does, config.CanonicalTeamRoots); a spawn
+// refuses a root that no longer resolves to itself. A grant made before this (no roots_canonical) keeps judging its roots
+// the way it always did: resolved at each spawn.
+
+func realTemp(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func symlinkTo(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func leadPayloadOf(t *testing.T, a team.Approval) team.LeadPayload {
+	t.Helper()
+	var p team.LeadPayload
+	if err := json.Unmarshal(a.Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// Mutation gate: create storing normaliseRoots' result without canonicalRoots → the link is stored (red).
+func TestCreate_StoresTheRealPathOfARootThatIsASymlink(t *testing.T) {
+	base := realTemp(t)
+	real := mustMkdir(t, filepath.Join(base, "x", "work"))
+	link := filepath.Join(base, "work")
+	symlinkTo(t, real, link)
+	missing := filepath.Join(base, "not-there")
+	f := newFixture(t)
+	f.createReqEdit = func(r *team.CreateApprovalRequest) { r.Roots = []string{link, missing + "/"} }
+	p := leadPayloadOf(t, f.create(uid(1)))
+	if want := []string{real, missing}; !reflect.DeepEqual(p.Roots, want) {
+		t.Fatalf("payload roots = %v, want %v (a link resolved, a missing root kept Clean)", p.Roots, want)
+	}
+	if !p.RootsCanonical {
+		t.Fatal("a payload made now must say its roots are canonical")
+	}
+}
+
+// What the user saw on the card is what a decide without edited roots grants: not resolved again. Mutation gate:
+// decide re-resolving the payload's roots → the grant follows the swap to elsewhere (red).
+func TestDecide_UneditedRootsAreTheCardsNotResolvedAgain(t *testing.T) {
+	base := realTemp(t)
+	root := mustMkdir(t, filepath.Join(base, "granted"))
+	elsewhere := mustMkdir(t, filepath.Join(base, "elsewhere"))
+	f := newFixture(t)
+	f.createReqEdit = func(r *team.CreateApprovalRequest) { r.Roots = []string{root} }
+	f.create(uid(1))
+	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	symlinkTo(t, elsewhere, root) // swapped between the card and the tap
+	f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(&team.Grant{MaxMembers: 2}))
+	tm, ok, err := f.m.store.LiveTeamByLead("sid-1")
+	if err != nil || !ok {
+		t.Fatalf("team: ok=%v err=%v", ok, err)
+	}
+	if !reflect.DeepEqual(tm.Grant.Roots, []string{root}) || !tm.Grant.RootsCanonical {
+		t.Fatalf("grant = %+v, want roots [%s] canonical", tm.Grant, root)
+	}
+	if underGrant(elsewhere, tm.Grant) {
+		t.Fatal("a root swapped for a symlink after the card admits the link's target")
+	}
+}
+
+// The App always sends grant.roots, edited or not (codex R1 P1). A root it sends back unchanged is the card's, not
+// resolved again; one it added is resolved. Mutation gate: decide resolving every root it is sent → the swapped root
+// follows the link (red).
+func TestDecide_RootsSentBackUnchangedAreNotResolvedAgain(t *testing.T) {
+	base := realTemp(t)
+	root := mustMkdir(t, filepath.Join(base, "granted"))
+	elsewhere := mustMkdir(t, filepath.Join(base, "elsewhere"))
+	real := mustMkdir(t, filepath.Join(base, "x", "work"))
+	link := filepath.Join(base, "work")
+	symlinkTo(t, real, link)
+	f := newFixture(t)
+	f.createReqEdit = func(r *team.CreateApprovalRequest) { r.Roots = []string{root} }
+	f.create(uid(1))
+	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	symlinkTo(t, elsewhere, root)
+	f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(&team.Grant{MaxMembers: 2, Roots: []string{root + "/", link}}))
+	tm, ok, _ := f.m.store.LiveTeamByLead("sid-1")
+	if !ok || !reflect.DeepEqual(tm.Grant.Roots, []string{root, real}) || !tm.Grant.RootsCanonical {
+		t.Fatalf("grant = %+v ok=%v, want roots [%s %s] canonical", tm.Grant, ok, root, real)
+	}
+	if underGrant(elsewhere, tm.Grant) {
+		t.Fatal("a root sent back unchanged was resolved again and follows the swap")
+	}
+}
+
+// Roots the App edited are resolved at the tap. Mutation gate: no canonicalRoots in decide → the link is stored (red).
+func TestDecide_EditedRootsAreResolved(t *testing.T) {
+	base := realTemp(t)
+	real := mustMkdir(t, filepath.Join(base, "x", "work"))
+	link := filepath.Join(base, "work")
+	symlinkTo(t, real, link)
+	f := newFixture(t)
+	f.create(uid(1))
+	f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(&team.Grant{MaxMembers: 2, Roots: []string{link}}))
+	tm, ok, _ := f.m.store.LiveTeamByLead("sid-1")
+	if !ok || !reflect.DeepEqual(tm.Grant.Roots, []string{real}) || !tm.Grant.RootsCanonical {
+		t.Fatalf("grant = %+v ok=%v, want roots [%s] canonical", tm.Grant, ok, real)
+	}
+	if !underGrant(real, tm.Grant) {
+		t.Fatal("the resolved root admits nothing")
+	}
+}
+
+// A pending approval made before this version has Clean-only roots in its payload: approved unedited, its grant is a
+// legacy one (not canonical), so its symlinked root keeps working.
+func TestDecide_LegacyPayloadStaysLegacy(t *testing.T) {
+	base := realTemp(t)
+	real := mustMkdir(t, filepath.Join(base, "x", "work"))
+	link := filepath.Join(base, "work")
+	symlinkTo(t, real, link)
+	f := newFixture(t)
+	f.create(uid(1))
+	old, _ := json.Marshal(map[string]any{"reason": "r", "max_members": 3, "roots": []string{link}, "team_name": "", "team_label": ""})
+	if _, err := f.m.store.db.Exec(`UPDATE approval_requests SET payload_json = ? WHERE id = ?`, string(old), uid(1)); err != nil {
+		t.Fatal(err)
+	}
+	f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(nil))
+	tm, ok, _ := f.m.store.LiveTeamByLead("sid-1")
+	if !ok || tm.Grant.RootsCanonical || !reflect.DeepEqual(tm.Grant.Roots, []string{link}) {
+		t.Fatalf("grant = %+v ok=%v, want legacy roots [%s]", tm.Grant, ok, link)
+	}
+	if !underGrant(real, tm.Grant) {
+		t.Fatal("a legacy grant's symlinked root stopped admitting its target")
+	}
+}
+
+// The same, through the App, which sends the roots back unchanged, with one root added (codex attack). The request is an
+// older daemon's, so its roots are not known to be real: at the tap every root is resolved and the grant is canonical
+// whole, not downgraded to legacy for the added root's sake. Mutation gate: a root of a legacy request kept verbatim →
+// the link is stored in a canonical grant and stops admitting (red); the grant staying legacy → the added root is
+// followed through a later swap (red).
+func TestDecide_LegacyPayloadSentBackIsResolvedWhole(t *testing.T) {
+	base := realTemp(t)
+	real := mustMkdir(t, filepath.Join(base, "x", "work"))
+	link := filepath.Join(base, "work")
+	symlinkTo(t, real, link)
+	added := mustMkdir(t, filepath.Join(base, "added"))
+	elsewhere := mustMkdir(t, filepath.Join(base, "elsewhere"))
+	f := newFixture(t)
+	f.create(uid(1))
+	old, _ := json.Marshal(map[string]any{"reason": "r", "max_members": 3, "roots": []string{link}, "team_name": "", "team_label": ""})
+	if _, err := f.m.store.db.Exec(`UPDATE approval_requests SET payload_json = ? WHERE id = ?`, string(old), uid(1)); err != nil {
+		t.Fatal(err)
+	}
+	f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(&team.Grant{MaxMembers: 3, Roots: []string{link, added}}))
+	tm, ok, _ := f.m.store.LiveTeamByLead("sid-1")
+	if !ok || !tm.Grant.RootsCanonical || !reflect.DeepEqual(tm.Grant.Roots, []string{real, added}) || !underGrant(real, tm.Grant) {
+		t.Fatalf("grant = %+v ok=%v, want canonical roots [%s %s]", tm.Grant, ok, real, added)
+	}
+	if err := os.RemoveAll(added); err != nil {
+		t.Fatal(err)
+	}
+	symlinkTo(t, elsewhere, added)
+	if underGrant(elsewhere, tm.Grant) {
+		t.Fatal("the added root was swapped for a symlink and still admits its target")
+	}
+}
+
+// The spawn rule. Mutation gate: underGrant without the live-root filter → the swapped root admits (red).
+func TestUnderGrant_CanonicalRootMustStillBeItself(t *testing.T) {
+	base := realTemp(t)
+	root := mustMkdir(t, filepath.Join(base, "granted"))
+	inside := mustMkdir(t, filepath.Join(root, "p"))
+	elsewhere := mustMkdir(t, filepath.Join(base, "elsewhere"))
+	g := team.Grant{Roots: []string{root}, RootsCanonical: true}
+	if !underGrant(inside, g) {
+		t.Fatal("a directory under an unchanged canonical root is refused")
+	}
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	symlinkTo(t, elsewhere, root)
+	if underGrant(elsewhere, g) {
+		t.Fatal("a canonical root replaced by a symlink admits the link's target")
+	}
+	if !underGrant(elsewhere, team.Grant{Roots: []string{root}}) { // legacy: resolved at spawn, as before
+		t.Fatal("a legacy grant must keep its spawn-time resolution")
+	}
+}

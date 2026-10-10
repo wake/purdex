@@ -157,13 +157,17 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if waitS > team.MaxWaitS {
 		waitS = team.MaxWaitS
 	}
-	lead := team.LeadPayload{Reason: reason, MaxMembers: normaliseMaxMembers(req.MaxMembers, team.DefaultMaxMembers), Roots: roots, TeamName: teamName, TeamLabel: teamLabel}
+	lead := team.LeadPayload{Reason: reason, MaxMembers: normaliseMaxMembers(req.MaxMembers, team.DefaultMaxMembers), Roots: canonicalRoots(roots), RootsCanonical: true, TeamName: teamName, TeamLabel: teamLabel}
 	payload, err := json.Marshal(lead)
 	if err != nil {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "encode payload: "+err.Error(), nil)
 		return
 	}
-	hashed, err := json.Marshal(hashPayload(lead))
+	// The request hash covers the roots as asked (Clean), not as resolved: a retry of the same request must still match
+	// after a link on the way changed.
+	hp := hashPayload(lead)
+	hp.Roots = roots
+	hashed, err := json.Marshal(hp)
 	if err != nil {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "encode payload: "+err.Error(), nil)
 		return
