@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -124,7 +125,10 @@ func (m *FsModule) handleRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	f, err := os.Open(path)
+	// O_NONBLOCK keeps open(2) on a FIFO without a writer from blocking this
+	// goroutine forever; it has no effect on regular files. The regular-file
+	// check below runs on the same fd, so there is no TOCTOU window.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		jsonError(w, err.Error(), http.StatusNotFound)
 		return
@@ -138,6 +142,10 @@ func (m *FsModule) handleRead(w http.ResponseWriter, r *http.Request) {
 	}
 	if info.IsDir() {
 		jsonError(w, "path is a directory", http.StatusBadRequest)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		jsonError(w, "path is not a regular file", http.StatusBadRequest)
 		return
 	}
 	if info.Size() > maxReadSize {
