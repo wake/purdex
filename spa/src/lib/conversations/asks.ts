@@ -81,20 +81,24 @@ export const REPLY_MAX_RUNES = 4000
 
 export type ReplyRefusal = 'empty' | 'too_long' | 'bad_characters'
 
-// Control characters but \n and \t; bidi controls; U+2028/2029; format characters (Cf) except ZWNJ/ZWJ and emoji tags.
-// Built from code point ranges so no invisible character sits in this source file.
-const FORBIDDEN_RANGES: ReadonlyArray<readonly [number, number]> = [
-  [0x00, 0x08], [0x0b, 0x1f], [0x7f, 0x9f], [0xad, 0xad], [0x61c, 0x61c], [0x180e, 0x180e], [0x200b, 0x200b],
-  [0x200e, 0x200f], [0x2028, 0x202e], [0x2060, 0x2064], [0x2066, 0x2069], [0xfeff, 0xfeff], [0xfff9, 0xfffb],
-]
-const forbidden = (cp: number): boolean => FORBIDDEN_RANGES.some(([a, b]) => cp >= a && cp <= b)
+// Refused, as the daemon does: control characters but \n and \t, U+2028/2029, and every Unicode format character (Cf: the bidi
+// controls, U+200B, U+FEFF, U+0600…) except ZWNJ / ZWJ and the emoji tag characters. The Cf test is the Unicode property, not a
+// hand-kept list, so the two sides cannot drift on a character neither listed.
+const FORMAT_CHAR = /^\p{Cf}$/u
+function forbidden(ch: string): boolean {
+  const cp = ch.codePointAt(0)!
+  if (cp === 0x09 || cp === 0x0a) return false
+  if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || cp === 0x2028 || cp === 0x2029) return true
+  if (cp === 0x200c || cp === 0x200d || (cp >= 0xe0020 && cp <= 0xe007f)) return false
+  return FORMAT_CHAR.test(ch)
+}
 
 /** The trimmed reply, or why it cannot be sent. */
 export function checkReply(text: string): { ok: true; text: string } | { ok: false; reason: ReplyRefusal } {
   const t = text.trim()
   if (t === '') return { ok: false, reason: 'empty' }
   if ([...t].length > REPLY_MAX_RUNES) return { ok: false, reason: 'too_long' }
-  if ([...t].some((c) => forbidden(c.codePointAt(0)!))) return { ok: false, reason: 'bad_characters' }
+  if ([...t].some(forbidden)) return { ok: false, reason: 'bad_characters' }
   return { ok: true, text: t }
 }
 

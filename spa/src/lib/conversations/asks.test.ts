@@ -92,9 +92,15 @@ describe('checkReply (mirrors the daemon: ask-chat spec §2.1)', () => {
   it('counts runes, not UTF-16 units', () => {
     expect(checkReply('😀'.repeat(REPLY_MAX_RUNES))).toMatchObject({ ok: true })
   })
-  it.each([['carriage return', 'a\rb'], ['NUL', 'a\u0000b'], ['bidi override', 'a‮b'], ['bidi isolate', 'a⁦b'], ['line separator', 'a b'],
-    ['zero-width space', 'a​b'], ['BOM', 'a﻿b'], ['DEL', 'a\u007Fb']])('refuses %s', (_n, text) => {
+  it.each([
+    ['carriage return', 'a\rb'], ['NUL', 'a\u0000b'], ['bidi override', 'a\u202Eb'], ['bidi isolate', 'a\u2066b'], ['line separator', 'a\u2028b'],
+    ['zero-width space', 'a\u200Bb'], ['BOM', 'a\uFEFFb'], ['DEL', 'a\u007Fb'], ['Arabic number sign (Cf)', 'a\u0600b'],
+    ['soft hyphen (Cf)', 'a\u00ADb'], ['word joiner (Cf)', 'a\u2060b'], ['C1 control', 'a\u0085b'],
+  ])('refuses %s', (_n, text) => {
     expect(checkReply(text)).toEqual({ ok: false, reason: 'bad_characters' })
+  })
+  it('allows the emoji tag characters (a flag by subdivision)', () => {
+    expect(checkReply('\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}')).toMatchObject({ ok: true })
   })
   it('allows ZWJ and ZWNJ (emoji, Persian)', () => {
     expect(checkReply('👨‍👩')).toMatchObject({ ok: true })
