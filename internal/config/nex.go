@@ -97,6 +97,16 @@ func (n *NexConfig) Validate(home string) error {
 		return fmt.Errorf("nex.repo_roots / nex.service_roots: at least one root required when nex.enabled")
 	}
 
+	// nexen refuses an opt-in profile as the ceiling or the default (it belongs in extra_profiles); say so on PUT instead of
+	// persisting a section the next boot cannot assemble.
+	for _, f := range []struct{ key, value string }{
+		{"max_profile", n.Sandbox.MaxProfile},
+		{"default_profile", n.Sandbox.DefaultProfile},
+	} {
+		if sandbox.IsExtraProfile(f.value) {
+			return fmt.Errorf("nex.sandbox.%s: %q is an opt-in profile outside the clamp order; list it in nex.sandbox.extra_profiles instead", f.key, f.value)
+		}
+	}
 	if n.Sandbox.MaxProfile != "" && !sandbox.ValidName(n.Sandbox.MaxProfile) {
 		return fmt.Errorf("nex.sandbox.max_profile: unknown profile %q", n.Sandbox.MaxProfile)
 	}

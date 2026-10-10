@@ -66,6 +66,14 @@ func mergeNex(current config.NexConfig, body json.RawMessage) (config.NexConfig,
 	if err := json.Unmarshal(body, &next); err != nil {
 		return config.NexConfig{}, fmt.Errorf("invalid nex: %w", err)
 	}
+	// "sandbox": null clears the whole section (json leaves a struct field alone on null, which would keep only the pre-filled
+	// extra_profiles beside an emptied ceiling and default).
+	var probe struct {
+		Sandbox json.RawMessage `json:"sandbox"`
+	}
+	if json.Unmarshal(body, &probe) == nil && string(probe.Sandbox) == "null" {
+		next.Sandbox = config.NexSandboxConfig{}
+	}
 	return next, nil
 }
 
