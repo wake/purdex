@@ -52,7 +52,10 @@ function seed() {
     h === M ? ok(alias, 'air', AIR_HOST_ID) : ok(alias, 'mini-lab', 'mini-lab:278cbm'))
   vi.mocked(api.updatePeerHost).mockImplementation(async (_h, _a, patch) => {
     airRow = { ...airRow, ...(patch.allow_team !== undefined ? { allow_team: patch.allow_team } : {}),
-      ...(patch.team_roots !== undefined ? { team_roots: patch.team_roots } : {}) }
+      ...(patch.team_roots !== undefined ? { team_roots: patch.team_roots } : {}),
+      ...(patch.remove_team_roots || patch.add_team_roots
+        ? { team_roots: [...(airRow.team_roots ?? []).filter((x) => !patch.remove_team_roots?.includes(x)),
+          ...(patch.add_team_roots ?? []).filter((x) => !(airRow.team_roots ?? []).includes(x))] } : {}) }
     return airRow
   })
   vi.mocked(api.listRemoteMembers).mockResolvedValue([])
@@ -185,6 +188,63 @@ describe('PeersSection — team consent (allow_team / team_roots)', () => {
     expect(within(row).getByTestId('peer-team-root-add')).toBeDisabled()
     release()
     await waitFor(() => expect(within(screen.getByTestId('peer-row-air')).getByTestId('peer-team-toggle')).toBeEnabled())
+  })
+
+  describe('atomic add / remove (daemon with team_roots_rev)', () => {
+    it('add sends add_team_roots only, no team_roots', async () => {
+      airRow = { ...AIR, team_roots: ['/a'], team_roots_rev: 3 }
+      const row = await openRow()
+      fireEvent.change(within(row).getByTestId('peer-team-root-input'), { target: { value: '/b' } })
+      fireEvent.click(within(row).getByTestId('peer-team-root-add'))
+      await waitFor(() => expect(api.updatePeerHost).toHaveBeenCalledWith(M, 'air', { add_team_roots: ['/b'] }))
+      const patch = vi.mocked(api.updatePeerHost).mock.calls[0][2]
+      expect(patch).not.toHaveProperty('team_roots')
+      expect(patch).not.toHaveProperty('team_roots_rev')
+      await waitFor(() => expect(within(screen.getByTestId('peer-row-air')).getAllByTestId('peer-team-root')).toHaveLength(2))
+    })
+
+    it('remove sends remove_team_roots only, no team_roots', async () => {
+      airRow = { ...AIR, team_roots: ['/a', '/b'], team_roots_rev: 3 }
+      const row = await openRow()
+      fireEvent.click(within(row).getAllByTestId('peer-team-root-remove')[0])
+      await waitFor(() => expect(api.updatePeerHost).toHaveBeenCalledWith(M, 'air', { remove_team_roots: ['/a'] }))
+      const patch = vi.mocked(api.updatePeerHost).mock.calls[0][2]
+      expect(patch).not.toHaveProperty('team_roots')
+      expect(patch).not.toHaveProperty('team_roots_rev')
+    })
+
+    it('an add already present / a remove already gone in the latest row sends nothing', async () => {
+      airRow = { ...AIR, team_roots: ['/a'], team_roots_rev: 3 }
+      const row = await openRow()
+      airRow = { ...airRow, team_roots: ['/a', '/b'] }
+      fireEvent.change(within(row).getByTestId('peer-team-root-input'), { target: { value: '/b' } })
+      fireEvent.click(within(row).getByTestId('peer-team-root-add'))
+      await waitFor(() => expect(within(screen.getByTestId('peer-row-air')).getByTestId('peer-team-toggle')).toBeEnabled())
+      expect(api.updatePeerHost).not.toHaveBeenCalled()
+    })
+
+    it('a 409 team_roots_conflict shows the error and the row is reloaded', async () => {
+      airRow = { ...AIR, team_roots: ['/a'], team_roots_rev: 3 }
+      vi.mocked(api.updatePeerHost).mockRejectedValue(new HostApiError(409, 'Conflict', 'team_roots_conflict'))
+      const row = await openRow()
+      fireEvent.change(within(row).getByTestId('peer-team-root-input'), { target: { value: '/b' } })
+      fireEvent.click(within(row).getByTestId('peer-team-root-add'))
+      expect(await within(row).findByTestId('peer-team-roots-error')).toHaveTextContent('team_roots_conflict')
+      expect(vi.mocked(api.listPeerHosts).mock.calls.length).toBeGreaterThan(2)
+    })
+  })
+
+  describe('legacy daemon without team_roots_rev keeps the whole-set write', () => {
+    it('add and remove still send team_roots', async () => {
+      airRow = { ...AIR, team_roots: ['/a'] }
+      const row = await openRow()
+      fireEvent.change(within(row).getByTestId('peer-team-root-input'), { target: { value: '/b' } })
+      fireEvent.click(within(row).getByTestId('peer-team-root-add'))
+      await waitFor(() => expect(api.updatePeerHost).toHaveBeenLastCalledWith(M, 'air', { team_roots: ['/a', '/b'] }))
+      await waitFor(() => expect(within(screen.getByTestId('peer-row-air')).getAllByTestId('peer-team-root')).toHaveLength(2))
+      fireEvent.click(within(screen.getByTestId('peer-row-air')).getAllByTestId('peer-team-root-remove')[0])
+      await waitFor(() => expect(api.updatePeerHost).toHaveBeenLastCalledWith(M, 'air', { team_roots: ['/b'] }))
+    })
   })
 
   describe('turning off while that peer has live members', () => {
