@@ -199,6 +199,23 @@ func (m *Module) busyNoticeOnce(op team.RelayOp, mr memberRow) {
 		if !ok || t.EndedAt != 0 {
 			return // no live team to tell: the mark stays, there is nothing to retry
 		}
+		// This goroutine runs after the sweep judged: the member may have claimed, or its turn may have ended, since.
+		// A notice that would be false is dropped and its mark stays (it is not retried).
+		cur, ok, err := m.store.GetRelayOp(op.ID)
+		if err != nil {
+			m.logf("[team] busy notice of op %s: %v", op.ID, err)
+			undo()
+			return
+		}
+		if !ok || cur.State != team.RelayRequested {
+			return
+		}
+		if m.status == nil {
+			return
+		}
+		if status, known := m.status.AgentStatus(mr.TmuxSession); !known || (status != agentRunning && status != agentWaiting) {
+			return
+		}
 		address, _ := m.memberNoticeName(mr)
 		if !m.noticeToLead(mr, t, fmt.Sprintf(team.RelayBusyNoticeFmt, address, strings.TrimPrefix(mr.Ref, "_")), "busy notice") {
 			undo()
