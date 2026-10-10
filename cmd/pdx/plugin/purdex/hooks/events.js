@@ -86,6 +86,7 @@ const ev = {
   scheduled: false, // a flush timer (the 150 ms one, or a backoff) is pending
   backoffMs: 0,
   turnId: '', // the running main turn
+  closed: [], // the ids of the last few main turns that ended (see rememberClosed)
   // tool_use_id → 'permission' | 'question': what waits on the person. A question
   // (AskUserQuestion / ExitPlanMode) leaves at its tool.end; a permission ask leaves too
   // when its ToolUse row starts running (tool.approved).
@@ -707,6 +708,14 @@ function withAgent(data, agentId) {
   return data
 }
 
+// rememberClosed keeps the ids of the last few main turns that ended: positive evidence that a turn.complete naming one of
+// them, arriving after the next turn began, is late and must not end the running one.
+function rememberClosed(turnId) {
+  if (!turnId || ev.closed.includes(turnId)) return
+  ev.closed.push(turnId)
+  if (ev.closed.length > 8) ev.closed.shift()
+}
+
 function turnStarted($, e) {
   if (!ev.on) return
   ev.turnId = e.turnId // turn.start has no agentId: it is always the main conversation's
@@ -718,8 +727,9 @@ function turnCompleted($, e) {
   if (!ev.on) return
   // A completion that names an earlier turn (the engine's own, arriving after the mod closed that turn itself and a new
   // one began) does not end the one now running.
-  const late = !e.agentId && !!ev.turnId && !!e.turnId && e.turnId !== ev.turnId
+  const late = !e.agentId && !!e.turnId && e.turnId !== ev.turnId && ev.closed.includes(e.turnId)
   if (!e.agentId && !late) {
+    rememberClosed(e.turnId)
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
@@ -736,6 +746,7 @@ function turnCompleted($, e) {
 // running: a turn.complete that did arrive, or a new turn, has already moved on.
 function turnAborted($, turnId) {
   if (!ev.on || !turnId || ev.turnId !== turnId) return
+  rememberClosed(turnId)
   ev.turnId = ''
   ev.asks.clear()
   enqueue($, 'turn.complete', { turn_id: turnId, reason: 'aborted', duration_ms: 0, aborted: true })
