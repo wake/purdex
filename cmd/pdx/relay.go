@@ -293,7 +293,7 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 func runRelayAsk(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
 	fs := flag.NewFlagSet("pdx relay ask", flag.ContinueOnError)
 	var req team.RelayAskRequest
-	used := fs.Int("used", -1, "")
+	used := fs.Float64("used", -1, "") // a decimal, as begin takes it: the mod's percent is fractional
 	fs.StringVar(&req.SessionID, "session", "", "")
 	fs.IntVar(&req.Window, "window", -1, "") // -1: not given (the grammar requires it)
 	fs.StringVar(&req.RequestID, "request-id", "", "")
@@ -306,8 +306,8 @@ func runRelayAsk(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
 	case strings.TrimSpace(req.SessionID) == "":
 		return relayUsageErr(stderr, "--session 不能為空")
-	case *used < 0 || *used > 100:
-		return relayUsageErr(stderr, "--used 必須是 0 到 100 之間的整數")
+	case math.IsNaN(*used) || math.IsInf(*used, 0) || *used < 0 || *used > 100:
+		return relayUsageErr(stderr, "--used 必須是 0 到 100 之間的數字")
 	case req.Window < 0:
 		return relayUsageErr(stderr, "--window <n> 是必要的，且不能是負數")
 	}
@@ -316,7 +316,7 @@ func runRelayAsk(ctx context.Context, args []string, stdout, stderr io.Writer, c
 	} else if u, err := uuid.Parse(req.RequestID); err != nil || u.Version() != 4 {
 		return relayUsageErr(stderr, "--request-id 必須是 UUID v4")
 	}
-	req.UsedPct = *used
+	req.UsedPct = int(math.Floor(*used)) // the wire carries whole percent points
 	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
 	if code != ExitOK {
 		return code
