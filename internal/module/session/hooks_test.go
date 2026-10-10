@@ -122,9 +122,9 @@ func TestHandleTmuxHookSetup_InvalidAction(t *testing.T) {
 // --- Hook changes serialised with Stop (#1473 spec D3.1, review A2) ---
 
 // An install already in flight when Stop arrives must finish before Stop's
-// remove, and nothing may be set after Stop returns: the daemon must not
-// leave hooks behind that point at a wait-for nobody listens to.
-func TestEnsureHooks_ConcurrentStop_NoSetAfterRemove(t *testing.T) {
+// return, and nothing may be set after Stop returns: the daemon must not
+// install behind a stopped daemon.
+func TestEnsureHooks_ConcurrentStop_NoSetAfterStop(t *testing.T) {
 	mod, fake, _ := newHookTestModule(t, true)
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
