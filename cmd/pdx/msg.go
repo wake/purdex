@@ -17,11 +17,10 @@ import (
 	ipeers "github.com/wake/purdex/internal/peers"
 )
 
-// msgSendTimeout is the client timeout for `pdx msg send`'s POST
-// /api/peers/send — longer than peersRequestTimeout because the daemon's
-// handler makes its own outbound call to a peer host (up to
-// ipeers.InterDaemonTimeout) before answering.
-const msgSendTimeout = 15 * time.Second
+// msgSendTimeout is the client timeout for `pdx msg send`'s POST /api/peers/send — longer than peersRequestTimeout because the
+// daemon's handler fetches the peer's inventory and makes its own outbound call (ipeers.InterDaemonTimeout) before answering; it
+// outlasts that whole worst case (ipeers.SenderWorstCase), so a delivery that landed is never reported as a timeout (#1009).
+const msgSendTimeout = ipeers.SendRequestTimeout
 
 // msgDefaultLogTail is `pdx msg log`'s default --tail, mirroring
 // internal/module/peers.defaultLogTail (cmd/pdx must not import that
@@ -352,8 +351,12 @@ func runMsgSend(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		return 1
 	}
 
+	mode := sanitizeCell(sr.EffectiveMode)
+	if sr.EffectiveMode == "" { // delivery_uncertain with no answer from the receiver (#1009): the mode it applied is not known
+		mode = "unknown"
+	}
 	line := fmt.Sprintf("sent %s → %s (%s, mode %s",
-		sanitizeCell(sr.MsgID), sanitizeCell(sr.ToAddress), sanitizeCell(sr.Result), sanitizeCell(sr.EffectiveMode))
+		sanitizeCell(sr.MsgID), sanitizeCell(sr.ToAddress), sanitizeCell(sr.Result), mode)
 	if sr.OneWay {
 		line += ", one-way"
 	}
