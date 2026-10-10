@@ -2,7 +2,7 @@
 // conversation workbook share it. 目前狀況 + 紀錄 (v1); v2 adds 待辦, the 紀錄｜待辦 switch and 重整. Data comes only from the
 // workbook store (through `useWorkbookViewing`, the one place that touches the view count); which seat a drill shows lives in
 // `useTeamUiStore.teamDrill`, and the view's own state (tab, scroll, open groups) in lib/workbook/view-memory.ts.
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { CaretLeft } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
@@ -40,13 +40,19 @@ function WorkbookFrame({ teamKey, hostId, sessionId, title, trailing, wb }: Prop
   const tab = v2 ? savedTab : 'log' // a v1 daemon has no 待辦 (and a remembered 待辦 does not outlive the capability)
   const [highlightId, setHighlightId] = useState<number | null>(null)
   const [notFound, setNotFound] = useState(false)
-  const switchTab = (next: WorkbookTab) => { setHighlightId(null); setNotFound(false); setTab(next) }
+  // Navigation intent: every tab switch and every jump takes a new number, and a jump's answer lands only if its number is still
+  // the current one (a later click, a tab switch, or the view going away all make it stale). A new conversation re-keys the frame.
+  const intent = useRef(0)
+  useEffect(() => () => { intent.current++ }, [])
+  const switchTab = (next: WorkbookTab) => { intent.current++; setHighlightId(null); setNotFound(false); setTab(next) }
   /** A done todo → the entry that closed it: 紀錄, paged in if need be, scrolled to and marked; else say it is not there. */
   async function jump(todo: WorkbookTodo) {
     const id = todo.closedEntryId
     switchTab('log')
     if (wb.convKey === null || !(id > 0)) { setNotFound(true); return } // 0 = no closing entry (an open todo's)
+    const mine = intent.current
     const ok = await useWorkbookStore.getState().loadUntil(hostId, wb.convKey, id)
+    if (intent.current !== mine) return
     if (ok) setHighlightId(id)
     else setNotFound(true)
   }

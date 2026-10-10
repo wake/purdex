@@ -171,6 +171,56 @@ describe('a done todo jumps into 紀錄', () => {
     expect(screen.getByTestId('workbook-log')).toBeTruthy()
     expect(screen.getByText('找不到這筆紀錄')).toBeTruthy()
   })
+  describe('overlapping jumps', () => {
+    const deferred = () => { let res: (v: boolean) => void = () => {}; const p = new Promise<boolean>((r) => { res = r }); return { p, res } }
+    const setup = () => {
+      seed({ entries: [entry(9, { thing: 'T9' }), entry(8, { thing: 'T8' })], oldestId: 8, todos: book({ done: [doneTodo(2, 9), doneTodo(1, 8)] }) })
+      const waits: Record<number, ReturnType<typeof deferred>> = { 9: deferred(), 8: deferred() }
+      useWorkbookStore.setState({ loadUntil: vi.fn((_h: string, _k: string, id: number) => waits[id].p) })
+      return waits
+    }
+    const rowOf = (todoId: number) => document.querySelector(`[data-todo-id="${todoId}"]`) as HTMLElement
+    const marked = () => [...document.querySelectorAll('[data-highlighted="true"]')].map((e) => e.getAttribute('data-entry-id'))
+
+    it('the last click wins even when an earlier jump answers after it', async () => {
+      const w = setup(); mount(); await settle()
+      fireEvent.click(tab('待辦'))
+      fireEvent.click(rowOf(2)) // → entry 9
+      fireEvent.click(tab('待辦'))
+      fireEvent.click(rowOf(1)) // → entry 8 (the later intent)
+      await act(async () => { w[8].res(true) })
+      await act(async () => { w[9].res(true) }) // the older answer lands last
+      expect(marked()).toEqual(['8'])
+    })
+    it('a stale not-found does not show over a later jump', async () => {
+      const w = setup(); mount(); await settle()
+      fireEvent.click(tab('待辦'))
+      fireEvent.click(rowOf(2))
+      fireEvent.click(tab('待辦'))
+      fireEvent.click(rowOf(1))
+      await act(async () => { w[8].res(true) })
+      await act(async () => { w[9].res(false) })
+      expect(screen.queryByText('找不到這筆紀錄')).toBeNull()
+    })
+    it('switching tabs while a jump is out drops its answer', async () => {
+      const w = setup(); mount(); await settle()
+      fireEvent.click(tab('待辦'))
+      fireEvent.click(rowOf(2))
+      fireEvent.click(tab('待辦')) // the reader went back to 待辦
+      fireEvent.click(tab('紀錄'))
+      await act(async () => { w[9].res(true) })
+      expect(marked()).toEqual([])
+      expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+    })
+    it('an answer after the view is gone does nothing (and does not throw)', async () => {
+      const w = setup(); const r = mount(); await settle()
+      fireEvent.click(tab('待辦'))
+      fireEvent.click(rowOf(2))
+      r.unmount()
+      await act(async () => { w[9].res(true) })
+      expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+    })
+  })
   it('a closing entry id of 0 (an open todo\'s) never calls loadUntil', async () => {
     seedDone(0)
     const loadUntil = vi.fn().mockResolvedValue(true)
