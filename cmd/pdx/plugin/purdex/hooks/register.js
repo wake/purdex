@@ -68,6 +68,7 @@ const HOLD_SLEEP = ['/bin/sleep', '5'] // the prompt hold's own `$` call, again 
 const HOLD_SLEEP_TIMEOUT_MS = 10_000 // its $.process.run bound
 const HOLD_MAX_MS = 660_000 // a held prompt waits for the request's answer at most 11 min: its 10 min deadline and slack
 const BEGIN_HOLD_MS = 40_000 // … and for begin's answer at most 40 s: begin's own bound (CALL_TIMEOUT_MS, 35 s) and slack
+const RELAY_MOD_RELOADED = 'mod_reloaded' // the failed reason of an op that was claimed / writing when the mod reloaded (#2441)
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
 const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
 const MAX_CONTROLS = 8 // verified (seen) control ops kept at once; a forged marker is refused by `seen` and never kept
@@ -134,6 +135,7 @@ let holding = 0
 // begin or a hello sent before the reset never answers for one sent after it.
 function resetState() {
   letGo()
+  waitingRecovery = undefined // a recovery waiting for the old conversation to be free is that conversation's
   Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq, askEpoch: s.askEpoch + 1 })
 }
 
@@ -213,6 +215,7 @@ async function hello($, seq) {
     }
     if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
     if (h.min_growth > 0) s.minGrowth = h.min_growth
+    if (h.active_relay && typeof h.active_relay === 'object') recoverLater($, h.active_relay, sid)
   } finally {
     if (seq === s.helloSeq) s.helloBusy = false
   }
@@ -1061,6 +1064,112 @@ async function checkHandoff($, p) {
   return { ok: text.length > 200 && missing.length === 0, missing }
 }
 
+// startClear is the step after the handoff file passed its check: the lock down, then the mod's own /clear, from a timer.
+// The write turn's end takes it, and so does a mod that reloaded after `written` (recover).
+function startClear($, p) {
+  later($, STEP_MS, async () => {
+    if (s.pending !== p || s.state !== 'clearing') return
+    await unlockRelay($, p) // before the /clear, so the new conversation never starts under the lock
+    if (s.pending !== p || s.state !== 'clearing') return
+    try {
+      await $.command.run({ command: 'clear' })
+    } catch (err) {
+      giveUp($, p, 'clearing', 'cancelled', 'abandoned', '/clear: ' + String(err)) // written → cancelled
+    }
+  })
+}
+
+// ---- a mod that reloaded in the middle of a relay (#2441) ----
+// `pdx setup` rewrites the mod folder and the mod reloads with an empty memory: the relay it was running has no
+// state here, and nothing would /clear. hello's answer names the session's open op (claimed / writing / written;
+// earlier states have their own paths, and a daemon without the field changes nothing). `written`: the handoff file
+// is on disk, so go on as the write turn's end would (check, lock down, /clear, then cleared and the seed). `claimed`
+// / `writing`: the write was under way and its prompt, nonce and git facts died with the old mod; re-sending it could
+// double a prompt the model is already answering, so the op is failed with a reason the lead can read
+// (`mod_reloaded`) and the lead relays again.
+const recovered = new Set() // op ids this mod instance took over (or ended): a hello that still carries the op does not run it again
+const recovering = new Set() // op ids with a recovery scheduled or running: one at a time
+let waitingRecovery // { active, sid }: a recovery that found the conversation busy (a turn running, the state taken): the next turn.complete runs it again
+
+function recoverLater($, active, sid) {
+  const op = active.op
+  if (!op || typeof op !== 'object' || typeof op.id !== 'string' || op.id === '' || recovered.has(op.id) || recovering.has(op.id)) return
+  if (op.state !== 'written' && op.state !== 'claimed' && op.state !== 'writing') return
+  recovering.add(op.id)
+  later($, 0, async () => {
+    let busy = false
+    try {
+      busy = (await recover($, active, sid)) === 'retry'
+    } finally {
+      recovering.delete(op.id)
+    }
+    if (busy) waitingRecovery = { active, sid }
+  })
+}
+
+// resumeRecovery runs a recovery that waited for the conversation to be free (turn.complete is where it is). True when it ran.
+function resumeRecovery($) {
+  const w = waitingRecovery
+  if (!w) return false
+  waitingRecovery = undefined
+  recoverLater($, w.active, w.sid)
+  return true
+}
+
+// recoverFail ends the op the old mod left: its relay lock down first (fail-open, as at every other end), then the
+// terminal report (a report that does not land is re-sent at the next turn end, as any other).
+async function recoverFail($, op, sid, reason, why) {
+  recovered.add(op.id)
+  log($, 'relay ' + op.id + ' ' + why)
+  await unlockRelay($, { op, oldSession: sid, locked: true })
+  report($, op.id, 'failed', ['--error', reason])
+}
+
+// recover answers 'retry' when the conversation is busy with something else right now (a turn, the state taken) and the
+// op is still waiting for its owner, 'done' when it took the op over or ended it, 'gone' when the session moved on (the
+// op is not that conversation's to finish any more).
+async function recover($, active, sid) {
+  const op = active.op
+  const sameSession = async () => (await $.session.id().catch(() => undefined)) === sid
+  // what must be true to act: nothing of the relay in this mod, and (for the /clear) no turn running
+  const verdict = async (needsNoTurn) => {
+    if (!(await sameSession())) return 'gone'
+    if (s.pending && s.pending.op.id === op.id) return 'gone' // the member claim path took this very op: it owns it
+    if (s.state !== 'idle' || s.pending || (needsNoTurn && s.turnRunning)) return 'retry'
+    return 'ok'
+  }
+  let v = await verdict(op.state === 'written')
+  if (v !== 'ok') return v === 'retry' ? 'retry' : 'gone'
+  if (op.state !== 'written') {
+    await recoverFail($, op, sid, RELAY_MOD_RELOADED, 'was ' + op.state + ' when the mod reloaded: reported failed (mod_reloaded)')
+    return 'done'
+  }
+  const p = {
+    op, requestId: op.request_id || undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: '',
+    nonce: undefined, nonceState: undefined, who: '', // the seed names neither the lead nor the team (the write prompt did): only the old ref, the path and the tasks
+    answer: deferred(), locked: true, // the old mod may have left the relay lock up: unlockRelay lowers it (fail-open) before the /clear
+  }
+  p.answer.resolve('approved')
+  const c = await checkHandoff($, p)
+  if (!c.ok) {
+    v = await verdict(false)
+    if (v !== 'ok') return v === 'retry' ? 'retry' : 'gone'
+    await recoverFail($, op, sid, 'handoff_incomplete', 'was written when the mod reloaded but its file is not complete: reported failed')
+    return 'done'
+  }
+  const u = (await $.session.usage().catch(() => undefined))?.context
+  p.before = u ? usageLine(u) : ''
+  p.who = await whoami($)
+  v = await verdict(true) // everything above was awaited: look again before /clear
+  if (v !== 'ok') return v === 'retry' ? 'retry' : 'gone'
+  recovered.add(op.id)
+  log($, 'relay ' + op.id + ' was written when the mod reloaded: going on to /clear and the seed')
+  s.pending = p
+  s.state = 'clearing'
+  startClear($, p)
+  return 'done'
+}
+
 async function onWriteTurnDone($) {
   const p = s.pending
   s.writeTurnId = undefined // checked once
@@ -1069,16 +1178,7 @@ async function onWriteTurnDone($) {
   if (c.ok) {
     s.state = 'clearing'
     report($, p.op.id, 'written')
-    later($, STEP_MS, async () => {
-      if (s.pending !== p || s.state !== 'clearing') return
-      await unlockRelay($, p) // before the /clear, so the new conversation never starts under the lock
-      if (s.pending !== p || s.state !== 'clearing') return
-      try {
-        await $.command.run({ command: 'clear' })
-      } catch (err) {
-        giveUp($, p, 'clearing', 'cancelled', 'abandoned', '/clear: ' + String(err)) // written → cancelled
-      }
-    })
+    startClear($, p)
     return
   }
   if (s.fixRounds < MAX_FIX_ROUNDS) {
@@ -1199,6 +1299,7 @@ export function register(on) {
       if (s.outbox.length) { s.held.clear(); pump($) } // re-send what did not land (§8.3)
       if (s.pending && s.writeTurnId !== undefined && e.turnId === s.writeTurnId) await onWriteTurnDone($)
       else if (s.pending && s.seedTurnId !== undefined && e.turnId === s.seedTurnId) await onSeedTurnDone($)
+      else if (resumeRecovery($)) { /* the relay a reload left is finished first: no new ask this turn */ }
       else if (s.state === 'idle') await maybeBegin($)
     } catch (err) {
       log($, 'turn.complete failed: ' + String(err))
@@ -1256,6 +1357,7 @@ export function register(on) {
     s.lastAskPct = undefined
     s.askBusy = undefined // an ask still out was the old conversation's: its answer is dropped (epoch), and it holds nothing here
     s.askEpoch++
+    waitingRecovery = undefined // see resetState
     helloLater($)
     return r
   })
