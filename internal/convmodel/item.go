@@ -113,6 +113,9 @@ type UserMessage struct {
 type From struct {
 	Kind string `json:"kind"`
 	Name string `json:"name,omitempty"`
+	// Unverified: the sender is only what the message text says (a row with no peer origin that opens with the peer
+	// wrapper, #2396), not something the transport established. A client should not present it as an authenticated peer.
+	Unverified bool `json:"unverified,omitempty"`
 }
 
 // Image is an image placeholder: the decoded size, never the data.

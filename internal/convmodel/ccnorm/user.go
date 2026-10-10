@@ -75,6 +75,23 @@ func pluginBody(text, name string) string {
 	return strings.TrimSuffix(rest, "\n\n"+pluginFooter)
 }
 
+// cleanName makes a sender name fit to display: control and invisible formatting characters dropped, at most 80 characters.
+// The name of a peer comes from a message attribute, which anyone who can write text can set.
+func cleanName(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if unicode.IsControl(r) || (r >= 0x200B && r <= 0x200F) || (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069) || r == 0xFEFF {
+			continue
+		}
+		if n++; n > 80 {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // pluginAsUser: the row's origin says a plugin submitted the text as the person's own (origin.asUser).
 func pluginAsUser(l *rawLine) bool {
 	o, ok := parseObject(l.Origin)
@@ -138,7 +155,7 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 			o, _ := parseObject(l.Origin)
 			name = o.str("name")
 		}
-		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: name}
+		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: cleanName(name)}
 	case kind == "task-notification":
 		src, text = convmodel.SourceTask, taskText(text)
 	case kind == "scheduled":
@@ -152,11 +169,11 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 		// plugin, not the person's (#2396). It opens its own turn; the frame and the footer are not part of the message.
 		o, _ := parseObject(l.Origin)
 		name := o.str("name")
-		src, text, from = convmodel.SourcePeer, pluginBody(text, name), &convmodel.From{Kind: "plugin", Name: name}
+		src, text, from = convmodel.SourcePeer, pluginBody(text, name), &convmodel.From{Kind: "plugin", Name: cleanName(name)}
 	case humanKind(kind) && leadingPeerWrapper(text):
 		// no peer origin on the row, but the text opens with the peer wrapper (#2396)
 		body, name := peerBody(strings.Replace(text, `<\cross-session-message`, peerOpen, 1))
-		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: name}
+		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: cleanName(name), Unverified: true}
 	case humanKind(kind):
 		var handled bool
 		src, text, handled = n.humanTags(l, off, text)
@@ -302,7 +319,7 @@ func (n *Normalizer) attachmentRow(l *rawLine, off int64) {
 			o, _ := parseObject(a.get("origin"))
 			name = o.str("name")
 		}
-		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: name}
+		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: cleanName(name)}
 	case "task-notification":
 		src, text = convmodel.SourceTask, taskText(text)
 	default:
