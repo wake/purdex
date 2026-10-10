@@ -9,6 +9,7 @@
 //     the edit form is closed by a change of team (an A -> B -> A switch must not bring it back).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NAME_CLICK_DELAY_MS } from './panel-layout'
+import type { PanelMode } from '../../stores/useTeamUiStore'
 
 export interface HeaderHandlers {
   onMouseDown: (e: React.MouseEvent) => void
@@ -18,8 +19,8 @@ export interface HeaderHandlers {
 
 interface Input {
   teamKey: string
-  mode: 'full' | 'line'
-  onSetMode: (mode: 'full' | 'line') => void
+  mode: PanelMode
+  onSetMode: (mode: PanelMode) => void
   /** The lead's host lists `team.edit.v1` and the roster holds the team. */
   canEdit: boolean
 }
@@ -41,7 +42,12 @@ export function useHeaderGestures({ teamKey, mode, onSetMode, canEdit }: Input) 
   }, [])
   useEffect(() => clearTimer, [clearTimer]) // unmount
   useEffect(() => { clearTimer() }, [teamKey, mode, clearTimer]) // another team, or the mode changed under it
-  const toggle = () => latest.current.onSetMode(latest.current.mode === 'full' ? 'line' : 'full')
+  // line <-> full only: an enlarged (max) panel is left by its own control, not by a stray click on the header.
+  const toggle = () => {
+    const { mode: now, onSetMode: set } = latest.current
+    if (now === 'full') set('line')
+    else if (now === 'line') set('full')
+  }
 
   const hdr: HeaderHandlers = {
     onMouseDown: keepFocus,

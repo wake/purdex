@@ -13,6 +13,8 @@ import { CollapseButton } from '../features/workspace/components/CollapseButton'
 import { ConfirmDialog } from './ConfirmDialog'
 import { LayoutClosingList, LayoutKeepPicker } from './LayoutKeepPicker'
 import { UnattendedButton } from './UnattendedButton'
+import { TeamNotebookButton, TeamTitleStrip } from './team/TeamTitleBar'
+import { useTitleBarTeam } from './team/useTitleBarTeam'
 import { BUTTON, IDLE, PRESSED } from './title-bar-styles'
 
 interface Props { title: string }
@@ -102,6 +104,7 @@ function sameQuestion(a: LayoutChangePlan, b: LayoutChangePlan): boolean {
 export function TitleBar({ title }: Props) {
   const t = useI18nStore((s) => s.t)
   const activeTabId = useTabStore((s) => s.activeTabId)
+  const team = useTitleBarTeam()
   const current = useTabStore((s) => {
     const tab = s.activeTabId ? s.tabs[s.activeTabId] : undefined
     return tab ? currentLayoutPattern(tab.layout) : null
@@ -167,10 +170,15 @@ export function TitleBar({ title }: Props) {
         </div>
 
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none px-2 gap-2">
-          <span className="text-xs text-text-secondary truncate max-w-[calc(100%-27rem)]">{title}</span>
+          {/* The active tab's team in the title bar state: its one-line content replaces the centred window title. */}
+          {team?.mode === 'titlebar'
+            ? <TeamTitleStrip team={team} />
+            : <span className="text-xs text-text-secondary truncate max-w-[calc(100%-27rem)]">{title}</span>}
         </div>
 
         <div className="flex-1" />
+        {/* Notebook (WA-2a′): moves the panel area between the title bar and the pane; only a team tab has one for now. */}
+        {team && <TeamNotebookButton team={team} />}
         {/* 無人值守模式 (U23): left of the layout buttons, in its own no-drag wrapper. */}
         <UnattendedButton />
         <div

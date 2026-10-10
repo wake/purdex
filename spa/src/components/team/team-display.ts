@@ -8,6 +8,7 @@
 // selects them from `useTeamRosterStore` per seat, so a context-window update re-renders the panel's row and not every
 // tab in the bar.
 import { createContext, useContext } from 'react'
+import type { PanelMode } from '../../stores/useTeamUiStore'
 
 /** Eight team colors, deliberately away from the default host blue and the four light colors. */
 export const TEAM_COLORS = ['#a78bfa', '#2dd4bf', '#f472b6', '#fb923c', '#e879f9', '#a3a3ff', '#5eead4', '#fda4af'] as const
@@ -75,7 +76,8 @@ export interface TeamPanelTeam {
   name: string
   unnamed: boolean
   tooltip: string
-  mode: 'full' | 'line'
+  /** Where the area sits: title bar, or in the pane as line / full / max (team spec §4.4 Round 3). */
+  mode: PanelMode
   lead: TeamSeatView
   members: TeamSeatView[]
 }

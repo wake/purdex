@@ -13,7 +13,7 @@ import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
-import { CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
+import { CELL_GAP, CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
 
 // The light, the subagent dots and the host chip are TI-3's pieces over the agent store; here they are stand-ins that show
 // what the panel asked of them.
@@ -49,7 +49,7 @@ beforeEach(() => {
   cleanup()
   localStorage.clear()
   resetTeamStores()
-  useTeamUiStore.setState({ panel: { width: 312, expanded: false }, teamDrill: {}, workbookTabs: {} })
+  useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {}, workbookTabs: {} })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
 })
@@ -276,7 +276,7 @@ describe('full mode', () => {
   it('the header switches to one-line, and the mode is per team in the store', () => {
     scene()
     mount()
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    fireEvent.click(screen.getByTestId('team-panel-count')) // a header click: full -> line
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('line')
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
     fireEvent.click(screen.getByTestId('team-panel-to-full'))
@@ -302,19 +302,19 @@ describe('header height (TI-6)', () => {
     expect(header().style.height).toBe(full)
   })
 
-  it('lead + 3 members stay in the header row; there is no region under it', () => {
-    scene()
+  it('lead + 1 member stay in the header row (what 312px holds without squeezing a cell); a smaller team has no region under it', () => {
+    seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
-    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(4)
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(2)
     expect(screen.queryByTestId('team-panel-more')).toBeNull()
   })
 
-  it('the 5th seat wraps into a region under the header, which keeps its height', () => {
-    scene5(4)
+  it('the 3rd seat wraps into a region under the header, which keeps its height', () => {
+    scene5(2)
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
-    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(4)
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(2)
     const more = screen.getByTestId('team-panel-more')
     expect(header().contains(more)).toBe(false)
     expect(more.className).toContain('flex-wrap')
@@ -347,12 +347,12 @@ describe('header height (TI-6)', () => {
       availW = 165
       cellW = 38
       const { unmount } = mount()
-      expect(inHeader()).toBe(4)
+      expect(inHeader()).toBe(3) // 3 x 38 + 2 x 8 + 9 = 139 of 165; a 4th would make 185
       unmount()
       cellW = 50 // the iconDot style: ~12px wider per cell
       mount()
-      expect(inHeader()).toBe(3)
-      expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(6)
+      expect(inHeader()).toBe(2) // 2 x 50 + 8 + 9 = 117; a 3rd would make 175
+      expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(7)
     })
 
     it('a wider boundary cell does not make the capacity oscillate (capacity comes from the widths, not from what is shown)', () => {
@@ -367,7 +367,7 @@ describe('header height (TI-6)', () => {
       const { rerender } = mount()
       const count = () => within(header()).getAllByTestId('team-panel-cell').length
       const first = count()
-      expect(first).toBe(3) // (165 - 5 + 2) / (50 + 2) -> 3, and it stays
+      expect(first).toBe(3) // 3 x 38 + 16 + 9 = 139 of 165; the 4th (50) would make 197; and it stays
       for (let i = 0; i < 5; i++) {
         rerender(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
         expect(count()).toBe(first)
@@ -381,7 +381,7 @@ describe('header height (TI-6)', () => {
         vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
           return this.getAttribute('data-testid') === 'team-panel-cell' ? widths[this.getAttribute('data-session-id') ?? ''] ?? 38 : 0
         })
-        availW = 165
+        availW = 190 // with M2 (50): 4 cells need 197; without: 38 x 4 + 24 + 9 = 185
       })
       const seed = (ids: string[]) => seedScene({
         members: ids.map((id) => [id, `${id}-tm`] as [string, string]),
@@ -416,17 +416,6 @@ describe('header height (TI-6)', () => {
       })
     })
 
-    it('an enlarged panel with a narrow box and a big team wraps under the header', () => {
-      scene5(8)
-      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-      act(() => useTeamUiStore.getState().setPanelExpanded(true))
-      availW = 130
-      cellW = 38
-      mount()
-      expect(inHeader()).toBe(3)
-      expect(screen.getByTestId('team-panel-more')).toBeTruthy()
-    })
-
     describe('capacity from each cell\'s own width', () => {
       let widths: Record<string, number> = {}
       let roCallbacks: Array<() => void> = []
@@ -451,7 +440,7 @@ describe('header height (TI-6)', () => {
         widths = { M2: 50 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 180 // 38*3 + 50 + 3*2 + 5 = 175
+        availW = 200 // 38*3 + 50 + 3*8 + 9 = 197
         mount()
         expect(inHeader()).toBe(4)
       })
@@ -460,7 +449,7 @@ describe('header height (TI-6)', () => {
         widths = { M2: 50 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 170
+        availW = 190
         mount()
         expect(inHeader()).toBe(3)
       })
@@ -469,7 +458,7 @@ describe('header height (TI-6)', () => {
         widths = { M3: 20 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 190 // 4 * 38 + 20 + 4*2 + 5 = 185
+        availW = 225 // 4 * 38 + 20 + 4*8 + 9 = 213
         mount()
         expect(inHeader()).toBe(5)
       })
@@ -513,7 +502,7 @@ describe('header height (TI-6)', () => {
         widths = { M3: 20, M4: 3 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 190 // 4*38 + 20 + 3 + 5*2 + 5 = 190 -> 6 fit
+        availW = 235 // 4*38 + 20 + 3 + 5*8 + 9 = 224 -> 6 fit (with M4 at 20: 241 -> 5)
         mount()
         expect(inHeader()).toBe(6)
         widths = { M3: 20, M4: 20 } // e.g. a host badge got wider; no container resize
@@ -540,21 +529,11 @@ describe('header height (TI-6)', () => {
         cells().forEach((c) => expect(observed().has(c)).toBe(true))
       })
 
-      it('an enlarged panel uses the same widths', () => {
-        widths = { M2: 50 }
-        scene5(8)
-        act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        act(() => useTeamUiStore.getState().setPanelExpanded(true))
-        availW = 130 // 38*2 + 2 + 5 = 83; + 2 + 38 = 123 -> 3 fit, 4th (50) does not
-        mount()
-        expect(inHeader()).toBe(3)
-      })
     })
 
-    it('an enlarged panel with room keeps everyone in the header row', () => {
+    it('a line panel with room keeps everyone in the header row', () => {
       scene5(8)
       act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-      act(() => useTeamUiStore.getState().setPanelExpanded(true))
       availW = 900
       cellW = 38
       mount()
@@ -563,11 +542,27 @@ describe('header height (TI-6)', () => {
     })
   })
 
-  it('a cell is a fixed height inside the header row', () => {
+  it('the divider after the lead is a flex child of the cells row with no margin: the row gap leaves 8px on each side of it', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
-    expect(screen.getAllByTestId('team-panel-cell')[0].style.height).toBe(`${CELL_H}px`)
+    const row = screen.getByTestId('team-panel-cells')
+    expect(row.style.columnGap).toBe(`${CELL_GAP}px`)
+    const sep = row.querySelector<HTMLElement>('[data-testid="cell-sep"]')!
+    expect(sep.parentElement).toBe(row) // not inside a cell's wrapper, where its margin would stack on the gap
+    expect(sep.style.marginInline).toBe('')
+    expect(sep.style.margin).toBe('')
+    expect(sep.previousElementSibling?.querySelector('[data-session-id="L"]')).not.toBeNull() // lead | line | first member
+    expect(sep.nextElementSibling?.querySelector('[data-session-id="A"]')).not.toBeNull()
+    expect(row.querySelectorAll('[data-testid="cell-sep"]')).toHaveLength(1)
+  })
+
+  it('a cell is a fixed height (a bead\'s h-6) inside the header row', () => {
+    scene()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    mount()
+    expect(CELL_H).toBe(24)
+    expect(screen.getAllByTestId('team-panel-cell')[0].className).toContain('h-6')
   })
 })
 
@@ -581,7 +576,8 @@ describe('one-line mode', () => {
     expect(cells.map((c) => c.getAttribute('data-session-id'))).toEqual(['L', 'A', 'B', 'C'])
     expect(screen.getByTestId('team-panel-name').textContent).toBeTruthy()
     expect(screen.getByTestId('team-panel-cells').className).not.toContain('flex-wrap') // the first row never wraps
-    expect(within(cells[0]).getByTestId('seat-icon').getAttribute('data-subagents')).toBe('false')
+    // the cell draws the seat's subagent dots like the sidebar row (they float into the cell's padding; no reserved slot)
+    expect(within(cells[0]).getByTestId('seat-icon').getAttribute('data-subagents')).toBe('true')
     expect(within(cells[0]).getByTestId('context-ring')).toBeTruthy()
     expect(within(cells[0]).getByTestId('model-icon-opus')).toBeTruthy()
     expect(within(cells[1]).getByTestId('model-icon-unknown')).toBeTruthy() // no reading: the dashed "?"
@@ -631,10 +627,10 @@ describe('resize and enlarge', () => {
     scene()
     mount()
     drag(500, 420, false)
-    act(() => { useTeamUiStore.getState().setPanelExpanded(true) })
+    act(() => { useTeamUiStore.getState().setPanelMode(KEY, 'max') })
     fireEvent.mouseMove(document, { clientX: 100 })
     fireEvent.mouseUp(document)
-    act(() => { useTeamUiStore.getState().setPanelExpanded(false) })
+    act(() => { useTeamUiStore.getState().setPanelMode(KEY, 'full') })
     expect(useTeamUiStore.getState().panel.width).toBe(312)
     expect(area().style.width).toBe('312px')
   })
@@ -662,30 +658,71 @@ describe('resize and enlarge', () => {
     act(() => useTeamUiStore.getState().setPanelWidth(600))
     mount()
     expect(area().style.width).toBe('600px')
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    fireEvent.click(screen.getByTestId('team-panel-count')) // full -> line
     expect(area().style.width).toBe('600px')
   })
 
-  it('enlarge toggles expanded and keeps the width apart', () => {
+  it('enlarge toggles full <-> max and keeps the width apart', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelWidth(500))
     mount()
     expect(area().getAttribute('data-expanded')).toBe('false')
     fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 500, expanded: true })
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+    expect(useTeamUiStore.getState().panel).toEqual({ width: 500 })
     expect(area().getAttribute('data-expanded')).toBe('true')
     expect(screen.queryByTestId('resize-hit')).toBeNull() // nothing to resize while it fills the area
     fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 500, expanded: false })
+    expect(KEY in useTeamUiStore.getState().panelMode).toBe(false) // back to full
     expect(area().style.width).toBe('500px')
   })
 
-  it('expanded works from one-line mode too', () => {
+  it('enlarge from one-line mode goes to max (the full list, enlarged)', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
     fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().panel.expanded).toBe(true)
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+    expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('max')
+    expect(rows().length).toBeGreaterThan(0)
+  })
+
+  it('a header click leaves a max panel alone', () => {
+    scene()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'max'))
+    mount()
+    fireEvent.click(screen.getByTestId('team-panel-count'))
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+  })
+
+  it('an old store saved enlarged: the team showing at the first draw becomes max', () => {
+    scene()
+    act(() => useTeamUiStore.setState({ legacyMax: true }))
+    mount()
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+    expect(useTeamUiStore.getState().legacyMax).toBe(false)
+  })
+
+  it('an old store saved enlarged with no team showing: dropped', () => {
+    scene({ activeTabId: 'x' })
+    act(() => useTeamUiStore.setState({ legacyMax: true }))
+    mount()
+    expect(useTeamUiStore.getState().legacyMax).toBe(false)
+    expect(useTeamUiStore.getState().panelMode).toEqual({})
+  })
+})
+
+describe('the title bar state', () => {
+  it('⌃ hands the area to the title bar: the pane draws nothing, and the way back is the state it left', () => {
+    scene()
+    mount()
+    fireEvent.click(screen.getByTestId('team-panel-expand')) // max
+    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
+    expect(screen.queryByTestId('team-panel-area')).toBeNull()
+    act(() => useTeamUiStore.getState().toggleTitleBar(KEY))
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
+    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
   })
 })
 
@@ -693,18 +730,16 @@ describe('the panel state lives in the store (tab-hosted rule)', () => {
   it('mode remembered per team and survives a reload', () => {
     scene()
     const first = mount()
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
-    act(() => { useTeamUiStore.getState().setPanelWidth(555); useTeamUiStore.getState().setPanelExpanded(true) })
+    fireEvent.click(screen.getByTestId('team-panel-count')) // line
+    act(() => { useTeamUiStore.getState().setPanelWidth(555) })
     first.unmount()
     // A reload: the in-memory state is gone, the persisted copy is read back.
     const saved = localStorage.getItem(STORAGE)!
-    act(() => useTeamUiStore.setState({ panelMode: {}, panel: { width: 312, expanded: false } }))
+    act(() => useTeamUiStore.setState({ panelMode: {}, panelLast: {}, panel: { width: 312 } }))
     localStorage.setItem(STORAGE, saved)
     act(() => { void useTeamUiStore.persist.rehydrate() })
     mount()
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
-    expect(area().getAttribute('data-expanded')).toBe('true')
-    act(() => useTeamUiStore.getState().setPanelExpanded(false))
     expect(area().style.width).toBe('555px')
   })
 

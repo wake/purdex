@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { TeamDisplayProvider } from './TeamDisplayProvider'
 import { TeamPanelArea } from './TeamPanelArea'
 import { teamColor } from './team-display'
-import { HOST, TEAM, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
+import { HOST, KEY, TEAM, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { clearModuleRegistry } from '../../lib/module-registry'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
@@ -57,7 +57,7 @@ beforeEach(() => {
   send.mockResolvedValue({})
   resetTeamStores()
   useUnattendedStore.getState().reset()
-  useTeamUiStore.setState({ panel: { width: 312, expanded: false }, teamDrill: {}, workbookTabs: {} })
+  useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {}, workbookTabs: {} })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
 })
@@ -70,7 +70,7 @@ describe('a click on the header', () => {
     expect(header().className).toContain('cursor-pointer')
     expect(header().className).toContain('select-none') // a double-click on the name must not leave its text selected
     expect(name().className).not.toMatch(/cursor-(?!pointer)/)
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    fireEvent.click(screen.getByTestId('team-panel-count'))
     expect(mode()).toBe('line')
     expect(header().className).toContain('cursor-pointer')
     expect(name().className).not.toMatch(/cursor-(?!pointer)/)
@@ -89,15 +89,17 @@ describe('a click on the header', () => {
   it('the switch, enlarge and the cells do not toggle on their own', () => {
     scene()
     mount()
-    fireEvent.click(screen.getByTestId('team-panel-to-line')) // the switch itself toggles once, not twice
+    fireEvent.click(screen.getByTestId('team-panel-count')) // a header click: full -> line
     expect(mode()).toBe('line')
-    fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(mode()).toBe('line')
-    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
     fireEvent.click(screen.getAllByTestId('team-panel-cell')[1])
-    expect(mode()).toBe('line')
-    fireEvent.click(screen.getByTestId('team-panel-to-full'))
+    expect(mode()).toBe('line') // a cell opens a seat, it does not toggle
+    fireEvent.click(screen.getByTestId('team-panel-expand')) // enlarge is its own move: line -> max
+    expect(mode()).toBe('max')
+    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
+    fireEvent.click(screen.getByTestId('team-panel-expand'))
     expect(mode()).toBe('full')
+    fireEvent.click(screen.getByTestId('team-panel-to-line')) // the switch is its own move too: to the title bar, once
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
   })
 
   it('a click on the name toggles only after the double-click interval', () => {
@@ -194,7 +196,7 @@ describe('the form follows its header', () => {
     fireEvent.keyDown(screen.getByTestId('team-edit-name'), { key: 'Escape' })
     dblClickName()
     const oldHeader = header()
-    fireEvent.click(screen.getByTestId('team-panel-to-line')) // the header element is replaced
+    fireEvent.click(screen.getByTestId('team-panel-count')) // the header element is replaced (full -> line)
     const fresh = header()
     expect(fresh).not.toBe(oldHeader)
     box = rectOf(30, 80) // the new header's geometry changed
@@ -219,7 +221,7 @@ describe('the form follows its header', () => {
     fireEvent.click(screen.getByTestId('team-panel-expand'))
     expect(pos()).toEqual(['40px', '64px'])
     box = rectOf(50, 70)
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     expect(popover()).not.toBeNull()
     expect(pos()).toEqual(['50px', '74px'])
   })

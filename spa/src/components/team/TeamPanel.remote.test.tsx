@@ -74,7 +74,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useHostStore.setState({ hosts: {}, runtime: {}, hostOrder: [] } as never)
-  useTeamUiStore.setState({ panel: { width: 312, expanded: false }, teamDrill: {}, workbookTabs: {} })
+  useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {}, workbookTabs: {} })
   clearModuleRegistry()
   useI18nStore.getState().setLocale('zh-TW')
 })
@@ -181,11 +181,11 @@ describe('joining / releasing / killing', () => {
 describe('one-line mode', () => {
   const toLine = () => act(() => useTeamUiStore.getState().setPanelMode(`${HOST}\u0000t1`, 'line'))
 
-  it('a remote cell has the host badge and the alias + state word in its tooltip, dimmed in a transition; a local cell has none of it', () => {
+  it('no cell draws a host square (the ring replaced it); a remote cell has the alias + state word in its tooltip, dimmed in a transition; a local cell has none of it', () => {
     scene({ extra: { state: 'releasing' } })
     toLine()
     mount()
-    expect(within(cell('R')).getByTestId('seat-host')).toBeTruthy()
+    expect(within(cell('R')).queryByTestId('seat-host')).toBeNull()
     expect(cell('R').getAttribute('title')).toContain('b26')
     expect(cell('R').getAttribute('title')).toContain(ZH.releasing)
     expect(within(cell('R')).getByTestId('team-panel-light')).toHaveAttribute('data-dim', 'true')
