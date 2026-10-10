@@ -84,6 +84,33 @@ func TestDecide_UneditedRootsAreTheCardsNotResolvedAgain(t *testing.T) {
 	}
 }
 
+// The App always sends grant.roots, edited or not (codex R1 P1). A root it sends back unchanged is the card's, not
+// resolved again; one it added is resolved. Mutation gate: decide resolving every root it is sent → the swapped root
+// follows the link (red).
+func TestDecide_RootsSentBackUnchangedAreNotResolvedAgain(t *testing.T) {
+	base := realTemp(t)
+	root := mustMkdir(t, filepath.Join(base, "granted"))
+	elsewhere := mustMkdir(t, filepath.Join(base, "elsewhere"))
+	real := mustMkdir(t, filepath.Join(base, "x", "work"))
+	link := filepath.Join(base, "work")
+	symlinkTo(t, real, link)
+	f := newFixture(t)
+	f.createReqEdit = func(r *team.CreateApprovalRequest) { r.Roots = []string{root} }
+	f.create(uid(1))
+	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	symlinkTo(t, elsewhere, root)
+	f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(&team.Grant{MaxMembers: 2, Roots: []string{root + "/", link}}))
+	tm, ok, _ := f.m.store.LiveTeamByLead("sid-1")
+	if !ok || !reflect.DeepEqual(tm.Grant.Roots, []string{root, real}) || !tm.Grant.RootsCanonical {
+		t.Fatalf("grant = %+v ok=%v, want roots [%s %s] canonical", tm.Grant, ok, root, real)
+	}
+	if underGrant(elsewhere, tm.Grant) {
+		t.Fatal("a root sent back unchanged was resolved again and follows the swap")
+	}
+}
+
 // Roots the App edited are resolved at the tap. Mutation gate: no canonicalRoots in decide → the link is stored (red).
 func TestDecide_EditedRootsAreResolved(t *testing.T) {
 	base := realTemp(t)
