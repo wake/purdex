@@ -361,3 +361,82 @@ func TestCompactedSummary_Incremental(t *testing.T) {
 		t.Fatalf("incremental detail = %v", got)
 	}
 }
+
+// ---- codex attack: the three fixes ----
+
+// Conversation() is a deep copy: writing to the new members of what it returned never reaches the normalizer.
+// Mutation gate: share the pointers again in cloneStep → red.
+func TestConversationCopyIsDeepForTheNewMembers(t *testing.T) {
+	n := norm(t, userRow("u1", 1, "go"),
+		toolCall("a1", 2, "toolu_1", "AskUserQuestion", askInput(question("Q?", true, "A", "B"))),
+		askResult(obj{"Q?": "A, B"}),
+		toolCall("a2", 4, "toolu_2", "Read", obj{"file_path": "/w/a", "offset": 3, "limit": 4}),
+		toolCall("a3", 5, "toolu_3", "Grep", obj{"pattern": "x", "path": "/w"}))
+	c := n.Conversation()
+	q, r, sc := stepNamed(t, c, "toolu_1"), stepNamed(t, c, "toolu_2"), stepNamed(t, c, "toolu_3")
+	q.Question.Questions[0].Question = "changed"
+	q.Question.Questions[0].Options[0].Label = "changed"
+	q.Question.Answers[0][0] = "changed"
+	q.Question.Answers = nil
+	r.Read.Offset = 99
+	sc.Search.Where = "changed"
+	again := n.Conversation()
+	q2 := stepNamed(t, again, "toolu_1").Question
+	if q2.Questions[0].Question != "Q?" || q2.Questions[0].Options[0].Label != "A" || len(q2.Answers) != 1 || q2.Answers[0][0] != "A" {
+		t.Fatalf("question was written through: %+v", q2)
+	}
+	if stepNamed(t, again, "toolu_2").Read.Offset != 3 || stepNamed(t, again, "toolu_3").Search.Where != "/w" {
+		t.Fatal("read / search written through")
+	}
+}
+
+// The summary row must be the row right after its boundary: any other row in between ends the wait, so a later summary is
+// not glued to an old compaction. Mutation gate: keep the wait across rows → red.
+func TestCompactedSummary_OnlyTheNextRow(t *testing.T) {
+	for name, rows := range map[string][][]byte{
+		"an assistant row between":      {userRow("u1", 1, "/compact"), compactBoundary("cb1", 2, "manual"), assistantText("a1", 2.05, "hm"), compactSummary("cs1", 2.1, "late")},
+		"a user turn between":           {userRow("u1", 1, "/compact"), compactBoundary("cb1", 2, "manual"), userRow("u2", 2.05, "next"), compactSummary("cs1", 2.1, "late")},
+		"a system row between":          {userRow("u1", 1, "/compact"), compactBoundary("cb1", 2, "manual"), turnDuration("d1", 2.05, 1), compactSummary("cs1", 2.1, "late")},
+		"a blank summary":               {userRow("u1", 1, "/compact"), compactBoundary("cb1", 2, "manual"), compactSummary("cs1", 2.1, "   ")},
+		"a summary before any boundary": {userRow("u1", 1, "go"), compactSummary("cs1", 2.1, "orphan")},
+	} {
+		n := norm(t, rows...)
+		for _, tr := range n.Conversation().Turns {
+			for _, it := range tr.Items {
+				if it.System != nil && it.System.Kind == convmodel.SystemCompacted && strings.Contains(string(it.System.Detail), "summary") {
+					t.Errorf("%s: a summary was attached: %s", name, it.System.Detail)
+				}
+			}
+		}
+		if n.Stats().Skipped["compact_summary"] != 1 {
+			t.Errorf("%s: skipped = %v", name, n.Stats().Skipped)
+		}
+	}
+	// a metadata row between (the title rows) does not end the wait; a second summary is not attached to the first
+	n := norm(t, userRow("u1", 1, "/compact"), compactBoundary("cb1", 2, "manual"), aiTitle("t"), compactSummary("cs1", 2.1, "first"), compactSummary("cs2", 2.2, "second"))
+	if d := compactedDetail(t, validated(t, n)); d["summary"] != "first" {
+		t.Fatalf("detail = %v", d)
+	}
+	if n.Stats().Skipped["compact_summary"] != 1 {
+		t.Fatalf("skipped = %v", n.Stats().Skipped)
+	}
+}
+
+// Only a Write can create a file: the same result type on any other edit tool is ignored. Mutation gate: drop the tool test → red.
+func TestDiffCreated_OnlyWrite(t *testing.T) {
+	create := toolUseResult(obj{"type": "create", "filePath": "/w/x"})
+	for _, c := range []struct {
+		tool string
+		in   obj
+	}{
+		{"Edit", obj{"file_path": "/w/x", "old_string": "a", "new_string": "b"}},
+		{"MultiEdit", obj{"file_path": "/w/x", "edits": []obj{{"old_string": "a", "new_string": "b"}}}},
+		{"NotebookEdit", obj{"notebook_path": "/w/x.ipynb", "new_source": "x"}},
+		{"apply_patch", obj{"input": "*** Begin Patch"}},
+	} {
+		s := oneStep(t, c.tool, c.in, resultRow("r1", 3, "toolu_1", "ok", false, create))
+		if s.Diff != nil && s.Diff.Created {
+			t.Errorf("%s was marked created: %+v", c.tool, s.Diff)
+		}
+	}
+}

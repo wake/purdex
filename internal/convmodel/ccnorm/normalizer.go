@@ -57,7 +57,8 @@ type Normalizer struct {
 
 	resulted map[string]struct{} // ids of the steps that have had their result
 
-	compactID string // the compacted item still waiting for its summary row (U3-0)
+	compactID    string // the compacted item whose summary row must be the very next row (U3-0)
+	compactCarry string // the same, while that next row is being applied
 
 	pend    []Change               // changes of the current feed, in order
 	pendSet map[[2]string]struct{} // (turn id, item id) of pend, for O(1) dedupe
@@ -249,6 +250,9 @@ func (n *Normalizer) row(off int64, line []byte) {
 		return
 	}
 	n.entryBefore = n.entry
+	// A compaction's summary is the row right after its boundary: any other row ends the wait.
+	n.compactCarry, n.compactID = n.compactID, ""
+	defer func() { n.compactCarry = "" }()
 	switch l.typ {
 	case "user":
 		n.userRow(&l, off)

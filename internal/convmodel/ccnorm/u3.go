@@ -165,10 +165,10 @@ func searchScopeOf(tool string, in object) *convmodel.SearchScope {
 	return nil
 }
 
-// createdDiff marks the diff of a Write as a created file when its result says so (toolUseResult.type "create"; Claude Code
+// createdDiff marks the diff of a Write (only a Write creates; Edit, MultiEdit, NotebookEdit and apply_patch never do) as a created file when its result says so (toolUseResult.type "create"; Claude Code
 // writes originalFile null there too). A Write of an empty file has no input diff, so one is made for it. d is not modified.
-func createdDiff(d *convmodel.Diff, path string, tur object) *convmodel.Diff {
-	if tur.str("type") != "create" {
+func createdDiff(tool string, d *convmodel.Diff, path string, tur object) *convmodel.Diff {
+	if tool != "Write" || tur.str("type") != "create" {
 		return d
 	}
 	if d == nil {
@@ -200,15 +200,14 @@ func (d compactDetail) json() json.RawMessage {
 // compactSummary gives the compaction the summary Claude Code wrote right after its boundary (the isCompactSummary row),
 // capped like user text. A summary with no boundary before it, or a second one, stays skipped and counted.
 func (n *Normalizer) compactSummary(blocks []block, off int64) {
-	loc, ok := n.itemAt[n.compactID]
-	if n.compactID == "" || !ok {
+	loc, ok := n.itemAt[n.compactCarry]
+	if n.compactCarry == "" || !ok {
 		n.skip("compact_summary")
 		return
 	}
 	tr := n.turns[loc.turn]
 	it := tr.t.Items[loc.item]
 	text := strings.TrimSpace(joinText(blocks))
-	n.compactID = ""
 	if text == "" || it.System == nil {
 		n.skip("compact_summary")
 		return

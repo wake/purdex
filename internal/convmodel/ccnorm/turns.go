@@ -260,6 +260,29 @@ func cloneStep(s *convmodel.Step) *convmodel.Step {
 		sa := *s.Subagent
 		c.Subagent = &sa
 	}
+	if s.Question != nil {
+		q := *s.Question
+		q.Questions = make([]convmodel.QuestionItem, len(s.Question.Questions))
+		for i, qi := range s.Question.Questions {
+			qi.Options = slices.Clone(qi.Options)
+			q.Questions[i] = qi
+		}
+		if s.Question.Answers != nil {
+			q.Answers = make([][]string, len(s.Question.Answers))
+			for i, a := range s.Question.Answers {
+				q.Answers[i] = slices.Clone(a)
+			}
+		}
+		c.Question = &q
+	}
+	if s.Read != nil {
+		r := *s.Read
+		c.Read = &r
+	}
+	if s.Search != nil {
+		sc := *s.Search
+		c.Search = &sc
+	}
 	c.Children = cloneItems(s.Children)
 	return &c
 }

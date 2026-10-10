@@ -173,7 +173,7 @@ func (n *Normalizer) applyResult(id string, r result, off int64) {
 			s.Diff = d
 		}
 		if s.Status == convmodel.StepDone {
-			s.Diff = createdDiff(s.Diff, path, tur)
+			s.Diff = createdDiff(s.Tool, s.Diff, path, tur)
 		}
 	case convmodel.StepExecute:
 		if s.Command != nil {
