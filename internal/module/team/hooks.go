@@ -168,7 +168,7 @@ func (m *Module) removeHookLock(agent, sessionID string) {
 
 // pruneHookLocks removes every <dataDir>/hooklocks/cc/<session_id> whose session the
 // registry no longer lists (spec §6.6 "the team sweeper deletes flags whose
-// session is gone"). Only the cc directory: LiveSession is a CC registry
+// session is gone"). Only the cc directory: SessionPresence is a CC registry
 // check and codex flags have no liveness oracle yet (nobody writes them in
 // P2c; a stale one goes through handleHookDecide's removal instead). A
 // missing directory is nothing to prune. Returns how many were removed.
@@ -199,7 +199,9 @@ func (m *Module) pruneHookLocks() int {
 			continue
 		}
 		sid := e.Name()
-		if m.origins.LiveSession(sid) {
+		// Removed only for a session that is positively gone (#1857): a live process whose registry file cannot be verified may be
+		// this session, and the hook would stop asking. A registry that cannot be read is Unknown too.
+		if !m.sessionGone("the hook flag of "+sid, sid) {
 			continue
 		}
 		if m.pruneUnlessLeadOpen(filepath.Join(dir, sid), sid) {

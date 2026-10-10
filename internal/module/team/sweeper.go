@@ -40,8 +40,8 @@ func (m *Module) runSweeper() {
 // (persistUsage) and marks gone members (markGoneMembers), open approvals
 // or not. A resolver that
 // cannot read the registry answers
-// "live" (peers/origin_resolver.go), so a read error never abandons
-// anything. The deadline and lease paths close through CloseIfExpired:
+// "unknown" (SessionPresence), and so does an unverifiable file of a live
+// process: only a session that is positively gone is abandoned here. The deadline and lease paths close through CloseIfExpired:
 // the decision here is made on a copy, and a poll that renewed the lease
 // since the read must win, so the CAS re-checks the expiry in the same
 // statement and a lost CAS leaves the row open for the next tick. Every
@@ -105,7 +105,7 @@ func (m *Module) tick() {
 				continue
 			}
 			after, won, err = m.closeAs(a.ID, Close{State: team.StateAbandoned, DecidedAt: now})
-		case checkLive && !m.origins.LiveSession(a.Origin.SessionID):
+		case checkLive && m.sessionGone("approval "+a.ID, a.Origin.SessionID):
 			after, won, err = m.closeAs(a.ID, Close{State: team.StateAbandoned, DecidedAt: now})
 		default:
 			continue

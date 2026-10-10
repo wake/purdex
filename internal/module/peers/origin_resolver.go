@@ -360,6 +360,31 @@ func (r *OriginResolver) LiveSession(sessionID string) bool {
 	return false
 }
 
+// SessionPresence is LiveSession's three-state form, for a caller that knows only the session id (#1857). Live: a live,
+// non-proxy registry entry has it. Gone: the registry was read, no entry has it, and no live pid has a file that could not be
+// verified (such a file might be this very session). Unknown: the registry could not be read, or such a file exists. A caller
+// whose act cannot be undone, or that the user sees, acts on Gone only.
+func (r *OriginResolver) SessionPresence(sessionID string) Presence {
+	if sessionID == "" {
+		return PresenceGone
+	}
+	entries, diag, err := ipeers.ReadRegistryDiag(r.m.registryDir, r.m.liveness)
+	if err != nil {
+		r.m.logf("peers: origin resolver: read registry: %v", err)
+		return PresenceUnknown
+	}
+	proxies := r.m.proxyPIDs()
+	for _, e := range entries {
+		if e.SessionID == sessionID && !e.IsProxy && !proxies[e.PID] {
+			return PresenceLive
+		}
+	}
+	if len(diag.BlockingUnknown()) > 0 {
+		return PresenceUnknown
+	}
+	return PresenceGone
+}
+
 // readRegistry is ipeers.ReadRegistry, a seam so a test can see the Liveness
 // ProcessRoots builds.
 var readRegistry = ipeers.ReadRegistry

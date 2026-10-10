@@ -24,6 +24,11 @@ func (m *Module) killAdopted(mr memberRow) (ended bool, status int, code, why st
 		return false, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry: " + err.Error()
 	}
 	if !live {
+		// Marked gone for good, and nothing is signalled: only when the session is positively gone. A live process whose
+		// registry file cannot be verified may be this member, so that is a retryable error, the row untouched (#1857).
+		if !m.sessionGone("the kill of member "+mr.SpawnOp, mr.SessionID) {
+			return false, http.StatusServiceUnavailable, team.ErrNotReady, "the member's session could not be confirmed gone; retry"
+		}
 		return true, 0, "", ""
 	}
 	same, err := m.origins.SameProcess(o.PID, o.ProcStart)
