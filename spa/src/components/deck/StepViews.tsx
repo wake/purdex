@@ -26,10 +26,10 @@ function Line({ step, icon, verb, subject, extra, children, testId = 'deck-step-
   step: StepItem; icon: ReactNode; verb: string; subject: string; extra?: ReactNode; children?: ReactNode; testId?: string
 }) {
   return (
-    <div data-testid={testId} data-kind={step.kind} data-status={step.status} className="text-sm">
+    <div data-testid={testId} data-kind={step.kind} data-status={step.status} className="rounded-md border border-border-default bg-surface-secondary/50 px-3 py-1.5 text-sm">
       <div className="flex items-center gap-2">
         {icon}
-        <span className="shrink-0 text-text-muted">{verb}</span>
+        <span className="shrink-0 font-mono text-xs font-medium text-text-secondary">{verb}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-secondary" title={subject}>{subject}</span>
         {extra}
         <StatusSlot step={step} />
@@ -41,10 +41,10 @@ function Line({ step, icon, verb, subject, extra, children, testId = 'deck-step-
 
 function Card({ step, icon, title, children }: { step: StepItem; icon: ReactNode; title: ReactNode; children: ReactNode }) {
   return (
-    <div data-testid="deck-step-card" data-kind={step.kind} data-status={step.status} className="rounded-lg border border-border-subtle text-sm">
+    <div data-testid="deck-step-card" data-kind={step.kind} data-status={step.status} className="rounded-md border border-border-default bg-surface-secondary/50 text-sm">
       <div className="flex items-center gap-2 px-3 py-1.5">
         {icon}
-        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="min-w-0 flex-1 truncate"><span className="mr-2 font-mono text-xs font-medium text-text-secondary">{step.tool}</span>{title}</span>
         <StatusSlot step={step} />
       </div>
       <div className="space-y-1 px-3 pb-2">{children}</div>
@@ -146,7 +146,7 @@ export function StepView({ step, actions = {} }: { step: StepItem; actions?: Ste
       const sub = step.subagent
       return (
         <button type="button" data-testid="deck-step-task" data-status={step.status} onClick={() => actions.onOpenSubagent?.(step)}
-          className="flex w-full cursor-pointer items-center gap-2 text-left text-sm hover:bg-surface-secondary">
+          className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-border-default bg-surface-secondary/50 px-3 py-1.5 text-left text-sm hover:bg-surface-secondary">
           <Robot className={ICON} size={16} />
           <span className="shrink-0 text-text-muted">{sub?.type ? t('deck.step.task_type', { type: sub.type }) : t('deck.step.task')}</span>
           <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{sub?.description ?? step.summary}</span>

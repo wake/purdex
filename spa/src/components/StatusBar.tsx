@@ -359,7 +359,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
         {paneTitle && (
           <span
             data-testid="agent-pane-title"
-            className="max-w-[40ch] truncate text-text-muted max-[700px]:hidden"
+            className="max-w-[40ch] truncate text-text-secondary max-[700px]:hidden"
             title={paneTitle}
           >
             {paneTitle}

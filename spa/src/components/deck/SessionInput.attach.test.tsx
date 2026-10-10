@@ -305,20 +305,21 @@ describe('SessionInput attachments', () => {
       fireEvent.dragLeave(box(), { dataTransfer: files })
       expect(lit()).toBe('false')
     })
-    it('the box itself takes the drop style over its focus ring, and gives it back afterwards', () => {
+    it('the terminal-style box has no frame, ring or outline, takes a tint while files are dragged over, and gives it back afterwards', () => {
       render(ui())
       box().focus()
       expect(document.activeElement).toBe(box())
-      expect(box().className).not.toContain('border-dashed')
+      for (const c of ['border-0', 'rounded-none', 'outline-none', 'focus:ring-0', 'bg-transparent']) expect(box().className).toContain(c)
+      expect(zone().className).toContain('border-[#808080]')
       fireEvent.dragEnter(zone(), { dataTransfer: files })
-      for (const c of ['border-dashed', 'border-accent', 'bg-accent/10', 'outline-none']) expect(box().className).toContain(c)
+      expect(box().className).toContain('bg-accent/10')
+      expect(zone().className).toContain('border-dashed')
       fireEvent.dragLeave(zone(), { dataTransfer: files })
-      expect(box().className).not.toContain('border-dashed')
-      expect(box().className).not.toContain('outline-none')
+      expect(box().className).not.toContain('bg-accent/10')
+      expect(zone().className).not.toContain('border-dashed')
       fireEvent.dragEnter(zone(), { dataTransfer: files })
       fireEvent.drop(zone(), { dataTransfer: files })
-      expect(box().className).not.toContain('border-dashed')
-      expect(box().className).toContain('border-border-subtle')
+      expect(box().className).not.toContain('bg-accent/10')
       expect(document.activeElement).toBe(box()) // focus itself was never taken away
     })
     it('drop clears it', () => {
@@ -350,10 +351,10 @@ describe('SessionInput attachments', () => {
       vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get').mockImplementation(() => scrollHeight)
     })
     afterEach(() => vi.restoreAllMocks())
-    it('is at least 2 lines, follows the content, and stops at 8 lines with a scrollbar', () => {
+    it('is at least 1 line, follows the content, and stops at 8 lines with a scrollbar', () => {
       scrollHeight = 10
       render(ui())
-      expect(box().style.height).toBe('40px') // 2 lines of the 20px fallback
+      expect(box().style.height).toBe('20px') // 1 line of the 20px fallback
       scrollHeight = 100
       fireEvent.change(box(), { target: { value: 'a\nb\nc\nd\ne' } })
       expect(box().style.height).toBe('100px')

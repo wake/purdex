@@ -85,7 +85,7 @@ export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title,
   if (used === null) {
     return (
       <span data-testid={testId} data-missing="true" role="img" title={title} aria-label={title}
-        className={`flex shrink-0 items-center gap-1 select-none text-text-muted ${className}`}>
+        className={`flex shrink-0 items-center gap-1 select-none text-text-secondary ${className}`}>
         <IconCmp size={10} aria-hidden="true" />
         <span>—</span>
       </span>
@@ -100,7 +100,7 @@ export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title,
       aria-label={title}
       className={`flex shrink-0 items-center gap-1 tabular-nums select-none ${stale ? 'opacity-50' : ''} ${className}`}
     >
-      <IconCmp size={10} className="text-text-muted" aria-hidden="true" />
+      <IconCmp size={10} className="text-text-secondary" aria-hidden="true" />
       <Ring used={used} mode={ring} />
       <span className="text-text-secondary">{shownPct(used, number)}%</span>
     </span>

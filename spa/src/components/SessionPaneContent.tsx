@@ -109,7 +109,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
     <div data-testid="session-footer">
       <QuestionDock ctx={ctx} />
       <SessionInput {...ctx} sessionCode={sessionCode} />
-      <SessionStatusRow sessionCode={sessionCode} ctx={ctx} />
+      <SessionStatusRow sessionCode={sessionCode} cwd={content.kind === 'tmux-session' ? content.rebuild?.cwd : undefined} ctx={ctx} />
     </div>
   )
 

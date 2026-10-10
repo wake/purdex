@@ -11,6 +11,7 @@
   --color-text-secondary: var(--text-secondary);
   --color-text-muted: var(--text-muted);
   --color-text-inverse: var(--text-inverse);
+  --color-text-system: var(--text-system);
   --color-border-default: var(--border-default);
   --color-border-active: var(--border-active);
   --color-border-subtle: var(--border-subtle);
@@ -39,6 +40,7 @@
   --text-secondary: #9ca3af;
   --text-muted: #6b7280;
   --text-inverse: #0a0a1a;
+  --text-system: #949494;
   --border-default: #404040;
   --border-active: #7a6aaa;
   --border-subtle: #2a2a2a;
@@ -72,6 +74,7 @@
   --text-secondary: #4a4a5a;
   --text-muted: #8a8a9a;
   --text-inverse: #f5f5f5;
+  --text-system: #6e6e6e;
   --border-default: #d0d0d0;
   --border-active: #6a5a9a;
   --border-subtle: #e0e0e0;
@@ -100,6 +103,7 @@
   --text-secondary: #d8dee9;
   --text-muted: #7b88a1;
   --text-inverse: #2e3440;
+  --text-system: #949494;
   --border-default: #4c566a;
   --border-active: #88c0d0;
   --border-subtle: #3b4252;
@@ -128,6 +132,7 @@
   --text-secondary: #bfbfbf;
   --text-muted: #6272a4;
   --text-inverse: #282a36;
+  --text-system: #949494;
   --border-default: #44475a;
   --border-active: #bd93f9;
   --border-subtle: #21222c;
