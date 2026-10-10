@@ -66,6 +66,7 @@ function AskCard({ card, ctx, askChat, markAnswered, finishAnswered }: CardProps
   const settle = async (send: () => Promise<AskDecideResult>) => {
     setPending(true)
     setRejected('')
+    setFailure(null)
     markAnswered(ask.id) // before the send: the approval's close can outrun the answer, and it must read as ours
     const r = await send()
     setPending(false)

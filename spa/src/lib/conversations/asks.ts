@@ -41,12 +41,12 @@ export function parseAsk(a: ConversationApproval): OpenAsk | null {
   if (!isRecord(p) || !Array.isArray(p.questions)) return null
   const questions = p.questions.map(readQuestion).filter((q): q is AskQuestion => q !== null)
   if (questions.length === 0) return null
-  return { id: a.id, toolUseId: typeof p.tool_use_id === 'string' ? p.tool_use_id : '', questions, terminalOnly: p.terminal_only === true || !remotelyAnswerable(questions) }
+  return { id: a.id, toolUseId: typeof p.tool_use_id === 'string' ? p.tool_use_id : '', questions, terminalOnly: p.terminal_only === true || questions.length !== p.questions.length || !remotelyAnswerable(questions) }
 }
 
 // The daemon keys hook.answers by question text and refuses what it cannot match exactly (decide's answersFit, #2548). A question
 // text with U+FFFD (or a lone surrogate, which the daemon folds into it) is never matched, and two questions with one text share a
-// key and so cannot be told apart; a blank option label cannot be told apart from no answer: such a card is read-only up front rather than refused after the person has answered.
+// key and so cannot be told apart (an unreadable question, dropped on parse, makes the answers misfit the same way); a blank option label cannot be told apart from no answer: such a card is read-only up front rather than refused after the person has answered.
 const UNMATCHABLE = /\uFFFD|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 export function remotelyAnswerable(questions: readonly AskQuestion[]): boolean {
   const seen = new Set<string>()

@@ -189,6 +189,10 @@ describe('remotelyAnswerable', () => {
   it('refuses a question with an option whose label is blank after trim', () => {
     expect(remotelyAnswerable([{ question: 'q', multiple: false, options: [{ label: 'ok' }, { label: ' \u3000 ' }] }])).toBe(false)
   })
+  it('parseAsk: a question the card cannot read leaves the rest unanswerable (the daemon counts the raw payload)', () => {
+    const a = ask('a7', {}, { questions: [{ question: 'good', options: [{ label: 'o' }] }, { header: 'no text' }] })
+    expect(parseAsk(a)!.terminalOnly).toBe(true)
+  })
   it('keeps a valid surrogate pair (emoji)', () => {
     expect(remotelyAnswerable([q('要🍜嗎？')])).toBe(true)
   })
