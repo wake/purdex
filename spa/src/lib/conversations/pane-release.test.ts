@@ -8,7 +8,7 @@ import { draftKey, readDraft, writeDraft, clearAllDrafts } from './draft-memory'
 import { deckPanes, isFolded, noteDeckPane, setOpen } from './fold-memory'
 import { chatScrollKey, clearAllPanels, conversationBinding, openPanel, readPanel } from './panel-memory'
 import { installPaneRelease, releasePane, retireStaleSessions } from './pane-release'
-import { clearAllSendQueues, hasSendQueue, sendQueueCount, sendQueueFor } from './send-queue'
+import { clearAllSendQueues, hasSendQueue, retiringQueueCount, sendQueueCount, sendQueueFor } from './send-queue'
 import type { SendOutcome, SendPort } from './send'
 
 const H = 'host-1'
@@ -217,12 +217,37 @@ describe('retireStaleSessions: the pane shows another conversation now', () => {
     await vi.advanceTimersByTimeAsync(3000)
     q.enqueue('in the undo window')
     retireStaleSessions(A, H, 's2')
-    expect(hasSendQueue(dk)).toBe(true) // the request is still out
+    expect(hasSendQueue(dk)).toBe(false) // detached at once; only the old queue waits for its request
+    expect(retiringQueueCount()).toBe(1)
     calls[0].resolve({ kind: 'accepted' })
     await vi.advanceTimersByTimeAsync(10_000)
     expect(hasSendQueue(dk)).toBe(false)
+    expect(retiringQueueCount()).toBe(0)
     expect(calls.map((c) => c.text)).toEqual(['in flight'])
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('back to s1 while its old request is still out: a FRESH queue, the new message goes out, and the old one finishing does not touch it', async () => {
+    const { calls, port } = fakePort()
+    const dk = fill(A, 's1', port)
+    const old = sendQueueFor(dk, () => port)
+    old.enqueue('old')
+    await vi.advanceTimersByTimeAsync(3000)
+    retireStaleSessions(A, H, 's2')
+    retireStaleSessions(A, H, 's1') // and back
+    const fresh = sendQueueFor(dk, () => port)
+    expect(fresh).not.toBe(old)
+    fresh.enqueue('new')
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(calls.map((c) => c.text)).toEqual(['old', 'new'])
+    calls[0].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(retiringQueueCount()).toBe(0)
+    expect(hasSendQueue(dk)).toBe(true)
+    expect(fresh.entries().map((e) => e.state)).toEqual(['sending'])
+    calls[1].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fresh.entries().map((e) => e.state)).toEqual(['sent'])
   })
 
   it('a waiting (busy) message of the old session is dropped, not stranded', async () => {

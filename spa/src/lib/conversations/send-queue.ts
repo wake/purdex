@@ -243,15 +243,27 @@ export function releaseSendQueues(match: (key: string) => boolean): number {
   return n
 }
 
-/** Retire the queues whose key matches (the pane shows another session now): see `SendQueue.retire`; each leaves the registry as soon as nothing of it is in flight. */
+let retiring = 0
+/** Retired queues still waiting for a request in flight (they are no longer in the registry). */
+export const retiringQueueCount = (): number => retiring
+
+/**
+ * Retire the queues whose key matches (the pane shows another session now): see `SendQueue.retire`. Each is detached from the
+ * registry AT ONCE, so the next `sendQueueFor` of the same key (the pane flips back) is a fresh queue; the old one only waits
+ * for its request in flight and then disposes itself.
+ */
 export function retireSendQueues(match: (key: string) => boolean): void {
   for (const [key, q] of [...queues]) {
-    if (match(key)) q.retire(() => { if (queues.get(key) === q) queues.delete(key) })
+    if (!match(key)) continue
+    queues.delete(key)
+    retiring++
+    q.retire(() => { retiring-- })
   }
 }
 
 /** Tests only. */
 export function clearAllSendQueues(): void {
+  retiring = 0
   queues.forEach((q) => q.dispose())
   queues.clear()
 }
