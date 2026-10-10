@@ -1,6 +1,9 @@
 package teammod
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 // seatWindow is the registration window of spawnFinish: the member row is inserted, the op is still running.
 // One seat, held by one spawn, must count once. Max 3 (seedTeam).
@@ -32,8 +35,16 @@ func TestSeats_SpawnCapAndAdoptSeatsCountOnceInTheRegistrationWindow(t *testing.
 		t.Fatal(err)
 	}
 	// 1 seat taken of 2: a second spawn fits.
+	// AcceptSpawnOp judges the cwd against the grant (#2561): the seeded root must exist.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE teams SET grant_json = json_set(grant_json, '$.roots', json_array(?)) WHERE id = ?`, root, uid(1)); err != nil {
+		t.Fatal(err)
+	}
 	next := newSpawn(t, uid(1), 4000)
-	next.OriginSessionID = "sid-1"
+	next.OriginSessionID, next.Cwd = "sid-1", root
 	if _, _, _, err := s.AcceptSpawnOp(next, "h"); err != nil {
 		t.Fatalf("spawn refused in the window: %v", err)
 	}
