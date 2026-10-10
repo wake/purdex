@@ -39,18 +39,3 @@ export function AgentBubble({ item }: { item: AgentTextItem }) {
   )
 }
 
-/** Consecutive peer messages as one line: 「來自 <name>：<text> · <text>」, 「未驗證」 if any of them is, a count when several. */
-export function PeerLine({ items }: { items: UserItem[] }) {
-  const t = useI18nStore((s) => s.t)
-  const names = [...new Set(items.map((i) => i.from?.name ?? i.from?.kind ?? '').filter(Boolean))].join('、')
-  const unverified = items.some((i) => i.from?.unverified === true)
-  const text = items.map((i) => i.text.replace(/\s+/g, ' ').trim()).join(' · ')
-  return (
-    <div data-testid="chat-peer" data-count={items.length} title={items.map((i) => i.text).join('\n')} className="flex items-center gap-2 text-xs text-text-muted">
-      <span className="shrink-0">{t('deck.user.from', { name: names })}</span>
-      {unverified && <span data-testid="chat-peer-unverified" className="shrink-0 rounded bg-surface-secondary px-1.5 text-status-warning">{t('chat.peer.unverified')}</span>}
-      {items.length > 1 && <span data-testid="chat-peer-count" className="shrink-0">{t('chat.peer.count', { n: items.length })}</span>}
-      <span data-testid="chat-peer-text" className="min-w-0 flex-1 truncate text-text-secondary">{text}</span>
-    </div>
-  )
-}

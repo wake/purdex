@@ -45,8 +45,9 @@ export function buildChat(turns: PanelTurn[]): ChatEntry[] {
         if (user.source === 'command_output') continue
         const last = out[out.length - 1]
         if (user.source === 'peer') {
-          // Consecutive peer messages are one line; turns in between that drew nothing do not break the run.
-          if (last?.kind === 'peer') last.items.push(user)
+          // iOS 0.6.44: only peer messages that follow each other directly, inside one turn, are one line; any other row
+          // between them (a reply, a work row, a user message) or a turn boundary splits them.
+          if (last?.kind === 'peer' && last.turnIndex === turn.index) last.items.push(user)
           else out.push({ kind: 'peer', key: `p:${user.id}`, turnIndex: turn.index, items: [user] })
         } else out.push({ kind: 'user', key: `u:${user.id}`, turnIndex: turn.index, item: user })
       } else if (it.type === 'agent_text') out.push({ kind: 'agent', key: `a:${it.id}`, turnIndex: turn.index, item: it as AgentTextItem })

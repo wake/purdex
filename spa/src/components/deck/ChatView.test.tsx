@@ -303,36 +303,83 @@ describe('the user on the right, the agent on the left (spec §5)', () => {
   })
 })
 
-describe('peer messages', () => {
-  it('a peer message is one line, not a bubble, and says who it is from (golden)', () => {
+describe('peer messages (iOS 0.6.44)', () => {
+  const me = (id = 'u'): UserItem => ({ type: 'user', id, at: 1, index: 0, text: 'me', source: 'user' })
+  const reply = (id = 'a'): ConversationItem => ({ type: 'agent_text', id, at: 1, index: 0, markdown: 'ok' }) as ConversationItem
+  const unv = (name: string) => ({ kind: 'peer', name, unverified: true })
+
+  it('a single message collapses to 「↪ sender：first 40 chars…」 (golden)', () => {
     mount({ turns: turnsOf(peerMessage) })
     const line = screen.getByTestId('chat-peer')
-    expect(line).toHaveTextContent('From host/fixture-peer')
-    expect(line).toHaveTextContent('fixture ping: reply with the single word pong')
-    expect(screen.queryByTestId('chat-peer-unverified')).toBeNull()
-    expect(screen.getByTestId('chat-peer-text')).toHaveClass('truncate')
+    expect(line).toHaveTextContent('↪ host/fixture-peer: fixture ping: reply with the single word…')
+    expect(screen.getByTestId('chat-peer-head')).toHaveClass('truncate')
   })
 
-  it('unverified senders are marked 「未驗證」 (hand-made, the goldens carry no such flag)', () => {
-    mount({ turns: [turn('t', 0, [peer('p1', { from: { kind: 'peer', name: 'host/b', unverified: true } })])] })
-    expect(screen.getByTestId('chat-peer-unverified')).toHaveTextContent('Unverified')
+  it('only the first line, only its first 40 characters', () => {
+    mount({ turns: [turn('t', 0, [peer('p', { text: `${'x'.repeat(60)}\nsecond line` })])] })
+    expect(screen.getByTestId('chat-peer-head').textContent).toBe(`↪ host/a: ${'x'.repeat(40)}…`)
   })
 
-  it('consecutive peer messages merge into one line, across turns; a user message in between splits them', () => {
-    const turns = [
-      turn('t0', 0, [peer('p1')]),
-      turn('t1', 1, [peer('p2', { from: { kind: 'peer', name: 'host/b', unverified: true } })]),
-      turn('t2', 2, [{ type: 'user', id: 'u', at: 1, index: 0, text: 'me', source: 'user' } as UserItem]),
-      turn('t3', 3, [peer('p3')]),
-    ]
-    mount({ turns })
+  it('consecutive peer messages of one turn are one line, "↪ N peer messages", with no sender list', () => {
+    mount({ turns: [turn('t', 0, [peer('p1'), peer('p2', { from: { kind: 'peer', name: 'host/b' } }), peer('p3')])] })
     const lines = screen.getAllByTestId('chat-peer')
-    expect(lines).toHaveLength(2)
-    expect(lines[0]).toHaveAttribute('data-count', '2')
-    expect(lines[0]).toHaveTextContent('host/a、host/b')
-    expect(within(lines[0]).getByTestId('chat-peer-unverified')).toBeInTheDocument()
-    expect(lines[1]).toHaveAttribute('data-count', '1')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toHaveAttribute('data-count', '3')
+    expect(screen.getByTestId('chat-peer-head').textContent).toBe('↪ 3 peer messages')
+    expect(screen.queryByText(/host\/b/)).toBeNull()
+  })
+
+  it('anything between them splits them: an agent reply, a work row, a user message', () => {
+    const work = step('s1')
+    for (const between of [reply(), work as ConversationItem, me() as ConversationItem]) {
+      mount({ turns: [turn('t', 0, [peer('p1'), between, peer('p2')])] })
+      expect(screen.getAllByTestId('chat-peer')).toHaveLength(2)
+      cleanup()
+    }
+  })
+
+  it('never merges across turns', () => {
+    const turns = [turn('t0', 0, [peer('p1')]), turn('t1', 1, [peer('p2')])]
+    mount({ turns })
+    expect(screen.getAllByTestId('chat-peer')).toHaveLength(2)
     expect(buildChat(turns).filter((e) => e.kind === 'peer')).toHaveLength(2)
+  })
+
+  it('a click expands one line per message with its sender; unverified senders say （未驗證）', () => {
+    mount({ turns: [turn('t', 0, [peer('p1', { text: 'first' }), peer('p2', { text: 'second', from: unv('host/b') })])] })
+    expect(screen.queryAllByTestId('chat-peer-item')).toHaveLength(0)
+    fireEvent.click(screen.getByTestId('chat-peer-head'))
+    const rows = screen.getAllByTestId('chat-peer-item')
+    expect(rows.map((r) => r.textContent)).toEqual(['host/a: first', 'host/b (unverified): second'])
+    fireEvent.click(screen.getByTestId('chat-peer-head'))
+    expect(screen.queryAllByTestId('chat-peer-item')).toHaveLength(0)
+  })
+
+  it('the expansion is kept when the chat remounts (tab-hosted)', () => {
+    const turns = [turn('t', 0, [peer('p1', { text: 'first' })])]
+    const first = mount({ turns })
+    fireEvent.click(screen.getByTestId('chat-peer-head'))
+    first.unmount()
+    mount({ turns })
+    expect(screen.getAllByTestId('chat-peer-item')).toHaveLength(1)
+  })
+
+  it('the line is dimmed only when EVERY message is unverified', () => {
+    mount({ turns: [turn('t', 0, [peer('p1', { from: unv('host/a') }), peer('p2', { from: unv('host/b') })])] })
+    expect(screen.getByTestId('chat-peer')).toHaveClass('opacity-60')
+    cleanup()
+    mount({ turns: [turn('t', 0, [peer('p1', { from: unv('host/a') }), peer('p2')])] })
+    expect(screen.getByTestId('chat-peer')).not.toHaveClass('opacity-60')
+    cleanup()
+    mount({ turns: [turn('t', 0, [peer('p1')])] })
+    expect(screen.getByTestId('chat-peer')).not.toHaveClass('opacity-60')
+  })
+
+  it('a plugin sender reads 「<name> plugin」 (golden plugin-submit)', () => {
+    mount({ turns: turnsOf(pluginSubmit) })
+    const first = screen.getAllByTestId('chat-peer')[0]
+    expect(first.textContent).toContain('↪ prompt-probe plugin:')
+    expect(first.textContent).not.toContain('plugin:  ')
   })
 })
 
