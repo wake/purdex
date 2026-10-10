@@ -99,6 +99,8 @@ type Module struct {
 	// pendingDir is where `pdx statusline-proxy` keeps a payload it could not deliver while the daemon was down (#2545);
 	// "" (a bare test module) reads nothing.
 	pendingDir string
+	// pendingAfterLoad is a test seam: runs between reading the pending files and acting on them.
+	pendingAfterLoad func()
 	// contextUsage keeps the last statusline context reading per CC session
 	// id (not per session code: two CC panes in one tmux session must not
 	// overwrite each other). Bounded by contextUsageCap; also under

@@ -30,7 +30,20 @@ const (
 var (
 	ErrUnsafeID = errors.New("statuspending: the session id is not a safe file name")
 	ErrFull     = errors.New("statuspending: the pending directory is full")
+	ErrBusy     = errors.New("statuspending: the pending directory is locked by another process")
+	ErrTooBig   = errors.New("statuspending: the payload is over the size bound")
 )
+
+// MaxFileBytes bounds one file (a statusline payload is a few KB).
+const MaxFileBytes = 256 << 10
+
+const lockName = ".lock"
+
+// testHook is a test seam: called at named points inside the locked steps.
+var testHook func(point string)
+
+// RemoveIfNotNewer deletes sid's file unless it is newer than atMs (the version the caller loaded). Scaffold.
+func RemoveIfNotNewer(dir, sid string, atMs int64) {}
 
 // safeIDRE is the alphabet a session id may have as a file name: no separator, no dot, nothing that hides or climbs.
 var safeIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
