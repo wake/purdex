@@ -1088,6 +1088,50 @@ describe('applySectionToStores — tabs.<id>', () => {
     expect(buildTabsSection(useWorkspaceStore.getState().workspaces[0], t.tabs)).toEqual(payload)
   })
 
+  // #2514: a client that never saw a workspace's deletion can still send a split tab with that workspace's settings page in a
+  // secondary pane; it must not come back as a 'Workspace not found' page here.
+  describe('a workspace-settings pane that points at a workspace that does not exist (#2514)', () => {
+    const settingsLeaf = (id: string, workspaceId: string): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind: 'settings', scope: { workspaceId } } } })
+    const splitOf = (...children: PaneLayout[]): PaneLayout => ({ type: 'split', id: 's-stale', direction: 'h', children, sizes: children.map(() => 100 / children.length) })
+    const leavesOf = (tabId: string) => collectLeaves(useTabStore.getState().tabs[tabId].layout).map((p) => p.id)
+
+    it('is dropped from a secondary pane; a pane pointing at a workspace that exists, and the tab itself, stay', async () => {
+      seedTabWorld() // workspaces wa, wb exist
+      const payload = incomingFor([tab('a3', splitOf(tmuxLeaf('keep-main', M), settingsLeaf('stale', 'deleted-ws'), settingsLeaf('live', 'wb')))])
+      const outcome = await applySectionToStores('tabs.wa', payload, ctx)
+      expect(useTabStore.getState().tabs.a3).toBeDefined()
+      expect(leavesOf('a3')).toEqual(['keep-main', 'live'])
+      // The stores no longer hold what arrived: the hash is the rebuilt one, not the payload's, so the section reads as
+      // dirty and is pushed back without the pane (the same path as an orphaned scoped setting).
+      expect(outcome).toMatchObject({ ok: true })
+      expect((outcome as { hash: string }).hash).not.toBe(await hashSection(payload))
+      expect((outcome as { hash: string }).hash).toBe(await hashSection(buildTabsSection(useWorkspaceStore.getState().workspaces[0], useTabStore.getState().tabs)))
+    })
+
+    it('a local tab of another workspace is not touched', async () => {
+      seedTabWorld()
+      const local = tab('b9', splitOf(tmuxLeaf('l-main', M), settingsLeaf('l-stale', 'deleted-ws'))) // device-local layout in workspace wb
+      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, b9: local } })
+      useWorkspaceStore.setState({ workspaces: [ws('wa', ['a1', 'a2'], 'a2'), ws('wb', ['b1', 'b9'], 'b1')], activeWorkspaceId: 'wb' })
+      await applySectionToStores('tabs.wa', incomingFor([tab('a3', splitOf(tmuxLeaf('m', M), tmuxLeaf('n', M)))]), ctx)
+      expect(useTabStore.getState().tabs.b9.layout).toBe(local.layout)
+    })
+
+    it('a tab whose PRIMARY pane is such a page is kept as it arrived (the current handling)', async () => {
+      seedTabWorld()
+      const payload = incomingFor([tab('a4', splitOf(settingsLeaf('stale-primary', 'deleted-ws'), tmuxLeaf('other', M)))])
+      await applySectionToStores('tabs.wa', payload, ctx)
+      expect(leavesOf('a4')).toEqual(['stale-primary', 'other'])
+    })
+
+    it('a tab with no such pane keeps its layout as it arrived', async () => {
+      seedTabWorld()
+      const payload = incomingFor([tab('a5', splitOf(tmuxLeaf('x1', M), tmuxLeaf('x2', M)))])
+      await applySectionToStores('tabs.wa', payload, ctx)
+      expect(leavesOf('a5')).toEqual(['x1', 'x2'])
+    })
+  })
+
   it('keeps the global active tab while it survives', async () => {
     seedTabWorld()
     await applySectionToStores('tabs.wa', incomingFor([tab('a2'), tab('a9')]), ctx)

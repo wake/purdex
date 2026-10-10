@@ -130,13 +130,22 @@ func (s *Store) applyMovedIn(tx dbtx, p FactPlan) (CommandResult, error) {
 		// the member host sends the fact again (a 5xx), by which time the row is active.
 		return CommandResult{}, errMemberNotSettled
 	}
+	// The lead's relay op this fact answers (D10), ended from `forwarded` before the row moves (the op names the member by the
+	// session the row still has). The session did move on its host, so the row moves whatever became of the op.
+	opEnded, err := endForwardedOpIn(tx, p.FromHostID, f.TeamID, f.MK, f.OpID, team.RelayDone, "", f.NewSession, f.NewRef, p.Now)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	outcome := func(st string) (CommandResult, error) {
+		return okResult(map[string]any{"state": st, "old_ref": oldRef, "op_ended": opEnded}) // for the lead's notice
+	}
 	if state != string(team.MemberActive) {
-		return okResult(map[string]string{"state": team.FactIgnored})
+		return outcome(team.FactIgnored)
 	}
 	var one int
 	switch err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state IN ('active', 'killing')`, f.NewSession).Scan(&one); {
 	case err == nil:
-		return okResult(map[string]string{"state": team.FactIgnored})
+		return outcome(team.FactIgnored)
 	case !errors.Is(err, sql.ErrNoRows):
 		return CommandResult{}, err
 	}
@@ -147,7 +156,7 @@ func (s *Store) applyMovedIn(tx dbtx, p FactPlan) (CommandResult, error) {
 		return CommandResult{}, err
 	}
 	if n, _ := r.RowsAffected(); n == 0 {
-		return okResult(map[string]string{"state": team.FactIgnored}) // the team ended
+		return outcome(team.FactIgnored) // the team ended
 	}
 	if oldRef != "" && oldRef != f.NewRef {
 		if _, err := tx.Exec(`INSERT INTO remote_member_refs (team_id, host_id, ref, mk, at) VALUES (?, ?, ?, ?, ?)
@@ -155,7 +164,7 @@ func (s *Store) applyMovedIn(tx dbtx, p FactPlan) (CommandResult, error) {
 			return CommandResult{}, err
 		}
 	}
-	return okResult(map[string]string{"state": team.FactApplied, "old_ref": oldRef}) // the old ref is for the lead's notice
+	return outcome(team.FactApplied)
 }
 
 // formerRefMatch is matchRemoteMember's second look (D7): the rows of host that were once called ref. It is consulted only when
@@ -181,10 +190,11 @@ func (m *Module) formerRefMatch(rows []memberRow, teamID, hostID, ref string) []
 // a lead that is slow to read. Refs are written as the lead can address them: <alias>/_<ref>.
 func (m *Module) announceMovedAfter(hostID string, f team.TeamFact, outcome []byte) {
 	var o struct {
-		State  string `json:"state"`
-		OldRef string `json:"old_ref"`
+		State   string `json:"state"`
+		OldRef  string `json:"old_ref"`
+		OpEnded bool   `json:"op_ended"`
 	}
-	if json.Unmarshal(outcome, &o) != nil || o.State != team.FactApplied || o.OldRef == "" {
+	if json.Unmarshal(outcome, &o) != nil || o.OldRef == "" || (o.State != team.FactApplied && !o.OpEnded) {
 		return
 	}
 	if !m.goTracked(func() { m.announceMoved(hostID, f, o.OldRef) }) {
@@ -202,6 +212,9 @@ func (m *Module) announceMoved(hostID string, f team.TeamFact, oldRef string) {
 		return
 	}
 	mr := memberRow{HostID: hostID, SessionID: f.NewSession, Ref: f.NewRef}
-	text := fmt.Sprintf(team.RelayManualNoticeFmt, alias+"/"+oldRef, alias+"/"+f.NewRef)
-	m.noticeToLead(mr, t, text, "moved notice")
+	format := team.RelayManualNoticeFmt // a person's own /relay (D3)
+	if f.OpID != "" {
+		format = RelayDoneNoticeFmt // the lead's relay finished
+	}
+	m.noticeToLead(mr, t, fmt.Sprintf(format, alias+"/"+oldRef, alias+"/"+f.NewRef), "moved notice")
 }

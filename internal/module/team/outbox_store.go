@@ -24,6 +24,7 @@ const (
 	CmdKill      = "kill"
 	CmdEnd       = "end"
 	CmdLeadMoved = "lead_moved"
+	CmdRelay     = team.CommandRelay
 	CmdSpawn     = "spawn"
 	CmdVoid      = "void"
 	// CmdAppearance is team.appearance (#2288): sent only to hosts that announce it, so a lead host's rename never waits
@@ -199,9 +200,24 @@ func (s *Store) SettleCommand(id string, res peersmod.CallResult, now int64, out
 		return false, err
 	}
 	if err := out.ApplyOutcome(tx, c, res); err != nil {
+		s.settleAborted(tx)
 		return false, err
 	}
-	return true, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		s.settleAborted(tx)
+		return false, err
+	}
+	if s.onCommandSettled != nil {
+		s.onCommandSettled(tx)
+	}
+	return true, nil
+}
+
+// settleAborted tells the module that the settle transaction tx did not commit: what it noted for after the commit is dropped.
+func (s *Store) settleAborted(tx *sql.Tx) {
+	if s.onSettleAborted != nil {
+		s.onSettleAborted(tx)
+	}
 }
 
 // withCurrentLook is body with the team's name, label and colour as the teams row holds them now (read in q's transaction),

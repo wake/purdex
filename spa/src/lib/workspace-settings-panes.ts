@@ -19,6 +19,22 @@ export function secondarySettingsPaneIds(layout: PaneLayout, workspaceIds: reado
     .map((p) => p.id)
 }
 
+/**
+ * `layout` without its secondary panes that show the settings page of a workspace NOT in `existing`; the same object when
+ * there are none (#2514: a tabs payload from a client that never saw the workspace's deletion). A primary pane is never
+ * removed here (a tab whose primary pane is such a page arrives as it is, as before).
+ */
+export function withoutStaleSettingsPanes(layout: PaneLayout, existing: ReadonlySet<string>): PaneLayout {
+  const primary = getPrimaryPane(layout).id
+  let next = layout
+  for (const p of collectLeaves(layout)) {
+    const c = p.content
+    if (p.id === primary || c.kind !== 'settings' || c.scope === 'global' || existing.has(c.scope.workspaceId)) continue
+    next = removePane(next, p.id) ?? next
+  }
+  return next
+}
+
 /** `layout` without those panes; the same object when there are none. A primary pane is never removed here. */
 export function withoutSecondarySettingsPanes(layout: PaneLayout, workspaceIds: readonly string[]): PaneLayout {
   let next = layout
