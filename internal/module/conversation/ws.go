@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/wake/purdex/internal/convfeed"
+	"github.com/wake/purdex/internal/convmodel"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -77,6 +78,26 @@ type wsConn struct {
 	// the follower's position (only the follower goroutine touches these)
 	epoch   string
 	sentRev uint64
+	// what the last capabilities frame (or the snapshot) said about sending: a change is pushed (U3-2)
+	caps capsKey
+}
+
+// capsKey is the part of the capability table that moves while a conversation is open: whether a mod can take a prompt.
+type capsKey struct{ send, interrupt, answer string }
+
+func capsKeyOf(c *convmodel.Capabilities) capsKey {
+	return capsKey{c.Send, c.Interrupt, c.AnswerQuestion}
+}
+
+// pushCaps queues a conversation.capabilities frame when the table changed since the snapshot or the last frame (a mod
+// that announced prompt.v1 came or went), so the App enables or disables its input at once instead of on the next fetch.
+func (c *wsConn) pushCaps() bool {
+	caps := c.m.capabilitiesFor(c.sid)
+	if k := capsKeyOf(caps); k != c.caps {
+		c.caps = k
+		return c.enqueue("conversation.capabilities", map[string]any{"capabilities": caps})
+	}
+	return true
 }
 
 // enqueue numbers and queues one frame. It never blocks: a full queue is a real overflow and ends the connection.
@@ -250,6 +271,8 @@ func (m *Module) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	c.addCleanup(cancelSub)
 
+	// c.caps stays empty until a snapshot goes out: a resume from a cursor carries no table and what changed while the client was
+	// away is unknown, so the first tick pushes the current one
 	if !c.sendFirst(hasAfter, afterEpoch, afterRev) {
 		return
 	}
@@ -262,7 +285,7 @@ func (c *wsConn) sendFirst(hasAfter bool, afterEpoch string, afterRev uint64) bo
 	if hasAfter {
 		inc := c.entry.Increment(afterEpoch, afterRev)
 		if !inc.Stale {
-			if body, ok := c.m.encodeIncrement(inc, c.hostID, frameOverhead); ok {
+			if body, ok := c.m.encodeIncrement(c.entry, inc, c.sid, c.hostID, frameOverhead); ok {
 				c.setPosition(inc.Cursor)
 				return c.enqueue("conversation.changes", json.RawMessage(body))
 			}
@@ -273,7 +296,9 @@ func (c *wsConn) sendFirst(hasAfter bool, afterEpoch string, afterRev uint64) bo
 
 // sendSnapshot queues a snapshot frame (with the connection's `turns`) and moves the follower's position to its cursor.
 func (c *wsConn) sendSnapshot() bool {
-	body, cursor, _, code := c.m.snapshotBody(c.entry, c.sid, c.hostID, c.turns, -1, "", false, false)
+	caps := c.m.capabilitiesFor(c.sid) // the table the snapshot says is also the baseline a later change is compared with
+	c.caps = capsKeyOf(caps)
+	body, cursor, _, code := c.m.snapshotBody(c.entry, c.sid, c.hostID, caps, c.turns, -1, "", false, false)
 	if code != "" {
 		log.Printf("[conversation] snapshot frame: %s", code)
 		return false
@@ -309,6 +334,9 @@ func (c *wsConn) follow() {
 		case <-c.ctx.Done():
 			return
 		case <-tick.C:
+		}
+		if !c.pushCaps() {
+			return
 		}
 		// The cheap light is read before the entry gate (a store query must not hold up other followers of the entry)
 		// for the frame the last full lookup confirmed, and applied only to that same source.
@@ -355,7 +383,7 @@ func (c *wsConn) push() bool {
 	if err != nil || rev == c.sentRev {
 		return true
 	}
-	body, ok := c.m.encodeIncrement(inc, c.hostID, frameOverhead)
+	body, ok := c.m.encodeIncrement(c.entry, inc, c.sid, c.hostID, frameOverhead)
 	if !ok { // too big for one frame
 		return c.enqueue("conversation.reset", map[string]any{}) && c.sendSnapshot()
 	}

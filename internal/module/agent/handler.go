@@ -1102,9 +1102,10 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 			// sessions/tmux broadcasts).
 			m.snapshotMu.Lock()
 			m.statusSnapshots = make(map[string]statusSnapshot)
-			// a removed statusline must not leave a stale CTX on the peer rows (codex R2, 2026-10-07)
-			m.contextUsage = make(map[string]ContextUsage)
 			m.snapshotMu.Unlock()
+			// a removed statusline must not leave a stale CTX on the peer rows (codex R2, 2026-10-07), nor a persisted one for
+			// the next boot (#2406)
+			m.clearContextUsage()
 			if m.core != nil {
 				m.core.Events.Broadcast("", "agent.status.cleared", `{"agent_type":"cc"}`)
 			}

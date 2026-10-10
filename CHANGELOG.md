@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.0.0-alpha.680] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`（mod 沒變，`pdx setup` 也不會再重寫 mod 資料夾）。跨主機 team 的修正要 member 主機也升級才生效。
+
+### Fixed：member 主機重啟後，lead 那邊的跨主機 member 不再空白 — #2406（#2408）
+
+- 每個 session 最後一次的 statusline 讀數（用量、model、effort 與時間）會存進 daemon 的資料庫，開機時只為仍然開著的 session 讀回來。原本只存在記憶體裡，member 主機一重啟就清空，要等那個 session 下一輪對話才補回來，lead 的 team 面板那段時間只能顯示空白。數值有變才寫，每 10 秒合併寫一次。
+
+## [1.0.0-alpha.679] - 2026-10-10
+
+> 動到 daemon、mod 與 SPA：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；開著的 session 會自動重新載入 mod（會印一次 reloaded 提示）。team.db 會換一個唯一索引（自動遷移，開機不會因此失敗）。SPA 已隨主機上的 dev server 生效。
+
+### Added：App 可以經由 session 的 mod 送出訊息與中斷 — U3-0b mod（#2402，介面線）
+
+- mod 會宣告 `prompt.v1`，並對目前的 session 掛著長輪詢等 App 的指令：送出時以使用者本人的身分送進 session（這一輪還在進行就立刻回 busy）；中斷時停下正在跑的那一輪（沒有在跑就回 not_running）。`/clear` 之後原本那個 session 的指令會被丟掉。mod 重新載入後，`POST /api/conversations/claude/{sid}/submit`／`interrupt` 才會從 409 `no_mod` 變成可用。
+
+### Changed：對話裡標出訊息從哪裡來 — #2396（#2405，介面線）
+
+- plugin 自己發的提示（例如接力）與以 peer 包裝開頭的訊息，現在標成 peer 來源並帶上寄件者；只靠文字包裝、無法驗證的標成未驗證；寄件者名稱會先清理過。
+
+### Changed：mod 沒改就不重寫 mod 資料夾 — #2403（#2404）
+
+- `pdx setup` 改成比對 mod 的內容：一次發版如果沒動到 mod，資料夾裡一個檔都不寫，開著的 session 也就不會再印「purdex: … changed — reloaded」；mod 真的改了才整包換一次（舊版留下、新版已刪的檔案也會清掉）。hooks 狀態的「mod 過期」也改成看內容，不再因為版本號不同就誤報。
+
+### Changed：member 主機的命令紀錄只留 30 天 — #2265（#2399）
+
+- 已決定的跨主機命令紀錄超過 30 天就分批刪除；仍有效的 adopt 紀錄會保留，讓晚到的撤銷照樣有效。lead 端也加了防線：開機先讓逾時的 adopt／spawn 作廢，送出時絕不送超過 10 分鐘的。
+
+### Changed：資料庫保證一個 session 最多只當一個 member — #2152 後續（#2400）
+
+- team.db 的唯一索引改成同時涵蓋 active 與 killing（kill 進行中）：同一個 session 不可能同時有兩筆有效的成員資格。遷移在同一個交易裡處理既有的重複資料（保留 active，否則保留最新的，其餘標成 gone），任何一步失敗都整筆退回、改建保底索引，開機不會失敗。
+
+### Changed：team 面板 — WA-2a′、單行格子（#2355、#2407，介面線）
+
+- team 面板四種狀態、標題列的 team 條與 Notebook 按鈕；單行格子：側欄列配置、用量圓環取代主機方塊、符號用主機主色並做視覺置中、格子間距 4px、面板預設寬 412 讓 lead 加 3 位 member 排得下一列；context 數字改成顯示剩下多少（圓環仍畫已用）。
+
+### Added：工作簿第 2 版資料層 — WA-1b（#2388，介面線）
+
+- App 端讀取待辦、重整與往前載入更多紀錄的資料層（還沒有畫面）。
+
 ## [1.0.0-alpha.678] - 2026-10-10
 
 > 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`。
@@ -11,6 +51,10 @@
 ### Changed：App 經由 mod 送出的訊息會出現在對話裡 — U3-0b 第一部分（#2394，介面線）
 
 - App 透過 session 的 mod 以使用者身分送出的訊息（`asUser`），轉錄檔裡標的是 plugin 來源，原本整筆被略過，對話裡看不到、App 也對不上自己先顯示的那一則。現在當成使用者訊息；plugin 自己發的提示（例如接力）照舊略過。
+
+### Added：App 送出／中斷訊息的 daemon 端 — U3-0b 第二部分（#2395，介面線；補記：已隨本版出去，當時漏記）
+
+- 新路由 `POST /api/conversations/claude/{sid}/submit`、`interrupt` 與 mod 用的 `/mod/v1/prompt/next`、`result`；snapshot 帶 capabilities，`/api/info` 宣告 `conversations.submit.v1`。mod 還沒宣告 `prompt.v1` 前一律回 409 `no_mod`。
 
 ### Fixed：kill 本機 member 時先佔住、再送訊號 — #2152（#2386）
 

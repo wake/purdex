@@ -104,17 +104,20 @@ interface ShouldNotifyParams {
   hasTab: boolean
   settings: NotificationSettings
   notificationSilent?: boolean
+  /** The event is a proxy subagent's Stop / StopFailure (`isProxyStop`): ends a tool, not the main agent's turn. */
+  fromProxy?: boolean
   /** Caller extracts from event.detail?.error before passing in (spec §4, option A). */
   errorString?: string
 }
 
 export function shouldNotify(params: ShouldNotifyParams): boolean {
-  const { derived, eventName: rawEventName, compositeKey: ck, visibleInActiveTab, hasTab, settings, notificationSilent = false, errorString } = params
+  const { derived, eventName: rawEventName, compositeKey: ck, visibleInActiveTab, hasTab, settings, notificationSilent = false, fromProxy = false, errorString } = params
   // W2 transition: cc broadcasts PdxXxx; legacy literal keys live in shouldNotify
   // suppression checks and NotificationSettings.events. Normalize once at entry.
   const eventName = normalizeEventName(rawEventName)
   if (derived !== 'waiting' && derived !== 'idle' && derived !== 'error') return false
   if (notificationSilent) return false
+  if (fromProxy) return false
   // Informational Notification subtypes (idle_prompt, auth_success) derive to 'idle'
   // but should not trigger desktop notifications — consistent with unread marking logic.
   if (derived === 'idle' && eventName === 'Notification') return false

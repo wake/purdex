@@ -6,13 +6,18 @@ import (
 )
 
 // VerifiedCCVersion is the Claude Code version every byte layout in this
-// package was measured against. A registry entry reporting a newer version
-// is where a silent protocol change would first show up, so callers log it
-// (once) and the selftest exists to re-verify.
+// package was measured against; the proxy helpers also present it as their own
+// version. It moves only when the layouts are measured again.
 const VerifiedCCVersion = "2.1.270"
 
-// NewerThanVerified reports whether v (dotted decimal, e.g. "2.1.271") is
-// strictly newer than VerifiedCCVersion. Missing trailing components count
+// SelftestPassedCCVersion is the newest Claude Code version a passing `pdx msg selftest` has been seen on (the inbox frame
+// in, the native reply out; 2.1.296 on mlab, #2387). A registry entry reporting a newer version than this is where a silent
+// protocol change would first show up, so callers log it (once) and the selftest exists to re-verify. It is the warning
+// threshold and nothing else: one round trip does not re-measure the byte layouts, so it does not touch VerifiedCCVersion.
+const SelftestPassedCCVersion = "2.1.296"
+
+// NewerThanVerified reports whether v (dotted decimal, e.g. "2.1.297") is
+// strictly newer than SelftestPassedCCVersion. Missing trailing components count
 // as 0. Anything that is not purely dotted decimal is not comparable and
 // yields false.
 func NewerThanVerified(v string) bool {
@@ -20,7 +25,7 @@ func NewerThanVerified(v string) bool {
 	if !ok {
 		return false
 	}
-	ref, _ := parseDotted(VerifiedCCVersion)
+	ref, _ := parseDotted(SelftestPassedCCVersion)
 	n := max(len(got), len(ref))
 	for i := 0; i < n; i++ {
 		a, b := component(got, i), component(ref, i)

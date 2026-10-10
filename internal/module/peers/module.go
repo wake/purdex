@@ -958,9 +958,9 @@ func (m *Module) titleSnapshot() (map[string]ipeers.TitleInfo, error) {
 }
 
 // warnNewerCCVersions logs a one-shot warning for every distinct Claude
-// Code version among entries that is newer than ccuds.VerifiedCCVersion —
-// the version every byte layout in the ccuds package was measured against,
-// so a newer one reporting is where a silent protocol change would first
+// Code version among entries that is newer than ccuds.SelftestPassedCCVersion —
+// the newest version a passing `pdx msg selftest` has been seen on, so a
+// newer one reporting is where a silent protocol change would first
 // show up. Deduped by version string in m.warnedVersions so the same
 // version logs at most once per process lifetime, however many
 // /api/peers calls (or entries sharing that version) see it.
@@ -972,7 +972,7 @@ func (m *Module) warnNewerCCVersions(entries []ipeers.Entry) {
 		if _, alreadyWarned := m.warnedVersions.LoadOrStore(e.Version, struct{}{}); alreadyWarned {
 			continue
 		}
-		m.logf("peers: Claude Code %s is newer than the last verified %s; run pdx msg selftest", e.Version, ccuds.VerifiedCCVersion)
+		m.logf("peers: Claude Code %s is newer than the last verified %s; run pdx msg selftest", e.Version, ccuds.SelftestPassedCCVersion)
 	}
 }
 

@@ -3,6 +3,8 @@
 // (survives a tab switch through the real TabContent and a reload). Real stores and the real provider.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { ArrowLineUp } from '@phosphor-icons/react'
 import { TabContent } from '../TabContent'
 import { TeamDisplayProvider } from './TeamDisplayProvider'
 import { TeamPanelArea } from './TeamPanelArea'
@@ -10,7 +12,8 @@ import { HOST, KEY, resetTeamStores, seedScene } from '../../lib/team/__tests__/
 import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
-import { PANEL_MIN_WIDTH, useTeamUiStore } from '../../stores/useTeamUiStore'
+import { currentPanelMin, useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
@@ -318,7 +321,7 @@ describe('full mode', () => {
     fireEvent.click(screen.getByTestId('team-panel-count')) // a header click: full -> line
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('line')
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
-    fireEvent.click(screen.getByTestId('team-panel-to-full'))
+    fireEvent.click(screen.getByTestId('team-panel-header')) // a header click again: line -> full (the button no longer does this)
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('full')
   })
 })
@@ -359,6 +362,21 @@ describe('header height (TI-6)', () => {
     expect(more.className).toContain('flex-wrap')
     expect(within(more).getAllByTestId('team-panel-cell')).toHaveLength(1)
     expect(header().style.height).toBe(`${HEADER_H}px`)
+  })
+
+  it('the unmeasured fallback capacity follows the light style (iconDot cells are wider)', () => {
+    useUISettingsStore.getState().setTabIndicatorStyle('iconDot')
+    try {
+      scene5(8)
+      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+      mount()
+      const w = useTeamUiStore.getState().panel.width
+      const n = firstRowCapacity(w, 'iconDot')
+      expect(n).toBeLessThan(firstRowCapacity(w))
+      expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(n)
+    } finally {
+      useUISettingsStore.getState().setTabIndicatorStyle('badge')
+    }
   })
 
   it('a big team keeps the header row to the capacity and wraps the rest', () => {
@@ -632,7 +650,7 @@ describe('one-line mode', () => {
 })
 
 describe('resize and enlarge', () => {
-  beforeEach(() => { useTeamUiStore.setState({ panel: { width: 500 } }) }) // above the minimum, so a drag to either side moves
+  beforeEach(() => { useTeamUiStore.setState({ panel: { width: 500, followsMin: false } }) }) // above the minimum, so a drag to either side moves
   const drag = (from: number, to: number, commit = true) => {
     fireEvent.mouseDown(screen.getByTestId('resize-hit'), { clientX: from })
     fireEvent.mouseMove(document, { clientX: to })
@@ -675,14 +693,14 @@ describe('resize and enlarge', () => {
     expect(area().style.width).toBe('500px')
   })
 
-  it('resize clamps to 412-720', () => {
+  it('resize clamps to the current minimum (356 under the default style) - 720', () => {
     scene()
     mount()
     drag(500, -2000)
     expect(useTeamUiStore.getState().panel.width).toBe(720)
     drag(500, 5000)
-    expect(useTeamUiStore.getState().panel.width).toBe(PANEL_MIN_WIDTH)
-    expect(PANEL_MIN_WIDTH).toBe(412)
+    expect(useTeamUiStore.getState().panel.width).toBe(currentPanelMin())
+    expect(currentPanelMin()).toBe(356)
   })
 
   it('a click on the edge without moving writes nothing', () => {
@@ -710,7 +728,7 @@ describe('resize and enlarge', () => {
     expect(area().getAttribute('data-expanded')).toBe('false')
     fireEvent.click(screen.getByTestId('team-panel-expand'))
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 500 })
+    expect(useTeamUiStore.getState().panel).toEqual({ width: 500, followsMin: false })
     expect(area().getAttribute('data-expanded')).toBe('true')
     expect(screen.queryByTestId('resize-hit')).toBeNull() // nothing to resize while it fills the area
     fireEvent.click(screen.getByTestId('team-panel-expand'))
@@ -753,12 +771,62 @@ describe('resize and enlarge', () => {
   })
 })
 
+describe('the header\'s move-to-title-bar button (round 5)', () => {
+  const btn = () => screen.getByTestId('team-panel-to-titlebar')
+  const setMode = (m: 'full' | 'line' | 'max') => act(() => { useTeamUiStore.getState().setPanelMode(KEY, m) })
+
+  it('line, full and max all draw the same icon (ArrowLineUp, not a caret) with the same tooltip, and none has the old expand-list control', () => {
+    scene()
+    mount()
+    const icons: string[] = []
+    for (const m of ['full', 'line', 'max'] as const) {
+      setMode(m)
+      expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe(m)
+      icons.push(btn().querySelector('svg')!.innerHTML)
+      expect(btn().getAttribute('title')).toBe('收進標題列')
+      expect(btn().getAttribute('aria-label')).toBe('收進標題列')
+      expect(screen.queryByTestId('team-panel-to-full')).toBeNull()
+    }
+    expect(new Set(icons).size).toBe(1)
+    // it is Phosphor's ArrowLineUp, not a caret
+    expect(icons[0]).toBe(renderToStaticMarkup(<ArrowLineUp size={11} />).replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, ''))
+  })
+
+  it('the tooltip reads 「Move to title bar」 in English', () => {
+    scene()
+    mount()
+    act(() => useI18nStore.getState().setLocale('en'))
+    expect(btn().getAttribute('title')).toBe('Move to title bar')
+  })
+
+  it('in every state a click moves the area into the title bar and back to the state it left', () => {
+    scene()
+    mount()
+    for (const m of ['line', 'full', 'max'] as const) {
+      setMode(m)
+      fireEvent.click(btn())
+      expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
+      expect(screen.queryByTestId('team-panel-area')).toBeNull()
+      act(() => useTeamUiStore.getState().toggleTitleBar(KEY))
+      expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe(m)
+    }
+  })
+
+  it('line <-> full is only the header click: the button never expands a one-line panel', () => {
+    scene()
+    mount()
+    setMode('line')
+    fireEvent.click(btn())
+    expect(useTeamUiStore.getState().panelMode[KEY]).not.toBe('full')
+  })
+})
+
 describe('the title bar state', () => {
   it('⌃ hands the area to the title bar: the pane draws nothing, and the way back is the state it left', () => {
     scene()
     mount()
     fireEvent.click(screen.getByTestId('team-panel-expand')) // max
-    fireEvent.click(screen.getByTestId('team-panel-to-line'))
+    fireEvent.click(screen.getByTestId('team-panel-to-titlebar'))
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
     expect(screen.queryByTestId('team-panel-area')).toBeNull()
     act(() => useTeamUiStore.getState().toggleTitleBar(KEY))

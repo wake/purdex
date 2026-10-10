@@ -2,13 +2,15 @@
 // ghost workspace): persisted under purdex-team-ui, never synced; pruned only by a roster frame that omits a team or by
 // deleting the host.
 import { describe, it, expect, beforeEach } from 'vitest'
-import { PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH, useTeamUiStore } from './useTeamUiStore'
+import { useTeamUiStore } from './useTeamUiStore'
+import { useUISettingsStore } from './useUISettingsStore'
 import { teamKeyOf } from '../lib/team/team-views'
 
 const k = (host: string, team: string) => teamKeyOf(host, team)
 
 beforeEach(() => {
   localStorage.clear()
+  useUISettingsStore.setState({ tabIndicatorStyle: 'badge', hostBadgeSidebarBox: 16 })
   useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', legacyMax: false, ghostWorkspace: {}, teamDrill: {}, endedSeats: {}, workbookTabs: {}, panel: { width: 312 }, teamBeadHost: true })
 })
 
@@ -174,14 +176,18 @@ describe('the bead host-icon setting (spec P7, device-local)', () => {
 
 describe('the panel area (WA-2a)', () => {
   const saved = () => JSON.parse(localStorage.getItem('purdex-team-ui')!).state
-  it('defaults to 412 wide (the minimum: a lead + 3 members fit one header row)', () => {
-    expect(useTeamUiStore.getInitialState().panel).toEqual({ width: 412 })
-    expect(PANEL_DEFAULT_WIDTH).toBeGreaterThanOrEqual(PANEL_MIN_WIDTH)
+  it('defaults to the minimum width (356 under the default light style: a lead + 3 members fit one header row)', () => {
+    expect(useTeamUiStore.getInitialState().panel).toEqual({ width: 356, followsMin: true })
   })
-  it('setPanelWidth clamps to 412-720 and rounds', () => {
+  it('a drag that lands on the same width (or is clamped to it) still makes the width the person\'s', () => {
+    useTeamUiStore.setState({ panel: { width: 356, followsMin: true } })
+    useTeamUiStore.getState().setPanelWidth(100) // clamped back to 356
+    expect(useTeamUiStore.getState().panel).toEqual({ width: 356, followsMin: false })
+  })
+  it('setPanelWidth clamps to the current minimum - 720 and rounds', () => {
     const { setPanelWidth } = useTeamUiStore.getState()
     setPanelWidth(100)
-    expect(useTeamUiStore.getState().panel.width).toBe(412)
+    expect(useTeamUiStore.getState().panel.width).toBe(356)
     setPanelWidth(5000)
     expect(useTeamUiStore.getState().panel.width).toBe(720)
     setPanelWidth(500.6)
@@ -191,11 +197,11 @@ describe('the panel area (WA-2a)', () => {
   })
   it('the width is saved and survives a reload', () => {
     useTeamUiStore.getState().setPanelWidth(500)
-    expect(saved().panel).toEqual({ width: 500 })
+    expect(saved().panel).toEqual({ width: 500, followsMin: false })
     useTeamUiStore.setState({ panel: { width: 312 } })
     localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { panel: { width: 500 } }, version: 0 }))
     useTeamUiStore.persist.rehydrate()
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 500 })
+    expect(useTeamUiStore.getState().panel).toEqual({ width: 500, followsMin: false })
   })
   it('heal clamps a wild width and rejects bad types', () => {
     const load = (panel: unknown) => {
@@ -203,21 +209,86 @@ describe('the panel area (WA-2a)', () => {
       useTeamUiStore.persist.rehydrate()
       return useTeamUiStore.getState().panel
     }
-    expect(load({ width: 9999 })).toEqual({ width: 720 })
-    expect(load({ width: 3 })).toEqual({ width: 412 })
-    expect(load({ width: 'wide' })).toEqual({ width: 412 })
-    expect(load('oops')).toEqual({ width: 412 })
-    expect(load(null)).toEqual({ width: 412 })
+    expect(load({ width: 9999 })).toEqual({ width: 720, followsMin: false })
+    expect(load({ width: 3 })).toEqual({ width: 356, followsMin: true })
+    expect(load({ width: 'wide' })).toEqual({ width: 356, followsMin: true })
+    expect(load('oops')).toEqual({ width: 356, followsMin: true })
+    expect(load(null)).toEqual({ width: 356, followsMin: true })
   })
-  it('a width saved under the old minimum (280 / the old 312 default) is lifted to the new minimum on load', () => {
+  it('a width saved under the current minimum is lifted to it on load (heal uses the CURRENT minimum)', () => {
     const load = (panel: unknown) => {
       localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { panel }, version: 0 }))
       useTeamUiStore.persist.rehydrate()
       return useTeamUiStore.getState().panel
     }
-    for (const old of [280, 300, 312, 411]) expect(load({ width: old })).toEqual({ width: PANEL_MIN_WIDTH })
-    expect(load({ width: 412 })).toEqual({ width: 412 })
-    expect(load({ width: 413 })).toEqual({ width: 413 })
+    for (const old of [280, 300, 312, 355]) expect(load({ width: old })).toEqual({ width: 356, followsMin: true })
+    expect(load({ width: 356 })).toEqual({ width: 356, followsMin: true })
+    expect(load({ width: 413 })).toEqual({ width: 413, followsMin: false })
+    useUISettingsStore.getState().setTabIndicatorStyle('iconDot')
+    expect(load({ width: 380 })).toEqual({ width: 412, followsMin: true })
+  })
+  describe('the minimum follows the light style and the host box', () => {
+    const width = () => useTeamUiStore.getState().panel.width
+    beforeEach(() => {
+      useUISettingsStore.getState().setTabIndicatorStyle('badge')
+      useUISettingsStore.getState().setHostBadgeSidebarBox(16)
+      useTeamUiStore.setState({ panel: { width: 356 } })
+    })
+    it('a width at the minimum follows it badge -> iconDot -> badge', () => {
+      useUISettingsStore.getState().setTabIndicatorStyle('iconDot')
+      expect(width()).toBe(412)
+      useUISettingsStore.getState().setTabIndicatorStyle('badge')
+      expect(width()).toBe(356)
+    })
+    it('a width below the new minimum is pulled up to it', () => {
+      useTeamUiStore.setState({ panel: { width: 380 } })
+      useUISettingsStore.getState().setTabIndicatorStyle('iconDot')
+      expect(width()).toBe(412)
+    })
+    it('a width the person widened past the minimum is kept, in both directions', () => {
+      useTeamUiStore.getState().setPanelWidth(500)
+      useUISettingsStore.getState().setTabIndicatorStyle('iconDot')
+      expect(width()).toBe(500)
+      useUISettingsStore.getState().setTabIndicatorStyle('badge')
+      expect(width()).toBe(500)
+    })
+    it('a width the person dragged to exactly the OLD minimum of another style is kept (badge 356 -> dragged 412 -> iconDot -> badge)', () => {
+      useTeamUiStore.getState().setPanelWidth(412)
+      expect(useTeamUiStore.getState().panel.followsMin).toBe(false)
+      useUISettingsStore.getState().setTabIndicatorStyle('iconDot')
+      expect(width()).toBe(412)
+      useUISettingsStore.getState().setTabIndicatorStyle('badge')
+      expect(width()).toBe(412)
+    })
+    it('a never-dragged default keeps following (badge 356 -> iconDot 412 -> badge 356), and the flag survives the follow', () => {
+      useUISettingsStore.getState().setTabIndicatorStyle('iconDot')
+      expect(width()).toBe(412)
+      expect(useTeamUiStore.getState().panel.followsMin).toBe(true)
+      useUISettingsStore.getState().setTabIndicatorStyle('badge')
+      expect(width()).toBe(356)
+    })
+    it('a saved store without the flag infers it once from width === the current minimum; the flag is persisted', () => {
+      const load = (panel: unknown) => {
+        localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { panel }, version: 0 }))
+        useTeamUiStore.persist.rehydrate()
+        return useTeamUiStore.getState().panel
+      }
+      expect(load({ width: 356 }).followsMin).toBe(true)
+      expect(load({ width: 500 }).followsMin).toBe(false)
+      expect(load({ width: 500, followsMin: true }).followsMin).toBe(true)
+      expect(load({ width: 412, followsMin: false })).toEqual({ width: 412, followsMin: false })
+      useTeamUiStore.getState().setPanelWidth(600)
+      expect(JSON.parse(localStorage.getItem('purdex-team-ui')!).state.panel).toEqual({ width: 600, followsMin: false })
+    })
+    it('a bigger host box raises the minimum too', () => {
+      useUISettingsStore.getState().setHostBadgeSidebarBox(24)
+      expect(width()).toBe(356 + 4 * 8)
+    })
+    it('setPanelWidth clamps to the current minimum', () => {
+      useUISettingsStore.getState().setTabIndicatorStyle('iconDot')
+      useTeamUiStore.getState().setPanelWidth(100)
+      expect(width()).toBe(412)
+    })
   })
   it('teamDrill and workbookTabs round-trip and heal', () => {
     const key = k('h1', 't1')
@@ -324,7 +395,7 @@ describe('the four states (WA-2a′)', () => {
   it('an old store maps line -> line, full -> full, and expanded:true waits for the team showing', () => {
     reload({ panelMode: { [key]: 'line' }, panel: { width: 500, expanded: true } })
     expect(st().panelMode[key]).toBe('line')
-    expect(st().panel).toEqual({ width: 500 })
+    expect(st().panel).toEqual({ width: 500, followsMin: false })
     expect(st().legacyMax).toBe(true)
     st().takeLegacyMax(k('h1', 't2'))
     expect(st().panelMode[k('h1', 't2')]).toBe('max')

@@ -151,14 +151,14 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if q.Has("after") {
 		inc := entry.Increment(afterEpoch, afterRev)
 		if !inc.Stale {
-			if body, ok := m.encodeIncrement(inc, hostID, 0); ok {
+			if body, ok := m.encodeIncrement(entry, inc, sid, hostID, 0); ok {
 				writeJSON(w, http.StatusOK, body)
 				return
 			}
 		}
 		reset = true // a cursor of another epoch, or a catch-up too big for one answer: a fresh snapshot instead
 	}
-	body, _, status, code := m.snapshotBody(entry, sid, hostID, turns, before, around, q.Has("around"), reset)
+	body, _, status, code := m.snapshotBody(entry, sid, hostID, m.capabilitiesFor(sid), turns, before, around, q.Has("around"), reset)
 	if code != "" {
 		writeError(w, status, code)
 		return
@@ -190,7 +190,12 @@ func (m *Module) hostID() string {
 
 // snapshotBody builds the snapshot answer (the same body for HTTP and for a WebSocket's snapshot frame): the window
 // under the 4 MiB cap, the header and the cursor of one instant. On failure it returns the HTTP status and error code.
-func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, turns, before int, around string, hasAround, reset bool) (body []byte, cursor string, status int, code string) {
+func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, caps *convmodel.Capabilities, turns, before int, around string, hasAround, reset bool) (body []byte, cursor string, status int, code string) {
+	// paired before the entry is locked for the view (UserMessages takes the same lock); it sizes the envelope
+	echo := m.echoIDs(sid, entry)
+	if echo == nil {
+		echo = map[string]string{}
+	}
 	build := func(h convfeed.Header, cursor string, turnList []convmodel.Turn, win convfeed.WindowResult, reset bool) snapshotJSON {
 		var cu *convmodel.Usage
 		if h.Usage != nil {
@@ -200,7 +205,7 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, turns, 
 			Reset: reset,
 			Conversation: conversationJSON{
 				Key:      convmodel.Key{HostID: hostID, Provider: "claude", SessionID: sid},
-				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Capabilities: m.capabilitiesFor(sid), Usage: cu, Turns: apiTurns(turnList),
+				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Capabilities: caps, Usage: cu, Turns: apiTurns(turnList, echo),
 			},
 			Header: headerOf(h),
 			Window: windowJSON{FirstIndex: win.FirstIndex, LastIndex: win.LastIndex, TotalTurns: win.TotalTurns, HasMoreBefore: win.HasMoreBefore},
@@ -230,7 +235,20 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, turns, 
 	if view.Turns == nil {
 		view.Turns = []convmodel.Turn{}
 	}
+	// paired again now that the view is taken: a message that landed after the first pairing and is in the view (its cursor is
+	// past it, so no increment would carry it) still gets its id; the first pairing only sized the envelope
+	sized := make(map[string]string, len(echo))
+	for id, cm := range echo {
+		sized[id] = cm
+	}
+	for id, cm := range m.echoIDs(sid, entry) {
+		echo[id] = cm
+	}
 	body, err := json.Marshal(build(view.Header, view.Cursor, view.Turns, view.WindowResult, reset))
+	if err == nil && len(body) > m.maxBody { // the late ids were not part of the budget: drop them rather than pass the cap
+		echo = sized
+		body, err = json.Marshal(build(view.Header, view.Cursor, view.Turns, view.WindowResult, reset))
+	}
 	if err != nil {
 		return nil, "", http.StatusInternalServerError, "encode_failed"
 	}
@@ -261,11 +279,12 @@ type incrementJSON struct {
 
 // encodeIncrement is the answer to a valid cursor; ok is false when it would pass the body cap (the caller then
 // answers a reset with a snapshot, which has its own way to fit).
-func (m *Module) encodeIncrement(inc convfeed.Increment, hostID string, overhead int) (body []byte, ok bool) {
+func (m *Module) encodeIncrement(entry *convfeed.Entry, inc convfeed.Increment, sid, hostID string, overhead int) (body []byte, ok bool) {
 	resp := incrementJSON{Changes: make([]changeJSON, 0, len(inc.Changes)), Header: headerOf(inc.Header), Cursor: inc.Cursor}
+	echo := m.echoIDs(sid, entry)
 	for _, c := range inc.Changes {
 		t := c.Turn
-		items := indexedItemsAt(c.Items, c.Indexes)
+		items := indexedItemsAt(c.Items, c.Indexes, echo)
 		resp.Changes = append(resp.Changes, changeJSON{
 			Turn:  turnHeaderJSON{ID: t.ID, Index: t.Index, StartedAt: t.StartedAt, EndedAt: t.EndedAt, Outcome: t.Outcome, Error: t.Error, DurationMS: t.DurationMS, OmittedItems: t.OmittedItems},
 			Items: items,

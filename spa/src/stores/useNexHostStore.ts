@@ -56,6 +56,15 @@ export function selectConversationsScope(hostId: string): (s: Pick<NexHostState,
   }
 }
 
+/**
+ * The daemon lists `conversations.v1` in `/api/info.capabilities`: `GET /api/conversations/{provider}/{session_id}` (the
+ * conversation snapshot and its stream) is served. Key presence, never a version compare. Independent of Nexen's phase:
+ * the conversation API reads Claude Code's transcript, not Nexen; false until the host's info has been fetched.
+ */
+export function selectConversationsV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('conversations.v1') === true
+}
+
 /** Nexen v0.17: every prelude item carries an integer `offset`. */
 export function selectPreludeItemOffset(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => {

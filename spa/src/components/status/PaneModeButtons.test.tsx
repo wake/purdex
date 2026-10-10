@@ -1,6 +1,7 @@
-// spa/src/components/status/PaneModeButtons.test.tsx — the status bar's terminal / worker / chat buttons (shell cleanup
-// spec §9.3). Every case runs in a split whose primary (first) pane is some other agent pane, so an action that went to
-// the primary instead of the status target would show.
+// spa/src/components/status/PaneModeButtons.test.tsx — the status bar's view buttons (shell cleanup spec §9.3; U3-1a).
+// A session pane has 終端機 · 指揮台 · 聊天 (views, device-local) and a separate Hand-to-worker control; an execution pane
+// has 指揮室 · 聊天 and a separate Take-back control. Every case runs in a split whose primary (first) pane is some other
+// agent pane, so an action that went to the primary instead of the status target would show.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { PaneModeButtons } from './PaneModeButtons'
@@ -11,6 +12,7 @@ import { useAgentStore } from '../../stores/useAgentStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useHandoffDialogStore } from '../../stores/useHandoffDialogStore'
+import { useSessionViewStore, selectSessionView, sessionBinding } from '../../stores/useSessionViewStore'
 import { registerTakeToTerminal, type TakeToTerminalEntry } from '../../lib/nex/take-to-terminal-registry'
 import { compositeKey } from '../../lib/composite-key'
 import { findPane } from '../../lib/pane-tree'
@@ -45,12 +47,14 @@ function seedTab(primary: PaneContent, target: PaneContent): Pane {
 
 const contentOf = (paneId: string) => findPane(useTabStore.getState().tabs[TAB].layout, paneId)?.content
 
-function seedReady(ready = true) {
+/** The host's info: Nexen ready (or not) for the handoff, and the daemon serving (or not) the conversation API. */
+function seedHost({ nex = true, conversations = true }: { nex?: boolean; conversations?: boolean } = {}) {
   useNexHostStore.setState({
     byHost: {
       [H]: {
         info: null,
-        capabilities: { delegate: { resume_session_id: true }, sandbox_profiles: ready ? ['default', 'handoff'] : ['default'] } as never,
+        capabilities: { delegate: { resume_session_id: true }, sandbox_profiles: nex ? ['default', 'handoff'] : ['default'] } as never,
+        daemonCapabilities: conversations ? ['conversations.v1'] : [],
         phase: 'ready', error: null, fetchedAt: 0, generation: 1, fingerprint: 'f',
       },
     },
@@ -60,8 +64,14 @@ const agents = (byCode: Record<string, string>) => useAgentStore.setState({
   agentTypes: Object.fromEntries(Object.entries(byCode).map(([code, type]) => [compositeKey(H, code), type])),
 })
 
-const button = (name: 'Terminal' | 'Worker room' | 'Chat') => screen.getByRole('button', { name })
-const pressed = () => ['Terminal', 'Worker room', 'Chat'].filter((n) => button(n as never).getAttribute('aria-pressed') === 'true')
+type Name = 'Terminal' | 'Deck' | 'Worker room' | 'Chat' | 'Hand to worker' | 'Take back to terminal'
+const button = (name: Name) => screen.getByRole('button', { name })
+const GROUP = ['Terminal', 'Deck', 'Worker room', 'Chat'] as const
+const pressed = () => GROUP.filter((n) => {
+  const b = screen.queryByRole('button', { name: n })
+  return b?.getAttribute('aria-pressed') === 'true'
+})
+const viewOfTarget = (code: string) => selectSessionView(TAB, TARGET, sessionBinding(H, code))(useSessionViewStore.getState())
 
 const unregister: Array<() => void> = []
 function registerTake(paneId: string, entry: Partial<TakeToTerminalEntry> = {}): TakeToTerminalEntry {
@@ -76,6 +86,7 @@ beforeEach(() => {
   useAgentStore.setState({ agentTypes: {} })
   useShownHostsStore.setState({ ids: [H] })
   useHandoffDialogStore.setState({ target: null })
+  useSessionViewStore.setState({ byPane: {} })
 })
 
 afterEach(() => {
@@ -85,73 +96,130 @@ afterEach(() => {
 describe('PaneModeButtons — a tmux-session target', () => {
   // The primary pane is a Claude Code terminal too: a candidate in its own right.
   const primary = tmux('prim01')
+  const ready = () => { seedHost(); agents({ prim01: 'cc', targ01: 'cc' }) }
 
-  it('terminal is pressed; worker and chat are not', () => {
-    seedReady()
-    agents({ prim01: 'cc', targ01: 'cc' })
+  it('the terminal is pressed; deck and chat are not; there is no worker-room button', () => {
+    ready()
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
     expect(pressed()).toEqual(['Terminal'])
-    expect(button('Worker room').getAttribute('aria-pressed')).toBe('false')
-    expect(button('Chat').getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByRole('button', { name: 'Worker room' })).toBeNull()
   })
 
-  it('worker on a candidate opens the Hand to Nex dialog for the target pane, with no mode (→ room)', () => {
-    seedReady()
-    agents({ prim01: 'cc', targ01: 'cc' })
+  it('deck and chat switch the view of the target pane only, and the pressed one follows', () => {
+    ready()
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
+    fireEvent.click(button('Deck'))
+    expect(viewOfTarget('targ01')).toBe('deck')
+    expect(pressed()).toEqual(['Deck'])
+    fireEvent.click(button('Chat'))
+    expect(viewOfTarget('targ01')).toBe('chat')
+    expect(pressed()).toEqual(['Chat'])
+    fireEvent.click(button('Terminal'))
+    expect(viewOfTarget('targ01')).toBe('terminal')
+    expect(pressed()).toEqual(['Terminal'])
+    expect(selectSessionView(TAB, PRIMARY, sessionBinding(H, 'prim01'))(useSessionViewStore.getState())).toBe('terminal')
+  })
+
+  // The view is a way of looking, not a handoff: it must not touch the dialog or the pane's content.
+  it('a view button never opens the handoff dialog or changes the tab', () => {
+    ready()
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
+    const before = useTabStore.getState().tabs
+    fireEvent.click(button('Deck'))
+    fireEvent.click(button('Chat'))
+    expect(useHandoffDialogStore.getState().target).toBeNull()
+    expect(useTabStore.getState().tabs).toBe(before)
+  })
+
+  it('the handoff is its own button: it opens the dialog for the target pane with no mode (→ room)', () => {
+    ready()
     const target = tmux('targ01')
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, target)} />)
-    expect(button('Worker room')).toBeEnabled()
-    fireEvent.click(button('Worker room'))
+    expect(button('Hand to worker')).toBeEnabled()
+    expect(button('Hand to worker').getAttribute('aria-pressed')).toBeNull()
+    fireEvent.click(button('Hand to worker'))
     const opened = useHandoffDialogStore.getState().target
     expect(opened).toEqual({ tabId: TAB, paneId: TARGET, content: target })
     expect(opened && 'mode' in opened).toBe(false)
-  })
-
-  it('chat on a candidate opens the same dialog with mode chat', () => {
-    seedReady()
-    agents({ prim01: 'cc', targ01: 'cc' })
-    const target = tmux('targ01')
-    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, target)} />)
-    fireEvent.click(button('Chat'))
-    expect(useHandoffDialogStore.getState().target).toEqual({ tabId: TAB, paneId: TARGET, content: target, mode: 'chat' })
+    expect(viewOfTarget('targ01')).toBe('terminal')
   })
 
   it.each([
-    ['not running Claude Code', () => { seedReady(); agents({ prim01: 'cc', targ01: 'codex' }) }, tmux('targ01'), 'This terminal is not running Claude Code'],
-    ['no agent at all', () => { seedReady(); agents({ prim01: 'cc' }) }, tmux('targ01'), 'This terminal is not running Claude Code'],
-    ['Nexen not ready', () => { seedReady(false); agents({ prim01: 'cc', targ01: 'cc' }) }, tmux('targ01'), 'Nexen is not ready on this host'],
-    ['a terminated session', () => { seedReady(); agents({ prim01: 'cc', targ01: 'cc' }) }, tmux('targ01', { terminated: 'session-closed' }), "This terminal's session is gone"],
-    ['a host hidden in this workbench', () => { seedReady(); agents({ prim01: 'cc', targ01: 'cc' }); useShownHostsStore.setState({ ids: [] }) }, tmux('targ01'), 'This host is turned off in this workbench'],
-  ])('%s → worker and chat are disabled, titled with why', (_label, arrange, target, why) => {
+    ['not running Claude Code', () => { seedHost(); agents({ prim01: 'cc', targ01: 'codex' }) }, tmux('targ01'),
+      'This terminal is not running Claude Code', 'This terminal is not running Claude Code'],
+    ['no agent at all', () => { seedHost(); agents({ prim01: 'cc' }) }, tmux('targ01'),
+      'This terminal is not running Claude Code', 'This terminal is not running Claude Code'],
+    ['a host without the conversation API', () => { seedHost({ conversations: false }); agents({ prim01: 'cc', targ01: 'cc' }) }, tmux('targ01'),
+      'This host does not offer the conversation view', null],
+    ['Nexen not ready', () => { seedHost({ nex: false }); agents({ prim01: 'cc', targ01: 'cc' }) }, tmux('targ01'),
+      null, 'Nexen is not ready on this host'],
+    ['a terminated session', () => { seedHost(); agents({ prim01: 'cc', targ01: 'cc' }) }, tmux('targ01', { terminated: 'session-closed' }),
+      "This terminal's session is gone", "This terminal's session is gone"],
+    ['a host hidden in this workbench', () => { seedHost(); agents({ prim01: 'cc', targ01: 'cc' }); useShownHostsStore.setState({ ids: [] }) }, tmux('targ01'),
+      'This host is turned off in this workbench', 'This host is turned off in this workbench'],
+  ])('%s → each blocked button is disabled, titled with its own reason', (_label, arrange, target, viewWhy, handoffWhy) => {
     arrange()
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, target)} />)
-    for (const name of ['Worker room', 'Chat'] as const) {
-      expect(button(name), name).toBeDisabled()
-      expect(button(name).getAttribute('title'), name).toBe(why)
+    for (const name of ['Deck', 'Chat'] as const) {
+      if (viewWhy) {
+        expect(button(name), name).toBeDisabled()
+        expect(button(name).getAttribute('title'), name).toBe(viewWhy)
+      } else {
+        expect(button(name), name).toBeEnabled()
+      }
       fireEvent.click(button(name))
     }
-    expect(useHandoffDialogStore.getState().target).toBeNull()
+    if (handoffWhy) {
+      expect(button('Hand to worker')).toBeDisabled()
+      expect(button('Hand to worker').getAttribute('title')).toBe(handoffWhy)
+    } else {
+      expect(button('Hand to worker')).toBeEnabled()
+    }
+    fireEvent.click(button('Hand to worker'))
+    expect(useHandoffDialogStore.getState().target === null).toBe(handoffWhy !== null)
+    if (viewWhy) expect(viewOfTarget('targ01')).toBe('terminal')
     // The pressed terminal button is not disabled: it is the current mode, not an unavailable one.
     expect(button('Terminal')).toBeEnabled()
   })
 
-  it('the gate follows the stores live', () => {
-    seedReady()
+  it('the gates follow the stores live', () => {
+    seedHost()
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
-    expect(button('Worker room')).toBeDisabled()
+    expect(button('Deck')).toBeDisabled()
+    expect(button('Hand to worker')).toBeDisabled()
     act(() => agents({ targ01: 'cc' }))
-    expect(button('Worker room')).toBeEnabled()
+    expect(button('Deck')).toBeEnabled()
+    expect(button('Hand to worker')).toBeEnabled()
   })
 
   it('clicking the pressed terminal button does nothing', () => {
-    seedReady()
-    agents({ prim01: 'cc', targ01: 'cc' })
-    const target = tmux('targ01')
-    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, target)} />)
+    ready()
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
     const before = useTabStore.getState().tabs
     fireEvent.click(button('Terminal'))
     expect(useHandoffDialogStore.getState().target).toBeNull()
     expect(useTabStore.getState().tabs).toBe(before)
+    expect(useSessionViewStore.getState().byPane).toEqual({})
+  })
+
+  // The pressed view stays reachable when its gate closes (the agent exited): it is a record of what the pane shows,
+  // and the terminal button takes the user back; nothing switches by itself (D11).
+  it('a deck chosen earlier stays pressed after the agent goes away, and the terminal button still works', () => {
+    ready()
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
+    fireEvent.click(button('Deck'))
+    act(() => agents({ prim01: 'cc' }))
+    expect(pressed()).toEqual(['Deck'])
+    expect(viewOfTarget('targ01')).toBe('deck')
+    fireEvent.click(button('Terminal'))
+    expect(viewOfTarget('targ01')).toBe('terminal')
+  })
+
+  it('a pane rebound to another session starts at the terminal again', () => {
+    ready()
+    useSessionViewStore.getState().setView(TAB, TARGET, sessionBinding(H, 'old001'), 'chat')
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
+    expect(pressed()).toEqual(['Terminal'])
   })
 })
 
@@ -159,9 +227,11 @@ describe('PaneModeButtons — an execution target in room', () => {
   // The primary pane is a worker as well, in room: a write aimed at it would be visible.
   const primary = exec('exc_primary')
 
-  it('worker is pressed; terminal and chat are not', () => {
+  it('room is pressed; chat is not; there is no terminal or deck button in the group', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
     expect(pressed()).toEqual(['Worker room'])
+    expect(screen.queryByRole('button', { name: 'Terminal' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Deck' })).toBeNull()
   })
 
   it('an absent mode, or one this build does not know, reads as room', () => {
@@ -197,7 +267,7 @@ describe('PaneModeButtons — an execution target in room', () => {
     }
   })
 
-  it('clicking the pressed worker button does nothing', () => {
+  it('clicking the pressed room button does nothing', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
     const before = useTabStore.getState().tabs
     fireEvent.click(button('Worker room'))
@@ -205,43 +275,44 @@ describe('PaneModeButtons — an execution target in room', () => {
     expect(useHandoffDialogStore.getState().target).toBeNull()
   })
 
-  it('terminal runs the target pane’s registered Take to terminal', () => {
+  it('take back runs the target pane’s registered Take to terminal', () => {
     const forPrimary = registerTake(PRIMARY)
     const forTarget = registerTake(TARGET)
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
-    expect(button('Terminal')).toBeEnabled()
-    fireEvent.click(button('Terminal'))
+    expect(button('Take back to terminal')).toBeEnabled()
+    expect(button('Take back to terminal').getAttribute('aria-pressed')).toBeNull()
+    fireEvent.click(button('Take back to terminal'))
     expect(forTarget.takeToTerminal).toHaveBeenCalledTimes(1)
     expect(forPrimary.takeToTerminal).not.toHaveBeenCalled()
   })
 
-  it('no view registered for the target pane → terminal is disabled, even when the primary has one', () => {
+  it('no view registered for the target pane → take back is disabled, even when the primary has one', () => {
     registerTake(PRIMARY)
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
-    expect(button('Terminal')).toBeDisabled()
-    expect(button('Terminal').getAttribute('title')).toBe("This worker can't be taken back to a terminal")
+    expect(button('Take back to terminal')).toBeDisabled()
+    expect(button('Take back to terminal').getAttribute('title')).toBe("This worker can't be taken back to a terminal")
   })
 
   it('a view that does not offer Take to terminal → disabled, titled cannot_take', () => {
     const entry = registerTake(TARGET, { canTake: false })
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
-    expect(button('Terminal')).toBeDisabled()
-    expect(button('Terminal').getAttribute('title')).toBe("This worker can't be taken back to a terminal")
-    fireEvent.click(button('Terminal'))
+    expect(button('Take back to terminal')).toBeDisabled()
+    expect(button('Take back to terminal').getAttribute('title')).toBe("This worker can't be taken back to a terminal")
+    fireEvent.click(button('Take back to terminal'))
     expect(entry.takeToTerminal).not.toHaveBeenCalled()
   })
 
   it('a busy view → disabled, titled busy; enabled again once the view is idle (live)', () => {
     const busy = registerTake(TARGET, { busy: true })
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
-    expect(button('Terminal')).toBeDisabled()
-    expect(button('Terminal').getAttribute('title')).toBe('Busy — try again in a moment')
-    fireEvent.click(button('Terminal'))
+    expect(button('Take back to terminal')).toBeDisabled()
+    expect(button('Take back to terminal').getAttribute('title')).toBe('Busy — try again in a moment')
+    fireEvent.click(button('Take back to terminal'))
     expect(busy.takeToTerminal).not.toHaveBeenCalled()
     let idle: TakeToTerminalEntry | undefined
     act(() => { idle = registerTake(TARGET) })
-    expect(button('Terminal')).toBeEnabled()
-    fireEvent.click(button('Terminal'))
+    expect(button('Take back to terminal')).toBeEnabled()
+    fireEvent.click(button('Take back to terminal'))
     expect(idle!.takeToTerminal).toHaveBeenCalledTimes(1)
   })
 })
@@ -249,12 +320,12 @@ describe('PaneModeButtons — an execution target in room', () => {
 describe('PaneModeButtons — an execution target in chat', () => {
   const primary = exec('exc_primary', { mode: 'chat' })
 
-  it('chat is pressed; terminal and worker are not', () => {
+  it('chat is pressed; room is not', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'chat' }))} />)
     expect(pressed()).toEqual(['Chat'])
   })
 
-  it('worker switches the target pane back to room, and leaves the primary alone', () => {
+  it('room switches the target pane back to room, and leaves the primary alone', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'chat' }))} />)
     fireEvent.click(button('Worker room'))
     expect(contentOf(TARGET)).toEqual(exec('exc_target', { mode: 'room' }))
@@ -268,10 +339,10 @@ describe('PaneModeButtons — an execution target in chat', () => {
     expect(useTabStore.getState().tabs).toBe(before)
   })
 
-  it('terminal behaves as in room: it runs the registered Take to terminal', () => {
+  it('take back behaves as in room: it runs the registered Take to terminal', () => {
     const entry = registerTake(TARGET)
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'chat' }))} />)
-    fireEvent.click(button('Terminal'))
+    fireEvent.click(button('Take back to terminal'))
     expect(entry.takeToTerminal).toHaveBeenCalledTimes(1)
   })
 })
@@ -280,30 +351,28 @@ describe('PaneModeButtons — an execution target in chat', () => {
 // mousedown, so `fireEvent.mouseDown(...) === false` proves the wiring. Pressed and action buttons are probed; a disabled
 // one never sees the press (React drops mouse events on a disabled button, and a browser does not focus one).
 describe('PaneModeButtons — a mouse press keeps focus where it was', () => {
-  const ALL = ['Terminal', 'Worker room', 'Chat'] as const
-
-  it('tmux target: every button prevents the mousedown default and stays in the tab order; a click still opens the dialog', () => {
-    seedReady()
+  it('tmux target: every button prevents the mousedown default and stays in the tab order; a click still works', () => {
+    seedHost()
     agents({ prim01: 'cc', targ01: 'cc' })
     const target = tmux('targ01')
     render(<PaneModeButtons tabId={TAB} pane={seedTab(tmux('prim01'), target)} />)
-    for (const name of ALL) {
+    for (const name of ['Terminal', 'Deck', 'Chat', 'Hand to worker'] as const) {
       expect(fireEvent.mouseDown(button(name)), name).toBe(false)
       expect(button(name).tabIndex, name).toBeGreaterThanOrEqual(0)
     }
-    fireEvent.click(button('Worker room'))
+    fireEvent.click(button('Hand to worker'))
     expect(useHandoffDialogStore.getState().target).toEqual({ tabId: TAB, paneId: TARGET, content: target })
   })
 
   it('execution target: every button prevents the mousedown default; a press then a click still runs each action', () => {
     const take = registerTake(TARGET)
     render(<PaneModeButtons tabId={TAB} pane={seedTab(exec('exc_primary'), exec('exc_target'))} />)
-    for (const name of ALL) {
+    for (const name of ['Worker room', 'Chat', 'Take back to terminal'] as const) {
       expect(fireEvent.mouseDown(button(name)), name).toBe(false)
       expect(button(name).tabIndex, name).toBeGreaterThanOrEqual(0)
     }
-    fireEvent.mouseDown(button('Terminal'))
-    fireEvent.click(button('Terminal'))
+    fireEvent.mouseDown(button('Take back to terminal'))
+    fireEvent.click(button('Take back to terminal'))
     expect(take.takeToTerminal).toHaveBeenCalledTimes(1)
     fireEvent.mouseDown(button('Chat'))
     fireEvent.click(button('Chat'))
@@ -316,8 +385,8 @@ describe('PaneModeButtons — a mouse press keeps focus where it was', () => {
   it.each([
     ['Cancel', () => fireEvent.click(screen.getByTestId('handoff-cancel'))],
     ['Escape', () => fireEvent.keyDown(document.activeElement!, { key: 'Escape' })],
-  ] as const)('worker on a candidate: the dialog panel takes focus from the pane; %s gives it back', (_name, close) => {
-    seedReady()
+  ] as const)('hand to worker on a candidate: the dialog panel takes focus from the pane; %s gives it back', (_name, close) => {
+    seedHost()
     agents({ prim01: 'cc', targ01: 'cc' })
     render(
       <>
@@ -328,8 +397,8 @@ describe('PaneModeButtons — a mouse press keeps focus where it was', () => {
     )
     const pane = screen.getByTestId('pane')
     pane.focus()
-    expect(fireEvent.mouseDown(button('Worker room'))).toBe(false)
-    fireEvent.click(button('Worker room'))
+    expect(fireEvent.mouseDown(button('Hand to worker'))).toBe(false)
+    fireEvent.click(button('Hand to worker'))
     expect(document.activeElement).toBe(screen.getByTestId('handoff-panel'))
     close()
     expect(screen.queryByTestId('handoff-dialog')).toBeNull()
@@ -338,16 +407,23 @@ describe('PaneModeButtons — a mouse press keeps focus where it was', () => {
 })
 
 describe('PaneModeButtons — layout and other kinds', () => {
-  it('the group drops below 500 px, like the split buttons it replaces', () => {
+  it('the group and the separate control drop below 500 px, like the split buttons they replace', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(exec('exc_primary'), exec('exc_target'))} />)
     expect(screen.getByTestId('status-mode-buttons').className).toContain('max-[500px]:hidden')
     expect(screen.getByRole('group', { name: 'Pane mode' })).toBe(screen.getByTestId('status-mode-buttons'))
+    expect(button('Take back to terminal').className).toContain('max-[500px]:hidden')
+  })
+
+  it('the separate control is outside the group', () => {
+    registerTake(TARGET)
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(exec('exc_primary'), exec('exc_target'))} />)
+    expect(screen.getByTestId('status-mode-buttons').contains(button('Take back to terminal'))).toBe(false)
   })
 
   it('every button keeps its label as its accessible name; an enabled one is titled with it', () => {
     registerTake(TARGET)
     render(<PaneModeButtons tabId={TAB} pane={seedTab(exec('exc_primary'), exec('exc_target'))} />)
-    for (const name of ['Terminal', 'Worker room', 'Chat'] as const) {
+    for (const name of ['Worker room', 'Chat', 'Take back to terminal'] as const) {
       expect(button(name).getAttribute('title'), name).toBe(name)
     }
   })
