@@ -852,6 +852,25 @@ test('reloaded at written while a user turn runs: no /clear until it ends, then 
   expect(count(f, 'begin') + count(f, 'ask')).toBe(0) // and no new ask in the turn that finished it
 })
 
+// codex incr: a recovery waiting for the old conversation belongs to it; after a /clear it must not swallow the new one's first turn end.
+// Mutation gate: no waitingRecovery reset at /clear → the new conversation's begin is skipped → red.
+test('a recovery waiting on a running turn is dropped by a /clear: the new conversation asks at its first turn end', async ($, on) => {
+  let answer!: (r: any) => void
+  const f = relayWorld(on, { usage: AT72, files: { '/data/relay/op-1.md': GOOD_FILE } })
+  f.pdx = (argv) => argv[1] === 'hello' ? (answer ? { exitCode: 0, stdout: HELLO() } : new Promise((r) => { answer = r })) : argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : argv[0] === 'msg' ? { exitCode: 0, stdout: 'x [abc123]' } : argv[1] === 'wait' ? new Promise<never>(() => {}) : { exitCode: 0, stdout: '{}' }
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await f.clock.advance(1)
+  await $.turn.start({ text: 'the user’s own prompt', turnId: 'tu' })
+  answer({ exitCode: 0, stdout: HELLO('none', { active_relay: ACTIVE('written') }) })
+  await f.clock.advance(100) // the recovery found a turn running and waits
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle()
+  await turnAndSettle($, f, 'tn')
+  expect(f.commands).toEqual([])
+  expect(count(f, 'begin')).toBe(1)
+})
+
 // Compatibility: a daemon that does not know the field, and an answer without an op, change nothing.
 for (const [name, active] of [['absent', undefined], ['null', null], ['empty', {}]] as const) {
   test(`active_relay ${name} in hello (an older daemon): nothing is reported or run`, async ($, on) => {

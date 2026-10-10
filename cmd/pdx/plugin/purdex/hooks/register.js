@@ -135,6 +135,7 @@ let holding = 0
 // begin or a hello sent before the reset never answers for one sent after it.
 function resetState() {
   letGo()
+  waitingRecovery = undefined // a recovery waiting for the old conversation to be free is that conversation's
   Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq, askEpoch: s.askEpoch + 1 })
 }
 
@@ -1356,6 +1357,7 @@ export function register(on) {
     s.lastAskPct = undefined
     s.askBusy = undefined // an ask still out was the old conversation's: its answer is dropped (epoch), and it holds nothing here
     s.askEpoch++
+    waitingRecovery = undefined // see resetState
     helloLater($)
     return r
   })
