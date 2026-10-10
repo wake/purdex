@@ -6,6 +6,7 @@
 //   send queue   (send-queue)              pane|host|session                             releasePane, retireStaleSessions
 //   draft        (draft-memory)            pane|host|session                             releasePane, retireStaleSessions
 //   attachments  (attachment-memory)       pane|host|session                             releasePane, retireStaleSessions
+//   uploads      (attachment-upload)       pane|host|session                             releasePane, retireStaleSessions (aborts; drops unseen failures)
 //   right panel  (panel-memory)            pane                                          releasePane (a stale binding is dropped by the panel itself)
 //   fold         (fold-memory)             deck: pane\0session   chat: pane\0host\0session releasePane, retireStaleSessions
 //   scroll       (transcript-scroll-memory) deck: pane\0session   chat: pane\0host\0session\0chat   releasePane, retireStaleSessions
@@ -25,6 +26,7 @@ import { useHistoryStore } from '../../stores/useHistoryStore'
 import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { forgetAttachmentsWhere } from './attachment-memory'
+import { forgetUploadsWhere } from './attachment-upload'
 import { forgetDraftsWhere, draftKey } from './draft-memory'
 import { forgetDeckPane, forgetFoldsOfPane } from './fold-memory'
 import { chatScrollKey, conversationBinding, forgetPanel } from './panel-memory'
@@ -36,6 +38,7 @@ export function releasePane(paneId: string): void {
   releaseSendQueues(mine)
   forgetDraftsWhere(mine)
   forgetAttachmentsWhere(mine)
+  forgetUploadsWhere(mine)
   forgetPanel(paneId)
   forgetFoldsOfPane(paneId)
   forgetScrollMemo(paneId)
@@ -54,6 +57,7 @@ export function retireStaleSessions(paneId: string, hostId: string, sessionId: s
   retireSendQueues((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetDraftsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetAttachmentsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
+  forgetUploadsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   const binding = conversationBinding(hostId, sessionId)
   const chatFold = `${paneId}\0${binding}`
   const deck = `${paneId}\0${sessionId}`

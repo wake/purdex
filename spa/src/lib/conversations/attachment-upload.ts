@@ -67,6 +67,12 @@ export function startUploads(key: string, hostId: string, sessionCode: string, f
   }
 }
 
+/** A released pane / session: its unseen failures and running entries go (the uploads themselves are aborted by `forgetAttachmentsWhere`). */
+export function forgetUploadsWhere(match: (key: string) => boolean): void {
+  for (const key of [...unseen.keys()]) if (match(key)) unseen.delete(key)
+  for (const key of [...running.keys()]) if (match(key)) { running.delete(key); notify(key) }
+}
+
 /** Tests only: module state outlives a test. */
 export function clearAllUploads(): void {
   running.clear(); listeners.clear(); unseen.clear()
