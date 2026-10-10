@@ -138,7 +138,7 @@ export function SotStep({ hostId, onHost, view, reload, choice, onChoice, newNam
                     </p>
                   )}
                   {del.refused?.id === row.id && (
-                    <p data-testid={`profile-wizard-profile-attached-${row.id}`} className="ml-5 text-status-warning">
+                    <p data-testid={`profile-wizard-profile-attached-${row.id}`} className="ml-5 text-status-warning-text">
                       {del.refused.attachments.length > 0
                         ? t('settings.profile.sot.attached', { names: deviceNames(del.refused.attachments) })
                         : t('settings.profile.sot.attached_none')}

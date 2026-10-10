@@ -99,7 +99,7 @@ export function ApprovalPill() {
         className="fixed bottom-8 right-3 z-50 flex items-center gap-1.5 rounded-full border border-border-default bg-surface-primary px-3 py-1 text-xs text-text-primary shadow-lg cursor-pointer hover:bg-surface-hover"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <Circle size={8} weight="fill" aria-hidden="true" className="text-status-warning" />
+        <Circle size={8} weight="fill" aria-hidden="true" className="text-status-warning-text" />
         <span>{label}</span>
       </button>
       {/* Mounted with the pill, empty, so the first growth is announced. Each announcement is a new node (its key), so

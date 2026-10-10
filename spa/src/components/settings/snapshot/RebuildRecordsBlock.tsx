@@ -95,7 +95,7 @@ export function RebuildRecordsBlock({
         <p
           key={group.sourcePaneId}
           data-testid="batch-conflict-source"
-          className="mt-2 text-[11px] text-status-warning"
+          className="mt-2 text-[11px] text-status-warning-text"
         >
           {t('rebuild.batch_conflict_source', {
             name: group.record.sessionName,

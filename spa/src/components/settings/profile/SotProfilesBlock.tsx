@@ -164,7 +164,7 @@ export function SotProfilesBlock({ hostId, attachedProfileId, view, reload }: So
                   </p>
                 )}
                 {del.refused?.id === row.id && (
-                  <p data-testid={`profile-sot-attached-${row.id}`} className="mt-0.5 text-status-warning">
+                  <p data-testid={`profile-sot-attached-${row.id}`} className="mt-0.5 text-status-warning-text">
                     {del.refused.attachments.length > 0
                       ? t('settings.profile.sot.attached', { names: deviceNames(del.refused.attachments) })
                       : t('settings.profile.sot.attached_none')}

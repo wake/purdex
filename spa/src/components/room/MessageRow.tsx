@@ -256,7 +256,7 @@ export default function MessageRow({ msg, i, ctx, preludePos }: MessageRowProps)
         if (block.text.startsWith('/')) {
           return (
             <div key={j} data-testid="room-command"
-              className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
+              className="flex items-center gap-1.5 text-[13px] text-status-warning-text font-mono">
               <TerminalWindow size={14} weight="bold" />
               <span data-search-unit={anchor}>{block.text}</span>
             </div>

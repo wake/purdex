@@ -401,7 +401,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                     />
                   </label>
                   {!nameOk && (
-                    <p id={nameErrorId} role="alert" data-testid="approval-team-name-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.team_name_invalid')}</p>
+                    <p id={nameErrorId} role="alert" data-testid="approval-team-name-error" className="mt-1 text-xs text-status-warning-text">{t('approval.dialog.team_name_invalid')}</p>
                   )}
                 </>
               )}
@@ -422,12 +422,12 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                         className={`min-w-0 flex-1 ${fieldClass}`}
                       />
                     </label>
-                    <span id={labelCountId} data-testid="approval-team-label-width" className={`shrink-0 tabular-nums ${labelOk ? 'text-text-muted' : 'text-status-warning'}`}>
+                    <span id={labelCountId} data-testid="approval-team-label-width" className={`shrink-0 tabular-nums ${labelOk ? 'text-text-muted' : 'text-status-warning-text'}`}>
                       {cellWidth(trimmedLabel)}/{TEAM_LABEL_MAX_WIDTH}
                     </span>
                   </div>
                   {!labelOk && (
-                    <p id={labelErrorId} role="alert" data-testid="approval-team-label-error" className="mt-1 text-xs text-status-warning">{t(`approval.dialog.team_label_invalid_${labelBad}`)}</p>
+                    <p id={labelErrorId} role="alert" data-testid="approval-team-label-error" className="mt-1 text-xs text-status-warning-text">{t(`approval.dialog.team_label_invalid_${labelBad}`)}</p>
                   )}
                 </>
               )}
@@ -451,7 +451,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 )}
               </label>
               {!membersOk && (
-                <p id={membersErrorId} role="alert" data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
+                <p id={membersErrorId} role="alert" data-testid="approval-max-members-error" className="mt-1 text-xs text-status-warning-text">{t('approval.dialog.max_members_range', { max: MAX_MAX_MEMBERS })}</p>
               )}
               <label className="mt-2 block text-xs text-text-secondary">
                 {t('approval.dialog.roots')}
@@ -465,12 +465,12 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 />
               </label>
               {!rootsOk && (
-                <p data-testid="approval-roots-error" className="mt-1 text-xs text-status-warning">{t('approval.dialog.roots_required')}</p>
+                <p data-testid="approval-roots-error" className="mt-1 text-xs text-status-warning-text">{t('approval.dialog.roots_required')}</p>
               )}
             </>
           )}
           {!connected && (
-            <p data-testid="approval-disconnected" className="mt-2 text-xs text-status-warning">{t('approval.dialog.daemon_restarting')}</p>
+            <p data-testid="approval-disconnected" className="mt-2 text-xs text-status-warning-text">{t('approval.dialog.daemon_restarting')}</p>
           )}
           {queued && (
             <p data-testid="approval-queued" className="mt-1 text-xs text-text-muted">

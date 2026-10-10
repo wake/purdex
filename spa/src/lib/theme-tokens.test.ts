@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { THEME_TOKEN_KEYS, TOKEN_METADATA, type ThemeTokenKey, type ThemeTokens, tokensToCss } from './theme-tokens'
 
 describe('theme-tokens', () => {
-  it('exports 23 token keys', () => {
-    expect(THEME_TOKEN_KEYS).toHaveLength(23)
+  it('exports 24 token keys', () => {
+    expect(THEME_TOKEN_KEYS).toHaveLength(24)
   })
 
   it('every key has metadata with label and group', () => {
@@ -24,7 +24,7 @@ describe('theme-tokens', () => {
 
   it('ThemeTokenKey type matches THEME_TOKEN_KEYS', () => {
     const keys: ThemeTokenKey[] = [...THEME_TOKEN_KEYS]
-    expect(keys.length).toBe(23)
+    expect(keys.length).toBe(24)
   })
 
   it('tokensToCss converts tokens to CSS variable declarations', () => {

@@ -7,7 +7,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { formatResetsIn, remainingPct, usageTone, usedPct, type UsageWindow } from '../../lib/usage-display'
 import { formatTokens, HIDE, shortReset, splitModel, tokensLeft } from './status-row-model'
 
-const TONE_TEXT = { ok: 'text-text-secondary', warn: 'text-status-warning', danger: 'text-status-error' } as const
+const TONE_TEXT = { ok: 'text-text-secondary', warn: 'text-status-warning-text', danger: 'text-status-error' } as const
 const ITEM = 'flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1 py-0.5 text-xs'
 
 export function ModelPart({ model, effort }: { model: string | null; effort: string | null }) {

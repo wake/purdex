@@ -43,7 +43,7 @@ export function ProjectsSection({ hostId }: { hostId: string }) {
         <p data-testid="projects-limit" className="mb-3 text-xs text-text-muted">{t('host_config.limit', { max: MAX_CONFIG_ITEMS })}</p>
       )}
       {saveError?.target === 'list' && (
-        <p data-testid="projects-save-error" className="mb-3 text-xs text-status-warning whitespace-pre-wrap">{saveError.text}</p>
+        <p data-testid="projects-save-error" className="mb-3 text-xs text-status-warning-text whitespace-pre-wrap">{saveError.text}</p>
       )}
 
       {editing && (

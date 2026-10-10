@@ -85,7 +85,7 @@ describe('StateSlot waiting', () => {
     const { container } = render(<StateSlot state="waiting" />)
     const el = opt(container, 'waiting')
     expect(el.textContent).toBe('Waiting for you')
-    expect(el.innerHTML).toContain('text-status-warning')
+    expect(el.innerHTML).toContain('text-status-warning-text')
     expect(el.innerHTML).toContain('bg-status-warning')
     expect(el.innerHTML).not.toMatch(/#[0-9a-f]{3,6}/i)
   })

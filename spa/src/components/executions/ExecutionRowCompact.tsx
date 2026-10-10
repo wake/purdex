@@ -95,7 +95,7 @@ export function ExecutionRowCompact({ row, hostId, daemonHostId, now, showCost =
       />
       {awaiting && (
         // The icon is what tells 「等待核准」 apart from queued, which has the same warning dot and no icon.
-        <span data-testid="executions-awaiting" className="shrink-0 inline-flex text-status-warning" title={dotTitle}>
+        <span data-testid="executions-awaiting" className="shrink-0 inline-flex text-status-warning-text" title={dotTitle}>
           <HandPalm size={11} weight="fill" aria-hidden="true" />
         </span>
       )}

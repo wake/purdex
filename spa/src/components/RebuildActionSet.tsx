@@ -353,7 +353,7 @@ export function RebuildActionSet({
         </p>
       )}
       {record.unverified && (
-        <p data-testid="rebuild-unverified-hint" className="pl-[1.65rem] pt-1 text-[11px] text-status-warning">
+        <p data-testid="rebuild-unverified-hint" className="pl-[1.65rem] pt-1 text-[11px] text-status-warning-text">
           {t('rebuild.unverified_hint')}
         </p>
       )}

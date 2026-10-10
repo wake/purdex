@@ -135,7 +135,7 @@ export function RelaySection({ hostId }: { hostId: string }) {
               <span data-testid="relay-member-note" className="text-xs text-text-muted">{t('hosts.relay.member_note')}</span>
             </div>
           </div>
-          {saveError && <p data-testid="relay-save-error" className="mt-3 text-xs text-status-warning whitespace-pre-wrap">{saveError}</p>}
+          {saveError && <p data-testid="relay-save-error" className="mt-3 text-xs text-status-warning-text whitespace-pre-wrap">{saveError}</p>}
 
           {shown.status === 'unsupported' && (
             <p data-testid="relay-prompts-unsupported" className="mt-6 text-xs text-text-muted">{t('hosts.relay.prompts.unsupported')}</p>
@@ -145,7 +145,7 @@ export function RelaySection({ hostId }: { hostId: string }) {
               <h3 className="text-base font-semibold mb-1">{t('hosts.relay.prompts.title')}</h3>
               <p className="mb-3 text-xs text-text-muted">{t('hosts.relay.prompts.desc')}</p>
               {shown.status === 'error' ? (
-                <p data-testid="relay-prompts-error" className="text-xs text-status-warning">
+                <p data-testid="relay-prompts-error" className="text-xs text-status-warning-text">
                   {t('hosts.relay.prompts.load_failed', { reason: shown.reason })}
                 </p>
               ) : (

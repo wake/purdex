@@ -150,7 +150,7 @@ function PanePeerSection({ target }: { target: RenameTargetPane }) {
         </DetailRow>
       )}
       <DetailRow label={t('peer.deliverable')}>
-        <span data-testid={`peer-deliverable-${pid}`} className={`block truncate text-[11px] ${row.deliverable ? 'text-text-primary' : 'text-status-warning'}`}>
+        <span data-testid={`peer-deliverable-${pid}`} className={`block truncate text-[11px] ${row.deliverable ? 'text-text-primary' : 'text-status-warning-text'}`}>
           {row.deliverable ? t('peer.deliverable_yes') : reasonText(row.reason, t)}
         </span>
       </DetailRow>
@@ -285,7 +285,7 @@ function PaneDetailBlock({
       <div className="flex items-center justify-between gap-2 pb-1">
         <span className="truncate font-mono text-[10px] text-text-muted">{target.sessionCode}</span>
         {!live && (
-          <span data-testid={`rename-pane-terminated-${target.paneId}`} className="shrink-0 text-[10px] text-status-warning">
+          <span data-testid={`rename-pane-terminated-${target.paneId}`} className="shrink-0 text-[10px] text-status-warning-text">
             {t('rebuild.pane_terminated')}
           </span>
         )}

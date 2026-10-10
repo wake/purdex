@@ -249,7 +249,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
             <div data-testid="unattended-empty" className="text-text-muted">{t('unattended.panel.empty')}</div>
           )}
           {unreachable.map((hostId) => (
-            <div key={hostId} data-testid="unattended-host-unreachable" className="text-status-warning">
+            <div key={hostId} data-testid="unattended-host-unreachable" className="text-status-warning-text">
               {t('unattended.panel.host_unreachable', { host: label(hostId) })}
             </div>
           ))}
@@ -263,7 +263,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
             </ul>
           )}
           {failed.map((hostId) => (
-            <div key={hostId} data-testid="unattended-host-failed" className="text-status-warning">
+            <div key={hostId} data-testid="unattended-host-failed" className="text-status-warning-text">
               {t('unattended.panel.host_failed', { host: label(hostId), code: pages[hostId].failed! })}
             </div>
           ))}

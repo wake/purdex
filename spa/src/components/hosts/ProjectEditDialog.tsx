@@ -9,7 +9,7 @@ type Field = 'name' | 'slug' | 'path'
 
 const PATH_STATUS: Record<PathVerdict, { Icon: typeof CheckCircle; cls: string; key: string }> = {
   dir: { Icon: CheckCircle, cls: 'text-status-success', key: 'projects.path.dir' },
-  not_dir: { Icon: Warning, cls: 'text-status-warning', key: 'projects.path.not_dir' },
+  not_dir: { Icon: Warning, cls: 'text-status-warning-text', key: 'projects.path.not_dir' },
   missing: { Icon: XCircle, cls: 'text-status-error', key: 'projects.path.missing' },
   error: { Icon: Question, cls: 'text-text-muted', key: 'projects.path.unknown' },
   unverifiable: { Icon: Question, cls: 'text-text-muted', key: 'projects.path.unknown' },

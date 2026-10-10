@@ -289,7 +289,7 @@ export function ResumeTemplateSettings({ hostId, busy = false }: { hostId: strin
       </p>
       <HostConfigProblemNotice problem={problem} title="resume_template.title" className="mt-2" />
       {saveError ? (
-        <p data-testid="resume-template-save-error" className="mt-2 text-xs text-status-warning">{saveError}</p>
+        <p data-testid="resume-template-save-error" className="mt-2 text-xs text-status-warning-text">{saveError}</p>
       ) : null}
 
       <div className="mt-3 flex flex-col gap-3">
@@ -423,7 +423,7 @@ function TemplateRow({
       {warning ? (
         <span
           data-testid={`resume-template-warning-${agentType}-${field}`}
-          className="flex w-full items-center gap-1 text-status-warning"
+          className="flex w-full items-center gap-1 text-status-warning-text"
         >
           <Warning size={14} />
           {t(warning)}

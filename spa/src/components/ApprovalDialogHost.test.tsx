@@ -137,6 +137,7 @@ describe('ApprovalDialogHost', () => {
       fireEvent.change(screen.getByTestId('approval-max-members'), { target: { value: bad } })
       expect(screen.getByTestId('approval-approve')).toBeDisabled()
       expect(screen.getByTestId('approval-max-members-error')).toBeInTheDocument()
+      expect(screen.getByTestId('approval-max-members-error')).toHaveClass('text-status-warning-text')
       expect(screen.getByTestId('approval-deny')).not.toBeDisabled()
     }
     fireEvent.change(screen.getByTestId('approval-max-members'), { target: { value: '8' } })
@@ -144,6 +145,8 @@ describe('ApprovalDialogHost', () => {
     fireEvent.change(screen.getByTestId('approval-roots'), { target: { value: ' \n' } })
     expect(screen.getByTestId('approval-approve')).toBeDisabled()
     expect(screen.getByTestId('approval-roots-error')).toBeInTheDocument()
+    expect(screen.getByTestId('approval-roots-error')).toHaveClass('text-status-warning-text')
+    expect(screen.getByTestId('approval-roots-error')).not.toHaveClass('text-status-warning')
     expect(mockedDecide).not.toHaveBeenCalled()
   })
 
@@ -217,6 +220,9 @@ describe('ApprovalDialogHost', () => {
       open(approval())
       setStatus('reconnecting')
       expect(screen.getByTestId('approval-disconnected').textContent).toBe('daemon 重啟中…')
+      // #2006: warning TEXT uses the text token (the plain status-warning is a pale fill in the light theme)
+      expect(screen.getByTestId('approval-disconnected')).toHaveClass('text-status-warning-text')
+      expect(screen.getByTestId('approval-disconnected')).not.toHaveClass('text-status-warning')
       expect(screen.getByTestId('approval-deny').getAttribute('aria-disabled')).toBe('true')
       expect(screen.getByTestId('approval-approve').getAttribute('aria-disabled')).toBe('true')
       fireEvent.click(screen.getByTestId('approval-deny'))
