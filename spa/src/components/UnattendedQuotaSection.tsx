@@ -21,6 +21,7 @@ import { setMaxMembers, teamKey, useMaxMembersStore } from '../lib/team/max-memb
 import { MAX_MEMBERS_MAX, MAX_MEMBERS_MIN, type RelayQuotaField, type SessionQuota } from '../lib/team/types'
 import type { TeamRoster } from '../lib/team/roster'
 import { TeamRootsEditor } from './team/TeamRootsEditor'
+import { NumberField } from './team/NumberField'
 
 /** One host's share of the section. */
 export interface QuotaHostData {
@@ -51,17 +52,31 @@ function order(a: SessionQuota, b: SessionQuota): number {
   return nameOf(a).localeCompare(nameOf(b)) || a.address.localeCompare(b.address)
 }
 
+const STEP_BTN = 'w-5 h-5 inline-flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-30 disabled:pointer-events-none'
+
+/** A − / + button. When it is off for a rule (not merely busy), the reason shows on hover: the title sits on a wrapper, since a disabled button gets no hover. */
+function StepButton({ sign, label, disabled, reason, onClick }: { sign: string; label: string; disabled: boolean; reason?: string; onClick: () => void }) {
+  return (
+    <span title={disabled ? reason : undefined} data-testid="step-reason" data-reason={disabled && reason ? reason : undefined} className="inline-flex">
+      <button type="button" aria-label={label} disabled={disabled} onClick={onClick} className={STEP_BTN}>{sign}</button>
+    </span>
+  )
+}
+
 function Stepper({ hostId, row, field, label }: { hostId: string; row: SessionQuota; field: RelayQuotaField; label: string }) {
   const t = useI18nStore((s) => s.t)
   const value = useRelayQuotaStore((s) => shownValue(s, hostId, row.root_session_id, field, row[field]))
   const write = (next: number) => setQuota({ hostId, sessionId: row.session_id, root: row.root_session_id, label: nameOf(row) }, field, next)
-  const btn = 'w-5 h-5 inline-flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-30 disabled:pointer-events-none'
   return (
     <span className="inline-flex items-center gap-1" data-testid="quota-stepper" data-field={field}>
       <span className="text-text-muted">{label}</span>
-      <button type="button" aria-label={t('unattended.quota.minus')} disabled={value <= 0} onClick={() => write(value - 1)} className={btn}>−</button>
-      <span data-testid="quota-value" className="min-w-[2ch] text-center tabular-nums text-text-primary">{value}</span>
-      <button type="button" aria-label={t('unattended.quota.plus')} disabled={value >= MAX} onClick={() => write(value + 1)} className={btn}>+</button>
+      <StepButton sign="−" label={t('unattended.quota.minus')} disabled={value <= 0} reason={t('unattended.quota.at_zero')} onClick={() => write(value - 1)} />
+      <NumberField
+        testId="quota-value" ariaLabel={label} value={value}
+        validate={(n) => (n > MAX ? t('unattended.field.range', { min: '0', max: String(MAX) }) : null)}
+        onCommit={write}
+      />
+      <StepButton sign="+" label={t('unattended.quota.plus')} disabled={value >= MAX} reason={t('unattended.quota.at_max', { n: String(MAX) })} onClick={() => write(value + 1)} />
     </span>
   )
 }
@@ -79,13 +94,21 @@ function CapStepper({ hostId, team, label }: { hostId: string; team: TeamRoster;
   const value = team.max_members as number
   const inUse = team.in_use as number
   const write = (next: number) => { void setMaxMembers({ hostId, teamId: team.id, label }, next) }
-  const btn = 'w-5 h-5 inline-flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-30 disabled:pointer-events-none'
+  // why − is off: the daemon will not take the cap below the members in use (409 max_below_in_use), nor below 1
+  const floor = Math.max(MAX_MEMBERS_MIN, inUse)
+  const minusReason = value <= inUse ? t('unattended.cap.minus_in_use', { n: String(inUse) }) : t('unattended.cap.minus_min', { n: String(MAX_MEMBERS_MIN) })
   return (
     <span className="inline-flex items-center gap-1" data-testid="cap-stepper" title={t('unattended.cap.in_use', { n: String(inUse) })}>
       <span className="text-text-muted">{t('unattended.cap.label')}</span>
-      <button type="button" aria-label={t('unattended.cap.minus')} disabled={busy || value <= Math.max(MAX_MEMBERS_MIN, inUse)} onClick={() => write(value - 1)} className={btn}>−</button>
-      <span data-testid="cap-value" className="min-w-[2ch] text-center tabular-nums text-text-primary">{value}</span>
-      <button type="button" aria-label={t('unattended.cap.plus')} disabled={busy || value >= MAX_MEMBERS_MAX} onClick={() => write(value + 1)} className={btn}>+</button>
+      <StepButton sign="−" label={t('unattended.cap.minus')} disabled={busy || value <= floor} reason={busy ? undefined : minusReason} onClick={() => write(value - 1)} />
+      <NumberField
+        testId="cap-value" ariaLabel={t('unattended.cap.label')} value={value} disabled={busy}
+        validate={(n) => (n < MAX_MEMBERS_MIN || n > MAX_MEMBERS_MAX
+          ? t('unattended.field.range', { min: String(MAX_MEMBERS_MIN), max: String(MAX_MEMBERS_MAX) })
+          : n < inUse ? t('unattended.cap.below', { n: String(inUse) }) : null)}
+        onCommit={write}
+      />
+      <StepButton sign="+" label={t('unattended.cap.plus')} disabled={busy || value >= MAX_MEMBERS_MAX} reason={busy ? undefined : t('unattended.cap.plus_max', { n: String(MAX_MEMBERS_MAX) })} onClick={() => write(value + 1)} />
     </span>
   )
 }

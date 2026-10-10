@@ -154,9 +154,17 @@ describe('setMaxMembers', () => {
     expect(calls.map((c) => c.value)).toEqual([2, 8])
   })
 
-  it('409 max_below_in_use toasts the daemon\'s member count', async () => {
+  it('409 max_below_in_use toasts the daemon\'s own detail when it sent one', async () => {
     const p = setMaxMembers(target, 1)
-    calls[0].reject(new ApprovalApiError(409, 'max_below_in_use', 'x', null, { in_use: 3 }))
+    calls[0].reject(new ApprovalApiError(409, 'max_below_in_use', '3 members are in use; the cap cannot go below 3', null, { in_use: 3 }))
+    await p
+    expect(toasts).toEqual(['3 members are in use; the cap cannot go below 3'])
+    expect(capOf('t1')?.max_members).toBe(2)
+  })
+
+  it('409 max_below_in_use without a detail toasts our words with the daemon\'s member count', async () => {
+    const p = setMaxMembers(target, 1)
+    calls[0].reject(new ApprovalApiError(409, 'max_below_in_use', '', null, { in_use: 3 }))
     await p
     expect(toasts).toEqual(['unattended.cap.below|n=3'])
     expect(capOf('t1')?.max_members).toBe(2)

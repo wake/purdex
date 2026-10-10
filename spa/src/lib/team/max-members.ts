@@ -134,7 +134,9 @@ export async function setMaxMembers(target: MaxMembersTarget, value: number): Pr
     const code = e instanceof ApprovalApiError ? e.code : 'error'
     if (code === 'max_below_in_use') {
       const inUse = e instanceof ApprovalApiError ? e.body?.in_use : undefined
-      deps.toast(deps.message('unattended.cap.below', { n: typeof inUse === 'number' ? String(inUse) : '?' }))
+      // the daemon's own words when it sent them (c9d9c7-56), else ours
+      const detail = e instanceof ApprovalApiError ? e.detail : ''
+      deps.toast(detail !== '' ? detail : deps.message('unattended.cap.below', { n: typeof inUse === 'number' ? String(inUse) : '?' }))
     } else if (code === 'not_found') {
       deps.toast(deps.message('unattended.cap.ended', {}))
     } else {
