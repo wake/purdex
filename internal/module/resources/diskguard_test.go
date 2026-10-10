@@ -390,6 +390,9 @@ func TestTrimGoCache_OnlyADirectoryThatIsAGoCache(t *testing.T) {
 	cases := map[string]func(dir string){
 		"no README":      func(string) {},
 		"another README": func(dir string) { putText(t, filepath.Join(dir, "README"), "my notes\n", ageOld) },
+		"a long README that is not go's": func(dir string) {
+			putText(t, filepath.Join(dir, "README"), "This directory holds the notes of my project, not Go's cache, and it is long enough.\n", ageOld)
+		},
 		"a README that is a symlink": func(dir string) {
 			putText(t, filepath.Join(base, "elsewhere-README"), goCacheReadme, ageOld)
 			if err := os.Symlink(filepath.Join(base, "elsewhere-README"), filepath.Join(dir, "README")); err != nil {

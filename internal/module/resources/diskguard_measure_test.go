@@ -27,6 +27,9 @@ func TestMeasureTrimWalk(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte(goCacheReadme), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	made := time.Now()
 	for i := 0; i < n; i++ {
 		p := filepath.Join(dir, fmt.Sprintf("%02x", i%256), fmt.Sprintf("%016x-%c", i, "ad"[i%2]))

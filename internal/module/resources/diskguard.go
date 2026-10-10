@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -31,6 +32,8 @@ const (
 	trimBudget     = 90 * time.Second
 	// cacheDirMemo is how long the resolved cache directory is remembered (`go env` forks).
 	cacheDirMemo = 10 * time.Minute
+	// warnFresh is how long a warning stays on the answers after the last look at the disk that confirmed it.
+	warnFresh = 2 * time.Minute
 )
 
 // diskGuardedKinds are the lease kinds that build or test: they are what fills the cache.
@@ -40,7 +43,8 @@ var diskGuardedKinds = map[string]bool{"test-full": true, "test-pkg": true, "bui
 type diskGuard struct {
 	mu       sync.Mutex
 	lastTrim time.Time
-	warn     string // the standing warning ("" = none)
+	warn     string    // the standing warning ("" = none)
+	warnAt   time.Time // when it was last confirmed by a look at the disk
 }
 
 // enableDiskGuard installs the real free-space reader and cache locator. New does not: a test module has the guard off
@@ -110,8 +114,16 @@ func (m *Module) startTrim(dir string, free int64) (started bool, done <-chan st
 	}
 	m.disk.lastTrim = now
 	m.disk.mu.Unlock()
-	ch := make(chan struct{})
+	// The wait group is added to under startMu, the lock markStopped takes before Stop / Close wait on it: a trim is never
+	// added behind a Wait that has begun.
+	m.startMu.Lock()
+	if m.stopped {
+		m.startMu.Unlock()
+		return false, nil
+	}
 	m.wg.Add(1)
+	m.startMu.Unlock()
+	ch := make(chan struct{})
 	go func() {
 		defer m.wg.Done()
 		defer close(ch)
@@ -141,6 +153,7 @@ func (m *Module) setDiskWarning(dir string, free int64) {
 		m.disk.warn = ""
 		return
 	}
+	m.disk.warnAt = m.now()
 	msg := fmt.Sprintf("disk: low on disk, %d MiB free on the volume of the Go build cache %s (hard floor %d GiB); builds and tests may fail with no space left on device",
 		free>>20, dir, diskHardFloor>>30)
 	if m.disk.warn == "" {
@@ -153,6 +166,9 @@ func (m *Module) setDiskWarning(dir string, free int64) {
 func (m *Module) diskWarning() string {
 	m.disk.mu.Lock()
 	defer m.disk.mu.Unlock()
+	if m.disk.warn == "" || m.now().Sub(m.disk.warnAt) > warnFresh {
+		return "" // nothing has confirmed it lately: the disk may have recovered
+	}
 	return m.disk.warn
 }
 
@@ -199,6 +215,9 @@ func (m *Module) trimGoCache(ctx context.Context, dir string, cutoff time.Time) 
 		return 0, err
 	}
 	defer root.Close()
+	if !isGoCache(root) {
+		return 0, fmt.Errorf("%s does not look like a Go build cache (no README written by go): not trimmed", dir)
+	}
 	top, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return 0, err
@@ -233,6 +252,29 @@ func (m *Module) trimGoCache(ctx context.Context, dir string, cutoff time.Time) 
 		}
 	}
 	return freed, nil
+}
+
+// goCacheReadmeHead is the first line of the README `go` writes into every build cache it creates (cmd/go/internal/cache).
+const goCacheReadmeHead = "This directory holds cached build artifacts from the Go build system."
+
+// isGoCache says whether the directory root was opened on is a Go build cache: it has a README that is a regular file (not a
+// symlink or a directory) and starts with the line `go` writes. A directory that merely has two-hex-digit subdirectories (a
+// project, a data folder, a GOCACHE pointed at the wrong place) is not one, and nothing in it is deleted.
+func isGoCache(root *os.Root) bool {
+	fi, err := root.Lstat("README")
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	f, err := root.Open("README")
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, len(goCacheReadmeHead))
+	if _, err := io.ReadFull(f, buf); err != nil {
+		return false
+	}
+	return string(buf) == goCacheReadmeHead
 }
 
 // resolveGoCacheDir is `go env GOCACHE`, or the platform's cache directory plus go-build when go cannot be run or says
