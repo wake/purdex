@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.702] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：`pdx start` 不再把別人的 daemon 當成自己起的，失敗時也不留下孤兒行程 — #958、#959（#2580）
+
+- `/api/health` 多回 `pid`。`pdx start` 等健康檢查時要求回應的 pid 就是它剛起的那顆：同一個位址上若有另一顆 daemon（不同 data dir 或舊版）在回應，不再誤判為啟動成功，而是等到新那顆因位址被佔而退出、印出真正的原因與 log；逾時的錯誤訊息會點名「另一個 pid 在回應」。健康檢查不走環境變數的 proxy、不跟隨轉址。
+- 啟動失敗時改成終止整個 process group，daemon 啟動到一半起的子行程不會留成孤兒；daemon 起的 tmux server 本來就不在這個群組裡，不受影響。
+
+### Changed：指揮台文字排版 — #2579（介面線）
+
+- 指揮台內文行距加大到 1.65、字距加 1px；輸入框字級與內文一致、拿掉輸入框下方的分隔線；狀態列往下移 4px。
+
 ## [1.0.0-alpha.701] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
