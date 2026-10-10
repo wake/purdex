@@ -186,8 +186,8 @@ func runServe(args []string) *reexecPlan {
 		log.Printf("tmux: started from inside a tmux pane; dropped inherited $TMUX so this daemon addresses the default socket, not that pane's server")
 	}
 
-	// 1. Load config
-	cfg, err := config.Load(*cfgPath)
+	// 1. Load config, inside the start-up gate that also takes the config file's run lock (#2562)
+	cfg, runLock, err := openConfigGate(*cfgPath, log.Printf)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -228,6 +228,9 @@ func runServe(args []string) *reexecPlan {
 	defer func() {
 		if !handingOff {
 			releasePidLock(pidFile, pidPath)
+			if runLock != nil {
+				runLock.Close()
+			}
 		}
 	}()
 
@@ -395,6 +398,10 @@ func runServe(args []string) *reexecPlan {
 			handingOff = true
 			boot.env = append(boot.env, pidLockEnvEntry(pidFile))
 			boot.lock = pidFile // keeps the *os.File (and its fd) alive until exec
+			if runLock != nil { // the config file's run lock goes the same way (#2562)
+				boot.env = append(boot.env, runLockEnvEntry(runLock))
+				boot.runLock = runLock
+			}
 			return boot
 		}
 		return nil

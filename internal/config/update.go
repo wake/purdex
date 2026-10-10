@@ -14,6 +14,12 @@ import (
 // hang the daemon (UpdateConfig holds CfgMu while it writes).
 var LockWait = 5 * time.Second
 
+// ErrLockTimeout: another writer held "<path>.lock" for the whole LockWait.
+var ErrLockTimeout = errors.New("config lock: still held")
+
+// CanonicalPath is the name every writer of the config file at path uses for it (see canonPath).
+func CanonicalPath(path string) string { return canonPath(path) }
+
 // canonPath is the one name every writer uses for a config file: absolute, with symlinks resolved (the file itself if it
 // exists, else its nearest resolvable directory), so two names of one file name one lock file and a symlinked config stays a
 // symlink — the write goes to what it points at. Known limit: a config reached through a dangling symlink whose target holds
@@ -94,7 +100,7 @@ func withFileLock(path string, fn func() error) error {
 			return fmt.Errorf("config lock %s.lock: %w", path, err)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("config lock %s.lock: still held after %s", path, LockWait)
+			return fmt.Errorf("config lock %s.lock: %w after %s", path, ErrLockTimeout, LockWait)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
