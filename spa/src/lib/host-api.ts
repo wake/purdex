@@ -159,6 +159,8 @@ export interface PeerHostRow {
   allow_team?: boolean
   /** Absolute folders the peer's members may be opened in; the daemon canonicalises. Absent = none. */
   team_roots?: string[]
+  /** Revision of `team_roots`; present only on a daemon with atomic add/remove (absent = whole-set writes only). */
+  team_roots_rev?: number
   rotation_pending: boolean                   // inbound_token_prev is set (spec §6.1)
   last_inbound_auth: '' | 'current' | 'prev'  // which token the peer LAST presented, derived at read time (§6.2)
 }
@@ -492,6 +494,9 @@ export function verifyPeerHost(hostId: string, alias: string): Promise<PeerHostV
 /**
  * `PUT /api/peers/hosts/{alias}`: any subset of `{alias, token, allow_bypass, allow_team, team_roots}`
  * (pointer fields on the daemon: absent = unchanged; `team_roots: []` clears).
+ * Roots can also be edited atomically with `add_team_roots` / `remove_team_roots` (remove first, then add; no rev
+ * needed; removal does not require the directory to exist). Sending either together with `team_roots` is a 400.
+ * `team_roots_rev` is an optional precondition: stale -> 409 `team_roots_conflict` and nothing is written.
  * D2 passes only `alias` (adopt the peer's self alias = plain rename, spec D-5).
  * D4 passes `token` for the push step (the daemon verifies with it before
  * storing); a token value must never be held longer than the call that
@@ -499,7 +504,8 @@ export function verifyPeerHost(hostId: string, alias: string): Promise<PeerHostV
  */
 export function updatePeerHost(
   hostId: string, alias: string,
-  patch: { alias?: string; token?: string; allow_bypass?: boolean; allow_team?: boolean; team_roots?: string[] },
+  patch: { alias?: string; token?: string; allow_bypass?: boolean; allow_team?: boolean; team_roots?: string[]
+    add_team_roots?: string[]; remove_team_roots?: string[]; team_roots_rev?: number },
 ): Promise<PeerHostRow> {
   return hostFetch(hostId, `/api/peers/hosts/${encodeURIComponent(alias)}`, {
     method: 'PUT',

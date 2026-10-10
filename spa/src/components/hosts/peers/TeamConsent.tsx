@@ -1,6 +1,7 @@
 // spa/src/components/hosts/peers/TeamConsent.tsx — one paired peer's cross-host team consent (spec §5.4):
 // the allow_team switch and the team_roots folder list, written with PUT /api/peers/hosts/{alias}. The daemon's
-// fields are pointers (absent = unchanged, `team_roots: []` clears), so each control sends only what it changed.
+// fields are pointers (absent = unchanged), so each control sends only what it changed; folders go as atomic
+// add_team_roots / remove_team_roots when the daemon reports team_roots_rev, else as the whole `team_roots` set.
 // Nothing is mirrored locally: after a write the page's flow runner re-reads the row, and the controls show whatever
 // the daemon says now (a failed write therefore "reverts" by simply not having changed anything).
 //
@@ -114,19 +115,28 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
     })
   }
 
-  // The wire is whole-set (no revision on the daemon), so a write from a stale render could drop what another window
-  // or the CLI just changed. Narrow that window: re-read this peer's row right before writing and compute the new set
-  // from THAT. `change` gets the latest roots and returns the set to write, or null when there is nothing to do (the
-  // path to add is already there / the one to remove is already gone: that is what was asked, so it counts as done).
-  const writeRoots = (change: (latest: string[]) => string[] | null, onDone?: () => void) => {
+  // A daemon that reports `team_roots_rev` supports atomic `add_team_roots` / `remove_team_roots`, so a write from a
+  // stale render cannot drop what another window or the CLI changed. An older daemon only has the whole-set
+  // `team_roots` write, so there we narrow the window instead: re-read this peer's row right before writing and
+  // compute the new set from THAT. Either way a path already there (add) / already gone (remove) is what was asked,
+  // so it counts as done and nothing is sent. A 409 `team_roots_conflict` (only from a write carrying a rev
+  // elsewhere) surfaces as the error; runFlow then re-reads the row.
+  const writeRoots = (op: { add: string } | { remove: string }, onDone?: () => void) => {
     setRootsError('')
     void runFlow(async () => {
       try {
         const fresh = (await listPeerHosts(hostId)).find((r) => r.alias.toLowerCase() === alias.toLowerCase())
         if (!fresh) throw new Error(t('peers.team.row_gone', { alias }))
         const latest = Array.isArray(fresh.team_roots) ? fresh.team_roots.filter((x): x is string => typeof x === 'string') : []
-        const next = change(latest)
-        if (next) await updatePeerHost(hostId, alias, { team_roots: next })
+        const atomic = typeof fresh.team_roots_rev === 'number'
+        if ('add' in op) {
+          if (!latest.includes(op.add)) {
+            await updatePeerHost(hostId, alias, atomic ? { add_team_roots: [op.add] } : { team_roots: [...latest, op.add] })
+          }
+        } else if (latest.includes(op.remove)) {
+          await updatePeerHost(hostId, alias,
+            atomic ? { remove_team_roots: [op.remove] } : { team_roots: latest.filter((x) => x !== op.remove) })
+        }
         onDone?.()
       } catch (e) {
         setRootsError(errText(e))
@@ -138,7 +148,7 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
   const add = () => {
     const p = draft.trim()
     if (!p) return
-    writeRoots((latest) => (latest.includes(p) ? null : [...latest, p]), () => setDraft(''))
+    writeRoots({ add: p }, () => setDraft(''))
   }
 
   return (
@@ -169,7 +179,7 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
               <li key={`${i}:${r}`} className="flex items-center gap-2">
                 <span data-testid="peer-team-root" className="font-mono text-xs text-text-secondary break-all">{r}</span>
                 <button type="button" data-testid="peer-team-root-remove" disabled={busy}
-                  onClick={() => writeRoots((latest) => (latest.includes(r) ? latest.filter((x) => x !== r) : null))}
+                  onClick={() => writeRoots({ remove: r })}
                   className="text-xs px-1.5 py-0.5 rounded bg-surface-tertiary text-text-secondary hover:text-status-error cursor-pointer disabled:opacity-50 disabled:cursor-default">
                   {t('peers.team.root_remove')}
                 </button>
