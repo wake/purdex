@@ -2674,6 +2674,24 @@ for (const args of ['', 'now', '  now ']) {
   })
 }
 
+// MR-1 (U-M1): a person's /relay is the daemon's `--manual` begin; the threshold's own begin never is.
+// Mutation gates: begin() always manual → the threshold half is red; never manual → the /relay half is red.
+test('/relay now sends --manual; the threshold begin does not', async ($, on) => {
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }))
+  await start($, f)
+  await relayCmd($, 'now')
+  const manual = f.argvs.filter((a) => a[1] === 'relay' && a[2] === 'begin')
+  expect(manual.length).toBe(1)
+  expect(manual[0]).toContain('--manual')
+
+  const g = relayWorld(on, { pdx: pdxWith([]), usage: AT72 })
+  await start($, g)
+  await turnAndSettle($, g, 't1')
+  const auto = g.argvs.filter((a) => a[1] === 'relay' && a[2] === 'begin')
+  expect(auto.length).toBe(1)
+  expect(auto[0]).not.toContain('--manual')
+})
+
 // Answers, and starts nothing: the cases of §2b. The state returns to idle (a second /relay asks again),
 // and the +10 guard is not set (a 72 % turn still asks). Mutation gate: set lastAskPct in relayNow → red.
 for (const [name, ans, text] of [

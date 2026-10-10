@@ -518,3 +518,25 @@ func TestRelayCmd_Compacted(t *testing.T) {
 		t.Fatalf("sent = %+v", sent)
 	}
 }
+
+// MR-1: `pdx relay begin --manual` is a person's /relay (the mod sends it); the flag is the request's `manual`, and
+// its absence is false. Mutation gate: the flag not read into the request → sent.Manual stays false (red).
+func TestRelayCmd_BeginManualFlagReachesTheRequest(t *testing.T) {
+	pct := 72.4
+	for _, tc := range []struct {
+		extra []string
+		want  bool
+	}{{nil, false}, {[]string{"--manual"}, true}} {
+		d := &fakeRelayDaemon{beginStatus: 201, beginBody: team.RelayBeginResponse{Op: team.RelayOp{ID: "op-1", State: team.RelayAwaitingApproval, UsedPercentage: &pct}, RequestID: "req-1"}}
+		args := append([]string{"begin", "--self", "--session", "sid-1", "--used", "72", "--window", "200000"}, tc.extra...)
+		if code, _, stderr := driveRelay(t, context.Background(), d, args...); code != ExitOK {
+			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr)
+		}
+		_, bodies := d.snapshot()
+		var sent team.RelayBeginRequest
+		_ = json.Unmarshal([]byte(bodies[len(bodies)-1]), &sent)
+		if sent.Manual != tc.want {
+			t.Fatalf("%v: sent manual = %v, want %v", args, sent.Manual, tc.want)
+		}
+	}
+}

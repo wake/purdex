@@ -99,6 +99,8 @@ type SelfRelayPayload struct {
 	Window         int     `json:"window"`
 	ModelID        string  `json:"model_id,omitempty"`
 	Effort         string  `json:"effort,omitempty"`
+	// Manual: a person typed /relay (MR-1, U-M1). It is the row's, never a caller's: every later gate reads it from here.
+	Manual bool `json:"manual,omitempty"`
 }
 
 // RelayHelloRequest is POST /api/relay/hello.
@@ -138,6 +140,9 @@ type RelayBeginRequest struct {
 	// state, instead of opening a second one. Optional: the daemon mints
 	// one when it is empty (PR #1726 attacker A-1).
 	RequestID string `json:"request_id,omitempty"`
+	// Manual says the begin is a person's /relay (member relay MR-1, U-M1): a member's refusals are lifted for it. It
+	// grants nothing by itself: the request still opens a card a person must approve.
+	Manual bool `json:"manual,omitempty"`
 }
 
 // RelayBeginResponse is begin's 201 body.
