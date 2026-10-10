@@ -1,7 +1,7 @@
 // Attachments in the deck / chat input: paste, drop and the attach button upload through agentUploadToPath (save only), put the
 // path in the draft, and show a removable chip; Enter is held back while an upload is still running.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { SessionInput } from './SessionInput'
 import { clearAllDrafts, draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearAllAttachments, readAttachments } from '../../lib/conversations/attachment-memory'
@@ -37,6 +37,7 @@ function pendingUpload() {
 const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve() })
 
 beforeEach(() => {
+  URL.createObjectURL = vi.fn(() => 'blob:test/x'); URL.revokeObjectURL = vi.fn()
   mocks.fetch.mockReset().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ status: 'accepted' }))))
   mocks.upload.mockReset().mockImplementation((_h: string, f: File) => Promise.resolve({ filename: f.name, path: `/up/dev001/${f.name}` }))
 })
@@ -52,7 +53,7 @@ describe('SessionInput attachments', () => {
     expect([hostId, (file as File).name, code]).toEqual(['h', 'shot.png', 'dev001'])
     expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
     expect(readDraft(KEY)).toBe('[Image: source: /up/dev001/shot.png]')
-    expect(screen.getByTestId('attachment-chip')).toHaveTextContent('Attached shot.png')
+    expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
   })
 
   it('the attachment area is set apart from the messages above by a faint tint only (no top line: it would double the input row\'s own line)', async () => {
@@ -290,7 +291,7 @@ describe('SessionInput attachments', () => {
     first.unmount()
     render(ui())
     expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
-    expect(screen.getByTestId('attachment-chip')).toHaveTextContent('shot.png')
+    expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
     expect(readAttachments(KEY)).toHaveLength(1)
   })
 

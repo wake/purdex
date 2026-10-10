@@ -1,7 +1,7 @@
 // Regression (CLAUDE.md tab-hosted rule): the attachments of the session input - the inserted text and the "attached" chips -
 // survive switching to another tab and back. The real TabContent unmounts the pane (keepAliveCount 0).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, within } from '@testing-library/react'
 import { TabContent } from '../TabContent'
 import { SessionInput } from './SessionInput'
 import { registerModule, clearModuleRegistry, type PaneRendererProps } from '../../lib/module-registry'
@@ -34,6 +34,7 @@ const paneId = (sessionTab.layout as { pane: { id: string } }).pane.id
 const key = draftKey(paneId, H, SID)
 
 beforeEach(() => {
+  URL.createObjectURL = vi.fn(() => 'blob:test/x'); URL.revokeObjectURL = vi.fn()
   cleanup()
   mocks.upload.mockReset().mockImplementation((_h: string, f: File) => Promise.resolve({ filename: f.name, path: `/up/dev001/${f.name}` }))
   clearModuleRegistry()
@@ -61,7 +62,29 @@ describe('session input attachments across tab switches', () => {
 
     rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
     expect(box().value).toBe('look\n[Image: source: /up/dev001/shot.png]')
-    expect(screen.getByTestId('attachment-chip')).toHaveTextContent('shot.png')
+    expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
+  })
+
+  it('the thumbnail is the same picture after a tab switch, and its blob: URL is kept while the tab is away and freed by the release', async () => {
+    let n = 0
+    const revoked: string[] = []
+    URL.createObjectURL = vi.fn(() => `blob:test/${++n}`)
+    URL.revokeObjectURL = vi.fn((u: string) => { revoked.push(u) })
+    const { rerender } = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    fireEvent.paste(box(), { clipboardData: { files: [new File(['x'], 'shot.png', { type: 'image/png' })], getData: () => '', types: ['Files'] } })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(screen.getByRole('img', { name: 'shot.png' })).toHaveAttribute('src', 'blob:test/1')
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('session-input')).toBeNull()
+    expect(revoked).toEqual([])
+    rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(screen.getByRole('img', { name: 'shot.png' })).toHaveAttribute('src', 'blob:test/1')
+    expect(revoked).toEqual([])
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    releasePane(paneId)
+    expect(revoked).toEqual(['blob:test/1'])
   })
 
   // an upload settled by hand
@@ -89,7 +112,7 @@ describe('session input attachments across tab switches', () => {
     expect(readDraft(key)).toBe('[Image: source: /up/dev001/shot.png]')
     rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
     expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
-    expect(screen.getByTestId('attachment-chip')).toHaveTextContent('shot.png')
+    expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
   })
 
   it('switching away and back while it is still uploading shows it, and Enter stays held back', async () => {

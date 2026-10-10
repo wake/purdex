@@ -2,7 +2,7 @@
 // 中斷 interrupts. Sending goes to the daemon (and through the session's mod); nothing is typed into a terminal. The draft and
 // the send queue live in modules keyed by the pane, not in this component (it unmounts on a tab switch).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Paperclip, PaperPlaneRight, Stop, X } from '@phosphor-icons/react'
+import { Paperclip, PaperPlaneRight, Stop } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { readAttachments, removeAttachment, removeAttachmentText, forgetAttachmentsWhere, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { startUploads, subscribeUploads, takeUnseenFailures, uploadsOf } from '../../lib/conversations/attachment-upload'
@@ -12,6 +12,8 @@ import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } f
 import { planSend } from '../../lib/conversations/send-plan'
 import { sendQueueFor } from '../../lib/conversations/send-queue'
 import type { Capabilities } from '../../lib/conversations/types'
+import { useFsImage } from '../../lib/conversations/fs-image'
+import { AttachmentThumb } from './AttachmentThumb'
 import { QueuedMessages } from './QueuedMessages'
 
 interface Props {
@@ -52,6 +54,14 @@ function fitHeight(el: HTMLTextAreaElement): void {
   const max = MAX_ROWS * line + chrome
   el.style.height = `${Math.max(MIN_ROWS * line + chrome, Math.min(wanted, max))}px`
   el.style.overflowY = wanted > max ? 'auto' : 'hidden'
+}
+
+/** A chip's thumbnail: the local file's picture, or (a chip restored without it) the host's copy read through the daemon. */
+function ChipThumb({ hostId, a, onRemove, removeLabel }: { hostId: string; a: Attachment; onRemove: () => void; removeLabel: string }) {
+  const image = !!a.image
+  const remote = useFsImage(hostId, a.path, image && !a.previewUrl)
+  const src = a.previewUrl ?? (remote.status === 'ready' ? remote.url : null)
+  return <AttachmentThumb name={a.name} image={image} src={src} loading={remote.status === 'loading'} size={a.size} onRemove={onRemove} removeLabel={removeLabel} />
 }
 
 function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, asking, onSwitchToTerminal }: Props) {
@@ -147,21 +157,18 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
       ) : (
         <div>
           {hintText && <div data-testid="session-input-hint" role="status" className={`mb-1 px-3 pt-1 text-xs ${hint?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{hintText}</div>}
-          {shown.length > 0 && (
+          {(shown.length > 0 || uploading.length > 0) && (
             // v3: tinted only, apart from the messages above (a top line would double the input row's own line)
-            <div data-testid="attachment-area" className="flex flex-wrap gap-1 bg-text-primary/5 px-3 py-1">
+            <div data-testid="attachment-area" className="flex flex-wrap gap-2 bg-text-primary/5 px-3 py-2">
               {shown.map((a) => (
-                <span key={a.id} data-testid="attachment-chip" className="inline-flex items-center gap-1 rounded border border-border-subtle bg-surface-secondary px-2 py-0.5 text-xs text-text-primary">
-                  {t('deck.attach.attached', { name: a.name })}
-                  <button type="button" aria-label={t('deck.attach.remove', { name: a.name })} title={t('deck.attach.remove', { name: a.name })} onClick={() => dropChip(a)} className="text-text-muted hover:text-text-primary"><X size={12} /></button>
+                <span key={a.id} data-testid="attachment-chip" className="inline-flex">
+                  <ChipThumb hostId={hostId} a={a} removeLabel={t('deck.attach.remove', { name: a.name })} onRemove={() => dropChip(a)} />
                 </span>
               ))}
-            </div>
-          )}
-          {uploading.length > 0 && (
-            <div className="mb-1 flex flex-col gap-0.5 px-3">
               {uploading.map((u) => (
-                <div key={u.id} data-testid="attachment-uploading" role="status" className="text-xs text-text-muted">{t('deck.attach.uploading', { name: u.name, percent: u.percent })}</div>
+                <span key={u.id} className="inline-flex">
+                  <AttachmentThumb name={u.name} image={u.image} src={u.previewUrl} size={u.size} percent={u.percent} progressLabel={t('deck.attach.uploading', { name: u.name, percent: u.percent })} />
+                </span>
               ))}
             </div>
           )}

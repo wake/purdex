@@ -10,6 +10,21 @@ export interface Attachment {
   path: string
   /** The exact text this attachment put in the draft (the chip's delete takes it out again). */
   text: string
+  /** Whether the file is an image (File.type or extension at attach time); absent: not known to be one. */
+  image?: boolean
+  mime?: string
+  /** Bytes. */
+  size?: number
+  /** A blob: URL of the local file for the thumbnail; owned by this memory (revoked when the chip goes). Absent after a reload. */
+  previewUrl?: string
+}
+
+/** `URL.createObjectURL` where it exists (not in every test environment). */
+export function makePreviewUrl(file: Blob): string | undefined {
+  return typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : undefined
+}
+export function revokePreviewUrl(url: string | undefined): void {
+  if (url && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url)
 }
 
 const chips = new Map<string, readonly Attachment[]>()
@@ -21,6 +36,7 @@ export function addAttachment(key: string, a: Attachment): void {
 }
 
 export function removeAttachment(key: string, id: string): void {
+  for (const a of readAttachments(key)) if (a.id === id) revokePreviewUrl(a.previewUrl)
   const rest = readAttachments(key).filter((a) => a.id !== id)
   if (rest.length === 0) chips.delete(key)
   else chips.set(key, rest)
@@ -39,7 +55,7 @@ export function trackUpload(key: string, ctl: AbortController): () => void {
 
 /** Forget every chip list whose key matches (a pane that is gone, or a session it no longer shows), and cancel its uploads. */
 export function forgetAttachmentsWhere(match: (key: string) => boolean): void {
-  for (const key of [...chips.keys()]) if (match(key)) chips.delete(key)
+  for (const key of [...chips.keys()]) if (match(key)) { for (const a of readAttachments(key)) revokePreviewUrl(a.previewUrl); chips.delete(key) }
   for (const [key, set] of [...uploads]) if (match(key)) { uploads.delete(key); for (const c of set) c.abort() }
 }
 
@@ -59,7 +75,7 @@ export function visibleAttachments(draft: string, list: readonly Attachment[]): 
 }
 
 /** Tests only: module state outlives a test. */
-export const clearAllAttachments = (): void => { chips.clear(); uploads.clear() }
+export const clearAllAttachments = (): void => { for (const list of chips.values()) for (const a of list) revokePreviewUrl(a.previewUrl); chips.clear(); uploads.clear() }
 
 /* ─── the draft text an attachment stands for ─── */
 
