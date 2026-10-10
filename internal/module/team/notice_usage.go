@@ -131,17 +131,24 @@ func (m *Module) sendUsageNotice(mr memberRow, pct int) bool {
 	if err != nil || !ok || t.EndedAt != 0 {
 		return true // no live team to tell: nothing to retry
 	}
+	address, title := m.memberNoticeName(mr)
+	ref := strings.TrimPrefix(mr.Ref, "_")
+	return m.noticeToLead(mr, t, fmt.Sprintf(UsageNoticeFmt, address, ref, title, pct, ref), "usage notice")
+}
+
+// memberNoticeName is how a notice to the lead names the member: its live address (else host/ref) and its title (else
+// its tmux session).
+func (m *Module) memberNoticeName(mr memberRow) (address, title string) {
 	alias, _ := m.selfHost()
-	address := alias + "/" + mr.Ref
+	address = alias + "/" + mr.Ref
 	if o, live, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && live && o.Address != "" {
 		address = o.Address
 	}
-	title := mr.Title
+	title = mr.Title
 	if title == "" {
 		title = mr.TmuxSession
 	}
-	ref := strings.TrimPrefix(mr.Ref, "_")
-	return m.noticeToLead(mr, t, fmt.Sprintf(UsageNoticeFmt, address, ref, title, pct, ref), "usage notice")
+	return address, title
 }
 
 // noticeToLead sends text to the team's lead at its live address, from the member's inbox (else the lead's own); false

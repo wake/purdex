@@ -50,11 +50,23 @@ func (m *Module) pruneCommandLog() {
 	}
 }
 
+// relayAskRetention is how long a closed relay ask is kept (an open one is never deleted).
+const relayAskRetention = 30 * 24 * time.Hour
+
+func (m *Module) pruneRelayAsks() {
+	if n, err := m.store.PruneRelayAsks(m.now() - relayAskRetention.Milliseconds()); err != nil {
+		m.logf("[team] retention: %v", err)
+	} else if n > 0 {
+		m.logf("[team] retention: %d old relay asks pruned", n)
+	}
+}
+
 // runRetention runs the sweep at boot and then hourly until Stop.
 func (m *Module) runRetention() {
 	defer m.sweepWG.Done()
 	m.sweepRetention()
 	m.pruneCommandLog()
+	m.pruneRelayAsks()
 	ticker := time.NewTicker(retentionInterval)
 	defer ticker.Stop()
 	for {
@@ -64,6 +76,7 @@ func (m *Module) runRetention() {
 		case <-ticker.C:
 			m.sweepRetention()
 			m.pruneCommandLog()
+			m.pruneRelayAsks()
 		}
 	}
 }
