@@ -29,9 +29,11 @@ func applyVoidIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 		if err := recordVoidIn(tx, p.LeadHostID, target, c.TeamID, c.ID, p.Now); err != nil {
 			return CommandResult{}, err
 		}
-		return okResult(map[string]string{"state": "recorded"})
+		return okResult(team.VoidOutcome{State: team.VoidNotApplied})
 	case err != nil:
 		return CommandResult{}, err
+	case kind == team.CommandRelay:
+		return voidRelayIn(tx, p, target, status)
 	case kind == team.CommandSpawn:
 		return refusal(http.StatusBadRequest, team.ErrCommandUnsupportedKind, "undoing a spawn is not supported by this version"), nil
 	case kind != team.CommandAdopt:

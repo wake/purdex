@@ -210,6 +210,12 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 		return op, res, err
 	}
 	movedFact := false
+	if r.State == team.RelayFailed || r.State == team.RelayCancelled {
+		// a relay the lead host sent ends in failure here: the same transaction tells it (MR-3b, §3.2)
+		if movedFact, err = s.queueRelayFailedIn(tx, op, r.At); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
+		}
+	}
 	if r.State == team.RelayCleared {
 		// a remote member's row follows the new session in this very transaction, and the lead host is told by a fact queued
 		// in it (member relay spec D4, §3.2)
@@ -232,7 +238,7 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 		s.onCommands() // lead_moved may have been enqueued: the pump goes now
 	}
 	if movedFact && s.onFacts != nil {
-		s.onFacts() // the moved fact is committed: tell the lead host now
+		s.onFacts() // the moved / relay_failed fact is committed: tell the lead host now
 	}
 	return op, res, nil
 }

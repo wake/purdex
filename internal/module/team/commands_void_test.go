@@ -61,7 +61,7 @@ func TestVoid_UndoesAnAppliedAdopt(t *testing.T) {
 func TestVoid_BeforeItsCommandMakesTheCommandVoid(t *testing.T) {
 	s := openTestStore(t)
 	res := mustApply(t, s, plan(voidCmd("v1", "c1"), false, nil))
-	if res.Status != http.StatusOK || voidState(t, res) != "recorded" {
+	if res.Status != http.StatusOK || voidState(t, res) != "not_applied" {
 		t.Fatalf("void = %d %s", res.Status, res.Body)
 	}
 	late := mustApply(t, s, plan(adoptCmd("c1", "c1", "sid-t"), true, targetOrigin("sid-t")))

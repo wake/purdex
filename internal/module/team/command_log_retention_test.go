@@ -145,7 +145,7 @@ func TestPruneCommandLog_EndedAdoptIsPrunedAndALateVoidOnlyRecords(t *testing.T)
 			vd := relCmd("c-void", team.CommandVoid, "")
 			vd.CommandID = target
 			res := mustApply(t, s, plan(vd, false, nil))
-			if res.Status != http.StatusOK || !bodyHas(res.Body, "state", "recorded") {
+			if res.Status != http.StatusOK || !bodyHas(res.Body, "state", "not_applied") {
 				t.Fatalf("late void = %d %s", res.Status, res.Body)
 			}
 			after := snapshot(t, s)
