@@ -1086,24 +1086,55 @@ function startClear($, p) {
 // / `writing`: the write was under way and its prompt, nonce and git facts died with the old mod; re-sending it could
 // double a prompt the model is already answering, so the op is failed with a reason the lead can read
 // (`mod_reloaded`) and the lead relays again.
-const recovered = new Set() // op ids this mod instance picked up: a second hello that still carries the op does not run it again
+const recovered = new Set() // op ids this mod instance took over (or ended): a hello that still carries the op does not run it again
+const recovering = new Set() // op ids with a recovery scheduled or running: one at a time
+const RECOVER_RETRY_MS = 2_000
+const RECOVER_MAX_TRIES = 30 // a user turn that runs when the mod reloads delays the /clear; a minute of looking again
 
-function recoverLater($, active, sid) {
+function recoverLater($, active, sid, attempt = 0) {
   const op = active.op
   if (!op || typeof op !== 'object' || typeof op.id !== 'string' || op.id === '' || recovered.has(op.id)) return
   if (op.state !== 'written' && op.state !== 'claimed' && op.state !== 'writing') return
-  recovered.add(op.id)
-  later($, 0, () => recover($, active, sid))
+  if (attempt === 0 && recovering.has(op.id)) return
+  recovering.add(op.id)
+  later($, attempt === 0 ? 0 : RECOVER_RETRY_MS, async () => {
+    let again = false
+    try {
+      again = (await recover($, active, sid)) === 'retry'
+    } finally {
+      recovering.delete(op.id)
+    }
+    if (again && attempt < RECOVER_MAX_TRIES) recoverLater($, active, sid, attempt + 1)
+  })
 }
 
+// recoverFail ends the op the old mod left: its relay lock down first (fail-open, as at every other end), then the
+// terminal report (a report that does not land is re-sent at the next turn end, as any other).
+async function recoverFail($, op, sid, reason, why) {
+  recovered.add(op.id)
+  log($, 'relay ' + op.id + ' ' + why)
+  await unlockRelay($, { op, oldSession: sid, locked: true })
+  report($, op.id, 'failed', ['--error', reason])
+}
+
+// recover answers 'retry' when the conversation is busy with something else right now (a turn, the state taken) and the
+// op is still waiting for its owner, 'done' when it took the op over or ended it, 'gone' when the session moved on (the
+// op is not that conversation's to finish any more).
 async function recover($, active, sid) {
   const op = active.op
-  const still = async () => s.state === 'idle' && !s.pending && (await $.session.id().catch(() => undefined)) === sid
-  if (!(await still())) return
+  const sameSession = async () => (await $.session.id().catch(() => undefined)) === sid
+  // what must be true to act: nothing of the relay in this mod, and (for the /clear) no turn running
+  const verdict = async (needsNoTurn) => {
+    if (!(await sameSession())) return 'gone'
+    if (s.pending && s.pending.op.id === op.id) return 'gone' // the member claim path took this very op: it owns it
+    if (s.state !== 'idle' || s.pending || (needsNoTurn && s.turnRunning)) return 'retry'
+    return 'ok'
+  }
+  let v = await verdict(op.state === 'written')
+  if (v !== 'ok') return v === 'retry' ? 'retry' : 'gone'
   if (op.state !== 'written') {
-    log($, 'relay ' + op.id + ' was ' + op.state + ' when the mod reloaded: reported failed (mod_reloaded)')
-    report($, op.id, 'failed', ['--error', RELAY_MOD_RELOADED])
-    return
+    await recoverFail($, op, sid, RELAY_MOD_RELOADED, 'was ' + op.state + ' when the mod reloaded: reported failed (mod_reloaded)')
+    return 'done'
   }
   const p = {
     op, requestId: op.request_id || undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: '',
@@ -1113,19 +1144,22 @@ async function recover($, active, sid) {
   p.answer.resolve('approved')
   const c = await checkHandoff($, p)
   if (!c.ok) {
-    if (!(await still())) return
-    log($, 'relay ' + op.id + ' was written when the mod reloaded but its file is not complete: reported failed')
-    report($, op.id, 'failed', ['--error', 'handoff_incomplete'])
-    return
+    v = await verdict(false)
+    if (v !== 'ok') return v === 'retry' ? 'retry' : 'gone'
+    await recoverFail($, op, sid, 'handoff_incomplete', 'was written when the mod reloaded but its file is not complete: reported failed')
+    return 'done'
   }
   const u = (await $.session.usage().catch(() => undefined))?.context
   p.before = u ? usageLine(u) : ''
   p.who = await whoami($)
-  if (!(await still())) return // a /clear or another session meanwhile: this is not that conversation any more
+  v = await verdict(true) // everything above was awaited: look again before /clear
+  if (v !== 'ok') return v === 'retry' ? 'retry' : 'gone'
+  recovered.add(op.id)
   log($, 'relay ' + op.id + ' was written when the mod reloaded: going on to /clear and the seed')
   s.pending = p
   s.state = 'clearing'
   startClear($, p)
+  return 'done'
 }
 
 async function onWriteTurnDone($) {

@@ -820,6 +820,35 @@ for (const state of ['claimed', 'writing']) {
   })
 }
 
+// codex attacker: a failed op's relay lock comes down first, so a failed report that does not land at once does not leave the
+// conversation under the old mod's lock. Mutation gate: no unlock before the report → red.
+for (const state of ['claimed', 'writing']) {
+  test(`reloaded at ${state}: the relay lock is lowered before failed is reported`, async ($, on) => {
+    const f = reloadedWorld(on, ACTIVE(state))
+    await start($, f)
+    await f.clock.advance(100)
+    const order = (f.order ?? []).filter((o) => o.startsWith('pdx relay unlock') || o.startsWith('pdx relay report'))
+    expect(order).toEqual(['pdx relay unlock op-1 --session sid-old', 'pdx relay report op-1 failed --error mod_reloaded'])
+  })
+}
+
+// codex R1: a user turn that is running when the mod reloads is not /cleared; the recovery looks again when it ends.
+// Mutation gate: no turnRunning check → /clear during the turn → red.
+test('reloaded at written while a user turn runs: no /clear until it ends, then the relay goes on', async ($, on) => {
+  let answer!: (r: any) => void
+  const f = relayWorld(on, { usage: AT72, files: { '/data/relay/op-1.md': GOOD_FILE } })
+  f.pdx = (argv) => argv[1] === 'hello' ? new Promise((r) => { answer = r }) : argv[0] === 'msg' ? { exitCode: 0, stdout: 'mlab/purdex-x [abc123]' } : { exitCode: 0, stdout: '{}' }
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await f.clock.advance(1) // the hello is out and unanswered
+  await $.turn.start({ text: 'the user’s own prompt', turnId: 'tu' })
+  answer({ exitCode: 0, stdout: HELLO('none', { active_relay: ACTIVE('written') }) })
+  await f.clock.advance(100)
+  expect(f.commands).toEqual([]) // the turn is running: the recovery looks again
+  await turn($, 'tu')
+  await f.clock.advance(3000)
+  expect(f.commands).toEqual(['clear'])
+})
+
 // Compatibility: a daemon that does not know the field, and an answer without an op, change nothing.
 for (const [name, active] of [['absent', undefined], ['null', null], ['empty', {}]] as const) {
   test(`active_relay ${name} in hello (an older daemon): nothing is reported or run`, async ($, on) => {
