@@ -34,6 +34,13 @@ describe('NewTabCanvas dnd-kit attributes (#2538)', () => {
     expect(handle).not.toHaveAttribute('aria-describedby')
   })
 
+  it('the pointer-only drag handle is not a Tab stop (it has no keyboard action)', () => {
+    render(<Harness onDragStart={() => {}} />)
+    expect(screen.getByRole('button', { name: 'a.label' })).toHaveAttribute('tabindex', '-1')
+    // The remove button stays reachable by keyboard.
+    expect(screen.getByTestId('canvas-remove-1col-a')).not.toHaveAttribute('tabindex', '-1')
+  })
+
   it('still starts a mouse drag: pointer-down + move fires onDragStart for this item', async () => {
     const onDragStart = vi.fn()
     render(<Harness onDragStart={onDragStart} />)

@@ -32,7 +32,8 @@ function SortableItem({ presetKey, id, label, onRemove }: {
       data-testid={`canvas-item-${presetKey}-${id}`}
       className="flex items-center justify-between px-3 py-2 rounded-md bg-surface-elevated border border-border-subtle text-xs"
     >
-      <button {...listeners} className="flex-1 text-left cursor-grab select-none" type="button" aria-label={label}>
+      {/* A mouse-only drag handle (sensors are pointer-only, no KeyboardSensor): it has no keyboard action, so it is not a Tab stop. */}
+      <button {...listeners} className="flex-1 text-left cursor-grab select-none" type="button" aria-label={label} tabIndex={-1}>
         {label}
       </button>
       <button
