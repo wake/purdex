@@ -99,6 +99,49 @@ func TestBusy_ATransientLookupFailureDoesNotSuppressTheNotice(t *testing.T) {
 	waitFor(t, func() bool { return len(f.busyNotices()) == 1 })
 }
 
+// #2440 incremental review: the notice goroutine runs after the sweep judged, and the world moves in between. It reads the op
+// and the member's state again before it speaks; when the op is no longer waiting on a running member the notice is dropped,
+// and the mark stays (a notice that would be false is not retried). Mutation gates: no re-read of the op → the claimed case red;
+// no re-read of the status → the idle case red.
+func TestBusy_TheNoticeIsDroppedWhenTheOpMovedOnBeforeItIsSent(t *testing.T) {
+	t.Run("claimed since the sweep", func(t *testing.T) {
+		f := newFixture(t)
+		snapshot := f.seenMemberOp("running") // what the sweep judged: requested, the member running
+		mr, _, _, _ := f.m.store.ActiveMemberInLiveTeam("sid-m1")
+		if code, _, ae := f.claim(snapshot.ID, "sid-m1"); code != 200 {
+			t.Fatalf("claim: %d %+v", code, ae)
+		}
+		f.m.busyNoticeOnce(snapshot, mr)
+		time.Sleep(100 * time.Millisecond)
+		if n := len(f.busyNotices()); n != 0 {
+			t.Fatalf("%d notices for an op that was claimed meanwhile", n)
+		}
+		f.m.busyNoticeOnce(snapshot, mr) // the mark stays: no retry of a notice that would be false
+		time.Sleep(100 * time.Millisecond)
+		if n := len(f.busyNotices()); n != 0 {
+			t.Fatalf("%d notices on the retry", n)
+		}
+	})
+	t.Run("the member's turn ended since the sweep", func(t *testing.T) {
+		f := newFixture(t)
+		snapshot := f.seenMemberOp("running")
+		mr, _, _, _ := f.m.store.ActiveMemberInLiveTeam("sid-m1")
+		f.usage.setStatus(memberTmux, "idle")
+		f.m.busyNoticeOnce(snapshot, mr)
+		time.Sleep(100 * time.Millisecond)
+		if n := len(f.busyNotices()); n != 0 {
+			t.Fatalf("%d notices for a member that went idle", n)
+		}
+	})
+	t.Run("still waiting on a running member: it is sent", func(t *testing.T) {
+		f := newFixture(t)
+		snapshot := f.seenMemberOp("running")
+		mr, _, _, _ := f.m.store.ActiveMemberInLiveTeam("sid-m1")
+		f.m.busyNoticeOnce(snapshot, mr)
+		waitFor(t, func() bool { return len(f.busyNotices()) == 1 })
+	})
+}
+
 // One failed member lookup is no verdict (codex attack): a member in its 20th minute of a turn keeps its op when the store
 // cannot be read for a sweep, instead of falling to the 15 minute no-status rule and failing for good.
 func TestBusy_AFailedMemberLookupSkipsTheSweepInsteadOfFailingTheOp(t *testing.T) {
