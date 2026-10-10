@@ -10,6 +10,9 @@
 //   approved ──(turn.complete of the write turn, file ok)──▶ clearing: report written, timer → /clear
 //   clearing ──(classic.SessionStart source=clear)──▶ seeding: report cleared --new-session, hello, seed prompt
 //   seeding ──(turn.complete of the seed turn)──▶ idle: report done, floor = tokens now
+//
+// A member never begins: at the same gate it asks its lead (`pdx relay ask`, maybeAsk) and keeps working; the lead's
+// `pdx relay _<ref>` arrives as the control message of the member relay (protocol 3, member relay ask spec §4).
 //   awaiting ──denied / timeout / cancelled / unavailable──▶ idle (ask again at +10 points)
 //   a deferred step that fails (prompt refused, /clear refused) ──▶ idle: write / fix / seed report
 //   failed{handoff_incomplete}, /clear reports cancelled{abandoned}
@@ -49,7 +52,7 @@ import { registerLease } from './lease.js'
 import { CONSUMED, claimOp, controlOp, leadLine, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
-const VERSION = '2' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
+const VERSION = '3' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
@@ -105,6 +108,7 @@ const fresh = () => ({
   writeDeferred: undefined, // a claimed request whose write prompt waits for the running turn to end
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
+  askBusy: false, // a member's `pdx relay ask` is out (member relay ask, D3: it changes no relay state)
   leadAsk: undefined, // { gen, sid }: a /lead prompt is out until the agent's turn ends or the session moves on
   floor: undefined,
   fixRounds: 0,
@@ -548,12 +552,59 @@ async function recheckMember($) {
   helloLater($)
 }
 
+// uuid4 is a request id for `pdx relay ask`, from the same CSPRNG as the nonce; '' when there is none (the CLI then
+// mints its own, and a replay is not recognised, which only costs a second ask the daemon answers as open).
+function uuid4() {
+  if (!hasCSPRNG()) return ''
+  const b = new Uint8Array(16)
+  globalThis.crypto.getRandomValues(b)
+  b[6] = (b[6] & 0x0f) | 0x40
+  b[8] = (b[8] & 0x3f) | 0x80
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+// maybeAsk is a member's maybeBegin (member relay ask, spec §4): the same gate as an ordinary session's (threshold,
+// minGrowth, +REASK_POINTS, state idle), but it asks the member's lead instead of opening a relay of its own, and it
+// does not pause the member (D3): no state change, no held prompt, no waiting status, no polling. `pdx relay ask`
+// runs from a timer, never in the hook.
+async function maybeAsk($) {
+  const u = (await $.session.usage()).context
+  if (u.percent === undefined || u.percent < s.threshold) return
+  if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
+  if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
+  const sid = await $.session.id()
+  if (s.state !== 'idle' || s.askBusy) return // a /relay now took the state while the engine was read, or an ask is out
+  s.askBusy = true
+  const gen = s.gen
+  later($, 0, () => ask($, sid, gen, u).finally(() => { s.askBusy = false }))
+}
+
+// ask sends the request. 200 (open or replay), 409 relay_open and 409 relay_unsupported close the question until
+// +REASK_POINTS; 409 not_member means the member was released: it re-reads its role (an ordinary session from then on).
+// Anything else (daemon down, a failure) changes nothing, and the next turn end tries again under the same gate. An
+// answer is taken only by the generation and the session it was sent from.
+async function ask($, sid, gen, u) {
+  const rid = uuid4()
+  const argv = ['relay', 'ask', '--session', sid, '--used', String(u.percent), '--window', String(u.window), ...(rid ? ['--request-id', rid] : [])]
+  const r = await pdx($, argv, CALL_TIMEOUT_MS)
+  const now = await $.session.id().catch(() => undefined)
+  if (s.gen !== gen || now !== sid) return
+  if (r.exitCode === 0) {
+    s.lastAskPct = u.percent
+  } else if (r.exitCode === 13) {
+    const code = stderrCode(r)
+    if (code === 'relay_open' || code === 'relay_unsupported') s.lastAskPct = u.percent
+    else if (code === 'not_member') await recheckMember($)
+  }
+}
+
 // maybeBegin runs in turn.complete: it reads the engine, moves to beginning
 // and leaves `pdx relay begin` to a timer.
 async function maybeBegin($) {
   if (!s.helloOK) return
   if (s.role === 'member') {
-    await recheckMember($)
+    await maybeAsk($)
     return
   }
   if (!hasCSPRNG()) {
