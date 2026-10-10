@@ -844,9 +844,12 @@ test('reloaded at written while a user turn runs: no /clear until it ends, then 
   answer({ exitCode: 0, stdout: HELLO('none', { active_relay: ACTIVE('written') }) })
   await f.clock.advance(100)
   expect(f.commands).toEqual([]) // the turn is running: the recovery looks again
+  await f.clock.advance(10 * 60_000) // a long turn: the recovery is not abandoned
+  expect(f.commands).toEqual([])
   await turn($, 'tu')
-  await f.clock.advance(3000)
+  await f.clock.advance(100)
   expect(f.commands).toEqual(['clear'])
+  expect(count(f, 'begin') + count(f, 'ask')).toBe(0) // and no new ask in the turn that finished it
 })
 
 // Compatibility: a daemon that does not know the field, and an answer without an op, change nothing.

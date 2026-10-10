@@ -1088,24 +1088,31 @@ function startClear($, p) {
 // (`mod_reloaded`) and the lead relays again.
 const recovered = new Set() // op ids this mod instance took over (or ended): a hello that still carries the op does not run it again
 const recovering = new Set() // op ids with a recovery scheduled or running: one at a time
-const RECOVER_RETRY_MS = 2_000
-const RECOVER_MAX_TRIES = 30 // a user turn that runs when the mod reloads delays the /clear; a minute of looking again
+let waitingRecovery // { active, sid }: a recovery that found the conversation busy (a turn running, the state taken): the next turn.complete runs it again
 
-function recoverLater($, active, sid, attempt = 0) {
+function recoverLater($, active, sid) {
   const op = active.op
-  if (!op || typeof op !== 'object' || typeof op.id !== 'string' || op.id === '' || recovered.has(op.id)) return
+  if (!op || typeof op !== 'object' || typeof op.id !== 'string' || op.id === '' || recovered.has(op.id) || recovering.has(op.id)) return
   if (op.state !== 'written' && op.state !== 'claimed' && op.state !== 'writing') return
-  if (attempt === 0 && recovering.has(op.id)) return
   recovering.add(op.id)
-  later($, attempt === 0 ? 0 : RECOVER_RETRY_MS, async () => {
-    let again = false
+  later($, 0, async () => {
+    let busy = false
     try {
-      again = (await recover($, active, sid)) === 'retry'
+      busy = (await recover($, active, sid)) === 'retry'
     } finally {
       recovering.delete(op.id)
     }
-    if (again && attempt < RECOVER_MAX_TRIES) recoverLater($, active, sid, attempt + 1)
+    if (busy) waitingRecovery = { active, sid }
   })
+}
+
+// resumeRecovery runs a recovery that waited for the conversation to be free (turn.complete is where it is). True when it ran.
+function resumeRecovery($) {
+  const w = waitingRecovery
+  if (!w) return false
+  waitingRecovery = undefined
+  recoverLater($, w.active, w.sid)
+  return true
 }
 
 // recoverFail ends the op the old mod left: its relay lock down first (fail-open, as at every other end), then the
@@ -1291,6 +1298,7 @@ export function register(on) {
       if (s.outbox.length) { s.held.clear(); pump($) } // re-send what did not land (§8.3)
       if (s.pending && s.writeTurnId !== undefined && e.turnId === s.writeTurnId) await onWriteTurnDone($)
       else if (s.pending && s.seedTurnId !== undefined && e.turnId === s.seedTurnId) await onSeedTurnDone($)
+      else if (resumeRecovery($)) { /* the relay a reload left is finished first: no new ask this turn */ }
       else if (s.state === 'idle') await maybeBegin($)
     } catch (err) {
       log($, 'turn.complete failed: ' + String(err))
