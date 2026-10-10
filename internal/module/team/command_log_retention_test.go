@@ -2,12 +2,15 @@
 package teammod
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -244,6 +247,31 @@ func TestSweep_PrunesTheCommandLogPastThirtyDays(t *testing.T) {
 	f.m.pruneCommandLog()
 	if n := countRows(t, f.m.store, `SELECT COUNT(*) FROM team_command_log`); n != 13 {
 		t.Fatalf("%d records left, want the 13 younger than 30 days", n)
+	}
+}
+
+// The member host prunes its records on the premise that the lead host never resends an adopt / spawn older than 10 minutes.
+// After a lead-host restart the pump must not get to send such a command before the expiry sweep voids it (#2265).
+// Mutation gate: no synchronous expiry before the pump starts → red.
+func TestStart_VoidsAnOverdueAdoptBeforeThePumpCanSendIt(t *testing.T) {
+	f, fc := remoteFixture(t)
+	f.enqueue(f.cmd("adopt-old", CmdAdopt, "hostM", "adopt-old")) // created at the fixture clock
+	f.clock.Add(11 * 60 * 1000)                                   // the daemon was down; 11 minutes later it starts
+	if err := f.m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return fc.capsAsked() > 0 || len(fc.sent()) > 0 })
+	time.Sleep(300 * time.Millisecond) // the pump has had its chances; the sweeper's own first tick is 1 s away
+	if err := f.m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range fc.sent() {
+		if bytes.Contains(c.Body, []byte(`"kind":"adopt"`)) {
+			t.Fatalf("an overdue adopt was sent after the restart: %s", c.Body)
+		}
+	}
+	if st := f.cmdState("adopt-old").State; st != cmdVoid {
+		t.Fatalf("adopt state = %s, want void", st)
 	}
 }
 
