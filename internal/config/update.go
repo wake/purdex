@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"syscall"
 	"time"
@@ -12,6 +13,31 @@ import (
 // LockWait bounds how long a writer waits for "<path>.lock": a holder that never lets go makes the write fail, it does not
 // hang the daemon (UpdateConfig holds CfgMu while it writes).
 var LockWait = 5 * time.Second
+
+// canonPath is the one name every writer uses for a config file: absolute, with symlinks resolved (the file itself if it
+// exists, else its nearest resolvable directory), so two names of one file name one lock file and a symlinked config stays a
+// symlink — the write goes to what it points at.
+func canonPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		return filepath.Join(dir, filepath.Base(abs))
+	}
+	return abs
+}
+
+// WithLock runs fn holding the exclusive lock every writer of the config file at path takes (waiting at most LockWait). A
+// caller that holds other locks of its own (the daemon's CfgMu) takes this one FIRST, so waiting for another process never
+// holds them; inside fn it writes with UpdateChangedHeld. Not reentrant: a nested WithLock/Update on the same file waits
+// out LockWait and fails.
+func WithLock(path string, fn func() error) error {
+	return withFileLock(canonPath(path), fn)
+}
 
 // withFileLock runs fn holding an exclusive flock on "<path>.lock", the one lock every writer of the config file takes
 // (Update, SetToken, and the daemon's start-up gate). It waits at most LockWait.
@@ -49,6 +75,7 @@ func withFileLock(path string, fn func() error) error {
 // know are not kept (as with WriteFile); a token-only change with SetToken keeps them. A mutate error is returned as it is and
 // writes nothing. The returned Config is what was written.
 func Update(path string, mutate func(*Config) error) (Config, error) {
+	path = canonPath(path)
 	var out Config
 	err := withFileLock(path, func() error {
 		cfg, err := Load(path)
@@ -76,6 +103,20 @@ func UpdateChanged(path string, before, after Config) (Config, error) {
 		applyChanged(reflect.ValueOf(onDisk).Elem(), reflect.ValueOf(before), reflect.ValueOf(after))
 		return nil
 	})
+}
+
+// UpdateChangedHeld is UpdateChanged for a caller that already holds the file's lock (inside WithLock).
+func UpdateChangedHeld(path string, before, after Config) (Config, error) {
+	path = canonPath(path)
+	cfg, err := Load(path)
+	if err != nil {
+		return Config{}, err
+	}
+	applyChanged(reflect.ValueOf(&cfg).Elem(), reflect.ValueOf(before), reflect.ValueOf(after))
+	if err := WriteFile(path, cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
 }
 
 // applyChanged sets in dst every field of after that differs from before: a struct is compared field by field (so a change to

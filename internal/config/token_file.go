@@ -17,6 +17,7 @@ import (
 // write goes through a temp file of its own, mode 0600, and the whole read-modify-write holds an exclusive lock on "<path>.lock",
 // so two daemons sharing a config, or `pdx token generate` beside a starting daemon, cannot lose each other's update.
 func SetToken(path, token string) error {
+	path = canonPath(path)
 	return withFileLock(path, func() error {
 		raw, err := os.ReadFile(path)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {

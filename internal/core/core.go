@@ -253,7 +253,7 @@ func (c *Core) CloseModules() error {
 //  2. err := mutate(&next); if err != nil -> Unlock, return err (nothing changed)
 //  3. if CfgPath != "" { config.UpdateChanged(CfgPath, *c.Cfg, next) -> on error Unlock, return err (c.Cfg untouched) }
 //  4. *c.Cfg = next // commit: pointer identity preserved for other holders
-//  5. CfgMu.Unlock(); c.NotifyConfigChange() // AFTER unlock: agent callbacks take RLock
+//  5. CfgMu.Unlock(), then the file lock; c.NotifyConfigChange() // AFTER both: agent callbacks take RLock and may update again
 //
 // mutate runs on a deep copy, so editing or deleting a Peers.Hosts element
 // (or any other slice) can never touch the live backing array, and neither
@@ -265,6 +265,24 @@ func (c *Core) CloseModules() error {
 // reload the file: when the token in the file is not the one it runs on it says so in its log, and the file's takes effect at
 // restart; a field that both the file and the daemon changed takes the daemon's value.
 func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error {
+	var err error
+	if c.CfgPath == "" {
+		err = c.updateConfig(mutate, false)
+	} else {
+		// The file's lock first, CfgMu inside it: waiting for another process that holds the lock (up to config.LockWait)
+		// must not hold CfgMu, which the auth path and every module read.
+		err = config.WithLock(c.CfgPath, func() error { return c.updateConfig(mutate, true) })
+	}
+	if err != nil {
+		return err
+	}
+	// After both are released: a callback may itself call UpdateConfig.
+	c.NotifyConfigChange()
+	return nil
+}
+
+// updateConfig is UpdateConfig's body; persist says the file's lock is held and the file is to be written.
+func (c *Core) updateConfig(mutate func(cfg *config.Config) error, persist bool) error {
 	c.CfgMu.Lock()
 	next := c.Cfg.Clone()
 
@@ -273,8 +291,8 @@ func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error {
 		return err
 	}
 
-	if c.CfgPath != "" {
-		onDisk, err := config.UpdateChanged(c.CfgPath, *c.Cfg, next)
+	if persist {
+		onDisk, err := config.UpdateChangedHeld(c.CfgPath, *c.Cfg, next)
 		if err != nil {
 			c.CfgMu.Unlock()
 			return err
@@ -284,8 +302,6 @@ func (c *Core) UpdateConfig(mutate func(cfg *config.Config) error) error {
 
 	*c.Cfg = next
 	c.CfgMu.Unlock()
-
-	c.NotifyConfigChange()
 	return nil
 }
 
