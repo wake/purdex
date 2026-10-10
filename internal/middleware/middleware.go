@@ -65,7 +65,7 @@ type CallerTicketValidator interface {
 }
 
 // TokenAuth checks Bearer token or one-time ticket (?ticket=).
-// tokenFn is called on each request to support runtime token changes.
+// tokenFn is called on each request to support runtime token changes. An empty token refuses every request (401).
 // Bearer prefix is case-insensitive, token value is case-sensitive.
 // If tickets is non-nil, ?ticket= is checked for WebSocket authentication —
 // and ONLY on a real WebSocket handshake: a GET with Connection: Upgrade +
@@ -84,14 +84,16 @@ func TokenAuth(tokenFn func() string, tickets TicketValidator) func(http.Handler
 
 // TokenAuthWith is TokenAuth that also accepts a live device token (a paired phone's, QR pairing spec §3.2): a bearer
 // shaped like one (and only such a bearer) is offered to devs, and when it is live the request goes on carrying the
-// device principal in its context. The admin token is checked first and carries no principal; an empty admin token leaves
-// auth off exactly as before (device tokens add nothing there); a nil devs makes this TokenAuth.
+// device principal in its context. The admin token is checked first and carries no principal; an empty admin token refuses
+// everyone (fail closed, #1950); a nil devs makes this TokenAuth.
 func TokenAuthWith(tokenFn func() string, tickets TicketValidator, devs devices.Authenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := tokenFn()
 			if token == "" {
-				next.ServeHTTP(w, r.WithContext(devices.WithAdmin(r.Context()))) // auth is off: everyone is the admin
+				// No admin token means a daemon with no credential, not one that wants none (#1950): nobody is let in,
+				// not by bearer, device token or ticket.
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			// Check Authorization header first

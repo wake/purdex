@@ -352,8 +352,8 @@ func TestAuthenticateToken_PastUseByAndUnknown(t *testing.T) {
 	}
 }
 
-// With the admin token empty, auth is off as before; device tokens add nothing there.
-func TestEmptyAdminTokenLeavesAuthOffAsBefore(t *testing.T) {
+// With the admin token empty nothing is served (#1950).
+func TestEmptyAdminTokenFailsClosed(t *testing.T) {
 	c := core.New(core.CoreDeps{Config: &config.Config{DataDir: t.TempDir()}})
 	m := New()
 	if err := m.Init(c); err != nil {
@@ -366,8 +366,8 @@ func TestEmptyAdminTokenLeavesAuthOffAsBefore(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/devices", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != 200 {
-		t.Fatalf("with auth off: %d", rec.Code)
+	if rec.Code != 401 {
+		t.Fatalf("with no admin token: %d", rec.Code)
 	}
 }
 

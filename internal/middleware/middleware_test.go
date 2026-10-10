@@ -88,13 +88,19 @@ func TestTokenAuthQueryParamRemoved(t *testing.T) {
 	}
 }
 
-func TestTokenAuthEmptyAllowsAll(t *testing.T) {
-	h := middleware.TokenAuth(func() string { return "" }, nil)(ok)
-	req := httptest.NewRequest("GET", "/", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != 200 {
-		t.Errorf("want 200, got %d", rec.Code)
+// An empty token is a daemon that has no credential, not one that wants none: every request is refused (#1950).
+func TestTokenAuthEmptyFailsClosed(t *testing.T) {
+	h := middleware.TokenAuth(func() string { return "" }, &fakeTickets{valid: map[string]bool{"": true}})(ok)
+	for _, auth := range []string{"", "Bearer ", "Bearer anything"} {
+		req := httptest.NewRequest("GET", "/", nil)
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 401 {
+			t.Errorf("auth %q: want 401, got %d", auth, rec.Code)
+		}
 	}
 }
 
