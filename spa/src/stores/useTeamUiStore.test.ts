@@ -11,7 +11,7 @@ const k = (host: string, team: string) => teamKeyOf(host, team)
 beforeEach(() => {
   localStorage.clear()
   useUISettingsStore.setState({ tabIndicatorStyle: 'badge', hostBadgeSidebarBox: 16 })
-  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', legacyMax: false, ghostWorkspace: {}, teamDrill: {}, workbookTabs: {}, panel: { width: 312 }, teamBeadHost: true })
+  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', legacyMax: false, ghostWorkspace: {}, teamDrill: {}, endedSeats: {}, workbookTabs: {}, panel: { width: 312 }, teamBeadHost: true })
 })
 
 describe('useTeamUiStore', () => {
@@ -25,7 +25,7 @@ describe('useTeamUiStore', () => {
     const raw = JSON.parse(localStorage.getItem('purdex-team-ui')!)
     expect(raw.state).toEqual({
       memberOrder: { [key]: ['b', 'a'] }, collapsed: { [key]: true }, panelMode: { [key]: 'line' }, ghostWorkspace: { [key]: 'w9' },
-      teamBeadHost: true, teamDrill: {}, panel: { width: 312 }, workbookTabs: {},
+      teamBeadHost: true, teamDrill: {}, endedSeats: {}, panel: { width: 312 }, workbookTabs: {},
       panelLast: { [key]: 'line' }, sharedPanelMode: 'titlebar', sharedPanelLast: 'full',
     })
     const saved = localStorage.getItem('purdex-team-ui')!
@@ -308,19 +308,19 @@ describe('the panel area (WA-2a)', () => {
     expect(useTeamUiStore.getState().teamDrill).toEqual({ [k('h', 't')]: { hostId: 'h', sessionId: 's' } })
     expect(useTeamUiStore.getState().workbookTabs).toEqual({ a: true })
   })
-  it('heal drops teamDrill entries with a malformed key, a cross-host value or a non-string session', () => {
+  it('heal drops teamDrill entries with a malformed key or a non-string session, and keeps a remote seat (its host differs from the lead host)', () => {
     const ok = k('h1', 't1')
     localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { teamDrill: {
       [ok]: { hostId: 'h1', sessionId: 's' },
       'no-separator': { hostId: 'no-separator', sessionId: 's' },
       [k('', 't')]: { hostId: '', sessionId: 's' },
       [k('h1', '')]: { hostId: 'h1', sessionId: 's' },
-      [k('h2', 't2')]: { hostId: 'h1', sessionId: 's' },
+      [k('h2', 't2')]: { hostId: 'h1', sessionId: 's' }, // a remote seat: the lead's host differs from the seat's
       [k('h1', 't3')]: { hostId: 'h1', sessionId: 5 },
       [k('h1', 't4')]: { hostId: 'h1', sessionId: '' },
     } }, version: 0 }))
     useTeamUiStore.persist.rehydrate()
-    expect(useTeamUiStore.getState().teamDrill).toEqual({ [ok]: { hostId: 'h1', sessionId: 's' } })
+    expect(useTeamUiStore.getState().teamDrill).toEqual({ [ok]: { hostId: 'h1', sessionId: 's' }, [k('h2', 't2')]: { hostId: 'h1', sessionId: 's' } })
   })
   it('forgetTeams / forgetHostTeams drop the teamDrill of a team that is gone', () => {
     const live = k('h1', 'live'), gone = k('h1', 'gone'), other = k('h2', 'x')
@@ -434,5 +434,72 @@ describe('the four states (WA-2a′)', () => {
     st().restoreHostTeams(snap)
     expect(st().panelMode[key]).toBe('titlebar')
     expect(st().panelLast[key]).toBe('max')
+  })
+})
+
+describe('the ended seats (WA-2b-1)', () => {
+  const seat = (sessionId: string, endedAt = 1, hostId = 'h1') => ({ hostId, sessionId, title: `t-${sessionId}`, endedAt })
+  const saved = () => JSON.parse(localStorage.getItem('purdex-team-ui')!).state
+
+  it('records newest first and never twice for the same seat', () => {
+    const key = k('h1', 't1')
+    const st = useTeamUiStore.getState()
+    st.recordEndedSeats(key, [seat('a', 1)])
+    st.recordEndedSeats(key, [seat('b', 2)])
+    st.recordEndedSeats(key, [seat('a', 3)]) // a second frame naming the same seat
+    expect(useTeamUiStore.getState().endedSeats[key].map((e) => e.sessionId)).toEqual(['b', 'a'])
+    expect(useTeamUiStore.getState().endedSeats[key][1].endedAt).toBe(1)
+  })
+  it('keeps at most 20, dropping the oldest', () => {
+    const key = k('h1', 't1')
+    for (let i = 0; i < 25; i++) useTeamUiStore.getState().recordEndedSeats(key, [seat(`s${i}`, i)])
+    const list = useTeamUiStore.getState().endedSeats[key]
+    expect(list).toHaveLength(20)
+    expect(list[0].sessionId).toBe('s24')
+    expect(list[19].sessionId).toBe('s5')
+  })
+  it('one frame ending several seats keeps them in the order given (first = newest)', () => {
+    const key = k('h1', 't1')
+    useTeamUiStore.getState().recordEndedSeats(key, [seat('x'), seat('y')])
+    expect(useTeamUiStore.getState().endedSeats[key].map((e) => e.sessionId)).toEqual(['x', 'y'])
+  })
+  it('a recorded seat that is live again leaves the list (clearEndedSeat)', () => {
+    const key = k('h1', 't1')
+    useTeamUiStore.getState().recordEndedSeats(key, [seat('a'), seat('b')])
+    useTeamUiStore.getState().clearEndedSeat(key, 'h1', 'a')
+    expect(useTeamUiStore.getState().endedSeats[key].map((e) => e.sessionId)).toEqual(['b'])
+    useTeamUiStore.getState().clearEndedSeat(key, 'h1', 'b')
+    expect(useTeamUiStore.getState().endedSeats[key]).toBeUndefined()
+  })
+  it('persists and heals', () => {
+    const key = k('h1', 't1')
+    useTeamUiStore.getState().recordEndedSeats(key, [seat('a')])
+    expect(saved().endedSeats).toEqual({ [key]: [seat('a')] })
+    const ok = seat('ok')
+    localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { endedSeats: {
+      [key]: [ok, { hostId: '', sessionId: 's', title: 't', endedAt: 1 }, { hostId: 'h', sessionId: 5, title: 't', endedAt: 1 },
+        { hostId: 'h', sessionId: 's', title: 3, endedAt: 1 }, { hostId: 'h', sessionId: 's', title: 't', endedAt: 'x' }, 'junk', ok],
+      'no-separator': [ok],
+      bad: 'x',
+    } }, version: 0 }))
+    useTeamUiStore.persist.rehydrate()
+    expect(useTeamUiStore.getState().endedSeats).toEqual({ [key]: [ok] })
+  })
+  it('heal caps a wild persisted list at 20', () => {
+    const key = k('h1', 't1')
+    localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { endedSeats: { [key]: Array.from({ length: 40 }, (_, i) => seat(`s${i}`)) } }, version: 0 }))
+    useTeamUiStore.persist.rehydrate()
+    expect(useTeamUiStore.getState().endedSeats[key]).toHaveLength(20)
+  })
+  it('goes with the team (forgetTeams / forgetHostTeams) and rides snapshot / restore', () => {
+    const live = k('h1', 'live'), gone = k('h1', 'gone'), other = k('h2', 'x')
+    for (const key of [live, gone, other]) useTeamUiStore.getState().recordEndedSeats(key, [seat('a')])
+    useTeamUiStore.getState().forgetTeams('h1', [live])
+    expect(Object.keys(useTeamUiStore.getState().endedSeats).sort()).toEqual([live, other].sort())
+    const snap = useTeamUiStore.getState().snapshotHostTeams('h1')
+    useTeamUiStore.getState().forgetHostTeams('h1')
+    expect(Object.keys(useTeamUiStore.getState().endedSeats)).toEqual([other])
+    useTeamUiStore.getState().restoreHostTeams(snap)
+    expect(useTeamUiStore.getState().endedSeats[live]).toEqual([seat('a')])
   })
 })

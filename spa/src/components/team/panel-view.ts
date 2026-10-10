@@ -7,7 +7,9 @@ import type { TeamPanelTeam } from './team-display'
 
 export type PanelView =
   | { kind: 'team'; team: TeamPanelTeam }
-  | { kind: 'workbook'; from: 'tab' | 'team' }
+  | { kind: 'workbook'; from: 'tab' }
+  /** The team's drilled-in seat workbook; the team rides along (its frame, mode and seats). */
+  | { kind: 'workbook'; from: 'team'; team: TeamPanelTeam }
 
 export interface PanelViewInput {
   workbookTabs: Readonly<Record<string, true>>
@@ -19,5 +21,5 @@ export interface PanelViewInput {
 export function panelView(activeTabId: string | null, { workbookTabs, panelTeam, teamDrill }: PanelViewInput): PanelView | null {
   if (activeTabId !== null && workbookTabs[activeTabId] === true) return { kind: 'workbook', from: 'tab' }
   if (panelTeam === null) return null
-  return teamDrill[panelTeam.teamKey] ? { kind: 'workbook', from: 'team' } : { kind: 'team', team: panelTeam }
+  return teamDrill[panelTeam.teamKey] ? { kind: 'workbook', from: 'team', team: panelTeam } : { kind: 'team', team: panelTeam }
 }

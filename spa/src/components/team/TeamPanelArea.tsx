@@ -1,8 +1,8 @@
 // spa/src/components/team/TeamPanelArea.tsx — the one panel area, mounted once by the shell (team spec §4.4 amended, WA-2a).
 //
 // A floating layer over the top-right of the pane area (the shell's content box is `relative`): the panes keep their
-// size, the tab bar is never covered. It shows the team view for the active tab's team (`panelView`); a workbook result
-// renders nothing yet (WA-2b). Everything the person arranged lives in `useTeamUiStore` (width, and per team one of four
+// size, the tab bar is never covered. It shows the team view for the active tab's team (`panelView`), or that team's
+// drilled-in seat workbook in the same frame; a tab's own workbook renders nothing yet (WA-2b-1b). Everything the person arranged lives in `useTeamUiStore` (width, and per team one of four
 // states: titlebar | line | full | max), so a tab switch that unmounts the pane and a reload both come back to the same
 // area. In the `titlebar` state the pane draws nothing: the strip in the title bar (TeamTitleStrip) is the area.
 //
@@ -25,10 +25,12 @@ export function TeamPanelArea() {
   const teamDrill = useTeamUiStore((s) => s.teamDrill)
   const { width } = useTeamUiStore((s) => s.panel)
   const view0 = display ? panelView(activeTabId, { workbookTabs, panelTeam: display.panelTeam(activeTabId), teamDrill }) : null
-  const expanded = view0?.kind === 'team' && view0.team.mode === 'max'
+  // The team the area draws a frame for: the team view, or the team's drilled-in seat workbook (same frame, same mode).
+  const shownTeam = view0 !== null && 'team' in view0 ? view0.team : null
+  const expanded = shownTeam?.mode === 'max'
   // A store saved before the four states held `expanded: true`: the team showing when the area first draws becomes `max`
   // (an old value with no team on screen is dropped). Once per load.
-  const teamOnShow = view0?.kind === 'team' ? view0.team.teamKey : null
+  const teamOnShow = shownTeam?.teamKey ?? null
   useEffect(() => { useTeamUiStore.getState().takeLegacyMax(teamOnShow) }, [teamOnShow])
   const [draft, setDraft] = useState<number | null>(null)
   const draftRef = useRef<number | null>(null)
@@ -43,8 +45,8 @@ export function TeamPanelArea() {
   }, [expanded])
 
   // In the title bar the area is the strip's (TeamTitleStrip), not the pane's.
-  if (!display || !view0 || view0.kind !== 'team' || view0.team.mode === 'titlebar') return null
-  const team = view0.team
+  if (!display || !shownTeam || shownTeam.mode === 'titlebar') return null
+  const team = shownTeam
 
   return (
     <div

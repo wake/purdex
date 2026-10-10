@@ -1,26 +1,29 @@
 // spa/src/components/team/TeamPanel.tsx — the team view inside the panel area (team spec §4.4; ported from the prototype
 // at f61748aa).
 //
-// Full: a sidebar-like list, lead on top and fixed, members draggable; each person takes two lines.
+// Full: a sidebar-like list, lead on top and fixed, members draggable; each person takes one line (a second line only when the seat has a workbook: its task).
 // One-line: one cell per person (bot + light, context ring around the model shape) plus the team name; the cells wrap to a
 // second row when the team is big. Both take the width of the area they sit in; the area (TeamPanelArea) owns the frame.
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowsInSimple, ArrowsOutSimple, ArrowLineUp } from '@phosphor-icons/react'
+import { ArrowsInSimple, ArrowsOutSimple, ArrowLineUp, CaretRight, Notebook } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
-import { ContextRing, ModelIcon } from './ModelIcon'
+import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
 import { ctxLeftText, ctxTip, useSeatReading } from './team-readings'
+import { firstSentence, useSeatWorkbook } from './seat-workbook'
 import { useMemberDrag } from './useMemberDrag'
 import { useCellCapacity } from './useCellCapacity'
 import { TeamEditPopover } from './TeamEditPopover'
 import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
 import { useI18nStore } from '../../stores/useI18nStore'
-import type { PanelMode } from '../../stores/useTeamUiStore'
+import { useWorkbookStore } from '../../stores/useWorkbookStore'
+import { useTeamUiStore, type PanelMode } from '../../stores/useTeamUiStore'
+import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
@@ -45,9 +48,17 @@ export function TeamPanel(props: Props) {
   const roster = useTeamRosterStore((s) => s.byHost[hostId]?.find((r) => r.id === teamId))
   const canEdit = editable && roster !== undefined
   const { rootRef, hdr, editOpen, close, anchor } = useHeaderGestures({ teamKey: team.teamKey, mode: team.mode, onSetMode: props.onSetMode, canEdit })
+  // A drilled-in seat takes the place of the list (the drill is the store's, so it outlives this component).
+  const drill = useTeamUiStore((s) => s.teamDrill[team.teamKey])
+  const endedTitle = useTeamUiStore((s) => drill ? s.endedSeats[team.teamKey]?.find((e) => e.hostId === drill.hostId && e.sessionId === drill.sessionId)?.title : undefined)
+  const drillTitle = drill
+    ? [team.lead, ...team.members].find((m) => m.sessionId === drill.sessionId && m.hostId === drill.hostId)?.title ?? endedTitle ?? drill.sessionId
+    : ''
   return (
     <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className="text-xs text-text-primary">
-      {team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} hdr={hdr} />}
+      {drill ? (
+        <TeamSeatWorkbookView teamKey={team.teamKey} hostId={drill.hostId} sessionId={drill.sessionId} title={drillTitle} />
+      ) : team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} hdr={hdr} />}
       {editOpen && canEdit && (
         <TeamEditPopover
           target={{ hostId, teamId, name: roster.team_name, label: roster.team_label, color: roster.team_color ?? null }}
@@ -176,7 +187,50 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Pro
           />
         ))}
       </div>
+      <EndedGroup teamKey={teamKey} />
     </>
+  )
+}
+
+/** Seats that left the team: a collapsed 「已結束 (N)」 group at the bottom of the full list (absent with none); a click on one
+ *  drills into its workbook, which the daemon keeps after the session is gone. */
+function EndedGroup({ teamKey }: { teamKey: string }) {
+  const t = useI18nStore((s) => s.t)
+  const all = useTeamUiStore((s) => s.endedSeats[teamKey])
+  const support = useWorkbookStore((s) => s.support)
+  const [open, setOpen] = useState(false)
+  // Only a seat on a host that lists `workbook.v1` has a workbook to open (openWorkbook does nothing elsewhere).
+  const ended = (all ?? []).filter((e) => support[e.hostId]?.v1 === true)
+  if (ended.length === 0) return null
+  const label = t('team.panel.ended', { count: ended.length })
+  return (
+    <div data-testid="team-panel-ended" className="border-t border-border-subtle py-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onMouseDown={keepFocus}
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-1 px-3.5 py-1 text-text-muted hover:text-text-secondary cursor-pointer"
+      >
+        <CaretRight size={10} className={open ? 'rotate-90' : ''} />
+        <span>{label}</span>
+      </button>
+      {open && ended.map((e) => (
+        <div
+          key={`${e.hostId}\u0000${e.sessionId}`}
+          role="button"
+          tabIndex={0}
+          data-testid="team-panel-ended-row"
+          title={t('team.panel.ended_hint')}
+          onMouseDown={keepFocus}
+          onClick={() => useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId })}
+          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId }) }}
+          className="mx-1.5 pl-6 pr-2 py-1.5 rounded-md truncate text-text-muted hover:bg-surface-hover hover:text-text-secondary cursor-pointer"
+        >
+          {e.title}
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -195,11 +249,16 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
-  const ctxText = ctxLeftText(r.ctx)
+  const wb = useSeatWorkbook(seat.hostId, seat.sessionId)
+  const status = wb.conv?.status.trim() ?? ''
+  const task = firstSentence(status)
   const { remember, restore } = useReturnFocus()
   const transition = transitionOf(seat)
   const away = notInApp(seat)
   const noAnswer = r.unavailable === true ? t('team.panel.context_unavailable') : undefined
+  // The row's tooltip: where the seat cannot be reached, then model · effort · context left (a missing value is a dash, never 0).
+  const readingTip = noAnswer ?? `${modelText} · ${r.effort ?? '—'} · ${ctxTip(r.ctx, t)}`
+  const rowTip = away ? `${t('team.seat_not_in_app')}\n${readingTip}` : readingTip
   const open = () => onOpen(seat.sessionId) // a seat on a host this Mac lacks toasts the reason (openTeamSeat)
   return (
     <div
@@ -210,7 +269,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
       data-role={seat.role}
       data-active={String(isActive)}
       data-seat-state={seat.state}
-      title={away ? t('team.seat_not_in_app') : undefined}
+      title={rowTip}
       onMouseDown={drag ? remember : keepFocus}
       onMouseUp={drag ? restore : undefined}
       onClick={() => { restore(); open() }}
@@ -233,25 +292,40 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
             {seat.hostAlias !== '' ? seat.hostAlias : t('team.seat_host_unknown')}
           </span>
         )}
-        <span className="truncate min-w-0 flex-1" title={away ? `${seat.title} — ${t('team.seat_not_in_app')}` : seat.title}>{seat.title}</span>
+        <span className="truncate min-w-0 flex-1">{seat.title}</span>
         {transition && <span data-testid="team-panel-state" className="text-[9.5px] text-text-muted flex-shrink-0">{t(`team.seat_state.${transition}`)}</span>}
         {seat.role === 'lead' && (
           <span className="text-[9.5px] px-1 rounded border flex-shrink-0 text-text-primary" style={{ borderColor: color }}>{t('team.panel.lead')}</span>
         )}
         {seat.tabId === null && <span className="text-[9.5px] text-text-secondary flex-shrink-0">{t('team.panel.unopened')}</span>}
-      </div>
-      {/* Line 2: model icon + name, effort, context ring + percent; a missing value is a dash, never 0 */}
-      <div className="flex items-center gap-2 pl-[26px] mt-1.5 text-[11px] leading-[16px] text-text-secondary min-w-0">
-        <span className="flex items-center gap-1 min-w-0">
-          <ModelIcon model={r.model} size={10} />
-          <span data-testid="team-panel-model" className="truncate" title={noAnswer ?? r.modelRaw}>{noAnswer ? '—' : modelText}</span>
+        {/* The right end of line 1: the context LEFT beside the ring (user 2026-10-10: the number is the remainder; a missing value is a dash),
+            the model shape inside the ring; model / effort ride in the row's tooltip */}
+        <span data-testid="team-panel-ring" className="flex items-center gap-1 flex-shrink-0 text-text-primary">
+          <span data-testid="team-panel-ctx" className="text-[10.5px] tabular-nums text-text-muted">{ctxLeftText(noAnswer ? undefined : r.ctx)}</span>
+          <ContextRing pct={noAnswer ? undefined : r.ctx} model={noAnswer ? undefined : r.model} size={16} />
         </span>
-        <span data-testid="team-panel-effort" className="truncate">{r.effort ?? '—'}</span>
-        <span className="ml-auto flex items-center gap-1 flex-shrink-0 text-text-primary" title={noAnswer ?? ctxTip(r.ctx, t)}>
-          <ContextRing pct={r.ctx} model={r.model} size={16} />
-          <span data-testid="team-panel-ctx" className="tabular-nums text-text-secondary">{ctxText}</span>
-        </span>
+        {/* The workbook button follows the ring (only with a workbook); it drills in, the row itself still opens the seat */}
+        {wb.has && (
+          <button
+            type="button"
+            data-testid="team-panel-workbook"
+            onMouseDown={(e) => { e.stopPropagation(); e.preventDefault() }}
+            onClick={(e) => { e.stopPropagation(); useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: seat.hostId, sessionId: seat.sessionId }) }}
+            onKeyDown={(e) => e.stopPropagation()}
+            title={t('team.panel.workbook')}
+            aria-label={t('team.panel.workbook')}
+            className="p-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer flex-shrink-0"
+          >
+            <Notebook size={14} />
+          </button>
+        )}
       </div>
+      {/* Line 2: the task (only with a workbook that has a status); without one the row stays one line */}
+      {task !== '' && (
+        <div data-testid="team-panel-task" aria-label={t('team.panel.task', { task })} title={status} className="pl-[26px] mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
+          {task}
+        </div>
+      )}
     </div>
   )
 }

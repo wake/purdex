@@ -73,15 +73,27 @@ describe('who the panel shows for', () => {
     expect(screen.queryByTestId('team-panel')).toBeNull()
   })
 
-  it('a workbook result (toggle on, or a drill) renders no team view yet', () => {
+  it('a tab-workbook toggle renders no team view yet; a drill shows the seat workbook in the same frame instead of the list', () => {
     scene()
     mount()
     act(() => useTeamUiStore.getState().setWorkbookTab('lead', true))
     expect(screen.queryByTestId('team-panel')).toBeNull()
     act(() => { useTeamUiStore.getState().setWorkbookTab('lead', false); useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' }) })
-    expect(screen.queryByTestId('team-panel')).toBeNull()
+    expect(screen.getByTestId('team-panel-area')).toBeTruthy()
+    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
+    expect(screen.queryAllByTestId('team-panel-row')).toHaveLength(0)
     act(() => useTeamUiStore.getState().setTeamDrill(KEY, null))
-    expect(screen.queryByTestId('team-panel')).not.toBeNull()
+    expect(screen.queryByTestId('team-seat-workbook')).toBeNull()
+    expect(rows().length).toBeGreaterThan(0)
+  })
+  it('a drill survives a title-bar round trip of the panel (the drill is the store\'s, not the component\'s)', () => {
+    scene()
+    mount()
+    act(() => useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' }))
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
+    expect(screen.queryByTestId('team-panel-area')).toBeNull()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'full'))
+    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
   })
 
   it('active row = the active tab\'s seat', () => {
@@ -200,7 +212,7 @@ describe('full mode', () => {
     expect(rows().slice(1).every((r) => r.getAttribute('draggable') === 'true')).toBe(true)
   })
 
-  it('full rows carry host chip / title / model / effort / context / light / subagents', () => {
+  it('full rows follow the prototype: dots + light, host chip, title, the ring at the right end with no number; model / effort / context in the tooltip', () => {
     scene()
     readings((t) => {
       t.lead.model = 'claude-opus-5-5'
@@ -209,29 +221,33 @@ describe('full mode', () => {
       t.members[0].context = { used_percentage: 7, window: 1000, model_id: 'claude-sonnet-5-5', effort: 'low', at: 1 }
     })
     mount()
-    const lead = within(rows()[0])
+    const leadRow = rows()[0]
+    const lead = within(leadRow)
     expect(lead.getByTestId('seat-icon').getAttribute('data-subagents')).toBe('true') // the dots + light
     expect(lead.getByTestId('seat-host')).toBeTruthy()
     expect(lead.getByText('title L')).toBeTruthy()
-    expect(lead.getAllByTestId('model-icon-opus').length).toBeGreaterThan(0)
-    expect(lead.getByTestId('team-panel-model').textContent).toBe('Opus')
-    expect(lead.getByTestId('team-panel-effort').textContent).toBe('high')
-    expect(lead.getByTestId('team-panel-ctx').textContent).toBe('58%') // REMAINING (100 - 42), the ring below still draws the used 42
+    expect(lead.getByTestId('model-icon-opus')).toBeTruthy() // the model shape sits inside the ring
     expect(lead.getByTestId('context-ring')).toBeTruthy()
-    const a = within(rows()[1])
-    expect(a.getByTestId('team-panel-model').textContent).toBe('Sonnet') // model_id of the context sample
-    expect(a.getByTestId('team-panel-effort').textContent).toBe('low')
-    expect(a.getByTestId('team-panel-ctx').textContent).toBe('93%')
+    // the ring is the LAST thing on line 1, after the title and the lead tag
+    const line1 = lead.getByTestId('team-panel-ring').parentElement!
+    expect(line1.lastElementChild).toBe(lead.getByTestId('team-panel-ring'))
+    expect(line1.textContent).toContain('title L')
+    // the number beside the ring is what is LEFT (100 - 42); no model / effort text in the row, no second line without a workbook
+    expect(lead.getByTestId('team-panel-ctx')).toHaveTextContent('58%')
+    for (const id of ['team-panel-model', 'team-panel-effort']) expect(lead.queryByTestId(id)).toBeNull()
+    expect(leadRow.textContent).not.toMatch(/Opus|high/)
+    expect(leadRow.querySelectorAll('[data-testid="team-panel-task"]').length).toBe(0)
+    expect(leadRow.title).toBe('Opus · high · context 剩 58%') // REMAINING (100 - 42); the ring still draws the used 42
+    expect(rows()[1].title).toBe('Sonnet · low · context 剩 93%') // model_id of the context sample
   })
 
-  it.each([[40, '60%'], [0, '100%'], [100, '0%']])('used %i%% -> ring draws used, the number reads %s left; the tooltips say so', (used, left) => {
+  it.each([[40, '60%'], [0, '100%'], [100, '0%']])('used %i%% -> ring draws used, the tooltip says %s left', (used, left) => {
     scene()
     readings((t) => { t.lead.model = 'claude-opus-5-5'; t.lead.context = { used_percentage: used, window: 1, at: 1 } })
     mount()
     const lead = within(rows()[0])
-    expect(lead.getByTestId('team-panel-ctx').textContent).toBe(left)
     expect(lead.getByTestId('context-ring-arc').getAttribute('data-shown')).toBe(String(used))
-    expect(lead.getByTestId('team-panel-ctx').parentElement?.getAttribute('title')).toBe(`context 剩 ${left}`)
+    expect(rows()[0].title).toContain(`context 剩 ${left}`)
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     expect(screen.getAllByTestId('team-panel-cell')[0].getAttribute('title')).toContain(`context 剩 ${left}`)
   })
@@ -261,10 +277,9 @@ describe('full mode', () => {
     scene()
     mount()
     for (const r of rows()) {
-      const row = within(r)
-      expect(row.getByTestId('team-panel-model').textContent).toBe('—')
-      expect(row.getByTestId('team-panel-effort').textContent).toBe('—')
-      expect(row.getByTestId('team-panel-ctx').textContent).toBe('—')
+      expect(r.title).toBe('— · — · context —')
+      expect(within(r).getByTestId('team-panel-ctx')).toHaveTextContent(/^—$/) // a dash beside the ring, never 0%
+      expect(within(r).getByTestId('model-icon-unknown')).toBeTruthy()
     }
     expect(area().textContent).not.toContain('0%')
   })

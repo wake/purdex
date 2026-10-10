@@ -16,7 +16,7 @@ describe('panelView', () => {
     expect(panelView('a', { workbookTabs: {}, panelTeam: team, teamDrill: {} })).toEqual({ kind: 'team', team })
   })
   it('a team tab with a drill shows the drilled workbook', () => {
-    expect(panelView('a', { workbookTabs: {}, panelTeam: team, teamDrill: drill })).toEqual({ kind: 'workbook', from: 'team' })
+    expect(panelView('a', { workbookTabs: {}, panelTeam: team, teamDrill: drill })).toEqual({ kind: 'workbook', from: 'team', team })
   })
   it('a toggle on another tab does not matter', () => {
     expect(panelView('a', { workbookTabs: { b: true }, panelTeam: team, teamDrill: {} })).toEqual({ kind: 'team', team })
