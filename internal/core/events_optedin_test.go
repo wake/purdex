@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -8,8 +9,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -218,34 +220,93 @@ func TestOptedInStrictness_NoDeadlockUnderConcurrentSendsAndChurn(t *testing.T) 
 
 // --- over real connections ---------------------------------------------
 
-// bigFrame is a valid host-events frame of size bytes or so. Large frames
-// fill the socket buffers between server and client after a few writes, so
-// a client that reads nothing stalls its write pump quickly.
-func bigFrame(t *testing.T, size int) []byte {
-	t.Helper()
-	b, err := json.Marshal(HostEvent{Type: "fill", Value: strings.Repeat("x", size)})
-	require.NoError(t, err)
-	return b
+// pumpGate holds a subscriber's write pump still, deterministically (#2590). The pump blocks in conn.Write; a real socket only
+// does that when the kernel's buffers are full, and a pump blocked on a client that reads nothing is not blocked for good — the
+// kernel finishes the write it was in (buffers grow, a window probe lands) and the pump takes the next frame, which freed a slot
+// a test had just found full. The gate is the server side's net.Conn: while armed, every Write waits for a permit, for open(), or
+// for the connection to be closed.
+type pumpGate struct {
+	armed   atomic.Bool
+	permits chan struct{}
+	opened  chan struct{}
+	waiting atomic.Int32 // Writes parked at the gate right now
+	closeCh chan struct{}
+	once    sync.Once
+	openOnc sync.Once
 }
 
-// stall fills sub's send buffer to the brim behind a write pump that is
-// blocked on a client reading nothing, without ever overflowing it: it
-// queues only while there is room (only this test queues), and stops once
-// the buffer has stayed full for a while — the pump is stuck. Every slot
-// holds the same slice, so the memory is one frame.
-func stall(t *testing.T, sub *EventSubscriber, frame []byte) {
-	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for full := 0; full < 5; {
-		require.True(t, time.Now().Before(deadline), "the write pump never stalled")
-		if len(sub.send) < cap(sub.send) {
-			require.True(t, sub.TrySend(frame), "a send with room in the buffer was not queued")
-			full = 0
-			continue
+func newPumpGate() *pumpGate {
+	return &pumpGate{permits: make(chan struct{}, 1<<16), opened: make(chan struct{}), closeCh: make(chan struct{})}
+}
+
+// open lets every Write through for good.
+func (g *pumpGate) open() { g.openOnc.Do(func() { close(g.opened) }) }
+
+type gatedConn struct {
+	net.Conn
+	g *pumpGate
+}
+
+func (c *gatedConn) Write(p []byte) (int, error) {
+	if c.g.armed.Load() {
+		c.g.waiting.Add(1)
+		defer c.g.waiting.Add(-1)
+		select {
+		case <-c.g.permits:
+		case <-c.g.opened:
+		case <-c.g.closeCh:
+			return 0, net.ErrClosed
 		}
-		full++
-		time.Sleep(20 * time.Millisecond)
 	}
+	return c.Conn.Write(p)
+}
+
+func (c *gatedConn) Close() error {
+	c.g.once.Do(func() { close(c.g.closeCh) })
+	return c.Conn.Close()
+}
+
+// gateWriter hands the upgrader a hijacked connection that goes through a pumpGate; the gate is announced on gates.
+type gateWriter struct {
+	http.ResponseWriter
+	gates chan<- *pumpGate
+}
+
+func (w gateWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := w.ResponseWriter.(http.Hijacker).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	g := newPumpGate()
+	w.gates <- g
+	return &gatedConn{Conn: conn, g: g}, rw, nil
+}
+
+// gatedServer serves eb's /ws/host-events with every connection's pump behind a gate; the gates arrive in connection order.
+func gatedServer(t *testing.T, eb *EventsBroadcaster) (*httptest.Server, <-chan *pumpGate) {
+	t.Helper()
+	gates := make(chan *pumpGate, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		eb.HandleHostEvents(gateWriter{w, gates}, r)
+	}))
+	t.Cleanup(server.Close)
+	return server, gates
+}
+
+// jam makes sub's send buffer full behind a pump that is parked at gate, with certainty: it arms the gate, queues one frame
+// and waits for the pump to take it and park in its Write, then queues cap(send) more — all of which fit. When it returns the
+// pump holds a frame it cannot write and len(send) == cap(send); nothing changes that until the gate lets a Write through.
+func jam(t *testing.T, sub *EventSubscriber, g *pumpGate) {
+	t.Helper()
+	filler := []byte(`{"type":"fill","session":"s","value":"{}"}`)
+	g.armed.Store(true)
+	require.True(t, sub.TrySend(filler))
+	require.Eventually(t, func() bool { return len(sub.send) == 0 && g.waiting.Load() == 1 }, 5*time.Second, time.Millisecond,
+		"the pump never parked at the gate with a frame in hand")
+	for i := 0; i < cap(sub.send); i++ {
+		require.True(t, sub.TrySend(filler), "a send with room in the buffer was not queued")
+	}
+	require.Equal(t, cap(sub.send), len(sub.send))
 }
 
 // The reads below wait for progress, not for a total time (#2590): a stalled client's backlog is hundreds of 256 KiB frames,
@@ -295,6 +356,9 @@ func readFrames(conn *websocket.Conn, idle, total time.Duration) ([]string, erro
 func readUntilError(t *testing.T, conn *websocket.Conn) ([]string, error) {
 	t.Helper()
 	types, err := readFrames(conn, readIdle, readTotal)
+	if errors.Is(err, errNoProgress) {
+		dumpGoroutines(t) // #2590: evidence of where the server side is stuck, if it is
+	}
 	require.False(t, errors.Is(err, errNoProgress), "the server never closed the connection: %v", err)
 	require.False(t, errors.Is(err, errTooLong), "the server never closed the connection: %v", err)
 	return types, err
@@ -353,15 +417,15 @@ func TestHandleHostEvents_OptedInConnectionClosesWhenABestEffortFrameDoesNotFit(
 	eb := NewEventsBroadcaster()
 	subs := make(chan *EventSubscriber, 2)
 	eb.OnSubscribe(func(sub *EventSubscriber) { subs <- sub })
-	server := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
-	defer server.Close()
+	server, gates := gatedServer(t, eb)
 	optedConn, opted := dialQuery(t, server, subs, "?nex=v1")
+	optedGate := <-gates
 	plainConn, plain := dialQuery(t, server, subs, "")
+	plainGate := <-gates
 	require.True(t, opted.Wants(FeatureNexV1))
 
-	frame := bigFrame(t, 256<<10)
-	stall(t, opted, frame)
-	stall(t, plain, frame)
+	jam(t, opted, optedGate)
+	jam(t, plain, plainGate)
 
 	eb.Broadcast("", "tmux", "unavailable")
 
@@ -383,6 +447,7 @@ func TestHandleHostEvents_OptedInConnectionClosesWhenABestEffortFrameDoesNotFit(
 		before, err := readUntilType(plainConn, "after")
 		got <- result{before, err}
 	}()
+	plainGate.open() // the client catches up: its backlog drains
 	require.Eventually(t, func() bool { return len(plain.send) == 0 }, 10*time.Second, 5*time.Millisecond,
 		"the client without nex never drained its backlog")
 	eb.Broadcast("", "after", "x")
@@ -404,12 +469,11 @@ func TestHandleHostEvents_OptedInConnectionClosesWhenADirectSendDoesNotFit(t *te
 	eb := NewEventsBroadcaster()
 	subs := make(chan *EventSubscriber, 1)
 	eb.OnSubscribe(func(sub *EventSubscriber) { subs <- sub })
-	server := httptest.NewServer(http.HandlerFunc(eb.HandleHostEvents))
-	defer server.Close()
+	server, gates := gatedServer(t, eb)
 	conn, opted := dialQuery(t, server, subs, "?nex=v1")
+	jam(t, opted, <-gates)
 
-	stall(t, opted, bigFrame(t, 256<<10))
-	opted.Send([]byte(`{"type":"hook","session":"s","value":"{}"}`))
+	require.False(t, opted.TrySend([]byte(`{"type":"hook","session":"s","value":"{}"}`)), "a send into a full buffer was queued")
 
 	types, err := readUntilError(t, conn)
 	require.Error(t, err)
@@ -417,4 +481,46 @@ func TestHandleHostEvents_OptedInConnectionClosesWhenADirectSendDoesNotFit(t *te
 	assert.True(t, isDone(opted))
 	require.Eventually(t, func() bool { return !eb.HasSubscribers() }, 5*time.Second, 10*time.Millisecond,
 		"the closed connection's subscriber is still registered")
+}
+
+// #2590: the other side of the same rule. A pump that finishes the write it was in takes the next frame and frees one slot; a
+// direct send that finds that slot is queued and delivered, and the connection stays open — the client is slow, not gone. (This
+// is what a real, un-gated socket does at random, and what made the test above fail one run in six under load.)
+func TestHandleHostEvents_OptedInDirectSendThatFindsASlotIsDeliveredNotClosed(t *testing.T) {
+	eb := NewEventsBroadcaster()
+	subs := make(chan *EventSubscriber, 1)
+	eb.OnSubscribe(func(sub *EventSubscriber) { subs <- sub })
+	server, gates := gatedServer(t, eb)
+	conn, opted := dialQuery(t, server, subs, "?nex=v1")
+	gate := <-gates
+	jam(t, opted, gate)
+
+	gate.permits <- struct{}{} // one Write completes: the pump takes the next frame and parks again
+	require.Eventually(t, func() bool { return len(opted.send) < cap(opted.send) && gate.waiting.Load() == 1 }, 5*time.Second, time.Millisecond,
+		"the pump never freed a slot")
+	require.True(t, opted.TrySend([]byte(`{"type":"hook","session":"s","value":"{}"}`)), "a send into the freed slot was not queued")
+	assert.False(t, isDone(opted), "the connection was closed over a frame that fit")
+
+	gate.open()
+	got := make(chan error, 1)
+	go func() {
+		_, err := readUntilType(conn, "hook")
+		got <- err
+	}()
+	select {
+	case err := <-got:
+		require.NoError(t, err, "the queued frame never reached the client")
+	case <-time.After(15 * time.Second):
+		t.Fatal("the queued frame never reached the client")
+	}
+	assert.False(t, isDone(opted))
+}
+
+// dumpGoroutines prints every goroutine's stack to the test log (#2590): a server that neither sends nor closes is a goroutine
+// parked somewhere, and where is the whole question.
+func dumpGoroutines(t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	t.Logf("goroutines at the stall:\n%s", buf)
 }
