@@ -36,7 +36,7 @@ func openConfigGate(cfgPath string, logf func(string, ...any)) (cfg config.Confi
 	var loadErr error
 	enter := func(locked string) error {
 		entered = true
-		if cfg, loadErr = config.Load(cfgPath); loadErr != nil {
+		if cfg, loadErr = config.Load(locked); loadErr != nil { // the path that is locked, not the name it was reached by
 			return loadErr
 		}
 		if haveHanded {
@@ -56,15 +56,15 @@ func openConfigGate(cfgPath string, logf func(string, ...any)) (cfg config.Confi
 		run = f
 		return nil
 	}
+	restartDeadline := time.Now().Add(restartGateWait)
 	werr := config.WithLock(gate, enter)
-	// A restart has no launcher to try again, so it keeps waiting for the lock — up to restartGateWait — instead of giving up at
+	// A restart has no launcher to try again, so it keeps waiting for the lock — about restartGateWait, counted from the first attempt, give or take one config.LockWait — instead of giving up at
 	// the first timeout. It never reads the file outside the gate: a writer that holds the lock can still commit after such a
 	// read, and the environment variable that names the inherited fd is no proof of a restart (it is read inside the gate, where
 	// the adoption is checked); a hand-over that does not even look like one (no such fd, not the run file, nobody holds a lock on it)
 	// is not waited for.
 	if haveHanded && errors.Is(werr, config.ErrLockTimeout) && config.HandOverLooksReal(handed, config.CanonicalPath(gate)) {
-		deadline := time.Now().Add(restartGateWait)
-		for errors.Is(werr, config.ErrLockTimeout) && time.Now().Before(deadline) {
+		for errors.Is(werr, config.ErrLockTimeout) && time.Now().Before(restartDeadline) {
 			logf("config lock: %v; restart: still waiting", werr)
 			werr = config.WithLock(gate, enter)
 		}
