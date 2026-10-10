@@ -71,7 +71,7 @@ export function startUploads(key: string, hostId: string, sessionCode: string, f
       // a chip whose marker has been gone from the draft for long enough is let go now (see reconcileAttachments)
       reconcileAttachments(key, readDraft(key) ?? '', { sweep: true })
       // an image leaves a short `[Image #N]` (sending expands it); any other file its path on a line of its own
-      const seq = image ? nextAttachmentSeq(key) : undefined
+      const seq = image ? nextAttachmentSeq() : undefined
       const text = seq === undefined ? attachmentText(path, false) : imagePlaceholder(seq)
       writeDraft(key, seq === undefined ? insertAttachmentText(readDraft(key) ?? '', text) : insertPlaceholderText(readDraft(key) ?? '', text))
       handedOver = true

@@ -39,13 +39,14 @@ export function revokePreviewUrl(url: string | undefined): void {
 }
 
 const chips = new Map<string, readonly Attachment[]>()
-/** The last image number handed out per draft: a number is never reused, whatever is removed. Starts over with the draft. */
-const lastSeq = new Map<string, number>()
+/**
+ * The last image number handed out, ONE count for the whole app: a `[Image #N]` pasted into another pane (or draft) then names no
+ * chip there and stays text, instead of expanding into somebody else's picture. Never reset, whatever is sent or released.
+ */
+let lastSeq = 0
 
-export function nextAttachmentSeq(key: string): number {
-  const n = (lastSeq.get(key) ?? 0) + 1
-  lastSeq.set(key, n)
-  return n
+export function nextAttachmentSeq(): number {
+  return ++lastSeq
 }
 
 export const readAttachments = (key: string): readonly Attachment[] => chips.get(key) ?? []
@@ -74,7 +75,6 @@ export function trackUpload(key: string, ctl: AbortController): () => void {
 
 /** Forget every chip list whose key matches (a pane that is gone, or a session it no longer shows), and cancel its uploads. */
 export function forgetAttachmentsWhere(match: (key: string) => boolean): void {
-  for (const key of [...lastSeq.keys()]) if (match(key)) lastSeq.delete(key)
   for (const key of [...chips.keys()]) if (match(key)) { for (const a of readAttachments(key)) revokePreviewUrl(a.previewUrl); chips.delete(key) }
   for (const [key, set] of [...uploads]) if (match(key)) { uploads.delete(key); for (const c of set) c.abort() }
 }
@@ -116,7 +116,7 @@ export function reconcileAttachments(key: string, draft: string, opts: { sweep?:
 }
 
 /** Tests only: module state outlives a test. */
-export const clearAllAttachments = (): void => { for (const list of chips.values()) for (const a of list) revokePreviewUrl(a.previewUrl); chips.clear(); lastSeq.clear(); uploads.clear() }
+export const clearAllAttachments = (): void => { for (const list of chips.values()) for (const a of list) revokePreviewUrl(a.previewUrl); chips.clear(); lastSeq = 0; uploads.clear() }
 
 /* ─── the draft text an attachment stands for ─── */
 

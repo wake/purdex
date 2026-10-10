@@ -68,12 +68,12 @@ describe('placeholders in the draft', () => {
     expect(box().value).toBe('[Image #2] [Image #4]')
   })
 
-  it('numbers start over for the next message', async () => {
+  it('a send does not start the numbers over', async () => {
     render(ui())
     await attach(png('a.png'))
     enter()
     await attach(png('b.png'))
-    expect(box().value).toBe('[Image #1]')
+    expect(box().value).toBe('[Image #2]')
   })
 })
 
@@ -281,5 +281,34 @@ describe('a hidden chip is not kept for ever', () => {
     vi.setSystemTime(T0 + 130_000)
     await attach(png('b.png'))
     expect(readAttachments(KEY).map((a) => a.seq)).toEqual([1, 2]) // hidden for 10 s only, not 130
+  })
+})
+
+describe('two panes never share a number', () => {
+  const other = () => <SessionInput paneKey="p2" hostId="h" sessionId={SID} sessionCode="dev001" capabilities={{ send: 'prompt' }} onSwitchToTerminal={() => {}} />
+  const KEY2 = draftKey('p2', 'h', SID)
+
+  it('an image attached in each gets its own number', async () => {
+    const a = render(ui())
+    await attach(png('a.png'))
+    a.unmount()
+    render(other())
+    await attach(png('b.png'))
+    expect(readAttachments(KEY)[0].seq).not.toBe(readAttachments(KEY2)[0].seq)
+    expect(box().value).toBe(`[Image #${readAttachments(KEY2)[0].seq}]`)
+  })
+
+  it('a placeholder pasted from another pane stays as typed: it names no picture here', async () => {
+    const a = render(ui())
+    await attach(png('a.png'))
+    const foreign = box().value // pane one's [Image #n]
+    a.unmount()
+    render(other())
+    await attach(png('b.png'))
+    type(`${foreign} and ${box().value}`)
+    enter()
+    expect(sent().textContent).toContain(foreign)
+    expect(sent().textContent).toContain('/up/dev001/b.png')
+    expect(sent().textContent).not.toContain('/up/dev001/a.png')
   })
 })

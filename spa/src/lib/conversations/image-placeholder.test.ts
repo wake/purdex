@@ -9,12 +9,10 @@ afterEach(() => clearAllAttachments())
 const chip = (seq: number, path = `/up/${seq}.png`) => ({ id: `c${seq}`, name: `${seq}.png`, path, text: imagePlaceholder(seq), image: true, seq })
 
 describe('placeholder numbers', () => {
-  it('count up per draft, never reuse a number, and start over once the draft is forgotten', () => {
-    expect([nextAttachmentSeq('k'), nextAttachmentSeq('k'), nextAttachmentSeq('k')]).toEqual([1, 2, 3])
-    expect(nextAttachmentSeq('other')).toBe(1)
-    forgetAttachmentsWhere((k) => k === 'k')
-    expect(nextAttachmentSeq('k')).toBe(1)
-    expect(nextAttachmentSeq('other')).toBe(2)
+  it('count up across every draft (no two panes share a number) and are never handed out again', () => {
+    expect([nextAttachmentSeq(), nextAttachmentSeq(), nextAttachmentSeq()]).toEqual([1, 2, 3])
+    forgetAttachmentsWhere(() => true) // a send or a release does not start the count over
+    expect(nextAttachmentSeq()).toBe(4)
   })
 })
 
