@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.696] - 2026-10-11
+
+> 只動到 daemon：**要部署 daemon**；mod 的執行碼沒有改（只多一份測試用的共用案例檔），不必重跑 `pdx setup`；SPA 沒有改動。
+
+### Fixed：daemon 停機時漏掉的 statusline 讀數，開機時補上 — #2545（#2549）
+
+- daemon 停機期間 Claude Code 的 statusline 送不出去時，`pdx statusline-proxy` 會把每個 session 最新的一筆留在 `<data_dir>/statusline-pending/`；daemon 開機時把比手上新的讀數補進去（只補 model／effort／context 讀數，不重播畫面狀態），再刪掉檔案。所以停機時用 `/model` 換了 model，回來後交給 worker 也會帶新的 model（694／695 的 U18 已知限制）。
+- 檔案只留最新一筆、目錄 0700／檔案 0600、檔名只接受安全的 session id、最多 512 個、超過 7 天開機時直接刪；正常 render 只多一次檢查目錄（約 1 µs）。
+
+### Fixed：遠端回答 hook_ask 時檢查答案是否對得上題目 — #1845（#2548）
+
+- `POST /api/team/approvals/{id}/decide` 回答 AskUserQuestion 時，答案要每題恰一個非空字串、不能有多餘的題目；對不上就回 400 並指出哪一題，不再先標成已回答、卡片顯示終端其實不會採用的答案。規則與 mod 的 `answersFit` 相同，兩邊共用同一份測試案例。
+
 ## [1.0.0-alpha.695] - 2026-10-11
 
 > daemon、mod、SPA 都有改：**要部署 daemon，並重跑 `pdx setup`（mod 有改）**；SPA 已隨主機上的 dev server 生效。內嵌的 nexen 升到 v0.21.0（不升 schema，不必刪 DB）。
