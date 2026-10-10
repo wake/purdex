@@ -17,15 +17,17 @@ import (
 // fact to its row, keeps the previous ref (so the ref a lead typed yesterday still names the member), and tells the lead.
 
 // remoteRefSchema is L's table of the refs a remote member had before a relay moved it (D7). A new table: nothing to migrate.
-// (host_id, ref) is the key: a ref names one session of one host. mk is the member the ref belonged to; the row it names is
+// (team_id, host_id, ref) is the key: a ref names one session of one host, and the same session may have been a member of
+// another team of this host before. mk is the member the ref belonged to; the row it names is
 // found through (team, host, mk), never by the ref again, so a stale entry can only ever point at the member it was kept for.
 const remoteRefSchema = `
 	CREATE TABLE IF NOT EXISTS remote_member_refs (
+		team_id TEXT    NOT NULL,
 		host_id TEXT    NOT NULL,
 		ref     TEXT    NOT NULL,
 		mk      TEXT    NOT NULL,
 		at      INTEGER NOT NULL,
-		PRIMARY KEY (host_id, ref)
+		PRIMARY KEY (team_id, host_id, ref)
 	);`
 
 // moveRemoteMemberIn is the member host's half of a cleared whose old session is a remote member (D4, §3.2): the active
@@ -82,6 +84,9 @@ func (s *Store) moveRemoteMemberIn(tx *sql.Tx, op team.RelayOp, r RelayReport) (
 // person's /relay cannot be refused (U-M1), so its `moved` cannot be checked before it happens, and a fact held at the head of
 // the host's FIFO would hold that host's `ended` facts with it. Unreachable is not "unannounced": only a capabilities answer
 // that lacks the kind drops it. (A kind table, not a column: it is a property of the kind, and team_facts needs no migration.)
+// errMemberNotSettled: a moved fact met a row that is still joining; it is retried, not answered.
+var errMemberNotSettled = errors.New("member row still joining")
+
 func dropIfUnannounced(kind string) bool { return kind == team.FactMoved }
 
 // applyMovedIn is `moved` on the lead host (spec §3.2, §4.5): the member's session moved on its host. The row is the one of THIS
@@ -98,6 +103,11 @@ func (s *Store) applyMovedIn(tx dbtx, p FactPlan) (CommandResult, error) {
 	}
 	if err != nil {
 		return CommandResult{}, err
+	}
+	if state == rowJoining {
+		// The adopt answer and the facts travel on separate queues, so this can arrive first. Not a verdict: nothing is logged and
+		// the member host sends the fact again (a 5xx), by which time the row is active.
+		return CommandResult{}, errMemberNotSettled
 	}
 	if state != string(team.MemberActive) {
 		return okResult(map[string]string{"state": team.FactIgnored})
@@ -119,8 +129,8 @@ func (s *Store) applyMovedIn(tx dbtx, p FactPlan) (CommandResult, error) {
 		return okResult(map[string]string{"state": team.FactIgnored}) // the team ended
 	}
 	if oldRef != "" && oldRef != f.NewRef {
-		if _, err := tx.Exec(`INSERT INTO remote_member_refs (host_id, ref, mk, at) VALUES (?, ?, ?, ?)
-			ON CONFLICT(host_id, ref) DO UPDATE SET mk = excluded.mk, at = excluded.at`, p.FromHostID, oldRef, f.MK, p.Now); err != nil {
+		if _, err := tx.Exec(`INSERT INTO remote_member_refs (team_id, host_id, ref, mk, at) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(team_id, host_id, ref) DO UPDATE SET mk = excluded.mk, at = excluded.at`, f.TeamID, p.FromHostID, oldRef, f.MK, p.Now); err != nil {
 			return CommandResult{}, err
 		}
 	}
@@ -133,7 +143,7 @@ func (s *Store) applyMovedIn(tx dbtx, p FactPlan) (CommandResult, error) {
 func (m *Module) formerRefMatch(rows []memberRow, teamID, hostID, ref string) []memberRow {
 	var spawnOp string
 	if err := m.store.db.QueryRow(`SELECT m.spawn_op FROM remote_member_refs r JOIN team_members m ON m.mk = r.mk AND m.host_id = r.host_id
-		WHERE r.host_id = ? AND r.ref = ? AND m.team_id = ? AND m.mk <> '' ORDER BY m.created_at DESC LIMIT 1`, hostID, ref, teamID).Scan(&spawnOp); err != nil {
+		WHERE r.team_id = ? AND r.host_id = ? AND r.ref = ? AND m.team_id = r.team_id AND m.mk <> '' ORDER BY m.created_at DESC LIMIT 1`, teamID, hostID, ref).Scan(&spawnOp); err != nil {
 		return nil
 	}
 	var hits []memberRow

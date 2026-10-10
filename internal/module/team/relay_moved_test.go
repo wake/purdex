@@ -350,7 +350,7 @@ func TestMovedFact_BindingMovesNothingForAnotherHostTeamOrMember(t *testing.T) {
 
 // A row that is no longer active is not moved ("ignored"); neither is a row of an ended team.
 func TestMovedFact_OnlyAnActiveRowOfALiveTeamMoves(t *testing.T) {
-	for _, state := range []string{"released", "gone", "killed", "joining"} {
+	for _, state := range []string{"released", "gone", "killed"} {
 		t.Run(state, func(t *testing.T) {
 			f := factFixture(t)
 			f.remoteRow("abc12", "lead:1", "mk1", state)
@@ -466,7 +466,7 @@ func TestMovedFact_AnOldRefNeverPointsAtSomeoneElse(t *testing.T) {
 		t.Fatalf("row %+v ok=%v err=%v, want the row that holds the ref now", row, ok, err)
 	}
 	// the mapping of another team's member is not followed into this team
-	if _, err := f.m.store.db.Exec(`INSERT INTO remote_member_refs (host_id, ref, mk, at) VALUES ('lead:1', '_old777', 'mk-of-another-team', 1)`); err != nil {
+	if _, err := f.m.store.db.Exec(`INSERT INTO remote_member_refs (team_id, host_id, ref, mk, at) VALUES ('other-team', 'lead:1', '_old777', 'mk-of-another-team', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, _ := f.m.matchRemoteMember(tm, "lead", "_old777"); ok {
@@ -538,5 +538,55 @@ func TestFactPump_AMovedIsKeptWhenTheRereadBeforeADropFails(t *testing.T) {
 	f.m.factPump.drain("host-L")
 	if st := f.factState("fact-mk-1"); st.State != factPending {
 		t.Fatalf("moved = %s, want pending: an unreadable re-read dropped it", st.State)
+	}
+}
+
+// codex attack: the adopt answer and the facts travel on separate queues, so a `moved` can reach L while the row is still
+// `joining`. That is not a verdict: the fact must not be logged (a resend would replay "ignored" for good); it is refused as a
+// storage failure so the member host sends it again, and once the row is active the same fact applies.
+func TestMovedFact_ARowStillJoiningIsNotAnswered_TheFactAppliesWhenItIsActive(t *testing.T) {
+	f := factFixture(t)
+	f.remoteRow("abc12", "lead:1", "mk1", "joining")
+	code, _ := f.postFact(leadPrincipal(), movedFact(factUUID1, "mk1"))
+	if code != 500 {
+		t.Fatalf("moved on a joining row = %d, want 500 (retry later)", code)
+	}
+	var n int
+	if err := f.m.store.db.QueryRow(`SELECT COUNT(*) FROM team_fact_log`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("the fact was logged (%d, %v): a resend would replay ignored", n, err)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'active' WHERE spawn_op = 'abc12'`); err != nil {
+		t.Fatal(err)
+	}
+	code, body := f.postFact(leadPrincipal(), movedFact(factUUID1, "mk1"))
+	if code != 200 || !strings.Contains(string(body), `"applied"`) {
+		t.Fatalf("after the row is active = %d %s, want applied", code, body)
+	}
+}
+
+// codex attack: the key of a kept ref carries the team, so the same ref of one host in two teams keeps two mappings.
+func TestMovedFact_AKeptRefIsKeyedByTeamToo(t *testing.T) {
+	f := factFixture(t)
+	for _, team := range []string{"t1", "t2"} {
+		if _, err := f.m.store.db.Exec(`INSERT INTO remote_member_refs (team_id, host_id, ref, mk, at) VALUES (?, 'lead:1', '_same01', ?, 1)`, team, "mk-"+team); err != nil {
+			t.Fatalf("team %s: %v", team, err)
+		}
+	}
+}
+
+// A ref kept in another team for the same mk is not followed into this team.
+func TestMovedFact_AKeptRefOfAnotherTeamIsNotFollowed(t *testing.T) {
+	f, fc := factsFixture(t)
+	f.setLeadHost(true)
+	fc.aliases = map[string]string{"lead": "lead:1"}
+	f.m.cmdCaller = fc
+	f.approveLead(uid(1))
+	f.remoteRow("abc12", "lead:1", "mk1", rowActive)
+	if _, err := f.m.store.db.Exec(`INSERT INTO remote_member_refs (team_id, host_id, ref, mk, at) VALUES ('other-team', 'lead:1', '_old888', 'mk1', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	tm, _, _ := f.m.store.TeamByID(uid(1))
+	if _, ok, _ := f.m.matchRemoteMember(tm, "lead", "_old888"); ok {
+		t.Fatal("a ref kept in another team matched in this one")
 	}
 }
