@@ -124,7 +124,7 @@ export function TeamNotebookButton({ team }: { team: TeamPanelTeam }) {
   const inBar = team.mode === 'titlebar'
   const label = t(inBar ? 'team.titlebar.to_pane' : 'team.titlebar.to_titlebar')
   return (
-    <div data-testid="team-notebook-wrap" className="shrink-0 flex items-center translate-y-[2.5px] mr-0.5" style={NO_DRAG}>
+    <div data-testid="team-notebook-wrap" className="shrink-0 flex items-center mr-0.5" style={NO_DRAG}>
       <button
         type="button"
         data-testid="team-notebook-button"

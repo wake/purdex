@@ -168,7 +168,7 @@ export function TitleBar({ title }: Props) {
         <div className="w-[72px] shrink-0" aria-hidden="true" />
         <div
           data-testid="sidebar-toggle"
-          className="shrink-0 flex items-center translate-y-[2.5px]"
+          className="shrink-0 flex items-center"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <CollapseButton variant="topbar" />
@@ -193,7 +193,7 @@ export function TitleBar({ title }: Props) {
         <UnattendedButton />
         <div
           data-testid="layout-buttons"
-          className="shrink-0 flex items-center gap-0.5 translate-y-[2.5px]"
+          className="shrink-0 flex items-center gap-0.5"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           {patterns.map(({ pattern, icon: Icon, labelKey }) => {

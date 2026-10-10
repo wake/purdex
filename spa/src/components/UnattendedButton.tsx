@@ -80,7 +80,7 @@ export function UnattendedButton() {
     <div
       ref={pairRef}
       data-testid="unattended-buttons"
-      className="shrink-0 flex items-center gap-0.5 translate-y-[2.5px] mr-1"
+      className="shrink-0 flex items-center gap-0.5 mr-1"
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
       <button
