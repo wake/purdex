@@ -41,7 +41,34 @@ export function parseAsk(a: ConversationApproval): OpenAsk | null {
   if (!isRecord(p) || !Array.isArray(p.questions)) return null
   const questions = p.questions.map(readQuestion).filter((q): q is AskQuestion => q !== null)
   if (questions.length === 0) return null
-  return { id: a.id, toolUseId: typeof p.tool_use_id === 'string' ? p.tool_use_id : '', questions, terminalOnly: p.terminal_only === true }
+  return { id: a.id, toolUseId: typeof p.tool_use_id === 'string' ? p.tool_use_id : '', questions, terminalOnly: p.terminal_only === true || !remotelyAnswerable(questions) }
+}
+
+// The daemon keys hook.answers by question text and refuses what it cannot match exactly (decide's answersFit, #2548). A question
+// text with U+FFFD (or a lone surrogate, which the daemon folds into it) is never matched, and two questions with one text share a
+// key and so cannot be told apart; a blank option label cannot be told apart from no answer: such a card is read-only up front rather than refused after the person has answered.
+const UNMATCHABLE = /\uFFFD|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+export function remotelyAnswerable(questions: readonly AskQuestion[]): boolean {
+  const seen = new Set<string>()
+  for (const q of questions) {
+    if (q.question === '' || UNMATCHABLE.test(q.question) || seen.has(q.question)) return false
+    // an option whose label is blank would be an answer the daemon reads as empty
+    if (q.options.some((o) => o.label.trim() === '')) return false
+    seen.add(q.question)
+  }
+  return true
+}
+
+/**
+ * The rule decide and the mod's `answersFit` (hooks/ask.js) apply: exactly one non-empty string per question text and no other key.
+ * Kept here so a test can hold `buildAnswers` to the shared fixture; the empty test is JavaScript's `trim`, as on the other two sides.
+ */
+export function answersFit(questions: readonly { question: string }[], answers: Record<string, unknown> | null): boolean {
+  if (questions.length === 0 || answers === null) return false
+  const asked = new Set(questions.map((q) => q.question))
+  if (asked.has('')) return false
+  const keys = Object.keys(answers)
+  return keys.length === asked.size && keys.every((k) => asked.has(k) && typeof answers[k] === 'string' && (answers[k] as string).trim() !== '')
 }
 
 /** The open asks of the conversation's approvals, oldest first (the order the daemon holds them in). */
@@ -109,6 +136,8 @@ export type AskDecideResult =
   /** Somebody (the terminal, another window) closed it first, or it is gone: the card locks. */
   | { ok: false; reason: 'changed' }
   | { ok: false; reason: 'terminal_only' }
+  /** The daemon refused the answer as malformed (400 bad_request); `message` is its words, and the card stays open to be fixed. */
+  | { ok: false; reason: 'rejected'; message: string }
   | { ok: false; reason: 'network' | 'failed' }
 
 async function decide(hostId: string, id: string, body: { decision: 'approve' | 'deny'; hook: { answers?: Record<string, string>; message?: string } }): Promise<AskDecideResult> {
@@ -119,6 +148,10 @@ async function decide(hostId: string, id: string, body: { decision: 'approve' | 
     const code = typeof e === 'object' && e !== null && 'code' in e ? String((e as { code: unknown }).code) : ''
     if (code === 'already_decided' || code === 'not_found') return { ok: false, reason: 'changed' }
     if (code === 'terminal_only') return { ok: false, reason: 'terminal_only' }
+    if (code === 'bad_request') {
+      const detail = typeof e === 'object' && e !== null && 'detail' in e ? String((e as { detail: unknown }).detail) : ''
+      if (detail !== '') return { ok: false, reason: 'rejected', message: detail }
+    }
     if (code === 'network') return { ok: false, reason: 'network' }
     return { ok: false, reason: 'failed' }
   }

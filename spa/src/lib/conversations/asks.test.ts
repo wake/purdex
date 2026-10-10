@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { answerAsk, buildAnswers, checkReply, openAsks, parseAsk, replyToAsk, terminalAnswerText, REPLY_MAX_RUNES } from './asks'
+import { answerAsk, answersFit, buildAnswers, remotelyAnswerable, checkReply, openAsks, parseAsk, replyToAsk, terminalAnswerText, REPLY_MAX_RUNES } from './asks'
 import { applyApprovals, applyApprovalOp, emptyDoc } from './model'
 import type { ConversationApproval } from './types'
+// @ts-expect-error — plain JS shared with the daemon's test and the mod's (one JSON value after `export default`)
+import answersFixture from '../../../../cmd/pdx/plugin/purdex/hooks/ask_answers.fixture.js'
 
 const decideApproval = vi.hoisted(() => vi.fn())
 vi.mock('../team/approval-api', () => ({ decideApproval }))
@@ -127,6 +129,14 @@ describe('deciding', () => {
     decideApproval.mockImplementation(async () => { throw Object.assign(new Error(code), { code }) })
     expect(await answerAsk('h', 'a1', { q: 'x' })).toEqual({ ok: false, reason })
   })
+  it('a 400 bad_request is the daemon\'s own words, not a generic failure', async () => {
+    decideApproval.mockImplementation(async () => { throw Object.assign(new Error('x'), { code: 'bad_request', detail: 'hook.answers has no answer for the question "Q"' }) })
+    expect(await answerAsk('h', 'a1', { q: 'x' })).toEqual({ ok: false, reason: 'rejected', message: 'hook.answers has no answer for the question "Q"' })
+  })
+  it('a bad_request with no detail is a plain failure', async () => {
+    decideApproval.mockImplementation(async () => { throw Object.assign(new Error('x'), { code: 'bad_request' }) })
+    expect(await answerAsk('h', 'a1', { q: 'x' })).toEqual({ ok: false, reason: 'failed' })
+  })
   it('never retries on its own', async () => {
     decideApproval.mockImplementation(async () => { throw Object.assign(new Error('n'), { code: 'network' }) })
     await answerAsk('h', 'a1', { q: 'x' })
@@ -144,5 +154,48 @@ describe('terminalAnswerText', () => {
     expect(terminalAnswerText([step], 'toolu_other')).toBeNull()
     expect(terminalAnswerText([{ type: 'step', id: 'toolu_a1', question: {} }], 'toolu_a1')).toBeNull()
     expect(terminalAnswerText([{ type: 'user', id: 'toolu_a1' }], 'toolu_a1')).toBeNull()
+  })
+})
+
+// The shared fixture (#2548): the same cases the daemon's decide check and the mod's answersFit are held to.
+describe('the shared answersFit fixture', () => {
+  type Case = { name: string; questions: unknown[]; answers: Record<string, unknown>; fit: boolean }
+  const cases = (answersFixture as { cases: Case[] }).cases
+  it.each(cases.map((c) => [c.name, c] as const))('answersFit agrees: %s', (_n, c) => {
+    const qs = c.questions.filter((q): q is { question: string } => typeof (q as { question?: unknown }).question === 'string')
+    // a question without text can never be answered: the rule is false there whatever the keys
+    const fit = qs.length === c.questions.length && answersFit(qs, c.answers)
+    expect(fit).toBe(c.fit)
+  })
+  it('every buildAnswers output for a card the dock lets be answered fits', () => {
+    for (const c of cases) {
+      const qs = openAsks([{ id: 'x', kind: 'hook_ask', state: 'open', payload: { questions: c.questions } }])[0]
+      if (!qs || qs.terminalOnly) continue
+      const picks = qs.questions.map((q) => (q.options.length > 0 ? { chosen: [q.options[0].label], other: '' } : { chosen: [], other: 'free' }))
+      expect(answersFit(qs.questions, buildAnswers(qs.questions, picks)), c.name).toBe(true)
+    }
+  })
+})
+
+describe('remotelyAnswerable', () => {
+  const q = (question: string) => ({ question, multiple: false, options: [] })
+  it('refuses U+FFFD, a lone surrogate and a repeated question text', () => {
+    expect(remotelyAnswerable([q('fine'), q('也好')])).toBe(true)
+    expect(remotelyAnswerable([q('bad \uFFFD')])).toBe(false)
+    expect(remotelyAnswerable([q('lone \uD800')])).toBe(false)
+    expect(remotelyAnswerable([q('lone \uDC00')])).toBe(false)
+    expect(remotelyAnswerable([q('same'), q('same')])).toBe(false)
+  })
+  it('refuses a question with an option whose label is blank after trim', () => {
+    expect(remotelyAnswerable([{ question: 'q', multiple: false, options: [{ label: 'ok' }, { label: ' \u3000 ' }] }])).toBe(false)
+  })
+  it('keeps a valid surrogate pair (emoji)', () => {
+    expect(remotelyAnswerable([q('要🍜嗎？')])).toBe(true)
+  })
+  it('makes parseAsk read the card as terminal-only', () => {
+    const a = ask('a9', {}, { questions: [{ question: 'x\uFFFDy', options: [{ label: 'o' }] }] })
+    expect(parseAsk(a)!.terminalOnly).toBe(true)
+    const dup = ask('a8', {}, { questions: [{ question: 'same', options: [{ label: 'o' }] }, { question: 'same', options: [{ label: 'p' }] }] })
+    expect(parseAsk(dup)!.terminalOnly).toBe(true)
   })
 })
