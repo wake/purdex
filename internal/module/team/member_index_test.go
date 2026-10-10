@@ -35,6 +35,13 @@ func indexSQL(t *testing.T, db *sql.DB, name string) (string, bool) {
 // given as (spawn_op, session, state, updated_at), and closes it. Returns the path.
 func legacyDB(t *testing.T, rows ...[4]any) string {
 	t.Helper()
+	return seedDB(t, true, rows...)
+}
+
+// seedDB is legacyDB with the choice of the old index: with it the rows must be ones it allows; without it (no unique index on the
+// seat at all) any rows go in.
+func seedDB(t *testing.T, oldIndexIn bool, rows ...[4]any) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "team.db")
 	s, err := OpenStore(path)
 	if err != nil {
@@ -43,9 +50,13 @@ func legacyDB(t *testing.T, rows ...[4]any) string {
 	if _, _, _, err := s.Create(openApproval("tm-1", "sid-lead", 1000), "h1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DROP INDEX IF EXISTS ` + newIndex + `;
-		CREATE UNIQUE INDEX IF NOT EXISTS ` + oldIndex + ` ON team_members (session_id) WHERE state = 'active'`); err != nil {
+	if _, err := s.db.Exec(`DROP INDEX IF EXISTS ` + newIndex); err != nil {
 		t.Fatal(err)
+	}
+	if oldIndexIn {
+		if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ` + oldIndex + ` ON team_members (session_id) WHERE state = 'active'`); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, r := range rows {
 		// no unique index in the way for the conflicting rows: drop it, insert, put it back is not possible with duplicates, so the
@@ -215,5 +226,92 @@ func TestOneMemberIndex_TheBaseSchemaDoesNotCreateTheOldIndex(t *testing.T) {
 	}
 	if strings.Contains(teamSchema, "CREATE UNIQUE INDEX IF NOT EXISTS "+newIndex) {
 		t.Fatalf("teamSchema creates %s: it is migrateOneMemberIndex's, together with the resolution of the rows it would reject", newIndex)
+	}
+}
+
+// bareDB is a team.db with NO unique index on the seat at all (neither the old nor the new): the shape of a fresh db whose swap
+// then fails, or of one whose index was dropped by hand. Rows are as legacyDB takes them.
+func bareDB(t *testing.T, rows ...[4]any) string {
+	t.Helper()
+	return seedDB(t, false, rows...)
+}
+
+// codex R1 P2 / attacker high 2: a failed swap leaves the db without the old index when it never had one — then NOTHING protected
+// the seat, and every later boot would retry and ignore the same error. A failed swap must leave a unique index in force.
+// Mutation gate: no backstop → red.
+func TestOneMemberIndex_AFailedSwapNeverLeavesTheSeatUnprotected(t *testing.T) {
+	path := bareDB(t, [4]any{"a1", "sid-1", "active", 5})
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE ` + newIndex + ` (x INTEGER)`); err != nil { // the swap cannot create its index
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("the boot must not fail: %v", err)
+	}
+	defer s.Close()
+	if err := s.InsertMember(newMember("dup", "tm-1", "sid-1", "_dup", 9)); err == nil {
+		t.Fatal("a second active row for one session was accepted: no unique index is in force")
+	}
+}
+
+// attacker high 2, second half: with the old index missing a legacy db can hold TWO active rows of one session. The newest stays,
+// the rest end gone, and the new index is created — the boot does not fail on it.
+func TestOneMemberIndex_ActiveRowsOfOneSessionAreResolvedToo(t *testing.T) {
+	path := bareDB(t, [4]any{"a1", "sid-1", "active", 5}, [4]any{"a2", "sid-1", "active", 8}, [4]any{"k1", "sid-1", "killing", 9},
+		[4]any{"a3", "sid-2", "active", 5}, [4]any{"a4", "sid-2", "active", 5}) // a tie on updated_at: the larger spawn_op stays
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("a db with duplicate active rows must still open: %v", err)
+	}
+	defer s.Close()
+	// session 1: an active row outranks a killing one whatever the times; of the two actives the newer (a2) stays
+	want := map[string]string{"a2": "active", "a1": "gone", "k1": "gone", "a4": "active", "a3": "gone"}
+	for op, st := range want {
+		if got := stateOf(t, s.db, op); got != st {
+			t.Errorf("row %s = %s, want %s", op, got, st)
+		}
+	}
+	if _, ok := indexSQL(t, s.db, newIndex); !ok {
+		t.Error("the new index was not created")
+	}
+}
+
+// attacker critical: an object already named team_members_one_member that is NOT the index we mean (a plain index, a partial index
+// of another predicate) made `CREATE UNIQUE INDEX IF NOT EXISTS` a silent success after the old index had been dropped — the swap
+// "worked" and nothing was unique. The definition is checked, and a wrong one is replaced. Mutation gate: trust the name → red.
+func TestOneMemberIndex_ASameNamedIndexOfAnotherDefinitionIsReplaced(t *testing.T) {
+	for name, create := range map[string]string{
+		"a plain index":      `CREATE INDEX ` + newIndex + ` ON team_members (session_id)`,
+		"a partial one":      `CREATE UNIQUE INDEX ` + newIndex + ` ON team_members (session_id) WHERE state = 'active'`,
+		"another column":     `CREATE UNIQUE INDEX ` + newIndex + ` ON team_members (spawn_op, session_id) WHERE state IN ('active', 'killing')`,
+		"a looser predicate": `CREATE UNIQUE INDEX ` + newIndex + ` ON team_members (session_id) WHERE state IN ('active', 'killing', 'gone')`,
+		"a narrower unique":  `CREATE UNIQUE INDEX ` + newIndex + ` ON team_members (session_id) WHERE state IN ('killing')`,
+	} {
+		path := legacyDB(t, [4]any{"a1", "sid-1", "active", 5})
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(create); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		db.Close()
+		s, err := OpenStore(path)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got, _ := indexSQL(t, s.db, newIndex)
+		if !strings.Contains(got, "UNIQUE") || !strings.Contains(got, "'active', 'killing'") || strings.Contains(got, "'gone'") || strings.Contains(got, "spawn_op") {
+			t.Errorf("%s: the index is %q after the open, want the one this migration means", name, got)
+		}
+		if err := s.InsertMember(newMember("dup", "tm-1", "sid-1", "_dup", 9)); err == nil {
+			t.Errorf("%s: a second active row was accepted", name)
+		}
+		s.Close()
 	}
 }
