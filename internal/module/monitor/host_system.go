@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -16,13 +18,40 @@ import (
 type systemHostCollector struct{}
 
 func NewSystemHostCollector() HostCollector {
+	if runtime.GOOS == "darwin" {
+		return &darwinHostCollector{sampler: newCPUSampler(runDarwinIostat, log.Printf)}
+	}
 	return systemHostCollector{}
+}
+
+// darwinHostCollector reads the host CPU from a background iostat sampler (macOS 26 has no kern.cp_time, #2013); the rest
+// is the system collector's. Close stops the sampler.
+type darwinHostCollector struct {
+	systemHostCollector
+	sampler *cpuSampler
+}
+
+func (c *darwinHostCollector) CPUPercent(interval time.Duration) (float64, error) {
+	return c.sampler.CPUPercent(interval)
+}
+
+func (c *darwinHostCollector) Close() { c.sampler.Close() }
+
+// runDarwinIostat is one `iostat -c 2 -w 1`: two samples a second apart, the second being the last second. LC_ALL=C keeps
+// the numbers and the header in the form the parser reads; the context kills the process.
+func runDarwinIostat(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "iostat", "-c", "2", "-w", "1")
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("iostat: %w", err)
+	}
+	return string(out), nil
 }
 
 func (systemHostCollector) CollectCPU(ctx context.Context) (HostCPUSample, error) {
 	switch runtime.GOOS {
-	case "darwin":
-		return collectDarwinCPU(ctx)
 	case "linux":
 		return collectLinuxCPU()
 	default:
@@ -50,30 +79,6 @@ func (systemHostCollector) CollectDisk(context.Context) (HostDiskSample, error) 
 	free := stat.Bavail * uint64(stat.Bsize)
 	used := total - free
 	return HostDiskSample{TotalBytes: total, UsedBytes: used}, nil
-}
-
-func collectDarwinCPU(ctx context.Context) (HostCPUSample, error) {
-	out, err := exec.CommandContext(ctx, "sysctl", "-n", "kern.cp_time").Output()
-	if err != nil {
-		return HostCPUSample{}, fmt.Errorf("sysctl kern.cp_time: %w", err)
-	}
-	fields := strings.Fields(string(out))
-	if len(fields) < 4 {
-		return HostCPUSample{}, fmt.Errorf("sysctl kern.cp_time: expected at least 4 fields")
-	}
-	values := make([]uint64, 0, len(fields))
-	for _, field := range fields {
-		value, err := strconv.ParseUint(field, 10, 64)
-		if err != nil {
-			return HostCPUSample{}, fmt.Errorf("parse kern.cp_time: %w", err)
-		}
-		values = append(values, value)
-	}
-	var total uint64
-	for _, value := range values {
-		total += value
-	}
-	return HostCPUSample{Idle: values[3], Total: total}, nil
 }
 
 func collectDarwinMemory(ctx context.Context) (HostMemorySample, error) {

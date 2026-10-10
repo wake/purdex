@@ -134,7 +134,13 @@ func (m *Module) Start(_ context.Context) error {
 	return nil
 }
 
-func (m *Module) Stop(_ context.Context) error { return nil }
+// Stop closes what the host collector keeps running in the background (the darwin CPU sampler, with its iostat).
+func (m *Module) Stop(_ context.Context) error {
+	if c, ok := m.collectors.HostCollector.(interface{ Close() }); ok {
+		c.Close()
+	}
+	return nil
+}
 
 func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := m.getSnapshot(r.Context())
@@ -232,9 +238,11 @@ func (m *Module) collectSnapshot(ctx context.Context, cfg EffectiveConfig) (*sna
 	}
 
 	sampledAt := m.now()
+	hostState := m.ensureHostMetricsState()
+	hostState.cpuInterval = time.Duration(cfg.RefreshIntervalMS) * time.Millisecond
 	return &snapshot{
 		SampledAt: sampledAt.UnixMilli(),
-		Host:      collectHostMetrics(ctx, m.ensureHostMetricsState()),
+		Host:      collectHostMetrics(ctx, hostState),
 		Sessions:  sessions,
 		Config:    cfg,
 		sampledAt: sampledAt,

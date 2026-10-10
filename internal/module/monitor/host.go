@@ -1,6 +1,10 @@
 package monitor
 
-import "context"
+import (
+	"context"
+	"errors"
+	"time"
+)
 
 const (
 	hostCPUUnavailableReason    = "host_cpu_unavailable"
@@ -55,9 +59,17 @@ type HostDiskMetrics struct {
 	UnavailableReason *string  `json:"unavailable_reason"`
 }
 
+// hostCPUPercentSource is a collector that reports the CPU utilisation itself instead of counters to take deltas of
+// (darwin, #2013). The interval is how often the caller wants it refreshed.
+type hostCPUPercentSource interface {
+	CPUPercent(interval time.Duration) (float64, error)
+}
+
 type HostMetricsState struct {
 	collector HostCollector
 	previous  *HostCPUSample
+	// cpuInterval is the monitor's refresh interval, the pace of a background CPU sampler.
+	cpuInterval time.Duration
 }
 
 func NewHostMetricsState(collector HostCollector) *HostMetricsState {
@@ -81,6 +93,20 @@ func collectHostMetrics(ctx context.Context, state *HostMetricsState) HostMetric
 }
 
 func collectHostCPU(ctx context.Context, state *HostMetricsState) *HostCPUMetrics {
+	if src, ok := state.collector.(hostCPUPercentSource); ok {
+		interval := state.cpuInterval
+		if interval <= 0 {
+			interval = DefaultRefreshIntervalMS * time.Millisecond
+		}
+		percent, err := src.CPUPercent(interval)
+		switch {
+		case errors.Is(err, errCPUPending):
+			return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUPendingReason)}
+		case err != nil:
+			return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUUnavailableReason)}
+		}
+		return &HostCPUMetrics{Percent: &percent}
+	}
 	sample, err := state.collector.CollectCPU(ctx)
 	if err != nil {
 		return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUUnavailableReason)}
