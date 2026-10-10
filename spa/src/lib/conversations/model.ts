@@ -28,7 +28,7 @@ export interface ConversationDoc {
   /** The open approvals of this conversation (the WebSocket's set; a snapshot replaces it). */
   approvals: ConversationApproval[]
   /**
-   * Bumped by every replacing snapshot (a new epoch, a reset). A paging or jump request remembers the generation it was
+   * Bumped by every replacing snapshot (a new epoch, a reset) and every jump. A paging or jump request remembers the generation it was
    * issued under and its answer is dropped if a snapshot has replaced the document since: a late page of the old epoch
    * must not put obsolete turns, items or a stale position into the new one.
    */
@@ -92,6 +92,7 @@ export function applyAround(doc: ConversationDoc, snap: Snapshot, generation: nu
     hasMoreBefore: w.has_more_before,
     detached: w.last_index < w.total_turns - 1,
     totalTurns: w.total_turns,
+    generation: doc.generation + 1, // a page asked before the jump must not be prepended to the new window
   }
 }
 

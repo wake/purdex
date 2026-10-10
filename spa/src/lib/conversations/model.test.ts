@@ -190,6 +190,15 @@ describe('the generation fence', () => {
     expect(applyAround(next, snap([turn(2, [user('stale2', 0)])], { total: 10 }), asked)).toBe(next)
   })
 
+  // loadBefore is issued, then a jump replaces the window before the page comes back
+  it('a page asked before a jump is dropped once the jump has applied', () => {
+    const d0 = old()
+    const asked = d0.generation
+    const jumped = applyAround(d0, snap([turn(2, [user('u2', 0)]), turn(3, [user('u3', 0)])], { hasMore: true, total: 10 }), asked)
+    expect(jumped.generation).toBe(asked + 1)
+    expect(applyOlderPage(jumped, snap([turn(4, [user('late4', 0)])]), asked)).toBe(jumped)
+  })
+
   it('a page asked under the current generation still applies', () => {
     const d0 = old()
     const d = applyOlderPage(d0, snap([turn(4, [user('u4', 0)])]), d0.generation)
