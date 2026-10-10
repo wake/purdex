@@ -17,6 +17,10 @@ import (
 // transaction, and the lead host's notice and mirror are its own (facts_relay_ask.go). The mod is unchanged: it treats
 // relay_unsupported as "stay quiet".
 
+// ErrAskLeadChanged: the member's lead host is not the one whose capabilities were read (it was released and adopted again between
+// the two); nothing was written.
+var ErrAskLeadChanged = errors.New("the member's lead host changed during the request")
+
 // remoteAskCapsTimeout bounds the lead host's capability read, as the remote adopt's.
 const remoteAskCapsTimeout = 3 * time.Second
 
@@ -45,7 +49,7 @@ func (m *Module) askRemote(w http.ResponseWriter, req team.RelayAskRequest, row 
 	m.createMu.Lock()
 	now := m.now()
 	ask, replay, err := m.store.CreateRemoteRelayAsk(RelayAsk{ID: req.RequestID, SessionID: req.SessionID, UsedPct: req.UsedPct, Window: req.Window,
-		CreatedAt: now, ExpiresAt: now + team.RelayAskHoldS*1000})
+		CreatedAt: now, ExpiresAt: now + team.RelayAskHoldS*1000}, row.LeadHostID)
 	m.createMu.Unlock()
 	switch {
 	case errors.Is(err, ErrAskNotMember):
@@ -70,7 +74,7 @@ func (m *Module) askRemote(w http.ResponseWriter, req team.RelayAskRequest, row 
 
 // CreateRemoteRelayAsk is CreateRelayAsk for an active remote member, plus the `relay_ask` fact for its lead host in the same
 // transaction (a replay queues none). The write lock is taken first, as CreateRelayAsk does.
-func (s *Store) CreateRemoteRelayAsk(a RelayAsk) (stored RelayAsk, replay bool, err error) {
+func (s *Store) CreateRemoteRelayAsk(a RelayAsk, checkedLeadHost string) (stored RelayAsk, replay bool, err error) {
 	fail := func(err error) (RelayAsk, bool, error) {
 		return RelayAsk{}, false, fmt.Errorf("create remote relay ask %s: %w", a.ID, err)
 	}
