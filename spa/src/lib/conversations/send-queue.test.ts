@@ -383,6 +383,65 @@ describe('failures', () => {
   })
 })
 
+describe('dispose (the pane is gone for good)', () => {
+  it('drops what waits, clears the timer, and the answer of a message in flight starts nothing', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('first')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.enqueue('second')
+    expect(calls).toHaveLength(1)
+    q.dispose()
+    expect(q.entries()).toEqual([])
+    calls[0].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
+    expect(calls).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a disposed queue sends nothing even if something still calls it', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.dispose()
+    q.enqueue('late')
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 2)
+    expect(calls).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('retire: undo and waiting entries are dropped and never sent; nothing in flight frees the queue at once', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const done = vi.fn()
+    q.enqueue('in the undo window')
+    q.retire(done)
+    expect(done).toHaveBeenCalledTimes(1)
+    expect(q.entries()).toEqual([])
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
+    expect(calls).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('retire: a message in flight runs to its end, the one behind it is dropped, then the queue frees itself (no resend of a busy answer)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const done = vi.fn()
+    q.enqueue('first')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.enqueue('second')
+    q.retire(done)
+    expect(done).not.toHaveBeenCalled()
+    calls[0].resolve({ kind: 'busy' } as SendOutcome)
+    await vi.advanceTimersByTimeAsync(0)
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
+    expect(done).toHaveBeenCalledTimes(1)
+    expect(calls).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
 describe('registry', () => {
   it('one queue per pane key, kept across calls', () => {
     const { port } = fakePort()

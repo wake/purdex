@@ -40,6 +40,8 @@ export class SendQueue {
   private view: readonly QueueEntry[] = []
   private timer: ReturnType<typeof setTimeout> | null = null
   private claimed = new Set<string>()
+  private disposed = false
+  private retiredDone: (() => void) | null = null
   private listeners = new Set<() => void>()
 
   private readonly port: SendPort
@@ -148,10 +150,38 @@ export class SendQueue {
 
   interrupt(): Promise<SendOutcome> { return this.port.interrupt() }
 
-  dispose(): void { if (this.timer) clearTimeout(this.timer); this.timer = null; this.listeners.clear() }
+  /**
+   * The queue's conversation will not be shown again (the pane moved to another session): everything not yet handed out (undo
+   * window, waiting for idle, a settled entry) is dropped, since the old text must never reach another session and nobody is
+   * left to drive it. A request already in flight is let run; when its answer lands the queue disposes itself and calls
+   * `onDone` (at once when nothing is in flight).
+   */
+  retire(onDone: () => void): void {
+    this.list = this.list.filter((e) => e.state === 'sending')
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
+    this.listeners.clear()
+    if (this.list.length === 0) { this.dispose(); onDone(); return }
+    this.retiredDone = onDone
+    this.view = this.list.map((e) => ({ ...e }))
+  }
+
+  /**
+   * The pane is gone for good: no timer, no further request, nothing emitted. A message already handed out (`sending`) keeps
+   * whatever the daemon makes of it and its answer is ignored; one still in its undo window or waiting for idle is dropped.
+   */
+  dispose(): void {
+    this.disposed = true
+    this.list = []
+    this.view = []
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
+    this.listeners.clear()
+  }
 
   // One at a time: the first entry that has not settled is the head.
   private pump(): void {
+    if (this.disposed || this.retiredDone) return
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
     const head = this.list.find((e) => e.state === 'undo' || e.state === 'sending' || e.state === 'waiting')
     if (!head || head.state !== 'undo') return
@@ -164,6 +194,13 @@ export class SendQueue {
   }
 
   private settle(e: QueueEntry, o: SendOutcome): void {
+    if (this.disposed) return
+    if (this.retiredDone) {
+      // retired: the answer changes nothing and starts nothing; the last one in flight frees the queue
+      this.list = this.list.filter((x) => x !== e)
+      if (this.list.every((x) => x.state !== 'sending')) { const done = this.retiredDone; this.dispose(); done() }
+      return
+    }
     if (e.state !== 'sending' || !this.list.includes(e)) return // already echoed by the transcript
     e.outcome = o
     e.settledAt = this.now()
@@ -190,8 +227,43 @@ export function sendQueueFor(key: string, make: () => SendPort): SendQueue {
   return q
 }
 
+/** Whether a queue is held under this key (the registry's size is `sendQueueCount`). */
+export const hasSendQueue = (key: string): boolean => queues.has(key)
+export const sendQueueCount = (): number => queues.size
+
+/** Dispose and forget the queues whose key matches (a pane that is gone for good); returns how many were released. */
+export function releaseSendQueues(match: (key: string) => boolean): number {
+  let n = 0
+  for (const [key, q] of [...queues]) {
+    if (!match(key)) continue
+    q.dispose()
+    queues.delete(key)
+    n++
+  }
+  return n
+}
+
+let retiring = 0
+/** Retired queues still waiting for a request in flight (they are no longer in the registry). */
+export const retiringQueueCount = (): number => retiring
+
+/**
+ * Retire the queues whose key matches (the pane shows another session now): see `SendQueue.retire`. Each is detached from the
+ * registry AT ONCE, so the next `sendQueueFor` of the same key (the pane flips back) is a fresh queue; the old one only waits
+ * for its request in flight and then disposes itself.
+ */
+export function retireSendQueues(match: (key: string) => boolean): void {
+  for (const [key, q] of [...queues]) {
+    if (!match(key)) continue
+    queues.delete(key)
+    retiring++
+    q.retire(() => { retiring-- })
+  }
+}
+
 /** Tests only. */
 export function clearAllSendQueues(): void {
+  retiring = 0
   queues.forEach((q) => q.dispose())
   queues.clear()
 }
