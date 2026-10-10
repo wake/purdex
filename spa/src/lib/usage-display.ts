@@ -101,3 +101,30 @@ export function formatResetsIn(resetsAtMs: number, nowMs: number): string | null
   if (hours < 24) return `${hours}h${String(mins % 60).padStart(2, '0')}m`
   return `${Math.floor(hours / 24)}d${hours % 24}h`
 }
+
+/** The rest of what a statusLine snapshot says about the session: model, effort, the window's size and the cost so far. Each may be absent: null / undefined, never a guess. */
+export interface CcExtras {
+  model: string | null
+  effort: string | null
+  /** The context window's size in tokens. */
+  windowTokens: number | undefined
+  /** USD so far. */
+  cost: number | null
+}
+
+const nonEmpty = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
+
+export function parseCcExtras(raw: Record<string, unknown> | null | undefined): CcExtras {
+  const model = raw?.model
+  const m = typeof model === 'object' && model !== null ? (model as Record<string, unknown>) : null
+  const effort = raw?.effort
+  const e = typeof effort === 'object' && effort !== null ? (effort as Record<string, unknown>) : null
+  const size = (raw?.context_window as Record<string, unknown> | undefined)?.context_window_size
+  const cost = (raw?.cost as Record<string, unknown> | undefined)?.total_cost_usd
+  return {
+    model: m ? (nonEmpty(m.display_name) ?? nonEmpty(m.id)) : nonEmpty(model),
+    effort: e ? (nonEmpty(e.level) ?? nonEmpty(e.name)) : nonEmpty(effort),
+    windowTokens: isPct(size) && size > 0 ? size : undefined,
+    cost: isPct(cost) ? cost : null,
+  }
+}

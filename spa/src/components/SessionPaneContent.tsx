@@ -14,6 +14,8 @@ import { useConversationViewGate } from '../hooks/useConversationViewGate'
 import { ChatPane } from './deck/ChatPane'
 import { DeckPane } from './deck/DeckPane'
 import { SessionInput } from './deck/SessionInput'
+import { SessionStatusRow } from './deck/SessionStatusRow'
+import type { DeckFooterContext } from './deck/footer-context'
 import { retireStaleSessions } from '../lib/conversations/pane-release'
 import { findPane } from '../lib/pane-tree'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
@@ -93,6 +95,14 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   useEffect(() => { retireStaleSessions(pane.id, hostId, readSession) }, [pane.id, hostId, readSession])
   const switchToTerminal = () => useSessionViewStore.getState().setView(tabId, pane.id, sessionBinding(hostId, sessionCode), 'terminal')
 
+  // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → input → status row.
+  const footer = (ctx: DeckFooterContext) => (
+    <div data-testid="session-footer">
+      <SessionInput {...ctx} />
+      <SessionStatusRow sessionCode={sessionCode} ctx={ctx} />
+    </div>
+  )
+
   if (content.kind === 'tmux-session' && content.terminated) {
     return <TerminatedPane content={content} tabId={tabId} paneId={pane.id} />
   }
@@ -133,7 +143,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           isActive={isActive}
           isFocusTarget={isFocusTarget}
           onSwitchToTerminal={switchToTerminal}
-          footer={(ctx) => <SessionInput {...ctx} />}
+          footer={footer}
         />
       )}
       {view === 'chat' && (
@@ -144,7 +154,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           isActive={isActive}
           isFocusTarget={isFocusTarget}
           onSwitchToTerminal={switchToTerminal}
-          footer={(ctx) => <SessionInput {...ctx} />}
+          footer={footer}
         />
       )}
     </div>

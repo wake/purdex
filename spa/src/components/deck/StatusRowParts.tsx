@@ -12,7 +12,9 @@ const ITEM = 'flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1 py
 
 export function ModelPart({ model, effort }: { model: string | null; effort: string | null }) {
   const t = useI18nStore((s) => s.t)
-  if (!model) return null
+  if (!model) {
+    return <span data-testid="item-model" data-missing="true" title={t('statusrow.none', { name: t('statusrow.name.model') })} className={`${ITEM} text-text-muted`}>—</span>
+  }
   const { name, window } = splitModel(model)
   return (
     <span data-testid="item-model" title={t('statusrow.model', { model, effort: effort ?? '—' })} className={`${ITEM} min-w-0 shrink!`}>

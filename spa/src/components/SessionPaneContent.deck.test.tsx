@@ -95,6 +95,16 @@ describe('the deck inside the session pane', () => {
     expect(screen.getByTestId('input-footer')).toBeInTheDocument()
   })
 
+  it('the footer is [input] → status row in the deck and in the chat (the dock stacks above the input)', () => {
+    for (const v of ['deck', 'chat'] as const) {
+      cleanup()
+      setView(v)
+      render(<TabContent activeTab={sessionTab} allTabs={all} />)
+      const footer = screen.getByTestId('session-footer')
+      expect(Array.from(footer.children).map((c) => c.getAttribute('data-testid'))).toEqual(['input-footer', 'status-row'])
+    }
+  })
+
   it('the chat view mounts the chat with the same footer, and the terminal layer stays mounted under it', () => {
     setView('chat')
     render(<TabContent activeTab={sessionTab} allTabs={all} />)

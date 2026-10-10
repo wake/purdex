@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { epochToMs, formatResetsIn, parseCcUsage, remainingPct, ringGeometry, ringTransform, usedPct, usageTone } from './usage-display'
+import { epochToMs, formatResetsIn, parseCcExtras, parseCcUsage, remainingPct, ringGeometry, ringTransform, usedPct, usageTone } from './usage-display'
 
 describe('ringGeometry', () => {
   it.each([
@@ -89,5 +89,21 @@ describe('formatResetsIn', () => {
   })
   it('is null once passed', () => {
     expect(formatResetsIn(now - 1000 * 60, now)).toBeNull()
+  })
+})
+
+describe('parseCcExtras', () => {
+  it('reads model (display name, else id), effort (level, or a plain string), window size and cost', () => {
+    expect(parseCcExtras({ model: { display_name: 'Opus 5.5 (1M)', id: 'x' }, effort: { level: 'xhigh' }, context_window: { context_window_size: 1e6 }, cost: { total_cost_usd: 1.5 } }))
+      .toEqual({ model: 'Opus 5.5 (1M)', effort: 'xhigh', windowTokens: 1e6, cost: 1.5 })
+    expect(parseCcExtras({ model: { id: 'claude-x' }, effort: 'low' })).toMatchObject({ model: 'claude-x', effort: 'low' })
+    expect(parseCcExtras({ model: 'plain' }).model).toBe('plain')
+  })
+  it('anything absent or malformed is null / undefined, never a guess (cost 0 is a real value)', () => {
+    expect(parseCcExtras(null)).toEqual({ model: null, effort: null, windowTokens: undefined, cost: null })
+    expect(parseCcExtras({ model: { display_name: '  ' }, effort: 5, context_window: { context_window_size: 0 }, cost: { total_cost_usd: 'x' } }))
+      .toEqual({ model: null, effort: null, windowTokens: undefined, cost: null })
+    expect(parseCcExtras({ cost: { total_cost_usd: 0 } }).cost).toBe(0)
+    expect(parseCcExtras({ cost: { total_cost_usd: NaN } }).cost).toBeNull()
   })
 })
