@@ -41,7 +41,15 @@ interface Slices {
 export interface DrillSeat { hostId: string; sessionId: string }
 
 /** The panel area: its width in px, one value for the whole area (enlarging is the per-team `max` state). */
-export interface PanelArea { width: number }
+export interface PanelArea {
+  width: number
+  /**
+   * True while the width is the automatic one (the person never dragged it): it then follows the minimum when the light style
+   * or host box moves it. A drag (`setPanelWidth`) clears it, so a width the person chose is kept even when it happens to equal
+   * another style's minimum. Absent (an old save, a test fixture) = infer once from `width === the current minimum`.
+   */
+  followsMin?: boolean
+}
 
 export const PANEL_MAX_WIDTH = 720
 
@@ -88,7 +96,7 @@ interface TeamUiState extends Slices {
 }
 
 const EMPTY: Slices = { memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, ghostWorkspace: {}, teamDrill: {} }
-const defaultPanel = (): PanelArea => ({ width: currentPanelMin() })
+const defaultPanel = (): PanelArea => ({ width: currentPanelMin(), followsMin: true })
 
 /** A team key is `<hostId>\0<teamId>` (team-views `teamKeyOf`); a host's keys start with `<hostId>\0`. */
 const hostPrefix = (hostId: string) => `${hostId}\u0000`
@@ -116,7 +124,8 @@ const DANGEROUS = new Set(['__proto__', 'prototype', 'constructor'])
 function healPanel(v: unknown): PanelArea {
   if (!isRecord(v)) return defaultPanel()
   const width = typeof v.width === 'number' && Number.isFinite(v.width) ? clampWidth(v.width) : currentPanelMin()
-  return { width }
+  // No flag in an old save: infer it once (a width at the minimum was never widened).
+  return { width, followsMin: typeof v.followsMin === 'boolean' ? v.followsMin : width === currentPanelMin() }
 }
 
 /** The host of a `<hostId>\0<teamId>` key, or null when the key is not that shape (either part empty / extra separator). */
@@ -155,7 +164,8 @@ export const useTeamUiStore = create<TeamUiState>()(
       setPanelWidth: (width) => set((s) => {
         if (!Number.isFinite(width)) return s
         const next = clampWidth(width)
-        return next === s.panel.width ? s : { panel: { ...s.panel, width: next } }
+        // This is the person's drag: the width is theirs from now on (the follow in the settings subscription uses setState).
+        return next === s.panel.width ? s : { panel: { width: next, followsMin: false } }
       }),
       sharedPanelMode: 'titlebar',
       sharedPanelLast: 'full',
@@ -257,14 +267,15 @@ export const useTeamUiStore = create<TeamUiState>()(
 )
 
 // The minimum moves with the light style and the host box (user 2026-10-10, round 5). When it does: a width below the new
-// minimum is pulled up to it, and a width that sat AT the old minimum (the default, never widened by the person) follows it
-// either way; a width the person widened past the minimum is kept.
+// minimum is pulled up to it, and a width the person never dragged (`panel.followsMin`) follows it either way; a width the
+// person dragged is kept, even when it equals another style's minimum.
 let lastMin = currentPanelMin()
 useUISettingsStore.subscribe(() => {
   const min = currentPanelMin()
   if (min === lastMin) return
   const prev = lastMin
   lastMin = min
-  const width = useTeamUiStore.getState().panel.width
-  if (width < min || width === prev) useTeamUiStore.setState({ panel: { width: min } })
+  const { width, followsMin } = useTeamUiStore.getState().panel
+  const follows = followsMin ?? width === prev
+  if (width < min || follows) useTeamUiStore.setState({ panel: { width: min, followsMin: follows } })
 })
