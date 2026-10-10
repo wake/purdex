@@ -60,7 +60,7 @@ func TestModHello_HelloRoutePersistsAndInitLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { g.Close() })
-	if !g.modPresent("sid-1") || g.modSeen["sid-1"].ModVersion != "2" {
+	if g.modSeen["sid-1"].ModVersion != "2" {
 		t.Fatalf("a restarted module lost the hello: %+v", g.modSeen)
 	}
 }

@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.0.0-alpha.700] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：mod 被停用或 `--safe-mode` 重開的 session，遠端又看得到它的提問 — #1832（#2555）
+
+- daemon 判斷「這個 session 有沒有 mod」改看 30 秒內有沒有收到 mod 的事件（與介面的燈號同一個定義），不再看「曾經打過招呼」。之前只要打過一次招呼就永遠算有 mod，之後以 `--safe-mode` 重開、或 mod 被停用的 session，它的 AskUserQuestion／權限提示不會開唯讀卡片，遠端完全看不到。
+- daemon 剛重啟的那幾秒會把有 mod 的 session 看成沒有，多開的唯讀卡片會立刻被 mod 自己的那張接管，畫面上只有一張。
+
+### Fixed：第二個 daemon 關閉時不再拔掉第一個的 tmux hook — #1109（#2571）
+
+- tmux 的 session hook 是整個 tmux server 共用的，而且每個 daemon 裝的內容都一樣；之前任何一個 daemon 關閉都會把它移除，同一個 tmux server 上還在跑的 daemon 因此悄悄退回 5 秒輪詢（新開的 session 要等一下才出現）。現在 daemon 關閉時不再移除，只在啟動時重新設定；熱重啟中間也不再有沒有 hook 的空檔。要清掉可用 Settings 裡的移除（`POST /api/hooks/tmux/setup`）。
+
+### Changed：指揮台 — #2567（介面線）
+
+- 指揮台的三種聲音（agent、系統、使用者）各有自己的排版；session 狀態列也帶主機色底；調整行距與字級。
+
+## [1.0.0-alpha.699] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Added：App 可以改正在運作的 team 的授權目錄 — #2561（#2566）
+
+- 新增 `PUT /api/team/roots`（只給 App 用，同調整上限）：送整份新清單與看到的 `roots_rev`；路徑存成真實路徑，重複或被包住的合併。兩個視窗同時改時，晚到的那個回 409 `rev_mismatch`（附目前的清單）；要移除的目錄底下還有 member、啟動中的 spawn 或進行中的收編時回 409 `roots_in_use` 並列出是誰。已在跑的 member 不受影響，只管之後的 spawn。
+- roster 多帶 `roots` 與 `roots_rev`。App 端的編輯畫面由介面線接著做。
+- spawn 寫入前會在同一個交易裡再確認一次工作目錄還在授權範圍內，避免剛好在目錄被移除時 spawn 進去。
+
+### Fixed：`pdx token generate` 不再悄悄讓整台主機 401 — #2557（#2560）
+
+- daemon 正在跑時，`pdx token generate` 預設拒絕、config 檔不動：之前它會直接改寫 config 的 token，而 daemon 記憶體裡仍是舊的，於是這台上所有 `pdx` 指令（mod、hook、接力）都回 401（2026-10-11 02:02 在 mlab 發生過）。真的要換就加 `--force`，它會說明 daemon 要重啟、App／手機／其他主機都要重新配對。
+- token 明文只在終端機顯示；導向檔案或管線時只印 fingerprint 與路徑。
+
+### Changed：狀態列底色帶主機色 — #2564（介面線）
+
+- 終端機與 worker 的狀態列底色改成「主機色 16% 混進主題底色」，一眼看出是哪台主機；沒設主機色的主機維持原樣。文字在四個主題、八個預設主機色下對比都 ≥ 4.5:1。
+- 指揮台 v3：內容貼齊底部；附件區加邊線與淡底（#2565）。
+
 ## [1.0.0-alpha.698] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。

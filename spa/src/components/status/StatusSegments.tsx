@@ -3,7 +3,6 @@
 // shell cleanup spec §9.2).
 import { useEffect, useRef, type ReactNode } from 'react'
 import { useHostLook } from '../../lib/host-look'
-import { resolveHostColorSet, type HostColorMode } from '../../lib/host-color'
 import { keepFocus } from '../../lib/keep-focus'
 import { useI18nStore } from '../../stores/useI18nStore'
 
@@ -151,25 +150,15 @@ export function HostSegment({ hostId, onCopy, onNavigateToHost }: {
  * The row's three containers, the same for every bar: the segments (everything in there may truncate), the slack
  * with the copy confirmation at its start, and the controls. `ml-auto` lives on the controls and nowhere else.
  */
-/** How much of the host colour the bar's ground takes; the rest is the theme's own surface, so text keeps its contrast in both themes. */
-export const STATUS_BAR_HOST_TINT_PCT = 16
-
-export function StatusBarLayout({ segments, controls, copyFeedback, copyFailed, hostId = null, colorMode = 'terminal' }: {
-  /** The host the bar's pane lives on: its colour darkens into the bar's background. Null (or a host with no colour) leaves the plain surface. */
-  hostId?: string | null
-  colorMode?: HostColorMode
+export function StatusBarLayout({ segments, controls, copyFeedback, copyFailed }: {
   segments: ReactNode
   controls?: ReactNode
   /** The confirmation text from `useCopyFeedback`; '' leaves the slot empty. */
   copyFeedback: string
   copyFailed: boolean
 }) {
-  const look = useHostLook(hostId || null)
-  const hostColor = resolveHostColorSet({ colors: look.colors, color: look.color }, colorMode)?.main.color
-  // Mixed into the theme's surface (not laid over it with alpha), so the bar is always the surface plus a measured amount of host colour.
-  const background = hostColor ? `color-mix(in srgb, ${hostColor} ${STATUS_BAR_HOST_TINT_PCT}%, var(--surface-secondary))` : undefined
   return (
-    <div data-testid="status-bar" data-host-tinted={hostColor ? 'true' : undefined} style={background ? { backgroundColor: background } : undefined} className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted flex-shrink-0 relative z-10">
+    <div data-testid="status-bar" className="h-6 bg-surface-secondary border-t border-border-subtle flex items-center px-3 text-[10px] text-text-muted flex-shrink-0 relative z-10">
       {/* Left: the segment group. Everything in here may truncate. */}
       <div data-testid="status-segments" className="flex min-w-0 items-center">
         {segments}

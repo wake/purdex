@@ -69,10 +69,14 @@ type TeamRoster struct {
 	CreatedAt int64 `json:"created_at"`
 	// MaxMembers is the team's member limit and InUse the places taken: active members plus spawns still starting,
 	// the count spawn and adopt compare with it. Both always present (the App's stepper reads them).
-	MaxMembers int            `json:"max_members"`
-	InUse      int            `json:"in_use"`
-	Lead       RosterSession  `json:"lead"`
-	Members    []RosterMember `json:"members"` // active members, join order; never null (MarshalJSON)
+	MaxMembers int `json:"max_members"`
+	InUse      int `json:"in_use"`
+	// Roots are the team's spawn roots as stored (real paths) and RootsRev their revision (0 for a team never edited): always
+	// present, Roots never null ([] only for a malformed old grant). The App edits them with PUT /api/team/roots (#2561).
+	Roots    []string       `json:"roots"`
+	RootsRev int            `json:"roots_rev"`
+	Lead     RosterSession  `json:"lead"`
+	Members  []RosterMember `json:"members"` // active members, join order; never null (MarshalJSON)
 }
 
 // MarshalJSON writes no members as members:[], not null.
@@ -80,6 +84,9 @@ func (t TeamRoster) MarshalJSON() ([]byte, error) {
 	type plain TeamRoster // no methods: avoids recursion
 	if t.Members == nil {
 		t.Members = []RosterMember{}
+	}
+	if t.Roots == nil {
+		t.Roots = []string{}
 	}
 	return json.Marshal(plain(t))
 }

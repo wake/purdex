@@ -3,7 +3,6 @@ package teammod
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -132,9 +131,8 @@ func TestObserve_AskWithoutAnswersIsDismissed(t *testing.T) {
 // remote responder; a Stop closes everything of the session as dismissed.
 func TestObserve_ModPresentOrNoRespondersOpensNothing_StopDismissesAll(t *testing.T) {
 	f := newFixture(t)
-	if code, body := f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-1", ModVersion: "1", Agent: "cc"}); code != http.StatusOK {
-		t.Fatalf("hello: %d %s", code, body)
-	}
+	reg, _ := f.modStream()
+	beat(t, reg, "stream-aaaa", "sid-1", "heartbeat", 1)
 	f.m.observeHookEvent(preAsk("sid-1", "toolu_b"))
 	f.m.observeHookEvent(permReq("sid-1", `{"command":"ls"}`))
 	if rows, _ := f.m.store.OpenTerminalOnlyBySession("sid-1"); len(rows) != 0 || f.flagExists("sid-1") {

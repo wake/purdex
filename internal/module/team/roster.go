@@ -116,7 +116,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 	out := team.Roster{Teams: make([]team.TeamRoster, 0, len(teams))}
 	for i, t := range teams {
 		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, TeamName: t.TeamName, TeamLabel: t.TeamLabel, CreatedAt: t.CreatedAt,
-			MaxMembers: t.Grant.MaxMembers, InUse: inUse[t.ID],
+			MaxMembers: t.Grant.MaxMembers, InUse: inUse[t.ID], Roots: append([]string{}, t.Grant.Roots...), RootsRev: t.Grant.RootsRev,
 			Lead: m.rosterLead(t.Team, origins, alias, t.leadUsage), Members: []team.RosterMember{}}
 		if c, ok := colors[t.ID]; ok {
 			tr.TeamColor = &c
