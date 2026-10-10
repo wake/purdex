@@ -82,11 +82,18 @@ func TestAskReportByToolUse_OtherToolUsesAndSessionsAreNotTouched(t *testing.T) 
 	since := f.clock.Load()
 	a := f.askBegin("toolu_a")
 	b := f.askBegin("toolu_b")
-	other := f.askBeginPermission("toolu_a") // sid-2, the same tool use id
+	f.clock.Add(1_000)
+	other := f.askBeginPermission("toolu_a") // sid-2, the same tool use id and NEWER than a: a lookup that ignores the session finds it
 	if code, body := f.reportByToolUse("sid-1", "toolu_b", since, team.StateDismissed, nil); code != http.StatusOK {
 		t.Fatalf("report = %d %s", code, body)
 	}
-	for id, want := range map[string]team.State{a: team.StateOpen, b: team.StateDismissed, other: team.StateOpen} {
+	if got, _, _ := f.m.store.Get(a); got.State != team.StateOpen {
+		t.Fatalf("a different tool use of the session was touched: %s", got.State)
+	}
+	if code, body := f.reportByToolUse("sid-1", "toolu_a", since, team.StateDismissed, nil); code != http.StatusOK {
+		t.Fatalf("report = %d %s", code, body)
+	}
+	for id, want := range map[string]team.State{a: team.StateDismissed, b: team.StateDismissed, other: team.StateOpen} {
 		if got, _, _ := f.m.store.Get(id); got.State != want {
 			t.Errorf("row %s = %s, want %s", id, got.State, want)
 		}
@@ -99,7 +106,7 @@ func TestAskReportByToolUse_OtherToolUsesAndSessionsAreNotTouched(t *testing.T) 
 func TestAskReportByToolUse_AnEarlierRowOfTheSameToolUseIsNotTheOne(t *testing.T) {
 	f := newFixture(t)
 	old := f.askBegin("toolu_3")
-	if code, _ := f.reportByToolUse("sid-1", "toolu_3", 0, team.StateDismissed, nil); code != http.StatusOK {
+	if code, _ := f.reportByToolUse("sid-1", "toolu_3", 1, team.StateDismissed, nil); code != http.StatusOK {
 		t.Fatal("setup: the old row did not close")
 	}
 	f.clock.Add(5_000)
@@ -148,10 +155,12 @@ func TestAskReportByToolUse_Validation(t *testing.T) {
 	since := f.clock.Load()
 	id := f.askBegin("toolu_5")
 	for name, req := range map[string]team.AskReportRequest{
-		"no session":      {State: team.StateDismissed, ToolUseID: "toolu_5", Since: since},
-		"no tool use":     {State: team.StateDismissed, SessionID: "sid-1", Since: since},
-		"bad state":       {State: team.StateApproved, SessionID: "sid-1", ToolUseID: "toolu_5", Since: since},
-		"hookless answer": {State: team.StateAnsweredLocal, SessionID: "sid-1", ToolUseID: "toolu_5", Since: since},
+		"no session":                            {State: team.StateDismissed, ToolUseID: "toolu_5", Since: since},
+		"no tool use":                           {State: team.StateDismissed, SessionID: "sid-1", Since: since},
+		"bad state, no row yet (never retried)": {State: team.StateApproved, SessionID: "sid-1", ToolUseID: "toolu_none", Since: since},
+		"no since":                              {State: team.StateDismissed, SessionID: "sid-1", ToolUseID: "toolu_5"},
+		"bad state":                             {State: team.StateApproved, SessionID: "sid-1", ToolUseID: "toolu_5", Since: since},
+		"hookless answer":                       {State: team.StateAnsweredLocal, SessionID: "sid-1", ToolUseID: "toolu_5", Since: since},
 	} {
 		code, body := f.do(http.MethodPost, "/api/ask/report", req)
 		if code != http.StatusBadRequest || decodeErr(t, body).Error != team.ErrBadRequest {

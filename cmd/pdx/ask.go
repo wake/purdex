@@ -30,11 +30,14 @@ import (
 //	      {"state":"still_open"} | {"state":"answered_remote","hook":…} | {"state":"closed","reason":…}
 //	      exit 0; a JSON 404 prints {"state":"closed","reason":"not_found"}; 20 / 21 only otherwise.
 //	pdx ask report <id> <answered_local|dismissed> [--hook <json> | --hook-file <f>] [--detach]
+//	pdx ask report --session <sid> --tool-use <id> --since <epoch ms> <answered_local|dismissed> [--hook …] [--detach]
+//	    → the same report by the tool use (#1848), for a caller that never learned the row id; a 404 (begin's row not there yet) is retried for 45 s
 //	    → stdout the Approval, exit 0; 1 / 20 / 21. --detach: the same report
 //	      runs as a process of its own (setsid); this one prints nothing, exit 0.
 const askUsage = "usage: pdx ask begin --session <sid> --tool-use <id> --kind hook_ask|hook_permission (--payload <json> | --payload-file <f>) [--config <path>]\n" +
 	"       pdx ask wait <id> [--config <path>]\n" +
-	"       pdx ask report <id> answered_local|dismissed [--hook <json> | --hook-file <f>] [--detach] [--config <path>]"
+	"       pdx ask report <id> answered_local|dismissed [--hook <json> | --hook-file <f>] [--detach] [--config <path>]\n" +
+	"       pdx ask report --session <sid> --tool-use <id> --since <epoch ms> answered_local|dismissed [--hook <json> | --hook-file <f>] [--detach] [--config <path>]"
 
 const (
 	// askAttemptTimeout bounds one poll: 25 s of daemon-side wait plus room (as lead's).
@@ -70,6 +73,8 @@ type askArgs struct {
 	hook  *team.HookDecision
 	// report --detach: run the same report as a process of its own and exit
 	detach bool
+	// report by tool use (#1848): session, toolUse (shared with begin's fields) and since (unix ms) instead of an id
+	since int64
 }
 
 // jsonArg reads an inline JSON flag or a file flag (exactly one may be set).
@@ -124,6 +129,9 @@ func parseAskArgs(args []string, stderr io.Writer) (askArgs, bool) {
 		fs.StringVar(&hook, "hook", "", "")
 		fs.StringVar(&hookFile, "hook-file", "", "")
 		fs.BoolVar(&a.detach, "detach", false, "")
+		fs.StringVar(&a.session, "session", "", "")
+		fs.StringVar(&a.toolUse, "tool-use", "", "")
+		fs.Int64Var(&a.since, "since", 0, "")
 	default:
 		return reject(fmt.Sprintf("unknown subcommand %q", a.verb))
 	}
@@ -167,10 +175,18 @@ func parseAskArgs(args []string, stderr io.Writer) (askArgs, bool) {
 		}
 		a.id = pos[0]
 	case "report":
-		if len(pos) != 2 || pos[0] == "" {
-			return reject("report takes <id> and <state>")
+		byToolUse := a.session != "" || a.toolUse != "" || a.since != 0
+		if byToolUse {
+			if len(pos) != 1 || a.session == "" || a.toolUse == "" || a.since <= 0 {
+				return reject("report by tool use takes <state>, --session, --tool-use and a positive --since (and no <id>)")
+			}
+			a.state = team.State(pos[0])
+		} else {
+			if len(pos) != 2 || pos[0] == "" {
+				return reject("report takes <id> and <state>")
+			}
+			a.id, a.state = pos[0], team.State(pos[1])
 		}
-		a.id, a.state = pos[0], team.State(pos[1])
 		if a.state != team.StateAnsweredLocal && a.state != team.StateDismissed {
 			return reject("state must be answered_local or dismissed")
 		}
@@ -222,7 +238,7 @@ func runAskCmd(ctx context.Context, args []string, stdout, stderr io.Writer, now
 	case "wait":
 		return askWait(ctx, client, a.id, stdout, stderr, now)
 	default:
-		return askReport(ctx, client, a, stdout, stderr)
+		return askReport(ctx, client, a, stdout, stderr, now)
 	}
 }
 
@@ -383,7 +399,10 @@ func askRowGone(err error) (team.AskWaitResponse, bool) {
 	return team.AskWaitResponse{}, false
 }
 
-func askReport(ctx context.Context, client *daemonclient.Client, a askArgs, stdout, stderr io.Writer) int {
+func askReport(ctx context.Context, client *daemonclient.Client, a askArgs, stdout, stderr io.Writer, now func() time.Time) int {
+	if a.id == "" {
+		return askReportByToolUse(ctx, client, a, stdout, stderr, now)
+	}
 	var ap team.Approval
 	// A report is idempotent on the daemon (it answers the row as it is), so a replay is safe.
 	_, err := client.Do(ctx, http.MethodPost, "/api/ask/report/"+a.id, team.AskReportRequest{State: a.state, Hook: a.hook}, &ap, daemonclient.Idempotent())
@@ -391,6 +410,42 @@ func askReport(ctx context.Context, client *daemonclient.Client, a askArgs, stdo
 		return askReportErr(err, stderr)
 	}
 	return printJSON(stdout, ap)
+}
+
+const (
+	// askReportRetryFor is how long a report by tool use waits for begin's row to land: begin's own restart grace (30 s) plus room.
+	askReportRetryFor = 45 * time.Second
+	// askReportRetryEvery is the pause between two asks.
+	askReportRetryEvery = 2 * time.Second
+)
+
+// askRetrySleep pauses between retries; a var so tests advance a fake clock instead of waiting.
+var askRetrySleep = func(ctx context.Context, d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
+// askReportByToolUse reports by (session, tool use, since). A 404 not_found means begin's row is not there yet (the daemon was busy
+// or restarting when begin was called): ask again every 2 s for up to 45 s; any other answer is final. Reports are idempotent.
+func askReportByToolUse(ctx context.Context, client *daemonclient.Client, a askArgs, stdout, stderr io.Writer, now func() time.Time) int {
+	req := team.AskReportRequest{State: a.state, Hook: a.hook, SessionID: a.session, ToolUseID: a.toolUse, Since: a.since}
+	deadline := now().Add(askReportRetryFor)
+	for {
+		var ap team.Approval
+		_, err := client.Do(ctx, http.MethodPost, "/api/ask/report", req, &ap, daemonclient.Idempotent())
+		if err == nil {
+			return printJSON(stdout, ap)
+		}
+		var se *daemonclient.StatusError
+		if !errors.As(err, &se) || se.Status != http.StatusNotFound || !now().Before(deadline) || ctx.Err() != nil {
+			return askReportErr(err, stderr)
+		}
+		askRetrySleep(ctx, askReportRetryEvery)
+	}
 }
 
 func printJSON(stdout io.Writer, v any) int {

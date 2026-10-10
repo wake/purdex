@@ -204,7 +204,8 @@ test('the person answers before begin has even returned ⇒ native result, and t
     on('process.run', (_$: any, e: any) => {
       const a = e.argv
       if (sub(a) === 'begin') return new Promise((res) => { answerBegin = res })
-      if (sub(a) === 'report') { resolve([...a]); return ok('{}') }
+      // (begin never replied within the settle cap, so a by-tool-use report is also detached, #1848; this test is about the id one)
+      if (sub(a) === 'report' && a[3] === 'r9') { resolve([...a]); return ok('{}') }
       return ok('')
     })
   })
@@ -539,7 +540,7 @@ test('a daemon that does not answer begin (down: exit 20 only after its 30 s gra
   on('process.run', (_$: any, e: any) => {
     calls.push([...e.argv])
     setTimeout(() => answerNative && answerNative(NATIVE_RED), 50)
-    return never()
+    return sub(e.argv) === 'begin' ? never() : ok('') // only begin hangs; `report --detach` exits at once
   })
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => { answerNative = res }))
   const t0 = Date.now()
@@ -547,7 +548,10 @@ test('a daemon that does not answer begin (down: exit 20 only after its 30 s gra
   const ms = Date.now() - t0
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, isReadOnly: true, ref: 1 }))
   expect(ms).toBeLessThan(5000)
-  expect(calls.map(sub)).toEqual(['begin'])
+  // begin never replied: the row it may still open is reported by the tool use, detached (#1848)
+  expect(calls.map(sub)).toEqual(['begin', 'report'])
+  expect(calls[1]).toContain('--detach')
+  expect(calls[1]).toContain('--since')
 })
 
 // The same bound for the report: the row is open, the person answers, and the daemon then stops
@@ -626,12 +630,15 @@ test('a healthy report is not detached', async ($, on) => {
 // taken after begin → the value differs (red).
 test('answered in the terminal while begin has not replied ⇒ back within 5 s, the report goes detached by the tool use with --since', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
-  on('clock.now', () => ({ value: 1_700_000_000_000 }))
+  // The clock moves on every read, so a `--since` taken after begin was called differs from the one taken before it.
+  let clock = 1_700_000_000_000
+  let clockAtBegin = 0
+  on('clock.now', () => ({ value: ++clock }))
   let beginArgv: Call | null = null
   let byToolUse: Call | null = null
   on('process.run', (_$: any, e: any) => {
     const a = e.argv
-    if (sub(a) === 'begin') { beginArgv = [...a]; return never() }
+    if (sub(a) === 'begin') { beginArgv = [...a]; clockAtBegin = clock; return never() }
     if (sub(a) === 'report' && a.includes('--detach')) { byToolUse = [...a]; return ok('') }
     return ok('')
   })
@@ -646,7 +653,7 @@ test('answered in the terminal while begin has not replied ⇒ back within 5 s, 
   const flag = (f: string) => a[a.indexOf(f) + 1]
   expect(flag('--session')).toBe('sess-test')
   expect(flag('--tool-use')).toBe(beginArgv![beginArgv!.indexOf('--tool-use') + 1])
-  expect(flag('--since')).toBe('1700000000000')
+  expect(flag('--since')).toBe(String(clockAtBegin)) // read just before begin was called, not after
   expect(a).toContain('answered_local')
   expect(JSON.parse(flag('--hook'))).toEqual({ answers: { '紅還是藍？': '紅' } })
 })

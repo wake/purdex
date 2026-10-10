@@ -18,7 +18,7 @@ import (
 const byToolUseHook = `{"answers":{"q?":"a"}}`
 
 func byToolUseArgs(extra ...string) []string {
-	return append([]string{"report", "--session", "sid-1", "--tool-use", "toolu_1", "--since", "1700000000000", "answered_local", "--hook", byToolUseHook}, extra...)
+	return append([]string{"report", "answered_local", "--session", "sid-1", "--tool-use", "toolu_1", "--since", "1700000000000", "--hook", byToolUseHook}, extra...)
 }
 
 func TestAskReportByToolUse_UsageErrorsExit2(t *testing.T) {
