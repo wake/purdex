@@ -723,6 +723,14 @@ func (f *FakeExecutor) PaneSessionName(target string) (string, error) {
 	return "", fmt.Errorf("pane session not configured for %s", target)
 }
 
+// PaneSessionNameCtx is PaneSessionName that gives up when ctx has ended, as a real tmux child killed by it would.
+func (f *FakeExecutor) PaneSessionNameCtx(ctx context.Context, target string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return f.PaneSessionName(target)
+}
+
 // SetPaneSessionID is a seam of its own, not a side effect of
 // SetPaneSessionName: the id and the name are separate facts about a pane, a
 // session keeps its id across a rename, and RenameSession (which preserves ids)
@@ -866,6 +874,14 @@ func (f *FakeExecutor) ActivePanePID(target string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.activePanePIDLocked(target), nil
+}
+
+// ActivePanePIDCtx is ActivePanePID that gives up when ctx has ended.
+func (f *FakeExecutor) ActivePanePIDCtx(ctx context.Context, target string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return f.ActivePanePID(target)
 }
 
 // activePanePIDLocked is ActivePanePID's lookup, shared with ListAllPanes so

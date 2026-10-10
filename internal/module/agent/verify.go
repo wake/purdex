@@ -99,8 +99,11 @@ func (m *Module) verifyEvent(req EventRequest) verifyDecision {
 // PanePID itself is left alone — its other callers pass session/window targets,
 // where "the first pane of the target" is the intended meaning.
 func resolvePanePID(exec tmux.Executor, paneID string) (int, error) {
-	pid, err := exec.ActivePanePID(paneID)
+	ctx, cancel := boundedPaneLookup() // a tmux that stopped answering must not hold the hook, or the emit slot behind it (#2039)
+	defer cancel()
+	pid, err := exec.ActivePanePIDCtx(ctx, paneID)
 	if err != nil {
+		logLookupDeadline(err)
 		return 0, err
 	}
 	return parsePanePID(pid)

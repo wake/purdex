@@ -1485,7 +1485,11 @@ func (m *Module) projectionForSession(sessionName string) (*SessionProjection, e
 	if err != nil {
 		return nil, err
 	}
-	return m.selectSessionProjectionBy(sessionName, projections, m.paneNameFunc(snap)), nil
+	sel := m.selectSessionProjectionBy(sessionName, projections, m.paneNameFunc(snap))
+	if snap.expired() {
+		return nil, errExpired() // a name that timed out is unreadable, not "no session here" (#717)
+	}
+	return sel, nil
 }
 
 func (m *Module) setProjectionTopStatus(sessionName string, status agentpkg.Status) (*SessionProjection, error) {
@@ -1567,6 +1571,9 @@ func (m *Module) liveSessionProjections() ([]namedProjection, error) {
 				Projection:  projection,
 			}
 		}
+	}
+	if snap.expired() {
+		return nil, errExpired() // the missing sessions are unreadable, not gone: no clear may follow (#717)
 	}
 	sessionNames := make([]string, 0, len(selected))
 	for sessionName := range selected {

@@ -112,6 +112,9 @@ type Executor interface {
 	PasteText(target, text string) error
 	PaneCurrentPath(target string) (string, error)
 	PaneSessionName(target string) (string, error)
+	// PaneSessionNameCtx is PaneSessionName bounded by ctx: a tmux that has stopped answering must not hold a caller
+	// that sits inside an emit slot or a worker (#2039). When ctx ends the error wraps ctx.Err().
+	PaneSessionNameCtx(ctx context.Context, target string) (string, error)
 	// PaneSessionID returns the tmux session ID ("$N") the pane belongs to.
 	// Unlike the session name it is immutable for the life of the session, so
 	// a caller that must not be confused by a rename asks for this instead.
@@ -146,6 +149,8 @@ type Executor interface {
 	ListPanePlacements(ctx context.Context) (map[string]PanePlacement, error)
 	PanePID(target string) (string, error)
 	ActivePanePID(target string) (string, error)
+	// ActivePanePIDCtx is ActivePanePID bounded by ctx, for the reason PaneSessionNameCtx is (#2039).
+	ActivePanePIDCtx(ctx context.Context, target string) (string, error)
 	PaneChildCommands(target string) ([]string, error)
 	CapturePaneContent(target string, lastN int) (string, error)
 	// CapturePaneRange returns lines [start, endInclusive] of the pane.
@@ -603,8 +608,15 @@ func (r *RealExecutor) PaneCurrentPath(target string) (string, error) {
 }
 
 func (r *RealExecutor) PaneSessionName(target string) (string, error) {
-	out, err := tmuxCmd("display-message", "-p", "-t", target, "#{session_name}").Output()
+	return r.PaneSessionNameCtx(context.Background(), target)
+}
+
+func (r *RealExecutor) PaneSessionNameCtx(ctx context.Context, target string) (string, error) {
+	out, err := boundedRead(ctx, "display-message", "-p", "-t", target, "#{session_name}").Output()
 	if err != nil {
+		if cerr := readCtxErr(ctx, "tmux display-message session_name", err); cerr != nil {
+			return "", cerr
+		}
 		return "", fmt.Errorf("tmux display-message session_name: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
@@ -702,8 +714,15 @@ func (r *RealExecutor) PanePID(target string) (string, error) {
 // when a value must come from the pane the user is looking at (e.g. shell
 // HOME for tilde-path expansion).
 func (r *RealExecutor) ActivePanePID(target string) (string, error) {
-	out, err := tmuxCmd("display-message", "-p", "-t", target, "#{pane_pid}").Output()
+	return r.ActivePanePIDCtx(context.Background(), target)
+}
+
+func (r *RealExecutor) ActivePanePIDCtx(ctx context.Context, target string) (string, error) {
+	out, err := boundedRead(ctx, "display-message", "-p", "-t", target, "#{pane_pid}").Output()
 	if err != nil {
+		if cerr := readCtxErr(ctx, "tmux display-message pane_pid", err); cerr != nil {
+			return "", cerr
+		}
 		return "", fmt.Errorf("tmux display-message pane_pid: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
