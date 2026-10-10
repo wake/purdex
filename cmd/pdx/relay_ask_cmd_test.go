@@ -72,10 +72,10 @@ func TestRelayCmd_AskRefusalsAreExit13WithTheCodeLast(t *testing.T) {
 func TestRelayCmd_AskGrammar(t *testing.T) {
 	for _, args := range [][]string{
 		{"ask"},
-		{"ask", "--used", "71", "--window", "1"},                       // no session
-		{"ask", "--session", "s", "--window", "1"},                     // no --used
-		{"ask", "--session", "s", "--used", "101", "--window", "1"},    // over 100
-		{"ask", "--session", "s", "--used", "71"},                      // no --window
+		{"ask", "--used", "71", "--window", "1"}, // no session
+		{"ask", "--session", "s", "--window", "1"},                      // no --used
+		{"ask", "--session", "s", "--used", "101", "--window", "1"},     // over 100
+		{"ask", "--session", "s", "--used", "71"},                       // no --window
 		{"ask", "--session", "s", "--used", "71", "--window", "1", "x"}, // stray argument
 		{"ask", "--session", "s", "--used", "71", "--window", "1", "--request-id", "nope"},
 	} {
