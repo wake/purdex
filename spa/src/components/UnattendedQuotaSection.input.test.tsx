@@ -1,6 +1,6 @@
 // The unattended panel's numbers (c9d9c7-56): a disabled − says why on hover, and a number can be typed (click, Enter / Esc / leaving the box).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { UnattendedQuotaSection } from './UnattendedQuotaSection'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -104,6 +104,24 @@ describe('typing a number', () => {
     expect(mockedQuota.mock.calls[0][2]).toBe(5)
   })
 
+  it('full-width digits are accepted as the digits they are', () => {
+    show([q('p1', { self_left: 2 })])
+    const input = open('p1', 'quota-value')
+    typeInto(input, '１２')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(mockedQuota.mock.calls[0][2]).toBe(12)
+  })
+
+  it('Enter while an IME is composing does not confirm', () => {
+    show([q('p1', { self_left: 2 })])
+    const input = open('p1', 'quota-value')
+    typeInto(input, '4')
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(input, { key: 'Escape', isComposing: true })
+    expect(mockedQuota).not.toHaveBeenCalled()
+    expect(within(row('p1')).getByTestId('quota-value-input')).toBeInTheDocument()
+  })
+
   it('the same number sends nothing', () => {
     show([q('p1', { self_left: 2 })])
     const input = open('p1', 'quota-value')
@@ -142,6 +160,23 @@ describe('typing a number', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(mockedCap).toHaveBeenCalledTimes(1)
     expect(mockedCap.mock.calls[0][1]).toBe(4)
+  })
+
+  it('a box left open when a cap request goes out sends nothing when it is confirmed', () => {
+    useUnattendedStore.getState().setMaxMembersSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [team({ max_members: 5, in_use: 1 })])
+    show([q('l1', { is_lead: true })])
+    const input = open('l1', 'cap-value')
+    typeInto(input, '4')
+    act(() => { useMaxMembersStore.getState().begin('host-a\u0000t-l1', { token: 1, identity: 'x' }) })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(mockedCap).not.toHaveBeenCalled()
+    expect(within(row('l1')).queryByTestId('cap-value-input')).toBeNull()
+  })
+
+  it('a disabled − also carries its reason on the button itself (a keyboard or screen-reader user reaches it)', () => {
+    show([q('p1', { self_left: 0 })])
+    expect(within(row('p1')).getByRole('button', { name: '減少' })).toHaveAttribute('title', '已經是 0')
   })
 
   it('the number cannot be opened while a cap request is out', () => {

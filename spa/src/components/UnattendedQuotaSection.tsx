@@ -58,7 +58,7 @@ const STEP_BTN = 'w-5 h-5 inline-flex items-center justify-center rounded text-t
 function StepButton({ sign, label, disabled, reason, onClick }: { sign: string; label: string; disabled: boolean; reason?: string; onClick: () => void }) {
   return (
     <span title={disabled ? reason : undefined} data-testid="step-reason" data-reason={disabled && reason ? reason : undefined} className="inline-flex">
-      <button type="button" aria-label={label} disabled={disabled} onClick={onClick} className={STEP_BTN}>{sign}</button>
+      <button type="button" aria-label={label} title={disabled ? reason : undefined} disabled={disabled} onClick={onClick} className={STEP_BTN}>{sign}</button>
     </span>
   )
 }

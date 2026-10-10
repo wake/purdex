@@ -28,7 +28,9 @@ export function NumberField({ value, disabled, validate, onCommit, testId, ariaL
   const close = () => { cancelled.current = true; setEditing(false); setError(null) }
   const commit = () => {
     if (cancelled.current) return
-    const text = draft.trim()
+    // a request went out while the box was open (disabled turned on): nothing more is sent
+    if (disabled) { close(); return }
+    const text = draft.trim().normalize('NFKC') // full-width digits, as a Chinese keyboard types them, are digits
     if (!/^\d+$/.test(text)) { setError(t('unattended.field.integer')); return }
     const n = Number(text)
     if (n === value) { close(); return }
@@ -41,7 +43,7 @@ export function NumberField({ value, disabled, validate, onCommit, testId, ariaL
   if (!editing) {
     return (
       <button
-        type="button" data-testid={testId} aria-label={ariaLabel} title={disabled ? undefined : t('unattended.field.edit_hint')} disabled={disabled} onClick={open}
+        type="button" data-testid={testId} aria-label={`${ariaLabel}: ${value}`} title={disabled ? undefined : t('unattended.field.edit_hint')} disabled={disabled} onClick={open}
         className="min-w-[2ch] cursor-text rounded px-0.5 text-center tabular-nums text-text-primary hover:bg-surface-hover disabled:cursor-default disabled:hover:bg-transparent"
       >{value}</button>
     )
@@ -52,6 +54,8 @@ export function NumberField({ value, disabled, validate, onCommit, testId, ariaL
         type="text" inputMode="numeric" autoFocus data-testid={`${testId}-input`} aria-label={ariaLabel} aria-invalid={error !== null} value={draft} size={3}
         onChange={(e) => { setDraft(e.target.value); setError(null) }}
         onKeyDown={(e) => {
+          // Enter / Esc while an IME is composing belong to the IME (confirming or cancelling the composition), not to this box
+          if (e.nativeEvent.isComposing) return
           if (e.key === 'Enter') { e.preventDefault(); commit() }
           else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close() }
         }}
