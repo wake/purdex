@@ -7,6 +7,8 @@ interface SessionUploadState {
   failed: number
   currentFile: string
   error?: string
+  /** Why the last failed file failed (an `AgentUploadError` kind / HTTP status), for the wording in `lib/upload-failure`. */
+  errorCause?: { kind?: string; status?: number }
   status: 'uploading' | 'typing' | 'done' | 'error'
 }
 
@@ -14,7 +16,7 @@ interface UploadState {
   sessions: Record<string, SessionUploadState>
   startUpload: (hostId: string, sessionCode: string, total: number, firstFile: string) => void
   fileCompleted: (hostId: string, sessionCode: string) => void
-  fileFailed: (hostId: string, sessionCode: string, filename: string) => void
+  fileFailed: (hostId: string, sessionCode: string, filename: string, cause?: unknown) => void
   nextFile: (hostId: string, sessionCode: string, filename: string) => void
   setDone: (hostId: string, sessionCode: string) => void
   dismiss: (hostId: string, sessionCode: string) => void
@@ -53,7 +55,7 @@ export const useUploadStore = create<UploadState>((set) => ({
     })
   },
 
-  fileFailed: (hostId, sessionCode, filename) => {
+  fileFailed: (hostId, sessionCode, filename, cause) => {
     const key = compositeKey(hostId, sessionCode)
     set((s) => {
       const prev = s.sessions[key]
@@ -67,6 +69,7 @@ export const useUploadStore = create<UploadState>((set) => ({
             ...prev,
             failed,
             error: filename,
+            errorCause: { kind: (cause as { kind?: string } | null)?.kind, status: (cause as { status?: number } | null)?.status },
             status: allDone ? 'error' : 'uploading',
           },
         },
