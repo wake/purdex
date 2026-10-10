@@ -90,7 +90,7 @@ func (h *handler) promptNext(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	release, ok := h.promptPolls.acquire(ctx, in.Stream+"/"+in.SessionID) // per session: after a /clear the old session's poll must not hold up the new one
 	if !ok {
-		return
+		w.WriteHeader(http.StatusNoContent) // the client went away, or the daemon is stopping, while queued behind its earlier poll
 	}
 	defer release()
 	if !may() { // the stream may have switched session or ended while this poll was queued behind its earlier one

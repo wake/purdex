@@ -65,8 +65,11 @@ func TestStop_AQueuedPollIsReleased(t *testing.T) {
 	first := parked(t, h, PromptNextPath, nextBody(testStream, testSID, 15000))
 	second := parked(t, h, PromptNextPath, nextBody(testStream, testSID, 15000))
 	close(stop)
-	answered(t, "first", first)
-	answered(t, "queued", second)
+	for name, ch := range map[string]<-chan *httptest.ResponseRecorder{"first": first, "queued": second} {
+		if rec := answered(t, name, ch); rec.Code != http.StatusNoContent { // never an implicit 200 with no job
+			t.Fatalf("%s: %d", name, rec.Code)
+		}
+	}
 }
 
 // No stop channel: nothing changes, the poll runs its wait (a 0 ms one answers immediately).
