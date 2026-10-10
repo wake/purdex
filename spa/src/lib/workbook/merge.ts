@@ -83,16 +83,18 @@ export function touched(t: TodoBook, incoming: WorkbookTodo[], at: number): Todo
   return { ...t, touches, touchFloor }
 }
 
-/** A conversation answer's todos are a snapshot as of when the daemon answered, which is after `startedAt` (the stamp of
- *  its request) — and an event that landed after `startedAt` can be newer than it. Monotonic by construction: its done
- *  list is always safe to merge (done is terminal); its open list is replaced into the book except (1) the ids an event
- *  touched after `startedAt` (the event wins) and (2) todos newer than anything in it. If the touch history reaches
- *  past `startedAt` (the bound discarded it), the answer's open list cannot be vouched for and is ignored. */
-export function snapshotTodos(t: TodoBook, snap: TodoLists, startedAt: number): TodoBook {
-  if (startedAt < t.touchFloor) return upsertTodos(t, snap.done)
-  const newer = new Set(t.touches.filter((x) => x.at > startedAt).map((x) => x.id))
-  const newest = Math.max(0, ...snap.open.map((x) => x.id), ...snap.done.map((x) => x.id))
-  const base = { ...t, open: t.open.filter((x) => x.id > newest || newer.has(x.id)) }
-  return upsertTodos(upsertTodos(base, snap.done.filter((x) => !newer.has(x.id))), snap.open.filter((x) => !newer.has(x.id)))
-}
+/** Whether an answer whose request started at `startedAt` can be reconciled with the events seen since: false once the touch
+ *  history (bounded) no longer reaches back to it. */
+export const snapshotTrusted = (t: TodoBook, startedAt: number): boolean => startedAt >= t.touchFloor
 
+/** A conversation answer's `open` is the daemon's whole open list as of when it answered, which is after `startedAt` (the
+ *  stamp of its request, spec §9). So every local todo from before the request is decided by the answer; the only local state
+ *  that survives is what an event touched AFTER `startedAt` (the event is newer than the answer). Its done list is always safe
+ *  to merge (done is terminal). If the touch history no longer reaches back to `startedAt` the answer's open list cannot be
+ *  reconciled with the events since: it is not applied (`trusted: false`, local open kept as it is) and the caller re-asks. */
+export function snapshotTodos(t: TodoBook, snap: TodoLists, startedAt: number): { book: TodoBook; trusted: boolean } {
+  if (!snapshotTrusted(t, startedAt)) return { book: upsertTodos(t, snap.done), trusted: false }
+  const newer = new Set(t.touches.filter((x) => x.at > startedAt).map((x) => x.id))
+  const base = { ...t, open: t.open.filter((x) => newer.has(x.id)) }
+  return { book: upsertTodos(upsertTodos(base, snap.done.filter((x) => !newer.has(x.id))), snap.open.filter((x) => !newer.has(x.id))), trusted: true }
+}

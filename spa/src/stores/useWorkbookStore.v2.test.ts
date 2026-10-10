@@ -1,5 +1,5 @@
 // spa/src/stores/useWorkbookStore.v2.test.ts — WA-1b: the v2 data layer (todos, refresh, loadUntil) on top of WA-1a's rules.
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { ConversationResult, RefreshResult, TodosResult } from '../lib/workbook/api'
 import type { TodoLists, WorkbookEntry, WorkbookTodo } from '../lib/workbook/types'
 
@@ -12,7 +12,7 @@ vi.mock('../lib/workbook/api', () => ({
   postRefresh: (...a: Parameters<typeof postRefresh>) => postRefresh(...a),
 }))
 
-import { MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES, MAX_UNTIL_PAGES, selectConv, selectRefreshPending, useWorkbookStore } from './useWorkbookStore'
+import { MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_RESNAPS, MAX_TODO_TOUCHES, MAX_UNTIL_PAGES, RESNAP_BACKOFF_MS, selectConv, selectRefreshPending, useWorkbookStore } from './useWorkbookStore'
 
 const entry = (id: number, over: Partial<WorkbookEntry> = {}): WorkbookEntry => ({
   id, convKey: 'c1', sessionId: 's1', turnId: `t${id}`, turnAt: id * 1000, state: 'ok', reason: '', thing: `thing ${id}`, push: '', entry: '',
@@ -107,13 +107,84 @@ describe('todos', () => {
     })
   })
 
-  it('the conversation answer is a snapshot: it replaces open, merges done, keeps events newer than itself', async () => {
+  it('the conversation answer is the whole open list: it replaces what was there before its request and merges done', async () => {
     st().setSupport('h1', V2)
-    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1), todo(2), todo(9)] }) // 1 closed server-side meanwhile; 9 is newer than the answer
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1), todo(2), todo(9)] }) // 1 and 9 are gone server-side
     fetchConversation.mockResolvedValue(page([entry(3)], { todos: { open: [todo(2), todo(5)], done: [todo(4, 'done'), todo(3, 'done')] } }))
     await st().openWorkbook('h1', 's1')
-    expect(ids(conv()?.todos.open)).toEqual([2, 5, 9])
+    expect(ids(conv()?.todos.open)).toEqual([2, 5])
     expect(ids(conv()?.todos.done)).toEqual([4, 3])
+  })
+
+  it('a high-id open todo the daemon no longer lists does not linger, whether the answer is empty or its largest id is lower', async () => {
+    st().setSupport('h1', V2)
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(500)] })
+    fetchConversation.mockResolvedValueOnce(page([entry(3)], { todos: { open: [], done: [] } }))
+    await st().openWorkbook('h1', 's1')
+    expect(conv()?.todos.open).toEqual([])
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(500)] })
+    fetchConversation.mockResolvedValueOnce(page([entry(3)], { todos: { open: [todo(100)], done: [] } }))
+    await st().openWorkbook('h1', 's1')
+    expect(ids(conv()?.todos.open)).toEqual([100])
+  })
+
+  describe('an answer older than the touch history is not trusted, and re-asked (bounded, never event-driven)', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+    const flood = () => { for (let i = 0; i < MAX_TODO_TOUCHES + 5; i++) st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(3000 + i, 'dropped')] }) }
+    const defer = () => { let r!: (v: ConversationResult) => void; const p = new Promise<ConversationResult>((res) => { r = res }); return { p, r } }
+    /** One stale answer: the request starts, an event flood outruns the touch history, then the answer lands. */
+    const staleAnswer = async (open: WorkbookTodo[]) => {
+      const d = defer()
+      fetchConversation.mockReturnValueOnce(d.p)
+      const call = fetchConversation.mock.calls.length === 0 ? st().openWorkbook('h1', 's1') : st().loadSeat('h1', 's1')
+      flood()
+      d.r(page([entry(3)], { todos: { open, done: [] } }))
+      await call
+    }
+    beforeEach(() => { st().setSupport('h1', V2) })
+
+    it('keeps the local open list as it was, then re-asks once with limit 1 after the backoff, and the trusted answer replaces it', async () => {
+      st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(7)] })
+      await staleAnswer([todo(500)])
+      expect(ids(conv()?.todos.open)).toEqual([7]) // not 500: the stale open list was not applied
+      expect(fetchConversation).toHaveBeenCalledTimes(1)
+      fetchConversation.mockResolvedValueOnce(page([entry(3)], { todos: { open: [todo(8)], done: [] } }))
+      await vi.advanceTimersByTimeAsync(RESNAP_BACKOFF_MS)
+      expect(fetchConversation).toHaveBeenCalledTimes(2)
+      expect(fetchConversation.mock.calls[1][3]).toEqual({ limit: 1 })
+      expect(ids(conv()?.todos.open)).toEqual([8])
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(fetchConversation).toHaveBeenCalledTimes(2) // reconciled: nothing pending
+    })
+
+    it('is bounded: at most MAX_RESNAPS re-asks in a row, one pending at a time', async () => {
+      await staleAnswer([todo(500)])
+      for (let n = 0; n < MAX_RESNAPS; n++) {
+        const d = defer()
+        fetchConversation.mockReturnValueOnce(d.p)
+        await vi.advanceTimersByTimeAsync(RESNAP_BACKOFF_MS * 2 ** n)
+        flood() // the re-ask is outrun again
+        d.r(page([entry(3)], { todos: { open: [todo(501 + n)], done: [] } }))
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      expect(fetchConversation).toHaveBeenCalledTimes(1 + MAX_RESNAPS)
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(fetchConversation).toHaveBeenCalledTimes(1 + MAX_RESNAPS) // gave up; no loop
+    })
+
+    it('a connection change cancels the pending re-ask', async () => {
+      await staleAnswer([todo(500)])
+      st().fence('h1')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(fetchConversation).toHaveBeenCalledTimes(1)
+    })
+
+    it('the events themselves fetch nothing: a flood with no stale answer schedules no re-ask', async () => {
+      flood()
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(fetchConversation).not.toHaveBeenCalled()
+    })
   })
 
   it('a v1 answer (no todos) leaves the list alone', async () => {

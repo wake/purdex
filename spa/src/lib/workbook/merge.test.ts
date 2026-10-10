@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { emptyTodos, MAX_DONE_TODOS, MAX_TODO_TOUCHES, mergeEntries, snapshotTodos, touched, upsertTodos } from './merge'
+import { emptyTodos, MAX_DONE_TODOS, MAX_TODO_TOUCHES, mergeEntries, snapshotTodos as snapshot, touched, upsertTodos } from './merge'
 import type { WorkbookEntry, WorkbookTodo } from './types'
 
 const todo = (id: number, state: WorkbookTodo['state'] = 'open'): WorkbookTodo =>
@@ -33,6 +33,8 @@ describe('upsertTodos', () => {
   })
 })
 
+const snapshotTodos = (...a: Parameters<typeof snapshot>) => snapshot(...a).book
+
 describe('touched / snapshotTodos', () => {
   it('keeps the bounded touch history and the stamp it discarded up to', () => {
     let t = emptyTodos()
@@ -45,10 +47,17 @@ describe('touched / snapshotTodos', () => {
     expect(ids(snapshotTodos(t, { open: [todo(1), todo(2)], done: [] }, 5).open)).toEqual([2])
     expect(ids(snapshotTodos(t, { open: [todo(1), todo(2)], done: [] }, 11).open)).toEqual([1, 2]) // started after: the answer is current
   })
+  it('the answer decides every todo from before its request: a high-id open one the daemon no longer lists goes, whatever the answer\'s ids', () => {
+    const t = upsertTodos(emptyTodos(), [todo(500)])
+    expect(ids(snapshotTodos(t, { open: [], done: [] }, 5).open)).toEqual([])
+    expect(ids(snapshotTodos(t, { open: [todo(100)], done: [] }, 5).open)).toEqual([100])
+    expect(snapshot(t, { open: [], done: [] }, 5).trusted).toBe(true)
+  })
   it('ignores the open list of an answer older than the discarded history', () => {
     let t = upsertTodos(emptyTodos(), [todo(9)])
     for (let i = 1; i <= MAX_TODO_TOUCHES + 1; i++) t = touched(t, [todo(1000 + i, 'dropped')], 100 + i)
     expect(ids(snapshotTodos(t, { open: [todo(1), todo(9)], done: [todo(4, 'done')] }, 50).open)).toEqual([9])
+    expect(snapshot(t, { open: [todo(1), todo(9)], done: [] }, 50).trusted).toBe(false)
     expect(ids(snapshotTodos(t, { open: [todo(1)], done: [todo(4, 'done')] }, 50).done)).toEqual([4]) // done is terminal: still merged
   })
 })

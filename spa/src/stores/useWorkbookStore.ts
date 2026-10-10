@@ -31,6 +31,11 @@ export type { TodoBook }
 
 export const SEAT_PAGE = 1
 export const VIEW_PAGE = 20
+/** A conversation answer too old to reconcile with the events since (the touch history is bounded) is re-asked: at most one
+ *  pending re-ask per conversation, at most MAX_RESNAPS in a row (reset by the next answer that does reconcile), each after
+ *  RESNAP_BACKOFF_MS × 2^n. This repairs a stale ANSWER; it is not an event trigger (events still never fetch). */
+export const MAX_RESNAPS = 2
+export const RESNAP_BACKOFF_MS = 1000
 /** `loadUntil` gives up after this many pages (5 × VIEW_PAGE = 100 entries). */
 export const MAX_UNTIL_PAGES = 5
 
@@ -214,6 +219,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       return
     }
     const { page } = result
+    let untrusted = false
     set((s) => ({
       ...withSessions(s, hostId, page.convKey, uniq([sessionId, ...page.entries.map((e) => e.sessionId)])),
       ...withConv(s, hostId, page.convKey, (c) => {
@@ -231,13 +237,39 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
           loading: false, missing: false,
           // v2 parts (null from a v1 daemon: left as they were)
           // An answer older than one already applied (two queries in flight, the later request landed first) only adds done todos.
-          todos: page.todos ? (startedAt < c.appliedAt ? upsertTodos(c.todos, page.todos.done) : snapshotTodos(c.todos, page.todos, startedAt)) : c.todos,
+          todos: !page.todos ? c.todos : startedAt < c.appliedAt ? upsertTodos(c.todos, page.todos.done)
+            : (() => { const r = snapshotTodos(c.todos, page.todos, startedAt); untrusted = !r.trusted; return r.book })(),
           refreshAvailable: page.refreshAvailable !== null && c.availAt < startedAt && startedAt >= c.appliedAt ? page.refreshAvailable : c.refreshAvailable,
           appliedAt: Math.max(c.appliedAt, startedAt),
         }
       }),
     }))
     set((s) => evicted(s, hostId))
+    if (untrusted) scheduleResnap(hostId, page.convKey)
+    else if (page.todos) { const r = resnaps.get(resnapKey(hostId, page.convKey)); if (r) { if (r.timer !== undefined) clearTimeout(r.timer); resnaps.delete(resnapKey(hostId, page.convKey)) } }
+  }
+
+  /** conv → the pending re-ask (timer) and how many were made in a row. */
+  const resnaps = new Map<string, { tries: number; timer?: ReturnType<typeof setTimeout> }>()
+  const resnapKey = (hostId: string, convKey: string) => `${hostId}\u0000${convKey}`
+  function clearResnaps(hostId?: string): void {
+    for (const [k, v] of resnaps) {
+      if (hostId === undefined || k.startsWith(`${hostId}\u0000`)) { if (v.timer !== undefined) clearTimeout(v.timer); resnaps.delete(k) }
+    }
+  }
+  function scheduleResnap(hostId: string, convKey: string): void {
+    const key = resnapKey(hostId, convKey)
+    const cur = resnaps.get(key) ?? { tries: 0 }
+    resnaps.set(key, cur)
+    if (cur.timer !== undefined || cur.tries >= MAX_RESNAPS) return
+    const epoch = get().epoch[hostId] ?? 0
+    const gen = get().gens[hostId]
+    cur.timer = setTimeout(() => {
+      cur.timer = undefined
+      if ((get().epoch[hostId] ?? 0) !== epoch || get().gens[hostId] !== gen || !get().support[hostId]?.v2) return
+      void runFetch(hostId, sessionOf(hostId, convKey), { limit: SEAT_PAGE })
+    }, RESNAP_BACKOFF_MS * 2 ** cur.tries)
+    cur.tries++
   }
 
   /** A session of the conversation to name in a request: a known one (the daemon wants a real session for a refresh), else the key (any session of it resolves). */
@@ -249,7 +281,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
   return {
     byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {},
 
-    fence: (hostId) => set((s) => {
+    fence: (hostId) => { clearResnaps(hostId); set((s) => {
       // What 404'd or was loading on the last connection is asked again on the next; entries already loaded stay (they
       // are history), but support is unknown until the new answer, so nothing is fetched and no view may rely on v1.
       const byConv = s.byHost[hostId]?.byConv ?? {}
@@ -261,7 +293,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
         missingSessions: { ...s.missingSessions, [hostId]: {} },
         ...(s.byHost[hostId] ? { byHost: { ...s.byHost, [hostId]: { byConv: cleared } } } : {}),
       }
-    }),
+    }) },
 
     setSupport: (hostId, support) => set((s) => {
       const cur = s.support[hostId]
@@ -404,14 +436,14 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
 
     applyRefreshAvailable: (hostId, ev) => { set((s) => withConv(s, hostId, ev.convKey, (c) => ({ ...c, refreshAvailable: ev.available, availAt: ++clock }))); set((s) => evicted(s, hostId)) },
 
-    forgetHost: (hostId) => set((s) => {
+    forgetHost: (hostId) => { clearResnaps(hostId); set((s) => {
       const drop = <T>(m: Record<string, T>): Record<string, T> => { const { [hostId]: _g, ...rest } = m; return rest }
       return {
         byHost: drop(s.byHost), convOfSession: drop(s.convOfSession), support: drop(s.support), gens: drop(s.gens),
         missingSessions: drop(s.missingSessions), seatGen: drop(s.seatGen), viewing: drop(s.viewing), epoch: { ...s.epoch, [hostId]: (s.epoch[hostId] ?? 0) + 1 },
       }
-    }),
+    }) },
 
-    reset: () => { inflight.clear(); set({ byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {} }) },
+    reset: () => { inflight.clear(); clearResnaps(); set({ byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {} }) },
   }
 })
