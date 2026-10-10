@@ -6,6 +6,7 @@ import { formatClock } from '../../lib/conversations/deck-format'
 import type { AgentTextItem, UserItem } from '../../lib/conversations/types'
 import RoomProse from '../room/RoomProse'
 import { UserBlock } from './UserBlock'
+import { CjkText } from './CjkText'
 
 /** Sources that are not the person's own message: they keep the deck's block (a bash input, a wake-up, a background report, a peer's message). */
 const NOT_THE_PERSON = new Set(['peer', 'bash', 'command_output', 'background', 'task', 'schedule', 'scheduled'])
@@ -16,8 +17,8 @@ export function UserBubble({ item }: { item: UserItem }) {
   if (NOT_THE_PERSON.has(item.source)) return <UserBlock item={item} />
   return (
     <div data-testid="chat-user" data-source={item.source} className="flex flex-col items-end">
-      <div data-testid="chat-user-bubble" className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm tracking-[1px] text-white">
-        {item.text}{item.truncated && '…'}
+      <div data-testid="chat-user-bubble" className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm text-white">
+        <CjkText text={item.text} />{item.truncated && '…'}
       </div>
       <div data-testid="chat-user-time" className="mt-0.5 text-xs text-text-muted">
         {item.source === 'queued' ? t('deck.user.queued') : formatClock(item.at)}
@@ -34,7 +35,7 @@ export function AgentBubble({ item }: { item: AgentTextItem }) {
     <div data-testid="chat-agent" className="flex justify-start">
       <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-surface-secondary px-3 py-2 text-sm text-text-primary">
         <div data-testid="chat-agent-md" className="chat-md">
-          <RoomProse content={item.markdown} streaming={item.streaming} />
+          <RoomProse content={item.markdown} streaming={item.streaming} cjk />
         </div>
         {item.truncated && <div className="text-xs text-text-muted">{t('deck.output.cut')}</div>}
       </div>
