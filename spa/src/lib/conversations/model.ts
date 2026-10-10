@@ -111,18 +111,19 @@ function upsertItems(turn: Turn, incoming: ConversationItem[], bound: number): T
 function applyChange(turns: Turn[], ch: Change, firstIndex: number | null): Turn[] {
   const header = ch.turn
   if (firstIndex !== null && header.index < firstIndex) return turns // older than what is loaded
-  const bound = boundary(header)
   let at = turns.findIndex((t) => t.id === header.id)
   if (at < 0) at = turns.findIndex((t) => t.index === header.index) // same slot, a re-keyed turn
   if (at >= 0) {
     const cur = turns[at]
     const merged: Turn = { ...cur, ...header, items: cur.items }
-    const next = upsertItems(merged, ch.items, bound)
+    // the boundary of what the document holds: an increment usually does not repeat `omitted_items` (a view-only field),
+    // and the spread above keeps the one the snapshot gave
+    const next = upsertItems(merged, ch.items, boundary(merged))
     const out = turns.slice()
     out[at] = next
     return out
   }
-  const fresh = upsertItems({ ...header, items: [] }, ch.items, bound)
+  const fresh = upsertItems({ ...header, items: [] }, ch.items, boundary(header))
   const out = turns.slice()
   let pos = out.length
   while (pos > 0 && out[pos - 1].index > fresh.index) pos--

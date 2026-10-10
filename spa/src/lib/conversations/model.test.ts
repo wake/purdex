@@ -110,6 +110,13 @@ describe('applyChanges — upsert by id, place by index', () => {
       expect(d.turns[0].omitted_items).toBe(3)
     })
 
+    // the increment's turn header carries no omitted_items (a view-only field): the boundary the snapshot gave still holds
+    it('keeps the boundary when a later change does not repeat omitted_items', () => {
+      const d = applyChanges(omitted(), inc([{ turn: turn(0, []), items: [agent('a1', 1, 'update of an omitted item'), agent('a4', 4, 'x')] }]))
+      expect(ids(d)).toEqual([['a3', 'a4']])
+      expect(d.turns[0].omitted_items).toBe(3)
+    })
+
     it('still places items at or above the boundary', () => {
       const d = applyChanges(omitted(), inc([{ turn: turn(0, [], { omitted_items: 3 }), items: [agent('a5', 5)] }]))
       expect(ids(d)).toEqual([['a3', 'a4', 'a5']])
