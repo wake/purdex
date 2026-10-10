@@ -133,3 +133,16 @@ func TestPostDeliver_ARefusalWhoseBodyIsCutIsStillARefusal(t *testing.T) {
 		t.Fatalf("postDeliver = remote %+v err %v, want the 429 refusal", remote, err)
 	}
 }
+
+// A refusal stays a refusal when its body is over the cap: the status line already said no. (codex incremental, #1009.)
+func TestPostDeliver_ARefusalWithAnOversizedBodyIsStillARefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write(make([]byte, maxDeliverRespBytes+10))
+	}))
+	defer srv.Close()
+	_, remote, err := postDeliver(context.Background(), newDeliverClient(), srv.URL, "tok", sampleDeliverRequest())
+	if err != nil || remote == nil || remote.Status != http.StatusInternalServerError || remote.Error != "http_500" {
+		t.Fatalf("postDeliver = remote %+v err %v, want the 500 refusal as http_500", remote, err)
+	}
+}
