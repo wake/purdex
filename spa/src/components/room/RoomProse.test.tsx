@@ -93,4 +93,30 @@ describe('RoomProse streaming cursor (R1)', () => {
     const { container } = render(<RoomProse content="done" />)
     expect(container.querySelector('[data-testid="stream-cursor"]')).toBeNull()
   })
+
+  // #2463: the --wt-* vars its .worker-prose rules read come from RoomProse's own root, so a caller outside the execution pane
+  // (deck, chat) still gets the list indent and the monospace code face. jsdom computes no custom properties, so this pins
+  // the inline style on the root; the real-Chromium numbers are in the PR.
+  it('carries the worker theme vars on its own root, with no pane around it', () => {
+    render(<RoomProse content={'- a\n  - b\n\nuse `x`'} />)
+    const root = screen.getByTestId('room-prose')
+    expect(root.style.getPropertyValue('--wt-list-indent')).toBe('1.5em')
+    expect(root.style.getPropertyValue('--wt-code-font')).toBe('Menlo, Monaco, monospace')
+    expect(root.style.getPropertyValue('--wt-block-gap')).not.toBe('')
+    expect(document.querySelector('ul ul')).not.toBeNull()
+    expect(document.querySelector('p code')!.textContent).toBe('x')
+  })
+
+  it('follows the selected worker theme', async () => {
+    const { useWorkerSettingsStore } = await import('../../stores/useWorkerSettingsStore')
+    const { registerWorkerTheme } = await import('../../lib/worker-theme/registry')
+    const { PURDEX_THEME } = await import('../../lib/worker-theme/purdex')
+    registerWorkerTheme({ ...PURDEX_THEME, id: 'rp-test', vars: { ...PURDEX_THEME.vars, 'list-indent': '3em' } })
+    const before = useWorkerSettingsStore.getState().theme
+    useWorkerSettingsStore.setState({ theme: 'rp-test' })
+    try {
+      render(<RoomProse content="- a" />)
+      expect(screen.getByTestId('room-prose').style.getPropertyValue('--wt-list-indent')).toBe('3em')
+    } finally { useWorkerSettingsStore.setState({ theme: before }) }
+  })
 })

@@ -3,12 +3,14 @@
 // edge: no bubble, no percentage clamp, only a reading measure so a paragraph
 // does not run the width of a wide pane. Code blocks inside it still get the
 // measure; output, diffs and tables are other blocks and take the full width.
-import type { ComponentProps } from 'react'
+import { useMemo, type ComponentProps, type CSSProperties } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
 import StreamCursor from '../StreamCursor'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
+import { getWorkerTheme, workerThemeStyle } from '../../lib/worker-theme/registry'
 
 // A table (GFM, spec §5.3) scrolls horizontally inside its own wrapper —
 // never the whole transcript. The wrapper adds no text, so markdown-text.ts's
@@ -35,8 +37,12 @@ interface Props {
 }
 
 export default function RoomProse({ content, streaming, searchUnit }: Props) {
+  // `.worker-prose` (index.css) reads the `--wt-*` vars; the execution pane root is not the only place this renders (deck,
+  // chat, peer blocks), so it carries the selected theme's vars itself (#2463). Same theme source as the pane root.
+  const themeId = useWorkerSettingsStore((s) => s.theme)
+  const themeVars = useMemo(() => workerThemeStyle(getWorkerTheme(themeId)) as CSSProperties, [themeId])
   return (
-    <div data-testid="room-prose" className="max-w-[90ch] text-text-primary">
+    <div data-testid="room-prose" className="max-w-[90ch] text-text-primary" style={themeVars}>
       <div data-search-unit={searchUnit} className="prose prose-invert worker-prose max-w-none">
         <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={COMPONENTS}>
           {content}

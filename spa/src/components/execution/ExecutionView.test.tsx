@@ -581,6 +581,16 @@ describe('ExecutionView — room transcript (T4.4)', () => {
     expect(container.querySelector('.justify-end')).toBeNull()
   })
 
+  // #2463: RoomProse supplies the worker theme vars itself — the pane root's copy is not what its list indent / code face read.
+  it('RoomProse inside the pane carries the theme vars on its own root (#2463)', () => {
+    const said2 = { type: 'assistant', parent_tool_use_id: null, message: { id: 'm9', role: 'assistant', content: [{ type: 'text', text: '- a\n- b' }], stop_reason: null } } as unknown as Exec['messages'][number]
+    patchExec({ messages: [said('q'), said2], turnStarts: [0] })
+    render(<ExecutionView {...base} isActive />)
+    const prose = screen.getByTestId('room-prose')
+    expect(prose.style.getPropertyValue('--wt-list-indent')).toBe('1.5em')
+    expect(prose.style.getPropertyValue('--wt-code-font')).toBe('Menlo, Monaco, monospace')
+  })
+
   it('groups the transcript by the turns the reducer recorded', () => {
     patchExec({ messages: [said('one'), said('two')], turnStarts: [0, 1] })
     render(<ExecutionView {...base} isActive />)
