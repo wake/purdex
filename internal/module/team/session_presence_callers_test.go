@@ -296,3 +296,36 @@ func TestPresence_TheLogMapIsPruned(t *testing.T) {
 		t.Fatalf("%d subjects remembered after the window, want only the fresh one", n)
 	}
 }
+
+// codex re-review: the hook flag is removed only for a session that is positively gone. (The flag is rewritten by the next
+// create, so this is not irreversible, but it is user-visible: the hook stops asking.)
+func TestPresence_AHookFlagOfAnUnknownSessionStaysAndOfAGoneOneIsPruned(t *testing.T) {
+	f := newFixture(t)
+	unknown := touchLock(t, f, "cc", "sid-unknown")
+	gone := touchLock(t, f, "cc", "sid-gone")
+	f.hideUnknown("sid-unknown")
+	f.origins.hide("sid-gone")
+	f.origins.markDead("sid-gone")
+	f.m.pruneHookLocks()
+	if !exists(unknown) {
+		t.Fatal("the flag of a session that cannot be placed was removed")
+	}
+	if exists(gone) {
+		t.Fatal("the flag of a gone session stayed")
+	}
+}
+
+// The rate-limit map never holds more than presenceLogMax subjects, even when none has expired.
+func TestPresence_TheLogMapNeverExceedsItsCapWithinTheWindow(t *testing.T) {
+	f := newFixture(t)
+	f.captureLogs()
+	for i := range 600 {
+		f.m.logPresenceUnknown(fmt.Sprintf("approval %d", i), "sid-1")
+	}
+	f.m.presenceLogMu.Lock()
+	n := len(f.m.presenceLogged)
+	f.m.presenceLogMu.Unlock()
+	if n > presenceLogMax {
+		t.Fatalf("%d subjects remembered at one instant, want at most %d", n, presenceLogMax)
+	}
+}

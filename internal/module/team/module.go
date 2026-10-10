@@ -47,8 +47,8 @@ type OriginResolver interface {
 	ResolveOriginByRef(ref string) (team.Origin, bool, error)
 	// InboxOf is the messaging socket of the session's live entry, for the notice outbox (PL-1d1).
 	InboxOf(sessionID string) (inbox string, ok bool, err error)
-	// LiveSession is the two-state check (a registry that cannot be read answers true). Only where the act is a recoverable file
-	// removal that has no process to ask about (pruneHookLocks). Everything that abandons, ends or fails something uses SessionPresence.
+	// LiveSession is the two-state check (a registry that cannot be read answers true). Only for a display flag with no side effect
+	// (pendingLineage). Everything that abandons, ends, fails or removes something uses SessionPresence.
 	LiveSession(sessionID string) bool
 	// SessionPresence is LiveSession in three states (#1857): act on Gone only; Unknown (an unreadable registry, or a live pid's
 	// file that could not be verified) leaves the decision for the next round.

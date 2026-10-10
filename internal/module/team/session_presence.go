@@ -38,10 +38,16 @@ func (m *Module) logPresenceUnknown(subject, sid string) {
 		m.presenceLogged = map[string]int64{}
 	}
 	if len(m.presenceLogged) >= presenceLogMax { // entries past the window are no longer needed: drop them, the map stays bounded
+		oldest, oldestAt := "", now+1
 		for k, t := range m.presenceLogged {
 			if now-t >= presenceLogEvery {
 				delete(m.presenceLogged, k)
+			} else if t < oldestAt {
+				oldest, oldestAt = k, t
 			}
+		}
+		if len(m.presenceLogged) >= presenceLogMax && oldest != "" { // none had expired: the oldest makes room
+			delete(m.presenceLogged, oldest)
 		}
 	}
 	m.presenceLogged[subject] = now
