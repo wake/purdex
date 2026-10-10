@@ -38,6 +38,9 @@ describe('liveLine', () => {
     expect(liveLine([running([step('c', { kind: 'task', tool: 'Agent' })])], 'running')).toMatchObject({ tool: 'Agent', subagents: 1 })
     expect(liveLine([running([step('a', { status: 'done' })])], 'running')).toMatchObject({ tool: null, subagents: 0 })
   })
+  it('a start time of 0 (a zero value) is no clock', () => {
+    expect(liveLine([{ outcome: 'running', started_at: 0, items: [] }], 'running')).toMatchObject({ since: null })
+  })
   it('counts from the last turn only while it is running; a finished last turn has no clock', () => {
     expect(liveLine([{ outcome: 'done', started_at: T0, ended_at: T0 + 5, items: [] }], 'running')).toMatchObject({ since: null })
     expect(liveLine([], 'running')).toMatchObject({ since: null })
@@ -96,6 +99,22 @@ describe('LiveTurnLine', () => {
     act(() => { vi.advanceTimersByTime(2_000) })
     expect(screen.getByTestId('turn-live').textContent).toContain('5s')
   })
+  it('a line that comes on after a long idle counts from the present at once, not from when it mounted', () => {
+    vi.useFakeTimers({ now: T0 })
+    const idle: LineTurn[] = [{ outcome: 'done', started_at: T0 - 5_000, ended_at: T0, items: [] }]
+    const { rerender } = render(<LiveTurnLine status="idle" turns={idle} />)
+    act(() => { vi.setSystemTime(T0 + 600_000) }) // ten minutes of idle
+    rerender(<LiveTurnLine status="running" turns={[{ outcome: 'running', started_at: T0 + 599_000, items: [] }]} />)
+    act(() => { vi.advanceTimersByTime(1) }) // the first refresh, long before the first interval tick
+    expect(screen.getByTestId('turn-live').textContent).toContain('1s')
+  })
+  it('the running line is not a live region (it changes every second); the waiting one is', () => {
+    render(<LiveTurnLine status="running" turns={[{ outcome: 'running', started_at: T0, items: [] }]} />)
+    expect(screen.getByTestId('turn-live')).not.toHaveAttribute('role')
+    cleanup()
+    render(<LiveTurnLine status="waiting" turns={[{ outcome: 'running', started_at: T0, items: [] }]} />)
+    expect(screen.getByTestId('turn-live')).toHaveAttribute('role', 'status')
+  })
   it('waiting for the person: the existing waiting words in the warning colour, no clock', () => {
     render(<LiveTurnLine status="waiting" turns={[{ outcome: 'running', started_at: T0, items: [] }]} />)
     const el = screen.getByTestId('turn-live')
@@ -106,6 +125,7 @@ describe('LiveTurnLine', () => {
   it('nothing while idle; stops its timer when it goes', () => {
     vi.useFakeTimers({ now: T0 })
     const { rerender } = render(<LiveTurnLine status="running" turns={[{ outcome: 'running', started_at: T0, items: [] }]} />)
+    act(() => { vi.advanceTimersByTime(0) }) // the first refresh has run: only the one-second interval is left
     expect(vi.getTimerCount()).toBe(1)
     rerender(<LiveTurnLine status="idle" turns={[{ outcome: 'done', started_at: T0, ended_at: T0 + 1, items: [] }]} />)
     expect(screen.queryByTestId('turn-live')).toBeNull()

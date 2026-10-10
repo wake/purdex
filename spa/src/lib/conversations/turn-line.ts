@@ -37,7 +37,7 @@ export function liveLine(turns: readonly LineTurn[], status: string | undefined)
   const latest = [...steps].reverse().find((s) => s.kind !== 'task') ?? steps[steps.length - 1]
   return {
     kind: status,
-    since: typeof running?.started_at === 'number' ? running.started_at : null,
+    since: typeof running?.started_at === 'number' && running.started_at > 0 ? running.started_at : null,
     tool: latest?.tool || null,
     subagents,
   }

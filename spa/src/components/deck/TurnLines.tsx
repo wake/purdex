@@ -25,7 +25,7 @@ export function DoneTurnLine({ turn }: { turn: LineTurn }) {
 export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; status: string | undefined }) {
   const t = useI18nStore((s) => s.t)
   const live = liveLine(turns, status)
-  const now = useNow(live !== null)
+  const now = useNow(live?.kind === 'running')
   if (!live) return null
   if (live.kind === 'waiting') {
     return (
@@ -40,7 +40,7 @@ export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; st
   if (live.subagents > 0) parts.push(t('deck.live.subagents', { n: live.subagents }))
   if (live.since !== null) parts.push(formatDuration(Math.max(0, now - live.since), t))
   return (
-    <div data-testid="turn-live" data-kind="running" role="status" className={ROW}>
+    <div data-testid="turn-live" data-kind="running" className={ROW}>
       <span aria-hidden="true" className="inline-block animate-pulse">✻</span>
       <span>{parts.join(' · ')}</span>
     </div>
