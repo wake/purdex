@@ -166,25 +166,22 @@ func (m *Module) spawnFinish(op spawnRow, o *team.Origin) {
 			DoneWhen: done, OwnerKey: op.ID, CreatedByRef: ipeers.RefID(op.OriginSessionID),
 			SpawnOp: op.ID, CreatedAt: now, UpdatedAt: now}
 	}
-	if _, err := m.store.InsertMemberAndTask(mem, first); err != nil {
+	won, err := m.store.FinishSpawn(op.ID, mem, first, now)
+	if err != nil {
 		m.abortSpawn(op.ID, op.TmuxID, op.TmuxInstance, err)
 		return
+	}
+	if !won {
+		return // the op ended meanwhile (an abort, a team end): nothing of it was written
 	}
 	if op.Title != "" && m.titleSet != nil {
 		if _, err := m.titleSet.Claim(op.SessionID, op.Title, time.UnixMilli(now)); err != nil {
 			m.logf("[team] spawn %s: title %q for %s: %v", op.ID, op.Title, op.SessionID, err)
 		}
 	}
-	// The member is on the roster from the insert, but its title comes from
-	// the title store: announce once the claim has run, whether it won or
+	// The op, the member and its task are committed together: announce once the title claim has run, whether it won or
 	// failed, so the roster sent carries the member as it will be seen.
 	m.rosterChanged()
-	won, err := m.store.AdvanceSpawnOp(op.ID, team.StepRegistered, spawnUpdate{Step: team.StepRegistered, State: team.SpawnDone, At: now})
-	if err != nil {
-		m.abortSpawn(op.ID, op.TmuxID, op.TmuxInstance, err)
-	}
-	if won {
-		m.logf("[team] spawn %s done: member %s (%s) in %s", op.ID, o.Ref, op.SessionID, op.TmuxName)
-		m.wake(op.ID)
-	}
+	m.logf("[team] spawn %s done: member %s (%s) in %s", op.ID, o.Ref, op.SessionID, op.TmuxName)
+	m.wake(op.ID)
 }
