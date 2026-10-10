@@ -44,6 +44,32 @@ describe('v1 daemon', () => {
   })
 })
 
+describe('the default 紀錄 view carries the open todos between the status and the log', () => {
+  it('shows 待辦 (count, titles, detail on hover) after the status and before the log', async () => {
+    seed({ entries: [entry(2)], todos: book({ open: [todo(1, { detail: 'why' }), todo(2)] }) }); mount(); await settle()
+    const sec = screen.getByTestId('workbook-open-todos')
+    expect(sec.textContent).toContain('待辦（2）')
+    expect(screen.getAllByTestId('workbook-todo')[0].getAttribute('title')).toBe('why')
+    const status = screen.getByTestId('team-seat-workbook-status')
+    const log = screen.getByTestId('workbook-log')
+    expect(status.compareDocumentPosition(sec) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(sec.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByTestId('workbook-done-todos')).toBeNull() // 已完成 belongs to the 待辦 tab
+  })
+  it('is hidden when there are no open todos', async () => {
+    seed({ entries: [entry(2)], todos: book({ done: [doneTodo(1, 2)] }) }); mount(); await settle()
+    expect(screen.queryByTestId('workbook-open-todos')).toBeNull()
+  })
+  it('says when the open list was cut', async () => {
+    seed({ todos: book({ open: [todo(1)], openCapped: true }) }); mount(); await settle()
+    expect(screen.getByText('待辦太多，只顯示最新的部分。')).toBeTruthy()
+  })
+  it('a v1 daemon shows none', async () => {
+    seed({ entries: [entry(2)], todos: book({ open: [todo(1)] }) }, false); mount(); await settle()
+    expect(screen.queryByTestId('workbook-open-todos')).toBeNull()
+  })
+})
+
 describe('待辦', () => {
   it('opens on 紀錄; the switch shows open todos with the count in the section header; the detail is the tooltip', async () => {
     seed({ entries: [entry(2)], todos: book({ open: [todo(1, { detail: 'why' }), todo(2)] }) }); mount(); await settle()

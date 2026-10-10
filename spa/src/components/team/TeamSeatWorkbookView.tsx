@@ -10,7 +10,7 @@ import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import type { WorkbookTab } from '../../lib/workbook/view-memory'
 import type { WorkbookTodo } from '../../lib/workbook/types'
 import { WorkbookToolbar } from './WorkbookToolbar'
-import { WorkbookTodos } from './WorkbookTodos'
+import { OpenTodoSection, WorkbookTodos } from './WorkbookTodos'
 import { useWorkbookViewing, type SeatWorkbook } from './seat-workbook'
 import { useWorkbookViewState } from './useWorkbookViewState'
 import { WorkbookStatus } from './WorkbookStatus'
@@ -83,7 +83,8 @@ function WorkbookFrame({ teamKey, hostId, sessionId, title, trailing, wb }: Prop
           <WorkbookTodos hostId={hostId} convKey={wb.convKey} conv={conv} onJump={(x) => { void jump(x) }} />
         ) : (
           <>
-            {notFound && <div role="status" className="text-[11px] text-text-muted">{t('team.workbook.entry_not_found')}</div>}
+            {v2 && <OpenTodoSection conv={conv} />}
+            {notFound &&<div role="status" className="text-[11px] text-text-muted">{t('team.workbook.entry_not_found')}</div>}
             <WorkbookLog hostId={hostId} convKey={wb.convKey} conv={conv} openGroups={openGroups} onToggleGroup={toggleGroup} highlightId={highlightId} />
           </>
         )}

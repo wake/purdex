@@ -32,6 +32,21 @@ function OpenTodo({ todo }: { todo: WorkbookTodo }) {
   )
 }
 
+/** The open todos with the count in the header and the cap notice; nothing at all when there are none. Shared by the default
+ *  紀錄 view (between the status and the log) and the 待辦 tab. */
+export function OpenTodoSection({ conv }: { conv: ConvState | undefined }) {
+  const t = useI18nStore((s) => s.t)
+  const open = conv?.todos.open ?? []
+  if (open.length === 0) return null
+  return (
+    <section data-testid="workbook-open-todos">
+      <div className="text-[10px] text-text-muted mb-0.5">{t('team.workbook.todos', { count: open.length })}</div>
+      {selectTodoCaps(conv).openCapped && <div className="text-[11px] text-text-muted mb-0.5">{t('team.workbook.open_capped')}</div>}
+      <ul className="flex flex-col gap-0.5">{open.map((x) => <OpenTodo key={x.id} todo={x} />)}</ul>
+    </section>
+  )
+}
+
 /** What closed a done todo: the thing of the entry that did (if loaded), 「重整」 for a refresh. */
 function closer(todo: WorkbookTodo, conv: ConvState | undefined, refreshLabel: string): string {
   const e = conv?.entries.find((x) => x.id === todo.closedEntryId)
@@ -47,13 +62,7 @@ export function WorkbookTodos({ hostId, convKey, conv, onJump }: Props) {
   const more = !!conv && convKey !== null && !conv.todos.doneExhausted && !caps.doneCapped && done.length > 0
   return (
     <div data-testid="workbook-todos" className="flex flex-col gap-2">
-      {open.length > 0 && (
-        <section data-testid="workbook-open-todos">
-          <div className="text-[10px] text-text-muted mb-0.5">{t('team.workbook.todos', { count: open.length })}</div>
-          {caps.openCapped && <div className="text-[11px] text-text-muted mb-0.5">{t('team.workbook.open_capped')}</div>}
-          <ul className="flex flex-col gap-0.5">{open.map((x) => <OpenTodo key={x.id} todo={x} />)}</ul>
-        </section>
-      )}
+      <OpenTodoSection conv={conv} />
       {done.length > 0 && (
         <section data-testid="workbook-done-todos">
           <div className="text-[10px] text-text-muted mb-0.5">{t('team.workbook.done_todos')}</div>
