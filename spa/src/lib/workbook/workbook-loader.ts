@@ -7,6 +7,7 @@
 import { useHostStore } from '../../stores/useHostStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
+import { WORKBOOK_MAX_RETRIES, workbookRetryDelay } from './retry'
 import type { TeamRoster } from '../team/roster'
 import { teamHostMap } from '../team/team-state'
 
@@ -32,12 +33,34 @@ export function seatTargets(rosterByHost: Record<string, TeamRoster[]>, hostStat
 }
 
 export function startWorkbookLoader(): () => void {
+  /** A seat whose ask got no answer (network / 5xx): its retry count and the timer of the one pending retry (#2435). Bounded by
+   *  the roster: an entry is dropped when the seat leaves it, the connection generation moves on, or the loader stops. */
+  const retries = new Map<string, { gen: number; tries: number; timer?: ReturnType<typeof setTimeout> }>()
+  const drop = (key: string) => { const e = retries.get(key); if (e?.timer !== undefined) clearTimeout(e.timer); retries.delete(key) }
+  const keyOf = (t: SeatTarget) => `${t.hostId}\u0000${t.sessionId}`
+  const ask = (t: SeatTarget) => {
+    const key = keyOf(t)
+    const gen = useWorkbookStore.getState().gens[t.hostId] ?? 0
+    let e = retries.get(key)
+    if (!e || e.gen !== gen) { drop(key); e = { gen, tries: 0 }; retries.set(key, e) }
+    if (e.timer !== undefined) return // the backoff is running: a roster frame does not cut it short (the store itself dedupes asks in one generation)
+    const mine = e
+    void useWorkbookStore.getState().loadSeat(t.hostId, t.sessionId).then((res) => {
+      if (retries.get(key) !== mine) return // the seat left, the generation moved on, or the loader stopped
+      if (res !== 'failed') { retries.delete(key); return }
+      if (mine.timer !== undefined || mine.tries >= WORKBOOK_MAX_RETRIES) return
+      mine.timer = setTimeout(() => { mine.timer = undefined; if (retries.get(key) === mine) ask(t) }, workbookRetryDelay(mine.tries++))
+    })
+  }
   const sync = () => {
     const targets = seatTargets(useTeamRosterStore.getState().byHost, useHostStore.getState())
     useWorkbookStore.getState().syncSeats(targets) // a seat that left the rosters stops holding its conversation
-    for (const t of targets) {
-      void useWorkbookStore.getState().loadSeat(t.hostId, t.sessionId)
+    const now = new Map(targets.map((t) => [keyOf(t), t]))
+    for (const [key, e] of retries) {
+      const t = now.get(key)
+      if (!t || e.gen !== (useWorkbookStore.getState().gens[t.hostId] ?? 0)) drop(key)
     }
+    for (const t of targets) ask(t)
   }
   const stops = [
     useTeamRosterStore.subscribe((n, p) => { if (n.byHost !== p.byHost) sync() }),
@@ -45,5 +68,5 @@ export function startWorkbookLoader(): () => void {
     useHostStore.subscribe((n, p) => { if (n.hosts !== p.hosts || n.runtime !== p.runtime) sync() }), // the daemon-id verification lands in runtime
   ]
   sync()
-  return () => stops.forEach((f) => f())
+  return () => { stops.forEach((f) => f()); for (const key of [...retries.keys()]) drop(key) }
 }
