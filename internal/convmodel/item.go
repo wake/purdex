@@ -174,6 +174,9 @@ type StepQuestion struct {
 
 // QuestionItem is one question of the call.
 type QuestionItem struct {
+	// Key is the question exactly as the call wrote it, before trimming and capping: the answers are keyed by it. Not on the
+	// wire.
+	Key      string           `json:"-"`
 	Question string           `json:"question"`
 	Header   string           `json:"header,omitempty"`
 	Multiple bool             `json:"multiple"`

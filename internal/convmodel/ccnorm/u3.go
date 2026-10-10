@@ -36,7 +36,7 @@ func questionOf(in object) *convmodel.StepQuestion {
 			continue
 		}
 		q := convmodel.QuestionItem{
-			Question: text, Header: trimCap(b.obj.str("header")),
+			Key: b.obj.str("question"), Question: text, Header: trimCap(b.obj.str("header")),
 			Multiple: jsonTrue(b.obj.get("multiSelect")) || jsonTrue(b.obj.get("multiple")),
 			Options:  []convmodel.QuestionOption{},
 		}
@@ -80,7 +80,7 @@ func withAnswers(q *convmodel.StepQuestion, tur object) *convmodel.StepQuestion 
 	}
 	answers := make([][]string, 0, len(q.Questions))
 	for _, it := range q.Questions {
-		s, ok := jsonString(given.get(it.Question))
+		s, ok := jsonString(given.get(it.Key))
 		if !ok {
 			return q
 		}

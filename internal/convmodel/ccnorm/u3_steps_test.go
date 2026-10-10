@@ -148,6 +148,25 @@ func TestQuestion_IncompleteAnswersAreNone(t *testing.T) {
 	}
 }
 
+// The answers are keyed by the question as the call wrote it: a question the model padded with white space, or one over the
+// 4 KiB cap, still finds its answer (codex R1). Mutation gate: look the answer up by the displayed text → red.
+func TestQuestion_AnswerKeyIsTheOriginalText(t *testing.T) {
+	long := strings.Repeat("長", convmodel.MaxInputString) // 3 bytes each: well over the cap
+	padded := "  Which?\n"
+	in := askInput(question(padded, false, "A"), question(long, false, "B"))
+	s := askStep(t, in, askResult(obj{padded: "A", long: "B"}))
+	a := s.Question.Answers
+	if len(a) != 2 || a[0][0] != "A" || a[1][0] != "B" {
+		t.Fatalf("answers = %v", a)
+	}
+	if got := s.Question.Questions[0].Question; got != "Which?" {
+		t.Fatalf("displayed text = %q, want it trimmed", got)
+	}
+	if b, _ := json.Marshal(s.Question); strings.Contains(string(b), `"Key"`) || strings.Contains(string(b), "  Which") {
+		t.Fatalf("the key leaks onto the wire: %.200s", b)
+	}
+}
+
 // An answer is capped like user text (head), never longer than MaxText.
 func TestQuestion_AnswerCap(t *testing.T) {
 	s := askStep(t, askInput(question("Q?", false, "A")), askResult(obj{"Q?": strings.Repeat("x", convmodel.MaxText+50)}))
