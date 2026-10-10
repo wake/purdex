@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.705] - 2026-10-11
+
+> daemon、CLI、SPA 與 mod 都有改：**要部署 daemon，並重跑 `pdx setup`**（mod 內的 pdx-team skill 說明更新）；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：`pdx msg send` 不再對其實已送達的訊息回報逾時 — #1009（#2593）
+
+- 跨主機送訊整條路的逾時改成由下往上推導、每層都比下游最壞情況多 2 秒（收件端 10 秒 → daemon 之間 12 秒 → 寄件端最壞 17 秒 → `pdx msg send` 19 秒）。之前上下游的逾時剛好相等，最慢的那次送達會被誤報成 `context deadline exceeded`，agent 看到失敗就重送，對方收到重複訊息。
+- 寄件端已把請求整個送出、但等不到對方回應時，改回 `delivery_uncertain`（可能已送達，不要重送），不再當成一般失敗；請求根本沒送出去才是失敗。
+- 舊版 `pdx msg send`（等 15 秒）對新版 daemon 仍可能在最壞情況下誤報，升級 CLI 即可。
+
+### Fixed：spawn 的 brief、report、task 訊息「可能沒送達」時會說出來 — #2595（#2598）
+
+- `pdx spawn` 的 brief、`pdx report`、`pdx task` 送出的訊息，以及 `pdx msg send`，遇到 `delivery_uncertain`（可能已送達、也可能沒有）或 daemon 的回應讀不懂時，會在 stderr 提示「不要重送，用 `pdx msg log --tail 10` 確認」。之前這三個指令丟掉回應，可能沒送達的訊息也被當成送達。exit code 不變（不重送，避免重複）。
+- pdx-team skill 補上這條規則：exit 1 或 uncertain 時先查審計紀錄，確認沒送出才手動補送。
+
+### Fixed：指揮台與聊天可以一路往上捲到最早的回合 — #2586（介面線）
+
+- 修正回歸：往上捲時不再停在中途載不到更早的回合；聊天分頁同樣修好。
+
+### Changed：字距 1px 只套用在中文 — #2596（介面線）
+
+- 指揮台內文的 1px 字距改成只對中文字元生效，英數與程式碼維持原本字距。
+
 ## [1.0.0-alpha.704] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
