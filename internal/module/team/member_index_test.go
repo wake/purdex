@@ -3,6 +3,7 @@ package teammod
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -393,5 +394,38 @@ func TestOneMemberIndex_AFailingBackstopLeavesNothingHalfDone(t *testing.T) {
 	defer s.Close()
 	if stateOf(t, s.db, "a1") != "active" || stateOf(t, s.db, "a2") != "active" {
 		t.Errorf("a1=%s a2=%s: a backstop that failed left rows half-resolved", stateOf(t, s.db, "a1"), stateOf(t, s.db, "a2"))
+	}
+}
+
+// attacker (incremental): in the one case the backstop cannot cure — a db already holding two active rows of a session that the
+// database itself refuses to update (a trigger) — the boot goes on with no unique index, and the application guard in insertMemberRowIn
+// is then the only line. It used to look at killing rows alone, so another active row for that session went in and the damage grew.
+// It now covers active as well. Mutation gate: killing only → red.
+func TestOneMemberIndex_WithNoIndexTheInsertGuardStillRefusesASecondActiveRow(t *testing.T) {
+	path := bareDB(t, [4]any{"a1", "sid-1", "active", 5}, [4]any{"a2", "sid-1", "active", 8}, [4]any{"a3", "sid-2", "active", 5})
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER refuse_gone BEFORE UPDATE ON team_members WHEN NEW.state = 'gone' BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("the boot must not fail: %v", err)
+	}
+	defer s.Close()
+	if _, ok := indexSQL(t, s.db, oldIndex); ok {
+		t.Fatal("test setup: the backstop made an index although the duplicates cannot be resolved")
+	}
+	for _, sid := range []string{"sid-1", "sid-2"} { // the damaged session and a healthy one
+		if err := s.InsertMember(newMember("dup-"+sid, "tm-1", sid, "_dup", 9)); !errors.Is(err, ErrSessionHeld) {
+			t.Errorf("a second active row for %s: %v, want ErrSessionHeld (no index is in force, so the guard is the line)", sid, err)
+		}
+	}
+	// a session nobody holds is still insertable
+	if err := s.InsertMember(newMember("fresh", "tm-1", "sid-9", "_fresh", 9)); err != nil {
+		t.Errorf("a free session was refused: %v", err)
 	}
 }

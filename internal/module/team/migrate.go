@@ -435,8 +435,10 @@ func swapOneMemberIndex(db *sql.DB) error {
 // half-resolved rows.
 //
 // What is left, stated: a db that is already inconsistent AND whose rows the database itself refuses to update (a trigger, a full
-// disk) — there the boot still goes on, with the loud log line below, and the seat is guarded by the application only
-// (insertMemberRowIn, the conflict checks) until the next boot tries again. The daemon's boot is never what fails.
+// disk). There the boot still goes on, with the loud log line below, and the seat is guarded by the application alone until the next
+// boot tries again: insertMemberRowIn refuses any new member row for a session that already has an active or killing one (so the
+// damage does not grow through an insert), while the transitions that turn an existing row active are not covered by it. The
+// daemon's boot is never what fails.
 func ensureSomeSeatIndex(db *sql.DB) {
 	definition := func(name string) string {
 		var q sql.NullString
@@ -450,7 +452,7 @@ func ensureSomeSeatIndex(db *sql.DB) {
 		return
 	}
 	fail := func(step string, err error) {
-		log.Printf("[team] migrate: NO unique index guards a session's seat and the backstop could not be made (%s): %v; the application guards are the only line until the next boot", step, err)
+		log.Printf("[team] migrate: NO unique index guards a session's seat and the backstop could not be made (%s): %v; the application guard (insertMemberRowIn) is the only line until the next boot", step, err)
 	}
 	tx, err := db.Begin()
 	if err != nil {
