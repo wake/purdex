@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -92,10 +93,24 @@ func selectBindIP() string {
 }
 
 // initPairing sets up the daemon's pairing mode based on config and flags.
-// Called before modules init and HTTP server start.
-func initPairing(c *core.Core, cfg *config.Config, cfgPath string, quick bool) {
+// Called before modules init and HTTP server start. A daemon never serves with an empty token: it pairs (quick) or
+// generates one (general). An error means it cannot — the caller must not start.
+func initPairing(c *core.Core, cfg *config.Config, cfgPath string, quick bool) error {
+	return initPairingTo(c, cfg, cfgPath, quick, os.Stdout, isTerminal(os.Stdout))
+}
+
+// isTerminal says whether f is a character device: a person's terminal, not a log file or a pipe.
+func isTerminal(f *os.File) bool {
+	st, err := f.Stat()
+	return err == nil && st.Mode()&os.ModeCharDevice != 0
+}
+
+// initPairingTo is initPairing writing its notices to out; tty says whether out is a terminal. A generated token is shown in
+// plaintext only to a terminal (the person starting the daemon in the foreground, who needs it to pair an App); to a log or a pipe
+// goes its fingerprint and where it is (#1950).
+func initPairingTo(c *core.Core, cfg *config.Config, cfgPath string, quick bool, out io.Writer, tty bool) error {
 	if cfg.Token != "" {
-		return
+		return nil
 	}
 
 	if quick {
@@ -112,7 +127,7 @@ func initPairing(c *core.Core, cfg *config.Config, cfgPath string, quick bool) {
 		// Generate pairing secret
 		secret := make([]byte, 3)
 		if _, err := rand.Read(secret); err != nil {
-			log.Fatalf("generate pairing secret: %v", err)
+			return fmt.Errorf("generate pairing secret: %w", err)
 		}
 		c.CfgMu.Lock()
 		c.PairingSecret = hex.EncodeToString(secret)
@@ -121,23 +136,36 @@ func initPairing(c *core.Core, cfg *config.Config, cfgPath string, quick bool) {
 
 		ip := net.ParseIP(cfg.Bind).To4()
 		code := pairing.EncodePairingCode(ip, uint16(cfg.Port), secret)
-		fmt.Printf("\n配對碼: %s\n\n", code)
-	} else {
-		// General mode: generate token and persist to config file
-		tokenBytes := make([]byte, 20)
-		if _, err := rand.Read(tokenBytes); err != nil {
-			log.Fatalf("generate token: %v", err)
-		}
-		token := "purdex_" + hex.EncodeToString(tokenBytes)
-		cfg.Token = token
-		c.CfgMu.Lock()
-		c.Cfg.Token = token
-		c.CfgMu.Unlock()
-		if err := config.WriteFile(cfgPath, *cfg); err != nil {
-			log.Printf("persist generated token: %v", err)
-		}
-		c.Pairing.Set(core.StatePending)
-
-		fmt.Printf("\nToken: %s\n\n", token)
+		fmt.Fprintf(out, "\n配對碼: %s\n\n", code)
+		return nil
 	}
+
+	// General mode: generate a token and persist it to the config file.
+	tokenBytes := make([]byte, 20)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return fmt.Errorf("generate token: %w", err)
+	}
+	token := "purdex_" + hex.EncodeToString(tokenBytes)
+	if err := persistGeneratedToken(cfgPath, token); err != nil {
+		// Not served on a token no client can learn (the next start would make another): the runtime state is untouched.
+		return fmt.Errorf("the daemon has no token and cannot write one to %s (%v); make that file writable, or give it a token yourself with `pdx token generate --config %s`", cfgPath, err, cfgPath)
+	}
+	cfg.Token = token
+	c.CfgMu.Lock()
+	c.Cfg.Token = token
+	c.CfgMu.Unlock()
+	c.Pairing.Set(core.StatePending)
+
+	if tty {
+		fmt.Fprintf(out, "\nToken: %s\n\n", token)
+	} else {
+		fmt.Fprintf(out, "\nToken generated (fingerprint %s); it is in %s (mode 0600)\n\n", config.TokenFingerprint(token), cfgPath)
+	}
+	return nil
+}
+
+// persistGeneratedToken writes token into the config file as the FILE has it, not the in-memory config (a --bind / --port
+// override is not made permanent): config.SetToken edits that one line under a file lock, keeping every other byte.
+func persistGeneratedToken(cfgPath, token string) error {
+	return config.SetToken(cfgPath, token)
 }

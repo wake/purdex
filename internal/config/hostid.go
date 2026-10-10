@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -82,15 +83,35 @@ func randomCode(n int) string {
 
 // WriteFile serialises the config to TOML and writes it to the given path atomically.
 func WriteFile(path string, cfg Config) error {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+		return err
+	}
+	return writeFileAtomic(path, buf.Bytes())
+}
+
+// writeFileAtomic writes data to path through a temp file of its own in the same directory (a fixed name would be shared by two
+// concurrent writers), mode 0600, flushed before the rename that publishes it.
+func writeFileAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
+	tmp := f.Name()
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
 		f.Close()
 		os.Remove(tmp)
 		return err
@@ -99,5 +120,9 @@ func WriteFile(path string, cfg Config) error {
 		os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
