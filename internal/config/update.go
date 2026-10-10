@@ -57,6 +57,9 @@ func canonPath(path string) string {
 	return abs
 }
 
+// afterCanon is a test seam: called once WithLock has resolved its path, before it waits for the lock.
+var afterCanon func()
+
 // WithLock runs fn holding the exclusive lock every writer of the config file at path takes (waiting at most LockWait). A
 // caller that holds other locks of its own (the daemon's CfgMu) takes this one FIRST, so waiting for another process never
 // holds them; inside fn it writes with UpdateChangedHeld. fn is given the path that was locked (the config's canonical name,
@@ -64,6 +67,9 @@ func canonPath(path string) string {
 // elsewhere. Not reentrant: a nested WithLock/Update on the same file waits out LockWait and fails.
 func WithLock(path string, fn func(locked string) error) error {
 	locked := canonPath(path)
+	if afterCanon != nil {
+		afterCanon()
+	}
 	return withFileLock(locked, func() error { return fn(locked) })
 }
 

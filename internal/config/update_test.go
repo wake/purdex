@@ -304,6 +304,9 @@ func TestWithLock_WritesThePathItLocked(t *testing.T) {
 	defer hold.Close()
 	require.NoError(t, syscall.Flock(int(hold.Fd()), syscall.LOCK_EX))
 
+	resolved := make(chan struct{})
+	afterCanon = func() { close(resolved) }
+	defer func() { afterCanon = nil }()
 	done := make(chan error, 1)
 	var lockedPath string
 	go func() {
@@ -316,7 +319,7 @@ func TestWithLock_WritesThePathItLocked(t *testing.T) {
 			return err
 		})
 	}()
-	time.Sleep(100 * time.Millisecond) // the writer is waiting for a.toml.lock
+	<-resolved // the writer has resolved the link to a.toml and is about to wait for a.toml.lock
 	require.NoError(t, os.Remove(link))
 	require.NoError(t, os.Symlink(b, link)) // retargeted
 	require.NoError(t, syscall.Flock(int(hold.Fd()), syscall.LOCK_UN))
