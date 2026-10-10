@@ -17,6 +17,9 @@ var LockWait = 5 * time.Second
 // ErrLockTimeout: another writer held "<path>.lock" for the whole LockWait.
 var ErrLockTimeout = errors.New("config lock: still held")
 
+// CanonicalPath is the name every writer of the config file at path uses for it (see canonPath).
+func CanonicalPath(path string) string { return canonPath(path) }
+
 // canonPath is the one name every writer uses for a config file: absolute, with symlinks resolved (the file itself if it
 // exists, else its nearest resolvable directory), so two names of one file name one lock file and a symlinked config stays a
 // symlink — the write goes to what it points at. Known limit: a config reached through a dangling symlink whose target holds

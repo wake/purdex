@@ -308,7 +308,7 @@ func TestOpenConfigGate_AHandedOverRunLockStartsDespiteABusyConfigLock(t *testin
 	require.NotNil(t, run, "the inherited run lock was not adopted")
 	defer run.Close()
 	require.Equal(t, 7860, cfg.Port)
-	require.Contains(t, strings.Join(logs, "\n"), "adopted from the previous image")
+	require.Contains(t, strings.Join(logs, "\n"), "on the inherited run lock")
 	held, err := config.RunLockHeld(locked)
 	require.NoError(t, err)
 	require.True(t, held)
