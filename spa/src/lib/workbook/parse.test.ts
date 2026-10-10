@@ -83,6 +83,17 @@ describe('parseTodo / todo lists', () => {
   it.each([['id', { id: 0 }], ['state', { state: 'x' }], ['title', { title: 3 }], ['time', { created_at: -1 }]])('rejects a bad %s', (_n, over) => {
     expect(typeof parseTodo(wireTodo(over))).toBe('string')
   })
+  it('entry-id fields: 0 is "none" (the daemon sends closed_entry_id 0 while open); fractions, negatives, NaN and strings are malformed', () => {
+    expect(parseTodo(wireTodo({ added_entry_id: 0, closed_entry_id: 0 }))).toMatchObject({ addedEntryId: 0, closedEntryId: 0 })
+    for (const k of ['added_entry_id', 'closed_entry_id']) {
+      for (const bad of [1.5, -1, NaN, Infinity, '3', 2 ** 60]) expect(typeof parseTodo(wireTodo({ [k]: bad }))).toBe('string')
+    }
+  })
+  it('usage counts are non-negative safe integers', () => {
+    for (const bad of [1.5, -1, NaN, '3', 2 ** 60]) expect(typeof parseEntry(wireEntry({ usage: { in: bad } }))).toBe('string')
+    expect(typeof parseEntry(wireEntry({ usage: { cache_read: 0.5 } }))).toBe('string')
+    expect(parseEntry(wireEntry({ usage: { in: 0, out: 3 } }))).toMatchObject({ usage: { in: 0, out: 3 } })
+  })
   it('drops a malformed todo from a list and warns once', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(parseTodos([wireTodo({ id: 1 }), wireTodo({ id: 2, state: 'x' }), wireTodo({ id: 3, state: 'y' })]).map((t) => t.id)).toEqual([1])

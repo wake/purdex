@@ -10,6 +10,8 @@ const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !
 const isStr = (v: unknown): v is string => typeof v === 'string'
 const isMs = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 const isId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
+/** A count or an optional entry-id reference: a non-negative safe integer (0 = none, as the daemon sends closed_entry_id while open). */
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 const STATES: readonly string[] = ['pending', 'ok', 'failed', 'skipped']
 const KINDS: readonly string[] = ['turn', 'refresh']
 const TODO_STATES: readonly string[] = ['open', 'done', 'dropped']
@@ -27,7 +29,7 @@ function parseUsage(v: unknown): Usage | string {
   if (v === undefined || v === null) return { in: 0, out: 0, cacheRead: 0 }
   if (!isRec(v)) return 'entry.usage is not an object'
   for (const k of ['in', 'out', 'cache_read']) {
-    if (v[k] !== undefined && !isMs(v[k])) return `entry.usage.${k} is not a count`
+    if (v[k] !== undefined && !isCount(v[k])) return `entry.usage.${k} is not a count`
   }
   return { in: (v.in as number | undefined) ?? 0, out: (v.out as number | undefined) ?? 0, cacheRead: (v.cache_read as number | undefined) ?? 0 }
 }
@@ -67,7 +69,7 @@ export function parseTodo(v: unknown): WorkbookTodo | string {
     if (v[k] !== undefined && !isStr(v[k])) return `todo.${k} is not a string`
   }
   for (const k of ['added_entry_id', 'closed_entry_id']) {
-    if (v[k] !== undefined && !isMs(v[k])) return `todo.${k} is not an id`
+    if (v[k] !== undefined && !isCount(v[k])) return `todo.${k} is not an entry id`
   }
   return {
     id: v.id, title: v.title, state: v.state as TodoState, detail: (v.detail as string | undefined) ?? '', closedBy: (v.closed_by as string | undefined) ?? '',
