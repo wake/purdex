@@ -26,7 +26,7 @@ export interface ScrollMemo {
   scrollTop: number
   atBottom: boolean
   /** The view that wrote it: only that view can reuse `scrollTop` and the anchor's offset. */
-  view: 'room' | 'chat'
+  view: 'room' | 'chat' | 'deck'
   /** The first turn (`data-turn-index`) still on screen — both views share the index. */
   firstTurn: number | null
   /** Absent when nothing anchorable was on screen. */

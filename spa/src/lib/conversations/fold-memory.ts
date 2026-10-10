@@ -39,6 +39,11 @@ export function forgetFolds(paneId: string): void {
   listeners.get(paneId)?.forEach((fn) => fn())
 }
 
+/** Forget every fold of a pane, whatever session it was bound to (the memory key is `${paneId}\0${sessionId}`). */
+export function forgetFoldsOfPane(paneId: string): void {
+  for (const key of [...panes.keys()]) if (key.startsWith(`${paneId}\0`)) forgetFolds(key)
+}
+
 function subscribe(paneId: string, fn: () => void): () => void {
   let set = listeners.get(paneId)
   if (!set) { set = new Set(); listeners.set(paneId, set) }
