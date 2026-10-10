@@ -21,6 +21,15 @@ const (
 	handoffEffortLabel = "purdex.effort"
 )
 
+// modelNameRE is nexen's rule for a model argument (store.ValidateModel, v0.21.0): an alias or a full id as Claude Code reports
+// it — Anthropic ids, Bedrock ids (':' and inference-profile ARNs with '/'), Vertex ids ('@') — optionally ending in [1m]. It
+// starts with an alphanumeric, so it is never a flag, and has no quote, space or shell character, so it is one argv word and safe
+// single-quoted on a command line. team.ValidModel is narrower on purpose (it also guards the member launch line, U20) and is
+// left alone; this module keeps its own guard aligned with the library it hands the value to.
+var modelNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,159}(\[1m\])?$`)
+
+func validModel(s string) bool { return modelNameRE.MatchString(s) }
+
 // sessionReading is the model id and effort level of a session, "" for what is not known.
 type sessionReading struct{ Model, Effort string }
 
@@ -30,7 +39,7 @@ var resumeIDRE = regexp.MustCompile(`(?:^|\s)(?:--resume|-r)(?:\s+|=)\{id\}`)
 
 // applySessionFlags returns the resume template with the reading's flags after the session id of its `--resume {id}`. A template
 // without one (codex, opencode, a wrapper that takes the id another way) is not ours to change. A flag the template already has
-// stays the user's; a value that is not safe on a command line (team.ValidModel / ValidEffort) is not used.
+// stays the user's; a value that is not safe on a command line (validModel / team.ValidEffort) is not used.
 func applySessionFlags(template string, r sessionReading) string {
 	locs := resumeIDRE.FindAllStringIndex(template, 2)
 	if len(locs) != 1 || !simpleCommand(template) {
@@ -39,7 +48,7 @@ func applySessionFlags(template string, r sessionReading) string {
 	loc := locs[0]
 	words := strings.Fields(template)
 	var add string
-	if r.Model != "" && team.ValidModel(r.Model) && !hasFlag(words, "--model") {
+	if r.Model != "" && validModel(r.Model) && !hasFlag(words, "--model") {
 		add += " --model '" + r.Model + "'" // single-quoted: "[1m]" would glob unquoted (as the member launch line does)
 	}
 	if r.Effort != "" && team.ValidEffort(r.Effort) && !hasFlag(words, "--effort") {
@@ -70,12 +79,12 @@ func hasFlag(words []string, name string) bool {
 }
 
 // readingOf is the session's reading: the execution's labels (JSON text, "" when there is no execution) first, then the
-// statusline's last reading, each field on its own; only values that pass team.ValidModel / ValidEffort.
+// statusline's last reading, each field on its own; only values that pass validModel / team.ValidEffort.
 func (m *Module) readingOf(sid, labelsJSON string) sessionReading {
 	var r sessionReading
 	var labels map[string]string
 	if labelsJSON != "" && json.Unmarshal([]byte(labelsJSON), &labels) == nil {
-		if v := labels[handoffModelLabel]; team.ValidModel(v) {
+		if v := labels[handoffModelLabel]; validModel(v) {
 			r.Model = v
 		}
 		if v := labels[handoffEffortLabel]; team.ValidEffort(v) {
@@ -87,7 +96,7 @@ func (m *Module) readingOf(sid, labelsJSON string) sessionReading {
 	}
 	if reader, ok := m.owners.(agent.ContextUsageReader); ok {
 		if u, found := reader.ContextUsage(sid); found {
-			if r.Model == "" && team.ValidModel(u.ModelID) {
+			if r.Model == "" && validModel(u.ModelID) {
 				r.Model = u.ModelID
 			}
 			if r.Effort == "" && team.ValidEffort(u.Effort) {

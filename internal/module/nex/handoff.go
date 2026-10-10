@@ -338,6 +338,9 @@ func (m *Module) handleNexHandoff(w http.ResponseWriter, r *http.Request) {
 		Origin:          handoffOrigin(m.opts.Config.HostID, code),
 		Labels:          handoffLabels(code, owner.SessionID, reading),
 		ResumeSessionID: owner.SessionID,
+		// U18: every turn of the worker starts with the model and effort the session had (nexen v0.21.0); "" leaves the flag off.
+		Model:  reading.Model,
+		Effort: reading.Effort,
 		// 0 (absent) leaves it unset: a request that never asked waits forever.
 		PermissionTimeoutS: permissionTimeout,
 	}
