@@ -254,3 +254,25 @@ P2 (mod tests, `register` harness):
 - The lead does not read the notice in time → the ask expires; accepted by D4.
 - Notice volume: at most three asks per conversation (70 / 80 / 90%); a retried notice is the same ask.
 - A notice delivered late (after retries) leaves the lead less than five minutes; the text says how many.
+
+## 11. Follow-up (#2439, 2026-10-10): a long turn, and a member that never answers
+
+The ask makes "the lead approves, the relay happens at the member's next turn boundary" the normal path, so the relay
+timeouts (`relay_timeouts.go`) have to survive a long turn and explain a blocked one. Designed by 1f; the rules, for a
+member op in `requested`:
+
+| Situation | Rule |
+|---|---|
+| Never seen (no `seen_at`) 60 s after it entered `requested` | fail `member_unseen`; `member_blocked` if the agent status is `waiting` |
+| Seen, no agent status for the member | as before: `member_unresponsive` 15 min after `seen_at` |
+| Seen, the member is in a turn (`running`, or `waiting` on a prompt) | keep waiting up to `RelayBusyCapS` = 60 min after `seen_at`; **once** at `RelayStallTimeoutS` = 15 min the lead gets `RelayBusyNoticeFmt` (`noticeToLead`); at the cap fail `member_busy_timeout` (`member_blocked` if `waiting`) |
+| Seen, the member is idle (its turn ended) and the op is still unclaimed `RelayIdleGraceS` = 2 min after the daemon first saw it idle | fail `member_unresponsive` (the mod did not claim) |
+
+Notes. The agent status is read as `noticeUsage` reads it (`AgentStatus(tmux)`): `running`, `waiting`, `idle`, and
+`error` (treated like idle); a `clear` leaves no reading (the agent module drops it), so it is "unknown" and the old
+15 minute rule applies. A store error while looking the member up skips that sweep: it is no verdict. `waiting` is a prompt that needs a person (a permission, a question); a dialog the
+agent never reports (such as "Mods: Enable hot reloading?") shows as an unseen op with whatever status the session had, so
+`member_unseen`'s message names that case. The idle count and the once-only mark of the 15 minute notice are in memory
+(a restart gives the mod another two minutes and can repeat the notice once). The failures are reported to the lead by the
+usual failure notice; the CLI keeps exit 14 for all of them and prints the reason on stderr. `pdx relay --wait` that runs out
+while the op is `seen` / `requested` exits 0 with the op printed: it will happen at the member's turn end.

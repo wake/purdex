@@ -56,13 +56,19 @@ const (
 	MinMemberRelayModVersion = 2                         // the mod ↔ daemon protocol version that handles the control message
 	RelayControlPrefix       = "[pdx-relay:control] op=" // the control message's text prefix, then the op id
 	RelayClaimTimeoutS       = 60                        // unseen request → member_unresponsive (P6-4b)
-	RelayStallTimeoutS       = 900                       // no progress after the claim
+	RelayStallTimeoutS       = 900                       // no progress after the claim; also: a seen op whose member has run one turn this long gets the lead's one notice (#2439)
+	RelayBusyCapS            = 3600                      // a seen, unclaimed op waits at most this long after seen_at for a running turn to end (#2439)
+	RelayIdleGraceS          = 120                       // a seen op whose member is idle (its turn ended) and still unclaimed this long → member_unresponsive (#2439)
 )
 
 // RelayCreateResponse is POST /api/team/relays' body: 201 for a new op, 200 for a replay of the same id.
 type RelayCreateResponse struct {
 	Op RelayOp `json:"op"`
 }
+
+// RelayBusyNoticeFmt is the lead's one notice when a seen member relay has waited RelayStallTimeoutS for a running turn:
+// it takes the member's address and bare ref. The 15 and the 45 are RelayStallTimeoutS and RelayBusyCapS minus it.
+const RelayBusyNoticeFmt = "[pdx team] member %s [%s] 這一輪已跑 15 分鐘，接力會在它的回合結束時進行（最多再等 45 分鐘）"
 
 // MemberRelayPayload is Approval.Payload for KindMemberRelay: the text of the card that asks a person to approve a
 // member's relay when the lead's pool is spent out. Nothing in it is trusted at approve.

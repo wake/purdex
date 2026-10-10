@@ -33,7 +33,7 @@ func TestSweep_UnseenRequested60sFails(t *testing.T) {
 	}
 	f.clock.Add(1_000)
 	f.sweepTimeouts()
-	if got := f.op(op.ID); got.State != team.RelayFailed || got.Reason != team.RelayReasonMemberUnresponsive {
+	if got := f.op(op.ID); got.State != team.RelayFailed || got.Reason != team.RelayReasonMemberUnseen {
 		t.Fatalf("after 60 s: %+v", got)
 	}
 	waitFor(t, func() bool { return len(f.leadNotices()) == 1 })
@@ -64,7 +64,7 @@ func TestSweep_AnOpApprovedNineMinutesLateGetsItsOwnSixtySeconds(t *testing.T) {
 	}
 	f.clock.Add(61_000)
 	f.sweepTimeouts()
-	if got := f.op(op.ID); got.State != team.RelayFailed || got.Reason != team.RelayReasonMemberUnresponsive {
+	if got := f.op(op.ID); got.State != team.RelayFailed || got.Reason != team.RelayReasonMemberUnseen {
 		t.Fatalf("60 s after the entry: %+v", got)
 	}
 }
