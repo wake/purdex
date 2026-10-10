@@ -90,7 +90,7 @@ The daemon's normalizer (`internal/convmodel/ccnorm`, U1-4) is what both apps re
 | U3-2 | SPA | §7 input: send with the safeguards, queued messages, interrupt, `/` `!` blocking, draft memory |
 | U3-3 | SPA | §5 chat + the right panel (also used by the deck's 「顯示全部」 and subagents); the shared turn-row fixture with iOS |
 | U3-4 | SPA | §7 dock (questions, P8a) + the terminal view's 「● 等你回答」 strip |
-| U3-5 | SPA | the status row of design doc §7 (state · model · effort · context / 5 h / 7 d rings by today's ring rules · cost; a click opens the right panel) — **a real SPA prototype shown to the user first**, then built |
+| U3-5 | SPA | the status row of design doc §7 (state · model · effort · context / 5 h / 7 d rings by today's ring rules · cost; a click opens the right panel) — **a real SPA prototype shown to the user first**, then built. **Decided: scheme A, one full row; number semantics follow the Mac status bar today *(user 2026-10-10)*:** the context ring draws what is **used** and its number shows what is **remaining** (93 % used → red ring, 「7%」); the 5 h and 7 d rings and numbers both show what is **remaining**; colour always follows the used share (70 / 90). This is `remainingPct` in `lib/usage-display.ts`, not "everything used" as design doc §7 first wrote it. A usage item is a tooltip only (it opens no panel). A missing value reads 「—」, never 0 %. |
 
 U3-1 and U3-2 together make the deck usable day to day; the user tries it from there.
 
