@@ -497,6 +497,40 @@ func (f *FakeExecutor) KillSessionIfInstance(sessionID, expectedInstance string)
 	return false, fmt.Errorf("kill-session %s: %w", sessionID, ErrNoSession)
 }
 
+// KillSessionIfTagged models the real contract: generation and tag are compared where the kill happens (here, under the fake's
+// lock), a value that is no spawn op id is refused, a decline touches nothing. Every call is recorded with the instance check.
+func (f *FakeExecutor) KillSessionIfTagged(sessionID, expectedInstance, option, value string) (bool, error) {
+	if !userOptionPattern.MatchString(option) {
+		return false, fmt.Errorf("tmux kill-session: %q is not a user option name", option)
+	}
+	if !spawnOpValuePattern.MatchString(value) {
+		return false, fmt.Errorf("tmux kill-session: %q is not a spawn op id", value)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.killIfInstanceCalls = append(f.killIfInstanceCalls, KillIfInstanceCall{SessionID: sessionID, Expected: expectedInstance})
+	if f.FailKillIfInstance {
+		return false, fmt.Errorf("kill-session: simulated failure")
+	}
+	if expectedInstance == "" || expectedInstance != f.instance {
+		return false, nil
+	}
+	for i, name := range f.sessionOrder {
+		s, ok := f.sessions[name]
+		if !ok || s.ID != sessionID {
+			continue
+		}
+		if f.tags[name][option] != value {
+			return false, nil
+		}
+		delete(f.sessions, name)
+		delete(f.tags, name)
+		f.sessionOrder = append(f.sessionOrder[:i], f.sessionOrder[i+1:]...)
+		return true, nil
+	}
+	return false, fmt.Errorf("kill-session %s: %w", sessionID, ErrNoSession)
+}
+
 // KillIfInstanceCalls returns every KillSessionIfInstance call so far.
 func (f *FakeExecutor) KillIfInstanceCalls() []KillIfInstanceCall {
 	f.mu.Lock()

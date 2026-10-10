@@ -29,6 +29,7 @@ type tmuxOps interface {
 	ListSessions(ctx context.Context) ([]tmux.TmuxSession, error)
 	SendKeysIfInstanceTarget(sessionID, window, expectedInstance string, keys ...string) (bool, error)
 	KillSessionIfInstance(sessionID, expectedInstance string) (bool, error)
+	KillSessionIfTagged(sessionID, expectedInstance, option, value string) (bool, error)
 }
 
 // initSpawn resolves the runner's seams. Each service is a hard error, as
