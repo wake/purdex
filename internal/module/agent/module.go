@@ -34,6 +34,7 @@ type Module struct {
 	events    *store.AgentEventStore
 	frames    *store.FramesStore
 	traces    *store.TraceStore
+	usage     *store.ContextUsageStore // persisted statusline readings (#2406); nil without an events DB
 	sessions  session.SessionProvider
 	registry  *agentpkg.Registry
 	uploadDir string
@@ -94,6 +95,12 @@ type Module struct {
 	// snapshotMu. usageSeq breaks eviction ties within one millisecond.
 	contextUsage map[string]ContextUsage
 	usageSeq     int64
+	// Persistence of contextUsage (#2406), also under snapshotMu: usageDirty holds the sessions whose reading must be
+	// written at the next flush, usageDeleted the ones evicted since (their rows go), usagePersistedAt the At each
+	// session's row holds (an unchanged value is rewritten only when that At is older than usageRefreshAfter).
+	usageDirty       map[string]struct{}
+	usageDeleted     map[string]struct{}
+	usagePersistedAt map[string]int64
 
 	// testObservers: per-nonce channel for the statusline self-test endpoint.
 	// Guarded by testMu (separate from snapshotMu and mu so test traffic
@@ -107,6 +114,10 @@ type Module struct {
 
 	sweepCancel context.CancelFunc
 	sweepWG     sync.WaitGroup
+
+	// usageCancel / usageWG run and join the context-usage flusher (#2406).
+	usageCancel context.CancelFunc
+	usageWG     sync.WaitGroup
 
 	pathHintDedup  *PathHintDedupCache
 	pathHintBuffer *PathHintRingBuffer
@@ -143,6 +154,7 @@ var (
 func New(events *store.AgentEventStore) (*Module, error) {
 	var frames *store.FramesStore
 	var traces *store.TraceStore
+	var usage *store.ContextUsageStore
 	if events != nil {
 		var err error
 		frames, err = framesInitFn(events)
@@ -154,11 +166,16 @@ func New(events *store.AgentEventStore) (*Module, error) {
 			log.Printf("[agent] traces store unavailable, continuing without trace observability: %v", err)
 			traces = nil
 		}
+		if usage, err = events.ContextUsage(); err != nil {
+			log.Printf("[agent] context usage persistence unavailable, readings stay in memory only: %v", err)
+			usage = nil
+		}
 	}
 	m := &Module{
 		events:             events,
 		frames:             frames,
 		traces:             traces,
+		usage:              usage,
 		registry:           agentpkg.NewRegistry(),
 		currentStatus:      make(map[string]agentpkg.Status),
 		subagents:          make(map[string][]agentpkg.SubagentRef),
@@ -167,6 +184,9 @@ func New(events *store.AgentEventStore) (*Module, error) {
 		activeProbeIntents: make(map[string]map[agentpkg.ProbeIntentKind]activeIntent),
 		statusSnapshots:    make(map[string]statusSnapshot),
 		contextUsage:       make(map[string]ContextUsage),
+		usageDirty:         make(map[string]struct{}),
+		usageDeleted:       make(map[string]struct{}),
+		usagePersistedAt:   make(map[string]int64),
 		testObservers:      make(map[string]*testObserver),
 		pathHintDedup:      NewPathHintDedupCache(5 * time.Second),
 		pathHintBuffer:     NewPathHintRingBuffer(200),
@@ -362,6 +382,10 @@ func (m *Module) Start(_ context.Context) error {
 			m.probeIntentDisp.replayStatus()
 		}
 	})
+	// Outside the step timer, whose line is a fixed set (#1767): the persisted statusline readings come back for the
+	// sessions that are live, then the flusher starts (#2406).
+	m.restoreContextUsage(context.Background())
+	m.startContextUsageFlush()
 	log.Printf("[agent] start: %s", st)
 	log.Print(startExecLine(execBase))
 
@@ -388,6 +412,11 @@ func (m *Module) getUploadDir() string {
 // Stop cancels all active Activity watchers and resets transient state.
 func (m *Module) Stop(_ context.Context) error {
 	m.stopModLights()
+	if m.usageCancel != nil { // the flusher writes the readings it still holds as it ends
+		m.usageCancel()
+		m.usageWG.Wait()
+		m.usageCancel = nil
+	}
 	if m.sweepCancel != nil {
 		m.sweepCancel()
 		m.sweepWG.Wait()

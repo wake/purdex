@@ -1104,7 +1104,15 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 			m.statusSnapshots = make(map[string]statusSnapshot)
 			// a removed statusline must not leave a stale CTX on the peer rows (codex R2, 2026-10-07)
 			m.contextUsage = make(map[string]ContextUsage)
+			m.usageDirty = make(map[string]struct{})
+			m.usageDeleted = make(map[string]struct{})
+			m.usagePersistedAt = make(map[string]int64)
 			m.snapshotMu.Unlock()
+			if m.usage != nil {
+				if err := m.usage.DeleteAll(); err != nil {
+					log.Printf("[agent] clear persisted context usage: %v", err)
+				}
+			}
 			if m.core != nil {
 				m.core.Events.Broadcast("", "agent.status.cleared", `{"agent_type":"cc"}`)
 			}

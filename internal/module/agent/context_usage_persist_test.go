@@ -3,10 +3,17 @@ package agent
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	agentcc "github.com/wake/purdex/internal/agent/cc"
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/store"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // #2406: the last statusline reading of each CC session survives a daemon restart (it is reported again only when the
@@ -150,5 +157,65 @@ func TestContextUsagePersist_WritesAreCoalesced(t *testing.T) {
 	m.recordContextUsage(statusline("S", 35, "m"))
 	if n := m.flushContextUsage(); n != 1 {
 		t.Fatalf("an unchanged value with a stale At wrote %d rows, want 1", n)
+	}
+}
+
+// Stop writes what the flusher still holds, and Start brings it back for a live session: the daemon's own lifecycle, not
+// only the two helpers.
+func TestContextUsagePersist_StopFlushesAndStartRestores(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.db")
+	a := moduleOn(t, path)
+	newTestModule(t)
+	seedRootWithIdentity(t, a, "%1", "cc", 101, "st-101", "S")
+	withLivePids(t, map[int]string{101: "st-101"})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	a.recordContextUsage(statusline("S", 44, "m"))
+	if err := a.Stop(context.Background()); err != nil { // before any 10 s tick
+		t.Fatal(err)
+	}
+
+	b := moduleOn(t, path)
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { b.Stop(context.Background()) })
+	if u, ok := b.ContextUsage("S"); !ok || u.UsedPercentage == nil || *u.UsedPercentage != 44 {
+		t.Fatalf("after Stop → Start: %+v ok=%v", u, ok)
+	}
+}
+
+// Removing the statusline wipes the persisted readings too: a stale one must not come back at the next boot.
+func TestContextUsagePersist_RemovingTheStatuslineDropsThePersistedRows(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"),
+		[]byte(`{"statusLine":{"type":"command","command":"/opt/bin/pdx statusline-proxy"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
+	m.recordContextUsage(statusline("S", 44, "m"))
+	m.flushContextUsage()
+	if rows, _ := m.usage.LoadAll(); len(rows) != 1 {
+		t.Fatalf("persisted rows = %d, want 1", len(rows))
+	}
+	req := httptest.NewRequest("POST", "/api/agent/cc/statusline/setup", strings.NewReader(`{"action":"remove"}`))
+	req.SetPathValue("agent", "cc")
+	w := httptest.NewRecorder()
+	m.handleStatuslineSetup(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if rows, _ := m.usage.LoadAll(); len(rows) != 0 {
+		t.Fatalf("persisted rows after the removal = %+v, want none", rows)
+	}
+	if _, ok := m.ContextUsage("S"); ok {
+		t.Fatal("the in-memory reading stayed")
 	}
 }
