@@ -2,9 +2,10 @@
 // pane holds (`useConversationOfPane`, mounted by SessionPaneContent for every view) as the chat, or why it cannot be read,
 // or the loading moment. The twin of DeckPane: same states, the chat's own wording (UnreadableState). Takes focus when the
 // pane switches to it (the input first), and hands its footer the same context the deck does.
-import { useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { useActivationFocus } from '../../hooks/useActivationFocus'
 import type { PaneConversation, PaneConversationUnreadable } from '../../hooks/useConversationOfPane'
+import { useConversationStore } from '../../stores/useConversationStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { ChatHeader } from './ChatHeader'
 import { ChatView } from './ChatView'
@@ -37,6 +38,10 @@ export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget,
   const doc = ready?.entry?.doc
   const items = useMemo(() => (doc ? doc.turns.flatMap((x) => x.items) : []), [doc])
 
+  const hostId = ready?.hostId
+  const sessionId = ready?.sessionId
+  const onLoadOlder = useCallback(() => { if (hostId && sessionId) void useConversationStore.getState().loadBefore(hostId, sessionId) }, [hostId, sessionId])
+
   const frame = (reason: UnreadableReason, onRetry?: () => void) => (
     <div data-testid="chat-view" className="flex h-full min-h-0 flex-col">
       <ChatHeader title={title} status="unknown" />
@@ -58,7 +63,7 @@ export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget,
     const { entry } = ready
     body = (
       <ChatView paneKey={paneId} hostId={ready.hostId} sessionId={ready.sessionId} title={entry.doc.header?.title || title}
-        status={entry.doc.header?.status ?? 'unknown'} turns={entry.doc.turns} onSwitchToTerminal={onSwitchToTerminal}
+        status={entry.doc.header?.status ?? 'unknown'} turns={entry.doc.turns} hasMoreBefore={entry.doc.hasMoreBefore} paging={entry.paging} generation={entry.doc.generation} onLoadOlder={onLoadOlder} onSwitchToTerminal={onSwitchToTerminal}
         input={footer?.(footerContext(paneId, ready.hostId, ready.sessionId, entry.doc, items, onSwitchToTerminal))}
         active={isActive && isFocusTarget} />
     )

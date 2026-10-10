@@ -75,7 +75,7 @@
 // worker pane's transcript keys it by pane *and* execution
 // (ExecutionView), since a handoff / take-back can swap a pane's content to
 // a different execution while keeping its paneId.
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref, type UIEvent } from 'react'
 import { readScrollMemo, writeScrollMemo, SCROLL_ANCHOR_CLASS, type ScrollAnchor, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'
 
 /** Within this many pixels of the end counts as the bottom (sub-pixel rounding, a last line's margin). */
@@ -100,6 +100,8 @@ export interface TranscriptScroll {
   release: () => void
   /** Content above the reader changed height by `delta` (the prelude): keep what is on screen where it is. */
   shiftBy: (delta: number) => void
+  /** The first placement has happened (state: callers that wait for it re-render when it does). */
+  placed: boolean
 }
 
 /** What a transcript hands its `scrollControl` ref (the search bar's handle). */
@@ -204,6 +206,7 @@ export function useTranscriptScroll(
   const atBottom = useRef(true)
   const lastTop = useRef(0)
   const scrolled = useRef(false)
+  const [placed, setPlaced] = useState(false)
   // The scrollTop a `release()` left, until the reader moves off it.
   const released = useRef<number | null>(null)
   // Set while a smooth scroll `follow` started is on its way down.
@@ -398,6 +401,7 @@ export function useTranscriptScroll(
       }
       if (waitTimer.current) { clearTimeout(waitTimer.current); waitTimer.current = null }
       scrolled.current = true
+      setPlaced(true)
       // Mounted under an open search bar (a view switch): the bar places
       // the reader — at the current match, or the bottom — not this (R1-1).
       if (holding.current) return
@@ -463,5 +467,5 @@ export function useTranscriptScroll(
     remember(el)
   }, [remember])
 
-  return useMemo(() => ({ attach, onScroll: observe, follow, release, shiftBy }), [attach, observe, follow, release, shiftBy])
+  return useMemo(() => ({ attach, onScroll: observe, follow, release, shiftBy, placed }), [attach, observe, follow, release, shiftBy, placed])
 }
