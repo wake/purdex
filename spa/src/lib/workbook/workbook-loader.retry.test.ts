@@ -49,6 +49,35 @@ describe('roster seat first-load retry', () => {
     expect(askedLead()).toBe(4)
   })
 
+  it('once the retries are spent, later roster / support / host updates do not ask that seat again', async () => {
+    fetchConversation.mockRejectedValue(new Error('offline'))
+    stop = startWorkbookLoader()
+    roster([team()])
+    await tick(7000)
+    expect(askedLead()).toBe(4)
+    roster([team(['m1'])]) // a roster frame
+    useWorkbookStore.setState((s) => ({ support: { ...s.support, h1: { v1: true, v2: false } } })) // a support update (new object)
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } }) // a host update
+    await tick(60000)
+    expect(askedLead()).toBe(4)
+  })
+
+  it('the budget is given again when the seat leaves and returns, or on a new connection generation', async () => {
+    fetchConversation.mockRejectedValue(new Error('offline'))
+    stop = startWorkbookLoader()
+    roster([team()])
+    await tick(7000)
+    expect(askedLead()).toBe(4)
+    roster([]) // the seat leaves ...
+    roster([team()]) // ... and returns
+    await tick(7000)
+    expect(askedLead()).toBe(8)
+    useWorkbookStore.getState().fence('h1')
+    useWorkbookStore.getState().setSupport('h1', { v1: true, v2: false })
+    await tick(7000)
+    expect(askedLead()).toBe(12)
+  })
+
   it('a retry that succeeds stops the retrying', async () => {
     fetchConversation.mockRejectedValueOnce(new Error('offline')).mockResolvedValue(ok)
     stop = startWorkbookLoader()
