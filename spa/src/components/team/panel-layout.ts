@@ -3,6 +3,8 @@
 // capsule at its 84px cap; a 5th seat wraps to a region under the header, so the first row never changes height.
 // jsdom has no layout, so the widths are named constants (and the row-capacity arithmetic is a pure function) the tests can add up.
 
+import { HOST_BADGE_BOX_DEFAULT } from '../../stores/useUISettingsStore'
+
 /** The header row of both modes (content box; no vertical padding). Full mode used to be py-2 around an 18px row = 34. */
 export const HEADER_H = 34
 /** The header's side padding and the gap between its parts (capsule | cells or count | buttons). */
@@ -19,30 +21,26 @@ export const BTN_GAP = 2
 export const BUTTONS_W = TOGGLE_BTN_W + BTN_GAP + EXPAND_BTN_W
 
 /**
- * One one-line cell: [subagent slot] bot + context ring. The ring is the full mode's 20px; the cell stays inside the header's 34px.
- * The slot is the fixed room left of the icon for the seat's subagent dots (user 2026-10-10): reserved whether or not the
- * seat has any, so the cell's width, and the measured first-row capacity, never move when subagents start or stop. The
- * dots park 4px left of the icon box (TabIcon badge layout, 3-4px across), so 5px holds them.
+ * One one-line cell (round 4, user 2026-10-10): the sidebar bead's box (`h-6 pl-1.5 pr-[3px]`) holding the bot icon exactly as
+ * the sidebar tab row draws it, 6px (`gap-1.5`), and the usage ring, which is as big as the sidebar host box. Nothing in it is
+ * squeezed to fit: the subagent dots float into the left padding (absolute, as in the sidebar) and the light into the top right,
+ * so neither adds width. These constants are the NOMINAL width — used where nothing can be laid out; the real width of each
+ * cell is measured (capacityFromWidths).
  */
-export const SUBAGENT_SLOT_W = 5
-export const CELL_ICON = 12
-/** TabIcon draws the glyph in a 16px box with a 1.5px left margin; the cell cancels the margin, so the icon takes 16. */
-export const CELL_ICON_SLOT = 16
-export const CELL_ICON_PULL = -1.5
-export const CELL_RING = 20
-export const CELL_PX = 1
-export const CELL_INNER_GAP = 0
-export const CELL_W = CELL_PX * 2 + SUBAGENT_SLOT_W + CELL_ICON_SLOT + CELL_INNER_GAP + CELL_RING
-/** The widest a one-line cell may be under any light style (iconDot used to be 50: dot slot + icon side by side). */
-export const CELL_W_MAX = 44
-/**
- * A cell's width under a light style. Every style takes CELL_W: the panel draws iconDot as the corner-overlay light
- * (TeamSeatIcon `compact`), so the status dot sits on the icon instead of taking a 16px slot of its own.
- */
-export function cellWidthFor(_style: 'icon' | 'dot' | 'iconDot' | 'badge'): number {
-  return CELL_W
+export const CELL_H = 24
+export const CELL_PL = 6
+export const CELL_PR = 3
+/** The gap between the bot and the ring (`gap-1.5`). */
+export const CELL_INNER_GAP = 6
+/** The bot icon's box in TabIcon's badge layout: 1px margin + 16px box + 0.5px margin, rounded up. */
+export const CELL_ICON_BOX_W = 18
+/** iconDot draws its light in a 16px slot BESIDE the 14px icon (TabIcon), so the run is wider by about the icon. */
+export const CELL_ICON_BOX_W_ICONDOT = 32
+/** A cell's nominal width under a light style, with a ring of `box` px (default: the host box's default). */
+export function cellWidthFor(style: 'icon' | 'dot' | 'iconDot' | 'badge', box: number = HOST_BADGE_BOX_DEFAULT): number {
+  return CELL_PL + (style === 'iconDot' ? CELL_ICON_BOX_W_ICONDOT : CELL_ICON_BOX_W) + CELL_INNER_GAP + box + CELL_PR
 }
-export const CELL_H = 26
+export const CELL_W = cellWidthFor('badge')
 export const CELL_GAP = 8
 /**
  * The 1px divider after the lead. It is an ordinary flex child of the cells row, so the row's CELL_GAP leaves 8px on EACH
@@ -89,8 +87,8 @@ export function capacityFromWidths(widths: readonly number[], avail: number, opt
 }
 
 /** Width the first row's cells take for `n` seats (divider after the lead when there are 2 or more). */
-export function cellsWidth(n: number): number {
-  return n * CELL_W + Math.max(0, n - 1) * CELL_GAP + (n >= 2 ? SEP_W : 0)
+export function cellsWidth(n: number, cellW: number = CELL_W): number {
+  return n * cellW + Math.max(0, n - 1) * CELL_GAP + (n >= 2 ? SEP_W : 0)
 }
 
 /** The edit form under the header (TI-7): its width, the gap to the viewport edge and to the header. */

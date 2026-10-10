@@ -18,8 +18,8 @@ import { CELL_GAP, CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
 // The light, the subagent dots and the host chip are TI-3's pieces over the agent store; here they are stand-ins that show
 // what the panel asked of them.
 vi.mock('./TeamSeatIcon', () => ({
-  TeamSeatIcon: ({ sessionCode, subagents, subagentSlot }: { sessionCode: string; subagents?: boolean; subagentSlot?: boolean }) => (
-    <span data-testid="seat-icon" data-code={sessionCode} data-subagents={String(subagents === true)} data-slot={String(subagentSlot === true)} />
+  TeamSeatIcon: ({ sessionCode, subagents }: { sessionCode: string; subagents?: boolean }) => (
+    <span data-testid="seat-icon" data-code={sessionCode} data-subagents={String(subagents === true)} />
   ),
   TeamSeatHostBadge: ({ hostId }: { hostId: string }) => <span data-testid="seat-host" data-host={hostId} />,
 }))
@@ -302,19 +302,19 @@ describe('header height (TI-6)', () => {
     expect(header().style.height).toBe(full)
   })
 
-  it('lead + 2 members stay in the header row (what 312px holds without squeezing a cell); a smaller team has no region under it', () => {
-    seedScene({ members: [['A', 'a-tm'], ['B', 'b-tm']], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
+  it('lead + 1 member stay in the header row (what 312px holds without squeezing a cell); a smaller team has no region under it', () => {
+    seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }], activeTabId: 'lead' })
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
-    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(3)
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(2)
     expect(screen.queryByTestId('team-panel-more')).toBeNull()
   })
 
-  it('the 4th seat wraps into a region under the header, which keeps its height', () => {
-    scene5(3)
+  it('the 3rd seat wraps into a region under the header, which keeps its height', () => {
+    scene5(2)
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
-    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(3)
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(2)
     const more = screen.getByTestId('team-panel-more')
     expect(header().contains(more)).toBe(false)
     expect(more.className).toContain('flex-wrap')
@@ -557,11 +557,12 @@ describe('header height (TI-6)', () => {
     expect(row.querySelectorAll('[data-testid="cell-sep"]')).toHaveLength(1)
   })
 
-  it('a cell is a fixed height inside the header row', () => {
+  it('a cell is a fixed height (a bead\'s h-6) inside the header row', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
-    expect(screen.getAllByTestId('team-panel-cell')[0].style.height).toBe(`${CELL_H}px`)
+    expect(CELL_H).toBe(24)
+    expect(screen.getAllByTestId('team-panel-cell')[0].className).toContain('h-6')
   })
 })
 
@@ -575,9 +576,8 @@ describe('one-line mode', () => {
     expect(cells.map((c) => c.getAttribute('data-session-id'))).toEqual(['L', 'A', 'B', 'C'])
     expect(screen.getByTestId('team-panel-name').textContent).toBeTruthy()
     expect(screen.getByTestId('team-panel-cells').className).not.toContain('flex-wrap') // the first row never wraps
-    // the cell draws the seat's subagent dots, in the slot that is always reserved for them
+    // the cell draws the seat's subagent dots like the sidebar row (they float into the cell's padding; no reserved slot)
     expect(within(cells[0]).getByTestId('seat-icon').getAttribute('data-subagents')).toBe('true')
-    expect(within(cells[0]).getByTestId('seat-icon').getAttribute('data-slot')).toBe('true')
     expect(within(cells[0]).getByTestId('context-ring')).toBeTruthy()
     expect(within(cells[0]).getByTestId('model-icon-opus')).toBeTruthy()
     expect(within(cells[1]).getByTestId('model-icon-unknown')).toBeTruthy() // no reading: the dashed "?"

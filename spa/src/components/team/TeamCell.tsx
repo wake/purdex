@@ -1,15 +1,21 @@
 // spa/src/components/team/TeamCell.tsx — the pieces the pane's one-line header and the title-bar strip share: the team name
-// capsule and one person's cell (subagent slot + bot + light, context ring around the model shape). One copy, so the two
-// places can not drift apart.
-import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
+// capsule and one person's cell. One copy, so the two places can not drift apart.
+//
+// The cell is laid out like the sidebar tab row's "bot -> host icon" run (InlineTab): the same icon (TeamSeatIcon, light and
+// subagent dots included — the dots float into the left padding, so they add no width), 6px, and then a square the size of the
+// sidebar host box. That square is the usage ring here, not a host icon: the host is shown by the ring's model symbol, painted
+// in the host's main colour, and by the tooltip. The box is a bead's (h-6, pl-1.5, pr-[3px]), so the dots at the left and the
+// light at the top right fall in the cell's own padding and never reach a neighbour.
+import { TeamSeatIcon } from './TeamSeatIcon'
+import { useSeatHostMain } from './useSeatHostMain'
 import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
 import { useSeatReading } from './team-readings'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { keepFocus } from '../../lib/keep-focus'
-import { CELL_H, CELL_ICON, CELL_ICON_PULL, CELL_INNER_GAP, CELL_PX, CELL_RING } from './panel-layout'
 
 export function NameCapsule({ team, className = '', style }: { team: TeamPanelTeam; className?: string; style?: React.CSSProperties }) {
   return (
@@ -27,6 +33,8 @@ export function NameCapsule({ team, className = '', style }: { team: TeamPanelTe
 export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string; seat: TeamSeatView; isActive: boolean; onOpen: (sessionId: string) => void }) {
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
+  const ringBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
+  const hostMain = useSeatHostMain(seat.hostId, seat.sessionCode)
   const model = r.unavailable ? '—' : r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '?'
   const transition = transitionOf(seat)
   const away = notInApp(seat)
@@ -47,14 +55,12 @@ export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string;
       onMouseDown={keepFocus}
       onClick={() => onOpen(seat.sessionId)}
       title={`${seat.title} · ${model} · ${t('team.panel.context')} ${r.ctx !== undefined ? `${r.ctx}%` : '—'}${seat.tabId ? '' : ` · ${t('team.panel.unopened')}`}${notes.map((n) => ` · ${n}`).join('')}`}
-      style={{ height: CELL_H, paddingInline: CELL_PX, columnGap: CELL_INNER_GAP }}
-      className={`flex items-center rounded-md cursor-pointer ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
+      className={`group relative flex items-center gap-1.5 h-6 pl-1.5 pr-[3px] rounded-md cursor-pointer ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
     >
-      <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`inline-flex ${transition !== null ? 'opacity-40' : ''}`} style={{ marginLeft: CELL_ICON_PULL }}>
-        <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} size={CELL_ICON} compact subagents subagentSlot />
+      <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`inline-flex ${transition !== null ? 'opacity-40' : ''}`}>
+        <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents />
       </span>
-      {seat.remote && <TeamSeatHostBadge hostId={seat.hostId} sessionCode={seat.sessionCode} />}
-      <ContextRing pct={r.ctx} model={r.model} size={CELL_RING} />
+      <ContextRing pct={r.ctx} model={r.model} size={ringBox} symbolColor={hostMain} />
     </button>
   )
 }

@@ -33,13 +33,17 @@ export function ModelIcon({ model, size = 11 }: { model: ModelFamily | undefined
 
 const TONE_CLASS: Record<UsageTone, string> = { ok: 'stroke-status-success', warn: 'stroke-status-warning', danger: 'stroke-status-error' }
 
-/** Context usage as a USED ring (grows counterclockwise from 12 o'clock, coloured by used %); the model shape sits in the middle. */
-export function ContextRing({ pct, model, size = 22 }: { pct: number | undefined; model: ModelFamily | undefined; size?: number }) {
+/**
+ * Context usage as a USED ring (grows counterclockwise from 12 o'clock, coloured by used %); the model shape sits in the
+ * middle. `symbolColor` (a CSS colour) paints the shape — the one-line cell passes the seat host's main colour; absent, it
+ * inherits the text colour.
+ */
+export function ContextRing({ pct, model, size = 22, symbolColor }: { pct: number | undefined; model: ModelFamily | undefined; size?: number; symbolColor?: string }) {
   const r = size / 2 - 2
   const c = 2 * Math.PI * r
   const geo = pct === undefined ? null : ringGeometry(pct, 'used')
   return (
-    <span className="relative inline-grid place-items-center flex-shrink-0" style={{ width: size, height: size }} data-testid="context-ring">
+    <span className="relative inline-grid place-items-center flex-shrink-0" style={{ width: size, height: size, color: symbolColor }} data-testid="context-ring">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="absolute inset-0">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border-default)" strokeWidth={2.5} />
         {geo && (

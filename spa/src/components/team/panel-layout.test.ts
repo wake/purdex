@@ -1,9 +1,9 @@
 // spa/src/components/team/panel-layout.test.ts — the header's width budget at the default 312px (TI-6). jsdom cannot lay
 // anything out, so this adds up the named constants; the real-Chromium numbers are in the PR notes.
 import { describe, it, expect } from 'vitest'
-import { PANEL_DEFAULT_WIDTH } from '../../stores/useTeamUiStore'
+import { HOST_BADGE_BOX_DEFAULT, HOST_BADGE_BOX_MAX } from '../../stores/useUISettingsStore'
 import {
-  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, CELL_RING, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_W_MAX, CELL_PX, CELL_GAP, SEP_LINE_W, SEP_W, POPOVER_W, SUBAGENT_SLOT_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
+  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_PL, CELL_PR, CELL_INNER_GAP, CELL_ICON_BOX_W, CELL_GAP, SEP_LINE_W, SEP_W, POPOVER_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
 } from './panel-layout'
 
 describe('panel header budget', () => {
@@ -15,20 +15,32 @@ describe('panel header budget', () => {
     expect(SEP_W).toBe(SEP_LINE_W + CELL_GAP)
     expect(CELL_GAP + SEP_LINE_W + CELL_GAP).toBe(17) // lead's edge -> line 8, line -> the next cell 8
     expect(cellsWidth(2)).toBe(2 * CELL_W + 8 + 1 + 8) // two cells with the divider between them: 17 apart
-    expect([HEADER_PX, HEADER_GAP, CELL_PX]).toEqual([6, 4, 1])
-    expect(CELL_W).toBe(43) // 2 x 1 padding + 5 subagent slot + 16 bot + 20 ring: nothing squeezed
+    expect([HEADER_PX, HEADER_GAP]).toEqual([6, 4])
   })
 
-  // The room the cells have at the default width: the area's borders, the header's padding and gaps, the name capsule at its
-  // cap and the two buttons come off 312. A cell is [subagent slot] + bot + ring (no squeezing: the content keeps its size).
-  const ROOM = PANEL_DEFAULT_WIDTH - (AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + BUTTONS_W)
+  it('a cell is the sidebar bead\'s box: 6px | bot run | 6px | host-box-sized ring | 3px — nothing squeezed', () => {
+    expect([CELL_PL, CELL_PR, CELL_INNER_GAP, CELL_H]).toEqual([6, 3, 6, 24]) // pl-1.5, pr-[3px], gap-1.5, h-6
+    expect(CELL_W).toBe(CELL_PL + CELL_ICON_BOX_W + CELL_INNER_GAP + HOST_BADGE_BOX_DEFAULT + CELL_PR)
+    expect(CELL_W).toBe(49)
+    expect(cellWidthFor('badge', 24)).toBe(CELL_W + (24 - HOST_BADGE_BOX_DEFAULT)) // the ring follows the host box setting
+  })
 
-  it('at 312 the first row holds lead + 2 members (3 cells); the 4th wraps under the header', () => {
-    expect(cellsWidth(3)).toBeLessThanOrEqual(ROOM)
-    expect(cellsWidth(4)).toBeGreaterThan(ROOM)
-    expect(firstRowCapacity(PANEL_DEFAULT_WIDTH)).toBe(3)
-    // the per-cell sum agrees with the closed form
-    expect(capacityFromWidths(Array(9).fill(CELL_W), ROOM)).toBe(3)
+  // The room the cells have at a panel width: the area's borders, the header's padding and gaps, the name capsule at its cap
+  // and the two buttons come off the width.
+  const roomAt = (w: number) => w - (AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + BUTTONS_W)
+
+  it.each([
+    // [panel width, light style, cells in the first row]. A remote seat's cell is the same width (no host square any more).
+    [312, 'badge', 2],
+    [312, 'iconDot', 2],
+    [440, 'badge', 5],
+    [440, 'iconDot', 4],
+  ] as const)('at %ipx (%s) the first row holds %i cells; the rest wrap under the header', (width, style, n) => {
+    const w = cellWidthFor(style)
+    expect(roomAt(width)).toBeGreaterThanOrEqual(cellsWidth(n, w))
+    expect(roomAt(width)).toBeLessThan(cellsWidth(n + 1, w))
+    expect(capacityFromWidths(Array(9).fill(w), roomAt(width))).toBe(n)
+    if (style === 'badge') expect(firstRowCapacity(width)).toBe(n)
   })
 
   it('capacity grows with the width and never drops below one', () => {
@@ -60,14 +72,9 @@ describe('panel header budget', () => {
     })
   })
 
-  it('a cell (ring at the full mode 20px) sits inside the header row', () => {
-    expect(CELL_RING).toBe(20)
+  it('a cell sits inside the header row, at any host box size', () => {
     expect(CELL_H).toBeLessThanOrEqual(HEADER_H)
-    expect(CELL_H).toBeGreaterThanOrEqual(CELL_RING)
-  })
-
-  it('a cell includes the subagent slot at its full size: nothing is squeezed to fit', () => {
-    expect(CELL_W).toBe(2 * CELL_PX + SUBAGENT_SLOT_W + 16 + CELL_RING)
+    expect(CELL_H).toBeGreaterThanOrEqual(HOST_BADGE_BOX_MAX) // the biggest ring still fits the cell's height
   })
 
   it('reserve keeps px free for the strip\'s +N chip only when someone does not fit; min 0 lets the strip show none', () => {
@@ -89,20 +96,8 @@ describe('panel header budget', () => {
     expect(placeBelow({ left: 0, bottom: 0 }, { w: POPOVER_W, h: 900 }, view).top).toBe(8) // taller than the viewport: top edge wins
   })
 
-  it.each(['icon', 'dot', 'iconDot', 'badge'] as const)('a cell under the %s light style is the same CELL_W (at most 44px)', (style) => {
-    expect(CELL_W_MAX).toBe(44)
+  it.each(['icon', 'dot', 'badge'] as const)('a cell under the %s light style is CELL_W; iconDot draws its light beside the icon, so it is wider', (style) => {
     expect(cellWidthFor(style)).toBe(CELL_W)
-    expect(CELL_W).toBeLessThanOrEqual(CELL_W_MAX)
-  })
-
-  it('a remote seat\'s cell is wider (host icon): the capacity counts its real width', () => {
-    const remote = CELL_W + 12
-    const plain = [CELL_W, CELL_W, CELL_W, CELL_W]
-    expect(capacityFromWidths(plain, ROOM)).toBe(3)
-    // 312: 43 + (8 + 1 + 8 + 43) + (8 + 43) = 154 of 165 for three plain cells; one remote cell (+12) anywhere pushes the 3rd out (166)
-    expect(capacityFromWidths([CELL_W, CELL_W, remote, CELL_W], ROOM)).toBe(2)
-    expect(capacityFromWidths([CELL_W, remote, CELL_W, CELL_W], ROOM)).toBe(2)
-    expect(capacityFromWidths([remote, CELL_W, CELL_W, CELL_W], ROOM)).toBe(2)
-    expect(capacityFromWidths([remote, remote, remote, remote], ROOM)).toBe(2) // 55 + 17 + 55 = 127 <= 165; the 3rd: 190 > 165
+    expect(cellWidthFor('iconDot')).toBeGreaterThan(CELL_W)
   })
 })
