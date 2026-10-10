@@ -67,7 +67,7 @@ func TestBuildOptionsFullMapping(t *testing.T) {
 		t.Errorf("Config.ServiceRoots = %v, want %v", cfg.ServiceRoots, n.ServiceRoots)
 	}
 	wantSandbox := sandbox.Policy{MaxProfile: "trusted", DefaultProfile: "readonly"}
-	if cfg.Sandbox != wantSandbox {
+	if !reflect.DeepEqual(cfg.Sandbox, wantSandbox) { // Policy carries a slice since v0.22.0: not comparable with !=
 		t.Errorf("Config.Sandbox = %+v, want %+v", cfg.Sandbox, wantSandbox)
 	}
 	if time.Duration(cfg.LeaseTTL) != 30*time.Second {

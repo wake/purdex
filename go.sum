@@ -49,6 +49,8 @@ lab.protype.tw/wake/nexen v0.20.0 h1:omlc+ha/ApzstKcZJnJVbmPqlJYWD3cNUAFnDVuLkZc
 lab.protype.tw/wake/nexen v0.20.0/go.mod h1:PtPV5o9VbcYpUFPoQFfKBVyecjYwG7ESq+QsjreOl6w=
 lab.protype.tw/wake/nexen v0.21.0 h1:34gicB1D+dFepim1SusHJxF1t14s8RyV2Ve1rpP0Eb8=
 lab.protype.tw/wake/nexen v0.21.0/go.mod h1:PtPV5o9VbcYpUFPoQFfKBVyecjYwG7ESq+QsjreOl6w=
+lab.protype.tw/wake/nexen v0.22.0 h1:7RmnKDh9MWT5Tf5VoLoFUgNmPEDJOcLJ713Dg0x0l10=
+lab.protype.tw/wake/nexen v0.22.0/go.mod h1:PtPV5o9VbcYpUFPoQFfKBVyecjYwG7ESq+QsjreOl6w=
 modernc.org/cc/v4 v4.29.0 h1:CXgwL8cvxmyzBQZzbSl/6xFtMCryb6u8IOqDci39cgc=
 modernc.org/cc/v4 v4.29.0/go.mod h1:OnovgIhbbMXMu1aISnJ0wvVD1KnW+cAUJkIrAWh+kVI=
 modernc.org/ccgo/v4 v4.34.6 h1:sBgfIwyN0TQ9C5hwIeuqyeAKyMWnbvj2fvpF4L11uzU=
