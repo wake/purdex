@@ -26,7 +26,7 @@ func TestCanonPath_DotDotAfterASymlinkInADanglingTarget(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "real", "sub"), 0o755))
 	require.NoError(t, os.Symlink(filepath.Join("real", "sub"), filepath.Join(tmp, "alias")))
 	cfg := filepath.Join(tmp, "config.toml")
-	require.NoError(t, os.Symlink(filepath.Join("alias", "..", "target.toml"), cfg)) // target.toml does not exist yet
+	require.NoError(t, os.Symlink("alias/../target.toml", cfg)) // target.toml does not exist yet
 
 	// alias -> real/sub, so alias/.. is real/ and the file would be created at real/target.toml.
 	require.Equal(t, filepath.Join(tmp, "real", "target.toml"), canonPath(cfg))
@@ -47,13 +47,13 @@ func TestCanonPath_AllNamesOfOneConfigAgree(t *testing.T) {
 	tmp := realTmp(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "real", "sub"), 0o755))
 	require.NoError(t, os.Symlink(filepath.Join("real", "sub"), filepath.Join(tmp, "alias")))
-	require.NoError(t, os.Symlink(filepath.Join("alias", "..", "target.toml"), filepath.Join(tmp, "config.toml")))
+	require.NoError(t, os.Symlink("alias/../target.toml", filepath.Join(tmp, "config.toml")))
 	require.NoError(t, os.Symlink("missing-dir", filepath.Join(tmp, "dangling-dir")))
 	require.NoError(t, os.Symlink(filepath.Join("dangling-dir", "config.toml"), filepath.Join(tmp, "via-dir.toml")))
 
 	want := filepath.Join(tmp, "real", "target.toml")
 	require.Equal(t, want, canonPath(filepath.Join(tmp, "config.toml")))
-	require.Equal(t, want, canonPath(filepath.Join(tmp, "alias", "..", "target.toml")))
+	require.Equal(t, want, canonPath(tmp+"/alias/../target.toml")) // Join would fold the ".." before alias is looked at
 	require.Equal(t, want, canonPath(filepath.Join(tmp, "real", "target.toml")))
 	require.Equal(t, filepath.Join(tmp, "missing-dir", "config.toml"), canonPath(filepath.Join(tmp, "via-dir.toml")))
 }
