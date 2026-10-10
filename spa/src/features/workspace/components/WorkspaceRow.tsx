@@ -49,11 +49,13 @@ export function WorkspaceRow(props: Props) {
   const conflictButtonRef = useRef<HTMLButtonElement>(null)
   const conflict = useWorkspaceConflict(workspace.id, conflictButtonRef)
 
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: workspace.id,
     data: { type: 'workspace', wsId: workspace.id },
   })
 
+  // Deliberately NOT spreading dnd-kit's `attributes` (tabIndex=0, role=button): the sensors are pointer-only, so keyboard
+  // drag is unreachable and the header div would only be an invisible Tab stop (#2525). Mouse drag uses `listeners`.
   const { setNodeRef: setHeaderDropRef, isOver: isHeaderOver } = useDroppable({
     id: `ws-header-${workspace.id}`,
     data: { type: 'workspace-header', wsId: workspace.id },
@@ -81,9 +83,8 @@ export function WorkspaceRow(props: Props) {
       <div
         ref={setHeaderDropRef}
         data-testid={`ws-header-${workspace.id}`}
-        {...attributes}
         {...listeners}
-        className={`group/ws-header mx-2 flex items-center gap-1 pl-1.5 pr-1.5 rounded-md text-sm transition-colors focus:outline-none focus-visible:outline-none ${
+        className={`group/ws-header mx-2 flex items-center gap-1 pl-1.5 pr-1.5 rounded-md text-sm transition-colors ${
           isActive
             ? 'bg-[#8b5cf6]/25 text-text-primary ring-1 ring-purple-400'
             : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
