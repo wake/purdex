@@ -1,0 +1,17 @@
+{
+  "live": false,
+  "turns": 4,
+  "per_turn": [
+    {"id": "0cbda9ec-c027-4aff-89e2-30584bf34da9", "outcome": "done", "user_source": ""},
+    {"id": "3d8114a0-5633-4d0f-8d76-f2754c559e05", "outcome": "done", "user_source": "user"},
+    {"id": "278fdadd-39bf-4089-a043-fadcfdea8e43", "outcome": "done", "user_source": "task"},
+    {"id": "86b80a64-e6b7-448e-8496-2c76ec995e75", "outcome": "done", "user_source": "user"}
+  ],
+  "steps": [
+    {"id": "toolu_01S5q1Y5QtuMFE2qqyntcqjZ", "kind": "execute", "status": "failed"},
+    {"id": "toolu_01Fe6Kx6dtEdh7mEHn3VX47V", "kind": "execute", "status": "done"},
+    {"id": "toolu_018Zxa1UBqfxSm9uJJ8zLZrr", "kind": "execute", "status": "done"}
+  ],
+  "outputs": [],
+  "shapes": []
+}

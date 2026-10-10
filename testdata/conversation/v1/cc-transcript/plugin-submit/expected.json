@@ -1,0 +1,246 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-haiku-5-5",
+      "effort": "medium"
+    },
+    "turns": [
+      {
+        "id": "0cbda9ec-c027-4aff-89e2-30584bf34da9",
+        "index": 0,
+        "started_at": 1791601129012,
+        "ended_at": 1791601129266,
+        "outcome": "done",
+        "duration_ms": 1813,
+        "items": [
+          {
+            "type": "thinking",
+            "id": "0cbda9ec-c027-4aff-89e2-30584bf34da9",
+            "at": 1791601129012,
+            "duration_ms": 800
+          },
+          {
+            "type": "agent_text",
+            "id": "3cb1a6d6-8d8a-4652-a9d9-4c8fec33f365",
+            "at": 1791601129122,
+            "markdown": "PROBE-IDLE-OK"
+          }
+        ]
+      },
+      {
+        "id": "3d8114a0-5633-4d0f-8d76-f2754c559e05",
+        "index": 1,
+        "started_at": 1791601147470,
+        "ended_at": 1791601164359,
+        "outcome": "done",
+        "duration_ms": 1158,
+        "items": [
+          {
+            "type": "user",
+            "id": "3d8114a0-5633-4d0f-8d76-f2754c559e05",
+            "at": 1791601147470,
+            "text": "Reply with exactly: PROBE-ASUSER-OK",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "d31aa7df-1747-4700-b0b4-f5a3e363882d",
+            "at": 1791601148535,
+            "markdown": "PROBE-ASUSER-OK"
+          },
+          {
+            "type": "thinking",
+            "id": "1ea150c5-94a7-4d94-924c-38d130762fc5",
+            "at": 1791601156697,
+            "duration_ms": 441
+          },
+          {
+            "type": "step",
+            "id": "toolu_01S5q1Y5QtuMFE2qqyntcqjZ",
+            "at": 1791601156972,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "failed",
+            "summary": "sleep 30 ; echo SLEPT",
+            "started_at": 1791601156972,
+            "duration_ms": 7,
+            "input": {
+              "command": "sleep 30 ; echo SLEPT",
+              "description": "Sleep 30 seconds then echo SLEPT"
+            },
+            "output": {
+              "text": "\u003ctool_use_error\u003eBlocked: sleep 30 followed by: echo SLEPT. To wait for a condition, use Monitor with an until-loop (e.g. `until \u003ccheck\u003e; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this block.\u003c/tool_use_error\u003e",
+              "total_lines": 1,
+              "total_bytes": 292,
+              "truncated": false
+            },
+            "command": {
+              "text": "sleep 30 ; echo SLEPT",
+              "description": "Sleep 30 seconds then echo SLEPT"
+            }
+          },
+          {
+            "type": "thinking",
+            "id": "8357aa9d-50cf-406f-bf1e-e0796ed9f822",
+            "at": 1791601159671,
+            "duration_ms": 1473
+          },
+          {
+            "type": "agent_text",
+            "id": "10021364-970a-4b14-9a43-1ce7652d5292",
+            "at": 1791601159996,
+            "markdown": "The first attempt was blocked because the harness rejects a bare `sleep` chained with an `echo`. Its suggested alternative is `run_in_background`, so I'll run the same command that way."
+          },
+          {
+            "type": "step",
+            "id": "toolu_01Fe6Kx6dtEdh7mEHn3VX47V",
+            "at": 1791601160300,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "done",
+            "summary": "sleep 30 ; echo SLEPT",
+            "started_at": 1791601160300,
+            "duration_ms": 1652,
+            "input": {
+              "command": "sleep 30 ; echo SLEPT",
+              "description": "Sleep 30 seconds then echo SLEPT, in background",
+              "run_in_background": true
+            },
+            "output": {
+              "text": "Command running in background with ID: bet8u34mn. Output is being written to: /work/tmp/00000000-0000-4000-8000-000000000001/tasks/bet8u34mn.output. You will be notified when it completes. To check interim output, use Read on that file path.",
+              "total_lines": 1,
+              "total_bytes": 241,
+              "truncated": false
+            },
+            "command": {
+              "text": "sleep 30 ; echo SLEPT",
+              "description": "Sleep 30 seconds then echo SLEPT, in background",
+              "background_task_id": "bet8u34mn"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "3d8204d5-d280-48d5-bb9b-78bc49dc1565",
+            "at": 1791601163004,
+            "markdown": "The foreground `sleep 30 ; echo SLEPT` was blocked by the harness, so I moved it to a background task (ID `bet8u34mn`). I'll get notified when it finishes, and then I'll reply `DONE-LONG`."
+          },
+          {
+            "type": "agent_text",
+            "id": "a7eb3bb4-2759-452e-9d16-22e9acfc5d30",
+            "at": 1791601164199,
+            "markdown": "PROBE-QUEUED-OK"
+          }
+        ]
+      },
+      {
+        "id": "278fdadd-39bf-4089-a043-fadcfdea8e43",
+        "index": 2,
+        "started_at": 1791601191918,
+        "ended_at": 1791601193411,
+        "outcome": "done",
+        "duration_ms": 1499,
+        "items": [
+          {
+            "type": "user",
+            "id": "278fdadd-39bf-4089-a043-fadcfdea8e43",
+            "at": 1791601191918,
+            "text": "Background command \"Sleep 30 seconds then echo SLEPT, in background\" completed (exit code 0)",
+            "source": "task"
+          },
+          {
+            "type": "thinking",
+            "id": "c67a427c-813c-4f0f-8732-f9a82600efe1",
+            "at": 1791601193118,
+            "duration_ms": 419
+          },
+          {
+            "type": "agent_text",
+            "id": "74c7e906-b195-4cd0-a3e4-1abfe19f3aa6",
+            "at": 1791601193313,
+            "markdown": "DONE-LONG"
+          }
+        ]
+      },
+      {
+        "id": "86b80a64-e6b7-448e-8496-2c76ec995e75",
+        "index": 3,
+        "started_at": 1791601193419,
+        "ended_at": 1791601222434,
+        "outcome": "done",
+        "duration_ms": 29019,
+        "items": [
+          {
+            "type": "user",
+            "id": "86b80a64-e6b7-448e-8496-2c76ec995e75",
+            "at": 1791601193419,
+            "text": "Use the Bash tool to run exactly this foreground command and wait for it: python3 -c \"import time; time.sleep(25)\" . Then reply LONG-DONE.",
+            "source": "user"
+          },
+          {
+            "type": "thinking",
+            "id": "8f1f7e1b-26a7-49f4-8fe2-2976ca1b188c",
+            "at": 1791601195991,
+            "duration_ms": 1907
+          },
+          {
+            "type": "step",
+            "id": "toolu_018Zxa1UBqfxSm9uJJ8zLZrr",
+            "at": 1791601196253,
+            "kind": "execute",
+            "tool": "Bash",
+            "status": "done",
+            "summary": "python3 -c \"import time; time.sleep(25)\"",
+            "started_at": 1791601196253,
+            "duration_ms": 25472,
+            "input": {
+              "command": "python3 -c \"import time; time.sleep(25)\"",
+              "description": "Run python sleep for 25 seconds in foreground"
+            },
+            "output": {
+              "text": "(Bash completed with no output)",
+              "total_lines": 1,
+              "total_bytes": 31,
+              "truncated": false
+            },
+            "command": {
+              "text": "python3 -c \"import time; time.sleep(25)\"",
+              "description": "Run python sleep for 25 seconds in foreground"
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "7d524a9b-548b-4a58-9104-f4ab869cb371",
+            "at": 1791601222348,
+            "markdown": "LONG-DONE"
+          }
+        ]
+      }
+    ]
+  }
+}
