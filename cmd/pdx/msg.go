@@ -348,6 +348,12 @@ func runMsgSend(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		return 1
 	}
 
+	// A 200 that is not JSON at all (cut short, rewritten by a proxy, empty) is not a failure to retry on — the message went out: say
+	// so and exit 0, like the other modes (#2595). JSON of another shape is still an invalid response.
+	if sr := readPeerSendAnswer(result.body); sr.Result == resultUnreadable {
+		noteUncertainSend(stderr, "pdx msg", sr, false)
+		return 0
+	}
 	var sr ipeers.SendResponse
 	if err := json.Unmarshal(result.body, &sr); err != nil {
 		fmt.Fprintln(stderr, "pdx msg: invalid response")

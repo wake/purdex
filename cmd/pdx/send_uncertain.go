@@ -19,16 +19,14 @@ import (
 // or an agent that re-ran a command on a non-zero exit would send the message twice (#2595).
 
 // resultUnreadable stands for an answer that is not JSON at all (a proxy's page, a body cut short): nothing says it was delivered.
-const resultUnreadable = "unreadable"
+const resultUnreadable = "unreadable" // an empty or non-JSON 200 too
 
-// readPeerSendAnswer reads a /api/peers/send 200 body. Not JSON at all is resultUnreadable; JSON of another shape (an old daemon's,
+// readPeerSendAnswer reads a /api/peers/send 200 body. No body, or not JSON at all, is resultUnreadable; JSON of another shape (an old daemon's,
 // a test's) is an empty answer with no note — as when these callers dropped the body.
 func readPeerSendAnswer(raw []byte) ipeers.SendResponse {
 	var sr ipeers.SendResponse
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return sr
-	}
-	if !json.Valid(raw) {
+	// No body, or one that is not JSON: the daemon never answers a send like that, so something cut or rewrote the answer.
+	if len(bytes.TrimSpace(raw)) == 0 || !json.Valid(raw) {
 		return ipeers.SendResponse{Result: resultUnreadable}
 	}
 	_ = json.Unmarshal(raw, &sr)
