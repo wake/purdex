@@ -185,3 +185,69 @@ func TestAskReportByToolUse_IsIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// codex R1 + attack: a terminal_only row (the settings hook's read-only card) is not begin's row. A report must never land on it
+// — nor on the one the takeover just dismissed — or it would answer 200, stop the retries, and leave begin's answerable row
+// unreported. fixed clock: the takeover's two rows share their created_at, so only the filter (not luck) picks the right one.
+func TestAskReportByToolUse_ATerminalOnlyRowIsNotBeginsRow(t *testing.T) {
+	f := newFixture(t)
+	since := f.clock.Load()
+	ro := f.openTerminalOnly("toolu_7")
+	if code, _ := f.reportByToolUse("sid-1", "toolu_7", since, team.StateAnsweredLocal, localAnswer); code != http.StatusNotFound {
+		t.Fatalf("report with only a terminal_only row = %d, want 404 (begin's row is not there yet)", code)
+	}
+	if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateOpen {
+		t.Fatalf("the terminal_only row = %s, it must not change", a.State)
+	}
+}
+
+func TestAskReportByToolUse_AfterATakeoverTheReportLandsOnTheNewRow(t *testing.T) {
+	for i := range 25 { // the rows' ids are random; the same created_at must not make the order a coin flip
+		f := newFixture(t)
+		since := f.clock.Load()
+		ro := f.openTerminalOnly("toolu_8")
+		fresh := f.askBegin("toolu_8") // takes the read-only card over: old dismissed, new open, the same millisecond
+		if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateDismissed {
+			t.Fatalf("round %d: setup: the terminal_only row = %s", i, a.State)
+		}
+		if code, body := f.reportByToolUse("sid-1", "toolu_8", since, team.StateAnsweredLocal, localAnswer); code != http.StatusOK {
+			t.Fatalf("round %d: report = %d %s", i, code, body)
+		}
+		if a, _, _ := f.m.store.Get(fresh); a.State != team.StateAnsweredLocal {
+			t.Fatalf("round %d: begin's row = %s, want answered_local (the report went to the dismissed read-only row)", i, a.State)
+		}
+	}
+}
+
+// What the report does to a row in each state (the same function as the id route): abandoned stays abandoned (the terminal's
+// answer cannot reopen it); denied (a remote chat reply) + answered_local → terminal_override; already overridden → unchanged.
+func TestAskReportByToolUse_StateMatrix(t *testing.T) {
+	f := newFixture(t)
+	since := f.clock.Load()
+	ab := f.askBegin("toolu_ab")
+	if _, won, err := f.m.store.CloseIfOpen(ab, Close{State: team.StateAbandoned, DecidedAt: f.clock.Load()}); err != nil || !won {
+		t.Fatalf("abandon: %v %v", won, err)
+	}
+	if code, _ := f.reportByToolUse("sid-1", "toolu_ab", since, team.StateAnsweredLocal, localAnswer); code != http.StatusOK {
+		t.Fatalf("report on an abandoned row = %d", code)
+	}
+	if a, _, _ := f.m.store.Get(ab); a.State != team.StateAbandoned {
+		t.Fatalf("abandoned row = %s, it must stay abandoned", a.State)
+	}
+	dn := f.askBegin("toolu_dn")
+	if code, body := f.do(http.MethodPost, "/api/team/approvals/"+dn+"/decide",
+		team.DecideRequest{Decision: "deny", Hook: &team.HookDecision{Message: "聊聊"}, Client: appClient()}); code != http.StatusOK {
+		t.Fatalf("remote chat reply = %d %s", code, body)
+	}
+	if code, _ := f.reportByToolUse("sid-1", "toolu_dn", since, team.StateAnsweredLocal, localAnswer); code != http.StatusOK {
+		t.Fatal("report on a denied row")
+	}
+	if a, _, _ := f.m.store.Get(dn); a.State != team.StateTerminalOverride {
+		t.Fatalf("denied row = %s, want terminal_override", a.State)
+	}
+	other := &team.HookDecision{Answers: map[string]string{"紅還是藍？": "藍"}}
+	f.reportByToolUse("sid-1", "toolu_dn", since, team.StateAnsweredLocal, other) // a repeat with another answer
+	if a, _, _ := f.m.store.Get(dn); a.Hook == nil || a.Hook.Answers["紅還是藍？"] != "紅" {
+		t.Fatalf("an overridden row was rewritten: %+v", a.Hook)
+	}
+}
