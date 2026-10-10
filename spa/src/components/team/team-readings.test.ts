@@ -89,10 +89,11 @@ describe('useCoarseNow', () => {
     expect(result.current).toBe(coarseNow())
     expect(result.current % COARSE_NOW_STEP_MS).toBe(0)
     const first = result.current
-    act(() => { vi.advanceTimersByTime(COARSE_NOW_STEP_MS - 20_000) })
-    expect(result.current).toBe(first) // 42 s in: the same minute (the tick fired but the minute has not turned)
+    // Subscribed 12 s into the minute: the first tick is 60 s after that (72 s, i.e. 12 s into the next minute).
     act(() => { vi.advanceTimersByTime(40_000) })
-    expect(result.current).toBe(first + COARSE_NOW_STEP_MS)
+    expect(result.current).toBe(first) // 52 s in: no tick yet, same minute
+    act(() => { vi.advanceTimersByTime(40_000) })
+    expect(result.current).toBe(first + COARSE_NOW_STEP_MS) // 92 s in: the tick at 72 s turned the minute
   })
 
   it('runs one timer for all subscribers and none when the last one goes', () => {

@@ -18,7 +18,9 @@ export interface SeatReading {
   /** Context used, 0-100 whole percent; undefined when unknown. */
   ctx?: number
   /**
-   * When the host took this reading (`context.at`, unix ms). Absent = unknown: the roster carries none, or a value that is
+   * When the seat's own host took this reading (`context.at`, unix ms): its daemon stamps it when the statusline arrives
+   * (internal/module/agent/context_usage.go), keeps the original stamp across a restart, and the lead host copies it unchanged
+   * — so it is that host's clock, which may differ from ours. Absent = unknown: the roster carries none, or a value that is
    * not a time (0, negative, not finite). #2410: a reading restored after a member host's restart, or an idle session's last
    * one, is drawn like a live one; this is what a freshness policy reads.
    */
