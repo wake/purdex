@@ -161,7 +161,7 @@ function heal(persisted: unknown): Slices & { panel: PanelArea; workbookTabs: Re
     legacyMax: isRecord(p.panel) && p.panel.expanded === true,
     ghostWorkspace: Object.fromEntries(entries(p.ghostWorkspace).filter(([, v]) => typeof v === 'string' && v !== '')) as Slices['ghostWorkspace'],
     teamDrill: Object.fromEntries(entries(p.teamDrill).filter(([key, v]) => isRecord(v) && typeof v.hostId === 'string' && v.hostId !== ''
-      && keyHost(key) === v.hostId && typeof v.sessionId === 'string' && v.sessionId !== '').map(([k, v]) => [k, { hostId: (v as DrillSeat).hostId, sessionId: (v as DrillSeat).sessionId }])),
+      && keyHost(key) !== null && typeof v.sessionId === 'string' && v.sessionId !== '').map(([k, v]) => [k, { hostId: (v as DrillSeat).hostId, sessionId: (v as DrillSeat).sessionId }])),
     endedSeats: Object.fromEntries(entries(p.endedSeats).filter(([key]) => keyHost(key) !== null)
       .map(([key, v]) => [key, healEnded(v)] as const).filter(([, v]) => v.length > 0)),
     workbookTabs: Object.fromEntries(entries(p.workbookTabs).filter(([, v]) => v === true)) as Record<string, true>,
