@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -156,4 +158,122 @@ func TestHandleUpload_PasteTextFail(t *testing.T) {
 	// The uploaded file must not remain on disk.
 	_, err := os.Stat(filepath.Join(m.uploadDir, "my-sess", "inject.txt"))
 	assert.True(t, os.IsNotExist(err), "orphaned file should have been removed")
+}
+
+func postUpload(t *testing.T, m *Module, session, filename string, extra map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("session", session)
+	for k, v := range extra {
+		w.WriteField(k, v)
+	}
+	fw, _ := w.CreateFormFile("file", filename)
+	fw.Write([]byte("data"))
+	w.Close()
+	req := httptest.NewRequest("POST", "/api/agent/upload", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	m.handleUpload(rec, req)
+	return rec
+}
+
+func TestHandleUpload_ReturnsSavedPath(t *testing.T) {
+	m, _ := newUploadTestModule(t)
+	rec := postUpload(t, m, "my-sess", "a.png", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	p, _ := resp["path"].(string)
+	assert.Equal(t, filepath.Join(m.uploadDir, "my-sess", "a.png"), p)
+	assert.True(t, filepath.IsAbs(p))
+	b, err := os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Equal(t, "data", string(b))
+}
+
+func TestHandleUpload_InjectOffSkipsPaste(t *testing.T) {
+	for _, v := range []string{"0", "false"} {
+		m, fake := newUploadTestModule(t)
+		rec := postUpload(t, m, "my-sess", "a.png", map[string]string{"inject": v})
+		require.Equal(t, http.StatusOK, rec.Code, v)
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		assert.Equal(t, false, resp["injected"], v)
+		assert.NotEmpty(t, resp["path"], v)
+		assert.Empty(t, fake.PastesSent(), "inject=%s must not paste", v)
+	}
+}
+
+func TestHandleUpload_InjectDefaultsToPaste(t *testing.T) {
+	m, fake := newUploadTestModule(t)
+	rec := postUpload(t, m, "my-sess", "a.png", map[string]string{"inject": "1"})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Len(t, fake.PastesSent(), 1)
+}
+
+func TestHandleUpload_HostileNamesStayInsideSessionDir(t *testing.T) {
+	for _, name := range []string{"..", ".", "/", "", "/etc/passwd", "../../x", "a/../../b"} {
+		m, _ := newUploadTestModule(t)
+		rec := postUpload(t, m, "my-sess", name, map[string]string{"inject": "0"})
+		if rec.Code != http.StatusOK {
+			continue // refusing is fine too
+		}
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		p := resp["path"].(string)
+		assert.Equal(t, filepath.Join(m.uploadDir, "my-sess"), filepath.Dir(p), "name %q", name)
+		fi, err := os.Stat(p)
+		require.NoError(t, err, "name %q", name)
+		assert.True(t, fi.Mode().IsRegular(), "name %q", name)
+	}
+}
+
+func TestHandleUpload_SessionCodeCannotEscape(t *testing.T) {
+	m, _ := newUploadTestModule(t)
+	rec := postUpload(t, m, "../evil", "a.png", map[string]string{"inject": "0"})
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	_, err := os.Stat(filepath.Join(m.uploadDir, "..", "evil"))
+	assert.True(t, os.IsNotExist(err))
+}
+
+func postBig(t *testing.T, m *Module, ctx context.Context, size int) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("session", "my-sess")
+	fw, _ := w.CreateFormFile("file", "big.bin")
+	fw.Write(bytes.Repeat([]byte("x"), size))
+	w.Close()
+	req := httptest.NewRequest("POST", "/api/agent/upload", &buf).WithContext(ctx)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	m.handleUpload(rec, req)
+	return rec
+}
+
+func shrinkUploadCaps(t *testing.T) {
+	a, b, c, d := uploadMaxFileBytes, uploadMaxFileBytesDevice, uploadFormOverhead, uploadMemBytes
+	uploadMaxFileBytes, uploadMaxFileBytesDevice, uploadFormOverhead, uploadMemBytes = 4096, 1024, 512, 256
+	t.Cleanup(func() { uploadMaxFileBytes, uploadMaxFileBytesDevice, uploadFormOverhead, uploadMemBytes = a, b, c, d })
+}
+
+func TestHandleUpload_OverCapIs413AndLeavesNothing(t *testing.T) {
+	shrinkUploadCaps(t)
+	m, fake := newUploadTestModule(t)
+	rec := postBig(t, m, context.Background(), 10000)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Contains(t, rec.Body.String(), "too large")
+	assert.Empty(t, fake.PastesSent())
+	entries, _ := os.ReadDir(filepath.Join(m.uploadDir, "my-sess"))
+	assert.Empty(t, entries)
+}
+
+func TestHandleUpload_DeviceCapIsLowerThanAdmin(t *testing.T) {
+	shrinkUploadCaps(t)
+	dev := devices.WithPrincipal(context.Background(), devices.Principal{ID: "d_aaaaaaaaaaaa"})
+	m, _ := newUploadTestModule(t)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, postBig(t, m, dev, 2000).Code)
+	m2, _ := newUploadTestModule(t)
+	assert.Equal(t, http.StatusOK, postBig(t, m2, context.Background(), 2000).Code)
 }
