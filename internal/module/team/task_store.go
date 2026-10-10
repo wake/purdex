@@ -754,12 +754,12 @@ func (s *Store) ReassignTask(teamID string, seq int, toKey string, at int64) (Ta
 }
 
 // sameHalfFinishedMember is nil when the stored member row of m.SpawnOp is the member this finish would insert: same team,
-// session and tmux identity (id and generation), same origin, and still active. Anything else — a terminal row, another
+// session, host and tmux identity (id, generation, pane), same origin, and still active. Anything else — a terminal row, another
 // session or tmux session, an adopted row — is an error naming what differs, and the finish rolls back (#2384).
 func sameHalfFinishedMember(ctx context.Context, conn *sql.Conn, m memberRow) error {
 	var have memberRow
-	err := conn.QueryRowContext(ctx, `SELECT team_id, session_id, tmux_id, tmux_instance, origin, state FROM team_members WHERE spawn_op = ?`, m.SpawnOp).
-		Scan(&have.TeamID, &have.SessionID, &have.TmuxID, &have.TmuxInstance, &have.Origin, &have.State)
+	err := conn.QueryRowContext(ctx, `SELECT team_id, host_id, session_id, tmux_id, tmux_instance, pane_id, origin, state FROM team_members WHERE spawn_op = ?`, m.SpawnOp).
+		Scan(&have.TeamID, &have.HostID, &have.SessionID, &have.TmuxID, &have.TmuxInstance, &have.PaneID, &have.Origin, &have.State)
 	if err != nil {
 		return fmt.Errorf("finish spawn %s: read the stored member row: %w", m.SpawnOp, err)
 	}
@@ -772,8 +772,10 @@ func sameHalfFinishedMember(ctx context.Context, conn *sql.Conn, m memberRow) er
 		return fmt.Errorf("finish spawn %s: its stored member row is %s, not active", m.SpawnOp, have.State)
 	case have.TeamID != m.TeamID || have.SessionID != m.SessionID:
 		return fmt.Errorf("finish spawn %s: its stored member row belongs to team %s / session %s", m.SpawnOp, have.TeamID, have.SessionID)
-	case have.TmuxID != m.TmuxID || have.TmuxInstance != m.TmuxInstance:
-		return fmt.Errorf("finish spawn %s: its stored member row has tmux %s (%s), not %s (%s)", m.SpawnOp, have.TmuxID, have.TmuxInstance, m.TmuxID, m.TmuxInstance)
+	case have.HostID != m.HostID:
+		return fmt.Errorf("finish spawn %s: its stored member row belongs to host %s", m.SpawnOp, have.HostID)
+	case have.TmuxID != m.TmuxID || have.TmuxInstance != m.TmuxInstance || have.PaneID != m.PaneID:
+		return fmt.Errorf("finish spawn %s: its stored member row has tmux %s (%s, pane %s), not %s (%s, pane %s)", m.SpawnOp, have.TmuxID, have.TmuxInstance, have.PaneID, m.TmuxID, m.TmuxInstance, m.PaneID)
 	case have.Origin != origin:
 		return fmt.Errorf("finish spawn %s: its stored member row has origin %s", m.SpawnOp, have.Origin)
 	}

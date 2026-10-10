@@ -112,6 +112,8 @@ func TestSpawnFinish_AnExistingMemberRowIsVerified(t *testing.T) {
 		{"another session", func(m *memberRow) { m.SessionID = "sid-other" }, false},
 		{"another tmux identity", func(m *memberRow) { m.TmuxID = "$9" }, false},
 		{"another generation", func(m *memberRow) { m.TmuxInstance = "1:1" }, false},
+		{"another host", func(m *memberRow) { m.HostID = "h:other" }, false},
+		{"another pane", func(m *memberRow) { m.PaneID = "%9" }, false},
 		{"another origin", func(m *memberRow) { m.Origin = team.MemberOriginAdopted }, false},
 	}
 	for _, tasked := range []bool{true, false} {
@@ -121,7 +123,7 @@ func TestSpawnFinish_AnExistingMemberRowIsVerified(t *testing.T) {
 				f, root := newSpawnFixture(t, 2)
 				f.register("%0", "sid-m1")
 				old := newMember(spawnID(1), uid(1), "sid-m1", "_m1", 1)
-				old.TmuxID, old.TmuxInstance = tmuxID, inst
+				old.TmuxID, old.TmuxInstance, old.PaneID = tmuxID, inst, "%0"
 				c.edit(&old)
 				if err := f.m.store.InsertMember(old); err != nil {
 					t.Fatal(err)
@@ -144,5 +146,22 @@ func TestSpawnFinish_AnExistingMemberRowIsVerified(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// killSpawnSession says whether a kill is settled: a failed kill is not (so an abort does not mark the session done and the
+// runner that stops on the op tries again); a generation that moved or a session already gone is.
+func TestKillSpawnSession_ReportsWhetherTheKillIsSettled(t *testing.T) {
+	f, _ := newSpawnFixture(t, 2)
+	f.tmux.FailKillIfInstance = true
+	if f.m.killSpawnSession("op", "$0", "4242:1700000000") {
+		t.Fatal("a failed kill was reported as settled")
+	}
+	f.tmux.FailKillIfInstance = false
+	if !f.m.killSpawnSession("op", "$7", "4242:1700000000") { // no such session: gone already
+		t.Fatal("a session that is already gone was reported as unsettled")
+	}
+	if !f.m.killSpawnSession("op", "$0", "1:1") { // another generation: not this op's any more
+		t.Fatal("a moved generation was reported as unsettled")
 	}
 }
