@@ -32,6 +32,11 @@ func newCountingTmux(inner tmux.Executor) *countingTmux {
 	return &countingTmux{Executor: inner, calls: map[string]int{}, failOnce: map[string]bool{}}
 }
 
+// The module asks through the bounded variant (#2039); the double's behaviour is the one below.
+func (c *countingTmux) PaneSessionNameCtx(_ context.Context, target string) (string, error) {
+	return c.PaneSessionName(target)
+}
+
 func (c *countingTmux) PaneSessionName(target string) (string, error) {
 	c.mu.Lock()
 	c.calls[target]++

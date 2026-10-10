@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"testing"
@@ -14,6 +15,10 @@ import (
 
 // slowTmux makes every pane lookup take a moment.
 type slowTmux struct{ *tmux.FakeExecutor }
+
+func (s slowTmux) PaneSessionNameCtx(_ context.Context, pane string) (string, error) {
+	return s.PaneSessionName(pane)
+}
 
 func (s slowTmux) PaneSessionName(pane string) (string, error) {
 	time.Sleep(time.Millisecond)

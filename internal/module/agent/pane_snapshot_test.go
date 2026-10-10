@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,6 +51,16 @@ func (c *batchCountingTmux) ActivePanePID(target string) (string, error) {
 func (c *batchCountingTmux) PaneSessionName(target string) (string, error) {
 	c.note(&c.session)
 	return c.FakeExecutor.PaneSessionName(target)
+}
+
+func (c *batchCountingTmux) ActivePanePIDCtx(ctx context.Context, target string) (string, error) {
+	c.note(&c.pid)
+	return c.FakeExecutor.ActivePanePIDCtx(ctx, target)
+}
+
+func (c *batchCountingTmux) PaneSessionNameCtx(ctx context.Context, target string) (string, error) {
+	c.note(&c.session)
+	return c.FakeExecutor.PaneSessionNameCtx(ctx, target)
 }
 
 func (c *batchCountingTmux) counts() (batch, pid, session int) {
@@ -332,5 +345,128 @@ func TestProjectionRead_BatchTimeoutDoesNotFallBackPerPane(t *testing.T) {
 	}
 	if b, pid, sess := f.tx.counts(); b != 1 || pid != 0 || sess != 0 {
 		t.Fatalf("calls batch=%d pid=%d session=%d, want 1/0/0", b, pid, sess)
+	}
+}
+
+// ---- #2039: the per-pane fallback has a deadline ----
+
+// stuckPaneTmux is a tmux whose batch call FAILS (not a timeout: the fallback case) and whose per-pane lookups hang
+// until their context ends, like a tmux that stopped answering mid-read. The unbounded variants hang for good: a read that
+// still reaches them never comes back.
+type stuckPaneTmux struct{ *batchCountingTmux }
+
+func (s stuckPaneTmux) ListPanePlacements(ctx context.Context) (map[string]tmux.PanePlacement, error) {
+	s.note(&s.batch)
+	return nil, errors.New("tmux: list-panes: exit status 1")
+}
+
+func (s stuckPaneTmux) ActivePanePIDCtx(ctx context.Context, _ string) (string, error) {
+	s.note(&s.pid)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (s stuckPaneTmux) PaneSessionNameCtx(ctx context.Context, _ string) (string, error) {
+	s.note(&s.session)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (s stuckPaneTmux) ActivePanePID(string) (string, error)   { select {} }
+func (s stuckPaneTmux) PaneSessionName(string) (string, error) { select {} }
+
+func shortLookupBudget(t *testing.T, d time.Duration) {
+	t.Helper()
+	orig := paneSnapshotTimeout
+	paneSnapshotTimeout = d
+	t.Cleanup(func() { paneSnapshotTimeout = orig })
+}
+
+// within fails the test when fn has not returned in d: a read stuck on a hung tmux never comes back, so it is run aside.
+func within(t *testing.T, d time.Duration, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); fn() }()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf("%s did not return within %v", what, d)
+	}
+}
+
+// A batch that fails without timing out falls back to per-pane lookups; a tmux that hangs there must cost the read ONE
+// budget (the batch's), not one per pane, and not forever. The lookups that ran out of time count as "not found" — the
+// existing failure path (frames unfiltered, pane nameless) — and the read does not fail. Mutations: the lookups back on the
+// unbounded variants → the read hangs (red); a budget per lookup instead of per read → 30 × 40 ms overruns (red).
+func TestProjectionRead_PerPaneFallbackIsBoundedByOneBudget(t *testing.T) {
+	f := newProjFixture(t, 30, false)
+	shortLookupBudget(t, 40*time.Millisecond)
+	f.m.tmux = stuckPaneTmux{f.tx}
+	start := time.Now()
+	within(t, 3*time.Second, "a projection read over a hung tmux", func() {
+		if _, err := f.m.liveSessionProjections(); err != nil {
+			t.Errorf("a fallback lookup that timed out failed the read: %v", err)
+		}
+	})
+	if d := time.Since(start); d > 400*time.Millisecond {
+		t.Fatalf("read took %v, want about one budget (40ms) for the whole fallback, not one per pane", d)
+	}
+}
+
+// Single lookups outside a snapshot (an event's pane, the hook verifier) are bounded too, each by the budget.
+func TestPaneLookups_WithoutASnapshotAreBounded(t *testing.T) {
+	f := newProjFixture(t, 2, false)
+	shortLookupBudget(t, 40*time.Millisecond)
+	f.m.tmux = stuckPaneTmux{f.tx}
+	within(t, 3*time.Second, "paneSessionName", func() {
+		if got := f.m.paneSessionName("%0"); got != "" {
+			t.Errorf("paneSessionName = %q, want \"\" (not found)", got)
+		}
+	})
+	within(t, 3*time.Second, "resolvePaneSession", func() {
+		if name, code := f.m.resolvePaneSession("%0"); name != "" || code != "" {
+			t.Errorf("resolvePaneSession = %q, %q", name, code)
+		}
+	})
+	within(t, 3*time.Second, "resolvePanePID", func() {
+		if _, err := resolvePanePID(f.m.tmux, "%0"); err == nil {
+			t.Error("resolvePanePID answered for a hung tmux")
+		}
+	})
+}
+
+// The replay cache's per-pane name lookups share one budget for the whole round.
+func TestReplayCache_PaneNameLookupsShareOneBudget(t *testing.T) {
+	f := newProjFixture(t, 30, false)
+	shortLookupBudget(t, 40*time.Millisecond)
+	f.m.tmux = stuckPaneTmux{f.tx}
+	rc := &replayProjectionCache{}
+	start := time.Now()
+	within(t, 3*time.Second, "a replay round over a hung tmux", func() {
+		for _, s := range []string{"s0", "s1", "s2", "s3"} {
+			if _, err := f.m.projectionForSessionWith(s, rc); err != nil {
+				t.Errorf("projectionForSessionWith(%s): %v", s, err)
+			}
+		}
+	})
+	if d := time.Since(start); d > 400*time.Millisecond {
+		t.Fatalf("round took %v, want about one budget", d)
+	}
+}
+
+// One line, not one per pane, when lookups run out of time.
+func TestPerPaneFallback_DeadlineIsLoggedOnce(t *testing.T) {
+	f := newProjFixture(t, 30, false)
+	shortLookupBudget(t, 20*time.Millisecond)
+	f.m.tmux = stuckPaneTmux{f.tx}
+	lookupDeadlineLastLog.Store(0)
+	lookupDeadlineSuppressed.Store(0)
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	within(t, 3*time.Second, "the read", func() { _, _ = f.m.liveSessionProjections() })
+	if n := strings.Count(buf.String(), "ran out of time"); n != 1 {
+		t.Fatalf("%d deadline lines for one read, want 1:\n%s", n, buf.String())
 	}
 }

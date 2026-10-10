@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -57,6 +58,10 @@ type blockingTmux struct {
 }
 
 func (b *blockingTmux) arm() { b.armed.Store(true) }
+
+func (b *blockingTmux) PaneSessionNameCtx(_ context.Context, pane string) (string, error) {
+	return b.PaneSessionName(pane)
+}
 
 func (b *blockingTmux) PaneSessionName(pane string) (string, error) {
 	if b.armed.CompareAndSwap(true, false) {

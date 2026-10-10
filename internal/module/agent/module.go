@@ -955,6 +955,7 @@ type replayProjectionCache struct {
 	projections []SessionProjection // set only after a SUCCESSFUL liveFrameProjections
 	loaded      bool
 	paneName    map[string]string // paneID -> session name; successful lookups only
+	deadline    time.Time         // the round's one budget for the per-pane lookups above (#2039), set at the first one
 }
 
 // projectionForSessionWith is projectionForSession with an optional replay
@@ -979,8 +980,14 @@ func (m *Module) projectionForSessionWith(sessionName string, rc *replayProjecti
 		if m.tmux == nil {
 			return ""
 		}
-		name, err := m.tmux.PaneSessionName(paneID)
+		if rc.deadline.IsZero() {
+			rc.deadline = time.Now().Add(paneSnapshotTimeout) // one budget for the whole round's lookups
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), rc.deadline)
+		defer cancel()
+		name, err := m.tmux.PaneSessionNameCtx(ctx, paneID)
 		if err != nil {
+			logLookupDeadline(err)
 			return ""
 		}
 		if rc.paneName == nil {
@@ -997,8 +1004,11 @@ func (m *Module) paneSessionName(paneID string) string {
 	if m.tmux == nil {
 		return ""
 	}
-	name, err := m.tmux.PaneSessionName(paneID)
+	ctx, cancel := boundedPaneLookup()
+	defer cancel()
+	name, err := m.tmux.PaneSessionNameCtx(ctx, paneID)
 	if err != nil {
+		logLookupDeadline(err)
 		return ""
 	}
 	return name
@@ -1008,8 +1018,11 @@ func (m *Module) resolvePaneSession(paneID string) (string, string) {
 	if m.tmux == nil {
 		return "", ""
 	}
-	sessionName, err := m.tmux.PaneSessionName(paneID)
+	ctx, cancel := boundedPaneLookup()
+	defer cancel()
+	sessionName, err := m.tmux.PaneSessionNameCtx(ctx, paneID)
 	if err != nil {
+		logLookupDeadline(err)
 		return "", ""
 	}
 	return sessionName, m.resolveSessionCode(sessionName)
