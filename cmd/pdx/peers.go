@@ -73,7 +73,9 @@ const peersUsage = "usage: pdx peers [--json] [--all] [--config <path>]\n" +
 	"       pdx peers host verify <alias> [--json] [--config <path>]\n" +
 	"       pdx peers host rename <alias> <new-alias> [--config <path>]\n" +
 	"       pdx peers host rotate <alias> [--commit|--cancel] [--force] [--config <path>]\n" +
-	"       pdx peers host allow-team <alias> on|off [--root <dir>]... [--remove-root <dir>]... [--end-members (off only)] [--config <path>]\n" +
+	"       pdx peers host allow-team <alias> on|off [--root <dir>... | --add-root <dir>... --remove-root <dir>...] [--end-members (off only)] [--config <path>]\n" +
+	"           (--root sets the roots to exactly these, checked against the revision it read: a 409 means someone changed them, run it again;\n" +
+	"            --add-root / --remove-root change the set atomically and never overwrite another writer; not together with --root)\n" +
 	"       pdx peers host remove <alias> [--config <path>]\n" +
 	"       pdx peers host list [--config <path>]\n" +
 	"       pdx peers alias [--config <path>]\n" +
@@ -129,6 +131,7 @@ type peersInvocation struct {
 	hasToken    bool
 	allowBypass *bool
 	roots       []string // `host allow-team`'s repeatable --root, as typed
+	addRoots    []string // `host allow-team`'s repeatable --add-root (#2340), as typed
 	removeRoots []string // `host allow-team`'s repeatable --remove-root (#2340), as typed
 	endMembers  bool     // `host allow-team <alias> off --end-members`
 
@@ -229,6 +232,12 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 			}
 			i++
 			inv.roots = append(inv.roots, args[i])
+		case a == "--add-root":
+			if i+1 >= len(args) {
+				return peersInvocation{}, "", false
+			}
+			i++
+			inv.addRoots = append(inv.addRoots, args[i])
 		case a == "--remove-root":
 			if i+1 >= len(args) {
 				return peersInvocation{}, "", false
@@ -258,7 +267,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		// Top-level query form: no positionals at all, and none of the
 		// host-only flags (--token, --allow-bypass, --commit/--cancel/
 		// --force — the last three are rotate-only).
-		if len(positionals) != 0 || inv.hasToken || inv.allowBypass != nil || inv.roots != nil || inv.removeRoots != nil || inv.endMembers ||
+		if len(positionals) != 0 || inv.hasToken || inv.allowBypass != nil || inv.roots != nil || inv.addRoots != nil || inv.removeRoots != nil || inv.endMembers ||
 			inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
@@ -271,7 +280,7 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 		// switches with nothing to switch here) and with every host-only
 		// flag; <name> together with --clear would be two instructions.
 		inv.aliasMode = true
-		if inv.all || inv.jsonOutput || inv.hasToken || inv.allowBypass != nil || inv.roots != nil || inv.removeRoots != nil || inv.endMembers ||
+		if inv.all || inv.jsonOutput || inv.hasToken || inv.allowBypass != nil || inv.roots != nil || inv.addRoots != nil || inv.removeRoots != nil || inv.endMembers ||
 			inv.rotateCommit || inv.rotateCancel || inv.rotateForce {
 			return peersInvocation{}, "", false
 		}
@@ -316,7 +325,11 @@ func parsePeersInvocation(args []string) (inv peersInvocation, unknownFlag strin
 	}
 
 	// --root is allow-team's alone.
-	if (inv.roots != nil || inv.removeRoots != nil || inv.endMembers) && inv.verb != "allow-team" {
+	if (inv.roots != nil || inv.addRoots != nil || inv.removeRoots != nil || inv.endMembers) && inv.verb != "allow-team" {
+		return peersInvocation{}, "", false
+	}
+	// --root sets the whole set; --add-root / --remove-root edit it: one or the other (#2340).
+	if inv.roots != nil && (inv.addRoots != nil || inv.removeRoots != nil) {
 		return peersInvocation{}, "", false
 	}
 
@@ -800,6 +813,7 @@ type cliHostRow struct {
 	AllowBypass     bool     `json:"allow_bypass"`
 	AllowTeam       bool     `json:"allow_team"`
 	TeamRoots       []string `json:"team_roots"`
+	TeamRootsRev    int64    `json:"team_roots_rev"`
 	RotationPending bool     `json:"rotation_pending"`
 	LastInboundAuth string   `json:"last_inbound_auth"`
 }
@@ -854,6 +868,8 @@ type cliPutHostRequest struct {
 	// current set atomically, so this CLI never reads and writes the whole set back.
 	AddTeamRoots    []string `json:"add_team_roots,omitempty"`
 	RemoveTeamRoots []string `json:"remove_team_roots,omitempty"`
+	// TeamRootsRev is the revision a whole-set --root read just before it wrote (the daemon answers 409 when it moved).
+	TeamRootsRev *int64 `json:"team_roots_rev,omitempty"`
 }
 
 // cliVerifyHostResponse mirrors internal/module/peers.verifyHostResponse:
@@ -1395,13 +1411,22 @@ func reportPeersAPIError(result peersHTTPResult, stderr io.Writer) int {
 // when it isn't that shape.
 func extractPeersErrorMessage(body []byte) string {
 	var errResp struct {
-		Error  string `json:"error"`
-		Root   string `json:"root"`
-		Detail string `json:"detail"`
+		Error     string   `json:"error"`
+		Root      string   `json:"root"`
+		Detail    string   `json:"detail"`
+		TeamRoots []string `json:"team_roots"`
+		Rev       int64    `json:"team_roots_rev"`
 	}
 	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error != "" {
 		if errResp.Error == "bad_root" {
 			return fmt.Sprintf("bad_root: %s (%s)", errResp.Root, errResp.Detail)
+		}
+		if errResp.Error == "team_roots_conflict" {
+			now := "none"
+			if len(errResp.TeamRoots) > 0 {
+				now = strings.Join(errResp.TeamRoots, ", ")
+			}
+			return fmt.Sprintf("team_roots_conflict: the roots were changed by someone else meanwhile (now: %s; revision %d); nothing was changed, run the command again", now, errResp.Rev)
 		}
 		return errResp.Error
 	}

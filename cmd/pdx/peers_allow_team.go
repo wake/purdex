@@ -14,17 +14,31 @@ import (
 	"github.com/wake/purdex/internal/config"
 )
 
-// runPeersHostAllowTeam implements `pdx peers host allow-team <alias>
-// on|off [--root <dir>]... [--remove-root <dir>]...`: a PUT with allow_team, plus add_team_roots for each --root and
-// remove_team_roots for each --remove-root (#2340: the daemon changes the set atomically, so two writers never overwrite
-// each other; without either flag the roots are left alone). The API takes absolute paths only, so the CLI expands ~ and
-// makes a relative root absolute; existence is the daemon's to check.
+// runPeersHostAllowTeam implements `pdx peers host allow-team <alias> on|off` with, optionally, one of two ways to change
+// the roots (#2340). `--root <dir>...` sets the roots to exactly these, as it always did, but reads the set's revision
+// first and sends it: if someone changed the roots in between, the daemon answers 409 team_roots_conflict and nothing is
+// overwritten. `--add-root <dir>...` / `--remove-root <dir>...` are atomic edits of the current set (add_team_roots /
+// remove_team_roots, no revision needed). Without any of them the roots are left alone. The API takes absolute paths only,
+// so the CLI expands ~ and makes a relative root absolute; existence is the daemon's to check.
 func runPeersHostAllowTeam(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
 	alias := inv.positionals[0]
 	on := inv.positionals[1] == "on"
 	req := cliPutHostRequest{AllowTeam: &on}
 	var err error
-	if req.AddTeamRoots, err = absTeamRoots(inv.roots); err != nil {
+	if inv.roots != nil {
+		whole, err := absTeamRoots(inv.roots)
+		if err != nil {
+			fmt.Fprintf(stderr, "pdx peers: %v\n", err)
+			return 1
+		}
+		req.TeamRoots = &whole
+		rev, code := listedTeamRootsRev(cfg, base, alias, stderr)
+		if code != 0 {
+			return code
+		}
+		req.TeamRootsRev = rev
+	}
+	if req.AddTeamRoots, err = absTeamRoots(inv.addRoots); err != nil {
 		fmt.Fprintf(stderr, "pdx peers: %v\n", err)
 		return 1
 	}
@@ -62,6 +76,30 @@ func runPeersHostAllowTeam(cfg config.Config, base string, inv peersInvocation, 
 		return endMembersOf(cfg, row, stdout, stderr)
 	}
 	return 0
+}
+
+// listedTeamRootsRev reads the host list and returns the team_roots_rev of alias (matched like the daemon does, ignoring
+// case). A host that is not listed gives nil: the PUT then answers its own 404.
+func listedTeamRootsRev(cfg config.Config, base, alias string, stderr io.Writer) (*int64, int) {
+	result, err := doPeersRequest(http.MethodGet, base, nil, cfg.Token, peersRequestTimeout)
+	if err != nil {
+		return nil, reportPeersTransportErr(err, stderr)
+	}
+	if result.status != http.StatusOK {
+		return nil, reportPeersAPIError(result, stderr)
+	}
+	var list cliHostsListResponse
+	if err := json.Unmarshal(result.body, &list); err != nil {
+		fmt.Fprintln(stderr, "pdx peers: invalid response")
+		return nil, 1
+	}
+	for _, h := range list.Hosts {
+		if strings.EqualFold(h.Alias, alias) {
+			rev := h.TeamRootsRev
+			return &rev, 0
+		}
+	}
+	return nil, 0
 }
 
 // absTeamRoots is absTeamRoot over a list; nil in, nil out.

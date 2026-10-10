@@ -264,3 +264,44 @@ func TestTeamRootsAdd_ConcurrentAddsAllLand(t *testing.T) {
 		t.Fatalf("after %d concurrent adds: %d roots, rev %d", n, len(got.TeamRoots), got.TeamRootsRev)
 	}
 }
+
+// Several whole-set writers that all read revision 0 and write at once: the revision check and the write are one
+// transaction of the config lock (UpdateConfig holds CfgMu from the copy to the file write), so exactly one wins, the others
+// get 409 with the winner's set, and the file is the winner's.
+func TestTeamRootsRev_ConcurrentWholeSetWritersExactlyOneWins(t *testing.T) {
+	f := newTeamRootsFixture(t)
+	const n = 8
+	var dirs []string
+	for i := 0; i < n; i++ {
+		dirs = append(dirs, realDir(t, fmt.Sprintf("w%d", i)))
+	}
+	var mu sync.Mutex
+	var winners []string
+	var wg sync.WaitGroup
+	for _, d := range dirs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			code, row := f.put(map[string]any{"team_roots": []string{d}, "team_roots_rev": 0})
+			mu.Lock()
+			defer mu.Unlock()
+			switch code {
+			case 200:
+				winners = append(winners, d)
+			case http.StatusConflict:
+				if row.Error != "team_roots_conflict" || row.Roots == nil {
+					t.Errorf("409 without the current set: %+v", row)
+				}
+			default:
+				t.Errorf("%s: %d %+v", d, code, row)
+			}
+		}()
+	}
+	wg.Wait()
+	if len(winners) != 1 {
+		t.Fatalf("%d writers won: %v", len(winners), winners)
+	}
+	if got := f.stored(); !reflect.DeepEqual(got.TeamRoots, winners) || got.TeamRootsRev != 1 {
+		t.Fatalf("the file is %+v, want the winner's %v at revision 1", got, winners)
+	}
+}
