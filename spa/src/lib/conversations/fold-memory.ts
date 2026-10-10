@@ -45,9 +45,12 @@ export const noteDeckPane = (paneId: string): void => { shown.add(paneId) }
 export const deckPanes = (): string[] => [...shown]
 export const forgetDeckPane = (paneId: string): void => { shown.delete(paneId) }
 
-/** Forget every fold of a pane, whatever session it was bound to (the memory key is `${paneId}\0${sessionId}`). */
-export function forgetFoldsOfPane(paneId: string): void {
-  for (const key of [...panes.keys()]) if (key.startsWith(`${paneId}\0`)) forgetFolds(key)
+/**
+ * Forget every fold of a pane, whatever session it was bound to (the memory key is `${paneId}\0${sessionId}`, or for the chat
+ * `${paneId}\0${hostId}\0${sessionId}`). `keep` spares the keys it returns true for.
+ */
+export function forgetFoldsOfPane(paneId: string, keep?: (key: string) => boolean): void {
+  for (const key of [...panes.keys()]) if (key.startsWith(`${paneId}\0`) && !keep?.(key)) forgetFolds(key)
 }
 
 function subscribe(paneId: string, fn: () => void): () => void {

@@ -383,6 +383,52 @@ describe('failures', () => {
   })
 })
 
+describe('dispose (the pane is gone for good)', () => {
+  it('drops what waits, clears the timer, and the answer of a message in flight starts nothing', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('first')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.enqueue('second')
+    expect(calls).toHaveLength(1)
+    q.dispose()
+    expect(q.entries()).toEqual([])
+    calls[0].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
+    expect(calls).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a disposed queue sends nothing even if something still calls it', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.dispose()
+    q.enqueue('late')
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 2)
+    expect(calls).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('hasPending: in the undo window, in flight and waiting for idle count; a settled message does not', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    expect(q.hasPending()).toBe(false)
+    q.enqueue('a')
+    expect(q.hasPending()).toBe(true)
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    expect(q.hasPending()).toBe(true) // in flight
+    calls[0].resolve({ kind: 'busy' } as SendOutcome)
+    await flush()
+    expect(q.hasPending()).toBe(true) // waiting for idle
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(0)
+    calls[1].resolve({ kind: 'accepted' })
+    await flush()
+    expect(q.hasPending()).toBe(false)
+  })
+})
+
 describe('registry', () => {
   it('one queue per pane key, kept across calls', () => {
     const { port } = fakePort()

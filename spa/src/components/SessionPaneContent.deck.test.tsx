@@ -7,6 +7,8 @@ import { TabContent } from './TabContent'
 import { SessionPaneContent } from './SessionPaneContent'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { forgetFolds } from '../lib/conversations/fold-memory'
+import { clearAllDrafts, draftKey, readDraft, writeDraft } from '../lib/conversations/draft-memory'
+import { clearAllSendQueues, hasSendQueue, sendQueueFor } from '../lib/conversations/send-queue'
 import { emptyDoc } from '../lib/conversations/model'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
@@ -50,6 +52,7 @@ const ready = (): PaneConversation => ({
 
 beforeEach(() => {
   cleanup()
+  clearAllDrafts(); clearAllSendQueues()
   conv.calls = []
   conv.value = ready()
   forgetFolds(`${paneIdOf(sessionTab)}\0s1`)
@@ -97,6 +100,31 @@ describe('the deck inside the session pane', () => {
     expect(screen.getByTestId('other-tab')).toBeInTheDocument()
     view.rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
     expect(screen.getByTestId('output-body')).toBeInTheDocument()
+  })
+
+  it('#2457: a tab switch keeps the pane\'s draft and queue; a session change frees the old session\'s; closing the tab frees the rest', () => {
+    const pane = paneIdOf(sessionTab)
+    const dk1 = draftKey(pane, H, 's1')
+    const dk2 = draftKey(pane, H, 's2')
+    setView('deck')
+    const view = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    writeDraft(dk1, 'unsent')
+    sendQueueFor(dk1, () => ({ submit: async () => ({ kind: 'accepted' }), interrupt: async () => ({ kind: 'accepted' }) }))
+    // away and back: the pane unmounts, nothing is freed
+    view.rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    view.rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(readDraft(dk1)).toBe('unsent')
+    expect(hasSendQueue(dk1)).toBe(true)
+    // the pane's agent moves to another session (/clear): the old session's state is not read again
+    writeDraft(dk2, 'new session draft')
+    conv.value = { ...ready(), sessionId: 's2' }
+    view.rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(readDraft(dk1)).toBeUndefined()
+    expect(hasSendQueue(dk1)).toBe(false)
+    expect(readDraft(dk2)).toBe('new session draft')
+    // the tab is closed: the pane is gone for good
+    act(() => { useTabStore.setState({ tabs: { [dashTab.id]: dashTab }, tabOrder: [dashTab.id], activeTabId: dashTab.id }) })
+    expect(readDraft(dk2)).toBeUndefined()
   })
 
   it('an unreadable conversation offers the terminal and switching goes there', () => {

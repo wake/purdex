@@ -40,6 +40,7 @@ export class SendQueue {
   private view: readonly QueueEntry[] = []
   private timer: ReturnType<typeof setTimeout> | null = null
   private claimed = new Set<string>()
+  private disposed = false
   private listeners = new Set<() => void>()
 
   private readonly port: SendPort
@@ -148,10 +149,25 @@ export class SendQueue {
 
   interrupt(): Promise<SendOutcome> { return this.port.interrupt() }
 
-  dispose(): void { if (this.timer) clearTimeout(this.timer); this.timer = null; this.listeners.clear() }
+  /** Any message not yet handed out (in its undo window, or waiting for idle) is waiting for the person to act. */
+  hasPending(): boolean { return this.list.some((e) => e.state === 'undo' || e.state === 'sending' || e.state === 'waiting') }
+
+  /**
+   * The pane is gone for good: no timer, no further request, nothing emitted. A message already handed out (`sending`) keeps
+   * whatever the daemon makes of it and its answer is ignored; one still in its undo window or waiting for idle is dropped.
+   */
+  dispose(): void {
+    this.disposed = true
+    this.list = []
+    this.view = []
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
+    this.listeners.clear()
+  }
 
   // One at a time: the first entry that has not settled is the head.
   private pump(): void {
+    if (this.disposed) return
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
     const head = this.list.find((e) => e.state === 'undo' || e.state === 'sending' || e.state === 'waiting')
     if (!head || head.state !== 'undo') return
@@ -164,6 +180,7 @@ export class SendQueue {
   }
 
   private settle(e: QueueEntry, o: SendOutcome): void {
+    if (this.disposed) return
     if (e.state !== 'sending' || !this.list.includes(e)) return // already echoed by the transcript
     e.outcome = o
     e.settledAt = this.now()
@@ -188,6 +205,25 @@ export function sendQueueFor(key: string, make: () => SendPort): SendQueue {
   let q = queues.get(key)
   if (!q) { q = new SendQueue(make()); queues.set(key, q) }
   return q
+}
+
+/** Whether a queue is held under this key (the registry's size is `sendQueueCount`). */
+export const hasSendQueue = (key: string): boolean => queues.has(key)
+export const sendQueueCount = (): number => queues.size
+
+/**
+ * Dispose and forget the queues whose key matches (a pane that is gone for good, or a session it no longer shows). With
+ * `keepPending` a queue that still has a message waiting stays until it settles; returns how many were released.
+ */
+export function releaseSendQueues(match: (key: string) => boolean, opts: { keepPending?: boolean } = {}): number {
+  let n = 0
+  for (const [key, q] of [...queues]) {
+    if (!match(key) || (opts.keepPending && q.hasPending())) continue
+    q.dispose()
+    queues.delete(key)
+    n++
+  }
+  return n
 }
 
 /** Tests only. */
