@@ -10,7 +10,8 @@ import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
 import { UNSORTED_WORKSPACE_ID, useWorkspaceStore } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useHistoryStore } from '../../../stores/useHistoryStore'
-import { createTab, type Tab } from '../../../types/tab'
+import { createTab, type Pane, type Tab } from '../../../types/tab'
+import { collectLeaves, getPrimaryPane } from '../../../lib/pane-tree'
 
 describe('WorkspaceSettingsPage', () => {
   let wsId: string
@@ -154,6 +155,38 @@ describe('WorkspaceSettingsPage', () => {
       expect(tabOrder).toEqual([others.id, global.id])
       expect(useWorkspaceStore.getState().workspaces.map((w) => w.tabs)).toEqual([[others.id, global.id]])
       expect(useHistoryStore.getState().closedTabs.map((c) => c.tab.id)).toEqual([]) // nothing to reopen it into
+    })
+
+    // #1955: a settings page of the deleted workspace in a SECONDARY pane of a split tab: only that pane goes.
+    it("a split tab whose SECONDARY pane is the deleted workspace's settings keeps the tab and its primary pane, and loses only that pane", () => {
+      const split = tabIn(wsId)
+      const primary = getPrimaryPane(split.layout)
+      const settingsPane: Pane = { id: 'p-settings', content: { kind: 'settings', scope: { workspaceId: wsId } } }
+      const otherPane: Pane = { id: 'p-other', content: { kind: 'settings', scope: { workspaceId: 'someone-else' } } }
+      useTabStore.setState((s) => ({
+        tabs: { ...s.tabs, [split.id]: { ...s.tabs[split.id], layout: {
+          type: 'split', id: 's1', direction: 'h', sizes: [34, 33, 33],
+          children: [{ type: 'leaf', pane: primary }, { type: 'leaf', pane: settingsPane }, { type: 'leaf', pane: otherPane }],
+        } } },
+      }))
+      deleteKeeping(wsId, 1) // the split tab is the only one in the dialog: keep it
+      const kept = useTabStore.getState().tabs[split.id]
+      expect(kept).toBeDefined()
+      expect(collectLeaves(kept.layout).map((p) => p.id)).toEqual([primary.id, 'p-other']) // only the deleted workspace's page went
+      expect(getPrimaryPane(kept.layout).id).toBe(primary.id)
+      expect(useWorkspaceStore.getState().workspaces.map((w) => w.id)).toEqual([UNSORTED_WORKSPACE_ID])
+    })
+
+    it('a split tab whose PRIMARY pane is the deleted workspace\'s settings is still closed whole (unchanged)', () => {
+      const split = tabIn(wsId, { kind: 'settings', scope: { workspaceId: wsId } })
+      useTabStore.setState((s) => ({
+        tabs: { ...s.tabs, [split.id]: { ...s.tabs[split.id], layout: {
+          type: 'split', id: 's2', direction: 'h', sizes: [50, 50],
+          children: [{ type: 'leaf', pane: getPrimaryPane(split.layout) }, { type: 'leaf', pane: { id: 'p-dash', content: { kind: 'dashboard' } } }],
+        } } },
+      }))
+      deleteKeeping(wsId, 0)
+      expect(useTabStore.getState().tabs[split.id]).toBeUndefined()
     })
 
     it('closing every tab still focuses the workspace that takes over', () => {
