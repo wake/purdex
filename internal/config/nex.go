@@ -35,7 +35,7 @@ type NexConfig struct {
 // are not edited in the UI, but the SPA PUTs them back untouched.
 type NexPeerConfig struct {
 	Enabled      bool   `toml:"enabled"       json:"enabled"`
-	MaxPending   int    `toml:"max_pending"   json:"max_pending"`
+	MaxPending   int    `toml:"max_pending,omitzero" json:"max_pending"`
 	WakeTemplate string `toml:"wake_template,omitempty" json:"wake_template"`
 	ReplyLine    string `toml:"reply_line,omitempty" json:"reply_line"`
 }
