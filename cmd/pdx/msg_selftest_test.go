@@ -1731,7 +1731,7 @@ func TestSelftest_SystemPromptIsBoundToTheProbeNonce(t *testing.T) {
 	if strings.Contains(selftestSystemPrompt("ffffffff"), "0123abcd") {
 		t.Error("the prompt carries a nonce other than its own")
 	}
-	if !strings.Contains(p, "any other") || !strings.Contains(p, "do not act") {
+	if lp := strings.ToLower(p); !strings.Contains(lp, "any other") || !strings.Contains(lp, "do not act") {
 		t.Errorf("the prompt must tell the model not to act on any other inbound message: %q", p)
 	}
 	// and the session that carries it is started with the nonce the probe will use
