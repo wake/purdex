@@ -50,6 +50,10 @@ const (
 	RelayReasonModReloaded       = "mod_reloaded"        // failed: the mod reloaded (pdx setup) while the write was under way (#2441)
 )
 
+// RelayManualNoticeFmt is the notice the lead gets when a person's /relay moved one of its members (member relay spec D3):
+// the old and the new ref, each written as the lead can address it.
+const RelayManualNoticeFmt = "[pdx team] member 由使用者手動接力：%s → %s"
+
 // Relay error codes (APIError.Error on /api/relay/*); 409 unless noted.
 const (
 	ErrMemberRelayIsLeads = "member_relay_is_leads" // a member's relay is the lead's (U9)
