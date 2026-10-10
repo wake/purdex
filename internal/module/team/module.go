@@ -257,12 +257,14 @@ type Module struct {
 	// frames and the title store (nil: no title). spawnWG joins the runners
 	// in Stop. spawnPoll and spawnSleep pace the registration poll,
 	// spawnBudget (ms) bounds it.
-	sessions    sessionCreator
-	tmux        tmuxOps
-	teamCfg     hostconfig.TeamSettingsReader
-	frames      frameReader
-	titleSet    TitleSetter
-	spawnWG     sync.WaitGroup
+	sessions sessionCreator
+	tmux     tmuxOps
+	teamCfg  hostconfig.TeamSettingsReader
+	frames   frameReader
+	titleSet TitleSetter
+	spawnWG  sync.WaitGroup
+	// abortKilled marks the ops whose abort already killed the session, so the runner that stops on them does not kill again
+	abortKilled sync.Map
 	spawnPoll   time.Duration
 	spawnSleep  func(ctx context.Context, d time.Duration)
 	spawnBudget int64
