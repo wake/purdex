@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -25,21 +26,14 @@ func runToken(args []string) {
 	}
 
 	if subcmd != "generate" {
-		fmt.Fprintf(os.Stderr, "Usage: pdx token generate [--config <path>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: pdx token generate [--config <path>] [--force]\n")
 		os.Exit(1)
 	}
 
 	fs := flag.NewFlagSet("token", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config.toml (default: ~/.config/pdx/config.toml)")
+	force := fs.Bool("force", false, "write the token even though a daemon is running on this config")
 	fs.Parse(flagArgs)
-
-	// Generate 20-byte random token → "pdx_" + 40 hex chars (160-bit entropy)
-	raw := make([]byte, 20)
-	if _, err := rand.Read(raw); err != nil {
-		fmt.Fprintf(os.Stderr, "token: failed to generate random bytes: %v\n", err)
-		os.Exit(1)
-	}
-	token := "pdx_" + hex.EncodeToString(raw)
 
 	// Resolve config path
 	path := *cfgPath
@@ -52,12 +46,52 @@ func runToken(args []string) {
 		path = filepath.Join(home, ".config", "pdx", "config.toml")
 	}
 
-	// One line of the file changes, under a lock (config.SetToken); every other setting, comment and table stays.
-	if err := config.SetToken(path, token); err != nil {
-		fmt.Fprintf(os.Stderr, "token: %v\n", err)
-		os.Exit(1)
+	if code := tokenGenerate(path, *force, isTerminal(os.Stdout), os.Stdout, os.Stderr); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// tokenGenerate writes a new token into the config at path and returns the exit code. A daemon running on that config (it holds
+// the pid lock in the config's data_dir) keeps its token in memory, so rewriting the file behind it leaves every client that
+// holds the old token — and every pdx call on the host — answering 401 (incident 2026-10-11, #2557): without force it is refused
+// and the file is not touched. The plaintext token goes to a terminal only; to a log or a pipe goes its fingerprint (#1950).
+func tokenGenerate(path string, force, tty bool, out, errw io.Writer) int {
+	cfg, err := config.Load(path)
+	if err != nil {
+		fmt.Fprintf(errw, "token: %v\n", err)
+		return 1
+	}
+	running, pid := isDaemonRunning(filepath.Join(cfg.DataDir, "pdx.pid"))
+	if running && !force {
+		fmt.Fprintf(errw, "token: a daemon (pid %d) is running on %s and keeps its token in memory; a new token in the file would "+
+			"lock out the daemon's own clients (every pdx call would answer 401). Nothing was changed. "+
+			"Pass --force to write it anyway.\n", pid, path)
+		return 1
 	}
 
-	fmt.Printf("Token: %s\n", token)
-	fmt.Printf("Saved to: %s\n", path)
+	// Generate 20-byte random token → "pdx_" + 40 hex chars (160-bit entropy)
+	raw := make([]byte, 20)
+	if _, err := rand.Read(raw); err != nil {
+		fmt.Fprintf(errw, "token: failed to generate random bytes: %v\n", err)
+		return 1
+	}
+	token := "pdx_" + hex.EncodeToString(raw)
+
+	// One line of the file changes, under a lock (config.SetToken); every other setting, comment and table stays.
+	if err := config.SetToken(path, token); err != nil {
+		fmt.Fprintf(errw, "token: %v\n", err)
+		return 1
+	}
+
+	if tty {
+		fmt.Fprintf(out, "Token: %s\n", token)
+	} else {
+		fmt.Fprintf(out, "Token generated (fingerprint %s)\n", config.TokenFingerprint(token))
+	}
+	fmt.Fprintf(out, "Saved to: %s\n", path)
+	if running {
+		fmt.Fprintf(errw, "token: --force: the daemon (pid %d) still holds the old token until you restart it, and every client "+
+			"(the App, phones, other hosts) must re-pair with the new token; they are refused with 401 until both are done.\n", pid)
+	}
+	return 0
 }
