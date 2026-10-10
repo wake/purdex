@@ -95,6 +95,6 @@ export const snapshotTrusted = (t: TodoBook, startedAt: number): boolean => star
 export function snapshotTodos(t: TodoBook, snap: TodoLists, startedAt: number): { book: TodoBook; trusted: boolean } {
   if (!snapshotTrusted(t, startedAt)) return { book: upsertTodos(t, snap.done), trusted: false }
   const newer = new Set(t.touches.filter((x) => x.at > startedAt).map((x) => x.id))
-  const base = { ...t, open: t.open.filter((x) => newer.has(x.id)) }
+  const base = { ...t, openCapped: false, open: t.open.filter((x) => newer.has(x.id)) } // the whole list is re-decided: the cap is re-earned by it
   return { book: upsertTodos(upsertTodos(base, snap.done.filter((x) => !newer.has(x.id))), snap.open.filter((x) => !newer.has(x.id))), trusted: true }
 }

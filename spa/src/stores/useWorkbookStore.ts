@@ -132,6 +132,11 @@ const emptyConv = (): ConvState => ({
 export const selectRefreshPending = (c: Pick<ConvState, 'entries'> | undefined): boolean =>
   !!c && c.entries.some((e) => e.kind === 'refresh' && e.state === 'pending')
 
+/** The caps the todo book hit (UI: say so instead of silently showing a partial list). `openCapped` resets when a reconciled
+ *  full snapshot replaces the open list; `doneCapped` stays (older done records were dropped; a snapshot does not bring them back). */
+export const selectTodoCaps = (c: Pick<ConvState, 'todos'> | undefined): { openCapped: boolean; doneCapped: boolean } =>
+  ({ openCapped: !!c?.todos.openCapped, doneCapped: !!c?.todos.doneCapped })
+
 /** What a host's daemon supports, as of its last `/api/info` answer; both false until it answered. */
 export function selectWorkbookSupport(hostId: string, state: Pick<WorkbookState, 'support'> = useWorkbookStore.getState()): WorkbookSupport {
   return state.support[hostId] ?? NO_SUPPORT // a stable reference (the generation rides along; callers read v1 / v2)

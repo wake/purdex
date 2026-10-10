@@ -12,7 +12,7 @@ vi.mock('../lib/workbook/api', () => ({
   postRefresh: (...a: Parameters<typeof postRefresh>) => postRefresh(...a),
 }))
 
-import { MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_RESNAPS, MAX_TODO_TOUCHES, MAX_UNTIL_PAGES, RESNAP_BACKOFF_MS, selectConv, selectRefreshPending, useWorkbookStore } from './useWorkbookStore'
+import { MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_RESNAPS, MAX_TODO_TOUCHES, MAX_UNTIL_PAGES, RESNAP_BACKOFF_MS, selectConv, selectRefreshPending, selectTodoCaps, useWorkbookStore } from './useWorkbookStore'
 
 const entry = (id: number, over: Partial<WorkbookEntry> = {}): WorkbookEntry => ({
   id, convKey: 'c1', sessionId: 's1', turnId: `t${id}`, turnAt: id * 1000, state: 'ok', reason: '', thing: `thing ${id}`, push: '', entry: '',
@@ -51,6 +51,17 @@ describe('todos', () => {
     expect(ids(conv()?.todos.done)).toEqual([2, 1].sort((a, b) => b - a)) // newest (highest id) first
     expect(conv()?.todos.doneOldestId).toBe(1)
     expect(st().convOfSession.h1.s1).toBe('c1')
+  })
+
+  it('openCapped is reset by a reconciled full snapshot; doneCapped is not (it records dropped older records, which a snapshot does not bring back)', async () => {
+    st().setSupport('h1', V2)
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: Array.from({ length: MAX_OPEN_TODOS + 1 }, (_, i) => todo(i + 1)) })
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: Array.from({ length: MAX_DONE_TODOS + 1 }, (_, i) => todo(9000 + i, 'done')) })
+    expect(selectTodoCaps(conv())).toEqual({ openCapped: true, doneCapped: true })
+    fetchConversation.mockResolvedValue(page([entry(3)], { todos: { open: [todo(2)], done: [todo(9100, 'done')] } }))
+    await st().openWorkbook('h1', 's1')
+    expect(ids(conv()?.todos.open)).toEqual([2])
+    expect(selectTodoCaps(conv())).toEqual({ openCapped: false, doneCapped: true })
   })
 
   it('keeps every open todo the daemon sends (well past the old 50), and marks openCapped only past MAX_OPEN_TODOS', () => {
