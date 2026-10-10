@@ -340,7 +340,7 @@ func (f *fakeOrigins) SessionPresence(sid string) peersmod.Presence {
 	switch {
 	case f.unknown[sid]:
 		return peersmod.PresenceUnknown
-	case f.dead[sid]:
+	case f.dead[sid] || f.hidden[sid]:
 		return peersmod.PresenceGone
 	}
 	return peersmod.PresenceLive

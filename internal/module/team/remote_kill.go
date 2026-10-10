@@ -33,6 +33,9 @@ func (m *Module) killTarget(r remoteMemberRow) (pid int, live bool, status int, 
 		return 0, false, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry: " + err.Error()
 	}
 	if !found {
+		if !m.sessionGone("the kill of remote member "+r.MK, r.MemberSessionID) { // see killAdopted (#1857)
+			return 0, false, http.StatusServiceUnavailable, team.ErrNotReady, "the member's session could not be confirmed gone; retry"
+		}
 		return 0, false, 0, "", ""
 	}
 	if r.PID == 0 || r.ProcStart == "" || o.PID != r.PID || o.ProcStart != r.ProcStart {
