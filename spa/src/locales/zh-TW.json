@@ -464,8 +464,6 @@
   "session.empty": "無 Session",
   "session.reconnecting": "重新連線中...",
   "session.attach_stalled": "已連線到主機，但讀不到 tmux session 清單，會自動重試",
-  "session.view.deck_soon": "指揮台即將推出",
-  "session.view.chat_soon": "聊天即將推出",
   "session.settings": "設定",
   "session.search": "搜尋 Session...",
   "session.provider_label_host": "Sessions · {{host}}",

@@ -87,6 +87,24 @@ describe('the deck inside the session pane', () => {
     expect(screen.getByTestId('input-footer')).toBeInTheDocument()
   })
 
+  it('the chat view mounts the chat with the same footer, and the terminal layer stays mounted under it', () => {
+    setView('chat')
+    render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(screen.getByTestId('chat-view')).toBeInTheDocument()
+    expect(screen.getByTestId('input-footer')).toBeInTheDocument()
+    expect(screen.getByTestId('terminal-view')).toBeInTheDocument()
+    expect(screen.queryByTestId('deck-turn')).toBeNull()
+  })
+
+  it('an unreadable conversation in the chat says so in the chat\'s words and offers the terminal', () => {
+    conv.value = { state: 'unreadable', reason: 'no_session', retry: () => {} }
+    setView('chat')
+    render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(screen.getByTestId('unreadable')).toHaveAttribute('data-reason', 'no_session')
+    fireEvent.click(screen.getByTestId('unreadable-terminal'))
+    expect(screen.queryByTestId('unreadable')).toBeNull()
+  })
+
   it('an opened output survives switching to another tab and back (the pane really unmounts)', () => {
     setView('deck')
     const view = render(<TabContent activeTab={sessionTab} allTabs={all} />)
