@@ -72,8 +72,8 @@ function Ring({ used, mode }: { used: number; mode: UsageMode }) {
 export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title, stale, className = '' }: {
   testId: string
   icon: Icon
-  /** Used share, 0-100. Colour always follows it. */
-  used: number
+  /** Used share, 0-100. Colour always follows it. `null` = no value: draws icon + 「—」 (never 0 %); only the status row passes it, the bars still hide a missing segment themselves. */
+  used: number | null
   /** What the ring shows: 'used' fills with the used share, 'remaining' with what is left. */
   ring: UsageMode
   /** What the number shows. */
@@ -82,6 +82,15 @@ export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title,
   stale: boolean
   className?: string
 }) {
+  if (used === null) {
+    return (
+      <span data-testid={testId} data-missing="true" role="img" title={title} aria-label={title}
+        className={`flex shrink-0 items-center gap-1 select-none text-text-muted ${className}`}>
+        <IconCmp size={10} aria-hidden="true" />
+        <span>—</span>
+      </span>
+    )
+  }
   return (
     <span
       data-testid={testId}
