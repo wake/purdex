@@ -155,6 +155,7 @@ func (m *Module) emitSlotFrom(kind slotKind, code, sessionName, notifyName, hook
 	if m.core != nil {
 		boot = m.core.BootID
 	}
+	n.FromProxy = fromProxy
 	undo := e.stamp(boot, &n)
 	if !m.emitNormalizedToCode(code, n) {
 		undo()

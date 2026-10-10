@@ -71,6 +71,16 @@ export interface NormalizedEvent {
   seq?: number
   /** A subscribe-time replay frame / `agent.snapshot` entry: `seq` is the slot's high-water mark, not a new frame. */
   snapshot?: boolean
+  /** A Stop / StopFailure of a proxy subagent (a codex run by the pane's main agent as a tool): ends a tool, not the
+   *  main agent's turn, so it raises no desktop notification and no unread. Only present when true (daemon). */
+  from_proxy?: boolean
+}
+
+/** Whether `e` is a proxy subagent's Stop / StopFailure — the only events `from_proxy` mutes. */
+export function isProxyStop(e: Pick<NormalizedEvent, 'from_proxy' | 'raw_event_name'>): boolean {
+  if (e.from_proxy !== true) return false
+  const n = e.raw_event_name
+  return n === 'PdxStop' || n === 'Stop' || n === 'PdxStopFailure' || n === 'StopFailure'
 }
 
 export type BackgroundKind = 'workflow' | 'monitor' | 'schedule'
@@ -318,7 +328,7 @@ function eventPatch(
   const notificationSilent = event.detail?.notification_silent === true
   const isActionable = status === 'waiting' || status === 'error' ||
     (status === 'idle' && !isNotification && !notificationSilent)
-  if (isActionable && !isAgentVisibleInActiveTab(hostId, sessionCode)) {
+  if (isActionable && !isProxyStop(event) && !isAgentVisibleInActiveTab(hostId, sessionCode)) {
     patch.unread = { ...s.unread, [key]: true }
   }
   return patch
