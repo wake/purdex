@@ -251,6 +251,58 @@ describe('file chip', () => {
   })
 })
 
+describe('the user on the right, the agent on the left (spec §5)', () => {
+  const userTurn = (source: string, text = 'hello there'): PanelTurn[] => [turn('t0', 0, [
+    { type: 'user', id: 'u', at: new Date(2026, 9, 10, 1, 56).getTime(), index: 0, text, source } as UserItem,
+    { type: 'agent_text', id: 'a', at: 2, index: 1, markdown: 'hi' } as ConversationItem,
+  ])]
+
+  it('an ordinary message is a right-aligned accent bubble, not the deck\'s framed block', () => {
+    mount({ turns: userTurn('user') })
+    const wrap = screen.getByTestId('chat-user')
+    expect(wrap).toHaveClass('items-end')
+    const bubble = within(wrap).getByTestId('chat-user-bubble')
+    expect(bubble).toHaveClass('bg-accent')
+    expect(bubble).toHaveTextContent('hello there')
+    expect(screen.queryByTestId('deck-user')).toBeNull()
+    expect(screen.queryByTestId('deck-user-caption')).toBeNull()
+  })
+
+  it('the time sits below the bubble in small text', () => {
+    mount({ turns: userTurn('user') })
+    const wrap = screen.getByTestId('chat-user')
+    const time = within(wrap).getByTestId('chat-user-time')
+    expect(time).toHaveTextContent('01:56')
+    expect(time).toHaveClass('text-xs')
+    expect(wrap.children[0]).toBe(within(wrap).getByTestId('chat-user-bubble'))
+    expect(wrap.children[1]).toBe(time)
+  })
+
+  it('a queued message says so under the bubble instead of the time', () => {
+    mount({ turns: userTurn('queued') })
+    expect(screen.getByTestId('chat-user-time')).toHaveTextContent('You · queued')
+  })
+
+  it('a source this build does not know still reads as the person (a bubble)', () => {
+    mount({ turns: userTurn('prompt') })
+    expect(screen.getByTestId('chat-user')).toBeInTheDocument()
+  })
+
+  it('the agent stays on the left', () => {
+    mount({ turns: userTurn('user') })
+    expect(screen.getByTestId('chat-agent')).toHaveClass('justify-start')
+  })
+
+  it('bash / schedule / background stay the deck\'s block', () => {
+    for (const source of ['bash', 'scheduled', 'task', 'background']) {
+      mount({ turns: userTurn(source) })
+      expect(screen.queryByTestId('chat-user')).toBeNull()
+      expect(screen.getByTestId('deck-user')).toBeInTheDocument()
+      cleanup()
+    }
+  })
+})
+
 describe('peer messages', () => {
   it('a peer message is one line, not a bubble, and says who it is from (golden)', () => {
     mount({ turns: turnsOf(peerMessage) })
