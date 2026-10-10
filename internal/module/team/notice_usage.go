@@ -28,7 +28,11 @@ type AgentStatusReader interface {
 	AgentStatus(tmuxSession string) (string, bool)
 }
 
-const agentIdle = "idle"
+const (
+	agentIdle    = "idle"
+	agentRunning = "running"
+	agentWaiting = "waiting" // on a prompt that needs a person (a permission, a question)
+)
 
 // noticeThreshold is the percentage this notice fires at: PDX_RELAY_THRESHOLD of the daemon's own environment when it is
 // an integer 1–100 (the acceptance runs with a low one), else team.RelayThresholdPct. It sets this notice only: the hello
