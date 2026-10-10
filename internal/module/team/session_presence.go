@@ -2,7 +2,6 @@ package teammod
 
 import (
 	peersmod "github.com/wake/purdex/internal/module/peers"
-	"github.com/wake/purdex/internal/team"
 )
 
 // presenceLogEvery is how often the skip of one subject is logged: a registry file that cannot be verified delays every
@@ -53,21 +52,4 @@ func (m *Module) logPresenceUnknown(subject, sid string) {
 	m.presenceLogged[subject] = now
 	m.presenceLogMu.Unlock()
 	m.logf("[team] presence unknown for session %s: %s is left for the next round (the registry could not be read, or a live process has a registry file that could not be verified)", sid, subject)
-}
-
-// approvalSessionGone is sessionGone for a swept approval, with one bound: a row that has neither a lease nor a deadline (the
-// settings hook's terminal_only card) has no clock but the registry, so an Unknown session holds it only for twice the stall
-// since it opened — a registry file that never verifies must not keep a card on a finished dialog for ever. Every other row has a
-// lease or a deadline that closes it anyway, so Unknown simply waits for that.
-func (m *Module) approvalSessionGone(a team.Approval) bool {
-	switch m.origins.SessionPresence(a.Origin.SessionID) {
-	case peersmod.PresenceGone:
-		return true
-	case peersmod.PresenceUnknown:
-		if a.LeaseUntil >= team.NoExpiryAt && a.DeadlineAt >= team.NoExpiryAt && m.now() >= a.CreatedAt+2*int64(team.RelayStallTimeoutS)*1000 {
-			return true
-		}
-		m.logPresenceUnknown("approval "+a.ID, a.Origin.SessionID)
-	}
-	return false
 }

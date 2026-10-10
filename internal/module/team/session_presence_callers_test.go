@@ -243,40 +243,30 @@ func TestPresence_RemoteKillOfASessionThatIsGoneIsGone(t *testing.T) {
 	}
 }
 
-// A terminal_only hook row has no lease and no deadline: the registry is its only clock. Unknown may hold it, but only for twice
-// the stall since the row opened (the same bound as the stalled cleared op), or a registry file that never verifies would keep a
-// read-only card on a finished dialog for ever. Mutation gates: no bound → the 30-minute assertion is red; bound on every row →
-// the row with a lease (next test) is red.
-func TestPresence_ATerminalOnlyRowWithAnUnknownSessionIsHeldForTwiceTheStallThenAbandoned(t *testing.T) {
+// A terminal_only hook row has no lease and no deadline: the registry is its only clock here. Unknown holds it for as long as it
+// stays unknown — abandoning an open row lifts the lock that makes the hook ask (the next hook decide removes the flag), which
+// for a session that may be alive is worse than a read-only card on a phone; the settings hook's own backstop (the tool use's
+// end, Stop) is what normally closes it. Mutation gate: abandon after any time → red.
+func TestPresence_ATerminalOnlyRowWithAnUnknownSessionStaysOpen(t *testing.T) {
 	f := newFixture(t)
 	ro := f.openTerminalOnly("toolu_ro")
 	f.markUnknown("sid-1")
-	f.livenessTick()
-	f.clock.Add(29 * minute)
-	f.livenessTick()
-	if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateOpen {
-		t.Fatalf("at 29 minutes: %s, want open", a.State)
+	for range 3 {
+		f.clock.Add(60 * minute)
+		f.livenessTick()
 	}
-	f.clock.Add(1 * minute)
-	f.livenessTick()
-	if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateAbandoned {
-		t.Fatalf("at 30 minutes: %s, want abandoned", a.State)
+	if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateOpen {
+		t.Fatalf("after 3 hours: %s, want still open", a.State)
 	}
 }
 
-// A row that has a lease (the mod's, renewed by its wait) is bounded by that lease already: unknown holds it as long as it is
-// renewed, however old it is.
-func TestPresence_ARowWithALeaseIsNotCutByTheNoTimerBound(t *testing.T) {
+func TestPresence_ATerminalOnlyRowWithAGoneSessionIsAbandoned(t *testing.T) {
 	f := newFixture(t)
-	id := f.askBegin("toolu_leased") // a mod-raised hook_ask: lease 30 s, no deadline
-	f.markUnknown("sid-1")
-	f.clock.Add(40 * minute)
-	if err := f.m.store.RenewLease(id, f.clock.Load()+team.LeaseS*1000); err != nil {
-		t.Fatal(err)
-	}
+	ro := f.openTerminalOnly("toolu_ro")
+	f.origins.markDead("sid-1")
 	f.livenessTick()
-	if a, _, _ := f.m.store.Get(id); a.State != team.StateOpen {
-		t.Fatalf("a renewed row with an unknown session = %s, want open", a.State)
+	if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateAbandoned {
+		t.Fatalf("a gone session's terminal_only row = %s, want abandoned", a.State)
 	}
 }
 

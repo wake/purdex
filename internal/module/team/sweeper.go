@@ -105,7 +105,7 @@ func (m *Module) tick() {
 				continue
 			}
 			after, won, err = m.closeAs(a.ID, Close{State: team.StateAbandoned, DecidedAt: now})
-		case checkLive && m.approvalSessionGone(a):
+		case checkLive && m.sessionGone("approval "+a.ID, a.Origin.SessionID):
 			after, won, err = m.closeAs(a.ID, Close{State: team.StateAbandoned, DecidedAt: now})
 		default:
 			continue
