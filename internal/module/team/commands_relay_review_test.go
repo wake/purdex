@@ -67,6 +67,20 @@ func TestRelayVoid_UndoneWakesTheOpsWaiters(t *testing.T) {
 	}
 }
 
+// codex critic: the void of a relay M refused applied nothing: not_applied, spelled as the spec spells it, and the op stays absent.
+func TestRelayVoid_OfARefusedRelayIsNotApplied(t *testing.T) {
+	s := relayVoidSetup(t)
+	p := relayPlanFor(relayCmdFor(cmdUUID1, "mk-1", relayOpID))
+	p.Consent = false
+	if res := mustApply(t, s, p); res.Status == http.StatusOK {
+		t.Fatalf("relay = %d %s, want a refusal", res.Status, res.Body)
+	}
+	res := mustApply(t, s, plan(voidCmd(cmdUUID2, cmdUUID1), false, nil))
+	if voidState(t, res) != "not_applied" {
+		t.Fatalf("void of a refused relay = %d %s, want not_applied", res.Status, res.Body)
+	}
+}
+
 // codex R1: a queued relay_failed starts the facts pump at once, like moved. Mutation gate: no pump → red.
 func TestRelayFailedFact_StartsTheFactsPump(t *testing.T) {
 	s := relayVoidSetup(t)

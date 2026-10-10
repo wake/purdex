@@ -114,11 +114,9 @@ const RelayCommandAccepted = "accepted"
 
 // Outcomes of a void of a relay command (member relay spec D9).
 const (
-	// The command never arrived (or was refused): its late copy answers command_void. The word is the one M has always answered an
-	// early void with: it cannot know the kind of a command it never saw.
-	VoidNotApplied = "recorded"
-	VoidUndone     = "undone"   // applied and the op still requested: cancelled (remote_unreachable)
-	VoidTooLate    = "too_late" // the op was claimed or already ended: left alone
+	VoidNotApplied = "not_applied" // the command never arrived (or was refused): its late copy answers command_void
+	VoidUndone     = "undone"      // applied and the op still requested: cancelled (remote_unreachable)
+	VoidTooLate    = "too_late"    // the op was claimed or already ended: left alone
 )
 
 // VoidOutcome is a void's outcome for a relay command.

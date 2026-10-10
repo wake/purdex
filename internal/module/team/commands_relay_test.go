@@ -166,7 +166,7 @@ func relayVoidSetup(t *testing.T) *Store {
 func TestRelayVoid_BeforeArrivalIsNotAppliedAndTheLateCopyIsVoid(t *testing.T) {
 	s := relayVoidSetup(t)
 	res := mustApply(t, s, plan(voidCmd(cmdUUID2, cmdUUID1), false, nil))
-	if voidState(t, res) != team.VoidNotApplied {
+	if voidState(t, res) != "not_applied" || team.VoidNotApplied != "not_applied" { // the wire word, spelled out
 		t.Fatalf("void = %d %s, want %s", res.Status, res.Body, team.VoidNotApplied)
 	}
 	late := mustApply(t, s, relayPlanFor(relayCmdFor(cmdUUID1, "mk-1", relayOpID)))
