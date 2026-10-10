@@ -151,6 +151,51 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 		return fail(err)
 	}
 
+	// A new adopt or spawn older than the lead's expiry plus the skew allowance is refused (#2398), and the refusal is
+	// logged like any other, so its replay is the same refusal. Only a command with a created_at is checked (an older
+	// lead sends none), and only new ones: a replay of an applied command was answered from the log above.
+	if commandTooOld(p.cmd, p.Now) {
+		res, err = refusal(http.StatusConflict, team.ErrCommandExpired, "the lead host queued this command too long ago"), nil
+	} else {
+		res, err = s.applyIn(tx, p)
+	}
+	if errors.Is(err, ErrCommandUnsupported) {
+		return CommandResult{}, err
+	}
+	if err != nil {
+		return fail(err)
+	}
+	if s.failBeforeCommandLog != nil {
+		if err := s.failBeforeCommandLog(); err != nil {
+			return fail(err)
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO team_command_log (lead_host_id, id, kind, body_hash, status, outcome_json, at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		p.LeadHostID, p.cmd.ID, p.cmd.Kind, p.hash, res.Status, string(res.Body), p.Now); err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(fmt.Errorf("commit: %w", err))
+	}
+	return res, nil
+}
+
+// commandTooOld says whether c is an adopt or a spawn that its lead host queued more than commandExpiryMS +
+// commandSkewMS before now (this host's clock). A command without created_at, or created in the future by this host's
+// clock, is not too old. Zero is "absent" (the lead omits the field; an older lead never sends it); a negative value is
+// no time a lead can have written and counts as too old, checked before the subtraction so the extremes cannot overflow.
+func commandTooOld(c team.TeamCommand, now int64) bool {
+	if c.CreatedAt == 0 || (c.Kind != team.CommandAdopt && c.Kind != team.CommandSpawn) {
+		return false
+	}
+	if c.CreatedAt < 0 {
+		return true
+	}
+	return now-c.CreatedAt > commandExpiryMS+commandSkewMS
+}
+
+// applyIn dispatches a new command to its kind's apply.
+func (s *Store) applyIn(tx *sql.Tx, p CommandPlan) (res CommandResult, err error) {
 	switch p.cmd.Kind {
 	case team.CommandAdopt:
 		res, err = applyAdoptIn(tx, p)
@@ -169,22 +214,7 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 	default:
 		return CommandResult{}, ErrCommandUnsupported
 	}
-	if err != nil {
-		return fail(err)
-	}
-	if s.failBeforeCommandLog != nil {
-		if err := s.failBeforeCommandLog(); err != nil {
-			return fail(err)
-		}
-	}
-	if _, err := tx.Exec(`INSERT INTO team_command_log (lead_host_id, id, kind, body_hash, status, outcome_json, at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		p.LeadHostID, p.cmd.ID, p.cmd.Kind, p.hash, res.Status, string(res.Body), p.Now); err != nil {
-		return fail(err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fail(fmt.Errorf("commit: %w", err))
-	}
-	return res, nil
+	return res, err
 }
 
 // rawString scans a TEXT column into a json.RawMessage.

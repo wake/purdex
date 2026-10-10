@@ -37,6 +37,11 @@ const commandsPath = "/api/peers/team/commands"
 // commandExpiryMS is X-U8: a spawn or adopt not done within 10 minutes of its creation is void.
 const commandExpiryMS = 10 * 60 * 1000
 
+// commandSkewMS is how much older than commandExpiryMS an adopt or spawn may look to the member host before it refuses it
+// (#2398): the two hosts' clocks differ, and a command the lead sent just before its own expiry arrives after it. Two
+// minutes is well above NTP-synced drift and well below anything that would make a stale command look fresh.
+const commandSkewMS = 2 * 60 * 1000
+
 // Command states.
 const (
 	cmdPending = "pending"
@@ -108,7 +113,7 @@ func enqueueCommandIn(q dbtx, c Command, now int64) error {
 		// the team's look is read HERE, in the transaction that stores the command (#2346): a rename lands wholly before
 		// this read (the command carries it) or after (its own team.appearance is queued behind this command)
 		var err error
-		if sent, err = withCurrentLook(q, c.Body); err != nil {
+		if sent, err = withCurrentLook(q, c.Body, now); err != nil {
 			return fmt.Errorf("enqueue command %s: %w", c.ID, err)
 		}
 	}
@@ -199,18 +204,20 @@ func (s *Store) SettleCommand(id string, res peersmod.CallResult, now int64, out
 	return true, tx.Commit()
 }
 
-// withCurrentLook is body with the team's name, label and colour as the teams row holds them now (read in q's transaction).
-// A team that is gone leaves the body as it was.
-func withCurrentLook(q dbtx, body []byte) ([]byte, error) {
+// withCurrentLook is body with the team's name, label and colour as the teams row holds them now (read in q's transaction),
+// and created_at = now, the time the row is stored with (#2398: the member host's age check). A team that is gone leaves
+// the look as it was.
+func withCurrentLook(q dbtx, body []byte, now int64) ([]byte, error) {
 	var tc team.TeamCommand
 	if err := json.Unmarshal(body, &tc); err != nil {
 		return nil, err
 	}
+	tc.CreatedAt = now
 	var name, label string
 	var color sql.NullInt64
 	switch err := q.QueryRow(`SELECT team_name, team_label, team_color FROM teams WHERE id = ?`, tc.TeamID).Scan(&name, &label, &color); {
 	case errors.Is(err, sql.ErrNoRows):
-		return body, nil
+		return json.Marshal(tc)
 	case err != nil:
 		return nil, err
 	}
@@ -222,13 +229,14 @@ func withCurrentLook(q dbtx, body []byte) ([]byte, error) {
 	return json.Marshal(tc)
 }
 
-// withoutLook is body with the look fields cleared: what two copies of one join command must agree on.
+// withoutLook is body with the look fields and created_at cleared: what two copies of one join command must agree on (the
+// copy built again for a replay carries no time, the stored one carries the first).
 func withoutLook(body []byte) []byte {
 	var tc team.TeamCommand
 	if json.Unmarshal(body, &tc) != nil {
 		return body
 	}
-	tc.TeamName, tc.TeamLabel, tc.TeamColor = "", "", nil
+	tc.TeamName, tc.TeamLabel, tc.TeamColor, tc.CreatedAt = "", "", nil, 0
 	out, err := json.Marshal(tc)
 	if err != nil {
 		return body
