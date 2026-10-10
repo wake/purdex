@@ -330,6 +330,11 @@ func (s *Store) MembersOf(teamID string) ([]memberRow, error) {
 
 // SetMemberState sets the member's state at at (spec §7.3: killed by pdx
 // kill, gone when its session ended). ErrNoSuchMember for an unknown spawn op.
+//
+// It has NO production caller — the kill, the sweeper and the boot each use their own guarded statements (ClaimMemberKilling,
+// MarkMemberKilled, MarkMemberGone, GiveBackMemberKilling) — and exists for tests that need a row in a given state. It therefore
+// does not carry the guards those do (e.g. refusing to turn a row active beside a killing row of the same session, #2152); a
+// production caller must not be added without them.
 func (s *Store) SetMemberState(spawnOp string, state team.MemberState, at int64) error {
 	if !validMemberState(state) {
 		return fmt.Errorf("set member %s: unknown state %q", spawnOp, state)
