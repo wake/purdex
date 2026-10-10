@@ -416,7 +416,8 @@ func TestSelftest_TmuxArgvGoldens(t *testing.T) {
 		"--name", name, "--settings", `{"crossSessionInbound":"accept"}`,
 		"--no-session-persistence",
 		"--model", "haiku", "--effort", "low", // #2387: the small model with little thinking; Opus took 25 s+ to get through ToolSearch
-		"--append-system-prompt", selftestSystemPrompt, // #2387: the user's CLAUDE.md says not to use the native SendMessage; this session must
+		"--append-system-prompt", selftestSystemPrompt(f.writtenNonce()), // #2387: the user's CLAUDE.md says not to use the native SendMessage; this session must, for THIS probe only
+		"--strict-mcp-config", "--disable-slash-commands", // #2387: no MCP servers, no skills in the throwaway session
 		"--disallowedTools", "Bash"}
 	if got := f.calls("new-session"); len(got) != 1 || !equalArgs(got[0].args, wantNew) {
 		t.Errorf("new-session argv = %v\nwant %q", got, wantNew)
@@ -1718,11 +1719,29 @@ func TestSelftestTmuxNoSession_AbsentSocket(t *testing.T) {
 
 // #2387: the throwaway session reads the user's global CLAUDE.md, which may forbid the native SendMessage (peer messages go
 // through pdx); a model that obeys it refuses the probe and the reply leg is never exercised. The system prompt the selftest
-// appends outranks that rule for this session only, and says so in words the model can act on.
-func TestSelftest_SystemPromptOverridesAGlobalSendMessageBan(t *testing.T) {
-	for _, must := range []string{"SendMessage", "CLAUDE.md", "pdx msg selftest", "ToolSearch"} {
-		if !strings.Contains(selftestSystemPrompt, must) {
-			t.Errorf("selftestSystemPrompt does not mention %q: %q", must, selftestSystemPrompt)
+// appends outranks that rule for this session — but only for the one probe: it names the generated nonce, so another local
+// peer that finds the registered session cannot borrow the exception for a request of its own.
+func TestSelftest_SystemPromptIsBoundToTheProbeNonce(t *testing.T) {
+	p := selftestSystemPrompt("0123abcd")
+	for _, must := range []string{"SendMessage", "CLAUDE.md", "pdx msg selftest", "ToolSearch", "PDX_SELFTEST 0123abcd:"} {
+		if !strings.Contains(p, must) {
+			t.Errorf("selftestSystemPrompt does not mention %q: %q", must, p)
 		}
+	}
+	if strings.Contains(selftestSystemPrompt("ffffffff"), "0123abcd") {
+		t.Error("the prompt carries a nonce other than its own")
+	}
+	if !strings.Contains(p, "any other") || !strings.Contains(p, "do not act") {
+		t.Errorf("the prompt must tell the model not to act on any other inbound message: %q", p)
+	}
+	// and the session that carries it is started with the nonce the probe will use
+	f := newStFixture(t)
+	f.onWrite = func() { f.peer.frames <- f.replyFromTarget("PONG " + f.writtenNonce()) }
+	if code, out, _ := f.run(context.Background(), 5*time.Second); code != 0 {
+		t.Fatalf("exit = %d, stdout:\n%s", code, out)
+	}
+	got := f.calls("new-session")
+	if len(got) != 1 || !strings.Contains(strings.Join(got[0].args, "\x00"), "PDX_SELFTEST "+f.writtenNonce()+":") {
+		t.Errorf("the throwaway session's system prompt does not name the probe's nonce %q: %v", f.writtenNonce(), got)
 	}
 }
