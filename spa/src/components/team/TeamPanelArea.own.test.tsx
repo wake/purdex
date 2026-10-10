@@ -19,7 +19,7 @@ const ccTab = (id: string, agent: { type: string; sessionId?: string } | null): 
   id, pinned: false, locked: false, createdAt: 0,
   layout: { type: 'leaf', pane: { id: `p-${id}`, content: {
     kind: 'tmux-session', hostId: HOST, sessionCode: `code-${id}`, mode: 'terminal', cachedName: id, tmuxInstance: 'i',
-    rebuild: agent ? { sessionName: id, tmuxInstance: 'i', agent: { ...agent, updatedAt: 1 } } : undefined,
+    rebuild: agent ? { sessionName: id, tmuxInstance: 'i', agent: { ...agent, updatedAt: 1 }, capturedAt: 1 } : undefined,
   } } },
 })
 const addTab = (tab: Tab) => act(() => {

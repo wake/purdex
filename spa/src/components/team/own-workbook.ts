@@ -7,7 +7,8 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { collectLeaves } from '../../lib/pane-tree'
 import type { PaneLayout } from '../../types/tab'
-import { useSeatWorkbook } from './seat-workbook'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { firstSentence, useSeatWorkbook } from './seat-workbook'
 import type { OwnWorkbookTarget } from './panel-view'
 
 /** The conversation a layout's first live `cc` tmux-session pane (pre-order) belongs to; null when there is none. */
@@ -19,6 +20,13 @@ export function ownSessionOf(layout: PaneLayout): OwnWorkbookTarget | null {
     if (agent?.type === 'cc' && agent.sessionId) return { hostId: c.hostId, sessionId: agent.sessionId }
   }
   return null
+}
+
+/** The one line both the pane's line and the title-bar strip draw: the first sentence of the status, or the "no status yet" word. */
+export function useOwnStatusLine(hostId: string, sessionId: string): { text: string; full: string } {
+  const t = useI18nStore((s) => s.t)
+  const status = useSeatWorkbook(hostId, sessionId).conv?.status.trim() ?? ''
+  return { text: status === '' ? t('team.workbook.no_status') : firstSentence(status), full: status }
 }
 
 /**

@@ -9,7 +9,7 @@ import type { Tab, PaneContent, PaneLayout } from '../../types/tab'
 
 const cc = (over: Partial<Extract<PaneContent, { kind: 'tmux-session' }>> = {}, agent: { type: string; sessionId?: string } | null = { type: 'cc', sessionId: 'S1' }): PaneContent => ({
   kind: 'tmux-session', hostId: 'h1', sessionCode: 'abc', mode: 'terminal', cachedName: 'n', tmuxInstance: 'i',
-  rebuild: agent ? { sessionName: 'n', tmuxInstance: 'i', agent: { ...agent, updatedAt: 1 } } : undefined, ...over,
+  rebuild: agent ? { sessionName: 'n', tmuxInstance: 'i', agent: { ...agent, updatedAt: 1 }, capturedAt: 1 } : undefined, ...over,
 })
 const leaf = (content: PaneContent, id = 'p'): PaneLayout => ({ type: 'leaf', pane: { id, content } }) as PaneLayout
 

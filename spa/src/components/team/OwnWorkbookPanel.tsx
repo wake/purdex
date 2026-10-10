@@ -4,7 +4,7 @@
 // The title bar's one-line form is `OwnTitleStrip` (TeamTitleBar.tsx). Everything the person arranged is the store's.
 import { Notebook } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { firstSentence, useSeatWorkbook } from './seat-workbook'
+import { useOwnStatusLine } from './own-workbook'
 import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
 import { ExpandButton, ToTitleBarButton } from './TeamPanel'
 import type { PaneMode, PanelMode } from '../../stores/useTeamUiStore'
@@ -14,13 +14,6 @@ interface Props {
   sessionId: string
   mode: PaneMode
   onSetMode: (mode: PanelMode) => void
-}
-
-/** The line's text: the first sentence of the status, or the "no status yet" word. Shared with the title-bar strip. */
-export function useOwnStatusLine(hostId: string, sessionId: string): { text: string; full: string } {
-  const t = useI18nStore((s) => s.t)
-  const status = useSeatWorkbook(hostId, sessionId).conv?.status.trim() ?? ''
-  return { text: status === '' ? t('team.workbook.no_status') : firstSentence(status), full: status }
 }
 
 export function OwnWorkbookPanel({ hostId, sessionId, mode, onSetMode }: Props) {

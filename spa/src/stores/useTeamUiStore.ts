@@ -76,6 +76,8 @@ interface TeamUiState extends Slices {
   sharedPanelMode: PanelMode
   sharedPanelLast: PaneMode
   setSharedPanelMode: (mode: PanelMode) => void
+  /** Title bar <-> the pane state last left, for the shared value (the title-bar button of a tab of no team). */
+  toggleSharedTitleBar: () => void
   /** An old store held `panel.expanded: true`: the team showing when the area first draws becomes `max` (TeamPanelArea). Not persisted. */
   legacyMax: boolean
   takeLegacyMax: (teamKey: string | null) => void
@@ -199,6 +201,10 @@ export const useTeamUiStore = create<TeamUiState>()(
         const last = mode === 'titlebar' ? s.sharedPanelLast : mode
         return mode === s.sharedPanelMode && last === s.sharedPanelLast ? s : { sharedPanelMode: mode, sharedPanelLast: last }
       }),
+      toggleSharedTitleBar: () => {
+        const s = get()
+        s.setSharedPanelMode(s.sharedPanelMode === 'titlebar' ? s.sharedPanelLast : 'titlebar')
+      },
       legacyMax: false,
       takeLegacyMax: (teamKey) => {
         if (!get().legacyMax) return
