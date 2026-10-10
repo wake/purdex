@@ -2398,5 +2398,17 @@
   "chat.unreadable.empty": "還沒有內容",
   "chat.unreadable.offline": "連不上主機",
   "chat.unreadable.retry": "重試",
-  "chat.unreadable.terminal": "切到終端機"
+  "chat.unreadable.terminal": "切到終端機",
+  "statusrow.model": "{{model}} · {{effort}}",
+  "statusrow.none": "{{name}}：沒有資料",
+  "statusrow.name.context": "context",
+  "statusrow.name.five_hour": "5 小時額度",
+  "statusrow.name.seven_day": "7 天額度",
+  "statusrow.name.cost": "成本",
+  "statusrow.context": "context 已用 {{pct}}%，剩 {{left}}%（{{used}}／{{total}}）",
+  "statusrow.ctx_left": "剩 {{n}}",
+  "statusrow.five_hour": "5 小時額度剩 {{left}}%",
+  "statusrow.seven_day": "7 天額度剩 {{left}}%",
+  "statusrow.cost": "這個 session 的累計成本 ${{cost}}",
+  "split.close": "關閉面板"
 }
