@@ -101,7 +101,7 @@ describe('DeckView defers far-off markdown', () => {
     const el = turnEl(4)
     approach(el)
     // a late report that it left the viewport (the observer no longer watches it, but a queued entry may still arrive)
-    act(() => observers[0].cb([{ target: el, isIntersecting: false } as IntersectionObserverEntry], observers[0] as unknown as IntersectionObserver))
+    act(() => observers[0].cb([{ target: el, isIntersecting: false } as unknown as IntersectionObserverEntry], observers[0] as unknown as IntersectionObserver))
     expect(isFull(4)).toBe(true)
     rerender(<DeckView {...props} entry={entry([...base, turn(base.length, [agent('new', 0, 'fresh')])])} />)
     expect(isFull(4)).toBe(true)

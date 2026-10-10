@@ -51,6 +51,15 @@ function renderMarkdown(content: string) {
 }
 
 /**
+ * The markdown body. The streaming text and the finished (kept) text both come out of this one component and are both
+ * react-markdown's own node tree, so when a message stops streaming React reconciles the same elements and keeps their DOM
+ * (a text selection, a code block scrolled sideways) instead of mounting a different element type in their place.
+ */
+function ProseBody({ content, keep }: { content: string; keep?: string }) {
+  return keep !== undefined ? cachedMarkdown(keep, content, () => renderMarkdown(content)) : renderMarkdown(content)
+}
+
+/**
  * The same box as RoomProse with the markdown source drawn as plain text (`white-space: pre-wrap`, the prose's own font and
  * line height), for a message far off screen (#2469). The whole text is there, so the browser's find still reaches it; it is
  * deliberately NOT a search unit — the transcript search indexes `proseText(content)`, which this is not, so its ordinals would
@@ -76,13 +85,7 @@ export default function RoomProse({ content, streaming, searchUnit, cacheKey }: 
   return (
     <div data-testid="room-prose" className="max-w-[90ch] text-text-primary" style={themeVars}>
       <div data-search-unit={searchUnit} className="prose prose-invert worker-prose max-w-none">
-        {cacheKey !== undefined && !streaming
-          ? cachedMarkdown(cacheKey, content, () => renderMarkdown(content))
-          : (
-            <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={COMPONENTS}>
-              {content}
-            </ReactMarkdown>
-          )}
+        <ProseBody content={content} keep={cacheKey !== undefined && !streaming ? cacheKey : undefined} />
       </div>
       {streaming && <StreamCursor />}
     </div>

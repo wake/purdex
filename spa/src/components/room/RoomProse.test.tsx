@@ -141,6 +141,27 @@ describe('RoomProse cacheKey (#2469)', () => {
   })
 })
 
+describe('RoomProse when streaming stops (#2469)', () => {
+  it('keeps the very same DOM nodes: a selection or a code block scrolled sideways survives', () => {
+    const md = 'a **b** `c`\n\n```ts\nconst long = 1\n```'
+    const { rerender } = render(<RoomProse content={md} streaming cacheKey="prose-s1" />)
+    const body = screen.getByTestId('room-prose')
+    const strong = body.querySelector('strong')!
+    const pre = body.querySelector('pre')!
+    const code = body.querySelector('pre code')!
+
+    rerender(<RoomProse content={md} cacheKey="prose-s1" />)
+    expect(screen.getByTestId('room-prose')).toBe(body)
+    expect(body.querySelector('strong')).toBe(strong)
+    expect(body.querySelector('pre')).toBe(pre)
+    expect(body.querySelector('pre code')).toBe(code)
+
+    // and from the kept tree on a later mount it still draws the same markup
+    rerender(<RoomProse content={md} streaming cacheKey="prose-s1" />)
+    expect(body.querySelector('strong')).toBe(strong)
+  })
+})
+
 describe('RoomProseLight', () => {
   it('keeps the whole markdown source as text, in a pre-wrap box, and is no search unit', () => {
     const md = '# Title\n\n- one\n- `two`\n\n```ts\nconst needle = 1\n```'
