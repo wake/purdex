@@ -45,7 +45,8 @@ type diskGuard struct {
 	warn     string // the standing warning of the last look at the disk ("" = none)
 	// grants is the warning each guarded lease was granted with (only the non-empty ones): the answer to a poll or a replay
 	// is the fact about the grant, not the disk of the moment. In memory, bounded.
-	grants map[string]string
+	grants     map[string]string
+	grantOrder []string // the ids in grants, oldest first: what the bound drops
 }
 
 // enableDiskGuard installs the real free-space reader and cache locator. New does not: a test module has the guard off
@@ -199,10 +200,17 @@ func (m *Module) recordGrantWarning(id, kind string) {
 	if m.disk.warn == "" {
 		return
 	}
-	if m.disk.grants == nil || len(m.disk.grants) >= maxGrantWarnings {
+	if m.disk.grants == nil {
 		m.disk.grants = map[string]string{}
 	}
+	if _, had := m.disk.grants[id]; !had {
+		m.disk.grantOrder = append(m.disk.grantOrder, id)
+	}
 	m.disk.grants[id] = m.disk.warn
+	for len(m.disk.grantOrder) > maxGrantWarnings {
+		delete(m.disk.grants, m.disk.grantOrder[0])
+		m.disk.grantOrder = m.disk.grantOrder[1:]
+	}
 }
 
 // warnFor is the warning a lease answer carries: the one it was granted with, if any.
