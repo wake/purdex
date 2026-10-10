@@ -122,9 +122,9 @@ func TestUpdate_GivesUpWhenTheLockIsHeld(t *testing.T) {
 	require.NoError(t, err)
 	defer lock.Close()
 	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX))
-	old := lockWait
-	lockWait = 200 * time.Millisecond
-	defer func() { lockWait = old }()
+	old := LockWait
+	LockWait = 200 * time.Millisecond
+	defer func() { LockWait = old }()
 
 	start := time.Now()
 	_, err = Update(p, func(c *Config) error { c.UploadDir = "/x"; return nil })
@@ -211,4 +211,52 @@ func TestUpdateChanged_ANestedFieldDoesNotCarryItsSiblings(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, back.Peers.Deliver)
 	require.Len(t, back.Peers.Hosts, 2, "peers.hosts was written back from the writer's older list")
+}
+
+// Two names of one file (two symlinks to it) share one lock: writers through either lose nothing. Mutation gate: name the lock
+// from the path as given -> red.
+func TestUpdate_TwoNamesOfOneFileShareOneLock(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "real.toml")
+	require.NoError(t, os.WriteFile(real, []byte(richConfig), 0o600))
+	a, b := filepath.Join(t.TempDir(), "config.toml"), filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.Symlink(real, a))
+	require.NoError(t, os.Symlink(real, b))
+	const n = 16
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			path := a
+			if i%2 == 1 {
+				path = b
+			}
+			_, err := Update(path, func(c *Config) error {
+				c.Peers.Hosts = append(c.Peers.Hosts, PeerHost{Alias: fmt.Sprintf("h%d", i), HostID: fmt.Sprintf("id%d", i), InboundToken: "t"})
+				return nil
+			})
+			require.NoError(t, err)
+		}(i)
+	}
+	wg.Wait()
+	back, err := Load(real)
+	require.NoError(t, err)
+	require.Len(t, back.Peers.Hosts, n+1)
+}
+
+// A config file that is itself a symlink stays one: the write goes to what it points at.
+func TestUpdate_AConfigThatIsASymlinkStaysASymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.toml")
+	require.NoError(t, os.WriteFile(target, []byte(richConfig), 0o600))
+	link := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.Symlink(target, link))
+	_, err := Update(link, func(c *Config) error { c.UploadDir = "/tmp/through-link"; return nil })
+	require.NoError(t, err)
+	st, err := os.Lstat(link)
+	require.NoError(t, err)
+	require.NotZero(t, st.Mode()&os.ModeSymlink, "the symlink was replaced by a file")
+	back, err := Load(target)
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/through-link", back.UploadDir)
 }

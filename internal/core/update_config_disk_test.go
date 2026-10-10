@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/wake/purdex/internal/config"
@@ -72,4 +74,33 @@ func TestUpdateConfig_WritesOnlyTheFieldsMutateChanged(t *testing.T) {
 	require.Equal(t, "/tmp/file-has-this", back.UploadDir)
 	require.Len(t, back.Peers.Hosts, 1)
 	require.Equal(t, "new", back.Peers.Hosts[0].Alias)
+}
+
+// Waiting for the config file's lock does not hold the daemon's CfgMu: while another process sits on the lock, readers (the
+// auth path takes CfgMu.RLock) are served. Mutation gate: take CfgMu before the file lock -> red.
+func TestUpdateConfig_WaitingForTheFileLockDoesNotBlockReaders(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(p, []byte(fileWithNewToken), 0o600))
+	lock, err := os.OpenFile(p+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	defer lock.Close()
+	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX))
+	old := config.LockWait
+	config.LockWait = 600 * time.Millisecond
+	defer func() { config.LockWait = old }()
+
+	c := newTestCore()
+	c.CfgPath = p
+	done := make(chan error, 1)
+	go func() { done <- c.UpdateConfig(func(cfg *config.Config) error { cfg.UploadDir = "/x"; return nil }) }()
+	time.Sleep(100 * time.Millisecond) // UpdateConfig is now waiting for the file lock
+
+	read := make(chan struct{})
+	go func() { c.CfgMu.RLock(); c.CfgMu.RUnlock(); close(read) }()
+	select {
+	case <-read:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("a reader of the config was blocked by a writer that waits for the file lock")
+	}
+	require.Error(t, <-done, "the writer gives up when the lock stays held")
 }

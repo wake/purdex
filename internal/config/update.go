@@ -9,12 +9,12 @@ import (
 	"time"
 )
 
-// lockWait bounds how long a writer waits for "<path>.lock": a holder that never lets go makes the write fail, it does not
+// LockWait bounds how long a writer waits for "<path>.lock": a holder that never lets go makes the write fail, it does not
 // hang the daemon (UpdateConfig holds CfgMu while it writes).
-var lockWait = 5 * time.Second
+var LockWait = 5 * time.Second
 
 // withFileLock runs fn holding an exclusive flock on "<path>.lock", the one lock every writer of the config file takes
-// (Update, SetToken, and the daemon's start-up gate). It waits at most lockWait.
+// (Update, SetToken, and the daemon's start-up gate). It waits at most LockWait.
 func withFileLock(path string, fn func() error) error {
 	if err := os.MkdirAll(dirOf(path), 0755); err != nil {
 		return err
@@ -24,7 +24,7 @@ func withFileLock(path string, fn func() error) error {
 		return err
 	}
 	defer lock.Close()
-	deadline := time.Now().Add(lockWait)
+	deadline := time.Now().Add(LockWait)
 	for {
 		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -34,7 +34,7 @@ func withFileLock(path string, fn func() error) error {
 			return fmt.Errorf("config lock %s.lock: %w", path, err)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("config lock %s.lock: still held after %s", path, lockWait)
+			return fmt.Errorf("config lock %s.lock: still held after %s", path, LockWait)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
