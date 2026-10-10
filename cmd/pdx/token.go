@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/BurntSushi/toml"
 	"github.com/wake/purdex/internal/config"
 )
 
@@ -53,42 +52,9 @@ func runToken(args []string) {
 		path = filepath.Join(home, ".config", "pdx", "config.toml")
 	}
 
-	// Load existing config (returns defaults if file doesn't exist)
-	cfg, err := config.Load(path)
-	if err != nil {
+	// One line of the file changes, under a lock (config.SetToken); every other setting, comment and table stays.
+	if err := config.SetToken(path, token); err != nil {
 		fmt.Fprintf(os.Stderr, "token: %v\n", err)
-		os.Exit(1)
-	}
-
-	cfg.Token = token
-
-	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "token: cannot create config directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Atomic write: write to .tmp then rename
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "token: cannot create temp file: %v\n", err)
-		os.Exit(1)
-	}
-	if err := toml.NewEncoder(f).Encode(cfg); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		fmt.Fprintf(os.Stderr, "token: failed to encode config: %v\n", err)
-		os.Exit(1)
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		fmt.Fprintf(os.Stderr, "token: failed to close temp file: %v\n", err)
-		os.Exit(1)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		fmt.Fprintf(os.Stderr, "token: failed to rename temp file: %v\n", err)
 		os.Exit(1)
 	}
 

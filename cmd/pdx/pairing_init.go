@@ -164,14 +164,8 @@ func initPairingTo(c *core.Core, cfg *config.Config, cfgPath string, quick bool,
 	return nil
 }
 
-// persistGeneratedToken writes token into the config file as the FILE has it: loaded again from disk (defaults when there is
-// none), so a command-line override already applied to the in-memory config (--bind, --port) is not made permanent and no
-// other setting is replaced; written atomically, mode 0600.
+// persistGeneratedToken writes token into the config file as the FILE has it, not the in-memory config (a --bind / --port
+// override is not made permanent): config.SetToken edits that one line under a file lock, keeping every other byte.
 func persistGeneratedToken(cfgPath, token string) error {
-	onDisk, err := config.Load(cfgPath)
-	if err != nil {
-		return err
-	}
-	onDisk.Token = token
-	return config.WriteFile(cfgPath, onDisk)
+	return config.SetToken(cfgPath, token)
 }

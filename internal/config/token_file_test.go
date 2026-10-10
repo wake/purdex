@@ -133,3 +133,25 @@ func TestSetToken_ConcurrentWritersNeverTearTheFile(t *testing.T) {
 		require.NotContains(t, e.Name(), ".tmp", "a temp file was left")
 	}
 }
+
+// WriteFile has no lock (core.UpdateConfig and others call it): its temp file must be its own, or two writers share one and a
+// rename finds it gone / publishes a mix. Mutation gate: a fixed temp name → an error or a torn file (red).
+func TestWriteFile_ConcurrentWritersNeverShareATempFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 40 {
+				require.NoError(t, WriteFile(p, Config{Bind: "127.0.0.1", Port: 7000 + i, Token: "pdx_x"}))
+			}
+		}()
+	}
+	wg.Wait()
+	cfg, err := Load(p)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, cfg.Port, 7000)
+	ents, _ := os.ReadDir(filepath.Dir(p))
+	require.Len(t, ents, 1, "only config.toml is left")
+}
