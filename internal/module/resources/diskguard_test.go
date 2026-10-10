@@ -303,6 +303,28 @@ func TestDiskGuard_TheWarningIsTheGrantsAndStaysWithIt(t *testing.T) {
 	}
 }
 
+// The warnings kept with grants are bounded, and the bound drops the OLDEST first, never all of them at once (codex re-review).
+func TestDiskGuard_GrantWarningsAreBoundedOldestFirst(t *testing.T) {
+	m := newTestModule(idleSampler(), nil)
+	m.disk.warn = "low"
+	n := maxGrantWarnings + 50
+	for i := 0; i < n; i++ {
+		m.recordGrantWarning(fmt.Sprintf("lease-%d", i), "build")
+	}
+	for _, c := range []struct {
+		i    int
+		want bool
+	}{{0, false}, {49, false}, {50, true}, {n - 1, true}} {
+		if got := m.warnFor(leaseRow{ID: fmt.Sprintf("lease-%d", c.i)}) != ""; got != c.want {
+			t.Errorf("lease-%d kept = %v, want %v", c.i, got, c.want)
+		}
+	}
+	m.recordGrantWarning("light", "") // not a guarded kind: nothing kept
+	if m.warnFor(leaseRow{ID: "light"}) != "" {
+		t.Error("a warning kept for a lease without a guarded kind")
+	}
+}
+
 // A pass nobody asked for (the sampler's, the sweeper's) that finds the disk low starts the trim and does not wait for it,
 // but it does not grant a guarded lease before the trim is done either: the grant comes from the pass the trim runs when it
 // ends, with the disk judged after it (codex critic). Mutation gate: grant while the trim runs → red.
