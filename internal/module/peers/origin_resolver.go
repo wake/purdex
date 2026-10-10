@@ -433,3 +433,6 @@ func (r *OriginResolver) processRoots(view rootView) ([]resources.Root, error) {
 	}
 	return roots, nil
 }
+
+// SessionPresence: stub for the red commit (#1857).
+func (r *OriginResolver) SessionPresence(string) Presence { return PresenceLive }

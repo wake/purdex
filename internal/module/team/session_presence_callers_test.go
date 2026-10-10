@@ -1,0 +1,187 @@
+package teammod
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/wake/purdex/internal/team"
+)
+
+// #1857: the callers of LiveSession whose answer decides something the user sees or cannot undo take the three-state
+// SessionPresence: gone acts; unknown (a registry that cannot be read, or a live pid's file that cannot be verified, which might
+// be this very session) leaves it for the next round. Each caller: one test that unknown does nothing, one that gone still acts.
+// Mutation gate for all: treat unknown as gone → the unknown test of that caller is red.
+
+func (f *fixture) markUnknown(sid string) {
+	f.origins.mu.Lock()
+	defer f.origins.mu.Unlock()
+	if f.origins.unknown == nil {
+		f.origins.unknown = map[string]bool{}
+	}
+	f.origins.unknown[sid] = true
+}
+
+func (f *fixture) captureLogs() *logSink {
+	s := &logSink{}
+	f.m.logf = func(format string, args ...any) { s.add(fmt.Sprintf(format, args...)) }
+	return s
+}
+
+type logSink struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (s *logSink) add(l string) { s.mu.Lock(); s.lines = append(s.lines, l); s.mu.Unlock() }
+func (s *logSink) matching(sub string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, l := range s.lines {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+// ---- 1: the sweeper abandons an open request whose origin is not there ----
+
+func TestPresence_SweeperLeavesAnOpenRequestWhoseSessionIsUnknown(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1)) // origin sid-1
+	f.markUnknown("sid-1")
+	logs := f.captureLogs()
+	f.livenessTick()
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
+		t.Fatalf("an unknown session's request = %s, want open", a.State)
+	}
+	if n := logs.matching("presence unknown"); n != 1 {
+		t.Fatalf("%d log lines about it, want 1", n)
+	}
+	// the next liveness ticks, inside 10 minutes: no second line for the same request
+	f.livenessTick()
+	f.livenessTick()
+	if n := logs.matching("presence unknown"); n != 1 {
+		t.Fatalf("%d log lines after more ticks, want still 1", n)
+	}
+}
+
+// The line is rate-limited per subject: once per 10 minutes. Mutation gate: no limit → the second call logs (red).
+func TestPresence_TheSkipIsLoggedOncePerSubjectPer10Minutes(t *testing.T) {
+	f := newFixture(t)
+	logs := f.captureLogs()
+	f.m.logPresenceUnknown("approval a1", "sid-1")
+	f.m.logPresenceUnknown("approval a1", "sid-1")
+	f.m.logPresenceUnknown("approval a2", "sid-1") // another subject
+	if n := logs.matching("presence unknown"); n != 2 {
+		t.Fatalf("%d lines, want 2 (one per subject)", n)
+	}
+	f.clock.Add(10*minute - 1_000)
+	f.m.logPresenceUnknown("approval a1", "sid-1")
+	if n := logs.matching("presence unknown"); n != 2 {
+		t.Fatalf("%d lines just inside 10 minutes, want 2", n)
+	}
+	f.clock.Add(1_000)
+	f.m.logPresenceUnknown("approval a1", "sid-1")
+	if n := logs.matching("presence unknown"); n != 3 {
+		t.Fatalf("%d lines at 10 minutes, want 3", n)
+	}
+}
+
+func TestPresence_SweeperStillAbandonsWhenTheSessionIsGone(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.origins.markDead("sid-1")
+	f.livenessTick()
+	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateAbandoned {
+		t.Fatalf("a gone session's request = %s, want abandoned", a.State)
+	}
+}
+
+// ---- 2: boot / tick reconciliation of an awaiting self op ----
+
+func TestPresence_ReconcileLeavesAnAwaitingSelfOpWhoseSessionIsUnknown(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1")
+	f.markUnknown("sid-1")
+	f.m.reconcileRelays()
+	if f.op(out.Op.ID).State != team.RelayAwaitingApproval || f.rowState(out.RequestID) != team.StateOpen {
+		t.Fatalf("op %s, row %s: an unknown session's request was abandoned", f.op(out.Op.ID).State, f.rowState(out.RequestID))
+	}
+}
+
+func TestPresence_ReconcileStillAbandonsAnAwaitingSelfOpWhoseSessionIsGone(t *testing.T) {
+	f := newFixture(t)
+	out := f.begin("sid-1")
+	f.origins.markDead("sid-1")
+	f.m.reconcileRelays()
+	if f.rowState(out.RequestID) != team.StateAbandoned {
+		t.Fatalf("row = %s, want abandoned", f.rowState(out.RequestID))
+	}
+}
+
+// ---- 3: a member op past claimed with no frame ----
+
+func TestPresence_NoFrameAndSessionUnknownDoesNotFailMemberGone(t *testing.T) {
+	f := newFixture(t)
+	op := f.claimedMemberOp()
+	f.setFrames()
+	f.markUnknown("sid-m1")
+	got, err := f.m.reconcileFromFrames(context.Background(), op)
+	if err != nil || got.State != team.RelayClaimed {
+		t.Fatalf("an unknown session was judged gone: %+v err=%v", got, err)
+	}
+}
+
+// ---- 4: a stalled cleared op: done (new session there) or failed (not); unknown waits, but only up to twice the stall ----
+
+func (f *fixture) stalledClearedOp() team.RelayOp {
+	f.t.Helper()
+	op := f.claimedMemberOp()
+	f.origins.cleared = map[string]int{"sid-new": 42}
+	for _, s := range []team.RelayReportRequest{{State: team.RelayWriting}, {State: team.RelayWritten}, {State: team.RelayCleared, NewSessionID: "sid-new"}} {
+		f.report(op.ID, s)
+	}
+	f.setFrames()
+	return op
+}
+
+func TestPresence_AStalledClearedOpWhoseNewSessionIsUnknownWaitsUpToTwiceTheStall(t *testing.T) {
+	f := newFixture(t)
+	op := f.stalledClearedOp()
+	f.markUnknown("sid-new")
+	logs := f.captureLogs()
+	f.clock.Add(15 * minute) // the stall: today it would be judged now
+	f.sweepTimeouts()
+	if got := f.op(op.ID); got.State != team.RelayCleared {
+		t.Fatalf("unknown at the stall: %+v, want it left cleared", got)
+	}
+	if logs.matching("presence unknown") == 0 {
+		t.Fatal("nothing logged about the skipped judgement")
+	}
+	f.clock.Add(14 * minute) // 29 min after it entered cleared
+	f.sweepTimeouts()
+	if got := f.op(op.ID); got.State != team.RelayCleared {
+		t.Fatalf("unknown at 29 min: %+v", got)
+	}
+	f.clock.Add(1 * minute) // 30 min: the bound — judged as today
+	f.sweepTimeouts()
+	if got := f.op(op.ID); got.State != team.RelayFailed || got.Reason != team.RelayReasonMemberUnresponsive {
+		t.Fatalf("unknown past twice the stall: %+v, want failed as for a gone session", got)
+	}
+}
+
+func TestPresence_AStalledClearedOpWhoseNewSessionIsGoneIsStillFailedAtTheStall(t *testing.T) {
+	f := newFixture(t)
+	op := f.stalledClearedOp()
+	f.origins.markDead("sid-new")
+	f.clock.Add(15 * minute)
+	f.sweepTimeouts()
+	if got := f.op(op.ID); got.State != team.RelayFailed {
+		t.Fatalf("gone at the stall: %+v", got)
+	}
+}
