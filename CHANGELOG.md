@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0-alpha.699] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Added：App 可以改正在運作的 team 的授權目錄 — #2561（#2566）
+
+- 新增 `PUT /api/team/roots`（只給 App 用，同調整上限）：送整份新清單與看到的 `roots_rev`；路徑存成真實路徑，重複或被包住的合併。兩個視窗同時改時，晚到的那個回 409 `rev_mismatch`（附目前的清單）；要移除的目錄底下還有 member、啟動中的 spawn 或進行中的收編時回 409 `roots_in_use` 並列出是誰。已在跑的 member 不受影響，只管之後的 spawn。
+- roster 多帶 `roots` 與 `roots_rev`。App 端的編輯畫面由介面線接著做。
+- spawn 寫入前會在同一個交易裡再確認一次工作目錄還在授權範圍內，避免剛好在目錄被移除時 spawn 進去。
+
+### Fixed：`pdx token generate` 不再悄悄讓整台主機 401 — #2557（#2560）
+
+- daemon 正在跑時，`pdx token generate` 預設拒絕、config 檔不動：之前它會直接改寫 config 的 token，而 daemon 記憶體裡仍是舊的，於是這台上所有 `pdx` 指令（mod、hook、接力）都回 401（2026-10-11 02:02 在 mlab 發生過）。真的要換就加 `--force`，它會說明 daemon 要重啟、App／手機／其他主機都要重新配對。
+- token 明文只在終端機顯示；導向檔案或管線時只印 fingerprint 與路徑。
+
+### Changed：狀態列底色帶主機色 — #2564（介面線）
+
+- 終端機與 worker 的狀態列底色改成「主機色 16% 混進主題底色」，一眼看出是哪台主機；沒設主機色的主機維持原樣。文字在四個主題、八個預設主機色下對比都 ≥ 4.5:1。
+- 指揮台 v3：內容貼齊底部；附件區加邊線與淡底（#2565）。
+
 ## [1.0.0-alpha.698] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
