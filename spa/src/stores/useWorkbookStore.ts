@@ -225,6 +225,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
     }
     const { page } = result
     let untrusted = false
+    let reconciled = false // this answer was applied as the conversation's latest, reconcilable snapshot
     set((s) => ({
       ...withSessions(s, hostId, page.convKey, uniq([sessionId, ...page.entries.map((e) => e.sessionId)])),
       ...withConv(s, hostId, page.convKey, (c) => {
@@ -243,7 +244,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
           // v2 parts (null from a v1 daemon: left as they were)
           // An answer older than one already applied (two queries in flight, the later request landed first) only adds done todos.
           todos: !page.todos ? c.todos : startedAt < c.appliedAt ? upsertTodos(c.todos, page.todos.done)
-            : (() => { const r = snapshotTodos(c.todos, page.todos, startedAt); untrusted = !r.trusted; return r.book })(),
+            : (() => { const r = snapshotTodos(c.todos, page.todos, startedAt); untrusted = !r.trusted; reconciled = r.trusted; return r.book })(),
           refreshAvailable: page.refreshAvailable !== null && c.availAt < startedAt && startedAt >= c.appliedAt ? page.refreshAvailable : c.refreshAvailable,
           appliedAt: Math.max(c.appliedAt, startedAt),
         }
@@ -251,7 +252,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
     }))
     set((s) => evicted(s, hostId))
     if (untrusted) scheduleResnap(hostId, page.convKey)
-    else if (page.todos) { const r = resnaps.get(resnapKey(hostId, page.convKey)); if (r) { if (r.timer !== undefined) clearTimeout(r.timer); resnaps.delete(resnapKey(hostId, page.convKey)) } }
+    else if (reconciled) { const r = resnaps.get(resnapKey(hostId, page.convKey)); if (r) { if (r.timer !== undefined) clearTimeout(r.timer); resnaps.delete(resnapKey(hostId, page.convKey)) } }
   }
 
   /** conv → the pending re-ask (timer) and how many were made in a row. */

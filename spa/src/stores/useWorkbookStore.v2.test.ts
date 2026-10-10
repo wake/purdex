@@ -184,6 +184,22 @@ describe('todos', () => {
       expect(fetchConversation).toHaveBeenCalledTimes(1 + MAX_RESNAPS) // gave up; no loop
     })
 
+    it('an older answer landing late does not clear the re-ask a newer request scheduled', async () => {
+      const older = defer(); const newer = defer()
+      fetchConversation.mockReturnValueOnce(older.p).mockReturnValueOnce(newer.p)
+      const a = st().loadSeat('h1', 's1') // started first
+      const b = st().openWorkbook('h1', 's1') // started second
+      flood()
+      newer.r(page([entry(3)], { todos: { open: [todo(500)], done: [] } })) // outrun by the flood: not trusted, schedules a re-ask
+      await b
+      older.r(page([entry(3)], { todos: { open: [], done: [] } })) // lands late: stale against the newer one
+      await a
+      fetchConversation.mockResolvedValueOnce(page([entry(3)], { todos: { open: [todo(8)], done: [] } }))
+      await vi.advanceTimersByTimeAsync(RESNAP_BACKOFF_MS)
+      expect(fetchConversation).toHaveBeenCalledTimes(3) // the re-ask still happened
+      expect(ids(conv()?.todos.open)).toEqual([8])
+    })
+
     it('a connection change cancels the pending re-ask', async () => {
       await staleAnswer([todo(500)])
       st().fence('h1')
