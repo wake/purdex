@@ -155,3 +155,17 @@ func TestWriteFile_ConcurrentWritersNeverShareATempFile(t *testing.T) {
 	ents, _ := os.ReadDir(filepath.Dir(p))
 	require.Len(t, ents, 1, "only config.toml is left")
 }
+
+// A key that only starts with "token" is not the token; CRLF files stay CRLF everywhere but the edited line, and still read back.
+func TestSetToken_OtherKeysStartingWithTokenAreLeftAlone(t *testing.T) {
+	p := setup(t, "token_ttl = 5\nport = 7860\n")
+	require.NoError(t, SetToken(p, tok))
+	got, _ := os.ReadFile(p)
+	require.Equal(t, "token_ttl = 5\nport = 7860\ntoken = \""+tok+"\"\n", string(got))
+	q := setup(t, "port = 7861\r\ntoken = \"\"\r\n")
+	require.NoError(t, SetToken(q, tok))
+	cfg, err := Load(q)
+	require.NoError(t, err)
+	require.Equal(t, tok, cfg.Token)
+	require.Equal(t, 7861, cfg.Port)
+}
