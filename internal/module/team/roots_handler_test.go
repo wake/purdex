@@ -190,6 +190,9 @@ func TestRootsPut_RemovingARootInUseIs409NamingWhatHoldsIt(t *testing.T) {
 	f.holdRunners()
 	mrow := newMember("op-1", uid(1), "sid-m1", "_mem1", 1)
 	mrow.Cwd = filepath.Join(root, "sub")
+	if err := os.MkdirAll(mrow.Cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.m.store.InsertMember(mrow); err != nil {
 		t.Fatal(err)
 	}
@@ -383,5 +386,19 @@ func TestRootsPut_ASymlinkOutOfARemovedRootDoesNotHoldIt(t *testing.T) {
 	}
 	if code, body := f.putRoots(uid(1), 0, []string{kept}, appClientRoots); code != 200 {
 		t.Fatalf("%d %s, want 200", code, body)
+	}
+}
+
+// A cwd that cannot be resolved (gone) is judged as written against the removed roots alone: a kept root that contains the
+// removed one does not clear it, because its real place is unknown. (codex attack, #2561.)
+func TestRootsPut_AnUnresolvableCwdStillHoldsTheRootItIsWrittenUnder(t *testing.T) {
+	f, root := newSpawnFixture(t, 3)
+	mrow := newMember("op-g", uid(1), "sid-g", "_memg", 1)
+	mrow.Cwd = filepath.Join(root, "gone")
+	if err := f.m.store.InsertMember(mrow); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := f.putRoots(uid(1), 0, []string{filepath.Dir(root)}, appClientRoots); code != 409 {
+		t.Fatalf("%d %s, want 409", code, body)
 	}
 }

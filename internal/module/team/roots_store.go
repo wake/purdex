@@ -107,11 +107,17 @@ func rootUses(ctx context.Context, q interface {
 			if err := rows.Scan(&ref, &cwd); err != nil {
 				return err
 			}
-			if cwd == "" || cwdUnderAny(cwd, next) {
+			if cwd == "" {
+				continue
+			}
+			// One resolution per row, used for every comparison. A cwd that cannot be resolved is judged as written against
+			// the removed roots alone: a kept root cannot clear a path whose real place is unknown.
+			real, ok := realCwd(cwd)
+			if ok && cwdUnderAny(real, next) {
 				continue
 			}
 			for _, r := range removed {
-				if cwdUnder(cwd, r) {
+				if within(real, r) {
 					uses = append(uses, team.RootUse{Root: r, Kind: kind, Ref: ref, Cwd: cwd})
 					break
 				}
@@ -144,21 +150,16 @@ func containsRoot(roots []string, r string) bool {
 	return false
 }
 
-// realCwd is cwd with its symlinks evaluated; one that cannot be (gone, unreadable) is judged as written, which can only
-// make it hold a root, never free one.
-func realCwd(cwd string) string {
+// realCwd is cwd with its symlinks evaluated; ok is false when it cannot be (gone, unreadable) and the cleaned path as
+// written comes back.
+func realCwd(cwd string) (string, bool) {
 	if real, err := filepath.EvalSymlinks(cwd); err == nil {
-		return real
+		return real, true
 	}
-	return filepath.Clean(cwd)
+	return filepath.Clean(cwd), false
 }
 
-// cwdUnder reports whether cwd, by its real path (a member's cwd is stored as it was announced, so a link under a kept root
-// may lead into a root being removed), is root or below it.
-func cwdUnder(cwd, root string) bool { return within(realCwd(cwd), root) }
-
-func cwdUnderAny(cwd string, roots []string) bool {
-	real := realCwd(cwd)
+func cwdUnderAny(real string, roots []string) bool {
 	for _, r := range roots {
 		if within(real, r) {
 			return true
