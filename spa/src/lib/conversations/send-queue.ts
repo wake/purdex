@@ -16,6 +16,11 @@ export const UNDO_MS = 3000
 const ECHO_BEFORE_MS = 2000
 const ECHO_AFTER_MS = 30_000
 const HAND_TIMEOUT_MS = 10_000
+// The mod may keep answering busy for about a second after the header went idle: a busy answer while the queue believes the
+// agent is idle is retried after 1 s, 2 s, 4 s (same client_msg_id: busy means the daemon did not run it), then it waits for the
+// next idle edge.
+const BACKOFF_BASE_MS = 1000
+const BACKOFF_MAX = 3
 
 export type EntryState = 'undo' | 'sending' | 'waiting' | 'sent' | 'maybe' | 'failed' | 'superseded'
 
@@ -35,6 +40,8 @@ export interface QueueEntry {
   supersededBy?: string
   /** An idle was observed while THIS entry's request was in flight and not yet used: its busy answer is resent at once (once). Gone with the entry. */
   idleSeen?: boolean
+  /** Backoff retries used since the last idle edge. */
+  retries?: number
 }
 
 export class SendQueue {
@@ -43,6 +50,10 @@ export class SendQueue {
   private timer: ReturnType<typeof setTimeout> | null = null
   private claimed = new Set<string>()
   private disposed = false
+  /** The latest observation of the header (`setIdle`). */
+  private idleNow = false
+  /** At most one: only the head waits, and only it can be backing off. */
+  private backoff: { id: string; timer: ReturnType<typeof setTimeout> } | null = null
   private retiredDone: (() => void) | null = null
   private listeners = new Set<() => void>()
 
@@ -57,7 +68,14 @@ export class SendQueue {
   subscribe = (fn: () => void): (() => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn) } }
   entries = (): readonly QueueEntry[] => this.view
 
+  private clearBackoff(): void {
+    if (this.backoff) clearTimeout(this.backoff.timer)
+    this.backoff = null
+  }
+
   private emit(): void {
+    // the backoff belongs to a message that is still waiting: any way out of it (undo, dismiss, echo, resend) takes the timer too
+    if (this.backoff && !this.list.some((e) => e.id === this.backoff!.id && e.state === 'waiting')) this.clearBackoff()
     this.view = this.list.map((e) => ({ ...e }))
     this.listeners.forEach((l) => l())
   }
@@ -114,9 +132,10 @@ export class SendQueue {
    * back to waiting if the mod says busy again, and needs a new observation.
    */
   setIdle(idle: boolean): void {
-    if (!idle) { for (const e of this.list) e.idleSeen = false; return }
+    this.idleNow = idle
+    if (!idle) { for (const e of this.list) e.idleSeen = false; this.clearBackoff(); return }
     const w = this.list.find((e) => e.state === 'waiting') // a waiting entry was refused before this observation, so it is "after the busy answer"
-    if (w) { w.state = 'undo'; w.undoUntil = this.now(); this.emit(); this.pump(); return }
+    if (w) { this.clearBackoff(); w.retries = 0; w.state = 'undo'; w.undoUntil = this.now(); this.emit(); this.pump(); return }
     // The observation came while a request is still out (a pane remounted mid-flight): when that request answers busy this idle
     // is "after the request started", so the answer is resent at once instead of waiting for an edge that will not come.
     const flying = this.list.find((e) => e.state === 'sending')
@@ -164,6 +183,7 @@ export class SendQueue {
    */
   retire(onDone: () => void): void {
     this.list = this.list.filter((e) => e.state === 'sending')
+    this.clearBackoff()
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.listeners.clear()
@@ -178,11 +198,22 @@ export class SendQueue {
    */
   dispose(): void {
     this.disposed = true
+    this.clearBackoff()
     this.list = []
     this.view = []
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.listeners.clear()
+  }
+
+  /** The backoff timer fired: resend the waiting message if the header is still idle (one request at a time, same id). */
+  private retryBusy(e: QueueEntry): void {
+    this.backoff = null
+    if (this.disposed || this.retiredDone || !this.idleNow || e.state !== 'waiting' || !this.list.includes(e)) return
+    e.state = 'undo'
+    e.undoUntil = this.now()
+    this.emit()
+    this.pump()
   }
 
   // One at a time: the first entry that has not settled is the head.
@@ -216,6 +247,12 @@ export class SendQueue {
     else if (o.kind === 'busy') {
       e.state = 'waiting'
       if (seenIdle) { e.state = 'undo'; e.undoUntil = this.now() }
+      else if (this.idleNow && (e.retries ?? 0) < BACKOFF_MAX) {
+        const delay = BACKOFF_BASE_MS * 2 ** (e.retries ?? 0)
+        e.retries = (e.retries ?? 0) + 1
+        this.clearBackoff()
+        this.backoff = { id: e.id, timer: setTimeout(() => this.retryBusy(e), delay) }
+      }
     }
     else if (mayHaveRun(o)) e.state = 'maybe'
     else {

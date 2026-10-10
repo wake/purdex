@@ -122,6 +122,29 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     expect(submits()).toHaveLength(2)
   })
 
+  it('the mod stays busy for a moment after the header went idle: the idle-edge resend is answered busy, and a 1 s backoff gets it through (same id, three requests)', async () => {
+    fetchMock.mockImplementationOnce(() => answer(200, { status: 'busy' }))
+    fetchMock.mockImplementationOnce(() => answer(200, { status: 'busy' }))
+    conv.value = ready({ status: 'running' })
+    setView(view)
+    const ui = mount()
+    type('persist'); enter()
+    await tick(3000)
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'waiting')
+    conv.value = ready({ status: 'idle' })
+    remount(ui)
+    await tick(0)
+    expect(submits()).toHaveLength(2) // the edge resend, answered busy
+    await tick(999)
+    expect(submits()).toHaveLength(2)
+    await tick(1)
+    expect(submits()).toHaveLength(3)
+    expect(new Set(submits().map((x) => x.client_msg_id)).size).toBe(1)
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
+    await tick(30_000)
+    expect(submits()).toHaveLength(3)
+  })
+
   it('a conversation without a send mod shows the disabled input with the way to the terminal; no request is made', async () => {
     conv.value = ready({ capabilities: {} })
     setView(view)

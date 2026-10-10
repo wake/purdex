@@ -139,8 +139,10 @@ describe('busy', () => {
     expect(calls).toHaveLength(2)
     calls[1].resolve({ kind: 'busy' })
     await flush()
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(calls).toHaveLength(2) // the observation is spent: only a NEW one resends again
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(2) // the observation is spent: no immediate third request, only the 1 s backoff follows
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(3)
   })
 
   it('busy settled while the pane was unmounted: the idle the remount reports resends exactly once', async () => {
@@ -411,12 +413,9 @@ describe('an idle observed while a request is in flight (the remount race)', () 
     calls[0].resolve(busy)
     await vi.advanceTimersByTimeAsync(0)
     calls[1].resolve(busy)
-    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
-    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(2) // spent: no immediate third request (the backoff is the only thing that follows)
     expect(q.entries()[0].state).toBe('waiting')
-    q.setIdle(true)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toHaveLength(3)
   })
 
   it('an idle seen BEFORE the request started does not count, nor does one followed by not-idle, nor a settled one', async () => {
@@ -451,8 +450,8 @@ describe('an idle observed while a request is in flight (the remount race)', () 
     calls[0].resolve({ kind: 'accepted' }) // A's late answer
     await vi.advanceTimersByTimeAsync(0)
     calls[1].resolve(busy) // B refused because A is running
-    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
-    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(2) // A's observation is not B's: no immediate resend (only B's own 1 s backoff follows)
     expect(q.entries().find((e) => e.text === 'B')!.state).toBe('waiting')
   })
 
@@ -470,6 +469,106 @@ describe('an idle observed while a request is in flight (the remount race)', () 
     await vi.advanceTimersByTimeAsync(0)
     expect(calls).toHaveLength(2)
     expect(q.entries().find((e) => e.text === 'b')!.state).toBe('waiting')
+  })
+})
+
+describe('the mod keeps answering busy for a moment after the header went idle (bounded backoff)', () => {
+  const busy = { kind: 'busy' } as SendOutcome
+  /** waiting after a first busy, then the idle edge resends and the mod is STILL busy: calls = 2, backoff pending. */
+  async function stillBusy() {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const id = q.enqueue('hi')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    q.setIdle(true) // the edge
+    await vi.advanceTimersByTimeAsync(0)
+    calls[1].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    return { calls, q, id }
+  }
+
+  it('second busy with the header idle: retried after 1 s with the same id, and it goes through', async () => {
+    const { calls, q, id } = await stillBusy()
+    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(3)
+    expect(calls[2].id).toBe(id)
+    calls[2].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q.entries()[0].state).toBe('sent')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls).toHaveLength(3)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('the header going busy again during the backoff stops it; the next idle edge resends', async () => {
+    const { calls, q } = await stillBusy()
+    q.setIdle(false)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls).toHaveLength(2)
+    expect(q.entries()[0].state).toBe('waiting')
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(3)
+  })
+
+  it('backs off 1 s, 2 s, 4 s and then stops in waiting (no timer); a later idle edge still resends once', async () => {
+    const { calls, q } = await stillBusy()
+    for (const [wait, n] of [[1000, 3], [2000, 4], [4000, 5]] as const) {
+      await vi.advanceTimersByTimeAsync(wait - 1)
+      expect(calls).toHaveLength(n - 1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(calls).toHaveLength(n)
+      calls[n - 1].resolve(busy)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(calls).toHaveLength(5)
+    expect(q.entries()[0].state).toBe('waiting')
+    expect(vi.getTimerCount()).toBe(0)
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(6)
+    expect(new Set(calls.map((c) => c.id)).size).toBe(1)
+  })
+
+  it('a first busy while the header is already idle backs off as well (the mod lags the header)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setIdle(true)
+    q.enqueue('hi')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('taking the message back, disposing and retiring leave no timer; an accepted message is never retried', async () => {
+    const a = await stillBusy()
+    a.q.undo(a.id)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(a.calls).toHaveLength(2)
+    const b = await stillBusy()
+    b.q.dispose()
+    expect(vi.getTimerCount()).toBe(0)
+    const c = await stillBusy()
+    c.q.retire(() => {})
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('one request at a time: a backoff timer and the idle edge never both resend', async () => {
+    const { calls, q } = await stillBusy()
+    q.setIdle(true) // an edge during the backoff resends now and takes the timer with it
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(calls).toHaveLength(3) // still in flight: the old timer is gone
   })
 })
 
