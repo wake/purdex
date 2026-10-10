@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { addAttachment, attachmentText, clearAllAttachments, forgetAttachmentsWhere, insertAttachmentText, isImageFile, readAttachments, removeAttachment, removeAttachmentText } from './attachment-memory'
+import { visibleAttachments, trackUpload, addAttachment, attachmentText, clearAllAttachments, forgetAttachmentsWhere, insertAttachmentText, isImageFile, readAttachments, removeAttachment, removeAttachmentText } from './attachment-memory'
 
 afterEach(() => clearAllAttachments())
 
@@ -37,10 +37,33 @@ describe('attachment chips memory', () => {
     removeAttachment('k', 'b')
     expect(readAttachments('k')).toEqual([])
   })
+  it('a release aborts the uploads of the matching keys only', () => {
+    const a = new AbortController(), b = new AbortController()
+    trackUpload('p1|h|s', a); trackUpload('p2|h|s', b)
+    forgetAttachmentsWhere((k) => k.startsWith('p1|'))
+    expect([a.signal.aborted, b.signal.aborted]).toEqual([true, false])
+  })
   it('forgets by predicate', () => {
     addAttachment('p1|h|s', att('a')); addAttachment('p2|h|s', att('b'))
     forgetAttachmentsWhere((k) => k.startsWith('p1|'))
     expect(readAttachments('p1|h|s')).toEqual([])
     expect(readAttachments('p2|h|s')).toHaveLength(1)
+  })
+})
+
+describe('visibleAttachments: the draft is the truth', () => {
+  const a = (id: string, text: string) => ({ id, name: id, path: text, text })
+  it('a chip whose marker line is gone from the draft is not shown', () => {
+    const list = [a('1', '/up/a.pdf'), a('2', '/up/b.pdf')]
+    expect(visibleAttachments('x\n/up/b.pdf', list).map((c) => c.id)).toEqual(['2'])
+    expect(visibleAttachments('', list)).toEqual([])
+  })
+  it('a rewritten line (not exactly the marker) does not count', () => {
+    expect(visibleAttachments('/up/a.pdf edited', [a('1', '/up/a.pdf')])).toEqual([])
+  })
+  it('identical markers need one line each', () => {
+    const list = [a('1', '/up/a.pdf'), a('2', '/up/a.pdf')]
+    expect(visibleAttachments('/up/a.pdf', list).map((c) => c.id)).toEqual(['1'])
+    expect(visibleAttachments('/up/a.pdf\n/up/a.pdf', list)).toHaveLength(2)
   })
 })

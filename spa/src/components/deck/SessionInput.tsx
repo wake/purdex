@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Paperclip, PaperPlaneRight, Stop, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { agentUploadToPath } from '../../lib/host-api'
-import { addAttachment, attachmentText, insertAttachmentText, isImageFile, readAttachments, removeAttachment, removeAttachmentText, forgetAttachmentsWhere, type Attachment } from '../../lib/conversations/attachment-memory'
+import { addAttachment, attachmentText, insertAttachmentText, isImageFile, readAttachments, removeAttachment, removeAttachmentText, forgetAttachmentsWhere, trackUpload, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
@@ -59,6 +59,13 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   // uploads in flight belong to this mounted input: leaving the pane cancels them (nothing half-done lands in the draft)
   const inflight = useRef(new Set<AbortController>())
   useEffect(() => { const set = inflight.current; return () => { for (const c of set) c.abort() } }, [])
+  // the draft is the truth: a marker line the reader deleted or rewrote takes its chip (in the memory too) with it
+  const shown = visibleAttachments(draft, chips)
+  useEffect(() => {
+    if (shown.length === chips.length) return
+    for (const a of chips) if (!shown.includes(a)) removeAttachment(dKey, a.id)
+    setChips(readAttachments(dKey))
+  }, [shown, chips, dKey])
 
   // The queue is driven by the pane (`useSendQueueDriver`, under every view); this input only types and shows.
   // the live capability is the only authority: a 409 no_mod fails that one message and disables nothing by itself
@@ -73,13 +80,16 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
       const id = `att-${++attachSeq}`
       const ctl = new AbortController()
       inflight.current.add(ctl)
+      const untrack = trackUpload(dKey, ctl)
       setUploading((u) => [...u, { id, name: file.name, percent: 0 }])
-      const settle = () => { inflight.current.delete(ctl); setUploading((u) => u.filter((x) => x.id !== id)) }
+      const settle = () => { inflight.current.delete(ctl); untrack(); setUploading((u) => u.filter((x) => x.id !== id)) }
       agentUploadToPath(hostId, file, sessionCode, {
         signal: ctl.signal,
         onProgress: (percent) => setUploading((u) => u.map((x) => (x.id === id ? { ...x, percent } : x))),
       }).then(({ path }) => {
         settle()
+        // the input was left or the pane released while the answer was on its way: nothing may be rebuilt
+        if (ctl.signal.aborted) return
         const text = attachmentText(path, isImageFile(file))
         const next = insertAttachmentText(readDraft(dKey) ?? '', text)
         writeDraft(dKey, next)
@@ -129,9 +139,9 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
       ) : (
         <div className="px-3 pb-2">
           {hintText && <div data-testid="session-input-hint" role="status" className={`mb-1 text-xs ${hint?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{hintText}</div>}
-          {chips.length > 0 && (
+          {shown.length > 0 && (
             <div className="mb-1 flex flex-wrap gap-1">
-              {chips.map((a) => (
+              {shown.map((a) => (
                 <span key={a.id} data-testid="attachment-chip" className="inline-flex items-center gap-1 rounded border border-border-subtle bg-surface-secondary px-2 py-0.5 text-xs text-text-primary">
                   {t('deck.attach.attached', { name: a.name })}
                   <button type="button" aria-label={t('deck.attach.remove', { name: a.name })} title={t('deck.attach.remove', { name: a.name })} onClick={() => dropChip(a)} className="text-text-muted hover:text-text-primary"><X size={12} /></button>
@@ -166,7 +176,8 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 // only files are taken over; a plain-text paste goes into the box as usual
                 const files = [...e.clipboardData.files]
                 if (!sessionCode || files.length === 0) return
-                e.preventDefault()
+                // a payload that also carries text keeps its text: the browser pastes it, the files are uploaded beside it
+                if (!e.clipboardData.getData('text/plain')) e.preventDefault()
                 attach(files)
               }}
               onKeyDown={(e) => {

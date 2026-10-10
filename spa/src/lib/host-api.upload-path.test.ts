@@ -74,6 +74,12 @@ describe('agentUploadToPath', () => {
     await expect(p).rejects.toMatchObject({ kind: 'http' })
   })
 
+  it('an unknown host is refused without building a request (no fallback to the active host)', async () => {
+    const before = FakeXHR.last
+    await expect(agentUploadToPath('not-mine', file(), 'dev001')).rejects.toMatchObject({ kind: 'host_missing' })
+    expect(FakeXHR.last).toBe(before)
+  })
+
   it('abort cancels the request and rejects as aborted', async () => {
     const ac = new AbortController()
     const p = agentUploadToPath(HOST_ID, file(), 'dev001', { signal: ac.signal })

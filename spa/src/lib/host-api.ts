@@ -239,11 +239,13 @@ export function hostFetch(hostId: string, path: string, init?: RequestInit): Pro
  * callers that rely on it.
  */
 export function pinnedHostFetch(hostId: string, path: string, init?: RequestInit): Promise<Response> {
-  if (!Object.hasOwn(useHostStore.getState().hosts, hostId)) {
-    return Promise.reject(new Error(`host ${hostId} is not configured`))
-  }
+  if (!isConfiguredHost(hostId)) return Promise.reject(notConfigured(hostId))
   return hostFetch(hostId, path, init)
 }
+
+/** Does THIS device have the host? (`getDaemonBase` would fall back to another one for an unknown id.) */
+const isConfiguredHost = (hostId: string): boolean => Object.hasOwn(useHostStore.getState().hosts, hostId)
+const notConfigured = (hostId: string): Error => new Error(`host ${hostId} is not configured`)
 
 /**
  * The auth headers `hostFetch` attaches, exported for transports that cannot
@@ -755,7 +757,7 @@ export async function agentUpload(
   return res.json()
 }
 
-export type AgentUploadErrorKind = 'too_large' | 'not_found' | 'http' | 'network' | 'aborted'
+export type AgentUploadErrorKind = 'too_large' | 'not_found' | 'http' | 'network' | 'aborted' | 'host_missing'
 
 export class AgentUploadError extends Error {
   kind: AgentUploadErrorKind
@@ -781,6 +783,8 @@ export function agentUploadToPath(
   const { signal, onProgress } = opts
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new AgentUploadError('aborted')); return }
+    // same pin as `pinnedHostFetch`: an unknown host must not be answered by the active host's daemon
+    if (!isConfiguredHost(hostId)) { reject(new AgentUploadError('host_missing')); return }
     const { getDaemonBase, getAuthHeaders } = useHostStore.getState()
     const form = new FormData()
     form.append('session', sessionCode)

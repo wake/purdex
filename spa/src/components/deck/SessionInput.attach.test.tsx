@@ -6,6 +6,7 @@ import { SessionInput } from './SessionInput'
 import { clearAllDrafts, draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearAllAttachments, readAttachments } from '../../lib/conversations/attachment-memory'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
+import { releasePane, retireStaleSessions } from '../../lib/conversations/pane-release'
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), upload: vi.fn() }))
 vi.mock('../../lib/host-api', () => ({ pinnedHostFetch: mocks.fetch, agentUploadToPath: mocks.upload }))
@@ -66,6 +67,14 @@ describe('SessionInput attachments', () => {
     const notPrevented = paste({ text: 'just text' })
     expect(notPrevented).toBe(true)
     expect(mocks.upload).not.toHaveBeenCalled()
+  })
+
+  it('a payload with files AND text keeps its text (not prevented) and still uploads the files', async () => {
+    render(ui())
+    expect(paste({ files: [png()], text: 'caption' })).toBe(true)
+    await flush()
+    expect(mocks.upload).toHaveBeenCalledTimes(1)
+    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
   })
 
   it('a file paste is intercepted (the browser does not also paste it)', () => {
@@ -157,6 +166,54 @@ describe('SessionInput attachments', () => {
     expect(readDraft(KEY)).toBe('keep me')
     expect(readAttachments(KEY)).toEqual([])
     expect(mocks.fetch).not.toHaveBeenCalled()
+  })
+
+  it('a chip follows the draft: delete the marker line by hand and the chip (and its memory) goes', async () => {
+    render(ui())
+    paste({ files: [png()] })
+    await flush()
+    fireEvent.change(box(), { target: { value: 'rewritten' } })
+    expect(screen.queryByTestId('attachment-chip')).toBeNull()
+    expect(readAttachments(KEY)).toEqual([])
+  })
+
+  it('two identical markers: removing one chip takes out one line and leaves the other chip', async () => {
+    mocks.upload.mockImplementation(() => Promise.resolve({ filename: 'shot.png', path: '/up/dev001/shot.png' }))
+    render(ui())
+    paste({ files: [png()] }); paste({ files: [png()] })
+    await flush()
+    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]\n[Image: source: /up/dev001/shot.png]')
+    expect(screen.getAllByTestId('attachment-chip')).toHaveLength(2)
+    fireEvent.click(screen.getAllByRole('button', { name: /Remove attachment/ })[0])
+    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(screen.getAllByTestId('attachment-chip')).toHaveLength(1)
+  })
+
+  it('an upload that resolved but lands after unmount rebuilds nothing', async () => {
+    const view = render(ui())
+    paste({ files: [png()] })
+    view.unmount()
+    await flush()
+    expect(readDraft(KEY)).toBeUndefined()
+    expect(readAttachments(KEY)).toEqual([])
+  })
+
+  it('an upload that lands after the pane was released (still mounted) rebuilds nothing', async () => {
+    render(ui())
+    paste({ files: [png()] })
+    releasePane('p1')
+    await flush()
+    expect(readDraft(KEY)).toBeUndefined()
+    expect(readAttachments(KEY)).toEqual([])
+  })
+
+  it('an upload that lands after the pane moved to another session rebuilds nothing for the old one', async () => {
+    render(ui())
+    paste({ files: [png()] })
+    retireStaleSessions('p1', 'h', 'other-session')
+    await flush()
+    expect(readDraft(KEY)).toBeUndefined()
+    expect(readAttachments(KEY)).toEqual([])
   })
 
   it('chips and the draft come back from the module memory after a remount', async () => {
