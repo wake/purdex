@@ -29,15 +29,24 @@ function geometry(box: HTMLElement, scrollHeight: number, clientHeight: number, 
   Object.defineProperty(box, 'scrollTop', { configurable: true, writable: true, value: scrollTop })
 }
 
-const deckEntry = (): ConversationEntry => ({
-  doc: { ...emptyDoc(), turns: [{ id: 't0', index: 0, started_at: 0, outcome: 'done', items: [userItem('a', 0)] }] },
+const deckEntry = (n: number): ConversationEntry => ({
+  doc: { ...emptyDoc(), turns: Array.from({ length: n }, (_, i) => ({ id: `t${i}`, index: i, started_at: 0, outcome: 'done' as const, items: [userItem(`a${i}`, 0)] })) },
   status: 'live', reason: '', paging: false, subagents: {},
 })
-const chatTurns: PanelTurn[] = [{ id: 't0', index: 0, items: [userItem('a', 0)] }]
+const chatTurns = (n: number): PanelTurn[] => Array.from({ length: n }, (_, i) => ({ id: `t${i}`, index: i, items: [userItem(`a${i}`, 0)] }))
 
+/** Each view mounts with one turn and hands back a `more()` that re-renders it with another turn (a live line landing: `follow`). */
 const views = [
-  ['deck', 'deck-scroll', () => render(<DeckView paneId="pin-deck" hostId="h" sessionId="s" entry={deckEntry()} onSwitchToTerminal={() => {}} />)],
-  ['chat', 'chat-scroll', () => render(<ChatView paneKey="pin-chat" hostId="h" sessionId="s" title="t" status="idle" turns={chatTurns} onSwitchToTerminal={() => {}} active />)],
+  ['deck', 'deck-scroll', () => {
+    const el = (n: number) => <DeckView paneId="pin-deck" hostId="h" sessionId="s" entry={deckEntry(n)} onSwitchToTerminal={() => {}} />
+    const r = render(el(1))
+    return () => r.rerender(el(2))
+  }],
+  ['chat', 'chat-scroll', () => {
+    const el = (n: number) => <ChatView paneKey="pin-chat" hostId="h" sessionId="s" title="t" status="idle" turns={chatTurns(n)} onSwitchToTerminal={() => {}} active />
+    const r = render(el(1))
+    return () => r.rerender(el(2))
+  }],
 ] as const
 
 beforeEach(() => {
@@ -99,5 +108,52 @@ describe.each(views)('%s: the footer growing under the box', (_n, testId, mount)
     setHeight(box, 300)
     setHeight(box, 250)
     expect(box.scrollTop).toBe(100)
+  })
+
+  // The guards. jsdom reports clientHeight 0 and a mock observer never reports on observe(), so without these the
+  // first report would always be a 0 -> 400 change and `h === before` / `before === null` would never be exercised.
+  describe('the guards', () => {
+    const boxHeight = (h: number) => vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(h)
+
+    it('the observer\'s first report with the height the box attached with moves nothing', () => {
+      boxHeight(400)
+      mount()
+      const box = screen.getByTestId(testId)
+      // at the bottom by the flag (no scroll event yet), but not at the end by the numbers: a pin would move it to 600
+      geometry(box, 1000, 400, 300)
+      resized(box)
+      expect(box.scrollTop).toBe(300)
+    })
+
+    it('a height change before the first placement does not pin', () => {
+      boxHeight(400)
+      delete (Element.prototype as { scrollTo?: unknown }).scrollTo // follow() cannot place the reader: `scrolled` stays false
+      mount()
+      const box = screen.getByTestId(testId)
+      geometry(box, 1000, 400, 300)
+      Object.defineProperty(box, 'clientHeight', { configurable: true, writable: true, value: 300 })
+      resized(box)
+      expect(box.scrollTop).toBe(300)
+    })
+
+    it('a pin ends a smooth follow that is still on its way: later downward scrolling is the reader\'s again', () => {
+      boxHeight(400)
+      const more = mount()
+      const box = screen.getByTestId(testId)
+      geometry(box, 1000, 400, 600)
+      box.scrollTop = 600
+      fireEvent.scroll(box)
+      more() // follow(): a smooth scroll to the end starts (smoothTarget set)
+      expect(Element.prototype.scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: 'smooth' }))
+      Object.defineProperty(box, 'clientHeight', { configurable: true, writable: true, value: 300 })
+      resized(box)
+      expect(box.scrollTop).toBe(700) // pinned, and the smooth target is dropped
+      // the reader scrolls down but stops far from the end: with the smooth target still set, that would read as the box catching up
+      geometry(box, 2000, 300, 800)
+      fireEvent.scroll(box)
+      Object.defineProperty(box, 'clientHeight', { configurable: true, writable: true, value: 250 })
+      resized(box)
+      expect(box.scrollTop).toBe(800)
+    })
   })
 })
