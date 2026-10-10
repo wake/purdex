@@ -89,7 +89,11 @@ func (m *Module) judgeRelayTimeout(op team.RelayOp, now int64) {
 
 // judgeMemberRequested is the rule for a member op in requested (see the list at the top of the file).
 func (m *Module) judgeMemberRequested(op team.RelayOp, now, claimMs, stallMs int64) {
-	mr, status, known := m.memberAgentStatus(op)
+	mr, status, known, err := m.memberAgentStatus(op)
+	if err != nil {
+		m.logf("[team] relay timeout of op %s skipped: %v", op.ID, err) // one unreadable sweep is no verdict on a failure that cannot be undone
+		return
+	}
 	if op.SeenAt == 0 {
 		if now >= op.UpdatedAt+claimMs {
 			reason := team.RelayReasonMemberUnseen
@@ -124,17 +128,22 @@ func (m *Module) judgeMemberRequested(op team.RelayOp, now, claimMs, stallMs int
 }
 
 // memberAgentStatus reads the member's agent status as noticeUsage does; known is false when there is no reading or the
-// session is no active member of a live team (then the old rule applies).
-func (m *Module) memberAgentStatus(op team.RelayOp) (mr memberRow, status string, known bool) {
+// session is no active member of a live team (then the old rule applies). A store error is returned, not folded into
+// "unknown": the caller must not judge on it. The agent module drops the reading of a cleared session, so a `clear` is
+// "unknown" too.
+func (m *Module) memberAgentStatus(op team.RelayOp) (mr memberRow, status string, known bool, err error) {
 	if m.status == nil {
-		return memberRow{}, "", false
+		return memberRow{}, "", false, nil
 	}
 	mr, _, ok, err := m.store.ActiveMemberInLiveTeam(op.SessionID)
-	if err != nil || !ok {
-		return memberRow{}, "", false
+	if err != nil {
+		return memberRow{}, "", false, err
+	}
+	if !ok {
+		return memberRow{}, "", false, nil
 	}
 	status, known = m.status.AgentStatus(mr.TmuxSession)
-	return mr, status, known
+	return mr, status, known, nil
 }
 
 // idleSinceOf is when this daemon first saw the op's member idle (now on the first look). In memory: after a restart the

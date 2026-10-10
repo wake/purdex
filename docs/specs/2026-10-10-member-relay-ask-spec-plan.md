@@ -268,8 +268,9 @@ member op in `requested`:
 | Seen, the member is in a turn (`running`, or `waiting` on a prompt) | keep waiting up to `RelayBusyCapS` = 60 min after `seen_at`; **once** at `RelayStallTimeoutS` = 15 min the lead gets `RelayBusyNoticeFmt` (`noticeToLead`); at the cap fail `member_busy_timeout` (`member_blocked` if `waiting`) |
 | Seen, the member is idle (its turn ended) and the op is still unclaimed `RelayIdleGraceS` = 2 min after the daemon first saw it idle | fail `member_unresponsive` (the mod did not claim) |
 
-Notes. The agent status is read as `noticeUsage` reads it (`AgentStatus(tmux)`): `running`, `waiting`, `idle` (and
-`error`, `clear`, treated like idle). `waiting` is a prompt that needs a person (a permission, a question); a dialog the
+Notes. The agent status is read as `noticeUsage` reads it (`AgentStatus(tmux)`): `running`, `waiting`, `idle`, and
+`error` (treated like idle); a `clear` leaves no reading (the agent module drops it), so it is "unknown" and the old
+15 minute rule applies. A store error while looking the member up skips that sweep: it is no verdict. `waiting` is a prompt that needs a person (a permission, a question); a dialog the
 agent never reports (such as "Mods: Enable hot reloading?") shows as an unseen op with whatever status the session had, so
 `member_unseen`'s message names that case. The idle count and the once-only mark of the 15 minute notice are in memory
 (a restart gives the mod another two minutes and can repeat the notice once). The failures are reported to the lead by the
