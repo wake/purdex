@@ -21,7 +21,8 @@
 //   * `loadUntil`      — pages `before=` from the oldest loaded entry until an entry is loaded, at most MAX_UNTIL_PAGES pages.
 import { create } from 'zustand'
 import { fetchConversation, fetchTodos, postRefresh } from '../lib/workbook/api'
-import { emptyTodos, mergeEntries, MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES, snapshotTodos, touched, upsertTodos, type TodoBook } from '../lib/workbook/merge'
+import { forgetViewMemosOfHost } from '../lib/workbook/view-memory'
+import { emptyTodos,mergeEntries, MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES, snapshotTodos, touched, upsertTodos, type TodoBook } from '../lib/workbook/merge'
 import {
   WORKBOOK_PROVIDER, type EntryEvent, type RefreshAvailableEvent, type StatusEvent, type TodosEvent, type WorkbookEntry,
 } from '../lib/workbook/types'
@@ -104,6 +105,8 @@ interface WorkbookState {
   /** 'failed': the ask did not reach an answer (network / 5xx) and the seat is NOT marked loaded for this generation, so a later ask retries. */
   loadSeat: (hostId: string, sessionId: string) => Promise<'ok' | 'failed'>
   openWorkbook: (hostId: string, sessionId: string) => Promise<void>
+  /** v2: ask for the conversation again NOW (limit 20), whatever else is loading it; the refresh path's way to correct `refreshAvailable` / learn a pending refresh entry. false: the request itself failed. No-op (true) without `workbook.v2`. */
+  resnapshot: (hostId: string, sessionId: string) => Promise<boolean>
   /** The seats the team views show now: a seat that is gone stops holding its conversation (and counts as new if it returns). */
   syncSeats: (targets: ReadonlyArray<{ hostId: string; sessionId: string }>) => void
   /** A workbook view opened (true) or closed (false) on a conversation: it is not evicted while open. */
@@ -334,6 +337,13 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       await runFetch(hostId, sessionId, { limit: VIEW_PAGE })
     },
 
+    resnapshot: async (hostId, sessionId) => {
+      if (!get().support[hostId]?.v2) return true
+      // Not `openWorkbook`: a page load of the same conversation (loadMore / loadUntil) must not swallow this, and a request
+      // already out may predate what the caller just learned (a 409), so it is never joined — its own start stamp decides what lands.
+      return fetchOnce(hostId, sessionId, { limit: VIEW_PAGE })
+    },
+
     loadMore: async (hostId, convKey) => {
       const c = get().byHost[hostId]?.byConv[convKey]
       if (!get().support[hostId]?.v1 || !c || c.loading || c.exhausted || c.oldestId === null) return
@@ -454,7 +464,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
 
     applyRefreshAvailable: (hostId, ev) => { set((s) => withConv(s, hostId, ev.convKey, (c) => ({ ...c, refreshAvailable: ev.available, availAt: ++clock }))); set((s) => evicted(s, hostId)) },
 
-    forgetHost: (hostId) => { clearResnaps(hostId); set((s) => {
+    forgetHost: (hostId) => { clearResnaps(hostId); forgetViewMemosOfHost(hostId); set((s) => {
       const drop = <T>(m: Record<string, T>): Record<string, T> => { const { [hostId]: _g, ...rest } = m; return rest }
       return {
         byHost: drop(s.byHost), convOfSession: drop(s.convOfSession), support: drop(s.support), gens: drop(s.gens),
