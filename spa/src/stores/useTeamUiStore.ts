@@ -41,9 +41,10 @@ export interface DrillSeat { hostId: string; sessionId: string }
 /** The panel area: its width in px, one value for the whole area (enlarging is the per-team `max` state). */
 export interface PanelArea { width: number }
 
-export const PANEL_MIN_WIDTH = 280
+/** The least width at which a lead + 3 members (4 cells, the widest light style, iconDot) fit one header row, measured in Chromium; see panel-layout.test.ts. */
+export const PANEL_MIN_WIDTH = 412
 export const PANEL_MAX_WIDTH = 720
-export const PANEL_DEFAULT_WIDTH = 312
+export const PANEL_DEFAULT_WIDTH = 412
 
 const clampWidth = (w: number): number => Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, Math.round(w)))
 

@@ -1,27 +1,30 @@
-// spa/src/components/team/panel-layout.test.ts — the header's width budget at the default 312px (TI-6). jsdom cannot lay
+// spa/src/components/team/panel-layout.test.ts — the header's width budget (TI-6; #2355: 4px gaps, a minimum width that holds a lead + 3 members). jsdom cannot lay
 // anything out, so this adds up the named constants; the real-Chromium numbers are in the PR notes.
 import { describe, it, expect } from 'vitest'
 import { HOST_BADGE_BOX_DEFAULT, HOST_BADGE_BOX_MAX } from '../../stores/useUISettingsStore'
+import { PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH } from '../../stores/useTeamUiStore'
 import {
   AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_PL, CELL_PR, CELL_INNER_GAP, CELL_ICON_BOX_W, CELL_GAP, SEP_LINE_W, SEP_W, POPOVER_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
 } from './panel-layout'
 
 describe('panel header budget', () => {
-  it('spacing: 8px between cells and either side of the divider; header padding, gap and cell padding are back at their old values', () => {
-    expect(CELL_GAP).toBe(8)
-    // The divider is an ordinary flex child of the cells row: the row's gap gives it 8 on EACH side, so it carries no margin
+  it('spacing: 4px between cells and either side of the divider; header padding, gap and cell padding are back at their old values', () => {
+    expect(CELL_GAP).toBe(4)
+    // The divider is an ordinary flex child of the cells row: the row's gap gives it 4 on EACH side, so it carries no margin
     // of its own. SEP_W is what it adds beyond the one gap every pair of cells has anyway: its line plus the second gap.
     expect(SEP_LINE_W).toBe(1)
     expect(SEP_W).toBe(SEP_LINE_W + CELL_GAP)
-    expect(CELL_GAP + SEP_LINE_W + CELL_GAP).toBe(17) // lead's edge -> line 8, line -> the next cell 8
-    expect(cellsWidth(2)).toBe(2 * CELL_W + 8 + 1 + 8) // two cells with the divider between them: 17 apart
+    expect(SEP_W).toBe(5)
+    expect(CELL_GAP + SEP_LINE_W + CELL_GAP).toBe(9) // lead's edge -> line 4, line -> the next cell 4
+    expect(cellsWidth(2)).toBe(2 * CELL_W + 4 + 1 + 4) // two cells with the divider between them: 9 apart
     expect([HEADER_PX, HEADER_GAP]).toEqual([6, 4])
   })
 
   it('a cell is the sidebar bead\'s box: 6px | bot run | 6px | host-box-sized ring | 3px — nothing squeezed', () => {
     expect([CELL_PL, CELL_PR, CELL_INNER_GAP, CELL_H]).toEqual([6, 3, 6, 24]) // pl-1.5, pr-[3px], gap-1.5, h-6
     expect(CELL_W).toBe(CELL_PL + CELL_ICON_BOX_W + CELL_INNER_GAP + HOST_BADGE_BOX_DEFAULT + CELL_PR)
-    expect(CELL_W).toBe(49)
+    expect(CELL_W).toBe(48) // measured in Chromium: 6 + 17 + 6 + 16 + 3
+    expect(cellWidthFor('iconDot')).toBe(62) // measured: iconDot draws its light beside the icon
     expect(cellWidthFor('badge', 24)).toBe(CELL_W + (24 - HOST_BADGE_BOX_DEFAULT)) // the ring follows the host box setting
   })
 
@@ -31,7 +34,7 @@ describe('panel header budget', () => {
 
   it.each([
     // [panel width, light style, cells in the first row]. A remote seat's cell is the same width (no host square any more).
-    [312, 'badge', 2],
+    [312, 'badge', 3],
     [312, 'iconDot', 2],
     [440, 'badge', 5],
     [440, 'iconDot', 4],
@@ -41,6 +44,38 @@ describe('panel header budget', () => {
     expect(roomAt(width)).toBeLessThan(cellsWidth(n + 1, w))
     expect(capacityFromWidths(Array(9).fill(w), roomAt(width))).toBe(n)
     if (style === 'badge') expect(firstRowCapacity(width)).toBe(n)
+  })
+
+  describe('the minimum width holds a lead + 3 members (4 cells) in one row (#2355, widths measured in Chromium)', () => {
+    // The pieces beside the cells, measured: capsule 84 (its cap), toggle 19 + expand 20 + gap 2 = 41, header padding 6 + 6,
+    // the gap between capsule | cells | buttons 4 + 4, the area's border 1 + 1  =>  147 off the panel width.
+    const BESIDE = AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + BUTTONS_W
+    const widest = (box: number) => Math.max(cellWidthFor('iconDot', box), cellWidthFor('badge', box))
+    it('beside-the-cells measures 147', () => {
+      expect(BUTTONS_W).toBe(41)
+      expect(BESIDE).toBe(147)
+    })
+    it('the minimum is the least width that holds 4 iconDot cells (the widest style); badge needs less', () => {
+      expect(cellsWidth(4, cellWidthFor('iconDot'))).toBe(265) // 4 x 62 + 3 x 4 + 5
+      expect(cellsWidth(4, cellWidthFor('badge'))).toBe(209) // 4 x 48 + 3 x 4 + 5
+      expect(PANEL_MIN_WIDTH).toBe(BESIDE + cellsWidth(4, widest(HOST_BADGE_BOX_DEFAULT)))
+      expect(PANEL_MIN_WIDTH).toBe(412)
+      expect(BESIDE + cellsWidth(4, cellWidthFor('badge'))).toBe(356)
+      expect(PANEL_DEFAULT_WIDTH).toBeGreaterThanOrEqual(PANEL_MIN_WIDTH)
+    })
+    it.each(['badge', 'iconDot'] as const)('at the minimum, 4 %s cells fit in the first row; one px less and the 4th wraps', (style) => {
+      const widths = Array(9).fill(cellWidthFor(style))
+      expect(capacityFromWidths(widths, PANEL_MIN_WIDTH - BESIDE)).toBeGreaterThanOrEqual(4)
+      if (style === 'iconDot') {
+        expect(capacityFromWidths(widths, PANEL_MIN_WIDTH - BESIDE)).toBe(4)
+        expect(capacityFromWidths(widths, PANEL_MIN_WIDTH - 1 - BESIDE)).toBe(3)
+      }
+    })
+    it('the badge fallback (no layout) agrees at the badge need', () => {
+      expect(firstRowCapacity(356)).toBe(4)
+      expect(firstRowCapacity(355)).toBe(3)
+      expect(firstRowCapacity(PANEL_MIN_WIDTH)).toBeGreaterThanOrEqual(4)
+    })
   })
 
   it('capacity grows with the width and never drops below one', () => {
