@@ -260,6 +260,21 @@ describe('generation fence', () => {
   })
 })
 
+describe('in-flight requests', () => {
+  it('two opens of a session whose conversation is not known yet send one request', async () => {
+    st().setSupport('h1', V1)
+    const d = deferred<ConversationResult>()
+    fetchConversation.mockReturnValueOnce(d.promise)
+    const a = st().openWorkbook('h1', 'plain')
+    const b = st().openWorkbook('h1', 'plain')
+    expect(fetchConversation).toHaveBeenCalledTimes(1)
+    d.resolve(page([entry(3)]))
+    await Promise.all([a, b])
+    await st().openWorkbook('h1', 'plain') // answered: a later open asks again
+    expect(fetchConversation).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('retention', () => {
   const keys = () => Object.keys(st().byHost.h1?.byConv ?? {})
 

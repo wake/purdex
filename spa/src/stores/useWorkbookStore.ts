@@ -136,7 +136,18 @@ const uniq = (xs: string[]): string[] => [...new Set(xs)]
 
 export const useWorkbookStore = create<WorkbookState>()((set, get) => {
   /** One conversation fetch for `sessionId`, fenced to the host's epoch and generation. */
-  async function runFetch(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<void> {
+  const inflight = new Map<string, Promise<void>>()
+  /** One request per (host, session, page) and connection generation at a time: a repeat joins the one out, whether or not the
+   *  session's conversation is known yet (a non-team session has no mapping before its first answer). */
+  function runFetch(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<void> {
+    const key = JSON.stringify([hostId, get().epoch[hostId] ?? 0, get().gens[hostId] ?? 0, sessionId, q.limit, q.before ?? null])
+    const out = inflight.get(key)
+    if (out) return out
+    const p = fetchOnce(hostId, sessionId, q).finally(() => { if (inflight.get(key) === p) inflight.delete(key) })
+    inflight.set(key, p)
+    return p
+  }
+  async function fetchOnce(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<void> {
     const epoch = get().epoch[hostId] ?? 0
     const gen = get().gens[hostId]
     const known = get().convOfSession[hostId]?.[sessionId]
@@ -253,6 +264,6 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       }
     }),
 
-    reset: () => { set({ byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {} }) },
+    reset: () => { inflight.clear(); set({ byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {} }) },
   }
 })
