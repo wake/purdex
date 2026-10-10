@@ -214,6 +214,20 @@ describe('WorkspaceRow keyboard focus is visible (#1486)', () => {
   })
 })
 
+// #2525: the sensors are pointer-only (no KeyboardSensor), so dnd-kit's tabIndex=0 / role=button on the header div would only add
+// an invisible Tab stop (the header sets focus-visible:outline-none). The first Tab must land on the name button.
+describe('WorkspaceRow header is not a Tab stop (#2525)', () => {
+  it('header has no tabindex / role=button; the first focusable in DOM order is the name button', () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide' })
+    const { container } = renderRow(mkWs('ws-1', 'Purdex'))
+    const header = screen.getByTestId('ws-header-ws-1')
+    expect(header).not.toHaveAttribute('tabindex')
+    expect(header).not.toHaveAttribute('role', 'button')
+    const focusables = container.querySelectorAll<HTMLElement>('[tabindex], button, a[href], input')
+    expect(focusables[0]).toBe(screen.getByText('Purdex').closest('button'))
+  })
+})
+
 describe('WorkspaceRow chevron visibility', () => {
   it("hides chevron when tabPosition='top'", () => {
     useLayoutStore.setState({ tabPosition: 'top' })

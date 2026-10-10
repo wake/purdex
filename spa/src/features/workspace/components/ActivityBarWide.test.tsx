@@ -524,8 +524,9 @@ describe('ActivityBarWide — drag and drop with the worker list open', () => {
     renderBar()
     expect(dnd.props).not.toBeNull()
     expect(screen.getByTestId('worker-list-section')).toBeInTheDocument()
-    // The workspace rows are still real sortables.
-    expect(screen.getByTestId('ws-header-w1').closest('[aria-roledescription="sortable"]')).not.toBeNull()
+    // The workspace rows are still real sortables: the reorder tests below drive them through this DndContext. (The row no
+    // longer carries dnd-kit's aria-roledescription, so it can't be told apart by DOM attribute — #2525.)
+    expect(screen.getByTestId('ws-header-w1')).toBeInTheDocument()
   })
 
   it('a workspace reorder still calls onReorderWorkspaces', () => {
