@@ -89,7 +89,7 @@ func TestUploadResidue_RevokeAbortsOnlyThatDevicesUploads(t *testing.T) {
 	m, _ := newUploadTestModule(t)
 	srvX := deviceServer(t, m, "d_xxxxxxxxxxxx")
 	srvY := deviceServer(t, m, "d_yyyyyyyyyyyy")
-	connX := startTrickle(t, srvX, 1_000_000, 20*time.Millisecond)
+	connX := startTrickle(t, srvX, 1_000_000, time.Hour) // silent: only a wake-up of the blocked read can end it
 	connY := startTrickle(t, srvY, 1_000_000, 20*time.Millisecond)
 	waitForCond(t, "both uploads in flight", func() bool { return inFlight(m, "d_xxxxxxxxxxxx") == 1 && inFlight(m, "d_yyyyyyyyyyyy") == 1 })
 
