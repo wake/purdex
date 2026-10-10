@@ -42,6 +42,8 @@ export interface QueueEntry {
   idleSeen?: boolean
   /** Backoff retries used since the last idle edge. */
   retries?: number
+  /** The one wake-up request after the quota ran out (a remount) has been used; a real idle edge gives it back. */
+  woken?: boolean
 }
 
 export class SendQueue {
@@ -132,10 +134,16 @@ export class SendQueue {
    * back to waiting if the mod says busy again, and needs a new observation.
    */
   setIdle(idle: boolean): void {
+    const edge = idle && !this.idleNow // false -> true; the pane reports the SAME value again on every remount, which is no edge
     this.idleNow = idle
     if (!idle) { for (const e of this.list) e.idleSeen = false; this.clearBackoff(); return }
     const w = this.list.find((e) => e.state === 'waiting') // a waiting entry was refused before this observation, so it is "after the busy answer"
-    if (w) { this.clearBackoff(); w.retries = 0; w.state = 'undo'; w.undoUntil = this.now(); this.emit(); this.pump(); return }
+    if (w) {
+      if (edge) { this.clearBackoff(); w.retries = 0; w.woken = false } // a real edge: resend now, with a fresh quota
+      else if (this.backoff === null && (w.retries ?? 0) >= BACKOFF_MAX && !w.woken) w.woken = true // a remount over a spent quota: ONE request, no refill
+      else return // same idle again: a pending backoff keeps its schedule, a spent wake-up stays spent
+      w.state = 'undo'; w.undoUntil = this.now(); this.emit(); this.pump(); return
+    }
     // The observation came while a request is still out (a pane remounted mid-flight): when that request answers busy this idle
     // is "after the request started", so the answer is resent at once instead of waiting for an edge that will not come.
     const flying = this.list.find((e) => e.state === 'sending')

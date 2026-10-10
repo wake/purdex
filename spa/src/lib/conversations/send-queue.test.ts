@@ -154,8 +154,10 @@ describe('busy', () => {
     calls[0].resolve({ kind: 'busy' }) // pane unmounted: nothing observes
     await flush()
     expect(calls).toHaveLength(1)
-    q.setIdle(true) // remount: idle is still true, no false -> true edge
+    q.setIdle(true) // remount: idle is still true, no false -> true edge: the pending backoff keeps its schedule
     await flush()
+    expect(calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(calls).toHaveLength(2)
     expect(calls[1].id).toBe(id)
     calls[1].resolve({ kind: 'accepted' })
@@ -562,13 +564,73 @@ describe('the mod keeps answering busy for a moment after the header went idle (
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('one request at a time: a backoff timer and the idle edge never both resend', async () => {
+  it('one request at a time: a REAL idle edge during the backoff resends now and takes the timer with it', async () => {
     const { calls, q } = await stillBusy()
-    q.setIdle(true) // an edge during the backoff resends now and takes the timer with it
+    q.setIdle(false)
+    q.setIdle(true) // false -> true: a real edge
     await vi.advanceTimersByTimeAsync(0)
     expect(calls).toHaveLength(3)
     await vi.advanceTimersByTimeAsync(5000)
     expect(calls).toHaveLength(3) // still in flight: the old timer is gone
+  })
+
+  it('the same idle reported again (a remount) neither cancels a pending backoff nor refills it', async () => {
+    const { calls, q } = await stillBusy()
+    await vi.advanceTimersByTimeAsync(500)
+    q.setIdle(true); q.setIdle(true) // remounts while the daemon is still busy
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(2) // nothing sent early
+    await vi.advanceTimersByTimeAsync(499)
+    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(3) // the backoff fired on schedule (1 s from the answer)
+    calls[2].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(2000 - 1)
+    expect(calls).toHaveLength(3) // retries were not reset: the next wait is 2 s, not 1 s
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(4)
+  })
+
+  it('remounting over and over while idle and the daemon stays busy: the total number of requests is bounded', async () => {
+    const { calls, q } = await stillBusy()
+    for (let i = 0; i < 40; i++) {
+      q.setIdle(true)
+      await vi.advanceTimersByTimeAsync(1000)
+      const last = calls[calls.length - 1]
+      last.resolve(busy)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    await vi.advanceTimersByTimeAsync(120_000)
+    // 1 first + 1 edge resend + 3 backoff + at most 1 wake-up for the exhausted waiting message
+    expect(calls.length).toBeLessThanOrEqual(6)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(q.entries()[0].state).toBe('waiting')
+  })
+
+  it('a remount after the quota is spent wakes the waiting message ONCE, without refilling; only a real edge refills', async () => {
+    const { calls, q } = await stillBusy()
+    for (const wait of [1000, 2000, 4000]) {
+      await vi.advanceTimersByTimeAsync(wait)
+      calls[calls.length - 1].resolve(busy)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(calls).toHaveLength(5)
+    q.setIdle(true) // a remount: nothing pending, quota spent -> one wake-up request
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(6)
+    calls[5].resolve(busy)
+    await vi.advanceTimersByTimeAsync(60_000)
+    q.setIdle(true); q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls).toHaveLength(6) // the wake-up is once per episode
+    q.setIdle(false); q.setIdle(true) // a real edge: refilled
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(7)
+    calls[6].resolve(busy)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(calls).toHaveLength(8) // backoff available again
   })
 })
 
