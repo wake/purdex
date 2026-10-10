@@ -146,7 +146,8 @@ export class SendQueue {
     }
     // The observation came while a request is still out (a pane remounted mid-flight): when that request answers busy this idle
     // is "after the request started", so the answer is resent at once instead of waiting for an edge that will not come.
-    const flying = this.list.find((e) => e.state === 'sending')
+    // Only a real edge counts: the same idle reported again (a remount) during a request, a wake-up included, must not buy a free resend.
+    const flying = edge ? this.list.find((e) => e.state === 'sending') : undefined
     if (flying) flying.idleSeen = true
   }
 

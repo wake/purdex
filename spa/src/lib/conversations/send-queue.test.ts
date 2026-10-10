@@ -129,10 +129,10 @@ describe('busy', () => {
   it('an idle observed while the request is in flight resends once on the busy answer; a stale header cannot loop it', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
-    q.setIdle(true)
+    q.setIdle(false)
     q.enqueue('x')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q.setIdle(true) // observed while the request is in flight
+    q.setIdle(true) // a real edge, observed while the request is in flight
     calls[0].resolve({ kind: 'busy' })
     await flush()
     await vi.advanceTimersByTimeAsync(10_000)
@@ -631,6 +631,39 @@ describe('the mod keeps answering busy for a moment after the header went idle (
     calls[6].resolve(busy)
     await vi.advanceTimersByTimeAsync(1000)
     expect(calls).toHaveLength(8) // backoff available again
+  })
+})
+
+describe('remounts during a request in flight cannot buy extra requests', () => {
+  const busy = { kind: 'busy' } as SendOutcome
+
+  it('idle all along, the daemon always busy, a remount (same idle again) during EVERY request, 40 rounds: the total stays bounded', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setIdle(true)
+    q.enqueue('x')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    for (let i = 0; i < 40; i++) {
+      q.setIdle(true) // a remount while the latest request is still out
+      calls[calls.length - 1].resolve(busy) // deferred answer, busy
+      await vi.advanceTimersByTimeAsync(4000)
+      q.setIdle(true) // and one while waiting / backing off
+    }
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(calls.length).toBeLessThanOrEqual(6)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a same-value idle during a request is not recorded: its busy answer is not resent at once', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setIdle(true)
+    q.enqueue('x')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setIdle(true) // same value: no edge
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(1) // only the backoff (1 s) follows, nothing immediate
   })
 })
 

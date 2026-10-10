@@ -240,7 +240,9 @@ describe('the remount race: the pane is away while a request is in flight', () =
     await tick(0)
     expect(submits()).toHaveLength(1)
     await act(async () => { answerBusy(new Response(JSON.stringify({ status: 'busy' }), { status: 200 })) })
-    await tick(0)
+    await tick(999)
+    expect(submits()).toHaveLength(1) // the remount's idle is the same value as before: no free resend, the backoff follows
+    await tick(1)
     expect(submits()).toHaveLength(2)
     expect(submits()[1]).toEqual(submits()[0])
     // the resend was accepted; nothing else goes out (the no-loop rule for a second busy is pinned in send-queue.test)
