@@ -271,9 +271,8 @@ func (m *Module) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	c.addCleanup(cancelSub)
 
-	if !hasAfter { // a snapshot carries the table: from then on only a change is a frame
-		c.caps = capsKeyOf(m.capabilitiesFor(sid))
-	} // a resume from a cursor carries none, and what changed while the client was away is unknown: the first tick pushes the current table
+	// c.caps stays empty until a snapshot goes out: a resume from a cursor carries no table and what changed while the client was
+	// away is unknown, so the first tick pushes the current one
 	if !c.sendFirst(hasAfter, afterEpoch, afterRev) {
 		return
 	}
@@ -297,7 +296,9 @@ func (c *wsConn) sendFirst(hasAfter bool, afterEpoch string, afterRev uint64) bo
 
 // sendSnapshot queues a snapshot frame (with the connection's `turns`) and moves the follower's position to its cursor.
 func (c *wsConn) sendSnapshot() bool {
-	body, cursor, _, code := c.m.snapshotBody(c.entry, c.sid, c.hostID, c.turns, -1, "", false, false)
+	caps := c.m.capabilitiesFor(c.sid) // the table the snapshot says is also the baseline a later change is compared with
+	c.caps = capsKeyOf(caps)
+	body, cursor, _, code := c.m.snapshotBody(c.entry, c.sid, c.hostID, caps, c.turns, -1, "", false, false)
 	if code != "" {
 		log.Printf("[conversation] snapshot frame: %s", code)
 		return false
