@@ -6,6 +6,7 @@
 // frames still queued in between.
 import { useHostStore } from '../../stores/useHostStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { connectionKey } from '../host-connection-key'
 
 export function startRosterForget(): () => void {
@@ -16,6 +17,11 @@ export function startRosterForget(): () => void {
       const now = next.hosts[hostId]
       const before = prev.hosts[hostId]
       if (!now || (before !== undefined && connectionKey(before) !== connectionKey(now))) store.forgetHost(hostId)
+    }
+    // The workbook entries, statuses and support the old daemon gave are not the new one's either (WA-1.3 (d)).
+    for (const hostId of Object.keys(prev.hosts)) {
+      const now = next.hosts[hostId]
+      if (!now || connectionKey(prev.hosts[hostId]) !== connectionKey(now)) useWorkbookStore.getState().forgetHost(hostId)
     }
   })
 }
