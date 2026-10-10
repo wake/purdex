@@ -16,6 +16,11 @@ func captureEventsLog(t *testing.T) *bytes.Buffer {
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(prev) })
+	t.Cleanup(func() {
+		log.SetOutput(prev) // first: nothing below may be swallowed again
+		if t.Failed() {
+			t.Logf("process log:\n%s", buf.String()) // a failing test keeps the debug log it would have had
+		}
+	})
 	return &buf
 }
