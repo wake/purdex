@@ -78,6 +78,41 @@ describe('roster seat first-load retry', () => {
     expect(askedLead()).toBe(12)
   })
 
+  it('updates while the first ask is still out do not erase its retry: it fails later and is still retried 1s / 2s / 4s, 3 times at most', async () => {
+    let fail!: (e: Error) => void
+    fetchConversation.mockReturnValueOnce(new Promise((_, rej) => { fail = rej }))
+    fetchConversation.mockRejectedValue(new Error('offline'))
+    stop = startWorkbookLoader()
+    roster([team()])
+    await tick(0)
+    roster([team(['m1'])]) // a roster frame
+    useWorkbookStore.setState((s) => ({ support: { ...s.support, h1: { v1: true, v2: false } } })) // a support update
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } }) // a host update
+    await tick(0)
+    expect(askedLead()).toBe(1) // the one out is not asked twice
+    fail(new Error('offline'))
+    await tick(999); expect(askedLead()).toBe(1)
+    await tick(1); expect(askedLead()).toBe(2)
+    await tick(2000); expect(askedLead()).toBe(3)
+    await tick(4000); expect(askedLead()).toBe(4)
+    await tick(60000)
+    expect(askedLead()).toBe(4)
+  })
+
+  it('updates while the first ask is out, which then succeeds: nothing is retried', async () => {
+    let done!: (v: unknown) => void
+    fetchConversation.mockReturnValueOnce(new Promise((res) => { done = res }))
+    fetchConversation.mockResolvedValue(ok)
+    stop = startWorkbookLoader()
+    roster([team()])
+    await tick(0)
+    roster([team(['m1'])])
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    done(ok)
+    await tick(60000)
+    expect(askedLead()).toBe(1)
+  })
+
   it('a retry that succeeds stops the retrying', async () => {
     fetchConversation.mockRejectedValueOnce(new Error('offline')).mockResolvedValue(ok)
     stop = startWorkbookLoader()

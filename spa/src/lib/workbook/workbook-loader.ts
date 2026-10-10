@@ -35,21 +35,24 @@ export function seatTargets(rosterByHost: Record<string, TeamRoster[]>, hostStat
 export function startWorkbookLoader(): () => void {
   /** A seat whose ask got no answer (network / 5xx): its retry count and the timer of the one pending retry (#2435). Bounded by
    *  the roster: an entry is dropped when the seat leaves it, the connection generation moves on, or the loader stops. */
-  const retries = new Map<string, { gen: number; tries: number; seq: number; exhausted?: boolean; timer?: ReturnType<typeof setTimeout> }>()
+  const retries = new Map<string, { gen: number; tries: number; exhausted?: boolean; timer?: ReturnType<typeof setTimeout> }>()
   const drop = (key: string) => { const e = retries.get(key); if (e?.timer !== undefined) clearTimeout(e.timer); retries.delete(key) }
   const keyOf = (t: SeatTarget) => `${t.hostId}\u0000${t.sessionId}`
   const ask = (t: SeatTarget) => {
     const key = keyOf(t)
     const gen = useWorkbookStore.getState().gens[t.hostId] ?? 0
     let e = retries.get(key)
-    if (!e || e.gen !== gen) { drop(key); e = { gen, tries: 0, seq: 0 }; retries.set(key, e) }
+    if (!e || e.gen !== gen) { drop(key); e = { gen, tries: 0 }; retries.set(key, e) }
     if (e.exhausted) return // the 3 retries are spent: no ask until the seat leaves the roster or the generation moves on (both drop this entry)
     if (e.timer !== undefined) return // the backoff is running: a roster frame does not cut it short (the store itself dedupes asks in one generation)
+    // Only a call that makes a real request may speak for the entry. The store answers 'ok' at once, without asking, when the
+    // host is not known to list workbook.v1 yet or when this seat's ask of the generation is already out (or done); such a call
+    // must neither erase the entry of the ask still out nor stand in for it, so it is not made at all (a support change syncs again).
+    const store = useWorkbookStore.getState()
+    if (!store.support[t.hostId]?.v1 || store.seatGen[t.hostId]?.[t.sessionId] === gen) return
     const mine = e
-    const n = ++mine.seq
-    void useWorkbookStore.getState().loadSeat(t.hostId, t.sessionId).then((res) => {
-      // Only the newest ask speaks: an older one (an 'ok' of a host whose support was not known yet) must not erase a newer failure.
-      if (retries.get(key) !== mine || n !== mine.seq) return // the seat left, the generation moved on, or the loader stopped
+    void store.loadSeat(t.hostId, t.sessionId).then((res) => {
+      if (retries.get(key) !== mine) return // the seat left, the generation moved on, or the loader stopped
       if (res !== 'failed') { retries.delete(key); return }
       if (mine.timer !== undefined) return
       if (mine.tries >= WORKBOOK_MAX_RETRIES) { mine.exhausted = true; return }
