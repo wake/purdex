@@ -12,6 +12,15 @@ export type PanelView =
   | { kind: 'output'; step: StepItem }
   | { kind: 'subagent'; step: StepItem; items: ConversationItem[] }
 
+/** The panel header's title (the chain one names the turn and the chain's position in it). */
+export function panelTitle(view: PanelView, t: (k: string, p?: Record<string, string | number>) => string): string {
+  switch (view.kind) {
+    case 'chain': return t('panel.chain', { turn: view.turnIndex + 1, k: view.position, n: view.count })
+    case 'output': return t(view.step.diff && !view.step.output ? 'panel.diff' : 'panel.output')
+    case 'subagent': return t('panel.subagent', { name: view.step.subagent?.description ?? view.step.subagent?.type ?? view.step.summary })
+  }
+}
+
 const findStep = (turns: PanelTurn[], id: string): StepItem | null => {
   for (const t of turns) for (const it of t.items) if (it.type === 'step' && it.id === id) return it as StepItem
   return null

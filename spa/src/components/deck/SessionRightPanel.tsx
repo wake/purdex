@@ -5,9 +5,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { ArrowLeft, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { closePanel, openPanel, panelBack, PANEL_WIDTH_STYLE, setPanelScroll, usePanel } from '../../lib/conversations/panel-memory'
-import { resolvePanel, type PanelTurn } from '../../lib/conversations/panel-resolve'
+import { panelTitle, resolvePanel, type PanelTurn } from '../../lib/conversations/panel-resolve'
 import type { StepItem } from '../../lib/conversations/types'
-import { PanelBody, panelTitle } from './PanelBody'
+import { PanelBody } from './PanelBody'
 
 interface Props {
   paneKey: string

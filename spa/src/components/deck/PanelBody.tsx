@@ -2,18 +2,10 @@
 // diff, or a subagent's steps. Steps are drawn by the deck's own `StepView`, so a chain reads like the deck does.
 import { useI18nStore } from '../../stores/useI18nStore'
 import { toActivityDiff } from '../../lib/conversations/deck-format'
-import type { PanelView } from '../../lib/conversations/panel-resolve'
+import { type PanelView } from '../../lib/conversations/panel-resolve'
 import ToolDiffView from '../room/ToolDiffView'
 import { DeckItem } from './DeckItem'
 import { StepView, type StepActions } from './StepViews'
-
-export function panelTitle(view: PanelView, t: (k: string, p?: Record<string, string | number>) => string): string {
-  switch (view.kind) {
-    case 'chain': return t('panel.chain', { turn: view.turnIndex + 1, k: view.position, n: view.count })
-    case 'output': return t(view.step.diff && !view.step.output ? 'panel.diff' : 'panel.output')
-    case 'subagent': return t('panel.subagent', { name: view.step.subagent?.description ?? view.step.subagent?.type ?? view.step.summary })
-  }
-}
 
 export function PanelBody({ view, actions }: { view: PanelView; actions: StepActions }) {
   const t = useI18nStore((s) => s.t)

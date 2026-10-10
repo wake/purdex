@@ -32,6 +32,13 @@ const TWO = 'f3236e8d-7531-41bf-ac48-9950b41aa539'
 const twoTurns = () => turnsOf(pluginSubmit)
 const runsOfTwo = () => turnRows(twoTurns().find((t) => t.id === TWO)!).runs
 
+const bigStep = (): StepItem & { output: NonNullable<StepItem['output']> } => {
+  for (const t of turnsOf(outputCaps)) for (const i of t.items) {
+    if (i.type === 'step' && (i as StepItem).output && (i as StepItem).output!.text.length > 500) return i as StepItem & { output: NonNullable<StepItem['output']> }
+  }
+  throw new Error('fixture step missing')
+}
+
 beforeEach(() => { cleanup(); clearAllPanels(); forgetFolds(PANE) })
 
 describe('content', () => {
@@ -56,7 +63,7 @@ describe('content', () => {
   })
 
   it('a full output shows every line the step has, not the deck\'s tail', () => {
-    const step = turnsOf(outputCaps).flatMap((t) => t.items).find((i): i is StepItem => i.type === 'step' && i.output !== undefined && i.output.text.length > 500)!
+    const step = bigStep()
     openPanel(PANE, { kind: 'output', stepId: step.id })
     mount(turnsOf(outputCaps))
     expect(screen.getByTestId('panel-output-text').textContent).toBe(step.output!.text)
@@ -80,7 +87,7 @@ describe('content', () => {
   })
 
   it('opening 「顯示全部」 from a chain keeps a way back', () => {
-    const step = turnsOf(outputCaps).flatMap((t) => t.items).find((i): i is StepItem => i.type === 'step' && i.output !== undefined && i.output.text.length > 500)!
+    const step = bigStep()
     const turn = turnsOf(outputCaps).find((t) => t.items.some((i) => i.id === step.id))!
     openPanel(PANE, { kind: 'chain', turnId: turn.id, firstStepId: turnRows(turn).runs.find((r) => r.stepIds.includes(step.id))!.stepIds[0] })
     mount(turnsOf(outputCaps))
