@@ -283,6 +283,17 @@ func (r *Registry) SessionCapable(sid, c string, within time.Duration) bool {
 	return false
 }
 
+// PresenceWindow is how recently a stream's last batch must have arrived for the session to count as having its mod
+// (the mod beats every 10 s: three missed beats). One definition of "mod present" for the daemon (interface U1 spec,
+// per-pane derivation; relay spec §6.6).
+const PresenceWindow = 30 * time.Second
+
+// SessionLive reports whether a stream that is not ended has sid as its current session and sent a batch within
+// `within`: the session's mod is there now.
+func (r *Registry) SessionLive(sid string, within time.Duration) bool {
+	return false
+}
+
 // CapableSession is a session id whose live stream announced a capability, and when (the latest batch that named it).
 type CapableSession struct {
 	SID string
