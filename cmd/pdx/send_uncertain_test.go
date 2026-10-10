@@ -33,7 +33,7 @@ func wantUncertainNote(t *testing.T, who, stderr string) {
 			t.Errorf("stderr lacks %q: %q", part, stderr)
 		}
 	}
-	if !strings.Contains(stderr, "不要重送") && !strings.Contains(stderr, "do not send it again") {
+	if !strings.Contains(stderr, "不要重送") && !strings.Contains(strings.ToLower(stderr), "do not send it again") {
 		t.Errorf("stderr does not say to leave it unsent again: %q", stderr)
 	}
 }

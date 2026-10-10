@@ -362,6 +362,7 @@ func runMsgSend(inv msgInvocation, getenv func(string) string, stdout, stderr io
 	}
 	line += ")"
 	fmt.Fprintln(stdout, line)
+	noteUncertainSend(stderr, "pdx msg", sr, false)
 	return 0
 }
 

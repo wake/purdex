@@ -291,12 +291,14 @@ func sendBriefText(ctx context.Context, client *daemonclient.Client, inbox strin
 	sctx, cancel := context.WithTimeout(ctx, briefTimeout)
 	defer cancel()
 	req := ipeers.SendRequest{To: op.Member.Address, Text: text, OriginInbox: inbox}
-	if _, err := client.Once(sctx, http.MethodPost, "/api/peers/send", req, nil); err != nil {
+	sr, err := postPeerMessage(sctx, client, req)
+	if err != nil {
 		detail, code := briefErr(err)
 		fmt.Fprintf(stderr, "pdx spawn: member 已開啟，但 brief 沒送出（%s）；請用 pdx msg send %s 手動送 %s\n",
 			sanitizeCell(detail), sanitizeCell(op.Member.Address), sanitizeCell(code))
 		return ExitError
 	}
+	noteUncertainSend(stderr, "pdx spawn", sr, true)
 	return ExitOK
 }
 

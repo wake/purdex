@@ -276,7 +276,7 @@ func (c taskCall) setStatus(verb string, to team.TaskStatus, args []string) int 
 // is already stored, so a failed send is exit 1 with the task's JSON on
 // stdout and the manual command on stderr, never a rollback.
 func (c taskCall) notify(client *daemonclient.Client, inbox, cfgPath string, task team.Task, compact, verb string, asJSON bool) int {
-	detail, code := sendTaskMessage(c.ctx, client, inbox, task)
+	sr, detail, code := sendTaskMessage(c.ctx, client, inbox, task)
 	if code != "" {
 		fmt.Fprintln(c.stdout, compact)
 		id, reason, cmd := sanitizeCell(task.ID), sanitizeCell(detail), taskResendCommand(task.Owner.Address, task.ID, cfgPath)
@@ -296,6 +296,7 @@ func (c taskCall) notify(client *daemonclient.Client, inbox, cfgPath string, tas
 		fmt.Fprintf(c.stdout, "%s %s (%s) → %s: %s\n", verb, sanitizeCell(task.ID), sanitizeCell(string(task.Status)),
 			sanitizeCell(task.Owner.Ref), sanitizeCell(task.Subject))
 	}
+	noteUncertainSend(c.stderr, "pdx task", sr, true)
 	return ExitOK
 }
 
@@ -303,17 +304,19 @@ func (c taskCall) notify(client *daemonclient.Client, inbox, cfgPath string, tas
 // the lead's inbox so the member's replies go to the lead. One request, never
 // replayed (client.Once): a send that may have arrived must not arrive twice.
 // code "" is success; otherwise detail and code are briefErr's.
-func sendTaskMessage(ctx context.Context, client *daemonclient.Client, inbox string, task team.Task) (detail, code string) {
+func sendTaskMessage(ctx context.Context, client *daemonclient.Client, inbox string, task team.Task) (sr ipeers.SendResponse, detail, code string) {
 	if task.Owner.Address == "" {
-		return "daemon 沒有回這個 owner 的地址", "no_address"
+		return sr, "daemon 沒有回這個 owner 的地址", "no_address"
 	}
 	sctx, cancel := context.WithTimeout(ctx, briefTimeout)
 	defer cancel()
 	req := ipeers.SendRequest{To: task.Owner.Address, Text: team.TaskDownMessage(task), OriginInbox: inbox}
-	if _, err := client.Once(sctx, http.MethodPost, "/api/peers/send", req, nil); err != nil {
-		return briefErr(err)
+	sr, err := postPeerMessage(sctx, client, req)
+	if err != nil {
+		detail, code = briefErr(err)
+		return sr, detail, code
 	}
-	return "", ""
+	return sr, "", ""
 }
 
 // shellQuote is s as one POSIX shell word: single quotes around it, an
