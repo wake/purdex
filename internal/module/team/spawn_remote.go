@@ -70,11 +70,13 @@ func resolveUnderRoots(roots []string, dir string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	live := liveRoots(roots)
-	if !underRoots(resolved, live) {
-		return "", false
+	// A live root is its own real path: containment is judged on that string, not on a second resolution of it.
+	for _, root := range liveRoots(roots) {
+		if within(resolved, root) {
+			return resolved, true
+		}
 	}
-	return resolved, true
+	return "", false
 }
 
 // underOpRoots is underTeamRoots for a spawn op of either kind: a local op is judged by its team's grant, a forwarded one
