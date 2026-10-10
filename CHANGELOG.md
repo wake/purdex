@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.695] - 2026-10-11
+
+> daemon、mod、SPA 都有改：**要部署 daemon，並重跑 `pdx setup`（mod 有改）**；SPA 已隨主機上的 dev server 生效。內嵌的 nexen 升到 v0.21.0（不升 schema，不必刪 DB）。
+
+### Changed：交給 worker 時也沿用 model 與 effort — #1647 PR-2（#2543）
+
+- 終端交給 worker（handoff），以及重建 worker 時，worker 每一個 turn 都會用這個 session 原本的 model 與 effort 啟動；例如原本是 Opus 5.5 xhigh，worker 不再用主機預設。搭配 694 的反方向，來回切換都會保留。
+- 重建 worker 時以被取代那一段記下的值為準，statusline 只補缺的，daemon 重啟後也一樣。
+- Bedrock、Vertex 的 model id 也會帶過去（之前只認 Anthropic 格式）。
+- 讀不到數值時照舊用主機預設。已知限制：daemon 停機期間用 `/model` 換了 model、又在下一次 statusline 更新前就交給 worker，worker 會用換之前的 model（#2545 追蹤）。
+
+### Fixed：終端先回答時，遠端的答案不再蓋掉它 — #1848（#2542）
+
+- AskUserQuestion 在終端先回答、而 daemon 那時忙碌或正在重啟（`pdx ask begin` 3 秒內沒回）時，之前這次回答不會被記下：之後 begin 開出的卡片若被遠端（例如手機）回答，就停在遠端的答案；沒人回答也會在已結束的對話上開著，直到 30 秒後才被放棄。現在 mod 會改用「這個 session 的這一題」回報，等 begin 的卡片出現（最多約 45 秒）就把它標成終端已回答，遠端已先答的則記為終端覆蓋。
+- 新增 `POST /api/ask/report`（不帶 id，依 session 與 tool use）與 `pdx ask report --session --tool-use --since`；只看這次 begin 之後建立的卡片，不會套到同一題更早留下的紀錄。
+
+### Fixed：介面 — #2540（介面線）
+
+- 新分頁畫布、模組面板、儲存空間列不再對螢幕閱讀器宣稱可用鍵盤拖曳（實際只能用滑鼠拖）；新分頁畫布只能用滑鼠拖的把手不再是 Tab 停靠點；tab 列的分頁可用 Enter／空白鍵選取（#2538）。
+
+### Internal：介面 — #2546（介面線）
+
+- team 席位的讀數帶上讀取時間與「是否過期」判斷（門檻暫定 30 分鐘），元件尚未使用，畫面不變（#2410）。
+
 ## [1.0.0-alpha.694] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
