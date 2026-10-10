@@ -22,13 +22,22 @@ export function panelTitle(view: PanelView, t: (k: string, p?: Record<string, st
 }
 
 /** A step by id among items, descending into a subagent step's loaded children (they nest as deep as agents spawn agents). */
+const MAX_NODES = 5000
 const findIn = (items: ReadonlyArray<{ type: string; id: string }>, id: string): StepItem | null => {
-  for (const it of items) {
-    if (it.type !== 'step') continue
+  // Iterative pre-order DFS: this runs while rendering, so an absurdly deep or self-referencing children graph must end in
+  // null (the panel says it is gone), never a RangeError or a loop. Visited set + node cap.
+  const stack: Array<{ type: string; id: string }> = []
+  for (let i = items.length - 1; i >= 0; i--) stack.push(items[i])
+  const seen = new Set<object>()
+  let visited = 0
+  while (stack.length > 0) {
+    const it = stack.pop()!
+    if (it.type !== 'step' || seen.has(it)) continue
+    seen.add(it)
+    if (++visited > MAX_NODES) return null
     const s = it as StepItem
     if (s.id === id) return s
-    const hit = s.children ? findIn(s.children, id) : null
-    if (hit) return hit
+    if (s.children) for (let i = s.children.length - 1; i >= 0; i--) stack.push(s.children[i])
   }
   return null
 }

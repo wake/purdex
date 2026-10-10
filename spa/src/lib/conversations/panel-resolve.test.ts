@@ -28,6 +28,38 @@ describe('resolvePanel needs the turn and the step together', () => {
   })
 })
 
+describe('resolvePanel survives hostile children (it runs during render)', () => {
+  const wrap = (s: StepItem): PanelTurn[] => [{ id: 't0', index: 0, items: [s as ConversationItem] }]
+
+  it('a children cycle terminates and a missing step is null', () => {
+    const a = step('a', { kind: 'task' })
+    const b = step('b', { kind: 'task', children: [a] as StepItem['children'] })
+    a.children = [b] as StepItem['children']
+    expect(resolvePanel({ kind: 'output', turnId: 't0', stepId: 'nope' }, wrap(a))).toBeNull()
+  })
+
+  it('a cycle does not hide a step that is reachable', () => {
+    const target = step('target')
+    const a = step('a', { kind: 'task' })
+    a.children = [a, target] as StepItem['children']
+    const v = resolvePanel({ kind: 'output', turnId: 't0', stepId: 'target' }, wrap(a))
+    expect(v?.kind === 'output' && v.step.id).toBe('target')
+  })
+
+  it('a 20000-deep chain neither throws nor resolves (past the node limit it is gone)', () => {
+    let leaf = step('leaf')
+    for (let i = 0; i < 20000; i++) leaf = step(`n${i}`, { kind: 'task', children: [leaf] as StepItem['children'] })
+    expect(() => resolvePanel({ kind: 'output', turnId: 't0', stepId: 'leaf' }, wrap(leaf))).not.toThrow()
+    expect(resolvePanel({ kind: 'output', turnId: 't0', stepId: 'leaf' }, wrap(leaf))).toBeNull()
+  })
+
+  it('an ordinary nested chain well under the limit still resolves', () => {
+    let leaf = step('leaf')
+    for (let i = 0; i < 200; i++) leaf = step(`n${i}`, { kind: 'task', children: [leaf] as StepItem['children'] })
+    expect(resolvePanel({ kind: 'output', turnId: 't0', stepId: 'leaf' }, wrap(leaf))?.kind).toBe('output')
+  })
+})
+
 describe('resolvePanel inside subagents', () => {
   it('a step under a subagent opens its full output', () => {
     const v = resolvePanel({ kind: 'output', turnId: 't0', stepId: 'inner-out' }, turns())
