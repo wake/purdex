@@ -112,6 +112,17 @@ describe('isDestructive', () => {
     expect(isDestructive(t)).toBe(true)
     expect(isDestructive(`fine\n${t}\nfine`)).toBe(true)
   })
+  it.each([
+    'rm -r --force target', 'rm --recursive -f target', 'rm -r  -f x', 'rm -R -f x', 'rm -f -r x', 'rm -r x -f', 'rm   -rf   x',
+    'rm --recursive --force x', 'rm -rv -f x', 'sudo rm -r -f x', 'ls && rm -r -f x', 'echo hi; rm --force -r x',
+    'rm -r \\\n  -f x', 'rm -r \\\r\n--force x',
+    'git push --force-with-lease', 'git push origin main -f', 'git push -uf origin x', 'git push origin +main', 'git -C repo push --force',
+  ])('%j is destructive (flags are read, not pattern-matched)', (t) => {
+    expect(isDestructive(t)).toBe(true)
+  })
+  it.each(['rm -r dir', 'rm -f file', 'rm -i foo', 'rm -r -- -f', 'echo rm -r', 'git pull -f', 'git push', 'git push origin main', 'ls -rf', 'rmdir -p x -f'])('%j is not', (t) => {
+    expect(isDestructive(t)).toBe(false)
+  })
   it.each(['rm file.txt', 'git push origin main', 'git reset HEAD file', 'drop the table', 'format the text'])('%s is fine', (t) => {
     expect(isDestructive(t)).toBe(false)
   })

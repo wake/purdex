@@ -35,15 +35,60 @@ export function planSend(raw: string): SendPlan {
 }
 
 const DESTRUCTIVE: RegExp[] = [
-  /\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|-r\s+-f|-f\s+-r|--recursive\b.*--force|--force\b.*--recursive)/i,
-  /\bgit\s+push\b[^\n]*(\s--force(-with-lease)?\b|\s-f\b|\s\+\S)/i,
   /\bgit\s+reset\s+--hard\b/i,
   /\bdrop\s+table\b/i,
   /\bmkfs(\.\w+)?\b/i,
   /\bdd\s+if=/i,
 ]
 
-/** A line that looks destructive (rm -rf, a forced push, a hard reset, DROP TABLE, mkfs, dd if=): sending needs a second press. */
+/** The flags of a command's argument list: [short letters, long names], up to `--` or the end. */
+function flagsOf(args: string[]): { short: string; long: string[] } {
+  let short = ''
+  const long: string[] = []
+  for (const a of args) {
+    if (a === '--') break
+    if (a.startsWith('--')) long.push(a.split('=')[0])
+    else if (a.length > 1 && a[0] === '-') short += a.slice(1)
+  }
+  return { short, long }
+}
+
+// the tokens of one simple command after the program word; `name` may be preceded by sudo / env words
+function argsAfter(words: string[], name: string): string[] | null {
+  const i = words.findIndex((w) => w === name || w.endsWith(`/${name}`))
+  return i < 0 ? null : words.slice(i + 1)
+}
+
+function isForcedPush(words: string[]): boolean {
+  const g = words.findIndex((w) => w === 'git' || w.endsWith('/git'))
+  if (g < 0) return false
+  let i = g + 1
+  while (i < words.length && words[i].startsWith('-')) i += ['-C', '-c', '--git-dir', '--work-tree'].includes(words[i]) ? 2 : 1
+  if (words[i] !== 'push') return false
+  const args = words.slice(i + 1)
+  const { short, long } = flagsOf(args)
+  return short.includes('f') || long.includes('--force') || long.includes('--force-with-lease') || args.some((a) => /^\+\S/.test(a))
+}
+
+function isForcedRecursiveRm(words: string[]): boolean {
+  const args = argsAfter(words, 'rm')
+  if (!args) return false
+  const { short, long } = flagsOf(args)
+  const recursive = /[rR]/.test(short) || long.includes('--recursive')
+  const force = short.includes('f') || long.includes('--force')
+  return recursive && force
+}
+
+/**
+ * A line that looks destructive (rm with both recursive and force flags in any spelling or order, a forced push, a hard
+ * reset, DROP TABLE, mkfs, dd if=): sending needs a second press. Backslash continuations are joined first.
+ */
 export function isDestructive(text: string): boolean {
-  return text.split('\n').some((line) => DESTRUCTIVE.some((re) => re.test(line)))
+  const joined = text.replace(/\\\r?\n/g, ' ')
+  return joined.split('\n').some((line) =>
+    DESTRUCTIVE.some((re) => re.test(line)) ||
+    line.split(/[;&|()`]+/).some((cmd) => {
+      const words = cmd.trim().split(/\s+/)
+      return isForcedRecursiveRm(words) || isForcedPush(words)
+    }))
 }
