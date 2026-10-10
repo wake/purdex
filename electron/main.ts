@@ -11,6 +11,7 @@ import { loadAppPrefs } from './app-prefs'
 import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
 import { pickDeeplinkTarget } from './deeplink'
+import { deliverNotificationClick } from './notification-router'
 import { createLocalDaemon } from './local-daemon/index'
 import { nodeDeps } from './local-daemon/node-deps'
 
@@ -154,32 +155,33 @@ function registerIpcHandlers(): void {
   // bytes; a slow leak from missing close events is negligible.
   const recentBroadcasts = new Set<number>()
   const activeNotifications = new Set<Notification>()
-  ipcMain.handle('notification:show', (_event, optsJson: string) => {
+  ipcMain.handle('notification:show', (event, optsJson: string) => {
     const opts = JSON.parse(optsJson) as {
       title: string; body: string; sessionCode: string; eventName: string; broadcastTs: number
       action?: { kind: string; hostId: string; sessionCode?: string }
     }
-    // Dedup: same broadcast received by multiple windows
+    // Dedup: same broadcast received by multiple windows. The first caller is the window the click goes back to (#1919).
     if (recentBroadcasts.has(opts.broadcastTs)) return
     recentBroadcasts.add(opts.broadcastTs)
     setTimeout(() => recentBroadcasts.delete(opts.broadcastTs), 5000)
+    const ownerId = event.sender.id
 
     const notification = new Notification({ title: opts.title, body: opts.body })
     activeNotifications.add(notification)
     const release = () => { activeNotifications.delete(notification) }
     notification.on('click', () => {
       release()
-      // Broadcast to all renderers — SPA decides which one has the tab
+      // To the window that showed it (every window when that one is gone) — see notification-router.ts.
       // The SPA will call focusMyWindow IPC when it handles the click
       const payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string } } = {
         sessionCode: opts.sessionCode,
       }
       if (opts.action) payload.action = opts.action
-      for (const win of windowManager.getAllWindows()) {
-        if (!win.isDestroyed()) {
-          win.webContents.send('notification:clicked', payload)
-        }
-      }
+      deliverNotificationClick(ownerId, windowManager.getAllWindows().map((win) => ({
+        id: win.webContents.id,
+        isDestroyed: () => win.isDestroyed(),
+        send: (channel, p) => win.webContents.send(channel, p),
+      })), payload)
     })
     notification.on('close', release)
     notification.show()
