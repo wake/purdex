@@ -1,0 +1,302 @@
+[
+  {
+    "input": "Task finished, all green.",
+    "max": 240,
+    "name": "plain text is unchanged",
+    "want": "Task finished, all green."
+  },
+  {
+    "input": "",
+    "max": 240,
+    "name": "empty",
+    "want": ""
+  },
+  {
+    "input": " \n\t \n ",
+    "max": 240,
+    "name": "only spaces and newlines",
+    "want": ""
+  },
+  {
+    "input": "see [the docs](https://example.com/a?b=1) now",
+    "max": 240,
+    "name": "link keeps its text",
+    "want": "see the docs now"
+  },
+  {
+    "input": "shot ![before](a.png) and ![](b.png)",
+    "max": 240,
+    "name": "image keeps its alt text",
+    "want": "shot before and"
+  },
+  {
+    "input": "run:\n```bash\nmake test\n```\ndone",
+    "max": 240,
+    "name": "code fence lines are dropped, the code stays",
+    "want": "run: make test done"
+  },
+  {
+    "input": "  ```go title=x\nfmt.Println()\n  ```",
+    "max": 240,
+    "name": "indented fence with an info string",
+    "want": "fmt.Println()"
+  },
+  {
+    "input": "use `go test ./...` here",
+    "max": 240,
+    "name": "backticks are dropped",
+    "want": "use go test ./... here"
+  },
+  {
+    "input": "**done** and __really__ done",
+    "max": 240,
+    "name": "bold and underscore bold markers are dropped",
+    "want": "done and really done"
+  },
+  {
+    "input": "# One\n###### Six\n####### Seven",
+    "max": 240,
+    "name": "heading hashes are dropped (1 to 6)",
+    "want": "One Six ####### Seven"
+  },
+  {
+    "input": "fixed #2144 and #12",
+    "max": 240,
+    "name": "a hash that is not a heading stays",
+    "want": "fixed #2144 and #12"
+  },
+  {
+    "input": "#nospace\n# space",
+    "max": 240,
+    "name": "heading marker needs a space after it",
+    "want": "#nospace space"
+  },
+  {
+    "input": "> quoted\n>> nested\n> > spaced",
+    "max": 240,
+    "name": "quote marks are dropped",
+    "want": "quoted nested > spaced"
+  },
+  {
+    "input": "- a\n* b\n+ c\n1. d\n2) e",
+    "max": 240,
+    "name": "bullets and numbered items are dropped",
+    "want": "a b c d e"
+  },
+  {
+    "input": "-1 and *star and 3.14",
+    "max": 240,
+    "name": "a dash without a space stays",
+    "want": "-1 and *star and 3.14"
+  },
+  {
+    "input": "## Result\n\n- **fast**: `x` is 2x\n- [link](u) ok\n\n> note",
+    "max": 240,
+    "name": "mixed multi-line answer becomes one line",
+    "want": "Result fast: x is 2x link ok note"
+  },
+  {
+    "input": "line one\r\nline two\r\n\r\nline three",
+    "max": 240,
+    "name": "CRLF line breaks",
+    "want": "line one line two line three"
+  },
+  {
+    "input": "a\u00a0b\u3000c",
+    "max": 240,
+    "name": "no-break space and ideographic space become plain spaces",
+    "want": "a b c"
+  },
+  {
+    "input": "a\u2028b\u2029c\u0085d",
+    "max": 240,
+    "name": "line and paragraph separators and NEL become spaces",
+    "want": "a b c d"
+  },
+  {
+    "input": "a\u202eb\u2066c\u2069d\u200be\ufeff f",
+    "max": 240,
+    "name": "direction marks, zero-width marks and the BOM are dropped",
+    "want": "abcde f"
+  },
+  {
+    "input": "a\u0000b\u0007c\u001bd",
+    "max": 240,
+    "name": "control characters are dropped",
+    "want": "abcd"
+  },
+  {
+    "input": "x\r# not a heading here\r- nor a bullet",
+    "max": 240,
+    "name": "a lone CR is not a line start for the line rules",
+    "want": "x # not a heading here - nor a bullet"
+  },
+  {
+    "input": "***bold*** ok",
+    "max": 240,
+    "name": "runs of markers: *** keeps the odd star",
+    "want": "*bold* ok"
+  },
+  {
+    "input": "*`*x_`_`_ y",
+    "max": 240,
+    "name": "markers are removed in one pass, not re-joined",
+    "want": "**x___ y"
+  },
+  {
+    "input": "```\n```\n**\n- \n> ",
+    "max": 240,
+    "name": "only markdown leaves nothing",
+    "want": ""
+  },
+  {
+    "input": "\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341",
+    "max": 5,
+    "name": "CJK text is cut by characters, not bytes",
+    "want": "\u4e00\u4e8c\u4e09\u56db\u4e94\u2026"
+  },
+  {
+    "input": "abcde",
+    "max": 5,
+    "name": "exactly max runes is not cut",
+    "want": "abcde"
+  },
+  {
+    "input": "abcdef",
+    "max": 5,
+    "name": "one over max is cut with an ellipsis",
+    "want": "abcde\u2026"
+  },
+  {
+    "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
+    "max": 5,
+    "name": "astral characters count as one rune",
+    "want": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\u2026"
+  },
+  {
+    "input": "**a**  **b**  **c**",
+    "max": 3,
+    "name": "the cut happens after the cleaning",
+    "want": "a b\u2026"
+  },
+  {
+    "input": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word",
+    "max": 240,
+    "name": "max 240 on a long line",
+    "want": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word \u2026"
+  },
+  {
+    "input": "A session title that is far too long to sit inside a longer notification title",
+    "max": 40,
+    "name": "max 40 on a title",
+    "want": "A session title that is far too long to \u2026"
+  },
+  {
+    "input": "[![alt](i.png)](https://x.example)",
+    "max": 240,
+    "name": "image inside a link",
+    "want": "alt"
+  },
+  {
+    "input": "[a [b] c](u) end",
+    "max": 240,
+    "name": "link text with brackets inside is not matched",
+    "want": "[a [b] c](u) end"
+  },
+  {
+    "input": "[open](never closed and ![img](x",
+    "max": 240,
+    "name": "unclosed markers are left alone",
+    "want": "[open](never closed and ![img](x"
+  },
+  {
+    "input": "a\u00adb",
+    "max": 240,
+    "name": "soft hyphen is dropped (Cf)",
+    "want": "ab"
+  },
+  {
+    "input": "a\u061cb",
+    "max": 240,
+    "name": "arabic letter mark is dropped (Cf)",
+    "want": "ab"
+  },
+  {
+    "input": "a\u180eb",
+    "max": 240,
+    "name": "mongolian vowel separator is dropped (Cf)",
+    "want": "ab"
+  },
+  {
+    "input": "a\u2060b",
+    "max": 240,
+    "name": "word joiner is dropped (Cf)",
+    "want": "ab"
+  },
+  {
+    "input": "a\udb40\udc01b\udb40\udc41c",
+    "max": 240,
+    "name": "tag characters are dropped (Cf)",
+    "want": "abc"
+  },
+  {
+    "input": "a\u200bb",
+    "max": 240,
+    "name": "zero width space is dropped, not turned into a space",
+    "want": "ab"
+  },
+  {
+    "input": "`- x",
+    "max": 240,
+    "name": "removing markers can expose new syntax; it is not cleaned a second time: dash",
+    "want": "- x"
+  },
+  {
+    "input": "`# h",
+    "max": 240,
+    "name": "removing markers can expose new syntax; it is not cleaned a second time: hash",
+    "want": "# h"
+  },
+  {
+    "input": "[a]`(b)",
+    "max": 240,
+    "name": "removing markers can expose new syntax; it is not cleaned a second time: link",
+    "want": "[a](b)"
+  },
+  {
+    "input": "**- x",
+    "max": 240,
+    "name": "removing markers can expose new syntax; it is not cleaned a second time: bold then dash",
+    "want": "- x"
+  },
+  {
+    "input": "[a](b\nc) end",
+    "max": 240,
+    "name": "a link target may span lines",
+    "want": "a end"
+  },
+  {
+    "input": "[a\nb](u) end",
+    "max": 240,
+    "name": "a link text may span lines",
+    "want": "a b end"
+  },
+  {
+    "input": "10) ten\n100. hundred",
+    "max": 240,
+    "name": "numbered item with a longer number",
+    "want": "ten hundred"
+  },
+  {
+    "input": "my__session__x",
+    "max": 240,
+    "name": "underscores inside a word: a pair goes",
+    "want": "mysessionx"
+  },
+  {
+    "input": "snake_case_name",
+    "max": 240,
+    "name": "a single underscore stays",
+    "want": "snake_case_name"
+  }
+]

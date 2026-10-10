@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.694] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Changed：交給 worker 再拿回來時保留 model 與 effort — #1647 PR-1（#2532）
+
+- 從 worker 拿回終端（take-back、take-to-terminal），或交接被拒而退回終端時，續接指令會帶上這個 session 原本的 `--model` 與 `--effort`；例如原本是 Opus 5.5 xhigh，回來不再變成 high。
+- 數值取自交接當下 statusline 回報的 model 與 effort，並記在 worker 上，所以 daemon 重啟後拿回來也一樣。
+- 自訂的續接範本只要含 `--resume {id}` 也會補上；範本自己已寫 `--model` 或 `--effort` 的，那一項以範本為準。範本是 codex、opencode、包裝腳本，或含管線、引號等 shell 結構時，一律不改動。
+- 讀不到數值（例如 session 還沒有 statusline）時，指令維持原樣。
+- 終端交給 worker 時帶上 model 與 effort 是下一步（要等 nexen v0.21.0）。
+
+### Changed：team 開機收尾集中一處 — #1968（#2535）
+
+- daemon 啟動時修正上次留下的 team 資料，這些步驟集中到同一處、順序與失敗處理寫明並以測試釘住；行為不變。
+
+### Fixed：介面 — #2537、#2539（介面線）
+
+- Mac 桌面通知的內文改用跟手機推播相同的整理規則：連結與圖片只留文字，去掉程式碼區塊標記、反引號、粗體、標題井號、引用符號與清單符號，連續空白併成一格，太長就截斷加刪節號；兩邊共用同一份測試資料（#2539、#2144）。
+- 窄模式的工作區按鈕、tab 列的分頁不再對螢幕閱讀器宣稱「按空白鍵可拾起拖曳」（實際只能用滑鼠拖）；窄模式工作區按鈕也不再多一個 Tab 停靠點（#2531）。
+
 ## [1.0.0-alpha.693] - 2026-10-11
 
 > 只動到 daemon：**要部署 daemon（lead 與 member 兩台都要）**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
