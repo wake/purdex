@@ -53,6 +53,13 @@ func (o remoteOutcomes) ApplyOutcome(tx *sql.Tx, c commandRow, res peersmod.Call
 		if refused {
 			return o.relayCommandRefused(tx, c, res.Code, now)
 		}
+		// only an explicit `accepted` for THIS command is a result; anything else is a broken or newer peer: nothing is settled
+		// and the command is sent again (an op left forwarded with its command done would never end)
+		var ans team.TeamCommandAnswer
+		var out team.RelayCommandOutcome
+		if err := json.Unmarshal(res.Body, &ans); err != nil || ans.ID != c.ID || json.Unmarshal(ans.Outcome, &out) != nil || out.State != "accepted" {
+			return fmt.Errorf("relay answer of command %s is not an accepted outcome", c.ID)
+		}
 		return nil
 	case CmdSpawn:
 		// `accepted` changes nothing (the result comes as a fact). A refusal (host_not_allowed, cwd_outside_grant,

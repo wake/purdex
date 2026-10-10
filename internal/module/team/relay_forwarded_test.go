@@ -519,3 +519,33 @@ func TestForwarded_ASettleThatDidNotCommitLeavesNothingToTellLater(t *testing.T)
 		t.Fatalf("%d notices, want 1", n)
 	}
 }
+
+// codex attack: only an explicit `accepted` for THIS command settles it. A 2xx with another command's id, no outcome or an
+// unknown state is a broken or newer peer: the command stays pending (sent again) and the op stays forwarded, never done with
+// nothing behind it.
+func TestForwarded_OnlyAnAcceptedAnswerSettlesTheCommand(t *testing.T) {
+	bad := map[string]func(id string) peersmod.CallResult{
+		"another command's id": func(string) peersmod.CallResult {
+			return answerOf("someone-else", team.RelayCommandOutcome{State: "accepted"})
+		},
+		"no outcome":    func(id string) peersmod.CallResult { return answerOf(id, nil) },
+		"unknown state": func(id string) peersmod.CallResult { return answerOf(id, team.RelayCommandOutcome{State: "maybe"}) },
+		"applied (an adopt's word)": func(id string) peersmod.CallResult {
+			return answerOf(id, map[string]string{"state": "applied"})
+		},
+	}
+	for name, mk := range bad {
+		f, _ := fwdRelayFixture(t)
+		f.relayForwarded(fwdOp)
+		c := f.relayCommands()[0]
+		if settled, err := f.m.store.SettleCommand(c.ID, mk(c.ID), f.clock.Load(), remoteOutcomes{m: f.m}); err == nil || settled {
+			t.Errorf("%s: settled=%v err=%v, want an error and nothing settled", name, settled, err)
+		}
+		if got := f.cmdState(c.ID); got.State != cmdPending {
+			t.Errorf("%s: command is %s, want pending", name, got.State)
+		}
+		if got := f.op(fwdOp); got.State != team.RelayForwarded {
+			t.Errorf("%s: op = %+v", name, got)
+		}
+	}
+}
