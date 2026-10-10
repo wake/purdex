@@ -102,7 +102,7 @@ export function WorkspaceRow(props: Props) {
             e.preventDefault()
             onContextMenuWorkspace?.(e, workspace.id)
           }}
-          className="flex-1 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
+          className="flex-1 flex items-center gap-2 py-1.5 text-left rounded cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
         >
           <WorkspaceIcon
             icon={workspace.icon}

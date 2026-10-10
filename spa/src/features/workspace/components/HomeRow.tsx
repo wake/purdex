@@ -37,7 +37,7 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
         onClick={switcher.onClick}
         {...switcher.triggerProps}
         title={switcher.current.name ?? undefined}
-        className="flex-1 min-w-0 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
+        className="flex-1 min-w-0 flex items-center gap-2 py-1.5 text-left rounded cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
       >
         <ProfileIcon appearance={switcher.current} size={16} />
         {/* The profile on screen, by name; one nobody named is `Home` — which, with the logo above, is the row
