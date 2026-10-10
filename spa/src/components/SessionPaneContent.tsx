@@ -104,7 +104,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → input → status row.
   const footer = (ctx: DeckFooterContext) => (
     <div data-testid="session-footer">
-      <SessionInput {...ctx} />
+      <SessionInput {...ctx} sessionCode={sessionCode} />
       <SessionStatusRow sessionCode={sessionCode} ctx={ctx} />
     </div>
   )
