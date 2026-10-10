@@ -27,16 +27,21 @@ describe('agent bubble markdown', () => {
     render(<AgentBubble item={item} />)
     const scope = screen.getByTestId('chat-agent-md')
     expect(scope).toHaveClass('chat-md')
+    // #2463: the vars now come from RoomProse itself, not from this wrapper.
+    expect(scope.getAttribute('style')).toBeNull()
     const vars = workerThemeStyle(getWorkerTheme(undefined))
-    expect(scope.style.getPropertyValue('--wt-list-indent')).toBe(vars['--wt-list-indent'])
-    expect(scope.style.getPropertyValue('--wt-code-font')).toBe(vars['--wt-code-font'])
-    expect(scope.querySelector('[data-testid="room-prose"]')).not.toBeNull()
+    const prose = scope.querySelector<HTMLElement>('[data-testid="room-prose"]')!
+    expect(prose.style.getPropertyValue('--wt-list-indent')).toBe(vars['--wt-list-indent'])
+    expect(prose.style.getPropertyValue('--wt-code-font')).toBe(vars['--wt-code-font'])
   })
 
-  it('leaves the deck (another RoomProse caller) without the bubble scope', () => {
+  it('leaves the deck (another RoomProse caller) without the bubble scope, yet with the theme vars on its RoomProse (#2463)', () => {
     render(<DeckItem item={item} />)
     const deck = screen.getByTestId('deck-agent-text')
     expect(deck.querySelector('.chat-md')).toBeNull()
     expect(deck.getAttribute('style')).toBeNull()
+    const prose = deck.querySelector<HTMLElement>('[data-testid="room-prose"]')!
+    expect(prose.style.getPropertyValue('--wt-list-indent')).toBe('1.5em')
+    expect(prose.style.getPropertyValue('--wt-code-font')).toBe('Menlo, Monaco, monospace')
   })
 })
