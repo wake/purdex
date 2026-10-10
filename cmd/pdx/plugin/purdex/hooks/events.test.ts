@@ -1519,3 +1519,30 @@ test('the /workbook command is registered once the reporter is on', async ($, on
   await start($, w)
   expect(w.registered).toContain('workbook')
 })
+
+// A fork cannot be cut ($.model.fork takes no signal): after its deadline it keeps spending the whole conversation's tokens,
+// so no other model call starts until it settles; then the executor asks again. Its late answer is not reported.
+// Mutation gate: let the loop go on while the fork runs → red (codex attack).
+test('a fork that outlived its deadline holds the executor until it settles; its late answer is dropped', async ($, on) => {
+  let release: (v: any) => void = () => {}
+  const w = evWorld(on, {
+    wbNext: (_b, n) => (n === 1 ? jobAnswer(REFRESH_JOB({ fork: { prompt: 'p', timeout_ms: 90000 } })) : n === 2 ? jobAnswer(JOB({ id: 'wbj-t2' })) : { status: 204 }),
+    wbResult: () => ({ status: 200, text: '{"more":true}' }), // the daemon says another job is ready
+    fork: () => new Promise((resolve) => { release = resolve }),
+  })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  await w.clock.advance(95_100) // the deadline: reported aborted
+  expect(resultReqs(w).map((r) => r.body.job_id)).toEqual(['wbj-r1'])
+  await w.clock.settle()
+  expect(nextReqs(w)).toHaveLength(1) // not asked again while the fork runs
+  expect(w.modelCalls.length).toBe(0)
+  release(FORK_OK) // it finally settles
+  await w.clock.settle()
+  expect(resultReqs(w).filter((r) => r.body.job_id === 'wbj-r1')).toHaveLength(1) // the late answer is not reported
+  expect(nextReqs(w).length).toBeGreaterThanOrEqual(2) // asked again now
+  expect(w.modelCalls.length).toBe(1)
+  expect(resultReqs(w).map((r) => r.body.job_id)).toContain('wbj-t2')
+})

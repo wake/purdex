@@ -58,7 +58,10 @@ const team = { good: false, role: 'none', members: 0, gen: 0, timer: null, pendi
 // wb is the workbook job executor's state (session workbook spec §5.1): one job at a time. `busy` is the loop that polls the
 // daemon and runs what it hands out; a trigger that comes while it runs only sets `again`. `gen` counts the session ends
 // and switches, so a loop that began before one stops asking. `wait` is the longest poll that is asked for next.
-const wb = { busy: false, again: false, scheduled: false, gen: 0, wait: 0 }
+// `orphan` is a fork that outlived its deadline: $.model.fork takes no signal, so it cannot be cut and keeps spending the
+// whole conversation's tokens. While it runs no further model call is started (one job at a time is a cost promise, not
+// only a state); when it settles the executor asks again.
+const wb = { busy: false, again: false, scheduled: false, gen: 0, wait: 0, orphan: false }
 
 // ev is the reporter's whole state; one per mod load. `stream` and `seq` live as long as the
 // load (a /clear or a resume goes on in the same stream), the queue holds every event not yet
@@ -336,7 +339,7 @@ async function wbRequest($, url, bodyText, waitMs) {
 // wbLoop asks, runs the job it is handed, reports it, and goes on while the daemon says another one is ready. Any failure
 // ends the loop: a job that could not be reported is dropped (its lease runs out on the daemon, which fails the entry).
 async function wbLoop($) {
-  if (wb.busy || !ev.on) return
+  if (wb.busy || !ev.on || wb.orphan) return
   wb.busy = true
   const gen = wb.gen
   try {
@@ -345,6 +348,7 @@ async function wbLoop($) {
     // trigger (a turn end, the heartbeat's hint) starts another drain.
     const seen = new Set()
     for (let n = 0; n < MAX_JOBS_PER_DRAIN; n++) {
+      if (wb.orphan) break // a fork is still running past its deadline: wait for it to settle (wbOrphaned asks again)
       const waitMs = wb.wait
       wb.wait = 0
       wb.again = false
@@ -392,7 +396,10 @@ async function wbRun($, job, gen) {
     try {
       // $.model.fork takes no signal: the deadline above reports a fork that outlives it, the call itself runs on
       const call = fork ? $.model.fork(req) : ctl ? $.model.complete(req, { signal: ctl.signal }) : $.model.complete(req)
+      let forkDone = false
+      if (fork) call.then(() => { forkDone = true }, () => { forkDone = true })
       r = await Promise.race([call, deadline])
+      if (fork && !forkDone) wbOrphaned($, call)
     } catch (err) {
       log($, 'workbook call refused: ' + String(err))
     } finally {
@@ -404,6 +411,21 @@ async function wbRun($, job, gen) {
   const out = await wbRequest($, RESULT_URL, bodyText, 0)
   if (!out || out === TIMEOUT || !out.res) return false
   return gen === wb.gen && moreOf(out.res)
+}
+
+// wbOrphaned: the race was won by the deadline while the fork was still running → hold the executor until it settles. Its
+// late answer is dropped (the daemon has already been told `aborted`).
+function wbOrphaned($, call) {
+  let done = false
+  const settle = () => {
+    if (done) return
+    done = true
+    if (!wb.orphan) return
+    wb.orphan = false
+    wbAsk($, 0)
+  }
+  wb.orphan = true
+  call.then(settle, settle)
 }
 
 // ---- /workbook refresh (session workbook spec §5.6) ----
