@@ -3,7 +3,11 @@
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { PaneConversationUnreadable } from '../../hooks/useConversationOfPane'
 
-const REASON_KEY: Record<PaneConversationUnreadable, string> = {
+/** The hook's reasons, and the one only the deck can see: a first turn with no items yet. */
+export type DeckUnreadableReason = PaneConversationUnreadable | 'empty'
+
+const REASON_KEY: Record<DeckUnreadableReason, string> = {
+  empty: 'deck.empty',
   no_session: 'deck.unreadable.no_session',
   not_found: 'deck.unreadable.not_found',
   provider_unsupported: 'deck.unreadable.provider_unsupported',
@@ -11,7 +15,7 @@ const REASON_KEY: Record<PaneConversationUnreadable, string> = {
 }
 
 export function DeckUnreadable({ reason, retry, onSwitchToTerminal }: {
-  reason: PaneConversationUnreadable
+  reason: DeckUnreadableReason
   /** Offered for what may pass: the host answering again, the transcript appearing. */
   retry?: () => void
   onSwitchToTerminal: () => void

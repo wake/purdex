@@ -5,7 +5,7 @@
 import { useEffect, useMemo, type ReactNode, type UIEvent } from 'react'
 import { FoldContext } from '../room/fold-context'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
-import { usePaneFoldStore } from '../../lib/conversations/fold-memory'
+import { noteDeckPane, usePaneFoldStore } from '../../lib/conversations/fold-memory'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import type { Capabilities, ConversationItem, Turn } from '../../lib/conversations/types'
 import { useConversationStore, type ConversationEntry } from '../../stores/useConversationStore'
@@ -55,6 +55,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   const t = useI18nStore((s) => s.t)
   const { doc } = entry
   const foldStore = usePaneFoldStore(`${paneId}\0${sessionId}`)
+  useEffect(() => noteDeckPane(paneId), [paneId])
   const scroll = useTranscriptScroll(undefined, false, { paneId, view: 'deck' })
   const { attach, onScroll: onBoxScroll, follow } = scroll
 

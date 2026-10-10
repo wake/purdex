@@ -157,6 +157,18 @@ describe('DeckPane', () => {
     expect(screen.getByTestId('deck-turn')).toBeInTheDocument()
   })
 
+  it('a first turn with no items is unreadable (還沒有內容) with the way to the terminal, and becomes the deck when an item lands', () => {
+    const conv = (turns: Turn[]) => ({ state: 'ready' as const, hostId: 'h', sessionId: 's', entry: entry(turns) })
+    const { rerender } = render(<DeckPane {...base} conversation={conv([turn(0, [])])} />)
+    expect(screen.getByTestId('deck-unreadable')).toHaveAttribute('data-reason', 'empty')
+    expect(screen.getByTestId('deck-unreadable')).toHaveTextContent('Nothing here yet')
+    expect(screen.getByTestId('deck-to-terminal')).toBeInTheDocument()
+    expect(screen.queryByTestId('deck-retry')).toBeNull()
+    rerender(<DeckPane {...base} conversation={conv([turn(0, [userItem('a', 0)])])} />)
+    expect(screen.queryByTestId('deck-unreadable')).toBeNull()
+    expect(screen.getByTestId('deck-turn')).toBeInTheDocument()
+  })
+
   it('draws the deck once the conversation is ready', () => {
     render(<DeckPane {...base} conversation={{ state: 'ready', hostId: 'h', sessionId: 's', entry: entry([turn(0, [userItem('a', 0)])]) }} />)
     expect(screen.getByTestId('session-view-deck')).toBeInTheDocument()

@@ -3,7 +3,7 @@ import { useSessionViewStore, selectSessionView, sessionBinding, viewKey, instal
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import { STORAGE_KEYS } from '../lib/storage'
-import { isFolded, setOpen } from '../lib/conversations/fold-memory'
+import { isFolded, noteDeckPane, setOpen } from '../lib/conversations/fold-memory'
 import { readScrollMemo, writeScrollMemo } from '../lib/nex/transcript-scroll-memory'
 
 beforeEach(() => {
@@ -125,11 +125,37 @@ describe('cleanup when a tab or a pane goes away', () => {
     installSessionViewCleanup()
     useTabStore.setState({ tabs: { [tab.id]: tab } })
     useSessionViewStore.getState().setView(tab.id, 'gone-pane', 'c', 'deck')
+    noteDeckPane('gone-pane')
     setOpen('gone-pane\0sess', 'k', true)
     writeScrollMemo('gone-pane', { scrollTop: 5, atBottom: false, view: 'deck', firstTurn: 1 })
     useTabStore.setState({ tabs: { [tab.id]: { ...tab } } })
     expect(isFolded('gone-pane\0sess', 'k')).toBe(false)
     expect(readScrollMemo('gone-pane')).toBeUndefined()
+  })
+
+  it('forgets the memory of a pane that was switched back to the terminal before it closed', () => {
+    const tab = createTab({ kind: 'dashboard' })
+    installSessionViewCleanup()
+    useTabStore.setState({ tabs: { [tab.id]: tab } })
+    // the deck was shown (so it noted the pane), then the view went back to the terminal: no record is left
+    noteDeckPane('closed-pane')
+    setOpen('closed-pane\0sess', 'k', true)
+    writeScrollMemo('closed-pane', { scrollTop: 5, atBottom: false, view: 'deck', firstTurn: 1 })
+    expect(useSessionViewStore.getState().byPane).toEqual({})
+    useTabStore.setState({ tabs: { [tab.id]: { ...tab } } })
+    expect(isFolded('closed-pane\0sess', 'k')).toBe(false)
+    expect(readScrollMemo('closed-pane')).toBeUndefined()
+  })
+
+  it('keeps the memory of a pane that is still in a tab', () => {
+    const tab = createTab({ kind: 'dashboard' })
+    const paneId = tab.layout.type === 'leaf' ? tab.layout.pane.id : ''
+    installSessionViewCleanup()
+    useTabStore.setState({ tabs: { [tab.id]: tab } })
+    noteDeckPane(paneId)
+    setOpen(`${paneId}\0sess`, 'k', true)
+    useTabStore.setState({ tabs: { [tab.id]: { ...tab } } })
+    expect(isFolded(`${paneId}\0sess`, 'k')).toBe(true)
   })
 
   it('does not wipe the records while the tab store has not hydrated yet', () => {
