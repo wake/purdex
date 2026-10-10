@@ -94,6 +94,30 @@ func TestStopBeforeTranscriptAfterASlashCommandTurn(t *testing.T) {
 	}
 }
 
+// With several turns newer than the cursor, a wordless running newest turn is adopted only when it provably began before
+// the Stop; an unknown start time leaves it alone (it may be a later prompt's turn) and the hook's words are never written
+// onto it (codex attack). Mutation gate: drop the StartedAt test → red.
+func TestStopDoesNotAdoptATurnWithUnknownStart(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "first"))
+	k.event("s1", 1000)
+	slash := convmodel.Turn{ID: "slash", Outcome: convmodel.OutcomeDone, StartedAt: 150, Items: []convmodel.Item{userItem("/model sonnet")}}
+	unknown := convmodel.Turn{ID: "t3", Outcome: convmodel.OutcomeRunning, Items: []convmodel.Item{userItem("some later prompt")}} // StartedAt 0
+	k.turns.set("s1", endedTurn("t1", 100, "first"), slash, unknown)
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "an older Stop's words", At: 2000, Seq: 2000})
+	for i := 0; i < settleRetries+1 && len(k.afters) > 0; i++ {
+		f := k.afters[0]
+		k.afters = k.afters[1:]
+		f()
+	}
+	for _, e := range k.entries("s1") {
+		if e.TurnID == "t3" {
+			t.Fatalf("a turn of unknown start was claimed by a Stop: %+v", e)
+		}
+	}
+}
+
 // The turn caught up at a Stop keeps its OWN time and order; only the turn the Stop is about carries the Stop's, so the
 // push hold (which matches a Stop to its entry by time) can never take a caught-up older turn for the new one (the live
 // push described the previous turn). A catch-up never pushes by itself: a push belongs to a Stop, and takes the entry whose
@@ -144,7 +168,7 @@ func TestStopBeforeTranscriptWithTheCursorOutsideTheWindow(t *testing.T) {
 			turns = append(turns, endedTurn("old"+string(rune('a'+i)), int64(10*(i+1)), "older"))
 		}
 		// the Stop beat the file: the newest turn has its prompt and nothing else yet
-		turns = append(turns, convmodel.Turn{ID: "new", Outcome: convmodel.OutcomeRunning, Items: []convmodel.Item{userItem("go")}})
+		turns = append(turns, convmodel.Turn{ID: "new", Outcome: convmodel.OutcomeRunning, StartedAt: 1500, Items: []convmodel.Item{userItem("go")}})
 		k.turns.set("s1", turns...)
 		k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "newest words", At: 2000, Seq: 2000})
 		for i := 0; i < settleRetries+1 && len(k.afters) > 0; i++ {
