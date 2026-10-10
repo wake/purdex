@@ -75,6 +75,15 @@ func (o *factOutbox) Announces(caps ipeers.TeamCaps, kind string) bool {
 	return slices.Contains(caps.FactKinds, kind)
 }
 
+// DropIfUnannounced is the pump's kindDropper policy: see dropIfUnannounced.
+func (o *factOutbox) DropIfUnannounced(kind string) bool { return dropIfUnannounced(kind) }
+
+// Dropped ends a fact the lead host will never be told (it does not apply the kind). One statement, a CAS on pending.
+func (o *factOutbox) Dropped(e outboxEntry) error {
+	_, err := o.s.db.Exec(`UPDATE team_facts SET state = ?, updated_at = ? WHERE id = ? AND state = ?`, factDropped, o.now(), e.ID, factPending)
+	return err
+}
+
 func (o *factOutbox) Attempted(id string, nextAt, first401At int64) error {
 	_, err := o.s.db.Exec(`UPDATE team_facts SET attempts = attempts + 1, next_at = ?, first_401_at = ?, updated_at = ? WHERE id = ? AND state = ?`,
 		nextAt, first401At, o.now(), id, factPending)

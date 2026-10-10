@@ -111,6 +111,8 @@ func (s *Store) applyFactIn(tx connTx, p FactPlan) (CommandResult, error) {
 		res, err = s.applyRegisteredIn(tx, p)
 	case p.fact.Kind == team.FactSpawnFailed:
 		res, err = s.applySpawnFailedIn(tx, p)
+	case p.fact.Kind == team.FactMoved:
+		res, err = s.applyMovedIn(tx, p)
 	default:
 		return CommandResult{}, ErrCommandUnsupported
 	}

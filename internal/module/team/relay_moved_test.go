@@ -525,3 +525,18 @@ func TestMovedFact_TheLeadHostAnnouncesTheKind(t *testing.T) {
 }
 
 var _ = peersmod.ClassDone
+
+// The capabilities answer is cached for a while: a host that was reachable a moment ago and is not when the drop is about to be
+// decided keeps the fact (unreachable is not "unannounced", also on the second read). Mutation: drop on the re-read's error → red.
+func TestFactPump_AMovedIsKeptWhenTheRereadBeforeADropFails(t *testing.T) {
+	f, fc := factsFixture(t)
+	fc.script = doneFor("host-L")
+	f.queueEnded("mk-0", "sid-0") // fills the capabilities cache: moved is not announced
+	f.m.factPump.drain("host-L")
+	fc.capsErr = errors.New("connection refused") // reachable a moment ago, not now
+	queueMoved(t, f, "mk-1", "sid-1")
+	f.m.factPump.drain("host-L")
+	if st := f.factState("fact-mk-1"); st.State != factPending {
+		t.Fatalf("moved = %s, want pending: an unreadable re-read dropped it", st.State)
+	}
+}

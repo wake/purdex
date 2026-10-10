@@ -102,6 +102,9 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !res.Replayed {
+		if fact.Kind == team.FactMoved {
+			m.announceMovedAfter(entry.HostID, fact, res.Body)
+		}
 		m.rosterChanged() // a seat may have been freed
 		if fact.Kind == team.FactRegistered || fact.Kind == team.FactSpawnFailed {
 			m.wake(fact.MK) // a `pdx spawn --host` POST is waiting on this op
@@ -113,7 +116,7 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 // factKindApplied: the fact kinds this version applies (the same list the inventory announces as fact_kinds).
 func factKindApplied(kind string) bool {
 	switch kind {
-	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed:
+	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved:
 		return true
 	}
 	return false
@@ -127,13 +130,13 @@ func validateFact(f team.TeamFact) string {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
 	}
-	for _, s := range []string{f.MemberSession, f.Ref, f.ProcStart, f.Pane, f.Title} {
+	for _, s := range []string{f.MemberSession, f.Ref, f.ProcStart, f.Pane, f.Title, f.OpID, f.NewSession, f.NewRef} {
 		if len(s) > maxCommandField || !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
 	}
 	switch f.Kind {
-	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed:
+	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved:
 		if f.MK == "" {
 			return f.Kind + ": mk is required"
 		}
@@ -142,6 +145,10 @@ func validateFact(f team.TeamFact) string {
 	case team.FactRegistered:
 		if f.MemberSession == "" || f.Ref == "" || f.PID <= 0 || f.ProcStart == "" {
 			return "registered: member_session_id, ref, pid and proc_start are required"
+		}
+	case team.FactMoved:
+		if f.NewSession == "" || !ipeers.IsRef(f.NewRef) {
+			return "moved: new_session_id and new_ref (a ref) are required"
 		}
 	case team.FactSpawnFailed:
 		if !spawnReasons[f.Reason] {

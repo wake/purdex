@@ -106,12 +106,12 @@ func TestFacts_ShapeAndAddressing(t *testing.T) {
 		status int
 		code   string
 	}{
-		"wrong host":     {wrong, 409, "wrong_host"},
-		"no mk":          {noMK, 400, "bad_request"},
-		"bad id":         {badID, 400, "bad_request"},
-		"not JSON":       {"{", 400, "bad_request"},
-		"reserved moved": {team.TeamFact{ID: factUUID2, Kind: "moved", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
-		"unknown kind":   {team.TeamFact{ID: factUUID3, Kind: "made_up", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
+		"wrong host":                    {wrong, 409, "wrong_host"},
+		"no mk":                         {noMK, 400, "bad_request"},
+		"bad id":                        {badID, 400, "bad_request"},
+		"not JSON":                      {"{", 400, "bad_request"},
+		"a kind no version applies yet": {team.TeamFact{ID: factUUID2, Kind: "not_a_kind_yet", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
+		"unknown kind":                  {team.TeamFact{ID: factUUID3, Kind: "made_up", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}, 400, "unsupported_kind"},
 	} {
 		code, body := f.postFact(leadPrincipal(), tc.body)
 		if code != tc.status || errCode(t, body) != tc.code {
@@ -130,7 +130,7 @@ func TestFacts_ShapeAndAddressing(t *testing.T) {
 func TestFacts_AnUnsupportedKindIsNotStoredSoAResendAfterTheUpgradeCompletes(t *testing.T) {
 	f := factFixture(t)
 	f.remoteRow("abc12", "lead:1", "mk1", rowActive)
-	moved := team.TeamFact{ID: factUUID1, Kind: "moved", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}
+	moved := team.TeamFact{ID: factUUID1, Kind: "not_a_kind_yet", ToHostID: "h:1", TeamID: uid(1), MK: "mk1"}
 	if code, body := f.postFact(leadPrincipal(), moved); code != 400 || errCode(t, body) != "unsupported_kind" || factLogCount(t, f) != 0 {
 		t.Fatalf("first = %d %s, logged %d", code, body, factLogCount(t, f))
 	}

@@ -223,23 +223,7 @@ func TestGates_RemoteMemberIsAMember(t *testing.T) {
 		}
 	})
 
-	// A relay claimed before the session was adopted remotely: its cleared would
-	// leave remote_members bound to the old session, so it is refused whole.
-	t.Run("cleared of a remote member's own session is refused", func(t *testing.T) {
-		s := openTestStore(t)
-		seedRemote(t, s, "mk-1", "sid-r", 1000)
-		claimedOp(t, s, "op-r", "sid-r", "_abc123")
-		_, _, err := s.ReportRelay("op-r", RelayReport{State: team.RelayCleared, NewSessionID: "sid-new", NewRef: "_nnn222", At: 5000})
-		if !errors.Is(err, ErrClearedRemoteMember) {
-			t.Fatalf("err = %v, want ErrClearedRemoteMember", err)
-		}
-		if op, ok, _ := s.GetRelayOp("op-r"); !ok || op.State == team.RelayCleared {
-			t.Fatalf("op = %+v ok=%v, want it left as it was", op, ok)
-		}
-		if got, _, _ := s.RemoteMember("mk-1"); got.MemberSessionID != "sid-r" || got.State != remoteActive {
-			t.Fatalf("remote row = %+v", got)
-		}
-	})
+	// (a cleared of a remote member's own session now moves its row and queues a `moved` fact: relay_moved_test.go)
 
 	t.Run("self-relay approve is cancelled", func(t *testing.T) {
 		s := openTestStore(t)
