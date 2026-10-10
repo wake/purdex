@@ -136,7 +136,15 @@ const (
 // Callers pass an op they just applied (ReportApplied) — a re-send (Noop) never calls it, so there is one notice per
 // transition. Best effort: a failure is logged.
 func (m *Module) outcomeNoticeAsync(op team.RelayOp) {
-	if m.sender == nil || op.Kind != team.RelayKindMember || op.TeamID == "" {
+	if m.sender == nil || op.TeamID == "" {
+		return
+	}
+	switch {
+	case op.Kind == team.RelayKindMember:
+	case op.Kind == team.RelayKindSelf && op.State == team.RelayDone:
+		// a person's manual relay of a member (MR-1, D3): its `cleared` stamped the member's team on the op. Failed and
+		// cancelled ones are not announced: the person who typed /relay sees them.
+	default:
 		return
 	}
 	switch op.State {
@@ -155,6 +163,10 @@ func (m *Module) outcomeNotice(op team.RelayOp) {
 	var text string
 	switch op.State {
 	case team.RelayDone:
+		if op.Kind == team.RelayKindSelf {
+			text = fmt.Sprintf(team.RelayManualNoticeFmt, op.Ref, op.NewRef)
+			break
+		}
 		text = fmt.Sprintf(RelayDoneNoticeFmt, op.Ref, op.NewRef)
 	case team.RelayFailed:
 		text = fmt.Sprintf(RelayFailedNoticeFmt, op.Ref, op.Reason)
