@@ -481,6 +481,23 @@ describe('worker title prefetch (#1557)', () => {
       expect(useWorkerTitlePrefetchStore.getState().byKey).toEqual({})
     })
 
+    it('the last pane closes and comes back while the request is still out: the answer is stored and nothing is fetched twice', async () => {
+      nexReady(H)
+      listAnswered(H)
+      const d = deferred<ExecutionSummary>()
+      getExecutionMock.mockReturnValueOnce(d.promise)
+      openTabs(execTab('t1', 'e1'))
+      start()
+      await flush()
+      openTabs() // closed ...
+      openTabs(execTab('t1', 'e1')) // ... and back, before the answer
+      d.resolve(summary('e1', { brief: 'Brief' }))
+      await flush()
+      await flush()
+      expect(getExecutionMock).toHaveBeenCalledTimes(1)
+      expect(Object.keys(useWorkerTitlePrefetchStore.getState().byKey)).toEqual([key('e1')])
+    })
+
     it('an answer that lands after its worker lost its last pane is not stored, and the worker may ask again', async () => {
       nexReady(H)
       listAnswered(H)

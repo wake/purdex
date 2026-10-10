@@ -9,7 +9,7 @@
 // Asked only when the answer is known to be missing: the host is configured, its Nexen is ready, and its list has
 // answered (phase `ready`) without the row — the list subscription itself is the worker projection's, held for every
 // host with a worker tab (useWorkerAgentProjection.ts). Bounded:
-// - once per (host, execution) per session, success or failure: a 404 or a network error keeps the pane label and is
+// - once per (host, execution) while a pane shows it (a reopen after the last pane closed asks again, see below), success or failure: a 404 or a network error keeps the pane label and is
 //   never retried (a host removed or re-pointed is forgotten, answers and marks: they came from the old daemon);
 // - one request in flight per host, so of the two REST lanes subscription-slots.ts keeps free for lease renew / send
 //   this never takes both.
@@ -121,6 +121,9 @@ function request(w: WorkerRef): void {
         requested.delete(key)
         return
       }
+      // Answered: marked asked again, as the eviction may have cleared the mark while the request was out (the pane closed
+      // and came back before the answer), and the next pass would otherwise fetch it a second time.
+      requested.add(key)
       useWorkerTitlePrefetchStore.setState((s) => ({ byKey: { ...s.byKey, [key]: summary } }))
     })
     .catch(() => {
