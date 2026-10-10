@@ -147,16 +147,30 @@ describe('loadMoreDone', () => {
     expect(fetchTodos).toHaveBeenCalledTimes(2)
   })
 
-  it('at MAX_DONE_TODOS the cursor still advances past an evicted page, never refetches the same page, and paging stops (doneCapped)', async () => {
+  it('the done record pages on well past 200 (retention is no 200-entry cut-off; spec §6 keeps it)', async () => {
     st().setSupport('h1', V2)
-    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: Array.from({ length: MAX_DONE_TODOS }, (_, i) => todo(1201 - i, 'done')) }) // 1201..1002
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: Array.from({ length: 250 }, (_, i) => todo(900 - i, 'done')) }) // 900..651
+    fetchTodos.mockResolvedValueOnce({ kind: 'ok', todos: Array.from({ length: 20 }, (_, i) => todo(650 - i, 'done')) })
+    await st().loadMoreDone('h1', 'c1')
+    fetchTodos.mockResolvedValueOnce({ kind: 'ok', todos: Array.from({ length: 20 }, (_, i) => todo(630 - i, 'done')) })
+    await st().loadMoreDone('h1', 'c1')
+    expect(fetchTodos).toHaveBeenCalledTimes(2)
+    expect(fetchTodos.mock.calls[1][2]).toMatchObject({ before: 631 })
+    expect(conv()?.todos.done).toHaveLength(290)
+    expect(conv()?.todos.doneOldestId).toBe(611)
+    expect(conv()?.todos.doneCapped).toBe(false)
+  })
+
+  it('at the safety ceiling MAX_DONE_TODOS the cursor still advances past an evicted page, never refetches the same page, and paging stops (doneCapped)', async () => {
+    st().setSupport('h1', V2)
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: Array.from({ length: MAX_DONE_TODOS }, (_, i) => todo(5000 - i, 'done')) }) // 5000 down, MAX_DONE_TODOS of them
     expect(conv()?.todos.doneCapped).toBe(false)
     const oldest = conv()?.todos.doneOldestId
-    fetchTodos.mockResolvedValueOnce({ kind: 'ok', todos: Array.from({ length: 20 }, (_, i) => todo(1001 - i, 'done')) }) // a full page, all older: retention drops it
+    fetchTodos.mockResolvedValueOnce({ kind: 'ok', todos: Array.from({ length: 20 }, (_, i) => todo(5000 - MAX_DONE_TODOS - i, 'done')) }) // a full page, all older: the ceiling drops it
     await st().loadMoreDone('h1', 'c1')
     expect(fetchTodos).toHaveBeenLastCalledWith('h1', 's1', { state: 'done', limit: 20, before: oldest })
     expect(conv()?.todos.done).toHaveLength(MAX_DONE_TODOS)
-    expect(conv()?.todos.doneCursor).toBe(982) // advanced to the page's oldest even though the page was not kept
+    expect(conv()?.todos.doneCursor).toBe(5000 - MAX_DONE_TODOS - 19) // advanced to the page's oldest even though the page was not kept
     expect(conv()?.todos.doneCapped).toBe(true)
     await st().loadMoreDone('h1', 'c1')
     await st().loadMoreDone('h1', 'c1')

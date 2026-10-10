@@ -4,7 +4,10 @@
 import type { TodoLists, WorkbookEntry, WorkbookTodo } from './types'
 
 export const MAX_OPEN_TODOS = 50
-export const MAX_DONE_TODOS = 200
+/** A safety ceiling on the done record kept per conversation, not a retention policy (spec §6 keeps every record, §9 pages it,
+ *  and the daemon holds them all): ~2000 todos is far above what a conversation's list reaches (the model adds ≤ 2 a turn and
+ *  closes most), and only there does the store stop paging (`doneCapped`) and drop the oldest to bound memory. */
+export const MAX_DONE_TODOS = 2000
 export const MAX_TODO_TOUCHES = 200
 
 export interface TodoBook {
