@@ -41,6 +41,8 @@ export function WorkerStatusBar({ tabId, pane, onNavigateToHost }: {
 
   return (
     <StatusBarLayout
+      hostId={hostId}
+      colorMode="execution"
       copyFeedback={feedback}
       copyFailed={failed}
       segments={(
