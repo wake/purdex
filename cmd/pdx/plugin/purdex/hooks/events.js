@@ -32,7 +32,7 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
+import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -503,8 +503,16 @@ async function pqRun($, job) {
     reason = job.kind === 'interrupt' ? 'not_running' : 'refused'
     log($, 'prompt job ' + job.kind + ' failed: ' + String(err))
   }
-  const out = await wbRequest($, PROMPT_RESULT_URL, promptResultBody(ev.stream, job.id, status, reason), 0)
-  if (!out || out === TIMEOUT || !out.res || out.res.status !== 200) log($, 'prompt result not accepted for ' + job.kind)
+  // The job has run (or been refused): its report must get through. A lost answer or a busy daemon is tried again, a few
+  // times inside the daemon's hand timeout; a 409 means the daemon has settled it already (expired, or the first try did
+  // arrive) and there is nothing to add.
+  for (let attempt = 0; attempt < PROMPT_RESULT_TRIES; attempt++) {
+    if (attempt > 0) await $.clock.sleep(PROMPT_RESULT_RETRY_MS * attempt)
+    const out = await wbRequest($, PROMPT_RESULT_URL, promptResultBody(ev.stream, job.id, status, reason), 0)
+    const code = out && out !== TIMEOUT && out.res ? out.res.status : 0
+    if (code === 200 || code === 409) return
+  }
+  log($, 'prompt result not accepted for ' + job.kind)
 }
 
 // ---- /workbook refresh (session workbook spec §5.6) ----

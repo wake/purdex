@@ -1753,3 +1753,27 @@ test('a job that arrives between session.end{clear} and the switch is dropped se
   expect(w.submitCalls).toHaveLength(0)
   expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'session_changed' })
 })
+
+// A report that gets no 200 (a lost answer, a busy daemon) is sent again inside the daemon's hand timeout; a 409 (settled
+// already) is final and not repeated; after three tries it gives up (codex attack). Mutation gate: a single try → red.
+test('a prompt result that fails is sent again, bounded; a 409 is not retried', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), promptResult: (_b, n) => (n === 1 ? { status: 503, text: '{}' } : n === 2 ? { deny: 'socket gone' } : { status: 200, text: '{}' }) })
+  await start($, w)
+  await w.clock.advance(5000)
+  expect(pqResult(w)).toHaveLength(3)
+  expect(new Set(pqResult(w).map((r) => JSON.stringify(r.body))).size).toBe(1) // the same report each time
+})
+
+test('a 409 on the report ends the retries', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), promptResult: () => ({ status: 409, text: '{"error":"not_leased"}' }) })
+  await start($, w)
+  await w.clock.advance(5000)
+  expect(pqResult(w)).toHaveLength(1)
+})
+
+test('a report that never succeeds is tried three times and no more', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), promptResult: () => ({ status: 500, text: '{}' }) })
+  await start($, w)
+  await w.clock.advance(10_000)
+  expect(pqResult(w)).toHaveLength(3)
+})
