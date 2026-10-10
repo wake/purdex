@@ -76,7 +76,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 					active[i] = append(active[i], mr)
 					remoteHosts = append(remoteHosts, mr.HostID)
 				}
-			case mr.State == team.MemberActive:
+			case mr.State == team.MemberActive || mr.State == team.MemberKilling: // a kill in flight still shows the member
 				active[i] = append(active[i], mr)
 				ids = append(ids, mr.SessionID)
 			}

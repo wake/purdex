@@ -759,7 +759,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		frameMeta.Provenance.SessionID != "" && frameMeta.IdentityRecorded {
 		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance))
 	}
-	emitDecision, emitReason := m.emitHookSessionWith(req, func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
+	emitDecision, emitReason := m.emitHookSessionFrom(req, isProxySubagentStopReason(frameMeta.Reason), func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
 		if readErr != nil {
 			if frameMeta.Exit == nil {
 				return agentpkg.NormalizedEvent{}, false

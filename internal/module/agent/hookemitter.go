@@ -119,6 +119,11 @@ func (m *Module) emitSessionWith(kind slotKind, code, sessionName string, build 
 // the notify hub says the frame is about. "" with kindNonTmux means a session outside tmux. hookSID is the agent
 // session id the hook itself names; only a kindHook frame uses it (see publishNotify).
 func (m *Module) emitSlot(kind slotKind, code, sessionName, notifyName, hookSID string, build buildTolerantFn) bool {
+	return m.emitSlotFrom(kind, code, sessionName, notifyName, hookSID, false, build)
+}
+
+// emitSlotFrom is emitSlot for a frame that may report a proxy subagent's Stop (fromProxy, see NotifyEvent).
+func (m *Module) emitSlotFrom(kind slotKind, code, sessionName, notifyName, hookSID string, fromProxy bool, build buildTolerantFn) bool {
 	e := &m.emit
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -159,7 +164,7 @@ func (m *Module) emitSlot(kind slotKind, code, sessionName, notifyName, hookSID 
 	if kind == kindNonTmux {
 		m.noteNonTmuxLocked(code, n)
 	}
-	m.publishNotify(kind, code, notifyName, hookSID, p, n)
+	m.publishNotifyFrom(kind, code, notifyName, hookSID, fromProxy, p, n)
 	return true
 }
 
@@ -205,6 +210,11 @@ func (m *Module) emitHookSession(req EventRequest, build buildFn) (string, strin
 // emitHookSessionWith is emitHookSession for a build that handles a failed
 // read itself (a SessionEnd that claimed its frame).
 func (m *Module) emitHookSessionWith(req EventRequest, build buildTolerantFn) (string, string) {
+	return m.emitHookSessionFrom(req, false, build)
+}
+
+// emitHookSessionFrom is emitHookSessionWith for a hook that may be a proxy subagent's Stop (fromProxy).
+func (m *Module) emitHookSessionFrom(req EventRequest, fromProxy bool, build buildTolerantFn) (string, string) {
 	var (
 		code string
 		path hookSessionCodePath
@@ -212,7 +222,7 @@ func (m *Module) emitHookSessionWith(req EventRequest, build buildTolerantFn) (s
 	if m.core != nil {
 		code, path = m.resolveSessionCodeFromHook(req)
 	}
-	if m.emitSlot(kindHook, code, req.TmuxSession, req.TmuxSession, m.hookAgentSessionID(req), build) {
+	if m.emitSlotFrom(kindHook, code, req.TmuxSession, req.TmuxSession, m.hookAgentSessionID(req), fromProxy, build) {
 		return "broadcasted", string(path)
 	}
 	switch {

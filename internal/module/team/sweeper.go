@@ -61,10 +61,11 @@ func (m *Module) tick() {
 		m.persistUsage()
 		m.endGoneTeams()
 		m.markGoneMembers()
-		m.markGoneRemoteMembers()    // sessions here that a lead on another host adopted (X2c)
-		m.endUnpairedRemoteMembers() // a lead host that is no longer paired (§3.2)
-		m.scanUnpaired()             // a host whose pairing is gone: its remote members are gone, its commands dropped (X3a)
-		m.noticeUsage()              // after the gone teams and members are settled: a member at the threshold and idle tells its lead once (P7-1)
+		m.settleStuckKillingMembers() // a kill that claimed its member and never ended (#2152)
+		m.markGoneRemoteMembers()     // sessions here that a lead on another host adopted (X2c)
+		m.endUnpairedRemoteMembers()  // a lead host that is no longer paired (§3.2)
+		m.scanUnpaired()              // a host whose pairing is gone: its remote members are gone, its commands dropped (X3a)
+		m.noticeUsage()               // after the gone teams and members are settled: a member at the threshold and idle tells its lead once (P7-1)
 		// Titles and names change in the registry without a write of ours:
 		// the hash gate in rosterChanged makes the unchanged case a read.
 		m.rosterChanged()

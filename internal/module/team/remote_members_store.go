@@ -261,7 +261,7 @@ type roleCheck struct {
 var roleChecks = []roleCheck{
 	{sessionRoleLead, `SELECT 1 FROM teams WHERE lead_session_id = ? AND ended_at = 0`},
 	{sessionRoleMemberLocal, `SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
-		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`},
+		WHERE m.session_id = ? AND m.state IN ('active', 'killing') AND t.ended_at = 0`}, // a kill in flight keeps its seat's role
 	{sessionRoleMemberRemote, `SELECT 1 FROM remote_members WHERE member_session_id = ? AND state = 'active'`},
 }
 

@@ -73,7 +73,7 @@ func (o remoteOutcomes) adoptApplied(tx *sql.Tx, c commandRow, res peersmod.Call
 	// A remote session id equal to a LOCAL active session would break team_members_one_active for good (the settle would
 	// roll back and the adopt would be sent again forever): it fails the membership instead.
 	var taken int
-	if err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state = 'active' AND NOT (mk = ? AND host_id = ?)`, out.MemberSession, c.MK, c.HostID).Scan(&taken); err == nil {
+	if err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state IN ('active', 'killing') AND NOT (mk = ? AND host_id = ?)`, out.MemberSession, c.MK, c.HostID).Scan(&taken); err == nil {
 		o.m.logf("[team] adopt %s: session %s is already an active member here; the membership fails session_conflict", c.ID, out.MemberSession)
 		return o.cas(tx, c, `state = ?, end_reason = 'session_conflict', updated_at = ?, ended_at = ?`, []any{rowFailed, now, now}, rowJoining)
 	}

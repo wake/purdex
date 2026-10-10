@@ -153,14 +153,23 @@ func (s *Store) InsertMember(m memberRow) error {
 		return fmt.Errorf("insert member: spawn op %q, team %q, session %q and state %q must all be set and the state known",
 			m.SpawnOp, m.TeamID, m.SessionID, m.State)
 	}
-	return insertMemberIn(context.Background(), s.db, m)
+	// In an immediate transaction like every other member insert: the guard in insertMemberRowIn (a session whose member is killing
+	// holds its seat) reads and inserts as one step against the kill's claim.
+	return s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		return insertMemberIn(ctx, conn, m)
+	})
 }
 
 // execer is what insertMemberIn writes through: the store's pool or a
 // connection that holds the write lock.
 type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
+
+// ErrSessionHeld: a member row cannot be inserted for a session whose member is being killed (state killing) — the kill may still
+// be given back, and the session keeps its seat until it ends.
+var ErrSessionHeld = errors.New("the session is held by a member whose kill is in flight")
 
 func insertMemberIn(ctx context.Context, q execer, m memberRow) error {
 	_, err := insertMemberRowIn(ctx, q, m)
@@ -173,6 +182,19 @@ func insertMemberRowIn(ctx context.Context, q execer, m memberRow) (bool, error)
 	origin := m.Origin
 	if origin == "" {
 		origin = team.MemberOriginSpawned
+	}
+	// A session whose member is being killed still holds its seat: the unique index covers active rows only, so without this a
+	// second active row would be inserted and the kill's give-back could only end the original gone (#2152). Every member insert
+	// passes here, inside the caller's write transaction, so the read and the insert are one step against the kill's claim.
+	if m.State == team.MemberActive {
+		var held int
+		switch err := q.QueryRowContext(ctx, `SELECT 1 FROM team_members WHERE session_id = ? AND state = 'killing' AND spawn_op <> ? LIMIT 1`,
+			m.SessionID, m.SpawnOp).Scan(&held); {
+		case err == nil:
+			return false, fmt.Errorf("insert member %s: %w", m.SpawnOp, ErrSessionHeld)
+		case !errors.Is(err, sql.ErrNoRows):
+			return false, fmt.Errorf("insert member %s: %w", m.SpawnOp, err)
+		}
 	}
 	res, err := q.ExecContext(ctx, `INSERT INTO team_members (`+memberCols+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (spawn_op) DO NOTHING`,
@@ -308,6 +330,11 @@ func (s *Store) MembersOf(teamID string) ([]memberRow, error) {
 
 // SetMemberState sets the member's state at at (spec §7.3: killed by pdx
 // kill, gone when its session ended). ErrNoSuchMember for an unknown spawn op.
+//
+// It has NO production caller — the kill, the sweeper and the boot each use their own guarded statements (ClaimMemberKilling,
+// MarkMemberKilled, MarkMemberGone, GiveBackMemberKilling) — and exists for tests that need a row in a given state. It therefore
+// does not carry the guards those do (e.g. refusing to turn a row active beside a killing row of the same session, #2152); a
+// production caller must not be added without them.
 func (s *Store) SetMemberState(spawnOp string, state team.MemberState, at int64) error {
 	if !validMemberState(state) {
 		return fmt.Errorf("set member %s: unknown state %q", spawnOp, state)
@@ -488,5 +515,15 @@ func endTeamTx(tx *sql.Tx, id, leadSessionID, reason string, at int64) (bool, er
 	if err != nil {
 		return false, fmt.Errorf("end team %s rows affected: %w", id, err)
 	}
-	return n == 1, nil
+	if n != 1 {
+		return false, nil
+	}
+	// The team's local spawns still running end with it (#2384), in this transaction: the runner's finish is a
+	// compare-and-set on a running op, so it can no longer add a member to the ended team. The runner reaps its
+	// session when it sees the op failed (reapFailedSpawn); a crash in between is the boot sweep's.
+	if _, err := tx.Exec(`UPDATE spawn_ops SET state = 'failed', reason = ?, updated_at = ? WHERE team_id = ? AND state = 'running' AND lead_host_id = ''`,
+		team.SpawnReasonAbandoned, at, id); err != nil {
+		return false, fmt.Errorf("end team %s: its running spawns: %w", id, err)
+	}
+	return true, nil
 }

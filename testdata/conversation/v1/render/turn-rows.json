@@ -8,6 +8,65 @@
       ]
     },
     {
+      "name" : "ask-question",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_0149aec0bc315f7eaa443d16"
+              ],
+              "text" : "處理了 1 秒 · 1 個其他"
+            }
+          ],
+          "turn_id" : "f64551fc-d6f0-4823-8b87-971cfb914464"
+        },
+        {
+          "index" : 1,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01c9cfbccd9b4a8a3d8a78e1"
+              ],
+              "text" : "處理了 1 秒 · 1 個其他"
+            }
+          ],
+          "turn_id" : "3946ca64-ff78-493c-8610-90a437cbb6b3"
+        },
+        {
+          "index" : 2,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01f5a5bd2907076de6674a11"
+              ],
+              "text" : "處理了 1 秒 · 1 個其他 · 1 已拒絕"
+            }
+          ],
+          "turn_id" : "43bb00d0-ce77-40a5-8b91-256b370c887b"
+        },
+        {
+          "index" : 3,
+          "runs" : [
+            {
+              "latest" : "其他 去哪裡？",
+              "running" : true,
+              "step_ids" : [
+                "toolu_01509be8a6f1ba86892767cd"
+              ],
+              "text" : null
+            }
+          ],
+          "turn_id" : "ab71fc4c-8a1c-4d62-8920-2b36ee7c07dd"
+        }
+      ]
+    },
+    {
       "name" : "bash-fail-and-background",
       "source" : "cc-transcript",
       "turns" : [
@@ -628,6 +687,35 @@
             }
           ],
           "turn_id" : "8e7ca735-586b-46e6-a5e4-a50dd7a21fe4"
+        }
+      ]
+    },
+    {
+      "name" : "read-range",
+      "source" : "cc-transcript",
+      "turns" : [
+        {
+          "index" : 0,
+          "runs" : [
+            {
+              "running" : false,
+              "step_ids" : [
+                "toolu_01f572f0ceaafd42d9fce2cd",
+                "toolu_01dbf5b138f14068f0b9b95d",
+                "toolu_01ae972b84f8705357161a40",
+                "toolu_01c5a4dd8733e10c84f8ac8c",
+                "toolu_01b3144fef4e2fa695f8904e",
+                "toolu_01bba36096e2dc1cadd9c51f",
+                "toolu_01b82b58e42c46a938fcf40b",
+                "toolu_01bc937ad7fd7c3261cc0d97",
+                "toolu_0144f1f2e2f9679f1bf48d55",
+                "toolu_01e2ff8c93ee4fc7eca1988d",
+                "toolu_01b41d0e469d29d1b91f2762"
+              ],
+              "text" : "處理了 21 秒 · 3 個編輯、3 個讀取、5 個搜尋 · 1 已拒絕"
+            }
+          ],
+          "turn_id" : "f64551fc-d6f0-4823-8b87-971cfb914464"
         }
       ]
     },

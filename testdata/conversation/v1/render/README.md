@@ -39,7 +39,7 @@ TEST_RUNNER_WRITE_TURN_ROWS=<out path> xcodebuild -project Purdex.xcodeproj -sch
   -only-testing:PurdexTests/TurnRowsFixtureTests/testWriteWhenAsked test
 ```
 
-Made from the fixtures at purdex `0ed33056` (iOS pins the same commit) with purdex-ios commit
-`8c0b09d032f9` (`github.com/wake/purdex-ios`, PRs #77 / #78, `App/Tests/TurnRowsFixtureTests.swift`).
+Made from the fixtures at purdex `1a44ff19` (iOS pins the same commit; U3-0 added the cases `ask-question` and
+`read-range`, 20 cases in all) with purdex-ios commit `3cf515d71abf` (`github.com/wake/purdex-ios`, PRs #77 / #78 / #82, `App/Tests/TurnRowsFixtureTests.swift`).
 When the golden cases change or iOS changes the row rules, regenerate and re-commit this file; the iOS test fails
 until both sides agree.
