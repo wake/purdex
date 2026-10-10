@@ -64,8 +64,11 @@ const teamSchema = `
 		created_at    INTEGER NOT NULL,
 		updated_at    INTEGER NOT NULL
 	);
-	CREATE INDEX IF NOT EXISTS team_members_team ON team_members (team_id, state);
-	CREATE UNIQUE INDEX IF NOT EXISTS team_members_one_active ON team_members (session_id) WHERE state = 'active';`
+	CREATE INDEX IF NOT EXISTS team_members_team ON team_members (team_id, state);`
+
+// The unique index on a session's seat, team_members_one_member, is NOT in the schema above: it replaces team_members_one_active and
+// is made by migrateOneMemberIndex. Left here, the old index would be created again at every boot (CREATE … IF NOT EXISTS) after
+// the migration dropped it.
 
 const teamCols = `id, host_id, lead_session_id, lead_ref, grant_json, request_id, created_at, ended_at, end_reason, team_name, team_label`
 
@@ -146,7 +149,7 @@ func validMemberState(s team.MemberState) bool {
 
 // InsertMember stores m, idempotent on the spawn op (a spawn retried after
 // a restart stores one row; a stored row is left as it is). A second
-// active row for one session (team_members_one_active), or a row missing
+// active-or-killing row for one session (team_members_one_member), or a row missing
 // spawn op, team or session or with an unknown state, is an error.
 func (s *Store) InsertMember(m memberRow) error {
 	if m.SpawnOp == "" || m.TeamID == "" || m.SessionID == "" || !validMemberState(m.State) {

@@ -150,7 +150,7 @@ func TestCloseAdoptApproved_EachRefusalCancelsWithItsCode(t *testing.T) {
 	}
 }
 
-// The target's `active` row in an ended team would break team_members_one_active: the approve retires it.
+// The target's `active` row in an ended team would break team_members_one_member: the approve retires it.
 func TestCloseAdoptApproved_RetiresAStaleRowOfAnEndedTeam(t *testing.T) {
 	s := adoptWorld(t)
 	seedTeam(t, s, "team-old", "lead-old", 500)

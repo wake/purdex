@@ -4,6 +4,7 @@ package teammod
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -362,18 +363,45 @@ func TestKillClaim_ASessionThatIsKillingIsNotAdoptedOrRegisteredAgain(t *testing
 	}
 }
 
-func TestKillClaim_AGiveBackThatMeetsTheUniqueIndexEndsTheRowGone(t *testing.T) {
+// With team_members_one_member in force (active AND killing) the database itself refuses a second membership for a session whose
+// member is killing — what the application checks (insertMemberRowIn, the conflict checks) used to be the only line for.
+func TestKillClaim_TheDatabaseRefusesASecondMembershipForAKillingSession(t *testing.T) {
 	f := newFixture(t)
 	key := f.adoptedMember(t)
 	mr := memberBySpawn(t, f.m.store, key)
 	if claimed, err := f.m.store.ClaimMemberKilling(mr.SpawnOp, mr.SessionID, 5); err != nil || !claimed {
 		t.Fatalf("claim = %v %v", claimed, err)
 	}
-	// The insert guard (insertMemberRowIn) would stop a newer membership of the same session; this is the LAST line, for when
-	// something slips past it: a row inserted behind the guard's back (the index covers active rows only).
+	_, err := f.m.store.db.Exec(`INSERT INTO team_members (spawn_op, team_id, host_id, session_id, ref, cwd, tmux_session, state, created_at, updated_at, origin)
+		VALUES ('dup1', ?, ?, ?, ?, '/w', 'tm-dup1', 'active', 6, 6, 'spawned')`, mr.TeamID, mr.HostID, mr.SessionID, mr.Ref)
+	if err == nil || !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		t.Fatalf("a second active row for a killing session: %v, want the unique index to refuse it", err)
+	}
+	if given, err := f.m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, 7); err != nil || !given {
+		t.Fatalf("give back = %v %v, want given", given, err)
+	}
+	if got := f.killRowState(key); got != team.MemberActive {
+		t.Fatalf("row = %s, want active again", got)
+	}
+}
+
+// The last line: a team.db whose index swap failed keeps the OLD index (the migration rolls back whole and never fails the boot),
+// which does not cover killing rows. There a competing membership can still slip in behind the guards, and the give-back that
+// meets the index ends the row gone instead of leaving it killing for good.
+func TestKillClaim_AGiveBackThatMeetsTheLegacyIndexEndsTheRowGone(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	mr := memberBySpawn(t, f.m.store, key)
+	if _, err := f.m.store.db.Exec(`DROP INDEX team_members_one_member;
+		CREATE UNIQUE INDEX team_members_one_active ON team_members (session_id) WHERE state = 'active'`); err != nil { // the state after a failed swap
+		t.Fatal(err)
+	}
+	if claimed, err := f.m.store.ClaimMemberKilling(mr.SpawnOp, mr.SessionID, 5); err != nil || !claimed {
+		t.Fatalf("claim = %v %v", claimed, err)
+	}
 	if _, err := f.m.store.db.Exec(`INSERT INTO team_members (spawn_op, team_id, host_id, session_id, ref, cwd, tmux_session, state, created_at, updated_at, origin)
 		VALUES ('dup1', ?, ?, ?, ?, '/w', 'tm-dup1', 'active', 6, 6, 'spawned')`, mr.TeamID, mr.HostID, mr.SessionID, mr.Ref); err != nil {
-		t.Fatalf("the competing membership could not be inserted: %v", err)
+		t.Fatalf("the competing membership could not be inserted behind the guards: %v", err)
 	}
 	given, err := f.m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, 7)
 	if err != nil || given {

@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // identPattern is a table or column name ensureColumn may interpolate.
@@ -344,4 +346,45 @@ func migrateCrossHostL(db *sql.DB) error {
 	}
 	_, err := db.Exec(`UPDATE team_members SET mk = spawn_op WHERE mk = ''`)
 	return err
+}
+
+// migrateOneMemberIndex swaps the unique index on a session's seat: team_members_one_active (state = 'active') becomes
+// team_members_one_member (state IN ('active', 'killing')). A kill claims its member by moving it active → killing (#2152); with
+// the old index a killing row freed its session and a second membership could take it, so the kill's give-back could only end
+// the original gone. The database now holds the invariant the application checks already keep.
+//
+// A team.db written before can hold the pair the new index forbids — an active row and a killing one of one session, or two
+// killing rows. They are resolved first: the active row stays, else the newest killing one, and the others end gone (end_reason
+// duplicate_membership). The resolution, the DROP and the CREATE are ONE transaction, and the boot never fails on this: if
+// anything in it fails the whole swap rolls back — the old index stays, so there is no unprotected window — the reason is logged
+// and the daemon starts, to try again at the next boot. Idempotent: a second run resolves nothing, drops nothing, creates nothing.
+func migrateOneMemberIndex(db *sql.DB) error {
+	failed := func(step string, err error) error {
+		log.Printf("[team] migrate: one-member index (%s): %v; the old index stays, to be tried again at the next boot", step, err)
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return failed("begin", err)
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixMilli()
+	if _, err := tx.Exec(`UPDATE team_members SET state = 'gone', updated_at = ?, end_reason = 'duplicate_membership',
+			ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
+		WHERE state = 'killing' AND EXISTS (SELECT 1 FROM team_members o
+			WHERE o.session_id = team_members.session_id AND o.spawn_op <> team_members.spawn_op
+			  AND (o.state = 'active' OR (o.state = 'killing' AND (o.updated_at > team_members.updated_at
+				OR (o.updated_at = team_members.updated_at AND o.spawn_op > team_members.spawn_op)))))`, now, now); err != nil {
+		return failed("resolve duplicates", err)
+	}
+	if _, err := tx.Exec(`DROP INDEX IF EXISTS team_members_one_active`); err != nil {
+		return failed("drop the old index", err)
+	}
+	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS team_members_one_member ON team_members (session_id) WHERE state IN ('active', 'killing')`); err != nil {
+		return failed("create the new index", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return failed("commit", err)
+	}
+	return nil
 }

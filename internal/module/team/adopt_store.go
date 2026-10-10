@@ -135,7 +135,7 @@ func adoptRefusal(tx *sql.Tx, id, rowHostID string, p team.AdoptPayload, chk ado
 // every refusal again, and then either
 //   - a refusal: the row closes cancelled with the code as its close_reason (refused = the code), or
 //   - the approve: an `active` row of the target in an ENDED team becomes `released` (its place is
-//     long gone and it would break team_members_one_active), the row closes as c, and m is inserted.
+//     long gone and it would break team_members_one_member), the row closes as c, and m is inserted.
 //
 // n is the close's RowsAffected: 0 means another writer closed the row first and nothing was written.
 // m must be the adopted member the request describes (key = the request id, origin adopted, active,
