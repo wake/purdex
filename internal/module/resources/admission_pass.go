@@ -41,6 +41,9 @@ func (m *Module) admissionPass(ctx context.Context, fresh string) passResult {
 	if set.Mode != resources.ModeLease && set.Mode != resources.ModeAdvise {
 		return res
 	}
+	// A heavy lease waits for the disk to be looked at (and the Go build cache trimmed when it runs low) before the locked
+	// part of the pass: the walk is never done under stateMu (diskguard.go).
+	m.diskPreflight(ctx, fresh != "")
 	// One more round when a grant could not be made as planned: its CAS lost to
 	// another writer, or a session-new waiter that arrived after the baselines
 	// were worked out. Two rounds at most; the next trigger finishes the rest.

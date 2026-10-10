@@ -98,6 +98,9 @@ type LeaseResponse struct {
 	ScopeFallback bool `json:"scope_fallback,omitempty"`
 	// EndReason names how an ended lease ended.
 	EndReason string `json:"end_reason,omitempty"`
+	// Warning is set on a held build / test lease while the volume that holds the Go build cache is under its hard floor
+	// even after a trim: the lease was granted all the same (#2470).
+	Warning string `json:"warning,omitempty"`
 }
 
 // LeaseView is one held lease in a Snapshot.

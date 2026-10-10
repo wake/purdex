@@ -19,9 +19,9 @@ import (
 // hard floor afterwards is granted anyway with a warning. Every test uses t.TempDir() and an injected free-space function.
 
 const (
-	gib    = int64(1) << 30
-	ageOld = 3 * time.Hour    // older than the 2 h horizon
-	ageNew = 30 * time.Minute // younger
+	diskGiB = int64(1) << 30
+	ageOld  = 3 * time.Hour    // older than the 2 h horizon
+	ageNew  = 30 * time.Minute // younger
 )
 
 func put(t *testing.T, path string, age time.Duration, size int) {
@@ -59,7 +59,6 @@ func newFakeCache(t *testing.T) fakeCache {
 	put(t, filepath.Join(c.dir, "README"), ageOld, 10)
 	put(t, filepath.Join(c.dir, "zz", "x-a"), ageOld, 10)    // not a two-hex-digit directory
 	put(t, filepath.Join(c.dir, "abc", "x-a"), ageOld, 10)   // nor is this
-	put(t, filepath.Join(c.dir, "AB", "x-a"), ageOld, 10)    // upper case is not Go's naming
 	put(t, filepath.Join(c.outside, "precious"), ageOld, 10) // the thing a symlink would point at
 	put(t, filepath.Join(c.outside, "dir", "inner"), ageOld, 10)
 	return c
@@ -99,7 +98,7 @@ func (f *diskFix) release(r resources.LeaseResponse) {
 
 // Below the watermark: old entries go, recent ones stay, and the lease is granted. Mutation gate: no trim → red.
 func TestDiskGuard_BelowTheWatermarkTrimsOldEntriesThenGrants(t *testing.T) {
-	f := newDiskFix(t, 10*gib)
+	f := newDiskFix(t, 10*diskGiB)
 	r := f.heavy(cidA)
 	if r.State != resources.StateHeld || !r.Granted {
 		t.Fatalf("lease = %+v", r)
@@ -120,7 +119,7 @@ func TestDiskGuard_BelowTheWatermarkTrimsOldEntriesThenGrants(t *testing.T) {
 
 // Above the watermark: nothing is deleted. Mutation gate: always trim → red.
 func TestDiskGuard_AboveTheWatermarkLeavesTheCacheAlone(t *testing.T) {
-	f := newDiskFix(t, 40*gib)
+	f := newDiskFix(t, 40*diskGiB)
 	f.heavy(cidA)
 	if !exists(filepath.Join(f.cache.dir, "ab/0123-a")) {
 		t.Fatal("the cache was trimmed with plenty of room")
@@ -132,7 +131,7 @@ func TestDiskGuard_AboveTheWatermarkLeavesTheCacheAlone(t *testing.T) {
 
 // Only the heavy kinds look at the disk: a light lease (no kind, small weight) does not even ask.
 func TestDiskGuard_LightLeasesDoNotLookAtTheDisk(t *testing.T) {
-	f := newDiskFix(t, 1*gib)
+	f := newDiskFix(t, 1*diskGiB)
 	rec := f.post(cidA, "", 5)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("post: %d", rec.Code)
@@ -155,7 +154,7 @@ func TestDiskGuard_LightLeasesDoNotLookAtTheDisk(t *testing.T) {
 // At most one trim per 10 minutes: a second heavy lease right after finds the cache as the first left it; once 10
 // minutes have passed a new trim runs. Mutation gate: no rate limit → the second trim deletes the re-created file (red).
 func TestDiskGuard_TrimsAreRateLimited(t *testing.T) {
-	f := newDiskFix(t, 10*gib)
+	f := newDiskFix(t, 10*diskGiB)
 	r := f.heavy(cidA)
 	f.release(r)
 	again := filepath.Join(f.cache.dir, "ab", "again-a")
@@ -166,7 +165,7 @@ func TestDiskGuard_TrimsAreRateLimited(t *testing.T) {
 	if !exists(again) {
 		t.Fatal("a second trim ran inside 10 minutes")
 	}
-	f.clock.ms.Add(2 * time.Second)
+	f.clock.ms.Add((2 * time.Second).Milliseconds())
 	f.heavy(cidC)
 	if exists(again) {
 		t.Fatal("no trim after the 10 minutes")
@@ -175,7 +174,7 @@ func TestDiskGuard_TrimsAreRateLimited(t *testing.T) {
 
 // Two heavy requests meeting a low disk at once: one walk, the other does not wait for it or start a second.
 func TestDiskGuard_OneTrimAtATime(t *testing.T) {
-	f := newDiskFix(t, 10*gib)
+	f := newDiskFix(t, 10*diskGiB)
 	var walks atomic.Int32
 	gate := make(chan struct{})
 	f.m.trimHook = func() { walks.Add(1); <-gate }
@@ -199,7 +198,7 @@ func TestDiskGuard_OneTrimAtATime(t *testing.T) {
 // The walk does not hold the admission lock (stateMu): a transition on the rows is not kept waiting by a slow trim.
 // Mutation gate: trim inside passOnce's lock → TryLock fails (red).
 func TestDiskGuard_TheWalkDoesNotHoldTheAdmissionLock(t *testing.T) {
-	f := newDiskFix(t, 10*gib)
+	f := newDiskFix(t, 10*diskGiB)
 	gate := make(chan struct{})
 	var inWalk atomic.Bool
 	f.m.trimHook = func() { inWalk.Store(true); <-gate }
@@ -217,7 +216,7 @@ func TestDiskGuard_TheWalkDoesNotHoldTheAdmissionLock(t *testing.T) {
 // Still under the hard floor after the trim: granted all the same, with a warning in the log and in the answer. Above the
 // floor (but under the watermark) there is no warning. Mutation gate: refuse or stay silent → red.
 func TestDiskGuard_UnderTheHardFloorGrantsWithAWarning(t *testing.T) {
-	f := newDiskFix(t, 2*gib)
+	f := newDiskFix(t, 2*diskGiB)
 	r := f.heavy(cidA)
 	if !r.Granted || r.State != resources.StateHeld || !strings.Contains(r.Warning, "disk") {
 		t.Fatalf("lease = %+v", r)
@@ -225,11 +224,11 @@ func TestDiskGuard_UnderTheHardFloorGrantsWithAWarning(t *testing.T) {
 	if f.logs.count("low on disk") == 0 {
 		t.Errorf("no warning in the log: %v", f.logs.lines)
 	}
-	g := newDiskFix(t, 5*gib)
+	g := newDiskFix(t, 5*diskGiB)
 	if r := g.heavy(cidA); r.Warning != "" {
 		t.Errorf("a warning with 5 GiB free: %q", r.Warning)
 	}
-	h := newDiskFix(t, 40*gib)
+	h := newDiskFix(t, 40*diskGiB)
 	if r := h.heavy(cidA); r.Warning != "" {
 		t.Errorf("a warning with 40 GiB free: %q", r.Warning)
 	}
@@ -237,8 +236,8 @@ func TestDiskGuard_UnderTheHardFloorGrantsWithAWarning(t *testing.T) {
 
 // A volume that frees up after the trim is judged on what is there after it.
 func TestDiskGuard_TheWarningIsJudgedAfterTheTrim(t *testing.T) {
-	f := newDiskFix(t, 2*gib)
-	f.m.trimHook = func() { f.free.Store(20 * gib) } // the trim frees space
+	f := newDiskFix(t, 2*diskGiB)
+	f.m.trimHook = func() { f.free.Store(20 * diskGiB) } // the trim frees space
 	if r := f.heavy(cidA); r.Warning != "" {
 		t.Fatalf("warned although the trim brought the volume above the floor: %q", r.Warning)
 	}
@@ -279,6 +278,17 @@ func TestTrimGoCache_TheHorizonIsTwoHours(t *testing.T) {
 	}
 }
 
+// The entry directories are exactly two lower-case hex digits (checked on the name alone: a case-insensitive volume cannot
+// hold both "ab" and "AB"). Mutation gate: accept any two characters, or upper case → red.
+func TestHexDir(t *testing.T) {
+	for name, want := range map[string]bool{"ab": true, "00": true, "ff": true, "9e": true, "AB": false, "aB": false, "a": false,
+		"abc": false, "zz": false, "g0": false, "": false, "a/": false, "..": false, ".a": false} {
+		if hexDir(name) != want {
+			t.Errorf("hexDir(%q) = %v, want %v", name, !want, want)
+		}
+	}
+}
+
 // Nothing outside the cache's two-hex-digit directories is ever deleted, and no symlink is followed. Mutation gate: follow
 // symlinks (os.Stat / RemoveAll) → the outside files go (red); accept any directory name → zz/ abc/ AB/ go (red).
 func TestTrimGoCache_NeverTouchesAnythingElse(t *testing.T) {
@@ -306,7 +316,7 @@ func TestTrimGoCache_NeverTouchesAnythingElse(t *testing.T) {
 	for _, keep := range []string{
 		filepath.Join(c.outside, "precious"), filepath.Join(c.outside, "dir", "inner"),
 		filepath.Join(c.dir, "trim.txt"), filepath.Join(c.dir, "README"),
-		filepath.Join(c.dir, "zz", "x-a"), filepath.Join(c.dir, "abc", "x-a"), filepath.Join(c.dir, "AB", "x-a"),
+		filepath.Join(c.dir, "zz", "x-a"), filepath.Join(c.dir, "abc", "x-a"),
 		filepath.Join(c.dir, "ee"), filepath.Join(c.dir, "ab", "subdir", "deep-a"),
 		filepath.Join(c.dir, "ab", "link-a"), filepath.Join(c.dir, "ab", "dirlink-a"), filepath.Join(c.dir, "ab", "dangling-a"),
 	} {
