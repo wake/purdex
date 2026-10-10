@@ -57,6 +57,25 @@ describe('loadSeat', () => {
     expect(st().convOfSession.h1.s1).toBe('c1')
   })
 
+  it('a failed fetch (network / 5xx) does not spend the generation: the next ask fetches again; success then 404 are not repeated', async () => {
+    st().setSupport('h1', V1)
+    fetchConversation.mockRejectedValueOnce(new Error('offline'))
+    expect(await st().loadSeat('h1', 's1')).toBe('failed')
+    expect(st().seatGen.h1?.s1).toBeUndefined()
+    expect(await st().loadSeat('h1', 's1')).toBe('ok')
+    expect(st().convOfSession.h1.s1).toBe('c1')
+    await st().loadSeat('h1', 's1')
+    expect(fetchConversation).toHaveBeenCalledTimes(2)
+  })
+
+  it('a definite 404 keeps the generation: no retry', async () => {
+    st().setSupport('h1', V1)
+    fetchConversation.mockResolvedValue({ kind: 'not_found' })
+    expect(await st().loadSeat('h1', 's1')).toBe('ok')
+    await st().loadSeat('h1', 's1')
+    expect(fetchConversation).toHaveBeenCalledTimes(1)
+  })
+
   it('a reconnect (fence, then a new support answer) fetches each seat once more', async () => {
     st().setSupport('h1', V1)
     await st().loadSeat('h1', 's1')
@@ -94,7 +113,7 @@ describe('loadSeat', () => {
   it('a failed fetch leaves the store alone and does not throw', async () => {
     st().setSupport('h1', V1)
     fetchConversation.mockRejectedValue(new Error('network'))
-    await expect(st().loadSeat('h1', 's1')).resolves.toBeUndefined()
+    await expect(st().loadSeat('h1', 's1')).resolves.toBe('failed')
     expect(st().byHost.h1).toBeUndefined()
   })
 })

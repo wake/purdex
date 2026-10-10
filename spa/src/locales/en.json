@@ -346,6 +346,8 @@
   "team.panel.ended": "Ended ({{count}})",
   "team.panel.ended_hint": "Ended - click to open its workbook",
   "team.workbook.title": "{{title}} - workbook",
+  "team.workbook.own_title": "This conversation's workbook",
+  "team.workbook.open": "Open the workbook",
   "team.workbook.status": "Status",
   "team.workbook.entries": "Recent entries",
   "team.workbook.no_status": "No status yet",

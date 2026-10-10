@@ -13,7 +13,9 @@ import { CollapseButton } from '../features/workspace/components/CollapseButton'
 import { ConfirmDialog } from './ConfirmDialog'
 import { LayoutClosingList, LayoutKeepPicker } from './LayoutKeepPicker'
 import { UnattendedButton } from './UnattendedButton'
-import { TeamNotebookButton, TeamTitleStrip } from './team/TeamTitleBar'
+import { OwnNotebookButton, OwnTitleStrip, TeamNotebookButton, TeamTitleStrip } from './team/TeamTitleBar'
+import { useOwnWorkbook } from './team/own-workbook'
+import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useTitleBarLayout } from './team/title-bar-layout'
 import { useTitleBarTeam } from './team/useTitleBarTeam'
 import { BUTTON, IDLE, PRESSED } from './title-bar-styles'
@@ -106,7 +108,11 @@ export function TitleBar({ title }: Props) {
   const t = useI18nStore((s) => s.t)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const team = useTitleBarTeam()
-  const stripShown = team?.mode === 'titlebar'
+  // A tab of no team whose own conversation has a workbook uses the shared value (WA-2b-1b).
+  const own = useOwnWorkbook()
+  const sharedInBar = useTeamUiStore((s) => s.sharedPanelMode === 'titlebar')
+  const ownStrip = team === null && own !== null && sharedInBar
+  const stripShown = team ? team.mode === 'titlebar' : ownStrip
   const { barRef, btnsRef, setStripW, layout } = useTitleBarLayout(stripShown)
   const current = useTabStore((s) => {
     const tab = s.activeTabId ? s.tabs[s.activeTabId] : undefined
@@ -186,9 +192,10 @@ export function TitleBar({ title }: Props) {
         <div className="flex-1" />
         {/* The active tab's team in the title bar state: its one-line content, at the right, right before the buttons. */}
         {team && stripShown && <TeamTitleStrip team={team} room={layout ? layout.room : null} onContentWidth={setStripW} />}
+        {ownStrip && own && <OwnTitleStrip target={own} room={layout ? layout.room : null} onContentWidth={setStripW} />}
         <div ref={btnsRef} data-testid="title-bar-right" className="shrink-0 flex items-center">
-        {/* Notebook (WA-2a′): moves the panel area between the title bar and the pane; only a team tab has one for now. */}
-        {team && <TeamNotebookButton team={team} />}
+        {/* Notebook (WA-2a′, WA-2b-1b): moves the panel area between the title bar and the pane; a team tab, or a tab whose own cc conversation has a workbook. */}
+        {team ? <TeamNotebookButton team={team} /> : own && <OwnNotebookButton />}
         {/* 無人值守模式 (U23): left of the layout buttons, in its own no-drag wrapper. */}
         <UnattendedButton />
         <div

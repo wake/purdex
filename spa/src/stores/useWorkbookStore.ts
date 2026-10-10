@@ -101,7 +101,8 @@ interface WorkbookState {
   fence: (hostId: string) => void
   /** The probe's answer for the current generation (it does not start a new one). */
   setSupport: (hostId: string, support: WorkbookSupport) => void
-  loadSeat: (hostId: string, sessionId: string) => Promise<void>
+  /** 'failed': the ask did not reach an answer (network / 5xx) and the seat is NOT marked loaded for this generation, so a later ask retries. */
+  loadSeat: (hostId: string, sessionId: string) => Promise<'ok' | 'failed'>
   openWorkbook: (hostId: string, sessionId: string) => Promise<void>
   /** The seats the team views show now: a seat that is gone stops holding its conversation (and counts as new if it returns). */
   syncSeats: (targets: ReadonlyArray<{ hostId: string; sessionId: string }>) => void
@@ -190,10 +191,10 @@ const uniq = (xs: string[]): string[] => [...new Set(xs)]
 
 export const useWorkbookStore = create<WorkbookState>()((set, get) => {
   /** One conversation fetch for `sessionId`, fenced to the host's epoch and generation. */
-  const inflight = new Map<string, Promise<void>>()
+  const inflight = new Map<string, Promise<boolean>>()
   /** One request per (host, session, page) and connection generation at a time: a repeat joins the one out, whether or not the
    *  session's conversation is known yet (a non-team session has no mapping before its first answer). */
-  function runFetch(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<void> {
+  function runFetch(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<boolean> {
     const key = JSON.stringify([hostId, get().epoch[hostId] ?? 0, get().gens[hostId] ?? 0, sessionId, q.limit, q.before ?? null])
     const out = inflight.get(key)
     if (out) return out
@@ -201,7 +202,8 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
     inflight.set(key, p)
     return p
   }
-  async function fetchOnce(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<void> {
+  /** true unless the request itself failed (network / 5xx); a stale or 404 answer is an answer. */
+  async function fetchOnce(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<boolean> {
     const epoch = get().epoch[hostId] ?? 0
     const gen = get().gens[hostId]
     const startedAt = ++clock // stamps the request: an event that lands after it is newer than the answer
@@ -213,15 +215,15 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       result = await fetchConversation(hostId, WORKBOOK_PROVIDER, sessionId, q)
     } catch {
       if (alive() && known) set((s) => withConv(s, hostId, known, (c) => ({ ...c, loading: false })))
-      return
+      return !alive() // a failure of a dead generation is nobody's to retry
     }
-    if (!alive()) return // another daemon, or another connection: the old answer is not this one's
+    if (!alive()) return true // another daemon, or another connection: the old answer is not this one's
     if (result.kind === 'not_found') {
       set((s) => ({
         missingSessions: { ...s.missingSessions, [hostId]: { ...s.missingSessions[hostId], [sessionId]: true } },
         ...(known ? withConv(s, hostId, known, (c) => ({ ...c, loading: false, missing: true })) : {}),
       }))
-      return
+      return true
     }
     const { page } = result
     let untrusted = false
@@ -253,6 +255,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
     set((s) => evicted(s, hostId))
     if (untrusted) scheduleResnap(hostId, page.convKey)
     else if (reconciled) { const r = resnaps.get(resnapKey(hostId, page.convKey)); if (r) { if (r.timer !== undefined) clearTimeout(r.timer); resnaps.delete(resnapKey(hostId, page.convKey)) } }
+    return true
   }
 
   /** conv → the pending re-ask (timer) and how many were made in a row. */
@@ -308,11 +311,20 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
 
     loadSeat: async (hostId, sessionId) => {
       const sup = get().support[hostId]
-      if (!sup?.v1) return // not a workbook host (or not known to be one yet)
+      if (!sup?.v1) return 'ok' // not a workbook host (or not known to be one yet)
       const gen = get().gens[hostId] ?? 0
-      if (get().seatGen[hostId]?.[sessionId] === gen) return // once per seat per connection generation
+      if (get().seatGen[hostId]?.[sessionId] === gen) return 'ok' // once per seat per connection generation
       set((s) => ({ seatGen: { ...s.seatGen, [hostId]: { ...s.seatGen[hostId], [sessionId]: gen } } }))
-      await runFetch(hostId, sessionId, { limit: SEAT_PAGE })
+      const ok = await runFetch(hostId, sessionId, { limit: SEAT_PAGE })
+      if (ok) return 'ok'
+      // The request never got an answer (network / 5xx): that is not this generation's answer, so let the next ask try again.
+      if ((get().gens[hostId] ?? 0) === gen && get().seatGen[hostId]?.[sessionId] === gen) {
+        set((s) => {
+          const { [sessionId]: _drop, ...rest } = s.seatGen[hostId] ?? {}
+          return { seatGen: { ...s.seatGen, [hostId]: rest } }
+        })
+      }
+      return 'failed'
     },
 
     openWorkbook: async (hostId, sessionId) => {

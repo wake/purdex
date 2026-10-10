@@ -71,13 +71,13 @@ const clampWidth = (w: number): number => Math.max(currentPanelMin(), Math.min(P
 
 interface TeamUiState extends Slices {
   panel: PanelArea
-  /** Tabs whose 「工作簿」 toggle is on (WA-2b writes it). */
-  workbookTabs: Record<string, true>
   setPanelWidth: (width: number) => void
   /** The four-state value of tabs that belong to no team (WA-2b-1 reads it); starts in the title bar. */
   sharedPanelMode: PanelMode
   sharedPanelLast: PaneMode
   setSharedPanelMode: (mode: PanelMode) => void
+  /** Title bar <-> the pane state last left, for the shared value (the title-bar button of a tab of no team). */
+  toggleSharedTitleBar: () => void
   /** An old store held `panel.expanded: true`: the team showing when the area first draws becomes `max` (TeamPanelArea). Not persisted. */
   legacyMax: boolean
   takeLegacyMax: (teamKey: string | null) => void
@@ -86,7 +86,6 @@ interface TeamUiState extends Slices {
   recordEndedSeats: (teamKey: string, seats: readonly EndedSeat[]) => void
   /** A listed seat is on the roster again: it is no longer "ended". */
   clearEndedSeat: (teamKey: string, hostId: string, sessionId: string) => void
-  setWorkbookTab: (tabId: string, on: boolean) => void
   /** Show the host icon next to each member bead (spec P7); default on. */
   teamBeadHost: boolean
   setTeamBeadHost: (v: boolean) => void
@@ -164,7 +163,7 @@ function healEnded(v: unknown): EndedSeat[] {
 }
 
 /** Persisted data is untrusted: keep only well-formed entries of each slice. */
-function heal(persisted: unknown): Slices & { panel: PanelArea; workbookTabs: Record<string, true>; sharedPanelMode: PanelMode; sharedPanelLast: PaneMode; legacyMax: boolean } {
+function heal(persisted: unknown): Slices & { panel: PanelArea; sharedPanelMode: PanelMode; sharedPanelLast: PaneMode; legacyMax: boolean } {
   const p = isRecord(persisted) ? persisted : {}
   const entries = (v: unknown) => (isRecord(v) ? Object.entries(v).filter(([k]) => !DANGEROUS.has(k)) : [])
   return {
@@ -181,7 +180,6 @@ function heal(persisted: unknown): Slices & { panel: PanelArea; workbookTabs: Re
       && keyHost(key) !== null && typeof v.sessionId === 'string' && v.sessionId !== '').map(([k, v]) => [k, { hostId: (v as DrillSeat).hostId, sessionId: (v as DrillSeat).sessionId }])),
     endedSeats: Object.fromEntries(entries(p.endedSeats).filter(([key]) => keyHost(key) !== null)
       .map(([key, v]) => [key, healEnded(v)] as const).filter(([, v]) => v.length > 0)),
-    workbookTabs: Object.fromEntries(entries(p.workbookTabs).filter(([, v]) => v === true)) as Record<string, true>,
     panel: healPanel(p.panel),
   }
 }
@@ -191,7 +189,6 @@ export const useTeamUiStore = create<TeamUiState>()(
     (set, get) => ({
       ...EMPTY,
       panel: defaultPanel(),
-      workbookTabs: {},
       setPanelWidth: (width) => set((s) => {
         if (!Number.isFinite(width)) return s
         const next = clampWidth(width)
@@ -204,6 +201,10 @@ export const useTeamUiStore = create<TeamUiState>()(
         const last = mode === 'titlebar' ? s.sharedPanelLast : mode
         return mode === s.sharedPanelMode && last === s.sharedPanelLast ? s : { sharedPanelMode: mode, sharedPanelLast: last }
       }),
+      toggleSharedTitleBar: () => {
+        const s = get()
+        s.setSharedPanelMode(s.sharedPanelMode === 'titlebar' ? s.sharedPanelLast : 'titlebar')
+      },
       legacyMax: false,
       takeLegacyMax: (teamKey) => {
         if (!get().legacyMax) return
@@ -227,10 +228,6 @@ export const useTeamUiStore = create<TeamUiState>()(
         if (!cur?.some((o) => sameSeat(o, { hostId, sessionId }))) return s
         const next = cur.filter((o) => !sameSeat(o, { hostId, sessionId }))
         return { endedSeats: next.length > 0 ? { ...s.endedSeats, [teamKey]: next } : without(s.endedSeats, (k) => k === teamKey) }
-      }),
-      setWorkbookTab: (tabId, on) => set((s) => {
-        if (on === (s.workbookTabs[tabId] === true)) return s
-        return { workbookTabs: on ? { ...s.workbookTabs, [tabId]: true } : without(s.workbookTabs, (k) => k === tabId) }
       }),
       teamBeadHost: true,
       setTeamBeadHost: (v) => set((s) => (s.teamBeadHost === v ? s : { teamBeadHost: v })),
@@ -301,7 +298,7 @@ export const useTeamUiStore = create<TeamUiState>()(
     {
       name: STORAGE_KEYS.TEAM_UI,
       storage: purdexStorage,
-      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, panelLast: s.panelLast, sharedPanelMode: s.sharedPanelMode, sharedPanelLast: s.sharedPanelLast, ghostWorkspace: s.ghostWorkspace, teamDrill: s.teamDrill, endedSeats: s.endedSeats, panel: s.panel, workbookTabs: s.workbookTabs, teamBeadHost: s.teamBeadHost }),
+      partialize: (s) => ({ memberOrder: s.memberOrder, collapsed: s.collapsed, panelMode: s.panelMode, panelLast: s.panelLast, sharedPanelMode: s.sharedPanelMode, sharedPanelLast: s.sharedPanelLast, ghostWorkspace: s.ghostWorkspace, teamDrill: s.teamDrill, endedSeats: s.endedSeats, panel: s.panel, teamBeadHost: s.teamBeadHost }),
       merge: (persisted, current) => ({
         ...current, ...heal(persisted),
         teamBeadHost: isRecord(persisted) && typeof persisted.teamBeadHost === 'boolean' ? persisted.teamBeadHost : true,

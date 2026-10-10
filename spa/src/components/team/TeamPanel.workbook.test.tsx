@@ -37,7 +37,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useWorkbookStore.getState().reset()
-  useTeamUiStore.setState({ panel: { width: 412 }, teamDrill: {}, endedSeats: {}, workbookTabs: {} })
+  useTeamUiStore.setState({ panel: { width: 412 }, teamDrill: {}, endedSeats: {} })
   clearModuleRegistry()
   fetchConversation.mockReset()
   fetchConversation.mockReturnValue(new Promise(() => {})) // an opened view asks once; the answer never lands
