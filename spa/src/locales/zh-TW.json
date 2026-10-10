@@ -378,7 +378,7 @@
   "team.workbook.entry_not_found": "找不到這筆紀錄",
   "team.workbook.refresh": "重整",
   "team.workbook.refreshing": "重整中…",
-  "team.workbook.refresh_tip": "用主模型讀完整段對話重整狀況與待辦。有成本：短 session 一次約 7.5 萬 token（cache read），冷快取的長對話可到約 64 萬 token。",
+  "team.workbook.refresh_tip": "用主模型讀完整段對話重整狀況與待辦。會用較多 token：依對話長短，一次約數萬到數十萬 token。",
   "team.workbook.refresh_unavailable": "這段對話目前沒有可重整的 session",
   "team.edit.title": "編輯 team",
   "team.edit.name": "名稱",

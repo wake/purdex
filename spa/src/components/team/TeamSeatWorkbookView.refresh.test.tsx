@@ -46,9 +46,14 @@ describe('重整', () => {
     patchConv({ refreshAvailable: true })
     expect(btn().disabled).toBe(false)
     expect(btn().title).toContain('主模型')
-    expect(btn().title).toContain('有成本')
-    expect(btn().title).toContain('7.5 萬')
-    expect(btn().title).toContain('64 萬')
+    expect(btn().title).toBe('用主模型讀完整段對話重整狀況與待辦。會用較多 token：依對話長短，一次約數萬到數十萬 token。')
+    expect(btn().title).not.toMatch(/\d/) // no hard-coded exact figures
+  })
+  it('en tooltip: says it costs, with no exact figures', async () => {
+    useI18nStore.getState().setLocale('en')
+    seed({ refreshAvailable: true }); mount(); await settle()
+    expect(btn().title).toContain('Costs real tokens')
+    expect(btn().title).not.toMatch(/\d/)
   })
   it('a click asks the store; the 202 entry makes it 重整中…, its ok event ends it', async () => {
     seed({ refreshAvailable: true }); mount(); await settle()

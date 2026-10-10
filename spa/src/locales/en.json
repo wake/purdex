@@ -378,7 +378,7 @@
   "team.workbook.entry_not_found": "That entry could not be found",
   "team.workbook.refresh": "Refresh",
   "team.workbook.refreshing": "Refreshing…",
-  "team.workbook.refresh_tip": "Re-reads the whole conversation with the main model to refresh the status and todos. It costs tokens: about 75k for a short session (cache read), up to about 640k for a long conversation with a cold cache.",
+  "team.workbook.refresh_tip": "Re-reads the whole conversation with the main model to refresh the status and todos. Costs real tokens: roughly tens of thousands to hundreds of thousands per run, depending on length.",
   "team.workbook.refresh_unavailable": "This conversation has no session that can be refreshed right now",
   "team.edit.title": "Edit team",
   "team.edit.name": "Name",
