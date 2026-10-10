@@ -3,14 +3,17 @@
 // Three jobs, one rule each:
 // - ASK: a page is asked for when the reader is within TOP_REACH of the top (scroll event), AND again whenever a page has just
 //   landed or failed and the reader is still there (`firstTurn` is the dependency: a reader who flung the box to scrollTop 0
-//   while the request was out gets no further scroll event), AND while the content is too short to scroll at all.
+//   while the request was out gets no further scroll event), AND while the content is too short to scroll at all. Not before the
+//   first placement (`placed`): a box still waiting for its remembered anchor sits at scrollTop 0 without being at the top.
 // - BACK OFF: a page that fails (paging ends and the first turn did not move) is not asked for again at once, from the scroll
 //   path or the automatic one: 1 s, 2 s, 4 s … up to 8 s. The automatic path gives up after AUTO_PAGE_TRIES until the reader's
 //   own scroll asks again.
-// - KEEP THE PLACE: the page lands above the reader. The first turn on screen and its offset from the box's top are read in the
-//   render that brings the page (the DOM is still the old one there) and put back right after the DOM change (`shiftBy`). At
-//   scrollTop 0 Chrome does not anchor by itself, so without this the whole page jumps past the reader.
-import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
+// - KEEP THE PLACE: whenever older turns land above the reader — whoever asked for them (another pane of the same session, a
+//   request that outlived an unmount) — the first turn on screen and its offset from the box's top are read in the render that
+//   brings them (the DOM is still the old one there; `useMemo` keyed by the first turn, from the box element held in state) and
+//   put back right after the DOM change (`shiftBy`). At scrollTop 0 Chrome does not anchor by itself and the box opts out of
+//   anchoring anyway. A new `generation` (a jump, a replacing snapshot) is another window, not older turns: nothing to keep.
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 
 /** Within this many pixels of the top the next older page is read. */
 export const TOP_REACH = 120
@@ -19,11 +22,16 @@ const RETRY_MS = 1000
 const RETRY_MAX_MS = 8000
 
 export interface OlderTurnsOptions {
-  box: RefObject<HTMLElement | null>
+  /** The scrolling box (held in state by the caller, so that it can be read while rendering); null before it attaches. */
+  box: HTMLElement | null
   hasMore: boolean
   paging: boolean
   /** Index of the first turn held now (null: none). */
   firstTurn: number | null
+  /** Changes when the turns held are another window (jump, replacing snapshot), not older turns added. */
+  generation: number
+  /** The first placement of the reader has happened (`useTranscriptScroll().placed`). */
+  placed: boolean
   load: () => void
   shiftBy: (delta: number) => void
 }
@@ -40,35 +48,28 @@ function firstVisible(box: HTMLElement): Snap | null {
   return null
 }
 
-export function useOlderTurns({ box, hasMore, paging, firstTurn, load, shiftBy }: OlderTurnsOptions): { onScroll: () => void } {
+export function useOlderTurns({ box, hasMore, paging, firstTurn, generation, placed, load, shiftBy }: OlderTurnsOptions): { onScroll: () => void } {
   const loadRef = useRef(load)
   const shiftRef = useRef(shiftBy)
   useLayoutEffect(() => { loadRef.current = load; shiftRef.current = shiftBy })
   const attempt = useRef<Attempt>({ first: null, tries: 0, fails: 0, notBefore: 0 })
-  const requested = useRef(false)
   const sawPaging = useRef(false)
   const askedAt = useRef<number | null>(null)
-  const committed = useRef<number | null>(firstTurn)
-  const snap = useRef<Snap | null>(null)
+  const committed = useRef<{ first: number | null; generation: number }>({ first: firstTurn, generation })
 
-  // Render phase, DOM still the old one: only when a page WE asked for is about to land above what is held.
-  if (requested.current && firstTurn !== null && committed.current !== null && firstTurn < committed.current && box.current) {
-    snap.current = firstVisible(box.current)
-  }
+  // While rendering, the DOM is still the one the reader sees: read their place when the first turn moves.
+  const snap = useMemo(() => (box && firstTurn !== null ? firstVisible(box) : null), [box, firstTurn])
+
   useLayoutEffect(() => {
-    const landed = firstTurn !== null && committed.current !== null && firstTurn < committed.current
-    if (landed) {
-      const el = box.current
-      const s = snap.current
-      const anchor = el && s ? el.querySelector<HTMLElement>(`[data-turn-index="${s.turn}"]`) : null
-      if (el && s && anchor) {
-        const delta = anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - s.offset
+    const prev = committed.current
+    if (box && snap && firstTurn !== null && prev.first !== null && firstTurn < prev.first && generation === prev.generation) {
+      const anchor = box.querySelector<HTMLElement>(`[data-turn-index="${snap.turn}"]`)
+      if (anchor) {
+        const delta = anchor.getBoundingClientRect().top - box.getBoundingClientRect().top - snap.offset
         if (delta !== 0) shiftRef.current(delta)
       }
-      requested.current = false
     }
-    snap.current = null
-    committed.current = firstTurn
+    committed.current = { first: firstTurn, generation }
   })
 
   const state = useCallback((): Attempt => {
@@ -77,13 +78,12 @@ export function useOlderTurns({ box, hasMore, paging, firstTurn, load, shiftBy }
   }, [firstTurn])
 
   const request = useCallback(() => {
-    requested.current = true
     sawPaging.current = false
     askedAt.current = firstTurn
     loadRef.current()
   }, [firstTurn])
 
-  // A page that ended without moving the first turn failed (or came empty): back off.
+  // A page that ended without moving the first turn failed (or came empty, or was aborted): back off.
   useEffect(() => {
     if (paging) { sawPaging.current = true; return }
     if (!sawPaging.current) return
@@ -92,19 +92,17 @@ export function useOlderTurns({ box, hasMore, paging, firstTurn, load, shiftBy }
     const a = state()
     a.fails += 1
     a.notBefore = Date.now() + Math.min(RETRY_MAX_MS, RETRY_MS * 2 ** (a.fails - 1))
-    requested.current = false
   }, [paging, firstTurn, state])
 
   // Automatic: the content too short to scroll, or the reader at the top when the last page landed / failed.
   useEffect(() => {
-    const el = box.current
-    if (!el || !hasMore || paging) return
-    if (el.scrollHeight > el.clientHeight + TOP_REACH && el.scrollTop >= TOP_REACH) return
+    if (!box || !hasMore || paging || !placed) return
+    if (box.scrollHeight > box.clientHeight + TOP_REACH && box.scrollTop >= TOP_REACH) return
     const a = state()
     if (a.tries >= AUTO_PAGE_TRIES) return
     const run = () => {
       // The live end may have grown the content, or the reader moved away, while the timer waited.
-      if (el.scrollHeight > el.clientHeight + TOP_REACH && el.scrollTop >= TOP_REACH) return
+      if (box.scrollHeight > box.clientHeight + TOP_REACH && box.scrollTop >= TOP_REACH) return
       a.tries += 1
       request()
     }
@@ -114,11 +112,10 @@ export function useOlderTurns({ box, hasMore, paging, firstTurn, load, shiftBy }
     const timer = setTimeout(run, wait)
     return () => clearTimeout(timer)
     // Keyed by the FIRST turn, not the turns: a live update elsewhere must not restart a pending retry.
-  }, [firstTurn, hasMore, paging, box, state, request])
+  }, [firstTurn, hasMore, paging, placed, box, state, request])
 
   const onScroll = useCallback(() => {
-    const el = box.current
-    if (!el || !hasMore || paging || el.scrollTop >= TOP_REACH) return
+    if (!box || !hasMore || paging || box.scrollTop >= TOP_REACH) return
     if (Date.now() < state().notBefore) return
     request()
   }, [box, hasMore, paging, state, request])

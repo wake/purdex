@@ -12,6 +12,7 @@ import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
 import type { Turn } from '../../lib/conversations/types'
 import { useConversationStore, type ConversationEntry } from '../../stores/useConversationStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { StatusOverlay } from './StatusOverlay'
 import { DeckItem } from './DeckItem'
 import { DeckRevealContext, EAGER_TURNS, useDeckReveal } from './deck-reveal'
 import { footerContext, type DeckFooterContext } from './footer-context'
@@ -76,7 +77,9 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   const scroll = useTranscriptScroll(undefined, false, { paneId: `${paneId}\0${sessionId}`, view: 'deck', detached: doc.detached, totalTurns: doc.totalTurns })
   const { attach, onScroll: onBoxScroll, follow } = scroll
   const boxRef = useRef<HTMLDivElement | null>(null)
-  const setBox = useCallback((node: HTMLDivElement | null) => { boxRef.current = node; attach(node) }, [attach])
+  // The box is also held in state: the older-turns hook reads it while rendering.
+  const [boxEl, setBoxEl] = useState<HTMLDivElement | null>(null)
+  const setBox = useCallback((node: HTMLDivElement | null) => { boxRef.current = node; setBoxEl(node); attach(node) }, [attach])
   const reveal = useDeckReveal(`${paneId}\0${sessionId}`, boxRef)
 
   // Placed from the pane's memory on the first run, then only a reader at the bottom is carried along as turns land. Not while
@@ -89,7 +92,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   // when one fails; the place kept across the page landing above.
   const firstTurn = doc.turns[0]?.index ?? null
   const load = useCallback(() => { void useConversationStore.getState().loadBefore(hostId, sessionId) }, [hostId, sessionId])
-  const older = useOlderTurns({ box: boxRef, hasMore: doc.hasMoreBefore, paging: entry.paging, firstTurn, load, shiftBy: scroll.shiftBy })
+  const older = useOlderTurns({ box: boxEl, hasMore: doc.hasMoreBefore, paging: entry.paging, firstTurn, generation: doc.generation, placed: scroll.placed, load, shiftBy: scroll.shiftBy })
 
   const onScroll = (e: UIEvent<HTMLDivElement>) => {
     onBoxScroll(e)
@@ -110,8 +113,10 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
       <div ref={setBox} onScroll={onScroll} data-testid="deck-scroll" style={{ overflowAnchor: 'none' }} className="flex-1 space-y-3 overflow-y-auto p-4">
         <FoldContext.Provider value={foldStore}>
           <DeckRevealContext.Provider value={reveal}>
-            {entry.paging && <div data-testid="deck-paging" className="text-xs text-text-muted">{t('deck.paging')}</div>}
-            {!empty && !doc.hasMoreBefore && !entry.paging && <div data-testid="deck-history-start" className="text-xs text-text-muted">{t('deck.history_start')}</div>}
+            <StatusOverlay>
+              {entry.paging && <div data-testid="deck-paging">{t('deck.paging')}</div>}
+              {!empty && !doc.hasMoreBefore && !entry.paging && <div data-testid="deck-history-start">{t('deck.history_start')}</div>}
+            </StatusOverlay>
             {empty ? (
               <div data-testid="deck-empty" className="flex h-full items-center justify-center text-sm text-text-muted">
                 {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}

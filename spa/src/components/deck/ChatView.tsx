@@ -2,7 +2,7 @@
 // detail. Bubbles, ONE row per chain of work (click → the right panel shows that chain), a file chip, peer messages as one
 // line, a header whose second line is what the agent is doing now. Everything arrives as props; nothing here finds the deck,
 // reads a store or switches to the terminal by itself. Open panel and scroll live in modules keyed by the pane (tab-hosted).
-import { useCallback, useEffect, useMemo, useRef, type ReactNode, type UIEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode, type UIEvent } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { buildChat, type ChatEntry } from '../../lib/conversations/chat-model'
 import { usePaneFoldStore } from '../../lib/conversations/fold-memory'
@@ -18,6 +18,7 @@ import { ChatHeader } from './ChatHeader'
 import { ChatWorkRow, FileChip } from './ChatWorkRow'
 import { SessionPanelSplit } from './SessionPanelSplit'
 import { SystemRow } from './ThinkingSystem'
+import { StatusOverlay } from './StatusOverlay'
 import { UnreadableState, type UnreadableReason } from './UnreadableState'
 
 export interface ChatViewProps {
@@ -40,6 +41,8 @@ export interface ChatViewProps {
   paging?: boolean
   /** Read the next older page (the caller owns the store). */
   onLoadOlder?: () => void
+  /** Changes when `turns` is another window of the conversation (a jump, a replacing snapshot), not older turns added. */
+  generation?: number
   /** The input below the stream (SessionInput), supplied by the caller. */
   input?: ReactNode
   /** False for a pane that is not in front (REQUIRED: Esc closes only the focused pane's panel). */
@@ -78,7 +81,7 @@ export function ChatView(props: ChatViewProps) {
   return <ChatViewBody key={binding} binding={binding} {...props} />
 }
 
-function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active, hasMoreBefore, paging, onLoadOlder }: ChatViewProps & { binding: string }) {
+function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active, hasMoreBefore, paging, onLoadOlder, generation }: ChatViewProps & { binding: string }) {
   const t = useI18nStore((s) => s.t)
   const fold = usePaneFoldStore(`${paneKey}\0${binding}`)
   const entries = useMemo(() => buildChat(turns), [turns])
@@ -91,11 +94,11 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
   const scroll = useTranscriptScroll(undefined, false, { paneId: chatScrollKey(paneKey, binding), view: 'chat' })
   const { attach, onScroll: onBoxScroll, follow, shiftBy } = scroll
   useEffect(() => { follow() }, [follow, entries])
-  const boxRef = useRef<HTMLDivElement | null>(null)
-  const setBox = useCallback((node: HTMLDivElement | null) => { boxRef.current = node; attach(node) }, [attach])
+  const [boxEl, setBoxEl] = useState<HTMLDivElement | null>(null)
+  const setBox = useCallback((node: HTMLDivElement | null) => { setBoxEl(node); attach(node) }, [attach])
   // Older pages as the reader goes up (the deck's rule, useOlderTurns); the place is kept when one lands above.
   const load = useCallback(() => onLoadOlder?.(), [onLoadOlder])
-  const older = useOlderTurns({ box: boxRef, hasMore: !!hasMoreBefore && !!onLoadOlder, paging: !!paging, firstTurn: turns[0]?.index ?? null, load, shiftBy })
+  const older = useOlderTurns({ box: boxEl, hasMore: !!hasMoreBefore && !!onLoadOlder, paging: !!paging, firstTurn: turns[0]?.index ?? null, generation: generation ?? 0, placed: scroll.placed, load, shiftBy })
   const onScroll = (e: UIEvent<HTMLDivElement>) => { onBoxScroll(e); older.onScroll() }
 
   return (
@@ -112,8 +115,10 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
           <SessionPanelSplit paneKey={paneKey} binding={binding} turns={turns} active={active}>
             <ChatHeader title={title} status={status} latest={latest} />
             <div ref={setBox} onScroll={onScroll} data-testid="chat-scroll" aria-label={t('chat.transcript')} style={{ overflowAnchor: 'none' }} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-              {paging && <div data-testid="chat-paging" className="text-xs text-text-muted">{t('deck.paging')}</div>}
-              {hasMoreBefore === false && !paging && <div data-testid="chat-history-start" className="text-xs text-text-muted">{t('deck.history_start')}</div>}
+              <StatusOverlay>
+                {paging && <div data-testid="chat-paging">{t('deck.paging')}</div>}
+                {hasMoreBefore === false && !paging && <div data-testid="chat-history-start">{t('deck.history_start')}</div>}
+              </StatusOverlay>
               {groupByTurn(entries).map((g) => (
                 <div key={g.turnIndex} data-turn-index={g.turnIndex} className={`${SCROLL_ANCHOR_CLASS} space-y-3`}>
                   {g.entries.map((e) => <Entry key={e.key} entry={e} paneKey={paneKey} binding={binding} />)}

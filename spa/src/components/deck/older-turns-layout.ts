@@ -6,11 +6,15 @@ export const layout = { turnH: 300, client: 600 }
 const tops = new WeakMap<HTMLElement, number>()
 const isBox = (el: HTMLElement) => el.dataset.testid === 'deck-scroll' || el.dataset.testid === 'chat-scroll'
 const turnsOf = (box: HTMLElement) => Array.from(box.querySelectorAll<HTMLElement>('[data-turn-index]'))
-const maxTop = (box: HTMLElement) => Math.max(0, turnsOf(box).length * layout.turnH - layout.client)
+// The status lines (paging / start of the conversation) are 28 px tall when they take part in the flow; a `sticky` or `absolute`
+// one (an overlay) takes none, as in the browser.
+const flowNotes = (box: HTMLElement) => Array.from(box.querySelectorAll<HTMLElement>('[data-testid$="paging"],[data-testid$="history-start"]')).filter((n) => !n.closest('.sticky,.absolute')).length * 28
+const contentH = (box: HTMLElement) => turnsOf(box).length * layout.turnH + flowNotes(box)
+const maxTop = (box: HTMLElement) => Math.max(0, contentH(box) - layout.client)
 
 export function installFakeLayout(): void {
   const proto = HTMLElement.prototype
-  vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) { return isBox(this) ? turnsOf(this).length * layout.turnH : 0 })
+  vi.spyOn(proto, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) { return isBox(this) ? contentH(this) : 0 })
   vi.spyOn(proto, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) { return isBox(this) ? layout.client : 0 })
   Object.defineProperty(proto, 'scrollTop', {
     configurable: true,
@@ -22,7 +26,7 @@ export function installFakeLayout(): void {
     const r = (top: number, h: number) => ({ top, bottom: top + h, left: 0, right: 100, width: 100, height: h, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
     if (isBox(this)) return r(0, layout.client)
     const box = this.closest<HTMLElement>('[data-testid="deck-scroll"],[data-testid="chat-scroll"]')
-    if (box && this.dataset.turnIndex !== undefined) return r(turnsOf(box).indexOf(this) * layout.turnH - box.scrollTop, layout.turnH)
+    if (box && this.dataset.turnIndex !== undefined) return r(flowNotes(box) + turnsOf(box).indexOf(this) * layout.turnH - box.scrollTop, layout.turnH)
     return r(0, 0)
   })
 }

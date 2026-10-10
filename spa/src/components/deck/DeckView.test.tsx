@@ -23,6 +23,9 @@ const entry = (turns: Turn[], over: Partial<ConversationEntry> = {}, doc: object
 const props = { paneId: 'p-deck', hostId: 'h', sessionId: 's', onSwitchToTerminal: () => {} }
 const loadBefore = vi.fn(async () => {})
 
+// jsdom has no scrollTo; a browser does, and the first placement (which the automatic paging waits for) goes through it.
+HTMLElement.prototype.scrollTo = function () {} as never
+
 beforeEach(() => {
   cleanup()
   forgetFolds('p-deck\0s')

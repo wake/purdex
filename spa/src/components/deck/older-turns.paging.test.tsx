@@ -2,7 +2,8 @@
 // top (even when they flung the box there while a page was out), the place on screen does not jump when it lands, the start of
 // the conversation is said, and a failing page is not asked for in a loop. Fake layout (older-turns-layout): jsdom has none.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react'
+import { useOlderTurns } from '../../hooks/useOlderTurns'
 import { emptyDoc } from '../../lib/conversations/model'
 import { forgetFolds } from '../../lib/conversations/fold-memory'
 import { forgetScrollMemosWithPrefix } from '../../lib/nex/transcript-scroll-memory'
@@ -16,19 +17,19 @@ import { installFakeLayout, uninstallFakeLayout, layout, turnTop } from './older
 const LAST = 29
 const user = (n: number): ConversationItem => ({ type: 'user', id: `u${n}`, at: 1, index: 0, text: `said ${n}`, source: 'user' })
 const turn = (n: number): Turn => ({ id: `t${n}`, index: n, started_at: n, outcome: 'done', items: [user(n)] })
-const entryFrom = (first: number, paging = false): ConversationEntry => ({
-  doc: { ...emptyDoc(), turns: Array.from({ length: LAST - first + 1 }, (_, i) => turn(first + i)), hasMoreBefore: first > 0 },
+const entryFrom = (first: number, paging = false, generation = 0): ConversationEntry => ({
+  doc: { ...emptyDoc(), turns: Array.from({ length: LAST - first + 1 }, (_, i) => turn(first + i)), hasMoreBefore: first > 0, generation },
   status: 'live', reason: '', paging, subagents: {},
 })
 
 const load = vi.fn()
-const deck = (e: ConversationEntry) => <DeckView paneId="p-old" hostId="h" sessionId="s" entry={e} onSwitchToTerminal={() => {}} />
-const chat = (e: ConversationEntry) => (
-  <ChatPane paneId="p-old" conversation={{ state: 'ready', hostId: 'h', sessionId: 's', entry: e } as never} title="t" isActive isFocusTarget={false} onSwitchToTerminal={() => {}} />
+const deck = (e: ConversationEntry, pane = 'p-old') => <DeckView paneId={pane} hostId="h" sessionId="s" entry={e} onSwitchToTerminal={() => {}} />
+const chat = (e: ConversationEntry, pane = 'p-old') => (
+  <ChatPane paneId={pane} conversation={{ state: 'ready', hostId: 'h', sessionId: 's', entry: e } as never} title="t" isActive isFocusTarget={false} onSwitchToTerminal={() => {}} />
 )
 
 beforeEach(() => {
-  cleanup(); clearAllPanels(); forgetFolds('p-old\0s'); forgetScrollMemosWithPrefix('p-old')
+  cleanup(); clearAllPanels(); forgetFolds('p-old\0s'); forgetScrollMemosWithPrefix('p-old'); forgetScrollMemosWithPrefix('p-b'); forgetFolds('p-b\0s')
   installFakeLayout()
   layout.turnH = 300; layout.client = 600
   load.mockReset()
@@ -131,5 +132,64 @@ describe.each([
     const bottom = box().scrollTop
     act(() => show(entryFrom(8)))
     expect(box().scrollTop).toBe(bottom + 4 * 300) // still at the end of the longer box
+  })
+
+  it('keeps the place of a pane that did not ask: another pane of the same session paged', () => {
+    const two = (e: ConversationEntry) => <>{view(e, 'p-old')}{view(e, 'p-b')}</>
+    const r = render(two(entryFrom(12)))
+    const [a, b] = screen.getAllByTestId(boxId)
+    b.scrollTop = 1000; fireEvent.scroll(b) // this reader is mid-history: turn 15 at -100
+    expect(turnTop(b, 15)).toBe(-100)
+    a.scrollTop = 0; fireEvent.scroll(a)
+    expect(load).toHaveBeenCalledTimes(1) // the other pane asked
+    act(() => r.rerender(two(entryFrom(8))))
+    expect(turnTop(b, 15)).toBe(-100)
+  })
+
+  it('keeps the place when the page lands after the view was unmounted and mounted again (a tab switch)', () => {
+    const first = render(view(entryFrom(12)))
+    const box = () => screen.getByTestId(boxId)
+    box().scrollTop = 1000; fireEvent.scroll(box())
+    first.unmount()
+    const again = render(view(entryFrom(12)))
+    expect(turnTop(box(), 15)).toBe(-100)
+    act(() => again.rerender(view(entryFrom(8))))
+    expect(turnTop(box(), 15)).toBe(-100)
+  })
+
+  it('a jump (another window of the conversation) is not older turns: nothing is put back', () => {
+    const { box, show } = mount(12)
+    box().scrollTop = 1000; fireEvent.scroll(box())
+    act(() => show(entryFrom(2, false, 1)))
+    expect(box().scrollTop).toBe(1000) // not shifted by the 10 turns that came in above
+  })
+
+  it('a status line coming and going above the reader does not move the turns (it takes no room in the flow)', () => {
+    const { box, show } = mount(12)
+    box().scrollTop = 1000; fireEvent.scroll(box())
+    expect(turnTop(box(), 15)).toBe(-100)
+    act(() => show(entryFrom(12, true)))
+    expect(screen.getByTestId(boxId.replace('scroll', 'paging'))).toBeInTheDocument()
+    expect(turnTop(box(), 15)).toBe(-100)
+    act(() => show(entryFrom(12, false)))
+    expect(turnTop(box(), 15)).toBe(-100)
+  })
+})
+
+describe('useOlderTurns before the first placement', () => {
+  const short = () => {
+    const el = document.createElement('div')
+    Object.defineProperty(el, 'scrollHeight', { value: 100 })
+    Object.defineProperty(el, 'clientHeight', { value: 600 })
+    return el
+  }
+  it('does not ask on its own while the reader has not been placed, and does once they are', () => {
+    const el = short()
+    const ask = vi.fn()
+    const opts = { box: el, hasMore: true, paging: false, firstTurn: 5, generation: 0, load: ask, shiftBy: () => {} }
+    const { rerender } = renderHook((p: { placed: boolean }) => useOlderTurns({ ...opts, ...p }), { initialProps: { placed: false } })
+    expect(ask).not.toHaveBeenCalled()
+    rerender({ placed: true })
+    expect(ask).toHaveBeenCalledTimes(1)
   })
 })
