@@ -8,6 +8,8 @@ import { draftKey, readDraft, writeDraft, clearAllDrafts } from './draft-memory'
 import { deckPanes, isFolded, noteDeckPane, setOpen } from './fold-memory'
 import { chatScrollKey, clearAllPanels, conversationBinding, openPanel, readPanel } from './panel-memory'
 import { commitTabWorld } from '../profile/master-world'
+import { useHistoryStore } from '../../stores/useHistoryStore'
+import { useWorkspaceStore } from '../../features/workspace/store'
 import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import { installPaneRelease, releasePane, retireStaleSessions } from './pane-release'
 import { clearAllSendQueues, hasSendQueue, retiringQueueCount, sendQueueCount, sendQueueFor } from './send-queue'
@@ -64,10 +66,12 @@ beforeEach(() => {
   vi.useFakeTimers()
   clearAllSendQueues(); clearAllDrafts(); clearAllPanels()
   useTabStore.setState({ tabs: { [tabA.id]: tabA, [tabB.id]: tabB }, tabOrder: [tabA.id, tabB.id], activeTabId: tabA.id, visitHistory: [] })
+  useHistoryStore.setState({ closedTabs: [] })
+  vi.spyOn(useHistoryStore.persist, 'hasHydrated').mockReturnValue(true) // the test storage hydrates asynchronously
   useLocalProfilesStore.setState({ activeProfileId: 'master', parkedMaster: null, slaves: {}, slaveOrder: [] })
   off = installPaneRelease()
 })
-afterEach(() => { off(); vi.useRealTimers(); clearAllSendQueues(); clearAllDrafts(); clearAllPanels() })
+afterEach(() => { off(); vi.restoreAllMocks(); vi.useRealTimers(); clearAllSendQueues(); clearAllDrafts(); clearAllPanels() })
 
 describe('releasePane', () => {
   it('frees every memory of the pane and leaves another pane\'s alone', () => {
@@ -271,6 +275,72 @@ describe('a profile switch is not a deletion (the old world is parked, and may c
     fill(A, 's1')
     vi.spyOn(useLocalProfilesStore.persist, 'hasHydrated').mockReturnValue(false)
     useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+  })
+})
+
+describe('a closed tab can be reopened with the same panes, so its state is kept while the record is', () => {
+  const close = (tab: Tab) => useWorkspaceStore.getState().closeTabInWorkspace(tab.id)
+
+  it('close (the real action) then reopen: draft, queue, folds, scroll and panel are all still there and live', async () => {
+    fill(A, 's1')
+    close(tabA)
+    expect(useTabStore.getState().tabs[tabA.id]).toBeUndefined()
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+    const reopened = useHistoryStore.getState().reopenLast()!
+    expect(paneOf(reopened)).toBe(A)
+    useTabStore.getState().addTab(reopened)
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+    expect(readDraft(draftKey(A, H, 's1'))).toBe('typing')
+  })
+
+  it('once reopened and then closed WITHOUT a new record (the old record is spent), the pane is released', async () => {
+    fill(A, 's1')
+    close(tabA)
+    useTabStore.getState().addTab(useHistoryStore.getState().reopenLast()!)
+    await settle()
+    useTabStore.setState({ tabs: { [tabB.id]: tabB }, tabOrder: [tabB.id], activeTabId: tabB.id })
+    await settle()
+    expect(has(A, 's1')).toEqual(NONE)
+  })
+
+  it('a record that was reopened but whose tab is not live any more does not keep the pane', async () => {
+    fill(A, 's1')
+    close(tabA)
+    useHistoryStore.getState().reopenLast() // marked reopened, the caller dropped the tab
+    await settle()
+    expect(has(A, 's1')).toEqual(NONE)
+  })
+
+  it('clearing the closed tabs releases what only they were keeping', async () => {
+    fill(A, 's1'); fill(B, 's1')
+    close(tabA)
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+    useHistoryStore.getState().clearClosedTabs()
+    await settle()
+    expect(has(A, 's1')).toEqual(NONE)
+    expect(has(B, 's1')).toEqual(ALL)
+  })
+
+  it('a record pushed out by the cap releases its panes (no permanent leak)', async () => {
+    fill(A, 's1')
+    close(tabA)
+    await settle()
+    expect(has(A, 's1')).toEqual(ALL)
+    for (let i = 0; i < 100; i++) useHistoryStore.getState().recordClose(mkTab('x' + i, 'xx' + String(i).padStart(4, '0')))
+    await settle()
+    expect(has(A, 's1')).toEqual(NONE)
+  })
+
+  it('a closed tab\'s pane that is also parked in a world is kept by the world, not only the record', async () => {
+    fill(A, 's1')
+    close(tabA)
+    useLocalProfilesStore.setState({ activeProfileId: 'slave-1', parkedMaster: { tabs: { [tabA.id]: tabA }, workspaces: [], activeWorkspaceId: null, activeTabId: null } })
+    useHistoryStore.getState().clearClosedTabs()
     await settle()
     expect(has(A, 's1')).toEqual(ALL)
   })

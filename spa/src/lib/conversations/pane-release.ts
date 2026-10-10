@@ -12,12 +12,15 @@
 //   workbook view (workbook/view-memory)   not a session pane's: its own LRU, untouched
 //
 // "Gone for good" is: the pane is in NO world any more — not on screen and not parked in the master's or a slave's world (a
-// profile switch swaps the live tabs and parks the old ones; a failed switch is rolled back; neither kills a pane) — because its
-// tab was closed, the pane was closed, a world was replaced or thrown away; or
+// profile switch swaps the live tabs and parks the old ones; a failed switch is rolled back; neither kills a pane) and not in a
+// closed tab that can still be reopened (`useHistoryStore.closedTabs`, not yet reopened: reopening hands back the same pane ids,
+// so while the record is kept the pane's state is kept and works as before) — because its tab was closed and the record was
+// reopened, evicted (cap) or cleared, the pane was closed, a world was replaced or thrown away; or
 // the pane now shows another conversation and the old one will not be shown again (/clear, relay, rebuild). A tab SWITCH is
 // neither: the pane unmounts and comes back, and the undo window, the queued messages and the draft must be there.
 import { scanPaneTree } from '../pane-tree'
 import { forgetScrollMemo, forgetScrollMemosWithPrefix } from '../nex/transcript-scroll-memory'
+import { useHistoryStore } from '../../stores/useHistoryStore'
 import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { forgetDraftsWhere, draftKey } from './draft-memory'
@@ -70,6 +73,8 @@ function livePaneIds(): Set<string> {
   const p = useLocalProfilesStore.getState()
   if (p.parkedMaster) addPaneIds(ids, p.parkedMaster.tabs)
   for (const slave of Object.values(p.slaves)) if (slave.world) addPaneIds(ids, slave.world.tabs)
+  // a closed tab that has not been reopened keeps its panes: `reopenLast` hands the same tab (same pane ids) back
+  for (const r of useHistoryStore.getState().closedTabs) if (r.reopenedAt === undefined) scanPaneTree(r.tab.layout, (pane) => ids.add(pane.id))
   return ids
 }
 
@@ -88,7 +93,7 @@ export function installPaneRelease(): () => void {
   let scheduled = false
   const settled = () => {
     if (Object.keys(useTabStore.getState().tabs).length === 0 && !useTabStore.persist.hasHydrated()) return false
-    return useLocalProfilesStore.persist.hasHydrated()
+    return useLocalProfilesStore.persist.hasHydrated() && useHistoryStore.persist.hasHydrated()
   }
   const check = () => {
     scheduled = false
@@ -108,12 +113,16 @@ export function installPaneRelease(): () => void {
   const offProfiles = useLocalProfilesStore.subscribe((next, prev) => {
     if (next.parkedMaster !== prev.parkedMaster || next.slaves !== prev.slaves) schedule()
   })
+  const offHistory = useHistoryStore.subscribe((next, prev) => { if (next.closedTabs !== prev.closedTabs) schedule() })
   // hydration may be what makes a pending check meaningful
   const offHydration = useLocalProfilesStore.persist.onFinishHydration(() => schedule())
+  const offHistoryHydration = useHistoryStore.persist.onFinishHydration(() => schedule())
   const stop = () => {
     offTabs()
     offProfiles()
+    offHistory()
     offHydration()
+    offHistoryHydration()
     if (uninstall === stop) uninstall = null
   }
   uninstall = stop
