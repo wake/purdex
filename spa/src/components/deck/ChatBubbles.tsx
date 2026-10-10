@@ -1,7 +1,10 @@
 // spa/src/components/deck/ChatBubbles.tsx — the chat's bubbles (U3 spec §5): the user on the right in an accent bubble, the
 // agent on the left, a peer message as ONE line (iOS 0.6.44) with 「未驗證」 when the daemon could not verify the sender.
 // A user item that is not a plain message (a bash input, a schedule wake-up…) is the deck's block, as it reads best there.
+import { useMemo, type CSSProperties } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
+import { getWorkerTheme, workerThemeStyle } from '../../lib/worker-theme/registry'
 import { formatClock } from '../../lib/conversations/deck-format'
 import type { AgentTextItem, UserItem } from '../../lib/conversations/types'
 import RoomProse from '../room/RoomProse'
@@ -29,10 +32,16 @@ export function UserBubble({ item }: { item: UserItem }) {
 
 export function AgentBubble({ item }: { item: AgentTextItem }) {
   const t = useI18nStore((s) => s.t)
+  // RoomProse reads the pane's --wt-* vars (list indent, code face…), which only the execution pane root sets (#2461): the chat
+  // bubble supplies the same theme itself, and `.chat-md` (index.css) fixes inline code. The deck and room are untouched.
+  const themeId = useWorkerSettingsStore((s) => s.theme)
+  const themeVars = useMemo(() => workerThemeStyle(getWorkerTheme(themeId)), [themeId])
   return (
     <div data-testid="chat-agent" className="flex justify-start">
       <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-surface-secondary px-3 py-2 text-sm text-text-primary">
-        <RoomProse content={item.markdown} streaming={item.streaming} />
+        <div data-testid="chat-agent-md" className="chat-md" style={themeVars as CSSProperties}>
+          <RoomProse content={item.markdown} streaming={item.streaming} />
+        </div>
         {item.truncated && <div className="text-xs text-text-muted">{t('deck.output.cut')}</div>}
       </div>
     </div>
