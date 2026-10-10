@@ -1,7 +1,8 @@
 // spa/src/components/deck/DeckPane.tsx — what a session pane shows in its deck view, given the conversation the pane holds
 // (`useConversationOfPane`, mounted by SessionPaneContent for every view): the unreadable state (D11), the loading
 // moment, or the deck. Takes focus when the pane switches to it, as the placeholder did.
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+import { focusSessionInput } from './focus-input'
 import { useActivationFocus } from '../../hooks/useActivationFocus'
 import type { PaneConversation } from '../../hooks/useConversationOfPane'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -23,7 +24,19 @@ export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwit
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
   // Switching to the deck focuses its input when it has one (plan D2), else the frame (loading, unreadable).
-  useActivationFocus(isActive, isFocusTarget, () => (ref.current?.querySelector('textarea') ?? ref.current)?.focus(), { raf: true })
+  // When the input is not there yet (the conversation is still resolving) the frame takes the focus and the input is taken when it shows up.
+  const wantsInput = useRef(false)
+  useActivationFocus(isActive, isFocusTarget, () => {
+    const r = focusSessionInput(ref.current)
+    if (r === 'focused') { wantsInput.current = false; return }
+    if (r === 'no_input') { ref.current?.focus(); wantsInput.current = true; return }
+    if (r === 'asking') ref.current?.focus() // the dock card is the thing to answer
+  }, { raf: true })
+  useEffect(() => {
+    if (!wantsInput.current) return
+    const r = focusSessionInput(ref.current, { frameOnly: true })
+    if (r !== 'no_input') wantsInput.current = false // taken, or the reader went elsewhere meanwhile: no more retries
+  })
 
   // Stable, so a live update re-draws only the turn that changed (DeckView memoizes its turns).
   const binding = conversation.state === 'ready' ? conversationBinding(conversation.hostId, conversation.sessionId) : ''

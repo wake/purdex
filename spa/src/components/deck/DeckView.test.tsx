@@ -266,7 +266,7 @@ describe('DeckPane', () => {
   })
 
   it('takes focus on the input when the pane becomes the focus target, else the frame', () => {
-    const footer = () => <textarea data-testid="deck-input" />
+    const footer = () => <div data-testid="session-input"><textarea data-testid="deck-input" /></div>
     const conv = { state: 'ready' as const, hostId: 'h', sessionId: 's', entry: entry([turn(0, [userItem('a', 0)])]) }
     vi.useFakeTimers()
     render(<DeckPane {...base} isFocusTarget conversation={conv} footer={footer} />)

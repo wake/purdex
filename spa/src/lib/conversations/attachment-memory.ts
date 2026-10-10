@@ -62,6 +62,13 @@ export function removeAttachment(key: string, id: string): void {
   else chips.set(key, rest)
 }
 
+/** Takes every chip of `key` out (hidden ones too) WITHOUT revoking their previews: the caller owns the URLs now (see draft-clear). */
+export function takeAttachments(key: string): readonly Attachment[] {
+  const list = readAttachments(key)
+  chips.delete(key)
+  return list
+}
+
 /** Uploads in flight, by key: a release cancels them, so one that lands after it cannot rebuild what was freed. */
 const uploads = new Map<string, Set<AbortController>>()
 

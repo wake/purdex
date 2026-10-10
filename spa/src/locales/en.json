@@ -2360,6 +2360,7 @@
   "deck.read.range": "lines {{a}}–{{b}}",
   "deck.status.running": "Running",
   "deck.live.running": "Running…",
+  "deck.draft.cleared": "Draft cleared · ⌘Z to undo",
   "deck.step.task_toggle": "Show or hide this agent's steps",
   "deck.live.subagents": "{{n}} subagent(s)",
   "deck.done": "Done",
