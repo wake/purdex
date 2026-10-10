@@ -63,6 +63,16 @@ const (
 	// SocketWriteTimeout bounds one frame write into a Claude Code inbox
 	// socket, including the wait for the peer's EOF.
 	SocketWriteTimeout = 5 * time.Second
+
+	// The budget chain of one remote send (#1009). Each layer's timeout is derived from what runs below it, so changing
+	// one cannot silently invert the chain; budget_test.go asserts it. (Stubs for the red commit: the real derivation follows.)
+	InventoryBudget    = 2 * time.Second // one local inventory build (peers Module.budget)
+	HelperReadyTimeout = 3 * time.Second // waiting for a sender's helper to be ready
+	RemoteFetchTimeout = 3 * time.Second // fetching a peer's inventory
+	TimeoutMargin      = 2 * time.Second // what each layer waits beyond its downstream's worst case
+	ReceiverWorstCase  = InventoryBudget + HelperReadyTimeout + SocketWriteTimeout
+	SenderWorstCase    = InventoryBudget + RemoteFetchTimeout + InterDaemonTimeout
+	SendRequestTimeout = 15 * time.Second // `pdx msg send`'s client
 )
 
 // Validation sentinels: Validate (via ValidateText / ValidateMode) wraps

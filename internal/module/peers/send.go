@@ -634,3 +634,10 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		OneWay:        resp.OneWay,
 	})
 }
+
+// DeliveryUncertainError is a /deliver call that failed after the whole request had been written: the receiver may have
+// delivered. (Stub for the red commit.)
+type DeliveryUncertainError struct{ Err error }
+
+func (e *DeliveryUncertainError) Error() string { return e.Err.Error() }
+func (e *DeliveryUncertainError) Unwrap() error { return e.Err }
