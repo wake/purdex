@@ -10,14 +10,20 @@ import type { DeckFooterContext } from './footer-context'
 import { slotModel } from './slot-state'
 import { StatusRow } from './StatusRow'
 
-/** Re-renders the caller every `ms`. */
+/** Re-renders the caller every `ms`. When `ms` changes (idle -> running swaps 30 s for 1 s) `now` is taken afresh at once, so a stale tick cannot make a clock start up to 30 s short. */
 function useNow(ms: number): number {
-  const [now, setNow] = useState(() => Date.now())
+  const [tick, setTick] = useState(() => ({ ms, now: Date.now() }))
+  let shown = tick
+  if (tick.ms !== ms) {
+    // eslint-disable-next-line react-hooks/purity -- adjusting state while rendering: the new interval starts from a fresh reading
+    shown = { ms, now: Date.now() }
+    setTick(shown)
+  }
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), ms)
+    const id = setInterval(() => setTick({ ms, now: Date.now() }), ms)
     return () => clearInterval(id)
   }, [ms])
-  return now
+  return shown.now
 }
 
 interface Props {

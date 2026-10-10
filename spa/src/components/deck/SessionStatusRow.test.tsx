@@ -83,6 +83,13 @@ describe('SessionStatusRow', () => {
     expect(screen.getByTestId('state-slot')).toHaveTextContent('0:45')
   })
 
+  it('idle for 29 s then running: the clock starts from the right value at once, not 29 s short', () => {
+    const { rerender } = render(<SessionStatusRow sessionCode={CODE} ctx={ctx()} />)
+    act(() => { vi.advanceTimersByTime(29_000) })
+    rerender(<SessionStatusRow sessionCode={CODE} ctx={ctx({ status: 'running', items: [step({ status: 'running', started_at: NOW + 29_000 - 42_000 })] })} />)
+    expect(screen.getByTestId('state-slot')).toHaveTextContent('0:42')
+  })
+
   it('failed, denied and exit N come from the newest step', () => {
     const { rerender } = render(<SessionStatusRow sessionCode={CODE} ctx={ctx({ items: [step({ status: 'failed' })] })} />)
     expect(screen.getByTestId('state-slot').dataset.state).toBe('failed')
