@@ -12,15 +12,24 @@ import (
 // A root that cannot be resolved (missing, not a directory) is kept as given: it admits nothing at a spawn anyway, and
 // refusing it would change the create wire. Duplicates are dropped, order kept.
 func canonicalRoots(roots []string) []string {
+	return dedupeRoots(roots, resolveRoot)
+}
+
+// resolveRoot is root's real path, or root itself when it cannot be resolved to a directory.
+func resolveRoot(root string) string {
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		if st, err := os.Stat(real); err == nil && st.IsDir() {
+			return real
+		}
+	}
+	return root
+}
+
+func dedupeRoots(roots []string, f func(string) string) []string {
 	out := make([]string, 0, len(roots))
 	seen := make(map[string]bool, len(roots))
 	for _, r := range roots {
-		if real, err := filepath.EvalSymlinks(r); err == nil {
-			if st, err := os.Stat(real); err == nil && st.IsDir() {
-				r = real
-			}
-		}
-		if !seen[r] {
+		if r = f(r); !seen[r] {
 			seen[r] = true
 			out = append(out, r)
 		}
@@ -51,4 +60,25 @@ func underGrant(dir string, g team.Grant) bool {
 		return underRoots(dir, g.Roots)
 	}
 	return underRoots(dir, liveRoots(g.Roots))
+}
+
+// reconcileRoots is the grant's roots for the roots a decide carries (Clean, absolute) against the request's own. The App
+// sends grant.roots back on every approve, edited or not, so a root that is one of the request's is the card's and stays
+// as the card showed it — resolving it again would follow a swap made between the card and the tap. A root that is new is
+// resolved now. The grant is canonical unless a root was kept from a request an older daemon made (its roots are only
+// Clean, so it keeps the spawn-time resolution it always had).
+func reconcileRoots(sent, requested []string, requestedCanonical bool) ([]string, bool) {
+	asked := make(map[string]bool, len(requested))
+	for _, r := range requested {
+		asked[r] = true
+	}
+	canonical := true
+	roots := dedupeRoots(sent, func(r string) string {
+		if asked[r] {
+			canonical = canonical && requestedCanonical
+			return r
+		}
+		return resolveRoot(r)
+	})
+	return roots, canonical
 }

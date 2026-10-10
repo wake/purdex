@@ -152,6 +152,26 @@ func TestDecide_LegacyPayloadStaysLegacy(t *testing.T) {
 	}
 }
 
+// The same, through the App, which sends the roots back unchanged. Mutation gate: a kept root counted as canonical
+// whatever the request was → the legacy grant is made canonical and its link stops admitting (red).
+func TestDecide_LegacyPayloadSentBackStaysLegacy(t *testing.T) {
+	base := realTemp(t)
+	real := mustMkdir(t, filepath.Join(base, "x", "work"))
+	link := filepath.Join(base, "work")
+	symlinkTo(t, real, link)
+	f := newFixture(t)
+	f.create(uid(1))
+	old, _ := json.Marshal(map[string]any{"reason": "r", "max_members": 3, "roots": []string{link}, "team_name": "", "team_label": ""})
+	if _, err := f.m.store.db.Exec(`UPDATE approval_requests SET payload_json = ? WHERE id = ?`, string(old), uid(1)); err != nil {
+		t.Fatal(err)
+	}
+	f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(&team.Grant{MaxMembers: 3, Roots: []string{link}}))
+	tm, ok, _ := f.m.store.LiveTeamByLead("sid-1")
+	if !ok || tm.Grant.RootsCanonical || !reflect.DeepEqual(tm.Grant.Roots, []string{link}) || !underGrant(real, tm.Grant) {
+		t.Fatalf("grant = %+v ok=%v, want legacy roots [%s] still admitting %s", tm.Grant, ok, link, real)
+	}
+}
+
 // The spawn rule. Mutation gate: underGrant without the live-root filter → the swapped root admits (red).
 func TestUnderGrant_CanonicalRootMustStillBeItself(t *testing.T) {
 	base := realTemp(t)
