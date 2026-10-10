@@ -12,7 +12,7 @@ import (
 )
 
 // #1845: decide checks a hook_ask's answers against the row's questions with the rule of the mod's answersFit (hooks/ask.js): one
-// non-empty string per question text, no other key. testdata/ask_answers.json is shared with ask.test.ts, so the two sides cannot
+// non-empty string per question text, no other key. hooks/ask_answers.fixture.js (inside the plugin folder, where `claude plugin test` can import it) is shared with ask.test.ts, so the two sides cannot
 // drift apart unnoticed.
 
 type answersCase struct {
@@ -24,14 +24,19 @@ type answersCase struct {
 
 func loadAnswersCases(t *testing.T) []answersCase {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/ask_answers.json")
+	raw, err := os.ReadFile("../../../cmd/pdx/plugin/purdex/hooks/ask_answers.fixture.js")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// the file is a JS module (`claude plugin test` imports only code files): comment lines, then `export default <JSON>`
+	_, body, found := strings.Cut(string(raw), "export default ")
+	if !found {
+		t.Fatal("fixture: no `export default`")
 	}
 	var file struct {
 		Cases []answersCase `json:"cases"`
 	}
-	if err := json.Unmarshal(raw, &file); err != nil || len(file.Cases) == 0 {
+	if err := json.Unmarshal([]byte(body), &file); err != nil || len(file.Cases) == 0 {
 		t.Fatalf("fixture: %v (%d cases)", err, len(file.Cases))
 	}
 	return file.Cases

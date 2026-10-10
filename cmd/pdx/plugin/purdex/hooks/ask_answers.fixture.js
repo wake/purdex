@@ -1,4 +1,6 @@
-{
+// Shared by the daemon's decide check (internal/module/team/ask_answers_test.go reads this file as JSON after the prefix)
+// and by ask.test.ts. One JSON value follows `export default`; keep it plain JSON.
+export default {
  "about": "decide's hook_ask answers rule and the mod's answersFit (hooks/ask.js) must agree on every case; both tests read this file. 'fit' is whether the answers answer exactly the questions asked.",
  "cases": [
   {

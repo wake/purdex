@@ -135,9 +135,9 @@ func TestAskWait_ChatReplyIsAnsweredRemoteWithTheMessage(t *testing.T) {
 	}
 	// Unchanged: an approved hook_ask, and a dismissed one.
 	ok := f.askBegin("toolu_chat_w2")
-	f.do(http.MethodPost, "/api/team/approvals/"+ok+"/decide", team.DecideRequest{Decision: "approve", Hook: &team.HookDecision{Answers: map[string]string{"q": "a"}}, Client: appClient()})
+	f.do(http.MethodPost, "/api/team/approvals/"+ok+"/decide", team.DecideRequest{Decision: "approve", Hook: &team.HookDecision{Answers: map[string]string{"紅還是藍？": "a"}}, Client: appClient()})
 	_, body = f.do(http.MethodGet, "/api/ask/wait/"+ok, nil)
-	if w := decodeWait(t, body); w.State != team.AskAnsweredRemote || w.Hook == nil || w.Hook.Answers["q"] != "a" {
+	if w := decodeWait(t, body); w.State != team.AskAnsweredRemote || w.Hook == nil || w.Hook.Answers["紅還是藍？"] != "a" {
 		t.Fatalf("approved wait = %s", body)
 	}
 	dis := f.askBegin("toolu_chat_w3")
