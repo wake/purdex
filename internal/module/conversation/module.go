@@ -156,6 +156,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/conversations/{provider}/{session_id}", m.handleSnapshot)
 	mux.HandleFunc("GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}", m.handleSubagent)
 	mux.HandleFunc("GET /ws/conversations/{provider}/{session_id}", m.handleWS)
+	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/submit", m.handleSubmit) // through the session's mod (U3-0b); not a device route
+	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/interrupt", m.handleInterrupt)
 }
 
 // Start runs the cache sweeper in a new lifetime; a second Start while one runs does nothing.

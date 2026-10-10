@@ -18,6 +18,7 @@ import (
 
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/modevents"
+	"github.com/wake/purdex/internal/promptq"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -29,9 +30,10 @@ const evictEvery = time.Minute
 
 // Module is the modevents daemon module.
 type Module struct {
-	core *core.Core
-	reg  *modevents.Registry
-	path string
+	core  *core.Core
+	reg   *modevents.Registry
+	queue *promptq.Queue // the prompt queue (U3-0b): the conversation API fills it, the mod socket drains it
+	path  string
 
 	logf func(string, ...any)
 	now  func() time.Time // the registry's clock
@@ -63,6 +65,8 @@ func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	m.reg = modevents.NewRegistry(m.now)
 	c.Registry.Register(ServiceName, m.reg)
+	m.queue = promptq.New(streamOwners{m.reg})
+	c.Registry.Register(promptq.Key, m.queue)
 	c.CfgMu.RLock()
 	dataDir := c.Cfg.DataDir
 	c.CfgMu.RUnlock()
@@ -93,7 +97,7 @@ func (m *Module) Start(ctx context.Context) error {
 		return nil
 	}
 
-	m.srv = modevents.NewServer(modevents.NewHandler(m.reg, modevents.WithTeamReader(m.teamRead), modevents.WithWorkbook(m.workbookService)))
+	m.srv = modevents.NewServer(modevents.NewHandler(m.reg, modevents.WithTeamReader(m.teamRead), modevents.WithWorkbook(m.workbookService), modevents.WithPrompt(m.promptService)))
 	srv, ln := m.srv, m.ln
 	m.spawn(func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
