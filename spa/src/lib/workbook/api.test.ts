@@ -37,6 +37,10 @@ describe('fetchConversation', () => {
     pinned.mockResolvedValueOnce(json({ conv_key: 'c1', entries: [wireEntry({ conv_key: 'other' })] }))
     await expect(fetchConversation('h1', 'claude', 's')).rejects.toMatchObject({ code: 'bad_response' })
   })
+  it('a mismatching entry that is also malformed still rejects the answer', async () => {
+    pinned.mockResolvedValueOnce(json({ conv_key: 'c1', entries: [wireEntry(), wireEntry({ id: 0, conv_key: 'other' })] }))
+    await expect(fetchConversation('h1', 'claude', 's')).rejects.toMatchObject({ code: 'bad_response' })
+  })
   it('an unknown host rejects without touching the network (host_removed)', async () => {
     await expect(fetchConversation('ghost', 'claude', 's')).rejects.toMatchObject({ code: 'host_removed' })
     expect(pinned).not.toHaveBeenCalled()

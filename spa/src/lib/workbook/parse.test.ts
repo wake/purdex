@@ -50,6 +50,14 @@ describe('parseConversation envelope consistency', () => {
   })
 })
 
+describe('parseConversation, mismatch hidden behind a malformed entry', () => {
+  it('rejects the whole answer although the mismatching entry is also malformed', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const body = { conv_key: 'c1', entries: [wireEntry({ id: 1 }), wireEntry({ id: 0, conv_key: 'other' })] }
+    expect(parseConversation(body)).toBeNull()
+  })
+})
+
 describe('events', () => {
   it('parses a workbook.entry value (JSON string)', () => {
     const ev = parseEntryEvent(JSON.stringify({ conv_key: 'c1', session_id: 's9', entry: wireEntry() }))
