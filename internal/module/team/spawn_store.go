@@ -296,6 +296,11 @@ func (s *Store) AdvanceSpawnOp(id, fromStep string, upd spawnUpdate) (bool, erro
 			return false, fmt.Errorf("advance spawn op %s: the stored row is corrupt: %w", id, err)
 		}
 	}
+	if upd.State == team.SpawnDone && s.failSpawnDone != nil {
+		if err := s.failSpawnDone(); err != nil {
+			return false, err
+		}
+	}
 	state := team.SpawnRunning
 	if upd.State == team.SpawnDone {
 		state = team.SpawnDone
