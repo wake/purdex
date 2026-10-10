@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -14,47 +15,82 @@ import (
 // hang the daemon (UpdateConfig holds CfgMu while it writes).
 var LockWait = 5 * time.Second
 
-// canonPath is the one name every writer uses for a config file: absolute, with symlinks resolved (the file itself if it
-// exists, else its nearest resolvable directory), so two names of one file name one lock file and a symlinked config stays a
-// symlink — the write goes to what it points at. Known limit: a config reached through a dangling symlink whose target holds
-// ".." after another symlink, or through a dangling symlink to a directory, is not resolved component by component.
+// ErrLockTimeout: another writer held "<path>.lock" for the whole LockWait.
+var ErrLockTimeout = errors.New("config lock: still held")
+
+// CanonicalPath is the name every writer of the config file at path uses for it (see canonPath).
+func CanonicalPath(path string) string { return canonPath(path) }
+
+// maxSymlinkHops bounds the symlinks canonPath expands for one path (the kernel's own ELOOP limit on Linux is 40), so a loop
+// ends instead of spinning.
+const maxSymlinkHops = 40
+
+// canonPath is the one name every writer uses for a config file: absolute, with symlinks resolved, so two names of one file
+// name one lock file and a symlinked config stays a symlink — the write goes to what it points at.
+//
+// It walks the path one component at a time, the way the kernel does: a symlink is replaced by its target (which is walked in
+// turn) before the next component, and a ".." is the parent of what the path has resolved to so far — so "alias/../x" with
+// alias a symlink to a/b is a/x, and is never folded lexically before alias is expanded. A component that does not exist (a
+// config not written yet, a directory behind a dangling symlink's target) is kept as it is, with what follows it, so the name
+// is where the file would be created. More than maxSymlinkHops symlinks (a loop) end the walk: the lexically cleaned absolute
+// path is returned and the write that follows fails on its own.
 func canonPath(path string) string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return path
-	}
-	for hops := 0; hops < 16; hops++ {
-		if real, err := filepath.EvalSymlinks(abs); err == nil {
-			return real
+	if !filepath.IsAbs(path) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return path
 		}
-		// A dangling symlink as the last element: follow it by hand, so the name is where it would be created.
-		if st, err := os.Lstat(abs); err == nil && st.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(abs)
-			if err != nil {
-				return abs
-			}
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(filepath.Dir(abs), target)
-			}
-			abs = filepath.Clean(target)
+		path = wd + string(filepath.Separator) + path
+	}
+	pending := splitPath(path)
+	resolved := string(filepath.Separator)
+	missing := false // once a component is not there, nothing behind it can be a symlink
+	hops := 0
+	for len(pending) > 0 {
+		c := pending[0]
+		pending = pending[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			resolved = filepath.Dir(resolved)
+			missing = false // the parent may be there: the next component is looked at again
 			continue
 		}
-		// Not there yet: the deepest ancestor that exists, resolved, with the rest appended.
-		var rest []string
-		dir := abs
-		for {
-			rest = append([]string{filepath.Base(dir)}, rest...)
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				return abs
-			}
-			dir = parent
-			if real, err := filepath.EvalSymlinks(dir); err == nil {
-				return filepath.Join(append([]string{real}, rest...)...)
-			}
+		next := filepath.Join(resolved, c)
+		if missing {
+			resolved = next
+			continue
 		}
+		st, err := os.Lstat(next)
+		if err != nil {
+			missing = true
+			resolved = next
+			continue
+		}
+		if st.Mode()&os.ModeSymlink == 0 {
+			resolved = next
+			continue
+		}
+		if hops++; hops > maxSymlinkHops {
+			return filepath.Clean(path)
+		}
+		target, err := os.Readlink(next)
+		if err != nil {
+			resolved = next
+			continue
+		}
+		if filepath.IsAbs(target) {
+			resolved = string(filepath.Separator)
+		}
+		pending = append(splitPath(target), pending...)
 	}
-	return abs
+	return resolved
+}
+
+// splitPath cuts a path into its components without folding anything: "." and ".." stay for canonPath to apply in order.
+func splitPath(p string) []string {
+	return strings.Split(p, string(filepath.Separator))
 }
 
 // afterCanon is a test seam: called once WithLock has resolved its path, before it waits for the lock.
@@ -94,7 +130,7 @@ func withFileLock(path string, fn func() error) error {
 			return fmt.Errorf("config lock %s.lock: %w", path, err)
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("config lock %s.lock: still held after %s", path, LockWait)
+			return fmt.Errorf("config lock %s.lock: %w after %s", path, ErrLockTimeout, LockWait)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

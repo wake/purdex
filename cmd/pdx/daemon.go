@@ -1,240 +1,17 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/config"
 )
-
-const (
-	// healthCheckTimeout is how long `pdx start` waits for the freshly spawned
-	// daemon to answer /api/health before giving up.
-	healthCheckTimeout = 60 * time.Second
-	// healthCheckInterval is the gap between health probes.
-	healthCheckInterval = 200 * time.Millisecond
-	// healthCheckNotifyAfter is how long the wait must last before we print a
-	// progress line, so a slow (but healthy) startup does not look hung.
-	healthCheckNotifyAfter = 3 * time.Second
-)
-
-// waitForHealthy polls healthURL every interval until it returns 200, the child
-// exits, or timeout elapses. A value on childExited (including a nil error, or a
-// closed channel) means the daemon died during startup and the wait ends
-// immediately instead of burning the rest of the window. notify, when non-nil, is
-// called at most once — only if the wait outlasts healthCheckNotifyAfter.
-func waitForHealthy(healthURL string, childExited <-chan error, timeout, interval time.Duration, notify func(string)) error {
-	return waitForHealthyWithNotify(healthURL, childExited, timeout, interval, healthCheckNotifyAfter, notify)
-}
-
-// waitForHealthyWithNotify is waitForHealthy with an injectable notify threshold,
-// so tests do not have to wait out the production one.
-func waitForHealthyWithNotify(healthURL string, childExited <-chan error, timeout, interval, notifyAfter time.Duration, notify func(string)) error {
-	maxProbeTimeout := 5 * interval
-	if maxProbeTimeout > timeout {
-		maxProbeTimeout = timeout
-	}
-	client := &http.Client{}
-
-	start := time.Now()
-	deadline := start.Add(timeout)
-	// The whole wait is bounded by one context, so no probe can outlive the window.
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
-
-	notified := false
-
-	for {
-		select {
-		case err := <-childExited:
-			return childExitError(err)
-		default:
-		}
-
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return healthTimeoutError(timeout)
-		}
-
-		// Never let a single probe run past the deadline.
-		probeTimeout := maxProbeTimeout
-		if probeTimeout > remaining {
-			probeTimeout = remaining
-		}
-		healthy, err := probeHealth(ctx, client, healthURL, probeTimeout)
-		if err == nil && healthy {
-			// The 200 is only trustworthy if the daemon is still alive and the
-			// window has not closed while we were holding the response.
-			select {
-			case exitErr := <-childExited:
-				return childExitError(exitErr)
-			default:
-			}
-			if time.Until(deadline) <= 0 {
-				return healthTimeoutError(timeout)
-			}
-			return nil
-		}
-
-		remaining = time.Until(deadline)
-		if remaining <= 0 {
-			return healthTimeoutError(timeout)
-		}
-
-		if notify != nil && !notified && time.Since(start) >= notifyAfter {
-			notified = true
-			notify(fmt.Sprintf("still waiting for daemon to become healthy (%s elapsed, giving it up to %s)",
-				time.Since(start).Round(time.Second), timeout))
-		}
-
-		wait := interval
-		if wait > remaining {
-			wait = remaining
-		}
-		timer := time.NewTimer(wait)
-		select {
-		case err := <-childExited:
-			timer.Stop()
-			return childExitError(err)
-		case <-timer.C:
-		}
-	}
-}
-
-// probeHealth issues one health request bounded by both probeTimeout and the
-// caller's overall window (parent ctx).
-func probeHealth(ctx context.Context, client *http.Client, healthURL string, probeTimeout time.Duration) (bool, error) {
-	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, healthURL, nil)
-	if err != nil {
-		return false, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK, nil
-}
-
-// healthTimeoutError describes a daemon that never answered inside the window.
-func healthTimeoutError(timeout time.Duration) error {
-	return fmt.Errorf("daemon did not become healthy within %s", timeout)
-}
-
-// childExitError describes a daemon that exited before it became healthy.
-func childExitError(err error) error {
-	if err == nil {
-		return fmt.Errorf("daemon exited during startup (exited before becoming healthy)")
-	}
-	return fmt.Errorf("daemon exited during startup (%v)", err)
-}
-
-func acquirePidLock(pidPath string, pid int) (*os.File, error) {
-	f, err := os.OpenFile(pidPath, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("open pid file: %w", err)
-	}
-
-	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-	if err != nil {
-		f.Close()
-		data, _ := os.ReadFile(pidPath)
-		existingPid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-		return nil, fmt.Errorf("already running (pid %d)", existingPid)
-	}
-
-	f.Truncate(0)
-	f.Seek(0, 0)
-	fmt.Fprintf(f, "%d", pid)
-	f.Sync()
-
-	return f, nil
-}
-
-// releasePidLock drops the flock and closes the file. The pid file itself is
-// permanent: unlinking it (in any order relative to the unlock) lets a
-// concurrently starting serve flock an inode that is no longer reachable by
-// path, after which `pdx status`/`stop` report "not running" for a live
-// daemon. isDaemonRunning decides by lock state, not existence, so an
-// unlocked leftover reads as stopped.
-//
-// The second parameter is kept for call-site stability: the pid file is
-// permanent now (see above), so there is nothing left to unlink, but
-// changing the signature would churn every caller for no behavioral gain.
-func releasePidLock(f *os.File, _ string) {
-	if f != nil {
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
-	}
-}
-
-const (
-	// pidLockAttempts / pidLockRetryDelay bound how long runServe waits for
-	// a *transient* holder of the pid file lock. isDaemonRunning takes a
-	// shared lock for microseconds, so a `pdx status` racing `pdx serve`
-	// must not kill the daemon; a real daemon holds LOCK_EX forever, so the
-	// retries change nothing for the double-daemon case (~250 ms, then fatal).
-	pidLockAttempts   = 5
-	pidLockRetryDelay = 50 * time.Millisecond
-)
-
-// mustAcquirePidLock is runServe's pid-lock gate. Two daemons on one
-// data_dir would share the SQLite files, so a held lock is fatal, not a
-// warning. fatalf is injected so the refusal is testable.
-func mustAcquirePidLock(pidPath string, pid int, fatalf func(string, ...any)) *os.File {
-	var (
-		f   *os.File
-		err error
-	)
-	for attempt := 0; attempt < pidLockAttempts; attempt++ {
-		if attempt > 0 {
-			time.Sleep(pidLockRetryDelay)
-		}
-		f, err = acquirePidLock(pidPath, pid)
-		if err == nil {
-			return f
-		}
-	}
-	fatalf("pid lock: %v — refusing to start a second daemon on %s", err, filepath.Dir(pidPath))
-	return nil
-}
-
-// isDaemonRunning reports whether a daemon currently holds the pid file's
-// exclusive lock, and the pid recorded there. It probes with a *shared*
-// lock: a daemon's LOCK_EX still makes it fail (→ running), but two
-// concurrent probers no longer see each other as the daemon, and a prober
-// never briefly masquerades as one to a starting `pdx serve`.
-func isDaemonRunning(pidPath string) (bool, int) {
-	f, err := os.OpenFile(pidPath, os.O_RDWR, 0644)
-	if err != nil {
-		return false, 0
-	}
-	defer f.Close()
-
-	err = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
-	if err != nil {
-		data, _ := os.ReadFile(pidPath)
-		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-		return true, pid
-	}
-
-	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	data, _ := os.ReadFile(pidPath)
-	pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-	return false, pid
-}
 
 // parseConfigPath extracts --config value from args and loads config accordingly.
 func parseConfigPath(args []string) (config.Config, string) {
@@ -314,9 +91,11 @@ func runStart(args []string) {
 		fmt.Fprintf(os.Stderr, "pdx: %s\n", msg)
 	}
 
-	if err := waitForHealthy(healthURL, childExited, healthCheckTimeout, healthCheckInterval, notify); err != nil {
+	if err := waitForHealthy(healthURL, childPid, childExited, healthCheckTimeout, healthCheckInterval, notify); err != nil {
 		fmt.Fprintf(os.Stderr, "pdx: %v\n", err)
-		cmd.Process.Kill()
+		if kerr := killProcessGroup(childPid); kerr != nil {
+			fmt.Fprintf(os.Stderr, "pdx: kill process group %d: %v\n", childPid, kerr)
+		}
 		fmt.Fprintf(os.Stderr, "pdx: last 20 lines of %s:\n\n", filepath.Join(logsDir, "pdx.log"))
 		tailCmd := exec.Command("tail", "-n", "20", filepath.Join(logsDir, "pdx.log"))
 		tailCmd.Stdout = os.Stderr

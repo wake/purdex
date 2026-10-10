@@ -20,6 +20,7 @@ import { setQuota } from '../lib/team/relay-quota-writer'
 import { setMaxMembers, teamKey, useMaxMembersStore } from '../lib/team/max-members'
 import { MAX_MEMBERS_MAX, MAX_MEMBERS_MIN, type RelayQuotaField, type SessionQuota } from '../lib/team/types'
 import type { TeamRoster } from '../lib/team/roster'
+import { TeamRootsEditor } from './team/TeamRootsEditor'
 
 /** One host's share of the section. */
 export interface QuotaHostData {
@@ -130,6 +131,11 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
                       return team !== undefined
                         ? <CapStepper hostId={h.hostId} team={team} label={nameOf(r)} />
                         : <span data-testid="cap-cell-empty" />
+                    })()}
+                    {(() => {
+                      // the lead's team directories, a full-width line under the row (only when the daemon reports `roots`)
+                      const team = r.is_lead ? rosters[h.hostId]?.find((x) => x.lead.session_id === r.session_id) : undefined
+                      return team?.roots !== undefined && team.roots_rev !== undefined ? <TeamRootsEditor hostId={h.hostId} team={team} /> : null
                     })()}
                   </li>
                 ))}

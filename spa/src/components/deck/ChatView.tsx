@@ -19,6 +19,8 @@ import { ChatWorkRow, FileChip } from './ChatWorkRow'
 import { SessionPanelSplit } from './SessionPanelSplit'
 import { SystemRow } from './ThinkingSystem'
 import { StatusOverlay } from './StatusOverlay'
+import { DoneTurnLine, LiveTurnLine } from './TurnLines'
+import { liveLine } from '../../lib/conversations/turn-line'
 import { UnreadableState, type UnreadableReason } from './UnreadableState'
 
 export interface ChatViewProps {
@@ -93,7 +95,8 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
   // Placed from the pane's memory on the first run (a remount), then follows growth only for a reader at the bottom.
   const scroll = useTranscriptScroll(undefined, false, { paneId: chatScrollKey(paneKey, binding), view: 'chat' })
   const { attach, onScroll: onBoxScroll, follow, shiftBy } = scroll
-  useEffect(() => { follow() }, [follow, entries])
+  const liveOn = liveLine(turns, status) !== null
+  useEffect(() => { follow() }, [follow, entries, liveOn])
   const [boxEl, setBoxEl] = useState<HTMLDivElement | null>(null)
   const setBox = useCallback((node: HTMLDivElement | null) => { setBoxEl(node); attach(node) }, [attach])
   // Older pages as the reader goes up (the deck's rule, useOlderTurns); the place is kept when one lands above.
@@ -122,8 +125,10 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
               {groupByTurn(entries).map((g) => (
                 <div key={g.turnIndex} data-turn-index={g.turnIndex} className={`${SCROLL_ANCHOR_CLASS} space-y-3`}>
                   {g.entries.map((e) => <Entry key={e.key} entry={e} paneKey={paneKey} binding={binding} />)}
+                  {(() => { const tn = turns.find((x) => x.index === g.turnIndex); return tn ? <DoneTurnLine turn={tn} /> : null })()}
                 </div>
               ))}
+              <LiveTurnLine turns={turns} status={status} />
             </div>
             {input}
           </SessionPanelSplit>

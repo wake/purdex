@@ -151,6 +151,32 @@ export async function putMaxMembers(hostId: string, teamId: string, maxMembers: 
   return { team_id: r.team_id, max_members: r.max_members as number, in_use: r.in_use as number }
 }
 
+export const ROOTS_PATH = '/api/team/roots'
+export const ROOTS_TIMEOUT_MS = 10_000
+
+export interface RootsView { team_id: string; roots: string[]; roots_rev: number }
+
+/**
+ * `PUT /api/team/roots`: the team's WHOLE new list with the revision it was read at (`if_rev`, required), signed with this app's client
+ * descriptor. 200 `{ team_id, roots, roots_rev }` (the real paths that were stored); the errors keep their body on the thrown error:
+ * 400 `bad_request` (`detail`, `field` such as `roots[3]`), 404 `not_found` (the team ended), 409 `rev_mismatch` (`roots`, `roots_rev`: someone
+ * edited first) and 409 `roots_in_use` (`in_use`: who stands under a root being removed).
+ */
+export async function putRoots(hostId: string, teamId: string, roots: readonly string[], ifRev: number): Promise<RootsView> {
+  const client = await descriptorFor(hostId)
+  const raw = await send<unknown>(hostId, ROOTS_PATH, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ team_id: teamId, roots, if_rev: ifRev, client }),
+    signal: AbortSignal.timeout(ROOTS_TIMEOUT_MS),
+  })
+  const r = raw as Partial<RootsView> | null
+  if (typeof r !== 'object' || r === null || r.team_id !== teamId || !Array.isArray(r.roots) || !r.roots.every((x) => typeof x === 'string') || !Number.isInteger(r.roots_rev)) {
+    throw new ApprovalApiError(200, 'bad_response', 'the roots answer is not the wire shape')
+  }
+  return { team_id: r.team_id, roots: r.roots as string[], roots_rev: r.roots_rev as number }
+}
+
 export const RELAY_QUOTA_PATH = '/api/team/relay-quota'
 
 /**
