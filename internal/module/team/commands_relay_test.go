@@ -156,7 +156,7 @@ func TestRelayCmd_AcceptsTheSessionsOpenAsk(t *testing.T) {
 
 func relayVoidSetup(t *testing.T) *Store {
 	t.Helper()
-	s := openTestStore(t)
+	s := openRemoteStore(t)
 	seedLeadMember(t, s, "mk-1", "sid-1")
 	return s
 }

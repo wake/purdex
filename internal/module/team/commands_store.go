@@ -129,7 +129,7 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 	// command_void, whatever a copy of it once stored. Not logged — the table is the answer.
 	// Only an adopt or a spawn can be voided; a void that arrived early did not know its target's kind, so it must
 	// not swallow a release, end or lead_moved carrying the same id.
-	if p.cmd.Kind == team.CommandAdopt || p.cmd.Kind == team.CommandSpawn {
+	if p.cmd.Kind == team.CommandAdopt || p.cmd.Kind == team.CommandSpawn || p.cmd.Kind == team.CommandRelay {
 		var voided int
 		switch err := tx.QueryRow(`SELECT 1 FROM team_command_voids WHERE lead_host_id = ? AND command_id = ? AND team_id = ?`,
 			p.LeadHostID, p.cmd.ID, p.cmd.TeamID).Scan(&voided); {
@@ -189,7 +189,7 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 // clock, is not too old. Zero is "absent" (the lead omits the field; an older lead never sends it); a negative value is
 // no time a lead can have written and counts as too old, checked before the subtraction so the extremes cannot overflow.
 func commandTooOld(c team.TeamCommand, now int64) bool {
-	if c.CreatedAt == 0 || (c.Kind != team.CommandAdopt && c.Kind != team.CommandSpawn) {
+	if c.CreatedAt == 0 || (c.Kind != team.CommandAdopt && c.Kind != team.CommandSpawn && c.Kind != team.CommandRelay) {
 		return false
 	}
 	if c.CreatedAt < 0 {
@@ -209,6 +209,8 @@ func (s *Store) applyIn(tx *sql.Tx, p CommandPlan) (res CommandResult, err error
 		res, err = applyKillIn(tx, p)
 	case team.CommandSpawn:
 		res, err = applySpawnIn(tx, p)
+	case team.CommandRelay:
+		res, err = applyRelayIn(tx, p)
 	case team.CommandEnd, team.CommandLeadMoved:
 		res, err = applyTeamLevelIn(tx, p)
 	case team.CommandVoid:

@@ -88,7 +88,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch cmd.Kind {
-	case team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid, team.CommandAppearance:
+	case team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandRelay, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid, team.CommandAppearance:
 	default:
 		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(cmd.Kind)+" commands")
 		return
@@ -136,7 +136,18 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 	if cmd.Kind == team.CommandSpawn && plan.Consent {
 		plan.SpawnCwd, _ = resolveUnderRoots(fresh.TeamRoots, cmd.Cwd)
 	}
-	res, err := m.store.ApplyTeamCommand(plan)
+	plan.HandoffDir = m.relayDir
+	plan.ModOK = func(sessionID string) bool { return m.modProtocolAtLeast(sessionID, team.MinMemberRelayModVersion) }
+	var res CommandResult
+	var err error
+	if cmd.Kind == team.CommandRelay || cmd.Kind == team.CommandVoid {
+		// a relay and the void of one are decided against the op's state, which the relay machinery moves under createMu (D9)
+		m.createMu.Lock()
+		res, err = m.store.ApplyTeamCommand(plan)
+		m.createMu.Unlock()
+	} else {
+		res, err = m.store.ApplyTeamCommand(plan)
+	}
 	switch {
 	case errors.Is(err, ErrCommandIDConflict):
 		m.writeCommandErr(w, http.StatusConflict, team.ErrCommandIDConflict, "the id is already used by a different command")
@@ -151,6 +162,9 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(res.Status)
 		_, _ = w.Write(res.Body)
 		return
+	}
+	if cmd.Kind == team.CommandRelay {
+		m.sendRemoteRelayControlAsync(entry.HostID, cmd.MK, cmd.OpID) // a replay too: it sends only while the op is still requested
 	}
 	if cmd.Kind == team.CommandSpawn && !res.Replayed {
 		m.startRemoteSpawn(cmd.ID)
@@ -199,7 +213,7 @@ func (m *Module) peerEntry(alias string) (e config.PeerHost, ourHostID string, o
 // characters (they end up in rows and, through templates, in notices). "" means valid.
 func validateCommand(c team.TeamCommand) string {
 	for _, s := range []string{c.ID, c.Kind, c.ToHostID, c.TeamID, c.TeamName, c.MK, c.Lead.SessionID, c.Lead.Ref, c.Lead.Title,
-		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID, c.Cwd, c.Title, c.Model, c.Effort, c.TeamLabel} {
+		c.Lead.Address, c.Lead.ProcStart, c.TargetSessionID, c.TargetRef, c.LeadSessionID, c.LeadRef, c.CommandID, c.OpID, c.Cwd, c.Title, c.Model, c.Effort, c.TeamLabel} {
 		if len(s) > maxCommandField || !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
@@ -228,6 +242,10 @@ func validateCommand(c team.TeamCommand) string {
 	case team.CommandRelease, team.CommandKill:
 		if c.MK == "" {
 			return c.Kind + ": mk is required"
+		}
+	case team.CommandRelay:
+		if c.MK == "" || !uuidV4.MatchString(c.OpID) {
+			return "relay: mk and op_id (a UUID v4) are required"
 		}
 	case team.CommandVoid:
 		if !uuidV4.MatchString(c.CommandID) || c.CommandID == c.ID {
