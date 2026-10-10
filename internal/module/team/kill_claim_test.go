@@ -369,9 +369,10 @@ func TestKillClaim_AGiveBackThatMeetsTheUniqueIndexEndsTheRowGone(t *testing.T) 
 	if claimed, err := f.m.store.ClaimMemberKilling(mr.SpawnOp, mr.SessionID, 5); err != nil || !claimed {
 		t.Fatalf("claim = %v %v", claimed, err)
 	}
-	// a newer membership of the same session slips in while the row is killing (the index covers active rows only)
-	other := newMember("dup1", mr.TeamID, mr.SessionID, mr.Ref, 6)
-	if err := f.m.store.InsertMember(other); err != nil {
+	// The insert guard (insertMemberRowIn) would stop a newer membership of the same session; this is the LAST line, for when
+	// something slips past it: a row inserted behind the guard's back (the index covers active rows only).
+	if _, err := f.m.store.db.Exec(`INSERT INTO team_members (spawn_op, team_id, host_id, session_id, ref, cwd, tmux_session, state, created_at, updated_at, origin)
+		VALUES ('dup1', ?, ?, ?, ?, '/w', 'tm-dup1', 'active', 6, 6, 'spawned')`, mr.TeamID, mr.HostID, mr.SessionID, mr.Ref); err != nil {
 		t.Fatalf("the competing membership could not be inserted: %v", err)
 	}
 	given, err := f.m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, 7)
@@ -430,5 +431,40 @@ func TestKillClaim_TheSweeperSettlesAStuckClaimOfAnEndedTeam(t *testing.T) {
 	f.m.settleStuckKillingMembers()
 	if got := f.killRowState(key); got == team.MemberKilling {
 		t.Fatal("a stuck claim of an ended team stayed killing")
+	}
+}
+
+// critic #4 (the one with evidence): spawnFinish and every other member insert go through insertMemberRowIn, and none of them
+// looked at a killing row — the unique index covers active rows only, so a second active row for a killing session was
+// inserted and the give-back could only end the original gone. The guard is in the one place all inserts pass.
+// Mutation gate: drop the guard → red (store level and the spawn-finish path).
+func TestKillClaim_NoMemberRowIsInsertedForASessionThatIsKilling(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	mr := memberBySpawn(t, f.m.store, key)
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing' WHERE spawn_op = ?`, key); err != nil {
+		t.Fatal(err)
+	}
+	// the plain insert
+	dup := newMember("dup-plain", mr.TeamID, mr.SessionID, mr.Ref, 9)
+	if err := f.m.store.InsertMember(dup); !errors.Is(err, ErrSessionHeld) {
+		t.Fatalf("InsertMember = %v, want ErrSessionHeld", err)
+	}
+	// the spawn-finish insert (member + first task in one transaction)
+	spawned := newMember("dup-spawn", mr.TeamID, mr.SessionID, mr.Ref, 10)
+	if _, err := f.m.store.InsertMemberAndTask(spawned, nil); !errors.Is(err, ErrSessionHeld) {
+		t.Fatalf("InsertMemberAndTask = %v, want ErrSessionHeld", err)
+	}
+	var n int
+	_ = f.m.store.db.QueryRow(`SELECT COUNT(*) FROM team_members WHERE session_id = ?`, mr.SessionID).Scan(&n)
+	if n != 1 {
+		t.Fatalf("%d rows for the session, want only the killing one", n)
+	}
+	// and once the claim is given back the session can be a member again only by the usual rules (the row is active again)
+	if given, err := f.m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, 11); err != nil || !given {
+		t.Fatalf("give back = %v %v", given, err)
+	}
+	if got := f.killRowState(key); got != team.MemberActive {
+		t.Fatalf("row = %s, want active", got)
 	}
 }
