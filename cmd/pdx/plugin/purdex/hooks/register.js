@@ -108,6 +108,7 @@ const fresh = () => ({
   writeDeferred: undefined, // a claimed request whose write prompt waits for the running turn to end
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
+  askEpoch: 0, // bumped by everything that makes an ask in the air stale (a /clear, a session reset, a compaction); never reset, like gen
   askBusy: undefined, // a token while a member's `pdx relay ask` is out (member relay ask, D3: it changes no relay state)
   leadAsk: undefined, // { gen, sid }: a /lead prompt is out until the agent's turn ends or the session moves on
   floor: undefined,
@@ -133,7 +134,7 @@ let holding = 0
 // begin or a hello sent before the reset never answers for one sent after it.
 function resetState() {
   letGo()
-  Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq })
+  Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq, askEpoch: s.askEpoch + 1 })
 }
 
 // letGo releases the prompts held on the request the mod is leaving, at
@@ -569,28 +570,30 @@ function uuid4() {
 // does not pause the member (D3): no state change, no held prompt, no waiting status, no polling. `pdx relay ask`
 // runs from a timer, never in the hook.
 async function maybeAsk($) {
+  const epoch = s.askEpoch // before any await: a /clear, a reset or a compaction while the engine is read makes everything below stale
   const u = (await $.session.usage()).context
   if (u.percent === undefined || u.percent < s.threshold) return
   if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
   if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
   const sid = await $.session.id()
+  // The engine was read twice: look again at everything the decision rests on.
+  if (s.askEpoch !== epoch || !s.helloOK || s.role !== 'member') return
   if (s.state !== 'idle' || s.askBusy) return // a /relay now took the state while the engine was read, or an ask is out
-  const own = {} // a /clear resets the state while an old ask is out: only the ask that owns the token clears it
+  const own = {} // only the ask that owns the token clears it
   s.askBusy = own
-  const gen = s.gen
-  later($, 0, () => ask($, sid, gen, u).finally(() => { if (s.askBusy === own) s.askBusy = undefined }))
+  later($, 0, () => ask($, sid, epoch, u).finally(() => { if (s.askBusy === own) s.askBusy = undefined }))
 }
 
 // ask sends the request. 200 (open or replay), 409 relay_open and 409 relay_unsupported close the question until
 // +REASK_POINTS; 409 not_member means the member was released: it re-reads its role (an ordinary session from then on).
 // Anything else (daemon down, a failure) changes nothing, and the next turn end tries again under the same gate. An
-// answer is taken only by the generation and the session it was sent from.
-async function ask($, sid, gen, u) {
+// answer is taken only by the epoch (no /clear, reset or compaction since) and the session it was sent from.
+async function ask($, sid, epoch, u) {
   const rid = uuid4()
   const argv = ['relay', 'ask', '--session', sid, '--used', String(u.percent), '--window', String(u.window), ...(rid ? ['--request-id', rid] : [])]
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
   const now = await $.session.id().catch(() => undefined)
-  if (s.gen !== gen || now !== sid) return
+  if (s.askEpoch !== epoch || now !== sid) return
   if (r.exitCode === 0) {
     s.lastAskPct = u.percent
   } else if (r.exitCode === 13) {
@@ -1251,7 +1254,8 @@ export function register(on) {
     if (was === 'awaiting') $.ui.status(undefined)
     s.floor = undefined
     s.lastAskPct = undefined
-    s.askBusy = undefined // an ask still out was the old conversation's: its answer is dropped (gen), and it holds nothing here
+    s.askBusy = undefined // an ask still out was the old conversation's: its answer is dropped (epoch), and it holds nothing here
+    s.askEpoch++
     helloLater($)
     return r
   })
@@ -1326,6 +1330,8 @@ export function register(on) {
       toIdle($) // the begin still out answers for a gone generation: its op is cancelled{abandoned}
     }
     s.lastAskPct = undefined // after a compaction the next ask needs ≥ threshold again
+    s.askEpoch++ // an ask in the air answers for the context that is gone: it must not put its lastAskPct back
+    s.askBusy = undefined
     return compactedAfter($, e, await next(e))
   })
 

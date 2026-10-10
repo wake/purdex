@@ -507,6 +507,41 @@ test('an old conversation’s ask finishing late does not free the new conversat
   await f.clock.settle()
 })
 
+// codex attacker #1: the engine is read twice before the ask is decided; a /clear in between makes the decision stale.
+// Mutation gate: no epoch re-check after the awaits → an ask for the new session from the old conversation's usage → red.
+test('a /clear while the turn end reads the engine: the old conversation sends no ask', async ($, on) => {
+  let open!: () => void
+  const f = relayWorld(on, { usage: MEMBER_AT_90, usageGate: new Promise<void>((r) => { open = r }) })
+  f.pdx = (argv) => argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO('member') } : { exitCode: 0, stdout: ASK_OK }
+  await start($, f)
+  const t = turn($, 't1') // maybeAsk reads the usage and waits on the gate
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle() // the new conversation's hello is answered: helloOK is true again, so only the epoch tells the old turn end apart
+  open()
+  await t
+  await f.clock.settle()
+  expect(count(f, 'ask')).toBe(0)
+})
+
+// codex attacker #2: a compaction resets the gate; a late answer of an ask sent before it must not put the old value back.
+// Mutation gate: no askEpoch++ at the compaction → lastAskPct comes back as 90 and the 72% turn asks nothing → red.
+test('an ask answered after an auto-compaction does not restore lastAskPct: the compacted context asks again at 70%', async ($, on) => {
+  let release!: (r: any) => void
+  const f = memberWorld(on, () => new Promise((r) => { release = r }))
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(1) // the ask is out
+  expect(count(f, 'ask')).toBe(1)
+  expect(await compact($, 'auto')).toEqual({ messages: MSGS })
+  release({ exitCode: 0, stdout: ASK_OK }) // the late 200
+  await f.clock.settle()
+  f.pdx = (argv) => argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO('member') } : { exitCode: 0, stdout: ASK_OK }
+  f.usage = { tokens: 144000, window: 200000, percent: 72 }
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'ask')).toBe(2)
+})
+
 // An answer belongs to the session it was sent from: a /clear while the ask is out must not mark the new conversation.
 test('an ask answered after a /clear does not set lastAskPct for the new conversation', async ($, on) => {
   let release!: (r: any) => void
