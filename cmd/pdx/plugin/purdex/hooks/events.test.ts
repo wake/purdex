@@ -1546,3 +1546,24 @@ test('a fork that outlived its deadline holds the executor until it settles; its
   expect(w.modelCalls.length).toBe(1)
   expect(resultReqs(w).map((r) => r.body.job_id)).toContain('wbj-t2')
 })
+
+// While a fork runs past its deadline /workbook refresh queues nothing and says why; a fork that never settles is given up
+// after 10 minutes and the executor works again. Mutation gate: no cap → red; queue anyway → red (codex critic).
+test('an orphaned fork: /workbook refresh is refused with a reason; after 10 minutes the hold is given up', async ($, on) => {
+  const w = evWorld(on, {
+    wbNext: (_b, n) => (n === 1 ? jobAnswer(REFRESH_JOB({ fork: { prompt: 'p', timeout_ms: 90000 } })) : n === 2 ? jobAnswer(JOB({ id: 'wbj-t2' })) : { status: 204 }),
+    wbResult: () => ({ status: 200, text: '{"more":true}' }),
+    fork: () => new Promise(() => {}), // never settles
+  })
+  await start($, w)
+  await turnStart($, 't1')
+  await turnDone($, 't1')
+  await w.clock.settle()
+  await w.clock.advance(95_100)
+  expect((await wbCmd($, 'refresh')).text).toContain('還在背景執行')
+  expect(refreshReqs(w)).toHaveLength(0)
+  await w.clock.advance(600_000)
+  await w.clock.settle()
+  expect(w.modelCalls.length).toBe(1) // the executor works again: the second job ran
+  expect((await wbCmd($, 'refresh')).text).toContain('已排入')
+})

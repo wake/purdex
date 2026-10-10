@@ -48,6 +48,7 @@ const MONITORS_MAX = 64 // monitor ids kept at once; one more drops the oldest
 const ASK_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']) // tools that wait on the person by themselves
 const TIMEOUT = Symbol('timeout')
 const TEAM_URL = 'http://pdx/mod/v1/team' // GET ?session_id=<sid> on the same socket (TI-5a)
+const ORPHAN_MAX_MS = 600_000 // how long a fork past its deadline holds the workbook executor at most
 const TEAM_MS = 15_000 // how often the lead's member count is read
 
 // team is the last good answer of the daemon's team read for the CURRENT session id. The ui.render hook below only
@@ -415,17 +416,22 @@ async function wbRun($, job, gen) {
 
 // wbOrphaned: the race was won by the deadline while the fork was still running → hold the executor until it settles. Its
 // late answer is dropped (the daemon has already been told `aborted`).
+// A fork that never settles must not wedge the executor for good: the hold is given up after ORPHAN_MAX_MS (a call to the
+// API ends long before that by itself) and the executor asks again. A mod reload forgets the hold (known limit).
 function wbOrphaned($, call) {
   let done = false
+  let cap = null
   const settle = () => {
     if (done) return
     done = true
+    if (cap) cap.cancel()
     if (!wb.orphan) return
     wb.orphan = false
     wbAsk($, 0)
   }
   wb.orphan = true
   call.then(settle, settle)
+  cap = $.clock.after(ORPHAN_MAX_MS, settle)
 }
 
 // ---- /workbook refresh (session workbook spec §5.6) ----
@@ -438,6 +444,7 @@ const WORKBOOK_USAGE = '用法：/workbook refresh — 依整段對話重整這�
 async function workbookCommand($, e) {
   if (String(e.args ?? '').trim() !== 'refresh') return { text: WORKBOOK_USAGE }
   if (!ev.on) return { text: '工作簿重整：這個 session 沒有連上 daemon。' }
+  if (wb.orphan) return { text: '工作簿重整：上一次重整的模型呼叫還在背景執行，請等它結束再試。' }
   const out = await wbRequest($, REFRESH_URL, refreshBody(ev.stream, ev.sid), 0)
   const notice = refreshNotice(out && out !== TIMEOUT ? out.res : null)
   if (notice.queued) wbAsk($, 0)
