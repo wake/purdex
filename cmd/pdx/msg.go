@@ -351,8 +351,12 @@ func runMsgSend(inv msgInvocation, getenv func(string) string, stdout, stderr io
 		return 1
 	}
 
+	mode := sanitizeCell(sr.EffectiveMode)
+	if sr.EffectiveMode == "" { // delivery_uncertain with no answer from the receiver (#1009): the mode it applied is not known
+		mode = "unknown"
+	}
 	line := fmt.Sprintf("sent %s → %s (%s, mode %s",
-		sanitizeCell(sr.MsgID), sanitizeCell(sr.ToAddress), sanitizeCell(sr.Result), sanitizeCell(sr.EffectiveMode))
+		sanitizeCell(sr.MsgID), sanitizeCell(sr.ToAddress), sanitizeCell(sr.Result), mode)
 	if sr.OneWay {
 		line += ", one-way"
 	}

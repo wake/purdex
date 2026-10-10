@@ -163,9 +163,11 @@ func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer strin
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDeliverRespBytes+1))
-	if err != nil {
-		return ipeers.DeliverResponse{}, nil, failed(fmt.Errorf("read response body: %w", err))
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxDeliverRespBytes+1))
+	// A status line other than 200 already says the receiver refused: that is known whether or not the rest of its body arrives,
+	// so only a failure to get a 200 answer through is uncertain.
+	if readErr != nil && resp.StatusCode == http.StatusOK {
+		return ipeers.DeliverResponse{}, nil, failed(fmt.Errorf("read response body: %w", readErr))
 	}
 	if len(raw) > maxDeliverRespBytes {
 		return ipeers.DeliverResponse{}, nil, fmt.Errorf("response body exceeds %d bytes", maxDeliverRespBytes)
@@ -615,15 +617,15 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		// The request went out in full and the answer never came: the receiver may have delivered. Answer what the contract
 		// promises — delivery_uncertain, 200 — so the caller does not resend; the audit row keeps the cause.
 		text := boundRemote(err.Error(), entry.Token)
-		m.setResult(id, mode, ipeers.ResultDeliveryUncertain, text)
+		m.setResult(id, "", ipeers.ResultDeliveryUncertain, text)
 		m.logf("peers: send %s to %q: no answer to the deliver call (it may have been delivered): %s", msgID, targetAlias, text)
 		_ = json.NewEncoder(w).Encode(ipeers.SendResponse{
-			MsgID:         msgID,
-			ToHostID:      targetHostID,
-			ToAddress:     toAddress,
-			To:            to,
-			Result:        ipeers.ResultDeliveryUncertain,
-			EffectiveMode: mode,
+			MsgID:     msgID,
+			ToHostID:  targetHostID,
+			ToAddress: toAddress,
+			To:        to,
+			Result:    ipeers.ResultDeliveryUncertain,
+			// EffectiveMode stays empty: no receiver answered, so nobody knows whether it lowered bypass to prompting.
 		})
 		return
 	case err != nil:

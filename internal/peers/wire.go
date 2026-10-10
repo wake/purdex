@@ -321,11 +321,13 @@ type SendRequest struct {
 
 // SendResponse is the body of a successful POST /send response.
 type SendResponse struct {
-	MsgID         string `json:"msg_id"`
-	ToHostID      string `json:"to_host_id"`
-	ToAddress     string `json:"to_address"` // normalised "<alias>/<session>" (Task 5)
-	To            WireTo `json:"to"`
-	Result        string `json:"result"`
+	MsgID     string `json:"msg_id"`
+	ToHostID  string `json:"to_host_id"`
+	ToAddress string `json:"to_address"` // normalised "<alias>/<session>" (Task 5)
+	To        WireTo `json:"to"`
+	Result    string `json:"result"`
+	// EffectiveMode is the mode the receiver applied. Empty only with delivery_uncertain when the receiver never answered the
+	// sender's call (it may or may not have delivered, and may have lowered bypass to prompting): the sender does not guess (#1009).
 	EffectiveMode string `json:"effective_mode"`
 	OneWay        bool   `json:"one_way"`
 }

@@ -404,7 +404,7 @@ delivers into the origin session exactly as above. The chain is symmetric.
 | Text size | UTF-8 `text` ≤ 64 KiB; refused at `/send` and `/deliver` |
 | HTTP | one inter-daemon call waits `InterDaemonTimeout` = receiver worst case + 2 s margin (12 s), no retry — see **Budget chain** below |
 | Socket write | 5 s; success means the full frame was written and the connection closed cleanly |
-| Timeout after write | reported to the caller as `delivery_uncertain`; the caller does not resend. This holds at every layer: a sender whose `/deliver` call timed out (or dropped) AFTER the whole request was written answers `delivery_uncertain` (200), not `remote_error`; a call that never got the request out (refused, dial timeout) is still a plain failure (#1009) |
+| Timeout after write | reported to the caller as `delivery_uncertain`; the caller does not resend. This holds at every layer: a sender whose `/deliver` call timed out (or dropped) AFTER the whole request was written answers `delivery_uncertain` (200, `effective_mode` empty — the receiver never said what it applied), not `remote_error`; a refusal whose body is cut is still the refusal; a call that never got the request out (refused, dial timeout) is still a plain failure (#1009) |
 
 **Budget chain (#1009).** Every layer waits longer than the worst case of what it waits for, and each number is derived from
 the one below in `internal/peers/wire.go` (asserted by `internal/peers/budget_test.go`; the daemon's own constants are tied to
@@ -417,6 +417,10 @@ reported as failed because a layer above gave up first:
 | sender daemon → receiver | `InterDaemonTimeout` 12 s | `ReceiverWorstCase` + `TimeoutMargin` 2 s |
 | sender daemon `/send` | `SenderWorstCase` 17 s | inventory 2 s + peer inventory fetch `RemoteFetchTimeout` 3 s + `InterDaemonTimeout` 12 s |
 | `pdx msg send` (and the spawn brief) | `SendRequestTimeout` 19 s | `SenderWorstCase` + `TimeoutMargin` |
+
+The 2 s margin is also what covers the steps that have no bound of their own here — the audit writes at both ends, the JSON
+encoding and the network round trip; it is a margin, not a proof, and the `delivery_uncertain` classification above is the
+backstop when it is ever exceeded.
 
 Older peers: only the numbers differ, no wire format changes. A new sender waiting 12 s for an old receiver (whose worst case is
 10 s) and a new CLI waiting 19 s for an old daemon (worst case 15 s) are both at least as patient as before; an old sender or CLI
