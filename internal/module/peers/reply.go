@@ -12,6 +12,7 @@ package peers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -181,7 +182,12 @@ func (m *Module) forwardReply(ctx context.Context, h *helper, line string) {
 	switch {
 	case err != nil:
 		text := boundRemote(err.Error(), entry.Token)
-		m.setResult(id, "", "", text)
+		result := ""
+		var uncertain *DeliveryUncertainError
+		if errors.As(err, &uncertain) {
+			result = ipeers.ResultDeliveryUncertain // it may have been delivered (#1009)
+		}
+		m.setResult(id, "", result, text)
 		m.logf("peers: reply %s to %q: deliver call failed: %s", dreq.MsgID, entry.Alias, text)
 	case remote != nil:
 		// postDeliver already scrubbed the entry's token; m.post is a seam,

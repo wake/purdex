@@ -71,7 +71,7 @@ const helperSockDir = "/tmp/cc-socks"
 
 // remoteFetchTimeout bounds each individual host fetch in a scope=all
 // fan-out, independent of the shared http.Client's own timeout.
-const remoteFetchTimeout = 3 * time.Second
+const remoteFetchTimeout = ipeers.RemoteFetchTimeout
 
 // maxRemoteTextBytes bounds how much of a remote peer's attacker-controlled
 // text (an error message, or a mismatched host_id) is allowed to appear in
@@ -290,7 +290,7 @@ func New(audit AuditStore, titles TitleStore) *Module {
 		registryDir:          registryDir,
 		liveness:             ipeers.DefaultLiveness(),
 		snapshotProcs:        snapshotProcesses,
-		budget:               2 * time.Second,
+		budget:               ipeers.InventoryBudget,
 		now:                  time.Now, // the one clock seam; every other clock reader below takes m.now
 		client:               newRemoteClient(),
 		fetch:                fetchRemote,

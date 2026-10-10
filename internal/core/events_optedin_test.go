@@ -248,35 +248,68 @@ func stall(t *testing.T, sub *EventSubscriber, frame []byte) {
 	}
 }
 
-// readUntilError reads frames until the connection fails, and returns the
-// frame types it read and the error. A read that times out fails the test:
-// the server never closed the connection.
-func readUntilError(t *testing.T, conn *websocket.Conn) ([]string, error) {
-	t.Helper()
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
+// The reads below wait for progress, not for a total time (#2590): a stalled client's backlog is hundreds of 256 KiB frames,
+// and how long the machine takes to move them depends on its load. Every frame read renews the window; only readIdle
+// without a frame (and without the close) fails, and readTotal is a backstop for a server that sends forever.
+var (
+	readIdle  = 10 * time.Second
+	readTotal = 2 * time.Minute
+)
+
+var (
+	errNoProgress = errors.New("no frame and no close within the idle window")
+	errTooLong    = errors.New("frames kept coming past the total limit")
+)
+
+// readFrames reads frames until the connection fails and returns the frame types it read and the error that ended the reads.
+// A read that sees nothing for idle ends with errNoProgress (wrapping the timeout); total bounds the whole read with
+// errTooLong. Any other error is the connection's own ending.
+func readFrames(conn *websocket.Conn, idle, total time.Duration) ([]string, error) {
+	start := time.Now()
 	var types []string
 	for {
+		if err := conn.SetReadDeadline(time.Now().Add(idle)); err != nil {
+			return types, err
+		}
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			var ne net.Error
-			require.False(t, errors.As(err, &ne) && ne.Timeout(), "the server never closed the connection: %v", err)
+			if errors.As(err, &ne) && ne.Timeout() {
+				return types, fmt.Errorf("%w (%s): %v", errNoProgress, idle, err)
+			}
 			return types, err
 		}
 		typ, err := frameType(msg)
-		require.NoError(t, err)
+		if err != nil {
+			return types, err
+		}
 		types = append(types, typ)
+		if time.Since(start) > total {
+			return types, fmt.Errorf("%w (%s)", errTooLong, total)
+		}
 	}
+}
+
+// readUntilError reads frames until the connection fails, and returns the frame types it read and the error. No progress for
+// readIdle fails the test: the server never closed the connection.
+func readUntilError(t *testing.T, conn *websocket.Conn) ([]string, error) {
+	t.Helper()
+	types, err := readFrames(conn, readIdle, readTotal)
+	require.False(t, errors.Is(err, errNoProgress), "the server never closed the connection: %v", err)
+	require.False(t, errors.Is(err, errTooLong), "the server never closed the connection: %v", err)
+	return types, err
 }
 
 // readUntilType reads frames until one of type want arrives, and returns
 // the types read before it, or the error that ended the reads first. It
-// runs off the test goroutine, so it reports rather than fails.
+// runs off the test goroutine, so it reports rather than fails. Each frame
+// renews the idle window, as in readFrames.
 func readUntilType(conn *websocket.Conn, want string) ([]string, error) {
-	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		return nil, err
-	}
 	var types []string
 	for {
+		if err := conn.SetReadDeadline(time.Now().Add(readIdle)); err != nil {
+			return nil, err
+		}
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return types, fmt.Errorf("the connection failed before a %s frame arrived: %w", want, err)
