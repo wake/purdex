@@ -119,10 +119,11 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 // expired; an ask whose member is no longer an active member of a live team is withdrawn (member_left); then every
 // open ask still owing its notice is sent again. Nobody is told about an expiry or a withdrawal.
 func (m *Module) settleAsks() {
-	now := m.now()
 	// Behind a notice that is on the wire (askMu, see sendAskNotice): an ask is not closed between a notice's state
-	// check and its delivery. Released before the retry below, whose senders take it themselves.
+	// check and its delivery. Released before the retry below, whose senders take it themselves. The time is read after
+	// the wait, so the decisions and the closed_at stamps are those of the moment the sweep runs.
 	m.askMu.Lock()
+	now := m.now()
 	expired, errE := m.store.ExpireRelayAsks(now)
 	left, errW := m.store.WithdrawAsksOfInactiveMembers(now)
 	m.askMu.Unlock()
