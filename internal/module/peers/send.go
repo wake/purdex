@@ -17,8 +17,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
@@ -139,15 +141,31 @@ func postDeliver(ctx context.Context, client *http.Client, baseURL, bearer strin
 	httpReq.Header.Set("Authorization", "Bearer "+bearer)
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	// Whether the request went out in full decides what a later failure means (DeliveryUncertainError).
+	var wrote atomic.Bool
+	httpReq = httpReq.WithContext(httptrace.WithClientTrace(httpReq.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				wrote.Store(true)
+			}
+		},
+	}))
+	failed := func(err error) error {
+		if wrote.Load() {
+			return &DeliveryUncertainError{Err: err}
+		}
+		return err
+	}
+
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return ipeers.DeliverResponse{}, nil, err
+		return ipeers.DeliverResponse{}, nil, failed(err)
 	}
 	defer resp.Body.Close()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDeliverRespBytes+1))
 	if err != nil {
-		return ipeers.DeliverResponse{}, nil, fmt.Errorf("read response body: %w", err)
+		return ipeers.DeliverResponse{}, nil, failed(fmt.Errorf("read response body: %w", err))
 	}
 	if len(raw) > maxDeliverRespBytes {
 		return ipeers.DeliverResponse{}, nil, fmt.Errorf("response body exceeds %d bytes", maxDeliverRespBytes)
@@ -591,7 +609,23 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	postCtx, cancelPost := context.WithTimeout(m.stopCtx, ipeers.InterDaemonTimeout)
 	defer cancelPost()
 	resp, remote, err := m.post(postCtx, m.deliverClient, entry.URL, entry.Token, dreq)
+	var uncertain *DeliveryUncertainError
 	switch {
+	case errors.As(err, &uncertain):
+		// The request went out in full and the answer never came: the receiver may have delivered. Answer what the contract
+		// promises — delivery_uncertain, 200 — so the caller does not resend; the audit row keeps the cause.
+		text := boundRemote(err.Error(), entry.Token)
+		m.setResult(id, mode, ipeers.ResultDeliveryUncertain, text)
+		m.logf("peers: send %s to %q: no answer to the deliver call (it may have been delivered): %s", msgID, targetAlias, text)
+		_ = json.NewEncoder(w).Encode(ipeers.SendResponse{
+			MsgID:         msgID,
+			ToHostID:      targetHostID,
+			ToAddress:     toAddress,
+			To:            to,
+			Result:        ipeers.ResultDeliveryUncertain,
+			EffectiveMode: mode,
+		})
+		return
 	case err != nil:
 		text := boundRemote(err.Error(), entry.Token)
 		m.setResult(id, "", "", text)
@@ -635,8 +669,10 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DeliveryUncertainError is a /deliver call that failed after the whole request had been written: the receiver may have
-// delivered. (Stub for the red commit.)
+// DeliveryUncertainError is a /deliver call that failed AFTER the whole request had been written — the client timed out waiting
+// for the answer, or the connection dropped before it: the receiver may have delivered, so the caller must not resend and the
+// answer is delivery_uncertain, not a failure (#1009, spec §4.4). A call that never got the request out (the connection was
+// refused, the dial timed out) is a plain error: nothing reached the receiver.
 type DeliveryUncertainError struct{ Err error }
 
 func (e *DeliveryUncertainError) Error() string { return e.Err.Error() }

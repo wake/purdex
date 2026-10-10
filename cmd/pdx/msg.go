@@ -17,11 +17,10 @@ import (
 	ipeers "github.com/wake/purdex/internal/peers"
 )
 
-// msgSendTimeout is the client timeout for `pdx msg send`'s POST
-// /api/peers/send — longer than peersRequestTimeout because the daemon's
-// handler makes its own outbound call to a peer host (up to
-// ipeers.InterDaemonTimeout) before answering.
-const msgSendTimeout = 15 * time.Second
+// msgSendTimeout is the client timeout for `pdx msg send`'s POST /api/peers/send — longer than peersRequestTimeout because the
+// daemon's handler fetches the peer's inventory and makes its own outbound call (ipeers.InterDaemonTimeout) before answering; it
+// outlasts that whole worst case (ipeers.SenderWorstCase), so a delivery that landed is never reported as a timeout (#1009).
+const msgSendTimeout = ipeers.SendRequestTimeout
 
 // msgDefaultLogTail is `pdx msg log`'s default --tail, mirroring
 // internal/module/peers.defaultLogTail (cmd/pdx must not import that

@@ -58,21 +58,36 @@ const (
 	HostRateLimit = 120
 	// HostRateWindow is the sliding window HostRateLimit applies over.
 	HostRateWindow = time.Minute
-	// InterDaemonTimeout bounds one daemon-to-daemon HTTP call (/deliver).
-	InterDaemonTimeout = 10 * time.Second
+	// InterDaemonTimeout bounds one daemon-to-daemon HTTP call (/deliver): the receiver's worst case plus a margin, so a
+	// delivery that lands in the worst case is still answered before the sender gives up (#1009).
+	InterDaemonTimeout = ReceiverWorstCase + TimeoutMargin
 	// SocketWriteTimeout bounds one frame write into a Claude Code inbox
 	// socket, including the wait for the peer's EOF.
 	SocketWriteTimeout = 5 * time.Second
 
-	// The budget chain of one remote send (#1009). Each layer's timeout is derived from what runs below it, so changing
-	// one cannot silently invert the chain; budget_test.go asserts it. (Stubs for the red commit: the real derivation follows.)
-	InventoryBudget    = 2 * time.Second // one local inventory build (peers Module.budget)
-	HelperReadyTimeout = 3 * time.Second // waiting for a sender's helper to be ready
-	RemoteFetchTimeout = 3 * time.Second // fetching a peer's inventory
-	TimeoutMargin      = 2 * time.Second // what each layer waits beyond its downstream's worst case
-	ReceiverWorstCase  = InventoryBudget + HelperReadyTimeout + SocketWriteTimeout
-	SenderWorstCase    = InventoryBudget + RemoteFetchTimeout + InterDaemonTimeout
-	SendRequestTimeout = 15 * time.Second // `pdx msg send`'s client
+	// The budget chain of one remote send (#1009), from the bottom up. Each layer waits for the worst case of what it waits
+	// for, plus TimeoutMargin, and every number is derived from the one below so changing one cannot silently invert the chain
+	// (budget_test.go asserts it, and the daemon's own constants are tied to these in the peers module's tests):
+	//
+	//	receiver /deliver   InventoryBudget + HelperReadyTimeout + SocketWriteTimeout          = ReceiverWorstCase
+	//	sender daemon       InventoryBudget + RemoteFetchTimeout + InterDaemonTimeout           = SenderWorstCase
+	//	  (InterDaemonTimeout = ReceiverWorstCase + TimeoutMargin, the sender's call to /deliver)
+	//	pdx msg send        SenderWorstCase + TimeoutMargin                                     = SendRequestTimeout
+
+	// InventoryBudget is the one budget of a local inventory build (peers Module.budget).
+	InventoryBudget = 2 * time.Second
+	// HelperReadyTimeout bounds the wait for a sender's helper to print its ready line.
+	HelperReadyTimeout = 3 * time.Second
+	// RemoteFetchTimeout bounds one fetch of a peer's inventory.
+	RemoteFetchTimeout = 3 * time.Second
+	// TimeoutMargin is what each layer waits beyond its downstream's worst case.
+	TimeoutMargin = 2 * time.Second
+	// ReceiverWorstCase is the longest a /deliver handler can take: inventory, then the helper, then the socket write.
+	ReceiverWorstCase = InventoryBudget + HelperReadyTimeout + SocketWriteTimeout
+	// SenderWorstCase is the longest the sender daemon's /send handler can take before it answers its caller.
+	SenderWorstCase = InventoryBudget + RemoteFetchTimeout + InterDaemonTimeout
+	// SendRequestTimeout is the client timeout of `pdx msg send` (and the spawn brief): longer than the sender daemon's worst case.
+	SendRequestTimeout = SenderWorstCase + TimeoutMargin
 )
 
 // Validation sentinels: Validate (via ValidateText / ValidateMode) wraps
