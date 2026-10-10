@@ -25,7 +25,7 @@ import (
 // These are the mod's calls (lead-team-relay spec §8.3) plus `pdx relay <ref>`
 // (the lead's member relay, P6-5).
 const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]\n" +
-	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--config <path>]\n" +
+	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--config <path>]\n" +
 	"       pdx relay ask --session <sid> --used <pct> --window <n> [--request-id <uuid>] [--config <path>]\n" +
 	"       pdx relay wait <request_id> [--wait 9m] [--config <path>]\n" +
 	"       pdx relay self off|on|status --session <sid> [--config <path>]\n" +
@@ -251,6 +251,7 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 	var req team.RelayBeginRequest
 	used := fs.Float64("used", -1, "")
 	fs.BoolVar(&req.Self, "self", false, "")
+	fs.BoolVar(&req.Manual, "manual", false, "") // a person's /relay (MR-1): the mod sends it, the daemon still asks a person to approve
 	fs.StringVar(&req.SessionID, "session", "", "")
 	fs.IntVar(&req.Window, "window", -1, "") // -1: not given (the grammar requires it)
 	cfgPath, ok := relayFlags(fs, args, stderr)

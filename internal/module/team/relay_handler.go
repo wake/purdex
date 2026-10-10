@@ -226,7 +226,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !sameBeginPayload(m, op, req) {
-				m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id reused with a different used_percentage or window", nil)
+				m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id reused with a different used_percentage, window or manual", nil)
 				return
 			}
 			m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: op.RequestID})
@@ -248,6 +248,23 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "role or switches unreadable; see the daemon log", nil)
 		return
 	}
+	if role == roleMember && req.Manual {
+		// A person's /relay in a member's session (MR-1, U-M1): the member refusals are lifted. It is judged like a
+		// session with no role: the ordinary switch, and the pause (which a member cannot lift) is ignored.
+		if !m.manualMemberAllowed(w, req.SessionID) {
+			return
+		}
+		sw, err := m.switches.RelaySwitches()
+		if err != nil {
+			m.logf("[team] relay begin %s: %v", req.SessionID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "role or switches unreadable; see the daemon log", nil)
+			return
+		}
+		role, state = roleNone, "on"
+		if !sw.SelfSolo {
+			state = "off"
+		}
+	}
 	switch {
 	case role == roleMember:
 		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
@@ -262,7 +279,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	// model_id / effort are the daemon's to fill (spec U18 (b), M21): the
 	// session's last statusline reading, kept by the agent module. The mod
 	// sends neither; a session without a reading shows neither.
-	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window}
+	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual}
 	if m.usage != nil {
 		if u, ok := m.usage.ContextUsage(req.SessionID); ok {
 			sp.ModelID, sp.Effort = u.ModelID, u.Effort
@@ -310,8 +327,14 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "role unreadable; see the daemon log", nil)
 		return
 	} else if role == roleMember {
-		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
-		return
+		// A manual begin passes (MR-1), unless the member since became a remote one (MR-2).
+		if !req.Manual {
+			m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
+			return
+		}
+		if !m.manualMemberAllowed(w, req.SessionID) {
+			return
+		}
 	}
 	if err := os.MkdirAll(m.relayDir, 0o700); err != nil {
 		m.logf("[team] relay begin %s: mkdir %s: %v", req.SessionID, m.relayDir, err)
@@ -459,11 +482,19 @@ func (m *Module) closedRowReport(a team.Approval, at int64) (RelayReport, error)
 	if rep.State != team.RelayClaimed {
 		return rep, nil
 	}
-	role, err := m.relayRole(a.Origin.SessionID)
-	if role == roleMember {
-		rep.State, rep.Reason = team.RelayCancelled, team.ErrMemberRelayIsLeads
+	sr, err := m.store.SessionRole(a.Origin.SessionID)
+	if err != nil {
+		return rep, err
 	}
-	return rep, err
+	if sr.isMember() {
+		// A person's manual relay of a LOCAL member goes on (MR-1): the ROW's payload says so, as at the approve.
+		var sp team.SelfRelayPayload
+		manual := json.Unmarshal(a.Payload, &sp) == nil && sp.Manual
+		if !(manual && sr == sessionRoleMemberLocal) {
+			rep.State, rep.Reason = team.RelayCancelled, team.ErrMemberRelayIsLeads
+		}
+	}
+	return rep, nil
 }
 
 // reconcileAwaitingOp re-derives an awaiting_approval op from its approval
@@ -508,10 +539,26 @@ func rowStateOrMissing(row team.Approval, ok bool) string {
 	return string(row.State)
 }
 
+// manualMemberAllowed is false (and the answer written) when a member's manual begin cannot go on: the member is on a
+// team led on another host (relay_unsupported until MR-2), or the role cannot be read. A local member passes.
+func (m *Module) manualMemberAllowed(w http.ResponseWriter, sessionID string) bool {
+	role, err := m.store.SessionRole(sessionID)
+	if err != nil {
+		m.logf("[team] relay begin %s: %v", sessionID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "role unreadable; see the daemon log", nil)
+		return false
+	}
+	if role == sessionRoleMemberRemote {
+		m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, "a member of a team led on another host cannot be relayed by hand yet", nil)
+		return false
+	}
+	return true
+}
+
 // sameBeginPayload reports whether a replayed begin carries the payload the
 // op was opened with: the op's used_percentage and the approval row's
-// window (SelfRelayPayload). A row that cannot be read or decoded is "not
-// the same" — a replay is proven, never assumed.
+// window and manual flag (SelfRelayPayload). A row that cannot be read or
+// decoded is "not the same" — a replay is proven, never assumed.
 func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bool {
 	if op.UsedPercentage == nil || *op.UsedPercentage != req.UsedPercentage {
 		return false
@@ -524,7 +571,7 @@ func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bo
 	if err := json.Unmarshal(row.Payload, &sp); err != nil {
 		return false
 	}
-	return sp.Window == req.Window
+	return sp.Window == req.Window && sp.Manual == req.Manual
 }
 
 // paneOf is the "%N" pane id at the end of an Origin.Tmux ("<session>:@<win>.%<pane>"), "" when there is none.

@@ -287,6 +287,23 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 		if err := moveTeamRoles(tx, cur.SessionID, r); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
 		}
+		if cur.Kind == team.RelayKindSelf {
+			// A self relay that moved a MEMBER row (only a person's manual relay can: MR-1, D3) carries that row's team,
+			// so the lead can be told when it is done. A lead's or a solo session's self op has no member row: no stamp.
+			var teamID string
+			err := tx.QueryRow(`SELECT m.team_id FROM team_members m JOIN teams t ON t.id = m.team_id
+				WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, r.NewSessionID).Scan(&teamID)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+			case err != nil:
+				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: member team: %w", id, err)
+			default:
+				if _, err := tx.Exec(`UPDATE relay_ops SET team_id = ? WHERE id = ?`, teamID, id); err != nil {
+					return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: stamp team: %w", id, err)
+				}
+				next.TeamID = teamID
+			}
+		}
 	}
 	return next, ReportApplied, nil
 }

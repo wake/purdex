@@ -36,7 +36,7 @@ Vocabulary (spec §4): a **lead** runs a **team** of **members**. A member is ne
 ## As a member
 
 - Report with `pdx report <kind>` (`ack` when you start, `ready` before any merge and wait for the lead's go-ahead, `merged`, `done`; `question` / `blocked` with `--needs`), not free text; `pdx task mine` lists your tasks, and after a relay the notice lists them too.
-- **Never relay yourself.** Your relay is the lead's to start.
+- **Never relay yourself.** Your relay is the lead's to start — or the person's, by typing /relay.
 - Your Purdex mod asks your lead for a relay by itself at 70% of context, at a turn boundary, and you keep working while it waits: **you do nothing**. If the lead approves, the mod takes the relay as below.
 - When the lead relays you, the Purdex mod does it all: it takes the lead's control message itself (you never see it) and waits for your running turn to finish. When its **接力 prompt** arrives, write the handoff file it names with **one `Write`** and answer `HANDOFF-WRITTEN`, nothing else (§8 of the file: the prompt lists your lead and team). Then the mod clears you and the new conversation reads the file; your old ref still reaches you.
 - Report to the lead's address (`pdx msg send <lead address> "..."`), not to the user.

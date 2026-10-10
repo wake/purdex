@@ -2,6 +2,7 @@ package team
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -166,4 +167,23 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// MR-1: the wire names a person's /relay is carried by, and the mod protocol that sends it.
+func TestWireRelay_ManualIsPinned(t *testing.T) {
+	b, _ := json.Marshal(RelayBeginRequest{SessionID: "s", Self: true, Manual: true})
+	if !strings.Contains(string(b), `"manual":true`) {
+		t.Fatalf("begin request = %s, want manual:true", b)
+	}
+	b, _ = json.Marshal(RelayBeginRequest{SessionID: "s", Self: true})
+	if strings.Contains(string(b), "manual") {
+		t.Fatalf("a begin without manual says it: %s", b)
+	}
+	b, _ = json.Marshal(SelfRelayPayload{OpID: "o", Manual: true})
+	if !strings.Contains(string(b), `"manual":true`) {
+		t.Fatalf("payload = %s, want manual:true", b)
+	}
+	if MinManualRelayModVersion != 4 || RelayManualNoticeFmt != "[pdx team] member 由使用者手動接力：%s → %s" {
+		t.Fatalf("manual relay constants = %d / %q", MinManualRelayModVersion, RelayManualNoticeFmt)
+	}
 }

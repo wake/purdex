@@ -185,6 +185,48 @@ func TestManualApprove_ANonManualRowOfANewMemberIsStillCancelled(t *testing.T) {
 	}
 }
 
+// The lift is for a LOCAL member only (a remote one waits for MR-2): a manual row of a session that became a member of a
+// team led on another host after its begin is still cancelled at the approve. Mutation gate: treat any member as local
+// at the approve → approved (red).
+func TestManualApprove_ARowOfASessionThatBecameARemoteMemberIsCancelled(t *testing.T) {
+	f := newFixture(t)
+	out := f.manualOpened("sid-1") // no role at begin
+	seedRemote(t, f.m.store, "mk-1", "sid-1", f.clock.Load())
+	code, body := f.decide(out.RequestID, "approve")
+	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrMemberRelayIsLeads {
+		t.Fatalf("approve: %d %s, want 409 %s", code, body, team.ErrMemberRelayIsLeads)
+	}
+	if op := f.op(out.Op.ID); op.State != team.RelayCancelled {
+		t.Fatalf("op = %s, want cancelled", op.State)
+	}
+}
+
+// The op paths: an approved manual row whose op was not moved yet (afterClose missed it) is reconciled — claimed for a
+// local member, cancelled for a session that became a remote one. Mutation gates: closedRowReport cancelling every
+// member → the first is cancelled (red); treating every member as local → the second is claimed (red).
+func TestManualReconcile_AnApprovedManualRowIsClaimedForALocalMemberOnly(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		f := newFixture(t)
+		out := f.manualOpened("sid-1")
+		if _, won, err := f.m.store.CloseIfOpen(out.RequestID, Close{State: team.StateApproved, DecidedAt: 1}); err != nil || !won {
+			t.Fatalf("approve in the store: won=%v err=%v", won, err)
+		}
+		if remote {
+			seedRemote(t, f.m.store, "mk-1", "sid-1", f.clock.Load())
+		} else {
+			f.makeMember("sid-1")
+		}
+		f.m.reconcileRelays()
+		op := f.op(out.Op.ID)
+		if remote && op.State != team.RelayCancelled {
+			t.Fatalf("remote: op = %s, want cancelled", op.State)
+		}
+		if !remote && op.State != team.RelayClaimed {
+			t.Fatalf("local: op = %s (%s), want claimed", op.State, op.Reason)
+		}
+	}
+}
+
 // Unattended mode never approves a member's manual relay and never spends: the begin falls back to an open card, the
 // sweeps leave it, a person's click approves it without a spend. Mutation gates: create it approved → row approved
 // (red); the sweep approves it → red; spend → self_left drops (red).
