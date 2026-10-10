@@ -136,6 +136,9 @@ func (m *Module) flushContextUsage() int {
 	}
 	m.usageFlushMu.Lock() // a removal of the statusline waits for a flush to finish, and the other way round
 	defer m.usageFlushMu.Unlock()
+	if m.usageClearOwed { // before this flush's snapshot: a clear that did not reach the disk comes first
+		m.deleteAllUsageRows()
+	}
 	m.snapshotMu.Lock()
 	rows := make([]store.ContextUsageRow, 0, len(m.usageDirty))
 	for id := range m.usageDirty {
@@ -161,9 +164,7 @@ func (m *Module) flushContextUsage() int {
 		for _, r := range rows {
 			m.usageDirty[r.SessionID] = struct{}{}
 		}
-		for _, id := range gone {
-			m.usageDeleted[id] = struct{}{}
-		}
+		m.requeueDeleted(gone)
 		m.snapshotMu.Unlock()
 		return 0
 	}
@@ -174,9 +175,7 @@ func (m *Module) flushContextUsage() int {
 	if err := del(gone); err != nil {
 		log.Printf("[agent] persist context usage: %v", err)
 		m.snapshotMu.Lock() // the rows stay until a later flush deletes them
-		for _, id := range gone {
-			m.usageDeleted[id] = struct{}{}
-		}
+		m.requeueDeleted(gone)
 		m.snapshotMu.Unlock()
 	}
 	m.snapshotMu.Lock()
@@ -199,6 +198,16 @@ func (m *Module) startContextUsageFlush() {
 		defer m.usageWG.Done()
 		m.runContextUsageFlush(ctx)
 	}()
+}
+
+// requeueDeleted puts evicted sessions' rows back on the delete list after a failed delete — except a session that has a
+// reading again (a statusline arrived meanwhile): its row is that reading's now, and a delete would erase it. snapshotMu held.
+func (m *Module) requeueDeleted(ids []string) {
+	for _, id := range ids {
+		if _, again := m.contextUsage[id]; !again {
+			m.usageDeleted[id] = struct{}{}
+		}
+	}
 }
 
 // runContextUsageFlush flushes every usageFlushEvery until ctx is done, then once more.
@@ -226,11 +235,25 @@ func (m *Module) clearContextUsage() {
 	m.usageDeleted = make(map[string]struct{})
 	m.usagePersistedAt = make(map[string]int64)
 	m.snapshotMu.Unlock()
-	if m.usage != nil {
-		if err := m.usage.DeleteAll(); err != nil {
-			log.Printf("[agent] clear persisted context usage: %v", err)
-		}
+	m.deleteAllUsageRows()
+}
+
+// deleteAllUsageRows empties the table; a failure is owed to the next flush (usageClearOwed), so the removed readings
+// cannot come back at a restart. usageFlushMu held.
+func (m *Module) deleteAllUsageRows() {
+	if m.usage == nil {
+		return
 	}
+	del := m.usage.DeleteAll
+	if m.usageDeleteAllFn != nil {
+		del = m.usageDeleteAllFn
+	}
+	if err := del(); err != nil {
+		log.Printf("[agent] clear persisted context usage (retried at the next flush): %v", err)
+		m.usageClearOwed = true
+		return
+	}
+	m.usageClearOwed = false
 }
 
 // restoreContextUsage reads the persisted readings back at boot, for the sessions that are still live (the same
