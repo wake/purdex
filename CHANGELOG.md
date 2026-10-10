@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.680] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`（mod 沒變，`pdx setup` 也不會再重寫 mod 資料夾）。跨主機 team 的修正要 member 主機也升級才生效。
+
+### Fixed：member 主機重啟後，lead 那邊的跨主機 member 不再空白 — #2406（#2408）
+
+- 每個 session 最後一次的 statusline 讀數（用量、model、effort 與時間）會存進 daemon 的資料庫，開機時只為仍然開著的 session 讀回來。原本只存在記憶體裡，member 主機一重啟就清空，要等那個 session 下一輪對話才補回來，lead 的 team 面板那段時間只能顯示空白。數值有變才寫，每 10 秒合併寫一次。
+
 ## [1.0.0-alpha.679] - 2026-10-10
 
 > 動到 daemon、mod 與 SPA：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；開著的 session 會自動重新載入 mod（會印一次 reloaded 提示）。team.db 會換一個唯一索引（自動遷移，開機不會因此失敗）。SPA 已隨主機上的 dev server 生效。
