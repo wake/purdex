@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { RegionResize } from '../RegionResize'
 import { useTabStore } from '../../stores/useTabStore'
-import { PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, useTeamUiStore } from '../../stores/useTeamUiStore'
+import { PANEL_MAX_WIDTH, currentPanelMin, useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamDisplay } from './team-display'
 import { panelView } from './panel-view'
@@ -60,7 +60,7 @@ export function TeamPanelArea() {
             onResize={(delta) => {
               // The latest committed width plus the drag so far; the store stays untouched until mouseup.
               const base = draftRef.current ?? useTeamUiStore.getState().panel.width
-              const next = Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, base + delta))
+              const next = Math.max(currentPanelMin(), Math.min(PANEL_MAX_WIDTH, base + delta))
               draftRef.current = next
               setDraft(next)
             }}

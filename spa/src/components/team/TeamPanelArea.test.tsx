@@ -10,7 +10,7 @@ import { HOST, KEY, resetTeamStores, seedScene } from '../../lib/team/__tests__/
 import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
-import { PANEL_MIN_WIDTH, useTeamUiStore } from '../../stores/useTeamUiStore'
+import { currentPanelMin, useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
@@ -662,14 +662,14 @@ describe('resize and enlarge', () => {
     expect(area().style.width).toBe('500px')
   })
 
-  it('resize clamps to 412-720', () => {
+  it('resize clamps to the current minimum (356 under the default style) - 720', () => {
     scene()
     mount()
     drag(500, -2000)
     expect(useTeamUiStore.getState().panel.width).toBe(720)
     drag(500, 5000)
-    expect(useTeamUiStore.getState().panel.width).toBe(PANEL_MIN_WIDTH)
-    expect(PANEL_MIN_WIDTH).toBe(412)
+    expect(useTeamUiStore.getState().panel.width).toBe(currentPanelMin())
+    expect(currentPanelMin()).toBe(356)
   })
 
   it('a click on the edge without moving writes nothing', () => {

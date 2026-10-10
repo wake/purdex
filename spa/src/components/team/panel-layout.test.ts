@@ -2,9 +2,8 @@
 // anything out, so this adds up the named constants; the real-Chromium numbers are in the PR notes.
 import { describe, it, expect } from 'vitest'
 import { HOST_BADGE_BOX_DEFAULT, HOST_BADGE_BOX_MAX } from '../../stores/useUISettingsStore'
-import { PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH } from '../../stores/useTeamUiStore'
 import {
-  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_PL, CELL_PR, CELL_INNER_GAP, CELL_ICON_BOX_W, CELL_GAP, SEP_LINE_W, SEP_W, POPOVER_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, placeBelow,
+  AREA_BORDER, BUTTONS_W, CAPSULE_MAX_W, CELL_H, HEADER_GAP, HEADER_H, HEADER_PX, CELL_W, CELL_PL, CELL_PR, CELL_INNER_GAP, CELL_ICON_BOX_W, CELL_GAP, SEP_LINE_W, SEP_W, POPOVER_W, PLUS_CHIP_W, capacityFromWidths, cellWidthFor, cellsWidth, firstRowCapacity, panelMinWidth, placeBelow,
 } from './panel-layout'
 
 describe('panel header budget', () => {
@@ -50,31 +49,28 @@ describe('panel header budget', () => {
     // The pieces beside the cells, measured: capsule 84 (its cap), toggle 19 + expand 20 + gap 2 = 41, header padding 6 + 6,
     // the gap between capsule | cells | buttons 4 + 4, the area's border 1 + 1  =>  147 off the panel width.
     const BESIDE = AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + BUTTONS_W
-    const widest = (box: number) => Math.max(cellWidthFor('iconDot', box), cellWidthFor('badge', box))
     it('beside-the-cells measures 147', () => {
       expect(BUTTONS_W).toBe(41)
       expect(BESIDE).toBe(147)
     })
-    it('the minimum is the least width that holds 4 iconDot cells (the widest style); badge needs less', () => {
+    it('the minimum follows the light style and the host box: today\'s values are 356 (badge) and 412 (iconDot)', () => {
       expect(cellsWidth(4, cellWidthFor('iconDot'))).toBe(265) // 4 x 62 + 3 x 4 + 5
       expect(cellsWidth(4, cellWidthFor('badge'))).toBe(209) // 4 x 48 + 3 x 4 + 5
-      expect(PANEL_MIN_WIDTH).toBe(BESIDE + cellsWidth(4, widest(HOST_BADGE_BOX_DEFAULT)))
-      expect(PANEL_MIN_WIDTH).toBe(412)
-      expect(BESIDE + cellsWidth(4, cellWidthFor('badge'))).toBe(356)
-      expect(PANEL_DEFAULT_WIDTH).toBeGreaterThanOrEqual(PANEL_MIN_WIDTH)
+      expect(panelMinWidth('badge')).toBe(356)
+      expect(panelMinWidth('iconDot')).toBe(412)
+      expect(panelMinWidth('badge')).toBe(BESIDE + cellsWidth(4, cellWidthFor('badge', HOST_BADGE_BOX_DEFAULT)))
+      expect(panelMinWidth('icon')).toBe(356)
+      // a bigger ring grows every cell, so the minimum follows it (4 cells x the extra px)
+      expect(panelMinWidth('badge', HOST_BADGE_BOX_MAX)).toBe(356 + 4 * (HOST_BADGE_BOX_MAX - HOST_BADGE_BOX_DEFAULT))
     })
     it.each(['badge', 'iconDot'] as const)('at the minimum, 4 %s cells fit in the first row; one px less and the 4th wraps', (style) => {
       const widths = Array(9).fill(cellWidthFor(style))
-      expect(capacityFromWidths(widths, PANEL_MIN_WIDTH - BESIDE)).toBeGreaterThanOrEqual(4)
-      if (style === 'iconDot') {
-        expect(capacityFromWidths(widths, PANEL_MIN_WIDTH - BESIDE)).toBe(4)
-        expect(capacityFromWidths(widths, PANEL_MIN_WIDTH - 1 - BESIDE)).toBe(3)
-      }
+      expect(capacityFromWidths(widths, panelMinWidth(style) - BESIDE)).toBe(4)
+      expect(capacityFromWidths(widths, panelMinWidth(style) - 1 - BESIDE)).toBe(3)
     })
     it('the badge fallback (no layout) agrees at the badge need', () => {
       expect(firstRowCapacity(356)).toBe(4)
       expect(firstRowCapacity(355)).toBe(3)
-      expect(firstRowCapacity(PANEL_MIN_WIDTH)).toBeGreaterThanOrEqual(4)
     })
   })
 

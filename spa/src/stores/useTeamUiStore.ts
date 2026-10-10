@@ -15,6 +15,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
+import { panelMinWidth } from '../components/team/panel-layout'
+import { useUISettingsStore } from './useUISettingsStore'
 
 /** Where the panel area sits (team spec §4.4 Round 3): in the title bar, or in the pane as one line, the full list, or enlarged. */
 export type PanelMode = 'titlebar' | 'line' | 'full' | 'max'
@@ -41,12 +43,18 @@ export interface DrillSeat { hostId: string; sessionId: string }
 /** The panel area: its width in px, one value for the whole area (enlarging is the per-team `max` state). */
 export interface PanelArea { width: number }
 
-/** The least width at which a lead + 3 members (4 cells, the widest light style, iconDot) fit one header row, measured in Chromium; see panel-layout.test.ts. */
-export const PANEL_MIN_WIDTH = 412
 export const PANEL_MAX_WIDTH = 720
-export const PANEL_DEFAULT_WIDTH = 412
 
-const clampWidth = (w: number): number => Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, Math.round(w)))
+/**
+ * The least width at which a lead + 3 members fit one header row under the CURRENT light style and host box
+ * (panel-layout `panelMinWidth`; badge 356, iconDot 412). It is also the default width.
+ */
+export const currentPanelMin = (): number => {
+  const s = useUISettingsStore.getState()
+  return panelMinWidth(s.tabIndicatorStyle, s.hostBadgeSidebarBox)
+}
+
+const clampWidth = (w: number): number => Math.max(currentPanelMin(), Math.min(PANEL_MAX_WIDTH, Math.round(w)))
 
 interface TeamUiState extends Slices {
   panel: PanelArea
@@ -80,7 +88,7 @@ interface TeamUiState extends Slices {
 }
 
 const EMPTY: Slices = { memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, ghostWorkspace: {}, teamDrill: {} }
-const DEFAULT_PANEL: PanelArea = { width: PANEL_DEFAULT_WIDTH }
+const defaultPanel = (): PanelArea => ({ width: currentPanelMin() })
 
 /** A team key is `<hostId>\0<teamId>` (team-views `teamKeyOf`); a host's keys start with `<hostId>\0`. */
 const hostPrefix = (hostId: string) => `${hostId}\u0000`
@@ -106,8 +114,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const DANGEROUS = new Set(['__proto__', 'prototype', 'constructor'])
 
 function healPanel(v: unknown): PanelArea {
-  if (!isRecord(v)) return DEFAULT_PANEL
-  const width = typeof v.width === 'number' && Number.isFinite(v.width) ? clampWidth(v.width) : PANEL_DEFAULT_WIDTH
+  if (!isRecord(v)) return defaultPanel()
+  const width = typeof v.width === 'number' && Number.isFinite(v.width) ? clampWidth(v.width) : currentPanelMin()
   return { width }
 }
 
@@ -142,7 +150,7 @@ export const useTeamUiStore = create<TeamUiState>()(
   persist(
     (set, get) => ({
       ...EMPTY,
-      panel: DEFAULT_PANEL,
+      panel: defaultPanel(),
       workbookTabs: {},
       setPanelWidth: (width) => set((s) => {
         if (!Number.isFinite(width)) return s
@@ -247,3 +255,16 @@ export const useTeamUiStore = create<TeamUiState>()(
     },
   ),
 )
+
+// The minimum moves with the light style and the host box (user 2026-10-10, round 5). When it does: a width below the new
+// minimum is pulled up to it, and a width that sat AT the old minimum (the default, never widened by the person) follows it
+// either way; a width the person widened past the minimum is kept.
+let lastMin = currentPanelMin()
+useUISettingsStore.subscribe(() => {
+  const min = currentPanelMin()
+  if (min === lastMin) return
+  const prev = lastMin
+  lastMin = min
+  const width = useTeamUiStore.getState().panel.width
+  if (width < min || width === prev) useTeamUiStore.setState({ panel: { width: min } })
+})
