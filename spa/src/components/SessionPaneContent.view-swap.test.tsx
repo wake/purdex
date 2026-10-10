@@ -19,7 +19,7 @@ import type { Tab } from '../types/tab'
 const seen = vi.hoisted(() => ({ mounts: 0, unmounts: 0, last: undefined as Record<string, unknown> | undefined }))
 
 vi.mock('./TerminalView', () => ({
-  default: (props: Record<string, unknown>) => {
+  default: function TerminalViewMock(props: Record<string, unknown>) {
     seen.last = props
     useEffect(() => {
       seen.mounts += 1
