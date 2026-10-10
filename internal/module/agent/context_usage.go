@@ -53,17 +53,16 @@ type statuslineUsage struct {
 	} `json:"effort"`
 }
 
-// recordContextUsage parses the CC statusline payload and keeps the reading
-// keyed by CC session id. Malformed or id-less payloads are ignored.
-func (m *Module) recordContextUsage(raw json.RawMessage) {
+// parseStatusline reads the CC session id and the usage reading out of a statusline payload (At is the caller's). Malformed or
+// id-less payloads are not readings.
+func parseStatusline(raw json.RawMessage) (sessionID string, u ContextUsage, ok bool) {
 	var p statuslineUsage
 	if err := json.Unmarshal(raw, &p); err != nil || p.SessionID == "" || p.ContextWindow == nil {
-		return
+		return "", ContextUsage{}, false
 	}
-	u := ContextUsage{
+	u = ContextUsage{
 		UsedPercentage: p.ContextWindow.UsedPercentage,
 		WindowSize:     p.ContextWindow.ContextWindowSize,
-		At:             usageNow(),
 	}
 	if p.Model != nil {
 		u.ModelID = p.Model.ID
@@ -71,11 +70,32 @@ func (m *Module) recordContextUsage(raw json.RawMessage) {
 	if p.Effort != nil {
 		u.Effort = p.Effort.Level
 	}
+	return p.SessionID, u, true
+}
+
+// recordContextUsage parses the CC statusline payload and keeps the reading
+// keyed by CC session id. Malformed or id-less payloads are ignored.
+func (m *Module) recordContextUsage(raw json.RawMessage) {
+	sid, u, ok := parseStatusline(raw)
+	if !ok {
+		return
+	}
+	u.At = usageNow()
+	m.storeContextUsage(sid, u, false)
+}
+
+// storeContextUsage keeps u as sid's reading. With onlyIfNewer a reading the daemon already holds that is as new as u (its At >=
+// u.At) stays — the check and the set are one step under snapshotMu, so a live POST racing a catch-up (#2545) ends with the
+// newer of the two whichever order they run in. It reports whether u was kept.
+func (m *Module) storeContextUsage(sid string, u ContextUsage, onlyIfNewer bool) bool {
 	m.snapshotMu.Lock()
 	defer m.snapshotMu.Unlock()
+	if cur, exists := m.contextUsage[sid]; onlyIfNewer && exists && cur.At >= u.At {
+		return false
+	}
 	m.usageSeq++
 	u.seq = m.usageSeq
-	if _, exists := m.contextUsage[p.SessionID]; !exists && len(m.contextUsage) >= contextUsageCap {
+	if _, exists := m.contextUsage[sid]; !exists && len(m.contextUsage) >= contextUsageCap {
 		var oldestID string
 		var oldest ContextUsage
 		for id, v := range m.contextUsage {
@@ -90,12 +110,13 @@ func (m *Module) recordContextUsage(raw json.RawMessage) {
 		}
 		delete(m.usagePersistedAt, oldestID)
 	}
-	prev, had := m.contextUsage[p.SessionID]
-	m.contextUsage[p.SessionID] = u
-	delete(m.usageDeleted, p.SessionID)
-	if !had || !sameReading(prev, u) || u.At-m.usagePersistedAt[p.SessionID] > usageRefreshAfter.Milliseconds() {
-		m.usageDirty[p.SessionID] = struct{}{}
+	prev, had := m.contextUsage[sid]
+	m.contextUsage[sid] = u
+	delete(m.usageDeleted, sid)
+	if !had || !sameReading(prev, u) || u.At-m.usagePersistedAt[sid] > usageRefreshAfter.Milliseconds() {
+		m.usageDirty[sid] = struct{}{}
 	}
+	return true
 }
 
 // sameReading says whether two readings carry the same values (At and seq aside).

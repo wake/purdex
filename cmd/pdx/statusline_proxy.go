@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/statuspending"
 )
 
 // readStdinWithTimeout reads the entire stdin, returning []byte("{}") if empty
@@ -166,6 +167,7 @@ func resolveProxyTmuxSession() string {
 func runStatuslineProxy(args []string) {
 	inner := parseInnerFlag(args)
 	raw := readStdinWithTimeout(os.Stdin, 5)
+	startedAt := time.Now() // the payload's time: when this render's JSON was read, not when it is written anywhere
 
 	// 1) Print to CC (never blocks on POST)
 	if inner != "" {
@@ -177,15 +179,32 @@ func runStatuslineProxy(args []string) {
 	// 2) Synchronously POST to daemon; silent fail.
 	tmuxSession := resolveProxyTmuxSession()
 	cfg, err := config.Load("")
+	var cfgp *config.Config
 	url := "http://127.0.0.1:7860/api/agent/status"
 	var token string
 	if err == nil {
+		cfgp = &cfg
 		url = fmt.Sprintf("http://%s:%d/api/agent/status", resolveDaemonHost(cfg.Bind), cfg.Port)
 		token = cfg.Token
 	}
-	_ = postStatus(url, token, statuslinePayload{
+	deliverStatus(cfgp, url, token, statuslinePayload{
 		TmuxSession: tmuxSession,
 		AgentType:   "cc",
 		RawStatus:   raw,
-	})
+	}, startedAt)
+}
+
+// deliverStatus POSTs the payload (silently, as before). A POST that fails — the daemon is down, or did not take it — leaves the
+// newest payload of that session in <data_dir>/statusline-pending for the daemon's next boot (#2545); a POST that works removes
+// the session's file unless a later render's failure wrote a newer one. Nothing here runs on the happy path but one stat of a
+// directory that is not there. at is when this render's JSON was read. The daemon's self-test traffic is never kept.
+func deliverStatus(cfg *config.Config, url, token string, p statuslinePayload, at time.Time) {
+	dir := statuspending.DirFor(cfg)
+	if err := postStatus(url, token, p); err != nil {
+		if dir != "" && os.Getenv("PDX_STATUSLINE_TEST_SESSION") == "" {
+			_ = statuspending.Write(dir, p.RawStatus, at.UnixMilli())
+		}
+		return
+	}
+	statuspending.CleanupOnSuccess(dir, p.RawStatus, at.UnixMilli())
 }
