@@ -38,11 +38,13 @@ interface Props {
   open: boolean
   /** Closes the panel (scrim click and Esc in overlay mode). */
   onClose: () => void
+  /** False for a pane that is not the focused one: its overlay does not answer Esc (the scrim and the panel's ✕ still close it). Default true. */
+  escActive?: boolean
   /** Test hook: use this container width instead of measuring. */
   widthOverride?: number
 }
 
-export function SessionSplit({ children, panel, open, onClose, widthOverride }: Props) {
+export function SessionSplit({ children, panel, open, onClose, escActive = true, widthOverride }: Props) {
   const t = useI18nStore((s) => s.t)
   const [width, attach] = useWidth(widthOverride)
   const measured = width !== null
@@ -74,7 +76,7 @@ export function SessionSplit({ children, panel, open, onClose, widthOverride }: 
 
   // Overlay only: Esc closes — unless a text field has it.
   useEffect(() => {
-    if (!overlay) return
+    if (!overlay || !escActive) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
       const el = e.target as HTMLElement | null
@@ -83,7 +85,7 @@ export function SessionSplit({ children, panel, open, onClose, widthOverride }: 
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [overlay, onClose])
+  }, [overlay, escActive, onClose])
 
   return (
     <div ref={attach} data-testid="session-split" data-mode={!open ? 'closed' : !measured ? 'measuring' : overlay ? 'overlay' : 'docked'} className="relative flex h-full min-w-0"

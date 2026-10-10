@@ -1,7 +1,7 @@
 // U3-1c b: the deck is mounted inside the session pane. The pane holds its conversation in EVERY view (plan D4), and what
 // the reader did in the deck (an opened output, the scroll place) survives the tab being switched away and back — the
 // real TabContent unmounts a session pane (keepAliveCount 0), as in SessionPaneContent.view-swap.test.tsx.
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
 import { TabContent } from './TabContent'
 import { SessionPaneContent } from './SessionPaneContent'
@@ -9,6 +9,7 @@ import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { forgetFolds } from '../lib/conversations/fold-memory'
 import { clearAllDrafts, draftKey, readDraft, writeDraft } from '../lib/conversations/draft-memory'
 import { clearAllSendQueues, hasSendQueue, sendQueueFor } from '../lib/conversations/send-queue'
+import { clearAllPanels, readPanel } from '../lib/conversations/panel-memory'
 import { emptyDoc } from '../lib/conversations/model'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
@@ -50,7 +51,11 @@ const ready = (): PaneConversation => ({
   entry: { doc: { ...emptyDoc(), turns: [{ id: 't0', index: 0, started_at: 1, outcome: 'done', items: [exec] }] }, status: 'live', reason: '', paging: false, subagents: {} },
 })
 
+afterEach(() => { vi.restoreAllMocks() })
 beforeEach(() => {
+  // jsdom lays nothing out; the pane split needs a width (1000 docks the panel).
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width: 1000, height: 600, top: 0, left: 0, right: 1000, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }))
+  clearAllPanels()
   cleanup()
   clearAllDrafts(); clearAllSendQueues()
   conv.calls = []
@@ -143,6 +148,27 @@ describe('the deck inside the session pane', () => {
     // the tab is closed: the pane is gone for good
     await act(async () => { useTabStore.setState({ tabs: { [dashTab.id]: dashTab }, tabOrder: [dashTab.id], activeTabId: dashTab.id }) })
     expect(readDraft(dk2)).toBeUndefined()
+  })
+
+  it('an open right panel survives switching to another tab and back, in the deck and in the chat', () => {
+    setView('deck')
+    const view = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    fireEvent.click(screen.getByTestId('output-toggle'))
+    fireEvent.click(screen.getByTestId('output-show-all'))
+    expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
+    view.rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('session-right-panel')).toBeNull() // really unmounted
+    view.rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
+    expect(readPanel(paneIdOf(sessionTab))?.content).toMatchObject({ kind: 'output', stepId: 'x1' })
+    // the same pane in the chat: its work row opens a chain, and that survives too
+    clearAllPanels()
+    setView('chat')
+    fireEvent.click(screen.getAllByTestId('chat-work')[0])
+    expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
+    view.rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    view.rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
   })
 
   it('an unreadable conversation offers the terminal and switching goes there', () => {

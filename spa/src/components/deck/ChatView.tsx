@@ -15,7 +15,7 @@ import { AgentBubble, UserBubble } from './ChatBubbles'
 import { PeerLine } from './ChatPeerLine'
 import { ChatHeader } from './ChatHeader'
 import { ChatWorkRow, FileChip } from './ChatWorkRow'
-import { SessionRightPanel } from './SessionRightPanel'
+import { SessionPanelSplit } from './SessionPanelSplit'
 import { SystemRow } from './ThinkingSystem'
 import { UnreadableState, type UnreadableReason } from './UnreadableState'
 
@@ -87,12 +87,17 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
 
   return (
     <FoldContext.Provider value={fold}>
-      <div data-testid="chat-view" className="flex h-full min-h-0">
-        <div className="flex min-w-0 flex-1 flex-col">
-          <ChatHeader title={title} status={status} latest={latest} />
-          {reason ? (
+      <div data-testid="chat-view" className="h-full min-h-0">
+        {reason ? (
+          // Nothing to read, so nothing a panel could show: no split, whatever the panel memory holds.
+          <div className="flex h-full min-h-0 flex-col">
+            <ChatHeader title={title} status={status} latest={latest} />
             <div className="min-h-0 flex-1"><UnreadableState reason={reason} onRetry={onRetry} onSwitchToTerminal={onSwitchToTerminal} /></div>
-          ) : (
+            {input}
+          </div>
+        ) : (
+          <SessionPanelSplit paneKey={paneKey} binding={binding} turns={turns} active={active}>
+            <ChatHeader title={title} status={status} latest={latest} />
             <div ref={attach} onScroll={onScroll} data-testid="chat-scroll" aria-label={t('chat.transcript')} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               {groupByTurn(entries).map((g) => (
                 <div key={g.turnIndex} data-turn-index={g.turnIndex} className={`${SCROLL_ANCHOR_CLASS} space-y-3`}>
@@ -100,10 +105,9 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
                 </div>
               ))}
             </div>
-          )}
-          {input}
-        </div>
-        {!reason && <SessionRightPanel paneKey={paneKey} binding={binding} turns={turns} active={active} />}
+            {input}
+          </SessionPanelSplit>
+        )}
       </div>
     </FoldContext.Provider>
   )
