@@ -118,6 +118,13 @@ type Module struct {
 	// started. The empty_samples a row carries from before a restart say nothing
 	// about the command now, so the vanished rule waits for a fresh one.
 	measuredThisBoot atomic.Bool
+	// The disk guard (diskguard.go, #2470). diskFree reads the free bytes of the volume of a path and goCacheDir says where
+	// the Go build cache is; both nil (a test module) leaves the guard off, Init installs the real ones. trimHook runs at
+	// the start of a trim's walk: a seam for tests.
+	diskFree   func(path string) (int64, error)
+	goCacheDir func() string
+	trimHook   func()
+	disk       diskGuard
 	// skipPass makes admissionPass a no-op (a test seam).
 	skipPass    bool
 	lastPrune   time.Time
@@ -193,6 +200,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
+		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)
 	}
 	m.openStore(c)
 	m.findSettings(c)

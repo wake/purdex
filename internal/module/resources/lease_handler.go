@@ -395,6 +395,7 @@ func (m *Module) leaseResponse(row leaseRow, set resources.Settings, fallback bo
 	resp := resources.LeaseResponse{
 		ID: row.ID, State: row.State, Granted: row.GrantedAt != 0, Overrun: row.Overrun,
 		WaitedMS: row.WaitedMS, Host: m.leaseHost(), Mode: set.Mode, ScopeFallback: fallback, EndReason: row.EndReason,
+		Warning: m.warnFor(row),
 	}
 	if set.Mode == resources.ModeAdvise {
 		ww := row.WouldWait
