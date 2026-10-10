@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -821,6 +822,64 @@ func TestNewOuterHandler_UnattendedIsAdminOnly(t *testing.T) {
 			if reached := ran > before; rec.Code != tc.want || reached != (tc.want == 200) {
 				t.Errorf("%s bearer %q: got %d (stub ran %v), want %d", method, tc.bearer, rec.Code, reached, tc.want)
 			}
+		}
+	}
+}
+
+// A quick-mode daemon starts with an empty token and pairs: /api/pair/verify and /api/pair/setup must reach their handlers
+// without a bearer (they check the pairing secret / setup secret themselves), or the empty-token refusal (#1950) would
+// leave it unpairable. Once paired the same paths are behind the token like everything else.
+func TestOuterChain_PairingFlowWorksWithAnEmptyToken(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	c := newTestCore(&config.Config{Token: "", DataDir: t.TempDir()})
+	c.CfgPath = cfgPath
+	c.PairingSecret = "a1b2c3"
+	c.Pairing.Set(core.StatePairing)
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	outer := newOuterHandler(c, mux, mux, nil)
+
+	post := func(path, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		outer.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := post("/api/pair/verify", `{"secret":"ffffff"}`); rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "unauthorized") {
+		t.Fatalf("wrong secret: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := post("/api/pair/verify", `{"secret":"a1b2c3"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("verify without a bearer while pairing: want 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	var v struct {
+		SetupSecret string `json:"setupSecret"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || v.SetupSecret == "" {
+		t.Fatalf("verify body: %v %s", err, rec.Body.String())
+	}
+	tok := strings.Repeat("t", 32)
+	if rec := post("/api/pair/setup", `{"setupSecret":"`+v.SetupSecret+`","token":"`+tok+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("setup: want 200, got %d %s", rec.Code, rec.Body.String())
+	}
+	if c.Pairing.Get() != core.StateNormal {
+		t.Fatal("still pairing after setup")
+	}
+	// Paired: the exemption is gone, the same paths now need the token.
+	if rec := post("/api/pair/verify", `{"secret":"a1b2c3"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("verify after pairing without a bearer: want 401, got %d", rec.Code)
+	}
+	// And the exemption is those two paths only.
+	c2 := newTestCore(&config.Config{Token: ""})
+	c2.Pairing.Set(core.StatePairing)
+	outer2 := newOuterHandler(c2, nil, http.NotFoundHandler(), nil)
+	for _, p := range []string{"/api/pair/other", "/api/sessions"} {
+		req := httptest.NewRequest(http.MethodPost, p, nil)
+		rec := httptest.NewRecorder()
+		outer2.ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK || rec.Code == http.StatusNotFound {
+			t.Fatalf("%s while pairing with an empty token reached the inner handler: %d", p, rec.Code)
 		}
 	}
 }

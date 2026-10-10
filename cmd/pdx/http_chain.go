@@ -84,8 +84,23 @@ func newOuterHandler(c *core.Core, routes *http.ServeMux, inner http.Handler, al
 	// its own source (tailnet / loopback) and keeps its own failure limiter. The exemption is this one exact path and method.
 	claim := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(inner)))
 
+	// The first pairing of a quick-mode daemon (#1950): it starts with no token, and the phone gets one by showing the pairing
+	// secret (verify) and then the setup secret it is given (setup) — each route checks its secret itself, and neither can
+	// run once paired. So these two exact paths take no bearer, and only while the daemon is pairing; once it is not, they
+	// are ordinary routes of the general chain (a token is needed, as for everything else).
+	pairOpen := middleware.CORS(middleware.IPWhitelist(allow)(middleware.PairingGuard(isPairing)(inner)))
+	pairRoute := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPairing() {
+			pairOpen.ServeHTTP(w, r)
+			return
+		}
+		general.ServeHTTP(w, r)
+	})
+
 	outer := http.NewServeMux()
 	outer.Handle("POST "+hosttransfermod.ClaimRoute, claim)
+	outer.Handle("POST /api/pair/verify", pairRoute)
+	outer.Handle("POST /api/pair/setup", pairRoute)
 	outer.Handle("GET /api/health", middleware.CORS(http.HandlerFunc(c.HandleHealth)))
 	outer.Handle("/api/peers", peerChain)
 	outer.Handle("/api/peers/", peerChain)
