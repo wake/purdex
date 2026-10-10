@@ -101,3 +101,6 @@ func WriteFile(path string, cfg Config) error {
 	}
 	return os.Rename(tmp, path)
 }
+
+// SetToken: stub for the red commit (#1950).
+func SetToken(path, token string) error { return os.ErrInvalid }
