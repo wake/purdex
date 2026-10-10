@@ -3,6 +3,7 @@ package teammod
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -183,5 +184,115 @@ func TestPresence_AStalledClearedOpWhoseNewSessionIsGoneIsStillFailedAtTheStall(
 	f.sweepTimeouts()
 	if got := f.op(op.ID); got.State != team.RelayFailed {
 		t.Fatalf("gone at the stall: %+v", got)
+	}
+}
+
+// ---- codex attack: the kill paths, the rows with no timer, the log map ----
+
+// hideUnknown: the registry does not list sid and a live pid's file could not be verified — it may be sid.
+func (f *fixture) hideUnknown(sid string) {
+	f.origins.hide(sid)
+	f.markUnknown(sid)
+}
+
+// An adopted member's kill marks it gone when its session is not there: irreversible, and the process is never signalled. A
+// session that merely cannot be placed (a live pid's unreadable file) is a retryable error, the row untouched.
+func TestPresence_KillOfAnAdoptedMemberWhoseSessionIsUnknownIsRetryableAndMarksNothing(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	rec := &killRec{}
+	f.m.killProcess = rec.kill
+	f.hideUnknown("sid-2")
+	code, _, e, body := f.killTarget("_def456")
+	if code != http.StatusServiceUnavailable || e.Error != team.ErrNotReady {
+		t.Fatalf("kill = %d %s, want 503 not_ready", code, body)
+	}
+	if row := memberBySpawn(t, f.m.store, key); row.State != team.MemberActive || len(rec.got()) != 0 {
+		t.Fatalf("row = %s, signals %v: an unknown session was marked gone", row.State, rec.got())
+	}
+}
+
+func TestPresence_KillOfAnAdoptedMemberWhoseSessionIsGoneIsMarkedGone(t *testing.T) {
+	f := newFixture(t)
+	f.adoptedMember(t)
+	f.origins.hide("sid-2")
+	f.origins.markDead("sid-2")
+	if code, m, _, body := f.killTarget("_def456"); code != http.StatusOK || m.State != team.MemberGone {
+		t.Fatalf("kill = %d %s, want 200 gone", code, body)
+	}
+}
+
+func TestPresence_RemoteKillOfASessionThatIsUnknownIsRetryableAndMarksNothing(t *testing.T) {
+	f, rec := killFixture(t, true)
+	f.hideUnknown("sid-2")
+	code, body := f.postCmd(leadPrincipal(), killCmd(cmdUUID1, "mk-1"))
+	if code != http.StatusServiceUnavailable {
+		t.Fatalf("kill = %d %s, want a retryable 503", code, body)
+	}
+	if rowState(t, f, "mk-1") != remoteActive || len(rec.got()) != 0 {
+		t.Fatalf("row = %s, signals %v", rowState(t, f, "mk-1"), rec.got())
+	}
+}
+
+func TestPresence_RemoteKillOfASessionThatIsGoneIsGone(t *testing.T) {
+	f, _ := killFixture(t, true)
+	f.origins.hide("sid-2")
+	f.origins.markDead("sid-2")
+	if code, body := f.postCmd(leadPrincipal(), killCmd(cmdUUID1, "mk-1")); code != http.StatusOK || outcomeState(t, body) != "gone" {
+		t.Fatalf("kill = %d %s", code, body)
+	}
+}
+
+// A terminal_only hook row has no lease and no deadline: the registry is its only clock. Unknown may hold it, but only for twice
+// the stall since the row opened (the same bound as the stalled cleared op), or a registry file that never verifies would keep a
+// read-only card on a finished dialog for ever. Mutation gates: no bound → the 30-minute assertion is red; bound on every row →
+// the row with a lease (next test) is red.
+func TestPresence_ATerminalOnlyRowWithAnUnknownSessionIsHeldForTwiceTheStallThenAbandoned(t *testing.T) {
+	f := newFixture(t)
+	ro := f.openTerminalOnly("toolu_ro")
+	f.markUnknown("sid-1")
+	f.livenessTick()
+	f.clock.Add(29 * minute)
+	f.livenessTick()
+	if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateOpen {
+		t.Fatalf("at 29 minutes: %s, want open", a.State)
+	}
+	f.clock.Add(1 * minute)
+	f.livenessTick()
+	if a, _, _ := f.m.store.Get(ro.ID); a.State != team.StateAbandoned {
+		t.Fatalf("at 30 minutes: %s, want abandoned", a.State)
+	}
+}
+
+// A row that has a lease (the mod's, renewed by its wait) is bounded by that lease already: unknown holds it as long as it is
+// renewed, however old it is.
+func TestPresence_ARowWithALeaseIsNotCutByTheNoTimerBound(t *testing.T) {
+	f := newFixture(t)
+	id := f.askBegin("toolu_leased") // a mod-raised hook_ask: lease 30 s, no deadline
+	f.markUnknown("sid-1")
+	f.clock.Add(40 * minute)
+	if err := f.m.store.RenewLease(id, f.clock.Load()+team.LeaseS*1000); err != nil {
+		t.Fatal(err)
+	}
+	f.livenessTick()
+	if a, _, _ := f.m.store.Get(id); a.State != team.StateOpen {
+		t.Fatalf("a renewed row with an unknown session = %s, want open", a.State)
+	}
+}
+
+// The rate-limit map does not grow with every subject ever skipped: entries past the window are dropped.
+func TestPresence_TheLogMapIsPruned(t *testing.T) {
+	f := newFixture(t)
+	f.captureLogs()
+	for i := range 600 {
+		f.m.logPresenceUnknown(fmt.Sprintf("approval %d", i), "sid-1")
+	}
+	f.clock.Add(10 * minute)
+	f.m.logPresenceUnknown("approval fresh", "sid-1")
+	f.m.presenceLogMu.Lock()
+	n := len(f.m.presenceLogged)
+	f.m.presenceLogMu.Unlock()
+	if n > 5 {
+		t.Fatalf("%d subjects remembered after the window, want only the fresh one", n)
 	}
 }
