@@ -19,6 +19,7 @@ import { WorkerStatusBar } from './status/WorkerStatusBar'
 import { PaneModeButtons } from './status/PaneModeButtons'
 import { useCopyFeedback } from './status/useCopyFeedback'
 import { keepFocus } from '../lib/keep-focus'
+import { uploadFailureText } from '../lib/upload-failure'
 
 type T = (key: string, params?: Record<string, string | number>) => string
 
@@ -133,9 +134,10 @@ function UploadStatus({ hostId, sessionCode, t }: { hostId: string | null; sessi
   }
 
   if (uploadState.status === 'error') {
+    const why = uploadFailureText(uploadState.errorCause, uploadState.error ?? '')
     const message = uploadState.completed > 0
       ? t('upload.partial', { uploaded: uploadState.completed, failed: uploadState.failed })
-      : t('upload.failed', { file: uploadState.error ?? '' })
+      : t(why.key, why.params)
     return (
       <span
         className="flex items-center gap-1 text-red-400 cursor-pointer"

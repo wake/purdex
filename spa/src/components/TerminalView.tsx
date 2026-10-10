@@ -108,8 +108,8 @@ export default function TerminalView({ wsUrl, visible = true, isFocusTarget = fa
       try {
         await agentUpload(hostId, files[i], sessionCode)
         fileCompleted(hostId, sessionCode)
-      } catch {
-        fileFailed(hostId, sessionCode, files[i].name)
+      } catch (err) {
+        fileFailed(hostId, sessionCode, files[i].name, err)
       }
     }
   }, [agentActive, hostId, sessionCode])

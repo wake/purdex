@@ -241,6 +241,23 @@ describe('StatusBar upload progress', () => {
     render(<StatusBar activeTab={tab} />)
     expect(screen.getByText(/bad\.mp4/)).toBeTruthy()
   })
+
+  // #2501: the reason, worded like the deck / chat input
+  it.each([
+    [{ kind: 'too_large', status: 0 }, /File too large: bad\.mp4/],
+    [{ kind: 'too_many', status: 0 }, /Too many files uploading/],
+    [{ kind: 'not_found', status: 0 }, /Session not found; cannot upload/],
+    [{ kind: 'network', status: 0 }, /Connection lost; upload failed: bad\.mp4/],
+    [{ kind: 'http', status: 500 }, /Upload failed \(500\): bad\.mp4/],
+  ])('shows the reason for an upload error %j', (errorCause, text) => {
+    const ck = compositeKey(HOST_ID, 'dev001')
+    useUploadStore.setState({
+      sessions: { [ck]: { total: 1, completed: 0, failed: 1, currentFile: '', error: 'bad.mp4', errorCause, status: 'error' } },
+    })
+    const tab = makeTab('t1', { kind: 'tmux-session', hostId: HOST_ID, sessionCode: 'dev001', mode: 'terminal', cachedName: '', tmuxInstance: '' })
+    render(<StatusBar activeTab={tab} />)
+    expect(screen.getByTestId('upload-status').textContent).toMatch(text)
+  })
 })
 
 describe('StatusBar agent label badge', () => {

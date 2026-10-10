@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, fireEvent } from '@testing-library/react'
 import TerminalView from './TerminalView'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useUploadStore } from '../stores/useUploadStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { compositeKey } from '../lib/composite-key'
@@ -369,6 +370,25 @@ describe('TerminalView', () => {
       fireEvent.dragEnter(root, { dataTransfer: { types: ['Files'] } })
 
       expect(container.querySelector('[data-testid="drop-overlay"]')).not.toBeInTheDocument()
+    })
+
+    it('a dropped file over 256 MiB is not sent and the status bar state says too_large (#2501)', async () => {
+      setAgentActive(true)
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      const { container } = render(
+        <TerminalView wsUrl="ws://localhost:7860/ws/terminal/test" hostId={HOST} sessionCode={SESSION} />,
+      )
+      const big = Object.defineProperty(new File(['x'], 'huge.mov'), 'size', { value: 256 * 1024 * 1024 + 1 })
+      await act(async () => {
+        fireEvent.drop(container.firstElementChild!, { dataTransfer: { files: [big], types: ['Files'] } })
+      })
+      const s = useUploadStore.getState().sessions[CK]
+      expect(s.status).toBe('error')
+      expect(s.error).toBe('huge.mov')
+      expect(s.errorCause?.kind).toBe('too_large')
+      expect(fetchSpy).not.toHaveBeenCalled()
+      fetchSpy.mockRestore()
+      useUploadStore.setState({ sessions: {} })
     })
 
     it('hides drop overlay on drag-leave', () => {

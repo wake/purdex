@@ -46,6 +46,12 @@ describe('useUploadStore', () => {
     expect(s.status).toBe('error')
   })
 
+  it('fileFailed keeps why it failed (#2501)', () => {
+    useUploadStore.getState().startUpload(H, 'dev', 1, 'a.png')
+    useUploadStore.getState().fileFailed(H, 'dev', 'a.png', Object.assign(new Error('x'), { kind: 'too_large', status: 413 }))
+    expect(useUploadStore.getState().sessions[`${H}:dev`].errorCause).toEqual({ kind: 'too_large', status: 413 })
+  })
+
   it('partial success: some completed some failed', () => {
     useUploadStore.getState().startUpload(H, 'dev', 3, 'a.png')
     useUploadStore.getState().fileCompleted(H, 'dev')
