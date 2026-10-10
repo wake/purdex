@@ -59,7 +59,7 @@ export async function postRefresh(hostId: string, sessionId: string): Promise<Re
   try {
     raw = await send<unknown>(hostId, `${convRoute(sessionId)}/refresh`, { method: 'POST' })
   } catch (e) {
-    if (e instanceof ApprovalApiError && e.status === 409 && (e.code === 'not_live' || e.code === 'refresh_pending')) return { kind: e.code }
+    if (e instanceof ApprovalApiError && e.status === 409 && (e.code === 'not_live' || e.code === 'refresh_pending')) return e.code === 'not_live' ? { kind: 'not_live' } : { kind: 'refresh_pending' }
     throw e
   }
   const id = isRecord(raw) ? raw.entry_id : undefined
