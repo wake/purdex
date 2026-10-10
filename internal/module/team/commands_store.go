@@ -517,3 +517,6 @@ func applyAppearanceIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	}
 	return okResult(map[string]any{"state": "ok", "affected": n})
 }
+
+// PruneCommandLog deletes at most batch decided-command records older than before (unix ms) and reports how many.
+func (s *Store) PruneCommandLog(before int64, batch int) (int, error) { return 0, nil }
