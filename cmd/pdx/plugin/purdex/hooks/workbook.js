@@ -167,9 +167,25 @@ export function parsePromptJob(res) {
   return null
 }
 
+const MAX_REASON_BYTES = 120 // the daemon refuses a reason over 128 BYTES: cut by UTF-8 length, on a character boundary
+
+// cutUtf8 keeps the head of s whose UTF-8 encoding fits in max bytes, never splitting a character.
+export function cutUtf8(s, max) {
+  let bytes = 0
+  let out = ''
+  for (const ch of s) { // iterates code points
+    const cp = ch.codePointAt(0)
+    const n = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4
+    if (bytes + n > max) break
+    bytes += n
+    out += ch
+  }
+  return out
+}
+
 // promptResultBody is the request of `prompt/result`: status accepted | dropped | busy, and for dropped the reason.
 export function promptResultBody(stream, jobId, status, reason) {
   const b = { stream, job_id: jobId, status }
-  if (reason) b.reason = String(reason).slice(0, 100)
+  if (reason) b.reason = cutUtf8(String(reason), MAX_REASON_BYTES)
   return JSON.stringify(b)
 }

@@ -1767,6 +1767,19 @@ test('a hanging prompt result is tried within the lease and the poll loop resume
   expect(pqNext(w).length).toBeGreaterThanOrEqual(2) // back to polling, well inside 9 s
 })
 
+// A drop reason in Chinese or with emoji is cut by UTF-8 bytes (the daemon refuses > 128 bytes), on a character boundary, so
+// the report is accepted (codex R1). Mutation gate: slice by characters → red.
+test("a long non-ASCII drop reason is cut to fit the daemon's byte limit", async ($, on) => {
+  const long = '無法送出'.repeat(40) + '😀'
+  const w = evWorld(on, { promptNext: nextOnce(PJOB()), submit: () => ({ drop: long }) })
+  await start($, w)
+  await w.clock.settle()
+  const reason: string = pqResult(w)[0].body.reason
+  expect(new TextEncoder().encode(reason).length).toBeLessThanOrEqual(128)
+  expect(reason.length).toBeGreaterThan(10)
+  expect(long.startsWith(reason)).toBe(true) // a clean head, no split character
+})
+
 // A report that gets no 200 (a lost answer, a busy daemon) is sent again inside the daemon's hand timeout; a 409 (settled
 // already) is final and not repeated; after three tries it gives up (codex attack). Mutation gate: a single try → red.
 test('a prompt result that fails is sent again, bounded; a 409 is not retried', async ($, on) => {
