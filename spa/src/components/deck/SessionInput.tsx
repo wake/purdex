@@ -1,12 +1,12 @@
 // spa/src/components/deck/SessionInput.tsx — the deck's input (U3 spec §7, plan D7): Enter sends, Shift+Enter breaks a line,
 // 中斷 interrupts. Sending goes to the daemon (and through the session's mod); nothing is typed into a terminal. The draft and
 // the send queue live in modules keyed by the pane, not in this component (it unmounts on a tab switch).
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Paperclip, PaperPlaneRight, Stop } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { expandPlaceholders, removePlaceholderText } from '../../lib/conversations/image-placeholder'
-import { readAttachments, removeAttachment, removeAttachmentText, forgetAttachmentsWhere, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
-import { startUploads, subscribeUploads, takeUnseenFailures, uploadsOf } from '../../lib/conversations/attachment-upload'
+import { reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, forgetAttachmentsWhere, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
+import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { uploadFailureText } from '../../lib/upload-failure'
 import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
@@ -80,7 +80,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const box = useRef<HTMLTextAreaElement>(null)
   // The uploads run in a module (they outlive this input, which unmounts on a tab switch); this input shows them and, when one
   // lands or fails, takes the result from the memories.
-  const uploading = useSyncExternalStore(useCallback((cb: () => void) => subscribeUploads(dKey, cb), [dKey]), () => uploadsOf(dKey))
+  const uploading = useUploads(dKey)
   useEffect(() => {
     const sync = () => {
       setChips(readAttachments(dKey))
@@ -106,19 +106,15 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     return () => { window.removeEventListener('keydown', off); window.removeEventListener('dragend', off); window.removeEventListener('drop', off) }
   }, [dragging])
   const carriesFiles = (e: React.DragEvent) => !!sessionCode && e.dataTransfer.types.includes('Files')
-  // the draft is the truth: a marker line the reader deleted or rewrote takes its chip (in the memory too) with it
+  // the draft is the truth for what is shown and sent: a marker the reader deleted or rewrote hides its chip. The chip is NOT
+  // destroyed (the browser's undo can bring the marker back, and the chip and its picture with it): the memory only keeps the clock
+  // (reconcileAttachments), and a hidden chip is let go by a send, a release, its remove button or a later attach.
   const shown = visibleAttachments(draft, chips)
-  useEffect(() => {
-    if (shown.length === chips.length) return
-    for (const a of chips) if (!shown.includes(a)) removeAttachment(dKey, a.id)
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- mirrors the module memory just pruned
-    setChips(readAttachments(dKey))
-  }, [shown, chips, dKey])
 
   // The queue is driven by the pane (`useSendQueueDriver`, under every view); this input only types and shows.
   // the live capability is the only authority: a 409 no_mod fails that one message and disables nothing by itself
   const noMod = capabilities?.send !== 'prompt'
-  const change = (v: string) => { setDraft(v); writeDraft(dKey, v); setHint(null) }
+  const change = (v: string) => { setDraft(v); writeDraft(dKey, v); reconcileAttachments(dKey, v); setHint(null) }
 
   // Files come from a paste, a drop or the attach button. Each is saved by the daemon (no paste into the pane) and its path goes
   // into the draft when it lands (see attachment-upload); the box stays editable meanwhile.

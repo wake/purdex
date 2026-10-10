@@ -185,13 +185,13 @@ describe('SessionInput attachments', () => {
     expect(mocks.fetch).not.toHaveBeenCalled()
   })
 
-  it('a chip follows the draft: delete the marker line by hand and the chip (and its memory) goes', async () => {
+  it('a chip follows the draft: delete the marker by hand and the chip is hidden (the memory keeps it, for an undo)', async () => {
     render(ui())
     paste({ files: [png()] })
     await flush()
     fireEvent.change(box(), { target: { value: 'rewritten' } })
     expect(screen.queryByTestId('attachment-chip')).toBeNull()
-    expect(readAttachments(KEY)).toEqual([])
+    expect(readAttachments(KEY)).toHaveLength(1)
   })
 
   it('two images of the same file: each has its own number, and removing one chip leaves the other', async () => {

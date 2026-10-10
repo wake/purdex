@@ -93,8 +93,8 @@ describe('sending expands the placeholders', () => {
     render(ui())
     await attach(png('a.png'), png('b.png'))
     type('[Image #1 and [Image #2]')
-    expect(screen.getAllByTestId('attachment-chip')).toHaveLength(1)
-    expect(readAttachments(KEY).map((a) => a.seq)).toEqual([2])
+    expect(screen.getAllByTestId('attachment-chip')).toHaveLength(1) // shown: only the one the draft still holds
+    expect(readAttachments(KEY).map((a) => a.seq)).toEqual([1, 2]) // kept: an undo may bring the placeholder back
     enter()
     expect(sent()).toHaveTextContent('[Image #1 and [Image: source: /up/dev001/b.png]')
   })
@@ -153,13 +153,13 @@ describe('sending expands the placeholders', () => {
 })
 
 describe('the chips follow the draft, the draft follows the chips', () => {
-  it('deleting a placeholder from the draft takes its chip (and its memory) with it', async () => {
+  it('deleting a placeholder from the draft hides its chip (the memory keeps it for an undo)', async () => {
     render(ui())
     await attach(png('a.png'), png('b.png'))
     type('[Image #2]')
     expect(screen.getAllByTestId('attachment-chip')).toHaveLength(1)
     expect(within(screen.getByTestId('attachment-chip')).getByRole('img')).toHaveAttribute('alt', 'b.png')
-    expect(readAttachments(KEY).map((a) => a.seq)).toEqual([2])
+    expect(readAttachments(KEY).map((a) => a.seq)).toEqual([1, 2])
   })
 
   it('removing a chip takes its placeholder out of the draft, in the middle of a line too', async () => {
@@ -185,5 +185,101 @@ describe('the tag behind the box', () => {
     expect([...tags.querySelectorAll('mark')].map((m) => m.textContent)).toEqual(['[Image #1]'])
     expect(box().value).toBe('see [Image #1] and [Image #9]')
     expect(tags.compareDocumentPosition(box()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('undo brings the attachment back', () => {
+  it('delete the placeholder: the chip hides and is not sent; undo the text: the chip is back (same picture) and is expanded again', async () => {
+    render(ui())
+    await attach(png('a.png'), png('b.png'))
+    const before = '[Image #1] [Image #2]'
+    expect(box().value).toBe(before)
+    const src = screen.getAllByRole('img', { name: 'a.png' })[0].getAttribute('src')
+
+    type('[Image #2]') // the first placeholder deleted
+    expect(screen.getAllByTestId('attachment-chip')).toHaveLength(1)
+    expect(readAttachments(KEY)).toHaveLength(2)
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled() // the picture is still held
+
+    type(before) // what the browser's own undo does: the text comes back
+    expect(screen.getAllByTestId('attachment-chip')).toHaveLength(2)
+    expect(screen.getByRole('img', { name: 'a.png' })).toHaveAttribute('src', src)
+
+    enter()
+    expect(sent()).toHaveTextContent('[Image: source: /up/dev001/a.png] [Image: source: /up/dev001/b.png]')
+    expect(sent().textContent).not.toContain('#')
+  })
+
+  it('while the placeholder is gone the picture is not sent, whatever the memory holds', async () => {
+    render(ui())
+    await attach(png('a.png'))
+    type('look')
+    enter()
+    expect(sent()).toHaveTextContent('look')
+    expect(sent().textContent).not.toContain('source')
+  })
+
+  it('a send takes every attachment with it, the hidden ones too (their pictures are let go)', async () => {
+    render(ui())
+    await attach(png('a.png'), png('b.png'))
+    type('[Image #2]')
+    enter()
+    expect(readAttachments(KEY)).toEqual([])
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
+  })
+
+  it('releasing the pane lets a hidden chip go too', async () => {
+    render(ui())
+    await attach(png('a.png'))
+    type('')
+    expect(readAttachments(KEY)).toHaveLength(1)
+    const { releasePane } = await import('../../lib/conversations/pane-release')
+    releasePane('p1')
+    expect(readAttachments(KEY)).toEqual([])
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('the remove button still lets a shown chip go at once', async () => {
+    render(ui())
+    await attach(png('a.png'))
+    fireEvent.click(screen.getByRole('button', { name: /Remove attachment/ }))
+    expect(readAttachments(KEY)).toEqual([])
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('a hidden chip is not kept for ever', () => {
+  const T0 = new Date('2026-10-11T12:00:00Z').getTime()
+  afterEach(() => { vi.useRealTimers() })
+
+  it('when another attachment lands, a chip whose placeholder has been gone for more than 60 s is let go; a younger one stays', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+    render(ui())
+    await attach(png('a.png'), png('b.png'))
+    type('[Image #2]') // #1 hides now
+    vi.setSystemTime(T0 + 30_000)
+    await attach(png('c.png')) // too early: #1 stays
+    expect(readAttachments(KEY).map((a) => a.seq)).toEqual([1, 2, 3])
+    type('[Image #2]') // #1 stays hidden, #3 hides now (T0 + 30 s)
+    vi.setSystemTime(T0 + 61_000)
+    await attach(png('d.png'))
+    // #1 has been hidden 61 s: gone. #3 only 31 s: kept.
+    expect(readAttachments(KEY).map((a) => a.seq)).toEqual([2, 3, 4])
+    expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('a chip that comes back (undo) is not on the clock any more', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(T0)
+    render(ui())
+    await attach(png('a.png'))
+    type('')
+    type('[Image #1]')
+    vi.setSystemTime(T0 + 120_000)
+    type('')
+    vi.setSystemTime(T0 + 130_000)
+    await attach(png('b.png'))
+    expect(readAttachments(KEY).map((a) => a.seq)).toEqual([1, 2]) // hidden for 10 s only, not 130
   })
 })

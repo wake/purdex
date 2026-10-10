@@ -2,8 +2,9 @@
 // rule: the input unmounts on a tab switch, and an upload must not die with it). A finished upload lands in the draft memory and the
 // chip memory whether or not an input is mounted; a remounted input reads what is still on its way from here. Only a release of the
 // pane (`forgetAttachmentsWhere`, via `pane-release`) aborts an upload, and an aborted one writes nothing back. Keyed like the draft.
+import { useCallback, useSyncExternalStore } from 'react'
 import { agentUploadToPath } from '../host-api'
-import { addAttachment, attachmentText, insertAttachmentText, isImageFile, makePreviewUrl, nextAttachmentSeq, revokePreviewUrl, trackUpload } from './attachment-memory'
+import { addAttachment, attachmentText, insertAttachmentText, isImageFile, makePreviewUrl, nextAttachmentSeq, reconcileAttachments, revokePreviewUrl, trackUpload } from './attachment-memory'
 import { imagePlaceholder, insertPlaceholderText } from './image-placeholder'
 import { readDraft, writeDraft } from './draft-memory'
 
@@ -27,6 +28,11 @@ export function subscribeUploads(key: string, cb: () => void): () => void {
   if (!set) listeners.set(key, (set = new Set()))
   set.add(cb)
   return () => { set.delete(cb); if (set.size === 0 && listeners.get(key) === set) listeners.delete(key) }
+}
+
+/** The uploads of `key` in flight, live. */
+export function useUploads(key: string): readonly Uploading[] {
+  return useSyncExternalStore(useCallback((cb: () => void) => subscribeUploads(key, cb), [key]), () => uploadsOf(key))
 }
 
 export function takeUnseenFailures(key: string): UploadFailure[] {
@@ -62,6 +68,8 @@ export function startUploads(key: string, hostId: string, sessionCode: string, f
     }).then(({ path }) => {
       // released while the answer was on its way: nothing may be rebuilt
       if (ctl.signal.aborted) return done()
+      // a chip whose marker has been gone from the draft for long enough is let go now (see reconcileAttachments)
+      reconcileAttachments(key, readDraft(key) ?? '', { sweep: true })
       // an image leaves a short `[Image #N]` (sending expands it); any other file its path on a line of its own
       const seq = image ? nextAttachmentSeq(key) : undefined
       const text = seq === undefined ? attachmentText(path, false) : imagePlaceholder(seq)

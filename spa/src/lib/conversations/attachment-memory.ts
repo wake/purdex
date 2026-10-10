@@ -23,7 +23,12 @@ export interface Attachment {
    * sending turns it into `[Image: source: <path>]` (see image-placeholder). Absent: the chip stands for a whole line of the draft.
    */
   seq?: number
+  /** When the draft was first seen without this chip's marker (ms); cleared when it comes back. Set by `reconcileAttachments`. */
+  hiddenSince?: number
 }
+
+/** How long a chip whose marker has left the draft is kept (a native undo may bring the marker back) before another attach lets it go. */
+export const HIDDEN_ATTACHMENT_TTL_MS = 60_000
 
 /** `URL.createObjectURL` where it exists (not in every test environment). */
 export function makePreviewUrl(file: Blob): string | undefined {
@@ -88,6 +93,26 @@ export function visibleAttachments(draft: string, list: readonly Attachment[]): 
     left.set(a.text, n - 1)
     return true
   })
+}
+
+/**
+ * The draft decides which chips are SHOWN (and expanded on send), but a chip whose marker is gone is NOT destroyed: the browser's
+ * undo can bring the text back, and the chip and its picture must come with it. This only keeps the clock: a chip first seen
+ * without its marker is stamped, one that is back is cleared; with `sweep`, a chip stamped longer than the TTL ago is let go.
+ */
+export function reconcileAttachments(key: string, draft: string, opts: { sweep?: boolean; now?: number } = {}): void {
+  const list = readAttachments(key)
+  if (list.length === 0) return
+  const now = opts.now ?? Date.now()
+  const shown = new Set(visibleAttachments(draft, list))
+  const next: Attachment[] = []
+  for (const a of list) {
+    if (shown.has(a)) { next.push(a.hiddenSince === undefined ? a : { ...a, hiddenSince: undefined }); continue }
+    if (opts.sweep && a.hiddenSince !== undefined && now - a.hiddenSince > HIDDEN_ATTACHMENT_TTL_MS) { revokePreviewUrl(a.previewUrl); continue }
+    next.push(a.hiddenSince === undefined ? { ...a, hiddenSince: now } : a)
+  }
+  if (next.length === 0) chips.delete(key)
+  else chips.set(key, next)
 }
 
 /** Tests only: module state outlives a test. */
