@@ -14,8 +14,11 @@ import { useHostConfigCollection } from './useHostConfigCollection'
 
 const iconBtn = 'p-1 rounded hover:bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
 
-function QuickReplyEditor({ initial, busy, error, onSave, onCancel }: {
+function QuickReplyEditor({ initial, text, onText, busy, error, onSave, onCancel }: {
   initial: QuickReply
+  /** The draft: held by the list, not here — the editor is remounted when its item moves from its row to the new row (#1487). */
+  text: string
+  onText: (text: string) => void
   busy: boolean
   /** Save failure text from the host, shown under the field. */
   error: string | null
@@ -23,7 +26,6 @@ function QuickReplyEditor({ initial, busy, error, onSave, onCancel }: {
   onCancel: () => void
 }) {
   const t = useI18nStore((s) => s.t)
-  const [text, setText] = useState(initial.text)
   const [invalid, setInvalid] = useState<string | null>(null)
 
   const save = () => {
@@ -44,7 +46,7 @@ function QuickReplyEditor({ initial, busy, error, onSave, onCancel }: {
     <div className="flex flex-col gap-1 px-3 py-2">
       <div className="flex items-center gap-2">
         <input data-testid="quick-reply-input" aria-label={t('hosts.quick_replies.text_label')} autoFocus value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => onText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); save() }
             else if (e.key === 'Escape') onCancel()
@@ -69,6 +71,11 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
     deleting, askDelete, cancelDelete, confirmDelete, move,
   } = useHostConfigCollection<QuickReply>(hostId, 'quick-replies')
   const locked = !editable
+  // The draft of the item being edited, kept here so it survives the editor's remount: after a 409 the store takes the daemon's
+  // list, and an item another client deleted flips `isNew`, which moves the editor from its row to the new row (#1487). It
+  // belongs to one item (`id`) and is dropped when the editor closes (set during render, react.dev "adjusting state").
+  const [draft, setDraft] = useState<{ id: string; text: string } | null>(null)
+  if (editing === null && draft !== null) setDraft(null)
 
   // The host-wide gate only knows the host config loaded; a daemon older than
   // this collection loads fine and simply has no `quickReplies` (plan review #3).
@@ -90,7 +97,9 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
   // not the current status.
   const neverWritten = entry.revisions.quickReplies === 0
   const editor = (reply: QuickReply) => (
-    <QuickReplyEditor key={reply.id} initial={reply} busy={locked || pending}
+    <QuickReplyEditor key={reply.id} initial={reply}
+      text={draft !== null && draft.id === reply.id ? draft.text : reply.text}
+      onText={(text) => setDraft({ id: reply.id, text })} busy={locked || pending}
       error={saveError?.target === 'dialog' ? saveError.text : null} onSave={submit} onCancel={closeEditor} />
   )
 

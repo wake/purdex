@@ -197,6 +197,60 @@ describe('QuickReplySettings', () => {
     expect(rowIds()).toEqual([])
   })
 
+  // #1487: after a 409 the store takes the daemon's list. An item another client deleted while this one was being edited
+  // flips the editor from its row to the `quick-reply-new` row; what was typed must come with it.
+  describe('an item deleted by another client while it is being edited (#1487)', () => {
+    /** What the reload after a 409 does: the daemon's list replaces the store's, with a newer revision. */
+    const remoteList = (items: QuickReply[], revision: number) =>
+      act(() => { useHostConfigStore.setState((s) => ({ byHost: { ...s.byHost, [H]: { ...s.byHost[H], quickReplies: items, revisions: { ...s.byHost[H].revisions, quickReplies: revision } } } })) })
+    const input = () => screen.getByTestId('quick-reply-input') as HTMLInputElement
+
+    it('keeps the typed text when the editor moves from its row to the new row', () => {
+      seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
+      render(<QuickReplySettings hostId={H} />)
+      fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+      fireEvent.change(input(), { target: { value: 'my long draft' } })
+      expect(screen.getByTestId('quick-reply-row-a')).toContainElement(input())
+
+      remoteList([{ id: 'b', text: 'beta' }], 4) // 'a' was deleted elsewhere
+
+      expect(screen.queryByTestId('quick-reply-row-a')).toBeNull()
+      expect(screen.getByTestId('quick-reply-new')).toContainElement(input()) // it moved ...
+      expect(input().value).toBe('my long draft') // ... with what was typed
+    })
+
+    it('saving after the move appends the item with the typed text (last writer wins, as before)', async () => {
+      seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
+      render(<QuickReplySettings hostId={H} />)
+      fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+      fireEvent.change(input(), { target: { value: 'my long draft' } })
+      remoteList([{ id: 'b', text: 'beta' }], 4)
+      fireEvent.click(screen.getByTestId('quick-reply-save'))
+      await waitFor(() => expect(saveQuickReplies).toHaveBeenCalled())
+      expect(saveQuickReplies.mock.calls[0][1]).toEqual([{ id: 'b', text: 'beta' }, { id: 'a', text: 'my long draft' }])
+    })
+
+    it('the draft belongs to one edit: cancelling drops it, and editing the item again starts from its saved text', () => {
+      seed(entry([{ id: 'a', text: 'alpha' }], 3))
+      render(<QuickReplySettings hostId={H} />)
+      fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+      fireEvent.change(input(), { target: { value: 'typed then abandoned' } })
+      fireEvent.click(screen.getByTestId('quick-reply-cancel'))
+      fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+      expect(input().value).toBe('alpha')
+    })
+
+    it('another item\'s edit does not inherit a previous item\'s draft', () => {
+      seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
+      render(<QuickReplySettings hostId={H} />)
+      fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+      fireEvent.change(input(), { target: { value: 'draft for a' } })
+      fireEvent.click(screen.getByTestId('quick-reply-cancel'))
+      fireEvent.click(screen.getByTestId('quick-reply-edit-b'))
+      expect(input().value).toBe('beta')
+    })
+  })
+
   it('is the third tab of the Commands section', () => {
     render(<CommandsSection hostId={H} />)
     fireEvent.click(screen.getByTestId('commands-tab-quick'))
