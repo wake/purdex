@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { forgetFolds } from '../../lib/conversations/fold-memory'
-import { forgetScrollMemo, readScrollMemo } from '../../lib/nex/transcript-scroll-memory'
+import { forgetScrollMemosWithPrefix, readScrollMemo } from '../../lib/nex/transcript-scroll-memory'
 import { emptyDoc } from '../../lib/conversations/model'
 import type { ConversationItem, Turn } from '../../lib/conversations/types'
 import { useConversationStore, type ConversationEntry } from '../../stores/useConversationStore'
@@ -26,7 +26,7 @@ const loadBefore = vi.fn(async () => {})
 beforeEach(() => {
   cleanup()
   forgetFolds('p-deck\0s')
-  forgetScrollMemo('p-deck')
+  forgetScrollMemosWithPrefix('p-deck')
   loadBefore.mockClear()
   useConversationStore.setState({ loadBefore })
 })
@@ -65,6 +65,35 @@ describe('DeckView', () => {
     fireEvent.scroll(screen.getByTestId('deck-scroll'))
     expect(loadBefore).not.toHaveBeenCalled()
     expect(screen.getByTestId('deck-paging')).toBeInTheDocument()
+  })
+
+  it('asks for the next page by itself when the content does not fill the box (no scroll event can come)', () => {
+    const e = entry([turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })
+    const { rerender } = render(<DeckView {...props} entry={e} />)
+    expect(loadBefore).toHaveBeenCalledTimes(1)
+    // the page lands (first turn 3): still short, ask again
+    rerender(<DeckView {...props} entry={entry([turn(3, [userItem('b', 0)]), turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })} />)
+    expect(loadBefore).toHaveBeenCalledTimes(2)
+    // nothing older any more: stop
+    rerender(<DeckView {...props} entry={entry([turn(1, [userItem('c', 0)]), turn(3, [userItem('b', 0)])], {}, { hasMoreBefore: false })} />)
+    expect(loadBefore).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not ask again for a page that failed to come (no loop on the same first turn)', () => {
+    const e = entry([turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })
+    const { rerender } = render(<DeckView {...props} entry={e} />)
+    rerender(<DeckView {...props} entry={{ ...e, paging: true }} />)
+    rerender(<DeckView {...props} entry={{ ...e, paging: false }} />)
+    expect(loadBefore).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not ask on its own when the content already overflows the box', () => {
+    const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(5000)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    render(<DeckView {...props} entry={entry([turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })} />)
+    expect(loadBefore).not.toHaveBeenCalled()
+    spy.mockRestore()
+    vi.restoreAllMocks()
   })
 
   it('does not page when nothing older exists', () => {
@@ -106,7 +135,7 @@ describe('DeckView', () => {
     expect(screen.getByTestId('output-body')).toBeInTheDocument()
     fireEvent.scroll(screen.getByTestId('deck-scroll'))
     first.unmount()
-    expect(readScrollMemo('p-deck')?.view).toBe('deck')
+    expect(readScrollMemo('p-deck\0s')?.view).toBe('deck')
     render(<DeckView {...props} entry={e} />)
     expect(screen.getByTestId('output-body')).toBeInTheDocument()
   })
@@ -167,6 +196,34 @@ describe('DeckPane', () => {
     rerender(<DeckPane {...base} conversation={conv([turn(0, [userItem('a', 0)])])} />)
     expect(screen.queryByTestId('deck-unreadable')).toBeNull()
     expect(screen.getByTestId('deck-turn')).toBeInTheDocument()
+  })
+
+  it('keeps the scroll place per session: another session of the same pane starts fresh', () => {
+    const a = entry([turn(0, [userItem('a', 0)])])
+    const first = render(<DeckPane {...base} conversation={{ state: 'ready', hostId: 'h', sessionId: 's', entry: a }} />)
+    fireEvent.scroll(screen.getByTestId('deck-scroll'))
+    expect(readScrollMemo('p-deck\0s')).toBeDefined()
+    first.unmount()
+    render(<DeckPane {...base} conversation={{ state: 'ready', hostId: 'h', sessionId: 's2', entry: a }} />)
+    fireEvent.scroll(screen.getByTestId('deck-scroll'))
+    expect(readScrollMemo('p-deck\0s2')).toBeDefined()
+    expect(readScrollMemo('p-deck\0s')).toBeDefined()
+  })
+
+  it('takes focus on the input when the pane becomes the focus target, else the frame', () => {
+    const footer = () => <textarea data-testid="deck-input" />
+    const conv = { state: 'ready' as const, hostId: 'h', sessionId: 's', entry: entry([turn(0, [userItem('a', 0)])]) }
+    vi.useFakeTimers()
+    render(<DeckPane {...base} isFocusTarget conversation={conv} footer={footer} />)
+    act(() => { vi.runAllTimers() })
+    vi.useRealTimers()
+    expect(document.activeElement).toBe(screen.getByTestId('deck-input'))
+    cleanup()
+    vi.useFakeTimers()
+    render(<DeckPane {...base} isFocusTarget conversation={{ state: 'off' }} />)
+    act(() => { vi.runAllTimers() })
+    vi.useRealTimers()
+    expect(document.activeElement).toBe(screen.getByTestId('session-view-deck'))
   })
 
   it('draws the deck once the conversation is ready', () => {

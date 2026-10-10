@@ -21,7 +21,8 @@ interface Props {
 export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwitchToTerminal, footer, actions }: Props) {
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
-  useActivationFocus(isActive, isFocusTarget, () => ref.current?.focus(), { raf: true })
+  // Switching to the deck focuses its input when it has one (plan D2), else the frame (loading, unreadable).
+  useActivationFocus(isActive, isFocusTarget, () => (ref.current?.querySelector('textarea') ?? ref.current)?.focus(), { raf: true })
 
   let body
   if (conversation.state === 'off') {
@@ -39,7 +40,7 @@ export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwit
     body = <DeckUnreadable reason="empty" onSwitchToTerminal={onSwitchToTerminal} />
   } else {
     body = (
-      <DeckView paneId={paneId} hostId={conversation.hostId} sessionId={conversation.sessionId} entry={conversation.entry}
+      <DeckView key={conversation.sessionId} paneId={paneId} hostId={conversation.hostId} sessionId={conversation.sessionId} entry={conversation.entry}
         onSwitchToTerminal={onSwitchToTerminal} footer={footer} actions={actions} />
     )
   }

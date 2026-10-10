@@ -5,7 +5,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { deckPanes, forgetDeckPane, forgetFoldsOfPane } from '../lib/conversations/fold-memory'
-import { forgetScrollMemo } from '../lib/nex/transcript-scroll-memory'
+import { forgetScrollMemo, forgetScrollMemosWithPrefix } from '../lib/nex/transcript-scroll-memory'
 import { findPane } from '../lib/pane-tree'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { useTabStore } from './useTabStore'
@@ -110,6 +110,7 @@ export function installSessionViewCleanup(): () => void {
     for (const paneId of deckPanes()) {
       if (alive(paneId)) continue
       forgetScrollMemo(paneId)
+      forgetScrollMemosWithPrefix(paneId)
       forgetFoldsOfPane(paneId)
       forgetDeckPane(paneId)
     }

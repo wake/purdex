@@ -2,7 +2,7 @@
 // order, older turns read when the reader reaches the top, the reader's place and unfolded parts kept per pane across a
 // tab switch (CLAUDE.md tab-hosted rule: `fold-memory` and the scroll memo are outside the component). The input and
 // whatever else lives under the stream is the caller's `footer`, drawn below the scrolling box.
-import { useEffect, useMemo, type ReactNode, type UIEvent } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, type ReactNode, type UIEvent } from 'react'
 import { FoldContext } from '../room/fold-context'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import { noteDeckPane, usePaneFoldStore } from '../../lib/conversations/fold-memory'
@@ -38,7 +38,8 @@ export interface DeckViewProps {
 /** Within this many pixels of the top the next older page is read. */
 const TOP_REACH = 120
 
-function TurnView({ turn, actions }: { turn: Turn; actions?: StepActions }) {
+// Memoized: the store keeps an unchanged turn's object, so a live update re-draws only the turn that changed.
+const TurnView = memo(function TurnView({ turn, actions }: { turn: Turn; actions?: StepActions }) {
   const t = useI18nStore((s) => s.t)
   return (
     <section data-testid="deck-turn" data-turn-index={turn.index} className={`space-y-3 ${SCROLL_ANCHOR_CLASS}`}>
@@ -49,18 +50,34 @@ function TurnView({ turn, actions }: { turn: Turn; actions?: StepActions }) {
       {turn.error && <div data-testid="deck-turn-error" className="text-xs text-status-error">{turn.error.message}</div>}
     </section>
   )
-}
+})
 
 export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, actions }: DeckViewProps) {
   const t = useI18nStore((s) => s.t)
   const { doc } = entry
   const foldStore = usePaneFoldStore(`${paneId}\0${sessionId}`)
   useEffect(() => noteDeckPane(paneId), [paneId])
-  const scroll = useTranscriptScroll(undefined, false, { paneId, view: 'deck' })
+  // The place is the pane's AND the session's: a pane that moves to another session (/clear, a relay) starts at the end.
+  const scroll = useTranscriptScroll(undefined, false, { paneId: `${paneId}\0${sessionId}`, view: 'deck' })
   const { attach, onScroll: onBoxScroll, follow } = scroll
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const setBox = useCallback((node: HTMLDivElement | null) => { boxRef.current = node; attach(node) }, [attach])
 
   // Placed from the pane's memory on the first run, then only a reader at the bottom is carried along as turns land.
   useEffect(() => { follow() }, [follow, doc.turns])
+
+  // A page that does not fill the box cannot be scrolled, so no scroll event would ever ask for the next one: ask until the
+  // box overflows or nothing older is left. Once per first turn, so a page that fails to come does not loop.
+  const askedFor = useRef<number | null>(null)
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box || !doc.hasMoreBefore || entry.paging) return
+    if (box.scrollHeight > box.clientHeight + TOP_REACH) return
+    const first = doc.turns[0]?.index ?? null
+    if (askedFor.current === first) return
+    askedFor.current = first
+    void useConversationStore.getState().loadBefore(hostId, sessionId)
+  }, [doc.turns, doc.hasMoreBefore, entry.paging, hostId, sessionId])
 
   const onScroll = (e: UIEvent<HTMLDivElement>) => {
     onBoxScroll(e)
@@ -81,7 +98,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
           {t('deck.back_live')}
         </button>
       )}
-      <div ref={attach} onScroll={onScroll} data-testid="deck-scroll" className="flex-1 space-y-3 overflow-y-auto p-4">
+      <div ref={setBox} onScroll={onScroll} data-testid="deck-scroll" className="flex-1 space-y-3 overflow-y-auto p-4">
         <FoldContext.Provider value={foldStore}>
           {entry.paging && <div data-testid="deck-paging" className="text-center text-xs text-text-muted">{t('deck.paging')}</div>}
           {empty ? (
