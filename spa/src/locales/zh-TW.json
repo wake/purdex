@@ -2368,5 +2368,13 @@
   "deck.send.too_long": "太長了（最多 4000 位元組）",
   "deck.send.empty": "沒有內容可送出",
   "deck.send.rejected": "沒有送出（{{code}}）",
-  "deck.send.network": "連線中斷，可能已送出，請看紀錄"
+  "deck.send.network": "連線中斷，可能已送出，請看紀錄",
+  "panel.close": "關閉面板",
+  "panel.back": "返回",
+  "panel.chain": "第 {{turn}} 回合 · 第 {{k}}／{{n}} 串工作",
+  "panel.output": "完整輸出",
+  "panel.diff": "完整差異",
+  "panel.subagent": "子 agent · {{name}}",
+  "panel.subagent.empty": "還沒有步驟",
+  "panel.gone": "這段內容已不在對話中"
 }
