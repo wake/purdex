@@ -348,11 +348,32 @@ export function useTranscriptScroll(
     return true
   }, [])
 
+  /**
+   * True while the memo's anchor (same view) is not drawn yet but is still to come: a turn anchor past the last turn drawn (the
+   * conversation is arriving in pieces), or a prelude anchor in a box too short to scroll. Nothing to put back yet. An anchor
+   * older than what is drawn will not come by waiting (a window that starts later): that restores from `scrollTop` as ever.
+   */
+  const awaitsAnchor = useCallback((el: HTMLDivElement): boolean => {
+    const m = mem.current
+    const memo = m && readScrollMemo(m.paneId)
+    if (!m || !memo || memo.atBottom || memo.view !== m.view || !memo.anchor) return false
+    // A box with no height yet (not laid out) says nothing about its content.
+    if (el.clientHeight === 0) return false
+    const { anchor } = memo
+    if (anchor.kind === 'prelude') return el.scrollHeight <= el.clientHeight && !preludeAt(el, anchor.pos)
+    if (turnAt(el, anchor.index)) return false
+    const last = anchors.current?.length ? Number(anchors.current[anchors.current.length - 1].dataset.turnIndex) : -1
+    return !Number.isFinite(last) || anchor.index > last
+  }, [])
+
   const follow = useCallback(() => {
     const el = box.current
     if (!el?.scrollTo) return
     const first = !scrolled.current
     if (first) {
+      // The first batch of a conversation arriving in pieces can be shorter than the box and hold no trace of the place the
+      // reader left: a restore now would clamp to the bottom and spend the placement. Wait for the piece that draws the anchor.
+      if (!holding.current && awaitsAnchor(el)) return
       scrolled.current = true
       // Mounted under an open search bar (a view switch): the bar places
       // the reader — at the current match, or the bottom — not this (R1-1).
@@ -378,7 +399,7 @@ export function useTranscriptScroll(
     // immediate unmount right after a follow()-driven jump would leave the
     // memo at whatever stale, off-bottom position the reader had before.
     remember(el)
-  }, [observe, restore, remember])
+  }, [observe, restore, remember, awaitsAnchor])
 
   const release = useCallback(() => {
     const el = box.current

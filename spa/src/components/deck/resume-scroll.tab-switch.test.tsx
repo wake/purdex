@@ -243,6 +243,35 @@ describe.each(views)('%s: coming back to the tab', (_name, testId, Renderer) => 
       expect(sets.includes(END)).toBe(false)
     })
 
+    it('the conversation arrives in batches, the first shorter than the box: turn 10 still lands where it was', () => {
+      const r = open()
+      scrollUp()
+      leave(r)
+      show(loading())
+      mark()
+      back(r)
+      show(loaded(3)) // 300 < 400: the box cannot scroll yet, so this must not spend the placement
+      show(loaded(60))
+      expect(turnTop(mounted(), 10)).toBe(OFFSET)
+      expect(calls.filter((c) => c.behavior === 'smooth')).toEqual([])
+      expect(sets.includes(END)).toBe(false)
+    })
+
+    it('the first batch already fills the box but stops short of turn 10: still waits for it', () => {
+      const r = open()
+      scrollUp()
+      leave(r)
+      show(loading())
+      mark()
+      back(r)
+      show(loaded(5)) // 500 > 400 and turns 0-4 only
+      expect(sets.includes(0) && calls.length > 0).toBe(false) // nothing placed against the wrong turns
+      show(loaded(60))
+      expect(turnTop(mounted(), 10)).toBe(OFFSET)
+      expect(calls.filter((c) => c.behavior === 'smooth')).toEqual([])
+      expect(sets.includes(END)).toBe(false)
+    })
+
     it('content landing below afterwards does not drag the reader down', () => {
       const r = open()
       scrollUp()
