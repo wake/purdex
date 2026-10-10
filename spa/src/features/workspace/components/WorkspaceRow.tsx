@@ -102,7 +102,7 @@ export function WorkspaceRow(props: Props) {
             e.preventDefault()
             onContextMenuWorkspace?.(e, workspace.id)
           }}
-          className="flex-1 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none"
+          className="flex-1 flex items-center gap-2 py-1.5 text-left cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
         >
           <WorkspaceIcon
             icon={workspace.icon}
@@ -122,7 +122,7 @@ export function WorkspaceRow(props: Props) {
               e.stopPropagation()
               onAddTabToWorkspace(workspace.id)
             }}
-            className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none"
+            className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer opacity-0 group-hover/ws-header:opacity-100 focus:opacity-100 transition-opacity focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
           >
             <Plus size={12} />
           </button>
@@ -136,7 +136,7 @@ export function WorkspaceRow(props: Props) {
               e.stopPropagation()
               toggleExpanded(workspace.id)
             }}
-            className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer focus:outline-none"
+            className="p-0.5 rounded hover:bg-surface-secondary hover:text-text-primary cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
           >
             <Chevron size={12} />
           </button>

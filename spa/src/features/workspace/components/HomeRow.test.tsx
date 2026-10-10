@@ -53,6 +53,12 @@ describe('HomeRow', () => {
   })
 
   // What it does once there is a slave is ProfileSwitcher.test.tsx's.
+  // #1486: the button drops the browser's focus outline, so a keyboard user gets a `focus-visible` ring instead (never on a click).
+  it('the main button carries a focus-visible ring', () => {
+    renderRow()
+    expect(screen.getByTestId('home-button')).toHaveClass('focus:outline-none', 'focus-visible:ring-1', 'focus-visible:ring-border-active')
+  })
+
   it('keeps data-testid=home-header on the row, and the button inside it is home-button', () => {
     renderRow()
     expect(screen.getByTestId('home-header').contains(screen.getByTestId('home-button'))).toBe(true)

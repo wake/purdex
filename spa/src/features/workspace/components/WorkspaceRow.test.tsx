@@ -200,6 +200,20 @@ describe('WorkspaceRow', () => {
   })
 })
 
+// #1486: these buttons drop the browser's focus outline (`focus:outline-none`), so a keyboard user needs `focus-visible`
+// styling instead: the ring shows for Tab, never for a mouse click (`:focus-visible` does not match a click).
+describe('WorkspaceRow keyboard focus is visible (#1486)', () => {
+  const RING = ['focus:outline-none', 'focus-visible:ring-1', 'focus-visible:ring-border-active']
+
+  it('the name button, the + button and the chevron each carry a focus-visible ring', () => {
+    useLayoutStore.setState({ tabPosition: 'left', activityBarWidth: 'wide', workspaceExpanded: { 'ws-1': true } })
+    renderRow(mkWs('ws-1', 'Purdex', ['t1']), { tabsById: { t1: mkTab('t1', 'alpha') }, onAddTabToWorkspace: () => {} })
+    expect(screen.getByText('Purdex').closest('button')).toHaveClass(...RING)
+    expect(screen.getByRole('button', { name: /new tab in purdex/i })).toHaveClass(...RING)
+    expect(screen.getByRole('button', { name: /expand|collapse/i })).toHaveClass(...RING)
+  })
+})
+
 describe('WorkspaceRow chevron visibility', () => {
   it("hides chevron when tabPosition='top'", () => {
     useLayoutStore.setState({ tabPosition: 'top' })
