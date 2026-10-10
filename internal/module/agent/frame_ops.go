@@ -2592,3 +2592,15 @@ func (m *Module) unmarkDelegatingRef(paneID string, senderPID int, senderStartTi
 	}
 	return fmt.Errorf("unmarkDelegatingRef: exceeded %d retries for frame %s", proxyUpsertMaxAttempts, current.FrameID)
 }
+
+// isProxySubagentStopReason: the trace reason of a Stop / StopFailure whose sender owns no frame of its own and is
+// handled as a proxy subagent (a codex or opencode that the pane's main agent runs), whether or not its ref was
+// still there to detach (a late or repeated Stop finds none, but it is still not the main agent's).
+func isProxySubagentStopReason(reason string) bool {
+	switch reason {
+	case "proxy_subagent_detached_on_stop_turn", "proxy_subagent_detached_on_stop",
+		"proxy_subagent_stop_no_match", "proxy_subagent_stop_parse_failed":
+		return true
+	}
+	return false
+}
