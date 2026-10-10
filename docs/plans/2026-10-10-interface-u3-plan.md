@@ -226,10 +226,19 @@ is reloading; a `/clear` between request and run (the session id no longer match
 1. `lib/conversations/send.ts` (`/submit`, `/interrupt`, each outcome's message, the destructive guard, the
    `SendQueue` port with the `busy` wait) + `components/deck/SessionInput.tsx` (Enter / Shift+Enter, 中斷, draft memory
    per pane, the `/` `!` message, disabled with its reason when the conversation's `send` is not `prompt`). Tests: each
-   outcome, queue order and undo, `busy` → resend on idle, `client_msg_id` reuse on retry, destructive guard, draft
-   survives a real `TabContent` remount.
-Review focus: a draft that is only whitespace; two quick sends; the host restarting mid-submit (retry with the same
-`client_msg_id`).
+   outcome, queue order and undo, `busy` → resend on idle, `client_msg_id` handling on resend (see below), destructive
+   guard, draft survives a real `TabContent` remount.
+   *(Amended in the U3-2 PR after the codex attack round, #2455.)* **Only the automatic `busy` resend reuses the
+   `client_msg_id`.** A manual resend is a new message with a **new** id: a `failed` one (dropped, timeout, …) 「再試一次」
+   directly (the daemon's ledger replays a cached `dropped` for the same id, so a same-id retry could never send); a
+   `maybe` one (unknown / not_owner / lost connection) only after an explicit 「可能已送出；仍要再送一次嗎？（可能重複）」
+   — the person accepts the duplicate risk, because after a daemon restart or the ledger's TTL the old id would be
+   executed again anyway. The old entry is marked `superseded` and hidden. A `maybe` that the transcript can settle
+   (echo by `client_msg_id`, or the same text inside the daemon's asymmetric window: 2 s before the request, 30 s after)
+   needs no resend at all. Draft and queue keys are `pane + host + session`; the live `capabilities.send` is the
+   authority for disabling the input (a 409 `no_mod` fails only that message).
+Review focus: a draft that is only whitespace; two quick sends; the host restarting mid-submit (the request counts as
+`maybe`; a manual resend asks first and uses a new id).
 
 ### U3-3 SPA — chat and the right panel (~700)
 1. **Gate: iOS has committed `testdata/conversation/v1/render/turn-rows.json`** (generated and tested in purdex-ios).
