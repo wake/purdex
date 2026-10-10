@@ -769,15 +769,15 @@ func TestWS_ChangesBodyIsMeasuredWithTheFrameAroundIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	inc := entry.Increment(epoch, rev)
-	body, ok := e.mod.encodeIncrement(inc, "h", 0)
+	body, ok := e.mod.encodeIncrement(entry, inc, sid, "h", 0)
 	if !ok {
 		t.Fatal("setup")
 	}
 	e.mod.maxBody = len(body) + frameOverhead - 1
-	if _, ok := e.mod.encodeIncrement(inc, "h", frameOverhead); ok {
+	if _, ok := e.mod.encodeIncrement(entry, inc, sid, "h", frameOverhead); ok {
 		t.Fatal("a body that fits only without its frame was accepted")
 	}
-	if _, ok := e.mod.encodeIncrement(inc, "h", 0); !ok {
+	if _, ok := e.mod.encodeIncrement(entry, inc, sid, "h", 0); !ok {
 		t.Fatal("the HTTP form (no frame) must still fit")
 	}
 	// and the frame really is smaller than the allowance
@@ -875,5 +875,24 @@ func TestModule_StopWaitsOnlyForItsOwnLifetimesConnections(t *testing.T) {
 	}
 	if err := e.mod.Stop(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A client resuming from a cursor was not told how the capabilities moved while it was away (the catch-up carries none), so
+// the current table follows. Mutation gate: set the baseline on a resume too → red.
+func TestWS_ResumeFromACursorGetsTheCurrentCapabilities(t *testing.T) {
+	e, _ := wsEnv(t)
+	e.transcript(idleTurns(2))
+	f := &fakeSender{}
+	e.sender(f)
+	snap := decode(t, e.get("/api/conversations/claude/"+sid))
+	f.liveOwner.Store(true) // the mod came while the client was away
+	srv := e.server()
+	c := e.connect(srv, "?after="+snap.Cursor)
+	c.expect("conversation.changes")
+	c.expect("approvals.snapshot")
+	fr := c.expect("conversation.capabilities")
+	if !strings.Contains(string(fr.Value), `"send":"prompt"`) {
+		t.Fatalf("frame: %s", fr.Value)
 	}
 }

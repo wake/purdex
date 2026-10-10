@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/wake/purdex/internal/convfeed"
 	"github.com/wake/purdex/internal/convmodel"
 	"github.com/wake/purdex/internal/promptq"
 )
@@ -23,6 +25,33 @@ type PromptSender interface {
 	Submit(ctx context.Context, sessionID, clientMsgID, text string) (promptq.Result, error)
 	Interrupt(ctx context.Context, sessionID string) (promptq.Result, error)
 	HasOwner(sessionID string) bool
+	Match(sessionID string, items []promptq.EchoItem) []string
+}
+
+// echoIDs pairs the session's user messages with the client_msg_ids of the requests that sent them (U3-2): user item id ->
+// client_msg_id. The pairing runs over the whole conversation (not the window or increment being answered), so a request
+// already paired with an older message is never handed to a later one with the same text. Only the person's own messages
+// (source user) are looked at.
+func (m *Module) echoIDs(sessionID string, entry *convfeed.Entry) map[string]string {
+	ps := m.promptSender()
+	if ps == nil || entry == nil {
+		return nil
+	}
+	msgs := entry.UserMessages()
+	if len(msgs) == 0 {
+		return nil
+	}
+	items := make([]promptq.EchoItem, len(msgs))
+	for i, u := range msgs {
+		items[i] = promptq.EchoItem{Text: u.Text, At: time.UnixMilli(u.At)}
+	}
+	out := map[string]string{}
+	for i, cm := range ps.Match(sessionID, items) {
+		if cm != "" {
+			out[msgs[i].ID] = cm
+		}
+	}
+	return out
 }
 
 const (
@@ -109,6 +138,10 @@ func (m *Module) promptSender() PromptSender {
 // while a mod stream that announced prompt.v1 is live for the session (else they stay not_wired, fail-closed).
 func (m *Module) capabilitiesFor(sessionID string) *convmodel.Capabilities {
 	c := convmodel.TranscriptCapabilities()
+	// a question the agent asks is answered through the approvals channel (the conversation stream's approvals and the decide
+	// API with hook answers), whatever the mod does
+	c.AnswerQuestion = "approval"
+	delete(c.Reasons, "answer_question")
 	if ps := m.promptSender(); ps != nil && ps.HasOwner(sessionID) {
 		c.Send, c.Interrupt = "prompt", "prompt"
 		delete(c.Reasons, "send")

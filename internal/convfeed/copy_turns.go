@@ -35,3 +35,27 @@ func (e *Entry) CopyLastTurns(n int) []convmodel.Turn {
 	}
 	return out
 }
+
+// UserMessage is a person's message of the conversation, as far as the echo pairing looks at it.
+type UserMessage struct {
+	ID   string
+	Text string
+	At   int64 // unix ms
+}
+
+// UserMessages is every source=user message of the whole conversation (oldest first), read under the entry's lock. The echo
+// pairing needs the whole session, not the window or the increment being answered: a request already paired with an older
+// message must not be handed to a later one with the same text.
+func (e *Entry) UserMessages() []UserMessage {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []UserMessage
+	for _, t := range e.conv().Turns {
+		for _, it := range t.Items {
+			if it.User != nil && it.User.Source == convmodel.SourceUser {
+				out = append(out, UserMessage{ID: it.User.ID, Text: it.User.Text, At: it.User.At})
+			}
+		}
+	}
+	return out
+}
