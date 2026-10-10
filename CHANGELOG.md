@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.703] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：`pdx token generate` 不會再在 daemon 執行中悄悄換掉 token — #2562（#2582）
+
+- daemon 執行期間會持有設定檔旁的 `<config>.run` 鎖。`pdx token generate` 改看這把鎖判斷「有沒有 daemon 正在用這個設定檔」，不再只看 data_dir 裡的 pid 檔：data_dir 改過、路徑寫法不同、經過 symlink，都不會漏掉執行中的 daemon；沒帶 `--force` 就拒絕，檔案不動。
+- daemon 啟動時要等正在寫設定檔的程式寫完才讀，不會出現「檢查完沒有 daemon、daemon 隨即啟動讀到舊 token」的空檔。設定檔被佔住超過 5 秒時，冷啟動會失敗並回報；熱重啟則沿用舊 image 交來的鎖，最多再等約 2 分鐘。
+
+### Fixed：nex 設定存檔不再把一堆空值寫進 config.toml — #1057（#2585）
+
+- 從 App 存 nex 設定時，預設本來就是空的欄位（`claude_bin`、`[nex.timeouts]` 三項、`[nex.peer]` 的 `wake_template`／`reply_line`／`max_pending`）沒設定就不再寫進 config.toml；讀回來的值不變。
+
+### Added：在 App 直接編輯執行中 team 的工作目錄 — #2561（#2575，介面線）
+
+- 無人值守面板的 lead 列（member 上限旁）會顯示執行中 team 的工作目錄清單，可以直接新增或移除；daemon 回報的是實際路徑。同時有人改過時會提示並刷新成最新清單；要移除的目錄還有 member 或待處理的 spawn／收編在用時會列出是誰，清單不變。
+
 ## [1.0.0-alpha.702] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
