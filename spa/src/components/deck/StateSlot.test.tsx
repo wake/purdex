@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import { StateSlot, type SlotState } from './StateSlot'
-import { formatElapsed } from './status-row-model'
+import { formatElapsed, formatExit } from './status-row-model'
 
 const STATES: SlotState[] = ['idle', 'running', 'failed', 'denied', 'exit']
 const opt = (container: HTMLElement, k: string) => container.querySelector(`[data-state-option="${k}"]`) as HTMLElement
@@ -54,6 +54,23 @@ describe('StateSlot', () => {
     rerender(<StateSlot state="exit" exitCode={2} />)
     expect(sizer('exit')!.textContent).toContain('exit 255')
     expect(sizer('running')).toBeNull() // inactive options already carry the widest text themselves
+  })
+
+  it('clock is capped at 99:59 (then 99:59+), exit code is 0-255 (then 255+), garbage is ?, and the sizer is the widest of each', () => {
+    expect(formatElapsed(99 * 60_000 + 59_000)).toBe('99:59')
+    expect(formatElapsed(100 * 60_000)).toBe('99:59+')
+    expect(formatElapsed(10 ** 12)).toBe('99:59+')
+    expect(formatElapsed(NaN)).toBe('0:00')
+    expect(formatElapsed(Infinity)).toBe('99:59+')
+    expect([0, 2, 255, 256, 1000, 7.9, -1, NaN, Infinity].map(formatExit)).toEqual(['0', '2', '255', '255+', '255+', '7', '?', '?', '?'])
+    const { container, rerender } = render(<StateSlot state="running" elapsedMs={100 * 60_000} />)
+    expect(opt(container, 'running').textContent).toContain('99:59+')
+    expect(opt(container, 'running').querySelector('[data-sizer]')!.textContent).toContain('88:88+')
+    for (const [code, text] of [[256, 'exit 255+'], [-3, 'exit ?'], [4.7, 'exit 4'], [NaN, 'exit ?']] as const) {
+      rerender(<StateSlot state="exit" exitCode={code} />)
+      expect(opt(container, 'exit').textContent).toContain(text)
+      expect(opt(container, 'exit').querySelector('[data-sizer]')!.textContent).toContain('exit 255+')
+    }
   })
 
   it('formats the clock', () => {

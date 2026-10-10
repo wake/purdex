@@ -46,10 +46,19 @@ export const HIDE = {
   modelSep: '@max-[300px]:hidden',
 } as const
 
-/** `0:42`, `12:05`. */
+/** `0:42`, `12:05`; capped at `99:59+` so the state slot's width stays bounded. NaN reads 0:00. */
 export function formatElapsed(ms: number): string {
+  if (Number.isNaN(ms)) return '0:00'
   const s = Math.max(0, Math.floor(ms / 1000))
+  
+  if (s >= 100 * 60) return '99:59+'
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** An exit code as shown: whole 0-255, above that `255+`, anything that is not a non-negative number `?`. */
+export function formatExit(code: number): string {
+  if (typeof code !== 'number' || Number.isNaN(code) || code < 0 || code === Infinity) return '?'
+  return code > 255 ? '255+' : String(Math.trunc(code))
 }
 
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)

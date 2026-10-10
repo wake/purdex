@@ -5,13 +5,13 @@ import type { ReactNode } from 'react'
 import { Prohibit, XCircle } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { formatElapsed } from './status-row-model'
+import { formatElapsed, formatExit } from './status-row-model'
 
 export type SlotState = 'idle' | 'running' | 'failed' | 'denied' | 'exit'
 
-/** exit code that sets the reserved width: three digits is the widest a real one gets (exit 255). */
-const WIDEST_EXIT = 255
-const WIDEST_CLOCK = '88:88'
+/** widest exit text (a code is shown 0-255, above that 255+). */
+const WIDEST_EXIT = '255+'
+const WIDEST_CLOCK = '88:88+'
 
 function Chip({ tone, icon: IconCmp, children }: { tone: 'error' | 'muted'; icon: Icon; children: ReactNode }) {
   const cls = tone === 'error' ? 'bg-status-error/15 text-status-error' : 'bg-surface-secondary text-text-muted'
@@ -42,7 +42,7 @@ export function StateSlot({ state, exitCode = 1, elapsedMs = 0, className = '' }
       <span className="tabular-nums text-text-muted">{clock}</span>
     </span>
   )
-  const exit = (n: number) => <Chip tone="error" icon={XCircle}>{t('deck.status.exit', { n })}</Chip>
+  const exit = (n: string) => <Chip tone="error" icon={XCircle}>{t('deck.status.exit', { n })}</Chip>
   // An inactive option carries the WIDEST text of its kind; the active one adds an invisible copy of that widest text (the
   // sizer), so a short clock or exit 2 never makes the slot narrower than when it is idle.
   const options: Array<{ key: SlotState; node: ReactNode; sizer?: ReactNode }> = [
@@ -50,7 +50,7 @@ export function StateSlot({ state, exitCode = 1, elapsedMs = 0, className = '' }
     { key: 'running', node: running(state === 'running' ? formatElapsed(elapsedMs) : WIDEST_CLOCK), sizer: running(WIDEST_CLOCK) },
     { key: 'failed', node: <Chip tone="error" icon={XCircle}>{t('deck.status.failed')}</Chip> },
     { key: 'denied', node: <Chip tone="muted" icon={Prohibit}>{t('deck.status.denied')}</Chip> },
-    { key: 'exit', node: exit(state === 'exit' ? exitCode : WIDEST_EXIT), sizer: exit(WIDEST_EXIT) },
+    { key: 'exit', node: exit(state === 'exit' ? formatExit(exitCode) : WIDEST_EXIT), sizer: exit(WIDEST_EXIT) },
   ]
   return (
     <span data-testid="state-slot" data-state={state} className={`inline-grid shrink-0 items-center justify-items-start whitespace-nowrap text-xs ${className}`}>
