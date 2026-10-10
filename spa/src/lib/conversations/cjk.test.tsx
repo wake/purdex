@@ -23,6 +23,7 @@ describe('splitCjk', () => {
   it('full-width punctuation, kana, bopomofo and astral ideographs are CJK; ASCII punctuation is not', () => {
     expect(splitCjk('好，嗎？').map((p) => p.text)).toEqual(['好，嗎？'])
     expect(splitCjk('ひらがなカタカナ')).toEqual([{ text: 'ひらがなカタカナ', cjk: true }])
+    expect(splitCjk('a㈱b㎏')).toEqual([{ text: 'a', cjk: false }, { text: '㈱', cjk: true }, { text: 'b', cjk: false }, { text: '㎏', cjk: true }])
     expect(splitCjk('ㄅㄆㄇ')).toEqual([{ text: 'ㄅㄆㄇ', cjk: true }])
     expect(splitCjk('𠀀字')).toEqual([{ text: '𠀀字', cjk: true }]) // U+20000, a surrogate pair
     expect(splitCjk('a, b. (c)')).toEqual([{ text: 'a, b. (c)', cjk: false }])

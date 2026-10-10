@@ -3,10 +3,10 @@
 // One splitter for both ways text reaches the screen: a rehype step for the agent's markdown (code blocks and the inline code chip are not
 // touched), and `splitCjk` for the plain text of the person's / a peer's message. Wrapping adds no text, so a node's `textContent` is unchanged.
 
-// CJK radicals / Kangxi, symbols and punctuation (U+3000–303F), kana, bopomofo, CJK unified ideographs (+ extension A and the astral B–G), compatibility
+// CJK radicals / Kangxi, symbols and punctuation (U+3000–303F), kana, bopomofo, enclosed CJK letters and CJK compatibility (U+3200–33FF), CJK unified ideographs (+ extension A and the astral B–G), compatibility
 // ideographs, small/vertical forms and half/fullwidth forms (full-width punctuation and letters).
 const CJK_RUN = new RegExp(
-  '[\\u2E80-\\u2FDF\\u3000-\\u30FF\\u3100-\\u312F\\u3190-\\u31FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\uFE30-\\uFE4F\\uFF00-\\uFFEF]|[\\u{20000}-\\u{323AF}]',
+  '[\\u2E80-\\u2FDF\\u3000-\\u30FF\\u3100-\\u312F\\u3190-\\u31FF\\u3200-\\u33FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\uFE30-\\uFE4F\\uFF00-\\uFFEF]|[\\u{20000}-\\u{323AF}]',
   'u',
 )
 const CJK_RUNS = new RegExp(`(?:${CJK_RUN.source})+`, 'gu')
