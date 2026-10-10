@@ -92,10 +92,25 @@ describe('the roots editor', () => {
     await act(async () => { fireEvent.click(screen.getByTestId('roots-add')) })
     expect(screen.getByTestId('roots-input-error')).toHaveTextContent('not a directory') // roots[2] is the row being added
     expect((screen.getByTestId('roots-input') as HTMLInputElement).value).toBe('/nope')
-    configureRoots({ put: async () => { throw err(400, 'bad_request', { detail: 'gone', field: 'roots[1]' }) } })
+    // removing row 0 sends [/b]; the daemon's roots[0] is /b, which is row 1 of the list shown
+    configureRoots({ put: async () => { throw err(400, 'bad_request', { detail: 'gone', field: 'roots[0]' }) } })
     await act(async () => { fireEvent.click(screen.getAllByTestId('roots-remove')[0]) })
     expect(screen.getByTestId('roots-row-error')).toHaveTextContent('gone')
     expect(screen.getAllByTestId('roots-row')[1]).toContainElement(screen.getByTestId('roots-row-error'))
+  })
+
+  it('the last directory cannot be removed (the daemon wants 1-16)', () => {
+    useTeamRosterStore.getState().apply(H, [team({ roots: ['/only'] })])
+    show()
+    expect(screen.getByTestId('roots-remove')).toBeDisabled()
+  })
+
+  it('says when an added path was merged into an existing one', async () => {
+    configureRoots({ put: async () => ({ team_id: T, roots: ['/Users/wake/a', '/b'], roots_rev: 4 }) })
+    show()
+    type('/Users/wake/a/inner')
+    await act(async () => { fireEvent.click(screen.getByTestId('roots-add')) })
+    expect(screen.getByTestId('roots-notice')).toHaveTextContent('已合併')
   })
 
   it('409 rev_mismatch: the list is refreshed from the answer and the person is told to do it again', async () => {

@@ -2306,6 +2306,8 @@
   "unattended.roots.in_use_member": "member {{who}} ({{cwd}})",
   "unattended.roots.in_use_spawn": "a member is starting in {{cwd}}",
   "unattended.roots.in_use_adoption": "an adoption is in progress in {{cwd}}",
+  "unattended.roots.last": "A team needs at least one directory",
+  "unattended.roots.merged": "Saved, but that path is inside (or the same as) a directory already in the list, so it was merged into it",
   "unattended.held.title": "Out of quota, waiting for you",
   "unattended.held.row_member": "{{host}}: {{lead}} wants to relay member {{member}} · {{time}}",
   "unattended.held.row": "{{host}}: {{session}} · relay request · {{time}}",

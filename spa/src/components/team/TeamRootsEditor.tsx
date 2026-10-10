@@ -27,7 +27,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
     setLocalRefusal(null)
     if (await saveRoots(hostId, team.id, [...roots, r.path])) useRootsStore.getState().setDraft(key, '')
   }
-  const remove = (i: number) => { void saveRoots(hostId, team.id, roots.filter((_, j) => j !== i), roots[i]) }
+  const remove = (i: number) => { void saveRoots(hostId, team.id, roots.filter((_, j) => j !== i), i) }
   const rowError = (i: number) => (err?.kind === 'bad_request' && err.index === i ? err.detail : null)
   const boxError = err?.kind === 'bad_request' && (err.index === null || err.index >= roots.length) ? err.detail : null
 
@@ -40,7 +40,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
             <div className="flex items-center gap-1">
               <span data-testid="roots-path" title={root} className="min-w-0 flex-1 truncate font-mono text-text-primary">{midEllipsis(root)}</span>
               <button
-                type="button" data-testid="roots-remove" aria-label={t('unattended.roots.remove', { path: root })} disabled={busy} onClick={() => remove(i)}
+                type="button" data-testid="roots-remove" aria-label={t('unattended.roots.remove', { path: root })} title={roots.length <= 1 ? t('unattended.roots.last') : undefined} disabled={busy || roots.length <= 1} onClick={() => remove(i)}
                 className="inline-flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-30"
               ><X size={12} /></button>
             </div>
@@ -62,6 +62,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
       {localRefusal && <div data-testid="roots-input-error" role="alert" className="text-status-error">{t(REFUSAL_KEY[localRefusal])}</div>}
       {boxError && <div data-testid="roots-input-error" role="alert" className="text-status-error">{boxError}</div>}
       {err?.kind === 'rev_mismatch' && <div data-testid="roots-notice" role="status" className="text-status-warning-text">{t('unattended.roots.rev_mismatch')}</div>}
+      {err?.kind === 'merged' && <div data-testid="roots-notice" role="status" className="text-text-muted">{t('unattended.roots.merged')}</div>}
       {err?.kind === 'ended' && <div data-testid="roots-notice" role="alert" className="text-status-error">{t('unattended.roots.ended')}</div>}
       {err?.kind === 'failed' && <div data-testid="roots-notice" role="alert" className="text-status-error">{t('unattended.roots.failed', { code: err.code })}</div>}
       {err?.kind === 'in_use' && (

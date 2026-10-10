@@ -33,6 +33,8 @@ export type RootsError =
   /** 404: the team has ended. */
   | { kind: 'ended' }
   | { kind: 'failed'; code: string }
+  /** 200, but the stored list is not the sent one's size: a path inside (or the same real path as) an existing root was merged into it. Not a refusal. */
+  | { kind: 'merged' }
 
 interface TeamEdit {
   error: RootsError | null
@@ -127,7 +129,7 @@ const rowIndex = (field: unknown): number | null => {
  * Write `next` (the whole list) for the team. Ignored while a request for the team is out, when the host is gone, or when the roster
  * has no revision for the team (a daemon that predates the route). Returns true when the daemon took it.
  */
-export async function saveRoots(hostId: string, teamId: string, next: readonly string[], removed: string | null = null): Promise<boolean> {
+export async function saveRoots(hostId: string, teamId: string, next: readonly string[], removedAt: number | null = null): Promise<boolean> {
   const key = teamKey(hostId, teamId)
   const store = useRootsStore.getState()
   const identity = deps.identity(hostId)
@@ -135,6 +137,7 @@ export async function saveRoots(hostId: string, teamId: string, next: readonly s
   if (identity === null || team?.roots === undefined || team.roots_rev === undefined) return false
   if (store.inflight[key]?.identity === identity) return false
   const ifRev = team.roots_rev
+  const removed = removedAt === null ? null : (team.roots[removedAt] ?? null)
   const token = Date.now() + Math.random()
   store.begin(key, { token, identity })
   store.setError(key, null)
@@ -143,13 +146,18 @@ export async function saveRoots(hostId: string, teamId: string, next: readonly s
     if (deps.identity(hostId) !== identity) return false
     // a roster event that already moved the revision is at least as new as this answer (the daemon emits it after the write)
     if ((teamOf(hostId, teamId)?.roots_rev ?? -1) <= ifRev) patchRoster(hostId, teamId, view.roots, view.roots_rev)
+    if (view.roots.length !== next.length) useRootsStore.getState().setError(key, { kind: 'merged' })
     return true
   } catch (e: unknown) {
     if (deps.identity(hostId) !== identity) return false
     if (!(e instanceof ApprovalApiError)) { useRootsStore.getState().setError(key, { kind: 'failed', code: 'error' }); return false }
     const body = e.body ?? {}
     let err: RootsError
-    if (e.code === 'bad_request') err = { kind: 'bad_request', detail: e.detail, index: rowIndex(body.field) }
+    if (e.code === 'bad_request') {
+      // the daemon counts rows of the list it was SENT; the editor shows the list it has: after a removal, the rows behind it moved up by one
+      const sent = rowIndex(body.field)
+      err = { kind: 'bad_request', detail: e.detail, index: sent !== null && removedAt !== null && sent >= removedAt ? sent + 1 : sent }
+    }
     else if (e.code === 'not_found') err = { kind: 'ended' }
     else if (e.code === 'rev_mismatch') {
       // the answer carries the list that won: show it (only if it is newer than what the roster has)
