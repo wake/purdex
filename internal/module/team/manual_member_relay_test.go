@@ -118,19 +118,16 @@ func TestManualBegin_TheRecheckUnderCreateMuLetsAManualOneThrough(t *testing.T) 
 	}
 }
 
-// A remote member's manual begin waits for MR-2: relay_unsupported, nothing opened.
-func TestManualBegin_ARemoteMemberIsUnsupportedUntilMR2(t *testing.T) {
+// A remote member's manual begin is let through like a local one (MR-2). Mutation gate: refuse remote members at begin → red.
+func TestManualBegin_ARemoteMemberIsLetThrough(t *testing.T) {
 	f := newFixture(t)
 	seedRemote(t, f.m.store, "mk-1", "sid-1", f.clock.Load())
 	code, body := f.beginManual("sid-1")
-	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrRelayUnsupported {
-		t.Fatalf("remote member manual begin: %d %s, want 409 %s", code, body, team.ErrRelayUnsupported)
+	if code != http.StatusCreated {
+		t.Fatalf("remote member manual begin: %d %s, want 201", code, body)
 	}
-	if active, _ := f.m.store.ListActiveRelayOps(); len(active) != 0 {
-		t.Fatalf("ops opened: %+v", active)
-	}
-	if open, _ := f.m.store.ListOpen(); len(open) != 0 {
-		t.Fatalf("approvals opened: %+v", open)
+	if active, _ := f.m.store.ListActiveRelayOps(); len(active) != 1 {
+		t.Fatalf("ops = %+v, want one", active)
 	}
 }
 
@@ -185,26 +182,23 @@ func TestManualApprove_ANonManualRowOfANewMemberIsStillCancelled(t *testing.T) {
 	}
 }
 
-// The lift is for a LOCAL member only (a remote one waits for MR-2): a manual row of a session that became a member of a
-// team led on another host after its begin is still cancelled at the approve. Mutation gate: treat any member as local
-// at the approve → approved (red).
-func TestManualApprove_ARowOfASessionThatBecameARemoteMemberIsCancelled(t *testing.T) {
+// A manual row of a session that became a member of a team led on another host after its begin is approved like a local
+// one (MR-2). Mutation gate: cancel remote members at the approve → red.
+func TestManualApprove_ARowOfASessionThatBecameARemoteMemberIsApproved(t *testing.T) {
 	f := newFixture(t)
 	out := f.manualOpened("sid-1") // no role at begin
 	seedRemote(t, f.m.store, "mk-1", "sid-1", f.clock.Load())
-	code, body := f.decide(out.RequestID, "approve")
-	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrMemberRelayIsLeads {
-		t.Fatalf("approve: %d %s, want 409 %s", code, body, team.ErrMemberRelayIsLeads)
+	if code, body := f.decide(out.RequestID, "approve"); code != http.StatusOK {
+		t.Fatalf("approve: %d %s", code, body)
 	}
-	if op := f.op(out.Op.ID); op.State != team.RelayCancelled {
-		t.Fatalf("op = %s, want cancelled", op.State)
+	if op := f.op(out.Op.ID); op.State != team.RelayClaimed {
+		t.Fatalf("op = %s, want claimed", op.State)
 	}
 }
 
 // The op paths: an approved manual row whose op was not moved yet (afterClose missed it) is reconciled — claimed for a
-// local member, cancelled for a session that became a remote one. Mutation gates: closedRowReport cancelling every
-// member → the first is cancelled (red); treating every member as local → the second is claimed (red).
-func TestManualReconcile_AnApprovedManualRowIsClaimedForALocalMemberOnly(t *testing.T) {
+// local member and for a remote one. Mutation gate: closedRowReport cancelling every member → red.
+func TestManualReconcile_AnApprovedManualRowIsClaimedForAMember(t *testing.T) {
 	for _, remote := range []bool{false, true} {
 		f := newFixture(t)
 		out := f.manualOpened("sid-1")
@@ -218,11 +212,8 @@ func TestManualReconcile_AnApprovedManualRowIsClaimedForALocalMemberOnly(t *test
 		}
 		f.m.reconcileRelays()
 		op := f.op(out.Op.ID)
-		if remote && op.State != team.RelayCancelled {
-			t.Fatalf("remote: op = %s, want cancelled", op.State)
-		}
-		if !remote && op.State != team.RelayClaimed {
-			t.Fatalf("local: op = %s (%s), want claimed", op.State, op.Reason)
+		if op.State != team.RelayClaimed {
+			t.Fatalf("remote=%v: op = %s (%s), want claimed", remote, op.State, op.Reason)
 		}
 	}
 }

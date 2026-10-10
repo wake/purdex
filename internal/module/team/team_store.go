@@ -325,8 +325,8 @@ func (s *Store) closeSelfRelayApprovedIn(tx *sql.Tx, id string, c Close, session
 var ErrManualMemberNeedsPerson = errors.New("a member's manual relay is approved by a person, never automatically")
 
 // selfRelayMemberIn says whether sessionID is a live member and whether the row's approve cancels for that (U13). A
-// member is cancelled unless the ROW's payload says manual (read from the row, never from a caller) and the member is a
-// local one: a member of a team led on another host is still cancelled until MR-2.
+// member is cancelled unless the ROW's payload says manual (read from the row, never from a caller): a person's relay of
+// a member, local or of a team led on another host (MR-2), goes on.
 func selfRelayMemberIn(tx *sql.Tx, rowID, sessionID string) (member, cancel bool, err error) {
 	role, err := memberRoleIn(tx, sessionID)
 	if err != nil || !role.isMember() {
@@ -343,7 +343,7 @@ func selfRelayMemberIn(tx *sql.Tx, rowID, sessionID string) (member, cancel bool
 	if err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state = 'killing'`, sessionID).Scan(&killing); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return true, false, err
 	}
-	return true, !(manual && role == sessionRoleMemberLocal) || killing == 1, nil
+	return true, !manual || killing == 1, nil
 }
 
 // isLiveMemberIn reports, on q (a transaction's read under its write lock),

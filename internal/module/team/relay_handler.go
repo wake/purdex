@@ -487,7 +487,7 @@ func (m *Module) closedRowReport(a team.Approval, at int64) (RelayReport, error)
 		return rep, err
 	}
 	if sr.isMember() {
-		// A person's manual relay of a LOCAL member goes on (MR-1): the ROW's payload says so, as at the approve.
+		// A person's manual relay of a member, local or remote, goes on (MR-1, MR-2): the ROW's payload says so, as at the approve.
 		var sp team.SelfRelayPayload
 		manual := json.Unmarshal(a.Payload, &sp) == nil && sp.Manual
 		// A member whose kill started after the card opened is cancelled too: the cleared moves active rows only.
@@ -495,7 +495,7 @@ func (m *Module) closedRowReport(a team.Approval, at int64) (RelayReport, error)
 		if err != nil {
 			return rep, err
 		}
-		if !(manual && sr == sessionRoleMemberLocal) || killing {
+		if !manual || killing {
 			rep.State, rep.Reason = team.RelayCancelled, team.ErrMemberRelayIsLeads
 		}
 	}
@@ -544,19 +544,9 @@ func rowStateOrMissing(row team.Approval, ok bool) string {
 	return string(row.State)
 }
 
-// manualMemberAllowed is false (and the answer written) when a member's manual begin cannot go on: the member is on a
-// team led on another host (relay_unsupported until MR-2), or the role cannot be read. A local member passes.
+// manualMemberAllowed is false (and the answer written) when a member's manual begin cannot go on: the member is
+// being removed, or the role cannot be read. A member of a team led on another host passes like a local one (MR-2).
 func (m *Module) manualMemberAllowed(w http.ResponseWriter, sessionID string) bool {
-	role, err := m.store.SessionRole(sessionID)
-	if err != nil {
-		m.logf("[team] relay begin %s: %v", sessionID, err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "role unreadable; see the daemon log", nil)
-		return false
-	}
-	if role == sessionRoleMemberRemote {
-		m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, "a member of a team led on another host cannot be relayed by hand yet", nil)
-		return false
-	}
 	if killing, err := m.store.IsKillingMember(sessionID); err != nil {
 		m.logf("[team] relay begin %s: %v", sessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "role unreadable; see the daemon log", nil)
