@@ -200,7 +200,10 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
               }}
               style={{ overflowWrap: 'anywhere' }}
-              className="flex-1 resize-none rounded border border-border-subtle bg-surface-primary px-2 py-1 text-sm text-text-primary"
+              className={`flex-1 resize-none rounded border px-2 py-1 text-sm text-text-primary ${
+                // while files are dragged over, the drop style takes the focus ring's place (a focused box would hide the dashes)
+                dragging ? 'border-dashed border-accent bg-accent/10 outline-none' : 'border-border-subtle bg-surface-primary'
+              }`}
             />
             {sessionCode && (
               <>

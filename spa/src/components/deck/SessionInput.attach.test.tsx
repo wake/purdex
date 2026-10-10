@@ -304,6 +304,22 @@ describe('SessionInput attachments', () => {
       fireEvent.dragLeave(box(), { dataTransfer: files })
       expect(lit()).toBe('false')
     })
+    it('the box itself takes the drop style over its focus ring, and gives it back afterwards', () => {
+      render(ui())
+      box().focus()
+      expect(document.activeElement).toBe(box())
+      expect(box().className).not.toContain('border-dashed')
+      fireEvent.dragEnter(zone(), { dataTransfer: files })
+      for (const c of ['border-dashed', 'border-accent', 'bg-accent/10', 'outline-none']) expect(box().className).toContain(c)
+      fireEvent.dragLeave(zone(), { dataTransfer: files })
+      expect(box().className).not.toContain('border-dashed')
+      expect(box().className).not.toContain('outline-none')
+      fireEvent.dragEnter(zone(), { dataTransfer: files })
+      fireEvent.drop(zone(), { dataTransfer: files })
+      expect(box().className).not.toContain('border-dashed')
+      expect(box().className).toContain('border-border-subtle')
+      expect(document.activeElement).toBe(box()) // focus itself was never taken away
+    })
     it('drop clears it', () => {
       render(ui())
       fireEvent.dragEnter(zone(), { dataTransfer: files })
