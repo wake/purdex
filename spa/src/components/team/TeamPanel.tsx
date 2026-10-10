@@ -7,7 +7,7 @@
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretUp } from '@phosphor-icons/react'
+import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretRight, CaretUp, Notebook } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
@@ -21,7 +21,8 @@ import { useCellCapacity } from './useCellCapacity'
 import { TeamEditPopover } from './TeamEditPopover'
 import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
 import { useI18nStore } from '../../stores/useI18nStore'
-import type { PanelMode } from '../../stores/useTeamUiStore'
+import { useTeamUiStore, type PanelMode } from '../../stores/useTeamUiStore'
+import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { CELL_GAP, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
@@ -45,9 +46,17 @@ export function TeamPanel(props: Props) {
   const roster = useTeamRosterStore((s) => s.byHost[hostId]?.find((r) => r.id === teamId))
   const canEdit = editable && roster !== undefined
   const { rootRef, hdr, editOpen, close, anchor } = useHeaderGestures({ teamKey: team.teamKey, mode: team.mode, onSetMode: props.onSetMode, canEdit })
+  // A drilled-in seat takes the place of the list (the drill is the store's, so it outlives this component).
+  const drill = useTeamUiStore((s) => s.teamDrill[team.teamKey])
+  const endedTitle = useTeamUiStore((s) => drill ? s.endedSeats[team.teamKey]?.find((e) => e.hostId === drill.hostId && e.sessionId === drill.sessionId)?.title : undefined)
+  const drillTitle = drill
+    ? [team.lead, ...team.members].find((m) => m.sessionId === drill.sessionId && m.hostId === drill.hostId)?.title ?? endedTitle ?? drill.sessionId
+    : ''
   return (
     <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className="text-xs text-text-primary">
-      {team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} hdr={hdr} />}
+      {drill ? (
+        <TeamSeatWorkbookView teamKey={team.teamKey} hostId={drill.hostId} sessionId={drill.sessionId} title={drillTitle} />
+      ) : team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} hdr={hdr} />}
       {editOpen && canEdit && (
         <TeamEditPopover
           target={{ hostId, teamId, name: roster.team_name, label: roster.team_label, color: roster.team_color ?? null }}
@@ -164,7 +173,47 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Pro
           />
         ))}
       </div>
+      <EndedGroup teamKey={teamKey} />
     </>
+  )
+}
+
+/** Seats that left the team: a collapsed 「已結束 (N)」 group at the bottom of the full list (absent with none); a click on one
+ *  drills into its workbook, which the daemon keeps after the session is gone. */
+function EndedGroup({ teamKey }: { teamKey: string }) {
+  const t = useI18nStore((s) => s.t)
+  const ended = useTeamUiStore((s) => s.endedSeats[teamKey])
+  const [open, setOpen] = useState(false)
+  if (!ended || ended.length === 0) return null
+  const label = t('team.panel.ended', { count: ended.length })
+  return (
+    <div data-testid="team-panel-ended" className="border-t border-border-subtle py-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onMouseDown={keepFocus}
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-1 px-3.5 py-1 text-text-muted hover:text-text-secondary cursor-pointer"
+      >
+        <CaretRight size={10} className={open ? 'rotate-90' : ''} />
+        <span>{label}</span>
+      </button>
+      {open && ended.map((e) => (
+        <div
+          key={`${e.hostId}\u0000${e.sessionId}`}
+          role="button"
+          tabIndex={0}
+          data-testid="team-panel-ended-row"
+          title={t('team.panel.ended_hint')}
+          onMouseDown={keepFocus}
+          onClick={() => useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId })}
+          onKeyDown={(ev) => { if (ev.key === 'Enter') useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId }) }}
+          className="mx-1.5 pl-6 pr-2 py-1.5 rounded-md truncate text-text-muted hover:bg-surface-hover hover:text-text-secondary cursor-pointer"
+        >
+          {e.title}
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -236,6 +285,21 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
         <span data-testid="team-panel-ring" className="flex items-center flex-shrink-0 text-text-primary">
           <ContextRing pct={noAnswer ? undefined : r.ctx} model={noAnswer ? undefined : r.model} size={16} />
         </span>
+        {/* The workbook button follows the ring (only with a workbook); it drills in, the row itself still opens the seat */}
+        {wb.has && (
+          <button
+            type="button"
+            data-testid="team-panel-workbook"
+            onMouseDown={(e) => { e.stopPropagation(); e.preventDefault() }}
+            onClick={(e) => { e.stopPropagation(); useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: seat.hostId, sessionId: seat.sessionId }) }}
+            onKeyDown={(e) => e.stopPropagation()}
+            title={t('team.panel.workbook')}
+            aria-label={t('team.panel.workbook')}
+            className="p-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer flex-shrink-0"
+          >
+            <Notebook size={14} />
+          </button>
+        )}
       </div>
       {/* Line 2: the task (only with a workbook that has a status); without one the row stays one line */}
       {task !== '' && (

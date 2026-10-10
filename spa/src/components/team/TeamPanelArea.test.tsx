@@ -70,15 +70,27 @@ describe('who the panel shows for', () => {
     expect(screen.queryByTestId('team-panel')).toBeNull()
   })
 
-  it('a workbook result (toggle on, or a drill) renders no team view yet', () => {
+  it('a tab-workbook toggle renders no team view yet; a drill shows the seat workbook in the same frame instead of the list', () => {
     scene()
     mount()
     act(() => useTeamUiStore.getState().setWorkbookTab('lead', true))
     expect(screen.queryByTestId('team-panel')).toBeNull()
     act(() => { useTeamUiStore.getState().setWorkbookTab('lead', false); useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' }) })
-    expect(screen.queryByTestId('team-panel')).toBeNull()
+    expect(screen.getByTestId('team-panel-area')).toBeTruthy()
+    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
+    expect(screen.queryAllByTestId('team-panel-row')).toHaveLength(0)
     act(() => useTeamUiStore.getState().setTeamDrill(KEY, null))
-    expect(screen.queryByTestId('team-panel')).not.toBeNull()
+    expect(screen.queryByTestId('team-seat-workbook')).toBeNull()
+    expect(rows().length).toBeGreaterThan(0)
+  })
+  it('a drill survives a title-bar round trip of the panel (the drill is the store\'s, not the component\'s)', () => {
+    scene()
+    mount()
+    act(() => useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' }))
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
+    expect(screen.queryByTestId('team-panel-area')).toBeNull()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'full'))
+    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
   })
 
   it('active row = the active tab\'s seat', () => {
