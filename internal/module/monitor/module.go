@@ -239,7 +239,7 @@ func (m *Module) collectSnapshot(ctx context.Context, cfg EffectiveConfig) (*sna
 
 	sampledAt := m.now()
 	hostState := m.ensureHostMetricsState()
-	hostState.cpuInterval = time.Duration(cfg.RefreshIntervalMS) * time.Millisecond
+	hostState.setCPUInterval(time.Duration(cfg.RefreshIntervalMS) * time.Millisecond)
 	return &snapshot{
 		SampledAt: sampledAt.UnixMilli(),
 		Host:      collectHostMetrics(ctx, hostState),

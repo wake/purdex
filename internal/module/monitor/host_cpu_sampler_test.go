@@ -308,11 +308,9 @@ type fakePercentCollector struct {
 	*fakeHostCollector
 	percent float64
 	err     error
-	asked   []time.Duration
 }
 
 func (c *fakePercentCollector) CPUPercent(interval time.Duration) (float64, error) {
-	c.asked = append(c.asked, interval)
 	return c.percent, c.err
 }
 
@@ -332,6 +330,30 @@ func TestHost_CPUFromAPercentSource(t *testing.T) {
 	host = collectHostMetrics(context.Background(), NewHostMetricsState(c))
 	assert.Nil(t, host.CPU.Percent)
 	assert.Equal(t, "host_cpu_unavailable", *host.CPU.UnavailableReason)
+}
+
+// The refresh interval is handed to the sampler through the shared host state; a snapshot that sets it while another reads
+// it must not race (codex attack). Run with -race: the plain field is reported (red).
+func TestHost_CPUIntervalIsSafeUnderConcurrentSnapshots(t *testing.T) {
+	c := &fakePercentCollector{fakeHostCollector: newFakeHostCollector(), percent: 1}
+	state := NewHostMetricsState(c)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				state.setCPUInterval(time.Duration(j+1) * time.Millisecond)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				collectHostCPU(context.Background(), state)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // The sampler is paced by the monitor's own refresh interval, and Stop closes it.

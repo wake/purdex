@@ -72,6 +72,8 @@ type HostMetricsState struct {
 	cpuInterval time.Duration
 }
 
+func (s *HostMetricsState) setCPUInterval(d time.Duration) { s.cpuInterval = d }
+
 func NewHostMetricsState(collector HostCollector) *HostMetricsState {
 	return &HostMetricsState{collector: collector}
 }
