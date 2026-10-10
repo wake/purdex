@@ -4,6 +4,9 @@
 
 const drafts = new Map<string, string>()
 
+/** A draft belongs to a pane AND the session it is bound to: a pane re-pointed at another session must not carry the text over. */
+export const draftKey = (paneKey: string, hostId: string, sessionId: string): string => `${paneKey}|${hostId}|${sessionId}`
+
 export const readDraft = (key: string): string | undefined => drafts.get(key)
 
 /** Every change of the box lands here; an empty box forgets (a send ends up here too). */

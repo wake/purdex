@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { SessionInput } from './SessionInput'
-import { clearAllDrafts, readDraft } from '../../lib/conversations/draft-memory'
+import { clearAllDrafts, draftKey, readDraft } from '../../lib/conversations/draft-memory'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
 import type { Capabilities, ConversationItem } from '../../lib/conversations/types'
 
@@ -192,9 +192,28 @@ describe('SessionInput capability', () => {
     expect(onSwitch).toHaveBeenCalledTimes(1)
   })
 
-  it('typing is remembered in the draft memory', () => {
+  it('typing is remembered in the draft memory, per host and session', () => {
     render(ui())
     type('half')
-    expect(readDraft('p1')).toBe('half')
+    expect(readDraft(draftKey('p1', 'h', SID))).toBe('half')
+  })
+
+  it('the same pane rebound to another session does not show or send the old draft; switching back restores it', async () => {
+    const other = '99999999-2222-4333-8444-555555555555'
+    const bound = (sid: string, host = 'h') => <SessionInput paneKey="p1" hostId={host} sessionId={sid} capabilities={PROMPT} items={[]} idle onSwitchToTerminal={() => {}} />
+    const { rerender } = render(bound(SID))
+    type('draft for A')
+    rerender(bound(other))
+    expect(box().value).toBe('')
+    enter()
+    await tick(5000)
+    expect(fetchMock).not.toHaveBeenCalled()
+    type('draft for B')
+    rerender(bound(SID, 'h2'))
+    expect(box().value).toBe('')
+    rerender(bound(SID))
+    expect(box().value).toBe('draft for A')
+    rerender(bound(other))
+    expect(box().value).toBe('draft for B')
   })
 })

@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { PaperPlaneRight, Stop } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { readDraft, writeDraft } from '../../lib/conversations/draft-memory'
+import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
 import { sendQueueFor } from '../../lib/conversations/send-queue'
@@ -24,11 +24,17 @@ interface Props {
 
 const REFUSAL_KEY = { empty: 'deck.send.empty', too_long: 'deck.send.too_long', needs_terminal: 'deck.send.needs_terminal' } as const
 
-export function SessionInput({ paneKey, hostId, sessionId, capabilities, items, idle, onSwitchToTerminal }: Props) {
+/** Re-keyed by host and session: a pane re-pointed at another session starts that session's own draft, queue and guard. */
+export function SessionInput(props: Props) {
+  return <SessionInputBody key={draftKey(props.paneKey, props.hostId, props.sessionId)} {...props} />
+}
+
+function SessionInputBody({ paneKey, hostId, sessionId, capabilities, items, idle, onSwitchToTerminal }: Props) {
   const t = useI18nStore((s) => s.t)
-  const queue = sendQueueFor(`${paneKey}|${hostId}|${sessionId}`, () => hostSendPort(hostId, sessionId))
+  const dKey = draftKey(paneKey, hostId, sessionId)
+  const queue = sendQueueFor(dKey, () => hostSendPort(hostId, sessionId))
   const entries = useSyncExternalStore(queue.subscribe, queue.entries)
-  const [draft, setDraft] = useState(() => readDraft(paneKey) ?? '')
+  const [draft, setDraft] = useState(() => readDraft(dKey) ?? '')
   const [hint, setHint] = useState<OutcomeMessage | null>(null)
   const guard = useRef(new DestructiveGuard())
   const users = useMemo(() => items.filter((i): i is UserItem => i.type === 'user'), [items])
@@ -37,7 +43,7 @@ export function SessionInput({ paneKey, hostId, sessionId, capabilities, items, 
   useEffect(() => { queue.reconcile(users) }, [queue, users, entries])
 
   const noMod = capabilities?.send !== 'prompt' || queue.blocked === 'no_mod'
-  const change = (v: string) => { setDraft(v); writeDraft(paneKey, v); setHint(null) }
+  const change = (v: string) => { setDraft(v); writeDraft(dKey, v); setHint(null) }
 
   const send = () => {
     const plan = planSend(draft)

@@ -11,7 +11,7 @@ import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
-import { clearAllDrafts, readDraft } from '../../lib/conversations/draft-memory'
+import { clearAllDrafts, draftKey, readDraft } from '../../lib/conversations/draft-memory'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
 
 const fetchMock = vi.hoisted(() => vi.fn())
@@ -51,7 +51,7 @@ describe('session input across tab switches', () => {
     rerender(<TabContent activeTab={dashTab} allTabs={all} />)
     expect(screen.queryByTestId('session-input')).toBeNull() // really unmounted
     expect(screen.getByTestId('other-tab')).toBeInTheDocument()
-    expect(readDraft(paneId)).toBe('half a thought')
+    expect(readDraft(draftKey(paneId, H, SID))).toBe('half a thought')
 
     rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
     expect(box().value).toBe('half a thought')
