@@ -108,8 +108,9 @@ func TestOpenConfigGate_WaitsForAWriterAndReadsWhatItWrote(t *testing.T) {
 	require.Equal(t, "pdx_newnewnewnewnewnewnewnewnewnewnewnew", cfg.Token)
 }
 
-// If the gate cannot be entered the daemon still starts, from the file, without a run lock.
-func TestOpenConfigGate_StartsWithoutTheGateWhenTheLockStaysHeld(t *testing.T) {
+// A lock that stays held past the wait refuses the start: starting from the file without the gate would leave a window in which
+// `pdx token generate` sees no daemon. (codex attack, #2562.) Mutation gate: start anyway -> red.
+func TestOpenConfigGate_RefusesToStartWhileAnotherWriterHoldsTheLock(t *testing.T) {
 	path, _ := gateCfg(t)
 	old := config.LockWait
 	config.LockWait = 100 * time.Millisecond
@@ -120,12 +121,56 @@ func TestOpenConfigGate_StartsWithoutTheGateWhenTheLockStaysHeld(t *testing.T) {
 	}()
 	<-done
 	defer close(release)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.Error(t, err)
+	require.ErrorIs(t, err, config.ErrLockTimeout)
+	require.Nil(t, run)
+}
+
+// A gate that cannot be entered for a reason other than a busy lock (the directory is read-only) still lets the daemon start,
+// from the file; `token generate` cannot write there either.
+func TestOpenConfigGate_StartsFromTheFileWhenTheLockCannotBeCreated(t *testing.T) {
+	path, _ := gateCfg(t)
+	dir := filepath.Dir(path)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	defer os.Chmod(dir, 0o700)
+	if f, err := os.Create(filepath.Join(dir, "probe")); err == nil { // running as root: the directory is writable anyway
+		f.Close()
+		t.Skip("directory permissions are not enforced here")
+	}
 	var logs []string
 	cfg, run, err := openConfigGate(path, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
 	require.NoError(t, err)
 	require.Nil(t, run)
 	require.Equal(t, 7860, cfg.Port)
 	require.NotEmpty(t, logs)
+}
+
+// Not knowing whether a daemon uses the file is not "no daemon": the token is left alone. (codex attack, #2562.) Mutation gate:
+// treat a failed probe as no daemon -> red.
+func TestTokenGenerate_RefusesWhenItCannotTellWhetherADaemonRuns(t *testing.T) {
+	path, _ := gateCfg(t)
+	require.NoError(t, os.Mkdir(path+".run", 0o755)) // the run file cannot be opened as a file
+	before, _ := os.ReadFile(path)
+	var out, errw strings.Builder
+	require.NotEqual(t, 0, tokenGenerate(path, false, true, &out, &errw))
+	after, _ := os.ReadFile(path)
+	require.Equal(t, string(before), string(after))
+	require.Contains(t, errw.String(), "cannot tell")
+	require.Contains(t, errw.String(), "--force")
+}
+
+// A run file that has been replaced by a symlink is not followed.
+func TestRunLock_DoesNotFollowASymlink(t *testing.T) {
+	path, _ := gateCfg(t)
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	require.NoError(t, os.WriteFile(target, nil, 0o600))
+	require.NoError(t, os.Symlink(target, path+".run"))
+	locked, _ := filepath.EvalSymlinks(path)
+	_, err := config.HoldRunLock(locked)
+	require.Error(t, err)
+	_, err = config.RunLockHeld(locked)
+	require.Error(t, err)
 }
 
 // ---- the hand-off across a restart ----

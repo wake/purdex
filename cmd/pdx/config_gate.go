@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -16,8 +17,9 @@ func runLockEnvEntry(f *os.File) string { return fmt.Sprintf("%s=%d", runLockFDE
 // openConfigGate is the daemon's start-up gate (#2562): inside "<config>.lock" it reads the config and takes (or adopts, after
 // a restart) the run lock of that file, which it then holds for as long as it runs. A writer that wants to change the file while
 // a daemon uses it (`pdx token generate`) takes the same lock first, so it either finishes before the daemon reads the file or
-// sees the daemon's run lock — it cannot slip in between. When the gate cannot be entered (the lock stays held, the directory is
-// not writable) the daemon still starts, from the file, without a run lock, and says so: availability over the gate.
+// sees the daemon's run lock — it cannot slip in between. A lock that stays held past the wait refuses the start (the launcher
+// tries again); a gate that cannot be entered for another reason (the directory is not writable — `token generate` cannot work
+// there either) lets the daemon start from the file without a run lock, and says so.
 func openConfigGate(cfgPath string, logf func(string, ...any)) (cfg config.Config, run *os.File, err error) {
 	gate := cfgPath
 	if gate == "" {
@@ -51,6 +53,12 @@ func openConfigGate(cfgPath string, logf func(string, ...any)) (cfg config.Confi
 	})
 	if loadErr != nil {
 		return cfg, nil, loadErr
+	}
+	if werr != nil && !entered && errors.Is(werr, config.ErrLockTimeout) {
+		// Another writer has held the lock for the whole wait. Starting anyway would read the file outside the gate and leave a
+		// window before the run lock in which `pdx token generate` sees no daemon and changes the token under it: refuse, the
+		// launcher starts it again.
+		return cfg, nil, fmt.Errorf("the config is being written by another process: %w", werr)
 	}
 	if werr != nil && !entered {
 		logf("config lock: %v; reading the config without the gate", werr)

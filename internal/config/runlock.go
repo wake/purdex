@@ -25,7 +25,7 @@ func runLockPath(locked string) string { return locked + ".run" }
 // HoldRunLock takes the run lock of the config file locked (the path WithLock handed over) shared and returns the open file: the
 // daemon keeps it until it exits, or hands it to its next image (AdoptRunLock). Several daemons sharing one config each hold it.
 func HoldRunLock(locked string) (*os.File, error) {
-	f, err := os.OpenFile(runLockPath(locked), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(runLockPath(locked), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func AdoptRunLock(fdStr, locked string) (*os.File, error) {
 // RunLockHeld reports whether a daemon holds the run lock of the config file locked. Call it inside WithLock. A probe that cannot
 // be made (the lock file cannot be created) is an error and says nothing about a daemon.
 func RunLockHeld(locked string) (bool, error) {
-	f, err := os.OpenFile(runLockPath(locked), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(runLockPath(locked), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return false, err
 	}

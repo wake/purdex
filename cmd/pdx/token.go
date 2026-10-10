@@ -72,8 +72,10 @@ func tokenGenerate(path string, force, tty bool, out, errw io.Writer) int {
 			return err
 		}
 		held, herr := config.RunLockHeld(locked)
-		if herr != nil {
-			fmt.Fprintf(errw, "token: cannot tell whether a daemon uses %s (%v); continuing on its pid file\n", locked, herr)
+		if herr != nil && !force {
+			// Not knowing is not "no daemon": a daemon whose data_dir the pid file check cannot find would be cut off.
+			fmt.Fprintf(errw, "token: cannot tell whether a daemon uses %s (%v). Nothing was changed. Pass --force to write it anyway.\n", locked, herr)
+			return refused
 		}
 		oldRunning, oldPid := isDaemonRunning(filepath.Join(cfg.DataDir, "pdx.pid"))
 		running, pid = held || oldRunning, oldPid
