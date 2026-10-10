@@ -6,22 +6,18 @@
 // second row when the team is big. Both take the width of the area they sit in; the area (TeamPanelArea) owns the frame.
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowsInSimple, ArrowsOutSimple, ArrowLineUp, CaretRight, Notebook } from '@phosphor-icons/react'
+import { Fragment, useCallback, useRef } from 'react'
+import { ArrowsInSimple, ArrowsOutSimple, ArrowLineUp } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
-import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
-import { ContextRing } from './ModelIcon'
-import { MODEL_LABEL } from './model-family'
-import { notInApp, transitionOf } from './seat-flags'
-import { ctxLeftText, ctxTip, useSeatReading } from './team-readings'
-import { firstSentence, useSeatWorkbook } from './seat-workbook'
 import { useMemberDrag } from './useMemberDrag'
 import { useCellCapacity } from './useCellCapacity'
 import { TeamEditPopover } from './TeamEditPopover'
 import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
+import { keepFocus } from './panel-focus'
+import { EndedGroup } from './TeamEndedGroup'
+import { PanelRow } from './TeamPanelRow'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useTeamUiStore, type PanelMode } from '../../stores/useTeamUiStore'
 import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
@@ -73,45 +69,6 @@ export function TeamPanel(props: Props) {
 /** The header row both modes share: one fixed height, capsule | middle | buttons in the same places. */
 const HEADER_CLASS = 'flex items-center cursor-pointer select-none'
 const headerStyle = { height: HEADER_H, paddingInline: HEADER_PX, columnGap: HEADER_GAP } as const
-
-/** Buttons keep the terminal's focus: a mousedown on them does not move it. */
-const keepFocus = (e: React.MouseEvent) => e.preventDefault()
-
-/** A draggable row cannot preventDefault on mousedown (the browser would never start the HTML5 drag), so it lets the focus
- *  move, remembers where it was, and hands it back when the press ends: mouseup / click / dragend on the row, or a mouseup
- *  anywhere (the pointer left the row without reaching the drag threshold), the window losing focus, or the row unmounting.
- *  It only hands back while the focus is still on the row (or nowhere): a focusable the person moved to is left alone. */
-function useReturnFocus() {
-  const [api] = useState(() => {
-    let held: { prev: HTMLElement; row: HTMLElement } | null = null
-    let listening = false
-    function restore() {
-      if (listening) {
-        listening = false
-        document.removeEventListener('mouseup', restore)
-        window.removeEventListener('blur', restore)
-      }
-      const h = held
-      held = null
-      if (!h || !h.prev.isConnected) return
-      const a = document.activeElement
-      if (a === h.row || a === document.body || a === null) h.prev.focus()
-    }
-    function remember(e: React.MouseEvent) {
-      const a = document.activeElement
-      const row = e.currentTarget as HTMLElement
-      held = a instanceof HTMLElement && a !== row ? { prev: a, row } : null
-      if (held && !listening) {
-        listening = true
-        document.addEventListener('mouseup', restore)
-        window.addEventListener('blur', restore)
-      }
-    }
-    return { remember, restore }
-  })
-  useEffect(() => api.restore, [api])
-  return api
-}
 
 /**
  * The header's one move-to-title-bar control (round 5): the same icon and the same action in line, full and max. Going
@@ -189,144 +146,6 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Pro
       </div>
       <EndedGroup teamKey={teamKey} />
     </>
-  )
-}
-
-/** Seats that left the team: a collapsed 「已結束 (N)」 group at the bottom of the full list (absent with none); a click on one
- *  drills into its workbook, which the daemon keeps after the session is gone. */
-function EndedGroup({ teamKey }: { teamKey: string }) {
-  const t = useI18nStore((s) => s.t)
-  const all = useTeamUiStore((s) => s.endedSeats[teamKey])
-  const support = useWorkbookStore((s) => s.support)
-  const [open, setOpen] = useState(false)
-  // Only a seat on a host that lists `workbook.v1` has a workbook to open (openWorkbook does nothing elsewhere).
-  const ended = (all ?? []).filter((e) => support[e.hostId]?.v1 === true)
-  if (ended.length === 0) return null
-  const label = t('team.panel.ended', { count: ended.length })
-  return (
-    <div data-testid="team-panel-ended" className="border-t border-border-subtle py-1">
-      <button
-        type="button"
-        aria-expanded={open}
-        onMouseDown={keepFocus}
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-1 px-3.5 py-1 text-text-muted hover:text-text-secondary cursor-pointer"
-      >
-        <CaretRight size={10} className={open ? 'rotate-90' : ''} />
-        <span>{label}</span>
-      </button>
-      {open && ended.map((e) => (
-        <div
-          key={`${e.hostId}\u0000${e.sessionId}`}
-          role="button"
-          tabIndex={0}
-          data-testid="team-panel-ended-row"
-          title={t('team.panel.ended_hint')}
-          onMouseDown={keepFocus}
-          onClick={() => useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId })}
-          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId }) }}
-          className="mx-1.5 pl-6 pr-2 py-1.5 rounded-md truncate text-text-muted hover:bg-surface-hover hover:text-text-secondary cursor-pointer"
-        >
-          {e.title}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-interface RowProps {
-  teamKey: string
-  seat: TeamSeatView
-  color: string
-  isActive: boolean
-  onOpen: (sessionId: string) => void
-  drag?: ReturnType<ReturnType<typeof useMemberDrag>['propsFor']>
-  insert?: 'before' | 'after' | null
-  dragging?: boolean
-}
-
-function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, dragging }: RowProps) {
-  const t = useI18nStore((s) => s.t)
-  const r = useSeatReading(teamKey, seat.sessionId)
-  const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
-  const wb = useSeatWorkbook(seat.hostId, seat.sessionId)
-  const status = wb.conv?.status.trim() ?? ''
-  const task = firstSentence(status)
-  const { remember, restore } = useReturnFocus()
-  const transition = transitionOf(seat)
-  const away = notInApp(seat)
-  const noAnswer = r.unavailable === true ? t('team.panel.context_unavailable') : undefined
-  // The row's tooltip: where the seat cannot be reached, then model · effort · context left (a missing value is a dash, never 0).
-  const readingTip = noAnswer ?? `${modelText} · ${r.effort ?? '—'} · ${ctxTip(r.ctx, t)}`
-  const rowTip = away ? `${t('team.seat_not_in_app')}\n${readingTip}` : readingTip
-  const open = () => onOpen(seat.sessionId) // a seat on a host this Mac lacks toasts the reason (openTeamSeat)
-  return (
-    <div
-      role="button"
-      tabIndex={0}
-      data-testid="team-panel-row"
-      data-session-id={seat.sessionId}
-      data-role={seat.role}
-      data-active={String(isActive)}
-      data-seat-state={seat.state}
-      title={rowTip}
-      onMouseDown={drag ? remember : keepFocus}
-      onMouseUp={drag ? restore : undefined}
-      onClick={() => { restore(); open() }}
-      onKeyDown={(e) => { if (e.key === 'Enter') open() }}
-      {...drag}
-      onDragEnd={drag ? () => { drag.onDragEnd(); restore() } : undefined}
-      className={`group relative mx-1.5 px-2 py-2 rounded-md transition-colors cursor-pointer ${
-        isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
-      } ${dragging ? 'opacity-30' : ''}`}
-    >
-      {insert && <span className="absolute left-2 right-2 h-0.5 rounded" style={{ background: color, [insert === 'before' ? 'top' : 'bottom']: -1 }} />}
-      {/* Line 1: subagent dots (drawn by the icon, to its left) -> bot + light -> host chip -> title -> lead / unopened */}
-      <div className="flex items-center gap-1.5 pl-1.5">
-        <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`inline-flex items-center gap-1.5 ${transition !== null ? 'opacity-40' : ''}`}>
-          <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents />
-          <TeamSeatHostBadge hostId={seat.hostId} sessionCode={seat.sessionCode} />
-        </span>
-        {seat.remote && (
-          <span data-testid="team-panel-host-chip" className="text-[9.5px] px-1 rounded bg-surface-hover text-text-secondary flex-shrink-0 max-w-[6rem] truncate">
-            {seat.hostAlias !== '' ? seat.hostAlias : t('team.seat_host_unknown')}
-          </span>
-        )}
-        <span className="truncate min-w-0 flex-1">{seat.title}</span>
-        {transition && <span data-testid="team-panel-state" className="text-[9.5px] text-text-muted flex-shrink-0">{t(`team.seat_state.${transition}`)}</span>}
-        {seat.role === 'lead' && (
-          <span className="text-[9.5px] px-1 rounded border flex-shrink-0 text-text-primary" style={{ borderColor: color }}>{t('team.panel.lead')}</span>
-        )}
-        {seat.tabId === null && <span className="text-[9.5px] text-text-secondary flex-shrink-0">{t('team.panel.unopened')}</span>}
-        {/* The right end of line 1: the context LEFT beside the ring (user 2026-10-10: the number is the remainder; a missing value is a dash),
-            the model shape inside the ring; model / effort ride in the row's tooltip */}
-        <span data-testid="team-panel-ring" className="flex items-center gap-1 flex-shrink-0 text-text-primary">
-          <span data-testid="team-panel-ctx" className="text-[10.5px] tabular-nums text-text-muted">{ctxLeftText(noAnswer ? undefined : r.ctx)}</span>
-          <ContextRing pct={noAnswer ? undefined : r.ctx} model={noAnswer ? undefined : r.model} size={16} />
-        </span>
-        {/* The workbook button follows the ring (only with a workbook); it drills in, the row itself still opens the seat */}
-        {wb.has && (
-          <button
-            type="button"
-            data-testid="team-panel-workbook"
-            onMouseDown={(e) => { e.stopPropagation(); e.preventDefault() }}
-            onClick={(e) => { e.stopPropagation(); useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: seat.hostId, sessionId: seat.sessionId }) }}
-            onKeyDown={(e) => e.stopPropagation()}
-            title={t('team.panel.workbook')}
-            aria-label={t('team.panel.workbook')}
-            className="p-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer flex-shrink-0"
-          >
-            <Notebook size={14} />
-          </button>
-        )}
-      </div>
-      {/* Line 2: the task (only with a workbook that has a status); without one the row stays one line */}
-      {task !== '' && (
-        <div data-testid="team-panel-task" aria-label={t('team.panel.task', { task })} title={status} className="pl-[26px] mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
-          {task}
-        </div>
-      )}
-    </div>
   )
 }
 
