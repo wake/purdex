@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.674] - 2026-10-10
+
+> 只動到 SPA：**不必部署 daemon、不必重跑 `pdx setup`**；SPA 已隨主機上的 dev server 生效。
+
+### Added：工作簿資料層（第 1 版）— WA-1a（#2372，介面線）
+
+- App 端開始接收工作簿：讀取對話與紀錄的型別與嚴格解析（格式壞掉的單筆整筆丟掉、只警告一次；紀錄的對話跟外層對不上也丟掉）、工作簿 store（每台主機、每段對話各自一份，最新在前、依 id 去重，最多留 500 筆，最近用的對話優先保留）。
+- 收到 `workbook.entry`／`workbook.status` 事件直接更新，事件不會觸發重新抓取；只有 team 席位或打開的畫面才抓，每席每次連線抓一次。偵測主機是否支援 `workbook.v1`／`v2`，主機移除或改指向時清掉它的資料。
+- 這一版還沒有畫面；待辦、重整等第 2 版功能另見 WA-1b。
+
+### Changed：team 珠子與「代理 lead 列」也顯示 subagent 點點 — #2374
+
+- 側邊欄 team 的珠子跟分頁列一樣，會畫出那一席的 subagent 點點（浮在機器人圖示左邊、不佔寬度，沒有 subagent 就不畫）；lead 分頁關掉時代替它的那一列也照樣畫。收合時的細條不變。
+
 ## [1.0.0-alpha.673] - 2026-10-10
 
 > 動到 daemon 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；已開著的 session 要重新載入 mod 才會有 `/workbook refresh`。
