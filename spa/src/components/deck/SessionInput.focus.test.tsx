@@ -144,6 +144,23 @@ describe('what it does not take the focus from', () => {
     expect(document.activeElement).toBe(screen.getByTestId('in-dialog'))
   })
 
+  it('a modal dialog even while the input is not there yet (the frame is not taken either)', () => {
+    conv = { state: 'resolving' }
+    render(<><div aria-modal="true" role="dialog"><button data-testid="in-dialog">ok</button></div><TabContent activeTab={sessionTab} allTabs={all} /></>)
+    screen.getByTestId('in-dialog').focus()
+    settle()
+    expect(document.activeElement).toBe(screen.getByTestId('in-dialog'))
+  })
+
+  it('a pane that went to the back before its input showed up does not take it afterwards', () => {
+    conv = { state: 'resolving' }
+    const { rerender } = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    settle()
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('session-input')).toBeNull()
+    expect(document.activeElement).not.toBe(screen.queryByRole('textbox'))
+  })
+
   it('a choice question open in the dock', () => {
     asking = true
     const { rerender } = render(<TabContent activeTab={dashTab} allTabs={all} />)

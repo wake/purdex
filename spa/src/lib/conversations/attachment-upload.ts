@@ -7,6 +7,7 @@ import { agentUploadToPath } from '../host-api'
 import { addAttachment, attachmentText, insertAttachmentText, isImageFile, makePreviewUrl, nextAttachmentSeq, reconcileAttachments, revokePreviewUrl, trackUpload } from './attachment-memory'
 import { imagePlaceholder, insertPlaceholderText } from './image-placeholder'
 import { readDraft, writeDraft } from './draft-memory'
+import { discardCleared } from './draft-clear'
 
 export interface Uploading { id: string; name: string; percent: number; image: boolean; size: number; /** The local file's blob: URL for the thumbnail (images only); handed to the chip when the upload lands, revoked otherwise. */ previewUrl?: string }
 export interface UploadFailure { name: string; error: unknown }
@@ -73,6 +74,7 @@ export function startUploads(key: string, hostId: string, sessionCode: string, f
       // an image leaves a short `[Image #N]` (sending expands it); any other file its path on a line of its own
       const seq = image ? nextAttachmentSeq() : undefined
       const text = seq === undefined ? attachmentText(path, false) : imagePlaceholder(seq)
+      discardCleared(key) // something new lands in the draft: an earlier clear can no longer be undone over it
       writeDraft(key, seq === undefined ? insertAttachmentText(readDraft(key) ?? '', text) : insertPlaceholderText(readDraft(key) ?? '', text))
       handedOver = true
       addAttachment(key, { id, name: file.name, path, text, image, mime: file.type, size: file.size, previewUrl, seq })

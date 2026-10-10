@@ -24,8 +24,10 @@ export function isEditable(el: Element | null): boolean {
  * Focuses `root`'s session input unless that would take the focus from the reader. `frameOnly`: only when nothing but the pane's own
  * frame (or the page) has the focus — the late retry must not pull the focus back from wherever the reader went since.
  */
-export function focusSessionInput(root: HTMLElement | null, opts: { frameOnly?: boolean } = {}): FocusInputResult {
+export function focusSessionInput(root: HTMLElement | null, opts: { frameOnly?: boolean; request?: boolean } = {}): FocusInputResult {
   if (!root) return 'no_input'
+  // a modal dialog is up: nothing here takes the focus from it, not even the pane's frame
+  if (document.querySelector('[aria-modal="true"], dialog[open]')) return 'busy'
   const input = root.querySelector<HTMLTextAreaElement>('[data-testid="session-input"] textarea')
   if (!input) return 'no_input'
   if (root.querySelector('[data-testid="dock-card"]')) return 'asking'
@@ -36,8 +38,8 @@ export function focusSessionInput(root: HTMLElement | null, opts: { frameOnly?: 
   // typing somewhere else, or a modal dialog is up: leave it. The pane's own terminal view is not "somewhere else": the focus is in it
   // exactly when the reader switches from the terminal to this view, and that switch is what this is for.
   const ownPane = root.parentElement
-  if (!idle && !root.contains(active) && !(ownPane && ownPane.contains(active)) && isEditable(active)) return 'busy'
-  if (document.querySelector('[aria-modal="true"], dialog[open]')) return 'busy'
+  // (an explicit request, a click on a notification, is the reader asking for this pane: it may take the focus from a field)
+  if (!opts.request && !idle && !root.contains(active) && !(ownPane && ownPane.contains(active)) && isEditable(active)) return 'busy'
   input.focus()
   input.setSelectionRange(input.value.length, input.value.length)
   return 'focused'

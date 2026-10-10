@@ -13,7 +13,7 @@ import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 import { clearAllDrafts, draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { addAttachment, clearAllAttachments, readAttachments, trackUpload } from '../../lib/conversations/attachment-memory'
-import { UNDO_CLEAR_MS, clearAllCleared } from '../../lib/conversations/draft-clear'
+import { UNDO_CLEAR_MS, clearAllCleared, undoClear } from '../../lib/conversations/draft-clear'
 import { clearAllUploads } from '../../lib/conversations/attachment-upload'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
 
@@ -103,6 +103,30 @@ describe('Esc clears the draft', () => {
     expect(hint()).toBeNull()
     undoKey()
     expect(box().value).toBe('new')
+  })
+
+  it('something that landed in the draft since (an upload finishing) ends the window: the undo does not overwrite it', () => {
+    render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    fireEvent.change(box(), { target: { value: 'old text' } })
+    esc()
+    act(() => { writeDraft(KEY, 'a file landed'); addAttachment(KEY, chip()) }) // as attachment-upload does when an upload finishes
+    expect(undoClear(KEY)).toBeNull()
+    expect(readDraft(KEY)).toBe('a file landed')
+    expect(readAttachments(KEY)).toHaveLength(1)
+  })
+
+  it('a key code 229 (an IME in Safari) is not an Esc', () => {
+    render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    fireEvent.change(box(), { target: { value: 'にほん' } })
+    esc({ keyCode: 229 })
+    expect(box().value).toBe('にほん')
+  })
+
+  it('a chip hidden from the screen does not by itself take an Esc (nothing visible to clear)', () => {
+    addAttachment(KEY, chip({ hiddenSince: 5 }))
+    render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(esc()).toBe(true)
+    expect(hint()).toBeNull()
   })
 
   it('an empty draft: Esc does nothing, not even to the event (it still reaches the pane\'s own Esc handlers)', () => {

@@ -8,7 +8,7 @@ import { expandPlaceholders, removePlaceholderText } from '../../lib/conversatio
 import { reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, forgetAttachmentsWhere, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
-import { clearDraft, discardCleared, hasCleared, hasDraftContent, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
+import { clearDraft, discardCleared, hasCleared, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
 import { uploadFailureText } from '../../lib/upload-failure'
 import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
@@ -217,10 +217,10 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               }}
               onKeyDown={(e) => {
                 // a key pressed while an IME is composing belongs to the IME (Esc cancels the composition, not the draft)
-                if (e.nativeEvent.isComposing) return
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return }
                 // Esc clears the draft and its attachments (undo for a few seconds); with nothing to clear it does nothing at all
-                if (e.key === 'Escape' && hasDraftContent(dKey)) {
+                if (e.key === 'Escape' && (draft !== '' || uploading.length > 0)) { // what is on screen (hidden chips ride along with a clear, but do not by themselves take an Esc)
                   e.preventDefault(); e.stopPropagation()
                   clearDraft(dKey)
                   setDraft(''); setChips([]); setHint(null)

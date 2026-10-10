@@ -69,9 +69,10 @@ export function clearDraft(key: string): boolean {
 export function undoClear(key: string): string | null {
   const c = cleared.get(key)
   if (!c) return null
+  // anything that landed since (typed, or an upload that finished) would be overwritten: a draft that is not empty ends the window instead
+  if ((readDraft(key) ?? '') !== '' || readAttachments(key).length > 0) { release(key, c); return null }
   clearTimeout(c.timer)
   cleared.delete(key)
-  // anything typed since would be overwritten: the draft is restored only into an empty box (the input drops the window when the reader types)
   writeDraft(key, c.text)
   for (const a of c.chips) addAttachment(key, { ...a, hiddenSince: undefined })
   notify(key)
