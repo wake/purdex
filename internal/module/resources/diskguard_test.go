@@ -271,23 +271,81 @@ func TestDiskGuard_NoTrimStartsAfterStop(t *testing.T) {
 	}
 }
 
-// The warning is about now: a lease granted under the floor shows it while it is fresh, and it is gone from later answers
-// once nothing has confirmed it for a couple of minutes (the disk may have recovered).
-func TestDiskGuard_AStaleWarningIsNotServed(t *testing.T) {
+// The warning is a fact about the grant, kept with the lease: a lease granted under the floor still shows it on a later
+// poll, and a lease granted while the disk was healthy never gets one because the disk got low afterwards (codex critic).
+// Mutation gate: a global standing warning read at answer time → the second assertion (or the first, later) is red.
+func TestDiskGuard_TheWarningIsTheGrantsAndStaysWithIt(t *testing.T) {
+	f := newDiskFix(t, 40*diskGiB)
+	healthy := f.heavy(cidA)
+	if healthy.Warning != "" {
+		t.Fatalf("a warning with 40 GiB free: %q", healthy.Warning)
+	}
+	f.free.Store(2 * diskGiB)
+	low := f.heavy(cidB)
+	if low.Warning == "" {
+		t.Fatal("no warning on a lease granted under the floor")
+	}
+	get := func(id string) resources.LeaseResponse {
+		return decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+id, nil))
+	}
+	f.clock.ms.Add((10 * time.Minute).Milliseconds())
+	f.free.Store(40 * diskGiB) // the disk recovered
+	if got := get(low.ID); got.Warning == "" {
+		t.Errorf("the grant's warning was lost on a later poll: %+v", got)
+	}
+	if got := get(healthy.ID); got.Warning != "" {
+		t.Errorf("a lease granted on a healthy disk got a warning later: %q", got.Warning)
+	}
+	// and a replay of the POST gives the same answer
+	rec := f.post(cidB, "test-full", 0)
+	if got := decodeLease(t, rec); rec.Code != http.StatusOK || got.Warning == "" {
+		t.Errorf("replay: %d %+v", rec.Code, got)
+	}
+}
+
+// A pass nobody asked for (the sampler's, the sweeper's) that finds the disk low starts the trim and does not wait for it,
+// but it does not grant a guarded lease before the trim is done either: the grant comes from the pass the trim runs when it
+// ends, with the disk judged after it (codex critic). Mutation gate: grant while the trim runs → red.
+func TestDiskGuard_ABackgroundPassDoesNotGrantBeforeTheTrimEnds(t *testing.T) {
 	f := newDiskFix(t, 2*diskGiB)
-	r := f.heavy(cidA)
-	if r.Warning == "" {
-		t.Fatal("no warning on the grant")
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release) // a failing assertion must not leave the walk parked: Stop waits for it
+	var inWalk atomic.Bool
+	f.m.trimHook = func() { inWalk.Store(true); <-gate }
+	f.set.set(resources.Settings{Mode: resources.ModeLease})
+	r := baseRow("bg1", "c-bg1")
+	r.Kind, r.Weight = "test-full", 35
+	r.CreatedAt, r.DeadlineAt, r.LeaseUntil = f.nowMS()-1000, f.nowMS()+300000, f.nowMS()+30000
+	mustCreate(t, f.m.store, r)
+	f.m.admissionPass(context.Background(), "") // what the sampler and the sweeper do
+	waitFor(t, "the walk to start", inWalk.Load)
+	f.m.admissionPass(context.Background(), "") // and again, while it runs
+	if st := f.state("bg1"); st != resources.StateWaiting {
+		t.Fatalf("granted before the trim ended: %s", st)
 	}
-	get := func() resources.LeaseResponse {
-		return decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+r.ID, nil))
+	release()
+	waitFor(t, "the grant after the trim", func() bool { return f.state("bg1") == resources.StateHeld })
+	if w := f.m.warnFor(f.row("bg1")); w == "" {
+		t.Error("granted under the floor without a warning")
 	}
-	if got := get(); got.Warning == "" {
-		t.Fatalf("the warning is gone at once: %+v", got)
+}
+
+// The cache directory itself is not followed if it is a symlink: pointing GOCACHE at a link to somewhere else must not make
+// that somewhere else a cache (codex critic). Mutation gate: open the path as given → the files go (red).
+func TestTrimGoCache_ARootThatIsASymlinkIsRefused(t *testing.T) {
+	c := newFakeCache(t)
+	link := filepath.Join(filepath.Dir(c.dir), "go-build-link")
+	if err := os.Symlink(c.dir, link); err != nil {
+		t.Fatal(err)
 	}
-	f.clock.ms.Add((3 * time.Minute).Milliseconds())
-	if got := get(); got.Warning != "" {
-		t.Fatalf("a warning nobody has confirmed for 3 minutes is still served: %q", got.Warning)
+	m := newTestModule(idleSampler(), nil)
+	if _, err := m.trimGoCache(context.Background(), link, time.Now().Add(-2*time.Hour)); err == nil {
+		t.Error("a symlink was accepted as the cache directory")
+	}
+	if !exists(filepath.Join(c.dir, "ab/0123-a")) {
+		t.Error("files behind a symlinked cache directory were deleted")
 	}
 }
 
