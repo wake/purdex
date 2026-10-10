@@ -16,6 +16,9 @@ type NotifyEvent struct {
 	SessionName string
 	SessionID   string
 	Event       agentpkg.NormalizedEvent
+	// FromProxy: the frame reports a proxy subagent's Stop (a codex or opencode that the pane's main agent runs as a
+	// tool): it ends a tool, not the main agent's turn, so a "task completed" consumer must not treat it as one.
+	FromProxy bool
 }
 
 // notifySubBuffer is the capacity of each subscriber's queue.
@@ -139,6 +142,11 @@ func (m *Module) NotifyDropped() int64 { return m.notifies.Dropped() }
 // winner, and can be another agent's (several frames per pane; a SessionEnd has just deleted the sender's own).
 // A mod / sweep / probe frame describes the projection itself, so it takes the projection's frame.
 func (m *Module) publishNotify(kind slotKind, code, notifyName, hookSID string, p *SessionProjection, n agentpkg.NormalizedEvent) {
+	m.publishNotifyFrom(kind, code, notifyName, hookSID, false, p, n)
+}
+
+// publishNotifyFrom is publishNotify for a frame that may report a proxy subagent's Stop (fromProxy).
+func (m *Module) publishNotifyFrom(kind slotKind, code, notifyName, hookSID string, fromProxy bool, p *SessionProjection, n agentpkg.NormalizedEvent) {
 	if kind == kindNonTmux || notifyName == "" {
 		return
 	}
@@ -153,5 +161,5 @@ func (m *Module) publishNotify(kind slotKind, code, notifyName, hookSID string, 
 			sid = p.PrimaryFrame.SessionID
 		}
 	}
-	m.notifies.publish(NotifyEvent{SessionCode: code, SessionName: notifyName, SessionID: sid, Event: n})
+	m.notifies.publish(NotifyEvent{SessionCode: code, SessionName: notifyName, SessionID: sid, Event: n, FromProxy: fromProxy})
 }
