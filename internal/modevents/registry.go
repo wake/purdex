@@ -42,6 +42,7 @@ type StreamInfo struct {
 	ModVersion   string
 	FirstSeen    time.Time // set once, when the registry first heard of the stream
 	LastSeen     time.Time
+	AppliedAt    time.Time // the last batch Apply accepted (Reject does not move it): what SessionLive reads
 	LastSeq      int64
 	Gaps         int64
 	DroppedTotal int64
@@ -147,7 +148,7 @@ func (r *Registry) Apply(b Batch) (ack int64, err error) {
 	now := r.now()
 	in := &s.info
 	in.Agent, in.CCVersion, in.ModVersion = b.Agent, b.CCVersion, b.ModVersion
-	in.LastSeen = now
+	in.LastSeen, in.AppliedAt = now, now
 	in.DroppedTotal = max(in.DroppedTotal, b.DroppedTotal)
 	// A batch without caps (an older mod, or a mod that lost the feature) leaves the last ones to age out.
 	if len(b.Caps) > 0 {
@@ -277,6 +278,29 @@ func (r *Registry) SessionCapable(sid, c string, within time.Duration) bool {
 	for _, s := range r.streams {
 		in := &s.info
 		if in.SID == sid && !in.Ended && !in.CapsAt.IsZero() && now.Sub(in.CapsAt) <= within && slices.Contains(in.Caps, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// PresenceWindow is how recently a stream's last batch must have arrived for the session to count as having its mod
+// (the mod beats every 10 s: three missed beats). One definition of "mod present" for the daemon (interface U1 spec,
+// per-pane derivation; relay spec §6.6).
+const PresenceWindow = 30 * time.Second
+
+// SessionLive reports whether a stream that is not ended has sid as its current session and sent a batch within
+// `within`: the session's mod is there now.
+func (r *Registry) SessionLive(sid string, within time.Duration) bool {
+	if sid == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	for _, s := range r.streams {
+		in := &s.info
+		if in.SID == sid && !in.Ended && !in.AppliedAt.IsZero() && now.Sub(in.AppliedAt) <= within {
 			return true
 		}
 	}
