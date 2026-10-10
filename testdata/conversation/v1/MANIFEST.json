@@ -207,8 +207,8 @@
       "facts": "cc-transcript/plugin-submit/facts.json",
       "sha256": {
         "input": "10a5293df166e692eb7211fa6bae52ba62865826259ca6661b938201404a3373",
-        "expected": "75ff498e8429b8678b096adfde1cf6d2382aed18fa9be222ce6aaf8eb3d1d46a",
-        "facts": "7ef0ec4f49ebafa85fb16cbb2e47aaace5b756727d4dc71454dc62bbbe4e76e4"
+        "expected": "683f138f96898d9d3decad8a3f2d6e65a1d91d0617a577743649623b9ce67850",
+        "facts": "04477385239cf0717d4fc1004544378e2c99b7f1ebefd4d16d994ea1ab921922"
       }
     },
     {

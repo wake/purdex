@@ -31,15 +31,16 @@ func TestPluginSubmit_AsUserIsAUserMessage(t *testing.T) {
 	}
 }
 
-// A plugin's own framed prompt (the relay's write prompt, workbook-style nudges) is not the person's: still skipped and counted.
-func TestPluginSubmit_FramedStaysSkipped(t *testing.T) {
-	n := norm(t, userRow("u0", 0.5, "hi"), assistantText("a0", 0.7, "x"), turnDuration("d0", 0.8, 1),
+// A plugin's own framed prompt (the relay's write prompt, nudges) is not the person's: a message from the plugin (#2396), in its
+// own turn - see peer_marks_test.go for the body rules.
+func TestPluginSubmit_FramedIsAMessageFromThePlugin(t *testing.T) {
+	c := conv(t, userRow("u0", 0.5, "hi"), assistantText("a0", 0.7, "x"), turnDuration("d0", 0.8, 1),
 		pluginRow("u1", 1, "The purdex plugin sent a message:\nwrite the handoff", false))
-	if got := n.Stats().Skipped["origin:plugin"]; got != 1 {
-		t.Fatalf("skipped = %v", n.Stats().Skipped)
+	if len(c.Turns) != 2 {
+		t.Fatalf("turns = %d", len(c.Turns))
 	}
-	if c := validated(t, n); len(c.Turns) != 1 {
-		t.Fatalf("a framed plugin prompt opened a turn: %d", len(c.Turns))
+	if u := c.Turns[1].Items[0].User; u == nil || u.Source != convmodel.SourcePeer || u.From == nil || u.From.Kind != "plugin" {
+		t.Fatalf("user = %+v", u)
 	}
 }
 
@@ -47,8 +48,9 @@ func TestPluginSubmit_FramedStaysSkipped(t *testing.T) {
 func TestPluginSubmit_OnlyABooleanTrue(t *testing.T) {
 	for name, v := range map[string]any{"false": false, "string": "true", "zero": 0} {
 		row := userRow("u1", 1, "x", with("origin", obj{"kind": "plugin", "name": "p", "asUser": v}), promptSource("system"), turnOrigin("system"))
-		if n := norm(t, row); n.Stats().Skipped["origin:plugin"] != 1 {
-			t.Errorf("asUser=%s was accepted: %v", name, n.Stats().Skipped)
+		u := firstUser(t, conv(t, row))
+		if u.Source != convmodel.SourcePeer {
+			t.Errorf("asUser=%s was taken for the person's own words: %+v", name, u)
 		}
 	}
 }

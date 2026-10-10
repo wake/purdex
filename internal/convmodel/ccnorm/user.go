@@ -39,6 +39,45 @@ func sourceKind(l *rawLine) string {
 	return normKind(l.str(l.PromptSource))
 }
 
+// leadingPeerWrapper: the text starts with the peer wrapper - after white space and at most one preface line that ends in a
+// colon and is at most 80 characters ("Another Claude session sent a message:") - in its plain or backslash-escaped form. A
+// wrapper in the middle of a sentence, or after more text, is just something the person wrote.
+func leadingPeerWrapper(text string) bool {
+	t := strings.TrimLeftFunc(text, unicode.IsSpace)
+	opens := func(s string) bool {
+		return strings.HasPrefix(s, peerOpen) || strings.HasPrefix(s, `<\cross-session-message`)
+	}
+	if opens(t) {
+		return true
+	}
+	line, rest, ok := strings.Cut(t, "\n")
+	if !ok || utf8.RuneCountInString(line) > 80 {
+		return false
+	}
+	line = strings.TrimRightFunc(line, unicode.IsSpace)
+	if !strings.HasSuffix(line, ":") && !strings.HasSuffix(line, "：") {
+		return false
+	}
+	return opens(strings.TrimLeftFunc(rest, unicode.IsSpace))
+}
+
+// pluginFooterStart opens the paragraph Claude Code appends to a framed plugin prompt (2.1.296); a text that does not end in
+// it keeps its tail.
+const pluginFooterStart = "This is how Claude Code surfaces a prompt a plugin submits between turns"
+
+// pluginBody takes the frame off a plugin's prompt: the first line "The <name> plugin sent a message:" and the footer
+// paragraph. A text in another shape is returned whole.
+func pluginBody(text, name string) string {
+	first, rest, ok := strings.Cut(text, "\n")
+	if !ok || first != "The "+name+" plugin sent a message:" {
+		return text
+	}
+	if i := strings.LastIndex(rest, "\n\n"+pluginFooterStart); i >= 0 && !strings.Contains(rest[i+2:], "\n\n") {
+		rest = rest[:i]
+	}
+	return rest
+}
+
 // pluginAsUser: the row's origin says a plugin submitted the text as the person's own (origin.asUser).
 func pluginAsUser(l *rawLine) bool {
 	o, ok := parseObject(l.Origin)
@@ -109,9 +148,18 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 		src = convmodel.SourceScheduled
 	case kind == "plugin" && pluginAsUser(l):
 		// a mod's $.prompt.submit({text, asUser: true}): the person's own words sent on their behalf (U3-0b: the Apps'
-		// submit goes this way). The text is bare; a plugin prompt the model reads framed ("The X plugin sent a message")
-		// is not the person's and stays skipped.
+		// submit goes this way). The text is bare.
 		src = convmodel.SourceUser
+	case kind == "plugin":
+		// a plugin's own prompt, which the model reads framed ("The X plugin sent a message: …"): a message from the
+		// plugin, not the person's (#2396). It opens its own turn; the frame and the footer are not part of the message.
+		o, _ := parseObject(l.Origin)
+		name := o.str("name")
+		src, text, from = convmodel.SourcePeer, pluginBody(text, name), &convmodel.From{Kind: "plugin", Name: name}
+	case humanKind(kind) && leadingPeerWrapper(text):
+		// no peer origin on the row, but the text opens with the peer wrapper (#2396)
+		body, name := peerBody(strings.Replace(text, `<\cross-session-message`, peerOpen, 1))
+		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: name}
 	case humanKind(kind):
 		var handled bool
 		src, text, handled = n.humanTags(l, off, text)

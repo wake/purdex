@@ -437,7 +437,7 @@ func TestSource_OriginGateBeforeTags(t *testing.T) {
 }
 
 func TestSource_UnknownOriginSkippedAndCounted(t *testing.T) {
-	for _, kind := range []string{"coordinator", "plugin", "auto-continuation", "from-the-future"} {
+	for _, kind := range []string{"coordinator", "auto-continuation", "from-the-future"} {
 		n := norm(t, userRow("x1", 1, "text", originKind(kind), promptSource("system")))
 		if len(n.Conversation().Turns) != 0 || n.Stats().Skipped["origin:"+kind] != 1 {
 			t.Errorf("%s: turns=%d skipped=%v", kind, len(n.Conversation().Turns), n.Stats().Skipped)
@@ -495,7 +495,6 @@ func TestSource_PrecedenceMatrix(t *testing.T) {
 		{"task origin beats promptSource queued", "task-notification", "", "queued", false, convmodel.SourceTask},
 		{"scheduled", "", "scheduled", "system", true, convmodel.SourceScheduled},
 		{"coordinator", "coordinator", "system", "system", false, skipped},
-		{"plugin", "plugin", "system", "system", false, skipped},
 		{"auto-continuation, both spellings", "auto-continuation", "auto_continuation", "system", false, skipped},
 		{"auto_continuation, turnOrigin only", "", "auto_continuation", "system", false, skipped},
 		{"system turnOrigin", "", "system", "system", false, skipped},
@@ -552,7 +551,7 @@ func TestSource_SkippedRowOpensNoTurn(t *testing.T) {
 	}
 	feed(t, n,
 		userRow("u1", 1, "go"),
-		userRow("x1", 2, "automated", originKind("plugin"), turnOrigin("system"), promptSource("system")),
+		userRow("x1", 2, "automated", originKind("coordinator"), turnOrigin("system"), promptSource("system")),
 		assistantText("a1", 3, "ok"),
 	)
 	c := validated(t, n)

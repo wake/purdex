@@ -32,13 +32,24 @@
     },
     "turns": [
       {
-        "id": "0cbda9ec-c027-4aff-89e2-30584bf34da9",
+        "id": "fd4ebb74-c112-4196-9961-4f43106184d2",
         "index": 0,
-        "started_at": 1791601129012,
+        "started_at": 1791601127465,
         "ended_at": 1791601129266,
         "outcome": "done",
         "duration_ms": 1813,
         "items": [
+          {
+            "type": "user",
+            "id": "fd4ebb74-c112-4196-9961-4f43106184d2",
+            "at": 1791601127465,
+            "text": "Reply with exactly: PROBE-IDLE-OK",
+            "source": "peer",
+            "from": {
+              "kind": "plugin",
+              "name": "prompt-probe"
+            }
+          },
           {
             "type": "thinking",
             "id": "0cbda9ec-c027-4aff-89e2-30584bf34da9",
@@ -57,9 +68,9 @@
         "id": "3d8114a0-5633-4d0f-8d76-f2754c559e05",
         "index": 1,
         "started_at": 1791601147470,
-        "ended_at": 1791601164359,
+        "ended_at": 1791601148745,
         "outcome": "done",
-        "duration_ms": 1158,
+        "duration_ms": 1319,
         "items": [
           {
             "type": "user",
@@ -73,6 +84,27 @@
             "id": "d31aa7df-1747-4700-b0b4-f5a3e363882d",
             "at": 1791601148535,
             "markdown": "PROBE-ASUSER-OK"
+          }
+        ]
+      },
+      {
+        "id": "f3236e8d-7531-41bf-ac48-9950b41aa539",
+        "index": 2,
+        "started_at": 1791601155329,
+        "ended_at": 1791601163194,
+        "outcome": "done",
+        "duration_ms": 7880,
+        "items": [
+          {
+            "type": "user",
+            "id": "f3236e8d-7531-41bf-ac48-9950b41aa539",
+            "at": 1791601155329,
+            "text": "Run the bash command: sleep 30 ; echo SLEPT  — then reply DONE-LONG",
+            "source": "peer",
+            "from": {
+              "kind": "plugin",
+              "name": "prompt-probe"
+            }
           },
           {
             "type": "thinking",
@@ -149,6 +181,27 @@
             "id": "3d8204d5-d280-48d5-bb9b-78bc49dc1565",
             "at": 1791601163004,
             "markdown": "The foreground `sleep 30 ; echo SLEPT` was blocked by the harness, so I moved it to a background task (ID `bet8u34mn`). I'll get notified when it finishes, and then I'll reply `DONE-LONG`."
+          }
+        ]
+      },
+      {
+        "id": "a7d2875b-6eab-436d-bb8c-f74ca240ced1",
+        "index": 3,
+        "started_at": 1791601163208,
+        "ended_at": 1791601164359,
+        "outcome": "done",
+        "duration_ms": 1158,
+        "items": [
+          {
+            "type": "user",
+            "id": "a7d2875b-6eab-436d-bb8c-f74ca240ced1",
+            "at": 1791601163208,
+            "text": "SECOND while running: reply PROBE-QUEUED-OK",
+            "source": "peer",
+            "from": {
+              "kind": "plugin",
+              "name": "prompt-probe"
+            }
           },
           {
             "type": "agent_text",
@@ -160,7 +213,7 @@
       },
       {
         "id": "278fdadd-39bf-4089-a043-fadcfdea8e43",
-        "index": 2,
+        "index": 4,
         "started_at": 1791601191918,
         "ended_at": 1791601193411,
         "outcome": "done",
@@ -189,7 +242,7 @@
       },
       {
         "id": "86b80a64-e6b7-448e-8496-2c76ec995e75",
-        "index": 3,
+        "index": 5,
         "started_at": 1791601193419,
         "ended_at": 1791601222434,
         "outcome": "done",

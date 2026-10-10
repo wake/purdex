@@ -315,7 +315,9 @@ Everything until the next opening belongs to the turn. An absorbed queued prompt
 | `promptSource: "queued"` or an absorbed `queued_command` from a human (origin `human` or none, `commandMode: "prompt"`) | `queued` | — |
 | `origin.kind` `human` or none, `promptSource` `typed` / `suggestion_accepted` / `sdk` / none | `user` | — |
 | `origin.kind: "plugin"` with `origin.asUser: true` (a mod's `$.prompt.submit({text, asUser: true})`: the Apps' send, U3-0b) | `user` (the text is bare) | — |
-| any other kind (`coordinator`, `plugin` without `asUser` — the model reads it framed as "The X plugin sent a message" —, `auto-continuation`, `system` without a recognised `origin`) | skipped and counted; such a row opens **no** turn | — |
+| `origin.kind: "plugin"` without `asUser` (a plugin's own prompt; the model reads it framed as "The X plugin sent a message:") (#2396) | `peer` (text = the message with the first line `The <name> plugin sent a message:` and the trailing "This is how Claude Code surfaces a prompt a plugin submits between turns …" paragraph taken off; a text in another shape is kept whole); it opens its own turn | `{kind: "plugin", name: origin.name}` |
+| a human-looking row (origin `human` or none) whose text **starts** with the peer wrapper `<cross-session-message …>` — after white space and at most one preface line of ≤ 80 characters ending in `:` or `：`; the escaped opener `<\cross-session-message` is tolerated (#2396) | `peer` (text = the body, the wrapper removed) | `{kind: "peer", name: from-name}` |
+| any other kind (`coordinator`, `auto-continuation`, `system` without a recognised `origin`) | skipped and counted; such a row opens **no** turn | — |
 
 User text keeps `[Image #n]` markers; image blocks become `images[{media_type, bytes}]` (the decoded size; the base64 is never kept). A bash-mode turn's output and a local command's `<local-command-stdout>` become one `system {kind: command_output, detail}`.
 
