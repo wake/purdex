@@ -3,6 +3,7 @@ package nex
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/wake/purdex/internal/module/agent"
@@ -31,10 +32,11 @@ var resumeIDRE = regexp.MustCompile(`(?:^|\s)(?:--resume|-r)(?:\s+|=)\{id\}`)
 // without one (codex, opencode, a wrapper that takes the id another way) is not ours to change. A flag the template already has
 // stays the user's; a value that is not safe on a command line (team.ValidModel / ValidEffort) is not used.
 func applySessionFlags(template string, r sessionReading) string {
-	loc := resumeIDRE.FindStringIndex(template)
-	if loc == nil {
-		return template
+	locs := resumeIDRE.FindAllStringIndex(template, 2)
+	if len(locs) != 1 || !simpleCommand(template) {
+		return template // none, two, or a shell structure in which the flags' command is a guess: the user's text stays
 	}
+	loc := locs[0]
 	words := strings.Fields(template)
 	var add string
 	if r.Model != "" && team.ValidModel(r.Model) && !hasFlag(words, "--model") {
@@ -44,6 +46,18 @@ func applySessionFlags(template string, r sessionReading) string {
 		add += " --effort " + r.Effort
 	}
 	return template[:loc[1]] + add + template[loc[1]:]
+}
+
+// simpleCommand says whether the template is ONE simple command: words separated by blanks, optionally led by NAME=value
+// assignments. Anything that gives the line a shell structure — a pipe, a list, a background, a redirection, a quote, an escape,
+// a comment, a substitution, a group, a newline — or an option terminator makes "which command do the flags belong to, and does a
+// --model further on belong to Claude" a guess, so those templates are not rewritten.
+func simpleCommand(template string) bool {
+	// {id} is the one brace the template may carry: take it out, then nothing with a meaning to the shell may be left
+	if strings.ContainsAny(strings.ReplaceAll(template, "{id}", ""), "|&;<>()$`\\\"'#\n\r*?[]{}~!") {
+		return false
+	}
+	return !slices.Contains(strings.Fields(template), "--")
 }
 
 func hasFlag(words []string, name string) bool {
