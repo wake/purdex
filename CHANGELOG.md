@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.707] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。nexen 升到 v0.22.0（資料庫格式不變）。
+
+### Added：nexen v0.22.0 與 confined profile — c933b0-122（#2608）
+
+- nexen 升到 v0.22.0，帶進 `confined` sandbox profile：worker 只讀得到自己的工作目錄、只能改明確列出的檔案，persona 取自工作目錄的 `CLAUDE.md`，不載入全域與上層設定、hooks 與 auto-memory。
+- 主機要在 `[nex.sandbox]` 加 `extra_profiles = ["confined"]` 才能請求 confined；沒列時請求會被拒絕（`profile_not_allowed`）。從 App 或 API 存其他 nex 設定時，手寫的 `extra_profiles` 會保留，明確給 `[]` 才清掉；改了要重啟 daemon 才生效。
+- `pdx nex delegate` 可帶 `--model`、`--effort`、`--writable <檔案>`（可重複）；daemon 沒宣告支援時會直接報錯、不送出。
+
+### Added：切換分頁自動 focus 輸入框，Esc 清草稿可復原 — #2604（介面線）
+
+- 切到指揮台或聊天分頁、切換 view 時，輸入框自動取得焦點。
+- 按 Esc 清掉草稿後 5 秒內可以復原。
+
 ## [1.0.0-alpha.706] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
