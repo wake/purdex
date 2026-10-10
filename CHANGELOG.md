@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.687] - 2026-10-10
+
+> 動到 daemon 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；SPA 沒有變更。
+
+### Fixed：在 App 按「中斷」後，燈號與這一輪不再卡在「工作中」 — #2479（介面線）
+
+- 實測 Claude Code 在 App 的中斷之後不會觸發 Stop hook，也不寫中斷標記，所以這一輪一直被當成還在跑。現在 mod 中斷成功後自己把這一輪結束（`turn.complete`，原因 aborted）；daemon 收到後燈號回到閒置，對話裡這一輪記成「已中斷」，它底下還開著的步驟一起結束。
+- 只處理 App 的中斷鈕；在終端機按 Esc 的情況是下一個 PR。
+
 ## [1.0.0-alpha.686] - 2026-10-10
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
