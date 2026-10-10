@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/fsutil"
@@ -30,12 +31,56 @@ var (
 
 var uploadStallTimeout = middleware.UploadStallTimeout
 
+// uploadDeviceSlots is how many uploads one paired device (one token) may have in flight; admin is unlimited.
+// uploadRetryAfter is the Retry-After (seconds) a refused upload carries.
+const (
+	uploadDeviceSlots = 2
+	uploadRetryAfter  = "5"
+)
+
+// uploadLimiter counts in-flight uploads per device id. A full device is refused at once (no queueing), and an entry
+// that drops to zero is deleted so the map does not grow with every device ever seen.
+type uploadLimiter struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func (l *uploadLimiter) acquire(id string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.n[id] >= uploadDeviceSlots {
+		return false
+	}
+	if l.n == nil {
+		l.n = map[string]int{}
+	}
+	l.n[id]++
+	return true
+}
+
+func (l *uploadLimiter) release(id string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.n[id] <= 1 {
+		delete(l.n, id)
+		return
+	}
+	l.n[id]--
+}
+
 // handleUpload handles POST /api/agent/upload.
 // It saves the uploaded file and injects the path into the tmux pane.
 func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	limit := uploadMaxFileBytes
-	if _, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
+	if p, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
 		limit = uploadMaxFileBytesDevice
+		// Per-token slot, taken before the body is touched and released on every exit (success, error, disconnect).
+		if !m.uploadSlots.acquire(p.ID) {
+			w.Header().Set("Retry-After", uploadRetryAfter)
+			http.Error(w, `{"error":"too many uploads"}`, http.StatusTooManyRequests)
+			return
+		}
+		defer m.uploadSlots.release(p.ID)
 	}
 	// Hard body cap (ParseMultipartForm's argument is only the in-memory threshold); the stall wrapper stays inside it.
 	r.Body = http.MaxBytesReader(w, middleware.StallTimeoutBody(w, r, uploadStallTimeout), limit+uploadFormOverhead)
