@@ -13,8 +13,10 @@ import (
 // the member insert and the claim would carry no title and nothing would
 // re-announce. The claim hook flushes the publisher at the moment the claim
 // runs (a signal sent before it would be published right there, titleless)
-// and then writes the title the way the store does. Mutation gate: signal
-// before the claim → red.
+// and then writes the title the way the store does. The roster the clients
+// end up with must name the member; an earlier changed may not (the accept's
+// pending signal is published by that same flush). Mutation gate: signal
+// before the claim and none after → red.
 func TestRoster_SpawnAnnouncesTheClaimedTitle(t *testing.T) {
 	f, root := newTeamFixture(t, 3)
 	if err := f.m.Start(context.Background()); err != nil {
@@ -34,17 +36,26 @@ func TestRoster_SpawnAnnouncesTheClaimedTitle(t *testing.T) {
 
 	f.member(1, root, "sid-m1", "w-one", func(r *team.SpawnRequest) { r.Title = "worker-one" })
 
-	for _, ev := range w.drain() {
+	// The claim hook flushes whatever signal is pending when the claim runs — the accept's, for one — and that
+	// changed may legitimately carry the member before its title. What must hold is that the roster the clients
+	// are left with names it: the LAST changed that carries the member has the title.
+	var last *team.RosterEventValue
+	var lastTitle string
+	evs := w.drain()
+	for i, ev := range evs {
 		for _, tr := range ev.Teams {
 			for _, mem := range tr.Members {
 				if mem.SessionID == "sid-m1" {
-					if mem.Title != "worker-one" {
-						t.Fatalf("the first %s that carried the new member had title %q, want %q", ev.Op, mem.Title, "worker-one")
-					}
-					return
+					last, lastTitle = &evs[i], mem.Title
 				}
 			}
 		}
+	}
+	if last != nil {
+		if lastTitle != "worker-one" {
+			t.Fatalf("the last %s that carried the new member had title %q, want %q", last.Op, lastTitle, "worker-one")
+		}
+		return
 	}
 	t.Fatal("no roster event carried the new member")
 }
