@@ -27,10 +27,16 @@ export interface ConversationDoc {
   totalTurns: number
   /** The open approvals of this conversation (the WebSocket's set; a snapshot replaces it). */
   approvals: ConversationApproval[]
+  /**
+   * Bumped by every replacing snapshot (a new epoch, a reset). A paging or jump request remembers the generation it was
+   * issued under and its answer is dropped if a snapshot has replaced the document since: a late page of the old epoch
+   * must not put obsolete turns, items or a stale position into the new one.
+   */
+  generation: number
 }
 
 export function emptyDoc(): ConversationDoc {
-  return { turns: [], header: null, capabilities: null, cursor: '', hasMoreBefore: false, detached: false, totalTurns: 0, approvals: [] }
+  return { turns: [], header: null, capabilities: null, cursor: '', hasMoreBefore: false, detached: false, totalTurns: 0, approvals: [], generation: 0 }
 }
 
 const byIndex = (a: { index: number }, b: { index: number }) => a.index - b.index
@@ -59,11 +65,13 @@ export function applySnapshot(doc: ConversationDoc, snap: Snapshot): Conversatio
     hasMoreBefore: snap.window.has_more_before,
     detached: false,
     totalTurns: snap.window.total_turns,
+    generation: doc.generation + 1,
   }
 }
 
 /** An older page (`before=`): its turns go in front. The cursor, header and capabilities stay: they are the live ones. */
-export function applyOlderPage(doc: ConversationDoc, snap: Snapshot): ConversationDoc {
+export function applyOlderPage(doc: ConversationDoc, snap: Snapshot, generation: number): ConversationDoc {
+  if (generation !== doc.generation) return doc // asked under an epoch that a snapshot has since replaced
   const incoming = (snap.conversation.turns ?? []).map(normalizeTurn)
   const have = new Set(doc.turns.map((t) => t.index))
   const merged = [...incoming.filter((t) => !have.has(t.index)), ...doc.turns].sort(byIndex)
@@ -74,7 +82,8 @@ export function applyOlderPage(doc: ConversationDoc, snap: Snapshot): Conversati
  * A jump (`around=`): the window around an item replaces the turns, but is NOT the live position — the cursor stays, and
  * while the window does not reach the newest turn live changes are not merged (`detached`) until a snapshot returns.
  */
-export function applyAround(doc: ConversationDoc, snap: Snapshot): ConversationDoc {
+export function applyAround(doc: ConversationDoc, snap: Snapshot, generation: number): ConversationDoc {
+  if (generation !== doc.generation) return doc
   const turns = (snap.conversation.turns ?? []).map(normalizeTurn).sort(byIndex)
   const w: Window = snap.window
   return {
@@ -115,7 +124,9 @@ function applyChange(turns: Turn[], ch: Change, firstIndex: number | null): Turn
   if (at < 0) at = turns.findIndex((t) => t.index === header.index) // same slot, a re-keyed turn
   if (at >= 0) {
     const cur = turns[at]
-    const merged: Turn = { ...cur, ...header, items: cur.items }
+    // Rebuilt from the incoming header (a reopened turn must lose its old `ended_at`, a cleared `error` must go), keeping
+    // only what is view-local: the items held and the omitted boundary the snapshot gave
+    const merged: Turn = { ...header, omitted_items: header.omitted_items ?? cur.omitted_items, items: cur.items }
     // the boundary of what the document holds: an increment usually does not repeat `omitted_items` (a view-only field),
     // and the spread above keeps the one the snapshot gave
     const next = upsertItems(merged, ch.items, boundary(merged))

@@ -85,6 +85,20 @@ describe('applyChanges — upsert by id, place by index', () => {
     expect(d.totalTurns).toBe(2)
   })
 
+  // the incoming header is the turn's full current state: a field it no longer has must not survive from the old one
+  it('a reopened turn loses its old ended_at / duration_ms, and a cleared error goes', () => {
+    const closed = applyChanges(base(), inc([{
+      turn: turn(1, [], { outcome: 'failed', ended_at: 9, duration_ms: 8, error: { kind: 'api', message: 'boom' } }), items: [user('u1', 0)],
+    }]))
+    expect(closed.turns[1]).toMatchObject({ ended_at: 9, duration_ms: 8, error: { kind: 'api' } })
+    const reopened = applyChanges(closed, inc([{ turn: turn(1, [], { outcome: 'running' }), items: [] }], 'e:3'))
+    expect(reopened.turns[1].outcome).toBe('running')
+    expect(reopened.turns[1].ended_at).toBeUndefined()
+    expect(reopened.turns[1].duration_ms).toBeUndefined()
+    expect(reopened.turns[1].error).toBeUndefined()
+    expect(ids(reopened)[1]).toEqual(['u1'])
+  })
+
   it('updates the turn header (outcome) by id', () => {
     const running = applyChanges(base(), inc([{ turn: turn(1, [], { outcome: 'running' }), items: [user('u1', 0)] }]))
     const done = applyChanges(running, inc([{ turn: turn(1, [], { outcome: 'done', ended_at: 9 }), items: [] }], 'e:3'))
@@ -125,7 +139,7 @@ describe('applyChanges — upsert by id, place by index', () => {
 
   it('a detached window (a jump) does not merge live changes but keeps the live cursor', () => {
     const live = applySnapshot(emptyDoc(), snap([turn(8, [user('u8', 0)]), turn(9, [user('u9', 0)])], { cursor: 'e:5', total: 10 }))
-    const jumped = applyAround(live, snap([turn(2, [user('u2', 0)]), turn(3, [user('u3', 0)])], { hasMore: true, total: 10, cursor: 'IGNORED' }))
+    const jumped = applyAround(live, snap([turn(2, [user('u2', 0)]), turn(3, [user('u3', 0)])], { hasMore: true, total: 10, cursor: 'IGNORED' }), live.generation)
     expect(jumped.detached).toBe(true)
     expect(jumped.cursor).toBe('e:5')
     const d = applyChanges(jumped, inc([{ turn: turn(9, []), items: [agent('a9', 1)] }], 'e:6'))
@@ -139,7 +153,7 @@ describe('applyChanges — upsert by id, place by index', () => {
 describe('applyOlderPage', () => {
   it('goes in front, keeps the live cursor, and takes has_more_before from the page', () => {
     const live = applySnapshot(emptyDoc(), snap([turn(5, [user('u5', 0)]), turn(6, [user('u6', 0)])], { hasMore: true, cursor: 'e:9', total: 7 }))
-    const d = applyOlderPage(live, snap([turn(3, [user('u3', 0)]), turn(4, [user('u4', 0)])], { hasMore: false, cursor: 'PAGE', total: 7 }))
+    const d = applyOlderPage(live, snap([turn(3, [user('u3', 0)]), turn(4, [user('u4', 0)])], { hasMore: false, cursor: 'PAGE', total: 7 }), live.generation)
     expect(d.turns.map((t) => t.index)).toEqual([3, 4, 5, 6])
     expect(d.cursor).toBe('e:9')
     expect(d.hasMoreBefore).toBe(false)
@@ -148,7 +162,37 @@ describe('applyOlderPage', () => {
 
   it('does not duplicate a turn the document already holds', () => {
     const live = applySnapshot(emptyDoc(), snap([turn(5, [user('u5', 0)])], { hasMore: true }))
-    const d = applyOlderPage(live, snap([turn(4, [user('u4', 0)]), turn(5, [user('u5', 0)])], { hasMore: true }))
+    const d = applyOlderPage(live, snap([turn(4, [user('u4', 0)]), turn(5, [user('u5', 0)])], { hasMore: true }), live.generation)
+    expect(d.turns.map((t) => t.index)).toEqual([4, 5])
+  })
+})
+
+// A page or a jump asked under one epoch and answered after a reset snapshot installed the next must change nothing.
+describe('the generation fence', () => {
+  const old = () => applySnapshot(emptyDoc(), snap([turn(5, [user('u5', 0)])], { hasMore: true, cursor: 'e:1' }))
+
+  it('every replacing snapshot bumps the generation', () => {
+    const d0 = old()
+    const d1 = applySnapshot(d0, snap([turn(9, [user('u9', 0)])], { reset: true, cursor: 'f:1' }))
+    expect(d1.generation).toBe(d0.generation + 1)
+  })
+
+  it('a late older page of the previous epoch is dropped', () => {
+    const asked = old().generation
+    const next = applySnapshot(old(), snap([turn(9, [user('u9', 0)])], { reset: true, cursor: 'f:1' }))
+    const d = applyOlderPage(next, snap([turn(4, [user('stale4', 0)])]), asked)
+    expect(d).toBe(next)
+  })
+
+  it('a late jump of the previous epoch is dropped', () => {
+    const asked = old().generation
+    const next = applySnapshot(old(), snap([turn(9, [user('u9', 0)])], { reset: true, cursor: 'f:1' }))
+    expect(applyAround(next, snap([turn(2, [user('stale2', 0)])], { total: 10 }), asked)).toBe(next)
+  })
+
+  it('a page asked under the current generation still applies', () => {
+    const d0 = old()
+    const d = applyOlderPage(d0, snap([turn(4, [user('u4', 0)])]), d0.generation)
     expect(d.turns.map((t) => t.index)).toEqual([4, 5])
   })
 })

@@ -91,7 +91,7 @@ export interface StepItem extends ItemBase {
   command?: { text: string; description?: string; exit_code?: number; background_task_id?: string }
   subagent?: { agent_id: string; description?: string; type?: string; async?: boolean }
   /** Never inlined by snapshots: loaded on demand (`fetchSubagent`) and kept by the store. */
-  children?: ConversationItem[]
+  children?: Array<DistributiveOmit<ConversationItem, 'index'>>
   question?: { questions: StepQuestionItem[]; answers?: string[][] }
   read?: { offset?: number; limit?: number }
   search?: { where: string }
@@ -107,6 +107,9 @@ export interface SystemItem extends ItemBase {
 export interface UnknownItem extends ItemBase {
   type: string
 }
+
+/** An item as the §8.1 model has it, without the API's placement `index` (a subagent's items are this). */
+export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 
 export type KnownItem = UserItem | AgentTextItem | ThinkingItem | StepItem | SystemItem
 export type ConversationItem = KnownItem | UnknownItem

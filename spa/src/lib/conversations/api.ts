@@ -1,7 +1,7 @@
 // spa/src/lib/conversations/api.ts — the conversation REST calls (U1 spec §8.2; U3 plan D4). Pinned to the pane's host:
 // a host this device does not have is a rejection, never a request to another daemon (`pinnedHostFetch`).
 import { pinnedHostFetch } from '../host-api'
-import type { ConversationItem, Increment, Snapshot } from './types'
+import type { ConversationItem, DistributiveOmit, Increment, Snapshot } from './types'
 
 /** An error answer of the conversation API: the HTTP status and the daemon's `{error}` code ('' when there is none). */
 export class ConversationApiError extends Error {
@@ -63,13 +63,14 @@ export async function fetchConversationIncrement(hostId: string, sessionId: stri
 }
 
 export interface SubagentAnswer {
-  items: ConversationItem[]
+  /** The §8.1 model's items: a subagent's file is not windowed, so they carry no placement `index`. */
+  items: Array<DistributiveOmit<ConversationItem, 'index'>>
   /** A read error cut the list short: what is here is true, there may be more. */
   partial: boolean
 }
 
 export function fetchConversationSubagent(hostId: string, sessionId: string, agentId: string, signal?: AbortSignal): Promise<SubagentAnswer> {
   return pinnedHostFetch(hostId, `${base(sessionId)}/subagents/${encodeURIComponent(agentId)}`, { signal })
-    .then((r) => readJson<{ items?: ConversationItem[]; partial?: boolean }>(r))
+    .then((r) => readJson<{ items?: SubagentAnswer['items']; partial?: boolean }>(r))
     .then((b) => ({ items: b.items ?? [], partial: b.partial === true }))
 }
