@@ -345,3 +345,43 @@ func TestRootsPut_AnnouncesTheRosterAndLeavesMembersAlone(t *testing.T) {
 		t.Fatalf("GET roster lacks roots_rev: %s", raw)
 	}
 }
+
+// A cwd is judged by its real path: a member whose cwd is written under a kept root but is a symlink into the root being
+// removed still holds that root. (codex attack, #2561.) Mutation gate: judge the written string first -> red.
+func TestRootsPut_ASymlinkIntoARemovedRootStillHoldsIt(t *testing.T) {
+	f, root := newSpawnFixture(t, 3)
+	kept := mkdir(t, "")
+	link := filepath.Join(kept, "link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	mrow := newMember("op-l", uid(1), "sid-l", "_meml", 1)
+	mrow.Cwd = link
+	if err := f.m.store.InsertMember(mrow); err != nil {
+		t.Fatal(err)
+	}
+	code, body := f.putRoots(uid(1), 0, []string{kept}, appClientRoots)
+	var r team.RootsRefusal
+	_ = json.Unmarshal(body, &r)
+	if code != 409 || r.Error != team.ErrRootsInUse || len(r.InUse) != 1 || r.InUse[0].Root != root {
+		t.Fatalf("%d %s, want 409 roots_in_use naming %s", code, body, root)
+	}
+}
+
+// And the other way: a cwd written under the removed root that is a link into a kept one is not held by the removed root.
+func TestRootsPut_ASymlinkOutOfARemovedRootDoesNotHoldIt(t *testing.T) {
+	f, root := newSpawnFixture(t, 3)
+	kept := mkdir(t, "")
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(kept, link); err != nil {
+		t.Fatal(err)
+	}
+	mrow := newMember("op-l", uid(1), "sid-l", "_meml", 1)
+	mrow.Cwd = link
+	if err := f.m.store.InsertMember(mrow); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := f.putRoots(uid(1), 0, []string{kept}, appClientRoots); code != 200 {
+		t.Fatalf("%d %s, want 200", code, body)
+	}
+}
