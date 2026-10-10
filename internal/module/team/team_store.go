@@ -172,7 +172,7 @@ type execer interface {
 
 // ErrSessionHeld: a member row cannot be inserted for a session that already has a member holding its seat (state active, or killing —
 // a kill may still be given back); the session keeps its seat until that member ends.
-var ErrSessionHeld = errors.New("the session is held by a member whose kill is in flight")
+var ErrSessionHeld = errors.New("the session already has a member holding its seat (active, or killing: its kill may still be given back)")
 
 func insertMemberIn(ctx context.Context, q execer, m memberRow) error {
 	_, err := insertMemberRowIn(ctx, q, m)
@@ -192,8 +192,11 @@ func insertMemberRowIn(ctx context.Context, q execer, m memberRow) (bool, error)
 	// inside the caller's write transaction, so the read and the insert are one step against a kill's claim.
 	if m.State == team.MemberActive {
 		var held int
-		switch err := q.QueryRowContext(ctx, `SELECT 1 FROM team_members WHERE session_id = ? AND state IN ('active', 'killing') AND spawn_op <> ? LIMIT 1`,
-			m.SessionID, m.SpawnOp).Scan(&held); {
+		// Only for a row that is NEW: a spawn op that is stored already is the retry InsertMember has always made a no-op (ON CONFLICT
+		// below), whatever the session has become since.
+		switch err := q.QueryRowContext(ctx, `SELECT 1 FROM team_members WHERE session_id = ? AND state IN ('active', 'killing') AND spawn_op <> ?
+			AND NOT EXISTS (SELECT 1 FROM team_members WHERE spawn_op = ?) LIMIT 1`,
+			m.SessionID, m.SpawnOp, m.SpawnOp).Scan(&held); {
 		case err == nil:
 			return false, fmt.Errorf("insert member %s: %w", m.SpawnOp, ErrSessionHeld)
 		case !errors.Is(err, sql.ErrNoRows):

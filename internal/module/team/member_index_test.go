@@ -429,3 +429,37 @@ func TestOneMemberIndex_WithNoIndexTheInsertGuardStillRefusesASecondActiveRow(t 
 		t.Errorf("a free session was refused: %v", err)
 	}
 }
+
+// codex re-review P2: InsertMember is idempotent on its spawn op (a spawn retried after a restart stores one row). The seat guard
+// must not turn that retry into an error just because the session has meanwhile been taken by another member: a row that already
+// exists is not a new membership. Mutation gate: guard before the spawn-op check → red.
+func TestOneMemberIndex_ARetriedInsertOfAnExistingRowIsStillANoOp(t *testing.T) {
+	s := openTestStore(t)
+	if _, _, _, err := s.Create(openApproval("tm-1", "sid-lead", 1000), "h1"); err != nil {
+		t.Fatal(err)
+	}
+	first := newMember("s1", "tm-1", "sid-1", "_s1", 5)
+	if err := s.InsertMember(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE team_members SET state = 'released' WHERE spawn_op = 's1'`); err != nil { // it ended; the session is free
+		t.Fatal(err)
+	}
+	if err := s.InsertMember(newMember("s2", "tm-1", "sid-1", "_s2", 6)); err != nil { // and has since been taken by another member
+		t.Fatal(err)
+	}
+	if err := s.InsertMember(first); err != nil {
+		t.Fatalf("the retry of an insert whose row exists = %v, want the no-op it always was", err)
+	}
+	if stateOf(t, s.db, "s1") != "released" {
+		t.Fatal("the retry changed the stored row")
+	}
+	// a genuinely new row for the held session is still refused, with an error that does not claim a kill
+	err := s.InsertMember(newMember("s3", "tm-1", "sid-1", "_s3", 7))
+	if !errors.Is(err, ErrSessionHeld) {
+		t.Fatalf("a new row for a held session = %v, want ErrSessionHeld", err)
+	}
+	if strings.Contains(err.Error(), "kill") && !strings.Contains(err.Error(), "active") {
+		t.Errorf("the error %q names a kill but the holder is active", err)
+	}
+}
