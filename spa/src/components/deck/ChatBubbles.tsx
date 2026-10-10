@@ -7,8 +7,8 @@ import type { AgentTextItem, UserItem } from '../../lib/conversations/types'
 import RoomProse from '../room/RoomProse'
 import { UserBlock } from './UserBlock'
 
-/** Sources that are not the person's own message: they keep the deck's block (a bash input, a wake-up, a background report). */
-const NOT_THE_PERSON = new Set(['bash', 'command_output', 'background', 'task', 'schedule', 'scheduled'])
+/** Sources that are not the person's own message: they keep the deck's block (a bash input, a wake-up, a background report, a peer's message). */
+const NOT_THE_PERSON = new Set(['peer', 'bash', 'command_output', 'background', 'task', 'schedule', 'scheduled'])
 
 export function UserBubble({ item }: { item: UserItem }) {
   const t = useI18nStore((s) => s.t)

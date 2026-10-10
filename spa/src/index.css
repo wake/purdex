@@ -281,7 +281,7 @@ button:disabled {
    Headings are body-size and bold only; strong is bold only; lists keep marker and indent at body size / leading; inline code stays a chip (rule above). */
 .deck-md .worker-prose,
 .chat-md .worker-prose {
-  line-height: 1.5;
+  line-height: 1.7;
   font-weight: 400;
   color: var(--text-primary);
 }
@@ -301,3 +301,11 @@ button:disabled {
 .chat-md .worker-prose ol { padding-left: 2em; }
 .deck-md .worker-prose :not(pre) > code,
 .chat-md .worker-prose :not(pre) > code { color: var(--text-primary); }
+
+/* Agent text breathes (c9d9c7-52 pt 10): leading 1.7, and the gaps between blocks and between list items follow it, the same in the deck and the chat. */
+.deck-md .worker-prose :where(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4, h5, h6),
+.chat-md .worker-prose :where(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4, h5, h6) { margin-bottom: 0.75em; }
+.deck-md .worker-prose > :last-child,
+.chat-md .worker-prose > :last-child { margin-bottom: 0; }
+.deck-md .worker-prose :where(li + li),
+.chat-md .worker-prose :where(li + li) { margin-top: 0.3em; }

@@ -17,7 +17,7 @@ export function formatClock(ms: number): string {
 export type UserCaption =
   | { kind: 'you'; time: string }
   | { kind: 'queued' }
-  | { kind: 'from'; name: string }
+  | { kind: 'from'; name: string; time: string }
   | { kind: 'background' }
   | { kind: 'schedule' }
 
@@ -25,10 +25,25 @@ export type UserCaption =
 export function userCaption(item: Pick<UserItem, 'source' | 'from' | 'at'>): UserCaption {
   switch (item.source) {
     case 'queued': return { kind: 'queued' }
-    case 'peer': return { kind: 'from', name: item.from?.name ?? item.from?.kind ?? '' }
+    case 'peer': return { kind: 'from', name: item.from?.name ?? item.from?.kind ?? '', time: formatClock(item.at) }
     case 'task': case 'background': return { kind: 'background' }
     case 'schedule': case 'scheduled': return { kind: 'schedule' }
     default: return { kind: 'you', time: formatClock(item.at) }
+  }
+}
+
+/**
+ * The tone of a user block, told apart from the data the daemon already sends (no new field): the person's own words (and their queued
+ * ones, and a bash input) are `you`; a message another session sent (`peer`, from kind `peer`) is `peer`; everything the system said in the
+ * person's place — a background-task report, a scheduled wake-up, a mod's own notice (`peer` from kind `plugin`, e.g. a pdx team notice) —
+ * is `notice`, the quietest of the three.
+ */
+export type UserTone = 'you' | 'peer' | 'notice'
+export function userTone(item: Pick<UserItem, 'source' | 'from'>): UserTone {
+  switch (item.source) {
+    case 'peer': return item.from?.kind === 'plugin' ? 'notice' : 'peer'
+    case 'task': case 'background': case 'schedule': case 'scheduled': return 'notice'
+    default: return 'you'
   }
 }
 

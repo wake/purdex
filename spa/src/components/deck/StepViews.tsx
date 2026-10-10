@@ -83,7 +83,7 @@ function ExecuteCard({ step, actions }: { step: StepItem; actions: StepActions }
   const command = step.command?.text ?? step.summary
   return (
     <Card step={step} icon={<Terminal className={ICON} size={16} />} title={<span className="text-text-muted">{step.command?.description ?? t('deck.step.execute')}</span>}>
-      <pre data-testid="exec-command" className="line-clamp-6 overflow-hidden whitespace-pre-wrap break-all rounded bg-black/60 px-2 py-1 font-mono text-xs text-neutral-100">{`$ ${command}`}</pre>
+      <pre data-testid="exec-command" className="line-clamp-6 overflow-hidden whitespace-pre-wrap break-all rounded bg-black/60 px-2 py-1 font-mono text-xs text-neutral-300 transition-colors hover:text-neutral-100">{`$ ${command}`}</pre>
       {step.output && (
         <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={step.status === 'failed' ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />
       )}
