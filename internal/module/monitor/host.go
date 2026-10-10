@@ -1,6 +1,11 @@
 package monitor
 
-import "context"
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"time"
+)
 
 const (
 	hostCPUUnavailableReason    = "host_cpu_unavailable"
@@ -55,10 +60,21 @@ type HostDiskMetrics struct {
 	UnavailableReason *string  `json:"unavailable_reason"`
 }
 
+// hostCPUPercentSource is a collector that reports the CPU utilisation itself instead of counters to take deltas of
+// (darwin, #2013). The interval is how often the caller wants it refreshed.
+type hostCPUPercentSource interface {
+	CPUPercent(interval time.Duration) (float64, error)
+}
+
 type HostMetricsState struct {
 	collector HostCollector
 	previous  *HostCPUSample
+	// cpuInterval is the monitor's refresh interval in nanoseconds, the pace of a background CPU sampler. Atomic: the
+	// snapshot that sets it and the one that reads it are not ordered by anything this type owns.
+	cpuInterval atomic.Int64
 }
+
+func (s *HostMetricsState) setCPUInterval(d time.Duration) { s.cpuInterval.Store(int64(d)) }
 
 func NewHostMetricsState(collector HostCollector) *HostMetricsState {
 	return &HostMetricsState{collector: collector}
@@ -81,6 +97,20 @@ func collectHostMetrics(ctx context.Context, state *HostMetricsState) HostMetric
 }
 
 func collectHostCPU(ctx context.Context, state *HostMetricsState) *HostCPUMetrics {
+	if src, ok := state.collector.(hostCPUPercentSource); ok {
+		interval := time.Duration(state.cpuInterval.Load())
+		if interval <= 0 {
+			interval = DefaultRefreshIntervalMS * time.Millisecond
+		}
+		percent, err := src.CPUPercent(interval)
+		switch {
+		case errors.Is(err, errCPUPending):
+			return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUPendingReason)}
+		case err != nil:
+			return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUUnavailableReason)}
+		}
+		return &HostCPUMetrics{Percent: &percent}
+	}
 	sample, err := state.collector.CollectCPU(ctx)
 	if err != nil {
 		return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUUnavailableReason)}
