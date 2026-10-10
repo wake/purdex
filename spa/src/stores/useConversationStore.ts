@@ -45,6 +45,8 @@ export const BACKOFF_START_MS = 1_000
 export const BACKOFF_MAX_MS = 15_000
 /** A transcript that is not there yet may appear (a session that has only just started): ask again this often. */
 export const NOT_FOUND_RETRY_MS = 5_000
+/** A read (snapshot or increment) that has not answered by then is given up on and retried with backoff. */
+export const READ_TIMEOUT_MS = 15_000
 export const PAGE_TURNS = 20
 export const WINDOW_TURNS = 20
 
@@ -166,6 +168,9 @@ export const useConversationStore = create<ConversationState>()((set, get) => {
     rt.connectAbort?.abort()
     const ac = new AbortController()
     rt.connectAbort = ac
+    // A half-open connection never answers and never fails: without a deadline the loop would wait for it forever.
+    let timedOut = false
+    const deadline = setTimeout(() => { timedOut = true; ac.abort() }, READ_TIMEOUT_MS)
     try {
       const cursor = get().byKey[key]?.doc.cursor ?? ''
       if (cursor) {
@@ -178,7 +183,8 @@ export const useConversationStore = create<ConversationState>()((set, get) => {
         patchDoc(key, (d) => applySnapshot(d, snap))
       }
     } catch (err) {
-      if (rt.stopped || attempt !== rt.attempt || ac.signal.aborted) return
+      if (rt.stopped || attempt !== rt.attempt) return
+      if (ac.signal.aborted && !timedOut) return // superseded by the next attempt or by stop
       if (err instanceof ConversationApiError && (UNREADABLE_CODES as readonly string[]).includes(err.code)) {
         patch(key, () => ({ status: 'unreadable', reason: err.code }))
         // a transcript that is not there may still appear; a provider this daemon does not read never will
@@ -190,6 +196,8 @@ export const useConversationStore = create<ConversationState>()((set, get) => {
       patch(key, () => ({ status: 'error' }))
       reconnectLater(key, rt)
       return
+    } finally {
+      clearTimeout(deadline)
     }
     const live = get().byKey[key]
     if (!live) return
@@ -202,6 +210,10 @@ export const useConversationStore = create<ConversationState>()((set, get) => {
       onClose: (why) => {
         if (attempt !== rt.attempt || rt.stopped) return
         rt.socket = null
+        // The approvals are the current connection's atomic set: with the connection gone they are unknown, and an
+        // approval closed meanwhile (in the terminal, by another client) must not stay answerable. The next connection's
+        // `approvals.snapshot` brings the real set back.
+        patchDoc(key, (d) => (d.approvals.length ? applyApprovals(d, []) : d))
         reconnectLater(key, rt, why.gap)
       },
     })

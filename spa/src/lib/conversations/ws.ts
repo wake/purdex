@@ -17,6 +17,8 @@ export interface ConversationSocketOptions {
   onFrame: (frame: Frame) => void
   /** The connection ended: `gap` when this side retired it for a bad `seq`, `failed` when it never opened. Once. */
   onClose: (why: { gap: boolean; failed: boolean }) => void
+  /** How long the ticket and the upgrade may take before the attempt is given up as failed. */
+  connectTimeoutMs?: number
   /** Tests. */
   WebSocketImpl?: typeof WebSocket
   getTicket?: (hostId: string) => Promise<string>
@@ -26,6 +28,8 @@ export interface ConversationSocket {
   /** Ends the connection; no callback fires after it. Safe to call more than once. */
   close: () => void
 }
+
+export const CONNECT_TIMEOUT_MS = 15_000
 
 export function openConversationSocket(opts: ConversationSocketOptions): ConversationSocket {
   let closed = false
@@ -41,12 +45,20 @@ export function openConversationSocket(opts: ConversationSocketOptions): Convers
   }
 
   void (async () => {
+    const limit = opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS
     let ticket: string
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      ticket = await (opts.getTicket ?? fetchWsTicket)(opts.hostId)
+      // a ticket request over a half-open connection neither answers nor fails
+      ticket = await Promise.race([
+        (opts.getTicket ?? fetchWsTicket)(opts.hostId),
+        new Promise<never>((_r, rej) => { timer = setTimeout(() => rej(new Error('ticket timeout')), limit) }),
+      ])
     } catch {
       end({ gap: false, failed: true })
       return
+    } finally {
+      clearTimeout(timer)
     }
     if (closed) return
     let url: string
@@ -63,7 +75,10 @@ export function openConversationSocket(opts: ConversationSocketOptions): Convers
     const Impl = opts.WebSocketImpl ?? WebSocket
     const sock = new Impl(url)
     ws = sock
+    // ... and so can the upgrade: a socket that has not opened by the deadline is closed (reported as failed)
+    const openTimer = setTimeout(() => { if (!opened) { try { sock.close() } catch { /* already closing */ } } }, limit)
     sock.onopen = () => {
+      clearTimeout(openTimer)
       if (closed || ended) return
       opened = true
       opts.onOpen?.()
@@ -86,7 +101,7 @@ export function openConversationSocket(opts: ConversationSocketOptions): Convers
       opts.onFrame(frame)
     }
     sock.onerror = () => { /* the close that follows reports it */ }
-    sock.onclose = () => end({ gap: false, failed: !opened })
+    sock.onclose = () => { clearTimeout(openTimer); end({ gap: false, failed: !opened }) }
   })()
 
   return {

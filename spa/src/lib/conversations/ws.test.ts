@@ -106,6 +106,54 @@ describe('openConversationSocket', () => {
     expect(a.closes).toEqual([{ gap: false, failed: true }])
   })
 
+  it('a ticket request that never answers is a failure after the deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const closes: Array<{ gap: boolean; failed: boolean }> = []
+      openConversationSocket({
+        hostId: 'h1', sessionId: SID, WebSocketImpl: Impl, connectTimeoutMs: 1000, getTicket: () => new Promise(() => {}),
+        onFrame: () => {}, onClose: (w) => closes.push(w),
+      })
+      await vi.advanceTimersByTimeAsync(999)
+      expect(closes).toEqual([])
+      await vi.advanceTimersByTimeAsync(2)
+      expect(closes).toEqual([{ gap: false, failed: true }])
+      expect(FakeWS.all).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an upgrade that never completes is closed after the deadline and reported as failed', async () => {
+    vi.useFakeTimers()
+    try {
+      const closes: Array<{ gap: boolean; failed: boolean }> = []
+      openConversationSocket({ hostId: 'h1', sessionId: SID, WebSocketImpl: Impl, connectTimeoutMs: 1000, onFrame: () => {}, onClose: (w) => closes.push(w) })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(FakeWS.all).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1001)
+      expect(FakeWS.all[0].closed).toBe(true)
+      expect(closes).toEqual([{ gap: false, failed: true }])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('an upgrade that completes in time is not closed by the deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const closes: unknown[] = []
+      openConversationSocket({ hostId: 'h1', sessionId: SID, WebSocketImpl: Impl, connectTimeoutMs: 1000, onFrame: () => {}, onClose: (w) => closes.push(w) })
+      await vi.advanceTimersByTimeAsync(0)
+      FakeWS.all[0].open()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(FakeWS.all[0].closed).toBe(false)
+      expect(closes).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('close() ends it and fires nothing afterwards', async () => {
     const a = await open()
     a.ws().open()

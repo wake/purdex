@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  BACKOFF_MAX_MS, BACKOFF_START_MS, CLOSE_AFTER_MS, NOT_FOUND_RETRY_MS, conversationKey, resetConversationStore, selectConversation,
+  BACKOFF_MAX_MS, BACKOFF_START_MS, CLOSE_AFTER_MS, NOT_FOUND_RETRY_MS, READ_TIMEOUT_MS, conversationKey, resetConversationStore, selectConversation,
   useConversationStore,
 } from './useConversationStore'
 import { ConversationApiError } from '../lib/conversations/api'
@@ -207,6 +207,19 @@ describe('reconnecting', () => {
     expect(socks.list.length).toBe(before + 1)
   })
 
+  // the approvals are the current connection's atomic set: with it gone they are unknown, never "still open"
+  it('the open approvals are cleared when the stream is lost and come back with the next approvals.snapshot', async () => {
+    useConversationStore.getState().acquire(H, S)
+    await flush()
+    lastSock().opts.onFrame(f(1, 'approvals.snapshot', { approvals: [{ id: 'a1' }] }))
+    expect(entry()?.doc.approvals).toHaveLength(1)
+    lastSock().opts.onClose({ gap: false, failed: false })
+    expect(entry()?.doc.approvals).toEqual([])
+    await vi.advanceTimersByTimeAsync(BACKOFF_START_MS + 1)
+    lastSock().opts.onFrame(f(1, 'approvals.snapshot', { approvals: [{ id: 'a2' }] }))
+    expect(entry()?.doc.approvals.map((a) => a.id)).toEqual(['a2'])
+  })
+
   it('a seq gap reconnects at once, with no waiting', async () => {
     useConversationStore.getState().acquire(H, S)
     await flush()
@@ -241,6 +254,30 @@ describe('reconnecting', () => {
 })
 
 describe('unreadable and failing reads', () => {
+  // a half-open connection neither answers nor fails: without a deadline the loop would wait for it for ever
+  it('a read that never answers is given up on after the deadline and retried with backoff', async () => {
+    api.snapshot.mockImplementationOnce((_h: string, _s: string, o: { signal: AbortSignal }) =>
+      new Promise((_r, rej) => o.signal.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))))
+    useConversationStore.getState().acquire(H, S)
+    await flush()
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS - 1)
+    expect(entry()?.status).toBe('loading')
+    await vi.advanceTimersByTimeAsync(2)
+    expect(entry()?.status).toBe('reconnecting')
+    await vi.advanceTimersByTimeAsync(BACKOFF_START_MS + 1)
+    expect(api.snapshot).toHaveBeenCalledTimes(2)
+    expect(socks.list).toHaveLength(1)
+  })
+
+  it('stopping while a read is out leaves no deadline timer behind', async () => {
+    api.snapshot.mockImplementationOnce(() => new Promise(() => {}))
+    const release = useConversationStore.getState().acquire(H, S)
+    await flush()
+    release()
+    await vi.advanceTimersByTimeAsync(CLOSE_AFTER_MS + 1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('not_found is unreadable and asked again every few seconds; it recovers when the transcript appears', async () => {
     api.snapshot.mockRejectedValueOnce(new ConversationApiError(404, 'not_found'))
     useConversationStore.getState().acquire(H, S)
