@@ -7,7 +7,7 @@ import type { UsageWindow } from '../../lib/usage-display'
 import { USAGE_STALE_MS } from '../../lib/usage-display'
 import { StateSlot, type SlotState } from './StateSlot'
 import { ContextPart, CostPart, LimitPart, ModelPart } from './StatusRowParts'
-import { HIDE } from './status-row-model'
+import { cleanCost, cleanElapsed, cleanShare, cleanTokens, cleanWindow, HIDE } from './status-row-model'
 
 export interface StatusRowProps {
   state: SlotState
@@ -28,7 +28,17 @@ export interface StatusRowProps {
   usageAt?: number
 }
 
-export function StatusRow(p: StatusRowProps) {
+export function StatusRow(raw: StatusRowProps) {
+  // The boundary: whatever the caller computed, only finite, clamped numbers go below; anything else is a missing value.
+  const p = {
+    ...raw,
+    contextUsed: cleanShare(raw.contextUsed),
+    contextWindowTokens: cleanTokens(raw.contextWindowTokens),
+    fiveHour: cleanWindow(raw.fiveHour),
+    sevenDay: cleanWindow(raw.sevenDay),
+    cost: cleanCost(raw.cost),
+    elapsedMs: cleanElapsed(raw.elapsedMs),
+  }
   const stale = p.usageAt !== undefined && p.now - p.usageAt > USAGE_STALE_MS
   return (
     <div data-testid="status-row" className="@container border-t border-border-subtle bg-surface-primary">

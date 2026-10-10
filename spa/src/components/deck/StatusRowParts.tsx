@@ -51,7 +51,7 @@ export function LimitPart({ which, win, now, stale, className = '' }: {
 }) {
   const t = useI18nStore((s) => s.t)
   const five = which === 'five_hour'
-  const left = win && win.resetsAtMs !== null ? formatResetsIn(win.resetsAtMs, now) : null
+  const left = win && win.resetsAtMs !== null && Number.isFinite(now) ? formatResetsIn(win.resetsAtMs, now) : null
   const short = win ? shortReset(win.resetsAtMs, now) : null
   const title = !win
     ? t('statusrow.none', { name: t(`statusrow.name.${which}`) })

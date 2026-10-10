@@ -4,7 +4,7 @@
 
 /** Compact reset phrase: `45m`, `2h`, `3d`; null once the reset has passed or there is none. */
 export function shortReset(resetsAtMs: number | null | undefined, nowMs: number): string | null {
-  if (typeof resetsAtMs !== 'number') return null
+  if (typeof resetsAtMs !== 'number' || !Number.isFinite(resetsAtMs) || !Number.isFinite(nowMs)) return null
   const mins = Math.floor((resetsAtMs - nowMs) / 60_000)
   if (mins < 0) return null
   if (mins < 60) return `${mins}m`
@@ -51,3 +51,20 @@ export function formatElapsed(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
+
+const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+
+/** A used share from the outside: non-finite → null (shown 「—」), else rounded and clamped to 0-100. */
+export function cleanShare(n: number | null | undefined): number | null {
+  return finite(n) ? Math.min(100, Math.max(0, Math.round(n))) : null
+}
+
+/** A limit window from the outside: a bad share drops the whole window, a bad reset time only the reset. */
+export function cleanWindow(w: { pct: number; resetsAtMs: number | null } | null | undefined): { pct: number; resetsAtMs: number | null } | null {
+  const pct = w ? cleanShare(w.pct) : null
+  return w && pct !== null ? { pct, resetsAtMs: finite(w.resetsAtMs) ? w.resetsAtMs : null } : null
+}
+
+export const cleanTokens = (n: number | undefined): number | undefined => (finite(n) && n > 0 ? n : undefined)
+export const cleanCost = (n: number | null | undefined): number | null => (finite(n) ? n : null)
+export const cleanElapsed = (n: number | undefined): number => (finite(n) ? n : 0)

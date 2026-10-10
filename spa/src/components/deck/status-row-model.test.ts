@@ -10,6 +10,8 @@ describe('status-row-model', () => {
     expect(shortReset(NOW - 1, NOW)).toBeNull()
     expect(shortReset(null, NOW)).toBeNull()
     expect(shortReset(undefined, NOW)).toBeNull()
+    expect(shortReset(NaN, NOW)).toBeNull()
+    expect(shortReset(NOW, NaN)).toBeNull()
   })
   it('formatTokens', () => {
     expect(formatTokens(620_000)).toBe('620K')

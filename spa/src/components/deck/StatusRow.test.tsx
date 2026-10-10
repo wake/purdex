@@ -76,6 +76,53 @@ describe('StatusRow content', () => {
   })
 })
 
+describe('StatusRow bad numbers', () => {
+  const ctxArc = () => screen.getByTestId('status-seg-usage-context').querySelector('[data-testid="usage-ring-arc"]')
+  it.each([[NaN], [Infinity], [-Infinity]])('a non-finite used share (%s) is a missing value: 「—」, no ring, no NaN anywhere', (bad) => {
+    const { container } = r({ contextUsed: bad, fiveHour: { pct: bad, resetsAtMs: NOW + MIN }, sevenDay: { pct: bad, resetsAtMs: null }, cost: bad })
+    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('—')
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('—')
+    expect(screen.getByTestId('status-seg-usage-seven-day').textContent).toBe('—')
+    expect(screen.getByTestId('item-cost').textContent).toBe('—')
+    expect(screen.queryByTestId('ctx-tokens')).toBeNull()
+    expect(screen.queryByTestId('five_hour-reset')).toBeNull()
+    expect(container.innerHTML).not.toMatch(/NaN|Infinity/)
+  })
+  it('out-of-range and fractional shares are clamped / rounded the same way in ring, number, tone, tooltip and tokens', () => {
+    r({ contextUsed: 150 })
+    expect(ctxArc()!.getAttribute('data-shown')).toBe('100')
+    expect(ctxArc()!.getAttribute('data-tone')).toBe('danger')
+    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('0%')
+    expect(screen.getByTestId('ctx-tokens').textContent).toBe('0 left')
+    expect(screen.getByTestId('item-context').title).toBe('Context 100% used, 0% left (1M / 1M)')
+    cleanup()
+    r({ contextUsed: -5 })
+    expect(ctxArc()!.getAttribute('data-shown')).toBe('0')
+    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('100%')
+    expect(screen.getByTestId('ctx-tokens').textContent).toBe('1M left')
+    cleanup()
+    r({ contextUsed: 37.6 })
+    expect(ctxArc()!.getAttribute('data-shown')).toBe('38')
+    expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('62%')
+    expect(screen.getByTestId('ctx-tokens').textContent).toBe('620K left')
+    expect(screen.getByTestId('item-context').title).toBe('Context 38% used, 62% left (380K / 1M)')
+  })
+  it('a bad window size drops the token text but keeps the percentage', () => {
+    for (const bad of [NaN, Infinity, 0, -1]) {
+      cleanup()
+      const { container } = r({ contextWindowTokens: bad })
+      expect(screen.getByTestId('status-seg-usage-context').textContent).toBe('62%')
+      expect(screen.queryByTestId('ctx-tokens')).toBeNull()
+      expect(container.innerHTML).not.toMatch(/NaN|Infinity/)
+    }
+  })
+  it('a bad reset time or elapsed time never prints NaN', () => {
+    const { container } = r({ fiveHour: { pct: 10, resetsAtMs: NaN }, state: 'running', elapsedMs: NaN })
+    expect(screen.queryByTestId('five_hour-reset')).toBeNull()
+    expect(container.innerHTML).not.toMatch(/NaN|Infinity/)
+  })
+})
+
 describe('StatusRow narrowing (container-query classes; real layout is checked in Chromium)', () => {
   const has = (el: Element, cls: string) => el.className.split(/\s+/).includes(cls)
   it('the row is its own @container', () => {
