@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/wake/purdex/internal/resources"
 )
 
 // The disk guard (#2470). Before a heavy lease is granted, the volume that holds the Go build cache is looked at. Below
@@ -32,8 +30,8 @@ const (
 	trimBudget     = 90 * time.Second
 	// cacheDirMemo is how long the resolved cache directory is remembered (`go env` forks).
 	cacheDirMemo = 10 * time.Minute
-	// warnFresh is how long a warning stays on the answers after the last look at the disk that confirmed it.
-	warnFresh = 2 * time.Minute
+	// maxGrantWarnings bounds the warnings kept with grants.
+	maxGrantWarnings = 512
 )
 
 // diskGuardedKinds are the lease kinds that build or test: they are what fills the cache.
@@ -43,8 +41,11 @@ var diskGuardedKinds = map[string]bool{"test-full": true, "test-pkg": true, "bui
 type diskGuard struct {
 	mu       sync.Mutex
 	lastTrim time.Time
-	warn     string    // the standing warning ("" = none)
-	warnAt   time.Time // when it was last confirmed by a look at the disk
+	trimming bool   // a walk is running: guarded grants wait for it (passOnce) and the walk ends with a pass of its own
+	warn     string // the standing warning of the last look at the disk ("" = none)
+	// grants is the warning each guarded lease was granted with (only the non-empty ones): the answer to a poll or a replay
+	// is the fact about the grant, not the disk of the moment. In memory, bounded.
+	grants map[string]string
 }
 
 // enableDiskGuard installs the real free-space reader and cache locator. New does not: a test module has the guard off
@@ -112,13 +113,16 @@ func (m *Module) startTrim(dir string, free int64) (started bool, done <-chan st
 		m.disk.mu.Unlock()
 		return false, nil
 	}
-	m.disk.lastTrim = now
+	m.disk.lastTrim, m.disk.trimming = now, true
 	m.disk.mu.Unlock()
 	// The wait group is added to under startMu, the lock markStopped takes before Stop / Close wait on it: a trim is never
 	// added behind a Wait that has begun.
 	m.startMu.Lock()
 	if m.stopped {
 		m.startMu.Unlock()
+		m.disk.mu.Lock()
+		m.disk.trimming = false
+		m.disk.mu.Unlock()
 		return false, nil
 	}
 	m.wg.Add(1)
@@ -127,6 +131,15 @@ func (m *Module) startTrim(dir string, free int64) (started bool, done <-chan st
 	go func() {
 		defer m.wg.Done()
 		defer close(ch)
+		defer func() {
+			m.disk.mu.Lock()
+			m.disk.trimming = false
+			m.disk.mu.Unlock()
+			// The guarded leases that waited for this walk are granted now, with the disk judged after it.
+			if m.runCtx.Err() == nil {
+				m.admissionPass(m.runCtx, "")
+			}
+		}()
 		if m.trimHook != nil {
 			m.trimHook()
 		}
@@ -153,7 +166,7 @@ func (m *Module) setDiskWarning(dir string, free int64) {
 		m.disk.warn = ""
 		return
 	}
-	m.disk.warnAt = m.now()
+
 	msg := fmt.Sprintf("disk: low on disk, %d MiB free on the volume of the Go build cache %s (hard floor %d GiB); builds and tests may fail with no space left on device",
 		free>>20, dir, diskHardFloor>>30)
 	if m.disk.warn == "" {
@@ -166,18 +179,37 @@ func (m *Module) setDiskWarning(dir string, free int64) {
 func (m *Module) diskWarning() string {
 	m.disk.mu.Lock()
 	defer m.disk.mu.Unlock()
-	if m.disk.warn == "" || m.now().Sub(m.disk.warnAt) > warnFresh {
-		return "" // nothing has confirmed it lately: the disk may have recovered
-	}
 	return m.disk.warn
 }
 
-// warnFor is the warning a lease answer carries: a held lease of a guarded kind while the standing warning is on.
-func (m *Module) warnFor(row leaseRow) string {
-	if row.State != resources.StateHeld || !diskGuardedKinds[row.Kind] {
-		return ""
+// diskHolding says a trim is running: a guarded lease is not granted until it ends.
+func (m *Module) diskHolding() bool {
+	m.disk.mu.Lock()
+	defer m.disk.mu.Unlock()
+	return m.disk.trimming
+}
+
+// recordGrantWarning keeps, with a guarded lease just granted, the warning of the look at the disk that preceded the grant.
+func (m *Module) recordGrantWarning(id, kind string) {
+	if !diskGuardedKinds[kind] {
+		return
 	}
-	return m.diskWarning()
+	m.disk.mu.Lock()
+	defer m.disk.mu.Unlock()
+	if m.disk.warn == "" {
+		return
+	}
+	if m.disk.grants == nil || len(m.disk.grants) >= maxGrantWarnings {
+		m.disk.grants = map[string]string{}
+	}
+	m.disk.grants[id] = m.disk.warn
+}
+
+// warnFor is the warning a lease answer carries: the one it was granted with, if any.
+func (m *Module) warnFor(row leaseRow) string {
+	m.disk.mu.Lock()
+	defer m.disk.mu.Unlock()
+	return m.disk.grants[row.ID]
 }
 
 // hexDir says whether name is one of the cache's entry directories: exactly two lower-case hex digits.
@@ -206,6 +238,15 @@ func (m *Module) trimGoCache(ctx context.Context, dir string, cutoff time.Time) 
 	dir = filepath.Clean(dir)
 	if home, err := os.UserHomeDir(); dir == string(filepath.Separator) || (err == nil && dir == filepath.Clean(home)) {
 		return 0, fmt.Errorf("go build cache %q is not a cache directory", dir)
+	}
+	// The directory itself is not followed if it is a symlink (OpenRoot would): a GOCACHE pointing through a link to somewhere
+	// else does not make that somewhere else a cache.
+	if fi, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	} else if err != nil {
+		return 0, err
+	} else if !fi.IsDir() {
+		return 0, fmt.Errorf("go build cache %q is not a plain directory (a symlink, a file): not trimmed", dir)
 	}
 	root, err := os.OpenRoot(dir)
 	if errors.Is(err, fs.ErrNotExist) {
