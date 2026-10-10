@@ -260,3 +260,31 @@ func TestUpdate_AConfigThatIsASymlinkStaysASymlink(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/tmp/through-link", back.UploadDir)
 }
+
+// Names that do not exist yet still resolve to one: through a symlinked ancestor over directories that are not there, and
+// through a symlink that dangles (the file is created where it points). (codex attack, #2556.)
+func TestCanonPath_ResolvesWhatDoesNotExistYet(t *testing.T) {
+	real := t.TempDir()
+	realEval, _ := filepath.EvalSymlinks(real)
+	link := filepath.Join(t.TempDir(), "alias")
+	require.NoError(t, os.Symlink(real, link))
+	require.Equal(t, filepath.Join(realEval, "new", "deeper", "config.toml"), canonPath(filepath.Join(link, "new", "deeper", "config.toml")))
+
+	dangling := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.Symlink(filepath.Join(real, "later.toml"), dangling))
+	require.Equal(t, filepath.Join(realEval, "later.toml"), canonPath(dangling))
+}
+
+func TestUpdate_ADanglingConfigSymlinkIsFilledNotReplaced(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.Symlink(filepath.Join(real, "later.toml"), link))
+	_, err := Update(link, func(c *Config) error { c.HostID = "h:1"; return nil })
+	require.NoError(t, err)
+	st, err := os.Lstat(link)
+	require.NoError(t, err)
+	require.NotZero(t, st.Mode()&os.ModeSymlink, "the symlink was replaced")
+	back, err := Load(filepath.Join(real, "later.toml"))
+	require.NoError(t, err)
+	require.Equal(t, "h:1", back.HostID)
+}

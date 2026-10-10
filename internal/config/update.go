@@ -22,11 +22,36 @@ func canonPath(path string) string {
 	if err != nil {
 		return path
 	}
-	if real, err := filepath.EvalSymlinks(abs); err == nil {
-		return real
-	}
-	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
-		return filepath.Join(dir, filepath.Base(abs))
+	for hops := 0; hops < 16; hops++ {
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			return real
+		}
+		// A dangling symlink as the last element: follow it by hand, so the name is where it would be created.
+		if st, err := os.Lstat(abs); err == nil && st.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(abs)
+			if err != nil {
+				return abs
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(abs), target)
+			}
+			abs = filepath.Clean(target)
+			continue
+		}
+		// Not there yet: the deepest ancestor that exists, resolved, with the rest appended.
+		var rest []string
+		dir := abs
+		for {
+			rest = append([]string{filepath.Base(dir)}, rest...)
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				return abs
+			}
+			dir = parent
+			if real, err := filepath.EvalSymlinks(dir); err == nil {
+				return filepath.Join(append([]string{real}, rest...)...)
+			}
+		}
 	}
 	return abs
 }
