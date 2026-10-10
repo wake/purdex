@@ -67,6 +67,16 @@ type kindGate interface {
 	Announces(caps ipeers.TeamCaps, kind string) bool
 }
 
+// kindDropper is an optional part of a kindGate store: an entry of a kind it names is DROPPED, not held, when the peer's
+// capabilities (read fresh) do not list the kind (member relay spec §3.6, D8 `drop_if_unannounced`). For a fact that cannot be
+// checked before the thing it reports happened (a person's /relay), holding it would hold everything behind it in the host's
+// FIFO. Unreachable is not "unannounced": a capabilities error waits as for every entry.
+type kindDropper interface {
+	DropIfUnannounced(kind string) bool
+	// Dropped ends the entry for good (state dropped); the pump logs it once.
+	Dropped(e outboxEntry) error
+}
+
 // capsTTL is how long a host's capabilities are reused by the gate (ms).
 const capsTTL = 30_000
 
@@ -234,6 +244,9 @@ func (p *outboxPump) attempt(e outboxEntry) bool {
 			p.backoff(e, 0, "its capabilities are unavailable: "+err.Error())
 			return false
 		case !g.Announces(caps, e.Kind):
+			if d, ok := p.store.(kindDropper); ok && d.DropIfUnannounced(e.Kind) {
+				return p.dropUnannounced(d, e)
+			}
 			p.backoff(e, 0, "the host does not announce "+e.Kind+" yet; held")
 			return false
 		}
@@ -279,6 +292,30 @@ func (p *outboxPump) attempt(e outboxEntry) bool {
 		p.backoff(e, 0, string(res.Class)+" "+res.Code)
 		return false
 	}
+}
+
+// dropUnannounced settles e as dropped when the host STILL does not announce its kind after the capabilities are read again
+// (the cached answer is up to capsTTL old: a host upgraded since must not lose a fact that is true). true: the entry is gone and
+// the next may go; false: the read failed (the entry waits) or the host announces the kind after all (it is tried next).
+func (p *outboxPump) dropUnannounced(d kindDropper, e outboxEntry) bool {
+	p.mu.Lock()
+	delete(p.caps, e.HostID)
+	p.mu.Unlock()
+	caps, err := p.capsOf(e.HostID)
+	if err != nil {
+		p.backoff(e, 0, "its capabilities are unavailable: "+err.Error())
+		return false
+	}
+	if g, ok := p.store.(kindGate); ok && g.Announces(caps, e.Kind) {
+		return true // announced now: nothing is dropped, and the loop sends it on its next look at the head
+	}
+	if err := d.Dropped(e); err != nil {
+		p.logf("[team] %s outbox %s (%s): drop: %v", p.name, e.ID, e.HostID, err)
+		p.backoff(e, 0, "dropping an unannounced entry failed")
+		return false
+	}
+	p.logf("[team] %s outbox: host %s does not announce %s; entry %s dropped", p.name, e.HostID, e.Kind, e.ID)
+	return true
 }
 
 // onUnauthorized is the 401 rule: a run of 401s that lasts UnpairedByPeerAfter ends the relation on this side.
