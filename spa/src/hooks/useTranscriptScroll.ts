@@ -3,7 +3,11 @@
 //
 // The transcript calls `follow()` from its own effect whenever it grows (its
 // deps say what growth is). The first call (mount, or a view switch
-// remounting it) places the reader at once; later ones animate (F3).
+// remounting it) places the reader at once; later ones animate (F3) — over
+// up to a screen. A catch-up from further away jumps: it is a conversation
+// that landed whole after the box was drawn, not a line arriving. A caller
+// whose box has nothing in it yet (a conversation still loading) does not
+// call `follow` until it has: the first call is the one that reads the memory.
 //
 // **One rule: growth follows only a reader at the bottom** (worker pane
 // theme spec §6), search bar open or not. A tab the alive pool keeps under
@@ -358,8 +362,13 @@ export function useTranscriptScroll(
       observe()
       if (!atBottom.current && !resume.current) return
     }
-    el.scrollTo({ top: el.scrollHeight, behavior: first ? 'auto' : 'smooth' })
-    smoothTarget.current = first ? null : el.scrollHeight
+    // A catch-up animates only over a short way (a line, a few): further than a screen — a conversation that arrived whole after
+    // the box was drawn — is a jump, or the reader would watch it slide down from where they were.
+    const glide = !first && el.scrollHeight - el.scrollTop - el.clientHeight <= el.clientHeight
+    el.scrollTo({ top: el.scrollHeight, behavior: glide ? 'smooth' : 'auto' })
+    smoothTarget.current = glide ? el.scrollHeight : null
+    // An instant jump reports itself later as a scroll event; until it does, `lastTop` must already be where it landed.
+    if (!glide) lastTop.current = el.scrollTop
     atBottom.current = true
     released.current = null
     resume.current = false
