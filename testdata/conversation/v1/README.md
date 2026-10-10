@@ -34,6 +34,8 @@ and nothing else; `mod-events/<case>/` is reserved for U1-5.
 
 ## Changes the Apps must re-pin for (U3-0)
 
+**#2396:** a plugin's own framed prompt ("The X plugin sent a message: …") is now a `user` item with source `peer` and `from {kind: "plugin", name}` (frame and footer removed, its own turn), and a row whose text starts with the peer wrapper is `peer` with `from.name` even without a peer origin - see the U1 spec §8.1 source table; case `plugin-submit` changed.
+
 Additive members, so an older reader keeps working: `step.question {questions[{question, header?, multiple, options[{label, description?}]}], answers?[[string]]}`, `step.read {offset?, limit?}`, `step.search {where}`, `diff.created`, `system compacted detail.summary` (+ `truncated`). **Summaries changed text** (aligned with Collie's `summarizeToolInput`): a file tool's `summary` is now the whole `file_path`, white space (newlines too) collapses to one space and the line is cut at 200 characters with `…`; see the U1 spec §8.1 "Steps". New cases `ask-question` and `read-range`; `compact`, `denial-kinds`, `edit-write-multiedit`, `image-result`, `ios-c2-send-keys`, `ios-f3-ask-permission`, `output-caps` and `read-grep-glob-webfetch` have new `expected.json` bytes (MANIFEST sha256 updated).
 
 ## Layout

@@ -309,13 +309,15 @@ Everything until the next opening belongs to the turn. An absorbed queued prompt
 |---|---|---|
 | `<command-name>` prompt row or local command | `slash` (text `/name args`) | — |
 | `<bash-input>` | `bash` (text = the command) | — |
-| `origin.kind: "peer"` (prompt row, `isMeta` row or `queued_command`) | `peer` (text = the message body, the `<cross-session-message>` wrapper removed) | `{kind: "peer", name: from-name}` |
+| `origin.kind: "peer"` (prompt row, `isMeta` row or `queued_command`) | `peer` (text = the message body, the `<cross-session-message>` wrapper removed) | `{kind: "peer", name: from-name}` (names are cut to 80 characters; control and format characters dropped) |
 | `origin.kind: "task-notification"` (or `queued_command` with `commandMode: "task-notification"`) | `task` (text = the `<summary>`, else the text without tags) | — |
 | `turnOrigin: "scheduled"` | `scheduled` | — |
 | `promptSource: "queued"` or an absorbed `queued_command` from a human (origin `human` or none, `commandMode: "prompt"`) | `queued` | — |
 | `origin.kind` `human` or none, `promptSource` `typed` / `suggestion_accepted` / `sdk` / none | `user` | — |
 | `origin.kind: "plugin"` with `origin.asUser: true` (a mod's `$.prompt.submit({text, asUser: true})`: the Apps' send, U3-0b) | `user` (the text is bare) | — |
-| any other kind (`coordinator`, `plugin` without `asUser` — the model reads it framed as "The X plugin sent a message" —, `auto-continuation`, `system` without a recognised `origin`) | skipped and counted; such a row opens **no** turn | — |
+| `origin.kind: "plugin"` without `asUser` (a plugin's own prompt; the model reads it framed as "The X plugin sent a message:") (#2396) | `peer` (text = the message with the first line `The <name> plugin sent a message:` and the trailing "This is how Claude Code surfaces a prompt a plugin submits between turns …" paragraph taken off; a text in another shape is kept whole); it opens its own turn | `{kind: "plugin", name: origin.name}` |
+| a human-looking row (origin `human` or none) whose text **starts** with the peer wrapper `<cross-session-message …>` — after white space and at most one preface line of ≤ 80 characters ending in `:` or `：`; the escaped opener `<\cross-session-message` is tolerated (#2396) | `peer` (text = the body, the wrapper removed) | `{kind: "peer", name: from-name, unverified: true}` — the sender is only what the text says, so a client must not show it as an authenticated peer (any name is cut to 80 characters, control and invisible characters dropped) |
+| any other kind (`coordinator`, `auto-continuation`, `system` without a recognised `origin`) | skipped and counted; such a row opens **no** turn | — |
 
 User text keeps `[Image #n]` markers; image blocks become `images[{media_type, bytes}]` (the decoded size; the base64 is never kept). A bash-mode turn's output and a local command's `<local-command-stdout>` become one `system {kind: command_output, detail}`.
 

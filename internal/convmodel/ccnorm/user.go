@@ -39,6 +39,60 @@ func sourceKind(l *rawLine) string {
 	return normKind(l.str(l.PromptSource))
 }
 
+// leadingPeerWrapper: the text starts with the peer wrapper - after white space and at most one preface line that ends in a
+// colon and is at most 80 characters ("Another Claude session sent a message:") - in its plain or backslash-escaped form. A
+// wrapper in the middle of a sentence, or after more text, is just something the person wrote.
+func leadingPeerWrapper(text string) bool {
+	t := strings.TrimLeftFunc(text, unicode.IsSpace)
+	opens := func(s string) bool {
+		return strings.HasPrefix(s, peerOpen) || strings.HasPrefix(s, `<\cross-session-message`)
+	}
+	if opens(t) {
+		return true
+	}
+	line, rest, ok := strings.Cut(t, "\n")
+	if !ok || utf8.RuneCountInString(line) > 80 {
+		return false
+	}
+	line = strings.TrimRightFunc(line, unicode.IsSpace)
+	if !strings.HasSuffix(line, ":") && !strings.HasSuffix(line, "：") {
+		return false
+	}
+	return opens(strings.TrimLeftFunc(rest, unicode.IsSpace))
+}
+
+// pluginFooter is the paragraph Claude Code 2.1.296 appends to a framed plugin prompt. It is matched whole: a text that
+// does not end in exactly this keeps its tail (another version may word it differently - then it stays in the message).
+const pluginFooter = "This is how Claude Code surfaces a prompt a plugin submits between turns — it starts this turn in the user's place. Address the message above."
+
+// pluginBody takes the frame off a plugin's prompt: the first line "The <name> plugin sent a message:" and the footer
+// paragraph. A text in another shape is returned whole.
+func pluginBody(text, name string) string {
+	first, rest, ok := strings.Cut(text, "\n")
+	if !ok || first != "The "+name+" plugin sent a message:" {
+		return text
+	}
+	return strings.TrimSuffix(rest, "\n\n"+pluginFooter)
+}
+
+// cleanName makes a sender name fit to display: control characters, every Unicode format character (bidi, zero-width, word
+// joiner, BOM, ...) and line separators dropped, at most 80 characters.
+// The name of a peer comes from a message attribute, which anyone who can write text can set.
+func cleanName(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) { // control, format (bidi, zero-width, joiners), separators
+			continue
+		}
+		if n++; n > 80 {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return strings.TrimSpace(b.String())
+}
+
 // pluginAsUser: the row's origin says a plugin submitted the text as the person's own (origin.asUser).
 func pluginAsUser(l *rawLine) bool {
 	o, ok := parseObject(l.Origin)
@@ -102,16 +156,25 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 			o, _ := parseObject(l.Origin)
 			name = o.str("name")
 		}
-		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: name}
+		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: cleanName(name)}
 	case kind == "task-notification":
 		src, text = convmodel.SourceTask, taskText(text)
 	case kind == "scheduled":
 		src = convmodel.SourceScheduled
 	case kind == "plugin" && pluginAsUser(l):
 		// a mod's $.prompt.submit({text, asUser: true}): the person's own words sent on their behalf (U3-0b: the Apps'
-		// submit goes this way). The text is bare; a plugin prompt the model reads framed ("The X plugin sent a message")
-		// is not the person's and stays skipped.
+		// submit goes this way). The text is bare.
 		src = convmodel.SourceUser
+	case kind == "plugin":
+		// a plugin's own prompt, which the model reads framed ("The X plugin sent a message: …"): a message from the
+		// plugin, not the person's (#2396). It opens its own turn; the frame and the footer are not part of the message.
+		o, _ := parseObject(l.Origin)
+		name := o.str("name")
+		src, text, from = convmodel.SourcePeer, pluginBody(text, name), &convmodel.From{Kind: "plugin", Name: cleanName(name)}
+	case humanKind(kind) && leadingPeerWrapper(text):
+		// no peer origin on the row, but the text opens with the peer wrapper (#2396)
+		body, name := peerBody(strings.Replace(text, `<\cross-session-message`, peerOpen, 1))
+		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: cleanName(name), Unverified: true}
 	case humanKind(kind):
 		var handled bool
 		src, text, handled = n.humanTags(l, off, text)
@@ -257,7 +320,7 @@ func (n *Normalizer) attachmentRow(l *rawLine, off int64) {
 			o, _ := parseObject(a.get("origin"))
 			name = o.str("name")
 		}
-		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: name}
+		src, text, from = convmodel.SourcePeer, body, &convmodel.From{Kind: "peer", Name: cleanName(name)}
 	case "task-notification":
 		src, text = convmodel.SourceTask, taskText(text)
 	default:
