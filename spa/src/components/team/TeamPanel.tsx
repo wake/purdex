@@ -15,6 +15,7 @@ import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
 import { ctxTip, useSeatReading } from './team-readings'
+import { firstSentence, useSeatWorkbook } from './seat-workbook'
 import { useMemberDrag } from './useMemberDrag'
 import { useCellCapacity } from './useCellCapacity'
 import { TeamEditPopover } from './TeamEditPopover'
@@ -182,6 +183,9 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
+  const wb = useSeatWorkbook(seat.hostId, seat.sessionId)
+  const status = wb.conv?.status.trim() ?? ''
+  const task = firstSentence(status)
   const { remember, restore } = useReturnFocus()
   const transition = transitionOf(seat)
   const away = notInApp(seat)
@@ -233,6 +237,12 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
           <ContextRing pct={noAnswer ? undefined : r.ctx} model={noAnswer ? undefined : r.model} size={16} />
         </span>
       </div>
+      {/* Line 2: the task (only with a workbook that has a status); without one the row stays one line */}
+      {task !== '' && (
+        <div data-testid="team-panel-task" aria-label={t('team.panel.task', { task })} title={status} className="pl-[26px] mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
+          {task}
+        </div>
+      )}
     </div>
   )
 }
