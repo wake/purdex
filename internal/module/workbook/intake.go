@@ -261,8 +261,15 @@ func adoptEvent(turns []convmodel.Turn, ev agent.TurnEndEvent, from int, force b
 	if ev.At > 0 && t.StartedAt >= ev.At {
 		return out, -1, true // it began after this Stop: a newer turn's, left running (its own Stop will come)
 	}
-	onlyNewer := last == from // the one turn newer than the newest recorded: the event can only be about it
-	if !onlyNewer {
+	// The one turn newer than the newest recorded: the event can only be about it. When more turns are newer than the
+	// cursor (a slash command's own turn, a cursor that left the window, no record yet) that cannot be told from the
+	// words - but a newest turn that is running, began before this Stop and has no words at all is a file that has not
+	// caught up with this Stop: it is waited for (then given the hook's words) all the same. Any older turn that is
+	// newer than the cursor has ended, so it cannot be the one this Stop is about while the newest one runs.
+	// With several candidates the turn must also be provably older than the Stop: a turn with no known start time cannot be
+	// told from a later prompt's, a background turn or a transcript that merely lags, and is left alone.
+	onlyNewer := last == from
+	if !onlyNewer && (lastWords(t) != "" || t.StartedAt <= 0 || ev.At <= 0) {
 		return out, -1, true
 	}
 	if lastWords(t) != "" { // the file has words of its own that differ from the hook's (normalised, cut): still this turn
