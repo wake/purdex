@@ -445,3 +445,18 @@ func (e *Entry) changesSinceLocked(rev uint64) []TurnChange {
 	}
 	return out
 }
+
+// InterruptRunning ends the conversation's last turn as interrupted when it is still running and began no later than
+// at (see ccnorm.Normalizer.MarkInterrupted), for an interrupt the transcript does not record. The caller holds the
+// entry's gate (Exclusive) or has just refreshed it, so the file has been read up to what is there.
+func (e *Entry) InterruptRunning(at time.Time) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	changes := e.norm.MarkInterrupted(at.UnixMilli())
+	if len(changes) == 0 {
+		return false
+	}
+	e.bump(changes)
+	e.refreshHeader()
+	return true
+}

@@ -60,6 +60,10 @@ type StreamState struct {
 	Ended       bool
 	Dots        map[string]Dot // keyed by agent id
 	Background  Background
+	// AbortedAt is the daemon receive time of the last main-turn turn.complete that said aborted: the mod's own
+	// interrupt (`$.turn.abort` writes no interruption marker into the transcript, so this is the only record of it).
+	// Zero when none since the session (re)started.
+	AbortedAt time.Time
 	// StatusEventAt is when the last event that moved, or could have moved,
 	// the light happened: the event's own at (the mod's Date.now()), clamped
 	// to the time the daemon received it, going back only when a clock
@@ -117,6 +121,15 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 		s.StatusEventAt = time.Time{} // the wall clock went back
 	}
 	touched := s.apply(ev)
+	if ev.Type == modevents.TypeTurnComplete {
+		var d struct {
+			Aborted bool   `json:"aborted"`
+			AgentID string `json:"agent_id"`
+		}
+		if decode(ev.Data, &d) && d.Aborted && d.AgentID == "" {
+			s.AbortedAt = now
+		}
+	}
 	if ev.Type == modevents.TypeHeartbeat && s.Status() != status {
 		// A heartbeat that repairs the light (a lost turn.start /
 		// turn.complete, an ask, a compaction, an error) moves it like the
@@ -351,6 +364,7 @@ func (s *StreamState) reset() {
 	s.Err = false
 	clear(s.Dots)
 	s.Background = ""
+	s.AbortedAt = time.Time{}
 }
 
 // decode unmarshals raw into v when raw is a JSON object whose fields fit

@@ -286,3 +286,22 @@ func cloneStep(s *convmodel.Step) *convmodel.Step {
 	c.Children = cloneItems(s.Children)
 	return &c
 }
+
+// MarkInterrupted ends the last turn as interrupted when it is still running and began no later than atMs (unix ms): the
+// caller knows the person's turn was cancelled in a way the transcript does not record — the Purdex mod's own interrupt
+// (`$.turn.abort`) writes no "[Request interrupted by user]" row. A turn that has ended, or one that began after atMs
+// (the abort was of an earlier turn), is left alone. A marker row the transcript may write later changes nothing
+// (the turn is already interrupted). It returns the turns it changed, with Offset -1 like SetLive.
+func (n *Normalizer) MarkInterrupted(atMs int64) []Change {
+	last := len(n.turns) - 1
+	if last < 0 {
+		return nil
+	}
+	tr := n.turns[last]
+	if tr.t.Outcome != convmodel.OutcomeRunning || tr.t.StartedAt > atMs || tr.interrupted {
+		return nil
+	}
+	tr.interrupted, tr.markerAt = true, max(atMs, tr.lastAt)
+	n.refresh(last, -1)
+	return n.flush()
+}

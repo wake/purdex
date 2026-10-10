@@ -31,6 +31,12 @@ type LightSource interface {
 	LightStatus(sessionID, frameID string) (status string, ok bool)
 }
 
+// AbortSource tells when the Purdex mod last interrupted the session's main turn (`$.turn.abort` writes no interruption
+// marker into the transcript, so the model cannot know). Optional: without it such a turn stays running until the next one.
+type AbortSource interface {
+	AbortedAt(sessionID string) (at time.Time, ok bool)
+}
+
 const (
 	// maxBody is the largest encoded response body (spec §8.2).
 	maxBody = 4 << 20
@@ -47,6 +53,7 @@ type Module struct {
 	cache    *convfeed.Cache
 	resolver *convfeed.Resolver
 	light    LightSource // nil: no cheap light
+	aborts   AbortSource // nil: a mod interrupt is not seen in the model
 	maxBody  int         // tests lower it
 	subSem   chan struct{}
 
@@ -133,6 +140,7 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("conversation: service %q does not implement OwnerSource (%T)", agentKey, svc)
 	}
 	m.light, _ = svc.(LightSource)
+	m.aborts, _ = svc.(AbortSource)
 	fsvc, ok := c.Registry.Get(team.ApprovalFeedKey)
 	if !ok {
 		return fmt.Errorf("conversation: service %q not registered", team.ApprovalFeedKey)
@@ -220,4 +228,15 @@ func (a ownerAdapter) LiveSessions(ctx context.Context, sessionID string) ([]con
 		out = append(out, convfeed.Owner{TranscriptPath: p.TranscriptPath, Status: p.Status, SeenAt: p.LastSeenAt, FrameID: p.FrameID})
 	}
 	return out, nil
+}
+
+// applyAbort ends the entry's last running turn as interrupted when the mod reported interrupting this session after
+// that turn began. Called after every refresh (the transcript has been read up to what is there), under the entry's gate.
+func (m *Module) applyAbort(entry *convfeed.Entry, sid string) {
+	if m.aborts == nil {
+		return
+	}
+	if at, ok := m.aborts.AbortedAt(sid); ok {
+		entry.InterruptRunning(at)
+	}
 }
