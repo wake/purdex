@@ -38,5 +38,14 @@ export function refreshCounts(e: Pick<WorkbookEntry, 'todoChanges'>): { done: nu
   return { done: e.todoChanges.done.length, dropped: e.todoChanges.dropped.length, added: e.todoChanges.added.length }
 }
 
+const two = (n: number): string => String(n).padStart(2, '0')
+/** 「14:05」 for today, 「10/9 14:05」 for another day; '' for no time (0). */
+export function formatWhen(ms: number, now: number = Date.now()): string {
+  if (!(ms > 0)) return ''
+  const d = new Date(ms), n = new Date(now)
+  const hm = `${two(d.getHours())}:${two(d.getMinutes())}`
+  return d.toDateString() === n.toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`
+}
+
 /** The time an entry is about: its turn's, else (a refresh has no turn) when it was written. */
 export const entryTime = (e: Pick<WorkbookEntry, 'turnAt' | 'createdAt'>): number => e.turnAt > 0 ? e.turnAt : e.createdAt

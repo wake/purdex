@@ -1,15 +1,15 @@
-// spa/src/components/team/TeamSeatWorkbookView.tsx — the placeholder workbook view a team panel drills into (WA-2b-1; the
-// real view is WA-2b-2): back control, title, the status in one block and the latest few entries as plain text. Reads only
-// the workbook store (through `useWorkbookViewing`); which seat it shows lives in `useTeamUiStore.teamDrill`, so the view
-// survives the panel unmounting.
+// spa/src/components/team/TeamSeatWorkbookView.tsx — the workbook view (WA-2b-2): a team panel's drill-in and a tab's own
+// conversation workbook share it. 目前狀況 + 紀錄 (v1); v2 adds 待辦, the 紀錄｜待辦 switch and 重整. Data comes only from the
+// workbook store (through `useWorkbookViewing`, the one place that touches the view count); which seat a drill shows lives in
+// `useTeamUiStore.teamDrill`, and the view's own state (tab, scroll, open groups) in lib/workbook/view-memory.ts.
 import type { ReactNode } from 'react'
 import { CaretLeft } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
-import { useWorkbookViewing } from './seat-workbook'
-
-/** How many of the newest entries the placeholder lists. */
-export const VIEW_ENTRIES = 5
+import { useWorkbookViewing, type SeatWorkbook } from './seat-workbook'
+import { useWorkbookViewState } from './useWorkbookViewState'
+import { WorkbookStatus } from './WorkbookStatus'
+import { WorkbookLog } from './WorkbookLog'
 
 interface Props {
   /** The team whose drill this is: it gets the back control. Absent for a tab's own workbook (no drill, nothing to go back to). */
@@ -21,11 +21,16 @@ interface Props {
   trailing?: ReactNode
 }
 
-export function TeamSeatWorkbookView({ teamKey, hostId, sessionId, title, trailing }: Props) {
+export function TeamSeatWorkbookView(props: Props) {
+  const wb = useWorkbookViewing(props.hostId, props.sessionId)
+  // Re-keyed when the conversation first becomes known, so the remembered view state is read for the right conversation.
+  return <WorkbookFrame key={wb.convKey ?? ''} {...props} wb={wb} />
+}
+
+function WorkbookFrame({ teamKey, hostId, title, trailing, wb }: Props & { wb: SeatWorkbook }) {
   const t = useI18nStore((s) => s.t)
-  const wb = useWorkbookViewing(hostId, sessionId)
-  const status = wb.conv?.status.trim() ?? ''
-  const entries = (wb.conv?.entries ?? []).filter((e) => e.state !== 'skipped').slice(0, VIEW_ENTRIES)
+  const vs = useWorkbookViewState(hostId, wb.convKey)
+  const conv = wb.conv
   const back = t('team.panel.workbook_back')
   const heading = teamKey === undefined ? t('team.workbook.own_title') : t('team.workbook.title', { title })
   return (
@@ -47,23 +52,9 @@ export function TeamSeatWorkbookView({ teamKey, hostId, sessionId, title, traili
         <span className="truncate min-w-0 flex-1 font-medium" title={heading}>{heading}</span>
         {trailing !== undefined && <span className="flex items-center gap-0.5 flex-shrink-0">{trailing}</span>}
       </div>
-      <div className="px-3 py-2 flex flex-col gap-2">
-        <section>
-          <div className="text-[10px] text-text-muted mb-0.5">{t('team.workbook.status')}</div>
-          <div data-testid="team-seat-workbook-status" className="whitespace-pre-wrap break-words">{status !== '' ? status : t('team.workbook.no_status')}</div>
-        </section>
-        <section>
-          <div className="text-[10px] text-text-muted mb-0.5">{t('team.workbook.entries')}</div>
-          {entries.length === 0 ? (
-            <div className="text-text-secondary">{wb.conv?.loading ? t('team.workbook.loading') : t('team.workbook.no_entries')}</div>
-          ) : (
-            <ul className="flex flex-col gap-1">
-              {entries.map((e) => (
-                <li key={e.id} data-testid="team-seat-workbook-entry" className="text-text-secondary break-words">{e.entry !== '' ? e.entry : e.thing}</li>
-              ))}
-            </ul>
-          )}
-        </section>
+      <div ref={vs.scrollRef} onScroll={vs.onScroll} data-testid="workbook-body" className="px-3 py-2 flex flex-col gap-2 overflow-y-auto max-h-[70vh]">
+        <WorkbookStatus status={conv?.status ?? ''} statusAt={conv?.statusAt ?? 0} loading={!!conv?.loading} />
+        <WorkbookLog hostId={hostId} convKey={wb.convKey} conv={conv} openGroups={vs.openGroups} onToggleGroup={vs.toggleGroup} highlightId={null} />
       </div>
     </div>
   )
