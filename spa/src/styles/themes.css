@@ -22,7 +22,7 @@
   --color-terminal-cursor: var(--terminal-cursor);
   --color-status-error: var(--status-error);
   --color-status-warning: var(--status-warning);
-  --color-status-warning-text: var(--status-warning-text);
+  --color-status-warning-text: var(--status-warning-text, var(--status-warning));
   --color-status-success: var(--status-success);
 }
 

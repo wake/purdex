@@ -60,3 +60,13 @@ export function tokensToCss(tokens: ThemeTokens): string {
     .map(([key, value]) => `--${key}: ${sanitizeCssValue(value)};`)
     .join(' ')
 }
+
+/**
+ * A theme saved before a token existed lacks it (a custom theme is persisted whole). `status-warning-text` (#2006) falls back to
+ * the theme's own `status-warning`: the colour its warning text had until then, so an old theme looks exactly as it did.
+ */
+export function backfillTokens(tokens: Partial<ThemeTokens>): ThemeTokens {
+  const out = { ...tokens } as ThemeTokens
+  if (!out['status-warning-text'] && out['status-warning']) out['status-warning-text'] = out['status-warning']
+  return out
+}

@@ -41,8 +41,8 @@ describe('status-warning-text', () => {
     expect(THEME_TOKEN_KEYS).toContain('status-warning-text')
   })
 
-  it('the Tailwind colour maps to the CSS variable (text-status-warning-text)', () => {
-    expect(themesCss).toMatch(/--color-status-warning-text:\s*var\(--status-warning-text\);/)
+  it('the Tailwind colour maps to the CSS variable, falling back to the fill for a theme that lacks it (text-status-warning-text)', () => {
+    expect(themesCss).toMatch(/--color-status-warning-text:\s*var\(--status-warning-text,\s*var\(--status-warning\)\);/)
   })
 
   it('every builtin theme defines every token key in themes.css and in the editor copy (the new one with the same value in both)', () => {
