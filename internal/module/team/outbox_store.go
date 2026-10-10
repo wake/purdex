@@ -24,6 +24,7 @@ const (
 	CmdKill      = "kill"
 	CmdEnd       = "end"
 	CmdLeadMoved = "lead_moved"
+	CmdRelay     = team.CommandRelay
 	CmdSpawn     = "spawn"
 	CmdVoid      = "void"
 	// CmdAppearance is team.appearance (#2288): sent only to hosts that announce it, so a lead host's rename never waits

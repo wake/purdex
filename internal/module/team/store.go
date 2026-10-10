@@ -58,6 +58,8 @@ type Store struct {
 	beforeReplaceInsert func() error
 	// afterMemberOpInsert, when set, fails CreateMemberRelayOp right after the op's insert, before the commit (tests).
 	afterMemberOpInsert func() error
+	// afterRelayCommandEnqueue, when set, fails a remote member relay right after its command was enqueued, before the commit (tests).
+	afterRelayCommandEnqueue func() error
 	// afterAskAccept, when set, fails CreateMemberRelayOp right after the open ask was marked accepted, before the commit (tests).
 	afterAskAccept func(tx *sql.Tx) error
 	// beforeMemberOpMove, when set, runs in a member_relay row's transaction after the row's close and before its op's
