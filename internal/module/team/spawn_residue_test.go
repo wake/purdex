@@ -69,3 +69,53 @@ func TestSpawnAbort_NeverKillsTheSessionOfAFinishedOp(t *testing.T) {
 		t.Fatalf("the finished op's session was killed: %+v", calls)
 	}
 }
+
+// #2384 point 2: a member row of this spawn_op already exists when the finish runs (left by an older run). The finish
+// goes on only when it is the same half-finished member — same team, session, tmux identity, origin, and active; anything
+// else rolls the finish back, writes no task, and the abort follows.
+func TestSpawnFinish_AnExistingMemberRowIsVerified(t *testing.T) {
+	const tmuxID, inst = "$0", "4242:1700000000" // what the fake executor gives the created session
+	cases := []struct {
+		name    string
+		edit    func(*memberRow)
+		resumed bool
+	}{
+		{"same active member", func(m *memberRow) {}, true},
+		{"terminal", func(m *memberRow) { m.State = team.MemberGone }, false},
+		{"another session", func(m *memberRow) { m.SessionID = "sid-other" }, false},
+		{"another tmux identity", func(m *memberRow) { m.TmuxID = "$9" }, false},
+		{"another generation", func(m *memberRow) { m.TmuxInstance = "1:1" }, false},
+		{"another origin", func(m *memberRow) { m.Origin = team.MemberOriginAdopted }, false},
+	}
+	for _, tasked := range []bool{true, false} {
+		for _, c := range cases {
+			name := c.name + map[bool]string{true: "/with task", false: "/no task"}[tasked]
+			t.Run(name, func(t *testing.T) {
+				f, root := newSpawnFixture(t, 2)
+				f.register("%0", "sid-m1")
+				old := newMember(spawnID(1), uid(1), "sid-m1", "_m1", 1)
+				old.TmuxID, old.TmuxInstance = tmuxID, inst
+				c.edit(&old)
+				if err := f.m.store.InsertMember(old); err != nil {
+					t.Fatal(err)
+				}
+				edit := func(r *team.SpawnRequest) {}
+				if tasked {
+					edit = withTask
+				}
+				f.spawn(1, root, edit)
+				op, _, _ := f.m.store.GetSpawnOp(spawnID(1))
+				tasks, _ := f.m.store.ListTasks(uid(1), "", true)
+				if c.resumed {
+					if op.State != team.SpawnDone || (tasked && len(tasks) != 1) {
+						t.Fatalf("op %+v, %d tasks: the matching half-finished member should be finished", op, len(tasks))
+					}
+					return
+				}
+				if op.State != team.SpawnFailed || op.Reason != team.SpawnReasonAbandoned || len(tasks) != 0 {
+					t.Fatalf("op %+v, %d tasks: a member row that is not this spawn's must fail the finish", op, len(tasks))
+				}
+			})
+		}
+	}
+}
