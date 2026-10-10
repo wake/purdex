@@ -126,17 +126,56 @@ describe('busy', () => {
     expect(calls.map((c) => c.text)).toEqual(['one', 'one'])
   })
 
-  it('an idle that was already true is not an edge (no resend loop on a stale header)', async () => {
+  it('an idle observed BEFORE the busy answer does not resend (no loop on a stale header)', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.setIdle(true)
     q.enqueue('x')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setIdle(true) // observed while the request is in flight
     calls[0].resolve({ kind: 'busy' })
+    await flush()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('busy settled while the pane was unmounted: the idle the remount reports resends exactly once', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setIdle(true) // recorded before the pane went away
+    const id = q.enqueue('x')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve({ kind: 'busy' }) // pane unmounted: nothing observes
+    await flush()
+    expect(calls).toHaveLength(1)
+    q.setIdle(true) // remount: idle is still true, no false -> true edge
+    await flush()
+    expect(calls).toHaveLength(2)
+    expect(calls[1].id).toBe(id)
+    calls[1].resolve({ kind: 'accepted' })
     await flush()
     q.setIdle(true)
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('a second busy waits for a newer idle observation again', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('x')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve({ kind: 'busy' })
+    await flush()
+    q.setIdle(true)
+    await flush()
+    calls[1].resolve({ kind: 'busy' })
+    await flush()
+    q.setIdle(false) // only an idle observation resends
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(calls).toHaveLength(2)
+    q.setIdle(true)
+    await flush()
+    expect(calls).toHaveLength(3)
   })
 
   it('a waiting message can be taken back', async () => {

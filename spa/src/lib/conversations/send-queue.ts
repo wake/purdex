@@ -29,8 +29,7 @@ export interface QueueEntry {
   /** When the latest submit started (the text-match window is around it). */
   startedAt: number
   /** When the latest submit got its answer. */
-  settledAt?: number
-  outcome?: SendOutcome
+  settledAt?: number  outcome?: SendOutcome
   /** The id of the message that replaced this one after a manual resend (the old entry is kept for the audit trail). */
   supersededBy?: string
 }
@@ -38,7 +37,6 @@ export interface QueueEntry {
 export class SendQueue {
   private list: QueueEntry[] = []
   private view: readonly QueueEntry[] = []
-  private idle = false
   private timer: ReturnType<typeof setTimeout> | null = null
   private claimed = new Set<string>()
   private listeners = new Set<() => void>()
@@ -106,12 +104,15 @@ export class SendQueue {
     this.emit()
   }
 
-  /** The header status: a message the mod refused as `busy` is resent when the agent turns idle (an edge, so a stale idle cannot loop). */
+  /**
+   * An observation of the header status. A message the mod refused as `busy` is resent ONCE by the first idle observed after
+   * the busy answer (not by an edge: the pane may have been unmounted when the answer came, so the remount reports an
+   * idle that never changed). The caller reports on change and on mount, so a stale header cannot loop: the entry goes
+   * back to waiting if the mod says busy again, and needs a new observation.
+   */
   setIdle(idle: boolean): void {
-    const edge = idle && !this.idle
-    this.idle = idle
-    if (!edge) return
-    const w = this.list.find((e) => e.state === 'waiting')
+    if (!idle) return
+    const w = this.list.find((e) => e.state === 'waiting') // a waiting entry was refused before this observation, so it is "after the busy answer"
     if (w) { w.state = 'undo'; w.undoUntil = this.now(); this.emit(); this.pump() }
   }
 
