@@ -280,10 +280,11 @@ func TestCaptureReexecPlan_DropsRunLockFD(t *testing.T) {
 	require.Equal(t, []string{"A=1", "B=2"}, p.env)
 }
 
-// A restart has no launcher to try again: the new image inherits the run lock, so a writer that keeps "<config>.lock" busy cannot
-// slip a token change in (generate sees the run lock held) and the daemon starts, from the file, on the inherited lock.
-// Mutation gate: refuse on a timeout even with a hand-over -> red. (lead review, #2562.)
-func TestOpenConfigGate_AHandedOverRunLockStartsDespiteABusyConfigLock(t *testing.T) {
+// A restart has no launcher to try again, so it does not give up when "<config>.lock" is busy: it keeps the run lock it inherited and
+// waits for the lock, then reads the file INSIDE the gate — so it loads what the writer committed, never the file as it was before.
+// (lead review; critic: a writer already holding the lock can still commit after an unlocked read.) Mutation gate: read outside the
+// gate on a timeout -> red.
+func TestOpenConfigGate_ARestartWaitsForTheConfigLockAndReadsWhatTheWriterCommitted(t *testing.T) {
 	path, _ := gateCfg(t)
 	locked, err := filepath.EvalSymlinks(path)
 	require.NoError(t, err)
@@ -297,21 +298,69 @@ func TestOpenConfigGate_AHandedOverRunLockStartsDespiteABusyConfigLock(t *testin
 	oldWait := config.LockWait
 	config.LockWait = 100 * time.Millisecond
 	defer func() { config.LockWait = oldWait }()
-	busy, release := make(chan struct{}), make(chan struct{})
-	go func() { _ = config.WithLock(path, func(string) error { close(busy); <-release; return nil }) }()
+	busy := make(chan struct{})
+	go func() {
+		_ = config.WithLock(path, func(l string) error {
+			close(busy)
+			time.Sleep(450 * time.Millisecond) // several waits long, then commits a new token
+			return config.SetTokenHeld(l, "pdx_committedcommittedcommittedcommittedcom")
+		})
+	}()
 	<-busy
-	defer close(release)
 
 	var logs []string
 	cfg, run, err := openConfigGate(path, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
 	require.NoError(t, err)
 	require.NotNil(t, run, "the inherited run lock was not adopted")
 	defer run.Close()
-	require.Equal(t, 7860, cfg.Port)
-	require.Contains(t, strings.Join(logs, "\n"), "on the inherited run lock")
+	require.Equal(t, "pdx_committedcommittedcommittedcommittedcom", cfg.Token, "the restart read the file before the writer committed")
+	require.Contains(t, strings.Join(logs, "\n"), "adopted from the previous image")
 	held, err := config.RunLockHeld(locked)
 	require.NoError(t, err)
 	require.True(t, held)
+}
+
+// A restart does not wait for ever: past restartGateWait it refuses, as a cold start does.
+func TestOpenConfigGate_ARestartGivesUpEventually(t *testing.T) {
+	path, _ := gateCfg(t)
+	locked, _ := filepath.EvalSymlinks(path)
+	old, err := config.HoldRunLock(locked)
+	require.NoError(t, err)
+	defer old.Close()
+	dup, _ := syscall.Dup(int(old.Fd()))
+	t.Setenv(runLockFDEnv, fmt.Sprint(dup))
+	oldWait, oldRestart := config.LockWait, restartGateWait
+	config.LockWait, restartGateWait = 50*time.Millisecond, 300*time.Millisecond
+	defer func() { config.LockWait, restartGateWait = oldWait, oldRestart }()
+	busy, release := make(chan struct{}), make(chan struct{})
+	go func() { _ = config.WithLock(path, func(string) error { close(busy); <-release; return nil }) }()
+	<-busy
+	defer close(release)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.ErrorIs(t, err, config.ErrLockTimeout)
+	require.Nil(t, run)
+}
+
+// An environment variable alone is no restart: a cold start whose env names an fd of the run file that nobody held gets no
+// shortcut around the gate. (codex attack.)
+func TestOpenConfigGate_AForgedHandOverBypassesNothing(t *testing.T) {
+	path, _ := gateCfg(t)
+	locked, _ := filepath.EvalSymlinks(path)
+	f, err := os.OpenFile(locked+".run", os.O_CREATE|os.O_RDWR, 0o600) // open, not locked
+	require.NoError(t, err)
+	dup, _ := syscall.Dup(int(f.Fd()))
+	f.Close()
+	t.Setenv(runLockFDEnv, fmt.Sprint(dup))
+	oldWait, oldRestart := config.LockWait, restartGateWait
+	config.LockWait, restartGateWait = 50*time.Millisecond, 200*time.Millisecond
+	defer func() { config.LockWait, restartGateWait = oldWait, oldRestart }()
+	busy, release := make(chan struct{}), make(chan struct{})
+	go func() { _ = config.WithLock(path, func(string) error { close(busy); <-release; return nil }) }()
+	<-busy
+	defer close(release)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.Error(t, err, "started without the gate on a hand-over nobody made")
+	require.Nil(t, run)
 }
 
 // A hand-over that cannot be adopted is no hand-over: with the lock busy too, the start is refused as a cold start is.

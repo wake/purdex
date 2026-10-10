@@ -4,12 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/wake/purdex/internal/config"
 )
 
 // runLockFDEnv names the run-lock fd a restart hands to its new image (the pid lock's twin: pidLockFDEnv).
 const runLockFDEnv = "PDX_RUNLOCK_FD"
+
+// restartGateWait bounds how long a restart keeps waiting for "<config>.lock" (each attempt waits config.LockWait).
+var restartGateWait = 2 * time.Minute
 
 // runLockEnvEntry is the env entry that names f's fd for the new image; like pidLockEnvEntry it has no side effect.
 func runLockEnvEntry(f *os.File) string { return fmt.Sprintf("%s=%d", runLockFDEnv, f.Fd()) }
