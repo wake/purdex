@@ -1,6 +1,6 @@
 # Member relay: a person's /relay, and relays across hosts (spec + plan, v2)
 
-Status: v2, 2026-10-10 (v1 reviewed by codex `task-mv2eamdq-nkm8gm`: 6 critical, 12 important, 2 minor — every one
+Status: v2, 2026-10-10; implemented (MR-1 … MR-4 shipped in alpha.690–693; §10 records the corrections) (v1 reviewed by codex `task-mv2eamdq-nkm8gm`: 6 critical, 12 important, 2 minor — every one
 answered in §9). Owner: A line (1f). Builds on `2026-10-06-lead-team-relay-spec.md` (U9, U13, §8.2, §8.4, §8.7),
 `2026-10-10-member-relay-ask-spec-plan.md` (the ask, D1–D11), `2026-10-09-rq2-member-relay-approval-spec.md` (the
 member relay gate, §4.3 / §4.5), `2026-10-09-cross-host-team-spec-plan.md` (X-U1…X-U8, rules §3.1, unpairing §3.2,
@@ -299,3 +299,13 @@ the manual card "member").
 | 18 important | D10 misstated the timers | D10 corrected (dispatch by kind/state; test pins it) |
 | 19 minor | mod wiring | D1, §4: `begin(manual)` |
 | 20 minor | handler line | §3.5 |
+
+## 10. Corrections made during implementation (1f, 2026-10-10 → 10-11; each decided in a PR review, recorded so the spec matches main)
+
+1. **Five member gates, not four (MR-1 #2491).** Besides D2's four, `closedRowReport` (the claim of an approved self op, `relay_handler.go`) also cancelled a member's self relay; it now lets a manual one through like the others. And a member whose kill has started (`killing`) is refused a manual relay at every one of them — at begin (`relay_unsupported`), at the approve and at the claim (cancelled `member_relay_is_leads`, decided under the write lock in `reportRelayIn`): `moveTeamRoles` moves active rows only, so a relay of a killing member would leave its seat behind.
+2. **What `moved` carries (MR-2 #2489).** `/clear` keeps the Claude Code process, so `moved` carries the row's current `pid` / `proc_start` / `pane` / `title` and M's row changes only `member_session_id` and `ref`. A `cleared` of a remote member whose kill already committed on M (row `killed`, signal not yet sent) is refused (`ErrClearedMemberKilled`) and is no verdict for the stall timer; L answers a `moved` that meets a `joining` row with a 5xx (retried), not a refusal.
+3. **`remote_member_refs` key (MR-2).** `(team_id, host_id, ref) → mk`, not `(host_id, ref)`: the same session may have been a member of another team of the lead host before. A former ref resolves through the mk to the row, never to another member.
+4. **The void of a `relay` (MR-3b #2516).** `undone` cancels the op directly and sends **no** `relay_failed` (L ends its op from the void's outcome, D9); a void that arrives before its command answers `not_applied` and is recorded so a late copy is `command_void`; a `relay` must carry `created_at` (a new kind: omitting it is not a way round the age refusal); an `op_id` already used on M is a refusal (`id_conflict`), not an error retried forever. M remembers which op a command opened in `team_relay_commands(lead_host_id, command_id) → op_id, mk, team_id`.
+5. **Binding a forwarded op (MR-3a-1 #2515, found in the lead's review).** D10's CAS binds the op to the member by **L's own `relay` command** (same host, team, mk and `op_id` in its body), not by the session the row has now. A person's `/relay` on M can move the row (B) while the lead's command is in flight; the command then relays the new session and its `moved{op_id}` names an op recorded with the old one — a session match would never end it.
+6. **The held card's command (MR-3a-2 #2523).** The command's `created_at` is the **approve** time, so a relay that waited for its card is not refused as old by M; the team, lead tuple and mk are read inside the approve transaction (a lead that moved in between is the one the command carries). Boot repairs an approved row whose op is still `awaiting_approval` by forwarding it (`ForwardAwaitingOp`).
+7. **The mirror ask (MR-4 #2522).** A `relay_ask` for a session whose older mirror is still open on L supersedes it (`withdrawn{superseded}`): M allows one open ask per session, so the old one is closed there. A replayed ask on M is answered from the store before the capability read (a committed ask is never turned into a refusal). The pump's stale check runs before the capability gate.
