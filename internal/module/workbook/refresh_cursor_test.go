@@ -94,6 +94,41 @@ func TestStopBeforeTranscriptAfterASlashCommandTurn(t *testing.T) {
 	}
 }
 
+// The turn caught up at a Stop keeps its OWN time and order; only the turn the Stop is about carries the Stop's, so the
+// push hold (which matches a Stop to its entry by time) can never take a caught-up older turn for the new one (the live
+// push described the previous turn). A catch-up never pushes by itself: a push belongs to a Stop, and takes the entry whose
+// turn_at is that Stop's.
+func TestCaughtUpTurnKeepsItsOwnTimeAndTheStopsEntryIsTheNewTurn(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "first"))
+	k.event("s1", 1000)
+	slash := convmodel.Turn{ID: "slash", Outcome: convmodel.OutcomeDone, StartedAt: 350, Items: []convmodel.Item{userItem("/model sonnet")}}
+	missed := endedTurn("t2", 300, "missed") // its own Stop was lost (or raced, as before the fix)
+	next := convmodel.Turn{ID: "t3", Outcome: convmodel.OutcomeRunning, StartedAt: 1500, Items: []convmodel.Item{userItem("the real question")}}
+	k.turns.set("s1", endedTurn("t1", 100, "first"), missed, slash, next)
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "the real answer", At: 2000, Seq: 2000})
+	for i := 0; i < settleRetries+1 && len(k.afters) > 0; i++ {
+		f := k.afters[0]
+		k.afters = k.afters[1:]
+		f()
+	}
+	byID := map[string]Entry{}
+	for _, e := range k.entries("s1") {
+		byID[e.TurnID] = e
+	}
+	if byID["t2"].TurnAt != 300 || byID["t2"].TurnSeq == 2000 {
+		t.Fatalf("the caught-up turn took the Stop's time: %+v", byID["t2"])
+	}
+	if byID["t3"].TurnAt != 2000 || byID["t3"].TurnSeq != 2000 {
+		t.Fatalf("the Stop's turn: %+v", byID["t3"])
+	}
+	got, ok, err := k.st.ClosestTurn("s1", 2000, 2000, 500)
+	if err != nil || !ok || got.TurnID != "t3" {
+		t.Fatalf("the push hold's entry for the Stop = %+v ok=%v err=%v", got, ok, err)
+	}
+}
+
 // A cursor that is a real turn but has aged out of the 6-turn window (or no record at all: a session with history the
 // workbook never saw) is the same hole: the Stop that beats the transcript must still find the newest, running turn
 // (codex attack on the hotfix). Mutation gate: onlyNewer without the lost-cursor case → red.
