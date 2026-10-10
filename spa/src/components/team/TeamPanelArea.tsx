@@ -2,7 +2,8 @@
 //
 // A floating layer over the top-right of the pane area (the shell's content box is `relative`): the panes keep their
 // size, the tab bar is never covered. It shows the team view for the active tab's team (`panelView`), or that team's
-// drilled-in seat workbook in the same frame; a tab's own workbook renders nothing yet (WA-2b-1b). Everything the person arranged lives in `useTeamUiStore` (width, and per team one of four
+// drilled-in seat workbook in the same frame; a tab of no team shows its own conversation's workbook (WA-2b-1b), in the
+// one value all such tabs share. Everything the person arranged lives in `useTeamUiStore` (width, and per team one of four
 // states: titlebar | line | full | max), so a tab switch that unmounts the pane and a reload both come back to the same
 // area. In the `titlebar` state the pane draws nothing: the strip in the title bar (TeamTitleStrip) is the area.
 //
@@ -17,6 +18,7 @@ import { useTeamDisplay } from './team-display'
 import { panelView } from './panel-view'
 import { useOwnWorkbook } from './own-workbook'
 import { TeamPanel } from './TeamPanel'
+import { OwnWorkbookPanel } from './OwnWorkbookPanel'
 
 export function TeamPanelArea() {
   const t = useI18nStore((s) => s.t)
@@ -25,10 +27,13 @@ export function TeamPanelArea() {
   const teamDrill = useTeamUiStore((s) => s.teamDrill)
   const { width } = useTeamUiStore((s) => s.panel)
   const own = useOwnWorkbook()
-  const view0 = display ? panelView({ panelTeam: display.panelTeam(activeTabId), teamDrill, own }) : null
+  const sharedMode = useTeamUiStore((s) => s.sharedPanelMode)
+  const view0 = panelView({ panelTeam: display ? display.panelTeam(activeTabId) : null, teamDrill, own })
   // The team the area draws a frame for: the team view, or the team's drilled-in seat workbook (same frame, same mode).
   const shownTeam = view0 !== null && 'team' in view0 ? view0.team : null
-  const expanded = shownTeam?.mode === 'max'
+  // A tab of no team shows its own workbook in the one value all such tabs share.
+  const mode = shownTeam ? shownTeam.mode : view0 !== null ? sharedMode : null
+  const expanded = mode === 'max'
   // A store saved before the four states held `expanded: true`: the team showing when the area first draws becomes `max`
   // (an old value with no team on screen is dropped). Once per load.
   const teamOnShow = shownTeam?.teamKey ?? null
@@ -46,8 +51,8 @@ export function TeamPanelArea() {
   }, [expanded])
 
   // In the title bar the area is the strip's (TeamTitleStrip), not the pane's.
-  if (!display || !shownTeam || shownTeam.mode === 'titlebar') return null
-  const team = shownTeam
+  if (view0 === null || mode === null || mode === 'titlebar') return null
+  const paneMode = mode
 
   return (
     <div
@@ -78,14 +83,23 @@ export function TeamPanelArea() {
         </div>
       )}
       <div className="flex-1 min-w-0 overflow-y-auto rounded-b-lg border border-t-0 border-border-default bg-surface-elevated shadow-xl">
-        <TeamPanel
-          team={team}
-          activeTabId={activeTabId}
-          width={expanded ? undefined : draft ?? width}
-          onSetMode={(mode) => useTeamUiStore.getState().setPanelMode(team.teamKey, mode)}
-          onOpen={(sessionId) => display.onOpenSeat(team.teamKey, sessionId)}
-          onReorder={(ids) => display.onReorderMembers(team.teamKey, ids)}
-        />
+        {shownTeam && display ? (
+          <TeamPanel
+            team={shownTeam}
+            activeTabId={activeTabId}
+            width={expanded ? undefined : draft ?? width}
+            onSetMode={(m) => useTeamUiStore.getState().setPanelMode(shownTeam.teamKey, m)}
+            onOpen={(sessionId) => display.onOpenSeat(shownTeam.teamKey, sessionId)}
+            onReorder={(ids) => display.onReorderMembers(shownTeam.teamKey, ids)}
+          />
+        ) : view0.kind === 'workbook' && view0.from === 'own' ? (
+          <OwnWorkbookPanel
+            hostId={view0.hostId}
+            sessionId={view0.sessionId}
+            mode={paneMode}
+            onSetMode={(m) => useTeamUiStore.getState().setSharedPanelMode(m)}
+          />
+        ) : null}
       </div>
     </div>
   )

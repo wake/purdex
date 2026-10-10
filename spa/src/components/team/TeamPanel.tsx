@@ -117,7 +117,7 @@ function useReturnFocus() {
  * The header's one move-to-title-bar control (round 5): the same icon and the same action in line, full and max. Going
  * line <-> full is the header click's job, not this button's.
  */
-function ToTitleBarButton({ onClick }: { onClick: () => void }) {
+export function ToTitleBarButton({ onClick }: { onClick: () => void }) {
   const t = useI18nStore((s) => s.t)
   const label = t('team.panel.to_titlebar')
   return (
@@ -135,7 +135,7 @@ function ToTitleBarButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-function ExpandButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+export function ExpandButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
   const t = useI18nStore((s) => s.t)
   const label = t(expanded ? 'team.panel.restore' : 'team.panel.enlarge')
   return (
