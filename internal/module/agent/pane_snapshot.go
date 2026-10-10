@@ -113,7 +113,7 @@ var (
 )
 
 // logLookupDeadline notes a per-pane lookup that the read's deadline cut off (other failures are tmux's own and were never
-// logged here). The lookup counts as "not found" for the caller: the existing failure path.
+// logged here). What it means is the caller's: a snapshot read fails, a single lookup answers its own failure.
 func logLookupDeadline(err error) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		return
@@ -128,7 +128,7 @@ func logLookupDeadline(err error) {
 		lookupDeadlineSuppressed.Add(1)
 		return
 	}
-	log.Printf("[agent] a per-pane tmux lookup ran out of time, treated as not found (%d similar since the last report): %v",
+	log.Printf("[agent] a per-pane tmux lookup ran out of time (%d similar since the last report): %v",
 		lookupDeadlineSuppressed.Swap(0), err)
 }
 
