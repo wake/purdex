@@ -3,7 +3,7 @@
 // measure only. Carried over from MessageBubble's assistant arm (T4.3).
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
-import RoomProse from './RoomProse'
+import RoomProse, { RoomProseLight } from './RoomProse'
 
 beforeEach(() => { cleanup() })
 
@@ -118,5 +118,37 @@ describe('RoomProse streaming cursor (R1)', () => {
       render(<RoomProse content="- a" />)
       expect(screen.getByTestId('room-prose').style.getPropertyValue('--wt-list-indent')).toBe('3em')
     } finally { useWorkerSettingsStore.setState({ theme: before }) }
+  })
+})
+
+describe('RoomProse cacheKey (#2469)', () => {
+  it('draws the same DOM with and without a cache key, and again from the kept tree', () => {
+    const md = 'a **b** `c`\n\n- x\n- y\n\n```ts\nconst n = 1\n```'
+    const plain = render(<RoomProse content={md} />)
+    const want = plain.container.innerHTML
+    cleanup()
+    const first = render(<RoomProse content={md} cacheKey="prose-k1" />)
+    expect(first.container.innerHTML).toBe(want)
+    first.unmount()
+    const second = render(<RoomProse content={md} cacheKey="prose-k1" />)
+    expect(second.container.innerHTML).toBe(want)
+  })
+
+  it('follows a changed text under the same key', () => {
+    const { rerender } = render(<RoomProse content="one" cacheKey="prose-k2" />)
+    rerender(<RoomProse content="two" cacheKey="prose-k2" />)
+    expect(screen.getByTestId('room-prose')).toHaveTextContent('two')
+  })
+})
+
+describe('RoomProseLight', () => {
+  it('keeps the whole markdown source as text, in a pre-wrap box, and is no search unit', () => {
+    const md = '# Title\n\n- one\n- `two`\n\n```ts\nconst needle = 1\n```'
+    render(<RoomProseLight content={md} />)
+    const light = screen.getByTestId('room-prose-light')
+    expect(light.textContent).toBe(md)
+    expect(light.querySelector('.whitespace-pre-wrap')).not.toBeNull()
+    expect(light.querySelector('[data-search-unit]')).toBeNull()
+    expect(light.querySelector('pre, code, li, h1')).toBeNull()
   })
 })
