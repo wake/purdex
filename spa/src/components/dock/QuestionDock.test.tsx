@@ -173,6 +173,76 @@ describe('bound to its question', () => {
   })
 })
 
+describe('the note 「已在終端機回答」 gets its own 3 s from when it first shows', () => {
+  const said = () => [answered('a1', [['甲案'], ['紅', '綠']])]
+
+  it('the approval closes first, the transcript answer lands 0.6 s later: the lock, then the note for a full 3 s', () => {
+    vi.useFakeTimers()
+    const { rerender } = render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    rerender(<QuestionDock ctx={ctxOf([])} />) // closed, no answer in the transcript yet
+    expect(screen.getByTestId('dock-locked')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(600) })
+    rerender(<QuestionDock ctx={ctxOf([], { items: said() })} />) // the answer arrives
+    expect(screen.getByTestId('dock-answered-terminal')).toHaveTextContent('甲案 / 紅, 綠')
+    act(() => { vi.advanceTimersByTime(2999) })
+    expect(screen.getByTestId('dock-answered-terminal')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(2) })
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+  })
+
+  it('the answer already there when the approval closes: the note for 3 s', () => {
+    vi.useFakeTimers()
+    const { rerender } = render(<QuestionDock ctx={ctxOf([approval('a1')], { items: said() })} />)
+    rerender(<QuestionDock ctx={ctxOf([], { items: said() })} />)
+    act(() => { vi.advanceTimersByTime(2999) })
+    expect(screen.getByTestId('dock-answered-terminal')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(2) })
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+  })
+
+  it('the answer lands after the lock is gone (1.5 s): the card is gone and does not come back', () => {
+    vi.useFakeTimers()
+    const { rerender } = render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    rerender(<QuestionDock ctx={ctxOf([])} />)
+    act(() => { vi.advanceTimersByTime(1600) })
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+    rerender(<QuestionDock ctx={ctxOf([], { items: said() })} />)
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+    act(() => { vi.advanceTimersByTime(5000) })
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+  })
+
+  it('the 3 s is counted once: later items updates do not extend it', () => {
+    vi.useFakeTimers()
+    const { rerender } = render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    rerender(<QuestionDock ctx={ctxOf([])} />)
+    rerender(<QuestionDock ctx={ctxOf([], { items: said() })} />)
+    act(() => { vi.advanceTimersByTime(2000) })
+    rerender(<QuestionDock ctx={ctxOf([], { items: said() })} />) // a new items array, the same answer
+    act(() => { vi.advanceTimersByTime(1001) })
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+  })
+
+  it('a send that lost to the terminal (hidden entry) shows the note for 3 s from when it is shown', async () => {
+    vi.useFakeTimers()
+    let finish: (v: unknown) => void = () => {}
+    asks.answerAsk.mockReturnValue(new Promise((r) => { finish = r }))
+    const { rerender } = render(<QuestionDock ctx={ctxOf([approval('a1')])} />)
+    pickAll()
+    fireEvent.click(screen.getByTestId('dock-submit'))
+    rerender(<QuestionDock ctx={ctxOf([])} />) // closed under our send
+    act(() => { vi.advanceTimersByTime(4000) }) // the send is slow; nothing shows meanwhile
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+    rerender(<QuestionDock ctx={ctxOf([], { items: said() })} />)
+    await act(async () => { finish({ ok: false, reason: 'changed' }) })
+    expect(screen.getByTestId('dock-answered-terminal')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(2999) })
+    expect(screen.getByTestId('dock-answered-terminal')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(2) })
+    expect(screen.queryByTestId('dock-card')).toBeNull()
+  })
+})
+
 describe('races and re-announcements', () => {
   it('our send loses to another client: the approval closes, the send says changed — the lock still shows', async () => {
     let finish: (v: unknown) => void = () => {}
