@@ -31,6 +31,20 @@ func (m *Module) askRemote(w http.ResponseWriter, req team.RelayAskRequest, row 
 	unsupported := func(detail string) {
 		m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, detail, nil)
 	}
+	// A retry of an ask that is already stored (the answer was lost), or a second request while one is open, is answered from
+	// the store: the capability gate is for a NEW ask, and it must not turn a committed ask into a refusal.
+	if old, ok, err := m.store.RelayAskForRequest(req.RequestID, req.SessionID); err != nil {
+		m.logf("[team] relay ask %s: %v", req.RequestID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	} else if ok {
+		if old.SessionID != req.SessionID {
+			m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id belongs to another session's ask", nil)
+			return
+		}
+		m.writeJSON(w, http.StatusOK, team.RelayAskResponse{ID: old.ID, State: old.State, ExpiresAt: old.ExpiresAt, Replay: true})
+		return
+	}
 	if m.cmdCaller == nil {
 		unsupported("cross-host team is not available on this daemon")
 		return
@@ -55,6 +69,9 @@ func (m *Module) askRemote(w http.ResponseWriter, req team.RelayAskRequest, row 
 	case errors.Is(err, ErrAskNotMember):
 		m.writeErr(w, http.StatusConflict, team.ErrNotMember, "the session is not an active member of a live team", nil)
 		return
+	case errors.Is(err, ErrAskLeadChanged):
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "the member's lead host changed; retry", nil)
+		return
 	case errors.Is(err, ErrAskRelayOpen):
 		if !m.writeRelayOpen(w, req.SessionID) {
 			m.writeErr(w, http.StatusConflict, team.ErrRelayOpen, "this session already has a relay in progress", nil)
@@ -70,6 +87,22 @@ func (m *Module) askRemote(w http.ResponseWriter, req team.RelayAskRequest, row 
 		return
 	}
 	m.writeJSON(w, http.StatusOK, team.RelayAskResponse{ID: ask.ID, State: ask.State, ExpiresAt: ask.ExpiresAt, Replay: replay})
+}
+
+// RelayAskForRequest is the ask a request id names, or else the session's open ask (what a replay answers); ok false when neither
+// exists. A read, with no lock: the transaction that writes decides again.
+func (s *Store) RelayAskForRequest(requestID, sessionID string) (RelayAsk, bool, error) {
+	if a, ok, err := s.GetRelayAsk(requestID); err != nil || ok {
+		return a, ok, err
+	}
+	a, err := scanRelayAsk(s.db.QueryRow(`SELECT `+relayAskCols+` FROM relay_asks WHERE session_id = ? AND state = 'open'`, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RelayAsk{}, false, nil
+	}
+	if err != nil {
+		return RelayAsk{}, false, fmt.Errorf("open relay ask of %s: %w", sessionID, err)
+	}
+	return a, true, nil
 }
 
 // CreateRemoteRelayAsk is CreateRelayAsk for an active remote member, plus the `relay_ask` fact for its lead host in the same
@@ -101,6 +134,9 @@ func (s *Store) CreateRemoteRelayAsk(a RelayAsk, checkedLeadHost string) (stored
 	}
 	if err != nil {
 		return fail(err)
+	}
+	if leadHost != checkedLeadHost { // the capabilities that were read are another host's
+		return fail(ErrAskLeadChanged)
 	}
 	var one int
 	switch err := tx.QueryRow(`SELECT 1 FROM relay_ops WHERE session_id = ? AND state NOT IN ('done', 'failed', 'cancelled') LIMIT 1`, a.SessionID).Scan(&one); {

@@ -154,7 +154,7 @@ func (s *Store) WithdrawAsksOfInactiveMembers(now int64) (int64, error) {
 			WHERE m.spawn_op = relay_asks.spawn_op AND m.session_id = relay_asks.session_id AND m.state = 'active' AND t.ended_at = 0)
 		AND NOT EXISTS (
 			SELECT 1 FROM remote_members r
-			WHERE r.mk = relay_asks.spawn_op AND r.member_session_id = relay_asks.session_id AND r.state = 'active')`,
+			WHERE r.mk = relay_asks.spawn_op AND r.member_session_id = relay_asks.session_id AND r.team_id = relay_asks.team_id AND r.state = 'active')`,
 		team.RelayAskWithdrawMemberLeft, now)
 	if err != nil {
 		return 0, fmt.Errorf("withdraw relay asks of inactive members: %w", err)

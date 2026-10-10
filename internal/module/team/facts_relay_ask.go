@@ -18,6 +18,9 @@ import (
 // `min(expires_in_s, 300)` seconds from the moment this host received the fact.
 const maxMirrorWindowS = team.RelayAskHoldS
 
+// relayAskSuperseded is the reason of a mirror the member host's next ask replaced.
+const relayAskSuperseded = "superseded"
+
 // applyRelayAskIn applies a `relay_ask` fact. The row is the member of THIS host in this team with this mk, active, in a live team
 // (never another host's, never a local row). The mirror is keyed by the member host's ask id, so a second fact for the same ask
 // (another fact id) makes neither a second mirror nor a second notice ("ignored"); so does an ask when the member already has
@@ -51,13 +54,28 @@ func (s *Store) applyRelayAskIn(tx dbtx, p FactPlan) (CommandResult, error) {
 	if window > maxMirrorWindowS {
 		window = maxMirrorWindowS
 	}
+	// The member host allows one open ask per session, so a mirror of the session that is still open belongs to an ask the member
+	// host has closed since: this is its new one, and the old mirror goes (the one-open index would swallow the new one otherwise).
+	// The same ask id again is the dedupe below, not a replacement.
+	if _, err := tx.Exec(`UPDATE relay_asks SET state = 'withdrawn', reason = ?, closed_at = ? WHERE session_id = ? AND state = 'open' AND id <> ?`,
+		relayAskSuperseded, p.Now, sessionID, f.AskID); err != nil {
+		return CommandResult{}, err
+	}
 	r, err := tx.Exec(`INSERT INTO relay_asks (id, team_id, spawn_op, session_id, used_pct, window, state, reason, op_id, notified_at, created_at, expires_at, closed_at)
-		VALUES (?, ?, ?, ?, ?, ?, 'open', '', '', 0, ?, ?, 0) ON CONFLICT DO NOTHING`,
+		VALUES (?, ?, ?, ?, ?, ?, 'open', '', '', 0, ?, ?, 0) ON CONFLICT(id) DO NOTHING`,
 		f.AskID, f.TeamID, spawnOp, sessionID, f.UsedPct, f.Window, p.Now, p.Now+int64(window)*1000)
 	if err != nil {
 		return CommandResult{}, err
 	}
 	if n, _ := r.RowsAffected(); n == 0 {
+		// the id is taken: by this very ask (a second fact for it) or by another row, which must not be mistaken for it
+		var team_, session string
+		if err := tx.QueryRow(`SELECT team_id, session_id FROM relay_asks WHERE id = ?`, f.AskID).Scan(&team_, &session); err != nil {
+			return CommandResult{}, err
+		}
+		if team_ != f.TeamID || session != sessionID {
+			return refusal(http.StatusConflict, team.ErrCommandIDConflict, "that ask id is already used by another ask here"), nil
+		}
 		return okResult(map[string]string{"state": team.FactIgnored})
 	}
 	return okResult(map[string]string{"state": team.FactApplied})
