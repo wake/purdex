@@ -61,7 +61,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, capabilities, items, idl
   const hintText = hint ? t(hint.key, hint.params) : ''
   return (
     <div data-testid="session-input" className="border-t border-border-subtle pt-2">
-      <QueuedMessages entries={entries} onUndo={undo} onRetry={(id) => queue.retry(id)} onDismiss={(id) => queue.dismiss(id)} />
+      <QueuedMessages entries={entries} onUndo={undo} onResend={(id) => { queue.resend(id) }} onDismiss={(id) => queue.dismiss(id)} />
       {noMod ? (
         <div data-testid="session-input-disabled" className="flex items-center gap-2 px-3 pb-2 text-sm text-text-muted">
           <span>{t('deck.send.no_mod')}</span>

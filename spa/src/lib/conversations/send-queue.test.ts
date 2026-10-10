@@ -207,20 +207,48 @@ describe('unknown: at most once', () => {
     expect(q.entries()).toHaveLength(1)
   })
 
-  it('a retry (host restarted mid-submit) reuses the same client_msg_id and takes the ledger answer', async () => {
+  it('a manual resend of a maybe-sent message is a NEW message: new client_msg_id, the old entry kept as superseded', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     const id = q.enqueue('restart me')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
     calls[0].resolve({ kind: 'network' })
     await flush()
-    q.retry(id)
+    const next = q.resend(id)
+    await flush()
+    expect(next).toBeDefined()
+    expect(next).not.toBe(id)
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({ id: next, text: 'restart me' })
+    expect(q.entries().find((e) => e.id === id)).toMatchObject({ state: 'superseded', supersededBy: next })
+    calls[1].resolve({ kind: 'accepted' })
+    await flush()
+    expect(q.entries().find((e) => e.id === next)?.state).toBe('sent')
+  })
+
+  it('a dropped message is resent under a new id and really calls submit again (the ledger would replay the drop for the old id)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const id = q.enqueue('again')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve({ kind: 'dropped', reason: 'session_changed' })
+    await flush()
+    const next = q.resend(id)
     await flush()
     expect(calls).toHaveLength(2)
-    expect(calls[1]).toMatchObject({ id, text: 'restart me' })
-    calls[1].resolve({ kind: 'accepted' }) // the ledger remembers the first request
+    expect(calls[1].id).toBe(next)
+    expect(calls[1].id).not.toBe(calls[0].id)
+  })
+
+  it('only a maybe or failed entry can be resent', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const id = q.enqueue('x')
+    expect(q.resend(id)).toBeUndefined() // still in its undo window
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve({ kind: 'accepted' })
     await flush()
-    expect(q.entries()[0].state).toBe('sent')
+    expect(q.resend(id)).toBeUndefined()
   })
 })
 

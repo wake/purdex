@@ -13,7 +13,7 @@ import type { UserItem } from './types'
 export const UNDO_MS = 3000
 export const MATCH_WINDOW_MS = 30_000
 
-export type EntryState = 'undo' | 'sending' | 'waiting' | 'sent' | 'maybe' | 'failed'
+export type EntryState = 'undo' | 'sending' | 'waiting' | 'sent' | 'maybe' | 'failed' | 'superseded'
 
 export interface QueueEntry {
   /** The client_msg_id. */
@@ -25,6 +25,8 @@ export interface QueueEntry {
   /** When the latest submit started (the text-match window is around it). */
   startedAt: number
   outcome?: SendOutcome
+  /** The id of the message that replaced this one after a manual resend (the old entry is kept for the audit trail). */
+  supersededBy?: string
 }
 
 export class SendQueue {
@@ -73,14 +75,24 @@ export class SendQueue {
     return e.text
   }
 
-  /** The person asks to send a `maybe` / `failed` entry again: the SAME client_msg_id (the daemon's ledger answers a repeat). */
-  retry(id: string): void {
-    const e = this.list.find((x) => x.id === id)
-    if (!e || (e.state !== 'maybe' && e.state !== 'failed')) return
-    e.state = 'undo'
-    e.undoUntil = this.now()
+  /**
+   * The person asks to send a `maybe` / `failed` entry again. It is a NEW message with a NEW client_msg_id: the daemon's
+   * ledger is in memory with a TTL, so the old id may be replayed (a cached `dropped`) or forgotten (a restart: the request
+   * would run a second time under the old id). The old entry stays, marked superseded. The caller confirms first for a
+   * `maybe` (it may have run). Returns the new id.
+   */
+  resend(id: string): string | undefined {
+    const i = this.list.findIndex((x) => x.id === id)
+    const e = this.list[i]
+    if (!e || (e.state !== 'maybe' && e.state !== 'failed')) return undefined
+    const at = this.now()
+    const next = newClientMsgId()
+    e.state = 'superseded'
+    e.supersededBy = next
+    this.list.splice(i + 1, 0, { id: next, text: e.text, state: 'undo', createdAt: at, undoUntil: at, startedAt: at })
     this.emit()
     this.pump()
+    return next
   }
 
   dismiss(id: string): void {

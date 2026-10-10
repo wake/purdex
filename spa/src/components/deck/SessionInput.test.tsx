@@ -152,17 +152,38 @@ describe('SessionInput outcomes', () => {
     expect(screen.getByTestId('queued-message')).toHaveTextContent('session_changed')
   })
 
-  it('a lost connection mid-submit: retry uses the same client_msg_id and the ledger answer settles it', async () => {
+  it('a lost connection mid-submit: resending needs a second confirmation, then goes out as a new message', async () => {
     fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError('down')))
     render(ui())
     type('restart'); enter()
     await tick(3000)
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'maybe')
-    fireEvent.click(screen.getByText('Check again'))
+    expect(screen.queryByText('Check again')).toBeNull()
+    fireEvent.click(screen.getByText('Send again (may duplicate)'))
+    await tick(0)
+    expect(sends()).toHaveLength(1) // asked, not sent
+    expect(screen.getByTestId('queued-message')).toHaveTextContent('may arrive twice')
+    fireEvent.click(screen.getByText('Cancel'))
+    await tick(5000)
+    expect(sends()).toHaveLength(1)
+    fireEvent.click(screen.getByText('Send again (may duplicate)'))
+    fireEvent.click(screen.getByText('Send again'))
     await tick(0)
     expect(sends()).toHaveLength(2)
-    expect(sends()[1].client_msg_id).toBe(sends()[0].client_msg_id)
+    expect(sends()[1].client_msg_id).not.toBe(sends()[0].client_msg_id)
+    expect(screen.getAllByTestId('queued-message')).toHaveLength(1) // the superseded one is not drawn
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
+  })
+
+  it('a dropped message: Try again is a new message that really calls submit', async () => {
+    fetchMock.mockImplementationOnce(() => answer(200, { status: 'dropped', reason: 'session_changed' }))
+    render(ui())
+    type('x'); enter()
+    await tick(3000)
+    fireEvent.click(screen.getByText('Try again'))
+    await tick(0)
+    expect(sends()).toHaveLength(2)
+    expect(sends()[1].client_msg_id).not.toBe(sends()[0].client_msg_id)
   })
 
   it('409 no_mod disables the input', async () => {
