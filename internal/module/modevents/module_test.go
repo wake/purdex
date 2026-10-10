@@ -146,6 +146,29 @@ func TestModule_StartServesAndStopUnlinks(t *testing.T) {
 	}
 }
 
+// #2420: Stop wakes the mods' parked long polls before it shuts the server down, so a restart does not wait their wait out.
+// Mutation gate: Stop does not close stopPolls → red.
+func TestModule_StopWakesTheLongPolls(t *testing.T) {
+	dir := shortDir(t)
+	m, _, _ := started(t, dir)
+	select {
+	case <-m.stopPolls:
+		t.Fatal("closed before Stop")
+	default:
+	}
+	if err := m.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-m.stopPolls:
+	default:
+		t.Fatal("Stop did not wake the long polls")
+	}
+	if err := m.Stop(context.Background()); err != nil { // a second Stop must not close it again (panic)
+		t.Fatal(err)
+	}
+}
+
 func TestModule_StopUnlinksEvenWhenShutdownTimesOut(t *testing.T) {
 	dir := shortDir(t)
 	m, c, _ := started(t, dir)

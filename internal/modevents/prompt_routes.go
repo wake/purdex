@@ -86,7 +86,9 @@ func (h *handler) promptNext(w http.ResponseWriter, r *http.Request) {
 	defer h.activePolls.Add(-1)
 	wait := time.Duration(*in.WaitMS) * time.Millisecond
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait + waitWriteSlack))
-	release, ok := h.promptPolls.acquire(r.Context(), in.Stream+"/"+in.SessionID) // per session: after a /clear the old session's poll must not hold up the new one
+	ctx, cancel := h.pollContext(r)
+	defer cancel()
+	release, ok := h.promptPolls.acquire(ctx, in.Stream+"/"+in.SessionID) // per session: after a /clear the old session's poll must not hold up the new one
 	if !ok {
 		return
 	}
@@ -96,8 +98,8 @@ func (h *handler) promptNext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait + waitWriteSlack))
-	job, ok := svc.NextPrompt(r.Context(), in.Stream, in.SessionID, wait)
-	if !ok || r.Context().Err() != nil {
+	job, ok := svc.NextPrompt(ctx, in.Stream, in.SessionID, wait)
+	if !ok || ctx.Err() != nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

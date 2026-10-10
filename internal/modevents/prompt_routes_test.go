@@ -30,6 +30,17 @@ func (f *fakePrompt) PromptResult(_ string, r PromptResult) error {
 	return f.resErr
 }
 
+// parkedPrompt parks NextPrompt until its context ends, as the real queue does while it waits for a job.
+type parkedPrompt struct{ fakePrompt }
+
+func (f *parkedPrompt) NextPrompt(ctx context.Context, _, _ string, wait time.Duration) (any, bool) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(wait):
+	}
+	return nil, false
+}
+
 // promptReg: testStream announced prompt.v1, "Zz9_-other1" workbook.v2 only; both on testSID.
 func promptReg() *Registry {
 	reg := NewRegistry(time.Now)

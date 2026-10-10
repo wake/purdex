@@ -43,6 +43,8 @@ type Module struct {
 	ln     net.Listener
 	srv    *http.Server
 	cancel context.CancelFunc
+	// stopPolls is closed by the first Stop, before the server is shut down: the mods' parked long polls answer at once.
+	stopPolls chan struct{}
 	// stopDone is made by the first Stop and closed when its cleanup ends;
 	// every other Stop waits on it. Non-nil also keeps a later Start from
 	// listening again.
@@ -97,7 +99,8 @@ func (m *Module) Start(ctx context.Context) error {
 		return nil
 	}
 
-	m.srv = modevents.NewServer(modevents.NewHandler(m.reg, modevents.WithTeamReader(m.teamRead), modevents.WithWorkbook(m.workbookService), modevents.WithPrompt(m.promptService)))
+	m.stopPolls = make(chan struct{})
+	m.srv = modevents.NewServer(modevents.NewHandler(m.reg, modevents.WithTeamReader(m.teamRead), modevents.WithWorkbook(m.workbookService), modevents.WithPrompt(m.promptService), modevents.WithStop(m.stopPolls)))
 	srv, ln := m.srv, m.ln
 	m.spawn(func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
@@ -198,6 +201,9 @@ func (m *Module) Stop(ctx context.Context) error {
 	done := make(chan struct{})
 	m.stopDone = done
 	ln, srv, cancel := m.ln, m.srv, m.cancel
+	if m.stopPolls != nil {
+		close(m.stopPolls) // under m.mu and behind the stopDone gate: closed once
+	}
 	m.mu.Unlock()
 	defer close(done)
 

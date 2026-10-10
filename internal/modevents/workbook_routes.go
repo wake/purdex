@@ -205,7 +205,8 @@ func (h *handler) workbookNext(w http.ResponseWriter, r *http.Request) {
 	wait := time.Duration(*in.WaitMS) * time.Millisecond
 	// The server's WriteTimeout is 10 s; a 15 s poll must be able to answer, so this request carries its own deadline.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(wait + waitWriteSlack))
-	ctx := r.Context()
+	ctx, cancel := h.pollContext(r)
+	defer cancel()
 	release, ok := h.polls.acquire(ctx, in.Stream)
 	if !ok {
 		return // the client went away while queued behind its own earlier poll
