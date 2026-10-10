@@ -86,6 +86,7 @@ const ev = {
   scheduled: false, // a flush timer (the 150 ms one, or a backoff) is pending
   backoffMs: 0,
   turnId: '', // the running main turn
+  closed: [], // the ids of the last few main turns that ended (see rememberClosed)
   // tool_use_id → 'permission' | 'question': what waits on the person. A question
   // (AskUserQuestion / ExitPlanMode) leaves at its tool.end; a permission ask leaves too
   // when its ToolUse row starts running (tool.approved).
@@ -497,7 +498,9 @@ async function pqRun($, job) {
       status = 'dropped'
       reason = 'not_running'
     } else {
-      await $.turn.abort({ turnId: ev.turnId })
+      const turnId = ev.turnId
+      await $.turn.abort({ turnId })
+      turnAborted($, turnId)
     }
   } catch (err) {
     status = 'dropped'
@@ -705,6 +708,14 @@ function withAgent(data, agentId) {
   return data
 }
 
+// rememberClosed keeps the ids of the last few main turns that ended: positive evidence that a turn.complete naming one of
+// them, arriving after the next turn began, is late and must not end the running one.
+function rememberClosed(turnId) {
+  if (!turnId || ev.closed.includes(turnId)) return
+  ev.closed.push(turnId)
+  if (ev.closed.length > 8) ev.closed.shift()
+}
+
 function turnStarted($, e) {
   if (!ev.on) return
   ev.turnId = e.turnId // turn.start has no agentId: it is always the main conversation's
@@ -714,13 +725,31 @@ function turnStarted($, e) {
 
 function turnCompleted($, e) {
   if (!ev.on) return
-  if (!e.agentId) {
+  // A completion that names an earlier turn (the engine's own, arriving after the mod closed that turn itself and a new
+  // one began) does not end the one now running.
+  const late = !e.agentId && !!ev.turnId && !!e.turnId && e.turnId !== ev.turnId && ev.closed.includes(e.turnId)
+  if (!e.agentId && !late) {
+    rememberClosed(e.turnId)
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'
   }
   if (shouldAsk(e)) wbAsk($, WAIT_MS) // the daemon's job for this turn appears after its Stop hook and the catch-up
   enqueue($, 'turn.complete', { ...withAgent({ turn_id: e.turnId, reason: e.reason }, e.agentId), duration_ms: e.durationMs, aborted: !!e.isAborted })
+}
+
+// turnAborted closes the main turn this mod just cancelled with $.turn.abort. Claude Code ends such a turn without a
+// turn.complete for the main conversation and without a Stop hook (measured, CC 2.1.294: after the abort the light and the
+// heartbeat's turn_id stayed 'running' for good), so the mod says so itself: the state a real turn.complete clears, and a
+// turn.complete{reason:'aborted', aborted:true} for the daemon (the light goes idle; the conversation ends its running
+// turn as interrupted, since the abort leaves no marker in the transcript). Only when the turn it cancelled is still the one
+// running: a turn.complete that did arrive, or a new turn, has already moved on.
+function turnAborted($, turnId) {
+  if (!ev.on || !turnId || ev.turnId !== turnId) return
+  rememberClosed(turnId)
+  ev.turnId = ''
+  ev.asks.clear()
+  enqueue($, 'turn.complete', { turn_id: turnId, reason: 'aborted', duration_ms: 0, aborted: true })
 }
 
 function toolStarted($, e) {

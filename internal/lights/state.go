@@ -60,6 +60,13 @@ type StreamState struct {
 	Ended       bool
 	Dots        map[string]Dot // keyed by agent id
 	Background  Background
+	// AbortedAt is when the last main-turn turn.complete that said aborted happened (the event's time, see Apply): the mod's own
+	// interrupt (`$.turn.abort` writes no interruption marker into the transcript, so this is the only record of it).
+	// Zero when none since the session (re)started.
+	AbortedAt time.Time
+	// Closed holds the ids of the last few main turns whose turn.complete was seen, oldest first: positive evidence that a
+	// completion naming one of them (arriving after the next turn began) is late and ends nothing.
+	Closed []string
 	// StatusEventAt is when the last event that moved, or could have moved,
 	// the light happened: the event's own at (the mod's Date.now()), clamped
 	// to the time the daemon received it, going back only when a clock
@@ -116,7 +123,21 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	if s.StatusEventAt.After(now) {
 		s.StatusEventAt = time.Time{} // the wall clock went back
 	}
+	var abortedTurn struct {
+		TurnID  string `json:"turn_id"`
+		Aborted bool   `json:"aborted"`
+		AgentID string `json:"agent_id"`
+	}
+	stale := ev.Type == modevents.TypeTurnComplete && decode(ev.Data, &abortedTurn) && abortedTurn.AgentID == "" && s.staleComplete(abortedTurn.TurnID)
 	touched := s.apply(ev)
+	if ev.Type == modevents.TypeTurnComplete && !stale {
+		d := abortedTurn
+		if d.Aborted && d.AgentID == "" {
+			// The event's own time, as the mod stamped it when the abort returned (believed within atSkewWindow, else the
+			// receive time): a batch that arrives late must not date the abort after a turn that started in between.
+			s.AbortedAt, _ = eventTime(ev.At, now)
+		}
+	}
 	if ev.Type == modevents.TypeHeartbeat && s.Status() != status {
 		// A heartbeat that repairs the light (a lost turn.start /
 		// turn.complete, an ask, a compaction, an error) moves it like the
@@ -195,10 +216,12 @@ func (s *StreamState) apply(ev modevents.Event) (touched bool) {
 			s.TurnID = d.TurnID
 			clear(s.Asks)
 			s.Err = false
+			s.AbortedAt = time.Time{} // a new main turn: an earlier abort can no longer name the running one
 			touched = true
 		}
 	case modevents.TypeTurnComplete:
 		var d struct {
+			TurnID  string `json:"turn_id"`
 			Reason  string `json:"reason"`
 			AgentID string `json:"agent_id"`
 		}
@@ -209,6 +232,10 @@ func (s *StreamState) apply(ev modevents.Event) (touched bool) {
 			delete(s.Dots, d.AgentID)
 			return false
 		}
+		if s.staleComplete(d.TurnID) {
+			return false
+		}
+		s.closeTurn(d.TurnID)
 		s.TurnID = ""
 		clear(s.Asks)
 		s.Err = d.Reason == "error"
@@ -344,6 +371,27 @@ func (s *StreamState) reconcileDots(agents []heartbeatAgent, at int64) {
 }
 
 // reset forgets the conversation: a new session or a /clear or /resume.
+// staleComplete reports whether a main-turn turn.complete names a turn other than the one running: the engine's late
+// completion of a turn the mod already closed (its own interrupt), arriving after the next turn began. It must not end
+// that next turn. A completion with no turn id, or one that arrives with no turn running, is never stale.
+func (s *StreamState) staleComplete(turnID string) bool {
+	return turnID != "" && s.TurnID != "" && turnID != s.TurnID && slices.Contains(s.Closed, turnID)
+}
+
+// closeTurn remembers a main turn that has ended, so a later completion naming it is known to be late. Bounded: only the
+// last few matter (a late completion arrives before the next few turns do).
+func (s *StreamState) closeTurn(turnID string) {
+	if turnID == "" || slices.Contains(s.Closed, turnID) {
+		return
+	}
+	s.Closed = append(s.Closed, turnID)
+	if len(s.Closed) > closedTurnsKept {
+		s.Closed = s.Closed[len(s.Closed)-closedTurnsKept:]
+	}
+}
+
+const closedTurnsKept = 8
+
 func (s *StreamState) reset() {
 	s.TurnID = ""
 	clear(s.Asks)
@@ -351,6 +399,8 @@ func (s *StreamState) reset() {
 	s.Err = false
 	clear(s.Dots)
 	s.Background = ""
+	s.AbortedAt = time.Time{}
+	s.Closed = nil
 }
 
 // decode unmarshals raw into v when raw is a JSON object whose fields fit

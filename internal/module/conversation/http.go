@@ -321,6 +321,9 @@ func (m *Module) refreshOnce(ctx context.Context, entry *convfeed.Entry, sid str
 		return resolveError{err}
 	}
 	defer src.Closer.Close()
-	_, err = entry.Refresh(ctx, src)
-	return err
+	if _, err = entry.Refresh(ctx, src); err != nil {
+		return err
+	}
+	m.applyAbort(entry, sid)
+	return nil
 }
