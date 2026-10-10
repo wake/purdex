@@ -1,5 +1,8 @@
 // spa/src/lib/nex/worker-agent-status.test.ts — spec §8.1–8.2.
+// node:fs / node:path / __dirname are untyped under tsconfig.app.json (deliberately no @types/node; see src/index.css.test.ts); they work at runtime.
+// @ts-expect-error node:fs is untyped here.
 import { readFileSync } from 'node:fs'
+// @ts-expect-error node:path is untyped here.
 import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { isAwaitingApproval } from './worker-summary'
@@ -113,6 +116,7 @@ describe('projectWorkerStatus', () => {
 describe('shared fixture: internal/module/nex/testdata/worker-status-cases.json', () => {
   type Case = { name: string; row: Partial<ExecutionSummary>; expected: WorkerProjection['status'] }
   const cases: Case[] = JSON.parse(
+    // @ts-expect-error __dirname is untyped here.
     readFileSync(resolve(__dirname, '../../../../internal/module/nex/testdata/worker-status-cases.json'), 'utf8'),
   )
 
