@@ -43,7 +43,9 @@ const RE_DROPPED = /^[\p{Cc}\p{Cf}]$/u
 function plainChars(s: string): string {
   let out = ''
   for (const ch of s) {
-    if (isGoSpace(ch.codePointAt(0)!)) out += ' '
+    const c = ch.codePointAt(0)!
+    if (isGoSpace(c)) out += ' '
+    else if (c >= 0xd800 && c <= 0xdfff) out += '\ufffd' // a lone surrogate: Go reads it as invalid UTF-8, which is U+FFFD
     else if (!RE_DROPPED.test(ch)) out += ch
   }
   return out
@@ -66,6 +68,14 @@ export function normaliseNotificationText(s: string, maxRunes: number): string {
   s = plainChars(s)
   s = s.replace(RE_SPACE, ' ').replace(/^ | $/g, '')
   return cutRunes(s, maxRunes)
+}
+
+/**
+ * A name or title as plain text (the phone push's title rule: `cutRunes` only, after the space / control / format
+ * clean-up): NOT Markdown-processed, so a session called `my__session__x` or a tool called `mcp__srv__tool` keeps its name.
+ */
+export function plainNotificationText(s: string, maxRunes: number): string {
+  return cutRunes(plainChars(s), maxRunes)
 }
 
 /** The push limits (internal/push/content.go): a body, and a title. */

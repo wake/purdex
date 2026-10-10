@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 // @ts-expect-error node:path is untyped here.
 import { resolve } from 'node:path'
-import { normaliseNotificationText } from './notification-normalise'
+import { normaliseNotificationText, plainNotificationText } from './notification-normalise'
 
 interface Case { name: string; input: string; max: number; want: string }
 // @ts-expect-error __dirname is untyped here.
@@ -19,5 +19,24 @@ describe('normaliseNotificationText (the shared fixture)', () => {
 
   it.each(cases)('$name', ({ input, max, want }) => {
     expect(normaliseNotificationText(input, max)).toBe(want)
+  })
+})
+
+// What a JSON fixture cannot carry: Go reads a lone surrogate as invalid UTF-8, which is U+FFFD.
+describe('lone surrogates', () => {
+  it.each(['a\ud800b', 'a\udc00b'])('%j becomes U+FFFD, as in Go', (s) => {
+    expect(normaliseNotificationText(s, 240)).toBe('a�b')
+    expect(plainNotificationText(s, 240)).toBe('a�b')
+  })
+  it('a proper surrogate pair is one character', () => {
+    expect(normaliseNotificationText('😀', 240)).toBe('😀')
+  })
+})
+
+describe('plainNotificationText (a title or a name: no Markdown rules)', () => {
+  it('keeps what Markdown would take, cleans spaces and format characters, and cuts', () => {
+    expect(plainNotificationText('my__session__x', 120)).toBe('my__session__x')
+    expect(plainNotificationText('a‮b​c d', 120)).toBe('abc d')
+    expect(plainNotificationText('abcdef', 5)).toBe('abcde…')
   })
 })

@@ -104,6 +104,26 @@ describe('buildNotificationContent', () => {
     expect(Array.from(title)).toHaveLength(121)
   })
 
+  // The phone push cuts a title and nothing else (internal/push/agent_content.go): a name is not Markdown.
+  it.each(['my__session__x', '1. first session', '> quoted name', '`tick` **bold** name', 'snake_case'])('the title %j keeps its name', (name) => {
+    expect(buildNotificationContent('Stop', { last_assistant_message: 'ok' }, name)?.title).toBe(name)
+  })
+
+  it('a title made only of format characters is empty, never the raw string with its direction marks', () => {
+    expect(buildNotificationContent('Stop', { last_assistant_message: 'ok' }, '‮‮')?.title).toBe('')
+  })
+
+  it('the body is cleaned once, like the push: what removing the markers exposes is not cleaned again', () => {
+    expect(buildNotificationContent('Stop', { last_assistant_message: '`- x' }, 's')?.body).toBe('- x')
+    expect(buildNotificationContent('Notification', { message: '**- x' }, 's')?.body).toBe('- x')
+  })
+
+  it('a tool name keeps its underscores (an MCP tool is mcp__server__tool) and loses control / format characters', () => {
+    expect(buildNotificationContent('PermissionRequest', { tool_name: 'mcp__srv__tool' }, 's')?.body).toBe('Permission required: mcp__srv__tool')
+    expect(buildNotificationContent('PermissionRequest', { tool_name: 'Ba‮sh' }, 's')?.body).toBe('Permission required: Bash')
+    expect(buildNotificationContent('PermissionRequest', { tool_name: '‮' }, 's')?.body).toBe('Permission required: unknown tool')
+  })
+
   // W2 transition: cc broadcasts PdxXxx; buildNotificationContent normalizes
   // at entry so PdxXxx and legacy literals produce identical output.
   it('PdxNotification → identical to Notification (W2)', () => {

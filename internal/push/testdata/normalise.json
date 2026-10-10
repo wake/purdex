@@ -102,19 +102,19 @@
     "want": "line one line two line three"
   },
   {
-    "input": "a b　c",
+    "input": "a\u00a0b\u3000c",
     "max": 240,
     "name": "no-break space and ideographic space become plain spaces",
     "want": "a b c"
   },
   {
-    "input": "a\u2028b\u2029cd",
+    "input": "a\u2028b\u2029c\u0085d",
     "max": 240,
     "name": "line and paragraph separators and NEL become spaces",
     "want": "a b c d"
   },
   {
-    "input": "a‮b⁦c⁩d​e﻿ f",
+    "input": "a\u202eb\u2066c\u2069d\u200be\ufeff f",
     "max": 240,
     "name": "direction marks, zero-width marks and the BOM are dropped",
     "want": "abcde f"
@@ -150,10 +150,10 @@
     "want": ""
   },
   {
-    "input": "一二三四五六七八九十",
+    "input": "\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341",
     "max": 5,
     "name": "CJK text is cut by characters, not bytes",
-    "want": "一二三四五…"
+    "want": "\u4e00\u4e8c\u4e09\u56db\u4e94\u2026"
   },
   {
     "input": "abcde",
@@ -165,31 +165,31 @@
     "input": "abcdef",
     "max": 5,
     "name": "one over max is cut with an ellipsis",
-    "want": "abcde…"
+    "want": "abcde\u2026"
   },
   {
-    "input": "😀😀😀😀😀😀",
+    "input": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00",
     "max": 5,
     "name": "astral characters count as one rune",
-    "want": "😀😀😀😀😀…"
+    "want": "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\u2026"
   },
   {
     "input": "**a**  **b**  **c**",
     "max": 3,
     "name": "the cut happens after the cleaning",
-    "want": "a b…"
+    "want": "a b\u2026"
   },
   {
     "input": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word",
     "max": 240,
     "name": "max 240 on a long line",
-    "want": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word …"
+    "want": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word \u2026"
   },
   {
     "input": "A session title that is far too long to sit inside a longer notification title",
     "max": 40,
     "name": "max 40 on a title",
-    "want": "A session title that is far too long to …"
+    "want": "A session title that is far too long to \u2026"
   },
   {
     "input": "[![alt](i.png)](https://x.example)",
@@ -208,5 +208,95 @@
     "max": 240,
     "name": "unclosed markers are left alone",
     "want": "[open](never closed and ![img](x"
+  },
+  {
+    "input": "a\u00adb",
+    "max": 240,
+    "name": "soft hyphen is dropped (Cf)",
+    "want": "ab"
+  },
+  {
+    "input": "a\u061cb",
+    "max": 240,
+    "name": "arabic letter mark is dropped (Cf)",
+    "want": "ab"
+  },
+  {
+    "input": "a\u180eb",
+    "max": 240,
+    "name": "mongolian vowel separator is dropped (Cf)",
+    "want": "ab"
+  },
+  {
+    "input": "a\u2060b",
+    "max": 240,
+    "name": "word joiner is dropped (Cf)",
+    "want": "ab"
+  },
+  {
+    "input": "a\udb40\udc01b\udb40\udc41c",
+    "max": 240,
+    "name": "tag characters are dropped (Cf)",
+    "want": "abc"
+  },
+  {
+    "input": "a\u200bb",
+    "max": 240,
+    "name": "zero width space is dropped, not turned into a space",
+    "want": "ab"
+  },
+  {
+    "input": "`- x",
+    "max": 240,
+    "name": "removing markers can expose new syntax; it is not cleaned a second time: dash",
+    "want": "- x"
+  },
+  {
+    "input": "`# h",
+    "max": 240,
+    "name": "removing markers can expose new syntax; it is not cleaned a second time: hash",
+    "want": "# h"
+  },
+  {
+    "input": "[a]`(b)",
+    "max": 240,
+    "name": "removing markers can expose new syntax; it is not cleaned a second time: link",
+    "want": "[a](b)"
+  },
+  {
+    "input": "**- x",
+    "max": 240,
+    "name": "removing markers can expose new syntax; it is not cleaned a second time: bold then dash",
+    "want": "- x"
+  },
+  {
+    "input": "[a](b\nc) end",
+    "max": 240,
+    "name": "a link target may span lines",
+    "want": "a end"
+  },
+  {
+    "input": "[a\nb](u) end",
+    "max": 240,
+    "name": "a link text may span lines",
+    "want": "a b end"
+  },
+  {
+    "input": "10) ten\n100. hundred",
+    "max": 240,
+    "name": "numbered item with a longer number",
+    "want": "ten hundred"
+  },
+  {
+    "input": "my__session__x",
+    "max": 240,
+    "name": "underscores inside a word: a pair goes",
+    "want": "mysessionx"
+  },
+  {
+    "input": "snake_case_name",
+    "max": 240,
+    "name": "a single underscore stays",
+    "want": "snake_case_name"
   }
 ]

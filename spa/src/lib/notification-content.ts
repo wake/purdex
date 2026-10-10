@@ -1,6 +1,6 @@
 // spa/src/lib/notification-content.ts
 import { normalizeEventName } from './event-name'
-import { NOTIFICATION_BODY_RUNES, NOTIFICATION_TITLE_RUNES, normaliseNotificationText } from './notification-normalise'
+import { NOTIFICATION_BODY_RUNES, NOTIFICATION_TITLE_RUNES, normaliseNotificationText, plainNotificationText } from './notification-normalise'
 
 interface NotificationContent { title: string; body: string }
 
@@ -34,7 +34,10 @@ export function buildNotificationContent(
       break
     }
     case 'PermissionRequest': {
-      const toolName = rawEvent.tool_name as string | undefined
+      // A tool name is written outside (an MCP tool is `mcp__server__tool`): clean of control and format characters and cut,
+      // but not Markdown-processed, or its underscores would go.
+      const raw = rawEvent.tool_name
+      const toolName = typeof raw === 'string' ? plainNotificationText(raw, 120) : undefined
       const body = toolName
         ? (t?.('notification.permission_request', { tool: toolName }) ?? `Permission required: ${toolName}`)
         : (t?.('notification.fallback.permission') ?? 'Permission required: unknown tool')
@@ -53,9 +56,9 @@ export function buildNotificationContent(
     default:
       return null
   }
-  // The same rule for every body (a tool name inside a template included) and for the title: a name written by a session
-  // cannot carry direction marks or run past the lock screen either.
-  content.body = normaliseNotificationText(content.body, NOTIFICATION_BODY_RUNES)
-  content.title = normaliseNotificationText(content.title, NOTIFICATION_TITLE_RUNES) || content.title
+  // The body was cleaned once, where the text came from (`lockScreenText`: the phone push's rule, once); what is left is our
+  // own template. The title is the phone push's title rule: a name written by a session is cleaned of direction marks and
+  // cut at 120 runes, and is not Markdown-processed.
+  content.title = plainNotificationText(content.title, NOTIFICATION_TITLE_RUNES)
   return content
 }
