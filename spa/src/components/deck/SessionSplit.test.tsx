@@ -67,6 +67,14 @@ describe('SessionSplit', () => {
     ta.remove()
   })
 
+  it('escActive false (a pane that is not the focused one): Esc does not close its overlay, the scrim still does', () => {
+    const onClose = r(500, { escActive: false })
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('split-scrim'))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('docked: the scrim does not exist and Esc is not ours (the panel itself handles it)', () => {
     const onClose = r(900)
     expect(screen.queryByTestId('split-scrim')).toBeNull()

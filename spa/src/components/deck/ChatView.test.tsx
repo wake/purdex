@@ -38,8 +38,13 @@ const step = (id: string, over: Partial<StepItem> = {}): StepItem =>
 const peer = (id: string, over: Partial<UserItem> = {}): UserItem => ({ type: 'user', id, at: 1, index: 0, text: `msg ${id}`, source: 'peer', from: { kind: 'peer', name: 'host/a' }, ...over })
 const turn = (id: string, index: number, items: ConversationItem[]): PanelTurn => ({ id, index, items })
 
-beforeEach(() => { cleanup(); clearAllPanels(); forgetFolds(PANE); forgetScrollMemo(chatScrollKey(PANE, BIND)); forgetScrollMemo(chatScrollKey(PANE, conversationBinding("h", "session-2"))) })
-afterEach(() => { vi.useRealTimers() })
+// jsdom lays nothing out; the split (docked beside the panel, or overlaid) needs a pane width. 1000 px docks.
+const WIDTH = { px: 1000 }
+beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width: WIDTH.px, height: 600, top: 0, left: 0, right: WIDTH.px, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }))
+  WIDTH.px = 1000
+  cleanup(); clearAllPanels(); forgetFolds(PANE); forgetScrollMemo(chatScrollKey(PANE, BIND)); forgetScrollMemo(chatScrollKey(PANE, conversationBinding("h", "session-2"))) })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('bubbles and work rows', () => {
   it('draws the user as a bubble, the agent as a bubble, and each chain of work as one row with the iOS text', () => {
