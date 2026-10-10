@@ -412,4 +412,93 @@ describe('worker title prefetch (#1557)', () => {
     await flush()
     expect(getExecutionMock).not.toHaveBeenCalled()
   })
+
+  // #1831: what no pane references any more is dropped, and a reopen asks again.
+  describe('eviction of what no pane references (#1831)', () => {
+    const key = (id: string, host = H) => executionKey(host, id)
+
+    it('closing the last pane that shows a worker drops its stored summary and its mark; reopening fetches again', async () => {
+      nexReady(H)
+      listAnswered(H)
+      getExecutionMock.mockResolvedValue(summary('e1', { brief: 'Brief' }))
+      openTabs(execTab('t1', 'e1'))
+      start()
+      await flush()
+      expect(getExecutionMock).toHaveBeenCalledTimes(1)
+      expect(Object.keys(useWorkerTitlePrefetchStore.getState().byKey)).toEqual([key('e1')])
+
+      openTabs() // the last pane closes
+      expect(useWorkerTitlePrefetchStore.getState().byKey).toEqual({})
+
+      openTabs(execTab('t1', 'e1')) // reopened
+      await flush()
+      expect(getExecutionMock).toHaveBeenCalledTimes(2)
+      expect(Object.keys(useWorkerTitlePrefetchStore.getState().byKey)).toEqual([key('e1')])
+    })
+
+    it('a worker still shown by another pane keeps its summary and mark (no refetch)', async () => {
+      nexReady(H)
+      listAnswered(H)
+      getExecutionMock.mockResolvedValue(summary('e1', { brief: 'Brief' }))
+      openTabs(execTab('t1', 'e1'), execTab('t2', 'e1'))
+      start()
+      await flush()
+      openTabs(execTab('t2', 'e1')) // one of the two panes closes
+      await flush()
+      expect(Object.keys(useWorkerTitlePrefetchStore.getState().byKey)).toEqual([key('e1')])
+      expect(getExecutionMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('only the closed worker is dropped: another open worker of the same host stays', async () => {
+      nexReady(H)
+      listAnswered(H)
+      getExecutionMock.mockImplementation(async (_h, id) => summary(id as string, { brief: `Brief ${id}` }))
+      openTabs(execTab('t1', 'e1'), execTab('t2', 'e2'))
+      start()
+      await flush()
+      await flush()
+      expect(Object.keys(useWorkerTitlePrefetchStore.getState().byKey).sort()).toEqual([key('e1'), key('e2')])
+      openTabs(execTab('t2', 'e2'))
+      expect(Object.keys(useWorkerTitlePrefetchStore.getState().byKey)).toEqual([key('e2')])
+    })
+
+    it('a pane in a split tab\'s secondary leaf counts as a reference', async () => {
+      nexReady(H)
+      listAnswered(H)
+      getExecutionMock.mockResolvedValue(summary('e1', { brief: 'Brief' }))
+      const split: Tab = {
+        id: 'ts', pinned: false, locked: false, createdAt: 0,
+        layout: { type: 'split', id: 's', direction: 'h', sizes: [50, 50], children: [
+          { type: 'leaf', pane: { id: 'pa', content: { kind: 'new-tab' } } },
+          { type: 'leaf', pane: { id: 'pb', content: { kind: 'execution', executionId: 'e1', host: H } } },
+        ] },
+      }
+      openTabs(split)
+      start()
+      await flush()
+      expect(Object.keys(useWorkerTitlePrefetchStore.getState().byKey)).toEqual([key('e1')])
+      openTabs({ ...split, layout: { type: 'leaf', pane: { id: 'pa', content: { kind: 'new-tab' } } } }) // the secondary pane closes
+      expect(useWorkerTitlePrefetchStore.getState().byKey).toEqual({})
+    })
+
+    it('an answer that lands after its worker lost its last pane is not stored, and the worker may ask again', async () => {
+      nexReady(H)
+      listAnswered(H)
+      const d = deferred<ExecutionSummary>()
+      getExecutionMock.mockReturnValueOnce(d.promise)
+      openTabs(execTab('t1', 'e1'))
+      start()
+      await flush()
+      expect(getExecutionMock).toHaveBeenCalledTimes(1)
+      openTabs() // closed while the request is out
+      d.resolve(summary('e1', { brief: 'Brief' }))
+      await flush()
+      expect(useWorkerTitlePrefetchStore.getState().byKey).toEqual({})
+
+      getExecutionMock.mockResolvedValue(summary('e1', { brief: 'Brief' }))
+      openTabs(execTab('t1', 'e1'))
+      await flush()
+      expect(getExecutionMock).toHaveBeenCalledTimes(2)
+    })
+  })
 })
