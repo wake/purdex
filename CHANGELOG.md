@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.700] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：mod 被停用或 `--safe-mode` 重開的 session，遠端又看得到它的提問 — #1832（#2555）
+
+- daemon 判斷「這個 session 有沒有 mod」改看 30 秒內有沒有收到 mod 的事件（與介面的燈號同一個定義），不再看「曾經打過招呼」。之前只要打過一次招呼就永遠算有 mod，之後以 `--safe-mode` 重開、或 mod 被停用的 session，它的 AskUserQuestion／權限提示不會開唯讀卡片，遠端完全看不到。
+- daemon 剛重啟的那幾秒會把有 mod 的 session 看成沒有，多開的唯讀卡片會立刻被 mod 自己的那張接管，畫面上只有一張。
+
+### Fixed：第二個 daemon 關閉時不再拔掉第一個的 tmux hook — #1109（#2571）
+
+- tmux 的 session hook 是整個 tmux server 共用的，而且每個 daemon 裝的內容都一樣；之前任何一個 daemon 關閉都會把它移除，同一個 tmux server 上還在跑的 daemon 因此悄悄退回 5 秒輪詢（新開的 session 要等一下才出現）。現在 daemon 關閉時不再移除，只在啟動時重新設定；熱重啟中間也不再有沒有 hook 的空檔。要清掉可用 Settings 裡的移除（`POST /api/hooks/tmux/setup`）。
+
+### Changed：指揮台 — #2567（介面線）
+
+- 指揮台的三種聲音（agent、系統、使用者）各有自己的排版；session 狀態列也帶主機色底；調整行距與字級。
+
 ## [1.0.0-alpha.699] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
