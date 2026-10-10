@@ -484,6 +484,29 @@ test('a turn end while an ask is out sends no second ask', async ($, on) => {
   await f.clock.settle()
 })
 
+// The busy mark belongs to its ask: the old conversation's late answer must not free the new conversation's.
+// Mutation gate: `finally` clears askBusy unconditionally → a third ask while the second is out → red.
+test('an old conversation’s ask finishing late does not free the new conversation’s ask', async ($, on) => {
+  const releases: Array<(r: any) => void> = []
+  const f = memberWorld(on, () => new Promise((r) => { releases.push(r) }))
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(1) // ask #1 (sid-old) is out
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.advance(10)
+  await turn($, 't2')
+  await f.clock.advance(1) // ask #2 (sid-new) is out
+  expect(count(f, 'ask')).toBe(2)
+  releases[0]({ exitCode: 0, stdout: ASK_OK }) // the old one answers late
+  await f.clock.settle()
+  await turn($, 't3')
+  await f.clock.advance(1)
+  expect(count(f, 'ask')).toBe(2) // the new one is still out
+  releases[1]({ exitCode: 0, stdout: ASK_OK })
+  await f.clock.settle()
+})
+
 // An answer belongs to the session it was sent from: a /clear while the ask is out must not mark the new conversation.
 test('an ask answered after a /clear does not set lastAskPct for the new conversation', async ($, on) => {
   let release!: (r: any) => void

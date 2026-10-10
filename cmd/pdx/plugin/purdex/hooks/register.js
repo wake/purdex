@@ -108,7 +108,7 @@ const fresh = () => ({
   writeDeferred: undefined, // a claimed request whose write prompt waits for the running turn to end
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
-  askBusy: false, // a member's `pdx relay ask` is out (member relay ask, D3: it changes no relay state)
+  askBusy: undefined, // a token while a member's `pdx relay ask` is out (member relay ask, D3: it changes no relay state)
   leadAsk: undefined, // { gen, sid }: a /lead prompt is out until the agent's turn ends or the session moves on
   floor: undefined,
   fixRounds: 0,
@@ -575,9 +575,10 @@ async function maybeAsk($) {
   if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
   const sid = await $.session.id()
   if (s.state !== 'idle' || s.askBusy) return // a /relay now took the state while the engine was read, or an ask is out
-  s.askBusy = true
+  const own = {} // a /clear resets the state while an old ask is out: only the ask that owns the token clears it
+  s.askBusy = own
   const gen = s.gen
-  later($, 0, () => ask($, sid, gen, u).finally(() => { s.askBusy = false }))
+  later($, 0, () => ask($, sid, gen, u).finally(() => { if (s.askBusy === own) s.askBusy = undefined }))
 }
 
 // ask sends the request. 200 (open or replay), 409 relay_open and 409 relay_unsupported close the question until
@@ -1250,6 +1251,7 @@ export function register(on) {
     if (was === 'awaiting') $.ui.status(undefined)
     s.floor = undefined
     s.lastAskPct = undefined
+    s.askBusy = undefined // an ask still out was the old conversation's: its answer is dropped (gen), and it holds nothing here
     helloLater($)
     return r
   })
