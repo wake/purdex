@@ -43,19 +43,20 @@ func (c *Core) handleReady(w http.ResponseWriter, r *http.Request) {
 // hosts on different versions. Add a name here in the same change that ships
 // the feature; never reuse or remove one.
 var capabilities = []string{
-	"transcript.v1",          // GET /api/sessions/{code}/transcript
-	"terminal.mirror.v1",     // /ws/terminal/{code}?mirror=1 plus window text frames
-	"conversations.scope.v1", // GET /api/nex/conversations?scope=test|normal|all
-	"relay.unattended.v1",    // GET/PUT /api/team/unattended, team.unattended events (U23)
-	"team.name.v1",           // lead request team_name, grant.team_name, Team / TeamRoster team_name
-	"team.tasks.v1",          // /api/team/tasks…, task routes (T-1b)
-	"team.label.v1",          // lead request team_label, grant.team_label, Team / TeamRoster team_label
-	"conversations.v1",       // GET /api/conversations/{provider}/{session_id} (snapshot, ?after= increments, ?around=) and .../subagents/{agent_id}
-	"team.adopt.v1",          // lead request kind adopt (POST /api/team/approvals {kind:"adopt", target}), adopt members (U24)
-	"team.relay_quota.v1",    // PUT /api/team/relay-quota, team.relay_quota events, relay_quota on Member / RosterSession, UnattendedView.quotas (#2062)
-	"team.max_members.v1",    // PUT /api/team/max-members, max_members and in_use on TeamRoster
-	"team.edit.v1",           // PUT /api/team/appearance (name, label, colour of a live team), team_color on TeamRoster (TR-1)
-	"team.ask_chat.v1",       // decide a hook_ask with decision deny + hook.message (the reply instead of answers); its wait is answered_remote with hook.message
+	"transcript.v1",           // GET /api/sessions/{code}/transcript
+	"terminal.mirror.v1",      // /ws/terminal/{code}?mirror=1 plus window text frames
+	"conversations.scope.v1",  // GET /api/nex/conversations?scope=test|normal|all
+	"relay.unattended.v1",     // GET/PUT /api/team/unattended, team.unattended events (U23)
+	"team.name.v1",            // lead request team_name, grant.team_name, Team / TeamRoster team_name
+	"team.tasks.v1",           // /api/team/tasks…, task routes (T-1b)
+	"team.label.v1",           // lead request team_label, grant.team_label, Team / TeamRoster team_label
+	"conversations.v1",        // GET /api/conversations/{provider}/{session_id} (snapshot, ?after= increments, ?around=) and .../subagents/{agent_id}
+	"team.adopt.v1",           // lead request kind adopt (POST /api/team/approvals {kind:"adopt", target}), adopt members (U24)
+	"team.relay_quota.v1",     // PUT /api/team/relay-quota, team.relay_quota events, relay_quota on Member / RosterSession, UnattendedView.quotas (#2062)
+	"team.max_members.v1",     // PUT /api/team/max-members, max_members and in_use on TeamRoster
+	"team.edit.v1",            // PUT /api/team/appearance (name, label, colour of a live team), team_color on TeamRoster (TR-1)
+	"conversations.submit.v1", // POST /api/conversations/{provider}/{session_id}/submit and /interrupt through the session's mod (needs a prompt.v1 stream: else 409 no_mod); not a device route
+	"team.ask_chat.v1",        // decide a hook_ask with decision deny + hook.message (the reply instead of answers); its wait is answered_remote with hook.message
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose

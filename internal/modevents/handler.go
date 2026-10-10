@@ -41,7 +41,10 @@ type handler struct {
 	reg      *Registry
 	team     TeamReader
 	workbook func() WorkbookService
+	prompt   func() PromptService
 	polls    pollGate
+	// promptPolls is the prompt queue's own gate: a stream polls both queues at once, so they cannot share one.
+	promptPolls pollGate
 	// activePolls counts the long polls being served (hard cap maxPolls).
 	activePolls atomic.Int32
 	maxPolls    int
@@ -72,6 +75,10 @@ func NewHandler(reg *Registry, opts ...HandlerOption) http.Handler {
 			h.teamRead(w, r)
 		case WorkbookNextPath:
 			h.workbookNext(w, r)
+		case PromptNextPath:
+			h.promptNext(w, r)
+		case PromptResultPath:
+			h.promptResult(w, r)
 		case WorkbookRefreshPath:
 			h.workbookRefresh(w, r)
 		case WorkbookResultPath:

@@ -22,6 +22,12 @@ Daemon (`internal/module/conversation/`, U1 spec §8.2):
   `conversation.snapshot | changes | reset (then a snapshot) | header`, `approvals.snapshot {approvals}` (replaces the
   set), `approval {op: opened|closed, approval}`. A `seq` gap → reconnect with the last cursor. Auth: Bearer, or
   `?ticket=` from `POST /api/ws-ticket`.
+- **Measured for U3-0b (2026-10-10, Claude Code 2.1.296, throwaway session + a probe mod; rows in `testdata/conversation/v1/cc-transcript/plugin-submit`)**:
+  - `$.prompt.submit({text})` while **idle** returns in 40–190 ms with `{text, origin: {kind: "plugin", name[, asUser: true]}}` and the turn starts at once (`turn.start`). Without `asUser` the model reads the text framed ("The <name> plugin sent a message:\n…" + a footer); with `asUser: true` it is bare.
+  - Called while a turn **runs** (or a permission dialog is open in it) it neither refuses nor queues in Claude Code: the call **blocks until the session is idle**, then the turn starts and it returns (1.9 s and 19 s observed; as long as the turn lasts). So the mod must not call it mid-turn and wait: it reports `busy` itself when `turn.start` has no `turn.complete` yet.
+  - After `/clear` the session id changes (`session.end clear` → `classic.SessionStart clear`); a submit then goes to the new session, so the mod re-reads `$.session.id()` right before submitting.
+  - `$.turn.abort({turnId})` while running: returns in ~2 ms, the turn ends `reason: aborted`, no interruption marker. With the id of a turn that is over it rejects `no turn is running (asked for <id>)`.
+  - The transcript row of a submit: `type user`, `origin {kind: "plugin", name[, asUser: true]}`, `promptSource` / `turnOrigin` `system`, no `client_msg_id`. The normalizer used to skip every `origin.kind: "plugin"` row (no user item, no turn): U3-0b makes the `asUser` ones a `user` item.
 - **Transcript-only**: no streaming (`streaming` never set; U1-5 not wired), header usage is `{model, effort}` only
   (U1-7 not wired), capabilities declare `send / interrupt / answer_question` as `not_wired`. `/api/info` has
   `conversations.v1` and `team.ask_chat.v1`.

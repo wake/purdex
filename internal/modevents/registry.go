@@ -305,6 +305,29 @@ func (r *Registry) CapableSessions(c string, within time.Duration) []CapableSess
 	return out
 }
 
+// NewestCapableStream is the live stream whose current session is sid and that announced capability c most recently
+// within `within` (ties: the stream the registry heard of last): the one stream that owns a per-session job channel such
+// as the prompt queue (U3-0b). false when none.
+func (r *Registry) NewestCapableStream(sid, c string, within time.Duration) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	var best *StreamInfo
+	for _, s := range r.streams {
+		in := &s.info
+		if in.SID != sid || in.Ended || in.CapsAt.IsZero() || now.Sub(in.CapsAt) > within || !slices.Contains(in.Caps, c) {
+			continue
+		}
+		if best == nil || in.CapsAt.After(best.CapsAt) || (in.CapsAt.Equal(best.CapsAt) && in.FirstSeen.After(best.FirstSeen)) {
+			best = in
+		}
+	}
+	if best == nil {
+		return "", false
+	}
+	return best.Stream, true
+}
+
 // StreamCapable is SessionCapable for one named stream: that stream is live, its current session is sid, and it announced
 // c within `within`. The workbook routes use it so a caller cannot take work for a session through a stream that is not
 // that session's.

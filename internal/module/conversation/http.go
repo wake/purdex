@@ -200,7 +200,7 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, turns, 
 			Reset: reset,
 			Conversation: conversationJSON{
 				Key:      convmodel.Key{HostID: hostID, Provider: "claude", SessionID: sid},
-				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Usage: cu, Turns: apiTurns(turnList),
+				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Capabilities: m.capabilitiesFor(sid), Usage: cu, Turns: apiTurns(turnList),
 			},
 			Header: headerOf(h),
 			Window: windowJSON{FirstIndex: win.FirstIndex, LastIndex: win.LastIndex, TotalTurns: win.TotalTurns, HasMoreBefore: win.HasMoreBefore},
