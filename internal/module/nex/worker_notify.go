@@ -5,11 +5,26 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // WorkerNotifyKey is the service-registry key under which the nex module publishes its WorkerNotifyFeed (the push
 // module will read it in PW-2; nex does not import push).
 const WorkerNotifyKey = "nex.worker-notify-feed"
+
+// workerNotifyFieldRunes caps each free-text field of an event, so a full queue holds a bounded amount.
+const workerNotifyFieldRunes = 256
+
+// clipRunes cuts s to workerNotifyFieldRunes runes, never inside a rune and with no ellipsis.
+func clipRunes(s string) string {
+	if len(s) <= workerNotifyFieldRunes { // bytes >= runes: short enough either way
+		return s
+	}
+	if r := []rune(s); len(r) > workerNotifyFieldRunes {
+		return string(r[:workerNotifyFieldRunes])
+	}
+	return s
+}
 
 // WorkerNotifyEvent is one worker status transition worth telling a person about. Every field comes from the row
 // the projector just pushed. Not filled here, left to PW-2: the title fallback (exec-<6 chars>), Markdown/length
@@ -34,7 +49,8 @@ type WorkerNotifyFeed interface {
 }
 
 // SubscribeWorkerNotify registers fn for every worker transition, under workerNotifyHub's delivery contract. fn
-// runs on the subscriber's own goroutine.
+// runs on the subscriber's own goroutine and must not block: a stuck fn fills its queue (events are then dropped)
+// and holds up Stop for up to workerNotifyCloseWait.
 func (m *Module) SubscribeWorkerNotify(fn func(WorkerNotifyEvent)) func() {
 	return m.workerHub.subscribe(fn)
 }
@@ -44,7 +60,7 @@ const workerNotifySubBuffer = 64
 
 // workerNotifyHub is agent.notifyHub's shape for worker transitions: every subscriber owns a fixed-capacity channel
 // and one recovered consumer goroutine; publish never waits (a full queue drops the event, counted) because it runs
-// inside the read slot. close ends every consumer; after it publish and subscribe do nothing.
+// inside the read slot. A subscriber's fn must not block: close waits for it only workerNotifyCloseWait. close ends every consumer; after it publish and subscribe do nothing.
 type workerNotifyHub struct {
 	mu      sync.Mutex
 	next    int
@@ -53,7 +69,12 @@ type workerNotifyHub struct {
 	wg      sync.WaitGroup
 	dropped atomic.Int64
 	logging atomic.Bool
+	// closeWait bounds close's wait for the consumers; zero means workerNotifyCloseWait.
+	closeWait time.Duration
 }
+
+// workerNotifyCloseWait is how long close waits for subscriber goroutines (projectorStopWait's order of magnitude).
+const workerNotifyCloseWait = 5 * time.Second
 
 func (h *workerNotifyHub) subscribe(fn func(WorkerNotifyEvent)) func() {
 	ch := make(chan WorkerNotifyEvent, workerNotifySubBuffer)
@@ -128,8 +149,18 @@ func (h *workerNotifyHub) close() {
 		delete(h.subs, id)
 		close(ch)
 	}
+	wait := h.closeWait
 	h.mu.Unlock()
-	h.wg.Wait()
+	if wait <= 0 {
+		wait = workerNotifyCloseWait
+	}
+	done := make(chan struct{})
+	go func() { h.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(wait):
+		log.Printf("[nex] worker notify: a subscriber is still running %v after close; not waiting for it", wait)
+	}
 }
 
 // Dropped is how many (subscriber, event) deliveries were lost to a full queue.
@@ -143,7 +174,7 @@ func (p *projector) notifyWorker(id string, prev pushedRow, had bool, rec pushed
 		return
 	}
 	var before *rowDigest
-	if had && !prev.removed {
+	if had && !prev.removed && !prev.unparsed {
 		before = &prev.digest
 	}
 	status, key, ok := classifyWorker(id, before, rec.digest)
@@ -163,21 +194,21 @@ func (p *projector) notifyWorker(id string, prev pushedRow, had bool, rec pushed
 	}
 	_ = json.Unmarshal(row, &r) // the digest already parsed this row; a failure leaves the optional fields blank
 	d := rec.digest
-	ev := WorkerNotifyEvent{ExecID: id, Status: string(status), DedupKey: key, Brief: r.Brief, Provider: r.Provider,
+	ev := WorkerNotifyEvent{ExecID: id, Status: string(status), DedupKey: key, Brief: clipRunes(r.Brief), Provider: clipRunes(r.Provider),
 		TurnCount: d.TurnCount, Stamp: p.now().UnixMilli()}
 	if r.SessionTitle != nil {
-		ev.Title = r.SessionTitle.Text
+		ev.Title = clipRunes(r.SessionTitle.Text)
 	}
 	switch status {
 	case workerWaiting:
 		ev.RequestID = d.PermissionRequest
 		if r.PendingPermission != nil {
-			ev.ToolName = r.PendingPermission.ToolName
+			ev.ToolName = clipRunes(r.PendingPermission.ToolName)
 		}
 	case workerError:
 		for _, s := range []string{d.LastTurnReason, d.TerminalReason, r.RejectReason, d.State} {
 			if s != "" {
-				ev.Reason = s
+				ev.Reason = clipRunes(s)
 				break
 			}
 		}

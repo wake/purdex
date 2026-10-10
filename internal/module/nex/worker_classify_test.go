@@ -63,6 +63,14 @@ func TestClassifyWorker(t *testing.T) {
 		{"no prev is a baseline (waiting)", nil, waiting("p1"), false, workerWaiting, ""},
 		{"idle to running", pt(idle), running, false, workerRunning, ""},
 		{"failed with a request stays error", pt(running), rowDigest{State: "failed", PermissionRequest: "p1", TurnCount: 2}, true, workerError, "e|error|2"},
+		{"unarchive to idle is not a second done", pt(archived), idle, false, workerIdle, ""},
+		{"unarchive to failed is not a second failure", pt(rowDigest{State: "failed", Archived: true}), failed, false, workerError, ""},
+		{"unarchive to waiting, same request", pt(rowDigest{State: "running", Archived: true, PermissionRequest: "p1"}), waiting("p1"), false, workerWaiting, ""},
+		{"unarchive to waiting, another request", pt(rowDigest{State: "running", Archived: true, PermissionRequest: "p1"}), waiting("p2"), true, workerWaiting, "e|waiting|p2"},
+		{"failed to idle without a running", pt(failed), idle, false, workerIdle, ""},
+		{"rejected to idle without a running", pt(rejected), idle, false, workerIdle, ""},
+		{"idle to failed without a running", pt(idle), failed, false, workerError, ""},
+		{"blank request id keys on the turn", pt(running), rowDigest{State: "running", PermissionBlank: true, TurnCount: 2}, true, workerWaiting, "e|waiting||turn2"},
 		{"last_turn_reason error with state idle is done", pt(running), rowDigest{State: "idle", LastTurnReason: "error", TurnCount: 1}, true, workerIdle, "e|idle|1"},
 	}
 	for _, tc := range tests {

@@ -51,12 +51,20 @@ func classifyWorker(execID string, prev *rowDigest, cur rowDigest) (status worke
 	before := projectWorker(*prev)
 	switch status {
 	case workerWaiting:
-		if before == workerWaiting && prev.PermissionRequest == cur.PermissionRequest {
+		// The same request the earlier row already carried is not new, whatever status that row projected to
+		// (archive then unarchive goes through clear and back).
+		if prev.pending() && prev.PermissionRequest == cur.PermissionRequest {
 			return status, "", false
 		}
-		return status, execID + "|waiting|" + cur.PermissionRequest, true
+		key = execID + "|waiting|" + cur.PermissionRequest
+		if cur.PermissionRequest == "" { // blank request id: turn_count is all that tells two apart
+			key += "|turn" + strconv.FormatInt(cur.TurnCount, 10)
+		}
+		return status, key, true
 	case workerIdle, workerError:
-		if before == status {
+		// Done and failed follow a turn that was running or waiting. From clear (unarchive), or from idle/error
+		// (failed to idle without a running between), nothing new happened.
+		if before != workerRunning && before != workerWaiting {
 			return status, "", false
 		}
 		return status, execID + "|" + string(status) + "|" + strconv.FormatInt(cur.TurnCount, 10), true

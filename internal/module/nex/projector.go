@@ -158,6 +158,9 @@ type pushedRow struct {
 	ver     uint64
 	removed bool      // that delta was a removal (row null)
 	digest  rowDigest // zero when removed
+	// unparsed: the row's digest did not parse and there was no earlier one to keep, so digest is a placeholder
+	// (the worker notifier takes the next read as a baseline).
+	unparsed bool
 }
 
 // mark is one reason to read an execution again.
@@ -440,28 +443,40 @@ func (p *projector) push(id string, st slotStamp, cause []string, row json.RawMe
 		return pushedRow{}
 	}
 	p.events.BroadcastStrictTo(core.FeatureNexV1, core.HostEvent{Type: deltaEventType, Value: value})
-	rec, prev, had := p.recordPushed(id, st.Ver, row, found)
-	p.notifyWorker(id, prev, had, rec, row)
+	rec, prev, had, bad := p.recordPushed(id, st.Ver, row, found)
+	if !bad {
+		p.notifyWorker(id, prev, had, rec, row)
+	}
 	return rec
 }
 
 // recordPushed keeps lastPushed[id] current and returns what it recorded,
 // with the entry it replaced (had false: none, so the worker notifier takes
-// this read as a baseline).
-func (p *projector) recordPushed(id string, ver uint64, row json.RawMessage, found bool) (rec, prev pushedRow, had bool) {
+// this read as a baseline) and bad: the row's digest did not parse. A bad
+// read keeps the previous digest as the baseline (a zero digest would read as
+// idle); with none to keep it records a zero digest marked unparsed.
+func (p *projector) recordPushed(id string, ver uint64, row json.RawMessage, found bool) (rec, prev pushedRow, had, bad bool) {
 	rec = pushedRow{ver: ver, removed: !found}
 	if found {
 		d, err := digestOf(row)
 		if err != nil {
 			p.logf("nex-delta: no status digest for exec=%s: %v", id, err)
+			bad = true
 		}
 		rec.digest = d
 	}
 	p.mu.Lock()
 	prev, had = p.pushed[id]
+	if bad {
+		if had && !prev.removed && !prev.unparsed {
+			rec.digest = prev.digest
+		} else {
+			rec.unparsed = true
+		}
+	}
 	p.pushed[id] = rec
 	p.mu.Unlock()
-	return rec, prev, had
+	return rec, prev, had, bad
 }
 
 // digestOf extracts a row's status digest.

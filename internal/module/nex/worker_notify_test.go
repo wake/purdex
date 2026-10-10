@@ -3,9 +3,11 @@ package nex
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,6 +97,84 @@ func TestProjector_PublishesOnlyTransitions(t *testing.T) {
 	evs = c.waitFor(t, 4)
 	assert.Equal(t, "error", evs[3].Status)
 	assert.Equal(t, "failed", evs[3].Reason)
+}
+
+// A row that comes back after a removal is a baseline, not a transition.
+func TestProjector_RemovedThenBackIsABaseline(t *testing.T) {
+	rows := newRowServer()
+	rows.set("exc_a", "running")
+	e := startProjEnv(t, fastTiming, rows)
+	hub := &workerNotifyHub{}
+	e.p.notify = hub
+	c := &collector{}
+	defer hub.subscribe(c.add)()
+
+	rows.remove("exc_a")
+	flushOnce(t, e, "exc_a")
+	rows.set("exc_a", "idle")
+	flushOnce(t, e, "exc_a")
+	assert.Empty(t, c.got())
+}
+
+// A digest that does not parse neither publishes nor wipes the baseline.
+func TestProjector_UnparsedRowKeepsTheBaseline(t *testing.T) {
+	rows := newRowServer()
+	rows.set("exc_a", "running")
+	e := startProjEnv(t, fastTiming, rows)
+	hub := &workerNotifyHub{}
+	e.p.notify = hub
+	c := &collector{}
+	defer hub.subscribe(c.add)()
+
+	rows.setBody("exc_a", `{"id":"exc_a","state":"running","turn_count":"x"}`+"\n")
+	flushOnce(t, e, "exc_a")
+	assert.Empty(t, c.got(), "an unparsed row is not a transition")
+	rows.set("exc_a", "running")
+	flushOnce(t, e, "exc_a")
+	assert.Empty(t, c.got())
+	rows.setBody("exc_a", `{"id":"exc_a","state":"running","turn_count":"x"}`+"\n")
+	flushOnce(t, e, "exc_a")
+	rows.set("exc_a", "idle") // straight after an unparsed read: the baseline is still the running one
+	flushOnce(t, e, "exc_a")
+	assert.Len(t, c.waitFor(t, 1), 1, "the running baseline survived: one done")
+	flushOnce(t, e, "exc_a")
+	assert.Len(t, c.got(), 1)
+}
+
+func TestProjector_EventTextIsClippedByRunes(t *testing.T) {
+	rows := newRowServer()
+	rows.set("exc_a", "running")
+	e := startProjEnv(t, fastTiming, rows)
+	hub := &workerNotifyHub{}
+	e.p.notify = hub
+	c := &collector{}
+	defer hub.subscribe(c.add)()
+
+	long := strings.Repeat("字", 300)
+	rows.setBody("exc_a", fmt.Sprintf(`{"id":"exc_a","state":"running","turn_count":1,"brief":%q,"session_title":{"text":%q},`+
+		`"pending_permission":{"request_id":"p1","tool_name":%q}}`+"\n", long, long, long))
+	flushOnce(t, e, "exc_a")
+	ev := c.waitFor(t, 1)[0]
+	want := strings.Repeat("字", 256)
+	assert.Equal(t, want, ev.Title)
+	assert.Equal(t, want, ev.Brief)
+	assert.Equal(t, want, ev.ToolName)
+	assert.True(t, utf8.ValidString(ev.Title))
+	assert.Equal(t, "ab", clipRunes("ab"))
+	assert.Equal(t, strings.Repeat("a", 256), clipRunes(strings.Repeat("a", 300)))
+	assert.Equal(t, strings.Repeat("字", 100), clipRunes(strings.Repeat("字", 100)))
+}
+
+func TestWorkerNotifyHub_CloseIsBoundedWhenASubscriberIsStuck(t *testing.T) {
+	h := &workerNotifyHub{closeWait: 100 * time.Millisecond}
+	block, entered := make(chan struct{}), make(chan struct{})
+	defer close(block)
+	h.subscribe(func(WorkerNotifyEvent) { close(entered); <-block })
+	h.publish(WorkerNotifyEvent{})
+	<-entered
+	start := time.Now()
+	h.close()
+	assert.Less(t, time.Since(start), 2*time.Second)
 }
 
 func TestProjector_NoSubscriberChangesNothing(t *testing.T) {
