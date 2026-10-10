@@ -71,6 +71,7 @@ type workerNotifyHub struct {
 	logging atomic.Bool
 	// closeWait bounds close's wait for the consumers; zero means workerNotifyCloseWait.
 	closeWait time.Duration
+	gaveUp    bool // a close ran out its wait: later closes return at once
 }
 
 // workerNotifyCloseWait is how long close waits for subscriber goroutines (projectorStopWait's order of magnitude).
@@ -150,7 +151,11 @@ func (h *workerNotifyHub) close() {
 		close(ch)
 	}
 	wait := h.closeWait
+	gaveUp := h.gaveUp
 	h.mu.Unlock()
+	if gaveUp { // an earlier close already waited out the budget: do not wait a second time
+		return
+	}
 	if wait <= 0 {
 		wait = workerNotifyCloseWait
 	}
@@ -159,6 +164,9 @@ func (h *workerNotifyHub) close() {
 	select {
 	case <-done:
 	case <-time.After(wait):
+		h.mu.Lock()
+		h.gaveUp = true
+		h.mu.Unlock()
 		log.Printf("[nex] worker notify: a subscriber is still running %v after close; not waiting for it", wait)
 	}
 }

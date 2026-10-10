@@ -175,6 +175,10 @@ func TestWorkerNotifyHub_CloseIsBoundedWhenASubscriberIsStuck(t *testing.T) {
 	start := time.Now()
 	h.close()
 	assert.Less(t, time.Since(start), 2*time.Second)
+	second := time.Now()
+	h.close() // Stop then Close: the second must not wait out the budget again
+	assert.Less(t, time.Since(second), 50*time.Millisecond)
+	assert.Less(t, time.Since(start), 190*time.Millisecond, "two closes cost about one wait")
 }
 
 func TestProjector_NoSubscriberChangesNothing(t *testing.T) {
