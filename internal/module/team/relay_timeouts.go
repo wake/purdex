@@ -182,8 +182,13 @@ func (m *Module) busyNoticeOnce(op team.RelayOp, mr memberRow) {
 	}
 	if !m.goTracked(func() {
 		t, ok, err := m.store.TeamByID(op.TeamID)
-		if err != nil || !ok || t.EndedAt != 0 {
-			return // no live team to tell
+		if err != nil {
+			m.logf("[team] busy notice of op %s: %v", op.ID, err)
+			undo() // transient: the next sweep tries again
+			return
+		}
+		if !ok || t.EndedAt != 0 {
+			return // no live team to tell: the mark stays, there is nothing to retry
 		}
 		address, _ := m.memberNoticeName(mr)
 		if !m.noticeToLead(mr, t, fmt.Sprintf(team.RelayBusyNoticeFmt, address, strings.TrimPrefix(mr.Ref, "_")), "busy notice") {
