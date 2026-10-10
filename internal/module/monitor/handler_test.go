@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -114,4 +115,24 @@ func toJSONMap(t *testing.T, value any) map[string]any {
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(data, &got))
 	return got
+}
+
+// The monitor's PUT goes through the daemon's one config writer (#2556): the file's other settings, a newer token among them,
+// are kept, and a failed write leaves memory as it was.
+func TestPutMonitorConfig_KeepsWhatAnotherWriterPutInTheFile(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("token = \"pdx_onfileonfileonfileonfileonfileonfileon\"\n"), 0o600))
+	m := New()
+	c := core.New(core.CoreDeps{Config: &config.Config{Token: "inmemory"}})
+	c.CfgPath = cfgPath
+	require.NoError(t, m.Init(c))
+
+	rec := httptest.NewRecorder()
+	m.handleConfig(rec, httptest.NewRequest(http.MethodPut, "/api/monitor/config", bytes.NewBufferString(`{"refresh_interval_ms":2000}`)))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	back, err := config.Load(cfgPath)
+	require.NoError(t, err)
+	require.Equal(t, "pdx_onfileonfileonfileonfileonfileonfileon", back.Token)
+	require.Equal(t, 2000, back.Monitor.RefreshIntervalMS)
 }

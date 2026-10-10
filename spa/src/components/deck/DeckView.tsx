@@ -78,14 +78,17 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   const foldStore = usePaneFoldStore(`${paneId}\0${sessionId}`)
   useEffect(() => noteDeckPane(paneId), [paneId])
   // The place is the pane's AND the session's: a pane that moves to another session (/clear, a relay) starts at the end.
-  const scroll = useTranscriptScroll(undefined, false, { paneId: `${paneId}\0${sessionId}`, view: 'deck' })
+  const scroll = useTranscriptScroll(undefined, false, { paneId: `${paneId}\0${sessionId}`, view: 'deck', detached: doc.detached, totalTurns: doc.totalTurns })
   const { attach, onScroll: onBoxScroll, follow } = scroll
   const boxRef = useRef<HTMLDivElement | null>(null)
   const setBox = useCallback((node: HTMLDivElement | null) => { boxRef.current = node; attach(node) }, [attach])
   const reveal = useDeckReveal(`${paneId}\0${sessionId}`, boxRef)
 
-  // Placed from the pane's memory on the first run, then only a reader at the bottom is carried along as turns land.
-  useEffect(() => { follow() }, [follow, doc.turns])
+  // Placed from the pane's memory on the first run, then only a reader at the bottom is carried along as turns land. Not while
+  // there is nothing in the box (a conversation re-opened and still loading): that first run would read the memory against
+  // an empty box and spend the placement, and the turns arriving next would slide down from the top.
+  const empty = doc.turns.every((turn) => turn.items.length === 0)
+  useEffect(() => { if (!empty) follow() }, [follow, doc.turns, empty])
 
   // A page that does not fill the box cannot be scrolled, so no scroll event would ever ask for the next one: ask until the
   // box overflows or nothing older is left. A page that lands moves the first turn and starts over at once; one that fails
@@ -119,7 +122,6 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   }
 
   const items = useMemo(() => doc.turns.flatMap((turn) => turn.items), [doc.turns])
-  const empty = doc.turns.every((turn) => turn.items.length === 0)
 
   return (
     <div className="flex h-full flex-col">

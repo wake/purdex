@@ -120,7 +120,9 @@ func initPairingTo(c *core.Core, cfg *config.Config, cfgPath string, quick bool,
 			c.CfgMu.Lock()
 			c.Cfg.Bind = cfg.Bind
 			c.CfgMu.Unlock()
-			if err := config.WriteFile(cfgPath, *cfg); err != nil {
+			// Its own field, on top of the file: nothing else of the in-memory config (a --port override) is made permanent.
+			bind := cfg.Bind
+			if _, err := config.Update(cfgPath, func(f *config.Config) error { f.Bind = bind; return nil }); err != nil {
 				log.Printf("save bind config: %v", err)
 			}
 		}

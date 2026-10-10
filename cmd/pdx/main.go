@@ -202,18 +202,10 @@ func runServe(args []string) *reexecPlan {
 		log.Fatalf("data dir: %v", err)
 	}
 
-	// 1b. Ensure stable host ID
 	resolvedCfgPath := *cfgPath
 	if resolvedCfgPath == "" {
 		resolvedCfgPath = filepath.Join(cfg.DataDir, "config.toml")
 	}
-	hostID, err := config.EnsureHostID(&cfg, resolvedCfgPath)
-	if err != nil {
-		log.Printf("host_id: %v (running without stable host ID)", err)
-	} else {
-		log.Printf("host_id: %s", hostID)
-	}
-
 	// Acquire PID file lock (for pdx start/stop/status). A held lock means
 	// another daemon already owns this data_dir, so refuse to start rather
 	// than run two daemons against the same SQLite files.
@@ -238,6 +230,15 @@ func runServe(args []string) *reexecPlan {
 			releasePidLock(pidFile, pidPath)
 		}
 	}()
+
+	// 1b. Ensure stable host ID. After the pid lock (#2556): a second daemon that is refused above never touches the config
+	// file, and nothing before this point uses the host id.
+	hostID, err := config.EnsureHostID(&cfg, resolvedCfgPath)
+	if err != nil {
+		log.Printf("host_id: %v (running without stable host ID)", err)
+	} else {
+		log.Printf("host_id: %s", hostID)
+	}
 
 	// The daemon's log is bounded (#2163): size-rotated and compressed, only when its stdout/stderr is that file. After
 	// the pid lock, so only the daemon that owns this data_dir renames or compresses anything; stopped (and its

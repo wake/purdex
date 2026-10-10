@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"strings"
-	"syscall"
 
 	"github.com/BurntSushi/toml"
 )
@@ -18,37 +17,27 @@ import (
 // write goes through a temp file of its own, mode 0600, and the whole read-modify-write holds an exclusive lock on "<path>.lock",
 // so two daemons sharing a config, or `pdx token generate` beside a starting daemon, cannot lose each other's update.
 func SetToken(path, token string) error {
-	if err := os.MkdirAll(dirOf(path), 0755); err != nil {
-		return err
-	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-
-	raw, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err == nil {
-		if out, ok := withTopLevelToken(raw, token); ok {
-			var check Config
-			if toml.Unmarshal(out, &check) == nil && check.Token == token {
-				return writeFileAtomic(path, out)
+	path = canonPath(path)
+	return withFileLock(path, func() error {
+		raw, err := os.ReadFile(path)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err == nil {
+			if out, ok := withTopLevelToken(raw, token); ok {
+				var check Config
+				if toml.Unmarshal(out, &check) == nil && check.Token == token {
+					return writeFileAtomic(path, out)
+				}
 			}
 		}
-	}
-	cfg, err := Load(path) // defaults for a missing file
-	if err != nil {
-		return err
-	}
-	cfg.Token = token
-	return WriteFile(path, cfg)
+		cfg, err := Load(path) // defaults for a missing file
+		if err != nil {
+			return err
+		}
+		cfg.Token = token
+		return WriteFile(path, cfg)
+	})
 }
 
 func dirOf(path string) string {

@@ -568,14 +568,13 @@ func TestRotateCancel_FailedWriteLeavesRecordAndGateIntact(t *testing.T) {
 	m := newHostsTestModule(t, c, failIfCalledFetch(t))
 	doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, prevPrincipal("air")) // peer is on the OLD token
 
-	// Break persistence: a regular file as CfgPath's parent makes
-	// config.WriteFile fail with ENOTDIR (same trick as
-	// TestPutConfigRollsBackOnWriteFailure in internal/core).
-	blocker := filepath.Join(t.TempDir(), "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
-		t.Fatalf("write blocker: %v", err)
+	// Break persistence: a directory where the config file should be makes the write phase fail (inside the file lock, after the
+	// handler's own change ran), as a failed write always did.
+	asDir := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.Mkdir(asDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	c.CfgPath = filepath.Join(blocker, "config.toml")
+	c.CfgPath = asDir // reading it fails inside the lock, after the handler's own change ran
 
 	if rr := gate(t, m, "air", "cancel", false); rr.Code != http.StatusInternalServerError {
 		t.Fatalf("cancel with failed write = %d; want 500; body=%s", rr.Code, rr.Body.String())
@@ -762,11 +761,11 @@ func TestRenameAndDelete_FailedWriteIsFailClosed(t *testing.T) {
 		t.Helper()
 		// A regular file as CfgPath's parent makes config.WriteFile fail
 		// with ENOTDIR (same trick as TestRotateCancel_FailedWriteLeavesRecordAndGateIntact).
-		blocker := filepath.Join(t.TempDir(), "blocker")
-		if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
-			t.Fatalf("write blocker: %v", err)
+		asDir := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.Mkdir(asDir, 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
 		}
-		c.CfgPath = filepath.Join(blocker, "config.toml")
+		c.CfgPath = asDir // reading it fails inside the lock, after the handler's own change ran
 	}
 	stillAir := func(t *testing.T, c *core.Core) {
 		t.Helper()

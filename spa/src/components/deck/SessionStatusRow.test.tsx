@@ -88,4 +88,11 @@ describe('SessionStatusRow', () => {
     expect(row.getAttribute('style')).toContain(hostTintBackground('#3b82f6'))
     expect(row).toHaveClass('text-text-primary')
   })
+
+  it('is 24px tall (4px lower than before), the text still centred', () => {
+    snapshot({ model: { display_name: 'Opus 5.5' } })
+    render(<SessionStatusRow sessionCode={CODE} cwd={WT} ctx={ctx()} />)
+    expect(screen.getByTestId('status-row')).toHaveClass('h-6', 'items-center')
+    expect(screen.getByTestId('status-row')).not.toHaveClass('h-7')
+  })
 })

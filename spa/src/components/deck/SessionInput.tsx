@@ -51,7 +51,8 @@ function fitHeight(el: HTMLTextAreaElement): void {
   const wanted = el.scrollHeight + px(cs.borderTopWidth) + px(cs.borderBottomWidth)
   const max = MAX_ROWS * line + chrome
   el.style.height = `${Math.max(MIN_ROWS * line + chrome, Math.min(wanted, max))}px`
-  el.style.overflowY = wanted > max ? 'auto' : 'hidden'
+  // scrollHeight is a whole number and a fractional line height (1.65 × 13px) makes `max` one: a full MAX_ROWS is not an overflow
+  el.style.overflowY = wanted > max + 1 ? 'auto' : 'hidden'
 }
 
 function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, asking, onSwitchToTerminal }: Props) {
@@ -168,7 +169,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
           <div
             data-testid="session-input-drop"
             data-dragging={dragging}
-            className={`flex items-end gap-2 border-y px-3 py-1.5 ${dragging ? 'border-dashed border-accent' : 'border-[#808080]'}`} /* proto v2: terminal-style input, 1px #808080 above and below */
+            className={`flex items-end gap-2 border-t px-3 py-1.5 ${dragging ? 'border-dashed border-accent' : 'border-[#808080]'}`} /* proto v2: terminal-style input, a 1px #808080 rule above only (the session status row below is a block of its own) */
             onDragEnter={(e) => { if (carriesFiles(e)) { dragDepth.current++; setDragging(true) } }}
             onDragLeave={(e) => { if (carriesFiles(e) && --dragDepth.current <= 0) endDrag() }}
             onDragOver={(e) => { if (carriesFiles(e)) e.preventDefault() }}
@@ -198,7 +199,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
               }}
               style={{ overflowWrap: 'anywhere' }}
-              className={`flex-1 resize-none rounded-none border-0 px-0 pb-1.5 pt-0 text-sm leading-5 text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
+              className={`flex-1 resize-none rounded-none border-0 px-0 pb-1.5 pt-0 text-[13px] leading-[1.65] tracking-[1px] text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
                 // proto v2: no border, radius, outline or ring (focused or not); a drag over tints the row
                 dragging ? 'bg-accent/10' : 'bg-transparent'
               }`}
