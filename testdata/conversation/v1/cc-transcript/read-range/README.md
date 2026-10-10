@@ -1,0 +1,5 @@
+Hand-composed session: one turn with the tool calls whose range, scope or creation U3-0 reads.
+
+- **Not recorded** (the recorded 2.1.294 sessions used `Bash` for searching, there are no Grep / Glob steps in them). The rows are written to the shapes measured in real transcripts: `Read` with `offset` / `limit`, `Grep` with `path` or `glob`, `Glob` with and without `path`, `WebSearch`, and `Write` whose `toolUseResult` has `type: "create"` (a new file, empty `structuredPatch`, `originalFile: null`) or `type: "update"` with a `structuredPatch`. Text is invented; `version` 2.1.294 only fills the MANIFEST.
+- Steps: three `Read`s (offset + limit, whole file, offset only) → `step.read` {10, 20} / none / {40}; `Grep` with a path and with a glob, `Glob` with and without a path, `WebSearch` → `step.search.where` = the path, the glob, the path, none, `web`; `Write` creating a file → `diff.created`; `Write` updating a file → an exact diff, not created; a `Write` refused by the person → denied / user-rejected, never `created`.
+- Live: `false`.

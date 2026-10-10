@@ -1,0 +1,369 @@
+{
+  "live": false,
+  "conversation": {
+    "key": {
+      "host_id": "",
+      "provider": "claude",
+      "session_id": "00000000-0000-4000-8000-000000000001"
+    },
+    "provider": "claude",
+    "title": "",
+    "capabilities": {
+      "source": "transcript",
+      "text_streaming": "message",
+      "thinking": "duration",
+      "subagent": "partial",
+      "reasons": {
+        "answer_permission": "not_wired",
+        "answer_plan": "not_wired",
+        "answer_question": "not_wired",
+        "background_tasks": "not_wired",
+        "interrupt": "not_wired",
+        "peer_inbound": "not_wired",
+        "send": "not_wired",
+        "steer": "not_wired",
+        "todo": "not_wired",
+        "usage": "not_wired"
+      }
+    },
+    "usage": {
+      "model": "claude-sonnet-5-5",
+      "effort": "medium"
+    },
+    "turns": [
+      {
+        "id": "f64551fc-d6f0-4823-8b87-971cfb914464",
+        "index": 0,
+        "started_at": 1791620201000,
+        "ended_at": 1791620226000,
+        "outcome": "done",
+        "duration_ms": 30000,
+        "items": [
+          {
+            "type": "user",
+            "id": "f64551fc-d6f0-4823-8b87-971cfb914464",
+            "at": 1791620201000,
+            "text": "讀幾個檔案、搜尋、新增一個檔案並改一個舊檔。",
+            "source": "user"
+          },
+          {
+            "type": "agent_text",
+            "id": "628b49d9-6dcd-497a-830d-d4f597705899",
+            "at": 1791620202000,
+            "markdown": "開始。"
+          },
+          {
+            "type": "step",
+            "id": "toolu_01f572f0ceaafd42d9fce2cd",
+            "at": 1791620203000,
+            "kind": "read",
+            "tool": "Read",
+            "status": "done",
+            "summary": "/work/fixture/notes.txt",
+            "started_at": 1791620203000,
+            "duration_ms": 1000,
+            "input": {
+              "file_path": "/work/fixture/notes.txt",
+              "limit": 20,
+              "offset": 10
+            },
+            "output": {
+              "text": "    10\tline ten\n    11\tline eleven\n    12\tline twelve",
+              "total_lines": 3,
+              "total_bytes": 53,
+              "truncated": false
+            },
+            "read": {
+              "offset": 10,
+              "limit": 20
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01dbf5b138f14068f0b9b95d",
+            "at": 1791620205000,
+            "kind": "read",
+            "tool": "Read",
+            "status": "done",
+            "summary": "/work/fixture/notes.txt",
+            "started_at": 1791620205000,
+            "duration_ms": 1000,
+            "input": {
+              "file_path": "/work/fixture/notes.txt"
+            },
+            "output": {
+              "text": "     1\tfirst\n     2\tsecond",
+              "total_lines": 2,
+              "total_bytes": 26,
+              "truncated": false
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01ae972b84f8705357161a40",
+            "at": 1791620207000,
+            "kind": "read",
+            "tool": "Read",
+            "status": "done",
+            "summary": "/work/fixture/notes.txt",
+            "started_at": 1791620207000,
+            "duration_ms": 1000,
+            "input": {
+              "file_path": "/work/fixture/notes.txt",
+              "offset": 40
+            },
+            "output": {
+              "text": "    40\tforty",
+              "total_lines": 1,
+              "total_bytes": 12,
+              "truncated": false
+            },
+            "read": {
+              "offset": 40
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01c5a4dd8733e10c84f8ac8c",
+            "at": 1791620209000,
+            "kind": "search",
+            "tool": "Grep",
+            "status": "done",
+            "summary": "widget",
+            "started_at": 1791620209000,
+            "duration_ms": 1000,
+            "input": {
+              "path": "/work/fixture/src",
+              "pattern": "widget"
+            },
+            "output": {
+              "text": "src/a.go:3:widget",
+              "total_lines": 1,
+              "total_bytes": 17,
+              "truncated": false
+            },
+            "search": {
+              "where": "/work/fixture/src"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01b3144fef4e2fa695f8904e",
+            "at": 1791620211000,
+            "kind": "search",
+            "tool": "Grep",
+            "status": "done",
+            "summary": "widget",
+            "started_at": 1791620211000,
+            "duration_ms": 1000,
+            "input": {
+              "glob": "*.md",
+              "pattern": "widget"
+            },
+            "output": {
+              "text": "README.md:1:widget",
+              "total_lines": 1,
+              "total_bytes": 18,
+              "truncated": false
+            },
+            "search": {
+              "where": "*.md"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01bba36096e2dc1cadd9c51f",
+            "at": 1791620213000,
+            "kind": "search",
+            "tool": "Glob",
+            "status": "done",
+            "summary": "**/*.md",
+            "started_at": 1791620213000,
+            "duration_ms": 1000,
+            "input": {
+              "path": "/work/fixture",
+              "pattern": "**/*.md"
+            },
+            "output": {
+              "text": "/work/fixture/README.md",
+              "total_lines": 1,
+              "total_bytes": 23,
+              "truncated": false
+            },
+            "search": {
+              "where": "/work/fixture"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01b82b58e42c46a938fcf40b",
+            "at": 1791620215000,
+            "kind": "search",
+            "tool": "Glob",
+            "status": "done",
+            "summary": "**/*.go",
+            "started_at": 1791620215000,
+            "duration_ms": 1000,
+            "input": {
+              "pattern": "**/*.go"
+            },
+            "output": {
+              "text": "/work/fixture/src/a.go",
+              "total_lines": 1,
+              "total_bytes": 22,
+              "truncated": false
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01bc937ad7fd7c3261cc0d97",
+            "at": 1791620217000,
+            "kind": "search",
+            "tool": "WebSearch",
+            "status": "done",
+            "summary": "go generics tutorial",
+            "started_at": 1791620217000,
+            "duration_ms": 1000,
+            "input": {
+              "query": "go generics tutorial"
+            },
+            "output": {
+              "text": "Web search results for query: \"go generics tutorial\"",
+              "total_lines": 1,
+              "total_bytes": 52,
+              "truncated": false
+            },
+            "search": {
+              "where": "web"
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_0144f1f2e2f9679f1bf48d55",
+            "at": 1791620219000,
+            "kind": "edit",
+            "tool": "Write",
+            "status": "done",
+            "summary": "/work/fixture/new.txt",
+            "started_at": 1791620219000,
+            "duration_ms": 1000,
+            "input": {
+              "content": "hello\nworld\n",
+              "file_path": "/work/fixture/new.txt"
+            },
+            "output": {
+              "text": "File created successfully at: /work/fixture/new.txt",
+              "total_lines": 1,
+              "total_bytes": 51,
+              "truncated": false
+            },
+            "diff": {
+              "path": "/work/fixture/new.txt",
+              "added": 2,
+              "removed": 0,
+              "exact": false,
+              "hunks": [
+                {
+                  "old_start": 0,
+                  "old_lines": 0,
+                  "new_start": 1,
+                  "new_lines": 2,
+                  "lines": [
+                    "+hello",
+                    "+world"
+                  ]
+                }
+              ],
+              "created": true
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01e2ff8c93ee4fc7eca1988d",
+            "at": 1791620221000,
+            "kind": "edit",
+            "tool": "Write",
+            "status": "done",
+            "summary": "/work/fixture/old.txt",
+            "started_at": 1791620221000,
+            "duration_ms": 1000,
+            "input": {
+              "content": "hello\nthere\n",
+              "file_path": "/work/fixture/old.txt"
+            },
+            "output": {
+              "text": "The file /work/fixture/old.txt has been updated.",
+              "total_lines": 1,
+              "total_bytes": 48,
+              "truncated": false
+            },
+            "diff": {
+              "path": "/work/fixture/old.txt",
+              "added": 1,
+              "removed": 1,
+              "exact": true,
+              "hunks": [
+                {
+                  "old_start": 1,
+                  "old_lines": 2,
+                  "new_start": 1,
+                  "new_lines": 2,
+                  "lines": [
+                    " hello",
+                    "-world",
+                    "+there"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "type": "step",
+            "id": "toolu_01b41d0e469d29d1b91f2762",
+            "at": 1791620223000,
+            "kind": "edit",
+            "tool": "Write",
+            "status": "denied",
+            "denial": "user-rejected",
+            "summary": "/work/fixture/denied.txt",
+            "started_at": 1791620223000,
+            "duration_ms": 1000,
+            "input": {
+              "content": "nope\n",
+              "file_path": "/work/fixture/denied.txt"
+            },
+            "output": {
+              "text": "The user doesn't want to proceed with this tool use. The tool use was rejected.",
+              "total_lines": 1,
+              "total_bytes": 79,
+              "truncated": false
+            },
+            "diff": {
+              "path": "/work/fixture/denied.txt",
+              "added": 1,
+              "removed": 0,
+              "exact": false,
+              "hunks": [
+                {
+                  "old_start": 0,
+                  "old_lines": 0,
+                  "new_start": 1,
+                  "new_lines": 1,
+                  "lines": [
+                    "+nope"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "type": "agent_text",
+            "id": "c4447403-8d45-4e40-8471-4afefa7bf8da",
+            "at": 1791620225000,
+            "markdown": "完成。"
+          }
+        ]
+      }
+    ]
+  }
+}

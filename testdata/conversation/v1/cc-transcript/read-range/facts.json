@@ -1,0 +1,22 @@
+{
+  "live": false,
+  "turns": 1,
+  "per_turn": [
+    {"id": "f64551fc-d6f0-4823-8b87-971cfb914464", "outcome": "done", "user_source": "user"}
+  ],
+  "steps": [
+    {"id": "toolu_01f572f0ceaafd42d9fce2cd", "kind": "read", "status": "done"},
+    {"id": "toolu_01dbf5b138f14068f0b9b95d", "kind": "read", "status": "done"},
+    {"id": "toolu_01ae972b84f8705357161a40", "kind": "read", "status": "done"},
+    {"id": "toolu_01c5a4dd8733e10c84f8ac8c", "kind": "search", "status": "done"},
+    {"id": "toolu_01b3144fef4e2fa695f8904e", "kind": "search", "status": "done"},
+    {"id": "toolu_01bba36096e2dc1cadd9c51f", "kind": "search", "status": "done"},
+    {"id": "toolu_01b82b58e42c46a938fcf40b", "kind": "search", "status": "done"},
+    {"id": "toolu_01bc937ad7fd7c3261cc0d97", "kind": "search", "status": "done"},
+    {"id": "toolu_0144f1f2e2f9679f1bf48d55", "kind": "edit", "status": "done"},
+    {"id": "toolu_01e2ff8c93ee4fc7eca1988d", "kind": "edit", "status": "done"},
+    {"id": "toolu_01b41d0e469d29d1b91f2762", "kind": "edit", "status": "denied", "denial": "user-rejected"}
+  ],
+  "outputs": [],
+  "shapes": []
+}

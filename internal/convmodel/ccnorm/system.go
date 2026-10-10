@@ -89,16 +89,15 @@ func (n *Normalizer) compactBoundary(l *rawLine, off int64) {
 	if !tr.hasModel {
 		tr.modelFree = true
 	}
-	var detail json.RawMessage
+	var d compactDetail
 	meta, _ := parseObject(l.CompactMetadata)
 	if trig := meta.str("trigger"); trig == "auto" || trig == "manual" {
-		detail = marshalNoEscape(struct {
-			Trigger string `json:"trigger"`
-		}{trig})
+		d.Trigger = trig
 	}
 	n.upsert(tr.t.ID, convmodel.Item{Type: convmodel.ItemSystem, System: &convmodel.System{
-		ID: l.uuid, At: l.at, Kind: convmodel.SystemCompacted, Detail: detail,
+		ID: l.uuid, At: l.at, Kind: convmodel.SystemCompacted, Detail: d.json(),
 	}}, off)
+	n.compactID = l.uuid // the isCompactSummary row that follows is its summary
 	n.attribute(ti, l.at)
 }
 

@@ -53,7 +53,7 @@
             "kind": "read",
             "tool": "Read",
             "status": "done",
-            "summary": "tiny.png",
+            "summary": "/work/fixture/tiny.png",
             "started_at": 1791482627465,
             "duration_ms": 4168,
             "input": {

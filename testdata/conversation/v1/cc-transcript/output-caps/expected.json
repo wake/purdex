@@ -53,7 +53,7 @@
             "kind": "read",
             "tool": "Read",
             "status": "done",
-            "summary": "big.txt",
+            "summary": "/work/fixture/big.txt",
             "started_at": 1791378002000,
             "duration_ms": 1000,
             "input": {

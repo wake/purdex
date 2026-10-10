@@ -1,7 +1,6 @@
 package ccnorm
 
 import (
-	"path"
 	"sort"
 	"strings"
 
@@ -29,20 +28,32 @@ func kindOf(tool string) convmodel.StepKind {
 	return convmodel.StepOther
 }
 
-// summaryOf is the one line a step shows: the tool's main argument, else the
-// first string input value in sorted key order (the iOS fallback), first line
-// only and at most one input string long. Rules: spec §8.1 "Steps".
+// maxSummaryRunes is the longest one-line summary; past it the line stops being a summary and ends in an ellipsis (Collie's
+// limit, U3-0).
+const maxSummaryRunes = 200
+
+// pickOrder is the named input fields tried, in this order, when a tool's own field is empty and for tools the table below
+// does not know: the same list and order as Collie's `summarizeToolInput`, so `pattern` outranks the bare `path` of a Grep.
+var pickOrder = [...]string{"file_path", "command", "pattern", "query", "url", "path", "description", "task", "prompt"}
+
+// summaryOf is the one line a step shows (spec §8.1 "Steps", aligned with Collie's `summarizeToolInput` in U3-0; the table
+// test summary_collie_test.go is the record of every difference kept). A question asked by the call comes first (by the
+// shape of the input); then the tool's main argument; else the named fields of pickOrder; else the first string input value
+// in sorted key order. Whitespace runs collapse to one space, and the line is cut at maxSummaryRunes.
 func summaryOf(tool string, in object) string {
+	if q := questionOf(in); q != nil {
+		return oneLine(q.Questions[0].Question)
+	}
 	var s string
 	switch tool {
 	case "Bash":
 		s = in.str("command")
 	case "Read", "Edit", "MultiEdit", "Write":
-		s = baseName(in.str("file_path"))
+		s = in.str("file_path")
 	case "NotebookEdit":
-		s = baseName(in.str("notebook_path"))
+		s = in.str("notebook_path")
 		if s == "" {
-			s = baseName(in.str("file_path"))
+			s = in.str("file_path")
 		}
 	case "Grep", "Glob":
 		s = in.str("pattern")
@@ -54,9 +65,8 @@ func summaryOf(tool string, in object) string {
 		s = in.str("description")
 	case "Skill":
 		s = in.str("skill")
-	case "AskUserQuestion":
-		s = firstQuestion(in.get("questions"))
 	default:
+		// an MCP tool keeps its identity ("server · tool"); Collie shows the first argument instead
 		if rest, ok := strings.CutPrefix(tool, "mcp__"); ok {
 			if server, name, ok := strings.Cut(rest, "__"); ok {
 				s = server + " · " + name
@@ -64,25 +74,27 @@ func summaryOf(tool string, in object) string {
 		}
 	}
 	if strings.TrimSpace(s) == "" {
+		for _, k := range pickOrder {
+			if v := in.str(k); strings.TrimSpace(v) != "" {
+				s = v
+				break
+			}
+		}
+	}
+	if strings.TrimSpace(s) == "" {
 		s = firstStringValue(in)
 	}
-	return firstLine(s)
+	return oneLine(s)
 }
 
-func baseName(p string) string {
-	if p == "" {
-		return ""
+// oneLine collapses every run of white space to one space, trims, and cuts the line at maxSummaryRunes runes with an
+// ellipsis.
+func oneLine(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > maxSummaryRunes {
+		return string(r[:maxSummaryRunes]) + "…"
 	}
-	return path.Base(p)
-}
-
-// firstQuestion is the first question of an AskUserQuestion input.
-func firstQuestion(raw []byte) string {
-	blocks, ok := contentBlocks(raw)
-	if !ok || len(blocks) == 0 {
-		return ""
-	}
-	return blocks[0].obj.str("question")
+	return s
 }
 
 // firstStringValue is the first non-blank string input value in sorted key
@@ -99,14 +111,4 @@ func firstStringValue(in object) string {
 		}
 	}
 	return ""
-}
-
-// firstLine is the first line of s after leading white space, capped.
-func firstLine(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = strings.TrimRight(s[:i], "\r")
-	}
-	s, _ = capText(s, convmodel.MaxInputString)
-	return s
 }

@@ -64,7 +64,7 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 	}
 	blocks = n.capBlocks(blocks)
 	if l.compactSummary {
-		n.skip("compact_summary")
+		n.compactSummary(blocks, off)
 		return
 	}
 	kind := sourceKind(l)

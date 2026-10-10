@@ -16,6 +16,20 @@
       }
     },
     {
+      "name": "ask-question",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Hand-composed session: four turns that each ask an AskUserQuestion, answered four different ways (U3-0).",
+      "input": "cc-transcript/ask-question/input.jsonl",
+      "expected": "cc-transcript/ask-question/expected.json",
+      "facts": "cc-transcript/ask-question/facts.json",
+      "sha256": {
+        "input": "bbf6d9518dc755cfc7deaa149152de8c674814a8f096a487f43ef96b9e5d5f39",
+        "expected": "51cecc466430744e955bb5097c331d5385204592c7fe6ea2843532b2fc3153ec",
+        "facts": "507a0f92a4f547a14303fc1e93263c9b5db29e1dab7dc3d9aba19df7a00bbc9d"
+      }
+    },
+    {
       "name": "bash-fail-and-background",
       "source": "cc-transcript",
       "cc_version": "2.1.294",
@@ -39,7 +53,7 @@
       "facts": "cc-transcript/compact/facts.json",
       "sha256": {
         "input": "0c2d1813091e537bdf6f9f9f8953afe870ac617ea5e1863f537347b78540b06b",
-        "expected": "8024153ce2dbd598815ef5f33da67087cb3eba0f6edb3155ebcafce261261890",
+        "expected": "44064d3040a052a5b384511a938dab2853a34bc6ff07fa54d8afa84cfed68790",
         "facts": "e8a74f5f9fc491432a79e01a6daf3f536baa984ea6643cebea6ec85c04af09c0"
       }
     },
@@ -53,7 +67,7 @@
       "facts": "cc-transcript/denial-kinds/facts.json",
       "sha256": {
         "input": "26e6cbd9e9ef6f9248a12bc82b2f676955e5c4430b0ea3139f87ab46e6ebaec7",
-        "expected": "2ba9ab3a8e3828a9893428c155bc85c71b70b8c0e5d3188075239318f95a7409",
+        "expected": "19f39de7902019b2a43835def8b31a3a14aa4c3f97f7f9776c2a26fe40e58f86",
         "facts": "b6ba748955735d316b5521330e9ec35f2cf20494ee9b49a99d60496890364891"
       }
     },
@@ -67,7 +81,7 @@
       "facts": "cc-transcript/edit-write-multiedit/facts.json",
       "sha256": {
         "input": "4bef74e413de223bce741a9edf97cb2dfad93a9886bc39c1815e86f1aac08ef5",
-        "expected": "7e74e60d7774d5e72eda3e7fd19a17dcfeb19c8507d5785525454c221be681c1",
+        "expected": "511419180cf65a7d6462da0be8ee4b1c52f94c441f7dbd366fbea6ef5cf1ddf1",
         "facts": "a9b0b7407fb7edcaa47f47bad4c58d7049105e0034a82d120df66c0df1828785"
       }
     },
@@ -81,7 +95,7 @@
       "facts": "cc-transcript/image-result/facts.json",
       "sha256": {
         "input": "4b981b0da3a82ca8b43e7c004d54ed1782e98a92c75d7f3b635d09d471807ef2",
-        "expected": "85f3635a19f22c608fe605112657ccba695189c842e658ec338a1f42ab76f456",
+        "expected": "66362682e68bc00cd3b24842bcaaeacc5210c0f499f691edd7978f29eabad082",
         "facts": "0a9e445385d9d2ae43290e4cafa00195dc936b728ca168dac24d2c7cf14cf9a5"
       }
     },
@@ -109,7 +123,7 @@
       "facts": "cc-transcript/ios-c2-send-keys/facts.json",
       "sha256": {
         "input": "25287a43ab9e899f473673d88039cf8882c85cc4f6052cda7f48b64b73d09482",
-        "expected": "b7c6223cb5fc8d9ac4295fa8672632834b25a65f3db923f9a862824169501371",
+        "expected": "c394b0d0dde4891421d8f4afbdfc4672854dd5b5f62124392ed5d4d321b13872",
         "facts": "3f9f9da67a97fa2bd124e853e37e040f75b56e69a4608fe4b426ca3fdd0d51fd"
       }
     },
@@ -137,7 +151,7 @@
       "facts": "cc-transcript/ios-f3-ask-permission/facts.json",
       "sha256": {
         "input": "5f66d789616b7cb157d828bb2b6b6b70773d0fd75ac008dba2ca23d5bca89397",
-        "expected": "9a16c1d4da2edaa0820e06e960c908a18a9e9b7badaa495dd58894fe2c05c69e",
+        "expected": "5eec0bdfc21d609939761868f61f4c577d2b400d12dd6009e71497a87481e64d",
         "facts": "1100067750525302f6c1b46be26c13ee12018a5eb2657d381a75954af38e694d"
       }
     },
@@ -165,7 +179,7 @@
       "facts": "cc-transcript/output-caps/facts.json",
       "sha256": {
         "input": "87fcd8b9c15aeaf91958ab79d04ce2c2cc198d0f8834d210c7c53c4f57e43501",
-        "expected": "e07a0e8c6e235d635abfe922765b259ca321b60da7e25d842f3a5bf616cb8880",
+        "expected": "d66e1141379a9f13464b8060e5ae033de6d466e476f052315dd9db834ee95454",
         "facts": "237bbd411689f22f5f5e9ea960a0828bcf35e35cb96c90c7a37248036a2b90d2"
       }
     },
@@ -207,8 +221,22 @@
       "facts": "cc-transcript/read-grep-glob-webfetch/facts.json",
       "sha256": {
         "input": "b3fadf7d9db47c24b64868a90585b2f098eea05f5e4d7ce686fadb6bdce580fb",
-        "expected": "061a30a95330a5e9cd03527567f19ef88fadc1d8051699893daef59d909f2d67",
+        "expected": "23f9e264e156d2ece32f9e81d0aa65eef02b2f551f36de163d8a7edf9f1b2fa4",
         "facts": "3a8e93740fd69147e8bc3cde4b6a73663e75f8a4bf1504fdd28b41473ed70502"
+      }
+    },
+    {
+      "name": "read-range",
+      "source": "cc-transcript",
+      "cc_version": "2.1.294",
+      "description": "Hand-composed session: one turn with the tool calls whose range, scope or creation U3-0 reads.",
+      "input": "cc-transcript/read-range/input.jsonl",
+      "expected": "cc-transcript/read-range/expected.json",
+      "facts": "cc-transcript/read-range/facts.json",
+      "sha256": {
+        "input": "b6750d1a3125732e47f04d3b1c6e31a7158c54288eb74416583d33380b2cd77d",
+        "expected": "f4baac0bf808bc3c7bea45366b2503e409353e17736cb1ccf9ad3164be693ffd",
+        "facts": "4fe6b7a161273bb2455314d7555a46c78a8ad0d6110e729d7cdc2ee4e4df708d"
       }
     },
     {

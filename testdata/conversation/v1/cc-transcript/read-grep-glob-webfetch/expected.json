@@ -59,7 +59,7 @@
             "kind": "read",
             "tool": "Read",
             "status": "done",
-            "summary": "README.md",
+            "summary": "/work/fixture/README.md",
             "started_at": 1791482215717,
             "duration_ms": 3861,
             "input": {

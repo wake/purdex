@@ -46,7 +46,12 @@ func (n *Normalizer) newStep(b block, taken []convmodel.Item, at int64) (convmod
 		s.Diff = inputDiff(tool, in) // replaced by the exact patch when the result brings one
 	case convmodel.StepExecute:
 		s.Command = commandOf(in)
+	case convmodel.StepRead:
+		s.Read = readRangeOf(in)
+	case convmodel.StepSearch:
+		s.Search = searchScopeOf(tool, in)
 	}
+	s.Question = questionOf(in) // by the shape of the input, whatever the tool is called
 	return convmodel.Item{Type: convmodel.ItemStep, Step: s}, true
 }
 
@@ -167,12 +172,18 @@ func (n *Normalizer) applyResult(id string, r result, off int64) {
 		if d := patchDiff(path, tur); d != nil {
 			s.Diff = d
 		}
+		if s.Status == convmodel.StepDone {
+			s.Diff = createdDiff(s.Diff, path, tur)
+		}
 	case convmodel.StepExecute:
 		if s.Command != nil {
 			s.Command = commandWithResult(s.Command, r.text, tur)
 		}
 	case convmodel.StepTask:
 		s.Subagent = n.subagentOf(&s, tur)
+	}
+	if s.Question != nil && s.Status == convmodel.StepDone {
+		s.Question = withAnswers(s.Question, tur)
 	}
 	if r.at > 0 && s.StartedAt > 0 {
 		d := max(r.at-s.StartedAt, 0)
@@ -184,7 +195,7 @@ func (n *Normalizer) applyResult(id string, r result, off int64) {
 
 // refusals are the texts older Claude Code versions put in an error result
 // when the person said no; newer rows carry toolDenialKind instead.
-var refusals = [...]string{"doesn't want to proceed", "[Request interrupted by user", "was rejected"}
+var refusals = [...]string{"doesn't want to proceed", "[Request interrupted by user", "was rejected", "dismissed the question"}
 
 // resultStatus is the status of a step that has a result, first match wins
 // (spec §8.1): toolDenialKind present → denied with that value, with or

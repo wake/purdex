@@ -57,6 +57,8 @@ type Normalizer struct {
 
 	resulted map[string]struct{} // ids of the steps that have had their result
 
+	compactID string // the compacted item still waiting for its summary row (U3-0)
+
 	pend    []Change               // changes of the current feed, in order
 	pendSet map[[2]string]struct{} // (turn id, item id) of pend, for O(1) dedupe
 	touched int                    // turn index the current row belonged to, -1 for none
