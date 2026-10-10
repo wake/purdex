@@ -14,7 +14,9 @@ interface Props { presetKey: PresetKey }
 function SortableItem({ presetKey, id, label, onRemove }: {
   presetKey: PresetKey; id: string; label: string; onRemove: () => void
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  // `attributes` deliberately not spread: sensors are pointer-only (no KeyboardSensor), so its aria-roledescription /
+  // aria-describedby ("press space to pick up") would be false. A native <button> is already focusable (#2538).
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `item:${presetKey}:${id}`,
     data: { type: 'canvas-item', providerId: id, presetKey },
   })
@@ -30,7 +32,7 @@ function SortableItem({ presetKey, id, label, onRemove }: {
       data-testid={`canvas-item-${presetKey}-${id}`}
       className="flex items-center justify-between px-3 py-2 rounded-md bg-surface-elevated border border-border-subtle text-xs"
     >
-      <button {...listeners} {...attributes} className="flex-1 text-left cursor-grab select-none" type="button" aria-label={label}>
+      <button {...listeners} className="flex-1 text-left cursor-grab select-none" type="button" aria-label={label}>
         {label}
       </button>
       <button

@@ -107,7 +107,9 @@ export function StorageRow({
   // Drag source (every row) + drop target (EVERY row now — files route a drop
   // to their parent dir via `targetDir`). One DOM node carries both refs via the
   // merge callback below.
-  const { attributes, listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
+  // `attributes` deliberately not spread (pointer-only sensors; its "press space to pick up" description would be
+  // false). The row sets its own role=button + tabIndex=0 below and handles Enter/Space in onKeyDown (#2538).
+  const { listeners, setNodeRef: setDragRef, transform, isDragging } = useDraggable({
     id: node.path,
   })
   const { setNodeRef: setDropRef, isOver } = useDroppable({
@@ -191,7 +193,6 @@ export function StorageRow({
   return (
     <div
       ref={setRowRef}
-      {...attributes}
       {...listeners}
       data-testid="buffer-row"
       data-name={node.name}
