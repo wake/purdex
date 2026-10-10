@@ -94,17 +94,22 @@ function ExecuteCard({ step, actions }: { step: StepItem; actions: StepActions }
 function QuestionCard({ step }: { step: StepItem }) {
   const t = useI18nStore((s) => s.t)
   const q = step.question!
-  const answered = q.answers !== undefined
+  const answered = Array.isArray(q.answers)
   return (
     <Card step={step} icon={<Question className={ICON} size={16} />} title={<span className="text-text-muted">{t('deck.step.question')}</span>}>
       {q.questions.map((qq, i) => {
-        const chosen = q.answers?.[i] ?? []
+        // Daemon data is not validated at the API edge: a wrong-typed field reads as empty rather than throwing a render.
+        const options = Array.isArray(qq?.options) ? qq.options : []
+        const given = answered ? q.answers![i] : undefined
+        const chosen = Array.isArray(given) ? given.filter((c): c is string => typeof c === 'string') : []
+        // An answer that is none of the options is what the user typed.
+        const typed = chosen.filter((c) => !options.some((o) => o.label === c))
         return (
           <div key={i} data-testid="deck-question" className="space-y-1">
-            {qq.header && <div className="text-xs text-text-muted">{qq.header}</div>}
-            <div className="text-text-primary">{qq.question}</div>
+            {qq?.header && <div className="text-xs text-text-muted">{String(qq.header)}</div>}
+            <div className="text-text-primary">{String(qq?.question ?? '')}</div>
             <ul className="space-y-0.5">
-              {qq.options.map((o) => {
+              {options.map((o) => {
                 const on = chosen.includes(o.label)
                 return (
                   <li key={o.label} data-testid="deck-question-option" data-chosen={on} className={on ? 'text-text-primary' : 'text-text-secondary'}>
@@ -113,9 +118,7 @@ function QuestionCard({ step }: { step: StepItem }) {
                 )
               })}
             </ul>
-            {answered && chosen.length > 0 && chosen.some((c) => !qq.options.some((o) => o.label === c)) && (
-              <div data-testid="deck-question-free" className="text-xs text-text-primary">✓ {chosen.filter((c) => !qq.options.some((o) => o.label === c)).join('、')}</div>
-            )}
+            {typed.length > 0 && <div data-testid="deck-question-free" className="text-xs text-text-primary">✓ {typed.join('、')}</div>}
           </div>
         )
       })}
@@ -126,7 +129,7 @@ function QuestionCard({ step }: { step: StepItem }) {
 
 export function StepView({ step, actions = {} }: { step: StepItem; actions?: StepActions }) {
   const t = useI18nStore((s) => s.t)
-  if (step.question) return <QuestionCard step={step} />
+  if (step.question && Array.isArray(step.question.questions)) return <QuestionCard step={step} />
   switch (step.kind) {
     case 'edit': return <EditCard step={step} actions={actions} />
     case 'execute': return <ExecuteCard step={step} actions={actions} />

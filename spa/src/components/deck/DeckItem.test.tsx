@@ -349,6 +349,26 @@ describe('step · question', () => {
   })
 })
 
+describe('malformed question payloads', () => {
+  const base = { type: 'step', id: 'q', at: 1, index: 0, kind: 'other', tool: 'AskUserQuestion', status: 'done', summary: 'q?', started_at: 1, input: null }
+  const draw = (question: unknown) => render(<DeckItem item={{ ...base, question } as unknown as ConversationItem} />)
+
+  it('questions that are not a list fall back to a plain line', () => {
+    draw({ questions: 'nope' })
+    expect(screen.getByTestId('deck-step-line')).toHaveTextContent('AskUserQuestion')
+  })
+  it('options, answers and entries of the wrong type read as empty', () => {
+    draw({ questions: [{ question: 'a?', options: 5 }, null, { question: 'b?', options: [{ label: 'x' }] }], answers: [7, 'y', ['x', 3]] })
+    expect(screen.getAllByTestId('deck-question')).toHaveLength(3)
+    expect(screen.getAllByTestId('deck-question-option')).toHaveLength(1)
+    expect(screen.getByTestId('deck-question-option').getAttribute('data-chosen')).toBe('true')
+  })
+  it('answers that is not a list counts as unanswered', () => {
+    draw({ questions: [{ question: 'a?', options: [{ label: 'x' }] }], answers: 'x' })
+    expect(screen.queryByTestId('deck-question-free')).toBeNull()
+  })
+})
+
 describe('system', () => {
   it('compaction and interrupt have their own lines', () => {
     const items = [...itemsOf(compact), ...itemsOf(interrupted)]
