@@ -192,6 +192,7 @@ describe('the drilled-in workbook view', () => {
 
 describe('the ended list', () => {
   const ended = (id: string) => ({ hostId: HOST, sessionId: id, title: `gone ${id}`, endedAt: 1 })
+  beforeEach(() => useWorkbookStore.getState().setSupport(HOST, { v1: true, v2: false }))
 
   it('is absent with none; with some it is a collapsed 「已結束 (N)」 group', () => {
     scene()
@@ -219,5 +220,29 @@ describe('the ended list', () => {
     fireEvent.click(rows[1])
     expect(drill()).toEqual({ hostId: HOST, sessionId: 'Y' })
     expect(screen.getByTestId('team-seat-workbook')).toHaveTextContent('gone Y 的工作簿')
+  })
+  it('a seat on a host without workbook.v1 is not listed (it has no workbook to open)', () => {
+    scene()
+    useTeamUiStore.getState().recordEndedSeats(KEY, [ended('X')])
+    useWorkbookStore.getState().setSupport(HOST, { v1: false, v2: false })
+    mount()
+    expect(screen.queryByTestId('team-panel-ended')).toBeNull()
+  })
+  it('Space opens an ended row too', () => {
+    scene()
+    useTeamUiStore.getState().recordEndedSeats(KEY, [ended('X')])
+    mount()
+    fireEvent.click(screen.getByRole('button', { name: /已結束/ }))
+    fireEvent.keyDown(screen.getByTestId('team-panel-ended-row'), { key: ' ' })
+    expect(drill()).toEqual({ hostId: HOST, sessionId: 'X' })
+  })
+})
+
+describe('the row tooltip', () => {
+  it('the seat title has no tooltip of its own that would hide the readings', () => {
+    scene()
+    mount()
+    const title = row('A').querySelector('span.truncate')
+    expect(title?.getAttribute('title')).toBeNull()
   })
 })

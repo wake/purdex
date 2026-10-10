@@ -211,8 +211,8 @@ describe('clicking a remote seat', () => {
     fireEvent.keyDown(row('R'), { key: 'Enter' })
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(tabs)
     expect(useUndoToast.getState().toast?.message).toBe(ZH.notInApp)
-    expect(within(row('R')).getByText('title R')).toHaveAttribute('title', `title R — ${ZH.notInApp}`)
-    expect(within(row('A')).getByText('title A')).toHaveAttribute('title', 'title A') // other seats: unchanged
+    expect(row('R').getAttribute('title')).toContain(ZH.notInApp) // the row tooltip leads with the reason
+    expect(row('A').getAttribute('title') ?? '').not.toContain(ZH.notInApp) // other seats: unchanged
   })
 
   it('in line mode too', () => {

@@ -21,6 +21,7 @@ import { useCellCapacity } from './useCellCapacity'
 import { TeamEditPopover } from './TeamEditPopover'
 import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { useTeamUiStore, type PanelMode } from '../../stores/useTeamUiStore'
 import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
@@ -182,9 +183,12 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Pro
  *  drills into its workbook, which the daemon keeps after the session is gone. */
 function EndedGroup({ teamKey }: { teamKey: string }) {
   const t = useI18nStore((s) => s.t)
-  const ended = useTeamUiStore((s) => s.endedSeats[teamKey])
+  const all = useTeamUiStore((s) => s.endedSeats[teamKey])
+  const support = useWorkbookStore((s) => s.support)
   const [open, setOpen] = useState(false)
-  if (!ended || ended.length === 0) return null
+  // Only a seat on a host that lists `workbook.v1` has a workbook to open (openWorkbook does nothing elsewhere).
+  const ended = (all ?? []).filter((e) => support[e.hostId]?.v1 === true)
+  if (ended.length === 0) return null
   const label = t('team.panel.ended', { count: ended.length })
   return (
     <div data-testid="team-panel-ended" className="border-t border-border-subtle py-1">
@@ -207,7 +211,7 @@ function EndedGroup({ teamKey }: { teamKey: string }) {
           title={t('team.panel.ended_hint')}
           onMouseDown={keepFocus}
           onClick={() => useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId })}
-          onKeyDown={(ev) => { if (ev.key === 'Enter') useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId }) }}
+          onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') useTeamUiStore.getState().setTeamDrill(teamKey, { hostId: e.hostId, sessionId: e.sessionId }) }}
           className="mx-1.5 pl-6 pr-2 py-1.5 rounded-md truncate text-text-muted hover:bg-surface-hover hover:text-text-secondary cursor-pointer"
         >
           {e.title}
@@ -275,7 +279,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
             {seat.hostAlias !== '' ? seat.hostAlias : t('team.seat_host_unknown')}
           </span>
         )}
-        <span className="truncate min-w-0 flex-1" title={away ? `${seat.title} — ${t('team.seat_not_in_app')}` : seat.title}>{seat.title}</span>
+        <span className="truncate min-w-0 flex-1">{seat.title}</span>
         {transition && <span data-testid="team-panel-state" className="text-[9.5px] text-text-muted flex-shrink-0">{t(`team.seat_state.${transition}`)}</span>}
         {seat.role === 'lead' && (
           <span className="text-[9.5px] px-1 rounded border flex-shrink-0 text-text-primary" style={{ borderColor: color }}>{t('team.panel.lead')}</span>
