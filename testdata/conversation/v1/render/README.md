@@ -23,8 +23,8 @@ local replacement.
   The text uses ASCII spaces; iOS draws U+00A0 around the numbers of the three trailing parts (失敗 / 已拒絕 /
   已中斷) as a line-break hint only.
 - A run that contains a **running** step is iOS's live progress message (「正在：<latest>」 and a ticking clock):
-  `running` is `true`, `text` is `null` and `latest` is `<類別> <step summary>`. The current golden cases have no
-  such run.
+  `running` is `true`, `text` is `null` and `latest` is `<類別> <step summary>`. The goldens do contain one: `ask-question` turn 3 (`latest` = 「其他 去哪裡？」); a consumer must compare `latest`
+  as well as `running`, `text` and `step_ids`.
 - `children` are the subagent files of the case (`cc-transcript/<case>/children/<agentId>.expected.json`): each is one
   pseudo-turn, its runs are computed the same way. A parent's subagent step counts as one step (類別 子 agent).
 
