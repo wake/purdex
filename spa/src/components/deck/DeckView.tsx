@@ -7,23 +7,14 @@ import { FoldContext } from '../room/fold-context'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import { noteDeckPane, usePaneFoldStore } from '../../lib/conversations/fold-memory'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
-import type { Capabilities, ConversationItem, Turn } from '../../lib/conversations/types'
+import type { Turn } from '../../lib/conversations/types'
 import { useConversationStore, type ConversationEntry } from '../../stores/useConversationStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { DeckItem } from './DeckItem'
+import { footerContext, type DeckFooterContext } from './footer-context'
 import type { StepActions } from './StepViews'
 
-/** What the footer needs to draw an input for this conversation. */
-export interface DeckFooterContext {
-  paneKey: string
-  hostId: string
-  sessionId: string
-  capabilities: Capabilities | undefined
-  items: readonly ConversationItem[]
-  /** The header status is idle. */
-  idle: boolean
-  onSwitchToTerminal: () => void
-}
+export type { DeckFooterContext }
 
 export interface DeckViewProps {
   paneId: string
@@ -124,11 +115,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
           )}
         </FoldContext.Provider>
       </div>
-      {footer?.({
-        paneKey: paneId, hostId, sessionId,
-        capabilities: doc.capabilities ?? undefined,
-        items, idle: doc.header?.status === 'idle', onSwitchToTerminal,
-      })}
+      {footer?.(footerContext(paneId, hostId, sessionId, doc, items, onSwitchToTerminal))}
     </div>
   )
 }

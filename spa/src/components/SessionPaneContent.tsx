@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
 import TerminalView from './TerminalView'
-import { SessionViewPlaceholder } from './SessionViewPlaceholder'
 import { TerminatedPane } from './TerminatedPane'
 import { MissingHostPane } from './MissingHostPane'
 import { useTabStore } from '../stores/useTabStore'
@@ -12,6 +11,7 @@ import { selectSessionView, sessionBinding, useSessionViewStore } from '../store
 import { useAttachStall } from '../hooks/useAttachStall'
 import { useConversationOfPane } from '../hooks/useConversationOfPane'
 import { useConversationViewGate } from '../hooks/useConversationViewGate'
+import { ChatPane } from './deck/ChatPane'
 import { DeckPane } from './deck/DeckPane'
 import { SessionInput } from './deck/SessionInput'
 import { retireStaleSessions } from '../lib/conversations/pane-release'
@@ -136,7 +136,17 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           footer={(ctx) => <SessionInput {...ctx} />}
         />
       )}
-      {view === 'chat' && <SessionViewPlaceholder view={view} isActive={isActive} isFocusTarget={isFocusTarget} />}
+      {view === 'chat' && (
+        <ChatPane
+          paneId={pane.id}
+          conversation={conversation}
+          title={content.cachedName}
+          isActive={isActive}
+          isFocusTarget={isFocusTarget}
+          onSwitchToTerminal={switchToTerminal}
+          footer={(ctx) => <SessionInput {...ctx} />}
+        />
+      )}
     </div>
   )
 }
