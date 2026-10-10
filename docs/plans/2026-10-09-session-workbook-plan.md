@@ -512,6 +512,9 @@ Size ~650 lines.
    沒有可重整的 session」); 「重整中…」 while refresh pending is derived true (WA-1.6); a 409 `not_live` refetches the
    conversation (the flag corrects itself), `refresh_pending` shows 「重整中…」; tooltip when enabled:
    「用主模型讀完整段對話重整狀況與待辦（會用較多 token）」.
+   *(lead 2026-10-10: the tooltip must say plainly that it costs — measured: a short session ≈ 75k tokens of cache
+   read, a cold-cache long conversation ≈ 640k — so the shipped text reads 「用主模型讀完整段對話重整狀況與待辦。有成本：短
+   session 一次約 7.5 萬 token（cache read），冷快取的長對話可到約 64 萬 token。」)*
 5. Back control when `from:'team'`. Tab-hosted rule: view (紀錄 / 待辦) and scroll per `convKey` in module-level memos
    (`transcript-scroll-memory.ts` pattern); a real `TabContent` switch-away-and-back test.
 Tests: grouping and collapse; todo change lines; refresh entry text; the switch and the done record's jump into 紀錄
