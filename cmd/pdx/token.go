@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -51,34 +52,55 @@ func runToken(args []string) {
 	}
 }
 
-// tokenGenerate writes a new token into the config at path and returns the exit code. A daemon running on that config (it holds
-// the pid lock in the config's data_dir) keeps its token in memory, so rewriting the file behind it leaves every client that
-// holds the old token — and every pdx call on the host — answering 401 (incident 2026-10-11, #2557): without force it is refused
-// and the file is not touched. The plaintext token goes to a terminal only; to a log or a pipe goes its fingerprint (#1950).
+// tokenGenerate writes a new token into the config at path and returns the exit code. A daemon running on that config keeps its
+// token in memory, so rewriting the file behind it leaves every client that holds the old token — and every pdx call on the host
+// — answering 401 (incident 2026-10-11, #2557): without force it is refused and the file is not touched. Whether a daemon runs
+// on THIS file is read from the file's run lock (#2562), which no daemon of another path, data_dir or spelling holds, inside the
+// lock a starting daemon also takes before it reads the file — so one cannot start between the check and the write. A daemon
+// older than the run lock is still found by its pid file. The plaintext token goes to a terminal only; to a log or a pipe goes
+// its fingerprint (#1950).
 func tokenGenerate(path string, force, tty bool, out, errw io.Writer) int {
-	cfg, err := config.Load(path)
-	if err != nil {
-		fmt.Fprintf(errw, "token: %v\n", err)
-		return 1
-	}
-	running, pid := isDaemonRunning(filepath.Join(cfg.DataDir, "pdx.pid"))
-	if running && !force {
-		fmt.Fprintf(errw, "token: a daemon (pid %d) is running on %s and keeps its token in memory; a new token in the file would "+
-			"lock out the daemon's own clients (every pdx call would answer 401). Nothing was changed. "+
-			"Pass --force to write it anyway.\n", pid, path)
-		return 1
-	}
+	var (
+		running bool
+		pid     int
+		token   string
+	)
+	refused := errors.New("refused")
+	err := config.WithLock(path, func(locked string) error {
+		cfg, err := config.Load(locked)
+		if err != nil {
+			return err
+		}
+		held, herr := config.RunLockHeld(locked)
+		if herr != nil {
+			fmt.Fprintf(errw, "token: cannot tell whether a daemon uses %s (%v); continuing on its pid file\n", locked, herr)
+		}
+		oldRunning, oldPid := isDaemonRunning(filepath.Join(cfg.DataDir, "pdx.pid"))
+		running, pid = held || oldRunning, oldPid
+		if running && !force {
+			who := "a daemon"
+			if pid > 0 {
+				who = fmt.Sprintf("a daemon (pid %d)", pid)
+			}
+			fmt.Fprintf(errw, "token: %s is running on %s and keeps its token in memory; a new token in the file would "+
+				"lock out the daemon's own clients (every pdx call would answer 401). Nothing was changed. "+
+				"Pass --force to write it anyway.\n", who, path)
+			return refused
+		}
 
-	// Generate 20-byte random token → "pdx_" + 40 hex chars (160-bit entropy)
-	raw := make([]byte, 20)
-	if _, err := rand.Read(raw); err != nil {
-		fmt.Fprintf(errw, "token: failed to generate random bytes: %v\n", err)
+		// Generate 20-byte random token → "pdx_" + 40 hex chars (160-bit entropy)
+		raw := make([]byte, 20)
+		if _, err := rand.Read(raw); err != nil {
+			return fmt.Errorf("failed to generate random bytes: %w", err)
+		}
+		token = "pdx_" + hex.EncodeToString(raw)
+		// One line of the file changes (config.SetTokenHeld); every other setting, comment and table stays.
+		return config.SetTokenHeld(locked, token)
+	})
+	switch {
+	case errors.Is(err, refused):
 		return 1
-	}
-	token := "pdx_" + hex.EncodeToString(raw)
-
-	// One line of the file changes, under a lock (config.SetToken); every other setting, comment and table stays.
-	if err := config.SetToken(path, token); err != nil {
+	case err != nil:
 		fmt.Fprintf(errw, "token: %v\n", err)
 		return 1
 	}
@@ -90,8 +112,12 @@ func tokenGenerate(path string, force, tty bool, out, errw io.Writer) int {
 	}
 	fmt.Fprintf(out, "Saved to: %s\n", path)
 	if running {
-		fmt.Fprintf(errw, "token: --force: the daemon (pid %d) still holds the old token until you restart it, and every client "+
-			"(the App, phones, other hosts) must re-pair with the new token; they are refused with 401 until both are done.\n", pid)
+		who := "the daemon"
+		if pid > 0 {
+			who = fmt.Sprintf("the daemon (pid %d)", pid)
+		}
+		fmt.Fprintf(errw, "token: --force: %s still holds the old token until you restart it, and every client "+
+			"(the App, phones, other hosts) must re-pair with the new token; they are refused with 401 until both are done.\n", who)
 	}
 	return 0
 }

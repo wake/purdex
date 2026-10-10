@@ -17,27 +17,29 @@ import (
 // write goes through a temp file of its own, mode 0600, and the whole read-modify-write holds an exclusive lock on "<path>.lock",
 // so two daemons sharing a config, or `pdx token generate` beside a starting daemon, cannot lose each other's update.
 func SetToken(path, token string) error {
-	path = canonPath(path)
-	return withFileLock(path, func() error {
-		raw, err := os.ReadFile(path)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err == nil {
-			if out, ok := withTopLevelToken(raw, token); ok {
-				var check Config
-				if toml.Unmarshal(out, &check) == nil && check.Token == token {
-					return writeFileAtomic(path, out)
-				}
+	return WithLock(path, func(locked string) error { return setToken(locked, token) })
+}
+
+// setToken is SetToken's work, on the canonical path and with the lock held.
+func setToken(path, token string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil {
+		if out, ok := withTopLevelToken(raw, token); ok {
+			var check Config
+			if toml.Unmarshal(out, &check) == nil && check.Token == token {
+				return writeFileAtomic(path, out)
 			}
 		}
-		cfg, err := Load(path) // defaults for a missing file
-		if err != nil {
-			return err
-		}
-		cfg.Token = token
-		return WriteFile(path, cfg)
-	})
+	}
+	cfg, err := Load(path) // defaults for a missing file
+	if err != nil {
+		return err
+	}
+	cfg.Token = token
+	return WriteFile(path, cfg)
 }
 
 func dirOf(path string) string {
