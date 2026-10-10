@@ -96,6 +96,16 @@ describe('the loader', () => {
     expect(calls().sort()).toEqual(['h1/L', 'h1/m1', 'h1/m2'])
   })
 
+  it('a seat that leaves the roster stops being a held seat in the store', async () => {
+    useWorkbookStore.getState().setSupport('h1', { v1: true, v2: false })
+    stops.push(startWorkbookLoader())
+    roster('h1', [team('a', [member('m1')])])
+    await flush()
+    expect(Object.keys(useWorkbookStore.getState().seatGen.h1).sort()).toEqual(['L', 'm1'])
+    roster('h1', [team('a')])
+    expect(Object.keys(useWorkbookStore.getState().seatGen.h1)).toEqual(['L'])
+  })
+
   it('capability off: no fetch; it starts once the host is known to list workbook.v1', async () => {
     stops.push(startWorkbookLoader())
     roster('h1', [team('a', [member('m1')])])

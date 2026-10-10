@@ -33,7 +33,9 @@ export function seatTargets(rosterByHost: Record<string, TeamRoster[]>, hostStat
 
 export function startWorkbookLoader(): () => void {
   const sync = () => {
-    for (const t of seatTargets(useTeamRosterStore.getState().byHost, useHostStore.getState())) {
+    const targets = seatTargets(useTeamRosterStore.getState().byHost, useHostStore.getState())
+    useWorkbookStore.getState().syncSeats(targets) // a seat that left the rosters stops holding its conversation
+    for (const t of targets) {
       void useWorkbookStore.getState().loadSeat(t.hostId, t.sessionId)
     }
   }

@@ -5,7 +5,7 @@ import type { WorkbookEntry } from '../lib/workbook/types'
 const fetchConversation = vi.fn<(hostId: string, provider: string, sessionId: string, q?: { limit?: number; before?: number }) => Promise<ConversationResult>>()
 vi.mock('../lib/workbook/api', () => ({ fetchConversation: (...a: Parameters<typeof fetchConversation>) => fetchConversation(...a) }))
 
-import { MAX_ENTRIES, MAX_UNPINNED, selectConv, selectWorkbookSupport, useWorkbookStore } from './useWorkbookStore'
+import { MAX_CONVS, MAX_ENTRIES, MAX_UNPINNED, selectConv, selectWorkbookSupport, useWorkbookStore } from './useWorkbookStore'
 
 const entry = (id: number, over: Partial<WorkbookEntry> = {}): WorkbookEntry => ({
   id, convKey: 'c1', sessionId: 's1', turnId: `t${id}`, turnAt: id * 1000, state: 'ok', reason: '', thing: `thing ${id}`, push: '', entry: '',
@@ -311,5 +311,29 @@ describe('retention', () => {
     expect(c.entries[0].id).toBe(MAX_ENTRIES + 30)
     expect(c.oldestId).toBe(31)
     expect(c.exhausted).toBe(false)
+  })
+
+  it('a seat that left the rosters stops pinning its conversation; the current seats stay pinned; the caps hold through rotation', async () => {
+    st().setSupport('h1', V1)
+    const total = MAX_CONVS + 30
+    for (let i = 0; i < total; i++) {
+      fetchConversation.mockResolvedValueOnce(page([entry(i + 1, { convKey: `k${i}`, sessionId: `ss${i}` })], { convKey: `k${i}` }))
+      st().syncSeats([{ hostId: 'h1', sessionId: `ss${i}` }]) // only the newest seat is in the roster
+      await st().loadSeat('h1', `ss${i}`)
+    }
+    expect(keys()).toContain(`k${total - 1}`) // the current seat is pinned
+    expect(keys().length).toBeLessThanOrEqual(MAX_UNPINNED + 1)
+    expect(Object.keys(st().convOfSession.h1).length).toBeLessThanOrEqual(MAX_UNPINNED + 1)
+    expect(Object.keys(st().seatGen.h1)).toEqual([`ss${total - 1}`])
+  })
+
+  it('a seat that returns after leaving is a first appearance again', async () => {
+    st().setSupport('h1', V1)
+    st().syncSeats([{ hostId: 'h1', sessionId: 's1' }])
+    await st().loadSeat('h1', 's1')
+    st().syncSeats([])
+    st().syncSeats([{ hostId: 'h1', sessionId: 's1' }])
+    await st().loadSeat('h1', 's1')
+    expect(fetchConversation).toHaveBeenCalledTimes(2)
   })
 })

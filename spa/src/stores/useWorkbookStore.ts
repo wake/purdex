@@ -62,6 +62,8 @@ interface WorkbookState {
   setSupport: (hostId: string, support: WorkbookSupport) => void
   loadSeat: (hostId: string, sessionId: string) => Promise<void>
   openWorkbook: (hostId: string, sessionId: string) => Promise<void>
+  /** The seats the team views show now: a seat that is gone stops holding its conversation (and counts as new if it returns). */
+  syncSeats: (targets: ReadonlyArray<{ hostId: string; sessionId: string }>) => void
   /** A workbook view opened (true) or closed (false) on a conversation: it is not evicted while open. */
   setViewing: (hostId: string, convKey: string, open: boolean) => void
   loadMore: (hostId: string, convKey: string) => Promise<void>
@@ -232,6 +234,18 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       if (!get().support[hostId]?.v1 || !c || c.loading || c.exhausted || c.oldestId === null) return
       await runFetch(hostId, convKey, { limit: VIEW_PAGE, before: c.oldestId }) // a conversation key is a session of it
     },
+
+    syncSeats: (targets) => set((s) => {
+      const now = new Set(targets.map((t) => `${t.hostId}\u0000${t.sessionId}`))
+      let next: S = s
+      for (const [hostId, seats] of Object.entries(s.seatGen)) {
+        const kept = Object.fromEntries(Object.entries(seats).filter(([sid]) => now.has(`${hostId}\u0000${sid}`)))
+        if (Object.keys(kept).length === Object.keys(seats).length) continue
+        next = { ...next, seatGen: { ...next.seatGen, [hostId]: kept } }
+        next = { ...next, ...evicted(next, hostId) }
+      }
+      return next === s ? s : next
+    }),
 
     setViewing: (hostId, convKey, open) => set((s) => {
       const cur = { ...s.viewing[hostId] }
