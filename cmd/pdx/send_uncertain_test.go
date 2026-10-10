@@ -146,3 +146,33 @@ func TestReport_AnUnreadableSendAnswerIsSaidOnStderr(t *testing.T) {
 		t.Errorf("sends = %d, want one", len(d.sendReq))
 	}
 }
+
+// The default (non --json) `pdx msg send` too: a 200 that is not JSON, or has no body, is not a failure to resend on — it says so and
+// exits 0 like the other modes. (codex, #2595.)
+func TestMsgSend_AnUnreadableOrEmptyAnswerIsSaidOnStderrAndExitsZero(t *testing.T) {
+	for name, body := range map[string]string{"truncated": `{"result":"delivery_unc`, "html": `<html>proxy</html>`, "empty": ``} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }))
+			defer srv.Close()
+			cfgPath := writeTestConfig(t, srv.URL, "sekret")
+			var stdout, stderr bytes.Buffer
+			code := runMsgCmd([]string{"send", "air/_abc123", "hello", "--config", cfgPath},
+				fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/cc.sock"}), &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("code = %d, want 0 (a non-zero exit invites a resend); stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "could not be read") || !strings.Contains(stderr.String(), "Do not send it again") {
+				t.Errorf("stderr = %q", stderr.String())
+			}
+		})
+	}
+}
+
+// An empty 200 from the send endpoint is unreadable for the team commands too.
+func TestTask_AnEmptySendAnswerIsSaidOnStderr(t *testing.T) {
+	d := &fakeTaskDaemon{sendEmpty: true}
+	code, _, stderr := driveTask(t, d, addArgs...)
+	if code != ExitOK || !strings.Contains(stderr, "讀不懂") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+}
