@@ -552,6 +552,15 @@ func (m *Module) manualMemberAllowed(w http.ResponseWriter, sessionID string) bo
 		m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, "a member of a team led on another host cannot be relayed by hand yet", nil)
 		return false
 	}
+	if killing, err := m.store.IsKillingMember(sessionID); err != nil {
+		m.logf("[team] relay begin %s: %v", sessionID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "role unreadable; see the daemon log", nil)
+		return false
+	} else if killing {
+		// moveTeamRoles moves active rows only: a relay now would leave the seat behind.
+		m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, "this member is being removed; it cannot be relayed by hand", nil)
+		return false
+	}
 	return true
 }
 

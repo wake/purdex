@@ -353,6 +353,20 @@ func isLiveMemberIn(q dbtx, sessionID string) (bool, error) {
 	return role.isMember(), nil
 }
 
+// IsKillingMember reports whether sessionID is a member of a live team whose kill is in flight.
+func (s *Store) IsKillingMember(sessionID string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.session_id = ? AND m.state = 'killing' AND t.ended_at = 0`, sessionID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("killing member %s: %w", sessionID, err)
+	}
+	return true, nil
+}
+
 // MembersOf returns every member row of the team, in any state, with its
 // persisted reading, oldest first. Never nil.
 func (s *Store) MembersOf(teamID string) ([]memberRow, error) {
