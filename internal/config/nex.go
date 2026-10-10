@@ -48,6 +48,9 @@ type NexPeerConfig struct {
 type NexSandboxConfig struct {
 	MaxProfile     string `toml:"max_profile"     json:"max_profile"`
 	DefaultProfile string `toml:"default_profile" json:"default_profile"`
+	// ExtraProfiles lists the opt-in profiles outside the clamp order a request may ask for (nexen sandbox.Policy.ExtraProfiles; the
+	// only legal element today is "confined"). Empty by default, so omitempty is safe: an absent key reads back as empty.
+	ExtraProfiles []string `toml:"extra_profiles,omitempty" json:"extra_profiles"`
 }
 
 // NexTimeoutsConfig holds Nexen turn/lease timeouts as duration strings
@@ -242,7 +245,8 @@ func (n NexConfig) Equal(o NexConfig) bool {
 		slices.Equal(n.ServiceRoots, o.ServiceRoots) &&
 		slices.Equal(n.PathPrepend, o.PathPrepend) &&
 		n.ClaudeBin == o.ClaudeBin &&
-		n.Sandbox == o.Sandbox &&
+		n.Sandbox.MaxProfile == o.Sandbox.MaxProfile &&
+		n.Sandbox.DefaultProfile == o.Sandbox.DefaultProfile &&
 		n.Timeouts == o.Timeouts &&
 		n.Peer == o.Peer
 }
