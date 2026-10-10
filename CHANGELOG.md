@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.682] - 2026-10-10
+
+> 動到 daemon、mod 與 SPA：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改，協定升到 3）；開著的 session 會自動重新載入 mod（會印一次 reloaded 提示）。team.db 新增 `relay_asks` 表（新表，不需遷移）。SPA 已隨主機上的 dev server 生效。
+
+### Added：member 自動接力改成「問 lead」 — member relay ask（#2428、#2429、#2431）
+
+- member 的用量到 70% 時，它的 mod 會在回合邊界自動向 lead 送一則接力申請：`[pdx team] member … 已用 N%，申請接力。M 分鐘內同意請執行：pdx relay _<ref>（不同意不用回覆，過期即作罷）`。送出後 member 照常工作、不暫停。
+- lead 在 5 分鐘內執行 `pdx relay _<ref>` 就算同意，接力在 member 的下一個回合邊界進行；額度規則照舊（無人值守時從 member 池扣）。5 分鐘內沒同意就作罷，member 照舊一路走到自動壓縮；之後要再多用 10 個百分點才會再申請（最多 70／80／90% 各一次）。
+- 通知送失敗會由 daemon 每輪重送，直到送達或過期；申請與 lead 的 `pdx relay` 同時發生時嚴格排序；自動壓縮或 member 離開 team 會撤回申請（只發原本那則壓縮通知）。
+- `pdx team` 的 TASK 欄顯示「接力申請（剩 N 分）」，`GET /api/team` 帶 `relay_ask_until`；新的 mod 內部指令 `pdx relay ask`。
+- 會自己申請的 mod（協定 3）不再收到舊的「70% 且閒置」通知；舊版 mod 照舊。跨主機的 member 不申請（跨主機接力目前不支援）。
+
+### Added：對話的型別、REST client 與文件模型 — U3-1b-i（#2427，介面線）
+
+- App 端對話功能的資料層（還沒有畫面）。
+
 ## [1.0.0-alpha.681] - 2026-10-10
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
