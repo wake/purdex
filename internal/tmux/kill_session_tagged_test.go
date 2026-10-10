@@ -11,6 +11,7 @@ package tmux_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -134,7 +135,7 @@ func TestKillSessionIfTagged_ValueThatIsNoSpawnOpId_IsRefusedBeforeTmuxRuns(t *t
 printf 'tmux must not run for a bad value: %s\n' "$*" >&2
 exit 3
 `)
-	for _, v := range []string{"", "x", opA + "}", "}{,#{1}", "#{pid}", opA + ",#{==:1,1}", strings.ToUpper(opA), "11111111-1111-4111-8111-11111111111", "a b", "'; kill-server; '"} {
+	for _, v := range []string{"", "x", opA + "}", "}{,#{1}", "#{pid}", opA + ",#{==:1,1}", "ABCDEF12-3456-4789-8ABC-DEF123456789", "11111111-1111-4111-8111-11111111111", "a b", "'; kill-server; '"} {
 		killed, err := (&tmux.RealExecutor{}).KillSessionIfTagged("$1", "4471:1788740000", tagOpt, v)
 		if err == nil || killed || strings.Contains(err.Error(), "must not run") {
 			t.Errorf("value %q: killed=%v err=%v, want a refusal before tmux", v, killed, err)
@@ -165,22 +166,24 @@ case "$7" in display-message*) ;; *) printf 'bad else: %%s\n' "$7" >&2; exit 2 ;
 	}
 }
 
-// A session that is already gone is the same "unknown, nothing killed" answer as for the plain conditional kill.
-func TestKillSessionIfTagged_NoSuchSession_IsErrNoSession(t *testing.T) {
+// A session that is already gone is a decline, not a kill of anything: the kill names its target by id, so it can only ever land
+// on that session, and no other session (here one with the very same tag) is touched.
+func TestKillSessionIfTagged_NoSuchSession_DeclinesAndTouchesNothing(t *testing.T) {
 	run := ownTmux(t)
 	id := session(t, run, "keep", opA) // a live server, so the generation matches
 	killed, err := (&tmux.RealExecutor{}).KillSessionIfTagged("$999", id.Instance, tagOpt, opA)
-	if killed || err == nil {
-		t.Fatalf("killed=%v err=%v, want an error and nothing killed", killed, err)
+	if killed || (err != nil && !errors.Is(err, tmux.ErrNoSession)) {
+		t.Fatalf("killed=%v err=%v, want nothing killed (a decline or ErrNoSession)", killed, err)
 	}
 	if !alive(run, "keep") {
-		t.Fatal("an unrelated session was killed")
+		t.Fatal("an unrelated session — one carrying the very same tag — was killed")
 	}
 }
 
 // The fake keeps the real contract: generation AND tag are compared where the kill happens, a decline touches nothing.
 func TestFakeKillSessionIfTagged_FollowsTheRealContract(t *testing.T) {
 	f := tmux.NewFakeExecutor()
+	f.SetInstance("4471:1788740000")
 	f.AddSession("s", "/w")
 	f.SetSessionTag("s", tagOpt, opA)
 	ss, _ := f.ListSessions(context.Background())
@@ -200,5 +203,27 @@ func TestFakeKillSessionIfTagged_FollowsTheRealContract(t *testing.T) {
 	}
 	if killed, err := f.KillSessionIfTagged(id, inst, tagOpt, opA); err != nil || !killed || f.HasSession("s") {
 		t.Fatalf("a match: killed=%v err=%v has=%v", killed, err, f.HasSession("s"))
+	}
+}
+
+// The condition reads the TARGET session's option, not the server's current session's (`-t '$N:'`). Here the session to kill
+// matches and the one created after it — the server's current one — carries another tag: without the target the condition would
+// read the wrong session and decline. Mutation gate: drop `-t` → red.
+func TestKillSessionIfTagged_ReadsTheTargetSessionsTagNotTheCurrentOnes(t *testing.T) {
+	run := ownTmux(t)
+	target := session(t, run, "target", opA)
+	session(t, run, "newer", opB) // created last: the one the server would call current
+	killed, err := (&tmux.RealExecutor{}).KillSessionIfTagged(target.SessionID, target.Instance, tagOpt, opA)
+	if err != nil || !killed {
+		t.Fatalf("killed=%v err=%v, want the matching session killed whatever the current one carries", killed, err)
+	}
+	if alive(run, "target") || !alive(run, "newer") {
+		t.Fatalf("target alive=%v newer alive=%v, want only target gone", alive(run, "target"), alive(run, "newer"))
+	}
+	// and the reverse: the target does NOT match while the current session does
+	a := session(t, run, "mismatch", opB)
+	session(t, run, "current-matches", opA)
+	if killed, err := (&tmux.RealExecutor{}).KillSessionIfTagged(a.SessionID, a.Instance, tagOpt, opA); err != nil || killed || !alive(run, "mismatch") {
+		t.Fatalf("killed=%v err=%v alive=%v, want a decline: the target's own tag is not opA", killed, err, alive(run, "mismatch"))
 	}
 }
