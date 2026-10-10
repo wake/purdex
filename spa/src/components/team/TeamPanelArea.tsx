@@ -15,16 +15,17 @@ import { PANEL_MAX_WIDTH, currentPanelMin, useTeamUiStore } from '../../stores/u
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamDisplay } from './team-display'
 import { panelView } from './panel-view'
+import { useOwnWorkbook } from './own-workbook'
 import { TeamPanel } from './TeamPanel'
 
 export function TeamPanelArea() {
   const t = useI18nStore((s) => s.t)
   const display = useTeamDisplay()
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const workbookTabs = useTeamUiStore((s) => s.workbookTabs)
   const teamDrill = useTeamUiStore((s) => s.teamDrill)
   const { width } = useTeamUiStore((s) => s.panel)
-  const view0 = display ? panelView(activeTabId, { workbookTabs, panelTeam: display.panelTeam(activeTabId), teamDrill }) : null
+  const own = useOwnWorkbook()
+  const view0 = display ? panelView({ panelTeam: display.panelTeam(activeTabId), teamDrill, own }) : null
   // The team the area draws a frame for: the team view, or the team's drilled-in seat workbook (same frame, same mode).
   const shownTeam = view0 !== null && 'team' in view0 ? view0.team : null
   const expanded = shownTeam?.mode === 'max'

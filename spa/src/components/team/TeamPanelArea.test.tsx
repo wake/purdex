@@ -54,7 +54,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useI18nStore.getState().setLocale('zh-TW')
-  useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {}, workbookTabs: {} })
+  useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {} })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
 })
@@ -73,12 +73,10 @@ describe('who the panel shows for', () => {
     expect(screen.queryByTestId('team-panel')).toBeNull()
   })
 
-  it('a tab-workbook toggle renders no team view yet; a drill shows the seat workbook in the same frame instead of the list', () => {
+  it('a drill shows the seat workbook in the same frame instead of the list', () => {
     scene()
     mount()
-    act(() => useTeamUiStore.getState().setWorkbookTab('lead', true))
-    expect(screen.queryByTestId('team-panel')).toBeNull()
-    act(() => { useTeamUiStore.getState().setWorkbookTab('lead', false); useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' }) })
+    act(() => { useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' }) })
     expect(screen.getByTestId('team-panel-area')).toBeTruthy()
     expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
     expect(screen.queryAllByTestId('team-panel-row')).toHaveLength(0)

@@ -11,7 +11,7 @@ const k = (host: string, team: string) => teamKeyOf(host, team)
 beforeEach(() => {
   localStorage.clear()
   useUISettingsStore.setState({ tabIndicatorStyle: 'badge', hostBadgeSidebarBox: 16 })
-  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', legacyMax: false, ghostWorkspace: {}, teamDrill: {}, endedSeats: {}, workbookTabs: {}, panel: { width: 312 }, teamBeadHost: true })
+  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', legacyMax: false, ghostWorkspace: {}, teamDrill: {}, endedSeats: {}, panel: { width: 312 }, teamBeadHost: true })
 })
 
 describe('useTeamUiStore', () => {
@@ -25,7 +25,7 @@ describe('useTeamUiStore', () => {
     const raw = JSON.parse(localStorage.getItem('purdex-team-ui')!)
     expect(raw.state).toEqual({
       memberOrder: { [key]: ['b', 'a'] }, collapsed: { [key]: true }, panelMode: { [key]: 'line' }, ghostWorkspace: { [key]: 'w9' },
-      teamBeadHost: true, teamDrill: {}, endedSeats: {}, panel: { width: 312 }, workbookTabs: {},
+      teamBeadHost: true, teamDrill: {}, endedSeats: {}, panel: { width: 312 },
       panelLast: { [key]: 'line' }, sharedPanelMode: 'titlebar', sharedPanelLast: 'full',
     })
     const saved = localStorage.getItem('purdex-team-ui')!
@@ -290,23 +290,29 @@ describe('the panel area (WA-2a)', () => {
       expect(width()).toBe(412)
     })
   })
-  it('teamDrill and workbookTabs round-trip and heal', () => {
+  it('teamDrill round-trips and heals', () => {
     const key = k('h1', 't1')
     useTeamUiStore.getState().setTeamDrill(key, { hostId: 'h1', sessionId: 's1' })
-    useTeamUiStore.getState().setWorkbookTab('tab-1', true)
     expect(saved().teamDrill).toEqual({ [key]: { hostId: 'h1', sessionId: 's1' } })
-    expect(saved().workbookTabs).toEqual({ 'tab-1': true })
     useTeamUiStore.getState().setTeamDrill(key, null)
-    useTeamUiStore.getState().setWorkbookTab('tab-1', false)
     expect(useTeamUiStore.getState().teamDrill).toEqual({})
-    expect(useTeamUiStore.getState().workbookTabs).toEqual({})
     localStorage.setItem('purdex-team-ui', JSON.stringify({ state: {
       teamDrill: { [k('h', 't')]: { hostId: 'h', sessionId: 's' }, bad1: { hostId: 1, sessionId: 's' }, bad2: 'x', bad3: { hostId: '', sessionId: 's' } },
-      workbookTabs: { a: true, b: false, c: 'yes' },
     }, version: 0 }))
     useTeamUiStore.persist.rehydrate()
     expect(useTeamUiStore.getState().teamDrill).toEqual({ [k('h', 't')]: { hostId: 'h', sessionId: 's' } })
-    expect(useTeamUiStore.getState().workbookTabs).toEqual({ a: true })
+  })
+  it('an old store that still carries the per-tab workbook toggle (workbookTabs) loads without it and never writes it back (round 3: no per-tab toggle)', () => {
+    localStorage.setItem('purdex-team-ui', JSON.stringify({ state: {
+      workbookTabs: { a: true, b: false, c: 'yes' }, sharedPanelMode: 'line', panelMode: { [k('h', 't')]: 'line' },
+    }, version: 0 }))
+    useTeamUiStore.persist.rehydrate()
+    const s = useTeamUiStore.getState() as unknown as Record<string, unknown>
+    expect('workbookTabs' in s).toBe(false)
+    expect(s.sharedPanelMode).toBe('line')
+    expect(useTeamUiStore.getState().panelMode).toEqual({ [k('h', 't')]: 'line' })
+    useTeamUiStore.getState().setCollapsed(k('h', 't'), true) // any write persists the state
+    expect(saved()).not.toHaveProperty('workbookTabs')
   })
   it('heal drops teamDrill entries with a malformed key or a non-string session, and keeps a remote seat (its host differs from the lead host)', () => {
     const ok = k('h1', 't1')
