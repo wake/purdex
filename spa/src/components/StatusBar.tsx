@@ -265,6 +265,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
 
   return (
     <StatusBarLayout
+      hostId={agentHostId}
       copyFeedback={copyFeedback}
       copyFailed={copyFailed}
       segments={<>
