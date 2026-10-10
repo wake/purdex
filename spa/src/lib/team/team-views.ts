@@ -104,8 +104,18 @@ export function teamKeyOf(hostId: string, teamId: string): string {
 
 const sessionKey = (hostId: string, name: string) => `${hostId}\u0000${name}`
 
+/** The SPA host a session of `team` lives on, and whether that is another host than the lead's. A member whose `host_id` is
+ *  another host's lives there: the SPA host that daemon id maps to, else null (not configured). */
+export function seatHostOf(
+  team: Pick<TeamRoster, 'host_id'>, session: RosterSession, leadHostId: string, hostIdByDaemonId?: Record<string, string>,
+): { hostId: string | null; remote: boolean } {
+  const untrusted = session.host_untrusted === true // a host_id was sent but cannot be trusted: another host, unnamed
+  const remote = untrusted || (!!session.host_id && session.host_id !== team.host_id)
+  return { remote, hostId: untrusted ? null : remote ? hostIdByDaemonId?.[session.host_id!] ?? null : leadHostId }
+}
+
 /** The seat's display name: title, else the name part of the address (after the last `/`), else the ref. */
-function labelOf(s: RosterSession): string {
+export function labelOf(s: RosterSession): string {
   if (s.title) return s.title
   const name = s.address.slice(s.address.lastIndexOf('/') + 1)
   return name || s.ref
@@ -216,10 +226,7 @@ export function selectTeamViews(input: TeamViewsInput): TeamView[] {
     extra: { origin: string | null; state: string; joinedAt: number }, preferred: ReadonlyArray<string | null>,
     group?: { leadHasTab: boolean; workspaceId: string | null },
   ): Seat => {
-    // A member whose `host_id` is another host's lives there: the SPA host that daemon id maps to, else null (not configured).
-    const untrusted = session.host_untrusted === true // a host_id was sent but cannot be trusted: another host, unnamed
-    const remote = untrusted || (!!session.host_id && session.host_id !== team.host_id)
-    const hostId = untrusted ? null : remote ? input.hostIdByDaemonId?.[session.host_id!] ?? null : leadHostId
+    const { hostId, remote } = seatHostOf(team, session, leadHostId, input.hostIdByDaemonId)
     const candidates = session.tmux_session && hostId !== null
       ? index.get(sessionKey(hostId, session.tmux_session))
       : undefined
