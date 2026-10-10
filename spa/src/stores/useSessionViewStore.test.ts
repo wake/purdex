@@ -3,6 +3,8 @@ import { useSessionViewStore, selectSessionView, sessionBinding, viewKey, instal
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import { STORAGE_KEYS } from '../lib/storage'
+import { isFolded, setOpen } from '../lib/conversations/fold-memory'
+import { readScrollMemo, writeScrollMemo } from '../lib/nex/transcript-scroll-memory'
 
 beforeEach(() => {
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
@@ -116,6 +118,18 @@ describe('cleanup when a tab or a pane goes away', () => {
     // a layout write that keeps the tab: the stale pane record goes
     useTabStore.setState({ tabs: { [tab.id]: { ...tab } } })
     expect(useSessionViewStore.getState().byPane).toEqual({})
+  })
+
+  it('forgets what the pane\'s views kept in memory: unfolded parts and the scroll place', () => {
+    const tab = createTab({ kind: 'dashboard' })
+    installSessionViewCleanup()
+    useTabStore.setState({ tabs: { [tab.id]: tab } })
+    useSessionViewStore.getState().setView(tab.id, 'gone-pane', 'c', 'deck')
+    setOpen('gone-pane\0sess', 'k', true)
+    writeScrollMemo('gone-pane', { scrollTop: 5, atBottom: false, view: 'deck', firstTurn: 1 })
+    useTabStore.setState({ tabs: { [tab.id]: { ...tab } } })
+    expect(isFolded('gone-pane\0sess', 'k')).toBe(false)
+    expect(readScrollMemo('gone-pane')).toBeUndefined()
   })
 
   it('does not wipe the records while the tab store has not hydrated yet', () => {
