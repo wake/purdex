@@ -37,8 +37,18 @@ func (m *Module) unpairHost(hostID, reason string) error {
 	if err != nil {
 		return err
 	}
+	ended, err := endForwardedOpsOfHostIn(tx, hostID, now)
+	if err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	for _, id := range ended { // the long-polls and the lead, after the commit that ended the ops
+		m.store.notifyOp(id)
+		if op, ok, err := m.store.GetRelayOp(id); err == nil && ok && op.State.Terminal() {
+			m.outcomeNoticeAsync(op)
+		}
 	}
 	if dropped+gone+spawns > 0 {
 		m.logf("[team] host %s %s: %d command(s) dropped, %d remote member(s) gone", hostID, reason, dropped, gone)
@@ -47,7 +57,7 @@ func (m *Module) unpairHost(hostID, reason string) error {
 	return nil
 }
 
-// expireCommands voids the spawn and adopt commands not done within 10 minutes (X-U8, §3.3): the command stops being
+// expireCommands voids the spawn, adopt and relay commands not done within 10 minutes (X-U8, §3.3): the command stops being
 // sent, the seat is freed (the joining row fails `remote_unreachable`), and a `void {command_id}` is queued behind
 // everything else for the host — it never expires, so a command that M applied after all is undone when it is back.
 // Release, kill, end and lead_moved queue until delivered.
@@ -56,7 +66,7 @@ func (m *Module) expireCommands() {
 		return
 	}
 	now := m.now()
-	rows, err := m.store.db.Query(`SELECT `+commandCols+` FROM team_commands WHERE state = 'pending' AND kind IN ('adopt', 'spawn') AND created_at <= ?`, now-commandExpiryMS)
+	rows, err := m.store.db.Query(`SELECT `+commandCols+` FROM team_commands WHERE state = 'pending' AND kind IN ('adopt', 'spawn', 'relay') AND created_at <= ?`, now-commandExpiryMS)
 	if err != nil {
 		m.logf("[team] expire commands: %v", err)
 		return

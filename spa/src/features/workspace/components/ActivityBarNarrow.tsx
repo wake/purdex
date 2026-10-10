@@ -26,7 +26,9 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
   onSelect: (wsId: string) => void
   onContextMenu?: (e: React.MouseEvent, wsId: string) => void
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: ws.id })
+  // Deliberately NOT spreading dnd-kit's `attributes` (tabIndex=0, role=button, fake keyboard-drag description): sensors are
+  // pointer-only, and the inner <button> is already the focusable element (#2531). Mouse drag uses `listeners`.
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: ws.id })
   const { unreadCount, aggregatedStatus } = useWorkspaceIndicators(ws.tabs)
   const showBadge = !isActive && unreadCount > 0
   const tooltipExtras = [
@@ -43,7 +45,7 @@ function SortableWorkspaceButton({ workspace: ws, isActive, onSelect, onContextM
   }
 
   return (
-    <div ref={setNodeRef} style={style} className="relative group" {...attributes} {...listeners}>
+    <div ref={setNodeRef} style={style} className="relative group" {...listeners}>
       {aggregatedStatus && !isActive && (
         <span
           className={`absolute rounded-full ${aggregatedStatus === 'running' ? 'animate-breathe' : ''}`}

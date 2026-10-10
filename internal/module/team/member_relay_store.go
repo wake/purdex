@@ -211,7 +211,12 @@ func (s *Store) CloseMemberRelayApproved(id string, c Close) (a team.Approval, w
 			return fail(err)
 		}
 	}
-	if _, res, err := reportRelayIn(tx, op.ID, RelayReport{State: team.RelayRequested, At: c.DecidedAt}); err != nil || res != ReportApplied {
+	if s.isRemoteOp(op) {
+		// a member of another host: the op is forwarded with its command, in this transaction (member relay spec §3.4)
+		if err := s.forwardAwaitingOpIn(tx, c.Forward, op, c.DecidedAt); err != nil {
+			return fail(err)
+		}
+	} else if _, res, err := reportRelayIn(tx, op.ID, RelayReport{State: team.RelayRequested, At: c.DecidedAt}); err != nil || res != ReportApplied {
 		if err == nil {
 			err = fmt.Errorf("op %s did not take requested (%v)", op.ID, res)
 		}

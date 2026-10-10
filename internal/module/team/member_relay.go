@@ -13,6 +13,13 @@ import (
 // closed the row cancelled instead: that close is announced too, and returned as *adoptRefusedError (the shape the
 // click and the auto approve already handle for adopt: "closed cancelled by its own re-check, not retried").
 func (m *Module) approveMemberRelay(a team.Approval, c Close) (after team.Approval, won bool, err error) {
+	// A member of another host: the approve forwards the op and queues its `relay` command in the same transaction, so what the
+	// command needs is read now, outside it.
+	if op, ok, err := m.store.RelayOpByRequest(a.ID); err == nil && ok && m.store.isRemoteOp(op) {
+		if c.Forward, err = m.forwardEnqueuerFor(op); err != nil {
+			return team.Approval{}, false, err
+		}
+	}
 	after, won, refused, err := m.store.CloseMemberRelayApproved(a.ID, c)
 	if err != nil {
 		return team.Approval{}, false, err
@@ -43,7 +50,11 @@ func (m *Module) afterMemberRelayApproved(a team.Approval) {
 			m.announceSpend(t.LeadSessionID) // the team's CURRENT lead's chain
 		}
 	}
-	m.sendMemberControlAsync(op)
+	if m.store.isRemoteOp(op) {
+		m.kickCommands() // the op is forwarded with its command: the member host runs the relay, no local control message
+	} else {
+		m.sendMemberControlAsync(op)
+	}
 	m.rosterChanged()
 }
 
@@ -103,6 +114,18 @@ func (m *Module) reconcileMemberRelays(ops []team.RelayOp) {
 		case team.RelayAwaitingApproval: // its row closed while the op did not follow: the op takes the row's verdict
 			row, ok, err := m.store.Get(op.RequestID)
 			if err != nil || !ok || row.State == team.StateOpen {
+				continue
+			}
+			if row.State == team.StateApproved && m.store.isRemoteOp(op) { // forwarded with its command, not requested
+				forward, err := m.forwardEnqueuerFor(op)
+				if err == nil {
+					err = m.store.ForwardAwaitingOp(op, forward, now)
+				}
+				if err != nil {
+					m.logf("[team] boot: forward member relay op %s: %v", op.ID, err)
+				} else {
+					m.kickCommands()
+				}
 				continue
 			}
 			rep := opReportForClosedRow(row, now)

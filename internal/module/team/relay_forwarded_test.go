@@ -139,25 +139,6 @@ func TestForwarded_RefusedBeforeTheGateWhenTheHostCannotApplyIt(t *testing.T) {
 	}
 }
 
-// A pool that is spent out would hold the op for a card; the card for a remote member is MR-3a-2, so for now it is refused
-// whole (nothing written, nothing spent).
-func TestForwarded_ASpentOutPoolIsRefusedUntilTheCardPathLands(t *testing.T) {
-	f, _ := fwdRelayFixture(t)
-	f.unatt.set(true)
-	f.qrule.set(true, nil)
-	f.setPool("sid-1", 0)
-	code, _, ae := f.createRelay(fwdOp, "/tmp/10.sock", "air26/"+remoteRef)
-	if code != http.StatusConflict || ae.Error != team.ErrRelayUnsupported {
-		t.Fatalf("= %d %s, want 409 relay_unsupported", code, ae.Error)
-	}
-	if _, ok, _ := f.m.store.GetRelayOp(fwdOp); ok || len(f.relayCommands()) != 0 {
-		t.Fatal("a refused create left an op or a command")
-	}
-	if open, _ := f.m.store.ListOpen(); len(open) != 0 {
-		t.Fatalf("a card was opened: %+v", open)
-	}
-}
-
 // With the pool on, one unit is spent in the create's transaction and the command is queued.
 func TestForwarded_TheGateSpendsOneUnitInTheSameTransaction(t *testing.T) {
 	f, _ := fwdRelayFixture(t)
