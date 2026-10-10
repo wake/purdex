@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.685] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 沒有變更。
+
+### Added：跑重活前先看磁碟，空間不夠就清 Go 編譯快取 — #2470（#2471）
+
+- 完整測試、單套件測試、build、全專案 lint 這四種重活拿到資源名額前，daemon 先看 Go 編譯快取所在磁碟的剩餘空間：低於 **15 GiB** 先清掉快取裡 **2 小時以上沒動過**的項目再放行。
+- 清完仍低於 **3 GiB** 照樣放行，但 log 與那張名額的回應會帶警告；`pdx lease acquire` 印在 JSON 的 `warning` 欄，`pdx lease run` 印在 stderr。
+- 只清「確定是 Go 編譯快取」的目錄（根目錄不能是 symlink、要有 Go 自己寫的 README），且只刪兩位十六進位子目錄裡的一般檔案；每 10 分鐘最多清一次，清理不佔資源模組的鎖。
+
 ## [1.0.0-alpha.684] - 2026-10-10
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
