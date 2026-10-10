@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.0-alpha.690] - 2026-10-10
+
+> 動到 daemon、mod 與 Electron：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod protocol 升到 4）；Electron 已重新打包，Mac App 用 dev update 更新；SPA 已隨主機上的 dev server 生效。
+
+### Added：member 的 session 裡親手打 /relay 一律放行 — MR-1（#2491）、MR-2（#2489）
+
+- 使用者在 member 的 session 打 `/relay`（或 `/relay now`）不再被「member 的接力由 lead 安排」擋住，照一般 session 的流程開核准卡片；接力完它仍是同一個 lead 的 member，lead 收到「member 由使用者手動接力：舊 ref → 新 ref」。開著無人值守也一樣要人按卡片，不會自動核准、不扣任何額度。mod 自己在 70% 發起的接力仍由 lead 決定。
+- 跨主機的 member（例如 air26 上的 iOS member）也適用：接力在 member 那台進行，完成後 lead 那台的名單換成新 ref，舊 ref 照樣找得到它。lead 那台若是舊版、不認得這個通知，member 那台會丟掉它而不卡住其他通知。
+- 正在被 kill 的 member 不能手動接力。
+
+### Fixed：核准通知點擊只送到發出它的視窗 — #1919（#2508，介面線）
+
+- Mac App 有多個視窗時，點核准通知只會在發出它的那個視窗開卡片；「開啟 session」照舊會到有那個分頁的視窗。
+
+### Fixed：介面 — #2511（介面線）
+
+- Worker 已消失／測試用分頁按「重試」後，鍵盤焦點留在原地。
+
+### Refactor
+
+- pairing.ts 純搬移拆成 types／transport／mint／session（#2509）。
+
 ## [1.0.0-alpha.689] - 2026-10-10
 
 > 動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
