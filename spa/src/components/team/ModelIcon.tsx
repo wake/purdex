@@ -8,7 +8,7 @@ import { MODEL_LABEL, type ModelFamily } from './model-family'
 // Every shape's bbox is centred on (6,6) of the 12x12 box (r4b) — the ring draws them by that centre, so a shape that is
 // off-centre in its own box shows up as "偏上／偏下" no matter how exactly the box is placed. opus and sonnet were already
 // centred; haiku (y 1–10.6) and fable (y .5–11.2) were shifted down by .2 and .15.
-export const PATHS: Record<ModelFamily, string> = {
+const PATHS: Record<ModelFamily, string> = {
   opus: 'M6 .6 11.4 6 6 11.4.6 6Z',
   sonnet: 'M6 1.2a4.8 4.8 0 1 1 0 9.6a4.8 4.8 0 1 1 0-9.6Z',
   haiku: 'M6 1.2 11.2 10.8H.8Z',
