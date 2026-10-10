@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import TerminalView from './TerminalView'
 import { TerminatedPane } from './TerminatedPane'
 import { MissingHostPane } from './MissingHostPane'
@@ -10,6 +10,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { selectSessionView, sessionBinding, useSessionViewStore } from '../stores/useSessionViewStore'
 import { useAttachStall } from '../hooks/useAttachStall'
 import { useConversationOfPane } from '../hooks/useConversationOfPane'
+import { useSendQueueDriver } from '../hooks/useSendQueueDriver'
 import { useConversationViewGate } from '../hooks/useConversationViewGate'
 import { ChatPane } from './deck/ChatPane'
 import { DeckPane } from './deck/DeckPane'
@@ -93,6 +94,11 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // (#2457). Importing the module also installs the release of a pane that leaves the tab world.
   const readSession = conversation.state === 'ready' ? conversation.sessionId : ''
   useEffect(() => { retireStaleSessions(pane.id, hostId, readSession) }, [pane.id, hostId, readSession])
+  // The send queue is driven from here, which stays mounted under every view (the terminal's too): a busy message is resent on idle
+  // and an echo is matched whatever the reader is looking at.
+  const readyDoc = conversation.state === 'ready' ? conversation.entry?.doc : undefined
+  const readyItems = useMemo(() => (readyDoc ? readyDoc.turns.flatMap((turn) => turn.items) : []), [readyDoc])
+  useSendQueueDriver(pane.id, hostId, readSession, readyDoc?.header?.status === 'idle', readyItems)
   const switchToTerminal = () => useSessionViewStore.getState().setView(tabId, pane.id, sessionBinding(hostId, sessionCode), 'terminal')
 
   // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → input → status row.

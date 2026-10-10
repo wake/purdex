@@ -20,7 +20,7 @@ vi.mock('../../lib/host-api', () => ({ pinnedHostFetch: fetchMock }))
 const H = 'h', SID = '11111111-2222-4333-8444-555555555555'
 
 function SessionRenderer({ pane }: PaneRendererProps) {
-  return <SessionInput paneKey={pane.id} hostId={H} sessionId={SID} capabilities={{ send: 'prompt' }} items={[]} idle onSwitchToTerminal={() => {}} />
+  return <SessionInput paneKey={pane.id} hostId={H} sessionId={SID} capabilities={{ send: 'prompt' }} onSwitchToTerminal={() => {}} />
 }
 const Other = () => <div data-testid="other-tab" />
 

@@ -56,7 +56,7 @@ function ready(over: { status?: string; capabilities?: Capabilities | null; item
   }
 }
 
-const setView = (v: 'deck' | 'chat') =>
+const setView = (v: 'deck' | 'chat' | 'terminal') =>
   act(() => useSessionViewStore.getState().setView(sessionTab.id, paneId, sessionBinding(H, CODE), v))
 const box = () => screen.getByRole('textbox') as HTMLTextAreaElement
 const type = (v: string) => fireEvent.change(box(), { target: { value: v } })
@@ -154,5 +154,44 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     type('new thought'); enter()
     await tick(3000)
     expect(submits()[0].path).toBe('/api/conversations/claude/bbbbbbbb-1111-4222-8333-444444444444/submit')
+  })
+})
+
+describe('the queue is driven by the pane, not by the input (every view)', () => {
+  it('sent from the deck, then the terminal view: busy waits, and the idle header resends once with the same id although no input is mounted', async () => {
+    fetchMock.mockImplementationOnce(() => answer(200, { status: 'busy' }))
+    conv.value = ready({ status: 'running' })
+    setView('deck')
+    const ui = mount()
+    type('after you'); enter()
+    setView('terminal')
+    expect(screen.queryByRole('textbox')).toBeNull() // no SessionInput under the terminal
+    await tick(3000)
+    expect(submits()).toHaveLength(1)
+    conv.value = ready({ status: 'idle' })
+    remount(ui)
+    await tick(3000)
+    expect(submits()).toHaveLength(2)
+    expect(submits()[1]).toEqual(submits()[0])
+    remount(ui)
+    await tick(5000)
+    expect(submits()).toHaveLength(2)
+    // back in the deck the message is shown as sent, not stuck
+    setView('deck')
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
+  })
+
+  it('the transcript echo is matched while the terminal view is up (nothing stays queued behind it)', async () => {
+    conv.value = ready()
+    setView('deck')
+    const ui = mount()
+    type('hello'); enter()
+    setView('terminal')
+    await tick(3000)
+    conv.value = ready({ items: [user('u0', 'earlier'), user('u1', 'hello', { client_msg_id: submits()[0].client_msg_id })] })
+    remount(ui)
+    await tick(0)
+    setView('deck')
+    expect(screen.queryByTestId('queued-message')).toBeNull()
   })
 })

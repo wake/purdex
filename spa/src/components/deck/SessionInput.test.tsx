@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { SessionInput } from './SessionInput'
+import { useSendQueueDriver } from '../../hooks/useSendQueueDriver'
 import { clearAllDrafts, draftKey, readDraft } from '../../lib/conversations/draft-memory'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
 import type { Capabilities, ConversationItem } from '../../lib/conversations/types'
@@ -14,10 +15,12 @@ const answer = (status: number, body: unknown) => Promise.resolve(new Response(J
 const sends = () => fetchMock.mock.calls.filter((c) => String(c[1]).endsWith('/submit')).map((c) => JSON.parse(c[2].body) as { text: string; client_msg_id: string })
 
 interface Over { capabilities?: Capabilities; items?: ConversationItem[]; idle?: boolean; onSwitchToTerminal?: () => void }
-const ui = (o: Over = {}) => (
-  <SessionInput paneKey="p1" hostId="h" sessionId={SID} capabilities={o.capabilities ?? PROMPT} items={o.items ?? []} idle={o.idle ?? true}
-    onSwitchToTerminal={o.onSwitchToTerminal ?? (() => {})} />
-)
+// The input only types and shows; the pane drives the queue (idle, echoes). The pane's driver stands next to it here.
+function Pane({ o }: { o: Over }) {
+  useSendQueueDriver('p1', 'h', SID, o.idle ?? true, o.items ?? [])
+  return <SessionInput paneKey="p1" hostId="h" sessionId={SID} capabilities={o.capabilities ?? PROMPT} onSwitchToTerminal={o.onSwitchToTerminal ?? (() => {})} />
+}
+const ui = (o: Over = {}) => <Pane o={o} />
 const box = () => screen.getByRole('textbox') as HTMLTextAreaElement
 const type = (v: string) => fireEvent.change(box(), { target: { value: v } })
 const enter = () => fireEvent.keyDown(box(), { key: 'Enter' })
@@ -226,7 +229,7 @@ describe('SessionInput capability', () => {
 
   it('the same pane rebound to another session does not show or send the old draft; switching back restores it', async () => {
     const other = '99999999-2222-4333-8444-555555555555'
-    const bound = (sid: string, host = 'h') => <SessionInput paneKey="p1" hostId={host} sessionId={sid} capabilities={PROMPT} items={[]} idle onSwitchToTerminal={() => {}} />
+    const bound = (sid: string, host = 'h') => <SessionInput paneKey="p1" hostId={host} sessionId={sid} capabilities={PROMPT} onSwitchToTerminal={() => {}} />
     const { rerender } = render(bound(SID))
     type('draft for A')
     rerender(bound(other))
