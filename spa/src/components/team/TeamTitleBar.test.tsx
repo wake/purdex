@@ -16,7 +16,8 @@ import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useWorkspaceStore } from '../../features/workspace/store'
-import { PLUS_CHIP_W } from './panel-layout'
+import { HEADER_GAP, PLUS_CHIP_W } from './panel-layout'
+import { TITLE_LEFT_RESERVE, TITLE_MIN_W, TITLE_RIGHT_EDGE, titleBarLayout } from './title-bar-layout'
 
 vi.mock('./TeamSeatIcon', () => ({
   TeamSeatIcon: () => <span data-testid="seat-icon" />,
@@ -95,17 +96,40 @@ describe('the Notebook button', () => {
 })
 
 describe('the strip', () => {
-  it('replaces the window title while the area is in the title bar, and only then', () => {
+  it('appears only while the area is in the title bar, and the window title stays throughout (round 5)', () => {
     scene()
     mountBar()
     expect(screen.queryByText(TITLE)).not.toBeNull()
     expect(strip()).toBeNull()
     press()
     expect(strip()).not.toBeNull()
-    expect(screen.queryByText(TITLE)).toBeNull()
+    expect(screen.queryByText(TITLE)).not.toBeNull()
     press()
     expect(strip()).toBeNull()
     expect(screen.queryByText(TITLE)).not.toBeNull()
+  })
+
+  it('sits at the right, right before the buttons (Notebook first), while the title stays in the centred overlay', () => {
+    scene()
+    mountBar()
+    press()
+    const s = strip()!
+    const title = screen.getByText(TITLE)
+    const overlay = title.parentElement as HTMLElement
+    // the strip is not in the title's overlay; the overlay is the absolute, centred one
+    expect(overlay.contains(s)).toBe(false)
+    expect(overlay.className).toContain('absolute')
+    expect(overlay.className).toContain('justify-center')
+    expect(title.className).toContain('truncate') // the title is what gives way first
+    // DOM order: window title overlay, then the strip, then the right-hand buttons (Notebook, unattended, layout)
+    const after = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(after(overlay, s)).toBe(true)
+    expect(after(s, screen.getByTestId('team-notebook-wrap'))).toBe(true)
+    expect(after(s, screen.getByTestId('layout-buttons'))).toBe(true)
+    const right = screen.getByTestId('title-bar-right')
+    expect(s.nextElementSibling).toBe(right) // nothing between the strip and the button group
+    expect(right.firstElementChild).toBe(screen.getByTestId('team-notebook-wrap'))
+    expect(noDrag(s)).toBe(false) // the box itself drags the window; only its content is no-drag
   })
 
   it('draws the team name and one cell per person', () => {
@@ -196,7 +220,7 @@ describe('the strip', () => {
       expect(shownCells()).toHaveLength(0)
       expect(within(s).getByTestId('team-strip-more').textContent).toBe('+1')
       // structure: capped to the allotted width, clipped, and the name is the part that gives way
-      expect(s.className).toContain('max-w-[calc(100%-27rem)]')
+      expect(s.className).toContain('min-w-0')
       expect(s.className).toContain('overflow-hidden')
       expect(screen.getByTestId('team-strip-name').className).not.toContain('flex-shrink-0')
       expect(screen.getByTestId('team-strip-name').className).toContain('min-w-0')
@@ -351,5 +375,86 @@ describe('the state lives in the store (tab-hosted rule)', () => {
     expect(strip()).not.toBeNull()
     press()
     expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
+  })
+})
+
+describe('room for the strip and the centred title (round 5)', () => {
+  it('titleBarLayout: the title keeps at least TITLE_MIN_W centred; the strip gets what is left of the right half', () => {
+    const wide = titleBarLayout({ barW: 1200, btnsW: 120, stripW: 300 })
+    // half of the bar, less half the title's minimum, the bar's edge padding, the buttons and a gap
+    expect(wide.room).toBe(600 - TITLE_MIN_W / 2 - TITLE_RIGHT_EDGE - 120 - HEADER_GAP)
+    // the title's side padding covers the strip and the buttons, so the (centred) title never reaches them
+    expect(wide.titlePad).toBe(300 + 120 + TITLE_RIGHT_EDGE + HEADER_GAP)
+    // a short strip does not push the padding below what the left side needs
+    expect(titleBarLayout({ barW: 1200, btnsW: 20, stripW: 10 }).titlePad).toBe(TITLE_LEFT_RESERVE)
+    // never a negative room
+    expect(titleBarLayout({ barW: 300, btnsW: 120, stripW: 50 }).room).toBe(0)
+    // with a narrow window the room shrinks first, so the title keeps its minimum before the strip fills
+    const narrow = titleBarLayout({ barW: 700, btnsW: 120, stripW: 9999 })
+    expect(narrow.room).toBeLessThan(wide.room)
+    expect(700 - 2 * narrow.titlePad).toBeGreaterThanOrEqual(TITLE_MIN_W)
+  })
+
+  it('titleBarLayout: the title floor wins in a narrow bar, whatever the strip, the room or the buttons ask for', () => {
+    for (const barW of [200, 250, 300, 350]) {
+      for (const [btnsW, stripW] of [[120, 300], [120, 0], [20, 10], [600, 9999], [400, 50]]) {
+        const { room, titlePad } = titleBarLayout({ barW, btnsW, stripW })
+        expect(room).toBeGreaterThanOrEqual(0)
+        expect(titlePad).toBeGreaterThanOrEqual(0)
+        // the centred title keeps TITLE_MIN_W (or the whole bar when the bar itself is narrower)
+        expect(barW - 2 * titlePad).toBeGreaterThanOrEqual(Math.min(TITLE_MIN_W, barW))
+      }
+    }
+    // barW=300: before the cap the padding was 112 and the title got 76px
+    expect(titleBarLayout({ barW: 300, btnsW: 120, stripW: 50 }).titlePad).toBe((300 - TITLE_MIN_W) / 2)
+    // room=0 (the strip is gone): the padding is still bounded
+    const none = titleBarLayout({ barW: 300, btnsW: 120, stripW: 50 })
+    expect(none.room).toBe(0)
+    expect(300 - 2 * none.titlePad).toBe(TITLE_MIN_W)
+    // an over-wide button group does not squeeze the title either
+    const wideBtns = titleBarLayout({ barW: 350, btnsW: 600, stripW: 40 })
+    expect(wideBtns.room).toBe(0)
+    expect(350 - 2 * wideBtns.titlePad).toBeGreaterThanOrEqual(TITLE_MIN_W)
+    // a bar narrower than the title floor: no negative padding
+    expect(titleBarLayout({ barW: 50, btnsW: 20, stripW: 10 }).titlePad).toBe(0)
+    // roomy bars are unchanged
+    expect(titleBarLayout({ barW: 1200, btnsW: 20, stripW: 10 }).titlePad).toBe(TITLE_LEFT_RESERVE)
+  })
+
+  describe('in the bar', () => {
+    const W = 1000
+    const BTNS = 130
+    const STRIP = 260
+    beforeEach(() => {
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        const id = this.getAttribute('data-testid')
+        return id === 'title-bar' ? W : id === 'team-title-strip' ? 400 : 0
+      })
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        const id = this.getAttribute('data-testid')
+        return id === 'title-bar-right' ? BTNS : id === 'team-strip-inner' ? STRIP : id === 'team-panel-cell' ? 43 : 0
+      })
+    })
+
+    it('the title keeps its centre: padding covers the strip and the buttons, and the strip gets only the room that is left', () => {
+      scene()
+      mountBar()
+      press()
+      const title = screen.getByText(TITLE)
+      const overlay = title.parentElement as HTMLElement
+      const { titlePad, room } = titleBarLayout({ barW: W, btnsW: BTNS, stripW: STRIP })
+      expect(overlay.style.paddingInline).toBe(`${titlePad}px`)
+      expect(strip()!.style.width).toBe(`${room}px`)
+      expect(title.className).not.toContain('27rem') // the strip's reserve replaces the old blanket max-width
+      expect(W - 2 * titlePad).toBeGreaterThanOrEqual(TITLE_MIN_W)
+    })
+
+    it('without a strip the overlay is the old one (no padding override)', () => {
+      scene()
+      mountBar()
+      const overlay = screen.getByText(TITLE).parentElement as HTMLElement
+      expect(overlay.style.paddingInline).toBe('')
+      expect(screen.getByText(TITLE).className).toContain('27rem')
+    })
   })
 })

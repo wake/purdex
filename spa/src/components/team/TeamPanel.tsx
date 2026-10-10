@@ -7,7 +7,7 @@
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretUp } from '@phosphor-icons/react'
+import { ArrowsInSimple, ArrowsOutSimple, ArrowLineUp } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
@@ -23,6 +23,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import type { PanelMode } from '../../stores/useTeamUiStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { CELL_GAP, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
 
 interface Props {
@@ -101,6 +102,28 @@ function useReturnFocus() {
   return api
 }
 
+/**
+ * The header's one move-to-title-bar control (round 5): the same icon and the same action in line, full and max. Going
+ * line <-> full is the header click's job, not this button's.
+ */
+function ToTitleBarButton({ onClick }: { onClick: () => void }) {
+  const t = useI18nStore((s) => s.t)
+  const label = t('team.panel.to_titlebar')
+  return (
+    <button
+      type="button"
+      data-testid="team-panel-to-titlebar"
+      onMouseDown={keepFocus}
+      onClick={onClick}
+      className="px-1 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
+      title={label}
+      aria-label={label}
+    >
+      <ArrowLineUp size={11} />
+    </button>
+  )
+}
+
 function ExpandButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
   const t = useI18nStore((s) => s.t)
   const label = t(expanded ? 'team.panel.restore' : 'team.panel.enlarge')
@@ -133,17 +156,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Pro
         <NameCapsule team={team} />
         <span data-testid="team-panel-count" className="text-text-muted whitespace-nowrap">· {t('team.panel.members', { count: members.length })}</span>
         <span className="ml-auto flex items-center gap-0.5">
-          <button
-            type="button"
-            data-testid="team-panel-to-line"
-            onMouseDown={keepFocus}
-            onClick={() => onSetMode('titlebar')}
-            className="px-1 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
-            title={t('team.panel.to_line')}
-            aria-label={t('team.panel.to_line')}
-          >
-            <CaretUp size={11} />
-          </button>
+          <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
           <ExpandButton expanded={expanded} onToggle={() => onSetMode(expanded ? 'full' : 'max')} />
         </span>
       </div>
@@ -244,7 +257,6 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
 }
 
 function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props & { hdr: HeaderHandlers }) {
-  const t = useI18nStore((s) => s.t)
   const seats = [team.lead, ...team.members]
   // The header row holds as many cells as it really has room for; the rest wrap into a region UNDER it, so the first row
   // (capsule, cells, buttons) never changes height. The room is measured (useCellCapacity); where nothing can be measured
@@ -252,7 +264,9 @@ function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props &
   const box = useRef<HTMLDivElement>(null)
   const moreBox = useRef<HTMLDivElement>(null)
   const measured = useCellCapacity(box, { extra: moreBox })
-  const cap = measured ?? (width === undefined ? seats.length : firstRowCapacity(width))
+  const lightStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
+  const ringBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
+  const cap = measured ?? (width === undefined ? seats.length : firstRowCapacity(width, lightStyle, ringBox))
   const first = seats.slice(0, cap)
   const more = seats.slice(cap)
   const cell = (s: TeamSeatView) => <TeamCell key={s.sessionId} teamKey={team.teamKey} seat={s} isActive={s.tabId !== null && s.tabId === activeTabId} onOpen={onOpen} />
@@ -269,17 +283,7 @@ function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props &
         ))}
       </div>
       <span className="flex items-center gap-0.5 flex-shrink-0">
-        <button
-          type="button"
-          data-testid="team-panel-to-full"
-          onMouseDown={keepFocus}
-          onClick={() => onSetMode('full')}
-          className="px-1 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer"
-          title={t('team.panel.to_full')}
-          aria-label={t('team.panel.to_full')}
-        >
-          <CaretDown size={11} />
-        </button>
+        <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
         <ExpandButton expanded={false} onToggle={() => onSetMode('max')} />
       </span>
     </div>

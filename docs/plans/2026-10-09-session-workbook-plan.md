@@ -387,7 +387,7 @@ WA-1 / WA-2b behind `workbook.v1`.
    true>` (the last two unused until WA-2b, but the selector is final). One pure selector `panelView(activeTabId)`
    implements TI spec §4.4: the active tab's toggle on → `{kind:'workbook', from:'tab'}`; else the active tab's team →
    `teamDrill[teamKey]` ? `{kind:'workbook', from:'team'}` : `{kind:'team'}`; else `null`. Resize by a `RegionResize`
-   edge with draft-then-commit (the `ActivityBarWide` pattern), width clamped 412–720 *(was 280–720; #2355)*, `expanded` = most of the content
+   edge with draft-then-commit (the `ActivityBarWide` pattern), width clamped to [min, 720] where min = `panelMinWidth(tabIndicatorStyle, hostBadgeSidebarBox)` (a lead + 3 members in one header row; today badge 356, iconDot 412; it is also the default) *(was 280–720, then a fixed 412; user 2026-10-10 round 5)*; a style / box change lifts a narrower width to the new min and moves a width that sat at the old min with it, while a width the person widened is kept; heal clamps with the current min, `expanded` = most of the content
    area, a header control toggles it.
 2. **Team view** = TI-4's full / one-line panel (TI plan TI-4 bullets and tests), full and one-line taking the area's
    width; row / cell click = `openTeamSeat` (no workbook yet).

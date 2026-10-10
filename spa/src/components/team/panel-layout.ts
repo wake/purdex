@@ -55,10 +55,27 @@ export const SEP_W = SEP_LINE_W + CELL_GAP
 /** The area's own 1px border on each side. */
 export const AREA_BORDER = 2
 
-/** Cells (lead included) that fit in the header's first row at panel width `width`; at least 1. */
-export function firstRowCapacity(width: number): number {
-  const avail = width - AREA_BORDER - 2 * HEADER_PX - CAPSULE_MAX_W - 2 * HEADER_GAP - BUTTONS_W
-  return Math.max(1, Math.floor((avail - SEP_W + CELL_GAP) / (CELL_W + CELL_GAP)))
+/** What the header spends beside the cells: the area's borders, its padding and gaps, the name capsule at its cap, the buttons. */
+export const BESIDE_CELLS_W = AREA_BORDER + 2 * HEADER_PX + CAPSULE_MAX_W + 2 * HEADER_GAP + BUTTONS_W
+/** The panel's minimum width holds a lead + 3 members. */
+export const PANEL_MIN_CELLS = 4
+
+/**
+ * The panel's least width (user 2026-10-10, round 5): the one at which a lead + 3 members sit in one header row under the
+ * given light style and host box, so it moves with both (default styles: badge 356, iconDot 412). It is also the default.
+ */
+export function panelMinWidth(style: 'icon' | 'dot' | 'iconDot' | 'badge', box: number = HOST_BADGE_BOX_DEFAULT): number {
+  return BESIDE_CELLS_W + cellsWidth(PANEL_MIN_CELLS, cellWidthFor(style, box))
+}
+
+/**
+ * Cells (lead included) that fit in the header's first row at panel width `width`; at least 1. This is the fallback where
+ * nothing can be measured, so it uses the same nominal cell (`cellWidthFor(style, box)`) as `panelMinWidth`: pass the CURRENT
+ * light style and host box, or it disagrees with the minimum (iconDot 412 holds 4, not the badge cell's 5).
+ */
+export function firstRowCapacity(width: number, style: 'icon' | 'dot' | 'iconDot' | 'badge' = 'badge', box: number = HOST_BADGE_BOX_DEFAULT): number {
+  const avail = width - BESIDE_CELLS_W
+  return Math.max(1, Math.floor((avail - SEP_W + CELL_GAP) / (cellWidthFor(style, box) + CELL_GAP)))
 }
 
 /** The strip's 「+N」 chip (title bar): reserved at the end of the cells when some seats do not fit. */

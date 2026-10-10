@@ -1,10 +1,10 @@
 // spa/src/components/team/TeamTitleBar.tsx — the panel area's title-bar state (team spec §4.4 Round 3): the strip in the
-// middle of the window title bar (the one-line content: team name + cells, no wrap, overflow -> 「+N」) and the Notebook
+// right of the window title bar, next to the buttons (the one-line content: team name + cells, no wrap, overflow -> 「+N」) and the Notebook
 // button that moves the area between the title bar and the pane. TitleBar.tsx only places them.
 //
 // Only the strip's content is no-drag: the strip box itself ignores the pointer, so the empty part of the title bar still
 // drags the window. The state lives in `useTeamUiStore` (per team), so a tab switch or a reload comes back the same.
-import { Fragment, useRef } from 'react'
+import { Fragment, useLayoutEffect, useRef } from 'react'
 import { Notebook } from '@phosphor-icons/react'
 import { useTeamDisplay, type TeamPanelTeam } from './team-display'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
@@ -18,11 +18,26 @@ import { keepFocus } from '../../lib/keep-focus'
 
 const NO_DRAG = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
-/** The strip: shown by TitleBar in place of the window title while the team's area is in the title bar. */
-export function TeamTitleStrip({ team }: { team: TeamPanelTeam }) {
+/**
+ * The strip: shown by TitleBar at the right of the bar, right before the button group, while the team's area is in the
+ * title bar (the window title stays centred). `room` is the box's width from `titleBarLayout`; null = not measured, take what is left.
+ */
+export function TeamTitleStrip({ team, room = null, onContentWidth }: { team: TeamPanelTeam; room?: number | null; onContentWidth?: (w: number) => void }) {
   const display = useTeamDisplay()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const box = useRef<HTMLDivElement>(null)
+  const inner = useRef<HTMLDivElement>(null)
+  // The title overlay's padding follows the strip's real content width (not the box's, which is the room it may use).
+  useLayoutEffect(() => {
+    const el = inner.current
+    if (!el || !onContentWidth) return
+    const report = () => onContentWidth(el.offsetWidth)
+    report()
+    if (typeof ResizeObserver === 'undefined') return () => onContentWidth(0)
+    const ro = new ResizeObserver(report)
+    ro.observe(el)
+    return () => { ro.disconnect(); onContentWidth(0) }
+  }, [onContentWidth])
   const seats = [team.lead, ...team.members]
   // The room is measured from every seat's own cell width: the strip's width, less the team name's worst case, and 「+N」
   // when someone does not fit. The seats that do not fit are still rendered, in a hidden row, so their widths count; where
@@ -49,19 +64,22 @@ export function TeamTitleStrip({ team }: { team: TeamPanelTeam }) {
     <div
       ref={box}
       data-testid="team-title-strip"
-      className="flex items-center justify-center relative min-w-0 w-full max-w-[calc(100%-27rem)] overflow-hidden pointer-events-none"
-      style={{ columnGap: HEADER_GAP }}
+      className={`flex items-center justify-end relative min-w-0 overflow-hidden pointer-events-none ${room === null ? 'flex-1' : 'shrink-0'}`}
+      style={{ ...(room === null ? null : { width: room }), marginRight: HEADER_GAP }}
     >
-      <TeamStripButton testId="team-strip-name" onClick={back} label={team.tooltip} className="min-w-0 shrink overflow-hidden">
-        <NameCapsule team={team} className="block" style={{ maxWidth: CAPSULE_MAX_W }} />
-      </TeamStripButton>
-      <div data-testid="team-strip-cells" className="pointer-events-auto flex items-center min-w-0" style={{ ...NO_DRAG, columnGap: CELL_GAP }}>
-        {shown.map((s, i) => (
-          <Fragment key={s.sessionId}>
-            {i === 1 && <CellSep />}
-            <span className="flex items-center">{cell(s)}</span>
-          </Fragment>
-        ))}
+      <div ref={inner} data-testid="team-strip-inner" className="flex items-center min-w-0 max-w-full" style={{ columnGap: HEADER_GAP }}>
+        <TeamStripButton testId="team-strip-name" onClick={back} label={team.tooltip} className="min-w-0 shrink overflow-hidden">
+          <NameCapsule team={team} className="block" style={{ maxWidth: CAPSULE_MAX_W }} />
+        </TeamStripButton>
+        <div data-testid="team-strip-cells" className="pointer-events-auto flex items-center min-w-0" style={{ ...NO_DRAG, columnGap: CELL_GAP }}>
+          {shown.map((s, i) => (
+            <Fragment key={s.sessionId}>
+              {i === 1 && <CellSep />}
+              <span className="flex items-center">{cell(s)}</span>
+            </Fragment>
+          ))}
+        </div>
+        {hidden > 0 && <MoreChip count={hidden} onClick={back} />}
       </div>
       {hidden > 0 && (
         // Out of sight and out of reach (not focusable, not clickable): only here so their widths can be measured.
@@ -69,7 +87,6 @@ export function TeamTitleStrip({ team }: { team: TeamPanelTeam }) {
           {rest.map((s) => <span key={s.sessionId} className="flex items-center">{cell(s)}</span>)}
         </div>
       )}
-      {hidden > 0 && <MoreChip count={hidden} onClick={back} />}
     </div>
   )
 }
