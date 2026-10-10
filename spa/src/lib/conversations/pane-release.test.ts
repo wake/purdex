@@ -353,8 +353,8 @@ describe('retireStaleSessions: the pane shows another conversation now', () => {
   it('frees what was kept for the old session, keeps the new one\'s', () => {
     fill(A, 's1'); fill(A, 's2')
     retireStaleSessions(A, H, 's2')
-    expect(has(A, 's1')).toMatchObject({ draft: false, queue: false, deckFold: false, chatFold: false, deckScroll: false, chatScroll: false })
-    expect(has(A, 's2')).toMatchObject({ draft: true, queue: true, deckFold: true, chatFold: true, deckScroll: true, chatScroll: true })
+    expect(has(A, 's1')).toMatchObject({ draft: false, attachments: false, queue: false, deckFold: false, chatFold: false, deckScroll: false, chatScroll: false })
+    expect(has(A, 's2')).toMatchObject({ draft: true, attachments: true, queue: true, deckFold: true, chatFold: true, deckScroll: true, chatScroll: true })
   })
 
   it('never touches another pane, and does nothing without a session', () => {
