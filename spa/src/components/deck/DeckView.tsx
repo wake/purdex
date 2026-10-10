@@ -78,7 +78,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   const foldStore = usePaneFoldStore(`${paneId}\0${sessionId}`)
   useEffect(() => noteDeckPane(paneId), [paneId])
   // The place is the pane's AND the session's: a pane that moves to another session (/clear, a relay) starts at the end.
-  const scroll = useTranscriptScroll(undefined, false, { paneId: `${paneId}\0${sessionId}`, view: 'deck' })
+  const scroll = useTranscriptScroll(undefined, false, { paneId: `${paneId}\0${sessionId}`, view: 'deck', detached: doc.detached, totalTurns: doc.totalTurns })
   const { attach, onScroll: onBoxScroll, follow } = scroll
   const boxRef = useRef<HTMLDivElement | null>(null)
   const setBox = useCallback((node: HTMLDivElement | null) => { boxRef.current = node; attach(node) }, [attach])

@@ -23,6 +23,7 @@ import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { DeckView } from './DeckView'
 import { ChatView } from './ChatView'
+import { scrollTuning } from '../../hooks/useTranscriptScroll'
 
 const H = 'h'
 const BOX = 400
@@ -101,6 +102,14 @@ const loaded = (n: number): Shown => ({
   turns: mkTurns(n) as PanelTurn[],
 })
 /** The moment after a re-open: the conversation is acquired but nothing has arrived. */
+/** A window of the conversation (turns `from`..`to`) the store swapped in by a jump: not the live end, so `detached`. */
+const windowed = (from: number, to: number): Shown => {
+  const ts = mkTurns(to + 1).slice(from)
+  return {
+    entry: { doc: { ...emptyDoc(), turns: ts, detached: true, totalTurns: 100 }, status: 'live', reason: '', paging: false, subagents: {} },
+    turns: ts as PanelTurn[],
+  }
+}
 const loading = (): Shown => ({
   entry: { doc: emptyDoc(), status: 'loading', reason: '', paging: false, subagents: {} },
   turns: [],
@@ -213,6 +222,56 @@ describe.each(views)('%s: coming back to the tab', (_name, testId, Renderer) => 
       mark()
       show(loaded(41))
       expect(calls.some((c) => c.behavior === 'smooth')).toBe(true)
+    })
+  })
+
+  // The first placement always happens: an anchor that will never be drawn must not leave the reader on a box nobody placed.
+  describe('an anchor that never comes', () => {
+    const WAIT = 30
+    const prev = scrollTuning.anchorWaitMs
+    beforeEach(() => { scrollTuning.anchorWaitMs = WAIT; vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers(); scrollTuning.anchorWaitMs = prev })
+    /** The reader left on turn 95 of 100. */
+    function leaveOn95() {
+      registerModule({ id: 'nex', name: 'Nex', panes: [{ kind: 'execution', component: Renderer }] })
+      show(loaded(100))
+      const r = render(<TabContent activeTab={deckTab} allTabs={all} />)
+      scrollBoxTo(mounted(), 95 * TURN - 30)
+      r.rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+      return r
+    }
+    const wait = () => act(() => { vi.advanceTimersByTime(WAIT + 10) })
+
+    it('a window the store swapped in (turns 10-30) places the reader, it does not leave them at the top', () => {
+      const r = leaveOn95()
+      show(windowed(10, 30))
+      sets = []
+      r.rerender(<TabContent activeTab={deckTab} allTabs={all} />)
+      wait()
+      expect(sets.length).toBeGreaterThan(0)
+      expect(mounted().scrollTop).toBeGreaterThan(0)
+    })
+
+    it('an anchor past a conversation that stopped growing: placed once the wait is over', () => {
+      const r = leaveOn95()
+      show(loaded(30))
+      sets = []
+      r.rerender(<TabContent activeTab={deckTab} allTabs={all} />)
+      wait()
+      expect(sets.length).toBeGreaterThan(0)
+      expect(mounted().scrollTop).toBeGreaterThan(0)
+    })
+
+    it('but not before the wait is over: a batch arriving in time still finds its anchor', () => {
+      const r = leaveOn95()
+      show(loading())
+      r.rerender(<TabContent activeTab={deckTab} allTabs={all} />)
+      show(loaded(5))
+      act(() => { vi.advanceTimersByTime(WAIT / 2) })
+      show(loaded(100))
+      expect(turnTop(mounted(), 95)).toBe(30)
+      wait()
+      expect(turnTop(mounted(), 95)).toBe(30)
     })
   })
 

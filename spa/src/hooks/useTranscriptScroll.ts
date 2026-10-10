@@ -75,11 +75,14 @@
 // worker pane's transcript keys it by pane *and* execution
 // (ExecutionView), since a handoff / take-back can swap a pane's content to
 // a different execution while keeping its paneId.
-import { useCallback, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, type Ref, type UIEvent } from 'react'
 import { readScrollMemo, writeScrollMemo, SCROLL_ANCHOR_CLASS, type ScrollAnchor, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'
 
 /** Within this many pixels of the end counts as the bottom (sub-pixel rounding, a last line's margin). */
 const NEAR_BOTTOM = 24
+
+/** Tunable (a test shortens it): how long the first placement waits for a remembered anchor turn that has not been drawn. */
+export const scrollTuning = { anchorWaitMs: 1500 }
 
 /** Keys that scroll the box (A3). */
 const SCROLL_KEYS = new Set(['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', ' ', 'Spacebar', 'End', 'Home'])
@@ -108,6 +111,10 @@ export interface TranscriptScrollControl {
 export interface TranscriptScrollMemory {
   paneId: string
   view: ScrollMemo['view']
+  /** The conversation is a window the store jumped to, not the live end: an anchor it does not draw will not arrive. */
+  detached?: boolean
+  /** How many turns the conversation has (0 or absent: not known yet): an anchor past it does not exist. */
+  totalTurns?: number
 }
 
 /** Exposes `scroll.release` on a transcript's `scrollControl` prop. */
@@ -207,6 +214,10 @@ export function useTranscriptScroll(
   // The box's clientHeight at the last resize notification (null: none yet), and its observer.
   const lastClient = useRef<number | null>(null)
   const sizeObserver = useRef<ResizeObserver | null>(null)
+  // The first placement's wait for a remembered anchor turn: its timer, whether it ran out, and `follow` for the timer to call.
+  const waitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const gaveUp = useRef(false)
+  const followRef = useRef<() => void>(() => {})
   const mem = useRef(memory)
   // Before any passive effect of the same commit reads them.
   useLayoutEffect(() => {
@@ -348,6 +359,8 @@ export function useTranscriptScroll(
     return true
   }, [])
 
+  useEffect(() => () => { if (waitTimer.current) clearTimeout(waitTimer.current) }, [])
+
   /**
    * True while the memo's anchor (same view) is not drawn yet but is still to come: a turn anchor past the last turn drawn (the
    * conversation is arriving in pieces), or a prelude anchor in a box too short to scroll. Nothing to put back yet. An anchor
@@ -359,7 +372,11 @@ export function useTranscriptScroll(
     if (!m || !memo || memo.atBottom || memo.view !== m.view || !memo.anchor) return false
     // A box with no height yet (not laid out) says nothing about its content.
     if (el.clientHeight === 0) return false
+    // The ways out, so that the first placement always happens: the wait ran out, the conversation is a window that does not
+    // draw it, or it is past the end of the conversation.
+    if (gaveUp.current || m.detached) return false
     const { anchor } = memo
+    if (anchor.kind === 'turn' && m.totalTurns && anchor.index >= m.totalTurns) return false
     if (anchor.kind === 'prelude') return el.scrollHeight <= el.clientHeight && !preludeAt(el, anchor.pos)
     if (turnAt(el, anchor.index)) return false
     const last = anchors.current?.length ? Number(anchors.current[anchors.current.length - 1].dataset.turnIndex) : -1
@@ -373,7 +390,13 @@ export function useTranscriptScroll(
     if (first) {
       // The first batch of a conversation arriving in pieces can be shorter than the box and hold no trace of the place the
       // reader left: a restore now would clamp to the bottom and spend the placement. Wait for the piece that draws the anchor.
-      if (!holding.current && awaitsAnchor(el)) return
+      if (!holding.current && awaitsAnchor(el)) {
+        // Not for ever: when the wait is over the placement happens with what is drawn (an anchor still missing restores from
+        // scrollTop, or the bottom).
+        waitTimer.current ??= setTimeout(() => { gaveUp.current = true; waitTimer.current = null; followRef.current() }, scrollTuning.anchorWaitMs)
+        return
+      }
+      if (waitTimer.current) { clearTimeout(waitTimer.current); waitTimer.current = null }
       scrolled.current = true
       // Mounted under an open search bar (a view switch): the bar places
       // the reader — at the current match, or the bottom — not this (R1-1).
@@ -400,6 +423,7 @@ export function useTranscriptScroll(
     // memo at whatever stale, off-bottom position the reader had before.
     remember(el)
   }, [observe, restore, remember, awaitsAnchor])
+  useLayoutEffect(() => { followRef.current = follow }, [follow])
 
   const release = useCallback(() => {
     const el = box.current
