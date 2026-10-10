@@ -52,7 +52,7 @@ func TestTokenGenerate_ForceWritesAndSaysEveryClientMustRepair(t *testing.T) {
 	require.NotContains(t, string(after), oldTokenLine)
 	require.Contains(t, string(after), "# mine", "only the token line changes")
 	require.Contains(t, errw.String()+out.String(), "re-pair", "says plainly what it costs")
-	require.Contains(t, errw.String()+out.String(), "restart")
+	require.Contains(t, errw.String()+out.String(), "restart it")
 }
 
 func TestTokenGenerate_NoDaemonWritesAsToday(t *testing.T) {
