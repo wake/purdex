@@ -484,6 +484,13 @@ Size ~650 lines.
    value); in `titlebar` / `line` it is one line — the first sentence of the latest `status` — and a click brings the
    area into the pane; the title-bar button now also appears for such a tab. `panelView` becomes: team tab → team view
    (or the drilled workbook); else the tab's conversation's workbook when it has one; else nothing.
+   **Implemented as WA-2b-1b:** `workbookTabs` / `setWorkbookTab` are gone (an old store carrying the field loads without
+   it and never writes it back); `panelView({panelTeam, teamDrill, own})`; `own-workbook.ts` (`ownSessionOf` = the tab's
+   first live `cc` tmux-session pane, `rebuild.agent.sessionId`; `useOwnWorkbook` = that target only when
+   `useSeatWorkbook(...).has`, and it asks `loadSeat` — limit 1, deduped per connection generation — since no roster does
+   for a non-team tab). `line` = `OwnWorkbookPanel` (click → `full`); `full` / `max` = `TeamSeatWorkbookView` without a
+   back control, with the header's ArrowLineUp / enlarge; the title-bar strip `OwnTitleStrip` (click → `full`) and the
+   Notebook button (`OwnNotebookButton`, toggles `sharedPanelMode` ⇄ `sharedPanelLast`). No StatusBar button existed.
 Tests: rows to the prototype (ring position, no percent, tooltip carries model / effort / %); task line present / absent;
 row click drills, bot icon opens the tab, back returns; non-`workbook.v1` row click opens the tab; ended seat recorded
 once, listed, drill works, pruned with the team, cap 20; toolbar toggle on a team tab (back to team view) and a plain
