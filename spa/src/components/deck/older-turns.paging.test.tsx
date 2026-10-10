@@ -72,6 +72,10 @@ describe.each([
       first = next
     }
     expect(screen.getByTestId(startId)).toHaveTextContent(/Start of the conversation|已到對話開頭/)
+    // in the flow (no sticky / absolute / fixed between it and the box): it scrolls away with the content
+    for (let el: HTMLElement | null = screen.getByTestId(startId); el && el !== box(); el = el.parentElement) {
+      expect(el.classList.contains('sticky') || el.classList.contains('absolute') || el.classList.contains('fixed')).toBe(false)
+    }
     to(box(), 0)
     expect(load).not.toHaveBeenCalled()
   })
@@ -162,6 +166,17 @@ describe.each([
     box().scrollTop = 1000; fireEvent.scroll(box())
     act(() => show(entryFrom(2, false, 1)))
     expect(box().scrollTop).toBe(1000) // not shifted by the 10 turns that came in above
+  })
+
+  it('the start-of-conversation line arrives with the last page without moving the reader, even if paging ends a render later', () => {
+    const { box, to, show } = mount(4)
+    to(box(), 100)
+    expect(turnTop(box(), 4)).toBe(-100)
+    act(() => show(entryFrom(0, true))) // the page landed, paging not yet cleared
+    expect(screen.getByTestId(startId)).toBeInTheDocument()
+    expect(turnTop(box(), 4)).toBe(-100)
+    act(() => show(entryFrom(0, false)))
+    expect(turnTop(box(), 4)).toBe(-100)
   })
 
   it('a status line coming and going above the reader does not move the turns (it takes no room in the flow)', () => {

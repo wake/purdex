@@ -120,8 +120,9 @@ function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRe
             <div ref={setBox} onScroll={onScroll} data-testid="chat-scroll" aria-label={t('chat.transcript')} style={{ overflowAnchor: 'none' }} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               <StatusOverlay>
                 {paging && <div data-testid="chat-paging">{t('deck.paging')}</div>}
-                {hasMoreBefore === false && !paging && <div data-testid="chat-history-start">{t('deck.history_start')}</div>}
               </StatusOverlay>
+              {/* In the flow, on top of the content: it scrolls away with it, and arrives in the commit of the last page. */}
+              {hasMoreBefore === false && <div data-testid="chat-history-start" className="text-xs text-text-muted">{t('deck.history_start')}</div>}
               {groupByTurn(entries).map((g) => (
                 <div key={g.turnIndex} data-turn-index={g.turnIndex} className={`${SCROLL_ANCHOR_CLASS} space-y-3`}>
                   {g.entries.map((e) => <Entry key={e.key} entry={e} paneKey={paneKey} binding={binding} />)}

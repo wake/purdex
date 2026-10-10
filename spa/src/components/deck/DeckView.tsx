@@ -125,8 +125,9 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
           <DeckRevealContext.Provider value={reveal}>
             <StatusOverlay>
               {entry.paging && <div data-testid="deck-paging">{t('deck.paging')}</div>}
-              {!empty && !doc.hasMoreBefore && !entry.paging && <div data-testid="deck-history-start">{t('deck.history_start')}</div>}
             </StatusOverlay>
+            {/* In the flow, on top of the content: it scrolls away with it, and arrives in the commit of the last page (the place is kept for it). */}
+            {!empty && !doc.hasMoreBefore && <div data-testid="deck-history-start" className="text-xs text-text-muted">{t('deck.history_start')}</div>}
             {empty ? (
               <div data-testid="deck-empty" className="flex h-full items-center justify-center text-sm text-text-muted">
                 {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
