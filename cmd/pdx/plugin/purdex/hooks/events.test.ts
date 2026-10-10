@@ -1694,6 +1694,25 @@ test('an interrupt closes the turn it cancelled: turn.complete aborted for the d
   expect(beats[beats.length - 1].data.turn_id).toBeUndefined()
 })
 
+// Mutation gate: clear turnId on any main completion → the late one ends turn B and a submit would call the blocking
+// $.prompt.submit mid-turn → red.
+test('the engine\'s late completion of the aborted turn does not end the next turn', async ($, on) => {
+  const g = gated(PJOB({ kind: 'interrupt', text: undefined }))
+  const w = evWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await turnStart($, 'A')
+  g.open()
+  await w.clock.settle()
+  await turnStart($, 'B') // the next turn begins
+  await turnDone($, 'A', { reason: 'aborted', isAborted: true }) // the engine's own completion of A arrives late
+  await w.clock.advance(1000)
+  await w.clock.advance(10_000)
+  await w.clock.advance(10_000)
+  const beats = ofType(w, 'heartbeat')
+  expect(beats.length).toBeGreaterThan(0)
+  expect(beats[beats.length - 1].data.turn_id).toBe('B') // B is still the running turn
+})
+
 test('a second interrupt right after finds no turn running', async ($, on) => {
   const job2 = PJOB({ id: 'pj-' + '1'.repeat(32), kind: 'interrupt', text: undefined })
   const jobs = [PJOB({ kind: 'interrupt', text: undefined }), job2]

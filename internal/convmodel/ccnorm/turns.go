@@ -15,6 +15,7 @@ type turnRec struct {
 	duration    bool  // a turn_duration row was seen
 	durationAt  int64 // its time
 	interrupted bool  // an interrupt marker was seen
+	synthetic   bool  // ...or the caller said the turn was cancelled (MarkInterrupted): no marker row exists
 	markerAt    int64
 	apiErr      *convmodel.TurnError // the turn's last assistant row is an API error
 	hasModel    bool                 // an assistant row (a model reply) is in the turn
@@ -88,6 +89,9 @@ func (n *Normalizer) settle(ti int, last bool, off int64) {
 			e = tr.durationAt
 		case tr.interrupted:
 			e = tr.markerAt
+			if tr.synthetic {
+				e = max(e, tr.lastAt) // rows the abort let through before the process stopped are still the turn's
+			}
 		}
 		e = max(e, tr.t.StartedAt)
 		ended = &e
@@ -298,10 +302,10 @@ func (n *Normalizer) MarkInterrupted(atMs int64) []Change {
 		return nil
 	}
 	tr := n.turns[last]
-	if tr.t.Outcome != convmodel.OutcomeRunning || tr.t.StartedAt > atMs || tr.interrupted {
+	if tr.t.Outcome != convmodel.OutcomeRunning || tr.t.StartedAt >= atMs || tr.interrupted {
 		return nil
 	}
-	tr.interrupted, tr.markerAt = true, max(atMs, tr.lastAt)
+	tr.interrupted, tr.markerAt, tr.synthetic = true, max(atMs, tr.lastAt), true
 	n.refresh(last, -1)
 	return n.flush()
 }

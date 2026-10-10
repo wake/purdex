@@ -716,7 +716,10 @@ function turnStarted($, e) {
 
 function turnCompleted($, e) {
   if (!ev.on) return
-  if (!e.agentId) {
+  // A completion that names an earlier turn (the engine's own, arriving after the mod closed that turn itself and a new
+  // one began) does not end the one now running.
+  const late = !e.agentId && !!ev.turnId && !!e.turnId && e.turnId !== ev.turnId
+  if (!e.agentId && !late) {
     ev.turnId = ''
     ev.asks.clear()
     ev.lastError = e.reason === 'error'

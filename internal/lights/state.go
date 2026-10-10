@@ -120,13 +120,16 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 	if s.StatusEventAt.After(now) {
 		s.StatusEventAt = time.Time{} // the wall clock went back
 	}
+	var abortedTurn struct {
+		TurnID  string `json:"turn_id"`
+		Aborted bool   `json:"aborted"`
+		AgentID string `json:"agent_id"`
+	}
+	stale := ev.Type == modevents.TypeTurnComplete && decode(ev.Data, &abortedTurn) && abortedTurn.AgentID == "" && s.staleComplete(abortedTurn.TurnID)
 	touched := s.apply(ev)
-	if ev.Type == modevents.TypeTurnComplete {
-		var d struct {
-			Aborted bool   `json:"aborted"`
-			AgentID string `json:"agent_id"`
-		}
-		if decode(ev.Data, &d) && d.Aborted && d.AgentID == "" {
+	if ev.Type == modevents.TypeTurnComplete && !stale {
+		d := abortedTurn
+		if d.Aborted && d.AgentID == "" {
 			// The event's own time, as the mod stamped it when the abort returned (believed within atSkewWindow, else the
 			// receive time): a batch that arrives late must not date the abort after a turn that started in between.
 			s.AbortedAt, _ = eventTime(ev.At, now)
@@ -215,6 +218,7 @@ func (s *StreamState) apply(ev modevents.Event) (touched bool) {
 		}
 	case modevents.TypeTurnComplete:
 		var d struct {
+			TurnID  string `json:"turn_id"`
 			Reason  string `json:"reason"`
 			AgentID string `json:"agent_id"`
 		}
@@ -223,6 +227,9 @@ func (s *StreamState) apply(ev modevents.Event) (touched bool) {
 		}
 		if d.AgentID != "" {
 			delete(s.Dots, d.AgentID)
+			return false
+		}
+		if s.staleComplete(d.TurnID) {
 			return false
 		}
 		s.TurnID = ""
@@ -360,6 +367,13 @@ func (s *StreamState) reconcileDots(agents []heartbeatAgent, at int64) {
 }
 
 // reset forgets the conversation: a new session or a /clear or /resume.
+// staleComplete reports whether a main-turn turn.complete names a turn other than the one running: the engine's late
+// completion of a turn the mod already closed (its own interrupt), arriving after the next turn began. It must not end
+// that next turn. A completion with no turn id, or one that arrives with no turn running, is never stale.
+func (s *StreamState) staleComplete(turnID string) bool {
+	return turnID != "" && s.TurnID != "" && turnID != s.TurnID
+}
+
 func (s *StreamState) reset() {
 	s.TurnID = ""
 	clear(s.Asks)
