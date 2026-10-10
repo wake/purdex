@@ -12,7 +12,13 @@ export interface DockCard {
 }
 
 /** `hidden`: this dock's own answer is in flight and the approval has already closed — shown only if that send fails. */
-interface Closing { ask: OpenAsk; until: number; hidden?: boolean }
+interface Closing {
+  ask: OpenAsk
+  until: number
+  hidden?: boolean
+  /** `until` already counts the 「已在終端機回答」 note's own 3 s (set once, when the terminal's answer is first known). */
+  noted?: boolean
+}
 
 export interface DockCards {
   /** Closing cards first (they leave in a moment), then the open ones in the order the daemon holds them. */
@@ -24,6 +30,12 @@ export interface DockCards {
    * open again if the approval is, and if the approval closed meanwhile (another client won) the lock shows after all.
    */
   finishAnswered: (approvalId: string, ok: boolean) => void
+}
+
+/** A card that just stopped being open and was not answered here: the note when the terminal's answer is known, else the lock. */
+function closingEntry(ask: OpenAsk, items: readonly ConversationItem[]): Closing {
+  const said = terminalAnswerText(items, ask.toolUseId) !== null
+  return { ask, until: Date.now() + (said ? ANSWERED_NOTE_MS : LOCK_CLOSE_MS), noted: said }
 }
 
 export function useDockCards(paneKey: string, scope: string, approvals: readonly ConversationApproval[], items: readonly ConversationItem[]): DockCards {
@@ -55,13 +67,27 @@ export function useDockCards(paneKey: string, scope: string, approvals: readonly
         gone.push({ ask, until: Infinity, hidden: true })
         continue
       }
-      const said = terminalAnswerText(itemsRef.current, ask.toolUseId) !== null
-      gone.push({ ask, until: Date.now() + (said ? ANSWERED_NOTE_MS : LOCK_CLOSE_MS) })
+      gone.push(closingEntry(ask, itemsRef.current))
     }
     for (const [id, ask] of nowOpen) seen.current.set(id, ask)
     if (gone.length > 0) setClosing((c) => [...c, ...gone])
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` is derived from `approvals`; its ids are the key
   }, [openKey, paneKey])
+
+  // The terminal's answer lands in the transcript after the approval closed (about half a second later). Until it does the card
+  // is the lock; the moment it does the card becomes the note, and the note gets its own 3 s from there — once per card.
+  useEffect(() => {
+    setClosing((c) => {
+      const now = Date.now()
+      let changed = false
+      const next = c.map((x) => {
+        if (x.noted || x.hidden || x.until <= now || terminalAnswerText(items, x.ask.toolUseId) === null) return x
+        changed = true
+        return { ...x, until: now + ANSWERED_NOTE_MS, noted: true }
+      })
+      return changed ? next : c
+    })
+  }, [items])
 
   // A closing card leaves when its time is up.
   useEffect(() => {
@@ -82,8 +108,7 @@ export function useDockCards(paneKey: string, scope: string, approvals: readonly
     answeredHere.current.delete(id)
     setClosing((c) => c.map((x) => {
       if (x.ask.id !== id || !x.hidden) return x
-      const said = terminalAnswerText(itemsRef.current, x.ask.toolUseId) !== null
-      return { ask: x.ask, until: Date.now() + (said ? ANSWERED_NOTE_MS : LOCK_CLOSE_MS) }
+      return closingEntry(x.ask, itemsRef.current)
     }))
   }, [])
 
