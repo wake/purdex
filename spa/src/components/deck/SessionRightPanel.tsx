@@ -14,11 +14,11 @@ interface Props {
   /** The conversation the panel belongs to (host + session id); a change drops a panel opened under the old one. */
   binding: string
   turns: PanelTurn[]
-  /** False for a pane that is not the one in front: its Esc must not close another pane's panel. */
-  active?: boolean
+  /** REQUIRED. True only for the focused pane: Esc closes the focused pane's panel and no other (a split view has several). */
+  active: boolean
 }
 
-export function SessionRightPanel({ paneKey, binding, turns, active = true }: Props) {
+export function SessionRightPanel({ paneKey, binding, turns, active }: Props) {
   const t = useI18nStore((s) => s.t)
   const state = usePanel(paneKey, binding)
   const scroller = useRef<HTMLDivElement>(null)

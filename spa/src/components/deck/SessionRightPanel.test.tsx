@@ -108,21 +108,21 @@ describe('a different conversation in the same pane (/clear, relay, rebuild)', (
 
   it('the panel opened under the old session is not shown under the new one, and is dropped from memory', () => {
     openOn()
-    const { rerender } = render(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} /></Fold>)
+    const { rerender } = render(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} active /></Fold>)
     expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
     // /clear: the same pane, the same turn and step ids (a fixture replayed), a new session id
-    rerender(<Fold><SessionRightPanel paneKey={PANE} binding={NEXT} turns={twoTurns()} /></Fold>)
+    rerender(<Fold><SessionRightPanel paneKey={PANE} binding={NEXT} turns={twoTurns()} active /></Fold>)
     expect(screen.queryByTestId('session-right-panel')).toBeNull()
     expect(readPanel(PANE)).toBeUndefined()
     // and it does not come back if the old binding returns
-    rerender(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} /></Fold>)
+    rerender(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} active /></Fold>)
     expect(screen.queryByTestId('session-right-panel')).toBeNull()
   })
 
   it('a panel opened later under the new session works', () => {
     openOn()
-    const { rerender } = render(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} /></Fold>)
-    rerender(<Fold><SessionRightPanel paneKey={PANE} binding={NEXT} turns={twoTurns()} /></Fold>)
+    const { rerender } = render(<Fold><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} active /></Fold>)
+    rerender(<Fold><SessionRightPanel paneKey={PANE} binding={NEXT} turns={twoTurns()} active /></Fold>)
     act(() => openPanel(PANE, NEXT, { kind: 'chain', turnId: TWO, firstStepId: runs()[0].stepIds[0] }))
     expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
   })
@@ -152,7 +152,7 @@ describe('closing and width', () => {
 
   it('Esc typed in a text field is the field\'s, and another key does nothing', () => {
     open()
-    render(<Fold><textarea data-testid="box" /><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} /></Fold>)
+    render(<Fold><textarea data-testid="box" /><SessionRightPanel paneKey={PANE} binding={BIND} turns={twoTurns()} active /></Fold>)
     fireEvent.keyDown(screen.getByTestId('box'), { key: 'Escape' })
     fireEvent.keyDown(document.body, { key: 'a' })
     expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
@@ -162,6 +162,28 @@ describe('closing and width', () => {
     open(); mount(twoTurns(), false)
     fireEvent.keyDown(document.body, { key: 'Escape' })
     expect(screen.getByTestId('session-right-panel')).toBeInTheDocument()
+  })
+
+  it('split view: two panes both have a panel open, Esc closes only the focused one', () => {
+    const B = conversationBinding('h', 'session-b')
+    openPanel('pane-left', BIND, { kind: 'chain', turnId: TWO, firstStepId: runsOfTwo()[0].stepIds[0] })
+    openPanel('pane-right', B, { kind: 'chain', turnId: TWO, firstStepId: runsOfTwo()[0].stepIds[0] })
+    const both = (focus: 'left' | 'right') => (
+      <Fold>
+        <SessionRightPanel paneKey="pane-left" binding={BIND} turns={twoTurns()} active={focus === 'left'} />
+        <SessionRightPanel paneKey="pane-right" binding={B} turns={twoTurns()} active={focus === 'right'} />
+      </Fold>
+    )
+    const { rerender } = render(both('right'))
+    expect(screen.getAllByTestId('session-right-panel')).toHaveLength(2)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(readPanel('pane-right')).toBeUndefined()
+    expect(readPanel('pane-left')).toBeDefined()
+    expect(screen.getAllByTestId('session-right-panel')).toHaveLength(1)
+    // focus moves: the next Esc is the left one's
+    rerender(both('left'))
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(readPanel('pane-left')).toBeUndefined()
   })
 
   it('is 42 % of the pane, never under 320 nor over 640 px', () => {
@@ -177,7 +199,7 @@ describe('closing and width', () => {
 // The real TabContent: the alive pool keeps nothing (keepAliveCount 0), so the pane unmounts when the tab is left.
 const H = 'h'
 function PanelPane({ pane }: PaneRendererProps) {
-  return <Fold><SessionRightPanel paneKey={pane.id} binding={BIND} turns={twoTurns()} /></Fold>
+  return <Fold><SessionRightPanel paneKey={pane.id} binding={BIND} turns={twoTurns()} active /></Fold>
 }
 const Other = () => <div data-testid="other-tab" />
 const paneTab: Tab = { ...createTab({ kind: 'execution', executionId: 'exc_1', host: H }), id: 't-panel' }

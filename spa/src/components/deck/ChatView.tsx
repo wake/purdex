@@ -34,8 +34,8 @@ export interface ChatViewProps {
   onSwitchToTerminal: () => void
   /** The input below the stream (SessionInput), supplied by the caller. */
   input?: ReactNode
-  /** False for a pane that is not in front (its Esc must not close another pane's panel). */
-  active?: boolean
+  /** False for a pane that is not in front (REQUIRED: Esc closes only the focused pane's panel). */
+  active: boolean
 }
 
 function Entry({ entry, paneKey, binding }: { entry: ChatEntry; paneKey: string; binding: string }) {
@@ -60,7 +60,7 @@ export function ChatView(props: ChatViewProps) {
   return <ChatViewBody key={binding} binding={binding} {...props} />
 }
 
-function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active = true }: ChatViewProps & { binding: string }) {
+function ChatViewBody({ binding, paneKey, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active }: ChatViewProps & { binding: string }) {
   const t = useI18nStore((s) => s.t)
   const fold = usePaneFoldStore(`${paneKey}\0${binding}`)
   const entries = useMemo(() => buildChat(turns), [turns])

@@ -29,7 +29,7 @@ const turnsOf = (f: unknown): PanelTurn[] =>
   (f as Fx).conversation.turns.map((t) => ({ id: t.id, index: t.index, items: t.items.map((it, index) => ({ ...(it as object), index }) as ConversationItem) }))
 
 const props = (over: Partial<ChatViewProps> = {}): ChatViewProps =>
-  ({ paneKey: PANE, hostId: 'h', sessionId: 'session-1', title: 'my tab', status: 'idle', turns: turnsOf(pluginSubmit), onSwitchToTerminal: vi.fn(), ...over })
+  ({ paneKey: PANE, hostId: 'h', sessionId: 'session-1', title: 'my tab', status: 'idle', turns: turnsOf(pluginSubmit), onSwitchToTerminal: vi.fn(), active: true, ...over })
 const mount = (over: Partial<ChatViewProps> = {}) => render(<ChatView {...props(over)} />)
 
 // hand-made helpers
