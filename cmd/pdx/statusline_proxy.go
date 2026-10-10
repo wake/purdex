@@ -166,6 +166,7 @@ func resolveProxyTmuxSession() string {
 func runStatuslineProxy(args []string) {
 	inner := parseInnerFlag(args)
 	raw := readStdinWithTimeout(os.Stdin, 5)
+	startedAt := time.Now() // the payload's time: when this render's JSON was read, not when it is written anywhere
 
 	// 1) Print to CC (never blocks on POST)
 	if inner != "" {
@@ -177,15 +178,22 @@ func runStatuslineProxy(args []string) {
 	// 2) Synchronously POST to daemon; silent fail.
 	tmuxSession := resolveProxyTmuxSession()
 	cfg, err := config.Load("")
+	var cfgp *config.Config
 	url := "http://127.0.0.1:7860/api/agent/status"
 	var token string
 	if err == nil {
+		cfgp = &cfg
 		url = fmt.Sprintf("http://%s:%d/api/agent/status", resolveDaemonHost(cfg.Bind), cfg.Port)
 		token = cfg.Token
 	}
-	_ = postStatus(url, token, statuslinePayload{
+	deliverStatus(cfgp, url, token, statuslinePayload{
 		TmuxSession: tmuxSession,
 		AgentType:   "cc",
 		RawStatus:   raw,
-	})
+	}, startedAt)
+}
+
+// deliverStatus POSTs the payload; what a failed POST leaves behind is statuspending's (#2545). Scaffold.
+func deliverStatus(cfg *config.Config, url, token string, p statuslinePayload, at time.Time) {
+	_ = postStatus(url, token, p)
 }

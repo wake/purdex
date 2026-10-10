@@ -25,6 +25,7 @@ import (
 	"github.com/wake/purdex/internal/execstat"
 	modeventsmod "github.com/wake/purdex/internal/module/modevents"
 	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/statuspending"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -94,6 +95,10 @@ type Module struct {
 	// because hot-path agent.status POSTs shouldn't contend with hook writes).
 	snapshotMu      sync.RWMutex
 	statusSnapshots map[string]statusSnapshot
+
+	// pendingDir is where `pdx statusline-proxy` keeps a payload it could not deliver while the daemon was down (#2545);
+	// "" (a bare test module) reads nothing.
+	pendingDir string
 	// contextUsage keeps the last statusline context reading per CC session
 	// id (not per session code: two CC panes in one tmux session must not
 	// overwrite each other). Bounded by contextUsageCap; also under
@@ -271,6 +276,7 @@ func (m *Module) Dependencies() []string { return []string{"session", modeventsm
 // and registers CC and Codex providers.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	m.pendingDir = statuspending.DirFor(c.Cfg) // the one directory the statusline proxy writes (#2545), from the one config
 	m.initModLights(c)
 	svc, ok := c.Registry.Get(session.RegistryKey)
 	if !ok {
@@ -396,6 +402,7 @@ func (m *Module) Start(_ context.Context) error {
 	// Outside the step timer, whose line is a fixed set (#1767): the persisted statusline readings come back for the
 	// sessions that are live, then the flusher starts (#2406).
 	m.restoreContextUsage(context.Background())
+	m.applyPendingStatuslines(context.Background())
 	m.startContextUsageFlush()
 	log.Printf("[agent] start: %s", st)
 	log.Print(startExecLine(execBase))
