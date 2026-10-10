@@ -80,6 +80,25 @@
               "total_lines": 1,
               "total_bytes": 117,
               "truncated": false
+            },
+            "question": {
+              "questions": [
+                {
+                  "question": "你喜歡貓還是狗？",
+                  "header": "貓或狗",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "label": "貓",
+                      "description": "喜歡貓"
+                    },
+                    {
+                      "label": "狗",
+                      "description": "喜歡狗"
+                    }
+                  ]
+                }
+              ]
             }
           },
           {
@@ -143,6 +162,29 @@
               "total_lines": 1,
               "total_bytes": 128,
               "truncated": false
+            },
+            "question": {
+              "questions": [
+                {
+                  "question": "你喜歡哪些水果？",
+                  "header": "水果",
+                  "multiple": true,
+                  "options": [
+                    {
+                      "label": "蘋果",
+                      "description": "喜歡蘋果"
+                    },
+                    {
+                      "label": "香蕉",
+                      "description": "喜歡香蕉"
+                    },
+                    {
+                      "label": "芒果",
+                      "description": "喜歡芒果"
+                    }
+                  ]
+                }
+              ]
             }
           },
           {
@@ -217,6 +259,40 @@
               "total_lines": 1,
               "total_bytes": 145,
               "truncated": false
+            },
+            "question": {
+              "questions": [
+                {
+                  "question": "早餐吃什麼？",
+                  "header": "早餐",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "label": "蛋餅",
+                      "description": "吃蛋餅"
+                    },
+                    {
+                      "label": "飯糰",
+                      "description": "吃飯糰"
+                    }
+                  ]
+                },
+                {
+                  "question": "飲料喝什麼？",
+                  "header": "飲料",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "label": "豆漿",
+                      "description": "喝豆漿"
+                    },
+                    {
+                      "label": "紅茶",
+                      "description": "喝紅茶"
+                    }
+                  ]
+                }
+              ]
             }
           },
           {
@@ -374,6 +450,25 @@
               "total_lines": 3,
               "total_bytes": 438,
               "truncated": false
+            },
+            "question": {
+              "questions": [
+                {
+                  "question": "上午還是下午開會？",
+                  "header": "開會時段",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "label": "上午",
+                      "description": "上午開會"
+                    },
+                    {
+                      "label": "下午",
+                      "description": "下午開會"
+                    }
+                  ]
+                }
+              ]
             }
           },
           {
@@ -452,6 +547,44 @@
               "total_lines": 1,
               "total_bytes": 156,
               "truncated": false
+            },
+            "question": {
+              "questions": [
+                {
+                  "question": "午餐吃什麼？",
+                  "header": "午餐",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "label": "便當",
+                      "description": "吃便當"
+                    },
+                    {
+                      "label": "麵",
+                      "description": "吃麵"
+                    }
+                  ]
+                },
+                {
+                  "question": "甜點想吃哪些？",
+                  "header": "甜點",
+                  "multiple": true,
+                  "options": [
+                    {
+                      "label": "布丁",
+                      "description": "吃布丁"
+                    },
+                    {
+                      "label": "蛋糕",
+                      "description": "吃蛋糕"
+                    },
+                    {
+                      "label": "冰淇淋",
+                      "description": "吃冰淇淋"
+                    }
+                  ]
+                }
+              ]
             }
           },
           {
@@ -668,6 +801,25 @@
               "total_lines": 1,
               "total_bytes": 120,
               "truncated": false
+            },
+            "question": {
+              "questions": [
+                {
+                  "question": "你喜歡咖啡還是茶？",
+                  "header": "飲品",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "label": "咖啡",
+                      "description": "喝咖啡"
+                    },
+                    {
+                      "label": "茶",
+                      "description": "喝茶"
+                    }
+                  ]
+                }
+              ]
             }
           },
           {
@@ -727,6 +879,25 @@
               "total_lines": 1,
               "total_bytes": 117,
               "truncated": false
+            },
+            "question": {
+              "questions": [
+                {
+                  "question": "你喜歡山還是海？",
+                  "header": "山或海",
+                  "multiple": false,
+                  "options": [
+                    {
+                      "label": "山",
+                      "description": "喜歡山"
+                    },
+                    {
+                      "label": "海",
+                      "description": "喜歡海"
+                    }
+                  ]
+                }
+              ]
             }
           },
           {

@@ -39,14 +39,14 @@ func TestSummary_Table(t *testing.T) {
 		want  string
 	}{
 		{"Bash", obj{"command": "ls -la", "description": "list"}, "ls -la"},
-		{"Bash", obj{"command": "echo a\necho b"}, "echo a"}, // first line only
+		{"Bash", obj{"command": "echo a\necho b"}, "echo a echo b"}, // white space runs collapse to one space (Collie's oneLine)
 		{"Bash", obj{"command": "  \n  echo a"}, "echo a"},
-		{"Bash", obj{"command": "echo a\r\necho b"}, "echo a"},
-		{"Read", obj{"file_path": "/work/x/src/main.go"}, "main.go"},
-		{"Edit", obj{"file_path": "/work/x/a.txt", "old_string": "a", "new_string": "b"}, "a.txt"},
-		{"Write", obj{"file_path": "/work/x/new.md", "content": "c"}, "new.md"},
-		{"MultiEdit", obj{"file_path": "/work/x/pkg/m.go", "edits": []obj{{"old_string": "a", "new_string": "b"}}}, "m.go"},
-		{"NotebookEdit", obj{"notebook_path": "/work/x/nb.ipynb", "new_source": "x"}, "nb.ipynb"},
+		{"Bash", obj{"command": "echo a\r\necho b"}, "echo a echo b"},
+		{"Read", obj{"file_path": "/work/x/src/main.go"}, "/work/x/src/main.go"}, // the whole path (U3-0, as Collie)
+		{"Edit", obj{"file_path": "/work/x/a.txt", "old_string": "a", "new_string": "b"}, "/work/x/a.txt"},
+		{"Write", obj{"file_path": "/work/x/new.md", "content": "c"}, "/work/x/new.md"},
+		{"MultiEdit", obj{"file_path": "/work/x/pkg/m.go", "edits": []obj{{"old_string": "a", "new_string": "b"}}}, "/work/x/pkg/m.go"},
+		{"NotebookEdit", obj{"notebook_path": "/work/x/nb.ipynb", "new_source": "x"}, "/work/x/nb.ipynb"},
 		{"Grep", obj{"pattern": "foo.*bar", "path": "/work"}, "foo.*bar"},
 		{"Glob", obj{"pattern": "**/*.go"}, "**/*.go"},
 		{"WebFetch", obj{"url": "https://example.com/a", "prompt": "p"}, "https://example.com/a"},
@@ -55,11 +55,13 @@ func TestSummary_Table(t *testing.T) {
 		{"Task", obj{"description": "Old name", "prompt": "long"}, "Old name"},
 		{"Monitor", obj{"description": "Watch the build", "command": "tail -f x"}, "Watch the build"},
 		{"Skill", obj{"skill": "commit"}, "commit"},
-		{"AskUserQuestion", obj{"questions": []obj{{"question": "貓還是狗？", "header": "h"}, {"question": "second"}}}, "貓還是狗？"},
+		{"AskUserQuestion", obj{"questions": []obj{{"question": "貓還是狗？", "header": "h", "options": []obj{{"label": "貓"}}}, {"question": "second"}}}, "貓還是狗？"},
 		{"mcp__ploom__issue_get", obj{"id": "1"}, "ploom · issue_get"},
 		{"mcp__a__b__c", obj{"id": "1"}, "a · b__c"}, // only the first separator splits
-		// fallback: the first string input value in (sorted) key order
+		// fallback: Collie's named fields in its order, then the first string input value in (sorted) key order
 		{"ToolSearch", obj{"max_results": 5, "query": "select:X", "a_flag": true}, "select:X"},
+		{"Whatever", obj{"a": "first", "path": "/p", "description": "d"}, "/p"}, // path outranks description, as in Collie
+		{"Whatever", obj{"a": "first", "prompt": "p"}, "p"},
 		{"Whatever", obj{"b": "second", "a": "first", "n": 3}, "first"},
 		{"Whatever", obj{"n": 3, "ok": true}, ""},
 		{"Read", obj{"offset": 1}, ""},
@@ -77,8 +79,13 @@ func TestSummary_Table(t *testing.T) {
 
 func TestSummary_CappedAtOneLine(t *testing.T) {
 	s := oneStep(t, "Bash", obj{"command": repeat("x", 10000)}, nil)
-	if len(s.Summary) > convmodel.MaxInputString || !utf8.ValidString(s.Summary) {
-		t.Errorf("summary is %d bytes, valid=%v", len(s.Summary), utf8.ValidString(s.Summary))
+	if got := []rune(s.Summary); len(got) != maxSummaryRunes+1 || got[maxSummaryRunes] != '…' || !utf8.ValidString(s.Summary) {
+		t.Errorf("summary is %d runes, valid=%v: want %d runes of text and an ellipsis", len(got), utf8.ValidString(s.Summary), maxSummaryRunes)
+	}
+	// a cut never splits a multi-byte character
+	s = oneStep(t, "Bash", obj{"command": repeat("測", 5000)}, nil)
+	if !utf8.ValidString(s.Summary) || len([]rune(s.Summary)) != maxSummaryRunes+1 {
+		t.Errorf("multi-byte summary: %d runes, valid=%v", len([]rune(s.Summary)), utf8.ValidString(s.Summary))
 	}
 }
 

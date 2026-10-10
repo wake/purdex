@@ -48,6 +48,8 @@ var ReadFields = []ReadField{
 	{Row: "user", Path: "toolDenialKind"},
 	{Row: "user", Path: "toolUseResult.structuredPatch", Subtree: true},
 	{Row: "user", Path: "toolUseResult.filePath"},
+	{Row: "user", Path: "toolUseResult.type"},
+	{Row: "user", Path: "toolUseResult.answers", Subtree: true},
 	{Row: "user", Path: "toolUseResult.backgroundTaskId"},
 	{Row: "user", Path: "toolUseResult.agentId"},
 	{Row: "user", Path: "toolUseResult.description"},

@@ -53,7 +53,7 @@
             "kind": "edit",
             "tool": "Write",
             "status": "done",
-            "summary": "hello.py",
+            "summary": "/work/fixture/hello.py",
             "started_at": 1791482056089,
             "duration_ms": 1803,
             "input": {
@@ -114,7 +114,7 @@
             "kind": "edit",
             "tool": "Edit",
             "status": "done",
-            "summary": "hello.py",
+            "summary": "/work/fixture/hello.py",
             "started_at": 1791482073283,
             "duration_ms": 1898,
             "input": {
@@ -190,7 +190,7 @@
             "kind": "read",
             "tool": "Read",
             "status": "done",
-            "summary": "app.py",
+            "summary": "/work/fixture/app.py",
             "started_at": 1791482103982,
             "duration_ms": 3715,
             "input": {
@@ -223,7 +223,7 @@
             "kind": "edit",
             "tool": "Edit",
             "status": "done",
-            "summary": "app.py",
+            "summary": "/work/fixture/app.py",
             "started_at": 1791482112627,
             "duration_ms": 2973,
             "input": {
@@ -282,7 +282,7 @@
             "kind": "edit",
             "tool": "Edit",
             "status": "done",
-            "summary": "app.py",
+            "summary": "/work/fixture/app.py",
             "started_at": 1791482117626,
             "duration_ms": 2290,
             "input": {
@@ -367,7 +367,7 @@
             "kind": "read",
             "tool": "Read",
             "status": "done",
-            "summary": "notes.md",
+            "summary": "/work/fixture/notes.md",
             "started_at": 1791482136314,
             "duration_ms": 2792,
             "input": {
@@ -387,7 +387,7 @@
             "kind": "edit",
             "tool": "Write",
             "status": "done",
-            "summary": "notes.md",
+            "summary": "/work/fixture/notes.md",
             "started_at": 1791482142691,
             "duration_ms": 3059,
             "input": {
