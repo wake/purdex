@@ -45,6 +45,10 @@ export const STORAGE_KEYS = {
   PLACEHOLDER_FILES: 'purdex-placeholder-files',
   DEVICE_STATE: 'purdex-device-state',
   HEADLESS_LAUNCHER: 'purdex-headless-launcher',
+  /** 這台裝置怎麼看一個 session pane（useSessionViewStore，U3 D1）：`{ byPane: { [tabId\0paneId]: { view: 'deck' | 'chat', sessionCode } } }`，
+   *  終端機＝沒有紀錄；pane 重綁到別的 session 就回終端機；tab／pane 關掉時清。
+   *  device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts、也不放 pane content）、不走 syncManager */
+  SESSION_VIEW: 'purdex-session-view',
   /** 團隊介面的排列（useTeamUiStore）：每個 team key（`<hostId>\0<teamId>`）的成員順序、收合、面板模式、ghost lead 所在的工作區；
    *  device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、不走 syncManager；只被 roster frame 與刪除主機清掉 */
   TEAM_UI: 'purdex-team-ui',
