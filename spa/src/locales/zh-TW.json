@@ -2334,6 +2334,7 @@
   "deck.question.open": "請在下方回答",
   "deck.read.range": "第 {{a}}–{{b}} 行",
   "deck.status.running": "進行中",
+  "deck.status.waiting": "等你回覆",
   "deck.status.failed": "失敗",
   "deck.status.denied": "已拒絕",
   "deck.status.interrupted": "已中斷",

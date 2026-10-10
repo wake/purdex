@@ -7,7 +7,7 @@ import type { Icon } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { formatElapsed, formatExit } from './status-row-model'
 
-export type SlotState = 'idle' | 'running' | 'failed' | 'denied' | 'exit'
+export type SlotState = 'idle' | 'running' | 'waiting' | 'failed' | 'denied' | 'exit'
 
 /** widest exit text (a code is shown 0-255, above that 255+). */
 const WIDEST_EXIT = '255+'
@@ -35,6 +35,13 @@ export function StateSlot({ state, exitCode = 1, elapsedMs = 0, className = '' }
       <span>{t('chat.status.idle')}</span>
     </span>
   )
+  // The agent is waiting for the person (an approval, a question): the same yellow as the tab's light, and ask is never dimmed.
+  const waiting = (
+    <span className="flex items-center gap-1.5 text-status-warning">
+      <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-status-warning" />
+      <span>{t('deck.status.waiting')}</span>
+    </span>
+  )
   const running = (clock: string) => (
     <span className="flex items-center gap-1.5 text-text-primary">
       <span className="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-accent" />
@@ -48,6 +55,7 @@ export function StateSlot({ state, exitCode = 1, elapsedMs = 0, className = '' }
   const options: Array<{ key: SlotState; node: ReactNode; sizer?: ReactNode }> = [
     { key: 'idle', node: idle },
     { key: 'running', node: running(state === 'running' ? formatElapsed(elapsedMs) : WIDEST_CLOCK), sizer: running(WIDEST_CLOCK) },
+    { key: 'waiting', node: waiting },
     { key: 'failed', node: <Chip tone="error" icon={XCircle}>{t('deck.status.failed')}</Chip> },
     { key: 'denied', node: <Chip tone="muted" icon={Prohibit}>{t('deck.status.denied')}</Chip> },
     { key: 'exit', node: exit(state === 'exit' ? formatExit(exitCode) : WIDEST_EXIT), sizer: exit(WIDEST_EXIT) },

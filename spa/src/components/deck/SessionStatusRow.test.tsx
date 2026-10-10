@@ -93,6 +93,12 @@ describe('SessionStatusRow', () => {
     expect(screen.getByTestId('state-slot')).toHaveTextContent('7')
   })
 
+  it('waiting for the person shows 「Waiting for you」, above a running step and an old failure', () => {
+    render(<SessionStatusRow sessionCode={CODE} ctx={ctx({ status: 'waiting', items: [step({ status: 'running' })] })} />)
+    expect(screen.getByTestId('state-slot').dataset.state).toBe('waiting')
+    expect(screen.getByTestId('state-slot')).toHaveTextContent('Waiting for you')
+  })
+
   it('a new snapshot lands live', () => {
     render(<SessionStatusRow sessionCode={CODE} ctx={ctx()} />)
     expect(screen.getByTestId('item-cost').textContent).toBe('—')

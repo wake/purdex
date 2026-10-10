@@ -8,9 +8,9 @@ const step = (over: object = {}): ConversationItem => ({
 const agent = { type: 'agent_text', id: 'a', at: 9, index: 1, markdown: 'ok' } as ConversationItem
 
 describe('slotModel', () => {
-  it('idle with nothing, with an idle header, and while waiting for the person or after the end', () => {
+  it('idle with nothing, with an idle header, and after the end', () => {
     expect(slotModel('idle', [])).toEqual({ state: 'idle' })
-    for (const s of ['idle', 'waiting', 'ended', 'unknown']) expect(slotModel(s, [step()]).state).toBe('idle')
+    for (const s of ['idle', 'ended', 'unknown']) expect(slotModel(s, [step()]).state).toBe('idle')
   })
 
   it('running counts from the running step, else from the newest item', () => {
@@ -34,6 +34,13 @@ describe('slotModel', () => {
   it('an error header says failed when no newer step says more', () => {
     expect(slotModel('error', [agent]).state).toBe('failed')
     expect(slotModel('error', [step({ status: 'denied' })]).state).toBe('denied')
+  })
+
+  it('waiting for the person is its own state and outranks running and any step result', () => {
+    expect(slotModel('waiting', [])).toEqual({ state: 'waiting' })
+    expect(slotModel('waiting', [step({ status: 'running' })]).state).toBe('waiting')
+    expect(slotModel('waiting', [step({ status: 'failed', command: { text: 'x', exit_code: 2 } })]).state).toBe('waiting')
+    expect(slotModel('waiting', [step({ status: 'denied' })]).state).toBe('waiting')
   })
 
   it('running outranks an old failure', () => {
