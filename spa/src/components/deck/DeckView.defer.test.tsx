@@ -111,6 +111,32 @@ describe('DeckView defers far-off markdown', () => {
     expect(isLight(5)).toBe(true)
   })
 
+  it('moves the box by however far the item at its top moved when a swap lands, so the reader keeps their place', () => {
+    render(<DeckView {...props} entry={entry(turns(EAGER_TURNS + 10))} />)
+    const box = screen.getByTestId('deck-scroll')
+    // turn 2 is the one at the top of the box: its first item shows, and the swap above it pushes that item down 55 px
+    const section = turnEl(2)
+    const item = section.firstElementChild as HTMLElement
+    vi.spyOn(section, 'getBoundingClientRect').mockReturnValue({ top: -50, bottom: 500 } as DOMRect)
+    let calls = 0
+    vi.spyOn(item, 'getBoundingClientRect').mockImplementation(() => ({ top: calls++ === 0 ? 100 : 155, bottom: 300 } as DOMRect))
+    expect(box.scrollTop).toBe(0)
+    approach(section)
+    expect(isFull(2)).toBe(true)
+    expect(box.scrollTop).toBe(55)
+  })
+
+  it('leaves the box alone when nothing under the reader moved', () => {
+    render(<DeckView {...props} entry={entry(turns(EAGER_TURNS + 10))} />)
+    const box = screen.getByTestId('deck-scroll')
+    const section = turnEl(2)
+    vi.spyOn(section, 'getBoundingClientRect').mockReturnValue({ top: -50, bottom: 500 } as DOMRect)
+    vi.spyOn(section.firstElementChild as HTMLElement, 'getBoundingClientRect').mockReturnValue({ top: 100, bottom: 300 } as DOMRect)
+    approach(section)
+    expect(isFull(2)).toBe(true)
+    expect(box.scrollTop).toBe(0)
+  })
+
   it('draws streaming text in full whatever the turn', () => {
     const ts = turns(EAGER_TURNS + 3)
     ts[1] = turn(1, [agent('s1', 0, 'typing', { streaming: true })])
