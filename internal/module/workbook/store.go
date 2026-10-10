@@ -274,7 +274,7 @@ func (s *Store) Entry(id int64) (Entry, error) {
 
 // NewestTurn is the newest recorded turn of a session (the catch-up's cursor); ok is false when it has none.
 func (s *Store) NewestTurn(sessionID string) (turnID string, turnAt int64, ok bool, err error) {
-	err = s.db.QueryRow(`SELECT turn_id, turn_at FROM wb_entries WHERE session_id = ? ORDER BY id DESC LIMIT 1`, sessionID).Scan(&turnID, &turnAt)
+	err = s.db.QueryRow(`SELECT turn_id, turn_at FROM wb_entries WHERE session_id = ? AND kind = 'turn' ORDER BY id DESC LIMIT 1`, sessionID).Scan(&turnID, &turnAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", 0, false, nil
 	}
@@ -287,7 +287,7 @@ func (s *Store) NewestTurn(sessionID string) (turnID string, turnAt int64, ok bo
 // ClosestTurn is the session's entry whose turn_at is nearest to `at` within [at-before, at+after] (the push hold's match: a
 // Stop's own entry carries the event's time); ok is false when there is none. Two Stops a moment apart each find their own.
 func (s *Store) ClosestTurn(sessionID string, at, before, after int64) (Entry, bool, error) {
-	e, err := scanEntry(s.db.QueryRow(`SELECT `+entryCols+` FROM wb_entries WHERE session_id = ? AND turn_at BETWEEN ? AND ?
+	e, err := scanEntry(s.db.QueryRow(`SELECT `+entryCols+` FROM wb_entries WHERE session_id = ? AND kind = 'turn' AND turn_at BETWEEN ? AND ?
 		ORDER BY ABS(turn_at - ?) ASC, id DESC LIMIT 1`, sessionID, at-before, at+after, at))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Entry{}, false, nil
@@ -348,7 +348,7 @@ func (s *Store) Entries(since, until int64, thingDone bool, limit int) ([]Entry,
 
 // RecentForPrompt is the last n ok entries of a conversation, oldest first (what the next call is told).
 func (s *Store) RecentForPrompt(convKey string, n int) ([]Entry, error) {
-	rows, err := s.queryEntries(`SELECT `+entryCols+` FROM wb_entries WHERE conv_key = ? AND state = 'ok' ORDER BY id DESC LIMIT ?`, convKey, n)
+	rows, err := s.queryEntries(`SELECT `+entryCols+` FROM wb_entries WHERE conv_key = ? AND state = 'ok' AND kind = 'turn' ORDER BY id DESC LIMIT ?`, convKey, n)
 	if err != nil {
 		return nil, err
 	}
