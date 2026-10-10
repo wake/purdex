@@ -49,15 +49,20 @@ func EnsureHostID(cfg *Config, cfgPath string) (string, error) {
 		return cfg.HostID, nil
 	}
 
-	hostname := shortHostname()
-	code := randomCode(6)
-	cfg.HostID = hostname + ":" + code
-
-	if err := WriteFile(cfgPath, *cfg); err != nil {
-		cfg.HostID = "" // rollback — don't use unstable ID
-		return "", fmt.Errorf("persist host_id: %w", err)
+	// Only host_id goes to the file, on top of the file as it is: a flag override sitting in cfg is not made permanent, and a
+	// host_id another process wrote first is the one this process takes.
+	id := shortHostname() + ":" + randomCode(6)
+	if _, err := Update(cfgPath, func(c *Config) error {
+		if c.HostID == "" {
+			c.HostID = id
+		}
+		id = c.HostID
+		return nil
+	}); err != nil {
+		return "", fmt.Errorf("persist host_id: %w", err) // don't use an unstable ID
 	}
-	return cfg.HostID, nil
+	cfg.HostID = id
+	return id, nil
 }
 
 func shortHostname() string {
