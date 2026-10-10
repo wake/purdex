@@ -29,7 +29,8 @@ export interface QueueEntry {
   /** When the latest submit started (the text-match window is around it). */
   startedAt: number
   /** When the latest submit got its answer. */
-  settledAt?: number  outcome?: SendOutcome
+  settledAt?: number
+  outcome?: SendOutcome
   /** The id of the message that replaced this one after a manual resend (the old entry is kept for the audit trail). */
   supersededBy?: string
 }
