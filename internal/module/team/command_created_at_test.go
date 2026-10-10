@@ -49,6 +49,32 @@ func TestApplyAdopt_RefusesACommandPastTheExpiryAndTheSkew(t *testing.T) {
 	}
 }
 
+// A negative created_at is not a time a lead can have written: refused (and without an overflow for the extremes). Zero is
+// "absent" (the lead omits it), and a time in the future is accepted: the check is about OLD commands, and refusing a
+// lead whose clock runs ahead would stop every adopt instead of only degrading to today's behaviour.
+func TestApplyAdopt_ANegativeCreatedAtIsRefused(t *testing.T) {
+	for _, v := range []int64{-1, -1 << 62, -1 << 63} {
+		s := openTestStore(t)
+		cmd := adoptCmd("c1", "mk-1", "sid-t")
+		cmd.CreatedAt = v
+		p := plan(cmd, true, targetOrigin("sid-t"))
+		p.Now = 500_000_000_000
+		if res := mustApply(t, s, p); res.Status != http.StatusConflict || refusalCode(t, res) != team.ErrCommandExpired {
+			t.Errorf("created_at %d: %d %s", v, res.Status, res.Body)
+		}
+	}
+	for _, v := range []int64{1 << 62, 1<<63 - 1} { // far in the future: accepted, no overflow
+		s := openTestStore(t)
+		cmd := adoptCmd("c2", "mk-2", "sid-t")
+		cmd.CreatedAt = v
+		p := plan(cmd, true, targetOrigin("sid-t"))
+		p.Now = 500_000_000_000
+		if res := mustApply(t, s, p); res.Status != http.StatusOK {
+			t.Errorf("created_at %d: %d %s", v, res.Status, res.Body)
+		}
+	}
+}
+
 // A refused adopt applies nothing and is logged like every refusal, so its replay is the same refusal.
 func TestApplyAdopt_AnExpiredCommandChangesNothingAndReplaysAsRefused(t *testing.T) {
 	const now = int64(500_000_000_000)
