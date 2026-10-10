@@ -48,7 +48,7 @@ func waitForHealthyWithNotify(healthURL string, wantPID int, childExited <-chan 
 	if maxProbeTimeout > timeout {
 		maxProbeTimeout = timeout
 	}
-	client := &http.Client{}
+	client := healthClient()
 
 	start := time.Now()
 	deadline := start.Add(timeout)
@@ -144,6 +144,9 @@ func probeHealth(ctx context.Context, client *http.Client, healthURL string, pro
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body)
 	return true, body.PID, nil
 }
+
+// healthClient is a stub until the implementation commit (#958 attack).
+func healthClient() *http.Client { return &http.Client{} }
 
 // killProcessGroup SIGKILLs the whole process group `pdx start` put the daemon in (Setpgid: the pgid is the child's
 // pid), so a daemon that failed to come up leaves no grandchildren behind (#958). A group with no member left is not

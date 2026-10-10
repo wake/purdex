@@ -169,3 +169,29 @@ func TestKillProcessGroup_LeavesATmuxServerStartedInsideTheGroup(t *testing.T) {
 		t.Fatalf("the group kill took the tmux server with it: %v", err)
 	}
 }
+
+// The probe asks the address directly: an environment proxy (HTTP_PROXY) can answer for a non-loopback bind such as a
+// Tailscale IP, and without the child's pid in that answer the start would be reported failed and a healthy daemon's group
+// killed. And a redirect is not followed to somewhere else. Mutation gate: default transport → red.
+func TestHealthClient_NoProxyNoRedirect(t *testing.T) {
+	c := healthClient()
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok || tr.Proxy != nil {
+		t.Fatalf("transport = %#v, want an *http.Transport with no Proxy", c.Transport)
+	}
+	if c.CheckRedirect == nil {
+		t.Fatal("redirects must not be followed")
+	}
+}
+
+func TestWaitForHealthy_ARedirectIsNotFollowedToAnotherDaemon(t *testing.T) {
+	ours := healthServer(`{"ok":true,"pid":4242}`)
+	defer ours.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, ours.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+	if err := waitForHealthy(redirector.URL, 4242, make(chan error, 1), 300*time.Millisecond, 20*time.Millisecond, nil); err == nil {
+		t.Fatal("a redirect to a server with the right pid must not make the address healthy")
+	}
+}
