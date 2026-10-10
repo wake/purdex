@@ -40,11 +40,45 @@ beforeEach(() => {
 })
 afterEach(() => { stops.forEach((f) => f()); stops = [] })
 
+const verified = (id: string, daemonId: string, ip: string) => ({ endpoint: `${ip}:7860`, daemonId })
 describe('seatTargets', () => {
   it('lead and members on the roster\'s host; a remote member on the host its daemon id maps to; the unmappable and untrusted skipped', () => {
+    useHostStore.setState({ runtime: { h1: { daemonIdVerified: verified('h1', 'd1', '100.64.0.2') }, h2: { daemonIdVerified: verified('h2', 'd2', '100.64.0.4') } } as never })
     const t = team('a', [member('m1'), member('m2', { host_id: 'd2' }), member('m3', { host_id: 'dX' }), member('m4', { host_untrusted: true })])
-    const targets = seatTargets({ h1: [t] }, useHostStore.getState().hosts).map((x) => `${x.hostId}/${x.sessionId}`)
+    const targets = seatTargets({ h1: [t] }, useHostStore.getState()).map((x) => `${x.hostId}/${x.sessionId}`)
     expect(targets).toEqual(['h1/L', 'h1/m1', 'h2/m2'])
+  })
+})
+
+describe('a remote seat never goes to a host whose daemon id is not verified', () => {
+  const remote = () => [team('a', [member('m2', { host_id: 'd2' })])]
+  const remoteCalls = () => calls().filter((c) => c.startsWith('h2/'))
+  beforeEach(() => { useWorkbookStore.getState().setSupport('h2', { v1: true, v2: false }) })
+
+  it('a stored (synced) daemon id nothing verified yet: no fetch; once verified, one', async () => {
+    stops.push(startWorkbookLoader())
+    roster('h1', remote())
+    await flush()
+    expect(remoteCalls()).toEqual([])
+    useHostStore.setState({ runtime: { h2: { daemonIdVerified: verified('h2', 'd2', '100.64.0.4') } } as never })
+    await flush()
+    expect(remoteCalls()).toEqual(['h2/m2'])
+  })
+
+  it('a daemon id verified at an old endpoint (stale after a re-point): no fetch', async () => {
+    useHostStore.setState({ runtime: { h2: { daemonIdVerified: verified('h2', 'd2', '1.1.1.1') } } as never })
+    stops.push(startWorkbookLoader())
+    roster('h1', remote())
+    await flush()
+    expect(remoteCalls()).toEqual([])
+  })
+
+  it('a mismatch (another daemon answered there): no fetch', async () => {
+    useHostStore.setState({ runtime: { h2: { daemonIdMismatch: { endpoint: '100.64.0.4:7860', stored: 'd2', observed: 'zz' } } } as never })
+    stops.push(startWorkbookLoader())
+    roster('h1', remote())
+    await flush()
+    expect(remoteCalls()).toEqual([])
   })
 })
 

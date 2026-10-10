@@ -8,14 +8,15 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import type { TeamRoster } from '../team/roster'
-import { daemonIdMap } from '../team/team-views'
+import { teamHostMap } from '../team/team-state'
 
 export interface SeatTarget { hostId: string; sessionId: string }
 
 /** Every seat (lead and active members) of every roster, on the SPA host its session lives on. A remote member lives on
  *  the host its daemon id maps to (none: this Mac lacks that host, nothing to ask); an untrusted `host_id` names no host. */
-export function seatTargets(rosterByHost: Record<string, TeamRoster[]>, hosts: Record<string, { daemonId?: string }>): SeatTarget[] {
-  const byDaemon = daemonIdMap(hosts)
+export function seatTargets(rosterByHost: Record<string, TeamRoster[]>, hostState: Pick<ReturnType<typeof useHostStore.getState>, 'hosts' | 'runtime'>): SeatTarget[] {
+  const { hosts } = hostState
+  const byDaemon = teamHostMap(hostState) // only a daemon id verified at its host's endpoint maps: a stale or mismatched one would send a credential to the wrong daemon
   const out = new Map<string, SeatTarget>()
   for (const [leadHost, teams] of Object.entries(rosterByHost)) {
     for (const team of teams) {
@@ -32,14 +33,14 @@ export function seatTargets(rosterByHost: Record<string, TeamRoster[]>, hosts: R
 
 export function startWorkbookLoader(): () => void {
   const sync = () => {
-    for (const t of seatTargets(useTeamRosterStore.getState().byHost, useHostStore.getState().hosts)) {
+    for (const t of seatTargets(useTeamRosterStore.getState().byHost, useHostStore.getState())) {
       void useWorkbookStore.getState().loadSeat(t.hostId, t.sessionId)
     }
   }
   const stops = [
     useTeamRosterStore.subscribe((n, p) => { if (n.byHost !== p.byHost) sync() }),
     useWorkbookStore.subscribe((n, p) => { if (n.support !== p.support) sync() }),
-    useHostStore.subscribe((n, p) => { if (n.hosts !== p.hosts) sync() }),
+    useHostStore.subscribe((n, p) => { if (n.hosts !== p.hosts || n.runtime !== p.runtime) sync() }), // the daemon-id verification lands in runtime
   ]
   sync()
   return () => stops.forEach((f) => f())
