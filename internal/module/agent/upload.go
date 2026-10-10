@@ -77,6 +77,11 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 		// Per-token slot, taken before the body is touched and released on every exit (success, error, disconnect).
 		if !m.uploadSlots.acquire(p.ID) {
 			w.Header().Set("Retry-After", uploadRetryAfter)
+			w.Header().Set("Connection", "close")
+			// Read (and discard, never to disk) up to what a device may legitimately send before answering: closing a
+			// connection that still has unread body makes the kernel RST, and the client then sees a reset instead of
+			// the 429 (measured: 1 MiB of draining still lost 60-75% of 32 MB refusals; the full cap lost none).
+			_, _ = io.CopyN(io.Discard, middleware.StallTimeoutBody(w, r, uploadStallTimeout), uploadMaxFileBytesDevice+uploadFormOverhead)
 			http.Error(w, `{"error":"too many uploads"}`, http.StatusTooManyRequests)
 			return
 		}

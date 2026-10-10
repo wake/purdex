@@ -107,13 +107,31 @@ func TestUploadLimit_DisconnectFreesSlotAndMapEmpties(t *testing.T) {
 // Success, 413 and 400 each finish more than twice in a row on one device: any path that leaked its slot would 429.
 func TestUploadLimit_EveryExitPathReleases(t *testing.T) {
 	shrinkUploadCaps(t)
-	m, _ := newUploadTestModule(t)
+	m, fake := newUploadTestModule(t)
 	ctx := deviceCtx("d_aaaaaaaaaaaa")
 	for i := 0; i < 3; i++ {
 		assert.Equal(t, http.StatusRequestEntityTooLarge, postBig(t, m, ctx, 2000).Code)
 		assert.Equal(t, http.StatusBadRequest, postNoSession(m, ctx).Code)
 		assert.Equal(t, http.StatusOK, postBig(t, m, ctx, 10).Code)
+		assert.Equal(t, http.StatusNotFound, postWithSession(m, ctx, "nonexistent").Code)
+		fake.FailPasteText = true
+		assert.Equal(t, http.StatusInternalServerError, postWithSession(m, ctx, "my-sess").Code)
+		fake.FailPasteText = false
 	}
+}
+
+func postWithSession(m *Module, ctx context.Context, session string) *httptest.ResponseRecorder {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("session", session)
+	fw, _ := w.CreateFormFile("file", "a.txt")
+	fw.Write([]byte("x"))
+	w.Close()
+	req := httptest.NewRequest("POST", "/api/agent/upload", &buf).WithContext(ctx)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	m.handleUpload(rec, req)
+	return rec
 }
 
 func postNoSession(m *Module, ctx context.Context) *httptest.ResponseRecorder {
