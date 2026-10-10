@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.691] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon（lead 與 member 兩台都要）**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Added：lead 可以幫別台主機上的 member 接力 — MR-3b（#2516）、MR-3a-1（#2515）
+
+- lead 對另一台主機上的 member 執行 `pdx relay <主機>/_<ref>`，現在會真的接力：lead 這台先記下並送出接力指令，member 那台開始接力（寫交接檔、清空、帶新 session 開始），完成後通知回 lead 這台，名單換成新 ref、`pdx relay --wait` 拿到結果，lead 收到「member 接力完成」通知；失敗或取消也會回報原因。
+- member 那台要允許這台主機管理 member（`allow-team`），而且 member 的 mod 要夠新；超過 10 分鐘才送到的接力指令會被拒絕，不會在很久之後突然開始。
+- 還沒做（下一版）：lead 的接力額度用完時要開核准卡片（現在先回「不支援」）、指令送不到時的作廢、解除配對時收尾。
+
+### Changed：介面 — #2510、#2513、#2517、#2519（介面線）
+
+- deck 畫面外的回合延後渲染 markdown 並快取，300 回合的掛載從 525 ms 降到 116 ms（#2510）；刪除工作區時，分割分頁次要窗格裡它的設定頁只關窗格、保留分頁（#2513），套用分頁設定時也會丟掉指向不存在工作區的設定窗格（#2519）；worker 標題預抓在沒有窗格引用時清掉標記與摘要（#2517）。
+
 ## [1.0.0-alpha.690] - 2026-10-10
 
 > 動到 daemon、mod 與 Electron：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod protocol 升到 4）；Electron 已重新打包，Mac App 用 dev update 更新；SPA 已隨主機上的 dev server 生效。
