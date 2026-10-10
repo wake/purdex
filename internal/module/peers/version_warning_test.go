@@ -46,7 +46,7 @@ func versionWarningFixture(t *testing.T, dir string, calls int) *moduleFixture {
 // calls that see the same version again.
 func TestLocalEnvelope_VersionWarning_FiresOnceAcrossTwoCalls(t *testing.T) {
 	dir := t.TempDir()
-	writeRegistryFixture(t, dir, "76980.json", registryFixtureWithVersion(76980, "2.1.271"))
+	writeRegistryFixture(t, dir, "76980.json", registryFixtureWithVersion(76980, "2.1.297"))
 	f := versionWarningFixture(t, dir, 2)
 
 	if rr := doGetPeers(t, f.m, "/api/peers"); rr.Code != http.StatusOK {
@@ -57,7 +57,7 @@ func TestLocalEnvelope_VersionWarning_FiresOnceAcrossTwoCalls(t *testing.T) {
 	}
 
 	logs := strings.Join(f.logs.all(), "\n")
-	got := strings.Count(logs, "2.1.271")
+	got := strings.Count(logs, "2.1.297")
 	if got != 1 {
 		t.Errorf("occurrences of the warned version in the module log = %d, want 1 (fires once); log=%q", got, logs)
 	}
