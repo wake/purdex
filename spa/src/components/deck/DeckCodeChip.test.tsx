@@ -3,7 +3,10 @@
 // execution pane / room caller — does not) and the presence of the stylesheet rules (real-Chromium pixels are in the report).
 import { describe, it, expect, afterEach } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
+// node:fs / node:path / __dirname are untyped under tsconfig.app.json (deliberately no @types/node; see src/index.css.test.ts); they work at runtime.
+// @ts-expect-error node:fs is untyped here.
 import { readFileSync } from 'node:fs'
+// @ts-expect-error node:path is untyped here.
 import { resolve } from 'node:path'
 import { DeckItem } from './DeckItem'
 import RoomProse from '../room/RoomProse'
@@ -26,6 +29,7 @@ describe('deck inline code chip scope', () => {
   })
 
   it('index.css keeps the .deck-md chip rule and its backtick-removing ::before/::after', () => {
+    // @ts-expect-error __dirname is untyped here.
     const css = readFileSync(resolve(__dirname, '../../index.css'), 'utf8')
     expect(css).toMatch(/\.deck-md \.worker-prose :not\(pre\) > code\s*[,{]/)
     expect(css).toMatch(/\.deck-md \.worker-prose :not\(pre\) > code::before,\s*\.deck-md \.worker-prose :not\(pre\) > code::after\s*\{\s*content: none;/)
