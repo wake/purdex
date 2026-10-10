@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.673] - 2026-10-10
+
+> 動到 daemon 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；已開著的 session 要重新載入 mod 才會有 `/workbook refresh`。
+
+### Added：工作簿第 2 版——待辦清單與完成紀錄 — WB-2b-i（#2369、#2370，介面線）
+
+- 每筆紀錄多了種類（一般／重整）、用量與「這一筆對待辦做了什麼」；新路由 `GET /api/workbook/conversations/{provider}/{session_id}/todos`（未完成／已完成，可分頁）；待辦變動時發 `workbook.todos` 事件；能力 `workbook.v2`。待辦只能看，由每一輪的整理與重整更新。
+
+### Added：分岔重整（手動）— WB-2b-i、WB-2b-ii（#2370、#2373）
+
+- `POST /api/workbook/conversations/{provider}/{session_id}/refresh` 與 session 內的 `/workbook refresh`：用主模型讀整段對話，重寫目前狀況並整理待辦，結果記成一筆「重整」紀錄。只有手動觸發；session 還在、mod 宣告支援時才可按（`refresh_available` 與 `workbook.refresh_available` 事件）。**注意耗用**：重整用的是主模型、帶整段對話，長對話在快取冷掉時一次可達數十萬 token。
+
+### Docs
+
+- team 單行格子設計稿（#2371）。
+
 ## [1.0.0-alpha.672] - 2026-10-10
 
 > 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`。
