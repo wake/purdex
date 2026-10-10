@@ -119,3 +119,22 @@ func TestDecideHookAsk_OtherDecisionsAreUnchanged(t *testing.T) {
 		t.Fatalf("lead approve = %d %s", code, body)
 	}
 }
+
+// codex attack: Go decodes a lone UTF-16 surrogate (\ud800) to U+FFFD, JavaScript keeps it as it is. Two different questions
+// \ud800 and \ud801 would fold into ONE Go key, and the daemon would approve one answer for two questions that the mod's Set still
+// counts as two. A text that cannot be told apart exactly is not matched (the stricter direction: a 400, never an approval the
+// mod refuses). Not in the shared fixture: the mod would accept a genuine U+FFFD. Mutation gate: drop the check → red.
+func TestDecideHookAsk_ATextTheDecoderCannotKeepApartIsRefused(t *testing.T) {
+	for name, tc := range map[string]struct{ questions, answers string }{
+		"two different lone surrogates": {`[{"question":"\ud800","header":"a"},{"question":"\ud801","header":"b"}]`, `{"\ud800":"x"}`},
+		"one lone surrogate":            {`[{"question":"\ud800","header":"a"}]`, `{"\ud800":"x"}`},
+		"a literal U+FFFD":              {"[{\"question\":\"a�b\",\"header\":\"a\"}]", "{\"a�b\":\"x\"}"},
+	} {
+		f := newFixture(t)
+		id := f.beginWithQuestions("toolu_s", json.RawMessage(tc.questions))
+		code, body := f.decideRawAnswers(id, json.RawMessage(tc.answers))
+		if a, _, _ := f.m.store.Get(id); code != http.StatusBadRequest || a.State != team.StateOpen {
+			t.Errorf("%s: %d %s (row %s), want 400 and the row open", name, code, body, a.State)
+		}
+	}
+}

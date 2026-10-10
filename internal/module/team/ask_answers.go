@@ -27,6 +27,11 @@ func answersFit(questions json.RawMessage, answers map[string]string) (fit bool,
 		if err := json.Unmarshal(raw, &q); err != nil || q.Question == nil || *q.Question == "" {
 			return false, fmt.Sprintf("question %d has no text, so it cannot be answered remotely", i+1)
 		}
+		if strings.ContainsRune(*q.Question, utf8.RuneError) {
+			// Go folds a lone UTF-16 surrogate (and invalid UTF-8) into U+FFFD where JavaScript keeps it, so two different
+			// questions could become one key here and one answer would be approved for both. Not matched at all.
+			return false, fmt.Sprintf("question %d has a character the daemon cannot match exactly, so it cannot be answered remotely", i+1)
+		}
 		asked[*q.Question] = true
 	}
 	for q := range asked {
