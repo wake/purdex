@@ -8,7 +8,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useNexHostQuota } from '../../hooks/useNexHostQuota'
 import { compositeKey } from '../../lib/composite-key'
 import {
-  USAGE_STALE_MS, epochToMs, formatResetsIn, parseCcUsage, remainingPct, ringGeometry, ringTransform, usedPct,
+  USAGE_STALE_MS, epochToMs, formatResetsIn, parseCcExtras, parseCcUsage, remainingPct, ringGeometry, ringTransform, usedPct,
   type UsageTone, type UsageWindow,
 } from '../../lib/usage-display'
 import type { Icon } from '@phosphor-icons/react'
@@ -85,7 +85,7 @@ export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title,
   if (used === null) {
     return (
       <span data-testid={testId} data-missing="true" role="img" title={title} aria-label={title}
-        className={`flex shrink-0 items-center gap-1 select-none text-text-muted ${className}`}>
+        className={`flex shrink-0 items-center gap-1 select-none text-text-secondary ${className}`}>
         <IconCmp size={10} aria-hidden="true" />
         <span>—</span>
       </span>
@@ -100,7 +100,7 @@ export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title,
       aria-label={title}
       className={`flex shrink-0 items-center gap-1 tabular-nums select-none ${stale ? 'opacity-50' : ''} ${className}`}
     >
-      <IconCmp size={10} className="text-text-muted" aria-hidden="true" />
+      <IconCmp size={10} className="text-text-secondary" aria-hidden="true" />
       <Ring used={used} mode={ring} />
       <span className="text-text-secondary">{shownPct(used, number)}%</span>
     </span>
@@ -162,12 +162,13 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
   const entry = useAgentStore((s) => hostId && sessionCode ? s.ccStatus[compositeKey(hostId, sessionCode)] : undefined)
   const now = useNow()
   const usage = parseCcUsage(entry?.raw)
-  if (!entry || !usage) return null
+  const cost = parseCcExtras(entry?.raw).cost
+  if (!entry || (!usage && cost === null)) return null
 
   const stale = now - entry.receivedAt > USAGE_STALE_MS
   return (
-    <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${usage.context !== null ? 'max-[600px]:hidden' : 'max-[700px]:hidden'}`}>
-      {usage.context !== null && (
+    <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${usage?.context != null ? 'max-[600px]:hidden' : 'max-[700px]:hidden'}`}>
+      {usage && usage.context !== null && (
         <UsageSegment
           testId="status-seg-usage-context"
           icon={Brain}
@@ -179,7 +180,13 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
           className="max-[600px]:hidden"
         />
       )}
-      <LimitSegments fiveHour={usage.fiveHour} sevenDay={usage.sevenDay} stale={stale} now={now} idPrefix="status-seg-usage" />
+      {usage && <LimitSegments fiveHour={usage.fiveHour} sevenDay={usage.sevenDay} stale={stale} now={now} idPrefix="status-seg-usage" />}
+      {/* proto v2: the session's cost so far, right of the usage rings (it used to sit in the pane's status row) */}
+      {cost !== null && (
+        <span data-testid="status-seg-cost" title={t('statusrow.cost', { cost: cost.toFixed(2) })} className={`shrink-0 tabular-nums select-none text-text-secondary ${stale ? 'opacity-50' : ''}`}>
+          ${cost.toFixed(2)}
+        </span>
+      )}
     </div>
   )
 }

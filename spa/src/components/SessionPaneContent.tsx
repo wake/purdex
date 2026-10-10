@@ -18,7 +18,6 @@ import { QuestionDock } from './dock/QuestionDock'
 import { openAsks } from '../lib/conversations/asks'
 import { DeckPane } from './deck/DeckPane'
 import { SessionInput } from './deck/SessionInput'
-import { SessionStatusRow } from './deck/SessionStatusRow'
 import type { DeckFooterContext } from './deck/footer-context'
 import { retireStaleSessions } from '../lib/conversations/pane-release'
 import { findPane } from '../lib/pane-tree'
@@ -109,7 +108,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
     <div data-testid="session-footer">
       <QuestionDock ctx={ctx} />
       <SessionInput {...ctx} sessionCode={sessionCode} />
-      <SessionStatusRow sessionCode={sessionCode} ctx={ctx} />
+      {/* proto v2: the status row is gone from the pane; cost and model move to the bottom StatusBar */}
     </div>
   )
 

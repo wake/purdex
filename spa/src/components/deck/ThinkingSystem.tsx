@@ -1,6 +1,7 @@
 // spa/src/components/deck/ThinkingSystem.tsx — the deck's two quiet rows: a collapsed 「思考」 disclosure (duration when
 // known) and the system notices (small centred grey text; a long machine note folded under 「系統」; compaction and
 // interrupt as their own lines). Their open state is in the pane's fold memory.
+import { Info } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { systemView, textOutput } from '../../lib/conversations/deck-format'
 import type { SystemItem, ThinkingItem } from '../../lib/conversations/types'
@@ -25,15 +26,28 @@ export function ThinkingRow({ item }: { item: ThinkingItem }) {
   )
 }
 
+/** proto v2 (Collie summary/note): a dashed, faint frame with an Info icon and a small label; always at the left edge. */
+function SystemFrame({ label, children }: { label: string | null; children: React.ReactNode }) {
+  return (
+    <div data-testid="deck-system" className="flex items-start gap-2 rounded-md border border-dashed border-border-default bg-surface-secondary/40 px-3 py-1.5 text-left text-xs text-text-muted">
+      <Info size={14} className="mt-px shrink-0" aria-hidden="true" />
+      <div className="min-w-0">
+        {label && <span className="mr-1.5 font-medium uppercase tracking-wide text-text-secondary">{label}</span>}
+        {children}
+      </div>
+    </div>
+  )
+}
+
 export function SystemRow({ item }: { item: SystemItem }) {
   const t = useI18nStore((s) => s.t)
   const [open, toggle] = useFold(`${item.id}:note`)
   const view = systemView(item)
   if (view.kind === 'interrupted') {
-    return <div data-testid="deck-system" className="text-center text-xs text-text-muted">{t('deck.system.interrupted')}</div>
+    return <SystemFrame label={t('deck.system.label')}>{t('deck.system.interrupted')}</SystemFrame>
   }
   if (view.kind === 'compacted') {
-    return <div data-testid="deck-system" className="text-center text-xs text-text-muted">{t('deck.system.compacted', { time: view.time })}</div>
+    return <SystemFrame label={t('deck.system.label')}>{t('deck.system.compacted', { time: view.time })}</SystemFrame>
   }
   if (view.kind === 'output') {
     return (
@@ -43,14 +57,14 @@ export function SystemRow({ item }: { item: SystemItem }) {
     )
   }
   if (view.kind === 'notice') {
-    return <div data-testid="deck-system" className="text-center text-xs text-text-muted">{view.text}</div>
+    return <SystemFrame label={t('deck.system.label')}>{view.text}</SystemFrame>
   }
   return (
-    <div data-testid="deck-system" className="text-center text-xs text-text-muted">
-      <button type="button" data-testid="system-toggle" aria-expanded={open} onClick={toggle} className="cursor-pointer hover:text-text-primary">
+    <SystemFrame label={null}>
+      <button type="button" data-testid="system-toggle" aria-expanded={open} onClick={toggle} className="cursor-pointer text-left hover:text-text-primary">
         {open ? '▾' : '▸'} {t('deck.system.label')}
       </button>
-      {open && <pre data-testid="system-note" className="mx-auto mt-1 max-w-[90ch] whitespace-pre-wrap break-words text-left">{view.text}</pre>}
-    </div>
+      {open && <pre data-testid="system-note" className="mt-1 max-w-[90ch] whitespace-pre-wrap break-words text-left">{view.text}</pre>}
+    </SystemFrame>
   )
 }

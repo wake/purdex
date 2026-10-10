@@ -38,7 +38,7 @@ function uploadFailure(err: unknown, name: string): OutcomeMessage {
   return { ...uploadFailureText(err, name), tone: 'error' }
 }
 
-const MIN_ROWS = 2
+const MIN_ROWS = 1
 const MAX_ROWS = 8
 const px = (v: string): number => parseFloat(v) || 0
 
@@ -137,18 +137,18 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
 
   const hintText = hint ? t(hint.key, hint.params) : ''
   return (
-    <div data-testid="session-input" className="border-t border-border-subtle pt-2">
+    <div data-testid="session-input">
       <QueuedMessages entries={entries} onUndo={undo} onResend={(id) => { queue.resend(id) }} onDismiss={(id) => queue.dismiss(id)} />
       {noMod ? (
-        <div data-testid="session-input-disabled" className="flex items-center gap-2 px-3 pb-2 text-sm text-text-muted">
+        <div data-testid="session-input-disabled" className="flex items-center gap-2 border-t border-border-subtle px-3 py-2 text-sm text-text-muted">
           <span>{t('deck.send.no_mod')}</span>
           <button type="button" className="rounded border border-border-subtle px-2 py-0.5 text-text-primary" onClick={onSwitchToTerminal}>{t('deck.send.switch_terminal')}</button>
         </div>
       ) : (
-        <div className="px-3 pb-2">
-          {hintText && <div data-testid="session-input-hint" role="status" className={`mb-1 text-xs ${hint?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{hintText}</div>}
+        <div>
+          {hintText && <div data-testid="session-input-hint" role="status" className={`mb-1 px-3 pt-1 text-xs ${hint?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{hintText}</div>}
           {shown.length > 0 && (
-            <div className="mb-1 flex flex-wrap gap-1">
+            <div className="mb-1 flex flex-wrap gap-1 px-3 pt-1">
               {shown.map((a) => (
                 <span key={a.id} data-testid="attachment-chip" className="inline-flex items-center gap-1 rounded border border-border-subtle bg-surface-secondary px-2 py-0.5 text-xs text-text-primary">
                   {t('deck.attach.attached', { name: a.name })}
@@ -158,7 +158,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
             </div>
           )}
           {uploading.length > 0 && (
-            <div className="mb-1 flex flex-col gap-0.5">
+            <div className="mb-1 flex flex-col gap-0.5 px-3">
               {uploading.map((u) => (
                 <div key={u.id} data-testid="attachment-uploading" role="status" className="text-xs text-text-muted">{t('deck.attach.uploading', { name: u.name, percent: u.percent })}</div>
               ))}
@@ -167,7 +167,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
           <div
             data-testid="session-input-drop"
             data-dragging={dragging}
-            className={`flex items-end gap-2 rounded border ${dragging ? 'border-dashed border-accent' : 'border-transparent'}`}
+            className={`flex items-end gap-2 border-y px-3 py-1.5 ${dragging ? 'border-dashed border-accent' : 'border-[#808080]'}`} /* proto v2: terminal-style input, 1px #808080 above and below */
             onDragEnter={(e) => { if (carriesFiles(e)) { dragDepth.current++; setDragging(true) } }}
             onDragLeave={(e) => { if (carriesFiles(e) && --dragDepth.current <= 0) endDrag() }}
             onDragOver={(e) => { if (carriesFiles(e)) e.preventDefault() }}
@@ -182,7 +182,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
             <textarea
               ref={box}
               value={draft}
-              rows={2}
+              rows={1}
               placeholder={t(asking ? 'deck.dock.input_placeholder' : 'deck.send.placeholder')}
               onChange={(e) => change(e.target.value)}
               onPaste={(e) => {
@@ -197,19 +197,19 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
               }}
               style={{ overflowWrap: 'anywhere' }}
-              className={`flex-1 resize-none rounded border px-2 py-1 text-sm text-text-primary ${
-                // while files are dragged over, the drop style takes the focus ring's place (a focused box would hide the dashes)
-                dragging ? 'border-dashed border-accent bg-accent/10 outline-none' : 'border-border-subtle bg-surface-primary'
+              className={`flex-1 resize-none rounded-none border-0 px-0 pb-1.5 pt-0 font-mono text-sm leading-5 text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
+                // proto v2: no border, radius, outline or ring (focused or not); a drag over tints the row
+                dragging ? 'bg-accent/10' : 'bg-transparent'
               }`}
             />
             {sessionCode && (
               <>
                 <input ref={fileInput} data-testid="attach-file-input" type="file" multiple hidden onChange={(e) => { attach([...(e.target.files ?? [])]); e.target.value = '' }} />
-                <button type="button" aria-label={t('deck.attach.add')} title={t('deck.attach.add')} onClick={() => fileInput.current?.click()} className="rounded p-2 text-text-muted hover:text-text-primary"><Paperclip size={18} /></button>
+                <button type="button" aria-label={t('deck.attach.add')} title={t('deck.attach.add')} onClick={() => fileInput.current?.click()} className="flex h-8 w-8 items-center justify-center rounded text-text-muted hover:text-text-primary"><Paperclip size={18} /></button>
               </>
             )}
-            <button type="button" aria-label={t('deck.send.interrupt')} title={t('deck.send.interrupt')} onClick={() => void interrupt()} className="rounded p-2 text-text-muted hover:text-text-primary"><Stop size={18} /></button>
-            <button type="button" aria-label={t('deck.send.send')} title={t('deck.send.send')} onClick={send} className="rounded p-2 text-accent hover:opacity-80"><PaperPlaneRight size={18} /></button>
+            <button type="button" aria-label={t('deck.send.interrupt')} title={t('deck.send.interrupt')} onClick={() => void interrupt()} className="flex h-8 w-8 items-center justify-center rounded text-text-muted hover:text-text-primary"><Stop size={18} /></button>
+            <button type="button" aria-label={t('deck.send.send')} title={t('deck.send.send')} onClick={send} className="flex h-8 w-8 items-center justify-center rounded text-accent hover:opacity-80"><PaperPlaneRight size={18} /></button>
           </div>
         </div>
       )}

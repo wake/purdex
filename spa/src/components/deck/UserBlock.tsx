@@ -24,8 +24,8 @@ export function UserBlock({ item }: { item: UserItem }) {
     )
   }
   return (
-    <div data-testid="deck-user" data-source={item.source} className="rounded-lg border border-border-subtle bg-surface-secondary px-3 py-2">
-      <div data-testid="deck-user-caption" className="mb-1 text-xs text-text-muted">{caption}</div>
+    <div data-testid="deck-user" data-source={item.source} className="rounded-md border border-accent/50 bg-accent/15 px-3 py-2">
+      <div data-testid="deck-user-caption" className="mb-1 text-xs font-medium text-accent">{caption}</div>
       <div className={`whitespace-pre-wrap break-words text-sm text-text-primary ${bash ? 'font-mono' : ''}`}>
         {bash ? `! ${item.text}` : item.text}
         {item.truncated && <span className="text-text-muted">…</span>}

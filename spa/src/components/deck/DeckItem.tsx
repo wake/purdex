@@ -6,9 +6,10 @@ import RoomProse, { RoomProseLight } from '../room/RoomProse'
 import { StepView, type StepActions } from './StepViews'
 import { SystemRow, ThinkingRow } from './ThinkingSystem'
 import { UserBlock } from './UserBlock'
+import { AgentHeader } from './AgentHeader'
 
 /** `light`: the agent text is drawn as plain text (a turn far off screen, #2469); streaming text is always drawn in full. */
-export function DeckItem({ item, actions, light }: { item: ConversationItem; actions?: StepActions; light?: boolean }) {
+export function DeckItem({ item, actions, light, agentModel, agentHeader }: { item: ConversationItem; actions?: StepActions; light?: boolean; /** proto v2: the first agent text of a turn carries the head line */ agentModel?: string; agentHeader?: boolean }) {
   const t = useI18nStore((s) => s.t)
   if (!isKnownItem(item)) return null
   switch (item.type) {
@@ -16,6 +17,7 @@ export function DeckItem({ item, actions, light }: { item: ConversationItem; act
     case 'agent_text':
       return (
         <div data-testid="deck-agent-text" className="deck-md">
+          {agentHeader && <AgentHeader model={agentModel} at={item.at} />}
           {light && !item.streaming
             ? <RoomProseLight content={item.markdown} />
             : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} />}

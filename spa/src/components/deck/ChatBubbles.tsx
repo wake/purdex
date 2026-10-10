@@ -6,6 +6,7 @@ import { formatClock } from '../../lib/conversations/deck-format'
 import type { AgentTextItem, UserItem } from '../../lib/conversations/types'
 import RoomProse from '../room/RoomProse'
 import { UserBlock } from './UserBlock'
+import { AgentHeader } from './AgentHeader'
 
 /** Sources that are not the person's own message: they keep the deck's block (a bash input, a wake-up, a background report). */
 const NOT_THE_PERSON = new Set(['bash', 'command_output', 'background', 'task', 'schedule', 'scheduled'])
@@ -14,6 +15,8 @@ export function UserBubble({ item }: { item: UserItem }) {
   const t = useI18nStore((s) => s.t)
   // A source this build does not know reads as the person (as the deck's caption does).
   if (NOT_THE_PERSON.has(item.source)) return <UserBlock item={item} />
+  // proto v2: the person's message is the same left-aligned, brand-tinted block as in the deck (caption 「你 · 時間」), not a right bubble.
+  if (item.source !== undefined) return <UserBlock item={item} />
   return (
     <div data-testid="chat-user" data-source={item.source} className="flex flex-col items-end">
       <div data-testid="chat-user-bubble" className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm text-text-inverse">
@@ -27,12 +30,13 @@ export function UserBubble({ item }: { item: UserItem }) {
   )
 }
 
-export function AgentBubble({ item }: { item: AgentTextItem }) {
+export function AgentBubble({ item, header, model }: { item: AgentTextItem; header?: boolean; model?: string }) {
   const t = useI18nStore((s) => s.t)
   // RoomProse carries the --wt-* theme vars itself (#2463); `.chat-md` (index.css) only fixes inline code (the deck's `.deck-md` shares the rule; room and execution are untouched).
   return (
     <div data-testid="chat-agent" className="flex justify-start">
-      <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-surface-secondary px-3 py-2 text-sm text-text-primary">
+      <div className="min-w-0 text-sm text-text-primary">
+        {header && <AgentHeader model={model} at={item.at} />}
         <div data-testid="chat-agent-md" className="chat-md">
           <RoomProse content={item.markdown} streaming={item.streaming} />
         </div>

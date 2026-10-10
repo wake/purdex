@@ -40,7 +40,7 @@ const AUTO_PAGE_RETRY_MS = 1000
 // `eager`: one of the newest turns, always drawn in full. An older one draws its agent text as plain text until it comes near the
 // viewport (#2469), then in full for good — the swap is remembered outside the component (`deck-reveal-memory`), so a deck that
 // remounts with its tab does not start the far-off turns over.
-const TurnView = memo(function TurnView({ turn, eager, onOpenPanel }: { turn: Turn; eager: boolean; onOpenPanel?: (content: PanelContent) => void }) {
+const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel }: { turn: Turn; eager: boolean; onOpenPanel?: (content: PanelContent) => void; agentModel?: string }) {
   const t = useI18nStore((s) => s.t)
   const reveal = useContext(DeckRevealContext)
   const [near, setNear] = useState(false)
@@ -51,6 +51,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel }: { turn: Tu
   }, [eager, reveal, turn.id])
   // A turn without agent text looks the same either way: nothing to watch.
   const hasProse = turn.items.some((item) => item.type === 'agent_text')
+  const firstAgentId = turn.items.find((item) => item.type === 'agent_text')?.id
   useEffect(() => {
     const el = ref.current
     if (full || !reveal || !el || !hasProse) return
@@ -63,9 +64,9 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel }: { turn: Tu
   return (
     <section ref={ref} data-testid="deck-turn" data-turn-index={turn.index} className={`space-y-3 ${SCROLL_ANCHOR_CLASS}`}>
       {turn.omitted_items ? (
-        <div data-testid="deck-omitted" className="text-center text-xs text-text-muted">{t('deck.omitted', { n: turn.omitted_items })}</div>
+        <div data-testid="deck-omitted" className="text-xs text-text-muted">{t('deck.omitted', { n: turn.omitted_items })}</div>
       ) : null}
-      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} />)}
+      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} agentModel={agentModel} agentHeader={item.id === firstAgentId} />)}
       {turn.error && <div data-testid="deck-turn-error" className="text-xs text-status-error">{turn.error.message}</div>}
     </section>
   )
@@ -122,23 +123,23 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
 
   return (
     <div className="flex h-full flex-col">
-      {entry.status === 'reconnecting' && <div data-testid="deck-reconnecting" className="px-4 py-1 text-center text-xs text-text-muted">{t('deck.reconnecting')}</div>}
+      {entry.status === 'reconnecting' && <div data-testid="deck-reconnecting" className="px-4 py-1 text-xs text-text-muted">{t('deck.reconnecting')}</div>}
       {doc.detached && (
         <button type="button" data-testid="deck-back-live" onClick={() => void useConversationStore.getState().returnToLive(hostId, sessionId)}
-          className="cursor-pointer bg-surface-secondary px-4 py-1 text-center text-xs text-text-secondary hover:text-text-primary">
+          className="cursor-pointer bg-surface-secondary px-4 py-1 text-left text-xs text-text-secondary hover:text-text-primary">
           {t('deck.back_live')}
         </button>
       )}
       <div ref={setBox} onScroll={onScroll} data-testid="deck-scroll" className="flex-1 space-y-3 overflow-y-auto p-4">
         <FoldContext.Provider value={foldStore}>
           <DeckRevealContext.Provider value={reveal}>
-            {entry.paging && <div data-testid="deck-paging" className="text-center text-xs text-text-muted">{t('deck.paging')}</div>}
+            {entry.paging && <div data-testid="deck-paging" className="text-xs text-text-muted">{t('deck.paging')}</div>}
             {empty ? (
               <div data-testid="deck-empty" className="flex h-full items-center justify-center text-sm text-text-muted">
                 {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
               </div>
             ) : (
-              doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} />)
+              doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} />)
             )}
           </DeckRevealContext.Provider>
         </FoldContext.Provider>
