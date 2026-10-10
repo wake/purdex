@@ -15,7 +15,7 @@ export function StatusRow({ cost, tint, ...line }: StatusRowProps) {
   return (
     <div
       data-testid="status-row" data-host-tinted={tint ? 'true' : undefined} style={tint ? { backgroundColor: tint } : undefined}
-      className={`flex h-7 items-center gap-2 overflow-hidden px-3 text-xs ${tint ? 'text-text-primary' : 'text-text-secondary'}`}
+      className={`flex h-6 items-center gap-2 overflow-hidden px-3 text-xs ${tint ? 'text-text-primary' : 'text-text-secondary'}`}
     >
       <span data-testid="status-row-line" title={text} className="min-w-0 flex-1 truncate">{text || '—'}</span>
       {cost !== null && Number.isFinite(cost) && <span data-testid="item-cost" className="shrink-0 tabular-nums">${cost.toFixed(2)}</span>}

@@ -281,8 +281,9 @@ button:disabled {
    Headings and strong are body-size and the same weight as the text (nothing is bold); lists keep marker and indent at body size / leading; inline code stays a chip (rule above). */
 .deck-md .worker-prose,
 .chat-md .worker-prose {
-  line-height: 1.8;
-  font-size: calc(var(--wt-font-size) - 1px);
+  line-height: 1.65;
+  font-size: calc(var(--wt-font-size) - 1px); /* the input (SessionInput) types at the same 13px */
+  letter-spacing: 1px;
   font-weight: 400;
   color: var(--text-primary);
 }
@@ -303,7 +304,7 @@ button:disabled {
 .deck-md .worker-prose :not(pre) > code,
 .chat-md .worker-prose :not(pre) > code { color: var(--text-primary); }
 
-/* Agent text breathes (c9d9c7-52 pt 10): leading 1.8 at one pixel under the pane's size, and the gaps between blocks and between list items follow it, the same in the deck and the chat. */
+/* Agent text breathes (c9d9c7-52 pt 10): leading 1.65 at one pixel under the pane's size, 1px apart, and the gaps between blocks and between list items follow it, the same in the deck and the chat. */
 .deck-md .worker-prose :where(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4, h5, h6),
 .chat-md .worker-prose :where(p, ul, ol, pre, table, blockquote, h1, h2, h3, h4, h5, h6) { margin-bottom: 0.75em; }
 .deck-md .worker-prose > :last-child,
@@ -312,3 +313,6 @@ button:disabled {
 .chat-md .worker-prose :where(li + li) { margin-top: 0.3em; }
 .deck-md .worker-prose :where(li > ul, li > ol, li > p),
 .chat-md .worker-prose :where(li > ul, li > ol, li > p) { margin-top: 0; margin-bottom: 0; }
+/* The letter-spacing above is for reading text; code (blocks and the inline chip) keeps its own. */
+.deck-md .worker-prose :where(pre, code),
+.chat-md .worker-prose :where(pre, code) { letter-spacing: normal; }

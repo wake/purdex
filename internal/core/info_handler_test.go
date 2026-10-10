@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -394,6 +395,17 @@ func TestHandleHealth_CarriesBootID(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 	assert.Equal(t, c.BootID, body["boot_id"])
+}
+
+// `pdx start` tells its own child's answer from another daemon's on the same address by the pid (#959).
+// Mutation gate: drop the field → red.
+func TestHandleHealth_CarriesThePid(t *testing.T) {
+	c := New(CoreDeps{Config: &config.Config{}})
+	rec := httptest.NewRecorder()
+	c.HandleHealth(rec, httptest.NewRequest("GET", "/api/health", nil))
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, float64(os.Getpid()), body["pid"])
 }
 
 // capabilities is how a client gates features per host instead of comparing

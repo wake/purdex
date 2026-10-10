@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.702] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：`pdx start` 不再把別人的 daemon 當成自己起的，失敗時也不留下孤兒行程 — #958、#959（#2580）
+
+- `/api/health` 多回 `pid`。`pdx start` 等健康檢查時要求回應的 pid 就是它剛起的那顆：同一個位址上若有另一顆 daemon（不同 data dir 或舊版）在回應，不再誤判為啟動成功，而是等到新那顆因位址被佔而退出、印出真正的原因與 log；逾時的錯誤訊息會點名「另一個 pid 在回應」。健康檢查不走環境變數的 proxy、不跟隨轉址。
+- 啟動失敗時改成終止整個 process group，daemon 啟動到一半起的子行程不會留成孤兒；daemon 起的 tmux server 本來就不在這個群組裡，不受影響。
+
+### Changed：指揮台文字排版 — #2579（介面線）
+
+- 指揮台內文行距加大到 1.65、字距加 1px；輸入框字級與內文一致、拿掉輸入框下方的分隔線；狀態列往下移 4px。
+
+## [1.0.0-alpha.701] - 2026-10-11
+
+> daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Fixed：寫 config 不再蓋掉別人改過的值 — #2556（#2570）
+
+- daemon 改設定時，改成在 `<config>.lock` 檔案鎖裡、以磁碟上的檔案為底，只寫這次改動的欄位：別的寫入者（例如 `pdx token generate --force`）改過的 token 或 hosts 不會被 daemon 的下一次設定變更蓋回舊值。磁碟上的 token 與執行中的不同時，daemon 記一行（只有 fingerprint）提醒重啟才會採用；不會自動熱換 token。
+- `--bind`／`--port` 這類啟動參數不再被寫進 config；`--quick` 自己挑的 bind 照舊會寫。
+- 第二個 daemon 被 pid lock 擋下時不再先動 config（寫 host_id 移到取得 pid lock 之後）。monitor 的設定也改走同一條路。
+
+### Fixed：daemon 關閉或熱重啟時，進行中的請求不再打到已關的資料庫 — #1033（#2577）
+
+- backup、hostconfig、profiles、push、devices、workbook 六個模組原本在「停止」那一步就關掉 SQLite，但 daemon 要等進行中的請求跑完才真正收工，中間這段時間的請求會打到已關的資料庫而失敗。改成請求都排空之後才關資料庫；熱重啟在重新執行前一樣會正常關檔。
+
+### Fixed：介面 — #2569（介面線）
+
+- 切回指揮台／聊天分頁時不再從舊位置滑到底；內容分批到達時保持閱讀位置。
+
 ## [1.0.0-alpha.700] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
