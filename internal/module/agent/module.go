@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -933,6 +934,9 @@ func (m *Module) liveFrameProjectionsWithSnapshot() ([]SessionProjection, *paneS
 		return nil, nil, err
 	}
 	frames = m.filterProjectionFrames(frames, snap)
+	if snap.expired() {
+		return nil, nil, errExpired() // the pid lookups ran out of time: the frames were not filtered, so nothing here is a verdict
+	}
 	projections := BuildSessionProjections(frames)
 	m.applyModOverlay(projections)
 	return projections, snap, nil
@@ -956,6 +960,7 @@ type replayProjectionCache struct {
 	loaded      bool
 	paneName    map[string]string // paneID -> session name; successful lookups only
 	deadline    time.Time         // the round's one budget for the per-pane lookups above (#2039), set at the first one
+	expired     bool              // one of those lookups ran out of time: the round's names are unreadable, not absent
 }
 
 // projectionForSessionWith is projectionForSession with an optional replay
@@ -973,7 +978,7 @@ func (m *Module) projectionForSessionWith(sessionName string, rc *replayProjecti
 		rc.projections = projections
 		rc.loaded = true
 	}
-	return m.selectSessionProjectionBy(sessionName, rc.projections, func(paneID string) string {
+	sel := m.selectSessionProjectionBy(sessionName, rc.projections, func(paneID string) string {
 		if name, ok := rc.paneName[paneID]; ok {
 			return name
 		}
@@ -987,6 +992,9 @@ func (m *Module) projectionForSessionWith(sessionName string, rc *replayProjecti
 		defer cancel()
 		name, err := m.tmux.PaneSessionNameCtx(ctx, paneID)
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				rc.expired = true
+			}
 			logLookupDeadline(err)
 			return ""
 		}
@@ -995,7 +1003,11 @@ func (m *Module) projectionForSessionWith(sessionName string, rc *replayProjecti
 		}
 		rc.paneName[paneID] = name
 		return name
-	}), nil
+	})
+	if rc.expired {
+		return nil, errExpired() // stays set for the round: its deadline is gone, every later name would be a guess
+	}
+	return sel, nil
 }
 
 // paneSessionName is the name half of resolvePaneSession: the tmux session

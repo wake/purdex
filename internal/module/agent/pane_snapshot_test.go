@@ -395,8 +395,8 @@ func within(t *testing.T, d time.Duration, what string, fn func()) {
 }
 
 // A batch that fails without timing out falls back to per-pane lookups; a tmux that hangs there must cost the read ONE
-// budget (the batch's), not one per pane, and not forever. The lookups that ran out of time count as "not found" — the
-// existing failure path (frames unfiltered, pane nameless) — and the read does not fail. Mutations: the lookups back on the
+// budget, not one per pane, and not forever. A lookup that ran out of time is "unreadable", not "pane gone": the read FAILS
+// as a timed-out batch does, so no empty answer is broadcast as a clear (#717). Mutations: the lookups back on the
 // unbounded variants → the read hangs (red); a budget per lookup instead of per read → 30 × 40 ms overruns (red).
 func TestProjectionRead_PerPaneFallbackIsBoundedByOneBudget(t *testing.T) {
 	f := newProjFixture(t, 30, false)
@@ -404,8 +404,8 @@ func TestProjectionRead_PerPaneFallbackIsBoundedByOneBudget(t *testing.T) {
 	f.m.tmux = stuckPaneTmux{f.tx}
 	start := time.Now()
 	within(t, 3*time.Second, "a projection read over a hung tmux", func() {
-		if _, err := f.m.liveSessionProjections(); err != nil {
-			t.Errorf("a fallback lookup that timed out failed the read: %v", err)
+		if _, err := f.m.liveSessionProjections(); !errors.Is(err, errPaneSnapshotTimeout) {
+			t.Errorf("a fallback lookup that timed out: err = %v, want errPaneSnapshotTimeout (an unreadable read, never an empty one: #717)", err)
 		}
 	})
 	if d := time.Since(start); d > 400*time.Millisecond {
@@ -444,8 +444,8 @@ func TestReplayCache_PaneNameLookupsShareOneBudget(t *testing.T) {
 	start := time.Now()
 	within(t, 3*time.Second, "a replay round over a hung tmux", func() {
 		for _, s := range []string{"s0", "s1", "s2", "s3"} {
-			if _, err := f.m.projectionForSessionWith(s, rc); err != nil {
-				t.Errorf("projectionForSessionWith(%s): %v", s, err)
+			if _, err := f.m.projectionForSessionWith(s, rc); !errors.Is(err, errPaneSnapshotTimeout) {
+				t.Errorf("projectionForSessionWith(%s): err = %v, want errPaneSnapshotTimeout", s, err)
 			}
 		}
 	})
@@ -468,5 +468,97 @@ func TestPerPaneFallback_DeadlineIsLoggedOnce(t *testing.T) {
 	within(t, 3*time.Second, "the read", func() { _, _ = f.m.liveSessionProjections() })
 	if n := strings.Count(buf.String(), "ran out of time"); n != 1 {
 		t.Fatalf("%d deadline lines for one read, want 1:\n%s", n, buf.String())
+	}
+}
+
+// A read whose batch call fails only near the end of its budget has little left for the per-pane lookups: batch and
+// fallback share ONE deadline, they do not add up (codex attack). Mutation: a fresh budget for the fallback → the read takes
+// about twice the budget → red.
+type slowFailBatchTmux struct {
+	stuckPaneTmux
+	after time.Duration
+}
+
+func (s slowFailBatchTmux) ListPanePlacements(ctx context.Context) (map[string]tmux.PanePlacement, error) {
+	s.note(&s.batch)
+	time.Sleep(s.after) // fails on its own, a little before the context would end it
+	return nil, errors.New("tmux: list-panes: exit status 1")
+}
+
+func TestProjectionRead_BatchAndFallbackShareOneBudget(t *testing.T) {
+	f := newProjFixture(t, 10, false)
+	shortLookupBudget(t, 100*time.Millisecond)
+	f.m.tmux = slowFailBatchTmux{stuckPaneTmux{f.tx}, 80 * time.Millisecond}
+	start := time.Now()
+	within(t, 3*time.Second, "the read", func() {
+		if _, err := f.m.liveSessionProjections(); !errors.Is(err, errPaneSnapshotTimeout) {
+			t.Errorf("err = %v, want errPaneSnapshotTimeout", err)
+		}
+	})
+	if d := time.Since(start); d > 170*time.Millisecond {
+		t.Fatalf("read took %v, want about one budget (100ms): the batch's 80ms plus the fallback must not add a second budget", d)
+	}
+}
+
+// A mod round whose name lookups ran out of time keeps every update it took: the dirty set comes back (codex attack:
+// before, the sids were dropped and the update lost until another event marked them).
+func TestModWorker_LookupTimeoutKeepsTheDirtyUpdates(t *testing.T) {
+	r := newWorkerRig(t)
+	seedIdentityFrame(t, r.m, "%5", "cc", 501, "s501", 10, modSID1, "/w")
+	feedMod(r.m, modStrm, modStart, modTurnStart)
+	shortLookupBudget(t, 40*time.Millisecond)
+	r.m.tmux = stuckPaneTmux{&batchCountingTmux{FakeExecutor: tmux.NewFakeExecutor()}}
+	within(t, 3*time.Second, "the mod round", func() { r.round() })
+	if got := r.drain(t); len(got) != 0 {
+		t.Fatalf("a round whose lookups timed out emitted: %+v", got)
+	}
+	r.m.modMu.Lock()
+	_, back := r.m.modDirty[modSID1]
+	r.m.modMu.Unlock()
+	if !back {
+		t.Fatal("the sid was dropped by a round whose name lookups timed out; it must come back dirty for the next round")
+	}
+}
+
+// Each stage of the fallback fails the read on its own: a tmux that answers the pid lookups but hangs on the names (and the
+// other way round) is still an unreadable read, never an empty or partial one (#717). Mutations: ignoring expiry after the pid
+// stage, or after the name stage, each → the matching case green-lights an incomplete read → red.
+type namesOnlyStuckTmux struct{ stuckPaneTmux }
+
+func (s namesOnlyStuckTmux) ActivePanePIDCtx(ctx context.Context, target string) (string, error) {
+	return s.FakeExecutor.ActivePanePIDCtx(ctx, target)
+}
+
+type pidsOnlyStuckTmux struct{ stuckPaneTmux }
+
+func (s pidsOnlyStuckTmux) PaneSessionNameCtx(ctx context.Context, target string) (string, error) {
+	return s.FakeExecutor.PaneSessionNameCtx(ctx, target)
+}
+
+func TestProjectionRead_EitherFallbackStageTimingOutFailsTheRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wrap func(stuckPaneTmux) tmux.Executor
+	}{
+		{"names hang, pids answer", func(s stuckPaneTmux) tmux.Executor { return namesOnlyStuckTmux{s} }},
+		{"pids hang, names answer", func(s stuckPaneTmux) tmux.Executor { return pidsOnlyStuckTmux{s} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newProjFixture(t, 6, false)
+			shortLookupBudget(t, 40*time.Millisecond)
+			f.m.tmux = tc.wrap(stuckPaneTmux{f.tx})
+			within(t, 3*time.Second, "the read", func() {
+				if _, err := f.m.liveSessionProjections(); !errors.Is(err, errPaneSnapshotTimeout) {
+					t.Errorf("err = %v, want errPaneSnapshotTimeout", err)
+				}
+				if _, err := f.m.projectionForSession("s0"); !errors.Is(err, errPaneSnapshotTimeout) {
+					t.Errorf("projectionForSession: err = %v, want errPaneSnapshotTimeout", err)
+				}
+				// the replay round reads the frames through its own cache: the pid stage's expiry must reach it too
+				if _, err := f.m.projectionForSessionWith("s0", &replayProjectionCache{}); !errors.Is(err, errPaneSnapshotTimeout) {
+					t.Errorf("projectionForSessionWith: err = %v, want errPaneSnapshotTimeout", err)
+				}
+			})
+		})
 	}
 }

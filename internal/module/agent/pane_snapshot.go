@@ -54,7 +54,26 @@ type paneSnapshot struct {
 	m        *Module
 	panes    map[string]tmux.PanePlacement
 	fallback bool
-	deadline time.Time // fallback only: the read's one budget for per-pane lookups
+	deadline time.Time   // the budget for this snapshot's per-pane lookups: the read's own (fallback), or a fresh one (a batch answer's Ambiguous panes)
+	timedOut atomic.Bool // a per-pane lookup ran out of time: the read is unreadable, not "pane gone" (see expired)
+}
+
+// expired says a per-pane lookup of this snapshot was cut off by its deadline. Such a read FAILS (errPaneSnapshotTimeout), exactly
+// as a batch that ran out of time does: its empty names are "unreadable", and a successful-looking empty answer would broadcast
+// a clear (#717) or have the mod worker drop the updates it already took. Nil-safe: no tmux, no snapshot, no timeout.
+func (s *paneSnapshot) expired() bool { return s != nil && s.timedOut.Load() }
+
+// errExpired is the failure of a read whose snapshot expired.
+func errExpired() error {
+	return fmt.Errorf("%w: a per-pane lookup ran out of time", errPaneSnapshotTimeout)
+}
+
+// noteLookup records the outcome of one per-pane lookup: only the deadline matters (tmux's own failure is the lookup's).
+func (s *paneSnapshot) noteLookup(err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		s.timedOut.Store(true)
+	}
+	logLookupDeadline(err)
 }
 
 // lookupCtx is the context of one per-pane lookup: the read's deadline.
@@ -69,7 +88,10 @@ func (m *Module) takePaneSnapshot() (*paneSnapshot, error) {
 	if m == nil || m.tmux == nil {
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), paneSnapshotTimeout)
+	// ONE absolute deadline for the whole read: the batch call, and (when it merely fails) the per-pane lookups that stand
+	// in for it spend what the batch left.
+	deadline := time.Now().Add(paneSnapshotTimeout)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	panes, err := m.tmux.ListPanePlacements(ctx)
 	if err != nil {
@@ -78,9 +100,9 @@ func (m *Module) takePaneSnapshot() (*paneSnapshot, error) {
 		if timedOut {
 			return nil, fmt.Errorf("%w: %v", errPaneSnapshotTimeout, err)
 		}
-		return &paneSnapshot{m: m, fallback: true, deadline: time.Now().Add(paneSnapshotTimeout)}, nil
+		return &paneSnapshot{m: m, fallback: true, deadline: deadline}, nil
 	}
-	return &paneSnapshot{m: m, panes: panes}, nil
+	return &paneSnapshot{m: m, panes: panes, deadline: time.Now().Add(paneSnapshotTimeout)}, nil
 }
 
 // lookupDeadlineLastLog / lookupDeadlineSuppressed are logBatchFailure's for a per-pane lookup that ran out of time: one line
@@ -143,7 +165,7 @@ func (s *paneSnapshot) panePID(paneID string) (int, error) {
 		defer cancel()
 		pid, err := s.m.tmux.ActivePanePIDCtx(ctx, paneID)
 		if err != nil {
-			logLookupDeadline(err)
+			s.noteLookup(err)
 			return 0, err
 		}
 		return parsePanePID(pid)
@@ -165,7 +187,7 @@ func (s *paneSnapshot) sessionName(paneID string) string {
 		defer cancel()
 		name, err := s.m.tmux.PaneSessionNameCtx(ctx, paneID)
 		if err != nil {
-			logLookupDeadline(err)
+			s.noteLookup(err)
 			return ""
 		}
 		return name
@@ -175,7 +197,14 @@ func (s *paneSnapshot) sessionName(paneID string) string {
 		return ""
 	}
 	if p.Ambiguous {
-		return s.m.paneSessionName(paneID)
+		ctx, cancel := s.lookupCtx()
+		defer cancel()
+		name, err := s.m.tmux.PaneSessionNameCtx(ctx, paneID)
+		if err != nil {
+			s.noteLookup(err)
+			return ""
+		}
+		return name
 	}
 	return p.SessionName
 }
