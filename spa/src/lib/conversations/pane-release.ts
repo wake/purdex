@@ -27,6 +27,7 @@ import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { forgetAttachmentsWhere } from './attachment-memory'
 import { forgetUploadsWhere } from './attachment-upload'
+import { forgetClearedWhere } from './draft-clear'
 import { forgetDraftsWhere, draftKey } from './draft-memory'
 import { forgetDeckPane, forgetFoldsOfPane } from './fold-memory'
 import { chatScrollKey, conversationBinding, forgetPanel } from './panel-memory'
@@ -39,6 +40,7 @@ export function releasePane(paneId: string): void {
   forgetDraftsWhere(mine)
   forgetAttachmentsWhere(mine)
   forgetUploadsWhere(mine)
+  forgetClearedWhere(mine)
   forgetPanel(paneId)
   forgetFoldsOfPane(paneId)
   forgetScrollMemo(paneId)

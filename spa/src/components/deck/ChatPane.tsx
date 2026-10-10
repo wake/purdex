@@ -2,7 +2,8 @@
 // pane holds (`useConversationOfPane`, mounted by SessionPaneContent for every view) as the chat, or why it cannot be read,
 // or the loading moment. The twin of DeckPane: same states, the chat's own wording (UnreadableState). Takes focus when the
 // pane switches to it (the input first), and hands its footer the same context the deck does.
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { focusSessionInput } from './focus-input'
 import { useActivationFocus } from '../../hooks/useActivationFocus'
 import type { PaneConversation, PaneConversationUnreadable } from '../../hooks/useConversationOfPane'
 import { useConversationStore } from '../../stores/useConversationStore'
@@ -32,7 +33,20 @@ export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget,
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
   // Switching to the chat focuses its input when it has one (plan D2), else the frame (loading, unreadable).
-  useActivationFocus(isActive, isFocusTarget, () => (ref.current?.querySelector('textarea') ?? ref.current)?.focus(), { raf: true })
+  // When the input is not there yet (the conversation is still resolving) the frame takes the focus and the input is taken when it shows up.
+  const wantsInput = useRef(false)
+  useActivationFocus(isActive, isFocusTarget, (cause) => {
+    const r = focusSessionInput(ref.current, { request: cause === 'request' })
+    if (r === 'focused') { wantsInput.current = false; return }
+    if (r === 'no_input') { ref.current?.focus(); wantsInput.current = true; return }
+    if (r === 'asking') ref.current?.focus() // the dock card is the thing to answer
+  }, { raf: true })
+  useEffect(() => {
+    if (!wantsInput.current) return
+    if (!isActive || !isFocusTarget) { wantsInput.current = false; return } // gone to the back meanwhile: no retries for a pane that is not in front
+    const r = focusSessionInput(ref.current, { frameOnly: true })
+    if (r !== 'no_input') wantsInput.current = false // taken, or the reader went elsewhere meanwhile: no more retries
+  })
 
   const ready = conversation.state === 'ready' ? conversation : null
   const doc = ready?.entry?.doc

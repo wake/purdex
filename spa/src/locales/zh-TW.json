@@ -2360,6 +2360,7 @@
   "deck.read.range": "第 {{a}}–{{b}} 行",
   "deck.status.running": "進行中",
   "deck.live.running": "執行中…",
+  "deck.draft.cleared": "已清除草稿 · ⌘Z 復原",
   "deck.step.task_toggle": "展開或收起這個 subagent 的步驟",
   "deck.live.subagents": "{{n}} 個 subagent",
   "deck.done": "完成",

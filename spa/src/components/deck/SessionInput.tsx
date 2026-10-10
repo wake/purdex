@@ -8,6 +8,7 @@ import { expandPlaceholders, removePlaceholderText } from '../../lib/conversatio
 import { reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, forgetAttachmentsWhere, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
+import { clearDraft, discardCleared, hasCleared, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
 import { uploadFailureText } from '../../lib/upload-failure'
 import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
@@ -120,7 +121,16 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   // The queue is driven by the pane (`useSendQueueDriver`, under every view); this input only types and shows.
   // the live capability is the only authority: a 409 no_mod fails that one message and disables nothing by itself
   const noMod = capabilities?.send !== 'prompt'
-  const change = (v: string) => { setDraft(v); writeDraft(dKey, v); reconcileAttachments(dKey, v); setHint(null) }
+  const change = (v: string) => { setDraft(v); writeDraft(dKey, v); reconcileAttachments(dKey, v); setHint(null); if (v !== '') discardCleared(dKey) } // typing something new ends the undo window
+  const canUndoClear = useHasCleared(dKey)
+  const restoreCleared = () => {
+    const text = undoClear(dKey)
+    if (text === null) return
+    setDraft(text)
+    setChips(readAttachments(dKey))
+    setHint(null)
+    box.current?.focus()
+  }
 
   // Files come from a paste, a drop or the attach button. Each is saved by the daemon (no paste into the pane) and its path goes
   // into the draft when it lands (see attachment-upload); the box stays editable meanwhile.
@@ -142,6 +152,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     if (!plan.ok) { if (plan.refusal !== 'empty') setHint({ key: REFUSAL_KEY[plan.refusal], tone: 'warn' }); return }
     if (guard.current.check(plan.text) === 'confirm') { setHint({ key: 'deck.send.confirm', tone: 'warn' }); return }
     queue.enqueue(plan.text)
+    discardCleared(dKey)
     forgetAttachmentsWhere((key) => key === dKey)
     setChips([])
     change('')
@@ -211,7 +222,17 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 attach(files)
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
+                // a key pressed while an IME is composing belongs to the IME (Esc cancels the composition, not the draft)
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); return }
+                // Esc clears the draft and its attachments (undo for a few seconds); with nothing to clear it does nothing at all
+                if (e.key === 'Escape' && (draft !== '' || uploading.length > 0)) { // what is on screen (hidden chips ride along with a clear, but do not by themselves take an Esc)
+                  e.preventDefault(); e.stopPropagation()
+                  clearDraft(dKey)
+                  setDraft(''); setChips([]); setHint(null)
+                  return
+                }
+                if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && hasCleared(dKey)) { e.preventDefault(); restoreCleared() }
               }}
               style={{ overflowWrap: 'anywhere' }}
               className={`relative block w-full resize-none rounded-none border-0 px-0 pb-1.5 pt-0 text-[13px] leading-[1.65] text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
@@ -229,6 +250,11 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
             <button type="button" aria-label={t('deck.send.interrupt')} title={t('deck.send.interrupt')} onClick={() => void interrupt()} className="flex h-8 w-8 items-center justify-center rounded text-text-muted hover:text-text-primary"><Stop size={18} /></button>
             <button type="button" aria-label={t('deck.send.send')} title={t('deck.send.send')} onClick={send} className="flex h-8 w-8 items-center justify-center rounded text-accent hover:opacity-80"><PaperPlaneRight size={18} /></button>
           </div>
+          {canUndoClear && (
+            <button type="button" data-testid="draft-cleared" onClick={restoreCleared} className="block w-full cursor-pointer px-3 pb-1 text-left text-xs text-text-muted hover:text-text-primary">
+              {t('deck.draft.cleared')}
+            </button>
+          )}
         </div>
       )}
     </div>

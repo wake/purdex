@@ -92,7 +92,7 @@ describe('ChatPane', () => {
   })
 
   it('takes focus on the input when the pane becomes the focus target, else the frame', () => {
-    const footer = () => <textarea data-testid="chat-input" />
+    const footer = () => <div data-testid="session-input"><textarea data-testid="chat-input" /></div>
     vi.useFakeTimers()
     render(<ChatPane {...base} isFocusTarget footer={footer} conversation={ready(entry([turn(0, [userItem('a', 0)])]))} />)
     act(() => { vi.runAllTimers() })
