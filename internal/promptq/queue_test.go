@@ -352,6 +352,23 @@ func TestNext_LongPollWakesAtTheLeaseExpiry(t *testing.T) {
 	take(t, second)
 }
 
+// The wait bounds the time in the queue: a request handed out late in the wait still has its whole HandTimeout from the
+// hand-out and its late result is accepted (codex R1). Mutation gate: finish a handed request at the wait's end → red.
+func TestSubmit_HandedLateStillGetsItsFullHandTimeout(t *testing.T) {
+	q, _ := newQ(t)
+	q.Wait, q.HandTimeout = 300*time.Millisecond, 600*time.Millisecond
+	ch := submitAsync(q, "s1", "c1", "late")
+	time.Sleep(250 * time.Millisecond) // nearly the whole wait in the queue
+	j := next(t, q, "mod1", "s1")
+	time.Sleep(200 * time.Millisecond) // past the wait's end, inside the hand timeout
+	if err := q.Result("mod1", j.ID, Outcome{Status: Accepted}); err != nil {
+		t.Fatalf("a result inside the hand timeout was refused: %v", err)
+	}
+	if r := take(t, ch); r.Status != Accepted {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
 // A flood of distinct ids forgets the OLDEST settled rows first and never an open one: a request that may still run is
 // not sent a second time. Mutation gate: drop any settled row (map order), or an open one → red (codex attack).
 func TestLedger_FloodForgetsTheOldestSettledAndNeverAnOpenRow(t *testing.T) {

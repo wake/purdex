@@ -275,7 +275,7 @@ func (q *Queue) Interrupt(ctx context.Context, sessionID string) (Result, error)
 // `timeout`; one handed out and unanswered is `unknown`), the hand timeout after hand-out, or the caller's context.
 func (q *Queue) await(ctx context.Context, e *entry) Result {
 	deadline := time.NewTimer(q.wait())
-	defer deadline.Stop()
+	defer func() { deadline.Stop() }() // the timer is replaced once the request is handed out
 	for {
 		q.mu.Lock()
 		if e.state == stDone {
@@ -305,23 +305,26 @@ func (q *Queue) await(ctx context.Context, e *entry) Result {
 			}
 			q.mu.Unlock()
 		case <-deadline.C:
+			// The wait bounds the time in the queue only: a request handed out meanwhile has its own full HandTimeout from
+			// the hand-out (a prompt handed out at 9 s must not be called unknown at 10 s).
 			q.mu.Lock()
-			switch e.state {
-			case stQueued: // never handed out: withdrawn, so it may be sent again
+			if e.state == stQueued { // never handed out: withdrawn, so it may be sent again
 				q.removeQueued(e)
 				if e.key != "" {
 					delete(q.ledger, e.key)
 				}
 				q.finish(e, Result{Status: Timeout})
-			case stHanded:
-				q.finish(e, Result{Status: Unknown, Reason: "no_result"})
 			}
+			done := e.state == stDone
 			r := e.res
 			q.mu.Unlock()
 			if handTimer != nil {
 				handTimer.Stop()
 			}
-			return r
+			if done {
+				return r
+			}
+			deadline = time.NewTimer(q.handTimeout() + q.wait()) // handed out: the hand timer decides; this is only a backstop
 		case <-ctx.Done():
 			if handTimer != nil {
 				handTimer.Stop()
