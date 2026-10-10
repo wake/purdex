@@ -312,3 +312,24 @@ func TestForwardedCard_ForwardingAnOpThatIsNotAwaitingQueuesNothing(t *testing.T
 		t.Fatalf("%d commands, want 1", n)
 	}
 }
+
+// codex attack: what the command says about the lead is read under the approve's write lock, not before it. A lead that moved
+// between the preparation and the transaction is the lead the command carries.
+func TestForwardedCard_TheCommandCarriesTheLeadOfTheTransactionNotOfThePreparation(t *testing.T) {
+	f, _ := fwdRelayFixture(t)
+	op := f.heldRemoteRelay(fwdOp)
+	forward, err := f.m.forwardEnqueuerFor(op) // prepared while sid-1 leads
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE teams SET lead_session_id = 'sid-newlead', lead_ref = '_new111' WHERE id = ?`, uid(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.m.store.ForwardAwaitingOp(op, forward, f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	var body team.TeamCommand
+	if err := json.Unmarshal(f.relayCommands()[0].Body, &body); err != nil || body.Lead.SessionID != "sid-newlead" || body.Lead.Ref != "_new111" {
+		t.Fatalf("lead in the command = %+v err=%v, want the current lead", body.Lead, err)
+	}
+}

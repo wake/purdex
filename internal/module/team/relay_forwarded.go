@@ -49,7 +49,7 @@ func (m *Module) createRemoteMemberRelay(w http.ResponseWriter, req team.RelayCr
 	}
 	var spent bool
 	var held *team.Approval
-	op, _, err := m.store.CreateRemoteMemberRelayOp(op, m.memberRelayGate(leadOrigin, mr, &spent, &held), m.relayEnqueuer(t, mr.HostID, mr.SpawnOp))
+	op, _, err := m.store.CreateRemoteMemberRelayOp(op, m.memberRelayGate(leadOrigin, mr, &spent, &held), m.relayEnqueuer(mr.HostID, mr.SpawnOp))
 	switch {
 	case errors.Is(err, ErrMemberNotActive):
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, "member "+mr.Ref+" left the team while the relay was being opened", nil)
@@ -81,17 +81,21 @@ func (m *Module) createRemoteMemberRelay(w http.ResponseWriter, req team.RelayCr
 	m.writeJSON(w, http.StatusCreated, team.RelayCreateResponse{Op: op})
 }
 
-// relayEnqueuer builds the closure that queues op's `relay` command in the op's transaction: the team, the lead's tuple and the
-// host are read now (outside it), the member's key inside it. at is when the command is queued — its created_at, which the
-// member host's age check reads (an op that waited for a card is not 'old').
-func (m *Module) relayEnqueuer(t team.Team, hostID, spawnOp string) func(tx *sql.Tx, op team.RelayOp, at int64) error {
-	lead := m.leadTuple(t)
+// relayEnqueuer builds the closure that queues op's `relay` command in the op's transaction. The team, the lead's tuple and the
+// member's key are read INSIDE that transaction, under its write lock: a lead that moved (or a team renamed) before the
+// transaction is the one the command carries, the one whose pool pays. at is when the command is queued — its created_at, which
+// the member host's age check reads (an op that waited for a card is not 'old').
+func (m *Module) relayEnqueuer(hostID, spawnOp string) func(tx *sql.Tx, op team.RelayOp, at int64) error {
 	return func(tx *sql.Tx, op team.RelayOp, at int64) error {
+		t, err := scanTeam(tx.QueryRow(`SELECT `+teamCols+` FROM teams WHERE id = ?`, op.TeamID))
+		if err != nil {
+			return err
+		}
 		var mk string
 		if err := tx.QueryRow(`SELECT mk FROM team_members WHERE spawn_op = ? AND host_id = ?`, spawnOp, hostID).Scan(&mk); err != nil {
 			return err
 		}
-		cmd, err := remoteCommand(m.newID(), CmdRelay, hostID, t, mk, lead, func(tc *team.TeamCommand) { tc.OpID, tc.CreatedAt = op.ID, at })
+		cmd, err := remoteCommand(m.newID(), CmdRelay, hostID, t, mk, m.leadTupleIn(tx, t), func(tc *team.TeamCommand) { tc.OpID, tc.CreatedAt = op.ID, at })
 		if err != nil {
 			return err
 		}
@@ -99,18 +103,29 @@ func (m *Module) relayEnqueuer(t team.Team, hostID, spawnOp string) func(tx *sql
 	}
 }
 
-// forwardEnqueuerFor is relayEnqueuer for an op that already exists (the approve's, the boot's): the team and the member's row
-// are read from the op. Read BEFORE the transaction that uses it.
-func (m *Module) forwardEnqueuerFor(op team.RelayOp) (func(tx *sql.Tx, op team.RelayOp, at int64) error, error) {
-	t, ok, err := m.store.TeamByID(op.TeamID)
-	if err != nil || !ok {
-		return nil, fmt.Errorf("forward op %s: team %s (found=%v): %v", op.ID, op.TeamID, ok, err)
+// leadTupleIn is leadTuple for a caller inside a transaction: the registry is not the database, and the lead's request row (the
+// fallback for a lead that is gone) is read on tx.
+func (m *Module) leadTupleIn(tx dbtx, t team.Team) team.TeamLead {
+	alias, _ := m.selfHost()
+	lead := team.TeamLead{SessionID: t.LeadSessionID, Ref: t.LeadRef, Address: alias + "/" + t.LeadRef}
+	if o, ok, err := m.origins.ResolveOriginBySession(t.LeadSessionID); err == nil && ok {
+		lead.PID, lead.ProcStart, lead.Address = o.PID, o.ProcStart, firstNonEmpty(o.Address, lead.Address)
+		return lead
 	}
+	if req, _, err := getRowIn(tx, t.RequestID); err == nil {
+		lead.PID, lead.ProcStart = req.Origin.PID, req.Origin.ProcStart
+	}
+	return lead
+}
+
+// forwardEnqueuerFor is relayEnqueuer for an op that already exists (the approve's, the boot's): only the member's row is looked
+// up, before the transaction.
+func (m *Module) forwardEnqueuerFor(op team.RelayOp) (func(tx *sql.Tx, op team.RelayOp, at int64) error, error) {
 	var spawnOp string
 	if err := m.store.db.QueryRow(`SELECT spawn_op FROM team_members WHERE session_id = ? AND team_id = ? AND host_id = ?`, op.SessionID, op.TeamID, op.HostID).Scan(&spawnOp); err != nil {
 		return nil, fmt.Errorf("forward op %s: its member row: %w", op.ID, err)
 	}
-	return m.relayEnqueuer(t, op.HostID, spawnOp), nil
+	return m.relayEnqueuer(op.HostID, spawnOp), nil
 }
 
 // endForwardedOpIn ends the forwarded op opID — of THIS host's member — as a compare-and-set from `forwarded`. The op is bound
