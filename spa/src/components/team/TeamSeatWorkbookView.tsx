@@ -2,10 +2,15 @@
 // conversation workbook share it. 目前狀況 + 紀錄 (v1); v2 adds 待辦, the 紀錄｜待辦 switch and 重整. Data comes only from the
 // workbook store (through `useWorkbookViewing`, the one place that touches the view count); which seat a drill shows lives in
 // `useTeamUiStore.teamDrill`, and the view's own state (tab, scroll, open groups) in lib/workbook/view-memory.ts.
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { CaretLeft } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useWorkbookStore } from '../../stores/useWorkbookStore'
+import type { WorkbookTab } from '../../lib/workbook/view-memory'
+import type { WorkbookTodo } from '../../lib/workbook/types'
+import { WorkbookToolbar } from './WorkbookToolbar'
+import { WorkbookTodos } from './WorkbookTodos'
 import { useWorkbookViewing, type SeatWorkbook } from './seat-workbook'
 import { useWorkbookViewState } from './useWorkbookViewState'
 import { WorkbookStatus } from './WorkbookStatus'
@@ -31,6 +36,26 @@ function WorkbookFrame({ teamKey, hostId, title, trailing, wb }: Props & { wb: S
   const t = useI18nStore((s) => s.t)
   const vs = useWorkbookViewState(hostId, wb.convKey)
   const conv = wb.conv
+  const v2 = useWorkbookStore((s) => s.support[hostId]?.v2 === true)
+  const tab = v2 ? vs.tab : 'log' // a v1 daemon has no 待辦 (and a remembered 待辦 does not outlive the capability)
+  const [highlightId, setHighlightId] = useState<number | null>(null)
+  const [notFound, setNotFound] = useState(false)
+  const switchTab = (next: WorkbookTab) => { setHighlightId(null); setNotFound(false); vs.setTab(next) }
+  /** A done todo → the entry that closed it: 紀錄, paged in if need be, scrolled to and marked; else say it is not there. */
+  async function jump(todo: WorkbookTodo) {
+    const id = todo.closedEntryId
+    switchTab('log')
+    if (wb.convKey === null || !(id > 0)) { setNotFound(true); return } // 0 = no closing entry (an open todo's)
+    const ok = await useWorkbookStore.getState().loadUntil(hostId, wb.convKey, id)
+    if (ok) setHighlightId(id)
+    else setNotFound(true)
+  }
+  const entryCount = conv?.entries.length ?? 0
+  useEffect(() => {
+    if (highlightId === null || tab !== 'log') return
+    const el = vs.scrollRef.current?.querySelector(`[data-entry-id="${highlightId}"]`)
+    el?.scrollIntoView?.({ block: 'center' })
+  }, [highlightId, tab, entryCount, vs.scrollRef])
   const back = t('team.panel.workbook_back')
   const heading = teamKey === undefined ? t('team.workbook.own_title') : t('team.workbook.title', { title })
   return (
@@ -50,11 +75,19 @@ function WorkbookFrame({ teamKey, hostId, title, trailing, wb }: Props & { wb: S
           </button>
         )}
         <span className="truncate min-w-0 flex-1 font-medium" title={heading}>{heading}</span>
+        <WorkbookToolbar v2={v2} tab={tab} onTab={switchTab} openTodos={conv?.todos.open.length ?? 0} />
         {trailing !== undefined && <span className="flex items-center gap-0.5 flex-shrink-0">{trailing}</span>}
       </div>
       <div ref={vs.scrollRef} onScroll={vs.onScroll} data-testid="workbook-body" className="px-3 py-2 flex flex-col gap-2 overflow-y-auto max-h-[70vh]">
         <WorkbookStatus status={conv?.status ?? ''} statusAt={conv?.statusAt ?? 0} loading={!!conv?.loading} />
-        <WorkbookLog hostId={hostId} convKey={wb.convKey} conv={conv} openGroups={vs.openGroups} onToggleGroup={vs.toggleGroup} highlightId={null} />
+        {tab === 'todos' ? (
+          <WorkbookTodos hostId={hostId} convKey={wb.convKey} conv={conv} onJump={(x) => { void jump(x) }} />
+        ) : (
+          <>
+            {notFound && <div role="status" className="text-[11px] text-text-muted">{t('team.workbook.entry_not_found')}</div>}
+            <WorkbookLog hostId={hostId} convKey={wb.convKey} conv={conv} openGroups={vs.openGroups} onToggleGroup={vs.toggleGroup} highlightId={highlightId} />
+          </>
+        )}
       </div>
     </div>
   )
