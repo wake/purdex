@@ -747,6 +747,112 @@ for (const reporter of REPORTER) {
   })
 }
 
+// ---------- #2441: a mod that reloads mid-relay picks its op up from hello ----------
+// `pdx setup` rewrites the mod folder and the mod reloads with an empty memory. hello's answer carries the op
+// (claimed / writing / written) the session was in the middle of; written resumes at /clear and the seed, claimed /
+// writing fail with a named reason the lead can read. A daemon without the field behaves as before.
+
+const ACTIVE = (state: string, extra: Record<string, unknown> = {}) => ({ op: { ...OP, state }, ...extra })
+const LEAD = { address: 'mlab/purdex-1f-vq', ref: '_wqer47', team_id: 'team-1' }
+function reloadedWorld(on: any, active: unknown | undefined, files: Record<string, string> = {}, more: Partial<Fake> = {}) {
+  const f = relayWorld(on, { usage: AT72, files, ...more })
+  f.pdx = (argv) => argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO('none', active === undefined ? {} : { active_relay: active }) }
+    : argv[0] === 'msg' ? { exitCode: 0, stdout: 'mlab/purdex-x [abc123]' }
+    : { exitCode: 0, stdout: '{}' }
+  return f
+}
+
+for (const reporter of REPORTER) {
+  test(withReporter('reloaded at written with a good handoff file: unlock, /clear, then cleared, the seed and done — never stuck', reporter), async ($, on) => {
+    const f = reloadedWorld(on, ACTIVE('written'), { '/data/relay/op-1.md': GOOD_FILE }, { reporter })
+    await start($, f)
+    await f.clock.advance(100)
+    expect(f.commands).toEqual(['clear'])
+    expect(f.argvs.map(sub)).toContain('relay unlock op-1 --session sid-old') // the lock the old mod raised, if still up
+    expect(reports(f)).toEqual([]) // written was reported by the mod that is gone: nothing is re-reported
+    f.switchTo = 'sid-new'
+    await $.classic.SessionStart({ source: 'clear' })
+    await f.clock.settle()
+    expect(f.argvs.map(sub)).toContain('relay report op-1 cleared --new-session sid-new')
+    await f.clock.advance(50)
+    expect(f.submits.length).toBe(1)
+    expect(f.submits[0].text.split('\n')[0]).toBe('↪ 接手自 _abc123')
+    expect(f.submits[0].text).toMatch(/\n\[pdx-relay seed op=op-1 n=[0-9a-f]{12,}\] /)
+    f.usage = { tokens: 30000, window: 200000, percent: 15 }
+    await $.turn.start({ text: f.submits[0].text, turnId: 'ts' })
+    await turnAndSettle($, f, 'ts')
+    expect(reports(f)).toEqual(['relay report op-1 cleared --new-session sid-new', 'relay report op-1 done'])
+  })
+}
+
+test('reloaded at written, a member op: the same path, and no pdx team query (the seed names no lead)', async ($, on) => {
+  const f = reloadedWorld(on, ACTIVE('written', { lead: LEAD }), { '/data/relay/op-1.md': GOOD_FILE })
+  await start($, f)
+  await f.clock.advance(100)
+  expect(f.commands).toEqual(['clear'])
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle()
+  await f.clock.advance(50)
+  expect(f.submits[0].text.split('\n')[0]).toBe('↪ 接手自 _abc123')
+  expect(f.argvs.filter((a) => a[1] === 'team').length).toBe(0)
+})
+
+// Mutation gate: skip checkHandoff → a /clear over a file that is not there → red.
+for (const [name, file] of [['missing', undefined], ['short', '# HANDOFF\n## 1. a\n' + 'x'.repeat(300)]] as const) {
+  test(`reloaded at written but the handoff file is ${name}: failed{handoff_incomplete}, no /clear`, async ($, on) => {
+    const f = reloadedWorld(on, ACTIVE('written'), file === undefined ? {} : { '/data/relay/op-1.md': file })
+    await start($, f)
+    await f.clock.advance(100)
+    expect(reports(f)).toEqual(['relay report op-1 failed --error handoff_incomplete'])
+    expect(f.commands).toEqual([])
+  })
+}
+
+for (const state of ['claimed', 'writing']) {
+  test(`reloaded at ${state}: failed{mod_reloaded} so the lead sees why, and nothing else runs`, async ($, on) => {
+    const f = reloadedWorld(on, ACTIVE(state), { '/data/relay/op-1.md': GOOD_FILE })
+    await start($, f)
+    await f.clock.advance(100)
+    expect(reports(f)).toEqual(['relay report op-1 failed --error mod_reloaded'])
+    expect(f.commands).toEqual([])
+    expect(f.submits).toEqual([])
+  })
+}
+
+// Compatibility: a daemon that does not know the field, and an answer without an op, change nothing.
+for (const [name, active] of [['absent', undefined], ['null', null], ['empty', {}]] as const) {
+  test(`active_relay ${name} in hello (an older daemon): nothing is reported or run`, async ($, on) => {
+    const f = reloadedWorld(on, active, { '/data/relay/op-1.md': GOOD_FILE })
+    await start($, f)
+    await f.clock.advance(100)
+    expect(reports(f)).toEqual([])
+    expect(f.commands).toEqual([])
+  })
+}
+
+// Once per op: a second hello (the next /clear's, a re-check) that still carries the op does not run it again.
+test('the same op is picked up once even when hello carries it twice', async ($, on) => {
+  const f = reloadedWorld(on, ACTIVE('claimed'))
+  await start($, f)
+  await f.clock.advance(100)
+  await start($, f) // a second session.start: its hello carries the same op again
+  await f.clock.advance(100)
+  expect(helloCount(f)).toBe(2)
+  expect(reports(f).filter((r) => r.includes('failed'))).toEqual(['relay report op-1 failed --error mod_reloaded'])
+})
+
+// The session moved on while the file was read: the old conversation's recovery must not /clear the new one.
+test('a /clear while the recovery reads the engine: the old conversation is not /cleared again', async ($, on) => {
+  let open!: () => void
+  const f = reloadedWorld(on, ACTIVE('written'), { '/data/relay/op-1.md': GOOD_FILE }, { usageGate: new Promise<void>((r) => { open = r }) })
+  await start($, f) // the recovery is waiting on the engine's usage
+  f.sessionId = 'sid-other' // a /clear moved the engine on meanwhile
+  open()
+  await f.clock.advance(100)
+  expect(f.commands).toEqual([])
+})
+
 // §8.3: a report that did not reach the daemon (20 unreachable — also a
 // cleared the daemon answered 503 not_ready for through the CLI's grace —
 // 21 unsupported) is re-sent at the next turn.complete and the relay goes

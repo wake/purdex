@@ -68,6 +68,7 @@ const HOLD_SLEEP = ['/bin/sleep', '5'] // the prompt hold's own `$` call, again 
 const HOLD_SLEEP_TIMEOUT_MS = 10_000 // its $.process.run bound
 const HOLD_MAX_MS = 660_000 // a held prompt waits for the request's answer at most 11 min: its 10 min deadline and slack
 const BEGIN_HOLD_MS = 40_000 // … and for begin's answer at most 40 s: begin's own bound (CALL_TIMEOUT_MS, 35 s) and slack
+const RELAY_MOD_RELOADED = 'mod_reloaded' // the failed reason of an op that was claimed / writing when the mod reloaded (#2441)
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
 const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
 const MAX_CONTROLS = 8 // verified (seen) control ops kept at once; a forged marker is refused by `seen` and never kept
@@ -213,6 +214,7 @@ async function hello($, seq) {
     }
     if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
     if (h.min_growth > 0) s.minGrowth = h.min_growth
+    if (h.active_relay && typeof h.active_relay === 'object') recoverLater($, h.active_relay, sid)
   } finally {
     if (seq === s.helloSeq) s.helloBusy = false
   }
@@ -1061,6 +1063,71 @@ async function checkHandoff($, p) {
   return { ok: text.length > 200 && missing.length === 0, missing }
 }
 
+// startClear is the step after the handoff file passed its check: the lock down, then the mod's own /clear, from a timer.
+// The write turn's end takes it, and so does a mod that reloaded after `written` (recover).
+function startClear($, p) {
+  later($, STEP_MS, async () => {
+    if (s.pending !== p || s.state !== 'clearing') return
+    await unlockRelay($, p) // before the /clear, so the new conversation never starts under the lock
+    if (s.pending !== p || s.state !== 'clearing') return
+    try {
+      await $.command.run({ command: 'clear' })
+    } catch (err) {
+      giveUp($, p, 'clearing', 'cancelled', 'abandoned', '/clear: ' + String(err)) // written → cancelled
+    }
+  })
+}
+
+// ---- a mod that reloaded in the middle of a relay (#2441) ----
+// `pdx setup` rewrites the mod folder and the mod reloads with an empty memory: the relay it was running has no
+// state here, and nothing would /clear. hello's answer names the session's open op (claimed / writing / written;
+// earlier states have their own paths, and a daemon without the field changes nothing). `written`: the handoff file
+// is on disk, so go on as the write turn's end would (check, lock down, /clear, then cleared and the seed). `claimed`
+// / `writing`: the write was under way and its prompt, nonce and git facts died with the old mod; re-sending it could
+// double a prompt the model is already answering, so the op is failed with a reason the lead can read
+// (`mod_reloaded`) and the lead relays again.
+const recovered = new Set() // op ids this mod instance picked up: a second hello that still carries the op does not run it again
+
+function recoverLater($, active, sid) {
+  const op = active.op
+  if (!op || typeof op !== 'object' || typeof op.id !== 'string' || op.id === '' || recovered.has(op.id)) return
+  if (op.state !== 'written' && op.state !== 'claimed' && op.state !== 'writing') return
+  recovered.add(op.id)
+  later($, 0, () => recover($, active, sid))
+}
+
+async function recover($, active, sid) {
+  const op = active.op
+  const still = async () => s.state === 'idle' && !s.pending && (await $.session.id().catch(() => undefined)) === sid
+  if (!(await still())) return
+  if (op.state !== 'written') {
+    log($, 'relay ' + op.id + ' was ' + op.state + ' when the mod reloaded: reported failed (mod_reloaded)')
+    report($, op.id, 'failed', ['--error', RELAY_MOD_RELOADED])
+    return
+  }
+  const p = {
+    op, requestId: op.request_id || undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: '',
+    nonce: undefined, nonceState: undefined, who: '', // the seed names neither the lead nor the team (the write prompt did): only the old ref, the path and the tasks
+    answer: deferred(), locked: true, // the old mod may have left the relay lock up: unlockRelay lowers it (fail-open) before the /clear
+  }
+  p.answer.resolve('approved')
+  const c = await checkHandoff($, p)
+  if (!c.ok) {
+    if (!(await still())) return
+    log($, 'relay ' + op.id + ' was written when the mod reloaded but its file is not complete: reported failed')
+    report($, op.id, 'failed', ['--error', 'handoff_incomplete'])
+    return
+  }
+  const u = (await $.session.usage().catch(() => undefined))?.context
+  p.before = u ? usageLine(u) : ''
+  p.who = await whoami($)
+  if (!(await still())) return // a /clear or another session meanwhile: this is not that conversation any more
+  log($, 'relay ' + op.id + ' was written when the mod reloaded: going on to /clear and the seed')
+  s.pending = p
+  s.state = 'clearing'
+  startClear($, p)
+}
+
 async function onWriteTurnDone($) {
   const p = s.pending
   s.writeTurnId = undefined // checked once
@@ -1069,16 +1136,7 @@ async function onWriteTurnDone($) {
   if (c.ok) {
     s.state = 'clearing'
     report($, p.op.id, 'written')
-    later($, STEP_MS, async () => {
-      if (s.pending !== p || s.state !== 'clearing') return
-      await unlockRelay($, p) // before the /clear, so the new conversation never starts under the lock
-      if (s.pending !== p || s.state !== 'clearing') return
-      try {
-        await $.command.run({ command: 'clear' })
-      } catch (err) {
-        giveUp($, p, 'clearing', 'cancelled', 'abandoned', '/clear: ' + String(err)) // written → cancelled
-      }
-    })
+    startClear($, p)
     return
   }
   if (s.fixRounds < MAX_FIX_ROUNDS) {
