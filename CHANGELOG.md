@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.708] - 2026-10-11
+
+> 只升依賴（nexen v0.22.1）：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`。
+
+### Fixed：confined worker 的 context 不再帶 cwd 外的 git 資訊 — nexen#189（#2610）
+
+- nexen 升到 v0.22.1。之前 confined 的工作目錄若在某個 git repo 的子目錄裡，Claude Code 會把整個 repo 的 branch、git user、`git status`（含工作目錄外的檔名）與最近的 commit 訊息放進模型 context，跟「只讀得到工作目錄」的承諾不符；現在 confined 啟動時關掉這個區塊（設定與環境變數兩道）。
+- confined 啟動時也不再列出內建 skills／slash commands（confined 本來就沒有 Skill 工具，只是清掉清單）。
+
 ## [1.0.0-alpha.707] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。nexen 升到 v0.22.0（資料庫格式不變）。
