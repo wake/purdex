@@ -20,6 +20,8 @@ interface Props {
   /** The tmux session code the daemon's upload endpoint names the session by (not the Claude session id). No code: no attachments. */
   sessionCode?: string
   capabilities?: Capabilities
+  /** A question waits in the dock: the placeholder says to answer there. */
+  asking?: boolean
   onSwitchToTerminal: () => void
 }
 
@@ -57,7 +59,7 @@ function fitHeight(el: HTMLTextAreaElement): void {
   el.style.overflowY = wanted > max ? 'auto' : 'hidden'
 }
 
-function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, onSwitchToTerminal }: Props) {
+function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, asking, onSwitchToTerminal }: Props) {
   const t = useI18nStore((s) => s.t)
   const dKey = draftKey(paneKey, hostId, sessionId)
   const queue = sendQueueFor(dKey, () => hostSendPort(hostId, sessionId))
@@ -186,7 +188,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               ref={box}
               value={draft}
               rows={2}
-              placeholder={t('deck.send.placeholder')}
+              placeholder={t(asking ? 'deck.dock.input_placeholder' : 'deck.send.placeholder')}
               onChange={(e) => change(e.target.value)}
               onPaste={(e) => {
                 // only files are taken over; a plain-text paste goes into the box as usual

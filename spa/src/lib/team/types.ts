@@ -181,6 +181,11 @@ export interface Approval {
 export interface DecideRequest {
   decision: 'approve' | 'deny'
   grant?: Grant
+  /**
+   * hook_ask only (the dock): `approve` + `answers` (question text → answer), or `deny` + `message` (the reply in words,
+   * `team.ask_chat.v1`) — one or the other, never both.
+   */
+  hook?: { answers?: Record<string, string>; message?: string }
   client: Client
 }
 
