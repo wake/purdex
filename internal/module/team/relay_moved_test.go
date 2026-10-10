@@ -590,3 +590,21 @@ func TestMovedFact_AKeptRefOfAnotherTeamIsNotFollowed(t *testing.T) {
 		t.Fatal("a ref kept in another team matched in this one")
 	}
 }
+
+// codex re-review: a remote kill that committed (row `killed`, the SIGTERM not yet sent) must not be outrun by a cleared: the
+// old session would be gone, the kill would find nothing to signal, and the new session would live on as a killed member.
+func TestMoved_AClearedOfAKilledRemoteMemberFailsWhole(t *testing.T) {
+	s := openRemoteStore(t)
+	seedRemote(t, s, "mk-1", "sid-r", 1000)
+	claimedOp(t, s, "op-r", "sid-r", "_abc123")
+	if _, err := s.db.Exec(`UPDATE remote_members SET state = 'killed' WHERE mk = 'mk-1'`); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := s.ReportRelay("op-r", RelayReport{State: team.RelayCleared, NewSessionID: "sid-new", NewRef: "_nnn222", At: 5000})
+	if !errors.Is(err, ErrClearedMemberKilled) {
+		t.Fatalf("err = %v, want ErrClearedMemberKilled", err)
+	}
+	if got, _, _ := s.RemoteMember("mk-1"); got.MemberSessionID != "sid-r" {
+		t.Fatalf("row %+v: a refused cleared moved it", got)
+	}
+}

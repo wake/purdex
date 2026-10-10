@@ -46,6 +46,15 @@ func (s *Store) moveRemoteMemberIn(tx *sql.Tx, op team.RelayOp, r RelayReport) (
 	err = tx.QueryRow(`SELECT mk, team_id, lead_host_id, pid, proc_start, pane_id, title FROM remote_members
 		WHERE member_session_id = ? AND state = ?`, op.SessionID, remoteActive).Scan(&mk, &teamID, &leadHost, &pid, &procStart, &pane, &title)
 	if errors.Is(err, sql.ErrNoRows) {
+		// A kill that already committed (row `killed`, the signal not yet sent) is not outrun: the old session would vanish, the
+		// kill would find nothing to signal and the new one would live on as a killed member.
+		var killed int
+		switch err := tx.QueryRow(`SELECT 1 FROM remote_members WHERE member_session_id = ? AND state = ?`, op.SessionID, remoteKilled).Scan(&killed); {
+		case err == nil:
+			return false, fmt.Errorf("%w (%s)", ErrClearedMemberKilled, op.SessionID)
+		case !errors.Is(err, sql.ErrNoRows):
+			return false, err
+		}
 		return false, nil
 	}
 	if err != nil {
@@ -84,6 +93,9 @@ func (s *Store) moveRemoteMemberIn(tx *sql.Tx, op team.RelayOp, r RelayReport) (
 // person's /relay cannot be refused (U-M1), so its `moved` cannot be checked before it happens, and a fact held at the head of
 // the host's FIFO would hold that host's `ended` facts with it. Unreachable is not "unannounced": only a capabilities answer
 // that lacks the kind drops it. (A kind table, not a column: it is a property of the kind, and team_facts needs no migration.)
+// ErrClearedMemberKilled refuses a cleared whose old session is a remote member whose kill has committed.
+var ErrClearedMemberKilled = errors.New("the old session is a remote member whose kill is under way")
+
 // errMemberNotSettled: a moved fact met a row that is still joining; it is retried, not answered.
 var errMemberNotSettled = errors.New("member row still joining")
 
