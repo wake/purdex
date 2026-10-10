@@ -182,10 +182,14 @@ func (s *Store) ApplyTeamCommand(p CommandPlan) (CommandResult, error) {
 
 // commandTooOld says whether c is an adopt or a spawn that its lead host queued more than commandExpiryMS +
 // commandSkewMS before now (this host's clock). A command without created_at, or created in the future by this host's
-// clock, is not too old.
+// clock, is not too old. Zero is "absent" (the lead omits the field; an older lead never sends it); a negative value is
+// no time a lead can have written and counts as too old, checked before the subtraction so the extremes cannot overflow.
 func commandTooOld(c team.TeamCommand, now int64) bool {
-	if c.CreatedAt <= 0 || (c.Kind != team.CommandAdopt && c.Kind != team.CommandSpawn) {
+	if c.CreatedAt == 0 || (c.Kind != team.CommandAdopt && c.Kind != team.CommandSpawn) {
 		return false
+	}
+	if c.CreatedAt < 0 {
+		return true
 	}
 	return now-c.CreatedAt > commandExpiryMS+commandSkewMS
 }
