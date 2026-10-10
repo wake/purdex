@@ -96,7 +96,7 @@ func TestPendingStatuslines_DeadExpiredAndInvalidAreDroppedNotApplied(t *testing
 // replayed into them. Mutation: apply via the whole status path → a snapshot appears (red).
 func TestPendingStatuslines_OnlyTouchTheUsageReading(t *testing.T) {
 	m, dir := pendingModule(t)
-	statuspending.Write(dir, statusline("S", 5, "m"), 100)
+	statuspending.Write(dir, statusline("S", 5, "m"), usageNow()-1000)
 	m.applyPendingStatuslines(context.Background())
 	m.snapshotMu.RLock()
 	n := len(m.statusSnapshots)
@@ -117,7 +117,7 @@ func TestPendingStatuslines_AreFlushedLikeAnyReading(t *testing.T) {
 	seedRootWithIdentity(t, a, "%1", "cc", 101, "st-101", "S")
 	withLivePids(t, map[int]string{101: "st-101"})
 	a.pendingDir = filepath.Join(t.TempDir(), "p")
-	statuspending.Write(a.pendingDir, statusline("S", 7, "pending-model"), 4000)
+	statuspending.Write(a.pendingDir, statusline("S", 7, "pending-model"), usageNow()-1000)
 	a.applyPendingStatuslines(context.Background())
 	if n := a.flushContextUsage(); n != 1 {
 		t.Fatalf("flush wrote %d rows, want 1", n)
@@ -126,6 +126,29 @@ func TestPendingStatuslines_AreFlushedLikeAnyReading(t *testing.T) {
 	b.restoreContextUsage(context.Background())
 	if u, ok := b.ContextUsage("S"); !ok || u.ModelID != "pending-model" {
 		t.Fatalf("after a restart: %+v ok=%v", u, ok)
+	}
+}
+
+// The daemon's own lifecycle: a reading stored before the outage, a payload the proxy kept during it, and Start brings the
+// newer one in. Mutation: Start does not call the catch-up → the old reading stays (red).
+func TestPendingStatuslines_StartCatchesUp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.db")
+	a := moduleOn(t, path)
+	newTestModule(t)
+	seedRootWithIdentity(t, a, "%1", "cc", 101, "st-101", "S")
+	withLivePids(t, map[int]string{101: "st-101"})
+	a.recordContextUsage(statusline("S", 10, "model-before-the-outage"))
+	a.flushContextUsage()
+
+	b := moduleOn(t, path)
+	b.pendingDir = filepath.Join(t.TempDir(), "statusline-pending")
+	statuspending.Write(b.pendingDir, statusline("S", 20, "model-during-the-outage"), usageNow()+1000)
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { b.Stop(context.Background()) })
+	if u, ok := b.ContextUsage("S"); !ok || u.ModelID != "model-during-the-outage" {
+		t.Fatalf("after Start: %+v ok=%v", u, ok)
 	}
 }
 

@@ -165,6 +165,25 @@ func TestLoad_DeletesTheInvalid(t *testing.T) {
 	}
 }
 
+// The cost on the render path: what a delivery that worked adds. Reported in the PR.
+func BenchmarkCleanupOnSuccess_NoDirectory(b *testing.B) {
+	dir := filepath.Join(b.TempDir(), "missing")
+	raw := payload(sidA, "m")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		CleanupOnSuccess(dir, raw, 1)
+	}
+}
+
+func BenchmarkCleanupOnSuccess_DirectoryNoFile(b *testing.B) {
+	dir := b.TempDir()
+	raw := payload(sidA, "m")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		CleanupOnSuccess(dir, raw, 1)
+	}
+}
+
 func TestRemove(t *testing.T) {
 	dir := t.TempDir()
 	Write(dir, payload(sidA, "m"), 1)
