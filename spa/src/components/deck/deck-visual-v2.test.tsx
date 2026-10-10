@@ -3,7 +3,10 @@
 // normal face, the input is terminal-style. jsdom does not lay out, so this pins the class and CSS contract.
 import { describe, it, expect, afterEach } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
+// node:fs / node:path / __dirname are untyped under tsconfig.app.json (deliberately no @types/node; see src/index.css.test.ts); they work at runtime.
+// @ts-expect-error node:fs is untyped here.
 import { readFileSync } from 'node:fs'
+// @ts-expect-error node:path is untyped here.
 import { resolve } from 'node:path'
 import type { ReactNode } from 'react'
 import { FoldContext } from '../room/fold-context'
@@ -17,6 +20,7 @@ afterEach(cleanup)
 const sys = (kind: string, detail?: unknown) => ({ type: 'system', id: `s-${kind}`, at: 1, index: 0, kind, detail }) as unknown as SystemItem
 const user = (over: Partial<UserItem> = {}) => ({ type: 'user', id: 'u', at: new Date(2026, 9, 10, 1, 56).getTime(), index: 0, text: 'hi', source: 'user', ...over }) as UserItem
 
+// @ts-expect-error __dirname is untyped here.
 const read = (rel: string) => readFileSync(resolve(__dirname, rel), 'utf8')
 const css = read('../../index.css')
 const themes = read('../../styles/themes.css')

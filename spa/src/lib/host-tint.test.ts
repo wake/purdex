@@ -1,12 +1,16 @@
 // The tint is a fixed share of the host colour over the theme's surface, so the worst case is a preset colour on a theme: --text-primary
 // must stay at 4.5:1 on every one. The theme values are read from themes.css, so a retuned theme is checked, not a copy of it.
 import { describe, it, expect } from 'vitest'
+// node:fs / node:path / __dirname are untyped under tsconfig.app.json (deliberately no @types/node; see src/index.css.test.ts); they work at runtime.
+// @ts-expect-error node:fs is untyped here.
 import { readFileSync } from 'node:fs'
+// @ts-expect-error node:path is untyped here.
 import { resolve } from 'node:path'
 import { HOST_COLOR_PRESETS } from './host-color'
 import { hexToRgb } from './color-space'
 import { HOST_TINT_PCT, hostTintBackground } from './host-tint'
 
+// @ts-expect-error __dirname is untyped here.
 const themes = readFileSync(resolve(__dirname, '../styles/themes.css'), 'utf8')
 const tokenOf = (theme: string, token: string): string => {
   const from = themes.indexOf(`[data-theme="${theme}"] {`)
