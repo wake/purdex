@@ -23,14 +23,18 @@ export interface UnattendedHostEntry {
   state?: UnattendedState
 }
 
+/** The host's capability flags: all of them follow one rule (unknown on disconnect / before a probe / after a failed probe). */
+const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport'] as const
+
 interface UnattendedStoreState {
   byHost: Record<string, UnattendedHostEntry>
   setSupport: (hostId: string, support: UnattendedSupport) => void
   setQuotaSupport: (hostId: string, support: UnattendedSupport) => void
   setMaxMembersSupport: (hostId: string, support: UnattendedSupport) => void
   setEditSupport: (hostId: string, support: UnattendedSupport) => void
-  /** The edit capability is unknown again (the connection it was learned on is gone); a no-op when never learned. */
-  invalidateEditSupport: (hostId: string) => void
+  /** Every capability flag of the host (unattended, relay quota, max members, edit) is unknown again: the connection they were
+   *  learned on is gone, and a daemon that came back may have lost one (#2309). A no-op for a flag never learned. */
+  invalidateSupport: (hostId: string) => void
   applyState: (hostId: string, state: UnattendedState) => void
   forgetHost: (hostId: string) => void
   reset: () => void
@@ -53,10 +57,14 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
     if (cur?.maxMembersSupport === maxMembersSupport) return s
     return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', maxMembersSupport } } }
   }),
-  invalidateEditSupport: (hostId) => set((s) => {
+  invalidateSupport: (hostId) => set((s) => {
     const cur = s.byHost[hostId]
-    if (cur?.editSupport === undefined || cur.editSupport === 'unknown') return s
-    return { byHost: { ...s.byHost, [hostId]: { ...cur, editSupport: 'unknown' } } }
+    if (!cur) return s
+    const known = (v: UnattendedSupport | undefined) => v !== undefined && v !== 'unknown'
+    if (!SUPPORT_FLAGS.some((k) => known(cur[k]))) return s
+    const next = { ...cur }
+    for (const k of SUPPORT_FLAGS) if (next[k] !== undefined) next[k] = 'unknown' // the switch's `state` is not a capability: it stays
+    return { byHost: { ...s.byHost, [hostId]: next } }
   }),
   setEditSupport: (hostId, editSupport) => set((s) => {
     const cur = s.byHost[hostId]
