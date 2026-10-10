@@ -69,9 +69,39 @@ describe('buildNotificationContent', () => {
     expect(result).toEqual({ title: 'my-session', body: 'Claude wants to run Bash' })
   })
 
-  it('collapses consecutive newlines in body', () => {
+  // #2144: the body is the phone push's lock-screen line (lib/notification-normalise.ts), not the raw Markdown
+  it('puts a multi-line body on one line', () => {
     const result = buildNotificationContent('Stop', { last_assistant_message: 'Line 1\n\n\nLine 2\n\nLine 3' }, 'my-session')
-    expect(result).toEqual({ title: 'my-session', body: 'Line 1\nLine 2\nLine 3' })
+    expect(result).toEqual({ title: 'my-session', body: 'Line 1 Line 2 Line 3' })
+  })
+
+  it('drops Markdown syntax from a Stop body', () => {
+    const msg = '## Result\n\n- **fast**: `go test` passes\n- see [the docs](https://example.com)\n\n> note'
+    expect(buildNotificationContent('Stop', { last_assistant_message: msg }, 's')?.body).toBe('Result fast: go test passes see the docs note')
+  })
+
+  it('cuts a long body at 240 runes with an ellipsis, like the push', () => {
+    const body = buildNotificationContent('Stop', { last_assistant_message: 'x'.repeat(1000) }, 's')!.body
+    expect(Array.from(body)).toHaveLength(241)
+    expect(body.endsWith('…')).toBe(true)
+  })
+
+  it('a message that is only Markdown falls back to the default text', () => {
+    expect(buildNotificationContent('Stop', { last_assistant_message: '```\n```\n**' }, 's')?.body).toBe('Task completed')
+    expect(buildNotificationContent('Notification', { message: '> ' }, 's')?.body).toBe('New notification')
+  })
+
+  it('a Notification message and a StopFailure error are cleaned the same way', () => {
+    expect(buildNotificationContent('Notification', { message: '**Claude** needs\nyour `OK`' }, 's')?.body).toBe('Claude needs your OK')
+    expect(buildNotificationContent('StopFailure', { error_details: '**rate** limit\n(429)' }, 's')?.body).toBe('rate limit (429)')
+    expect(buildNotificationContent('StopFailure', { error_details: '', error: 'boom' }, 's')?.body).toBe('boom')
+    expect(buildNotificationContent('StopFailure', { error_details: '```', error: '' }, 's')?.body).toBe('Task stopped unexpectedly')
+  })
+
+  it('the title is cleaned and cut like the push title (direction marks dropped, 120 runes)', () => {
+    expect(buildNotificationContent('Stop', { last_assistant_message: 'ok' }, 'a‮b​c')?.title).toBe('abc')
+    const title = buildNotificationContent('Stop', { last_assistant_message: 'ok' }, 't'.repeat(300))!.title
+    expect(Array.from(title)).toHaveLength(121)
   })
 
   // W2 transition: cc broadcasts PdxXxx; buildNotificationContent normalizes
