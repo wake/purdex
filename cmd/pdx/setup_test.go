@@ -209,13 +209,19 @@ func TestSetupRelayGuard(t *testing.T) {
 			t.Fatalf("code = %d", code)
 		}
 	})
-	t.Run("a daemon that cannot say goes ahead", func(t *testing.T) {
-		for _, srv := range []*httptest.Server{serve(404, `nope`), serve(500, `{}`), serve(200, `not json`)} {
-			if code := setupRelayGuard(srv.Client(), srv.URL, "", false, io.Discard); code != ExitOK {
-				t.Errorf("code = %d", code)
+	t.Run("a daemon that answers but cannot say refuses, and --force goes ahead", func(t *testing.T) {
+		for _, srv := range []*httptest.Server{serve(401, `nope`), serve(500, `{}`), serve(200, `not json`)} {
+			var stderr bytes.Buffer
+			if code := setupRelayGuard(srv.Client(), srv.URL, "", false, &stderr); code != ExitRefused || !strings.Contains(stderr.String(), "--force") {
+				t.Errorf("code = %d, stderr %q", code, stderr.String())
+			}
+			if code := setupRelayGuard(srv.Client(), srv.URL, "", true, io.Discard); code != ExitOK {
+				t.Errorf("--force: code = %d", code)
 			}
 			srv.Close()
 		}
+	})
+	t.Run("a daemon that does not answer at all goes ahead (nothing runs to strand)", func(t *testing.T) {
 		dead := httptest.NewServer(http.NotFoundHandler())
 		url := dead.URL
 		dead.Close()

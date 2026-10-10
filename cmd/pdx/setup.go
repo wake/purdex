@@ -146,8 +146,8 @@ func localSetup(agentType string, remove bool) error {
 }
 
 // setupRelayGuard is ExitRefused (and says why on stderr) while the daemon reports relays under way, unless force.
-// It guards only what it can see: a daemon that does not answer, or answers without the list (an older one), is
-// not a reason to refuse.
+// A daemon that does not answer at all is not a reason to refuse (setup also installs before any daemon runs, and a
+// daemon that is down holds no mod to strand); one that answers an error is: the relays are then unknown.
 func setupRelayGuard(client *http.Client, baseURL, token string, force bool, stderr io.Writer) int {
 	if force {
 		return ExitOK
@@ -165,7 +165,13 @@ func setupRelayGuard(client *http.Client, baseURL, token string, force bool, std
 	}
 	defer resp.Body.Close()
 	var inf team.InflightResponse
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&inf) != nil || inf.RelaysActive == 0 {
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&inf) != nil {
+		// A daemon that answered but could not say (a storage failure, a wrong token, garbage): the relays are
+		// unknown, and unknown is not zero.
+		fmt.Fprintf(stderr, "setup: the daemon answered %d and could not say whether a relay is under way.\nrun again with --force to go ahead anyway.\nrelay_active\n", resp.StatusCode)
+		return ExitRefused
+	}
+	if inf.RelaysActive == 0 {
 		return ExitOK
 	}
 	var b strings.Builder
