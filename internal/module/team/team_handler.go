@@ -562,6 +562,9 @@ func (m *Module) matchRemoteMember(t team.Team, hostAlias, sess string) (memberR
 			hits = append(hits, r)
 		}
 	}
+	if len(hits) == 0 { // no row holds the ref now: a relay may have moved a member off it (D7)
+		hits = m.formerRefMatch(rows, t.ID, hostID, ref)
+	}
 	if len(hits) > 1 { // a session released and adopted again leaves two rows with one ref: the one in play is the member
 		var live []memberRow
 		for _, h := range hits {

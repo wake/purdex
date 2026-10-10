@@ -12,6 +12,7 @@ const (
 	FactEnded       = "ended"        // the membership ended on the member host
 	FactRegistered  = "registered"   // a forwarded spawn's session registered: it is a member now (spec §6.3)
 	FactSpawnFailed = "spawn_failed" // a forwarded spawn ended without a member; Reason says why (a SpawnReason*)
+	FactMoved       = "moved"        // the member's session moved to a new session id on the member host (a person's /relay; member relay spec D4)
 )
 
 // Reasons of an `ended` fact.
@@ -36,6 +37,12 @@ type TeamFact struct {
 	ProcStart     string `json:"proc_start,omitempty"`
 	Pane          string `json:"pane,omitempty"`
 	Title         string `json:"title,omitempty"`
+	// moved: the member's new session and ref (PID / ProcStart / Pane / Title above are its current ones), the relay op that
+	// moved it when the lead started that relay ("" for a person's own /relay), and whether a person typed it.
+	OpID       string `json:"op_id,omitempty"`
+	NewSession string `json:"new_session_id,omitempty"`
+	NewRef     string `json:"new_ref,omitempty"`
+	Manual     bool   `json:"manual,omitempty"`
 }
 
 // TeamFactAnswer is the 200 body: the receiver's host id (the sender checks it is who it addressed) and the fact's
