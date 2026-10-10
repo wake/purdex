@@ -4,8 +4,9 @@
 //
 // Needs a daemon with `conversations.scope.v1`: on an older one the tab only explains that and calls nothing.
 // Rows and actions are the 已退出 / 已消失 ones (`ConversationRow`, `rebuildConversation`).
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConversations, type UseConversations } from '../../hooks/useConversations'
+import { useListRetry, type ListRetry } from '../../hooks/useListRetry'
 import { useHostExecutions } from '../../hooks/useHostExecutions'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { selectConversationsScope, selectSessionTitleSupported, useNexHostStore } from '../../stores/useNexHostStore'
@@ -53,21 +54,25 @@ function SectionHeading({ id, label }: { id: string; label: string }) {
 interface ListNoticesProps {
   prefix: string
   list: UseConversations
+  /** The section's retry (#1952): its button stays while the retry runs and focus is handed on when it settles. */
+  retry: ListRetry
 }
 
 /** Unavailable / error+retry / loading lines of one conversations section (the 已退出 tab's, per section). */
-function ListNotices({ prefix, list }: ListNoticesProps) {
+function ListNotices({ prefix, list, retry }: ListNoticesProps) {
   const t = useI18nStore((s) => s.t)
-  const { page, phase, error, unavailable, refetch } = list
+  const { page, phase, unavailable } = list
+  const { busy: retrying, error, onRetry, bindButton } = retry
   return (
     <>
       {unavailable ? (
         <p data-testid={`${prefix}-unavailable`} className="text-xs text-text-muted">{t('settings.worker.conversations.unavailable')}</p>
-      ) : phase === 'error' && (
+      ) : (phase === 'error' || retrying) && (
         <div data-testid={`${prefix}-error`} className="flex items-center gap-2 text-xs text-red-400">
           <span className="flex-1 min-w-0 truncate">{t('newtab.workers.error', { error: error ?? '' })}</span>
-          <button type="button" data-testid={`${prefix}-retry`} onClick={refetch}
-            className="shrink-0 px-1.5 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer">
+          <button ref={bindButton} type="button" data-testid={`${prefix}-retry`} onClick={onRetry}
+            disabled={retrying} aria-busy={retrying}
+            className="shrink-0 px-1.5 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-50 disabled:cursor-default">
             {t('newtab.workers.retry')}
           </button>
         </div>
@@ -91,6 +96,9 @@ function TestSections({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
   const ended = useConversations(hostId, 'ended', 'test')
   const gone = useConversations(hostId, 'gone', 'test')
+  // Each section's retry keeps keyboard focus (#1952, as 已退出 / 已消失 do: #1627 C).
+  const { busy: endedBusy, error: endedRetryError, onRetry: onEndedRetry, bindButton: bindEndedButton, bindList: bindEndedList } = useListRetry(ended.phase, ended.error, ended.refetch)
+  const { busy: goneBusy, error: goneRetryError, onRetry: onGoneRetry, bindButton: bindGoneButton, bindList: bindGoneList } = useListRetry(gone.phase, gone.error, gone.refetch)
   const exec = useHostExecutions(hostId)
   const titleSupported = useNexHostStore(selectSessionTitleSupported(hostId))
   const [query, setQuery] = useState('')
@@ -102,6 +110,8 @@ function TestSections({ hostId }: { hostId: string }) {
 
   const endedHome = ended.page?.home ?? ''
   const goneHome = gone.page?.home ?? ''
+  // Nothing at all to show (both sections empty): a successful retry has no list to hand focus to, so it goes to this line (#1952).
+  const bindEmptyLine = useCallback((el: HTMLElement | null) => { bindEndedList(el); bindGoneList(el) }, [bindEndedList, bindGoneList])
   const endedRootError = ended.page?.root_error
   const goneRootError = gone.page?.root_error
   const endedRows = useMemo(
@@ -144,9 +154,10 @@ function TestSections({ hostId }: { hostId: string }) {
       />
 
       {endedRows.length > 0 && <SectionHeading id="exited" label={t('settings.worker.test.section.exited')} />}
-      <ListNotices prefix="worker-test-exited" list={ended} />
+      <ListNotices prefix="worker-test-exited" list={ended}
+        retry={{ busy: endedBusy, error: endedRetryError, onRetry: onEndedRetry, bindButton: bindEndedButton, bindList: bindEndedList }} />
       {endedRows.length > 0 && (
-        <div role="list" aria-busy={ended.phase === 'loading' ? 'true' : undefined} className="flex flex-col">
+        <div ref={bindEndedList} tabIndex={-1} role="list" aria-busy={ended.phase === 'loading' ? 'true' : undefined} className="flex flex-col outline-none">
           {endedRows.map((row) => (
             <ConversationRow key={row.session_id} row={row} state="ended" home={endedHome} now={now}
               disabled={!!endedRootError} onRebuild={() => rebuildConversation(hostId, row)} />
@@ -155,9 +166,10 @@ function TestSections({ hostId }: { hostId: string }) {
       )}
 
       {goneRows.length > 0 && <SectionHeading id="gone" label={t('settings.worker.test.section.gone')} />}
-      <ListNotices prefix="worker-test-gone" list={gone} />
+      <ListNotices prefix="worker-test-gone" list={gone}
+        retry={{ busy: goneBusy, error: goneRetryError, onRetry: onGoneRetry, bindButton: bindGoneButton, bindList: bindGoneList }} />
       {goneRows.length > 0 && (
-        <div role="list" aria-busy={gone.phase === 'loading' ? 'true' : undefined} className="flex flex-col">
+        <div ref={bindGoneList} tabIndex={-1} role="list" aria-busy={gone.phase === 'loading' ? 'true' : undefined} className="flex flex-col outline-none">
           {goneRows.map((row) => (
             <ConversationRow key={row.session_id} row={row} state="gone" home={goneHome} now={now} disabled />
           ))}
@@ -171,7 +183,7 @@ function TestSections({ hostId }: { hostId: string }) {
       )}
 
       {allEmpty && (
-        <p data-testid="worker-test-empty" className="text-xs text-text-muted">{t('settings.worker.test.empty')}</p>
+        <p ref={bindEmptyLine} tabIndex={-1} data-testid="worker-test-empty" className="text-xs text-text-muted outline-none">{t('settings.worker.test.empty')}</p>
       )}
     </div>
   )
