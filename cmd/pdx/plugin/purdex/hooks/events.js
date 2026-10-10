@@ -32,7 +32,7 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, moreOf, nextBody, parseNext, refusedBody, resultBody, shouldAsk } from './workbook.js'
+import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -366,13 +366,14 @@ async function wbLoop($) {
 }
 
 // wbRun runs one job and reports it; true when the daemon said another job is ready. A turn or re-write job is one
-// $.model.complete; a refresh (this mod does not announce workbook.refresh, so none should come) or a kind it does not know
-// is answered `refused`. A call the engine refuses rejects: that is reported as `refused` too.
+// $.model.complete; a refresh job is one $.model.fork (the conversation itself, a cache read while the main thread's cache is
+// warm); a kind it does not know is answered `refused`. A call the engine refuses rejects: that is reported as `refused` too.
 async function wbRun($, job, gen) {
   // gen only decides whether to go on asking afterwards (see the end)
   const jobId = job.id
   let bodyText
-  const req = job.kind === 'turn' || job.kind === 'rewrite' ? completeRequest(job.complete) : null
+  const fork = job.kind === 'refresh' ? forkRequest(job.fork) : null
+  const req = job.kind === 'turn' || job.kind === 'rewrite' ? completeRequest(job.complete) : fork ? fork.req : null
   if (!req) {
     bodyText = refusedBody(ev.stream, jobId)
   } else {
@@ -382,14 +383,15 @@ async function wbRun($, job, gen) {
     const ctl = typeof AbortController === 'function' ? new AbortController() : null
     let cut = null
     const deadline = new Promise((resolve) => {
-      cut = $.clock.after((req.timeoutMs ?? DEFAULT_TIMEOUT_MS) + MODEL_SLACK_MS, () => {
+      cut = $.clock.after((fork ? fork.timeoutMs : req.timeoutMs ?? DEFAULT_TIMEOUT_MS) + MODEL_SLACK_MS, () => {
         if (ctl) ctl.abort()
         resolve({ isAnswered: false, reason: 'aborted', usage: {} })
       })
     })
     let r = null
     try {
-      const call = ctl ? $.model.complete(req, { signal: ctl.signal }) : $.model.complete(req)
+      // $.model.fork takes no signal: the deadline above reports a fork that outlives it, the call itself runs on
+      const call = fork ? $.model.fork(req) : ctl ? $.model.complete(req, { signal: ctl.signal }) : $.model.complete(req)
       r = await Promise.race([call, deadline])
     } catch (err) {
       log($, 'workbook call refused: ' + String(err))
@@ -402,6 +404,22 @@ async function wbRun($, job, gen) {
   const out = await wbRequest($, RESULT_URL, bodyText, 0)
   if (!out || out === TIMEOUT || !out.res) return false
   return gen === wb.gen && moreOf(out.res)
+}
+
+// ---- /workbook refresh (session workbook spec §5.6) ----
+
+const WORKBOOK_USAGE = '用法：/workbook refresh — 依整段對話重整這個 session 的工作簿（目前狀況與待辦）。'
+
+// workbookCommand answers `/workbook refresh`: it asks the daemon to queue the refresh and, once queued, asks `next` at
+// once (from a timer: wbAsk never runs the loop inside the hook). The person waits for the line, so the one daemon call is
+// awaited here, bounded by wbRequest's deadline.
+async function workbookCommand($, e) {
+  if (String(e.args ?? '').trim() !== 'refresh') return { text: WORKBOOK_USAGE }
+  if (!ev.on) return { text: '工作簿重整：這個 session 沒有連上 daemon。' }
+  const out = await wbRequest($, REFRESH_URL, refreshBody(ev.stream, ev.sid), 0)
+  const notice = refreshNotice(out && out !== TIMEOUT ? out.res : null)
+  if (notice.queued) wbAsk($, 0)
+  return { text: notice.text }
 }
 
 // ---- the lead's footer (TI-5b, spec §4.10) ----
@@ -512,6 +530,8 @@ async function startReporter($, e) {
   ev.background = null
   ev.monitors.clear()
   ev.on = true
+  await $.command.register({ name: 'workbook', description: 'Purdex 工作簿：refresh 依整段對話重整目前狀況與待辦', argumentHint: 'refresh' })
+    .catch((err) => log($, '/workbook not registered: ' + String(err)))
   enqueue($, 'session.start', { cwd: e.cwd, surface: e.surface })
   ev.beat = $.clock.every(HEARTBEAT_MS, () => beatTick($))
   forgetTeam($) // a second session.start in this load: nothing read for an earlier session stays
@@ -822,4 +842,5 @@ export function registerEvents(on) {
   on('classic.Stop', onStop).catch(($, e, next) => next(e))
   on('ui.render', { component: 'ToolUse' }, onToolUseRender).catch(($, e, next) => next(e))
   on('ui.render', { component: 'SessionMode' }, onSessionModeRender).catch(($, e, next) => next(e))
+  on('command.run', { command: 'workbook' }, workbookCommand)
 }
