@@ -291,6 +291,18 @@ const PresenceWindow = 30 * time.Second
 // SessionLive reports whether a stream that is not ended has sid as its current session and sent a batch within
 // `within`: the session's mod is there now.
 func (r *Registry) SessionLive(sid string, within time.Duration) bool {
+	if sid == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.now()
+	for _, s := range r.streams {
+		in := &s.info
+		if in.SID == sid && !in.Ended && now.Sub(in.LastSeen) <= within {
+			return true
+		}
+	}
 	return false
 }
 
