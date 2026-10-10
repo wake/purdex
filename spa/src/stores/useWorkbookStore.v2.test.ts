@@ -300,6 +300,21 @@ describe('refreshAvailable', () => {
     expect(conv()?.refreshAvailable).toBe(false)
   })
 
+  it('of two answers in flight (different queries), the one whose request started later wins whichever lands last', async () => {
+    st().setSupport('h1', V2)
+    const defer = () => { let r!: (v: ConversationResult) => void; const p = new Promise<ConversationResult>((res) => { r = res }); return { p, r } }
+    const older = defer(); const newer = defer()
+    fetchConversation.mockReturnValueOnce(older.p).mockReturnValueOnce(newer.p)
+    const a = st().loadSeat('h1', 's1') // limit 1, started first
+    const b = st().openWorkbook('h1', 's1') // limit 20, started second
+    newer.r(page([entry(3)], { refreshAvailable: true, todos: { open: [todo(5)], done: [] } }))
+    await b
+    older.r(page([entry(3)], { refreshAvailable: false, todos: { open: [], done: [] } })) // computed earlier, lands later
+    await a
+    expect(conv()?.refreshAvailable).toBe(true)
+    expect(ids(conv()?.todos.open)).toEqual([5])
+  })
+
   it('an answer that started after the last event does apply', async () => {
     st().setSupport('h1', V2)
     st().applyRefreshAvailable('h1', { convKey: 'c1', available: false })

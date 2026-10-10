@@ -63,6 +63,8 @@ export interface ConvState {
   refreshAvailable: boolean
   /** Store clock stamp of the last `workbook.refresh_available` event: an answer whose request started before it is older than the event. */
   availAt: number
+  /** The newest request stamp whose answer was applied as a snapshot (todos, refreshAvailable): an answer from an older request is not applied over it. */
+  appliedAt: number
 }
 
 /** What `requestRefresh` answers; it never throws. `unsupported`: the host does not list `workbook.v2` (nothing was posted). */
@@ -118,7 +120,7 @@ interface WorkbookState {
 const NO_SUPPORT: WorkbookSupport = { v1: false, v2: false }
 const emptyConv = (): ConvState => ({
   status: '', statusAt: 0, entries: [], oldestId: null, exhausted: false, loading: false, touched: 0, missing: false,
-  todos: emptyTodos(), refreshAvailable: false, availAt: 0,
+  todos: emptyTodos(), refreshAvailable: false, availAt: 0, appliedAt: 0,
 })
 
 /** Refresh pending, derived: the conversation holds a refresh entry that is still pending (see the header). */
@@ -228,8 +230,10 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
           exhausted: older || c.oldestId === null ? page.entries.length < q.limit : c.exhausted,
           loading: false, missing: false,
           // v2 parts (null from a v1 daemon: left as they were)
-          todos: page.todos ? snapshotTodos(c.todos, page.todos, startedAt) : c.todos,
-          refreshAvailable: page.refreshAvailable !== null && c.availAt < startedAt ? page.refreshAvailable : c.refreshAvailable,
+          // An answer older than one already applied (two queries in flight, the later request landed first) only adds done todos.
+          todos: page.todos ? (startedAt < c.appliedAt ? upsertTodos(c.todos, page.todos.done) : snapshotTodos(c.todos, page.todos, startedAt)) : c.todos,
+          refreshAvailable: page.refreshAvailable !== null && c.availAt < startedAt && startedAt >= c.appliedAt ? page.refreshAvailable : c.refreshAvailable,
+          appliedAt: Math.max(c.appliedAt, startedAt),
         }
       }),
     }))
