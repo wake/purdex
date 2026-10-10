@@ -256,6 +256,11 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// as a paste and auto-detects image file paths → [Image #N] chip.
 	// inject=0|false (the iOS deck / chat, which sends the path in its own message) only saves.
 	inject := uploadInjectWanted(r.FormValue("inject"))
+	if body.Aborted() { // revoked while the file was being saved: nothing is injected into a pane
+		os.Remove(destPath)
+		http.Error(w, `{"error":"token revoked"}`, http.StatusUnauthorized)
+		return
+	}
 	if inject {
 		if err := m.core.Tmux.PasteText(tmuxName, destPath); err != nil {
 			os.Remove(destPath) // Clean up orphaned file
