@@ -115,6 +115,7 @@ func (n *Normalizer) Feed(offset int64, line []byte) ([]Change, error) {
 	if len(line) > maxLineBytes {
 		// Too big to decode (a huge inline image): the offset has moved on,
 		// the content is dropped and counted.
+		n.compactID = ""
 		n.skip("line:oversize")
 		return nil, nil
 	}
@@ -125,6 +126,7 @@ func (n *Normalizer) Feed(offset int64, line []byte) ([]Change, error) {
 // skipOversize accounts for a line of size bytes (without its newline) that
 // was never read because it is over the line cap.
 func (n *Normalizer) skipOversize(size int64) {
+	n.compactID = ""
 	n.next += size + 1
 	n.stats.Lines++
 	n.skip("line:oversize")
@@ -208,6 +210,7 @@ func (n *Normalizer) skipDyn(reason string) {
 func (n *Normalizer) row(off int64, line []byte) {
 	l, ok := decodeLine(line)
 	if !ok {
+		n.compactID = ""
 		n.stats.BadJSON++
 		return
 	}
@@ -224,6 +227,10 @@ func (n *Normalizer) row(off int64, line []byte) {
 		}
 		return
 	}
+	// A compaction's summary is the row right after its boundary: any other row, accepted or skipped, ends the wait (the
+	// title rows above, which carry no conversation, do not).
+	n.compactCarry, n.compactID = n.compactID, ""
+	defer func() { n.compactCarry = "" }()
 	if l.sidechain && !n.sub {
 		n.skip("sidechain")
 		return
@@ -250,9 +257,6 @@ func (n *Normalizer) row(off int64, line []byte) {
 		return
 	}
 	n.entryBefore = n.entry
-	// A compaction's summary is the row right after its boundary: any other row ends the wait.
-	n.compactCarry, n.compactID = n.compactID, ""
-	defer func() { n.compactCarry = "" }()
 	switch l.typ {
 	case "user":
 		n.userRow(&l, off)

@@ -440,3 +440,49 @@ func TestDiffCreated_OnlyWrite(t *testing.T) {
 		}
 	}
 }
+
+// Every line that is consumed after the boundary ends the wait for its summary - skipped, oversize, undecodable, sidechain,
+// unknown or uuid-less ones too - while a replayed line or a refused gap (nothing consumed) does not (codex critic).
+// Mutation gate: clear only in the accepted-row path → red.
+func TestCompactedSummary_ConsumedLinesEndTheWait(t *testing.T) {
+	boundary := func() *Normalizer {
+		return norm(t, userRow("u1", 1, "/compact"), compactBoundary("cb1", 2, "manual"))
+	}
+	summarised := func(n *Normalizer) bool {
+		feed(t, n, compactSummary("cs1", 2.1, "late"))
+		return n.Stats().Skipped["compact_summary"] == 0
+	}
+	for name, between := range map[string]func(*Normalizer){
+		"an oversize line fed": func(n *Normalizer) {
+			if _, err := n.Feed(n.Next(), []byte(strings.Repeat("x", 4<<20))); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"an oversize line skipped": func(n *Normalizer) {
+			if err := n.Skip(n.Next(), 99); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"bad json":     func(n *Normalizer) { feed(t, n, []byte(`{not json`)) },
+		"a sidechain":  func(n *Normalizer) { feed(t, n, userRow("sc1", 2.05, "side", sidechain())) },
+		"no uuid":      func(n *Normalizer) { feed(t, n, []byte(`{"type":"user","message":{"content":"x"}}`)) },
+		"unknown type": func(n *Normalizer) { feed(t, n, []byte(`{"type":"mystery","uuid":"m1"}`)) },
+	} {
+		n := boundary()
+		between(n)
+		if summarised(n) {
+			t.Errorf("%s: the summary was attached to the old boundary", name)
+		}
+	}
+	// nothing consumed: a replay, a refused gap
+	n := boundary()
+	if _, err := n.Feed(0, userRow("u1", 1, "/compact")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.Feed(n.Next()+5, []byte(`{}`)); err == nil {
+		t.Fatal("a gap was accepted")
+	}
+	if !summarised(n) {
+		t.Error("a replay or a refused gap ended the wait")
+	}
+}
