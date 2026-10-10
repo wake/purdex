@@ -68,4 +68,8 @@ type NormalizedEvent struct {
 	// emit slot's high-water mark as Seq (not a new one), so a client takes it
 	// as the state at that point, not as the next live frame.
 	Snapshot bool `json:"snapshot,omitempty"`
+	// FromProxy marks a Stop / StopFailure of a proxy subagent (a codex or opencode that the pane's main agent runs as
+	// a tool): it ends a tool, not the main agent's turn, so a client raises no desktop notification and no unread
+	// for it. Only present when true; the status itself is unchanged.
+	FromProxy bool `json:"from_proxy,omitempty"`
 }

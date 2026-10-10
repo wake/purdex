@@ -1,7 +1,7 @@
 // spa/src/hooks/useAgentNotifications.ts — agent-store events → desktop notifications (persistent dedup, gate,
 // content); split from useNotificationDispatcher (#1690).
 import { useEffect } from 'react'
-import { useAgentStore } from '../stores/useAgentStore'
+import { isProxyStop, useAgentStore } from '../stores/useAgentStore'
 import { isAgentVisibleInActiveTab } from '../lib/active-session'
 import { splitCompositeKey } from '../lib/composite-key'
 import { useI18nStore } from '../stores/useI18nStore'
@@ -67,6 +67,7 @@ export function useAgentNotifications(): void {
           hasTab,
           settings,
           notificationSilent: event.detail?.notification_silent === true,
+          fromProxy: isProxyStop(event),
           errorString,
         })) continue
 
