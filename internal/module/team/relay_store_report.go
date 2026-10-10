@@ -253,6 +253,17 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	if r.Expect != nil && (cur.State != r.Expect.State || cur.UpdatedAt != r.Expect.UpdatedAt || cur.SeenAt != r.Expect.SeenAt) {
 		return cur, ReportBadTransition, nil // progress landed since the caller looked: it wins
 	}
+	if r.State == team.RelayClaimed && cur.Kind == team.RelayKindSelf && cur.State == team.RelayAwaitingApproval {
+		// MR-1: a kill may start (ClaimMemberKilling) while the card is open; cleared moves active rows only, so a claim
+		// of a killing member's op would strand the seat. Decided here, under the write lock, not by the caller's earlier read.
+		var one int
+		switch err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state = 'killing'`, cur.SessionID).Scan(&one); {
+		case err == nil:
+			r.State, r.Reason = team.RelayCancelled, team.ErrMemberRelayIsLeads
+		case !errors.Is(err, sql.ErrNoRows):
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: killing member: %w", id, err)
+		}
+	}
 	if cur.State == r.State {
 		return cur, ReportNoop, nil
 	}
@@ -284,8 +295,25 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 			VALUES (?, ?, ?, ?, ?)`, r.NewSessionID, cur.SessionID, cur.Ref, id, r.At); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: lineage: %w", id, err)
 		}
+		// A self relay that moves a MEMBER row (only a person's manual relay can: MR-1, D3) carries that row's team, so the
+		// lead can be told when it is done. The team is the OLD session's row, read before the move: a lead's or a solo
+		// session's self op has no member row (no stamp), and the target's own role never counts.
+		var memberTeam string
+		if cur.Kind == team.RelayKindSelf {
+			err := tx.QueryRow(`SELECT m.team_id FROM team_members m JOIN teams t ON t.id = m.team_id
+				WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0`, cur.SessionID).Scan(&memberTeam)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: member team: %w", id, err)
+			}
+		}
 		if err := moveTeamRoles(tx, cur.SessionID, r); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: %w", id, err)
+		}
+		if memberTeam != "" {
+			if _, err := tx.Exec(`UPDATE relay_ops SET team_id = ? WHERE id = ?`, memberTeam, id); err != nil {
+				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: stamp team: %w", id, err)
+			}
+			next.TeamID = memberTeam
 		}
 	}
 	return next, ReportApplied, nil

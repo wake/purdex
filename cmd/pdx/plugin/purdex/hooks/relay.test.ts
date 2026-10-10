@@ -31,7 +31,7 @@ test('an interactive session.start says hello through the pdx and to the daemon 
   const argvs = world(on)
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await argvs.settle()
-  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '3', '--agent', 'cc', '--config', '/tmp/pdx b/config.toml']])
+  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '4', '--agent', 'cc', '--config', '/tmp/pdx b/config.toml']])
 })
 
 // Mutation gate: always append --config → this test fails.
@@ -39,7 +39,7 @@ test('a pdx.json without config adds no --config (pdx falls back to its default)
   const argvs = world(on, { sid: 'sid-1' }, '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx"}')
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await argvs.settle()
-  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '3', '--agent', 'cc']])
+  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '4', '--agent', 'cc']])
 })
 
 test('a headless session.start (claude -p) calls nothing', async ($, on) => {
@@ -59,7 +59,7 @@ test('after /clear the mod says hello again with the new session id', async ($, 
   ids.sid = 'sid-2'
   await $.classic.SessionStart({ source: 'clear' })
   await argvs.settle()
-  expect(argvs.map(sub)).toEqual(['relay hello --session sid-1 --version 3 --agent cc --config /tmp/pdx b/config.toml', 'relay hello --session sid-2 --version 3 --agent cc --config /tmp/pdx b/config.toml'])
+  expect(argvs.map(sub)).toEqual(['relay hello --session sid-1 --version 4 --agent cc --config /tmp/pdx b/config.toml', 'relay hello --session sid-2 --version 4 --agent cc --config /tmp/pdx b/config.toml'])
 })
 
 test('a SessionStart that is not a clear adds no hello (startup / resume are session.start’s)', async ($, on) => {
@@ -722,7 +722,7 @@ for (const reporter of REPORTER) {
     await clock.settle()
     const calls = f.argvs.map(sub)
     expect(calls).toContain('relay report op-1 cleared --new-session sid-new')
-    expect(calls.filter((c) => c.startsWith('relay hello')).at(-1)).toBe('relay hello --session sid-new --version 3 --agent cc')
+    expect(calls.filter((c) => c.startsWith('relay hello')).at(-1)).toBe('relay hello --session sid-new --version 4 --agent cc')
     await clock.advance(50)
     expect(f.submits.length).toBe(2)
     expect(f.submits[1].text.split('\n')[0]).toBe('↪ 接手自 _abc123')
@@ -1025,7 +1025,7 @@ for (const reporter of REPORTER) {
     await f.clock.settle()
     await turnAndSettle($, f, 't3')
     expect(count(f, 'begin')).toBe(2)
-    expect(f.argvs.map(sub).filter((c) => c.startsWith('relay hello'))).toEqual(['relay hello --session sid-old --version 3 --agent cc', 'relay hello --session sid-2 --version 3 --agent cc'])
+    expect(f.argvs.map(sub).filter((c) => c.startsWith('relay hello'))).toEqual(['relay hello --session sid-old --version 4 --agent cc', 'relay hello --session sid-2 --version 4 --agent cc'])
     if (!reporter) return expect(f.posts).toEqual([])
     expect(await switches(f)).toEqual([['sid-2', { prev_sid: 'sid-old', source: 'clear' }]])
   })
@@ -2673,6 +2673,26 @@ for (const args of ['', 'now', '  now ']) {
     expect(count(f, 'wait')).toBe(1) // the same wait loop the threshold path runs
   })
 }
+
+// MR-1 (U-M1): a person's /relay is the daemon's `--manual` begin; the threshold's own begin never is.
+// Mutation gates: begin() always manual → the threshold half is red; never manual → the /relay half is red.
+test('/relay now sends --manual', async ($, on) => {
+  const f = nowWorld(on, () => ({ exitCode: 0, stdout: BEGIN_OK }))
+  await start($, f)
+  await relayCmd($, 'now')
+  const manual = f.argvs.filter((a) => a[1] === 'relay' && a[2] === 'begin')
+  expect(manual.length).toBe(1)
+  expect(manual[0]).toContain('--manual')
+})
+
+test('the threshold begin does not send --manual', async ($, on) => {
+  const g = relayWorld(on, { pdx: pdxWith([]), usage: AT72 })
+  await start($, g)
+  await turnAndSettle($, g, 't1')
+  const auto = g.argvs.filter((a) => a[1] === 'relay' && a[2] === 'begin')
+  expect(auto.length).toBe(1)
+  expect(auto[0]).not.toContain('--manual')
+})
 
 // Answers, and starts nothing: the cases of §2b. The state returns to idle (a second /relay asks again),
 // and the +10 guard is not set (a 72 % turn still asks). Mutation gate: set lastAskPct in relayNow → red.

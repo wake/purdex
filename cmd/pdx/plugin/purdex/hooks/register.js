@@ -52,7 +52,7 @@ import { registerLease } from './lease.js'
 import { CONSUMED, claimOp, controlOp, leadLine, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
-const VERSION = '3' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
+const VERSION = '4' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
@@ -647,8 +647,12 @@ async function maybeBegin($) {
 // maps to a message: { kind: 'opened' } | { kind: 'abandoned' } | { kind: 'unreachable' } |
 // { kind: 'refused', code } (a 409 with the daemon's code: member_relay_is_leads,
 // self_relay_off, self_relay_paused, relay_open, …) | { kind: 'failed', detail }.
-async function begin($, sid, gen, u, adopted) {
+//
+// `manual` is a person's /relay (MR-1, U-M1): `--manual` lifts a member's refusals at the daemon, which still opens a
+// card a person must approve. The threshold path (maybeBegin) never passes it.
+async function begin($, sid, gen, u, adopted, manual = false) {
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
+  if (manual) argv.push('--manual')
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
   const now = await $.session.id().catch(() => undefined)
   const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
@@ -823,7 +827,7 @@ async function relayNow($) {
     begun.resolve(undefined)
     return { text: RELAY_NOT_STARTED }
   }
-  const out = await begin($, sid, gen, u, begun.resolve).finally(() => begun.resolve(undefined))
+  const out = await begin($, sid, gen, u, begun.resolve, true).finally(() => begun.resolve(undefined))
   switch (out.kind) {
     case 'opened': return { text: '已送出接力申請（context ' + u.percent + '%），等待核准' }
     case 'unreachable': return { text: RELAY_UNREACHABLE }

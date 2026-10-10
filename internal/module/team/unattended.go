@@ -203,6 +203,9 @@ func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.
 		// The chain has no quota left (the rule is on): nothing was written; the caller opens the request for a person
 		// exactly as with unattended mode off. The sweeps hold it quietly and approve it once the quota is raised.
 		return false, true
+	case errors.Is(err, ErrManualMemberNeedsPerson):
+		// A member's manual relay is a person's to approve (MR-1): nothing was written; the request opens as a card.
+		return false, false
 	case errors.Is(err, ErrMemberRelayIsLeads):
 		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
 		return true, false
