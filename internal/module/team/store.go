@@ -458,6 +458,8 @@ type Close struct {
 	UnexpiredAt int64
 	// Reason is the code an adopt request cancelled at approve carries (close_reason); empty for every other close.
 	Reason string
+	// Forward, set by approveMemberRelay for a remote member's op, queues the `relay` command in the approve's transaction.
+	Forward func(tx *sql.Tx, op team.RelayOp, at int64) error
 	// Auto marks a close the DAEMON makes itself (U23: autoApprove, beginApproved, the create-time approves). It is an
 	// internal flag, set only by daemonClose — nothing an HTTP body carries can produce it — and it is the truth of
 	// "automatic": the stored decided_by of an Auto close is always UnattendedClient, and a close that is not Auto

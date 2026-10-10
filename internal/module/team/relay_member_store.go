@@ -27,19 +27,16 @@ func (s *Store) CreateMemberRelayOp(op team.RelayOp, gate MemberRelayGate) (team
 	return s.createMemberRelayOp(op, gate, nil)
 }
 
-// ErrRemoteRelayHeld: the lead's pool is spent out and the op would wait for a card; for a member of another host the card
-// path is not built yet (MR-3a-2), so the create is refused whole.
-var ErrRemoteRelayHeld = errors.New("a remote member's relay would wait for a card")
-
 // CreateRemoteMemberRelayOp is CreateMemberRelayOp for a member that lives on another host (member relay spec §3.4): the
 // membership read accepts the remote row of op.HostID, the op is inserted `forwarded` and enqueue — the `relay` command —
 // runs in the SAME transaction, after the gate (which may spend the pool) and the insert. Any failure writes nothing and spends
-// nothing. A gate that holds the op for a card fails with ErrRemoteRelayHeld.
-func (s *Store) CreateRemoteMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enqueue func(tx *sql.Tx, op team.RelayOp) error) (team.RelayOp, bool, error) {
+// nothing. A gate that holds the op for a card leaves it `awaiting_approval` with no command: the approve forwards it
+// (CloseMemberRelayApproved).
+func (s *Store) CreateRemoteMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enqueue func(tx *sql.Tx, op team.RelayOp, at int64) error) (team.RelayOp, bool, error) {
 	return s.createMemberRelayOp(op, gate, enqueue)
 }
 
-func (s *Store) createMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enqueue func(tx *sql.Tx, op team.RelayOp) error) (team.RelayOp, bool, error) {
+func (s *Store) createMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enqueue func(tx *sql.Tx, op team.RelayOp, at int64) error) (team.RelayOp, bool, error) {
 	fail := func(err error) (team.RelayOp, bool, error) {
 		return team.RelayOp{}, false, fmt.Errorf("create member relay %s: %w", op.ID, err)
 	}
@@ -72,23 +69,16 @@ func (s *Store) createMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enque
 			return fail(err)
 		}
 	}
-	if enqueue != nil {
-		if needs {
-			return fail(ErrRemoteRelayHeld)
-		}
+	forward := enqueue != nil && !needs // a held op waits for its card; the approve forwards it
+	if forward {
 		op.State = team.RelayForwarded
 	}
 	if err := insertRelayOpIn(tx, op); err != nil {
 		return fail(err)
 	}
-	if enqueue != nil {
-		if err := enqueue(tx, op); err != nil {
+	if forward {
+		if err := s.enqueueRelayIn(tx, enqueue, op, op.CreatedAt); err != nil {
 			return fail(err)
-		}
-		if s.afterRelayCommandEnqueue != nil {
-			if err := s.afterRelayCommandEnqueue(); err != nil {
-				return fail(err)
-			}
 		}
 	}
 	if s.afterMemberOpInsert != nil {
@@ -142,4 +132,53 @@ func (s *Store) MarkRelaySeen(id string, at int64) (op team.RelayOp, seen bool, 
 		s.notifyOp(id)
 	}
 	return op, n == 1, nil
+}
+
+// enqueueRelayIn runs the `relay` command's enqueue in tx (the op's transaction), then the test seam.
+func (s *Store) enqueueRelayIn(tx *sql.Tx, enqueue func(tx *sql.Tx, op team.RelayOp, at int64) error, op team.RelayOp, at int64) error {
+	if err := enqueue(tx, op, at); err != nil {
+		return err
+	}
+	if s.afterRelayCommandEnqueue != nil {
+		return s.afterRelayCommandEnqueue()
+	}
+	return nil
+}
+
+// isRemoteOp says whether the op is a lead's relay of a member that lives on another host.
+func (s *Store) isRemoteOp(op team.RelayOp) bool {
+	return op.HostID != "" && s.localHostID != "" && op.HostID != s.localHostID
+}
+
+// forwardAwaitingOpIn moves a remote op awaiting_approval → forwarded and queues its `relay` command, in tx. at is when the
+// command is queued (its created_at, which the member host's age check reads).
+func (s *Store) forwardAwaitingOpIn(tx *sql.Tx, forward func(tx *sql.Tx, op team.RelayOp, at int64) error, op team.RelayOp, at int64) error {
+	if forward == nil {
+		return fmt.Errorf("op %s is a remote member's: it needs its relay command to be forwarded", op.ID)
+	}
+	r, err := tx.Exec(`UPDATE relay_ops SET state = 'forwarded', updated_at = ? WHERE id = ? AND state = 'awaiting_approval'`, at, op.ID)
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n != 1 {
+		return fmt.Errorf("op %s is no longer awaiting approval", op.ID)
+	}
+	return s.enqueueRelayIn(tx, forward, op, at)
+}
+
+// ForwardAwaitingOp is the boot's repair of a remote op whose approved row did not carry it along: forwarded, with its command.
+func (s *Store) ForwardAwaitingOp(op team.RelayOp, forward func(tx *sql.Tx, op team.RelayOp, at int64) error, at int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := s.forwardAwaitingOpIn(tx, forward, op, at); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.notifyOp(op.ID)
+	return nil
 }

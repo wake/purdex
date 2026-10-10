@@ -68,6 +68,19 @@ func (o remoteOutcomes) ApplyOutcome(tx *sql.Tx, c commandRow, res peersmod.Call
 			return failRemoteSpawnIn(tx, c.MK, c.HostID, res.Code, now)
 		}
 		return nil
+	case CmdVoid:
+		// the void of a relay command decides the op (D9); the void of an adopt or a spawn changes nothing on a member row
+		var body team.TeamCommand
+		if json.Unmarshal(c.Body, &body) == nil && body.CommandID != "" {
+			var kind string
+			if err := tx.QueryRow(`SELECT kind FROM team_commands WHERE id = ?`, body.CommandID).Scan(&kind); err == nil && kind == CmdRelay && !refused {
+				voided, err := scanCommand(tx.QueryRow(`SELECT `+commandCols+` FROM team_commands WHERE id = ?`, body.CommandID))
+				if err != nil {
+					return err
+				}
+				return o.relayVoidAnswered(tx, c, voided, res.Body, now)
+			}
+		}
 	}
 	// end, lead_moved, void (and spawn, X4b): nothing on a member row; a refusal is logged once
 	if refused {
