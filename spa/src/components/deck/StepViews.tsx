@@ -1,12 +1,16 @@
 // spa/src/components/deck/StepViews.tsx — a step as the deck draws it (U3 spec §4 table): edit and execute are cards, read
 // / search / fetch / other / task are one line, a question step is its options card. Every one ends in the fixed status
-// slot. Nothing here nests a subagent's steps: a task line hands its step to `onOpenSubagent` (the right panel, U3-3).
+// slot. A task line hands its step to `onOpenSubagent` (the right panel, U3-3) and its chevron unfolds the agent's own steps in place.
 import { FilePlus, FileText, Globe, MagnifyingGlass, PencilSimple, Robot, Terminal, Wrench, Question } from '@phosphor-icons/react'
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
+import { useNow } from '../../hooks/useNow'
 import { useI18nStore } from '../../stores/useI18nStore'
+import type { SubagentState } from '../../stores/useConversationStore'
+import { formatDuration } from '../../lib/conversations/turn-line'
 import { capDiff, readRange, toActivityDiff } from '../../lib/conversations/deck-format'
-import type { StepItem } from '../../lib/conversations/types'
+import type { ConversationItem, StepItem } from '../../lib/conversations/types'
 import ToolDiffView from '../room/ToolDiffView'
+import { useFold } from '../room/fold-context'
 import { OutputFold } from './OutputFold'
 import { StatusSlot } from './StatusSlot'
 
@@ -15,9 +19,39 @@ export interface StepActions {
   onShowAll?: (step: StepItem) => void
   /** A subagent line was clicked. */
   onOpenSubagent?: (step: StepItem) => void
+  /** Inline subagent steps (c9d9c7-54 pt 4): what the conversation holds of each agent (by agent id), the loader, and how to draw its items. */
+  subagents?: Record<string, SubagentState>
+  loadSubagent?: (agentId: string) => void
+  renderSubagent?: (items: ConversationItem[]) => ReactNode
 }
 
 const ICON = 'shrink-0 text-text-muted'
+
+/** A subagent's time: how long it ran (done), or how long so far (running, ticking). Nothing when the conversation does not say. */
+function SubagentTime({ step }: { step: StepItem }) {
+  const t = useI18nStore((s) => s.t)
+  const running = step.status === 'running'
+  const now = useNow(running)
+  const ms = running ? (step.started_at > 0 ? now - step.started_at : null) : (typeof step.duration_ms === 'number' ? step.duration_ms : null)
+  if (ms === null) return null
+  return <span data-testid="subagent-time" className="shrink-0 text-xs tabular-nums text-text-muted">{formatDuration(Math.max(0, ms), t)}</span>
+}
+
+/** A subagent's own steps, one level in: read on demand the first time it is opened, kept by the conversation. */
+function SubagentSteps({ step, actions }: { step: StepItem; actions: StepActions }) {
+  const t = useI18nStore((s) => s.t)
+  const agentId = step.subagent?.agent_id
+  const load = actions.loadSubagent
+  useEffect(() => { if (agentId && load) load(agentId) }, [agentId, load])
+  const st = agentId ? actions.subagents?.[agentId] : undefined
+  const items = st?.state === 'ready' ? st.answer?.items : undefined
+  let body: ReactNode
+  if (st?.state === 'error') body = <div data-testid="subagent-error" className="text-xs text-status-error">{t('panel.subagent.error')}</div>
+  else if (items === undefined) body = <div data-testid="subagent-loading" className="text-xs text-text-muted">{t('deck.loading')}</div>
+  else if (items.length === 0) body = <div data-testid="subagent-empty" className="text-xs text-text-muted">{t('panel.subagent.empty')}</div>
+  else body = actions.renderSubagent ? actions.renderSubagent(items as ConversationItem[]) : null
+  return <div data-testid="subagent-steps" className="ml-3 mt-1 space-y-1 border-l border-border-subtle pl-3">{body}</div>
+}
 
 /** 「顯示全部」 only exists when someone can show it: no handler, no button. */
 const showAll = (step: StepItem, actions: StepActions) => actions.onShowAll && (() => actions.onShowAll!(step))
@@ -142,18 +176,7 @@ export function StepView({ step, actions = {} }: { step: StepItem; actions?: Ste
           extra={r ? <span data-testid="read-range" className="shrink-0 text-xs text-text-muted">{t('deck.read.range', { a: r.from, b: r.to })}</span> : null} />
       )
     }
-    case 'task': {
-      const sub = step.subagent
-      return (
-        <button type="button" data-testid="deck-step-task" data-status={step.status} onClick={() => actions.onOpenSubagent?.(step)}
-          className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-border-default bg-surface-secondary/50 px-3 py-1.5 text-left text-sm hover:bg-surface-secondary">
-          <Robot className={ICON} size={16} />
-          <span className="shrink-0 text-text-muted">{sub?.type ? t('deck.step.task_type', { type: sub.type }) : t('deck.step.task')}</span>
-          <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{sub?.description ?? step.summary}</span>
-          <StatusSlot step={step} />
-        </button>
-      )
-    }
+    case 'task': return <TaskStep step={step} actions={actions} />
     case 'search':
       return <OutputLine step={step} icon={<MagnifyingGlass className={ICON} size={16} />} verb={t('deck.step.search')} actions={actions} />
     case 'fetch':
@@ -170,5 +193,35 @@ function OutputLine({ step, icon, verb, actions }: { step: StepItem; icon: React
       extra={where ? <span data-testid="search-where" className="shrink-0 truncate text-xs text-text-muted">{where}</span> : null}>
       {step.output && <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={step.status === 'failed' ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />}
     </Line>
+  )
+}
+
+/** An Agent/Task step: its type, description, time and state; the line opens the right panel, the chevron unfolds the agent's own steps in place. */
+function TaskStep({ step, actions }: { step: StepItem; actions: StepActions }) {
+  const t = useI18nStore((s) => s.t)
+  const sub = step.subagent
+  const [open, toggle] = useFold(`${step.id}:sub`)
+  // Only a step that names its agent and a deck that can load it has anything to unfold.
+  const unfoldable = Boolean(sub?.agent_id && actions.loadSubagent)
+  return (
+    <div data-testid="deck-step-task-wrap">
+      <div className="flex items-stretch gap-1">
+        {unfoldable && (
+          <button type="button" data-testid="deck-step-task-toggle" aria-expanded={open} aria-label={t('deck.step.task_toggle')} onClick={toggle}
+            className="flex w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-xs text-text-muted hover:bg-surface-secondary hover:text-text-primary">
+            {open ? '▾' : '▸'}
+          </button>
+        )}
+        <button type="button" data-testid="deck-step-task" data-status={step.status} onClick={() => actions.onOpenSubagent?.(step)}
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border border-border-default bg-surface-secondary/50 px-3 py-1.5 text-left text-sm hover:bg-surface-secondary">
+          <Robot className={ICON} size={16} />
+          <span className="shrink-0 text-text-muted">{sub?.type ? t('deck.step.task_type', { type: sub.type }) : t('deck.step.task')}</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{sub?.description ?? step.summary}</span>
+          <SubagentTime step={step} />
+          <StatusSlot step={step} />
+        </button>
+      </div>
+      {open && unfoldable && <SubagentSteps step={step} actions={actions} />}
+    </div>
   )
 }
