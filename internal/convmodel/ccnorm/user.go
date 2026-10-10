@@ -39,6 +39,12 @@ func sourceKind(l *rawLine) string {
 	return normKind(l.str(l.PromptSource))
 }
 
+// pluginAsUser: the row's origin says a plugin submitted the text as the person's own (origin.asUser).
+func pluginAsUser(l *rawLine) bool {
+	o, ok := parseObject(l.Origin)
+	return ok && jsonTrue(o.get("asUser"))
+}
+
 func normKind(k string) string { return strings.ReplaceAll(k, "_", "-") }
 
 // humanKind reports whether a row of this kind was typed by a person (or
@@ -101,6 +107,11 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 		src, text = convmodel.SourceTask, taskText(text)
 	case kind == "scheduled":
 		src = convmodel.SourceScheduled
+	case kind == "plugin" && pluginAsUser(l):
+		// a mod's $.prompt.submit({text, asUser: true}): the person's own words sent on their behalf (U3-0b: the Apps'
+		// submit goes this way). The text is bare; a plugin prompt the model reads framed ("The X plugin sent a message")
+		// is not the person's and stays skipped.
+		src = convmodel.SourceUser
 	case humanKind(kind):
 		var handled bool
 		src, text, handled = n.humanTags(l, off, text)

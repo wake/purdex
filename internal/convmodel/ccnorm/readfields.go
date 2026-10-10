@@ -43,6 +43,7 @@ var ReadFields = []ReadField{
 	{Row: "user", Path: "origin"},
 	{Row: "user", Path: "origin.kind"},
 	{Row: "user", Path: "origin.name"},
+	{Row: "user", Path: "origin.asUser"},
 	{Row: "user", Path: "turnOrigin"},
 	{Row: "user", Path: "promptSource"},
 	{Row: "user", Path: "toolDenialKind"},

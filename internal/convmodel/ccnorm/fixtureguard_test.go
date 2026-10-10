@@ -658,7 +658,7 @@ func diffSets(before, after map[string]bool) string {
 // names their directory.
 const rawSample = `{"type":"custom-title","customTitle":"t"}
 {"type":"ai-title","aiTitle":"t"}
-{"type":"user","uuid":"u1","timestamp":"2026-10-07T13:00:00.000Z","isSidechain":false,"isMeta":false,"isCompactSummary":false,"entrypoint":"cli","agentId":"a1","origin":{"kind":"human","name":"n","producer":"p"},"turnOrigin":"human","promptSource":"typed","parentUuid":"p","message":{"role":"user","content":[{"type":"text","text":"hi"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}
+{"type":"user","uuid":"u1","timestamp":"2026-10-07T13:00:00.000Z","isSidechain":false,"isMeta":false,"isCompactSummary":false,"entrypoint":"cli","agentId":"a1","origin":{"kind":"human","name":"n","producer":"p","asUser":true},"turnOrigin":"human","promptSource":"typed","parentUuid":"p","message":{"role":"user","content":[{"type":"text","text":"hi"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}
 {"type":"user","uuid":"u2","interruptedMessageId":"m1","message":{"content":"[Request interrupted by user]"}}
 {"type":"assistant","uuid":"a1","timestamp":"2026-10-07T13:00:01.000Z","thinkingDurationMs":5,"effort":"high","perTurnEffort":"high","isApiErrorMessage":false,"error":"x","requestId":"r","message":{"model":"m","id":"msg","usage":{},"content":[{"type":"thinking","thinking":"t","signature":"s"},{"type":"text","text":"x"},{"type":"tool_use","id":"toolu_1","name":"Edit","input":{"file_path":"/work/a","old_string":"a","new_string":"b"},"caller":{}}]}}
 {"type":"assistant","uuid":"a2","message":{"model":"m","content":"plain string content"}}
