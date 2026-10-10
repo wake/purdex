@@ -68,6 +68,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"POST /api/push/devices", "GET /api/push/devices", "DELETE /api/push/devices/{device_id}",
 		"GET /api/profiles", "GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
 		"PUT /api/devices/self",
+		"POST /api/agent/upload",
 		"GET /api/workbook/conversations/{provider}/{session_id}", "GET /api/workbook/entries",
 		"GET /api/workbook/conversations/{provider}/{session_id}/todos", // not the refresh: that is the Mac App's
 	}
@@ -121,6 +122,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
 		{"GET", "/api/push/devices"}, {"GET", "/api/profiles"}, {"GET", "/api/profiles/p_0123456789ab"}, {"PUT", "/api/devices/self"},
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
+		{"POST", "/api/agent/upload"},
 	} {
 		assert.False(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}

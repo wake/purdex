@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/wake/purdex/internal/fsutil"
 	"github.com/wake/purdex/internal/middleware"
@@ -56,7 +57,7 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save file with atomic dedup. Strip directory components to prevent path traversal.
-	dst, filename, err := fsutil.CreateDedupFile(dir, filepath.Base(header.Filename))
+	dst, filename, err := fsutil.CreateDedupFile(dir, safeUploadName(header.Filename))
 	if err != nil {
 		log.Printf("[agent] create file: %v", err)
 		http.Error(w, `{"error":"cannot save file"}`, http.StatusInternalServerError)
@@ -75,18 +76,43 @@ func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// Inject path into tmux pane via paste-buffer with bracketed paste markers.
 	// Using paste (not send-keys) so Claude Code's TUI recognises the event
 	// as a paste and auto-detects image file paths → [Image #N] chip.
-	if err := m.core.Tmux.PasteText(tmuxName, destPath); err != nil {
-		os.Remove(destPath) // Clean up orphaned file
-		log.Printf("[agent] paste-text: %v", err)
-		http.Error(w, `{"error":"inject failed"}`, http.StatusInternalServerError)
-		return
+	// inject=0|false (the iOS deck / chat, which sends the path in its own message) only saves.
+	inject := uploadInjectWanted(r.FormValue("inject"))
+	if inject {
+		if err := m.core.Tmux.PasteText(tmuxName, destPath); err != nil {
+			os.Remove(destPath) // Clean up orphaned file
+			log.Printf("[agent] paste-text: %v", err)
+			http.Error(w, `{"error":"inject failed"}`, http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"filename": filename,
-		"injected": true,
+		"path":     destPath,
+		"injected": inject,
 	})
+}
+
+// uploadInjectWanted: the optional "inject" form field; absent or anything but 0/false means paste (the Mac behaviour).
+func uploadInjectWanted(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "0", "false":
+		return false
+	}
+	return true
+}
+
+// safeUploadName reduces a client-supplied filename to a single plain path element: directory parts are dropped
+// (both separators), and names that would resolve to a directory ("", ".", "..") or hold a NUL become "upload".
+func safeUploadName(name string) string {
+	name = strings.ReplaceAll(name, "\\", "/")
+	base := filepath.Base(name)
+	if base == "" || base == "." || base == ".." || base == "/" || strings.ContainsRune(base, 0) {
+		return "upload"
+	}
+	return base
 }
 
 // resolveSessionName maps a pdx session code to the tmux session name.

@@ -51,6 +51,8 @@ var deviceAllowed = map[string]bool{
 	"PUT /api/profiles/{id}/sections/{section}": true,
 	// devices
 	"PUT /api/devices/self": true,
+	// agent upload: the iOS deck / chat attachments (the phone sends inject=0 and carries the returned path in its own message)
+	"POST /api/agent/upload": true,
 	// session workbook: read-only
 	"GET /api/workbook/conversations/{provider}/{session_id}":       true,
 	"GET /api/workbook/entries":                                     true,
