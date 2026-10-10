@@ -256,7 +256,6 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
 }
 
 function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props & { hdr: HeaderHandlers }) {
-  const t = useI18nStore((s) => s.t)
   const seats = [team.lead, ...team.members]
   // The header row holds as many cells as it really has room for; the rest wrap into a region UNDER it, so the first row
   // (capsule, cells, buttons) never changes height. The room is measured (useCellCapacity); where nothing can be measured
