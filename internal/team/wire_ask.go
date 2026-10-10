@@ -102,8 +102,14 @@ type AskWaitResponse struct {
 	Reason string        `json:"reason,omitempty"`
 }
 
-// AskReportRequest is POST /api/ask/report/{id} (the mod: the native dialog settled).
+// AskReportRequest is POST /api/ask/report/{id} (the mod: the native dialog settled) and POST /api/ask/report (the same report
+// by the tool use, for a mod that never learned the row's id because `pdx ask begin` had not answered yet, #1848).
 type AskReportRequest struct {
 	State State         `json:"state"` // answered_local | dismissed
 	Hook  *HookDecision `json:"hook,omitempty"`
+	// by tool use only: the newest hook row of SessionID's ToolUseID created at or after Since (unix ms, taken by the mod before
+	// it called begin, so an earlier row of the same tool use is never the one reported). None yet → 404 not_found (the CLI retries).
+	SessionID string `json:"session_id,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	Since     int64  `json:"since,omitempty"`
 }
