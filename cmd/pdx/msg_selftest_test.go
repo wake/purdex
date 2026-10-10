@@ -415,6 +415,7 @@ func TestSelftest_TmuxArgvGoldens(t *testing.T) {
 		"--input-format", "stream-json", "--output-format", "stream-json",
 		"--name", name, "--settings", `{"crossSessionInbound":"accept"}`,
 		"--no-session-persistence",
+		"--model", "haiku", "--effort", "low", // #2387: the small model with little thinking; Opus took 25 s+ to get through ToolSearch
 		"--disallowedTools", "Bash"}
 	if got := f.calls("new-session"); len(got) != 1 || !equalArgs(got[0].args, wantNew) {
 		t.Errorf("new-session argv = %v\nwant %q", got, wantNew)
@@ -1133,7 +1134,9 @@ func TestSelftest_WrittenFrame(t *testing.T) {
 	}
 	// #1631: the text names the native tool and rules out the pdx / Bash
 	// detour a global CLAUDE.md may suggest, so the reply leg is exercised.
-	if want := "PDX_SELFTEST " + nonce + ": reply to the sender using the SendMessage tool (not pdx, not Bash), with exactly: PONG " + nonce; wr.Text != want {
+	// #2387: SendMessage is a deferred tool in current Claude Code; the text tells the model to load it first (ToolSearch
+	// select:SendMessage) instead of spending a reasoning turn finding out.
+	if want := "PDX_SELFTEST " + nonce + ": first load the SendMessage tool with ToolSearch (query select:SendMessage), then reply to the sender using the SendMessage tool (not pdx, not Bash), with exactly: PONG " + nonce; wr.Text != want {
 		t.Errorf("text = %q, want %q", wr.Text, want)
 	}
 }
