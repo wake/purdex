@@ -12,6 +12,8 @@ import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 import { clearAllDrafts, draftKey, readDraft } from '../../lib/conversations/draft-memory'
 import { clearAllAttachments, readAttachments } from '../../lib/conversations/attachment-memory'
+import { clearAllUploads } from '../../lib/conversations/attachment-upload'
+import { releasePane } from '../../lib/conversations/pane-release'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), upload: vi.fn() }))
@@ -41,7 +43,7 @@ beforeEach(() => {
   useShownHostsStore.setState({ ids: [H] })
   useHostConfigStore.setState({ byHost: {}, ensureLoaded: async () => {} })
 })
-afterEach(() => { cleanup(); clearAllDrafts(); clearAllAttachments(); clearAllSendQueues() })
+afterEach(() => { cleanup(); clearAllUploads(); clearAllDrafts(); clearAllAttachments(); clearAllSendQueues() })
 
 describe('session input attachments across tab switches', () => {
   it('keeps the draft text and the chips when the reader switches to another tab and back', async () => {
@@ -60,5 +62,68 @@ describe('session input attachments across tab switches', () => {
     rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
     expect(box().value).toBe('look\n[Image: source: /up/dev001/shot.png]')
     expect(screen.getByTestId('attachment-chip')).toHaveTextContent('shot.png')
+  })
+
+  // an upload settled by hand
+  function pending() {
+    let resolve!: (v: { filename: string; path: string }) => void
+    let progress: ((p: number) => void) | undefined
+    mocks.upload.mockImplementationOnce((_h: string, _f: File, _s: string, o: { onProgress?: (p: number) => void }) => {
+      progress = o.onProgress
+      return new Promise((res) => { resolve = res })
+    })
+    return { resolve: (path: string) => resolve({ filename: 'shot.png', path }), progress: (p: number) => progress?.(p) }
+  }
+  const pasteShot = () => fireEvent.paste(box(), { clipboardData: { files: [new File(['x'], 'shot.png', { type: 'image/png' })], getData: () => '', types: ['Files'] } })
+  const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+  it('an upload keeps running while the tab is away: it lands, and the chip and draft are there on return', async () => {
+    const up = pending()
+    const { rerender } = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    pasteShot()
+    await flush()
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('session-input')).toBeNull()
+    up.resolve('/up/dev001/shot.png')
+    await flush()
+    expect(readDraft(key)).toBe('[Image: source: /up/dev001/shot.png]')
+    rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(screen.getByTestId('attachment-chip')).toHaveTextContent('shot.png')
+  })
+
+  it('switching away and back while it is still uploading shows it, and Enter stays held back', async () => {
+    const up = pending()
+    const { rerender } = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    fireEvent.change(box(), { target: { value: 'hello' } })
+    pasteShot()
+    await flush()
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    act(() => up.progress(55))
+    expect(screen.getByTestId('attachment-uploading')).toHaveTextContent('55%')
+    fireEvent.keyDown(box(), { key: 'Enter' })
+    expect(screen.queryByTestId('queued-message')).toBeNull()
+    expect(screen.getByTestId('session-input-hint')).toBeInTheDocument()
+    up.resolve('/up/dev001/shot.png')
+    await flush()
+    expect(screen.queryByTestId('attachment-uploading')).toBeNull()
+    expect(box().value).toBe('hello\n[Image: source: /up/dev001/shot.png]')
+  })
+
+  it('releasing the pane while the tab is away aborts the upload and writes nothing back', async () => {
+    const up = pending()
+    const { rerender } = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    pasteShot()
+    await flush()
+    const signal = (mocks.upload.mock.calls[0][3] as { signal: AbortSignal }).signal
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(signal.aborted).toBe(false) // leaving did not abort
+    releasePane(paneId)
+    expect(signal.aborted).toBe(true)
+    up.resolve('/up/dev001/shot.png')
+    await flush()
+    expect(readDraft(key)).toBeUndefined()
+    expect(readAttachments(key)).toEqual([])
   })
 })

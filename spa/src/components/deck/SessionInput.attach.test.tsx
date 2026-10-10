@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { SessionInput } from './SessionInput'
 import { clearAllDrafts, draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearAllAttachments, readAttachments } from '../../lib/conversations/attachment-memory'
+import { clearAllUploads } from '../../lib/conversations/attachment-upload'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
 import { releasePane, retireStaleSessions } from '../../lib/conversations/pane-release'
 
@@ -39,7 +40,7 @@ beforeEach(() => {
   mocks.fetch.mockReset().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ status: 'accepted' }))))
   mocks.upload.mockReset().mockImplementation((_h: string, f: File) => Promise.resolve({ filename: f.name, path: `/up/dev001/${f.name}` }))
 })
-afterEach(() => { cleanup(); clearAllDrafts(); clearAllAttachments(); clearAllSendQueues() })
+afterEach(() => { cleanup(); clearAllUploads(); clearAllDrafts(); clearAllAttachments(); clearAllSendQueues() })
 
 describe('SessionInput attachments', () => {
   it('pasting an image uploads it to the tmux session code and writes [Image: source: path] into the draft', async () => {
@@ -189,13 +190,64 @@ describe('SessionInput attachments', () => {
     expect(screen.getAllByTestId('attachment-chip')).toHaveLength(1)
   })
 
-  it('an upload that resolved but lands after unmount rebuilds nothing', async () => {
+  it('leaving the pane does not cancel an upload: it lands in the memories and the next mount shows it', async () => {
+    const up = pendingUpload()
     const view = render(ui())
     paste({ files: [png()] })
+    await flush()
     view.unmount()
+    up.resolve({ filename: 'shot.png', path: '/up/dev001/shot.png' })
+    await flush()
+    expect(readDraft(KEY)).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(readAttachments(KEY)).toHaveLength(1)
+    render(ui())
+    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(screen.getByTestId('attachment-chip')).toBeInTheDocument()
+  })
+
+  it('a remounted input still shows the upload on its way, and still holds Enter back', async () => {
+    const up = pendingUpload()
+    const view = render(ui())
+    fireEvent.change(box(), { target: { value: 'hi' } })
+    paste({ files: [png()] })
+    await flush()
+    view.unmount()
+    render(ui())
+    act(() => up.progress(70))
+    expect(screen.getByTestId('attachment-uploading')).toHaveTextContent('70%')
+    fireEvent.keyDown(box(), { key: 'Enter' })
+    expect(screen.getByTestId('session-input-hint')).toHaveTextContent('still uploading')
+    up.resolve({ filename: 'shot.png', path: '/up/dev001/shot.png' })
+    await flush()
+    expect(screen.queryByTestId('attachment-uploading')).toBeNull()
+    expect(box().value).toBe('hi\n[Image: source: /up/dev001/shot.png]') // the live input picked the landing up
+  })
+
+  it('a failure while the input was away is shown when it comes back', async () => {
+    const up = pendingUpload()
+    const view = render(ui())
+    paste({ files: [png()] })
+    await flush()
+    view.unmount()
+    up.reject(kindErr('too_large', 413))
+    await flush()
+    render(ui())
+    expect(screen.getByTestId('session-input-hint')).toHaveTextContent('File too large')
+  })
+
+  it('a release aborts a running upload (away or not) and what lands after it is not written back', async () => {
+    const up = pendingUpload()
+    const view = render(ui())
+    paste({ files: [png()] })
+    await flush()
+    view.unmount()
+    releasePane('p1')
+    up.resolve({ filename: 'shot.png', path: '/up/dev001/shot.png' })
     await flush()
     expect(readDraft(KEY)).toBeUndefined()
     expect(readAttachments(KEY)).toEqual([])
+    render(ui())
+    expect(screen.queryByTestId('attachment-uploading')).toBeNull()
   })
 
   it('an upload that lands after the pane was released (still mounted) rebuilds nothing', async () => {
@@ -234,6 +286,70 @@ describe('SessionInput attachments', () => {
     fireEvent.keyDown(box(), { key: 'Enter' })
     expect(screen.queryByTestId('attachment-chip')).toBeNull()
     expect(readAttachments(KEY)).toEqual([])
+  })
+
+  describe('drag highlight', () => {
+    const zone = () => screen.getByTestId('session-input-drop')
+    const files = { types: ['Files'], files: [] as File[] }
+    const lit = () => zone().getAttribute('data-dragging')
+    it('lights up for files, stays lit between children, goes out when the last leave comes', () => {
+      render(ui())
+      expect(lit()).toBe('false')
+      fireEvent.dragEnter(zone(), { dataTransfer: files })
+      expect(lit()).toBe('true')
+      expect(zone().className).toContain('border-dashed')
+      fireEvent.dragEnter(box(), { dataTransfer: files }) // into the textarea
+      fireEvent.dragLeave(zone(), { dataTransfer: files }) // out of the wrapper
+      expect(lit()).toBe('true')
+      fireEvent.dragLeave(box(), { dataTransfer: files })
+      expect(lit()).toBe('false')
+    })
+    it('drop clears it', () => {
+      render(ui())
+      fireEvent.dragEnter(zone(), { dataTransfer: files })
+      fireEvent.drop(zone(), { dataTransfer: files })
+      expect(lit()).toBe('false')
+    })
+    it('Esc clears it', () => {
+      render(ui())
+      fireEvent.dragEnter(zone(), { dataTransfer: files })
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(lit()).toBe('false')
+    })
+    it('a text drag does not light it, nor does a missing session code', () => {
+      render(ui())
+      fireEvent.dragEnter(zone(), { dataTransfer: { types: ['text/plain'], files: [] } })
+      expect(lit()).toBe('false')
+      cleanup()
+      render(<SessionInput paneKey="p1" hostId="h" sessionId={SID} capabilities={{ send: 'prompt' }} onSwitchToTerminal={() => {}} />)
+      fireEvent.dragEnter(zone(), { dataTransfer: files })
+      expect(lit()).toBe('false')
+    })
+  })
+
+  describe('box height', () => {
+    let scrollHeight = 0
+    beforeEach(() => {
+      vi.spyOn(HTMLTextAreaElement.prototype, 'scrollHeight', 'get').mockImplementation(() => scrollHeight)
+    })
+    afterEach(() => vi.restoreAllMocks())
+    it('is at least 2 lines, follows the content, and stops at 8 lines with a scrollbar', () => {
+      scrollHeight = 10
+      render(ui())
+      expect(box().style.height).toBe('40px') // 2 lines of the 20px fallback
+      scrollHeight = 100
+      fireEvent.change(box(), { target: { value: 'a\nb\nc\nd\ne' } })
+      expect(box().style.height).toBe('100px')
+      expect(box().style.overflowY).toBe('hidden')
+      scrollHeight = 400
+      fireEvent.change(box(), { target: { value: 'x'.repeat(50) } })
+      expect(box().style.height).toBe('160px') // 8 lines
+      expect(box().style.overflowY).toBe('auto')
+    })
+    it('long paths wrap anywhere', () => {
+      render(ui())
+      expect(box().style.overflowWrap).toBe('anywhere')
+    })
   })
 
   it('without a session code there is no attach affordance, and a paste is left alone', () => {
