@@ -11,6 +11,7 @@ import { startHostConfigLoader } from './lib/host-config-loader'
 import { startHostDaemonIdVerification } from './lib/host-daemon-id'
 import { startUnattendedSupport } from './lib/team/unattended-support'
 import { startRosterForget } from './lib/team/roster-forget'
+import { startWorkbookLoader } from './lib/workbook/workbook-loader'
 import { startHostReresolve } from './lib/host-reresolve'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
@@ -48,6 +49,8 @@ startHostDaemonIdVerification()
 startUnattendedSupport()
 // Team roster (plan PL-2b′): a removed or re-pointed host forgets the teams its old daemon reported.
 startRosterForget()
+// Session workbook (plan WA-1.3): each team seat is loaded once per connection generation, on a workbook.v1 host.
+startWorkbookLoader()
 // Host re-resolve (host ownership §3.3): a reference kept verbatim because this device lacked its host points at the
 // local host once that host is here — after hydration, on every host-identity change and every store rehydrate.
 startHostReresolve()

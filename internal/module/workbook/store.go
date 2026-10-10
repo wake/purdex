@@ -90,6 +90,7 @@ type Store struct {
 	now         func() int64 // unix ms; injectable for tests
 	obs         atomic.Pointer[func(Event)]
 	failFinish  func() error // test seam: makes Finish fail; nil in production
+	failRepoint func() error // test seam: runs at the start of RepointSession and may fail it; nil in production
 	afterCommit func()       // test seam: between InsertPending's commit and its event; nil in production
 	wmu         sync.Mutex   // serialises the writes together with their events; an observer must not write to the store
 }
@@ -283,6 +284,20 @@ func (s *Store) NewestTurn(sessionID string) (turnID string, turnAt int64, ok bo
 	return turnID, turnAt, true, nil
 }
 
+// ClosestTurn is the session's entry whose turn_at is nearest to `at` within [at-before, at+after] (the push hold's match: a
+// Stop's own entry carries the event's time); ok is false when there is none. Two Stops a moment apart each find their own.
+func (s *Store) ClosestTurn(sessionID string, at, before, after int64) (Entry, bool, error) {
+	e, err := scanEntry(s.db.QueryRow(`SELECT `+entryCols+` FROM wb_entries WHERE session_id = ? AND turn_at BETWEEN ? AND ?
+		ORDER BY ABS(turn_at - ?) ASC, id DESC LIMIT 1`, sessionID, at-before, at+after, at))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Entry{}, false, nil
+	}
+	if err != nil {
+		return Entry{}, false, fmt.Errorf("read workbook entry near a stop: %w", err)
+	}
+	return e, true, nil
+}
+
 // Conversation lists a conversation's entries newest first; beforeID > 0 returns the entries with a smaller id.
 func (s *Store) Conversation(convKey string, limit int, beforeID int64) ([]Entry, error) {
 	if beforeID <= 0 {
@@ -302,6 +317,17 @@ func (s *Store) HasEntries(convKey string) (bool, error) {
 		return false, fmt.Errorf("read workbook entries: %w", err)
 	}
 	return true, nil
+}
+
+// Known reports whether the workbook has ever written anything for the conversation: an entry (whatever its state) or a
+// status. The conversation route's 404 rule, shared by the todos route.
+func (s *Store) Known(convKey string) (bool, error) {
+	has, err := s.HasEntries(convKey)
+	if err != nil || has {
+		return has, err
+	}
+	_, ok, err := s.Status(convKey)
+	return ok, err
 }
 
 // Entries lists entries across conversations newest first. since is inclusive and until exclusive, on turn_at (0 = no

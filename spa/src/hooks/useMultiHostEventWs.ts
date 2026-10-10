@@ -27,6 +27,7 @@ import { handleRelayQuotaEvent } from '../lib/team/relay-quota-ws'
 import { RELAY_QUOTA_EVENT_TYPE, UNATTENDED_EVENT_TYPE } from '../lib/team/types'
 import { handleRosterEvent } from '../lib/team/roster-ws'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
+import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
 import { connectionKey } from '../lib/host-connection-key'
 import { decideHookFrame, parseAgentSnapshot, type HookCursor } from '../lib/agent-lights/hook-cursor'
 
@@ -298,6 +299,15 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleRosterEvent(hostId, event.value)
+            return
+          }
+          if (isWorkbookEvent(event.type)) {
+            // The session workbook (plan WA-1.4): an entry or a status, written to the store and never a reason to
+            // fetch. Bound to the connection exactly like `team.roster` above, so a removed or re-pointed host's old
+            // daemon cannot write back after the store was forgotten (roster-forget.ts).
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleWorkbookEvent(hostId, event.type, event.value)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in

@@ -28,6 +28,10 @@ type fakeWB struct {
 	maxSeen  atomic.Int32
 	gotWait  time.Duration
 	ctxEnded chan struct{}
+
+	refreshAsked []string
+	refreshID    int64
+	refreshErr   error
 }
 
 func (f *fakeWB) NextJob(ctx context.Context, stream, sid string, wait time.Duration) (any, bool) {
@@ -62,6 +66,11 @@ func (f *fakeWB) JobResult(_ string, r WorkbookResult) (bool, error) {
 }
 
 func (f *fakeWB) JobWaiting(string) bool { return f.waiting }
+
+func (f *fakeWB) RequestRefresh(stream, sid string) (int64, error) {
+	f.refreshAsked = append(f.refreshAsked, stream+"/"+sid)
+	return f.refreshID, f.refreshErr
+}
 
 // capableReg is a registry where the test streams are live, on testSID, and announced workbook.v2.
 func capableReg() *Registry {

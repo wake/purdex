@@ -1,6 +1,10 @@
 package push
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
 
 // AgentInput is what the content of an agent push is built from: the session, the event (the frame's raw_event_name)
 // and the frame's detail.
@@ -11,6 +15,17 @@ type AgentInput struct {
 	SessionName string // the tmux session name; "" falls back to the code
 	EventName   string
 	Detail      map[string]any
+	// Workbook is the session workbook's line for the Stop this push is about (WB-3); nil = today's push. Only a Stop or a
+	// StopFailure uses it.
+	Workbook *WorkbookLine
+}
+
+// WorkbookLine is the part of a workbook entry that a Stop push uses.
+type WorkbookLine struct {
+	Thing   string // the title's subject
+	Push    string // the body; blank = today's body
+	ConvKey string
+	EntryID int64
 }
 
 // eventAliases: cc broadcasts PdxXxx; the notification rules key on the legacy names (the Mac's normalizeEventName).
@@ -58,6 +73,21 @@ func init() {
 	}
 }
 
+// workbookTitle appends "・{thing}" to the title; when the whole is over the title limit it is the thing that is cut (with an
+// ellipsis), never the host or the session name. A title already over the limit on its own is cut as today.
+func workbookTitle(title, thing string) string {
+	thing = Normalise(thing, maxNamedRunes) // model text on a lock screen: no newlines, control or bidi characters
+	if thing == "" {
+		return cutRunes(title, maxTitleRunes)
+	}
+	base := cutRunes(title, maxTitleRunes)
+	room := maxTitleRunes - utf8.RuneCountInString(base) - 1 // the "・"
+	if room <= 0 {
+		return base
+	}
+	return base + "・" + cutRunes(thing, room)
+}
+
 func detailString(d map[string]any, key string) string {
 	s, _ := d[key].(string)
 	return s
@@ -93,6 +123,13 @@ func AgentContent(in AgentInput, locale string) (Content, bool) {
 	default:
 		return Content{}, false
 	}
+	wb := in.Workbook
+	if ev != "Stop" && ev != "StopFailure" {
+		wb = nil
+	}
+	if wb != nil && strings.TrimSpace(wb.Push) != "" { // the workbook's line is the body; today's candidates stay as the fallback
+		candidates = append([]string{wb.Push}, candidates...)
+	}
 	body := ""
 	for _, c := range candidates {
 		if body = Normalise(c, maxBodyRunes); body != "" {
@@ -107,9 +144,14 @@ func AgentContent(in AgentInput, locale string) (Content, bool) {
 	if in.HostLabel != "" {
 		title = fmt.Sprintf(t["agent_title"], in.HostLabel, name)
 	}
-	return Content{
+	c := Content{
 		Title: cutRunes(title, maxTitleRunes), Body: body, Kind: "agent",
 		SessionCode: in.SessionCode, SessionID: in.SessionID, SessionName: name, Event: ev,
 		CollapseID: "agent-" + in.SessionCode,
-	}, true
+	}
+	if wb != nil {
+		c.Title = workbookTitle(title, wb.Thing)
+		c.WorkbookConv, c.WorkbookEntry = wb.ConvKey, wb.EntryID
+	}
+	return c, true
 }

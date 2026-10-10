@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.0-alpha.674] - 2026-10-10
+
+> 只動到 SPA：**不必部署 daemon、不必重跑 `pdx setup`**；SPA 已隨主機上的 dev server 生效。
+
+### Added：工作簿資料層（第 1 版）— WA-1a（#2372，介面線）
+
+- App 端開始接收工作簿：讀取對話與紀錄的型別與嚴格解析（格式壞掉的單筆整筆丟掉、只警告一次；紀錄的對話跟外層對不上也丟掉）、工作簿 store（每台主機、每段對話各自一份，最新在前、依 id 去重，最多留 500 筆，最近用的對話優先保留）。
+- 收到 `workbook.entry`／`workbook.status` 事件直接更新，事件不會觸發重新抓取；只有 team 席位或打開的畫面才抓，每席每次連線抓一次。偵測主機是否支援 `workbook.v1`／`v2`，主機移除或改指向時清掉它的資料。
+- 這一版還沒有畫面；待辦、重整等第 2 版功能另見 WA-1b。
+
+### Changed：team 珠子與「代理 lead 列」也顯示 subagent 點點 — #2374
+
+- 側邊欄 team 的珠子跟分頁列一樣，會畫出那一席的 subagent 點點（浮在機器人圖示左邊、不佔寬度，沒有 subagent 就不畫）；lead 分頁關掉時代替它的那一列也照樣畫。收合時的細條不變。
+
+## [1.0.0-alpha.673] - 2026-10-10
+
+> 動到 daemon 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；已開著的 session 要重新載入 mod 才會有 `/workbook refresh`。
+
+### Added：工作簿第 2 版——待辦清單與完成紀錄 — WB-2b-i（#2369、#2370，介面線）
+
+- 每筆紀錄多了種類（一般／重整）、用量與「這一筆對待辦做了什麼」；新路由 `GET /api/workbook/conversations/{provider}/{session_id}/todos`（未完成／已完成，可分頁）；待辦變動時發 `workbook.todos` 事件；能力 `workbook.v2`。待辦只能看，由每一輪的整理與重整更新。
+
+### Added：分岔重整（手動）— WB-2b-i、WB-2b-ii（#2370、#2373）
+
+- `POST /api/workbook/conversations/{provider}/{session_id}/refresh` 與 session 內的 `/workbook refresh`：用主模型讀整段對話，重寫目前狀況並整理待辦，結果記成一筆「重整」紀錄。只有手動觸發；session 還在、mod 宣告支援時才可按（`refresh_available` 與 `workbook.refresh_available` 事件）。**注意耗用**：重整用的是主模型、帶整段對話，長對話在快取冷掉時一次可達數十萬 token。
+
+### Docs
+
+- team 單行格子設計稿（#2371）。
+
+## [1.0.0-alpha.672] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon**；mod 與 SPA 沒有改，不必重跑 `pdx setup`。
+
+### Changed：「做完／出錯」的推播改用工作簿的短句 — WB-3（#2365，介面線）
+
+- 一輪結束（Stop）或出錯（StopFailure）要推播時，daemon 最多等 8 秒（主機設定 `workbook.push_wait_s`，0＝不等）拿這一輪工作簿的推播短句：標題改成「<主機>：<session>・<事名>」（沒有主機標籤時「<session>・<事名>」），內文是那一句短句，payload 帶 `purdex.workbook = {conv_key, entry_id}`，iOS 點推播可以開到那一筆。沒有紀錄、整理失敗或逾時就照舊用原本的標題與內文。要求權限與其他通知不變。Mac 在場時照舊不推。
+
+### Tests
+
+- 對話轉譯 README 改用短 sha，修好 main 上的守門測試（#2367）。
+
 ## [1.0.0-alpha.671] - 2026-10-10
 
 > 只動到 daemon 與 SPA：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。

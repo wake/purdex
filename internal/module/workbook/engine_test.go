@@ -76,6 +76,7 @@ type kit struct {
 	turns   *fakeTurns
 	lineage fakeLineage
 	capable map[string]bool
+	refresh []CapSession // the sessions whose mod announced workbook.refresh
 	logs    *logSink
 	afters  []func()
 	lines   []string // push-line hook calls: "<entry>:<ready>"
@@ -98,9 +99,10 @@ func newKit(t *testing.T) *kit {
 	k := &kit{t: t, st: openTest(t), clock: &fakeClock{t: time.Unix(1_700_000_000, 0)}, lineage: fakeLineage{},
 		turns: &fakeTurns{turns: map[string][]convmodel.Turn{}, err: map[string]error{}}, capable: map[string]bool{}, logs: &logSink{}}
 	k.e = NewEngine(Deps{Store: k.st, Turns: k.turns, Lineage: k.lineage, HostID: "h1",
-		Seats:   fakeSeats{"s1": {TeamID: "team-9", Role: team.SeatMember}},
-		Capable: func(sid string) bool { return k.capable[sid] },
-		Now:     k.clock.Now,
+		Seats:           fakeSeats{"s1": {TeamID: "team-9", Role: team.SeatMember}},
+		Capable:         func(sid string) bool { return k.capable[sid] },
+		RefreshSessions: func() []CapSession { return k.refresh },
+		Now:             k.clock.Now,
 		After: func(_ time.Duration, f func()) func() bool {
 			k.afters = append(k.afters, f)
 			return func() bool { return true }

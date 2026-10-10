@@ -12,6 +12,9 @@ func (e *Engine) apply(l *lease, r Result) (follow *job) {
 	if j.kind == JobRewrite {
 		return e.applyRewrite(j, r)
 	}
+	if j.kind == JobRefresh {
+		return e.applyRefresh(j, l, r)
+	}
 	if !r.Answered {
 		return e.failedCall(j, r, l.timeoutMS)
 	}
@@ -102,6 +105,8 @@ func (e *Engine) failedCall(j *job, r Result, timeoutMS int) *job {
 		}
 	case "refused":
 		e.finishUnrun(j, StateFailed, ReasonRefused)
+	case "nothing-to-fork":
+		e.finishUnrun(j, StateFailed, ReasonNothingToFork)
 	default:
 		e.d.Logf("[workbook] the summariser call failed (reason %s)", logKind(r.Reason))
 		e.finishUnrun(j, StateFailed, ReasonAPI)

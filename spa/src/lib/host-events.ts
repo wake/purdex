@@ -18,6 +18,8 @@ export interface HostEvent {
     | 'team.unattended'
     | 'team.relay_quota'
     | 'team.roster'
+    | 'workbook.entry'
+    | 'workbook.status'
     | 'nex.executions.hello'
     | 'nex.execution'
   session: string

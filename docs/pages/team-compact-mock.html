@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team 單行格子設計稿</title>
+<style>
+  :root {
+    --page: #12121e; --panel: #23233f; --panel-border: #33335a; --titlebar: #1a1a30;
+    --text: #e6e6f0; --muted: #8b8ba7; --track: #404040;
+    --ok: #7ec699; --warn: #c8b560; --bad: #e06c75;
+    --run: #4ade80; --wait: #facc15; --idle: #6b7280; --unread: #ef4444;
+    --team: #f5923e; --mlab: #1f8f4e; --mlab-ink: #b7f5cd; --a26: #2f5fd0; --a26-ink: #cfe0ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.5 -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; padding: 24px 16px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 36px 0 6px; }
+  p.note { color: var(--muted); margin: 0 0 12px; max-width: 820px; }
+  .label { color: var(--muted); font-size: 12px; margin: 14px 0 6px; }
+  .panel { display: inline-flex; align-items: center; background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px; padding: 6px 10px; height: 44px; gap: 10px; max-width: 100%; }
+  .titlebar { display: flex; align-items: center; justify-content: center; background: var(--titlebar); border-bottom: 1px solid #2a2a44; height: 36px; border-radius: 8px 8px 0 0; padding: 0 12px; gap: 8px; max-width: 900px; }
+  .capsule { background: var(--team); color: #14141f; font-weight: 700; font-size: 13px; padding: 0 8px; border-radius: 5px; line-height: 22px; white-space: nowrap; }
+  .titlebar .capsule { font-size: 12px; line-height: 20px; }
+  .cells { display: flex; align-items: center; }
+  .sep { width: 1px; height: 18px; background: #44446a; }
+  .cell { position: relative; display: inline-flex; align-items: center; height: 28px; padding: 0 3px; border-radius: 6px; }
+  .cell.active { background: #2e2e52; }
+  .ctl { color: var(--muted); font-size: 14px; margin-left: 6px; }
+  .bot { position: relative; width: 16px; height: 16px; flex: none; }
+  .bot svg { width: 16px; height: 16px; display: block; }
+  .dot { position: absolute; top: -3px; right: -4px; width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--panel); }
+  .sub { width: 5px; display: inline-flex; flex-direction: column; gap: 2px; margin-right: 2px; }
+  .sub i { width: 3px; height: 3px; border-radius: 50%; background: #7aa2ff; }
+  .host { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; flex: none; }
+  .host svg { width: 11px; height: 11px; display: block; }
+  .host.mlab { background: var(--mlab); color: var(--mlab-ink); }
+  .host.a26 { background: var(--a26); color: var(--a26-ink); }
+  .bar { position: relative; height: 16px; border-radius: 2px; background: var(--track); overflow: hidden; flex: none; display: inline-block; }
+  .bar b { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 2px; }
+  .ring { width: 20px; height: 20px; flex: none; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .wrap { overflow-x: auto; padding-bottom: 4px; }
+  table { border-collapse: collapse; margin-top: 8px; }
+  td { padding: 4px 14px 4px 0; vertical-align: middle; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Team 單行格子設計稿</h1>
+<p class="note">2026-10-10。單行面板與收在標題列的條共用同一份格子。比較：現在（機器人＋圓環，只有遠端有主機）與兩種新排法（機器人＋窄直條＋主機，每一格都有主機，比照左側列表的珠子）。直條＝context 已用：全暗開始、從下往上長，顏色照已用（&lt;70 綠、70–90 黃、≥90 紅）。格與格之間 12px，格內元件之間 4px。子 agent 的點在機器人左邊（固定留位）。</p>
+
+<div id="out"></div>
+
+<script>
+const ROBOT = '<svg viewBox="0 0 16 16"><rect x="2" y="5" width="12" height="8" rx="2" fill="currentColor"/><rect x="7.25" y="2" width="1.5" height="3" fill="currentColor"/><circle cx="8" cy="2" r="1.2" fill="currentColor"/><circle cx="5.5" cy="9" r="1.2" fill="#23233f"/><circle cx="10.5" cy="9" r="1.2" fill="#23233f"/><rect x="0.5" y="7.5" width="1.5" height="3" rx=".5" fill="currentColor"/><rect x="14" y="7.5" width="1.5" height="3" rx=".5" fill="currentColor"/></svg>';
+const CHIP = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="4" width="8" height="8" rx="1.2"/><path d="M6 1.5v2M10 1.5v2M6 12.5v2M10 12.5v2M1.5 6h2M1.5 10h2M12.5 6h2M12.5 10h2"/></svg>';
+const LAPTOP = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3.5" width="10" height="7" rx="1"/><path d="M1 12.5h14"/></svg>';
+const tone = u => u >= 90 ? 'var(--bad)' : u >= 70 ? 'var(--warn)' : 'var(--ok)';
+const LIGHT = { run: 'var(--run)', wait: 'var(--wait)', idle: 'var(--idle)', unread: 'var(--unread)' };
+
+const TEAM4 = [
+  { host: 'mlab', used: 42, light: 'idle', sub: 0, lead: true, active: true },
+  { host: 'mlab', used: 15, light: 'run', sub: 2 },
+  { host: 'mlab', used: 75, light: 'unread', sub: 0 },
+  { host: 'a26', used: 95, light: 'wait', sub: 1 },
+];
+const TEAM7 = TEAM4.concat([
+  { host: 'mlab', used: 50, light: 'run', sub: 0 },
+  { host: 'a26', used: 30, light: 'idle', sub: 0 },
+  { host: 'mlab', used: 88, light: 'run', sub: 3 },
+]);
+
+function bot(s) {
+  const ink = s.lead || s.active ? '#ffffff' : '#a9a9c4';
+  return `<span class="bot" style="color:${ink}">${ROBOT}<i class="dot" style="background:${LIGHT[s.light]}"></i></span>`;
+}
+function sub(s) {
+  return `<span class="sub">${Array.from({ length: Math.min(s.sub, 3) }, () => '<i></i>').join('')}</span>`;
+}
+function host(s) {
+  return `<span class="host ${s.host}" title="${s.host}">${s.host === 'mlab' ? CHIP : LAPTOP}</span>`;
+}
+function bar(s, w) {
+  return `<span class="bar" style="width:${w}px" title="context 已用 ${s.used}%"><b style="height:${s.used}%;background:${tone(s.used)}"></b></span>`;
+}
+function ring(s) {
+  const r = 8, c = 2 * Math.PI * r, v = s.used / 100 * c;
+  return `<svg class="ring" viewBox="0 0 20 20"><circle cx="10" cy="10" r="${r}" fill="none" stroke="var(--track)" stroke-width="2.5"/>` +
+    `<circle cx="10" cy="10" r="${r}" fill="none" stroke="${tone(s.used)}" stroke-width="2.5" stroke-dasharray="${v.toFixed(2)} ${c.toFixed(2)}" transform="translate(20 0) scale(-1 1) rotate(-90 10 10)"/>` +
+    `<circle cx="10" cy="10" r="3" fill="#cfcfe0"/></svg>`;
+}
+const SP = w => `<span style="width:${w}px;display:inline-block"></span>`;
+const LAYOUTS = {
+  current: { name: '現在：機器人＋圓環（只有遠端有主機）', cell: s => sub(s) + bot(s) + SP(4) + (s.host === 'a26' ? host(s) + SP(4) : '') + ring(s), gap: 8 },
+  A4: { name: '方案 A：機器人 → 直條 4px → 主機', cell: s => sub(s) + bot(s) + SP(5) + bar(s, 4) + SP(4) + host(s), gap: 12 },
+  A6: { name: '方案 A′：機器人 → 直條 6px → 主機', cell: s => sub(s) + bot(s) + SP(5) + bar(s, 6) + SP(4) + host(s), gap: 12 },
+  B4: { name: '方案 B：機器人 → 主機 → 直條 4px', cell: s => sub(s) + bot(s) + SP(5) + host(s) + SP(4) + bar(s, 4), gap: 12 },
+};
+
+function cells(team, L) {
+  return team.map((s, i) => {
+    const c = `<span class="cell${s.active ? ' active' : ''}">${L.cell(s)}</span>`;
+    const gap = i === 0 ? '' : SP(L.gap);
+    const sep = i === 1 ? SP(L.gap) + '<span class="sep"></span>' : '';
+    return sep + gap + c;
+  }).join('');
+}
+function panel(team, L) {
+  return `<div class="wrap"><div class="panel"><span class="capsule">介面線</span><span class="cells">${cells(team, L)}</span><span class="ctl">⌃</span><span class="ctl">⤢</span></div></div>`;
+}
+function strip(team, L) {
+  return `<div class="wrap"><div class="titlebar"><span class="capsule">介面線</span><span class="cells">${cells(team, L)}</span></div></div>`;
+}
+
+let html = '';
+for (const key of ['current', 'A4', 'A6', 'B4']) {
+  const L = LAYOUTS[key];
+  html += `<h2>${L.name}</h2>`;
+  html += `<div class="label">窗格頂端單行（4 人：lead＋2 位 mlab＋1 位 a26）</div>` + panel(TEAM4, L);
+  html += `<div class="label">收在標題列</div>` + strip(TEAM4, L);
+  if (key !== 'current') html += `<div class="label">7 人的 team</div>` + panel(TEAM7, L);
+}
+html += `<h2>直條的四種用量</h2><table><tr>` + [15, 50, 75, 95].map(u => `<td>${bar({ used: u }, 6)} &nbsp;已用 ${u}%</td>`).join('') + `</tr></table>`;
+html += `<div class="legend"><span><i class="dot" style="position:static;display:inline-block;background:var(--run)"></i>工作中</span><span><i class="dot" style="position:static;display:inline-block;background:var(--wait)"></i>等你</span><span><i class="dot" style="position:static;display:inline-block;background:var(--idle)"></i>閒置</span><span><i class="dot" style="position:static;display:inline-block;background:var(--unread)"></i>未讀</span><span><i style="width:3px;height:3px;border-radius:50%;background:#7aa2ff;display:inline-block"></i>子 agent</span></div>`;
+document.getElementById('out').innerHTML = html;
+</script>
+</body>
+</html>

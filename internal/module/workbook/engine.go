@@ -48,6 +48,11 @@ type Deps struct {
 	Capable func(sessionID string) bool // whether the session's mod announced workbook.v2 (nil: nobody is)
 	HostID  string
 
+	// RefreshSessions lists the sessions whose live stream announced workbook.refresh within 30 s, with when (nil: none).
+	RefreshSessions func() []CapSession
+	// OnAvailability is told, at each sweep, of the conversations whose refresh_available value changed (nil: nobody).
+	OnAvailability func([]AvailabilityChange)
+
 	Now   func() time.Time                                   // test seam
 	After func(d time.Duration, f func()) (stop func() bool) // test seam: the busy re-queue timer
 	Logf  func(format string, args ...any)
@@ -80,6 +85,9 @@ type Engine struct {
 	// pushLine tells the push hold that an entry's line is final: ready true at the push line, false when the entry
 	// ended without one. Nil until the push module's waiter (WB-3) is wired.
 	pushLine func(entryID int64, ready bool)
+	waiter   *PushLines
+
+	rf refreshState // refresh.go
 }
 
 // NewEngine builds an engine over the deps.
@@ -99,7 +107,14 @@ func NewEngine(d Deps) *Engine {
 // SetPushLineHook registers the push-line notification (see Engine.pushLine).
 func (e *Engine) SetPushLineHook(fn func(entryID int64, ready bool)) { e.pushLine = fn }
 
+// SetWaiter wires the push hold's waiter (lines.go): it is woken at every push line and every final state, and told when
+// an event's intake is done. Set before the engine is subscribed.
+func (e *Engine) SetWaiter(w *PushLines) { e.waiter = w }
+
 func (e *Engine) notifyLine(entryID int64, ready bool) {
+	if e.waiter != nil {
+		e.waiter.wake()
+	}
 	if e.pushLine != nil {
 		e.pushLine(entryID, ready)
 	}

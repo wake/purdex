@@ -18,6 +18,7 @@ import (
 	"github.com/wake/purdex/internal/modevents"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/workbooklines"
 )
 
 // Module is the workbook module.
@@ -29,6 +30,7 @@ type Module struct {
 	ready   bool
 	initErr string
 	prompts PromptFiles // where Start wrote the prompts
+	lines   *PushLines  // the push hold's waiter; registered under workbooklines.Key
 
 	engine       *Engine // the subscriber and the job queue; nil until Start
 	unsubTurnEnd func()
@@ -51,6 +53,8 @@ func (m *Module) Dependencies() []string {
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	c.Registry.Register(JobsKey, jobsService{m: m}) // the mod socket's routes find the job queue here
+	m.lines = NewPushLines(m.live)
+	c.Registry.Register(workbooklines.Key, workbooklines.Lines(m.lines)) // the push module's hold waits here
 	c.CfgMu.RLock()
 	dataDir := c.Cfg.DataDir
 	c.CfgMu.RUnlock()
@@ -150,10 +154,19 @@ func (m *Module) startEngine(st *Store) {
 		if svc, ok := reg.Get("modevents"); ok {
 			if mr, ok := svc.(*modevents.Registry); ok {
 				d.Capable = func(sid string) bool { return mr.SessionCapable(sid, CapV2, modevents.CapsFresh) }
+				d.RefreshSessions = func() []CapSession {
+					var out []CapSession
+					for _, c := range mr.CapableSessions(modevents.CapWorkbookRefresh, modevents.CapsFresh) {
+						out = append(out, CapSession{SID: c.SID, At: c.At})
+					}
+					return out
+				}
 			}
 		}
 	}
+	d.OnAvailability = m.announceAvailability
 	eng := NewEngine(d)
+	eng.SetWaiter(m.lines)
 	ctx, cancel := context.WithCancel(context.Background())
 	go eng.RunReaper(ctx)
 	var unsub func()

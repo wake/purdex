@@ -20,7 +20,7 @@ interface IconProps {
   sessionCode: string
   isActive?: boolean
   size?: number
-  /** Draw the seat's subagent dots to the icon's left (the panel's full rows); the beads leave them off. */
+  /** Draw the seat's subagent dots to the icon's left (the panel's full rows, the sidebar beads and ghost lead row, like the sidebar's tab rows); the collapsed strip leaves them off. */
   subagents?: boolean
   /** The panel's one-line cell: iconDot draws its light on the icon's corner instead of in a slot beside it (no extra width). */
   compact?: boolean
