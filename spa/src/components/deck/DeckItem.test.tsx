@@ -127,6 +127,77 @@ describe('step · edit', () => {
   })
 })
 
+describe('step · edit, long diff and 顯示全部', () => {
+  const longDiff = (lines: number, over: object = {}): StepItem => ({
+    type: 'step', id: 'long', at: 1, index: 0, kind: 'edit', tool: 'Edit', status: 'done', summary: '/a', started_at: 1, input: null,
+    diff: {
+      path: '/a', added: lines, removed: 0, exact: true,
+      hunks: [{ old_start: 1, old_lines: 0, new_start: 1, new_lines: lines, lines: Array.from({ length: lines }, (_, i) => `+row ${i + 1}`) }],
+      ...over,
+    },
+  })
+
+  it('draws the first 16 lines and hands the rest to the panel', () => {
+    const onShowAll = vi.fn()
+    const step = longDiff(40)
+    render(<DeckItem item={step} actions={{ onShowAll }} />)
+    expect(screen.getByTestId('tool-diff').textContent).toContain('row 16')
+    expect(screen.getByTestId('tool-diff').textContent).not.toContain('row 17')
+    expect(screen.queryByTestId('diff-more')).toBeNull()
+    fireEvent.click(screen.getByTestId('diff-show-all'))
+    expect(onShowAll).toHaveBeenCalledWith(step)
+    expect(screen.getByTestId('diff-show-all')).toHaveTextContent('Show all 40 lines')
+  })
+
+  it('a diff of exactly 16 lines is whole, with no button', () => {
+    render(<DeckItem item={longDiff(16)} actions={{ onShowAll: vi.fn() }} />)
+    expect(screen.getByTestId('tool-diff').textContent).toContain('row 16')
+    expect(screen.queryByTestId('diff-show-all')).toBeNull()
+  })
+
+  it('a daemon-truncated short diff offers the panel too', () => {
+    render(<DeckItem item={longDiff(3, { truncated: true })} actions={{ onShowAll: vi.fn() }} />)
+    expect(screen.getByTestId('diff-show-all')).toBeInTheDocument()
+  })
+
+  it('draws no 顯示全部 when nobody can show it', () => {
+    render(<DeckItem item={longDiff(40)} />)
+    expect(screen.queryByTestId('diff-show-all')).toBeNull()
+  })
+
+  it('an output without a handler has no 顯示全部 either', () => {
+    const big = find<StepItem>(steps(outputCaps), (i) => (i as StepItem).kind === 'execute')
+    render(<DeckItem item={big} />)
+    fireEvent.click(screen.getByTestId('output-toggle'))
+    expect(screen.queryByTestId('output-show-all')).toBeNull()
+  })
+})
+
+describe('command_output', () => {
+  const lines = (n: number) => Array.from({ length: n }, (_, i) => `out ${i + 1}`).join('\n')
+
+  it('a user-source command_output is folded to 「輸出 · N 行」 and opens to the last 10 lines', () => {
+    const item = { type: 'user', source: 'command_output', id: 'co1', at: 1, index: 0, text: lines(30) } as ConversationItem
+    render(<DeckItem item={item} />)
+    expect(screen.getByTestId('output-toggle')).toHaveTextContent('Output · 30 lines')
+    expect(screen.queryByTestId('output-body')).toBeNull()
+    fireEvent.click(screen.getByTestId('output-toggle'))
+    expect(screen.getByTestId('output-body').textContent?.split('\n')).toHaveLength(10)
+    expect(screen.getByTestId('output-cut')).toBeInTheDocument()
+  })
+
+  it('a long system command_output folds the same way; a short one stays a notice', () => {
+    const long = { type: 'system', kind: 'command_output', id: 'co2', at: 1, index: 0, detail: { text: lines(12) } } as ConversationItem
+    render(<DeckItem item={long} />)
+    expect(screen.getByTestId('output-toggle')).toHaveTextContent('Output · 12 lines')
+    cleanup()
+    const short = { type: 'system', kind: 'command_output', id: 'co3', at: 1, index: 0, detail: { text: 'Bye!' } } as ConversationItem
+    render(<DeckItem item={short} />)
+    expect(screen.queryByTestId('output-toggle')).toBeNull()
+    expect(screen.getByTestId('deck-system')).toHaveTextContent('Bye!')
+  })
+})
+
 describe('step · execute', () => {
   it('shows the command in a clamped box and folds the output to the last 10 lines', () => {
     const big = find<StepItem>(steps(outputCaps), (i) => (i as StepItem).kind === 'execute')

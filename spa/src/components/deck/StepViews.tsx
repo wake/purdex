@@ -4,7 +4,7 @@
 import { FilePlus, FileText, Globe, MagnifyingGlass, PencilSimple, Robot, Terminal, Wrench, Question } from '@phosphor-icons/react'
 import type { ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { readRange, toActivityDiff } from '../../lib/conversations/deck-format'
+import { capDiff, readRange, toActivityDiff } from '../../lib/conversations/deck-format'
 import type { StepItem } from '../../lib/conversations/types'
 import ToolDiffView from '../room/ToolDiffView'
 import { OutputFold } from './OutputFold'
@@ -18,6 +18,9 @@ export interface StepActions {
 }
 
 const ICON = 'shrink-0 text-text-muted'
+
+/** 「顯示全部」 only exists when someone can show it: no handler, no button. */
+const showAll = (step: StepItem, actions: StepActions) => actions.onShowAll && (() => actions.onShowAll!(step))
 
 function Line({ step, icon, verb, subject, extra, children, testId = 'deck-step-line' }: {
   step: StepItem; icon: ReactNode; verb: string; subject: string; extra?: ReactNode; children?: ReactNode; testId?: string
@@ -56,16 +59,19 @@ function EditCard({ step, actions }: { step: StepItem; actions: StepActions }) {
   if (!step.diff) {
     return <Line step={step} icon={<PencilSimple className={ICON} size={16} />} verb={t('deck.step.edit')} subject={step.summary} />
   }
+  // The deck draws the first 16 lines and sends the rest to the right panel (spec §4); the room's own fold is switched off.
+  const capped = capDiff(step.diff)
+  const { onShowAll } = actions
   return (
     <Card
       step={step}
       icon={created ? <FilePlus className={ICON} size={16} /> : <PencilSimple className={ICON} size={16} />}
       title={<><span className="text-text-muted">{created ? t('deck.step.create') : t('deck.step.edit')}</span> <span className="font-mono text-xs" title={path}>{path}</span></>}
     >
-      <ToolDiffView diff={toActivityDiff(step.diff)} foldKey={step.id} />
-      {step.diff.truncated && actions.onShowAll && (
-        <button type="button" data-testid="diff-show-all" onClick={() => actions.onShowAll?.(step)} className="cursor-pointer text-xs text-text-muted hover:text-text-primary">
-          {t('deck.output.show_all')}
+      <ToolDiffView diff={toActivityDiff(capped.diff)} foldKey={step.id} unfolded />
+      {capped.cut && onShowAll && (
+        <button type="button" data-testid="diff-show-all" onClick={() => onShowAll(step)} className="cursor-pointer text-xs text-text-muted hover:text-text-primary">
+          {t('deck.diff.show_all', { n: capped.totalLines })}
         </button>
       )}
     </Card>
@@ -79,7 +85,7 @@ function ExecuteCard({ step, actions }: { step: StepItem; actions: StepActions }
     <Card step={step} icon={<Terminal className={ICON} size={16} />} title={<span className="text-text-muted">{step.command?.description ?? t('deck.step.execute')}</span>}>
       <pre data-testid="exec-command" className="line-clamp-6 overflow-hidden whitespace-pre-wrap break-all rounded bg-black/60 px-2 py-1 font-mono text-xs text-neutral-100">{`$ ${command}`}</pre>
       {step.output && (
-        <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={step.status === 'failed' ? 'error' : 'normal'} onShowAll={() => actions.onShowAll?.(step)} />
+        <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={step.status === 'failed' ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />
       )}
     </Card>
   )
@@ -157,7 +163,7 @@ function OutputLine({ step, icon, verb, actions }: { step: StepItem; icon: React
   return (
     <Line step={step} icon={icon} verb={verb} subject={step.summary}
       extra={where ? <span data-testid="search-where" className="shrink-0 truncate text-xs text-text-muted">{where}</span> : null}>
-      {step.output && <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={step.status === 'failed' ? 'error' : 'normal'} onShowAll={() => actions.onShowAll?.(step)} />}
+      {step.output && <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={step.status === 'failed' ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />}
     </Line>
   )
 }

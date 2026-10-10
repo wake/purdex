@@ -2,9 +2,10 @@
 // known) and the system notices (small centred grey text; a long machine note folded under 「系統」; compaction and
 // interrupt as their own lines). Their open state is in the pane's fold memory.
 import { useI18nStore } from '../../stores/useI18nStore'
-import { systemView } from '../../lib/conversations/deck-format'
+import { systemView, textOutput } from '../../lib/conversations/deck-format'
 import type { SystemItem, ThinkingItem } from '../../lib/conversations/types'
 import { useFold } from '../room/fold-context'
+import { OutputFold } from './OutputFold'
 
 export function ThinkingRow({ item }: { item: ThinkingItem }) {
   const t = useI18nStore((s) => s.t)
@@ -33,6 +34,13 @@ export function SystemRow({ item }: { item: SystemItem }) {
   }
   if (view.kind === 'compacted') {
     return <div data-testid="deck-system" className="text-center text-xs text-text-muted">{t('deck.system.compacted', { time: view.time })}</div>
+  }
+  if (view.kind === 'output') {
+    return (
+      <div data-testid="deck-system" data-output className="pl-6">
+        <OutputFold foldKey={`${item.id}:out`} output={textOutput(view.text)} />
+      </div>
+    )
   }
   if (view.kind === 'notice') {
     return <div data-testid="deck-system" className="text-center text-xs text-text-muted">{view.text}</div>

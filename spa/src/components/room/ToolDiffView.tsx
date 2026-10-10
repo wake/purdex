@@ -34,6 +34,11 @@ interface Props {
    * folded or not: it sits on the stat line, outside the fold.
    */
   searchKey?: BlockKey
+  /**
+   * Draw every row it is given and no fold button: the caller owns the budget (the deck caps a diff at 16 rows and
+   * sends the rest to its right panel). Off by default.
+   */
+  unfolded?: boolean
 }
 
 /**
@@ -92,7 +97,7 @@ function spendBudget(hunks: HunkRows[], budget: number, preview?: string[]): Hun
   return out
 }
 
-export default function ToolDiffView({ diff, foldKey, showPath = false, searchKey }: Props) {
+export default function ToolDiffView({ diff, foldKey, showPath = false, searchKey, unfolded = false }: Props) {
   const t = useI18nStore((s) => s.t)
   const [expanded, toggle] = useFold(`${foldKey}:diff`)
 
@@ -109,7 +114,7 @@ export default function ToolDiffView({ diff, foldKey, showPath = false, searchKe
     totalLines: rows.length,
     truncated: diff.truncated,
   })
-  const folded = !expanded && plan.collapsible
+  const folded = !unfolded && !expanded && plan.collapsible
   const budget = folded ? plan.previewLines.length : rows.length
 
   // No hunks and nothing dropped → nothing to say. No hunks but truncated →
@@ -181,7 +186,7 @@ export default function ToolDiffView({ diff, foldKey, showPath = false, searchKe
           {t('execution.tool.diff_truncated')}
         </div>
       )}
-      {plan.collapsible && (
+      {plan.collapsible && !unfolded && (
         <button
           type="button"
           data-testid={expanded ? 'diff-less' : 'diff-more'}

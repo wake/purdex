@@ -77,12 +77,37 @@ export function outputTail(out: StepOutput): OutputTail {
   return { text: lines.slice(-OUTPUT_TAIL_LINES).join('\n'), totalLines, cut: true }
 }
 
+/** A bare text as a `StepOutput` (a `command_output` item has only text), so one fold draws both. */
+export function textOutput(text: string, truncated = false): StepOutput {
+  return { text, total_lines: text === '' ? 0 : text.replace(/\n$/, '').split('\n').length, total_bytes: text.length, truncated }
+}
+
 /** The lines of an output the user can see once it is open: the whole text, for the right panel's 「顯示全部」. */
 export function outputLineCount(out: StepOutput): number {
   return Math.max(out.total_lines, out.text === '' ? 0 : out.text.replace(/\n$/, '').split('\n').length)
 }
 
 type ActivityDiff = NonNullable<ToolActivity['diff']>
+
+/** How many diff lines the deck draws before 「顯示全部 N 行」 (spec §4). */
+export const DIFF_DECK_LINES = 16
+
+/**
+ * The first `DIFF_DECK_LINES` lines of a diff, hunk by hunk (a hunk whose lines are all past the budget is dropped), with
+ * the line count of the whole diff and whether anything was left off — by this cap or by the daemon.
+ */
+export function capDiff(diff: StepDiff): { diff: StepDiff; totalLines: number; cut: boolean } {
+  const hunks = diff.hunks ?? []
+  const totalLines = hunks.reduce((n, h) => n + h.lines.length, 0)
+  let left = DIFF_DECK_LINES
+  const kept: typeof hunks = []
+  for (const h of hunks) {
+    if (left <= 0) break
+    kept.push(h.lines.length <= left ? h : { ...h, lines: h.lines.slice(0, left) })
+    left -= h.lines.length
+  }
+  return { diff: { ...diff, hunks: kept }, totalLines, cut: totalLines > DIFF_DECK_LINES || diff.truncated === true }
+}
 
 /** The wire diff as the room's `ToolDiffView` takes it (camelCase hunks, `truncated` always a boolean). */
 export function toActivityDiff(diff: StepDiff): ActivityDiff {
@@ -106,6 +131,8 @@ const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g
 export type SystemView =
   | { kind: 'interrupted' }
   | { kind: 'compacted'; time: string }
+  /** A command's output (`command_output`): folded to 「輸出 · N 行」, opening to its last lines. */
+  | { kind: 'output'; text: string }
   /** A short notice: small centred grey text. */
   | { kind: 'notice'; text: string }
   /** A long machine note: folded under 「系統」. */
@@ -130,5 +157,8 @@ export function systemView(item: Pick<SystemItem, 'kind' | 'detail' | 'at'>): Sy
   if (item.kind === 'compacted') return { kind: 'compacted', time: formatClock(item.at) }
   const text = detailText(item.detail).replace(ANSI, '').trim()
   const label = text === '' ? item.kind : text
+  if (item.kind === 'command_output' && text !== '' && (text.includes('\n') || text.length > SHORT_NOTICE_CHARS)) {
+    return { kind: 'output', text }
+  }
   return text.includes('\n') || label.length > SHORT_NOTICE_CHARS ? { kind: 'note', text: label } : { kind: 'notice', text: label }
 }
