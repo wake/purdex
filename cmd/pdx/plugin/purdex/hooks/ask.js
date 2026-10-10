@@ -189,8 +189,10 @@ export function register(on) {
 
     const cfg = await pdxConfig($)
     const sid = await $.session.id()
-    // Taken before begin is called: a report by tool use (below) only looks at rows created after it.
-    const since = await $.clock.now().then((n) => (Number.isFinite(n) ? n : Date.now()), () => Date.now())
+    // Taken before begin is called: a report by tool use (below) only looks at rows created after it. It is compared with the
+    // daemon's wall clock (created_at is time.Now in epoch ms), so it is the real clock, not the engine's: that one is another
+    // clock domain and may be ahead (never a 404 to the end) or behind (no filter at all), as register.js notes.
+    const since = Date.now()
     const begin = ask($, cfg, ['begin', '--session', String(sid || ''), '--tool-use', String(e.tool_use_id || ''), '--kind', 'hook_ask',
       '--payload', JSON.stringify({ questions: e.questions })], CALL_TIMEOUT_MS)
       .then((r) => ({ who: 'begin', r }), (err) => ({ who: 'begin-error', err }))

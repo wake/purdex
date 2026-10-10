@@ -630,15 +630,15 @@ test('a healthy report is not detached', async ($, on) => {
 // taken after begin → the value differs (red).
 test('answered in the terminal while begin has not replied ⇒ back within 5 s, the report goes detached by the tool use with --since', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
-  // The clock moves on every read, so a `--since` taken after begin was called differs from the one taken before it.
-  let clock = 1_700_000_000_000
-  let clockAtBegin = 0
-  on('clock.now', () => ({ value: ++clock }))
+  // The engine's clock is another clock domain and can be far from the wall clock: --since is the REAL time (the daemon's
+  // created_at is), taken just before begin is called. Mutation gate: read the engine clock (or take it after begin) → red.
+  on('clock.now', () => ({ value: 42 }))
   let beginArgv: Call | null = null
   let byToolUse: Call | null = null
+  let realAtBegin = 0
   on('process.run', (_$: any, e: any) => {
     const a = e.argv
-    if (sub(a) === 'begin') { beginArgv = [...a]; clockAtBegin = clock; return never() }
+    if (sub(a) === 'begin') { beginArgv = [...a]; realAtBegin = Date.now(); return never() }
     if (sub(a) === 'report' && a.includes('--detach')) { byToolUse = [...a]; return ok('') }
     return ok('')
   })
@@ -653,7 +653,9 @@ test('answered in the terminal while begin has not replied ⇒ back within 5 s, 
   const flag = (f: string) => a[a.indexOf(f) + 1]
   expect(flag('--session')).toBe('sess-test')
   expect(flag('--tool-use')).toBe(beginArgv![beginArgv!.indexOf('--tool-use') + 1])
-  expect(flag('--since')).toBe(String(clockAtBegin)) // read just before begin was called, not after
+  const since = Number(flag('--since'))
+  expect(since).toBeGreaterThanOrEqual(t0)  // the real time, not the engine's 42
+  expect(since).toBeLessThanOrEqual(realAtBegin) // taken before begin was called
   expect(a).toContain('answered_local')
   expect(JSON.parse(flag('--hook'))).toEqual({ answers: { '紅還是藍？': '紅' } })
 })
