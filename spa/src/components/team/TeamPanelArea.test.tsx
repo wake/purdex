@@ -10,7 +10,8 @@ import { HOST, KEY, resetTeamStores, seedScene } from '../../lib/team/__tests__/
 import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
-import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { PANEL_MIN_WIDTH, useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
 import { CELL_GAP, CELL_H, HEADER_H, firstRowCapacity } from './panel-layout'
@@ -49,6 +50,7 @@ beforeEach(() => {
   cleanup()
   localStorage.clear()
   resetTeamStores()
+  useI18nStore.getState().setLocale('zh-TW')
   useTeamUiStore.setState({ panel: { width: 312 }, teamDrill: {}, workbookTabs: {} })
   useShownHostsStore.setState({ ids: [HOST] })
   clearModuleRegistry()
@@ -211,12 +213,36 @@ describe('full mode', () => {
     expect(lead.getAllByTestId('model-icon-opus').length).toBeGreaterThan(0)
     expect(lead.getByTestId('team-panel-model').textContent).toBe('Opus')
     expect(lead.getByTestId('team-panel-effort').textContent).toBe('high')
-    expect(lead.getByTestId('team-panel-ctx').textContent).toBe('42%')
+    expect(lead.getByTestId('team-panel-ctx').textContent).toBe('58%') // REMAINING (100 - 42), the ring below still draws the used 42
     expect(lead.getByTestId('context-ring')).toBeTruthy()
     const a = within(rows()[1])
     expect(a.getByTestId('team-panel-model').textContent).toBe('Sonnet') // model_id of the context sample
     expect(a.getByTestId('team-panel-effort').textContent).toBe('low')
-    expect(a.getByTestId('team-panel-ctx').textContent).toBe('7%')
+    expect(a.getByTestId('team-panel-ctx').textContent).toBe('93%')
+  })
+
+  it.each([[40, '60%'], [0, '100%'], [100, '0%']])('used %i%% -> ring draws used, the number reads %s left; the tooltips say so', (used, left) => {
+    scene()
+    readings((t) => { t.lead.model = 'claude-opus-5-5'; t.lead.context = { used_percentage: used, window: 1, at: 1 } })
+    mount()
+    const lead = within(rows()[0])
+    expect(lead.getByTestId('team-panel-ctx').textContent).toBe(left)
+    expect(lead.getByTestId('context-ring-arc').getAttribute('data-shown')).toBe(String(used))
+    expect(lead.getByTestId('team-panel-ctx').parentElement?.getAttribute('title')).toBe(`context 剩 ${left}`)
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    expect(screen.getAllByTestId('team-panel-cell')[0].getAttribute('title')).toContain(`context 剩 ${left}`)
+  })
+
+  it('the tooltips read "context N% left" in English, and a missing value stays a dash', () => {
+    act(() => useI18nStore.getState().setLocale('en'))
+    scene()
+    readings((t) => { t.lead.model = 'claude-opus-5-5'; t.lead.context = { used_percentage: 40, window: 1, at: 1 } })
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    mount()
+    const cells = screen.getAllByTestId('team-panel-cell')
+    expect(cells[0].getAttribute('title')).toContain('context 60% left')
+    expect(cells[1].getAttribute('title')).toContain('context —')
+    expect(cells[1].getAttribute('title')).not.toContain('left')
   })
 
   it('header shows panelName and its tooltip "<name> (<label>)"', () => {
@@ -310,11 +336,11 @@ describe('header height (TI-6)', () => {
     expect(screen.queryByTestId('team-panel-more')).toBeNull()
   })
 
-  it('the 3rd seat wraps into a region under the header, which keeps its height', () => {
-    scene5(2)
+  it('the 4th seat wraps into a region under the header, which keeps its height (312px holds 3 cells at 4px gaps)', () => {
+    scene5(3)
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
-    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(2)
+    expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(3)
     const more = screen.getByTestId('team-panel-more')
     expect(header().contains(more)).toBe(false)
     expect(more.className).toContain('flex-wrap')
@@ -347,11 +373,11 @@ describe('header height (TI-6)', () => {
       availW = 165
       cellW = 38
       const { unmount } = mount()
-      expect(inHeader()).toBe(3) // 3 x 38 + 2 x 8 + 9 = 139 of 165; a 4th would make 185
+      expect(inHeader()).toBe(3) // 3 x 38 + 2 x 4 + 5 = 127 of 165; a 4th would make 169
       unmount()
-      cellW = 50 // the iconDot style: ~12px wider per cell
+      cellW = 56 // a wider style: ~18px wider per cell
       mount()
-      expect(inHeader()).toBe(2) // 2 x 50 + 8 + 9 = 117; a 3rd would make 175
+      expect(inHeader()).toBe(2) // 2 x 56 + 4 + 5 = 121; a 3rd would make 181
       expect(within(screen.getByTestId('team-panel-more')).getAllByTestId('team-panel-cell')).toHaveLength(7)
     })
 
@@ -367,7 +393,7 @@ describe('header height (TI-6)', () => {
       const { rerender } = mount()
       const count = () => within(header()).getAllByTestId('team-panel-cell').length
       const first = count()
-      expect(first).toBe(3) // 3 x 38 + 16 + 9 = 139 of 165; the 4th (50) would make 197; and it stays
+      expect(first).toBe(3) // 3 x 38 + 8 + 5 = 127 of 165; the 4th (50) would make 181; and it stays
       for (let i = 0; i < 5; i++) {
         rerender(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
         expect(count()).toBe(first)
@@ -381,7 +407,7 @@ describe('header height (TI-6)', () => {
         vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
           return this.getAttribute('data-testid') === 'team-panel-cell' ? widths[this.getAttribute('data-session-id') ?? ''] ?? 38 : 0
         })
-        availW = 190 // with M2 (50): 4 cells need 197; without: 38 x 4 + 24 + 9 = 185
+        availW = 175 // with M2 (50): 4 cells need 181; without: 38 x 4 + 12 + 5 = 169
       })
       const seed = (ids: string[]) => seedScene({
         members: ids.map((id) => [id, `${id}-tm`] as [string, string]),
@@ -440,7 +466,7 @@ describe('header height (TI-6)', () => {
         widths = { M2: 50 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 200 // 38*3 + 50 + 3*8 + 9 = 197
+        availW = 185 // 38*3 + 50 + 3*4 + 5 = 181
         mount()
         expect(inHeader()).toBe(4)
       })
@@ -449,7 +475,7 @@ describe('header height (TI-6)', () => {
         widths = { M2: 50 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 190
+        availW = 175 // 4 cells with the wide one need 181
         mount()
         expect(inHeader()).toBe(3)
       })
@@ -458,7 +484,7 @@ describe('header height (TI-6)', () => {
         widths = { M3: 20 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 225 // 4 * 38 + 20 + 4*8 + 9 = 213
+        availW = 200 // 4 * 38 + 20 + 4*4 + 5 = 193
         mount()
         expect(inHeader()).toBe(5)
       })
@@ -502,7 +528,7 @@ describe('header height (TI-6)', () => {
         widths = { M3: 20, M4: 3 }
         scene5(8)
         act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
-        availW = 235 // 4*38 + 20 + 3 + 5*8 + 9 = 224 -> 6 fit (with M4 at 20: 241 -> 5)
+        availW = 210 // 4*38 + 20 + 3 + 5*4 + 5 = 200 -> 6 fit (with M4 at 20: 217 -> 5)
         mount()
         expect(inHeader()).toBe(6)
         widths = { M3: 20, M4: 20 } // e.g. a host badge got wider; no container resize
@@ -542,7 +568,7 @@ describe('header height (TI-6)', () => {
     })
   })
 
-  it('the divider after the lead is a flex child of the cells row with no margin: the row gap leaves 8px on each side of it', () => {
+  it('the divider after the lead is a flex child of the cells row with no margin: the row gap leaves 4px on each side of it', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     mount()
@@ -593,6 +619,7 @@ describe('one-line mode', () => {
 })
 
 describe('resize and enlarge', () => {
+  beforeEach(() => { useTeamUiStore.setState({ panel: { width: 500 } }) }) // above the minimum, so a drag to either side moves
   const drag = (from: number, to: number, commit = true) => {
     fireEvent.mouseDown(screen.getByTestId('resize-hit'), { clientX: from })
     fireEvent.mouseMove(document, { clientX: to })
@@ -602,12 +629,12 @@ describe('resize and enlarge', () => {
   it('resize is draft-then-commit: the store changes on mouseup only', () => {
     scene()
     mount()
-    drag(500, 420, false) // the left edge moves left 80px: 312 -> 392
-    expect(area().style.width).toBe('392px')
-    expect(useTeamUiStore.getState().panel.width).toBe(312)
+    drag(500, 420, false) // the left edge moves left 80px: 500 -> 580
+    expect(area().style.width).toBe('580px')
+    expect(useTeamUiStore.getState().panel.width).toBe(500)
     fireEvent.mouseUp(document)
-    expect(useTeamUiStore.getState().panel.width).toBe(392)
-    expect(area().style.width).toBe('392px')
+    expect(useTeamUiStore.getState().panel.width).toBe(580)
+    expect(area().style.width).toBe('580px')
   })
 
   it('a drag cut short by the panel going away leaves no draft and commits nothing later', () => {
@@ -617,10 +644,10 @@ describe('resize and enlarge', () => {
     unmount()
     fireEvent.mouseMove(document, { clientX: 100 })
     fireEvent.mouseUp(document)
-    expect(useTeamUiStore.getState().panel.width).toBe(312)
+    expect(useTeamUiStore.getState().panel.width).toBe(500)
     expect(document.body.style.cursor).toBe('')
     mount()
-    expect(area().style.width).toBe('312px')
+    expect(area().style.width).toBe('500px')
   })
 
   it('enlarging in the middle of a drag drops the draft: nothing commits and the width is unchanged', () => {
@@ -631,17 +658,18 @@ describe('resize and enlarge', () => {
     fireEvent.mouseMove(document, { clientX: 100 })
     fireEvent.mouseUp(document)
     act(() => { useTeamUiStore.getState().setPanelMode(KEY, 'full') })
-    expect(useTeamUiStore.getState().panel.width).toBe(312)
-    expect(area().style.width).toBe('312px')
+    expect(useTeamUiStore.getState().panel.width).toBe(500)
+    expect(area().style.width).toBe('500px')
   })
 
-  it('resize clamps to 280-720', () => {
+  it('resize clamps to 412-720', () => {
     scene()
     mount()
     drag(500, -2000)
     expect(useTeamUiStore.getState().panel.width).toBe(720)
     drag(500, 5000)
-    expect(useTeamUiStore.getState().panel.width).toBe(280)
+    expect(useTeamUiStore.getState().panel.width).toBe(PANEL_MIN_WIDTH)
+    expect(PANEL_MIN_WIDTH).toBe(412)
   })
 
   it('a click on the edge without moving writes nothing', () => {

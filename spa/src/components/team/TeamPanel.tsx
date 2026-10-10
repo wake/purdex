@@ -14,7 +14,7 @@ import { CellSep, NameCapsule, TeamCell } from './TeamCell'
 import { ContextRing, ModelIcon } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
-import { useSeatReading } from './team-readings'
+import { ctxLeftText, ctxTip, useSeatReading } from './team-readings'
 import { useMemberDrag } from './useMemberDrag'
 import { useCellCapacity } from './useCellCapacity'
 import { TeamEditPopover } from './TeamEditPopover'
@@ -182,7 +182,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
-  const ctxText = r.ctx !== undefined ? `${r.ctx}%` : '—'
+  const ctxText = ctxLeftText(r.ctx)
   const { remember, restore } = useReturnFocus()
   const transition = transitionOf(seat)
   const away = notInApp(seat)
@@ -234,7 +234,7 @@ function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, draggi
           <span data-testid="team-panel-model" className="truncate" title={noAnswer ?? r.modelRaw}>{noAnswer ? '—' : modelText}</span>
         </span>
         <span data-testid="team-panel-effort" className="truncate">{r.effort ?? '—'}</span>
-        <span className="ml-auto flex items-center gap-1 flex-shrink-0 text-text-primary" title={noAnswer ?? `${t('team.panel.context')} ${ctxText}`}>
+        <span className="ml-auto flex items-center gap-1 flex-shrink-0 text-text-primary" title={noAnswer ?? ctxTip(r.ctx, t)}>
           <ContextRing pct={r.ctx} model={r.model} size={16} />
           <span data-testid="team-panel-ctx" className="tabular-nums text-text-secondary">{ctxText}</span>
         </span>

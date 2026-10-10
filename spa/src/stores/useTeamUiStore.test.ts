@@ -2,7 +2,7 @@
 // ghost workspace): persisted under purdex-team-ui, never synced; pruned only by a roster frame that omits a team or by
 // deleting the host.
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useTeamUiStore } from './useTeamUiStore'
+import { PANEL_DEFAULT_WIDTH, PANEL_MIN_WIDTH, useTeamUiStore } from './useTeamUiStore'
 import { teamKeyOf } from '../lib/team/team-views'
 
 const k = (host: string, team: string) => teamKeyOf(host, team)
@@ -174,19 +174,20 @@ describe('the bead host-icon setting (spec P7, device-local)', () => {
 
 describe('the panel area (WA-2a)', () => {
   const saved = () => JSON.parse(localStorage.getItem('purdex-team-ui')!).state
-  it('defaults to 312 wide', () => {
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 312 })
+  it('defaults to 412 wide (the minimum: a lead + 3 members fit one header row)', () => {
+    expect(useTeamUiStore.getInitialState().panel).toEqual({ width: 412 })
+    expect(PANEL_DEFAULT_WIDTH).toBeGreaterThanOrEqual(PANEL_MIN_WIDTH)
   })
-  it('setPanelWidth clamps to 280-720 and rounds', () => {
+  it('setPanelWidth clamps to 412-720 and rounds', () => {
     const { setPanelWidth } = useTeamUiStore.getState()
     setPanelWidth(100)
-    expect(useTeamUiStore.getState().panel.width).toBe(280)
+    expect(useTeamUiStore.getState().panel.width).toBe(412)
     setPanelWidth(5000)
     expect(useTeamUiStore.getState().panel.width).toBe(720)
-    setPanelWidth(400.6)
-    expect(useTeamUiStore.getState().panel.width).toBe(401)
+    setPanelWidth(500.6)
+    expect(useTeamUiStore.getState().panel.width).toBe(501)
     setPanelWidth(Number.NaN)
-    expect(useTeamUiStore.getState().panel.width).toBe(401)
+    expect(useTeamUiStore.getState().panel.width).toBe(501)
   })
   it('the width is saved and survives a reload', () => {
     useTeamUiStore.getState().setPanelWidth(500)
@@ -203,10 +204,20 @@ describe('the panel area (WA-2a)', () => {
       return useTeamUiStore.getState().panel
     }
     expect(load({ width: 9999 })).toEqual({ width: 720 })
-    expect(load({ width: 3 })).toEqual({ width: 280 })
-    expect(load({ width: 'wide' })).toEqual({ width: 312 })
-    expect(load('oops')).toEqual({ width: 312 })
-    expect(load(null)).toEqual({ width: 312 })
+    expect(load({ width: 3 })).toEqual({ width: 412 })
+    expect(load({ width: 'wide' })).toEqual({ width: 412 })
+    expect(load('oops')).toEqual({ width: 412 })
+    expect(load(null)).toEqual({ width: 412 })
+  })
+  it('a width saved under the old minimum (280 / the old 312 default) is lifted to the new minimum on load', () => {
+    const load = (panel: unknown) => {
+      localStorage.setItem('purdex-team-ui', JSON.stringify({ state: { panel }, version: 0 }))
+      useTeamUiStore.persist.rehydrate()
+      return useTeamUiStore.getState().panel
+    }
+    for (const old of [280, 300, 312, 411]) expect(load({ width: old })).toEqual({ width: PANEL_MIN_WIDTH })
+    expect(load({ width: 412 })).toEqual({ width: 412 })
+    expect(load({ width: 413 })).toEqual({ width: 413 })
   })
   it('teamDrill and workbookTabs round-trip and heal', () => {
     const key = k('h1', 't1')
@@ -311,9 +322,9 @@ describe('the four states (WA-2a′)', () => {
   })
 
   it('an old store maps line -> line, full -> full, and expanded:true waits for the team showing', () => {
-    reload({ panelMode: { [key]: 'line' }, panel: { width: 400, expanded: true } })
+    reload({ panelMode: { [key]: 'line' }, panel: { width: 500, expanded: true } })
     expect(st().panelMode[key]).toBe('line')
-    expect(st().panel).toEqual({ width: 400 })
+    expect(st().panel).toEqual({ width: 500 })
     expect(st().legacyMax).toBe(true)
     st().takeLegacyMax(k('h1', 't2'))
     expect(st().panelMode[k('h1', 't2')]).toBe('max')
@@ -324,11 +335,11 @@ describe('the four states (WA-2a′)', () => {
   })
 
   it('expanded:true with no team showing is dropped; not expanded asks for nothing', () => {
-    reload({ panel: { width: 400, expanded: true } })
+    reload({ panel: { width: 500, expanded: true } })
     st().takeLegacyMax(null)
     expect(st().legacyMax).toBe(false)
     expect(st().panelMode).toEqual({})
-    reload({ panel: { width: 400, expanded: false } })
+    reload({ panel: { width: 500, expanded: false } })
     expect(st().legacyMax).toBe(false)
   })
 

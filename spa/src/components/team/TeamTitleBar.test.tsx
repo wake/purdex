@@ -138,12 +138,12 @@ describe('the strip', () => {
     expect(mode()).toBe('titlebar')
   })
 
-  it('the divider is a flex child of the cells row with no margin: the row gap leaves 8px on each side of it', () => {
+  it('the divider is a flex child of the cells row with no margin: the row gap leaves 4px on each side of it', () => {
     scene()
     mountBar()
     act(() => useTeamUiStore.getState().setPanelMode(KEY, 'titlebar'))
     const row = screen.getByTestId('team-strip-cells')
-    expect(row.style.columnGap).toBe('8px')
+    expect(row.style.columnGap).toBe('4px')
     const sep = row.querySelector<HTMLElement>('[data-testid="cell-sep"]')!
     expect(sep.parentElement).toBe(row)
     expect(sep.style.marginInline).toBe('')

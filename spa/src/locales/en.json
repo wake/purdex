@@ -340,6 +340,7 @@
   "team.panel.lead": "lead",
   "team.panel.unopened": "not open",
   "team.panel.context": "context",
+  "team.panel.context_left": "context {{pct}}% left",
   "team.edit.title": "Edit team",
   "team.edit.name": "Name",
   "team.edit.label": "Short label",

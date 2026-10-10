@@ -340,6 +340,7 @@
   "team.panel.lead": "lead",
   "team.panel.unopened": "未開",
   "team.panel.context": "context",
+  "team.panel.context_left": "context 剩 {{pct}}%",
   "team.edit.title": "編輯 team",
   "team.edit.name": "名稱",
   "team.edit.label": "短標籤",

@@ -1,5 +1,5 @@
 // spa/src/components/team/panel-layout.ts — the panel header's fixed measures (TI-6). Both modes share ONE header height, and
-// the one-line cells are sized so that at the default width (312) a lead + 3 members fit in the first row with the name
+// the one-line cells are sized so that at the minimum width (412, which is also the default) a lead + 3 members fit in the first row, even under iconDot, with the name
 // capsule at its 84px cap; a 5th seat wraps to a region under the header, so the first row never changes height.
 // jsdom has no layout, so the widths are named constants (and the row-capacity arithmetic is a pure function) the tests can add up.
 
@@ -32,19 +32,20 @@ export const CELL_PL = 6
 export const CELL_PR = 3
 /** The gap between the bot and the ring (`gap-1.5`). */
 export const CELL_INNER_GAP = 6
-/** The bot icon's box in TabIcon's badge layout: 1px margin + 16px box + 0.5px margin, rounded up. */
-export const CELL_ICON_BOX_W = 18
-/** iconDot draws its light in a 16px slot BESIDE the 14px icon (TabIcon), so the run is wider by about the icon. */
-export const CELL_ICON_BOX_W_ICONDOT = 32
+/** The bot icon's box in TabIcon's badge layout (1px margin + 16px box + 0.5px margin); 17 as MEASURED in Chromium (a badge cell is 48px). */
+export const CELL_ICON_BOX_W = 17
+/** iconDot draws its light in a 16px slot BESIDE the 14px icon (TabIcon), so the run is wider by about the icon (measured: an iconDot cell is 62px). */
+export const CELL_ICON_BOX_W_ICONDOT = 31
 /** A cell's nominal width under a light style, with a ring of `box` px (default: the host box's default). */
 export function cellWidthFor(style: 'icon' | 'dot' | 'iconDot' | 'badge', box: number = HOST_BADGE_BOX_DEFAULT): number {
   return CELL_PL + (style === 'iconDot' ? CELL_ICON_BOX_W_ICONDOT : CELL_ICON_BOX_W) + CELL_INNER_GAP + box + CELL_PR
 }
 export const CELL_W = cellWidthFor('badge')
-export const CELL_GAP = 8
+/** Cells are 4px apart (user 2026-10-10 on #2355; was 8), and the divider after the lead has 4px on each side. */
+export const CELL_GAP = 4
 /**
- * The 1px divider after the lead. It is an ordinary flex child of the cells row, so the row's CELL_GAP leaves 8px on EACH
- * side of it and it carries no margin of its own (a margin inside a cell's wrapper stacked on the gap: 16 / 8). Between the lead
+ * The 1px divider after the lead. It is an ordinary flex child of the cells row, so the row's CELL_GAP leaves 4px on EACH
+ * side of it and it carries no margin of its own (a margin inside a cell's wrapper stacked on the gap). Between the lead
  * and the next cell the row therefore spends CELL_GAP + line + CELL_GAP; SEP_W is what that adds beyond the one CELL_GAP
  * every pair of cells has anyway.
  */

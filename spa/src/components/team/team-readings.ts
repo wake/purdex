@@ -6,6 +6,7 @@
 import { useMemo } from 'react'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import type { RosterSession } from '../../lib/team/roster'
+import { remainingPct } from '../../lib/usage-display'
 import { familyOf, type ModelFamily } from './model-family'
 
 export interface SeatReading {
@@ -42,6 +43,16 @@ export function readingOf(s: RosterSession | undefined): SeatReading {
     ...(effort ? { effort } : {}),
     ...(typeof used === 'number' ? { ctx: Math.round(used) } : {}),
   }
+}
+
+/** The number the panel prints for context: what is LEFT (the status bar's rule, usage-display remainingPct); the ring still draws the used share. */
+export function ctxLeftText(ctx: number | undefined): string {
+  return ctx === undefined ? '—' : `${remainingPct(ctx)}%`
+}
+
+/** The tooltip phrase for context: 「context 剩 60%」 / "context 60% left"; a missing value is 「context —」, never 0. */
+export function ctxTip(ctx: number | undefined, t: (key: string, params?: Record<string, string | number>) => string): string {
+  return ctx === undefined ? `${t('team.panel.context')} —` : t('team.panel.context_left', { pct: remainingPct(ctx) })
 }
 
 export function useSeatReading(teamKey: string, sessionId: string): SeatReading {

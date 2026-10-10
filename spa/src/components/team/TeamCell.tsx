@@ -11,7 +11,7 @@ import { useSeatHostMain } from './useSeatHostMain'
 import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
-import { useSeatReading } from './team-readings'
+import { ctxTip, useSeatReading } from './team-readings'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
@@ -54,7 +54,7 @@ export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string;
       data-seat-state={seat.state}
       onMouseDown={keepFocus}
       onClick={() => onOpen(seat.sessionId)}
-      title={`${seat.title} · ${model} · ${t('team.panel.context')} ${r.ctx !== undefined ? `${r.ctx}%` : '—'}${seat.tabId ? '' : ` · ${t('team.panel.unopened')}`}${notes.map((n) => ` · ${n}`).join('')}`}
+      title={`${seat.title} · ${model} · ${ctxTip(r.ctx, t)}${seat.tabId ? '' : ` · ${t('team.panel.unopened')}`}${notes.map((n) => ` · ${n}`).join('')}`}
       className={`group relative flex items-center gap-1.5 h-6 pl-1.5 pr-[3px] rounded-md cursor-pointer ${isActive ? 'bg-surface-active text-white' : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}`}
     >
       <span data-testid="team-panel-light" data-dim={String(transition !== null)} className={`inline-flex ${transition !== null ? 'opacity-40' : ''}`}>
