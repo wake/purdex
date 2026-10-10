@@ -72,20 +72,26 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   // A page that does not fill the box cannot be scrolled, so no scroll event would ever ask for the next one: ask until the
   // box overflows or nothing older is left. A page that lands moves the first turn and starts over at once; one that fails
   // or brings nothing is asked for again after 1 s, then 2 s, and then left to the reader's own scroll to the top.
+  const firstTurn = doc.turns[0]?.index ?? null
   const attempt = useRef<{ first: number | null; tries: number }>({ first: null, tries: 0 })
   useEffect(() => {
     const box = boxRef.current
     if (!box || !doc.hasMoreBefore || entry.paging) return
     if (box.scrollHeight > box.clientHeight + TOP_REACH) return
-    const first = doc.turns[0]?.index ?? null
-    if (attempt.current.first !== first) attempt.current = { first, tries: 0 }
+    if (attempt.current.first !== firstTurn) attempt.current = { first: firstTurn, tries: 0 }
     const { tries } = attempt.current
     if (tries >= AUTO_PAGE_TRIES) return
-    const run = () => { attempt.current.tries += 1; void useConversationStore.getState().loadBefore(hostId, sessionId) }
+    const run = () => {
+      // The live end may have grown the content past the box while the timer waited.
+      if (box.scrollHeight > box.clientHeight + TOP_REACH) return
+      attempt.current.tries += 1
+      void useConversationStore.getState().loadBefore(hostId, sessionId)
+    }
     if (tries === 0) { run(); return }
     const timer = setTimeout(run, AUTO_PAGE_RETRY_MS * 2 ** (tries - 1))
     return () => clearTimeout(timer)
-  }, [doc.turns, doc.hasMoreBefore, entry.paging, hostId, sessionId])
+    // Keyed by the FIRST turn, not the turns: a live update elsewhere must not restart a pending retry.
+  }, [firstTurn, doc.hasMoreBefore, entry.paging, hostId, sessionId])
 
   const onScroll = (e: UIEvent<HTMLDivElement>) => {
     onBoxScroll(e)

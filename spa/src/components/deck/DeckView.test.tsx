@@ -102,6 +102,20 @@ describe('DeckView', () => {
     vi.useRealTimers()
   })
 
+  it('a live update to a later turn does not restart a pending retry', () => {
+    vi.useFakeTimers()
+    const e = entry([turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })
+    const { rerender } = render(<DeckView {...props} entry={e} />)
+    rerender(<DeckView {...props} entry={{ ...e, paging: true }} />)
+    rerender(<DeckView {...props} entry={{ ...e, paging: false }} />)
+    for (let i = 0; i < 5; i++) {
+      act(() => { vi.advanceTimersByTime(300) })
+      rerender(<DeckView {...props} entry={entry([turn(5, [userItem('a', 0), userItem(`live${i}`, i + 1)])], {}, { hasMoreBefore: true })} />)
+    }
+    expect(loadBefore).toHaveBeenCalledTimes(2) // the retry fired at 1 s although updates kept arriving every 0.3 s
+    vi.useRealTimers()
+  })
+
   it('a page that lands starts the tries over', () => {
     vi.useFakeTimers()
     const e = entry([turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })
