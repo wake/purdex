@@ -468,3 +468,26 @@ func TestKillClaim_NoMemberRowIsInsertedForASessionThatIsKilling(t *testing.T) {
 		t.Fatalf("row = %s, want active", got)
 	}
 }
+
+// codex re-review P1: the guard's read and the insert must be ONE step against the kill's claim, so every member insert runs in an
+// immediate transaction — including InsertMember and InsertMemberAndTask(m, nil), the spawn-finish without a first task, which
+// used the bare connection (two autocommit statements, the claim could land between them). beforeTaskCommit fires only inside
+// immediateTx. Mutation gate: insert on the bare connection → red.
+func TestKillClaim_EveryMemberInsertRunsInOneImmediateTransaction(t *testing.T) {
+	f := newFixture(t)
+	f.approveLead(uid(1))
+	var fired int
+	f.m.store.beforeTaskCommit = func() error { fired++; return nil }
+	if err := f.m.store.InsertMember(newMember("ins-1", uid(1), "sid-ins-1", "_ins111", 5)); err != nil {
+		t.Fatal(err)
+	}
+	if fired != 1 {
+		t.Fatalf("InsertMember committed outside an immediate transaction (hook fired %d times)", fired)
+	}
+	if _, err := f.m.store.InsertMemberAndTask(newMember("ins-2", uid(1), "sid-ins-2", "_ins222", 6), nil); err != nil {
+		t.Fatal(err)
+	}
+	if fired != 2 {
+		t.Fatalf("InsertMemberAndTask(m, nil) committed outside an immediate transaction (hook fired %d times in all)", fired)
+	}
+}

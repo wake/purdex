@@ -153,7 +153,11 @@ func (s *Store) InsertMember(m memberRow) error {
 		return fmt.Errorf("insert member: spawn op %q, team %q, session %q and state %q must all be set and the state known",
 			m.SpawnOp, m.TeamID, m.SessionID, m.State)
 	}
-	return insertMemberIn(context.Background(), s.db, m)
+	// In an immediate transaction like every other member insert: the guard in insertMemberRowIn (a session whose member is killing
+	// holds its seat) reads and inserts as one step against the kill's claim.
+	return s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		return insertMemberIn(ctx, conn, m)
+	})
 }
 
 // execer is what insertMemberIn writes through: the store's pool or a
