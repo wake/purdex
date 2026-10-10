@@ -275,6 +275,26 @@ func TestStart_VoidsAnOverdueAdoptBeforeThePumpCanSendIt(t *testing.T) {
 	}
 }
 
+// Whatever happens to the expiry sweep, the pump is never offered an adopt / spawn older than 10 minutes (the member host has
+// no age check, and may have pruned its record): the head waits for the sweep to void it. Other kinds are not held.
+// Mutation gate: Head without the age guard → red.
+func TestCommandOutboxHead_NeverOffersAnOverdueAdoptOrSpawn(t *testing.T) {
+	for _, kind := range []string{CmdAdopt, CmdSpawn, CmdRelease} {
+		f, _, _ := pumpFixture(t)
+		ob := &commandOutbox{s: f.m.store, now: f.m.now}
+		f.enqueue(f.cmd("c-"+kind, kind, "hostM", "mk"))
+		if _, _, ok, err := ob.Head("hostM"); err != nil || !ok {
+			t.Fatalf("%s: a fresh command is not offered: ok=%v err=%v", kind, ok, err)
+		}
+		f.clock.Add(commandExpiryMS + 1)
+		_, _, ok, err := ob.Head("hostM")
+		overdueHeld := kind != CmdRelease
+		if err != nil || ok == overdueHeld {
+			t.Fatalf("%s: overdue offered = %v (err %v), want %v", kind, ok, err, !overdueHeld)
+		}
+	}
+}
+
 type stateSnap struct {
 	members        string
 	notices, voids int

@@ -47,6 +47,11 @@ func (o *commandOutbox) Head(hostID string) (outboxEntry, int64, bool, error) {
 	if err != nil {
 		return outboxEntry{}, 0, false, fmt.Errorf("outbox head %s: %w", hostID, err)
 	}
+	// An adopt / spawn past its 10 minutes is never sent: the member host has no age check of its own (and may have pruned
+	// its record of the id, #2265). It waits here, and blocks the host's queue, until the expiry sweep voids it.
+	if (c.Kind == CmdAdopt || c.Kind == CmdSpawn) && c.CreatedAt <= o.now()-commandExpiryMS {
+		return outboxEntry{}, 0, false, nil
+	}
 	return outboxEntry{ID: c.ID, HostID: c.HostID, Path: commandsPath, Body: c.Body, Attempts: c.Attempts, First401At: c.First401At}, c.NextAt, true, nil
 }
 
