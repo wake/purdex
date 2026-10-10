@@ -57,6 +57,26 @@ func TestManualApprove_ARowOfAMemberThatStartedBeingKilledIsCancelled(t *testing
 	}
 }
 
+// codex incremental: the killing check and the claim must be one transaction (ClaimMemberKilling may land between a
+// handler-level check and the claim). So the store itself turns a claim of a killing member's self op into a cancel.
+// Mutation gate: drop the check in reportRelayIn → the op is claimed (red).
+func TestRelayStore_AClaimOfAKillingMembersSelfOpIsACancel(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-1", "L1", 1000)
+	m1 := seedMember(t, s, "sp-1", "team-1", "M1", 1000)
+	op := selfOp("op-k", "M1", m1.Ref, 1000)
+	op.State = team.RelayAwaitingApproval
+	if err := s.CreateRelayOp(op); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetMemberState("sp-1", team.MemberKilling, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if op, res, err := s.ReportRelay("op-k", RelayReport{State: team.RelayClaimed, At: 3000}); err != nil || res != ReportApplied || op.State != team.RelayCancelled {
+		t.Fatalf("claim of a killing member's op: %+v %v %v, want applied + cancelled", op, res, err)
+	}
+}
+
 func TestManualReconcile_AnApprovedRowOfAKillingMemberIsCancelled(t *testing.T) {
 	f := newFixture(t)
 	f.makeMember("sid-1")

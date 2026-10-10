@@ -253,6 +253,17 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	if r.Expect != nil && (cur.State != r.Expect.State || cur.UpdatedAt != r.Expect.UpdatedAt || cur.SeenAt != r.Expect.SeenAt) {
 		return cur, ReportBadTransition, nil // progress landed since the caller looked: it wins
 	}
+	if r.State == team.RelayClaimed && cur.Kind == team.RelayKindSelf && cur.State == team.RelayAwaitingApproval {
+		// MR-1: a kill may start (ClaimMemberKilling) while the card is open; cleared moves active rows only, so a claim
+		// of a killing member's op would strand the seat. Decided here, under the write lock, not by the caller's earlier read.
+		var one int
+		switch err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state = 'killing'`, cur.SessionID).Scan(&one); {
+		case err == nil:
+			r.State, r.Reason = team.RelayCancelled, team.ErrMemberRelayIsLeads
+		case !errors.Is(err, sql.ErrNoRows):
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: killing member: %w", id, err)
+		}
+	}
 	if cur.State == r.State {
 		return cur, ReportNoop, nil
 	}
