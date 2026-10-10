@@ -29,7 +29,7 @@ export function UserBubble({ item }: { item: UserItem }) {
 
 export function AgentBubble({ item }: { item: AgentTextItem }) {
   const t = useI18nStore((s) => s.t)
-  // RoomProse carries the --wt-* theme vars itself (#2463); `.chat-md` (index.css) only fixes inline code. The deck and room are untouched.
+  // RoomProse carries the --wt-* theme vars itself (#2463); `.chat-md` (index.css) only fixes inline code (the deck's `.deck-md` shares the rule; room and execution are untouched).
   return (
     <div data-testid="chat-agent" className="flex justify-start">
       <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-surface-secondary px-3 py-2 text-sm text-text-primary">

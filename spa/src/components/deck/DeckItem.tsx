@@ -14,7 +14,7 @@ export function DeckItem({ item, actions }: { item: ConversationItem; actions?: 
     case 'user': return <UserBlock item={item} />
     case 'agent_text':
       return (
-        <div data-testid="deck-agent-text">
+        <div data-testid="deck-agent-text" className="deck-md">
           <RoomProse content={item.markdown} streaming={item.streaming} />
           {item.truncated && <div className="text-xs text-text-muted">{t('deck.output.cut')}</div>}
         </div>
