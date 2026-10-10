@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -77,7 +78,7 @@ func TestRelayCreate_AFailureAtTheAcceptRollsEverythingBack(t *testing.T) {
 	for _, pool := range []int{2, 0} {
 		f := gateFixture(t, true, true, pool)
 		f.openAsk(rid(530))
-		f.m.store.afterAskAccept = func() error { return boom }
+		f.m.store.afterAskAccept = func(*sql.Tx) error { return boom }
 		code, _, _ := f.createRelay(rid(531), "/tmp/10.sock", "_mem001")
 		if code != 500 || countRelayOps(t, f) != 0 || f.rowCount("member_relay") != 0 || f.poolLeft("sid-1") != pool {
 			t.Errorf("pool %d: %d, ops %d, rows %d, pool %d", pool, code, countRelayOps(t, f), f.rowCount("member_relay"), f.poolLeft("sid-1"))
@@ -93,8 +94,8 @@ func TestRelayCreate_AcceptIsInsideTheTransaction(t *testing.T) {
 	f := gateFixture(t, false, false, 0)
 	f.openAsk(rid(540))
 	var seen string
-	f.m.store.afterAskAccept = func() error {
-		f.m.store.db.QueryRow(`SELECT state FROM relay_asks WHERE id = ?`, rid(540)).Scan(&seen)
+	f.m.store.afterAskAccept = func(tx *sql.Tx) error {
+		tx.QueryRow(`SELECT state FROM relay_asks WHERE id = ?`, rid(540)).Scan(&seen)
 		return errors.New("stop")
 	}
 	f.createRelay(rid(541), "/tmp/10.sock", "_mem001")
