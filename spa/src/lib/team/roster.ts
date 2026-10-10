@@ -67,6 +67,10 @@ export interface TeamRoster {
   in_use?: number
   /** The team's chosen colour, 0-7; absent = automatic (the id hash). Absent on a daemon without `team.edit.v1`. */
   team_color?: number
+  /** The directories a member of this team may be started under (real paths, 1-16). Absent on a daemon that predates `PUT /api/team/roots`. */
+  roots?: string[]
+  /** The roots' revision: 0 = never edited. The write sends it back as `if_rev`. Present exactly when `roots` is. */
+  roots_rev?: number
 }
 
 export interface RosterEventValue {
@@ -154,7 +158,7 @@ export function parseRosterEvent(value: unknown): RosterEventValue | string {
   return {
     op,
     teams: (teams as TeamRoster[]).map((t) => {
-      const { max_members, in_use, team_color, ...rest } = t
+      const { max_members, in_use, team_color, roots, roots_rev, ...rest } = t
       return {
         ...rest,
         lead: cleanHost(t.lead),
@@ -163,6 +167,8 @@ export function parseRosterEvent(value: unknown): RosterEventValue | string {
         team_label: typeof t.team_label === 'string' ? t.team_label : '',
         // Both or neither: a cap without its usage (or the reverse) is not a number to build a stepper on.
         ...(isCapPair(max_members, in_use) ? { max_members, in_use } : {}),
+        // Both or neither, as the cap: a list without its revision cannot be written back (if_rev is required).
+        ...(Array.isArray(roots) && roots.every(isStr) && Number.isInteger(roots_rev) && (roots_rev as number) >= 0 ? { roots, roots_rev } : {}),
         // 0-7 or nothing: null, a bad value or a daemon that predates colours all read as automatic.
         ...(Number.isInteger(team_color) && (team_color as number) >= 0 && (team_color as number) <= 7 ? { team_color } : {}),
       }

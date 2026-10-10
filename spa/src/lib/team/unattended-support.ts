@@ -15,6 +15,7 @@ import { hostEndpoint, useHostStore, type HostConfig } from '../../stores/useHos
 import { PROBE_ONLY_FLAGS, useUnattendedStore } from '../../stores/useUnattendedStore'
 import { quotaHostIds, useRelayQuotaStore } from './relay-quota'
 import { useMaxMembersStore } from './max-members'
+import { useRootsStore } from './roots'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { WORKBOOK_V1_CAPABILITY, WORKBOOK_V2_CAPABILITY } from '../workbook/types'
 import { RELAY_QUOTA_CAPABILITY, TEAM_EDIT_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
@@ -69,7 +70,7 @@ export function startUnattendedSupport(): () => void {
       if (!next.hosts[hostId]) useRelayQuotaStore.getState().forgetHost(hostId) // a removed host's numbers go with it
     }
     for (const hostId of Object.keys(prev.hosts)) {
-      if (!next.hosts[hostId]) useMaxMembersStore.getState().forgetHost(hostId) // and a cap request still out to it
+      if (!next.hosts[hostId]) { useMaxMembersStore.getState().forgetHost(hostId); useRootsStore.getState().forgetHost(hostId) } // and a cap / roots request still out to it
     }
     for (const [hostId, host] of Object.entries(next.hosts)) {
       const before = prev.hosts[hostId]
@@ -79,6 +80,7 @@ export function startUnattendedSupport(): () => void {
         store.forgetHost(hostId)
         useRelayQuotaStore.getState().forgetHost(hostId) // and so are the quota numbers it confirmed
         useMaxMembersStore.getState().forgetHost(hostId) // and a cap request still out to it
+        useRootsStore.getState().forgetHost(hostId)
       }
       if (next.runtime[hostId]?.status !== 'connected') {
         // The connection the capabilities were learned on is gone: they are unknown until the next probe answers, and an
