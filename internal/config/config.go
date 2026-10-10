@@ -61,6 +61,10 @@ type PeerHost struct {
 	// none means no spawn. Absolute, canonical (CanonicalTeamRoots).
 	AllowTeam bool     `toml:"allow_team"  json:"allow_team"`
 	TeamRoots []string `toml:"team_roots"  json:"team_roots"`
+	// TeamRootsRev rises by one every time TeamRoots changes (#2340): a writer that read the set at revision N and writes
+	// the whole set back says so, and the daemon refuses it when the set has moved on. An entry written before the field
+	// existed has 0.
+	TeamRootsRev int64 `toml:"team_roots_rev" json:"team_roots_rev"`
 }
 
 // MaxTeamRoots bounds how many roots one peer entry may carry.
