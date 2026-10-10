@@ -94,3 +94,24 @@ func RunLockHeld(locked string) (bool, error) {
 
 // SetTokenHeld is SetToken for a caller already inside WithLock: locked is the path it was handed.
 func SetTokenHeld(locked, token string) error { return setToken(locked, token) }
+
+// HandOverLooksReal reports whether fdStr names an open fd on the run file of locked while some lock on that file is held — the
+// shape of a restart's inherited run lock. It takes nothing and closes nothing. It is what lets a restart keep waiting for the
+// config lock (an environment variable alone is not a restart: an fd nobody locked, or one that is not the run file, is not
+// worth waiting for and the start is refused like a cold start).
+func HandOverLooksReal(fdStr, locked string) bool {
+	fd, err := strconv.Atoi(fdStr)
+	if err != nil || fd < 3 {
+		return false
+	}
+	var have syscall.Stat_t
+	if err := syscall.Fstat(fd, &have); err != nil {
+		return false
+	}
+	var want syscall.Stat_t
+	if err := syscall.Stat(runLockPath(locked), &want); err != nil || have.Dev != want.Dev || have.Ino != want.Ino {
+		return false
+	}
+	held, err := RunLockHeld(locked)
+	return err == nil && held
+}

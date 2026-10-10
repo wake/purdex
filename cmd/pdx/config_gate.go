@@ -22,8 +22,9 @@ func runLockEnvEntry(f *os.File) string { return fmt.Sprintf("%s=%d", runLockFDE
 // a restart) the run lock of that file, which it then holds for as long as it runs. A writer that wants to change the file while
 // a daemon uses it (`pdx token generate`) takes the same lock first, so it either finishes before the daemon reads the file or
 // sees the daemon's run lock — it cannot slip in between. A lock that stays held past the wait refuses a cold start (pdx start
-// and the App report the failure to a person); a restart, which inherits the run lock and needs no gate, starts on it; a gate that cannot be entered for another reason (the directory is not writable — `token generate` cannot work
-// there either) lets the daemon start from the file without a run lock, and says so.
+// and the App report the failure to a person); a restart keeps waiting, with the run lock it inherited; a gate that cannot be
+// entered for another reason (the directory is not writable — `token generate` cannot work there either) lets the daemon start
+// from the file without a run lock, and says so.
 func openConfigGate(cfgPath string, logf func(string, ...any)) (cfg config.Config, run *os.File, err error) {
 	gate := cfgPath
 	if gate == "" {
@@ -33,9 +34,9 @@ func openConfigGate(cfgPath string, logf func(string, ...any)) (cfg config.Confi
 	os.Unsetenv(runLockFDEnv) // children (tmux, nex turns) must not see a stale fd number
 	entered := false
 	var loadErr error
-	werr := config.WithLock(gate, func(locked string) error {
+	enter := func(locked string) error {
 		entered = true
-		if cfg, loadErr = config.Load(locked); loadErr != nil { // the path that is locked, not the name it was reached by
+		if cfg, loadErr = config.Load(cfgPath); loadErr != nil {
 			return loadErr
 		}
 		if haveHanded {
@@ -54,27 +55,27 @@ func openConfigGate(cfgPath string, logf func(string, ...any)) (cfg config.Confi
 		}
 		run = f
 		return nil
-	})
+	}
+	werr := config.WithLock(gate, enter)
+	// A restart has no launcher to try again, so it keeps waiting for the lock — up to restartGateWait — instead of giving up at
+	// the first timeout. It never reads the file outside the gate: a writer that holds the lock can still commit after such a
+	// read, and the environment variable that names the inherited fd is no proof of a restart (it is read inside the gate, where
+	// the adoption is checked); a hand-over that does not even look like one (no such fd, not the run file, nobody holds a lock on it)
+	// is not waited for.
+	if haveHanded && errors.Is(werr, config.ErrLockTimeout) && config.HandOverLooksReal(handed, config.CanonicalPath(gate)) {
+		deadline := time.Now().Add(restartGateWait)
+		for errors.Is(werr, config.ErrLockTimeout) && time.Now().Before(deadline) {
+			logf("config lock: %v; restart: still waiting", werr)
+			werr = config.WithLock(gate, enter)
+		}
+	}
 	if loadErr != nil {
 		return cfg, nil, loadErr
 	}
-	if werr != nil && !entered && errors.Is(werr, config.ErrLockTimeout) && haveHanded {
-		// A restart has no launcher to try again, and it does not need the gate: the previous image's run lock is inherited, held
-		// without a gap, so `pdx token generate` sees it and cannot change the file under this daemon. Read the file where it is
-		// and take the inherited lock over; only a hand-over that cannot be adopted falls through to the refusal below.
-		locked := config.CanonicalPath(gate)
-		if f, aerr := config.AdoptRunLock(handed, locked); aerr == nil {
-			logf("config lock: %v; restart: reading the config without the gate, on the inherited run lock", werr)
-			cfg, err = config.Load(locked)
-			return cfg, f, err
-		} else {
-			logf("run lock: inherited fd not adopted (%v)", aerr)
-		}
-	}
 	if werr != nil && !entered && errors.Is(werr, config.ErrLockTimeout) {
 		// Another writer has held the lock for the whole wait. Starting anyway would read the file outside the gate and leave a
-		// window before the run lock in which `pdx token generate` sees no daemon and changes the token under it: refuse, the
-		// launcher starts it again.
+		// window before the run lock in which `pdx token generate` sees no daemon and changes the token under it: refuse (a cold
+		// start is reported to whoever ran `pdx start`, or the App, who tries again).
 		return cfg, nil, fmt.Errorf("the config is being written by another process: %w", werr)
 	}
 	if werr != nil && !entered {
