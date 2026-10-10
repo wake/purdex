@@ -55,6 +55,20 @@ describe('SessionInput attachments', () => {
     expect(screen.getByTestId('attachment-chip')).toHaveTextContent('Attached shot.png')
   })
 
+  it('the attachment area is set apart from the messages above: a top border in the input line gray and a faint tint', async () => {
+    render(ui())
+    expect(screen.queryByTestId('attachment-area')).toBeNull()
+    paste({ files: [png()] })
+    await flush()
+    const area = screen.getByTestId('attachment-area')
+    expect(area).toContainElement(screen.getByTestId('attachment-chip'))
+    expect(area.className).toContain('border-t')
+    expect(area.className).toContain('border-[#808080]')
+    expect(area.className).toContain('bg-text-primary/5')
+    // the same gray as the input row's own lines
+    expect(screen.getByTestId('session-input-drop').className).toContain('border-[#808080]')
+  })
+
   it('a non-image file puts only its path, on a new line after existing text', async () => {
     render(ui())
     fireEvent.change(box(), { target: { value: 'see this' } })
