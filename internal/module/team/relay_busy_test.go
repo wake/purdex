@@ -78,6 +78,27 @@ func TestBusy_ARunningMemberPast15MinKeepsTheOpAndTellsTheLeadOnce(t *testing.T)
 	}
 }
 
+// A transient store failure while the notice is being built must not use up its single chance (codex R1): the mark is given
+// back and the next sweep sends it. A team that is really gone keeps the mark (nothing to tell).
+func TestBusy_ATransientLookupFailureDoesNotSuppressTheNotice(t *testing.T) {
+	f := newFixture(t)
+	op := f.seenMemberOp("running")
+	mr, _, _, _ := f.m.store.ActiveMemberInLiveTeam("sid-m1")
+	if _, err := f.m.store.db.Exec(`ALTER TABLE teams RENAME TO teams_away`); err != nil {
+		t.Fatal(err)
+	}
+	f.m.busyNoticeOnce(op, mr)
+	time.Sleep(100 * time.Millisecond)
+	if _, err := f.m.store.db.Exec(`ALTER TABLE teams_away RENAME TO teams`); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.busyNotices()); n != 0 {
+		t.Fatalf("a notice went out while the lookup failed (%d)", n)
+	}
+	f.m.busyNoticeOnce(op, mr) // the next sweep
+	waitFor(t, func() bool { return len(f.busyNotices()) == 1 })
+}
+
 // Past the hard cap the op fails member_busy_timeout, and the lead is told by the usual failure notice.
 func TestBusy_ARunningMemberPastTheCapFailsMemberBusyTimeout(t *testing.T) {
 	f := newFixture(t)
