@@ -225,6 +225,23 @@ describe('WorkerTestTab', () => {
       expect(document.activeElement).toBe(lists[0])
     })
 
+    it('a success with nothing to show anywhere moves focus to the empty line (no list to hand it to)', () => {
+      const { pressByKeyboard, settle, refetch } = setup()
+      pressByKeyboard()
+      settle(hook({ page: page(state, []), refetch }))
+      expect(screen.queryByRole('list')).toBeNull()
+      expect(document.activeElement).toBe(screen.getByTestId('worker-test-empty'))
+    })
+
+    it('focus moved elsewhere while the retry ran is left alone', () => {
+      const { pressByKeyboard, settle, refetch } = setup()
+      pressByKeyboard()
+      const search = screen.getByTestId('worker-test-search')
+      act(() => { search.focus() })
+      settle(hook({ page: page(state, [row]), refetch }))
+      expect(document.activeElement).toBe(search)
+    })
+
     it('a press without focus on the button moves no focus', () => {
       const { btn, settle, refetch } = setup()
       act(() => { fireEvent.click(btn()) })

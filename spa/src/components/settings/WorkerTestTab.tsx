@@ -4,7 +4,7 @@
 //
 // Needs a daemon with `conversations.scope.v1`: on an older one the tab only explains that and calls nothing.
 // Rows and actions are the 已退出 / 已消失 ones (`ConversationRow`, `rebuildConversation`).
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useConversations, type UseConversations } from '../../hooks/useConversations'
 import { useListRetry, type ListRetry } from '../../hooks/useListRetry'
 import { useHostExecutions } from '../../hooks/useHostExecutions'
@@ -110,6 +110,8 @@ function TestSections({ hostId }: { hostId: string }) {
 
   const endedHome = ended.page?.home ?? ''
   const goneHome = gone.page?.home ?? ''
+  // Nothing at all to show (both sections empty): a successful retry has no list to hand focus to, so it goes to this line (#1952).
+  const bindEmptyLine = useCallback((el: HTMLElement | null) => { bindEndedList(el); bindGoneList(el) }, [bindEndedList, bindGoneList])
   const endedRootError = ended.page?.root_error
   const goneRootError = gone.page?.root_error
   const endedRows = useMemo(
@@ -181,7 +183,7 @@ function TestSections({ hostId }: { hostId: string }) {
       )}
 
       {allEmpty && (
-        <p data-testid="worker-test-empty" className="text-xs text-text-muted">{t('settings.worker.test.empty')}</p>
+        <p ref={bindEmptyLine} tabIndex={-1} data-testid="worker-test-empty" className="text-xs text-text-muted outline-none">{t('settings.worker.test.empty')}</p>
       )}
     </div>
   )
