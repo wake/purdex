@@ -21,8 +21,12 @@ const cases = golden.cases as unknown as Array<{ name: string; turns: GoldenTurn
 const withSteps = (items: Item[]) => items.map((it, index) => ({ ...it, index }) as Item)
 const rowsOf = (turns: Array<{ id: string; index: number; items: Item[] }>) =>
   turns.map((t) => turnRows({ ...t, items: withSteps(t.items) })).filter((r) => r.runs.length > 0)
+// `latest` is compared too (iOS omits the key unless the run is running).
+const runView = (x: { stepIds: string[]; running: boolean; text: string | null; latest?: string }) =>
+  ({ step_ids: x.stepIds, running: x.running, text: x.text, ...(x.latest !== undefined ? { latest: x.latest } : {}) })
+const goldenRun = (r: GoldenTurn['runs'][number]) => ({ step_ids: r.step_ids, running: r.running, text: r.text, ...(r.latest !== undefined ? { latest: r.latest } : {}) })
 const view = (rows: ReturnType<typeof rowsOf>): GoldenTurn[] =>
-  rows.map((r) => ({ turn_id: r.turnId, index: r.index, runs: r.runs.map((x) => ({ step_ids: x.stepIds, running: x.running, text: x.text })) }))
+  rows.map((r) => ({ turn_id: r.turnId, index: r.index, runs: r.runs.map(runView) }))
 
 describe('turn rows parity with the iOS golden file', () => {
   it('covers every MANIFEST case, in order', () => {
@@ -31,16 +35,16 @@ describe('turn rows parity with the iOS golden file', () => {
   })
 
   for (const c of cases) {
-    it(`case ${c.name}: runs, step ids and text equal`, () => {
+    it(`case ${c.name}: runs, step ids, text and latest equal`, () => {
       const fx = fixtureOf(c.name)
       expect(fx, 'fixture loaded').toBeDefined()
-      expect(view(rowsOf(fx.conversation.turns))).toEqual(c.turns.map((t) => ({ turn_id: t.turn_id, index: t.index, runs: t.runs.map((r) => ({ step_ids: r.step_ids, running: r.running, text: r.text })) })))
+      expect(view(rowsOf(fx.conversation.turns))).toEqual(c.turns.map((t) => ({ turn_id: t.turn_id, index: t.index, runs: t.runs.map(goldenRun) })))
       for (const ch of c.children ?? []) {
         const child = childOf(c.name, ch.agent_id)
         expect(child, 'child fixture loaded').toBeDefined()
         // A subagent file is one pseudo-turn whose id is its first item's id.
         const got = rowsOf([{ id: child.items[0].id, index: 0, items: child.items }])
-        expect(view(got)).toEqual(ch.turns.map((t) => ({ turn_id: t.turn_id, index: t.index, runs: t.runs.map((r) => ({ step_ids: r.step_ids, running: r.running, text: r.text })) })))
+        expect(view(got)).toEqual(ch.turns.map((t) => ({ turn_id: t.turn_id, index: t.index, runs: t.runs.map(goldenRun) })))
       }
     })
   }
@@ -56,7 +60,7 @@ describe('turn rows parity with the iOS golden file', () => {
   })
 })
 
-// Hand-made inputs for rules the golden file has no case for (README: "the current golden cases have no running run").
+// Hand-made inputs for rules the golden file has no case for (its one running run is in `ask-question`, covered above).
 const step = (id: string, over: Partial<StepItem> = {}): StepItem =>
   ({ type: 'step', id, at: 1, index: 0, kind: 'execute', tool: 'Bash', status: 'done', summary: id, started_at: 1000, duration_ms: 1000, input: {}, ...over })
 
