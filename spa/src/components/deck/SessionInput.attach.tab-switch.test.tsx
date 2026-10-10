@@ -1,7 +1,7 @@
 // Regression (CLAUDE.md tab-hosted rule): the attachments of the session input - the inserted text and the "attached" chips -
 // survive switching to another tab and back. The real TabContent unmounts the pane (keepAliveCount 0).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, within } from '@testing-library/react'
 import { TabContent } from '../TabContent'
 import { SessionInput } from './SessionInput'
 import { registerModule, clearModuleRegistry, type PaneRendererProps } from '../../lib/module-registry'
@@ -34,6 +34,7 @@ const paneId = (sessionTab.layout as { pane: { id: string } }).pane.id
 const key = draftKey(paneId, H, SID)
 
 beforeEach(() => {
+  URL.createObjectURL = vi.fn(() => 'blob:test/x'); URL.revokeObjectURL = vi.fn()
   cleanup()
   mocks.upload.mockReset().mockImplementation((_h: string, f: File) => Promise.resolve({ filename: f.name, path: `/up/dev001/${f.name}` }))
   clearModuleRegistry()
@@ -56,12 +57,52 @@ describe('session input attachments across tab switches', () => {
 
     rerender(<TabContent activeTab={dashTab} allTabs={all} />)
     expect(screen.queryByTestId('session-input')).toBeNull() // really unmounted
-    expect(readDraft(key)).toBe('look\n[Image: source: /up/dev001/shot.png]')
+    expect(readDraft(key)).toBe('look [Image #1]')
     expect(readAttachments(key)).toHaveLength(1)
 
     rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
-    expect(box().value).toBe('look\n[Image: source: /up/dev001/shot.png]')
-    expect(screen.getByTestId('attachment-chip')).toHaveTextContent('shot.png')
+    expect(box().value).toBe('look [Image #1]')
+    expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
+  })
+
+  it('the thumbnail is the same picture after a tab switch, and its blob: URL is kept while the tab is away and freed by the release', async () => {
+    let n = 0
+    const revoked: string[] = []
+    URL.createObjectURL = vi.fn(() => `blob:test/${++n}`)
+    URL.revokeObjectURL = vi.fn((u: string) => { revoked.push(u) })
+    const { rerender } = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    fireEvent.paste(box(), { clipboardData: { files: [new File(['x'], 'shot.png', { type: 'image/png' })], getData: () => '', types: ['Files'] } })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(screen.getByRole('img', { name: 'shot.png' })).toHaveAttribute('src', 'blob:test/1')
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('session-input')).toBeNull()
+    expect(revoked).toEqual([])
+    rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(screen.getByRole('img', { name: 'shot.png' })).toHaveAttribute('src', 'blob:test/1')
+    expect(revoked).toEqual([])
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    releasePane(paneId)
+    expect(revoked).toEqual(['blob:test/1'])
+  })
+
+  it('the placeholder, its chip and its number are there after a tab switch, and sending still expands them', async () => {
+    const { rerender } = render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    fireEvent.paste(box(), { clipboardData: { files: [new File(['x'], 'a.png', { type: 'image/png' }), new File(['x'], 'b.png', { type: 'image/png' })], getData: () => '', types: ['Files'] } })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    fireEvent.change(box(), { target: { value: 'see [Image #2] and [Image #1]' } })
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('session-input')).toBeNull()
+    rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(box().value).toBe('see [Image #2] and [Image #1]')
+    expect(screen.getAllByTestId('attachment-chip')).toHaveLength(2)
+    expect(screen.getAllByRole('img').map((i) => i.getAttribute('alt')).sort()).toEqual(['a.png', 'b.png'])
+    expect(screen.getByTestId('draft-tags').querySelectorAll('mark')).toHaveLength(2)
+
+    fireEvent.keyDown(box(), { key: 'Enter' })
+    expect(screen.getByTestId('queued-message')).toHaveTextContent('see [Image: source: /up/dev001/b.png] and [Image: source: /up/dev001/a.png]')
   })
 
   // an upload settled by hand
@@ -86,10 +127,10 @@ describe('session input attachments across tab switches', () => {
     expect(screen.queryByTestId('session-input')).toBeNull()
     up.resolve('/up/dev001/shot.png')
     await flush()
-    expect(readDraft(key)).toBe('[Image: source: /up/dev001/shot.png]')
+    expect(readDraft(key)).toBe('[Image #1]')
     rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
-    expect(box().value).toBe('[Image: source: /up/dev001/shot.png]')
-    expect(screen.getByTestId('attachment-chip')).toHaveTextContent('shot.png')
+    expect(box().value).toBe('[Image #1]')
+    expect(within(screen.getByTestId('attachment-chip')).getByRole('img', { name: 'shot.png' })).toBeInTheDocument()
   })
 
   it('switching away and back while it is still uploading shows it, and Enter stays held back', async () => {
@@ -108,7 +149,7 @@ describe('session input attachments across tab switches', () => {
     up.resolve('/up/dev001/shot.png')
     await flush()
     expect(screen.queryByTestId('attachment-uploading')).toBeNull()
-    expect(box().value).toBe('hello\n[Image: source: /up/dev001/shot.png]')
+    expect(box().value).toBe('hello [Image #1]')
   })
 
   it('releasing the pane while the tab is away aborts the upload and writes nothing back', async () => {

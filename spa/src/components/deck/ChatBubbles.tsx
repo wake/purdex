@@ -5,7 +5,9 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { formatClock } from '../../lib/conversations/deck-format'
 import type { AgentTextItem, UserItem } from '../../lib/conversations/types'
 import RoomProse from '../room/RoomProse'
+import { OWN_TEXT_SOURCES } from '../../lib/conversations/image-sniff'
 import { UserBlock } from './UserBlock'
+import { UserText } from './UserText'
 import { CjkText } from './CjkText'
 
 /** Sources that are not the person's own message: they keep the deck's block (a bash input, a wake-up, a background report, a peer's message). */
@@ -18,7 +20,7 @@ export function UserBubble({ item }: { item: UserItem }) {
   return (
     <div data-testid="chat-user" data-source={item.source} className="flex flex-col items-end">
       <div data-testid="chat-user-bubble" className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm text-white">
-        <CjkText text={item.text} />{item.truncated && '…'}
+        {OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}{item.truncated && '…'}
       </div>
       <div data-testid="chat-user-time" className="mt-0.5 text-xs text-text-muted">
         {item.source === 'queued' ? t('deck.user.queued') : formatClock(item.at)}

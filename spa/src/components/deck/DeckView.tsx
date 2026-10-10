@@ -4,6 +4,7 @@
 // whatever else lives under the stream is the caller's `footer`, drawn below the scrolling box.
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type UIEvent } from 'react'
 import { FoldContext } from '../room/fold-context'
+import { ConversationHostContext } from './conversation-host'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import { useOlderTurns } from '../../hooks/useOlderTurns'
 import { noteDeckPane, usePaneFoldStore } from '../../lib/conversations/fold-memory'
@@ -121,6 +122,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
         </button>
       )}
       <div ref={setBox} onScroll={onScroll} data-testid="deck-scroll" style={{ overflowAnchor: 'none' }} className="flex-1 space-y-3 overflow-y-auto p-4">
+        <ConversationHostContext.Provider value={hostId}>
         <FoldContext.Provider value={foldStore}>
           <DeckRevealContext.Provider value={reveal}>
             <StatusOverlay>
@@ -138,6 +140,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
             {!empty && <LiveTurnLine turns={doc.turns} status={doc.header?.status} />}
           </DeckRevealContext.Provider>
         </FoldContext.Provider>
+        </ConversationHostContext.Provider>
       </div>
       {footer?.(footerContext(paneId, hostId, sessionId, doc, items, onSwitchToTerminal))}
     </div>

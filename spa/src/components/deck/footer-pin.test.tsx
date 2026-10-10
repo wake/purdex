@@ -16,7 +16,8 @@ const userItem = (id: string, index: number): ConversationItem => ({ type: 'user
 class MockRO {
   static all: MockRO[] = []
   els: Element[] = []
-  constructor(readonly cb: () => void) { MockRO.all.push(this) }
+  readonly cb: () => void
+  constructor(cb: () => void) { this.cb = cb; MockRO.all.push(this) }
   observe(el: Element) { this.els.push(el) }
   unobserve() {}
   disconnect() { this.els = [] }
