@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
 )
@@ -22,7 +21,7 @@ const maxRemoteBodyBytes = 16 * 1024 * 1024 // 16 MiB
 // caller as an error rather than silently chased.
 func newRemoteClient() *http.Client {
 	return &http.Client{
-		Timeout: 3 * time.Second,
+		Timeout: ipeers.RemoteFetchTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

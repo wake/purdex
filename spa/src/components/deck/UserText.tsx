@@ -9,6 +9,7 @@ import { isImagePath } from '../../lib/conversations/image-sniff'
 import { useFsImage } from '../../lib/conversations/fs-image'
 import { useInView } from './use-in-view'
 import { AttachmentThumb } from './AttachmentThumb'
+import { CjkText } from './CjkText'
 import { ConversationHostContext } from './conversation-host'
 
 function SentImageTag({ path }: { path: string }) {
@@ -25,7 +26,7 @@ function SentImageTag({ path }: { path: string }) {
 
 export function UserText({ text }: { text: string }) {
   const parts = splitImageRefs(text)
-  if (!parts.some((p) => p.kind === 'image')) return <>{text}</>
+  if (!parts.some((p) => p.kind === 'image')) return <CjkText text={text} />
   // only a path that names an image file becomes a tag; any other stays the text it was (and is never read)
-  return <>{parts.map((p, i) => (p.kind === 'text' ? p.text : isImagePath(p.path) ? <SentImageTag key={i} path={p.path} /> : imageMarker(p.path)))}</>
+  return <>{parts.map((p, i) => (p.kind === 'text' ? <CjkText key={i} text={p.text} /> : isImagePath(p.path) ? <SentImageTag key={i} path={p.path} /> : <CjkText key={i} text={imageMarker(p.path)} />))}</>
 }

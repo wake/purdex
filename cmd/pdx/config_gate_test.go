@@ -1,0 +1,380 @@
+package main
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/wake/purdex/internal/config"
+)
+
+// #2562: a daemon is identified to the other writers of its config by the config file's run lock, taken inside the lock a writer
+// also takes, so `pdx token generate` cannot miss it nor slip in while it starts.
+
+func gateCfg(t *testing.T) (path, dataDir string) {
+	t.Helper()
+	dir := t.TempDir()
+	dataDir = filepath.Join(dir, "data")
+	path = filepath.Join(dir, "config.toml")
+	body := fmt.Sprintf("data_dir = %q\ntoken = %q\nport = 7860\n", dataDir, "purdex_0123456789012345678901234567890123456789")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path, dataDir
+}
+
+// A daemon found through the config FILE: no pid file in the data_dir the file names (the daemon was started with another
+// data_dir, or the file was edited since) — the old check missed it. Mutation gate: do not ask the run lock -> red.
+func TestTokenGenerate_RefusesADaemonHoldingTheConfigsRunLock(t *testing.T) {
+	path, _ := gateCfg(t) // no pdx.pid anywhere
+	_, run, err := openConfigGate(path, t.Logf)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	defer run.Close()
+	before, _ := os.ReadFile(path)
+
+	var out, errw strings.Builder
+	require.NotEqual(t, 0, tokenGenerate(path, false, true, &out, &errw))
+	after, _ := os.ReadFile(path)
+	require.Equal(t, string(before), string(after), "the file was changed")
+	require.Empty(t, out.String())
+	require.Contains(t, errw.String(), "--force")
+
+	out.Reset()
+	errw.Reset()
+	require.Equal(t, 0, tokenGenerate(path, true, true, &out, &errw))
+	require.Contains(t, errw.String(), "re-pair")
+}
+
+// The same file reached by another name is the same daemon.
+func TestTokenGenerate_FindsTheDaemonThroughASymlinkToTheConfig(t *testing.T) {
+	path, _ := gateCfg(t)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.NoError(t, err)
+	defer run.Close()
+	link := filepath.Join(t.TempDir(), "alias.toml")
+	require.NoError(t, os.Symlink(path, link))
+	var out, errw strings.Builder
+	require.NotEqual(t, 0, tokenGenerate(link, false, true, &out, &errw))
+}
+
+// A run file nobody holds (the daemon exited) is not a running daemon.
+func TestTokenGenerate_ALeftoverRunFileIsNotADaemon(t *testing.T) {
+	path, _ := gateCfg(t)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.NoError(t, err)
+	run.Close() // the daemon is gone; "<path>.run" stays
+	_, statErr := os.Stat(path + ".run")
+	require.NoError(t, statErr)
+	var out, errw strings.Builder
+	require.Equal(t, 0, tokenGenerate(path, false, true, &out, &errw))
+}
+
+// The start-up gate waits for a writer that is mid-write and then reads what it wrote: a daemon cannot start from the old
+// token while `token generate` is changing it. Mutation gate: read the config outside the lock -> red.
+func TestOpenConfigGate_WaitsForAWriterAndReadsWhatItWrote(t *testing.T) {
+	path, _ := gateCfg(t)
+	inside, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = config.WithLock(path, func(locked string) error {
+			close(inside)
+			<-release
+			return config.SetTokenHeld(locked, "pdx_newnewnewnewnewnewnewnewnewnewnewnew")
+		})
+	}()
+	<-inside
+	got := make(chan config.Config, 1)
+	go func() {
+		cfg, run, err := openConfigGate(path, t.Logf)
+		if err == nil && run != nil {
+			defer run.Close()
+		}
+		got <- cfg
+	}()
+	select {
+	case <-got:
+		t.Fatal("the daemon read the config while a writer held the lock")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(release)
+	cfg := <-got
+	require.Equal(t, "pdx_newnewnewnewnewnewnewnewnewnewnewnew", cfg.Token)
+}
+
+// A lock that stays held past the wait refuses the start: starting from the file without the gate would leave a window in which
+// `pdx token generate` sees no daemon. (codex attack, #2562.) Mutation gate: start anyway -> red.
+func TestOpenConfigGate_RefusesToStartWhileAnotherWriterHoldsTheLock(t *testing.T) {
+	path, _ := gateCfg(t)
+	old := config.LockWait
+	config.LockWait = 100 * time.Millisecond
+	defer func() { config.LockWait = old }()
+	done, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = config.WithLock(path, func(string) error { close(done); <-release; return nil })
+	}()
+	<-done
+	defer close(release)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.Error(t, err)
+	require.ErrorIs(t, err, config.ErrLockTimeout)
+	require.Nil(t, run)
+}
+
+// A gate that cannot be entered for a reason other than a busy lock (the directory is read-only) still lets the daemon start,
+// from the file; `token generate` cannot write there either.
+func TestOpenConfigGate_StartsFromTheFileWhenTheLockCannotBeCreated(t *testing.T) {
+	path, _ := gateCfg(t)
+	dir := filepath.Dir(path)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	defer os.Chmod(dir, 0o700)
+	if f, err := os.Create(filepath.Join(dir, "probe")); err == nil { // running as root: the directory is writable anyway
+		f.Close()
+		t.Skip("directory permissions are not enforced here")
+	}
+	var logs []string
+	cfg, run, err := openConfigGate(path, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
+	require.NoError(t, err)
+	require.Nil(t, run)
+	require.Equal(t, 7860, cfg.Port)
+	require.NotEmpty(t, logs)
+}
+
+// Not knowing whether a daemon uses the file is not "no daemon": the token is left alone. (codex attack, #2562.) Mutation gate:
+// treat a failed probe as no daemon -> red.
+func TestTokenGenerate_RefusesWhenItCannotTellWhetherADaemonRuns(t *testing.T) {
+	path, _ := gateCfg(t)
+	require.NoError(t, os.Mkdir(path+".run", 0o755)) // the run file cannot be opened as a file
+	before, _ := os.ReadFile(path)
+	var out, errw strings.Builder
+	require.NotEqual(t, 0, tokenGenerate(path, false, true, &out, &errw))
+	after, _ := os.ReadFile(path)
+	require.Equal(t, string(before), string(after))
+	require.Contains(t, errw.String(), "cannot tell")
+	require.Contains(t, errw.String(), "--force")
+}
+
+// A run file that has been replaced by a symlink is not followed.
+func TestRunLock_DoesNotFollowASymlink(t *testing.T) {
+	path, _ := gateCfg(t)
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	require.NoError(t, os.WriteFile(target, nil, 0o600))
+	require.NoError(t, os.Symlink(target, path+".run"))
+	locked, _ := filepath.EvalSymlinks(path)
+	_, err := config.HoldRunLock(locked)
+	require.Error(t, err)
+	_, err = config.RunLockHeld(locked)
+	require.Error(t, err)
+}
+
+// ---- the hand-off across a restart ----
+
+// The helper "new image": adopts the fd named in PDX_RUNLOCK_FD, says so, and holds it until its stdin closes.
+func TestHelperRunLockChild(t *testing.T) {
+	if os.Getenv("PDX_TEST_RUNLOCK_CHILD") != "1" {
+		t.Skip("helper process")
+	}
+	adopted := false
+	_, run, err := openConfigGate(os.Getenv("PDX_TEST_CFG"), func(f string, a ...any) {
+		adopted = adopted || strings.Contains(fmt.Sprintf(f, a...), "adopted from the previous image")
+	})
+	if err != nil || run == nil {
+		fmt.Println("no run lock", err)
+		os.Exit(3)
+	}
+	if adopted {
+		fmt.Println("adopted")
+	} else {
+		fmt.Println("took a new one")
+	}
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	os.Exit(0)
+}
+
+// The restart hands the run lock across the exec: the lock is held without a gap — by the old image until the new one has it, and by
+// the new one afterwards — and it is gone when the new image exits. Mutation gate: do not hand over the run lock -> red.
+func TestReexec_HandsTheRunLockToTheNewImage(t *testing.T) {
+	path, _ := gateCfg(t)
+	cfg, run, err := openConfigGate(path, t.Logf)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	_ = cfg
+	locked, _ := filepath.EvalSymlinks(path)
+
+	// Nothing may ever see the lock free while the image changes: probe it all the way through.
+	stop := make(chan struct{})
+	gaps := make(chan int, 1)
+	go func() {
+		n := 0
+		for {
+			select {
+			case <-stop:
+				gaps <- n
+				return
+			default:
+			}
+			if held, err := config.RunLockHeld(locked); err == nil && !held {
+				n++
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	// What reexec does, step by step: the env entry names the fd, close-on-exec is cleared right before the exec, the new image
+	// starts. (reexec itself holds syscall.ForkLock around execFn, which os/exec needs, so the child is started here; the plan's
+	// own clearing and restoring are covered below.)
+	env := append(os.Environ(), runLockEnvEntry(run), "PDX_TEST_RUNLOCK_CHILD=1", "PDX_TEST_CFG="+path)
+	require.NoError(t, clearCloseOnExec(run))
+	child := exec.Command(os.Args[0], "-test.run=TestHelperRunLockChild")
+	child.Env = env
+	stdin, err := child.StdinPipe()
+	require.NoError(t, err)
+	out, err := child.StdoutPipe()
+	require.NoError(t, err)
+	stdout := bufio.NewReader(out)
+	require.NoError(t, child.Start())
+	syscall.CloseOnExec(int(run.Fd()))
+
+	line, err := stdout.ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "adopted", strings.TrimSpace(line))
+	run.Close() // the old image is gone
+	held, err := config.RunLockHeld(locked)
+	require.NoError(t, err)
+	require.True(t, held, "the new image does not hold the run lock the old one handed over")
+
+	close(stop)
+	require.Zero(t, <-gaps, "the run lock was free for a moment during the hand-over")
+
+	_ = stdin.Close()
+	require.NoError(t, child.Wait())
+	held, err = config.RunLockHeld(locked)
+	require.NoError(t, err)
+	require.False(t, held, "the run lock outlived the daemon")
+}
+
+func TestReexec_RunLockIsCloseOnExecAgainWhenTheExecFails(t *testing.T) {
+	path, _ := gateCfg(t)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.NoError(t, err)
+	defer run.Close()
+	plan := &reexecPlan{path: "/x", runLock: run}
+	var during uintptr
+	reexec(plan, func(string, []string, []string) error {
+		during = getFD(t, int(run.Fd()))
+		return errors.New("x")
+	}, func(string, ...any) {}, func(int) {})
+	require.Zero(t, during, "the fd would not survive exec")
+	require.NotZero(t, getFD(t, int(run.Fd()))&1, "the fd stayed inheritable after a failed exec")
+}
+
+func TestCaptureReexecPlan_DropsRunLockFD(t *testing.T) {
+	p, err := captureReexecPlan(func() (string, error) { return "/opt/pdx", nil }, []string{"pdx"}, []string{"A=1", "PDX_RUNLOCK_FD=9", "B=2"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"A=1", "B=2"}, p.env)
+}
+
+// A restart has no launcher to try again, so it does not give up when "<config>.lock" is busy: it keeps the run lock it inherited and
+// waits for the lock, then reads the file INSIDE the gate — so it loads what the writer committed, never the file as it was before.
+// (lead review; critic: a writer already holding the lock can still commit after an unlocked read.) Mutation gate: read outside the
+// gate on a timeout -> red.
+func TestOpenConfigGate_ARestartWaitsForTheConfigLockAndReadsWhatTheWriterCommitted(t *testing.T) {
+	path, _ := gateCfg(t)
+	locked, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	old, err := config.HoldRunLock(locked) // the previous image's lock
+	require.NoError(t, err)
+	defer old.Close()
+	dup, err := syscall.Dup(int(old.Fd())) // what the new image inherits: the same open file description
+	require.NoError(t, err)
+	t.Setenv(runLockFDEnv, fmt.Sprint(dup))
+
+	oldWait := config.LockWait
+	config.LockWait = 100 * time.Millisecond
+	defer func() { config.LockWait = oldWait }()
+	busy := make(chan struct{})
+	go func() {
+		_ = config.WithLock(path, func(l string) error {
+			close(busy)
+			time.Sleep(450 * time.Millisecond) // several waits long, then commits a new token
+			return config.SetTokenHeld(l, "pdx_committedcommittedcommittedcommittedcom")
+		})
+	}()
+	<-busy
+
+	var logs []string
+	cfg, run, err := openConfigGate(path, func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) })
+	require.NoError(t, err)
+	require.NotNil(t, run, "the inherited run lock was not adopted")
+	defer run.Close()
+	require.Equal(t, "pdx_committedcommittedcommittedcommittedcom", cfg.Token, "the restart read the file before the writer committed")
+	require.Contains(t, strings.Join(logs, "\n"), "adopted from the previous image")
+	held, err := config.RunLockHeld(locked)
+	require.NoError(t, err)
+	require.True(t, held)
+}
+
+// A restart does not wait for ever: past restartGateWait it refuses, as a cold start does.
+func TestOpenConfigGate_ARestartGivesUpEventually(t *testing.T) {
+	path, _ := gateCfg(t)
+	locked, _ := filepath.EvalSymlinks(path)
+	old, err := config.HoldRunLock(locked)
+	require.NoError(t, err)
+	defer old.Close()
+	dup, _ := syscall.Dup(int(old.Fd()))
+	t.Setenv(runLockFDEnv, fmt.Sprint(dup))
+	oldWait, oldRestart := config.LockWait, restartGateWait
+	config.LockWait, restartGateWait = 50*time.Millisecond, 300*time.Millisecond
+	defer func() { config.LockWait, restartGateWait = oldWait, oldRestart }()
+	busy, release := make(chan struct{}), make(chan struct{})
+	go func() { _ = config.WithLock(path, func(string) error { close(busy); <-release; return nil }) }()
+	<-busy
+	defer close(release)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.ErrorIs(t, err, config.ErrLockTimeout)
+	require.Nil(t, run)
+}
+
+// An environment variable alone is no restart: a cold start whose env names an fd of the run file that nobody held gets no
+// shortcut around the gate. (codex attack.)
+func TestOpenConfigGate_AForgedHandOverBypassesNothing(t *testing.T) {
+	path, _ := gateCfg(t)
+	locked, _ := filepath.EvalSymlinks(path)
+	f, err := os.OpenFile(locked+".run", os.O_CREATE|os.O_RDWR, 0o600) // open, not locked
+	require.NoError(t, err)
+	dup, _ := syscall.Dup(int(f.Fd()))
+	f.Close()
+	t.Setenv(runLockFDEnv, fmt.Sprint(dup))
+	oldWait, oldRestart := config.LockWait, restartGateWait
+	config.LockWait, restartGateWait = 50*time.Millisecond, 200*time.Millisecond
+	defer func() { config.LockWait, restartGateWait = oldWait, oldRestart }()
+	busy, release := make(chan struct{}), make(chan struct{})
+	go func() { _ = config.WithLock(path, func(string) error { close(busy); <-release; return nil }) }()
+	<-busy
+	defer close(release)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.Error(t, err, "started without the gate on a hand-over nobody made")
+	require.Nil(t, run)
+}
+
+// A hand-over that cannot be adopted is no hand-over: with the lock busy too, the start is refused as a cold start is.
+func TestOpenConfigGate_ABrokenHandOverAndABusyLockRefuses(t *testing.T) {
+	path, _ := gateCfg(t)
+	t.Setenv(runLockFDEnv, "9999") // not an open fd
+	oldWait := config.LockWait
+	config.LockWait = 100 * time.Millisecond
+	defer func() { config.LockWait = oldWait }()
+	busy, release := make(chan struct{}), make(chan struct{})
+	go func() { _ = config.WithLock(path, func(string) error { close(busy); <-release; return nil }) }()
+	<-busy
+	defer close(release)
+	_, run, err := openConfigGate(path, t.Logf)
+	require.ErrorIs(t, err, config.ErrLockTimeout)
+	require.Nil(t, run)
+}

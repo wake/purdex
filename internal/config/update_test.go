@@ -332,3 +332,16 @@ func TestWithLock_WritesThePathItLocked(t *testing.T) {
 	require.Equal(t, "/tmp/written", gotA.UploadDir)
 	require.NotEqual(t, "/tmp/written", gotB.UploadDir, "wrote the new target while holding the old target's lock")
 }
+
+func TestAdoptRunLock_Rejects(t *testing.T) {
+	p := writeCfg(t, richConfig)
+	locked := canonPath(p)
+	other, err := os.CreateTemp(t.TempDir(), "x")
+	require.NoError(t, err)
+	defer other.Close()
+	for name, fd := range map[string]string{"not a number": "x", "a standard stream": "1", "open on another file": fmt.Sprint(other.Fd())} {
+		if _, err := AdoptRunLock(fd, locked); err == nil {
+			t.Errorf("%s: adopted", name)
+		}
+	}
+}

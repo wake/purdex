@@ -25,6 +25,8 @@ type reexecPlan struct {
 	// lock is the pid lock handed to the new image; held only so the GC
 	// cannot close its fd before exec.
 	lock *os.File
+	// runLock is the config file's run lock (#2562), handed over the same way; nil when this daemon holds none.
+	runLock *os.File
 	// clearCLOEXEC lets lock's fd survive the exec; nil means
 	// clearCloseOnExec. A seam for tests.
 	clearCLOEXEC func(*os.File) error
@@ -39,7 +41,7 @@ func captureReexecPlan(executable func() (string, error), args, env []string) (*
 	// passed on: runServe unsets it once read, but the capture runs first.
 	kept := make([]string, 0, len(env))
 	for _, kv := range env {
-		if !strings.HasPrefix(kv, pidLockFDEnv+"=") {
+		if !strings.HasPrefix(kv, pidLockFDEnv+"=") && !strings.HasPrefix(kv, runLockFDEnv+"=") {
 			kept = append(kept, kv)
 		}
 	}
@@ -78,27 +80,42 @@ func captureCleanReexecPlan(executable func() (string, error), args []string) (*
 // points at this log).
 func reexec(p *reexecPlan, execFn func(string, []string, []string) error, logf func(string, ...any), exit func(int)) {
 	logf("restart: exec %s", p.path)
-	if p.lock != nil {
+	var held []*os.File
+	for _, f := range []*os.File{p.lock, p.runLock} {
+		if f != nil {
+			held = append(held, f)
+		}
+	}
+	if len(held) > 0 {
 		syscall.ForkLock.Lock()
-		// As late as possible: until here the fd is close-on-exec, so a child
-		// forked while the stores closed cannot carry the lock past us. On
+		// As late as possible: until here the fds are close-on-exec, so a child
+		// forked while the stores closed cannot carry a lock past us. On
 		// failure the exec closes the fd and the new image re-acquires.
 		clear := p.clearCLOEXEC
 		if clear == nil {
 			clear = clearCloseOnExec
 		}
-		if cerr := clear(p.lock); cerr != nil {
-			logf("pid lock: hand-off failed (%v); the new image re-acquires it", cerr)
+		for i, f := range held {
+			if cerr := clear(f); cerr != nil {
+				what := "pid lock"
+				if f == p.runLock && (i > 0 || p.lock == nil) {
+					what = "run lock"
+				}
+				logf("%s: hand-off failed (%v); the new image re-acquires it", what, cerr)
+			}
 		}
 	}
 	err := execFn(p.path, p.argv, p.env)
-	if p.lock != nil {
-		// exec failed and this process lives on until exit(1): make the fd
-		// close-on-exec again before any fork can see it, then let forks resume.
-		syscall.CloseOnExec(int(p.lock.Fd()))
+	if len(held) > 0 {
+		// exec failed and this process lives on until exit(1): make the fds
+		// close-on-exec again before any fork can see them, then let forks resume.
+		for _, f := range held {
+			syscall.CloseOnExec(int(f.Fd()))
+		}
 		syscall.ForkLock.Unlock()
 	}
 	runtime.KeepAlive(p.lock)
+	runtime.KeepAlive(p.runLock)
 	logf("restart: exec %s failed: %v", p.path, err)
 	exit(1)
 }

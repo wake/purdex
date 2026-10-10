@@ -51,7 +51,7 @@ export const DraftTags = ({ draft, seqs, box }: Props) => {
       data-testid="draft-tags"
       aria-hidden="true"
       style={{ overflowWrap: 'anywhere' }}
-      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap pb-1.5 pt-0 text-[13px] leading-[1.65] tracking-[1px] text-transparent"
+      className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap pb-1.5 pt-0 text-[13px] leading-[1.65] text-transparent"
     >
       {pieces(draft, ranges).map((p, i) => (p.tag
         ? <mark key={i} className="rounded-[3px] bg-accent/20 text-transparent ring-1 ring-accent/50">{p.text}</mark>
