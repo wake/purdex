@@ -59,26 +59,30 @@ func underGrant(dir string, g team.Grant) bool {
 	if !g.RootsCanonical {
 		return underRoots(dir, g.Roots)
 	}
-	return underRoots(dir, liveRoots(g.Roots))
+	// A live root is its own real path, so containment is judged on that string: resolving it a second time would be a
+	// second look at a path that may have changed since the first.
+	for _, root := range liveRoots(g.Roots) {
+		if within(dir, root) {
+			return true
+		}
+	}
+	return false
 }
 
 // reconcileRoots is the grant's roots for the roots a decide carries (Clean, absolute) against the request's own. The App
 // sends grant.roots back on every approve, edited or not, so a root that is one of the request's is the card's and stays
-// as the card showed it — resolving it again would follow a swap made between the card and the tap. A root that is new is
-// resolved now. The grant is canonical unless a root was kept from a request an older daemon made (its roots are only
-// Clean, so it keeps the spawn-time resolution it always had).
-func reconcileRoots(sent, requested []string, requestedCanonical bool) ([]string, bool) {
+// as the card showed it — resolving it again would follow a swap made between the card and the tap. That holds only for a
+// request whose roots are real paths: an older daemon's are only Clean, so at the tap they are resolved like an added
+// root (what the spawn would have done a moment later), and the grant is canonical whole.
+func reconcileRoots(sent, requested []string, requestedCanonical bool) []string {
 	asked := make(map[string]bool, len(requested))
 	for _, r := range requested {
 		asked[r] = true
 	}
-	canonical := true
-	roots := dedupeRoots(sent, func(r string) string {
-		if asked[r] {
-			canonical = canonical && requestedCanonical
+	return dedupeRoots(sent, func(r string) string {
+		if asked[r] && requestedCanonical {
 			return r
 		}
 		return resolveRoot(r)
 	})
-	return roots, canonical
 }

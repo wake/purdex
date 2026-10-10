@@ -152,23 +152,35 @@ func TestDecide_LegacyPayloadStaysLegacy(t *testing.T) {
 	}
 }
 
-// The same, through the App, which sends the roots back unchanged. Mutation gate: a kept root counted as canonical
-// whatever the request was → the legacy grant is made canonical and its link stops admitting (red).
-func TestDecide_LegacyPayloadSentBackStaysLegacy(t *testing.T) {
+// The same, through the App, which sends the roots back unchanged, with one root added (codex attack). The request is an
+// older daemon's, so its roots are not known to be real: at the tap every root is resolved and the grant is canonical
+// whole, not downgraded to legacy for the added root's sake. Mutation gate: a root of a legacy request kept verbatim →
+// the link is stored in a canonical grant and stops admitting (red); the grant staying legacy → the added root is
+// followed through a later swap (red).
+func TestDecide_LegacyPayloadSentBackIsResolvedWhole(t *testing.T) {
 	base := realTemp(t)
 	real := mustMkdir(t, filepath.Join(base, "x", "work"))
 	link := filepath.Join(base, "work")
 	symlinkTo(t, real, link)
+	added := mustMkdir(t, filepath.Join(base, "added"))
+	elsewhere := mustMkdir(t, filepath.Join(base, "elsewhere"))
 	f := newFixture(t)
 	f.create(uid(1))
 	old, _ := json.Marshal(map[string]any{"reason": "r", "max_members": 3, "roots": []string{link}, "team_name": "", "team_label": ""})
 	if _, err := f.m.store.db.Exec(`UPDATE approval_requests SET payload_json = ? WHERE id = ?`, string(old), uid(1)); err != nil {
 		t.Fatal(err)
 	}
-	f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(&team.Grant{MaxMembers: 3, Roots: []string{link}}))
+	f.do(http.MethodPost, "/api/team/approvals/"+uid(1)+"/decide", appApprove(&team.Grant{MaxMembers: 3, Roots: []string{link, added}}))
 	tm, ok, _ := f.m.store.LiveTeamByLead("sid-1")
-	if !ok || tm.Grant.RootsCanonical || !reflect.DeepEqual(tm.Grant.Roots, []string{link}) || !underGrant(real, tm.Grant) {
-		t.Fatalf("grant = %+v ok=%v, want legacy roots [%s] still admitting %s", tm.Grant, ok, link, real)
+	if !ok || !tm.Grant.RootsCanonical || !reflect.DeepEqual(tm.Grant.Roots, []string{real, added}) || !underGrant(real, tm.Grant) {
+		t.Fatalf("grant = %+v ok=%v, want canonical roots [%s %s]", tm.Grant, ok, real, added)
+	}
+	if err := os.RemoveAll(added); err != nil {
+		t.Fatal(err)
+	}
+	symlinkTo(t, elsewhere, added)
+	if underGrant(elsewhere, tm.Grant) {
+		t.Fatal("the added root was swapped for a symlink and still admits its target")
 	}
 }
 
