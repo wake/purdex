@@ -137,6 +137,22 @@ func TestRelayAsk_ReleaseVersusRelayBothOrders(t *testing.T) {
 	}
 }
 
+// A withdrawal that fails fails the request (the mod can retry) and sends no compaction notice: the ask would stay open
+// and be notified again later, and the compaction notice must be the only message (codex R1).
+func TestRelayAsk_AFailedWithdrawalOnCompactionSendsNothing(t *testing.T) {
+	f, _ := askedFixture(t)
+	if _, err := f.m.store.db.Exec(`ALTER TABLE relay_asks RENAME TO relay_asks_gone`); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := f.compacted("sid-m1", "auto"); code != http.StatusInternalServerError {
+		t.Fatalf("compacted with a failing withdrawal: %d, want 500", code)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := len(f.sender.calls()); n != 0 {
+		t.Fatalf("%d messages after a failed withdrawal", n)
+	}
+}
+
 // An auto compaction withdraws the ask and the compaction notice is the only message. A manual one leaves the ask.
 func TestRelayAsk_AutoCompactionWithdrawsAndSendsOnlyTheCompactionNotice(t *testing.T) {
 	f, a := askedFixture(t)
