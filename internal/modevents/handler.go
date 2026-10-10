@@ -1,6 +1,7 @@
 package modevents
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -48,6 +49,27 @@ type handler struct {
 	// activePolls counts the long polls being served (hard cap maxPolls).
 	activePolls atomic.Int32
 	maxPolls    int
+	// stop is closed when the daemon shuts the socket down: the long polls waiting for work answer at once (204), they do
+	// not hold the shutdown until their wait runs out. nil never fires.
+	stop <-chan struct{}
+}
+
+// WithStop wakes the long polls (workbook and prompt `next`) when ch is closed.
+func WithStop(ch <-chan struct{}) HandlerOption { return func(h *handler) { h.stop = ch } }
+
+// pollContext is the request's context, also cancelled when the handler is told to stop. The caller defers the cancel.
+func (h *handler) pollContext(r *http.Request) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(r.Context())
+	if h.stop != nil {
+		go func() {
+			select {
+			case <-h.stop:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
+	return ctx, cancel
 }
 
 // withMaxPolls lowers the poll cap (tests).
