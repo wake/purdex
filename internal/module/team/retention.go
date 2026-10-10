@@ -23,10 +23,38 @@ const (
 	retentionFailedAge    = 3 * 24 * time.Hour
 )
 
+// The decided-command log of a member host (#2265): records older than 30 days go, 500 a statement so the write lock is
+// never held long. PruneCommandLog says which records stay.
+const (
+	commandLogRetention  = 30 * 24 * time.Hour
+	commandLogPruneBatch = 500
+)
+
+// pruneCommandLog deletes the old records batch by batch until none is left to delete or the daemon stops.
+func (m *Module) pruneCommandLog() {
+	before := m.now() - commandLogRetention.Milliseconds()
+	total := 0
+	for m.stopCtx.Err() == nil {
+		n, err := m.store.PruneCommandLog(before, commandLogPruneBatch)
+		if err != nil {
+			m.logf("[team] retention: %v", err)
+			return
+		}
+		total += n
+		if n < commandLogPruneBatch {
+			break
+		}
+	}
+	if total > 0 {
+		m.logf("[team] retention: %d old command log records pruned", total)
+	}
+}
+
 // runRetention runs the sweep at boot and then hourly until Stop.
 func (m *Module) runRetention() {
 	defer m.sweepWG.Done()
 	m.sweepRetention()
+	m.pruneCommandLog()
 	ticker := time.NewTicker(retentionInterval)
 	defer ticker.Stop()
 	for {
@@ -35,6 +63,7 @@ func (m *Module) runRetention() {
 			return
 		case <-ticker.C:
 			m.sweepRetention()
+			m.pruneCommandLog()
 		}
 	}
 }

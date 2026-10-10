@@ -578,6 +578,9 @@ func (m *Module) Start(context.Context) error {
 	go m.runSweeper()
 	go m.runRetention()
 	go m.runRoster() // after the boot's own writes signalled: it publishes what they left
+	// An overdue spawn / adopt is voided BEFORE the pump runs, not on the sweeper's first tick: the member host prunes its
+	// command records on the premise that the lead host never resends one older than 10 minutes (#2265).
+	m.expireCommands()
 	m.startCommandPump()
 	m.startFactPump()
 	m.startRemoteNoticePump()
