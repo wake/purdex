@@ -2388,6 +2388,7 @@
   "chat.files": "{{n}} file(s) +{{a}} −{{r}}",
   "chat.peer.unverified": "Unverified",
   "chat.peer.count": "{{n}} messages",
+  "chat.unreadable.title": "Can't read this conversation properly",
   "chat.unreadable.no_session": "No Claude Code conversation found for this tab",
   "chat.unreadable.not_found": "The conversation record has not appeared yet",
   "chat.unreadable.unsupported": "This agent is not supported",

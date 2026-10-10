@@ -2388,6 +2388,7 @@
   "chat.files": "{{n}} 個檔案 +{{a}} −{{r}}",
   "chat.peer.unverified": "未驗證",
   "chat.peer.count": "{{n}} 則",
+  "chat.unreadable.title": "無法正確讀取這個對話",
   "chat.unreadable.no_session": "找不到這個分頁的 Claude Code 對話",
   "chat.unreadable.not_found": "對話紀錄還沒出現",
   "chat.unreadable.unsupported": "這個 agent 不支援",

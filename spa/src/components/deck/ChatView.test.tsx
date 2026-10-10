@@ -273,7 +273,8 @@ describe('unreadable (D11)', () => {
     it(`${reason}: says 「${text}」 and always offers the terminal, which only a click uses`, () => {
       const onSwitchToTerminal = vi.fn()
       mount({ unreadable: reason, turns: [], onSwitchToTerminal })
-      expect(screen.getByTestId('unreadable')).toHaveTextContent(text)
+      expect(screen.getByTestId('unreadable-title')).toHaveTextContent('無法正確讀取這個對話') // spec "Unreadable": the one main message, then the reason
+      expect(screen.getByTestId('unreadable-reason')).toHaveTextContent(text)
       expect(onSwitchToTerminal).not.toHaveBeenCalled() // never automatic
       fireEvent.click(screen.getByTestId('unreadable-terminal'))
       expect(onSwitchToTerminal).toHaveBeenCalledTimes(1)

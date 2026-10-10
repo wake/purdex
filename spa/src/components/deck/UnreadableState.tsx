@@ -9,7 +9,8 @@ export function UnreadableState({ reason, onRetry, onSwitchToTerminal }: { reaso
   const btn = 'cursor-pointer rounded border border-border-subtle px-3 py-1 text-sm text-text-primary hover:bg-surface-secondary'
   return (
     <div data-testid="unreadable" data-reason={reason} className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-      <div className="text-sm text-text-muted">{t(`chat.unreadable.${reason}`)}</div>
+      <div data-testid="unreadable-title" className="text-sm text-text-primary">{t('chat.unreadable.title')}</div>
+      <div data-testid="unreadable-reason" className="text-xs text-text-muted">{t(`chat.unreadable.${reason}`)}</div>
       <div className="flex gap-2">
         {reason === 'offline' && onRetry && <button type="button" data-testid="unreadable-retry" onClick={onRetry} className={btn}>{t('chat.unreadable.retry')}</button>}
         <button type="button" data-testid="unreadable-terminal" onClick={onSwitchToTerminal} className={btn}>{t('chat.unreadable.terminal')}</button>
