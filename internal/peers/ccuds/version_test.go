@@ -2,9 +2,15 @@ package ccuds
 
 import "testing"
 
+// VerifiedCCVersion is the byte-layout measure and the version the proxy helpers impersonate: it stays where the layouts
+// were measured. SelftestPassedCCVersion is how far a passing `pdx msg selftest` has been seen to work; only the warning
+// threshold follows it (#2387).
 func TestVerifiedCCVersion(t *testing.T) {
-	if VerifiedCCVersion != "2.1.296" {
+	if VerifiedCCVersion != "2.1.270" {
 		t.Fatalf("VerifiedCCVersion = %q", VerifiedCCVersion)
+	}
+	if SelftestPassedCCVersion != "2.1.296" {
+		t.Fatalf("SelftestPassedCCVersion = %q", SelftestPassedCCVersion)
 	}
 }
 
