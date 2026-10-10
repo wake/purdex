@@ -79,12 +79,40 @@ describe('DeckView', () => {
     expect(loadBefore).toHaveBeenCalledTimes(2)
   })
 
-  it('does not ask again for a page that failed to come (no loop on the same first turn)', () => {
+  it('asks again after a page that failed or came empty — with a growing wait, three tries, no busy loop', () => {
+    vi.useFakeTimers()
+    const e = entry([turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })
+    const { rerender } = render(<DeckView {...props} entry={e} />)
+    const settle = () => {
+      rerender(<DeckView {...props} entry={{ ...e, paging: true }} />)
+      rerender(<DeckView {...props} entry={{ ...e, paging: false }} />)
+    }
+    settle()
+    expect(loadBefore).toHaveBeenCalledTimes(1) // not at once
+    act(() => { vi.advanceTimersByTime(999) })
+    expect(loadBefore).toHaveBeenCalledTimes(1)
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(loadBefore).toHaveBeenCalledTimes(2)
+    settle()
+    act(() => { vi.advanceTimersByTime(2000) })
+    expect(loadBefore).toHaveBeenCalledTimes(3)
+    settle()
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(loadBefore).toHaveBeenCalledTimes(3) // given up until the reader scrolls to the top
+    vi.useRealTimers()
+  })
+
+  it('a page that lands starts the tries over', () => {
+    vi.useFakeTimers()
     const e = entry([turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })
     const { rerender } = render(<DeckView {...props} entry={e} />)
     rerender(<DeckView {...props} entry={{ ...e, paging: true }} />)
     rerender(<DeckView {...props} entry={{ ...e, paging: false }} />)
-    expect(loadBefore).toHaveBeenCalledTimes(1)
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(loadBefore).toHaveBeenCalledTimes(2)
+    rerender(<DeckView {...props} entry={entry([turn(3, [userItem('b', 0)]), turn(5, [userItem('a', 0)])], {}, { hasMoreBefore: true })} />)
+    expect(loadBefore).toHaveBeenCalledTimes(3) // at once: the first turn moved
+    vi.useRealTimers()
   })
 
   it('does not ask on its own when the content already overflows the box', () => {

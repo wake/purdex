@@ -37,6 +37,9 @@ export interface DeckViewProps {
 
 /** Within this many pixels of the top the next older page is read. */
 const TOP_REACH = 120
+/** Automatic asks for an older page while the content is too short to scroll: how many per first turn, and the first wait. */
+const AUTO_PAGE_TRIES = 3
+const AUTO_PAGE_RETRY_MS = 1000
 
 // Memoized: the store keeps an unchanged turn's object, so a live update re-draws only the turn that changed.
 const TurnView = memo(function TurnView({ turn, actions }: { turn: Turn; actions?: StepActions }) {
@@ -67,16 +70,21 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   useEffect(() => { follow() }, [follow, doc.turns])
 
   // A page that does not fill the box cannot be scrolled, so no scroll event would ever ask for the next one: ask until the
-  // box overflows or nothing older is left. Once per first turn, so a page that fails to come does not loop.
-  const askedFor = useRef<number | null>(null)
+  // box overflows or nothing older is left. A page that lands moves the first turn and starts over at once; one that fails
+  // or brings nothing is asked for again after 1 s, then 2 s, and then left to the reader's own scroll to the top.
+  const attempt = useRef<{ first: number | null; tries: number }>({ first: null, tries: 0 })
   useEffect(() => {
     const box = boxRef.current
     if (!box || !doc.hasMoreBefore || entry.paging) return
     if (box.scrollHeight > box.clientHeight + TOP_REACH) return
     const first = doc.turns[0]?.index ?? null
-    if (askedFor.current === first) return
-    askedFor.current = first
-    void useConversationStore.getState().loadBefore(hostId, sessionId)
+    if (attempt.current.first !== first) attempt.current = { first, tries: 0 }
+    const { tries } = attempt.current
+    if (tries >= AUTO_PAGE_TRIES) return
+    const run = () => { attempt.current.tries += 1; void useConversationStore.getState().loadBefore(hostId, sessionId) }
+    if (tries === 0) { run(); return }
+    const timer = setTimeout(run, AUTO_PAGE_RETRY_MS * 2 ** (tries - 1))
+    return () => clearTimeout(timer)
   }, [doc.turns, doc.hasMoreBefore, entry.paging, hostId, sessionId])
 
   const onScroll = (e: UIEvent<HTMLDivElement>) => {
