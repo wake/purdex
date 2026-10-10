@@ -1098,9 +1098,23 @@ describe('applySectionToStores — tabs.<id>', () => {
     it('is dropped from a secondary pane; a pane pointing at a workspace that exists, and the tab itself, stay', async () => {
       seedTabWorld() // workspaces wa, wb exist
       const payload = incomingFor([tab('a3', splitOf(tmuxLeaf('keep-main', M), settingsLeaf('stale', 'deleted-ws'), settingsLeaf('live', 'wb')))])
-      await applySectionToStores('tabs.wa', payload, ctx)
+      const outcome = await applySectionToStores('tabs.wa', payload, ctx)
       expect(useTabStore.getState().tabs.a3).toBeDefined()
       expect(leavesOf('a3')).toEqual(['keep-main', 'live'])
+      // The stores no longer hold what arrived: the hash is the rebuilt one, not the payload's, so the section reads as
+      // dirty and is pushed back without the pane (the same path as an orphaned scoped setting).
+      expect(outcome).toMatchObject({ ok: true })
+      expect((outcome as { hash: string }).hash).not.toBe(await hashSection(payload))
+      expect((outcome as { hash: string }).hash).toBe(await hashSection(buildTabsSection(useWorkspaceStore.getState().workspaces[0], useTabStore.getState().tabs)))
+    })
+
+    it('a local tab that is not part of the arriving order is not touched', async () => {
+      seedTabWorld()
+      const local = tab('a8', splitOf(tmuxLeaf('l-main', M), settingsLeaf('l-stale', 'deleted-ws'))) // a local-only layout, same id the payload mentions outside its order
+      useTabStore.setState({ tabs: { ...useTabStore.getState().tabs, a8: local } })
+      const payload = incomingFor([tab('a3', splitOf(tmuxLeaf('m', M), tmuxLeaf('n', M)))])
+      await applySectionToStores('tabs.wa', { ...payload, tabs: { ...payload.tabs, a8: payload.tabs.a3 } }, ctx)
+      expect(useTabStore.getState().tabs.a8?.layout ?? local.layout).toBe(local.layout)
     })
 
     it('a tab whose PRIMARY pane is such a page is kept as it arrived (the current handling)', async () => {

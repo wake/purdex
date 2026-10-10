@@ -376,10 +376,13 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
       if (applied.unrendered) return { ok: true, hash: null }
       // A settings page of a workspace that does not exist (here: a client that never saw its deletion still sends one in a
       // split tab's secondary pane) would only say "Workspace not found": it is not kept (#2514).
+      // Safe because the executor pulls a `tabs.<id>` only once `workspaces` is synced (its GATES): the workspaces here are
+      // the SOT's, so a pane is never dropped for a workspace that is merely not here yet. Only the tabs that ARRIVED
+      // (`incoming.order`, what `applyTabs` writes) are looked at; a local tab is left as it is.
       const existing = new Set(applied.next.workspaces.map((w) => w.id))
       const arrivedTabs = { ...applied.next.tabs }
-      for (const id of Object.keys(incoming.tabs)) {
-        const t = arrivedTabs[id]
+      for (const id of incoming.order) {
+        const t = Object.hasOwn(incoming.tabs, id) ? arrivedTabs[id] : undefined
         if (!t) continue
         const layout = withoutStaleSettingsPanes(t.layout, existing)
         if (layout !== t.layout) arrivedTabs[id] = { ...t, layout }
