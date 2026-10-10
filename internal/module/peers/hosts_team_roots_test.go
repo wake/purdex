@@ -16,7 +16,7 @@ import (
 // #2340: team_roots has a revision and atomic add / remove. Two writers on a stale snapshot can no longer silently drop an
 // authorised root or bring back a revoked one; an older client (no revision, whole-set team_roots) behaves as before.
 
-type rootsRow struct {
+type teamRootsRow struct {
 	Error    string    `json:"error"`
 	Roots    *[]string `json:"team_roots"`
 	Rev      *int64    `json:"team_roots_rev"`
@@ -25,32 +25,32 @@ type rootsRow struct {
 	AllowTmp *bool     `json:"allow_team"`
 }
 
-type rootsFixture struct {
+type teamRootsFixture struct {
 	t       *testing.T
 	m       *Module
 	cfgPath string
 }
 
-func newRootsFixture(t *testing.T, roots ...string) *rootsFixture {
+func newTeamRootsFixture(t *testing.T, roots ...string) *teamRootsFixture {
 	t.Helper()
 	hosts := []config.PeerHost{{Alias: "air", URL: "https://a.example", HostID: "air:1", InboundToken: "inbound-a", AllowTeam: true, TeamRoots: roots}}
 	c, cfgPath := newHostsTestCore(t, "local:1", "local", "", hosts)
-	return &rootsFixture{t: t, m: newHostsTestModule(t, c, failIfCalledFetch(t)), cfgPath: cfgPath}
+	return &teamRootsFixture{t: t, m: newHostsTestModule(t, c, failIfCalledFetch(t)), cfgPath: cfgPath}
 }
 
-func (f *rootsFixture) put(body map[string]any) (int, rootsRow) {
+func (f *teamRootsFixture) put(body map[string]any) (int, teamRootsRow) {
 	f.t.Helper()
 	rr := doHostsRequest(f.t, f.m, http.MethodPut, "/api/peers/hosts/air", body, adminPrincipal())
-	var row rootsRow
+	var row teamRootsRow
 	if err := json.Unmarshal(rr.Body.Bytes(), &row); err != nil {
 		f.t.Fatalf("body %q: %v", rr.Body.String(), err)
 	}
 	return rr.Code, row
 }
 
-func (f *rootsFixture) stored() config.PeerHost { return loadCfg(f.t, f.cfgPath).Peers.Hosts[0] }
+func (f *teamRootsFixture) stored() config.PeerHost { return loadCfg(f.t, f.cfgPath).Peers.Hosts[0] }
 
-func (f *rootsFixture) rev(row rootsRow) int64 {
+func (f *teamRootsFixture) rev(row teamRootsRow) int64 {
 	f.t.Helper()
 	if row.Rev == nil {
 		f.t.Fatal("the row carries no team_roots_rev")
@@ -60,7 +60,7 @@ func (f *rootsFixture) rev(row rootsRow) int64 {
 
 func TestTeamRootsRev_StartsAtZeroAndRisesOnlyWhenTheSetChanges(t *testing.T) {
 	a, b := realDir(t, "a"), realDir(t, "b")
-	f := newRootsFixture(t)
+	f := newTeamRootsFixture(t)
 	code, row := f.put(map[string]any{"allow_bypass": false})
 	if code != 200 || f.rev(row) != 0 {
 		t.Fatalf("fresh: %d %+v", code, row)
@@ -88,7 +88,7 @@ func TestTeamRootsRev_StartsAtZeroAndRisesOnlyWhenTheSetChanges(t *testing.T) {
 	// and the list serves it
 	rr := doHostsRequest(t, f.m, http.MethodGet, "/api/peers/hosts", nil, adminPrincipal())
 	var env struct {
-		Hosts []rootsRow `json:"hosts"`
+		Hosts []teamRootsRow `json:"hosts"`
 	}
 	_ = json.Unmarshal(rr.Body.Bytes(), &env)
 	if len(env.Hosts) != 1 || env.Hosts[0].Rev == nil || *env.Hosts[0].Rev != 2 {
@@ -100,7 +100,7 @@ func TestTeamRootsRev_StartsAtZeroAndRisesOnlyWhenTheSetChanges(t *testing.T) {
 // Mutation gate: ignore the revision → the stale write wins and drops b (red).
 func TestTeamRootsRev_AStaleWholeSetWriteIsRefusedWithTheCurrentSet(t *testing.T) {
 	a, b, c := realDir(t, "a"), realDir(t, "b"), realDir(t, "c")
-	f := newRootsFixture(t, a)
+	f := newTeamRootsFixture(t, a)
 	snapshot := int64(0) // both writers read rev 0 and {a}
 	_, row := f.put(map[string]any{"team_roots": []string{a, b}, "team_roots_rev": snapshot})
 	if f.rev(row) != 1 {
@@ -123,7 +123,7 @@ func TestTeamRootsRev_AStaleWholeSetWriteIsRefusedWithTheCurrentSet(t *testing.T
 // An older client sends no revision: the whole-set write is applied as it always was.
 func TestTeamRootsRev_NoRevisionKeepsTheOldBehaviour(t *testing.T) {
 	a, b, c := realDir(t, "a"), realDir(t, "b"), realDir(t, "c")
-	f := newRootsFixture(t, a)
+	f := newTeamRootsFixture(t, a)
 	f.put(map[string]any{"team_roots": []string{a, b}})
 	code, row := f.put(map[string]any{"team_roots": []string{c}})
 	if code != 200 || !reflect.DeepEqual(*row.Roots, []string{c}) {
@@ -133,7 +133,7 @@ func TestTeamRootsRev_NoRevisionKeepsTheOldBehaviour(t *testing.T) {
 
 func TestTeamRootsAddRemove_TwoWritersOnOneSnapshotDoNotOverwriteEachOther(t *testing.T) {
 	a, b, c := realDir(t, "a"), realDir(t, "b"), realDir(t, "c")
-	f := newRootsFixture(t, a)
+	f := newTeamRootsFixture(t, a)
 	_, r1 := f.put(map[string]any{"add_team_roots": []string{b}})
 	code, r2 := f.put(map[string]any{"add_team_roots": []string{c}})
 	if code != 200 || !reflect.DeepEqual(*r2.Roots, []string{a, b, c}) || f.rev(r1) != 1 || f.rev(r2) != 2 {
@@ -151,7 +151,7 @@ func TestTeamRootsAddRemove_TwoWritersOnOneSnapshotDoNotOverwriteEachOther(t *te
 
 func TestTeamRootsAddRemove_NoOpsDoNotBumpTheRevision(t *testing.T) {
 	a, b := realDir(t, "a"), realDir(t, "b")
-	f := newRootsFixture(t, a)
+	f := newTeamRootsFixture(t, a)
 	_, row := f.put(map[string]any{"add_team_roots": []string{a}}) // already there
 	if f.rev(row) != 0 {
 		t.Fatalf("adding a present root: rev %v", row.Rev)
@@ -166,7 +166,7 @@ func TestTeamRootsAddRemove_NoOpsDoNotBumpTheRevision(t *testing.T) {
 // spelling removes the canonical root it points at.
 func TestTeamRootsRemove_WorksForAGoneDirectoryAndASymlinkSpelling(t *testing.T) {
 	gone, kept := realDir(t, "gone"), realDir(t, "kept")
-	f := newRootsFixture(t, gone, kept)
+	f := newTeamRootsFixture(t, gone, kept)
 	if err := os.Remove(gone); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestTeamRootsRemove_WorksForAGoneDirectoryAndASymlinkSpelling(t *testing.T)
 
 func TestTeamRootsAdd_IsValidatedLikeTheWholeSet(t *testing.T) {
 	a, b := realDir(t, "a"), realDir(t, "b")
-	f := newRootsFixture(t, a)
+	f := newTeamRootsFixture(t, a)
 	for name, c := range map[string]struct {
 		body   map[string]any
 		status int
@@ -218,7 +218,7 @@ func TestTeamRootsAdd_IsValidatedLikeTheWholeSet(t *testing.T) {
 
 func TestTeamRootsAddRemove_OneRequestRemovesThenAdds(t *testing.T) {
 	a, b, c := realDir(t, "a"), realDir(t, "b"), realDir(t, "c")
-	f := newRootsFixture(t, a, b)
+	f := newTeamRootsFixture(t, a, b)
 	code, row := f.put(map[string]any{"remove_team_roots": []string{a}, "add_team_roots": []string{c}})
 	if code != 200 || !reflect.DeepEqual(*row.Roots, []string{b, c}) || f.rev(row) != 1 {
 		t.Fatalf("%d %+v", code, row)
@@ -228,7 +228,7 @@ func TestTeamRootsAddRemove_OneRequestRemovesThenAdds(t *testing.T) {
 // A revision may also guard an add / remove.
 func TestTeamRootsAddRemove_ARevisionIsAPrecondition(t *testing.T) {
 	a, b := realDir(t, "a"), realDir(t, "b")
-	f := newRootsFixture(t, a)
+	f := newTeamRootsFixture(t, a)
 	f.put(map[string]any{"add_team_roots": []string{b}}) // rev 1
 	code, row := f.put(map[string]any{"remove_team_roots": []string{a}, "team_roots_rev": 0})
 	if code != http.StatusConflict || row.Error != "team_roots_conflict" {
@@ -240,9 +240,9 @@ func TestTeamRootsAddRemove_ARevisionIsAPrecondition(t *testing.T) {
 }
 
 // Many concurrent adds under -race: every one lands (the read and the write are one transaction of the config lock).
-// Mutation gate: read the roots outside UpdateConfig → adds are lost (red).
+// (The read-modify-write is one UpdateConfig closure; a read outside it would lose adds here.)
 func TestTeamRootsAdd_ConcurrentAddsAllLand(t *testing.T) {
-	f := newRootsFixture(t)
+	f := newTeamRootsFixture(t)
 	const n = 12
 	var dirs []string
 	for i := 0; i < n; i++ {

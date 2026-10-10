@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -43,6 +45,8 @@ type hostRow struct {
 	// never null.
 	AllowTeam bool     `json:"allow_team"`
 	TeamRoots []string `json:"team_roots"`
+	// TeamRootsRev is the revision of team_roots (#2340): it rises with every change, and a PUT may name it as a precondition.
+	TeamRootsRev int64 `json:"team_roots_rev"`
 	// Rotation state (spec §6.1): pending = inbound_token_prev is set;
 	// last_inbound_auth = "" | "current" | "prev" — which token the peer
 	// most recently presented in this epoch (in memory, rotation.go).
@@ -61,6 +65,7 @@ func toHostRow(h config.PeerHost) hostRow {
 		AllowBypass:     h.AllowBypass,
 		AllowTeam:       h.AllowTeam,
 		TeamRoots:       append([]string{}, h.TeamRoots...),
+		TeamRootsRev:    h.TeamRootsRev,
 	}
 }
 
@@ -100,6 +105,72 @@ type putHostRequest struct {
 	// them. Roots are canonicalised before anything is applied.
 	AllowTeam *bool     `json:"allow_team"`
 	TeamRoots *[]string `json:"team_roots"`
+	// AddTeamRoots / RemoveTeamRoots (#2340) change the set atomically: the daemon reads the current set and writes it in
+	// one transaction of the config lock, so two writers never overwrite each other. Removal is applied first, then the
+	// additions; neither may be combined with the whole-set TeamRoots. TeamRootsRev, when present, is a precondition for
+	// any of the three: the set must still be at that revision (409 team_roots_conflict, with the current set).
+	AddTeamRoots    []string `json:"add_team_roots"`
+	RemoveTeamRoots []string `json:"remove_team_roots"`
+	TeamRootsRev    *int64   `json:"team_roots_rev"`
+}
+
+// rootsConflictError is the 409 of a stale team_roots revision: it carries the set and revision as they are now.
+type rootsConflictError struct {
+	roots []string
+	rev   int64
+}
+
+func (e *rootsConflictError) Error() string { return "team_roots_conflict" }
+
+// rootsBadError is a root problem found under the lock (the bound after the additions): answered like bad_root.
+type rootsBadError struct{ err error }
+
+func (e *rootsBadError) Error() string { return e.err.Error() }
+
+// removalCandidates are the spellings of a root to revoke: the cleaned path and, when the directory still exists, the real
+// path the grant was stored as. A directory that is gone can still be revoked by the spelling it was granted under.
+func removalCandidates(in []string) ([]string, error) {
+	out := make([]string, 0, 2*len(in))
+	for _, p := range in {
+		if !filepath.IsAbs(p) {
+			return nil, &config.RootError{Root: p, Reason: "not_absolute"}
+		}
+		c := filepath.Clean(p)
+		out = append(out, c)
+		if real, err := filepath.EvalSymlinks(c); err == nil {
+			out = append(out, real)
+		}
+	}
+	return out, nil
+}
+
+// applyRootsChange computes the new set from the current one: the whole set, or the removals then the additions.
+func applyRootsChange(cur []string, whole *[]string, wholeRoots, remove, add []string) ([]string, error) {
+	if whole != nil {
+		return wholeRoots, nil
+	}
+	drop := make(map[string]bool, len(remove))
+	for _, r := range remove {
+		drop[r] = true
+	}
+	next := make([]string, 0, len(cur)+len(add))
+	have := make(map[string]bool, len(cur)+len(add))
+	for _, r := range cur {
+		if !drop[r] {
+			next = append(next, r)
+			have[r] = true
+		}
+	}
+	for _, r := range add {
+		if !have[r] {
+			next = append(next, r)
+			have[r] = true
+		}
+	}
+	if len(next) > config.MaxTeamRoots {
+		return nil, &config.RootError{Reason: "too_many"}
+	}
+	return next, nil
 }
 
 // writeBadRoot answers a rejected team root: 400 {"error":"bad_root",
@@ -125,6 +196,17 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 // writeAPIError translates an UpdateConfig mutate error into a response:
 // an *apiError carries its own status, anything else is a 500.
 func writeAPIError(w http.ResponseWriter, err error) {
+	var rc *rootsConflictError
+	if errors.As(err, &rc) {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "team_roots_conflict", "team_roots": append([]string{}, rc.roots...), "team_roots_rev": rc.rev})
+		return
+	}
+	var rb *rootsBadError
+	if errors.As(err, &rb) {
+		writeBadRoot(w, rb.err)
+		return
+	}
 	var ae *apiError
 	if errors.As(err, &ae) {
 		writeJSONError(w, ae.status, ae.msg)
@@ -489,7 +571,7 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var teamRoots []string
+	var teamRoots, addRoots, dropRoots []string
 	if req.TeamRoots != nil {
 		var err error
 		if teamRoots, err = config.CanonicalTeamRoots(*req.TeamRoots); err != nil {
@@ -497,6 +579,25 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.TeamRoots != nil && (len(req.AddTeamRoots) > 0 || len(req.RemoveTeamRoots) > 0) {
+		writeJSONError(w, http.StatusBadRequest, "team_roots cannot be combined with add_team_roots or remove_team_roots")
+		return
+	}
+	if len(req.AddTeamRoots) > 0 {
+		var err error
+		if addRoots, err = config.CanonicalTeamRoots(req.AddTeamRoots); err != nil {
+			writeBadRoot(w, err)
+			return
+		}
+	}
+	if len(req.RemoveTeamRoots) > 0 {
+		var err error
+		if dropRoots, err = removalCandidates(req.RemoveTeamRoots); err != nil {
+			writeBadRoot(w, err)
+			return
+		}
+	}
+	touchesRoots := req.TeamRoots != nil || len(addRoots) > 0 || len(dropRoots) > 0
 
 	// A rename is validated before the verify below dials anyone, for the
 	// same reason handleAddHost validates an explicit alias first: a
@@ -545,7 +646,7 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 			return &apiError{http.StatusNotFound, "unknown alias"}
 		}
 		h := &cfg.Peers.Hosts[i]
-		if verifying || renaming || req.AllowTeam != nil || req.TeamRoots != nil {
+		if verifying || renaming || req.AllowTeam != nil || touchesRoots {
 			// InboundToken is unique per entry and minted fresh at POST, so
 			// comparing it (alongside URL) catches an entry that was
 			// deleted and re-created — even at the SAME url — while this
@@ -595,8 +696,20 @@ func (m *Module) handlePutHost(w http.ResponseWriter, r *http.Request) {
 			}
 			h.AllowTeam = *req.AllowTeam
 		}
-		if req.TeamRoots != nil {
-			h.TeamRoots = teamRoots
+		if touchesRoots {
+			// The read of the current set, the revision check and the write are one transaction of the config lock: this is
+			// what makes add / remove atomic and the revision a real precondition (#2340).
+			if req.TeamRootsRev != nil && *req.TeamRootsRev != h.TeamRootsRev {
+				return &rootsConflictError{roots: h.TeamRoots, rev: h.TeamRootsRev}
+			}
+			next, err := applyRootsChange(h.TeamRoots, req.TeamRoots, teamRoots, dropRoots, addRoots)
+			if err != nil {
+				return &rootsBadError{err}
+			}
+			if !slices.Equal(h.TeamRoots, next) {
+				h.TeamRoots = next
+				h.TeamRootsRev++
+			}
 		}
 		if renaming {
 			// The record is keyed by the STORED alias; the path's spelling

@@ -15,25 +15,22 @@ import (
 )
 
 // runPeersHostAllowTeam implements `pdx peers host allow-team <alias>
-// on|off [--root <dir>]...`: a PUT with allow_team, plus team_roots when
-// --root was given (the whole set is replaced; without it the roots are
-// left alone). The API takes absolute paths only, so the CLI expands ~ and
+// on|off [--root <dir>]... [--remove-root <dir>]...`: a PUT with allow_team, plus add_team_roots for each --root and
+// remove_team_roots for each --remove-root (#2340: the daemon changes the set atomically, so two writers never overwrite
+// each other; without either flag the roots are left alone). The API takes absolute paths only, so the CLI expands ~ and
 // makes a relative root absolute; existence is the daemon's to check.
 func runPeersHostAllowTeam(cfg config.Config, base string, inv peersInvocation, stdout, stderr io.Writer) int {
 	alias := inv.positionals[0]
 	on := inv.positionals[1] == "on"
 	req := cliPutHostRequest{AllowTeam: &on}
-	if inv.roots != nil {
-		roots := make([]string, 0, len(inv.roots))
-		for _, r := range inv.roots {
-			abs, err := absTeamRoot(r)
-			if err != nil {
-				fmt.Fprintf(stderr, "pdx peers: %v\n", err)
-				return 1
-			}
-			roots = append(roots, abs)
-		}
-		req.TeamRoots = &roots
+	var err error
+	if req.AddTeamRoots, err = absTeamRoots(inv.roots); err != nil {
+		fmt.Fprintf(stderr, "pdx peers: %v\n", err)
+		return 1
+	}
+	if req.RemoveTeamRoots, err = absTeamRoots(inv.removeRoots); err != nil {
+		fmt.Fprintf(stderr, "pdx peers: %v\n", err)
+		return 1
 	}
 	reqBody, err := json.Marshal(req)
 	if err != nil {
@@ -65,6 +62,22 @@ func runPeersHostAllowTeam(cfg config.Config, base string, inv peersInvocation, 
 		return endMembersOf(cfg, row, stdout, stderr)
 	}
 	return 0
+}
+
+// absTeamRoots is absTeamRoot over a list; nil in, nil out.
+func absTeamRoots(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(in))
+	for _, r := range in {
+		abs, err := absTeamRoot(r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, abs)
+	}
+	return out, nil
 }
 
 // absTeamRoot expands a leading ~ with the user's home (tmux and the API do
