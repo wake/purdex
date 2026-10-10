@@ -120,15 +120,22 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 // open ask still owing its notice is sent again. Nobody is told about an expiry or a withdrawal.
 func (m *Module) settleAsks() {
 	now := m.now()
-	if n, err := m.store.ExpireRelayAsks(now); err != nil {
-		m.logf("[team] sweep relay asks: %v", err)
-	} else if n > 0 {
-		m.logf("[team] %d relay ask(s) expired", n)
+	// Behind a notice that is on the wire (askMu, see sendAskNotice): an ask is not closed between a notice's state
+	// check and its delivery. Released before the retry below, whose senders take it themselves.
+	m.askMu.Lock()
+	expired, errE := m.store.ExpireRelayAsks(now)
+	left, errW := m.store.WithdrawAsksOfInactiveMembers(now)
+	m.askMu.Unlock()
+	for _, err := range []error{errE, errW} {
+		if err != nil {
+			m.logf("[team] sweep relay asks: %v", err)
+		}
 	}
-	if n, err := m.store.WithdrawAsksOfInactiveMembers(now); err != nil {
-		m.logf("[team] sweep relay asks: %v", err)
-	} else if n > 0 {
-		m.logf("[team] %d relay ask(s) withdrawn: the member left", n)
+	if expired > 0 {
+		m.logf("[team] %d relay ask(s) expired", expired)
+	}
+	if left > 0 {
+		m.logf("[team] %d relay ask(s) withdrawn: the member left", left)
 	}
 	m.retryAskNotices()
 }
