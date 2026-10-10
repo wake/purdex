@@ -102,7 +102,7 @@ func (m *SessionModule) handleTmuxHookSetup(w http.ResponseWriter, r *http.Reque
 		// Re-enables the watcher and counts as its install, so a failure
 		// here is retried by the next tick (#1473 spec D3.1). Refused after
 		// Stop: core shuts HTTP down only after StopModules, so a request can
-		// still arrive once Stop has removed the hooks.
+		// still arrive once Stop has run.
 		m.hooksMu.Lock()
 		if m.hooksStopped {
 			m.hooksMu.Unlock()

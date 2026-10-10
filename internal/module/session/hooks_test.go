@@ -122,9 +122,9 @@ func TestHandleTmuxHookSetup_InvalidAction(t *testing.T) {
 // --- Hook changes serialised with Stop (#1473 spec D3.1, review A2) ---
 
 // An install already in flight when Stop arrives must finish before Stop's
-// remove, and nothing may be set after Stop returns: the daemon must not
-// leave hooks behind that point at a wait-for nobody listens to.
-func TestEnsureHooks_ConcurrentStop_NoSetAfterRemove(t *testing.T) {
+// return, and nothing may be set after Stop returns: the daemon must not
+// install behind a stopped daemon.
+func TestEnsureHooks_ConcurrentStop_NoSetAfterStop(t *testing.T) {
 	mod, fake, _ := newHookTestModule(t, true)
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
@@ -156,19 +156,45 @@ func TestEnsureHooks_ConcurrentStop_NoSetAfterRemove(t *testing.T) {
 		t.Fatal("Stop never returned")
 	}
 
+	// Stop leaves the hooks in place (#1109): the install that was in flight
+	// finishes, Stop removes nothing, and nothing is set after Stop returned.
 	calls := fake.HookCalls()
 	require.NotEmpty(t, calls)
-	firstRemove := -1
-	for i, c := range calls {
+	for _, c := range calls {
+		assert.False(t, strings.HasPrefix(c, "remove "), "Stop must not remove the hooks: %v", calls)
+	}
+	sets := len(fake.HookSets())
+	mod.wstate.clearHooksOK()
+	mod.ensureHooks("")
+	assert.Len(t, fake.HookSets(), sets, "no set-hook after Stop")
+}
+
+// The tmux hooks are global to the tmux server and identical for every daemon
+// on it, so a daemon that stops must leave them for the one still running
+// (#1109). Mutation gate: Stop calls removeTmuxHooks again → red.
+func TestStop_LeavesTheGlobalHooksForTheOtherDaemon(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	mod.ensureHooks("")
+	require.NoError(t, mod.Stop(context.Background()))
+	for _, c := range fake.HookCalls() {
+		assert.False(t, strings.HasPrefix(c, "remove "), "a stopping daemon removed a hook another daemon uses: %v", fake.HookCalls())
+	}
+}
+
+// The operator's explicit remove stays: it is the way to take the hooks off a
+// tmux server (uninstall), unlike a daemon's own shutdown. No uninstall path
+// of the product relied on Stop for it (#1109): electron/local-daemon only
+// probes for tmux, `pdx stop` only signals.
+func TestHookSetup_ExplicitRemoveStillRemoves(t *testing.T) {
+	mod, fake, _ := newHookTestModule(t, true)
+	require.Equal(t, 200, postHookSetup(t, mod, "remove"))
+	removed := 0
+	for _, c := range fake.HookCalls() {
 		if strings.HasPrefix(c, "remove ") {
-			firstRemove = i
-			break
+			removed++
 		}
 	}
-	require.GreaterOrEqual(t, firstRemove, 0, "Stop must remove the hooks: %v", calls)
-	for _, c := range calls[firstRemove:] {
-		assert.False(t, strings.HasPrefix(c, "set "), "set-hook after Stop's remove: %v", calls)
-	}
+	assert.Equal(t, len(tmuxHookEvents), removed, "remove must take off every event: %v", fake.HookCalls())
 }
 
 func TestEnsureHooks_AfterStop_IsNoop(t *testing.T) {

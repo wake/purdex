@@ -340,12 +340,16 @@ func (m *SessionModule) Stop(_ context.Context) error {
 	// runCtx cancelled or hooksStopped (lifeMu, #1474 spec D4).
 	m.lifeMu.Lock()
 	defer m.lifeMu.Unlock()
-	// Remove tmux hooks (best-effort). Under hooksMu, after any install in
-	// flight, and marked stopped first so none follows (#1473 D3.1).
+	// The tmux hooks stay (#1109). They are global to the tmux server and the
+	// same for every daemon on it (a wait-for signal, nothing of ours in them),
+	// so taking them off here pulled them from a second daemon still running
+	// on that server, which fell back to the 5 s poll without knowing. An
+	// operator's explicit remove (POST /api/hooks/tmux/setup) is the way to
+	// take them off. Under hooksMu, after any install in flight, and marked
+	// stopped so none follows (#1473 D3.1).
 	m.hooksMu.Lock()
 	defer m.hooksMu.Unlock()
 	m.hooksStopped = true
-	m.removeTmuxHooks()
 	return nil
 }
 
