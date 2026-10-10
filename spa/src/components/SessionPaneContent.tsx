@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import TerminalView from './TerminalView'
+import { SessionViewPlaceholder } from './SessionViewPlaceholder'
 import { TerminatedPane } from './TerminatedPane'
 import { MissingHostPane } from './MissingHostPane'
 import { useTabStore } from '../stores/useTabStore'
@@ -7,6 +8,7 @@ import { useWorkspaceStore } from '../features/workspace/store'
 import { fetchWsTicket } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { selectSessionView, useSessionViewStore } from '../stores/useSessionViewStore'
 import { useAttachStall } from '../hooks/useAttachStall'
 import { findPane } from '../lib/pane-tree'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
@@ -73,6 +75,9 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
     tabId ? s.findWorkspaceByTab(tabId)?.id : undefined,
   ) ?? undefined
 
+  // Which view this device shows for the pane (U3 plan D1). Read before the early returns (rules of hooks).
+  const view = useSessionViewStore(selectSessionView(tabId, pane.id, sessionCode))
+
   if (content.kind === 'tmux-session' && content.terminated) {
     return <TerminatedPane content={content} tabId={tabId} paneId={pane.id} />
   }
@@ -81,20 +86,32 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
 
   if (!hostKnown) return <MissingHostPane hostId={hostId} />
 
-  // Terminal is the only view a tmux-session pane has (P-D.3 tore down
-  // Stream mode), so the key no longer carries a mode suffix: nothing about
-  // the pane can change that would call for a remount here.
+  // The swap (D2): the terminal stays mounted whatever the view, so its WebSocket, scrollback and size survive a trip to
+  // the deck or the chat. Hidden with `visibility` (not `display:none`: the fit observer skips zero-size boxes) and
+  // `inert` (no focus, no clicks, not read out). `visible` goes false with it, so the view stops asking to be refit or
+  // focused; coming back flips it to true and the terminal refits and takes focus as on any activation.
+  const showTerminal = view === 'terminal'
   return (
-    <TerminalView
-      key={pane.id}
-      wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(sessionCode)}`}
-      visible={isActive}
-      isFocusTarget={isFocusTarget}
-      hostId={hostId}
-      sessionCode={sessionCode}
-      workspaceId={workspaceId}
-      getTicket={() => fetchWsTicket(hostId)}
-      connectingMessage={attachStalled ? t('session.attach_stalled') : undefined}
-    />
+    <div className="relative h-full w-full">
+      <div
+        data-testid="session-terminal-layer"
+        className="absolute inset-0"
+        style={showTerminal ? undefined : { visibility: 'hidden' }}
+        inert={!showTerminal}
+      >
+        <TerminalView
+          key={pane.id}
+          wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(sessionCode)}`}
+          visible={isActive && showTerminal}
+          isFocusTarget={isFocusTarget && showTerminal}
+          hostId={hostId}
+          sessionCode={sessionCode}
+          workspaceId={workspaceId}
+          getTicket={() => fetchWsTicket(hostId)}
+          connectingMessage={attachStalled ? t('session.attach_stalled') : undefined}
+        />
+      </div>
+      {!showTerminal && <SessionViewPlaceholder view={view} isActive={isActive} isFocusTarget={isFocusTarget} />}
+    </div>
   )
 }

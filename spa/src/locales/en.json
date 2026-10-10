@@ -425,6 +425,8 @@
   "session.empty": "No sessions",
   "session.reconnecting": "Reconnecting...",
   "session.attach_stalled": "Connected to the host, but the tmux session list can't be read. Retrying automatically.",
+  "session.view.deck_soon": "The deck is coming soon",
+  "session.view.chat_soon": "Chat is coming soon",
   "session.settings": "Settings",
   "session.search": "Search sessions...",
   "session.provider_label_host": "Sessions · {{host}}",
