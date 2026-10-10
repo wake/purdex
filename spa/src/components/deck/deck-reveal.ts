@@ -4,6 +4,7 @@
 import { createContext, useEffect, useMemo, useRef, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
+import { captureTextAnchor, currentTextTop, type TextAnchor } from './deck-anchor'
 
 /** The newest turns, always drawn in full: the reader is at (or near) the end. */
 export const EAGER_TURNS = 20
@@ -17,21 +18,41 @@ export interface DeckReveal {
 
 export const DeckRevealContext = createContext<DeckReveal | null>(null)
 
+/** What the reader is looking at: the first item showing at the top of the box and, when the item reaches above the box, the words at the top. */
+export interface ViewAnchor {
+  el: Element
+  top: number
+  text: TextAnchor | null
+}
+
 /**
- * The first item showing at the top of `box` (the first one whose bottom is below the box's top) and where its top is. What the
- * reader is looking at, to be put back after a swap changed the height above it.
+ * The first item showing at the top of `box` (the first one whose bottom is below the box's top) and where its top is, plus the
+ * words at the box's top when that item is cut by it and still plain text: a tall message that is itself swapped keeps its top
+ * while the line under the reader moves, so the item's top alone cannot hold the place.
  */
-function firstShowingItem(box: HTMLElement): { el: Element; top: number } | null {
-  const boxTop = box.getBoundingClientRect().top
+export function captureViewAnchor(box: HTMLElement): ViewAnchor | null {
+  const rect = box.getBoundingClientRect()
   for (const turn of box.getElementsByClassName(SCROLL_ANCHOR_CLASS)) {
-    if (turn.getBoundingClientRect().bottom <= boxTop) continue
+    if (turn.getBoundingClientRect().bottom <= rect.top) continue
     for (const item of turn.children) {
-      const rect = item.getBoundingClientRect()
-      if (rect.bottom > boxTop) return { el: item, top: rect.top }
+      const r = item.getBoundingClientRect()
+      if (r.bottom <= rect.top) continue
+      const cut = r.top < rect.top && item.querySelector('[data-testid="room-prose-light"]') !== null
+      return { el: item, top: r.top, text: cut ? captureTextAnchor(item, rect.left + 24, rect.top + 2) : null }
     }
     return null
   }
   return null
+}
+
+/** How far the anchored place has moved since it was captured (positive: down). */
+export function viewAnchorMoved(anchor: ViewAnchor): number {
+  if (!anchor.el.isConnected) return 0
+  if (anchor.text) {
+    const now = currentTextTop(anchor.text)
+    if (now !== null) return now - anchor.text.top
+  }
+  return anchor.el.getBoundingClientRect().top - anchor.top
 }
 
 export function useDeckReveal(memKey: string, boxRef: RefObject<HTMLElement | null>): DeckReveal {
@@ -64,11 +85,19 @@ export function useDeckReveal(memKey: string, boxRef: RefObject<HTMLElement | nu
           // where it was: the swaps land at once, then the box is moved by however far that item moved. When the browser has
           // already compensated the difference is 0.
           const box = boxRef.current
-          const before = box ? firstShowingItem(box) : null
-          flushSync(() => { for (const fn of swaps) fn() })
-          if (box && before?.el.isConnected) {
-            const moved = before.el.getBoundingClientRect().top - before.top
-            if (Math.abs(moved) >= 0.5) box.scrollTop += moved
+          // The browser's anchoring is switched off while it happens: it compensates some swaps (when its anchor node survives
+          // them) and not others, and compensating on top of it moved the reader by the difference twice.
+          const before = box ? captureViewAnchor(box) : null
+          const anchoring = box?.style.overflowAnchor ?? ''
+          if (box) box.style.overflowAnchor = 'none'
+          try {
+            flushSync(() => { for (const fn of swaps) fn() })
+            if (box && before) {
+              const moved = viewAnchorMoved(before)
+              if (Math.abs(moved) >= 0.5) box.scrollTop += moved
+            }
+          } finally {
+            if (box) box.style.overflowAnchor = anchoring
           }
         }, { root: boxRef.current, rootMargin: '100% 0px' })
       }

@@ -126,6 +126,36 @@ describe('DeckView defers far-off markdown', () => {
     expect(box.scrollTop).toBe(55)
   })
 
+  it('holds the line under the reader when the message that is swapped is the one cut by the top of the box', () => {
+    // jsdom has no layout: the hit test and the range rects are stubbed. The item keeps its top (-200) while the words move 55 px.
+    const ts = turns(EAGER_TURNS + 10)
+    ts[2] = turn(2, [agent('a2', 0, 'zebra quartz mango and more words')])
+    render(<DeckView {...props} entry={entry(ts)} />)
+    const box = screen.getByTestId('deck-scroll')
+    const section = turnEl(2)
+    const item = section.firstElementChild as HTMLElement
+    vi.spyOn(section, 'getBoundingClientRect').mockReturnValue({ top: -250, bottom: 500 } as DOMRect)
+    vi.spyOn(item, 'getBoundingClientRect').mockReturnValue({ top: -200, bottom: 300 } as DOMRect)
+    const light = item.querySelector('[data-testid="room-prose-light"]')!.textContent!
+    expect(light).toContain('zebra')
+    const text = [...(function* () { const w = document.createTreeWalker(item, NodeFilter.SHOW_TEXT); for (let n = w.nextNode(); n; n = w.nextNode()) yield n })()][0]
+    const range = document.createRange()
+    range.setStart(text, 0)
+    Object.defineProperty(document, 'caretRangeFromPoint', { configurable: true, value: () => range })
+    Object.defineProperty(Range.prototype, 'getBoundingClientRect', {
+      configurable: true,
+      value(this: Range) { return { top: item.querySelector('[data-testid="room-prose-light"]') ? 100 : 155 } as DOMRect },
+    })
+    try {
+      approach(section)
+      expect(isFull(2)).toBe(true)
+      expect(box.scrollTop).toBe(55)
+    } finally {
+      Reflect.deleteProperty(document, 'caretRangeFromPoint')
+      Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect')
+    }
+  })
+
   it('leaves the box alone when nothing under the reader moved', () => {
     render(<DeckView {...props} entry={entry(turns(EAGER_TURNS + 10))} />)
     const box = screen.getByTestId('deck-scroll')
