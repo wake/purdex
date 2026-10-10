@@ -335,6 +335,11 @@ func (q *Queue) Next(ctx context.Context, stream, sessionID string, wait time.Du
 	for {
 		owner, ok := q.owners.OwnerOf(sessionID)
 		q.mu.Lock()
+		// A handed-out request whose result never came is unknown after HandTimeout whether or not its caller is still
+		// waiting (a caller that went away leaves nobody to enforce it): the session must not stay blocked for good.
+		if b := q.busy[sessionID]; b != nil && q.Now().Sub(b.handedAt) > q.handTimeout() {
+			q.finish(b, Result{Status: Unknown, Reason: "no_result"})
+		}
 		if ok && owner == stream && q.busy[sessionID] == nil {
 			// A request nobody fetched within the wait is stale whether or not its caller is still there (a caller that
 			// went away leaves it queued): a prompt must never be typed minutes after it was asked for.

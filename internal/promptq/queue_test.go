@@ -330,6 +330,31 @@ func TestNext_ExpiredRequestIsNotHandedOut(t *testing.T) {
 	take(t, ch)
 }
 
+// A caller that disconnects after the hand-out must not leave the session blocked: the lease expires on its own and the
+// next request is handed out (codex R1). Mutation gate: drop the expiry in Next → red.
+func TestNext_HandedRequestOfAGoneCallerExpires(t *testing.T) {
+	q, _ := newQ(t)
+	q.Wait = 2 * time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _, _ = q.Submit(ctx, "s1", "c1", "first") }()
+	j := next(t, q, "mod1", "s1") // handed out, never answered
+	cancel()                      // the caller goes away
+	ch := submitAsync(q, "s1", "c2", "second")
+	if _, ok := q.Next(context.Background(), "mod1", "s1", 50*time.Millisecond); ok {
+		t.Fatal("handed out while the first lease was still within its timeout")
+	}
+	time.Sleep(q.HandTimeout + 50*time.Millisecond)
+	j2 := next(t, q, "mod1", "s1")
+	if j2.Text != "second" {
+		t.Fatalf("second job = %+v", j2)
+	}
+	q.Result("mod1", j2.ID, Outcome{Status: Accepted})
+	take(t, ch)
+	if err := q.Result("mod1", j.ID, Outcome{Status: Accepted}); !errors.Is(err, ErrNotLeased) {
+		t.Fatalf("the expired job's late result: %v", err)
+	}
+}
+
 // A caller that goes away does not cancel the request: it has been handed out or will be.
 func TestSubmit_CallerGoneKeepsTheRequest(t *testing.T) {
 	q, _ := newQ(t)
