@@ -236,6 +236,13 @@ func TestRevoke_ATicketMintedBeforeTheRevokeIsRefusedAfterIt(t *testing.T) {
 	idA, tokA := e.mintDevice(t, pairingA)
 	e.dial(t, "/ws/host-events", http.Header{"Authorization": {"Bearer " + tokA}}) // the device is in use (first use recorded)
 	ticket := e.ticketFor(t, idA)
+	// The first connection's handler counts itself after the client's dial has returned: under load that increment can
+	// land after a read taken right here and then look like the refused ticket's. Wait for it (#2572).
+	for deadline := time.Now().Add(5 * time.Second); e.opened.Load() < 1; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the first connection's handler never ran")
+		}
+	}
 	before := e.opened.Load()
 	e.del(t, "/api/devices/"+idA)
 
