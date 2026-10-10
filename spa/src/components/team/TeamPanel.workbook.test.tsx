@@ -179,6 +179,18 @@ describe('the drilled-in workbook view', () => {
     expect(fetchConversation).toHaveBeenCalledTimes(1)
     expect(view()).toHaveTextContent('entry 30')
   })
+  it('a reconnect (new generation, support answering again) asks again for an open view, even of an ended seat', () => {
+    scene()
+    seedWorkbook(HOST, 'Z', { status: 'x' })
+    useTeamUiStore.getState().recordEndedSeats(KEY, [{ hostId: HOST, sessionId: 'Z', title: 'gone Z', endedAt: 1 }])
+    useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'Z' })
+    mount()
+    expect(fetchConversation).toHaveBeenCalledTimes(1)
+    act(() => useWorkbookStore.getState().fence(HOST)) // the old connection is over: support unknown, nothing asked
+    expect(fetchConversation).toHaveBeenCalledTimes(1)
+    act(() => useWorkbookStore.getState().setSupport(HOST, { v1: true, v2: false })) // the new connection answered
+    expect(fetchConversation).toHaveBeenCalledTimes(2)
+  })
   it('a drilled seat that is no longer on the roster keeps its view until back (the title comes from the ended list)', () => {
     scene()
     seedWorkbook(HOST, 'Z', { status: '留下的狀態' })

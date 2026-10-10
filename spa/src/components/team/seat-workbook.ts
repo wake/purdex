@@ -40,8 +40,12 @@ export function useWorkbookViewing(hostId: string, sessionId: string): SeatWorkb
     useWorkbookStore.getState().setViewing(hostId, convKey, true)
     return () => useWorkbookStore.getState().setViewing(hostId, convKey, false)
   }, [hostId, convKey])
+  // A new connection generation (a reconnect) or support answering again re-asks: the roster loader only reloads seats that are
+  // still listed, so an ended seat's open view would otherwise keep the old connection's answer.
+  const gen = useWorkbookStore((s) => s.gens[hostId])
+  const v1 = useWorkbookStore((s) => s.support[hostId]?.v1 === true)
   useEffect(() => {
-    if (hostId !== '') void useWorkbookStore.getState().openWorkbook(hostId, sessionId)
-  }, [hostId, sessionId])
+    if (hostId !== '' && v1) void useWorkbookStore.getState().openWorkbook(hostId, sessionId)
+  }, [hostId, sessionId, gen, v1])
   return wb
 }
