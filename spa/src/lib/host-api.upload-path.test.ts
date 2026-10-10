@@ -55,7 +55,7 @@ describe('agentUploadToPath', () => {
     expect(onProgress).toHaveBeenCalledWith(25)
   })
 
-  it.each([[413, 'too_large'], [404, 'not_found'], [500, 'http'], [400, 'http']])('maps HTTP %i to %s', async (status, kind) => {
+  it.each([[413, 'too_large'], [429, 'too_many'], [404, 'not_found'], [500, 'http'], [400, 'http']])('maps HTTP %i to %s', async (status, kind) => {
     const p = agentUploadToPath(HOST_ID, file(), 'dev001')
     FakeXHR.last.reply(status, { error: 'x' })
     await expect(p).rejects.toMatchObject({ kind, status })

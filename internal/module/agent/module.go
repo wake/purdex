@@ -39,7 +39,9 @@ type Module struct {
 	sessions  session.SessionProvider
 	registry  *agentpkg.Registry
 	uploadDir string
-	traceSink *hookTraceSink
+	// uploadSlots caps concurrent uploads per paired device (#2466); the zero value is ready.
+	uploadSlots uploadLimiter
+	traceSink   *hookTraceSink
 
 	// sessionStarts fans granted SessionStarts out to in-process subscribers.
 	sessionStarts sessionStartHub

@@ -2407,6 +2407,7 @@
   "deck.attach.busy": "附件上傳中，請等上傳完成再送出",
   "deck.attach.too_large": "檔案太大：{{name}}（管理員裝置上限 256 MB、配對裝置 64 MB）",
   "deck.attach.not_found": "找不到這個 session，無法上傳",
+  "deck.attach.too_many": "上傳中的檔案太多，稍後再試",
   "deck.attach.http": "上傳失敗（{{status}}）：{{name}}",
   "deck.attach.network": "連線中斷，上傳失敗：{{name}}",
   "panel.close": "關閉面板",
