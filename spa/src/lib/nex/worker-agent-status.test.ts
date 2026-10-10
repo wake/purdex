@@ -1,5 +1,9 @@
 // spa/src/lib/nex/worker-agent-status.test.ts — spec §8.1–8.2.
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
+import { isAwaitingApproval } from './worker-summary'
+import type { ExecutionSummary } from './types'
 import {
   execAgentCode,
   isExecAgentCode,
@@ -102,4 +106,31 @@ describe('projectWorkerStatus', () => {
   it('no running subagents → empty array', () => {
     expect(projectWorkerStatus(baseInput()).subagents).toEqual([])
   })
+})
+
+// #2142 PW-1: the daemon's Go classifier (internal/module/nex/worker_classify.go) reads the same cases. A list row
+// feeds projectWorkerStatus the way useWorkerAgentProjection.deriveSource builds it.
+describe('shared fixture: internal/module/nex/testdata/worker-status-cases.json', () => {
+  type Case = { name: string; row: Partial<ExecutionSummary>; expected: WorkerProjection['status'] }
+  const cases: Case[] = JSON.parse(
+    readFileSync(resolve(__dirname, '../../../../internal/module/nex/testdata/worker-status-cases.json'), 'utf8'),
+  )
+
+  it('is not empty', () => expect(cases.length).toBeGreaterThan(10))
+
+  for (const { name, row, expected } of cases) {
+    it(name, () => {
+      const r = row as ExecutionSummary
+      const status = projectWorkerStatus({
+        state: r.state,
+        turnLive: r.state === 'running',
+        lastOutcome: r.state === 'failed' ? 'failed' : null,
+        hasTurn: (r.turn_count ?? 0) > 0,
+        archived: r.archived ?? false,
+        runningSubagents: [],
+        awaitingApproval: isAwaitingApproval(r),
+      }).status
+      expect(status).toBe(expected)
+    })
+  }
 })
