@@ -791,3 +791,15 @@ func TestStatusError_Message(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// RawBody as Once's out gets a 2xx body as it came — even one that is not JSON — and does not turn it into an error. (#2595)
+func TestOnce_RawBodyReceivesAnUnparseableAnswerUntouched(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`<html>proxy`)) }))
+	defer srv.Close()
+	c := New(srv.URL, "tok")
+	var raw RawBody
+	status, err := c.Once(context.Background(), http.MethodPost, "/x", nil, &raw)
+	if err != nil || status != 200 || string(raw) != "<html>proxy" {
+		t.Fatalf("status=%d err=%v raw=%q", status, err, raw)
+	}
+}

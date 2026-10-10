@@ -39,6 +39,8 @@ type fakeReportDaemon struct {
 	post     func(team.CreateReportRequest) *answer
 	list     answer
 	sendCode int
+	sendBody any    // the 200 answer of /api/peers/send; nil = {"ok":true}
+	sendRaw  string // when set, written as the 200 body instead of sendBody
 }
 
 func (f *fakeReportDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +92,14 @@ func (f *fakeReportDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.sendReq = append(f.sendReq, req)
 		if f.sendCode != 0 {
 			write(w, answer{status: f.sendCode, body: team.APIError{Error: "peer_unreachable", Detail: "lead gone"}})
+			return
+		}
+		if f.sendRaw != "" {
+			_, _ = w.Write([]byte(f.sendRaw))
+			return
+		}
+		if f.sendBody != nil {
+			write(w, answer{body: f.sendBody})
 			return
 		}
 		write(w, answer{body: map[string]any{"ok": true}})

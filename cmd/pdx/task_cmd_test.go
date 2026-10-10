@@ -51,13 +51,14 @@ type fakeTaskDaemon struct {
 	listQueries []url.Values
 	detailPaths []string
 
-	create   func(team.CreateTaskRequest) answer
-	status   func(id string, req team.TaskStatusRequest) answer
-	reassign func(id string, req team.ReassignTaskRequest) answer
-	list     answer
-	detail   answer
-	send     answer
-	sendMode func(n int) string
+	create    func(team.CreateTaskRequest) answer
+	status    func(id string, req team.TaskStatusRequest) answer
+	reassign  func(id string, req team.ReassignTaskRequest) answer
+	list      answer
+	detail    answer
+	send      answer
+	sendMode  func(n int) string
+	sendEmpty bool // answer /api/peers/send 200 with no body at all
 }
 
 func fakeOwner() team.TaskOwner {
@@ -143,6 +144,9 @@ func (f *fakeTaskDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				conn.Close()
 			}
 		default:
+			if f.sendEmpty {
+				return
+			}
 			write(w, f.send)
 		}
 	default:
