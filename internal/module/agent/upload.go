@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/fsutil"
 	"github.com/wake/purdex/internal/middleware"
 	"github.com/wake/purdex/internal/module/session"
@@ -17,16 +19,39 @@ import (
 
 // uploadStallTimeout is how long the upload body may stall. A var so tests
 // can shrink it.
+// Body caps: admin / Mac, a paired phone (a stolen token must not be able to fill the disk), the multipart framing
+// allowance, and the in-memory threshold above which parts spill to temp files. Vars so tests can shrink them.
+var (
+	uploadMaxFileBytes       int64 = 256 << 20
+	uploadMaxFileBytesDevice int64 = 64 << 20
+	uploadFormOverhead       int64 = 1 << 20
+	uploadMemBytes           int64 = 32 << 20
+)
+
 var uploadStallTimeout = middleware.UploadStallTimeout
 
 // handleUpload handles POST /api/agent/upload.
 // It saves the uploaded file and injects the path into the tmux pane.
 func (m *Module) handleUpload(w http.ResponseWriter, r *http.Request) {
-	r.Body = middleware.StallTimeoutBody(w, r, uploadStallTimeout)
-	if err := r.ParseMultipartForm(256 << 20); err != nil {
+	limit := uploadMaxFileBytes
+	if _, isDevice := devices.PrincipalFrom(r.Context()); isDevice {
+		limit = uploadMaxFileBytesDevice
+	}
+	// Hard body cap (ParseMultipartForm's argument is only the in-memory threshold); the stall wrapper stays inside it.
+	r.Body = http.MaxBytesReader(w, middleware.StallTimeoutBody(w, r, uploadStallTimeout), limit+uploadFormOverhead)
+	if err := r.ParseMultipartForm(uploadMemBytes); err != nil {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, `{"error":"too large"}`, http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, `{"error":"invalid multipart form"}`, http.StatusBadRequest)
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 
 	sessionCode := r.FormValue("session")
 	if sessionCode == "" {

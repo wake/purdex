@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -233,4 +235,45 @@ func TestHandleUpload_SessionCodeCannotEscape(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	_, err := os.Stat(filepath.Join(m.uploadDir, "..", "evil"))
 	assert.True(t, os.IsNotExist(err))
+}
+
+func postBig(t *testing.T, m *Module, ctx context.Context, size int) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("session", "my-sess")
+	fw, _ := w.CreateFormFile("file", "big.bin")
+	fw.Write(bytes.Repeat([]byte("x"), size))
+	w.Close()
+	req := httptest.NewRequest("POST", "/api/agent/upload", &buf).WithContext(ctx)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rec := httptest.NewRecorder()
+	m.handleUpload(rec, req)
+	return rec
+}
+
+func shrinkUploadCaps(t *testing.T) {
+	a, b, c, d := uploadMaxFileBytes, uploadMaxFileBytesDevice, uploadFormOverhead, uploadMemBytes
+	uploadMaxFileBytes, uploadMaxFileBytesDevice, uploadFormOverhead, uploadMemBytes = 4096, 1024, 512, 256
+	t.Cleanup(func() { uploadMaxFileBytes, uploadMaxFileBytesDevice, uploadFormOverhead, uploadMemBytes = a, b, c, d })
+}
+
+func TestHandleUpload_OverCapIs413AndLeavesNothing(t *testing.T) {
+	shrinkUploadCaps(t)
+	m, fake := newUploadTestModule(t)
+	rec := postBig(t, m, context.Background(), 10000)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Contains(t, rec.Body.String(), "too large")
+	assert.Empty(t, fake.PastesSent())
+	entries, _ := os.ReadDir(filepath.Join(m.uploadDir, "my-sess"))
+	assert.Empty(t, entries)
+}
+
+func TestHandleUpload_DeviceCapIsLowerThanAdmin(t *testing.T) {
+	shrinkUploadCaps(t)
+	dev := devices.WithPrincipal(context.Background(), devices.Principal{ID: "d_aaaaaaaaaaaa"})
+	m, _ := newUploadTestModule(t)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, postBig(t, m, dev, 2000).Code)
+	m2, _ := newUploadTestModule(t)
+	assert.Equal(t, http.StatusOK, postBig(t, m2, context.Background(), 2000).Code)
 }
