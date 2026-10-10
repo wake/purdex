@@ -14,13 +14,13 @@ import (
 // `pdx relay ask` (member relay ask §5): the member's mod asks its lead. Exit 0 ok, 13 refused (the code is the last
 // word on stderr), 20 daemon unreachable, 2 for a bad grammar.
 
-type fakeAskDaemon struct {
+type fakeRelayAskDaemon struct {
 	status int
 	body   any
 	got    team.RelayAskRequest
 }
 
-func (d *fakeAskDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (d *fakeRelayAskDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	switch r.URL.Path {
 	case "/api/health":
@@ -37,7 +37,7 @@ func (d *fakeAskDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestRelayCmd_AskPostsAndPrintsTheAnswer(t *testing.T) {
-	d := &fakeAskDaemon{body: team.RelayAskResponse{ID: "ask-1", State: team.RelayAskOpen, ExpiresAt: 99}}
+	d := &fakeRelayAskDaemon{body: team.RelayAskResponse{ID: "ask-1", State: team.RelayAskOpen, ExpiresAt: 99}}
 	code, stdout, stderr := driveRelay(t, context.Background(), d, "ask", "--session", "sid-m", "--used", "71", "--window", "1000000", "--request-id", "11111111-1111-4111-8111-111111111111")
 	if code != ExitOK || strings.TrimSpace(stdout) != `{"id":"ask-1","state":"open","expires_at":99}` {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
@@ -49,7 +49,7 @@ func TestRelayCmd_AskPostsAndPrintsTheAnswer(t *testing.T) {
 
 // Without --request-id the CLI mints one, so a retry of one call is the same ask.
 func TestRelayCmd_AskMintsARequestID(t *testing.T) {
-	d := &fakeAskDaemon{body: team.RelayAskResponse{ID: "ask-1", State: team.RelayAskOpen}}
+	d := &fakeRelayAskDaemon{body: team.RelayAskResponse{ID: "ask-1", State: team.RelayAskOpen}}
 	if code, _, stderr := driveRelay(t, context.Background(), d, "ask", "--session", "sid-m", "--used", "71", "--window", "1"); code != ExitOK {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
@@ -60,7 +60,7 @@ func TestRelayCmd_AskMintsARequestID(t *testing.T) {
 
 func TestRelayCmd_AskRefusalsAreExit13WithTheCodeLast(t *testing.T) {
 	for _, code := range []string{team.ErrNotMember, team.ErrRelayOpen, team.ErrRelayUnsupported} {
-		d := &fakeAskDaemon{status: http.StatusConflict, body: team.APIError{Error: code, Detail: "no"}}
+		d := &fakeRelayAskDaemon{status: http.StatusConflict, body: team.APIError{Error: code, Detail: "no"}}
 		got, stdout, stderr := driveRelay(t, context.Background(), d, "ask", "--session", "sid-m", "--used", "71", "--window", "1")
 		toks := strings.Fields(stderr)
 		if got != ExitRefused || stdout != "" || len(toks) == 0 || toks[len(toks)-1] != code {
@@ -79,7 +79,7 @@ func TestRelayCmd_AskGrammar(t *testing.T) {
 		{"ask", "--session", "s", "--used", "71", "--window", "1", "x"}, // stray argument
 		{"ask", "--session", "s", "--used", "71", "--window", "1", "--request-id", "nope"},
 	} {
-		if code, _, _ := driveRelay(t, context.Background(), &fakeAskDaemon{}, args...); code != ExitUsage {
+		if code, _, _ := driveRelay(t, context.Background(), &fakeRelayAskDaemon{}, args...); code != ExitUsage {
 			t.Errorf("%v: code=%d, want %d", args, code, ExitUsage)
 		}
 	}

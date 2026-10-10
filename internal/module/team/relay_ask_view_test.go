@@ -3,8 +3,6 @@ package teammod
 import (
 	"net/http"
 	"testing"
-
-	"github.com/wake/purdex/internal/team"
 )
 
 // GET /api/team shows relay_ask_until (unix ms) on a member while its ask is open (spec 2026-10-10-member-relay-ask §3.6).

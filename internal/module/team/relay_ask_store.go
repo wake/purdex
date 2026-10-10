@@ -191,6 +191,26 @@ func (s *Store) ListUnnotifiedAsks(now int64) ([]RelayAsk, error) {
 	return out, rows.Err()
 }
 
+// OpenAskDeadlines maps the session of each of the team's members with an open, unexpired ask to when it runs out
+// (unix ms): what GET /api/team shows.
+func (s *Store) OpenAskDeadlines(teamID string, now int64) (map[string]int64, error) {
+	rows, err := s.db.Query(`SELECT session_id, expires_at FROM relay_asks WHERE team_id = ? AND state = 'open' AND expires_at > ?`, teamID, now)
+	if err != nil {
+		return nil, fmt.Errorf("open relay asks of team %s: %w", teamID, err)
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var sid string
+		var until int64
+		if err := rows.Scan(&sid, &until); err != nil {
+			return nil, fmt.Errorf("open relay asks of team %s: %w", teamID, err)
+		}
+		out[sid] = until
+	}
+	return out, rows.Err()
+}
+
 // PruneRelayAsks deletes the closed asks that closed before the cut-off (unix ms). An open ask is never deleted.
 func (s *Store) PruneRelayAsks(before int64) (int64, error) {
 	res, err := s.db.Exec(`DELETE FROM relay_asks WHERE state != 'open' AND closed_at < ?`, before)
