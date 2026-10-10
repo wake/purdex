@@ -90,17 +90,20 @@ func (m *Module) createRemoteMemberRelay(w http.ResponseWriter, req team.RelayCr
 	m.writeJSON(w, http.StatusCreated, team.RelayCreateResponse{Op: op})
 }
 
-// endForwardedOpIn ends the forwarded op opID — of THIS host's member (host, team and the member's session as the op recorded
-// it) — as a compare-and-set from `forwarded`. ended says whether it changed: false means the op was not forwarded any more
-// (another cause got there first), or is not that member's, and nothing was written.
+// endForwardedOpIn ends the forwarded op opID — of THIS host's member — as a compare-and-set from `forwarded`. The op is bound
+// to the member by the `relay` command this host queued for it (host, team, mk and the op id in its body), never by the session
+// the row has now: a person's own /relay may have moved the row between the command's send and the op's answer. ended says
+// whether it changed: false means the op was not forwarded any more (another cause got there first), or is not this member's,
+// and nothing was written.
 func endForwardedOpIn(tx dbtx, hostID, teamID, mk, opID string, to team.RelayState, reason, newSession, newRef string, now int64) (ended bool, err error) {
 	if opID == "" {
 		return false, nil
 	}
 	r, err := tx.Exec(`UPDATE relay_ops SET state = ?, reason = ?, new_session_id = ?, new_ref = ?, updated_at = ?
 		WHERE id = ? AND kind = 'member' AND state = 'forwarded' AND host_id = ? AND team_id = ?
-		AND session_id = (SELECT session_id FROM team_members WHERE host_id = ? AND mk = ? AND team_id = ?)`,
-		string(to), reason, newSession, newRef, now, opID, hostID, teamID, hostID, mk, teamID)
+		AND EXISTS (SELECT 1 FROM team_commands WHERE kind = 'relay' AND host_id = ? AND team_id = ? AND mk = ?
+			AND json_extract(body_json, '$.op_id') = relay_ops.id)`,
+		string(to), reason, newSession, newRef, now, opID, hostID, teamID, hostID, teamID, mk)
 	if err != nil {
 		return false, err
 	}

@@ -553,3 +553,38 @@ func TestForwarded_OnlyAnAcceptedAnswerSettlesTheCommand(t *testing.T) {
 		}
 	}
 }
+
+// 1f review: the op is bound to the member by the `relay` command this host queued for it, not by the session the row has now.
+// The command is still on its way, a person relays the member by hand on its host (a `moved` without an op id moves the row),
+// then the command reaches the new session and its relay answers with the op's id: the op still ends.
+func TestForwarded_AMovedWithTheOpIdEndsItAfterAPersonsMovedChangedTheRowsSession(t *testing.T) {
+	f, _ := fwdRelayFixture(t)
+	op := f.relayForwarded(fwdOp)
+	person := movedOf("", factUUID1)
+	person.NewSession, person.NewRef = "sid-person", "_ppp111"
+	if code, body := f.postFact(memberPrincipal(), person); code != 200 || !strings.Contains(string(body), `"applied"`) {
+		t.Fatalf("person's moved: %d %s", code, body)
+	}
+	if got := f.op(op.ID); got.State != team.RelayForwarded {
+		t.Fatalf("op = %+v", got)
+	}
+	if code, body := f.postFact(memberPrincipal(), movedOf(fwdOp, factUUID2)); code != 200 || !strings.Contains(string(body), `"applied"`) {
+		t.Fatalf("the op's moved: %d %s", code, body)
+	}
+	if got := f.op(op.ID); got.State != team.RelayDone || got.NewSessionID != "sid-new" {
+		t.Fatalf("op = %+v, want done", got)
+	}
+}
+
+// The same for a relay_failed after the row moved.
+func TestForwarded_ARelayFailedEndsTheOpAfterAPersonsMovedChangedTheRowsSession(t *testing.T) {
+	f, _ := fwdRelayFixture(t)
+	f.relayForwarded(fwdOp)
+	person := movedOf("", factUUID1)
+	person.NewSession, person.NewRef = "sid-person", "_ppp111"
+	f.postFact(memberPrincipal(), person)
+	f.postFact(memberPrincipal(), relayFailedOf(fwdOp, factUUID2, "failed", "member_gone"))
+	if got := f.op(fwdOp); got.State != team.RelayFailed {
+		t.Fatalf("op = %+v", got)
+	}
+}
