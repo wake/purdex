@@ -32,7 +32,7 @@ export function TeamSeatWorkbookView(props: Props) {
   return <WorkbookFrame key={wb.convKey ?? ''} {...props} wb={wb} />
 }
 
-function WorkbookFrame({ teamKey, hostId, title, trailing, wb }: Props & { wb: SeatWorkbook }) {
+function WorkbookFrame({ teamKey, hostId, sessionId, title, trailing, wb }: Props & { wb: SeatWorkbook }) {
   const t = useI18nStore((s) => s.t)
   const vs = useWorkbookViewState(hostId, wb.convKey)
   const conv = wb.conv
@@ -75,7 +75,7 @@ function WorkbookFrame({ teamKey, hostId, title, trailing, wb }: Props & { wb: S
           </button>
         )}
         <span className="truncate min-w-0 flex-1 font-medium" title={heading}>{heading}</span>
-        <WorkbookToolbar v2={v2} tab={tab} onTab={switchTab} openTodos={conv?.todos.open.length ?? 0} />
+        <WorkbookToolbar v2={v2} tab={tab} onTab={switchTab} hostId={hostId} sessionId={sessionId} convKey={wb.convKey} conv={conv} />
         {trailing !== undefined && <span className="flex items-center gap-0.5 flex-shrink-0">{trailing}</span>}
       </div>
       <div ref={vs.scrollRef} onScroll={vs.onScroll} data-testid="workbook-body" className="px-3 py-2 flex flex-col gap-2 overflow-y-auto max-h-[70vh]">
