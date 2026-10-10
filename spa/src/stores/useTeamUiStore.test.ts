@@ -179,6 +179,11 @@ describe('the panel area (WA-2a)', () => {
   it('defaults to the minimum width (356 under the default light style: a lead + 3 members fit one header row)', () => {
     expect(useTeamUiStore.getInitialState().panel).toEqual({ width: 356, followsMin: true })
   })
+  it('a drag that lands on the same width (or is clamped to it) still makes the width the person\'s', () => {
+    useTeamUiStore.setState({ panel: { width: 356, followsMin: true } })
+    useTeamUiStore.getState().setPanelWidth(100) // clamped back to 356
+    expect(useTeamUiStore.getState().panel).toEqual({ width: 356, followsMin: false })
+  })
   it('setPanelWidth clamps to the current minimum - 720 and rounds', () => {
     const { setPanelWidth } = useTeamUiStore.getState()
     setPanelWidth(100)

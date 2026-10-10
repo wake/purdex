@@ -637,7 +637,7 @@ describe('one-line mode', () => {
 })
 
 describe('resize and enlarge', () => {
-  beforeEach(() => { useTeamUiStore.setState({ panel: { width: 500 } }) }) // above the minimum, so a drag to either side moves
+  beforeEach(() => { useTeamUiStore.setState({ panel: { width: 500, followsMin: false } }) }) // above the minimum, so a drag to either side moves
   const drag = (from: number, to: number, commit = true) => {
     fireEvent.mouseDown(screen.getByTestId('resize-hit'), { clientX: from })
     fireEvent.mouseMove(document, { clientX: to })
@@ -715,7 +715,7 @@ describe('resize and enlarge', () => {
     expect(area().getAttribute('data-expanded')).toBe('false')
     fireEvent.click(screen.getByTestId('team-panel-expand'))
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 500 })
+    expect(useTeamUiStore.getState().panel).toEqual({ width: 500, followsMin: false })
     expect(area().getAttribute('data-expanded')).toBe('true')
     expect(screen.queryByTestId('resize-hit')).toBeNull() // nothing to resize while it fills the area
     fireEvent.click(screen.getByTestId('team-panel-expand'))

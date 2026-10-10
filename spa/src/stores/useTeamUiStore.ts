@@ -165,7 +165,7 @@ export const useTeamUiStore = create<TeamUiState>()(
         if (!Number.isFinite(width)) return s
         const next = clampWidth(width)
         // This is the person's drag: the width is theirs from now on (the follow in the settings subscription uses setState).
-        return next === s.panel.width ? s : { panel: { width: next, followsMin: false } }
+        return next === s.panel.width && s.panel.followsMin === false ? s : { panel: { width: next, followsMin: false } }
       }),
       sharedPanelMode: 'titlebar',
       sharedPanelLast: 'full',
