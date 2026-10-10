@@ -4,6 +4,7 @@ package teammod
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/team"
@@ -28,24 +29,66 @@ func TestJoin_SpawnAndAdoptCommandsCarryTheStoredLook(t *testing.T) {
 		t.Fatalf("spawn body = %+v", tc)
 	}
 	tm := f.teamRow()
-	ad, err := f.m.adoptRemoteCommand(cmdUUID1, team.AdoptPayload{TeamID: tm.ID, TargetHostID: "hostM", TargetSessionID: "sid-t", TargetRef: "_tgt001"})
-	if err != nil {
-		t.Fatal(err)
+	payload := team.AdoptPayload{TeamID: tm.ID, TargetHostID: "hostM", TargetSessionID: "sid-t", TargetRef: "_tgt001"}
+	storedAdopt := func(id string) team.TeamCommand {
+		t.Helper()
+		ad, err := f.m.adoptRemoteCommand(id, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.m.store.EnqueueCommand(f.m.store.db, *ad, f.clock.Load()); err != nil {
+			t.Fatal(err)
+		}
+		var tc team.TeamCommand
+		for _, c := range f.commandsOf(CmdAdopt) {
+			if c.ID == id {
+				_ = json.Unmarshal(c.Body, &tc)
+			}
+		}
+		return tc
 	}
-	tc = team.TeamCommand{}
-	_ = json.Unmarshal(ad.Body, &tc)
-	if tc.TeamLabel != "資源線" || tc.TeamColor == nil || *tc.TeamColor != 3 {
+	if tc = storedAdopt(cmdUUID1); tc.TeamLabel != "資源線" || tc.TeamColor == nil || *tc.TeamColor != 3 {
 		t.Fatalf("adopt body = %+v", tc)
 	}
 	// automatic colour: absent
 	if code, _ := f.putAppearance(appearanceBody(map[string]any{"team_color": nil})); code != http.StatusOK {
 		t.Fatal("put")
 	}
-	ad, _ = f.m.adoptRemoteCommand(cmdUUID2, team.AdoptPayload{TeamID: tm.ID, TargetHostID: "hostM", TargetSessionID: "sid-t", TargetRef: "_tgt001"})
-	tc = team.TeamCommand{}
-	_ = json.Unmarshal(ad.Body, &tc)
-	if tc.TeamColor != nil {
+	if tc = storedAdopt(cmdUUID2); tc.TeamColor != nil {
 		t.Fatalf("automatic colour sent as %d", *tc.TeamColor)
+	}
+}
+
+// The look is read where the command is stored, not where it was built: a rename between the two is not lost, and enqueueing
+// the same command again after a rename is a replay, not "the id is taken".
+func TestJoin_TheLookIsReadInTheEnqueuingTransaction(t *testing.T) {
+	f, _ := leadSpawnFixture(t)
+	tm := f.teamRow()
+	ad, err := f.m.adoptRemoteCommand(cmdUUID1, team.AdoptPayload{TeamID: tm.ID, TargetHostID: "hostM", TargetSessionID: "sid-t", TargetRef: "_tgt001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, body := f.putAppearance(appearanceBody(nil)); code != http.StatusOK { // after the build, before the enqueue
+		t.Fatalf("put = %d %s", code, body)
+	}
+	if err := f.m.store.EnqueueCommand(f.m.store.db, *ad, f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	var tc team.TeamCommand
+	_ = json.Unmarshal(f.commandsOf(CmdAdopt)[0].Body, &tc)
+	if tc.TeamName != "資源線：租約" || tc.TeamLabel != "資源線" || tc.TeamColor == nil || *tc.TeamColor != 3 {
+		t.Fatalf("stored body = %+v, want the look as of the enqueue", tc)
+	}
+	if code, _ := f.putAppearance(appearanceBody(map[string]any{"team_name": "改名", "team_label": "改"})); code != http.StatusOK {
+		t.Fatal("put")
+	}
+	if err := f.m.store.EnqueueCommand(f.m.store.db, *ad, f.clock.Load()); err != nil {
+		t.Fatalf("the same command after a rename = %v, want a replay", err)
+	}
+	other := *ad
+	other.Body = []byte(strings.Replace(string(ad.Body), `"target_ref":"_tgt001"`, `"target_ref":"_other1"`, 1))
+	if err := f.m.store.EnqueueCommand(f.m.store.db, other, f.clock.Load()); err == nil {
+		t.Fatal("a different command under the same id was accepted")
 	}
 }
 
