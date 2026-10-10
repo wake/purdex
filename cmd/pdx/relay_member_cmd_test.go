@@ -189,6 +189,9 @@ func TestRelayCmd_WaitMapping(t *testing.T) {
 		{"done", []team.RelayOp{opIn(team.RelayRequested, ""), opIn(team.RelayDone, "")}, ExitOK},
 		{"failed member_unresponsive", []team.RelayOp{opIn(team.RelayFailed, team.RelayReasonMemberUnresponsive)}, ExitMemberFailed},
 		{"failed member_gone", []team.RelayOp{opIn(team.RelayFailed, team.RelayReasonMemberGone)}, ExitMemberFailed},
+		{"failed member_unseen", []team.RelayOp{opIn(team.RelayFailed, team.RelayReasonMemberUnseen)}, ExitMemberFailed},
+		{"failed member_busy_timeout", []team.RelayOp{opIn(team.RelayFailed, team.RelayReasonMemberBusyTimeout)}, ExitMemberFailed},
+		{"failed member_blocked", []team.RelayOp{opIn(team.RelayFailed, team.RelayReasonMemberBlocked)}, ExitMemberFailed},
 		{"failed handoff_incomplete", []team.RelayOp{opIn(team.RelayFailed, team.RelayReasonHandoffIncomplete)}, ExitError},
 		{"cancelled denied", []team.RelayOp{opIn(team.RelayCancelled, team.RelayReasonDenied)}, ExitDenied},
 		{"cancelled timeout", []team.RelayOp{opIn(team.RelayCancelled, team.RelayReasonTimeout)}, ExitTimeout},
@@ -293,5 +296,25 @@ func TestRelayCmd_AnInterruptedWaitSaysTheRelayGoesOn(t *testing.T) {
 	code := runRelayCmd(ctx, []string{"_mem001", "--wait", "5m", "--config", cfg}, &stdout, &stderr, leadClockOpt())
 	if code != ExitCancelled || !strings.Contains(stderr.String(), "接力仍在進行") {
 		t.Fatalf("code=%d err=%q", code, stderr.String())
+	}
+}
+
+// #2439: a member that never answered is explained on stderr (the op's JSON stays on stdout), exit 14 as before.
+func TestRelayCmd_WaitExplainsWhyAMemberDidNotAnswer(t *testing.T) {
+	for reason, want := range map[string]string{
+		team.RelayReasonMemberUnseen:      "Mods: Enable hot reloading?",
+		team.RelayReasonMemberBlocked:     "等待輸入",
+		team.RelayReasonMemberBusyTimeout: "60 分鐘",
+	} {
+		d := &fakeMemberRelayDaemon{polls: []team.RelayOp{opIn(team.RelayFailed, reason)}}
+		code, out, errs := driveMemberRelay(t, d, "/tmp/x.sock", "_mem001", "--wait", "5m")
+		if code != ExitMemberFailed || !strings.Contains(errs, want) || !strings.Contains(out, reason) {
+			t.Errorf("%s: exit %d out=%q err=%q, want a hint with %q", reason, code, out, errs, want)
+		}
+	}
+	// the old reasons print no hint
+	d := &fakeMemberRelayDaemon{polls: []team.RelayOp{opIn(team.RelayFailed, team.RelayReasonMemberGone)}}
+	if _, _, errs := driveMemberRelay(t, d, "/tmp/x.sock", "_mem001", "--wait", "5m"); strings.Contains(errs, "Mods:") {
+		t.Errorf("member_gone got the dialog hint: %q", errs)
 	}
 }
