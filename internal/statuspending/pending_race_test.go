@@ -135,6 +135,24 @@ func TestWrite_AFileIsBounded(t *testing.T) {
 	}
 }
 
+// critic: two renders of one session that read their JSON in the same millisecond cannot be ordered by the clock; the one that
+// takes the lock later (it started later, or at worst it is a tie) replaces the other, so a failed render is never silently lost
+// to its same-millisecond twin. Mutation: `>=` on the check → the later payload is dropped (red).
+func TestWrite_ASameMillisecondTwinReplaces(t *testing.T) {
+	dir := t.TempDir()
+	Write(dir, payload(sidA, "first"), 4000)
+	Write(dir, payload(sidA, "second"), 4000)
+	got, _ := Load(dir)
+	var m struct{ Model struct{ ID string } }
+	if len(got) != 1 {
+		t.Fatalf("load = %+v", got)
+	}
+	json.Unmarshal(got[0].Raw, &m)
+	if m.Model.ID != "second" {
+		t.Fatalf("kept %q, want the later writer's payload", m.Model.ID)
+	}
+}
+
 // A file placed by hand over the bound is not an entry (and is deleted), so a boot never loads an unbounded file.
 func TestLoad_AFileOverTheBoundIsDropped(t *testing.T) {
 	dir := t.TempDir()
