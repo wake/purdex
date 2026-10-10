@@ -176,7 +176,8 @@ func (m *Module) handleWorkerRebuild(w http.ResponseWriter, r *http.Request) {
 	}
 	// U18: a rebuilt stint is the same hand-over of the same session: it keeps the model and effort too, and records them as the
 	// handoff does so the take-back reads them back.
-	reading := m.readingOf(sid, "")
+	// The replaced stint's labels are the authoritative copy of what it was started with; the statusline fills what they lack.
+	reading := m.readingOf(sid, replaced.Labels)
 	for k, v := range reading.labels() {
 		labels[k] = v
 	}
