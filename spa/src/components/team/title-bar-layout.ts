@@ -18,7 +18,11 @@ export const TITLE_RIGHT_EDGE = 8
 export function titleBarLayout({ barW, btnsW, stripW }: { barW: number; btnsW: number; stripW: number }): { room: number; titlePad: number } {
   const right = TITLE_RIGHT_EDGE + btnsW + HEADER_GAP
   const room = Math.max(0, Math.min(Math.floor(barW / 2) - TITLE_MIN_W / 2 - right, barW - TITLE_LEFT_RESERVE - right))
-  const titlePad = Math.max(TITLE_LEFT_RESERVE, Math.min(stripW, room) + right)
+  // Priority in a narrow bar: the title's floor (TITLE_MIN_W, centred) comes first, so the padding is capped at what leaves it
+  // that width; the traffic-light reserve and the strip both yield to it (the strip's room is already 0 there, so only 「+N」 /
+  // nothing shows). A bar narrower than the floor gets no padding at all.
+  const maxPad = Math.max(0, (barW - TITLE_MIN_W) / 2)
+  const titlePad = Math.min(maxPad, Math.max(TITLE_LEFT_RESERVE, Math.min(stripW, room) + right))
   return { room, titlePad }
 }
 

@@ -395,6 +395,32 @@ describe('room for the strip and the centred title (round 5)', () => {
     expect(700 - 2 * narrow.titlePad).toBeGreaterThanOrEqual(TITLE_MIN_W)
   })
 
+  it('titleBarLayout: the title floor wins in a narrow bar, whatever the strip, the room or the buttons ask for', () => {
+    for (const barW of [200, 250, 300, 350]) {
+      for (const [btnsW, stripW] of [[120, 300], [120, 0], [20, 10], [600, 9999], [400, 50]]) {
+        const { room, titlePad } = titleBarLayout({ barW, btnsW, stripW })
+        expect(room).toBeGreaterThanOrEqual(0)
+        expect(titlePad).toBeGreaterThanOrEqual(0)
+        // the centred title keeps TITLE_MIN_W (or the whole bar when the bar itself is narrower)
+        expect(barW - 2 * titlePad).toBeGreaterThanOrEqual(Math.min(TITLE_MIN_W, barW))
+      }
+    }
+    // barW=300: before the cap the padding was 112 and the title got 76px
+    expect(titleBarLayout({ barW: 300, btnsW: 120, stripW: 50 }).titlePad).toBe((300 - TITLE_MIN_W) / 2)
+    // room=0 (the strip is gone): the padding is still bounded
+    const none = titleBarLayout({ barW: 300, btnsW: 120, stripW: 50 })
+    expect(none.room).toBe(0)
+    expect(300 - 2 * none.titlePad).toBe(TITLE_MIN_W)
+    // an over-wide button group does not squeeze the title either
+    const wideBtns = titleBarLayout({ barW: 350, btnsW: 600, stripW: 40 })
+    expect(wideBtns.room).toBe(0)
+    expect(350 - 2 * wideBtns.titlePad).toBeGreaterThanOrEqual(TITLE_MIN_W)
+    // a bar narrower than the title floor: no negative padding
+    expect(titleBarLayout({ barW: 50, btnsW: 20, stripW: 10 }).titlePad).toBe(0)
+    // roomy bars are unchanged
+    expect(titleBarLayout({ barW: 1200, btnsW: 20, stripW: 10 }).titlePad).toBe(TITLE_LEFT_RESERVE)
+  })
+
   describe('in the bar', () => {
     const W = 1000
     const BTNS = 130
