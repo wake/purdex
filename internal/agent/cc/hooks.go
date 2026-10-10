@@ -235,6 +235,9 @@ func pluginIssue(settings map[string]any, dataDir string) string {
 	if want == "" || want == "unknown" {
 		return ""
 	}
+	if got == "" { // a truncated stamp is damage, not a version
+		return notInstalled
+	}
 	// With the embedded tree to compare, the mod is outdated when its CONTENT differs — the same test ExtractPlugin uses
 	// to decide a swap (#2403): VERSION is the daemon version the tree last changed at, not this binary's.
 	if PluginSource != nil {

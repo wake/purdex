@@ -77,8 +77,9 @@ func ExtractPlugin(src fs.FS, dataDir, version, pdxPath, cfgPath string) (root s
 	defer unlock()
 	// A binary built without ldflags reports "unknown"; such a dev build always
 	// re-extracts, so an edited mod reaches the next session without a bump.
-	// A VERSION of "unknown" is a dev build's stamp: a release replaces it once, so VERSION always names a real daemon version.
-	if cur, err := os.ReadFile(filepath.Join(root, "VERSION")); err == nil && strings.TrimSpace(string(cur)) != "unknown" && version != "" && version != "unknown" && treeIdentical(src, root) {
+	// A VERSION that is empty (damage) or "unknown" (a dev build's stamp) is replaced once by a release, so VERSION always
+	// names a real daemon version.
+	if cur, err := os.ReadFile(filepath.Join(root, "VERSION")); err == nil && stampIsRelease(string(cur)) && version != "" && version != "unknown" && treeIdentical(src, root) {
 		if err := writePdxJSON(root, pdxPath, dataDir, cfgPath); err != nil {
 			return root, false, err
 		}
@@ -163,8 +164,12 @@ func installedIgnored(rel string) bool {
 // treeIdentical reports whether the folder at root is exactly the embedded tree: every embedded file there with the same
 // bytes (treeMatches), and no file there that src lacks, apart from installedIgnored ones. A file a newer mod dropped
 // (a removed skill) makes the tree different, so the swap that replaces the whole folder clears it away.
+//
+// A symlink anywhere in the folder (the root included) outside the ignored paths is a difference: its target can change
+// behind the comparison and Claude Code would load whatever it points at. The walk comes first, so treeMatches never reads
+// through one. Finder's .DS_Store is not something Claude Code loads and is not a difference.
 func treeIdentical(src fs.FS, root string) bool {
-	if !treeMatches(src, root) {
+	if fi, err := os.Lstat(root); err != nil || !fi.IsDir() {
 		return false
 	}
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -182,7 +187,13 @@ func treeIdentical(src fs.FS, root string) bool {
 			}
 			return nil
 		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return errTreeDiffers
+		}
 		if d.IsDir() {
+			return nil
+		}
+		if d.Name() == ".DS_Store" {
 			return nil
 		}
 		if _, err := fs.Stat(src, rel); err != nil {
@@ -190,7 +201,13 @@ func treeIdentical(src fs.FS, root string) bool {
 		}
 		return nil
 	})
-	return err == nil
+	return err == nil && treeMatches(src, root)
+}
+
+// stampIsRelease says whether a VERSION file's content names a real daemon version (not empty, not a dev build's "unknown").
+func stampIsRelease(content string) bool {
+	v := strings.TrimSpace(content)
+	return v != "" && v != "unknown"
 }
 
 // lockFileName is the cross-process lock beside the extracted tree: the
