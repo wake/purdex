@@ -151,7 +151,7 @@ func Write(dir string, raw []byte, atMs int64) error {
 	path := filepath.Join(dir, sid+ext)
 	return withLock(dir, func() error {
 		if cur, ok := read(path); ok {
-			if cur.AtMs >= atMs {
+			if cur.AtMs > atMs { // a tie is not "older": the later lock holder replaces its same-millisecond twin
 				return nil
 			}
 		} else if entries, err := os.ReadDir(dir); err == nil && countFiles(dir, entries) >= Cap {
