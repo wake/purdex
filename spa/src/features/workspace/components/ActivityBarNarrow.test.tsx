@@ -227,3 +227,49 @@ describe('ActivityBarNarrow', () => {
     })
   })
 })
+
+// #2531: the sensors are pointer-only (no KeyboardSensor), so dnd-kit's `attributes` on the wrapper div (tabIndex=0,
+// role=button, fake "press space to pick up" description) would be a second Tab stop around the real <button>.
+// ActivityBarNarrow owns its DndContext + PointerSensor, so the drag is observed through the component's own
+// isDragging style (opacity 0.8) on the real useSortable.
+describe('ActivityBarNarrow workspace button — dnd-kit attributes (#2531)', () => {
+  function renderBar() {
+    render(
+      <ActivityBarNarrow
+        workspaces={[{ id: 'w1', name: 'Purdex', tabs: [], activeTabId: null }]}
+        activeWorkspaceId={null}
+        onSelectWorkspace={() => {}}
+        onSelectHome={() => {}}
+        onAddWorkspace={() => {}}
+        onReorderWorkspaces={() => {}}
+        onOpenHosts={() => {}}
+        onOpenSettings={() => {}}
+      />,
+    )
+    return screen.getByLabelText('Purdex').parentElement as HTMLElement
+  }
+
+  it('wrapper div is not a second Tab stop and carries no fake keyboard-drag description', () => {
+    const wrapper = renderBar()
+    expect(wrapper).not.toHaveAttribute('tabindex')
+    expect(wrapper).not.toHaveAttribute('role')
+    expect(wrapper).not.toHaveAttribute('aria-roledescription')
+    expect(wrapper).not.toHaveAttribute('aria-describedby')
+  })
+
+  it('the inner <button> is the only focusable element of the row', () => {
+    const wrapper = renderBar()
+    expect(wrapper.querySelectorAll('[tabindex], button')).toHaveLength(1)
+  })
+
+  it('still starts a mouse drag: pointer-down + move on the wrapper marks it as dragging', async () => {
+    const wrapper = renderBar()
+    expect(wrapper.style.opacity).toBe('1')
+    fireEvent.pointerDown(wrapper, { button: 0, isPrimary: true, clientX: 10, clientY: 10 })
+    fireEvent.pointerMove(document, { clientX: 10, clientY: 30 })
+    expect(wrapper.style.opacity).toBe('0.8')
+    fireEvent.pointerUp(document)
+    await new Promise((r) => setTimeout(r, 50))
+    cleanup()
+  })
+})

@@ -41,7 +41,9 @@ export function InlineTab({
   const badgeInset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
   const badgeRadius = useUISettingsStore((s) => s.hostBadgeSidebarRadius)
   const hostBadge = useTabHostBadge(tab)
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  // `attributes` is deliberately not spread: sensors are pointer-only, so its aria-roledescription / aria-describedby
+  // ("press space to pick up") would be false. The row sets its own role=button + tabIndex=0 below (#2531).
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.id,
     data: { type: 'tab', tabId: tab.id, sourceWsId, isPinned: tab.pinned },
   })
@@ -106,7 +108,6 @@ export function InlineTab({
       style={style}
       data-testid="inline-tab-row"
       data-active={String(isActive)}
-      {...attributes}
       {...otherListeners}
       onPointerDown={handlePointerDown}
       role="button"

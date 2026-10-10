@@ -33,7 +33,9 @@ const TAB_BG_INACTIVE = 'var(--surface-secondary)'
 const TAB_BG_ACTIVE = 'var(--surface-active)'
 
 export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, group }: Props) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
+  // `attributes` is deliberately not spread: sensors are pointer-only, so its aria-roledescription / aria-describedby
+  // ("press space to pick up") would be false (#2531). Pinned is a native <button>; the unpinned div sets role=tab + tabIndex=0 itself.
+  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
 
   const style = {
     transform: transform ? `translate3d(${Math.round(transform.x)}px, 0, 0)` : undefined,
@@ -92,7 +94,6 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         ref={setNodeRef}
         data-tab-id={tab.id}
         style={{ ...style, height: 26, margin: '0 1px', marginTop: 2 }}
-        {...attributes}
         {...listeners}
         onClick={() => onSelect(tab.id)}
         onDoubleClick={handleDoubleClick}
@@ -138,9 +139,9 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       ref={setNodeRef}
       data-tab-id={tab.id}
       style={{ ...style, height: 26, margin: '0 1px', marginTop: 2, flex: '0 1 140px', width: 140, minWidth: 80 }}
-      {...attributes}
       {...listeners}
       role="tab"
+      tabIndex={0}
       aria-selected={isActive}
       aria-label={stateSuffix ? tipText : undefined}
       data-seat-state={seatState ?? undefined}
