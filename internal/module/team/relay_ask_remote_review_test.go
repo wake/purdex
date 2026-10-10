@@ -102,6 +102,27 @@ func TestRelayAskFact_AnAskIDOfAnotherRowIsAConflict(t *testing.T) {
 	}
 }
 
+// codex critic: the refusal has no side effect — the session's existing open mirror is still open after an id_conflict.
+// Mutation gate: withdraw the old mirror before looking at who owns the id → the old mirror is withdrawn (red).
+func TestRelayAskFact_AnIDConflictLeavesTheSessionsMirrorOpen(t *testing.T) {
+	f, _ := leadAskFixture(t)
+	f.postFact(leadPrincipal(), relayAskFact(factUUID1, "mk1", rid(920), 71, 300))
+	if _, err := f.m.store.db.Exec(`INSERT INTO relay_asks (id, team_id, spawn_op, session_id, used_pct, window, state, created_at, expires_at)
+		VALUES (?, ?, 'op-other', 'sid-other', 50, 1000, 'open', 1, 9999999999999)`, rid(921), uid(1)); err != nil {
+		t.Fatal(err)
+	}
+	code, body := f.postFact(leadPrincipal(), relayAskFact(askFactUUID, "mk1", rid(921), 73, 300))
+	if code != http.StatusConflict || errCode(t, body) != team.ErrCommandIDConflict {
+		t.Fatalf("fact: %d %s, want 409 %s", code, body, team.ErrCommandIDConflict)
+	}
+	if a := f.ask(rid(920)); a.State != team.RelayAskOpen {
+		t.Fatalf("the session's mirror = %+v, want still open", a)
+	}
+	if a := f.ask(rid(921)); a.SessionID != "sid-other" || a.UsedPct != 50 {
+		t.Fatalf("the other row changed: %+v", a)
+	}
+}
+
 // codex attack: the member-left withdrawal ties the remote row to the ask by team too: a row of another team with the same mk and
 // session does not keep it open. Mutation: drop the team comparison → the ask stays open (red).
 func TestRemoteAsk_TheSweeperChecksTheTeamOfTheRemoteRow(t *testing.T) {
