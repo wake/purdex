@@ -122,6 +122,37 @@ describe('the loader', () => {
     expect(fetchConversation).toHaveBeenCalledTimes(4)
   })
 
+  it('a connection that stays up (latency ticks, the same roster) never refetches a seat; a drop and return does, once', async () => {
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    stops.push(startUnattendedSupport(), startWorkbookLoader())
+    roster('h1', [team('a', [member('m1')])])
+    await flush()
+    expect(fetchConversation).toHaveBeenCalledTimes(2)
+    for (let i = 0; i < 5; i++) useHostStore.setState({ runtime: { h1: { status: 'connected', latency: i } } })
+    await flush()
+    expect(fetchConversation).toHaveBeenCalledTimes(2)
+    expect(fetchHostInfo).toHaveBeenCalledTimes(1)
+    useHostStore.setState({ runtime: { h1: { status: 'reconnecting' } } })
+    expect(selectWorkbookSupport('h1').v1).toBe(false) // the drop fences at once
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    await flush()
+    expect(fetchConversation).toHaveBeenCalledTimes(4)
+  })
+
+  it('a probe that fails after a drop leaves support unknown and fetches nothing', async () => {
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    stops.push(startUnattendedSupport(), startWorkbookLoader())
+    roster('h1', [team('a')])
+    await flush()
+    fetchConversation.mockClear()
+    fetchHostInfo.mockRejectedValue(new Error('down'))
+    useHostStore.setState({ runtime: { h1: { status: 'reconnecting' } } })
+    useHostStore.setState({ runtime: { h1: { status: 'connected' } } })
+    await flush()
+    expect(selectWorkbookSupport('h1').v1).toBe(false)
+    expect(fetchConversation).not.toHaveBeenCalled()
+  })
+
   it('the probe feeds selectWorkbookSupport: v1 and v2 from the capabilities, none from an old daemon', async () => {
     useHostStore.setState({ runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } })
     fetchHostInfo.mockImplementation(async (id) => info(id === 'h1' ? ['workbook.v1'] : []))

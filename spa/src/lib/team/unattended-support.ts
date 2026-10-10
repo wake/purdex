@@ -30,6 +30,7 @@ export function startUnattendedSupport(): () => void {
     const generation = ++counter
     current.set(hostId, generation)
     useUnattendedStore.getState().invalidateEditSupport(hostId) // what the last connection said is not this one's answer
+    useWorkbookStore.getState().fence(hostId) // same for the workbook: a new connection generation, support unknown until this answer
     fetchHostInfo(hostId).then(
       (info) => {
         if (current.get(hostId) !== generation) return
@@ -83,6 +84,7 @@ export function startUnattendedSupport(): () => void {
         if (prev.runtime[hostId]?.status === 'connected') {
           current.delete(hostId)
           store.invalidateEditSupport(hostId)
+          useWorkbookStore.getState().fence(hostId) // the connection is gone: requests still out must not land
         }
         continue
       }

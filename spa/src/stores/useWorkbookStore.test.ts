@@ -56,10 +56,11 @@ describe('loadSeat', () => {
     expect(st().convOfSession.h1.s1).toBe('c1')
   })
 
-  it('a reconnect (a new support answer) fetches each seat once more', async () => {
+  it('a reconnect (fence, then a new support answer) fetches each seat once more', async () => {
     st().setSupport('h1', V1)
     await st().loadSeat('h1', 's1')
     await st().loadSeat('h1', 's2')
+    st().fence('h1')
     st().setSupport('h1', V1)
     await st().loadSeat('h1', 's1')
     await st().loadSeat('h1', 's1')
@@ -84,6 +85,7 @@ describe('loadSeat', () => {
     st().setSupport('h1', V1)
     fetchConversation.mockResolvedValue({ kind: 'not_found' })
     await st().loadSeat('h1', 's1')
+    st().fence('h1')
     st().setSupport('h1', V1)
     expect(st().missingSessions.h1).toEqual({})
   })
@@ -203,11 +205,58 @@ describe('forget and fences', () => {
     const d2 = deferred<ConversationResult>()
     fetchConversation.mockReturnValueOnce(d2.promise)
     const p2 = st().loadSeat('h1', 's1')
-    st().setSupport('h1', V1) // the old connection's answer is not this one's
+    st().fence('h1') // the old connection's answer is not this one's
     d2.resolve(page([entry(3)]))
     await p2
     await flush()
     expect(st().byHost.h1).toBeUndefined()
+  })
+})
+
+describe('generation fence', () => {
+  it('the same answer again on an unbroken connection (a periodic probe) is not a new generation: no refetch', async () => {
+    st().setSupport('h1', V1)
+    await st().loadSeat('h1', 's1')
+    for (let i = 0; i < 5; i++) { st().setSupport('h1', V1); await st().loadSeat('h1', 's1') }
+    expect(fetchConversation).toHaveBeenCalledTimes(1)
+  })
+
+  it('a fence makes support unknown at once (v1 false), keeps the loaded entries, and clears loading', async () => {
+    st().setSupport('h1', { v1: true, v2: true })
+    await st().loadSeat('h1', 's1')
+    st().fence('h1')
+    expect(selectWorkbookSupport('h1')).toMatchObject({ v1: false, v2: false })
+    expect(conv()?.entries).toHaveLength(2)
+    await st().loadSeat('h1', 's1') // support unknown: no request
+    await st().openWorkbook('h1', 's1')
+    expect(fetchConversation).toHaveBeenCalledTimes(1)
+  })
+
+  it('a request out when the daemon restarts writes nothing, even though the new probe has not answered (or fails)', async () => {
+    st().setSupport('h1', V1)
+    const d = deferred<ConversationResult>()
+    fetchConversation.mockReturnValueOnce(d.promise)
+    const p = st().loadSeat('h1', 's1')
+    st().fence('h1') // the socket closed / a new probe started; no answer yet
+    d.resolve(page([entry(3)]))
+    await p
+    expect(st().byHost.h1).toBeUndefined()
+    expect(st().convOfSession.h1?.s1).toBeUndefined()
+  })
+
+  it('a request out for the old generation does not swallow the new generation\'s request for the same seat', async () => {
+    st().setSupport('h1', V1)
+    const d = deferred<ConversationResult>()
+    fetchConversation.mockReturnValueOnce(d.promise)
+    const old = st().loadSeat('h1', 's1')
+    st().fence('h1')
+    st().setSupport('h1', V1)
+    await st().loadSeat('h1', 's1')
+    expect(fetchConversation).toHaveBeenCalledTimes(2)
+    expect(conv()?.entries).toHaveLength(2)
+    d.resolve(page([entry(99)]))
+    await old
+    expect(conv()?.entries.map((e) => e.id)).toEqual([3, 2])
   })
 })
 

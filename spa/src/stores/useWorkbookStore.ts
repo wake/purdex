@@ -3,7 +3,7 @@
 //
 // Loading rules (plan WA-1.3, codex #9) — the fetch count is bounded by seats × connection generations + views opened:
 //   * `loadSeat`      — a seat's first appearance in a team view, and again once per connection generation (a new
-//                       `/api/info` answer, support.gen): `limit: 1`, only on a host that lists `workbook.v1`.
+//                       connection generation, `gens`): `limit: 1`, only on a host that lists `workbook.v1`.
 //   * `openWorkbook`  — a workbook view opens: `limit: 20`; `loadMore` pages with `before = oldestId`.
 //   * EVENTS NEVER FETCH. `workbook.entry` carries the entry (upsert by id, learns session → conversation, clears
 //     `missing`); `workbook.status` carries `session_id`, so it lands after a reload too. A status for a conversation no
@@ -40,12 +40,13 @@ export interface ConvState {
 }
 
 export interface WorkbookSupport { v1: boolean; v2: boolean }
-interface HostSupport extends WorkbookSupport { gen: number }
 
 interface WorkbookState {
   byHost: Record<string, { byConv: Record<string, ConvState> }>
   convOfSession: Record<string, Record<string, string>>
-  support: Record<string, HostSupport>
+  support: Record<string, WorkbookSupport>
+  /** The connection generation per host: `fence` bumps it when the connection is interrupted or a new probe starts. */
+  gens: Record<string, number>
   /** Sessions whose conversation answered 404 in the current generation. */
   missingSessions: Record<string, Record<string, true>>
   /** The generation each seat was last loaded in. */
@@ -55,6 +56,9 @@ interface WorkbookState {
   /** Bumped by `forgetHost`: tells a fetch still out that its host was forgotten. */
   epoch: Record<string, number>
 
+  /** The connection the host had is over, or a new probe starts: support is unknown again and no answer still out may land. */
+  fence: (hostId: string) => void
+  /** The probe's answer for the current generation (it does not start a new one). */
   setSupport: (hostId: string, support: WorkbookSupport) => void
   loadSeat: (hostId: string, sessionId: string) => Promise<void>
   openWorkbook: (hostId: string, sessionId: string) => Promise<void>
@@ -134,10 +138,10 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
   /** One conversation fetch for `sessionId`, fenced to the host's epoch and generation. */
   async function runFetch(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<void> {
     const epoch = get().epoch[hostId] ?? 0
-    const gen = get().support[hostId]?.gen
+    const gen = get().gens[hostId]
     const known = get().convOfSession[hostId]?.[sessionId]
     if (known) set((s) => withConv(s, hostId, known, (c) => ({ ...c, loading: true })))
-    const alive = () => (get().epoch[hostId] ?? 0) === epoch && get().support[hostId]?.gen === gen
+    const alive = () => (get().epoch[hostId] ?? 0) === epoch && get().gens[hostId] === gen
     let result
     try {
       result = await fetchConversation(hostId, WORKBOOK_PROVIDER, sessionId, q)
@@ -176,24 +180,32 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
   }
 
   return {
-    byHost: {}, convOfSession: {}, support: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {},
+    byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {},
 
-    setSupport: (hostId, support) => set((s) => {
-      // A new answer is a new connection generation: what 404'd or was loading on the last one is asked again.
+    fence: (hostId) => set((s) => {
+      // What 404'd or was loading on the last connection is asked again on the next; entries already loaded stay (they
+      // are history), but support is unknown until the new answer, so nothing is fetched and no view may rely on v1.
       const byConv = s.byHost[hostId]?.byConv ?? {}
       const cleared = Object.fromEntries(Object.entries(byConv).map(([k, c]) => [k, { ...c, loading: false, missing: false }]))
+      const { [hostId]: _gone, ...support } = s.support
       return {
-        support: { ...s.support, [hostId]: { ...support, gen: (s.support[hostId]?.gen ?? 0) + 1 } },
+        support, gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 },
         missingSessions: { ...s.missingSessions, [hostId]: {} },
         ...(s.byHost[hostId] ? { byHost: { ...s.byHost, [hostId]: { byConv: cleared } } } : {}),
       }
     }),
 
+    setSupport: (hostId, support) => set((s) => {
+      const cur = s.support[hostId]
+      return cur && cur.v1 === support.v1 && cur.v2 === support.v2 ? s : { support: { ...s.support, [hostId]: { v1: support.v1, v2: support.v2 } } }
+    }),
+
     loadSeat: async (hostId, sessionId) => {
       const sup = get().support[hostId]
       if (!sup?.v1) return // not a workbook host (or not known to be one yet)
-      if (get().seatGen[hostId]?.[sessionId] === sup.gen) return // once per seat per connection generation
-      set((s) => ({ seatGen: { ...s.seatGen, [hostId]: { ...s.seatGen[hostId], [sessionId]: sup.gen } } }))
+      const gen = get().gens[hostId] ?? 0
+      if (get().seatGen[hostId]?.[sessionId] === gen) return // once per seat per connection generation
+      set((s) => ({ seatGen: { ...s.seatGen, [hostId]: { ...s.seatGen[hostId], [sessionId]: gen } } }))
       await runFetch(hostId, sessionId, { limit: SEAT_PAGE })
     },
 
@@ -236,11 +248,11 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
     forgetHost: (hostId) => set((s) => {
       const drop = <T>(m: Record<string, T>): Record<string, T> => { const { [hostId]: _g, ...rest } = m; return rest }
       return {
-        byHost: drop(s.byHost), convOfSession: drop(s.convOfSession), support: drop(s.support),
+        byHost: drop(s.byHost), convOfSession: drop(s.convOfSession), support: drop(s.support), gens: drop(s.gens),
         missingSessions: drop(s.missingSessions), seatGen: drop(s.seatGen), viewing: drop(s.viewing), epoch: { ...s.epoch, [hostId]: (s.epoch[hostId] ?? 0) + 1 },
       }
     }),
 
-    reset: () => set({ byHost: {}, convOfSession: {}, support: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {} }),
+    reset: () => { set({ byHost: {}, convOfSession: {}, support: {}, gens: {}, missingSessions: {}, seatGen: {}, viewing: {}, epoch: {} }) },
   }
 })
