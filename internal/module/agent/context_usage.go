@@ -134,6 +134,8 @@ func (m *Module) flushContextUsage() int {
 	if m.usage == nil {
 		return 0
 	}
+	m.usageFlushMu.Lock() // a removal of the statusline waits for a flush to finish, and the other way round
+	defer m.usageFlushMu.Unlock()
 	m.snapshotMu.Lock()
 	rows := make([]store.ContextUsageRow, 0, len(m.usageDirty))
 	for id := range m.usageDirty {
@@ -149,6 +151,9 @@ func (m *Module) flushContextUsage() int {
 	m.usageDirty = make(map[string]struct{})
 	m.usageDeleted = make(map[string]struct{})
 	m.snapshotMu.Unlock()
+	if m.usageAfterSnapshot != nil {
+		m.usageAfterSnapshot()
+	}
 
 	if err := m.usage.Upsert(rows); err != nil {
 		log.Printf("[agent] persist context usage: %v", err)
@@ -162,8 +167,17 @@ func (m *Module) flushContextUsage() int {
 		m.snapshotMu.Unlock()
 		return 0
 	}
-	if err := m.usage.Delete(gone); err != nil {
+	del := m.usage.Delete
+	if m.usageDeleteFn != nil {
+		del = m.usageDeleteFn
+	}
+	if err := del(gone); err != nil {
 		log.Printf("[agent] persist context usage: %v", err)
+		m.snapshotMu.Lock() // the rows stay until a later flush deletes them
+		for _, id := range gone {
+			m.usageDeleted[id] = struct{}{}
+		}
+		m.snapshotMu.Unlock()
 	}
 	m.snapshotMu.Lock()
 	for _, r := range rows {
@@ -198,6 +212,23 @@ func (m *Module) runContextUsageFlush(ctx context.Context) {
 			return
 		case <-t.C:
 			m.flushContextUsage()
+		}
+	}
+}
+
+// clearContextUsage forgets every reading, in memory and on disk (the statusline was removed).
+func (m *Module) clearContextUsage() {
+	m.usageFlushMu.Lock() // not while a flush holds a snapshot that would write the rows back
+	defer m.usageFlushMu.Unlock()
+	m.snapshotMu.Lock()
+	m.contextUsage = make(map[string]ContextUsage)
+	m.usageDirty = make(map[string]struct{})
+	m.usageDeleted = make(map[string]struct{})
+	m.usagePersistedAt = make(map[string]int64)
+	m.snapshotMu.Unlock()
+	if m.usage != nil {
+		if err := m.usage.DeleteAll(); err != nil {
+			log.Printf("[agent] clear persisted context usage: %v", err)
 		}
 	}
 }

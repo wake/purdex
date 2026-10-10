@@ -98,9 +98,12 @@ type Module struct {
 	// Persistence of contextUsage (#2406), also under snapshotMu: usageDirty holds the sessions whose reading must be
 	// written at the next flush, usageDeleted the ones evicted since (their rows go), usagePersistedAt the At each
 	// session's row holds (an unchanged value is rewritten only when that At is older than usageRefreshAfter).
-	usageDirty       map[string]struct{}
-	usageDeleted     map[string]struct{}
-	usagePersistedAt map[string]int64
+	usageDirty         map[string]struct{}
+	usageFlushMu       sync.Mutex           // one flush or removal at a time, snapshot to write
+	usageDeleteFn      func([]string) error // test seam; nil = the store's Delete
+	usageAfterSnapshot func()               // test seam: runs in a flush after its snapshot, before it writes
+	usageDeleted       map[string]struct{}
+	usagePersistedAt   map[string]int64
 
 	// testObservers: per-nonce channel for the statusline self-test endpoint.
 	// Guarded by testMu (separate from snapshotMu and mu so test traffic
