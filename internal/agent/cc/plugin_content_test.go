@@ -210,3 +210,80 @@ func TestPluginIssue_JudgesTheModByContent(t *testing.T) {
 		t.Fatalf("a stray file: Installed=%v issues=%v", status.Installed, status.Issues)
 	}
 }
+
+// A symlink in the installed folder is never "the same tree": its target can change behind the comparison, and Claude
+// Code would load whatever it points at.
+func TestExtractPlugin_ASymlinkInTheFolderIsADifference(t *testing.T) {
+	cases := map[string]func(root, outside string){
+		"managed file is a symlink": func(root, outside string) {
+			os.WriteFile(filepath.Join(outside, "register.js"), []byte("export function register(on) {} // same"), 0o644)
+			os.Remove(filepath.Join(root, "hooks", "register.js"))
+			os.Symlink(filepath.Join(outside, "register.js"), filepath.Join(root, "hooks", "register.js"))
+		},
+		"managed directory is a symlink": func(root, outside string) {
+			os.Rename(filepath.Join(root, "hooks"), filepath.Join(outside, "hooks"))
+			os.Symlink(filepath.Join(outside, "hooks"), filepath.Join(root, "hooks"))
+		},
+		"an extra symlink": func(root, outside string) {
+			os.Symlink(outside, filepath.Join(root, "skills", "link"))
+		},
+	}
+	for name, damage := range cases {
+		t.Run(name, func(t *testing.T) {
+			dataDir, outside := t.TempDir(), t.TempDir()
+			src := fakePlugin("same")
+			if _, _, err := ExtractPlugin(src, dataDir, vOld, "/opt/pdx", ""); err != nil {
+				t.Fatal(err)
+			}
+			damage(PluginRoot(dataDir), outside)
+			if _, changed, err := ExtractPlugin(src, dataDir, vNew, "/opt/pdx", ""); err != nil || !changed {
+				t.Fatalf("changed=%v err=%v, want the symlinked folder replaced", changed, err)
+			}
+			if fi, err := os.Lstat(filepath.Join(PluginRoot(dataDir), "hooks")); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+				t.Fatalf("hooks is still a symlink: %v %v", fi, err)
+			}
+		})
+	}
+}
+
+// An empty VERSION is damage, not a stamp: the folder is re-extracted, and the hooks status does not call it healthy.
+func TestExtractPlugin_AnEmptyVersionIsRepaired(t *testing.T) {
+	dataDir := t.TempDir()
+	src := fakePlugin("same")
+	if _, _, err := ExtractPlugin(src, dataDir, vOld, "/opt/pdx", ""); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(PluginRoot(dataDir), "VERSION"), []byte(" \n"), 0o644)
+	if _, changed, err := ExtractPlugin(src, dataDir, vNew, "/opt/pdx", ""); err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if v, _ := os.ReadFile(filepath.Join(PluginRoot(dataDir), "VERSION")); strings.TrimSpace(string(v)) != vNew {
+		t.Fatalf("VERSION = %q", v)
+	}
+}
+
+func TestPluginIssue_AnEmptyVersionIsNotHealthy(t *testing.T) {
+	p, _, dataDir := pluginProvider(t, vOld)
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(PluginRoot(dataDir), "VERSION"), []byte("\n"), 0o644)
+	if status, _ := p.CheckHooks(); status.Installed || len(pluginIssues(status.Issues)) != 1 {
+		t.Fatalf("empty VERSION: Installed=%v issues=%v", status.Installed, status.Issues)
+	}
+}
+
+// Finder's .DS_Store is not something Claude Code loads: it must not turn every setup into a swap.
+func TestExtractPlugin_DSStoreIsNotADifference(t *testing.T) {
+	dataDir := t.TempDir()
+	src := fakePlugin("same")
+	if _, _, err := ExtractPlugin(src, dataDir, vOld, "/opt/pdx", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".DS_Store", "hooks/.DS_Store", "skills/pdx-team/.DS_Store"} {
+		os.WriteFile(filepath.Join(PluginRoot(dataDir), filepath.FromSlash(rel)), []byte("x"), 0o644)
+	}
+	if _, changed, err := ExtractPlugin(src, dataDir, vNew, "/opt/pdx", ""); err != nil || changed {
+		t.Fatalf("changed=%v err=%v: .DS_Store made the tree differ", changed, err)
+	}
+}
