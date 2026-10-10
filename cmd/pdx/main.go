@@ -308,7 +308,9 @@ func runServe(args []string) *reexecPlan {
 	c.CfgPath = resolvedCfgPath
 
 	// Phase 5a: Pairing initialization
-	initPairing(c, &cfg, resolvedCfgPath, *quick)
+	if err := initPairing(c, &cfg, resolvedCfgPath, *quick); err != nil {
+		log.Fatalf("pairing: %v", err)
+	}
 
 	// 5. Add modules (order doesn't matter — topoSort handles dependencies)
 	if err := registerServeModules(c, meta, agentEvents); err != nil {

@@ -122,6 +122,7 @@ func TestInitPairing_AConfigThatCannotBeWrittenRefusesTheStart(t *testing.T) {
 	require.Empty(t, out.String(), "no token is shown for a daemon that will not run")
 	require.Contains(t, err.Error(), path)
 	require.Contains(t, err.Error(), "pdx token generate")
+	require.NotContains(t, err.Error(), tokenPrefix, "the refusal never names the token it did not keep")
 }
 
 // Quick mode (the pairing code) is not touched by this: no token is generated.
