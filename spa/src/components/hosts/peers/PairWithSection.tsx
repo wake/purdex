@@ -110,14 +110,14 @@ function CandidateLine({ hostId, self, xUrl, candidate: c, busy, flow, runFlow }
         </button>
       </div>
       {c.listError !== '' && (
-        <p className="text-xs text-status-warning mt-1">{t('peers.pair_blocked_unread', { name: c.name, cause: c.listError })}</p>
+        <p className="text-xs text-status-warning-text mt-1">{t('peers.pair_blocked_unread', { name: c.name, cause: c.listError })}</p>
       )}
       {c.returnEntry && !pendingReturn && (
         <p className="text-xs text-text-muted mt-1">{t('peers.pair_repair_note', { name: c.name })}</p>
       )}
       {c.returnEntry && pendingReturn && (
         <div className="flex items-center gap-2 flex-wrap mt-1">
-          <span className="text-xs text-status-warning">{t('peers.pair_blocked_pending', { name: c.name })}</span>
+          <span className="text-xs text-status-warning-text">{t('peers.pair_blocked_pending', { name: c.name })}</span>
           <RotationControls holder={{ hostId: c.hostId, alias: c.returnEntry.alias }} row={c.returnEntry}
             stale={false} evidenceDialled={false} push={null} label="rotate" testId={`peers-cand-${c.hostId}`}
             busy={busy} runFlow={(fn) => runFlow(candidateKey(c.hostId), fn)} />

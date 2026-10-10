@@ -43,7 +43,7 @@ export default function WorkerInfoPanel({ summary, anchorRef, onClose }: WorkerI
         ))}
       </dl>
       {summary.archived && (
-        <div data-testid="worker-info-archived" className="mt-2 text-xs text-status-warning">{t('room.info.archived')}</div>
+        <div data-testid="worker-info-archived" className="mt-2 text-xs text-status-warning-text">{t('room.info.archived')}</div>
       )}
     </FloatingPanel>
   )

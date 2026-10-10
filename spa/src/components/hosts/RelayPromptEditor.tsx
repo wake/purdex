@@ -145,11 +145,11 @@ export function RelayPromptEditor({ hostId, kind, fixed, defaultBody, stored, va
       </div>
 
       {problem && (
-        <p data-testid={`${id}-problem`} className="mt-2 text-xs text-status-warning">
+        <p data-testid={`${id}-problem`} className="mt-2 text-xs text-status-warning-text">
           {t(`hosts.relay.prompts.${problem}`, { max: RELAY_PROMPT_MAX_BYTES })}
         </p>
       )}
-      {error && <p data-testid={`${id}-error`} className="mt-2 text-xs text-status-warning whitespace-pre-wrap">{error}</p>}
+      {error && <p data-testid={`${id}-error`} className="mt-2 text-xs text-status-warning-text whitespace-pre-wrap">{error}</p>}
 
       <div className="mt-2 flex items-center gap-2">
         <button type="button" data-testid={`${id}-save`} disabled={!canSave} onClick={() => void run(() => onSave(value))}

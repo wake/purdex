@@ -347,7 +347,7 @@ export function DevEnvironmentSection() {
           </select>
         </div>
         {devHostId === null && (
-          <div className="text-xs text-status-warning border border-status-warning/40 bg-status-warning/10 rounded p-2">
+          <div className="text-xs text-status-warning-text border border-status-warning/40 bg-status-warning/10 rounded p-2">
             {t('settings.dev.host.required')}
           </div>
         )}
@@ -382,20 +382,20 @@ export function DevEnvironmentSection() {
           <span className="text-sm text-text-primary">{t('settings.dev.spa_hash')}</span>
           <div className="flex items-center gap-2">
             <span className="text-xs text-text-secondary font-mono">{appInfo?.spaHash ?? '...'}</span>
-            {hasSPAUpdate && <span className="text-xs text-status-warning font-mono">→ {remoteInfo.spaHash}</span>}
+            {hasSPAUpdate && <span className="text-xs text-status-warning-text font-mono">→ {remoteInfo.spaHash}</span>}
           </div>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-sm text-text-primary">{t('settings.dev.electron_hash')}</span>
           <div className="flex items-center gap-2">
             <span className="text-xs text-text-secondary font-mono">{appInfo?.electronHash ?? '...'}</span>
-            {hasElectronUpdate && <span className="text-xs text-status-warning font-mono">→ {remoteInfo.electronHash}</span>}
+            {hasElectronUpdate && <span className="text-xs text-status-warning-text font-mono">→ {remoteInfo.electronHash}</span>}
           </div>
         </div>
       </div>
 
       {remoteInfo?.requiresFullRebuild && (
-        <div className="text-xs text-status-warning border border-status-warning/40 bg-status-warning/10 rounded p-2">
+        <div className="text-xs text-status-warning-text border border-status-warning/40 bg-status-warning/10 rounded p-2">
           {t('settings.dev.full_rebuild_hint')}
           {remoteInfo.fullRebuildReason && (
             <span className="block text-text-secondary font-mono mt-1">{remoteInfo.fullRebuildReason}</span>
@@ -404,7 +404,7 @@ export function DevEnvironmentSection() {
       )}
 
       {status !== 'idle' && (
-        <div className={`text-sm ${status === 'error' ? 'text-status-error' : status === 'building' ? 'text-accent' : status === 'update_available' ? 'text-status-warning' : 'text-text-secondary'}`}>
+        <div className={`text-sm ${status === 'error' ? 'text-status-error' : status === 'building' ? 'text-accent' : status === 'update_available' ? 'text-status-warning-text' : 'text-text-secondary'}`}>
           {status === 'error' && updateError ? updateError : statusText[status]}
         </div>
       )}
@@ -459,7 +459,7 @@ export function DevEnvironmentSection() {
               <div className="flex items-center gap-2">
                 <span className="font-mono">{daemonCheck.latest_hash || '-'}</span>
                 {daemonCheck.available && (
-                  <span className="text-status-warning">{t('settings.dev.daemon.update_available')}</span>
+                  <span className="text-status-warning-text">{t('settings.dev.daemon.update_available')}</span>
                 )}
               </div>
             </div>

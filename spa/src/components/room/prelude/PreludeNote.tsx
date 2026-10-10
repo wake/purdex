@@ -35,7 +35,7 @@ export default function PreludeNote({ id, pos, source, text, truncated, totalByt
   if (source === 'bash_input') {
     return (
       <div data-testid="prelude-bash-input" data-prelude-pos={pos} className={SCROLL_ANCHOR_CLASS}>
-        <div className="flex items-center gap-1.5 text-[13px] text-status-warning font-mono">
+        <div className="flex items-center gap-1.5 text-[13px] text-status-warning-text font-mono">
           <TerminalWindow size={14} weight="bold" />
           <span>! </span><span data-search-unit={anchor}>{text}</span>
         </div>

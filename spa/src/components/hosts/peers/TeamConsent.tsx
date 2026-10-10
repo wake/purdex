@@ -162,7 +162,7 @@ export function TeamConsent({ hostId, row, busy, runFlow }: Props) {
 
       {leftover && (
         <div className="flex items-center gap-2">
-          <p data-testid="peer-team-leftover" className="text-xs text-status-warning whitespace-pre-wrap">{leftover}</p>
+          <p data-testid="peer-team-leftover" className="text-xs text-status-warning-text whitespace-pre-wrap">{leftover}</p>
           <button type="button" data-testid="peer-team-retry" disabled={busy} onClick={retryCleanup}
             className="text-xs px-2 py-0.5 rounded bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer disabled:opacity-50 disabled:cursor-default">
             {t('peers.team.retry')}

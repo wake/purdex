@@ -316,7 +316,7 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
           // when the answer beside it may no longer hold, neutral otherwise.
           // It sits directly after the peer id, it is the thing that fixes the
           // condition it reports, and colouring it costs nothing to read.
-          className={`ml-1.5 flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-surface-hover disabled:opacity-40 cursor-pointer disabled:cursor-default ${peerDim ? 'text-status-warning' : 'text-text-muted'}`}
+          className={`ml-1.5 flex shrink-0 items-center rounded p-0.5 transition-colors hover:bg-surface-hover disabled:opacity-40 cursor-pointer disabled:cursor-default ${peerDim ? 'text-status-warning-text' : 'text-text-muted'}`}
         >
           <ArrowsClockwise size={10} className={peer.loading ? 'animate-spin' : ''} />
         </button>

@@ -59,7 +59,7 @@ function RecentWriteNotice({ lastWriteAt }: { lastWriteAt: number }) {
   const seconds = Math.max(0, Math.floor((now - mounted.writeAt) / 1_000))
   return (
     // Not a live region: it re-counts every second, and a screen reader would read every count out.
-    <p data-testid="terminated-recent-write" className="mb-6 flex items-center gap-1.5 text-sm text-status-warning">
+    <p data-testid="terminated-recent-write" className="mb-6 flex items-center gap-1.5 text-sm text-status-warning-text">
       <Warning size={16} className="shrink-0" />
       {t('worker.rebuild.recent_write', { n: seconds })}
     </p>

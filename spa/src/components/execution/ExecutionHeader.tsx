@@ -202,7 +202,7 @@ export default function ExecutionHeader({
       <span className={`shrink-0 w-2 h-2 rounded-full ${workerDotClass(state, awaiting)}`} />
       <span data-testid="execution-state" className="shrink-0 inline-flex items-center gap-1 text-text-primary font-medium">
         {awaiting && (
-          <span data-testid="execution-state-awaiting" className="inline-flex text-status-warning">
+          <span data-testid="execution-state-awaiting" className="inline-flex text-status-warning-text">
             <HandPalm size={12} weight="fill" aria-hidden="true" />
           </span>
         )}

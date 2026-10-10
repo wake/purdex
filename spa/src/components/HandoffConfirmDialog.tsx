@@ -155,7 +155,7 @@ export function HandoffConfirmDialog({ onClose, ...args }: Props) {
         </fieldset>
       )}
       {otherPanes > 0 && (
-        <p data-testid="handoff-other-panes" className="mt-1 text-xs text-status-warning">
+        <p data-testid="handoff-other-panes" className="mt-1 text-xs text-status-warning-text">
           {t('handoff.other_panes', { count: otherPanes })}
         </p>
       )}

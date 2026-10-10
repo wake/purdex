@@ -134,7 +134,7 @@ describe('RoomTranscript', () => {
       render(T({ messages: [said('/compact')] }))
       const el = screen.getByTestId('room-command')
       expect(el).toHaveTextContent('/compact')
-      expect(el.className).toContain('text-status-warning')
+      expect(el.className).toContain('text-status-warning-text')
       expect(el.className).toContain('font-mono')
       expect(el.className).not.toMatch(/rounded|bg-/)
       expect(el.outerHTML).not.toMatch(/#[0-9a-f]{3,6}/i)

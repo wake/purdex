@@ -25,6 +25,7 @@ const darkTokens: ThemeTokens = {
   'terminal-cursor': '#e0e0e0',
   'status-error': '#e06c75',
   'status-warning': '#c8b560',
+  'status-warning-text': '#c8b560',
   'status-success': '#7ec699',
 }
 
@@ -51,6 +52,7 @@ const lightTokens: ThemeTokens = {
   'terminal-cursor': '#1a1a2e',
   'status-error': '#fce4e4',
   'status-warning': '#fef3cd',
+  'status-warning-text': '#8a6d00',
   'status-success': '#d4edda',
 }
 
@@ -77,6 +79,7 @@ const nordTokens: ThemeTokens = {
   'terminal-cursor': '#d8dee9',
   'status-error': '#bf616a33',
   'status-warning': '#ebcb8b',
+  'status-warning-text': '#ebcb8b',
   'status-success': '#a3be8c33',
 }
 
@@ -103,6 +106,7 @@ const draculaTokens: ThemeTokens = {
   'terminal-cursor': '#f8f8f2',
   'status-error': '#ff555533',
   'status-warning': '#f1fa8c',
+  'status-warning-text': '#f1fa8c',
   'status-success': '#50fa7b33',
 }
 

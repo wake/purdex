@@ -174,7 +174,7 @@ describe('ExecutionRowCompact — awaiting approval', () => {
     const icon = screen.getByTestId('executions-awaiting')
     expect(icon.querySelector('svg')).not.toBeNull()
     expect(icon).toHaveAttribute('title', 'Awaiting approval')
-    expect(icon).toHaveClass('shrink-0', 'text-status-warning')
+    expect(icon).toHaveClass('shrink-0', 'text-status-warning-text')
   })
 
   it('zh-TW: the tooltip reads 等待核准', () => {

@@ -106,7 +106,7 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
       {hosts.map((h) => {
         let body
         if (h.failed || h.rows === undefined) {
-          body = <div data-testid="quota-unreadable" className="text-status-warning">{t('unattended.quota.unreadable', { host: label(h.hostId) })}</div>
+          body = <div data-testid="quota-unreadable" className="text-status-warning-text">{t('unattended.quota.unreadable', { host: label(h.hostId) })}</div>
         } else if (rosters[h.hostId] === undefined) {
           body = <div data-testid="quota-loading-team" className="text-text-muted">{t('unattended.quota.loading_team')}</div>
         } else {

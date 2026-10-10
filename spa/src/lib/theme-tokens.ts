@@ -11,7 +11,7 @@ export const THEME_TOKEN_KEYS = [
   // Terminal
   'terminal-bg', 'terminal-fg', 'terminal-cursor',
   // Status
-  'status-error', 'status-warning', 'status-success',
+  'status-error', 'status-warning', 'status-warning-text', 'status-success',
 ] as const
 
 export type ThemeTokenKey = (typeof THEME_TOKEN_KEYS)[number]
@@ -45,6 +45,7 @@ export const TOKEN_METADATA: Record<ThemeTokenKey, TokenMeta> = {
   'terminal-cursor':   { label: 'Terminal Cursor',        group: 'terminal' },
   'status-error':      { label: 'Error',                  group: 'status' },
   'status-warning':    { label: 'Warning',                group: 'status' },
+  'status-warning-text': { label: 'Warning Text',         group: 'status' },
   'status-success':    { label: 'Success',                group: 'status' },
 }
 

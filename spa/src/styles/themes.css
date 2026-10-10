@@ -22,6 +22,7 @@
   --color-terminal-cursor: var(--terminal-cursor);
   --color-status-error: var(--status-error);
   --color-status-warning: var(--status-warning);
+  --color-status-warning-text: var(--status-warning-text);
   --color-status-success: var(--status-success);
 }
 
@@ -49,6 +50,7 @@
   --terminal-cursor: #e0e0e0;
   --status-error: #e06c75;
   --status-warning: #c8b560;
+  --status-warning-text: #c8b560;
   /* Foreground tier, like its two siblings above. It was #2a4a3a — a fill
      shade, which reads at 1.63:1 on --surface-elevated and is simply not
      legible as text. Every consumer of this token is a text colour
@@ -81,6 +83,7 @@
   --terminal-cursor: #1a1a2e;
   --status-error: #fce4e4;
   --status-warning: #fef3cd;
+  --status-warning-text: #8a6d00;
   --status-success: #d4edda;
 }
 
@@ -108,6 +111,7 @@
   --terminal-cursor: #d8dee9;
   --status-error: #bf616a;
   --status-warning: #ebcb8b;
+  --status-warning-text: #ebcb8b;
   --status-success: #a3be8c;
 }
 
@@ -135,5 +139,6 @@
   --terminal-cursor: #f8f8f2;
   --status-error: #ff5555;
   --status-warning: #f1fa8c;
+  --status-warning-text: #f1fa8c;
   --status-success: #50fa7b;
 }

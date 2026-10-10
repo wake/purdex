@@ -129,8 +129,8 @@ export default function PermissionRequestCard({ request, agentLabel, disabled, e
     <div data-testid="permission-card" role="group" aria-label={t('execution.permission.heading')}
       className="mx-2 mb-1.5 rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs">
       <div className="flex items-center gap-1.5 min-w-0">
-        <HandPalm size={14} weight="fill" className="shrink-0 text-status-warning" aria-hidden />
-        <span className="shrink-0 text-status-warning">{t('execution.permission.heading')}</span>
+        <HandPalm size={14} weight="fill" className="shrink-0 text-status-warning-text" aria-hidden />
+        <span className="shrink-0 text-status-warning-text">{t('execution.permission.heading')}</span>
         <span data-testid="permission-tool" className="min-w-0 truncate font-medium text-text-primary">{request.displayName ?? request.toolName}</span>
         <span data-testid="permission-waited" className="ml-auto shrink-0 tabular-nums text-text-muted">
           {t('execution.permission.waited', { time: waited })}

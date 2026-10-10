@@ -756,7 +756,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
       {/* Worker pane spec §4.6 (Q3): the worker's current state, inside the pane, above the input. Chat has none (spec §5). */}
       {!chat && <WorkerDock sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} isMine={isMine} tasks={dockTasks} onInspect={onInspectTask} />}
       {leaseHeld && (
-        <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning">
+        <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning-text">
           {t('execution.lease_held', { principal: st.leaseError?.heldBy ?? '' })}
         </div>
       )}

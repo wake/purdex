@@ -43,7 +43,7 @@ export function ShellVerdict({ testId, verdict, t }: { testId: string; verdict: 
     )
   }
   return (
-    <span data-testid={testId} data-status="unresolved" data-reason={verdict.reason} className={`${cls} text-status-warning`}>
+    <span data-testid={testId} data-status="unresolved" data-reason={verdict.reason} className={`${cls} text-status-warning-text`}>
       <XCircle size={14} />
       {t(REASON_LABEL[verdict.reason] ?? 'resume_template.verdict.unresolved')}
     </span>

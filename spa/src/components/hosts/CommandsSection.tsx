@@ -66,7 +66,7 @@ export function CommandsSection({ hostId }: { hostId: string }) {
             <p data-testid="commands-limit" className="mb-3 text-xs text-text-muted">{t('host_config.limit', { max: MAX_CONFIG_ITEMS })}</p>
           )}
           {saveError?.target === 'list' && (
-            <p data-testid="commands-save-error" className="mb-3 text-xs text-status-warning whitespace-pre-wrap">{saveError.text}</p>
+            <p data-testid="commands-save-error" className="mb-3 text-xs text-status-warning-text whitespace-pre-wrap">{saveError.text}</p>
           )}
           {editing && (
             <CommandEditDialog key={editing.id} hostId={hostId} initial={editing} isNew={isNew}
