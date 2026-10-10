@@ -126,7 +126,7 @@ describe('busy', () => {
     expect(calls.map((c) => c.text)).toEqual(['one', 'one'])
   })
 
-  it('an idle observed BEFORE the busy answer does not resend (no loop on a stale header)', async () => {
+  it('an idle observed while the request is in flight resends once on the busy answer; a stale header cannot loop it', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.setIdle(true)
@@ -136,7 +136,11 @@ describe('busy', () => {
     calls[0].resolve({ kind: 'busy' })
     await flush()
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(2)
+    calls[1].resolve({ kind: 'busy' })
+    await flush()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(calls).toHaveLength(2) // the observation is spent: only a NEW one resends again
   })
 
   it('busy settled while the pane was unmounted: the idle the remount reports resends exactly once', async () => {
@@ -380,6 +384,74 @@ describe('failures', () => {
     const { port } = fakePort()
     await new SendQueue(port).interrupt()
     expect(port.interrupt).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('an idle observed while a request is in flight (the remount race)', () => {
+  const busy = { kind: 'busy' } as SendOutcome
+
+  it('is used once the busy answer lands: resent at once with the same id, not stuck in waiting', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const id = q.enqueue('hi')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setIdle(true) // the remounted pane reports idle while the request is still out: setIdle has nothing waiting to resend
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(2)
+    expect(calls[1].id).toBe(id)
+  })
+
+  it('is spent by that one resend: a second busy waits for a NEW observation (no loop)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('hi')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setIdle(true)
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    calls[1].resolve(busy)
+    await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
+    expect(calls).toHaveLength(2)
+    expect(q.entries()[0].state).toBe('waiting')
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(3)
+  })
+
+  it('an idle seen BEFORE the request started does not count, nor does one followed by not-idle, nor a settled one', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setIdle(true) // nothing in flight yet
+    q.enqueue('a')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q.entries()[0].state).toBe('waiting')
+    expect(calls).toHaveLength(1)
+    const q2 = new SendQueue(port)
+    q2.enqueue('b')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q2.setIdle(true); q2.setIdle(false) // the header went busy again
+    calls[calls.length - 1].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q2.entries()[0].state).toBe('waiting')
+  })
+
+  it('an observation does not leak into a later request after an accepted answer', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('a')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setIdle(true)
+    calls[0].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(0)
+    q.enqueue('b')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[1].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(2)
+    expect(q.entries().find((e) => e.text === 'b')!.state).toBe('waiting')
   })
 })
 

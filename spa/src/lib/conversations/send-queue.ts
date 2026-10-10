@@ -41,6 +41,8 @@ export class SendQueue {
   private timer: ReturnType<typeof setTimeout> | null = null
   private claimed = new Set<string>()
   private disposed = false
+  /** An idle observed while a request was in flight and not yet used: the first busy answer after it is resent at once (once). */
+  private idleDuringFlight = false
   private retiredDone: (() => void) | null = null
   private listeners = new Set<() => void>()
 
@@ -112,9 +114,12 @@ export class SendQueue {
    * back to waiting if the mod says busy again, and needs a new observation.
    */
   setIdle(idle: boolean): void {
-    if (!idle) return
+    if (!idle) { this.idleDuringFlight = false; return }
     const w = this.list.find((e) => e.state === 'waiting') // a waiting entry was refused before this observation, so it is "after the busy answer"
-    if (w) { w.state = 'undo'; w.undoUntil = this.now(); this.emit(); this.pump() }
+    if (w) { w.state = 'undo'; w.undoUntil = this.now(); this.emit(); this.pump(); return }
+    // The observation came while a request is still out (a pane remounted mid-flight): when that request answers busy this idle
+    // is "after the request started", so the answer is resent at once instead of waiting for an edge that will not come.
+    if (this.list.some((e) => e.state === 'sending')) this.idleDuringFlight = true
   }
 
   /** The transcript's user messages: an entry whose echo is there is done (the transcript shows it from now on). */
@@ -204,8 +209,13 @@ export class SendQueue {
     if (e.state !== 'sending' || !this.list.includes(e)) return // already echoed by the transcript
     e.outcome = o
     e.settledAt = this.now()
+    const seenIdle = this.idleDuringFlight
+    this.idleDuringFlight = false // used by this answer or stale after it: one observation, at most one resend
     if (o.kind === 'accepted') e.state = 'sent'
-    else if (o.kind === 'busy') e.state = 'waiting'
+    else if (o.kind === 'busy') {
+      e.state = 'waiting'
+      if (seenIdle) { e.state = 'undo'; e.undoUntil = this.now() }
+    }
     else if (mayHaveRun(o)) e.state = 'maybe'
     else {
       e.state = 'failed'

@@ -195,3 +195,33 @@ describe('the queue is driven by the pane, not by the input (every view)', () =>
     expect(screen.queryByTestId('queued-message')).toBeNull()
   })
 })
+
+describe('the remount race: the pane is away while a request is in flight', () => {
+  const dashTab: Tab = { ...createTab({ kind: 'dashboard' }), id: 't-dash' }
+  const both = [sessionTab, dashTab]
+
+  it('sent, tab switched away, back while the header is idle, THEN the busy answer lands: resent once with the same id, and nothing is sent a third time', async () => {
+    let answerBusy: (r: Response) => void = () => {}
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { answerBusy = r }))
+    useTabStore.setState({ tabs: { [sessionTab.id]: sessionTab, [dashTab.id]: dashTab }, tabOrder: [sessionTab.id, dashTab.id], activeTabId: sessionTab.id, visitHistory: [] })
+    registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: () => <div data-testid="other-tab" /> }] })
+    conv.value = ready({ status: 'idle' })
+    setView('deck')
+    const ui = render(<TabContent activeTab={sessionTab} allTabs={both} />)
+    type('slow one'); enter()
+    await tick(3000)
+    expect(submits()).toHaveLength(1) // in flight
+    ui.rerender(<TabContent activeTab={dashTab} allTabs={both} />)
+    expect(screen.queryByTestId('session-footer')).toBeNull() // really unmounted
+    ui.rerender(<TabContent activeTab={sessionTab} allTabs={both} />) // header is idle: the remount reports it while the request is still out
+    await tick(0)
+    expect(submits()).toHaveLength(1)
+    await act(async () => { answerBusy(new Response(JSON.stringify({ status: 'busy' }), { status: 200 })) })
+    await tick(0)
+    expect(submits()).toHaveLength(2)
+    expect(submits()[1]).toEqual(submits()[0])
+    // the resend was accepted; nothing else goes out (the no-loop rule for a second busy is pinned in send-queue.test)
+    await tick(10_000)
+    expect(submits()).toHaveLength(2)
+  })
+})
