@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
-import { CcUsageSegments, HostQuotaSegments } from './UsageSegments'
+import { Clock } from '@phosphor-icons/react'
+import { CcUsageSegments, HostQuotaSegments, UsageSegment } from './UsageSegments'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { compositeKey } from '../../lib/composite-key'
 import * as nexApi from '../../lib/nex/nex-api'
@@ -246,5 +247,32 @@ describe('HostQuotaSegments', () => {
     mockFetchNexHost.mockReturnValue(new Promise(() => {}))
     rerender(<HostQuotaSegments hostId="B" />)
     expect(container.innerHTML).toBe('')
+  })
+})
+
+describe('UsageSegment missing value (status row)', () => {
+  const base = { testId: 'seg', icon: Clock, ring: 'remaining' as const, number: 'remaining' as const, title: 'tip', stale: false }
+  it('a null used reads the dash, with no ring and no percent sign', () => {
+    render(<UsageSegment {...base} used={null} />)
+    const seg = screen.getByTestId('seg')
+    expect(seg.textContent).toBe('—')
+    expect(seg.querySelector('[data-testid="usage-ring-arc"]')).toBeNull()
+    expect(seg.title).toBe('tip')
+    expect(seg.dataset.missing).toBe('true')
+  })
+  it('0 and a missing value are different: 0 used is 100% left with a full ring', () => {
+    render(<UsageSegment {...base} used={0} />)
+    const seg = screen.getByTestId('seg')
+    expect(seg.textContent).toBe('100%')
+    expect(seg.dataset.missing).toBeUndefined()
+    expect(seg.querySelector('[data-testid="usage-ring-arc"]')!.getAttribute('data-shown')).toBe('100')
+  })
+  it('a present value keeps the ring rules (93 used, ring used -> 93 lit, number 7%)', () => {
+    render(<UsageSegment {...base} ring="used" used={93} />)
+    const seg = screen.getByTestId('seg')
+    expect(seg.textContent).toBe('7%')
+    const arc = seg.querySelector('[data-testid="usage-ring-arc"]')!
+    expect(arc.getAttribute('data-shown')).toBe('93')
+    expect(arc.getAttribute('data-tone')).toBe('danger')
   })
 })

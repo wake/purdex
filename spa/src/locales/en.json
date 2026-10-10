@@ -2398,5 +2398,18 @@
   "chat.unreadable.empty": "Nothing here yet",
   "chat.unreadable.offline": "Cannot reach the host",
   "chat.unreadable.retry": "Retry",
-  "chat.unreadable.terminal": "Switch to terminal"
+  "chat.unreadable.terminal": "Switch to terminal",
+  "statusrow.model": "{{model}} · {{effort}}",
+  "statusrow.none": "{{name}}: no data",
+  "statusrow.name.context": "Context",
+  "statusrow.name.five_hour": "5-hour limit",
+  "statusrow.name.seven_day": "7-day limit",
+  "statusrow.name.cost": "Cost",
+  "statusrow.context": "Context {{pct}}% used, {{left}}% left ({{used}} / {{total}})",
+  "statusrow.ctx_left": "{{n}} left",
+  "statusrow.five_hour": "5-hour limit: {{left}}% left",
+  "statusrow.seven_day": "7-day limit: {{left}}% left",
+  "statusrow.cost": "This session's cost so far ${{cost}}",
+  "split.close": "Close panel",
+  "split.panel": "Side panel"
 }
