@@ -1754,6 +1754,19 @@ test('a job that arrives between session.end{clear} and the switch is dropped se
   expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'session_changed' })
 })
 
+// Every report POST hangs: the tries are bounded in time (2 s each, none started after 6.5 s from the job's arrival) so the
+// last one still reaches the daemon inside its 10 s lease and the poll loop is back soon (codex critic). Mutation gate: the
+// old 5 s per try and no budget → the third try starts after the lease / the loop is held ~17 s → red.
+test('a hanging prompt result is tried within the lease and the poll loop resumes', async ($, on) => {
+  const w = evWorld(on, { promptNext: (_b, n) => (n === 1 ? { status: 200, text: JSON.stringify({ job: PJOB() }) } : never()), promptResult: () => never() })
+  await start($, w)
+  await w.clock.settle()
+  await w.clock.advance(6600) // 2 s + 0.7 s + 2 s + 1.4 s: the third try starts at ~6.1 s
+  expect(pqResult(w)).toHaveLength(3)
+  await w.clock.advance(2200) // its 2 s deadline passed
+  expect(pqNext(w).length).toBeGreaterThanOrEqual(2) // back to polling, well inside 9 s
+})
+
 // A report that gets no 200 (a lost answer, a busy daemon) is sent again inside the daemon's hand timeout; a 409 (settled
 // already) is final and not repeated; after three tries it gives up (codex attack). Mutation gate: a single try → red.
 test('a prompt result that fails is sent again, bounded; a 409 is not retried', async ($, on) => {
