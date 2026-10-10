@@ -59,10 +59,10 @@ func (m *Module) peerEntryByHostID(hostID string) (config.PeerHost, bool) {
 // not an open directory, so a directory swapped in that gap is not prevented here. It is caught afterwards: the runner reads
 // the new pane's real directory and judges it the same way (checkLaunchPane) before any key reaches the pane, and kills the
 // session if it left the roots. What the window does allow is the pane's shell starting in the swapped directory: its
-// startup files and prompt hooks (a direnv hook, say) run there before the check, though nothing the lead sent does. The
-// pane's cwd is a directory object, not a path, so what the check verified is what the launch runs in even if that
-// directory is renamed afterwards. Whoever can swap a directory under a granted root can already put anything in the
-// roots, which is the trust the grant gives; the check removes the case where a spawn is *used* to reach elsewhere.
+// startup files and prompt hooks (a direnv hook, say) run there before the check, although the member launch line has not
+// been sent yet. The pane's cwd is a directory object, not a path, so what the check verified is what the launch runs in
+// even if that directory is renamed afterwards. Whoever can swap a path under a granted root is needed to use the window.
+// Closing it for good takes a helper that opens the directory itself as the pane's first command: #2453.
 func resolveUnderRoots(roots []string, dir string) (string, bool) {
 	if dir == "" || !filepath.IsAbs(dir) {
 		return "", false
