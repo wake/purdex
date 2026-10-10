@@ -271,7 +271,9 @@ func (m *Module) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	c.addCleanup(cancelSub)
 
-	c.caps = capsKeyOf(m.capabilitiesFor(sid)) // the snapshot (and any later fetch) carries the table: only a change is a frame
+	if !hasAfter { // a snapshot carries the table: from then on only a change is a frame
+		c.caps = capsKeyOf(m.capabilitiesFor(sid))
+	} // a resume from a cursor carries none, and what changed while the client was away is unknown: the first tick pushes the current table
 	if !c.sendFirst(hasAfter, afterEpoch, afterRev) {
 		return
 	}
@@ -284,7 +286,7 @@ func (c *wsConn) sendFirst(hasAfter bool, afterEpoch string, afterRev uint64) bo
 	if hasAfter {
 		inc := c.entry.Increment(afterEpoch, afterRev)
 		if !inc.Stale {
-			if body, ok := c.m.encodeIncrement(inc, c.sid, c.hostID, frameOverhead); ok {
+			if body, ok := c.m.encodeIncrement(c.entry, inc, c.sid, c.hostID, frameOverhead); ok {
 				c.setPosition(inc.Cursor)
 				return c.enqueue("conversation.changes", json.RawMessage(body))
 			}
@@ -380,7 +382,7 @@ func (c *wsConn) push() bool {
 	if err != nil || rev == c.sentRev {
 		return true
 	}
-	body, ok := c.m.encodeIncrement(inc, c.sid, c.hostID, frameOverhead)
+	body, ok := c.m.encodeIncrement(c.entry, inc, c.sid, c.hostID, frameOverhead)
 	if !ok { // too big for one frame
 		return c.enqueue("conversation.reset", map[string]any{}) && c.sendSnapshot()
 	}

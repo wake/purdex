@@ -12,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/wake/purdex/internal/convfeed"
 	"github.com/wake/purdex/internal/convmodel"
 	"github.com/wake/purdex/internal/promptq"
 )
@@ -27,39 +28,27 @@ type PromptSender interface {
 	Match(sessionID string, items []promptq.EchoItem) []string
 }
 
-// turnItems is the items of the turns, one group per turn.
-func turnItems(turns []convmodel.Turn) [][]convmodel.Item {
-	out := make([][]convmodel.Item, len(turns))
-	for i, t := range turns {
-		out[i] = t.Items
-	}
-	return out
-}
-
-// echoIDs pairs the user messages in the item groups with the client_msg_ids of the requests that sent them (U3-2): user item
-// id -> client_msg_id. Only the person's own messages (source user) are looked at.
-func (m *Module) echoIDs(sessionID string, groups ...[]convmodel.Item) map[string]string {
+// echoIDs pairs the session's user messages with the client_msg_ids of the requests that sent them (U3-2): user item id ->
+// client_msg_id. The pairing runs over the whole conversation (not the window or increment being answered), so a request
+// already paired with an older message is never handed to a later one with the same text. Only the person's own messages
+// (source user) are looked at.
+func (m *Module) echoIDs(sessionID string, entry *convfeed.Entry) map[string]string {
 	ps := m.promptSender()
-	if ps == nil {
+	if ps == nil || entry == nil {
 		return nil
 	}
-	var items []promptq.EchoItem
-	var ids []string
-	for _, g := range groups {
-		for _, it := range g {
-			if it.User != nil && it.User.Source == convmodel.SourceUser {
-				items = append(items, promptq.EchoItem{Text: it.User.Text, At: time.UnixMilli(it.User.At)})
-				ids = append(ids, it.User.ID)
-			}
-		}
-	}
-	if len(items) == 0 {
+	msgs := entry.UserMessages()
+	if len(msgs) == 0 {
 		return nil
+	}
+	items := make([]promptq.EchoItem, len(msgs))
+	for i, u := range msgs {
+		items[i] = promptq.EchoItem{Text: u.Text, At: time.UnixMilli(u.At)}
 	}
 	out := map[string]string{}
 	for i, cm := range ps.Match(sessionID, items) {
 		if cm != "" {
-			out[ids[i]] = cm
+			out[msgs[i].ID] = cm
 		}
 	}
 	return out

@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wake/purdex/internal/convfeed"
-	"github.com/wake/purdex/internal/convmodel"
 	"github.com/wake/purdex/internal/promptq"
 )
 
@@ -344,18 +342,28 @@ func TestCapabilities_AnswerQuestionIsApproval(t *testing.T) {
 	}
 }
 
-// The increments (HTTP ?after= and the WebSocket's changes frames) name it too. Mutation gate: skip the echo in encodeIncrement → red.
+// The increments (HTTP ?after= and the WebSocket's changes frames) name it too, and the pairing looks at the whole session
+// (an older message with the same text is in the Match call), not only at the rows of the increment. Mutation gate: skip the
+// echo in encodeIncrement → red; pass only the changed items to Match → red.
 func TestEcho_IncrementsCarryTheClientMsgID(t *testing.T) {
 	e := newEnv(t)
-	e.sender(&fakeSender{echo: map[string]string{"from the app": "cm-9"}})
-	inc := convfeed.Increment{Changes: []convfeed.TurnChange{{
-		Turn:    convmodel.Turn{ID: "t1"},
-		Items:   []convmodel.Item{{Type: convmodel.ItemUser, User: &convmodel.UserMessage{ID: "u1", At: 1791378001000, Text: "from the app", Source: convmodel.SourceUser}}},
-		Indexes: []int{0},
-	}}}
-	body, ok := e.mod.encodeIncrement(inc, sid, "h", 0)
-	if !ok || !strings.Contains(string(body), `"client_msg_id":"cm-9"`) {
-		t.Fatalf("increment = %s", body)
+	f := &fakeSender{echo: map[string]string{"from the app": "cm-9"}}
+	e.sender(f)
+	p := e.transcript(userRow("u1", 1, "from the app") + "\n")
+	var snap struct {
+		Cursor string `json:"cursor"`
+	}
+	if err := json.Unmarshal(e.get("/api/conversations/claude/"+sid).Body.Bytes(), &snap); err != nil || snap.Cursor == "" {
+		t.Fatalf("snapshot cursor %v", err)
+	}
+	f.matched = nil
+	appendRows(t, p, userRow("u2", 60, "from the app"))
+	w := e.get("/api/conversations/claude/" + sid + "?after=" + snap.Cursor)
+	if !strings.Contains(w.Body.String(), `"client_msg_id":"cm-9"`) {
+		t.Fatalf("increment = %s", w.Body)
+	}
+	if len(f.matched) != 2 {
+		t.Fatalf("Match saw %d messages, want the whole session (2): %+v", len(f.matched), f.matched)
 	}
 }
 

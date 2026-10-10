@@ -17,12 +17,12 @@ func TestWire_TurnDurationMS(t *testing.T) {
 		t.Errorf("snapshot turn = %s (%v)", b, err)
 	}
 	m := &Module{maxBody: 1 << 20}
-	body, ok := m.encodeIncrement(convfeed.Increment{Changes: []convfeed.TurnChange{{Turn: turn}}}, sid, "h", 0)
+	body, ok := m.encodeIncrement(nil, convfeed.Increment{Changes: []convfeed.TurnChange{{Turn: turn}}}, sid, "h", 0)
 	if !ok || !strings.Contains(string(body), `"duration_ms":9000`) {
 		t.Errorf("increment = %s", body)
 	}
 	turn.DurationMS = nil
-	body, _ = m.encodeIncrement(convfeed.Increment{Changes: []convfeed.TurnChange{{Turn: turn}}}, sid, "h", 0)
+	body, _ = m.encodeIncrement(nil, convfeed.Increment{Changes: []convfeed.TurnChange{{Turn: turn}}}, sid, "h", 0)
 	if strings.Contains(string(body), "duration_ms") {
 		t.Errorf("increment without duration = %s", body)
 	}

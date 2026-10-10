@@ -151,7 +151,7 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	if q.Has("after") {
 		inc := entry.Increment(afterEpoch, afterRev)
 		if !inc.Stale {
-			if body, ok := m.encodeIncrement(inc, sid, hostID, 0); ok {
+			if body, ok := m.encodeIncrement(entry, inc, sid, hostID, 0); ok {
 				writeJSON(w, http.StatusOK, body)
 				return
 			}
@@ -191,6 +191,8 @@ func (m *Module) hostID() string {
 // snapshotBody builds the snapshot answer (the same body for HTTP and for a WebSocket's snapshot frame): the window
 // under the 4 MiB cap, the header and the cursor of one instant. On failure it returns the HTTP status and error code.
 func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, turns, before int, around string, hasAround, reset bool) (body []byte, cursor string, status int, code string) {
+	// paired before the entry is locked for the view (UserMessages takes the same lock); a message that lands in between pairs on its increment
+	echo := m.echoIDs(sid, entry)
 	build := func(h convfeed.Header, cursor string, turnList []convmodel.Turn, win convfeed.WindowResult, reset bool) snapshotJSON {
 		var cu *convmodel.Usage
 		if h.Usage != nil {
@@ -200,7 +202,7 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, turns, 
 			Reset: reset,
 			Conversation: conversationJSON{
 				Key:      convmodel.Key{HostID: hostID, Provider: "claude", SessionID: sid},
-				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Capabilities: m.capabilitiesFor(sid), Usage: cu, Turns: apiTurns(turnList, m.echoIDs(sid, turnItems(turnList)...)),
+				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Capabilities: m.capabilitiesFor(sid), Usage: cu, Turns: apiTurns(turnList, echo),
 			},
 			Header: headerOf(h),
 			Window: windowJSON{FirstIndex: win.FirstIndex, LastIndex: win.LastIndex, TotalTurns: win.TotalTurns, HasMoreBefore: win.HasMoreBefore},
@@ -261,13 +263,9 @@ type incrementJSON struct {
 
 // encodeIncrement is the answer to a valid cursor; ok is false when it would pass the body cap (the caller then
 // answers a reset with a snapshot, which has its own way to fit).
-func (m *Module) encodeIncrement(inc convfeed.Increment, sid, hostID string, overhead int) (body []byte, ok bool) {
+func (m *Module) encodeIncrement(entry *convfeed.Entry, inc convfeed.Increment, sid, hostID string, overhead int) (body []byte, ok bool) {
 	resp := incrementJSON{Changes: make([]changeJSON, 0, len(inc.Changes)), Header: headerOf(inc.Header), Cursor: inc.Cursor}
-	var all [][]convmodel.Item
-	for _, c := range inc.Changes {
-		all = append(all, c.Items)
-	}
-	echo := m.echoIDs(sid, all...)
+	echo := m.echoIDs(sid, entry)
 	for _, c := range inc.Changes {
 		t := c.Turn
 		items := indexedItemsAt(c.Items, c.Indexes, echo)
