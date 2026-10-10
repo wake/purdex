@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
-import { SessionSplit, panelDocks, CHAT_MIN_W } from './SessionSplit'
+import { SessionSplit } from './SessionSplit'
+import { panelDocks, CHAT_MIN_W } from './split-layout'
 
 afterEach(cleanup)
 const panel = <aside data-testid="the-panel">panel</aside>

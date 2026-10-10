@@ -4,22 +4,12 @@
 // hands the chat as `children`, the panel as `panel`, and whether it is open.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { panelWidth } from '../../lib/conversations/panel-memory'
-
-/** The chat never gets narrower than this beside a docked panel. */
-export const CHAT_MIN_W = 360
-
-/** Docked iff the chat keeps CHAT_MIN_W next to the panel at this container width. Unknown width (not measured yet) docks. */
-export function panelDocks(containerPx: number | null): boolean {
-  if (containerPx === null || containerPx <= 0) return true
-  return containerPx >= CHAT_MIN_W + panelWidth(containerPx)
-}
+import { panelDocks } from './split-layout'
 
 function useWidth(ref: React.RefObject<HTMLElement | null>, override?: number): number | null {
   const [w, setW] = useState<number | null>(null)
   useLayoutEffect(() => {
     if (override !== undefined || !ref.current) return
-    setW(ref.current.getBoundingClientRect().width || null)
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver((entries) => setW(entries[entries.length - 1]?.contentRect.width ?? null))
     ro.observe(ref.current)

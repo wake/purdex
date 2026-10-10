@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
-import { StateSlot, formatElapsed, type SlotState } from './StateSlot'
+import { StateSlot, type SlotState } from './StateSlot'
+import { formatElapsed } from './status-row-model'
 
 const STATES: SlotState[] = ['idle', 'running', 'failed', 'denied', 'exit']
 const opt = (container: HTMLElement, k: string) => container.querySelector(`[data-state-option="${k}"]`) as HTMLElement
