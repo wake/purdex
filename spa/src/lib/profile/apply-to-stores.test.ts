@@ -1088,6 +1088,36 @@ describe('applySectionToStores — tabs.<id>', () => {
     expect(buildTabsSection(useWorkspaceStore.getState().workspaces[0], t.tabs)).toEqual(payload)
   })
 
+  // #2514: a client that never saw a workspace's deletion can still send a split tab with that workspace's settings page in a
+  // secondary pane; it must not come back as a 'Workspace not found' page here.
+  describe('a workspace-settings pane that points at a workspace that does not exist (#2514)', () => {
+    const settingsLeaf = (id: string, workspaceId: string): PaneLayout => ({ type: 'leaf', pane: { id, content: { kind: 'settings', scope: { workspaceId } } } })
+    const splitOf = (...children: PaneLayout[]): PaneLayout => ({ type: 'split', id: 's-stale', direction: 'h', children, sizes: children.map(() => 100 / children.length) })
+    const leavesOf = (tabId: string) => collectLeaves(useTabStore.getState().tabs[tabId].layout).map((p) => p.id)
+
+    it('is dropped from a secondary pane; a pane pointing at a workspace that exists, and the tab itself, stay', async () => {
+      seedTabWorld() // workspaces wa, wb exist
+      const payload = incomingFor([tab('a3', splitOf(tmuxLeaf('keep-main', M), settingsLeaf('stale', 'deleted-ws'), settingsLeaf('live', 'wb')))])
+      await applySectionToStores('tabs.wa', payload, ctx)
+      expect(useTabStore.getState().tabs.a3).toBeDefined()
+      expect(leavesOf('a3')).toEqual(['keep-main', 'live'])
+    })
+
+    it('a tab whose PRIMARY pane is such a page is kept as it arrived (the current handling)', async () => {
+      seedTabWorld()
+      const payload = incomingFor([tab('a4', splitOf(settingsLeaf('stale-primary', 'deleted-ws'), tmuxLeaf('other', M)))])
+      await applySectionToStores('tabs.wa', payload, ctx)
+      expect(leavesOf('a4')).toEqual(['stale-primary', 'other'])
+    })
+
+    it('a tab with no such pane keeps its layout as it arrived', async () => {
+      seedTabWorld()
+      const payload = incomingFor([tab('a5', splitOf(tmuxLeaf('x1', M), tmuxLeaf('x2', M)))])
+      await applySectionToStores('tabs.wa', payload, ctx)
+      expect(leavesOf('a5')).toEqual(['x1', 'x2'])
+    })
+  })
+
   it('keeps the global active tab while it survives', async () => {
     seedTabWorld()
     await applySectionToStores('tabs.wa', incomingFor([tab('a2'), tab('a9')]), ctx)

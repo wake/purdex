@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isWorkspaceSettingsOf, secondarySettingsPaneIds, withoutSecondarySettingsPanes } from './workspace-settings-panes'
+import { isWorkspaceSettingsOf, secondarySettingsPaneIds, withoutSecondarySettingsPanes, withoutStaleSettingsPanes } from './workspace-settings-panes'
 import type { PaneContent, PaneLayout } from '../types/tab'
 
 const leaf = (id: string, content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id, content } })
@@ -22,6 +22,19 @@ describe('workspace settings panes (#1955)', () => {
   it('finds them in nested splits', () => {
     const layout = split(leaf('p1', { kind: 'dashboard' }), split(leaf('p2', { kind: 'dashboard' }), leaf('p3', settings('w1'))))
     expect(secondarySettingsPaneIds(layout, ['w1'])).toEqual(['p3'])
+  })
+
+  it('withoutStaleSettingsPanes drops only secondary settings panes of workspaces that do not exist (#2514)', () => {
+    const layout = split(leaf('p1', { kind: 'dashboard' }), leaf('p2', settings('gone')), leaf('p3', settings('here')), leaf('p4', { kind: 'settings', scope: 'global' }))
+    const next = withoutStaleSettingsPanes(layout, new Set(['here']))
+    expect(secondarySettingsPaneIds(next, ['gone'])).toEqual([])
+    expect(JSON.stringify(next)).toContain('p3')
+    expect(JSON.stringify(next)).toContain('p4')
+    expect(JSON.stringify(next)).not.toContain('p2')
+    const intact = split(leaf('p1', { kind: 'dashboard' }), leaf('p2', settings('here')))
+    expect(withoutStaleSettingsPanes(intact, new Set(['here']))).toBe(intact)
+    const primary = split(leaf('p1', settings('gone')), leaf('p2', { kind: 'dashboard' }))
+    expect(withoutStaleSettingsPanes(primary, new Set())).toBe(primary) // a primary pane is never removed here
   })
 
   it('removes them and collapses a split left with one child; the same object when there is nothing to remove', () => {

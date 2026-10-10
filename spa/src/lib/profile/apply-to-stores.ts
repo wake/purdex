@@ -49,7 +49,7 @@ import { registerTheme, unregisterTheme } from '../theme-registry'
 import type { ThemeDefinition } from '../theme-registry'
 import { applySettings, applyTabs, applyWorkspaces, isWellFormedSection, settingsFromWire, tabsFromWire, upcastLegacySettings, upcastLegacyTabs } from './applier'
 import { getPrimaryPane } from '../pane-tree'
-import { withoutSecondarySettingsPanes } from '../workspace-settings-panes'
+import { withoutSecondarySettingsPanes, withoutStaleSettingsPanes } from '../workspace-settings-panes'
 import { identityOfSync } from './host-identity'
 import { hashSection } from './hash'
 import { masterWorkspaceIds, readMasterWorld, writeMasterWorld } from './master-world'
@@ -374,6 +374,17 @@ async function applyTabsSection(key: ProfileSectionKey, payload: unknown): Promi
       const local = read.world
       const applied = applyTabs({ tabs: local.tabs, workspaces: local.workspaces }, workspaceId, incoming)
       if (applied.unrendered) return { ok: true, hash: null }
+      // A settings page of a workspace that does not exist (here: a client that never saw its deletion still sends one in a
+      // split tab's secondary pane) would only say "Workspace not found": it is not kept (#2514).
+      const existing = new Set(applied.next.workspaces.map((w) => w.id))
+      const arrivedTabs = { ...applied.next.tabs }
+      for (const id of Object.keys(incoming.tabs)) {
+        const t = arrivedTabs[id]
+        if (!t) continue
+        const layout = withoutStaleSettingsPanes(t.layout, existing)
+        if (layout !== t.layout) arrivedTabs[id] = { ...t, layout }
+      }
+      applied.next = { ...applied.next, tabs: arrivedTabs }
 
       // A pane whose host this device does not have is kept exactly as it arrived (host ownership spec §3.2): its
       // wire id is stored verbatim and rendered as "no host here" on this device only. Nothing is marked — a mark is a
