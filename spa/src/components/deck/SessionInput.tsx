@@ -51,7 +51,8 @@ function fitHeight(el: HTMLTextAreaElement): void {
   const wanted = el.scrollHeight + px(cs.borderTopWidth) + px(cs.borderBottomWidth)
   const max = MAX_ROWS * line + chrome
   el.style.height = `${Math.max(MIN_ROWS * line + chrome, Math.min(wanted, max))}px`
-  el.style.overflowY = wanted > max ? 'auto' : 'hidden'
+  // scrollHeight is a whole number and a fractional line height (1.65 × 13px) makes `max` one: a full MAX_ROWS is not an overflow
+  el.style.overflowY = wanted > max + 1 ? 'auto' : 'hidden'
 }
 
 function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, asking, onSwitchToTerminal }: Props) {
