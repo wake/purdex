@@ -43,9 +43,21 @@ func TestParsePeersInvocation_AllowTeamGrammar(t *testing.T) {
 	}
 }
 
+// listedRev is the team_roots_rev the fake daemon's list gives the host "air"; getsSeen counts the list reads of the last run.
+const listedRev = 3
+
+var getsSeen int
+
 func runAllowTeam(t *testing.T, status int, resp any, args ...string) (code int, body map[string]any, method, path, out, errOut string) {
 	t.Helper()
+	getsSeen = 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet { // the list a whole-set --root reads its revision from (#2340)
+			getsSeen++
+			_ = json.NewEncoder(w).Encode(map[string]any{"hosts": []map[string]any{
+				{"alias": "other", "team_roots_rev": 99}, {"alias": "air", "team_roots_rev": listedRev}}})
+			return
+		}
 		method, path = r.Method, r.URL.Path
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.WriteHeader(status)
@@ -71,47 +83,68 @@ func TestRunPeersCmd_AllowTeamOnWithRoots(t *testing.T) {
 		t.Fatalf("body = %v", body)
 	}
 	// ~ is expanded and a relative root made absolute by the CLI; the API gets absolute paths only.
-	// #2340: --root ADDS (a read-modify-write of the whole set could drop another writer's root); the whole-set field is never sent.
+	// #2340: --root keeps its meaning (set the roots to exactly these), but it now reads the revision first and sends it.
 	want := []any{"/r/a", filepath.Join(home, "w"), filepath.Join(cwd, "rel")}
-	if !reflect.DeepEqual(body["add_team_roots"], want) {
-		t.Fatalf("add_team_roots = %v want %v", body["add_team_roots"], want)
+	if !reflect.DeepEqual(body["team_roots"], want) {
+		t.Fatalf("team_roots = %v want %v", body["team_roots"], want)
 	}
-	if _, has := body["team_roots"]; has {
-		t.Fatalf("the whole-set team_roots was sent: %v", body)
+	if body["team_roots_rev"] != float64(listedRev) || getsSeen != 1 {
+		t.Fatalf("revision sent %v after %d list reads, want %d after 1", body["team_roots_rev"], getsSeen, listedRev)
 	}
-	if _, has := body["remove_team_roots"]; has {
-		t.Fatalf("remove_team_roots sent without --remove-root: %v", body)
+	for _, k := range []string{"add_team_roots", "remove_team_roots"} {
+		if _, has := body[k]; has {
+			t.Fatalf("%s sent by --root: %v", k, body)
+		}
 	}
 	if !strings.Contains(out, "air") || !strings.Contains(out, "on") {
 		t.Fatalf("stdout = %q", out)
 	}
 }
 
-// #2340: revoking a root is `--remove-root <dir>` (repeatable), sent as remove_team_roots; it can be combined with --root.
-func TestRunPeersCmd_AllowTeamRemoveRootSendsAnAtomicRemoval(t *testing.T) {
+// #2340: --add-root / --remove-root are the atomic edits: no list read, no revision, never the whole-set field.
+func TestRunPeersCmd_AllowTeamAddAndRemoveRootAreAtomicEdits(t *testing.T) {
 	code, body, _, _, _, errOut := runAllowTeam(t, 200, map[string]any{"alias": "air", "allow_team": true, "team_roots": []string{"/r/b"}},
-		"air", "on", "--remove-root", "/r/a", "--root", "/r/b")
+		"air", "on", "--remove-root", "/r/a", "--add-root", "/r/b", "--add-root", "/r/c")
 	if code != 0 {
 		t.Fatalf("code=%d err=%q", code, errOut)
 	}
-	if !reflect.DeepEqual(body["remove_team_roots"], []any{"/r/a"}) || !reflect.DeepEqual(body["add_team_roots"], []any{"/r/b"}) {
+	if !reflect.DeepEqual(body["remove_team_roots"], []any{"/r/a"}) || !reflect.DeepEqual(body["add_team_roots"], []any{"/r/b", "/r/c"}) {
 		t.Fatalf("body = %v", body)
 	}
-	if _, has := body["team_roots"]; has {
-		t.Fatalf("the whole-set team_roots was sent: %v", body)
+	for _, k := range []string{"team_roots", "team_roots_rev"} {
+		if _, has := body[k]; has {
+			t.Fatalf("%s sent by an atomic edit: %v", k, body)
+		}
+	}
+	if getsSeen != 0 {
+		t.Fatalf("an atomic edit read the list %d times", getsSeen)
 	}
 }
 
-func TestParsePeersInvocation_RemoveRoot(t *testing.T) {
-	inv, _, ok := parsePeersInvocation([]string{"host", "allow-team", "air", "off", "--remove-root", "/a", "--remove-root", "/b"})
-	if !ok || !reflect.DeepEqual(inv.removeRoots, []string{"/a", "/b"}) || inv.roots != nil {
+// A whole-set --root that meets a changed set is not applied over it: the daemon's 409 is reported with the current set and
+// the command is to be run again (never a silent overwrite).
+func TestRunPeersCmd_AllowTeamWholeSetConflictAsksForARetry(t *testing.T) {
+	code, _, _, _, out, errOut := runAllowTeam(t, 409,
+		map[string]any{"error": "team_roots_conflict", "team_roots": []string{"/r/x", "/r/y"}, "team_roots_rev": 4}, "air", "on", "--root", "/r/a")
+	if code == 0 || out != "" || !strings.Contains(errOut, "team_roots_conflict") || !strings.Contains(errOut, "/r/x, /r/y") || !strings.Contains(errOut, "again") {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+}
+
+func TestParsePeersInvocation_AddAndRemoveRoot(t *testing.T) {
+	inv, _, ok := parsePeersInvocation([]string{"host", "allow-team", "air", "off", "--remove-root", "/a", "--add-root", "/b", "--remove-root", "/c"})
+	if !ok || !reflect.DeepEqual(inv.removeRoots, []string{"/a", "/c"}) || !reflect.DeepEqual(inv.addRoots, []string{"/b"}) || inv.roots != nil {
 		t.Fatalf("inv=%+v ok=%v", inv, ok)
 	}
 	for _, args := range [][]string{
 		{"host", "allow-team", "air", "on", "--remove-root"}, // missing value
-		{"host", "rename", "a", "b", "--remove-root", "/x"},  // allow-team's alone
+		{"host", "allow-team", "air", "on", "--add-root"},
+		{"host", "allow-team", "air", "on", "--root", "/a", "--add-root", "/b"}, // whole set or edits, not both
+		{"host", "allow-team", "air", "on", "--root", "/a", "--remove-root", "/b"},
+		{"host", "rename", "a", "b", "--remove-root", "/x"}, // allow-team's alone
+		{"host", "rename", "a", "b", "--add-root", "/x"},
 		{"host", "list", "--remove-root", "/x"},
-		{"--remove-root", "/x"},
+		{"--add-root", "/x"},
 	} {
 		if _, _, ok := parsePeersInvocation(args); ok {
 			t.Errorf("accepted %v", args)
