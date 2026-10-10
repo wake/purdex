@@ -86,6 +86,10 @@ type CommandPlan struct {
 	// HostID is this host's id (a spawn's op belongs to it); SpawnCwd the canonical cwd of a spawn, "" when it lies under
 	// none of the roots the lead host's entry grants.
 	HostID, SpawnCwd string
+	// ModOK says whether the session's mod speaks a protocol the relay needs (MinMemberRelayModVersion), read by the handler
+	// from the hello it saw; nil means no. HandoffDir is the directory a relay's handoff file lives in.
+	ModOK      func(sessionID string) bool
+	HandoffDir string
 
 	cmd  team.TeamCommand // decoded from Body by ApplyTeamCommand
 	hash string
