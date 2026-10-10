@@ -77,6 +77,10 @@ func TestForwarded_CreateRecordsTheOpAndTheCommandTogether(t *testing.T) {
 	if err := json.Unmarshal(cmds[0].Body, &body); err != nil || body.Kind != team.CommandRelay || body.OpID != fwdOp || body.ToHostID != "hostM" || body.MK != "mk1" || body.ID == fwdOp {
 		t.Fatalf("body = %+v err=%v (op_id must be the op's, the command's own id another)", body, err)
 	}
+	// the member host refuses a relay command without created_at (command_expired); it is the op's creation time
+	if body.CreatedAt != op.CreatedAt || body.CreatedAt == 0 {
+		t.Fatalf("created_at = %d, want the op's %d", body.CreatedAt, op.CreatedAt)
+	}
 	if len(f.sender.calls()) != 0 {
 		t.Fatalf("a local control message was sent for a remote member: %+v", f.sender.calls())
 	}

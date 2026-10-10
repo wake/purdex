@@ -55,7 +55,7 @@ func (m *Module) createRemoteMemberRelay(w http.ResponseWriter, req team.RelayCr
 		if err := tx.QueryRow(`SELECT mk FROM team_members WHERE spawn_op = ? AND host_id = ?`, mr.SpawnOp, mr.HostID).Scan(&mk); err != nil {
 			return err
 		}
-		cmd, err := remoteCommand(m.newID(), CmdRelay, mr.HostID, t, mk, lead, func(tc *team.TeamCommand) { tc.OpID = op.ID })
+		cmd, err := remoteCommand(m.newID(), CmdRelay, mr.HostID, t, mk, lead, func(tc *team.TeamCommand) { tc.OpID, tc.CreatedAt = op.ID, op.CreatedAt })
 		if err != nil {
 			return err
 		}
