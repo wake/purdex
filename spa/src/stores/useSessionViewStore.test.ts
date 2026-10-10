@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useSessionViewStore, selectSessionView, viewKey, installSessionViewCleanup } from './useSessionViewStore'
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
@@ -99,10 +99,24 @@ describe('cleanup when a tab or a pane goes away', () => {
     expect(useSessionViewStore.getState().byPane).toEqual({})
   })
 
-  it('does not wipe the records while the tab world is still empty (before hydration)', () => {
+  it('does not wipe the records while the tab store has not hydrated yet', () => {
+    const hydrated = vi.spyOn(useTabStore.persist, 'hasHydrated').mockReturnValue(false)
+    try {
+      installSessionViewCleanup()
+      useSessionViewStore.getState().setView('t1', 'p1', 'c', 'deck')
+      useTabStore.setState({ tabs: {}, tabOrder: ['x'] })
+      expect(Object.keys(useSessionViewStore.getState().byPane)).toHaveLength(1)
+    } finally {
+      hydrated.mockRestore()
+    }
+  })
+
+  it('closing the last tab clears its records', () => {
+    const only = createTab({ kind: 'dashboard' })
     installSessionViewCleanup()
-    useSessionViewStore.getState().setView('t1', 'p1', 'c', 'deck')
-    useTabStore.setState({ tabs: {}, tabOrder: ['x'] })
-    expect(Object.keys(useSessionViewStore.getState().byPane)).toHaveLength(1)
+    useTabStore.setState({ tabs: { [only.id]: only } })
+    useSessionViewStore.getState().setView(only.id, only.layout.type === 'leaf' ? only.layout.pane.id : '', 'c', 'chat')
+    useTabStore.setState({ tabs: {} })
+    expect(useSessionViewStore.getState().byPane).toEqual({})
   })
 })

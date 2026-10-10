@@ -79,8 +79,8 @@ let uninstallCleanup: (() => void) | null = null
 /**
  * The cleanup point (D1): drop the record of every pane that is no longer in the tab world. A subscription on the tab
  * store, not a hook in its close path, because the tab world can also be replaced wholesale (cross-window rehydrate,
- * Profile Sync apply) without going through `closeTab` / `closePane`. An empty tab world is not acted on: it is what
- * the store looks like before it has hydrated, and the records must survive that.
+ * Profile Sync apply) without going through `closeTab` / `closePane`. An empty tab world is acted on too (the last
+ * tab closed), except before the tab store has hydrated, when the records must survive.
  *
  * Called once below; calling it again replaces the subscription. Returns the uninstall function.
  */
@@ -88,7 +88,8 @@ export function installSessionViewCleanup(): () => void {
   uninstallCleanup?.()
   const unsubscribe = useTabStore.subscribe((next, prev) => {
     if (next.tabs === prev.tabs) return
-    if (Object.keys(next.tabs).length === 0) return
+    // An empty tab world is real after the last tab closed, but also what the store looks like before it has hydrated.
+    if (Object.keys(next.tabs).length === 0 && !useTabStore.persist.hasHydrated()) return
     const { byPane } = useSessionViewStore.getState()
     let gone: string[] | null = null
     for (const key of Object.keys(byPane)) {
