@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom'
 import { File as FileIcon, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HOVER_PREVIEW_DELAY_MS, formatBytes, shortName } from '../../lib/conversations/attachment-format'
+import { placeHoverCard, type Placement } from '../../lib/conversations/hover-place'
 import { ImageLightbox } from './ImageLightbox'
 
 const PREVIEW_MAX = 360
@@ -101,19 +102,23 @@ export function AttachmentThumb({ name, image, src, loading, size, percent, prog
   )
 }
 
-/** The larger preview, floating above the thumbnail. It never takes the pointer: the box under it stays clickable. */
+/** The larger preview, floating above the thumbnail (below it when there is no room above). It never takes the pointer: the box under it stays clickable. */
 function HoverPreview({ anchor, name, src, size }: { anchor: React.RefObject<HTMLElement | null>; name: string; src: string | null | undefined; size?: number }) {
-  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null)
+  const [pos, setPos] = useState<Placement | null>(null)
   const card = useRef<HTMLDivElement>(null)
   const [grown, setGrown] = useState(0) // the picture's load changes the card's width: place again
   useLayoutEffect(() => {
     const a = anchor.current
     if (!a) return
     const r = a.getBoundingClientRect()
-    const w = card.current?.offsetWidth ?? PREVIEW_MAX
-    const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), Math.max(8, window.innerWidth - w - 8))
+    // above the thumbnail when it fits, else below, else clamped inside the window (see placeHoverCard)
+    const placed = placeHoverCard(
+      { left: r.left, top: r.top, width: r.width, height: r.height },
+      { w: card.current?.offsetWidth ?? PREVIEW_MAX, h: card.current?.offsetHeight ?? PREVIEW_MAX },
+      { w: window.innerWidth, h: window.innerHeight },
+    )
     // eslint-disable-next-line react-hooks/set-state-in-effect -- measured placement of a fixed card
-    setPos({ left, bottom: window.innerHeight - r.top + 8 })
+    setPos(placed)
   }, [anchor, src, grown])
   const bytes = formatBytes(size)
   return createPortal(
@@ -121,7 +126,8 @@ function HoverPreview({ anchor, name, src, size }: { anchor: React.RefObject<HTM
       ref={card}
       data-testid="attachment-hover-preview"
       role="tooltip"
-      style={{ position: 'fixed', left: pos?.left ?? 0, bottom: pos?.bottom ?? 0, visibility: pos ? 'visible' : 'hidden', pointerEvents: 'none', maxWidth: PREVIEW_MAX + 16 }}
+      data-side={pos?.side}
+      style={{ position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, visibility: pos ? 'visible' : 'hidden', pointerEvents: 'none', maxWidth: PREVIEW_MAX + 16 }}
       className="z-[1000] rounded-lg border border-border-default bg-surface-secondary p-2 shadow-xl"
     >
       {src && <img src={src} alt="" onLoad={() => setGrown((n) => n + 1)} style={{ maxWidth: PREVIEW_MAX, maxHeight: PREVIEW_MAX }} className="block rounded object-contain" />}

@@ -151,6 +151,39 @@ describe('hover preview', () => {
   })
 })
 
+describe('hover preview placement', () => {
+  const thumb = () => within(screen.getByTestId('attachment-chip')).getByTestId('attachment-thumb')
+  const place = (top: number) => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1000 })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ left: 500, top, width: 48, height: 48, right: 548, bottom: top + 48, x: 500, y: top, toJSON: () => ({}) }))
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(376)
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(300)
+  }
+  afterEach(() => { vi.restoreAllMocks() })
+  async function hoverAt(top: number) {
+    render(ui())
+    paste([png()])
+    await flush()
+    place(top)
+    vi.useFakeTimers()
+    fireEvent.mouseEnter(thumb())
+    act(() => { vi.advanceTimersByTime(400) })
+    return screen.getByTestId('attachment-hover-preview')
+  }
+
+  it('floats above the thumbnail when there is room', async () => {
+    const card = await hoverAt(600)
+    expect(card.style.top).toBe(`${600 - 8 - 300}px`)
+  })
+
+  it('goes below it when the thumbnail is near the top of the window (the preview would be cut off)', async () => {
+    const card = await hoverAt(100)
+    expect(card.style.top).toBe(`${100 + 48 + 8}px`)
+    expect(card.dataset.side).toBe('below')
+  })
+})
+
 describe('lightbox', () => {
   async function open() {
     render(ui())
