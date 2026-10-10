@@ -86,7 +86,7 @@ func (m *Module) runSpawn(id string) {
 			return
 		}
 		if !ok || op.State != team.SpawnRunning {
-			m.reapFailedSpawn(id)
+			m.reapFailedSpawn(id, &op) // the row this runner just read: a second read cannot lose the cleanup
 			return
 		}
 		if m.beforeSpawnStep != nil {
@@ -106,22 +106,28 @@ func (m *Module) runSpawn(id string) {
 			m.logf("[team] spawn %s: no runner step for %q", id, op.Step)
 		}
 		if !next {
-			m.reapFailedSpawn(id)
+			m.reapFailedSpawn(id, nil)
 			return
 		}
 	}
 }
 
-// reapFailedSpawn kills the session of an op that was failed abandoned by someone else — a team that ended (#2384), an
+// reapFailedSpawn (seen: the row the caller just read, nil to read it) kills the session of an op that was failed abandoned by someone else — a team that ended (#2384), an
 // abort of another runner — when this runner stops on it: the one that failed the op may not have known the session
 // (it was created after), or is gone. Generation-guarded; a session already gone is not an error. Other failure
 // reasons kill their own session before they fail the op.
-func (m *Module) reapFailedSpawn(id string) {
+func (m *Module) reapFailedSpawn(id string, seen *spawnRow) {
 	_, mine := m.abortKilled.LoadAndDelete(id) // by id and before anything can fail, so a marker never outlives the stop
-	op, ok, err := m.store.GetSpawnOp(id)
-	if err != nil {
-		m.logf("[team] spawn %s: read the op to see how it ended: %v", id, err)
-		return
+	var op spawnRow
+	ok := seen != nil
+	if ok {
+		op = *seen
+	} else {
+		var err error
+		if op, ok, err = m.store.GetSpawnOp(id); err != nil {
+			m.logf("[team] spawn %s: read the op to see how it ended: %v", id, err)
+			return
+		}
 	}
 	if ok && op.State == team.SpawnFailed {
 		m.wake(id) // whoever failed it (a team end writes no wake of its own) leaves the requests waiting on it to this runner
