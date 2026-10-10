@@ -162,18 +162,24 @@ func (m *Module) outcomeNotice(op team.RelayOp) {
 	if err != nil || !ok || t.EndedAt != 0 {
 		return // no live team to tell
 	}
+	ref, newRef := op.Ref, op.NewRef
+	if op.HostID != "" && op.HostID != m.hostID() { // a member of another host is named as the lead can address it
+		if alias := m.remoteAlias(op.HostID); alias != "" {
+			ref, newRef = alias+"/"+ref, alias+"/"+newRef
+		}
+	}
 	var text string
 	switch op.State {
 	case team.RelayDone:
 		if op.Kind == team.RelayKindSelf {
-			text = fmt.Sprintf(team.RelayManualNoticeFmt, op.Ref, op.NewRef)
+			text = fmt.Sprintf(team.RelayManualNoticeFmt, ref, newRef)
 			break
 		}
-		text = fmt.Sprintf(RelayDoneNoticeFmt, op.Ref, op.NewRef)
+		text = fmt.Sprintf(RelayDoneNoticeFmt, ref, newRef)
 	case team.RelayFailed:
-		text = fmt.Sprintf(RelayFailedNoticeFmt, op.Ref, op.Reason)
+		text = fmt.Sprintf(RelayFailedNoticeFmt, ref, op.Reason)
 	default:
-		text = fmt.Sprintf(RelayCancelledNoticeFmt, op.Ref, op.Reason)
+		text = fmt.Sprintf(RelayCancelledNoticeFmt, ref, op.Reason)
 	}
 	// Sent to the lead's current address, from the member's own inbox when it has one (its new session once cleared),
 	// else from the lead's own.

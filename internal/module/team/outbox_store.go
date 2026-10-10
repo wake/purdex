@@ -202,7 +202,13 @@ func (s *Store) SettleCommand(id string, res peersmod.CallResult, now int64, out
 	if err := out.ApplyOutcome(tx, c, res); err != nil {
 		return false, err
 	}
-	return true, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	if s.onCommandSettled != nil {
+		s.onCommandSettled()
+	}
+	return true, nil
 }
 
 // withCurrentLook is body with the team's name, label and colour as the teams row holds them now (read in q's transaction),

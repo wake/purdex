@@ -24,6 +24,22 @@ type MemberRelayGate func(tx *sql.Tx, op *team.RelayOp) (needsApproval bool, err
 // open: a release first → ErrMemberNotActive here; this op first → the release finds it and answers relay_open.
 // ErrRelayOpOpen (wrapped) is the table's one-open-op floor. Any failure writes nothing.
 func (s *Store) CreateMemberRelayOp(op team.RelayOp, gate MemberRelayGate) (team.RelayOp, bool, error) {
+	return s.createMemberRelayOp(op, gate, nil)
+}
+
+// ErrRemoteRelayHeld: the lead's pool is spent out and the op would wait for a card; for a member of another host the card
+// path is not built yet (MR-3a-2), so the create is refused whole.
+var ErrRemoteRelayHeld = errors.New("a remote member's relay would wait for a card")
+
+// CreateRemoteMemberRelayOp is CreateMemberRelayOp for a member that lives on another host (member relay spec §3.4): the
+// membership read accepts the remote row of op.HostID, the op is inserted `forwarded` and enqueue — the `relay` command —
+// runs in the SAME transaction, after the gate (which may spend the pool) and the insert. Any failure writes nothing and spends
+// nothing. A gate that holds the op for a card fails with ErrRemoteRelayHeld.
+func (s *Store) CreateRemoteMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enqueue func(tx *sql.Tx, op team.RelayOp) error) (team.RelayOp, bool, error) {
+	return s.createMemberRelayOp(op, gate, enqueue)
+}
+
+func (s *Store) createMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enqueue func(tx *sql.Tx, op team.RelayOp) error) (team.RelayOp, bool, error) {
 	fail := func(err error) (team.RelayOp, bool, error) {
 		return team.RelayOp{}, false, fmt.Errorf("create member relay %s: %w", op.ID, err)
 	}
@@ -39,6 +55,9 @@ func (s *Store) CreateMemberRelayOp(op team.RelayOp, gate MemberRelayGate) (team
 	}
 	var one int
 	loc, locArgs := s.local("m.host_id")
+	if enqueue != nil { // the member's row is the remote one of op.HostID
+		loc, locArgs = `m.host_id = ? AND m.host_id <> ?`, []any{op.HostID, s.localHostID}
+	}
 	err = tx.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
 		WHERE m.session_id = ? AND m.team_id = ? AND m.state = 'active' AND t.ended_at = 0 AND `+loc, append([]any{op.SessionID, op.TeamID}, locArgs...)...).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -53,8 +72,24 @@ func (s *Store) CreateMemberRelayOp(op team.RelayOp, gate MemberRelayGate) (team
 			return fail(err)
 		}
 	}
+	if enqueue != nil {
+		if needs {
+			return fail(ErrRemoteRelayHeld)
+		}
+		op.State = team.RelayForwarded
+	}
 	if err := insertRelayOpIn(tx, op); err != nil {
 		return fail(err)
+	}
+	if enqueue != nil {
+		if err := enqueue(tx, op); err != nil {
+			return fail(err)
+		}
+		if s.afterRelayCommandEnqueue != nil {
+			if err := s.afterRelayCommandEnqueue(); err != nil {
+				return fail(err)
+			}
+		}
 	}
 	if s.afterMemberOpInsert != nil {
 		if err := s.afterMemberOpInsert(); err != nil {

@@ -105,6 +105,12 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 		if fact.Kind == team.FactMoved {
 			m.announceMovedAfter(entry.HostID, fact, res.Body)
 		}
+		if fact.Kind == team.FactMoved || fact.Kind == team.FactRelayFailed {
+			m.store.notifyOp(fact.OpID) // a lead's relay this fact ended: its long-polls
+			if fact.Kind == team.FactRelayFailed && relayFailedApplied(res.Body) {
+				m.noticeForwardedOpEnded(fact.OpID)
+			}
+		}
 		m.rosterChanged() // a seat may have been freed
 		if fact.Kind == team.FactRegistered || fact.Kind == team.FactSpawnFailed {
 			m.wake(fact.MK) // a `pdx spawn --host` POST is waiting on this op
@@ -116,7 +122,7 @@ func (m *Module) handleTeamFact(w http.ResponseWriter, r *http.Request) {
 // factKindApplied: the fact kinds this version applies (the same list the inventory announces as fact_kinds).
 func factKindApplied(kind string) bool {
 	switch kind {
-	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved:
+	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved, team.FactRelayFailed:
 		return true
 	}
 	return false
@@ -125,7 +131,7 @@ func factKindApplied(kind string) bool {
 // validateFact checks that every string is bounded and free of control characters (they end up in rows) and the fields
 // each kind needs. "" means valid.
 func validateFact(f team.TeamFact) string {
-	for _, s := range []string{f.ID, f.Kind, f.ToHostID, f.TeamID, f.MK, f.Reason} {
+	for _, s := range []string{f.ID, f.Kind, f.ToHostID, f.TeamID, f.MK, f.Reason, f.State} {
 		if len(s) > maxCommandField || !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 {
 			return "a field is over 256 bytes, not UTF-8, or holds a control character"
 		}
@@ -136,7 +142,7 @@ func validateFact(f team.TeamFact) string {
 		}
 	}
 	switch f.Kind {
-	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved:
+	case team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved, team.FactRelayFailed:
 		if f.MK == "" {
 			return f.Kind + ": mk is required"
 		}
@@ -149,6 +155,10 @@ func validateFact(f team.TeamFact) string {
 	case team.FactMoved:
 		if f.NewSession == "" || !ipeers.IsRef(f.NewRef) {
 			return "moved: new_session_id and new_ref (a ref) are required"
+		}
+	case team.FactRelayFailed:
+		if f.OpID == "" || (f.State != string(team.RelayFailed) && f.State != string(team.RelayCancelled)) {
+			return "relay_failed: op_id and a state (failed or cancelled) are required"
 		}
 	case team.FactSpawnFailed:
 		if !spawnReasons[f.Reason] {

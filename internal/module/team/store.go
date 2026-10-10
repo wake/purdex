@@ -50,6 +50,9 @@ type Store struct {
 	// choke point for waking its long-polls (P6-2b-2, plan v3 §7), whatever path wrote it (report, claim, an approval's
 	// close, a create). The module sets it at Init (wake); it must not block and must not call back into the store.
 	opChanged func(opID string)
+	// onCommandSettled, when set, runs after a command's settle transaction committed (the relay ops it ended: their long-polls and
+	// the lead's notice).
+	onCommandSettled func()
 
 	// beforeReplaceInsert, when set, runs in ReplaceTerminalOnly's
 	// transaction after the old row's close and before the new row's

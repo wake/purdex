@@ -271,8 +271,12 @@ func TestForwarded_AWaitingPollGetsTheDoneOp(t *testing.T) {
 		_ = json.Unmarshal(body, &got)
 	}()
 	waitForWaiter(t, f, op.ID)
+	start := time.Now()
 	f.postFact(memberPrincipal(), movedOf(fwdOp, factUUID1))
 	wg.Wait()
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the poll took %s after the fact: nothing woke it", d)
+	}
 	if code != 200 || got.State != team.RelayDone || got.NewRef != "_nnn222" {
 		t.Fatalf("poll = %d %+v", code, got)
 	}
@@ -355,11 +359,12 @@ func TestForwarded_RelayFailedBinding(t *testing.T) {
 		mut  func(*team.TeamFact)
 		want int
 	}{
-		"another host (the op is hostM's)":    {otherHost, func(x *team.TeamFact) { x.MK = "mk3" }, 200},
-		"another team":                        {memberPrincipal(), func(x *team.TeamFact) { x.TeamID = uid(2) }, 0},
-		"another member's mk (not the op's)":  {memberPrincipal(), func(x *team.TeamFact) { x.MK = "mk2" }, 200},
-		"no such mk":                          {memberPrincipal(), func(x *team.TeamFact) { x.MK = "nope" }, 0},
-		"an op id that is not this host's op": {memberPrincipal(), func(x *team.TeamFact) { x.OpID = "11111111-1111-4111-8111-0000000000ee" }, 200},
+		"another host, its own member (the op is hostM's)": {otherHost, func(x *team.TeamFact) { x.MK = "mk3" }, 200},
+		"another host, the mk of hostM's member":           {otherHost, func(x *team.TeamFact) {}, 409},
+		"another team":                                     {memberPrincipal(), func(x *team.TeamFact) { x.TeamID = uid(2) }, 409},
+		"another member's mk (not the op's)":               {memberPrincipal(), func(x *team.TeamFact) { x.MK = "mk2" }, 200},
+		"no such mk":                                       {memberPrincipal(), func(x *team.TeamFact) { x.MK = "nope" }, 409},
+		"an op id that is not this host's op":              {memberPrincipal(), func(x *team.TeamFact) { x.OpID = "11111111-1111-4111-8111-0000000000ee" }, 200},
 	}
 	n := 0
 	for name, tc := range cases {
@@ -367,8 +372,11 @@ func TestForwarded_RelayFailedBinding(t *testing.T) {
 		fact := relayFailedOf(fwdOp, fmt.Sprintf("b%07d-2222-4222-8222-222222222222", n), "failed", "x")
 		tc.mut(&fact)
 		code, body := f.postFact(tc.p, fact)
-		if tc.want != 0 && code != tc.want {
-			t.Errorf("%s: %d %s", name, code, body)
+		if code != tc.want {
+			t.Errorf("%s: %d %s, want %d", name, code, body, tc.want)
+		}
+		if tc.want == 200 && !strings.Contains(string(body), `"ignored"`) {
+			t.Errorf("%s: %s, want ignored", name, body)
 		}
 		if got := f.op(op.ID); got.State != team.RelayForwarded {
 			t.Fatalf("%s moved the op: %+v", name, got)
@@ -450,5 +458,32 @@ func TestForwarded_AMovedWithoutAnOpIdDoesNotEndTheOp(t *testing.T) {
 	f.postFact(memberPrincipal(), movedOf("", factUUID1))
 	if got := f.op(op.ID); got.State != team.RelayForwarded {
 		t.Fatalf("op = %+v", got)
+	}
+}
+
+// A refused command ends the op: the long-poll is woken and the lead is told once, with the member's address.
+func TestForwarded_ARefusalWakesThePollAndTellsTheLead(t *testing.T) {
+	f, _ := fwdRelayFixture(t)
+	op := f.relayForwarded(fwdOp)
+	var (
+		wg  sync.WaitGroup
+		got team.RelayOp
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, body := f.do(http.MethodGet, "/api/relay/ops/"+op.ID+"?wait=5", nil)
+		_ = json.Unmarshal(body, &got)
+	}()
+	waitForWaiter(t, f, op.ID)
+	start := time.Now()
+	f.settleRelayCommand(nil, "relay_open")
+	wg.Wait()
+	if d := time.Since(start); d > 2*time.Second || got.State != team.RelayFailed {
+		t.Fatalf("poll after %s: %+v", d, got)
+	}
+	waitFor(t, func() bool { return len(f.leadNotices()) == 1 })
+	if n := f.leadNotices()[0]; n != "[pdx team] member 接力失敗：air26/_rabc12（relay_open）" {
+		t.Fatalf("notice = %q", n)
 	}
 }

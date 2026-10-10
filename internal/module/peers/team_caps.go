@@ -21,7 +21,7 @@ func teamKinds() []string {
 // teamFactKinds is what this daemon applies as a lead host on POST /api/peers/team/facts (X3b-2, X4b): `ended`, and the
 // forwarded spawn's `registered` / `spawn_failed`, and `moved` (a person's /relay moved a member on its own host).
 func teamFactKinds() []string {
-	return []string{team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved}
+	return []string{team.FactEnded, team.FactRegistered, team.FactSpawnFailed, team.FactMoved, team.FactRelayFailed}
 }
 
 // teamEntryFor is the live entry a host principal stands for, under the

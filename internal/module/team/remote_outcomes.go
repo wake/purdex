@@ -47,6 +47,13 @@ func (o remoteOutcomes) ApplyOutcome(tx *sql.Tx, c commandRow, res peersmod.Call
 		return o.cas(tx, c, `state = ?, end_reason = ?, updated_at = ?, ended_at = ?`, []any{string(team.MemberReleased), reason, now, now}, rowReleasing)
 	case CmdKill:
 		return o.killAnswer(tx, c, res, refused, now)
+	case CmdRelay:
+		// `accepted` changes nothing (the result comes as a fact: moved or relay_failed). A refusal ends the forwarded op
+		// with its code, from `forwarded` only (member relay spec D10).
+		if refused {
+			return o.relayCommandRefused(tx, c, res.Code, now)
+		}
+		return nil
 	case CmdSpawn:
 		// `accepted` changes nothing (the result comes as a fact). A refusal (host_not_allowed, cwd_outside_grant,
 		// capacity_exceeded, bad_request, unsupported_kind, …) fails the forwarded op with its code: the seat is free.

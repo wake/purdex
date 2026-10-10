@@ -144,7 +144,10 @@ type Module struct {
 	askMu sync.Mutex
 	// busyMu guards the member-relay wait marks of relay_timeouts.go (#2439): the ops whose lead got the long-turn notice,
 	// and when each op's member was first seen idle.
-	busyMu      sync.Mutex
+	busyMu sync.Mutex
+	// endedOps are the forwarded relay ops a command settle ended, until that settle has committed (relay_forwarded.go).
+	endedOpsMu  sync.Mutex
+	endedOps    []string
 	busyNoticed map[string]struct{}
 	idleSince   map[string]int64
 	// beforeMemberRelayInsert, when set, runs in the member-relay create between its checks and the insert's transaction (tests race a release there).
@@ -462,6 +465,7 @@ func (m *Module) Init(c *core.Core) error {
 	store.onCommands = m.kickCommands
 	store.onFacts = m.kickFacts
 	store.aliasFn = func() string { a, _ := m.selfHost(); return a }
+	store.onCommandSettled = m.afterRelayOpsEnded
 	store.opChanged = m.wake                    // the one choke point: every committed change of an op wakes its long-polls
 	seen, err := store.LoadModHello(modSeenCap) // presence outlives a restart (P6-2a)
 	if err != nil {
