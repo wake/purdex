@@ -5,13 +5,19 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkbookStore } from '../stores/useWorkbookStore'
-import { wireEntry } from '../lib/workbook/fixtures'
+import { wireEntry, wireTodo } from '../lib/workbook/fixtures'
 
 vi.mock('../lib/host-connection', () => ({
   checkHealth: vi.fn(async () => ({ daemon: 'connected', latency: 3, ticket: 'tk' })),
 }))
 const fetchConversation = vi.fn()
-vi.mock('../lib/workbook/api', () => ({ fetchConversation: (...a: unknown[]) => fetchConversation(...a) }))
+const fetchTodos = vi.fn()
+const postRefresh = vi.fn()
+vi.mock('../lib/workbook/api', () => ({
+  fetchConversation: (...a: unknown[]) => fetchConversation(...a),
+  fetchTodos: (...a: unknown[]) => fetchTodos(...a),
+  postRefresh: (...a: unknown[]) => postRefresh(...a),
+}))
 
 const { useMultiHostEventWs } = await import('./useMultiHostEventWs')
 
@@ -63,6 +69,39 @@ describe('useMultiHostEventWs workbook events', () => {
     expect(c.status).toBe('hello')
     expect(useWorkbookStore.getState().convOfSession[HOST].s1).toBe('c1')
     expect(fetchConversation).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
+  it('v2 todos and refresh_available frames land in the store, 50 of each, with no request', async () => {
+    useWorkbookStore.getState().setSupport(HOST, { v1: true, v2: true })
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    act(() => {
+      for (let i = 1; i <= 50; i++) {
+        sockets[0].emit(frame('workbook.todos', { conv_key: 'c1', session_id: 's1', todos: [wireTodo({ id: i, state: i % 2 ? 'open' : 'done' })] }))
+        sockets[0].emit(frame('workbook.refresh_available', { conv_key: 'c1', available: i % 2 === 0 }))
+      }
+    })
+    const c = useWorkbookStore.getState().byHost[HOST].byConv.c1
+    expect(c.todos.open).toHaveLength(25)
+    expect(c.todos.done).toHaveLength(25)
+    expect(c.refreshAvailable).toBe(true)
+    expect(fetchConversation).not.toHaveBeenCalled()
+    expect(fetchTodos).not.toHaveBeenCalled()
+    expect(postRefresh).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
+  it('a malformed todos frame is dropped and does not throw', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    act(() => {
+      sockets[0].emit(frame('workbook.todos', { conv_key: 'c1', session_id: 's1', todos: 'nope' }))
+      sockets[0].emit(frame('workbook.refresh_available', { conv_key: 'c1', available: 'yes' }))
+    })
+    expect(useWorkbookStore.getState().byHost[HOST]).toBeUndefined()
+    warn.mockRestore()
     view.unmount()
   })
 
