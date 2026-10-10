@@ -142,6 +142,11 @@ type Module struct {
 	// askMu serialises the lead's relay-ask notices (member relay ask §3.1) and the withdrawal a compaction makes (§3.3):
 	// the first send and the sweeper's retry never both tell the lead, and no ask notice follows a withdrawal.
 	askMu sync.Mutex
+	// busyMu guards the member-relay wait marks of relay_timeouts.go (#2439): the ops whose lead got the long-turn notice,
+	// and when each op's member was first seen idle.
+	busyMu      sync.Mutex
+	busyNoticed map[string]struct{}
+	idleSince   map[string]int64
 	// beforeMemberRelayInsert, when set, runs in the member-relay create between its checks and the insert's transaction (tests race a release there).
 	beforeMemberRelayInsert func(mr memberRow)
 	// afterPoolSpend and afterMemberRowInsert fail the member-relay create's gate at that point (tests: fault injection).

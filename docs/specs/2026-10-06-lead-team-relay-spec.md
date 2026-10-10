@@ -716,6 +716,10 @@ Both kinds are rows in `relay_ops` and run the same steps in the session's mod.
 - claim: 60 s, else `failed{member_unresponsive}`;
 - whole op: 15 min.
 
+> **Update 2026-10-10 (#2439).** The claim timeout is reported as `member_unseen` (or `member_blocked` when the agent is
+> waiting on a prompt), and a seen op whose member is still in a turn waits up to 60 minutes instead of failing at 15. The
+> rules are in `2026-10-10-member-relay-ask-spec-plan.md` §11.
+
 The lead is told about every failure.
 
 **⟲ changed from D5 steps 3–5.** The brief had the daemon ask by `pdx msg`, wait for the Stop hook, and send-keys `/clear`. Reasons are in §5. The detection (D5.1) and the report to the lead (D5.6) are unchanged.

@@ -38,8 +38,8 @@ func isMemberRelayTarget(s string) bool {
 }
 
 // runRelayMember is `pdx relay <ref> [--wait <dur>]`. Without --wait it returns once the daemon has accepted the op
-// and prints the op (its id is in it), exit 0. With --wait it follows the op: done → 0; failed member_unresponsive or
-// member_gone → 14; any other failed → 1; cancelled{denied} → 10; cancelled{timeout} → 11; any other cancelled → 12;
+// and prints the op (its id is in it), exit 0. With --wait it follows the op: done → 0; failed member_unresponsive, member_gone,
+// member_unseen, member_blocked or member_busy_timeout → 14 (the last three explained on stderr, #2439); any other failed → 1; cancelled{denied} → 10; cancelled{timeout} → 11; any other cancelled → 12;
 // the bound reached while the op still awaits a person's approval (RQ-2: the member pool is spent) → 11, the op left
 // as it is; the bound reached otherwise → the op on stdout, exit 0. The final op is on stdout.
 func runRelayMember(ctx context.Context, target string, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
@@ -155,7 +155,11 @@ func finishRelayOp(op team.RelayOp, stdout, stderr io.Writer) int {
 	case team.RelayDone:
 		return ExitOK
 	case team.RelayFailed:
-		if op.Reason == team.RelayReasonMemberUnresponsive || op.Reason == team.RelayReasonMemberGone {
+		switch op.Reason {
+		case team.RelayReasonMemberUnresponsive, team.RelayReasonMemberGone:
+			return ExitMemberFailed
+		case team.RelayReasonMemberUnseen, team.RelayReasonMemberBlocked, team.RelayReasonMemberBusyTimeout:
+			fmt.Fprintln(stderr, memberNoAnswerHint(op.Reason))
 			return ExitMemberFailed
 		}
 		return ExitError
@@ -168,6 +172,18 @@ func finishRelayOp(op team.RelayOp, stdout, stderr io.Writer) int {
 		}
 		return ExitCancelled
 	}
+}
+
+// memberNoAnswerHint says why a member's mod did not take the relay (#2439), so the lead knows what to look at.
+func memberNoAnswerHint(reason string) string {
+	switch reason {
+	case team.RelayReasonMemberBlocked:
+		return "pdx relay: member 正在等待輸入（權限或提示），它的 mod 沒有回應接力；請到它的分頁處理後再試 " + reason
+	case team.RelayReasonMemberBusyTimeout:
+		return "pdx relay: member 這一輪跑超過 60 分鐘仍未結束，接力沒有進行；等它的回合結束後再試 " + reason
+	}
+	return fmt.Sprintf("pdx relay: member 的 mod 在 %d 秒內沒有確認收到接力；它的終端機可能卡在對話框（例如「Mods: Enable hot reloading?」），"+
+		"或 Claude Code 沒有在執行；請到它的分頁看看 %s", team.RelayClaimTimeoutS, reason)
 }
 
 // runRelayClaim is `pdx relay claim <op> --session <sid>`: the member's mod takes the op. stdout is the claim JSON
