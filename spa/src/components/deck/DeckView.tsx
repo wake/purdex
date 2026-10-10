@@ -5,6 +5,7 @@
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type UIEvent } from 'react'
 import { FoldContext } from '../room/fold-context'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
+import { useOlderTurns } from '../../hooks/useOlderTurns'
 import { noteDeckPane, usePaneFoldStore } from '../../lib/conversations/fold-memory'
 import { isRevealed, markRevealed } from '../../lib/conversations/deck-reveal-memory'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
@@ -29,12 +30,6 @@ export interface DeckViewProps {
   /** 「顯示全部」 and a subagent line open the pane's right panel on that step (the turn is known here, not to the step). */
   onOpenPanel?: (content: PanelContent) => void
 }
-
-/** Within this many pixels of the top the next older page is read. */
-const TOP_REACH = 120
-/** Automatic asks for an older page while the content is too short to scroll: how many per first turn, and the first wait. */
-const AUTO_PAGE_TRIES = 3
-const AUTO_PAGE_RETRY_MS = 1000
 
 // Memoized: the store keeps an unchanged turn's object, so a live update re-draws only the turn that changed.
 // `eager`: one of the newest turns, always drawn in full. An older one draws its agent text as plain text until it comes near the
@@ -90,35 +85,15 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   const empty = doc.turns.every((turn) => turn.items.length === 0)
   useEffect(() => { if (!empty) follow() }, [follow, doc.turns, empty])
 
-  // A page that does not fill the box cannot be scrolled, so no scroll event would ever ask for the next one: ask until the
-  // box overflows or nothing older is left. A page that lands moves the first turn and starts over at once; one that fails
-  // or brings nothing is asked for again after 1 s, then 2 s, and then left to the reader's own scroll to the top.
+  // Older pages (see useOlderTurns): asked for at the top, again when a page landed and the reader is still there, with a back-off
+  // when one fails; the place kept across the page landing above.
   const firstTurn = doc.turns[0]?.index ?? null
-  const attempt = useRef<{ first: number | null; tries: number }>({ first: null, tries: 0 })
-  useEffect(() => {
-    const box = boxRef.current
-    if (!box || !doc.hasMoreBefore || entry.paging) return
-    if (box.scrollHeight > box.clientHeight + TOP_REACH) return
-    if (attempt.current.first !== firstTurn) attempt.current = { first: firstTurn, tries: 0 }
-    const { tries } = attempt.current
-    if (tries >= AUTO_PAGE_TRIES) return
-    const run = () => {
-      // The live end may have grown the content past the box while the timer waited.
-      if (box.scrollHeight > box.clientHeight + TOP_REACH) return
-      attempt.current.tries += 1
-      void useConversationStore.getState().loadBefore(hostId, sessionId)
-    }
-    if (tries === 0) { run(); return }
-    const timer = setTimeout(run, AUTO_PAGE_RETRY_MS * 2 ** (tries - 1))
-    return () => clearTimeout(timer)
-    // Keyed by the FIRST turn, not the turns: a live update elsewhere must not restart a pending retry.
-  }, [firstTurn, doc.hasMoreBefore, entry.paging, hostId, sessionId])
+  const load = useCallback(() => { void useConversationStore.getState().loadBefore(hostId, sessionId) }, [hostId, sessionId])
+  const older = useOlderTurns({ box: boxRef, hasMore: doc.hasMoreBefore, paging: entry.paging, firstTurn, load, shiftBy: scroll.shiftBy })
 
   const onScroll = (e: UIEvent<HTMLDivElement>) => {
     onBoxScroll(e)
-    if (e.currentTarget.scrollTop < TOP_REACH && doc.hasMoreBefore && !entry.paging) {
-      void useConversationStore.getState().loadBefore(hostId, sessionId)
-    }
+    older.onScroll()
   }
 
   const items = useMemo(() => doc.turns.flatMap((turn) => turn.items), [doc.turns])
@@ -132,10 +107,11 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
           {t('deck.back_live')}
         </button>
       )}
-      <div ref={setBox} onScroll={onScroll} data-testid="deck-scroll" className="flex-1 space-y-3 overflow-y-auto p-4">
+      <div ref={setBox} onScroll={onScroll} data-testid="deck-scroll" style={{ overflowAnchor: 'none' }} className="flex-1 space-y-3 overflow-y-auto p-4">
         <FoldContext.Provider value={foldStore}>
           <DeckRevealContext.Provider value={reveal}>
             {entry.paging && <div data-testid="deck-paging" className="text-xs text-text-muted">{t('deck.paging')}</div>}
+            {!empty && !doc.hasMoreBefore && !entry.paging && <div data-testid="deck-history-start" className="text-xs text-text-muted">{t('deck.history_start')}</div>}
             {empty ? (
               <div data-testid="deck-empty" className="flex h-full items-center justify-center text-sm text-text-muted">
                 {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
