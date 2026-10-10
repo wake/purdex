@@ -133,6 +133,14 @@ func (m *Module) runModRound(now time.Time) {
 			targets = append(targets, target{sid, name, dirty[sid]})
 		}
 	}
+	if snap.expired() {
+		// A name lookup ran out of time: sids whose pane was cut off are not "unnamed", they are unread. Take nothing from
+		// this round; every sid comes back next round (#2039).
+		for _, sid := range sids {
+			redirty(sid, dirty[sid])
+		}
+		return
+	}
 	for _, t := range targets {
 		if m.emitSessionState(t.session, "mod", map[string]any{"mod_event": t.why}) {
 			redirty(t.sid, t.why)

@@ -108,7 +108,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   const footer = (ctx: DeckFooterContext) => (
     <div data-testid="session-footer">
       <QuestionDock ctx={ctx} />
-      <SessionInput {...ctx} />
+      <SessionInput {...ctx} sessionCode={sessionCode} />
       <SessionStatusRow sessionCode={sessionCode} ctx={ctx} />
     </div>
   )

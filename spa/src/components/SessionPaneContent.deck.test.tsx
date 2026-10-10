@@ -30,7 +30,7 @@ vi.mock('./TerminalView', () => ({ default: () => <div data-testid="terminal-vie
 vi.mock('../lib/host-api', async (orig) => ({ ...(await orig<typeof import('../lib/host-api')>()), fetchWsTicket: vi.fn(async () => 't') }))
 vi.mock('../lib/rebuild/cwd-probe', () => ({ probeSessionCwd: vi.fn() }))
 vi.mock('../lib/rebuild/provenance-probe', () => ({ probeSessionProvenance: vi.fn() }))
-vi.mock('./deck/SessionInput', () => ({ SessionInput: () => <div data-testid="input-footer" /> }))
+vi.mock('./deck/SessionInput', () => ({ SessionInput: (p: { sessionCode?: string }) => <div data-testid="input-footer" data-session-code={p.sessionCode} /> }))
 
 const H = 'host-1'
 const CODE = 'dev001'
@@ -102,6 +102,15 @@ describe('the deck inside the session pane', () => {
       render(<TabContent activeTab={sessionTab} allTabs={all} />)
       const footer = screen.getByTestId('session-footer')
       expect(Array.from(footer.children).map((c) => c.getAttribute('data-testid'))).toEqual(['input-footer', 'status-row'])
+    }
+  })
+
+  it('the input is handed the tmux session code (the upload endpoint\'s session) in the deck and in the chat', () => {
+    for (const v of ['deck', 'chat'] as const) {
+      cleanup()
+      setView(v)
+      render(<TabContent activeTab={sessionTab} allTabs={all} />)
+      expect(screen.getByTestId('input-footer')).toHaveAttribute('data-session-code', CODE)
     }
   })
 

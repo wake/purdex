@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.688] - 2026-10-10
+
+> 只動到 daemon：**要部署 daemon**；mod 沒有改，不必重跑 `pdx setup`；SPA 沒有變更。
+
+### Fixed：按 Esc 或 App 中斷後，對話標題列的燈不再卡在「工作中」 — #2484（介面線）
+
+- 中斷時 Claude Code 不會跑 Stop hook，對話標題列的燈原本只看 hook 的狀態，所以一直顯示工作中。現在標題列和燈號也套用 mod 回報的即時狀態（分頁本身的燈之前已經是這樣），Esc 和 App 的中斷鈕兩條路都會回到閒置。
+
+### Fixed：效能頁的主機 CPU 在 macOS 26 恢復顯示 — #2013（#2482）
+
+- macOS 26 拿掉了原本讀 CPU 的系統資訊（`kern.cp_time`），所以 CPU 一直顯示「無法使用」。現在改成在背景每隔一個更新週期跑一次 `iostat` 取真正的使用率：有人在看效能頁時才開始取樣，一分鐘沒人看就停；剛開始的第一兩秒顯示「等待中」。Linux 不受影響。
+
 ## [1.0.0-alpha.687] - 2026-10-10
 
 > 動到 daemon 與 mod：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；SPA 沒有變更。
