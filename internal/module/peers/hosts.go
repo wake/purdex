@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -139,9 +140,37 @@ func removalCandidates(in []string) ([]string, error) {
 		out = append(out, c)
 		if real, err := filepath.EvalSymlinks(c); err == nil {
 			out = append(out, real)
+		} else if lex, ok := followLinkLexically(c); ok {
+			out = append(out, lex) // a dangling link: the real directory it pointed at when it was granted
 		}
 	}
 	return out, nil
+}
+
+// followLinkLexically follows p's last component through symlinks without needing the final target to exist (EvalSymlinks
+// fails on a dangling link), after resolving the parent directory the normal way. ok is false when the parent cannot be
+// resolved or the chain is too long.
+func followLinkLexically(p string) (string, bool) {
+	for range 40 {
+		parent, err := filepath.EvalSymlinks(filepath.Dir(p))
+		if err != nil {
+			return "", false
+		}
+		p = filepath.Join(parent, filepath.Base(p))
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			return p, true // gone, or a plain entry: the last spelling
+		}
+		target, err := os.Readlink(p)
+		if err != nil {
+			return p, true
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(p), target)
+		}
+		p = filepath.Clean(target)
+	}
+	return "", false
 }
 
 // applyRootsChange computes the new set from the current one: the whole set, or the removals then the additions.
