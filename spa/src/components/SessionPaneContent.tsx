@@ -8,7 +8,7 @@ import { useWorkspaceStore } from '../features/workspace/store'
 import { fetchWsTicket } from '../lib/host-api'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
-import { selectSessionView, useSessionViewStore } from '../stores/useSessionViewStore'
+import { selectSessionView, sessionBinding, useSessionViewStore } from '../stores/useSessionViewStore'
 import { useAttachStall } from '../hooks/useAttachStall'
 import { findPane } from '../lib/pane-tree'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
@@ -76,7 +76,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   ) ?? undefined
 
   // Which view this device shows for the pane (U3 plan D1). Read before the early returns (rules of hooks).
-  const view = useSessionViewStore(selectSessionView(tabId, pane.id, sessionCode))
+  const view = useSessionViewStore(selectSessionView(tabId, pane.id, sessionBinding(hostId, sessionCode)))
 
   if (content.kind === 'tmux-session' && content.terminated) {
     return <TerminatedPane content={content} tabId={tabId} paneId={pane.id} />

@@ -21,7 +21,7 @@ import { setExecutionPaneMode, viewModeOf } from '../../lib/nex/view-mode'
 import { resolveExecutionHostId } from '../../lib/nex/resolve-host'
 import { useHandoffDialogStore } from '../../stores/useHandoffDialogStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { selectSessionView, useSessionViewStore, type SessionView } from '../../stores/useSessionViewStore'
+import { selectSessionView, sessionBinding, useSessionViewStore, type SessionView } from '../../stores/useSessionViewStore'
 import { keepFocus } from '../../lib/keep-focus'
 import type { ExecutionViewMode, Pane } from '../../types/tab'
 
@@ -73,8 +73,8 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
   const handoff = useHandoffGate(content)
   const viewGate = useConversationViewGate(content)
   const take = useTakeToTerminal(pane.id)
-  const sessionCode = content.kind === 'tmux-session' ? content.sessionCode : ''
-  const view = useSessionViewStore(selectSessionView(tabId, pane.id, sessionCode))
+  const binding = content.kind === 'tmux-session' ? sessionBinding(content.hostId, content.sessionCode) : ''
+  const view = useSessionViewStore(selectSessionView(tabId, pane.id, binding))
 
   let group: ButtonSpec[]
   let control: ButtonSpec
@@ -83,7 +83,7 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
       if (v === view) return PRESSED
       // The terminal is always reachable; the conversation views need the gate.
       if (v !== 'terminal' && !viewGate.ok) return { kind: 'disabled', why: t(`status.mode.${viewGate.reason}`) }
-      return { kind: 'action', run: () => useSessionViewStore.getState().setView(tabId, pane.id, sessionCode, v) }
+      return { kind: 'action', run: () => useSessionViewStore.getState().setView(tabId, pane.id, binding, v) }
     }
     group = [
       { id: 'terminal', icon: TerminalWindow, label: 'status.mode.terminal', state: toView('terminal'), toggle: true },

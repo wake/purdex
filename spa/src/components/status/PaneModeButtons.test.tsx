@@ -12,7 +12,7 @@ import { useAgentStore } from '../../stores/useAgentStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useHandoffDialogStore } from '../../stores/useHandoffDialogStore'
-import { useSessionViewStore, selectSessionView } from '../../stores/useSessionViewStore'
+import { useSessionViewStore, selectSessionView, sessionBinding } from '../../stores/useSessionViewStore'
 import { registerTakeToTerminal, type TakeToTerminalEntry } from '../../lib/nex/take-to-terminal-registry'
 import { compositeKey } from '../../lib/composite-key'
 import { findPane } from '../../lib/pane-tree'
@@ -71,7 +71,7 @@ const pressed = () => GROUP.filter((n) => {
   const b = screen.queryByRole('button', { name: n })
   return b?.getAttribute('aria-pressed') === 'true'
 })
-const viewOfTarget = (code: string) => selectSessionView(TAB, TARGET, code)(useSessionViewStore.getState())
+const viewOfTarget = (code: string) => selectSessionView(TAB, TARGET, sessionBinding(H, code))(useSessionViewStore.getState())
 
 const unregister: Array<() => void> = []
 function registerTake(paneId: string, entry: Partial<TakeToTerminalEntry> = {}): TakeToTerminalEntry {
@@ -117,7 +117,7 @@ describe('PaneModeButtons — a tmux-session target', () => {
     fireEvent.click(button('Terminal'))
     expect(viewOfTarget('targ01')).toBe('terminal')
     expect(pressed()).toEqual(['Terminal'])
-    expect(selectSessionView(TAB, PRIMARY, 'prim01')(useSessionViewStore.getState())).toBe('terminal')
+    expect(selectSessionView(TAB, PRIMARY, sessionBinding(H, 'prim01'))(useSessionViewStore.getState())).toBe('terminal')
   })
 
   // The view is a way of looking, not a handoff: it must not touch the dialog or the pane's content.
@@ -217,7 +217,7 @@ describe('PaneModeButtons — a tmux-session target', () => {
 
   it('a pane rebound to another session starts at the terminal again', () => {
     ready()
-    useSessionViewStore.getState().setView(TAB, TARGET, 'old001', 'chat')
+    useSessionViewStore.getState().setView(TAB, TARGET, sessionBinding(H, 'old001'), 'chat')
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
     expect(pressed()).toEqual(['Terminal'])
   })

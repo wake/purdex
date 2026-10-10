@@ -5,7 +5,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { findPane } from '../lib/pane-tree'
-import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
+import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { useTabStore } from './useTabStore'
 
 export type SessionView = 'terminal' | 'deck' | 'chat'
@@ -13,24 +13,29 @@ export type ConversationView = Exclude<SessionView, 'terminal'>
 
 export interface SessionViewRecord {
   view: ConversationView
-  sessionCode: string
+  /** What the choice was made for (`sessionBinding`): a pane rebound to another session, or another host's same-named
+   *  one, is not the same binding and starts at the terminal again. */
+  binding: string
 }
 
 const VIEWS: readonly string[] = ['deck', 'chat']
+
+/** The session a pane shows: `${hostId}\0${sessionCode}` (codes repeat across hosts, so the code alone is not it). */
+export const sessionBinding = (hostId: string, sessionCode: string): string => `${hostId}\0${sessionCode}`
 
 /** `${tabId}\0${paneId}` — a NUL cannot appear in either id. */
 export const viewKey = (tabId: string, paneId: string): string => `${tabId}\0${paneId}`
 
 interface SessionViewState {
   byPane: Record<string, SessionViewRecord>
-  setView: (tabId: string, paneId: string, sessionCode: string, view: SessionView) => void
+  setView: (tabId: string, paneId: string, binding: string, view: SessionView) => void
 }
 
 export const useSessionViewStore = create<SessionViewState>()(
   persist(
     (set) => ({
       byPane: {},
-      setView: (tabId, paneId, sessionCode, view) =>
+      setView: (tabId, paneId, binding, view) =>
         set((s) => {
           const key = viewKey(tabId, paneId)
           if (view === 'terminal') {
@@ -40,8 +45,8 @@ export const useSessionViewStore = create<SessionViewState>()(
             return { byPane }
           }
           const cur = s.byPane[key]
-          if (cur && cur.view === view && cur.sessionCode === sessionCode) return s
-          return { byPane: { ...s.byPane, [key]: { view, sessionCode } } }
+          if (cur && cur.view === view && cur.binding === binding) return s
+          return { byPane: { ...s.byPane, [key]: { view, binding } } }
         }),
     }),
     {
@@ -55,8 +60,8 @@ export const useSessionViewStore = create<SessionViewState>()(
           for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
             const r = v as Partial<SessionViewRecord> | null
             if (r && typeof r === 'object' && typeof r.view === 'string' && VIEWS.includes(r.view)
-              && typeof r.sessionCode === 'string') {
-              byPane[k] = { view: r.view as ConversationView, sessionCode: r.sessionCode }
+              && typeof r.binding === 'string') {
+              byPane[k] = { view: r.view as ConversationView, binding: r.binding }
             }
           }
         }
@@ -66,13 +71,16 @@ export const useSessionViewStore = create<SessionViewState>()(
   ),
 )
 
-/** The view of a pane now showing `sessionCode`: the recorded one if it was chosen for this session, else the terminal. */
-export function selectSessionView(tabId: string, paneId: string, sessionCode: string) {
+/** The view of a pane now showing `binding`: the recorded one if it was chosen for this session, else the terminal. */
+export function selectSessionView(tabId: string, paneId: string, binding: string) {
   return (s: Pick<SessionViewState, 'byPane'>): SessionView => {
     const r = s.byPane[viewKey(tabId, paneId)]
-    return r && r.sessionCode === sessionCode ? r.view : 'terminal'
+    return r && r.binding === binding ? r.view : 'terminal'
   }
 }
+
+// Another window of this client writes the same key: read it again, or the next write here would overwrite it (lost update).
+syncManager.register(STORAGE_KEYS.SESSION_VIEW, useSessionViewStore)
 
 let uninstallCleanup: (() => void) | null = null
 

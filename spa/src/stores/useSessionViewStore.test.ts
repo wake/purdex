@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useSessionViewStore, selectSessionView, viewKey, installSessionViewCleanup } from './useSessionViewStore'
+import { useSessionViewStore, selectSessionView, sessionBinding, viewKey, installSessionViewCleanup } from './useSessionViewStore'
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
 import { STORAGE_KEYS } from '../lib/storage'
@@ -32,6 +32,15 @@ describe('selectSessionView', () => {
   })
 })
 
+describe('sessionBinding', () => {
+  // codes repeat across hosts: the same code on another host is another session
+  it('tells the same code on two hosts apart', () => {
+    expect(sessionBinding('h1', 'dev001')).not.toBe(sessionBinding('h2', 'dev001'))
+    useSessionViewStore.getState().setView('t1', 'p1', sessionBinding('h1', 'dev001'), 'deck')
+    expect(selectSessionView('t1', 'p1', sessionBinding('h2', 'dev001'))(useSessionViewStore.getState())).toBe('terminal')
+  })
+})
+
 describe('setView', () => {
   it('the terminal is the absence of a record', () => {
     const { setView } = useSessionViewStore.getState()
@@ -54,12 +63,12 @@ describe('persistence', () => {
     expect(raw).toBeTruthy()
     const state = JSON.parse(raw as string).state
     expect(Object.keys(state)).toEqual(['byPane'])
-    expect(state.byPane[viewKey('t1', 'p1')]).toEqual({ view: 'chat', sessionCode: 'code' })
+    expect(state.byPane[viewKey('t1', 'p1')]).toEqual({ view: 'chat', binding: 'code' })
   })
 
   it('restores from storage', async () => {
     localStorage.setItem(STORAGE_KEYS.SESSION_VIEW, JSON.stringify({
-      state: { byPane: { [viewKey('t1', 'p1')]: { view: 'deck', sessionCode: 'code' } } }, version: 0,
+      state: { byPane: { [viewKey('t1', 'p1')]: { view: 'deck', binding: 'code' } } }, version: 0,
     }))
     await useSessionViewStore.persist.rehydrate()
     expect(selectSessionView('t1', 'p1', 'code')(useSessionViewStore.getState())).toBe('deck')
@@ -67,10 +76,20 @@ describe('persistence', () => {
 
   it('drops a damaged record instead of throwing', async () => {
     localStorage.setItem(STORAGE_KEYS.SESSION_VIEW, JSON.stringify({
-      state: { byPane: { a: { view: 'sideways', sessionCode: 'c' }, b: 5, c: { view: 'deck', sessionCode: 'ok' } } }, version: 0,
+      state: { byPane: { a: { view: 'sideways', binding: 'c' }, b: 5, c: { view: 'deck', binding: 'ok' } } }, version: 0,
     }))
     await useSessionViewStore.persist.rehydrate()
-    expect(useSessionViewStore.getState().byPane).toEqual({ c: { view: 'deck', sessionCode: 'ok' } })
+    expect(useSessionViewStore.getState().byPane).toEqual({ c: { view: 'deck', binding: 'ok' } })
+  })
+})
+
+// Another window of this client writes the same key; without the sync registration the next write here would overwrite it.
+describe('across windows', () => {
+  it('re-reads the key when another window changed it', async () => {
+    const raw = JSON.stringify({ state: { byPane: { [viewKey('t9', 'p9')]: { view: 'chat', binding: 'b' } } }, version: 0 })
+    localStorage.setItem(STORAGE_KEYS.SESSION_VIEW, raw)
+    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEYS.SESSION_VIEW, newValue: raw, storageArea: localStorage }))
+    await vi.waitFor(() => expect(selectSessionView('t9', 'p9', 'b')(useSessionViewStore.getState())).toBe('chat'))
   })
 })
 

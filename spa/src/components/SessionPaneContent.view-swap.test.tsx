@@ -11,7 +11,7 @@ import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
-import { useSessionViewStore } from '../stores/useSessionViewStore'
+import { useSessionViewStore, sessionBinding } from '../stores/useSessionViewStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
@@ -64,7 +64,7 @@ beforeEach(() => {
 
 const layer = () => screen.getByTestId('session-terminal-layer')
 const setView = (v: 'terminal' | 'deck' | 'chat') =>
-  act(() => useSessionViewStore.getState().setView(sessionTab.id, paneIdOf(sessionTab), CODE, v))
+  act(() => useSessionViewStore.getState().setView(sessionTab.id, paneIdOf(sessionTab), sessionBinding(H, CODE), v))
 
 describe('the swap inside a pane', () => {
   it('keeps the same terminal mounted across deck, chat and back (no reconnect)', () => {
@@ -99,8 +99,14 @@ describe('the swap inside a pane', () => {
     expect(seen.last?.isFocusTarget).toBe(false)
   })
 
+  it('a view chosen for the same code on another host does not apply to this pane', () => {
+    act(() => useSessionViewStore.getState().setView(sessionTab.id, paneIdOf(sessionTab), sessionBinding('host-2', CODE), 'deck'))
+    render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    expect(screen.queryByTestId('session-view-deck')).toBeNull()
+  })
+
   it('a view chosen for another session does not apply to this pane', () => {
-    act(() => useSessionViewStore.getState().setView(sessionTab.id, paneIdOf(sessionTab), 'other01', 'deck'))
+    act(() => useSessionViewStore.getState().setView(sessionTab.id, paneIdOf(sessionTab), sessionBinding(H, 'other01'), 'deck'))
     render(<TabContent activeTab={sessionTab} allTabs={all} />)
     expect(screen.queryByTestId('session-view-deck')).toBeNull()
     expect(seen.last?.visible).toBe(true)
