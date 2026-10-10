@@ -109,3 +109,40 @@ func TestMsgSend_AnUncertainSendIsSaidOnStderr(t *testing.T) {
 	}
 	wantUncertainNote(t, "pdx msg", stderr.String())
 }
+
+// --json keeps stdout the daemon's JSON as it is; the note still goes to stderr. (codex, #2595.)
+func TestMsgSend_JSONModeSaysUncertainOnStderrAndKeepsStdoutRaw(t *testing.T) {
+	body, _ := json.Marshal(uncertainSend())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(body) }))
+	defer srv.Close()
+	cfgPath := writeTestConfig(t, srv.URL, "sekret")
+	var stdout, stderr bytes.Buffer
+	code := runMsgCmd([]string{"send", "air/_abc123", "hello", "--json", "--config", cfgPath},
+		fakeGetenv(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/cc.sock"}), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(stdout.String(), `"delivery_uncertain"`) || strings.Contains(stdout.String(), "Do not send") {
+		t.Errorf("stdout = %q, want the daemon's JSON alone", stdout.String())
+	}
+	wantUncertainNote(t, "pdx msg", stderr.String())
+}
+
+// An answer that is not JSON at all — a proxy's page, a cut body — is not "delivered": the command says it could not read it and
+// that the message may or may not have arrived. (A valid JSON answer without a result, like an old daemon's, stays quiet.)
+func TestReport_AnUnreadableSendAnswerIsSaidOnStderr(t *testing.T) {
+	fixedReportID(t, fakeReportID)
+	d := &fakeReportDaemon{sendRaw: `{"result":"delivery_unc`}
+	code, _, stderr := driveReport(t, d, "ack", "--task", fakeTaskID, "--summary", "starting now")
+	if code != ExitOK {
+		t.Fatalf("code = %d, want 0", code)
+	}
+	for _, part := range []string{"pdx report", "讀不懂", "不要重送", "pdx msg log"} {
+		if !strings.Contains(stderr, part) {
+			t.Errorf("stderr lacks %q: %q", part, stderr)
+		}
+	}
+	if len(d.sendReq) != 1 {
+		t.Errorf("sends = %d, want one", len(d.sendReq))
+	}
+}
