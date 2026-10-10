@@ -32,13 +32,13 @@ const (
 // closed channel) means the daemon died during startup and the wait ends
 // immediately instead of burning the rest of the window. notify, when non-nil, is
 // called at most once — only if the wait outlasts healthCheckNotifyAfter.
-func waitForHealthy(healthURL string, childExited <-chan error, timeout, interval time.Duration, notify func(string)) error {
-	return waitForHealthyWithNotify(healthURL, childExited, timeout, interval, healthCheckNotifyAfter, notify)
+func waitForHealthy(healthURL string, wantPID int, childExited <-chan error, timeout, interval time.Duration, notify func(string)) error {
+	return waitForHealthyWithNotify(healthURL, wantPID, childExited, timeout, interval, healthCheckNotifyAfter, notify)
 }
 
 // waitForHealthyWithNotify is waitForHealthy with an injectable notify threshold,
 // so tests do not have to wait out the production one.
-func waitForHealthyWithNotify(healthURL string, childExited <-chan error, timeout, interval, notifyAfter time.Duration, notify func(string)) error {
+func waitForHealthyWithNotify(healthURL string, wantPID int, childExited <-chan error, timeout, interval, notifyAfter time.Duration, notify func(string)) error {
 	maxProbeTimeout := 5 * interval
 	if maxProbeTimeout > timeout {
 		maxProbeTimeout = timeout
@@ -127,6 +127,9 @@ func probeHealth(ctx context.Context, client *http.Client, healthURL string, pro
 	defer resp.Body.Close()
 	return resp.StatusCode == http.StatusOK, nil
 }
+
+// killProcessGroup is a stub until the implementation commit (#958).
+func killProcessGroup(pid int) error { return nil }
 
 // healthTimeoutError describes a daemon that never answered inside the window.
 func healthTimeoutError(timeout time.Duration) error {
@@ -314,7 +317,7 @@ func runStart(args []string) {
 		fmt.Fprintf(os.Stderr, "pdx: %s\n", msg)
 	}
 
-	if err := waitForHealthy(healthURL, childExited, healthCheckTimeout, healthCheckInterval, notify); err != nil {
+	if err := waitForHealthy(healthURL, childPid, childExited, healthCheckTimeout, healthCheckInterval, notify); err != nil {
 		fmt.Fprintf(os.Stderr, "pdx: %v\n", err)
 		cmd.Process.Kill()
 		fmt.Fprintf(os.Stderr, "pdx: last 20 lines of %s:\n\n", filepath.Join(logsDir, "pdx.log"))
