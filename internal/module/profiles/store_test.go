@@ -548,8 +548,8 @@ func TestStoreConcurrentDeleteProfileVsPutSection(t *testing.T) {
 		require.Equal(t, PutApplied, res.Outcome, "round %d", i)
 		require.True(t, res.Changed, "round %d", i)
 	}
+	// Who won how often is scheduling, not behaviour: under CPU load the put can win every round (or lose every one), so
+	// the split is logged and never asserted (#2226). What the test proves is the per-round invariants above: no error from
+	// the delete, no profile and no section row left, a refused put names ErrProfileNotFound and changed nothing.
 	t.Logf("put applied before the delete %d, refused %d of %d rounds", applied, refused, rounds)
-	// The put wins only a few rounds in a hundred, so its count is logged, not
-	// asserted — a zero there is bad luck, not a bug.
-	assert.NotZero(t, refused, "the delete never won a round")
 }

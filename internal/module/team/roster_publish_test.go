@@ -144,6 +144,7 @@ func TestRoster_SnapshotToEveryNewSubscriber(t *testing.T) {
 // it is closed so it reconnects for the snapshot; one with room gets it.
 // Mutation gate: plain Broadcast → red.
 func TestRoster_ChangedIsStrict(t *testing.T) {
+	captureEventsLog(t) // the hub logs the drop it is asked to make: expected output, not a failure (#2210)
 	f := newFixture(t)
 	w := f.watchRoster()
 	full := f.core.Events.AddTestSubscriber()
