@@ -135,6 +135,16 @@ func TestWrite_AFileIsBounded(t *testing.T) {
 	}
 }
 
+// A file placed by hand over the bound is not an entry (and is deleted), so a boot never loads an unbounded file.
+func TestLoad_AFileOverTheBoundIsDropped(t *testing.T) {
+	dir := t.TempDir()
+	body := fmt.Sprintf(`{"at_ms":1,"raw_status":{"session_id":%q,"pad":%q}}`, sidA, strings.Repeat("a", MaxFileBytes+4096))
+	os.WriteFile(filepath.Join(dir, sidA+".json"), []byte(body), 0o600)
+	if got, _ := Load(dir); len(got) != 0 {
+		t.Fatalf("an oversized file was loaded: %d entries", len(got))
+	}
+}
+
 func TestWrite_OnlyRealEntriesCountTowardTheCap(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < Cap+5; i++ {
