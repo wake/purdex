@@ -89,6 +89,28 @@ func TestSanitizePrompt(t *testing.T) {
 	}
 }
 
+// Format characters are built from code points (a literal one in the source is invisible, and a BOM is not even legal).
+func r(cp ...rune) string { return string(cp) }
+
+func TestSanitizePrompt_InvisibleFormatCharacters(t *testing.T) {
+	zwj := r(0x200d)
+	for _, c := range []struct {
+		name, in, want, code string
+	}{
+		{"bidi overrides, embeddings and isolates", "a" + r(0x202e) + "b" + r(0x202a) + "c" + r(0x2066) + "d" + r(0x2069) + "e", "abcde", ""},
+		{"zero-width space, word joiner, BOM, direction marks", "a" + r(0x200b) + "b" + r(0x2060) + "c" + r(0xfeff) + "d" + r(0x200e) + "e" + r(0x200f), "abcde", ""},
+		{"a hidden prefix cannot hide the slash", r(0x202e) + "/clear", "", "needs_terminal"},
+		{"nor the bang", r(0x200b) + "!ls", "", "needs_terminal"},
+		{"separators become line breaks", "one" + r(0x2028) + "two" + r(0x2029) + "three", "one\ntwo\nthree", ""},
+		{"the joiner of an emoji sequence stays", "👨" + zwj + "👩" + zwj + "👧", "👨" + zwj + "👩" + zwj + "👧", ""},
+	} {
+		got, code := sanitizePrompt(c.in)
+		if got != c.want || code != c.code {
+			t.Errorf("%s: %q → %q %q, want %q %q", c.name, c.in, got, code, c.want, c.code)
+		}
+	}
+}
+
 func submitPath(sid string) string { return "/api/conversations/claude/" + sid + "/submit" }
 
 func TestSubmit_ReportsTheModsAnswer(t *testing.T) {

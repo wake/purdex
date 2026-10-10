@@ -201,12 +201,20 @@ func (q *Queue) sweepLedger() {
 			delete(q.ledger, k)
 		}
 	}
-	if len(q.ledger) > maxLedger { // a flood of distinct ids: forget the oldest settled ones
+	// A flood of distinct ids: forget the OLDEST settled rows first; an open (queued or handed-out) row is never forgotten,
+	// so a request that may still run cannot be sent a second time.
+	for len(q.ledger) > maxLedger {
+		var oldest string
+		var at time.Time
 		for k, e := range q.ledger {
-			if e.state == stDone && len(q.ledger) > maxLedger {
-				delete(q.ledger, k)
+			if e.state == stDone && (oldest == "" || e.finishedAt.Before(at)) {
+				oldest, at = k, e.finishedAt
 			}
 		}
+		if oldest == "" {
+			return // nothing settled to forget: the open rows are bounded by the per-session queue
+		}
+		delete(q.ledger, oldest)
 	}
 }
 
@@ -333,8 +341,11 @@ func (q *Queue) Next(ctx context.Context, stream, sessionID string, wait time.Du
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	for {
-		owner, ok := q.owners.OwnerOf(sessionID)
 		q.mu.Lock()
+		// The owner is read inside the critical section that creates the lease, so a request is never leased on the word of
+		// an owner read before another poll or an expiry changed the queue. (The registry itself can still move on right
+		// after: the mod re-reads its session id before it submits, and the result's owner re-check settles the rest.)
+		owner, ok := q.owners.OwnerOf(sessionID)
 		// A handed-out request whose result never came is unknown after HandTimeout whether or not its caller is still
 		// waiting (a caller that went away leaves nobody to enforce it): the session must not stay blocked for good.
 		if b := q.busy[sessionID]; b != nil && q.Now().Sub(b.handedAt) > q.handTimeout() {

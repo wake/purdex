@@ -44,7 +44,13 @@ func sanitizePrompt(s string) (text, code string) {
 	s = strings.ReplaceAll(s, "\t", "    ")
 	var b strings.Builder
 	for _, r := range s {
-		if r == '\n' || !unicode.IsControl(r) {
+		switch {
+		case r == '\n':
+			b.WriteRune(r)
+		case r == ' ' || r == ' ': // line / paragraph separators read as line breaks
+			b.WriteRune('\n')
+		case unicode.IsControl(r) || hidden(r):
+		default:
 			b.WriteRune(r)
 		}
 	}
@@ -68,6 +74,22 @@ func sanitizePrompt(s string) (text, code string) {
 		return "", "needs_terminal"
 	}
 	return text, ""
+}
+
+// hidden: format characters that change how text is shown without being visible - the bidi overrides, embeddings and
+// isolates, and the zero-width space, word joiner and byte-order mark. They would let the person's screen and the model's
+// input disagree (and hide a leading "/" or "!"). The zero-width joiner and non-joiner stay: emoji sequences and several
+// scripts need them.
+func hidden(r rune) bool {
+	switch {
+	case r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069: // bidi embeddings, overrides, isolates
+		return true
+	case r == 0x200E || r == 0x200F || r == 0x061C: // implicit direction marks
+		return true
+	case r == 0x200B || r == 0x2060 || r == 0xFEFF: // zero-width space, word joiner, BOM
+		return true
+	}
+	return false
 }
 
 func (m *Module) promptSender() PromptSender {

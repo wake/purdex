@@ -330,6 +330,41 @@ func TestNext_ExpiredRequestIsNotHandedOut(t *testing.T) {
 	take(t, ch)
 }
 
+// A flood of distinct ids forgets the OLDEST settled rows first and never an open one: a request that may still run is
+// not sent a second time. Mutation gate: drop any settled row (map order), or an open one → red (codex attack).
+func TestLedger_FloodForgetsTheOldestSettledAndNeverAnOpenRow(t *testing.T) {
+	q, _ := newQ(t)
+	q.Wait, q.HandTimeout = time.Minute, time.Minute
+	now := time.Unix(1_700_000_000, 0)
+	q.Now = func() time.Time { return now }
+	open := submitAsync(q, "s1", "open", "x")
+	time.Sleep(20 * time.Millisecond)
+	j := next(t, q, "mod1", "s1") // handed out, still open
+	_ = j
+	q.mu.Lock()
+	for i := 0; i < maxLedger+10; i++ {
+		now = now.Add(time.Second)
+		id := "done-" + time.Duration(i).String()
+		e := &entry{key: id, state: stDone, finishedAt: now, done: make(chan struct{})}
+		q.ledger[id] = e
+	}
+	q.sweepLedger()
+	_, openKept := q.ledger["open"]
+	_, oldestKept := q.ledger["done-"+time.Duration(0).String()]
+	_, newestKept := q.ledger["done-"+time.Duration(maxLedger+9).String()]
+	n := len(q.ledger)
+	q.mu.Unlock()
+	if !openKept || oldestKept || !newestKept || n > maxLedger {
+		t.Fatalf("open kept %v, oldest kept %v, newest kept %v, size %d", openKept, oldestKept, newestKept, n)
+	}
+	// and a repeat of the open id still answers the open request, not a new one
+	r := submitAsync(q, "s1", "open", "x")
+	q.Result("mod1", j.ID, Outcome{Status: Accepted})
+	if take(t, open).Status != Accepted || take(t, r).Status != Accepted {
+		t.Fatal("the repeat did not share the open request")
+	}
+}
+
 // A caller that disconnects after the hand-out must not leave the session blocked: the lease expires on its own and the
 // next request is handed out (codex R1). Mutation gate: drop the expiry in Next → red.
 func TestNext_HandedRequestOfAGoneCallerExpires(t *testing.T) {
