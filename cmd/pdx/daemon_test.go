@@ -224,7 +224,7 @@ func TestWaitForHealthyImmediate(t *testing.T) {
 
 	notified := 0
 	start := time.Now()
-	err := waitForHealthy(srv.URL, make(chan error, 1), 2*time.Second, 40*time.Millisecond, func(string) {
+	err := waitForHealthy(srv.URL, 0, make(chan error, 1), 2*time.Second, 40*time.Millisecond, func(string) {
 		notified++
 	})
 	elapsed := time.Since(start)
@@ -256,7 +256,7 @@ func TestWaitForHealthyAfterSeveralProbes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := waitForHealthy(srv.URL, make(chan error, 1), 4*time.Second, 20*time.Millisecond, nil)
+	err := waitForHealthy(srv.URL, 0, make(chan error, 1), 4*time.Second, 20*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("waitForHealthy: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestWaitForHealthyTimesOut(t *testing.T) {
 
 	timeout := 150 * time.Millisecond
 	start := time.Now()
-	err := waitForHealthy(srv.URL, make(chan error, 1), timeout, 40*time.Millisecond, nil)
+	err := waitForHealthy(srv.URL, 0, make(chan error, 1), timeout, 40*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -304,7 +304,7 @@ func TestWaitForHealthyChildExitsEarly(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err := waitForHealthy(srv.URL, childExited, timeout, 20*time.Millisecond, nil)
+	err := waitForHealthy(srv.URL, 0, childExited, timeout, 20*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -345,7 +345,7 @@ func TestWaitForHealthyNotifiesOnSlowWait(t *testing.T) {
 		msgs = append(msgs, m)
 	}
 
-	err := waitForHealthyWithNotify(srv.URL, make(chan error, 1), 4*time.Second, 20*time.Millisecond, 60*time.Millisecond, notify)
+	err := waitForHealthyWithNotify(srv.URL, 0, make(chan error, 1), 4*time.Second, 20*time.Millisecond, 60*time.Millisecond, notify)
 	if err != nil {
 		t.Fatalf("waitForHealthy: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestWaitForHealthyChildExitsDuringProbe(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := waitForHealthy(srv.URL, childExited, 2*time.Second, 20*time.Millisecond, nil)
+	err := waitForHealthy(srv.URL, 0, childExited, 2*time.Second, 20*time.Millisecond, nil)
 	if err == nil {
 		t.Fatal("accepted a 200 from a daemon that had already exited during startup")
 	}
@@ -413,7 +413,7 @@ func TestWaitForHealthyRejectsResponseAfterDeadline(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := waitForHealthy(srv.URL, make(chan error, 1), timeout, interval, nil)
+	err := waitForHealthy(srv.URL, 0, make(chan error, 1), timeout, interval, nil)
 	elapsed := time.Since(start)
 
 	if err == nil {

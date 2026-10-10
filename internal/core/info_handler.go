@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -25,6 +26,9 @@ func (c *Core) HandleHealth(w http.ResponseWriter, r *http.Request) {
 		"version": buildinfo.Version,
 		"hash":    buildinfo.Hash,
 		"boot_id": c.BootID,
+		// `pdx start` compares it with the child it spawned, so another daemon answering on the same address is not
+		// taken for the new one (#959).
+		"pid": os.Getpid(),
 	})
 }
 
