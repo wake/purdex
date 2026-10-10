@@ -38,30 +38,40 @@ interface Props {
   open: boolean
   /** Closes the panel (scrim click and Esc in overlay mode). */
   onClose: () => void
+  /** False for a pane that is not the focused one: its overlay does not answer Esc (the scrim and the panel's ✕ still close it). Default true. */
+  escActive?: boolean
   /** Test hook: use this container width instead of measuring. */
   widthOverride?: number
 }
 
-export function SessionSplit({ children, panel, open, onClose, widthOverride }: Props) {
+export function SessionSplit({ children, panel, open, onClose, escActive = true, widthOverride }: Props) {
   const t = useI18nStore((s) => s.t)
   const [width, attach] = useWidth(widthOverride)
   const measured = width !== null
   const overlay = open && measured && !panelDocks(width)
+  // Modal behaviour (focus moves in, Tab is held, the chat is inert) belongs to the FOCUSED pane only: another pane's overlay,
+  // e.g. one restored from memory, is drawn with its scrim but never takes the keyboard from the pane that has it.
+  const modal = overlay && escActive
 
   const dialog = useRef<HTMLDivElement>(null)
   const lastFocus = useRef<HTMLElement | null>(null)
 
   // Overlay is modal: focus goes into the panel, and back to where it was when the overlay ends.
   useEffect(() => {
-    if (!overlay) return
+    if (!modal) return
     const opener = lastFocus.current
     const d = dialog.current
     if (d) (focusables(d)[0] ?? d).focus()
-    return () => { if (opener && opener.isConnected) opener.focus() }
-  }, [overlay])
+    return () => {
+      // give focus back only if it is still ours (inside the overlay, or nowhere): a pane that lost focus to another one must not take it back
+      const at = document.activeElement
+      const ours = !at || at === document.body || (d !== null && d.contains(at))
+      if (ours && opener && opener.isConnected) opener.focus()
+    }
+  }, [modal])
 
   const trapTab = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Tab') return
+    if (e.key !== 'Tab' || !modal) return
     const d = dialog.current
     if (!d) return
     const list = focusables(d)
@@ -74,7 +84,7 @@ export function SessionSplit({ children, panel, open, onClose, widthOverride }: 
 
   // Overlay only: Esc closes — unless a text field has it.
   useEffect(() => {
-    if (!overlay) return
+    if (!overlay || !escActive) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
       const el = e.target as HTMLElement | null
@@ -83,19 +93,19 @@ export function SessionSplit({ children, panel, open, onClose, widthOverride }: 
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [overlay, onClose])
+  }, [overlay, escActive, onClose])
 
   return (
     <div ref={attach} data-testid="session-split" data-mode={!open ? 'closed' : !measured ? 'measuring' : overlay ? 'overlay' : 'docked'} className="relative flex h-full min-w-0"
       onFocusCapture={(e) => { if (!overlay) lastFocus.current = e.target as HTMLElement }}>
-      <div data-testid="split-chat" inert={overlay} aria-hidden={overlay ? true : undefined} className="flex min-w-0 flex-1 flex-col">{children}</div>
+      <div data-testid="split-chat" inert={modal} aria-hidden={modal ? true : undefined} className="flex min-w-0 flex-1 flex-col">{children}</div>
       {open && measured && !overlay && panel}
       {overlay && (
         <div data-testid="split-overlay" className="absolute inset-0 z-10">
           <button type="button" data-testid="split-scrim" tabIndex={-1} aria-label={t('split.close')} onClick={onClose}
             className="absolute inset-0 cursor-default bg-black/40" />
           {/* full width so the panel's own 42 % / 320–640 rule resolves against the pane; clicks outside the panel fall through to the scrim */}
-          <div ref={dialog} role="dialog" aria-modal="true" aria-label={t('split.panel')} tabIndex={-1} onKeyDown={trapTab}
+          <div ref={dialog} role="dialog" aria-modal={modal ? true : undefined} aria-label={t('split.panel')} tabIndex={-1} onKeyDown={trapTab}
             className="pointer-events-none relative flex h-full w-full justify-end outline-none *:pointer-events-auto *:shadow-2xl">{panel}</div>
         </div>
       )}

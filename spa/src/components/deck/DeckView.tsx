@@ -7,23 +7,15 @@ import { FoldContext } from '../room/fold-context'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import { noteDeckPane, usePaneFoldStore } from '../../lib/conversations/fold-memory'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
-import type { Capabilities, ConversationItem, Turn } from '../../lib/conversations/types'
+import type { Turn } from '../../lib/conversations/types'
 import { useConversationStore, type ConversationEntry } from '../../stores/useConversationStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { DeckItem } from './DeckItem'
+import { footerContext, type DeckFooterContext } from './footer-context'
 import type { StepActions } from './StepViews'
+import type { PanelContent } from '../../lib/conversations/panel-memory'
 
-/** What the footer needs to draw an input for this conversation. */
-export interface DeckFooterContext {
-  paneKey: string
-  hostId: string
-  sessionId: string
-  capabilities: Capabilities | undefined
-  items: readonly ConversationItem[]
-  /** The header status is idle. */
-  idle: boolean
-  onSwitchToTerminal: () => void
-}
+export type { DeckFooterContext }
 
 export interface DeckViewProps {
   paneId: string
@@ -32,7 +24,8 @@ export interface DeckViewProps {
   entry: ConversationEntry
   onSwitchToTerminal: () => void
   footer?: (ctx: DeckFooterContext) => ReactNode
-  actions?: StepActions
+  /** 「顯示全部」 and a subagent line open the pane's right panel on that step (the turn is known here, not to the step). */
+  onOpenPanel?: (content: PanelContent) => void
 }
 
 /** Within this many pixels of the top the next older page is read. */
@@ -42,8 +35,12 @@ const AUTO_PAGE_TRIES = 3
 const AUTO_PAGE_RETRY_MS = 1000
 
 // Memoized: the store keeps an unchanged turn's object, so a live update re-draws only the turn that changed.
-const TurnView = memo(function TurnView({ turn, actions }: { turn: Turn; actions?: StepActions }) {
+const TurnView = memo(function TurnView({ turn, onOpenPanel }: { turn: Turn; onOpenPanel?: (content: PanelContent) => void }) {
   const t = useI18nStore((s) => s.t)
+  const actions = useMemo<StepActions | undefined>(() => onOpenPanel && ({
+    onShowAll: (s) => onOpenPanel({ kind: 'output', turnId: turn.id, stepId: s.id }),
+    onOpenSubagent: (s) => onOpenPanel({ kind: 'subagent', turnId: turn.id, stepId: s.id }),
+  }), [onOpenPanel, turn.id])
   return (
     <section data-testid="deck-turn" data-turn-index={turn.index} className={`space-y-3 ${SCROLL_ANCHOR_CLASS}`}>
       {turn.omitted_items ? (
@@ -55,7 +52,7 @@ const TurnView = memo(function TurnView({ turn, actions }: { turn: Turn; actions
   )
 })
 
-export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, actions }: DeckViewProps) {
+export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, onOpenPanel }: DeckViewProps) {
   const t = useI18nStore((s) => s.t)
   const { doc } = entry
   const foldStore = usePaneFoldStore(`${paneId}\0${sessionId}`)
@@ -120,15 +117,11 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
               {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
             </div>
           ) : (
-            doc.turns.map((turn) => <TurnView key={turn.id} turn={turn} actions={actions} />)
+            doc.turns.map((turn) => <TurnView key={turn.id} turn={turn} onOpenPanel={onOpenPanel} />)
           )}
         </FoldContext.Provider>
       </div>
-      {footer?.({
-        paneKey: paneId, hostId, sessionId,
-        capabilities: doc.capabilities ?? undefined,
-        items, idle: doc.header?.status === 'idle', onSwitchToTerminal,
-      })}
+      {footer?.(footerContext(paneId, hostId, sessionId, doc, items, onSwitchToTerminal))}
     </div>
   )
 }

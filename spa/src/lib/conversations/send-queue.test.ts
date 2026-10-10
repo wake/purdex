@@ -126,17 +126,23 @@ describe('busy', () => {
     expect(calls.map((c) => c.text)).toEqual(['one', 'one'])
   })
 
-  it('an idle observed BEFORE the busy answer does not resend (no loop on a stale header)', async () => {
+  it('an idle observed while the request is in flight resends once on the busy answer; a stale header cannot loop it', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
-    q.setIdle(true)
+    q.setIdle(false)
     q.enqueue('x')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q.setIdle(true) // observed while the request is in flight
+    q.setIdle(true) // a real edge, observed while the request is in flight
     calls[0].resolve({ kind: 'busy' })
     await flush()
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(2)
+    calls[1].resolve({ kind: 'busy' })
+    await flush()
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(2) // the observation is spent: no immediate third request, only the 1 s backoff follows
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(3)
   })
 
   it('busy settled while the pane was unmounted: the idle the remount reports resends exactly once', async () => {
@@ -148,8 +154,10 @@ describe('busy', () => {
     calls[0].resolve({ kind: 'busy' }) // pane unmounted: nothing observes
     await flush()
     expect(calls).toHaveLength(1)
-    q.setIdle(true) // remount: idle is still true, no false -> true edge
+    q.setIdle(true) // remount: idle is still true, no false -> true edge: the pending backoff keeps its schedule
     await flush()
+    expect(calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(calls).toHaveLength(2)
     expect(calls[1].id).toBe(id)
     calls[1].resolve({ kind: 'accepted' })
@@ -380,6 +388,282 @@ describe('failures', () => {
     const { port } = fakePort()
     await new SendQueue(port).interrupt()
     expect(port.interrupt).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('an idle observed while a request is in flight (the remount race)', () => {
+  const busy = { kind: 'busy' } as SendOutcome
+
+  it('is used once the busy answer lands: resent at once with the same id, not stuck in waiting', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const id = q.enqueue('hi')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setIdle(true) // the remounted pane reports idle while the request is still out: setIdle has nothing waiting to resend
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(2)
+    expect(calls[1].id).toBe(id)
+  })
+
+  it('is spent by that one resend: a second busy waits for a NEW observation (no loop)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('hi')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setIdle(true)
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    calls[1].resolve(busy)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(2) // spent: no immediate third request (the backoff is the only thing that follows)
+    expect(q.entries()[0].state).toBe('waiting')
+  })
+
+  it('an idle seen BEFORE the request started does not count, nor does one followed by not-idle, nor a settled one', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setIdle(true) // nothing in flight yet
+    q.enqueue('a')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q.entries()[0].state).toBe('waiting')
+    expect(calls).toHaveLength(1)
+    const q2 = new SendQueue(port)
+    q2.enqueue('b')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q2.setIdle(true); q2.setIdle(false) // the header went busy again
+    calls[calls.length - 1].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q2.entries()[0].state).toBe('waiting')
+  })
+
+  it('the observation belongs to ITS entry: A in flight, idle seen, A echoed by the transcript, B goes out, A\'s answer lands, B answers busy -> B waits (no extra submit)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const a = q.enqueue('A')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.enqueue('B')
+    q.setIdle(true) // seen while A is in flight
+    q.reconcile([user('ua', 'A', 1_000_000, { client_msg_id: a })]) // the echo settles A early; B is pumped (undo window 3 s)
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    expect(calls.map((c) => c.text)).toEqual(['A', 'B'])
+    calls[0].resolve({ kind: 'accepted' }) // A's late answer
+    await vi.advanceTimersByTimeAsync(0)
+    calls[1].resolve(busy) // B refused because A is running
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(2) // A's observation is not B's: no immediate resend (only B's own 1 s backoff follows)
+    expect(q.entries().find((e) => e.text === 'B')!.state).toBe('waiting')
+  })
+
+  it('an observation does not leak into a later request after an accepted answer', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('a')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setIdle(true)
+    calls[0].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(0)
+    q.enqueue('b')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[1].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(2)
+    expect(q.entries().find((e) => e.text === 'b')!.state).toBe('waiting')
+  })
+})
+
+describe('the mod keeps answering busy for a moment after the header went idle (bounded backoff)', () => {
+  const busy = { kind: 'busy' } as SendOutcome
+  /** waiting after a first busy, then the idle edge resends and the mod is STILL busy: calls = 2, backoff pending. */
+  async function stillBusy() {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    const id = q.enqueue('hi')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    q.setIdle(true) // the edge
+    await vi.advanceTimersByTimeAsync(0)
+    calls[1].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    return { calls, q, id }
+  }
+
+  it('second busy with the header idle: retried after 1 s with the same id, and it goes through', async () => {
+    const { calls, q, id } = await stillBusy()
+    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(3)
+    expect(calls[2].id).toBe(id)
+    calls[2].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q.entries()[0].state).toBe('sent')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls).toHaveLength(3)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('the header going busy again during the backoff stops it; the next idle edge resends', async () => {
+    const { calls, q } = await stillBusy()
+    q.setIdle(false)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls).toHaveLength(2)
+    expect(q.entries()[0].state).toBe('waiting')
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(3)
+  })
+
+  it('backs off 1 s, 2 s, 4 s and then stops in waiting (no timer); a later idle edge still resends once', async () => {
+    const { calls, q } = await stillBusy()
+    for (const [wait, n] of [[1000, 3], [2000, 4], [4000, 5]] as const) {
+      await vi.advanceTimersByTimeAsync(wait - 1)
+      expect(calls).toHaveLength(n - 1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(calls).toHaveLength(n)
+      calls[n - 1].resolve(busy)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(calls).toHaveLength(5)
+    expect(q.entries()[0].state).toBe('waiting')
+    expect(vi.getTimerCount()).toBe(0)
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(6)
+    expect(new Set(calls.map((c) => c.id)).size).toBe(1)
+  })
+
+  it('a first busy while the header is already idle backs off as well (the mod lags the header)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setIdle(true)
+    q.enqueue('hi')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('taking the message back, disposing and retiring leave no timer; an accepted message is never retried', async () => {
+    const a = await stillBusy()
+    a.q.undo(a.id)
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(a.calls).toHaveLength(2)
+    const b = await stillBusy()
+    b.q.dispose()
+    expect(vi.getTimerCount()).toBe(0)
+    const c = await stillBusy()
+    c.q.retire(() => {})
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('one request at a time: a REAL idle edge during the backoff resends now and takes the timer with it', async () => {
+    const { calls, q } = await stillBusy()
+    q.setIdle(false)
+    q.setIdle(true) // false -> true: a real edge
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(calls).toHaveLength(3) // still in flight: the old timer is gone
+  })
+
+  it('the same idle reported again (a remount) neither cancels a pending backoff nor refills it', async () => {
+    const { calls, q } = await stillBusy()
+    await vi.advanceTimersByTimeAsync(500)
+    q.setIdle(true); q.setIdle(true) // remounts while the daemon is still busy
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(2) // nothing sent early
+    await vi.advanceTimersByTimeAsync(499)
+    expect(calls).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(3) // the backoff fired on schedule (1 s from the answer)
+    calls[2].resolve(busy)
+    await vi.advanceTimersByTimeAsync(0)
+    q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(2000 - 1)
+    expect(calls).toHaveLength(3) // retries were not reset: the next wait is 2 s, not 1 s
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(4)
+  })
+
+  it('remounting over and over while idle and the daemon stays busy: the total number of requests is bounded', async () => {
+    const { calls, q } = await stillBusy()
+    for (let i = 0; i < 40; i++) {
+      q.setIdle(true)
+      await vi.advanceTimersByTimeAsync(1000)
+      const last = calls[calls.length - 1]
+      last.resolve(busy)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    await vi.advanceTimersByTimeAsync(120_000)
+    // 1 first + 1 edge resend + 3 backoff + at most 1 wake-up for the exhausted waiting message
+    expect(calls.length).toBeLessThanOrEqual(6)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(q.entries()[0].state).toBe('waiting')
+  })
+
+  it('a remount after the quota is spent wakes the waiting message ONCE, without refilling; only a real edge refills', async () => {
+    const { calls, q } = await stillBusy()
+    for (const wait of [1000, 2000, 4000]) {
+      await vi.advanceTimersByTimeAsync(wait)
+      calls[calls.length - 1].resolve(busy)
+      await vi.advanceTimersByTimeAsync(0)
+    }
+    expect(calls).toHaveLength(5)
+    q.setIdle(true) // a remount: nothing pending, quota spent -> one wake-up request
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(6)
+    calls[5].resolve(busy)
+    await vi.advanceTimersByTimeAsync(60_000)
+    q.setIdle(true); q.setIdle(true)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls).toHaveLength(6) // the wake-up is once per episode
+    q.setIdle(false); q.setIdle(true) // a real edge: refilled
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(7)
+    calls[6].resolve(busy)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(calls).toHaveLength(8) // backoff available again
+  })
+})
+
+describe('remounts during a request in flight cannot buy extra requests', () => {
+  const busy = { kind: 'busy' } as SendOutcome
+
+  it('idle all along, the daemon always busy, a remount (same idle again) during EVERY request, 40 rounds: the total stays bounded', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setIdle(true)
+    q.enqueue('x')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    for (let i = 0; i < 40; i++) {
+      q.setIdle(true) // a remount while the latest request is still out
+      calls[calls.length - 1].resolve(busy) // deferred answer, busy
+      await vi.advanceTimersByTimeAsync(4000)
+      q.setIdle(true) // and one while waiting / backing off
+    }
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(calls.length).toBeLessThanOrEqual(6)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a same-value idle during a request is not recorded: its busy answer is not resent at once', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setIdle(true)
+    q.enqueue('x')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setIdle(true) // same value: no edge
+    calls[0].resolve(busy)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(calls).toHaveLength(1) // only the backoff (1 s) follows, nothing immediate
   })
 })
 

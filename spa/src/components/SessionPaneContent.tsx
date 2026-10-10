@@ -1,6 +1,5 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import TerminalView from './TerminalView'
-import { SessionViewPlaceholder } from './SessionViewPlaceholder'
 import { TerminatedPane } from './TerminatedPane'
 import { MissingHostPane } from './MissingHostPane'
 import { useTabStore } from '../stores/useTabStore'
@@ -11,9 +10,13 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { selectSessionView, sessionBinding, useSessionViewStore } from '../stores/useSessionViewStore'
 import { useAttachStall } from '../hooks/useAttachStall'
 import { useConversationOfPane } from '../hooks/useConversationOfPane'
+import { useSendQueueDriver } from '../hooks/useSendQueueDriver'
 import { useConversationViewGate } from '../hooks/useConversationViewGate'
+import { ChatPane } from './deck/ChatPane'
 import { DeckPane } from './deck/DeckPane'
 import { SessionInput } from './deck/SessionInput'
+import { SessionStatusRow } from './deck/SessionStatusRow'
+import type { DeckFooterContext } from './deck/footer-context'
 import { retireStaleSessions } from '../lib/conversations/pane-release'
 import { findPane } from '../lib/pane-tree'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
@@ -91,7 +94,20 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // (#2457). Importing the module also installs the release of a pane that leaves the tab world.
   const readSession = conversation.state === 'ready' ? conversation.sessionId : ''
   useEffect(() => { retireStaleSessions(pane.id, hostId, readSession) }, [pane.id, hostId, readSession])
+  // The send queue is driven from here, which stays mounted under every view (the terminal's too): a busy message is resent on idle
+  // and an echo is matched whatever the reader is looking at.
+  const readyDoc = conversation.state === 'ready' ? conversation.entry?.doc : undefined
+  const readyItems = useMemo(() => (readyDoc ? readyDoc.turns.flatMap((turn) => turn.items) : []), [readyDoc])
+  useSendQueueDriver(pane.id, hostId, readSession, readyDoc?.header?.status === 'idle', readyItems)
   const switchToTerminal = () => useSessionViewStore.getState().setView(tabId, pane.id, sessionBinding(hostId, sessionCode), 'terminal')
+
+  // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → input → status row.
+  const footer = (ctx: DeckFooterContext) => (
+    <div data-testid="session-footer">
+      <SessionInput {...ctx} />
+      <SessionStatusRow sessionCode={sessionCode} ctx={ctx} />
+    </div>
+  )
 
   if (content.kind === 'tmux-session' && content.terminated) {
     return <TerminatedPane content={content} tabId={tabId} paneId={pane.id} />
@@ -133,10 +149,20 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           isActive={isActive}
           isFocusTarget={isFocusTarget}
           onSwitchToTerminal={switchToTerminal}
-          footer={(ctx) => <SessionInput {...ctx} />}
+          footer={footer}
         />
       )}
-      {view === 'chat' && <SessionViewPlaceholder view={view} isActive={isActive} isFocusTarget={isFocusTarget} />}
+      {view === 'chat' && (
+        <ChatPane
+          paneId={pane.id}
+          conversation={conversation}
+          title={content.cachedName}
+          isActive={isActive}
+          isFocusTarget={isFocusTarget}
+          onSwitchToTerminal={switchToTerminal}
+          footer={footer}
+        />
+      )}
     </div>
   )
 }

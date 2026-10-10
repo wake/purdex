@@ -67,6 +67,35 @@ describe('SessionSplit', () => {
     ta.remove()
   })
 
+  it('escActive false (a pane that is not the focused one): Esc does not close its overlay, the scrim still does', () => {
+    const onClose = r(500, { escActive: false })
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('split-scrim'))
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('an overlay of a pane that is not the focused one is shown but not modal: no focus taken, chat not inert; it becomes modal when the pane gets focus and lets go when it loses it', () => {
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    const ui = (escActive: boolean) => <SessionSplit panel={<aside data-testid="the-panel"><button>in panel</button></aside>} open onClose={() => {}} widthOverride={500} escActive={escActive}><div data-testid="chat">chat</div></SessionSplit>
+    const { rerender } = render(ui(false))
+    expect(screen.getByTestId('split-overlay')).toBeTruthy() // still drawn, with its scrim
+    expect(document.activeElement).toBe(outside)
+    expect(screen.getByTestId('split-chat').hasAttribute('inert')).toBe(false)
+    expect(screen.getByRole('dialog', { hidden: true }).getAttribute('aria-modal')).toBeNull()
+    rerender(ui(true))
+    expect(screen.getByTestId('split-overlay').contains(document.activeElement)).toBe(true)
+    expect(screen.getByTestId('split-chat').hasAttribute('inert')).toBe(true)
+    // focus moves to another pane, then this pane stops being the focused one: it must not take focus back
+    outside.focus()
+    rerender(ui(false))
+    expect(document.activeElement).toBe(outside)
+    expect(screen.getByTestId('split-chat').hasAttribute('inert')).toBe(false)
+    outside.remove()
+  })
+
   it('docked: the scrim does not exist and Esc is not ours (the panel itself handles it)', () => {
     const onClose = r(900)
     expect(screen.queryByTestId('split-scrim')).toBeNull()

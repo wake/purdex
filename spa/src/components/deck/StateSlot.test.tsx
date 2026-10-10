@@ -3,7 +3,7 @@ import { render, screen, cleanup } from '@testing-library/react'
 import { StateSlot, type SlotState } from './StateSlot'
 import { formatElapsed, formatExit } from './status-row-model'
 
-const STATES: SlotState[] = ['idle', 'running', 'failed', 'denied', 'exit']
+const STATES: SlotState[] = ['idle', 'running', 'waiting', 'failed', 'denied', 'exit']
 const opt = (container: HTMLElement, k: string) => container.querySelector(`[data-state-option="${k}"]`) as HTMLElement
 
 afterEach(cleanup)
@@ -19,7 +19,7 @@ describe('StateSlot', () => {
       expect(opt(container, k).classList.contains('row-start-1')).toBe(true)
     }
     const text = slot.textContent!
-    for (const w of ['Idle', 'Working', 'Failed', 'Denied', 'exit']) expect(text).toContain(w)
+    for (const w of ['Idle', 'Working', 'Waiting for you', 'Failed', 'Denied', 'exit']) expect(text).toContain(w)
   })
 
   it.each(STATES)('%s: exactly one option is visible, the others are opacity-0 + inert + aria-hidden', (state) => {
@@ -77,5 +77,16 @@ describe('StateSlot', () => {
     expect(formatElapsed(42_000)).toBe('0:42')
     expect(formatElapsed(725_000)).toBe('12:05')
     expect(formatElapsed(-5)).toBe('0:00')
+  })
+})
+
+describe('StateSlot waiting', () => {
+  it('draws 「Waiting for you」 in the waiting colour token (the tab light\'s yellow), not a hard-coded colour', () => {
+    const { container } = render(<StateSlot state="waiting" />)
+    const el = opt(container, 'waiting')
+    expect(el.textContent).toBe('Waiting for you')
+    expect(el.innerHTML).toContain('text-status-warning')
+    expect(el.innerHTML).toContain('bg-status-warning')
+    expect(el.innerHTML).not.toMatch(/#[0-9a-f]{3,6}/i)
   })
 })

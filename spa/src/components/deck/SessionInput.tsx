@@ -1,14 +1,14 @@
 // spa/src/components/deck/SessionInput.tsx — the deck's input (U3 spec §7, plan D7): Enter sends, Shift+Enter breaks a line,
 // 中斷 interrupts. Sending goes to the daemon (and through the session's mod); nothing is typed into a terminal. The draft and
 // the send queue live in modules keyed by the pane, not in this component (it unmounts on a tab switch).
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useRef, useState, useSyncExternalStore } from 'react'
 import { PaperPlaneRight, Stop } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
 import { sendQueueFor } from '../../lib/conversations/send-queue'
-import type { Capabilities, ConversationItem, UserItem } from '../../lib/conversations/types'
+import type { Capabilities } from '../../lib/conversations/types'
 import { QueuedMessages } from './QueuedMessages'
 
 interface Props {
@@ -16,9 +16,6 @@ interface Props {
   hostId: string
   sessionId: string
   capabilities?: Capabilities
-  items: readonly ConversationItem[]
-  /** The header status is idle (a message the mod refused as busy is resent on the edge to idle). */
-  idle: boolean
   onSwitchToTerminal: () => void
 }
 
@@ -29,7 +26,7 @@ export function SessionInput(props: Props) {
   return <SessionInputBody key={draftKey(props.paneKey, props.hostId, props.sessionId)} {...props} />
 }
 
-function SessionInputBody({ paneKey, hostId, sessionId, capabilities, items, idle, onSwitchToTerminal }: Props) {
+function SessionInputBody({ paneKey, hostId, sessionId, capabilities, onSwitchToTerminal }: Props) {
   const t = useI18nStore((s) => s.t)
   const dKey = draftKey(paneKey, hostId, sessionId)
   const queue = sendQueueFor(dKey, () => hostSendPort(hostId, sessionId))
@@ -37,11 +34,8 @@ function SessionInputBody({ paneKey, hostId, sessionId, capabilities, items, idl
   const [draft, setDraft] = useState(() => readDraft(dKey) ?? '')
   const [hint, setHint] = useState<OutcomeMessage | null>(null)
   const guard = useRef(new DestructiveGuard())
-  const users = useMemo(() => items.filter((i): i is UserItem => i.type === 'user'), [items])
 
-  useEffect(() => { queue.setIdle(idle) }, [queue, idle])
-  useEffect(() => { queue.reconcile(users) }, [queue, users, entries])
-
+  // The queue is driven by the pane (`useSendQueueDriver`, under every view); this input only types and shows.
   // the live capability is the only authority: a 409 no_mod fails that one message and disables nothing by itself
   const noMod = capabilities?.send !== 'prompt'
   const change = (v: string) => { setDraft(v); writeDraft(dKey, v); setHint(null) }

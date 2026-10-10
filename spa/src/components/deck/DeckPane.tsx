@@ -1,12 +1,14 @@
 // spa/src/components/deck/DeckPane.tsx — what a session pane shows in its deck view, given the conversation the pane holds
 // (`useConversationOfPane`, mounted by SessionPaneContent for every view): the unreadable state (D11), the loading
 // moment, or the deck. Takes focus when the pane switches to it, as the placeholder did.
-import { useRef } from 'react'
+import { useCallback, useRef } from 'react'
 import { useActivationFocus } from '../../hooks/useActivationFocus'
 import type { PaneConversation } from '../../hooks/useConversationOfPane'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { conversationBinding, openPanel, type PanelContent } from '../../lib/conversations/panel-memory'
 import { DeckUnreadable } from './DeckUnreadable'
 import { DeckView, type DeckViewProps } from './DeckView'
+import { SessionPanelSplit } from './SessionPanelSplit'
 
 interface Props {
   paneId: string
@@ -15,14 +17,17 @@ interface Props {
   isFocusTarget: boolean
   onSwitchToTerminal: () => void
   footer?: DeckViewProps['footer']
-  actions?: DeckViewProps['actions']
 }
 
-export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwitchToTerminal, footer, actions }: Props) {
+export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwitchToTerminal, footer }: Props) {
   const t = useI18nStore((s) => s.t)
   const ref = useRef<HTMLDivElement>(null)
   // Switching to the deck focuses its input when it has one (plan D2), else the frame (loading, unreadable).
   useActivationFocus(isActive, isFocusTarget, () => (ref.current?.querySelector('textarea') ?? ref.current)?.focus(), { raf: true })
+
+  // Stable, so a live update re-draws only the turn that changed (DeckView memoizes its turns).
+  const binding = conversation.state === 'ready' ? conversationBinding(conversation.hostId, conversation.sessionId) : ''
+  const onOpenPanel = useCallback((content: PanelContent) => openPanel(paneId, binding, content), [paneId, binding])
 
   let body
   if (conversation.state === 'off') {
@@ -39,9 +44,12 @@ export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwit
     // the moment an item lands.
     body = <DeckUnreadable reason="empty" onSwitchToTerminal={onSwitchToTerminal} />
   } else {
+    const { hostId, sessionId, entry } = conversation
     body = (
-      <DeckView key={conversation.sessionId} paneId={paneId} hostId={conversation.hostId} sessionId={conversation.sessionId} entry={conversation.entry}
-        onSwitchToTerminal={onSwitchToTerminal} footer={footer} actions={actions} />
+      <SessionPanelSplit paneKey={paneId} binding={binding} turns={entry.doc.turns} active={isActive && isFocusTarget}>
+        <DeckView key={sessionId} paneId={paneId} hostId={hostId} sessionId={sessionId} entry={entry}
+          onSwitchToTerminal={onSwitchToTerminal} footer={footer} onOpenPanel={onOpenPanel} />
+      </SessionPanelSplit>
     )
   }
   return (
