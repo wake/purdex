@@ -42,6 +42,16 @@
 // not count. Only the reader moving off it, back to the bottom, resumes
 // following.
 //
+// **Pinning (v3 point 3).** The footer (input, attachments, dock) is a
+// sibling under the box, so when it grows the box gets shorter: `scrollTop`
+// stays, the distance to the end grows, and the last lines look covered. A
+// ResizeObserver on the box notices its height changing; if the reader was at
+// the bottom *before* the change (the `atBottom` flag, kept from the last
+// scroll event — it is not re-measured in the callback, where the box is
+// already squeezed) `scrollTop` goes back to the end, in the same frame. A
+// reader scrolled up is left alone: `scrollTop` unchanged, nothing on screen
+// moves. A smooth follow still on its way counts as at the bottom.
+//
 // **Memory (spec §6).** Given `memory`, every observed position — and
 // `follow`'s own jump, mount's or a later catch-up alike, which never gets a
 // scroll event of its own to observe — is written to the pane's memo
@@ -190,6 +200,9 @@ export function useTranscriptScroll(
   // The bar just closed: the next growth follows wherever the reader is.
   const resume = useRef(false)
   const holding = useRef(hold)
+  // The box's clientHeight at the last resize notification (null: none yet), and its observer.
+  const lastClient = useRef<number | null>(null)
+  const sizeObserver = useRef<ResizeObserver | null>(null)
   const mem = useRef(memory)
   // Before any passive effect of the same commit reads them.
   useLayoutEffect(() => {
@@ -217,8 +230,42 @@ export function useTranscriptScroll(
     smoothTarget.current = null
   }, [])
 
+  const remember = useCallback((el: HTMLDivElement) => {
+    const m = mem.current
+    if (!m) return
+    writeScrollMemo(m.paneId, {
+      scrollTop: el.scrollTop, atBottom: atBottom.current, view: m.view, firstTurn: firstVisibleTurn(el),
+      anchor: anchors.current ? firstVisibleAnchor(el, anchors.current) : undefined,
+    })
+  }, [])
+
+  const pin = useCallback(() => {
+    const el = box.current
+    if (!el) return
+    const h = el.clientHeight
+    const before = lastClient.current
+    lastClient.current = h
+    if (before === null || h === before || !scrolled.current) return
+    // The state from BEFORE this change: the flag, not a fresh measurement.
+    if (!atBottom.current && smoothTarget.current === null) return
+    el.scrollTop = el.scrollHeight - h
+    smoothTarget.current = null
+    atBottom.current = true
+    lastTop.current = el.scrollTop
+    remember(el)
+  }, [remember])
+
   const attach = useCallback((node: HTMLDivElement | null) => {
     const prev = box.current
+    if (node !== prev) {
+      sizeObserver.current?.disconnect()
+      sizeObserver.current = null
+      lastClient.current = node ? node.clientHeight : null
+      if (node && typeof ResizeObserver !== 'undefined') {
+        sizeObserver.current = new ResizeObserver(() => pin())
+        sizeObserver.current.observe(node)
+      }
+    }
     if (prev && prev !== node) {
       for (const type of SCROLL_INPUTS) prev.removeEventListener(type, takeOver)
       prev.removeEventListener('pointerdown', takeOver)
@@ -232,16 +279,7 @@ export function useTranscriptScroll(
     if (node !== prev) anchors.current = node ? anchorsIn(node) : null
     box.current = node
     assignRef(external, node)
-  }, [external, takeOver])
-
-  const remember = useCallback((el: HTMLDivElement) => {
-    const m = mem.current
-    if (!m) return
-    writeScrollMemo(m.paneId, {
-      scrollTop: el.scrollTop, atBottom: atBottom.current, view: m.view, firstTurn: firstVisibleTurn(el),
-      anchor: anchors.current ? firstVisibleAnchor(el, anchors.current) : undefined,
-    })
-  }, [])
+  }, [external, takeOver, pin])
 
   const observe = useCallback(() => {
     const el = box.current
