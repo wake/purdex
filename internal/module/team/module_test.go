@@ -129,8 +129,19 @@ func TestStart_RunsTheSweeperUntilStop(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if n := f.countOps("closed"); n != 1 {
-		t.Fatalf("closed events = %d, want 1", n)
+	// The store row turns timeout before the closed event is broadcast: wait for the event, not for one read after the row
+	// (#2572, under load the read landed in between).
+	// events() drains the subscriber, so the count is accumulated across polls.
+	closed := 0
+	for deadline := time.Now().Add(5 * time.Second); closed < 1; time.Sleep(20 * time.Millisecond) {
+		closed += f.countOps("closed")
+		if closed < 1 && time.Now().After(deadline) {
+			t.Fatal("no closed event within 5 s after the row timed out")
+		}
+	}
+	closed += f.countOps("closed") // anything late: still exactly one
+	if closed != 1 {
+		t.Fatalf("closed events = %d, want 1", closed)
 	}
 	stopped := make(chan struct{})
 	go func() {
