@@ -21,7 +21,8 @@
 //   * `loadUntil`      — pages `before=` from the oldest loaded entry until an entry is loaded, at most MAX_UNTIL_PAGES pages.
 import { create } from 'zustand'
 import { fetchConversation, fetchTodos, postRefresh } from '../lib/workbook/api'
-import { emptyTodos, mergeEntries, MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES, snapshotTodos, touched, upsertTodos, type TodoBook } from '../lib/workbook/merge'
+import { forgetViewMemosOfHost } from '../lib/workbook/view-memory'
+import { emptyTodos,mergeEntries, MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES, snapshotTodos, touched, upsertTodos, type TodoBook } from '../lib/workbook/merge'
 import {
   WORKBOOK_PROVIDER, type EntryEvent, type RefreshAvailableEvent, type StatusEvent, type TodosEvent, type WorkbookEntry,
 } from '../lib/workbook/types'
@@ -463,7 +464,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
 
     applyRefreshAvailable: (hostId, ev) => { set((s) => withConv(s, hostId, ev.convKey, (c) => ({ ...c, refreshAvailable: ev.available, availAt: ++clock }))); set((s) => evicted(s, hostId)) },
 
-    forgetHost: (hostId) => { clearResnaps(hostId); set((s) => {
+    forgetHost: (hostId) => { clearResnaps(hostId); forgetViewMemosOfHost(hostId); set((s) => {
       const drop = <T>(m: Record<string, T>): Record<string, T> => { const { [hostId]: _g, ...rest } = m; return rest }
       return {
         byHost: drop(s.byHost), convOfSession: drop(s.convOfSession), support: drop(s.support), gens: drop(s.gens),
