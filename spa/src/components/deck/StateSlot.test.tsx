@@ -15,8 +15,8 @@ describe('StateSlot', () => {
     expect(slot.className).toContain('inline-grid')
     expect(slot.className).not.toMatch(/\bw-\d/)
     for (const k of STATES) {
-      expect(opt(container, k).className).toContain('col-start-1')
-      expect(opt(container, k).className).toContain('row-start-1')
+      expect(opt(container, k).classList.contains('col-start-1')).toBe(true)
+      expect(opt(container, k).classList.contains('row-start-1')).toBe(true)
     }
     const text = slot.textContent!
     for (const w of ['Idle', 'Working', 'Failed', 'Denied', 'exit']) expect(text).toContain(w)
@@ -24,7 +24,7 @@ describe('StateSlot', () => {
 
   it.each(STATES)('%s: exactly one option is visible, the others are opacity-0 + inert + aria-hidden', (state) => {
     const { container } = render(<StateSlot state={state} />)
-    const visible = STATES.filter((k) => !opt(container, k).className.includes('opacity-0'))
+    const visible = STATES.filter((k) => !opt(container, k).classList.contains('opacity-0'))
     expect(visible).toEqual([state])
     for (const k of STATES.filter((x) => x !== state)) {
       const el = opt(container, k)
@@ -42,6 +42,18 @@ describe('StateSlot', () => {
     rerender(<StateSlot state="exit" exitCode={2} />)
     expect(opt(container, 'exit').textContent).toContain('exit 2')
     expect(opt(container, 'running').textContent).toContain('88:88')
+  })
+
+  it('an active running / exit option keeps an invisible sizer of the widest text, so a short clock or exit 2 cannot shrink the slot', () => {
+    const { container, rerender } = render(<StateSlot state="running" elapsedMs={42_000} />)
+    const sizer = (k: string) => opt(container, k).querySelector('[data-sizer]') as HTMLElement | null
+    expect(sizer('running')!.textContent).toContain('88:88')
+    expect(sizer('running')!.className).toContain('invisible')
+    expect(sizer('running')!.getAttribute('aria-hidden')).toBe('true')
+    expect(sizer('idle')).toBeNull()
+    rerender(<StateSlot state="exit" exitCode={2} />)
+    expect(sizer('exit')!.textContent).toContain('exit 255')
+    expect(sizer('running')).toBeNull() // inactive options already carry the widest text themselves
   })
 
   it('formats the clock', () => {

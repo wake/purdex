@@ -29,32 +29,42 @@ interface Props {
 
 export function StateSlot({ state, exitCode = 1, elapsedMs = 0, className = '' }: Props) {
   const t = useI18nStore((s) => s.t)
-  const options: Array<{ key: SlotState; node: ReactNode }> = [
-    { key: 'idle', node: (
-      <span className="flex items-center gap-1.5 text-text-muted">
-        <span className="inline-block h-2 w-2 shrink-0 rounded-full border border-text-muted" />
-        <span>{t('chat.status.idle')}</span>
-      </span>
-    ) },
-    { key: 'running', node: (
-      <span className="flex items-center gap-1.5 text-text-primary">
-        <span className="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-accent" />
-        <span>{t('chat.status.running')}</span>
-        <span className="tabular-nums text-text-muted">{state === 'running' ? formatElapsed(elapsedMs) : WIDEST_CLOCK}</span>
-      </span>
-    ) },
+  const idle = (
+    <span className="flex items-center gap-1.5 text-text-muted">
+      <span className="inline-block h-2 w-2 shrink-0 rounded-full border border-text-muted" />
+      <span>{t('chat.status.idle')}</span>
+    </span>
+  )
+  const running = (clock: string) => (
+    <span className="flex items-center gap-1.5 text-text-primary">
+      <span className="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-accent" />
+      <span>{t('chat.status.running')}</span>
+      <span className="tabular-nums text-text-muted">{clock}</span>
+    </span>
+  )
+  const exit = (n: number) => <Chip tone="error" icon={XCircle}>{t('deck.status.exit', { n })}</Chip>
+  // An inactive option carries the WIDEST text of its kind; the active one adds an invisible copy of that widest text (the
+  // sizer), so a short clock or exit 2 never makes the slot narrower than when it is idle.
+  const options: Array<{ key: SlotState; node: ReactNode; sizer?: ReactNode }> = [
+    { key: 'idle', node: idle },
+    { key: 'running', node: running(state === 'running' ? formatElapsed(elapsedMs) : WIDEST_CLOCK), sizer: running(WIDEST_CLOCK) },
     { key: 'failed', node: <Chip tone="error" icon={XCircle}>{t('deck.status.failed')}</Chip> },
     { key: 'denied', node: <Chip tone="muted" icon={Prohibit}>{t('deck.status.denied')}</Chip> },
-    { key: 'exit', node: <Chip tone="error" icon={XCircle}>{t('deck.status.exit', { n: state === 'exit' ? exitCode : WIDEST_EXIT })}</Chip> },
+    { key: 'exit', node: exit(state === 'exit' ? exitCode : WIDEST_EXIT), sizer: exit(WIDEST_EXIT) },
   ]
   return (
     <span data-testid="state-slot" data-state={state} className={`inline-grid shrink-0 items-center justify-items-start whitespace-nowrap text-xs ${className}`}>
-      {options.map(({ key, node }) => {
+      {options.map(({ key, node, sizer }) => {
         const on = key === state
         return (
           <span key={key} data-state-option={key} data-active={on ? 'true' : 'false'} aria-hidden={on ? undefined : true}
-            inert={!on} className={`col-start-1 row-start-1${on ? '' : 'opacity-0'}`}>
-            {node}
+            inert={!on} className={`col-start-1 row-start-1 ${on ? '' : 'opacity-0'}`}>
+            {on && sizer ? (
+              <span className="inline-grid">
+                <span data-sizer aria-hidden="true" className="invisible col-start-1 row-start-1">{sizer}</span>
+                <span className="col-start-1 row-start-1">{node}</span>
+              </span>
+            ) : node}
           </span>
         )
       })}

@@ -90,7 +90,7 @@ describe('StatusRow narrowing (container-query classes; real layout is checked i
     expect(has(screen.getByTestId('ctx-tokens'), '@max-[500px]:hidden')).toBe(true)
     expect(has(screen.getByTestId('five_hour-reset'), '@max-[460px]:hidden')).toBe(true)
     expect(has(screen.getByTestId('model-effort'), '@max-[400px]:hidden')).toBe(true)
-    expect(has(screen.getByTestId('item-five_hour'), '@max-[360px]:hidden')).toBe(true)
+    expect(has(screen.getByTestId('item-five_hour'), '@max-[330px]:hidden')).toBe(true)
   })
   it('at 412 wide only 5h-and-below thresholds apply: context and 5h carry no class that hides them', () => {
     r()

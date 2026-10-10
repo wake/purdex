@@ -32,7 +32,7 @@ export function tokensLeft(totalTokens: number, usedPct: number): number {
 
 /**
  * Hide-at-width classes, on the row's own `@container` (so the row follows its pane, not the window). Narrowing order:
- * cost (≤640) → 7d (≤560) → (1M) (≤520) → context tokens (≤500) → reset times (≤460) → effort (≤400) → 5h (≤360).
+ * cost (≤640) → 7d (≤560) → (1M) (≤520) → context tokens (≤500) → reset times (≤460) → effort (≤400) → 5h (≤330; the prototype hid it at 360, but 360 is the narrowest chat pane, so it stays there).
  * Context and the state cell never drop; at 412 the row still shows state · model · context · 5h.
  */
 export const HIDE = {
@@ -42,8 +42,8 @@ export const HIDE = {
   ctxTokens: '@max-[500px]:hidden',
   reset: '@max-[460px]:hidden',
   effort: '@max-[400px]:hidden',
-  fiveHour: '@max-[360px]:hidden',
-  modelSep: '@max-[330px]:hidden',
+  fiveHour: '@max-[330px]:hidden',
+  modelSep: '@max-[300px]:hidden',
 } as const
 
 /** `0:42`, `12:05`. */
