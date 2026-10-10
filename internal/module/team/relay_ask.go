@@ -73,27 +73,19 @@ func (m *Module) notifyAskAsync(a RelayAsk) bool {
 }
 
 // sendAskNotice tells the lead about an open, unnotified ask, with the minutes left of its window (rounded up), and
-// records the delivery. Safe to call again and from two places: one send per ask at a time, and nothing once the ask is
-// notified, closed or past its window.
+// records the delivery. Safe to call again and from two places: one send at a time, and nothing once the ask is
+// notified, closed or past its window. The notice is at-least-once, like the 70% one: a crash between the send and the
+// mark sends it once more after the restart (with the minutes then left), which is harmless — the lead's answer is the
+// same command; an outbox is not worth it for an advisory.
 func (m *Module) sendAskNotice(a RelayAsk) {
 	if m.sender == nil || m.stopping() {
 		return
 	}
+	// One send at a time, from the state check to the delivery mark; a second sender waits and then finds the ask
+	// notified. A compaction takes the same lock to withdraw (handleRelayCompacted), so "approve within N minutes" is
+	// never sent after the compaction notice's withdrawal.
 	m.askMu.Lock()
-	if _, busy := m.askSending[a.ID]; busy {
-		m.askMu.Unlock()
-		return
-	}
-	if m.askSending == nil {
-		m.askSending = map[string]struct{}{}
-	}
-	m.askSending[a.ID] = struct{}{}
-	m.askMu.Unlock()
-	defer func() {
-		m.askMu.Lock()
-		delete(m.askSending, a.ID)
-		m.askMu.Unlock()
-	}()
+	defer m.askMu.Unlock()
 
 	cur, ok, err := m.store.GetRelayAsk(a.ID)
 	if err != nil {
