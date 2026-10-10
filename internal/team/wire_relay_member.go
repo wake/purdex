@@ -103,6 +103,10 @@ const RelayManualNoticeFmt = "[pdx team] member 由使用者手動接力：%s �
 // left (rounded up) and the ref again.
 const RelayAskNoticeFmt = "[pdx team] member %s [%s]「%s」已用 %d%%，申請接力。\n%d 分鐘內同意請執行：pdx relay _%s（不同意不用回覆，過期即作罷）"
 
+// RelayAskRemoteNoticeFmt is RelayAskNoticeFmt for a member on another host: the same words, the last argument is the whole
+// ref the lead types — <alias>/_<ref> — instead of the bare ref after an underscore.
+const RelayAskRemoteNoticeFmt = "[pdx team] member %s [%s]「%s」已用 %d%%，申請接力。\n%d 分鐘內同意請執行：pdx relay %s（不同意不用回覆，過期即作罷）"
+
 // Relay ask states (relay_asks.state) and the reasons of a withdrawal.
 const (
 	RelayAskOpen      = "open"
