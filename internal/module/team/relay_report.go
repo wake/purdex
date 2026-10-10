@@ -328,7 +328,7 @@ func (m *Module) reconcileRelays() {
 			}
 			// Still awaiting after the step ⇔ the row is open. A live
 			// session keeps waiting; a gone one is abandoned via the row.
-			if cur.State != team.RelayAwaitingApproval || m.origins.LiveSession(cur.SessionID) {
+			if cur.State != team.RelayAwaitingApproval || !m.sessionGone("relay op "+cur.ID, cur.SessionID) {
 				continue
 			}
 			if _, won, err := m.closeAs(cur.RequestID, Close{State: team.StateAbandoned, DecidedAt: now}); err != nil {

@@ -80,7 +80,7 @@ func (m *Module) reconcileFromFrames(ctx context.Context, op team.RelayOp) (team
 		after, _, err := m.applyReconcile(op, RelayReport{State: team.RelayCleared, NewSessionID: f.SessionID, NewRef: ipeers.RefID(f.SessionID), At: m.now()})
 		return after, err
 	}
-	if unverified || m.origins.LiveSession(op.SessionID) {
+	if unverified || !m.sessionGone("relay op "+op.ID, op.SessionID) {
 		return op, nil
 	}
 	if m.now() < m.bootAt+team.BootGraceS*1000 {

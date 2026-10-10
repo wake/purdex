@@ -47,7 +47,12 @@ type OriginResolver interface {
 	ResolveOriginByRef(ref string) (team.Origin, bool, error)
 	// InboxOf is the messaging socket of the session's live entry, for the notice outbox (PL-1d1).
 	InboxOf(sessionID string) (inbox string, ok bool, err error)
+	// LiveSession is the two-state check (a registry that cannot be read answers true). Only for a display flag with no side effect
+	// (pendingLineage). Everything that abandons, ends, fails or removes something uses SessionPresence.
 	LiveSession(sessionID string) bool
+	// SessionPresence is LiveSession in three states (#1857): act on Gone only; Unknown (an unreadable registry, or a live pid's
+	// file that could not be verified) leaves the decision for the next round.
+	SessionPresence(sessionID string) peersmod.Presence
 	// ListLiveOrigins is every live, non-proxy session of this host (one registry read), for the unattended panel's
 	// quota list. An error is a registry read failure only.
 	ListLiveOrigins() ([]team.Origin, error)
@@ -145,6 +150,9 @@ type Module struct {
 	// busyMu guards the member-relay wait marks of relay_timeouts.go (#2439): the ops whose lead got the long-turn notice,
 	// and when each op's member was first seen idle.
 	busyMu sync.Mutex
+	// presenceLogged is when each skipped judgement was last logged (session_presence.go).
+	presenceLogMu  sync.Mutex
+	presenceLogged map[string]int64
 	// bootTrace, when set, is told the name of each boot reconciliation step as it starts (tests).
 	bootTrace func(step string)
 	// endedOps are the forwarded relay ops a command settle ended, until that settle has committed (relay_forwarded.go).
