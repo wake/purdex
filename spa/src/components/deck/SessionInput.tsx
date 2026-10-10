@@ -52,10 +52,16 @@ function fitHeight(el: HTMLTextAreaElement): void {
   const cs = getComputedStyle(el)
   const line = px(cs.lineHeight) || 20
   const chrome = px(cs.paddingTop) + px(cs.paddingBottom) + px(cs.borderTopWidth) + px(cs.borderBottomWidth)
+  // `auto` makes the footer shorter for the moment the text is measured. The scrolling box above is then taller, and the browser
+  // clamps its scrollTop to the smaller maximum — a reader at the bottom is left scrolled up by the difference and the footer's
+  // growth is no longer pinned (footer-pin). The wrapper holds its height meanwhile.
+  const hold = el.parentElement
+  if (hold) hold.style.minHeight = `${hold.offsetHeight}px`
   el.style.height = 'auto'
   const wanted = el.scrollHeight + px(cs.borderTopWidth) + px(cs.borderBottomWidth)
   const max = MAX_ROWS * line + chrome
   el.style.height = `${Math.max(MIN_ROWS * line + chrome, Math.min(wanted, max))}px`
+  if (hold) hold.style.minHeight = ''
   // scrollHeight is a whole number and a fractional line height (1.65 × 13px) makes `max` one: a full MAX_ROWS is not an overflow
   el.style.overflowY = wanted > max + 1 ? 'auto' : 'hidden'
 }
