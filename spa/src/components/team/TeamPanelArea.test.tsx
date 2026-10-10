@@ -13,6 +13,7 @@ import { clearModuleRegistry, registerModule } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { currentPanelMin, useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import type { TeamRoster } from '../../lib/team/roster'
@@ -348,6 +349,21 @@ describe('header height (TI-6)', () => {
     expect(more.className).toContain('flex-wrap')
     expect(within(more).getAllByTestId('team-panel-cell')).toHaveLength(1)
     expect(header().style.height).toBe(`${HEADER_H}px`)
+  })
+
+  it('the unmeasured fallback capacity follows the light style (iconDot cells are wider)', () => {
+    useUISettingsStore.getState().setTabIndicatorStyle('iconDot')
+    try {
+      scene5(8)
+      act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+      mount()
+      const w = useTeamUiStore.getState().panel.width
+      const n = firstRowCapacity(w, 'iconDot')
+      expect(n).toBeLessThan(firstRowCapacity(w))
+      expect(within(header()).getAllByTestId('team-panel-cell')).toHaveLength(n)
+    } finally {
+      useUISettingsStore.getState().setTabIndicatorStyle('badge')
+    }
   })
 
   it('a big team keeps the header row to the capacity and wraps the rest', () => {

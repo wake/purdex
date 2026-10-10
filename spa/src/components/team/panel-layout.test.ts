@@ -71,6 +71,20 @@ describe('panel header budget', () => {
     it('the badge fallback (no layout) agrees at the badge need', () => {
       expect(firstRowCapacity(356)).toBe(4)
       expect(firstRowCapacity(355)).toBe(3)
+      expect(firstRowCapacity(356, 'badge')).toBe(4)
+      expect(firstRowCapacity(355, 'badge')).toBe(3)
+    })
+    it('the fallback follows the light style: iconDot holds 4 at 412 and 3 at 411 (not the badge cell\'s 5)', () => {
+      expect(firstRowCapacity(412, 'iconDot')).toBe(4)
+      expect(firstRowCapacity(411, 'iconDot')).toBe(3)
+    })
+    it('the fallback follows the host box too (a bigger ring widens every cell)', () => {
+      const min = panelMinWidth('badge', HOST_BADGE_BOX_MAX)
+      expect(firstRowCapacity(min, 'badge', HOST_BADGE_BOX_MAX)).toBe(4)
+      expect(firstRowCapacity(min - 1, 'badge', HOST_BADGE_BOX_MAX)).toBe(3)
+      const minDot = panelMinWidth('iconDot', HOST_BADGE_BOX_MAX)
+      expect(firstRowCapacity(minDot, 'iconDot', HOST_BADGE_BOX_MAX)).toBe(4)
+      expect(firstRowCapacity(minDot - 1, 'iconDot', HOST_BADGE_BOX_MAX)).toBe(3)
     })
   })
 

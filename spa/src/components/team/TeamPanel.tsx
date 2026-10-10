@@ -23,6 +23,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import type { PanelMode } from '../../stores/useTeamUiStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { CELL_GAP, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
 
 interface Props {
@@ -263,7 +264,9 @@ function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props &
   const box = useRef<HTMLDivElement>(null)
   const moreBox = useRef<HTMLDivElement>(null)
   const measured = useCellCapacity(box, { extra: moreBox })
-  const cap = measured ?? (width === undefined ? seats.length : firstRowCapacity(width))
+  const lightStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
+  const ringBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
+  const cap = measured ?? (width === undefined ? seats.length : firstRowCapacity(width, lightStyle, ringBox))
   const first = seats.slice(0, cap)
   const more = seats.slice(cap)
   const cell = (s: TeamSeatView) => <TeamCell key={s.sessionId} teamKey={team.teamKey} seat={s} isActive={s.tabId !== null && s.tabId === activeTabId} onOpen={onOpen} />

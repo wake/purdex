@@ -68,10 +68,14 @@ export function panelMinWidth(style: 'icon' | 'dot' | 'iconDot' | 'badge', box: 
   return BESIDE_CELLS_W + cellsWidth(PANEL_MIN_CELLS, cellWidthFor(style, box))
 }
 
-/** Cells (lead included) that fit in the header's first row at panel width `width`; at least 1. */
-export function firstRowCapacity(width: number): number {
+/**
+ * Cells (lead included) that fit in the header's first row at panel width `width`; at least 1. This is the fallback where
+ * nothing can be measured, so it uses the same nominal cell (`cellWidthFor(style, box)`) as `panelMinWidth`: pass the CURRENT
+ * light style and host box, or it disagrees with the minimum (iconDot 412 holds 4, not the badge cell's 5).
+ */
+export function firstRowCapacity(width: number, style: 'icon' | 'dot' | 'iconDot' | 'badge' = 'badge', box: number = HOST_BADGE_BOX_DEFAULT): number {
   const avail = width - BESIDE_CELLS_W
-  return Math.max(1, Math.floor((avail - SEP_W + CELL_GAP) / (CELL_W + CELL_GAP)))
+  return Math.max(1, Math.floor((avail - SEP_W + CELL_GAP) / (cellWidthFor(style, box) + CELL_GAP)))
 }
 
 /** The strip's 「+N」 chip (title bar): reserved at the end of the cells when some seats do not fit. */
