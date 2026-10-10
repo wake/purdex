@@ -1740,3 +1740,16 @@ test('after a /clear the poll is for the new session id', async ($, on) => {
   const last = pqNext(w)[pqNext(w).length - 1]
   expect(last.body.session_id).toBe(SID2)
 })
+
+// session.end{clear} has been seen but the switch not yet: $.session.id() still says the old id, yet the conversation is
+// ending - a job that arrives then is dropped, never run (codex R1). Mutation gate: drop the ev.switching test → red.
+test('a job that arrives between session.end{clear} and the switch is dropped session_changed', async ($, on) => {
+  const g = gated(PJOB())
+  const w = evWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await end($, 'clear', SID1) // the switch is pending: ev.switching
+  g.open()
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'session_changed' })
+})

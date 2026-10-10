@@ -478,11 +478,12 @@ async function pqRun($, job) {
   let status = 'accepted'
   let reason = ''
   try {
-    if (job.kind === 'submit') {
-      if (job.sessionId !== String(await $.session.id())) {
-        status = 'dropped'
-        reason = 'session_changed'
-      } else if (ev.turnId) {
+    // A /clear or resume in progress (session.end seen, the switch not yet) still reports the old id: nothing runs then
+    if (ev.switching || job.sessionId !== String(await $.session.id())) {
+      status = 'dropped'
+      reason = 'session_changed'
+    } else if (job.kind === 'submit') {
+      if (ev.turnId) {
         status = 'busy'
       } else {
         const r = await $.prompt.submit({ text: job.text, asUser: true })
@@ -491,9 +492,6 @@ async function pqRun($, job) {
           reason = r.drop || 'dropped'
         }
       }
-    } else if (job.sessionId !== String(await $.session.id())) {
-      status = 'dropped'
-      reason = 'session_changed'
     } else if (!ev.turnId) {
       status = 'dropped'
       reason = 'not_running'
