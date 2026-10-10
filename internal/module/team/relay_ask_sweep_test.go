@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -134,6 +135,37 @@ func TestRelayAsk_ReleaseVersusRelayBothOrders(t *testing.T) {
 	g.livenessTick()
 	if a := g.ask(rid(820)); a.State != team.RelayAskAccepted {
 		t.Fatalf("a tick changed an accepted ask: %+v", a)
+	}
+}
+
+// A compaction never withdraws an ask while its notice is on the wire (codex attack): the withdrawal waits for the send
+// to finish, so the lead cannot get "approve within N minutes" after the compaction notice. Mutation gate: drop the
+// shared mutex → the ask is withdrawn while the notice is still being sent (red).
+func TestRelayAsk_CompactionWaitsForAnAskNoticeInFlight(t *testing.T) {
+	f := newFixture(t)
+	f.memberTeam("3")
+	a := f.openAsk(rid(830))
+	f.sender.mu.Lock()
+	f.sender.block, f.sender.in = make(chan struct{}), make(chan struct{}, 4)
+	block, in := f.sender.block, f.sender.in
+	f.sender.mu.Unlock()
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(block) }) }
+	t.Cleanup(unblock) // a failing assertion must not leave a send blocked: Stop waits for it
+	go f.m.sendAskNotice(a)
+	<-in // the ask notice is inside the sender: its state check is behind it
+	done := make(chan int, 1)
+	go func() { code, _ := f.compacted("sid-m1", "auto"); done <- code }()
+	time.Sleep(150 * time.Millisecond)
+	if got := f.ask(a.ID); got.State != team.RelayAskOpen {
+		t.Fatalf("the ask was withdrawn while its notice was on the wire: %+v", got)
+	}
+	unblock()
+	if code := <-done; code != http.StatusOK {
+		t.Fatalf("compacted: %d", code)
+	}
+	if got := f.ask(a.ID); got.State != team.RelayAskWithdrawn {
+		t.Fatalf("after the send: %+v", got)
 	}
 }
 
