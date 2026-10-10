@@ -13,6 +13,9 @@ import { useConversationOfPane } from '../hooks/useConversationOfPane'
 import { useSendQueueDriver } from '../hooks/useSendQueueDriver'
 import { useConversationViewGate } from '../hooks/useConversationViewGate'
 import { ChatPane } from './deck/ChatPane'
+import { AskStrip } from './dock/AskStrip'
+import { QuestionDock } from './dock/QuestionDock'
+import { openAsks } from '../lib/conversations/asks'
 import { DeckPane } from './deck/DeckPane'
 import { SessionInput } from './deck/SessionInput'
 import { SessionStatusRow } from './deck/SessionStatusRow'
@@ -104,6 +107,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → input → status row.
   const footer = (ctx: DeckFooterContext) => (
     <div data-testid="session-footer">
+      <QuestionDock ctx={ctx} />
       <SessionInput {...ctx} />
       <SessionStatusRow sessionCode={sessionCode} ctx={ctx} />
     </div>
@@ -130,6 +134,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
         style={showTerminal ? undefined : { visibility: 'hidden' }}
         inert={!showTerminal}
       >
+        <AskStrip open={showTerminal && readyDoc !== undefined && openAsks(readyDoc.approvals).length > 0} />
         <TerminalView
           key={pane.id}
           wsUrl={`${wsBase}/ws/terminal/${encodeURIComponent(sessionCode)}`}

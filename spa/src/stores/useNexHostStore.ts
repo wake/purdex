@@ -65,6 +65,11 @@ export function selectConversationsV1(hostId: string): (s: Pick<NexHostState, 'b
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('conversations.v1') === true
 }
 
+/** The daemon lists `team.ask_chat.v1`: a `hook_ask` can be answered in words (decide `deny` + `hook.message`). */
+export function selectAskChatV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('team.ask_chat.v1') === true
+}
+
 /** Nexen v0.17: every prelude item carries an integer `offset`. */
 export function selectPreludeItemOffset(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => {

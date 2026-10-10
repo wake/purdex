@@ -16,6 +16,8 @@ interface Props {
   hostId: string
   sessionId: string
   capabilities?: Capabilities
+  /** A question waits in the dock: the placeholder says to answer there. */
+  asking?: boolean
   onSwitchToTerminal: () => void
 }
 
@@ -26,7 +28,7 @@ export function SessionInput(props: Props) {
   return <SessionInputBody key={draftKey(props.paneKey, props.hostId, props.sessionId)} {...props} />
 }
 
-function SessionInputBody({ paneKey, hostId, sessionId, capabilities, onSwitchToTerminal }: Props) {
+function SessionInputBody({ paneKey, hostId, sessionId, capabilities, asking, onSwitchToTerminal }: Props) {
   const t = useI18nStore((s) => s.t)
   const dKey = draftKey(paneKey, hostId, sessionId)
   const queue = sendQueueFor(dKey, () => hostSendPort(hostId, sessionId))
@@ -69,7 +71,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, capabilities, onSwitchTo
             <textarea
               value={draft}
               rows={2}
-              placeholder={t('deck.send.placeholder')}
+              placeholder={t(asking ? 'deck.dock.input_placeholder' : 'deck.send.placeholder')}
               onChange={(e) => change(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
