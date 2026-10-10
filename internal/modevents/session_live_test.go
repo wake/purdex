@@ -6,6 +6,27 @@ import (
 	"time"
 )
 
+// A stream that only sends rejected (400) batches is not a working mod: Reject refreshes LastSeen (diagnostics, eviction)
+// but must not keep the session live (#2555 attack). Mutation gate: SessionLive reads LastSeen → red.
+func TestRegistry_SessionLive_RejectedBatchesDoNotKeepItAlive(t *testing.T) {
+	clk := newFakeClock()
+	reg := NewRegistry(clk.Now)
+	if _, err := reg.Apply(mkBatch("stream-aaaa", 0, mkEvent(1, "heartbeat"))); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		clk.Advance(10 * time.Second)
+		reg.Reject("stream-aaaa")
+	}
+	if reg.SessionLive(sidA, PresenceWindow) {
+		t.Fatal("40 s of rejected batches after the last applied one: not live")
+	}
+	reg.Reject("stream-bbbb") // a stream only ever rejected has no session at all
+	if reg.SessionLive("", PresenceWindow) {
+		t.Fatal("an empty sid is never live")
+	}
+}
+
 // SessionLive: a stream that is not ended, whose current session is sid and whose last batch is within the window.
 // Mutation gate: ignore the age, the sid, or Ended → red.
 func TestRegistry_SessionLive(t *testing.T) {
