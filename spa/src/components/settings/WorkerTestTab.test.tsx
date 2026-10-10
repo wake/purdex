@@ -184,6 +184,55 @@ describe('WorkerTestTab', () => {
     expect(refetch).toHaveBeenCalled()
   })
 
+  // #1952: a section's retry keeps keyboard focus, as 已退出 / 已消失 do (#1627 C). The hook is mocked here, so the retry's
+  // phase is driven by hand: refetch -> 'loading', then the answer.
+  describe.each([['exited', 'ended'], ['gone', 'gone']] as const)('the %s section\'s retry keeps focus', (section, state) => {
+    const setup = () => {
+      let current: UseConversations
+      const other = hook({ page: page(state === 'ended' ? 'gone' : 'ended', []) })
+      const asHooks = (mine: UseConversations) => (state === 'ended' ? answer(mine, other) : answer(other, mine))
+      const set = (mine: UseConversations) => { current = mine; asHooks(current) }
+      const refetch = vi.fn(() => { set(hook({ phase: 'loading', error: null, refetch })); view.rerender(<WorkerTestTab hostId={H} />) })
+      set(hook({ page: null, phase: 'error', error: 'boom', refetch }))
+      const view = render(<WorkerTestTab hostId={H} />)
+      const settle = (next: UseConversations) => act(() => { set(next); view.rerender(<WorkerTestTab hostId={H} />) })
+      const btn = () => screen.getByTestId(`worker-test-${section}-retry`)
+      const pressByKeyboard = () => { act(() => { btn().focus() }); act(() => { fireEvent.click(btn()) }) }
+      return { refetch, settle, btn, pressByKeyboard }
+    }
+    const row = section === 'exited' ? ENDED : GONE
+
+    it('the button stays, busy, while the retry runs; a failure keeps focus on it', () => {
+      const { btn, pressByKeyboard, settle, refetch } = setup()
+      pressByKeyboard()
+      const b = btn()
+      expect(b).toBeDisabled()
+      expect(b).toHaveAttribute('aria-busy', 'true')
+      const refocus = vi.spyOn(b, 'focus')
+      settle(hook({ page: null, phase: 'error', error: 'still down', refetch }))
+      expect(btn()).toBe(b)
+      expect(b).toBeEnabled()
+      expect(refocus).toHaveBeenCalled()
+      expect(document.activeElement).toBe(b)
+    })
+
+    it('a success moves focus to that section\'s list', () => {
+      const { pressByKeyboard, settle, refetch } = setup()
+      pressByKeyboard()
+      settle(hook({ page: page(state, [row]), refetch }))
+      const lists = screen.getAllByRole('list')
+      expect(lists).toHaveLength(1)
+      expect(document.activeElement).toBe(lists[0])
+    })
+
+    it('a press without focus on the button moves no focus', () => {
+      const { btn, settle, refetch } = setup()
+      act(() => { fireEvent.click(btn()) })
+      settle(hook({ page: page(state, [row]), refetch }))
+      expect(document.activeElement).toBe(document.body)
+    })
+  })
+
   it('shows truncation per section', () => {
     answer(hook({ page: page('ended', [ENDED], { truncated: true }) }), hook({ page: page('gone', [GONE], { truncated: true }) }))
     render(<WorkerTestTab hostId={H} />)
