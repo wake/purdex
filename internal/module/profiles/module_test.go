@@ -103,12 +103,16 @@ func TestStartIsANoOp(t *testing.T) {
 	assert.NoError(t, m.Start(context.Background()))
 }
 
-func TestStopClosesTheStore(t *testing.T) {
+// Stop leaves the store open for requests still draining; Close releases it (#1033).
+func TestCloseClosesTheStore(t *testing.T) {
 	m := New()
 	require.NoError(t, m.Init(newTestCore(t)))
 	require.NoError(t, m.Stop(context.Background()))
-
 	_, err := m.store.ListProfiles()
+	assert.NoError(t, err, "Stop must leave the database open")
+
+	require.NoError(t, m.Close())
+	_, err = m.store.ListProfiles()
 	assert.Error(t, err, "the database is closed")
 }
 

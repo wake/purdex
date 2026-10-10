@@ -94,11 +94,15 @@ func (m *Module) Start(_ context.Context) error {
 
 // Stop closes the underlying SQLite database.
 func (m *Module) Stop(_ context.Context) error {
+	return nil // the store is released by Close, after the HTTP server drained (#1033)
+}
+
+// Close releases the store. It runs from CloseModules, after the HTTP server has drained (spec §4.5), which is why Stop
+// leaves the store open: a request in flight during shutdown must not meet a closed database (#1033). Idempotent
+// (sql.DB.Close is).
+func (m *Module) Close() error {
 	if m.store != nil {
 		return m.store.Close()
 	}
 	return nil
 }
-
-// Close is a stub until the implementation commit (#1033).
-func (m *Module) Close() error { return nil }

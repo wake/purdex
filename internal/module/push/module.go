@@ -341,10 +341,7 @@ func (m *Module) Stop(context.Context) error {
 	if snd := m.sender.Swap(nil); snd != nil {
 		snd.Stop() // a callback that already holds snd only enqueues onto a stopped sender: harmless
 	}
-	if m.store != nil {
-		return m.store.Close()
-	}
-	return nil
+	return nil // the store is released by Close, after the HTTP server drained (#1033)
 }
 
 // maxOpenKeys caps purdex.open_approval_keys (spec §6); open_approvals still reports the full count.
@@ -697,5 +694,12 @@ func writeError(w http.ResponseWriter, status int, code string) {
 	writeJSON(w, status, map[string]string{"error": code})
 }
 
-// Close is a stub until the implementation commit (#1033).
-func (m *Module) Close() error { return nil }
+// Close releases the store. It runs from CloseModules, after the HTTP server has drained (spec §4.5), which is why Stop
+// leaves the store open: a request in flight during shutdown must not meet a closed database (#1033). Idempotent
+// (sql.DB.Close is).
+func (m *Module) Close() error {
+	if m.store != nil {
+		return m.store.Close()
+	}
+	return nil
+}

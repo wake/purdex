@@ -186,17 +186,14 @@ func (m *Module) Start(ctx context.Context) error {
 // Stop ends the sweep and closes the store.
 func (m *Module) Stop(context.Context) error {
 	m.mu.Lock()
-	cancel, done, st := m.cancel, m.done, m.store
+	cancel, done := m.cancel, m.done
 	m.cancel, m.done, m.ready = nil, nil, false
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()
 		<-done
 	}
-	if st != nil {
-		return st.Close()
-	}
-	return nil
+	return nil // the store is released by Close, after the HTTP server drained (#1033)
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
@@ -210,5 +207,15 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/devices/self", m.handleSelf)
 }
 
-// Close is a stub until the implementation commit (#1033).
-func (m *Module) Close() error { return nil }
+// Close releases the store. It runs from CloseModules, after the HTTP server has drained (spec §4.5), which is why Stop
+// only turns the module not-ready: a request that already took the store finishes against an open database (#1033).
+// Idempotent.
+func (m *Module) Close() error {
+	m.mu.Lock()
+	st := m.store
+	m.mu.Unlock()
+	if st == nil {
+		return nil
+	}
+	return st.Close()
+}

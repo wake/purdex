@@ -27,6 +27,7 @@ type Module struct {
 
 	mu      sync.Mutex
 	store   *Store
+	closing *Store // the store Stop set aside for Close (guarded by mu)
 	ready   bool
 	initErr string
 	prompts PromptFiles // where Start wrote the prompts
@@ -205,11 +206,14 @@ func (m *Module) disable(err error) {
 	}
 }
 
-// Stop releases the store. Nothing writes after it returns.
+// Stop ends the engine and the reaper, so nothing writes after it returns; the store itself is released by Close.
 func (m *Module) Stop(context.Context) error {
 	m.mu.Lock()
 	st, eng, unsub, stopReaper := m.store, m.engine, m.unsubTurnEnd, m.stopReaper
 	m.store, m.ready, m.engine, m.unsubTurnEnd, m.stopReaper = nil, false, nil, nil, nil
+	if st != nil {
+		m.closing = st // released by Close, after the HTTP server drained (#1033)
+	}
 	m.mu.Unlock()
 	// the engine ends its entries while the store is still open
 	if unsub != nil {
@@ -221,11 +225,18 @@ func (m *Module) Stop(context.Context) error {
 	if eng != nil {
 		eng.Stop()
 	}
+	return nil
+}
+
+// Close releases the store Stop set aside. It runs from CloseModules, after the HTTP server has drained (spec §4.5): a
+// request that already took the store finishes against an open database (#1033). Idempotent.
+func (m *Module) Close() error {
+	m.mu.Lock()
+	st := m.closing
+	m.closing = nil
+	m.mu.Unlock()
 	if st == nil {
 		return nil
 	}
 	return st.Close()
 }
-
-// Close is a stub until the implementation commit (#1033).
-func (m *Module) Close() error { return nil }
