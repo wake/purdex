@@ -3,6 +3,7 @@ package main
 
 import (
 	"crypto/rand"
+	"io"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -140,4 +141,10 @@ func initPairing(c *core.Core, cfg *config.Config, cfgPath string, quick bool) {
 
 		fmt.Printf("\nToken: %s\n\n", token)
 	}
+}
+
+// initPairingTo: stub for the red commit (#1950).
+func initPairingTo(c *core.Core, cfg *config.Config, cfgPath string, quick bool, out io.Writer, tty bool) error {
+	initPairing(c, cfg, cfgPath, quick)
+	return nil
 }
