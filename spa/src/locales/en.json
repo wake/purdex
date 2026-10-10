@@ -2386,7 +2386,7 @@
   "chat.status.ended": "Ended",
   "chat.status.unknown": "Status unknown",
   "chat.files": "{{n}} file(s) +{{a}} −{{r}}",
-  "chat.peer.single": "↪ {{name}}: {{text}}…",
+  "chat.peer.single": "↪ {{name}}{{flag}}: {{text}}{{more}}",
   "chat.peer.many": "↪ {{n}} peer messages",
   "chat.peer.item": "{{sender}}{{flag}}: {{text}}",
   "chat.peer.unverified": " (unverified)",

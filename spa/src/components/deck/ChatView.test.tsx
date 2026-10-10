@@ -320,6 +320,27 @@ describe('peer messages (iOS 0.6.44)', () => {
     expect(screen.getByTestId('chat-peer-head').textContent).toBe(`↪ host/a: ${'x'.repeat(40)}…`)
   })
 
+  describe('the ellipsis only says something was cut', () => {
+    const head = (text: string) => {
+      mount({ turns: [turn('t', 0, [peer('p', { text })])] })
+      const h = screen.getByTestId('chat-peer-head').textContent
+      cleanup()
+      return h
+    }
+    it('a short single line has none', () => { expect(head('short ping')).toBe('↪ host/a: short ping') })
+    it('a single line of exactly 40 characters has none', () => { expect(head('y'.repeat(40))).toBe(`↪ host/a: ${'y'.repeat(40)}`) })
+    it('a single line of 41 characters is cut and has it', () => { expect(head('y'.repeat(41))).toBe(`↪ host/a: ${'y'.repeat(40)}…`) })
+    it('a short first line with more lines after it has it', () => { expect(head('first\nsecond')).toBe('↪ host/a: first…') })
+  })
+
+  it('a single unverified message says （未驗證） on the collapsed line too; a verified one does not', () => {
+    mount({ turns: [turn('t', 0, [peer('p', { text: 'hi', from: unv('host/b') })])] })
+    expect(screen.getByTestId('chat-peer-head').textContent).toBe('↪ host/b (unverified): hi')
+    cleanup()
+    mount({ turns: [turn('t', 0, [peer('p', { text: 'hi' })])] })
+    expect(screen.getByTestId('chat-peer-head').textContent).toBe('↪ host/a: hi')
+  })
+
   it('consecutive peer messages of one turn are one line, "↪ N peer messages", with no sender list', () => {
     mount({ turns: [turn('t', 0, [peer('p1'), peer('p2', { from: { kind: 'peer', name: 'host/b' } }), peer('p3')])] })
     const lines = screen.getAllByTestId('chat-peer')

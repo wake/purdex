@@ -2386,7 +2386,7 @@
   "chat.status.ended": "已結束",
   "chat.status.unknown": "狀態未知",
   "chat.files": "{{n}} 個檔案 +{{a}} −{{r}}",
-  "chat.peer.single": "↪ {{name}}：{{text}}…",
+  "chat.peer.single": "↪ {{name}}{{flag}}：{{text}}{{more}}",
   "chat.peer.many": "↪ {{n}} 則 peer 訊息",
   "chat.peer.item": "{{sender}}{{flag}}：{{text}}",
   "chat.peer.unverified": "（未驗證）",
