@@ -45,7 +45,9 @@ export function useWorkbookViewing(hostId: string, sessionId: string): SeatWorkb
   const gen = useWorkbookStore((s) => s.gens[hostId])
   const v1 = useWorkbookStore((s) => s.support[hostId]?.v1 === true)
   useEffect(() => {
-    if (hostId !== '' && v1) void useWorkbookStore.getState().openWorkbook(hostId, sessionId)
+    // `reloadOpen`, not `openWorkbook`: after a reconnect the roster loader's limit-1 ask has the conversation loading, and
+    // `openWorkbook` would return at once, leaving the view one entry deep (#2417).
+    if (hostId !== '' && v1) void useWorkbookStore.getState().reloadOpen(hostId, sessionId)
   }, [hostId, sessionId, gen, v1])
   return wb
 }

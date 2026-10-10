@@ -6,13 +6,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTabStore } from '../../stores/useTabStore'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
 import { collectLeaves } from '../../lib/pane-tree'
+import { WORKBOOK_MAX_RETRIES, workbookRetryDelay } from '../../lib/workbook/retry'
 import type { PaneLayout } from '../../types/tab'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { firstSentence, useSeatWorkbook } from './seat-workbook'
 import type { OwnWorkbookTarget } from './panel-view'
 
-const OWN_MAX_RETRIES = 3
-const OWN_RETRY_BASE_MS = 1000
 
 /** The conversation a layout's first live `cc` tmux-session pane (pre-order) belongs to; null when there is none. */
 export function ownSessionOf(layout: PaneLayout): OwnWorkbookTarget | null {
@@ -60,8 +59,8 @@ export function useOwnWorkbook(): OwnWorkbookTarget | null {
     r.busy = key
     void Promise.resolve(useWorkbookStore.getState().loadSeat(hostId, sessionId)).then((res) => {
       if (retry.current.busy === key) retry.current.busy = ''
-      if (res !== 'failed' || retry.current.key !== key || retry.current.tries >= OWN_MAX_RETRIES) return
-      const delay = OWN_RETRY_BASE_MS * 2 ** retry.current.tries++
+      if (res !== 'failed' || retry.current.key !== key || retry.current.tries >= WORKBOOK_MAX_RETRIES) return
+      const delay = workbookRetryDelay(retry.current.tries++)
       retry.current.notBefore = Date.now() + delay
       setTimeout(() => setTick((n) => n + 1), delay)
     })

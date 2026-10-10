@@ -105,6 +105,8 @@ interface WorkbookState {
   /** 'failed': the ask did not reach an answer (network / 5xx) and the seat is NOT marked loaded for this generation, so a later ask retries. */
   loadSeat: (hostId: string, sessionId: string) => Promise<'ok' | 'failed'>
   openWorkbook: (hostId: string, sessionId: string) => Promise<void>
+  /** A workbook view is open (opening, or its host reconnected): the first page (limit 20) even while a limit-1 `loadSeat` has the conversation loading; v1 and v2 alike. */
+  reloadOpen: (hostId: string, sessionId: string) => Promise<void>
   /** v2: ask for the conversation again NOW (limit 20), whatever else is loading it; the refresh path's way to correct `refreshAvailable` / learn a pending refresh entry. false: the request itself failed. No-op (true) without `workbook.v2`. */
   resnapshot: (hostId: string, sessionId: string) => Promise<boolean>
   /** The seats the team views show now: a seat that is gone stops holding its conversation (and counts as new if it returns). */
@@ -334,6 +336,13 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       if (!get().support[hostId]?.v1) return
       const conv = get().convOfSession[hostId]?.[sessionId]
       if (conv && get().byHost[hostId]?.byConv[conv]?.loading) return
+      await runFetch(hostId, sessionId, { limit: VIEW_PAGE })
+    },
+
+    reloadOpen: async (hostId, sessionId) => {
+      if (!get().support[hostId]?.v1) return
+      // No loading check: the roster loader's limit-1 ask of the same conversation must not turn a view's full page away (#2417).
+      // The request key still joins an identical limit-20 ask already out, and the epoch / generation fence drops a stale answer.
       await runFetch(hostId, sessionId, { limit: VIEW_PAGE })
     },
 
