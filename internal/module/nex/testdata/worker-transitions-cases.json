@@ -1,0 +1,17 @@
+{
+  "_comment": "Go only: transition decisions (classifyWorker, prev digest to cur digest, exec id 'e'). The SPA does not run this file; worker-status-cases.json (single-row projection) is the shared one. prev/cur use rowDigest's Go field names.",
+  "cases": [
+    {"name": "idle to idle, turn_count +1", "prev": {"State": "idle", "TurnCount": 1}, "cur": {"State": "idle", "TurnCount": 2}, "notify": true, "status": "idle", "key": "e|idle|2"},
+    {"name": "idle to idle, turn_count unchanged", "prev": {"State": "idle", "TurnCount": 2}, "cur": {"State": "idle", "TurnCount": 2}, "notify": false, "status": "idle", "key": ""},
+    {"name": "idle to idle, turn_count smaller (reset)", "prev": {"State": "idle", "TurnCount": 5}, "cur": {"State": "idle", "TurnCount": 1}, "notify": false, "status": "idle", "key": ""},
+    {"name": "idle to idle, turn_count jumps by 3", "prev": {"State": "idle", "TurnCount": 1}, "cur": {"State": "idle", "TurnCount": 4}, "notify": true, "status": "idle", "key": "e|idle|4"},
+    {"name": "idle to idle, first turn (0 to 1)", "prev": {"State": "idle", "TurnCount": 0}, "cur": {"State": "idle", "TurnCount": 1}, "notify": true, "status": "idle", "key": "e|idle|1"},
+    {"name": "archived idle to archived idle, turn_count +1 (clear)", "prev": {"State": "idle", "Archived": true, "TurnCount": 1}, "cur": {"State": "idle", "Archived": true, "TurnCount": 2}, "notify": false, "status": "clear", "key": ""},
+    {"name": "archived idle to unarchived idle, turn_count +1 (before is clear)", "prev": {"State": "idle", "Archived": true, "TurnCount": 1}, "cur": {"State": "idle", "TurnCount": 2}, "notify": false, "status": "idle", "key": ""},
+    {"name": "blank pending (waiting) to idle is a waiting-to-idle transition, not the turn_count rule", "prev": {"State": "idle", "TurnCount": 2, "PermissionBlank": true}, "cur": {"State": "idle", "TurnCount": 2}, "notify": true, "status": "idle", "key": "e|idle|2"},
+    {"name": "idle to idle, only last_turn_reason changes", "prev": {"State": "idle", "TurnCount": 2}, "cur": {"State": "idle", "TurnCount": 2, "LastTurnReason": "error"}, "notify": false, "status": "idle", "key": ""},
+    {"name": "error to error, turn_count +1 is not loosened", "prev": {"State": "failed", "TurnCount": 1}, "cur": {"State": "failed", "TurnCount": 2}, "notify": false, "status": "error", "key": ""},
+    {"name": "failed to idle, turn_count +1 (error before)", "prev": {"State": "failed", "TurnCount": 1}, "cur": {"State": "idle", "TurnCount": 2}, "notify": false, "status": "idle", "key": ""},
+    {"name": "running to idle still notifies", "prev": {"State": "running", "TurnCount": 1}, "cur": {"State": "idle", "TurnCount": 1}, "notify": true, "status": "idle", "key": "e|idle|1"}
+  ]
+}

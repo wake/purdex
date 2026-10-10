@@ -99,6 +99,47 @@ func TestProjector_PublishesOnlyTransitions(t *testing.T) {
 	assert.Equal(t, "failed", evs[3].Reason)
 }
 
+func idleRow(id string, turns int) string {
+	return fmt.Sprintf(`{"id":%q,"state":"idle","turn_count":%d}`+"\n", id, turns)
+}
+
+// A turn that ran and ended between two reads (the running state coalesced away) is one done; a reset of
+// turn_count only moves the baseline.
+func TestProjector_QuickTurnIsOneDone(t *testing.T) {
+	rows := newRowServer()
+	rows.setBody("exc_a", idleRow("exc_a", 1)) // seeded
+	e := startProjEnv(t, fastTiming, rows)
+	hub := &workerNotifyHub{}
+	e.p.notify = hub
+	c := &collector{}
+	defer hub.subscribe(c.add)()
+
+	flushOnce(t, e, "exc_a") // same digest
+	assert.Empty(t, c.got())
+
+	rows.setBody("exc_a", idleRow("exc_a", 2))
+	flushOnce(t, e, "exc_a")
+	evs := c.waitFor(t, 1)
+	assert.Equal(t, "idle", evs[0].Status)
+	assert.Equal(t, "exc_a|idle|2", evs[0].DedupKey)
+	flushOnce(t, e, "exc_a") // the same digest again
+	assert.Len(t, c.got(), 1)
+
+	rows.setBody("exc_a", idleRow("exc_a", 1)) // reset: baseline only
+	flushOnce(t, e, "exc_a")
+	assert.Len(t, c.got(), 1)
+	rows.setBody("exc_a", idleRow("exc_a", 2)) // +1 against the new baseline
+	flushOnce(t, e, "exc_a")
+	evs = c.waitFor(t, 2)
+	assert.Equal(t, "exc_a|idle|2", evs[1].DedupKey)
+
+	rows.setBody("exc_a", idleRow("exc_a", 5)) // a jump of 3 is still one
+	flushOnce(t, e, "exc_a")
+	assert.Equal(t, "exc_a|idle|5", c.waitFor(t, 3)[2].DedupKey)
+	flushOnce(t, e, "exc_a")
+	assert.Len(t, c.got(), 3)
+}
+
 // A row that comes back after a removal is a baseline, not a transition.
 func TestProjector_RemovedThenBackIsABaseline(t *testing.T) {
 	rows := newRowServer()

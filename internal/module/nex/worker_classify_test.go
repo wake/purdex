@@ -29,6 +29,32 @@ func TestProjectWorker_SharedFixture(t *testing.T) {
 	}
 }
 
+// testdata/worker-transitions-cases.json: Go only (prev digest to cur digest); the SPA does not run it.
+func TestClassifyWorker_TransitionFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/worker-transitions-cases.json")
+	require.NoError(t, err)
+	var f struct {
+		Cases []struct {
+			Name   string     `json:"name"`
+			Prev   *rowDigest `json:"prev"`
+			Cur    rowDigest  `json:"cur"`
+			Notify bool       `json:"notify"`
+			Status string     `json:"status"`
+			Key    string     `json:"key"`
+		} `json:"cases"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &f))
+	require.Greater(t, len(f.Cases), 8)
+	for _, c := range f.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			status, key, notify := classifyWorker("e", c.Prev, c.Cur)
+			assert.Equal(t, c.Notify, notify)
+			assert.Equal(t, c.Status, string(status))
+			assert.Equal(t, c.Key, key)
+		})
+	}
+}
+
 func TestClassifyWorker(t *testing.T) {
 	running := rowDigest{State: "running", TurnCount: 1}
 	waiting := func(req string) rowDigest { return rowDigest{State: "running", PermissionRequest: req, TurnCount: 1} }

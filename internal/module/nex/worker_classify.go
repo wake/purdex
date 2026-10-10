@@ -41,8 +41,15 @@ func projectWorker(d rowDigest) workerStatus {
 
 // classifyWorker decides whether the step from prev to cur is a notification. prev nil (the execution was never
 // seen: the first read is a baseline, as an epoch seed is) never notifies. Only a change of projected status into
-// waiting/idle/error notifies, plus a waiting worker whose pending request id changed (a new needs-you). The key
-// is what a consumer dedupes on: (exec, request_id) for waiting, (exec, "idle"|"error", turn_count) otherwise.
+// waiting/idle/error notifies, plus two steps inside one status:
+//   - waiting to waiting with another pending request id (a new needs-you);
+//   - idle to idle with a larger turn_count (a whole turn ran and ended between two reads: a quick turn inside one
+//     coalescing window, or the first turn after a daemon restart). A smaller turn_count (a reset) or an equal one
+//     is not a turn; the caller still records cur, so the next comparison uses the new baseline. error to error is
+//     not loosened.
+//
+// Done and failed otherwise follow a turn that was running or waiting; from clear (unarchive) nothing new happened.
+// The key is what a consumer dedupes on: (exec, request_id) for waiting, (exec, "idle"|"error", turn_count) otherwise.
 func classifyWorker(execID string, prev *rowDigest, cur rowDigest) (status workerStatus, key string, notify bool) {
 	status = projectWorker(cur)
 	if prev == nil {
@@ -64,7 +71,8 @@ func classifyWorker(execID string, prev *rowDigest, cur rowDigest) (status worke
 	case workerIdle, workerError:
 		// Done and failed follow a turn that was running or waiting. From clear (unarchive), or from idle/error
 		// (failed to idle without a running between), nothing new happened.
-		if before != workerRunning && before != workerWaiting {
+		turnRan := status == workerIdle && before == workerIdle && cur.TurnCount > prev.TurnCount
+		if before != workerRunning && before != workerWaiting && !turnRan {
 			return status, "", false
 		}
 		return status, execID + "|" + string(status) + "|" + strconv.FormatInt(cur.TurnCount, 10), true
