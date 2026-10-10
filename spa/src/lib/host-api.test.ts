@@ -169,6 +169,13 @@ describe('agentUpload', () => {
     const file = new File(['data'], 'test.png')
     await expect(agentUpload(HOST_ID, file, 'dev001')).rejects.toThrow('404')
   })
+
+  it('a file over 256 MiB is refused as too_large without a request (#2493)', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch')
+    const file = Object.defineProperty(new File(['data'], 'big.bin'), 'size', { value: 256 * 1024 * 1024 + 1 })
+    await expect(agentUpload(HOST_ID, file, 'dev001')).rejects.toMatchObject({ kind: 'too_large' })
+    expect(spy).not.toHaveBeenCalled()
+  })
 })
 
 describe('fetchSessionCwd', () => {

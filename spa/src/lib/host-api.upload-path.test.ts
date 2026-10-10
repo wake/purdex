@@ -1,7 +1,7 @@
 // agentUploadToPath: the deck / chat attachment upload (save only, inject=0, answers the saved path, reports progress).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../stores/useHostStore'
-import { agentUploadToPath, AgentUploadError } from './host-api'
+import { agentUploadToPath, AgentUploadError, AGENT_UPLOAD_MAX_BYTES } from './host-api'
 
 const HOST_ID = 'test-host'
 const TOKEN = 'purdex_test_token'
@@ -86,5 +86,20 @@ describe('agentUploadToPath', () => {
     ac.abort()
     expect(FakeXHR.last.aborted).toBe(true)
     await expect(p).rejects.toMatchObject({ kind: 'aborted' })
+  })
+
+  // #2493: the size is compared before anything is sent
+  const sized = (bytes: number) => Object.defineProperty(file(), 'size', { value: bytes })
+
+  it('a file over 256 MiB is refused as too_large without a request', async () => {
+    const before = FakeXHR.last
+    await expect(agentUploadToPath(HOST_ID, sized(AGENT_UPLOAD_MAX_BYTES + 1), 'dev001')).rejects.toMatchObject({ kind: 'too_large' })
+    expect(FakeXHR.last).toBe(before)
+  })
+
+  it('a file of exactly 256 MiB is sent', () => {
+    const before = FakeXHR.last
+    void agentUploadToPath(HOST_ID, sized(AGENT_UPLOAD_MAX_BYTES), 'dev001')
+    expect(FakeXHR.last).not.toBe(before)
   })
 })
