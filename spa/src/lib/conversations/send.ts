@@ -109,7 +109,13 @@ export const DESTRUCTIVE_WINDOW_MS = 5000
 
 export class DestructiveGuard {
   private pending: { text: string; at: number } | null = null
-  constructor(private readonly now: () => number = Date.now, private readonly windowMs = DESTRUCTIVE_WINDOW_MS) {}
+  private readonly now: () => number
+  private readonly windowMs: number
+
+  constructor(now: () => number = Date.now, windowMs = DESTRUCTIVE_WINDOW_MS) {
+    this.now = now
+    this.windowMs = windowMs
+  }
 
   /** 'confirm': ask 「真的要送出？」 and wait for a second press; 'send': go ahead. */
   check(text: string): 'send' | 'confirm' {

@@ -37,7 +37,13 @@ export class SendQueue {
   /** Set when the daemon says there is no mod: the input is disabled. */
   blocked: 'no_mod' | null = null
 
-  constructor(private readonly port: SendPort, private readonly now: () => number = Date.now) {}
+  private readonly port: SendPort
+  private readonly now: () => number
+
+  constructor(port: SendPort, now: () => number = Date.now) {
+    this.port = port
+    this.now = now
+  }
 
   subscribe = (fn: () => void): (() => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn) } }
   entries = (): readonly QueueEntry[] => this.view

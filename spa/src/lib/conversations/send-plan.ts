@@ -14,7 +14,8 @@ export const utf8Bytes = (s: string): number => utf8.encode(s).length
 // Built from strings so the source holds no invisible characters.
 const HIDDEN = new RegExp('[\\u202A-\\u202E\\u2066-\\u2069\\u200E\\u200F\\u061C\\u200B\\u2060\\uFEFF]', 'g')
 const LINE_SEP = new RegExp('[\\u2028\\u2029]', 'g')
-const CONTROL = new RegExp('[\\u0000-\\u0009\\u000B-\\u001F\\u007F-\\u009F]', 'g')
+// eslint-disable-next-line no-control-regex -- stripping control characters is the point
+const CONTROL =new RegExp('[\\u0000-\\u0009\\u000B-\\u001F\\u007F-\\u009F]', 'g')
 
 /** The text as it would be sent: control characters but \n gone, tabs -> 4 spaces, trailing spaces and blank head / tail lines trimmed. */
 export function normalizePrompt(raw: string): string {
