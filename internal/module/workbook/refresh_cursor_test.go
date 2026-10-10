@@ -69,6 +69,31 @@ func TestRefreshEntryIsNotAPreviousTurnInThePrompt(t *testing.T) {
 	}
 }
 
+// A slash command's own turn (/workbook refresh, /model, /clear ...) sits between the newest recorded turn and the next
+// one. It is not summarised, but it made two turns "newer than the cursor", and the Stop of the real turn that beat the
+// transcript was then left unadopted: the real turn was lost, and the previous one - caught up at the NEXT Stop - was
+// stamped with that Stop's time and words (live, 2026-10-10 11:17: entry 224 described the turn before).
+// Mutation gate: require the newest turn to be the only one newer than the cursor again → red.
+func TestStopBeforeTranscriptAfterASlashCommandTurn(t *testing.T) {
+	k := newKit(t)
+	k.capable["s1"] = true
+	k.turns.set("s1", endedTurn("t1", 100, "first"))
+	k.event("s1", 1000)
+	slash := convmodel.Turn{ID: "slash", Outcome: convmodel.OutcomeDone, StartedAt: 150, Items: []convmodel.Item{userItem("/workbook refresh")}}
+	next := convmodel.Turn{ID: "t3", Outcome: convmodel.OutcomeRunning, StartedAt: 1500, Items: []convmodel.Item{userItem("the real question")}}
+	k.turns.set("s1", endedTurn("t1", 100, "first"), slash, next)
+	k.e.OnTurnEnd(agent.TurnEndEvent{SessionID: "s1", Text: "the real answer", At: 2000, Seq: 2000})
+	for i := 0; i < settleRetries+1 && len(k.afters) > 0; i++ {
+		f := k.afters[0]
+		k.afters = k.afters[1:]
+		f()
+	}
+	rows := k.entries("s1")
+	if len(rows) != 2 || rows[1].TurnID != "t3" || rows[1].TurnAt != 2000 {
+		t.Fatalf("entries = %+v", rows)
+	}
+}
+
 // A cursor that is a real turn but has aged out of the 6-turn window (or no record at all: a session with history the
 // workbook never saw) is the same hole: the Stop that beats the transcript must still find the newest, running turn
 // (codex attack on the hotfix). Mutation gate: onlyNewer without the lost-cursor case → red.

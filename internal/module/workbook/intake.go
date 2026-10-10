@@ -159,11 +159,10 @@ func (e *Engine) pickTurns(ev agent.TurnEndEvent, try tries) (picks []pick, late
 	}
 	// the turns newer than the newest recorded one; a cursor outside the window means the whole window
 	from := 0
-	cursorSeen := false
 	if has {
 		for i, t := range turns {
 			if t.ID == cursor {
-				from, cursorSeen = i+1, true
+				from = i + 1
 			}
 		}
 	}
@@ -171,7 +170,7 @@ func (e *Engine) pickTurns(ev agent.TurnEndEvent, try tries) (picks []pick, late
 	// running) and sometimes the last assistant row. Wait a little for the file to catch up with the hook's own words; only
 	// then use those words.
 	forced := try.settle >= settleRetries
-	turns, target, caughtUp := adoptEvent(turns, ev, from, !cursorSeen, forced)
+	turns, target, caughtUp := adoptEvent(turns, ev, from, forced)
 	if !caughtUp {
 		return nil, &again{settleDelay, tries{busy: try.busy, settle: try.settle + 1}}
 	}
@@ -233,7 +232,7 @@ func (e *Engine) pickTurns(ev agent.TurnEndEvent, try tries) (picks []pick, late
 // done something counts. When nothing matches and the newest turn is running with no assistant words at all, the file has
 // not caught up: caughtUp is false until `force`, then the hook's words become that turn's words. The turns slice is not
 // changed; a turn that is changed is copied.
-func adoptEvent(turns []convmodel.Turn, ev agent.TurnEndEvent, from int, cursorLost, force bool) (out []convmodel.Turn, target int, caughtUp bool) {
+func adoptEvent(turns []convmodel.Turn, ev agent.TurnEndEvent, from int, force bool) (out []convmodel.Turn, target int, caughtUp bool) {
 	last := len(turns) - 1
 	if last < from {
 		return turns, -1, true // nothing newer than the newest recorded turn
@@ -262,11 +261,13 @@ func adoptEvent(turns []convmodel.Turn, ev agent.TurnEndEvent, from int, cursorL
 	if ev.At > 0 && t.StartedAt >= ev.At {
 		return out, -1, true // it began after this Stop: a newer turn's, left running (its own Stop will come)
 	}
-	// the one turn newer than the newest recorded: the event can only be about it. With no cursor in the window (none
-	// recorded, or it has aged out of the window) that cannot be told - but a newest turn that is running with no words at
-	// all is a file that has not caught up with this Stop, and is waited for (then given the hook's words) all the same.
+	// The one turn newer than the newest recorded: the event can only be about it. When more turns are newer than the
+	// cursor (a slash command's own turn, a cursor that left the window, no record yet) that cannot be told from the
+	// words - but a newest turn that is running, began before this Stop and has no words at all is a file that has not
+	// caught up with this Stop: it is waited for (then given the hook's words) all the same. Any older turn that is
+	// newer than the cursor has ended, so it cannot be the one this Stop is about while the newest one runs.
 	onlyNewer := last == from
-	if !onlyNewer && !(cursorLost && lastWords(t) == "") {
+	if !onlyNewer && lastWords(t) != "" {
 		return out, -1, true
 	}
 	if lastWords(t) != "" { // the file has words of its own that differ from the hook's (normalised, cut): still this turn
