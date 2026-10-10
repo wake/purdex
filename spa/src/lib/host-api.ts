@@ -741,11 +741,19 @@ export async function updateConfig(
 
 /* ─── Agent Upload API ─── */
 
+/**
+ * The most the daemon takes from this client (admin / the Mac: 256 MiB; a paired phone's 64 MiB is the iOS app's check).
+ * Compared before anything is sent: an oversize body streamed past the cap is a wasted upload, and the person should be
+ * told "too large" at once (#2493).
+ */
+export const AGENT_UPLOAD_MAX_BYTES = 256 * 1024 * 1024
+
 export async function agentUpload(
   hostId: string,
   file: File,
   session: string,
 ): Promise<{ filename: string; injected: boolean }> {
+  if (file.size > AGENT_UPLOAD_MAX_BYTES) throw new AgentUploadError('too_large')
   const form = new FormData()
   form.append('file', file)
   form.append('session', session)
@@ -783,6 +791,7 @@ export function agentUploadToPath(
   const { signal, onProgress } = opts
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(new AgentUploadError('aborted')); return }
+    if (file.size > AGENT_UPLOAD_MAX_BYTES) { reject(new AgentUploadError('too_large')); return }
     // same pin as `pinnedHostFetch`: an unknown host must not be answered by the active host's daemon
     if (!isConfiguredHost(hostId)) { reject(new AgentUploadError('host_missing')); return }
     const { getDaemonBase, getAuthHeaders } = useHostStore.getState()
