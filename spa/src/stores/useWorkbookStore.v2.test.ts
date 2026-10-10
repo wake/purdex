@@ -226,6 +226,25 @@ describe('refreshAvailable', () => {
     expect(conv()?.refreshAvailable).toBe(false)
   })
 
+  it('a late conversation answer does not overwrite a newer workbook.refresh_available event', async () => {
+    st().setSupport('h1', V2)
+    let resolve!: (v: ConversationResult) => void
+    fetchConversation.mockReturnValueOnce(new Promise<ConversationResult>((r) => { resolve = r }))
+    const loading = st().openWorkbook('h1', 's1')
+    st().applyRefreshAvailable('h1', { convKey: 'c1', available: false }) // after the request started
+    resolve(page([entry(3)], { refreshAvailable: true })) // the answer was computed before the event
+    await loading
+    expect(conv()?.refreshAvailable).toBe(false)
+  })
+
+  it('an answer that started after the last event does apply', async () => {
+    st().setSupport('h1', V2)
+    st().applyRefreshAvailable('h1', { convKey: 'c1', available: false })
+    fetchConversation.mockResolvedValue(page([entry(3)], { refreshAvailable: true }))
+    await st().openWorkbook('h1', 's1')
+    expect(conv()?.refreshAvailable).toBe(true)
+  })
+
   it('an answer without the flag (v1) leaves it', async () => {
     st().setSupport('h1', V2)
     st().applyRefreshAvailable('h1', { convKey: 'c1', available: true })

@@ -74,6 +74,8 @@ export interface ConvState {
   todos: TodoBook
   /** v2: some live session of the conversation can run a refresh now (false until told, and again after a disconnect). */
   refreshAvailable: boolean
+  /** Store clock stamp of the last `workbook.refresh_available` event: an answer whose request started before it is older than the event. */
+  availAt: number
 }
 
 /** What `requestRefresh` answers; it never throws. `unsupported`: the host does not list `workbook.v2` (nothing was posted). */
@@ -130,7 +132,7 @@ const NO_SUPPORT: WorkbookSupport = { v1: false, v2: false }
 const emptyTodos = (): TodoBook => ({ open: [], done: [], doneOldestId: null, doneExhausted: false, loading: false, droppedIds: [] })
 const emptyConv = (): ConvState => ({
   status: '', statusAt: 0, entries: [], oldestId: null, exhausted: false, loading: false, touched: 0, missing: false,
-  todos: emptyTodos(), refreshAvailable: false,
+  todos: emptyTodos(), refreshAvailable: false, availAt: 0,
 })
 
 /** Refresh pending, derived: the conversation holds a refresh entry that is still pending (see the header). */
@@ -246,6 +248,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
   async function fetchOnce(hostId: string, sessionId: string, q: { limit: number; before?: number }): Promise<void> {
     const epoch = get().epoch[hostId] ?? 0
     const gen = get().gens[hostId]
+    const startedAt = ++clock // stamps the request: an event that lands after it is newer than the answer
     const known = get().convOfSession[hostId]?.[sessionId]
     if (known) set((s) => withConv(s, hostId, known, (c) => ({ ...c, loading: true })))
     const alive = () => (get().epoch[hostId] ?? 0) === epoch && get().gens[hostId] === gen
@@ -282,7 +285,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
           loading: false, missing: false,
           // v2 parts (null from a v1 daemon: left as they were)
           todos: page.todos ? snapshotTodos(c.todos, page.todos) : c.todos,
-          refreshAvailable: page.refreshAvailable ?? c.refreshAvailable,
+          refreshAvailable: page.refreshAvailable !== null && c.availAt < startedAt ? page.refreshAvailable : c.refreshAvailable,
         }
       }),
     }))
@@ -445,7 +448,7 @@ export const useWorkbookStore = create<WorkbookState>()((set, get) => {
       ...withConv(s, hostId, ev.convKey, (c) => ({ ...c, todos: upsertTodos(c.todos, ev.todos), missing: false })),
     })); set((s) => evicted(s, hostId)) },
 
-    applyRefreshAvailable: (hostId, ev) => { set((s) => withConv(s, hostId, ev.convKey, (c) => ({ ...c, refreshAvailable: ev.available }))); set((s) => evicted(s, hostId)) },
+    applyRefreshAvailable: (hostId, ev) => { set((s) => withConv(s, hostId, ev.convKey, (c) => ({ ...c, refreshAvailable: ev.available, availAt: ++clock }))); set((s) => evicted(s, hostId)) },
 
     forgetHost: (hostId) => set((s) => {
       const drop = <T>(m: Record<string, T>): Record<string, T> => { const { [hostId]: _g, ...rest } = m; return rest }
