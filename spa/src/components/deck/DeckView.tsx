@@ -49,11 +49,13 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel }: { turn: Tu
   useEffect(() => {
     if (eager && reveal) markRevealed(reveal.memKey, turn.id)
   }, [eager, reveal, turn.id])
+  // A turn without agent text looks the same either way: nothing to watch.
+  const hasProse = turn.items.some((item) => item.type === 'agent_text')
   useEffect(() => {
     const el = ref.current
-    if (full || !reveal || !el) return
+    if (full || !reveal || !el || !hasProse) return
     return reveal.observe(el, () => { markRevealed(reveal.memKey, turn.id); setNear(true) })
-  }, [full, reveal, turn.id])
+  }, [full, reveal, turn.id, hasProse])
   const actions = useMemo<StepActions | undefined>(() => onOpenPanel && ({
     onShowAll: (s) => onOpenPanel({ kind: 'output', turnId: turn.id, stepId: s.id }),
     onOpenSubagent: (s) => onOpenPanel({ kind: 'subagent', turnId: turn.id, stepId: s.id }),

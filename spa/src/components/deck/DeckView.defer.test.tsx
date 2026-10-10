@@ -9,7 +9,7 @@ import { registerModule, clearModuleRegistry, type PaneRendererProps } from '../
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 import { forgetFolds } from '../../lib/conversations/fold-memory'
-import { forgetReveals, isRevealed } from '../../lib/conversations/deck-reveal-memory'
+import { forgetRevealsOfPane, isRevealed } from '../../lib/conversations/deck-reveal-memory'
 import { clearMarkdownCache, markdownCacheSize } from '../../lib/conversations/markdown-cache'
 import { forgetScrollMemosWithPrefix, readScrollMemo } from '../../lib/nex/transcript-scroll-memory'
 import { emptyDoc } from '../../lib/conversations/model'
@@ -64,7 +64,7 @@ beforeEach(() => {
   observers = []
   vi.stubGlobal('IntersectionObserver', StubIO)
   forgetFolds(KEY)
-  forgetReveals(KEY)
+  forgetRevealsOfPane('p-deck')
   clearMarkdownCache()
   forgetScrollMemosWithPrefix('p-deck')
   vi.mocked(ReactMarkdown).mockClear()
@@ -167,6 +167,16 @@ describe('DeckView defers far-off markdown', () => {
     expect(box.scrollTop).toBe(0)
   })
 
+  it('watches only the turns that have agent text', () => {
+    const ts = turns(EAGER_TURNS + 3)
+    ts[1] = turn(1, [{ type: 'user', id: 'u1', at: 1, index: 0, text: 'only a question', source: 'user' } as ConversationItem])
+    render(<DeckView {...props} entry={entry(ts)} />)
+    const watched = new Set(observers.flatMap((o) => [...o.targets]))
+    expect(watched.has(turnEl(0))).toBe(true)
+    expect(watched.has(turnEl(1))).toBe(false)
+    expect(watched.has(turnEl(2))).toBe(true)
+  })
+
   it('draws streaming text in full whatever the turn', () => {
     const ts = turns(EAGER_TURNS + 3)
     ts[1] = turn(1, [agent('s1', 0, 'typing', { streaming: true })])
@@ -203,11 +213,11 @@ describe('a tab switch', () => {
     registerModule({ id: 'nex', name: 'Nex', panes: [{ kind: 'execution', component: DeckRenderer }] })
     registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: () => <div data-testid="other-tab" /> }] })
     forgetFolds(`${pane}\0s`)
-    forgetReveals(`${pane}\0s`)
+    forgetRevealsOfPane(pane)
     forgetScrollMemosWithPrefix(pane)
   })
   afterEach(() => {
-    forgetReveals(`${pane}\0s`)
+    forgetRevealsOfPane(pane)
     forgetScrollMemosWithPrefix(pane)
   })
 

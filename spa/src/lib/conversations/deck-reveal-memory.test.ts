@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { forgetFoldsOfPane } from './fold-memory'
-import { forgetReveals, isRevealed, markRevealed } from './deck-reveal-memory'
+import { forgetRevealsOfPane, isRevealed, markRevealed } from './deck-reveal-memory'
 
 describe('deck reveal memory', () => {
   it('remembers per deck key, and forgets a key', () => {
@@ -8,7 +8,7 @@ describe('deck reveal memory', () => {
     expect(isRevealed('rv-a\0s', 't1')).toBe(true)
     expect(isRevealed('rv-a\0s', 't2')).toBe(false)
     expect(isRevealed('rv-a\0s2', 't1')).toBe(false)
-    forgetReveals('rv-a\0s')
+    forgetRevealsOfPane('rv-a')
     expect(isRevealed('rv-a\0s', 't1')).toBe(false)
   })
 

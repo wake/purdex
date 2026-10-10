@@ -14,10 +14,6 @@ export function markRevealed(key: string, turnId: string): void {
   set.add(turnId)
 }
 
-export function forgetReveals(key: string): void {
-  panes.delete(key)
-}
-
 /** Forget every key of a pane (`${paneId}\0…`), sparing those `keep` returns true for. Called with the fold memory's sweep. */
 export function forgetRevealsOfPane(paneId: string, keep?: (key: string) => boolean): void {
   for (const key of [...panes.keys()]) if (key.startsWith(`${paneId}\0`) && !keep?.(key)) panes.delete(key)
