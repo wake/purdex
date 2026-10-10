@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatClock, outputLineCount, outputTail, readRange, stepChip, systemView, toActivityDiff, userCaption } from './deck-format'
+import { capDiff, formatClock, outputTail, readRange, stepChip, systemView, textOutput, toActivityDiff, userCaption } from './deck-format'
 import type { StepOutput } from './types'
 
 const out = (text: string, over: Partial<StepOutput> = {}): StepOutput => ({
@@ -68,10 +68,29 @@ describe('outputTail', () => {
   it('ignores one trailing newline', () => {
     expect(outputTail(out('a\nb\n', { total_lines: 2 }))).toMatchObject({ text: 'a\nb', cut: false })
   })
-  it('counts the lines of an output', () => {
-    expect(outputLineCount(out(lines(4)))).toBe(4)
-    expect(outputLineCount(out(''))).toBe(0)
-    expect(outputLineCount(out(lines(2), { total_lines: 50 }))).toBe(50)
+  it('draws 10 lines whole and 11 as the last 10', () => {
+    expect(outputTail(out(lines(10))).cut).toBe(false)
+    const eleven = outputTail(out(lines(11)))
+    expect(eleven.cut).toBe(true)
+    expect(eleven.text.split('\n')[0]).toBe('l2')
+    expect(eleven.totalLines).toBe(11)
+  })
+  it('reads a payload with missing or wrong-typed fields as empty, never throwing', () => {
+    expect(outputTail({} as StepOutput)).toEqual({ text: '', totalLines: 0, cut: false })
+    expect(outputTail({ text: 42, total_lines: 'x' } as unknown as StepOutput)).toEqual({ text: '', totalLines: 0, cut: false })
+    expect(outputTail(undefined as unknown as StepOutput).text).toBe('')
+  })
+  it('handles a very large output without splitting it (the tail is found from the end)', () => {
+    const big = Array.from({ length: 200_000 }, (_, i) => `row ${i + 1}`).join('\n')
+    const tail = outputTail(out(big, { total_lines: 200_000 }))
+    expect(tail.text.split('\n')).toHaveLength(10)
+    expect(tail.text.endsWith('row 200000')).toBe(true)
+    expect(tail.totalLines).toBe(200_000)
+  })
+  it('counts the lines of a bare text', () => {
+    expect(textOutput('a\nb\nc\n').total_lines).toBe(3)
+    expect(textOutput('').total_lines).toBe(0)
+    expect(textOutput('one').total_lines).toBe(1)
   })
 })
 
@@ -88,6 +107,28 @@ describe('toActivityDiff', () => {
   })
   it('carries truncation and tolerates no hunks', () => {
     expect(toActivityDiff({ path: '/a', added: 9, removed: 9, exact: false, truncated: true })).toMatchObject({ hunks: [], truncated: true })
+  })
+})
+
+describe('capDiff', () => {
+  const hunk = (n: number, start = 1) => ({ old_start: start, old_lines: n, new_start: start, new_lines: n, lines: Array.from({ length: n }, (_, i) => `+${start}:${i}`) })
+  const diff = (hunks: ReturnType<typeof hunk>[], over: object = {}) => ({ path: '/a', added: 0, removed: 0, exact: true, hunks, ...over })
+  it('cuts at 16 lines across hunks and reports the whole', () => {
+    const r = capDiff(diff([hunk(10), hunk(10, 50)]))
+    expect(r.diff.hunks!.map((h) => h.lines.length)).toEqual([10, 6])
+    expect(r).toMatchObject({ totalLines: 20, cut: true })
+  })
+  it('drops a hunk that starts past the budget', () => {
+    expect(capDiff(diff([hunk(16), hunk(3, 90)])).diff.hunks).toHaveLength(1)
+  })
+  it('keeps exactly 16 whole', () => {
+    expect(capDiff(diff([hunk(16)]))).toMatchObject({ totalLines: 16, cut: false })
+  })
+  it('reads missing hunks, or a hunk with no lines, as nothing', () => {
+    expect(capDiff({ path: '/a', added: 1, removed: 0, exact: true })).toMatchObject({ totalLines: 0, cut: false })
+    const bad = diff([{ old_start: 1 } as never, hunk(2)])
+    expect(capDiff(bad).totalLines).toBe(2)
+    expect(toActivityDiff(bad).hunks).toHaveLength(1)
   })
 })
 

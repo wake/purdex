@@ -2,7 +2,7 @@
 // gets, what the status slot of a step says, how an output is cut to its last lines, and the adapter that gives a wire
 // diff to the room's `ToolDiffView`. No React, no store.
 import type { DiffHunk as ActivityHunk, ToolActivity } from '../nex/tool-activity'
-import type { StepDiff, StepItem, StepOutput, SystemItem, UserItem } from './types'
+import type { DiffHunk, StepDiff, StepItem, StepOutput, SystemItem, UserItem } from './types'
 
 /** How many lines of an output the deck opens to (spec §4: "the last 10 lines"). */
 export const OUTPUT_TAIL_LINES = 10
@@ -68,23 +68,41 @@ export interface OutputTail {
   cut: boolean
 }
 
-/** The last `OUTPUT_TAIL_LINES` lines of an output. */
+/** Lines in a text, without allocating one string per line (an output can be large). A trailing newline ends a line. */
+function countLines(text: string): number {
+  if (text === '') return 0
+  let n = 1
+  for (let i = text.indexOf('\n'); i >= 0 && i < text.length - 1; i = text.indexOf('\n', i + 1)) n++
+  return n
+}
+
+/**
+ * The last `OUTPUT_TAIL_LINES` lines of an output. Scans from the end for the newlines it needs instead of splitting the
+ * whole text, and reads a payload with missing or wrong-typed fields as empty rather than throwing in a render.
+ */
 export function outputTail(out: StepOutput): OutputTail {
-  const text = out.text.endsWith('\n') ? out.text.slice(0, -1) : out.text
-  const lines = text === '' ? [] : text.split('\n')
-  const totalLines = Math.max(out.total_lines, lines.length)
-  if (lines.length <= OUTPUT_TAIL_LINES) return { text, totalLines, cut: out.truncated || totalLines > lines.length }
-  return { text: lines.slice(-OUTPUT_TAIL_LINES).join('\n'), totalLines, cut: true }
+  const raw = typeof out?.text === 'string' ? out.text : ''
+  const text = raw.endsWith('\n') ? raw.slice(0, -1) : raw
+  const given = Number.isFinite(out?.total_lines) && out.total_lines > 0 ? Math.floor(out.total_lines) : 0
+  let start = 0
+  let found = 0
+  for (let at = text.length; found < OUTPUT_TAIL_LINES && at > 0;) {
+    const i = text.lastIndexOf('\n', at - 1)
+    if (i < 0) break
+    found++
+    start = i + 1
+    at = i
+  }
+  if (found < OUTPUT_TAIL_LINES) {
+    const shown = text === '' ? 0 : found + 1
+    return { text, totalLines: Math.max(given, shown), cut: out?.truncated === true || given > shown }
+  }
+  return { text: text.slice(start), totalLines: Math.max(given, countLines(text)), cut: true }
 }
 
 /** A bare text as a `StepOutput` (a `command_output` item has only text), so one fold draws both. */
 export function textOutput(text: string, truncated = false): StepOutput {
-  return { text, total_lines: text === '' ? 0 : text.replace(/\n$/, '').split('\n').length, total_bytes: text.length, truncated }
-}
-
-/** The lines of an output the user can see once it is open: the whole text, for the right panel's 「顯示全部」. */
-export function outputLineCount(out: StepOutput): number {
-  return Math.max(out.total_lines, out.text === '' ? 0 : out.text.replace(/\n$/, '').split('\n').length)
+  return { text, total_lines: countLines(text), total_bytes: text.length, truncated }
 }
 
 type ActivityDiff = NonNullable<ToolActivity['diff']>
@@ -92,15 +110,20 @@ type ActivityDiff = NonNullable<ToolActivity['diff']>
 /** How many diff lines the deck draws before 「顯示全部 N 行」 (spec §4). */
 export const DIFF_DECK_LINES = 16
 
+/** A hunk list read defensively: a missing list, or a hunk without a `lines` array, counts as nothing. */
+function safeHunks(diff: StepDiff): DiffHunk[] {
+  return Array.isArray(diff.hunks) ? diff.hunks.filter((h) => h && Array.isArray(h.lines)) : []
+}
+
 /**
  * The first `DIFF_DECK_LINES` lines of a diff, hunk by hunk (a hunk whose lines are all past the budget is dropped), with
  * the line count of the whole diff and whether anything was left off — by this cap or by the daemon.
  */
 export function capDiff(diff: StepDiff): { diff: StepDiff; totalLines: number; cut: boolean } {
-  const hunks = diff.hunks ?? []
+  const hunks = safeHunks(diff)
   const totalLines = hunks.reduce((n, h) => n + h.lines.length, 0)
   let left = DIFF_DECK_LINES
-  const kept: typeof hunks = []
+  const kept: DiffHunk[] = []
   for (const h of hunks) {
     if (left <= 0) break
     kept.push(h.lines.length <= left ? h : { ...h, lines: h.lines.slice(0, left) })
@@ -111,7 +134,7 @@ export function capDiff(diff: StepDiff): { diff: StepDiff; totalLines: number; c
 
 /** The wire diff as the room's `ToolDiffView` takes it (camelCase hunks, `truncated` always a boolean). */
 export function toActivityDiff(diff: StepDiff): ActivityDiff {
-  const hunks: ActivityHunk[] = (diff.hunks ?? []).map((h) => ({
+  const hunks: ActivityHunk[] = safeHunks(diff).map((h) => ({
     oldStart: h.old_start, oldLines: h.old_lines, newStart: h.new_start, newLines: h.new_lines, lines: h.lines,
   }))
   return { path: diff.path, added: diff.added, removed: diff.removed, hunks, truncated: diff.truncated === true }

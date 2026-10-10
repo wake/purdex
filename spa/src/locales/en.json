@@ -2293,6 +2293,7 @@
   "deck.output": "Output · {{n}} lines",
   "deck.output.cut": "…truncated",
   "deck.output.show_all": "Show all",
+  "deck.output.images": "{{n}} image(s) not shown",
   "deck.diff.show_all": "Show all {{n}} lines",
   "deck.thinking": "Thinking",
   "deck.thinking.for": "Thinking · {{s}} s",

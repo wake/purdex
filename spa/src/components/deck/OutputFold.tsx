@@ -18,7 +18,12 @@ export function OutputFold({ foldKey, output, tone = 'normal', onShowAll }: Prop
   const t = useI18nStore((s) => s.t)
   const [open, toggle] = useFold(foldKey)
   const tail = outputTail(output)
-  if (output.text === '' && !output.images?.length) return null
+  const textless = typeof output?.text !== 'string' || output.text === ''
+  // An output that is only pictures has no lines to fold: say so, as the user block does (the apps draw a notice).
+  if (textless) {
+    const n = output?.images?.length ?? 0
+    return n > 0 ? <div data-testid="output-images" className="text-xs text-text-muted">{t('deck.output.images', { n })}</div> : null
+  }
   return (
     <div data-testid="output-fold" className="text-xs">
       <button type="button" data-testid="output-toggle" aria-expanded={open} onClick={toggle} className="cursor-pointer text-text-muted hover:text-text-primary">

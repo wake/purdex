@@ -173,6 +173,18 @@ describe('step · edit, long diff and 顯示全部', () => {
   })
 })
 
+describe('an output that is only pictures', () => {
+  it('says the images are not shown instead of a 0-line fold', () => {
+    const step = {
+      type: 'step', id: 'img', at: 1, index: 0, kind: 'other', tool: 'Screenshot', status: 'done', summary: 'shot', started_at: 1, input: null,
+      output: { text: '', total_lines: 0, total_bytes: 0, truncated: false, images: [{ media_type: 'image/png', bytes: 10 }] },
+    } as ConversationItem
+    render(<DeckItem item={step} />)
+    expect(screen.getByTestId('output-images')).toHaveTextContent('1 image(s) not shown')
+    expect(screen.queryByTestId('output-toggle')).toBeNull()
+  })
+})
+
 describe('command_output', () => {
   const lines = (n: number) => Array.from({ length: n }, (_, i) => `out ${i + 1}`).join('\n')
 

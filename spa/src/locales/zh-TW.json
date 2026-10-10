@@ -2293,6 +2293,7 @@
   "deck.output": "輸出 · {{n}} 行",
   "deck.output.cut": "…已截斷",
   "deck.output.show_all": "顯示全部",
+  "deck.output.images": "{{n}} 張圖片未顯示",
   "deck.diff.show_all": "顯示全部 {{n}} 行",
   "deck.thinking": "思考",
   "deck.thinking.for": "思考 · {{s}} 秒",
