@@ -12,7 +12,7 @@ vi.mock('../lib/workbook/api', () => ({
   postRefresh: (...a: Parameters<typeof postRefresh>) => postRefresh(...a),
 }))
 
-import { MAX_DONE_TODOS, MAX_DROPPED_TOMBSTONES, MAX_OPEN_TODOS, MAX_UNTIL_PAGES, selectConv, selectRefreshPending, useWorkbookStore } from './useWorkbookStore'
+import { MAX_DONE_TODOS, MAX_OPEN_TODOS, MAX_TODO_TOUCHES, MAX_UNTIL_PAGES, selectConv, selectRefreshPending, useWorkbookStore } from './useWorkbookStore'
 
 const entry = (id: number, over: Partial<WorkbookEntry> = {}): WorkbookEntry => ({
   id, convKey: 'c1', sessionId: 's1', turnId: `t${id}`, turnAt: id * 1000, state: 'ok', reason: '', thing: `thing ${id}`, push: '', entry: '',
@@ -53,11 +53,49 @@ describe('todos', () => {
     expect(st().convOfSession.h1.s1).toBe('c1')
   })
 
-  it('a todo only moves forward: a stale open copy revives neither a done nor a dropped one', () => {
-    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1, 'done'), todo(2, 'dropped')] })
-    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1), todo(2)] })
+  it('a done todo is never reopened by an open copy', () => {
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1, 'done')] })
+    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1)] })
     expect(conv()?.todos.open).toEqual([])
     expect(ids(conv()?.todos.done)).toEqual([1])
+  })
+
+  describe('a late answer (snapshot) never revives what events closed since its request started', () => {
+    const lateSnapshot = async (during: () => void, open: WorkbookTodo[]) => {
+      st().setSupport('h1', V2)
+      let resolve!: (v: ConversationResult) => void
+      fetchConversation.mockReturnValueOnce(new Promise<ConversationResult>((r) => { resolve = r }))
+      const loading = st().openWorkbook('h1', 's1')
+      during()
+      resolve(page([entry(3)], { todos: { open, done: [] } }))
+      await loading
+    }
+
+    it('the touched ids are refused, the rest of the snapshot applies', async () => {
+      await lateSnapshot(
+        () => st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1, 'dropped'), todo(2, 'done')] }),
+        [todo(1), todo(2), todo(3), todo(500)],
+      )
+      expect(ids(conv()?.todos.open)).toEqual([3, 500])
+      expect(ids(conv()?.todos.done)).toEqual([2])
+    })
+
+    it('with more events than MAX_TODO_TOUCHES the history is gone, so the stale snapshot\'s open list is not trusted at all', async () => {
+      st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1), todo(7)] })
+      await lateSnapshot(() => {
+        st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1, 'dropped')] }) // the first touch, soon evicted
+        for (let i = 0; i < MAX_TODO_TOUCHES + 5; i++) st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(2000 + i, 'dropped')] })
+      }, [todo(1), todo(7), todo(500)])
+      expect(ids(conv()?.todos.open)).toEqual([7]) // 1 stays closed; 500 is not added from an answer that cannot be vouched for
+    })
+
+    it('an answer that started after the events is current: it applies in full', async () => {
+      st().setSupport('h1', V2)
+      st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(1, 'dropped')] })
+      fetchConversation.mockResolvedValue(page([entry(3)], { todos: { open: [todo(5)], done: [] } }))
+      await st().openWorkbook('h1', 's1')
+      expect(ids(conv()?.todos.open)).toEqual([5])
+    })
   })
 
   it('the conversation answer is a snapshot: it replaces open, merges done, keeps events newer than itself', async () => {
@@ -76,7 +114,7 @@ describe('todos', () => {
     expect(ids(conv()?.todos.open)).toEqual([1])
   })
 
-  it('is bounded: the newest MAX_OPEN_TODOS open, the newest MAX_DONE_TODOS done, MAX_DROPPED_TOMBSTONES tombstones', () => {
+  it('is bounded: the newest MAX_OPEN_TODOS open, the newest MAX_DONE_TODOS done, MAX_TODO_TOUCHES touches', () => {
     const open = Array.from({ length: MAX_OPEN_TODOS + 5 }, (_, i) => todo(i + 1))
     st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: open })
     expect(conv()?.todos.open).toHaveLength(MAX_OPEN_TODOS)
@@ -86,9 +124,8 @@ describe('todos', () => {
     expect(conv()?.todos.done).toHaveLength(MAX_DONE_TODOS)
     expect(conv()?.todos.done[0].id).toBe(1000 + MAX_DONE_TODOS + 4)
     expect(conv()?.todos.doneOldestId).toBe(conv()?.todos.done[MAX_DONE_TODOS - 1].id)
-    const dropped = Array.from({ length: MAX_DROPPED_TOMBSTONES + 7 }, (_, i) => todo(5000 + i, 'dropped'))
-    st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: dropped })
-    expect(conv()?.todos.droppedIds).toHaveLength(MAX_DROPPED_TOMBSTONES)
+    for (let i = 0; i < MAX_TODO_TOUCHES + 7; i++) st().applyTodos('h1', { convKey: 'c1', sessionId: 's1', todos: [todo(5000 + i, 'dropped')] })
+    expect(conv()?.todos.touches).toHaveLength(MAX_TODO_TOUCHES)
   })
 })
 
