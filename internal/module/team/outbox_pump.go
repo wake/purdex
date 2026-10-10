@@ -77,6 +77,12 @@ type kindDropper interface {
 	Dropped(e outboxEntry) error
 }
 
+// entryStale is an optional part of a kindDropper store: an entry that reports something that is no longer so by the time it
+// would be sent is dropped before the call (member relay spec §3.6: a `relay_ask` whose ask is no longer open on this host).
+type entryStale interface {
+	Stale(e outboxEntry) (bool, error)
+}
+
 // capsTTL is how long a host's capabilities are reused by the gate (ms).
 const capsTTL = 30_000
 
@@ -230,6 +236,24 @@ func (p *outboxPump) drain(hostID string) {
 // attempt makes one call for the head entry and acts on its class; true means the entry was settled and the next one
 // may go at once.
 func (p *outboxPump) attempt(e outboxEntry) bool {
+	if st, ok := p.store.(entryStale); ok && e.Kind != "" {
+		stale, err := st.Stale(e)
+		if err != nil {
+			p.backoff(e, 0, "reading whether it is still so failed: "+err.Error())
+			return false
+		}
+		if stale {
+			if d, ok := p.store.(kindDropper); ok {
+				if err := d.Dropped(e); err != nil {
+					p.logf("[team] %s outbox %s (%s): drop: %v", p.name, e.ID, e.HostID, err)
+					p.backoff(e, 0, "dropping a stale entry failed")
+					return false
+				}
+				p.logf("[team] %s outbox: %s entry %s for host %s is no longer so; dropped", p.name, e.Kind, e.ID, e.HostID)
+				return true
+			}
+		}
+	}
 	if g, ok := p.store.(kindGate); ok && e.Kind != "" {
 		caps, err := p.capsOf(e.HostID)
 		var se *peersmod.CapsStatusError

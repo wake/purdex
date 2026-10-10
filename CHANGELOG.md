@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.692] - 2026-10-11
+
+> 只動到 daemon：**要部署 daemon（lead 與 member 兩台都要）**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Added：別台主機上的 member 用量到 70% 時，申請會傳到 lead — MR-4（#2522）
+
+- 跨主機的 member（例如 air26 上的 iOS member）用量到 70% 時，它的 mod 照常申請接力；member 那台先確認 lead 那台支援這個通知才記下申請，再把申請送到 lead 那台，lead 收到「member air26/_<ref> 已用 N%，申請接力。M 分鐘內同意請執行：pdx relay air26/_<ref>」。lead 在時限內執行就接上；不理會就過期作罷，member 照舊會在 Claude Code 自動壓縮。
+- lead 那台是舊版、或連不上時，member 那台不記申請、mod 保持安靜；申請在送出前已被接受或過期，就不再送。
+
+### Changed（內部，對外無變化）：nex worker 狀態轉換的 hub 與分類 — PW-1（#2521，介面線）
+
+- 為之後的 worker 推播鋪路；目前沒有任何訂閱者，行為不變。
+
+### Fixed：介面 — #2524（介面線）
+
+- 側欄工作區列與首頁列的按鈕，用鍵盤移動焦點時看得到外框。
+
 ## [1.0.0-alpha.691] - 2026-10-10
 
 > 只動到 daemon：**要部署 daemon（lead 與 member 兩台都要）**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
