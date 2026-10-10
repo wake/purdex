@@ -12,7 +12,7 @@ describe('markdown cache', () => {
   })
 
   it('renders again when the text under the same id changed', () => {
-    const render = vi.fn(() => ({}))
+    const render = vi.fn(() => ['x'])
     const first = cachedMarkdown('a', 'one', render)
     const second = cachedMarkdown('a', 'two', render)
     expect(second).not.toBe(first)
