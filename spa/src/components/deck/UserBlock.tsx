@@ -36,7 +36,7 @@ export function UserBlock({ item }: { item: UserItem }) {
   return (
     <div data-testid="deck-user" data-source={item.source} data-tone={tone} className={`${c.box} px-3 py-2`}>
       <div data-testid="deck-user-caption" className={`mb-1 text-xs font-medium ${c.caption}`}>{caption}</div>
-      <div className={`whitespace-pre-wrap break-words text-sm ${c.body} ${bash ? 'font-mono' : ''}`}>
+      <div className={`whitespace-pre-wrap break-words text-sm ${c.body} ${bash ? 'font-mono' : 'tracking-[1px]'}`}>
         {bash ? `! ${item.text}` : item.text}
         {item.truncated && <span className="text-text-muted">…</span>}
       </div>
