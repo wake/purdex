@@ -391,6 +391,17 @@ func TestTakeToTerminal_ExitedExecutionIsRebuiltWithoutExit(t *testing.T) {
 	assert.Equal(t, []string{"claude --resume " + tbSessionID + "\n"}, rawKeysText(env.tmux))
 }
 
+// U18: the third place a resume command is rendered. Mutation: leave take-to-terminal unflagged → red.
+func TestTakeToTerminal_ResumesWithTheReading(t *testing.T) {
+	env := newTTEnv(t)
+	e := ttExec(store.StateTerminated)
+	e.Labels = `{"handoff_session":"` + hoCode + `","source":"purdex","purdex.model":"` + opusID + `","purdex.effort":"xhigh"}`
+	env.store.script(e)
+	status, body := env.post(t, tbExecID, ttBody())
+	require.Equal(t, http.StatusOK, status, "%v", body)
+	assert.Equal(t, []string{"claude --resume " + tbSessionID + flagsOpus + "\n"}, rawKeysText(env.tmux))
+}
+
 // Terminated but not yet archived is exited too (not live, §4.2): no
 // control, no exit — the archive is retried on the next exit only (D16).
 func TestTakeToTerminal_TerminatedUnarchivedIsNotArchived(t *testing.T) {

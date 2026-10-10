@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.693] - 2026-10-11
+
+> 只動到 daemon：**要部署 daemon（lead 與 member 兩台都要）**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
+
+### Added：lead 接力遠端 member 的收尾 — MR-3a-2（#2523）
+
+- lead 的接力額度用完時，幫遠端 member 接力改成開核准卡片（之前直接回「不支援」）；按下核准才把接力指令送出，指令的建立時間取核准那一刻，所以等卡片等很久也不會被 member 那台當成過期指令拒絕。
+- 接力指令 10 分鐘內送不到就作廢：member 那台還沒開始就取消並回報，已經開始的照常做完、結果照常回來，lead 這台不會出現「回報失敗但其實接力成功」。
+- 兩台主機解除配對時，還在等結果的接力一併結束（原因 unpaired），不會卡住那個 member 之後的接力。
+- 至此 member 接力規格（docs/specs/2026-10-10-member-relay-manual-and-cross-host-spec-plan.md）的六張全部完成。
+
+### Fixed：介面 — #2529、#2530（介面線）
+
+- 快速回覆編輯器裡的項目在別處被刪掉（409）時保留草稿（#2529）；工作區列的標題不再是看不見的 Tab 停靠點（#2530）。
+
 ## [1.0.0-alpha.692] - 2026-10-11
 
 > 只動到 daemon：**要部署 daemon（lead 與 member 兩台都要）**；mod 沒有改，不必重跑 `pdx setup`；SPA 已隨主機上的 dev server 生效。
