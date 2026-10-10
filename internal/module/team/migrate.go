@@ -426,13 +426,26 @@ func swapOneMemberIndex(db *sql.DB) error {
 	return nil
 }
 
-// ensureSomeSeatIndex is the backstop of a failed swap: when no unique index on the seat is in force (the rollback restored none,
-// because the db never had the old one), the old one is created. It cannot fail on duplicates the swap would have resolved only if
-// there are two active rows of one session, which the old index forbade for as long as it existed; if it fails anyway it is logged
-// and the boot goes on — the application guards (insertMemberRowIn, the conflict checks) are then the only line.
+// ensureSomeSeatIndex is the backstop of a failed swap: when no unique index that REALLY guards a session's seat is in force, the old
+// one is created. "Really" is the whole definition, not the name: an object called team_members_one_active or team_members_one_member
+// that is a plain index, or unique on another column or predicate, guards nothing — a wrong team_members_one_active is replaced, a
+// wrong team_members_one_member is left (the next swap replaces it). It cannot fail on duplicates: the old index forbade two active
+// rows of one session for as long as it existed; if it fails anyway it is logged and the boot goes on — the application guards
+// (insertMemberRowIn, the conflict checks) are then the only line.
 func ensureSomeSeatIndex(db *sql.DB) {
-	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name IN ('team_members_one_active', 'team_members_one_member') AND sql LIKE 'CREATE UNIQUE%'`).Scan(&n); err == nil && n > 0 {
+	definition := func(name string) string {
+		var q sql.NullString
+		if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&q); err != nil {
+			return ""
+		}
+		return squashSpaces(q.String)
+	}
+	wantOld := squashSpaces(strings.Replace(oneActiveIndexSQL, "IF NOT EXISTS ", "", 1))
+	if definition("team_members_one_member") == squashSpaces(oneMemberIndexSQL) || definition("team_members_one_active") == wantOld {
+		return
+	}
+	if _, err := db.Exec(`DROP INDEX IF EXISTS team_members_one_active`); err != nil { // one of that name that is not the index meant
+		log.Printf("[team] migrate: a team_members_one_active that guards nothing could not be dropped: %v", err)
 		return
 	}
 	if _, err := db.Exec(oneActiveIndexSQL); err != nil {

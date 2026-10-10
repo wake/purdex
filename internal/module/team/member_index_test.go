@@ -315,3 +315,30 @@ func TestOneMemberIndex_ASameNamedIndexOfAnotherDefinitionIsReplaced(t *testing.
 		s.Close()
 	}
 }
+
+// codex re-review P2: the backstop of a failed swap looked at the NAME and the `CREATE UNIQUE` prefix only, so a unique index of the
+// right name on the wrong column or predicate counted as protection. Here the swap fails for good (a trigger refuses the update that
+// resolves the duplicate pair) while a wrong team_members_one_member stands in the way: the seat must still end up guarded by an
+// index that really covers session_id and active. Mutation gate: the name test again → red.
+func TestOneMemberIndex_TheBackstopChecksTheDefinitionNotTheName(t *testing.T) {
+	// sid-2 holds the pair the failing resolution chokes on; sid-1 is a plain active session the DATABASE must still protect (it has
+	// no killing row, so insertMemberRowIn's own guard would not be what refuses the duplicate below)
+	path := bareDB(t, [4]any{"a1", "sid-1", "active", 5}, [4]any{"a2", "sid-2", "active", 5}, [4]any{"k2", "sid-2", "killing", 6})
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX ` + newIndex + ` ON team_members (spawn_op) WHERE state = 'active';
+		CREATE TRIGGER refuse_gone BEFORE UPDATE ON team_members WHEN NEW.state = 'gone' BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("the boot must not fail: %v", err)
+	}
+	defer s.Close()
+	if err := s.InsertMember(newMember("dup", "tm-1", "sid-1", "_dup", 9)); err == nil {
+		t.Fatal("a second active row for one session was accepted: the wrong-definition index was taken for protection")
+	}
+}
