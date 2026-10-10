@@ -31,6 +31,7 @@ const commandSchema = `
 		at           INTEGER NOT NULL,
 		PRIMARY KEY (lead_host_id, id)
 	);
+	CREATE INDEX IF NOT EXISTS team_command_log_at ON team_command_log (at);
 	CREATE TABLE IF NOT EXISTS remote_notices (
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,
 		mk         TEXT    NOT NULL,
@@ -518,5 +519,22 @@ func applyAppearanceIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	return okResult(map[string]any{"state": "ok", "affected": n})
 }
 
-// PruneCommandLog deletes at most batch decided-command records older than before (unix ms) and reports how many.
-func (s *Store) PruneCommandLog(before int64, batch int) (int, error) { return 0, nil }
+// PruneCommandLog deletes at most batch decided-command records older than before (unix ms) and reports how many; the
+// caller repeats until it reports fewer than batch. team_command_voids is never touched (the lead host's late void is
+// answered from it). The receiver has no age check of its own for adopt / spawn — only the lead host settles or voids them
+// within 10 minutes — so the record of an adopt whose member row is still active stays however old it is: a late void
+// finds it and undoes the adoption. Every other record (a refusal, an adopt whose member ended, spawn, release, end,
+// lead_moved, void) is replayed as an idempotent no-op or never resent, and goes after the retention (#2265).
+func (s *Store) PruneCommandLog(before int64, batch int) (int, error) {
+	res, err := s.db.Exec(`DELETE FROM team_command_log WHERE rowid IN (
+			SELECT l.rowid FROM team_command_log l
+			WHERE l.at < ?
+			  AND NOT (l.kind = 'adopt' AND EXISTS (
+				SELECT 1 FROM remote_members r WHERE r.mk = l.id AND r.lead_host_id = l.lead_host_id AND r.state = 'active'))
+			ORDER BY l.at LIMIT ?)`, before, batch)
+	if err != nil {
+		return 0, fmt.Errorf("prune command log: %w", err)
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}

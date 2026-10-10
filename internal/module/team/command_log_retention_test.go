@@ -142,7 +142,7 @@ func TestPruneCommandLog_EndedAdoptIsPrunedAndALateVoidOnlyRecords(t *testing.T)
 			vd := relCmd("c-void", team.CommandVoid, "")
 			vd.CommandID = target
 			res := mustApply(t, s, plan(vd, false, nil))
-			if res.Status != http.StatusOK || !bodyHas(res.Body, "state", map[bool]string{true: "ok", false: "recorded"}[name == "released"]) {
+			if res.Status != http.StatusOK || !bodyHas(res.Body, "state", "recorded") {
 				t.Fatalf("late void = %d %s", res.Status, res.Body)
 			}
 			after := snapshot(t, s)
@@ -224,6 +224,26 @@ func TestPruneCommandLog_InBatches(t *testing.T) {
 	}
 	if total != 1200 || countRows(t, s, `SELECT COUNT(*) FROM team_command_log`) != 0 {
 		t.Fatalf("deleted %d of 1200", total)
+	}
+}
+
+// The module's sweep prunes everything past the retention, in batches until none is left, and nothing younger.
+func TestSweep_PrunesTheCommandLogPastThirtyDays(t *testing.T) {
+	f := newFixture(t)
+	f.clock.Store(100 * logDay)
+	for i := 0; i < 1300; i++ {
+		at := int64(1) // far past the retention
+		if i%100 == 0 {
+			at = f.clock.Load() - 29*logDay // inside it
+		}
+		if _, err := f.m.store.db.Exec(`INSERT INTO team_command_log (lead_host_id, id, kind, body_hash, status, outcome_json, at) VALUES (?, ?, 'release', 'h', 200, '{}', ?)`,
+			leadHostA, fmt.Sprintf("c-%d", i), at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.m.pruneCommandLog()
+	if n := countRows(t, f.m.store, `SELECT COUNT(*) FROM team_command_log`); n != 13 {
+		t.Fatalf("%d records left, want the 13 younger than 30 days", n)
 	}
 }
 
