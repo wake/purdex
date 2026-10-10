@@ -375,6 +375,17 @@ describe('paging and jumping', () => {
     expect(entry()?.doc.turns.map((t) => t.id)).toEqual(['t2'])
   })
 
+  // a real fetch REJECTS (AbortError) when the next navigation aborts it: that is a supersede, not a network error
+  it('a jump whose fetch rejects because it was aborted reports superseded', async () => {
+    await live()
+    api.snapshot.mockImplementationOnce((_h: string, _s: string, o: { signal: AbortSignal }) =>
+      new Promise((_r, rej) => o.signal.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))))
+    const first = useConversationStore.getState().jumpTo(H, S, 'old')
+    api.snapshot.mockImplementationOnce(async () => snap([turn(2, [user('new', 0)])], { total: 7 }))
+    await useConversationStore.getState().jumpTo(H, S, 'new')
+    expect(await first).toBe('superseded')
+  })
+
   it('a jump the daemon refuses returns its code and leaves the document alone', async () => {
     await live()
     api.snapshot.mockRejectedValueOnce(new ConversationApiError(404, 'item_not_found'))
@@ -396,6 +407,25 @@ describe('paging and jumping', () => {
     expect(entry()?.doc.turns.map((t) => t.index)).toEqual([8, 9])
   })
 
+  // a frame of the stream that was open when the reader left the jump must not be overwritten by, or mixed into, the new read
+  it('returnToLive retires the stream: a late frame of the old one is ignored, and a new stream follows the new window', async () => {
+    await live({ total: 10 })
+    api.snapshot.mockImplementationOnce(async () => snap([turn(2, [user('u2', 0)])], { hasMore: true, total: 10 }))
+    await useConversationStore.getState().jumpTo(H, S, 'u2')
+    const oldSock = lastSock()
+    const gate = deferred<Snapshot>()
+    api.snapshot.mockImplementationOnce(() => gate.promise)
+    const back = useConversationStore.getState().returnToLive(H, S)
+    oldSock.opts.onFrame(f(1, 'conversation.changes', incr('e:99', [user('late', 5)])))
+    gate.resolve(snap([turn(9, [user('u9', 0)])], { total: 10, cursor: 'e:20' }))
+    await back
+    expect(oldSock.closed).toBe(true)
+    expect(entry()?.doc.turns.map((t) => t.index)).toEqual([9])
+    expect(entry()?.doc.cursor).toBe('e:20')
+    expect(lastSock()).not.toBe(oldSock)
+    expect(lastSock().opts.cursor).toBe('e:20')
+  })
+
   it('nothing is done for a conversation nobody holds', async () => {
     await useConversationStore.getState().loadBefore(H, S)
     await useConversationStore.getState().returnToLive(H, S)
@@ -404,6 +434,22 @@ describe('paging and jumping', () => {
 })
 
 describe('subagents on demand', () => {
+  it('an answer that outlives its conversation is not written into the one opened after it', async () => {
+    const release = useConversationStore.getState().acquire(H, S)
+    await flush()
+    const gate = deferred<{ items: never[]; partial: boolean }>()
+    api.subagent.mockImplementationOnce(() => gate.promise)
+    const asked = useConversationStore.getState().loadSubagent(H, S, 'ag1')
+    release()
+    await vi.advanceTimersByTimeAsync(CLOSE_AFTER_MS + 1)
+    expect(entry()).toBeUndefined()
+    useConversationStore.getState().acquire(H, S)
+    await flush()
+    gate.resolve({ items: [], partial: false })
+    await asked
+    expect(entry()?.subagents).toEqual({})
+  })
+
   it('loads once, keeps the answer, and a failure is a state to retry from', async () => {
     useConversationStore.getState().acquire(H, S)
     await flush()

@@ -255,7 +255,7 @@ export const useConversationStore = create<ConversationState>()((set, get) => {
         /* the page stays unloaded; the holder asks again when the reader reaches the top again */
       } finally {
         if (rt.nav === ac) rt.nav = null
-        patch(key, () => ({ paging: false })) // also when a jump aborted it: paging must not stay set
+        if (runtimes.get(key) === rt) patch(key, () => ({ paging: false })) // also when a jump aborted it: paging must not stay set
       }
     },
 
@@ -274,6 +274,7 @@ export const useConversationStore = create<ConversationState>()((set, get) => {
         patchDoc(key, (d) => applyAround(d, snap, generation))
         return 'ok'
       } catch (err) {
+        if (ac.signal.aborted) return 'superseded' // a real fetch rejects with AbortError when the next navigation aborts it
         return err instanceof ConversationApiError ? err.code || `http_${err.status}` : 'network'
       } finally {
         if (rt.nav === ac) rt.nav = null
@@ -285,24 +286,22 @@ export const useConversationStore = create<ConversationState>()((set, get) => {
       const rt = runtimes.get(key)
       if (!rt || !get().byKey[key]) return
       rt.nav?.abort()
-      const ac = new AbortController()
-      rt.nav = ac
-      try {
-        const snap = await fetchConversationSnapshot(hostId, sessionId, { turns: WINDOW_TURNS, signal: ac.signal })
-        if (ac.signal.aborted) return
-        patchDoc(key, (d) => applySnapshot(d, snap))
-      } catch {
-        /* still detached; the holder offers the button again */
-      } finally {
-        if (rt.nav === ac) rt.nav = null
-      }
+      rt.nav = null
+      // Not a second snapshot applied beside the stream (it could overwrite a frame that arrived while it was out): the
+      // connect path again, which reads the newest window and opens the stream from its cursor, in that order.
+      clearTimers(rt)
+      rt.backoff = BACKOFF_START_MS
+      patchDoc(key, (d) => ({ ...d, cursor: '' }))
+      await connect(key, rt)
     },
 
     loadSubagent: async (hostId, sessionId, agentId) => {
       const key = conversationKey(hostId, sessionId)
       const cur = get().byKey[key]
-      if (!cur || cur.subagents[agentId]?.state === 'loading' || cur.subagents[agentId]?.state === 'ready') return
-      const setSub = (st: SubagentState) => patch(key, (e) => ({ subagents: { ...e.subagents, [agentId]: st } }))
+      const rt = runtimes.get(key)
+      if (!cur || !rt || cur.subagents[agentId]?.state === 'loading' || cur.subagents[agentId]?.state === 'ready') return
+      // a request that outlives its conversation (closed after the last holder, then opened again) must not patch the new one
+      const setSub = (st: SubagentState) => { if (runtimes.get(key) === rt) patch(key, (e) => ({ subagents: { ...e.subagents, [agentId]: st } })) }
       setSub({ state: 'loading' })
       try {
         const answer = await fetchConversationSubagent(hostId, sessionId, agentId)
