@@ -26,7 +26,7 @@ export interface ScrollMemo {
   scrollTop: number
   atBottom: boolean
   /** The view that wrote it: only that view can reuse `scrollTop` and the anchor's offset. */
-  view: 'room' | 'chat'
+  view: 'room' | 'chat' | 'deck'
   /** The first turn (`data-turn-index`) still on screen — both views share the index. */
   firstTurn: number | null
   /** Absent when nothing anchorable was on screen. */
@@ -45,4 +45,9 @@ export function writeScrollMemo(paneId: string, memo: ScrollMemo): void {
 
 export function forgetScrollMemo(paneId: string): void {
   memos.delete(paneId)
+}
+
+/** Forgets every memo whose key is `${prefix}\0…` (a view that keys its memo by pane and session). */
+export function forgetScrollMemosWithPrefix(prefix: string): void {
+  for (const key of [...memos.keys()]) if (key.startsWith(`${prefix}\0`)) memos.delete(key)
 }

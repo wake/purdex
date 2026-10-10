@@ -4,6 +4,8 @@
 // so a pane rebound to another session starts at the terminal again. The terminal is the absence of a record.
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { deckPanes, forgetDeckPane, forgetFoldsOfPane } from '../lib/conversations/fold-memory'
+import { forgetScrollMemo, forgetScrollMemosWithPrefix } from '../lib/nex/transcript-scroll-memory'
 import { findPane } from '../lib/pane-tree'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { useTabStore } from './useTabStore'
@@ -101,6 +103,16 @@ export function installSessionViewCleanup(): () => void {
       const [tabId, paneId] = key.split('\0')
       const tab = Object.hasOwn(tabs, tabId) ? tabs[tabId] : undefined
       if (!tab || !findPane(tab.layout, paneId)) (gone ??= []).push(key)
+    }
+    // What the deck remembered in memory (where it was scrolled, what was unfolded) goes with its pane. Swept from the
+    // panes the deck has been shown in, not from the records: a pane switched back to the terminal has no record left.
+    const alive = (paneId: string) => Object.values(tabs).some((tab) => findPane(tab.layout, paneId))
+    for (const paneId of deckPanes()) {
+      if (alive(paneId)) continue
+      forgetScrollMemo(paneId)
+      forgetScrollMemosWithPrefix(paneId)
+      forgetFoldsOfPane(paneId)
+      forgetDeckPane(paneId)
     }
     if (!gone) return
     const kept = { ...byPane }

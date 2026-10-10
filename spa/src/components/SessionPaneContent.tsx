@@ -10,6 +10,10 @@ import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { selectSessionView, sessionBinding, useSessionViewStore } from '../stores/useSessionViewStore'
 import { useAttachStall } from '../hooks/useAttachStall'
+import { useConversationOfPane } from '../hooks/useConversationOfPane'
+import { useConversationViewGate } from '../hooks/useConversationViewGate'
+import { DeckPane } from './deck/DeckPane'
+import { SessionInput } from './deck/SessionInput'
 import { findPane } from '../lib/pane-tree'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
@@ -78,6 +82,12 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // Which view this device shows for the pane (U3 plan D1). Read before the early returns (rules of hooks).
   const view = useSessionViewStore(selectSessionView(tabId, pane.id, sessionBinding(hostId, sessionCode)))
 
+  // The pane holds its conversation's stream in every view (plan D4: the terminal view needs the approvals too), as long
+  // as it is a live Claude Code session on a host that serves conversations. Before the early returns (rules of hooks).
+  const gate = useConversationViewGate(pane.content)
+  const conversation = useConversationOfPane(pane.content, gate.ok)
+  const switchToTerminal = () => useSessionViewStore.getState().setView(tabId, pane.id, sessionBinding(hostId, sessionCode), 'terminal')
+
   if (content.kind === 'tmux-session' && content.terminated) {
     return <TerminatedPane content={content} tabId={tabId} paneId={pane.id} />
   }
@@ -111,7 +121,17 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           connectingMessage={attachStalled ? t('session.attach_stalled') : undefined}
         />
       </div>
-      {!showTerminal && <SessionViewPlaceholder view={view} isActive={isActive} isFocusTarget={isFocusTarget} />}
+      {view === 'deck' && (
+        <DeckPane
+          paneId={pane.id}
+          conversation={conversation}
+          isActive={isActive}
+          isFocusTarget={isFocusTarget}
+          onSwitchToTerminal={switchToTerminal}
+          footer={(ctx) => <SessionInput {...ctx} />}
+        />
+      )}
+      {view === 'chat' && <SessionViewPlaceholder view={view} isActive={isActive} isFocusTarget={isFocusTarget} />}
     </div>
   )
 }

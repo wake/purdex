@@ -39,6 +39,17 @@ export function forgetFolds(paneId: string): void {
   listeners.get(paneId)?.forEach((fn) => fn())
 }
 
+// The panes whose deck has been shown: what the cleanup sweeps for panes that closed, whatever view they were left in.
+const shown = new Set<string>()
+export const noteDeckPane = (paneId: string): void => { shown.add(paneId) }
+export const deckPanes = (): string[] => [...shown]
+export const forgetDeckPane = (paneId: string): void => { shown.delete(paneId) }
+
+/** Forget every fold of a pane, whatever session it was bound to (the memory key is `${paneId}\0${sessionId}`). */
+export function forgetFoldsOfPane(paneId: string): void {
+  for (const key of [...panes.keys()]) if (key.startsWith(`${paneId}\0`)) forgetFolds(key)
+}
+
 function subscribe(paneId: string, fn: () => void): () => void {
   let set = listeners.get(paneId)
   if (!set) { set = new Set(); listeners.set(paneId, set) }
