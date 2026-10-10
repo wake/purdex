@@ -42,6 +42,7 @@ type StreamInfo struct {
 	ModVersion   string
 	FirstSeen    time.Time // set once, when the registry first heard of the stream
 	LastSeen     time.Time
+	AppliedAt    time.Time // the last batch Apply accepted (Reject does not move it): what SessionLive reads
 	LastSeq      int64
 	Gaps         int64
 	DroppedTotal int64
@@ -147,7 +148,7 @@ func (r *Registry) Apply(b Batch) (ack int64, err error) {
 	now := r.now()
 	in := &s.info
 	in.Agent, in.CCVersion, in.ModVersion = b.Agent, b.CCVersion, b.ModVersion
-	in.LastSeen = now
+	in.LastSeen, in.AppliedAt = now, now
 	in.DroppedTotal = max(in.DroppedTotal, b.DroppedTotal)
 	// A batch without caps (an older mod, or a mod that lost the feature) leaves the last ones to age out.
 	if len(b.Caps) > 0 {
@@ -299,7 +300,7 @@ func (r *Registry) SessionLive(sid string, within time.Duration) bool {
 	now := r.now()
 	for _, s := range r.streams {
 		in := &s.info
-		if in.SID == sid && !in.Ended && now.Sub(in.LastSeen) <= within {
+		if in.SID == sid && !in.Ended && !in.AppliedAt.IsZero() && now.Sub(in.AppliedAt) <= within {
 			return true
 		}
 	}
