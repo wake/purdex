@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.683] - 2026-10-10
+
+> 動到 daemon、mod 與 SPA：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改）；開著的 session 會自動重新載入 mod（會印一次 reloaded 提示）。跨主機 team 的修正要兩端都升級才完整。SPA 已隨主機上的 dev server 生效。
+
+### Fixed：接力撐得過 mod 重新載入；`pdx setup` 不再打斷接力 — #2441（#2442、#2448）
+
+- mod 重新載入（例如部署時的 `pdx setup`）會丟掉記憶體裡的接力進度：接力檔已寫好卻沒有 `/clear`，卡到 15 分鐘停滯規則才失敗。現在 mod 載入時會從 daemon 的 hello 讀回自己進行中的接力：已寫好就接著 `/clear` 與 seed（使用者的回合還在跑就等它結束）；寫到一半就解鎖並以有名字的原因失敗，讓 lead 重送。
+- `pdx setup --agent cc` 在有接力進行中時拒絕執行（exit 13、`relay_active`，列出 op），加 `--force` 才繼續；daemon 有回應但出錯也拒絕，完全連不上 daemon 才放行。
+
+### Fixed：member 接力等得過長回合，沒回應時說出原因 — #2439（#2440）
+
+- lead 同意接力後，member 若還在跑一輪（例如 subagent 在做事），接力會一直等到這一輪結束，最多 60 分鐘；第 15 分鐘通知 lead 一次「接力會在它的回合結束時進行」，到上限才以 `member_busy_timeout` 失敗。原本 15 分鐘就判 `member_unresponsive`。
+- member 的 mod 60 秒內都沒回應時改成 `member_unseen`，提示「終端機可能停在對話框（例如 Mods: Enable hot reloading?）或 Claude Code 沒在跑」；member 停在權限或提問的提示時是 `member_blocked`。這些都維持 exit 14。
+
+### Changed：member 主機自己判斷 adopt／spawn 命令是否過期 — #2398（#2436）
+
+- lead 建立的 adopt／spawn 命令帶上建立時間（`created_at`）；member 主機收到超過 10 分鐘（加 2 分鐘時鐘誤差）的就以 `command_expired` 拒絕，lead 收到不重送。舊版 lead 不帶這個欄位就照舊處理；舊版 member 會忽略它。
+
+### Changed：team roots 的編輯不再互相覆蓋 — #2340（#2447）
+
+- 每台 host 的 team roots 帶版本號 `team_roots_rev`；`PUT /api/peers/hosts/{alias}` 可帶版本號當前置條件（過期就 409、不寫入），或用原子的 `add_team_roots`／`remove_team_roots`。不帶版本號的整份寫入照舊。
+- `pdx peers host allow-team --root` 維持「設定成這些」（先讀版本號再寫，遇到別人剛改過就提示重試、不覆蓋）；新增 `--add-root`、`--remove-root` 做原子增刪。
+
+### Changed：對話畫面與工作簿 — U3-1b-ii、U3-1c a、WA-2b-1b／2、標題列、team roots（#2433、#2446、#2432、#2444、#2438、#2454，介面線）
+
+- 對話的串流、store 與分頁對應（#2433）；指揮台的項目元件（#2446）；工作簿畫面第二批（#2432）與完整的工作簿畫面：目前狀況、待辦、紀錄、重整（#2444）；標題列左右圖示垂直置中（#2438）；App 編輯 team roots 改用原子的 add／remove（#2454）。
+
+### Refactor：拆開 team 的 handler.go 與 team_cmd.go — #2018（#2443、#2445）
+
+- 純搬移：逐宣告位元組比對零差異，行為不變。
+
 ## [1.0.0-alpha.682] - 2026-10-10
 
 > 動到 daemon、mod 與 SPA：**要部署 daemon，並重跑 `pdx setup --agent cc`**（mod 有改，協定升到 3）；開著的 session 會自動重新載入 mod（會印一次 reloaded 提示）。team.db 新增 `relay_asks` 表（新表，不需遷移）。SPA 已隨主機上的 dev server 生效。
