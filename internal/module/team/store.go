@@ -178,6 +178,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (cross-host L): %w", err)
 	}
+	if err := migrateOneMemberIndex(db); err != nil { // after the columns it writes (end_reason); it never fails the boot
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (one-member index): %w", err)
+	}
 	if err := migrateNoticeArmed(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (notice armed): %w", err)

@@ -64,8 +64,11 @@ const teamSchema = `
 		created_at    INTEGER NOT NULL,
 		updated_at    INTEGER NOT NULL
 	);
-	CREATE INDEX IF NOT EXISTS team_members_team ON team_members (team_id, state);
-	CREATE UNIQUE INDEX IF NOT EXISTS team_members_one_active ON team_members (session_id) WHERE state = 'active';`
+	CREATE INDEX IF NOT EXISTS team_members_team ON team_members (team_id, state);`
+
+// The unique index on a session's seat, team_members_one_member, is NOT in the schema above: it replaces team_members_one_active and
+// is made by migrateOneMemberIndex. Left here, the old index would be created again at every boot (CREATE … IF NOT EXISTS) after
+// the migration dropped it.
 
 const teamCols = `id, host_id, lead_session_id, lead_ref, grant_json, request_id, created_at, ended_at, end_reason, team_name, team_label`
 
@@ -146,7 +149,7 @@ func validMemberState(s team.MemberState) bool {
 
 // InsertMember stores m, idempotent on the spawn op (a spawn retried after
 // a restart stores one row; a stored row is left as it is). A second
-// active row for one session (team_members_one_active), or a row missing
+// active-or-killing row for one session (team_members_one_member), or a row missing
 // spawn op, team or session or with an unknown state, is an error.
 func (s *Store) InsertMember(m memberRow) error {
 	if m.SpawnOp == "" || m.TeamID == "" || m.SessionID == "" || !validMemberState(m.State) {
@@ -167,9 +170,9 @@ type execer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// ErrSessionHeld: a member row cannot be inserted for a session whose member is being killed (state killing) — the kill may still
-// be given back, and the session keeps its seat until it ends.
-var ErrSessionHeld = errors.New("the session is held by a member whose kill is in flight")
+// ErrSessionHeld: a member row cannot be inserted for a session that already has a member holding its seat (state active, or killing —
+// a kill may still be given back); the session keeps its seat until that member ends.
+var ErrSessionHeld = errors.New("the session already has a member holding its seat (active, or killing: its kill may still be given back)")
 
 func insertMemberIn(ctx context.Context, q execer, m memberRow) error {
 	_, err := insertMemberRowIn(ctx, q, m)
@@ -183,13 +186,17 @@ func insertMemberRowIn(ctx context.Context, q execer, m memberRow) (bool, error)
 	if origin == "" {
 		origin = team.MemberOriginSpawned
 	}
-	// A session whose member is being killed still holds its seat: the unique index covers active rows only, so without this a
-	// second active row would be inserted and the kill's give-back could only end the original gone (#2152). Every member insert
-	// passes here, inside the caller's write transaction, so the read and the insert are one step against the kill's claim.
+	// A session that already has a member holding its seat — active, or killing (its kill may still be given back) — gets no second
+	// active row. team_members_one_member says the same in the database; this is the line when that index is not in force (a db
+	// whose swap could not finish, migrateOneMemberIndex) and the check that names the reason. Every member insert passes here,
+	// inside the caller's write transaction, so the read and the insert are one step against a kill's claim.
 	if m.State == team.MemberActive {
 		var held int
-		switch err := q.QueryRowContext(ctx, `SELECT 1 FROM team_members WHERE session_id = ? AND state = 'killing' AND spawn_op <> ? LIMIT 1`,
-			m.SessionID, m.SpawnOp).Scan(&held); {
+		// Only for a row that is NEW: a spawn op that is stored already is the retry InsertMember has always made a no-op (ON CONFLICT
+		// below), whatever the session has become since.
+		switch err := q.QueryRowContext(ctx, `SELECT 1 FROM team_members WHERE session_id = ? AND state IN ('active', 'killing') AND spawn_op <> ?
+			AND NOT EXISTS (SELECT 1 FROM team_members WHERE spawn_op = ?) LIMIT 1`,
+			m.SessionID, m.SpawnOp, m.SpawnOp).Scan(&held); {
 		case err == nil:
 			return false, fmt.Errorf("insert member %s: %w", m.SpawnOp, ErrSessionHeld)
 		case !errors.Is(err, sql.ErrNoRows):

@@ -70,7 +70,7 @@ func (o remoteOutcomes) adoptApplied(tx *sql.Tx, c commandRow, res peersmod.Call
 	if err := json.Unmarshal(res.Body, &ans); err != nil || json.Unmarshal(ans.Outcome, &out) != nil || out.State != "applied" || out.MemberSession == "" || out.Ref == "" {
 		return fmt.Errorf("adopt answer of command %s is not an applied outcome", c.ID)
 	}
-	// A remote session id equal to a LOCAL active session would break team_members_one_active for good (the settle would
+	// A remote session id equal to a LOCAL active session would break team_members_one_member for good (the settle would
 	// roll back and the adopt would be sent again forever): it fails the membership instead.
 	var taken int
 	if err := tx.QueryRow(`SELECT 1 FROM team_members WHERE session_id = ? AND state IN ('active', 'killing') AND NOT (mk = ? AND host_id = ?)`, out.MemberSession, c.MK, c.HostID).Scan(&taken); err == nil {

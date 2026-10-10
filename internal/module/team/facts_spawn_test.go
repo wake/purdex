@@ -199,7 +199,7 @@ func TestRemoteSpawn_LateFactsFindTheOpPastRunningAndAreIgnored(t *testing.T) {
 	}
 }
 
-// A registered whose session is already an active member here would break team_members_one_active for good (the fact
+// A registered whose session is already an active member here would break team_members_one_member for good (the fact
 // would roll back and be sent forever): the op fails session_conflict instead, as an adopt does.
 func TestRemoteSpawn_ASessionAlreadyActiveHereFailsTheOp(t *testing.T) {
 	f := factFixture(t)

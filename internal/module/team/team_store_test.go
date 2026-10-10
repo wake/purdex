@@ -74,7 +74,7 @@ func seedMember(t *testing.T, s *Store, spawnOp, teamID, sid string, at int64) m
 
 // The member store (spec §7.2 step 6, §7.3): an insert is idempotent on its
 // spawn op (a spawn retried after a restart stores one row); a session is
-// an active member at most once (team_members_one_active), and a row that
+// an active member at most once (team_members_one_member), and a row that
 // is no longer active frees its session; MembersOf lists every state.
 func TestStore_InsertMemberIsIdempotentOnSpawnOp(t *testing.T) {
 	s := openTestStore(t)
@@ -364,7 +364,7 @@ func TestOpenStore_AddsTeamsToAnExistingDB(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`DROP INDEX teams_one_live_per_lead; DROP TABLE teams;
-		DROP INDEX team_members_one_active; DROP INDEX team_members_team; DROP TABLE team_members`); err != nil {
+		DROP INDEX team_members_one_member; DROP INDEX team_members_team; DROP TABLE team_members`); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -386,6 +386,6 @@ func TestOpenStore_AddsTeamsToAnExistingDB(t *testing.T) {
 	// P4-3: team_members and its one-active index come back too.
 	seedMember(t, s, "op-1", "id-1", "sid-m1", 2000)
 	if err := s.InsertMember(newMember("op-2", "id-1", "sid-m1", "_x", 3000)); err == nil {
-		t.Fatal("the migrated db lacks team_members_one_active")
+		t.Fatal("the migrated db lacks team_members_one_member")
 	}
 }

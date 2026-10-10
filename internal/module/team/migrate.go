@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 // identPattern is a table or column name ensureColumn may interpolate.
@@ -344,4 +346,140 @@ func migrateCrossHostL(db *sql.DB) error {
 	}
 	_, err := db.Exec(`UPDATE team_members SET mk = spawn_op WHERE mk = ''`)
 	return err
+}
+
+// oneMemberIndexSQL is the definition migrateOneMemberIndex creates and checks for. SQLite keeps the statement as written, so an
+// index of that name is the one meant exactly when its stored text equals this (spaces collapsed).
+const oneMemberIndexSQL = `CREATE UNIQUE INDEX team_members_one_member ON team_members (session_id) WHERE state IN ('active', 'killing')`
+
+// oneActiveIndexSQL is the index this one replaces; it is also the backstop of a swap that failed (below).
+const oneActiveIndexSQL = `CREATE UNIQUE INDEX IF NOT EXISTS team_members_one_active ON team_members (session_id) WHERE state = 'active'`
+
+func squashSpaces(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// migrateOneMemberIndex swaps the unique index on a session's seat: team_members_one_active (state = 'active') becomes
+// team_members_one_member (state IN ('active', 'killing')). A kill claims its member by moving it active → killing (#2152); with
+// the old index a killing row freed its session and a second membership could take it, so the kill's give-back could only end
+// the original gone. The database now holds the invariant the application checks already keep.
+//
+// A team.db written before can hold rows the new index forbids — an active and a killing row of one session, two killing rows,
+// and, when the old index was missing, two active rows. They are resolved first, keeping ONE row per session: an active row
+// outranks a killing one, and of equals the newest (updated_at, then spawn_op) stays; the others end gone (end_reason
+// duplicate_membership). The resolution, the DROP and the CREATE are ONE transaction, and the boot never fails on this.
+//
+// If anything in it fails the whole swap rolls back and the daemon starts, to try again at the next boot — but never with the seat
+// unprotected: after a failed swap a unique index must be in force, and if the rollback left none (the old index never existed in
+// this db, or was dropped by hand) the old one is created as a backstop. An index named team_members_one_member that is not
+// exactly the one meant (a plain index, another predicate) is replaced, not trusted: `IF NOT EXISTS` would call it a success.
+// Idempotent: a second run resolves nothing, drops nothing, creates nothing.
+func migrateOneMemberIndex(db *sql.DB) error {
+	if err := swapOneMemberIndex(db); err != nil {
+		log.Printf("[team] migrate: one-member index: %v; the swap is rolled back and tried again at the next boot", err)
+		ensureSomeSeatIndex(db)
+	}
+	return nil
+}
+
+func swapOneMemberIndex(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixMilli()
+	// One row per session among the active and killing ones: a row goes when another of its session outranks it.
+	if _, err := tx.Exec(`UPDATE team_members SET state = 'gone', updated_at = ?, end_reason = 'duplicate_membership',
+			ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
+		WHERE state IN ('active', 'killing') AND EXISTS (SELECT 1 FROM team_members o
+			WHERE o.session_id = team_members.session_id AND o.spawn_op <> team_members.spawn_op AND o.state IN ('active', 'killing')
+			  AND ((o.state = 'active' AND team_members.state = 'killing')
+				OR (o.state = team_members.state AND (o.updated_at > team_members.updated_at
+					OR (o.updated_at = team_members.updated_at AND o.spawn_op > team_members.spawn_op)))))`, now, now); err != nil {
+		return fmt.Errorf("resolve duplicates: %w", err)
+	}
+	if _, err := tx.Exec(`DROP INDEX IF EXISTS team_members_one_active`); err != nil {
+		return fmt.Errorf("drop the old index: %w", err)
+	}
+	var have sql.NullString
+	switch err := tx.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'team_members_one_member'`).Scan(&have); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("read the new index: %w", err)
+	case squashSpaces(have.String) != squashSpaces(oneMemberIndexSQL):
+		if _, err := tx.Exec(`DROP INDEX team_members_one_member`); err != nil { // not ours: an object of that name that is no such index
+			return fmt.Errorf("replace a team_members_one_member that is not the index meant (%q): %w", have.String, err)
+		}
+		have.Valid = false
+	default:
+		have.Valid = true
+	}
+	if !have.Valid {
+		// Plain CREATE, not IF NOT EXISTS: the branches above leave no index of this name, so it either creates exactly this or fails
+		// (and the whole swap rolls back). There is no outcome in which "success" means some other object is standing there.
+		if _, err := tx.Exec(oneMemberIndexSQL); err != nil {
+			return fmt.Errorf("create the new index: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// ensureSomeSeatIndex is the backstop of a failed swap: when no unique index that REALLY guards a session's seat is in force, the old
+// one is made — and made to be creatable. "Really" is the whole definition, not the name (an object called team_members_one_active
+// or team_members_one_member that is a plain index, or unique on another column or predicate, guards nothing). Where the db had no
+// index at all it can hold two active rows of one session, which the old index would refuse and which the failed swap rolled back
+// with everything else; so the backstop resolves them (the newest stays, the rest end gone) and creates the index in ONE transaction,
+// and a backstop that cannot finish leaves nothing of itself behind — no wrong index dropped without its replacement, no
+// half-resolved rows.
+//
+// What is left, stated: a db that is already inconsistent AND whose rows the database itself refuses to update (a trigger, a full
+// disk). There the boot still goes on, with the loud log line below, and the seat is guarded by the application alone until the next
+// boot tries again: insertMemberRowIn refuses any new member row for a session that already has an active or killing one (so the
+// damage does not grow through an insert), while the transitions that turn an existing row active are not covered by it. The
+// daemon's boot is never what fails.
+func ensureSomeSeatIndex(db *sql.DB) {
+	definition := func(name string) string {
+		var q sql.NullString
+		if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&q); err != nil {
+			return ""
+		}
+		return squashSpaces(q.String)
+	}
+	wantOld := squashSpaces(strings.Replace(oneActiveIndexSQL, "IF NOT EXISTS ", "", 1))
+	if definition("team_members_one_member") == squashSpaces(oneMemberIndexSQL) || definition("team_members_one_active") == wantOld {
+		return
+	}
+	fail := func(step string, err error) {
+		log.Printf("[team] migrate: NO unique index guards a session's seat and the backstop could not be made (%s): %v; the application guard (insertMemberRowIn) is the only line until the next boot", step, err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		fail("begin", err)
+		return
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixMilli()
+	if _, err := tx.Exec(`UPDATE team_members SET state = 'gone', updated_at = ?, end_reason = 'duplicate_membership',
+			ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
+		WHERE state = 'active' AND EXISTS (SELECT 1 FROM team_members o
+			WHERE o.session_id = team_members.session_id AND o.spawn_op <> team_members.spawn_op AND o.state = 'active'
+			  AND (o.updated_at > team_members.updated_at OR (o.updated_at = team_members.updated_at AND o.spawn_op > team_members.spawn_op)))`, now, now); err != nil {
+		fail("resolve duplicate active rows", err)
+		return
+	}
+	if _, err := tx.Exec(`DROP INDEX IF EXISTS team_members_one_active`); err != nil { // one of that name that is not the index meant
+		fail("drop a team_members_one_active that guards nothing", err)
+		return
+	}
+	if _, err := tx.Exec(oneActiveIndexSQL); err != nil {
+		fail("create", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		fail("commit", err)
+		return
+	}
+	log.Printf("[team] migrate: created team_members_one_active as the backstop of the failed swap")
 }
