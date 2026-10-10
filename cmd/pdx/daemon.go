@@ -145,8 +145,15 @@ func probeHealth(ctx context.Context, client *http.Client, healthURL string, pro
 	return true, body.PID, nil
 }
 
-// healthClient is a stub until the implementation commit (#958 attack).
-func healthClient() *http.Client { return &http.Client{} }
+// healthClient asks the configured address itself: no environment proxy (HTTP_PROXY can answer for a non-loopback
+// bind such as a Tailscale IP, and an answer without the child's pid now fails the start and kills the group) and no
+// redirect followed (a 3xx is simply not healthy).
+func healthClient() *http.Client {
+	return &http.Client{
+		Transport:     &http.Transport{Proxy: nil, DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
 
 // killProcessGroup SIGKILLs the whole process group `pdx start` put the daemon in (Setpgid: the pgid is the child's
 // pid), so a daemon that failed to come up leaves no grandchildren behind (#958). A group with no member left is not
