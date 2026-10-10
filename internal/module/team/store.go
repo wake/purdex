@@ -32,6 +32,9 @@ type Store struct {
 	// failBeforeCommandLog, when set, fails ApplyTeamCommand after the command's changes and before its log insert
 	// (test seam for the one-transaction crash cut). nil in production.
 	failBeforeCommandLog func() error
+	// failSpawnDone, when set, fails the registered → done write of a spawn op wherever it is made (a test seam for #2105:
+	// the member and its task must not outlive a failed finish).
+	failSpawnDone func() error
 	// failBeforeFactLog is the same seam for ApplyTeamFact (the fact's row change and its log entry are one transaction).
 	failBeforeFactLog func() error
 	// failAfterFactInsert, when set, fails EndRemoteMemberLocally after its fact is queued and before it commits
