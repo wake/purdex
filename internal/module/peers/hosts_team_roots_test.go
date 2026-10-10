@@ -184,6 +184,28 @@ func TestTeamRootsRemove_WorksForAGoneDirectoryAndASymlinkSpelling(t *testing.T)
 	}
 }
 
+// A root granted through a symlink is stored as its real directory. If that directory is then deleted the symlink dangles, and
+// revoking it by the symlink's spelling must still remove the stored root (codex critic): a silent no-op would leave a grant
+// that comes back to life when the directory is re-created.
+func TestTeamRootsRemove_ADanglingSymlinkSpellingStillRevokes(t *testing.T) {
+	real := realDir(t, "team")
+	link := real + "-link"
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	f := newTeamRootsFixture(t)
+	if code, row := f.put(map[string]any{"add_team_roots": []string{link}}); code != 200 || !reflect.DeepEqual(*row.Roots, []string{real}) {
+		t.Fatalf("granted through the link: %d %+v", code, row)
+	}
+	if err := os.RemoveAll(real); err != nil {
+		t.Fatal(err)
+	}
+	code, row := f.put(map[string]any{"remove_team_roots": []string{link}})
+	if code != 200 || len(*row.Roots) != 0 || len(f.stored().TeamRoots) != 0 {
+		t.Fatalf("revoked through the dangling link: %d %+v stored %v", code, row, f.stored().TeamRoots)
+	}
+}
+
 func TestTeamRootsAdd_IsValidatedLikeTheWholeSet(t *testing.T) {
 	a, b := realDir(t, "a"), realDir(t, "b")
 	f := newTeamRootsFixture(t, a)
