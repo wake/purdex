@@ -758,8 +758,12 @@ export async function agentUpload(
 export type AgentUploadErrorKind = 'too_large' | 'not_found' | 'http' | 'network' | 'aborted'
 
 export class AgentUploadError extends Error {
-  constructor(public kind: AgentUploadErrorKind, public status = 0) {
+  kind: AgentUploadErrorKind
+  status: number
+  constructor(kind: AgentUploadErrorKind, status = 0) {
     super(`agent upload failed: ${kind}${status ? ` ${status}` : ''}`)
+    this.kind = kind
+    this.status = status
   }
 }
 
