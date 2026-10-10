@@ -60,7 +60,7 @@ type StreamState struct {
 	Ended       bool
 	Dots        map[string]Dot // keyed by agent id
 	Background  Background
-	// AbortedAt is the daemon receive time of the last main-turn turn.complete that said aborted: the mod's own
+	// AbortedAt is when the last main-turn turn.complete that said aborted happened (the event's time, see Apply): the mod's own
 	// interrupt (`$.turn.abort` writes no interruption marker into the transcript, so this is the only record of it).
 	// Zero when none since the session (re)started.
 	AbortedAt time.Time
@@ -127,7 +127,9 @@ func (s *StreamState) Apply(ev modevents.Event, now time.Time) (changed bool) {
 			AgentID string `json:"agent_id"`
 		}
 		if decode(ev.Data, &d) && d.Aborted && d.AgentID == "" {
-			s.AbortedAt = now
+			// The event's own time, as the mod stamped it when the abort returned (believed within atSkewWindow, else the
+			// receive time): a batch that arrives late must not date the abort after a turn that started in between.
+			s.AbortedAt, _ = eventTime(ev.At, now)
 		}
 	}
 	if ev.Type == modevents.TypeHeartbeat && s.Status() != status {
@@ -208,6 +210,7 @@ func (s *StreamState) apply(ev modevents.Event) (touched bool) {
 			s.TurnID = d.TurnID
 			clear(s.Asks)
 			s.Err = false
+			s.AbortedAt = time.Time{} // a new main turn: an earlier abort can no longer name the running one
 			touched = true
 		}
 	case modevents.TypeTurnComplete:
