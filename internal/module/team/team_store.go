@@ -488,5 +488,15 @@ func endTeamTx(tx *sql.Tx, id, leadSessionID, reason string, at int64) (bool, er
 	if err != nil {
 		return false, fmt.Errorf("end team %s rows affected: %w", id, err)
 	}
-	return n == 1, nil
+	if n != 1 {
+		return false, nil
+	}
+	// The team's local spawns still running end with it (#2384), in this transaction: the runner's finish is a
+	// compare-and-set on a running op, so it can no longer add a member to the ended team. The runner reaps its
+	// session when it sees the op failed (reapFailedSpawn); a crash in between is the boot sweep's.
+	if _, err := tx.Exec(`UPDATE spawn_ops SET state = 'failed', reason = ?, updated_at = ? WHERE team_id = ? AND state = 'running' AND lead_host_id = ''`,
+		team.SpawnReasonAbandoned, at, id); err != nil {
+		return false, fmt.Errorf("end team %s: its running spawns: %w", id, err)
+	}
+	return true, nil
 }

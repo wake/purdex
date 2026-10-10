@@ -4,6 +4,7 @@ package teammod
 import (
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/wake/purdex/internal/team"
@@ -17,13 +18,17 @@ import (
 // there, then lets it go on.
 func holdAt(f *fixture, step string) (waitReached, release func()) {
 	reached, gate := make(chan struct{}), make(chan struct{})
-	var once sync.Once
+	var first atomic.Bool
+	var rel sync.Once
 	f.m.beforeSpawnStep = func(op spawnRow) {
-		if op.Step == step {
-			once.Do(func() { close(reached); <-gate })
+		if op.Step == step && first.CompareAndSwap(false, true) { // only the first runner there is held
+			close(reached)
+			<-gate
 		}
 	}
-	return func() { <-reached }, func() { close(gate) }
+	release = func() { rel.Do(func() { close(gate) }) }
+	f.t.Cleanup(release) // a test that fails before it releases must not leave the runner held
+	return func() { <-reached }, release
 }
 
 // The lead host's half: a host that holds only a running forwarded spawn (no live member row yet) is told `end` too; a

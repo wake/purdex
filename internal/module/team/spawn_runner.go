@@ -7,6 +7,7 @@ package teammod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/wake/purdex/internal/core"
@@ -85,6 +86,7 @@ func (m *Module) runSpawn(id string) {
 			return
 		}
 		if !ok || op.State != team.SpawnRunning {
+			m.reapFailedSpawn(id, &op) // the row this runner just read: a second read cannot lose the cleanup
 			return
 		}
 		if m.beforeSpawnStep != nil {
@@ -104,13 +106,44 @@ func (m *Module) runSpawn(id string) {
 			m.logf("[team] spawn %s: no runner step for %q", id, op.Step)
 		}
 		if !next {
+			m.reapFailedSpawn(id, nil)
 			return
 		}
 	}
 }
 
+// reapFailedSpawn (seen: the row the caller just read, nil to read it) kills the session of an op that was failed abandoned by someone else — a team that ended (#2384), an
+// abort of another runner — when this runner stops on it: the one that failed the op may not have known the session
+// (it was created after), or is gone. Generation-guarded; a session already gone is not an error. Other failure
+// reasons kill their own session before they fail the op.
+func (m *Module) reapFailedSpawn(id string, seen *spawnRow) {
+	_, mine := m.abortKilled.LoadAndDelete(id) // by id and before anything can fail, so a marker never outlives the stop
+	var op spawnRow
+	ok := seen != nil
+	if ok {
+		op = *seen
+	} else {
+		var err error
+		if op, ok, err = m.store.GetSpawnOp(id); err != nil {
+			m.logf("[team] spawn %s: read the op to see how it ended: %v", id, err)
+			return
+		}
+	}
+	if ok && op.State == team.SpawnFailed {
+		m.wake(id) // whoever failed it (a team end writes no wake of its own) leaves the requests waiting on it to this runner
+		m.rosterChanged()
+	}
+	if mine || !ok || op.State != team.SpawnFailed || op.Reason != team.SpawnReasonAbandoned || op.TmuxID == "" {
+		return // this runner's own abort already killed the session, or the op did not end that way
+	}
+	m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
+}
+
 // failSpawn ends a running op as failed and wakes its waiting POSTs.
-func (m *Module) failSpawn(id, reason string) {
+func (m *Module) failSpawn(id, reason string) { m.failSpawnWon(id, reason) }
+
+// failSpawnWon is failSpawn that says whether this call is the one that ended the op.
+func (m *Module) failSpawnWon(id, reason string) bool {
 	won, err := m.store.FailSpawnOp(id, reason, m.now())
 	if err != nil {
 		m.logf("[team] spawn %s: %v", id, err)
@@ -121,26 +154,34 @@ func (m *Module) failSpawn(id, reason string) {
 		m.kickFacts()     // a forwarded op's spawn_failed fact is committed with it
 		m.wake(id)
 	}
+	return won
 }
 
 // abortSpawn ends an op failed abandoned: team.db refused to record its step
 // (a stored row that fails its checks, an update that does not fit, a write
 // error; a retry would meet the same refusal, P4-4 review), or its tmux
-// session is no longer the one it created. Its session, if any, is killed
-// first (generation-guarded), so nothing of a failed op keeps running.
+// session is no longer the one it created. The op is failed FIRST and only the call that wins that
+// compare-and-set kills the session (generation-guarded): another runner of the op that finished it, or someone who
+// already ended it, owns the session from there (#2384). A crash between the two leaves the session of a failed op,
+// which the boot sweep reaps.
 func (m *Module) abortSpawn(id, tmuxID, inst string, err error) {
 	m.logf("[team] spawn %s: %v; abandoning it", id, err)
-	if tmuxID != "" {
-		m.killSpawnSession(id, tmuxID, inst)
+	if m.failSpawnWon(id, team.SpawnReasonAbandoned) && tmuxID != "" {
+		if m.killSpawnSession(id, tmuxID, inst) {
+			m.abortKilled.Store(id, true) // done: the runner that stops on this op need not kill again
+		}
 	}
-	m.failSpawn(id, team.SpawnReasonAbandoned)
 }
 
 // killSpawnSession kills the member's tmux session by id, only under the
 // generation it was created in: a server that restarted since declines,
 // and whatever holds that id now is left alone (I3).
-func (m *Module) killSpawnSession(opID, tmuxID, inst string) {
-	if killed, err := m.tmux.KillSessionIfInstance(tmuxID, inst); err != nil || !killed {
+// It reports whether nothing of it is left to kill: killed, already gone, or a generation that moved on (whatever holds
+// the id now is not this op's); false is a kill that failed and may be tried again.
+func (m *Module) killSpawnSession(opID, tmuxID, inst string) (settled bool) {
+	killed, err := m.tmux.KillSessionIfInstance(tmuxID, inst)
+	if err != nil || !killed {
 		m.logf("[team] spawn %s: tmux session %s not killed (generation moved or gone): %v", opID, tmuxID, err)
 	}
+	return err == nil || errors.Is(err, tmux.ErrNoSession)
 }

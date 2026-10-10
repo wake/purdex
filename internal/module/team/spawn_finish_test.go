@@ -36,8 +36,8 @@ func TestSpawnFinish_AFailedDoneLeavesNoMemberAndNoTask(t *testing.T) {
 		t.Fatalf("op = %+v, want failed abandoned", got)
 	}
 	f.assertNoMemberNoTask("failed done")
-	if len(f.tmux.KillIfInstanceCalls()) != 1 {
-		t.Fatalf("kills = %+v, want the session reaped", f.tmux.KillIfInstanceCalls())
+	if name, _ := team.SpawnTmuxName(spawnID(1)); f.tmux.HasSession(name) {
+		t.Fatalf("session %s left running (kills %+v)", name, f.tmux.KillIfInstanceCalls())
 	}
 }
 
