@@ -27,7 +27,6 @@ vi.mock('../lib/conversations/ws', () => ({
 
 const H = 'h1'
 const S = 'aaaaaaaa-1111-4111-8111-111111111111'
-const KEY = conversationKey(H, S)
 
 const user = (id: string, index: number): ConversationItem => ({ type: 'user', id, at: 1, index, text: id, source: 'user' }) as ConversationItem
 const turn = (idx: number, items: ConversationItem[]): Turn => ({ id: `t${idx}`, index: idx, started_at: idx, outcome: 'done', items })
