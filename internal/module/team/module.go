@@ -3,6 +3,7 @@ package teammod
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -147,7 +148,7 @@ type Module struct {
 	busyMu sync.Mutex
 	// endedOps are the forwarded relay ops a command settle ended, until that settle has committed (relay_forwarded.go).
 	endedOpsMu  sync.Mutex
-	endedOps    []string
+	endedOps    map[*sql.Tx][]string
 	busyNoticed map[string]struct{}
 	idleSince   map[string]int64
 	// beforeMemberRelayInsert, when set, runs in the member-relay create between its checks and the insert's transaction (tests race a release there).
@@ -465,7 +466,7 @@ func (m *Module) Init(c *core.Core) error {
 	store.onCommands = m.kickCommands
 	store.onFacts = m.kickFacts
 	store.aliasFn = func() string { a, _ := m.selfHost(); return a }
-	store.onCommandSettled = m.afterRelayOpsEnded
+	store.onCommandSettled, store.onSettleAborted = m.afterRelayOpsEnded, m.dropRelayOpsEnded
 	store.opChanged = m.wake                    // the one choke point: every committed change of an op wakes its long-polls
 	seen, err := store.LoadModHello(modSeenCap) // presence outlives a restart (P6-2a)
 	if err != nil {

@@ -52,7 +52,9 @@ type Store struct {
 	opChanged func(opID string)
 	// onCommandSettled, when set, runs after a command's settle transaction committed (the relay ops it ended: their long-polls and
 	// the lead's notice).
-	onCommandSettled func()
+	onCommandSettled func(tx *sql.Tx)
+	// onSettleAborted runs when that transaction rolled back or failed to commit.
+	onSettleAborted func(tx *sql.Tx)
 
 	// beforeReplaceInsert, when set, runs in ReplaceTerminalOnly's
 	// transaction after the old row's close and before the new row's

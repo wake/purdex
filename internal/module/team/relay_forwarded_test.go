@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/middleware"
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -485,5 +487,35 @@ func TestForwarded_ARefusalWakesThePollAndTellsTheLead(t *testing.T) {
 	waitFor(t, func() bool { return len(f.leadNotices()) == 1 })
 	if n := f.leadNotices()[0]; n != "[pdx team] member 接力失敗：air26/_rabc12（relay_open）" {
 		t.Fatalf("notice = %q", n)
+	}
+}
+
+// codex R1: what a settle noted for after its commit dies with a settle that did not commit — a later settle must not tell the
+// lead about an op that another cause ended in between. Mutation: one shared list of noted ids → two notices (red).
+type failAfterApply struct{ m *Module }
+
+func (o failAfterApply) ApplyOutcome(tx *sql.Tx, c commandRow, res peersmod.CallResult) error {
+	if err := (remoteOutcomes{m: o.m}).ApplyOutcome(tx, c, res); err != nil {
+		return err
+	}
+	return errInjected
+}
+
+func TestForwarded_ASettleThatDidNotCommitLeavesNothingToTellLater(t *testing.T) {
+	f, _ := fwdRelayFixture(t)
+	f.relayForwarded(fwdOp)
+	cmds := f.relayCommands()
+	if _, err := f.m.store.SettleCommand(cmds[0].ID, refusedBy("relay_open"), f.clock.Load(), failAfterApply{f.m}); err == nil {
+		t.Fatal("the injected failure did not surface")
+	}
+	if got := f.op(fwdOp); got.State != team.RelayForwarded {
+		t.Fatalf("a rolled back settle ended the op: %+v", got)
+	}
+	f.postFact(memberPrincipal(), relayFailedOf(fwdOp, factUUID1, "failed", "member_gone")) // another cause ends it, and tells once
+	waitFor(t, func() bool { return len(f.leadNotices()) == 1 })
+	f.settleRemote(CmdRelease, "r9", "mk1", answerOf("r9", map[string]string{"state": "ok"})) // an unrelated settle commits
+	time.Sleep(80 * time.Millisecond)
+	if n := len(f.leadNotices()); n != 1 {
+		t.Fatalf("%d notices, want 1", n)
 	}
 }

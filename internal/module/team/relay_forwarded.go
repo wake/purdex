@@ -123,24 +123,34 @@ func (o remoteOutcomes) relayCommandRefused(tx *sql.Tx, c commandRow, code strin
 		o.m.logf("[team] relay command %s was refused (%s); op %s is not forwarded any more", c.ID, code, body.OpID)
 		return nil
 	}
-	o.m.noteOpEnded(body.OpID)
+	o.m.noteOpEnded(tx, body.OpID)
 	return nil
 }
 
-// noteOpEnded remembers an op the settle transaction ended, for the wake and the notice once that transaction has committed.
-func (m *Module) noteOpEnded(opID string) {
+// noteOpEnded remembers an op the settle transaction tx ended, for the wake and the notice once THAT transaction has committed
+// (dropRelayOpsEnded forgets it when it did not: a notice for a change that never happened would be a false one).
+func (m *Module) noteOpEnded(tx *sql.Tx, opID string) {
 	m.endedOpsMu.Lock()
-	m.endedOps = append(m.endedOps, opID)
+	if m.endedOps == nil {
+		m.endedOps = map[*sql.Tx][]string{}
+	}
+	m.endedOps[tx] = append(m.endedOps[tx], opID)
 	m.endedOpsMu.Unlock()
 }
 
-// afterRelayOpsEnded wakes the long-polls of, and tells the lead about, the ops a committed settle ended.
-func (m *Module) afterRelayOpsEnded() {
+func (m *Module) takeEndedOps(tx *sql.Tx) []string {
 	m.endedOpsMu.Lock()
-	ids := m.endedOps
-	m.endedOps = nil
-	m.endedOpsMu.Unlock()
-	for _, id := range ids {
+	defer m.endedOpsMu.Unlock()
+	ids := m.endedOps[tx]
+	delete(m.endedOps, tx)
+	return ids
+}
+
+func (m *Module) dropRelayOpsEnded(tx *sql.Tx) { m.takeEndedOps(tx) }
+
+// afterRelayOpsEnded wakes the long-polls of, and tells the lead about, the ops the committed settle tx ended.
+func (m *Module) afterRelayOpsEnded(tx *sql.Tx) {
+	for _, id := range m.takeEndedOps(tx) {
 		m.store.notifyOp(id)
 		if op, ok, err := m.store.GetRelayOp(id); err == nil && ok && op.State.Terminal() {
 			m.outcomeNoticeAsync(op)
