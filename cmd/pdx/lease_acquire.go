@@ -82,6 +82,8 @@ type acquireLine struct {
 	WaitedMS     int64  `json:"waited_ms,omitempty"`
 	HostMeasured int    `json:"host_measured,omitempty"`
 	FailOpen     string `json:"fail_open,omitempty"`
+	// Warning is the daemon's (#2470): the volume of the Go build cache is under its hard floor; the lease was granted anyway.
+	Warning string `json:"warning,omitempty"`
 }
 
 func (o acquireOutcome) line() acquireLine {
@@ -89,7 +91,7 @@ func (o acquireOutcome) line() acquireLine {
 		return acquireLine{Granted: true, FailOpen: o.failOpen}
 	}
 	r := o.resp
-	return acquireLine{ID: r.ID, Granted: r.Granted, Overrun: r.Overrun, WaitedMS: r.WaitedMS, HostMeasured: r.Host.Measured}
+	return acquireLine{ID: r.ID, Granted: r.Granted, Overrun: r.Overrun, WaitedMS: r.WaitedMS, HostMeasured: r.Host.Measured, Warning: r.Warning}
 }
 
 // parseAcquireFlags reads and checks the flags of acquire; msg is a usage

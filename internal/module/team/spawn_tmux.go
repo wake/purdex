@@ -168,7 +168,7 @@ func (m *Module) underTeamRoots(teamID, dir string) (string, bool) {
 	if dir == "" || rerr != nil || !found {
 		return "", false
 	}
-	return resolved, underRoots(resolved, t.Grant.Roots)
+	return resolved, underGrant(resolved, t.Grant)
 }
 
 // underRoots reports whether dir (symlinks evaluated) is a root or below
@@ -176,14 +176,15 @@ func (m *Module) underTeamRoots(teamID, dir string) (string, bool) {
 // points outside it is outside (spec §15 "symlink escape").
 func underRoots(dir string, roots []string) bool {
 	for _, root := range roots {
-		r, err := filepath.EvalSymlinks(root)
-		if err != nil {
-			continue
-		}
-		rel, err := filepath.Rel(r, dir)
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if r, err := filepath.EvalSymlinks(root); err == nil && within(dir, r) {
 			return true
 		}
 	}
 	return false
+}
+
+// within reports whether dir is root or below it, by path components; both are already resolved.
+func within(dir, root string) bool {
+	rel, err := filepath.Rel(root, dir)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

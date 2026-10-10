@@ -41,6 +41,9 @@ func (m *Module) admissionPass(ctx context.Context, fresh string) passResult {
 	if set.Mode != resources.ModeLease && set.Mode != resources.ModeAdvise {
 		return res
 	}
+	// A heavy lease waits for the disk to be looked at (and the Go build cache trimmed when it runs low) before the locked
+	// part of the pass: the walk is never done under stateMu (diskguard.go).
+	m.diskPreflight(ctx, fresh != "")
 	// One more round when a grant could not be made as planned: its CAS lost to
 	// another writer, or a session-new waiter that arrived after the baselines
 	// were worked out. Two rounds at most; the next trigger finishes the rest.
@@ -90,6 +93,16 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 			break
 		}
 	}
+	// A trim is running: the guarded leases wait for it (FIFO is kept: the queue is cut at the first one), and the walk ends
+	// with a pass that grants them with the disk judged after it (diskguard.go).
+	if m.diskHolding() {
+		for i, w := range ready {
+			if diskGuardedKinds[w.Kind] {
+				ready = ready[:i]
+				break
+			}
+		}
+	}
 	for _, pg := range m.plan(set, held, ready, fresh, now) {
 		w := pg.row
 		won, err := m.store.GrantDecided(w.ID, now.UnixMilli(), pg.wouldWait, pg.grant, baselines[w.ID])
@@ -102,6 +115,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 			return granted, true
 		}
 		granted++
+		m.recordGrantWarning(w.ID, w.Kind)
 		m.logf("[resources] lease %s (%s, weight %d) granted: %s, waited %d ms", w.ID, w.Kind, w.Weight,
 			pg.grant.Path, pg.grant.WaitedMS)
 	}

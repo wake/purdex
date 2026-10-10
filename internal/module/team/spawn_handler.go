@@ -165,7 +165,7 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	if err != nil {
 		return fail(http.StatusBadRequest, team.ErrBadRequest, "cwd does not exist or is not a directory: "+req.Cwd)
 	}
-	if !underRoots(cwd, t.Grant.Roots) {
+	if !underGrant(cwd, t.Grant) {
 		return fail(http.StatusConflict, team.ErrCwdOutsideGrant, cwd+" is under none of the team's roots")
 	}
 	name, err := team.SpawnTmuxName(req.ID)

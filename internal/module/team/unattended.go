@@ -58,7 +58,7 @@ func leadGrantOf(a team.Approval) (team.Grant, error) {
 		return team.Grant{}, fmt.Errorf("lead row %s: decode payload: %w", a.ID, err)
 	}
 	name, label := p.TeamName, p.TeamLabel // copies: the grant owns its pointers
-	return team.Grant{MaxMembers: p.MaxMembers, Roots: p.Roots, TeamName: &name, TeamLabel: &label}, nil
+	return team.Grant{MaxMembers: p.MaxMembers, Roots: p.Roots, RootsCanonical: p.RootsCanonical, TeamName: &name, TeamLabel: &label}, nil
 }
 
 // leadTeamOf is the team a lead row's approval creates (spec §7.1); its id

@@ -32,7 +32,7 @@ func TestDecide_ApproveCreatesTheTeamWithTheEditedGrant(t *testing.T) {
 	got, ok, err := f.m.store.LiveTeamByLead("sid-1")
 	noName, noLabel := "", "" // the request had no name or label; the stored grant records that
 	want := team.Team{ID: uid(1), HostID: "h:1", LeadSessionID: "sid-1", LeadRef: "_abc123",
-		Grant: team.Grant{MaxMembers: 2, Roots: []string{"/w/x", "/y"}, TeamName: &noName, TeamLabel: &noLabel}, RequestID: uid(1), CreatedAt: 1_000_005}
+		Grant: team.Grant{MaxMembers: 2, Roots: []string{"/w/x", "/y"}, RootsCanonical: true, TeamName: &noName, TeamLabel: &noLabel}, RequestID: uid(1), CreatedAt: 1_000_005}
 	if err != nil || !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("team after approve = %+v ok=%v err=%v, want %+v", got, ok, err, want)
 	}

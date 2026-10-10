@@ -107,6 +107,9 @@ func runLeaseRun(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		} else if time.Duration(r.WaitedMS)*time.Millisecond >= leaseWaitNotice {
 			fmt.Fprintf(stderr, "pdx lease: 等了 %s主機資源（負載 %d/100）\n", waitedText(r.WaitedMS), r.Host.Measured)
 		}
+		if r.Warning != "" {
+			fmt.Fprintf(stderr, "pdx lease: 警告：%s\n", r.Warning)
+		}
 		if r.ID != "" {
 			// Also after a signal: the deferred release runs on every way out.
 			defer leaseReleaseByID(client, r.ID, stderr)
