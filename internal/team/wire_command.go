@@ -30,8 +30,9 @@ const (
 	ErrCommandNotYourMember   = "not_your_member"
 	ErrCommandCapacity        = "capacity_exceeded" // 409: the lead host already has as many spawns running and members here as one host may
 	ErrCommandMKConflict      = "mk_conflict"
-	ErrCommandVoided          = "command_void" // 409: the lead host voided this command id (spec §3.3)
-	ErrCommandNotVoidable     = "not_voidable" // 409: a void names a command that is no adopt or spawn
+	ErrCommandVoided          = "command_void"    // 409: the lead host voided this command id (spec §3.3)
+	ErrCommandNotVoidable     = "not_voidable"    // 409: a void names a command that is no adopt or spawn
+	ErrCommandExpired         = "command_expired" // 409: an adopt or spawn older than the lead's expiry plus the skew allowance (#2398)
 )
 
 // TeamLead is the lead's full origin tuple a command carries, which the member host needs to present the lead as a
@@ -56,6 +57,10 @@ type TeamCommand struct {
 	TeamName string   `json:"team_name,omitempty"`
 	MK       string   `json:"mk,omitempty"`
 	Lead     TeamLead `json:"lead"`
+	// CreatedAt is when the lead host queued an adopt or a spawn (its clock, unix ms). The member host refuses one older
+	// than the lead's 10 minute expiry plus a skew allowance (ErrCommandExpired). Absent (an older lead, or any other kind)
+	// means no age check; an older member ignores the field (its decode is not strict). #2398.
+	CreatedAt int64 `json:"created_at,omitempty"`
 
 	// adopt
 	TargetSessionID string `json:"target_session_id,omitempty"`

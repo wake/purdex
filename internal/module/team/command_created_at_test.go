@@ -13,21 +13,21 @@ import (
 // queued); the member host refuses one older than the lead's 10 minute expiry plus a skew allowance. An absent field
 // (an older lead) keeps today's behaviour; an older member ignores the field.
 
-const commandMaxAgeMS = commandExpiryMS + commandSkewMS
+const commandMaxAgeMS = 12 * 60 * 1000 // 10 minutes of expiry + 2 of clock skew, written out so the policy is pinned
 
 func ageAt(now, age int64) int64 { return now - age }
 
 // ---- member side ----
 
 func TestApplyAdopt_RefusesACommandPastTheExpiryAndTheSkew(t *testing.T) {
-	const now = int64(50_000_000)
+	const now = int64(500_000_000_000)
 	for name, c := range map[string]struct {
 		age  int64
 		want int
 	}{
 		"fresh":                  {60_000, http.StatusOK},
 		"at the expiry":          {commandExpiryMS, http.StatusOK},
-		"inside the skew":        {commandExpiryMS + commandSkewMS - 1, http.StatusOK},
+		"inside the skew":        {commandMaxAgeMS - 1, http.StatusOK},
 		"exactly the limit":      {commandMaxAgeMS, http.StatusOK},
 		"one ms past the limit":  {commandMaxAgeMS + 1, http.StatusConflict},
 		"a day old":              {24 * 3600 * 1000, http.StatusConflict},
@@ -51,7 +51,7 @@ func TestApplyAdopt_RefusesACommandPastTheExpiryAndTheSkew(t *testing.T) {
 
 // A refused adopt applies nothing and is logged like every refusal, so its replay is the same refusal.
 func TestApplyAdopt_AnExpiredCommandChangesNothingAndReplaysAsRefused(t *testing.T) {
-	const now = int64(50_000_000)
+	const now = int64(500_000_000_000)
 	s := openTestStore(t)
 	cmd := adoptCmd("c1", "mk-1", "sid-t")
 	cmd.CreatedAt = now - commandMaxAgeMS - 1
@@ -87,7 +87,7 @@ func TestApplyAdopt_NoCreatedAtIsNotRefused(t *testing.T) {
 // A command already applied is answered from the log when it is replayed, however old the command has become: the age
 // check is for new commands only (#2265 keeps those log rows for exactly this).
 func TestApplyAdopt_ReplayOfAnAppliedCommandIgnoresItsAge(t *testing.T) {
-	const now = int64(50_000_000)
+	const now = int64(500_000_000_000)
 	s := openTestStore(t)
 	cmd := adoptCmd("c1", "mk-1", "sid-t")
 	cmd.CreatedAt = now - 60_000
@@ -104,7 +104,7 @@ func TestApplyAdopt_ReplayOfAnAppliedCommandIgnoresItsAge(t *testing.T) {
 
 // Only adopt and spawn carry the check: a release (or any other kind) with an old created_at is applied as before.
 func TestApply_OtherKindsAreNotAgeChecked(t *testing.T) {
-	const now = int64(50_000_000)
+	const now = int64(500_000_000_000)
 	s := openTestStore(t)
 	cmd := team.TeamCommand{ID: "c9", Kind: team.CommandEnd, ToHostID: "h:1", TeamID: "team-L", CreatedAt: 1}
 	p := plan(cmd, true, nil)
