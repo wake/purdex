@@ -353,8 +353,11 @@ func (c *wsConn) follow() {
 			} else if lightOK && src.Live && src.FrameID == lightFrame {
 				src.Status, src.StatusAt = light, lightAt
 			}
-			_, err := c.entry.Refresh(c.ctx, src)
-			return err
+			if _, err := c.entry.Refresh(c.ctx, src); err != nil {
+				return err
+			}
+			c.m.applyAbort(c.entry, c.sid)
+			return nil
 		})
 		if c.ctx.Err() != nil {
 			return

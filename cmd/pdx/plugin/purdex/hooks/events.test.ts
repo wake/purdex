@@ -1675,6 +1675,68 @@ test('an interrupt aborts the running main turn', async ($, on) => {
   expect(pqResult(w)[0].body).toMatchObject({ status: 'accepted' })
 })
 
+// The abort leaves no turn.complete of its own (measured on CC 2.1.294): the mod closes the turn it cancelled.
+// Mutation gate: skip the closing → no aborted turn.complete, the heartbeat keeps carrying turn_id → red.
+test('an interrupt closes the turn it cancelled: turn.complete aborted for the daemon, no turn_id in the next heartbeat', async ($, on) => {
+  const g = gated(PJOB({ kind: 'interrupt', text: undefined }))
+  const w = evWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await turnStart($, 't-run')
+  g.open()
+  await w.clock.settle()
+  await w.clock.advance(1000) // the batch goes out from a timer
+  const done = ofType(w, 'turn.complete')
+  expect(done).toHaveLength(1)
+  expect(done[0].data).toEqual({ turn_id: 't-run', reason: 'aborted', duration_ms: 0, aborted: true })
+  await w.clock.advance(10_000)
+  const beats = ofType(w, 'heartbeat')
+  expect(beats.length).toBeGreaterThan(0)
+  expect(beats[beats.length - 1].data.turn_id).toBeUndefined()
+})
+
+// Mutation gate: clear turnId on any main completion → the late one ends turn B and a submit would call the blocking
+// $.prompt.submit mid-turn → red.
+test('the engine\'s late completion of the aborted turn does not end the next turn', async ($, on) => {
+  const g = gated(PJOB({ kind: 'interrupt', text: undefined }))
+  const w = evWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await turnStart($, 'A')
+  g.open()
+  await w.clock.settle()
+  await turnStart($, 'B') // the next turn begins
+  await turnDone($, 'A', { reason: 'aborted', isAborted: true }) // the engine's own completion of A arrives late
+  await w.clock.advance(1000)
+  await w.clock.advance(10_000)
+  await w.clock.advance(10_000)
+  const beats = ofType(w, 'heartbeat')
+  expect(beats.length).toBeGreaterThan(0)
+  expect(beats[beats.length - 1].data.turn_id).toBe('B') // B is still the running turn
+})
+
+test('a second interrupt right after finds no turn running', async ($, on) => {
+  const job2 = PJOB({ id: 'pj-' + '1'.repeat(32), kind: 'interrupt', text: undefined })
+  const jobs = [PJOB({ kind: 'interrupt', text: undefined }), job2]
+  const g = gated(jobs[0])
+  const w = evWorld(on, { promptNext: (b: any, n: number) => (n === 1 ? g.fn(b, 1) : n === 2 ? { status: 200, text: JSON.stringify({ job: job2 }) } : never()) })
+  await start($, w)
+  await turnStart($, 't-run')
+  g.open()
+  await w.clock.settle()
+  expect(w.abortCalls).toHaveLength(1)
+  expect(pqResult(w).map((r) => r.body.status)).toEqual(['accepted', 'dropped'])
+})
+
+test('a turn that ended by itself before the abort returned is not announced twice', async ($, on) => {
+  const g = gated(PJOB({ kind: 'interrupt', text: undefined }))
+  const w = evWorld(on, { promptNext: g.fn, abort: async () => { await turnDone($, 't-run', { reason: 'aborted', isAborted: true }) } })
+  await start($, w)
+  await turnStart($, 't-run')
+  g.open()
+  await w.clock.settle()
+  await w.clock.advance(1000)
+  expect(ofType(w, 'turn.complete')).toHaveLength(1) // the engine's own, not a second one from the mod
+})
+
 test('an interrupt with no turn running is dropped not_running and aborts nothing', async ($, on) => {
   const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'interrupt', text: undefined })) })
   await start($, w)
