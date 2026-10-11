@@ -526,3 +526,14 @@ func TestLaunchClaims_LateCleanupOfAnEarlierLaunchCannotReleaseALaterOne(t *test
 func TestLaunchClaimKey_DoesNotConfuseCodeAndInstanceBoundaries(t *testing.T) {
 	assert.NotEqual(t, launchClaimKey("ab", "c:1"), launchClaimKey("a", "bc:1"))
 }
+
+// With no launch in flight there is nothing to release (and nothing to look up); with one, there is.
+func TestReleaseLaunchClaim_OnlyWhenALaunchIsInFlight(t *testing.T) {
+	r := newLaunchRig(t)
+	r.mod.ReleaseLaunchClaim("work")
+	assert.False(t, r.mod.claims.any())
+	require.Equal(t, http.StatusOK, r.launch("fresh", false).Code)
+	assert.True(t, r.mod.claims.any())
+	r.mod.ReleaseLaunchClaim("work")
+	assert.False(t, r.mod.claims.any())
+}

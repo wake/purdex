@@ -315,7 +315,14 @@ func (m *SessionModule) handleLaunch(w http.ResponseWriter, r *http.Request) {
 // ReleaseLaunchClaim is the agent module's call on a root SessionStart: the claim of the session's CURRENT generation (the
 // name re-resolved now to its code and instance) is released. A SessionStart of another session, or of an old generation,
 // finds no matching claim.
+//
+// Most SessionStarts happen with no launch in flight: they return before asking tmux anything. (A SessionStart that arrives long
+// after its launch's claim timed out can release a later launch's claim; the later launch is still guarded — the agent is running
+// or the pane is busy — so the worst case is a refused second launch, not a keystroke into the wrong program.)
 func (m *SessionModule) ReleaseLaunchClaim(tmuxSessionName string) {
+	if !m.claims.any() {
+		return
+	}
 	code, ok := m.LookupCodeByName(tmuxSessionName)
 	if !ok {
 		return

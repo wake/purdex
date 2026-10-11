@@ -67,6 +67,13 @@ func (c *launchClaims) releaseKey(key string) {
 	}
 }
 
+// any reports whether any launch holds a claim: a SessionStart with none to release has nothing to look up.
+func (c *launchClaims) any() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.claims) > 0
+}
+
 // held reports whether the key is claimed (tests).
 func (c *launchClaims) held(key string) bool {
 	c.mu.Lock()
