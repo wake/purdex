@@ -18,6 +18,7 @@ import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 import { clearAllWorkerDrafts, forgetWorkerDraft, readWorkerDraft } from '../../lib/nex/worker-draft-memory'
+import { clearAllPermissionCards, permissionCardCount } from '../../lib/nex/permission-card-memory'
 import { UNDO_MS, clearAllSendQueues } from '../../lib/conversations/send-queue'
 import { clearAllAdapters } from '../../lib/conversations/deck-adapter'
 import { clearAllWorkerLeases } from '../../lib/conversations/worker-adapter'
@@ -25,7 +26,7 @@ import { clearAllDrafts } from '../../lib/conversations/draft-memory'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), answerPermission: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 
@@ -49,7 +50,7 @@ const box = () => screen.getByRole('textbox') as HTMLTextAreaElement
 const realEnsure = useNexHostStore.getState().ensure
 
 beforeEach(() => {
-  cleanup(); clearModuleRegistry(); clearAllPanels(); clearAllSendQueues(); clearAllAdapters(); clearAllWorkerLeases(); clearAllDrafts(); clearAllWorkerDrafts()
+  cleanup(); clearModuleRegistry(); clearAllPanels(); clearAllSendQueues(); clearAllAdapters(); clearAllWorkerLeases(); clearAllDrafts(); clearAllWorkerDrafts(); clearAllPermissionCards()
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({} as never)
   registerModule({ id: 'nex', name: 'Nex', panes: [{ kind: 'execution', component: DeckRenderer }] })
   registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: Other }] })
@@ -105,3 +106,65 @@ describe('the worker deck across tab switches', () => {
     expect(vi.mocked(api.sendMessage).mock.calls[0].slice(0, 4)).toEqual([H, E, 'lease-1', 'send me'])
   })
 })
+
+// U4-3: the permission request's card in the worker deck. Its note, open note field and expanded preview, and the mark of an answer sent just before the
+// switch (its resolution may not have arrived yet), live outside the card (permission-card-memory), so the switch that unmounts the pane brings them back.
+describe('the worker deck\'s permission card across tab switches', () => {
+  const LONG = `python3 -c "print(1)" ${'x'.repeat(500)} THE-TAIL`
+  let seq = 0
+  const apply = (kind: string, payload: Record<string, unknown>) => act(() => {
+    seq += 1
+    useExecutionStore.getState().applyEvents(H, E, [{ seq, execution_id: E, kind, payload, created_at: Date.now() }])
+  })
+  const ask = (requestId = 'req_a') => apply('permission.requested', { request_id: requestId, turn_id: 'trn_1', tool_name: 'Bash', input: { command: LONG } })
+  const note = () => screen.getByTestId('permission-deny-note') as HTMLInputElement
+
+  beforeEach(() => {
+    seq = 0
+    useExecutionStore.getState().setSummary(H, E, { ...summary, state: 'running' } as never)
+  })
+
+  it('keeps the typed note, the open note field and the expanded input when the reader switches away and back', () => {
+    const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+    ask()
+    fireEvent.click(screen.getByTestId('permission-expand'))
+    fireEvent.click(screen.getByTestId('permission-deny'))
+    fireEvent.change(note(), { target: { value: 'not in prod' } })
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('permission-card')).toBeNull() // really unmounted, not hidden
+
+    rerender(<TabContent activeTab={execTab} allTabs={all} />)
+    expect(within(screen.getByTestId('permission-dock')).getByTestId('permission-card')).toBeInTheDocument()
+    expect(note().value).toBe('not in prod')
+    expect(screen.getByTestId('permission-input')).toHaveTextContent('THE-TAIL')
+    expect(screen.getByTestId('permission-expand')).toHaveTextContent('Show less')
+  })
+
+  it('an answer sent just before the switch stays answered on return (its resolution may not have come yet): no card again', async () => {
+    vi.mocked(api.answerPermission).mockReset().mockResolvedValue({ request_id: 'req_a', outcome: 'allowed' } as never)
+    const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+    ask()
+    fireEvent.click(screen.getByTestId('permission-allow'))
+    await vi.waitFor(() => expect(api.answerPermission).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(screen.queryByTestId('permission-card')).toBeNull())
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    rerender(<TabContent activeTab={execTab} allTabs={all} />)
+    expect(screen.queryByTestId('permission-card')).toBeNull() // the store still reads pending; the mark keeps it closed
+    expect(api.answerPermission).toHaveBeenCalledTimes(1)
+  })
+
+  it('a request another client answered while the reader was away is not drawn on return, and its memory goes', () => {
+    const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+    ask()
+    fireEvent.click(screen.getByTestId('permission-deny'))
+    fireEvent.change(note(), { target: { value: 'for req_a' } })
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    apply('permission.resolved', { request_id: 'req_a', turn_id: 'trn_1', outcome: 'allowed' })
+    rerender(<TabContent activeTab={execTab} allTabs={all} />)
+    expect(screen.queryByTestId('permission-card')).toBeNull()
+    expect(permissionCardCount()).toBe(0)
+  })
+})
+
