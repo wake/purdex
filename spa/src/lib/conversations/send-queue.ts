@@ -8,6 +8,7 @@
 // carries the client_msg_id, or the same text within 30 s) and otherwise stays 「可能已送出」 until the person decides.
 import { mayHaveRun, newClientMsgId, type SendOutcome, type SendPort } from './send'
 import { revokePreviewUrl, type Attachment } from './attachment-memory'
+import { adapterOf } from './deck-adapter'
 import { normalizePrompt } from './send-plan'
 import type { UserItem } from './types'
 
@@ -319,10 +320,10 @@ export class SendQueue {
 
 const queues = new Map<string, SendQueue>()
 
-/** The pane's queue: it survives the component (a tab switch unmounts the pane). */
+/** The pane's queue: it survives the component (a tab switch unmounts the pane). Made on the port of the adapter bound to `key` (a worker's), else on `make` (a terminal's). */
 export function sendQueueFor(key: string, make: () => SendPort): SendQueue {
   let q = queues.get(key)
-  if (!q) { q = new SendQueue(make()); queues.set(key, q) }
+  if (!q) { q = new SendQueue((adapterOf(key)?.port ?? make)()); queues.set(key, q) }
   return q
 }
 
