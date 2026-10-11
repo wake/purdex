@@ -5,7 +5,7 @@
 //  - the App's send queue (QueuedMessages): the same frame with Undo, Up in an empty box calls them back.
 import { useI18nStore } from '../../stores/useI18nStore'
 import { draftKey } from '../../lib/conversations/draft-memory'
-import { hostSendPort } from '../../lib/conversations/send'
+import { unboundSendPort } from '../../lib/conversations/send'
 import { sendQueueFor, type QueueEntry } from '../../lib/conversations/send-queue'
 import { recallHeld } from '../../lib/conversations/draft-recall'
 import type { HeaderQueued } from '../../lib/conversations/types'
@@ -43,7 +43,7 @@ interface Props {
 
 export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Props) {
   const key = draftKey(paneKey, hostId, sessionId)
-  const queue = sendQueueFor(key, () => hostSendPort(hostId, sessionId))
+  const queue = sendQueueFor(key, () => unboundSendPort(hostId, sessionId))
   const shownEntries = entries.filter((e) => e.state !== 'superseded')
   if (queued.length === 0 && shownEntries.length === 0) return null
   return (

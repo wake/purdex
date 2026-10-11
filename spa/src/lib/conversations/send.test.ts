@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { DestructiveGuard, SUBMIT_TIMEOUT_MS, interruptSession, outcomeMessage, submitPrompt, submitTyped, typedSendPort, mayHaveRun } from './send'
+import { DestructiveGuard, SUBMIT_TIMEOUT_MS, interruptSession, outcomeMessage, submitTyped, typedSendPort, mayHaveRun } from './send'
 import { isDestructive, normalizePrompt, planSend } from './send-plan'
 
 const fetchMock = vi.hoisted(() => vi.fn())
@@ -11,41 +11,7 @@ const json = (status: number, body: unknown) => Promise.resolve(new Response(JSO
 beforeEach(() => fetchMock.mockReset())
 afterEach(() => vi.useRealTimers())
 
-describe('submitPrompt', () => {
-  it('posts text and client_msg_id to the pinned host', async () => {
-    fetchMock.mockImplementation(() => json(200, { status: 'accepted', client_msg_id: 'c1' }))
-    await expect(submitPrompt('h', SID, 'hi', 'c1')).resolves.toEqual({ kind: 'accepted' })
-    const [host, p, init] = fetchMock.mock.calls[0]
-    expect(host).toBe('h')
-    expect(p).toBe(`/api/conversations/claude/${SID}/submit`)
-    expect(init.method).toBe('POST')
-    expect(JSON.parse(init.body)).toEqual({ text: 'hi', client_msg_id: 'c1' })
-  })
-
-  it.each([
-    [200, { status: 'dropped', reason: 'session_changed' }, { kind: 'dropped', reason: 'session_changed' }],
-    [200, { status: 'busy' }, { kind: 'busy' }],
-    [200, { status: 'timeout' }, { kind: 'timeout' }],
-    [200, { status: 'unknown', reason: 'no_result' }, { kind: 'unknown', reason: 'no_result' }],
-    [200, { status: 'unknown', reason: 'not_owner' }, { kind: 'not_owner' }],
-    [409, { error: 'no_mod' }, { kind: 'no_mod' }],
-    [409, { error: 'not_owner' }, { kind: 'not_owner' }],
-    [400, { error: 'needs_terminal' }, { kind: 'needs_terminal' }],
-    [400, { error: 'too_long' }, { kind: 'invalid', code: 'too_long' }],
-    [429, { error: 'too_many_pending' }, { kind: 'rejected', status: 429, code: 'too_many_pending' }],
-  ])('%i %j -> %j', async (status, body, want) => {
-    fetchMock.mockImplementation(() => json(status, body))
-    await expect(submitPrompt('h', SID, 'hi', 'c1')).resolves.toEqual(want)
-  })
-
-  it('a lost connection is `network`: possibly sent, never auto-resent', async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'))
-    const o = await submitPrompt('h', SID, 'hi', 'c1')
-    expect(o).toEqual({ kind: 'network' })
-    expect(mayHaveRun(o)).toBe(true)
-    expect(mayHaveRun({ kind: 'busy' })).toBe(false)
-  })
-
+describe('submitTyped timeout', () => {
   it('waits at least 25 s for the daemon (it answers within 10 s), then gives up as `network`', async () => {
     vi.useFakeTimers()
     let signal: AbortSignal | undefined
@@ -54,7 +20,7 @@ describe('submitPrompt', () => {
       return new Promise((_res, rej) => init.signal.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))))
     })
     expect(SUBMIT_TIMEOUT_MS).toBeGreaterThanOrEqual(25_000)
-    const p = submitPrompt('h', SID, 'hi', 'c1')
+    const p = submitTyped('h', { code: 'dev001', instance: 'g' }, 'hi', 'c1')
     await vi.advanceTimersByTimeAsync(24_999)
     expect(signal?.aborted).toBe(false)
     await vi.advanceTimersByTimeAsync(SUBMIT_TIMEOUT_MS)

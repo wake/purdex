@@ -1,5 +1,5 @@
-// spa/src/lib/conversations/send.ts — sending through the session's mod (U3 plan D7): POST …/submit and …/interrupt, what
-// each answer means, and the destructive guard. Nothing here types into a terminal. The queue is in send-queue.ts.
+// spa/src/lib/conversations/send.ts — sending (K-2): the daemon types a message through POST /api/sessions/{code}/submit; interrupt is still the session mod's (POST …/interrupt). What each answer means, and the destructive guard.
+// The queue is in send-queue.ts.
 //
 // At most once: a submit carries a client_msg_id; only `busy` (and a `timeout`, which the daemon withdrew unhanded) did not
 // run. `unknown`, a lost connection and `not_owner` MAY have run: the caller never resends those by itself.
@@ -46,7 +46,7 @@ export interface SendPort {
 /** Where a typed submit goes: the tmux session code (not the conversation id) and the generation the pane believes in. */
 export interface SubmitTarget { code: string; instance: string }
 
-const path = (sessionId: string, verb: 'submit' | 'interrupt') => `/api/conversations/claude/${encodeURIComponent(sessionId)}/${verb}`
+const path = (sessionId: string, verb: 'interrupt') => `/api/conversations/claude/${encodeURIComponent(sessionId)}/${verb}`
 
 async function post(hostId: string, p: string, body: unknown): Promise<SendOutcome> {
   const ac = new AbortController()
@@ -111,16 +111,16 @@ export async function submitTyped(hostId: string, target: SubmitTarget, text: st
   }
 }
 
-export function submitPrompt(hostId: string, sessionId: string, text: string, clientMsgId: string): Promise<SendOutcome> {
-  return post(hostId, path(sessionId, 'submit'), { text, client_msg_id: clientMsgId })
-}
-
 export function interruptSession(hostId: string, sessionId: string): Promise<SendOutcome> {
   return post(hostId, path(sessionId, 'interrupt'), {})
 }
 
-export const hostSendPort = (hostId: string, sessionId: string): SendPort => ({
-  submit: (text, id) => submitPrompt(hostId, sessionId, text, id),
+/**
+ * The port of a queue made before its pane bound an adapter (a fallback `make`): it can interrupt, and it can NOT submit — the old mod
+ * submit route is gone for a terminal pane, and a typed submit needs the pane's target, which only the bound adapter has.
+ */
+export const unboundSendPort = (hostId: string, sessionId: string): SendPort => ({
+  submit: async () => ({ kind: 'rejected', status: 0, code: 'unbound' }),
   interrupt: () => interruptSession(hostId, sessionId),
 })
 

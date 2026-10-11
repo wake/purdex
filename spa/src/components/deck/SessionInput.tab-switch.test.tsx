@@ -13,6 +13,8 @@ import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 import { clearAllDrafts, draftKey, readDraft } from '../../lib/conversations/draft-memory'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
+import { bindAdapter, clearAllAdapters } from '../../lib/conversations/deck-adapter'
+import { terminalAdapter } from '../../lib/conversations/terminal-adapter'
 
 const fetchMock = vi.hoisted(() => vi.fn())
 vi.mock('../../lib/host-api', () => ({ pinnedHostFetch: fetchMock }))
@@ -20,6 +22,8 @@ vi.mock('../../lib/host-api', () => ({ pinnedHostFetch: fetchMock }))
 const H = 'h', SID = '11111111-2222-4333-8444-555555555555'
 
 function SessionRenderer({ pane }: PaneRendererProps) {
+  // the pane binds its terminal adapter (with a live target) before the input touches the queue, as SessionPaneContent does
+  bindAdapter(draftKey(pane.id, H, SID), terminalAdapter(H, SID, undefined, () => ({ code: 'dev001', instance: 'g1' })))
   return <SessionInput paneKey={pane.id} hostId={H} sessionId={SID} capabilities={{ send: 'prompt' }} onSwitchToTerminal={() => {}} />
 }
 const Other = () => <div data-testid="other-tab" />
@@ -33,7 +37,7 @@ const paneId = (sessionTab.layout as { pane: { id: string } }).pane.id
 beforeEach(() => {
   cleanup()
   vi.useFakeTimers()
-  fetchMock.mockReset().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ status: 'accepted' }))))
+  fetchMock.mockReset().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ outcome: 'handed', mode: 'fill' }))))
   clearModuleRegistry()
   registerModule({ id: 'nex', name: 'Nex', panes: [{ kind: 'execution', component: SessionRenderer }] })
   registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: Other }] })
@@ -41,7 +45,7 @@ beforeEach(() => {
   useShownHostsStore.setState({ ids: [H] })
   useHostConfigStore.setState({ byHost: {}, ensureLoaded: async () => {} })
 })
-afterEach(() => { cleanup(); clearAllDrafts(); clearAllSendQueues(); vi.useRealTimers() })
+afterEach(() => { cleanup(); clearAllDrafts(); clearAllSendQueues(); clearAllAdapters(); vi.useRealTimers() })
 
 describe('session input across tab switches', () => {
   it('keeps the typed draft when the reader switches to another tab and back', () => {

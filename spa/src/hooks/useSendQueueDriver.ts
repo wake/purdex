@@ -4,14 +4,14 @@
 // input is mounted. The input only types and shows; it drives nothing.
 import { useEffect, useMemo } from 'react'
 import { draftKey } from '../lib/conversations/draft-memory'
-import { hostSendPort } from '../lib/conversations/send'
+import { unboundSendPort } from '../lib/conversations/send'
 import { sendQueueFor } from '../lib/conversations/send-queue'
 import type { ConversationItem, UserItem } from '../lib/conversations/types'
 
 /** `sessionId` '' (the conversation is not ready) drives nothing and creates no queue. */
 export function useSendQueueDriver(paneKey: string, hostId: string, sessionId: string, idle: boolean, items: readonly ConversationItem[]): void {
   const key = sessionId ? draftKey(paneKey, hostId, sessionId) : ''
-  const queue = key ? sendQueueFor(key, () => hostSendPort(hostId, sessionId)) : null
+  const queue = key ? sendQueueFor(key, () => unboundSendPort(hostId, sessionId)) : null
   const users = useMemo(() => items.filter((i): i is UserItem => i.type === 'user'), [items])
 
   // Reported on mount and on change, as the queue expects (see SendQueue.setIdle).
