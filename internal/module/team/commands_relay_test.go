@@ -105,6 +105,15 @@ func TestRelayCmd_Refusals(t *testing.T) {
 			}
 		}, code: team.ErrCommandNotYourMember},
 		{name: "old mod", edit: func(p *CommandPlan, c *team.TeamCommand) { p.ModOK = func(string) bool { return false } }, code: team.ErrRelayUnsupported},
+		// c933b0-129 ① (codex attack): the member's row is already the successor's (sid-1); the op that made it cleared into sid-1
+		// and its seed turn is running. The unique index is per session_id, so only the new_session_id lookup sees it.
+		{name: "the predecessor op cleared into this session and is not done", setup: func(t *testing.T, s *Store) {
+			op := team.RelayOp{ID: "op-prev", Kind: team.RelayKindMember, HostID: "h:1", SessionID: "sid-0", NewSessionID: "sid-1", Ref: "_old", NewRef: "_rmk-1",
+				TeamID: "team-L", State: team.RelayCleared, CreatedAt: 900, UpdatedAt: 950}
+			if err := s.CreateRelayOp(op); err != nil {
+				t.Fatal(err)
+			}
+		}, code: team.ErrRelayOpen},
 		{name: "an op is open", setup: func(t *testing.T, s *Store) {
 			op := team.RelayOp{ID: "op-open", Kind: team.RelayKindMember, HostID: "h:1", SessionID: "sid-1", Ref: "_rmk-1", TeamID: "team-L", State: team.RelayRequested, CreatedAt: 1000, UpdatedAt: 1000}
 			if err := s.CreateRelayOp(op); err != nil {

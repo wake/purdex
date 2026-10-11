@@ -91,6 +91,15 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, req.Target+" is no active member of team "+t.ID, nil)
 		return
 	}
+	// The target may be an old ref that the lineage carries to a successor: the row is the successor's, and the op that made
+	// it (cleared, seed turn still running) is the predecessor's. Relaying the successor now would relay the member twice.
+	if prev, open, err := m.store.OpenRelayOpByNewSession(mr.SessionID); err != nil {
+		fail(err)
+		return
+	} else if open {
+		m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this member's previous relay (to this session) is still settling", Op: &prev})
+		return
+	}
 	if m.isRemoteRow(mr) { // the member's host runs the relay; this host records it and sends the command (MR-3a)
 		m.createRemoteMemberRelay(w, req, t, mr)
 		return
