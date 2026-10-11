@@ -18,6 +18,7 @@ import { DestructiveGuard, outcomeMessage, type OutcomeMessage } from '../../lib
 import { planSend } from '../../lib/conversations/send-plan'
 import { sendQueueFor } from '../../lib/conversations/send-queue'
 import { isWalking, stepHistory } from '../../lib/conversations/input-history'
+import { arrowDir, caretAtEdge, decideArrow, isEmptyBox } from '../../lib/conversations/input-arrows'
 import { subscribeRecall } from '../../lib/conversations/draft-recall'
 import { canTakeBack, canTakeBackAll, takeBackAll, takeBackHeld, takeBackQueued, useTakeBackState } from '../../lib/conversations/take-back'
 import type { Capabilities } from '../../lib/conversations/types'
@@ -275,22 +276,22 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && hasCleared(dKey)) { e.preventDefault(); restoreCleared() }
                 // Up in an empty box (nothing typed, no chip, no upload on its way) calls back every message the App still holds, as the terminal does;
                 // anywhere else Up is the caret's
-                const arrow = (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey
-                const emptyBox = draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) // (a draft Esc just cleared is not overwritten: its undo window is the box's)
-                if (arrow && e.key === 'ArrowUp' && adapter.recall && emptyBox && canTakeBackAll(dKey, queue)) {
+                // (the decision is input-arrows.ts's: taking back first, then the sent history #2666, else the caret's)
+                const dir = arrowDir(e)
+                if (!dir) return
+                const el = e.currentTarget
+                const emptyBox = isEmptyBox({ draft, shownChips: shown.length, uploading: uploading.length, hasCleared: hasCleared(dKey) }) // (a draft Esc just cleared is not overwritten: its undo window is the box's)
+                const decision = decideArrow({
+                  dir, recall: adapter.recall, emptyBox, walking: isWalking(dKey, draft),
+                  atEdge: caretAtEdge(dir, draft, el.selectionStart, el.selectionEnd),
+                  canTakeBackAll: () => canTakeBackAll(dKey, queue),
+                })
+                if (decision === 'take_back_all') {
                   e.preventDefault()
                   void takeBackAll(dKey, queue)
                   return
                 }
-                // Nothing to take back (#2666): Up / Down walk this conversation's sent history, as the terminal does. A shown history item is a step
-                // only with the caret on its first line (Up) / last line (Down); an edited one is an ordinary draft, and Up there is the caret's.
-                if (arrow) {
-                  const dir = e.key === 'ArrowUp' ? 'up' : 'down'
-                  const el = e.currentTarget
-                  const walking = isWalking(dKey, draft)
-                  const atEdge = el.selectionStart === el.selectionEnd
-                    && (dir === 'up' ? !draft.slice(0, el.selectionStart).includes('\n') : !draft.slice(el.selectionEnd).includes('\n'))
-                  if (walking ? !atEdge : !(dir === 'up' && emptyBox)) return
+                if (decision === 'history') {
                   const step = stepHistory(dKey, dir, draft, emptyBox)
                   if (!step) return
                   e.preventDefault()

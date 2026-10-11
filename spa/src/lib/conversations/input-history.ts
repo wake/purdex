@@ -7,6 +7,7 @@ import { addAttachment, nextAttachmentSeq, removeAttachment, reconcileAttachment
 import { discardCleared } from './draft-clear'
 import { writeDraft } from './draft-memory'
 import { imagePlaceholder, splitImageRefs } from './image-placeholder'
+import { planHistoryStep, type WalkState } from './input-arrows'
 import type { ConversationItem, UserItem } from './types'
 
 interface Sent { id: string; ids: string[]; text: string }
@@ -29,11 +30,8 @@ function sentEntries(items: readonly ConversationItem[]): Sent[] {
 /** The texts the person sent, oldest first. */
 export const sentTexts = (items: readonly ConversationItem[]): string[] => sentEntries(items).map((e) => e.text)
 
-/** `ids` are every member id of the item the box shows (its identity, not a position: the list changes under the walk). */
-interface Walk { ids: string[]; shown: string; chipIds: string[] }
-
 const sources = new Map<string, readonly Sent[]>()
-const walks = new Map<string, Walk>()
+const walks = new Map<string, WalkState>()
 
 /** The conversation's items as the pane reads them now (called on every change). */
 export function setHistorySource(key: string, items: readonly ConversationItem[]): void {
@@ -70,27 +68,20 @@ function restore(key: string, text: string): { draft: string; chipIds: string[] 
 export function stepHistory(key: string, dir: 'up' | 'down', draft: string, canStart: boolean): { draft: string } | null {
   const list = sources.get(key) ?? []
   const old = walks.get(key)
-  const w = old && old.shown === draft ? old : undefined
-  let pos: number
-  if (!w) {
-    walks.delete(key)
-    for (const id of old?.chipIds ?? []) removeAttachment(key, id) // an edited-away walk: its restored chips go with it, whether or not a new one starts
-    if (dir === 'down' || !canStart || list.length === 0) return null
-    pos = list.length - 1
-  } else {
-    const at = list.findIndex((e) => e.ids.some((id) => w.ids.includes(id))) // relocate by intersection of member ids: pages, removals and collapses shift positions
-    if (at < 0) { walks.delete(key); return null } // the item is gone: the walk ends, the box stays as it is
-    if (dir === 'up') {
-      if (at <= 0) return null
-      pos = at - 1
-    } else pos = at + 1
+  const plan = planHistoryStep(list, old, draft, dir, canStart)
+  if (plan.kind === 'none') {
+    if (plan.forgetWalk) walks.delete(key)
+    if (plan.dropChips) for (const id of old?.chipIds ?? []) removeAttachment(key, id) // an edited-away walk: its restored chips go with it, whether or not a new one starts
+    return null
   }
-  for (const id of w?.chipIds ?? []) removeAttachment(key, id)
-  if (pos >= list.length) { // past the newest: the walk ends in an empty box
+  // a step that goes on (or ends the walk) lets go of the walk's earlier chips, edited away or not
+  for (const id of old?.chipIds ?? []) removeAttachment(key, id)
+  if (plan.kind === 'end') { // past the newest: the walk ends in an empty box
     walks.delete(key)
     writeDraft(key, '')
     return { draft: '' }
   }
+  const pos = plan.pos
   const next = restore(key, list[pos].text)
   walks.set(key, { ids: list[pos].ids, shown: next.draft, chipIds: next.chipIds })
   writeDraft(key, next.draft)
