@@ -1,11 +1,19 @@
 package agent
 
-import "context"
+import (
+	"context"
+
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/store"
+)
 
 // AgentRunningKey names the service the session module uses to tell whether a tmux session has an agent running (the
 // no-agent launch panel's `agent_running`, spec 2026-10-12-no-agent-launch-panel §2.2). The interface lives here, not
 // in the session package: agent already depends on session, never the other way round.
-const AgentRunningKey = "agent.running"
+const AgentRunningKey = session.AgentRunningKey
+
+// The module is what the session module's launch plan asks (session.LaunchAgentFacts).
+var _ session.LaunchAgentFacts = (*Module)(nil)
 
 // AgentRunning answers for one session code.
 type AgentRunning interface {
@@ -13,6 +21,14 @@ type AgentRunning interface {
 	// owns it, or the hook state says one is running. An unknown session or an empty code is false, not an error; an
 	// error means the answer could not be established (the caller must not read it as "no agent").
 	AgentRunning(ctx context.Context, code string) (bool, error)
+}
+
+// LastRun is the last root run recorded for a session code (NA-0a), or nil.
+func (m *Module) LastRun(code string) (*store.LastRun, error) {
+	if m.frames == nil || code == "" {
+		return nil, nil
+	}
+	return m.frames.LastRun(code)
 }
 
 // AgentRunning implements the AgentRunning service. The root frame is the primary answer (the same owner resolution

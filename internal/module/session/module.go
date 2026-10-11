@@ -123,6 +123,9 @@ type SessionModule struct {
 	snapshotRetryDelays []time.Duration
 	snapshotRetriesLive atomic.Int32
 	runCtx              context.Context
+
+	// claims is the launch panel's one-launch-at-a-time table (launch_claim.go).
+	claims *launchClaims
 }
 
 // defaultSnapshotRetryDelays is the wait before each subscribe-snapshot
@@ -159,6 +162,7 @@ func NewSessionModule(meta *store.MetaStore) *SessionModule {
 		epoch:           newEpoch(),
 		snapSlot:        newSlot(),
 		listCacheSlot:   newSlot(),
+		claims:          newLaunchClaims(),
 	}
 }
 
@@ -184,6 +188,8 @@ func (m *SessionModule) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/sessions/{code}", m.handleRename)
 	mux.HandleFunc("DELETE /api/sessions/{code}", m.handleDelete)
 	mux.HandleFunc("POST /api/sessions/{code}/send-keys", m.handleSendKeys)
+	mux.HandleFunc("GET /api/sessions/{code}/launch-plan", m.handleLaunchPlan)
+	mux.HandleFunc("POST /api/sessions/{code}/launch", m.handleLaunch)
 	mux.HandleFunc("/ws/terminal/{code}", m.handleTerminalWS)
 	mux.HandleFunc("POST /api/shell/resolve-command", m.handleShellResolveCommand)
 	mux.HandleFunc("GET /api/hooks/tmux/status", m.handleTmuxHookStatus)

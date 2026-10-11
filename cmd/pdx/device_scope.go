@@ -21,12 +21,14 @@ var deviceAllowed = map[string]bool{
 	"/ws/terminal/{code}":                           true,
 	"GET /ws/conversations/{provider}/{session_id}": true,
 	// sessions
-	"POST /api/sessions":                  true,
-	"POST /api/sessions/{code}/send-keys": true,
-	"POST /api/sessions/{code}/submit":    true, // typing into Claude Code through the daemon's guard (K-1a-2)
-	"POST /api/sessions/{code}/recall":    true, // take the queued messages back out of Claude Code's input (K-1b)
-	"GET /api/sessions/{code}/provenance": true,
-	"GET /api/sessions/{code}/transcript": true,
+	"POST /api/sessions":                   true,
+	"POST /api/sessions/{code}/send-keys":  true,
+	"GET /api/sessions/{code}/launch-plan": true, // the no-agent launch panel: what to offer ...
+	"POST /api/sessions/{code}/launch":     true, // ... and the choice (resume / start fresh)
+	"POST /api/sessions/{code}/submit":     true, // typing into Claude Code through the daemon's guard (K-1a-2)
+	"POST /api/sessions/{code}/recall":     true, // take the queued messages back out of Claude Code's input (K-1b)
+	"GET /api/sessions/{code}/provenance":  true,
+	"GET /api/sessions/{code}/transcript":  true,
 	// conversations
 	"GET /api/conversations/{provider}/{session_id}":                      true,
 	"GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}": true,
