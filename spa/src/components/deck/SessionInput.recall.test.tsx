@@ -57,13 +57,12 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); clearAllCleared(); clearAllDrafts(); clearAllAttachments(); clearAllUploads(); clearAllSendQueues(); vi.useRealTimers() })
 
-describe('what the App holds is shown grey, without a card', () => {
-  it('a held message: the queued caption, the text, a small Undo; no frame', () => {
+describe('what the App holds is shown in the first-cut block (accent frame): not accepted yet', () => {
+  it('a held message: the queued caption, the text, a small Undo', () => {
     render(<TabContent activeTab={sessionTab} allTabs={all} />)
     type('hold me'); enter()
     const [m] = held()
-    expect(m).toHaveClass('text-text-system')
-    expect(m.className).not.toMatch(/border|bg-/)
+    expect(m).toHaveClass('border', 'border-accent', 'bg-accent/12')
     expect(m).toHaveTextContent('You · queued')
     expect(m).toHaveTextContent('hold me')
     expect(m.querySelector('button')).toHaveTextContent('Undo')
