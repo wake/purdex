@@ -12,6 +12,7 @@ import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useSessionViewStore, sessionBinding } from '../stores/useSessionViewStore'
+import { useLaunchPlanStore } from '../stores/useLaunchPlanStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
@@ -56,6 +57,7 @@ beforeEach(() => {
   conv.value = { state: 'off' }
   gate.value = { ok: false, reason: 'not_agent' }
   plans.fetch.mockReset()
+  useLaunchPlanStore.setState({ entries: {} })
   plans.fetch.mockResolvedValue(plan())
   clearModuleRegistry()
   registerModule({ id: 'terminal', name: 'Terminal', panes: [{ kind: 'tmux-session', component: SessionPaneContent }] })
@@ -81,19 +83,48 @@ describe('the user path: status bar deck / chat button to the panel', () => {
     </>,
   )
 
-  it.each([['Deck'], ['Chat']])('starting in the terminal view, clicking %s renders the launch panel', async (name) => {
+  it.each([['Deck'], ['Chat']])('starting in the terminal view, the plan resolves there; then clicking %s renders the launch panel', async (name) => {
     mountBoth()
     expect(screen.queryByTestId('launch-panel')).toBeNull()
     const btn = screen.getByRole('button', { name })
-    expect(btn).toBeEnabled()
+    await waitFor(() => expect(btn).toBeEnabled())
+    expect(plans.fetch).toHaveBeenCalledTimes(1)
     fireEvent.click(btn)
     expect(await screen.findByTestId('launch-panel')).toBeInTheDocument()
   })
 
-  it('without session.launch.v1 the buttons stay disabled', () => {
+  it('while the plan GET is pending the deck / chat buttons are disabled ("checking")', async () => {
+    plans.fetch.mockReturnValue(new Promise(() => {}))
+    mountBoth()
+    await act(async () => { await Promise.resolve() })
+    for (const name of ['Deck', 'Chat']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled()
+      expect(screen.getByRole('button', { name }).getAttribute('title')).toBe('Checking this session…')
+    }
+  })
+
+  it('a plan with agent_running true keeps the buttons disabled with the not_agent reason', async () => {
+    plans.fetch.mockResolvedValue(plan({ agentRunning: true }))
+    mountBoth()
+    await waitFor(() => expect(plans.fetch).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByRole('button', { name: 'Deck' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Deck' }).getAttribute('title')).toBe('This terminal is not running Claude Code')
+  })
+
+  it('a failed plan GET keeps the buttons disabled', async () => {
+    plans.fetch.mockRejectedValue(new Error('boom'))
+    mountBoth()
+    await waitFor(() => expect(plans.fetch).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByRole('button', { name: 'Deck' })).toBeDisabled()
+  })
+
+  it('without session.launch.v1 the buttons stay disabled and nothing is asked', () => {
     setCaps([])
     mountBoth()
     expect(screen.getByRole('button', { name: 'Deck' })).toBeDisabled()
+    expect(plans.fetch).not.toHaveBeenCalled()
   })
 })
 
@@ -153,12 +184,13 @@ describe('when it does not', () => {
     expect(screen.queryByTestId('launch-panel')).toBeNull()
   })
 
-  it('the terminal view never asks and shows no panel', async () => {
+  it('the terminal view asks (the status bar needs the answer) but shows no panel', async () => {
     setView('terminal')
     mount()
+    await waitFor(() => expect(plans.fetch).toHaveBeenCalledTimes(1))
     await act(async () => { await Promise.resolve() })
-    expect(plans.fetch).not.toHaveBeenCalled()
     expect(screen.queryByTestId('launch-panel')).toBeNull()
+    expect(screen.queryByTestId('session-view-launch')).toBeNull()
   })
 
   it('a conversation that exists is not replaced by the panel', async () => {
@@ -179,12 +211,64 @@ describe('when it does not', () => {
     expect(screen.queryByTestId('launch-panel')).toBeNull()
   })
 
-  it('a failed plan read keeps today\'s view', async () => {
+})
+
+describe('while the plan is unknown or failed (deck / chat)', () => {
+  it.each(['deck', 'chat'] as const)('%s: a pending read renders the empty launch container, never DeckPane / ChatPane', async (view) => {
+    plans.fetch.mockReturnValue(new Promise(() => {}))
+    setView(view)
+    mount()
+    await act(async () => { await Promise.resolve() })
+    const box = screen.getByTestId('session-view-launch')
+    expect(box.childElementCount).toBe(0)
+    expect(screen.queryByTestId('deck-unreadable')).toBeNull()
+    expect(screen.queryByTestId('launch-panel')).toBeNull()
+    expect(screen.queryByTestId('session-footer')).toBeNull()
+  })
+
+  it('already in the deck, a plan that reloads for a new key (another session) does not flash DeckUnreadable', async () => {
+    setView('deck')
+    const { rerender } = mount()
+    await screen.findByTestId('launch-panel')
+    const next = { ...sessionTab, id: 't-other', layout: { type: 'leaf', pane: { id: 'p-other', content: { kind: 'tmux-session', hostId: H, sessionCode: 'dev002', mode: 'terminal', cachedName: 'dev002', tmuxInstance: 'j' } } } } as unknown as Tab
+    plans.fetch.mockReturnValue(new Promise(() => {}))
+    act(() => useSessionViewStore.getState().setView(next.id, 'p-other', sessionBinding(H, 'dev002'), 'deck'))
+    useSessionStore.setState({ sessions: { [H]: [{ code: 'dev002', name: 'dev002', cwd: '/x', mode: 'terminal', tmux_instance: 'j' }] } })
+    useTabStore.setState({ tabs: { [next.id]: next }, tabOrder: [next.id], activeTabId: next.id })
+    rerender(<TabContent activeTab={next} allTabs={[next]} />)
+    await act(async () => { await Promise.resolve() })
+    expect(screen.queryByTestId('deck-unreadable')).toBeNull()
+    expect(screen.queryByTestId('launch-panel')).toBeNull()
+    expect(screen.getByTestId('session-view-launch')).toBeInTheDocument()
+  })
+
+  it.each(['deck', 'chat'] as const)('%s: a failed read shows the error block; refresh re-reads, terminal switches the view', async (view) => {
+    plans.fetch.mockRejectedValue(new Error('boom'))
+    setView(view)
+    mount()
+    expect(await screen.findByTestId('launch-plan-error')).toBeInTheDocument()
+    expect(screen.queryByTestId('deck-unreadable')).toBeNull()
+    plans.fetch.mockResolvedValue(plan())
+    fireEvent.click(screen.getByTestId('launch-plan-error-refresh'))
+    await waitFor(() => expect(plans.fetch).toHaveBeenCalledTimes(2))
+    expect(await screen.findByTestId('launch-panel')).toBeInTheDocument()
+  })
+
+  it('the error block 「切到終端機」 switches this pane to the terminal view', async () => {
     plans.fetch.mockRejectedValue(new Error('boom'))
     setView('deck')
     mount()
+    fireEvent.click(await screen.findByTestId('launch-plan-error-terminal'))
+    await waitFor(() => expect(screen.queryByTestId('launch-plan-error')).toBeNull())
+    expect(screen.getByTestId('session-terminal-layer').getAttribute('style') ?? '').not.toContain('hidden')
+  })
+
+  it('already in the deck when the agent turns out to be running: today\'s deck view', async () => {
+    plans.fetch.mockResolvedValue(plan({ agentRunning: true }))
+    setView('deck')
+    mount()
     expect(await screen.findByTestId('deck-unreadable')).toBeInTheDocument()
-    expect(screen.queryByTestId('launch-panel')).toBeNull()
+    expect(screen.queryByTestId('session-view-launch')).toBeNull()
   })
 })
 

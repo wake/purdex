@@ -1,23 +1,18 @@
-// spa/src/hooks/useLaunchPlan.ts — the daemon's launch plan for one session (no-agent launch panel). Read when `enabled` turns on
-// (mount), on `refresh()`, and whenever `changeKey` changes (the sessions list moved for this session). The previous plan stays
-// shown while a re-read is in flight; a failed read drops it (the caller then keeps today's view — never a stale panel).
+// spa/src/hooks/useLaunchPlan.ts — triggers the shared launch-plan read (useLaunchPlanStore) for one session: when `enabled` turns on
+// (mount), on `refresh()`, and whenever `changeKey` changes (the sessions list moved for this session). The state itself
+// lives in the store, so the status bar and the pane read one answer and it survives a tab remount.
 import { useCallback, useEffect, useState } from 'react'
-import { fetchLaunchPlan, type LaunchPlan } from '../lib/launch-plan'
+import { selectLaunchPlanEntry, useLaunchPlanStore, type LaunchPlanEntry } from '../stores/useLaunchPlanStore'
 
-export function useLaunchPlan(enabled: boolean, hostId: string, code: string, changeKey: string): { plan: LaunchPlan | null; refresh: () => void } {
+export function useLaunchPlan(enabled: boolean, hostId: string, code: string, changeKey: string): { entry: LaunchPlanEntry | undefined; refresh: () => void } {
   const [tick, setTick] = useState(0)
   const refresh = useCallback(() => setTick((n) => n + 1), [])
-  const subject = `${hostId}\0${code}`
-  const [held, setHeld] = useState<{ subject: string; plan: LaunchPlan | null } | null>(null)
 
   useEffect(() => {
-    if (!enabled) return
-    const ac = new AbortController()
-    fetchLaunchPlan(hostId, code, ac.signal)
-      .then((plan) => plan, () => null)
-      .then((plan) => { if (!ac.signal.aborted) setHeld({ subject, plan }) })
-    return () => ac.abort()
-  }, [enabled, hostId, code, subject, changeKey, tick])
+    if (!enabled || !hostId || !code) return
+    void useLaunchPlanStore.getState().load(hostId, code)
+  }, [enabled, hostId, code, changeKey, tick])
 
-  return { plan: enabled && held?.subject === subject ? held.plan : null, refresh }
+  const entry = useLaunchPlanStore(selectLaunchPlanEntry(hostId, code))
+  return { entry: enabled ? entry : undefined, refresh }
 }

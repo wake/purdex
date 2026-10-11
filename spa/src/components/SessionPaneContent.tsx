@@ -16,13 +16,14 @@ import { bindAdapter } from '../lib/conversations/deck-adapter'
 import { draftKey } from '../lib/conversations/draft-memory'
 import { paneSendTarget, terminalAdapter } from '../lib/conversations/terminal-adapter'
 import { useConversationViewGate } from '../hooks/useConversationViewGate'
-import { useLaunchPanelGate } from '../hooks/useLaunchPanelGate'
+import { useLaunchPlanCandidate } from '../hooks/useLaunchPlanCandidate'
 import { ChatPane } from './deck/ChatPane'
 import { AskStrip } from './dock/AskStrip'
 import { QuestionDock } from './dock/QuestionDock'
 import { openAsks } from '../lib/conversations/asks'
 import { DeckPane } from './deck/DeckPane'
 import { LaunchPanel } from './LaunchPanel'
+import { LaunchPlanError } from './LaunchPlanError'
 import { useLaunchPlan } from '../hooks/useLaunchPlan'
 import { useSessionStore } from '../stores/useSessionStore'
 import { QuickReplies } from './deck/QuickReplies'
@@ -104,20 +105,26 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   const gate = useConversationViewGate(pane.content)
   const conversation = useConversationOfPane(pane.content, gate.ok)
 
-  // The no-agent launch panel (spec 2026-10-12 §3). Decided HERE, once, for the deck and the chat alike: a live session
-  // whose conversation would be `off` (no Claude Code to read, or a host that does not serve conversations), on a host that
-  // serves `session.launch.v1`, where the daemon's plan says no agent is running. Other reasons keep today's views.
-  const launchRule = useLaunchPanelGate(pane.content, gate)
+  // The no-agent launch panel (spec 2026-10-12 §3). Whether the daemon is worth asking is decided HERE, once, for every view: a
+  // live session whose conversation would be `off` (no Claude Code to read, or a host that does not serve conversations), on a
+  // host that serves `session.launch.v1`. The read is made in the terminal view too, so the status bar already has an answer
+  // (it enables deck / chat only on a ready plan with no agent running). Other reasons keep today's views.
+  const launchRule = useLaunchPlanCandidate(pane.content, gate)
   const sessionKey = useSessionStore((s) => {
     const x = (Object.hasOwn(s.sessions, hostId) ? s.sessions[hostId] : undefined)?.find((c) => c.code === sessionCode)
     return x ? [x.tmux_instance, x.cwd, x.current_command, x.branch].join('\0') : ''
   })
   const sessionBranch = useSessionStore((s) => (Object.hasOwn(s.sessions, hostId) ? s.sessions[hostId] : undefined)?.find((c) => c.code === sessionCode)?.branch)
-  const panelCandidate = content.kind === 'tmux-session' && !terminated && hostKnown
-    && (view === 'deck' || view === 'chat')
+  const planCandidate = content.kind === 'tmux-session' && !terminated && hostKnown
     && conversation.state === 'off' && launchRule
-  const launchPlan = useLaunchPlan(panelCandidate, hostId, sessionCode, sessionKey)
-  const showLaunchPanel = panelCandidate && launchPlan.plan !== null && !launchPlan.plan.agentRunning
+  const launchPlan = useLaunchPlan(planCandidate, hostId, sessionCode, sessionKey)
+  // Not asked yet (the effect has not run) reads as loading. In deck / chat the pane never falls through to DeckPane /
+  // ChatPane while the plan is unknown (no flash of "no_session" / an empty chat); a plan that says an agent is running
+  // (it started after the user got here) is the one answer that leaves today's views.
+  const planStatus = launchPlan.entry?.status ?? 'loading'
+  const planAgentRunning = planStatus === 'ready' && launchPlan.entry?.plan?.agentRunning === true
+  const showLaunchView = planCandidate && (view === 'deck' || view === 'chat') && !planAgentRunning
+  const launchReady = planStatus === 'ready' ? launchPlan.entry?.plan ?? null : null
   // The pane now reads another conversation (/clear, relay, rebuild): what it kept for the old one will not be read again
   // (#2457). Importing the module also installs the release of a pane that leaves the tab world.
   const readSession = conversation.state === 'ready' ? conversation.sessionId : ''
@@ -181,20 +188,23 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           connectingMessage={attachStalled ? t('session.attach_stalled') : undefined}
         />
       </div>
-      {showLaunchPanel && launchPlan.plan && (
+      {showLaunchView && (
         <div data-testid="session-view-launch" className="absolute inset-0 bg-surface-primary">
-          <LaunchPanel
-            hostId={hostId}
-            sessionCode={sessionCode}
-            tmuxInstance={tmuxInstance}
-            branch={sessionBranch}
-            plan={launchPlan.plan}
-            onRefresh={launchPlan.refresh}
-            onSwitchToTerminal={switchToTerminal}
-          />
+          {launchReady && (
+            <LaunchPanel
+              hostId={hostId}
+              sessionCode={sessionCode}
+              tmuxInstance={tmuxInstance}
+              branch={sessionBranch}
+              plan={launchReady}
+              onRefresh={launchPlan.refresh}
+              onSwitchToTerminal={switchToTerminal}
+            />
+          )}
+          {planStatus === 'error' && <LaunchPlanError onRefresh={launchPlan.refresh} onSwitchToTerminal={switchToTerminal} />}
         </div>
       )}
-      {!showLaunchPanel && view === 'deck' && (
+      {!showLaunchView && view === 'deck' && (
         <DeckPane
           paneId={pane.id}
           conversation={conversation}
@@ -204,7 +214,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           footer={footer}
         />
       )}
-      {!showLaunchPanel && view === 'chat' && (
+      {!showLaunchView && view === 'chat' && (
         <ChatPane
           paneId={pane.id}
           conversation={conversation}
