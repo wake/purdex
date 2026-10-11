@@ -28,14 +28,10 @@ func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(reg), "import { register as registerAsk } from './ask.js'") || !strings.Contains(string(reg), "registerAsk(on)") {
-		t.Error("register.js does not import and register ./ask.js")
-	}
-	if !strings.Contains(string(reg), "import { registerEvents } from './events.js'") || !strings.Contains(string(reg), "registerEvents(on)") {
-		t.Error("register.js does not import and register ./events.js")
-	}
-	if !strings.Contains(string(reg), "import { registerLease } from './lease.js'") || !strings.Contains(string(reg), "registerLease(on)") {
-		t.Error("register.js does not import and register ./lease.js")
+	for _, c := range []struct{ name, file string }{{"registerAsk", "ask.js"}, {"registerEvents", "events.js"}, {"registerLease", "lease.js"}} {
+		if !importsAndCalls(string(reg), c.name, c.file) {
+			t.Errorf("register.js does not import and register ./%s", c.file)
+		}
 	}
 	// The seed's task notice (T-2b): the mod checks the header `pdx task mine --seed` prints.
 	if !strings.Contains(string(reg), "const TASKS_HEADER = '"+team.TaskSeedHeader+"'") {
@@ -54,6 +50,14 @@ func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	if err := json.Unmarshal(hb, &h); err != nil || len(h.Modules) != 1 || h.Modules[0] != "./register.js" {
 		t.Fatalf("hooks.json = %s", hb)
 	}
+}
+
+// importsAndCalls reports whether src imports `name` from './<file>' (among other names, with or without an `as` alias,
+// so one more export in the list does not break it) and calls name(on).
+func importsAndCalls(src, name, file string) bool {
+	imp := regexp.MustCompile(`import\s*\{[^}]*\b` + regexp.QuoteMeta(name) + `\b[^}]*\}\s*from\s*'\./` + regexp.QuoteMeta(file) + `'`)
+	call := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\(on\)`)
+	return imp.MatchString(src) && call.MatchString(src)
 }
 
 // registration is one on('<event>', …) call in a hooks module: its file, its event and
