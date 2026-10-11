@@ -279,6 +279,27 @@ describe('no generation to send', () => {
   })
 })
 
+describe('layout', () => {
+  it('is one centred block whose rows are left-aligned', () => {
+    mount(plan({ busy: { command: 'vim' } }), { branch: 'main' })
+    const panel = screen.getByTestId('launch-panel')
+    expect(panel.className).toContain('items-center')
+    expect(panel.className).toContain('justify-center')
+    const block = screen.getByTestId('launch-block')
+    expect(block.parentElement).toBe(panel)
+    expect(panel.children).toHaveLength(1)
+    expect(block.className).toContain('items-start')
+    expect(block.className).toContain('text-left')
+    for (const id of ['launch-in-tmux', 'launch-cd-row', 'launch-resume', 'launch-busy', 'launch-refresh']) {
+      let el: HTMLElement | null = screen.getByTestId(id)
+      while (el && el.parentElement !== block) el = el.parentElement
+      expect(el, id).not.toBeNull()
+    }
+    expect(screen.getByTestId('launch-dir').className).toContain('truncate')
+    expect(screen.getByTestId('launch-dir').className).toContain('min-w-0')
+  })
+})
+
 describe('the cd choice belongs to the plan it was made for', () => {
   const el = (p: LaunchPlan) => (
     <LaunchPanel hostId="h" sessionCode="abc" tmuxInstance="1:2" plan={p} onRefresh={onRefresh} onSwitchToTerminal={onSwitchToTerminal} />
