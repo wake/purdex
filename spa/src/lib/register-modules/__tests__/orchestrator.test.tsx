@@ -9,8 +9,10 @@ import { useHostStore } from '../../../stores/useHostStore'
 import { createTab } from '../../../types/tab'
 import { getPrimaryPane } from '../../pane-tree'
 import ExecutionView from '../../../components/execution/ExecutionView'
+import WorkerDeckPane from '../../../components/execution/WorkerDeckPane'
 
 vi.mock('../../../components/execution/ExecutionView', () => ({ default: vi.fn(() => null) }))
+vi.mock('../../../components/execution/WorkerDeckPane', () => ({ default: vi.fn(() => null) }))
 import {
   clearAllBuiltinModuleRegistries,
   resetAndRegisterBuiltinModules,
@@ -165,6 +167,38 @@ describe('registerBuiltinModules orchestrator', () => {
       useTabStore.getState().setPaneContent(tab.id, pane.id, { kind: 'execution', executionId: 'exc_2', host: 'h1' })
       act(() => { lastProps().onModeChange('chat') })
       expect(current().content).toEqual({ kind: 'execution', executionId: 'exc_2', host: 'h1' })
+    })
+
+    // U4-1b: the deck (指揮台) is a different component on the same worker; one worker view is mounted at a time.
+    it('mode deck renders the worker deck, not the room view, with the pane\'s address; the deck can write room back', () => {
+      const { tab, pane, current, rerender } = mountWrapper()
+      vi.mocked(WorkerDeckPane).mockClear()
+      useTabStore.getState().setPaneContent(tab.id, pane.id, { ...current().content, mode: 'deck' } as never)
+      vi.mocked(ExecutionView).mockClear()
+      rerender()
+      expect(vi.mocked(ExecutionView)).not.toHaveBeenCalled()
+      const props = vi.mocked(WorkerDeckPane).mock.calls.at(-1)![0]
+      expect(props).toMatchObject({ hostId: 'h1', executionId: 'exc_1', isActive: true, tabId: tab.id, paneId: pane.id })
+      act(() => { props.onModeChange('room') })
+      expect(current().content).toMatchObject({ kind: 'execution', executionId: 'exc_1', mode: 'room' })
+    })
+
+    it('going to the deck and back remounts (one worker view at a time: no second lease, no second subscription)', () => {
+      const log: string[] = []
+      const fake = (name: string) => function Fake() { useEffect(() => { log.push(`+${name}`); return () => { log.push(`-${name}`) } }, []); return <></> }
+      vi.mocked(ExecutionView).mockImplementation(fake('room'))
+      vi.mocked(WorkerDeckPane).mockImplementation(fake('deck'))
+      try {
+        const { tab, pane, current, rerender } = mountWrapper()
+        const to = (mode: string) => { useTabStore.getState().setPaneContent(tab.id, pane.id, { ...current().content, mode } as never); rerender() }
+        to('chat') // room ⇄ chat stays one mount
+        to('deck')
+        to('room')
+        expect(log).toEqual(['+room', '-room', '+deck', '-deck', '+room'])
+      } finally {
+        vi.mocked(ExecutionView).mockImplementation(() => <></>)
+        vi.mocked(WorkerDeckPane).mockImplementation(() => <></>)
+      }
     })
 
     it('switching does not remount the view (the key ignores the mode)', () => {

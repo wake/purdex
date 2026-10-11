@@ -28,7 +28,7 @@ const header = (queued: HeaderQueued[]): Header => ({ title: 't', status: 'runni
 TURNS.push(turn) // one array for every render: only the header changes between them
 const entry = (h: Header): ConversationEntry => ({ doc: { ...emptyDoc(), turns: TURNS, header: h, capabilities: { send: 'prompt' } }, status: 'live', reason: '', paging: false, subagents: {} })
 const port: SendPort = { submit: () => new Promise<SendOutcome>(() => {}), interrupt: () => Promise.resolve<SendOutcome>({ kind: 'accepted' }) }
-const footer = (ctx: ReturnType<typeof footerContext>) => <SessionInput {...ctx} sessionCode="c" pendingInStream />
+const footer = (ctx: ReturnType<typeof footerContext>) => <SessionInput {...ctx} onSwitchToTerminal={() => {}} sessionCode="c" pendingInStream />
 const props = { paneId: P, hostId: H, sessionId: S, onSwitchToTerminal: () => {} }
 
 beforeEach(() => {

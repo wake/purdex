@@ -18,7 +18,8 @@ export function DeckUnreadable({ reason, retry, onSwitchToTerminal }: {
   reason: DeckUnreadableReason
   /** Offered for what may pass: the host answering again, the transcript appearing. */
   retry?: () => void
-  onSwitchToTerminal: () => void
+  /** Absent (a worker has no terminal view): no 「切到終端機」. */
+  onSwitchToTerminal?: () => void
 }) {
   const t = useI18nStore((s) => s.t)
   const canRetry = retry && (reason === 'unreachable' || reason === 'not_found')
@@ -29,7 +30,9 @@ export function DeckUnreadable({ reason, retry, onSwitchToTerminal }: {
         {canRetry && (
           <button type="button" data-testid="deck-retry" onClick={retry} className="cursor-pointer rounded border border-border-subtle px-3 py-1 hover:bg-surface-secondary">{t('deck.retry')}</button>
         )}
-        <button type="button" data-testid="deck-to-terminal" onClick={onSwitchToTerminal} className="cursor-pointer rounded border border-border-subtle px-3 py-1 hover:bg-surface-secondary">{t('deck.to_terminal')}</button>
+        {onSwitchToTerminal && (
+          <button type="button" data-testid="deck-to-terminal" onClick={onSwitchToTerminal} className="cursor-pointer rounded border border-border-subtle px-3 py-1 hover:bg-surface-secondary">{t('deck.to_terminal')}</button>
+        )}
       </div>
     </div>
   )

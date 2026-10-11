@@ -1,3 +1,4 @@
+import type { ExecutionViewMode } from '../../types/tab'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { useState } from 'react'
 import { render, screen, fireEvent, act, within } from '@testing-library/react'
@@ -263,7 +264,8 @@ describe('ExecutionHeader', () => {
 
     fireEvent.click(screen.getByTestId('view-mode'))
     const menu = within(screen.getByTestId('view-mode-menu')).getByRole('menu')
-    expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(2)
+    expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(3) // room, deck (指揮台), chat
+    expect(within(menu).getByTestId('view-mode-deck')).toHaveAttribute('aria-checked', 'false')
     expect(within(menu).getByTestId('view-mode-room')).toHaveAttribute('aria-checked', 'true')
     expect(within(menu).getByRole('menuitem')).toHaveAttribute('data-testid', 'view-mode-terminal')
   })
@@ -696,7 +698,7 @@ describe('ExecutionHeader', () => {
     const panels = ['worker-info-panel', 'view-mode-menu', 'cost-panel', 'header-overflow-panel']
     const openPanels = () => panels.filter((id) => screen.queryByTestId(id))
 
-    function Pane({ start = 'room' as 'room' | 'chat' }) {
+    function Pane({ start = 'room' as ExecutionViewMode }) {
       const [mode, setMode] = useState(start)
       return <ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} onTakeBack={vi.fn()} mode={mode} onModeChange={setMode} />
     }

@@ -31,13 +31,13 @@ import { useQuickReplies } from '../../lib/quick-replies'
 import { announceTakeOutcome } from '../../lib/nex/take-outcome'
 import ExecutionHeader from './ExecutionHeader'
 import { WorkerEndedPane, workerEndedKind } from './WorkerEndedPane'
-import { readWorkerDraft, writeWorkerDraft, forgetWorkerDraft, workerDraftKey } from '../../lib/nex/worker-draft-memory'
+import { readWorkerDraft } from '../../lib/nex/worker-draft-memory'
 import { ConfirmDialog } from '../ConfirmDialog'
-import { useExecutionStore, executionKey } from '../../stores/useExecutionStore'
+import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { getWorkerTheme, workerThemeStyle } from '../../lib/worker-theme/registry'
 import { useUndoToast } from '../../stores/useUndoToast'
-import { useExecutionSubscription } from '../../hooks/useExecutionSubscription'
+import { useWorkerSession } from '../../hooks/useWorkerSession'
 import { useExecutionPrelude } from '../../hooks/useExecutionPrelude'
 import { derivePrelude } from '../../lib/nex/prelude'
 import { attributeItems, isWorkerEntrypoint, NO_ATTRIBUTION } from '../../lib/nex/stint-attribution'
@@ -46,13 +46,9 @@ import { createStintEnrichmentCache } from '../../lib/nex/stint-enrichment-cache
 import { withStintTools } from '../../lib/nex/stint-enrichment'
 import { StintEnrichmentContext } from '../../hooks/useStintEnrichment'
 import PreludeSection from '../room/prelude/PreludeSection'
-import { useExecutionLease } from '../../hooks/useExecutionLease'
 import { useExecutionActions, type SendOptions } from '../../hooks/useExecutionActions'
-import { usePermissionAnswer } from '../../hooks/usePermissionAnswer'
-import { selectPendingPermission } from '../../lib/nex/permissions'
 import PermissionRequestCard, { PermissionExpiredNotice } from './PermissionRequestCard'
-import { permissionCardKey, prunePermissionCards } from '../../lib/nex/permission-card-memory'
-import { useWorkerUploads } from '../../hooks/useWorkerUploads'
+import { permissionCardKey } from '../../lib/nex/permission-card-memory'
 import { useInputHistory, type HistoryDir } from '../../hooks/useInputHistory'
 import { buildSentHistory, type SentEntry } from '../../lib/nex/sent-history'
 import { fetchAttachment } from '../../lib/nex/nex-api'
@@ -60,11 +56,10 @@ import {
   canSend, composeWithAttachments, encodeImage, isAttachmentError, planAttachments, requestBytes, uploadErrorKey,
   PER_IMAGE_ERRORS, type Chip, type WireImageAttachment,
 } from '../../lib/nex/worker-upload'
-import { selectAttachmentFetch, selectImageAttachments, selectPreludeItemOffset, selectTranscriptPrelude, useNexHostStore } from '../../stores/useNexHostStore'
+import { selectAttachmentFetch, selectPreludeItemOffset, selectTranscriptPrelude, useNexHostStore } from '../../stores/useNexHostStore'
 import { useElapsedTicker } from '../../hooks/useElapsedTicker'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
-import { defaultExecutionState } from '../../lib/nex/event-reducer'
 import { costSummary } from '../../lib/nex/cost-summary'
 import { useThinkingGate } from './useThinkingGate'
 import { anyRunningSubagent, anyRunningTask, runningTasks, subagentTasksByToolUse } from '../../lib/nex/tasks'
@@ -95,7 +90,6 @@ export interface ExecutionViewProps {
   onModeChange: (mode: ExecutionViewMode) => void
 }
 
-const EMPTY = defaultExecutionState()
 /**
  * States the daemon's take-to-terminal can settle (spec §4.2): never `queued`
  * (it would answer `execution_not_settled`) nor `rejected`.
@@ -118,14 +112,12 @@ const KNOWN_ERROR_KEYS = new Set(['invalid_text', 'execution_archived', 'executi
 
 export default function ExecutionView({ hostId, executionId, isActive, isFocusTarget = false, tabId, paneId, from, mode = 'room', onModeChange }: ExecutionViewProps) {
   const t = useI18nStore((s) => s.t)
-  const key = executionKey(hostId, executionId)
-  const st = useExecutionStore((s) => s.executions[key] ?? EMPTY)
+  const { key, st, problem, lease, permission, shownPermission, imageCaps, draftKey, onTextChange, uploads } = useWorkerSession(hostId, executionId, isActive)
   // Worker pane theme spec §4.1: the pane root carries the theme id and its
   // `--wt-*` vars as inline style; room and chat read only `var(--wt-*)`.
   const workerThemeId = useWorkerSettingsStore((s) => s.theme)
   const workerTheme = getWorkerTheme(workerThemeId)
   const workerThemeVars = useMemo(() => workerThemeStyle(workerTheme), [workerTheme])
-  const { problem } = useExecutionSubscription(hostId, executionId, isActive)
   // Spec D4: a worker with no prelude to draw gets no prelude markup at all.
   const preludeEligible = useNexHostStore(selectTranscriptPrelude(hostId)) !== null && !!st.summary?.resume_session_id
   const preludeApi = useExecutionPrelude(hostId, executionId)
@@ -168,45 +160,7 @@ export default function ExecutionView({ hostId, executionId, isActive, isFocusTa
     () => withStintTools(preludeView, preludeRedraw.attribution, enrichment.get),
     [preludeView, preludeRedraw, enrichment],
   )
-  // Permission channel plan Task 9: while the worker waits on a request the
-  // lease is held (no idle lapse) — the answer needs it, and may come hours
-  // later. The card shows the earliest request this pane has not closed itself.
-  const permissions = st.permissions
-  const pendingPermission = useMemo(() => selectPendingPermission({ permissions }), [permissions])
-  const lease = useExecutionLease(hostId, executionId, { hold: pendingPermission !== undefined })
   const { draft, actionPending, handleSend, handleInterrupt, restoreDraft } = useExecutionActions(hostId, executionId, lease)
-  const permission = usePermissionAnswer(hostId, executionId, lease)
-  const shownPermission = useMemo(() => selectPendingPermission({ permissions }, permission.closed), [permissions, permission.closed])
-  // Spec §9.2 (phase E): native images only when the host's capability
-  // exists AND lists this execution's provider — null otherwise (an older
-  // daemon, a codex execution, the summary not in yet), and then every image
-  // goes by path exactly as in phase D. The result is reference-stable.
-  const imageCaps = useNexHostStore(selectImageAttachments(hostId, st.summary?.provider ?? ''))
-  useEffect(() => { void useNexHostStore.getState().ensure(hostId) }, [hostId])
-  // The typed text, for planning an image added mid-draft against the request budget.
-  const draftText = useRef('')
-  // The reply box's text outlives this component: a tab switch unmounts the
-  // pane (the alive pool keeps no execution tab by default), and the box would
-  // come back empty. Written on every change, read as the initial value; a
-  // restored failed-send `draft` still wins (it is the text that just failed).
-  const draftKey = workerDraftKey(hostId, executionId)
-  const onTextChange = useCallback((text: string) => { draftText.current = text; writeWorkerDraft(draftKey, text) }, [draftKey])
-  const workerEnded = !!st.summary && !!workerEndedKind(st.summary)
-  useEffect(() => { if (workerEnded) forgetWorkerDraft(draftKey) }, [workerEnded, draftKey])
-  // The request card's note / open / expanded outlive a tab switch the same way (permission-card-memory), and so
-  // does "this pane closed it" (an answer whose resolution has not arrived yet — closing drops the draft itself).
-  // One rule drops both: a request the store no longer lists as pending — resolved, cancelled, expired — and every
-  // request of an ended worker. Only once the history is in: before that the table may not have replayed a request
-  // yet, and a closed request dropped then would come back as a card when it does.
-  useEffect(() => {
-    if (workerEnded) prunePermissionCards(hostId, executionId)
-    else if (st.historyLoaded) prunePermissionCards(hostId, executionId, (id) => permissions[id]?.status === 'pending')
-  }, [hostId, executionId, workerEnded, st.historyLoaded, permissions])
-  const getDraftText = useCallback(() => draftText.current, [])
-  // Spec §9.1: attachments. The chips live here, not in WorkerInput — the
-  // input is re-keyed on the restored draft and remounts after a failed send —
-  // and the whole pane is the drop target (TerminalView's overlay pattern).
-  const uploads = useWorkerUploads(hostId, executionId, { caps: imageCaps, getText: getDraftText })
   // Reply-box history (see showEntry below); hooks live up here, above the early return.
   const sentEntries = useMemo(() => buildSentHistory(st.messages, st.pendingLocal), [st.messages, st.pendingLocal])
   const history = useInputHistory<SentEntry, string>(sentEntries)

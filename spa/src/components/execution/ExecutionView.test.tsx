@@ -1,3 +1,4 @@
+import type { ExecutionViewMode } from '../../types/tab'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { StrictMode, useEffect, useState } from 'react'
 import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react'
@@ -1421,7 +1422,7 @@ describe('ExecutionView — room and chat (R2 T1.4)', () => {
 
   /** The pane as the wrapper drives it: the view menu's choice comes back as the `mode` prop. */
   function Switchable(props: Omit<Parameters<typeof ExecutionView>[0], 'mode' | 'onModeChange'>) {
-    const [mode, setMode] = useState<'room' | 'chat'>('room')
+    const [mode, setMode] = useState<ExecutionViewMode>('room')
     return <ExecutionView {...props} mode={mode} onModeChange={setMode} />
   }
 

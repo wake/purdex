@@ -227,11 +227,21 @@ describe('PaneModeButtons — an execution target in room', () => {
   // The primary pane is a worker as well, in room: a write aimed at it would be visible.
   const primary = exec('exc_primary')
 
-  it('room is pressed; chat is not; there is no terminal or deck button in the group', () => {
+  it('room is pressed; chat and deck are not; there is no terminal button in the group', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
     expect(pressed()).toEqual(['Worker room'])
     expect(screen.queryByRole('button', { name: 'Terminal' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Deck' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Deck' })).toBeInTheDocument() // U4-1b: the worker's deck (指揮台)
+  })
+
+  it('deck switches the target pane to the deck and is pressed there', () => {
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
+    fireEvent.click(button('Deck'))
+    expect(contentOf(TARGET)).toEqual(exec('exc_target', { mode: 'deck' }))
+    expect(contentOf(PRIMARY)).toEqual(primary)
+    cleanup()
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'deck' }))} />)
+    expect(pressed()).toEqual(['Deck'])
   })
 
   it('an absent mode, or one this build does not know, reads as room', () => {
