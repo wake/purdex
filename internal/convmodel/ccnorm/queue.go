@@ -47,11 +47,22 @@ func queueSource(content string) string {
 	if strings.HasPrefix(t, peerOpen) {
 		return QueuedPeer
 	}
-	if len(t) > 1 && t[0] == '<' && (t[1] >= 'a' && t[1] <= 'z' || t[1] >= 'A' && t[1] <= 'Z') {
-		return QueuedSystem
+	if len(t) > 1 && t[0] == '<' {
+		for _, tag := range harnessTags {
+			if rest, ok := strings.CutPrefix(t[1:], tag); ok && (rest == "" || rest[0] == '>' || rest[0] == '/' || unicode.IsSpace(rune(rest[0]))) {
+				return QueuedSystem
+			}
+		}
 	}
 	return QueuedUser
 }
+
+// harnessTags are the tags Claude Code itself writes at the start of a queued command. user.go already reads bash-input,
+// bash-stdout/stderr, local-command-stdout/caveat, command-name/message/args and task-notification (humanTags,
+// isSlashCommand); system-reminder, local-command-stderr and user-prompt-submit-hook are the other harness wrappers.
+var harnessTags = [...]string{"task-notification", "system-reminder", "command-name", "command-message", "command-args",
+	"local-command-stdout", "local-command-stderr", "local-command-caveat", "bash-input", "bash-stdout", "bash-stderr",
+	"user-prompt-submit-hook"}
 
 func normSpace(s string) string { return strings.Join(strings.Fields(s), " ") }
 
@@ -93,12 +104,21 @@ func (n *Normalizer) queueRemove(text string) {
 			}
 		}
 	}
+	// A user remove with no match falls back only when exactly one user entry is queued: hiding a message that is still
+	// queued is worse than briefly showing a delivered one.
+	idx, count := -1, 0
 	for i, q := range n.queue {
 		if q.Source == want.Source {
-			n.removeAt(i)
-			n.skip("queue:remove-fifo")
-			return
+			count++
+			if idx < 0 {
+				idx = i
+			}
 		}
+	}
+	if idx >= 0 && (want.Source != QueuedUser || count == 1) {
+		n.removeAt(idx)
+		n.skip("queue:remove-fifo")
+		return
 	}
 	n.skip("queue:remove-unmatched")
 }

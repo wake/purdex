@@ -107,19 +107,46 @@ func TestQueue_OversizeLineClearsQueue(t *testing.T) {
 
 func TestQueue_SourceByTag(t *testing.T) {
 	for in, want := range map[string]string{
-		"<task-notification>x</task-notification>":                         "system",
-		"  <local-command-stdout>x</local-command-stdout>":                 "system",
-		"\n<system-reminder>x</system-reminder>":                           "system",
-		"<foo-bar attr=\"1\">x":                                            "system",
+		"<task-notification>x</task-notification>":         "system",
+		"  <local-command-stdout>x</local-command-stdout>": "system",
+		"\n<system-reminder>x</system-reminder>":           "system",
+		"<foo-bar attr=\"1\">x":                            "user",
+		"<div> broken":                                     "user",
+		"<Button> 壞了":                                      "user",
+		"<?php echo 1;":                                    "user",
+		"<task-notificationx>y":                            "user",
 		"<cross-session-message from-name=\"a\">x</cross-session-message>": "peer",
-		"fix a < b please":                                                 "user",
-		"< 5 is small":                                                     "user",
-		"a <tag> later":                                                    "user",
-		"":                                                                 "user",
+		"fix a < b please": "user",
+		"< 5 is small":     "user",
+		"a <tag> later":    "user",
+		"":                 "user",
 	} {
 		if got := queueSource(in); got != want {
 			t.Errorf("queueSource(%q) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+func TestQueue_SourceWhitelistedHarnessTags(t *testing.T) {
+	for _, tag := range []string{"task-notification", "system-reminder", "command-name", "command-message", "command-args",
+		"local-command-stdout", "local-command-stderr", "local-command-caveat", "bash-input", "bash-stdout", "bash-stderr",
+		"user-prompt-submit-hook"} {
+		for _, in := range []string{"<" + tag + ">x</" + tag + ">", "  \n<" + tag + " a=\"1\">x"} {
+			if got := queueSource(in); got != "system" {
+				t.Errorf("queueSource(%q) = %s, want system", in, got)
+			}
+		}
+	}
+}
+
+func TestQueue_RemoveUserFallbackOnlyWhenSingleUserEntry(t *testing.T) {
+	n := norm(t, qin(1, "enqueue", "only"), qin(2, "remove", "something else"))
+	if len(queuedOf(n)) != 0 || n.Stats().Skipped["queue:remove-fifo"] != 1 {
+		t.Fatalf("queued %+v skipped %v", queuedOf(n), n.Stats().Skipped)
+	}
+	n = norm(t, qin(1, "enqueue", "one"), qin(2, "enqueue", "two"), qin(3, "remove", "something else"))
+	if got := texts(queuedOf(n)); !reflect.DeepEqual(got, []string{"user:one", "user:two"}) || n.Stats().Skipped["queue:remove-unmatched"] != 1 {
+		t.Fatalf("queued %v skipped %v", got, n.Stats().Skipped)
 	}
 }
 
