@@ -2478,6 +2478,8 @@
   "launch.err.already_launching": "Already launching",
   "launch.err.not_found": "This session no longer exists",
   "launch.err.other": "Launch failed ({{status}})",
+  "launch.err.unknown_outcome": "Not sure whether it was sent — refresh to check",
+  "launch.no_generation": "Cannot confirm which generation of this session this is — please refresh",
   "split.close": "Close panel",
   "split.panel": "Side panel"
 }

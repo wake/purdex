@@ -167,11 +167,33 @@ describe('errors by code', () => {
     expect(el.textContent).toContain('Launch failed (502)')
     expect(el.textContent).not.toContain('Bad Gateway')
   })
-  it('a network failure is 「failed」 without a status', async () => {
+  it('a transport failure is an unknown outcome: says so, and the plan is re-read', async () => {
     post.mockRejectedValue(new TypeError('Failed to fetch'))
     mount(plan())
     fireEvent.click(screen.getByTestId('launch-fresh'))
     const el = await screen.findByTestId('launch-error')
+    expect(el.textContent).toContain('Not sure whether it was sent')
     expect(el.textContent).not.toContain('Failed to fetch')
+    expect(el.textContent).not.toContain('Launch failed')
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+  })
+  it('a coded other error keeps 「Launch failed (status)」 and does not re-read', async () => {
+    const el = await fail(new LaunchError(500, 'other'))
+    expect(el.textContent).toContain('Launch failed (500)')
+    expect(onRefresh).not.toHaveBeenCalled()
+  })
+})
+
+describe('no generation to send', () => {
+  it('both empty: buttons disabled, a refresh hint is shown, nothing is posted', () => {
+    mount(plan({ tmuxInstance: '' }), { tmuxInstance: '' })
+    const resume = screen.getByTestId('launch-resume') as HTMLButtonElement
+    const fresh = screen.getByTestId('launch-fresh') as HTMLButtonElement
+    expect(resume.disabled).toBe(true)
+    expect(fresh.disabled).toBe(true)
+    expect(screen.getByTestId('launch-no-generation').textContent).toContain('refresh')
+    fireEvent.click(resume)
+    fireEvent.click(fresh)
+    expect(post).not.toHaveBeenCalled()
   })
 })

@@ -34,17 +34,20 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
   const resumeReason = resumeLine === null && 'reason' in plan.resume ? plan.resume.reason : null
   const freshLine = plan.fresh?.line ?? null
   const withCd = cd && move
+  const generation = tmuxInstance || plan.tmuxInstance
+  const noGeneration = generation === ''
 
   const launch = async (kind: LaunchKind) => {
-    if (sending) return
+    if (sending || noGeneration) return
     setSending(true)
     setFailure(null)
     try {
-      await postLaunch(hostId, sessionCode, { kind, cd: withCd, expectedTmuxInstance: tmuxInstance || plan.tmuxInstance })
+      await postLaunch(hostId, sessionCode, { kind, cd: withCd, expectedTmuxInstance: generation })
     } catch (e) {
-      const code = e instanceof LaunchError ? e.code : 'other'
-      setFailure({ code, status: e instanceof LaunchError ? String(e.status) : 'network' })
-      if (code === 'busy' || code === 'agent_running') onRefresh()
+      // Not a coded answer (network, aborted, ...): the line may or may not have been typed — say so and read the plan again.
+      const code = e instanceof LaunchError ? e.code : 'unknown_outcome'
+      setFailure({ code, status: e instanceof LaunchError ? String(e.status) : '' })
+      if (code === 'busy' || code === 'agent_running' || code === 'unknown_outcome') onRefresh()
     } finally {
       setSending(false)
     }
@@ -56,6 +59,7 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
       case 'busy': return plan.busy ? t('launch.err.busy', { command: plan.busy.command }) : t('launch.err.busy_unknown')
       case 'already_launching': return t('launch.err.already_launching')
       case 'not_found': return t('launch.err.not_found')
+      case 'unknown_outcome': return t('launch.err.unknown_outcome')
       case 'agent_running': return ''
       default: return t('launch.err.other', { status: f.status })
     }
@@ -90,7 +94,7 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
           type="button"
           data-testid="launch-resume"
           title={previewLine(resumeLine, plan.dir, withCd)}
-          disabled={resumeLine === null || busy || sending}
+          disabled={resumeLine === null || busy || sending || noGeneration}
           onClick={() => void launch('resume')}
           className={btn}
         >
@@ -100,7 +104,7 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
           type="button"
           data-testid="launch-fresh"
           title={previewLine(freshLine, plan.dir, withCd)}
-          disabled={freshLine === null || busy || sending}
+          disabled={freshLine === null || busy || sending || noGeneration}
           onClick={() => void launch('fresh')}
           className={btn}
         >
@@ -109,6 +113,9 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
       </div>
       {resumeReason && !busy && (
         <p data-testid="launch-resume-hint" className="text-xs text-text-muted">{t(`launch.resume.${resumeReason}`)}</p>
+      )}
+      {noGeneration && (
+        <p data-testid="launch-no-generation" className="text-xs text-text-muted">{t('launch.no_generation')}</p>
       )}
       {plan.busy && (
         <p data-testid="launch-busy" className="text-xs text-text-primary">{t('launch.busy', { command: plan.busy.command })}</p>
