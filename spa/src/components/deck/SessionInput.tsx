@@ -17,6 +17,7 @@ import { uploadFailureText } from '../../lib/upload-failure'
 import { DestructiveGuard, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
 import { sendQueueFor } from '../../lib/conversations/send-queue'
+import { isWalking, stepHistory } from '../../lib/conversations/input-history'
 import { subscribeRecall } from '../../lib/conversations/draft-recall'
 import { canTakeBack, canTakeBackAll, takeBackAll, takeBackHeld, takeBackQueued, useTakeBackState } from '../../lib/conversations/take-back'
 import type { Capabilities } from '../../lib/conversations/types'
@@ -118,6 +119,13 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const typeFont = useDeckTypeStore((s) => s.fontSize)
   const typeLine = useDeckTypeStore((s) => s.lineHeight)
   useLayoutEffect(() => { if (box.current) fitHeight(box.current) }, [draft, typeFont, typeLine])
+  // a history step leaves the caret at the end of the item it shows (the last line: Up goes on walking from a one-line item)
+  const atEnd = useRef(false)
+  useLayoutEffect(() => {
+    if (!atEnd.current || !box.current) return
+    atEnd.current = false
+    box.current.setSelectionRange(draft.length, draft.length)
+  }, [draft])
   // dragging files over the input: counted enter / leave (moving over a child fires leave on the parent)
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
@@ -267,9 +275,27 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && hasCleared(dKey)) { e.preventDefault(); restoreCleared() }
                 // Up in an empty box (nothing typed, no chip, no upload on its way) calls back every message the App still holds, as the terminal does;
                 // anywhere else Up is the caret's
-                if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && adapter.recall && draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) && canTakeBackAll(dKey, queue)) { // (a draft Esc just cleared is not overwritten: its undo window is the box's)
+                const arrow = (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey
+                const emptyBox = draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) // (a draft Esc just cleared is not overwritten: its undo window is the box's)
+                if (arrow && e.key === 'ArrowUp' && adapter.recall && emptyBox && canTakeBackAll(dKey, queue)) {
                   e.preventDefault()
                   void takeBackAll(dKey, queue)
+                  return
+                }
+                // Nothing to take back (#2666): Up / Down walk this conversation's sent history, as the terminal does. A shown history item is a step
+                // only with the caret on its first line (Up) / last line (Down); an edited one is an ordinary draft, and Up there is the caret's.
+                if (arrow) {
+                  const dir = e.key === 'ArrowUp' ? 'up' : 'down'
+                  const el = e.currentTarget
+                  const walking = isWalking(dKey, draft)
+                  const atEdge = el.selectionStart === el.selectionEnd
+                    && (dir === 'up' ? !draft.slice(0, el.selectionStart).includes('\n') : !draft.slice(el.selectionEnd).includes('\n'))
+                  if (walking ? !atEdge : !(dir === 'up' && emptyBox)) return
+                  const step = stepHistory(dKey, dir, draft, emptyBox)
+                  if (!step) return
+                  e.preventDefault()
+                  atEnd.current = true
+                  setDraft(step.draft); setChips(readAttachments(dKey)); setHint(null)
                 }
               }}
               style={{ overflowWrap: 'anywhere' }}
