@@ -32,6 +32,11 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 		refuse(w, http.StatusConflict, "no_owner_yet")
 		return
 	}
+	text := padTrailingMention(c.text) // c.text is already backslash-padded in typed_submit.go
+	if len(text) > maxPromptBytes {    // the mention space can push it over the limit: refuse before any claim or typing
+		fail(w, http.StatusBadRequest, "too_long")
+		return
+	}
 	// Atomic claim before anything is typed: a concurrent request with the same id (even on another session, which holds a
 	// different lock) gets the recorded answer and never types.
 	row, claimed, full := m.keysSeen.claim(c.id, c.owner.SessionID, tune.now())
@@ -63,7 +68,6 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 		refuse(w, http.StatusConflict, "no_owner_yet")
 		return
 	}
-	text := padTrailingMention(c.text) // c.text is already backslash-padded in typed_submit.go
 	if err := c.td.keys.SendKeysIfInstanceAndMode(c.tmuxID, c.expected, c.owner.TmuxPaneID, text); err != nil {
 		if reason, ok := guardReason(err); ok {
 			m.keysSeen.forget(c.id) // the guard declined the text call: nothing was typed, a retry is safe

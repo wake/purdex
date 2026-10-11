@@ -49,6 +49,10 @@ func (m *Module) handleSessionSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text = padTrailingBackslash(text)
+	if len(text) > maxPromptBytes { // the padding can push an exactly-at-limit text over: the limit applies to what goes out
+		fail(w, http.StatusBadRequest, "too_long")
+		return
+	}
 	tune := m.tuning()
 	if m.answerKnown(w, td, in.ClientMsgID, tune) { // replay first: before the session or the owner are looked at
 		return

@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,6 +137,32 @@ func TestKeysSubmit_LedgerFullOfInFlightRefusesBusy(t *testing.T) {
 	}
 	te.mod.keysSeen.settle("p0s") // once one settles it is evictable and the new id fits
 	answer(t, te.submit("kfull", "x"), 200, "handed", "keys", "")
+}
+
+// The 4000-byte limit applies to the final text: padding must not push an accepted text over it, in either path.
+func TestSubmit_PaddingCannotExceedTheByteLimit(t *testing.T) {
+	over := strings.Repeat("a", 3999) + `\`
+	ok := strings.Repeat("a", 3998) + `\`
+	mention := strings.Repeat("a", 3995) + " @src" // 4000 bytes, the mention space would make 4001
+	for _, keysMode := range []bool{false, true} {
+		te := newTEnv(t)
+		if keysMode {
+			te.owners.drop()
+			te.mod.tune.keysAfter = time.Millisecond
+			te.mod.tune.keysSettle = time.Millisecond
+			time.Sleep(5 * time.Millisecond)
+		}
+		errOf(t, te.submit("pl1", over), 400, "too_long")
+		if keysMode {
+			errOf(t, te.submit("pl3", mention), 400, "too_long")
+		}
+		if te.keys.n() != 0 || te.fm.count("fill") != 0 {
+			t.Fatalf("keys=%v: sent something for a refused text", keysMode)
+		}
+		if w := te.submit("pl2", ok); w.Code != 200 {
+			t.Fatalf("keys=%v: 3998+backslash: %d %s", keysMode, w.Code, w.Body.String())
+		}
+	}
 }
 
 // The default settle is the measured one plus margin.
