@@ -16,7 +16,7 @@ import { useSendQueueDriver } from '../../hooks/useSendQueueDriver'
 import { bindAdapter } from '../../lib/conversations/deck-adapter'
 import { draftKey } from '../../lib/conversations/draft-memory'
 import { retireStaleSessions } from '../../lib/conversations/pane-release'
-import { sendQueueFor, type QueueEntry } from '../../lib/conversations/send-queue'
+import { retiringInFlight, sendQueueFor, subscribeRetiring, type QueueEntry } from '../../lib/conversations/send-queue'
 import { registerWorkerLease, workerAdapter } from '../../lib/conversations/worker-adapter'
 import { runningToolName, workerBackground } from '../../lib/nex/worker-live'
 import { DeckPane } from '../deck/DeckPane'
@@ -45,6 +45,12 @@ export interface WorkerDeckPaneProps {
   onModeChange: (mode: ExecutionViewMode) => void
 }
 
+/** Reports whether the deck's footer (its status row) is on screen. */
+function FooterMark({ onChange }: { onChange: (shown: boolean) => void }) {
+  useLayoutEffect(() => { onChange(true); return () => onChange(false) }, [onChange])
+  return null
+}
+
 const NO_ENTRIES: readonly QueueEntry[] = []
 const noSubscribe = () => () => {}
 
@@ -65,7 +71,9 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
   // for it (a message waiting for the worker's idle is not on its way: it does not hold an exit back for a whole turn).
   const queue = readSession ? sendQueueFor(draftKey(paneId, hostId, readSession), adapter.port) : null
   const queueEntries = useSyncExternalStore(queue ? queue.subscribe : noSubscribe, queue ? queue.entries : () => NO_ENTRIES)
-  const queueWrite = queueEntries.some((e) => e.state === 'undo' || e.state === 'sending')
+  // A queue the pane left behind (the session moved on) is retired but its request in flight still runs: it counts until it has answered (#2659).
+  const retiringWrites = useSyncExternalStore(subscribeRetiring, () => retiringInFlight(`${paneId}|`))
+  const queueWrite = retiringWrites > 0 || queueEntries.some((e) => e.state === 'undo' || e.state === 'sending')
   const queueWriteRef = useRef(queueWrite)
   useLayoutEffect(() => { queueWriteRef.current = queueWrite })
   const handoff = useWorkerHandoff({ hostId, executionId, tabId, paneId, from, lease, st, problem, actionPending: queueWrite })
@@ -90,6 +98,7 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
     return st.historyLoaded ? { tool: runningToolName(st.tools), background: workerBackground(st.tasks) } : undefined
   }, [endedNow, st.historyLoaded, st.tools, st.tasks])
 
+  const [footerShown, setFooterShown] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuAnchor = useRef<HTMLButtonElement>(null)
 
@@ -109,7 +118,8 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
   const runIfQuiet = (run: () => Promise<void>) => { if (!queueWriteRef.current) void run() }
   const handoffBar = (
     <div data-testid="worker-deck-handoff" className="flex items-center justify-end">
-      <WorkerChips sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} />
+      {/* where the deck draws no status row (a lifecycle line, an unreadable conversation) the chips sit with the controls */}
+      {!footerShown && <WorkerChips sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} />}
       {/* a narrow window hides the status bar's mode buttons: the way back to the room is here too */}
       <button ref={menuAnchor} type="button" data-testid="worker-deck-view-menu" aria-haspopup="menu" aria-expanded={menuOpen}
         onClick={() => setMenuOpen((o) => !o)}
@@ -175,7 +185,14 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning-text">{t('execution.lease_held', { principal: st.leaseError.heldBy ?? '' })}</div>
       )}
       {!ended && <SessionInput {...ctx} asking={ctx.asking || permissionShown} pendingInStream />}
-      <StatusRow cwd={st.summary?.cwd} model={ctx.usage?.model ?? null} effort={ctx.usage?.effort ?? null} cost={st.summary?.cost_usd ?? null} />
+      {/* the session status row (spec §3.5): the stream state, observers and lease holder at its right, small */}
+      <FooterMark onChange={setFooterShown} />
+      <div className="flex items-center">
+        <div className="min-w-0 flex-1">
+          <StatusRow cwd={st.summary?.cwd} model={ctx.usage?.model ?? null} effort={ctx.usage?.effort ?? null} cost={st.summary?.cost_usd ?? null} />
+        </div>
+        <WorkerChips sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} />
+      </div>
     </div>
   )
 

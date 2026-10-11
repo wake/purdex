@@ -555,4 +555,34 @@ describe('WorkerDeckPane', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(exitWorker).not.toHaveBeenCalled()
   })
+  it('a send still in flight when the session moves on keeps 退出 and 帶回終端機 held until it has answered (#2659)', async () => {
+    vi.useFakeTimers()
+    let answer: (v: unknown) => void = () => {}
+    vi.mocked(api.sendMessage).mockReset().mockImplementation(() => new Promise((r) => { answer = r }) as never)
+    seed(summary({ state: 'idle' }))
+    render(ui())
+    typeAndSend('run the tests')
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sending')
+    const SID2 = '11111111-2222-4333-8444-555555555555'
+    useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: entry(), [`${H}\0${SID2}`]: entry() } } as never)
+    act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: SID2 }) as never) })
+    expect(acquire).toHaveBeenCalledWith(H, SID2)
+    expect(screen.getByTestId('worker-deck-exit')).toBeDisabled() // the new session's queue is empty, the old request still runs
+    expect(getTakeToTerminal('p-w')).toMatchObject({ busy: true })
+    await act(async () => { answer({}); await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId('worker-deck-exit')).not.toBeDisabled()
+    expect(getTakeToTerminal('p-w')).toMatchObject({ busy: false })
+  })
+
+  it('the chips sit on the status row where the deck draws one, and with the controls where it does not', () => {
+    seed(summary())
+    render(ui())
+    expect(within(screen.getByTestId('worker-deck-footer')).getByTestId('worker-chips')).toBeInTheDocument()
+    expect(within(screen.getByTestId('worker-deck-handoff')).queryByTestId('worker-chips')).toBeNull()
+    cleanup()
+    seed(summary({ state: 'queued', session_id: undefined }))
+    render(ui())
+    expect(within(screen.getByTestId('worker-deck-handoff')).getByTestId('worker-chips')).toBeInTheDocument()
+  })
 })
