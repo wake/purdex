@@ -11,6 +11,8 @@ import { useExecutionActions } from '../../hooks/useExecutionActions'
 import { useExecutionConversation } from '../../hooks/useExecutionConversation'
 import { retireStaleSessions } from '../../lib/conversations/pane-release'
 import { readWorkerDraft } from '../../lib/nex/worker-draft-memory'
+import { sendErrorText } from '../../lib/nex/send-error-text'
+import { useExecutionStore } from '../../stores/useExecutionStore'
 import { DeckPane } from '../deck/DeckPane'
 import type { DeckFooterContext } from '../deck/footer-context'
 import { StatusRow } from '../deck/StatusRow'
@@ -32,7 +34,7 @@ export interface WorkerDeckPaneProps {
 
 export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusTarget = false, tabId, paneId, onModeChange }: WorkerDeckPaneProps) {
   const t = useI18nStore((s) => s.t)
-  const { st, problem, lease, draftKey, onTextChange } = useWorkerSession(hostId, executionId, isActive)
+  const { key, st, problem, lease, shownPermission, draftKey, onTextChange } = useWorkerSession(hostId, executionId, isActive)
   const { draft, handleSend, handleInterrupt } = useExecutionActions(hostId, executionId, lease)
   const conversation = useExecutionConversation(hostId, executionId)
   // The pane now reads another session (the first turn reports it, a resume moves it): what it kept for the old one is let go (#2457).
@@ -62,10 +64,24 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
   const inputDisabled = st.sendLocked || !st.historyLoaded || streamDead
   const footer = (ctx: DeckFooterContext) => (
     <div data-testid="worker-deck-footer">
-      {st.sendError && (
-        <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{t('execution.error.generic', { message: st.sendError.message })}</div>
+      {/* The request card is the room's (U4-3 brings it here): until then the worker is waiting on something this view cannot show, and the lease is held for it */}
+      {st.historyLoaded && shownPermission && (
+        <div data-testid="worker-deck-permission" role="status" className="mx-2 mb-1 flex items-center gap-2 text-xs text-status-warning-text">
+          <span className="min-w-0 flex-1">{t('worker.deck.permission_waiting')}</span>
+          <button type="button" data-testid="worker-deck-to-room" onClick={() => onModeChange('room')}
+            className="shrink-0 cursor-pointer rounded border border-border-subtle px-2 py-0.5 text-text-primary hover:bg-surface-hover">{t('room.view.room')}</button>
+        </div>
       )}
-      <WorkerInput key={draft ?? ''} initialValue={draft ?? readWorkerDraft(draftKey)} onSend={(text) => { void handleSend(text, { draftText: text }) }}
+      {st.leaseError?.code === 'lease_held' && (
+        <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning-text">{t('execution.lease_held', { principal: st.leaseError.heldBy ?? '' })}</div>
+      )}
+      {st.sendError && <div data-testid="send-error" className="mx-2 mb-1 text-xs text-status-error">{sendErrorText(t, st.sendError)}</div>}
+      <WorkerInput key={draft ?? ''} initialValue={draft ?? readWorkerDraft(draftKey)}
+        // a send refused while another is still on its way keeps the typed text in the box (false), as the room's does
+        onSend={(text) => {
+          if (useExecutionStore.getState().executions[key]?.sendLocked) return false
+          void handleSend(text, { draftText: text })
+        }}
         disabled={inputDisabled} pendingSend={st.sendLocked} placeholder={streamDead ? t('execution.input.disconnected') : undefined}
         isActive={isActive} isFocusTarget={isFocusTarget} onTextChange={onTextChange}
         turnLive={st.turnLive} onInterrupt={() => void handleInterrupt()} />

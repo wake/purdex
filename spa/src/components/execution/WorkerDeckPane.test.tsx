@@ -112,6 +112,56 @@ describe('WorkerDeckPane', () => {
     expect(onModeChange).toHaveBeenCalledWith('room')
   })
 
+  it('a request the worker waits on is not shown here (U4-3), so the deck says so and offers the way to the room', () => {
+    seed(summary({ state: 'running' }))
+    const onModeChange = vi.fn()
+    render(ui({ onModeChange }))
+    expect(screen.queryByTestId('worker-deck-permission')).toBeNull()
+    act(() => {
+      useExecutionStore.getState().applyEvents(H, E, [{ seq: 1, execution_id: E, kind: 'permission.requested', payload: { request_id: 'req_a', turn_id: 'trn_1', tool_name: 'Bash', input: { command: 'ls' } }, created_at: 1 }])
+    })
+    expect(screen.getByTestId('worker-deck-permission')).toHaveTextContent('waiting for a permission answer')
+    fireEvent.click(screen.getByTestId('worker-deck-to-room'))
+    expect(onModeChange).toHaveBeenCalledWith('room')
+  })
+
+  it('a lease another principal holds is said, not swallowed', () => {
+    seed(summary())
+    useExecutionStore.setState((st) => ({ executions: { ...st.executions, [`${H}:${E}`]: { ...st.executions[`${H}:${E}`], leaseError: { code: 'lease_held', heldBy: 'someone-else' } } } }) as never)
+    render(ui())
+    expect(screen.getByTestId('lease-held')).toHaveTextContent('someone-else')
+  })
+
+  it('a send error is worded as the room words it: a known code has its own line, the rest the generic one with the daemon\'s message', () => {
+    seed(summary())
+    render(ui())
+    const fail = (code: string, message: string) => act(() => { useExecutionStore.getState().setSendError(H, E, { code, message } as never) })
+    fail('turn_stalled', 'raw daemon text')
+    expect(screen.getByTestId('send-error')).not.toHaveTextContent('raw daemon text')
+    expect(screen.getByTestId('send-error').textContent).toMatch(/\S/)
+    fail('something_new', 'raw daemon text')
+    expect(screen.getByTestId('send-error')).toHaveTextContent('Send failed: raw daemon text')
+  })
+
+  it('a send refused while another is on its way keeps the typed text in the box', () => {
+    seed(summary())
+    render(ui())
+    useExecutionStore.setState((st) => ({ executions: { ...st.executions, [`${H}:${E}`]: { ...st.executions[`${H}:${E}`], sendLocked: false } } }) as never)
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: 'second' } })
+    // the lock lands between the render and the Enter (the same tick as a first send)
+    useExecutionStore.setState((st) => ({ executions: { ...st.executions, [`${H}:${E}`]: { ...st.executions[`${H}:${E}`], sendLocked: true } } }) as never)
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(api.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('an unreadable conversation offers no retry (a worker has nothing to ask again)', () => {
+    seed(summary())
+    useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: { ...entry(), status: 'unreadable', reason: 'not_found' } } } as never)
+    render(ui())
+    expect(screen.queryByTestId('deck-retry')).toBeNull()
+  })
+
   it('an exited worker has its own screen in the deck view too', () => {
     seed(summary({ state: 'terminated' }))
     render(ui())

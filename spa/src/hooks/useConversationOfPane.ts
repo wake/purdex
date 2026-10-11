@@ -20,7 +20,7 @@ export type PaneConversationUnreadable =
 export type PaneConversation =
   | { state: 'off' }
   | { state: 'resolving' }
-  | { state: 'unreadable'; reason: PaneConversationUnreadable; retry: () => void }
+  | { state: 'unreadable'; reason: PaneConversationUnreadable; retry?: () => void }
   | { state: 'ready'; hostId: string; sessionId: string; entry: ConversationEntry | undefined }
 
 type Resolved = { sessionId: string } | { none: 'no_session' | 'unreachable' }
