@@ -13,7 +13,7 @@ type ExecOwnerSource interface {
 	LiveWorker(ctx context.Context, sessionID string) (convfeed.ExecOwner, bool, error)
 }
 
-// lookupExec is the one place that asks the execution source: found is true only for a live owner; err means "could
+// lookupExec is the one place that asks the execution source: found is true only for a live owner (an owner with Live=false is treated as not found, so the follow loop re-resolves); err means "could
 // not tell" (the source answered with an error). With no source loaded the answer is "none".
 func (m *Module) lookupExec(ctx context.Context, sid string) (o convfeed.ExecOwner, found bool, err error) {
 	if m.core == nil || m.core.Registry == nil {

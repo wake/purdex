@@ -217,3 +217,25 @@ func TestExecOwnerCache_SweepsAtMostOncePerInterval(t *testing.T) {
 	c.put("c", ownerCacheEntry{at: now})
 	assert.Len(t, c.m, 1, "the sweep removed the expired ones")
 }
+
+func TestExecOwnerCache_NegativeEntryCountsFromScanEnd(t *testing.T) {
+	now := time.Unix(1000, 0)
+	c := &execOwnerCache{now: func() time.Time { return now }}
+	scans := 0
+	slowFail := func(context.Context) ownerCacheEntry {
+		scans++
+		now = now.Add(errCacheTTL + 500*time.Millisecond) // the scan outlasts the negative TTL
+		return ownerCacheEntry{err: errors.New("stuck store")}
+	}
+	_, err := c.do(context.Background(), "k", slowFail)
+	assert.NoError(t, err)
+	_, hit := c.get("k")
+	assert.True(t, hit, "a negative entry from a slow scan is still cached right after it ends")
+	now = now.Add(errCacheTTL - time.Millisecond)
+	_, hit = c.get("k")
+	assert.True(t, hit, "still cached until errCacheTTL after the end")
+	now = now.Add(2 * time.Millisecond)
+	_, hit = c.get("k")
+	assert.False(t, hit, "expires errCacheTTL after the scan end")
+	assert.Equal(t, 1, scans)
+}

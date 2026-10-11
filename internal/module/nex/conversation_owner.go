@@ -30,7 +30,7 @@ type ConversationOwnerSource interface {
 }
 
 // ownerCacheEntry is one session's scan result: only who owns it, never the light (read fresh on every call).
-// at is when the scan started.
+// at is when the scan started (conservative); for an error entry it is when the scan ended.
 type ownerCacheEntry struct {
 	at             time.Time
 	ok             bool
@@ -113,6 +113,9 @@ func (c *execOwnerCache) do(ctx context.Context, key string, scan func(context.C
 			defer cancel()
 			res := scan(sctx)
 			res.at = start
+			if res.err != nil {
+				res.at = c.clock() // negative entries count their TTL from the scan end: a slow scan must not expire on arrival
+			}
 			c.put(key, res)
 			c.mu.Lock()
 			delete(c.flights, key)
