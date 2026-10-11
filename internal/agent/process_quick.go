@@ -35,8 +35,8 @@ func ProcessPPID(pid int) (int, error) {
 }
 
 // ProcessStartText is the text `ps -p <pid> -o lstart=` prints, trimmed: what store.Frame.ProcessStartTime holds. Where the
-// kernel's p_starttime formats to exactly that text in this process's locale (startTextFast) it is read by sysctl, with no
-// fork; otherwise ps is asked, counted in execstat.PS. A pid that is gone is an error.
+// kernel's p_starttime formats to exactly that text in this process's locale and zone (startTextFast) it is read by sysctl,
+// with no fork; otherwise ps is asked, counted in execstat.PS. A pid that is gone is an error.
 func ProcessStartText(pid int) (string, error) {
 	if pid <= 0 {
 		return "", fmt.Errorf("invalid pid %d", pid)
@@ -57,29 +57,61 @@ func ProcessStartText(pid int) (string, error) {
 
 // startTextFast says whether the kernel's start time, formatted with psLstartLayout, is what ps prints for lstart right now.
 // ps follows LC_TIME (zh_TW prints "日 10月/11 …") and the system time zone, and the frames hold ps's text, so the answer is
-// measured on this very process rather than assumed. It is measured again every startTextRecheck: a time zone changed under
-// a running daemon (Go keeps the zone it started with, ps does not) turns the answer false until the next check, and a
-// check that failed for a passing reason (fork pressure) is retried instead of switching the fast path off for good. A
-// recheck is one ps fork; a var so tests can start it afresh.
+// measured on this very process rather than assumed (one ps fork, bounded by calibrateTimeout). The measurement is kept:
+//
+//   - until the system time zone changes. Go keeps the zone it started with, ps does not, so a changed zone makes the two
+//     texts differ and a frame compared on them look like a reused pid (the sweep clears such a frame). The zone is
+//     fingerprinted on every call (zoneFingerprint, one lstat + readlink) and a change measures again at once, in the caller.
+//   - for startTextRecheck, then measured again off the caller's path (a goroutine): a measurement that failed for a passing
+//     reason (fork pressure) must not switch the fast path off for good, and a caller inside the emit slot must not wait for
+//     a fork. Until it lands the previous answer stands.
+//
+// A var so tests can start it afresh.
 var startTextFast = newStartTextFast()
 
-// startTextRecheck is how long a calibration answer is trusted.
-const startTextRecheck = 15 * time.Second
+const (
+	startTextRecheck = 15 * time.Second // how long a measurement is trusted before the background recheck
+)
 
-// startTextNow is the clock of the recheck; a var for tests.
-var startTextNow = time.Now
+// Seams of the calibration, for tests.
+var (
+	startTextNow     = time.Now
+	startTextGo      = func(f func()) { go f() }
+	calibrateTimeout = 2 * time.Second
+	// zoneFingerprint identifies the system zone ps follows: where /etc/localtime points and when it was replaced.
+	zoneFingerprint = func() string {
+		fi, err := os.Lstat("/etc/localtime")
+		if err != nil {
+			return ""
+		}
+		target, _ := os.Readlink("/etc/localtime")
+		return fmt.Sprintf("%s|%d", target, fi.ModTime().UnixNano())
+	}
+)
 
 func newStartTextFast() func() bool {
 	var (
-		mu   sync.Mutex
-		fast bool
-		at   time.Time
+		mu       sync.Mutex
+		fast     bool
+		at       time.Time
+		zone     string
+		checking bool
 	)
 	return func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		if now := startTextNow(); at.IsZero() || now.Sub(at) >= startTextRecheck {
-			fast, at = calibrateStartText(), now
+		now, fp := startTextNow(), zoneFingerprint()
+		switch {
+		case at.IsZero() || fp != zone:
+			fast, at, zone = calibrateStartText(), now, fp
+		case now.Sub(at) >= startTextRecheck && !checking:
+			checking = true
+			startTextGo(func() {
+				r := calibrateStartText()
+				mu.Lock()
+				fast, at, checking = r, startTextNow(), false
+				mu.Unlock()
+			})
 		}
 		return fast
 	}
@@ -91,7 +123,9 @@ func calibrateStartText() bool {
 	if err != nil {
 		return false // no sysctl read here: every read asks ps
 	}
-	out, err := runPS(context.Background(), "-p", strconv.Itoa(pid), "-o", "lstart=")
+	ctx, cancel := context.WithTimeout(context.Background(), calibrateTimeout)
+	defer cancel()
+	out, err := runPS(ctx, "-p", strconv.Itoa(pid), "-o", "lstart=")
 	if err != nil {
 		return false
 	}

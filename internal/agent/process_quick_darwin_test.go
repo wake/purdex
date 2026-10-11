@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,23 +98,22 @@ func fakeClock(t *testing.T) *time.Time {
 }
 
 // codex attack (high): the system time zone changes under a running daemon. Go keeps the zone it started with, ps follows the
-// new one, so the kernel text no longer equals ps's. The next recheck must see it and send every read back to ps.
-func TestProcessStartText_ATimeZoneChangedUnderTheDaemonIsCaughtAtTheRecheck(t *testing.T) {
+// new one, so the kernel text no longer equals ps's. The change of the zone is seen on the very next call, with no window in
+// which a frame could be compared on the stale text.
+func TestProcessStartText_ATimeZoneChangedUnderTheDaemonIsSeenAtOnce(t *testing.T) {
 	useEnglishLocale(t)
-	now := fakeClock(t)
+	fakeClock(t)
 	startTextFast = newStartTextFast()
 	if !startTextFast() {
 		t.Fatal("precondition: the kernel text matches ps")
 	}
 	prev := time.Local
-	time.Local = time.FixedZone("elsewhere", 5*3600+1800)
-	t.Cleanup(func() { time.Local = prev })
-	if !startTextFast() {
-		t.Fatal("within the recheck interval the answer is the cached one")
-	}
-	*now = now.Add(startTextRecheck + time.Second)
+	time.Local = time.FixedZone("elsewhere", 5*3600+1800) // what Go would still format with, after the system zone moved
+	prevFP := zoneFingerprint
+	zoneFingerprint = func() string { return "/var/db/timezone/zoneinfo/Elsewhere|2" }
+	t.Cleanup(func() { time.Local = prev; zoneFingerprint = prevFP })
 	if startTextFast() {
-		t.Fatal("after the interval the recheck must notice the kernel text no longer equals ps's")
+		t.Fatal("the zone changed: the kernel text no longer equals ps's, the very next call must fall back to ps")
 	}
 	got, err := ProcessStartText(os.Getpid())
 	if err != nil {
@@ -142,8 +142,68 @@ func TestProcessStartText_AFailedCalibrationIsRetried(t *testing.T) {
 		t.Fatal("within the interval the failed answer stands")
 	}
 	*now = now.Add(startTextRecheck + time.Second)
+	startTextFast() // due: the answer stays the old one, the recheck runs in the background
+	deadline := time.Now().Add(5 * time.Second)
+	for !startTextFast() {
+		if time.Now().After(deadline) {
+			t.Fatal("once ps works again the recheck turns the fast path back on")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// codex attack (medium): the recheck forks ps; the caller (a hook inside the emit slot) must not wait for it.
+func TestProcessStartText_TheRecheckDoesNotBlockTheCaller(t *testing.T) {
+	useEnglishLocale(t)
+	now := fakeClock(t)
+	startTextFast = newStartTextFast()
 	if !startTextFast() {
-		t.Fatal("once ps works again the recheck turns the fast path back on")
+		t.Fatal("precondition: the kernel text matches ps")
+	}
+	release := make(chan struct{})
+	prevRunPS := runPS
+	runPS = func(ctx context.Context, _ ...string) ([]byte, error) {
+		<-release
+		return nil, errors.New("late")
+	}
+	var bg sync.WaitGroup
+	startTextGo = func(f func()) {
+		bg.Add(1)
+		go func() { defer bg.Done(); f() }()
+	}
+	t.Cleanup(func() { startTextGo = func(f func()) { go f() } })
+	t.Cleanup(func() { runPS = prevRunPS })
+	defer func() { close(release); bg.Wait() }() // the background recheck must be done before the seams are restored
+	*now = now.Add(startTextRecheck + time.Second)
+	done := make(chan bool, 1)
+	go func() { done <- startTextFast() }()
+	select {
+	case fast := <-done:
+		if !fast {
+			t.Fatal("until the recheck lands, the previous answer stands")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the caller waited for the recheck's ps")
+	}
+}
+
+// The first measurement is the caller's, but it is bounded: a ps that hangs reads as "not the same text".
+func TestProcessStartText_AHungCalibrationIsBounded(t *testing.T) {
+	useEnglishLocale(t)
+	prevTimeout, prevRunPS := calibrateTimeout, runPS
+	calibrateTimeout = 50 * time.Millisecond
+	runPS = func(ctx context.Context, _ ...string) ([]byte, error) { <-ctx.Done(); return nil, ctx.Err() }
+	t.Cleanup(func() { calibrateTimeout, runPS = prevTimeout, prevRunPS })
+	startTextFast = newStartTextFast()
+	done := make(chan bool, 1)
+	go func() { done <- startTextFast() }()
+	select {
+	case fast := <-done:
+		if fast {
+			t.Fatal("a calibration that timed out cannot say the texts match")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the calibration is not bounded")
 	}
 }
 
