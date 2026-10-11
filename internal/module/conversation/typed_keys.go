@@ -56,21 +56,22 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 		writeTyped(w, http.StatusOK, typedAnswer{Outcome: out, Mode: "keys"})
 		return
 	}
-	defer m.keysSeen.settle(c.id) // whatever way this ends, the claim becomes an ordinary row (or was forgotten)
+	tok := row.gen
+	defer m.keysSeen.settle(c.id, tok) // whatever way this ends, the claim becomes an ordinary row (or was forgotten)
 	st, ok := m.freshLight(c.owner)
 	if !ok { // fail closed: an unreadable light is not an idle one
-		m.keysSeen.forget(c.id) // nothing went out
+		m.keysSeen.forget(c.id, tok) // nothing went out
 		refuse(w, http.StatusConflict, "light_unavailable")
 		return
 	}
 	if st != "idle" || q.HasOwner(c.owner.SessionID) {
-		m.keysSeen.forget(c.id) // nothing went out
+		m.keysSeen.forget(c.id, tok) // nothing went out
 		refuse(w, http.StatusConflict, "no_owner_yet")
 		return
 	}
 	if err := c.td.keys.SendKeysIfInstanceAndMode(c.tmuxID, c.expected, c.owner.TmuxPaneID, text); err != nil {
 		if reason, ok := guardReason(err); ok {
-			m.keysSeen.forget(c.id) // the guard declined the text call: nothing was typed, a retry is safe
+			m.keysSeen.forget(c.id, tok) // the guard declined the text call: nothing was typed, a retry is safe
 			refuse(w, http.StatusConflict, reason)
 			return
 		}
@@ -89,6 +90,6 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 		refuse(w, http.StatusConflict, "text_left_in_terminal")
 		return
 	}
-	m.keysSeen.put(c.id, keysRow{handed: true, sid: c.owner.SessionID}, tune.now())
+	m.keysSeen.hand(c.id, tok)
 	writeTyped(w, http.StatusOK, typedAnswer{Outcome: "handed", Mode: "keys"})
 }

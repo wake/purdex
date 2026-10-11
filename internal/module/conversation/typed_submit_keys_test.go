@@ -132,10 +132,11 @@ func TestKeysSubmit_LedgerFullOfInFlightRefusesBusy(t *testing.T) {
 	if te.keys.n() != 0 {
 		t.Fatal("typed while refusing")
 	}
-	if _, ok := te.mod.keysSeen.get("p0s", now); !ok {
+	r0, ok := te.mod.keysSeen.get("p0s", now)
+	if !ok {
 		t.Fatal("an in-flight row was evicted")
 	}
-	te.mod.keysSeen.settle("p0s") // once one settles it is evictable and the new id fits
+	te.mod.keysSeen.settle("p0s", r0.gen) // once one settles it is evictable and the new id fits
 	answer(t, te.submit("kfull", "x"), 200, "handed", "keys", "")
 }
 
@@ -276,5 +277,64 @@ func TestKeysLedger_TombstonesLastADayAndOldestGoesFirst(t *testing.T) {
 	}
 	if _, ok := f.get("id"+time.Duration(11).String(), now); !ok {
 		t.Fatal("an id newer than the evicted ones must be kept")
+	}
+}
+
+// A stale settle/forget (from a claim that was already forgotten) must not touch a newer claim on the same id.
+func TestKeysLedger_StaleSettleAndForgetLeaveNewerClaimInFlight(t *testing.T) {
+	var k keysLedger
+	now := time.Unix(1000, 0)
+	a, claimed, _ := k.claim("x", "A", now)
+	if !claimed {
+		t.Fatal("A should claim")
+	}
+	k.forget("x", a.gen) // A's clean refusal
+	b, claimed, _ := k.claim("x", "B", now)
+	if !claimed {
+		t.Fatal("B should claim after A forgot")
+	}
+	k.settle("x", a.gen) // A's deferred settle
+	k.forget("x", a.gen)
+	r, ok := k.get("x", now)
+	if !ok || !r.inflight || r.gen != b.gen {
+		t.Fatalf("B's claim was touched: %+v %v", r, ok)
+	}
+	if _, claimed, _ := k.claim("x", "B", now); claimed {
+		t.Fatal("a replay must not claim again")
+	}
+	for i := 0; i < maxKeysLedger+5; i++ { // capacity pressure cannot drop it either
+		k.put("f"+time.Duration(i).String(), keysRow{handed: true}, now)
+	}
+	if r, ok := k.get("x", now); !ok || !r.inflight {
+		t.Fatal("B's in-flight row was evicted")
+	}
+	k.settle("x", b.gen)
+	if r, _ := k.get("x", now); r.inflight {
+		t.Fatal("B's own settle must work")
+	}
+}
+
+// An in-flight row older than the TTL is neither expired by get nor claimable again.
+func TestKeysLedger_InFlightRowNeverExpires(t *testing.T) {
+	var k keysLedger
+	t0 := time.Unix(1000, 0)
+	c, claimed, _ := k.claim("x", "A", t0)
+	if !claimed {
+		t.Fatal("claim")
+	}
+	late := t0.Add(keysTombstoneTTL + time.Hour)
+	if r, ok := k.get("x", late); !ok || !r.inflight {
+		t.Fatalf("in-flight row expired: %+v %v", r, ok)
+	}
+	if _, claimed, _ := k.claim("x", "A", late); claimed {
+		t.Fatal("a second claim got through an in-flight row")
+	}
+	k.put("x", keysRow{handed: true}, late) // must not overwrite it
+	if r, _ := k.get("x", late); !r.inflight || r.gen != c.gen {
+		t.Fatalf("put overwrote an in-flight row: %+v", r)
+	}
+	k.settle("x", c.gen)
+	if _, ok := k.get("x", late.Add(keysTombstoneTTL)); ok {
+		t.Fatal("a settled row expires normally")
 	}
 }
