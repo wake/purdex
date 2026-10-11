@@ -1,22 +1,38 @@
 // spa/src/components/deck/ChatBubbles.tsx — the chat's bubbles (U3 spec §5): the user on the right in an accent bubble, the
 // agent on the left, a peer message as ONE line (iOS 0.6.44) with 「未驗證」 when the daemon could not verify the sender.
-// A user item that is not a plain message (a bash input, a schedule wake-up…) is the deck's block, as it reads best there.
+// A user item that is not a plain message (a schedule wake-up…; a bash input is a step-like row) is the deck's block, as it reads best there.
 import { useI18nStore } from '../../stores/useI18nStore'
 import { formatClock } from '../../lib/conversations/deck-format'
 import type { AgentTextItem, UserItem } from '../../lib/conversations/types'
 import RoomProse from '../room/RoomProse'
 import { OWN_TEXT_SOURCES } from '../../lib/conversations/image-sniff'
 import { agentUnitId, userUnitId } from '../../lib/conversations/find-units'
+import { TerminalWindow } from '@phosphor-icons/react'
 import { UserBlock } from './UserBlock'
 import { UserText } from './UserText'
 import { CjkText } from './CjkText'
 
 /** Sources that are not the person's own message: they keep the deck's block (a bash input, a wake-up, a background report, a peer's message). */
-const NOT_THE_PERSON = new Set(['peer', 'bash', 'command_output', 'background', 'task', 'schedule', 'scheduled'])
+const NOT_THE_PERSON = new Set(['peer', 'command_output', 'background', 'task', 'schedule', 'scheduled'])
+
+/** A bash-mode command in the chat: a step-like row on the left (no frame, no tint, no bubble). Its output (command_output) stays the folded block under it. */
+function ChatCommandRow({ item }: { item: UserItem }) {
+  return (
+    <div data-testid="chat-command" data-source={item.source} className="flex items-start gap-2 pl-1 deck-t-up text-text-secondary">
+      <TerminalWindow size={14} className="mt-[0.3em] shrink-0 text-text-muted" aria-hidden />
+      <div className="min-w-0 whitespace-pre-wrap break-all font-mono">
+        <span data-search-unit={userUnitId(item.id)}>{`! ${item.text}`}</span>
+        {item.truncated && <span className="text-text-muted">…</span>}
+        <span className="ml-1 font-sans deck-t-down text-text-muted">· {formatClock(item.at)}</span>
+      </div>
+    </div>
+  )
+}
 
 export function UserBubble({ item, midTurn }: { item: UserItem; /** not the first user message of its turn */ midTurn?: boolean }) {
   const t = useI18nStore((s) => s.t)
   // A source this build does not know reads as the person (as the deck's caption does).
+  if (item.source === 'bash') return <ChatCommandRow item={item} />
   if (NOT_THE_PERSON.has(item.source)) return <UserBlock item={item} midTurn={midTurn} />
   return (
     <div data-testid="chat-user" data-source={item.source} className="flex flex-col items-end">
