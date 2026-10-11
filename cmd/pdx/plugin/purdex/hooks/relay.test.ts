@@ -3323,7 +3323,8 @@ test('IR-2: a denied idle ask asks again only at +10 points', async ($, on) => {
   await f.clock.advance(40 * MIN)
   expect(count(f, 'begin')).toBe(1)
   row.decide('denied')
-  await f.clock.settle()
+  await f.clock.advance(100)
+  expect(f.statuses).toEqual(['接力等待核准中', undefined]) // the denial has been taken: idle again
   f.usage = { tokens: 120000, window: 200000, percent: 60 }
   await turnAndSettle($, f, 't2')
   await f.clock.advance(40 * MIN)
