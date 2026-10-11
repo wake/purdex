@@ -1,8 +1,8 @@
-# K-2 — the Mac deck sends by typing, 1.5 s send buffer, take back — plan (rev 1)
+# K-2 — the Mac deck sends by typing, 1.5 s send buffer, take back — plan (rev 2, after the plan review)
 
 Spec: `docs/specs/2026-10-11-keystroke-submit-spec.md` §3 (the daemon route) and §4 (what the deck shows, user decisions
 2026-10-11). Daemon side is merged: K-1a-2 `/api/sessions/{code}/submit` (#2636, #2639), K-1b `/api/sessions/{code}/recall` (#2644).
-PRs: **K-2a** (send path) and **K-2b** (take back), each ≤ 800 lines / 20 files incl. tests. iOS follows in K-3 (purdex-ios).
+PRs: K-2a-1 (daemon capability), K-2a-2 (send client + bound terminal adapter), K-2a-3 (queue), K-2b (take back) — each ≤ 800 lines / 20 files incl. tests (budgets below). iOS follows in K-3 (purdex-ios).
 
 ## Facts (code at 17fc48a76)
 - One queue for the deck, chat and the worker deck: `spa/src/lib/conversations/send-queue.ts` (`SendQueue`, `sendQueueFor(key, make)`),
@@ -32,92 +32,120 @@ PRs: **K-2a** (send path) and **K-2b** (take back), each ≤ 800 lines / 20 file
   `409 refused {reason}` or `200 {outcome: unknown, reason}`.
 - None of #2636 / #2639 / #2644 is in a released daemon yet (CHANGELOG stops at alpha.709): **no host serves `/submit` or
   `/recall` until 710 is deployed.**
+- `/submit` refusals, classified (`typed_submit.go`, `typed_fill.go`, `typed_keys.go`): **every refusal means nothing was sent**
+  (before the fill; a mod refusal / clean fill; or a fill that was cleaned up best effort before any Enter — a failed clean-up
+  leaves our text in the composer unsent, and a retry then meets `input_not_empty`), **except `text_left_in_terminal`** (keys mode,
+  tmux failed mid-write: the text may be in the terminal and the id stays recorded as unknown). `needs_terminal` (a leading `/` or
+  `!`) comes back as `400 needs_terminal` from the shared sanitiser (`submit.go:103`, `typed_submit.go:46`).
+- Capabilities (`submit.go` `capabilitiesFor`): a terminal conversation declares `send: "prompt"` only while a mod owner is live;
+  otherwise `send` stays `not_wired`, so the terminal adapter's `canSend` (`caps.send === 'prompt'`) disables the input and the
+  daemon's keys fallback (spec §3.5, plan K-1 M4) is unreachable from the deck.
+- `PendingTail` / `HeaderQueuedLine` sit in the stream tail (`DeckView.tsx:154`, `ChatView.tsx:146`) and get only pane, host,
+  conversation sid, entries and queued — no session code or tmux instance.
 
 ## Decisions
-- **D1 Terminal port → the daemon route.** `submit(text, id)` → `POST /api/sessions/{code}/submit {text, client_msg_id,
-  expected_tmux_instance}`. The port reads code and instance **at each call** through a getter (the pane content's `sessionCode` /
-  `tmuxInstance`, falling back to the session list's `tmux_instance` for that code) — the memoized port must not freeze a stale
-  instance. No instance known → the entry fails locally with `no_instance` (nothing sent). `interrupt` stays on the mod route
-  (spec §4 "Interrupt: unchanged"). The fallback `make` in `useSendQueueDriver` / `usePending` / `PendingTail` must build the same
-  terminal port (or never be reached for a terminal pane) — no path may still post to the old submit route.
+- **D1 Bound terminal adapter with a live target.** `SessionPaneContent` binds a terminal adapter for its draft key
+  (`bindAdapter(draftKey, …)`, as `WorkerDeckPane` does for workers) built with a **getter** `target(): {code, instance} | null`
+  that reads, at each call, the pane content's `sessionCode` / `tmuxInstance`, falling back to the session list's `tmux_instance`
+  for that code. Every consumer goes through `adapterOf(key)`: the port, `SessionInput`, `PendingTail` (D7) — no prop drilling
+  through Deck/Chat views, and the memoized port never freezes a stale instance. The fallback `make` in `useSendQueueDriver` /
+  `usePending` / `PendingTail` must never build the old mod submit port for a terminal pane (bind before the first queue access,
+  or make the fallback the same bound adapter). Port `submit(text, id)` → `POST /api/sessions/{code}/submit {text, client_msg_id,
+  expected_tmux_instance}`; no target → local outcome `no_instance` (nothing sent). `interrupt` stays on the mod route (spec §4).
+- **D1b Keys capability (daemon).** `capabilitiesFor` declares `send: "keys"` for a terminal conversation that is live (the same
+  `live` the header reports) and has no mod owner; `prompt` wins when the mod is there; ended / not live stays `not_wired`. The
+  terminal adapter's `canSend` accepts `prompt` and `keys`. `interrupt` unchanged. The daemon still decides per request (keys only
+  after 10 s without an owner and an idle light → else `no_owner_yet`).
 - **D2 Outcomes.** Add `{kind: 'handed'; mode: 'fill' | 'keys'}` and `{kind: 'refused'; reason: string; status: number}` to
-  `SendOutcome`. Mapping: `200 handed` → `handed`; `200 unknown` → `unknown` (may have run); `409/429` with `outcome: refused` →
-  `refused`; `400` sanitiser / validation codes → `invalid` (existing keys: `empty_text`, `too_long`, `bad_text`, plus
-  `bad_client_msg_id` / `bad_expected_tmux_instance` → `rejected`); other statuses → `rejected`; fetch failure / abort → `network`
-  (may have run). The kinds only the old route produced (`dropped`, `busy`, `timeout`, `no_mod`, `not_owner`, `needs_terminal`)
-  are removed when nothing else produces them (check the worker adapter and tests); `accepted` stays for the worker.
-- **D3 Retries never reuse a refused id.** `refused` with reason `busy` (lock or promptq busy) → automatic retry after 1 s, 2 s,
-  4 s, each attempt with a **new** `client_msg_id` (a refused id may replay its refusal forever); the entry keeps its identity and
-  remembers every id it used, so the echo pairs with any of them. Any other refusal → `failed` with the reason's message and a
-  Retry (new id; nothing was typed). `unknown` / `network` → `maybe`, never resent automatically; Resend (existing confirm step)
-  uses a new id.
-- **D4 The App no longer waits for idle.** Remove the `waiting` state, `setIdle`, the busy-resend quota and the idle input of
-  `useSendQueueDriver` (keep `reconcile`). A busy session's message is queued by Claude Code itself (spec §3).
+  `SendOutcome`. Mapping: `200 handed` → `handed`; `200 unknown` → `unknown`; `409/429` with `outcome: refused` → `refused`;
+  `400 needs_terminal` → `needs_terminal` (kept: 「這種指令請到終端機操作」); `400 empty_text|too_long|bad_text` → `invalid`;
+  other `400` (`bad_client_msg_id`, `bad_expected_tmux_instance`) / `404` / `500` / `503` → `rejected` (no outcome: not run);
+  fetch failure / abort → `network`. The old route's `dropped`, `busy`, `timeout`, `no_mod`, `not_owner` are removed when nothing
+  else produces them (the worker adapter produces `accepted`, `rejected`, `network` only — verify); `accepted` stays for workers.
+- **D3 What may have run, and retries.** `mayHaveRun` = `unknown`, `network`, and `refused` with reason **`text_left_in_terminal`**:
+  → `maybe` (「可能已送出，請看紀錄」, for `text_left_in_terminal` 「文字可能留在終端機，請看終端機」), never resent automatically;
+  Resend keeps its confirm step and uses a new id. `refused` `busy` (either 429: the pane/session lock, or promptq busy) → automatic
+  retry after 1 s, 2 s, 4 s, **each attempt with a new `client_msg_id`** (a fill refusal is recorded and replays itself for that id);
+  the entry keeps its identity and the list of every id it used, and `reconcile` pairs an echo with any of them. Every other
+  refusal → `failed` with its reason's message and a Retry (new id). After the retries are spent → `failed` (busy message).
+- **D4 The App no longer waits for idle.** Remove `waiting`, `setIdle`, the busy-resend quota and the idle input of
+  `useSendQueueDriver` (keep `reconcile`). Claude Code queues a busy session's message itself (spec §3).
 - **D5 Send buffer 1.5 s** for every adapter (`UNDO_MS = 1500`; the worker deck too — the decision is the deck's).
-- **D6 Pending until accepted, no duplicate.** Every entry, terminal included, keeps `PENDING_USER_BOX` from send until accepted
-  (`frameUntilEchoed` for every adapter, or the flag removed). After `handed`, when a `user` row of `header.queued` has the same
-  text (both trailing-whitespace trimmed) the App entry is hidden — the header line now draws it; it reappears if the row leaves
-  the header without an echo. Accepted = the transcript echo (`reconcile`, unchanged) → the entry settles; the transcript draws the
-  accepted user block (current style, slightly dimmer — already U3). `handed` with neither a header match nor an echo for 10 s
-  → `maybe` (「可能已送出，請看紀錄」, `deck.send.unknown`). `handed` with `mode: keys` → caption 「未經 mod 確認」 while pending.
-- **D7 Take back (K-2b).**
-  - A held entry (`undo` state): the **whole block** is clickable (role=button, keyboard Enter/Space, pointer cursor, title
-    「點一下拉回」) and takes back **that entry only** (existing `recallHeld(key, queue, id)`); the Undo button may stay.
-  - A Claude Code-queued message — a `user` row of `HeaderQueuedLine`, or an App entry already `handed` but not yet matched —
-    is clickable: `POST /api/sessions/{code}/recall {client_msg_id (new per action), expected_tmux_instance}`. `200 {text}` →
-    prepend to the draft (`text + '\n' + draft`, or `text` when empty), focus the input, and hide every App entry whose text is
-    one of the recalled lines (they are back in the draft). All queued user messages come back at once (Claude Code pops all;
-    user decision 2026-10-11). Peer rows are not clickable.
-  - Up on an empty input takes back everything pending, oldest first: Claude Code's queue via `/recall` (when `header.queued` has
-    user rows) and the held entries (`recallHeld`). Draft = recalled text, then held text. A failed `/recall` still returns the
-    held entries and shows the failure.
-  - One recall in flight per pane (Up / clicks ignored meanwhile, the row shows a spinner); a network failure retries once with
-    the **same** id (the daemon replays it), then shows the network message.
-  - The draft write is shared with `recallHeld`: extract `prependToDraft(key, text)` (writeDraft + reconcileAttachments +
-    discardCleared + notify the recall listeners). A result arriving while the tab is switched away is written to draft memory
-    and shows on return (tab-hosted checklist).
-  - Messages (`deck.recall.*`, zh-TW + en): `input_not_empty` 「終端機輸入框有字，沒有拉回」; `recall_mismatch` 「終端機輸入框
-    出現別的內容，沒有拉回，請到終端機確認」; `nothing_queued` 「已經送出，拉不回來」; `recall_unsupported` 「佇列裡有不是你送的
-    訊息，請到終端機處理」; `recall_too_long` 「訊息太長，請到終端機處理」; `input_not_cleared` 「沒有拉回：終端機輸入框沒清掉，請
-    到終端機處理」; `unknown` (any reason) 「可能已送出，或還在終端機輸入框，請看終端機」; `busy` 「忙碌中，稍後再試」; any other
-    refusal 「終端機狀態變了，請到終端機處理（{code}）」; network 「連線中斷，結果不明，請看終端機」. Shown as the pending tail's
-    notice (same place and tone rules as send outcomes), dismissable.
-- **D8 Chat** shares the footer, queue and `PendingTail` (`SessionPaneContent.tsx:108-169`), so it gets D1–D7 with no extra code;
-  tests cover one chat path.
-- **D9 Not in K-2:** the daemon's old mod submit route stays (removal is a follow-up issue once K-3 ships); interrupt unchanged.
+- **D6 Pending until accepted, no duplicate.** Every entry, terminal included, keeps `PENDING_USER_BOX` from send until accepted.
+  After `handed`, while the header line **actually renders** a `user` row with the same text (both trailing-whitespace trimmed;
+  i.e. `shownHeaderQueue` returns it), the App entry is hidden; it shows again when that row is no longer rendered and no echo
+  came. Accepted = the transcript echo (`reconcile`) → settled; the transcript draws the accepted block (U3 style). `handed` with
+  neither a header match nor an echo for 10 s → `maybe`. `mode: keys` → caption 「未經 mod 確認」 while pending.
+- **D7 Take back.**
+  - The bound adapter gains `takeBack(): Promise<RecallOutcome>` (terminal: `POST /api/sessions/{code}/recall {client_msg_id,
+    expected_tmux_instance}` from the D1 getter; one new id per user action; a `network` failure retries once with the **same** id).
+    The worker adapter has none (its App-held messages still come back through `recallHeld`).
+  - `RecallOutcome` classes, mirroring `typed_recall.go`: **back** `200 {text}`; **not run** — `400`, `404`, `409/429 refused`
+    (`nothing_queued`, `recall_unsupported`, `recall_too_long`, `input_not_empty`, `recall_mismatch`, `input_not_cleared`, guards,
+    `busy`, …), `500`, `503` other than `keys_failed`; **may have popped** — `200 {outcome: unknown, reason}` (`recall_empty`,
+    `read_failed`, `clear_unknown`), `503 keys_failed`, `network` after the retry.
+  - A held entry (`undo`): the **whole block** is clickable (role=button, Enter/Space, pointer, title 「點一下拉回」) and takes back
+    **that entry only** (`recallHeld(key, queue, id)`).
+  - A Claude Code-queued message — a `user` row of `HeaderQueuedLine`, or an App entry `handed` and not yet matched — is clickable
+    → `takeBack()`. `back` → prepend to the draft (`text + '\n' + draft`, or `text`), focus the input, hide every App entry whose
+    text is one of the recalled lines. All queued user messages come back at once (user decision 2026-10-11). Peer rows are not
+    clickable.
+  - Up on an empty input takes back everything pending, oldest first: `takeBack()` when the header renders user rows, then the held
+    entries. Draft = recalled text, then held text. A failed `takeBack()` still returns the held entries and shows the failure.
+  - One take-back in flight per pane (Up / clicks ignored meanwhile, the row shows a spinner).
+  - Draft writes share `prependToDraft(key, text)` extracted from `draft-recall.ts` (writeDraft + reconcileAttachments +
+    discardCleared + notify the recall listeners); a result that lands while the tab is switched away stays in draft memory and
+    shows on return.
+  - Messages (`deck.recall.*`, zh-TW + en), shown as the pending tail's notice (dismissable): `input_not_empty` 「終端機輸入框有字，
+    沒有拉回」; `recall_mismatch` 「終端機輸入框出現別的內容，沒有拉回，請到終端機確認」; `nothing_queued` 「已經送出，拉不回來」;
+    `recall_unsupported` 「佇列裡有不是你送的訊息，請到終端機處理」; `recall_too_long` 「訊息太長，請到終端機處理」;
+    `input_not_cleared` 「沒有拉回：終端機輸入框沒清掉，請到終端機處理」; `busy` 「忙碌中，稍後再試」; other not-run 「終端機狀態變了，
+    請到終端機處理（{code}）」; may-have-popped 「可能已送出，或還在終端機輸入框，請看終端機」.
+- **D8 Chat** shares the footer, queue and `PendingTail` (`SessionPaneContent.tsx:108-169`): it gets D1–D7 with no extra code; one
+  chat-path test per PR that touches the tail.
+- **D9 Not in K-2:** the daemon's old mod submit route stays (follow-up issue after K-3); interrupt unchanged.
 
-## K-2a — send path (D1–D6)
-1. `send.ts`: daemon submit client + D2 mapping + `outcomeMessage` for `handed` / `refused` reasons (`input_not_empty`,
-   `dialog_open`, `pane_busy`, `waiting`, `generation`, `owner_changed`, `stale`, `conflict`, `light_unavailable`, `no_owner_yet`,
-   `text_left_in_terminal`, `mod_timeout`, `client_msg_id_reused`, `not_claude`, `ambiguous_pane`, `pane_mismatch`, `busy`; one
-   generic message with the code for the rest). Tests per mapping.
-2. Terminal adapter + port with the code / instance getter; `SessionPaneContent` passes `tmuxInstance` down (footer context or
-   adapter args); the fallback `make` paths fixed. Tests: the URL and body (`SessionPaneContent.send.test.tsx`), an instance
-   stamped after the queue was created is used, `''` → `no_instance`.
-3. `send-queue.ts`: remove waiting / setIdle / quota (D4); D3 retry with new ids + id list for echo pairing; `UNDO_MS = 1500`
-   (D5); `handed` → `sent`-like state with the 10 s → `maybe` timer; hide-when-in-header (D6) exposed for `PendingTail`.
-   Update `send-queue.test.ts`, `send-queue.recall.test.ts`, `useSendQueueDriver`.
-4. `QueuedMessages` / `PendingTail`: frame until accepted for terminal entries, header de-duplication, keys caption. Tests incl.
-   the header match / un-match and the 10 s timer (fake timers).
-5. Tab switch (real `TabContent`): a held entry still sends after a switch (existing test, 1.5 s); a `handed` entry survives a
-   switch and still de-duplicates against the header on return.
+## PRs (budgets are changed lines incl. tests; if a PR's diff passes 800 or 20 files, split at the numbered task boundary)
+**K-2a-1 — daemon keys capability (D1b), ~120.** `capabilitiesFor` + tests (live terminal without owner → `keys`; with owner →
+`prompt`; not live → `not_wired`; execution unchanged). go test -race on the conversation package.
 
-## K-2b — take back (D7)
-1. `recall` client in `send.ts` (or `recall.ts`): request, answer mapping, one same-id retry on network failure. Tests.
-2. `prependToDraft` extracted from `draft-recall.ts`; `recallHeld` uses it. Tests unchanged in behaviour.
-3. Clickable held block; clickable header `user` rows and handed entries → `/recall`; Up path extended (Claude Code queue +
-   held). Tests: click held → only that entry; click a header row with 3 queued → all three lines, one per line, draft
-   prepended; draft non-empty → recalled first; Up with both kinds → Claude Code text then held; each `deck.recall.*` reason; in
-   flight → second click ignored; peer row not clickable; chat view path once.
-4. Tab switch: a recall answered while switched away → the draft holds the text on return (real `TabContent`).
+**K-2a-2 — send client + bound terminal adapter (D1, D2), ~550.**
+1. `send.ts`: daemon submit client, D2 mapping, `outcomeMessage` for `handed` (keys caption), `needs_terminal`, every `refused`
+   reason of the classification (one message each for `input_not_empty`, `dialog_open`, `pane_busy`, `waiting`, `generation`,
+   `no_owner_yet`, `text_left_in_terminal`, `busy`; a generic message with the code for the rest), `no_instance`. One test per status
+   / reason class incl. both 429 bodies and a 400 without outcome.
+2. Terminal adapter with the target getter, bound by `SessionPaneContent`; `canSend` for `prompt` / `keys`; the fallback `make`
+   paths can no longer reach the old submit route. Tests: URL + body (`SessionPaneContent.send.test.tsx`); an instance stamped after
+   the queue exists is the one sent; `''` everywhere → `no_instance`, no request; `keys` capability enables the input.
+
+**K-2a-3 — the queue (D3–D6), ~650.**
+1. `send-queue.ts`: remove waiting / setIdle / quota; `mayHaveRun` per D3; busy retries with a new id each (fake timers: 1 s / 2 s /
+   4 s, three different ids posted, then `failed`); an echo carrying an earlier id settles the entry; a retry answered `unknown` /
+   `network` is not resent; `UNDO_MS = 1500`; `handed` + 10 s → `maybe`. Update `send-queue.test.ts`, `send-queue.recall.test.ts`,
+   `useSendQueueDriver`.
+2. `QueuedMessages` / `PendingTail`: frame until accepted for terminal entries; hidden while the header renders the same text,
+   shown again when it stops; keys caption. Tests incl. header match / un-match, status idle (header not rendered → entry shown).
+3. Tab switch (real `TabContent`): a held entry still sends after a switch (1.5 s); a `handed` entry survives and still
+   de-duplicates on return.
+
+**K-2b — take back (D7), ~700.**
+1. `takeBack()` on the terminal adapter + `RecallOutcome` mapping: one test per class and status (200 text; 200 unknown × 3 reasons;
+   400 / 404 / 409 reasons / 429 / 500 / 503 / 503 `keys_failed`; network → same-id retry → then may-have-popped).
+2. `prependToDraft` extracted; `recallHeld` uses it (behaviour tests unchanged).
+3. Clickable held block, clickable header user rows and handed entries, Up merge, in-flight guard, `deck.recall.*` messages. Tests:
+   click held → only that entry; click a header row with 3 queued → three lines, draft prepended; draft non-empty → recalled first;
+   Up with both kinds → Claude Code text then held; failed takeBack + held → held back, notice shown; second click while in flight
+   ignored; peer row not clickable; one chat-path test.
+4. Tab switch (real `TabContent`): a take-back answered while switched away → the draft holds the text on return.
 
 ## Merge gates
-- Both PRs: codex R1 + attack in parallel, then critic (gpt-5.6-sol, effort low); full `vitest --maxWorkers=2` + `pnpm exec tsc -b`
-  on a freshly fetched origin/main.
-- **K-2a and K-2b merge only after alpha.710 (or later, with #2636 / #2639 / #2644) is deployed on mlab and air26** — the SPA
-  reaches the Mac App through the dev server at once, and a daemon without `/submit` would fail every send.
+- Every PR: codex R1 + attack in parallel, then critic (gpt-5.6-sol, effort low); SPA PRs run full `vitest --maxWorkers=2` +
+  `pnpm exec tsc -b` on a freshly fetched origin/main; the daemon PR runs `go test -race` on the touched packages.
+- **K-2a-2, K-2a-3 and K-2b merge only after alpha.710 (or later, with #2636 / #2639 / #2644) is deployed on mlab and air26** — the
+  SPA reaches the Mac App through the dev server at once, and a daemon without `/submit` fails every send. K-2a-1 (daemon only,
+  additive capability value) can merge any time; the SPA ignores `keys` until K-2a-2.
 - Real-machine acceptance (spec §4, plan K-1 "Acceptance") on mlab after 710, before K-2b merges: busy session — a send queues
   (header shows it, framed, no duplicate) and is read mid-turn; idle → runs at once; terminal draft → `input_not_empty`, terminal
-  unchanged; permission dialog open → `dialog_open`; copy-mode → `pane_busy`; click a queued message → it comes back, TUI input
-  empty; Up with an empty queue in the terminal input is never pressed (deck refuses with `nothing_queued`); keys mode (no mod):
-  text and Enter in one write is not taken as a paste, Up sequence `\x1b[A` vs `\x1bOA`, settle delay.
+  unchanged; permission dialog open → `dialog_open`; copy-mode → `pane_busy`; click a queued message → it comes back and the TUI
+  input is empty; nothing queued → `nothing_queued`, Up never pressed; keys mode (no mod): text and Enter in one write is not taken
+  as a paste, Up sequence `\x1b[A` vs `\x1bOA`, settle delay.
