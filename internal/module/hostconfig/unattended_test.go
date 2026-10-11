@@ -233,7 +233,7 @@ func TestSetUnattended_RetriesALostCAS(t *testing.T) {
 			return
 		}
 		// Another writer: off, with a since of its own, at revision 1.
-		_, ok, err := m.store.Put(KeyUnattended, 0, func() (json.RawMessage, error) {
+		_, ok, err := m.store.Put(KeyUnattended, 0, func(Entry) (json.RawMessage, error) {
 			return json.RawMessage(`{"on":false,"since":500,"changed_at":1500,"changed_by":{"kind":"app","label":"other"}}`), nil
 		})
 		require.NoError(t, err)
@@ -250,7 +250,7 @@ func TestSetUnattended_RetriesALostCAS(t *testing.T) {
 	// nothing to write.
 	m2 := newTestModule(t)
 	m2.beforeUnattendedPut = func() {
-		_, _, err := m2.store.Put(KeyUnattended, 0, func() (json.RawMessage, error) {
+		_, _, err := m2.store.Put(KeyUnattended, 0, func(Entry) (json.RawMessage, error) {
 			return json.RawMessage(`{"on":true,"since":1500,"changed_at":1500,"changed_by":{"kind":"app","label":"other"}}`), nil
 		})
 		require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestSetUnattended_GivesUpAfterThreeRetries(t *testing.T) {
 		puts++
 		e, err := m.store.Get(KeyUnattended)
 		require.NoError(t, err)
-		_, ok, err := m.store.Put(KeyUnattended, e.Revision, func() (json.RawMessage, error) {
+		_, ok, err := m.store.Put(KeyUnattended, e.Revision, func(Entry) (json.RawMessage, error) {
 			return json.RawMessage(`{"on":false,"since":0,"changed_at":1,"changed_by":{"kind":"app","label":"other"}}`), nil
 		})
 		require.NoError(t, err)

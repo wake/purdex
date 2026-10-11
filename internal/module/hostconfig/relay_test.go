@@ -173,7 +173,7 @@ func TestRelayPrompts_DefaultsAndStored(t *testing.T) {
 // RelaySwitches() validate the bodies → red.
 func TestRelaySwitches_IgnoreABadStoredPrompt(t *testing.T) {
 	m := newTestModule(t)
-	_, stored, err := m.store.Put(KeyRelay, 0, func() (json.RawMessage, error) {
+	_, stored, err := m.store.Put(KeyRelay, 0, func(Entry) (json.RawMessage, error) {
 		return json.RawMessage(`{"self_solo":false,"self_lead":true,"prompt_fix":"[pdx-relay op=x"}`), nil
 	})
 	require.NoError(t, err)

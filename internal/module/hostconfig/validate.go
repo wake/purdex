@@ -207,41 +207,117 @@ func readCommands(raw json.RawMessage) readout {
 	return readRows(raw, "command", "commands", maxItems, func(c Command) (Command, error) { return checkCommand(c, ids) })
 }
 
-// QuickReply is one canned message a worker pane can send with one click.
+// QuickReply is one canned message a worker pane can send with one click, as
+// the daemon stores and answers it. Text repeats Content so a client from
+// before quick replies v2, which reads only text, keeps working.
 type QuickReply struct {
-	ID   string `json:"id"`
-	Text string `json:"text"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
+	Text    string `json:"text"`
+}
+
+// quickReplyWire is one quick reply as a client sends it (or as an old row
+// is stored). Every field but the id stays raw, so the presence of "content"
+// decides the shape, and null or a non-string is told from an absent key.
+type quickReplyWire struct {
+	ID      string          `json:"id"`
+	Title   json.RawMessage `json:"title"`
+	Content json.RawMessage `json:"content"`
+	Text    json.RawMessage `json:"text"`
+}
+
+const quickReplyTitleMaxBytes = 100
+
+// quickReplyString reads a raw field that must be a string. Absent, null and
+// non-strings are not ok. encoding/json replaces invalid UTF-8 with U+FFFD
+// while decoding; the ValidString check is a guard should that ever change.
+func quickReplyString(raw json.RawMessage, max int) (string, bool) {
+	if raw == nil || firstByte(raw) != '"' {
+		return "", false
+	}
+	var v string
+	if json.Unmarshal(raw, &v) != nil {
+		return "", false
+	}
+	v = strings.TrimSpace(v)
+	if v == "" || len(v) > max || strings.ContainsRune(v, 0) || !utf8.ValidString(v) {
+		return "", false
+	}
+	return v, true
+}
+
+// clipTitle cuts s to the title limit on a rune boundary.
+func clipTitle(s string) string {
+	if len(s) <= quickReplyTitleMaxBytes {
+		return s
+	}
+	cut := quickReplyTitleMaxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(s[:cut])
 }
 
 // checkQuickReply applies the PUT's rules to one reply and answers it as
-// stored (text trimmed); only a row that passes takes its id. encoding/json
-// already replaces invalid UTF-8 with U+FFFD; the ValidString check is a
-// guard should the decoding path ever change.
-func checkQuickReply(q QuickReply, ids map[string]bool) (QuickReply, error) {
+// stored; only a row that passes takes its id. The "content" key being
+// present makes it a v2 item (title and content both required); absent, it is
+// a legacy {id, text} item whose content is the text and whose title is the
+// stored title of the same id (titles), else the text cut to the title limit.
+func checkQuickReply(q quickReplyWire, ids map[string]bool, titles map[string]string) (QuickReply, error) {
 	if err := checkID(ids, q.ID); err != nil {
 		return QuickReply{}, err
 	}
-	text := strings.TrimSpace(q.Text)
-	if text == "" || len(text) > quickReplyMaxBytes || strings.ContainsRune(text, 0) || !utf8.ValidString(text) {
-		return QuickReply{}, fmt.Errorf("invalid text for quick reply %q", q.ID)
+	var title, content string
+	var ok bool
+	if q.Content != nil {
+		if content, ok = quickReplyString(q.Content, quickReplyMaxBytes); !ok {
+			return QuickReply{}, fmt.Errorf("invalid content for quick reply %q", q.ID)
+		}
+		if title, ok = quickReplyString(q.Title, quickReplyTitleMaxBytes); !ok {
+			return QuickReply{}, fmt.Errorf("invalid title for quick reply %q", q.ID)
+		}
+	} else {
+		if content, ok = quickReplyString(q.Text, quickReplyMaxBytes); !ok {
+			return QuickReply{}, fmt.Errorf("invalid text for quick reply %q", q.ID)
+		}
+		if title, ok = titles[q.ID]; !ok {
+			title = clipTitle(content)
+		}
 	}
 	ids[q.ID] = true
-	return QuickReply{ID: q.ID, Text: text}, nil
+	return QuickReply{ID: q.ID, Title: title, Content: content, Text: content}, nil
 }
 
-// normalizeQuickReplies validates the list and stores each text trimmed.
-func normalizeQuickReplies(raw json.RawMessage) ([]QuickReply, error) {
-	var in []QuickReply
+// storedQuickReplyTitles maps id to title for the stored value, read like the
+// GET reads it (a pre-v2 {id, text} row lends its text as the title).
+func storedQuickReplyTitles(cur Entry) map[string]string {
+	titles := map[string]string{}
+	if cur.Value == nil {
+		return titles
+	}
+	rows, _ := readQuickReplies(cur.Value).items.([]QuickReply)
+	for _, r := range rows {
+		titles[r.ID] = r.Title
+	}
+	return titles
+}
+
+// normalizeQuickReplies validates the list; cur is the row the store's CAS
+// just matched, the source of the titles legacy items keep.
+func normalizeQuickReplies(raw json.RawMessage, cur Entry) ([]QuickReply, error) {
+	var in []quickReplyWire
 	if err := decodeArray(raw, &in); err != nil {
 		return nil, err
 	}
 	if len(in) > maxQuickReplies {
 		return nil, fmt.Errorf("at most %d quick replies", maxQuickReplies)
 	}
+	titles := storedQuickReplyTitles(cur)
 	out := make([]QuickReply, 0, len(in))
 	ids := map[string]bool{}
 	for _, q := range in {
-		row, err := checkQuickReply(q, ids)
+		row, err := checkQuickReply(q, ids, titles)
 		if err != nil {
 			return nil, err
 		}
@@ -251,9 +327,10 @@ func normalizeQuickReplies(raw json.RawMessage) ([]QuickReply, error) {
 }
 
 // readQuickReplies is normalizeQuickReplies' lenient twin (the GET's view).
+// It has no stored titles to consult, so a legacy row's title is its text.
 func readQuickReplies(raw json.RawMessage) readout {
 	ids := map[string]bool{}
-	return readRows(raw, "quick reply", "quick replies", maxQuickReplies, func(q QuickReply) (QuickReply, error) { return checkQuickReply(q, ids) })
+	return readRows(raw, "quick reply", "quick replies", maxQuickReplies, func(q quickReplyWire) (QuickReply, error) { return checkQuickReply(q, ids, nil) })
 }
 
 func validTemplate(v string) bool {

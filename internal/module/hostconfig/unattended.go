@@ -137,7 +137,7 @@ func (m *Module) SetUnattended(on bool, by team.Client, now int64) (team.Unatten
 		if m.beforeUnattendedPut != nil {
 			m.beforeUnattendedPut() // test seam: another writer between the read and the CAS
 		}
-		stored, ok, err := m.store.Put(KeyUnattended, e.Revision, func() (json.RawMessage, error) { return value, nil })
+		stored, ok, err := m.store.Put(KeyUnattended, e.Revision, func(Entry) (json.RawMessage, error) { return value, nil })
 		if err != nil {
 			return team.UnattendedState{}, false, err
 		}

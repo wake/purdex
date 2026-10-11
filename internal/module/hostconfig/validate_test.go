@@ -134,20 +134,20 @@ func TestNormalizeQuickRepliesOK(t *testing.T) {
 	got, err := normalizeQuickReplies(json.RawMessage(`[
 		{"id":"continue","text":"  continue \n"},
 		{"id":"run-tests","text":"請跑測試"}
-	]`))
+	]`), Entry{})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	assert.Equal(t, QuickReply{ID: "continue", Text: "continue"}, got[0], "text is stored trimmed")
+	assert.Equal(t, QuickReply{ID: "continue", Title: "continue", Content: "continue", Text: "continue"}, got[0], "text is stored trimmed")
 	assert.Equal(t, "請跑測試", got[1].Text)
 
-	empty, err := normalizeQuickReplies(json.RawMessage(`[]`))
+	empty, err := normalizeQuickReplies(json.RawMessage(`[]`), Entry{})
 	require.NoError(t, err)
 	assert.NotNil(t, empty)
 
-	_, err = normalizeQuickReplies(json.RawMessage(quickReplyList(20)))
+	_, err = normalizeQuickReplies(json.RawMessage(quickReplyList(20)), Entry{})
 	assert.NoError(t, err, "20 items is allowed")
 
-	_, err = normalizeQuickReplies(json.RawMessage(`[{"id":"a","text":"` + strings.Repeat("x", 1000) + `"}]`))
+	_, err = normalizeQuickReplies(json.RawMessage(`[{"id":"a","text":"`+strings.Repeat("x", 1000)+`"}]`), Entry{})
 	assert.NoError(t, err, "1000 bytes is allowed")
 }
 
@@ -166,7 +166,7 @@ func TestNormalizeQuickRepliesRejects(t *testing.T) {
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := normalizeQuickReplies(json.RawMessage(raw))
+			_, err := normalizeQuickReplies(json.RawMessage(raw), Entry{})
 			assert.Error(t, err)
 		})
 	}
