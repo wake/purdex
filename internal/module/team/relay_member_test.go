@@ -169,6 +169,30 @@ func TestRelayCreate_AClearedPredecessorBlocksTheSuccessor(t *testing.T) {
 	}
 }
 
+// codex R1 (P2): the predecessor lookup runs under createMu on every member relay; it must use an index, not scan the
+// ever-growing relay_ops history. Mutation: drop relay_ops_new_session_open → the plan says SCAN → red.
+func TestOpenRelayOpByNewSession_UsesAnIndex(t *testing.T) {
+	f := newFixture(t)
+	rows, err := f.m.store.db.Query(`EXPLAIN QUERY PLAN SELECT `+relayCols+` FROM relay_ops
+		WHERE new_session_id = ? AND state NOT IN ('done', 'failed', 'cancelled') ORDER BY created_at, id LIMIT 1`, "sid-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if got := strings.Join(plan, " | "); !strings.Contains(got, "relay_ops_new_session_open") {
+		t.Fatalf("the lookup does not use relay_ops_new_session_open: %s", got)
+	}
+}
+
 func TestRelayCreate_SendsTheControlMessageFromTheLeadsInbox(t *testing.T) {
 	f := newFixture(t)
 	f.memberTeam("2")

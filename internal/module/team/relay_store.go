@@ -51,6 +51,8 @@ const relaySchema = `
 	CREATE INDEX IF NOT EXISTS relay_ops_session_state ON relay_ops (session_id, state);
 	CREATE UNIQUE INDEX IF NOT EXISTS relay_ops_one_open ON relay_ops (session_id)
 		WHERE state NOT IN ('done', 'failed', 'cancelled');
+	CREATE INDEX IF NOT EXISTS relay_ops_new_session_open ON relay_ops (new_session_id)
+		WHERE state NOT IN ('done', 'failed', 'cancelled');
 	CREATE TABLE IF NOT EXISTS session_lineage (
 		session_id             TEXT PRIMARY KEY,
 		predecessor_session_id TEXT    NOT NULL,
