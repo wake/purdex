@@ -47,3 +47,33 @@ describe('usageFor', () => {
     expect(usageFor('mlab:x', 'a', cc)!.fiveHour?.pct).toBe(20)
   })
 })
+
+describe('usageFor: untrusted timestamps', () => {
+  it('a snapshot without a daemon timestamp never beats a trusted one, even if received later', () => {
+    const cc = {
+      'h1:a': { ...snap(100, 10, 20, 30), atTrusted: true },
+      'h1:b': { ...snap(900, 55, 90, 95), atTrusted: false },
+    }
+    const u = usageFor('h1', 'a', cc)!
+    expect(u.fiveHour?.pct).toBe(20)
+    expect(u.sevenDay?.pct).toBe(30)
+  })
+  it('with no trusted snapshot on the host, the newest untrusted one is used', () => {
+    const cc = {
+      'h1:a': { ...snap(100, 10, 20, 30), atTrusted: false },
+      'h1:b': { ...snap(200, 55, 90, 95), atTrusted: false },
+    }
+    const u = usageFor('h1', 'a', cc)!
+    expect(u.fiveHour?.pct).toBe(90)
+    expect(u.sevenDay?.pct).toBe(95)
+  })
+  it('a trusted snapshot lacking the field still falls back to an untrusted one that has it', () => {
+    const cc = {
+      'h1:a': { ...snap(100, 10, 20), atTrusted: true },
+      'h1:b': { ...snap(900, 55, 90, 95), atTrusted: false },
+    }
+    const u = usageFor('h1', 'a', cc)!
+    expect(u.fiveHour?.pct).toBe(20)
+    expect(u.sevenDay?.pct).toBe(95)
+  })
+})
