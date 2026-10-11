@@ -22,6 +22,16 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
   `ctrl+j` = newline; Up on an empty input pops the queued items into the input (`popAll`, written to the transcript).
 - B-read (#2619) puts Claude Code's queued prompts in `header.queued`; the transcript shows the delivered prompt
   (`promptSource: "queued"` / `queued_command`).
+- **Step 0 measurement (2026-10-11, Claude Code 2.1.296, Haiku, isolated tmux):** mid-turn `$.prompt.read` returns in 0 ms and
+  `$.prompt.fill` in 5–10 ms (no blocking, unlike `submit`); `fill` keeps newlines and trailing spaces and `read` right after returns
+  the same string; Enter after a mid-turn fill → `queue-operation enqueue`, then `remove` 13 ms after the next `tool_result` (read
+  mid-turn; the model acknowledged it); the TUI shows "Press up to edit queued messages" / "ctrl+x ctrl+s to send now";
+  `#{alternate_on} #{pane_in_mode}` = `0 0` (main screen); Up on an empty input with two queued items pops **both**, joined by a
+  single `\n`, each item's trailing whitespace trimmed (transcript: one `popAll` per item, same timestamp); Up on an empty input with
+  an empty queue **recalls the previous prompt from history**. Refusal values per the type declarations: `'no_composer' | 'dialog'`
+  (a hook's own refusal has none: `isFilled:false` without `refusal` = unknown); the dialog refusal was not exercised. Not measured:
+  whether Up pops queued peer / task-notification items; Up mid-turn with an empty queue. `C-u` clears only the current line of a
+  multi-line input — clearing uses `fill('')`. A bare `sleep N` is blocked by the harness (use another long command in tests).
 
 ## 3. Design — one daemon endpoint, used by both apps
 `POST /api/sessions/{code}/submit {text, client_msg_id, expected_tmux_instance}` (device-allowed like send-keys). In order:
