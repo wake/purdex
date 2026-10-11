@@ -22,6 +22,10 @@
 //   every return to idle lets the request go first (letGo): its held prompts go on at once,
 //   unchanged, before any report; the loop's late answer for it is ignored
 //
+// Idle relay (docs/specs/2026-10-11-idle-relay-spec-plan.md §4): when hello advertised idle_minutes, an ordinary session
+// idle that long at ≥ idle_threshold % asks for a relay the same way (begin --reason idle). That ask never holds a
+// prompt (D6): one that arrives while it is open withdraws it (cancelled{resumed}) and goes on unchanged.
+//
 // Everything that starts a turn, runs a command or waits on the daemon goes
 // out from a $.clock.after timer, never inside a hook: $.command.run rejects
 // inside a hook the turn waits on (F3), and a daemon that is down answers
@@ -47,7 +51,7 @@
 // prompt, and the built-in bodies.
 
 import { register as registerAsk } from './ask.js'
-import { registerEvents } from './events.js'
+import { backgroundBusy, registerEvents } from './events.js'
 import { registerLease } from './lease.js'
 import { CONSUMED, claimOp, controlOp, leadLine, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
@@ -56,6 +60,7 @@ const VERSION = '4' // the mod ↔ daemon protocol version `pdx relay hello --ve
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
+const IDLE_MINUTES_MAX = 50 // env PDX_RELAY_IDLE_MINUTES 1–50 (idle relay D9); the daemon takes 1–59
 const ROLE_RECHECK_MS = 60_000 // a cached `member` role is re-read (hello) at the threshold at most this often (U24 PL-1g)
 const MAX_FIX_ROUNDS = 2
 const WAIT_TIMEOUT_MS = 590_000 // $.process.run caps at 10 min (M24); pdx relay wait bounds itself to 9
@@ -109,6 +114,13 @@ const fresh = () => ({
   writeDeferred: undefined, // a claimed request whose write prompt waits for the running turn to end
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
+  idleMinutes: 0, // idle relay (D9): hello's idle_minutes, or the env's; 0 = off (an older daemon, or no hello yet)
+  idleThreshold: 0,
+  envIdleMinutes: 0, // PDX_RELAY_IDLE_MINUTES, honoured only when hello advertised the feature
+  envIdleThreshold: 0, // PDX_RELAY_IDLE_THRESHOLD
+  idleTimer: undefined, // { gen, handle }: the armed idle timer; a fire acts only while it is still s.idleTimer
+  idleAsk: false, // an idle ask is out (beginning / awaiting): it holds no prompt, a prompt withdraws it (D6)
+  idleWithdraw: false, // a prompt arrived while the idle begin was out: the op it opens is withdrawn at once
   askEpoch: 0, // bumped by everything that makes an ask in the air stale (a /clear, a session reset, a compaction); never reset, like gen
   askBusy: undefined, // a token while a member's `pdx relay ask` is out (member relay ask, D3: it changes no relay state)
   leadAsk: undefined, // { gen, sid }: a /lead prompt is out until the agent's turn ends or the session moves on
@@ -134,6 +146,7 @@ let holding = 0
 // resetState starts the session over; the counters keep counting up, so a
 // begin or a hello sent before the reset never answers for one sent after it.
 function resetState() {
+  disarmIdle()
   letGo()
   waitingRecovery = undefined // a recovery waiting for the old conversation to be free is that conversation's
   Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq, askEpoch: s.askEpoch + 1 })
@@ -215,6 +228,15 @@ async function hello($, seq) {
     }
     if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
     if (h.min_growth > 0) s.minGrowth = h.min_growth
+    // Idle relay (D9): the daemon's numbers switch the feature on; without them it is off whatever the env says.
+    if (h.idle_minutes > 0 && h.idle_threshold > 0) {
+      s.idleMinutes = s.envIdleMinutes || h.idle_minutes
+      s.idleThreshold = s.envIdleThreshold || h.idle_threshold
+    } else {
+      s.idleMinutes = 0
+      s.idleThreshold = 0
+      disarmIdle()
+    }
     if (h.active_relay && typeof h.active_relay === 'object') recoverLater($, h.active_relay, sid)
   } finally {
     if (seq === s.helloSeq) s.helloBusy = false
@@ -522,7 +544,7 @@ function toIdle($) {
   const p = s.pending
   if (p && p.locked) later($, 0, () => unlockRelay($, p))
   letGo()
-  Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined })
+  Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined, idleAsk: false, idleWithdraw: false })
   if (s.control.length > 0) claimLater($) // a control that came while a relay ran (claim checks the turn) is not left waiting for a later turn
 }
 
@@ -627,6 +649,7 @@ async function maybeBegin($) {
   if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
   const sid = await $.session.id()
   if (s.state !== 'idle') return // a /relay now took the state while the engine was read
+  disarmIdle()
   s.state = 'beginning'
   s.lastAskPct = u.percent
   const gen = s.gen
@@ -650,9 +673,11 @@ async function maybeBegin($) {
 //
 // `manual` is a person's /relay (MR-1, U-M1): `--manual` lifts a member's refusals at the daemon, which still opens a
 // card a person must approve. The threshold path (maybeBegin) never passes it.
-async function begin($, sid, gen, u, adopted, manual = false) {
+async function begin($, sid, gen, u, adopted, manual = false, idle = false) {
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
   if (manual) argv.push('--manual')
+  const idleMinutes = s.idleMinutes // the numbers of this ask, whatever hello says meanwhile
+  if (idle) argv.push('--reason', 'idle', '--idle-minutes', String(idleMinutes))
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
   const now = await $.session.id().catch(() => undefined)
   const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
@@ -673,7 +698,16 @@ async function begin($, sid, gen, u, adopted, manual = false) {
     if (r.exitCode === 20 || r.exitCode === 21) return { kind: 'unreachable' }
     return { kind: 'failed', detail: (r.stderr || '').trim() }
   }
+  if (idle && s.idleWithdraw) {
+    // a prompt arrived while this idle begin was out (D6): the session is no longer idle, so the request is withdrawn
+    // before it is ever shown as ours; toIdle lets the prompt waiting on begin go on first, unchanged
+    toIdle($)
+    report($, body.op.id, 'cancelled', ['--error', 'resumed'])
+    return { kind: 'abandoned' }
+  }
   s.pending = {
+    idle, // an idle ask never holds a prompt (D6); a denial or timeout is remembered for the +10 rule at settle
+    idlePct: u.percent,
     op: body.op,
     requestId: body.request_id,
     path: body.op.handoff_path,
@@ -802,6 +836,7 @@ async function relayNow($) {
   if (!hasCSPRNG()) return { text: 'Purdex 接力無法啟動：這個環境沒有 crypto.getRandomValues' }
   // Taken before any await, so a second /relay or a turn's threshold check meanwhile sees
   // `beginning`; a preflight that fails gives it back, if it is still this attempt's.
+  disarmIdle()
   s.state = 'beginning'
   const gen = s.gen
   const begun = deferred() // a prompt that arrives while begin is out waits on it (P5b-3)
@@ -919,7 +954,12 @@ function settle($, p, outcome) {
   if (s.pending !== p) return
   $.ui.status(undefined)
   if (s.state !== 'awaiting') return
-  if (outcome !== 'approved') return toIdle($)
+  if (outcome !== 'approved') {
+    // an idle ask counts against the shared +10 guard only when the person answered it (denied / timed out); a
+    // withdrawal, a compaction or an unreachable daemon costs nothing (D7)
+    if (p.idle && (outcome === 'denied' || outcome === 'timeout')) s.lastAskPct = p.idlePct
+    return toIdle($)
+  }
   s.state = 'approved'
   startWrite($, p)
 }
@@ -1027,14 +1067,70 @@ function claimLater($) {
 // compactedAfter reports a compaction that really ran, after it did; compactedLater reports a compaction the mod did NOT intercept (P7-2, spec §8.5): from a timer, never awaited, so the
 // compaction never waits for it. Whatever the role (coordinator decision 12: the first hello may answer before the member
 // row exists), the daemon decides whether the lead is told (a member's auto one only). The session id is read in the timer.
-function compactedAfter($, e, result) {
+function compactedAfter($, e, result, trigger = e.trigger) {
   // only a compaction that ran: a hook beneath that skipped it (or threw, which never reaches here) reports nothing
-  if (!result || result.skip === undefined) compactedLater($, e.trigger)
+  if (!result || result.skip === undefined) compactedLater($, trigger)
   return result
 }
 
+// ---- idle relay (spec §4) ----
+
+// disarmIdle drops the armed idle timer, if any. Its fire acts only while it is still s.idleTimer, so a timer the engine
+// could not cancel in time (or an await in its handler) finds itself gone.
+function disarmIdle() {
+  const t = s.idleTimer
+  s.idleTimer = undefined
+  if (t && t.handle && typeof t.handle.cancel === 'function') t.handle.cancel()
+}
+
+// armIdle (re)starts the idle timer at the end of a main turn: an ordinary session that is idle, whose hello advertised
+// the feature. Re-arming replaces the timer.
+function armIdle($) {
+  disarmIdle()
+  if (!s.helloOK || s.role === 'member' || s.idleMinutes <= 0 || s.state !== 'idle') return
+  const t = { gen: s.gen, handle: undefined }
+  s.idleTimer = t
+  t.handle = $.clock.after(s.idleMinutes * 60_000, () => { void idleFire($, t).catch((err) => log($, 'idle ask failed: ' + String(err))) })
+}
+
+// idleLive: the cheap part of the gate, asked again after every await of the fire (as maybeBegin does).
+const idleLive = (t) => s.idleTimer === t && s.gen === t.gen && s.interactive && s.helloOK && s.role !== 'member' &&
+  s.idleMinutes > 0 && s.state === 'idle' && !s.turnRunning && s.control.length === 0
+
+// idleFire is the timer's handler (never inside a hook): the maybeBegin gate with the idle threshold, the shared +10 and
+// growth guards, and no running background task or session cron (D8). It opens the same self-relay request, with the
+// reason, and takes `beginning` with nothing awaited between its last look and that move. s.lastAskPct is NOT set here:
+// only a denial or timeout of the request sets it (settle), so a withdrawal costs nothing.
+async function idleFire($, t) {
+  if (!idleLive(t) || !hasCSPRNG()) return
+  const u = (await $.session.usage()).context
+  if (!idleLive(t)) return
+  if (u.percent === undefined || u.percent < s.idleThreshold) return
+  if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
+  if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
+  if (backgroundBusy()) return
+  const sid = await $.session.id()
+  if (!idleLive(t) || backgroundBusy()) return
+  s.idleTimer = undefined
+  s.state = 'beginning'
+  s.idleAsk = true
+  const gen = s.gen
+  const begun = deferred() // a prompt that arrives while begin is out waits on it, then withdraws the request it opened
+  s.begun = begun
+  later($, 0, () => begin($, sid, gen, u, begun.resolve, false, true).finally(() => begun.resolve(undefined)))
+}
+
+// withdrawIdle: a prompt arrived while an idle ask is open (D6). toIdle first, so the prompt goes on at once and
+// unchanged; then the status line; then the report. The wait loop's late answer for the request is ignored (settle).
+function withdrawIdle($, p) {
+  if (s.pending !== p || s.state !== 'awaiting') return
+  toIdle($)
+  $.ui.status(undefined)
+  report($, p.op.id, 'cancelled', ['--error', 'resumed'])
+}
+
 function compactedLater($, trigger) {
-  if (trigger !== 'auto' && trigger !== 'manual') return
+  if (trigger !== 'auto' && trigger !== 'manual' && trigger !== 'idle') return
   later($, 0, async () => {
     const sid = await $.session.id()
     await pdx($, ['relay', 'compacted', '--session', sid, '--trigger', trigger], CALL_TIMEOUT_MS)
@@ -1252,6 +1348,11 @@ export function register(on) {
     if (!s.interactive) return next(e) // a Nexen worker's `claude -p`: the mod does nothing (spec §5)
     const t = Number(await $.env.get('PDX_RELAY_THRESHOLD').catch(() => undefined))
     if (t > 0 && t <= 100) { s.threshold = t; s.envThreshold = true }
+    // Idle relay (D9): read now, used only when hello advertises the feature.
+    const im = Number(await $.env.get('PDX_RELAY_IDLE_MINUTES').catch(() => undefined))
+    if (Number.isInteger(im) && im >= 1 && im <= IDLE_MINUTES_MAX) s.envIdleMinutes = im
+    const it = Number(await $.env.get('PDX_RELAY_IDLE_THRESHOLD').catch(() => undefined))
+    if (Number.isInteger(it) && it >= 1 && it <= 100) s.envIdleThreshold = it
     const cfg = parseJSON(await $.fs.read($.plugin.root + '/pdx.json').catch(() => ''))
     if (cfg && cfg.pdx) s.pdx = cfg.pdx // written beside VERSION by the extractor; absent in `claude plugin test`
     s.config = cfg && typeof cfg.config === 'string' ? cfg.config : ''
@@ -1272,7 +1373,7 @@ export function register(on) {
   // the relay's.
   on('turn.start', async ($, e, next) => {
     const p = s.pending
-    if (s.interactive && !e.agentId) s.turnRunning = true
+    if (s.interactive && !e.agentId) { s.turnRunning = true; disarmIdle() }
     if (s.interactive && s.leadAsk && s.leadAsk.turnId === undefined && typeof e.text === 'string' && e.text.includes(s.leadAsk.nonce)) s.leadAsk.turnId = e.turnId
     if (s.interactive && p && p.nonce && s.state === p.nonceState && typeof e.text === 'string' && e.text.includes(p.nonce)) {
       const writing = s.state === 'approved'
@@ -1305,6 +1406,7 @@ export function register(on) {
       else if (s.pending && s.seedTurnId !== undefined && e.turnId === s.seedTurnId) await onSeedTurnDone($)
       else if (resumeRecovery($)) { /* the relay a reload left is finished first: no new ask this turn */ }
       else if (s.state === 'idle') await maybeBegin($)
+      if (s.state === 'idle') armIdle($) // idle relay: the stretch of idleness starts at the end of a main turn
     } catch (err) {
       log($, 'turn.complete failed: ' + String(err))
     }
@@ -1319,6 +1421,7 @@ export function register(on) {
     const r = await next(e)
     if (!s.interactive || e.source !== 'clear') return r
     const p = s.pending
+    disarmIdle()
     s.gen += 1 // a new session id: no begin sent under the old one answers for it
     s.control = [] // a control message named the old session id: it is the old conversation's
     s.helloOK = false // nor does the old session's hello: the new one is sent below
@@ -1395,6 +1498,23 @@ export function register(on) {
   // answers next(e) (fail-open; P5b-3 review).
   on('prompt.submit', async ($, e, next) => {
     if (!s.interactive) return next(e)
+    disarmIdle() // a prompt ends the idle stretch, whatever becomes of it
+    // An idle ask holds nothing (D6): the prompt withdraws it and goes on unchanged. While begin is still out it waits for
+    // begin's answer (as a held prompt does, ≤ BEGIN_HOLD_MS); begin withdraws the op it opens (idleWithdraw).
+    if (s.idleAsk && s.state === 'beginning' && s.begun) {
+      s.idleWithdraw = true
+      holding += 1
+      try {
+        await sleepUntil($, s.begun.promise, BEGIN_HOLD_MS, next.signal)
+      } finally {
+        holding -= 1
+      }
+      return next(e)
+    }
+    if (s.state === 'awaiting' && s.pending && s.pending.idle) {
+      withdrawIdle($, s.pending)
+      return next(e)
+    }
     const open = s.state === 'awaiting' ? s.pending : undefined
     const begun = s.state === 'beginning' ? s.begun : undefined
     if (!open && !begun) return next(e)
@@ -1423,9 +1543,13 @@ export function register(on) {
   // throws here lets the compaction run.
   on('session.compact', async ($, e, next) => {
     if (!s.interactive || e.agentId || e.trigger === 'precompute') return next(e)
+    disarmIdle()
+    // Claude Code's idle compaction runs between turns; a context-full auto compaction runs inside one (spec §4.5). Only
+    // told apart once hello advertised the feature (an older daemon does not know `idle`).
+    const trigger = e.trigger === 'auto' && !s.turnRunning && s.idleMinutes > 0 ? 'idle' : e.trigger
     if (s.state === 'approved') {
       if (e.trigger === 'auto') return { skip: SKIP_COMPACT }
-      return compactedAfter($, e, await next(e))
+      return compactedAfter($, e, await next(e), trigger)
     }
     if (s.state === 'awaiting' && s.pending) {
       const op = s.pending.op.id
@@ -1438,7 +1562,7 @@ export function register(on) {
     s.lastAskPct = undefined // after a compaction the next ask needs ≥ threshold again
     s.askEpoch++ // an ask in the air answers for the context that is gone: it must not put its lastAskPct back
     s.askBusy = undefined
-    return compactedAfter($, e, await next(e))
+    return compactedAfter($, e, await next(e), trigger)
   })
 
   on('command.run', { command: 'lead' }, async ($, e) => leadCommand($, e))

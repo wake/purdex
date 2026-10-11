@@ -906,8 +906,15 @@ function measured($, e) {
   enqueue($, 'usage', data)
 }
 
+// backgroundBusy: the last classic.Stop listed a background task that is still running, or a session cron (a /clear would
+// orphan them; idle relay D8). null (no Stop seen yet) is not busy. It reads what stopped() keeps whether or not the
+// reporter is on.
+export function backgroundBusy() {
+  const b = ev.background
+  return !!b && (b.crons > 0 || b.tasks.some((t) => t.status === 'running'))
+}
+
 function stopped($, e) {
-  if (!ev.on) return
   // a copy: the engine's objects are never touched. A task the Monitor tool started is named "monitor".
   const listed = Array.isArray(e.background_tasks) ? e.background_tasks : []
   const tasks = listed.map((t) => ({ id: t.id, type: ev.monitors.has(t.id) ? 'monitor' : t.type, status: t.status }))
@@ -918,7 +925,7 @@ function stopped($, e) {
     else if (seen) ev.monitors.delete(id)
   }
   ev.background = { tasks, crons: Array.isArray(e.session_crons) ? e.session_crons.length : 0 }
-  enqueue($, 'background', ev.background)
+  if (ev.on) enqueue($, 'background', ev.background)
 }
 
 function compactStarted($, e) {

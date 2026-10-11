@@ -3156,3 +3156,369 @@ test('fix rounds do not lock again', async ($, on) => {
   await $.turn.start({ text: f.submits[1].text, turnId: 'tf' })
   expect(lockCalls(f)).toEqual(['relay lock op-1 --session sid-old'])
 })
+
+
+// ---------- IR-2: idle relay (docs/specs/2026-10-11-idle-relay-spec-plan.md §4, §8) ----------
+
+const IDLE_HELLO = (role = 'none') => HELLO(role, { idle_minutes: 40, idle_threshold: 40 })
+const AT55 = { tokens: 110000, window: 200000, percent: 55 }
+const MIN = 60_000
+const idleBegins = (f: Fake) => f.argvs.map(sub).filter((c) => c.startsWith('relay begin'))
+const IDLE_BEGIN = 'relay begin --self --session sid-old --used 55 --window 200000 --reason idle --idle-minutes 40'
+
+// The idle world: a daemon whose hello advertises idle_minutes / idle_threshold (40 / 40), and a row-backed approval.
+function idleWorld(on: any, more: Partial<Fake> = {}, env: Record<string, string> = {}, hello = IDLE_HELLO()) {
+  const f = relayWorld(on, { usage: AT55, ...more }, env)
+  const row = rowDaemon(f)
+  const base = f.pdx
+  f.pdx = (argv) => (argv[1] === 'hello' ? { exitCode: 0, stdout: hello } : base(argv))
+  return { f, row }
+}
+// An idle session: hello answered, one turn ended at 55 % (below the 70 % ask), the idle timer armed.
+async function idleSession($: any, on: any, more: Partial<Fake> = {}, env: Record<string, string> = {}, hello = IDLE_HELLO()) {
+  const w = idleWorld(on, more, env, hello)
+  await start($, w.f)
+  await turnAndSettle($, w.f, 't1')
+  return w
+}
+
+// Mutation gates: no arm → no begin; the minutes not used → red at the 40-minute edge.
+test('IR-2: a main turn.complete arms the idle timer; at idle_minutes it begins with --reason idle --idle-minutes 40', async ($, on) => {
+  const { f } = await idleSession($, on)
+  await f.clock.advance(40 * MIN - 1)
+  expect(count(f, 'begin')).toBe(0)
+  await f.clock.advance(1)
+  expect(idleBegins(f)).toEqual([IDLE_BEGIN])
+  expect(f.statuses).toEqual(['接力等待核准中'])
+})
+
+test('IR-2: a subagent’s turn.complete does not arm the timer', async ($, on) => {
+  const { f } = idleWorld(on)
+  await start($, f)
+  await $.turn.complete({ answer: 'ok', reason: 'answer', durationMs: 1, isAborted: false, turnId: 'a1', agentId: 'ag-1' })
+  await f.clock.advance(41 * MIN)
+  expect(count(f, 'begin')).toBe(0)
+})
+
+test('IR-2: re-arming replaces the timer: one begin, 40 minutes after the LAST turn', async ($, on) => {
+  const { f } = await idleSession($, on)
+  await f.clock.advance(30 * MIN)
+  await turnAndSettle($, f, 't2')
+  await f.clock.advance(39 * MIN)
+  expect(count(f, 'begin')).toBe(0)
+  await f.clock.advance(1 * MIN)
+  expect(idleBegins(f)).toEqual([IDLE_BEGIN])
+})
+
+// Mutation gate: a disarm that does nothing → the begin fires after the activity → red.
+for (const [what, act] of [
+  ['a main turn.start', ($: any) => $.turn.start({ text: 'x', turnId: 't2' })],
+  ['a prompt.submit', ($: any) => typed($, 'hello')],
+  ['a /clear', ($: any) => $.classic.SessionStart({ source: 'clear' })],
+  ['a compaction', ($: any) => compact($, 'manual')],
+  ['a new session.start', ($: any) => $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })],
+] as const) {
+  test('IR-2: ' + what + ' disarms the idle timer', async ($, on) => {
+    const { f } = await idleSession($, on)
+    await f.clock.advance(10 * MIN)
+    await act($)
+    await f.clock.settle()
+    await f.clock.advance(60 * MIN)
+    expect(idleBegins(f)).toEqual([])
+  })
+}
+
+test('IR-2: a subagent’s turn.start does not disarm the timer', async ($, on) => {
+  const { f } = await idleSession($, on)
+  await $.turn.start({ text: 'x', turnId: 'a1', agentId: 'ag-1' })
+  await f.clock.advance(40 * MIN)
+  expect(idleBegins(f)).toEqual([IDLE_BEGIN])
+})
+
+// The fire awaits session.usage(): a prompt or a turn that lands meanwhile ends the question.
+// Mutation gate: no re-check after the await → a begin although the session is no longer idle → red.
+test('IR-2: a prompt while the fire reads usage → no begin', async ($, on) => {
+  const g = gated()
+  const { f } = await idleSession($, on)
+  f.usageGate = g.p
+  await f.clock.advance(40 * MIN) // the fire is waiting for the engine
+  await typed($, 'hello')
+  g.release()
+  await f.clock.settle()
+  expect(count(f, 'begin')).toBe(0)
+})
+
+test('IR-2: a main turn.start while the fire reads usage → no begin', async ($, on) => {
+  const g = gated()
+  const { f } = await idleSession($, on)
+  f.usageGate = g.p
+  await f.clock.advance(40 * MIN)
+  await $.turn.start({ text: 'x', turnId: 't2' })
+  g.release()
+  await f.clock.settle()
+  expect(count(f, 'begin')).toBe(0)
+})
+
+test('IR-2: a /clear while the fire reads usage → no begin (the generation moved)', async ($, on) => {
+  const g = gated()
+  const { f } = await idleSession($, on)
+  f.usageGate = g.p
+  await f.clock.advance(40 * MIN)
+  await $.classic.SessionStart({ source: 'clear' })
+  g.release()
+  await f.clock.settle()
+  expect(count(f, 'begin')).toBe(0)
+})
+
+// A turn that started while the turn.complete hook was still reading usage re-arms nothing it should not: the fire
+// finds a turn running. Mutation gate: drop `!s.turnRunning` from the fire's gate → a begin under a running turn → red.
+test('IR-2: a timer armed while a turn is already running does not begin', async ($, on) => {
+  const g = gated()
+  const { f } = idleWorld(on)
+  await start($, f)
+  f.usageGate = g.p
+  const done = turn($, 't1') // maybeBegin waits for the engine
+  await f.clock.settle()
+  await $.turn.start({ text: 'x', turnId: 't2' }) // the next turn starts before t1's hook finished
+  g.release()
+  await done
+  await f.clock.advance(41 * MIN)
+  expect(count(f, 'begin')).toBe(0)
+})
+
+test('IR-2: below idle_threshold, no begin', async ($, on) => {
+  const { f } = await idleSession($, on, { usage: { tokens: 70000, window: 200000, percent: 35 } })
+  await f.clock.advance(41 * MIN)
+  expect(count(f, 'begin')).toBe(0)
+})
+
+test('IR-2: a member never arms (its lead is told by the daemon)', async ($, on) => {
+  const { f } = await idleSession($, on, {}, {}, IDLE_HELLO('member'))
+  await f.clock.advance(41 * MIN)
+  expect(count(f, 'begin')).toBe(0)
+})
+
+// Mutation gate: drop the hello condition (arm on env alone) → red.
+test('IR-2: a hello without idle numbers never arms, even with the env set', async ($, on) => {
+  const { f } = await idleSession($, on, {}, { PDX_RELAY_IDLE_MINUTES: '2', PDX_RELAY_IDLE_THRESHOLD: '1' }, HELLO())
+  await f.clock.advance(60 * MIN)
+  expect(count(f, 'begin')).toBe(0)
+})
+
+test('IR-2: when hello advertises it, PDX_RELAY_IDLE_MINUTES / PDX_RELAY_IDLE_THRESHOLD override the numbers', async ($, on) => {
+  const { f } = await idleSession($, on, { usage: { tokens: 10000, window: 200000, percent: 5 } }, { PDX_RELAY_IDLE_MINUTES: '2', PDX_RELAY_IDLE_THRESHOLD: '1' })
+  await f.clock.advance(2 * MIN)
+  expect(idleBegins(f)).toEqual(['relay begin --self --session sid-old --used 5 --window 200000 --reason idle --idle-minutes 2'])
+})
+
+test('IR-2: an env outside 1–50 minutes / 1–100 percent is ignored', async ($, on) => {
+  const { f } = await idleSession($, on, {}, { PDX_RELAY_IDLE_MINUTES: '51', PDX_RELAY_IDLE_THRESHOLD: '101' })
+  await f.clock.advance(40 * MIN)
+  expect(idleBegins(f)).toEqual([IDLE_BEGIN]) // the daemon's 40 / 40
+})
+
+// Mutation gates: drop the `lastAskPct` guard → red; set lastAskPct at begin (not at denial) → the withdrawn one below is red.
+test('IR-2: a denied idle ask asks again only at +10 points', async ($, on) => {
+  const { f, row } = await idleSession($, on)
+  await f.clock.advance(40 * MIN)
+  expect(count(f, 'begin')).toBe(1)
+  row.decide('denied')
+  await f.clock.settle()
+  f.usage = { tokens: 120000, window: 200000, percent: 60 }
+  await turnAndSettle($, f, 't2')
+  await f.clock.advance(40 * MIN)
+  expect(count(f, 'begin')).toBe(1)
+  f.usage = { tokens: 130000, window: 200000, percent: 65 }
+  await turnAndSettle($, f, 't3')
+  await f.clock.advance(40 * MIN)
+  expect(count(f, 'begin')).toBe(2)
+})
+
+test('IR-2: a withdrawn idle ask costs nothing: it asks again next idle period', async ($, on) => {
+  const { f } = await idleSession($, on)
+  await f.clock.advance(40 * MIN)
+  expect(count(f, 'begin')).toBe(1)
+  await typed($, 'back')
+  await f.clock.settle()
+  await turnAndSettle($, f, 't2') // same 55 %
+  await f.clock.advance(40 * MIN)
+  expect(count(f, 'begin')).toBe(2)
+})
+
+// Mutation gate: drop the floor guard → a begin at 55 % although the conversation has not grown → red.
+test('IR-2: under floor + minGrowth, no idle ask', async ($, on) => {
+  const waits = [{ exitCode: 0, stdout: APPROVAL('approved') }]
+  const base = pdxWith(waits)
+  const { f, clock } = await approvedRelay($, on, waits, { pdx: (argv: string[]) => (argv[1] === 'hello' ? { exitCode: 0, stdout: IDLE_HELLO() } : base(argv)) })
+  f.files['/data/relay/op-1.md'] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turn($, 'tw')
+  await clock.advance(50)
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await clock.settle()
+  await clock.advance(50)
+  f.usage = { tokens: 100000, window: 200000, percent: 50 } // the seed turn ends here: floor = 100000
+  await $.turn.start({ text: f.submits[1].text, turnId: 'ts' })
+  await turnAndSettle($, f, 'ts')
+  expect(count(f, 'begin')).toBe(1)
+  f.usage = { tokens: 110000, window: 200000, percent: 55 } // 10K over the floor
+  await turnAndSettle($, f, 't9')
+  await clock.advance(40 * MIN)
+  expect(count(f, 'begin')).toBe(1)
+  f.usage = { tokens: 120000, window: 200000, percent: 60 } // 20K over
+  await turnAndSettle($, f, 't10')
+  await clock.advance(40 * MIN)
+  expect(count(f, 'begin')).toBe(2)
+})
+
+// Mutation gate: drop the background check → a begin although a task runs → red.
+const STOP = (tasks: any[], crons: any[] = []) => ({ stop_hook_active: false, background_tasks: tasks, session_crons: crons }) as any
+for (const [what, stop, begins] of [
+  ['a running background task', STOP([{ id: 'b1', type: 'shell', status: 'running' }]), 0],
+  ['a session cron', STOP([], [{ id: 'c1' }]), 0],
+  ['only a finished task', STOP([{ id: 'b1', type: 'shell', status: 'completed' }]), 1],
+  ['no Stop seen yet', undefined, 1],
+] as const) {
+  test('IR-2: ' + what + ' → ' + (begins ? 'asks' : 'no ask') + ' (reporter off still tracks the background)', async ($, on) => {
+    const w = idleWorld(on)
+    on('classic.Stop', async () => ({}))
+    await start($, w.f)
+    if (stop) await $.classic.Stop(stop)
+    await turnAndSettle($, w.f, 't1')
+    await w.f.clock.advance(40 * MIN)
+    expect(count(w.f, 'begin')).toBe(begins)
+  })
+}
+
+// ---- no hold, withdraw (D6) ----
+
+// Mutation gate: hold an idle ask like the 70 % one → the prompt waits for the answer → red.
+test('IR-2: a prompt during an idle ask goes on unchanged at once and withdraws it: cancelled{resumed}, the card goes', async ($, on) => {
+  const { f, row } = await idleSession($, on)
+  await f.clock.advance(40 * MIN)
+  expect(f.statuses).toEqual(['接力等待核准中'])
+  await typed($, 'are you there?')
+  expect(f.submits.map((x) => [x.text, x.context])).toEqual([['are you there?', undefined]]) // not held
+  expect(f.statuses).toEqual(['接力等待核准中', undefined])
+  expect(f.sleeps).toEqual([])
+  await f.clock.settle()
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error resumed'])
+  expect(row).toBeDefined()
+  // the wait loop’s late answer changes nothing
+  expect(f.submits.length).toBe(1)
+})
+
+test('IR-2: a prompt while the idle begin is still out waits for begin, then goes on; an op it opened is withdrawn', async ($, on) => {
+  const g = gated()
+  const { f } = idleWorld(on, { usage: AT55 })
+  rowDaemon(f, { begin: async () => { await g.p; return { exitCode: 0, stdout: BEGIN_OK } } })
+  const base = f.pdx
+  f.pdx = (argv) => (argv[1] === 'hello' ? { exitCode: 0, stdout: IDLE_HELLO() } : base(argv))
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await f.clock.advance(40 * MIN) // begin is out
+  let done = false
+  const p = typed($, 'q').then(() => { done = true })
+  await f.clock.advance(1000)
+  expect(done).toBe(false) // it waits for begin's answer
+  g.release()
+  await f.clock.settle()
+  await p
+  expect(f.submits.map((x) => x.text)).toEqual(['q'])
+  expect(f.submits[0].context).toBeUndefined()
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error resumed'])
+  expect(f.statuses).toEqual([]) // it was never shown as awaiting
+  expect(waits(f)).toEqual([]) // and never waited on
+})
+
+test('IR-2: a prompt while the idle begin is out and begin opens nothing: it goes on, no report', async ($, on) => {
+  const g = gated()
+  const { f } = idleWorld(on)
+  rowDaemon(f, { begin: async () => { await g.p; return { exitCode: 13, stderr: 'self_relay_paused' } } })
+  const base = f.pdx
+  f.pdx = (argv) => (argv[1] === 'hello' ? { exitCode: 0, stdout: IDLE_HELLO() } : base(argv))
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await f.clock.advance(40 * MIN)
+  const p = typed($, 'q')
+  await f.clock.advance(1000)
+  g.release()
+  await f.clock.settle()
+  await p
+  expect(f.submits.map((x) => x.text)).toEqual(['q'])
+  expect(reports(f)).toEqual([])
+})
+
+// "70 % hold unchanged": a threshold ask holds exactly as before, with idle numbers advertised.
+test('IR-2: the 70 % ask still holds a prompt until its answer', async ($, on) => {
+  const { f, row } = idleWorld(on, { usage: AT72 })
+  await start($, f)
+  await turn($, 't1')
+  await f.clock.advance(50)
+  const p = typed($, 'q')
+  await f.clock.settle()
+  expect(f.submits.length).toBe(0) // held
+  row.decide('approved')
+  await p
+  expect(f.submits[0].context).toEqual([NOTE])
+  expect(reports(f).includes('relay report op-1 cancelled --error resumed')).toBe(false)
+})
+
+test('IR-2: the idle ask’s approval is the ordinary path: the write prompt follows', async ($, on) => {
+  const { f, row } = await idleSession($, on)
+  await f.clock.advance(40 * MIN)
+  row.decide('approved')
+  await f.clock.advance(100)
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].text).toMatch(/^\[pdx-relay op=op-1 n=[0-9a-f]{12,}\] /)
+  expect(reports(f)).toEqual(['relay report op-1 writing'])
+})
+
+test('IR-2: a compaction while the idle ask is open cancels it as compacted (D2)', async ($, on) => {
+  const { f } = await idleSession($, on)
+  await f.clock.advance(40 * MIN)
+  await compact($, 'auto')
+  await f.clock.settle()
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
+})
+
+// ---- telling an idle compaction apart (D4, §4.5) ----
+const compactedCalls = (f: Fake) => f.argvs.map(sub).filter((c) => c.startsWith('relay compacted'))
+
+// Mutation gates: drop `!s.turnRunning` → the in-turn case reports idle → red; drop the hello condition → red.
+test('IR-2: an auto compaction with no turn running is reported --trigger idle', async ($, on) => {
+  const { f } = await idleSession($, on)
+  await compact($, 'auto')
+  await f.clock.settle()
+  expect(compactedCalls(f)).toEqual(['relay compacted --session sid-old --trigger idle'])
+})
+
+test('IR-2: an auto compaction inside a turn is reported auto', async ($, on) => {
+  const { f } = await idleSession($, on)
+  await $.turn.start({ text: 'x', turnId: 't2' })
+  await compact($, 'auto')
+  await f.clock.settle()
+  expect(compactedCalls(f)).toEqual(['relay compacted --session sid-old --trigger auto'])
+})
+
+test('IR-2: a manual compaction stays manual', async ($, on) => {
+  const { f } = await idleSession($, on)
+  await compact($, 'manual')
+  await f.clock.settle()
+  expect(compactedCalls(f)).toEqual(['relay compacted --session sid-old --trigger manual'])
+})
+
+test('IR-2: a hello without idle numbers reports auto, as before', async ($, on) => {
+  const { f } = await idleSession($, on, {}, {}, HELLO())
+  await compact($, 'auto')
+  await f.clock.settle()
+  expect(compactedCalls(f)).toEqual(['relay compacted --session sid-old --trigger auto'])
+})
+
+test('IR-2: a member’s idle compaction is reported idle too', async ($, on) => {
+  const { f } = await idleSession($, on, {}, {}, IDLE_HELLO('member'))
+  await compact($, 'auto')
+  await f.clock.settle()
+  expect(compactedCalls(f)).toEqual(['relay compacted --session sid-old --trigger idle'])
+})
