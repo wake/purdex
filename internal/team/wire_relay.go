@@ -65,10 +65,12 @@ const (
 
 // Relay limits (spec §8.1, §8.7).
 const (
-	RelayThresholdPct  = 70      // U1: used ≥ 70 % triggers the ask
-	RelayMinGrowth     = 20000   // §8.1 loop guard: tokens a seeded conversation must grow before asking again
-	SelfRelayDeadlineS = 600     // §8.7: 10 minutes, absolute
-	RelayDir           = "relay" // <data_dir>/relay/<op id>.md
+	RelayThresholdPct     = 70      // U1: used ≥ 70 % triggers the ask
+	RelayIdleMinutes      = 40      // idle relay D1: a session idle this long is told to / asks for a relay
+	RelayIdleThresholdPct = 40      // idle relay D1: … when its context use is at least this much
+	RelayMinGrowth        = 20000   // §8.1 loop guard: tokens a seeded conversation must grow before asking again
+	SelfRelayDeadlineS    = 600     // §8.7: 10 minutes, absolute
+	RelayDir              = "relay" // <data_dir>/relay/<op id>.md
 )
 
 // RelayOp is one relay operation, self or member (spec §8.1).
