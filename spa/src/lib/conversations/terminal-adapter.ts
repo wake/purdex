@@ -9,6 +9,9 @@ import { hostSendPort } from './send'
 export function terminalAdapter(hostId: string, sessionId: string, sessionCode?: string): DeckAdapter {
   return {
     kind: 'terminal',
+    // the session's mod says `prompt`; the live capability is the only authority (a 409 no_mod fails one message and disables nothing by itself)
+    canSend: (capabilities) => capabilities?.send === 'prompt',
+    recall: true,
     port: () => hostSendPort(hostId, sessionId),
     upload: sessionCode ? (file, o) => agentUploadToPath(hostId, file, sessionCode, o) : null,
   }

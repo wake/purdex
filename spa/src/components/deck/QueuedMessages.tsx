@@ -17,9 +17,11 @@ interface Props {
   className?: string
   /** A worker's: the message stays in the not-yet-accepted frame while it is on its way and after it was handed over, until the transcript has it. */
   frameUntilEchoed?: boolean
+  /** False: the back-end offers no recall, so no Undo is drawn (default true). */
+  canUndo?: boolean
 }
 
-export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className = 'flex flex-col gap-1 px-3 pb-1', frameUntilEchoed = false }: Props) {
+export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className = 'flex flex-col gap-1 px-3 pb-1', frameUntilEchoed = false, canUndo = true }: Props) {
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState<string | null>(null)
   const shown = entries.filter((e) => e.state !== 'superseded')
@@ -37,7 +39,7 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
             <div key={e.id} data-testid="queued-message" data-state={e.state} className={`${PENDING_USER_BOX} px-3 py-2`}>
               <div className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{e.state === 'waiting' ? t('deck.send.waiting') : t('deck.user.queued')}</div>
               <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
-              <button type="button" className="rounded px-0 deck-t-down text-accent underline-offset-2 hover:underline" onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>
+              {canUndo && <button type="button" className="rounded px-0 deck-t-down text-accent underline-offset-2 hover:underline" onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>}
             </div>
           )
         }

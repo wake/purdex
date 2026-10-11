@@ -53,6 +53,7 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Pro
         entries={entries}
         className="flex flex-col gap-2"
         frameUntilEchoed={adapterOf(key)?.kind === 'worker'}
+        canUndo={adapterOf(key)?.recall !== false}
         onUndo={(id) => { recallHeld(key, queue, id) }}
         onResend={(id) => { queue.resend(id) }}
         onDismiss={(id) => queue.dismiss(id)}

@@ -64,6 +64,9 @@ export function workerAdapter(hostId: string, executionId: string): DeckAdapter 
   const draftKey = workerDraftKey(hostId, executionId)
   return {
     kind: 'worker',
+    // no mod to wait for: Nexen answers for itself, and says so when it cannot (an older daemon reports no capability for a worker at all)
+    canSend: () => true,
+    recall: true, // the 3 s undo window is the App's: Up and Undo bring it back
     port: () => ({
       echo: ECHO,
       async submit(text) {

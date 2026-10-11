@@ -8,7 +8,7 @@ import { useDeckTypeStore } from '../../stores/useDeckTypeStore'
 import { expandPlaceholders, removePlaceholderText } from '../../lib/conversations/image-placeholder'
 import { reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, takeAttachments, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { registerDropTarget } from '../../lib/conversations/pane-drop'
-import { adapterOf } from '../../lib/conversations/deck-adapter'
+import { pickAdapter } from '../../lib/conversations/deck-adapter'
 import { terminalAdapter } from '../../lib/conversations/terminal-adapter'
 import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
@@ -87,7 +87,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const dKey = draftKey(paneKey, hostId, sessionId)
   // The back-end this input runs on: the adapter its pane bound to the key (a worker's), else a terminal session's (U4-2)
   const terminal = useMemo(() => terminalAdapter(hostId, sessionId, sessionCode), [hostId, sessionId, sessionCode])
-  const adapter = adapterOf(dKey) ?? terminal
+  const adapter = pickAdapter(dKey, capabilities, terminal)
   const upload = adapter.upload
   const queue = sendQueueFor(dKey, adapter.port)
   const entries = useSyncExternalStore(queue.subscribe, queue.entries)
@@ -135,8 +135,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
 
   // The queue is driven by the pane (`useSendQueueDriver`, under every view); this input only types and shows.
   // the live capability is the only authority: a 409 no_mod fails that one message and disables nothing by itself
-  // (a worker has no mod: its own back-end answers, and says so when it cannot)
-  const noMod = adapter.kind === 'terminal' && capabilities?.send !== 'prompt'
+  const noMod = !adapter.canSend(capabilities)
   const change = (v: string) => { setDraft(v); writeDraft(dKey, v); reconcileAttachments(dKey, v); setHint(null); if (v !== '') discardCleared(dKey) } // typing something new ends the undo window
   const canUndoClear = useHasCleared(dKey)
   const restoreCleared = () => {
@@ -262,7 +261,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && hasCleared(dKey)) { e.preventDefault(); restoreCleared() }
                 // Up in an empty box (nothing typed, no chip, no upload on its way) calls back every message the App still holds, as the terminal does;
                 // anywhere else Up is the caret's
-                if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) && queue.heldCount() > 0) { // (a draft Esc just cleared is not overwritten: its undo window is the box's)
+                if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && adapter.recall && draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) && queue.heldCount() > 0) { // (a draft Esc just cleared is not overwritten: its undo window is the box's)
                   e.preventDefault()
                   recallHeld(dKey, queue)
                 }

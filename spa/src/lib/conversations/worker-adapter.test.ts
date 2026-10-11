@@ -1,6 +1,6 @@
 // U4-2: the worker's deck adapter (what the deck's input does on a Nexen execution) and the registry the input finds its adapter in.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { adapterOf, bindAdapter, clearAllAdapters, forgetAdaptersWhere } from './deck-adapter'
+import { adapterOf, bindAdapter, clearAllAdapters, forgetAdaptersWhere, pickAdapter, unavailableAdapter } from './deck-adapter'
 import { draftKey, forgetDraft, readDraft, writeDraft, clearAllDrafts } from './draft-memory'
 import { SendQueue, UNDO_MS, clearAllSendQueues, sendQueueFor } from './send-queue'
 import { SUBMIT_TIMEOUT_MS, outcomeMessage } from './send'
@@ -189,6 +189,33 @@ describe('the adapter registry', () => {
     expect(terminalAdapter(H, 's1').upload).toBeNull()
     expect(terminalAdapter(H, 's1', 'dev001').draft).toBeUndefined()
     expect(terminalAdapter(H, 's1', 'dev001').kind).toBe('terminal')
+  })
+
+  it('pickAdapter: what the pane bound; else for a session another back-end owns the unavailable one, never the terminal\'s; else the terminal\'s', async () => {
+    const terminal = terminalAdapter(H, 's1', 'dev001')
+    const worker = workerAdapter(H, E)
+    expect(pickAdapter(KEY, { send: 'prompt' } as never, terminal)).toBe(terminal)
+    expect(pickAdapter(KEY, undefined, terminal)).toBe(terminal)
+    expect(pickAdapter(KEY, { send: 'execution' } as never, terminal)).toBe(unavailableAdapter)
+    bindAdapter(KEY, worker)
+    expect(pickAdapter(KEY, { send: 'execution' } as never, terminal)).toBe(worker)
+    expect(pickAdapter(KEY, undefined, terminal)).toBe(worker) // an older daemon says nothing for a worker; its pane still bound it
+    expect(await unavailableAdapter.port().submit('x', 'c')).toEqual({ kind: 'no_mod' })
+    expect(await unavailableAdapter.port().interrupt()).toEqual({ kind: 'no_mod' })
+    expect(unavailableAdapter.upload).toBeNull()
+  })
+
+  it('each adapter reads its own capability: the terminal\'s only `prompt` (a value it does not know is "cannot send"), the worker\'s always', () => {
+    const t = terminalAdapter(H, 's1', 'dev001'), w = workerAdapter(H, E)
+    expect(t.canSend({ send: 'prompt' } as never)).toBe(true)
+    for (const send of ['execution', 'typed', 'none', undefined]) expect(t.canSend({ send } as never)).toBe(false)
+    expect(t.canSend(undefined)).toBe(false)
+    expect(w.canSend(undefined)).toBe(true)
+    expect(w.canSend({ send: 'execution' } as never)).toBe(true)
+    expect(t.recall).toBe(true)
+    expect(w.recall).toBe(true)
+    expect(unavailableAdapter.canSend({ send: 'prompt' } as never)).toBe(false)
+    expect(unavailableAdapter.recall).toBe(false)
   })
 
   it('a released pane, and a session the pane no longer shows, let their bindings go', () => {
