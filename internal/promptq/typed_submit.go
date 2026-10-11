@@ -73,6 +73,18 @@ func (q *Queue) MarkEntering(id string) error {
 // MarkEntered: Enter went out.
 func (q *Queue) MarkEntered(id string) error { return q.step(id, PhaseEntered, PhaseEntering) }
 
+// MarkEnterRefused: tmux definitively declined the Enter (nothing was sent), so the row steps back from entering to filled
+// and the composer can be cleaned up with ClearFilled.
+func (q *Queue) MarkEnterRefused(id string) error {
+	return q.stepWith(id, PhaseFilled, func(e *entry) bool { return e.phase == PhaseEntering }, func(e *entry) { e.enterMark = false })
+}
+
+// MarkGaveUp settles a row whose cleanup did not succeed (ClearIf dropped not_ours, or no answer): cleared with the reason
+// cleanup_gave_up, so it stops counting toward the open typed rows. Only a row that was never entering.
+func (q *Queue) MarkGaveUp(id string) error {
+	return q.stepWith(id, PhaseCleared, clearable, func(e *entry) { e.res.Reason = "cleanup_gave_up" })
+}
+
 // clearable: the row's text may be in the composer and Enter was never marked.
 func clearable(e *entry) bool {
 	return e.phase == PhaseFilled || (e.phase == PhaseUnknown && !e.enterMark)

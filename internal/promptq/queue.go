@@ -146,12 +146,17 @@ type Queue struct {
 	busy   map[string]*entry   // session -> the entry handed out (one at a time)
 	ledger map[string]*entry   // client_msg_id -> entry (submits)
 	wake   map[string]chan struct{}
+	// seen: when a mod owner was last seen per session (HasOwner, NoOwnerFor, Next); started: the queue's start, the first
+	// sighting of every session (NoOwnerFor).
+	seen    map[string]time.Time
+	started time.Time
 }
 
 // New returns a queue over the owners.
 func New(o Owners) *Queue {
 	return &Queue{owners: o, Now: time.Now, queues: map[string][]*entry{}, leases: map[string]*entry{},
-		busy: map[string]*entry{}, ledger: map[string]*entry{}, wake: map[string]chan struct{}{}}
+		busy: map[string]*entry{}, ledger: map[string]*entry{}, wake: map[string]chan struct{}{},
+		seen: map[string]time.Time{}, started: time.Now()}
 }
 
 func (q *Queue) wait() time.Duration {
@@ -170,8 +175,30 @@ func (q *Queue) handTimeout() time.Duration {
 
 // HasOwner: some live mod stream can take a prompt for the session now (the conversation's `send` capability).
 func (q *Queue) HasOwner(sessionID string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	_, ok := q.owners.OwnerOf(sessionID)
+	if ok {
+		q.seen[sessionID] = q.Now()
+	}
 	return ok
+}
+
+// NoOwnerFor is 0 while a mod owns the session, else how long it has been since one was last seen (the queue's start counts
+// as the first sighting, so a daemon that just started does not call a session ownerless before its mod could connect).
+func (q *Queue) NoOwnerFor(sessionID string) time.Duration {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := q.Now()
+	if _, ok := q.owners.OwnerOf(sessionID); ok {
+		q.seen[sessionID] = now
+		return 0
+	}
+	at := q.seen[sessionID]
+	if at.Before(q.started) {
+		at = q.started
+	}
+	return now.Sub(at)
 }
 
 func newID() string {
@@ -240,6 +267,11 @@ func (q *Queue) sweepLedger() {
 	for k, e := range q.ledger {
 		if forgettable(e) && now.Sub(e.finishedAt) > LedgerTTL {
 			delete(q.ledger, k)
+		}
+	}
+	for k, at := range q.seen {
+		if now.Sub(at) > LedgerTTL {
+			delete(q.seen, k)
 		}
 	}
 	// A flood of distinct ids: forget the OLDEST settled rows first; an open (queued or handed-out) row is never forgotten,
@@ -426,6 +458,9 @@ func (q *Queue) Next(ctx context.Context, stream, sessionID string, wait time.Du
 		// an owner read before another poll or an expiry changed the queue. (The registry itself can still move on right
 		// after: the mod re-reads its session id before it submits, and the result's owner re-check settles the rest.)
 		owner, ok := q.owners.OwnerOf(sessionID)
+		if ok {
+			q.seen[sessionID] = q.Now()
+		}
 		// A handed-out request whose result never came is unknown after HandTimeout whether or not its caller is still
 		// waiting (a caller that went away leaves nobody to enforce it): the session must not stay blocked for good.
 		if b := q.busy[sessionID]; b != nil && q.Now().Sub(b.handedAt) >= q.handTimeout() {
