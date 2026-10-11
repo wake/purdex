@@ -127,4 +127,47 @@ describe('QuickReplies', () => {
     fireEvent.click(screen.getByTestId('quick-reply'))
     expect(q.entries().map((e) => e.text)).toEqual(['rm -rf build'])
   })
+  // atk of #2685: the confirmation belongs to the conversation and to the moment it was asked in
+  it('a second tap in ANOTHER session does not count as the confirmation of the first (the pane moved on: /clear, a relay)', () => {
+    hostReplies(['rm -rf build'])
+    const { rerender } = render(ui())
+    fireEvent.click(screen.getByTestId('quick-reply'))
+    expect(screen.getByTestId('quick-reply-note')).toBeInTheDocument()
+    const S2 = 's2'
+    const KEY2 = draftKey(P, H, S2)
+    bindAdapter(KEY2, adapter())
+    sendQueueFor(KEY2, () => adapter().port())
+    rerender(ui({ sessionId: S2 }))
+    expect(screen.queryByTestId('quick-reply-note')).toBeNull()
+    fireEvent.click(screen.getByTestId('quick-reply'))
+    expect(sendQueueFor(KEY2, () => adapter().port()).entries()).toHaveLength(0) // asks anew
+    expect(screen.getByTestId('quick-reply-note')).toBeInTheDocument()
+  })
+
+  it('the row stepping aside (a card, a lost stream) disarms the confirmation: it asks again when the row is back', () => {
+    hostReplies(['rm -rf build'])
+    const { rerender } = render(ui())
+    fireEvent.click(screen.getByTestId('quick-reply'))
+    rerender(ui({ asking: true }))
+    rerender(ui({ asking: false }))
+    expect(screen.queryByTestId('quick-reply-note')).toBeNull()
+    fireEvent.click(screen.getByTestId('quick-reply'))
+    expect(sendQueueFor(KEY, () => adapter().port()).entries()).toHaveLength(0)
+    rerender(ui({ locked: true }))
+    rerender(ui({ locked: false }))
+    fireEvent.click(screen.getByTestId('quick-reply'))
+    expect(sendQueueFor(KEY, () => adapter().port()).entries()).toHaveLength(0)
+  })
+
+  it('the confirmation is announced (a status region) and tied to the button that is waiting for it', () => {
+    hostReplies(['rm -rf build', 'continue'])
+    render(ui())
+    const [danger, other] = screen.getAllByTestId('quick-reply')
+    expect(danger).not.toHaveAttribute('aria-describedby')
+    fireEvent.click(danger)
+    const note = screen.getByTestId('quick-reply-note')
+    expect(note).toHaveAttribute('role', 'status')
+    expect(danger).toHaveAttribute('aria-describedby', note.id)
+    expect(other).not.toHaveAttribute('aria-describedby')
+  })
 })

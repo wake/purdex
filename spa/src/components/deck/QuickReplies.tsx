@@ -4,7 +4,7 @@
 // worker: Nexen under the pane's lease) and the message can be taken back while the App still holds it. What is typed in the box stays where it is.
 // The row steps aside for a dock card (a question or a permission request waits above the input) and is not drawn where the conversation cannot be
 // sent to. Collapsing it is a per-device setting (`useWorkerSettingsStore.quickRepliesCollapsed`), so it outlives the component.
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { CaretDown, CaretRight } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
@@ -28,6 +28,12 @@ interface Props {
   locked?: boolean
 }
 
+/** The text a tap would send (what the guard remembers), or null when there is nothing to send. */
+function textOf(raw: string): string | null {
+  const plan = planSend(raw)
+  return plan.ok ? plan.text : null
+}
+
 export function QuickReplies({ paneKey, hostId, sessionId, capabilities, asking, locked = false }: Props) {
   const t = useI18nStore((s) => s.t)
   const replies = useQuickReplies(hostId)
@@ -39,15 +45,24 @@ export function QuickReplies({ paneKey, hostId, sessionId, capabilities, asking,
   const terminal = useMemo(() => terminalAdapter(hostId, sessionId), [hostId, sessionId])
   const adapter = pickAdapter(dKey, capabilities, terminal)
   const guard = useRef(new DestructiveGuard())
-  const [confirming, setConfirming] = useState(false)
+  // The tap that is waiting for its second one (the text), if any: it names the button the note belongs to.
+  const [confirming, setConfirming] = useState<string | null>(null)
+  const noteId = useId()
+  const shown = !(replies.length === 0 || asking || locked || !adapter.canSend(capabilities))
+  // The confirmation belongs to the conversation and to the moment it was asked in: another session on this pane (/clear, a relay), or the row
+  // stepping aside (a card, a lost stream), ends it, so a tap after that asks again.
+  const scope = `${dKey}\0${shown}`
+  const [seenScope, setSeenScope] = useState(scope)
+  if (seenScope !== scope) { setSeenScope(scope); setConfirming(null) }
+  useEffect(() => { guard.current.reset() }, [scope])
 
-  if (replies.length === 0 || asking || locked || !adapter.canSend(capabilities)) return null
+  if (!shown) return null
 
   const send = (text: string) => {
     const plan = planSend(text)
     if (!plan.ok) return
-    if (guard.current.check(plan.text) === 'confirm') { setConfirming(true); return }
-    setConfirming(false)
+    if (guard.current.check(plan.text) === 'confirm') { setConfirming(plan.text); return }
+    setConfirming(null)
     // No box to keep: the message is only its text, so Undo puts the text in front of what is typed
     sendQueueFor(dKey, adapter.port).enqueue(plan.text)
   }
@@ -66,6 +81,7 @@ export function QuickReplies({ paneKey, hostId, sessionId, capabilities, asking,
           <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none]">
             {replies.map((r) => (
               <button key={r.id} type="button" data-testid="quick-reply" title={r.text} onClick={() => send(r.text)}
+                aria-describedby={confirming !== null && confirming === textOf(r.text) ? noteId : undefined}
                 className="min-h-9 max-w-[16rem] shrink-0 cursor-pointer truncate rounded-full border border-border-subtle bg-surface-secondary px-3.5 deck-t-down text-text-secondary transition-colors hover:border-border-active hover:text-text-primary">
                 {r.text}
               </button>
@@ -73,7 +89,7 @@ export function QuickReplies({ paneKey, hostId, sessionId, capabilities, asking,
           </div>
         )}
       </div>
-      {confirming && !collapsed && <div data-testid="quick-reply-note" className="px-1 pt-1 deck-t-down text-status-warning-text">{t('deck.send.confirm')}</div>}
+      {confirming !== null && !collapsed && <div id={noteId} role="status" data-testid="quick-reply-note" className="px-1 pt-1 deck-t-down text-status-warning-text">{t('deck.send.confirm')}</div>}
     </div>
   )
 }
