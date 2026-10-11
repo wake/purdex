@@ -93,8 +93,8 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const overlayRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const approveRef = useRef<HTMLButtonElement>(null)
-  // When the dialog last showed; the keyboard guard counts from here.
-  const shownAt = useRef(0)
+  // True for `keyboardGuard.ms` after the dialog shows (or is restored): a keyboard-triggered click is ignored meanwhile.
+  const keyboardGuarded = useRef(false)
   // Where the keyboard was when the panel last took it; null while the panel has not taken it (mounted minimized).
   const focusBefore = useRef<{ el: Element | null } | null>(null)
 
@@ -113,11 +113,13 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
     if (!minimized) {
       const active = document.activeElement
       focusBefore.current = { el: inDialog(active) ? (focusBefore.current?.el ?? null) : active }
-      shownAt.current = Date.now()
+      // The keyboard guard runs from here (also from a restore): see the header.
+      keyboardGuarded.current = keyboardGuard.ms > 0
+      const guardTimer = setTimeout(() => { keyboardGuarded.current = false }, keyboardGuard.ms)
       // 核准 when it can be pressed, else the panel (a lead form that does not validate yet).
       const approve = approveRef.current
       ;(approve && !approve.disabled ? approve : panelRef.current)?.focus()
-      return
+      return () => clearTimeout(guardTimer)
     }
     const took = focusBefore.current
     focusBefore.current = null
@@ -215,7 +217,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const canReveal = parseOriginTmux(approval.origin.tmux) !== null
   // The click handler of all three buttons: the keyboard guard, then the decision.
   const onButton = (e: React.MouseEvent, decision: Decision, reveal = false) => {
-    if (e.detail === 0 && Date.now() - shownAt.current < keyboardGuard.ms) return
+    if (e.detail === 0 && keyboardGuarded.current) return
     void decide(decision, reveal)
   }
 
