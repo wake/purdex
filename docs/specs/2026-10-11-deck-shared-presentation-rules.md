@@ -21,7 +21,7 @@ iOS uses the same wording.
 | User (you) | purple family; block with border + background at the same strength as the selected sidebar item | `你 · {time}` |
 | User, absorbed mid-turn (queued in the terminal, read at a tool boundary) | as user | `你 · {time} · 回合中送達` (new key; replaces the misleading `你 · 排隊中` for delivered messages) |
 | Agent | no block; header `◆ {model} · {time}` one step brighter than system grey | — |
-| Peer message | cyan family; keep the original line breaks | `來自 {name} · {time}` |
+| Peer message | cyan family; keep the original line breaks; **collapsed to its first lines** (Mac 3, iOS by screen size) with the body one step dimmer; hover (iOS: press) brightens text and frame one step; a click / tap on the block toggles the full text; ≤ the collapsed line count → not collapsed, not clickable; expansion remembered per message for the tab (user 2026-10-11) | `來自 {name} · {time}` |
 | Task report / background report | grey, dashed rule | `背景任務回報` |
 | Scheduled wake-up | grey | `排程喚醒` |
 | System rows (interrupted, compacted, …) | `--text-system` grey (#949494 dark / #6e6e6e light), one size under the text | `已中斷`, `Context 已壓縮 · {time}` |
@@ -36,6 +36,9 @@ iOS uses the same wording.
 - File change (edit / create) card: collapsed to the **first 3 diff lines**, dimmed, `+N −M` visible; an expand control at the end of
   the header shows the longer view (16 lines) and `顯示全部 {n} 行` when there is more. No expand control when the diff is ≤3 lines.
   Expansion is remembered per step for the tab.
+- **A step never folds or unfolds by itself** (P1): a finished step keeps the state it had while running (output folded, diff at
+  its first lines); only the person's click changes it. iOS may pick its own line counts for the short / long views (user
+  2026-10-11: iOS auto-collapsed finished tools — not allowed).
 - Tool-row text (paths, commands) is one step dimmer than prose.
 - Subagent step: `子 agent · {type}`, description, time (ticking while running), state dot; unfolds its own steps in place, one level
   indented.
