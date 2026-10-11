@@ -348,6 +348,19 @@ let retiring = 0
 /** Retired queues still waiting for a request in flight (they are no longer in the registry). */
 export const retiringQueueCount = (): number => retiring
 
+// A retired queue's request in flight is still a write on its way to the execution: the pane's hand-over controls wait for it (#2659).
+// Counted per key and announced, because a retired queue emits nothing of its own.
+const retiringByKey = new Map<string, number>()
+const retiringListeners = new Set<() => void>()
+const announceRetiring = (): void => retiringListeners.forEach((l) => l())
+export const subscribeRetiring = (fn: () => void): (() => void) => { retiringListeners.add(fn); return () => { retiringListeners.delete(fn) } }
+/** How many retired queues whose key starts with `prefix` still have a request in flight. */
+export function retiringInFlight(prefix: string): number {
+  let n = 0
+  for (const [key, c] of retiringByKey) if (key.startsWith(prefix)) n += c
+  return n
+}
+
 /**
  * Retire the queues whose key matches (the pane shows another session now): see `SendQueue.retire`. Each is detached from the
  * registry AT ONCE, so the next `sendQueueFor` of the same key (the pane flips back) is a fresh queue; the old one only waits
@@ -358,13 +371,21 @@ export function retireSendQueues(match: (key: string) => boolean): void {
     if (!match(key)) continue
     queues.delete(key)
     retiring++
-    q.retire(() => { retiring-- })
+    retiringByKey.set(key, (retiringByKey.get(key) ?? 0) + 1)
+    q.retire(() => {
+      retiring--
+      const left = (retiringByKey.get(key) ?? 1) - 1
+      if (left > 0) retiringByKey.set(key, left); else retiringByKey.delete(key)
+      announceRetiring()
+    })
+    announceRetiring()
   }
 }
 
 /** Tests only. */
 export function clearAllSendQueues(): void {
   retiring = 0
+  retiringByKey.clear()
   queues.forEach((q) => q.dispose())
   queues.clear()
 }

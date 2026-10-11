@@ -22,7 +22,10 @@ import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import { NexApiError } from '../../lib/nex/types'
-import { takeToTerminal } from '../../lib/nex/handoff'
+import { takeBack, takeToTerminal } from '../../lib/nex/handoff'
+import { exitWorker } from '../../lib/nex/exit-worker'
+import { getTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
+import { getNexClientId } from '../../lib/nex/client-id'
 import { closeTab } from '../../lib/tab-lifecycle'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), answerPermission: vi.fn() }))
@@ -38,7 +41,8 @@ const item = { type: 'user', id: 'u1', at: 1, index: 0, text: 'hello worker', so
 const turn: Turn = { id: 't0', index: 0, started_at: 1, outcome: 'done', items: [item] }
 const entry = (): ConversationEntry => ({ doc: { ...emptyDoc(), turns: [turn], header: { status: 'running', title: '', backend: 'execution', usage: { model: 'claude-haiku-5-5', effort: 'medium' } } as never }, status: 'live', reason: '', paging: false, subagents: {} })
 
-vi.mock('../../lib/nex/handoff', async (orig) => ({ ...(await orig<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn(async () => ({ result: {}, swapped: true })) }))
+vi.mock('../../lib/nex/handoff', async (orig) => ({ ...(await orig<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn(async () => ({ result: {}, swapped: true })), takeBack: vi.fn(async () => ({ result: {}, swapped: true })) }))
+vi.mock('../../lib/nex/exit-worker', async (orig) => ({ ...(await orig<typeof import('../../lib/nex/exit-worker')>()), exitWorker: vi.fn() }))
 vi.mock('../../lib/tab-lifecycle', async (orig) => ({ ...(await orig<typeof import('../../lib/tab-lifecycle')>()), closeTab: vi.fn() }))
 
 const acquire = vi.fn(() => vi.fn())
@@ -59,6 +63,7 @@ beforeEach(() => {
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease: vi.fn(async () => 'lease-1'), release: vi.fn(), forget: vi.fn(), touch: vi.fn() } as never)
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({} as never)
   vi.mocked(api.answerPermission).mockReset()
+  vi.mocked(takeToTerminal).mockClear(); vi.mocked(takeBack).mockClear(); vi.mocked(exitWorker).mockClear(); vi.mocked(closeTab).mockClear()
   vi.mocked(api.interruptExecution).mockReset().mockResolvedValue({} as never)
   vi.mocked(api.uploadWorkerFile).mockReset().mockImplementation(async (_h, _e, f) => ({ path: `/w/purdex/${f.name}`, name: f.name, size: 1 }) as never)
   acquire.mockClear()
@@ -227,6 +232,98 @@ describe('WorkerDeckPane', () => {
     expect(live()).toContain('2 background command(s), 1 background subagent(s)')
     setSlice({ tasks: {} })
     expect(live()).not.toContain('background')
+  })
+
+  // --- U4-4b: the worker's current facts (stream state, observers, lease) are small chips on the right of the status row ---
+  it('the status row\'s right side says the stream state, the observers and the lease holder, small', () => {
+    seed(summary({ state: 'running', observers: 2, lease: { principal_id: 'someone-else', expires_at: Date.now() + 60_000 } }))
+    setSlice({ sse: 'open' })
+    render(ui())
+    const chips = screen.getByTestId('worker-chips')
+    expect(chips).toHaveTextContent('live · 2 observers · lease: someone-else')
+    expect(within(chips).getByTestId('worker-chips-dot').className).toContain('bg-status-success')
+  })
+
+  it('a lease this client holds says "you"; none says so; a closed stream shows the error dot', () => {
+    seed(summary({ state: 'running', observers: 1, lease: { principal_id: `h/${getNexClientId()}`, expires_at: Date.now() + 60_000 } }))
+    setSlice({ sse: 'closed' })
+    render(ui())
+    const chips = screen.getByTestId('worker-chips')
+    expect(chips).toHaveTextContent('disconnected · 1 observers · lease: you')
+    expect(within(chips).getByTestId('worker-chips-dot').className).toContain('bg-status-error')
+    act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'running', observers: 0 }) as never) })
+    expect(screen.getByTestId('worker-chips')).toHaveTextContent('no lease')
+  })
+
+  // --- U4-4b: the hand-over controls (take to terminal, exit): the same flow as the room's, from the deck's own small menu and the status bar's terminal button ---
+  const openMenu = () => fireEvent.click(screen.getByTestId('worker-deck-view-menu'))
+
+  it('the view menu offers 終端機 (take to terminal) for a session-bound claude worker: an idle one goes at once', async () => {
+    seed(summary({ state: 'idle' }))
+    render(ui())
+    openMenu()
+    fireEvent.click(screen.getByTestId('view-mode-terminal'))
+    await vi.waitFor(() => expect(takeToTerminal).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(takeToTerminal).mock.calls[0][0]).toMatchObject({ hostId: H, executionId: E, cwd: '/w/purdex' })
+  })
+
+  it('a running turn asks first: the same confirm as the room\'s, then takes it', async () => {
+    seed(summary({ state: 'running' }))
+    render(ui())
+    openMenu()
+    fireEvent.click(screen.getByTestId('view-mode-terminal'))
+    expect(takeToTerminal).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('takeback-confirm'))
+    await vi.waitFor(() => expect(takeToTerminal).toHaveBeenCalledTimes(1))
+  })
+
+  it('a worker handed over from a terminal session goes back to it (take-back), not to a new one', async () => {
+    seed(summary({ state: 'idle' }))
+    const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
+    render(ui({ from }))
+    openMenu()
+    fireEvent.click(screen.getByTestId('view-mode-terminal'))
+    await vi.waitFor(() => expect(takeBack).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(takeBack).mock.calls[0][0]).toMatchObject({ hostId: H, executionId: E, from })
+    expect(takeToTerminal).not.toHaveBeenCalled()
+  })
+
+  it('not offered where the room does not offer it: a queued worker, a non-claude provider', () => {
+    seed(summary({ state: 'queued', session_id: undefined }))
+    render(ui())
+    openMenu() // the placeholder keeps the small menu (the way back to the room), but offers no terminal
+    expect(screen.queryByTestId('view-mode-terminal')).toBeNull()
+    cleanup()
+    seed(summary({ state: 'idle', provider: 'codex' }))
+    render(ui())
+    openMenu()
+    expect(screen.queryByTestId('view-mode-terminal')).toBeNull()
+  })
+
+  it('the status bar\'s terminal button reaches the deck too: the pane is registered while it is mounted, and taken back when it goes', () => {
+    seed(summary({ state: 'idle' }))
+    const { unmount } = render(ui())
+    expect(getTakeToTerminal('p-w')).toMatchObject({ canTake: true, busy: false })
+    unmount()
+    expect(getTakeToTerminal('p-w')).toBeNull()
+  })
+
+  it('退出 is a small button on the status row: an idle worker exits at once, a running one asks first', async () => {
+    vi.mocked(exitWorker).mockReset().mockResolvedValue({ state: 'terminated', archived: false } as never)
+    seed(summary({ state: 'idle' }))
+    render(ui())
+    fireEvent.click(screen.getByTestId('worker-deck-exit'))
+    await vi.waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(exitWorker).mock.calls[0][0]).toMatchObject({ hostId: H, executionId: E })
+    cleanup()
+    vi.mocked(exitWorker).mockClear()
+    useExecutionStore.setState({ executions: {} })
+    seed(summary({ state: 'running' }))
+    render(ui())
+    fireEvent.click(screen.getByTestId('worker-deck-exit'))
+    expect(exitWorker).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    await vi.waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
   })
 
   it('a lease another principal holds is said, not swallowed', () => {
@@ -410,5 +507,82 @@ describe('WorkerDeckPane', () => {
     expect(vi.mocked(takeToTerminal).mock.calls[0][0]).toMatchObject({ hostId: H, executionId: E })
     fireEvent.click(within(screen.getByTestId('worker-ended-footer')).getByRole('button', { name: 'Close tab' }))
     expect(closeTab).toHaveBeenCalledWith('t')
+  })
+  // --- the controls outlive the conversation's state, and wait for the pane's own unsent messages ---
+  it('a worker with no session id yet (placeholder) can still be exited, with the running-turn confirm', async () => {
+    vi.mocked(exitWorker).mockReset().mockResolvedValue({ state: 'terminated', archived: false } as never)
+    seed(summary({ state: 'running', session_id: undefined }))
+    render(ui())
+    expect(screen.getByTestId('worker-deck-placeholder')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('worker-deck-exit'))
+    expect(exitWorker).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    await vi.waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
+  })
+
+  it('an unreadable conversation keeps 退出 and the status bar\'s terminal button answerable (the confirm is not inside the deck\'s footer)', () => {
+    seed(summary({ state: 'running' }))
+    useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: { ...entry(), status: 'error', doc: { ...emptyDoc(), turns: [] } } } } as never)
+    render(ui())
+    expect(screen.getByTestId('deck-unreadable')).toBeInTheDocument()
+    act(() => { getTakeToTerminal('p-w')!.takeToTerminal() })
+    expect(screen.getByTestId('takeback-confirm')).toBeInTheDocument()
+  })
+
+  it('a message the pane still holds (undo window) freezes 退出 and 帶回終端機 until it has gone out', async () => {
+    vi.useFakeTimers()
+    seed(summary({ state: 'idle' }))
+    render(ui())
+    typeAndSend('run the tests')
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'undo')
+    expect(screen.getByTestId('worker-deck-exit')).toBeDisabled()
+    expect(getTakeToTerminal('p-w')).toMatchObject({ canTake: true, busy: true })
+    getTakeToTerminal('p-w')!.takeToTerminal()
+    expect(takeToTerminal).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) }) // handed to Nexen: nothing of the pane's is on its way any more
+    expect(screen.getByTestId('worker-deck-exit')).not.toBeDisabled()
+    expect(getTakeToTerminal('p-w')).toMatchObject({ busy: false })
+  })
+
+  it('a confirm opened before a message was typed does not run once the message is on its way', async () => {
+    vi.useFakeTimers()
+    vi.mocked(exitWorker).mockReset().mockResolvedValue({ state: 'terminated', archived: false } as never)
+    seed(summary({ state: 'running' }))
+    render(ui())
+    fireEvent.click(screen.getByTestId('worker-deck-exit'))
+    typeAndSend('one more thing')
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(exitWorker).not.toHaveBeenCalled()
+  })
+  it('a send still in flight when the session moves on keeps 退出 and 帶回終端機 held until it has answered (#2659)', async () => {
+    vi.useFakeTimers()
+    let answer: (v: unknown) => void = () => {}
+    vi.mocked(api.sendMessage).mockReset().mockImplementation(() => new Promise((r) => { answer = r }) as never)
+    seed(summary({ state: 'idle' }))
+    render(ui())
+    typeAndSend('run the tests')
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sending')
+    const SID2 = '11111111-2222-4333-8444-555555555555'
+    useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: entry(), [`${H}\0${SID2}`]: entry() } } as never)
+    act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'idle', session_id: SID2 }) as never) })
+    expect(acquire).toHaveBeenCalledWith(H, SID2)
+    expect(screen.getByTestId('worker-deck-exit')).toBeDisabled() // the new session's queue is empty, the old request still runs
+    expect(getTakeToTerminal('p-w')).toMatchObject({ busy: true })
+    await act(async () => { answer({}); await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId('worker-deck-exit')).not.toBeDisabled()
+    expect(getTakeToTerminal('p-w')).toMatchObject({ busy: false })
+  })
+
+  it('the chips sit on the status row where the deck draws one, and with the controls where it does not', () => {
+    seed(summary())
+    render(ui())
+    expect(within(screen.getByTestId('worker-deck-footer')).getByTestId('worker-chips')).toBeInTheDocument()
+    expect(within(screen.getByTestId('worker-deck-handoff')).queryByTestId('worker-chips')).toBeNull()
+    cleanup()
+    seed(summary({ state: 'queued', session_id: undefined }))
+    render(ui())
+    expect(within(screen.getByTestId('worker-deck-handoff')).getByTestId('worker-chips')).toBeInTheDocument()
   })
 })
