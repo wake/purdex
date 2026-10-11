@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.718] - 2026-10-12
+
+> 只有 daemon 改動，mod 沒有改。App 看不出差別；這一版先上線，是為了讓主機開始記錄每個 session 最後跑過的 agent，之後的啟動面板一上線就有紀錄可以接續。
+
+### Added：記錄每個 session 最後一次跑的 agent（啟動面板 NA-0a，#2721，介面線）
+
+- 主 agent 結束時，daemon 記下這個 tmux session 最後一次跑的是哪個 agent、哪段對話、在哪個目錄（每個 session 只留最新一筆）。這筆紀錄和結束時的認領在同一個交易裡寫入：兩個結束事件同時到時，只有搶到認領的那一邊會寫；子 agent 結束、主機開機清理殘留時都不寫。tmux 重啟過的話，舊世代的紀錄不會蓋掉新世代的。
+- 資料庫：`agent_frames` 加兩欄（tmux 世代、是否為主 agent），舊資料在升級當下回填；`agent_events.db` 新增 `last_agent_run` 表。
+- 還沒有任何路由或畫面會用到這筆紀錄（NA-0b 起才會）。
+
+### 其他
+
+- 沒有 agent 在跑的 session 改顯示啟動面板（接續上次對話／開新對話）的 spec 與 plan（#2720，介面線，文件）。
+
 ## [1.0.0-alpha.717] - 2026-10-12
 
 > 只有 SPA 改動：daemon 只為版號重啟，mod 沒有改。App 要按 dev update 才看得到。

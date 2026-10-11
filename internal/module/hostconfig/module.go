@@ -51,6 +51,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(RelayQuotaKey, m)
 	// ... and the session workbook setting through this one (workbook plan WB-1b.1).
 	c.Registry.Register(workbooksettings.Key, m)
+	// ... and the resume templates through this one (the session module's launch plan, NA-0).
+	c.Registry.Register(ResumeTemplatesKey, m)
 	return nil
 }
 

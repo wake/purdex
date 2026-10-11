@@ -41,6 +41,14 @@ func TestModuleInit_RegistersOwnerResolver(t *testing.T) {
 	if _, ok := svc.(OwnerResolver); !ok {
 		t.Fatalf("registered service does not implement OwnerResolver: %T", svc)
 	}
+	// ... and as the AgentRunning the session module's launch plan asks (NA-0a).
+	svc, ok = c.Registry.Get(AgentRunningKey)
+	if !ok {
+		t.Fatalf("AgentRunningKey not registered")
+	}
+	if _, ok := svc.(AgentRunning); !ok {
+		t.Fatalf("registered service does not implement AgentRunning: %T", svc)
+	}
 }
 
 // TestModule_ResolveSessionOwner_UnknownCode_FoundFalse pins that the exported
