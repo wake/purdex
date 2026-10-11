@@ -86,6 +86,27 @@ func TestSnapshot_BackgroundIsOmittedWhenTheSessionIsNotLive(t *testing.T) {
 	}
 }
 
+// The agent module really is a BackgroundSource: a changed signature would otherwise leave m.bg nil and silently drop the field.
+var _ BackgroundSource = (*agent.Module)(nil)
+
+// Live is not enough: a live pane whose status says ended carries no background work.
+func TestHeaderOf_BackgroundNeedsLiveAndNotEnded(t *testing.T) {
+	bg := convfeed.Header{}
+	bg.Background = convfeed.Background{Shell: 1}
+	cases := []struct {
+		live   bool
+		status string
+		want   bool
+	}{{true, "idle", true}, {true, "ended", false}, {false, "idle", false}}
+	for _, c := range cases {
+		h := bg
+		h.Live, h.Status = c.live, c.status
+		if got := headerOf(h).Background != nil; got != c.want {
+			t.Errorf("live=%v status=%q: background present = %v, want %v", c.live, c.status, got, c.want)
+		}
+	}
+}
+
 func TestSnapshot_NoBackgroundSourceNoField(t *testing.T) {
 	e := newEnv(t) // e.mod.bg stays nil
 	p := e.transcript(idleTurns(1))

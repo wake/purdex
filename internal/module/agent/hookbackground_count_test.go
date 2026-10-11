@@ -6,6 +6,7 @@ import (
 	"time"
 
 	agentpkg "github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/store"
 )
 
 // c9d9c7-67 PR2 (#2592): the Stop hook's background_tasks, counted by kind, for the conversation header ("1 shell still running").
@@ -110,6 +111,27 @@ func TestStop_BackgroundCountsOnlyARootFrame(t *testing.T) {
 	m.noteHookBackground(req, agentpkg.LifecycleStop, time.Now().UnixNano())
 	if _, ok := hookBgCountOf(m, child.FrameID); ok {
 		t.Fatal("a child frame's Stop recorded counts")
+	}
+}
+
+// An old process that outlived --resume or /clear still has its frame; the newer live root frame is the conversation, so the old one's
+// stale counts must not show through when the newer one listed nothing.
+func TestBackgroundWork_NewestLiveRootFrameWins(t *testing.T) {
+	m := delegationModuleWithRealCCProvider(t)
+	orig := isPidAliveFn
+	isPidAliveFn = func(int) bool { return true }
+	t.Cleanup(func() { isPidAliveFn = orig })
+	sendBody(t, m, hookBgSessionStart("startup"))
+	sendBody(t, m, hookBgStop([]map[string]any{hookBgTask("shell")}, 0))
+	old := findCCFrameRow(t, m)
+	if _, err := m.frames.Upsert(store.Frame{
+		PaneID: "%9", AgentType: "cc", PID: 999, PPID: 1, ProcessStartTime: "t999", Status: agentpkg.StatusIdle,
+		StartedAt: old.StartedAt + 1000, LastSeenAt: old.StartedAt + 1000, Verified: true, SessionID: old.SessionID,
+	}); err != nil {
+		t.Fatalf("seed newer frame: %v", err)
+	}
+	if got, ok := m.BackgroundWork(old.SessionID); ok {
+		t.Fatalf("the older frame's stale counts %+v showed through the newer live frame", got)
 	}
 }
 

@@ -105,13 +105,15 @@ func (m *Module) BackgroundWork(sessionID string) (HookBackground, bool) {
 	}
 	m.modMu.Lock()
 	defer m.modMu.Unlock()
-	for _, f := range frames {
+	// frames are oldest first; the newest live cc frame is the conversation (an old process that outlived --resume or /clear must not
+	// speak for it), so its answer is final even when it listed nothing.
+	for i := len(frames) - 1; i >= 0; i-- {
+		f := frames[i]
 		if f.AgentType != "cc" || !isPidAliveFn(f.PID) {
 			continue
 		}
-		if c, ok := m.hookBgCount[f.FrameID]; ok {
-			return c, true
-		}
+		c, ok := m.hookBgCount[f.FrameID]
+		return c, ok
 	}
 	return HookBackground{}, false
 }
