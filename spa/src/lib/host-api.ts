@@ -22,6 +22,8 @@ export interface Session {
 export interface NexSandboxConfig {
   max_profile: string
   default_profile: string
+  // Opt-in profiles outside the clamp order (alpha.707). GET always returns an array.
+  extra_profiles: string[]
 }
 
 export interface NexTimeoutsConfig {

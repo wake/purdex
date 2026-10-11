@@ -6,6 +6,11 @@ import type { NexConfig, NexInfo } from '../../../lib/host-api'
 // Rank order (Nexen v0.19.0): `handoff_ask` is rank 3, below `handoff` (4).
 export const SANDBOX_PROFILES = ['', 'readonly', 'standard', 'trusted', 'handoff_ask', 'handoff'] as const
 
+// The opt-in profiles a host can list in [nex.sandbox] extra_profiles. The daemon does not expose this list (capabilities'
+// sandbox_profiles is what is already enabled), so it is mirrored from nexen's sandbox.IsExtraProfile
+// (internal/config/nex.go validates against it: an unknown name is a 400). They never belong in the max/default selects.
+export const EXTRA_SANDBOX_PROFILES = ['confined'] as const
+
 export function emptyNexConfig(): NexConfig {
   return {
     enabled: false,
@@ -13,7 +18,7 @@ export function emptyNexConfig(): NexConfig {
     service_roots: [],
     claude_bin: '',
     path_prepend: [],
-    sandbox: { max_profile: '', default_profile: '' },
+    sandbox: { max_profile: '', default_profile: '', extra_profiles: [] },
     timeouts: { lease_ttl: '', interrupt: '', turn: '' },
     // U4: the peer mailbox is on by default; 0 / '' = Nexen's defaults.
     peer: { enabled: true, max_pending: 0, wake_template: '', reply_line: '' },
@@ -49,7 +54,7 @@ export function normalizeNexConfig(raw: Partial<NexConfig> | null | undefined): 
     path_prepend: r.path_prepend ?? [],
     claude_bin: r.claude_bin ?? '',
     enabled: r.enabled ?? false,
-    sandbox: { ...base.sandbox, ...(r.sandbox ?? {}) },
+    sandbox: { ...base.sandbox, ...(r.sandbox ?? {}), extra_profiles: Array.isArray(r.sandbox?.extra_profiles) ? [...new Set(r.sandbox.extra_profiles)] : [] },
     timeouts: { ...base.timeouts, ...(r.timeouts ?? {}) },
     peer: { ...base.peer, ...(r.peer ?? {}) },
   }

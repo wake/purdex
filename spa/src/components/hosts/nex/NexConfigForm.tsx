@@ -11,7 +11,7 @@ import { hostLabel, useHostLook } from '../../../lib/host-look'
 import { hostFetch } from '../../../lib/host-api'
 import type { NexConfig, NexInfo, ConfigData } from '../../../lib/host-api'
 import { Field } from '../form-fields'
-import { emptyNexConfig, normalizeNexConfig, restartRequired, SANDBOX_PROFILES } from './nex-config-diff'
+import { EXTRA_SANDBOX_PROFILES, emptyNexConfig, normalizeNexConfig, restartRequired, SANDBOX_PROFILES } from './nex-config-diff'
 import NexListEditor from './NexListEditor'
 import { RestartDaemonButton } from '../RestartDaemonButton'
 
@@ -42,7 +42,7 @@ const CONFIG_ERROR = /^nex\.([a-zA-Z0-9_.]+)(?:\[\d+\])?:\s*([\s\S]*)$/
 // that is not on screen.
 const FIELD_SLOTS = new Set([
   'repo_roots', 'service_roots', 'path_prepend', 'claude_bin',
-  'sandbox.max_profile', 'sandbox.default_profile',
+  'sandbox.max_profile', 'sandbox.default_profile', 'sandbox.extra_profiles',
   'timeouts.lease_ttl', 'timeouts.interrupt', 'timeouts.turn',
   'peer.max_pending',
 ])
@@ -81,6 +81,8 @@ function trimForSubmit(draft: NexConfig): NexConfig {
     sandbox: {
       max_profile: draft.sandbox.max_profile,
       default_profile: draft.sandbox.default_profile,
+      // Always sent as loaded (or as edited), never left out: the daemon keeps the current list when the key is missing.
+      extra_profiles: draft.sandbox.extra_profiles,
     },
     timeouts: {
       lease_ttl: draft.timeouts.lease_ttl.trim(),
@@ -199,6 +201,14 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
     }
   }
 
+  // The known opt-in profiles, then any other name the config holds (shown ticked so a save never drops it silently).
+  const extraNames = [...EXTRA_SANDBOX_PROFILES, ...draft.sandbox.extra_profiles.filter((n) => !(EXTRA_SANDBOX_PROFILES as readonly string[]).includes(n))]
+  const toggleExtra = (name: string, on: boolean) => {
+    const cur = draft.sandbox.extra_profiles
+    const next = on ? (cur.includes(name) ? cur : [...cur, name]) : cur.filter((n) => n !== name)
+    update({ sandbox: { ...draft.sandbox, extra_profiles: next } })
+  }
+
   const needsRestart = restartRequired(config, info)
 
   return (
@@ -286,6 +296,31 @@ export default function NexConfigForm({ hostId, config, info, onSaved }: NexConf
         </select>
       </Field>
       <FieldErrorText field="sandbox.default_profile" message={errorFor('sandbox.default_profile')} />
+
+      <Field label={t('hosts.nex.config.extra_profiles')}>
+        <div className="flex flex-col gap-1" role="group" aria-label={t('hosts.nex.config.extra_profiles')}>
+          {extraNames.map((name) => (
+            <label key={name} className="flex items-start gap-2 text-sm text-text-primary">
+              <input
+                type="checkbox"
+                aria-label={name}
+                checked={draft.sandbox.extra_profiles.includes(name)}
+                onChange={(e) => toggleExtra(name, e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                {name}
+                <span className="block text-xs text-text-muted">
+                  {(EXTRA_SANDBOX_PROFILES as readonly string[]).includes(name)
+                    ? t(`hosts.nex.config.extra_profile.${name}`)
+                    : t('hosts.nex.config.extra_profile_unknown')}
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </Field>
+      <FieldErrorText field="sandbox.extra_profiles" message={errorFor('sandbox.extra_profiles')} />
 
       <Field label={t('hosts.nex.config.lease_ttl')}>
         <input

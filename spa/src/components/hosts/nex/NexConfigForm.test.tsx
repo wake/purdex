@@ -12,7 +12,7 @@ vi.mock('../../../lib/host-api', async () => {
 })
 
 const info = { configured: true, mounted: true, ready: true, init_error: '', effective: { data_dir: '/d', claude_bin: '', max_profile: 'handoff', default_profile: 'standard', repo_roots: ['/a'], service_roots: [], path_prefix: '', lease_ttl: '2m0s', interrupt: '10s', turn: '5m0s' } }
-const saved = { ...emptyNexConfig(), enabled: true, repo_roots: ['/a'], sandbox: { max_profile: 'handoff', default_profile: 'standard' } }
+const saved = { ...emptyNexConfig(), enabled: true, repo_roots: ['/a'], sandbox: { max_profile: 'handoff', default_profile: 'standard', extra_profiles: [] } }
 
 beforeEach(() => vi.mocked(hostApi.hostFetch).mockReset())
 
@@ -76,7 +76,7 @@ describe('NexConfigForm', () => {
     const [, , init] = vi.mocked(hostApi.hostFetch).mock.calls[0]
     const body = JSON.parse(init!.body as string)
     expect(Object.keys(body.nex).sort()).toEqual(['claude_bin', 'enabled', 'path_prepend', 'peer', 'repo_roots', 'sandbox', 'service_roots', 'timeouts'])
-    expect(Object.keys(body.nex.sandbox).sort()).toEqual(['default_profile', 'max_profile'])
+    expect(Object.keys(body.nex.sandbox).sort()).toEqual(['default_profile', 'extra_profiles', 'max_profile'])
     expect(Object.keys(body.nex.timeouts).sort()).toEqual(['interrupt', 'lease_ttl', 'turn'])
     expect(Object.keys(body.nex.peer).sort()).toEqual(['enabled', 'max_pending', 'reply_line', 'wake_template'])
     // U4: an empty form still sends the mailbox on, with Nexen's defaults.
@@ -242,7 +242,7 @@ describe('NexConfigForm save across a host change', () => {
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
     await waitFor(() => expect(hostApi.hostFetch).toHaveBeenCalledTimes(1))
 
-    const hostB = { ...emptyNexConfig(), enabled: false, repo_roots: ['/b'], sandbox: { max_profile: 'trusted', default_profile: 'trusted' } }
+    const hostB = { ...emptyNexConfig(), enabled: false, repo_roots: ['/b'], sandbox: { max_profile: 'trusted', default_profile: 'trusted', extra_profiles: [] } }
     rerender(<NexConfigForm hostId="b" config={hostB} info={info} onSaved={onSaved} />)
 
     await act(async () => {
