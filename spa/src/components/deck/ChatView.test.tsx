@@ -283,9 +283,21 @@ describe('the user on the right, the agent on the left (spec §5)', () => {
     expect(wrap.children[1]).toBe(time)
   })
 
-  it('a queued message says so under the bubble instead of the time', () => {
+  it('a queued message that begins its turn is an ordinary one: just the time', () => {
     mount({ turns: userTurn('queued') })
-    expect(screen.getByTestId('chat-user-time')).toHaveTextContent('You · queued')
+    expect(screen.getByTestId('chat-user-time').textContent).toBe('01:56')
+  })
+
+  it('a queued message in the middle of a turn says it was delivered mid-turn (not "queued")', () => {
+    const t = new Date(2026, 9, 10, 1, 57).getTime()
+    mount({ turns: [turn('t0', 0, [
+      { type: 'user', id: 'u0', at: 1, index: 0, text: 'first', source: 'user' } as UserItem,
+      { type: 'agent_text', id: 'a', at: 2, index: 1, markdown: 'working' } as ConversationItem,
+      { type: 'user', id: 'u1', at: t, index: 2, text: 'also this', source: 'queued' } as UserItem,
+    ])] })
+    const times = screen.getAllByTestId('chat-user-time').map((e) => e.textContent)
+    expect(times[1]).toBe('01:57 · delivered mid-turn')
+    expect(times.join('|')).not.toMatch(/queued/i)
   })
 
   it('a source this build does not know still reads as the person (a bubble)', () => {

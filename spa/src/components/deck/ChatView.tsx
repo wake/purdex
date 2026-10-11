@@ -54,7 +54,7 @@ export interface ChatViewProps {
 
 function Entry({ entry, paneKey, binding }: { entry: ChatEntry; paneKey: string; binding: string }) {
   switch (entry.kind) {
-    case 'user': return <UserBubble item={entry.item} />
+    case 'user': return <UserBubble item={entry.item} midTurn={entry.midTurn} />
     case 'peer': return <PeerLine items={entry.items} />
     case 'agent': return <AgentBubble item={entry.item} />
     case 'system': return <SystemRow item={entry.item} />
