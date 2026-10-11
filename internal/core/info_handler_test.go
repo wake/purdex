@@ -417,6 +417,8 @@ func TestHandleInfo_Capabilities(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 	assert.Equal(t, []any{"transcript.v1", "terminal.mirror.v1", "conversations.scope.v1", "relay.unattended.v1", "team.name.v1", "team.tasks.v1", "team.label.v1", "conversations.v1", "team.adopt.v1", "team.relay_quota.v1", "team.max_members.v1", "team.edit.v1", "conversations.submit.v1", "session.launch.v1", "team.ask_chat.v1"}, body["capabilities"])
+	// the pause is announced with UP-3b, when a client can rely on the whole of it (the routes it needs are not all there yet)
+	assert.NotContains(t, body["capabilities"], "team.pause.v1")
 }
 
 func TestHandleInfo_LastShutdown(t *testing.T) {

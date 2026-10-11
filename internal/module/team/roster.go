@@ -104,6 +104,10 @@ func (m *Module) buildRoster() (team.Roster, error) {
 	if qerr != nil {
 		m.logf("[team] roster relay quotas: %v", qerr)
 	}
+	pauses, perr := m.store.PausesAmong(ids)
+	if perr != nil {
+		m.logf("[team] roster pauses: %v", perr) // a roster without the pause light is still a roster
+	}
 	inUse, err := m.store.InUseOfTeams(teamIDs)
 	if err != nil {
 		return team.Roster{}, err
@@ -122,6 +126,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 			tr.TeamColor = &c
 		}
 		tr.Lead.RelayQuota = quotas[t.LeadSessionID]
+		tr.Lead.Paused = pausedOf(pauses, t.LeadSessionID)
 		for _, mr := range active[i] {
 			if m.isRemoteRow(mr) {
 				tr.Members = append(tr.Members, m.remoteRosterMember(mr, tasks[t.ID], t.ID))
@@ -134,6 +139,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 			s.Model, s.Effort = mr.Model, mr.Effort // what it was spawned with
 			s.Context = m.sessionContext(mr.SessionID, mr.Usage)
 			s.RelayQuota = quotas[mr.SessionID]
+			s.Paused = pausedOf(pauses, mr.SessionID)
 			rm := team.RosterMember{RosterSession: s, State: mr.State, Origin: rosterOriginOf(mr), JoinedAt: mr.CreatedAt}
 			if mr.SpawnOp != "" { // every row has a key (an adopted member's is the adoption's request id), so adopted members have tasks too
 				if cur, ok := currentTaskOf(tasks[t.ID][mr.SpawnOp]); ok {
@@ -145,6 +151,14 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		out.Teams = append(out.Teams, tr)
 	}
 	return out, nil
+}
+
+// pausedOf is a session's pause for the roster, nil when it has none.
+func pausedOf(pauses map[string]team.RosterPause, sessionID string) *team.RosterPause {
+	if p, ok := pauses[sessionID]; ok {
+		return &p
+	}
+	return nil
 }
 
 // rosterLead is a team's lead: the live registry entry, else teams.lead_ref
