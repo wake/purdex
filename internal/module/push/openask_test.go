@@ -91,22 +91,6 @@ func TestOpenAsks_IntervalOverlap(t *testing.T) {
 	}
 }
 
-// A new subscription (a restart) loads the snapshot; an event that ran before the snapshot was loaded is kept.
-// Mutation gate: ignore the snapshot → red; clear before loading → red.
-func TestOpenAsks_LoadAddsTheSnapshotAndKeepsEarlierEvents(t *testing.T) {
-	o, c := newAsks()
-	o.Opened(ask("early", "sid-early", "early:@1.%1"))
-	snap := ask("a1", "sid-1", "dev:@1.%2")
-	snap.CreatedAt = c.Now().Add(-5 * time.Minute).UnixMilli()
-	o.Load([]team.Approval{snap})
-	if !overlapsWindow(o, "sid-1", "", c.Now()) {
-		t.Fatal("an ask in the snapshot is not open")
-	}
-	if !overlapsWindow(o, "sid-early", "", c.Now()) {
-		t.Fatal("loading the snapshot dropped an ask that opened first")
-	}
-}
-
 // Only an answerable hook_ask counts: a terminal_only ask is not pushed, so the agent's own event must still be.
 // Other kinds are not asks. Mutation gate: count every kind → red.
 func TestOpenAsks_OnlyAnAnswerableHookAskCounts(t *testing.T) {
@@ -120,7 +104,6 @@ func TestOpenAsks_OnlyAnAnswerableHookAskCounts(t *testing.T) {
 	for _, a := range []team.Approval{terminal, lead, perm} {
 		o.Opened(a)
 	}
-	o.Load([]team.Approval{terminal, lead, perm})
 	for _, id := range [][2]string{{"sid-t", "t"}, {"sid-l", "l"}, {"sid-p", "p"}} {
 		if overlapsWindow(o, id[0], id[1], c.Now()) {
 			t.Fatalf("%v: something that is not an answerable hook_ask counted", id)

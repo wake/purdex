@@ -87,6 +87,7 @@ type Module struct {
 type presenceChecker interface {
 	ShowsName(tmuxSession string) bool
 	ShowsCode(code string) bool
+	AtComputer() bool // PA-1: some Mac says the person is at the machine now (v2 reports)
 }
 
 func New() *Module {
@@ -149,9 +150,11 @@ func (m *Module) load(c *core.Core) error {
 // Status is what /api/info reports under "push" (alongside the core's "configured").
 func (m *Module) Status() map[string]any {
 	entries, active := m.pres.Counts() // its own lock; taken before m.mu, never inside it
+	v2, atComputer := m.pres.V2Counts()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return map[string]any{"ready": m.ready, "init_error": m.initErr, "presence_entries": entries, "presence_active": active}
+	return map[string]any{"ready": m.ready, "init_error": m.initErr, "presence_entries": entries, "presence_active": active,
+		"presence_v2_entries": v2, "presence_at_computer": atComputer}
 }
 
 func (m *Module) isReady() bool {
@@ -228,19 +231,9 @@ func (m *Module) Start(ctx context.Context) error {
 	m.sender.Store(snd)
 	m.holds.reset()
 	m.wbHolds.reset()
-	m.asks.Clear() // a restart begins from the feed's snapshot, not from asks an earlier run saw open
+	m.asks.Clear() // a restart starts with no asks: the feed's open snapshot proves nothing was pushed (spec §4.4), so it is not loaded
 	if m.events != nil {
-		// The feed arms the callback in the same step that returns the snapshot, and may run an event before this goroutine
-		// has loaded the snapshot. Events wait for it: a `closed` that outruns the load would otherwise be lost, and the
-		// snapshot would then reopen an ask that is closed.
-		ready := make(chan struct{})
-		var open []team.Approval
-		open, m.unsub = m.events.SubscribeApprovals(func(op string, a team.Approval) {
-			<-ready
-			m.onApproval(op, a)
-		})
-		m.asks.Load(open)
-		close(ready)
+		_, m.unsub = m.events.SubscribeApprovals(m.onApproval)
 	}
 	if m.notify == nil {
 		svc, ok := m.core.Registry.Get(agent.NotifyFeedKey)
@@ -476,11 +469,8 @@ func (m *Module) openState(ctx context.Context, j Job) openSnap {
 // when a present Mac shows the requesting session (R6, by the tmux session name of the origin; an origin with no tmux is
 // never suppressed).
 func (m *Module) onApproval(op string, a team.Approval) {
-	switch op { // the open hook_ask set is kept whether or not this approval is pushed (rule 8 reads it)
-	case "opened":
-		m.asks.Opened(a)
-	case "closed":
-		m.asks.Closed(a.ID)
+	if op == "closed" {
+		m.asks.Closed(a.ID) // an ask that was never recorded (not pushed) has nothing to close
 	}
 	snd := m.sender.Load() // one read: Stop may clear it at any moment
 	if op != "opened" || snd == nil {
@@ -488,6 +478,11 @@ func (m *Module) onApproval(op string, a team.Approval) {
 	}
 	pa := toPushApproval(a)
 	if _, pushed := push.ApprovalContent(pa, "", "en"); !pushed {
+		return
+	}
+	// PA-1 §4.3: a person at the computer needs no phone push, whatever the approval's origin (none included); an older
+	// App's window that shows the requesting session does the same for its own session.
+	if m.presence.AtComputer() {
 		return
 	}
 	if name := tmuxSessionOf(a.Origin.Tmux); name != "" && m.presence.ShowsName(name) {
@@ -503,9 +498,15 @@ func (m *Module) onApproval(op string, a team.Approval) {
 	}
 	// Approval: the sender resolves session_code (#2235) from its one snapshot; nothing here may touch tmux.
 	ja := &JobApproval{ID: a.ID, TmuxSession: tmuxSessionOf(a.Origin.Tmux), CreatedAt: a.CreatedAt}
-	snd.Enqueue(Job{DeviceIDs: ids, Approval: ja, Make: func(d push.Device) (push.Content, bool) {
+	if m.presence.AtComputer() { // the person came back since the check above: nothing is told
+		return
+	}
+	// Rule 8 (§4.4): the ask counts as pushed only when its push was actually queued for the devices.
+	if snd.Enqueue(Job{DeviceIDs: ids, Approval: ja, Make: func(d push.Device) (push.Content, bool) {
 		return push.ApprovalContent(pa, d.HostLabel, d.Locale)
-	}})
+	}}) {
+		m.asks.Opened(a)
+	}
 }
 
 func toPushApproval(a team.Approval) push.Approval {

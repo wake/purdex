@@ -49,6 +49,12 @@ type agentEnv struct {
 
 func newAgentEnv(t *testing.T, hold time.Duration, open ...team.Approval) *agentEnv {
 	t.Helper()
+	return newAgentEnvWith(t, hold, nil, open...)
+}
+
+// newAgentEnvWith is newAgentEnv with a presence seam in place of the real store (nil = the real one).
+func newAgentEnvWith(t *testing.T, hold time.Duration, presence presenceChecker, open ...team.Approval) *agentEnv {
+	t.Helper()
 	e := newEnv(t)
 	clock := &fakeClock{now: time.Unix(5_000_000, 0)}
 	te := &triggerEnv{env: e, apns: &fakeAPNS{script: []apns.Result{{Class: apns.OK, Status: 200}}}, events: &fakeEvents{open: open}}
@@ -59,6 +65,9 @@ func newAgentEnv(t *testing.T, hold time.Duration, open ...team.Approval) *agent
 	e.mod.gate = NewGate(clock.Now)
 	e.mod.asks = newOpenAsks(clock.Now)
 	e.mod.holdFor = hold
+	if presence != nil {
+		e.mod.presence = presence
+	}
 	if err := e.mod.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -254,13 +263,14 @@ func TestAgentTrigger_ATerminalOnlyAskDoesNotSuppressTheAgentEvent(t *testing.T)
 	e.waitSends(t, 1)
 }
 
-// The daemon restarted with an ask open: the snapshot of the new subscription counts. Mutation gate: ignore the
-// snapshot → red.
-func TestAgentTrigger_AnAskInTheOpenSnapshotSuppresses(t *testing.T) {
+// PA-1 §4.4: an ask open when the daemon started carries no proof that it was pushed, so it does not hide the session's
+// `waiting` event any more (a duplicate beats losing the only notice). Mutation gate: load the snapshot as intervals →
+// the event is swallowed → red.
+func TestAgentTrigger_AnAskInTheOpenSnapshotDoesNotSuppress(t *testing.T) {
 	e := newAgentEnv(t, 60*time.Millisecond, askApproval("ask1", "sid-1", "dev:@1.%2", false))
 	e.device(tokA, "en", "mlab", tabsOf("c1"))
 	e.feed.emit(nev("c1", "PdxPermissionRequest", "waiting", nil))
-	e.noSends(t)
+	e.waitSends(t, 1)
 }
 
 // A probe or sweep frame names its reason as the event: no content, no push, even when its status is waiting.
@@ -409,44 +419,6 @@ func askApproval(id, sid, tmux string, terminalOnly bool) team.Approval {
 	}
 	return team.Approval{ID: id, Kind: team.KindHookAsk, Payload: json.RawMessage(payload), Origin: team.Origin{SessionID: sid, Ref: "_abc123", Name: "worker-1", Tmux: tmux}}
 }
-
-// The approval feed runs an event before the snapshot is loaded: a `closed` that outruns the load must not be lost, or
-// the snapshot would reopen a closed ask and suppress the session's waiting events for good. Mutation gate: apply
-// events without waiting for the load → red.
-type racingEvents struct{ ask team.Approval }
-
-func (r *racingEvents) SubscribeApprovals(fn func(string, team.Approval)) ([]team.Approval, func()) {
-	done := make(chan struct{})
-	go func() { fn("closed", r.ask); close(done) }()
-	time.Sleep(60 * time.Millisecond) // the callback goroutine is first
-	return []team.Approval{r.ask}, func() {}
-}
-
-func TestAgentTrigger_AClosedEventThatOutrunsTheSnapshotIsNotLost(t *testing.T) {
-	e := newEnv(t)
-	apnsFake := &fakeAPNS{script: []apns.Result{{Class: apns.OK, Status: 200}}}
-	feed := &fakeNotifyFeed{}
-	e.mod.events = &racingEvents{ask: askApproval("ask1", "sid-1", "dev:@1.%2", false)}
-	e.mod.notify = feed
-	e.mod.newAPNs = func() apnsClient { return apnsFake }
-	e.mod.holdFor = 40 * time.Millisecond
-	if err := e.mod.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { e.mod.Stop(context.Background()) })
-	e.do("POST", "/api/push/devices", reqBody(tokA, tabsOf2("c1")))
-	time.Sleep(100 * time.Millisecond) // the closed event has been applied; the waiting frame below arrives after it
-	feed.emit(nev("c1", "PdxPermissionRequest", "waiting", nil))
-	deadline := time.Now().Add(2 * time.Second)
-	for apnsFake.count() < 1 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if apnsFake.count() != 1 {
-		t.Fatal("the closed ask was reopened by the snapshot: the waiting event was swallowed")
-	}
-}
-
-func tabsOf2(codes ...string) func(*push.DeviceRequest) { return tabsOf(codes...) }
 
 // A restart starts from the snapshot: an ask an earlier run saw open does not outlive it. Mutation gate: no Clear → red.
 func TestAgentTrigger_AStartForgetsAsksOfAnEarlierRun(t *testing.T) {

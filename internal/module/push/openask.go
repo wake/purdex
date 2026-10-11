@@ -19,8 +19,8 @@ const maxAskIntervals = 1024
 // [opened, closed) per ask, still running while it is open. A `waiting` event is a duplicate of an AskUserQuestion push
 // exactly when its own window (its arrival until its hold ends) overlaps one of those intervals; an ask that was
 // opened and answered before the event arrived does not hide it. Only an answerable hook_ask counts (a terminal_only
-// ask is not pushed, so the agent's own event stays the phone's only notice). Rebuilt from the approval feed's open
-// snapshot, kept by its opened / closed events; in memory.
+// ask is not pushed, so the agent's own event stays the phone's only notice). Kept by the approval feed's opened / closed events
+// (an ask opens an interval only when its push was actually enqueued, spec §4.4); in memory, empty at a start.
 type openAsks struct {
 	mu   sync.Mutex
 	now  func() time.Time
@@ -53,23 +53,6 @@ func (o *openAsks) Clear() {
 	o.mu.Lock()
 	o.byID = map[string]askInterval{}
 	o.mu.Unlock()
-}
-
-// Load adds the snapshot of open approvals the feed returned when it was subscribed. It adds, never clears.
-func (o *openAsks) Load(open []team.Approval) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	now := o.now()
-	for _, a := range open {
-		if !isPushedAsk(a) {
-			continue
-		}
-		opened := now
-		if a.CreatedAt > 0 {
-			opened = time.UnixMilli(a.CreatedAt)
-		}
-		o.byID[a.ID] = askInterval{sid: a.Origin.SessionID, name: tmuxSessionOf(a.Origin.Tmux), opened: opened}
-	}
 }
 
 // Opened starts the ask's interval.

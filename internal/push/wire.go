@@ -251,9 +251,23 @@ type PresenceRequest struct {
 	Active   bool              `json:"active"`
 	Sessions []PresenceSession `json:"sessions"`
 	TTLMs    int               `json:"ttl_ms"`
+
+	// v2 (push-away-presence spec §3.1): pointers, so "absent" is distinguishable from 0 / false. V absent or null is a
+	// v1 report and the rest are then ignored.
+	V           *int   `json:"v,omitempty"`
+	IdleMs      *int64 `json:"idle_ms,omitempty"`
+	Locked      *bool  `json:"locked,omitempty"`
+	LockedMs    *int64 `json:"locked_ms,omitempty"`
+	AwayAfterMs *int64 `json:"away_after_ms,omitempty"`
 }
 
+// IsV2 is a report that carries the machine's idle / lock state (meaningful after Validate).
+func (r *PresenceRequest) IsV2() bool { return r.V != nil }
+
 const (
+	maxPresenceV2Ms     = 2_592_000_000 // 30 days: idle_ms / locked_ms
+	minAwayAfterMs      = 60_000
+	maxAwayAfterMs      = 3_600_000
 	maxPresenceSessions = 200
 	minPresenceTTLMs    = 1000
 	maxPresenceTTLMs    = 60000
@@ -285,6 +299,38 @@ func (r *PresenceRequest) Validate() error {
 		if err := printable("sessions.name", s.Name, maxNameLen); err != nil {
 			return err
 		}
+	}
+	return r.validateV2()
+}
+
+// validateV2 checks the v2 fields (spec §3.1): the version, then each required field in turn.
+func (r *PresenceRequest) validateV2() error {
+	if r.V == nil {
+		return nil
+	}
+	if *r.V != 2 {
+		return errors.New("v: want 2")
+	}
+	if r.IdleMs == nil {
+		return errors.New("idle_ms: required")
+	}
+	if *r.IdleMs < 0 || *r.IdleMs > maxPresenceV2Ms {
+		return fmt.Errorf("idle_ms: want 0-%d", maxPresenceV2Ms)
+	}
+	if r.Locked == nil {
+		return errors.New("locked: required")
+	}
+	if r.LockedMs == nil {
+		return errors.New("locked_ms: required")
+	}
+	if *r.LockedMs < 0 || *r.LockedMs > maxPresenceV2Ms {
+		return fmt.Errorf("locked_ms: want 0-%d", maxPresenceV2Ms)
+	}
+	if r.AwayAfterMs == nil {
+		return errors.New("away_after_ms: required")
+	}
+	if *r.AwayAfterMs < minAwayAfterMs || *r.AwayAfterMs > maxAwayAfterMs {
+		return fmt.Errorf("away_after_ms: want %d-%d", minAwayAfterMs, maxAwayAfterMs)
 	}
 	return nil
 }

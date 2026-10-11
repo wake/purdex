@@ -55,10 +55,14 @@ func (f *fakeEvents) emit(op string, a team.Approval) {
 	}
 }
 
-type presenceFake struct{ shows map[string]bool }
+type presenceFake struct {
+	shows map[string]bool
+	at    func() bool // AtComputer; nil = never
+}
 
 func (p presenceFake) ShowsName(name string) bool { return p.shows[name] }
 func (p presenceFake) ShowsCode(code string) bool { return p.shows[code] }
+func (p presenceFake) AtComputer() bool           { return p.at != nil && p.at() }
 
 // approvalAtMs is when the fixture approvals were raised (unix ms); fake sessions are created at sessionAt (unix s).
 const approvalAtMs = 1_700_000_000_000
