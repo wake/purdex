@@ -72,11 +72,11 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   return (
     <section ref={ref} data-testid="deck-turn" data-turn-index={turn.index} className={`space-y-3 ${SCROLL_ANCHOR_CLASS}`}>
       {turn.omitted_items ? (
-        <div data-testid="deck-omitted" className="text-xs text-text-muted">{t('deck.omitted', { n: turn.omitted_items })}</div>
+        <div data-testid="deck-omitted" className="deck-t-down text-text-muted">{t('deck.omitted', { n: turn.omitted_items })}</div>
       ) : null}
       {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} agentModel={agentModel} agentHeader={item.id === firstAgentId} midTurn={item.type === 'user' && item.id !== firstUser} />)}
       <DoneTurnLine turn={turn} />
-      {turn.error && <div data-testid="deck-turn-error" className="text-xs text-status-error">{turn.error.message}</div>}
+      {turn.error && <div data-testid="deck-turn-error" className="deck-t-down text-status-error">{turn.error.message}</div>}
     </section>
   )
 })
@@ -125,10 +125,10 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
 
   return (
     <div className="flex h-full flex-col">
-      {entry.status === 'reconnecting' && <div data-testid="deck-reconnecting" className="px-4 py-1 text-xs text-text-muted">{t('deck.reconnecting')}</div>}
+      {entry.status === 'reconnecting' && <div data-testid="deck-reconnecting" className="px-4 py-1 deck-t-down text-text-muted">{t('deck.reconnecting')}</div>}
       {doc.detached && (
         <button type="button" data-testid="deck-back-live" onClick={() => void useConversationStore.getState().returnToLive(hostId, sessionId)}
-          className="cursor-pointer bg-surface-secondary px-4 py-1 text-left text-xs text-text-secondary hover:text-text-primary">
+          className="cursor-pointer bg-surface-secondary px-4 py-1 text-left deck-t-down text-text-secondary hover:text-text-primary">
           {t('deck.back_live')}
         </button>
       )}
@@ -140,10 +140,10 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
               {entry.paging && <div data-testid="deck-paging">{t('deck.paging')}</div>}
             </StatusOverlay>
             {/* In the flow, on top of the content: it scrolls away with it, and arrives in the commit of the last page (the place is kept for it). */}
-            {!empty && !doc.hasMoreBefore && <div data-testid="deck-history-start" className="text-xs text-text-muted">{t('deck.history_start')}</div>}
+            {!empty && !doc.hasMoreBefore && <div data-testid="deck-history-start" className="deck-t-down text-text-muted">{t('deck.history_start')}</div>}
             {empty ? (
               // a first message the App still holds is something to read: no "nothing here" block beside it
-              pending.some((e) => e.state !== 'superseded') || headerQueued.length > 0 ? null : <div data-testid="deck-empty" className="flex h-full items-center justify-center text-sm text-text-muted">
+              pending.some((e) => e.state !== 'superseded') || headerQueued.length > 0 ? null : <div data-testid="deck-empty" className="flex h-full items-center justify-center deck-t-up text-text-muted">
                 {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
               </div>
             ) : (

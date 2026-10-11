@@ -17,7 +17,7 @@ export function StatusSlot({ step }: { step: Pick<StepItem, 'status' | 'denial' 
   } else if (chip?.kind === 'interrupted') {
     body = <span data-testid="step-chip" className="rounded bg-surface-secondary px-1.5 text-text-muted">{t('deck.status.interrupted')}</span>
   }
-  return <span data-testid="status-slot" className="flex w-20 shrink-0 items-center justify-end text-xs">{body}</span>
+  return <span data-testid="status-slot" className="flex w-20 shrink-0 items-center justify-end deck-t-down">{body}</span>
 }
 
 const DOT_CLASS = { running: 'animate-pulse bg-accent', ok: 'bg-status-success', failed: 'bg-status-error', muted: 'bg-text-muted' } as const

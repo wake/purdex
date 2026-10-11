@@ -27,9 +27,9 @@ export interface FoldedOutputProps {
   searchUnit?: string
 }
 
-const BODY_CLASS = 'text-xs whitespace-pre-wrap break-all overflow-auto max-h-96'
+const BODY_CLASS = 'deck-t-down whitespace-pre-wrap break-all overflow-auto max-h-96'
 const BUTTON_CLASS =
-  'mt-1 text-xs text-text-muted hover:text-text-primary cursor-pointer text-left'
+  'mt-1 deck-t-down text-text-muted hover:text-text-primary cursor-pointer text-left'
 
 export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal', trailing, searchUnit }: FoldedOutputProps) {
   const t = useI18nStore((s) => s.t)
@@ -39,7 +39,7 @@ export function FoldedOutput({ text, plan, expanded, onToggle, tone = 'normal', 
   // whether or not anything here is foldable. A truncated body the preview
   // shows whole draws no button at all, so the note cannot live behind one.
   const truncationNote = plan.daemonTruncated ? (
-    <span data-testid="fold-daemon-truncated" className="block text-xs text-text-muted">
+    <span data-testid="fold-daemon-truncated" className="block deck-t-down text-text-muted">
       {t('room.fold.daemon_truncated')}
     </span>
   ) : null

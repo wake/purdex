@@ -35,7 +35,7 @@ export function ChatWorkRow({ run, onOpen }: { run: TurnRun; onOpen: () => void 
   const t = useI18nStore((s) => s.t)
   return (
     <button type="button" data-testid="chat-work" data-running={run.running} onClick={onOpen}
-      className="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-border-subtle px-3 py-1.5 text-left text-xs text-text-secondary hover:bg-surface-secondary">
+      className="flex w-full cursor-pointer items-center gap-2 rounded-lg border border-border-subtle px-3 py-1.5 text-left deck-t-down text-text-secondary hover:bg-surface-secondary">
       {run.running ? (
         <>
           <span className="inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-accent" />
@@ -54,7 +54,7 @@ export function FileChip({ files, added, removed, onOpen }: { files: number; add
   const t = useI18nStore((s) => s.t)
   return (
     <button type="button" data-testid="chat-files" onClick={onOpen}
-      className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border-subtle px-2.5 py-0.5 text-xs text-text-secondary hover:bg-surface-secondary">
+      className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border-subtle px-2.5 py-0.5 deck-t-down text-text-secondary hover:bg-surface-secondary">
       <FileText size={12} />
       {t('chat.files', { n: files, a: added, r: removed })}
     </button>

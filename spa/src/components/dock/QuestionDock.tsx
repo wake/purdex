@@ -27,7 +27,7 @@ export function QuestionDock({ ctx }: { ctx: DeckFooterContext }) {
     <div data-testid="question-dock" className="border-t border-border-subtle px-3 pt-2">
       {/* re-keyed by approval and by its questions: a card for another request (or the same id asked anew) is another card, with its own draft */}
       <AskCard key={`${card.ask.id}\0${card.ask.questions.map((q) => q.question).join('\0')}`} card={card} ctx={ctx} askChat={askChat} markAnswered={markAnswered} finishAnswered={finishAnswered} />
-      {cards.length > 1 && <div data-testid="dock-more" className="mt-1 text-xs text-text-muted">{t('deck.dock.more', { n: cards.length - 1 })}</div>}
+      {cards.length > 1 && <div data-testid="dock-more" className="mt-1 deck-t-down text-text-muted">{t('deck.dock.more', { n: cards.length - 1 })}</div>}
     </div>
   )
 }
@@ -54,10 +54,10 @@ function AskCard({ card, ctx, askChat, markAnswered, finishAnswered }: CardProps
   const update = (next: DockDraft) => { setDraft(next); writeDockDraft(key, next); setFailure(null); setRejected('') }
 
   if (phase.kind === 'changed') {
-    return <Shell><div data-testid="dock-locked" role="status" className="py-2 text-sm text-text-muted">{t('deck.dock.changed')}</div></Shell>
+    return <Shell><div data-testid="dock-locked" role="status" className="py-2 deck-t-up text-text-muted">{t('deck.dock.changed')}</div></Shell>
   }
   if (phase.kind === 'answered_in_terminal') {
-    return <Shell><div data-testid="dock-answered-terminal" role="status" className="py-2 text-sm text-text-muted">{t('deck.dock.answered_terminal', { text: phase.text })}</div></Shell>
+    return <Shell><div data-testid="dock-answered-terminal" role="status" className="py-2 deck-t-up text-text-muted">{t('deck.dock.answered_terminal', { text: phase.text })}</div></Shell>
   }
 
   const readOnly = ask.terminalOnly || terminalOnly
@@ -87,7 +87,7 @@ function AskCard({ card, ctx, askChat, markAnswered, finishAnswered }: CardProps
 
   return (
     <Shell>
-      <div className="mb-2 flex items-center gap-2 text-sm font-medium text-text-primary">
+      <div className="mb-2 flex items-center gap-2 deck-t-up font-medium text-text-primary">
         <ChatCircleDots size={16} weight="fill" className="shrink-0 text-accent" />
         <span>{t('deck.dock.title')}</span>
       </div>
@@ -98,12 +98,12 @@ function AskCard({ card, ctx, askChat, markAnswered, finishAnswered }: CardProps
         <textarea
           data-testid="dock-reply" value={draft.reply} rows={3} disabled={pending} placeholder={t('deck.dock.reply_placeholder')} aria-label={t('deck.dock.reply_placeholder')}
           onChange={(e) => update({ ...draft, reply: e.target.value })}
-          className="mb-2 w-full resize-none rounded border border-border-subtle bg-surface-primary px-2 py-1 text-sm text-text-primary"
+          className="mb-2 w-full resize-none rounded border border-border-subtle bg-surface-primary px-2 py-1 deck-t-up text-text-primary"
         />
       )}
-      {readOnly && <div data-testid="dock-terminal-only" className="mb-2 text-xs text-text-muted">{t('deck.dock.terminal_only')}</div>}
-      {rejected && <div data-testid="dock-rejected" role="alert" className="mb-1 text-xs text-status-error">{rejected}</div>}
-      {failure && <div data-testid="dock-failure" role="alert" className="mb-1 text-xs text-status-error">{t(failure === 'network' ? 'deck.dock.err_network' : failure === 'failed' ? 'deck.dock.err_failed' : REPLY_REFUSAL_KEY[failure])}</div>}
+      {readOnly && <div data-testid="dock-terminal-only" className="mb-2 deck-t-down text-text-muted">{t('deck.dock.terminal_only')}</div>}
+      {rejected && <div data-testid="dock-rejected" role="alert" className="mb-1 deck-t-down text-status-error">{rejected}</div>}
+      {failure && <div data-testid="dock-failure" role="alert" className="mb-1 deck-t-down text-status-error">{t(failure === 'network' ? 'deck.dock.err_network' : failure === 'failed' ? 'deck.dock.err_failed' : REPLY_REFUSAL_KEY[failure])}</div>}
       <div className="flex flex-wrap items-center gap-2 pb-2">
         {readOnly ? (
           <button type="button" data-testid="dock-open-terminal" onClick={ctx.onSwitchToTerminal} className={BTN_PRIMARY}>{t('deck.dock.open_terminal')}</button>
@@ -124,8 +124,8 @@ function AskCard({ card, ctx, askChat, markAnswered, finishAnswered }: CardProps
   )
 }
 
-const BTN = 'rounded border border-border-subtle px-3 py-1 text-xs text-text-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50'
-const BTN_PRIMARY = 'rounded bg-accent px-3 py-1 text-xs text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50'
+const BTN = 'rounded border border-border-subtle px-3 py-1 deck-t-down text-text-secondary hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50'
+const BTN_PRIMARY = 'rounded bg-accent px-3 py-1 deck-t-down text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50'
 
 function Shell({ children }: { children: React.ReactNode }) {
   return <div data-testid="dock-card" className="rounded-lg border border-accent/40 bg-surface-secondary px-3 pt-2">{children}</div>
@@ -136,9 +136,9 @@ function ReadOnlyQuestions({ ask }: { ask: OpenAsk }) {
     <div className="mb-2 space-y-2">
       {ask.questions.map((q, i) => (
         <div key={i} data-testid="dock-question">
-          {q.header && <div className="text-xs text-text-muted">{q.header}</div>}
-          <div className="text-sm text-text-primary">{q.question}</div>
-          <ul className="text-xs text-text-secondary">{q.options.map((o, oi) => <li key={oi}>· {o.label}</li>)}</ul>
+          {q.header && <div className="deck-t-down text-text-muted">{q.header}</div>}
+          <div className="deck-t-up text-text-primary">{q.question}</div>
+          <ul className="deck-t-down text-text-secondary">{q.options.map((o, oi) => <li key={oi}>· {o.label}</li>)}</ul>
         </div>
       ))}
     </div>
@@ -160,29 +160,29 @@ function Questions({ ask, draft, disabled, onChange }: { ask: OpenAsk; draft: Do
         }
         return (
           <div key={i} data-testid="dock-question" role={q.multiple ? 'group' : 'radiogroup'} aria-label={q.question}>
-            {q.header && <div className="text-xs text-text-muted">{q.header}</div>}
-            <div className="text-sm text-text-primary">{q.question}{q.multiple && <span className="ml-1 text-xs text-text-muted">{t('deck.dock.multi')}</span>}</div>
+            {q.header && <div className="deck-t-down text-text-muted">{q.header}</div>}
+            <div className="deck-t-up text-text-primary">{q.question}{q.multiple && <span className="ml-1 deck-t-down text-text-muted">{t('deck.dock.multi')}</span>}</div>
             <div className="mt-1 flex flex-col gap-1">
               {q.options.map((o, oi) => {
                 const on = pick.chosen.includes(o.label)
                 return (
                   <button
                     key={oi} type="button" data-testid="dock-option" data-chosen={on} role={q.multiple ? 'checkbox' : 'radio'} aria-checked={on} disabled={disabled} onClick={() => toggle(o.label)}
-                    className={`flex items-center gap-2 rounded border px-2 py-1 text-left text-sm ${on ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle text-text-secondary hover:text-text-primary'}`}
+                    className={`flex items-center gap-2 rounded border px-2 py-1 text-left deck-t-up ${on ? 'border-accent bg-accent/10 text-text-primary' : 'border-border-subtle text-text-secondary hover:text-text-primary'}`}
                   >
                     {q.multiple ? (
                       <span data-testid="dock-mark" data-shape="check" className="flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border-subtle">{on && <Check size={10} weight="bold" />}</span>
                     ) : (
                       <span data-testid="dock-mark" data-shape="radio" className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-border-subtle">{on && <span className="h-2 w-2 rounded-full bg-accent" />}</span>
                     )}
-                    <span>{o.label}{o.description && <span className="ml-1 text-xs text-text-muted">— {o.description}</span>}</span>
+                    <span>{o.label}{o.description && <span className="ml-1 deck-t-down text-text-muted">— {o.description}</span>}</span>
                   </button>
                 )
               })}
               <input
                 type="text" data-testid="dock-other" value={pick.other} disabled={disabled} placeholder={t('deck.dock.other')} aria-label={t('deck.dock.other')}
                 onChange={(e) => setPick(i, { chosen: q.multiple ? pick.chosen : [], other: e.target.value })}
-                className="rounded border border-border-subtle bg-surface-primary px-2 py-1 text-sm text-text-primary"
+                className="rounded border border-border-subtle bg-surface-primary px-2 py-1 deck-t-up text-text-primary"
               />
             </div>
           </div>

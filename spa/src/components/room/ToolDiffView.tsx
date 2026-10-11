@@ -65,7 +65,7 @@ interface HunkRows {
 
 const NUM_CLASS = 'w-10 shrink-0 text-right tabular-nums text-text-muted pr-1 select-none'
 const BUTTON_CLASS =
-  'mt-1 text-xs text-text-muted hover:text-text-primary cursor-pointer text-left px-2'
+  'mt-1 deck-t-down text-text-muted hover:text-text-primary cursor-pointer text-left px-2'
 
 /**
  * Spends the row budget hunk by hunk, in order. A hunk whose rows all fall
@@ -139,7 +139,7 @@ export default function ToolDiffView({ diff, foldKey, showPath = false, searchKe
   // off the rail. Outline only: the fill is reserved for error and denied
   // (#2), and an edit is not a failure.
   return (
-    <div data-testid="tool-diff" className="font-mono text-xs rounded-lg border border-border-subtle">
+    <div data-testid="tool-diff" className="font-mono deck-t-down rounded-lg border border-border-subtle">
       {/*
         Spec §3.1.1 #3: the stat travels with the diff, not in the header's
         right column where it used to be stacked under the duration and the

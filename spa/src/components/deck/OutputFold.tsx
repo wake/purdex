@@ -22,10 +22,10 @@ export function OutputFold({ foldKey, output, tone = 'normal', onShowAll }: Prop
   // An output that is only pictures has no lines to fold: say so, as the user block does (the apps draw a notice).
   if (textless) {
     const n = output?.images?.length ?? 0
-    return n > 0 ? <div data-testid="output-images" className="text-xs text-text-muted">{t('deck.output.images', { n })}</div> : null
+    return n > 0 ? <div data-testid="output-images" className="deck-t-down text-text-muted">{t('deck.output.images', { n })}</div> : null
   }
   return (
-    <div data-testid="output-fold" className="text-xs">
+    <div data-testid="output-fold" className="deck-t-down">
       <button type="button" data-testid="output-toggle" aria-expanded={open} onClick={toggle} className={`cursor-pointer ${tone === 'error' ? 'text-status-error' : 'text-text-muted hover:text-text-primary'}`}>
         {open ? '▾' : '▸'} {t('deck.output', { n: tail.totalLines })}
       </button>

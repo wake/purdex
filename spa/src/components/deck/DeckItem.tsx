@@ -21,7 +21,7 @@ export function DeckItem({ item, actions, light, agentModel, agentHeader, midTur
           {light && !item.streaming
             ? <RoomProseLight content={item.markdown} cjk />
             : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} cjk />}
-          {item.truncated && <div className="text-xs text-text-muted">{t('deck.output.cut')}</div>}
+          {item.truncated && <div className="deck-t-down text-text-muted">{t('deck.output.cut')}</div>}
         </div>
       )
     case 'thinking': return <ThinkingRow item={item} />

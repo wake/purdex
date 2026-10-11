@@ -27,7 +27,7 @@ export function PeerLine({ items }: { items: UserItem[] }) {
     ? t('chat.peer.single', { name: sender(items[0]), flag: flag(items[0]), text: one.text, more: one.cut ? '…' : '' })
     : t('chat.peer.many', { n: items.length })
   return (
-    <div data-testid="chat-peer" data-count={items.length} className={`text-xs text-text-muted ${dim ? 'opacity-60' : ''}`}>
+    <div data-testid="chat-peer" data-count={items.length} className={`deck-t-down text-text-muted ${dim ? 'opacity-60' : ''}`}>
       <button type="button" data-testid="chat-peer-head" aria-expanded={open} onClick={toggle} className="block w-full cursor-pointer truncate text-left hover:text-text-primary">
         {head}
       </button>
