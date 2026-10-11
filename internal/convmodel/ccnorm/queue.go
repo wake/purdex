@@ -18,6 +18,9 @@ const (
 	maxQueuedText   = 2000 // runes of text kept and shown
 )
 
+// MaxQueuedText is the cap (in runes) of a queued text the feed keeps: a text at the cap may have been cut.
+const MaxQueuedText = maxQueuedText
+
 // Queued is one message waiting in Claude Code's queue.
 type Queued struct {
 	Text   string `json:"text"`
@@ -165,4 +168,16 @@ func (n *Normalizer) queuedOut() []Queued {
 		}
 	}
 	return out
+}
+
+// HiddenQueued is how many queued entries the header hides (the harness's own: task notifications, reminders…). Recall
+// (K-1b) needs it: Up pops everything the queue holds, so "only user messages are queued" means this is zero.
+func (n *Normalizer) HiddenQueued() int {
+	c := 0
+	for _, q := range n.queue {
+		if q.Source == QueuedSystem {
+			c++
+		}
+	}
+	return c
 }

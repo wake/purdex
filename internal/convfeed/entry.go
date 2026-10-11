@@ -72,6 +72,7 @@ type Entry struct {
 	title    string
 	usage    *convmodel.Usage
 	queued   []ccnorm.Queued // messages waiting in Claude Code's queue (user and peer)
+	hidden   int             // queued harness entries the header does not show (recall refuses while any)
 	bg       Background      // the background work Claude Code's last Stop listed (not in the transcript: set by SetBackground)
 	live     bool
 	// status and backend are the resolver's answer as of the last Refresh (the pane's light or ended / unknown, and
@@ -279,6 +280,7 @@ func (e *Entry) rollFingerprint(off int64, line []byte) {
 // refreshHeader bumps the revision when the title, the usage or the queued messages changed.
 func (e *Entry) refreshHeader() {
 	title, usage, queued := e.norm.Header()
+	e.hidden = e.norm.HiddenQueued() // not part of the revision: nothing on the wire shows it
 	if title == e.title && sameUsage(usage, e.usage) && sameQueued(queued, e.queued) {
 		return
 	}
@@ -345,13 +347,15 @@ func (e *Entry) SetBackground(b Background) bool {
 
 // Header is the title and usage as of the current revision.
 type Header struct {
-	Title      string
-	Usage      *convmodel.Usage
-	Queued     []ccnorm.Queued // messages waiting in Claude Code's queue, oldest first
-	Background Background      // background work still running (shell commands, subagents, other); zero when none or unknown
-	Live       bool
-	Status     string // the pane's light, "ended" without a pane, "unknown" when the owner lookup failed
-	Backend    string // "terminal" while a pane runs the session
+	Title  string
+	Usage  *convmodel.Usage
+	Queued []ccnorm.Queued // messages waiting in Claude Code's queue, oldest first
+	// HiddenQueued counts queued harness (system) entries that Queued leaves out; not on the wire.
+	HiddenQueued int
+	Background   Background // background work still running (shell commands, subagents, other); zero when none or unknown
+	Live         bool
+	Status       string // the pane's light, "ended" without a pane, "unknown" when the owner lookup failed
+	Backend      string // "terminal" while a pane runs the session
 }
 
 // Header returns the conversation-level fields.
@@ -367,7 +371,7 @@ func (e *Entry) headerLocked() Header {
 		c := *e.usage
 		u = &c
 	}
-	return Header{Title: e.title, Usage: u, Queued: append([]ccnorm.Queued(nil), e.queued...), Background: e.bg, Live: e.live, Status: e.status, Backend: e.backend}
+	return Header{Title: e.title, Usage: u, Queued: append([]ccnorm.Queued(nil), e.queued...), HiddenQueued: e.hidden, Background: e.bg, Live: e.live, Status: e.status, Backend: e.backend}
 }
 
 // Epoch is the random id of the current normalizer instance.
