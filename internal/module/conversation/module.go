@@ -65,10 +65,13 @@ type Module struct {
 	subSem   chan struct{}
 
 	// typed submit (K-1a-2)
-	td       *typedDeps  // nil: the daemon's services; tests inject
-	tune     typedTuning // zero: the spec's timings
-	locks    sidLocks    // shared by both submit routes
-	keysSeen keysLedger  // ids typed blind (no mod)
+	td         *typedDeps  // nil: the daemon's services; tests inject
+	tune       typedTuning // zero: the spec's timings
+	locks      sidLocks    // by Claude Code session id, shared by both submit routes
+	paneLocks  sidLocks    // by tmux pane id, the typed route only (taken before the session lock)
+	keysSeen   keysLedger  // ids typed blind (no mod)
+	finMu      sync.Mutex
+	finalising map[string]struct{} // ids with a finaliser running
 
 	mu      sync.Mutex
 	cur     *generation // the latest Start's (kept after Stop: its context is cancelled, so nothing is admitted)

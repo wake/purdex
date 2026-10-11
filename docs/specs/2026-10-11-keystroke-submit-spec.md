@@ -72,7 +72,17 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
   cannot be removed.
 - A cleanup (`clear_if` / `ClearFilled`) clears the composer when it still equals our text: a person who typed exactly the
   same text in that moment would lose it (accepted, negligible).
-- Sessions without the mod: blind typing as iOS does today.
+- Sessions without the mod (keys mode): blind typing, allowed only when the light is `idle` and no mod owner was seen for 10 s;
+  the light is read again right before the send and the text and Enter go out in ONE guarded `send-keys` call. Residual risks:
+  there is no dialog detection (only the light), a draft already in the composer would be prefixed to our text, and with Claude
+  Code's vim mode the text would be read as normal-mode commands.
+- The Enter goes out even if the client disconnected after the fill was accepted: sending beats leaving our text behind in the
+  composer. The answer is lost, the ledger keeps `handed`, and a repeat of the id is answered from it.
+- The mod's owner stream carries no frame id or pid, so the pane that did the fill cannot be compared with the pane that gets the
+  Enter. Instead the route refuses (`409 ambiguous_pane`) when more than one live Claude Code pane has the session id, and
+  (`409 pane_mismatch`) when that one pane is not the resolved owner's.
+- Trailing backslashes: Claude Code reads `\` + Enter as a newline, so text ending in an odd run of `\` gets one space appended.
+- Every non-2xx answer is `{outcome?, reason, error}` (`reason` = `error` = the code), so the apps parse one shape.
 
 ## 6. Phases
 - K-1 daemon: `/submit` with lock, ledger, sanitise, guards, mod fill path, keys fallback; `/recall`. Tests with a fake mod and a

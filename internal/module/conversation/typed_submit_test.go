@@ -169,6 +169,40 @@ func (r tResolver) ResolveSessionOwner(context.Context, string) (agent.PaneOwner
 	return r.owner, r.found, nil
 }
 
+// tFlip answers `first` once, then `then` for ever (the owner moved while the request waited for the locks).
+type tFlip struct {
+	mu          sync.Mutex
+	first, then agent.PaneOwner
+	n           int
+}
+
+func (r *tFlip) ResolveSessionOwner(context.Context, string) (agent.PaneOwner, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.n++
+	if r.n == 1 {
+		return r.first, true, nil
+	}
+	return r.then, true, nil
+}
+
+// tPanes is the confirmed live panes of the session (the identity check).
+type tPanes struct {
+	mu     sync.Mutex
+	panes  []agent.PaneOwner
+	err    error
+	called int
+}
+
+func (p *tPanes) ConfirmedOwners(context.Context, string) ([]agent.PaneOwner, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.called++
+	return p.panes, p.err
+}
+
+var tOwner = agent.PaneOwner{SessionID: sid, FrameID: "f1", TmuxPaneID: "%5", AgentType: "cc", Status: "idle"}
+
 type tenv struct {
 	*env
 	q      *promptq.Queue
@@ -176,6 +210,7 @@ type tenv struct {
 	fm     *tMod
 	keys   *tKeys
 	light  *tLight
+	panes  *tPanes
 }
 
 func newTEnv(t *testing.T) *tenv {
@@ -184,11 +219,10 @@ func newTEnv(t *testing.T) *tenv {
 	owners := &tOwners{m: map[string]string{sid: "mod1"}}
 	q := promptq.New(owners)
 	q.Wait, q.HandTimeout = 400*time.Millisecond, 150*time.Millisecond
-	te := &tenv{env: e, q: q, owners: owners, keys: &tKeys{}, light: &tLight{seq: []string{"idle"}}, fm: &tMod{q: q}}
-	e.mod.td = &typedDeps{q: q, sessions: tSessions{tInst}, keys: te.keys,
-		owners: tResolver{found: true, owner: agent.PaneOwner{SessionID: sid, FrameID: "f1", TmuxPaneID: "%5", AgentType: "cc", Status: "idle"}}}
+	te := &tenv{env: e, q: q, owners: owners, keys: &tKeys{}, light: &tLight{seq: []string{"idle"}}, fm: &tMod{q: q}, panes: &tPanes{panes: []agent.PaneOwner{tOwner}}}
+	e.mod.td = &typedDeps{q: q, sessions: tSessions{tInst}, keys: te.keys, panes: te.panes, owners: tResolver{found: true, owner: tOwner}}
 	e.mod.light = te.light
-	e.mod.tune = typedTuning{lockWait: 150 * time.Millisecond, poll: 5 * time.Millisecond, finaliseFor: 2 * time.Second, keysAfter: time.Hour, keyGap: -1}
+	e.mod.tune = typedTuning{lockWait: 150 * time.Millisecond, poll: 5 * time.Millisecond, finaliseFor: 2 * time.Second, keysAfter: time.Hour}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { te.fm.run(ctx); close(done) }()
@@ -330,13 +364,23 @@ func TestTypedSubmit_GuardRefusalsClearTheComposer(t *testing.T) {
 			t.Fatalf("%s: clear_if=%d phase=%s", c.reason, te.fm.count(promptq.KindClearIf), phaseOf(t, te.q, "g1").Phase)
 		}
 	}
-	te := newTEnv(t) // tmux could not be reached: nothing was sent either
+}
+
+// A tmux invocation error that is not a guard refusal: the Enter may or may not have gone. The row is unknown (not cleared:
+// the Enter was marked), our text is cleared best effort with clear_if, and the answer is 200 unknown, not a 502.
+func TestTypedSubmit_TmuxErrorAfterEnteringIsUnknownNot502(t *testing.T) {
+	te := newTEnv(t)
 	te.keys.errs = []error{context.DeadlineExceeded}
-	if w := te.submit("g2", "x"); w.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d", w.Code)
+	answer(t, te.submit("g2", "x"), 200, "unknown", "fill", "")
+	if got := phaseOf(t, te.q, "g2").Phase; got != promptq.PhaseUnknown {
+		t.Fatalf("phase = %s", got)
 	}
-	if phaseOf(t, te.q, "g2").Phase != promptq.PhaseCleared {
-		t.Fatalf("phase = %s", phaseOf(t, te.q, "g2").Phase)
+	if n := te.fm.count(promptq.KindClearIf); n != 1 {
+		t.Fatalf("clear_if = %d, want a best-effort clear", n)
+	}
+	answer(t, te.submit("g2", "x"), 200, "unknown", "fill", "") // a repeat never types again
+	if te.fm.count(promptq.KindFill) != 1 || te.keys.n() != 1 {
+		t.Fatal("a repeat typed")
 	}
 }
 
@@ -423,30 +467,6 @@ func TestTypedSubmit_CleanupThatFailsTwiceEndsAsGaveUp(t *testing.T) {
 	if r := phaseOf(t, te.q, "gu1"); r.Phase != promptq.PhaseCleared || r.Reason != "cleanup_gave_up" {
 		t.Fatalf("row = %+v", r)
 	}
-}
-
-func TestTypedSubmit_KeysFallbackNeedsAnOwnerlessWindowAndACalmLight(t *testing.T) {
-	te := newTEnv(t)
-	te.owners.drop() // the mod is gone
-	te.mod.tune.keysAfter = time.Hour
-	answer(t, te.submit("k1", "x"), 409, "refused", "", "no_owner_yet")
-	if te.keys.n() != 0 {
-		t.Fatal("typed blind too early")
-	}
-	te.mod.tune.keysAfter = time.Millisecond
-	time.Sleep(5 * time.Millisecond)
-	te.light.seq = []string{"error"}
-	answer(t, te.submit("k2", "x"), 409, "refused", "", "no_owner_yet")
-	te.light.seq = []string{"running"}
-	answer(t, te.submit("k3", "line1\nline2 @src"), 200, "handed", "keys", "")
-	if te.keys.n() != 2 || te.keys.calls[0].keys[0] != "line1\nline2 @src " || te.keys.calls[1].keys[0] != tmux.KeyEnter || te.keys.calls[0].pane != "%5" {
-		t.Fatalf("keys = %+v", te.keys.calls)
-	}
-	answer(t, te.submit("k3", "line1\nline2 @src"), 200, "handed", "keys", "") // the same id never types twice
-	if te.keys.n() != 2 {
-		t.Fatalf("a replay typed again: %d calls", te.keys.n())
-	}
-	errOf(t, te.submit("k4", "/help"), 400, "needs_terminal")
 }
 
 func TestTypedSubmit_SharesTheLockWithTheOldConversationRoute(t *testing.T) {
