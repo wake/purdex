@@ -164,7 +164,21 @@ export function parsePromptJob(res) {
   if (j.kind === 'submit' && typeof j.text === 'string' && j.text.trim() !== '' && j.text.length <= MAX_PROMPT_TEXT) {
     return { id: j.id, kind: 'submit', sessionId: j.session_id, text: j.text }
   }
+  if ((j.kind === 'fill' || j.kind === 'clear_if') && typeof j.text === 'string' && j.text.trim() !== '' && j.text.length <= MAX_PROMPT_TEXT) {
+    return { id: j.id, kind: j.kind, sessionId: j.session_id, text: j.text }
+  }
+  if (j.kind === 'read') return { id: j.id, kind: 'read', sessionId: j.session_id, text: '' }
   return null
+}
+
+// fillRefusal is the drop reason of a `$.prompt.fill` answer that did not fill: dialog_open | no_composer | refused (the hook's
+// own refusal and anything unexpected carry no `refusal`), or '' when the composer was filled.
+export function fillRefusal(f) {
+  if (!f || typeof f !== 'object') return 'refused'
+  if (f.isFilled === true) return ''
+  if (f.refusal === 'dialog') return 'dialog_open'
+  if (f.refusal === 'no_composer') return 'no_composer'
+  return 'refused'
 }
 
 const MAX_REASON_BYTES = 120 // the daemon refuses a reason over 128 BYTES: cut by UTF-8 length, on a character boundary
@@ -184,8 +198,11 @@ export function cutUtf8(s, max) {
 }
 
 // promptResultBody is the request of `prompt/result`: status accepted | dropped | busy, and for dropped the reason.
-export function promptResultBody(stream, jobId, status, reason) {
+// `extra` carries {filledAt} of an accepted fill (unix ms) and {text} of an accepted read.
+export function promptResultBody(stream, jobId, status, reason, extra) {
   const b = { stream, job_id: jobId, status }
   if (reason) b.reason = cutUtf8(String(reason), MAX_REASON_BYTES)
+  if (extra && Number.isFinite(extra.filledAt)) b.filled_at = Math.trunc(extra.filledAt)
+  if (extra && typeof extra.text === 'string') b.text = extra.text
   return JSON.stringify(b)
 }

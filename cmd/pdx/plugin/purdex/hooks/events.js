@@ -32,7 +32,7 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
+import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, fillRefusal, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -479,6 +479,7 @@ async function pqRun($, job) {
   const t0 = await $.clock.now() // when the job arrived: the result's retries are bounded from here
   let status = 'accepted'
   let reason = ''
+  let extra = null // filled_at of a fill, text of a read
   try {
     // A /clear or resume in progress (session.end seen, the switch not yet) still reports the old id: nothing runs then
     if (ev.switching || job.sessionId !== String(await $.session.id())) {
@@ -494,6 +495,39 @@ async function pqRun($, job) {
           reason = r.drop || 'dropped'
         }
       }
+    } else if (job.kind === 'fill') {
+      // Typed submit (K-1): the text goes into the empty composer WITHOUT Enter; the daemon presses Enter. Allowed mid-turn
+      // (fill/read return at once, unlike submit). Never mixes with a draft someone is typing in the terminal.
+      const cur = await $.prompt.read()
+      if (isObject(cur) && typeof cur.text === 'string' && cur.text !== '') {
+        status = 'dropped'
+        reason = 'input_not_empty'
+      } else {
+        const f = await $.prompt.fill({ text: job.text, mode: 'replace' })
+        const why = fillRefusal(f)
+        if (why) {
+          status = 'dropped'
+          reason = why
+        } else if (f.text !== job.text) {
+          await $.prompt.fill({ text: '', mode: 'replace' }).catch(() => undefined) // leave nothing of ours behind
+          status = 'dropped'
+          reason = 'fill_mismatch'
+        } else {
+          extra = { filledAt: await $.clock.now() } // right after the fill: the daemon presses Enter only while this is fresh
+        }
+      }
+    } else if (job.kind === 'clear_if') {
+      // Cleanup of a fill that was not sent: only our own text is cleared, never someone else's draft.
+      const cur = await $.prompt.read()
+      if (isObject(cur) && cur.text === job.text) {
+        await $.prompt.fill({ text: '', mode: 'replace' })
+      } else {
+        status = 'dropped'
+        reason = 'not_ours'
+      }
+    } else if (job.kind === 'read') {
+      const cur = await $.prompt.read()
+      extra = { text: isObject(cur) && typeof cur.text === 'string' ? cur.text : '' }
     } else if (!ev.turnId) {
       status = 'dropped'
       reason = 'not_running'
@@ -505,6 +539,7 @@ async function pqRun($, job) {
   } catch (err) {
     status = 'dropped'
     reason = job.kind === 'interrupt' ? 'not_running' : 'refused'
+    extra = null
     log($, 'prompt job ' + job.kind + ' failed: ' + String(err))
   }
   // The job has run (or been refused): its report must get through. A lost answer or a busy daemon is tried again, a few
@@ -512,10 +547,13 @@ async function pqRun($, job) {
   // add. The whole sequence is bounded from the moment the job arrived: no attempt starts after PROMPT_RESULT_BUDGET_MS
   // (the daemon's lease is 10 s) and each one waits at most PROMPT_RESULT_POST_MS, so the poll loop is held up for a
   // bounded time even when every POST hangs.
-  for (let attempt = 0; attempt < PROMPT_RESULT_TRIES; attempt++) {
+  // A fill is reported ONCE: a retry only widens the window between the fill and the daemon's Enter, and a late report is
+  // stale anyway (the daemon types Enter only while filled_at is fresh and cleans the composer otherwise).
+  const tries = job.kind === 'fill' ? 1 : PROMPT_RESULT_TRIES
+  for (let attempt = 0; attempt < tries; attempt++) {
     if (attempt > 0) await $.clock.sleep(PROMPT_RESULT_RETRY_MS * attempt)
     if ((await $.clock.now()) - t0 >= PROMPT_RESULT_BUDGET_MS) break
-    const out = await wbRequest($, PROMPT_RESULT_URL, promptResultBody(ev.stream, job.id, status, reason), 0, PROMPT_RESULT_POST_MS)
+    const out = await wbRequest($, PROMPT_RESULT_URL, promptResultBody(ev.stream, job.id, status, reason, extra), 0, PROMPT_RESULT_POST_MS)
     const code = out && out !== TIMEOUT && out.res ? out.res.status : 0
     if (code === 200 || code === 409) return
   }

@@ -7,6 +7,7 @@
 // Every POST goes out from a $.clock.after timer, so each step settles or advances the mocked
 // clock before it looks at what was posted.
 import { test, expect, mock } from 'claude-code/testing'
+import { fillRefusal } from './workbook.js'
 
 const SID1 = 'aaaaaaaa-1111-4111-8111-111111111111'
 const SID2 = 'bbbbbbbb-2222-4222-8222-222222222222'
@@ -48,6 +49,11 @@ type W = {
   promptResult: (body: any, n: number) => Answer | Promise<Answer> // ... to prompt/result (default 200)
   submit: (e: any, n: number) => any // prompt.submit beneath the mod: { text } or { drop }, or { deny } for a refused call
   submitCalls: any[]
+  composer: string // the TUI input: prompt.fill sets it, prompt.read returns it (the engine's fill reads it back, so a fake must keep state)
+  read?: (e: any, n: number) => any // overrides prompt.read: { text, cursor }, or { deny }
+  readCalls: any[] // NOTE: the engine's own fill reads back through this hook too, so count reads only where no fill runs
+  fill?: (e: any, n: number) => any // overrides prompt.fill: { isFilled, text, cursor } (the engine drops a hook's `refusal`)
+  fillCalls: any[]
   abort: (e: any) => any // turn.abort beneath the mod: undefined, or { deny } when no turn is running
   abortCalls: any[]
   wbRefresh: (body: any, n: number) => Answer | Promise<Answer> // the daemon's answer to POST /workbook/refresh
@@ -66,7 +72,7 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     wbReqs: [], wbNext: () => ({ status: 204 }), wbResult: () => ({ status: 200, text: '{"more":false}' }),
     model: () => ({ isAnswered: true, text: '{}', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }), modelCalls: [],
     fork: () => ({ isAnswered: true, text: '{"status":"s","todos":{"done":[],"dropped":[],"add":[]}}', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 } }), forkCalls: [], registered: [], pqReqs: [], promptNext: () => never(), promptResult: () => ({ status: 200, text: '{"ok":true}' }),
-    submit: (e: any) => ({ text: e.text }), submitCalls: [], abort: () => undefined, abortCalls: [],
+    submit: (e: any) => ({ text: e.text }), submitCalls: [], composer: '', readCalls: [], fillCalls: [], abort: () => undefined, abortCalls: [],
     wbRefresh: () => ({ status: 202, text: '{"entry_id":7}' }),
     daemon: ackAll,
     bash: () => BASH_OK,
@@ -136,6 +142,17 @@ function evWorld(on: any, opts: Partial<W> = {}): W {
     w.submitCalls.push(e)
     const r = await w.submit(e, w.submitCalls.length)
     return r
+  })
+  on('prompt.read', async (_$: any, e: any) => {
+    w.readCalls.push(e)
+    const r = w.read ? await w.read(e, w.readCalls.length) : { text: w.composer, cursor: w.composer.length }
+    return r && 'deny' in r ? { deny: r.deny } : { value: r }
+  })
+  on('prompt.fill', async (_$: any, e: any) => {
+    w.fillCalls.push(e)
+    if (w.fill) return w.fill(e, w.fillCalls.length)
+    w.composer = e.text
+    return { isFilled: true, text: e.text, cursor: e.text.length }
   })
   on('turn.abort', async (_$: any, e: any) => {
     w.abortCalls.push(e)
@@ -1865,3 +1882,163 @@ test('a report that never succeeds is tried three times and no more', async ($, 
   await w.clock.advance(10_000)
   expect(pqResult(w)).toHaveLength(3)
 })
+
+// ---- K-1a-1: typed submits (fill), the cleanup (clear_if) and read ----
+
+// fillOf drops the `origin` the engine adds to a call.
+const fillOf = (e: any) => ({ text: e.text, mode: e.mode })
+const FJOB = (extra: any = {}) => PJOB({ kind: 'fill', text: 'typed\nby the app ', ...extra })
+
+// Mutation gate: call prompt.submit, skip the read, or use another fill mode -> red. A fill is allowed mid-turn.
+test('a fill job reads the composer, fills it in replace mode (also mid-turn) and reports accepted with filled_at', async ($, on) => {
+  const g = gated(FJOB())
+  const w = evWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await turnStart($, 't1') // a turn is running: unlike submit, fill goes ahead
+  await w.clock.advance(1234) // the mock clock starts at 0: filled_at must be the time of the fill, not a constant
+  g.open()
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(0)
+  expect(w.fillCalls.map(fillOf)).toEqual([{ text: 'typed\nby the app ', mode: 'replace' }])
+  expect(w.composer).toBe('typed\nby the app ')
+  const body = pqResult(w)[0].body
+  expect(body).toMatchObject({ job_id: 'pj-' + PJ, status: 'accepted' })
+  expect(typeof body.filled_at).toBe('number')
+  expect(body.filled_at).toBeGreaterThanOrEqual(1234)
+  expect(body.filled_at).toBeLessThanOrEqual(w.clock.now())
+})
+
+// Mutation gate: fill over a draft -> red (never mix with what someone is typing in the terminal).
+test('a fill finds a draft in the composer: dropped input_not_empty, nothing filled', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), composer: 'half a thought' })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.fillCalls).toHaveLength(0)
+  expect(w.composer).toBe('half a thought')
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'input_not_empty' })
+  expect(pqResult(w)[0].body.filled_at).toBeUndefined()
+})
+
+test('a fill the hook refuses (isFilled false, no refusal) is dropped refused', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), fill: () => ({ isFilled: false, text: '', cursor: 0 }) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.fillCalls).toHaveLength(1)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'refused' })
+})
+
+// The engine's own refusals cannot be raised through a test hook (it drops `refusal`), so the mapping is tested directly.
+test('fillRefusal maps the engine\'s refusals to drop reasons', () => {
+  expect(fillRefusal({ isFilled: true, text: 'x', cursor: 1 })).toBe('')
+  expect(fillRefusal({ isFilled: false, refusal: 'dialog', text: '', cursor: 0 })).toBe('dialog_open')
+  expect(fillRefusal({ isFilled: false, refusal: 'no_composer', text: '', cursor: 0 })).toBe('no_composer')
+  expect(fillRefusal({ isFilled: false, text: '', cursor: 0 })).toBe('refused')
+  expect(fillRefusal({ isFilled: false, refusal: 'something new' })).toBe('refused')
+  for (const odd of [undefined, null, 'x', 5, {}, { isFilled: 'yes' }]) expect(fillRefusal(odd)).toBe('refused')
+})
+
+// Mutation gate: leave the wrong text in place, or skip the clean-up fill -> red.
+test('a fill whose returned text differs is cleaned up (fill empty) and dropped fill_mismatch', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), fill: (e: any, n: number) => { w.composer = n === 1 ? 'typed by the app' : e.text; return { isFilled: true, text: w.composer, cursor: 1 } } })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.composer).toBe('')
+  expect(w.fillCalls.map(fillOf)).toEqual([{ text: 'typed\nby the app ', mode: 'replace' }, { text: '', mode: 'replace' }])
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'fill_mismatch' })
+})
+
+test('a fill the engine throws on is dropped refused', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), fill: () => { throw new Error('engine says no') } })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'refused' })
+})
+
+test('a fill made for another session id is dropped session_changed and touches nothing', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB({ session_id: SID2 })) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.readCalls).toHaveLength(0)
+  expect(w.fillCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'session_changed' })
+})
+
+// Mutation gate: retry the fill result (it only widens the window before the daemon's Enter) -> red.
+test('the result of a fill is posted once even when the post fails', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => ({ status: 503, text: '{}' }) })
+  await start($, w)
+  await w.clock.settle()
+  await w.clock.advance(10_000)
+  expect(pqResult(w)).toHaveLength(1)
+})
+
+// The other kinds keep today's retries.
+for (const job of [PJOB({ kind: 'read', text: undefined }), PJOB({ kind: 'clear_if', text: 'x' })]) {
+  test(`the result of a ${job.kind} still retries (only fill is one-shot)`, async ($, on) => {
+    const w = evWorld(on, { promptNext: nextOnce(job), composer: 'x', promptResult: () => ({ status: 503, text: '{}' }) })
+    await start($, w)
+    await w.clock.settle()
+    await w.clock.advance(5000)
+    expect(pqResult(w).length).toBeGreaterThan(1)
+  })
+}
+
+// Mutation gate: clear whatever is there -> red (never clear someone else's draft).
+test('clear_if clears the composer only when it still holds exactly the job text', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'clear_if', text: 'ours' })), composer: 'ours' })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.fillCalls.map(fillOf)).toEqual([{ text: '', mode: 'replace' }])
+  expect(w.composer).toBe('')
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'accepted' })
+})
+
+for (const found of ['someone else\'s draft', '', 'ours too']) {
+  test(`clear_if finds ${JSON.stringify(found)}: dropped not_ours, nothing cleared`, async ($, on) => {
+    const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'clear_if', text: 'ours' })), composer: found })
+    await start($, w)
+    await w.clock.settle()
+    expect(w.fillCalls).toHaveLength(0)
+    expect(w.composer).toBe(found)
+    expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'not_ours' })
+  })
+}
+
+test('a clear_if for another session id is dropped session_changed', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'clear_if', text: 'ours', session_id: SID2 })) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.readCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'session_changed' })
+})
+
+test('a read job reports the composer text, newlines kept', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'read', text: undefined })), composer: 'a\nb ' })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.fillCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'accepted', text: 'a\nb ' })
+})
+
+test('a read the engine throws on is dropped refused', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'read', text: undefined })), read: () => { throw new Error('no') } })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'refused' })
+})
+
+for (const [name, job] of [
+  ['a fill with blank text', FJOB({ text: '  ' })],
+  ['a fill with over-long text', FJOB({ text: 'x'.repeat(8001) })],
+  ['a fill with text that is not a string', FJOB({ text: 5 })],
+  ['a clear_if without text', PJOB({ kind: 'clear_if', text: undefined })],
+] as [string, any][]) {
+  test(`${name} is not run and not reported`, async ($, on) => {
+    const w = evWorld(on, { promptNext: nextOnce(job) })
+    await start($, w)
+    await w.clock.advance(1100)
+    await w.clock.settle()
+    expect(w.fillCalls).toHaveLength(0)
+    expect(pqResult(w)).toHaveLength(0)
+  })
+}
