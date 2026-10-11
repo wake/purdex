@@ -136,13 +136,21 @@ func (m *Module) promptSender() PromptSender {
 
 // capabilitiesFor is the conversation's capability table with what the mod channel adds: send and interrupt are `prompt`
 // while a mod stream that announced prompt.v1 is live for the session (else they stay not_wired, fail-closed).
-func (m *Module) capabilitiesFor(sessionID string) *convmodel.Capabilities {
+//
+// backend is the one the conversation's resolved source (the header) reports: "execution" gets the worker's table, anything
+// else the terminal / prompt logic. One owner decision, so the header and the capabilities cannot disagree.
+func (m *Module) capabilitiesFor(sessionID, backend string) *convmodel.Capabilities {
 	c := convmodel.TranscriptCapabilities()
 	// a question the agent asks is answered through the approvals channel (the conversation stream's approvals and the decide
 	// API with hook answers), whatever the mod does
 	c.AnswerQuestion = "approval"
 	delete(c.Reasons, "answer_question")
-	if ps := m.promptSender(); ps != nil && ps.HasOwner(sessionID) {
+	if backend == "execution" { // a headless worker runs it: the SPA picks the worker adapter by these values
+		c.Send, c.Interrupt, c.AnswerPermission, c.BackgroundTasks = "execution", "execution", "execution", "execution"
+		for _, k := range []string{"send", "interrupt", "answer_permission", "background_tasks"} {
+			delete(c.Reasons, k)
+		}
+	} else if ps := m.promptSender(); ps != nil && ps.HasOwner(sessionID) {
 		c.Send, c.Interrupt = "prompt", "prompt"
 		delete(c.Reasons, "send")
 		delete(c.Reasons, "interrupt")

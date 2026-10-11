@@ -43,6 +43,19 @@ func executionIsFor(e store.Execution, sid string) bool {
 	return sid != "" && (strings.EqualFold(e.SessionID, sid) || strings.EqualFold(e.ResumeSessionID, sid))
 }
 
+// executionOwns: the row IS conversation sid's worker (stricter than executionIsFor). It owns sid when it reports sid
+// as its own session, or, before its first turn has reported one (SessionID empty), when it resumes sid. A row that
+// only resumed sid and already runs under another session id has moved on: it is not sid's owner.
+func executionOwns(e store.Execution, sid string) bool {
+	if sid == "" {
+		return false
+	}
+	if e.SessionID != "" {
+		return strings.EqualFold(e.SessionID, sid)
+	}
+	return strings.EqualFold(e.ResumeSessionID, sid)
+}
+
 // liveWorkersFor returns S's live executions, newest first (CreatedAt desc,
 // then ID desc), with scanLiveWorkers' error contract.
 func (m *Module) liveWorkersFor(parent context.Context, sid string) ([]store.Execution, error) {

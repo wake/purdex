@@ -148,6 +148,7 @@ type Module struct {
 	workerHub  workerNotifyHub // worker transitions for the push module (worker_notify.go)
 	projMu     sync.Mutex
 	proj       *projector
+	execOwners execOwnerCache // conversation-owner answers (conversation_owner.go)
 	projTiming projectorTiming
 
 	// Q1 lifecycle (manual_resume.go). Start creates q1Ctx and subscribes;
@@ -301,6 +302,7 @@ func (m *Module) Init(c *core.Core) error {
 	// no execution rows, instead of a listing failure on every request.
 	c.Registry.Register(execpeers.RegistryKey, &execPeers{m: m})
 	c.Registry.Register(WorkerNotifyKey, WorkerNotifyFeed(m))
+	c.Registry.Register(ConversationOwnerKey, ConversationOwnerSource(m))
 	return nil
 }
 

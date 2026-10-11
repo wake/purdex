@@ -31,6 +31,14 @@ type Owner struct {
 	Status         string // the pane's light: running | waiting | idle | error
 	SeenAt         int64  // when the pane was last seen; the largest wins among several
 	FrameID        string // the owning frame, so a cheap light lookup can follow the frame that was confirmed
+	Backend        string // "terminal" (empty means the same) | "execution"
+}
+
+// ExecLookup finds the live execution that runs a session (a headless worker): its owner carries Backend
+// "execution", the worker's light as Status and the row's transcript path. ok false means none; an error means "could
+// not tell". It is asked only when no terminal pane owns the session and that lookup succeeded.
+type ExecLookup interface {
+	LiveExecution(ctx context.Context, sessionID string) (Owner, bool, error)
 }
 
 // OwnerLookup finds the confirmed live panes of a session. An error means "could not tell", not "none".
@@ -48,6 +56,8 @@ type Resolver struct {
 	Home   string // the home directory holding .claude/projects
 	Owners OwnerLookup
 	Index  IndexLookup
+	// ExecOwners is optional: without it only terminal panes own a session.
+	ExecOwners ExecLookup
 
 	MaxLookupDirs int           // zero: DefaultLookupDirs
 	LookupTime    time.Duration // zero: DefaultLookupTime
@@ -88,6 +98,17 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 			}
 			owner = &o
 			status = o.Status
+		case r.ExecOwners != nil:
+			// no pane owns it (and the pane lookup did not fail): a live worker execution may
+			x, ok, xerr := r.ExecOwners.LiveExecution(ctx, sessionID)
+			switch {
+			case xerr != nil:
+				status = "unknown"
+			case ok:
+				x.Backend = "execution"
+				owner = &x
+				status = x.Status
+			}
 		}
 	}
 
@@ -100,6 +121,9 @@ func (r *Resolver) Resolve(ctx context.Context, sessionID string) (Source, error
 		s := Source{File: osFile{f}, Identity: identity, Closer: f, Status: status, StatusAt: readAt, Path: path}
 		if owner != nil {
 			s.Live, s.Backend, s.FrameID = true, "terminal", owner.FrameID
+			if owner.Backend != "" {
+				s.Backend = owner.Backend
+			}
 		}
 		return s, nil
 	}
