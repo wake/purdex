@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.719] - 2026-10-12
+
+> 只有 daemon 改動，mod 沒有改。Mac／iOS 的啟動面板還沒上（要等這一版在兩台主機上線後才 merge），所以 App 暫時看不出差別。
+
+### Added：啟動面板的 daemon 路由（NA-0b，#2723、#2726，介面線）
+
+- `GET /api/sessions/{code}/launch-plan`：回報這個 session 現在能怎麼啟動 agent——有沒有 agent 在跑、上次跑的對話能不能接續、要不要先切到專案目錄、開新對話用哪個 agent、pane 是不是正在忙。上次的紀錄只在 tmux 世代沒變時才給。
+- `POST /api/sessions/{code}/launch`：由 daemon 自己重新算出要打的指令（不收 client 傳來的指令），只在 pane 停在 shell 提示字元、且 tmux 世代沒變時才送出；判斷和送出在同一次 tmux 呼叫裡完成。世代變了回 409 `generation_conflict`，pane 在忙回 `busy`，同時按兩次只有一次會送出（`already_launching`），agent 已經在跑回 `agent_running`。要切目錄時指令前面固定加 `cd '<路徑>' && `，路徑一律單引號。
+- 新 capability `session.launch.v1`；這兩條路由也開放給手機等 device token 使用（同路徑的其他方法仍然擋）。
+
 ## [1.0.0-alpha.718] - 2026-10-12
 
 > 只有 daemon 改動，mod 沒有改。App 看不出差別；這一版先上線，是為了讓主機開始記錄每個 session 最後跑過的 agent，之後的啟動面板一上線就有紀錄可以接續。
