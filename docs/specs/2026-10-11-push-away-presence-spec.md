@@ -1,6 +1,6 @@
 # Push: phone only when you are away from the computer — spec + plan (rev 3)
 
-Status: approved (codex reviewed, rev 3); PA-1 in progress. User decisions 2026-10-11 (purdex-1f). rev 2 takes codex review `task-mv3nefgr-rbvam2` (11 important, 1 minor; all taken); rev 3 takes the incremental review `task-mv3nyz3w-cw3kv0` (5 partial + 3 new important; all taken). See §9. Amends `docs/specs/2026-10-09-push-spec.md` §5.1 (approvals R6), §5.2 rules 4/7/8 (agent events) and §5.4 (Mac presence). Desktop notifications (the Mac App's own `shouldNotify`, `spa/src/lib/notification-gate.ts`) are **unchanged**.
+Status: approved (codex reviewed, rev 3.1); PA-1 in progress. User decisions 2026-10-11 (purdex-1f). rev 2 takes codex review `task-mv3nefgr-rbvam2` (11 important, 1 minor; all taken); rev 3 takes the incremental review `task-mv3nyz3w-cw3kv0` (5 partial + 3 new important; all taken). See §9. Amends `docs/specs/2026-10-09-push-spec.md` §5.1 (approvals R6), §5.2 rules 4/7/8 (agent events) and §5.4 (Mac presence). Desktop notifications (the Mac App's own `shouldNotify`, `spa/src/lib/notification-gate.ts`) are **unchanged**.
 
 ## 1. Why
 
@@ -76,11 +76,11 @@ Today a phone push is skipped only while a Mac window **has focus, saw input in 
 ### 5.1 Owner: one reporter per Mac, in the Electron main process
 
 - On macOS the main process outlives every window (`electron/main.ts:405`); a renderer-hosted reporter dies with its window (`electron/window-manager.ts:69`). So the **v2 reporter lives in the main process**, one per App, independent of windows (no throttling, no per-window races).
-- **Host list**: the renderer hands the main process the **persisted host configuration** only — `{rev, hosts: [{hostId, baseUrl, token}]}` — never per-window connection state (that differs between windows, `useHostStore.ts:782`). `rev` is the host store's persisted update counter (add one if the store has none); the main process keeps the copy with the highest `rev` and ignores older ones, so a window that is reconnecting or stale cannot overwrite a newer list; the copy survives closed windows (on App restart a window opens first and hands it over).
+- **Host list**: the renderer hands the main process the **persisted host configuration** only — `{rev, hosts: [{hostId, baseUrl, token}]}` — never per-window connection state (that differs between windows, `useHostStore.ts:782`). `rev` is written as `max(rev + 1, now)` (ms) on every host-store write, so two windows cannot produce the same number; the main process keeps the copy with the highest `rev` and ignores older ones, so a window that is reconnecting or stale cannot overwrite a newer list; the copy survives closed windows (on App restart a window opens first and hands it over).
 - **Capabilities**: the main process asks each host itself — `GET /api/info` with the token — at start, when the list changes, after a failed send, and every 10 min; it reports v2 only to hosts whose `/api/info` lists `push.presence.v2`.
 - **IPC hygiene**: the handler validates the payload shape, `http(s)` URL scheme, at most 64 hosts and a size cap; tokens are never logged or sent back to a renderer.
 - `client_id` for v2 = `mac:<install id>` (one per App install, not per window).
-- The per-window v1 reporter (`spa/src/lib/presence/reporter.ts`) keeps reporting v1 to hosts **without** `push.presence.v2`, and stops reporting to hosts that have it (the main process owns those).
+- The per-window v1 reporter (`spa/src/lib/presence/reporter.ts`) keeps reporting v1 to every host **until the main process says it has taken that host over**: the host lists `push.presence.v2` **and** the main process's last v2 send to it succeeded within the last 45 s. When a main-process send fails, the host leaves the taken-over set and v1 resumes at once — so there is no gap while v2 takes over or falls back (PA-2 plan rev 2, `docs/plans/2026-10-11-push-presence-pa2-plan.md`).
 
 ### 5.2 Sampling
 
@@ -100,14 +100,13 @@ Today a phone push is skipped only while a Mac window **has focus, saw input in 
 
 ### 5.4 Compatibility
 
-- **New SPA + old Electron shell** (dev-server SPA newer than the preload) or a plain browser: the bridge methods are optional and feature-detected; without them the main process cannot report, so the renderer keeps sending **v1** to every host (today's behaviour). v2 is sent only when the bridge exists **and** the host announces `push.presence.v2`.
+- **New SPA + old Electron shell** (dev-server SPA newer than the preload) or a plain browser: the bridge methods are optional and feature-detected; without them the main process cannot report, so the renderer keeps sending **v1** to every host (today's behaviour). v2 is sent only when the bridge exists **and** the host announces `push.presence.v2`, and v1 stops for a host only once the main process reports it has taken that host over (§5.1).
 - **v2 App + old daemon** (no capability): v1 only, as today.
 - **v1 App + new daemon**: legacy rule (§4.2/§4.3), as today.
 
 ### 5.5 Settings
 
-- Settings → Notifications: 「離開電腦幾分鐘後推到手機」 1 / 2 / 3 / 5 / 10 / 15 / 30 / 60 min, default 5, with the line 「在電腦前（這台 Mac 有鍵盤或滑鼠動作、沒鎖螢幕）時不推到手機；鎖螢幕 1 分鐘後也會推。」 **Stored by the main process** in its own app prefs (under `userData`), read and written through the bridge — not in the renderer's notification store (that one is synced across windows and projected by Profile Sync, `useNotificationSettingsStore.ts:52`, `projections.ts:67`), so N stays per Mac. A change forces a send (§5.3).
-- Shown only when the Electron bridge is present (it has no effect otherwise).
+- Settings → Desktop App (the `ElectronSection`, shown only when the bridge exists; the repo has no separate Notifications page): 「離開電腦幾分鐘後推到手機」 1 / 2 / 3 / 5 / 10 / 15 / 30 / 60 min, default 5, with the line 「在電腦前（這台 Mac 有鍵盤或滑鼠動作、沒鎖螢幕）時不推到手機；鎖螢幕 1 分鐘後也會推。」 **Stored by the main process** in its own app prefs (under `userData`), read and written through the bridge — not in the renderer's notification store (that one is synced across windows and projected by Profile Sync, `useNotificationSettingsStore.ts:52`, `projections.ts:67`), so N stays per Mac. A change forces a send (§5.3).
 
 ## 6. Phases
 
@@ -136,3 +135,5 @@ Boundary probes — an event is triggered on each side of the boundary; nothing 
 1 no window → main-process owner §5.1 · 2 new SPA/old shell → optional bridge §5.4, PA-2a/2b split · 3 heartbeat/initial send → main-process 20 s from start §5.3 · 4 lock init/races/per-window → reconcile, monotonic, revision, one reporter §5.2 · 5 forced sends/dedup/sample age → §5.3 · 6 optional field decoding, error contract → §3.1 · 7 approval without tmux → §4.3 · 8 rule 8 eats the only notice → §4.4 · 9 delayed send → final check, rule 7 after it §4.2 · 10 restart/reconnect → forced send on boot_id/connect §5.3, accepted window §4.1 · 11 host setting/UI did not fit → threshold in the report, device-local setting §3.1/§5.5 · 12 acceptance wording → boundary probes §8.
 
 rev 3 (incremental `task-mv3nyz3w-cw3kv0`): 4 already-locked start → `locked_ms` 60000 §5.2 · 6 `v:null` → v1 §3.1 · 8 restart snapshot not loaded as dedupe, `openAsks` only serves rule 8 §4.4 · 10 no `boot_id` from the renderer; main detects recovery, ≤ 20 s window accepted §5.3 · 11 N in main app prefs, not the synced/projected store §5.5 · new-1 multi-window race → persisted host list by `rev`, main checks capabilities itself §5.1 · new-2 rule 7 stays at arrival §4.2 · new-3 10 s request deadline §5.3.
+
+rev 3.1 (PA-2 plan rev 2, #2671, codex-reviewed by the interface line): v1 yields per host only after the main process reports it has taken the host over (capability + a v2 send succeeded within 45 s), and resumes at once when a v2 send fails §5.1/§5.4 · host-list `rev` = `max(rev+1, now)` §5.1 · the setting lives in Settings → Desktop App §5.5.
