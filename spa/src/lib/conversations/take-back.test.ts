@@ -7,7 +7,7 @@ import { clearAllDrafts, draftKey, readDraft } from './draft-memory'
 import { releasePane, retireStaleSessions } from './pane-release'
 import type { RecallOutcome } from './send'
 import type { QueueEntry, SendQueue } from './send-queue'
-import { HIDE_MS, clearAllTakeBack, isRowHidden, setHeaderUserRows, takeBackQueued, useTakeBackState } from './take-back'
+import { HIDE_MS, clearAllTakeBack, inflightTakeBackCount, isRowHidden, setHeaderUserRows, takeBackQueued, useTakeBackState } from './take-back'
 
 const P = 'p-tbu', H = 'h', S = 's1'
 const KEY = draftKey(P, H, S)
@@ -103,5 +103,51 @@ describe('a pane that let the conversation go while the daemon answered', () => 
     expect(readDraft(KEY) ?? '').toBe('')
     expect(dismissed).toEqual([])
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('the invalidation token lives only while a take-back is in flight', () => {
+  const start = () => {
+    setHeaderUserRows(KEY, [{ text: 'a', at: 10 }])
+    return takeBackQueued(KEY, fakeQueue([entry('e', 'a', 10)]).queue)
+  }
+  it('N releases with nothing in flight leave no entry', () => {
+    for (let i = 0; i < 50; i++) { setHeaderUserRows(KEY, [{ text: 'a', at: i }]); releasePane(P); retireStaleSessions(P, H, 'other') }
+    expect(inflightTakeBackCount()).toBe(0)
+  })
+  it('a release during a recall still discards the late result, and the entry is gone', async () => {
+    const p = start()
+    expect(inflightTakeBackCount()).toBe(1)
+    releasePane(P)
+    expect(inflightTakeBackCount()).toBe(0)
+    await answer({ kind: 'back', text: 'a' })
+    await p
+    expect(readDraft(KEY) ?? '').toBe('')
+    expect(inflightTakeBackCount()).toBe(0)
+  })
+  it('a take-back started after a release works normally; the old late answer does not remove its token', async () => {
+    const old = start()
+    releasePane(P)
+    bindAdapter(KEY, { kind: 'terminal', canSend: () => true, recall: true, port: () => ({ submit: async () => ({ kind: 'accepted' as const }), interrupt: async () => ({ kind: 'accepted' as const }) }), upload: null, takeBack })
+    const fresh = start()
+    await answer({ kind: 'back', text: 'old' })
+    await old
+    expect(inflightTakeBackCount()).toBe(1)
+    await answer({ kind: 'back', text: 'a' })
+    await fresh
+    expect(readDraft(KEY)).toContain('a')
+    expect(inflightTakeBackCount()).toBe(0)
+  })
+  it('a failed take-back (notice) also clears the entry', async () => {
+    const p = start()
+    await answer({ kind: 'none' } as unknown as RecallOutcome)
+    await p
+    expect(inflightTakeBackCount()).toBe(0)
+  })
+  it('clearAllTakeBack empties it', () => {
+    void start()
+    expect(inflightTakeBackCount()).toBe(1)
+    clearAllTakeBack()
+    expect(inflightTakeBackCount()).toBe(0)
   })
 })

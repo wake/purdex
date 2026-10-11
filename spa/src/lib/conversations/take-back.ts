@@ -22,9 +22,10 @@ export interface TakeBackState {
 const EMPTY: TakeBackState = { busy: false, notice: null, hide: null }
 const states = new Map<string, TakeBackState>()
 const rows = new Map<string, readonly HeaderRow[]>()
-/** Per key: bumped when the pane releases / retires it, so a take-back answered after that applies nothing. */
-const gens = new Map<string, number>()
-const genOf = (key: string): number => gens.get(key) ?? 0
+/** Per key, only while a take-back is in flight: the pane releasing / retiring the key deletes it, so a late answer applies nothing. Idle keys hold no entry. */
+const inflight = new Map<string, object>()
+/** Tests only: how many keys have a take-back in flight. */
+export const inflightTakeBackCount = (): number => inflight.size
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
 const listeners = new Map<string, Set<() => void>>()
 
@@ -92,7 +93,10 @@ export const canTakeBack = (key: string): boolean => !!adapterOf(key)?.takeBack
 export async function takeBackQueued(key: string, queue: SendQueue): Promise<void> {
   const takeBack = adapterOf(key)?.takeBack
   if (!takeBack || get(key).busy) return
-  const gen = genOf(key)
+  const token = {}
+  inflight.set(key, token)
+  const mine = (): boolean => inflight.get(key) === token
+  const done = (): void => { if (mine()) inflight.delete(key) }
   // What Claude Code's queue holds as this pane renders it, in reading order: the header rows (an entry that claimed one stands for it), then
   // the handed entries no row stands for yet. The daemon joins its queue the same way (typed_recall.go joinQueued), so the answer can be matched.
   const snapshot = (rows.get(key) ?? []).map((r) => ({ at: r.at, text: trimmed(r.text) }))
@@ -101,10 +105,11 @@ export async function takeBackQueued(key: string, queue: SendQueue): Promise<voi
   set(key, { busy: true, notice: null })
   let outcome
   try { outcome = await takeBack() } catch { outcome = { kind: 'may_have_popped' as const, reason: 'network' } }
-  if (genOf(key) !== gen) return // the pane let this conversation go while the daemon answered: nothing of it applies any more
-  if (outcome.kind !== 'back') { set(key, { busy: false, notice: recallMessage(outcome) }); return }
+  if (!mine()) return // the pane let this conversation go while the daemon answered: nothing of it applies any more
+  if (outcome.kind !== 'back') { done(); set(key, { busy: false, notice: recallMessage(outcome) }); return }
   prependToDraft(key, outcome.text)
   clearHide(key)
+  done()
   if (expected === '' || outcome.text !== expected) { set(key, { busy: false }); return } // the queue changed meanwhile: which rows came back is unknown
   // exactly the instances of the snapshot, one to one: an entry holding a claim on one of its rows, or one that stood alone
   const free = [...snapshot]
@@ -140,12 +145,12 @@ export async function takeBackAll(key: string, queue: SendQueue): Promise<void> 
 
 /** A pane that is gone for good, or a session it no longer shows. */
 export function forgetTakeBackWhere(match: (key: string) => boolean): void {
-  for (const key of [...new Set([...states.keys(), ...rows.keys(), ...timers.keys(), ...gens.keys()])]) {
+  for (const key of [...new Set([...states.keys(), ...rows.keys(), ...timers.keys(), ...inflight.keys()])]) {
     if (!match(key)) continue
     const t = timers.get(key)
     if (t) clearTimeout(t)
     timers.delete(key); states.delete(key); rows.delete(key)
-    gens.set(key, genOf(key) + 1)
+    inflight.delete(key)
   }
 }
 
