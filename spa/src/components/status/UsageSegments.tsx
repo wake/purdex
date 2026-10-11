@@ -118,16 +118,17 @@ function rolledOver(w: UsageWindow | null, now: number): UsageWindow | null {
   return w && w.resetsAtMs !== null && w.resetsAtMs <= now ? { ...w, pct: 0 } : w
 }
 
-/** Re-renders once when the nearest upcoming reset time is crossed (one timer, cleared on unmount; no polling). */
-function useResetTick(windows: Array<UsageWindow | null>): void {
-  const [, setTick] = useState(0)
-  const nexts = windows.map((w) => w?.resetsAtMs ?? null).filter((m): m is number => m !== null && m > Date.now())
+/** A clock that also ticks once when the nearest upcoming reset time is crossed (one timer, cleared on unmount; no polling). */
+function useResetClock(windows: Array<UsageWindow | null>): number {
+  const [clock, setClock] = useState(() => Date.now())
+  const nexts = windows.map((w) => w?.resetsAtMs ?? null).filter((m): m is number => m !== null && m > clock)
   const next = nexts.length ? Math.min(...nexts) : null
   useEffect(() => {
     if (next === null) return
-    const id = setTimeout(() => setTick((n) => n + 1), Math.min(Math.max(next - Date.now(), 0) + 50, 2_000_000_000))
+    const id = setTimeout(() => setClock(Date.now()), Math.min(Math.max(next - Date.now(), 0) + 50, 2_000_000_000))
     return () => clearTimeout(id)
   }, [next])
+  return clock
 }
 
 /** The 5h and 7d rings; shared by both bars. */
@@ -138,8 +139,7 @@ function LimitSegments({ fiveHour: fiveHourIn, sevenDay: sevenDayIn, now: nowIn,
   idPrefix: string
 }) {
   const t = useI18nStore((s) => s.t)
-  useResetTick([fiveHourIn, sevenDayIn])
-  const now = Math.max(nowIn, Date.now())
+  const now = Math.max(nowIn, useResetClock([fiveHourIn, sevenDayIn]))
   const fiveHour = rolledOver(fiveHourIn, now)
   const sevenDay = rolledOver(sevenDayIn, now)
   return (
