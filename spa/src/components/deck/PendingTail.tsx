@@ -7,7 +7,7 @@ import { useEffect } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { draftKey } from '../../lib/conversations/draft-memory'
 import { unboundSendPort } from '../../lib/conversations/send'
-import { sendQueueFor, type QueueEntry } from '../../lib/conversations/send-queue'
+import { sendQueueFor, type HeaderRow, type QueueEntry } from '../../lib/conversations/send-queue'
 import { canTakeBack, dismissTakeBackNotice, isRowHidden, setHeaderUserRows, takeBackHeld, takeBackQueued, useTakeBackState } from '../../lib/conversations/take-back'
 import type { HeaderQueued } from '../../lib/conversations/types'
 import { adapterOf } from '../../lib/conversations/deck-adapter'
@@ -50,10 +50,10 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Pro
   const queue = sendQueueFor(key, () => unboundSendPort(hostId, sessionId))
   const tb = useTakeBackState(key)
   // the rows the deck renders, for Up (is there a Claude Code queue to take back?) and to end the hide after a take-back once the header caught up
-  const userRowsSig = JSON.stringify(queued.filter((q) => q.source !== 'peer').map((q) => q.text))
-  useEffect(() => { setHeaderUserRows(key, JSON.parse(userRowsSig) as string[]) }, [key, userRowsSig])
+  const userRowsSig = JSON.stringify(queued.filter((q) => q.source !== 'peer').map((q) => ({ text: q.text, at: q.at })))
+  useEffect(() => { setHeaderUserRows(key, JSON.parse(userRowsSig) as HeaderRow[]) }, [key, userRowsSig])
   const shownEntries = entries.filter((e) => e.state !== 'superseded' && !e.matched)
-  const rows = queued.filter((q) => q.source === 'peer' || !isRowHidden(tb, q.text))
+  const rows = queued.filter((q) => q.source === 'peer' || !isRowHidden(tb, q))
   if (rows.length === 0 && shownEntries.length === 0 && !tb.notice) return null
   const takeBack = canTakeBack(key) ? () => { void takeBackQueued(key, queue) } : undefined
   return (

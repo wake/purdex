@@ -5,7 +5,7 @@ import { useSyncExternalStore } from 'react'
 import { adapterOf } from './deck-adapter'
 import { prependToDraft, recallHeld } from './draft-recall'
 import { recallMessage, type OutcomeMessage } from './send'
-import type { SendQueue } from './send-queue'
+import type { HeaderRow, SendQueue } from './send-queue'
 
 /** Header rows the answer brought back stay hidden at most this long: `header.queued` takes about a second to empty after a recall. */
 export const HIDE_MS = 5000
@@ -15,13 +15,16 @@ export interface TakeBackState {
   busy: boolean
   /** Why nothing came back (dismissable); drawn by the pending tail. */
   notice: OutcomeMessage | null
-  /** The lines that came back: the header rows with this text are hidden until the header stops listing them (or HIDE_MS pass). */
-  hide: { lines: readonly string[]; at: number } | null
+  /** The header rows (text, at) that came back: exactly those instances are hidden until the header stops listing them (or HIDE_MS pass). */
+  hide: { rows: readonly HeaderRow[]; at: number } | null
 }
 
 const EMPTY: TakeBackState = { busy: false, notice: null, hide: null }
 const states = new Map<string, TakeBackState>()
-const rows = new Map<string, readonly string[]>()
+const rows = new Map<string, readonly HeaderRow[]>()
+/** Per key: bumped when the pane releases / retires it, so a take-back answered after that applies nothing. */
+const gens = new Map<string, number>()
+const genOf = (key: string): number => gens.get(key) ?? 0
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
 const listeners = new Map<string, Set<() => void>>()
 
@@ -51,8 +54,8 @@ export const dismissTakeBackNotice = (key: string): void => { if (get(key).notic
 const trimmed = (text: string): string => text.trimEnd()
 
 /** Whether the header row `text` is hidden: it came back a moment ago and the header has not caught up. */
-export function isRowHidden(s: TakeBackState, text: string, now: number = Date.now()): boolean {
-  return !!s.hide && now - s.hide.at < HIDE_MS && s.hide.lines.includes(trimmed(text))
+export function isRowHidden(s: TakeBackState, row: HeaderRow, now: number = Date.now()): boolean {
+  return !!s.hide && now - s.hide.at < HIDE_MS && s.hide.rows.some((x) => x.at === row.at && x.text === trimmed(row.text))
 }
 
 function clearHide(key: string): void {
@@ -66,10 +69,10 @@ function clearHide(key: string): void {
  * The `user` rows of Claude Code's queue line as the deck renders them, reported by the pane's driver on every header change. Once the header
  * lists none of the lines that came back, the optimistic hide has done its job.
  */
-export function setHeaderUserRows(key: string, texts: readonly string[]): void {
-  rows.set(key, texts)
+export function setHeaderUserRows(key: string, now: readonly HeaderRow[]): void {
+  rows.set(key, now)
   const h = get(key).hide
-  if (h && !texts.some((x) => h.lines.includes(trimmed(x)))) clearHide(key)
+  if (h && !now.some((r) => h.rows.some((x) => x.at === r.at && x.text === trimmed(r.text)))) clearHide(key)
 }
 
 /** How many `user` rows of the header are shown right now (not counting rows hidden after a take-back). */
@@ -89,17 +92,30 @@ export const canTakeBack = (key: string): boolean => !!adapterOf(key)?.takeBack
 export async function takeBackQueued(key: string, queue: SendQueue): Promise<void> {
   const takeBack = adapterOf(key)?.takeBack
   if (!takeBack || get(key).busy) return
+  const gen = genOf(key)
+  // What Claude Code's queue holds as this pane renders it, in reading order: the header rows (an entry that claimed one stands for it), then
+  // the handed entries no row stands for yet. The daemon joins its queue the same way (typed_recall.go joinQueued), so the answer can be matched.
+  const snapshot = (rows.get(key) ?? []).map((r) => ({ at: r.at, text: trimmed(r.text) }))
+  const loose = queue.entries().filter((e) => e.state === 'sent' && e.mode !== undefined && e.claimAt === undefined).map((e) => ({ id: e.id, text: trimmed(e.text) }))
+  const expected = [...snapshot.map((r) => r.text), ...loose.map((e) => e.text)].join('\n')
   set(key, { busy: true, notice: null })
   let outcome
   try { outcome = await takeBack() } catch { outcome = { kind: 'may_have_popped' as const, reason: 'network' } }
+  if (genOf(key) !== gen) return // the pane let this conversation go while the daemon answered: nothing of it applies any more
   if (outcome.kind !== 'back') { set(key, { busy: false, notice: recallMessage(outcome) }); return }
-  const lines = outcome.text.split('\n').map(trimmed).filter((x) => x !== '')
   prependToDraft(key, outcome.text)
-  for (const e of queue.entries()) if (e.state === 'sent' && e.mode !== undefined && lines.includes(trimmed(e.text))) queue.dismiss(e.id)
   clearHide(key)
+  if (expected === '' || outcome.text !== expected) { set(key, { busy: false }); return } // the queue changed meanwhile: which rows came back is unknown
+  // exactly the instances of the snapshot, one to one: an entry holding a claim on one of its rows, or one that stood alone
+  const free = [...snapshot]
+  for (const e of queue.entries()) {
+    if (e.state !== 'sent' || e.mode === undefined) continue
+    const k = e.claimAt === undefined ? -1 : free.findIndex((r) => r.at === e.claimAt && r.text === trimmed(e.text))
+    if (k >= 0) { free.splice(k, 1); queue.dismiss(e.id) } else if (loose.some((l) => l.id === e.id)) queue.dismiss(e.id)
+  }
   const at = Date.now()
   timers.set(key, setTimeout(() => { timers.delete(key); if (get(key).hide?.at === at) set(key, { hide: null }) }, HIDE_MS))
-  set(key, { busy: false, hide: { lines, at } })
+  set(key, { busy: false, hide: snapshot.length > 0 ? { rows: snapshot, at } : null })
 }
 
 /** A held entry's block was clicked (or its Undo): that entry only, no daemon call. */
@@ -124,11 +140,12 @@ export async function takeBackAll(key: string, queue: SendQueue): Promise<void> 
 
 /** A pane that is gone for good, or a session it no longer shows. */
 export function forgetTakeBackWhere(match: (key: string) => boolean): void {
-  for (const key of [...new Set([...states.keys(), ...rows.keys(), ...timers.keys()])]) {
+  for (const key of [...new Set([...states.keys(), ...rows.keys(), ...timers.keys(), ...gens.keys()])]) {
     if (!match(key)) continue
     const t = timers.get(key)
     if (t) clearTimeout(t)
     timers.delete(key); states.delete(key); rows.delete(key)
+    gens.set(key, genOf(key) + 1)
   }
 }
 
