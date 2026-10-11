@@ -9,6 +9,7 @@ import { hostTintBackground } from '../../lib/host-tint'
 
 const H = 'host-1'
 const CODE = 'dev001'
+const FUTURE = Math.floor(Date.now() / 1000) + 3600
 const WT = '/Users/wake/Workspace/wake/purdex/.claude/worktrees/iface-u1-3'
 const ctx = (usage?: { model?: string; effort?: string }) => ({ hostId: H, usage })
 const snapshot = (raw: Record<string, unknown>) => useAgentStore.setState({ ccStatus: { [`${H}:${CODE}`]: { receivedAt: Date.now(), raw } } })
@@ -63,7 +64,7 @@ describe('SessionStatusRow', () => {
   })
 
   it('has no state cell; the three usage rings (context, 5h, 7d) sit at the right end, after the cost, in the status bar\'s order', () => {
-    snapshot({ model: { display_name: 'Opus 5.5' }, cost: { total_cost_usd: 1 }, context_window: { used_percentage: 38 }, rate_limits: { five_hour: { used_percentage: 66, resets_at: 1 }, seven_day: { used_percentage: 10, resets_at: 2 } } })
+    snapshot({ model: { display_name: 'Opus 5.5' }, cost: { total_cost_usd: 1 }, context_window: { used_percentage: 38 }, rate_limits: { five_hour: { used_percentage: 66, resets_at: FUTURE }, seven_day: { used_percentage: 10, resets_at: FUTURE } } })
     render(<SessionStatusRow sessionCode={CODE} cwd={WT} ctx={ctx()} />)
     expect(screen.queryByTestId('state-slot')).toBeNull()
     const ids = ['status-seg-usage-context', 'status-seg-usage-five-hour', 'status-seg-usage-seven-day']
@@ -76,7 +77,7 @@ describe('SessionStatusRow', () => {
   })
 
   it('without a snapshot of its own the host\'s freshest 5h / 7d still show (no context), and nothing is dimmed', () => {
-    useAgentStore.setState({ ccStatus: { [`${H}:other1`]: { receivedAt: 1, raw: { rate_limits: { five_hour: { used_percentage: 20, resets_at: 1 }, seven_day: { used_percentage: 30, resets_at: 2 } } } } } })
+    useAgentStore.setState({ ccStatus: { [`${H}:other1`]: { receivedAt: 1, raw: { rate_limits: { five_hour: { used_percentage: 20, resets_at: FUTURE }, seven_day: { used_percentage: 30, resets_at: FUTURE } } } } } })
     render(<SessionStatusRow sessionCode={CODE} cwd={WT} ctx={ctx()} />)
     expect(screen.queryByTestId('status-seg-usage-context')).toBeNull()
     expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('80%')
@@ -85,7 +86,7 @@ describe('SessionStatusRow', () => {
   })
 
   it('the rings do not give way on a narrow row (the line truncates instead), and do not wrap', () => {
-    snapshot({ context_window: { used_percentage: 38 }, rate_limits: { five_hour: { used_percentage: 66, resets_at: 1 } } })
+    snapshot({ context_window: { used_percentage: 38 }, rate_limits: { five_hour: { used_percentage: 66, resets_at: FUTURE } } })
     render(<SessionStatusRow sessionCode={CODE} cwd={WT} ctx={ctx()} />)
     expect(screen.getByTestId('status-usage').className).not.toMatch(/max-\[/)
     expect(screen.getByTestId('status-seg-usage-context').className).not.toMatch(/max-\[/)
