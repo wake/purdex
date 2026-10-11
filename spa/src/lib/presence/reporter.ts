@@ -122,18 +122,20 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
   // Hosts main reports for (PA-2 D10): v1 says one final active:false and then stays silent for them. Ids of hosts this
   // window does not know are never looked up, so they are harmless.
   let owned = new Set<string>()
+  const retracted = new Set<string>() // owned hosts whose final active:false went through, for the current ownership episode
   let ownedEventSeen = false // an event is newer than the initial read: the read must not overwrite it
 
   const sync = () => {
     const hosts = deps.connectedHosts()
     const live = new Set(hosts.map((h) => h.id))
     for (const id of [...support.keys()]) {
-      if (!live.has(id)) { support.delete(id); sent.delete(id) }
+      if (!live.has(id)) { support.delete(id); sent.delete(id); retracted.delete(id) }
     }
     for (const h of hosts) {
       const known = support.get(h.id)
       if (known?.identity === h.identity) continue
       sent.delete(h.id)
+      retracted.delete(h.id) // another daemon: what was retracted on the old one says nothing about it
       const entry = { identity: h.identity, supported: null as boolean | null }
       support.set(h.id, entry)
       deps.supportsPush(h.id).then(
@@ -161,12 +163,14 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
       if (s.supported !== true) continue
       // A request under the host's previous identity is the old daemon's: it does not hold up the new one.
       if (inflight.has(hostId) && inflight.get(hostId) === s) { skipped.add(hostId); continue }
+      if (!owned.has(hostId)) retracted.delete(hostId) // the episode is over: a new one retracts again
       const last = sent.get(hostId)
       let body: PresenceBody
       let next: Sent
       if (owned.has(hostId)) {
-        if (last?.active !== true) continue // main reports for it and v1 has nothing left to retract
-        // A lingering v1 entry would feed the daemon's legacy rule: retract it once, then stay silent.
+        // Once per ownership episode, whatever this reporter sent: a v1 entry from the previous renderer (reload) or one
+        // made before the probe answered can still be on the daemon, and would feed its legacy rule until the TTL.
+        if (retracted.has(hostId)) continue
         body = { client_id: deps.clientId(), active: false, sessions: [], ttl_ms: PRESENCE_TTL_MS }
         next = { active: false, signature: '' }
       } else if (!active) {
@@ -183,8 +187,13 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
       }
       inflight.set(hostId, s)
       const entry = s
+      const retracting = owned.has(hostId)
       deps.put(hostId, body).then(
-        (result) => { if (!stopped && support.get(hostId) === entry) sent.set(hostId, result === 'rejected' ? { ...next, rejected: true } : next) },
+        (result) => {
+          if (stopped || support.get(hostId) !== entry) return
+          sent.set(hostId, result === 'rejected' ? { ...next, rejected: true } : next)
+          if (retracting && owned.has(hostId)) retracted.add(hostId) // a refusal is for good: not repeated either
+        },
         () => { /* ignored: the next tick retries */ },
       ).finally(() => {
         if (inflight.get(hostId) === entry) inflight.delete(hostId)

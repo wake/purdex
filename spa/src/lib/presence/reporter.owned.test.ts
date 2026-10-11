@@ -147,3 +147,56 @@ describe('v1 reporter and the owned set', () => {
     expect(e.hasListener()).toBe(false)
   })
 })
+
+describe('v1 retracts once per ownership episode (PA-2b R1 / attack)', () => {
+  const RETRACT = { client_id: 'c_aaaaaaaaaaaa:win1', active: false, sessions: [], ttl_ms: 45000 }
+
+  it('owned from the start (reload): exactly one active:false once support is known, nothing after', async () => {
+    const e = makeEnv(['h1'])
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2)
+    await tick(HEARTBEAT_MS * 3)
+    expect(forHost(e.puts, 'h1')).toEqual([RETRACT])
+  })
+
+  it('owned before the capability probe answers: retracted when the probe says push.v1', async () => {
+    const e = makeEnv(['h1'])
+    let answer!: (ok: boolean) => void
+    e.deps.supportsPush = (id) => (id === 'h1' ? new Promise<boolean>((r) => { answer = r }) : Promise.resolve(true))
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2)
+    expect(forHost(e.puts, 'h1')).toEqual([])
+    answer(true)
+    await tick(DEBOUNCE_MS * 2)
+    await tick(HEARTBEAT_MS * 2)
+    expect(forHost(e.puts, 'h1')).toEqual([RETRACT])
+  })
+
+  it('a failed first retraction is retried by the tick path, then not repeated', async () => {
+    const e = makeEnv(['h1'])
+    let fails = 1
+    const real = e.deps.put
+    e.deps.put = async (hostId, body) => {
+      if (hostId === 'h1' && fails-- > 0) throw new Error('net')
+      return real(hostId, body)
+    }
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2)
+    expect(forHost(e.puts, 'h1')).toEqual([])
+    await tick(HEARTBEAT_MS)
+    expect(forHost(e.puts, 'h1')).toEqual([RETRACT])
+    await tick(HEARTBEAT_MS * 3)
+    expect(forHost(e.puts, 'h1')).toEqual([RETRACT])
+  })
+
+  it('left and re-entered ownership retracts again', async () => {
+    const e = makeEnv(['h1'])
+    stop = startPushPresence(e.deps)
+    await tick(DEBOUNCE_MS * 2)
+    e.emit([])
+    await tick(DEBOUNCE_MS * 2)
+    e.emit(['h1'])
+    await tick(DEBOUNCE_MS * 2)
+    expect(forHost(e.puts, 'h1').map((b) => b.active)).toEqual([false, true, false])
+  })
+})
