@@ -91,6 +91,7 @@ func (c *Core) capabilityList() []string {
 	out := append([]string(nil), capabilities...)
 	if c.pushReady() {
 		out = append(out, "push.v1") // POST/GET /api/push/devices, DELETE /api/push/devices/{device_id}, PUT /api/push/presence
+		out = append(out, "push.presence.v2") // …/presence accepts v:2 (the machine's idle / lock state); same condition as push.v1
 	}
 	if c.moduleReady("devices") {
 		out = append(out, "devices.v1") // POST/GET/DELETE /api/devices, PUT /api/devices/self; device tokens (pdxd_) as bearers
