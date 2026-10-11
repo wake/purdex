@@ -106,10 +106,16 @@ func newStartTextFast() func() bool {
 			fast, at, zone = calibrateStartText(), now, fp
 		case now.Sub(at) >= startTextRecheck && !checking:
 			checking = true
+			startedFor := zone
 			startTextGo(func() {
 				r := calibrateStartText()
 				mu.Lock()
-				fast, at, checking = r, startTextNow(), false
+				// A zone that changed while ps ran was measured again by the caller that saw it; this older answer
+				// is about the zone before and must not overwrite that one.
+				if zone == startedFor {
+					fast, at = r, startTextNow()
+				}
+				checking = false
 				mu.Unlock()
 			})
 		}

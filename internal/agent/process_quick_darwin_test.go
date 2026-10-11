@@ -187,6 +187,54 @@ func TestProcessStartText_TheRecheckDoesNotBlockTheCaller(t *testing.T) {
 	}
 }
 
+// codex re-review (high): a background recheck that started before the zone changed must not overwrite the answer the caller
+// measured after it.
+func TestProcessStartText_AStaleBackgroundRecheckDoesNotOverwriteAZoneChange(t *testing.T) {
+	useEnglishLocale(t)
+	now := fakeClock(t)
+	startTextFast = newStartTextFast()
+	if !startTextFast() {
+		t.Fatal("precondition: the kernel text matches ps")
+	}
+	_, sec, err := kernelProc(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := time.FixedZone("elsewhere", 5*3600+1800)
+	started, release := make(chan struct{}), make(chan struct{})
+	prevRunPS := runPS
+	// The old zone's measurement: it comes back after the zone moved and says "same text" for the zone it was taken in.
+	runPS = func(context.Context, ...string) ([]byte, error) {
+		close(started)
+		<-release
+		return []byte(time.Unix(sec, 0).In(elsewhere).Format(psLstartLayout)), nil
+	}
+	var bg sync.WaitGroup
+	startTextGo = func(f func()) {
+		bg.Add(1)
+		go func() { defer bg.Done(); f() }()
+	}
+	prevLocal, prevFP := time.Local, zoneFingerprint
+	t.Cleanup(func() {
+		startTextGo = func(f func()) { go f() }
+		runPS, time.Local, zoneFingerprint = prevRunPS, prevLocal, prevFP
+	})
+	*now = now.Add(startTextRecheck + time.Second)
+	startTextFast() // due: the recheck starts in the background and waits in runPS
+	<-started
+	runPS = func(context.Context, ...string) ([]byte, error) { return nil, errors.New("not needed") } // the caller's own measurement
+	time.Local = elsewhere
+	zoneFingerprint = func() string { return "/var/db/timezone/zoneinfo/Elsewhere|2" }
+	if startTextFast() {
+		t.Fatal("the zone changed: the caller's measurement says the fast path is off")
+	}
+	close(release)
+	bg.Wait()
+	if startTextFast() {
+		t.Fatal("the older background answer overwrote the measurement taken after the zone changed")
+	}
+}
+
 // The first measurement is the caller's, but it is bounded: a ps that hangs reads as "not the same text".
 func TestProcessStartText_AHungCalibrationIsBounded(t *testing.T) {
 	useEnglishLocale(t)
