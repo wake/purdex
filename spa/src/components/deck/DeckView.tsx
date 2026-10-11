@@ -19,7 +19,7 @@ import { DeckItem } from './DeckItem'
 import { firstUserId } from '../../lib/conversations/deck-format'
 import { DoneTurnLine, LiveTurnLine } from './TurnLines'
 import { PendingTail } from './PendingTail'
-import { shownHeaderQueue, usePendingEntries } from '../../hooks/usePending'
+import { queuedSignature, shownHeaderQueue, usePendingEntries } from '../../hooks/usePending'
 import { liveLine } from '../../lib/conversations/turn-line'
 import { DeckRevealContext, EAGER_TURNS, useDeckReveal } from './deck-reveal'
 import { footerContext, type DeckFooterContext } from './footer-context'
@@ -104,7 +104,8 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   // What waits to be read is the last thing in the stream: it coming and going moves the end like the live line does, so a reader at the bottom follows it.
   const pending = usePendingEntries(paneId, hostId, sessionId)
   const headerQueued = shownHeaderQueue(doc.header?.queued, doc.header?.status)
-  useEffect(() => { if (!empty) follow() }, [follow, doc.turns, empty, liveOn, pending, headerQueued])
+  const queuedSig = queuedSignature(headerQueued)
+  useEffect(() => { if (!empty) follow() }, [follow, doc.turns, empty, liveOn, pending, queuedSig])
 
   // Older pages (see useOlderTurns): asked for at the top, again when a page landed and the reader is still there, with a back-off
   // when one fails; the place kept across the page landing above.
@@ -141,7 +142,8 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
             {/* In the flow, on top of the content: it scrolls away with it, and arrives in the commit of the last page (the place is kept for it). */}
             {!empty && !doc.hasMoreBefore && <div data-testid="deck-history-start" className="text-xs text-text-muted">{t('deck.history_start')}</div>}
             {empty ? (
-              <div data-testid="deck-empty" className="flex h-full items-center justify-center text-sm text-text-muted">
+              // a first message the App still holds is something to read: no "nothing here" block beside it
+              pending.some((e) => e.state !== 'superseded') || headerQueued.length > 0 ? null : <div data-testid="deck-empty" className="flex h-full items-center justify-center text-sm text-text-muted">
                 {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
               </div>
             ) : (

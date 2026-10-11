@@ -159,3 +159,17 @@ describe('the previews of a held box', () => {
     expect(revoke).toHaveBeenCalledWith('blob:a')
   })
 })
+
+describe('recallHeld without an input to take it', () => {
+  it('leaves the message where it is (no listener for the key: nothing is taken)', async () => {
+    const { recallHeld, subscribeRecall } = await import('./draft-recall')
+    const q = new SendQueue(fakePort().port)
+    const id = q.enqueue('stay')
+    expect(recallHeld('k', q, id)).toBe(false)
+    expect(q.heldCount()).toBe(1)
+    const off = subscribeRecall('k', () => {})
+    expect(recallHeld('k', q, id)).toBe(true)
+    expect(q.heldCount()).toBe(0)
+    off()
+  })
+})

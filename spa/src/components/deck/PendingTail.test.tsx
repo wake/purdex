@@ -149,6 +149,31 @@ describe('Claude Code\'s own queue (header.queued)', () => {
     expect(screen.queryByTestId('header-queued')).toBeNull()
   })
 
+  it('a malformed value from the daemon draws nothing and does not take the pane down', () => {
+    for (const bad of [{}, 'x', 1, [null], [1, 'a'], [{ source: 'user' }], [{ text: '' }]]) {
+      cleanup()
+      mountDeck({ ...header('running'), queued: bad as unknown as HeaderQueued[] })
+      expect(screen.queryByTestId('header-queued')).toBeNull()
+    }
+  })
+
+  it('odd entries are coerced and a long list is cut', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ text: `m${i}`, at: i, source: 'user' }))
+    mountDeck(header('running', many))
+    expect(screen.getAllByTestId('header-queued')).toHaveLength(20)
+    cleanup()
+    mountDeck({ ...header('running'), queued: [{ text: 'no at, no source' }] as unknown as HeaderQueued[] })
+    expect(screen.getByTestId('header-queued')).toHaveTextContent('no at, no source')
+  })
+
+  it('a conversation with no turns yet and a first message the App holds shows it, without the "nothing here" block', () => {
+    render(<DeckView {...props} entry={{ ...entry(header('running')), doc: { ...entry(header('running')).doc, turns: [] } }} footer={footer} />)
+    expect(screen.getByTestId('deck-empty')).toBeInTheDocument()
+    type('first'); enter()
+    expect(screen.queryByTestId('deck-empty')).toBeNull()
+    expect(screen.getByTestId('queued-message')).toBeInTheDocument()
+  })
+
   it('the chat draws it too', () => {
     render(<ChatView paneKey={P} hostId={H} sessionId={S} title="t" status="running" queued={[user]} turns={[turn]} onSwitchToTerminal={() => {}} active />)
     expect(screen.getByTestId('chat-scroll').contains(screen.getByTestId('header-queued'))).toBe(true)

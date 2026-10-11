@@ -23,7 +23,7 @@ import { StatusOverlay } from './StatusOverlay'
 import { DoneTurnLine, LiveTurnLine } from './TurnLines'
 import { liveLine } from '../../lib/conversations/turn-line'
 import { PendingTail } from './PendingTail'
-import { shownHeaderQueue, usePendingEntries } from '../../hooks/usePending'
+import { queuedSignature, shownHeaderQueue, usePendingEntries } from '../../hooks/usePending'
 import type { HeaderQueued } from '../../lib/conversations/types'
 import { UnreadableState, type UnreadableReason } from './UnreadableState'
 
@@ -105,7 +105,8 @@ function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queu
   // What waits to be read ends the stream: it coming and going moves the end like the live line does, so a reader at the bottom follows it.
   const pending = usePendingEntries(paneKey, hostId, sessionId ?? '')
   const headerQueued = shownHeaderQueue(queued, status)
-  useEffect(() => { follow() }, [follow, entries, liveOn, pending, headerQueued])
+  const queuedSig = queuedSignature(headerQueued)
+  useEffect(() => { follow() }, [follow, entries, liveOn, pending, queuedSig])
   const [boxEl, setBoxEl] = useState<HTMLDivElement | null>(null)
   const setBox = useCallback((node: HTMLDivElement | null) => { setBoxEl(node); attach(node) }, [attach])
   // Older pages as the reader goes up (the deck's rule, useOlderTurns); the place is kept when one lands above.

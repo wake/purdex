@@ -19,9 +19,11 @@ export function subscribeRecall(key: string, cb: () => void): () => void {
 /**
  * Takes the held message `id` back (or, without an id, every held message, oldest first) and puts it into the box of `key` before what is typed
  * there: the box as it was when it was sent (placeholders and all), its chips and their previews with it. False when nothing was left to take
- * (the message had already been handed out).
+ * (the message had already been handed out, or no input is there to take it).
  */
 export function recallHeld(key: string, queue: SendQueue, id?: string): boolean {
+  // Nothing listens (no input is mounted for this pane): there is no box to put the text in, so the message stays where it is.
+  if ((listeners.get(key)?.size ?? 0) === 0) return false
   const taken = id === undefined ? queue.takeAllHeld() : [queue.takeBack(id)].filter((x) => x !== undefined)
   if (taken.length === 0) return false
   for (const x of taken) for (const a of x.held?.chips ?? []) addAttachment(key, { ...a, hiddenSince: undefined })

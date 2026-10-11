@@ -22,9 +22,11 @@ HTMLElement.prototype.scrollTo = function () {} as never
 
 const H = 'h', S = 'sess-1', P = 'p-follow'
 const KEY = draftKey(P, H, S)
+const TURNS: Turn[] = []
 const turn: Turn = { id: 't0', index: 0, started_at: 1, outcome: 'running', items: [{ type: 'user', id: 'u0', at: 1, index: 0, text: 'go', source: 'user' }] }
 const header = (queued: HeaderQueued[]): Header => ({ title: 't', status: 'running', backend: 'terminal', live: true, queued })
-const entry = (h: Header): ConversationEntry => ({ doc: { ...emptyDoc(), turns: [turn], header: h, capabilities: { send: 'prompt' } }, status: 'live', reason: '', paging: false, subagents: {} })
+TURNS.push(turn) // one array for every render: only the header changes between them
+const entry = (h: Header): ConversationEntry => ({ doc: { ...emptyDoc(), turns: TURNS, header: h, capabilities: { send: 'prompt' } }, status: 'live', reason: '', paging: false, subagents: {} })
 const port: SendPort = { submit: () => new Promise<SendOutcome>(() => {}), interrupt: () => Promise.resolve<SendOutcome>({ kind: 'accepted' }) }
 const footer = (ctx: ReturnType<typeof footerContext>) => <SessionInput {...ctx} sessionCode="c" pendingInStream />
 const props = { paneId: P, hostId: H, sessionId: S, onSwitchToTerminal: () => {} }
@@ -46,6 +48,14 @@ describe('the end of the stream moved', () => {
     follow.mockClear()
     rerender(<DeckView {...props} entry={entry(header([]))} footer={footer} />)
     expect(follow).toHaveBeenCalled()
+  })
+
+  it('a header that is a new object with the same queued lines does not ask again', () => {
+    const q = [{ text: 'x', at: 1, source: 'user' as const }]
+    const { rerender } = render(<DeckView {...props} entry={entry(header(q))} footer={footer} />)
+    follow.mockClear()
+    rerender(<DeckView {...props} entry={entry(header([...q]))} footer={footer} />)
+    expect(follow).not.toHaveBeenCalled()
   })
 
   it('a message the App holds appearing and being taken back asks the scroll to follow', () => {
