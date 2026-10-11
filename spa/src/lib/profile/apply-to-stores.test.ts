@@ -29,6 +29,7 @@ import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { DEFAULT_WORKER_SETTINGS, useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
+import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
 import { MASTER_PROFILE_ID, useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import type { ParkedWorld } from '../../stores/useLocalProfilesStore'
 import { deleteHostCascade } from '../host-lifecycle'
@@ -523,7 +524,7 @@ describe('applySectionToStores — settings', () => {
   })
 
   it('editor preferences are device-local: not a settings source, and a payload carrying them is invalid', async () => {
-    expect(Object.keys(readSettingsSources())).toHaveLength(11)
+    expect(Object.keys(readSettingsSources())).toHaveLength(12)
     expect(readSettingsSources()).not.toHaveProperty('purdex-editor-settings')
     const payload = { ...settingsNow(), 'purdex-editor-settings': { fontSize: 20 } }
     let outcome: unknown
@@ -788,6 +789,43 @@ describe('applySectionToStores — settings: worker pane theme', () => {
     expect(await applySectionToStores('settings', payload, ctx)).toMatchObject({ ok: true, hash: await hashSection(payload) })
     expect(worker().theme).toBe('mono-dark')
     expect(worker().customIcon).toBe('Star')
+  })
+})
+
+// quick-reply switches (quick-replies v2 spec §3, QR-2b, settings ordinal 10): `purdex-quick-reply-prefs.{rowEnabled,disabled}` ride `settings`; the
+// `disabled` keys are WIRE host ids, passed through verbatim — a key naming a host this Mac lacks round-trips untouched.
+describe('applySectionToStores — settings: quick-reply switches', () => {
+  const prefs = () => useQuickReplyPrefsStore.getState()
+  const collected = (): SettingsPayload => JSON.parse(JSON.stringify(buildSectionPayload('settings')!.payload)) as SettingsPayload
+
+  it('collect → apply round-trips the row switch and every off-list, a key for a host this Mac lacks included; the rebuilt hash is the payload\'s', async () => {
+    useQuickReplyPrefsStore.setState({ rowEnabled: false, disabled: { d1_mlab: ['a', 'b'], d1_a_host_this_mac_lacks: ['z'] } })
+    const fromA = collected()
+    expect(fromA['purdex-quick-reply-prefs']).toEqual({ rowEnabled: false, disabled: { d1_mlab: ['a', 'b'], d1_a_host_this_mac_lacks: ['z'] } })
+
+    useQuickReplyPrefsStore.setState({ rowEnabled: true, disabled: {} })
+    const outcome = await applySectionToStores('settings', fromA, ctx)
+    expect(outcome).toMatchObject({ ok: true, hash: await hashSection(fromA) })
+    expect(prefs().rowEnabled).toBe(false)
+    expect(prefs().disabled).toEqual({ d1_mlab: ['a', 'b'], d1_a_host_this_mac_lacks: ['z'] })
+    expect(persistedOf(STORAGE_KEYS.QUICK_REPLY_PREFS)).toMatchObject({ rowEnabled: false, disabled: { d1_mlab: ['a', 'b'], d1_a_host_this_mac_lacks: ['z'] } })
+    expect(JSON.stringify(collected()['purdex-quick-reply-prefs'])).toBe(JSON.stringify(fromA['purdex-quick-reply-prefs']))
+  })
+
+  it('an ordinal-9 payload (no prefs store) leaves the store alone; the rebuild carries it, so the hash differs (pushed once)', async () => {
+    useQuickReplyPrefsStore.setState({ rowEnabled: false, disabled: { d1_mlab: ['a'] } })
+    const before = prefs()
+    const legacy = collected()
+    delete legacy['purdex-quick-reply-prefs']
+    const outcome = await applySectionToStores('settings', legacy, ctx)
+    expect(prefs()).toBe(before)
+    expect(outcome).not.toMatchObject({ ok: true, hash: await hashSection(legacy) })
+  })
+
+  it('what arrives is sanitised by the store\'s merge (a non-string id, a duplicate)', async () => {
+    const payload = { ...collected(), 'purdex-quick-reply-prefs': { rowEnabled: true, disabled: { d1_mlab: ['a', 'a', 3] } } } as unknown as SettingsPayload
+    await applySectionToStores('settings', payload, ctx)
+    expect(prefs().disabled).toEqual({ d1_mlab: ['a'] })
   })
 })
 

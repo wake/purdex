@@ -86,6 +86,9 @@ export const PROJECTIONS: Record<SectionKind, readonly string[]> = {
     // released (see the guard test's sanctioned-exception note, matching the ordinal-7 precedent), so there is
     // no shipped client whose lock this would trip.
     ...settingsPaths('purdex-worker-settings', ['theme', 'iconStyle', 'customIcon']),
+    // The Mac App's quick-reply switches (quick-replies v2 spec §3): the row's on/off and the per-host off-lists. The `disabled` keys are WIRE host ids
+    // (like `purdex-host-looks.looks`): the builder and the applier pass them through verbatim, and the store's `merge` sanitises what arrives.
+    ...settingsPaths('purdex-quick-reply-prefs', ['rowEnabled', 'disabled']),
     // NOT `purdex-module-enabled` (nor `purdex-editor-settings`, below) — eleven
     // stores, not thirteen. useModuleEnabledStore
     // says so itself: toggling a module on or off "is a device-local preference
@@ -128,7 +131,9 @@ export const SECTION_SCHEMA_ORDINAL: Record<SectionKind, number> = {
   //    `customIcon` joined the same three fields shortly after, still under ordinal 9 (not a bump): ordinal 9 was never
   //    released, so the fingerprint moving in place trips no shipped client's lock — the same sanctioned exception the
   //    guard test records for ordinal 7 (H2d-1).
-  settings: 9,
+  //10: purdex-quick-reply-prefs.{rowEnabled,disabled} (quick-replies v2 spec §3, QR-2b) — a projection change, so the fingerprint moves by
+  //    itself (no marker), as at ordinal 9; an ordinal-9 payload lacks the store and leaves it alone on apply.
+  settings: 10,
   workspaces: 1,
   // 2: `tmux-session.hostId`, daemon `source.hostId`, `execution.host` are WIRE ids (host-sync-identity). The projection is
   //    unchanged; the fingerprint moves through WIRE_MARKERS.tabs.

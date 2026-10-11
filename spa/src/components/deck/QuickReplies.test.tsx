@@ -10,6 +10,9 @@ import { sendQueueFor, UNDO_MS, clearAllSendQueues } from '../../lib/conversatio
 import { subscribeRecall } from '../../lib/conversations/draft-recall'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
+import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { wireIdOfHost } from '../../lib/profile/host-identity'
 import type { SendPort } from '../../lib/conversations/send'
 
 const H = 'h', S = 's1', P = 'p1'
@@ -39,6 +42,7 @@ beforeEach(() => {
   sendQueueFor(KEY, () => adapter().port()) // the pane's driver makes the queue before the footer draws
   hostReplies(['continue', 'run the tests'])
   useWorkerSettingsStore.setState({ quickRepliesCollapsed: false })
+  useQuickReplyPrefsStore.setState({ rowEnabled: true, disabled: {} })
 })
 afterEach(() => { cleanup(); vi.useRealTimers(); clearAllAdapters(); clearAllDrafts(); clearAllSendQueues() })
 
@@ -187,5 +191,54 @@ describe('QuickReplies', () => {
     expect(note).toHaveAttribute('role', 'status')
     expect(danger).toHaveAttribute('aria-describedby', note.id)
     expect(other).not.toHaveAttribute('aria-describedby')
+  })
+})
+
+// QR-2b: the Mac's switches (the prefs store, keyed by WIRE host id) hide the whole row or single items
+describe('QuickReplies — the switches', () => {
+  it('the row switched off: nothing is drawn, not even the toggle', () => {
+    useQuickReplyPrefsStore.setState({ rowEnabled: false })
+    const { container } = render(ui())
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('an item switched off for this host is not drawn; the others are; an id the host no longer lists is ignored', () => {
+    useQuickReplyPrefsStore.setState({ disabled: { [H]: ['r0', 'long-gone'] } })
+    render(ui())
+    expect(screen.getAllByTestId('quick-reply').map((b) => b.textContent)).toEqual(['run the tests'])
+  })
+
+  it('every item switched off leaves no row (nothing to show)', () => {
+    useQuickReplyPrefsStore.setState({ disabled: { [H]: ['r0', 'r1'] } })
+    const { container } = render(ui())
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('another host\'s off-list does not touch this one', () => {
+    useQuickReplyPrefsStore.setState({ disabled: { other: ['r0', 'r1'] } })
+    render(ui())
+    expect(screen.getAllByTestId('quick-reply')).toHaveLength(2)
+  })
+
+  it('the host is read under its WIRE id (d1_…), not its local id; a local-id entry the pass has not moved yet is the host\'s too', () => {
+    useHostStore.setState({ hosts: { [H]: { id: H, name: 'mlab', ip: '1.2.3.4', port: 7860, token: 't', order: 0, daemonId: 'abc123' } }, hostOrder: [H] })
+    const wire = wireIdOfHost(useHostStore.getState().hosts[H])
+    expect(wire).not.toBe(H)
+    useQuickReplyPrefsStore.setState({ disabled: { [wire]: ['r0'] } })
+    render(ui())
+    expect(screen.getAllByTestId('quick-reply').map((b) => b.textContent)).toEqual(['run the tests'])
+    cleanup()
+    useQuickReplyPrefsStore.setState({ disabled: { [H]: ['r0'] } })
+    render(ui())
+    expect(screen.getAllByTestId('quick-reply').map((b) => b.textContent)).toEqual(['run the tests'])
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+  })
+
+  it('a switch flipped while the row is shown takes effect at once', () => {
+    render(ui())
+    act(() => { useQuickReplyPrefsStore.getState().setItemDisabled(H, 'r1', true) })
+    expect(screen.getAllByTestId('quick-reply').map((b) => b.textContent)).toEqual(['continue'])
+    act(() => { useQuickReplyPrefsStore.getState().setRowEnabled(false) })
+    expect(screen.queryByTestId('quick-reply')).toBeNull()
   })
 })

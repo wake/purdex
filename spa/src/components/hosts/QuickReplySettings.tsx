@@ -7,7 +7,9 @@ import { ArrowDown, ArrowUp, Check, PencilSimple, Plus, Trash, X } from '@phosph
 import type { QuickReply } from '../../lib/host-config-api'
 import { newConfigId } from '../../lib/host-config-validate'
 import { MAX_QUICK_REPLIES, trimLikeGo, validateQuickReplyText, validateQuickReplyTitle } from '../../lib/quick-replies'
+import { quickReplyPrefsKey, useDisabledQuickReplyIds } from '../../lib/quick-reply-prefs'
 import { EMPTY_HOST_CONFIG, useHostConfigStore } from '../../stores/useHostConfigStore'
+import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HostConfigProblemNotice } from './HostConfigNotice'
 import { useHostConfigCollection } from './useHostConfigCollection'
@@ -72,6 +74,9 @@ function QuickReplyEditor({ initial, draft, onDraft, busy, error, onSave, onCanc
 export function QuickReplySettings({ hostId }: { hostId: string }) {
   const t = useI18nStore((s) => s.t)
   const entry = useHostConfigStore((s) => s.byHost[hostId] ?? EMPTY_HOST_CONFIG)
+  // The Mac's own switches (not the daemon's): the whole row, and this host's off-list. Both write the prefs store.
+  const rowEnabled = useQuickReplyPrefsStore((s) => s.rowEnabled)
+  const off = useDisabledQuickReplyIds(hostId)
   const {
     items, editable, problem, atLimit, pending, saveError,
     editing, isNew, openEditor, closeEditor, submit,
@@ -115,6 +120,14 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
   return (
     <div data-testid="quick-replies">
       <HostConfigProblemNotice problem={problem} title="hosts.quick_replies.tab" />
+      <label className="mb-3 flex items-start gap-2 text-sm text-text-primary">
+        <input type="checkbox" role="switch" data-testid="quick-replies-row-switch" checked={rowEnabled}
+          onChange={(e) => useQuickReplyPrefsStore.getState().setRowEnabled(e.target.checked)} className="mt-0.5 cursor-pointer" />
+        <span>
+          {t('hosts.quick_replies.row_switch')}
+          <span className="block text-xs text-text-muted">{t('hosts.quick_replies.row_switch_hint')}</span>
+        </span>
+      </label>
       <div className="mb-3 flex items-center justify-between gap-3">
         <p className="text-xs text-text-muted">
           {neverWritten && <span data-testid="quick-replies-defaults">{t('hosts.quick_replies.defaults_note')}</span>}
@@ -139,7 +152,10 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
             <li key={reply.id} data-testid={`quick-reply-row-${reply.id}`}>
               {editing?.id === reply.id ? editor(editing) : (
                 <div className="flex items-center gap-3 px-3 py-2">
-                  <span className="min-w-0 flex-1 truncate text-sm text-text-primary" title={reply.content}>
+                  <input type="checkbox" role="switch" data-testid={`quick-reply-switch-${reply.id}`} aria-label={t('hosts.quick_replies.item_switch', { title: reply.title })}
+                    checked={!off.includes(reply.id)} onChange={(e) => useQuickReplyPrefsStore.getState().setItemDisabled(quickReplyPrefsKey(hostId), reply.id, !e.target.checked)}
+                    className="shrink-0 cursor-pointer" />
+                  <span className={`min-w-0 flex-1 truncate text-sm text-text-primary ${off.includes(reply.id) ? 'opacity-50' : ''}`} title={reply.content}>
                     <span data-testid={`quick-reply-title-${reply.id}`}>{reply.title}</span>
                     {reply.content !== reply.title && <span className="ml-2 text-xs text-text-muted">{reply.content}</span>}
                   </span>

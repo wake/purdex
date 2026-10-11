@@ -10,6 +10,7 @@ import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore } from '../stores/useRebuildStore'
 import { useHostLookStore } from '../stores/useHostLookStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
+import { useQuickReplyPrefsStore } from '../stores/useQuickReplyPrefsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { __resetMasterWorldForTest } from './profile/master-world'
 import { syncIdOfSync } from './profile/host-identity'
@@ -99,6 +100,7 @@ beforeEach(() => {
   useRebuildStore.setState({ lockedBy: null, lockGrant: null })
   useHostLookStore.setState({ looks: {} })
   useShownHostsStore.setState({ ids: [] })
+  useQuickReplyPrefsStore.setState({ rowEnabled: true, disabled: {} })
   seed()
 })
 
@@ -974,6 +976,52 @@ describe('startHostReresolve (the triggers)', () => {
       finish?.()
       expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'L', colors: RED, icon: 'Cloud' } })
     })
+  })
+
+  // QR-2b: the quick-reply prefs' off-lists are keyed by WIRE id too — the same re-key, the same hydration wait
+  it('learning a daemonId moves the host\'s local-id off-list to its d1_ key; an off-list already there wins (QR-2b)', () => {
+    addHostX({ daemonId: undefined })
+    useQuickReplyPrefsStore.setState({ disabled: { [LOCAL]: ['a'], [UNKNOWN]: ['far'] } })
+    stop = startHostReresolve()
+    expect(useQuickReplyPrefsStore.getState().disabled).toEqual({ [LOCAL]: ['a'], [UNKNOWN]: ['far'] })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], daemonId: DAEMON } } }))
+    expect(useQuickReplyPrefsStore.getState().disabled).toEqual({ [WIRE]: ['a'], [UNKNOWN]: ['far'] }) // a host this Mac lacks stays as it is
+  })
+
+  it('a d1_ off-list that arrived first (Profile Sync) wins over the local one (QR-2b)', () => {
+    addHostX({ daemonId: undefined })
+    useQuickReplyPrefsStore.setState({ disabled: { [LOCAL]: ['mine'], [WIRE]: ['synced'] } })
+    stop = startHostReresolve()
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [LOCAL]: { ...s.hosts[LOCAL], daemonId: DAEMON } } }))
+    expect(useQuickReplyPrefsStore.getState().disabled).toEqual({ [WIRE]: ['synced'] })
+  })
+
+  it('waits for the prefs store: nothing runs while purdex-quick-reply-prefs has not hydrated, then it does (QR-2b)', () => {
+    let finish: (() => void) | undefined
+    const hydrated = vi.spyOn(useQuickReplyPrefsStore.persist, 'hasHydrated').mockReturnValue(false)
+    vi.spyOn(useQuickReplyPrefsStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useQuickReplyPrefsStore.getState())
+      return () => { finish = undefined }
+    })
+    addHostX()
+    stop = startHostReresolve()
+    expect(runs).toBe(0)
+    hydrated.mockReturnValue(true)
+    finish?.()
+    expect(runs).toBe(1)
+  })
+
+  it('the prefs store hydrating LAST, after the first pass, with a local-id key ends on the d1_ key (QR-2b)', () => {
+    let finish: (() => void) | undefined
+    vi.spyOn(useQuickReplyPrefsStore.persist, 'onFinishHydration').mockImplementation((cb) => {
+      finish = () => cb(useQuickReplyPrefsStore.getState())
+      return () => { finish = undefined }
+    })
+    addHostX()
+    stop = startHostReresolve()
+    useQuickReplyPrefsStore.setState({ disabled: { [LOCAL]: ['late'] } }) // another window's write landed
+    finish?.()
+    expect(useQuickReplyPrefsStore.getState().disabled).toEqual({ [WIRE]: ['late'] })
   })
 
   it('learning a daemonId moves the host\'s listed local id to its d1_ id (H2d-1)', () => {

@@ -9,6 +9,7 @@ import { CaretDown, CaretRight } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { useQuickReplies } from '../../lib/quick-replies'
+import { useShownReplies } from '../../lib/quick-reply-prefs'
 import { pickAdapter } from '../../lib/conversations/deck-adapter'
 import { terminalAdapter } from '../../lib/conversations/terminal-adapter'
 import { draftKey } from '../../lib/conversations/draft-memory'
@@ -36,7 +37,7 @@ function textOf(raw: string): string | null {
 
 export function QuickReplies({ paneKey, hostId, sessionId, capabilities, asking, locked = false }: Props) {
   const t = useI18nStore((s) => s.t)
-  const replies = useQuickReplies(hostId)
+  const replies = useShownReplies(hostId, useQuickReplies(hostId))
   const collapsed = useWorkerSettingsStore((s) => s.quickRepliesCollapsed)
   const setCollapsed = useWorkerSettingsStore((s) => s.setQuickRepliesCollapsed)
   const dKey = draftKey(paneKey, hostId, sessionId)
