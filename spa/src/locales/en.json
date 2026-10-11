@@ -2461,6 +2461,7 @@
   "deck.send.empty": "Nothing to send",
   "deck.send.pane_closed": "Left this view before it went out — not sent (you can resend)",
   "deck.send.rejected": "Not sent ({{code}})",
+  "deck.send.daemon_outdated": "This host's daemon is too old for the new send route; update it and send again",
   "deck.send.network": "Connection lost; may have been sent, check the transcript",
   "deck.send.handed": "Sent",
   "deck.send.handed_keys": "Sent (not confirmed by the mod)",

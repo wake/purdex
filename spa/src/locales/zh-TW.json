@@ -2461,6 +2461,7 @@
   "deck.send.empty": "沒有內容可送出",
   "deck.send.pane_closed": "已離開這個檢視，訊息沒有送出（可重送）",
   "deck.send.rejected": "沒有送出（{{code}}）",
+  "deck.send.daemon_outdated": "這台主機的 daemon 太舊，沒有新的送出路由；請更新後再送",
   "deck.send.network": "連線中斷，可能已送出，請看紀錄",
   "deck.send.handed": "已送出",
   "deck.send.handed_keys": "已送出（未經 mod 確認）",

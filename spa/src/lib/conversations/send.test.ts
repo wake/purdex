@@ -165,6 +165,18 @@ describe('submitTyped (POST /api/sessions/{code}/submit)', () => {
     await expect(run()).resolves.toEqual(want)
   })
 
+  it('a plain-text 404 (Go mux, a daemon without the submit route) is daemon_outdated, with a readable message', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response('404 page not found\n', { status: 404 })))
+    const o = await run()
+    expect(o).toEqual({ kind: 'rejected', status: 404, code: 'daemon_outdated' })
+    expect(outcomeMessage(o)).toEqual({ key: 'deck.send.daemon_outdated', tone: 'error' })
+  })
+
+  it('a JSON 404 session_not_found keeps its own mapping', async () => {
+    fetchMock.mockImplementation(() => json(404, { error: 'session_not_found' }))
+    await expect(run()).resolves.toEqual({ kind: 'rejected', status: 404, code: 'session_not_found' })
+  })
+
   it('a 200 whose body cannot be read may have run: unknown', async () => {
     fetchMock.mockImplementation(() => Promise.resolve(new Response('not json', { status: 200 })))
     await expect(run()).resolves.toEqual({ kind: 'unknown' })

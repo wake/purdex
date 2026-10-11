@@ -103,6 +103,8 @@ export async function submitTyped(hostId: string, target: SubmitTarget, text: st
     if ((res.status === 409 || res.status === 429) && json?.outcome === 'refused') return { kind: 'refused', reason: code, status: res.status }
     if (res.status === 400 && code === 'needs_terminal') return { kind: 'needs_terminal' }
     if (res.status === 400 && (code === 'empty_text' || code === 'too_long' || code === 'bad_text')) return { kind: 'invalid', code }
+    // Go's mux answers an unknown route 404 in plain text: a daemon older than the submit route. Ours always carries error / reason.
+    if (res.status === 404 && !code) return { kind: 'rejected', status: 404, code: 'daemon_outdated' }
     return { kind: 'rejected', status: res.status, code } // not run
   } catch {
     return { kind: 'network' } // the request may have reached the daemon: unknown to us
@@ -160,6 +162,7 @@ function refusedMessage(o: { reason: string; status: number }): OutcomeMessage {
 export function outcomeMessage(o: SendOutcome): OutcomeMessage {
   if (o.kind === 'rejected' && o.code === 'pane_closed') return { key: 'deck.send.pane_closed', tone: 'warn' }
   if (o.kind === 'rejected' && WORKER_REFUSALS.has(o.code)) return { key: `execution.error.${o.code}`, tone: 'error' }
+  if (o.kind === 'rejected' && o.code === 'daemon_outdated') return { key: 'deck.send.daemon_outdated', tone: 'error' }
   switch (o.kind) {
     case 'accepted': return { key: 'deck.send.accepted', tone: 'ok' }
     case 'handed': return { key: o.mode === 'keys' ? 'deck.send.handed_keys' : 'deck.send.handed', tone: 'ok' }
