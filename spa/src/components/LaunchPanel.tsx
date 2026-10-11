@@ -25,6 +25,16 @@ const btn = 'cursor-pointer rounded border border-border-subtle px-3 py-1 hover:
 export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, onRefresh, onSwitchToTerminal }: Props) {
   const t = useI18nStore((s) => s.t)
   const [cd, setCd] = useState(true)
+  // The cd choice belongs to the plan it was made for: adjust it while rendering (never in an effect, which would leave one
+  // render holding the old value) whenever the plan's (generation, directory, state) triple changes.
+  const planKey = `${plan.tmuxInstance}\0${plan.dir?.path ?? ''}\0${plan.dir?.state ?? ''}`
+  const [seenKey, setSeenKey] = useState(planKey)
+  let cdNow = cd
+  if (seenKey !== planKey) {
+    setSeenKey(planKey)
+    setCd(true)
+    cdNow = true
+  }
   const [sending, setSending] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
 
@@ -33,7 +43,7 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
   const resumeLine = 'line' in plan.resume ? plan.resume.line : null
   const resumeReason = resumeLine === null && 'reason' in plan.resume ? plan.resume.reason : null
   const freshLine = plan.fresh?.line ?? null
-  const withCd = cd && move
+  const withCd = cdNow && move
   const generation = tmuxInstance || plan.tmuxInstance
   const noGeneration = generation === ''
 

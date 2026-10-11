@@ -197,3 +197,43 @@ describe('no generation to send', () => {
     expect(post).not.toHaveBeenCalled()
   })
 })
+
+describe('the cd choice belongs to the plan it was made for', () => {
+  const el = (p: LaunchPlan) => (
+    <LaunchPanel hostId="h" sessionCode="abc" tmuxInstance="1:2" plan={p} onRefresh={onRefresh} onSwitchToTerminal={onSwitchToTerminal} />
+  )
+  const box = () => screen.getByTestId('launch-cd') as HTMLInputElement
+  const A = plan({ dir: { path: '/repo-a', state: 'move' } })
+  const hereA = plan({ dir: { path: '/repo-a', state: 'here' } })
+  const B = plan({ dir: { path: '/repo-b', state: 'move' } })
+
+  it('move A unchecked -> here A -> move A: checked again, and the POST carries cd:true', async () => {
+    post.mockResolvedValue(undefined)
+    const { rerender } = render(el(A))
+    fireEvent.click(box())
+    expect(box().checked).toBe(false)
+    rerender(el(hereA))
+    rerender(el(A))
+    expect(box().checked).toBe(true)
+    fireEvent.click(screen.getByTestId('launch-fresh'))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('h', 'abc', { kind: 'fresh', cd: true, expectedTmuxInstance: '1:2' }))
+  })
+  it('move A unchecked -> move B: checked', () => {
+    const { rerender } = render(el(A))
+    fireEvent.click(box())
+    rerender(el(B))
+    expect(box().checked).toBe(true)
+  })
+  it('a different generation resets it too', () => {
+    const { rerender } = render(el(A))
+    fireEvent.click(box())
+    rerender(el({ ...A, tmuxInstance: '1:3' }))
+    expect(box().checked).toBe(true)
+  })
+  it('the same plan read again keeps the unchecked choice', () => {
+    const { rerender } = render(el(A))
+    fireEvent.click(box())
+    rerender(el({ ...A, dir: { ...A.dir! } }))
+    expect(box().checked).toBe(false)
+  })
+})
