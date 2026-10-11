@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -56,6 +57,12 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 	default:
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "unknown state", nil)
 		return
+	}
+	if req.State == team.RelayCancelled && strings.TrimSpace(req.Error) == team.RelayReasonResumed {
+		// resumed withdraws an idle ask (idle relay D6): the op's own row says whether it is one; any other op stays as it is.
+		if !m.refuseResumedUnlessIdle(w, id) {
+			return
+		}
 	}
 	rep := RelayReport{State: req.State, Reason: strings.TrimSpace(req.Error), At: m.now()}
 	if req.State == team.RelayCleared {
@@ -153,6 +160,36 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 		m.afterReport(op)
 	}
 	m.writeJSON(w, http.StatusOK, op)
+}
+
+// refuseResumedUnlessIdle answers a `cancelled --error resumed` report for an op that is not an idle ask: 400
+// bad_transition carrying the op, nothing changed. It returns true when the report may go on — the op's approval row
+// says reason idle, or there is no such op (the store answers 404 below). An op or row that cannot be read is a 500, never
+// a licence to cancel.
+func (m *Module) refuseResumedUnlessIdle(w http.ResponseWriter, opID string) bool {
+	op, ok, err := m.store.GetRelayOp(opID)
+	if err != nil {
+		m.logf("[team] relay report %s: read op: %v", opID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return false
+	}
+	if !ok {
+		return true
+	}
+	if op.Kind == team.RelayKindSelf && op.RequestID != "" {
+		row, found, err := m.store.Get(op.RequestID)
+		if err != nil {
+			m.logf("[team] relay report %s: read request %s: %v", opID, op.RequestID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return false
+		}
+		var sp team.SelfRelayPayload
+		if found && json.Unmarshal(row.Payload, &sp) == nil && sp.Reason == team.RelayBeginReasonIdle {
+			return true
+		}
+	}
+	m.writeJSON(w, http.StatusBadRequest, team.APIError{Error: team.ErrBadTransition, Detail: "resumed is only for an idle relay ask", Op: &op})
+	return false
 }
 
 // afterReport is what follows an op's state in the store: a cleared op
