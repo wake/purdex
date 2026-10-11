@@ -87,7 +87,7 @@ func TestScrub_DropsRowsTheNormalizerIgnores(t *testing.T) {
 		}
 		types = append(types, typ)
 	}
-	want := "ai-title system/turn_duration attachment/queued_command"
+	want := "queue-operation ai-title system/turn_duration attachment/queued_command"
 	if got := strings.Join(types, " "); got != want {
 		t.Errorf("kept %q, want %q", got, want)
 	}

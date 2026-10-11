@@ -84,7 +84,7 @@ func TestReadFields_CoversDecoderKeys(t *testing.T) {
 }
 
 func TestReadFields_WellFormed(t *testing.T) {
-	rows := map[string]bool{"*": true, "user": true, "assistant": true, "system": true, "attachment": true, "custom-title": true, "ai-title": true}
+	rows := map[string]bool{"*": true, "user": true, "assistant": true, "system": true, "attachment": true, "custom-title": true, "ai-title": true, "queue-operation": true}
 	seen := map[string]bool{}
 	for _, f := range ReadFields {
 		if !rows[f.Row] || f.Path == "" || strings.HasPrefix(f.Path, ".") || strings.HasSuffix(f.Path, ".") {

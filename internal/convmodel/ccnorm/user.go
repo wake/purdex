@@ -186,6 +186,15 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 		return
 	}
 
+	// A fresh prompt the person typed into an idle session starts the turn: the queue is empty by then, so whatever it
+	// still holds is a leftover (a crash, a resume) and goes. Only an explicit promptSource "typed" (or
+	// "suggestion_accepted": 45 of 45 measured rows came with no turn running) counts; local commands (/cost, !ls) carry
+	// no promptSource, and a prompt while a turn still runs is not a fresh one. Measured on the 60 largest local
+	// transcripts: slash rows have no promptSource; queued rows are "queued", system ones "system".
+	ps := l.str(l.PromptSource)
+	clearsQueue := humanKind(kind) && kind != "queued" && (ps == "typed" || ps == "suggestion_accepted") &&
+		src == convmodel.SourceUser && !n.turnRunning()
+
 	ti, ok := n.openTurn(l.uuid, l.at, off)
 	if !ok {
 		return
@@ -194,6 +203,9 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 		// a subagent's first prompt is the brief its parent gave it (ruling D7)
 		n.briefDone = true
 		src, from = convmodel.SourceTask, nil
+	}
+	if clearsQueue {
+		n.queue = nil
 	}
 	n.addUser(ti, l.uuid, l.at, src, from, text, blocks, off)
 	n.handoff(ti, l.str(l.Entrypoint), l.at, off)

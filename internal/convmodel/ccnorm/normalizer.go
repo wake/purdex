@@ -72,6 +72,8 @@ type Normalizer struct {
 	entry                string // entrypoint (cli / sdk-cli) of the last row that had one
 	entryBefore          string // the same, as it was before the current row
 
+	queue []qEntry // Claude Code's prompt queue, oldest first (queue.go)
+
 	// Subagent mode (NormalizeSubagent): the file is an agent's own, so its
 	// sidechain rows count, and its first prompt is the brief.
 	sub       bool
@@ -116,6 +118,7 @@ func (n *Normalizer) Feed(offset int64, line []byte) ([]Change, error) {
 		// Too big to decode (a huge inline image): the offset has moved on,
 		// the content is dropped and counted.
 		n.compactID = ""
+		n.queue = nil // a skipped line may have been an enqueue: hide rather than mispair
 		n.skip("line:oversize")
 		return nil, nil
 	}
@@ -128,6 +131,7 @@ func (n *Normalizer) Feed(offset int64, line []byte) ([]Change, error) {
 func (n *Normalizer) skipOversize(size int64) {
 	n.compactID = ""
 	n.next += size + 1
+	n.queue = nil // see Feed
 	n.stats.Lines++
 	n.skip("line:oversize")
 }
@@ -150,13 +154,14 @@ func (n *Normalizer) Skip(offset, length int64) error {
 	return nil
 }
 
-// Header is the title and the usage the conversation shows; both are cheap to
-// read, unlike Conversation, which copies every turn.
-func (n *Normalizer) Header() (title string, usage *convmodel.Usage) {
+// Header is the title, the usage and the queued messages the conversation
+// shows; all are cheap to read, unlike Conversation, which copies every turn.
+// queued holds the user and peer entries of Claude Code's prompt queue.
+func (n *Normalizer) Header() (title string, usage *convmodel.Usage, queued []Queued) {
 	if n.model != "" || n.effort != "" {
 		usage = &convmodel.Usage{Model: n.model, Effort: n.effort}
 	}
-	return n.title(), usage
+	return n.title(), usage, n.queuedOut()
 }
 
 // Next is the offset the next line must have.
@@ -245,6 +250,12 @@ func (n *Normalizer) row(off int64, line []byte) {
 			n.skip("agent:other")
 			return
 		}
+	}
+	if l.typ == "queue-operation" {
+		if !n.sub { // a subagent's file has no queue of its own
+			n.queueRow(&l, l.str(l.Operation))
+		}
+		return
 	}
 	switch l.typ {
 	case "user", "assistant", "system", "attachment":

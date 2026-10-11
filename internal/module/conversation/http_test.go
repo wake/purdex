@@ -175,7 +175,12 @@ type snapshot struct {
 		Status  string `json:"status"`
 		Backend string `json:"backend"`
 		Live    bool   `json:"live"`
-		Usage   *struct {
+		Queued  []struct {
+			Text   string `json:"text"`
+			At     int64  `json:"at"`
+			Source string `json:"source"`
+		} `json:"queued"`
+		Usage *struct {
 			Model  string `json:"model"`
 			Effort string `json:"effort"`
 		} `json:"usage"`

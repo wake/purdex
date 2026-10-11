@@ -71,6 +71,7 @@ type Entry struct {
 	headRev  uint64            // the revision that last changed the header
 	title    string
 	usage    *convmodel.Usage
+	queued   []ccnorm.Queued // messages waiting in Claude Code's queue (user and peer)
 	live     bool
 	// status and backend are the resolver's answer as of the last Refresh (the pane's light or ended / unknown, and
 	// "terminal" while a pane runs the session). They live in the entry so that a header, a window and a cursor read
@@ -126,7 +127,7 @@ func (e *Entry) newEpoch() {
 	e.rev = 0
 	e.headRev = 0
 	e.changed = map[string]uint64{}
-	e.title, e.usage = "", nil
+	e.title, e.usage, e.queued = "", nil, nil
 	e.status, e.backend, e.statusAt = "", "", time.Time{}
 	e.fp, e.fpEnd = nil, 0
 	e.snapOK = false
@@ -274,16 +275,28 @@ func (e *Entry) rollFingerprint(off int64, line []byte) {
 	e.fp, e.fpEnd = buf, end
 }
 
-// refreshHeader bumps the revision when the title or the usage changed.
+// refreshHeader bumps the revision when the title, the usage or the queued messages changed.
 func (e *Entry) refreshHeader() {
-	title, usage := e.norm.Header()
-	if title == e.title && sameUsage(usage, e.usage) {
+	title, usage, queued := e.norm.Header()
+	if title == e.title && sameUsage(usage, e.usage) && sameQueued(queued, e.queued) {
 		return
 	}
-	e.title, e.usage = title, usage
+	e.title, e.usage, e.queued = title, usage, queued
 	e.rev++
 	e.headRev = e.rev
 	e.snapOK = false
+}
+
+func sameQueued(a, b []ccnorm.Queued) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func sameUsage(a, b *convmodel.Usage) bool {
@@ -308,6 +321,7 @@ func (e *Entry) conv() *convmodel.Conversation {
 type Header struct {
 	Title   string
 	Usage   *convmodel.Usage
+	Queued  []ccnorm.Queued // messages waiting in Claude Code's queue, oldest first
 	Live    bool
 	Status  string // the pane's light, "ended" without a pane, "unknown" when the owner lookup failed
 	Backend string // "terminal" while a pane runs the session
@@ -326,7 +340,7 @@ func (e *Entry) headerLocked() Header {
 		c := *e.usage
 		u = &c
 	}
-	return Header{Title: e.title, Usage: u, Live: e.live, Status: e.status, Backend: e.backend}
+	return Header{Title: e.title, Usage: u, Queued: append([]ccnorm.Queued(nil), e.queued...), Live: e.live, Status: e.status, Backend: e.backend}
 }
 
 // Epoch is the random id of the current normalizer instance.
@@ -343,7 +357,7 @@ func (e *Entry) Revision() uint64 {
 	return e.rev
 }
 
-// HeaderChangedSince reports whether the title or usage changed after rev.
+// HeaderChangedSince reports whether the title, usage or queue changed after rev.
 func (e *Entry) HeaderChangedSince(rev uint64) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()

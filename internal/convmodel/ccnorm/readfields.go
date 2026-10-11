@@ -36,6 +36,10 @@ var ReadFields = []ReadField{
 	{Row: "custom-title", Path: "customTitle"},
 	{Row: "ai-title", Path: "aiTitle"},
 
+	// queue-operation rows: Claude Code's prompt queue (queue.go)
+	{Row: "queue-operation", Path: "operation"},
+	{Row: "queue-operation", Path: "content"},
+
 	// user rows: prompts, tool results, interrupt markers
 	{Row: "user", Path: "isMeta"},
 	{Row: "user", Path: "isCompactSummary"},
@@ -112,7 +116,7 @@ var ReadFields = []ReadField{
 // step with the row switch.
 func ReadsRow(typ, subtype, attachmentType string) bool {
 	switch typ {
-	case "user", "assistant", "custom-title", "ai-title":
+	case "user", "assistant", "custom-title", "ai-title", "queue-operation":
 		return true
 	case "system":
 		return subtype == "turn_duration" || subtype == "local_command" || subtype == "compact_boundary" || subtype == "informational"
