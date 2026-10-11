@@ -29,11 +29,19 @@ type usageJSON struct {
 }
 
 type headerJSON struct {
-	Title   string     `json:"title"`
-	Status  string     `json:"status"`
-	Backend string     `json:"backend"`
-	Usage   *usageJSON `json:"usage,omitempty"`
-	Live    bool       `json:"live"`
+	Title   string       `json:"title"`
+	Status  string       `json:"status"`
+	Backend string       `json:"backend"`
+	Usage   *usageJSON   `json:"usage,omitempty"`
+	Live    bool         `json:"live"`
+	Queued  []queuedJSON `json:"queued,omitempty"`
+}
+
+// queuedJSON is one message waiting in Claude Code's own queue; the deck shows it grey at the tail until it is read.
+type queuedJSON struct {
+	Text   string `json:"text"`
+	At     int64  `json:"at"`
+	Source string `json:"source"`
 }
 
 type windowJSON struct {
@@ -56,7 +64,11 @@ func headerOf(h convfeed.Header) headerJSON {
 	if h.Usage != nil {
 		u = &usageJSON{Model: h.Usage.Model, Effort: h.Usage.Effort}
 	}
-	return headerJSON{Title: h.Title, Status: h.Status, Backend: h.Backend, Usage: u, Live: h.Live}
+	var q []queuedJSON
+	for _, m := range h.Queued {
+		q = append(q, queuedJSON{Text: m.Text, At: m.At, Source: m.Source})
+	}
+	return headerJSON{Title: h.Title, Status: h.Status, Backend: h.Backend, Usage: u, Live: h.Live, Queued: q}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body []byte) {
