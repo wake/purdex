@@ -291,7 +291,8 @@ describe('WorkerDeckPane', () => {
   it('not offered where the room does not offer it: a queued worker, a non-claude provider', () => {
     seed(summary({ state: 'queued', session_id: undefined }))
     render(ui())
-    expect(screen.queryByTestId('worker-deck-view-menu')).toBeNull() // the placeholder has no footer
+    openMenu() // the placeholder keeps the small menu (the way back to the room), but offers no terminal
+    expect(screen.queryByTestId('view-mode-terminal')).toBeNull()
     cleanup()
     seed(summary({ state: 'idle', provider: 'codex' }))
     render(ui())
@@ -506,5 +507,52 @@ describe('WorkerDeckPane', () => {
     expect(vi.mocked(takeToTerminal).mock.calls[0][0]).toMatchObject({ hostId: H, executionId: E })
     fireEvent.click(within(screen.getByTestId('worker-ended-footer')).getByRole('button', { name: 'Close tab' }))
     expect(closeTab).toHaveBeenCalledWith('t')
+  })
+  // --- the controls outlive the conversation's state, and wait for the pane's own unsent messages ---
+  it('a worker with no session id yet (placeholder) can still be exited, with the running-turn confirm', async () => {
+    vi.mocked(exitWorker).mockReset().mockResolvedValue({ state: 'terminated', archived: false } as never)
+    seed(summary({ state: 'running', session_id: undefined }))
+    render(ui())
+    expect(screen.getByTestId('worker-deck-placeholder')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('worker-deck-exit'))
+    expect(exitWorker).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    await vi.waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
+  })
+
+  it('an unreadable conversation keeps 退出 and the status bar\'s terminal button answerable (the confirm is not inside the deck\'s footer)', () => {
+    seed(summary({ state: 'running' }))
+    useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: { ...entry(), status: 'error', doc: { ...emptyDoc(), turns: [] } } } } as never)
+    render(ui())
+    expect(screen.getByTestId('deck-unreadable')).toBeInTheDocument()
+    act(() => { getTakeToTerminal('p-w')!.takeToTerminal() })
+    expect(screen.getByTestId('takeback-confirm')).toBeInTheDocument()
+  })
+
+  it('a message the pane still holds (undo window) freezes 退出 and 帶回終端機 until it has gone out', async () => {
+    vi.useFakeTimers()
+    seed(summary({ state: 'idle' }))
+    render(ui())
+    typeAndSend('run the tests')
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'undo')
+    expect(screen.getByTestId('worker-deck-exit')).toBeDisabled()
+    expect(getTakeToTerminal('p-w')).toMatchObject({ canTake: true, busy: true })
+    getTakeToTerminal('p-w')!.takeToTerminal()
+    expect(takeToTerminal).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) }) // handed to Nexen: nothing of the pane's is on its way any more
+    expect(screen.getByTestId('worker-deck-exit')).not.toBeDisabled()
+    expect(getTakeToTerminal('p-w')).toMatchObject({ busy: false })
+  })
+
+  it('a confirm opened before a message was typed does not run once the message is on its way', async () => {
+    vi.useFakeTimers()
+    vi.mocked(exitWorker).mockReset().mockResolvedValue({ state: 'terminated', archived: false } as never)
+    seed(summary({ state: 'running' }))
+    render(ui())
+    fireEvent.click(screen.getByTestId('worker-deck-exit'))
+    typeAndSend('one more thing')
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(exitWorker).not.toHaveBeenCalled()
   })
 })
