@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { DEFAULT_QUICK_REPLIES, effectiveQuickReplies, trimLikeGo, useQuickReplies, validateQuickReplyText } from './quick-replies'
+import { DEFAULT_QUICK_REPLIES, effectiveQuickReplies, trimLikeGo, useQuickReplies, validateQuickReplyText, validateQuickReplyTitle } from './quick-replies'
 import { emptyHostConfigEntry, useHostConfigStore, type HostConfigEntry } from '../stores/useHostConfigStore'
 import type { QuickReply } from './host-config-api'
 
@@ -13,10 +13,10 @@ beforeEach(() => useHostConfigStore.setState({ byHost: {} }))
 
 describe('effectiveQuickReplies', () => {
   it('the defaults are the three from Q3, frozen', () => {
-    expect(DEFAULT_QUICK_REPLIES.map((r) => [r.id, r.text])).toEqual([
-      ['continue', 'continue'],
-      ['run-tests', 'run the tests'],
-      ['explain', 'explain that'],
+    expect(DEFAULT_QUICK_REPLIES.map((r) => [r.id, r.title, r.content])).toEqual([
+      ['continue', '繼續', 'continue'],
+      ['run-tests', '跑測試', 'run the tests'],
+      ['explain', '解釋', 'explain that'],
     ])
     expect(Object.isFrozen(DEFAULT_QUICK_REPLIES)).toBe(true)
   })
@@ -28,7 +28,7 @@ describe('effectiveQuickReplies', () => {
   // #1489: revision 0 is only "never written" when the row holds nothing. A row edited by hand back to 0 may still
   // hold replies, and showing the defaults over them would make the first edit PUT defaults + that edit, wiping them.
   it('revision 0 with stored items shows the items', () => {
-    const items = [{ id: 'go', text: 'go on' }]
+    const items = [{ id: 'go', title: 'go on', content: 'go on' }]
     expect(effectiveQuickReplies(ready(items, 0))).toEqual(items)
     expect(effectiveQuickReplies({ ...ready(items, 0), problems: { quickReplies: { kind: 'rows', count: 1 } } })).toEqual(items)
   })
@@ -44,7 +44,7 @@ describe('effectiveQuickReplies', () => {
   // host is not known to hold must never be the defaults, or a stray
   // `continue` appears — and one tap sends it.
   it('error after ready keeps the stored list', () => {
-    const items = [{ id: 'go', text: 'go on' }]
+    const items = [{ id: 'go', title: 'go on', content: 'go on' }]
     expect(effectiveQuickReplies({ ...ready(items, 4), status: 'error', error: 'offline' })).toEqual(items)
     // …and a never-written collection still reads as the defaults.
     expect(effectiveQuickReplies({ ...ready([], 0), status: 'error', error: 'offline' })).toBe(DEFAULT_QUICK_REPLIES)
@@ -59,7 +59,7 @@ describe('effectiveQuickReplies', () => {
     expect(effectiveQuickReplies(emptyHostConfigEntry('idle'))).toEqual([])
     expect(effectiveQuickReplies(emptyHostConfigEntry('loading'))).toEqual([])
     // A refresh of a host that loaded before keeps its list.
-    expect(effectiveQuickReplies({ ...ready([{ id: 'a', text: 'a' }], 3), status: 'loading' })).toEqual([{ id: 'a', text: 'a' }])
+    expect(effectiveQuickReplies({ ...ready([{ id: 'a', title: 'a', content: 'a' }], 3), status: 'loading' })).toEqual([{ id: 'a', title: 'a', content: 'a' }])
   })
 
   it('never-loaded error shows nothing', () => {
@@ -77,7 +77,7 @@ describe('effectiveQuickReplies', () => {
   })
 
   it('stored items win', () => {
-    const items = [{ id: 'go', text: 'go on' }]
+    const items = [{ id: 'go', title: 'go on', content: 'go on' }]
     expect(effectiveQuickReplies(ready(items, 1))).toEqual(items)
   })
 
@@ -93,6 +93,16 @@ describe('validateQuickReplyText', () => {
     expect(validateQuickReplyText('a\0b')).toBe('hosts.quick_replies.error_invalid')
     expect(validateQuickReplyText('字'.repeat(333))).toBeNull() // 999 bytes
     expect(validateQuickReplyText('字'.repeat(334))).toBe('hosts.quick_replies.error_invalid')
+  })
+})
+
+describe('validateQuickReplyTitle', () => {
+  it('follows the daemon: non-empty, at most 100 bytes, no NUL', () => {
+    expect(validateQuickReplyTitle('Go')).toBeNull()
+    expect(validateQuickReplyTitle('')).toBe('hosts.quick_replies.error_title_empty')
+    expect(validateQuickReplyTitle('a\0b')).toBe('hosts.quick_replies.error_title_invalid')
+    expect(validateQuickReplyTitle('字'.repeat(33))).toBeNull() // 99 bytes
+    expect(validateQuickReplyTitle('字'.repeat(34))).toBe('hosts.quick_replies.error_title_invalid')
   })
 })
 
@@ -128,7 +138,7 @@ describe('useQuickReplies', () => {
     const { result } = renderHook(() => useQuickReplies('h1'))
     expect(ensureLoaded).toHaveBeenCalledWith('h1')
     expect(result.current).toEqual([])
-    act(() => useHostConfigStore.setState({ byHost: { h1: ready([{ id: 'go', text: 'go on' }], 1) } }))
-    expect(result.current).toEqual([{ id: 'go', text: 'go on' }])
+    act(() => useHostConfigStore.setState({ byHost: { h1: ready([{ id: 'go', title: 'go on', content: 'go on' }], 1) } }))
+    expect(result.current).toEqual([{ id: 'go', title: 'go on', content: 'go on' }])
   })
 })

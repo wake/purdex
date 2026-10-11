@@ -9,12 +9,13 @@ import { useHostConfigStore, type HostConfigEntry } from '../stores/useHostConfi
 /** The daemon's limits (`internal/module/hostconfig/validate.go`). */
 export const MAX_QUICK_REPLIES = 20
 export const QUICK_REPLY_MAX_BYTES = 1000
+export const QUICK_REPLY_TITLE_MAX_BYTES = 100
 
 /** What a host with nothing configured shows (Q3). Editable and deletable. */
 export const DEFAULT_QUICK_REPLIES: readonly QuickReply[] = Object.freeze([
-  Object.freeze({ id: 'continue', text: 'continue' }),
-  Object.freeze({ id: 'run-tests', text: 'run the tests' }),
-  Object.freeze({ id: 'explain', text: 'explain that' }),
+  Object.freeze({ id: 'continue', title: '繼續', content: 'continue' }),
+  Object.freeze({ id: 'run-tests', title: '跑測試', content: 'run the tests' }),
+  Object.freeze({ id: 'explain', title: '解釋', content: 'explain that' }),
 ])
 
 const NO_QUICK_REPLIES: readonly QuickReply[] = Object.freeze([])
@@ -23,8 +24,15 @@ const utf8 = new TextEncoder()
 
 export { trimLikeGo } from './go-trim'
 
+/** Why a title (already trimmed) cannot be saved: non-empty, at most 100 bytes, no NUL (the daemon's rules). */
+export function validateQuickReplyTitle(title: string): string | null {
+  if (title === '') return 'hosts.quick_replies.error_title_empty'
+  if (title.includes('\0') || utf8.encode(title).length > QUICK_REPLY_TITLE_MAX_BYTES) return 'hosts.quick_replies.error_title_invalid'
+  return null
+}
+
 /**
- * Why `text` (already trimmed) cannot be saved, as a locale key, or `null`.
+ * Why a content (already trimmed) cannot be saved, as a locale key, or `null`.
  * The same rules the daemon enforces, so a bad text never costs a round trip.
  */
 export function validateQuickReplyText(text: string): string | null {

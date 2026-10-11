@@ -61,7 +61,7 @@ beforeEach(() => {
   useExecutionStore.setState({ executions: {} })
   useNexHostStore.setState({ ensure: async () => {}, byHost: { [H]: { phase: 'ready', capabilities: {} } } } as never)
   useHostConfigStore.setState({
-    byHost: { [H]: { status: 'ready', quickRepliesSupported: true, quickReplies: [{ id: 'a', text: 'continue' }, { id: 'b', text: 'run the tests' }], revisions: { quickReplies: 1 }, problems: {} } },
+    byHost: { [H]: { status: 'ready', quickRepliesSupported: true, quickReplies: [{ id: 'a', title: 'continue', content: 'continue' }, { id: 'b', title: 'run the tests', content: 'run the tests' }], revisions: { quickReplies: 1 }, problems: {} } },
     ensureLoaded: async () => {},
   } as never)
   useWorkerSettingsStore.setState({ quickRepliesCollapsed: false })

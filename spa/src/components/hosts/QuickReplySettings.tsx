@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { ArrowDown, ArrowUp, Check, PencilSimple, Plus, Trash, X } from '@phosphor-icons/react'
 import type { QuickReply } from '../../lib/host-config-api'
 import { newConfigId } from '../../lib/host-config-validate'
-import { MAX_QUICK_REPLIES, trimLikeGo, validateQuickReplyText } from '../../lib/quick-replies'
+import { MAX_QUICK_REPLIES, trimLikeGo, validateQuickReplyText, validateQuickReplyTitle } from '../../lib/quick-replies'
 import { EMPTY_HOST_CONFIG, useHostConfigStore } from '../../stores/useHostConfigStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HostConfigProblemNotice } from './HostConfigNotice'
@@ -14,11 +14,11 @@ import { useHostConfigCollection } from './useHostConfigCollection'
 
 const iconBtn = 'p-1 rounded hover:bg-surface-tertiary text-text-secondary hover:text-text-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
 
-function QuickReplyEditor({ initial, text, onText, busy, error, onSave, onCancel }: {
+function QuickReplyEditor({ initial, draft, onDraft, busy, error, onSave, onCancel }: {
   initial: QuickReply
   /** The draft: held by the list, not here — the editor is remounted when its item moves from its row to the new row (#1487). */
-  text: string
-  onText: (text: string) => void
+  draft: { title: string; content: string }
+  onDraft: (draft: { title: string; content: string }) => void
   busy: boolean
   /** Save failure text from the host, shown under the field. */
   error: string | null
@@ -31,27 +31,34 @@ function QuickReplyEditor({ initial, text, onText, busy, error, onSave, onCancel
   const save = () => {
     // Enter reaches here too, past the button's `disabled` (as in CommandEditDialog).
     if (busy) return
-    const trimmed = trimLikeGo(text)
-    const problem = validateQuickReplyText(trimmed)
+    const title = trimLikeGo(draft.title)
+    const content = trimLikeGo(draft.content)
+    const problem = validateQuickReplyTitle(title) ?? validateQuickReplyText(content)
     if (problem) {
       setInvalid(problem)
       return
     }
     setInvalid(null)
-    onSave({ id: initial.id, text: trimmed })
+    onSave({ id: initial.id, title, content })
+  }
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); save() }
+    else if (e.key === 'Escape') onCancel()
   }
 
   const shown = invalid ? t(invalid, { max: MAX_QUICK_REPLIES }) : error
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
       <div className="flex items-center gap-2">
-        <input data-testid="quick-reply-input" aria-label={t('hosts.quick_replies.text_label')} autoFocus value={text}
-          onChange={(e) => onText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); save() }
-            else if (e.key === 'Escape') onCancel()
-          }}
-          className="min-w-0 flex-1 rounded border border-border-default bg-surface-secondary px-2 py-1 text-sm text-text-primary" />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <input data-testid="quick-reply-title-input" aria-label={t('hosts.quick_replies.title_label')} autoFocus value={draft.title}
+            onChange={(e) => onDraft({ ...draft, title: e.target.value })} onKeyDown={onKey}
+            className="min-w-0 rounded border border-border-default bg-surface-secondary px-2 py-1 text-sm text-text-primary" />
+          <input data-testid="quick-reply-input" aria-label={t('hosts.quick_replies.text_label')} value={draft.content}
+            onChange={(e) => onDraft({ ...draft, content: e.target.value })} onKeyDown={onKey}
+            className="min-w-0 rounded border border-border-default bg-surface-secondary px-2 py-1 text-sm text-text-primary" />
+        </div>
         <button type="button" data-testid="quick-reply-save" title={t('common.save')} disabled={busy} onClick={save}
           className={iconBtn}><Check size={14} /></button>
         <button type="button" data-testid="quick-reply-cancel" title={t('common.cancel')} onClick={onCancel}
@@ -76,7 +83,7 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
   // belongs to one item (`id`) and is dropped when the editor closes or another item is opened — a row's edit button works
   // while another item is being edited, which never passes through `editing === null` (set during render, react.dev
   // "adjusting state").
-  const [draft, setDraft] = useState<{ id: string; text: string } | null>(null)
+  const [draft, setDraft] = useState<{ id: string; title: string; content: string } | null>(null)
   if (draft !== null && draft.id !== editing?.id) setDraft(null)
 
   // The host-wide gate only knows the host config loaded; a daemon older than
@@ -100,8 +107,8 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
   const neverWritten = entry.revisions.quickReplies === 0
   const editor = (reply: QuickReply) => (
     <QuickReplyEditor key={reply.id} initial={reply}
-      text={draft !== null && draft.id === reply.id ? draft.text : reply.text}
-      onText={(text) => setDraft({ id: reply.id, text })} busy={locked || pending}
+      draft={draft !== null && draft.id === reply.id ? draft : reply}
+      onDraft={(d) => setDraft({ id: reply.id, ...d })} busy={locked || pending}
       error={saveError?.target === 'dialog' ? saveError.text : null} onSave={submit} onCancel={closeEditor} />
   )
 
@@ -113,7 +120,7 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
           {neverWritten && <span data-testid="quick-replies-defaults">{t('hosts.quick_replies.defaults_note')}</span>}
         </p>
         <button type="button" data-testid="quick-reply-add" disabled={locked || pending || atLimit || !!editing}
-          onClick={() => openEditor({ id: newConfigId(), text: '' })}
+          onClick={() => openEditor({ id: newConfigId(), title: '', content: '' })}
           className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50">
           <Plus size={14} />{t('hosts.quick_replies.add')}
         </button>
@@ -132,7 +139,10 @@ export function QuickReplySettings({ hostId }: { hostId: string }) {
             <li key={reply.id} data-testid={`quick-reply-row-${reply.id}`}>
               {editing?.id === reply.id ? editor(editing) : (
                 <div className="flex items-center gap-3 px-3 py-2">
-                  <span className="min-w-0 flex-1 truncate text-sm text-text-primary" title={reply.text}>{reply.text}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-text-primary" title={reply.content}>
+                    <span data-testid={`quick-reply-title-${reply.id}`}>{reply.title}</span>
+                    {reply.content !== reply.title && <span className="ml-2 text-xs text-text-muted">{reply.content}</span>}
+                  </span>
                   <div className="flex items-center gap-1">
                     <button type="button" data-testid={`quick-reply-up-${reply.id}`} title={t('host_config.move_up')}
                       disabled={locked || index === 0} onClick={() => void move(reply.id, -1)}
