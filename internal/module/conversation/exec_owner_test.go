@@ -80,14 +80,14 @@ func TestExec_NexAbsentIsUnchanged(t *testing.T) {
 	if s.Header.Backend != "" || s.Header.Live || s.Header.Status != "ended" {
 		t.Fatalf("header = %+v", s.Header)
 	}
-	if c := e.mod.capabilitiesFor(sid, ""); c.Send != "" || c.Reasons["send"] != "not_wired" {
+	if c := e.mod.capabilitiesFor(sid, "", false); c.Send != "" || c.Reasons["send"] != "not_wired" {
 		t.Fatalf("caps = %+v", c)
 	}
 }
 
 func TestExec_CapabilitiesPerBackend(t *testing.T) {
 	e, _ := execEnv(t)
-	c := e.mod.capabilitiesFor(sid, "execution")
+	c := e.mod.capabilitiesFor(sid, "execution", true)
 	if c.Send != "execution" || c.Interrupt != "execution" || c.AnswerPermission != "execution" || c.BackgroundTasks != "execution" {
 		t.Fatalf("execution caps = %+v", c)
 	}
@@ -103,12 +103,12 @@ func TestExec_CapabilitiesPerBackend(t *testing.T) {
 	// a terminal backend keeps the prompt logic, whatever the execution source says
 	f := &fakeSender{owner: true}
 	e.sender(f)
-	if c := e.mod.capabilitiesFor(sid, "terminal"); c.Send != "prompt" || c.AnswerPermission != "" {
+	if c := e.mod.capabilitiesFor(sid, "terminal", true); c.Send != "prompt" || c.AnswerPermission != "" {
 		t.Fatalf("terminal caps = %+v", c)
 	}
 	// no backend (ended / unknown): not execution caps either
 	e2, _ := execEnv(t)
-	if c := e2.mod.capabilitiesFor(sid, ""); c.Send != "" || c.Reasons["send"] != "not_wired" {
+	if c := e2.mod.capabilitiesFor(sid, "", false); c.Send != "" || c.Reasons["send"] != "not_wired" {
 		t.Fatalf("no owner: %+v", c)
 	}
 }

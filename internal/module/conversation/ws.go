@@ -92,7 +92,13 @@ func capsKeyOf(c *convmodel.Capabilities) capsKey {
 // pushCaps queues a conversation.capabilities frame when the table changed since the snapshot or the last frame (a mod
 // that announced prompt.v1 came or went), so the App enables or disables its input at once instead of on the next fetch.
 func (c *wsConn) pushCaps() bool {
-	caps := c.m.capabilitiesFor(c.sid, c.entry.Header().Backend)
+	return c.pushCapsFor(c.entry.Header())
+}
+
+// pushCapsFor does the same from a header the caller already holds: the frames after a refresh are built from one header,
+// and the capabilities that depend on it (live) must leave from that same reading, ahead of it.
+func (c *wsConn) pushCapsFor(h convfeed.Header) bool {
+	caps := c.m.capabilitiesFor(c.sid, h.Backend, headerLive(h))
 	if k := capsKeyOf(caps); k != c.caps {
 		c.caps = k
 		return c.enqueue("conversation.capabilities", map[string]any{"capabilities": caps})
@@ -296,7 +302,7 @@ func (c *wsConn) sendFirst(hasAfter bool, afterEpoch string, afterRev uint64) bo
 
 // sendSnapshot queues a snapshot frame (with the connection's `turns`) and moves the follower's position to its cursor.
 func (c *wsConn) sendSnapshot() bool {
-	caps := c.m.capabilitiesFor(c.sid, c.entry.Header().Backend) // the table the snapshot says is also the baseline a later change is compared with
+	caps := capsOf(c) // the table the snapshot says is also the baseline a later change is compared with
 	c.caps = capsKeyOf(caps)
 	body, cursor, _, code := c.m.snapshotBody(c.entry, c.sid, c.hostID, caps, c.turns, -1, "", false, false)
 	if code != "" {
@@ -396,6 +402,9 @@ func (c *wsConn) push() bool {
 		return c.enqueue("conversation.reset", map[string]any{}) && c.sendSnapshot()
 	}
 	c.sentRev = rev
+	if !c.pushCapsFor(inc.Header) { // before the header frame: send follows the live state that header reports
+		return false
+	}
 	if len(inc.Changes) == 0 {
 		return c.enqueue("conversation.header", map[string]any{"header": headerOf(inc.Header), "cursor": inc.Cursor})
 	}
@@ -459,4 +468,10 @@ func (m *Module) cheapLight(src convfeed.Source, have bool, sid string) (status 
 		return "", false, ""
 	}
 	return st, true, src.FrameID
+}
+
+// capsOf reads the header once, so backend and live come from the same reading.
+func capsOf(c *wsConn) *convmodel.Capabilities {
+	h := c.entry.Header()
+	return c.m.capabilitiesFor(c.sid, h.Backend, headerLive(h))
 }

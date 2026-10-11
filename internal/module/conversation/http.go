@@ -189,7 +189,7 @@ func (m *Module) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		}
 		reset = true // a cursor of another epoch, or a catch-up too big for one answer: a fresh snapshot instead
 	}
-	body, _, status, code := m.snapshotBody(entry, sid, hostID, m.capabilitiesFor(sid, entry.Header().Backend), turns, before, around, q.Has("around"), reset)
+	body, _, status, code := m.snapshotBody(entry, sid, hostID, capsForEntry(m, sid, entry), turns, before, around, q.Has("around"), reset)
 	if code != "" {
 		writeError(w, status, code)
 		return

@@ -225,12 +225,12 @@ func TestCapabilities_SendFollowsTheOwner(t *testing.T) {
 	e := newEnv(t)
 	f := &fakeSender{}
 	e.sender(f)
-	c := e.mod.capabilitiesFor(sid, "")
+	c := e.mod.capabilitiesFor(sid, "", false)
 	if c.Send != "" || c.Interrupt != "" || c.Reasons["send"] != "not_wired" || c.Reasons["interrupt"] != "not_wired" {
 		t.Fatalf("without an owner: %+v", c)
 	}
 	f.owner = true
-	c = e.mod.capabilitiesFor(sid, "")
+	c = e.mod.capabilitiesFor(sid, "", false)
 	if c.Send != "prompt" || c.Interrupt != "prompt" || c.Reasons["send"] != "" || c.Reasons["interrupt"] != "" {
 		t.Fatalf("with an owner: %+v", c)
 	}
@@ -333,7 +333,7 @@ func TestWS_CapabilitiesFrameFollowsTheOwner(t *testing.T) {
 func TestCapabilities_AnswerQuestionIsApproval(t *testing.T) {
 	e := newEnv(t)
 	e.sender(&fakeSender{})
-	c := e.mod.capabilitiesFor(sid, "")
+	c := e.mod.capabilitiesFor(sid, "", false)
 	if c.AnswerQuestion != "approval" || c.Reasons["answer_question"] != "" {
 		t.Fatalf("capabilities = %+v", c)
 	}

@@ -322,7 +322,9 @@ func TestWS_PaneGoesAwayIsAHeaderFrame(t *testing.T) {
 	e.owners.own = nil
 	e.owners.mu.Unlock()
 	// the liveness change settles the unfinished turn too (SetLive), so the frame may be a changes frame that carries
-	// the header; a header-only change is a conversation.header frame (the next test)
+	// the header; a header-only change is a conversation.header frame (the next test). The live pane carried send `keys`,
+	// so the capabilities (not_wired now) leave first.
+	c.expect("conversation.capabilities")
 	f = c.read()
 	var hv struct {
 		Header struct {

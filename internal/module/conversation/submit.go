@@ -139,7 +139,7 @@ func (m *Module) promptSender() PromptSender {
 //
 // backend is the one the conversation's resolved source (the header) reports: "execution" gets the worker's table, anything
 // else the terminal / prompt logic. One owner decision, so the header and the capabilities cannot disagree.
-func (m *Module) capabilitiesFor(sessionID, backend string) *convmodel.Capabilities {
+func (m *Module) capabilitiesFor(sessionID, backend string, live bool) *convmodel.Capabilities {
 	c := convmodel.TranscriptCapabilities()
 	// a question the agent asks is answered through the approvals channel (the conversation stream's approvals and the decide
 	// API with hook answers), whatever the mod does
@@ -154,9 +154,17 @@ func (m *Module) capabilitiesFor(sessionID, backend string) *convmodel.Capabilit
 		c.Send, c.Interrupt = "prompt", "prompt"
 		delete(c.Reasons, "send")
 		delete(c.Reasons, "interrupt")
+	} else if live {
+		// a live terminal conversation with no mod owner: the daemon's submit route may type it through the pane (K-2 D1b).
+		// Declaration only; each request is still decided by /api/sessions/{code}/submit. interrupt stays not_wired.
+		c.Send = "keys"
+		delete(c.Reasons, "send")
 	}
 	return &c
 }
+
+// headerLive is the one reading of "live" the capability table uses: what the header reports, and not an ended session.
+func headerLive(h convfeed.Header) bool { return h.Live && h.Status != "ended" }
 
 type submitRequest struct {
 	Text        string `json:"text"`
@@ -275,4 +283,9 @@ func (m *Module) writeSendAnswer(w http.ResponseWriter, res promptq.Result, err 
 		b, _ := json.Marshal(sendAnswer{Status: res.Status, Reason: res.Reason, ClientMsgID: clientMsgID})
 		writeJSON(w, http.StatusOK, b)
 	}
+}
+
+func capsForEntry(m *Module, sid string, entry *convfeed.Entry) *convmodel.Capabilities {
+	h := entry.Header()
+	return m.capabilitiesFor(sid, h.Backend, headerLive(h))
 }
