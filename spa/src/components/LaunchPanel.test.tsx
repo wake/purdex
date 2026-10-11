@@ -1,8 +1,9 @@
 // NA-1: the no-agent launch panel renders the daemon's plan and posts a choice. Fixtures stand in for the daemon (NA-0b).
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { LaunchError, type LaunchPlan } from '../lib/launch-plan'
 import { LaunchPanel } from './LaunchPanel'
+import { resetLaunchLatch } from '../lib/launch-latch'
 
 const post = vi.hoisted(() => vi.fn())
 vi.mock('../lib/launch-plan', async (orig) => ({ ...(await orig<typeof import('../lib/launch-plan')>()), postLaunch: post }))
@@ -17,7 +18,7 @@ const onSwitchToTerminal = vi.fn()
 const mount = (p: LaunchPlan, extra: { branch?: string; tmuxInstance?: string } = {}) =>
   render(<LaunchPanel hostId="h" sessionCode="abc" tmuxInstance={extra.tmuxInstance ?? '1:2'} branch={extra.branch} plan={p} onRefresh={onRefresh} onSwitchToTerminal={onSwitchToTerminal} />)
 
-beforeEach(() => { cleanup(); post.mockReset(); onRefresh.mockReset(); onSwitchToTerminal.mockReset() })
+beforeEach(() => { cleanup(); resetLaunchLatch(); post.mockReset(); onRefresh.mockReset(); onSwitchToTerminal.mockReset() })
 
 describe('rows', () => {
   it('in tmux is a ticked, disabled box', () => {
@@ -122,8 +123,69 @@ describe('actions', () => {
     expect((screen.getByTestId('launch-fresh') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByTestId('launch-resume'))
     expect(post).toHaveBeenCalledTimes(1)
-    done()
-    await waitFor(() => expect((screen.getByTestId('launch-fresh') as HTMLButtonElement).disabled).toBe(false))
+    await act(async () => { done() })
+    // success: still latched (until the claim lifetime ends), and no message
+    expect((screen.getByTestId('launch-fresh') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByTestId('launch-error')).toBeNull()
+  })
+})
+
+describe('launch latch', () => {
+  const btns = () => [screen.getByTestId('launch-resume'), screen.getByTestId('launch-fresh')] as HTMLButtonElement[]
+  const flush = () => act(async () => { await Promise.resolve() })
+
+  it('success then click again: exactly one POST; enabled again after 15 s', async () => {
+    vi.useFakeTimers()
+    try {
+      post.mockResolvedValue(undefined)
+      mount(plan())
+      fireEvent.click(screen.getByTestId('launch-fresh'))
+      await flush()
+      expect(btns().every((b) => b.disabled)).toBe(true)
+      fireEvent.click(screen.getByTestId('launch-fresh'))
+      fireEvent.click(screen.getByTestId('launch-resume'))
+      expect(post).toHaveBeenCalledTimes(1)
+      act(() => { vi.advanceTimersByTime(14_900) })
+      expect(btns().every((b) => b.disabled)).toBe(true)
+      act(() => { vi.advanceTimersByTime(200) })
+      expect(btns().every((b) => !b.disabled)).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
+  it('a failed POST frees the buttons at once and shows the error', async () => {
+    post.mockRejectedValue(new LaunchError(500, 'other'))
+    mount(plan())
+    fireEvent.click(screen.getByTestId('launch-fresh'))
+    await screen.findByTestId('launch-error')
+    expect(btns().every((b) => !b.disabled)).toBe(true)
+  })
+  it('a panel mounted during an in-flight POST (tab switch) starts disabled, and follows its outcome', async () => {
+    let done: () => void = () => {}
+    post.mockReturnValue(new Promise<void>((r) => { done = r }))
+    const first = mount(plan())
+    fireEvent.click(screen.getByTestId('launch-fresh'))
+    first.unmount()
+    mount(plan())
+    expect(btns().every((b) => b.disabled)).toBe(true)
+    await act(async () => { done() })
+    expect(btns().every((b) => b.disabled)).toBe(true) // settled: still latched for the claim lifetime
+  })
+  it('an in-flight POST that fails frees a panel mounted meanwhile', async () => {
+    let fail: (e: unknown) => void = () => {}
+    post.mockReturnValue(new Promise<void>((_, rej) => { fail = rej }))
+    const first = mount(plan())
+    fireEvent.click(screen.getByTestId('launch-fresh'))
+    first.unmount()
+    mount(plan())
+    await act(async () => { fail(new LaunchError(500, 'other')) })
+    expect(btns().every((b) => !b.disabled)).toBe(true)
+  })
+  it('a different tmux instance is not latched', async () => {
+    post.mockReturnValue(new Promise<void>(() => {}))
+    const first = mount(plan())
+    fireEvent.click(screen.getByTestId('launch-fresh'))
+    first.unmount()
+    mount(plan({ tmuxInstance: '1:9' }), { tmuxInstance: '1:9' })
+    expect(btns().every((b) => !b.disabled)).toBe(true)
   })
 })
 

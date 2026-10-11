@@ -1,7 +1,8 @@
 // spa/src/components/LaunchPanel.tsx — what a live session with no agent shows in the deck and the chat (no-agent launch panel
 // spec §3): the daemon's launch plan as rows, and two quick buttons. The daemon owns every rule; this renders its plan and
 // posts the choice. Never switches to the terminal by itself, and shows nothing on success (the agent's hooks switch the view).
-import { useState } from 'react'
+import { useEffect, useReducer, useState } from 'react'
+import { latchKey, latchRelease, latchRemaining, latchSettled, latchStart, subscribeLatch } from '../lib/launch-latch'
 import { LaunchError, postLaunch, previewLine, type LaunchKind, type LaunchPlan } from '../lib/launch-plan'
 import { useI18nStore } from '../stores/useI18nStore'
 
@@ -35,8 +36,19 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
     setCd(true)
     cdNow = true
   }
-  const [sending, setSending] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
+  const generation = tmuxInstance || plan.tmuxInstance
+  // The launch latch is module-level (it survives a tab switch); re-render on any change and when its window ends.
+  const key = latchKey(hostId, sessionCode, generation)
+  const [tick, bump] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => subscribeLatch(bump), [])
+  const remaining = latchRemaining(key)
+  const sending = remaining > 0
+  useEffect(() => {
+    if (remaining <= 0 || remaining === Infinity) return
+    const id = setTimeout(bump, remaining + 1)
+    return () => clearTimeout(id)
+  }, [key, remaining, tick])
 
   const move = plan.dir?.state === 'move'
   const busy = plan.busy !== null
@@ -44,22 +56,21 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
   const resumeReason = resumeLine === null && 'reason' in plan.resume ? plan.resume.reason : null
   const freshLine = plan.fresh?.line ?? null
   const withCd = cdNow && move
-  const generation = tmuxInstance || plan.tmuxInstance
   const noGeneration = generation === ''
 
   const launch = async (kind: LaunchKind) => {
-    if (sending || noGeneration) return
-    setSending(true)
+    if (latchRemaining(key) > 0 || noGeneration) return
+    latchStart(key)
     setFailure(null)
     try {
       await postLaunch(hostId, sessionCode, { kind, cd: withCd, expectedTmuxInstance: generation })
+      latchSettled(key) // stays latched for the claim lifetime; the agent's hooks switch the view
     } catch (e) {
+      latchRelease(key)
       // Not a coded answer (network, aborted, ...): the line may or may not have been typed — say so and read the plan again.
       const code = e instanceof LaunchError ? e.code : 'unknown_outcome'
       setFailure({ code, status: e instanceof LaunchError ? String(e.status) : '' })
       if (code === 'busy' || code === 'agent_running' || code === 'unknown_outcome') onRefresh()
-    } finally {
-      setSending(false)
     }
   }
 
