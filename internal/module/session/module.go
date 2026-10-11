@@ -37,6 +37,8 @@ type SessionModule struct {
 	shellHomeReader func(pid string) (string, error)
 	// tmuxInstanceFn reads the tmux server identity; swapped in tests.
 	tmuxInstanceFn func(context.Context) string
+	// branches caches cwd -> git branch; resolved in the background only.
+	branches *branchCache
 	// shellProbe runs the command-word probe (spec §4.4). A field, not a
 	// package global, so a test can prove a rejected token never reached a
 	// shell without mutating shared state.
@@ -151,6 +153,7 @@ func NewSessionModule(meta *store.MetaStore) *SessionModule {
 		meta:            meta,
 		shellHomeReader: readShellHomeFromProc,
 		tmuxInstanceFn:  config.GetTmuxInstanceContext,
+		branches:        newGitBranchCache(),
 		shellProbe:      runShellProbe,
 		passwdShell:     passwdShellForCurrentUser,
 		epoch:           newEpoch(),

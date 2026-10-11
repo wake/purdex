@@ -13,7 +13,7 @@ import (
 
 // newTestModule creates a SessionModule with in-memory MetaStore and FakeExecutor,
 // already initialised via Core. Returns the module, meta store, and fake executor.
-func newTestModule(t *testing.T) (*SessionModule, *store.MetaStore, *tmux.FakeExecutor) {
+func newTestModule(t testing.TB) (*SessionModule, *store.MetaStore, *tmux.FakeExecutor) {
 	t.Helper()
 
 	meta, err := store.OpenMeta(":memory:")

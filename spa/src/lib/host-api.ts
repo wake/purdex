@@ -12,6 +12,8 @@ export interface Session {
   current_command?: string
   pane_title?: string
   window_name?: string
+  // git branch of the repo at cwd ("@abc1234" when detached); absent off-repo or from an older daemon
+  branch?: string
   // tmux server generation ("<server pid>:<start_time>") the daemon stamped on
   // the payload that carried this session. Changes on every tmux server
   // restart; "" means unknown (probe failure/timeout, or an older daemon) and
