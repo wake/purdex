@@ -96,6 +96,7 @@ func timestampMillis(raw json.RawMessage) int64 {
 // drops a whole row.
 type rawLine struct {
 	Type               json.RawMessage // "type"
+	Operation          json.RawMessage // "operation": a queue-operation row's verb
 	Subtype            json.RawMessage // "subtype"
 	UUID               json.RawMessage // "uuid"
 	Timestamp          json.RawMessage // "timestamp"
@@ -143,6 +144,7 @@ func decodeLine(line []byte) (rawLine, bool) {
 	}
 	l := rawLine{
 		Type:               o["type"],
+		Operation:          o["operation"],
 		Subtype:            o["subtype"],
 		UUID:               o["uuid"],
 		Timestamp:          o["timestamp"],

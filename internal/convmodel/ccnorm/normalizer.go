@@ -72,6 +72,8 @@ type Normalizer struct {
 	entry                string // entrypoint (cli / sdk-cli) of the last row that had one
 	entryBefore          string // the same, as it was before the current row
 
+	queue []Queued // Claude Code's prompt queue, oldest first (queue.go)
+
 	// Subagent mode (NormalizeSubagent): the file is an agent's own, so its
 	// sidechain rows count, and its first prompt is the brief.
 	sub       bool
@@ -150,13 +152,14 @@ func (n *Normalizer) Skip(offset, length int64) error {
 	return nil
 }
 
-// Header is the title and the usage the conversation shows; both are cheap to
-// read, unlike Conversation, which copies every turn.
-func (n *Normalizer) Header() (title string, usage *convmodel.Usage) {
+// Header is the title, the usage and the queued messages the conversation
+// shows; all are cheap to read, unlike Conversation, which copies every turn.
+// queued holds the user and peer entries of Claude Code's prompt queue.
+func (n *Normalizer) Header() (title string, usage *convmodel.Usage, queued []Queued) {
 	if n.model != "" || n.effort != "" {
 		usage = &convmodel.Usage{Model: n.model, Effort: n.effort}
 	}
-	return n.title(), usage
+	return n.title(), usage, n.queuedOut()
 }
 
 // Next is the offset the next line must have.
@@ -245,6 +248,12 @@ func (n *Normalizer) row(off int64, line []byte) {
 			n.skip("agent:other")
 			return
 		}
+	}
+	if l.typ == "queue-operation" {
+		if !n.sub { // a subagent's file has no queue of its own
+			n.queueRow(&l, l.str(l.Operation))
+		}
+		return
 	}
 	switch l.typ {
 	case "user", "assistant", "system", "attachment":

@@ -195,6 +195,13 @@ func (n *Normalizer) userRow(l *rawLine, off int64) {
 		n.briefDone = true
 		src, from = convmodel.SourceTask, nil
 	}
+	// A prompt the person typed into an idle session starts the turn: the queue is empty by then, so whatever it still
+	// holds is a leftover (a crash, a resume) and goes. Measured on the 40 largest local transcripts: 1355 promptSource
+	// "typed" rows follow a user row, 97 a remove, 3 a popAll, 3 an enqueue, none a dequeue; rows that did come out of the
+	// queue are promptSource "queued" (28) or "system". A queued row is the only human row that must not clear.
+	if humanKind(kind) && l.str(l.PromptSource) != "queued" && (src == convmodel.SourceUser || src == convmodel.SourceSlash || src == convmodel.SourceBash) {
+		n.queue = nil
+	}
 	n.addUser(ti, l.uuid, l.at, src, from, text, blocks, off)
 	n.handoff(ti, l.str(l.Entrypoint), l.at, off)
 	n.attribute(ti, l.at)

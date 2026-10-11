@@ -202,7 +202,7 @@ func TestRows_MetadataTypesCountedNotApplied(t *testing.T) {
 		queueOp(1, "enqueue"),
 	)
 	sk := n.Stats().Skipped
-	if sk["type:last-prompt"] != 1 || sk["type:mode"] != 1 || sk["type:brand-new-type"] != 1 || sk["type:queue-operation"] != 1 {
+	if sk["type:last-prompt"] != 1 || sk["type:mode"] != 1 || sk["type:brand-new-type"] != 1 || sk["queue:content"] != 1 {
 		t.Errorf("Skipped = %v", sk)
 	}
 	if len(n.Conversation().Turns) != 0 {

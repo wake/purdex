@@ -49,11 +49,11 @@ func TestSkip_ContiguityLikeFeed(t *testing.T) {
 
 func TestHeader_TitleAndUsage(t *testing.T) {
 	n := New(Options{})
-	if title, usage := n.Header(); title != "" || usage != nil {
+	if title, usage, _ := n.Header(); title != "" || usage != nil {
 		t.Fatalf("empty normalizer header = %q %+v", title, usage)
 	}
 	feed(t, n, userRow("u1", 1, "hi"), assistantText("a1", 2, "yo"))
-	title, usage := n.Header()
+	title, usage, _ := n.Header()
 	c := n.Conversation()
 	if title != c.Title || (usage == nil) != (c.Usage == nil) || (usage != nil && !reflect.DeepEqual(usage, c.Usage)) {
 		t.Fatalf("Header %q %+v differs from Conversation %q %+v", title, usage, c.Title, c.Usage)
