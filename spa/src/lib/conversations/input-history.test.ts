@@ -63,6 +63,17 @@ describe('stepHistory', () => {
     expect(stepHistory(K, 'up', r.draft, true)?.draft).toBe('plain')
     expect(readAttachments(K)).toHaveLength(0)
   })
+  it('an edited (placeholder deleted) item leaks no chips: Up from empty leaves only the current item\'s chips', () => {
+    setHistorySource(K, [user('plain'), user('a [Image: source: /tmp/a.png]'), user('b [Image: source: /tmp/b.png]')])
+    const first = stepHistory(K, 'up', '', true)! // b with its chip
+    expect(readAttachments(K)).toHaveLength(1)
+    expect(first.draft).toContain('[Image #')
+    stepHistory(K, 'up', first.draft, true) // a, b's chip gone
+    expect(readAttachments(K).map((c) => c.path)).toEqual(['/tmp/a.png'])
+    const edited = '' // the person deletes the placeholder and the text
+    stepHistory(K, 'up', edited, true) // a new walk from the newest: b again
+    expect(readAttachments(K).map((c) => c.path)).toEqual(['/tmp/b.png'])
+  })
   it('keeps the place by identity: older items prepended while one is shown, the next Up is its true older neighbour', () => {
     const [a, b, c] = [user('one'), user('two'), user('three')]
     setHistorySource(K, [a, b, c])

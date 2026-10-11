@@ -66,10 +66,12 @@ function restore(key: string, text: string): { draft: string; chipIds: string[] 
  */
 export function stepHistory(key: string, dir: 'up' | 'down', draft: string, canStart: boolean): { draft: string } | null {
   const list = sources.get(key) ?? []
-  const w = isWalking(key, draft) ? walks.get(key) : undefined
+  const old = walks.get(key)
+  const w = old && old.shown === draft ? old : undefined
   let pos: number
   if (!w) {
     walks.delete(key)
+    for (const id of old?.chipIds ?? []) removeAttachment(key, id) // an edited-away walk: its restored chips go with it, whether or not a new one starts
     if (dir === 'down' || !canStart || list.length === 0) return null
     pos = list.length - 1
   } else {
