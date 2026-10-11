@@ -22,7 +22,9 @@ import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import { NexApiError } from '../../lib/nex/types'
-import { takeToTerminal } from '../../lib/nex/handoff'
+import { takeBack, takeToTerminal } from '../../lib/nex/handoff'
+import { exitWorker } from '../../lib/nex/exit-worker'
+import { getTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { closeTab } from '../../lib/tab-lifecycle'
 
@@ -39,7 +41,8 @@ const item = { type: 'user', id: 'u1', at: 1, index: 0, text: 'hello worker', so
 const turn: Turn = { id: 't0', index: 0, started_at: 1, outcome: 'done', items: [item] }
 const entry = (): ConversationEntry => ({ doc: { ...emptyDoc(), turns: [turn], header: { status: 'running', title: '', backend: 'execution', usage: { model: 'claude-haiku-5-5', effort: 'medium' } } as never }, status: 'live', reason: '', paging: false, subagents: {} })
 
-vi.mock('../../lib/nex/handoff', async (orig) => ({ ...(await orig<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn(async () => ({ result: {}, swapped: true })) }))
+vi.mock('../../lib/nex/handoff', async (orig) => ({ ...(await orig<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn(async () => ({ result: {}, swapped: true })), takeBack: vi.fn(async () => ({ result: {}, swapped: true })) }))
+vi.mock('../../lib/nex/exit-worker', async (orig) => ({ ...(await orig<typeof import('../../lib/nex/exit-worker')>()), exitWorker: vi.fn() }))
 vi.mock('../../lib/tab-lifecycle', async (orig) => ({ ...(await orig<typeof import('../../lib/tab-lifecycle')>()), closeTab: vi.fn() }))
 
 const acquire = vi.fn(() => vi.fn())
@@ -60,6 +63,7 @@ beforeEach(() => {
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease: vi.fn(async () => 'lease-1'), release: vi.fn(), forget: vi.fn(), touch: vi.fn() } as never)
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({} as never)
   vi.mocked(api.answerPermission).mockReset()
+  vi.mocked(takeToTerminal).mockClear(); vi.mocked(takeBack).mockClear(); vi.mocked(exitWorker).mockClear(); vi.mocked(closeTab).mockClear()
   vi.mocked(api.interruptExecution).mockReset().mockResolvedValue({} as never)
   vi.mocked(api.uploadWorkerFile).mockReset().mockImplementation(async (_h, _e, f) => ({ path: `/w/purdex/${f.name}`, name: f.name, size: 1 }) as never)
   acquire.mockClear()
@@ -249,6 +253,76 @@ describe('WorkerDeckPane', () => {
     expect(within(chips).getByTestId('worker-chips-dot').className).toContain('bg-status-error')
     act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'running', observers: 0 }) as never) })
     expect(screen.getByTestId('worker-chips')).toHaveTextContent('no lease')
+  })
+
+  // --- U4-4b: the hand-over controls (take to terminal, exit): the same flow as the room's, from the deck's own small menu and the status bar's terminal button ---
+  const openMenu = () => fireEvent.click(screen.getByTestId('worker-deck-view-menu'))
+
+  it('the view menu offers 終端機 (take to terminal) for a session-bound claude worker: an idle one goes at once', async () => {
+    seed(summary({ state: 'idle' }))
+    render(ui())
+    openMenu()
+    fireEvent.click(screen.getByTestId('view-mode-terminal'))
+    await vi.waitFor(() => expect(takeToTerminal).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(takeToTerminal).mock.calls[0][0]).toMatchObject({ hostId: H, executionId: E, cwd: '/w/purdex' })
+  })
+
+  it('a running turn asks first: the same confirm as the room\'s, then takes it', async () => {
+    seed(summary({ state: 'running' }))
+    render(ui())
+    openMenu()
+    fireEvent.click(screen.getByTestId('view-mode-terminal'))
+    expect(takeToTerminal).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('takeback-confirm'))
+    await vi.waitFor(() => expect(takeToTerminal).toHaveBeenCalledTimes(1))
+  })
+
+  it('a worker handed over from a terminal session goes back to it (take-back), not to a new one', async () => {
+    seed(summary({ state: 'idle' }))
+    const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
+    render(ui({ from }))
+    openMenu()
+    fireEvent.click(screen.getByTestId('view-mode-terminal'))
+    await vi.waitFor(() => expect(takeBack).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(takeBack).mock.calls[0][0]).toMatchObject({ hostId: H, executionId: E, from })
+    expect(takeToTerminal).not.toHaveBeenCalled()
+  })
+
+  it('not offered where the room does not offer it: a queued worker, a non-claude provider', () => {
+    seed(summary({ state: 'queued', session_id: undefined }))
+    render(ui())
+    expect(screen.queryByTestId('worker-deck-view-menu')).toBeNull() // the placeholder has no footer
+    cleanup()
+    seed(summary({ state: 'idle', provider: 'codex' }))
+    render(ui())
+    openMenu()
+    expect(screen.queryByTestId('view-mode-terminal')).toBeNull()
+  })
+
+  it('the status bar\'s terminal button reaches the deck too: the pane is registered while it is mounted, and taken back when it goes', () => {
+    seed(summary({ state: 'idle' }))
+    const { unmount } = render(ui())
+    expect(getTakeToTerminal('p-w')).toMatchObject({ canTake: true, busy: false })
+    unmount()
+    expect(getTakeToTerminal('p-w')).toBeNull()
+  })
+
+  it('退出 is a small button on the status row: an idle worker exits at once, a running one asks first', async () => {
+    vi.mocked(exitWorker).mockReset().mockResolvedValue({ state: 'terminated', archived: false } as never)
+    seed(summary({ state: 'idle' }))
+    render(ui())
+    fireEvent.click(screen.getByTestId('worker-deck-exit'))
+    await vi.waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(exitWorker).mock.calls[0][0]).toMatchObject({ hostId: H, executionId: E })
+    cleanup()
+    vi.mocked(exitWorker).mockClear()
+    useExecutionStore.setState({ executions: {} })
+    seed(summary({ state: 'running' }))
+    render(ui())
+    fireEvent.click(screen.getByTestId('worker-deck-exit'))
+    expect(exitWorker).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('exit-confirm'))
+    await vi.waitFor(() => expect(exitWorker).toHaveBeenCalledTimes(1))
   })
 
   it('a lease another principal holds is said, not swallowed', () => {

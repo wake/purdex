@@ -138,7 +138,7 @@ function ExecutionPaneWrapper({ pane, isActive, isFocusTarget = false }: PaneRen
   if (mode === 'deck') {
     return (
       <WorkerDeckPane key={`deck:${hostId}:${executionId}`} hostId={hostId} executionId={executionId} isActive={isActive}
-        isFocusTarget={isFocusTarget} tabId={tabId ?? ''} paneId={pane.id} onModeChange={onModeChange} />
+        isFocusTarget={isFocusTarget} tabId={tabId ?? ''} paneId={pane.id} from={tabId ? content.from : undefined} onModeChange={onModeChange} />
     )
   }
   return (

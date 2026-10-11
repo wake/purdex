@@ -6,9 +6,11 @@
 // says so instead of an empty deck. A permission request the worker waits on is a card in the dock (U4-3): above the input, where a question's card
 // is, answered through Nexen's permission channel under the pane's lease (`usePermissionAnswer`, the room's path).
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CaretDown } from '@phosphor-icons/react'
+import { CaretDown, SignOut } from '@phosphor-icons/react'
+import { ConfirmDialog } from '../ConfirmDialog'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useWorkerSession } from '../../hooks/useWorkerSession'
+import { useWorkerHandoff } from '../../hooks/useWorkerHandoff'
 import { useExecutionConversation } from '../../hooks/useExecutionConversation'
 import { useSendQueueDriver } from '../../hooks/useSendQueueDriver'
 import { bindAdapter } from '../../lib/conversations/deck-adapter'
@@ -27,7 +29,7 @@ import { WorkerLifecycleRow } from './WorkerLifecycleRow'
 import { workerEndedKind } from '../../lib/nex/worker-ended'
 import PermissionRequestCard, { PermissionExpiredNotice } from './PermissionRequestCard'
 import { permissionCardKey } from '../../lib/nex/permission-card-memory'
-import type { ExecutionViewMode } from '../../types/tab'
+import type { ExecutionFrom, ExecutionViewMode } from '../../types/tab'
 
 export interface WorkerDeckPaneProps {
   hostId: string
@@ -36,13 +38,18 @@ export interface WorkerDeckPaneProps {
   isFocusTarget?: boolean
   tabId: string
   paneId: string
+  /** Set when the execution was handed off from a tmux session; take-back then returns to that session. */
+  from?: ExecutionFrom
   /** Writes the chosen view back to the pane content (ExecutionPaneWrapper). */
   onModeChange: (mode: ExecutionViewMode) => void
 }
 
-export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusTarget = false, tabId, paneId, onModeChange }: WorkerDeckPaneProps) {
+export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusTarget = false, tabId, paneId, from, onModeChange }: WorkerDeckPaneProps) {
   const t = useI18nStore((s) => s.t)
   const { st, problem, lease, permission, shownPermission } = useWorkerSession(hostId, executionId, isActive)
+  // 帶回終端機 / 退出 (U4-4b): the room's own flow, with its running-turn confirms and the status bar's terminal button. The deck has no write of its own
+  // on its way (its sends go through the send queue), so nothing is held back for one.
+  const handoff = useWorkerHandoff({ hostId, executionId, tabId, paneId, from, lease, st, problem, actionPending: false })
   const conversation = useExecutionConversation(hostId, executionId)
   // The pane now reads another session (the first turn reports it, a resume moves it): what it kept for the old one is let go (#2457).
   const readSession = conversation.state === 'ready' ? conversation.sessionId : ''
@@ -132,8 +139,26 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
           className="ml-2 mr-2 flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 text-xs text-text-secondary hover:bg-surface-hover hover:text-text-primary">
           <ViewModeLabel mode="deck" /> <CaretDown size={10} />
         </button>
-        {menuOpen && <ViewModeMenu anchorRef={menuAnchor} mode="deck" onModeChange={onModeChange} onClose={() => setMenuOpen(false)} />}
+        {menuOpen && (
+          <ViewModeMenu anchorRef={menuAnchor} mode="deck" onModeChange={onModeChange} onClose={() => setMenuOpen(false)}
+            onTakeBack={handoff.takeOffered ? handoff.onTakeBack : undefined} takeBackBusy={handoff.takeBusy} />
+        )}
+        <button type="button" data-testid="worker-deck-exit" aria-label={t('worker.exit.button')} title={t('worker.exit.button')}
+          disabled={!handoff.exitable || handoff.exitBusy || handoff.takeBackBusy || handoff.exitWriteInFlight} onClick={handoff.onExit}
+          className="mr-2 flex shrink-0 cursor-pointer items-center rounded p-1 text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40">
+          <SignOut size={12} />
+        </button>
       </div>
+      {handoff.confirmExit && (
+        <ConfirmDialog testIdPrefix="exit" title={t('worker.exit.confirm_title')} body={t('worker.exit.confirm_running')}
+          confirmLabel={t('worker.exit.button')} onCancel={() => handoff.setConfirmExit(false)}
+          onConfirm={() => { handoff.setConfirmExit(false); void handoff.runExit() }} />
+      )}
+      {handoff.confirmTakeBack && (
+        <ConfirmDialog testIdPrefix="takeback" title={t('takeback.confirm_title')} body={t('takeback.confirm_running')}
+          confirmLabel={t('takeback.button')} onCancel={() => handoff.setConfirmTakeBack(false)}
+          onConfirm={() => { handoff.setConfirmTakeBack(false); void handoff.runTakeBack() }} />
+      )}
     </div>
   )
 

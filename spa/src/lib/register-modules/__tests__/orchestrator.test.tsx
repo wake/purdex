@@ -178,7 +178,7 @@ describe('registerBuiltinModules orchestrator', () => {
       rerender()
       expect(vi.mocked(ExecutionView)).not.toHaveBeenCalled()
       const props = vi.mocked(WorkerDeckPane).mock.calls.at(-1)![0]
-      expect(props).toMatchObject({ hostId: 'h1', executionId: 'exc_1', isActive: true, tabId: tab.id, paneId: pane.id })
+      expect(props).toMatchObject({ hostId: 'h1', executionId: 'exc_1', isActive: true, tabId: tab.id, paneId: pane.id, from })
       act(() => { props.onModeChange('room') })
       expect(current().content).toMatchObject({ kind: 'execution', executionId: 'exc_1', mode: 'room' })
     })
