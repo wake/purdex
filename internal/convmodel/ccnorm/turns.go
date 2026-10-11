@@ -309,3 +309,8 @@ func (n *Normalizer) MarkInterrupted(atMs int64) []Change {
 	n.refresh(last, -1)
 	return n.flush()
 }
+
+// turnRunning: the last turn has not ended (no turn_duration, marker or later turn yet).
+func (n *Normalizer) turnRunning() bool {
+	return len(n.turns) > 0 && n.turns[len(n.turns)-1].t.Outcome == convmodel.OutcomeRunning
+}

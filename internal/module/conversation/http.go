@@ -42,6 +42,7 @@ type queuedJSON struct {
 	Text   string `json:"text"`
 	At     int64  `json:"at"`
 	Source string `json:"source"`
+	From   string `json:"from,omitempty"` // a peer entry's sender
 }
 
 type windowJSON struct {
@@ -64,9 +65,13 @@ func headerOf(h convfeed.Header) headerJSON {
 	if h.Usage != nil {
 		u = &usageJSON{Model: h.Usage.Model, Effort: h.Usage.Effort}
 	}
+	// A queue that outlives its session (it ended, or the pane is gone) is a leftover, not a pending message: it is
+	// omitted. The SPA likewise draws `queued` only while the conversation is running or waiting.
 	var q []queuedJSON
-	for _, m := range h.Queued {
-		q = append(q, queuedJSON{Text: m.Text, At: m.At, Source: m.Source})
+	if h.Live && h.Status != "ended" {
+		for _, m := range h.Queued {
+			q = append(q, queuedJSON{Text: m.Text, At: m.At, Source: m.Source, From: m.From})
+		}
 	}
 	return headerJSON{Title: h.Title, Status: h.Status, Backend: h.Backend, Usage: u, Live: h.Live, Queued: q}
 }

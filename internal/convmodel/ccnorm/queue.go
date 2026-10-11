@@ -1,6 +1,7 @@
 package ccnorm
 
 import (
+	"crypto/sha256"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -14,7 +15,7 @@ import (
 
 const (
 	maxQueueEntries = 50   // internal entries kept; the oldest is dropped past this
-	maxQueuedText   = 2000 // runes of text shown outward
+	maxQueuedText   = 2000 // runes of text kept and shown
 )
 
 // Queued is one message waiting in Claude Code's queue.
@@ -22,6 +23,7 @@ type Queued struct {
 	Text   string `json:"text"`
 	At     int64  `json:"at"` // ms since the epoch, 0 when the row had no timestamp
 	Source string `json:"source"`
+	From   string `json:"from,omitempty"` // a peer entry's sender
 }
 
 // Queue sources.
@@ -31,15 +33,74 @@ const (
 	QueuedSystem = "system"
 )
 
+// qEntry is what the queue keeps: the shown text already cut, and hashes of the full content for remove matching.
+type qEntry struct {
+	Queued
+	full [sha256.Size]byte // whitespace-normalised full content
+	body [sha256.Size]byte // a peer entry's normalised body (the wrapper attributes differ between enqueue and remove)
+}
+
+// queueSource: a trimmed content that opens like an XML-ish tag (`<` and a letter) is the harness's, not the person's;
+// the cross-session wrapper is a peer's message.
 func queueSource(content string) string {
 	t := strings.TrimLeftFunc(content, unicode.IsSpace)
-	switch {
-	case strings.HasPrefix(t, "<cross-session-message"):
+	if strings.HasPrefix(t, peerOpen) {
 		return QueuedPeer
-	case strings.HasPrefix(t, "<task-notification"):
+	}
+	if len(t) > 1 && t[0] == '<' && (t[1] >= 'a' && t[1] <= 'z' || t[1] >= 'A' && t[1] <= 'Z') {
 		return QueuedSystem
 	}
 	return QueuedUser
+}
+
+func normSpace(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+func newQEntry(text string, at int64) qEntry {
+	e := qEntry{Queued: Queued{At: at, Source: queueSource(text)}, full: sha256.Sum256([]byte(normSpace(text)))}
+	shown := text
+	if e.Source == QueuedPeer {
+		b, name := peerBody(text)
+		shown, e.From = strings.TrimSpace(b), cleanName(name)
+		e.body = sha256.Sum256([]byte(normSpace(b)))
+	}
+	if utf8.RuneCountInString(shown) > maxQueuedText {
+		shown = string([]rune(shown)[:maxQueuedText])
+	}
+	e.Text = shown
+	return e
+}
+
+// removeAt drops entry i.
+func (n *Normalizer) removeAt(i int) { n.queue = append(n.queue[:i:i], n.queue[i+1:]...) }
+
+// queueRemove pairs a remove row with its enqueue: by normalised content, then (peers) by body, then the oldest entry of
+// the same source class — Claude Code absorbs queued commands in FIFO order. Measured on the 60 largest local
+// transcripts: 1413 of 1428 removes match exactly, 14 of the other 15 match by peer body (the wrapper is re-serialised,
+// e.g. the enqueued one carries a hop-chain attribute), the last one needs the fallback.
+func (n *Normalizer) queueRemove(text string) {
+	want := newQEntry(text, 0)
+	for i, q := range n.queue {
+		if q.full == want.full {
+			n.removeAt(i)
+			return
+		}
+	}
+	if want.Source == QueuedPeer {
+		for i, q := range n.queue {
+			if q.Source == QueuedPeer && q.body == want.body {
+				n.removeAt(i)
+				return
+			}
+		}
+	}
+	for i, q := range n.queue {
+		if q.Source == want.Source {
+			n.removeAt(i)
+			n.skip("queue:remove-fifo")
+			return
+		}
+	}
+	n.skip("queue:remove-unmatched")
 }
 
 func (n *Normalizer) queueRow(l *rawLine, op string) {
@@ -51,20 +112,14 @@ func (n *Normalizer) queueRow(l *rawLine, op string) {
 			return
 		}
 		if op == "remove" {
-			for i, q := range n.queue {
-				if q.Text == text {
-					n.queue = append(n.queue[:i:i], n.queue[i+1:]...)
-					return
-				}
-			}
-			n.skip("queue:remove-unmatched")
+			n.queueRemove(text)
 			return
 		}
 		if len(n.queue) >= maxQueueEntries {
 			n.queue = n.queue[1:]
 			n.skip("queue:overflow")
 		}
-		n.queue = append(n.queue, Queued{Text: text, At: l.at, Source: queueSource(text)})
+		n.queue = append(n.queue, newQEntry(text, l.at))
 	case "dequeue":
 		if len(n.queue) == 0 {
 			n.skip("queue:dequeue-empty")
@@ -74,21 +129,20 @@ func (n *Normalizer) queueRow(l *rawLine, op string) {
 	case "popAll":
 		n.queue = nil
 	default:
+		if len(op) > 64 {
+			op = strings.ToValidUTF8(op[:64], "")
+		}
 		n.skipDyn("queue:op:" + op)
 	}
 }
 
-// queuedOut is what the header shows: user and peer entries, copied, text cut.
+// queuedOut is what the header shows: user and peer entries, copied.
 func (n *Normalizer) queuedOut() []Queued {
 	var out []Queued
 	for _, q := range n.queue {
-		if q.Source == QueuedSystem {
-			continue
+		if q.Source != QueuedSystem {
+			out = append(out, q.Queued)
 		}
-		if utf8.RuneCountInString(q.Text) > maxQueuedText {
-			q.Text = string([]rune(q.Text)[:maxQueuedText])
-		}
-		out = append(out, q)
 	}
 	return out
 }

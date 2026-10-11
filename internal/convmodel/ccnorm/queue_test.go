@@ -49,7 +49,7 @@ func TestQueue_RemoveAbsorbedMidTurn(t *testing.T) {
 }
 
 func TestQueue_UnmatchedRemoveCounted(t *testing.T) {
-	n := norm(t, qin(1, "enqueue", "a"), qin(2, "remove", "zzz"), qop(3, "dequeue"), qop(4, "dequeue"))
+	n := norm(t, qin(1, "enqueue", "a"), qin(2, "remove", sysMsg), qop(3, "dequeue"), qop(4, "dequeue"))
 	if got := n.Stats().Skipped; got["queue:remove-unmatched"] != 1 || got["queue:dequeue-empty"] != 1 {
 		t.Fatalf("skipped = %v", got)
 	}
@@ -68,11 +68,11 @@ func TestQueue_FIFOWithSystemEntriesHidden(t *testing.T) {
 		t.Fatalf("header must hide the system entry, got %+v", got)
 	}
 	feed(t, n, qop(4, "dequeue")) // the oldest is the system entry, not "mine"
-	if got := texts(queuedOf(n)); !reflect.DeepEqual(got, []string{"user:mine", "peer:" + peerMsg}) {
+	if got := texts(queuedOf(n)); !reflect.DeepEqual(got, []string{"user:mine", "peer:hello"}) {
 		t.Fatalf("queued = %v", got)
 	}
 	feed(t, n, qop(5, "dequeue"))
-	if got := texts(queuedOf(n)); !reflect.DeepEqual(got, []string{"peer:" + peerMsg}) {
+	if got := texts(queuedOf(n)); !reflect.DeepEqual(got, []string{"peer:hello"}) {
 		t.Fatalf("queued = %v", got)
 	}
 }

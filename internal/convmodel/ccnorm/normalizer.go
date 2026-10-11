@@ -72,7 +72,7 @@ type Normalizer struct {
 	entry                string // entrypoint (cli / sdk-cli) of the last row that had one
 	entryBefore          string // the same, as it was before the current row
 
-	queue []Queued // Claude Code's prompt queue, oldest first (queue.go)
+	queue []qEntry // Claude Code's prompt queue, oldest first (queue.go)
 
 	// Subagent mode (NormalizeSubagent): the file is an agent's own, so its
 	// sidechain rows count, and its first prompt is the brief.
@@ -118,6 +118,7 @@ func (n *Normalizer) Feed(offset int64, line []byte) ([]Change, error) {
 		// Too big to decode (a huge inline image): the offset has moved on,
 		// the content is dropped and counted.
 		n.compactID = ""
+		n.queue = nil // a skipped line may have been an enqueue: hide rather than mispair
 		n.skip("line:oversize")
 		return nil, nil
 	}
@@ -130,6 +131,7 @@ func (n *Normalizer) Feed(offset int64, line []byte) ([]Change, error) {
 func (n *Normalizer) skipOversize(size int64) {
 	n.compactID = ""
 	n.next += size + 1
+	n.queue = nil // see Feed
 	n.stats.Lines++
 	n.skip("line:oversize")
 }
