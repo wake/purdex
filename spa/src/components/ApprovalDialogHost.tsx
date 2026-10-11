@@ -211,6 +211,16 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   // A self relay and an adoption carry no grant (U13a: one click); only the lead kind validates its fields.
   const grantOk = isSelfRelay || isAdopt || isMemberRelay || (membersOk && rootsOk && nameOk && labelOk)
   const locked = busy || queued !== undefined
+
+  // A button the person just pressed turns disabled while the decision is in flight or queued, and a disabled element
+  // gives its focus up to the body — where the focus guard (it only reacts to a focus landing elsewhere) cannot see it
+  // and the keys would reach the pane behind. Take it back to the panel.
+  useEffect(() => {
+    if (minimized || !locked) return
+    const active = document.activeElement
+    const lost = active === null || active === document.body || (active instanceof HTMLButtonElement && active.disabled)
+    if (lost) panelRef.current?.focus()
+  }, [locked, minimized])
   const session = approvalSessionLabel(approval.origin)
 
   // Only 核准並檢視 has somewhere to go: an origin outside tmux names no session to look at.

@@ -187,6 +187,8 @@ describe('ApprovalDialogHost keeps the keyboard while open (U22 switch, notifica
 
     await approve(A)
     expect(dialog()).toBeNull()
+    // While the decision was in flight the dialog took the focus back from the disabled button: that is before the close.
+    panelFocus.mockClear()
     runFrames()
 
     expect(terminalFocus).toEqual(['tA'])

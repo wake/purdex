@@ -160,6 +160,16 @@ describe('focus on 核准', () => {
     expect(document.activeElement).toBe(approveBtn())
   })
 
+  it('the decision is queued after 核准 had the focus: the focus stays in the dialog, not on the body', () => {
+    render(<ApprovalDialogHost />)
+    const a = approval()
+    open(a)
+    expect(document.activeElement).toBe(approveBtn())
+    act(() => { useApprovalStore.getState().queueDecision(H, a, 'approve') })
+    expect(approveBtn()).toBeDisabled()
+    expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+  })
+
   it('核准 disabled (here: a decision already queued): the focus falls back to the panel', () => {
     render(<ApprovalDialogHost />)
     const a = approval()
