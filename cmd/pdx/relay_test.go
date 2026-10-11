@@ -51,7 +51,7 @@ func (f *fakeRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/health":
 		_ = json.NewEncoder(w).Encode(map[string]string{"boot_id": "b1"})
 	case r.URL.Path == "/api/relay/hello":
-		_ = json.NewEncoder(w).Encode(team.RelayHelloResponse{OK: true, Role: "none", SelfRelay: "on", Threshold: 70, MinGrowth: 20000})
+		_ = json.NewEncoder(w).Encode(team.RelayHelloResponse{OK: true, Role: "none", SelfRelay: "on", Threshold: 70, MinGrowth: 20000, IdleMinutes: 40, IdleThreshold: 40})
 	case r.URL.Path == "/api/relay/begin":
 		if f.beginStatus == 0 {
 			f.beginStatus = http.StatusCreated
@@ -541,6 +541,64 @@ func TestRelayCmd_BeginManualFlagReachesTheRequest(t *testing.T) {
 	}
 }
 
+// IR-1a: `relay hello` prints the daemon's idle numbers (the mod's capability check, idle relay D9).
+func TestRelayCmd_HelloPrintsIdleNumbers(t *testing.T) {
+	code, stdout, stderr := driveRelay(t, context.Background(), &fakeRelayDaemon{}, "hello", "--session", "sid-1", "--version", "1")
+	if code != ExitOK || !strings.Contains(stdout, `"idle_minutes":40`) || !strings.Contains(stdout, `"idle_threshold":40`) {
+		t.Fatalf("hello: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+// IR-1a: `relay begin --reason idle --idle-minutes N` reaches the wire; a bad combination is a usage error (exit 2) before
+// any request. Mutation gate: drop the validation → the bad cases reach the daemon / exit 0 (red).
+func TestRelayCmd_BeginIdleFlagsReachTheWireAndAreValidated(t *testing.T) {
+	pct := 55.0
+	base := []string{"begin", "--self", "--session", "sid-1", "--used", "55", "--window", "1000000"}
+	d := &fakeRelayDaemon{beginStatus: 201, beginBody: team.RelayBeginResponse{Op: team.RelayOp{ID: "op-1", State: team.RelayAwaitingApproval, UsedPercentage: &pct}, RequestID: "req-1"}}
+	args := append(append([]string{}, base...), "--reason", "idle", "--idle-minutes", "40")
+	if code, _, stderr := driveRelay(t, context.Background(), d, args...); code != ExitOK {
+		t.Fatalf("idle begin: code=%d stderr=%q", code, stderr)
+	}
+	_, bodies := d.snapshot()
+	var sent team.RelayBeginRequest
+	_ = json.Unmarshal([]byte(bodies[len(bodies)-1]), &sent)
+	if sent.Reason != "idle" || sent.IdleMinutes != 40 {
+		t.Fatalf("sent = %+v, want reason idle, 40 minutes", sent)
+	}
+	for _, extra := range [][]string{
+		{"--reason", "idle"},                                     // minutes missing
+		{"--reason", "idle", "--idle-minutes", "0"},              // below 1
+		{"--reason", "idle", "--idle-minutes", "60"},             // above 59
+		{"--reason", "lazy", "--idle-minutes", "40"},             // unknown reason
+		{"--idle-minutes", "40"},                                 // minutes without a reason
+		{"--reason", "idle", "--idle-minutes", "40", "--manual"}, // idle is never a /relay
+		{"--reason", "idle", "--idle-minutes", "x"},              // not a number
+	} {
+		bad := &fakeRelayDaemon{}
+		if code, _, _ := driveRelay(t, context.Background(), bad, append(append([]string{}, base...), extra...)...); code != ExitUsage {
+			t.Fatalf("%v: code = %d, want %d", extra, code, ExitUsage)
+		}
+		if paths, _ := bad.snapshot(); len(paths) != 0 {
+			t.Fatalf("%v reached the daemon: %v", extra, paths)
+		}
+	}
+}
+
+// IR-1a: `report <op> cancelled --error resumed` carries the reason.
+func TestRelayCmd_ReportResumedReachesTheWire(t *testing.T) {
+	d := &fakeRelayDaemon{reportStatus: http.StatusOK, reportBody: team.RelayOp{ID: "op-1", State: team.RelayCancelled, Reason: team.RelayReasonResumed}}
+	code, stdout, stderr := driveRelay(t, context.Background(), d, "report", "op-1", "cancelled", "--error", "resumed")
+	if code != ExitOK || !strings.Contains(stdout, `"reason":"resumed"`) {
+		t.Fatalf("report resumed: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	_, bodies := d.snapshot()
+	var sent team.RelayReportRequest
+	_ = json.Unmarshal([]byte(bodies[len(bodies)-1]), &sent)
+	if sent.State != team.RelayCancelled || sent.Error != team.RelayReasonResumed {
+		t.Fatalf("sent = %+v", sent)
+	}
+}
+
 // IR-1b: `--trigger idle` reaches the wire; a trigger the daemon does not know is still a usage error (exit 2).
 func TestRelayCmd_CompactedIdleReachesTheWire(t *testing.T) {
 	d := &fakeRelayDaemon{}
@@ -560,5 +618,18 @@ func TestRelayCmd_CompactedIdleReachesTheWire(t *testing.T) {
 	}
 	if code, _, _ := driveRelay(t, context.Background(), d, "compacted", "--session", "sid-1", "--trigger", "sideways"); code != ExitUsage {
 		t.Fatalf("sideways = %d, want %d", code, ExitUsage)
+	}
+}
+
+// Codex attack: `resumed` is a cancelled reason only; failed / writing carrying it is a usage error before any request.
+func TestRelayCmd_ResumedOnlyWithCancelled(t *testing.T) {
+	for _, st := range []string{"failed", "writing", "done"} {
+		d := &fakeRelayDaemon{}
+		if code, _, _ := driveRelay(t, context.Background(), d, "report", "op-1", st, "--error", "resumed"); code != ExitUsage {
+			t.Fatalf("%s --error resumed: code = %d, want %d", st, code, ExitUsage)
+		}
+		if paths, _ := d.snapshot(); len(paths) != 0 {
+			t.Fatalf("%s --error resumed reached the daemon: %v", st, paths)
+		}
 	}
 }

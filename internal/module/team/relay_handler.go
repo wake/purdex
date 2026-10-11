@@ -125,6 +125,7 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 	resp := team.RelayHelloResponse{
 		OK: true, Role: role, SelfRelay: state,
 		Threshold: team.RelayThresholdPct, MinGrowth: team.RelayMinGrowth,
+		IdleMinutes: team.RelayIdleMinutes, IdleThreshold: team.RelayIdleThresholdPct,
 	}
 	// A mod that reloaded mid-relay (pdx setup, #2441) holds no state for its op: hand it the op it must pick up. A
 	// failed read only costs the recovery (the stall rule still fails the op), never the hello.
@@ -205,6 +206,23 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "session_id is required; used_percentage must be 0–100 and window non-negative", nil)
 		return
 	}
+	// An idle ask (idle relay spec §2) names its minutes (1–59); the threshold ask has neither. A /relay is a person's
+	// word, never an idle ask.
+	switch req.Reason {
+	case "":
+		if req.IdleMinutes != 0 {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "idle_minutes is only for reason idle", nil)
+			return
+		}
+	case team.RelayBeginReasonIdle:
+		if req.IdleMinutes < 1 || req.IdleMinutes > 59 || req.Manual {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "an idle begin needs idle_minutes 1–59 and cannot be manual", nil)
+			return
+		}
+	default:
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "unknown reason", nil)
+		return
+	}
 	if req.RequestID != "" {
 		if u, err := uuid.Parse(req.RequestID); err != nil || u.Version() != 4 || u.Variant() != uuid.RFC4122 {
 			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "request_id must be a UUID v4", nil)
@@ -226,7 +244,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !sameBeginPayload(m, op, req) {
-				m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id reused with a different used_percentage, window or manual", nil)
+				m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id reused with a different used_percentage, window, manual, reason or idle_minutes", nil)
 				return
 			}
 			m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: op.RequestID})
@@ -279,7 +297,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	// model_id / effort are the daemon's to fill (spec U18 (b), M21): the
 	// session's last statusline reading, kept by the agent module. The mod
 	// sends neither; a session without a reading shows neither.
-	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual}
+	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual, Reason: req.Reason, IdleMinutes: req.IdleMinutes}
 	if m.usage != nil {
 		if u, ok := m.usage.ContextUsage(req.SessionID); ok {
 			sp.ModelID, sp.Effort = u.ModelID, u.Effort
@@ -575,7 +593,7 @@ func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bo
 	if err := json.Unmarshal(row.Payload, &sp); err != nil {
 		return false
 	}
-	return sp.Window == req.Window && sp.Manual == req.Manual
+	return sp.Window == req.Window && sp.Manual == req.Manual && sp.Reason == req.Reason && sp.IdleMinutes == req.IdleMinutes
 }
 
 // paneOf is the "%N" pane id at the end of an Origin.Tmux ("<session>:@<win>.%<pane>"), "" when there is none.
