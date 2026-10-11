@@ -159,6 +159,19 @@ interface Window {
       onVisibilityChanged?: (callback: (visible: boolean) => void) => () => void
     }
 
+    // Push presence (main-process reporter). Every method optional: an older shell lacks the group
+    // or some methods, so callers feature-detect with optional chaining.
+    presence?: {
+      /** Hands the persisted host list to the main process; false when the payload is invalid. */
+      setHosts?: (payload: { rev: number; hosts: Array<{ hostId: string; baseUrl: string; token: string | null }> }) => Promise<boolean>
+      getAwayMinutes?: () => Promise<number>
+      /** Rejects for a value outside 1/2/3/5/10/15/30/60; resolves to the saved value. */
+      setAwayMinutes?: (minutes: number) => Promise<number>
+      /** Host ids the main process currently reports for (v2 send succeeded within the last 45 s). */
+      getOwned?: () => Promise<string[]>
+      onOwnedChanged?: (callback: (hostIds: string[]) => void) => () => void
+    }
+
     // Dev Update
     getAppInfo: () => Promise<ElectronAppInfo>
     checkUpdate: (daemonUrl: string, token?: string) => Promise<ElectronRemoteVersionInfo>

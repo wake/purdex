@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, Notification, protocol, net } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, Notification, powerMonitor, protocol, net } from 'electron'
 import { join, resolve } from 'path'
 import { WindowManager } from './window-manager'
 import { BrowserViewManager } from './browser-view-manager'
@@ -8,6 +8,7 @@ import { registerFsIpc } from './fs-ipc'
 import { createTray, isTrayVisible } from './tray'
 import { registerTrayIpc } from './tray-ipc'
 import { loadAppPrefs } from './app-prefs'
+import { startPresence, type PresenceHandle } from './presence/start'
 import { getAppInfo, checkUpdate, applyUpdate, streamCheck } from './updater'
 import { getDefaultKeybindings, buildMenuTemplate } from './keybindings'
 import { pickDeeplinkTarget } from './deeplink'
@@ -41,6 +42,7 @@ windowManager.setOnWindowClosed((win) => {
 })
 let metricsInterval: ReturnType<typeof setInterval> | null = null
 let updateInProgress = false
+let presence: PresenceHandle | null = null
 
 // ── OS protocol handler (purdex://) ─────────────────────────────────────────
 // Deeplink format: purdex://execution/<execution_id>[?host=<hint>]
@@ -365,6 +367,20 @@ if (!gotInstanceLock) {
     const prefs = loadAppPrefs(prefsPath)
     registerIpcHandlers()
     registerTrayIpc({ prefsPath, windowManager })
+    // Push presence (PA-2): the Mac reports "at the computer" from the main process, which outlives
+    // every window. Tokens handed over by the renderer stay in memory here.
+    presence = startPresence({
+      prefsPath,
+      ipcMain,
+      powerMonitor,
+      fetch: (url, init) => fetch(url, init),
+      broadcastOwned: (ids) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+          if (!w.isDestroyed()) w.webContents.send('presence:owned-changed', ids)
+        }
+      },
+      logger: { warn: (m) => console.warn(`[presence] ${m}`) },
+    })
     // Spec D5: the app is the launcher on machines without booter/launchd.
     if (process.env.PDX_DEV_MODE !== '0') {
       void localDaemon.ensureRunning().then((r) => console.log(`[local-daemon] ensureRunning: ${r}`))
@@ -412,6 +428,7 @@ if (!gotInstanceLock) {
   })
 
   app.on('before-quit', () => {
+    presence?.stop()
     if (metricsInterval) clearInterval(metricsInterval)
     miniWindowManager.closeAll()
     browserViewManager.destroyAll()

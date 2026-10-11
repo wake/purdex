@@ -142,6 +142,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
+  // Push presence (main-process reporter; PA-2). Host tokens go in, never come back out.
+  presence: {
+    setHosts: (payload: unknown) => ipcRenderer.invoke('presence:set-hosts', payload),
+    getAwayMinutes: () => ipcRenderer.invoke('presence:get-away-minutes'),
+    setAwayMinutes: (minutes: number) => ipcRenderer.invoke('presence:set-away-minutes', minutes),
+    getOwned: () => ipcRenderer.invoke('presence:get-owned'),
+    onOwnedChanged: (callback: (hostIds: string[]) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, hostIds: string[]) => callback(hostIds)
+      ipcRenderer.on('presence:owned-changed', handler)
+      return () => ipcRenderer.removeListener('presence:owned-changed', handler)
+    },
+  },
+
   // Dev Update (exposed unless PDX_DEV_MODE=0)
   ...(process.env.PDX_DEV_MODE !== '0' ? {
     getAppInfo: () => ipcRenderer.invoke('dev:app-info'),
