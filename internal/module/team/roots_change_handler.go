@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/config"
+	"github.com/wake/purdex/internal/middleware"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
@@ -112,21 +113,74 @@ func (m *Module) handleRootsChange(w http.ResponseWriter, r *http.Request) {
 			m.writeBadRoot(w, err)
 			return
 		}
-		if refs, err := m.rootsInUse(entry, candidates); err != nil {
-			m.logf("[team] roots change %s: in-use check: %v", req.ID, err)
-			m.writeCommandErr(w, http.StatusInternalServerError, "storage_error", "team.db failed; see the daemon log")
-			return
-		} else if len(refs) > 0 {
-			m.writeCommandErr(w, http.StatusConflict, team.ErrRootsInUse, boundDetail(strings.Join(refs, ",")))
-			return
-		}
 	}
 
+	// A removal judges "kept" from the roots the pre-check read, so the write must apply to that same set: the closure
+	// refuses when the revision moved since (another request, an admin), and the attempt starts over with a fresh read and a
+	// fresh pre-check. Bounded; past it the caller gets team_roots_conflict, as the admin route does for a stale revision.
 	var resp team.RootsChangeResponse
-	err := m.core.UpdateConfig(func(cfg *config.Config) error {
+	var err error
+	for attempt := 0; attempt < maxRootsAttempts; attempt++ {
+		expectRev := int64(-1) // -1: no revision precondition (add)
+		if req.Op == team.RootsOpRemove {
+			cur, _, ok := m.peerEntry(principal.Alias)
+			if !ok || cur.HostID != principal.HostID || !cur.AllowTeam {
+				m.writeCommandErr(w, http.StatusForbidden, team.ErrCommandHostNotAllowed, "this host does not accept team requests from the lead host")
+				return
+			}
+			refs, perr := m.rootsInUse(cur, candidates)
+			if perr != nil {
+				m.logf("[team] roots change %s: in-use check: %v", req.ID, perr)
+				m.writeCommandErr(w, http.StatusInternalServerError, "storage_error", "team.db failed; see the daemon log")
+				return
+			}
+			if len(refs) > 0 {
+				m.writeCommandErr(w, http.StatusConflict, team.ErrRootsInUse, boundDetail(strings.Join(refs, ",")))
+				return
+			}
+			expectRev = cur.TeamRootsRev
+		}
+		err = m.applyRootsChange(req, principal, ourHostID, canon, candidates, expectRev, &resp)
+		var stale *rootsStale
+		if !errors.As(err, &stale) {
+			break
+		}
+		err = &rootsHTTPError{http.StatusConflict, "team_roots_conflict", "the roots changed while the request was checked; send it again"}
+	}
+	var done *rootsDone
+	var herr *rootsHTTPError
+	switch {
+	case errors.As(err, &done):
+		m.writeJSON(w, http.StatusOK, done.resp)
+	case errors.As(err, &herr):
+		m.writeCommandErr(w, herr.status, herr.code, herr.detail)
+	case err != nil:
+		m.logf("[team] roots change %s: %v", req.ID, err)
+		m.writeCommandErr(w, http.StatusInternalServerError, "storage_error", "config could not be written; see the daemon log")
+	default:
+		m.logf("[team] team roots: %s (%s) %s %s, rev %d", principal.Alias, principal.HostID, resp.Result, resp.Path, resp.TeamRootsRev)
+		m.writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// maxRootsAttempts bounds how often a removal re-reads and re-checks when the roots move under it.
+const maxRootsAttempts = 3
+
+// rootsStale is the closure's refusal when the revision is not the one the pre-check read.
+type rootsStale struct{}
+
+func (e *rootsStale) Error() string { return "roots moved" }
+
+// applyRootsChange is the one UpdateConfig closure: it reads and writes the caller's entry in config and nothing else.
+// expectRev >= 0 is the revision the in-use pre-check judged; a different one is rootsStale and nothing is written.
+func (m *Module) applyRootsChange(req team.RootsChangeRequest, principal middleware.Principal, ourHostID, canon string, candidates []string, expectRev int64, resp *team.RootsChangeResponse) error {
+	return m.core.UpdateConfig(func(cfg *config.Config) error {
 		h, ok := findRootsEntryPtr(cfg.Peers.Hosts, principal.Alias, principal.HostID)
 		if !ok || !h.AllowTeam {
 			return &rootsHTTPError{http.StatusForbidden, team.ErrCommandHostNotAllowed, "this host does not accept team requests from the lead host"}
+		}
+		if expectRev >= 0 && h.TeamRootsRev != expectRev {
+			return &rootsStale{}
 		}
 		var (
 			next   []string
@@ -159,23 +213,9 @@ func (m *Module) handleRootsChange(w http.ResponseWriter, r *http.Request) {
 		}
 		h.TeamRoots = next
 		h.TeamRootsRev++
-		resp = rootsResponse(req, ourHostID, result, path, *h)
+		*resp = rootsResponse(req, ourHostID, result, path, *h)
 		return nil
 	})
-	var done *rootsDone
-	var herr *rootsHTTPError
-	switch {
-	case errors.As(err, &done):
-		m.writeJSON(w, http.StatusOK, done.resp)
-	case errors.As(err, &herr):
-		m.writeCommandErr(w, herr.status, herr.code, herr.detail)
-	case err != nil:
-		m.logf("[team] roots change %s: %v", req.ID, err)
-		m.writeCommandErr(w, http.StatusInternalServerError, "storage_error", "config could not be written; see the daemon log")
-	default:
-		m.logf("[team] team roots: %s (%s) %s %s, rev %d", principal.Alias, principal.HostID, resp.Result, resp.Path, resp.TeamRootsRev)
-		m.writeJSON(w, http.StatusOK, resp)
-	}
 }
 
 // validateRootsChange checks the shape: a UUID v4 id, a known op, and a path that is absolute and clean for add / remove

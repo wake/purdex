@@ -500,3 +500,50 @@ func TestRootsChange_ConsentWithdrawnDuringThePreCheckIsRefused(t *testing.T) {
 		t.Fatalf("grant after the refused removal: %v %v %d", allow, roots, rev)
 	}
 }
+
+// Codex attack (high): the pre-check judges "kept" from the roots it read; if the set moves before the write (a second request,
+// an admin), the write must not apply on top of a different set. Roots [A, A/B] with a member in A/B: removing A passes the
+// pre-check (A/B keeps the member covered), but another writer removes A/B first — the write notices the revision moved and
+// the pre-check runs again, now finding the member uncovered.
+// Mutation gate: no revision check in the closure -> A is removed and the member is left with no root (red).
+func TestRootsChange_TheSetMovingBetweenPreCheckAndWriteRunsThePreCheckAgain(t *testing.T) {
+	f := newFixture(t)
+	a := realTemp(t)
+	ab := filepath.Join(a, "b")
+	work := filepath.Join(ab, "w")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.setLeadGrant(true, []string{a, ab}, 1)
+	f.seedRemoteMemberAt("mk1", "lead:1", remoteActive, work)
+	calls := 0
+	f.m.rootsPrecheckHook = func() {
+		calls++
+		if calls == 1 {
+			f.setLeadGrant(true, []string{a}, 2) // another writer removed A/B between the pre-check's read and the write
+		}
+	}
+	d := f.refusal(rootsReq(cmdUUID1, team.RootsOpRemove, a), leadPrincipal(), http.StatusConflict, team.ErrRootsInUse)
+	if !strings.Contains(d, "_rmk1") || calls != 2 {
+		t.Fatalf("detail %q, pre-check ran %d times, want the member named after a second pre-check", d, calls)
+	}
+	if _, roots, rev := f.leadGrant(); len(roots) != 1 || roots[0] != a || rev != 2 {
+		t.Fatalf("grant: %v %d", roots, rev)
+	}
+}
+
+// A set that keeps moving does not loop forever: after the bounded attempts the caller gets team_roots_conflict and sends it again.
+func TestRootsChange_ASetThatKeepsMovingEndsInAConflict(t *testing.T) {
+	f := newFixture(t)
+	root := realTemp(t)
+	f.setLeadGrant(true, []string{root}, 1)
+	rev := int64(1)
+	f.m.rootsPrecheckHook = func() {
+		rev++
+		f.setLeadGrant(true, []string{root}, rev)
+	}
+	f.refusal(rootsReq(cmdUUID1, team.RootsOpRemove, root), leadPrincipal(), http.StatusConflict, "team_roots_conflict")
+	if _, roots, _ := f.leadGrant(); len(roots) != 1 {
+		t.Fatalf("a conflicting removal changed the grant: %v", roots)
+	}
+}
