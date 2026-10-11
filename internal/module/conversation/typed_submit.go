@@ -166,7 +166,8 @@ func (l *sidLocks) acquire(ctx context.Context, key string, wait time.Duration) 
 	return nil, false
 }
 
-// keysLedger remembers the ids typed blind (no mod, so no promptq row): a repeat never types again.
+// keysLedger remembers the ids typed blind (no mod, so no promptq row): a repeat never types again. It is in memory only:
+// a daemon restart forgets it (and, unlike the promptq ledger, there is no tombstone).
 type keysLedger struct {
 	mu sync.Mutex
 	m  map[string]keysRow
@@ -467,9 +468,13 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 			time.Sleep(tune.keyGap)
 		}
 		if err := c.td.keys.SendKeysIfInstanceAndMode(c.tmuxID, c.expected, c.owner.TmuxPaneID, chunk); err != nil {
-			if i == 0 {
-				m.keysSeen.forget(c.id) // nothing went out: a retry is safe
+			if i > 0 {
+				// The text is already typed and the Enter was refused: it stays in the terminal, the id stays recorded as
+				// unknown (a repeat never types again) and the deck tells the user to look at the terminal.
+				refuse(w, http.StatusConflict, "text_left_in_terminal")
+				return
 			}
+			m.keysSeen.forget(c.id) // nothing went out: a retry is safe
 			if reason, ok := guardReason(err); ok {
 				refuse(w, http.StatusConflict, reason)
 			} else {
