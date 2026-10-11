@@ -3,7 +3,7 @@
 import { useContext } from 'react'
 import { SearchScopeContext } from './search-scope'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { textOutput, userCaption, userTone, type UserTone } from '../../lib/conversations/deck-format'
+import { cleanCommandText, textOutput, userCaption, userTone, type UserTone } from '../../lib/conversations/deck-format'
 import type { UserItem } from '../../lib/conversations/types'
 import { userUnitId } from '../../lib/conversations/find-units'
 import { OutputFold } from './OutputFold'
@@ -66,7 +66,7 @@ function UserBox({ item, midTurn, fold }: BlockProps & { fold?: Fold }) {
       {fold?.collapsible && <button type="button" {...fold.toggleProps} />}
       <div data-testid="deck-user-caption" className={`mb-1 deck-t-down font-medium ${c.caption}`}>{caption}</div>
       <div ref={fold?.bodyRef} id={fold?.bodyId} className={`whitespace-pre-wrap break-words deck-t-up ${c.body} ${bash ? 'font-mono' : ''} ${fold?.bodyClass ?? ''}`}>
-        <span data-search-unit={userUnitId(item.id, scope)}>{bash ? `! ${item.text}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}</span>
+        <span data-search-unit={userUnitId(item.id, scope)}>{bash ? `! ${cleanCommandText(item.text)}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}</span>
         {item.truncated && <span className="text-text-muted">…</span>}
       </div>
       {item.images && item.images.length > 0 && (
