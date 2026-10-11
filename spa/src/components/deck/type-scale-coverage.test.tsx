@@ -45,7 +45,7 @@ describe('what draws', () => {
     renderIn(<StepView step={step({})} />)
     const card = screen.getByTestId('deck-step-card')
     expect(card.querySelector('.deck-t-down.font-mono')).not.toBeNull()
-    expect(card.innerHTML.match(/.{80}text-xs.{40}/)?.[0]).toBeUndefined()
+    expect(card.innerHTML).not.toMatch(/\btext-(xs|sm)\b/)
   })
 
   it('the output fold', () => {
