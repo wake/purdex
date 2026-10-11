@@ -1,16 +1,52 @@
 // Package gitbranch reads the current git branch of a directory without
 // spawning a git process: it walks up to the nearest .git, follows a
 // worktree/submodule "gitdir:" pointer, and parses HEAD.
+//
+// Everything it reads is attacker-influenced (a repo the user cd'd into), so
+// reads are bounded, only regular files are opened (a FIFO or device would
+// block forever) and the result is validated before it is returned. There is
+// deliberately no location cache: every call walks up from the cwd again, so
+// a nearer repo or a redirected gitdir is noticed at once.
 package gitbranch
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
+	"unicode"
+	"unicode/utf8"
 )
 
-const headPrefix = "ref: refs/heads/"
+const (
+	headPrefix   = "ref: refs/heads/"
+	maxFileBytes = 1024
+	maxNameBytes = 200
+)
+
+// readSmall reads a regular file of at most maxFileBytes. Anything else
+// (missing, non-regular, oversized, multi-line) yields ok=false. The returned
+// text has at most one trailing "\n" removed and contains no other newline.
+func readSmall(path string) (string, bool) {
+	fi, err := os.Stat(path)
+	if err != nil || !fi.Mode().IsRegular() {
+		return "", false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
+	if err != nil || len(b) > maxFileBytes || !utf8.Valid(b) {
+		return "", false
+	}
+	s := strings.TrimSuffix(string(b), "\n")
+	if strings.ContainsRune(s, '\n') {
+		return "", false
+	}
+	return s, true
+}
 
 // FindHead locates the HEAD file for the repository containing dir, walking
 // up until stopAt (inclusive) or the filesystem root. "" when none.
@@ -43,16 +79,16 @@ func headIn(dir string) string {
 	if fi.IsDir() {
 		return filepath.Join(dot, "HEAD")
 	}
-	b, err := os.ReadFile(dot)
-	if err != nil {
+	s, ok := readSmall(dot)
+	if !ok {
 		return ""
 	}
-	rest, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+	rest, ok := strings.CutPrefix(s, "gitdir:")
 	if !ok {
 		return ""
 	}
 	gd := strings.TrimSpace(rest)
-	if gd == "" {
+	if gd == "" || strings.ContainsFunc(gd, unicode.IsControl) {
 		return ""
 	}
 	if !filepath.IsAbs(gd) {
@@ -62,20 +98,45 @@ func headIn(dir string) string {
 }
 
 // ReadHead parses a HEAD file: branch name, "@"+7 sha chars when detached,
-// "" when unreadable or unrecognised.
+// "" when unreadable, not a regular file, oversized or unrecognised.
 func ReadHead(headPath string) string {
-	b, err := os.ReadFile(headPath)
-	if err != nil {
+	s, ok := readSmall(headPath)
+	if !ok {
 		return ""
 	}
-	s := strings.TrimSpace(string(b))
 	if name, ok := strings.CutPrefix(s, headPrefix); ok {
-		return name
+		if validBranchName(name) {
+			return name
+		}
+		return ""
 	}
-	if len(s) >= 7 && isHex(s) {
+	if (len(s) == 40 || len(s) == 64) && isHex(s) {
 		return "@" + s[:7]
 	}
 	return ""
+}
+
+// validBranchName is a simplified git check-ref-format plus a refusal of
+// anything that could spoof the UI (bidi/format characters).
+func validBranchName(n string) bool {
+	if n == "" || len(n) > maxNameBytes || !utf8.ValidString(n) {
+		return false
+	}
+	if strings.Contains(n, "..") || strings.HasPrefix(n, "/") || strings.HasSuffix(n, "/") ||
+		strings.HasPrefix(n, ".") || strings.HasSuffix(n, ".") || strings.HasSuffix(n, ".lock") {
+		return false
+	}
+	for _, r := range n {
+		switch {
+		case r < 0x20 || r == 0x7f, unicode.IsControl(r), unicode.IsSpace(r):
+			return false
+		case strings.ContainsRune("~^:?*[\\", r):
+			return false
+		case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069, r == 0x200e, r == 0x200f:
+			return false
+		}
+	}
+	return true
 }
 
 func isHex(s string) bool {
@@ -87,53 +148,10 @@ func isHex(s string) bool {
 	return true
 }
 
-// Branch is the uncached one-shot lookup.
+// Branch looks the branch up from scratch (no caching). Callers on a hot path
+// must still run it off the request path: a hung filesystem can stall it.
 func Branch(cwd, stopAt string) string {
 	head := FindHead(cwd, stopAt)
-	if head == "" {
-		return ""
-	}
-	return ReadHead(head)
-}
-
-// Resolver caches cwd -> HEAD path (where .git lives); HEAD content is
-// re-read on every call. A cached location that no longer exists is
-// rediscovered. Non-repo cwds are not cached (a repo may appear later).
-type Resolver struct {
-	stopAt string
-	mu     sync.Mutex
-	heads  map[string]string
-}
-
-// NewResolver walks no higher than stopAt (typically $HOME).
-func NewResolver(stopAt string) *Resolver {
-	return &Resolver{stopAt: stopAt, heads: map[string]string{}}
-}
-
-// Branch returns the branch for cwd, "" when not in a repo.
-func (r *Resolver) Branch(cwd string) string {
-	if cwd == "" {
-		return ""
-	}
-	r.mu.Lock()
-	head, ok := r.heads[cwd]
-	r.mu.Unlock()
-	if ok {
-		if _, err := os.Stat(head); err == nil {
-			return ReadHead(head)
-		}
-	}
-	head = FindHead(cwd, r.stopAt)
-	r.mu.Lock()
-	if head == "" {
-		delete(r.heads, cwd)
-	} else {
-		if len(r.heads) > 512 {
-			r.heads = map[string]string{}
-		}
-		r.heads[cwd] = head
-	}
-	r.mu.Unlock()
 	if head == "" {
 		return ""
 	}
