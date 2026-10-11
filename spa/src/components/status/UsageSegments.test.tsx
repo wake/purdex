@@ -291,3 +291,37 @@ describe('UsageSegment missing value (status row)', () => {
     expect(arc.getAttribute('data-tone')).toBe('danger')
   })
 })
+
+describe('window reset (resets_at passed)', () => {
+  const lim = (pct: number, resetsAtMs?: number) => ({
+    rate_limits: { five_hour: { used_percentage: pct, ...(resetsAtMs === undefined ? {} : { resets_at: resetsAtMs / 1000 }) } },
+  })
+  const arc = () => screen.getByTestId('status-seg-usage-five-hour').querySelector('[data-testid="usage-ring-arc"]')!
+
+  it('flips to 0% used / 100% left when the clock crosses resets_at', () => {
+    seed(lim(95, NOW + 30_000))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('5%')
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('100%')
+    expect(arc().getAttribute('data-used')).toBe('0')
+    expect(arc().getAttribute('data-tone')).toBe('ok')
+  })
+  it('already past resets_at shows 0% used from the first render', () => {
+    seed(lim(95, NOW - 1000))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('100%')
+    expect(arc().getAttribute('data-used')).toBe('0')
+  })
+  it('no resets_at keeps the original value', () => {
+    seed(lim(95))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('5%')
+  })
+  it('clears its reset timer on unmount', () => {
+    seed(lim(95, NOW + 3_600_000))
+    const { unmount } = render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
