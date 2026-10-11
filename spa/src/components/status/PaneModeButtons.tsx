@@ -15,11 +15,12 @@
 import type { Icon } from '@phosphor-icons/react'
 import { ArrowLeft, ArrowRight, ChatCircle, SquaresFour, TerminalWindow } from '@phosphor-icons/react'
 import { useConversationViewGate } from '../../hooks/useConversationViewGate'
-import { useLaunchPanelGate } from '../../hooks/useLaunchPanelGate'
+import { useLaunchPlanCandidate } from '../../hooks/useLaunchPlanCandidate'
 import { useHandoffGate } from '../../hooks/useHandoffCandidate'
 import { useTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import { setExecutionPaneMode, viewModeOf } from '../../lib/nex/view-mode'
 import { resolveExecutionHostId } from '../../lib/nex/resolve-host'
+import { selectLaunchPlanEntry, useLaunchPlanStore } from '../../stores/useLaunchPlanStore'
 import { useHandoffDialogStore } from '../../stores/useHandoffDialogStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { selectSessionView, sessionBinding, useSessionViewStore, type SessionView } from '../../stores/useSessionViewStore'
@@ -73,8 +74,13 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
   // non-session pane, and a tmux pane has no registered worker view.
   const handoff = useHandoffGate(content)
   const viewGate = useConversationViewGate(content)
-  // A live session with no Claude Code still reaches deck / chat when the launch panel applies there (same rule as the pane).
-  const launchPanel = useLaunchPanelGate(content, viewGate)
+  // A live session with no Claude Code reaches deck / chat only when the daemon's plan (read by the pane, whatever its view)
+  // is ready and says no agent is running. Same candidate rule as the pane; the answer is the shared store's.
+  const planCandidate = useLaunchPlanCandidate(content, viewGate)
+  const planEntry = useLaunchPlanStore(selectLaunchPlanEntry(
+    content.kind === 'tmux-session' ? content.hostId : '', content.kind === 'tmux-session' ? content.sessionCode : ''))
+  const launchReady = planCandidate && planEntry?.status === 'ready' && planEntry.plan?.agentRunning === false
+  const launchChecking = planCandidate && (planEntry === undefined || planEntry.status === 'loading')
   const take = useTakeToTerminal(pane.id)
   const binding = content.kind === 'tmux-session' ? sessionBinding(content.hostId, content.sessionCode) : ''
   const view = useSessionViewStore(selectSessionView(tabId, pane.id, binding))
@@ -84,8 +90,10 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
   if (content.kind === 'tmux-session') {
     const toView = (v: SessionView): ButtonState => {
       if (v === view) return PRESSED
-      // The terminal is always reachable; the conversation views need the gate or the launch panel.
-      if (v !== 'terminal' && !viewGate.ok && !launchPanel) return { kind: 'disabled', why: t(`status.mode.${viewGate.reason}`) }
+      // The terminal is always reachable; the conversation views need the gate or a ready launch plan with no agent running.
+      if (v !== 'terminal' && !viewGate.ok && !launchReady) {
+        return { kind: 'disabled', why: t(launchChecking ? 'status.mode.launch_checking' : `status.mode.${viewGate.reason}`) }
+      }
       return { kind: 'action', run: () => useSessionViewStore.getState().setView(tabId, pane.id, binding, v) }
     }
     group = [
