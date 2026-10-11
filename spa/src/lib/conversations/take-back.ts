@@ -130,7 +130,12 @@ export function takeBackHeld(key: string, queue: SendQueue, id: string): boolean
 }
 
 /** Whether Up in an empty box has something to take back: held messages, or Claude Code's queue as the header renders it. */
-export const canTakeBackAll = (key: string, queue: SendQueue): boolean => queue.heldCount() > 0 || (canTakeBack(key) && visibleHeaderUsers(key) > 0)
+export const canTakeBackAll = (key: string, queue: SendQueue): boolean => queue.heldCount() > 0 || (canTakeBack(key) && hasQueuedToTakeBack(key, queue))
+
+/** Everything K-2b's daemon take-back can act on: a rendered header `user` row, or an entry handed to the daemon and not yet echoed (claimed a row or not). */
+function hasQueuedToTakeBack(key: string, queue: SendQueue): boolean {
+  return visibleHeaderUsers(key) > 0 || queue.entries().some((e) => e.state === 'sent' && e.mode !== undefined)
+}
 
 /**
  * Up in an empty box: everything pending, oldest first. The held entries come into the box first (they leave the App's hands at once; the send
@@ -140,7 +145,7 @@ export const canTakeBackAll = (key: string, queue: SendQueue): boolean => queue.
 export async function takeBackAll(key: string, queue: SendQueue): Promise<void> {
   if (get(key).busy) return
   if (queue.heldCount() > 0) recallHeld(key, queue)
-  if (canTakeBack(key) && visibleHeaderUsers(key) > 0) await takeBackQueued(key, queue)
+  if (canTakeBack(key) && hasQueuedToTakeBack(key, queue)) await takeBackQueued(key, queue)
 }
 
 /** A pane that is gone for good, or a session it no longer shows. */

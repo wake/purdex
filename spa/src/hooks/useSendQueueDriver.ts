@@ -5,6 +5,7 @@
 import { useEffect, useMemo } from 'react'
 import { draftKey } from '../lib/conversations/draft-memory'
 import { unboundSendPort } from '../lib/conversations/send'
+import { setHistorySource } from '../lib/conversations/input-history'
 import { sendQueueFor } from '../lib/conversations/send-queue'
 import type { ConversationItem, HeaderQueued, UserItem } from '../lib/conversations/types'
 
@@ -18,6 +19,8 @@ export function useSendQueueDriver(paneKey: string, hostId: string, sessionId: s
   const key = sessionId ? draftKey(paneKey, hostId, sessionId) : ''
   const queue = key ? sendQueueFor(key, () => unboundSendPort(hostId, sessionId)) : null
   const users = useMemo(() => items.filter((i): i is UserItem => i.type === 'user'), [items])
+  // the input's Up / Down history reads the same items (#2666)
+  useEffect(() => { if (key) setHistorySource(key, items) }, [key, items])
   // the header is a new object on every frame: depend on what the lines say
   const linesSig = JSON.stringify(headerQueued.filter((q) => q.source === 'user').map((q) => ({ text: q.text, at: q.at })))
 
