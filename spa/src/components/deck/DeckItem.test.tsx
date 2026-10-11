@@ -182,10 +182,24 @@ describe('step · edit, long diff and 顯示全部', () => {
     expect(screen.queryByTestId('diff-show-all')).toBeNull()
   })
 
-  it('a daemon-truncated short diff offers the panel too (expanded)', () => {
+  it('a daemon-truncated short diff (<= 3 lines) has no caret but still offers the panel', () => {
+    render(<DeckItem item={longDiff(2, { truncated: true })} actions={{ onShowAll: vi.fn() }} />)
+    expect(screen.queryByTestId('diff-expand')).toBeNull()
+    expect(screen.getByTestId('diff-show-all')).toBeInTheDocument()
+  })
+
+  it('a 5-line diff has the caret; truncated or not', () => {
+    render(<DeckItem item={longDiff(5)} actions={{ onShowAll: vi.fn() }} />)
+    expect(screen.getByTestId('diff-expand')).toBeInTheDocument()
+    cleanup()
     render(<DeckItem item={longDiff(5, { truncated: true })} actions={{ onShowAll: vi.fn() }} />)
     expand()
     expect(screen.getByTestId('diff-show-all')).toBeInTheDocument()
+  })
+
+  it('an edit without a diff needs no FoldContext', () => {
+    const step = { ...longDiff(3), diff: undefined } as StepItem
+    expect(() => render(<DeckItem item={step} />)).not.toThrow()
   })
 
   it('draws no 顯示全部 when nobody can show it', () => {
@@ -332,7 +346,17 @@ describe('step · one-liners', () => {
     const run = { ...find<StepItem>(steps(readGrep), (i) => (i as StepItem).kind === 'fetch'), status: 'running' } as StepItem
     render(<DeckItem item={run} />)
     expect(screen.getByTestId('step-dot')).toHaveAttribute('data-state', 'running')
-    expect(within(screen.getByTestId('status-slot')).queryByTestId('step-running')).toBeNull()
+    expect(screen.getByTestId('step-dot')).toHaveAttribute('aria-label')
+    expect(screen.getByTestId('step-dot')).not.toHaveAttribute('aria-hidden')
+    expect(screen.getByTestId('status-slot')).toBeEmptyDOMElement()
+  })
+
+  it('a failed step shows the chip, so its dot is aria-hidden instead of repeating it', () => {
+    const f = { type: 'step', id: 'f', at: 1, index: 0, started_at: 1, input: {}, summary: 'x', kind: 'read', tool: 'Read', status: 'failed' } as StepItem
+    render(<DeckItem item={f} />)
+    expect(screen.getByTestId('step-chip')).toBeInTheDocument()
+    expect(screen.getByTestId('step-dot')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByTestId('step-dot')).not.toHaveAttribute('aria-label')
   })
 
   it('every step kind starts with a dot: ok, failed (also done + exit 2), muted', () => {
@@ -347,7 +371,6 @@ describe('step · one-liners', () => {
     for (const [over, state] of cases) {
       render(<DeckItem item={{ ...base, ...over } as StepItem} />)
       expect(screen.getByTestId('step-dot')).toHaveAttribute('data-state', state)
-      expect(screen.getByTestId('step-dot')).toHaveAttribute('aria-label')
       cleanup()
     }
   })

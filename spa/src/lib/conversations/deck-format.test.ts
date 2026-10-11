@@ -120,6 +120,16 @@ describe('stepDot / stepFailed', () => {
     expect(stepDot({ status: 'denied' })).toBe('muted')
     expect(stepDot({ status: 'denied', denial: 'interrupted' })).toBe('muted')
   })
+  it('any unknown or missing status is muted, never green', () => {
+    for (const status of [undefined, '', 'pending', 'weird'] as const) {
+      expect(stepDot({ status } as never)).toBe('muted')
+    }
+  })
+  it('any unknown or missing status is muted, never green', () => {
+    for (const status of [undefined, '', 'pending', 'weird']) {
+      expect(stepDot({ status } as never)).toBe('muted')
+    }
+  })
   it('stepFailed is the same rule the red text uses', () => {
     expect(stepFailed({ status: 'done', command: { text: 'x', exit_code: 1 } })).toBe(true)
     expect(stepFailed({ status: 'failed' })).toBe(true)

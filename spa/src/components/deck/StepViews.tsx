@@ -92,17 +92,24 @@ function Card({ step, icon, title, headerExtra, children }: { step: StepItem; ic
 
 function EditCard({ step, actions }: { step: StepItem; actions: StepActions }) {
   const t = useI18nStore((s) => s.t)
-  const [open, toggle] = useFold(`${step.id}:diff`)
-  const created = step.diff?.created === true
-  const path = step.diff?.path ?? step.summary
   if (!step.diff) {
     return <Line step={step} icon={<PencilSimple className={ICON} size={16} />} verb={t('deck.step.edit')} subject={step.summary} />
   }
+  return <DiffCard step={step} diff={step.diff} actions={actions} />
+}
+
+function DiffCard({ step, diff, actions }: { step: StepItem; diff: NonNullable<StepItem['diff']>; actions: StepActions }) {
+  const t = useI18nStore((s) => s.t)
+  // The key deliberately equals ToolDiffView's own `${foldKey}:diff` registration, so the room's expand-all / search expand opens this card too.
+  const [open, toggle] = useFold(`${step.id}:diff`)
+  const created = diff.created === true
+  const path = diff.path ?? step.summary
   // The deck draws the first 16 lines and sends the rest to the right panel (spec §4); the room's own fold is switched off.
-  const capped = capDiff(step.diff, open ? undefined : DIFF_PREVIEW_LINES)
-  // Expandable only when there is more than the 3-line preview to show.
-  const expandable = open || capped.cut
+  const capped = capDiff(diff, open ? undefined : DIFF_PREVIEW_LINES)
+  // The caret only when there is more than the 3-line preview to show; a daemon-truncated short diff just offers 「顯示全部」.
+  const expandable = open || capped.totalLines > DIFF_PREVIEW_LINES
   const { onShowAll } = actions
+  const showAll = onShowAll && capped.cut && (open || !expandable)
   return (
     <Card
       step={step}
@@ -115,10 +122,10 @@ function EditCard({ step, actions }: { step: StepItem; actions: StepActions }) {
       )}
       title={<><span className="text-text-muted">{created ? t('deck.step.create') : t('deck.step.edit')}</span> <span className="font-mono text-xs" title={path}>{path}</span></>}
     >
-      <div data-testid="diff-body" className="opacity-60 transition-opacity hover:opacity-100">
+      <div data-testid="diff-body" className="opacity-60 transition-opacity hover:opacity-100 focus-within:opacity-100">
         <ToolDiffView diff={toActivityDiff(capped.diff)} foldKey={step.id} unfolded />
       </div>
-      {open && capped.cut && onShowAll && (
+      {showAll && (
         <button type="button" data-testid="diff-show-all" onClick={() => onShowAll(step)} className="cursor-pointer text-xs text-text-muted hover:text-text-primary">
           {t('deck.diff.show_all', { n: capped.totalLines })}
         </button>

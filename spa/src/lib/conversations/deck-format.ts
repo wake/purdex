@@ -88,7 +88,8 @@ export function stepFailed(step: Pick<StepItem, 'status' | 'command'>): boolean 
 export function stepDot(step: Pick<StepItem, 'status' | 'denial' | 'command'>): StepDotState {
   if (step.status === 'running') return 'running'
   if (stepFailed(step)) return 'failed'
-  return step.status === 'denied' ? 'muted' : 'ok'
+  if (step.status === 'done') return 'ok'
+  return 'muted' // denied, interrupted, and any status we do not know: never green
 }
 
 export interface OutputTail {

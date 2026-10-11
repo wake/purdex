@@ -245,3 +245,20 @@ describe('panel across tab switches', () => {
     expect(screen.queryByTestId('session-right-panel')).toBeNull()
   })
 })
+
+describe('without an outer FoldContext (deck mode puts the panel outside DeckView)', () => {
+  it('a chain with an execute output and an edit diff renders instead of throwing', () => {
+    const base = { type: 'step', at: 1, started_at: 1, input: {}, status: 'done' } as const
+    const items = [
+      { ...base, id: 's1', index: 0, kind: 'execute', tool: 'Bash', summary: 'ls', command: { text: 'ls' }, output: { text: 'a\nb', total_lines: 2, total_bytes: 3, truncated: false } },
+      { ...base, id: 's2', index: 1, kind: 'edit', tool: 'Edit', summary: '/a', diff: { path: '/a', added: 5, removed: 0, exact: true,
+        hunks: [{ old_start: 1, old_lines: 0, new_start: 1, new_lines: 5, lines: ['+1', '+2', '+3', '+4', '+5'] }] } },
+    ] as unknown as ConversationItem[]
+    const turns = [{ id: 'T', index: 0, items }]
+    openPanel(PANE, BIND, { kind: 'chain', turnId: 'T', firstStepId: 's1' })
+    render(<SessionRightPanel paneKey={PANE} binding={BIND} turns={turns} active />)
+    expect(screen.getByTestId('panel-chain')).toBeInTheDocument()
+    expect(screen.getByTestId('output-toggle')).toBeInTheDocument()
+    expect(screen.getByTestId('diff-expand')).toBeInTheDocument()
+  })
+})

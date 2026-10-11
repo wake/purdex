@@ -26,7 +26,10 @@ const DOT_CLASS = { running: 'animate-pulse bg-accent', ok: 'bg-status-success',
 export function StepDot({ step }: { step: Pick<StepItem, 'status' | 'denial' | 'command'> }) {
   const t = useI18nStore((s) => s.t)
   const state = stepDot(step)
-  const label = state === 'running' ? t('deck.status.running') : state === 'ok' ? t('deck.status.ok') : state === 'failed' ? t('deck.status.failed')
-    : t(step.denial === 'interrupted' ? 'deck.status.interrupted' : 'deck.status.denied')
-  return <span data-testid="step-dot" data-state={state} role="img" aria-label={label} className={`inline-block h-2 w-2 shrink-0 rounded-full ${DOT_CLASS[state]}`} />
+  const cls = `inline-block h-2 w-2 shrink-0 rounded-full ${DOT_CLASS[state]}`
+  // Running and ok have no chip next to them, so the dot speaks; failed / muted have a chip (or nothing to say), so the dot is decoration.
+  if (state === 'running' || state === 'ok') {
+    return <span data-testid="step-dot" data-state={state} role="img" aria-label={t(state === 'running' ? 'deck.status.running' : 'deck.status.ok')} className={cls} />
+  }
+  return <span data-testid="step-dot" data-state={state} aria-hidden="true" className={cls} />
 }

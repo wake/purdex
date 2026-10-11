@@ -1,12 +1,13 @@
 // spa/src/components/deck/SessionRightPanel.tsx — the pane's right panel (U3 plan D10): inside the pane, on the right, 42 %
 // wide (320–640 px), Esc or ✕ closes it. Whether it is open, what it shows and its scroll live in `panel-memory` (the pane
 // unmounts with its tab). Whoever draws it hands the current `turns`; callers open it with `openPanel(paneKey, …)`.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { ArrowLeft, X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { closePanel, openPanel, panelBack, PANEL_WIDTH_STYLE, readPanel, setPanelScroll, usePanel } from '../../lib/conversations/panel-memory'
 import { panelTitle, resolvePanel, type PanelTurn } from '../../lib/conversations/panel-resolve'
 import type { StepItem } from '../../lib/conversations/types'
+import { FoldContext, useFoldMemory } from '../room/fold-context'
 import { PanelBody } from './PanelBody'
 
 interface Props {
@@ -20,6 +21,9 @@ interface Props {
 
 export function SessionRightPanel({ paneKey, binding, turns, active }: Props) {
   const t = useI18nStore((s) => s.t)
+  // Deck mode puts the panel outside DeckView's fold provider; chat mode has one around it, which is reused so folds stay shared.
+  const outerFold = useContext(FoldContext)
+  const ownFold = useFoldMemory()
   const state = usePanel(paneKey, binding)
   const scroller = useRef<HTMLDivElement>(null)
   const view = useMemo(() => (state ? resolvePanel(state.content, turns) : null), [state, turns])
@@ -76,7 +80,9 @@ export function SessionRightPanel({ paneKey, binding, turns, active }: Props) {
         </button>
       </div>
       <div ref={scroller} data-testid="panel-scroll" onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto p-3">
-        {view ? <PanelBody view={view} actions={actions} /> : <div data-testid="panel-gone" className="text-sm text-text-muted">{t('panel.gone')}</div>}
+        <FoldContext.Provider value={outerFold ?? ownFold}>
+          {view ? <PanelBody view={view} actions={actions} /> : <div data-testid="panel-gone" className="text-sm text-text-muted">{t('panel.gone')}</div>}
+        </FoldContext.Provider>
       </div>
     </aside>
   )
