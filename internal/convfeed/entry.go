@@ -72,6 +72,7 @@ type Entry struct {
 	title    string
 	usage    *convmodel.Usage
 	queued   []ccnorm.Queued // messages waiting in Claude Code's queue (user and peer)
+	bg       Background      // the background work Claude Code's last Stop listed (not in the transcript: set by SetBackground)
 	live     bool
 	// status and backend are the resolver's answer as of the last Refresh (the pane's light or ended / unknown, and
 	// "terminal" while a pane runs the session). They live in the entry so that a header, a window and a cursor read
@@ -127,7 +128,7 @@ func (e *Entry) newEpoch() {
 	e.rev = 0
 	e.headRev = 0
 	e.changed = map[string]uint64{}
-	e.title, e.usage, e.queued = "", nil, nil
+	e.title, e.usage, e.queued, e.bg = "", nil, nil, Background{}
 	e.status, e.backend, e.statusAt = "", "", time.Time{}
 	e.fp, e.fpEnd = nil, 0
 	e.snapOK = false
@@ -317,14 +318,40 @@ func (e *Entry) conv() *convmodel.Conversation {
 	return &e.snap
 }
 
+// Background is the background work a Claude Code session still has running, by kind (the Stop hook's background_tasks).
+type Background struct {
+	Shell    int
+	Subagent int
+	Other    int // monitor, workflow, cron
+}
+
+// Zero reports whether nothing runs in the background.
+func (b Background) Zero() bool { return b == Background{} }
+
+// SetBackground records the background work the agent module reports for the session. It does not come from the transcript, so the caller
+// asks after every refresh (see applyAbort for the shape); a change moves the header's revision like a title change does and reports true.
+func (e *Entry) SetBackground(b Background) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.bg == b {
+		return false
+	}
+	e.bg = b
+	e.rev++
+	e.headRev = e.rev
+	e.snapOK = false
+	return true
+}
+
 // Header is the title and usage as of the current revision.
 type Header struct {
-	Title   string
-	Usage   *convmodel.Usage
-	Queued  []ccnorm.Queued // messages waiting in Claude Code's queue, oldest first
-	Live    bool
-	Status  string // the pane's light, "ended" without a pane, "unknown" when the owner lookup failed
-	Backend string // "terminal" while a pane runs the session
+	Title      string
+	Usage      *convmodel.Usage
+	Queued     []ccnorm.Queued // messages waiting in Claude Code's queue, oldest first
+	Background Background      // background work still running (shell commands, subagents, other); zero when none or unknown
+	Live       bool
+	Status     string // the pane's light, "ended" without a pane, "unknown" when the owner lookup failed
+	Backend    string // "terminal" while a pane runs the session
 }
 
 // Header returns the conversation-level fields.
@@ -340,7 +367,7 @@ func (e *Entry) headerLocked() Header {
 		c := *e.usage
 		u = &c
 	}
-	return Header{Title: e.title, Usage: u, Queued: append([]ccnorm.Queued(nil), e.queued...), Live: e.live, Status: e.status, Backend: e.backend}
+	return Header{Title: e.title, Usage: u, Queued: append([]ccnorm.Queued(nil), e.queued...), Background: e.bg, Live: e.live, Status: e.status, Backend: e.backend}
 }
 
 // Epoch is the random id of the current normalizer instance.

@@ -35,6 +35,15 @@ type headerJSON struct {
 	Usage   *usageJSON   `json:"usage,omitempty"`
 	Live    bool         `json:"live"`
 	Queued  []queuedJSON `json:"queued,omitempty"`
+	// Background is the work Claude Code still runs in the background (its last Stop's background_tasks), by kind; only while the conversation
+	// is live and something runs.
+	Background *backgroundJSON `json:"background,omitempty"`
+}
+
+type backgroundJSON struct {
+	Shell    int `json:"shell,omitempty"`
+	Subagent int `json:"subagent,omitempty"`
+	Other    int `json:"other,omitempty"`
 }
 
 // queuedJSON is one message waiting in Claude Code's own queue; the deck shows it grey at the tail until it is read.
@@ -73,7 +82,12 @@ func headerOf(h convfeed.Header) headerJSON {
 			q = append(q, queuedJSON{Text: m.Text, At: m.At, Source: m.Source, From: m.From})
 		}
 	}
-	return headerJSON{Title: h.Title, Status: h.Status, Backend: h.Backend, Usage: u, Live: h.Live, Queued: q}
+	// Background work is likewise only meaningful while the session lives; a zero count is omitted.
+	var bg *backgroundJSON
+	if h.Live && h.Status != "ended" && !h.Background.Zero() {
+		bg = &backgroundJSON{Shell: h.Background.Shell, Subagent: h.Background.Subagent, Other: h.Background.Other}
+	}
+	return headerJSON{Title: h.Title, Status: h.Status, Backend: h.Backend, Usage: u, Live: h.Live, Queued: q, Background: bg}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body []byte) {
@@ -343,5 +357,6 @@ func (m *Module) refreshOnce(ctx context.Context, entry *convfeed.Entry, sid str
 		return err
 	}
 	m.applyAbort(entry, sid)
+	m.applyBackground(entry, sid)
 	return nil
 }

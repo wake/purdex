@@ -357,6 +357,7 @@ func (c *wsConn) follow() {
 				return err
 			}
 			c.m.applyAbort(c.entry, c.sid)
+			c.m.applyBackground(c.entry, c.sid)
 			return nil
 		})
 		if c.ctx.Err() != nil {
