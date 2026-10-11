@@ -114,11 +114,13 @@ function windowTitle(t: T, nameKey: string, w: UsageWindow, now: number): string
 }
 
 /** The 5h and 7d rings; shared by both bars. */
-function LimitSegments({ fiveHour, sevenDay, now, idPrefix }: {
+function LimitSegments({ fiveHour, sevenDay, now, idPrefix, narrow }: {
   fiveHour: UsageWindow | null
   sevenDay: UsageWindow | null
   now: number
   idPrefix: string
+  /** The class that lets the segment drop out of a narrow window ('' = it stays). */
+  narrow: string
 }) {
   const t = useI18nStore((s) => s.t)
   return (
@@ -131,7 +133,7 @@ function LimitSegments({ fiveHour, sevenDay, now, idPrefix }: {
           ring="remaining"
           number="remaining"
           title={windowTitle(t, 'status.usage.five_hour', fiveHour, now)}
-          className="max-[700px]:hidden"
+          className={narrow}
         />
       )}
       {sevenDay && (
@@ -142,15 +144,21 @@ function LimitSegments({ fiveHour, sevenDay, now, idPrefix }: {
           ring="remaining"
           number="remaining"
           title={windowTitle(t, 'status.usage.seven_day', sevenDay, now)}
-          className="max-[700px]:hidden"
+          className={narrow}
         />
       )}
     </>
   )
 }
 
-/** A terminal session's context window and rate limits, from its latest Claude Code statusLine snapshot. */
-export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null; sessionCode: string | null }) {
+/** What the bottom bar does on a narrow window (the limit rings drop out); a status row keeps them (its text gives way instead). */
+const BAR_NARROW = 'max-[700px]:hidden'
+
+/**
+ * A terminal session's context window and rate limits, from its latest Claude Code statusLine snapshot.
+ * `keep`: the deck's status row — the rings never hide for width.
+ */
+export function CcUsageSegments({ hostId, sessionCode, keep = false }: { hostId: string | null; sessionCode: string | null; keep?: boolean }) {
   const t = useI18nStore((s) => s.t)
   const ccStatus = useAgentStore((s) => s.ccStatus)
   const now = useNow()
@@ -158,7 +166,7 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
   if (!usage) return null
 
   return (
-    <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${usage.context !== null ? 'max-[600px]:hidden' : 'max-[700px]:hidden'}`}>
+    <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${keep ? '' : usage.context !== null ? 'max-[600px]:hidden' : BAR_NARROW}`}>
       {usage.context !== null && (
         <UsageSegment
           testId="status-seg-usage-context"
@@ -167,28 +175,29 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
           ring="used"
           number="remaining"
           title={t('status.usage.context', { left: remainingPct(usage.context), pct: usedPct(usage.context) })}
-          className="max-[600px]:hidden"
+          className={keep ? '' : 'max-[600px]:hidden'}
         />
       )}
-      <LimitSegments fiveHour={usage.fiveHour} sevenDay={usage.sevenDay} now={now} idPrefix="status-seg-usage" />
+      <LimitSegments fiveHour={usage.fiveHour} sevenDay={usage.sevenDay} now={now} idPrefix="status-seg-usage" narrow={keep ? '' : BAR_NARROW} />
     </div>
   )
 }
 
 /** A worker pane's host quota (the account the Nexen host is logged in as). */
-export function HostQuotaSegments({ hostId }: { hostId: string }) {
+export function HostQuotaSegments({ hostId, keep = false }: { hostId: string; keep?: boolean }) {
   const { quota } = useNexHostQuota(hostId)
   const now = useNow()
   if (!quota) return null
   const resetsAtMs = epochToMs(quota.resets_at)
   // Nexen reports one reset time for the reading; it is shown on the 5-hour window, the one it belongs to.
   return (
-    <div data-testid="status-usage" className="flex shrink-0 items-center gap-2 max-[700px]:hidden">
+    <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${keep ? '' : BAR_NARROW}`}>
       <LimitSegments
         fiveHour={{ pct: quota.five_hour_pct, resetsAtMs }}
         sevenDay={{ pct: quota.seven_day_pct, resetsAtMs: null }}
         now={now}
         idPrefix="status-seg-quota"
+        narrow={keep ? '' : BAR_NARROW}
       />
     </div>
   )
