@@ -264,7 +264,8 @@ describe('ExecutionHeader', () => {
 
     fireEvent.click(screen.getByTestId('view-mode'))
     const menu = within(screen.getByTestId('view-mode-menu')).getByRole('menu')
-    expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(2)
+    expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(3) // room, deck (指揮台), chat
+    expect(within(menu).getByTestId('view-mode-deck')).toHaveAttribute('aria-checked', 'false')
     expect(within(menu).getByTestId('view-mode-room')).toHaveAttribute('aria-checked', 'true')
     expect(within(menu).getByRole('menuitem')).toHaveAttribute('data-testid', 'view-mode-terminal')
   })

@@ -12,6 +12,11 @@ describe('viewModeOf', () => {
     expect(viewModeOf({ kind: 'execution', executionId: 'e1', mode: 'chat' })).toBe('chat')
   })
 
+  it('knows the deck (指揮台, U4-1b); a build that predates it reads that same stored mode as room, like any unknown one', () => {
+    expect(viewModeOf({ kind: 'execution', executionId: 'e1', mode: 'deck' })).toBe('deck')
+    expect(withViewMode({ kind: 'execution', executionId: 'e1', host: 'h1' }, 'deck')).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', mode: 'deck' })
+  })
+
   it('reads an unknown mode as room', () => {
     // an older or newer client may have written a mode this build does not know
     const content = { kind: 'execution', executionId: 'e1', mode: 'terminal' as unknown as ExecutionViewMode } satisfies ExecutionContent
