@@ -65,6 +65,11 @@ export function selectConversationsV1(hostId: string): (s: Pick<NexHostState, 'b
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('conversations.v1') === true
 }
 
+/** The daemon lists `session.launch.v1`: `GET /api/sessions/{code}/launch-plan` and `POST …/launch` are served (no-agent launch panel). */
+export function selectSessionLaunchV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('session.launch.v1') === true
+}
+
 /** The daemon lists `team.ask_chat.v1`: a `hook_ask` can be answered in words (decide `deny` + `hook.message`). */
 export function selectAskChatV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('team.ask_chat.v1') === true

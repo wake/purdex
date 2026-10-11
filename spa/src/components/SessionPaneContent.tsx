@@ -21,6 +21,10 @@ import { AskStrip } from './dock/AskStrip'
 import { QuestionDock } from './dock/QuestionDock'
 import { openAsks } from '../lib/conversations/asks'
 import { DeckPane } from './deck/DeckPane'
+import { LaunchPanel } from './LaunchPanel'
+import { useLaunchPlan } from '../hooks/useLaunchPlan'
+import { useSessionStore } from '../stores/useSessionStore'
+import { useNexHostStore, selectSessionLaunchV1 } from '../stores/useNexHostStore'
 import { QuickReplies } from './deck/QuickReplies'
 import { SessionInput } from './deck/SessionInput'
 import { SessionStatusRow } from './deck/SessionStatusRow'
@@ -30,6 +34,8 @@ import { findPane } from '../lib/pane-tree'
 import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
 import type { PaneRendererProps } from '../lib/module-registry'
+
+const absent = () => false
 
 export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: PaneRendererProps) {
   const content = pane.content
@@ -98,6 +104,22 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // as it is a live Claude Code session on a host that serves conversations. Before the early returns (rules of hooks).
   const gate = useConversationViewGate(pane.content)
   const conversation = useConversationOfPane(pane.content, gate.ok)
+
+  // The no-agent launch panel (spec 2026-10-12 §3). Decided HERE, once, for the deck and the chat alike: a live session
+  // whose conversation would be `off` (no Claude Code to read, or a host that does not serve conversations), on a host that
+  // serves `session.launch.v1`, where the daemon's plan says no agent is running. Other reasons keep today's views.
+  const launchServed = useNexHostStore(hostId ? selectSessionLaunchV1(hostId) : absent)
+  const sessionKey = useSessionStore((s) => {
+    const x = s.sessions[hostId]?.find((c) => c.code === sessionCode)
+    return x ? [x.tmux_instance, x.cwd, x.current_command, x.branch].join('\0') : ''
+  })
+  const sessionBranch = useSessionStore((s) => s.sessions[hostId]?.find((c) => c.code === sessionCode)?.branch)
+  const panelCandidate = content.kind === 'tmux-session' && !terminated && hostKnown
+    && (view === 'deck' || view === 'chat')
+    && conversation.state === 'off' && (gate.reason === 'not_agent' || gate.reason === 'no_conversations')
+    && launchServed
+  const launchPlan = useLaunchPlan(panelCandidate, hostId, sessionCode, sessionKey)
+  const showLaunchPanel = panelCandidate && launchPlan.plan !== null && !launchPlan.plan.agentRunning
   // The pane now reads another conversation (/clear, relay, rebuild): what it kept for the old one will not be read again
   // (#2457). Importing the module also installs the release of a pane that leaves the tab world.
   const readSession = conversation.state === 'ready' ? conversation.sessionId : ''
@@ -161,7 +183,20 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           connectingMessage={attachStalled ? t('session.attach_stalled') : undefined}
         />
       </div>
-      {view === 'deck' && (
+      {showLaunchPanel && launchPlan.plan && (
+        <div data-testid="session-view-launch" className="absolute inset-0 bg-surface-primary">
+          <LaunchPanel
+            hostId={hostId}
+            sessionCode={sessionCode}
+            tmuxInstance={tmuxInstance}
+            branch={sessionBranch}
+            plan={launchPlan.plan}
+            onRefresh={launchPlan.refresh}
+            onSwitchToTerminal={switchToTerminal}
+          />
+        </div>
+      )}
+      {!showLaunchPanel && view === 'deck' && (
         <DeckPane
           paneId={pane.id}
           conversation={conversation}
@@ -171,7 +206,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
           footer={footer}
         />
       )}
-      {view === 'chat' && (
+      {!showLaunchPanel && view === 'chat' && (
         <ChatPane
           paneId={pane.id}
           conversation={conversation}
