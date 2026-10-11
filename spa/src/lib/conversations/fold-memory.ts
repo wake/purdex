@@ -5,6 +5,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import type { FoldStore } from '../../components/room/fold-context'
 import { forgetRevealsOfPane } from './deck-reveal-memory'
+import { forgetFindOfPane } from './find-memory'
 
 const panes = new Map<string, Set<string>>()
 const listeners = new Map<string, Set<() => void>>()
@@ -52,6 +53,7 @@ export const forgetDeckPane = (paneId: string): void => { shown.delete(paneId) }
  */
 export function forgetFoldsOfPane(paneId: string, keep?: (key: string) => boolean): void {
   forgetRevealsOfPane(paneId, keep) // the deck's drawn-in-full turns (#2469) share the key and the lifetime
+  forgetFindOfPane(paneId, keep) // so does the pane's ⌘F search (#2665): its key is `${paneId}\0${sessionId}` as the deck's folds are
   for (const key of [...panes.keys()]) if (key.startsWith(`${paneId}\0`) && !keep?.(key)) forgetFolds(key)
 }
 
