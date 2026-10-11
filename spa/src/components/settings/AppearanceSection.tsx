@@ -16,6 +16,7 @@ import { useLayoutStore } from '../../stores/useLayoutStore'
 import type { TabPosition } from '../../stores/useLayoutStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { ToggleSwitch } from './ToggleSwitch'
+import { DeckTypeSettings } from './DeckTypeSettings'
 
 function exportTheme(theme: ThemeDefinition) {
   const data = JSON.stringify({ name: theme.name, tokens: theme.tokens }, null, 2)
@@ -261,6 +262,8 @@ export function AppearanceSection() {
           </button>
         </div>
       </SettingItem>
+
+      <DeckTypeSettings />
 
       {showEditor && (
         <ThemeEditor baseThemeId={activeThemeId} onClose={() => setShowEditor(false)} />

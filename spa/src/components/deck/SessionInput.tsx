@@ -4,6 +4,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Paperclip, PaperPlaneRight, Stop } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useDeckTypeStore } from '../../stores/useDeckTypeStore'
 import { expandPlaceholders, removePlaceholderText } from '../../lib/conversations/image-placeholder'
 import { addAttachment, reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, takeAttachments, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
@@ -99,7 +100,10 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     sync() // a landing or a failure while this input was away
     return subscribeUploads(dKey, sync)
   }, [dKey])
-  useLayoutEffect(() => { if (box.current) fitHeight(box.current) }, [draft])
+  // a new type size or line height changes how tall the same text is: the box is fitted again
+  const typeFont = useDeckTypeStore((s) => s.fontSize)
+  const typeLine = useDeckTypeStore((s) => s.lineHeight)
+  useLayoutEffect(() => { if (box.current) fitHeight(box.current) }, [draft, typeFont, typeLine])
   // dragging files over the input: counted enter / leave (moving over a child fires leave on the parent)
   const [dragging, setDragging] = useState(false)
   const dragDepth = useRef(0)
@@ -250,7 +254,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 }
               }}
               style={{ overflowWrap: 'anywhere' }}
-              className={`relative block w-full resize-none rounded-none border-0 px-0 pb-1.5 pt-0 text-[13px] leading-[1.65] text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
+              className={`relative block w-full resize-none rounded-none border-0 px-0 pb-1.5 pt-0 deck-t-base text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${
                 // proto v2: no border, radius, outline or ring (focused or not); a drag over tints the row
                 dragging ? 'bg-accent/10' : 'bg-transparent'
               }`}

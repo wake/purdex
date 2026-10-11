@@ -19,7 +19,7 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss }: Props) 
   const [confirming, setConfirming] = useState<string | null>(null)
   const shown = entries.filter((e) => e.state !== 'superseded')
   if (shown.length === 0) return null
-  const btn = 'rounded px-1.5 text-xs text-accent hover:underline'
+  const btn = 'rounded px-1.5 deck-t-down text-accent hover:underline'
   return (
     <div data-testid="queued-messages" className="flex flex-col gap-1 px-3 pb-1">
       {shown.map((e) => {
@@ -30,17 +30,17 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss }: Props) 
         if (e.state === 'undo' || e.state === 'waiting') {
           return (
             <div key={e.id} data-testid="queued-message" data-state={e.state} className="text-text-system">
-              <div className="text-xs">{e.state === 'waiting' ? t('deck.send.waiting') : t('deck.user.queued')}</div>
-              <div className="whitespace-pre-wrap break-words text-sm">{e.text}</div>
-              <button type="button" className="rounded px-0 text-xs underline-offset-2 hover:underline" onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>
+              <div className="deck-t-down">{e.state === 'waiting' ? t('deck.send.waiting') : t('deck.user.queued')}</div>
+              <div className="whitespace-pre-wrap break-words deck-t-up">{e.text}</div>
+              <button type="button" className="rounded px-0 deck-t-down underline-offset-2 hover:underline" onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>
             </div>
           )
         }
         const caption = asking ? t('deck.send.resend_confirm') : m ? t(m.key, m.params) : e.state === 'sent' ? t('deck.send.accepted') : t('deck.send.sending')
         return (
           <div key={e.id} data-testid="queued-message" data-state={e.state} className="rounded-lg border border-border-subtle bg-surface-secondary px-3 py-1.5">
-            <div className={`text-xs ${m?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{caption}</div>
-            <div className="whitespace-pre-wrap break-words text-sm text-text-primary">{e.text}</div>
+            <div className={`deck-t-down ${m?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{caption}</div>
+            <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
             <div className="flex gap-1">
               {e.state === 'failed' && <button type="button" className={btn} onClick={() => onResend(e.id)}>{t('deck.send.retry')}</button>}
               {e.state === 'maybe' && !asking && <button type="button" className={btn} onClick={() => setConfirming(e.id)}>{t('deck.send.resend')}</button>}

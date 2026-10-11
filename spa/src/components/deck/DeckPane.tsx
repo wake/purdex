@@ -10,6 +10,7 @@ import { conversationBinding, openPanel, type PanelContent } from '../../lib/con
 import { DeckUnreadable } from './DeckUnreadable'
 import { DeckView, type DeckViewProps } from './DeckView'
 import { SessionPanelSplit } from './SessionPanelSplit'
+import { useDeckTypeStyle } from '../../lib/conversations/deck-type'
 
 interface Props {
   paneId: string
@@ -22,6 +23,7 @@ interface Props {
 
 export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwitchToTerminal, footer }: Props) {
   const t = useI18nStore((s) => s.t)
+  const typeStyle = useDeckTypeStyle()
   const ref = useRef<HTMLDivElement>(null)
   // Switching to the deck focuses its input when it has one (plan D2), else the frame (loading, unreadable).
   // When the input is not there yet (the conversation is still resolving) the frame takes the focus and the input is taken when it shows up.
@@ -67,7 +69,7 @@ export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwit
     )
   }
   return (
-    <div ref={ref} tabIndex={-1} data-testid="session-view-deck" className="absolute inset-0 bg-surface-primary outline-none">
+    <div ref={ref} tabIndex={-1} data-testid="session-view-deck" style={typeStyle} className="absolute inset-0 bg-surface-primary outline-none">
       {body}
     </div>
   )
