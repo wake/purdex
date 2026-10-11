@@ -1,18 +1,20 @@
 // spa/src/components/deck/SessionInput.tsx — the deck's input (U3 spec §7, plan D7): Enter sends, Shift+Enter breaks a line,
 // 中斷 interrupts. Sending goes to the daemon (and through the session's mod); nothing is typed into a terminal. The draft and
 // the send queue live in modules keyed by the pane, not in this component (it unmounts on a tab switch).
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Paperclip, PaperPlaneRight, Stop } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useDeckTypeStore } from '../../stores/useDeckTypeStore'
 import { expandPlaceholders, removePlaceholderText } from '../../lib/conversations/image-placeholder'
 import { reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, takeAttachments, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { registerDropTarget } from '../../lib/conversations/pane-drop'
+import { pickAdapter } from '../../lib/conversations/deck-adapter'
+import { terminalAdapter } from '../../lib/conversations/terminal-adapter'
 import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearDraft, discardCleared, hasCleared, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
 import { uploadFailureText } from '../../lib/upload-failure'
-import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
+import { DestructiveGuard, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
 import { sendQueueFor } from '../../lib/conversations/send-queue'
 import { recallHeld, subscribeRecall } from '../../lib/conversations/draft-recall'
@@ -33,7 +35,8 @@ interface Props {
   asking?: boolean
   /** The held and in-flight messages are drawn at the end of the stream (PendingTail), not above this box (the deck and the chat do; a bare input keeps them here). */
   pendingInStream?: boolean
-  onSwitchToTerminal: () => void
+  /** Absent for a worker (no terminal view). */
+  onSwitchToTerminal?: () => void
 }
 
 const REFUSAL_KEY = { empty: 'deck.send.empty', too_long: 'deck.send.too_long', needs_terminal: 'deck.send.needs_terminal' } as const
@@ -82,7 +85,11 @@ function ChipThumb({ hostId, a, onRemove, removeLabel }: { hostId: string; a: At
 function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, asking, pendingInStream, onSwitchToTerminal }: Props) {
   const t = useI18nStore((s) => s.t)
   const dKey = draftKey(paneKey, hostId, sessionId)
-  const queue = sendQueueFor(dKey, () => hostSendPort(hostId, sessionId))
+  // The back-end this input runs on: the adapter its pane bound to the key (a worker's), else a terminal session's (U4-2)
+  const terminal = useMemo(() => terminalAdapter(hostId, sessionId, sessionCode), [hostId, sessionId, sessionCode])
+  const adapter = pickAdapter(dKey, capabilities, terminal)
+  const upload = adapter.upload
+  const queue = sendQueueFor(dKey, adapter.port)
   const entries = useSyncExternalStore(queue.subscribe, queue.entries)
   const [draft, setDraft] = useState(() => readDraft(dKey) ?? '')
   const [hint, setHint] = useState<OutcomeMessage | null>(null)
@@ -120,7 +127,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     window.addEventListener('drop', off)
     return () => { window.removeEventListener('keydown', off); window.removeEventListener('dragend', off); window.removeEventListener('drop', off) }
   }, [dragging])
-  const carriesFiles = (e: React.DragEvent) => !!sessionCode && e.dataTransfer.types.includes('Files')
+  const carriesFiles = (e: React.DragEvent) => !!upload && e.dataTransfer.types.includes('Files')
   // the draft is the truth for what is shown and sent: a marker the reader deleted or rewrote hides its chip. The chip is NOT
   // destroyed (the browser's undo can bring the marker back, and the chip and its picture with it): the memory only keeps the clock
   // (reconcileAttachments), and a hidden chip is let go by a send, a release, its remove button or a later attach.
@@ -128,7 +135,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
 
   // The queue is driven by the pane (`useSendQueueDriver`, under every view); this input only types and shows.
   // the live capability is the only authority: a 409 no_mod fails that one message and disables nothing by itself
-  const noMod = capabilities?.send !== 'prompt'
+  const noMod = !adapter.canSend(capabilities)
   const change = (v: string) => { setDraft(v); writeDraft(dKey, v); reconcileAttachments(dKey, v); setHint(null); if (v !== '') discardCleared(dKey) } // typing something new ends the undo window
   const canUndoClear = useHasCleared(dKey)
   const restoreCleared = () => {
@@ -142,13 +149,13 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
 
   // Files come from a paste, a drop or the attach button. Each is saved by the daemon (no paste into the pane) and its path goes
   // into the draft when it lands (see attachment-upload); the box stays editable meanwhile.
-  const attach = (files: readonly File[]) => { if (sessionCode) startUploads(dKey, hostId, sessionCode, files) }
+  const attach = (files: readonly File[]) => { if (upload) startUploads(dKey, upload, files) }
   // the pane takes a drop anywhere on it and hands the files to this input (usePaneFileDrop)
   const dropEl = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (!sessionCode || !dropEl.current) return
-    return registerDropTarget(dropEl.current, (files) => startUploads(dKey, hostId, sessionCode, files))
-  }, [dKey, hostId, sessionCode])
+    if (!upload || !dropEl.current) return
+    return registerDropTarget(dropEl.current, (files) => startUploads(dKey, upload, files))
+  }, [dKey, upload])
   const dropChip = (a: Attachment) => {
     removeAttachment(dKey, a.id)
     setChips(readAttachments(dKey))
@@ -188,7 +195,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
       {noMod ? (
         <div data-testid="session-input-disabled" className="flex items-center gap-2 border-t border-border-subtle px-3 py-2 deck-t-up text-text-muted">
           <span>{t('deck.send.no_mod')}</span>
-          <button type="button" className="rounded border border-border-subtle px-2 py-0.5 text-text-primary" onClick={onSwitchToTerminal}>{t('deck.send.switch_terminal')}</button>
+          {onSwitchToTerminal && <button type="button" className="rounded border border-border-subtle px-2 py-0.5 text-text-primary" onClick={onSwitchToTerminal}>{t('deck.send.switch_terminal')}</button>}
         </div>
       ) : (
         <div>
@@ -219,7 +226,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
             onDrop={(e) => {
               endDrag()
               const files = [...e.dataTransfer.files]
-              if (!sessionCode || files.length === 0) return
+              if (!upload || files.length === 0) return
               e.preventDefault()
               attach(files)
             }}
@@ -235,7 +242,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               onPaste={(e) => {
                 // only files are taken over; a plain-text paste goes into the box as usual
                 const files = [...e.clipboardData.files]
-                if (!sessionCode || files.length === 0) return
+                if (!upload || files.length === 0) return
                 // a payload that also carries text keeps its text: the browser pastes it, the files are uploaded beside it
                 if (!e.clipboardData.getData('text/plain')) e.preventDefault()
                 attach(files)
@@ -254,7 +261,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && hasCleared(dKey)) { e.preventDefault(); restoreCleared() }
                 // Up in an empty box (nothing typed, no chip, no upload on its way) calls back every message the App still holds, as the terminal does;
                 // anywhere else Up is the caret's
-                if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) && queue.heldCount() > 0) { // (a draft Esc just cleared is not overwritten: its undo window is the box's)
+                if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && adapter.recall && draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) && queue.heldCount() > 0) { // (a draft Esc just cleared is not overwritten: its undo window is the box's)
                   e.preventDefault()
                   recallHeld(dKey, queue)
                 }
@@ -266,7 +273,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               }`}
             />
             </div>
-            {sessionCode && (
+            {upload && (
               <>
                 <input ref={fileInput} data-testid="attach-file-input" type="file" multiple hidden onChange={(e) => { attach([...(e.target.files ?? [])]); e.target.value = '' }} />
                 <button type="button" aria-label={t('deck.attach.add')} title={t('deck.attach.add')} onClick={() => fileInput.current?.click()} className="flex h-8 w-8 items-center justify-center rounded text-text-muted hover:text-text-primary"><Paperclip size={18} /></button>

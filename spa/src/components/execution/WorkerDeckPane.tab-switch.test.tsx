@@ -2,7 +2,7 @@
 // survives switching to another tab and back. The pane really unmounts (keepAliveCount 0, an execution pane is not a "light" kind), so this mounts the
 // real TabContent, not WorkerDeckPane alone.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { act, render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { TabContent } from '../TabContent'
 import WorkerDeckPane from './WorkerDeckPane'
 import { registerModule, clearModuleRegistry, type PaneRendererProps } from '../../lib/module-registry'
@@ -17,7 +17,12 @@ import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
-import { forgetWorkerDraft } from '../../lib/nex/worker-draft-memory'
+import { clearAllWorkerDrafts, forgetWorkerDraft, readWorkerDraft } from '../../lib/nex/worker-draft-memory'
+import { UNDO_MS, clearAllSendQueues } from '../../lib/conversations/send-queue'
+import { clearAllAdapters } from '../../lib/conversations/deck-adapter'
+import { clearAllWorkerLeases } from '../../lib/conversations/worker-adapter'
+import { clearAllDrafts } from '../../lib/conversations/draft-memory'
+import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn() }))
@@ -44,7 +49,8 @@ const box = () => screen.getByRole('textbox') as HTMLTextAreaElement
 const realEnsure = useNexHostStore.getState().ensure
 
 beforeEach(() => {
-  cleanup(); clearModuleRegistry(); clearAllPanels()
+  cleanup(); clearModuleRegistry(); clearAllPanels(); clearAllSendQueues(); clearAllAdapters(); clearAllWorkerLeases(); clearAllDrafts(); clearAllWorkerDrafts()
+  vi.mocked(api.sendMessage).mockReset().mockResolvedValue({} as never)
   registerModule({ id: 'nex', name: 'Nex', panes: [{ kind: 'execution', component: DeckRenderer }] })
   registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: Other }] })
   useUISettingsStore.setState({ keepAliveCount: 0 })
@@ -55,9 +61,9 @@ beforeEach(() => {
   useExecutionStore.getState().setSummary(H, E, summary as never)
   useExecutionStore.getState().setHistoryLoaded(H, E, true)
   useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: entry }, acquire: () => () => {} } as never)
-  vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease: vi.fn(), release: vi.fn(), forget: vi.fn(), touch: vi.fn() } as never)
+  vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease: vi.fn(async () => 'lease-1'), release: vi.fn(), forget: vi.fn(), touch: vi.fn() } as never)
 })
-afterEach(() => { forgetWorkerDraft(`${H}:${E}`); useNexHostStore.setState({ byHost: {}, ensure: realEnsure }) })
+afterEach(() => { forgetWorkerDraft(`${H}:${E}`); vi.useRealTimers(); useNexHostStore.setState({ byHost: {}, ensure: realEnsure }) })
 
 describe('the worker deck across tab switches', () => {
   it('keeps the typed reply, and draws the deck again, when the reader switches to another tab and back', () => {
@@ -72,5 +78,30 @@ describe('the worker deck across tab switches', () => {
     rerender(<TabContent activeTab={execTab} allTabs={all} />)
     expect(screen.getByTestId('deck-scroll')).toBeInTheDocument()
     expect(box().value).toBe('half a thought')
+    expect(readWorkerDraft(`${H}:${E}`)).toBe('half a thought') // the worker's own memory (the room view reads the same)
+  })
+
+  // The undo window ends after the pane is gone: the lease belongs to the mounted view, so the message is refused, said so, and can be sent again.
+  it('a message whose undo window ends while another tab is shown is not lost: it comes back as failed, and a resend after returning goes through', async () => {
+    vi.useFakeTimers()
+    const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+    fireEvent.change(box(), { target: { value: 'send me' } })
+    fireEvent.keyDown(box(), { key: 'Enter' })
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'undo')
+
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('deck-scroll')).toBeNull()
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS + 10) })
+    expect(api.sendMessage).not.toHaveBeenCalled() // nothing went out under a lease nobody holds
+
+    rerender(<TabContent activeTab={execTab} allTabs={all} />)
+    const msg = screen.getByTestId('queued-message')
+    expect(msg).toHaveAttribute('data-state', 'failed')
+    expect(msg).toHaveTextContent('send me')
+    expect(msg).toHaveTextContent('Left this view')
+
+    fireEvent.click(within(msg).getByRole('button', { name: 'Try again' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+    expect(vi.mocked(api.sendMessage).mock.calls[0].slice(0, 4)).toEqual([H, E, 'lease-1', 'send me'])
   })
 })

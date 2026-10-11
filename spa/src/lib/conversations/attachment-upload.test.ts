@@ -4,6 +4,7 @@ import { draftKey } from './draft-memory'
 import { clearAllAttachments } from './attachment-memory'
 import { clearAllUploads, startUploads, takeUnseenFailures, uploadsOf } from './attachment-upload'
 import { releasePane, retireStaleSessions } from './pane-release'
+import { terminalAdapter } from './terminal-adapter'
 
 const mocks = vi.hoisted(() => ({ upload: vi.fn() }))
 vi.mock('../host-api', async (orig) => ({ ...(await orig<typeof import('../host-api')>()), agentUploadToPath: mocks.upload }))
@@ -13,7 +14,7 @@ const file = new File(['x'], 'a.png', { type: 'image/png' })
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 const failOffline = async () => {
   mocks.upload.mockRejectedValueOnce(Object.assign(new Error('net'), { kind: 'network' }))
-  startUploads(KEY, 'h', 'dev001', [file])
+  startUploads(KEY, terminalAdapter('h', 's1', 'dev001').upload!, [file])
   await flush()
 }
 
@@ -40,7 +41,7 @@ describe('unseen upload failures', () => {
   })
   it('a release also drops the running entry', () => {
     mocks.upload.mockReturnValueOnce(new Promise(() => {}))
-    startUploads(KEY, 'h', 'dev001', [file])
+    startUploads(KEY, terminalAdapter('h', 's1', 'dev001').upload!, [file])
     expect(uploadsOf(KEY)).toHaveLength(1)
     releasePane('pane-x')
     expect(uploadsOf(KEY)).toEqual([])

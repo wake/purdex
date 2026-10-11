@@ -2460,6 +2460,7 @@
   "deck.send.needs_terminal": "這需要在終端機輸入",
   "deck.send.too_long": "太長了（最多 4000 位元組）",
   "deck.send.empty": "沒有內容可送出",
+  "deck.send.pane_closed": "已離開這個檢視，訊息沒有送出（可重送）",
   "deck.send.rejected": "沒有送出（{{code}}）",
   "deck.send.network": "連線中斷，可能已送出，請看紀錄",
   "deck.attach.add": "加入附件",

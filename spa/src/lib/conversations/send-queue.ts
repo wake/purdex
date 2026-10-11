@@ -8,6 +8,7 @@
 // carries the client_msg_id, or the same text within 30 s) and otherwise stays 「可能已送出」 until the person decides.
 import { mayHaveRun, newClientMsgId, type SendOutcome, type SendPort } from './send'
 import { revokePreviewUrl, type Attachment } from './attachment-memory'
+import { adapterOf } from './deck-adapter'
 import { normalizePrompt } from './send-plan'
 import type { UserItem } from './types'
 
@@ -190,7 +191,8 @@ export class SendQueue {
 
   /** The transcript's user messages: an entry whose echo is there is done (the transcript shows it from now on). */
   reconcile(items: readonly UserItem[]): void {
-    const users = items.filter((i) => i.source === 'user' && !this.claimed.has(i.id))
+    const sources = this.port.echo?.sources ?? ['user']
+    const users = items.filter((i) => sources.includes(i.source) && !this.claimed.has(i.id))
     const open = this.list.filter((e) => e.state === 'sent' || e.state === 'maybe' || e.state === 'sending')
     const done = new Set<QueueEntry>()
     const take = (e: QueueEntry, u: UserItem) => { this.claimed.add(u.id); done.add(e) }
@@ -204,7 +206,7 @@ export class SendQueue {
     const pairs: Array<{ e: QueueEntry; u: UserItem; d: number }> = []
     for (const e of open) {
       if (e.state === 'sending' || done.has(e)) continue
-      const to = e.state === 'sent' ? (e.settledAt ?? e.startedAt) + ECHO_BEFORE_MS : e.startedAt + HAND_TIMEOUT_MS + ECHO_AFTER_MS
+      const to = e.state === 'sent' ? (e.settledAt ?? e.startedAt) + (this.port.echo?.afterMs ?? ECHO_BEFORE_MS) : e.startedAt + HAND_TIMEOUT_MS + ECHO_AFTER_MS
       for (const u of users) {
         if (this.claimed.has(u.id) || u.client_msg_id !== undefined) continue
         if (u.at < e.startedAt - ECHO_BEFORE_MS || u.at > to || normalizePrompt(u.text) !== e.text) continue
@@ -319,10 +321,10 @@ export class SendQueue {
 
 const queues = new Map<string, SendQueue>()
 
-/** The pane's queue: it survives the component (a tab switch unmounts the pane). */
+/** The pane's queue: it survives the component (a tab switch unmounts the pane). Made on the port of the adapter bound to `key` (a worker's), else on `make` (a terminal's). */
 export function sendQueueFor(key: string, make: () => SendPort): SendQueue {
   let q = queues.get(key)
-  if (!q) { q = new SendQueue(make()); queues.set(key, q) }
+  if (!q) { q = new SendQueue((adapterOf(key)?.port ?? make)()); queues.set(key, q) }
   return q
 }
 

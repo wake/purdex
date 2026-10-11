@@ -9,6 +9,7 @@ import { hostSendPort } from '../../lib/conversations/send'
 import { sendQueueFor, type QueueEntry } from '../../lib/conversations/send-queue'
 import { recallHeld } from '../../lib/conversations/draft-recall'
 import type { HeaderQueued } from '../../lib/conversations/types'
+import { adapterOf } from '../../lib/conversations/deck-adapter'
 import { QueuedMessages } from './QueuedMessages'
 import { PENDING_USER_BOX, PENDING_USER_CAPTION } from './UserBlock'
 
@@ -51,6 +52,8 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Pro
       <QueuedMessages
         entries={entries}
         className="flex flex-col gap-2"
+        frameUntilEchoed={adapterOf(key)?.kind === 'worker'}
+        canUndo={adapterOf(key)?.recall !== false}
         onUndo={(id) => { recallHeld(key, queue, id) }}
         onResend={(id) => { queue.resend(id) }}
         onDismiss={(id) => queue.dismiss(id)}

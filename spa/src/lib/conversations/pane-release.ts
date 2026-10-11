@@ -4,6 +4,7 @@
 //
 //   memo                                   key                                           freed by
 //   send queue   (send-queue)              pane|host|session                             releasePane, retireStaleSessions
+//   adapter      (deck-adapter)            pane|host|session                             releasePane, retireStaleSessions
 //   draft        (draft-memory)            pane|host|session                             releasePane, retireStaleSessions
 //   attachments  (attachment-memory)       pane|host|session                             releasePane, retireStaleSessions
 //   uploads      (attachment-upload)       pane|host|session                             releasePane, retireStaleSessions (aborts; drops unseen failures)
@@ -27,6 +28,7 @@ import { useLocalProfilesStore } from '../../stores/useLocalProfilesStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { forgetAttachmentsWhere } from './attachment-memory'
 import { forgetUploadsWhere } from './attachment-upload'
+import { forgetAdaptersWhere } from './deck-adapter'
 import { forgetClearedWhere } from './draft-clear'
 import { forgetDraftsWhere, draftKey } from './draft-memory'
 import { forgetDeckPane, forgetFoldsOfPane } from './fold-memory'
@@ -37,6 +39,7 @@ import { releaseSendQueues, retireSendQueues } from './send-queue'
 export function releasePane(paneId: string): void {
   const mine = (key: string) => key.startsWith(`${paneId}|`)
   releaseSendQueues(mine)
+  forgetAdaptersWhere(mine)
   forgetDraftsWhere(mine)
   forgetAttachmentsWhere(mine)
   forgetUploadsWhere(mine)
@@ -57,6 +60,7 @@ export function retireStaleSessions(paneId: string, hostId: string, sessionId: s
   if (!sessionId) return
   const now = draftKey(paneId, hostId, sessionId)
   retireSendQueues((key) => key.startsWith(`${paneId}|`) && key !== now)
+  forgetAdaptersWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetDraftsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetAttachmentsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetUploadsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)

@@ -2,7 +2,14 @@
 // before that id exists, no way to a terminal, the worker's own input and send path in the footer, model and cost in the status row, and the way
 // back to the room.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { UNDO_MS, clearAllSendQueues } from '../../lib/conversations/send-queue'
+import { clearAllAdapters } from '../../lib/conversations/deck-adapter'
+import { clearAllWorkerLeases } from '../../lib/conversations/worker-adapter'
+import { clearAllUploads } from '../../lib/conversations/attachment-upload'
+import { clearAllAttachments } from '../../lib/conversations/attachment-memory'
+import { clearAllDrafts } from '../../lib/conversations/draft-memory'
+import { clearAllWorkerDrafts, readWorkerDraft } from '../../lib/nex/worker-draft-memory'
 import WorkerDeckPane from './WorkerDeckPane'
 import { emptyDoc } from '../../lib/conversations/model'
 import { clearAllPanels } from '../../lib/conversations/panel-memory'
@@ -13,6 +20,7 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
+import { NexApiError } from '../../lib/nex/types'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
@@ -38,16 +46,18 @@ function seed(sum: Record<string, unknown>, loaded = true) {
 const realEnsure = useNexHostStore.getState().ensure
 
 beforeEach(() => {
-  cleanup(); clearAllPanels()
+  cleanup(); clearAllPanels(); clearAllSendQueues(); clearAllAdapters(); clearAllWorkerLeases(); clearAllUploads(); clearAllAttachments(); clearAllDrafts(); clearAllWorkerDrafts()
   useExecutionStore.setState({ executions: {} })
   useNexHostStore.setState({ ensure: async () => {}, byHost: { [H]: { phase: 'ready', capabilities: {} } } } as never)
   useHostConfigStore.setState({ byHost: {}, ensureLoaded: async () => {} })
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease: vi.fn(async () => 'lease-1'), release: vi.fn(), forget: vi.fn(), touch: vi.fn() } as never)
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({} as never)
+  vi.mocked(api.interruptExecution).mockReset().mockResolvedValue({} as never)
+  vi.mocked(api.uploadWorkerFile).mockReset().mockImplementation(async (_h, _e, f) => ({ path: `/w/purdex/${f.name}`, name: f.name, size: 1 }) as never)
   acquire.mockClear()
   useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: entry() }, acquire } as never)
 })
-afterEach(() => { cleanup(); useNexHostStore.setState({ byHost: {}, ensure: realEnsure }) })
+afterEach(() => { cleanup(); vi.useRealTimers(); useNexHostStore.setState({ byHost: {}, ensure: realEnsure }) })
 
 describe('WorkerDeckPane', () => {
   it('draws the deck on the conversation of the row\'s own session id, and holds that conversation', () => {
@@ -82,16 +92,6 @@ describe('WorkerDeckPane', () => {
     render(ui())
     expect(screen.getByTestId('deck-unreadable')).toBeInTheDocument()
     expect(screen.queryByTestId('deck-to-terminal')).toBeNull()
-  })
-
-  it('the footer is the worker\'s own input: a send goes through the worker path (lease, sendMessage), not the terminal\'s', async () => {
-    seed(summary())
-    render(ui())
-    const box = screen.getByRole('textbox')
-    fireEvent.change(box, { target: { value: 'run the tests' } })
-    fireEvent.keyDown(box, { key: 'Enter' })
-    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalled())
-    expect(vi.mocked(api.sendMessage).mock.calls[0].slice(0, 4)).toEqual([H, E, 'lease-1', 'run the tests'])
   })
 
   it('the status row says the model (from the conversation\'s header) and the cost (from the row)', () => {
@@ -132,34 +132,97 @@ describe('WorkerDeckPane', () => {
     expect(screen.getByTestId('lease-held')).toHaveTextContent('someone-else')
   })
 
-  it('a send error is worded as the room words it: a known code has its own line, the rest the generic one with the daemon\'s message', () => {
-    seed(summary())
-    render(ui())
-    const fail = (code: string, message: string) => act(() => { useExecutionStore.getState().setSendError(H, E, { code, message } as never) })
-    fail('turn_stalled', 'raw daemon text')
-    expect(screen.getByTestId('send-error')).not.toHaveTextContent('raw daemon text')
-    expect(screen.getByTestId('send-error').textContent).toMatch(/\S/)
-    fail('something_new', 'raw daemon text')
-    expect(screen.getByTestId('send-error')).toHaveTextContent('Send failed: raw daemon text')
-  })
-
-  it('a send refused while another is on its way keeps the typed text in the box', () => {
-    seed(summary())
-    render(ui())
-    useExecutionStore.setState((st) => ({ executions: { ...st.executions, [`${H}:${E}`]: { ...st.executions[`${H}:${E}`], sendLocked: false } } }) as never)
-    const box = screen.getByRole('textbox') as HTMLTextAreaElement
-    fireEvent.change(box, { target: { value: 'second' } })
-    // the lock lands between the render and the Enter (the same tick as a first send)
-    useExecutionStore.setState((st) => ({ executions: { ...st.executions, [`${H}:${E}`]: { ...st.executions[`${H}:${E}`], sendLocked: true } } }) as never)
-    fireEvent.keyDown(box, { key: 'Enter' })
-    expect(api.sendMessage).not.toHaveBeenCalled()
-  })
-
   it('an unreadable conversation offers no retry (a worker has nothing to ask again)', () => {
     seed(summary())
     useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: { ...entry(), status: 'unreadable', reason: 'not_found' } } } as never)
     render(ui())
     expect(screen.queryByTestId('deck-retry')).toBeNull()
+  })
+
+  // --- U4-2: the footer is the deck's own input on the worker's adapter ---
+  const typeAndSend = (text: string) => {
+    const box = screen.getByRole('textbox')
+    fireEvent.change(box, { target: { value: text } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+  }
+  const withUser = (text: string, at: number) => {
+    const echoed = { type: 'user', id: `u-${text}`, at, index: 1, text, source: 'user' } as ConversationItem
+    const e = entry()
+    useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: { ...e, doc: { ...e.doc, turns: [{ ...turn, items: [item, echoed] }] } } } } as never)
+  }
+
+  it('the footer is the deck\'s input (not the room\'s WorkerInput), and a worker has no "switch to terminal" in it', () => {
+    seed(summary())
+    render(ui())
+    expect(screen.getByTestId('session-input')).toBeInTheDocument()
+    expect(screen.queryByTestId('session-input-disabled')).toBeNull() // no mod to wait for: the worker answers for itself, whatever the capabilities say
+  })
+
+  it('a send goes through Nexen under the lease; until the transcript has it, it stays in the not-accepted frame, then it is gone', async () => {
+    vi.useFakeTimers()
+    seed(summary())
+    render(ui())
+    typeAndSend('run the tests')
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'undo') // the App holds it for the undo window
+    expect(screen.getByTestId('queued-message').className).toContain('border-accent')
+    expect(api.sendMessage).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(vi.mocked(api.sendMessage).mock.calls[0].slice(0, 4)).toEqual([H, E, 'lease-1', 'run the tests'])
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent') // handed to Nexen (which queues it itself while a turn runs)
+    expect(screen.getByTestId('queued-message').className).toContain('border-accent') // still not accepted: the transcript has not got it
+    act(() => { withUser('run the tests', Date.now()) })
+    expect(screen.queryByTestId('queued-message')).toBeNull() // the transcript's own row takes over
+  })
+
+  it('a message handed over that is never echoed can be dismissed (it does not stay in the frame for good)', async () => {
+    vi.useFakeTimers()
+    seed(summary())
+    render(ui())
+    typeAndSend('never echoed')
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
+    fireEvent.click(within(screen.getByTestId('queued-message')).getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByTestId('queued-message')).toBeNull()
+  })
+
+  it('the typed text is the worker\'s own draft (the room view shares it)', () => {
+    seed(summary())
+    render(ui())
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'half a thought' } })
+    expect(readWorkerDraft(`${H}:${E}`)).toBe('half a thought')
+  })
+
+  it('the interrupt button interrupts the worker through Nexen', async () => {
+    seed(summary())
+    render(ui())
+    fireEvent.click(screen.getByRole('button', { name: /interrupt/i }))
+    await vi.waitFor(() => expect(api.interruptExecution).toHaveBeenCalledWith(H, E, 'lease-1'))
+  })
+
+  it('a file picked saves through the worker upload route and its path lands in the draft', async () => {
+    seed(summary())
+    render(ui())
+    const input = screen.getByTestId('attach-file-input') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } })
+    await vi.waitFor(() => expect(api.uploadWorkerFile).toHaveBeenCalled())
+    await vi.waitFor(() => expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('/w/purdex/notes.txt'))
+  })
+
+  it('a file dropped anywhere on the pane (not only the input) is saved the same way', async () => {
+    seed(summary())
+    render(ui())
+    fireEvent.drop(screen.getByTestId('deck-scroll'), { dataTransfer: { files: [new File(['x'], 'drop.txt', { type: 'text/plain' })], types: ['Files'] } })
+    await vi.waitFor(() => expect(api.uploadWorkerFile).toHaveBeenCalled())
+  })
+
+  it('a refused send (the lease is held by another) is shown as failed with a retry, not swallowed', async () => {
+    vi.useFakeTimers()
+    seed(summary())
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(409, 'lease_held', 'held'))
+    render(ui())
+    typeAndSend('hello')
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
   })
 
   it('an exited worker has its own screen in the deck view too', () => {

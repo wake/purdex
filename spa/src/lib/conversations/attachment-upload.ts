@@ -3,11 +3,11 @@
 // chip memory whether or not an input is mounted; a remounted input reads what is still on its way from here. Only a release of the
 // pane (`forgetAttachmentsWhere`, via `pane-release`) aborts an upload, and an aborted one writes nothing back. Keyed like the draft.
 import { useCallback, useSyncExternalStore } from 'react'
-import { agentUploadToPath } from '../host-api'
 import { addAttachment, attachmentText, insertAttachmentText, isImageFile, makePreviewUrl, nextAttachmentSeq, reconcileAttachments, revokePreviewUrl, trackUpload } from './attachment-memory'
 import { imagePlaceholder, insertPlaceholderText } from './image-placeholder'
 import { readDraft, writeDraft } from './draft-memory'
 import { discardCleared } from './draft-clear'
+import type { UploadFn } from './deck-adapter'
 
 export interface Uploading { id: string; name: string; percent: number; image: boolean; size: number; /** The local file's blob: URL for the thumbnail (images only); handed to the chip when the upload lands, revoked otherwise. */ previewUrl?: string }
 export interface UploadFailure { name: string; error: unknown }
@@ -49,7 +49,7 @@ function setRunning(key: string, next: readonly Uploading[]): void {
 }
 
 /** Starts saving `files`; each one's placeholder (an image) or path (any other file) goes into the draft and a chip when it lands. */
-export function startUploads(key: string, hostId: string, sessionCode: string, files: readonly File[]): void {
+export function startUploads(key: string, upload: UploadFn, files: readonly File[]): void {
   for (const file of files) {
     const id = `att-${++seq}`
     const ctl = new AbortController()
@@ -63,7 +63,7 @@ export function startUploads(key: string, hostId: string, sessionCode: string, f
       if (!handedOver) revokePreviewUrl(previewUrl)
       setRunning(key, uploadsOf(key).filter((x) => x.id !== id))
     }
-    agentUploadToPath(hostId, file, sessionCode, {
+    upload(file, {
       signal: ctl.signal,
       onProgress: (percent) => { if (!ctl.signal.aborted) setRunning(key, uploadsOf(key).map((x) => (x.id === id ? { ...x, percent } : x))) },
     }).then(({ path }) => {
