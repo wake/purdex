@@ -108,7 +108,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   const footer = (ctx: DeckFooterContext) => (
     <div data-testid="session-footer">
       <QuestionDock ctx={ctx} />
-      <SessionInput {...ctx} sessionCode={sessionCode} />
+      <SessionInput {...ctx} sessionCode={sessionCode} pendingInStream />
       <SessionStatusRow sessionCode={sessionCode} cwd={content.kind === 'tmux-session' ? content.rebuild?.cwd : undefined} ctx={ctx} />
     </div>
   )

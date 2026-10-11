@@ -149,6 +149,17 @@ export interface Capabilities {
   reasons?: Record<string, string>
 }
 
+/** A message waiting in Claude Code's own queue (the terminal's: typed while a turn ran, not yet read). Absent / empty when there is none. */
+export interface HeaderQueued {
+  text: string
+  /** ms */
+  at: number
+  /** user | peer (a background-task notice is left out by the daemon) */
+  source: 'user' | 'peer' | (string & {})
+  /** The sender's display name (peer only). */
+  from?: string
+}
+
 export interface Header {
   title: string
   /** running | waiting | idle | error | ended | unknown */
@@ -157,6 +168,8 @@ export interface Header {
   backend: string
   usage?: { model?: string; effort?: string }
   live: boolean
+  /** Claude Code's own queue (B-read); an older daemon sends none. Drawn only while the status is running / waiting. */
+  queued?: HeaderQueued[]
 }
 
 export interface Window {
