@@ -58,7 +58,7 @@ describe('deck user block', () => {
 describe('the three voices are told apart (c9d9c7-52 pt 7)', () => {
   const peer = user({ source: 'peer', from: { kind: 'peer', name: 'mlab/purdex-1f-vq' }, text: 'ship it' })
   it('a peer: its own colour (not accent), the caption names it with the time, the body is a step quieter than the person', () => {
-    render(<UserBlock item={peer} />)
+    render(<Folds><UserBlock item={peer} /></Folds>)
     const box = screen.getByTestId('deck-user')
     expect(box.dataset.tone).toBe('peer')
     expect(box).toHaveClass('border-peer/70', 'bg-peer/5')
@@ -83,18 +83,18 @@ describe('the three voices are told apart (c9d9c7-52 pt 7)', () => {
   })
   it('keeps a peer message\'s own line breaks, in the deck and in the chat (never folded into one line)', () => {
     const multi = user({ source: 'peer', from: { kind: 'peer', name: 'mlab/x' }, text: 'line one\n  indented two\n\nline four' })
-    const { container, unmount } = render(<UserBlock item={multi} />)
+    const { container, unmount } = render(<Folds><UserBlock item={multi} /></Folds>)
     const body = container.querySelector('[data-testid="deck-user"] > div:nth-child(2)') as HTMLElement
     expect(body).toHaveClass('whitespace-pre-wrap')
     expect(body.textContent).toBe('line one\n  indented two\n\nline four')
     unmount()
-    const chat = render(<UserBubble item={multi} />)
+    const chat = render(<Folds><UserBubble item={multi} /></Folds>)
     const cbody = chat.container.querySelector('[data-testid="deck-user"] > div:nth-child(2)') as HTMLElement
     expect(cbody).toHaveClass('whitespace-pre-wrap')
     expect(cbody.textContent).toBe('line one\n  indented two\n\nline four')
   })
   it('the chat shows a peer as the deck block, never as the person\'s bubble', () => {
-    render(<UserBubble item={peer} />)
+    render(<Folds><UserBubble item={peer} /></Folds>)
     expect(screen.queryByTestId('chat-user')).toBeNull()
     expect(screen.getByTestId('deck-user').dataset.tone).toBe('peer')
   })
