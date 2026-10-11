@@ -13,15 +13,20 @@ import (
 const (
 	PromptNextPath   = "/mod/v1/prompt/next"
 	PromptResultPath = "/mod/v1/prompt/result"
+	maxPromptText    = 32 << 10    // bytes of a read text accepted (at least promptq.MaxTextBytes, which the mod cuts to)
 	CapPromptV1      = "prompt.v1" // announced by a mod that can run a prompt job
 )
 
 // PromptResult is the body of POST /mod/v1/prompt/result.
 type PromptResult struct {
-	Stream string `json:"stream"`
-	JobID  string `json:"job_id"`
-	Status string `json:"status"` // accepted | dropped | busy
-	Reason string `json:"reason"`
+	Stream   string `json:"stream"`
+	JobID    string `json:"job_id"`
+	Status   string `json:"status"` // accepted | dropped | busy
+	Reason   string `json:"reason"`
+	FilledAt int64  `json:"filled_at,omitempty"` // accepted fill: unix ms
+	Text     string `json:"text,omitempty"`      // accepted read: the composer text
+	// Truncated: accepted read whose text the mod cut to the daemon's limit.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // Errors of a PromptService.
@@ -113,8 +118,8 @@ func (h *handler) promptResult(w http.ResponseWriter, r *http.Request) {
 	if !h.readJSON(w, r, &in) {
 		return
 	}
-	if !ValidStream(in.Stream) || in.JobID == "" || len(in.JobID) > maxJobID || len(in.Reason) > 128 ||
-		(in.Status != "accepted" && in.Status != "dropped" && in.Status != "busy") {
+	if !ValidStream(in.Stream) || in.JobID == "" || len(in.JobID) > maxJobID || len(in.Reason) > 128 || len(in.Text) > maxPromptText || in.FilledAt < 0 ||
+		(in.Status != "accepted" && in.Status != "dropped" && in.Status != "busy" && in.Status != "unknown") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 		return
 	}

@@ -32,7 +32,7 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
+import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, fillRefusal, cutUtf8, MAX_TYPED_TEXT_BYTES, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
 const FLUSH_MS = 150 // a flush goes out this long after the first event queued
@@ -477,34 +477,17 @@ async function pqLoop($, gen) {
 // in as the person's own words (asUser), which is also how the transcript shows it. An interrupt aborts the running main turn.
 async function pqRun($, job) {
   const t0 = await $.clock.now() // when the job arrived: the result's retries are bounded from here
-  let status = 'accepted'
-  let reason = ''
+  let out
   try {
     // A /clear or resume in progress (session.end seen, the switch not yet) still reports the old id: nothing runs then
-    if (ev.switching || job.sessionId !== String(await $.session.id())) {
-      status = 'dropped'
-      reason = 'session_changed'
-    } else if (job.kind === 'submit') {
-      if (ev.turnId) {
-        status = 'busy'
-      } else {
-        const r = await $.prompt.submit({ text: job.text, asUser: true })
-        if (isObject(r) && typeof r.drop === 'string') {
-          status = 'dropped'
-          reason = r.drop || 'dropped'
-        }
-      }
-    } else if (!ev.turnId) {
-      status = 'dropped'
-      reason = 'not_running'
-    } else {
-      const turnId = ev.turnId
-      await $.turn.abort({ turnId })
-      turnAborted($, turnId)
-    }
+    if (ev.switching || job.sessionId !== String(await $.session.id())) out = pqOut('dropped', 'session_changed')
+    else if (job.kind === 'submit') out = await pqSubmit($, job)
+    else if (job.kind === 'fill') out = await pqFill($, job)
+    else if (job.kind === 'clear_if') out = await pqClearIf($, job)
+    else if (job.kind === 'read') out = await pqRead($)
+    else out = await pqInterrupt($)
   } catch (err) {
-    status = 'dropped'
-    reason = job.kind === 'interrupt' ? 'not_running' : 'refused'
+    out = pqOut('dropped', job.kind === 'interrupt' ? 'not_running' : 'refused')
     log($, 'prompt job ' + job.kind + ' failed: ' + String(err))
   }
   // The job has run (or been refused): its report must get through. A lost answer or a busy daemon is tried again, a few
@@ -512,14 +495,102 @@ async function pqRun($, job) {
   // add. The whole sequence is bounded from the moment the job arrived: no attempt starts after PROMPT_RESULT_BUDGET_MS
   // (the daemon's lease is 10 s) and each one waits at most PROMPT_RESULT_POST_MS, so the poll loop is held up for a
   // bounded time even when every POST hangs.
-  for (let attempt = 0; attempt < PROMPT_RESULT_TRIES; attempt++) {
+  // A fill is reported ONCE: a retry only widens the window between the fill and the daemon's Enter, and a late report is
+  // stale anyway (the daemon types Enter only while filled_at is fresh and cleans the composer otherwise).
+  const tries = job.kind === 'fill' ? 1 : PROMPT_RESULT_TRIES
+  let delivered = false
+  for (let attempt = 0; attempt < tries; attempt++) {
     if (attempt > 0) await $.clock.sleep(PROMPT_RESULT_RETRY_MS * attempt)
     if ((await $.clock.now()) - t0 >= PROMPT_RESULT_BUDGET_MS) break
-    const out = await wbRequest($, PROMPT_RESULT_URL, promptResultBody(ev.stream, job.id, status, reason), 0, PROMPT_RESULT_POST_MS)
-    const code = out && out !== TIMEOUT && out.res ? out.res.status : 0
-    if (code === 200 || code === 409) return
+    const res = await wbRequest($, PROMPT_RESULT_URL, promptResultBody(ev.stream, job.id, out.status, out.reason, out.extra), 0, PROMPT_RESULT_POST_MS)
+    const code = res && res !== TIMEOUT && res.res ? res.res.status : 0
+    if (code === 200) delivered = true
+    if (code === 200 || code === 409) break
   }
+  if (delivered) return
   log($, 'prompt result not accepted for ' + job.kind)
+  // A fill the daemon never heard about (the single report failed) would leave our text in the composer, and any text there
+  // blocks every later submit: take it back, only if it is still exactly ours.
+  if (job.kind === 'fill' && out.status === 'accepted') {
+    const c = await clearIfOurs($, job.text)
+    log($, 'fill report lost; composer clean-up: ' + c)
+  }
+}
+
+// The outcome of one job: the status for the daemon, a reason, and extras (filledAt of a fill, text / truncated of a read).
+const pqOut = (status, reason = '', extra = null) => ({ status, reason, extra })
+
+// clearIfOurs empties the composer only if it holds exactly `own`: 'cleared', 'gone' (it holds something else or nothing:
+// nothing of ours to take back) or 'failed' (could not read or could not clear: we do not know what is there).
+async function clearIfOurs($, own) {
+  try {
+    const cur = await $.prompt.read()
+    if (!isObject(cur) || typeof cur.text !== 'string') return 'failed'
+    if (cur.text !== own) return 'gone'
+    await $.prompt.fill({ text: '', mode: 'replace' })
+    return 'cleared'
+  } catch (err) {
+    log($, 'composer clean-up failed: ' + String(err))
+    return 'failed'
+  }
+}
+
+// A submit goes only while no turn runs: $.prompt.submit does not refuse mid-turn, it blocks until the session is idle, so a
+// turn in progress is reported `busy` at once and the App sends again when it is idle. The text goes in as the person's own
+// words (asUser), which is also how the transcript shows it.
+async function pqSubmit($, job) {
+  if (ev.turnId) return pqOut('busy')
+  const r = await $.prompt.submit({ text: job.text, asUser: true })
+  if (isObject(r) && typeof r.drop === 'string') return pqOut('dropped', r.drop || 'dropped')
+  return pqOut('accepted')
+}
+
+// Typed submit (K-1): the text goes into the empty composer WITHOUT Enter; the daemon presses Enter. Allowed mid-turn
+// (fill/read return at once, unlike submit). Never mixes with a draft someone is typing in the terminal. Whatever goes
+// wrong after the fill started, our text is taken back if it is there; if we cannot tell, the report is `unknown`, never
+// `dropped` (a dropped fill promises that nothing was left in the composer).
+async function pqFill($, job) {
+  const cur = await $.prompt.read()
+  if (!isObject(cur) || typeof cur.text !== 'string') return pqOut('dropped', 'no_composer') // fail closed: we cannot see the composer
+  if (cur.text !== '') return pqOut('dropped', 'input_not_empty')
+  try {
+    const f = await $.prompt.fill({ text: job.text, mode: 'replace' })
+    const why = fillRefusal(f)
+    if (why) return pqOut('dropped', why)
+    if (f.text !== job.text) return pqCleaned(await clearIfOurs($, f.text), 'fill_mismatch')
+    return pqOut('accepted', '', { filledAt: await $.clock.now() }) // right after the fill: the daemon presses Enter only while it is fresh
+  } catch (err) {
+    log($, 'prompt job fill failed: ' + String(err))
+    return pqCleaned(await clearIfOurs($, job.text), 'fill_error')
+  }
+}
+
+// pqCleaned: the report of a fill that did not stay, given what the clean-up found.
+const pqCleaned = (cleanup, reason) => (cleanup === 'failed' ? pqOut('unknown', reason) : pqOut('dropped', reason))
+
+// Cleanup of a fill that was not sent: only our own text is cleared, never someone else's draft.
+async function pqClearIf($, job) {
+  const cur = await $.prompt.read()
+  if (!isObject(cur) || cur.text !== job.text) return pqOut('dropped', 'not_ours')
+  await $.prompt.fill({ text: '', mode: 'replace' })
+  return pqOut('accepted')
+}
+
+// A read of the composer; a text over the daemon's limit is cut on a character boundary and flagged, not refused.
+async function pqRead($) {
+  const cur = await $.prompt.read()
+  if (!isObject(cur) || typeof cur.text !== 'string') return pqOut('dropped', 'no_composer')
+  const text = cutUtf8(cur.text, MAX_TYPED_TEXT_BYTES)
+  return pqOut('accepted', '', text.length === cur.text.length ? { text } : { text, truncated: true })
+}
+
+// An interrupt aborts the running main turn.
+async function pqInterrupt($) {
+  if (!ev.turnId) return pqOut('dropped', 'not_running')
+  const turnId = ev.turnId
+  await $.turn.abort({ turnId })
+  turnAborted($, turnId)
+  return pqOut('accepted')
 }
 
 // ---- /workbook refresh (session workbook spec §5.6) ----

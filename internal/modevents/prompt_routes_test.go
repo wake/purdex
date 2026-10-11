@@ -128,6 +128,41 @@ func TestPromptResult_Reported(t *testing.T) {
 	}
 }
 
+// K-1a-1: filled_at and text ride the result; a text over the bound or a negative filled_at is refused.
+func TestPromptResult_FilledAtAndText(t *testing.T) {
+	f := &fakePrompt{}
+	h := promptHandler(f)
+	body := `{"stream":"` + testStream + `","job_id":"pj-1","status":"accepted","filled_at":1700000000123,"text":"a\nb"}`
+	if rec := post(t, h, http.MethodPost, PromptResultPath, body); rec.Code != http.StatusOK || f.results[0].FilledAt != 1700000000123 || f.results[0].Text != "a\nb" {
+		t.Fatalf("%+v", f.results)
+	}
+	for name, b := range map[string]string{
+		"huge text":   `{"stream":"` + testStream + `","job_id":"pj-1","status":"accepted","text":"` + strings.Repeat("x", 33<<10) + `"}`,
+		"negative at": `{"stream":"` + testStream + `","job_id":"pj-1","status":"accepted","filled_at":-1}`,
+	} {
+		if rec := post(t, h, http.MethodPost, PromptResultPath, b); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", name, rec.Code)
+		}
+	}
+}
+
+// The mod may report `unknown` (it cannot tell what its job left in the composer) and a read's `truncated` flag.
+func TestPromptResult_UnknownAndTruncated(t *testing.T) {
+	f := &fakePrompt{}
+	h := promptHandler(f)
+	for _, b := range []string{
+		`{"stream":"` + testStream + `","job_id":"pj-1","status":"unknown","reason":"fill_error"}`,
+		`{"stream":"` + testStream + `","job_id":"pj-2","status":"accepted","text":"x","truncated":true}`,
+	} {
+		if rec := post(t, h, http.MethodPost, PromptResultPath, b); rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d", b, rec.Code)
+		}
+	}
+	if f.results[0].Status != "unknown" || !f.results[1].Truncated {
+		t.Fatalf("%+v", f.results)
+	}
+}
+
 func TestPromptResult_Conflicts(t *testing.T) {
 	for _, c := range []struct {
 		err  error
@@ -148,11 +183,11 @@ func TestPromptResult_Conflicts(t *testing.T) {
 func TestPromptResult_Validation(t *testing.T) {
 	h := promptHandler(&fakePrompt{})
 	for name, body := range map[string]string{
-		"bad stream":     resultBodyP("x", "pj-1", "accepted", ""),
-		"no job":         resultBodyP(testStream, "", "accepted", ""),
-		"unknown status": resultBodyP(testStream, "pj-1", "unknown", ""),
-		"long reason":    resultBodyP(testStream, "pj-1", "dropped", strings.Repeat("r", 129)),
-		"not json":       `nope`,
+		"bad stream":   resultBodyP("x", "pj-1", "accepted", ""),
+		"no job":       resultBodyP(testStream, "", "accepted", ""),
+		"bogus status": resultBodyP(testStream, "pj-1", "bogus", ""),
+		"long reason":  resultBodyP(testStream, "pj-1", "dropped", strings.Repeat("r", 129)),
+		"not json":     `nope`,
 	} {
 		if rec := post(t, h, http.MethodPost, PromptResultPath, body); rec.Code != http.StatusBadRequest {
 			t.Fatalf("%s: %d", name, rec.Code)

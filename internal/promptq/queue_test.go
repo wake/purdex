@@ -374,17 +374,17 @@ func TestSubmit_HandedLateStillGetsItsFullHandTimeout(t *testing.T) {
 func TestLedger_FloodForgetsTheOldestSettledAndNeverAnOpenRow(t *testing.T) {
 	q, _ := newQ(t)
 	q.Wait, q.HandTimeout = time.Minute, time.Minute
+	// The clock stays FIXED: the settled rows get distinct finishedAt values directly. (Advancing q.Now by thousands of
+	// seconds made the handed-out row look past its HandTimeout, so a repeat that reached await before q.Result was
+	// answered unknown: the flake.)
 	now := time.Unix(1_700_000_000, 0)
 	q.Now = func() time.Time { return now }
 	open := submitAsync(q, "s1", "open", "x")
-	time.Sleep(20 * time.Millisecond)
-	j := next(t, q, "mod1", "s1") // handed out, still open
-	_ = j
+	j := next(t, q, "mod1", "s1") // waits for the request to be queued, then hands it out: still open
 	q.mu.Lock()
 	for i := 0; i < maxLedger+10; i++ {
-		now = now.Add(time.Second)
 		id := "done-" + time.Duration(i).String()
-		e := &entry{key: id, state: stDone, finishedAt: now, done: make(chan struct{})}
+		e := &entry{key: id, state: stDone, finishedAt: now.Add(time.Duration(i-maxLedger-20) * time.Millisecond), done: make(chan struct{})}
 		q.ledger[id] = e
 	}
 	q.sweepLedger()
