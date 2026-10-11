@@ -13,7 +13,7 @@ export function ThinkingRow({ item }: { item: ThinkingItem }) {
   const [open, toggle] = useFold(`${item.id}:think`)
   const secs = item.duration_ms !== undefined ? Math.max(1, Math.round(item.duration_ms / 1000)) : null
   return (
-    <div data-testid="deck-thinking" className="text-xs text-text-muted">
+    <div data-testid="deck-thinking" className="deck-t-down text-text-muted">
       <button type="button" data-testid="thinking-toggle" aria-expanded={open} onClick={toggle} className="cursor-pointer hover:text-text-primary">
         {open ? '▾' : '▸'} {secs === null ? t('deck.thinking') : t('deck.thinking.for', { s: secs })}
       </button>
@@ -29,7 +29,7 @@ export function ThinkingRow({ item }: { item: ThinkingItem }) {
 /** System rows (已中斷, compaction, notices) read like the terminal's grey `⎿ ...` line: one grey token, left-aligned, no label; the dashed frame is only a separator. */
 function SystemFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div data-testid="deck-system" className="flex items-start gap-2 rounded-md border border-dashed border-border-default px-3 py-1.5 text-left text-xs text-text-system">
+    <div data-testid="deck-system" className="flex items-start gap-2 rounded-md border border-dashed border-border-default px-3 py-1.5 text-left deck-t-down text-text-system">
       <Info size={14} className="mt-px shrink-0" aria-hidden="true" />
       <div className="min-w-0">{children}</div>
     </div>

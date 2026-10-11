@@ -179,13 +179,13 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     <div data-testid="session-input">
       {!pendingInStream && <QueuedMessages entries={entries} onUndo={undo} onResend={(id) => { queue.resend(id) }} onDismiss={(id) => queue.dismiss(id)} />}
       {noMod ? (
-        <div data-testid="session-input-disabled" className="flex items-center gap-2 border-t border-border-subtle px-3 py-2 text-sm text-text-muted">
+        <div data-testid="session-input-disabled" className="flex items-center gap-2 border-t border-border-subtle px-3 py-2 deck-t-up text-text-muted">
           <span>{t('deck.send.no_mod')}</span>
           <button type="button" className="rounded border border-border-subtle px-2 py-0.5 text-text-primary" onClick={onSwitchToTerminal}>{t('deck.send.switch_terminal')}</button>
         </div>
       ) : (
         <div>
-          {hintText && <div data-testid="session-input-hint" role="status" className={`mb-1 px-3 pt-1 text-xs ${hint?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{hintText}</div>}
+          {hintText && <div data-testid="session-input-hint" role="status" className={`mb-1 px-3 pt-1 deck-t-down ${hint?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{hintText}</div>}
           {(shown.length > 0 || uploading.length > 0) && (
             // v3: tinted only, apart from the messages above (a top line would double the input row's own line)
             <div data-testid="attachment-area" className="flex flex-wrap gap-2 bg-text-primary/5 px-3 py-2">
@@ -268,7 +268,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
             <button type="button" aria-label={t('deck.send.send')} title={t('deck.send.send')} onClick={send} className="flex h-8 w-8 items-center justify-center rounded text-accent hover:opacity-80"><PaperPlaneRight size={18} /></button>
           </div>
           {canUndoClear && (
-            <button type="button" data-testid="draft-cleared" onClick={restoreCleared} className="block w-full cursor-pointer px-3 pb-1 text-left text-xs text-text-muted hover:text-text-primary">
+            <button type="button" data-testid="draft-cleared" onClick={restoreCleared} className="block w-full cursor-pointer px-3 pb-1 text-left deck-t-down text-text-muted hover:text-text-primary">
               {t('deck.draft.cleared')}
             </button>
           )}

@@ -133,7 +133,7 @@ function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queu
                 {paging && <div data-testid="chat-paging">{t('deck.paging')}</div>}
               </StatusOverlay>
               {/* In the flow, on top of the content: it scrolls away with it, and arrives in the commit of the last page. */}
-              {hasMoreBefore === false && <div data-testid="chat-history-start" className="text-xs text-text-muted">{t('deck.history_start')}</div>}
+              {hasMoreBefore === false && <div data-testid="chat-history-start" className="deck-t-down text-text-muted">{t('deck.history_start')}</div>}
               {groupByTurn(entries).map((g) => (
                 <div key={g.turnIndex} data-turn-index={g.turnIndex} className={`${SCROLL_ANCHOR_CLASS} space-y-3`}>
                   {g.entries.map((e) => <Entry key={e.key} entry={e} paneKey={paneKey} binding={binding} />)}
