@@ -61,6 +61,14 @@ func applyRelayIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 	case !errors.Is(err, sql.ErrNoRows):
 		return CommandResult{}, err
 	}
+	// The member's session may be the successor of an op that cleared into it and is not done (its seed turn is running): the
+	// one-open-op index is per session_id and does not see that op, so it is asked for by new_session_id (#2653).
+	switch err := tx.QueryRow(`SELECT 1 FROM relay_ops WHERE new_session_id = ? AND state NOT IN ('done', 'failed', 'cancelled') LIMIT 1`, m.MemberSessionID).Scan(&used); {
+	case err == nil:
+		return refusal(http.StatusConflict, team.ErrRelayOpen, "the member's previous relay is still settling"), nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return CommandResult{}, err
+	}
 	op := team.RelayOp{
 		ID: c.OpID, Kind: team.RelayKindMember, HostID: p.HostID, SessionID: m.MemberSessionID, Ref: m.Ref, TeamID: c.TeamID,
 		State: team.RelayRequested, HandoffPath: filepath.Join(p.HandoffDir, c.OpID+".md"),

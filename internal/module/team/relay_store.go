@@ -51,6 +51,8 @@ const relaySchema = `
 	CREATE INDEX IF NOT EXISTS relay_ops_session_state ON relay_ops (session_id, state);
 	CREATE UNIQUE INDEX IF NOT EXISTS relay_ops_one_open ON relay_ops (session_id)
 		WHERE state NOT IN ('done', 'failed', 'cancelled');
+	CREATE INDEX IF NOT EXISTS relay_ops_new_session_open ON relay_ops (new_session_id)
+		WHERE state NOT IN ('done', 'failed', 'cancelled');
 	CREATE TABLE IF NOT EXISTS session_lineage (
 		session_id             TEXT PRIMARY KEY,
 		predecessor_session_id TEXT    NOT NULL,
@@ -139,6 +141,20 @@ func (s *Store) OpenRelayOpBySession(sessionID string) (team.RelayOp, bool, erro
 	}
 	if err != nil {
 		return team.RelayOp{}, false, fmt.Errorf("open relay op by session %s: %w", sessionID, err)
+	}
+	return op, true, nil
+}
+
+// OpenRelayOpByNewSession is the op that cleared INTO sessionID and is not over: the successor's seed turn is still
+// running. The op is keyed by the old session (OpenRelayOpBySession never finds it from the new one).
+func (s *Store) OpenRelayOpByNewSession(sessionID string) (team.RelayOp, bool, error) {
+	op, err := scanRelayOp(s.db.QueryRow(`SELECT `+relayCols+` FROM relay_ops
+		WHERE new_session_id = ? AND state NOT IN ('done', 'failed', 'cancelled') ORDER BY created_at, id LIMIT 1`, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return team.RelayOp{}, false, nil
+	}
+	if err != nil {
+		return team.RelayOp{}, false, fmt.Errorf("open relay op by new session %s: %w", sessionID, err)
 	}
 	return op, true, nil
 }
