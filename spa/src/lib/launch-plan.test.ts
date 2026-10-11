@@ -16,11 +16,11 @@ describe('parseLaunchPlan', () => {
     })
   })
   it('a missing / bad field is unavailable, not a guess', () => {
-    const p = parseLaunchPlan({ agent_running: false, dir: { path: 5, state: 'move' }, resume: { line: null, reason: 'weird' }, fresh: 3, busy: 'x' })!
+    const p = parseLaunchPlan({ agent_running: false, dir: { path: 5, state: 'move' }, resume: { line: null, reason: 'weird' }, fresh: 3 })!
     expect(p.dir).toBeNull()
     expect(p.resume).toEqual({ line: null, reason: 'no_record' })
     expect(p.fresh).toBeNull()
-    expect(p.busy).toBeNull() // a non-object busy is not a busy pane
+    expect(p.busy).toBeNull() // a missing busy is not a busy pane
   })
   it('keeps each resume reason', () => {
     for (const reason of ['no_record', 'no_template', 'empty_command'] as const) {
@@ -32,6 +32,21 @@ describe('parseLaunchPlan', () => {
     expect(parseLaunchPlan(null)).toBeNull()
     expect(parseLaunchPlan({ agent_running: 'no' })).toBeNull()
   })
+})
+
+describe('parseLaunchPlan busy', () => {
+  it('null and missing are not busy', () => {
+    expect(parseLaunchPlan({ ...full, busy: null })!.busy).toBeNull()
+    const { busy: _b, ...noBusy } = full
+    expect(parseLaunchPlan(noBusy)!.busy).toBeNull()
+  })
+  it('an object with a non-empty command is busy', () => {
+    expect(parseLaunchPlan({ ...full, busy: { command: 'npm' } })!.busy).toEqual({ command: 'npm' })
+  })
+  it.each([['a string', 'npm'], ['a number', 3], ['an empty object', {}], ['an empty command', { command: '' }], ['a non-string command', { command: 3 }], ['an array', ['npm']]])(
+    'busy as %s makes the whole plan unusable', (_n, busy) => {
+      expect(parseLaunchPlan({ ...full, busy })).toBeNull()
+    })
 })
 
 describe('previewLine', () => {

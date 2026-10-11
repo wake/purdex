@@ -36,8 +36,13 @@ export function parseLaunchPlan(raw: unknown): LaunchPlan | null {
   }
   const f = raw.fresh
   const fresh = isRecord(f) && str(f.line) !== '' ? { line: str(f.line) } : null
+  // busy is `null | {command: string}` (spec §2.2); a malformed one makes the whole plan unusable rather than guessing.
   const b = raw.busy
-  const busy = isRecord(b) ? { command: str(b.command) } : null
+  let busy: LaunchPlan['busy'] = null
+  if (b !== null && b !== undefined) {
+    if (!isRecord(b) || typeof b.command !== 'string' || b.command === '') return null
+    busy = { command: b.command }
+  }
   return { agentRunning: raw.agent_running, tmuxInstance: str(raw.tmux_instance), dir, resume, fresh, busy }
 }
 
@@ -85,6 +90,9 @@ export async function postLaunch(hostId: string, code: string, body: { kind: Lau
   }
   throw new LaunchError(res.status, code2)
 }
+
+/** Always single-quoted; each `'` becomes `'\\''` (the daemon's fixed format). */
+const shellQuote = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`
 
 /** The line a button will type, as a preview only (the daemon composes the real one). */
 export function previewLine(line: string | null, dir: LaunchPlan['dir'], cd: boolean): string {
