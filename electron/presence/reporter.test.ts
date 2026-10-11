@@ -272,7 +272,7 @@ describe('reporter: forced sends', () => {
     expect(e.calls.put).toHaveLength(n + 1)
     expect(e.calls.put[n].body?.idle_ms).toBe(777_000)
   })
-  it('a request that never settles is aborted at 10 s, the in-flight mark is cleared, the latest state is sent again', async () => {
+  it('a request that never settles is aborted at 10 s; with nothing forced pending there is no timeout resend, only the streak one recovery send', async () => {
     const e = await started()
     e.impl.put = () => new Promise<Res>(() => {}) // ignores abort entirely
     await advance(20_000)
@@ -282,8 +282,33 @@ describe('reporter: forced sends', () => {
     expect(e.calls.put).toHaveLength(n)
     await advance(1)
     expect(e.calls.put[n - 1].signal.aborted).toBe(true)
-    expect(e.calls.put).toHaveLength(n + 1)
     expect(e.reporter.getOwned()).toEqual([])
+    // Only the one recovery send of the failure streak (through the re-probe), no timeout resend on top.
+    expect(e.calls.put).toHaveLength(n + 1)
+    await advance(9_000)
+    expect(e.calls.put).toHaveLength(n + 1)
+  })
+  it('a forced reason that arrived during a timing-out request is sent once with the latest state, and that resend timing out chains nothing', async () => {
+    const e = await started()
+    e.impl.put = () => new Promise<Res>(() => {})
+    e.reporter.force('lock')
+    await flush()
+    const n = e.calls.put.length
+    e.reporter.force('unlock')
+    e.state.idleMs = 555_000
+    e.state.sampledAt = Date.now()
+    await advance(10_000)
+    expect(e.calls.put).toHaveLength(n + 1)
+    expect(e.calls.put[n].body?.idle_ms).toBe(565_000)
+    await advance(10_000) // the resend times out as well
+    expect(e.calls.put.length).toBeLessThanOrEqual(n + 2) // at most the 20 s tick that fell in this window
+  })
+  it('a host that keeps hanging is hit at the 20 s cadence, not every 10 s', async () => {
+    const e = await started()
+    e.impl.put = () => new Promise<Res>(() => {})
+    const before = e.calls.put.length
+    await advance(120_000)
+    expect(e.calls.put.length - before).toBeLessThanOrEqual(7) // 6 ticks + the streak's one recovery send
   })
 })
 
@@ -303,7 +328,7 @@ describe('reporter: results', () => {
     await advance(20_000)
     expect(rejected()).toBe(2)
   })
-  it('a force that coalesced behind a request that ends in 4xx waits for the next tick', async () => {
+  it('a force that coalesced behind a request that ends in 4xx is sent once, with the latest state', async () => {
     const e = await started()
     const d = deferred<Res>()
     e.impl.put = () => d.promise
@@ -311,6 +336,23 @@ describe('reporter: results', () => {
     await flush()
     const n = e.calls.put.length
     e.reporter.force('unlock')
+    e.state.idleMs = 424_000
+    e.state.sampledAt = Date.now()
+    e.impl.put = async () => res(400)
+    d.resolve(res(400))
+    await flush()
+    expect(e.calls.put).toHaveLength(n + 1)
+    expect(e.calls.put[n].body?.idle_ms).toBe(424_000)
+    await advance(5_000) // the follow-up's own 4xx does not retry
+    expect(e.calls.put).toHaveLength(n + 1)
+  })
+  it('a 4xx with nothing forced pending is not retried before the next tick', async () => {
+    const e = await started()
+    const d = deferred<Res>()
+    e.impl.put = () => d.promise
+    e.reporter.force('lock')
+    await flush()
+    const n = e.calls.put.length
     d.resolve(res(400))
     await flush()
     expect(e.calls.put).toHaveLength(n)
@@ -439,5 +481,18 @@ describe('reporter: tokens never reach the log', () => {
     expect(all).not.toContain(TOKEN_A)
     expect(all).not.toContain(TOKEN_B)
     expect(all).not.toContain('Bearer')
+  })
+  it('never logs a renderer-supplied hostId', async () => {
+    const env = makeEnv()
+    env.impl.put = async () => res(500)
+    env.reporter.start()
+    env.reporter.setHosts({ rev: 1, hosts: [host(TOKEN_A, TOKEN_A), host('evil\nforged', TOKEN_B, 7861)] })
+    await flush()
+    await advance(30_000)
+    const all = env.logs.join('\n')
+    expect(env.logs.length).toBeGreaterThan(0)
+    expect(all).not.toContain(TOKEN_A)
+    expect(all).not.toContain('forged')
+    expect(all).toMatch(/host#[01]/)
   })
 })

@@ -127,10 +127,11 @@ export function createReporter(deps: ReporterDeps): Reporter {
     void hosts.probe(st)
   }
 
-  const send = (st: Host, _reason: SendReason): void => {
+  const send = (st: Host, reason: SendReason): void => {
     if (!hosts.isRunning() || st.disposed || st.caps !== 'v2') return
     if (st.slot.inflight) {
-      st.slot.pending = true
+      // Only a forced reason (unlock / back / N change / ...) is worth a follow-up; the 20 s tick is not.
+      if (reason !== 'tick') st.slot.pending = true
       return
     }
     let clientId: string
@@ -174,7 +175,9 @@ export function createReporter(deps: ReporterDeps): Reporter {
     if (st.disposed || !hosts.isRunning()) return
     st.slot.inflight = false
     st.slot.sendAbort = null
-    let resend = st.slot.pending
+    // A follow-up is sent only for a forced reason that arrived while the request was in flight, once,
+    // with the latest snapshot. A failure or timeout alone never chains another request.
+    const resend = st.slot.pending
     if (r.ok && r.value >= 200 && r.value < 300) {
       hosts.markRecovered(st)
       st.slot.sendFailLogged = false
@@ -187,18 +190,16 @@ export function createReporter(deps: ReporterDeps): Reporter {
       const at = deps.now()
       if (st.slot.lastRejectLogAt === null || at - st.slot.lastRejectLogAt >= LOG_THROTTLE_MS) {
         st.slot.lastRejectLogAt = at
-        log(`presence: send rejected status=${r.value} host=${st.hostId}`)
+        log(`presence: send rejected status=${r.value} ${hosts.label(st)}`)
       }
-      // Retried on the next tick only.
-      resend = false
+      // The same body is never retried at once; a forced reason that arrived meanwhile is still sent.
     } else {
-      if (!r.ok && r.timedOut) resend = true // one stuck connection must not silence the host
       if (!st.slot.sendFailLogged) {
         st.slot.sendFailLogged = true
         log(
           r.ok
-            ? `presence: send failed status=${r.value} host=${st.hostId}`
-            : `presence: send failed (${r.timedOut ? 'timeout' : 'network'}) host=${st.hostId}`,
+            ? `presence: send failed status=${r.value} ${hosts.label(st)}`
+            : `presence: send failed (${r.timedOut ? 'timeout' : 'network'}) ${hosts.label(st)}`,
         )
       }
       markSendFailed(st)
