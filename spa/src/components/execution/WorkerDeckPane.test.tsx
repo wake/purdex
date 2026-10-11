@@ -198,6 +198,32 @@ describe('WorkerDeckPane', () => {
     expect(vi.mocked(api.answerPermission).mock.calls[0][2]).toBe('req_a')
   })
 
+  // --- U4-4a: the live line speaks from the worker's own Nexen events (fresher than the transcript), in the terminal deck's words ---
+  const setSlice = (patch: Record<string, unknown>) => act(() => {
+    useExecutionStore.setState((st) => ({ executions: { ...st.executions, [`${H}:${E}`]: { ...st.executions[`${H}:${E}`], ...patch } } }) as never)
+  })
+  const live = () => screen.getByTestId('turn-live').textContent ?? ''
+
+  it('the live line thinks while the events name no running tool, and names the tool once they do (and thinks again when it ends)', () => {
+    seed(summary({ state: 'running' }))
+    render(ui())
+    expect(live()).toContain('Thinking…')
+    setSlice({ tools: { t1: { name: 'Bash', startedAt: 5, endedAt: null, status: 'running' } } })
+    expect(live()).toContain('Running · Bash')
+    setSlice({ tools: { t1: { name: 'Bash', startedAt: 5, endedAt: 9, status: 'done' } } })
+    expect(live()).toContain('Thinking…')
+  })
+
+  it('the background work the events count (task_start / task_end) is on the live line, in the terminal deck\'s words', () => {
+    seed(summary({ state: 'running' }))
+    render(ui())
+    const task = (id: string, kind: string, status = 'running') => ({ task_id: id, turn_id: 't', kind, task_type: 'x', tool_use_id: null, parent_tool_use_id: null, description: '', backgrounded: true, status, provider_status: null, closed_by: null, started_at: 1, ended_at: null, startSeq: 1 })
+    setSlice({ tasks: { a: task('a', 'shell'), b: task('b', 'shell'), c: task('c', 'subagent'), d: task('d', 'other', 'completed') } })
+    expect(live()).toContain('2 background command(s), 1 background subagent(s)')
+    setSlice({ tasks: {} })
+    expect(live()).not.toContain('background')
+  })
+
   it('a lease another principal holds is said, not swallowed', () => {
     seed(summary())
     useExecutionStore.setState((st) => ({ executions: { ...st.executions, [`${H}:${E}`]: { ...st.executions[`${H}:${E}`], leaseError: { code: 'lease_held', heldBy: 'someone-else' } } } }) as never)

@@ -15,6 +15,7 @@ import { bindAdapter } from '../../lib/conversations/deck-adapter'
 import { draftKey } from '../../lib/conversations/draft-memory'
 import { retireStaleSessions } from '../../lib/conversations/pane-release'
 import { registerWorkerLease, workerAdapter } from '../../lib/conversations/worker-adapter'
+import { runningToolName, workerBackground } from '../../lib/nex/worker-live'
 import { DeckPane } from '../deck/DeckPane'
 import type { DeckFooterContext } from '../deck/footer-context'
 import { SessionInput } from '../deck/SessionInput'
@@ -59,6 +60,9 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
   const readyDoc = conversation.state === 'ready' ? conversation.entry?.doc : undefined
   const readyItems = useMemo(() => (readyDoc ? readyDoc.turns.flatMap((turn) => turn.items) : []), [readyDoc])
   useSendQueueDriver(paneId, hostId, readSession, readyDoc?.header?.status === 'idle', readyItems)
+
+  // The live line speaks from the worker's own events: the tool that runs and the background work (U4-4a), fresher than the transcript's steps.
+  const live = useMemo(() => ({ tool: runningToolName(st.tools), background: workerBackground(st.tasks) }), [st.tools, st.tasks])
 
   const [menuOpen, setMenuOpen] = useState(false)
   const menuAnchor = useRef<HTMLButtonElement>(null)
@@ -115,5 +119,5 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
     </div>
   )
 
-  return <DeckPane paneId={paneId} conversation={conversation} isActive={isActive} isFocusTarget={isFocusTarget} footer={footer} />
+  return <DeckPane paneId={paneId} conversation={conversation} isActive={isActive} isFocusTarget={isFocusTarget} footer={footer} live={live} />
 }

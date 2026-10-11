@@ -117,6 +117,26 @@ describe('LiveTurnLine', () => {
       expect(text([])).toBe('✻思考中… · 3 分 03 秒')
     })
   })
+  // U4-4a: a worker's own Nexen events are fresher than the transcript's steps, so they may speak for the line
+  describe('the tool a worker\'s events name', () => {
+    const turns = (items: unknown[]) => [{ outcome: 'running', started_at: T0, items: items as LineTurn['items'] }] as LineTurn[]
+    const text = (el: React.ReactElement) => { vi.useFakeTimers({ now: T0 + 183_000 }); render(el); return screen.getByTestId('turn-live').textContent }
+    it('a tool the events name is the running tool, though the transcript has no running step yet', () => {
+      expect(text(<LiveTurnLine status="running" tool="Edit" turns={turns([step('a', { status: 'done' })])} />)).toBe('✻Running · Edit · 3m 03s')
+    })
+    it('events that name no tool put the line to thinking, whatever the transcript still shows running', () => {
+      expect(text(<LiveTurnLine status="running" tool={null} turns={turns([step('b')])} />)).toBe('✻Thinking… · 3m 03s')
+    })
+    it('a subagent the transcript counts still counts when the events name no tool', () => {
+      expect(text(<LiveTurnLine status="running" tool={null} turns={turns([step('c', { kind: 'task', tool: 'Agent' })])} />)).toBe('✻Running · 1 subagent(s) · 3m 03s')
+    })
+    it('no events (the prop is absent): the transcript speaks, as before', () => {
+      expect(text(<LiveTurnLine status="running" turns={turns([step('b')])} />)).toBe('✻Running · Bash · 3m 03s')
+    })
+    it('the background work the events count is said on the line, in the terminal deck\'s words', () => {
+      expect(text(<LiveTurnLine status="running" tool="Edit" background={{ shell: 2, other: 1 }} turns={turns([])} />)).toBe('✻Running · Edit · 2 background command(s), 1 background task(s) · 3m 03s')
+    })
+  })
   it('a tool that ends puts the line back to thinking', () => {
     vi.useFakeTimers({ now: T0 + 3_000 })
     const turn = (status: string) => [{ outcome: 'running', started_at: T0, items: [step('b', { status })] }] as LineTurn[]

@@ -38,6 +38,11 @@ export interface DeckViewProps {
   footer?: (ctx: DeckFooterContext) => ReactNode
   /** 「顯示全部」 and a subagent line open the pane's right panel on that step (the turn is known here, not to the step). */
   onOpenPanel?: (content: PanelContent) => void
+  /**
+   * What the backend's own events say runs now, when they speak for the live line (a worker's Nexen events, U4-4a): the running tool (null: none)
+   * and the background work. They replace what the transcript's steps and the header say.
+   */
+  live?: { tool: string | null; background?: HeaderBackground }
 }
 
 // Memoized: the store keeps an unchanged turn's object, so a live update re-draws only the turn that changed.
@@ -82,7 +87,8 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   )
 })
 
-export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, onOpenPanel }: DeckViewProps) {
+export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, onOpenPanel, live }: DeckViewProps) {
+  const background = live ? live.background : entry.doc.header?.background
   const t = useI18nStore((s) => s.t)
   const { doc } = entry
   const foldStore = usePaneFoldStore(`${paneId}\0${sessionId}`)
@@ -148,9 +154,9 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
                 {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
               </div>
             ) : (
-              doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} subagents={entry.subagents} loadSubagent={loadSubagent} background={i === doc.turns.length - 1 ? doc.header?.background : undefined} />)
+              doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} subagents={entry.subagents} loadSubagent={loadSubagent} background={i === doc.turns.length - 1 ? background : undefined} />)
             )}
-            {!empty && <LiveTurnLine turns={doc.turns} status={doc.header?.status} background={doc.header?.background} />}
+            {!empty && <LiveTurnLine turns={doc.turns} status={doc.header?.status} background={background} tool={live?.tool} />}
             <PendingTail paneKey={paneId} hostId={hostId} sessionId={sessionId} entries={pending} queued={headerQueued} />
           </DeckRevealContext.Provider>
         </FoldContext.Provider>

@@ -24,7 +24,17 @@ export function DoneTurnLine({ turn, background }: { turn: LineTurn; /** The hea
 }
 
 /** The live line: `✻ Running · Bash · 2 subagents · ↓ 9.2k · 3m 03s`, `✻ Thinking… · 3m 03s` when no tool or subagent runs, or `✻ Waiting for you`. Draws nothing while the agent is idle. */
-export function LiveTurnLine({ turns, status, background }: { turns: readonly LineTurn[]; status: string | undefined; /** The header's background work: said on the running line, and on the closing line once the turn is over. */ background?: HeaderBackground }) {
+export function LiveTurnLine({ turns, status, background, tool }: {
+  turns: readonly LineTurn[]
+  status: string | undefined
+  /** The header's background work: said on the running line, and on the closing line once the turn is over. */
+  background?: HeaderBackground
+  /**
+   * A worker's own events say what runs (U4-4a): the tool's name, or null for "no tool runs" (the model is thinking), and they are fresher than the
+   * transcript's steps, so they win over them. Absent: the transcript's steps speak. A running subagent the transcript counts still counts.
+   */
+  tool?: string | null
+}) {
   const t = useI18nStore((s) => s.t)
   const live = liveLine(turns, status)
   const now = useNow(live?.kind === 'running')
@@ -38,8 +48,10 @@ export function LiveTurnLine({ turns, status, background }: { turns: readonly Li
     )
   }
   // No tool and no subagent running: the model is thinking or writing (the conversation cannot tell which, as in the terminal).
-  const parts = [t(live.busy ? 'deck.live.running' : 'deck.live.thinking')]
-  if (live.tool) parts.push(live.tool)
+  const named = tool === undefined ? live.tool : tool
+  const busy = tool === undefined ? live.busy : tool !== null || live.subagents > 0
+  const parts = [t(busy ? 'deck.live.running' : 'deck.live.thinking')]
+  if (named) parts.push(named)
   if (live.subagents > 0) parts.push(t('deck.live.subagents', { n: live.subagents }))
   if (live.outputTokens !== null) parts.push(`↓ ${formatTokens(live.outputTokens)}`)
   const bg = backgroundText(background, t)
