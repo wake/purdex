@@ -249,6 +249,23 @@ describe('HostQuotaSegments', () => {
     expect(screen.getAllByTestId('status-seg-quota-five-hour')).toHaveLength(2)
   })
 
+  it('readers that mount at different times still share one poll: one request per refresh, none once the last has left', async () => {
+    mockFetchNexHost.mockResolvedValue(host({ five_hour_pct: 41, seven_day_pct: 72, resets_at: 0, source: 'x' }))
+    const a = render(<HostQuotaSegments hostId="h1" />)
+    await act(async () => {})
+    await act(async () => { vi.advanceTimersByTime(60_000) })
+    const b = render(<HostQuotaSegments hostId="h1" keep />)
+    expect(b.container.querySelector('[data-testid="status-seg-quota-five-hour"]')).toBeTruthy() // a late reader gets the reading at once
+    await act(async () => { vi.advanceTimersByTime(4 * 60_000) }) // 5 min since the first request
+    expect(mockFetchNexHost).toHaveBeenCalledTimes(2)
+    a.unmount()
+    await act(async () => { vi.advanceTimersByTime(5 * 60_000) })
+    expect(mockFetchNexHost).toHaveBeenCalledTimes(3) // b still reads
+    b.unmount()
+    await act(async () => { vi.advanceTimersByTime(10 * 60_000) })
+    expect(mockFetchNexHost).toHaveBeenCalledTimes(3)
+  })
+
   it('is hidden when the host has no quota, a non-finite one, or the fetch fails', async () => {
     mockFetchNexHost.mockResolvedValue(host(null))
     const { container, rerender } = render(<HostQuotaSegments hostId="h1" />)
