@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/execstat"
 )
@@ -81,6 +84,66 @@ func TestProcessStartText_MissingProcessIsAnError(t *testing.T) {
 	}
 	if _, err := ProcessStartText(0); err == nil {
 		t.Fatal("ProcessStartText(0) must fail")
+	}
+}
+
+// fakeClock drives startTextNow.
+func fakeClock(t *testing.T) *time.Time {
+	t.Helper()
+	now := time.Now()
+	startTextNow = func() time.Time { return now }
+	t.Cleanup(func() { startTextNow = time.Now })
+	return &now
+}
+
+// codex attack (high): the system time zone changes under a running daemon. Go keeps the zone it started with, ps follows the
+// new one, so the kernel text no longer equals ps's. The next recheck must see it and send every read back to ps.
+func TestProcessStartText_ATimeZoneChangedUnderTheDaemonIsCaughtAtTheRecheck(t *testing.T) {
+	useEnglishLocale(t)
+	now := fakeClock(t)
+	startTextFast = newStartTextFast()
+	if !startTextFast() {
+		t.Fatal("precondition: the kernel text matches ps")
+	}
+	prev := time.Local
+	time.Local = time.FixedZone("elsewhere", 5*3600+1800)
+	t.Cleanup(func() { time.Local = prev })
+	if !startTextFast() {
+		t.Fatal("within the recheck interval the answer is the cached one")
+	}
+	*now = now.Add(startTextRecheck + time.Second)
+	if startTextFast() {
+		t.Fatal("after the interval the recheck must notice the kernel text no longer equals ps's")
+	}
+	got, err := ProcessStartText(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := psLstart(t, os.Getpid()); got != want {
+		t.Fatalf("ProcessStartText = %q, ps prints %q", got, want)
+	}
+}
+
+// codex attack (medium): a calibration that failed for a passing reason must not switch the fast path off for good.
+func TestProcessStartText_AFailedCalibrationIsRetried(t *testing.T) {
+	useEnglishLocale(t)
+	now := fakeClock(t)
+	startTextFast = newStartTextFast()
+	prevRunPS := runPS
+	runPS = func(context.Context, ...string) ([]byte, error) {
+		return nil, errors.New("fork: resource temporarily unavailable")
+	}
+	t.Cleanup(func() { runPS = prevRunPS })
+	if startTextFast() {
+		t.Fatal("a calibration whose ps failed cannot say the texts match")
+	}
+	runPS = prevRunPS
+	if startTextFast() {
+		t.Fatal("within the interval the failed answer stands")
+	}
+	*now = now.Add(startTextRecheck + time.Second)
+	if !startTextFast() {
+		t.Fatal("once ps works again the recheck turns the fast path back on")
 	}
 }
 

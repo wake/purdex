@@ -55,12 +55,35 @@ func ProcessStartText(pid int) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// startTextFast says whether the kernel's start time, formatted with psLstartLayout, is what ps prints for lstart in this
-// process's environment. ps follows LC_TIME (zh_TW prints "日 10月/11 …") and the frames hold ps's text, so the answer is
-// measured once, on this very process, rather than assumed: one ps fork per process lifetime. A var so tests can re-run it.
+// startTextFast says whether the kernel's start time, formatted with psLstartLayout, is what ps prints for lstart right now.
+// ps follows LC_TIME (zh_TW prints "日 10月/11 …") and the system time zone, and the frames hold ps's text, so the answer is
+// measured on this very process rather than assumed. It is measured again every startTextRecheck: a time zone changed under
+// a running daemon (Go keeps the zone it started with, ps does not) turns the answer false until the next check, and a
+// check that failed for a passing reason (fork pressure) is retried instead of switching the fast path off for good. A
+// recheck is one ps fork; a var so tests can start it afresh.
 var startTextFast = newStartTextFast()
 
-func newStartTextFast() func() bool { return sync.OnceValue(calibrateStartText) }
+// startTextRecheck is how long a calibration answer is trusted.
+const startTextRecheck = 15 * time.Second
+
+// startTextNow is the clock of the recheck; a var for tests.
+var startTextNow = time.Now
+
+func newStartTextFast() func() bool {
+	var (
+		mu   sync.Mutex
+		fast bool
+		at   time.Time
+	)
+	return func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if now := startTextNow(); at.IsZero() || now.Sub(at) >= startTextRecheck {
+			fast, at = calibrateStartText(), now
+		}
+		return fast
+	}
+}
 
 func calibrateStartText() bool {
 	pid := os.Getpid()
