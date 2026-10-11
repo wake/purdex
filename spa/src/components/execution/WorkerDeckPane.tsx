@@ -26,6 +26,7 @@ import type { DeckFooterContext } from '../deck/footer-context'
 import { QuickReplies } from '../deck/QuickReplies'
 import { SessionInput } from '../deck/SessionInput'
 import { StatusRow } from '../deck/StatusRow'
+import { HostQuotaSegments } from '../status/UsageSegments'
 import ViewModeMenu, { ViewModeLabel } from './ViewModeMenu'
 import { WorkerChips } from './WorkerChips'
 import { WorkerEndedFooter } from './WorkerEndedFooter'
@@ -199,7 +200,7 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
       <FooterMark onChange={setFooterShown} />
       <div className="flex items-center">
         <div className="min-w-0 flex-1">
-          <StatusRow info={st.summary ? workerInfoText(st.summary, t) : undefined} cwd={st.summary?.cwd} model={ctx.usage?.model ?? null} effort={ctx.usage?.effort ?? null} cost={st.summary?.cost_usd ?? null} />
+          <StatusRow info={st.summary ? workerInfoText(st.summary, t) : undefined} cwd={st.summary?.cwd} model={ctx.usage?.model ?? null} effort={ctx.usage?.effort ?? null} cost={st.summary?.cost_usd ?? null} usage={<HostQuotaSegments hostId={hostId} keep />} />
         </div>
         <WorkerChips sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} />
       </div>
