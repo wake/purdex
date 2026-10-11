@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { Clock } from '@phosphor-icons/react'
 import { CcUsageSegments, HostQuotaSegments, UsageSegment } from './UsageSegments'
+import { clearNexQuotaShare } from '../../hooks/useNexHostQuota'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { compositeKey } from '../../lib/composite-key'
 import * as nexApi from '../../lib/nex/nex-api'
@@ -30,6 +31,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW)
   useAgentStore.setState({ ccStatus: {} })
   mockFetchNexHost.mockReset()
+  clearNexQuotaShare()
 })
 afterEach(() => {
   cleanup()
@@ -237,6 +239,14 @@ describe('HostQuotaSegments', () => {
     expect(week.textContent).toBe('28%')
     // Nexen reports one reset time; it is not claimed for the weekly window.
     expect(week.title).not.toContain('resets in')
+  })
+
+  it('two readers of one host (the bottom bar and the deck row) share one request, and both draw the same quota', async () => {
+    mockFetchNexHost.mockResolvedValue(host({ five_hour_pct: 41, seven_day_pct: 72, resets_at: 0, source: 'x' }))
+    render(<><HostQuotaSegments hostId="h1" /><HostQuotaSegments hostId="h1" keep /></>)
+    await act(async () => {})
+    expect(mockFetchNexHost).toHaveBeenCalledTimes(1)
+    expect(screen.getAllByTestId('status-seg-quota-five-hour')).toHaveLength(2)
   })
 
   it('is hidden when the host has no quota, a non-finite one, or the fetch fails', async () => {

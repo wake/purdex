@@ -21,6 +21,7 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import * as api from '../../lib/nex/nex-api'
+import { clearNexQuotaShare } from '../../hooks/useNexHostQuota'
 import * as lease from '../../hooks/useExecutionLease'
 import { NexApiError } from '../../lib/nex/types'
 import { takeBack, takeToTerminal } from '../../lib/nex/handoff'
@@ -57,6 +58,7 @@ function seed(sum: Record<string, unknown>, loaded = true) {
 const realEnsure = useNexHostStore.getState().ensure
 
 beforeEach(() => {
+  clearNexQuotaShare()
   cleanup(); clearAllPanels(); clearAllSendQueues(); clearAllAdapters(); clearAllWorkerLeases(); clearAllUploads(); clearAllAttachments(); clearAllDrafts(); clearAllWorkerDrafts(); clearAllPermissionCards()
   useExecutionStore.setState({ executions: {} })
   useNexHostStore.setState({ ensure: async () => {}, byHost: { [H]: { phase: 'ready', capabilities: {} } } } as never)

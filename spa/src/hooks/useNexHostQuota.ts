@@ -7,13 +7,27 @@ import type { NexQuota } from '../lib/nex/types'
 
 export const NEX_QUOTA_REFRESH_MS = 5 * 60 * 1000
 
+/** Readers of the same host (the bottom bar and the deck's status row) asking within this window share one request. */
+const SHARE_MS = 1000
+const shared = new Map<string, { at: number; p: ReturnType<typeof fetchNexHost> }>()
+/** Tests only: module state outlives a test. */
+export const clearNexQuotaShare = (): void => shared.clear()
+function fetchShared(hostId: string): ReturnType<typeof fetchNexHost> {
+  const hit = shared.get(hostId)
+  if (hit && Date.now() - hit.at < SHARE_MS) return hit.p
+  const p = fetchNexHost(hostId)
+  shared.set(hostId, { at: Date.now(), p })
+  p.catch(() => { if (shared.get(hostId)?.p === p) shared.delete(hostId) })
+  return p
+}
+
 export function useNexHostQuota(hostId: string): { quota: NexQuota | null; fetchedAt: number } {
   const [state, setState] = useState<{ hostId: string; quota: NexQuota | null; fetchedAt: number } | null>(null)
   useEffect(() => {
     if (!hostId) return
     let cancelled = false
     const load = () => {
-      fetchNexHost(hostId)
+      fetchShared(hostId)
         .then((h) => {
           if (cancelled) return
           const q = h.quota
