@@ -1,20 +1,19 @@
 // spa/src/components/status/UsageSegments.tsx — the usage readouts both status bars share: the context window and
-// the 5-hour / weekly limits. `CcUsageSegments` reads a terminal session's Claude Code statusLine snapshot;
+// the 5-hour / weekly limits. `CcUsageSegments` reads a terminal session's context plus the host's freshest 5h / 7d (`usageFor`); nothing dims for age (user 2026-10-12);
 // `HostQuotaSegments` reads the Nexen host's quota for a worker pane. Both draw through `UsageSegment`, so a
 // percentage looks the same wherever it comes from. Hidden when there is nothing to show.
 import { useEffect, useState } from 'react'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useNexHostQuota } from '../../hooks/useNexHostQuota'
-import { compositeKey } from '../../lib/composite-key'
 import {
-  USAGE_STALE_MS, epochToMs, formatResetsIn, parseCcUsage, remainingPct, ringGeometry, ringTransform, usedPct,
+  epochToMs, formatResetsIn, remainingPct, ringGeometry, ringTransform, usageFor, usedPct,
   type UsageTone, type UsageWindow,
 } from '../../lib/usage-display'
 import type { Icon } from '@phosphor-icons/react'
 import { Brain, CalendarBlank, Clock } from '@phosphor-icons/react'
 
-/** Re-renders the caller every `ms` so "stale" and "resets in" age without a new snapshot arriving. */
+/** Re-renders the caller every `ms` so "resets in" ages without a new snapshot arriving. */
 function useNow(ms = 30_000): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -69,7 +68,7 @@ function Ring({ used, mode }: { used: number; mode: UsageMode }) {
 }
 
 /** icon + ring + % (each used or remaining per `ring` / `number`). No text label: the tooltip (and aria-label) names which limit this is. */
-export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title, stale, className = '' }: {
+export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title, className = '' }: {
   testId: string
   icon: Icon
   /** Used share, 0-100. Colour always follows it. `null` = no value: draws icon + 「—」 (never 0 %); only the status row passes it, the bars still hide a missing segment themselves. */
@@ -79,7 +78,6 @@ export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title,
   /** What the number shows. */
   number: UsageMode
   title: string
-  stale: boolean
   className?: string
 }) {
   if (used === null) {
@@ -94,11 +92,10 @@ export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title,
   return (
     <span
       data-testid={testId}
-      data-dim={stale ? 'true' : undefined}
       role="img"
       title={title}
       aria-label={title}
-      className={`flex shrink-0 items-center gap-1 tabular-nums select-none ${stale ? 'opacity-50' : ''} ${className}`}
+      className={`flex shrink-0 items-center gap-1 tabular-nums select-none ${className}`}
     >
       <IconCmp size={10} className="text-text-secondary" aria-hidden="true" />
       <Ring used={used} mode={ring} />
@@ -109,19 +106,17 @@ export function UsageSegment({ testId, icon: IconCmp, used, ring, number, title,
 
 type T = (key: string, params?: Record<string, string | number>) => string
 
-function windowTitle(t: T, nameKey: string, w: UsageWindow, now: number, stale: boolean): string {
+function windowTitle(t: T, nameKey: string, w: UsageWindow, now: number): string {
   const parts = [t(nameKey, { left: remainingPct(w.pct), pct: usedPct(w.pct) })]
   const left = w.resetsAtMs === null ? null : formatResetsIn(w.resetsAtMs, now)
   if (left) parts.push(t('status.usage.resets_in', { time: left }))
-  if (stale) parts.push(t('status.usage.stale'))
   return parts.join(' — ')
 }
 
 /** The 5h and 7d rings; shared by both bars. */
-function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
+function LimitSegments({ fiveHour, sevenDay, now, idPrefix }: {
   fiveHour: UsageWindow | null
   sevenDay: UsageWindow | null
-  stale: boolean
   now: number
   idPrefix: string
 }) {
@@ -135,8 +130,7 @@ function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
           used={fiveHour.pct}
           ring="remaining"
           number="remaining"
-          title={windowTitle(t, 'status.usage.five_hour', fiveHour, now, stale)}
-          stale={stale}
+          title={windowTitle(t, 'status.usage.five_hour', fiveHour, now)}
           className="max-[700px]:hidden"
         />
       )}
@@ -147,8 +141,7 @@ function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
           used={sevenDay.pct}
           ring="remaining"
           number="remaining"
-          title={windowTitle(t, 'status.usage.seven_day', sevenDay, now, stale)}
-          stale={stale}
+          title={windowTitle(t, 'status.usage.seven_day', sevenDay, now)}
           className="max-[700px]:hidden"
         />
       )}
@@ -159,12 +152,11 @@ function LimitSegments({ fiveHour, sevenDay, stale, now, idPrefix }: {
 /** A terminal session's context window and rate limits, from its latest Claude Code statusLine snapshot. */
 export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null; sessionCode: string | null }) {
   const t = useI18nStore((s) => s.t)
-  const entry = useAgentStore((s) => hostId && sessionCode ? s.ccStatus[compositeKey(hostId, sessionCode)] : undefined)
+  const ccStatus = useAgentStore((s) => s.ccStatus)
   const now = useNow()
-  const usage = parseCcUsage(entry?.raw)
-  if (!entry || !usage) return null
+  const usage = hostId && sessionCode ? usageFor(hostId, sessionCode, ccStatus) : null
+  if (!usage) return null
 
-  const stale = now - entry.receivedAt > USAGE_STALE_MS
   return (
     <div data-testid="status-usage" className={`flex shrink-0 items-center gap-2 ${usage.context !== null ? 'max-[600px]:hidden' : 'max-[700px]:hidden'}`}>
       {usage.context !== null && (
@@ -174,30 +166,27 @@ export function CcUsageSegments({ hostId, sessionCode }: { hostId: string | null
           used={usage.context}
           ring="used"
           number="remaining"
-          title={[t('status.usage.context', { left: remainingPct(usage.context), pct: usedPct(usage.context) }), stale ? t('status.usage.stale') : ''].filter(Boolean).join(' — ')}
-          stale={stale}
+          title={t('status.usage.context', { left: remainingPct(usage.context), pct: usedPct(usage.context) })}
           className="max-[600px]:hidden"
         />
       )}
-      <LimitSegments fiveHour={usage.fiveHour} sevenDay={usage.sevenDay} stale={stale} now={now} idPrefix="status-seg-usage" />
+      <LimitSegments fiveHour={usage.fiveHour} sevenDay={usage.sevenDay} now={now} idPrefix="status-seg-usage" />
     </div>
   )
 }
 
 /** A worker pane's host quota (the account the Nexen host is logged in as). */
 export function HostQuotaSegments({ hostId }: { hostId: string }) {
-  const { quota, fetchedAt } = useNexHostQuota(hostId)
+  const { quota } = useNexHostQuota(hostId)
   const now = useNow()
   if (!quota) return null
   const resetsAtMs = epochToMs(quota.resets_at)
   // Nexen reports one reset time for the reading; it is shown on the 5-hour window, the one it belongs to.
-  const stale = now - fetchedAt > USAGE_STALE_MS
   return (
     <div data-testid="status-usage" className="flex shrink-0 items-center gap-2 max-[700px]:hidden">
       <LimitSegments
         fiveHour={{ pct: quota.five_hour_pct, resetsAtMs }}
         sevenDay={{ pct: quota.seven_day_pct, resetsAtMs: null }}
-        stale={stale}
         now={now}
         idPrefix="status-seg-quota"
       />

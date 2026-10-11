@@ -19,8 +19,33 @@ export interface CcUsage {
   sevenDay: UsageWindow | null
 }
 
-/** A snapshot older than this renders dimmed: the numbers may no longer hold. */
-export const USAGE_STALE_MS = 10 * 60 * 1000
+/**
+ * The one source rule for the three usage rings (user 2026-10-12). Nothing is ever dimmed for age.
+ *  - context: this session's own statusLine snapshot.
+ *  - 5h / 7d: the account-wide limits → the freshest snapshot on the same host that carries that field
+ *    (compared by `receivedAt`; each ring looks separately, so a newest snapshot lacking 7d falls back to the next).
+ * `null` when there is nothing to draw at all.
+ */
+export function usageFor(
+  hostId: string,
+  sessionCode: string,
+  ccStatus: Record<string, { receivedAt: number; raw: Record<string, unknown> }>,
+): CcUsage | null {
+  const prefix = `${hostId}:`
+  const own = ccStatus[`${hostId}:${sessionCode}`]
+  const context = parseCcUsage(own?.raw)?.context ?? null
+  let fiveHour: UsageWindow | null = null
+  let sevenDay: UsageWindow | null = null
+  let fhAt = -Infinity
+  let sdAt = -Infinity
+  for (const [key, entry] of Object.entries(ccStatus)) {
+    if (!key.startsWith(prefix) || key.slice(prefix.length).includes(':')) continue
+    const u = parseCcUsage(entry.raw)
+    if (u?.fiveHour && entry.receivedAt > fhAt) { fiveHour = u.fiveHour; fhAt = entry.receivedAt }
+    if (u?.sevenDay && entry.receivedAt > sdAt) { sevenDay = u.sevenDay; sdAt = entry.receivedAt }
+  }
+  return context === null && !fiveHour && !sevenDay ? null : { context, fiveHour, sevenDay }
+}
 
 function isPct(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
