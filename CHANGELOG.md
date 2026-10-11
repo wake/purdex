@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.715] - 2026-10-12
+
+> daemon 有改（#2707）：**要部署 daemon**；mod 沒有改，不用重跑 `pdx setup`。
+
+### Added：一般 session 也顯示 git branch（#2707）
+
+- daemon 的 session 清單多帶 `branch`：session 模組在背景讀 cwd 的 `.git/HEAD`（不啟動 git 子程序、只讀一般檔案、HEAD 與 `.git` 檔上限 1 KiB、驗證 ref 名、每個 cwd 同時最多一個讀取、1 秒逾時），清單只讀快取；換 branch 後約 5～6 秒內廣播。實測暖快取的清單呼叫多約 5 µs，背景一輪 13 個 cwd 約 150 µs。
+- App 的狀態列：有 worktree 時顯示 worktree 的 branch，否則顯示 session 的 branch。iOS 0.6.66 起也會讀這個欄位。
+
+### Fixed：用量環顯示（#2710）
+
+- 用量環不再被調暗；context 用量取這個 session 自己的；5 小時與 7 天額度取同一台主機最新的一筆（只在帶可信時間的快照之間比較）。過了重置時間（`resets_at`）就當作已用 0%，計時跨過邊界時會重畫。
+
 ## [1.0.0-alpha.714] - 2026-10-12
 
 > daemon 有改（#2708）：**要部署 daemon**；mod 沒有改，不用重跑 `pdx setup`。
