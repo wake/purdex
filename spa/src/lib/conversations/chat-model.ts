@@ -35,7 +35,7 @@ export function buildChat(turns: PanelTurn[]): ChatEntry[] {
   const out: ChatEntry[] = []
   for (const turn of turns) {
     const rows = turnRows(turn)
-    const firstUser = firstUserId(turn.items)
+    const firstUser = firstUserId(turn.items, turn.omitted_items)
     for (const seg of rows.segments) {
       if (seg.kind === 'run') {
         out.push({ kind: 'work', key: `w:${seg.run.stepIds[0]}`, turnIndex: turn.index, turnId: turn.id, run: seg.run })

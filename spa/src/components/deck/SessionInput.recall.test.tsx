@@ -116,6 +116,21 @@ describe('Up in an empty box calls the held messages back', () => {
     expect(revoke).not.toHaveBeenCalled()
   })
 
+  it('a message the mod refused as busy (waiting for the agent) comes back with its chip and picture too', async () => {
+    writeDraft(KEY, 'look [Image #7]')
+    addAttachment(KEY, chip())
+    render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    enter()
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    await act(async () => { calls[0].resolve({ kind: 'busy' }); await vi.advanceTimersByTimeAsync(0) })
+    expect(held()[0]).toHaveAttribute('data-state', 'waiting')
+    expect(revoke).not.toHaveBeenCalled()
+    up()
+    expect(box().value).toBe('look [Image #7]')
+    expect(readAttachments(KEY).map((a) => [a.seq, a.previewUrl])).toEqual([[7, 'blob:p1']])
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
   it('never reaches the mod: nothing is sent after the undo window', async () => {
     render(<TabContent activeTab={sessionTab} allTabs={all} />)
     type('mine'); enter()
@@ -188,6 +203,17 @@ describe('where Up stays the caret\'s', () => {
     type('held'); enter()
     expect(up(init)).toBe(true)
     expect(held()).toHaveLength(1)
+  })
+
+  it('right after Esc cleared a draft: its undo window is not overwritten (Up leaves the held message and the ⌘Z hint alone)', () => {
+    render(<TabContent activeTab={sessionTab} allTabs={all} />)
+    type('held'); enter()
+    type('a long draft'); fireEvent.keyDown(box(), { key: 'Escape' })
+    expect(screen.getByTestId('draft-cleared')).toBeInTheDocument()
+    expect(up()).toBe(true)
+    expect(box().value).toBe('')
+    expect(held()).toHaveLength(1)
+    expect(screen.getByTestId('draft-cleared')).toBeInTheDocument()
   })
 
   it('nothing held: Up is untouched', () => {

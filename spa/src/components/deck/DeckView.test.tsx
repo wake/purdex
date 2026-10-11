@@ -51,6 +51,12 @@ describe('DeckView', () => {
     expect(caps[2]).toBe('You · 09:05 · delivered mid-turn')
   })
 
+  it('a turn that left its first items out cannot tell which user message began it: a queued one in view is mid-turn', () => {
+    const queued: ConversationItem = { type: 'user', id: 'q', at: new Date(2026, 9, 10, 9, 5).getTime(), index: 41, text: 'q', source: 'queued' }
+    render(<DeckView {...props} entry={entry([turn(0, [queued], { omitted_items: 40 })])} />)
+    expect(screen.getByTestId('deck-user-caption')).toHaveTextContent('You · 09:05 · delivered mid-turn')
+  })
+
   it('says how many items a too-long turn left out, and shows a turn error', () => {
     render(<DeckView {...props} entry={entry([turn(0, [userItem('a', 5)], { omitted_items: 5, error: { kind: 'api', message: 'boom' } })])} />)
     expect(screen.getByTestId('deck-omitted')).toHaveTextContent('5 earlier step(s) not shown')

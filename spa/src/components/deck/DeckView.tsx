@@ -52,7 +52,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   // A turn without agent text looks the same either way: nothing to watch.
   const hasProse = turn.items.some((item) => item.type === 'agent_text')
   const firstAgentId = turn.items.find((item) => item.type === 'agent_text')?.id
-  const firstUser = firstUserId(turn.items)
+  const firstUser = firstUserId(turn.items, turn.omitted_items)
   useEffect(() => {
     const el = ref.current
     if (full || !reveal || !el || !hasProse) return

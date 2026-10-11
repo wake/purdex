@@ -22,7 +22,8 @@ export type UserCaption =
   | { kind: 'schedule' }
 
 /** The id of the first user item of a turn (the message that began it): a later one arrived while the turn was running. */
-export const firstUserId = (items: readonly { type: string; id: string }[]): string | undefined => items.find((i) => i.type === 'user')?.id
+export const firstUserId = (items: readonly { type: string; id: string }[], omitted = 0): string | undefined =>
+  omitted > 0 ? undefined : items.find((i) => i.type === 'user')?.id // earlier items were left out: no visible user item is known to be the first
 
 /** The caption of a user block by where the message came from; a source this build does not know reads as the user. */
 export function userCaption(item: Pick<UserItem, 'source' | 'from' | 'at'>, midTurn = false): UserCaption {

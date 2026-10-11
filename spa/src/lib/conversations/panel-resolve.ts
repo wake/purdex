@@ -5,7 +5,7 @@ import type { ConversationItem, StepItem } from './types'
 import type { PanelContent } from './panel-memory'
 import { turnRows } from './turn-row'
 
-export interface PanelTurn { id: string; index: number; items: ConversationItem[]; started_at?: number; ended_at?: number; outcome?: string; duration_ms?: number }
+export interface PanelTurn { id: string; index: number; items: ConversationItem[]; started_at?: number; ended_at?: number; outcome?: string; duration_ms?: number; omitted_items?: number }
 
 export type PanelView =
   | { kind: 'chain'; turnIndex: number; position: number; count: number; steps: StepItem[] }

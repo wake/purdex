@@ -43,7 +43,7 @@ export interface QueueEntry {
   /** When the latest submit got its answer. */
   settledAt?: number
   outcome?: SendOutcome
-  /** The box as it was when this was queued, kept while the App still holds the message (undo window, waiting for idle): what a recall puts back. */
+  /** The box as it was when this was queued, kept while the message can still come back (undo window, in flight, waiting for idle after a busy answer): what a recall puts back. Let go when the mod takes the message or it is dropped. */
   held?: HeldDraft
   /** The id of the message that replaced this one after a manual resend (the old entry is kept for the audit trail). */
   supersededBy?: string
@@ -159,6 +159,7 @@ export class SendQueue {
   }
 
   dismiss(id: string): void {
+    for (const x of this.list) if (x.id === id && x.state !== 'sending') this.release(x)
     this.list = this.list.filter((x) => x.id !== id || x.state === 'sending')
     this.emit()
   }
@@ -213,6 +214,7 @@ export class SendQueue {
     pairs.sort((a, b) => a.d - b.d)
     for (const p of pairs) if (!done.has(p.e) && !this.claimed.has(p.u.id)) take(p.e, p.u)
     if (done.size === 0) return
+    for (const x of done) this.release(x)
     this.list = this.list.filter((x) => !done.has(x))
     this.emit()
     this.pump()
@@ -272,7 +274,6 @@ export class SendQueue {
     const left = head.undoUntil - this.now()
     if (left > 0) { this.timer = setTimeout(() => this.pump(), left); return }
     head.state = 'sending'
-    this.release(head) // handed out: it can no longer be taken back, so its box is not coming back either
     head.startedAt = this.now()
     this.emit()
     void this.port.submit(head.text, head.id).then((o) => this.settle(head, o))
@@ -282,6 +283,7 @@ export class SendQueue {
     if (this.disposed) return
     if (this.retiredDone) {
       // retired: the answer changes nothing and starts nothing; the last one in flight frees the queue
+      this.release(e)
       this.list = this.list.filter((x) => x !== e)
       if (this.list.every((x) => x.state !== 'sending')) { const done = this.retiredDone; this.dispose(); done() }
       return
@@ -289,6 +291,7 @@ export class SendQueue {
     if (e.state !== 'sending' || !this.list.includes(e)) return // already echoed by the transcript
     e.outcome = o
     e.settledAt = this.now()
+    if (o.kind !== 'busy') this.release(e) // the mod took it (or it failed): its box is not coming back; a busy answer leaves it the App's, so it can still be recalled whole
     const seenIdle = e.idleSeen === true
     e.idleSeen = false // used by this answer or stale after it: one observation, at most one resend
     if (o.kind === 'accepted') e.state = 'sent'

@@ -100,18 +100,55 @@ describe('the previews of a held box', () => {
     expect(revoke).not.toHaveBeenCalled()
   })
 
-  it('are let go when the message is handed out', async () => {
-    const q = new SendQueue(fakePort().port)
+  it('stay alive while the message is in flight and waiting for idle (it can still come back whole), and go once the mod takes it', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
     q.enqueue('x', { draft: '[Image #1]', chips: [chip('a', 1)] })
     await vi.advanceTimersByTimeAsync(UNDO_MS)
+    expect(q.entries()[0].state).toBe('sending')
+    expect(revoke).not.toHaveBeenCalled()
+    calls[0].resolve({ kind: 'busy' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(q.entries()[0].state).toBe('waiting')
+    expect(revoke).not.toHaveBeenCalled()
+    const taken = q.takeAllHeld() // a recall of a waiting message brings the chips back too
+    expect(taken[0].held?.chips.map((a) => a.id)).toEqual(['a'])
+    expect(revoke).not.toHaveBeenCalled()
+  })
+
+  it('are let go exactly once when the mod accepts the message', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('x', { draft: '[Image #1]', chips: [chip('a', 1)] })
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve({ kind: 'accepted' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(revoke).toHaveBeenCalledTimes(1)
     expect(revoke).toHaveBeenCalledWith('blob:a')
     expect(q.entries()[0].held).toBeUndefined()
+  })
+
+  it('are let go exactly once when the transcript echoes a message that is still in flight', async () => {
+    const { port } = fakePort()
+    const q = new SendQueue(port)
+    const id = q.enqueue('x', { draft: '[Image #1]', chips: [chip('a', 1)] })
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.reconcile([{ id: 'u1', type: 'user', text: 'x', at: Date.now(), index: 0, source: 'user', client_msg_id: id }])
+    expect(revoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('are let go exactly once when the queue is retired with the message held', () => {
+    const q = new SendQueue(fakePort().port)
+    q.enqueue('x', { draft: '[Image #1]', chips: [chip('a', 1)] })
+    q.retire(() => {})
+    expect(revoke).toHaveBeenCalledTimes(1)
   })
 
   it('are let go when the queue is disposed with the message still held', () => {
     const q = new SendQueue(fakePort().port)
     q.enqueue('x', { draft: '[Image #1]', chips: [chip('a', 1)] })
     q.dispose()
+    expect(revoke).toHaveBeenCalledTimes(1)
     expect(revoke).toHaveBeenCalledWith('blob:a')
   })
 
