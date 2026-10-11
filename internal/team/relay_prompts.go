@@ -27,7 +27,8 @@ const RelayPromptMaxBytes = 16 << 10
 // fills them. The fixed parts also use {{op}}, {{nonce}}, {{missing}} and {{team}}
 // (P6-6: the member's lead / the lead's roster lines, or nothing), which only the mod knows, and {{tasks}} (the seed's tail, T-2). "git" is the mod's own run of read-only git commands
 // (P6-3a): the relay lock allows only the handoff Write, so the model cannot run them itself.
-var RelayPromptVariables = []string{"path", "old_ref", "old_session", "context", "whoami", "git"}
+// "why" is the relay's cause as a clause (no final 。), which the mod fills from how the relay began: idle, threshold, manual, arranged by the lead.
+var RelayPromptVariables = []string{"path", "old_ref", "old_session", "context", "whoami", "git", "why"}
 
 // RelayPromptBodies is one body per prompt: the stored values (where "" is
 // unset) or the defaults.
@@ -71,22 +72,23 @@ func lines(l ...string) string { return strings.Join(l, "\n") }
 // (spec §8.8): what an unset, empty or whitespace-only body means.
 var DefaultRelayPromptBodies = RelayPromptBodies{
 	Write: lines(
-		"這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。",
-		"請先停下手邊工作，用你完整的工具撰寫接力檔：{{path}}",
+		"這個 session 要接力了：{{why}}。接力已核准（之後會 /clear）。",
+		"請用你完整的工具撰寫接力檔：{{path}}（手邊有工作就先停下）",
 		"",
 		"要求：",
 		"- 接力檔必須自成一體：讀它的是一個完全沒有這段對話記憶的新對話。",
+		"- 如果現在是在等使用者、lead 或其他 session（例如等決定、等 merge 通知），§2 的「下一步」要寫清楚在等什麼、等誰、等到之後的第一個動作（具體到指令）。",
 		"",
 		"機器提供的 git 狀態（照抄進 §3）：",
 		"{{git}}",
 	),
 	Fix: "接力檔 {{path}} 不完整。",
 	Seed: lines(
-		"你是接手的新對話：前一段對話 context 已滿並已清空。",
+		"你是接手的新對話：前一段對話已接力並清空（{{why}}）。",
 		"請先讀接力檔 {{path}}，然後：",
 		"1. 用三行複述：目標、下一步第一個動作、目前有哪些檔案異動。",
 		"2. 跑 `git status` 確認與接力檔一致，不一致就指出來。",
-		"3. 接著從「下一步」繼續原本的工作。",
+		"3. 如果「下一步」是在等使用者、lead 或其他 session，就停在這裡等，不要自己開始新的工作；否則接著從「下一步」繼續原本的工作。",
 		"回覆的第一行請寫「↪ 接手自 {{old_ref}}」。",
 	),
 }
