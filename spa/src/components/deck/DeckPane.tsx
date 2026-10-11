@@ -3,6 +3,7 @@
 // moment, or the deck. Takes focus when the pane switches to it, as the placeholder did.
 import { useCallback, useEffect, useRef, type KeyboardEvent } from 'react'
 import { focusSessionInput } from './focus-input'
+import { fromRightPanel } from './FindBar'
 import { isFindShortcut } from '../../lib/find-shortcut'
 import { findKey, requestFind } from '../../lib/conversations/find-memory'
 import { useActivationFocus } from '../../hooks/useActivationFocus'
@@ -56,7 +57,7 @@ export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwit
 
   // ⌘F searches this conversation — only while the focus is in this pane (the terminal's and the editor's ⌘F are not ours).
   const onFindKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (conversation.state !== 'ready' || !isFindShortcut(e.nativeEvent)) return
+    if (conversation.state !== 'ready' || !isFindShortcut(e.nativeEvent) || fromRightPanel(e.target)) return
     e.preventDefault()
     e.stopPropagation()
     requestFind(findKey(paneId, conversation.sessionId))

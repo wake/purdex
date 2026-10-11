@@ -132,6 +132,17 @@ describe.each([
   })
 })
 
+describe('a ⌘F from the right panel is the panel\'s', () => {
+  it('is not taken (the stream may be inert behind a modal panel)', () => {
+    render(<DeckPane {...base} conversation={conv(THREE)} />)
+    const panel = document.createElement('div')
+    panel.setAttribute('data-testid', 'session-right-panel')
+    screen.getByTestId('session-view-deck').appendChild(panel)
+    expect(fireEvent.keyDown(panel, findKeys())).toBe(true)
+    expect(screen.queryByTestId('find-bar')).toBeNull()
+  })
+})
+
 describe('the deck: a turn far from the end', () => {
   it('draws its agent text as plain text until a search lands on it, then in full — the match is marked in the real markdown', () => {
     // an observer that never sees anything near: the far turns stay plain text
