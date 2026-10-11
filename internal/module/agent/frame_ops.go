@@ -1176,8 +1176,10 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		prov = &p
 		// The frame keeps the generation it was created or taken over under: the SessionEnd that ends it writes THAT
 		// into the session's last run, whatever tmux's generation is when the SessionEnd arrives (NA-0a).
-		if serr := m.frames.SetTmuxInstance(stored.FrameID, p.TmuxInstance); serr != nil && !errors.Is(serr, sql.ErrNoRows) {
-			log.Printf("[agent] stamp tmux_instance on frame %s: %v", stored.FrameID, serr)
+		// A failed stamp is an error to the hook (it retries): swallowing it would let the frame's SessionEnd delete the
+		// only resumable record. A frame that vanished meanwhile (sweep / SessionEnd) has nothing to stamp.
+		if serr := stampTmuxInstanceFn(m, stored.FrameID, p.TmuxInstance); serr != nil && !errors.Is(serr, sql.ErrNoRows) {
+			return nil, FrameTraceMeta{}, fmt.Errorf("stamp tmux_instance on frame %s: %w", stored.FrameID, serr)
 		}
 	}
 	return projection, FrameTraceMeta{

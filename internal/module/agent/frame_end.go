@@ -14,6 +14,10 @@ var (
 		return m.projectionForSession(sessionName)
 	}
 	projectPaneFn = func(m *Module, paneID string) (*SessionProjection, error) { return m.projectPane(paneID) }
+	// stampTmuxInstanceFn records the generation on a root frame, a seam so a test can fail it.
+	stampTmuxInstanceFn = func(m *Module, frameID, instance string) error {
+		return m.frames.SetTmuxInstance(frameID, instance)
+	}
 	// claimDeleteFn is the claim itself, a seam so a test can make a caller
 	// lose it without staging the race.
 	claimDeleteFn = func(m *Module, frameID, sessionID string, end *store.RunEnd) (bool, error) {

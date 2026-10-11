@@ -361,3 +361,42 @@ func TestIsRoot_ClearsWhenAnExistingFrameAcquiresAParent(t *testing.T) {
 		}
 	})
 }
+
+// The new generation's run ended first; the OLD generation's SessionEnd arrives only afterwards. It must not replace the
+// newer record (the record that is actually resumable). The same generation: the later end still wins.
+func TestClaimEnd_OldGenerationNeverReplacesANewerGenerationsRecord(t *testing.T) {
+	end := func(t *testing.T, s *FramesStore, pid int, sid, instance string, at int64) {
+		t.Helper()
+		f := seedRoot(t, s, "%5", pid, sid, "/w/"+sid)
+		if err := s.SetTmuxInstance(f.FrameID, instance); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := s.ClaimEnd(f.FrameID, sid, &RunEnd{Code: "abc123", EndedAt: at}); err != nil || !ok {
+			t.Fatalf("claim: %v %v", ok, err)
+		}
+	}
+	t.Run("new generation first, old one late", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		end(t, s, 200, "S-new", "222:1800", 10)
+		end(t, s, 201, "S-old", "111:1700", 20) // later in time, older server
+		if got := mustLastRun(t, s, "abc123"); got == nil || got.SessionID != "S-new" || got.TmuxInstance != "222:1800" {
+			t.Fatalf("last run = %+v, want the newer generation's", got)
+		}
+	})
+	t.Run("old generation first, new one replaces it", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		end(t, s, 200, "S-old", "111:1700", 10)
+		end(t, s, 201, "S-new", "222:1800", 20)
+		if got := mustLastRun(t, s, "abc123"); got == nil || got.SessionID != "S-new" {
+			t.Fatalf("last run = %+v", got)
+		}
+	})
+	t.Run("same generation, the later end wins", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		end(t, s, 200, "S1", "222:1800", 10)
+		end(t, s, 201, "S2", "222:1800", 20)
+		if got := mustLastRun(t, s, "abc123"); got == nil || got.SessionID != "S2" {
+			t.Fatalf("last run = %+v", got)
+		}
+	})
+}

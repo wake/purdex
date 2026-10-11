@@ -114,8 +114,11 @@ func (s *FramesStore) RootInfo(frameID string) (tmuxInstance string, isRoot, fou
 // ClaimDelete does (sessionID "" is the sweep's claim; a non-empty one needs the row's recorded session_id to equal it)
 // and, only when this call removed the row, upserts the session's last run from the DELETED row — so the record is the
 // frame's own, whatever the SessionEnd's arrival time says. Written only for a root frame with a known generation and
-// a non-empty code; a child, an unstamped frame or a nil `end` records nothing but is still claimed. A failure to
-// record rolls the delete back: the frame stays and the caller's retry (or the sweep) ends it.
+// a non-empty code; a child, an unstamped frame or a nil `end` records nothing but is still claimed. The upsert never
+// lets an OLDER tmux generation replace a newer one's record (a SessionEnd of the old server arriving after a restart,
+// after the new server's run already ended): same generation, the later end wins; different, the later server start.
+// A failure to record rolls the delete back: the frame stays and the caller's retry ends it (the sweep, which carries
+// no run, may get there first when the process is already dead — then that run is simply not recorded).
 func (s *FramesStore) ClaimEnd(frameID, sessionID string, end *RunEnd) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -148,6 +151,8 @@ func (s *FramesStore) ClaimEnd(frameID, sessionID string, end *RunEnd) (bool, er
 				session_id = excluded.session_id,
 				cwd = excluded.cwd,
 				ended_at = excluded.ended_at
+			WHERE last_agent_run.tmux_instance = excluded.tmux_instance
+			   OR `+instanceStart("last_agent_run.tmux_instance")+` <= `+instanceStart("excluded.tmux_instance")+`
 		`, end.Code, instance, agentType, sid, cwd, end.EndedAt); err != nil {
 			return false, fmt.Errorf("record last run: %w", err)
 		}
@@ -156,6 +161,12 @@ func (s *FramesStore) ClaimEnd(frameID, sessionID string, end *RunEnd) (bool, er
 		return false, err
 	}
 	return true, nil
+}
+
+// instanceStart is the tmux server start time of a "pid:start_time" generation (config.GetTmuxInstance), as an SQL
+// integer expression; unparseable parts read as 0.
+func instanceStart(col string) string {
+	return "CAST(substr(" + col + ", instr(" + col + ", ':') + 1) AS INTEGER)"
 }
 
 // LastRun returns the last root run recorded for a session code, or nil.

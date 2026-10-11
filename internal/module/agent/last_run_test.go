@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"errors"
 	"testing"
+	"time"
 
+	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/store"
 )
 
@@ -126,5 +129,22 @@ func TestLastRun_SweepClaimRecordsNothing(t *testing.T) {
 	}
 	if got, _ := m.frames.LastRun("work-code"); got != nil {
 		t.Fatalf("the sweep wrote %+v", got)
+	}
+}
+
+// A failed stamp is the hook's error (it retries), not a log line: a frame left unstamped would delete the only
+// resumable record at its SessionEnd.
+func TestLastRun_FailedStampFailsTheSessionStart(t *testing.T) {
+	m := newProvenanceTestModule(t, exitTestInstance)
+	orig := stampTmuxInstanceFn
+	stampTmuxInstanceFn = func(*Module, string, string) error { return errors.New("database is locked") }
+	t.Cleanup(func() { stampTmuxInstanceFn = orig })
+	req := sessionStartReq(200, "t200", "S1")
+	var result agentpkg.DeriveResult
+	if provider, ok := m.registry.Get(req.AgentType); ok {
+		result = provider.DeriveStatus(req.PurdexName, req.RawEvent)
+	}
+	if _, _, err := m.applyFrameEvent(req, result, time.Now().UnixNano()); err == nil {
+		t.Fatal("applyFrameEvent swallowed a failed stamp")
 	}
 }
