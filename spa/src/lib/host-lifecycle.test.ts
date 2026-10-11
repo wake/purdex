@@ -361,6 +361,15 @@ describe('host delete cascade — this device only (host ownership spec §3.4)',
     expect(useSessionStore.getState().sessions[HOST_A]).toEqual(freshSessions)
   })
 
+  it('undo bumps hostsRev above the delete rev, so presence hand-over resends the restored host (PA-2b R1)', () => {
+    const before = useHostStore.getState().hostsRev
+    const restore = deleteHostCascade(HOST_A)
+    const afterDelete = useHostStore.getState().hostsRev
+    expect(afterDelete).toBeGreaterThan(before)
+    restore()
+    expect(useHostStore.getState().hostsRev).toBeGreaterThan(afterDelete)
+  })
+
   it('undo restores the host at its original position', () => {
     const restore = deleteHostCascade(HOST_A)
     expect(useHostStore.getState().hostOrder).toEqual([HOST_B])

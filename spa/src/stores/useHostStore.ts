@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
+import { revPatch } from '../lib/presence/host-projection'
 import { isValidDaemonId } from '../lib/daemon-id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { syncIdOfSync, wireIdOfHost } from '../lib/profile/host-identity'
@@ -127,6 +128,9 @@ interface HostState {
   activeHostId: string | null
   /** Host the Development page targets. Device-local, not synced (spec D3). */
   devHostId: string | null
+  /** Write time of the last change to what the Mac App's presence reporter reads (the set of hosts and each host's
+   *  id / ip / port / token). Persisted; main keeps the host list with the highest one (PA-2 D8). */
+  hostsRev: number
 
   /** Never writes `daemonId` — only `observeDaemonId` does (spec D3). */
   addHost: (opts: { id?: string; name: string; ip: string; port: number; token?: string | null }) => string
@@ -222,6 +226,7 @@ function createDefaultState() {
     runtime: {} as Record<string, HostRuntime>,
     activeHostId: DEFAULT_ID as string | null,
     devHostId: null as string | null,
+    hostsRev: 0,
   }
 }
 
@@ -602,10 +607,10 @@ export const useHostStore = create<HostState>()(
         const host: HostConfig = { id, ...restOpts, order }
         delete host.daemonId
         delete host.syncAliases
-        set((state) => ({
-          hosts: { ...state.hosts, [id]: host },
-          hostOrder: [...state.hostOrder, id],
-        }))
+        set((state) => {
+          const hosts = { ...state.hosts, [id]: host }
+          return { hosts, hostOrder: [...state.hostOrder, id], ...revPatch(state.hostsRev, state.hosts, hosts) }
+        })
         return id
       },
 
@@ -618,8 +623,10 @@ export const useHostStore = create<HostState>()(
           const repoint = hostEndpoint(next) !== hostEndpoint(host)
           // A re-point is learned afresh for the new endpoint (spec D3).
           if (repoint) delete next.daemonId
+          const hosts = { ...state.hosts, [hostId]: next }
           return {
-            hosts: { ...state.hosts, [hostId]: next },
+            hosts,
+            ...revPatch(state.hostsRev, state.hosts, hosts),
             ...(repoint ? { runtime: withoutVerification(state.runtime, hostId) } : {}),
           }
         }),
@@ -636,7 +643,7 @@ export const useHostStore = create<HostState>()(
             const next = transferPatch(state, change)
             if (!next) return state
             applied = { created: next.created, overwritten: next.overwritten }
-            return next.patch
+            return { ...next.patch, ...revPatch(state.hostsRev, state.hosts, next.patch.hosts) }
           } catch {
             applied = null
             return state
@@ -705,6 +712,7 @@ export const useHostStore = create<HostState>()(
             state.activeHostId === hostId ? newOrder[0] ?? null : state.activeHostId
           return {
             hosts: rest,
+            ...revPatch(state.hostsRev, state.hosts, rest),
             hostOrder: newOrder,
             runtime: restRuntime,
             activeHostId,
@@ -784,6 +792,7 @@ export const useHostStore = create<HostState>()(
         hostOrder: state.hostOrder,
         activeHostId: state.activeHostId,
         devHostId: state.devHostId,
+        hostsRev: state.hostsRev,
       }),
     },
   ),

@@ -12,14 +12,28 @@ import { cleanCommandText } from './deck-format'
 import { splitImageRefs, imageMarker } from './image-placeholder'
 import { OWN_TEXT_SOURCES, isImagePath } from './image-sniff'
 import type { PanelTurn } from './panel-resolve'
-import { isKnownItem, type AgentTextItem, type StepItem, type Turn, type UserItem } from './types'
+import { outputTail, systemView, textOutput } from './deck-format'
+import { isKnownItem, type AgentTextItem, type ConversationItem, type StepItem, type Turn, type UserItem } from './types'
+import { subagentScope } from '../../components/deck/search-scope'
+import type { SubagentState } from '../../stores/useConversationStore'
 
 /** The fold key that makes a far-off turn of the deck draw its agent text in full (the unit is the real markdown's text, not the plain source). */
 export const fullTurnKey = (turnId: string): string => `deck-full:${turnId}`
 
-export const userUnitId = (id: string): string => `u:${id}`
-export const agentUnitId = (id: string): string => `a:${id}`
-export const stepUnitId = (id: string): string => `s:${id}`
+export const userUnitId = (id: string, scope = ''): string => `${scope}u:${id}`
+export const agentUnitId = (id: string, scope = ''): string => `${scope}a:${id}`
+export const stepUnitId = (id: string, scope = ''): string => `${scope}s:${id}`
+/** A folded output's unit is its fold key (OutputFold draws `data-search-unit={foldKey}` on the body): opening the fold is its reveal. */
+export const outputKey = (id: string): string => `${id}:out`
+/** …and its unit id under a subagent scope. */
+export const outputUnitId = (id: string, scope = ''): string => `${scope}${id}:out`
+/** The key a task line's chevron toggles to show the agent's own steps. */
+export const subagentKey = (stepId: string): string => `${stepId}:sub`
+/**
+ * The key a collapsed peer message toggles (the peer-message collapse, #2694): a hit in its cut lines opens it. Not `${id}:peer`, which the
+ * chat's PeerLine already uses for its summary row in the same fold store.
+ */
+export const peerKey = (id: string): string => `${id}:peerfold`
 
 /**
  * The text of a message the way UserText draws it: an image reference that names an image file is a thumbnail (no text of its own), any
@@ -48,23 +62,55 @@ function add(out: SearchUnit[], id: string, text: string, reveal: string[] = [])
   if (text !== '') out.push({ id, text: text.normalize('NFC'), reveal })
 }
 
-/** The deck's units, in the order it draws them. `eager`: how many of the newest turns are always drawn in full (the older ones need `fullTurnKey` for their prose). */
-export function deckUnits(turns: readonly Turn[], eager: number): SearchUnit[] {
+/** Steps whose output the deck draws in a fold under the line (the rest — a read, a task, a diff card — draw none). */
+const hasOutputFold = (step: StepItem): boolean => !(step.question && Array.isArray(step.question.questions)) && step.kind !== 'read' && step.kind !== 'task' && step.kind !== 'edit'
+
+/** The text an OutputFold body draws, or null when it draws none. */
+function outputText(output: StepItem['output']): string | null {
+  if (!output || typeof output.text !== 'string' || output.text === '') return null
+  return outputTail(output).text
+}
+
+/** One item's units (and, for a task line, its unfolded agent's), in the order the deck draws them. `outer`: folds that hide the item itself. */
+function itemUnits(out: SearchUnit[], item: ConversationItem, outer: string[], far: string[], subagents: Record<string, SubagentState> | undefined, scope = ''): void {
+  if (!isKnownItem(item)) return
+  if (item.type === 'user') {
+    if (item.source === 'command_output') {
+      const text = outputText(textOutput(item.text, item.truncated))
+      if (text !== null) add(out, outputUnitId(item.id, scope), text, [...outer, outputKey(item.id)])
+    } else add(out, userUnitId(item.id, scope), userText(item), item.source === 'peer' ? [...outer, peerKey(item.id)] : outer)
+  } else if (item.type === 'agent_text') {
+    add(out, agentUnitId(item.id, scope), proseText((item as AgentTextItem).markdown), [...outer, ...far])
+  } else if (item.type === 'system') {
+    // a long command output is drawn as the same fold as a step's
+    const view = systemView(item)
+    if (view.kind === 'output') {
+      const text = outputText(textOutput(view.text))
+      if (text !== null) add(out, outputUnitId(item.id, scope), text, [...outer, outputKey(item.id)])
+    }
+  } else if (item.type === 'step') {
+    const subject = stepSubject(item)
+    if (subject !== null) add(out, stepUnitId(item.id, scope), subject, outer)
+    const text = hasOutputFold(item) ? outputText(item.output) : null
+    if (text !== null) add(out, outputUnitId(item.id, scope), text, [...outer, outputKey(item.id)])
+    // the agent's own steps, once they are loaded (the line's chevron loads them; an unloaded agent has nothing to search yet)
+    const agentId = item.kind === 'task' ? item.subagent?.agent_id : undefined
+    const st = agentId ? subagents?.[agentId] : undefined
+    if (st?.state === 'ready' && st.answer?.items) {
+      for (const child of st.answer.items as ConversationItem[]) itemUnits(out, child, [...outer, subagentKey(item.id)], far, undefined, subagentScope(item.id))
+    }
+  }
+}
+
+/**
+ * The deck's units, in the order it draws them. `eager`: how many of the newest turns are always drawn in full (the older ones need
+ * `fullTurnKey` for their prose). `subagents`: what the conversation holds of each agent's own steps.
+ */
+export function deckUnits(turns: readonly Turn[], eager: number, subagents?: Record<string, SubagentState>): SearchUnit[] {
   const out: SearchUnit[] = []
   turns.forEach((turn, i) => {
-    const far = i < turns.length - eager
-    for (const item of turn.items) {
-      if (!isKnownItem(item)) continue
-      if (item.type === 'user') {
-        if (item.source !== 'command_output') add(out, userUnitId(item.id), userText(item))
-      } else if (item.type === 'agent_text') {
-        const md = (item as AgentTextItem).markdown
-        add(out, agentUnitId(item.id), proseText(md), far ? [fullTurnKey(turn.id)] : [])
-      } else if (item.type === 'step') {
-        const subject = stepSubject(item)
-        if (subject !== null) add(out, stepUnitId(item.id), subject)
-      }
-    }
+    const far = i < turns.length - eager ? [fullTurnKey(turn.id)] : []
+    for (const item of turn.items) itemUnits(out, item, [], far, subagents)
   })
   return out
 }

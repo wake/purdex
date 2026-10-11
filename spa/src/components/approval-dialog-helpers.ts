@@ -25,3 +25,7 @@ export const teamNameOk = (name: string) => new TextEncoder().encode(name).lengt
 export const fieldClass = 'rounded-md border border-border-default bg-surface-input px-2 py-1 text-xs text-text-primary disabled:opacity-50'
 // `aria-disabled` dims like RestartDaemonButton's counting state: the button still takes the click (it queues).
 export const buttonBase = 'px-3 py-1 rounded-md text-xs cursor-pointer disabled:opacity-50 disabled:cursor-default aria-disabled:opacity-50 flex items-center gap-1.5'
+
+/** After the approval dialog shows, a keyboard-triggered click (`detail === 0`) is ignored for `ms`. jsdom's
+ *  `fireEvent.click` has `detail` 0 too, so test-setup.ts turns this off and the guard's own tests turn it back on. */
+export const keyboardGuard = { ms: 500 }

@@ -1,6 +1,8 @@
 // spa/src/lib/team/approval-decide.goto.test.ts — only this window's own successful decide goes back to the requester
-// (lead-team spec §2 "How this spec reads U22" (a) (c), §15; plan v3 P9b-1 behaviour rule 1): `submitDecision`'s 200
-// calls `gotoRequester` once, with the closed approval, for both dialog kinds and both answers; a 409, 404,
+// (lead-team spec §2 "How this spec reads U22" (a) (c), §15; plan v3 P9b-1 behaviour rule 1), and only when the person
+// asked for it (「核准並檢視」, `reveal: true`): `submitDecision`'s 200 calls `gotoRequester` once, with the closed
+// approval, for an approve with `reveal`; a plain approve, a deny, and a decision resent from the reconnect queue never
+// move the tabs. A 409, 404,
 // host_removed or a network failure (queued or not) never does; and a navigation that throws never turns a decision
 // that was sent into a failure. The daemon call and the navigation are mocked; the store is real.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -60,15 +62,10 @@ beforeEach(() => {
 afterEach(() => useHostStore.getState().reset())
 
 describe('submitDecision → gotoRequester (U22 (a))', () => {
-  it.each<[DialogKind, Decision]>([
-    ['lead', 'approve'],
-    ['lead', 'deny'],
-    ['self_relay', 'approve'],
-    ['self_relay', 'deny'],
-  ])('approve 200 and deny 200 each switch once, with the closed approval (%s, %s)', async (kind, decision) => {
+  it.each<DialogKind>(['lead', 'self_relay'])('approve with reveal switches once, with the closed approval (%s)', async (kind) => {
     const a = approval(kind)
     useApprovalStore.getState().applyOpened(H, a)
-    const closed = approval(kind, { state: decision === 'approve' ? 'approved' : 'denied', decided_by: { kind: 'app', label: 'Purdex.app' }, decided_at: 5 })
+    const closed = approval(kind, { state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app' }, decided_at: 5 })
     mockedDecide.mockResolvedValueOnce(closed)
     // The switch runs after the request left the store, so the next dialog is already up in front of it (rule 3).
     let entriesAtSwitch: unknown = 'not called'
@@ -77,11 +74,29 @@ describe('submitDecision → gotoRequester (U22 (a))', () => {
       return 'activated'
     })
 
-    await expect(submitDecision(H, a, decision)).resolves.toBe('closed')
+    await expect(submitDecision(H, a, 'approve', undefined, { reveal: true })).resolves.toBe('closed')
 
     expect(mockedGoto).toHaveBeenCalledTimes(1)
     expect(mockedGoto).toHaveBeenCalledWith(H, closed)
     expect(entriesAtSwitch).toEqual({})
+  })
+
+  it.each<[DialogKind, Decision, { reveal?: boolean; fromQueue?: boolean }]>([
+    ['lead', 'approve', {}],
+    ['self_relay', 'approve', {}],
+    ['lead', 'deny', {}],
+    ['self_relay', 'deny', {}],
+    ['lead', 'deny', { reveal: true }],
+    ['lead', 'approve', { fromQueue: true }],
+    ['lead', 'approve', { fromQueue: true, reveal: true }],
+  ])('%s %s with %j switches nothing', async (kind, decision, opts) => {
+    const a = approval(kind)
+    useApprovalStore.getState().applyOpened(H, a)
+    mockedDecide.mockResolvedValueOnce(approval(kind, { state: decision === 'approve' ? 'approved' : 'denied', decided_at: 5 }))
+
+    await expect(submitDecision(H, a, decision, undefined, opts)).resolves.toBe('closed')
+
+    expect(mockedGoto).not.toHaveBeenCalled()
   })
 
   it.each<[string, () => void, ApprovalApiError, string]>([
@@ -98,7 +113,7 @@ describe('submitDecision → gotoRequester (U22 (a))', () => {
     useApprovalStore.getState().applyOpened(H, a)
     mockedDecide.mockRejectedValueOnce(err)
 
-    await expect(submitDecision(H, a, 'approve')).resolves.toBe(outcome)
+    await expect(submitDecision(H, a, 'approve', undefined, { reveal: true })).resolves.toBe(outcome)
 
     expect(mockedGoto).not.toHaveBeenCalled()
   })
@@ -111,7 +126,7 @@ describe('submitDecision → gotoRequester (U22 (a))', () => {
       mockedDecide.mockResolvedValueOnce(approval('lead', { state: 'approved' }))
       mockedGoto.mockImplementationOnce(() => { throw new Error('tab store exploded') })
 
-      await expect(submitDecision(H, a, 'approve')).resolves.toBe('closed')
+      await expect(submitDecision(H, a, 'approve', undefined, { reveal: true })).resolves.toBe('closed')
 
       expect(mockedGoto).toHaveBeenCalledTimes(1)
       expect(useApprovalStore.getState().entries).toEqual({})

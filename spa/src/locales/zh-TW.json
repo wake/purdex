@@ -505,6 +505,10 @@
   "settings.electron.max_bg.label": "背景分頁上限",
   "settings.electron.max_bg.desc": "最多保留幾個背景瀏覽器分頁",
   "settings.electron.max_bg.aria": "背景分頁上限",
+  "settings.electron.away.label": "離開電腦幾分鐘後推到手機",
+  "settings.electron.away.desc": "在電腦前（這台 Mac 有鍵盤或滑鼠動作、沒鎖螢幕）時不推到手機；鎖螢幕 1 分鐘後也會推。",
+  "settings.electron.away.aria": "離開電腦幾分鐘後推到手機",
+  "settings.electron.away.option": "{{n}} 分鐘",
 
   "settings.section.dev_environment": "開發環境",
   "settings.dev.title": "開發環境",
@@ -2125,6 +2129,7 @@
   "approval.dialog.queued": "已記下「{{decision}}」，恢復連線後送出",
   "approval.dialog.more_pending": "還有 {{count}} 個申請排隊中",
   "approval.dialog.approve": "核准",
+  "approval.dialog.approve_and_view": "核准並檢視",
   "approval.dialog.deny": "拒絕",
   "approval.toast.ended_while_away": "{{host}}：{{session}} 的 {{kind}}已在離線期間結束，你的決定未送出",
   "approval.notify.title": "{{host}}：{{session}} 申請成為 lead",

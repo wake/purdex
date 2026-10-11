@@ -505,6 +505,10 @@
   "settings.electron.max_bg.label": "Max Background Views",
   "settings.electron.max_bg.desc": "Maximum browser views kept alive in background",
   "settings.electron.max_bg.aria": "Max background views",
+  "settings.electron.away.label": "Minutes away before pushing to your phone",
+  "settings.electron.away.desc": "No push to your phone while you are at this Mac (keyboard or mouse activity, screen not locked). A locked screen also pushes after 1 minute.",
+  "settings.electron.away.aria": "Minutes away before pushing",
+  "settings.electron.away.option": "{{n}} min",
 
   "settings.section.dev_environment": "Development",
   "settings.dev.title": "Development Environment",
@@ -2125,6 +2129,7 @@
   "approval.dialog.queued": "“{{decision}}” noted; it is sent once the connection is back",
   "approval.dialog.more_pending": "{{count}} more request(s) waiting",
   "approval.dialog.approve": "Approve",
+  "approval.dialog.approve_and_view": "Approve & view",
   "approval.dialog.deny": "Deny",
   "approval.toast.ended_while_away": "{{host}}: the {{kind}} from {{session}} ended while this app was disconnected; your decision was not sent",
   "approval.notify.title": "{{host}}: {{session}} requests to become lead",
