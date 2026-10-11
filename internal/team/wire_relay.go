@@ -49,6 +49,8 @@ const (
 	RelayReasonDenied            = "denied"              // cancelled
 	RelayReasonTimeout           = "timeout"             // cancelled
 	RelayReasonCompacted         = "compacted"           // cancelled
+	RelayBeginReasonIdle         = "idle"                // begin's reason for an idle relay ask (the threshold ask has none)
+	RelayReasonResumed           = "resumed"             // cancelled: a prompt arrived while an idle ask was open (idle relay D6); only an idle op takes it
 	RelayReasonAbandoned         = "abandoned"           // cancelled
 	RelayReasonModReloaded       = "mod_reloaded"        // failed: the mod reloaded (pdx setup) while the write was under way (#2441)
 )
@@ -106,6 +108,9 @@ type SelfRelayPayload struct {
 	Effort         string  `json:"effort,omitempty"`
 	// Manual: a person typed /relay (MR-1, U-M1). It is the row's, never a caller's: every later gate reads it from here.
 	Manual bool `json:"manual,omitempty"`
+	// Reason / IdleMinutes: the ask is an idle relay (idle relay spec §2). The row's, copied from begin.
+	Reason      string `json:"reason,omitempty"`
+	IdleMinutes int    `json:"idle_minutes,omitempty"`
 }
 
 // RelayHelloRequest is POST /api/relay/hello.
@@ -122,6 +127,10 @@ type RelayHelloResponse struct {
 	SelfRelay string `json:"self_relay"` // "on" | "off" | "paused"
 	Threshold int    `json:"threshold"`  // RelayThresholdPct
 	MinGrowth int    `json:"min_growth"` // RelayMinGrowth
+	// IdleMinutes / IdleThreshold are the idle relay's numbers (RelayIdleMinutes, RelayIdleThresholdPct). Absent or 0
+	// from a daemon older than the feature: the mod then keeps it off whatever its env says (idle relay spec D9).
+	IdleMinutes   int `json:"idle_minutes,omitempty"`
+	IdleThreshold int `json:"idle_threshold,omitempty"`
 	// ActiveRelay is the relay the session was in the middle of when its mod (re)loaded (#2441): its open op in
 	// claimed / writing / written, and the lead of a member op. A mod that holds no state of its own for that op
 	// picks it up (written: /clear and seed; claimed / writing: failed, mod_reloaded). Absent for every other
@@ -148,6 +157,9 @@ type RelayBeginRequest struct {
 	// Manual says the begin is a person's /relay (member relay MR-1, U-M1): a member's refusals are lifted for it. It
 	// grants nothing by itself: the request still opens a card a person must approve.
 	Manual bool `json:"manual,omitempty"`
+	// Reason is "" (the threshold ask) or RelayBeginReasonIdle; IdleMinutes is 1–59 iff the reason is idle, else 0.
+	Reason      string `json:"reason,omitempty"`
+	IdleMinutes int    `json:"idle_minutes,omitempty"`
 }
 
 // RelayBeginResponse is begin's 201 body.
