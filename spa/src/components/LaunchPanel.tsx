@@ -90,75 +90,77 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
   const shownError = failure ? errorText(failure) : ''
 
   return (
-    <div data-testid="launch-panel" className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm text-text-secondary">
-      <p className="text-text-primary">{t('launch.title')}</p>
-      <label className="flex items-center gap-2 opacity-70">
-        <input data-testid="launch-in-tmux" type="checkbox" checked disabled readOnly />
-        <span>{t('launch.in_tmux')}</span>
-      </label>
-      {plan.dir && (
-        <label data-testid="launch-cd-row" className="flex max-w-full items-center gap-2">
-          <input
-            data-testid="launch-cd"
-            type="checkbox"
-            checked={withCd}
-            disabled={!move || sending}
-            onChange={(e) => setCd(e.target.checked)}
-          />
-          <span data-testid="launch-dir" className="min-w-0 truncate">
-            {move ? t('launch.cd') : t('launch.here')}
-            <span className="ml-2 font-mono text-xs text-text-muted">{plan.dir.path}</span>
-            {branch && <span className="ml-1 text-xs text-text-muted">({branch})</span>}
-          </span>
+    <div data-testid="launch-panel" className="flex h-full items-center justify-center p-6 text-sm text-text-secondary">
+      <div data-testid="launch-block" className="flex max-w-full flex-col items-start gap-3 text-left">
+        <p className="text-text-primary">{t('launch.title')}</p>
+        <label className="flex items-center gap-2 opacity-70">
+          <input data-testid="launch-in-tmux" type="checkbox" checked disabled readOnly />
+          <span>{t('launch.in_tmux')}</span>
         </label>
-      )}
-      <div className="flex gap-2">
-        <button
-          type="button"
-          data-testid="launch-resume"
-          title={previewLine(resumeLine, plan.dir, withCd)}
-          disabled={resumeLine === null || busy || sending || noGeneration}
-          onClick={() => void launch('resume')}
-          className={btn}
-        >
-          {t('launch.resume')}
-        </button>
-        <button
-          type="button"
-          data-testid="launch-fresh"
-          title={previewLine(freshLine, plan.dir, withCd)}
-          disabled={freshLine === null || busy || sending || noGeneration}
-          onClick={() => void launch('fresh')}
-          className={btn}
-        >
-          {t('launch.fresh')}
-        </button>
-      </div>
-      {resumeReason && !busy && (
-        <p data-testid="launch-resume-hint" className="text-xs text-text-muted">{t(`launch.resume.${resumeReason}`)}</p>
-      )}
-      {noGeneration && (
-        <p data-testid="launch-no-generation" className="text-xs text-text-muted">{t('launch.no_generation')}</p>
-      )}
-      {plan.busy && (
-        <p data-testid="launch-busy" className="text-xs text-text-primary">{t('launch.busy', { command: plan.busy.command })}</p>
-      )}
-      {shownError && (
-        <p data-testid="launch-error" data-code={failure?.code} role="alert" className="text-xs text-red-400">{shownError}</p>
-      )}
-      <div className="flex items-center gap-3">
-        {onSwitchToTerminal && (
+        {plan.dir && (
+          <label data-testid="launch-cd-row" className="flex max-w-full items-center gap-2">
+            <input
+              data-testid="launch-cd"
+              type="checkbox"
+              checked={withCd}
+              disabled={!move || sending}
+              onChange={(e) => setCd(e.target.checked)}
+            />
+            <span data-testid="launch-dir" className="min-w-0 truncate">
+              {move ? t('launch.cd') : t('launch.here')}
+              <span className="ml-2 font-mono text-xs text-text-muted">{plan.dir.path}</span>
+              {branch && <span className="ml-1 text-xs text-text-muted">({branch})</span>}
+            </span>
+          </label>
+        )}
+        <div className="flex gap-2">
           <button
             type="button"
-            data-testid="launch-to-terminal"
-            data-emphasis={busy ? 'true' : 'false'}
-            onClick={onSwitchToTerminal}
-            className={`${btn} ${busy ? 'border-text-primary font-semibold text-text-primary' : ''}`}
+            data-testid="launch-resume"
+            title={previewLine(resumeLine, plan.dir, withCd)}
+            disabled={resumeLine === null || busy || sending || noGeneration}
+            onClick={() => void launch('resume')}
+            className={btn}
           >
-            {t('launch.to_terminal')}
+            {t('launch.resume')}
           </button>
+          <button
+            type="button"
+            data-testid="launch-fresh"
+            title={previewLine(freshLine, plan.dir, withCd)}
+            disabled={freshLine === null || busy || sending || noGeneration}
+            onClick={() => void launch('fresh')}
+            className={btn}
+          >
+            {t('launch.fresh')}
+          </button>
+        </div>
+        {resumeReason && !busy && (
+          <p data-testid="launch-resume-hint" className="text-xs text-text-muted">{t(`launch.resume.${resumeReason}`)}</p>
         )}
-        <button type="button" data-testid="launch-refresh" onClick={onRefresh} className={btn}>{t('launch.refresh')}</button>
+        {noGeneration && (
+          <p data-testid="launch-no-generation" className="text-xs text-text-muted">{t('launch.no_generation')}</p>
+        )}
+        {plan.busy && (
+          <p data-testid="launch-busy" className="text-xs text-text-primary">{t('launch.busy', { command: plan.busy.command })}</p>
+        )}
+        {shownError && (
+          <p data-testid="launch-error" data-code={failure?.code} role="alert" className="text-xs text-red-400">{shownError}</p>
+        )}
+        <div className="flex items-center gap-3">
+          {onSwitchToTerminal && (
+            <button
+              type="button"
+              data-testid="launch-to-terminal"
+              data-emphasis={busy ? 'true' : 'false'}
+              onClick={onSwitchToTerminal}
+              className={`${btn} ${busy ? 'border-text-primary font-semibold text-text-primary' : ''}`}
+            >
+              {t('launch.to_terminal')}
+            </button>
+          )}
+          <button type="button" data-testid="launch-refresh" onClick={onRefresh} className={btn}>{t('launch.refresh')}</button>
+        </div>
       </div>
     </div>
   )
