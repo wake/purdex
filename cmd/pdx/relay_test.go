@@ -94,7 +94,7 @@ func (f *fakeRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ap.ID = id
 		_ = json.NewEncoder(w).Encode(ap)
 	case r.URL.Path == "/api/relay/compacted":
-		_ = json.NewEncoder(w).Encode(team.RelayCompactedResponse{Noticed: strings.Contains(b.String(), `"auto"`)})
+		_ = json.NewEncoder(w).Encode(team.RelayCompactedResponse{Noticed: strings.Contains(b.String(), `"auto"`) || strings.Contains(b.String(), `"idle"`)})
 	case r.URL.Path == "/api/relay/self":
 		_ = json.NewEncoder(w).Encode(team.RelaySelfResponse{SelfRelay: "paused", HostSwitch: true})
 	case strings.HasSuffix(r.URL.Path, "/report"):
