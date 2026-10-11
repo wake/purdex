@@ -110,10 +110,10 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // serves `session.launch.v1`, where the daemon's plan says no agent is running. Other reasons keep today's views.
   const launchServed = useNexHostStore(hostId ? selectSessionLaunchV1(hostId) : absent)
   const sessionKey = useSessionStore((s) => {
-    const x = s.sessions[hostId]?.find((c) => c.code === sessionCode)
+    const x = (Object.hasOwn(s.sessions, hostId) ? s.sessions[hostId] : undefined)?.find((c) => c.code === sessionCode)
     return x ? [x.tmux_instance, x.cwd, x.current_command, x.branch].join('\0') : ''
   })
-  const sessionBranch = useSessionStore((s) => s.sessions[hostId]?.find((c) => c.code === sessionCode)?.branch)
+  const sessionBranch = useSessionStore((s) => (Object.hasOwn(s.sessions, hostId) ? s.sessions[hostId] : undefined)?.find((c) => c.code === sessionCode)?.branch)
   const panelCandidate = content.kind === 'tmux-session' && !terminated && hostKnown
     && (view === 'deck' || view === 'chat')
     && conversation.state === 'off' && (gate.reason === 'not_agent' || gate.reason === 'no_conversations')
