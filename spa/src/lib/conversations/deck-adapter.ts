@@ -6,7 +6,7 @@
 // An adapter is BOUND to the input's key (`draftKey(pane, host, session)`, the key every memory of the input already uses) by whoever mounts
 // the pane; the input, the send queue and the draft memory look it up by that key, and an unbound key is a terminal session. The registry is
 // module state like the memories it sits beside (the tab-hosted rule: the input unmounts on a tab switch) and is freed with them (pane-release).
-import type { SendPort } from './send'
+import type { RecallOutcome, SendPort } from './send'
 import type { Capabilities } from './types'
 
 /** Saves `file` where the agent can read it; the path goes into the draft. `onProgress` may never be called (a back-end with no progress). */
@@ -30,6 +30,8 @@ export interface DeckAdapter {
   canSend(capabilities: Capabilities | undefined): boolean
   /** The App holds a sent message for a moment (an undo window): Up in an empty box and a message's Undo bring it back. False: no recall is offered. */
   recall: boolean
+  /** Takes back what Claude Code queued from this conversation (K-2b: terminal only; a worker's App-held messages come back through `recallHeld`). */
+  takeBack?: () => Promise<RecallOutcome>
   /** The send queue's port: submit (with its client_msg_id) and interrupt. Called when the queue is made. */
   port(): SendPort
   /** Null: this back-end takes no attachments (no paperclip, a drop or a paste of files does nothing). */

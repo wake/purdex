@@ -33,6 +33,7 @@ import { forgetClearedWhere } from './draft-clear'
 import { forgetDraftsWhere, draftKey } from './draft-memory'
 import { forgetDeckPane, forgetFoldsOfPane } from './fold-memory'
 import { chatScrollKey, conversationBinding, forgetPanel } from './panel-memory'
+import { forgetTakeBackWhere } from './take-back'
 import { releaseSendQueues, retireSendQueues } from './send-queue'
 
 /** Everything the pane keeps in memory, for good. */
@@ -40,6 +41,7 @@ export function releasePane(paneId: string): void {
   const mine = (key: string) => key.startsWith(`${paneId}|`)
   releaseSendQueues(mine)
   forgetAdaptersWhere(mine)
+  forgetTakeBackWhere(mine)
   forgetDraftsWhere(mine)
   forgetAttachmentsWhere(mine)
   forgetUploadsWhere(mine)
@@ -61,6 +63,7 @@ export function retireStaleSessions(paneId: string, hostId: string, sessionId: s
   const now = draftKey(paneId, hostId, sessionId)
   retireSendQueues((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetAdaptersWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
+  forgetTakeBackWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetDraftsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetAttachmentsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetUploadsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)

@@ -27,12 +27,19 @@ export function recallHeld(key: string, queue: SendQueue, id?: string): boolean 
   const taken = id === undefined ? queue.takeAllHeld() : [queue.takeBack(id)].filter((x) => x !== undefined)
   if (taken.length === 0) return false
   for (const x of taken) for (const a of x.held?.chips ?? []) addAttachment(key, { ...a, hiddenSince: undefined })
-  const back = taken.map((x) => x.held?.draft ?? x.text).join('\n')
+  prependToDraft(key, taken.map((x) => x.held?.draft ?? x.text).join('\n'))
+  return true
+}
+
+/**
+ * Puts `text` in front of what is typed in the box of `key` (`text + '\n' + draft`, or `text` for an empty box) and tells the input to read the
+ * memories again. It needs no mounted input: a result that lands while the tab is switched away stays in the draft memory and shows on return.
+ */
+export function prependToDraft(key: string, text: string): void {
   const current = readDraft(key) ?? ''
-  const next = current ? `${back}\n${current}` : back
+  const next = current ? `${text}\n${current}` : text
   writeDraft(key, next)
   reconcileAttachments(key, next) // a chip whose marker is not in the text hides
   discardCleared(key) // typing something new ends the Esc undo window
   for (const l of [...(listeners.get(key) ?? [])]) l()
-  return true
 }

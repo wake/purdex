@@ -17,7 +17,8 @@ import { uploadFailureText } from '../../lib/upload-failure'
 import { DestructiveGuard, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
 import { sendQueueFor } from '../../lib/conversations/send-queue'
-import { recallHeld, subscribeRecall } from '../../lib/conversations/draft-recall'
+import { subscribeRecall } from '../../lib/conversations/draft-recall'
+import { canTakeBack, canTakeBackAll, takeBackAll, takeBackHeld, takeBackQueued, useTakeBackState } from '../../lib/conversations/take-back'
 import type { Capabilities } from '../../lib/conversations/types'
 import { useFsImage } from '../../lib/conversations/fs-image'
 import { AttachmentThumb } from './AttachmentThumb'
@@ -189,13 +190,14 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     setHint(null)
     box.current?.focus()
   }), [dKey])
-  const undo = (id: string) => { recallHeld(dKey, queue, id) }
+  const undo = (id: string) => { takeBackHeld(dKey, queue, id) }
+  const tb = useTakeBackState(dKey)
   const interrupt = async () => setHint(outcomeMessage(await queue.interrupt()))
 
   const hintText = hint ? t(hint.key, hint.params) : ''
   return (
     <div data-testid="session-input">
-      {!pendingInStream && <QueuedMessages entries={entries} onUndo={undo} onResend={(id) => { queue.resend(id) }} onDismiss={(id) => queue.dismiss(id)} />}
+      {!pendingInStream && <QueuedMessages entries={entries} onUndo={undo} onTakeBack={canTakeBack(dKey) ? () => { void takeBackQueued(dKey, queue) } : undefined} busy={tb.busy} onResend={(id) => { queue.resend(id) }} onDismiss={(id) => queue.dismiss(id)} />}
       {noMod ? (
         <div data-testid="session-input-disabled" className="flex items-center gap-2 border-t border-border-subtle px-3 py-2 deck-t-up text-text-muted">
           <span>{t('deck.send.no_mod')}</span>
@@ -265,9 +267,9 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && hasCleared(dKey)) { e.preventDefault(); restoreCleared() }
                 // Up in an empty box (nothing typed, no chip, no upload on its way) calls back every message the App still holds, as the terminal does;
                 // anywhere else Up is the caret's
-                if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && adapter.recall && draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) && queue.heldCount() > 0) { // (a draft Esc just cleared is not overwritten: its undo window is the box's)
+                if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && adapter.recall && draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) && canTakeBackAll(dKey, queue)) { // (a draft Esc just cleared is not overwritten: its undo window is the box's)
                   e.preventDefault()
-                  recallHeld(dKey, queue)
+                  void takeBackAll(dKey, queue)
                 }
               }}
               style={{ overflowWrap: 'anywhere' }}
