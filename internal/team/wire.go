@@ -162,7 +162,7 @@ type APIError struct {
 // InflightResponse is GET /api/team/inflight (spec §9.5): what a restart of
 // this daemon would interrupt. Neither field is omitempty — the restart
 // confirm reads a zero too. RelaysActive counts relay ops not yet
-// done/failed/cancelled (P5a).
+// done/failed/cancelled (P5a), except those that are settling (see InflightRelay).
 type InflightResponse struct {
 	ApprovalsOpen int `json:"approvals_open"`
 	RelaysActive  int `json:"relays_active"`
@@ -176,6 +176,9 @@ type InflightRelay struct {
 	Kind  RelayKind  `json:"kind"`
 	State RelayState `json:"state"`
 	Ref   string     `json:"ref"`
+	// Settling: the op has cleared into a session that is live, so the relay itself succeeded and only the seed turn's `done`
+	// (or the 15 minute reaper) is left. It is listed but not counted in RelaysActive: a restart does not strand it.
+	Settling bool `json:"settling,omitempty"`
 }
 
 // EventValue is HostEvent.Value (JSON string) for EventType.

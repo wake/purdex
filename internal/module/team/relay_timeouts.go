@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
@@ -264,17 +265,42 @@ func (m *Module) failOnTimeout(op team.RelayOp, reason string) {
 // newSessionPresence is the presence of a cleared op's new session: Live when a verified frame on the op's pane (or the registry)
 // shows it, Gone when the registry was read and does not, Unknown when it could not be told (SessionPresence).
 func (m *Module) newSessionPresence(op team.RelayOp) peersmod.Presence {
+	return m.newSessionPresenceFrom(op, m.liveFramesOnce(context.Background()))
+}
+
+// liveFramesOnce reads the live cc frames at the first call and answers every later question from an index of that one read (a
+// verified frame's pane + session), so a caller judging several ops scans the frames once, not once per op. A failed read is
+// not retried: the registry then decides for all of them.
+func (m *Module) liveFramesOnce(ctx context.Context) func(pane, sessionID string) bool {
+	var (
+		once sync.Once
+		live map[[2]string]bool
+	)
+	return func(pane, sessionID string) bool {
+		once.Do(func() {
+			if m.frames == nil {
+				return
+			}
+			if frames, err := m.frames.LiveSessions(ctx, "cc"); err == nil {
+				live = make(map[[2]string]bool, len(frames))
+				for _, f := range frames {
+					if f.Verified {
+						live[[2]string{f.PaneID, f.SessionID}] = true
+					}
+				}
+			}
+		})
+		return live[[2]string{pane, sessionID}]
+	}
+}
+
+// newSessionPresenceFrom is newSessionPresence over the frame index liveFrame answers from (asked only for an op with a pane).
+func (m *Module) newSessionPresenceFrom(op team.RelayOp, liveFrame func(pane, sessionID string) bool) peersmod.Presence {
 	if op.NewSessionID == "" {
 		return peersmod.PresenceGone
 	}
-	if _, pane, _ := m.opBinding(op); pane != "" && m.frames != nil {
-		if frames, err := m.frames.LiveSessions(context.Background(), "cc"); err == nil {
-			for _, f := range frames {
-				if f.PaneID == pane && f.Verified && f.SessionID == op.NewSessionID {
-					return peersmod.PresenceLive
-				}
-			}
-		}
+	if _, pane, _ := m.opBinding(op); pane != "" && liveFrame(pane, op.NewSessionID) {
+		return peersmod.PresenceLive
 	}
 	return m.origins.SessionPresence(op.NewSessionID)
 }

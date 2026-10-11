@@ -195,6 +195,27 @@ func TestSetupRelayGuard(t *testing.T) {
 			t.Errorf("empty message")
 		}
 	})
+	t.Run("a settling relay (cleared into a live session) neither refuses nor is listed", func(t *testing.T) {
+		mixed := `{"approvals_open":0,"relays_active":1,"relays":[{"id":"op-s","kind":"member","state":"cleared","ref":"_settl1","settling":true},{"id":"op-1","kind":"self","state":"written","ref":"_abc123"}]}`
+		srv := serve(200, mixed)
+		defer srv.Close()
+		var stderr bytes.Buffer
+		if code := setupRelayGuard(srv.Client(), srv.URL, "", false, &stderr); code != ExitRefused {
+			t.Fatalf("code = %d, want %d", code, ExitRefused)
+		}
+		if out := stderr.String(); !strings.Contains(out, "op-1") || strings.Contains(out, "op-s") || !strings.Contains(out, "1 relay(s)") {
+			t.Errorf("message = %q, want op-1 only, counted as 1", out)
+		}
+		only := serve(200, `{"approvals_open":0,"relays_active":0,"relays":[{"id":"op-s","kind":"member","state":"cleared","ref":"_settl1","settling":true}]}`)
+		defer only.Close()
+		var note bytes.Buffer
+		if code := setupRelayGuard(only.Client(), only.URL, "", false, &note); code != ExitOK {
+			t.Fatalf("only a settling relay: code = %d, want ok", code)
+		}
+		if !strings.Contains(note.String(), "1 relay(s)") || !strings.Contains(note.String(), "settling") || !strings.Contains(note.String(), "15 minutes") {
+			t.Errorf("a settling relay goes ahead with a note, got %q", note.String())
+		}
+	})
 	t.Run("--force goes ahead", func(t *testing.T) {
 		srv := serve(200, active)
 		defer srv.Close()
