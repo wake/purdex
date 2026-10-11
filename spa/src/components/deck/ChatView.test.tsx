@@ -278,7 +278,7 @@ describe('the user on the right, the agent on the left (spec §5)', () => {
     const wrap = screen.getByTestId('chat-user')
     const time = within(wrap).getByTestId('chat-user-time')
     expect(time).toHaveTextContent('01:56')
-    expect(time).toHaveClass('text-xs')
+    expect(time).toHaveClass('deck-t-down')
     expect(wrap.children[0]).toBe(within(wrap).getByTestId('chat-user-bubble'))
     expect(wrap.children[1]).toBe(time)
   })

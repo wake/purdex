@@ -19,7 +19,7 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss }: Props) 
   const [confirming, setConfirming] = useState<string | null>(null)
   const shown = entries.filter((e) => e.state !== 'superseded')
   if (shown.length === 0) return null
-  const btn = 'rounded px-1.5 text-xs text-accent hover:underline'
+  const btn = 'rounded px-1.5 deck-t-down text-accent hover:underline'
   return (
     <div data-testid="queued-messages" className="flex flex-col gap-1 px-3 pb-1">
       {shown.map((e) => {
@@ -28,8 +28,8 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss }: Props) 
         const caption = asking ? t('deck.send.resend_confirm') : e.state === 'waiting' ? t('deck.send.waiting') : m ? t(m.key, m.params) : t('deck.user.queued')
         return (
           <div key={e.id} data-testid="queued-message" data-state={e.state} className="rounded-lg border border-border-subtle bg-surface-secondary px-3 py-1.5">
-            <div className={`text-xs ${m?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{caption}</div>
-            <div className="whitespace-pre-wrap break-words text-sm text-text-primary">{e.text}</div>
+            <div className={`deck-t-down ${m?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{caption}</div>
+            <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
             <div className="flex gap-1">
               {(e.state === 'undo' || e.state === 'waiting') && <button type="button" className={btn} onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>}
               {e.state === 'failed' && <button type="button" className={btn} onClick={() => onResend(e.id)}>{t('deck.send.retry')}</button>}

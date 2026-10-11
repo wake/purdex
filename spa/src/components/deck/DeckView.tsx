@@ -7,6 +7,7 @@ import { FoldContext } from '../room/fold-context'
 import { ConversationHostContext } from './conversation-host'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import { useOlderTurns } from '../../hooks/useOlderTurns'
+import { useKeepPlaceOnTypeChange } from '../../hooks/useKeepPlaceOnTypeChange'
 import { noteDeckPane, usePaneFoldStore } from '../../lib/conversations/fold-memory'
 import { isRevealed, markRevealed } from '../../lib/conversations/deck-reveal-memory'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
@@ -103,6 +104,8 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   const firstTurn = doc.turns[0]?.index ?? null
   const load = useCallback(() => { void useConversationStore.getState().loadBefore(hostId, sessionId) }, [hostId, sessionId])
   const older = useOlderTurns({ box: boxEl, hasMore: doc.hasMoreBefore, paging: entry.paging, firstTurn, generation: doc.generation, placed: scroll.placed, load, shiftBy: scroll.shiftBy })
+
+  useKeepPlaceOnTypeChange(boxEl, scroll.shiftBy)
 
   const onScroll = (e: UIEvent<HTMLDivElement>) => {
     onBoxScroll(e)

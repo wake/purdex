@@ -19,13 +19,13 @@ export function UserBubble({ item }: { item: UserItem }) {
   if (NOT_THE_PERSON.has(item.source)) return <UserBlock item={item} />
   return (
     <div data-testid="chat-user" data-source={item.source} className="flex flex-col items-end">
-      <div data-testid="chat-user-bubble" className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-3 py-2 text-sm text-white">
+      <div data-testid="chat-user-bubble" className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-3 py-2 deck-t-up text-white">
         {OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}{item.truncated && '…'}
       </div>
-      <div data-testid="chat-user-time" className="mt-0.5 text-xs text-text-muted">
+      <div data-testid="chat-user-time" className="mt-0.5 deck-t-down text-text-muted">
         {item.source === 'queued' ? t('deck.user.queued') : formatClock(item.at)}
       </div>
-      {item.images && item.images.length > 0 && <div className="mt-0.5 text-xs text-text-muted">{t('deck.user.images', { n: item.images.length })}</div>}
+      {item.images && item.images.length > 0 && <div className="mt-0.5 deck-t-down text-text-muted">{t('deck.user.images', { n: item.images.length })}</div>}
     </div>
   )
 }
