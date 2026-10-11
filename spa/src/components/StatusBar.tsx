@@ -25,7 +25,8 @@ type T = (key: string, params?: Record<string, string | number>) => string
 
 /** The peer id's tooltip: every §6 state says here why it reads as it does. */
 function peerIdTitle(peer: PeerInfo, t: T): string {
-  if (!peer.connected) return t('peer.host_not_connected')
+  // An error keeps its old precedence: not connected wins over it. Only a cached row gets the richer form below.
+  if (!peer.connected && peer.error) return t('peer.host_not_connected')
   if (peer.error) return t('peer.error', { error: peer.error })
   const { row } = peer
   // Not `row.title === ''`, which is what this guard used to read. A title is
@@ -34,6 +35,7 @@ function peerIdTitle(peer: PeerInfo, t: T): string {
   // absent when it has neither a ref nor an address — nothing to say and
   // nothing to copy.
   if (!row || (row.ref === '' && row.address === '')) {
+    if (!peer.connected) return t('peer.host_not_connected')
     // No row from a partial answer is "undetermined", never "no peer": the row
     // may simply not have been resolved inside the daemon's 2 s budget.
     return peer.envelope.partial ? t('peer.undetermined') : t('peer.none')
@@ -43,6 +45,7 @@ function peerIdTitle(peer: PeerInfo, t: T): string {
   // what a click copies (address and ref) plus the title, which the clipboard does not carry.
   const copyValue = peerIdText(row).value || row.address
   const parts = [row.title ? `${copyValue} · ${row.title}` : copyValue]
+  if (!peer.connected) parts.push(t('peer.host_not_connected'))
   if (row.reason) parts.push(reasonText(row.reason, t))
   if (peer.envelope.titlesUnavailable) parts.push(t('peer.titles_unavailable_note'))
   if (peer.stale) parts.push(t('peer.stale', { seconds: Math.round((Date.now() - peer.fetchedAt) / 1000) }))

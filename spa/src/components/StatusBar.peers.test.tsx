@@ -302,6 +302,32 @@ describe('StatusBar peer segments', () => {
     expect(screen.getByTestId('status-seg-peer-id')).toHaveAttribute('data-dim', 'true')
   })
 
+  it('a disconnected host keeps the cached address, ref and title in the tooltip', async () => {
+    seedPeers({}, { ...PEER_ROW, title: 'Purdex Tester 01', titleSource: 'user' })
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
+    render(<StatusBar activeTab={sessionTab()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg.textContent).toContain('purdex-b0 [q34psn]')
+    expect(seg).toHaveAttribute('data-dim', 'true')
+    expect(seg.getAttribute('title')).toBe('mlab/purdex-b0 [q34psn] · Purdex Tester 01 — host not connected')
+    fireEvent.click(seg)
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0 [q34psn]'))
+  })
+
+  it('a disconnected host with no row says only that it is not connected', () => {
+    seedPeers({}, { ...PEER_ROW, ref: '', address: '' })
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
+    render(<StatusBar activeTab={sessionTab()} />)
+    expect(screen.getByTestId('status-seg-peer-id').getAttribute('title')).toBe('host not connected')
+  })
+
+  it('a disconnected host with an error still shows the not-connected text (unchanged)', () => {
+    seedPeers({ error: 'connection refused' })
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } })
+    render(<StatusBar activeTab={sessionTab()} />)
+    expect(screen.getByTestId('status-seg-peer-id').getAttribute('title')).toBe('host not connected')
+  })
+
   // Uncertainty is signalled beside the value, not by darkening it. Two
   // rounds of "make it dimmer" drew the same complaint from a live screenshot
   // both times: a segment darker than its neighbours reads as broken, not as
