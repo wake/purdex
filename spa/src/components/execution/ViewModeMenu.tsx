@@ -35,6 +35,8 @@ export interface ViewModeItemsProps {
   /** Present when the execution can be taken to a terminal; absent → no terminal item. */
   onTakeBack?: () => void
   takeBackBusy?: boolean
+  /** The views offered, in menu order; absent → all of them. The worker pane offers the deck and the chat only (U4-5a). */
+  views?: readonly ExecutionViewMode[]
   /** Called after any item acts, so the surrounding panel can close. */
   onDone: () => void
   /**
@@ -46,11 +48,11 @@ export interface ViewModeItemsProps {
   inMenu?: boolean
 }
 
-export function ViewModeItems({ mode, onModeChange, onTakeBack, takeBackBusy = false, onDone, inMenu = false }: ViewModeItemsProps) {
+export function ViewModeItems({ mode, views, onModeChange, onTakeBack, takeBackBusy = false, onDone, inMenu = false }: ViewModeItemsProps) {
   const t = useI18nStore((s) => s.t)
   return (
     <>
-      {VIEW_MODES.map(({ mode: m, icon: ModeIcon, labelKey }) => (
+      {VIEW_MODES.filter((v) => !views || views.includes(v.mode)).map(({ mode: m, icon: ModeIcon, labelKey }) => (
         <button key={m} type="button"
           {...(inMenu ? { role: 'menuitemradio', 'aria-checked': mode === m } : { 'aria-pressed': mode === m })}
           data-testid={`view-mode-${m}`} disabled={!onModeChange}

@@ -8,10 +8,8 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useHostStore } from '../../../stores/useHostStore'
 import { createTab } from '../../../types/tab'
 import { getPrimaryPane } from '../../pane-tree'
-import ExecutionView from '../../../components/execution/ExecutionView'
 import WorkerDeckPane from '../../../components/execution/WorkerDeckPane'
 
-vi.mock('../../../components/execution/ExecutionView', () => ({ default: vi.fn(() => null) }))
 vi.mock('../../../components/execution/WorkerDeckPane', () => ({ default: vi.fn(() => null) }))
 import {
   clearAllBuiltinModuleRegistries,
@@ -61,9 +59,9 @@ describe('registerBuiltinModules orchestrator', () => {
     expect(getRegisteredOpeners()).toEqual([])
   })
 
-  // P-C.3b task 4: the execution pane wrapper hands ExecutionView the pane's
+  // P-C.3b task 4: the execution pane wrapper hands WorkerDeckPane the pane's
   // address (tab id via reverse lookup, pane id) and its `from`.
-  it('the execution pane wrapper passes tabId (looked up from the pane id), paneId and from to ExecutionView', () => {
+  it('the execution pane wrapper passes tabId (looked up from the pane id), paneId and from to WorkerDeckPane', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
     const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
     const tab = createTab({ kind: 'execution', executionId: 'exc_1', host: 'h1', from })
@@ -74,18 +72,18 @@ describe('registerBuiltinModules orchestrator', () => {
     if (resolution.kind !== 'render') return
     const Component = resolution.component
     render(<Component pane={pane} isActive />)
-    expect(vi.mocked(ExecutionView)).toHaveBeenCalled()
-    expect(vi.mocked(ExecutionView).mock.calls[0][0]).toEqual({
+    expect(vi.mocked(WorkerDeckPane)).toHaveBeenCalled()
+    expect(vi.mocked(WorkerDeckPane).mock.calls[0][0]).toEqual({
       hostId: 'h1', executionId: 'exc_1', isActive: true, isFocusTarget: false, tabId: tab.id, paneId: pane.id, from,
-      mode: 'room', onModeChange: expect.any(Function),
+      view: 'deck', onModeChange: expect.any(Function),
     })
   })
 
   // Shell cleanup spec §8.2 (T5.4): the wrapper threads the pane's focus-target
-  // flag to ExecutionView (and on to the reply box); absent reads as false.
-  it('the execution pane wrapper passes isFocusTarget to ExecutionView', () => {
+  // flag to WorkerDeckPane (and on to the reply box); absent reads as false.
+  it('the execution pane wrapper passes isFocusTarget to WorkerDeckPane', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
-    vi.mocked(ExecutionView).mockClear()
+    vi.mocked(WorkerDeckPane).mockClear()
     const tab = createTab({ kind: 'execution', executionId: 'exc_1', host: 'h1' })
     useTabStore.getState().addTab(tab)
     const pane = getPrimaryPane(tab.layout)
@@ -93,7 +91,7 @@ describe('registerBuiltinModules orchestrator', () => {
     if (resolution.kind !== 'render') throw new Error('execution pane not registered')
     const Component = resolution.component
     render(<Component pane={pane} isActive isFocusTarget />)
-    expect(vi.mocked(ExecutionView).mock.calls.at(-1)![0]).toMatchObject({ isActive: true, isFocusTarget: true })
+    expect(vi.mocked(WorkerDeckPane).mock.calls.at(-1)![0]).toMatchObject({ isActive: true, isFocusTarget: true })
   })
 
   // R2 plan T1.1/T1.4: the view menu's choice is written to the pane content
@@ -102,7 +100,7 @@ describe('registerBuiltinModules orchestrator', () => {
     const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
     function mountWrapper() {
       useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
-      vi.mocked(ExecutionView).mockClear()
+      vi.mocked(WorkerDeckPane).mockClear()
       const tab = createTab({ kind: 'execution', executionId: 'exc_1', host: 'h1', from })
       useTabStore.getState().addTab(tab)
       const pane = getPrimaryPane(tab.layout)
@@ -112,17 +110,17 @@ describe('registerBuiltinModules orchestrator', () => {
       const current = () => getPrimaryPane(useTabStore.getState().tabs[tab.id].layout)
       const view = render(<Component pane={pane} isActive />)
       const rerender = () => view.rerender(<Component pane={current()} isActive />)
-      const lastProps = () => vi.mocked(ExecutionView).mock.calls.at(-1)![0]
+      const lastProps = () => vi.mocked(WorkerDeckPane).mock.calls.at(-1)![0]
       return { tab, pane, current, rerender, lastProps }
     }
 
     it('switching the view writes mode to the pane content', () => {
       const { current, rerender, lastProps } = mountWrapper()
-      expect(lastProps().mode).toBe('room')
+      expect(lastProps().view).toBe('deck')
       act(() => { lastProps().onModeChange('chat') })
       expect(current().content).toMatchObject({ kind: 'execution', executionId: 'exc_1', mode: 'chat' })
       rerender()
-      expect(lastProps().mode).toBe('chat')
+      expect(lastProps().view).toBe('chat')
     })
 
     it("switching keeps the pane's from", () => {
@@ -140,14 +138,14 @@ describe('registerBuiltinModules orchestrator', () => {
       useHostStore.setState({ hostOrder: ['h1'] })
       try {
         useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
-        vi.mocked(ExecutionView).mockClear()
+        vi.mocked(WorkerDeckPane).mockClear()
         const tab = createTab({ kind: 'execution', executionId: 'exc_1' })
         useTabStore.getState().addTab(tab)
         const resolution = resolvePaneRenderer('execution')
         if (resolution.kind !== 'render') throw new Error('execution pane not registered')
         const Component = resolution.component
         render(<Component pane={getPrimaryPane(tab.layout)} isActive />)
-        act(() => { vi.mocked(ExecutionView).mock.calls.at(-1)![0].onModeChange('chat') })
+        act(() => { vi.mocked(WorkerDeckPane).mock.calls.at(-1)![0].onModeChange('chat') })
         expect(getPrimaryPane(useTabStore.getState().tabs[tab.id].layout).content).toEqual({ kind: 'execution', executionId: 'exc_1', mode: 'chat' })
       } finally {
         useHostStore.setState({ hostOrder: prev })
@@ -169,49 +167,29 @@ describe('registerBuiltinModules orchestrator', () => {
       expect(current().content).toEqual({ kind: 'execution', executionId: 'exc_2', host: 'h1' })
     })
 
-    // U4-1b: the deck (指揮台) is a different component on the same worker; one worker view is mounted at a time.
-    it('mode deck renders the worker deck, not the room view, with the pane\'s address; the deck can write room back', () => {
-      const { tab, pane, current, rerender } = mountWrapper()
-      vi.mocked(WorkerDeckPane).mockClear()
-      useTabStore.getState().setPaneContent(tab.id, pane.id, { ...current().content, mode: 'deck' } as never)
-      vi.mocked(ExecutionView).mockClear()
+    // U4-5a: the worker tab is the deck or the chat — one component, so a switch between them does not resubscribe; room is retired.
+    it('an absent mode, or the retired room, draws the deck with the pane\'s address; chat draws the chat view', () => {
+      const { tab, pane, current, rerender, lastProps } = mountWrapper()
+      expect(lastProps()).toMatchObject({ hostId: 'h1', executionId: 'exc_1', isActive: true, tabId: tab.id, paneId: pane.id, from, view: 'deck' })
+      useTabStore.getState().setPaneContent(tab.id, pane.id, { ...current().content, mode: 'room' } as never)
       rerender()
-      expect(vi.mocked(ExecutionView)).not.toHaveBeenCalled()
-      const props = vi.mocked(WorkerDeckPane).mock.calls.at(-1)![0]
-      expect(props).toMatchObject({ hostId: 'h1', executionId: 'exc_1', isActive: true, tabId: tab.id, paneId: pane.id, from })
-      act(() => { props.onModeChange('room') })
-      expect(current().content).toMatchObject({ kind: 'execution', executionId: 'exc_1', mode: 'room' })
-    })
-
-    it('going to the deck and back remounts (one worker view at a time: no second lease, no second subscription)', () => {
-      const log: string[] = []
-      const fake = (name: string) => function Fake() { useEffect(() => { log.push(`+${name}`); return () => { log.push(`-${name}`) } }, []); return <></> }
-      vi.mocked(ExecutionView).mockImplementation(fake('room'))
-      vi.mocked(WorkerDeckPane).mockImplementation(fake('deck'))
-      try {
-        const { tab, pane, current, rerender } = mountWrapper()
-        const to = (mode: string) => { useTabStore.getState().setPaneContent(tab.id, pane.id, { ...current().content, mode } as never); rerender() }
-        to('chat') // room ⇄ chat stays one mount
-        to('deck')
-        to('room')
-        expect(log).toEqual(['+room', '-room', '+deck', '-deck', '+room'])
-      } finally {
-        vi.mocked(ExecutionView).mockImplementation(() => <></>)
-        vi.mocked(WorkerDeckPane).mockImplementation(() => <></>)
-      }
+      expect(lastProps().view).toBe('deck')
+      useTabStore.getState().setPaneContent(tab.id, pane.id, { ...current().content, mode: 'chat' } as never)
+      rerender()
+      expect(lastProps().view).toBe('chat')
     })
 
     it('switching does not remount the view (the key ignores the mode)', () => {
       const unmounts = vi.fn()
-      vi.mocked(ExecutionView).mockImplementation(function FakeView() { useEffect(() => unmounts, []); return <></> })
+      vi.mocked(WorkerDeckPane).mockImplementation(function FakeView() { useEffect(() => unmounts, []); return <></> })
       try {
         const { rerender, lastProps } = mountWrapper()
         act(() => { lastProps().onModeChange('chat') })
         rerender()
-        expect(lastProps().mode).toBe('chat')
+        expect(lastProps().view).toBe('chat')
         expect(unmounts).not.toHaveBeenCalled()
       } finally {
-        vi.mocked(ExecutionView).mockImplementation(() => <></>)
+        vi.mocked(WorkerDeckPane).mockImplementation(() => <></>)
       }
     })
   })
@@ -219,14 +197,14 @@ describe('registerBuiltinModules orchestrator', () => {
   // A1 (PR #1514 review): a handoff / take-back can swap a pane's content to
   // another execution while the paneId stays. The wrapper's
   // `key={`${hostId}:${executionId}`}` (register-modules/index.tsx,
-  // ExecutionPaneWrapper) must remount ExecutionView then, so its transcript
+  // ExecutionPaneWrapper) must remount WorkerDeckPane then, so its transcript
   // gets a fresh useTranscriptScroll (first follow restores / jumps from
   // scratch) instead of carrying the previous execution's scroll state.
   describe('the execution pane remounts per execution', () => {
     function mountCounting() {
       const mounts: string[] = []
       const unmounts: string[] = []
-      vi.mocked(ExecutionView).mockImplementation(function FakeView({ hostId, executionId }) {
+      vi.mocked(WorkerDeckPane).mockImplementation(function FakeView({ hostId, executionId }) {
         // Captured once per instance, so the effect runs once per mount.
         const [id] = useState(`${hostId}:${executionId}`)
         useEffect(() => {
@@ -249,14 +227,14 @@ describe('registerBuiltinModules orchestrator', () => {
       return { tab, pane, rerender, mounts, unmounts }
     }
     afterEach(() => {
-      vi.mocked(ExecutionView).mockImplementation(() => <></>)
+      vi.mocked(WorkerDeckPane).mockImplementation(() => <></>)
     })
 
-    it('a different executionId on the same pane → a fresh ExecutionView mount', () => {
+    it('a different executionId on the same pane → a fresh WorkerDeckPane mount', () => {
       const { tab, pane, rerender, mounts, unmounts } = mountCounting()
       useTabStore.getState().setPaneContent(tab.id, pane.id, { kind: 'execution', executionId: 'exc_2', host: 'h1' })
       rerender()
-      expect(vi.mocked(ExecutionView).mock.calls.at(-1)![0]).toMatchObject({ executionId: 'exc_2', paneId: pane.id })
+      expect(vi.mocked(WorkerDeckPane).mock.calls.at(-1)![0]).toMatchObject({ executionId: 'exc_2', paneId: pane.id })
       expect(unmounts).toEqual(['h1:exc_1'])
       expect(mounts).toEqual(['h1:exc_1', 'h1:exc_2'])
     })
@@ -274,7 +252,7 @@ describe('registerBuiltinModules orchestrator', () => {
 
   it('the execution pane wrapper offers no `from` (no take-back) when the pane belongs to no tab', () => {
     useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null })
-    vi.mocked(ExecutionView).mockClear()
+    vi.mocked(WorkerDeckPane).mockClear()
     const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
     const tab = createTab({ kind: 'execution', executionId: 'exc_1', host: 'h1', from })
     const pane = getPrimaryPane(tab.layout) // tab never added to the store
@@ -282,6 +260,6 @@ describe('registerBuiltinModules orchestrator', () => {
     if (resolution.kind !== 'render') throw new Error('execution pane not registered')
     const Component = resolution.component
     render(<Component pane={pane} isActive />)
-    expect(vi.mocked(ExecutionView).mock.calls[0][0]).toMatchObject({ tabId: '', paneId: pane.id, from: undefined })
+    expect(vi.mocked(WorkerDeckPane).mock.calls[0][0]).toMatchObject({ tabId: '', paneId: pane.id, from: undefined })
   })
 })

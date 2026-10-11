@@ -106,6 +106,16 @@ describe('WorkerDeckPane', () => {
     expect(screen.queryByTestId('deck-to-terminal')).toBeNull()
   })
 
+  it('the status row carries the worker\'s provider, profile, full cwd and session as its tooltip (coverage E)', () => {
+    seed(summary())
+    render(ui())
+    const tip = screen.getByTestId('status-row').getAttribute('title') ?? ''
+    expect(tip).toContain('claude')
+    expect(tip).toContain('standard')
+    expect(tip).toContain('/w/purdex')
+    expect(tip).toContain(SID)
+  })
+
   it('the status row says the model (from the conversation\'s header) and the cost (from the row)', () => {
     seed(summary())
     render(ui())
@@ -114,14 +124,15 @@ describe('WorkerDeckPane', () => {
     expect(screen.getByTestId('item-cost')).toHaveTextContent('$1.50')
   })
 
-  it('the small view menu goes back to the room', () => {
+  it('the small view menu offers the deck and the chat (no room), and switches between them', () => {
     seed(summary())
     const onModeChange = vi.fn()
     render(ui({ onModeChange }))
     fireEvent.click(screen.getByTestId('worker-deck-view-menu'))
     expect(screen.getByTestId('view-mode-deck')).toHaveAttribute('aria-checked', 'true')
-    fireEvent.click(screen.getByTestId('view-mode-room'))
-    expect(onModeChange).toHaveBeenCalledWith('room')
+    expect(screen.queryByTestId('view-mode-room')).toBeNull()
+    fireEvent.click(screen.getByTestId('view-mode-chat'))
+    expect(onModeChange).toHaveBeenCalledWith('chat')
   })
 
   // --- U4-3: the permission request is a dock card, in the place a question's is (above the input), answered through Nexen's permission channel ---
@@ -253,6 +264,66 @@ describe('WorkerDeckPane', () => {
     expect(within(chips).getByTestId('worker-chips-dot').className).toContain('bg-status-error')
     act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'running', observers: 0 }) as never) })
     expect(screen.getByTestId('worker-chips')).toHaveTextContent('no lease')
+  })
+
+  // --- U4-5a: the chat view is the conversation chat (ChatPane) on the same worker, with the same footer, controls and adapter ---
+  it('the chat view draws the conversation chat, with the worker\'s own input, status row and hand-over controls under it', () => {
+    seed(summary({ state: 'idle' }))
+    render(ui({ view: 'chat' }))
+    expect(screen.getByTestId('session-view-chat')).toBeInTheDocument()
+    expect(screen.queryByTestId('session-view-deck')).toBeNull()
+    expect(screen.getByText('hello worker')).toBeInTheDocument()
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-chips')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-deck-exit')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('worker-deck-view-menu'))
+    expect(screen.getByTestId('view-mode-chat')).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('a send from the chat goes through Nexen under the lease, like the deck\'s', async () => {
+    vi.useFakeTimers()
+    seed(summary())
+    render(ui({ view: 'chat' }))
+    typeAndSend('from the chat')
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(vi.mocked(api.sendMessage).mock.calls[0].slice(0, 4)).toEqual([H, E, 'lease-1', 'from the chat'])
+  })
+
+  it('an unreadable conversation in the chat offers no way to a terminal (a worker has none)', () => {
+    seed(summary())
+    useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: { ...entry(), status: 'error', doc: { ...emptyDoc(), turns: [] } } } } as never)
+    render(ui({ view: 'chat' }))
+    expect(screen.getByTestId('unreadable')).toBeInTheDocument()
+    expect(screen.queryByTestId('unreadable-terminal')).toBeNull()
+  })
+
+  it('deck ⇄ chat is one mount of the worker (no resubscribe, the held message and the draft stay)', () => {
+    seed(summary())
+    const { rerender } = render(ui({ view: 'deck' }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'half a thought' } })
+    rerender(ui({ view: 'chat' }))
+    expect(screen.getByRole('textbox')).toHaveValue('half a thought')
+    expect(acquire).toHaveBeenCalledTimes(1)
+  })
+
+  // coverage G: a stream that died for good (the SSE closed with an error after the history loaded) leaves nothing to send into: the box is locked, and says why.
+  it('a dead stream locks the input and says the connection is lost; it opens again when the stream is back', () => {
+    seed(summary({ state: 'running' }))
+    setSlice({ sse: 'closed', sseError: 'unauthorized' })
+    render(ui())
+    const box = screen.getByRole('textbox')
+    expect(box).toBeDisabled()
+    expect(box).toHaveAttribute('placeholder', 'Live connection lost — reopen this pane to continue')
+    expect(screen.getByLabelText('Send')).toBeDisabled()
+    act(() => { useExecutionStore.getState().setSse(H, E, 'open', null) })
+    expect(screen.getByRole('textbox')).not.toBeDisabled()
+  })
+
+  it('a stream that is merely closed with no error (not yet connected) does not lock the input', () => {
+    seed(summary({ state: 'running' }))
+    setSlice({ sse: 'closed', sseError: null })
+    render(ui())
+    expect(screen.getByRole('textbox')).not.toBeDisabled()
   })
 
   // --- U4-4b: the hand-over controls (take to terminal, exit): the same flow as the room's, from the deck's own small menu and the status bar's terminal button ---
@@ -424,6 +495,17 @@ describe('WorkerDeckPane', () => {
     typeAndSend('hello')
     await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
+  })
+
+  it('a refusal Nexen gives in a code is said in words on the failed message (coverage F), not as the bare code', async () => {
+    vi.useFakeTimers()
+    seed(summary())
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(409, 'execution_archived', 'archived'))
+    render(ui())
+    typeAndSend('hello')
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(screen.getByTestId('queued-message')).toHaveTextContent('Execution is archived; unarchive it first')
+    expect(screen.getByTestId('queued-message')).not.toHaveTextContent('execution_archived')
   })
 
   // --- U4-4a: the lifecycle is system rows in the stream, and an ended worker has an ended footer where the input was (WorkerEndedPane's content) ---

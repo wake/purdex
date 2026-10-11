@@ -4,13 +4,11 @@ import { useTabStore } from '../../stores/useTabStore'
 import { resolveExecutionHostId } from './resolve-host'
 
 /**
- * The view an execution pane shows its worker in. Only `'chat'` and `'deck'`
- * (U4-1b: the deck, 指揮台) are themselves: an absent mode, or one this build
- * does not know (written by an older or newer client — an older build reads
- * `'deck'` as room), reads as room.
+ * The view an execution pane shows its worker in (U4-5a): the interface has two views, the deck (指揮台) and the chat. Only
+ * `'chat'` is itself; an absent mode, the retired `'room'`, or one this build does not know (written by another client) reads as the deck.
  */
 export function viewModeOf(content: ExecutionContent): ExecutionViewMode {
-  return content.mode === 'chat' || content.mode === 'deck' ? content.mode : 'room'
+  return content.mode === 'chat' ? 'chat' : 'deck'
 }
 
 /** The same content showing `mode`; every other field (`from`, `host`, …) is kept. */

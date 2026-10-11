@@ -223,19 +223,22 @@ describe('PaneModeButtons — a tmux-session target', () => {
   })
 })
 
-describe('PaneModeButtons — an execution target in room', () => {
-  // The primary pane is a worker as well, in room: a write aimed at it would be visible.
+describe('PaneModeButtons — an execution target in the deck', () => {
+  // The primary pane is a worker as well, in the deck: a write aimed at it would be visible.
   const primary = exec('exc_primary')
 
-  it('room is pressed; chat and deck are not; there is no terminal button in the group', () => {
+  it('the deck is pressed (the default); chat is not; there is no terminal button and no worker-room button (U4-5a)', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
-    expect(pressed()).toEqual(['Worker room'])
+    expect(pressed()).toEqual(['Deck'])
     expect(screen.queryByRole('button', { name: 'Terminal' })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Deck' })).toBeInTheDocument() // U4-1b: the worker's deck (指揮台)
+    expect(screen.queryByRole('button', { name: 'Worker room' })).toBeNull()
   })
 
   it('deck switches the target pane to the deck and is pressed there', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
+    fireEvent.click(button('Chat'))
+    cleanup()
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'chat' }))} />)
     fireEvent.click(button('Deck'))
     expect(contentOf(TARGET)).toEqual(exec('exc_target', { mode: 'deck' }))
     expect(contentOf(PRIMARY)).toEqual(primary)
@@ -244,9 +247,12 @@ describe('PaneModeButtons — an execution target in room', () => {
     expect(pressed()).toEqual(['Deck'])
   })
 
-  it('an absent mode, or one this build does not know, reads as room', () => {
+  it('an absent mode, the retired room, or one this build does not know, reads as the deck', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'galaxy' as never }))} />)
-    expect(pressed()).toEqual(['Worker room'])
+    expect(pressed()).toEqual(['Deck'])
+    cleanup()
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'room' }))} />)
+    expect(pressed()).toEqual(['Deck'])
   })
 
   it('chat switches the target pane to chat, and leaves the primary alone', () => {
@@ -277,10 +283,10 @@ describe('PaneModeButtons — an execution target in room', () => {
     }
   })
 
-  it('clicking the pressed room button does nothing', () => {
+  it('clicking the pressed deck button does nothing', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target'))} />)
     const before = useTabStore.getState().tabs
-    fireEvent.click(button('Worker room'))
+    fireEvent.click(button('Deck'))
     expect(useTabStore.getState().tabs).toBe(before)
     expect(useHandoffDialogStore.getState().target).toBeNull()
   })
@@ -330,15 +336,15 @@ describe('PaneModeButtons — an execution target in room', () => {
 describe('PaneModeButtons — an execution target in chat', () => {
   const primary = exec('exc_primary', { mode: 'chat' })
 
-  it('chat is pressed; room is not', () => {
+  it('chat is pressed; the deck is not', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'chat' }))} />)
     expect(pressed()).toEqual(['Chat'])
   })
 
-  it('room switches the target pane back to room, and leaves the primary alone', () => {
+  it('the deck switches the target pane back to the deck, and leaves the primary alone', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'chat' }))} />)
-    fireEvent.click(button('Worker room'))
-    expect(contentOf(TARGET)).toEqual(exec('exc_target', { mode: 'room' }))
+    fireEvent.click(button('Deck'))
+    expect(contentOf(TARGET)).toEqual(exec('exc_target', { mode: 'deck' }))
     expect(contentOf(PRIMARY)).toEqual(primary)
   })
 
@@ -377,7 +383,7 @@ describe('PaneModeButtons — a mouse press keeps focus where it was', () => {
   it('execution target: every button prevents the mousedown default; a press then a click still runs each action', () => {
     const take = registerTake(TARGET)
     render(<PaneModeButtons tabId={TAB} pane={seedTab(exec('exc_primary'), exec('exc_target'))} />)
-    for (const name of ['Worker room', 'Chat', 'Take back to terminal'] as const) {
+    for (const name of ['Deck', 'Chat', 'Take back to terminal'] as const) {
       expect(fireEvent.mouseDown(button(name)), name).toBe(false)
       expect(button(name).tabIndex, name).toBeGreaterThanOrEqual(0)
     }
@@ -433,7 +439,7 @@ describe('PaneModeButtons — layout and other kinds', () => {
   it('every button keeps its label as its accessible name; an enabled one is titled with it', () => {
     registerTake(TARGET)
     render(<PaneModeButtons tabId={TAB} pane={seedTab(exec('exc_primary'), exec('exc_target'))} />)
-    for (const name of ['Worker room', 'Chat', 'Take back to terminal'] as const) {
+    for (const name of ['Deck', 'Chat', 'Take back to terminal'] as const) {
       expect(button(name).getAttribute('title'), name).toBe(name)
     }
   })

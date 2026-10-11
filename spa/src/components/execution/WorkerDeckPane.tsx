@@ -19,7 +19,9 @@ import { retireStaleSessions } from '../../lib/conversations/pane-release'
 import { retiringInFlight, sendQueueFor, subscribeRetiring, type QueueEntry } from '../../lib/conversations/send-queue'
 import { registerWorkerLease, workerAdapter } from '../../lib/conversations/worker-adapter'
 import { runningToolName, workerBackground } from '../../lib/nex/worker-live'
+import { workerInfoText } from '../../lib/nex/worker-info'
 import { DeckPane } from '../deck/DeckPane'
+import { ChatPane } from '../deck/ChatPane'
 import type { DeckFooterContext } from '../deck/footer-context'
 import { SessionInput } from '../deck/SessionInput'
 import { StatusRow } from '../deck/StatusRow'
@@ -41,6 +43,8 @@ export interface WorkerDeckPaneProps {
   paneId: string
   /** Set when the execution was handed off from a tmux session; take-back then returns to that session. */
   from?: ExecutionFrom
+  /** The view the pane shows the worker in: the deck (指揮台) or the chat. */
+  view?: 'deck' | 'chat'
   /** Writes the chosen view back to the pane content (ExecutionPaneWrapper). */
   onModeChange: (mode: ExecutionViewMode) => void
 }
@@ -51,10 +55,11 @@ function FooterMark({ onChange }: { onChange: (shown: boolean) => void }) {
   return null
 }
 
+const WORKER_VIEWS: readonly ExecutionViewMode[] = ['deck', 'chat']
 const NO_ENTRIES: readonly QueueEntry[] = []
 const noSubscribe = () => () => {}
 
-export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusTarget = false, tabId, paneId, from, onModeChange }: WorkerDeckPaneProps) {
+export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusTarget = false, tabId, paneId, from, view = 'deck', onModeChange }: WorkerDeckPaneProps) {
   const t = useI18nStore((s) => s.t)
   const { st, problem, lease, permission, shownPermission } = useWorkerSession(hostId, executionId, isActive)
   const conversation = useExecutionConversation(hostId, executionId)
@@ -124,10 +129,10 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
       <button ref={menuAnchor} type="button" data-testid="worker-deck-view-menu" aria-haspopup="menu" aria-expanded={menuOpen}
         onClick={() => setMenuOpen((o) => !o)}
         className="ml-2 mr-2 flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 text-xs text-text-secondary hover:bg-surface-hover hover:text-text-primary">
-        <ViewModeLabel mode="deck" /> <CaretDown size={10} />
+        <ViewModeLabel mode={view} /> <CaretDown size={10} />
       </button>
       {menuOpen && (
-        <ViewModeMenu anchorRef={menuAnchor} mode="deck" onModeChange={onModeChange} onClose={() => setMenuOpen(false)}
+        <ViewModeMenu anchorRef={menuAnchor} mode={view} views={WORKER_VIEWS} onModeChange={onModeChange} onClose={() => setMenuOpen(false)}
           onTakeBack={handoff.takeOffered ? handoff.onTakeBack : undefined} takeBackBusy={handoff.takeBusy} />
       )}
       <button type="button" data-testid="worker-deck-exit" aria-label={t('worker.exit.button')} title={t('worker.exit.button')}
@@ -165,6 +170,9 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
     return frame(<div data-testid="worker-deck-placeholder" className="flex h-full items-center justify-center text-sm text-text-muted">{text}</div>)
   }
 
+  // The SSE handle can die for good (401/403, or an error that does not retry) after the history loaded: a send would be accepted into the void. `sse` flips
+  // back off 'closed' the moment the pane is reactivated, so the lock clears itself.
+  const streamDead = st.historyLoaded && st.sse === 'closed' && !!st.sseError
   const permissionShown = !ended && st.historyLoaded && shownPermission !== undefined
   const footer = (ctx: DeckFooterContext) => (
     <div data-testid="worker-deck-footer">
@@ -184,19 +192,22 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
       {st.leaseError?.code === 'lease_held' && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning-text">{t('execution.lease_held', { principal: st.leaseError.heldBy ?? '' })}</div>
       )}
-      {!ended && <SessionInput {...ctx} asking={ctx.asking || permissionShown} pendingInStream />}
+      {!ended && <SessionInput {...ctx} asking={ctx.asking || permissionShown} pendingInStream lockedReason={streamDead ? t('execution.input.disconnected') : undefined} />}
       {/* the session status row (spec §3.5): the stream state, observers and lease holder at its right, small */}
       <FooterMark onChange={setFooterShown} />
       <div className="flex items-center">
         <div className="min-w-0 flex-1">
-          <StatusRow cwd={st.summary?.cwd} model={ctx.usage?.model ?? null} effort={ctx.usage?.effort ?? null} cost={st.summary?.cost_usd ?? null} />
+          <StatusRow info={st.summary ? workerInfoText(st.summary, t) : undefined} cwd={st.summary?.cwd} model={ctx.usage?.model ?? null} effort={ctx.usage?.effort ?? null} cost={st.summary?.cost_usd ?? null} />
         </div>
         <WorkerChips sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} />
       </div>
     </div>
   )
 
-  const deck = (
+  const deck = view === 'chat' ? (
+    <ChatPane paneId={paneId} conversation={conversation} title={st.summary?.brief ?? ''} isActive={isActive} isFocusTarget={isFocusTarget}
+      footer={footer} />
+  ) : (
     <DeckPane paneId={paneId} conversation={conversation} isActive={isActive} isFocusTarget={isFocusTarget} footer={footer} live={live}
       tail={st.summary ? <WorkerLifecycleRow summary={st.summary} /> : undefined} />
   )
