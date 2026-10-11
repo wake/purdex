@@ -33,7 +33,7 @@ func TestTypedSubmit_ReplayAnswersEvenWhenTheSessionVanished(t *testing.T) {
 	answer(t, te2.submit("rp2", "x"), 200, "handed", "keys", "")
 	te2.mod.td.owners = tResolver{}
 	answer(t, te2.post("/api/sessions/gone/submit", body("rp2", "x", tInst)), 200, "handed", "keys", "")
-	if te2.keys.n() != 1 {
+	if te2.keys.n() != 2 { // the text and the Enter, once
 		t.Fatal("a keys replay typed")
 	}
 }
@@ -126,7 +126,7 @@ func TestTypedSubmit_TrailingBackslashGetsASpace(t *testing.T) {
 	te := newTEnv(t)
 	answer(t, te.submit("bs1", `path C:\`), 200, "handed", "fill", "")
 	answer(t, te.submit("bs2", `two \\`), 200, "handed", "fill", "")
-	if te.fm.jobs[0].Text != `path C:\ ` || te.fm.jobs[1].Text != `two \\` {
+	if te.fm.jobs[0].Text != `path C:\ ` || te.fm.jobs[1].Text != `two \\ ` {
 		t.Fatalf("mod got %q and %q", te.fm.jobs[0].Text, te.fm.jobs[1].Text)
 	}
 	te2 := keysEnv(t)
@@ -137,7 +137,7 @@ func TestTypedSubmit_TrailingBackslashGetsASpace(t *testing.T) {
 }
 
 func TestTrailingBackslashPad(t *testing.T) {
-	for in, want := range map[string]string{`a`: `a`, `a\`: `a\ `, `a\\`: `a\\`, `a\\\`: `a\\\ `, `a\b`: `a\b`, "a\\\nb": "a\\\nb"} {
+	for in, want := range map[string]string{`a`: `a`, `a\`: `a\ `, `a\\`: `a\\ `, `a\\\`: `a\\\ `, `a\ `: `a\ `, `a\ b`: `a\ b`, `a\b`: `a\b`, "a\\\nb": "a\\\nb"} {
 		if got := padTrailingBackslash(in); got != want {
 			t.Errorf("%q -> %q, want %q", in, got, want)
 		}

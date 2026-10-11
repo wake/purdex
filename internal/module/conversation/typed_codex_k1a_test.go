@@ -21,7 +21,7 @@ func TestKeysLedger_ClaimIsAtomicAcrossSessions(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, claimed := l.claim("same-id", sid, now); claimed {
+			if _, claimed, _ := l.claim("same-id", sid, now); claimed {
 				wins <- sid
 			}
 		}()

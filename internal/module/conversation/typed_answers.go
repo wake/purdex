@@ -83,11 +83,11 @@ func (m *Module) answerKnown(w http.ResponseWriter, td *typedDeps, id string, tu
 	return false
 }
 
-// padTrailingBackslash appends one space when the text ends with an odd run of backslashes: Claude Code reads backslash +
-// Enter as a newline, so the Enter would not submit.
+// padTrailingBackslash appends one space after any trailing backslash run, for both the fill and the keys path. Measured
+// 2026-10-11 on Claude Code 2.1.296: a run of 1, 2 or 3 backslashes plus Enter does not submit (it reads backslash + Enter
+// as a newline), whatever way the text reached the composer.
 func padTrailingBackslash(s string) string {
-	n := len(s) - len(strings.TrimRight(s, `\`))
-	if n%2 == 1 {
+	if strings.HasSuffix(s, `\`) {
 		return s + " "
 	}
 	return s
