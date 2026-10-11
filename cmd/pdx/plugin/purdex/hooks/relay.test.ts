@@ -3617,7 +3617,7 @@ test('{{why}}: the idle minutes are the ones the ask was opened with, not whatev
   expect(f.submits[0].text).toContain(WHY_WRITE(WHY_IDLE(40, 55)))
 })
 
-test('{{why}}: a threshold begin says the context reached the threshold; a /relay says the person asked', async ($, on) => {
+test('{{why}}: a threshold begin says the context reached the threshold', async ($, on) => {
   const a = await approvedRelay($, on)
   expect(a.f.submits[0].text).toContain(WHY_WRITE('context 已達接力門檻'))
 })
