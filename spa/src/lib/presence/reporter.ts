@@ -47,12 +47,27 @@ export interface ReporterDeps {
   connectedHosts: () => ConnectedHost[]
   /** Calls fn whenever the tabs, the sessions or the hosts change; returns the unsubscribe. */
   subscribeChanges: (fn: () => void) => () => void
+  /** Hosts the Mac App's main process reports for itself (PA-2 D10); absent without the bridge (old shell, plain browser). */
+  owned?: {
+    get: () => Promise<string[]>
+    subscribe: (fn: (hostIds: string[]) => void) => () => void
+  }
 }
 
 const identityOf = (h: HostConfig): string => `${hostEndpoint(h)}:${h.token ?? ''}`
 
+function defaultOwned(): ReporterDeps['owned'] {
+  const presence = typeof window === 'undefined' ? undefined : window.electronAPI?.presence
+  if (!presence?.getOwned && !presence?.onOwnedChanged) return undefined
+  return {
+    get: async () => (presence.getOwned ? await presence.getOwned() : []),
+    subscribe: (fn) => presence.onOwnedChanged?.(fn) ?? (() => {}),
+  }
+}
+
 export function defaultReporterDeps(): ReporterDeps {
   return {
+    owned: defaultOwned(),
     tracker: createActivityTracker(),
     visible: visibleSessionsByHost,
     clientId: () => `${getClientId()}:${leaderWindowId()}`,
@@ -104,6 +119,10 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
   const skipped = new Set<string>() // changes that came while that host's PUT was out: sent when it settles
   let debounce: ReturnType<typeof setTimeout> | undefined
   let stopped = false
+  // Hosts main reports for (PA-2 D10): v1 says one final active:false and then stays silent for them. Ids of hosts this
+  // window does not know are never looked up, so they are harmless.
+  let owned = new Set<string>()
+  let ownedEventSeen = false // an event is newer than the initial read: the read must not overwrite it
 
   const sync = () => {
     const hosts = deps.connectedHosts()
@@ -145,7 +164,12 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
       const last = sent.get(hostId)
       let body: PresenceBody
       let next: Sent
-      if (!active) {
+      if (owned.has(hostId)) {
+        if (last?.active !== true) continue // main reports for it and v1 has nothing left to retract
+        // A lingering v1 entry would feed the daemon's legacy rule: retract it once, then stay silent.
+        body = { client_id: deps.clientId(), active: false, sessions: [], ttl_ms: PRESENCE_TTL_MS }
+        next = { active: false, signature: '' }
+      } else if (!active) {
         if (last?.active !== true) continue // never reported, or already told: one active:false, not a stream
         body = { client_id: deps.clientId(), active: false, sessions: [], ttl_ms: PRESENCE_TTL_MS }
         next = { active: false, signature: '' }
@@ -175,6 +199,24 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
     debounce = setTimeout(() => { debounce = undefined; flush(false) }, DEBOUNCE_MS)
   }
 
+  const setOwned = (ids: string[]) => {
+    const next = new Set(ids)
+    const left = [...owned].some((id) => !next.has(id))
+    owned = next
+    if (left) { // main stopped reporting for some host: v1 takes over at once
+      if (debounce !== undefined) { clearTimeout(debounce); debounce = undefined }
+      flush(false)
+    } else schedule()
+  }
+  const offOwned = deps.owned?.subscribe((ids) => {
+    if (stopped) return
+    ownedEventSeen = true
+    setOwned(ids)
+  })
+  deps.owned?.get().then(
+    (ids) => { if (!stopped && !ownedEventSeen) setOwned(ids) },
+    () => { /* no answer: behaves as without the bridge */ },
+  )
   const offChanges = deps.subscribeChanges(schedule)
   const offActivity = deps.tracker.subscribe(schedule)
   const heartbeat = setInterval(() => flush(true), HEARTBEAT_MS)
@@ -186,6 +228,7 @@ export function startPushPresence(deps: ReporterDeps = defaultReporterDeps()): (
     if (debounce !== undefined) clearTimeout(debounce)
     clearInterval(heartbeat)
     for (const r of retries) clearTimeout(r)
+    offOwned?.()
     offChanges()
     offActivity()
     deps.tracker.dispose()
