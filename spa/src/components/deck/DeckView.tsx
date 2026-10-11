@@ -43,6 +43,8 @@ export interface DeckViewProps {
    * and the background work. They replace what the transcript's steps and the header say.
    */
   live?: { tool: string | null; background?: HeaderBackground }
+  /** Drawn at the end of the stream, after the live line and before what is waiting to be read: a back-end's own system rows (a worker's lifecycle, U4-4a). */
+  tail?: ReactNode
 }
 
 // Memoized: the store keeps an unchanged turn's object, so a live update re-draws only the turn that changed.
@@ -87,7 +89,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   )
 })
 
-export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, onOpenPanel, live }: DeckViewProps) {
+export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, onOpenPanel, live, tail }: DeckViewProps) {
   const background = live ? live.background : entry.doc.header?.background
   const t = useI18nStore((s) => s.t)
   const { doc } = entry
@@ -157,6 +159,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
               doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} subagents={entry.subagents} loadSubagent={loadSubagent} background={i === doc.turns.length - 1 ? background : undefined} />)
             )}
             {!empty && <LiveTurnLine turns={doc.turns} status={doc.header?.status} background={background} tool={live?.tool} />}
+            {tail}
             <PendingTail paneKey={paneId} hostId={hostId} sessionId={sessionId} entries={pending} queued={headerQueued} />
           </DeckRevealContext.Provider>
         </FoldContext.Provider>

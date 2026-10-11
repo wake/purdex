@@ -22,6 +22,8 @@ import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import { NexApiError } from '../../lib/nex/types'
+import { takeToTerminal } from '../../lib/nex/handoff'
+import { closeTab } from '../../lib/tab-lifecycle'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), answerPermission: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
@@ -35,6 +37,9 @@ const summary = (over: Record<string, unknown> = {}) => ({
 const item = { type: 'user', id: 'u1', at: 1, index: 0, text: 'hello worker', source: 'user' } as ConversationItem
 const turn: Turn = { id: 't0', index: 0, started_at: 1, outcome: 'done', items: [item] }
 const entry = (): ConversationEntry => ({ doc: { ...emptyDoc(), turns: [turn], header: { status: 'running', title: '', backend: 'execution', usage: { model: 'claude-haiku-5-5', effort: 'medium' } } as never }, status: 'live', reason: '', paging: false, subagents: {} })
+
+vi.mock('../../lib/nex/handoff', async (orig) => ({ ...(await orig<typeof import('../../lib/nex/handoff')>()), takeToTerminal: vi.fn(async () => ({ result: {}, swapped: true })) }))
+vi.mock('../../lib/tab-lifecycle', async (orig) => ({ ...(await orig<typeof import('../../lib/tab-lifecycle')>()), closeTab: vi.fn() }))
 
 const acquire = vi.fn(() => vi.fn())
 const ui = (over: Partial<Parameters<typeof WorkerDeckPane>[0]> = {}) => (
@@ -324,9 +329,47 @@ describe('WorkerDeckPane', () => {
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
   })
 
-  it('an exited worker has its own screen in the deck view too', () => {
-    seed(summary({ state: 'terminated' }))
+  // --- U4-4a: the lifecycle is system rows in the stream, and an ended worker has an ended footer where the input was (WorkerEndedPane's content) ---
+  it('an exited worker keeps its deck: a system row says it exited, and the ended footer takes the input\'s place', () => {
+    seed(summary({ state: 'terminated', terminal_reason: 'idle timeout' }))
+    render(ui())
+    expect(screen.getByTestId('deck-scroll')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-lifecycle')).toHaveTextContent('This worker has exited')
+    expect(screen.getByTestId('worker-ended-footer')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(screen.queryByTestId('worker-ended')).toBeNull() // not the full screen
+  })
+
+  it('a worker that failed to start with a session says why on a system row, and offers exit besides the rebuild', () => {
+    seed(summary({ state: 'failed', reject_reason: 'no capacity' }))
+    render(ui())
+    expect(screen.getByTestId('worker-lifecycle')).toHaveTextContent('Failed to start · Reason: no capacity')
+    expect(within(screen.getByTestId('worker-ended-footer')).getByTestId('worker-ended-exit')).toBeInTheDocument()
+    expect(within(screen.getByTestId('worker-ended-footer')).getByTestId('worker-rebuild')).toBeInTheDocument()
+  })
+
+  it('a worker that failed before it had a session: no deck to draw, the system row and the ended footer on their own', () => {
+    seed(summary({ state: 'rejected', session_id: undefined, reject_reason: 'bad profile' }))
     render(ui())
     expect(screen.queryByTestId('deck-scroll')).toBeNull()
+    expect(screen.getByTestId('worker-lifecycle')).toHaveTextContent('Failed to start · Reason: bad profile')
+    expect(screen.getByTestId('worker-ended-footer')).toBeInTheDocument()
+  })
+
+  it('a worker still queued is a lifecycle line, not a deck (and has no ended footer)', () => {
+    seed(summary({ state: 'queued', session_id: undefined }))
+    render(ui())
+    expect(screen.getByTestId('worker-deck-placeholder')).toHaveTextContent('Queued')
+    expect(screen.queryByTestId('worker-ended-footer')).toBeNull()
+  })
+
+  it('the ended footer rebuilds through the same flow as the ended screen, and closes the tab', async () => {
+    seed(summary({ state: 'terminated' }))
+    render(ui())
+    fireEvent.click(within(screen.getByTestId('worker-ended-footer')).getByTestId('worker-rebuild'))
+    await vi.waitFor(() => expect(takeToTerminal).toHaveBeenCalledTimes(1)) // terminal: the only mode this test host offers
+    expect(vi.mocked(takeToTerminal).mock.calls[0][0]).toMatchObject({ hostId: H, executionId: E })
+    fireEvent.click(within(screen.getByTestId('worker-ended-footer')).getByRole('button', { name: 'Close tab' }))
+    expect(closeTab).toHaveBeenCalledWith('t')
   })
 })
