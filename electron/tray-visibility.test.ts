@@ -4,8 +4,8 @@ import { applyTrayVisibility, type TrayVisibilityDeps } from './tray-visibility'
 
 // A fake main process: a boolean for the runtime tray, an object for the
 // prefs file. `createOk` controls whether createTray would find its icon.
-function fakeDeps(opts: { visible: boolean; prefs: AppPrefs; createOk?: boolean }) {
-  const state = { visible: opts.visible, prefs: { ...opts.prefs }, saves: [] as AppPrefs[] }
+function fakeDeps(opts: { visible: boolean; prefs: Pick<AppPrefs, 'showTray'>; createOk?: boolean }) {
+  const state = { visible: opts.visible, prefs: { ...opts.prefs } as AppPrefs, saves: [] as AppPrefs[] }
   const deps: TrayVisibilityDeps = {
     isVisible: vi.fn(() => state.visible),
     create: vi.fn(() => {

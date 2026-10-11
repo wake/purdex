@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  closeSync, existsSync, fsyncSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync,
+  writeFileSync, writeSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_APP_PREFS, loadAppPrefs, parseAppPrefs, saveAppPrefs, serializeAppPrefs } from './app-prefs'
+import {
+  AWAY_MINUTES_OPTIONS, DEFAULT_APP_PREFS, ensureInstallId, loadAppPrefs, parseAppPrefs, saveAppPrefs, serializeAppPrefs,
+  type AppPrefs, type PrefsFs,
+} from './app-prefs'
+
+const P = (over: Partial<AppPrefs> = {}): AppPrefs => ({ ...DEFAULT_APP_PREFS, ...over })
+const UUID = '123e4567-e89b-42d3-a456-426614174000'
 
 describe('parseAppPrefs', () => {
   it('returns defaults for empty / null / undefined input', () => {
@@ -22,17 +31,17 @@ describe('parseAppPrefs', () => {
     expect(parseAppPrefs('42')).toEqual(DEFAULT_APP_PREFS)
   })
   it('falls back to the default for a field with the wrong type', () => {
-    expect(parseAppPrefs('{"showTray":"false"}')).toEqual({ showTray: true })
-    expect(parseAppPrefs('{"showTray":0}')).toEqual({ showTray: true })
-    expect(parseAppPrefs('{"showTray":null}')).toEqual({ showTray: true })
+    expect(parseAppPrefs('{"showTray":"false"}')).toEqual(P({ showTray: true }))
+    expect(parseAppPrefs('{"showTray":0}')).toEqual(P({ showTray: true }))
+    expect(parseAppPrefs('{"showTray":null}')).toEqual(P({ showTray: true }))
   })
   it('accepts booleans only', () => {
-    expect(parseAppPrefs('{"showTray":false}')).toEqual({ showTray: false })
-    expect(parseAppPrefs('{"showTray":true}')).toEqual({ showTray: true })
+    expect(parseAppPrefs('{"showTray":false}')).toEqual(P({ showTray: false }))
+    expect(parseAppPrefs('{"showTray":true}')).toEqual(P({ showTray: true }))
   })
   it('ignores unknown keys and fills missing ones', () => {
     expect(parseAppPrefs('{"other":1}')).toEqual(DEFAULT_APP_PREFS)
-    expect(parseAppPrefs('{"showTray":false,"other":1}')).toEqual({ showTray: false })
+    expect(parseAppPrefs('{"showTray":false,"other":1}')).toEqual(P({ showTray: false }))
   })
   it('does not return the shared default object', () => {
     expect(parseAppPrefs('')).not.toBe(DEFAULT_APP_PREFS)
@@ -41,12 +50,12 @@ describe('parseAppPrefs', () => {
 
 describe('serializeAppPrefs', () => {
   it('round-trips through parseAppPrefs', () => {
-    const p = { showTray: false }
+    const p = P({ showTray: false, presenceAwayMinutes: 15, installId: UUID })
     expect(parseAppPrefs(serializeAppPrefs(p))).toEqual(p)
   })
   it('emits pretty JSON with a trailing newline', () => {
-    const s = serializeAppPrefs({ showTray: true })
-    expect(s).toBe('{\n  "showTray": true\n}\n')
+    const s = serializeAppPrefs(P())
+    expect(s).toBe('{\n  "showTray": true,\n  "presenceAwayMinutes": 5,\n  "installId": null\n}\n')
   })
 })
 
@@ -83,10 +92,10 @@ describe('loadAppPrefs / saveAppPrefs', () => {
     const dir = mkdir()
     try {
       const path = join(dir, 'nested', 'deeper', 'app-prefs.json')
-      saveAppPrefs(path, { showTray: false })
+      saveAppPrefs(path, P({ showTray: false }))
       expect(existsSync(path)).toBe(true)
-      expect(readFileSync(path, 'utf8')).toBe(serializeAppPrefs({ showTray: false }))
-      expect(loadAppPrefs(path)).toEqual({ showTray: false })
+      expect(readFileSync(path, 'utf8')).toBe(serializeAppPrefs(P({ showTray: false })))
+      expect(loadAppPrefs(path)).toEqual(P({ showTray: false }))
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -95,9 +104,156 @@ describe('loadAppPrefs / saveAppPrefs', () => {
     const dir = mkdir()
     try {
       const path = join(dir, 'app-prefs.json')
-      saveAppPrefs(path, { showTray: false })
-      saveAppPrefs(path, { showTray: true })
-      expect(loadAppPrefs(path)).toEqual({ showTray: true })
+      saveAppPrefs(path, P({ showTray: false }))
+      saveAppPrefs(path, P({ showTray: true }))
+      expect(loadAppPrefs(path)).toEqual(P({ showTray: true }))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('presenceAwayMinutes', () => {
+  it('defaults to 5', () => {
+    expect(DEFAULT_APP_PREFS.presenceAwayMinutes).toBe(5)
+    expect(parseAppPrefs('{}').presenceAwayMinutes).toBe(5)
+  })
+  it('accepts exactly the offered values', () => {
+    expect([...AWAY_MINUTES_OPTIONS]).toEqual([1, 2, 3, 5, 10, 15, 30, 60])
+    for (const n of AWAY_MINUTES_OPTIONS) {
+      expect(parseAppPrefs(`{"presenceAwayMinutes":${n}}`).presenceAwayMinutes).toBe(n)
+    }
+  })
+  it('anything else falls back to the default', () => {
+    for (const bad of ['0', '4', '61', '-5', '5.5', '"5"', 'null', 'true', '[5]', '1e400']) {
+      expect(parseAppPrefs(`{"presenceAwayMinutes":${bad}}`).presenceAwayMinutes).toBe(5)
+    }
+  })
+})
+
+describe('installId', () => {
+  const mkdir = () => mkdtempSync(join(tmpdir(), 'pdx-app-prefs-'))
+  it('is null until generated and a valid stored value is kept', () => {
+    expect(parseAppPrefs('{}').installId).toBeNull()
+    expect(parseAppPrefs(`{"installId":"${UUID}"}`).installId).toBe(UUID)
+  })
+  it('an invalid stored value reads as null', () => {
+    for (const bad of ['""', '"x"', '123', 'null', '"123e4567-e89b-42d3-a456-42661417400g"', '"../../etc"', `"${UUID}\n"`]) {
+      expect(parseAppPrefs(`{"installId":${bad}}`).installId).toBeNull()
+    }
+  })
+  it('ensureInstallId generates once, persists, and returns the same id afterwards', () => {
+    const dir = mkdir()
+    try {
+      const path = join(dir, 'app-prefs.json')
+      saveAppPrefs(path, P({ showTray: false, presenceAwayMinutes: 10 }))
+      const gen = () => UUID
+      const id = ensureInstallId(path, gen)
+      expect(id).toBe(UUID)
+      expect(loadAppPrefs(path)).toEqual(P({ showTray: false, presenceAwayMinutes: 10, installId: UUID }))
+      expect(ensureInstallId(path, () => { throw new Error('must not generate again') })).toBe(UUID)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('ensureInstallId replaces an invalid stored value', () => {
+    const dir = mkdir()
+    try {
+      const path = join(dir, 'app-prefs.json')
+      writeFileSync(path, '{"installId":"bad"}')
+      expect(ensureInstallId(path, () => UUID)).toBe(UUID)
+      expect(loadAppPrefs(path).installId).toBe(UUID)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('ensureInstallId uses crypto.randomUUID by default', () => {
+    const dir = mkdir()
+    try {
+      const path = join(dir, 'app-prefs.json')
+      const id = ensureInstallId(path)
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+      expect(ensureInstallId(path)).toBe(id)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('only the known keys are ever serialised (no token-like field)', () => {
+    const dir = mkdir()
+    try {
+      const path = join(dir, 'app-prefs.json')
+      writeFileSync(path, '{"token":"secret","hosts":[{"token":"s"}],"showTray":true}')
+      ensureInstallId(path, () => UUID)
+      const text = readFileSync(path, 'utf8')
+      expect(text).not.toContain('secret')
+      expect(Object.keys(JSON.parse(text)).sort()).toEqual(['installId', 'presenceAwayMinutes', 'showTray'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('saveAppPrefs atomicity', () => {
+  const real = { openSync, writeSync, fsyncSync, closeSync, renameSync, unlinkSync }
+  const failing = (which: keyof typeof real): PrefsFs => ({
+    ...real,
+    [which]: () => { throw new Error('disk full') },
+  })
+  for (const which of ['writeSync', 'fsyncSync', 'renameSync'] as const) {
+    it(`a failing ${which} leaves the previous file intact and no temp file`, () => {
+      const dir = mkdtempSync(join(tmpdir(), 'app-prefs-atomic-'))
+      try {
+        const path = join(dir, 'app-prefs.json')
+        saveAppPrefs(path, P({ showTray: false, installId: UUID }))
+        const before = readFileSync(path, 'utf8')
+        expect(() => saveAppPrefs(path, P({ showTray: true, installId: UUID }), failing(which))).toThrow('disk full')
+        expect(readFileSync(path, 'utf8')).toBe(before)
+        expect(loadAppPrefs(path).installId).toBe(UUID)
+        expect(loadAppPrefs(path).showTray).toBe(false)
+        expect(readdirSync(dir)).toEqual(['app-prefs.json'])
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  }
+  it('keeps writing after a short write until every byte is out', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'app-prefs-atomic-'))
+    try {
+      const path = join(dir, 'app-prefs.json')
+      const half: PrefsFs = {
+        ...real,
+        writeSync: ((fd: number, buf: Uint8Array, off: number, len: number) =>
+          real.writeSync(fd, buf, off, Math.max(1, Math.floor(len / 2)))) as typeof writeSync,
+      }
+      saveAppPrefs(path, P({ showTray: false, installId: UUID }), half)
+      expect(readFileSync(path, 'utf8')).toBe(serializeAppPrefs(P({ showTray: false, installId: UUID })))
+      expect(readdirSync(dir)).toEqual(['app-prefs.json'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('a zero-byte write with bytes left throws, keeps the old file and leaves no temp', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'app-prefs-atomic-'))
+    try {
+      const path = join(dir, 'app-prefs.json')
+      saveAppPrefs(path, P({ showTray: false, installId: UUID }))
+      const before = readFileSync(path, 'utf8')
+      const stuck: PrefsFs = { ...real, writeSync: (() => 0) as unknown as typeof writeSync }
+      expect(() => saveAppPrefs(path, P({ showTray: true, installId: UUID }), stuck)).toThrow()
+      expect(readFileSync(path, 'utf8')).toBe(before)
+      expect(readdirSync(dir)).toEqual(['app-prefs.json'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('a successful write leaves no temp files behind', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'app-prefs-atomic-'))
+    try {
+      const path = join(dir, 'app-prefs.json')
+      saveAppPrefs(path, P({ installId: UUID }))
+      saveAppPrefs(path, P({ installId: UUID, showTray: false }))
+      expect(readdirSync(dir)).toEqual(['app-prefs.json'])
+      expect(loadAppPrefs(path).showTray).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
