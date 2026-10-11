@@ -164,7 +164,7 @@ func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 			IdleMinutes int     `json:"idle_minutes"`
 		}
 		_ = json.Unmarshal(a.Payload, &p)
-		if p.Reason == "idle" { // an idle ask (idle relay spec §3.2) says how long and why now
+		if p.Reason == "idle" && p.IdleMinutes >= 1 && p.IdleMinutes <= 59 { // an idle ask (idle relay spec §3.2) says how long and why now; a damaged one reads as an ordinary ask
 			c.Title = fmt.Sprintf(t["self_relay_idle"], hostLabel, who, p.IdleMinutes, int(math.Round(p.Used)))
 			c.Body = t["self_relay_idle_by"]
 			break

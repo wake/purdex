@@ -247,3 +247,21 @@ func TestPayload_FixedFieldsOverTheLimitAreAnError(t *testing.T) {
 		t.Fatalf("a long body must be cut to fit: %d bytes, %v", len(raw), err)
 	}
 }
+
+// Codex attack: only a well-formed idle payload (minutes 1–59) gets the idle text; a damaged one reads as an ordinary ask.
+func TestApprovalContent_SelfRelayIdleNeedsSaneMinutes(t *testing.T) {
+	for _, mins := range []any{0, -3, 60, 1440, nil} {
+		payload := map[string]any{"used_percentage": 55.4, "reason": "idle"}
+		if mins != nil {
+			payload["idle_minutes"] = mins
+		}
+		c, ok := ApprovalContent(approvalOpened("self_relay", payload, "", "worker-7"), "mlab", "zh-TW")
+		if !ok || c.Title != "mlab：worker-7 申請接力（已用 55%）" {
+			t.Fatalf("idle_minutes %v: title = %q, want the ordinary text", mins, c.Title)
+		}
+	}
+	c, _ := ApprovalContent(approvalOpened("self_relay", map[string]any{"used_percentage": 55.4, "reason": "idle", "idle_minutes": 40}, "", "worker-7"), "mlab", "fr")
+	if c.Title != "mlab：worker-7 閒置 40 分鐘，申請接力（已用 55%）" {
+		t.Fatalf("unknown locale falls back to zh-TW: %q", c.Title)
+	}
+}

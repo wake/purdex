@@ -620,3 +620,16 @@ func TestRelayCmd_CompactedIdleReachesTheWire(t *testing.T) {
 		t.Fatalf("sideways = %d, want %d", code, ExitUsage)
 	}
 }
+
+// Codex attack: `resumed` is a cancelled reason only; failed / writing carrying it is a usage error before any request.
+func TestRelayCmd_ResumedOnlyWithCancelled(t *testing.T) {
+	for _, st := range []string{"failed", "writing", "done"} {
+		d := &fakeRelayDaemon{}
+		if code, _, _ := driveRelay(t, context.Background(), d, "report", "op-1", st, "--error", "resumed"); code != ExitUsage {
+			t.Fatalf("%s --error resumed: code = %d, want %d", st, code, ExitUsage)
+		}
+		if paths, _ := d.snapshot(); len(paths) != 0 {
+			t.Fatalf("%s --error resumed reached the daemon: %v", st, paths)
+		}
+	}
+}

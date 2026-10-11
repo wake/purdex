@@ -514,6 +514,9 @@ func runRelayReport(ctx context.Context, args []string, stdout, stderr io.Writer
 	if (state == team.RelayFailed || state == team.RelayCancelled) && strings.TrimSpace(req.Error) == "" {
 		return relayUsageErr(stderr, "failed / cancelled 需要 --error")
 	}
+	if state != team.RelayCancelled && strings.TrimSpace(req.Error) == team.RelayReasonResumed {
+		return relayUsageErr(stderr, "--error resumed 只能搭配 cancelled")
+	}
 	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
 	if code != ExitOK {
 		return code

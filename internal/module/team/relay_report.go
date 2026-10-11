@@ -58,8 +58,13 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "unknown state", nil)
 		return
 	}
-	if req.State == team.RelayCancelled && strings.TrimSpace(req.Error) == team.RelayReasonResumed {
-		// resumed withdraws an idle ask (idle relay D6): the op's own row says whether it is one; any other op stays as it is.
+	if strings.TrimSpace(req.Error) == team.RelayReasonResumed {
+		// resumed withdraws an idle ask (idle relay D6): a cancelled reason only, and the op's own row says whether it is
+		// an idle ask; any other op stays as it is.
+		if req.State != team.RelayCancelled {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "resumed is only a reason for cancelled", nil)
+			return
+		}
 		if !m.refuseResumedUnlessIdle(w, id) {
 			return
 		}

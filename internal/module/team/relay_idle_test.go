@@ -229,3 +229,19 @@ func TestRelayReport_ResumedRacesApproveLikeCompacted(t *testing.T) {
 		}
 	}
 }
+
+// Codex attack: resumed is the cancelled reason of an idle ask only; any other state carrying it is refused 400 and the
+// op is untouched. Mutation gate: drop the state check → failed{resumed} lands (red).
+func TestRelayReport_ResumedIsOnlyACancelledReason(t *testing.T) {
+	f := newFixture(t)
+	out := f.beginIdle("sid-1")
+	for _, st := range []team.RelayState{team.RelayFailed, team.RelayWriting, team.RelayDone} {
+		code, _, ae := f.report(out.Op.ID, team.RelayReportRequest{State: st, Error: team.RelayReasonResumed})
+		if code != http.StatusBadRequest || ae.Error != team.ErrBadRequest {
+			t.Fatalf("%s{resumed}: %d %+v, want 400 bad_request", st, code, ae)
+		}
+	}
+	if got := f.op(out.Op.ID); got.State != team.RelayAwaitingApproval {
+		t.Fatalf("op after the refused reports = %s, want awaiting_approval", got.State)
+	}
+}
