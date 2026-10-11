@@ -1,13 +1,18 @@
 package conversation
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/convfeed"
+	"github.com/wake/purdex/internal/convmodel/ccnorm"
+	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/promptq"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -72,6 +77,8 @@ func newRecallEnv(t *testing.T, rows ...string) *recallEnv {
 	te.fm.onJob = re.comp.job
 	return re
 }
+
+func (re *recallEnv) tune(f func(*typedTuning)) { f(&re.mod.tune) }
 
 func (re *recallEnv) recall(id string) *httptest.ResponseRecorder {
 	m := map[string]string{"expected_tmux_instance": tInst}
@@ -158,78 +165,191 @@ func TestRecall_GuardRefusalsAreMapped(t *testing.T) {
 	}
 }
 
-// full parses a 200 answer; matched is a pointer so absence is visible.
-func (re *recallEnv) full(t *testing.T, w *httptest.ResponseRecorder, text string, matched bool, reason string) {
+// script answers the reads from seq in order (the last entry repeats; "!" is a failed read) and every clear_if with
+// clearStatus; it records when each read happened and which texts were cleared.
+type script struct {
+	mu          sync.Mutex
+	seq         []string
+	n           int
+	times       []time.Time
+	clears      []string
+	clearStatus string
+	truncated   bool // reads after the first report Truncated
+}
+
+func (re *recallEnv) script(s *script) {
+	re.fm.onJob = func(j promptq.Job) promptq.Outcome {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if j.Kind == promptq.KindClearIf {
+			s.clears = append(s.clears, j.Text)
+			return promptq.Outcome{Status: s.clearStatus, Reason: "not_ours"}
+		}
+		i := s.n
+		if i >= len(s.seq) {
+			i = len(s.seq) - 1
+		}
+		s.n++
+		s.times = append(s.times, time.Now())
+		if s.seq[i] == "!" {
+			return promptq.Outcome{Status: promptq.Dropped}
+		}
+		return promptq.Outcome{Status: promptq.Accepted, Text: s.seq[i], Truncated: s.truncated && i > 0}
+	}
+}
+
+func (s *script) cleared() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.clears...)
+}
+
+func (re *recallEnv) unknown(t *testing.T, w *httptest.ResponseRecorder, reason string) {
 	t.Helper()
 	var a struct {
-		Text    string
-		Matched *bool
-		Reason  string
+		Outcome, Reason, Text string
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &a)
-	if w.Code != 200 || a.Text != text || a.Matched == nil || *a.Matched != matched || a.Reason != reason {
-		t.Fatalf("got %d %s, want 200 text=%q matched=%v reason=%q", w.Code, w.Body.String(), text, matched, reason)
+	if w.Code != 200 || a.Outcome != "unknown" || a.Reason != reason || a.Text != "" {
+		t.Fatalf("got %d %s, want 200 unknown %s with no text", w.Code, w.Body.String(), reason)
 	}
 }
 
-func TestRecall_HappyPathIsMatched(t *testing.T) {
-	re := newRecallEnv(t, queueRow("enqueue", "a"))
-	re.popped = "a"
-	re.full(t, re.recall(""), "a", true, "")
-}
-
-func TestRecall_MismatchReturnsTheTextAndClears(t *testing.T) {
+func TestRecall_DraftTypedBetweenCheckAndUpIsNeverClearedNorReturned(t *testing.T) {
 	re := newRecallEnv(t, queueRow("enqueue", "queued one"))
-	re.popped = "something else" // queue still non-empty: a join difference
-	re.full(t, re.recall(""), "something else", false, "recall_mismatch")
-	if cl := re.comp.clears(); re.comp.now() != "" || len(cl) != 1 || cl[0] != "something else" {
-		t.Fatalf("input %q clears %q", re.comp.now(), cl)
+	s := &script{seq: []string{"", "secret draft"}, clearStatus: promptq.Accepted}
+	re.script(s)
+	w := re.recall("")
+	errOf(t, w, 409, "recall_mismatch")
+	if strings.Contains(w.Body.String(), "secret draft") || len(s.cleared()) != 0 {
+		t.Fatalf("body %s, clears %q: a mismatch must neither return nor clear", w.Body.String(), s.cleared())
 	}
 }
 
-func TestRecall_QueueEmptiedMeansHistoryRecalled(t *testing.T) {
-	re := newRecallEnv(t, queueRow("enqueue", "queued one"))
-	re.popped = "an old history line"
-	re.keys.onCall = func(c keyCall) { // the turn takes the queue as Up lands
+func TestRecall_QueuedTextPlusMoreTypedIsAMismatch(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "first"), queueRow("enqueue", "second"))
+	re.popped = "first\nsecond and my own words"
+	w := re.recall("")
+	errOf(t, w, 409, "recall_mismatch")
+	if len(re.comp.clears()) != 0 || re.comp.now() != re.popped || strings.Contains(w.Body.String(), "my own words") {
+		t.Fatalf("clears %q, input %q, body %s", re.comp.clears(), re.comp.now(), w.Body.String())
+	}
+}
+
+func TestRecall_ClearRefusedIsJudgedByAnotherRead(t *testing.T) {
+	cases := []struct {
+		name, reread string
+		check        func(t *testing.T, re *recallEnv, w *httptest.ResponseRecorder)
+	}{
+		{"gone", "", func(t *testing.T, re *recallEnv, w *httptest.ResponseRecorder) { re.ok(t, w, "q") }},
+		{"still ours", "q", func(t *testing.T, re *recallEnv, w *httptest.ResponseRecorder) { errOf(t, w, 409, "input_not_cleared") }},
+		{"something else", "other", func(t *testing.T, re *recallEnv, w *httptest.ResponseRecorder) { re.unknown(t, w, "clear_unknown") }},
+		{"read failed", "!", func(t *testing.T, re *recallEnv, w *httptest.ResponseRecorder) { re.unknown(t, w, "clear_unknown") }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			re := newRecallEnv(t, queueRow("enqueue", "q"))
+			s := &script{seq: []string{"", "q", c.reread}, clearStatus: promptq.Dropped}
+			re.script(s)
+			w := re.recall("")
+			c.check(t, re, w)
+			if cl := s.cleared(); len(cl) != 1 || cl[0] != "q" {
+				t.Fatalf("clears %q", cl)
+			}
+			if c.name != "gone" && strings.Contains(w.Body.String(), `"text"`) {
+				t.Fatalf("no text may come back: %s", w.Body.String())
+			}
+		})
+	}
+}
+
+func TestRecall_ClientDisconnectDoesNotStopTheReadsOrTheClear(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "q"))
+	s := &script{seq: []string{"", "", "q"}, clearStatus: promptq.Accepted}
+	re.script(s)
+	re.tune(func(t *typedTuning) { t.recallSettle = 5 * time.Millisecond })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	re.keys.onCall = func(c keyCall) {
 		if len(c.keys) == 1 && c.keys[0] == tmux.KeyUp {
-			appendRows(t, re.path, queueRow("dequeue", ""))
-			re.comp.set(re.popped)
+			cancel() // the client goes away right after Up
 		}
 	}
-	re.full(t, re.recall(""), "an old history line", false, "history_recalled")
+	b := `{"expected_tmux_instance":"` + tInst + `"}`
+	w := httptest.NewRecorder()
+	re.mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/sessions/"+tCode+"/recall", strings.NewReader(b)).WithContext(ctx))
+	re.ok(t, w, "q")
+	if cl := s.cleared(); len(cl) != 1 || cl[0] != "q" {
+		t.Fatalf("clears %q", cl)
+	}
+}
+
+func TestRecall_SlowDrawWithinTheBudgetIsStillOurs(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "q"))
+	re.tune(func(t *typedTuning) { t.recallSettle, t.recallReadBudget = 10*time.Millisecond, 300*time.Millisecond })
+	re.keys.onCall = func(c keyCall) { // the TUI draws the popped text ~60% into the budget
+		if len(c.keys) == 1 && c.keys[0] == tmux.KeyUp {
+			time.AfterFunc(180*time.Millisecond, func() { re.comp.set("q") })
+		}
+	}
+	re.ok(t, re.recall(""), "q")
 	if cl := re.comp.clears(); re.comp.now() != "" || len(cl) != 1 {
 		t.Fatalf("input %q clears %q", re.comp.now(), cl)
 	}
 }
 
-func TestRecall_LongItemIsReturnedWholeNotDestroyed(t *testing.T) {
-	long := strings.Repeat("長", 2500) // over the header's 2000-rune cap, so the join differs from what Up popped
-	re := newRecallEnv(t, queueRow("enqueue", long))
-	re.popped = long
-	re.full(t, re.recall(""), long, false, "recall_mismatch")
-	if re.comp.now() != "" {
-		t.Fatalf("input %q", re.comp.now())
-	}
-}
-
-func TestRecall_ClearRefusedKeepsTheText(t *testing.T) {
-	re := newRecallEnv(t, queueRow("enqueue", "q"))
-	re.popped = "other"
-	re.fm.onJob = func(j promptq.Job) promptq.Outcome {
-		if j.Kind == promptq.KindClearIf {
-			return promptq.Outcome{Status: promptq.Dropped, Reason: "not_ours"}
-		}
-		return re.comp.job(j)
-	}
-	re.full(t, re.recall(""), "other", false, "input_not_cleared")
-}
-
-func TestRecall_EmptyReadIsAlreadySent(t *testing.T) {
+func TestRecall_NothingWithinTheBudgetIsUnknownAndTheLastReadIsAfterIt(t *testing.T) {
 	re := newRecallEnv(t, queueRow("enqueue", "a"))
-	re.popped = ""
-	errOf(t, re.recall(""), 409, "already_sent")
-	if len(re.comp.clears()) != 0 {
-		t.Fatalf("nothing to clear: %q", re.comp.clears())
+	re.tune(func(t *typedTuning) { t.recallSettle, t.recallReadBudget = 20*time.Millisecond, 100*time.Millisecond })
+	s := &script{seq: []string{""}, clearStatus: promptq.Accepted}
+	re.script(s)
+	var upAt time.Time
+	re.keys.onCall = func(c keyCall) {
+		if len(c.keys) == 1 && c.keys[0] == tmux.KeyUp {
+			upAt = time.Now()
+		}
+	}
+	re.unknown(t, re.recall(""), "recall_empty")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if last := s.times[len(s.times)-1]; last.Sub(upAt) < 100*time.Millisecond || len(s.clears) != 0 {
+		t.Fatalf("last read %v after Up (budget 100ms), clears %q", last.Sub(upAt), s.clears)
+	}
+}
+
+func TestRecall_ReadFailureAfterUpIsUnknown(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "a"))
+	re.script(&script{seq: []string{"", "!"}, clearStatus: promptq.Accepted})
+	re.unknown(t, re.recall(""), "read_failed")
+}
+
+func TestRecall_TooLongIsRefusedBeforeUp(t *testing.T) {
+	var rows []string
+	for i := 0; i < 9; i++ { // 9 x 1900 ASCII bytes + separators > 16 KiB, each item under the feed's cap
+		rows = append(rows, queueRow("enqueue", strings.Repeat(string(rune('a'+i)), 1900)))
+	}
+	re := newRecallEnv(t, rows...)
+	errOf(t, re.recall(""), 409, "recall_too_long")
+	if re.keys.n() != 0 {
+		t.Fatal("nothing may be pressed")
+	}
+}
+
+func TestRecall_ItemAtTheFeedCapIsRefusedBeforeUp(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", strings.Repeat("長", ccnorm.MaxQueuedText+500))) // the feed cut it at the cap
+	errOf(t, re.recall(""), 409, "recall_too_long")
+	if re.keys.n() != 0 {
+		t.Fatal("nothing may be pressed")
+	}
+}
+
+func TestRecall_TruncatedReadIsAMismatchWithoutClear(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "q"))
+	s := &script{seq: []string{"", "q"}, clearStatus: promptq.Accepted, truncated: true}
+	re.script(s)
+	errOf(t, re.recall(""), 409, "recall_mismatch")
+	if len(s.cleared()) != 0 {
+		t.Fatalf("clears %q", s.cleared())
 	}
 }
 
@@ -243,11 +363,38 @@ func TestRecall_ReplayNeverPressesUpTwice(t *testing.T) {
 	}
 	re2 := newRecallEnv(t, queueRow("enqueue", "q"))
 	re2.popped = "history"
-	re2.full(t, re2.recall("r2"), "history", false, "recall_mismatch")
+	errOf(t, re2.recall("r2"), 409, "recall_mismatch")
 	re2.popped = "q"
-	re2.full(t, re2.recall("r2"), "history", false, "recall_mismatch") // the recorded answer, not a fresh try
+	errOf(t, re2.recall("r2"), 409, "recall_mismatch") // the recorded answer, not a fresh try
 	if re2.upCount() != 1 {
 		t.Fatalf("replay pressed Up: %d", re2.upCount())
+	}
+}
+
+// two session codes over the same pane: the ledger must tell them apart.
+type tTwoSessions struct{ inst string }
+
+func (s tTwoSessions) GetSession(code string) (*session.SessionInfo, error) {
+	if code != tCode && code != tCode+"b" {
+		return nil, nil
+	}
+	return &session.SessionInfo{Code: code, TmuxID: "$1", TmuxInstance: s.inst}, nil
+}
+
+func TestRecall_LedgerIsBoundToTheSession(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "a-private"))
+	re.mod.td.sessions = tTwoSessions{tInst}
+	re.popped = "a-private"
+	re.ok(t, re.recall("r1"), "a-private")
+	re.popped = "b-own"
+	b := `{"client_msg_id":"r1","expected_tmux_instance":"` + tInst + `"}`
+	w := re.post("/api/sessions/"+tCode+"b/recall", b)
+	if strings.Contains(w.Body.String(), "a-private") || re.upCount() != 2 {
+		t.Fatalf("B got %d %s, Ups %d: it must run its own recall", w.Code, w.Body.String(), re.upCount())
+	}
+	re.ok(t, re.recall("r1"), "a-private") // A's repeat: the same answer
+	if re.upCount() != 2 {
+		t.Fatalf("A's repeat pressed Up: %d", re.upCount())
 	}
 }
 

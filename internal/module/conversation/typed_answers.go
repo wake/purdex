@@ -18,8 +18,7 @@ type typedAnswer struct {
 	Mode    string `json:"mode,omitempty"`
 	Reason  string `json:"reason,omitempty"`
 	Error   string `json:"error,omitempty"`
-	Text    string `json:"text,omitempty"`    // recall: the queued messages that came back
-	Matched *bool  `json:"matched,omitempty"` // recall: the text equals the expected join of the queued messages
+	Text    string `json:"text,omitempty"` // recall: the queued messages that came back
 }
 
 func writeTyped(w http.ResponseWriter, status int, a typedAnswer) {

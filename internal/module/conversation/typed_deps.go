@@ -48,7 +48,8 @@ type typedDeps struct {
 // typedTuning: zero values are the spec's; tests shorten them.
 type typedTuning struct {
 	lockWait, poll, finaliseFor, keysAfter time.Duration
-	recallSettle                           time.Duration // recall: how long the TUI gets to draw what Up popped before the read repeats
+	recallSettle                           time.Duration // recall: pause between the reads that wait for the TUI to draw what Up popped
+	recallReadBudget, recallAfterUp        time.Duration // recall: how long those reads may go on; the deadline of everything after Up
 	now                                    func() time.Time
 }
 
@@ -73,6 +74,12 @@ func (m *Module) tuning() typedTuning {
 	}
 	if t.recallSettle <= 0 {
 		t.recallSettle = 150 * time.Millisecond
+	}
+	if t.recallReadBudget <= 0 {
+		t.recallReadBudget = time.Second
+	}
+	if t.recallAfterUp <= 0 {
+		t.recallAfterUp = 2 * time.Second
 	}
 	if t.now == nil {
 		t.now = time.Now

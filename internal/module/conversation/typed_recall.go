@@ -5,9 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/convfeed"
 	"github.com/wake/purdex/internal/convmodel/ccnorm"
@@ -16,10 +16,13 @@ import (
 )
 
 // POST /api/sessions/{code}/recall (K-1b; plan I5/I6, spec §2 step 0): take the messages waiting in Claude Code's queue back
-// out of the TUI. Up on an EMPTY input pops all queued items joined by one "\n" (each trailing-whitespace trimmed); the daemon
-// reads the input through the mod, clears exactly what it read (clear_if, so only that text) and answers 200 {text, matched};
-// matched=false (reason recall_mismatch / history_recalled) still carries the text: it came from Up, so it is returned, never deleted.
-// Mod owner required (no keys fallback). Whatever Up left in the input, the input is never left holding it.
+// out of the TUI. Up on an EMPTY input pops all queued items joined by one "\n" (each trailing-whitespace trimmed). The check,
+// Up and the read are not atomic, so a person typing meanwhile is possible: only a read that EQUALS that join is ours; it is
+// cleared with clear_if(that text) and answered 200 {text}. Any other non-empty read (a draft, history, a cut text) is
+// 409 recall_mismatch with no clear and no text: the terminal is left as it is. After Up the reads and the clear run on their
+// own deadline (a client disconnect does not stop them); nothing read within the budget is outcome unknown (recall_empty).
+// Every answer after Up is recorded under a session-bound key (typed_recall_ledger.go): at most one Up per client_msg_id.
+// Mod owner required (no keys fallback).
 
 type recallRequest struct {
 	ClientMsgID          string `json:"client_msg_id"`
@@ -46,9 +49,6 @@ func (m *Module) handleSessionRecall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tune := m.tuning()
-	if m.recalls.replay(w, in.ClientMsgID, tune.now()) {
-		return
-	}
 	scode := r.PathValue("code")
 	info, err := td.sessions.GetSession(scode)
 	switch {
@@ -66,13 +66,17 @@ func (m *Module) handleSessionRecall(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	key := recallKey(scode, in.ExpectedTmuxInstance, owner.SessionID, in.ClientMsgID)
+	if m.recalls.replay(w, key, tune.now()) { // bound to this session and owner: another session's answer never matches
+		return
+	}
 	release, ok := m.lockPaneAndSession(r.Context(), owner.TmuxPaneID, owner.SessionID, tune.lockWait)
 	if !ok {
 		refuse(w, http.StatusTooManyRequests, "busy")
 		return
 	}
 	defer release()
-	if m.recalls.replay(w, in.ClientMsgID, tune.now()) { // a concurrent request with this id may have finished meanwhile
+	if m.recalls.replay(w, key, tune.now()) { // a concurrent request with this id may have finished meanwhile
 		return
 	}
 	again, ok := m.resolveClaudeOwner(w, r, td, scode)
@@ -102,6 +106,11 @@ func (m *Module) handleSessionRecall(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusConflict, "recall_unsupported") // not measured whether Up pops peer / harness items
 		return
 	}
+	want := joinQueued(queued)
+	if len(want) > promptq.MaxTextBytes || anyAtFeedCap(queued) {
+		refuse(w, http.StatusConflict, "recall_too_long") // the read (or the feed's text) would be cut: it could never match
+		return
+	}
 	res, err := td.q.Read(r.Context(), again.SessionID)
 	if !readOK(w, res, err) {
 		return
@@ -120,58 +129,86 @@ func (m *Module) handleSessionRecall(w http.ResponseWriter, r *http.Request) {
 	}
 	// From here Up has been pressed: whatever happens, a repeat of this id gets the same answer and never presses it again.
 	done := func(status int, a typedAnswer) {
-		m.recalls.put(in.ClientMsgID, status, a, tune.now())
+		m.recalls.put(key, status, a, tune.now())
 		writeTyped(w, status, a)
 	}
-	got := m.readAfterUp(r.Context(), td, again.SessionID, tune)
-	want := joinQueued(queued)
+	unknown := func(reason string) { done(http.StatusOK, typedAnswer{Outcome: "unknown", Reason: reason}) }
+	// The reads are detached from the request: a client that went away must not leave a popped text in the input unjudged.
+	rctx, cancel := context.WithTimeout(context.Background(), tune.recallAfterUp)
+	defer cancel()
+	got := readAfterUp(rctx, td, again.SessionID, tune.recallSettle, tune.recallReadBudget)
 	switch {
 	case got.err != nil || got.status != promptq.Accepted:
-		// The mod could not tell: the input may hold what Up popped. Nothing can be cleared without the text.
-		done(http.StatusConflict, typedAnswer{Outcome: "refused", Reason: "read_failed", Error: "read_failed"})
+		unknown("read_failed")
 	case got.text == "":
-		done(http.StatusConflict, typedAnswer{Outcome: "refused", Reason: "already_sent", Error: "already_sent"})
+		unknown("recall_empty") // the turn may have taken the queue, or the TUI may still draw it
+	case got.truncated || got.text != want:
+		// Not provably what Up popped (a draft typed meanwhile, history, a cut text): touch nothing, return nothing.
+		done(http.StatusConflict, typedAnswer{Outcome: "refused", Reason: "recall_mismatch", Error: "recall_mismatch"})
 	default:
-		// The input was empty before Up, so whatever is there came from Up: the queued messages, or history when the queue
-		// emptied meanwhile. Never judge it by comparing: clear exactly that text and hand it to the deck, nothing is lost.
-		matched := got.text == want
-		a := typedAnswer{Text: got.text, Matched: &matched}
-		cleared := clearOurs(td, again.SessionID, got.text)
-		switch {
-		case !cleared:
-			a.Reason = "input_not_cleared" // the text is returned but still sits in the TUI input
-		case !matched:
-			a.Reason = "recall_mismatch"
-			if q2, h2, ok2 := m.queuedNow(r.Context(), again.SessionID); ok2 && len(q2) == 0 && h2 == 0 {
-				a.Reason = "history_recalled" // the turn took the queue meanwhile and Up recalled history
-			}
-		}
-		done(http.StatusOK, a)
+		recallClear(done, unknown, td, again.SessionID, want)
+	}
+}
+
+// recallClear clears the exact text Up popped and answers; a refused clear is judged by one more read.
+func recallClear(done func(int, typedAnswer), unknown func(string), td *typedDeps, sid, want string) {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	if res, err := td.q.ClearIf(ctx, sid, want); err == nil && res.Status == promptq.Accepted {
+		done(http.StatusOK, typedAnswer{Text: want})
+		return
+	}
+	again := readOnce(ctx, td, sid)
+	switch {
+	case again.err != nil || again.status != promptq.Accepted:
+		unknown("clear_unknown")
+	case again.text == "":
+		done(http.StatusOK, typedAnswer{Text: want}) // gone anyway
+	case again.text == want && !again.truncated:
+		done(http.StatusConflict, typedAnswer{Outcome: "refused", Reason: "input_not_cleared", Error: "input_not_cleared"})
+	default:
+		unknown("clear_unknown")
 	}
 }
 
 type recallRead struct {
 	status, text string
+	truncated    bool
 	err          error
 }
 
-// readAfterUp reads the input once, and once more after the settle time when it is still empty (the TUI draws what Up
-// popped asynchronously).
-func (m *Module) readAfterUp(ctx context.Context, td *typedDeps, sid string, tune typedTuning) recallRead {
-	var out recallRead
-	for i := 0; i < 2; i++ {
-		res, err := td.q.Read(ctx, sid)
-		out = recallRead{status: res.Status, text: res.Text, err: err}
-		if err != nil || res.Status != promptq.Accepted || res.Text != "" {
+func readOnce(ctx context.Context, td *typedDeps, sid string) recallRead {
+	res, err := td.q.Read(ctx, sid)
+	return recallRead{status: res.Status, text: res.Text, truncated: res.Truncated, err: err}
+}
+
+// readAfterUp polls the input every settle until it holds text or the budget has elapsed (the TUI draws what Up popped
+// asynchronously). The last read happens at or after the budget, never before a wait that ends the loop.
+func readAfterUp(ctx context.Context, td *typedDeps, sid string, settle, budget time.Duration) recallRead {
+	start := time.Now()
+	for {
+		out := readOnce(ctx, td, sid)
+		if out.err != nil || out.status != promptq.Accepted || out.text != "" || time.Since(start) >= budget {
 			return out
 		}
 		select {
-		case <-time.After(tune.recallSettle):
+		case <-time.After(settle):
 		case <-ctx.Done():
+			out.err = ctx.Err()
 			return out
 		}
 	}
-	return out
+}
+
+// anyAtFeedCap: the conversation feed keeps at most ccnorm.MaxQueuedText runes of a queued text, so an item at the cap may
+// have been cut and the join cannot be trusted.
+func anyAtFeedCap(q []ccnorm.Queued) bool {
+	for _, e := range q {
+		if utf8.RuneCountInString(e.Text) >= ccnorm.MaxQueuedText {
+			return true
+		}
+	}
+	return false
 }
 
 // readOK answers the refusal itself when the read did not produce the input's text.
@@ -189,14 +226,6 @@ func readOK(w http.ResponseWriter, res promptq.Result, err error) bool {
 		return true
 	}
 	return false
-}
-
-// clearOurs clears the input only if it still holds text (clear_if); reports whether the mod accepted.
-func clearOurs(td *typedDeps, sid, text string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-	defer cancel()
-	res, err := td.q.ClearIf(ctx, sid, text)
-	return err == nil && res.Status == promptq.Accepted
 }
 
 func allUser(q []ccnorm.Queued) bool {
@@ -240,57 +269,4 @@ func (m *Module) queuedOf(w http.ResponseWriter, ctx context.Context, sid string
 		fail(w, http.StatusServiceUnavailable, "queue_unavailable")
 	}
 	return q, h, ok
-}
-
-// recallLedger remembers the answer of a recall that pressed Up, by client_msg_id (optional): in memory, 24 h, bounded.
-type recallLedger struct {
-	mu sync.Mutex
-	m  map[string]recallRow
-}
-
-type recallRow struct {
-	status int
-	a      typedAnswer
-	at     time.Time
-}
-
-const maxRecallLedger = 1024
-
-func (l *recallLedger) replay(w http.ResponseWriter, id string, now time.Time) bool {
-	if id == "" {
-		return false
-	}
-	l.mu.Lock()
-	row, ok := l.m[id]
-	if ok && now.Sub(row.at) > keysTombstoneTTL {
-		delete(l.m, id)
-		ok = false
-	}
-	l.mu.Unlock()
-	if ok {
-		writeTyped(w, row.status, row.a)
-	}
-	return ok
-}
-
-func (l *recallLedger) put(id string, status int, a typedAnswer, now time.Time) {
-	if id == "" {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.m == nil {
-		l.m = map[string]recallRow{}
-	}
-	for len(l.m) >= maxRecallLedger {
-		var oldest string
-		var at time.Time
-		for k, v := range l.m {
-			if oldest == "" || v.at.Before(at) {
-				oldest, at = k, v.at
-			}
-		}
-		delete(l.m, oldest)
-	}
-	l.m[id] = recallRow{status, a, now}
 }

@@ -18,6 +18,9 @@ const (
 	maxQueuedText   = 2000 // runes of text kept and shown
 )
 
+// MaxQueuedText is the cap (in runes) of a queued text the feed keeps: a text at the cap may have been cut.
+const MaxQueuedText = maxQueuedText
+
 // Queued is one message waiting in Claude Code's queue.
 type Queued struct {
 	Text   string `json:"text"`

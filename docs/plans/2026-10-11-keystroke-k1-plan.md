@@ -36,9 +36,12 @@ spec §2 before any code. **If (a) blocks, stop and report — the fill route do
 - M4 Keys fallback only when no mod owner has been seen for ≥ 10 s and the light is `idle` or `running`; answer `mode:"keys"`; the
   deck labels such sends 「未經 mod 確認」.
 - I5/I6 Recall: until step 0 (f) is known, a queue holding non-user items → `409 recall_unsupported`; the input must be empty
-  first; Up under the same guard and pane target; any non-empty read → `clear_if(exactly that text)` and `200 {text, matched}` (`reason` `recall_mismatch` /
-  `history_recalled` when unmatched, `input_not_cleared` when the clear was refused) — never delete what Up popped; an empty
-  read → `409 already_sent`.
+  first; the join over `promptq.MaxTextBytes` or an item at the feed's 2000-rune cap → `409 recall_too_long` (nothing pressed);
+  Up under the same guard and pane target; reads on a detached deadline (poll every `recallSettle` up to a 1 s budget). Only a read
+  EQUAL to the join is cleared (`clear_if(exactly that text)`) and answered `200 {text}`; refused clear → one more read (empty →
+  200, equal → `409 input_not_cleared`, else `unknown clear_unknown`); any other non-empty or truncated read → `409 recall_mismatch`
+  with no clear and no text; nothing read → `unknown recall_empty`; read error → `unknown read_failed`. All answers after Up are
+  recorded in a session-bound ledger (`typed_recall_ledger.go`). Residual risk: a mismatch leaves the text in the TUI input.
 
 ## K-1a-1 — promptq kinds + mod
 promptq job kinds `fill {text}`, `clear_if {text}`, `read` (K-1b); outcomes with `filled_at`; ledger state machine (I3). mod
