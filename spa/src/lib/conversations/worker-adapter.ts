@@ -27,6 +27,9 @@ export function registerWorkerLease(hostId: string, executionId: string, lease: 
   return () => { if (leases.get(key) === lease) leases.delete(key) }
 }
 
+/** Tests only: module state outlives a test. */
+export const clearAllWorkerLeases = (): void => { leases.clear() }
+
 /** The lease codes the daemon answers when the lease this client holds is no longer valid (it is dropped locally, the next send re-acquires). */
 const STALE_LEASE = new Set(['lease_expired', 'lease_mismatch', 'lease_required'])
 
