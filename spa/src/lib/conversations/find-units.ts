@@ -8,6 +8,7 @@
 import { proseText } from '../nex/markdown-text'
 import type { SearchUnit } from '../nex/transcript-search'
 import { buildChat } from './chat-model'
+import { cleanCommandText } from './deck-format'
 import { splitImageRefs, imageMarker } from './image-placeholder'
 import { OWN_TEXT_SOURCES, isImagePath } from './image-sniff'
 import type { PanelTurn } from './panel-resolve'
@@ -25,7 +26,7 @@ export const stepUnitId = (id: string): string => `s:${id}`
  * other stays as the marker it was. Only the person's own messages are drawn that way (UserBlock / UserBubble decide).
  */
 export function userText(item: UserItem): string {
-  if (item.source === 'bash') return `! ${item.text}`
+  if (item.source === 'bash') return `! ${cleanCommandText(item.text)}`
   if (!OWN_TEXT_SOURCES.has(item.source)) return item.text
   const parts = splitImageRefs(item.text)
   if (!parts.some((p) => p.kind === 'image')) return item.text
@@ -72,7 +73,7 @@ export function deckUnits(turns: readonly Turn[], eager: number): SearchUnit[] {
 export function chatUnits(turns: readonly PanelTurn[]): SearchUnit[] {
   const out: SearchUnit[] = []
   for (const entry of buildChat(turns as PanelTurn[])) {
-    if (entry.kind === 'user') add(out, userUnitId(entry.item.id), userText(entry.item))
+    if (entry.kind === 'user') { if (entry.item.source !== 'command_output') add(out, userUnitId(entry.item.id), userText(entry.item)) }
     else if (entry.kind === 'agent') add(out, agentUnitId(entry.item.id), proseText(entry.item.markdown))
   }
   return out

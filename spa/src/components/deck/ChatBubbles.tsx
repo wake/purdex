@@ -6,7 +6,7 @@ import { formatClock } from '../../lib/conversations/deck-format'
 import type { AgentTextItem, UserItem } from '../../lib/conversations/types'
 import RoomProse from '../room/RoomProse'
 import { OWN_TEXT_SOURCES } from '../../lib/conversations/image-sniff'
-import { agentUnitId, userUnitId } from '../../lib/conversations/find-units'
+import { agentUnitId, userText, userUnitId } from '../../lib/conversations/find-units'
 import { TerminalWindow } from '@phosphor-icons/react'
 import { UserBlock } from './UserBlock'
 import { UserText } from './UserText'
@@ -21,7 +21,7 @@ function ChatCommandRow({ item }: { item: UserItem }) {
     <div data-testid="chat-command" data-source={item.source} className="flex items-start gap-2 pl-1 deck-t-up text-text-secondary">
       <TerminalWindow size={14} className="mt-[0.3em] shrink-0 text-text-muted" aria-hidden />
       <div className="min-w-0 whitespace-pre-wrap break-all font-mono">
-        <span data-search-unit={userUnitId(item.id)}>{`! ${item.text}`}</span>
+        <span data-search-unit={userUnitId(item.id)}>{userText(item)}</span>
         {item.truncated && <span className="text-text-muted">…</span>}
         <span className="ml-1 font-sans deck-t-down text-text-muted">· {formatClock(item.at)}</span>
       </div>

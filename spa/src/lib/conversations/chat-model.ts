@@ -15,7 +15,7 @@ export type ChatEntry =
   | { kind: 'files'; key: string; turnIndex: number; turnId: string; files: number; added: number; removed: number; firstStepId: string }
 
 /** System items the chat shows as a line; the rest (handoff, model change, notices) are the deck's business. */
-const CHAT_SYSTEM = new Set(['interrupted', 'compacted'])
+const CHAT_SYSTEM = new Set(['interrupted', 'compacted', 'command_output'])
 
 /** The files a run of steps changed: distinct paths, and the lines added / removed over every edit that took effect. */
 export function fileSummary(steps: StepItem[]): { files: number; added: number; removed: number } | null {
@@ -44,7 +44,6 @@ export function buildChat(turns: PanelTurn[]): ChatEntry[] {
       const it = seg.item
       if (it.type === 'user') {
         const user = it as UserItem
-        if (user.source === 'command_output') continue
         const last = out[out.length - 1]
         if (user.source === 'peer') {
           // iOS 0.6.44: only peer messages that follow each other directly, inside one turn, are one line; any other row
