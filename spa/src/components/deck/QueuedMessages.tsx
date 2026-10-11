@@ -1,10 +1,11 @@
 // spa/src/components/deck/QueuedMessages.tsx — the local echo of what was sent but is not in the transcript yet (U3 plan D7):
-// 「你 · 排隊中」 (grey, no card) while the App still holds it, 「傳送中」 once it is handed out, 「可能已送出」 when the answer was lost, the reason when it was not sent.
+// 「你 · 排隊中」 (the person's first-cut block: accent frame — not accepted yet) while the App still holds it, 「傳送中」 once it is handed out, 「可能已送出」 when the answer was lost, the reason when it was not sent.
 // A message that MAY have run is only resent after an explicit confirmation (it can arrive twice), and as a new message.
 import { useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { outcomeMessage } from '../../lib/conversations/send'
 import type { QueueEntry } from '../../lib/conversations/send-queue'
+import { PENDING_USER_BOX, PENDING_USER_CAPTION } from './UserBlock'
 
 interface Props {
   entries: readonly QueueEntry[]
@@ -31,10 +32,10 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
         // "Queued" is only ever said of these; a message already handed out says it is on its way.
         if (e.state === 'undo' || e.state === 'waiting') {
           return (
-            <div key={e.id} data-testid="queued-message" data-state={e.state} className="text-text-system">
-              <div className="deck-t-down">{e.state === 'waiting' ? t('deck.send.waiting') : t('deck.user.queued')}</div>
-              <div className="whitespace-pre-wrap break-words deck-t-up">{e.text}</div>
-              <button type="button" className="rounded px-0 deck-t-down underline-offset-2 hover:underline" onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>
+            <div key={e.id} data-testid="queued-message" data-state={e.state} className={`${PENDING_USER_BOX} px-3 py-2`}>
+              <div className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{e.state === 'waiting' ? t('deck.send.waiting') : t('deck.user.queued')}</div>
+              <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
+              <button type="button" className="rounded px-0 deck-t-down text-accent underline-offset-2 hover:underline" onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>
             </div>
           )
         }

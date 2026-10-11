@@ -1,8 +1,8 @@
 // spa/src/components/deck/PendingTail.tsx — what is waiting to be read, drawn where the terminal draws it: at the end of the stream, inside the scroll
 // box, after the live line (c9d9c7-62). Two kinds, Claude Code's own queue first (it got in earlier), then what the App still holds:
-//  - header.queued: messages typed in the terminal (or sent by a peer) while a turn runs, in Claude Code's queue. Grey, no Undo (the App cannot
+//  - header.queued: messages typed in the terminal (or sent by a peer) while a turn runs, in Claude Code's queue. Accent-framed like the person's first-cut block, no Undo (the App cannot
 //    reach them); a peer's keeps its teal, faded. Only while the conversation runs or waits for the person: an idle one has an empty queue.
-//  - the App's send queue (QueuedMessages): grey with Undo, Up in an empty box calls them back.
+//  - the App's send queue (QueuedMessages): the same frame with Undo, Up in an empty box calls them back.
 import { useI18nStore } from '../../stores/useI18nStore'
 import { draftKey } from '../../lib/conversations/draft-memory'
 import { hostSendPort } from '../../lib/conversations/send'
@@ -10,6 +10,7 @@ import { sendQueueFor, type QueueEntry } from '../../lib/conversations/send-queu
 import { recallHeld } from '../../lib/conversations/draft-recall'
 import type { HeaderQueued } from '../../lib/conversations/types'
 import { QueuedMessages } from './QueuedMessages'
+import { PENDING_USER_BOX, PENDING_USER_CAPTION } from './UserBlock'
 
 function HeaderQueuedLine({ item }: { item: HeaderQueued }) {
   const t = useI18nStore((s) => s.t)
@@ -22,10 +23,10 @@ function HeaderQueuedLine({ item }: { item: HeaderQueued }) {
     )
   }
   return (
-    <div data-testid="header-queued" data-source="user" className="text-text-system">
-      <div className="deck-t-down">{t('deck.user.queued')}</div>
-      <div className="whitespace-pre-wrap break-words deck-t-up">{item.text}</div>
-      <div className="deck-t-down opacity-80">{t('deck.user.queued_terminal')}</div>
+    <div data-testid="header-queued" data-source="user" className={`${PENDING_USER_BOX} px-3 py-2`}>
+      <div className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{t('deck.user.queued')}</div>
+      <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{item.text}</div>
+      <div className="deck-t-down text-text-system">{t('deck.user.queued_terminal')}</div>
     </div>
   )
 }
