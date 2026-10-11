@@ -172,6 +172,15 @@ func setupRelayGuard(client *http.Client, baseURL, token string, force bool, std
 		return ExitRefused
 	}
 	if inf.RelaysActive == 0 {
+		settling := 0
+		for _, r := range inf.Relays {
+			if r.Settling {
+				settling++
+			}
+		}
+		if settling > 0 { // cleared into a live session: the relay itself is done, only its `done` report rides on the mod
+			fmt.Fprintf(stderr, "setup: %d relay(s) cleared into a live session are settling; a mod reload now leaves their done to the 15 minute reaper.\n", settling)
+		}
 		return ExitOK
 	}
 	var b strings.Builder

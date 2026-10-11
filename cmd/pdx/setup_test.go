@@ -208,8 +208,12 @@ func TestSetupRelayGuard(t *testing.T) {
 		}
 		only := serve(200, `{"approvals_open":0,"relays_active":0,"relays":[{"id":"op-s","kind":"member","state":"cleared","ref":"_settl1","settling":true}]}`)
 		defer only.Close()
-		if code := setupRelayGuard(only.Client(), only.URL, "", false, io.Discard); code != ExitOK {
+		var note bytes.Buffer
+		if code := setupRelayGuard(only.Client(), only.URL, "", false, &note); code != ExitOK {
 			t.Fatalf("only a settling relay: code = %d, want ok", code)
+		}
+		if !strings.Contains(note.String(), "1 relay(s)") || !strings.Contains(note.String(), "settling") || !strings.Contains(note.String(), "reaper") {
+			t.Errorf("a settling relay goes ahead with a note, got %q", note.String())
 		}
 	})
 	t.Run("--force goes ahead", func(t *testing.T) {

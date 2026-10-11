@@ -1,10 +1,13 @@
 package teammod
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"testing"
 
+	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -125,5 +128,45 @@ func TestInflight_AClearedRelayIntoALiveSessionIsSettlingNotActive(t *testing.T)
 	}
 	if !settling["op-live"] || settling["op-gone"] || settling["op-unknown"] || settling["op-written"] || settling["op-claimed"] {
 		t.Fatalf("settling = %v, want only op-live", settling)
+	}
+}
+
+// codex attack (high): the frame scan behind "is the new session live" is the daemon's costliest read; inflight must make it once
+// per request, not once per cleared op. Mutation: back to a LiveSessions call per op → 3 calls → red.
+type countingFrames struct {
+	mu    sync.Mutex
+	calls int
+	list  []agent.TerminalSession
+}
+
+func (c *countingFrames) LiveSessions(context.Context, string) ([]agent.TerminalSession, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	return append([]agent.TerminalSession(nil), c.list...), nil
+}
+
+func TestInflight_ScansTheFramesOncePerRequest(t *testing.T) {
+	f := newFixture(t)
+	for i, sid := range []string{"a", "b", "c"} {
+		if err := f.m.store.CreateRelayOp(team.RelayOp{ID: "op-" + sid, Kind: team.RelayKindMember, HostID: "h:1", SessionID: "sid-" + sid, NewSessionID: "sid-" + sid + "2",
+			Ref: "_" + sid, State: team.RelayCleared, HandoffPath: "/d/" + sid + ".md", PID: 100 + i, PaneID: "%" + sid, ProcStart: "t", CreatedAt: 1, UpdatedAt: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cf := &countingFrames{list: []agent.TerminalSession{{PaneID: "%b", SessionID: "sid-b2", Verified: true}}}
+	f.m.frames = cf
+	f.origins.mu.Lock()
+	f.origins.dead = map[string]bool{"sid-a2": true, "sid-c2": true}
+	f.origins.mu.Unlock()
+	var inf team.InflightResponse
+	if code, body := f.do(http.MethodGet, "/api/team/inflight", nil); code != http.StatusOK || json.Unmarshal(body, &inf) != nil {
+		t.Fatalf("inflight: %d %s", code, body)
+	}
+	if cf.calls != 1 {
+		t.Fatalf("LiveSessions called %d times for 3 cleared ops, want 1", cf.calls)
+	}
+	if inf.RelaysActive != 2 || len(inf.Relays) != 3 {
+		t.Fatalf("inflight = %+v, want op-b settling (live frame), a and c counted", inf)
 	}
 }

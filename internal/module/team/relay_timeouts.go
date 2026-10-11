@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
+	"github.com/wake/purdex/internal/module/agent"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -264,15 +266,38 @@ func (m *Module) failOnTimeout(op team.RelayOp, reason string) {
 // newSessionPresence is the presence of a cleared op's new session: Live when a verified frame on the op's pane (or the registry)
 // shows it, Gone when the registry was read and does not, Unknown when it could not be told (SessionPresence).
 func (m *Module) newSessionPresence(op team.RelayOp) peersmod.Presence {
+	return m.newSessionPresenceFrom(op, m.liveFramesOnce(context.Background()))
+}
+
+// liveFramesOnce reads the live cc frames at the first call and answers every later call from that read, so a caller judging
+// several ops scans once. A failed read is not retried: the registry then decides for all of them.
+func (m *Module) liveFramesOnce(ctx context.Context) func() []agent.TerminalSession {
+	var (
+		once   sync.Once
+		frames []agent.TerminalSession
+	)
+	return func() []agent.TerminalSession {
+		once.Do(func() {
+			if m.frames == nil {
+				return
+			}
+			if got, err := m.frames.LiveSessions(ctx, "cc"); err == nil {
+				frames = got
+			}
+		})
+		return frames
+	}
+}
+
+// newSessionPresenceFrom is newSessionPresence over the frames liveFrames reads (called only for an op that has a pane).
+func (m *Module) newSessionPresenceFrom(op team.RelayOp, liveFrames func() []agent.TerminalSession) peersmod.Presence {
 	if op.NewSessionID == "" {
 		return peersmod.PresenceGone
 	}
-	if _, pane, _ := m.opBinding(op); pane != "" && m.frames != nil {
-		if frames, err := m.frames.LiveSessions(context.Background(), "cc"); err == nil {
-			for _, f := range frames {
-				if f.PaneID == pane && f.Verified && f.SessionID == op.NewSessionID {
-					return peersmod.PresenceLive
-				}
+	if _, pane, _ := m.opBinding(op); pane != "" {
+		for _, f := range liveFrames() {
+			if f.PaneID == pane && f.Verified && f.SessionID == op.NewSessionID {
+				return peersmod.PresenceLive
 			}
 		}
 	}

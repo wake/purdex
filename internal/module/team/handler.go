@@ -80,8 +80,9 @@ func (m *Module) handleInflight(w http.ResponseWriter, r *http.Request) {
 	}
 	relays := make([]team.InflightRelay, 0, len(active))
 	counted := 0
+	liveFrames := m.liveFramesOnce(r.Context()) // one frame scan for the whole request, however many ops have cleared
 	for _, op := range active {
-		settling := op.State == team.RelayCleared && m.newSessionPresence(op) == peersmod.PresenceLive
+		settling := op.State == team.RelayCleared && m.newSessionPresenceFrom(op, liveFrames) == peersmod.PresenceLive
 		if !settling {
 			counted++
 		}
