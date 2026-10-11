@@ -73,6 +73,22 @@ func TestSendKeysIfInstanceAndShell_LineArrivesVerbatim(t *testing.T) {
 	}
 }
 
+// IsShellCommand is case-insensitive and so is the server's condition. A real tmux evaluates the exact condition the guard sends,
+// with the pane's command replaced by a literal (pane_current_command itself cannot be made to read `ZSH`), and must agree with
+// IsShellCommand on every name — on this tmux version.
+func TestShellCondition_ServerAgreesWithIsShellCommand(t *testing.T) {
+	run := ownTmux(t)
+	run("new-session", "-d", "-s", "c", "-c", os.TempDir(), "cat")
+	for _, name := range []string{"zsh", "ZSH", "Bash", "-zsh", "-BASH", "fish", "nu", "pwsh", "sh", "dash", "ksh", "tcsh",
+		"npm", "node", "claude", "zshrc", "--zsh", "sleep", "vim", "python3", "cat", ""} {
+		cond := strings.ReplaceAll(tmux.ShellConditionForTest(), "#{pane_current_command}", name)
+		got := run("display-message", "-p", "-t", "=c:", cond) == "1"
+		if got != tmux.IsShellCommand(name) {
+			t.Errorf("%q: tmux says shell=%v, IsShellCommand says %v", name, got, tmux.IsShellCommand(name))
+		}
+	}
+}
+
 func TestSendKeysIfInstanceAndShell_BusyPaneIsRefusedAndNothingTyped(t *testing.T) {
 	p := catPane(t) // the foreground command is `cat`
 	err := (&tmux.RealExecutor{}).SendKeysIfInstanceAndShell(p.sessionID, p.inst, "typed-into-cat-9z", tmux.KeyEnter)

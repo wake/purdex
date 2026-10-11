@@ -30,15 +30,16 @@ func IsShellCommand(cmd string) bool {
 // shellRefusedSentinel starts the else branch's report: the generation verdict, then the pane's command (the rest of the line).
 const shellRefusedSentinel = "pdx-launch-refused"
 
-// shellCondition is a nested `#{||:…}` over every shell name (and its login `-name`): no regex match, which differs across tmux builds.
+// shellCondition is a nested `#{||:…}` of case-insensitive glob matches (`#{m/i:name,…}`, no regex) over every shell name and its
+// login `-name`, the same rule as IsShellCommand. The names carry no glob metacharacter.
 func shellCondition() string {
 	names := make([]string, 0, 2*len(ShellCommands))
 	for _, s := range ShellCommands {
 		names = append(names, s, "-"+s)
 	}
-	cond := fmt.Sprintf("#{==:#{pane_current_command},%s}", names[len(names)-1])
+	cond := fmt.Sprintf("#{m/i:%s,#{pane_current_command}}", names[len(names)-1])
 	for i := len(names) - 2; i >= 0; i-- {
-		cond = fmt.Sprintf("#{||:#{==:#{pane_current_command},%s},%s}", names[i], cond)
+		cond = fmt.Sprintf("#{||:#{m/i:%s,#{pane_current_command}},%s}", names[i], cond)
 	}
 	return cond
 }

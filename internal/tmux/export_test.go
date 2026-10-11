@@ -27,3 +27,6 @@ func SetServerStateTimeout(t testing.TB, d time.Duration) {
 	serverStateTimeout = d
 	t.Cleanup(func() { serverStateTimeout = prev })
 }
+
+// ShellConditionForTest exposes the server-side shell condition so a test can have a real tmux evaluate it.
+func ShellConditionForTest() string { return shellCondition() }
