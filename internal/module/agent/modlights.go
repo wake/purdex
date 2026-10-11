@@ -42,6 +42,9 @@ type modLights struct {
 	// hookBgClearedAt is the broadcast stamp of each frame's last
 	// SessionStart: a Stop stamped at or before it cannot set the symbol.
 	hookBgClearedAt map[string]int64
+	// hookBgCount is the background work the frame's last Stop listed, counted by kind (hookbackground.go): what the conversation header
+	// reports. Same keys, same clearing and the same stamp guard as hookBackground. Under modMu.
+	hookBgCount map[string]HookBackground
 	// hookEdge is each root cc frame's last turn-boundary hook by frame id
 	// (hookedge.go). Under modMu.
 	hookEdge map[string]hookEdge
@@ -94,6 +97,7 @@ func newModLights() modLights {
 
 		hookBackground:    make(map[string]lights.Background),
 		hookBgClearedAt:   make(map[string]int64),
+		hookBgCount:       make(map[string]HookBackground),
 		hookEdge:          make(map[string]hookEdge),
 		hookEdgeClearedAt: make(map[string]time.Time),
 	}

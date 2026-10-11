@@ -2,7 +2,7 @@
 // terminal's `✻ Puzzling… (3m 3s)` and `✻ Brewed for 20s · done 2:58 AM`: while the agent works, a live line at the very end of the stream
 // (since when, and what it runs now); when a turn is done, one closing line (how long it took, when it ended). Everything is read from the
 // conversation the daemon already sends — the turn header's times and outcome, the steps' status, the header's status; nothing is added.
-import type { ConversationItem, StepItem } from './types'
+import type { ConversationItem, HeaderBackground, StepItem } from './types'
 
 export interface LineTurn {
   started_at?: number
@@ -31,6 +31,22 @@ const isStep = (i: ConversationItem): i is StepItem => i.type === 'step'
 
 /** A token count that is a positive whole number, else null (nothing to show). */
 const tokensOf = (n: unknown): number | null => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : null)
+
+export type BackgroundKind = 'shell' | 'subagent' | 'other'
+
+/**
+ * What the header says still runs in the background, as [kind, count] in a fixed order (commands, subagents, other work). A value that is not a
+ * positive whole number is none: the header is a wire value.
+ */
+export function backgroundCounts(bg: HeaderBackground | undefined): Array<[BackgroundKind, number]> {
+  if (bg === null || typeof bg !== 'object') return []
+  const out: Array<[BackgroundKind, number]> = []
+  for (const k of ['shell', 'subagent', 'other'] as const) {
+    const n = bg[k]
+    if (typeof n === 'number' && Number.isFinite(n) && n >= 1) out.push([k, Math.floor(n)])
+  }
+  return out
+}
 
 /** `842` below a thousand, then thousands with one decimal: `9.2k`, `12.4k`, `103.0k` (the terminal's `↓ 9.2k tokens`, without the word). */
 export function formatTokens(n: number): string {
@@ -85,6 +101,11 @@ export function durationParts(ms: number): Duration {
 
 type T = (key: string, params?: Record<string, string | number>) => string
 const two = (n: number) => String(n).padStart(2, '0')
+
+/** `1 background command, 2 background subagents` (the kinds that run, joined by the locale's separator); '' when nothing runs. */
+export function backgroundText(bg: HeaderBackground | undefined, t: T): string {
+  return backgroundCounts(bg).map(([k, n]) => t(`deck.bg.${k}`, { n })).join(t('deck.bg.sep'))
+}
 
 /** The duration as text in the reader's language. */
 export function formatDuration(ms: number, t: T): string {

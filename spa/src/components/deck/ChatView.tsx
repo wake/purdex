@@ -24,7 +24,7 @@ import { DoneTurnLine, LiveTurnLine } from './TurnLines'
 import { liveLine } from '../../lib/conversations/turn-line'
 import { PendingTail } from './PendingTail'
 import { queuedSignature, shownHeaderQueue, usePendingEntries } from '../../hooks/usePending'
-import type { HeaderQueued } from '../../lib/conversations/types'
+import type { HeaderBackground, HeaderQueued } from '../../lib/conversations/types'
 import { UnreadableState, type UnreadableReason } from './UnreadableState'
 
 export interface ChatViewProps {
@@ -38,6 +38,8 @@ export interface ChatViewProps {
   status: string
   /** Claude Code's own queue from the header (B-read); only drawn while the status is running / waiting. */
   queued?: readonly HeaderQueued[]
+  /** The background work Claude Code still runs, from the header: said on the live line and on the last turn's closing line. */
+  background?: HeaderBackground
   turns: PanelTurn[]
   /** Why the conversation cannot be read (D11); absent when it can. An empty conversation says 「還沒有內容」 by itself. */
   unreadable?: UnreadableReason
@@ -89,7 +91,7 @@ export function ChatView(props: ChatViewProps) {
   return <ChatViewBody key={binding} binding={binding} {...props} />
 }
 
-function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queued, turns, unreadable, onRetry, onSwitchToTerminal, input, active, hasMoreBefore, paging, onLoadOlder, generation }: ChatViewProps & { binding: string }) {
+function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queued, background, turns, unreadable, onRetry, onSwitchToTerminal, input, active, hasMoreBefore, paging, onLoadOlder, generation }: ChatViewProps & { binding: string }) {
   const t = useI18nStore((s) => s.t)
   const fold = usePaneFoldStore(`${paneKey}\0${binding}`)
   const entries = useMemo(() => buildChat(turns), [turns])
@@ -137,10 +139,10 @@ function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queu
               {groupByTurn(entries).map((g) => (
                 <div key={g.turnIndex} data-turn-index={g.turnIndex} className={`${SCROLL_ANCHOR_CLASS} space-y-3`}>
                   {g.entries.map((e) => <Entry key={e.key} entry={e} paneKey={paneKey} binding={binding} />)}
-                  {(() => { const tn = turns.find((x) => x.index === g.turnIndex); return tn ? <DoneTurnLine turn={tn} /> : null })()}
+                  {(() => { const tn = turns.find((x) => x.index === g.turnIndex); return tn ? <DoneTurnLine turn={tn} background={tn === turns[turns.length - 1] ? background : undefined} /> : null })()}
                 </div>
               ))}
-              <LiveTurnLine turns={turns} status={status} />
+              <LiveTurnLine turns={turns} status={status} background={background} />
               <PendingTail paneKey={paneKey} hostId={hostId} sessionId={sessionId ?? ''} entries={pending} queued={headerQueued} />
             </div>
             {input}
