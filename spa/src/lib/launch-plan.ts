@@ -97,5 +97,5 @@ const shellQuote = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`
 /** The line a button will type, as a preview only (the daemon composes the real one). */
 export function previewLine(line: string | null, dir: LaunchPlan['dir'], cd: boolean): string {
   if (!line) return ''
-  return cd && dir?.state === 'move' ? `cd ${dir.path} && ${line}` : line
+  return cd && dir?.state === 'move' ? `cd ${shellQuote(dir.path)} && ${line}` : line
 }

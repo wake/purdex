@@ -63,8 +63,8 @@ describe('rows', () => {
 describe('tooltips preview the line', () => {
   it('with the cd prefix while the box is on, without it once off', () => {
     mount(plan())
-    expect(screen.getByTestId('launch-resume').getAttribute('title')).toBe('cd /w/proj && claude --resume abc')
-    expect(screen.getByTestId('launch-fresh').getAttribute('title')).toBe('cd /w/proj && claude')
+    expect(screen.getByTestId('launch-resume').getAttribute('title')).toBe("cd '/w/proj' && claude --resume abc")
+    expect(screen.getByTestId('launch-fresh').getAttribute('title')).toBe("cd '/w/proj' && claude")
     fireEvent.click(screen.getByTestId('launch-cd'))
     expect(screen.getByTestId('launch-resume').getAttribute('title')).toBe('claude --resume abc')
   })

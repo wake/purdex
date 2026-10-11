@@ -50,8 +50,15 @@ describe('parseLaunchPlan busy', () => {
 })
 
 describe('previewLine', () => {
+  it('single-quotes the path, escaping each single quote as \'\\\'\'', () => {
+    const d = (path: string) => ({ path, state: 'move' as const })
+    expect(previewLine('claude', d('/a'), true)).toBe("cd '/a' && claude")
+    expect(previewLine('claude', d('/a b/c'), true)).toBe("cd '/a b/c' && claude")
+    expect(previewLine('claude', d("/a b/it's"), true)).toBe("cd '/a b/it'\\''s' && claude")
+    expect(previewLine('claude', d('/x/$HOME;rm&y'), true)).toBe("cd '/x/$HOME;rm&y' && claude")
+  })
   it('prefixes cd only when the box is on and the directory is a move', () => {
-    expect(previewLine('claude', { path: '/a', state: 'move' }, true)).toBe('cd /a && claude')
+    expect(previewLine('claude', { path: '/a', state: 'move' }, true)).toBe("cd '/a' && claude")
     expect(previewLine('claude', { path: '/a', state: 'move' }, false)).toBe('claude')
     expect(previewLine('claude', { path: '/a', state: 'here' }, true)).toBe('claude')
     expect(previewLine(null, null, true)).toBe('')
