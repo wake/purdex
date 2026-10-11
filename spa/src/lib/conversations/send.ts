@@ -114,6 +114,62 @@ export async function submitTyped(hostId: string, target: SubmitTarget, text: st
   }
 }
 
+/** How a take-back ended (K-2b, mirrors typed_recall.go): the text came back, nothing was popped, or Up may have been pressed without the text reaching us. */
+export type RecallOutcome =
+  | { kind: 'back'; text: string }
+  /** The daemon declined or could not start (400 / 404 / 409 / 429 / 500 / 503): nothing was popped from Claude Code's queue. */
+  | { kind: 'not_run'; reason: string; status: number }
+  /** `200 unknown`, `503 keys_failed`, or no answer: Up may have popped the queue; the text may be in the terminal's input. Not retried by hand. */
+  | { kind: 'may_have_popped'; reason: string }
+
+/**
+ * POST /api/sessions/{code}/recall (K-2b): `clientMsgId` is the user action's id; a lost connection is retried ONCE with the same id (the daemon
+ * records every answer after Up under it and replays it, so a retry never presses Up twice), then the take-back `may_have_popped`.
+ */
+export async function recallTyped(hostId: string, target: SubmitTarget, clientMsgId: string): Promise<RecallOutcome> {
+  const attempt = async (): Promise<RecallOutcome | null> => {
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), SUBMIT_TIMEOUT_MS)
+    try {
+      const res = await pinnedHostFetch(hostId, `/api/sessions/${encodeURIComponent(target.code)}/recall`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ac.signal,
+        body: JSON.stringify({ client_msg_id: clientMsgId, expected_tmux_instance: target.instance }),
+      })
+      let json: { outcome?: string; reason?: string; error?: string; text?: string } | null = null
+      try { json = await res.json() } catch { /* no JSON body: the status alone */ }
+      const code = typeof json?.error === 'string' && json.error ? json.error : typeof json?.reason === 'string' ? json.reason : ''
+      if (res.ok) {
+        if (typeof json?.text === 'string' && json.text !== '') return { kind: 'back', text: json.text }
+        return { kind: 'may_have_popped', reason: json?.outcome === 'unknown' && json.reason ? json.reason : 'unreadable' }
+      }
+      if (res.status === 503 && code === 'keys_failed') return { kind: 'may_have_popped', reason: 'keys_failed' }
+      if (res.status === 404 && !code) return { kind: 'not_run', reason: 'daemon_outdated', status: 404 } // Go's mux: a daemon with no /recall
+      return { kind: 'not_run', reason: code, status: res.status }
+    } catch {
+      return null
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  return (await attempt()) ?? (await attempt()) ?? { kind: 'may_have_popped', reason: 'network' }
+}
+
+/** The terminal's take-back: one NEW id per call (per user action); no target sends nothing. */
+export const typedRecall = (hostId: string, target: () => SubmitTarget | null) => async (): Promise<RecallOutcome> => {
+  const t = target()
+  if (!t || !t.code || !t.instance) return { kind: 'not_run', reason: 'no_instance', status: 0 }
+  return recallTyped(hostId, t, newClientMsgId())
+}
+
+const RECALL_REASONS = new Set(['input_not_empty', 'recall_mismatch', 'nothing_queued', 'recall_unsupported', 'recall_too_long', 'input_not_cleared', 'busy'])
+
+/** The message for a take-back that did not bring the text back (i18n keys under deck.recall). */
+export function recallMessage(o: Exclude<RecallOutcome, { kind: 'back' }>): OutcomeMessage {
+  if (o.kind === 'may_have_popped') return { key: 'deck.recall.may_have_popped', tone: 'warn' }
+  if (RECALL_REASONS.has(o.reason)) return { key: `deck.recall.${o.reason}`, tone: o.reason === 'busy' ? 'warn' : 'error' }
+  return { key: 'deck.recall.other', params: { code: o.reason || String(o.status) }, tone: 'error' }
+}
+
 export function interruptSession(hostId: string, sessionId: string): Promise<SendOutcome> {
   return post(hostId, path(sessionId, 'interrupt'), {})
 }

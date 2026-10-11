@@ -1,6 +1,7 @@
 // K-2a-2: the terminal adapter's capability gate, its live send target, and the fallback port that can no longer reach a submit route.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { paneSendTarget, terminalAdapter } from './terminal-adapter'
+import { workerAdapter } from './worker-adapter'
 import { unboundSendPort } from './send'
 import { sendQueueFor, clearAllSendQueues } from './send-queue'
 import { clearAllAdapters } from './deck-adapter'
@@ -42,6 +43,19 @@ describe('paneSendTarget', () => {
     useSessionStore.setState({ sessions: {} })
     expect(paneSendTarget(bare.paneId, H, 'dev001')).toBeNull()
     expect(paneSendTarget(bare.paneId, H, '')).toBeNull()
+  })
+})
+
+describe('takeBack (K-2b)', () => {
+  it('posts to /recall with the live target; the worker adapter has none', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ text: 'a' }))))
+    let inst = 'g1'
+    const a = terminalAdapter(H, 's1', 'dev001', () => ({ code: 'dev001', instance: inst }))
+    inst = 'g2' // stamped after the adapter was made: the one sent
+    await expect(a.takeBack!()).resolves.toEqual({ kind: 'back', text: 'a' })
+    expect(fetchMock.mock.calls[0][1]).toBe('/api/sessions/dev001/recall')
+    expect(JSON.parse(fetchMock.mock.calls[0][2].body).expected_tmux_instance).toBe('g2')
+    expect(workerAdapter(H, 'exc_1').takeBack).toBeUndefined()
   })
 })
 
