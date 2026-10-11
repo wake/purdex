@@ -137,31 +137,74 @@ describe('step · edit, long diff and 顯示全部', () => {
     },
   })
 
-  it('draws the first 16 lines and hands the rest to the panel', () => {
+  const expand = () => fireEvent.click(screen.getByTestId('diff-expand'))
+
+  it('is collapsed to 3 lines by default; the expand button shows 16 and hands the rest to the panel', () => {
     const onShowAll = vi.fn()
     const step = longDiff(40)
     render(<DeckItem item={step} actions={{ onShowAll }} />)
+    expect(screen.getByTestId('tool-diff').textContent).toContain('row 3')
+    expect(screen.getByTestId('tool-diff').textContent).not.toContain('row 4')
+    expect(screen.getByTestId('diff-stat')).toHaveTextContent('+40')
+    expect(screen.queryByTestId('diff-show-all')).toBeNull()
+    expect(screen.getByTestId('diff-expand')).toHaveAttribute('aria-expanded', 'false')
+    expand()
+    expect(screen.getByTestId('diff-expand')).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByTestId('tool-diff').textContent).toContain('row 16')
     expect(screen.getByTestId('tool-diff').textContent).not.toContain('row 17')
     expect(screen.queryByTestId('diff-more')).toBeNull()
     fireEvent.click(screen.getByTestId('diff-show-all'))
     expect(onShowAll).toHaveBeenCalledWith(step)
     expect(screen.getByTestId('diff-show-all')).toHaveTextContent('Show all 40 lines')
+    expand()
+    expect(screen.getByTestId('tool-diff').textContent).not.toContain('row 4')
   })
 
-  it('a diff of exactly 16 lines is whole, with no button', () => {
+  it('the open state survives a remount', () => {
+    const step = longDiff(40)
+    const first = render(<DeckItem item={step} />)
+    expand()
+    first.unmount()
+    render(<DeckItem item={step} />)
+    expect(screen.getByTestId('tool-diff').textContent).toContain('row 16')
+  })
+
+  it('a diff of 3 lines or fewer has no expand button', () => {
+    render(<DeckItem item={longDiff(3)} />)
+    expect(screen.queryByTestId('diff-expand')).toBeNull()
+    expect(screen.getByTestId('tool-diff').textContent).toContain('row 3')
+  })
+
+  it('a diff of exactly 16 lines is whole once expanded, with no 顯示全部', () => {
     render(<DeckItem item={longDiff(16)} actions={{ onShowAll: vi.fn() }} />)
+    expand()
     expect(screen.getByTestId('tool-diff').textContent).toContain('row 16')
     expect(screen.queryByTestId('diff-show-all')).toBeNull()
   })
 
-  it('a daemon-truncated short diff offers the panel too', () => {
-    render(<DeckItem item={longDiff(3, { truncated: true })} actions={{ onShowAll: vi.fn() }} />)
+  it('a daemon-truncated short diff (<= 3 lines) has no caret but still offers the panel', () => {
+    render(<DeckItem item={longDiff(2, { truncated: true })} actions={{ onShowAll: vi.fn() }} />)
+    expect(screen.queryByTestId('diff-expand')).toBeNull()
     expect(screen.getByTestId('diff-show-all')).toBeInTheDocument()
+  })
+
+  it('a 5-line diff has the caret; truncated or not', () => {
+    render(<DeckItem item={longDiff(5)} actions={{ onShowAll: vi.fn() }} />)
+    expect(screen.getByTestId('diff-expand')).toBeInTheDocument()
+    cleanup()
+    render(<DeckItem item={longDiff(5, { truncated: true })} actions={{ onShowAll: vi.fn() }} />)
+    expand()
+    expect(screen.getByTestId('diff-show-all')).toBeInTheDocument()
+  })
+
+  it('an edit without a diff needs no FoldContext', () => {
+    const step = { ...longDiff(3), diff: undefined } as StepItem
+    expect(() => render(<DeckItem item={step} />)).not.toThrow()
   })
 
   it('draws no 顯示全部 when nobody can show it', () => {
     render(<DeckItem item={longDiff(40)} />)
+    expand()
     expect(screen.queryByTestId('diff-show-all')).toBeNull()
   })
 
@@ -302,7 +345,43 @@ describe('step · one-liners', () => {
   it('a running step shows the dot', () => {
     const run = { ...find<StepItem>(steps(readGrep), (i) => (i as StepItem).kind === 'fetch'), status: 'running' } as StepItem
     render(<DeckItem item={run} />)
-    expect(screen.getByTestId('step-running')).toBeInTheDocument()
+    expect(screen.getByTestId('step-dot')).toHaveAttribute('data-state', 'running')
+    expect(screen.getByTestId('step-dot')).toHaveAttribute('aria-label')
+    expect(screen.getByTestId('step-dot')).not.toHaveAttribute('aria-hidden')
+    expect(screen.getByTestId('status-slot')).toBeEmptyDOMElement()
+  })
+
+  it('a failed step shows the chip, so its dot is aria-hidden instead of repeating it', () => {
+    const f = { type: 'step', id: 'f', at: 1, index: 0, started_at: 1, input: {}, summary: 'x', kind: 'read', tool: 'Read', status: 'failed' } as StepItem
+    render(<DeckItem item={f} />)
+    expect(screen.getByTestId('step-chip')).toBeInTheDocument()
+    expect(screen.getByTestId('step-dot')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByTestId('step-dot')).not.toHaveAttribute('aria-label')
+  })
+
+  it('every step kind starts with a dot: ok, failed (also done + exit 2), muted', () => {
+    const base = { type: 'step', id: 'd', at: 1, index: 0, started_at: 1, input: {}, summary: 'x' } as const
+    const cases: Array<[Partial<StepItem>, string]> = [
+      [{ kind: 'read', tool: 'Read', status: 'done' }, 'ok'],
+      [{ kind: 'execute', tool: 'Bash', status: 'done', command: { text: 'ls', exit_code: 0 } }, 'ok'],
+      [{ kind: 'execute', tool: 'Bash', status: 'done', command: { text: 'ls', exit_code: 2 } }, 'failed'],
+      [{ kind: 'edit', tool: 'Edit', status: 'failed' }, 'failed'],
+      [{ kind: 'task', tool: 'Agent', status: 'denied', denial: 'interrupted' }, 'muted'],
+    ]
+    for (const [over, state] of cases) {
+      render(<DeckItem item={{ ...base, ...over } as StepItem} />)
+      expect(screen.getByTestId('step-dot')).toHaveAttribute('data-state', state)
+      cleanup()
+    }
+  })
+
+  it('a done command with a non-zero exit has red output, header and body', () => {
+    const step = { type: 'step', id: 'e', at: 1, index: 0, started_at: 1, input: {}, summary: 'x', kind: 'execute', tool: 'Bash', status: 'done',
+      command: { text: 'ls', exit_code: 2 }, output: { text: 'boom\nbad', total_lines: 2, total_bytes: 8, truncated: false } } as StepItem
+    render(<DeckItem item={step} />)
+    expect(screen.getByTestId('output-toggle')).toHaveClass('text-status-error')
+    fireEvent.click(screen.getByTestId('output-toggle'))
+    expect(screen.getByTestId('output-body')).toHaveClass('text-status-error')
   })
 })
 

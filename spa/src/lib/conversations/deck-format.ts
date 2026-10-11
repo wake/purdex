@@ -75,6 +75,23 @@ export function stepChip(step: Pick<StepItem, 'status' | 'denial' | 'command'>):
   }
 }
 
+export type StepDotState = 'running' | 'ok' | 'failed' | 'muted'
+
+/** A step failed: it says so, or it is a command that finished with a non-zero exit (the same rule as the exit chip). */
+export function stepFailed(step: Pick<StepItem, 'status' | 'command'>): boolean {
+  if (step.status === 'failed') return true
+  const code = step.command?.exit_code
+  return step.status === 'done' && typeof code === 'number' && code !== 0
+}
+
+/** The leading dot of a step header, like the terminal's coloured ● : running / ok / failed / muted (denied, interrupted). */
+export function stepDot(step: Pick<StepItem, 'status' | 'denial' | 'command'>): StepDotState {
+  if (step.status === 'running') return 'running'
+  if (stepFailed(step)) return 'failed'
+  if (step.status === 'done') return 'ok'
+  return 'muted' // denied, interrupted, and any status we do not know: never green
+}
+
 export interface OutputTail {
   text: string
   /** The line count of the whole output (the daemon's own when it has one). */
@@ -134,17 +151,17 @@ function safeHunks(diff: StepDiff): DiffHunk[] {
  * The first `DIFF_DECK_LINES` lines of a diff, hunk by hunk (a hunk whose lines are all past the budget is dropped), with
  * the line count of the whole diff and whether anything was left off — by this cap or by the daemon.
  */
-export function capDiff(diff: StepDiff): { diff: StepDiff; totalLines: number; cut: boolean } {
+export function capDiff(diff: StepDiff, limit = DIFF_DECK_LINES): { diff: StepDiff; totalLines: number; cut: boolean } {
   const hunks = safeHunks(diff)
   const totalLines = hunks.reduce((n, h) => n + h.lines.length, 0)
-  let left = DIFF_DECK_LINES
+  let left = limit
   const kept: DiffHunk[] = []
   for (const h of hunks) {
     if (left <= 0) break
     kept.push(h.lines.length <= left ? h : { ...h, lines: h.lines.slice(0, left) })
     left -= h.lines.length
   }
-  return { diff: { ...diff, hunks: kept }, totalLines, cut: totalLines > DIFF_DECK_LINES || diff.truncated === true }
+  return { diff: { ...diff, hunks: kept }, totalLines, cut: totalLines > limit || diff.truncated === true }
 }
 
 /** The wire diff as the room's `ToolDiffView` takes it (camelCase hunks, `truncated` always a boolean). */
