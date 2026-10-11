@@ -25,9 +25,9 @@ const ui = (over: Partial<Parameters<typeof QuickReplies>[0]> = {}) => (
   <QuickReplies paneKey={P} hostId={H} sessionId={S} capabilities={{ send: 'prompt' } as never} asking={false} {...over} />
 )
 /** A host whose config says these replies (the collection loaded once, so no defaults). */
-function hostReplies(texts: string[]) {
+function hostReplies(texts: string[], titled = false) {
   useHostConfigStore.setState({
-    byHost: { [H]: { status: 'ready', quickRepliesSupported: true, quickReplies: texts.map((text, i) => ({ id: `r${i}`, text })), revisions: { quickReplies: 1 }, problems: {} } },
+    byHost: { [H]: { status: 'ready', quickRepliesSupported: true, quickReplies: texts.map((content, i) => ({ id: `r${i}`, title: titled ? `T${i}` : content, content })), revisions: { quickReplies: 1 }, problems: {} } },
     ensureLoaded: async () => {},
   } as never)
 }
@@ -43,6 +43,24 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); clearAllAdapters(); clearAllDrafts(); clearAllSendQueues() })
 
 describe('QuickReplies', () => {
+  it('a button shows the title, carries the content as its tooltip and sends the content', async () => {
+    hostReplies(['continue please', 'run the tests'], true)
+    render(ui())
+    const buttons = screen.getAllByTestId('quick-reply')
+    expect(buttons.map((b) => b.textContent)).toEqual(['T0', 'T1'])
+    expect(buttons[1]).toHaveAttribute('title', 'run the tests')
+    fireEvent.click(buttons[1])
+    const q = sendQueueFor(KEY, () => adapter().port())
+    expect(q.entries().map((e) => e.text)).toEqual(['run the tests'])
+  })
+
+  it('the destructive check looks at the content, not the title', () => {
+    hostReplies(['rm -rf build'], true)
+    render(ui())
+    fireEvent.click(screen.getByTestId('quick-reply'))
+    expect(screen.getByTestId('quick-reply-note')).toBeInTheDocument()
+  })
+
   it('a pill per reply of the host\'s list', () => {
     render(ui())
     expect(screen.getAllByTestId('quick-reply').map((b) => b.textContent)).toEqual(['continue', 'run the tests'])

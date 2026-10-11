@@ -80,10 +80,10 @@ export function QuickReplies({ paneKey, hostId, sessionId, capabilities, asking,
         {!collapsed && (
           <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto whitespace-nowrap [scrollbar-width:none]">
             {replies.map((r) => (
-              <button key={r.id} type="button" data-testid="quick-reply" title={r.text} onClick={() => send(r.text)}
-                aria-describedby={confirming !== null && confirming === textOf(r.text) ? noteId : undefined}
+              <button key={r.id} type="button" data-testid="quick-reply" title={r.content} aria-description={r.content} onClick={() => send(r.content)}
+                aria-describedby={confirming !== null && confirming === textOf(r.content) ? noteId : undefined}
                 className="min-h-9 max-w-[16rem] shrink-0 cursor-pointer truncate rounded-full border border-border-subtle bg-surface-secondary px-3.5 deck-t-down text-text-secondary transition-colors hover:border-border-active hover:text-text-primary">
-                {r.text}
+                {r.title}
               </button>
             ))}
           </div>

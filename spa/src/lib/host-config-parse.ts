@@ -85,7 +85,19 @@ function stringFields(...fields: string[]): RowCheck {
 }
 
 const projectProblem = stringFields('id', 'name', 'slug', 'path')
-const quickReplyProblem = stringFields('id', 'text')
+/**
+ * Which shape a reply is follows the PRESENCE of `content` (as the daemon decides): present → a v2 reply needing string `id`,
+ * `title`, `content`; absent → a daemon from before v2, whose `text` is both the title and the content.
+ */
+function quickReplyProblem(row: unknown): string | null {
+  if (isObject(row) && 'content' in row) return stringFields('id', 'title', 'content')(row)
+  return stringFields('id', 'text')(row)
+}
+
+function quickReplyOf(row: JsonObject): QuickReply {
+  if ('content' in row) return { id: row.id as string, title: row.title as string, content: row.content as string }
+  return { id: row.id as string, title: row.text as string, content: row.text as string }
+}
 const resumePairProblem = stringFields('exact', 'fallback')
 
 function commandProblem(row: unknown): string | null {
@@ -129,7 +141,7 @@ function problemOf(
   return rowsProblem(count + skipped)
 }
 
-function parseList<T>(raw: unknown, hostId: string, field: HostConfigField, check: RowCheck): ParsedCollection<T[]> {
+function parseList<T>(raw: unknown, hostId: string, field: HostConfigField, check: RowCheck, read?: (row: JsonObject) => T): ParsedCollection<T[]> {
   if (!isObject(raw)) {
     warn(hostId, field, 'collection is not an object; reading as empty')
     return { items: [], revision: 0, problem: { kind: 'shape' } }
@@ -143,8 +155,9 @@ function parseList<T>(raw: unknown, hostId: string, field: HostConfigField, chec
     const why = check(row)
     if (why) warn(hostId, field, `item ${i}${isObject(row) && typeof row.id === 'string' ? ` (id ${row.id})` : ''} skipped: ${why}`)
     return why === null
-  }) as T[]
-  return { items, revision, problem: problemOf(raw, hostId, field, raw.items.length - items.length) }
+  })
+  const out = (read ? items.map((row) => read(row as JsonObject)) : items) as T[]
+  return { items: out, revision, problem: problemOf(raw, hostId, field, raw.items.length - items.length) }
 }
 
 export function parseProjects(raw: unknown, hostId: string): ParsedCollection<HostProject[]> {
@@ -156,7 +169,7 @@ export function parseCommands(raw: unknown, hostId: string): ParsedCollection<Ho
 }
 
 export function parseQuickReplies(raw: unknown, hostId: string): ParsedCollection<QuickReply[]> {
-  return parseList(raw, hostId, 'quickReplies', quickReplyProblem)
+  return parseList(raw, hostId, 'quickReplies', quickReplyProblem, quickReplyOf)
 }
 
 /**

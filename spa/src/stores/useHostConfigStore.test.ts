@@ -40,6 +40,20 @@ beforeEach(() => {
   useHostConfigStore.getState().forget(H)
 })
 
+describe('quick replies from an old daemon (text only)', () => {
+  it('a 200 and a 409 both fall back to text', async () => {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue({ projects: { items: [], revision: 0 }, commands: { items: [], revision: 0 }, resumeTemplates: { items: {}, revision: 0 }, quickReplies: { items: [{ id: 'a', text: 'old' }], revision: 1 } })
+    await useHostConfigStore.getState().load(H)
+    expect(useHostConfigStore.getState().byHost[H].quickReplies).toEqual([{ id: 'a', title: 'old', content: 'old' }])
+    vi.mocked(api.putHostConfig).mockResolvedValueOnce({ items: [{ id: 'b', text: 'two' }], revision: 2 })
+    await useHostConfigStore.getState().saveQuickReplies(H, [])
+    expect(useHostConfigStore.getState().byHost[H].quickReplies).toEqual([{ id: 'b', title: 'two', content: 'two' }])
+    vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigConflictError({ items: [{ id: 'c', text: 'three' }], revision: 3 }))
+    await expect(useHostConfigStore.getState().saveQuickReplies(H, [])).rejects.toBeInstanceOf(HostConfigConflictError)
+    expect(useHostConfigStore.getState().byHost[H].quickReplies).toEqual([{ id: 'c', title: 'three', content: 'three' }])
+  })
+})
+
 describe('load', () => {
   it('stores items and revisions and becomes ready', async () => {
     vi.mocked(api.fetchHostConfig).mockResolvedValue(payload)
@@ -67,11 +81,11 @@ describe('load', () => {
   })
 
   it('loads quickReplies and its revision', async () => {
-    const quickReplies = { items: [{ id: 'go', text: 'go on' }], revision: 2 }
+    const quickReplies = { items: [{ id: 'go', title: 'Go', content: 'go on', text: 'go on' }], revision: 2 }
     vi.mocked(api.fetchHostConfig).mockResolvedValue({ ...payload, quickReplies })
     await useHostConfigStore.getState().load(H)
     const e = useHostConfigStore.getState().byHost[H]
-    expect(e.quickReplies).toEqual(quickReplies.items)
+    expect(e.quickReplies).toEqual([{ id: 'go', title: 'Go', content: 'go on' }])
     expect(e.revisions.quickReplies).toBe(2)
     expect(e.quickRepliesSupported).toBe(true)
   })
@@ -134,7 +148,7 @@ describe('save*', () => {
   })
 
   it('saveQuickReplies PUTs the quick-replies collection and stores the copy', async () => {
-    const next = [{ id: 'go', text: 'go on' }]
+    const next = [{ id: 'go', title: 'Go', content: 'go on' }]
     vi.mocked(api.putHostConfig).mockResolvedValue({ items: next, revision: 1 })
     await useHostConfigStore.getState().saveQuickReplies(H, next)
     expect(api.putHostConfig).toHaveBeenCalledWith(H, 'quick-replies', next, 0)
@@ -204,7 +218,7 @@ describe('malformed collections', () => {
   it('a 409 whose current copy is malformed is sanitised and sets the problem; a clean one clears it', async () => {
     vi.mocked(api.fetchHostConfig).mockResolvedValue(payload)
     await useHostConfigStore.getState().load(H)
-    const ok = { id: 'q1', text: 'ok' }
+    const ok = { id: 'q1', title: 'ok', content: 'ok' }
     vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigConflictError({ items: [ok, { id: 'q2' }], revision: 9 }))
     await expect(useHostConfigStore.getState().saveQuickReplies(H, [])).rejects.toBeInstanceOf(HostConfigConflictError)
     let e = useHostConfigStore.getState().byHost[H]
@@ -273,7 +287,7 @@ describe('stale responses', () => {
   describe('a refresh sent before a save lands after it', () => {
     const C1 = { id: 'c1', name: 'Claude', command: 'claude', icon: { kind: 'agent', value: 'cc-bot' } }
     const P2 = { id: 'p2', name: 'B', slug: 'b', path: '/b' }
-    const Q1 = { id: 'q1', text: 'ok' }
+    const Q1 = { id: 'q1', title: 'ok', content: 'ok' }
     // What the daemon held before the save: projects malformed, quick replies with a bad row.
     const before = {
       ...payload,
