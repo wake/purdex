@@ -68,25 +68,25 @@ B1 **Which host relays**: the App's dev-host setting. When it is set or changed,
 B2 **Keyless push module**: the push module mounts when `[push] apns_dir` is set **or** a relay is configured. Keyless, it serves
    `/api/push/devices` and presence as today and swaps the APNs sender for a relay sender. `/api/info` `push` gains
    `{mode: "direct"|"relay"|"off", relay_host_id?, relay_ok}`; `push.v1` is advertised only when mode ≠ off and (direct ready or the
-   relay is reachable and allowed), so the phone registers only where a push can actually go out.
-B3 **Relay endpoint on the dev host**: `POST /api/peers/push/send` (added to `HostRoutePolicy`), host principal only, the
-   caller's `PeerHost` entry must have **`allow_push_relay = true`** (new, default false). Body ≤ 64 KiB:
+   relay is reachable), so the phone registers only where a push can actually go out.
+B3 **Relay endpoint on the dev host**: `POST /api/peers/push/send` (added to `HostRoutePolicy`), host principal only (any paired host,
+   B5). Body ≤ 64 KiB:
    `{to_host_id, id (UUIDv4, idempotent for 10 min), jobs: [{token, env: sandbox|production, payload (JSON ≤ 4 KiB), collapse_id?,
    push_type: alert|background, priority: 10|5, expiration?}]}` (≤ 32 jobs). The dev host checks: topic = its own bundle id (never
    from the caller), env is one it can sign for, payload size, token shape (hex 64–200), per-caller rate limit (e.g. 60 jobs/min,
    burst 20) → 429; sends through its normal sender; returns per job `{status, apns_id?, reason?}` mirroring the APNs answer
    (410 Unregistered → the caller deletes that device, as the local sender does).
 B4 **Relay sender (caller side)**: same queue and retry rules as the local sender (spec v1 §7), transport = HostCaller; a relay
-   that is unreachable / refuses (403 not allowed, 404 no endpoint) → jobs dropped and counted, `relay_ok=false` in `/api/info`,
+   that is unreachable / refuses (401/403, 404 no endpoint) → jobs dropped and counted, `relay_ok=false` in `/api/info`,
    retried per §7 only for transient errors. No outbox persistence (v1, same as local: a push is not worth replaying late).
-B5 **Permission on the dev host**: `allow_push_relay` is set per paired host on the dev host (Hosts page, next to "Allow team"),
-   default off; when the user sets a dev host, the App offers to switch it on for the paired hosts it lists (one confirmation).
-   *(Open question Q1 for the user.)*
+B5 **Permission on the dev host** *(user 2026-10-11: 「預設全開，不關」)*: every paired host (an inbound host principal that
+   `PeerAuth` accepts) may relay; there is no per-host switch. The guards are B3's checks (own topic, size, token shape) and the
+   per-caller rate limit; unpairing a host removes its ability to relay.
 B6 **Payload origin**: the caller builds the payload, so `purdex.host_id`, `session_code`, badge keys and the title are the source
    host's — the phone attributes the push to the right host and sums badges per host as today.
 B7 **Security notes**: the relay never learns device prefs or tabs; it can only be asked to send a ≤4 KiB payload to a token for
-   its own topic, by a host the user allowed, rate-limited. A compromised allowed peer could spam that phone's notifications —
-   same trust level as AllowTeam; revoking = switching `allow_push_relay` off or unpairing.
+   its own topic, by a paired host, rate-limited. A compromised paired host could spam that phone's notifications within the rate
+   limit; unpairing it stops that.
 
 ## 5. Delivery (PRs, each ≤ 800 lines incl. tests)
 - PW-2a daemon: feed subscription, mapping, DedupKey freshness, worker waiting set → badge keys, payload `execution_id`; done body
@@ -94,19 +94,18 @@ B7 **Security notes**: the relay never learns device prefs or tabs; it can only 
 - PW-2b daemon: A4 last-reply reader (measure first).
 - PW-2c SPA: presence includes `exec-` codes (A6).
 - PW-2d iOS: tabs include `exec-` codes, tap-to-open workers, badge keys (contract A7).
-- PR-1 daemon: `allow_push_relay` in PeerHost + config/API + Hosts page field; relay endpoint B3 with checks and rate limit.
+- PR-1 daemon: relay endpoint B3 (HostRoutePolicy entry, checks, idempotency, rate limit).
 - PR-2 daemon: keyless module mount, relay sender B4, `/api/info` push mode, `PUT /api/push/relay` (B1/B2).
-- PR-3 SPA: dev-host setting → `PUT /api/push/relay` to every host; Hosts page switch; the confirmation of B5.
+- PR-3 SPA: dev-host setting → `PUT /api/push/relay` to every host (and `""` when the dev host is cleared).
 - Order: PW-2a → PW-2c → PW-2b; PR-1 → PR-2 → PR-3; iOS PW-2d after PW-2a merges. Deploy gate: PR-2 needs PR-1 on the dev
   host first (a relay to a host without the endpoint just fails closed).
 
 ## 6. Acceptance
 - A worker on mlab: needs-you, done (with the last reply) and failed reach the phone only when its tab is open on the phone; not
   while the Mac shows it; the badge counts a waiting worker once.
-- A Claude Code session on air26 (no key): its done push arrives via mlab with air26's host label; with `allow_push_relay` off on
-  mlab nothing is sent and air26's `/api/info` shows `relay_ok=false`; switching the dev host in the App moves the relay.
+- A Claude Code session on air26 (no key): its done push arrives via mlab with air26's host label; with mlab unreachable nothing is
+  sent and air26's `/api/info` shows `relay_ok=false`; switching the dev host in the App moves the relay.
 
 ## 7. Open questions
-- Q1 (user): the relay permission on the dev host — explicit per-host switch, default off, offered once when the dev host is set
-  (recommended, same safety level as "Allow team"), or automatic for every paired host?
+- ~~Q1~~ decided 2026-10-11: every paired host may relay, no switch (B5).
 - Q2 (plan): which Nexen read gives the last assistant text cheapest (A4).
