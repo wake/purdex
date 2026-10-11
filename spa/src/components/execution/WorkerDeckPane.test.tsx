@@ -23,6 +23,7 @@ import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import { NexApiError } from '../../lib/nex/types'
 import { takeToTerminal } from '../../lib/nex/handoff'
+import { getNexClientId } from '../../lib/nex/client-id'
 import { closeTab } from '../../lib/tab-lifecycle'
 
 vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), answerPermission: vi.fn() }))
@@ -227,6 +228,27 @@ describe('WorkerDeckPane', () => {
     expect(live()).toContain('2 background command(s), 1 background subagent(s)')
     setSlice({ tasks: {} })
     expect(live()).not.toContain('background')
+  })
+
+  // --- U4-4b: the worker's current facts (stream state, observers, lease) are small chips on the right of the status row ---
+  it('the status row\'s right side says the stream state, the observers and the lease holder, small', () => {
+    seed(summary({ state: 'running', observers: 2, lease: { principal_id: 'someone-else', expires_at: Date.now() + 60_000 } }))
+    setSlice({ sse: 'open' })
+    render(ui())
+    const chips = screen.getByTestId('worker-chips')
+    expect(chips).toHaveTextContent('live · 2 observers · lease: someone-else')
+    expect(within(chips).getByTestId('worker-chips-dot').className).toContain('bg-status-success')
+  })
+
+  it('a lease this client holds says "you"; none says so; a closed stream shows the error dot', () => {
+    seed(summary({ state: 'running', observers: 1, lease: { principal_id: `h/${getNexClientId()}`, expires_at: Date.now() + 60_000 } }))
+    setSlice({ sse: 'closed' })
+    render(ui())
+    const chips = screen.getByTestId('worker-chips')
+    expect(chips).toHaveTextContent('disconnected · 1 observers · lease: you')
+    expect(within(chips).getByTestId('worker-chips-dot').className).toContain('bg-status-error')
+    act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'running', observers: 0 }) as never) })
+    expect(screen.getByTestId('worker-chips')).toHaveTextContent('no lease')
   })
 
   it('a lease another principal holds is said, not swallowed', () => {

@@ -21,6 +21,7 @@ import type { DeckFooterContext } from '../deck/footer-context'
 import { SessionInput } from '../deck/SessionInput'
 import { StatusRow } from '../deck/StatusRow'
 import ViewModeMenu, { ViewModeLabel } from './ViewModeMenu'
+import { WorkerChips } from './WorkerChips'
 import { WorkerEndedFooter } from './WorkerEndedFooter'
 import { WorkerLifecycleRow } from './WorkerLifecycleRow'
 import { workerEndedKind } from '../../lib/nex/worker-ended'
@@ -124,10 +125,11 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
         <div className="min-w-0 flex-1">
           <StatusRow cwd={st.summary?.cwd} model={ctx.usage?.model ?? null} effort={ctx.usage?.effort ?? null} cost={st.summary?.cost_usd ?? null} />
         </div>
+        <WorkerChips sse={st.sse} observers={st.summary?.observers ?? 0} lease={st.summary?.lease} />
         {/* a narrow window hides the status bar's mode buttons: the way back to the room is here too */}
         <button ref={menuAnchor} type="button" data-testid="worker-deck-view-menu" aria-haspopup="menu" aria-expanded={menuOpen}
           onClick={() => setMenuOpen((o) => !o)}
-          className="mr-2 flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 text-xs text-text-secondary hover:bg-surface-hover hover:text-text-primary">
+          className="ml-2 mr-2 flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 text-xs text-text-secondary hover:bg-surface-hover hover:text-text-primary">
           <ViewModeLabel mode="deck" /> <CaretDown size={10} />
         </button>
         {menuOpen && <ViewModeMenu anchorRef={menuAnchor} mode="deck" onModeChange={onModeChange} onClose={() => setMenuOpen(false)} />}
