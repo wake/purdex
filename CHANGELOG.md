@@ -1,5 +1,78 @@
 # Changelog
 
+## [1.0.0-alpha.710] - 2026-10-11
+
+> daemon、mod、SPA 都有改：**要部署 daemon，並重跑 `pdx setup`**（#2633 改了 mod）。
+
+### Added：指揮台的即時列與完成列顯示這一輪產出多少 token（#2624）
+
+- 每一輪帶 `output_tokens`：主執行緒各則回覆的輸出 token 加總（同一則訊息的多列只算一次，subagent 不算進來）。即時列顯示「✻ 執行中 · Bash · ↓ 9.2k · 3 分 03 秒」，完成列顯示「✻ 完成 · 20 秒 · ↓ 3.1k · 02:58」，歷史回合也有。
+- 跟終端機的數字一致；執行中會略落後（轉錄檔每寫完一段才更新），結束後相同。舊 daemon 不帶這個欄位，App 就不顯示 ↓。
+
+### Added：完成列提醒「背景還有工作在跑」（#2627）
+
+- 對話資料多了 `background`：Claude Code 結束一輪時還在背景執行的指令、subagent、其他工作各有幾個（取自 Stop hook 的 `background_tasks`）。只在 session 在線、未結束時帶。
+- 指揮台與聊天：即時列附「· 1 個背景指令」，最後一回合的完成列結尾加「· 1 個背景指令仍在執行」，對應終端機的「1 shell still running」。舊 daemon 不帶，App 就不顯示。
+
+### Added：daemon 認得 worker 擁有的對話（U4-1a，#2628）
+
+- worker（Nexen 執行體）跑的 Claude Code 對話，對話資料現在標 `backend: execution`，帶 worker 的即時燈號（每次更新都重讀），worker 結束就轉成已結束；能做的操作（送訊息、中斷、回覆權限、背景工作）也照 worker 的能力回報。
+- 這是 worker 分頁改用指揮台／聊天（U4）的 daemon 半邊；App 端是下一張 PR，舊 App 不受影響。
+
+### Changed：還沒被 agent 接受的訊息用醒目框，檔案可以拖到整個 pane（#2629）
+
+- 還在 App 手上或在 Claude Code 佇列裡排隊、agent 還沒讀進去的你的訊息，改回醒目的紫框區塊；已經被讀進去的照現行樣式、再調暗一小步，一眼分得出哪些還沒送達。其他 session 的排隊訊息不變。
+- 指揮台與聊天：檔案拖到 pane 任何地方都能放下（整個 pane 顯示虛線框），走原本的上傳流程進輸入框附件；終端機不變。
+- 表格格線調亮一階（深色更亮、淺色更深）。
+
+### Fixed：點 team 成員時主機被隱藏不再毫無反應（#2631）
+
+- 點 team 面板或側欄的成員，如果它所在的主機在這個工作台被隱藏，原本什麼都不發生；現在會提示「{主機} 在這個工作台是隱藏的」，並提供「顯示並開啟」。
+
+### Added：worker 分頁可以切到「指揮台」檢視（U4-1b，#2632）
+
+- worker（Nexen 執行體）分頁的檢視選單／狀態列多了「指揮台」，用跟一般 session 一樣的指揮台看 worker 的對話、燈號與可用操作（daemon 半邊是 #2628）。daemon 太舊時狀態顯示為已結束。
+
+### Internal：「打字送出」的地基（K-1a-1，#2633）
+
+- daemon 與 mod 之間新增三種工作（把文字填進 Claude Code 輸入框、只清掉自己填的內容、讀輸入框），以及送出流程的帳本狀態；mod 端照著執行，任何不確定的情況都不送出。之後 Mac 與 iOS 送訊息會改成「打進 Claude Code」，讓 Claude Code 自己的佇列處理、可中途插話、終端機與指揮台同步。這一版還沒有任何地方使用，行為不變；但 mod 有改，部署後要重跑 `pdx setup`。
+
+
+### Added：新的送出路由「打進 Claude Code」（K-1a-2，#2635、#2636）
+
+- 新路由 `POST /api/sessions/{code}/submit`（裝置也能用）：daemon 請 session 的 mod 把文字填進 Claude Code 的輸入框，確認內容相符、agent 不在等待回覆時，才對那個 pane 送 Enter；Enter 前任何不對（填錯、對話框開著、pane 在捲動模式、燈號轉成等待）都會清掉自己填的字、不送出。結果不確定時回 unknown，重送也絕不重打。
+- 沒裝 mod 的 session：確定沒有 owner 超過 10 秒、燈號是閒置或執行中時，才直接打字＋Enter（同樣的守衛）；Enter 被拒會回報字留在終端機。
+- 舊的 `/api/conversations/claude/{sid}/submit` 不變，兩者共用同一把每 session 的鎖。App 還沒改用新路由（K-2）。
+
+### Fixed：跨主機開出來的 member 在 App 點不開（#2630，#2634）
+
+- lead 從 mlab 遠端開到另一台主機的 member，lead 端名冊漏記它的 tmux session 名稱，App 點它只會跳「session 尚未出現在清單」。現在登記時就記下名稱；已經登記但空著的，名冊回傳時自動補上（不改資料庫）。從對方主機收編進來的 member 本來就正常，不受影響。
+
+### Changed：worker 分頁的指揮台可以直接送訊息（U4-2，#2637）
+
+- 指揮台的輸入列改成跟一般 session 同一個輸入元件：worker 分頁裡送出走 Nexen、可以中斷、附檔、草稿會保留，還沒被接受的訊息一樣用醒目框標示。一般 session 的終端機行為不變。
+
+### Fixed：「打進 Claude Code」送出路徑的四個邊界（#2639）
+
+- codex 補審 K-1a 找到並修正：mod 回報結果逾時（daemon 其實收到）時不再自己清掉輸入框，避免 daemon 接著按 Enter 送出空白；沒裝 mod 的直接打字模式，同一則訊息改成原子地認領，不會被兩個 session 各打一次；Enter 前讀燈號失敗一律不送（不再退回填字前的狀態），避免權限對話框跳出時仍按下 Enter；Enter 結果不明後清理輸入框會重試，仍失敗就放棄並回報，不再永久卡住。
+
+### Internal：叫回排隊訊息的路由（K-1b，#2644）
+
+- 新路由 `POST /api/sessions/{code}/recall`（裝置可用）：把剛「打進 Claude Code」、還在輸入框或佇列裡的訊息叫回來（保守版）。App 與 iOS 還沒接上（K-2／K-3），使用上沒有差別。
+
+### Changed：worker 指揮台的權限請求改成輸入框上方的作答卡（U4-3，#2641）
+
+- worker 分頁的指揮台裡，Nexen 送來的權限請求改成輸入框上方的作答卡（同意／拒絕走 Nexen 的權限通道）；其他裝置先答了，卡片會自動收起。
+
+### Fixed：側欄燈號延遲、接力時機失準的根因——hook 處理不再每件 fork 數百次 ps（#2647）
+
+- daemon 每處理一個 hook 事件，都會在序列化的區段裡把所有 live frame 的身分重新檢查一遍，每個 frame 要 fork `ps` 5～13 次（實測約每秒 280 次 fork，每件 hook 0.4～1 秒，最慢排隊 3 分鐘），主機一忙側欄燈號就跑掉、接力時機也跟著失準。現在追父行程只讀 PPID，PPID 與啟動時間都用一次 sysctl 讀出、不 fork：每個 frame 的檢查從 15～69 ms 降到 0.3 ms 以下。
+- 啟動時間的文字必須與 `ps -o lstart=` 逐字相同（frame 存的是 ps 的文字）：daemon 會先用自己這個行程比對一次，時區或語系一變就重新比對，對不上就照舊問 ps——只會變慢，不會把還活著的 frame 誤判成 pid 被重用。
+
+### Changed：狀態列的 peer 只顯示 name [ref]（#2648）
+
+- 狀態列的 peer 區段只留 `name [ref]`，title 移到滑鼠提示；斷線時提示裡也保留位址、ref 與 title。
+
 ## [1.0.0-alpha.709] - 2026-10-11
 
 > daemon 與 SPA 都有改：**要部署 daemon**（#2619）；mod 沒有改，不必重跑 `pdx setup`。
