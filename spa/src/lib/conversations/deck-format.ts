@@ -16,15 +16,20 @@ export function formatClock(ms: number): string {
 
 export type UserCaption =
   | { kind: 'you'; time: string }
-  | { kind: 'queued' }
+  | { kind: 'delivered'; time: string }
   | { kind: 'from'; name: string; time: string }
   | { kind: 'background' }
   | { kind: 'schedule' }
 
+/** The id of the first user item of a turn (the message that began it): a later one arrived while the turn was running. */
+export const firstUserId = (items: readonly { type: string; id: string }[]): string | undefined => items.find((i) => i.type === 'user')?.id
+
 /** The caption of a user block by where the message came from; a source this build does not know reads as the user. */
-export function userCaption(item: Pick<UserItem, 'source' | 'from' | 'at'>): UserCaption {
+export function userCaption(item: Pick<UserItem, 'source' | 'from' | 'at'>, midTurn = false): UserCaption {
   switch (item.source) {
-    case 'queued': return { kind: 'queued' }
+    // A `queued` source is a message the agent already read (it went in while a turn ran); "queued" itself is only what the App holds back
+    // (QueuedMessages). In the middle of a turn it says when it got in, as the first message of a turn it is an ordinary one.
+    case 'queued': return midTurn ? { kind: 'delivered', time: formatClock(item.at) } : { kind: 'you', time: formatClock(item.at) }
     case 'peer': return { kind: 'from', name: item.from?.name || item.from?.kind || '', time: formatClock(item.at) }
     case 'task': case 'background': return { kind: 'background' }
     case 'schedule': case 'scheduled': return { kind: 'schedule' }

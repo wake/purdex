@@ -42,6 +42,15 @@ describe('DeckView', () => {
     expect(turns[0].className).toContain('scroll-anchor')
   })
 
+  it('a queued message that begins a turn reads as an ordinary one; one that came in during the turn says so (never "queued")', () => {
+    const queued = (id: string, index: number): ConversationItem => ({ type: 'user', id, at: new Date(2026, 9, 10, 9, 5).getTime(), index, text: id, source: 'queued' })
+    render(<DeckView {...props} entry={entry([turn(0, [queued('opens', 0)]), turn(1, [userItem('first', 0), exec('x', 1), queued('mid', 2)])])} />)
+    const caps = screen.getAllByTestId('deck-user-caption').map((c) => c.textContent)
+    expect(caps[0]).toBe('You · 09:05')
+    expect(caps[1]).toMatch(/^You · \d\d:\d\d$/)
+    expect(caps[2]).toBe('You · 09:05 · delivered mid-turn')
+  })
+
   it('says how many items a too-long turn left out, and shows a turn error', () => {
     render(<DeckView {...props} entry={entry([turn(0, [userItem('a', 5)], { omitted_items: 5, error: { kind: 'api', message: 'boom' } })])} />)
     expect(screen.getByTestId('deck-omitted')).toHaveTextContent('5 earlier step(s) not shown')

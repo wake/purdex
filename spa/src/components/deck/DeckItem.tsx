@@ -9,11 +9,11 @@ import { UserBlock } from './UserBlock'
 import { AgentHeader } from './AgentHeader'
 
 /** `light`: the agent text is drawn as plain text (a turn far off screen, #2469); streaming text is always drawn in full. */
-export function DeckItem({ item, actions, light, agentModel, agentHeader }: { item: ConversationItem; actions?: StepActions; light?: boolean; /** proto v2: the first agent text of a turn carries the head line */ agentModel?: string; agentHeader?: boolean }) {
+export function DeckItem({ item, actions, light, agentModel, agentHeader, midTurn }: { item: ConversationItem; /** a user message that is not the first of its turn */ midTurn?: boolean; actions?: StepActions; light?: boolean; /** proto v2: the first agent text of a turn carries the head line */ agentModel?: string; agentHeader?: boolean }) {
   const t = useI18nStore((s) => s.t)
   if (!isKnownItem(item)) return null
   switch (item.type) {
-    case 'user': return <UserBlock item={item} />
+    case 'user': return <UserBlock item={item} midTurn={midTurn} />
     case 'agent_text':
       return (
         <div data-testid="deck-agent-text" className="deck-md">

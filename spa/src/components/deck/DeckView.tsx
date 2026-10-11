@@ -15,6 +15,7 @@ import { useConversationStore, type ConversationEntry } from '../../stores/useCo
 import { useI18nStore } from '../../stores/useI18nStore'
 import { StatusOverlay } from './StatusOverlay'
 import { DeckItem } from './DeckItem'
+import { firstUserId } from '../../lib/conversations/deck-format'
 import { DoneTurnLine, LiveTurnLine } from './TurnLines'
 import { liveLine } from '../../lib/conversations/turn-line'
 import { DeckRevealContext, EAGER_TURNS, useDeckReveal } from './deck-reveal'
@@ -51,6 +52,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   // A turn without agent text looks the same either way: nothing to watch.
   const hasProse = turn.items.some((item) => item.type === 'agent_text')
   const firstAgentId = turn.items.find((item) => item.type === 'agent_text')?.id
+  const firstUser = firstUserId(turn.items)
   useEffect(() => {
     const el = ref.current
     if (full || !reveal || !el || !hasProse) return
@@ -69,7 +71,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
       {turn.omitted_items ? (
         <div data-testid="deck-omitted" className="text-xs text-text-muted">{t('deck.omitted', { n: turn.omitted_items })}</div>
       ) : null}
-      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} agentModel={agentModel} agentHeader={item.id === firstAgentId} />)}
+      {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} agentModel={agentModel} agentHeader={item.id === firstAgentId} midTurn={item.type === 'user' && item.id !== firstUser} />)}
       <DoneTurnLine turn={turn} />
       {turn.error && <div data-testid="deck-turn-error" className="text-xs text-status-error">{turn.error.message}</div>}
     </section>

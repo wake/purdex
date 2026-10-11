@@ -46,7 +46,10 @@ describe('user', () => {
     cleanup()
     const queued = find<UserItem>(items, (i) => (i as UserItem).source === 'queued')
     render(<DeckItem item={queued} />)
-    expect(screen.getByTestId('deck-user-caption')).toHaveTextContent('You · queued')
+    expect(screen.getByTestId('deck-user-caption').textContent).toMatch(/^You · \d\d:\d\d$/) // the first message of a turn: an ordinary one
+    cleanup()
+    render(<DeckItem item={queued} midTurn />)
+    expect(screen.getByTestId('deck-user-caption').textContent).toMatch(/^You · \d\d:\d\d · delivered mid-turn$/)
     cleanup()
     const sched = find<UserItem>(items, (i) => (i as UserItem).source === 'scheduled')
     render(<DeckItem item={sched} />)

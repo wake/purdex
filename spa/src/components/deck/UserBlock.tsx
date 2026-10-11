@@ -1,5 +1,5 @@
 // spa/src/components/deck/UserBlock.tsx — the deck's one tinted block (U3 spec §4): a framed well with a caption by source
-// (你 · HH:mm / 你 · 排隊中 / 來自 <name> / 背景任務回報 / 排程喚醒). A bash-mode input shows as `! command`.
+// (你 · HH:mm / 你 · HH:mm · 回合中送達 / 來自 <name> / 背景任務回報 / 排程喚醒). A bash-mode input shows as `! command`.
 import { useI18nStore } from '../../stores/useI18nStore'
 import { textOutput, userCaption, userTone, type UserTone } from '../../lib/conversations/deck-format'
 import type { UserItem } from '../../lib/conversations/types'
@@ -16,12 +16,12 @@ const TONE: Record<UserTone, { box: string; caption: string; body: string }> = {
   notice: { box: 'rounded-md border border-dashed border-border-default', caption: 'text-text-system', body: 'text-text-system' },
 }
 
-export function UserBlock({ item }: { item: UserItem }) {
+export function UserBlock({ item, midTurn }: { item: UserItem; /** Not the first user message of its turn (a `queued` one then says it arrived mid-turn). */ midTurn?: boolean }) {
   const t = useI18nStore((s) => s.t)
-  const cap = userCaption(item)
+  const cap = userCaption(item, midTurn)
   const caption =
     cap.kind === 'you' ? t('deck.user.you', { time: cap.time })
-    : cap.kind === 'queued' ? t('deck.user.queued')
+    : cap.kind === 'delivered' ? t('deck.user.delivered', { time: cap.time })
     : cap.kind === 'from' ? t('deck.user.from', { name: cap.name, time: cap.time })
     : cap.kind === 'background' ? t('deck.user.background')
     : t('deck.user.schedule')
