@@ -62,6 +62,7 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
+	m.markIdleCompacted(mr.SessionID) // the cache the idle notice speaks of has been spent: no "about to expire" for this stretch
 	if m.sender == nil || m.stopping() {
 		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
 		return

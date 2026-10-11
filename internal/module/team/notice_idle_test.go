@@ -176,15 +176,99 @@ func TestIdleNotice_RecheckBeforeSend(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("members = %v, %v", rows, err)
 	}
+	gen, won := f.m.claimIdleTold("sid-ma")
+	if !won {
+		t.Fatal("no period to claim")
+	}
 	f.usage.setStatus("tm-op-a", "running") // it started a turn after the check
-	f.m.idleNotice(rows[0], 55, team.RelayIdleMinutes)
+	f.m.idleNotice(rows[0], 55, team.RelayIdleMinutes, gen)
 	if n := len(f.sender.calls()); n != 0 {
 		t.Fatalf("%d notices for a member that is running, want 0", n)
 	}
 	f.usage.setStatus("tm-op-a", "idle")
-	f.m.idleNotice(rows[0], 55, team.RelayIdleMinutes)
+	gen, won = f.m.claimIdleTold("sid-ma")
+	if !won {
+		t.Fatal("the skipped send did not give the period back")
+	}
+	f.m.idleNotice(rows[0], 55, team.RelayIdleMinutes, gen)
 	if n := len(f.sender.calls()); n != 1 {
-		t.Fatalf("%d notices once idle again, want 1 (the skipped send did not mark the period told)", n)
+		t.Fatalf("%d notices once idle again, want 1", n)
+	}
+}
+
+// Codex attack: a goroutine of one idle period must not send for a later period, nor unmark it. The status flickers
+// (idle → waiting → idle) while the notice of the first period is still on its way. Mutation gate: drop the generation → red.
+func TestIdleNotice_AStaleGoroutineNeitherSendsNorUnmarksALaterPeriod(t *testing.T) {
+	f := idleSetup(t)
+	f.advance(idleMin)
+	rows, _ := f.m.store.ActiveMembersOfLiveTeams()
+	gen1, won := f.m.claimIdleTold("sid-ma")
+	if !won {
+		t.Fatal("no period to claim")
+	}
+	f.usage.setStatus("tm-op-a", "waiting")
+	f.idleCheck() // the first period ends
+	f.usage.setStatus("tm-op-a", "idle")
+	f.idleCheck() // a second one starts
+	gen2, won := f.m.claimIdleTold("sid-ma")
+	if !won || gen2 == gen1 {
+		t.Fatalf("second period: won=%v gen1=%d gen2=%d", won, gen1, gen2)
+	}
+	f.m.idleNotice(rows[0], 55, team.RelayIdleMinutes, gen1) // the goroutine of the first period, late
+	if n := len(f.sender.calls()); n != 0 {
+		t.Fatalf("%d notices from a stale goroutine, want 0", n)
+	}
+	f.usage.setStatus("tm-op-a", "running") // …and it takes the release path
+	f.m.idleNotice(rows[0], 55, team.RelayIdleMinutes, gen1)
+	if _, won := f.m.claimIdleTold("sid-ma"); won {
+		t.Fatal("the stale goroutine's release unmarked the second period")
+	}
+}
+
+// Codex attack: the member was moved to a new session (its relay) or released after the check: the old row's notice is void.
+// Mutation gate: drop the active-member re-read → red.
+func TestIdleNotice_AMemberThatIsGoneOrMovedIsNotToldAbout(t *testing.T) {
+	f := idleSetup(t)
+	f.advance(idleMin)
+	rows, _ := f.m.store.ActiveMembersOfLiveTeams()
+	gen, _ := f.m.claimIdleTold("sid-ma")
+	tx, err := f.m.store.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := moveTeamRoles(tx, "sid-ma", RelayReport{NewSessionID: "sid-mb", NewRef: "_newmb", At: f.clock.Load()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	f.m.idleNotice(rows[0], 55, team.RelayIdleMinutes, gen)
+	if n := len(f.sender.calls()); n != 0 {
+		t.Fatalf("%d notices for a session the member left, want 0", n)
+	}
+}
+
+// Codex attack: a compaction ends the idle question for that stretch — an idle compaction that landed before the clock
+// reached the minutes (a restart in between, a longer configured wait) must not be followed by "cache about to expire".
+// Mutation gate: drop markIdleCompacted → red.
+func TestIdleNotice_NotAfterTheSessionWasCompacted(t *testing.T) {
+	f := idleSetup(t)
+	f.advance(idleMin - 60_000)
+	f.compacted("sid-ma", "idle")
+	waitFor(t, func() bool { return len(f.sender.calls()) == 1 })
+	f.advance(2 * 60_000)
+	f.idleCheck()
+	if n := len(f.sender.calls()); n != 1 {
+		t.Fatalf("%d notices, want only the compaction's", n)
+	}
+	f.usage.setStatus("tm-op-a", "running") // the stretch ends…
+	f.idleCheck()
+	f.usage.setStatus("tm-op-a", "idle")
+	f.idleCheck() // …and the next one is its own
+	f.advance(idleMin)
+	f.idleCheck()
+	if n := len(f.sender.calls()); n != 2 {
+		t.Fatalf("%d notices after the next stretch's minutes, want 2", n)
 	}
 }
 
@@ -240,7 +324,7 @@ func TestIdleNotice_EnvOverrides(t *testing.T) {
 	for _, c := range []struct {
 		env  string
 		want int
-	}{{"2", 2}, {"", team.RelayIdleMinutes}, {"0", team.RelayIdleMinutes}, {"abc", team.RelayIdleMinutes}, {"60", 60}} {
+	}{{"2", 2}, {"", team.RelayIdleMinutes}, {"0", team.RelayIdleMinutes}, {"abc", team.RelayIdleMinutes}, {"50", 50}, {"51", team.RelayIdleMinutes}, {"1440", team.RelayIdleMinutes}} {
 		t.Setenv("PDX_RELAY_IDLE_MINUTES", c.env)
 		if got := noticeIdleMinutes(); got != c.want {
 			t.Errorf("PDX_RELAY_IDLE_MINUTES=%q → %d, want %d", c.env, got, c.want)

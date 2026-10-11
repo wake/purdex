@@ -28,16 +28,24 @@ func envInt(name string, lo, hi, def int) int {
 	return def
 }
 
-// noticeIdleMinutes is how long a member is idle before its lead is told: PDX_RELAY_IDLE_MINUTES (1–1440, for the
-// acceptance), else team.RelayIdleMinutes. It sets this notice only.
+// noticeIdleMinutes is how long a member is idle before its lead is told: PDX_RELAY_IDLE_MINUTES (1–50, for the
+// acceptance; a longer wait would outlast the idle compaction it is meant to beat), else team.RelayIdleMinutes. It sets this notice only.
 func noticeIdleMinutes() int {
-	return envInt("PDX_RELAY_IDLE_MINUTES", 1, 1440, team.RelayIdleMinutes)
+	return envInt("PDX_RELAY_IDLE_MINUTES", 1, 50, team.RelayIdleMinutes)
 }
 
 // noticeIdleThreshold is the context percentage the idle notice needs: PDX_RELAY_IDLE_THRESHOLD (1–100), else
 // team.RelayIdleThresholdPct.
 func noticeIdleThreshold() int {
 	return envInt("PDX_RELAY_IDLE_THRESHOLD", 1, 100, team.RelayIdleThresholdPct)
+}
+
+// idlePeriod is one stretch of idleness of one session. gen is unique per period, so a notice goroutine started in one
+// period can never send for, or unmark, a later one (the status flickers; a relay moves the member to a new session).
+type idlePeriod struct {
+	since int64
+	gen   uint64
+	told  bool
 }
 
 // noticeIdle is the check: called on the liveness tick, after noticeUsage.
@@ -70,84 +78,120 @@ func (m *Module) noticeIdle() {
 		if m.relayOpen(mr.SessionID) || m.askOpen(mr.SessionID) {
 			continue // the relay (or the member's own ask) is the answer
 		}
-		if !m.markIdleTold(mr.SessionID) {
+		gen, won := m.claimIdleTold(mr.SessionID)
+		if !won {
 			continue // this idle period is already told
 		}
 		mr, pct, minutes := mr, int(*u.UsedPercentage), int((now-since)/60_000)
-		if !m.goTracked(func() { m.idleNotice(mr, pct, minutes) }) {
-			m.unmarkIdleTold(mr.SessionID)
+		if !m.goTracked(func() { m.idleNotice(mr, pct, minutes, gen) }) {
+			m.releaseIdleTold(mr.SessionID, gen)
 		}
 	}
 	m.pruneIdle(live)
 }
 
-// idleNotice sends the notice. Looked at again right before the send, as usageNotice does: the member may have started
-// a turn, or a relay or an ask may have opened, since the check; then nothing is sent and the period is not marked told.
+// idleNotice sends the notice of the idle period gen. Looked at again right before the send, as usageNotice does: the
+// member may have started a turn, a relay or an ask may have opened, it may have been released or moved to a new session,
+// or the period may have ended, since the check; then nothing is sent, and a period that is still the same is given back.
 // A send that fails is not retried (advisory: the lead still sees CTX in `pdx team`).
-func (m *Module) idleNotice(mr memberRow, pct, minutes int) {
+func (m *Module) idleNotice(mr memberRow, pct, minutes int, gen uint64) {
 	if st, ok := m.status.AgentStatus(mr.TmuxSession); !ok || st != agentIdle || m.relayOpen(mr.SessionID) || m.askOpen(mr.SessionID) {
-		m.unmarkIdleTold(mr.SessionID)
+		m.releaseIdleTold(mr.SessionID, gen)
 		return
 	}
-	t, ok, err := m.store.TeamByID(mr.TeamID)
-	if err != nil || !ok || t.EndedAt != 0 {
-		return // no live team to tell
+	if !m.idleToldIs(mr.SessionID, gen) {
+		return // the period ended (the session ran, or was moved): its notice is void
+	}
+	cur, t, ok, err := m.store.ActiveMemberInLiveTeam(mr.SessionID)
+	if err != nil {
+		m.logf("[team] idle notice (member %s): %v", mr.Ref, err)
+		m.releaseIdleTold(mr.SessionID, gen) // a store error is not a told period: the next tick tries again
+		return
+	}
+	if !ok || cur.SpawnOp != mr.SpawnOp || cur.TeamID != mr.TeamID {
+		return // released, moved or the team ended since the check
 	}
 	address, title := m.memberNoticeName(mr)
 	ref := strings.TrimPrefix(mr.Ref, "_")
 	m.noticeToLead(mr, t, fmt.Sprintf(UsageIdleNoticeFmt, address, ref, title, minutes, pct, ref), "idle notice")
 }
 
-// idleStart is when the session's current idle period began: now, the first time it is seen idle.
+// idleStart is when the session's current idle period began: now (a new period) the first time it is seen idle.
 func (m *Module) idleStart(sessionID string, now int64) int64 {
 	m.idleMu.Lock()
 	defer m.idleMu.Unlock()
-	if m.memberIdleSince == nil {
-		m.memberIdleSince = map[string]int64{}
+	if m.memberIdle == nil {
+		m.memberIdle = map[string]*idlePeriod{}
 	}
-	if s, ok := m.memberIdleSince[sessionID]; ok {
-		return s
+	if p, ok := m.memberIdle[sessionID]; ok {
+		return p.since
 	}
-	m.memberIdleSince[sessionID] = now
+	m.idleGenSeq++
+	m.memberIdle[sessionID] = &idlePeriod{since: now, gen: m.idleGenSeq}
 	return now
 }
 
-// endIdlePeriod forgets the clock and the told mark: the next idle period starts from scratch.
+// endIdlePeriod forgets the period: the next idle stretch starts from scratch.
 func (m *Module) endIdlePeriod(sessionID string) {
 	m.idleMu.Lock()
 	defer m.idleMu.Unlock()
-	delete(m.memberIdleSince, sessionID)
-	delete(m.idleTold, sessionID)
+	delete(m.memberIdle, sessionID)
 }
 
-// markIdleTold marks the period told and says whether THIS call did.
-func (m *Module) markIdleTold(sessionID string) bool {
+// claimIdleTold marks the session's current period told and returns its generation; false when it already was.
+func (m *Module) claimIdleTold(sessionID string) (uint64, bool) {
 	m.idleMu.Lock()
 	defer m.idleMu.Unlock()
-	if m.idleTold == nil {
-		m.idleTold = map[string]bool{}
+	p, ok := m.memberIdle[sessionID]
+	if !ok || p.told {
+		return 0, false
 	}
-	if m.idleTold[sessionID] {
-		return false
-	}
-	m.idleTold[sessionID] = true
-	return true
+	p.told = true
+	return p.gen, true
 }
 
-func (m *Module) unmarkIdleTold(sessionID string) {
+// releaseIdleTold gives the period gen back (the notice did not go for a reason that is not the lead's: the next tick may
+// tell). Another period, or none, is left alone.
+func (m *Module) releaseIdleTold(sessionID string, gen uint64) {
 	m.idleMu.Lock()
 	defer m.idleMu.Unlock()
-	delete(m.idleTold, sessionID)
+	if p, ok := m.memberIdle[sessionID]; ok && p.gen == gen {
+		p.told = false
+	}
+}
+
+// idleToldIs says whether the session's current period is gen and is marked told.
+func (m *Module) idleToldIs(sessionID string, gen uint64) bool {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	p, ok := m.memberIdle[sessionID]
+	return ok && p.gen == gen && p.told
+}
+
+// markIdleCompacted ends the question for the current idle stretch: the session was compacted, so a notice about a cache
+// about to expire would be stale. It stays quiet until the session leaves idle (a new period).
+func (m *Module) markIdleCompacted(sessionID string) {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	if m.memberIdle == nil {
+		m.memberIdle = map[string]*idlePeriod{}
+	}
+	p, ok := m.memberIdle[sessionID]
+	if !ok {
+		m.idleGenSeq++
+		p = &idlePeriod{since: m.now(), gen: m.idleGenSeq}
+		m.memberIdle[sessionID] = p
+	}
+	p.told = true
 }
 
 // pruneIdle drops the sessions that are no longer active members of a live team.
 func (m *Module) pruneIdle(live map[string]struct{}) {
 	m.idleMu.Lock()
 	defer m.idleMu.Unlock()
-	for sid := range m.memberIdleSince {
+	for sid := range m.memberIdle {
 		if _, ok := live[sid]; !ok {
-			delete(m.memberIdleSince, sid)
-			delete(m.idleTold, sid)
+			delete(m.memberIdle, sid)
 		}
 	}
 }

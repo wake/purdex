@@ -112,15 +112,15 @@ type Module struct {
 	status   AgentStatusReader
 	noticeAt int
 	// The member idle notice (idle relay spec §3.3): minutes and percentage from the environment (read once at Init),
-	// and per session the start of the current idle period and whether it was told, in memory behind idleMu.
-	idleMinutes     int
-	idleThreshold   int
-	idleMu          sync.Mutex
-	memberIdleSince map[string]int64
-	idleTold        map[string]bool
-	newID           func() string
-	relayDir        string
-	modSeen         map[string]helloInfo
+	// and per session the current idle period (its start, generation and whether it was told), in memory behind idleMu.
+	idleMinutes   int
+	idleThreshold int
+	idleMu        sync.Mutex
+	memberIdle    map[string]*idlePeriod
+	idleGenSeq    uint64
+	newID         func() string
+	relayDir      string
+	modSeen       map[string]helloInfo
 
 	// dataDir is the daemon's data dir; the hook lock flags live under
 	// <dataDir>/hooklocks (spec §6.6): the hook decide route removes a flag
