@@ -120,6 +120,16 @@ describe('stepHistory', () => {
     expect(stepHistory(K, 'up', 'two', true)?.draft).toBe('one')
     expect(stepHistory(K, 'up', 'one', true)).toBeNull()
   })
+  it('a collapsed duplicate group loses its first member while the second remains: the walk continues', () => {
+    const [a, d1, d2, c] = [user('one'), user('dup'), user('dup'), user('three')]
+    setHistorySource(K, [a, d1, d2, c])
+    stepHistory(K, 'up', '', true)
+    stepHistory(K, 'up', 'three', true) // dup (d1 + d2)
+    setHistorySource(K, [a, d2, c]) // d1 paged / truncated away, d2 remains
+    expect(stepHistory(K, 'down', 'dup', true)?.draft).toBe('three')
+    stepHistory(K, 'up', 'three', true) // back to dup
+    expect(stepHistory(K, 'up', 'dup', true)?.draft).toBe('one')
+  })
   it('the shown item vanished: the walk ends and the box is left alone', () => {
     const [a, b, c] = [user('one'), user('two'), user('three')]
     setHistorySource(K, [a, b, c])

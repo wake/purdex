@@ -29,8 +29,8 @@ function sentEntries(items: readonly ConversationItem[]): Sent[] {
 /** The texts the person sent, oldest first. */
 export const sentTexts = (items: readonly ConversationItem[]): string[] => sentEntries(items).map((e) => e.text)
 
-/** `id` is the item the box shows (its identity, not a position: the list changes under the walk). */
-interface Walk { id: string; shown: string; chipIds: string[] }
+/** `ids` are every member id of the item the box shows (its identity, not a position: the list changes under the walk). */
+interface Walk { ids: string[]; shown: string; chipIds: string[] }
 
 const sources = new Map<string, readonly Sent[]>()
 const walks = new Map<string, Walk>()
@@ -78,7 +78,7 @@ export function stepHistory(key: string, dir: 'up' | 'down', draft: string, canS
     if (dir === 'down' || !canStart || list.length === 0) return null
     pos = list.length - 1
   } else {
-    const at = list.findIndex((e) => e.ids.includes(w.id)) // relocate by any member id: pages, removals and collapses shift positions
+    const at = list.findIndex((e) => e.ids.some((id) => w.ids.includes(id))) // relocate by intersection of member ids: pages, removals and collapses shift positions
     if (at < 0) { walks.delete(key); return null } // the item is gone: the walk ends, the box stays as it is
     if (dir === 'up') {
       if (at <= 0) return null
@@ -92,7 +92,7 @@ export function stepHistory(key: string, dir: 'up' | 'down', draft: string, canS
     return { draft: '' }
   }
   const next = restore(key, list[pos].text)
-  walks.set(key, { id: list[pos].id, shown: next.draft, chipIds: next.chipIds })
+  walks.set(key, { ids: list[pos].ids, shown: next.draft, chipIds: next.chipIds })
   writeDraft(key, next.draft)
   reconcileAttachments(key, next.draft)
   discardCleared(key)
