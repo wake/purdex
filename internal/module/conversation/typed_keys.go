@@ -70,7 +70,8 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 	}
 	time.Sleep(tune.keysSettle)
 	// From here the text is in the terminal: anything but a clean Enter leaves it there unsent (the id stays unknown).
-	if st, ok := m.freshLight(c.owner); !ok || st != "idle" || q.HasOwner(c.owner.SessionID) {
+	// Only the light is re-checked (the owner gate applies before typing): a mod that reconnects meanwhile must not strand the text.
+	if st, ok := m.freshLight(c.owner); !ok || st != "idle" {
 		refuse(w, http.StatusConflict, "text_left_in_terminal")
 		return
 	}

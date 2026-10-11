@@ -69,6 +69,23 @@ func TestKeysSubmit_TextThenSettleThenEnterAsTwoGuardedCalls(t *testing.T) {
 	}
 }
 
+// A mod that reconnects during the settle does not strand the text: the second check is about the light only (spec §2), so
+// with an idle light the Enter still goes out.
+func TestKeysSubmit_OwnerAppearingDuringSettleStillSendsTheEnter(t *testing.T) {
+	te := keysEnv(t)
+	te.keys.onCall = func(c keyCall) {
+		if c.keys[0] == "hello" {
+			te.owners.mu.Lock()
+			te.owners.m[sid] = "mod1"
+			te.owners.mu.Unlock()
+		}
+	}
+	answer(t, te.submit("ko1", "hello"), 200, "handed", "keys", "")
+	if te.keys.n() != 2 || te.keys.calls[1].keys[0] != tmux.KeyEnter {
+		t.Fatalf("calls = %+v", te.keys.calls)
+	}
+}
+
 // The default settle is the measured one plus margin.
 func TestKeysTuning_DefaultSettle(t *testing.T) {
 	if got := (&Module{}).tuning().keysSettle; got != 150*time.Millisecond {
