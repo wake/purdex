@@ -156,14 +156,14 @@ type Queue struct {
 	// sighting of every session (NoOwnerFor).
 	seen    map[string]time.Time
 	started time.Time
-	tombs   map[string]time.Time // client_msg_id -> when its settled typed row was evicted
+	tombs   map[string]tomb // client_msg_id -> the evicted typed row's recorded answer
 }
 
 // New returns a queue over the owners.
 func New(o Owners) *Queue {
 	return &Queue{owners: o, Now: time.Now, queues: map[string][]*entry{}, leases: map[string]*entry{},
 		busy: map[string]*entry{}, ledger: map[string]*entry{}, wake: map[string]chan struct{}{},
-		seen: map[string]time.Time{}, started: time.Now(), tombs: map[string]time.Time{}}
+		seen: map[string]time.Time{}, started: time.Now(), tombs: map[string]tomb{}}
 }
 
 func (q *Queue) wait() time.Duration {
@@ -282,8 +282,8 @@ func (q *Queue) sweepLedger() {
 			q.evict(k, e)
 		}
 	}
-	for k, at := range q.tombs {
-		if now.Sub(at) > TombstoneTTL {
+	for k, t := range q.tombs {
+		if now.Sub(t.at) > TombstoneTTL {
 			delete(q.tombs, k)
 		}
 	}
@@ -309,27 +309,39 @@ func (q *Queue) sweepLedger() {
 	}
 }
 
-// evict forgets a ledger row; a settled unknown typed row leaves a tombstone. q.mu held.
+// evict forgets a ledger row; EVERY typed row leaves a tombstone holding its recorded answer, so a replay of its id is
+// answered the same and never types again. q.mu held.
 func (q *Queue) evict(k string, e *entry) {
 	delete(q.ledger, k)
-	if e.settled {
-		q.tombstone(k)
+	if e.job.Kind == KindFill && k != "" {
+		res := q.view(e)
+		res.Text = "" // the answer, not the user's text
+		if res.Phase == PhaseUnknown {
+			res.Status = Unknown // a row the sweep settled: it may or may not have been sent
+		}
+		q.tombstone(k, res)
 	}
 }
 
+// tomb is an evicted typed row's answer and when it was evicted.
+type tomb struct {
+	at  time.Time
+	res Result
+}
+
 // tombstone remembers an id, dropping the oldest when full. q.mu held.
-func (q *Queue) tombstone(id string) {
+func (q *Queue) tombstone(id string, res Result) {
 	for len(q.tombs) >= maxTombstones {
 		var oldest string
 		var at time.Time
 		for k, t := range q.tombs {
-			if oldest == "" || t.Before(at) {
-				oldest, at = k, t
+			if oldest == "" || t.at.Before(at) {
+				oldest, at = k, t.at
 			}
 		}
 		delete(q.tombs, oldest)
 	}
-	q.tombs[id] = q.Now()
+	q.tombs[id] = tomb{at: q.Now(), res: res}
 }
 
 // Submit queues a prompt for the session and waits for the mod's report (or the wait to end). clientMsgID identifies the
@@ -363,9 +375,9 @@ func (q *Queue) submitKeyed(ctx context.Context, kind, sessionID, clientMsgID, t
 			return q.await(ctx, e), nil // joins the first request's wait, or answers the settled ledger row
 		}
 	}
-	if _, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" && kind == KindFill {
-		q.mu.Unlock() // an evicted unknown row: it may have been sent, so it is never typed again
-		return Result{Status: Unknown, Phase: PhaseUnknown}, nil
+	if t, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" && kind == KindFill {
+		q.mu.Unlock() // an evicted typed row: its recorded answer, never typed again
+		return t.res, nil
 	}
 	if _, ok := q.owners.OwnerOf(sessionID); !ok {
 		q.mu.Unlock()

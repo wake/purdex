@@ -107,7 +107,7 @@ func TestTombstone_Capped(t *testing.T) {
 	q, _ := newQ(t)
 	q.mu.Lock()
 	for i := 0; i < maxTombstones+50; i++ {
-		q.tombstone("id" + strconv.Itoa(i))
+		q.tombstone("id"+strconv.Itoa(i), Result{})
 	}
 	n := len(q.tombs)
 	q.mu.Unlock()

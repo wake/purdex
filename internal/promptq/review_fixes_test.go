@@ -163,9 +163,8 @@ func TestLedger_OpenTypedRowsAreNeverEvicted(t *testing.T) {
 		if _, kept := q.ledger["t-"+p]; kept {
 			t.Fatalf("phase %s kept after the TTL", p)
 		}
-		_, tomb := q.tombs["t-"+p]
-		if tomb != (p == PhaseFilled || p == PhaseEntering || p == PhaseUnknown) {
-			t.Fatalf("phase %s tombstone=%v", p, tomb)
+		if _, tomb := q.tombs["t-"+p]; !tomb {
+			t.Fatalf("phase %s left no tombstone: every evicted typed row keeps its answer", p)
 		}
 	}
 }

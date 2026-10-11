@@ -33,8 +33,8 @@ func (q *Queue) Lookup(clientMsgID string) (Result, bool) {
 	defer q.mu.Unlock()
 	e, ok := q.ledger[clientMsgID]
 	if !ok || e.job.Kind != KindFill || clientMsgID == "" {
-		if _, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" {
-			return Result{Status: Unknown, Phase: PhaseUnknown}, true
+		if t, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" {
+			return t.res, true
 		}
 		return Result{}, false
 	}
