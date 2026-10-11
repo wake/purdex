@@ -61,13 +61,18 @@ function noHost(): void {
  * nothing: the toast names the host and offers 「顯示並開啟」, which shows it, reads its session list (a hidden host loads none) and
  * opens the seat again.
  */
-function hostHidden(teamKey: string, sessionId: string, hostIds: readonly (string | null)[]): void {
+function hostHidden(teamKey: string, sessionId: string, hostIds: readonly (string | null)[], quiet?: boolean): void {
+  if (quiet) return
   const t = useI18nStore.getState().t
   const hidden = [...new Set(hostIds)].filter((h): h is string => h !== null && !isRefShownNow(h))
   const hosts = useHostStore.getState().hosts
   const name = hidden.map((h) => hosts[h]?.name).filter(Boolean).join(', ') || t('team.seat_host_unknown')
   const showAndOpen = () => {
-    if (!hidden.every((h) => setHostShown(h, true))) return
+    if (!hidden.every((h) => setHostShown(h, true))) {
+      // nothing written (an unsettled world, a host the App no longer has): say it again, without the button that cannot work
+      useUndoToast.getState().show(t('team.seat_host_hidden', { name }))
+      return
+    }
     void Promise.allSettled(hidden.map((h) => useSessionStore.getState().fetchHost(h))).then(() => { openTeamSeat(teamKey, sessionId) })
   }
   useUndoToast.getState().show(t('team.seat_host_hidden', { name }), hidden.length > 0 ? showAndOpen : undefined, t('team.seat_host_show_open'))
@@ -85,9 +90,10 @@ function listedSession(seat: Seat) {
  * (never a second tab) — a member's tab means one in the lead tab's workspace (`groupTabId`); a tab of the same session in
  * another workspace is left alone and a new one opens beside the group (user 2026-10-10). Otherwise a tab is opened for its tmux session, right after the group's last tab in the LEAD
  * tab's workspace; a lead with no tab is opened first, in the ghost row's workspace (else the active one), and the
- * ghost entry cleared. A seat whose session the host's list does not hold yet opens nothing and says so.
+ * ghost entry cleared. A seat whose session the host's list does not hold yet opens nothing and says so. `quiet` is for a caller whose
+ * click is not a request to navigate (the approval dialog): a hidden host then opens nothing and says nothing.
  */
-export function openTeamSeat(teamKey: string, sessionId: string): OpenSeatResult {
+export function openTeamSeat(teamKey: string, sessionId: string, opts?: { quiet?: boolean }): OpenSeatResult {
   const first = currentTeamState()
   const view = first.index.byKey.get(teamKey)
   const seat = view ? seatOf(view, sessionId) : undefined
@@ -106,7 +112,7 @@ export function openTeamSeat(teamKey: string, sessionId: string): OpenSeatResult
   if (shown !== null) return { outcome: 'activated', tabId: shown }
 
   if (!isRefShownNow(view.hostId) || !isRefShownNow(seat.hostId)) {
-    hostHidden(teamKey, sessionId, [view.hostId, seat.hostId])
+    hostHidden(teamKey, sessionId, [view.hostId, seat.hostId], opts?.quiet)
     return { outcome: 'hidden', tabId: null }
   }
 
@@ -127,7 +133,7 @@ export function openTeamSeat(teamKey: string, sessionId: string): OpenSeatResult
     const wsId = ghostWs !== undefined && workspaces.workspaces.some((w) => w.id === ghostWs) ? ghostWs : workspaces.activeWorkspaceId
     const leadTab = openSessionTabAt(view.hostId, leadSession, wsId === null ? undefined : { workspaceId: wsId })
     if (leadTab === null) {
-      hostHidden(teamKey, sessionId, [view.hostId, seat.hostId])
+      hostHidden(teamKey, sessionId, [view.hostId, seat.hostId], opts?.quiet)
       return { outcome: 'hidden', tabId: null }
     }
     useTeamUiStore.getState().setGhostWorkspace(teamKey, null)
@@ -156,7 +162,7 @@ export function openTeamSeat(teamKey: string, sessionId: string): OpenSeatResult
   }
   const tabId = openSessionTabAt(seat.hostId, session, place)
   if (tabId === null) {
-    hostHidden(teamKey, sessionId, [view.hostId, seat.hostId])
+    hostHidden(teamKey, sessionId, [view.hostId, seat.hostId], opts?.quiet)
     return { outcome: 'hidden', tabId: null }
   }
   if (seat.role === 'lead') useTeamUiStore.getState().setGhostWorkspace(teamKey, null)

@@ -238,6 +238,21 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
       expect(isRefShownNow('h2')).toBe(true)
     })
 
+    it('quiet (the approval dialog\'s goto): nothing opens and nothing is said', () => {
+      hide()
+      expect(openTeamSeat(KEY, 'R', { quiet: true })).toEqual({ outcome: 'hidden', tabId: null })
+      expect(useUndoToast.getState().toast).toBeNull()
+    })
+
+    it('when the host can no longer be shown the button says so again, without an action that cannot work', () => {
+      hide()
+      openTeamSeat(KEY, 'R')
+      useHostStore.setState({ hosts: {} as never })
+      useUndoToast.getState().toast!.action!()
+      expect(useUndoToast.getState().toast?.message).toMatch(/hidden in this workbench/)
+      expect(useUndoToast.getState().toast?.action).toBeUndefined()
+    })
+
     it('shown again but its session is not listed yet: the old "not in the list" toast, not a silent click', () => {
       seedRemote(true)
       useSessionStore.setState({ sessions: { ...useSessionStore.getState().sessions, h2: [] } })
