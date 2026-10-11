@@ -22,6 +22,7 @@ type TypedQueue interface {
 	MarkEnterRefused(id string) error
 	MarkUnknown(id string) error
 	MarkGaveUp(id string) error
+	Read(ctx context.Context, sessionID string) (promptq.Result, error)
 	HasOwner(sessionID string) bool
 	NoOwnerFor(sessionID string) time.Duration
 }
@@ -47,6 +48,7 @@ type typedDeps struct {
 // typedTuning: zero values are the spec's; tests shorten them.
 type typedTuning struct {
 	lockWait, poll, finaliseFor, keysAfter time.Duration
+	recallSettle                           time.Duration // recall: how long the TUI gets to draw what Up popped before the read repeats
 	now                                    func() time.Time
 }
 
@@ -68,6 +70,9 @@ func (m *Module) tuning() typedTuning {
 	}
 	if t.keysAfter <= 0 {
 		t.keysAfter = 10 * time.Second
+	}
+	if t.recallSettle <= 0 {
+		t.recallSettle = 150 * time.Millisecond
 	}
 	if t.now == nil {
 		t.now = time.Now

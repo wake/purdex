@@ -65,11 +65,12 @@ type Module struct {
 	subSem   chan struct{}
 
 	// typed submit (K-1a-2)
-	td         *typedDeps  // nil: the daemon's services; tests inject
-	tune       typedTuning // zero: the spec's timings
-	locks      sidLocks    // by Claude Code session id, shared by both submit routes
-	paneLocks  sidLocks    // by tmux pane id, the typed route only (taken before the session lock)
-	keysSeen   keysLedger  // ids typed blind (no mod)
+	td         *typedDeps   // nil: the daemon's services; tests inject
+	tune       typedTuning  // zero: the spec's timings
+	locks      sidLocks     // by Claude Code session id, shared by both submit routes
+	paneLocks  sidLocks     // by tmux pane id, the typed route only (taken before the session lock)
+	keysSeen   keysLedger   // ids typed blind (no mod)
+	recalls    recallLedger // answers of recall requests that pressed Up (K-1b)
 	finMu      sync.Mutex
 	finalising map[string]struct{} // ids with a finaliser running
 
@@ -184,6 +185,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/submit", m.handleSubmit) // through the session's mod (U3-0b); not a device route
 	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/interrupt", m.handleInterrupt)
 	mux.HandleFunc("POST /api/sessions/{code}/submit", m.handleSessionSubmit) // typing into Claude Code (K-1a-2); a device route
+	mux.HandleFunc("POST /api/sessions/{code}/recall", m.handleSessionRecall) // take the queued messages back into the app (K-1b); a device route
 }
 
 // Start runs the cache sweeper in a new lifetime; a second Start while one runs does nothing.

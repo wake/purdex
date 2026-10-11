@@ -50,6 +50,7 @@ type tMod struct {
 	fillDelay time.Duration
 	onFill    func(promptq.Job) (promptq.Outcome, bool) // false: never report
 	onClear   func(n int) promptq.Outcome
+	onJob     func(promptq.Job) promptq.Outcome // read / clear_if, when set (takes both over)
 }
 
 func (m *tMod) run(ctx context.Context) {
@@ -67,6 +68,10 @@ func (m *tMod) run(ctx context.Context) {
 			}
 		}
 		m.mu.Unlock()
+		if m.onJob != nil && (j.Kind == promptq.KindRead || j.Kind == promptq.KindClearIf) { // recall tests: a scripted composer
+			_ = m.q.Result("mod1", j.ID, m.onJob(j))
+			continue
+		}
 		switch j.Kind {
 		case promptq.KindFill:
 			if m.fillDelay > 0 {

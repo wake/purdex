@@ -11,6 +11,9 @@ import (
 // KeyEnter is the byte Claude Code reads as Enter.
 const KeyEnter = "\r"
 
+// KeyUp is the Up arrow (ESC [ A) as Claude Code's input reads it: on an empty input it pops the queued messages (K-1b).
+const KeyUp = "\x1b[A"
+
 var (
 	// ErrPaneBusy: the pane is in a mode (copy-mode, view-mode…); nothing was sent.
 	ErrPaneBusy = errors.New("tmux pane is in a mode")

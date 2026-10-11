@@ -166,3 +166,15 @@ func (n *Normalizer) queuedOut() []Queued {
 	}
 	return out
 }
+
+// HiddenQueued is how many queued entries the header hides (the harness's own: task notifications, reminders…). Recall
+// (K-1b) needs it: Up pops everything the queue holds, so "only user messages are queued" means this is zero.
+func (n *Normalizer) HiddenQueued() int {
+	c := 0
+	for _, q := range n.queue {
+		if q.Source == QueuedSystem {
+			c++
+		}
+	}
+	return c
+}
