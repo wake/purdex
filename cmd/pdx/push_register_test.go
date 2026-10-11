@@ -91,7 +91,15 @@ func TestRegisterServeModules_PushOn(t *testing.T) {
 	// How many Mac windows are reporting, as numbers only (the deploy check: presence_entries > 0 after a restart).
 	assert.EqualValues(t, 0, body.Push["presence_entries"])
 	assert.EqualValues(t, 0, body.Push["presence_active"])
-	assert.Len(t, body.Push, 5, "the push status carries nothing else: no client id, no session name")
+	assert.Contains(t, body.Capabilities, "push.presence.v2")
+	assert.EqualValues(t, 0, body.Push["presence_v2_entries"])
+	assert.EqualValues(t, 0, body.Push["presence_at_computer"])
+	keys := make([]string, 0, len(body.Push))
+	for k := range body.Push {
+		keys = append(keys, k)
+	}
+	assert.ElementsMatch(t, []string{"configured", "ready", "init_error", "presence_entries", "presence_active", "presence_v2_entries", "presence_at_computer"}, keys,
+		"the push status carries numbers and flags only: no client id, no session name")
 }
 
 // A key that cannot be loaded does not stop the daemon: core init succeeds, /api/info says why push is off, push.v1 is
