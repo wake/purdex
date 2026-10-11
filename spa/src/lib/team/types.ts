@@ -91,6 +91,10 @@ export interface SelfRelayPayload {
   window: number
   model_id?: string
   effort?: string
+  /** 'idle' for an idle-relay ask (idle relay spec §2); absent for the threshold ask. Kept only as a non-empty string. */
+  reason?: string
+  /** Minutes the session had been idle, 1–59; kept only as such an integer. */
+  idle_minutes?: number
 }
 
 /**
@@ -277,6 +281,8 @@ export function selfRelayPayloadOf(a: Approval): SelfRelayPayload {
     window,
     ...(typeof p.model_id === 'string' && p.model_id !== '' ? { model_id: p.model_id } : {}),
     ...(typeof p.effort === 'string' && p.effort !== '' ? { effort: p.effort } : {}),
+    ...(typeof p.reason === 'string' && p.reason !== '' ? { reason: p.reason } : {}),
+    ...(typeof p.idle_minutes === 'number' && Number.isInteger(p.idle_minutes) && p.idle_minutes >= 1 && p.idle_minutes <= 59 ? { idle_minutes: p.idle_minutes } : {}),
   }
 }
 

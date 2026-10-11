@@ -184,6 +184,17 @@ describe('approval-api', () => {
       expect(selfRelayPayloadOf(approval({ kind: 'self_relay', payload: { op_id: 'op', used_percentage: 72.4, window: 200000, model_id: '', effort: 7 } })))
         .toEqual({ op_id: 'op', used_percentage: 72.4, window: 200000 })
     })
+    // Mutation gate: no minutes validation → 0 / 60 / 1.5 / '40' kept → red.
+    it('keeps a reason string and idle_minutes 1–59 (integer); drops any other', () => {
+      const base = { op_id: 'op', used_percentage: 55, window: 200000 }
+      const of = (extra: Record<string, unknown>) => selfRelayPayloadOf(approval({ kind: 'self_relay', payload: { ...base, ...extra } }))
+      expect(of({ reason: 'idle', idle_minutes: 40 })).toEqual({ ...base, reason: 'idle', idle_minutes: 40 })
+      expect(of({ idle_minutes: 1 })).toEqual({ ...base, idle_minutes: 1 })
+      expect(of({ idle_minutes: 59 })).toEqual({ ...base, idle_minutes: 59 })
+      for (const bad of [0, 60, -3, 1.5, '40', null, Number.NaN, Infinity]) expect(of({ reason: 'idle', idle_minutes: bad })).toEqual({ ...base, reason: 'idle' })
+      for (const bad of [7, null, '', {}]) expect(of({ reason: bad, idle_minutes: 40 })).toEqual({ ...base, idle_minutes: 40 })
+      expect(of({})).toEqual(base)
+    })
     it('defends against a malformed payload: non-finite numbers read 0, non-strings read empty, window truncated', () => {
       expect(selfRelayPayloadOf(approval({ kind: 'self_relay', payload: { op_id: 5, used_percentage: Number.NaN, window: 1.9 } })))
         .toEqual({ op_id: '', used_percentage: 0, window: 1 })
