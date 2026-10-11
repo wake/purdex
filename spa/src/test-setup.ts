@@ -1,9 +1,10 @@
 import '@testing-library/jest-dom/vitest'
 import 'fake-indexeddb/auto'
-import { afterEach, beforeAll } from 'vitest'
+import { afterEach, beforeAll, beforeEach } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import { registerBuiltinLocales } from './lib/register-locales'
 import { clearLocaleRegistry } from './lib/locale-registry'
+import { keyboardGuard } from './components/approval-dialog-helpers'
 import { clearAllWorkerDrafts } from './lib/nex/worker-draft-memory'
 
 // Register built-in locales once so t() returns real strings in all tests
@@ -11,6 +12,9 @@ beforeAll(() => {
   clearLocaleRegistry()
   registerBuiltinLocales()
 })
+
+// jsdom's fireEvent.click has detail 0, which the approval dialog reads as the keyboard: no guard unless a test asks for it
+beforeEach(() => { keyboardGuard.ms = 0 })
 
 // Auto-cleanup after each test (required because vitest doesn't expose afterEach globally)
 afterEach(() => { cleanup(); clearAllWorkerDrafts() })

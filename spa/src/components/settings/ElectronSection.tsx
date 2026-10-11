@@ -3,6 +3,9 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { SettingItem } from './SettingItem'
 import { ToggleSwitch } from './ToggleSwitch'
 
+/** Offered "away after" values; main rejects anything else (PA-2 D6). */
+const AWAY_MINUTES_OPTIONS = [1, 2, 3, 5, 10, 15, 30, 60]
+
 export function ElectronSection() {
   const t = useI18nStore((s) => s.t)
 
@@ -45,6 +48,33 @@ export function ElectronSection() {
     }
   }
 
+  // Push-only-when-away threshold, owned by the main process (PA-2 D11). Hidden when the shell predates it.
+  const presenceApi = window.electronAPI?.presence
+  const hasAwayRow = typeof presenceApi?.getAwayMinutes === 'function'
+  const [awayMinutes, setAwayMinutes] = useState<number | null>(null)
+  const latestAwayId = useRef(0)
+  useEffect(() => {
+    if (!presenceApi?.getAwayMinutes) return
+    let cancelled = false
+    presenceApi.getAwayMinutes()
+      .then((v) => { if (!cancelled && latestAwayId.current === 0) setAwayMinutes(v) })
+      .catch(() => { /* IPC unavailable — the select stays disabled */ })
+    return () => { cancelled = true }
+  }, [presenceApi])
+
+  const changeAway = async (v: number) => {
+    if (!presenceApi?.setAwayMinutes) return
+    const id = ++latestAwayId.current
+    const prev = awayMinutes
+    setAwayMinutes(v)
+    try {
+      const saved = await presenceApi.setAwayMinutes(v)
+      if (id === latestAwayId.current) setAwayMinutes(saved)
+    } catch {
+      if (id === latestAwayId.current) setAwayMinutes(prev)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -55,6 +85,22 @@ export function ElectronSection() {
         <SettingItem label={t('settings.electron.tray.label')} description={t('settings.electron.tray.desc')} disabled={!trayApi}>
           <ToggleSwitch label={t('settings.electron.tray.aria')} checked={showTray ?? true} onChange={toggleTray} />
         </SettingItem>
+        {hasAwayRow && (
+          <SettingItem label={t('settings.electron.away.label')} description={t('settings.electron.away.desc')}>
+            <select
+              aria-label={t('settings.electron.away.aria')}
+              value={awayMinutes ?? ''}
+              disabled={awayMinutes === null}
+              onChange={(e) => { void changeAway(Number(e.target.value)) }}
+              className="bg-surface-input border border-border-default rounded-md text-text-primary text-xs px-3 py-1.5 w-28 hover:border-text-muted focus:border-border-active focus:outline-none"
+            >
+              {awayMinutes === null && <option value="" />}
+              {AWAY_MINUTES_OPTIONS.map((m) => (
+                <option key={m} value={m}>{t('settings.electron.away.option', { n: m })}</option>
+              ))}
+            </select>
+          </SettingItem>
+        )}
         <div className="flex items-center justify-between">
           <div>
             <div className="text-sm text-text-primary">{t('settings.electron.idle_timeout.label')}</div>

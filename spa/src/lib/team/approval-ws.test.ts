@@ -177,7 +177,7 @@ describe('approval-ws: back to the requester (U22)', () => {
     useTabStore.setState({ tabs: { tS, tO }, tabOrder: ['tS', 'tO'], activeTabId: 'tO', visitHistory: [] })
   })
 
-  it.each(['lead', 'self_relay'] as const)('a queued decision resent on the reconnect snapshot switches on its 200 (%s)', async (kind) => {
+  it.each(['lead', 'self_relay'] as const)('a queued decision resent on the reconnect snapshot is sent but switches nothing (%s)', async (kind) => {
     const a = requester(kind)
     useApprovalStore.getState().applyOpened(H, a)
     useApprovalStore.getState().queueDecision(H, a, 'approve')
@@ -185,8 +185,9 @@ describe('approval-ws: back to the requester (U22)', () => {
     handleApprovalEvent(H, snapshot([a]))
     await flush()
     expect(mockedDecide).toHaveBeenCalledTimes(1)
-    expect(useTabStore.getState().activeTabId).toBe('tS')
-    expect(usePaneFocusStore.getState().recent.tS?.[0]).toBe('pS')
+    // A switch made after the reconnect would take the tab from whatever the person is doing by then.
+    expect(useTabStore.getState().activeTabId).toBe('tO')
+    expect(usePaneFocusStore.getState().focusRequest).toBeNull()
     expect(useTabStore.getState().tabOrder).toEqual(['tS', 'tO'])
   })
 

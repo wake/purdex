@@ -1,5 +1,6 @@
 // spa/src/lib/host-lifecycle.ts — Cascade delete logic for host removal with undo support
 import { useHostStore, type HostConfig } from '../stores/useHostStore'
+import { revPatch } from './presence/host-projection'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
@@ -272,7 +273,7 @@ function makeUndo(hostId: string, wireId: string, snapshot: UndoSnapshot, grant:
   }
 }
 
-type HostSlice = Pick<ReturnType<typeof useHostStore.getState>, 'hosts' | 'hostOrder' | 'activeHostId' | 'devHostId'>
+type HostSlice = Pick<ReturnType<typeof useHostStore.getState>, 'hosts' | 'hostOrder' | 'activeHostId' | 'devHostId' | 'hostsRev'>
 
 /**
  * The host store with `hostId`'s row back as it was: right after the hosts it followed that are still here (a host
@@ -295,6 +296,7 @@ function restoredHostSlice(
   return {
     hosts,
     hostOrder: order,
+    ...revPatch(s.hostsRev, s.hosts, hosts),
     ...(snap.activeHostId === hostId ? { activeHostId: hostId } : {}),
     ...(snap.devHostId === hostId ? { devHostId: hostId } : {}),
   }

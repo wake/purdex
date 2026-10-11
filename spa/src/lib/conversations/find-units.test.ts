@@ -1,7 +1,7 @@
 // #2665: the units the ⌘F search looks through — what the deck and the chat draw as text, in the order they draw it, under the id of the element
 // that holds it (the DOM side is in components/deck/FindBar.test.tsx).
 import { describe, it, expect } from 'vitest'
-import { chatUnits, deckUnits, fullTurnKey, stepUnitId, userUnitId, agentUnitId } from './find-units'
+import { chatUnits, deckUnits, fullTurnKey, stepUnitId, userUnitId, agentUnitId, outputKey, outputUnitId, subagentKey, peerKey } from './find-units'
 import { proseText } from '../nex/markdown-text'
 import { imageMarker } from './image-placeholder'
 import type { ConversationItem, Turn } from './types'
@@ -31,9 +31,9 @@ describe('deckUnits', () => {
     expect(units.map((u) => u.text)).toEqual(['$ pnpm test', 'src/a.ts', 'look around'])
   })
 
-  it('a bash input is drawn with its `!`; a command\'s output (folded) and a question step have no line of their own', () => {
+  it('a bash input is drawn with its `!`; a question step has no line of their own (a command\'s output is its own unit, below)', () => {
     const units = deckUnits([turn(0, [user('b', 'ls', 'bash'), user('o', 'file.txt', 'command_output'), step('q', { kind: 'other', question: { questions: [] } })])], 20)
-    expect(units.map((u) => u.text)).toEqual(['! ls'])
+    expect(units.map((u) => u.text)).toEqual(['! ls', 'file.txt'])
   })
 
   it('a sent image is a thumbnail (no text); a path that is not an image stays the marker it was', () => {
@@ -66,5 +66,49 @@ describe('chatUnits', () => {
     const units = chatUnits([turn(0, [user('u1', 'run it'), step('s1'), agent('a1', 'done **now**'), user('p1', 'from a peer', 'peer')])])
     expect(units.map((u) => u.id)).toEqual([userUnitId('u1'), agentUnitId('a1')])
     expect(units[1].text).toBe('done now')
+  })
+})
+
+describe('deckUnits: what hides behind a fold', () => {
+  const out = (n: number) => ({ text: Array.from({ length: n }, (_, i) => `row ${i}`).join('\n'), total_lines: n, total_bytes: 1, truncated: false })
+
+  it('a command\'s or tool\'s output is a unit that opens its fold; the last 10 lines are what the fold draws', () => {
+    const units = deckUnits([turn(0, [step('e', { kind: 'execute', command: { text: 'ls' }, output: out(30) }), step('o', { kind: 'other', output: out(2) })])], 20)
+    const e = units.find((u) => u.id === outputKey('e'))!
+    expect(e.reveal).toEqual([outputKey('e')])
+    expect(e.text.split('\n')).toHaveLength(10)
+    expect(e.text).toContain('row 29')
+    expect(e.text).not.toContain('row 5\n')
+    expect(units.map((u) => u.id)).toEqual([stepUnitId('e'), outputKey('e'), stepUnitId('o'), outputKey('o')])
+  })
+
+  it('a read, a task, an edit card and a question draw no output fold; an empty output is none', () => {
+    const units = deckUnits([turn(0, [step('r', { output: out(3) }), step('k', { kind: 'task', output: out(3) }), step('d', { kind: 'edit', output: out(3) }), step('e', { kind: 'execute', output: { text: '', total_lines: 0, total_bytes: 0, truncated: false } })])], 20)
+    expect(units.filter((u) => u.id.endsWith(':out'))).toEqual([])
+  })
+
+  it('a bash command\'s output (a user item) is a unit of its own, under its fold', () => {
+    const units = deckUnits([turn(0, [user('b', 'ls', 'bash'), user('o', 'file.txt\nother', 'command_output')])], 20)
+    expect(units.map((u) => [u.id, u.reveal])).toEqual([[userUnitId('b'), []], [outputKey('o'), [outputKey('o')]]])
+  })
+
+  it('an unfolded agent\'s steps are units under the task line\'s fold once loaded; an unloaded one has none', () => {
+    const task = step('k', { kind: 'task', subagent: { agent_id: 'ag', description: 'dig' } })
+    const sub = { ag: { state: 'ready', answer: { items: [agent('c1', 'inner **word**'), step('c2', { kind: 'execute', command: { text: 'make' }, output: out(2) })] } } } as never
+    const units = deckUnits([turn(0, [task])], 20, sub)
+    expect(units.map((u) => [u.id, u.reveal])).toEqual([
+      [stepUnitId('k'), []],
+      // under the task line's scope: the agent's ids may be a main-turn item's too
+      [agentUnitId('c1', 'k>'), [subagentKey('k')]],
+      [stepUnitId('c2', 'k>'), [subagentKey('k')]],
+      [outputUnitId('c2', 'k>'), [subagentKey('k'), outputKey('c2')]],
+    ])
+    expect(deckUnits([turn(0, [task])], 20, { ag: { state: 'loading' } } as never).map((u) => u.id)).toEqual([stepUnitId('k')])
+  })
+
+  it('a peer message opens its collapse (the peer-message fold) when a hit is in it', () => {
+    const [p] = deckUnits([turn(0, [user('p', 'from a peer', 'peer')])], 20)
+    expect(p.reveal).toEqual([peerKey('p')])
+    expect(peerKey('p')).toBe('p:peerfold') // the chat's PeerLine keeps `p:peer` for its summary row
   })
 })
