@@ -4,25 +4,27 @@
 import { useNow } from '../../hooks/useNow'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { formatClock } from '../../lib/conversations/deck-format'
-import { doneLine, formatDuration, formatTokens, liveLine, type LineTurn } from '../../lib/conversations/turn-line'
+import { backgroundText, doneLine, formatDuration, formatTokens, liveLine, type LineTurn } from '../../lib/conversations/turn-line'
+import type { HeaderBackground } from '../../lib/conversations/types'
 
 const ROW = 'flex items-center gap-1.5 text-left deck-t-down text-text-system'
 
-/** The turn's closing line: `✻ Done · 20s · ↓ 3.1k · 02:58` (the tokens when the turn reports them). Draws nothing for a turn that did not finish as `done`. */
-export function DoneTurnLine({ turn }: { turn: LineTurn }) {
+/** The turn's closing line: `✻ Done · 20s · ↓ 3.1k · 02:58 · 1 background command still running` (the tokens when the turn reports them; the background work for the last turn).  Draws nothing for a turn that did not finish as `done`. */
+export function DoneTurnLine({ turn, background }: { turn: LineTurn; /** The header's background work: given for the conversation's last turn only (it is what runs now). */ background?: HeaderBackground }) {
   const t = useI18nStore((s) => s.t)
   const done = doneLine(turn)
   if (!done) return null
+  const still = backgroundText(background, t)
   return (
     <div data-testid="turn-done" className={ROW}>
       <span aria-hidden="true">✻</span>
-      <span>{[t('deck.done'), formatDuration(done.durationMs, t), ...(done.outputTokens !== null ? [`↓ ${formatTokens(done.outputTokens)}`] : []), formatClock(done.endedAt)].join(' · ')}</span>
+      <span>{[t('deck.done'), formatDuration(done.durationMs, t), ...(done.outputTokens !== null ? [`↓ ${formatTokens(done.outputTokens)}`] : []), formatClock(done.endedAt), ...(still ? [t('deck.bg.still', { what: still })] : [])].join(' · ')}</span>
     </div>
   )
 }
 
 /** The live line: `✻ Running · Bash · 2 subagents · ↓ 9.2k · 3m 03s`, `✻ Thinking… · 3m 03s` when no tool or subagent runs, or `✻ Waiting for you`. Draws nothing while the agent is idle. */
-export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; status: string | undefined }) {
+export function LiveTurnLine({ turns, status, background }: { turns: readonly LineTurn[]; status: string | undefined; /** The header's background work: said on the running line, and on the closing line once the turn is over. */ background?: HeaderBackground }) {
   const t = useI18nStore((s) => s.t)
   const live = liveLine(turns, status)
   const now = useNow(live?.kind === 'running')
@@ -40,6 +42,8 @@ export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; st
   if (live.tool) parts.push(live.tool)
   if (live.subagents > 0) parts.push(t('deck.live.subagents', { n: live.subagents }))
   if (live.outputTokens !== null) parts.push(`↓ ${formatTokens(live.outputTokens)}`)
+  const bg = backgroundText(background, t)
+  if (bg) parts.push(bg)
   if (live.since !== null) parts.push(formatDuration(Math.max(0, now - live.since), t))
   return (
     <div data-testid="turn-live" data-kind="running" className={ROW}>

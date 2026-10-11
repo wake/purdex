@@ -162,6 +162,14 @@ export interface HeaderQueued {
   from?: string
 }
 
+/** The work Claude Code still runs in the background (its last Stop hook's background_tasks), by kind. A kind that is absent is none. */
+export interface HeaderBackground {
+  shell?: number
+  subagent?: number
+  /** monitor, workflow, cron wake-ups */
+  other?: number
+}
+
 export interface Header {
   title: string
   /** running | waiting | idle | error | ended | unknown */
@@ -172,6 +180,8 @@ export interface Header {
   live: boolean
   /** Claude Code's own queue (B-read); an older daemon sends none. Drawn only while the status is running / waiting. */
   queued?: HeaderQueued[]
+  /** Background work still running (c9d9c7-67 PR2); absent when none, and from an older daemon. The deck says so while the conversation lives. */
+  background?: HeaderBackground
 }
 
 export interface Window {

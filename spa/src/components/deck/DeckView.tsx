@@ -11,7 +11,7 @@ import { useKeepPlaceOnTypeChange } from '../../hooks/useKeepPlaceOnTypeChange'
 import { noteDeckPane, usePaneFoldStore } from '../../lib/conversations/fold-memory'
 import { isRevealed, markRevealed } from '../../lib/conversations/deck-reveal-memory'
 import { SCROLL_ANCHOR_CLASS } from '../../lib/nex/transcript-scroll-memory'
-import type { Turn } from '../../lib/conversations/types'
+import type { HeaderBackground, Turn } from '../../lib/conversations/types'
 import { useConversationStore, type ConversationEntry } from '../../stores/useConversationStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { StatusOverlay } from './StatusOverlay'
@@ -43,7 +43,7 @@ export interface DeckViewProps {
 // `eager`: one of the newest turns, always drawn in full. An older one draws its agent text as plain text until it comes near the
 // viewport (#2469), then in full for good — the swap is remembered outside the component (`deck-reveal-memory`), so a deck that
 // remounts with its tab does not start the far-off turns over.
-const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, subagents, loadSubagent }: { turn: Turn; eager: boolean; onOpenPanel?: (content: PanelContent) => void; agentModel?: string; subagents?: ConversationEntry['subagents']; loadSubagent?: (agentId: string) => void }) {
+const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, subagents, loadSubagent, background }: { turn: Turn; eager: boolean; /** the header's background work, for the last turn only */ background?: HeaderBackground; onOpenPanel?: (content: PanelContent) => void; agentModel?: string; subagents?: ConversationEntry['subagents']; loadSubagent?: (agentId: string) => void }) {
   const t = useI18nStore((s) => s.t)
   const reveal = useContext(DeckRevealContext)
   const [near, setNear] = useState(false)
@@ -75,7 +75,7 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
         <div data-testid="deck-omitted" className="deck-t-down text-text-muted">{t('deck.omitted', { n: turn.omitted_items })}</div>
       ) : null}
       {turn.items.map((item) => <DeckItem key={item.id} item={item} actions={actions} light={!full} agentModel={agentModel} agentHeader={item.id === firstAgentId} midTurn={item.type === 'user' && item.id !== firstUser} />)}
-      <DoneTurnLine turn={turn} />
+      <DoneTurnLine turn={turn} background={background} />
       {turn.error && <div data-testid="deck-turn-error" className="deck-t-down text-status-error">{turn.error.message}</div>}
     </section>
   )
@@ -147,9 +147,9 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
                 {entry.status === 'loading' ? t('deck.loading') : t('deck.empty')}
               </div>
             ) : (
-              doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} subagents={entry.subagents} loadSubagent={loadSubagent} />)
+              doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} subagents={entry.subagents} loadSubagent={loadSubagent} background={i === doc.turns.length - 1 ? doc.header?.background : undefined} />)
             )}
-            {!empty && <LiveTurnLine turns={doc.turns} status={doc.header?.status} />}
+            {!empty && <LiveTurnLine turns={doc.turns} status={doc.header?.status} background={doc.header?.background} />}
             <PendingTail paneKey={paneId} hostId={hostId} sessionId={sessionId} entries={pending} queued={headerQueued} />
           </DeckRevealContext.Provider>
         </FoldContext.Provider>

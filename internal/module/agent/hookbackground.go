@@ -19,6 +19,17 @@ import (
 // dropped by a SessionStart (any source: a new conversation has no background
 // work yet) and when the frame is deleted.
 
+// HookBackground is the background work a Stop hook listed, by kind: shell commands, subagents, and everything else (monitor, workflow
+// and the session's cron wake-ups). The conversation header carries it so the deck can say what the terminal says ("1 shell still running").
+type HookBackground struct {
+	Shell    int
+	Subagent int
+	Other    int
+}
+
+// Zero reports whether no background work is listed.
+func (b HookBackground) Zero() bool { return b == HookBackground{} }
+
 // stopBackgroundPayload is the part of CC's Stop hook input that carries the
 // background work (plugin-authoring d.ts StopHookInput). Every field is
 // optional; an older CC sends neither.
@@ -36,6 +47,75 @@ func hookBackgroundOf(raw json.RawMessage) lights.Background {
 		return ""
 	}
 	return lights.BackgroundKind(p.Tasks, len(p.Crons))
+}
+
+// hookBackgroundCountOf counts what a Stop payload lists: shell tasks, subagent tasks, and every other kind of task plus each cron as other. The
+// payload lists only work in flight, so status is not filtered. An unparseable payload counts nothing.
+func hookBackgroundCountOf(raw json.RawMessage) HookBackground {
+	var p stopBackgroundPayload
+	if len(raw) == 0 || json.Unmarshal(raw, &p) != nil {
+		return HookBackground{}
+	}
+	var c HookBackground
+	for _, t := range p.Tasks {
+		switch t.Type {
+		case "shell":
+			c.Shell++
+		case "subagent":
+			c.Subagent++
+		default:
+			c.Other++
+		}
+	}
+	c.Other += len(p.Crons)
+	return c
+}
+
+// setHookBackgroundCount records frameID's counts from the Stop stamped ts, under the same stamp guard as setHookBackground (a Stop at or before
+// the frame's last SessionStart is refused); zero counts remove the entry.
+func (m *Module) setHookBackgroundCount(frameID string, c HookBackground, ts int64) {
+	if frameID == "" {
+		return
+	}
+	m.modMu.Lock()
+	defer m.modMu.Unlock()
+	if cleared, ok := m.hookBgClearedAt[frameID]; ok && ts <= cleared {
+		return
+	}
+	if c.Zero() {
+		delete(m.hookBgCount, frameID)
+		return
+	}
+	if m.hookBgCount == nil {
+		m.hookBgCount = make(map[string]HookBackground)
+	}
+	m.hookBgCount[frameID] = c
+}
+
+// BackgroundWork is the background work the last Stop of sessionID's live Claude Code root frame listed; ok is false when no live frame
+// reports the session or it listed none. It reads the frames store (no tmux listing), so the conversation stream may ask every few hundred
+// milliseconds. The caller says whether the conversation is live (the header carries it only then).
+func (m *Module) BackgroundWork(sessionID string) (HookBackground, bool) {
+	if m == nil || m.frames == nil || sessionID == "" {
+		return HookBackground{}, false
+	}
+	frames, err := m.frames.ListRootsBySessionID(sessionID)
+	if err != nil {
+		return HookBackground{}, false
+	}
+	m.modMu.Lock()
+	defer m.modMu.Unlock()
+	// frames are oldest first; the newest live cc frame is the conversation (an old process that outlived --resume or /clear must not
+	// speak for it), so its answer is final even when it listed nothing.
+	for i := len(frames) - 1; i >= 0; i-- {
+		f := frames[i]
+		if f.AgentType != "cc" || !isPidAliveFn(f.PID) {
+			continue
+		}
+		c, ok := m.hookBgCount[f.FrameID]
+		return c, ok
+	}
+	return HookBackground{}, false
 }
 
 // setHookBackground records frameID's symbol from the Stop stamped ts; the
@@ -72,6 +152,7 @@ func (m *Module) clearHookBackground(frameID string, ts int64) {
 	m.modMu.Lock()
 	defer m.modMu.Unlock()
 	delete(m.hookBackground, frameID)
+	delete(m.hookBgCount, frameID)
 	if m.hookBgClearedAt == nil {
 		m.hookBgClearedAt = make(map[string]int64)
 	}
@@ -88,6 +169,7 @@ func (m *Module) forgetHookBackground(frameID string) {
 	}
 	m.modMu.Lock()
 	delete(m.hookBackground, frameID)
+	delete(m.hookBgCount, frameID)
 	delete(m.hookBgClearedAt, frameID)
 	m.modMu.Unlock()
 }
@@ -115,4 +197,5 @@ func (m *Module) noteHookBackground(req EventRequest, lifecycle agentpkg.Lifecyc
 		return
 	}
 	m.setHookBackground(frame.FrameID, hookBackgroundOf(req.RawEvent), ts)
+	m.setHookBackgroundCount(frame.FrameID, hookBackgroundCountOf(req.RawEvent), ts)
 }

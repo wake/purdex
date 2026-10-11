@@ -37,6 +37,12 @@ type AbortSource interface {
 	AbortedAt(sessionID string) (at time.Time, ok bool)
 }
 
+// BackgroundSource tells what background work (shell commands, subagents, monitors…) the session's last Stop hook listed: the agent module.
+// Optional: without it the header carries none.
+type BackgroundSource interface {
+	BackgroundWork(sessionID string) (agent.HookBackground, bool)
+}
+
 const (
 	// maxBody is the largest encoded response body (spec §8.2).
 	maxBody = 4 << 20
@@ -52,9 +58,10 @@ type Module struct {
 	feed     team.ApprovalFeed
 	cache    *convfeed.Cache
 	resolver *convfeed.Resolver
-	light    LightSource // nil: no cheap light
-	aborts   AbortSource // nil: a mod interrupt is not seen in the model
-	maxBody  int         // tests lower it
+	light    LightSource      // nil: no cheap light
+	aborts   AbortSource      // nil: a mod interrupt is not seen in the model
+	bg       BackgroundSource // nil: the header carries no background work
+	maxBody  int              // tests lower it
 	subSem   chan struct{}
 
 	mu      sync.Mutex
@@ -141,6 +148,7 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.light, _ = svc.(LightSource)
 	m.aborts, _ = svc.(AbortSource)
+	m.bg, _ = svc.(BackgroundSource)
 	fsvc, ok := c.Registry.Get(team.ApprovalFeedKey)
 	if !ok {
 		return fmt.Errorf("conversation: service %q not registered", team.ApprovalFeedKey)
@@ -228,6 +236,19 @@ func (a ownerAdapter) LiveSessions(ctx context.Context, sessionID string) ([]con
 		out = append(out, convfeed.Owner{TranscriptPath: p.TranscriptPath, Status: p.Status, SeenAt: p.LastSeenAt, FrameID: p.FrameID})
 	}
 	return out, nil
+}
+
+// applyBackground sets the header's background work from the agent module's last Stop for this session (nothing when it listed none). Called
+// after every refresh with applyAbort, under the entry's gate; the header only carries it while the conversation is live.
+func (m *Module) applyBackground(entry *convfeed.Entry, sid string) {
+	if m.bg == nil {
+		return
+	}
+	var b convfeed.Background
+	if w, ok := m.bg.BackgroundWork(sid); ok {
+		b = convfeed.Background{Shell: w.Shell, Subagent: w.Subagent, Other: w.Other}
+	}
+	entry.SetBackground(b)
 }
 
 // applyAbort ends the entry's last running turn as interrupted when the mod reported interrupting this session after

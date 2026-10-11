@@ -79,7 +79,7 @@ export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget,
     const { entry } = ready
     body = (
       <ChatView paneKey={paneId} hostId={ready.hostId} sessionId={ready.sessionId} title={entry.doc.header?.title || title}
-        status={entry.doc.header?.status ?? 'unknown'} queued={entry.doc.header?.queued} turns={entry.doc.turns} hasMoreBefore={entry.doc.hasMoreBefore} paging={entry.paging} generation={entry.doc.generation} onLoadOlder={onLoadOlder} onSwitchToTerminal={onSwitchToTerminal}
+        status={entry.doc.header?.status ?? 'unknown'} queued={entry.doc.header?.queued} background={entry.doc.header?.background} turns={entry.doc.turns} hasMoreBefore={entry.doc.hasMoreBefore} paging={entry.paging} generation={entry.doc.generation} onLoadOlder={onLoadOlder} onSwitchToTerminal={onSwitchToTerminal}
         input={footer?.(footerContext(paneId, ready.hostId, ready.sessionId, entry.doc, items, onSwitchToTerminal))}
         active={isActive && isFocusTarget} />
     )
