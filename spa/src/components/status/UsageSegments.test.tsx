@@ -132,17 +132,31 @@ describe('CcUsageSegments', () => {
     expect(screen.queryByTestId('status-seg-usage-seven-day')).toBeNull()
   })
 
-  it('dims a snapshot older than 10 minutes (opacity-50), and ages into dim while mounted', () => {
-    seed(payload(), NOW - 11 * 60_000)
+  it('never dims, however old the snapshot (user 2026-10-12), and prints no stale wording', () => {
+    seed(payload(), NOW - 20 * 60_000)
     render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
-    expect(screen.getByTestId('status-seg-usage-context').dataset.dim).toBe('true')
-    expect(screen.getByTestId('status-seg-usage-context').className).toContain('opacity-50')
-    cleanup()
-    seed(payload(), NOW - 9 * 60_000)
-    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    for (const id of ['status-seg-usage-context', 'status-seg-usage-five-hour', 'status-seg-usage-seven-day']) {
+      const el = screen.getByTestId(id)
+      expect(el.dataset.dim).toBeUndefined()
+      expect(el.className).not.toContain('opacity-50')
+      expect(el.getAttribute('aria-label')).not.toContain('10')
+    }
+    act(() => { vi.advanceTimersByTime(60 * 60_000) })
     expect(screen.getByTestId('status-seg-usage-context').dataset.dim).toBeUndefined()
-    act(() => { vi.advanceTimersByTime(2 * 60_000) })
-    expect(screen.getByTestId('status-seg-usage-context').dataset.dim).toBe('true')
+  })
+
+  it('5h / 7d follow the host\'s freshest snapshot while context stays the session\'s own', () => {
+    useAgentStore.setState({ ccStatus: {
+      [compositeKey('h1', 's1')]: { receivedAt: NOW - 3_600_000, raw: payload({ context_window: { used_percentage: 10 } }) },
+      [compositeKey('h1', 's2')]: { receivedAt: NOW, raw: payload({
+        context_window: { used_percentage: 80 },
+        rate_limits: { five_hour: { used_percentage: 70, resets_at: (NOW + 60_000) / 1000 } },
+      }) },
+    } })
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-seg-usage-context').textContent).toContain('90%')
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toContain('30%')
+    expect(screen.getByTestId('status-seg-usage-seven-day').textContent).toContain('7%')
   })
 
   it('drops its low-priority segments with the container-query classes the bar uses', () => {
@@ -152,10 +166,11 @@ describe('CcUsageSegments', () => {
     expect(screen.getByTestId('status-seg-usage-five-hour').className).toContain('max-[700px]:hidden')
   })
 
-  it('reads the pane\'s own session only', () => {
+  it('a session with no snapshot of its own shows no context, only the host limits', () => {
     seed(payload())
-    const { container } = render(<CcUsageSegments hostId="h1" sessionCode="other" />)
-    expect(container.innerHTML).toBe('')
+    render(<CcUsageSegments hostId="h1" sessionCode="other" />)
+    expect(screen.queryByTestId('status-seg-usage-context')).toBeNull()
+    expect(screen.getByTestId('status-seg-usage-five-hour')).toBeTruthy()
   })
 })
 
@@ -251,7 +266,7 @@ describe('HostQuotaSegments', () => {
 })
 
 describe('UsageSegment missing value (status row)', () => {
-  const base = { testId: 'seg', icon: Clock, ring: 'remaining' as const, number: 'remaining' as const, title: 'tip', stale: false }
+  const base = { testId: 'seg', icon: Clock, ring: 'remaining' as const, number: 'remaining' as const, title: 'tip' }
   it('a null used reads the dash, with no ring and no percent sign', () => {
     render(<UsageSegment {...base} used={null} />)
     const seg = screen.getByTestId('seg')
@@ -274,5 +289,39 @@ describe('UsageSegment missing value (status row)', () => {
     const arc = seg.querySelector('[data-testid="usage-ring-arc"]')!
     expect(arc.getAttribute('data-shown')).toBe('93')
     expect(arc.getAttribute('data-tone')).toBe('danger')
+  })
+})
+
+describe('window reset (resets_at passed)', () => {
+  const lim = (pct: number, resetsAtMs?: number) => ({
+    rate_limits: { five_hour: { used_percentage: pct, ...(resetsAtMs === undefined ? {} : { resets_at: resetsAtMs / 1000 }) } },
+  })
+  const arc = () => screen.getByTestId('status-seg-usage-five-hour').querySelector('[data-testid="usage-ring-arc"]')!
+
+  it('flips to 0% used / 100% left when the clock crosses resets_at', () => {
+    seed(lim(95, NOW + 30_000))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('5%')
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('100%')
+    expect(arc().getAttribute('data-used')).toBe('0')
+    expect(arc().getAttribute('data-tone')).toBe('ok')
+  })
+  it('already past resets_at shows 0% used from the first render', () => {
+    seed(lim(95, NOW - 1000))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('100%')
+    expect(arc().getAttribute('data-used')).toBe('0')
+  })
+  it('no resets_at keeps the original value', () => {
+    seed(lim(95))
+    render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    expect(screen.getByTestId('status-seg-usage-five-hour').textContent).toBe('5%')
+  })
+  it('clears its reset timer on unmount', () => {
+    seed(lim(95, NOW + 3_600_000))
+    const { unmount } = render(<CcUsageSegments hostId="h1" sessionCode="s1" />)
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

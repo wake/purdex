@@ -53,6 +53,11 @@ type SessionInfo struct {
 	// Meta cache (stored in DB)
 	Mode string `json:"mode"`
 	Cwd  string `json:"cwd,omitempty"`
+
+	// Branch is the git branch of the repo containing Cwd, read from the
+	// filesystem (no git process): a name, "@<7 sha chars>" when detached,
+	// absent when Cwd is not in a repo.
+	Branch string `json:"branch,omitempty"`
 }
 
 // MetaUpdate supports partial meta updates. Nil = no change.

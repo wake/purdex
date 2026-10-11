@@ -191,6 +191,8 @@ function flagUnverifiedAgent(hostId: string, sessionCode: string, agentType: str
 /** Latest CC statusLine snapshot per session (ephemeral, from statusLine wrapper). */
 export interface CcStatusEntry {
   receivedAt: number
+  /** True only when receivedAt came from a valid daemon `at`; false = it is just the local arrival time (old daemon / no at). */
+  atTrusted?: boolean
   raw: Record<string, unknown>
 }
 
@@ -430,8 +432,9 @@ export const useAgentStore = create<AgentState>()(
       // Only a finite millisecond value (>= 1e12; a smaller one looks like seconds) counts; one from the future (a small skew, or
       // an untrustworthy far-future value) is pinned to now so it can never make the line look fresher than it is.
       const now = Date.now()
-      const at = typeof receivedAt === 'number' && Number.isFinite(receivedAt) && receivedAt >= 1e12 ? Math.min(receivedAt, now) : now
-      const entry: CcStatusEntry = { receivedAt: at, raw }
+      const atTrusted = typeof receivedAt === 'number' && Number.isFinite(receivedAt) && receivedAt >= 1e12
+      const at = atTrusted ? Math.min(receivedAt, now) : now
+      const entry: CcStatusEntry = { receivedAt: at, atTrusted, raw }
       set((s) => ({ ccStatus: { ...s.ccStatus, [key]: entry } }))
     },
 

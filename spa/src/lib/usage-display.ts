@@ -19,8 +19,37 @@ export interface CcUsage {
   sevenDay: UsageWindow | null
 }
 
-/** A snapshot older than this renders dimmed: the numbers may no longer hold. */
-export const USAGE_STALE_MS = 10 * 60 * 1000
+/**
+ * The one source rule for the three usage rings (user 2026-10-12). Nothing is ever dimmed for age.
+ *  - context: this session's own statusLine snapshot.
+ *  - 5h / 7d: the account-wide limits → the freshest snapshot on the same host that carries that field
+ *    (compared by `receivedAt`; each ring looks separately, so a newest snapshot lacking 7d falls back to the next).
+ * `null` when there is nothing to draw at all.
+ */
+export function usageFor(
+  hostId: string,
+  sessionCode: string,
+  ccStatus: Record<string, { receivedAt: number; atTrusted?: boolean; raw: Record<string, unknown> }>,
+): CcUsage | null {
+  const prefix = `${hostId}:`
+  const own = ccStatus[`${hostId}:${sessionCode}`]
+  const context = parseCcUsage(own?.raw)?.context ?? null
+  // A snapshot whose time is only its local arrival (no daemon `at`) must not beat a trusted one: compare trusted
+  // entries first; untrusted ones are only a fallback (among themselves by receivedAt). `atTrusted` unset counts as trusted.
+  let fiveHour: UsageWindow | null = null
+  let sevenDay: UsageWindow | null = null
+  let fhRank = -Infinity
+  let sdRank = -Infinity
+  const BIG = 1e15
+  for (const [key, entry] of Object.entries(ccStatus)) {
+    if (!key.startsWith(prefix) || key.slice(prefix.length).includes(':')) continue
+    const u = parseCcUsage(entry.raw)
+    const rank = entry.receivedAt + (entry.atTrusted === false ? 0 : BIG)
+    if (u?.fiveHour && rank > fhRank) { fiveHour = u.fiveHour; fhRank = rank }
+    if (u?.sevenDay && rank > sdRank) { sevenDay = u.sevenDay; sdRank = rank }
+  }
+  return context === null && !fiveHour && !sevenDay ? null : { context, fiveHour, sevenDay }
+}
 
 function isPct(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)

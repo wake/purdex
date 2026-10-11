@@ -66,6 +66,15 @@ iOS uses the same wording.
 - Terminal-style: model · effort, cwd + worktree / branch; cost on the right. Background = the host colour at its middle tone.
 - Data: the session's Claude Code statusLine snapshot (the Mac reads `useAgentStore.ccStatus[host+code].raw`, the same snapshot
   that feeds the usage display), falling back to the pane's recorded cwd. No new daemon field.
+- Usage rings (context / 5 h / 7 d; user 2026-10-12): **never dimmed for age** (the old "older than 10 minutes → dim" is gone, and no
+  "may be stale" wording). Context = this session's own snapshot; 5 h / 7 d are account-wide → the **freshest snapshot on the same host**
+  (by `receivedAt`; per ring, falling back to the next newest that carries the field; none → the ring is not drawn). One shared rule:
+  `usageFor(hostId, sessionCode, ccStatus)` in `lib/usage-display.ts`. The Mac terminal status bar uses it today; the deck row follows it when it draws rings.
+  Only snapshots with a daemon-supplied time (`at`) are compared for "freshest"; one with no `at` (its `receivedAt` is just local arrival)
+  is used only when the host has no trusted snapshot carrying that field.
+  **Window rollover (2026-10-12):** a 5 h / 7 d window whose `resets_at` is already past (<= now) counts as reset: 0% used (100% left;
+  ring drawn and toned at 0% used). No `resets_at` = the value as given. The ring redraws by itself when it crosses `resets_at`
+  (one timer to the nearest reset, not polling). The "resets in ..." tooltip part disappears once reset. iOS follows the same rule.
 
 ## 6. Input
 - Draft (text + attachments) is kept per tab across tab switches. Attachments show as thumbnails with `[Image #N]` placeholders in

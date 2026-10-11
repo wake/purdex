@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { useSessionStore } from '../../stores/useSessionStore'
 import { SessionStatusRow } from './SessionStatusRow'
 import { hostTintBackground } from '../../lib/host-tint'
 
@@ -13,7 +14,8 @@ const ctx = (usage?: { model?: string; effort?: string }) => ({ hostId: H, usage
 const snapshot = (raw: Record<string, unknown>) => useAgentStore.setState({ ccStatus: { [`${H}:${CODE}`]: { receivedAt: Date.now(), raw } } })
 const line = () => screen.getByTestId('status-row-line').textContent
 
-beforeEach(() => { cleanup(); useAgentStore.setState({ ccStatus: {} }) })
+beforeEach(() => { cleanup(); useAgentStore.setState({ ccStatus: {} }); useSessionStore.setState({ sessions: {} }) })
+const sess = (extra: Record<string, unknown>) => useSessionStore.setState({ sessions: { [H]: [{ code: CODE, name: 'n', cwd: '/x/purdex', mode: 'terminal', ...extra }] } })
 
 describe('SessionStatusRow', () => {
   it('worktree path: `repo [worktree] [model · effort]`, cost on the right', () => {
@@ -94,5 +96,26 @@ describe('SessionStatusRow', () => {
     render(<SessionStatusRow sessionCode={CODE} cwd={WT} ctx={ctx()} />)
     expect(screen.getByTestId('status-row')).toHaveClass('h-6', 'items-center')
     expect(screen.getByTestId('status-row')).not.toHaveClass('h-7')
+  })
+
+  describe('branch: snapshot worktree.branch ?? session.branch', () => {
+    it('falls back to the session list branch when the snapshot has none', () => {
+      snapshot({ model: { display_name: 'Opus 5.5' } })
+      sess({ branch: 'feat/x' })
+      render(<SessionStatusRow sessionCode={CODE} cwd="/x/purdex" ctx={ctx()} />)
+      expect(line()).toBe('purdex (feat/x) [Opus 5.5]')
+    })
+    it('the snapshot wins when both exist', () => {
+      snapshot({ model: { display_name: 'Opus 5.5' }, worktree: { name: 'w', branch: 'snap' } })
+      sess({ branch: 'list' })
+      render(<SessionStatusRow sessionCode={CODE} cwd="/x/purdex" ctx={ctx()} />)
+      expect(line()).toBe('purdex [w] (snap) [Opus 5.5]')
+    })
+    it('neither source: no branch; an old daemon without the field does not break', () => {
+      snapshot({ model: { display_name: 'Opus 5.5' } })
+      sess({})
+      render(<SessionStatusRow sessionCode={CODE} cwd="/x/purdex" ctx={ctx()} />)
+      expect(line()).toBe('purdex [Opus 5.5]')
+    })
   })
 })

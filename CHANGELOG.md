@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.715] - 2026-10-12
+
+> daemon 有改（#2707）：**要部署 daemon**；mod 沒有改，不用重跑 `pdx setup`。
+
+### Added：一般 session 也顯示 git branch（#2707）
+
+- daemon 的 session 清單多帶 `branch`：session 模組在背景讀 cwd 的 `.git/HEAD`（不啟動 git 子程序、只讀一般檔案、HEAD 與 `.git` 檔上限 1 KiB、驗證 ref 名、每個 cwd 同時最多一個讀取、1 秒逾時），清單只讀快取；換 branch 後約 5～6 秒內廣播。實測暖快取的清單呼叫多約 5 µs，背景一輪 13 個 cwd 約 150 µs。
+- App 的狀態列：有 worktree 時顯示 worktree 的 branch，否則顯示 session 的 branch。iOS 0.6.66 起也會讀這個欄位。
+
+### Fixed：用量環顯示（#2710）
+
+- 用量環不再被調暗；context 用量取這個 session 自己的；5 小時與 7 天額度取同一台主機最新的一筆（只在帶可信時間的快照之間比較）。過了重置時間（`resets_at`）就當作已用 0%，計時跨過邊界時會重畫。
+
+## [1.0.0-alpha.714] - 2026-10-12
+
+> daemon 有改（#2708）：**要部署 daemon**；mod 沒有改，不用重跑 `pdx setup`。
+
+### Internal：「拉回訊息」的狀態機與副作用分開（#2705，#2682）
+
+- Mac 指揮台拉回訊息（K-2b）的判斷改成純狀態機，送出請求、改畫面等副作用另外處理，方便測試；行為不變。
+
+### Added：daemon 支援「閒置接力申請」（閒置接力 IR-1a，#2708）
+
+- 為之後的 mod（IR-2）鋪路，這一版只改 daemon 與 CLI，行為還不會變：`pdx relay hello` 回 `idle_minutes`（40）與 `idle_threshold`（40），mod 據此判斷這台 daemon 支援閒置申請；`pdx relay begin --self --reason idle --idle-minutes N` 開的申請會在卡片資料記下原因與閒置分鐘數。
+- 推播：閒置申請的通知改成「某 session 閒置 40 分鐘，申請接力（已用 N%）」，副標「趁快取還在時接力最省；不核准的話，Claude Code 稍後會自行壓縮」。
+- 新的取消原因 `resumed`：閒置申請開著時有新訊息進來，mod 會用它撤回申請（使用者定案：閒置申請不擋訊息；70% 的申請照舊擋）。只能用在閒置申請的「取消」。
+- spec：`docs/specs/2026-10-11-idle-relay-spec-plan.md`。
+
 ## [1.0.0-alpha.713] - 2026-10-12
 
 > daemon 有改（#2700、#2701）：**要部署 daemon**；mod 沒有改，不用重跑 `pdx setup`。⚠️ **Profile Sync 的設定版本 9 → 10**（#2698）：還沒更新的 App 會看到比自己新的設定而鎖住同步，**兩台 Mac 要一起按 dev update**。
