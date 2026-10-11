@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0-alpha.716] - 2026-10-12
+
+> mod 有改（#2715）：**要部署 daemon，並在兩台重跑 `pdx setup`**（各 session 會跳一次重新載入 mod 的提示）。
+
+### Added：閒置 40 分鐘先申請接力，不再被 Claude Code 直接壓縮（閒置接力 IR-2，#2715）
+
+- Claude Code 會在 session 閒置約 54 分鐘時自行壓縮（趁 1 小時的 prompt 快取過期前），常常還沒到 70% 的接力門檻。現在一般 session 在主對話一輪結束後閒置滿 40 分鐘、context 達 40% 時，mod 會先送出接力申請：Mac App 出現卡片，不在電腦前就推到手機（iOS 可核准）。核准就趁快取還熱的時候接力；沒核准的話，申請約 10 分鐘後逾時，Claude Code 照常在約 54 分鐘時壓縮。
+- **閒置申請不擋訊息**（使用者定案）：申請開著時你打字或有 peer 訊息進來，申請會自動撤回（`cancelled{resumed}`），訊息照原樣送出。70% 的申請照舊會擋。
+- 同一段閒置只問一次；被拒絕或逾時後，要 context 再多 10% 才會再問（與 70% 申請共用）。剛接力完的新對話、有背景工作或排程在跑時、member（由 daemon 通知 lead）都不會申請。daemon 沒宣告支援時整個關閉。
+- mod 會分辨閒置壓縮（自動壓縮發生時沒有一輪在跑）並回報 `idle`：member 被閒置壓縮時，lead 收到的通知改成「閒置太久，被 Claude Code 自動壓縮了」，不再誤說「lead 未在 70% 時接力」。
+- 背景工作的追蹤不再依賴事件回報器是否開啟。
+- 驗收用環境變數（在 session 的環境裡）：`PDX_RELAY_IDLE_MINUTES`（1–50）、`PDX_RELAY_IDLE_THRESHOLD`（1–100）。
+
+### Internal：mod 進入點檢查不再綁死 import 寫法（#2716）
+
+- `cmd/pdx/plugin` 檢查 register.js 有沒有載入 ask／events／lease 模組時，改用 regexp 認「import 清單裡有這個名字」加「有呼叫它」，清單多一個 export 或用 `as` 別名都不會誤判。
+
 ## [1.0.0-alpha.715] - 2026-10-12
 
 > daemon 有改（#2707）：**要部署 daemon**；mod 沒有改，不用重跑 `pdx setup`。
