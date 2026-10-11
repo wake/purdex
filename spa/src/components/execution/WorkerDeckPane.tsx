@@ -5,7 +5,7 @@
 // at a time. A worker has no terminal view: the deck gets no `onSwitchToTerminal`. Before the session id exists (queued, starting) the lifecycle
 // says so instead of an empty deck. A permission request the worker waits on is a card in the dock (U4-3): above the input, where a question's card
 // is, answered through Nexen's permission channel under the pane's lease (`usePermissionAnswer`, the room's path).
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { CaretDown, SignOut } from '@phosphor-icons/react'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -67,7 +67,7 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
   const queueEntries = useSyncExternalStore(queue ? queue.subscribe : noSubscribe, queue ? queue.entries : () => NO_ENTRIES)
   const queueWrite = queueEntries.some((e) => e.state === 'undo' || e.state === 'sending')
   const queueWriteRef = useRef(queueWrite)
-  useEffect(() => { queueWriteRef.current = queueWrite })
+  useLayoutEffect(() => { queueWriteRef.current = queueWrite })
   const handoff = useWorkerHandoff({ hostId, executionId, tabId, paneId, from, lease, st, problem, actionPending: queueWrite })
   // The adapter's port finds the lease through the registry at call time, so a queue that outlives this view never holds a stale one.
   const leaseRef = useRef(lease)
