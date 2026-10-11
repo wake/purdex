@@ -96,3 +96,56 @@ func TestRemoteRoster_LocalSessionsHaveNoHostFields(t *testing.T) {
 		}
 	}
 }
+
+// #2630: a remote spawned row written with an empty tmux_session (before the registered fact stored the name) reads as
+// SpawnTmuxName(spawn_op); an adopted remote row keeps its stored name. Mutation: drop the fallback → the first check is red.
+func TestRemoteRoster_SpawnedRowWithoutTmuxFallsBackToTheDerivedName(t *testing.T) {
+	f, _ := remoteFixture(t)
+	const op = "8954cc45-f3b5-4e21-9c4a-16592e9dba7e"
+	f.remoteRow(op, "hostM", "mk1", rowActive)
+	f.remoteRow("ad1", "hostM", "mk2", rowActive)
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET tmux_session = '' WHERE spawn_op = ?`, op); err != nil { // the legacy row
+		t.Fatal(err)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET origin = ?, tmux_session = ? WHERE spawn_op = 'ad1'`, string(team.MemberOriginAdopted), "purdex-ios:@10.%10"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := f.m.buildRoster()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, ok := rosterMemberOf(t, r, "sid-"+op)
+	if !ok || sp.TmuxSession != "tm-8954cc45f3" {
+		t.Fatalf("spawned = %+v ok=%v", sp, ok)
+	}
+	ad, ok := rosterMemberOf(t, r, "sid-ad1")
+	if !ok || ad.TmuxSession != "purdex-ios" {
+		t.Fatalf("adopted = %+v ok=%v", ad, ok)
+	}
+}
+
+// #2630: GET /api/team's memberView reads a legacy spawned row (empty tmux_session) as the derived name too, and an adopted
+// row as its stored one. Mutation: memberView back to tmuxName(mr.TmuxSession) → the spawned check is red.
+func TestRemoteView_MemberViewFallsBackToTheDerivedTmuxName(t *testing.T) {
+	f, _ := remoteFixture(t)
+	const op = "8954cc45-f3b5-4e21-9c4a-16592e9dba7e"
+	f.remoteRow(op, "hostM", "mk1", rowActive)
+	f.remoteRow("ad1", "hostM", "mk2", rowActive)
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET tmux_session = '' WHERE spawn_op = ?`, op); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET origin = ?, tmux_session = ? WHERE spawn_op = 'ad1'`, string(team.MemberOriginAdopted), "purdex-ios:@10.%10"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.m.store.MembersOf(uid(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range rows {
+		got[r.SpawnOp] = f.m.memberView(r).TmuxSession
+	}
+	if got[op] != "tm-8954cc45f3" || got["ad1"] != "purdex-ios" {
+		t.Fatalf("memberView tmux = %v", got)
+	}
+}

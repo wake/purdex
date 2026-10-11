@@ -236,7 +236,10 @@ func (s *Store) applyRegisteredIn(tx connTx, p FactPlan) (CommandResult, error) 
 	if title == "" {
 		title = op.Title
 	}
-	mem := memberRow{SpawnOp: op.ID, TeamID: op.TeamID, HostID: p.FromHostID, SessionID: f.MemberSession, Ref: f.Ref, Title: title, Cwd: op.Cwd,
+	// The member host names a forwarded spawn's tmux session from the command id, which is this op's id (#2630); a non-UUID id
+	// gives no name and the row keeps "" (the fact must still apply, or it would roll back and be sent forever).
+	tmuxSession, _ := team.SpawnTmuxName(op.ID)
+	mem := memberRow{SpawnOp: op.ID, TmuxSession: tmuxSession, TeamID: op.TeamID, HostID: p.FromHostID, SessionID: f.MemberSession, Ref: f.Ref, Title: title, Cwd: op.Cwd,
 		PaneID: f.Pane, PID: f.PID, ProcStart: f.ProcStart, Model: op.Model, Effort: op.Effort, State: team.MemberActive,
 		Origin: team.MemberOriginSpawned, CreatedAt: p.Now, UpdatedAt: p.Now}
 	if err := insertMemberIn(tx.ctx, tx.conn, mem); err != nil {

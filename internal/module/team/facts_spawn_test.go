@@ -282,3 +282,35 @@ func TestRemoteSpawn_SpawnFailedOfAnEndedTeamIsIgnored(t *testing.T) {
 		t.Fatal("the ignored fact was not logged")
 	}
 }
+
+// #2630: the member host names a forwarded spawn's tmux session SpawnTmuxName(command id) and the command id is the op id,
+// so the lead's row for the new member carries that name (the roster's tmux_session; empty = the App cannot open the tab).
+// Mutation: drop TmuxSession from applyRegisteredIn's row → red.
+func TestRemoteSpawn_RegisteredStoresTheMemberHostsTmuxName(t *testing.T) {
+	f := factFixture(t)
+	const op = "8954cc45-f3b5-4e21-9c4a-16592e9dba7e"
+	f.remoteSpawn(op, "lead:1", "")
+	if code, body := f.postFact(leadPrincipal(), registeredFact(factUUID1, op)); code != 200 {
+		t.Fatalf("%d %s", code, body)
+	}
+	var tmux string
+	if err := f.m.store.db.QueryRow(`SELECT tmux_session FROM team_members WHERE spawn_op = ?`, op).Scan(&tmux); err != nil {
+		t.Fatal(err)
+	}
+	if tmux != "tm-8954cc45f3" {
+		t.Fatalf("tmux_session = %q, want tm-8954cc45f3", tmux)
+	}
+}
+
+// A non-UUID op id gives no name: the row is written with "" and the fact still applies (it must not roll back and be resent).
+func TestRemoteSpawn_RegisteredWithANonUUIDOpStillApplies(t *testing.T) {
+	f := factFixture(t)
+	f.remoteSpawn("op1", "lead:1", "")
+	if code, body := f.postFact(leadPrincipal(), registeredFact(factUUID1, "op1")); code != 200 {
+		t.Fatalf("%d %s", code, body)
+	}
+	var tmux string
+	if err := f.m.store.db.QueryRow(`SELECT tmux_session FROM team_members WHERE spawn_op = 'op1'`).Scan(&tmux); err != nil || tmux != "" {
+		t.Fatalf("tmux_session = %q err=%v, want empty", tmux, err)
+	}
+}
