@@ -8,10 +8,12 @@ import { SessionPaneContent } from './SessionPaneContent'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { clearAllDrafts, draftKey, readDraft } from '../lib/conversations/draft-memory'
 import { emptyDoc } from '../lib/conversations/model'
+import { clearAllAdapters } from '../lib/conversations/deck-adapter'
 import { clearAllSendQueues } from '../lib/conversations/send-queue'
 import type { Capabilities, ConversationItem } from '../lib/conversations/types'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
+import { useSessionStore } from '../stores/useSessionStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useSessionViewStore, sessionBinding } from '../stores/useSessionViewStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
@@ -36,7 +38,7 @@ const paneId = (sessionTab.layout as { pane: { id: string } }).pane.id
 const PROMPT: Capabilities = { send: 'prompt', interrupt: 'prompt' }
 
 const answer = (status: number, body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status }))
-const submits = () => fetchMock.mock.calls.filter((c) => String(c[1]).endsWith('/submit')).map((c) => ({ path: String(c[1]), host: c[0] as string, ...(JSON.parse(c[2].body) as { text: string; client_msg_id: string }) }))
+const submits = () => fetchMock.mock.calls.filter((c) => String(c[1]).endsWith('/submit')).map((c) => ({ path: String(c[1]), host: c[0] as string, ...(JSON.parse(c[2].body) as { text: string; client_msg_id: string; expected_tmux_instance: string }) }))
 const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms))
 
 const user = (id: string, text: string, extra: object = {}): ConversationItem => ({ type: 'user', id, at: Date.now(), index: 0, text, source: 'user', ...extra }) as ConversationItem
@@ -68,8 +70,9 @@ beforeEach(() => {
   cleanup()
   vi.useFakeTimers()
   fetchMock.mockReset()
-  fetchMock.mockImplementation(() => answer(200, { status: 'accepted' }))
-  clearAllDrafts(); clearAllSendQueues()
+  fetchMock.mockImplementation(() => answer(200, { outcome: 'handed', mode: 'fill' }))
+  clearAllDrafts(); clearAllSendQueues(); clearAllAdapters()
+  useSessionStore.setState({ sessions: {} })
   conv.value = ready()
   clearModuleRegistry()
   registerModule({ id: 'terminal', name: 'Terminal', panes: [{ kind: 'tmux-session', component: SessionPaneContent }] })
@@ -85,14 +88,16 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearAllDrafts(); clearAllSendQueues(); vi.useRealTimers() })
 
 describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) => {
-  it('sends to the CONVERSATION\'s session on the pane\'s host, then the transcript echo (client_msg_id) settles the queued message', async () => {
+  it('sends through the daemon\'s typed route: the SESSION CODE on the pane\'s host, with the pane\'s tmux generation, then the transcript echo (client_msg_id) settles the queued message', async () => {
     setView(view)
     const ui = mount()
     type('hello agent'); enter()
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'undo')
     await tick(3000)
     expect(submits()).toHaveLength(1)
-    expect(submits()[0]).toMatchObject({ host: H, text: 'hello agent', path: `/api/conversations/claude/${SID}/submit` })
+    expect(submits()[0]).toMatchObject({ host: H, text: 'hello agent', path: `/api/sessions/${CODE}/submit`, expected_tmux_instance: 'i' })
+    expect(submits()[0].client_msg_id).toBeTruthy()
+    expect(fetchMock.mock.calls.some((c) => String(c[1]).includes('/api/conversations/claude/') && String(c[1]).endsWith('/submit'))).toBe(false) // the old mod route is not used
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
     // the transcript brings the user item for it, carrying the id the App chose
     conv.value = ready({ items: [user('u0', 'earlier'), user('u1', 'hello agent', { client_msg_id: submits()[0].client_msg_id })] })
@@ -102,50 +107,19 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     expect(submits()).toHaveLength(1)
   })
 
-  it('busy: waits while the header is not idle, and is resent ONCE (same id) when the header turns idle', async () => {
-    fetchMock.mockImplementationOnce(() => answer(200, { status: 'busy' }))
-    conv.value = ready({ status: 'running' })
+  it('a refusal (the terminal input has text) fails the message with its own text; nothing is resent by itself', async () => {
+    fetchMock.mockImplementationOnce(() => answer(409, { outcome: 'refused', reason: 'input_not_empty', error: 'input_not_empty' }))
     setView(view)
-    const ui = mount()
-    type('after you'); enter()
+    mount()
+    type('blocked'); enter()
     await tick(3000)
-    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'waiting')
-    expect(submits()).toHaveLength(1)
-    conv.value = ready({ status: 'idle' })
-    remount(ui)
-    await tick(3000)
-    expect(submits()).toHaveLength(2)
-    expect(submits()[1]).toEqual(submits()[0])
-    // later renders (still idle) do not send it again
-    remount(ui)
-    await tick(5000)
-    expect(submits()).toHaveLength(2)
-  })
-
-  it('the mod stays busy for a moment after the header went idle: the idle-edge resend is answered busy, and a 1 s backoff gets it through (same id, three requests)', async () => {
-    fetchMock.mockImplementationOnce(() => answer(200, { status: 'busy' }))
-    fetchMock.mockImplementationOnce(() => answer(200, { status: 'busy' }))
-    conv.value = ready({ status: 'running' })
-    setView(view)
-    const ui = mount()
-    type('persist'); enter()
-    await tick(3000)
-    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'waiting')
-    conv.value = ready({ status: 'idle' })
-    remount(ui)
-    await tick(0)
-    expect(submits()).toHaveLength(2) // the edge resend, answered busy
-    await tick(999)
-    expect(submits()).toHaveLength(2)
-    await tick(1)
-    expect(submits()).toHaveLength(3)
-    expect(new Set(submits().map((x) => x.client_msg_id)).size).toBe(1)
-    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
     await tick(30_000)
-    expect(submits()).toHaveLength(3)
+    expect(submits()).toHaveLength(1)
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 
-  it('a conversation without a send mod shows the disabled input with the way to the terminal; no request is made', async () => {
+  it('a conversation with neither a mod nor keys shows the disabled input with the way to the terminal; no request is made', async () => {
     conv.value = ready({ capabilities: {} })
     setView(view)
     mount()
@@ -156,14 +130,52 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('409 no_mod fails the message (it stays visible as failed) instead of disabling the box by itself', async () => {
-    fetchMock.mockImplementationOnce(() => answer(409, { error: 'no_mod' }))
+  it('the `keys` capability (a live terminal conversation with no mod) enables the input, and a send goes through the same route', async () => {
+    conv.value = ready({ capabilities: { send: 'keys', interrupt: 'prompt' } })
     setView(view)
     mount()
-    type('nobody home'); enter()
+    expect(screen.queryByTestId('session-input-disabled')).toBeNull()
+    type('typed by keys'); enter()
     await tick(3000)
+    expect(submits()).toHaveLength(1)
+    expect(submits()[0]).toMatchObject({ path: `/api/sessions/${CODE}/submit`, text: 'typed by keys' })
+  })
+
+  it('the tmux generation stamped AFTER the queue exists is the one sent (the adapter reads its target at each send)', async () => {
+    const legacy: Tab = { ...createTab({ kind: 'tmux-session', hostId: H, sessionCode: CODE, mode: 'terminal', cachedName: CODE, tmuxInstance: '' }), id: 't-legacy' }
+    const legacyPane = (legacy.layout as { pane: { id: string } }).pane.id
+    useTabStore.setState({ tabs: { [legacy.id]: legacy }, tabOrder: [legacy.id], activeTabId: legacy.id, visitHistory: [] })
+    act(() => useSessionViewStore.getState().setView(legacy.id, legacyPane, sessionBinding(H, CODE), view))
+    render(<TabContent activeTab={legacy} allTabs={[legacy]} />)
+    type('late stamp'); enter() // the queue now exists, the instance is still unknown
+    act(() => useTabStore.getState().adoptTmuxInstance(H, CODE, 'g-late'))
+    await tick(3000)
+    expect(submits()).toHaveLength(1)
+    expect(submits()[0].expected_tmux_instance).toBe('g-late')
+  })
+
+  it('no generation anywhere: nothing is sent (`no_instance`), the message fails with a reason, no request is made', async () => {
+    const legacy: Tab = { ...createTab({ kind: 'tmux-session', hostId: H, sessionCode: CODE, mode: 'terminal', cachedName: CODE, tmuxInstance: '' }), id: 't-legacy' }
+    const legacyPane = (legacy.layout as { pane: { id: string } }).pane.id
+    useTabStore.setState({ tabs: { [legacy.id]: legacy }, tabOrder: [legacy.id], activeTabId: legacy.id, visitHistory: [] })
+    act(() => useSessionViewStore.getState().setView(legacy.id, legacyPane, sessionBinding(H, CODE), view))
+    render(<TabContent activeTab={legacy} allTabs={[legacy]} />)
+    type('who am i'); enter()
+    await tick(3000)
+    expect(fetchMock).not.toHaveBeenCalled()
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
-    expect(screen.getByRole('textbox')).toBeInTheDocument()
+  })
+
+  it('the session list\'s generation is the fallback when the pane has none', async () => {
+    const legacy: Tab = { ...createTab({ kind: 'tmux-session', hostId: H, sessionCode: CODE, mode: 'terminal', cachedName: CODE, tmuxInstance: '' }), id: 't-legacy' }
+    const legacyPane = (legacy.layout as { pane: { id: string } }).pane.id
+    useTabStore.setState({ tabs: { [legacy.id]: legacy }, tabOrder: [legacy.id], activeTabId: legacy.id, visitHistory: [] })
+    useSessionStore.setState({ sessions: { [H]: [{ code: CODE, name: 'x', cwd: '/', mode: 'terminal', tmux_instance: 'g-list' }] } })
+    act(() => useSessionViewStore.getState().setView(legacy.id, legacyPane, sessionBinding(H, CODE), view))
+    render(<TabContent activeTab={legacy} allTabs={[legacy]} />)
+    type('from the list'); enter()
+    await tick(3000)
+    expect(submits()[0].expected_tmux_instance).toBe('g-list')
   })
 
   it('the draft and the queue are the pane\'s AND the session\'s: another session of the same pane starts empty', async () => {
@@ -176,34 +188,12 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     expect(box().value).toBe('') // the input is mounted afresh for the new session
     type('new thought'); enter()
     await tick(3000)
-    expect(submits()[0].path).toBe('/api/conversations/claude/bbbbbbbb-1111-4222-8333-444444444444/submit')
+    expect(submits()[0].path).toBe(`/api/sessions/${CODE}/submit`) // the route names the tmux session, whichever conversation it shows
+    expect(submits()[0].text).toBe('new thought')
   })
 })
 
 describe('the queue is driven by the pane, not by the input (every view)', () => {
-  it('sent from the deck, then the terminal view: busy waits, and the idle header resends once with the same id although no input is mounted', async () => {
-    fetchMock.mockImplementationOnce(() => answer(200, { status: 'busy' }))
-    conv.value = ready({ status: 'running' })
-    setView('deck')
-    const ui = mount()
-    type('after you'); enter()
-    setView('terminal')
-    expect(screen.queryByRole('textbox')).toBeNull() // no SessionInput under the terminal
-    await tick(3000)
-    expect(submits()).toHaveLength(1)
-    conv.value = ready({ status: 'idle' })
-    remount(ui)
-    await tick(3000)
-    expect(submits()).toHaveLength(2)
-    expect(submits()[1]).toEqual(submits()[0])
-    remount(ui)
-    await tick(5000)
-    expect(submits()).toHaveLength(2)
-    // back in the deck the message is shown as sent, not stuck
-    setView('deck')
-    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
-  })
-
   it('the transcript echo is matched while the terminal view is up (nothing stays queued behind it)', async () => {
     conv.value = ready()
     setView('deck')
@@ -223,12 +213,11 @@ describe('the remount race: the pane is away while a request is in flight', () =
   const dashTab: Tab = { ...createTab({ kind: 'dashboard' }), id: 't-dash' }
   const both = [sessionTab, dashTab]
 
-  it('sent, tab switched away, back while the header is idle, THEN the busy answer lands: resent once with the same id, and nothing is sent a third time', async () => {
-    let answerBusy: (r: Response) => void = () => {}
-    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { answerBusy = r }))
+  it('sent, tab switched away, back, THEN the answer lands: the message is sent (settled by its echo), and nothing is sent twice', async () => {
+    let answerLate: (r: Response) => void = () => {}
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { answerLate = r }))
     useTabStore.setState({ tabs: { [sessionTab.id]: sessionTab, [dashTab.id]: dashTab }, tabOrder: [sessionTab.id, dashTab.id], activeTabId: sessionTab.id, visitHistory: [] })
     registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: () => <div data-testid="other-tab" /> }] })
-    conv.value = ready({ status: 'idle' })
     setView('deck')
     const ui = render(<TabContent activeTab={sessionTab} allTabs={both} />)
     type('slow one'); enter()
@@ -236,17 +225,11 @@ describe('the remount race: the pane is away while a request is in flight', () =
     expect(submits()).toHaveLength(1) // in flight
     ui.rerender(<TabContent activeTab={dashTab} allTabs={both} />)
     expect(screen.queryByTestId('session-footer')).toBeNull() // really unmounted
-    ui.rerender(<TabContent activeTab={sessionTab} allTabs={both} />) // header is idle: the remount reports it while the request is still out
+    ui.rerender(<TabContent activeTab={sessionTab} allTabs={both} />)
     await tick(0)
-    expect(submits()).toHaveLength(1)
-    await act(async () => { answerBusy(new Response(JSON.stringify({ status: 'busy' }), { status: 200 })) })
-    await tick(999)
-    expect(submits()).toHaveLength(1) // the remount's idle is the same value as before: no free resend, the backoff follows
-    await tick(1)
-    expect(submits()).toHaveLength(2)
-    expect(submits()[1]).toEqual(submits()[0])
-    // the resend was accepted; nothing else goes out (the no-loop rule for a second busy is pinned in send-queue.test)
+    await act(async () => { answerLate(new Response(JSON.stringify({ outcome: 'handed', mode: 'fill' }), { status: 200 })) })
     await tick(10_000)
-    expect(submits()).toHaveLength(2)
+    expect(submits()).toHaveLength(1)
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
   })
 })

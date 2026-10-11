@@ -11,6 +11,9 @@ import { selectSessionView, sessionBinding, useSessionViewStore } from '../store
 import { useAttachStall } from '../hooks/useAttachStall'
 import { useConversationOfPane } from '../hooks/useConversationOfPane'
 import { useSendQueueDriver } from '../hooks/useSendQueueDriver'
+import { bindAdapter } from '../lib/conversations/deck-adapter'
+import { draftKey } from '../lib/conversations/draft-memory'
+import { paneSendTarget, terminalAdapter } from '../lib/conversations/terminal-adapter'
 import { useConversationViewGate } from '../hooks/useConversationViewGate'
 import { ChatPane } from './deck/ChatPane'
 import { AskStrip } from './dock/AskStrip'
@@ -101,6 +104,14 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // and an echo is matched whatever the reader is looking at.
   const readyDoc = conversation.state === 'ready' ? conversation.entry?.doc : undefined
   const readyItems = useMemo(() => (readyDoc ? readyDoc.turns.flatMap((turn) => turn.items) : []), [readyDoc])
+  // The terminal adapter of this pane's input, bound to its key BEFORE any queue access (the queue takes its port from the bound adapter): a
+  // message is typed by the daemon at the pane's live target (code + tmux generation), read at each send.
+  const paneId = pane.id
+  const sendAdapter = useMemo(
+    () => terminalAdapter(hostId, readSession, sessionCode, () => paneSendTarget(paneId, hostId, sessionCode)),
+    [paneId, hostId, readSession, sessionCode],
+  )
+  if (readSession && sessionCode) bindAdapter(draftKey(paneId, hostId, readSession), sendAdapter)
   useSendQueueDriver(pane.id, hostId, readSession, readyDoc?.header?.status === 'idle', readyItems)
   const switchToTerminal = () => useSessionViewStore.getState().setView(tabId, pane.id, sessionBinding(hostId, sessionCode), 'terminal')
 

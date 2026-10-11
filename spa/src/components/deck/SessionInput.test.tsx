@@ -4,6 +4,8 @@ import { SessionInput } from './SessionInput'
 import { useSendQueueDriver } from '../../hooks/useSendQueueDriver'
 import { clearAllDrafts, draftKey, readDraft } from '../../lib/conversations/draft-memory'
 import { clearAllSendQueues } from '../../lib/conversations/send-queue'
+import { bindAdapter, clearAllAdapters } from '../../lib/conversations/deck-adapter'
+import { terminalAdapter } from '../../lib/conversations/terminal-adapter'
 import type { Capabilities, ConversationItem } from '../../lib/conversations/types'
 
 const fetchMock = vi.hoisted(() => vi.fn())
@@ -17,6 +19,8 @@ const sends = () => fetchMock.mock.calls.filter((c) => String(c[1]).endsWith('/s
 interface Over { capabilities?: Capabilities; items?: ConversationItem[]; idle?: boolean; onSwitchToTerminal?: () => void }
 // The input only types and shows; the pane drives the queue (idle, echoes). The pane's driver stands next to it here.
 function Pane({ o }: { o: Over }) {
+  // the pane binds its terminal adapter before any queue access (SessionPaneContent does the same), with a live target
+  bindAdapter(draftKey('p1', 'h', SID), terminalAdapter('h', SID, undefined, () => ({ code: 'dev001', instance: 'g1' })))
   useSendQueueDriver('p1', 'h', SID, o.idle ?? true, o.items ?? [])
   return <SessionInput paneKey="p1" hostId="h" sessionId={SID} capabilities={o.capabilities ?? PROMPT} onSwitchToTerminal={o.onSwitchToTerminal ?? (() => {})} />
 }
@@ -30,9 +34,9 @@ const userItem = (id: string, text: string, extra: object = {}): ConversationIte
 beforeEach(() => {
   vi.useFakeTimers()
   fetchMock.mockReset()
-  fetchMock.mockImplementation(() => answer(200, { status: 'accepted' }))
+  fetchMock.mockImplementation(() => answer(200, { outcome: 'handed', mode: 'fill' }))
 })
-afterEach(() => { cleanup(); clearAllDrafts(); clearAllSendQueues(); vi.useRealTimers() })
+afterEach(() => { cleanup(); clearAllDrafts(); clearAllSendQueues(); clearAllAdapters(); vi.useRealTimers() })
 
 describe('SessionInput sending', () => {
   it('Enter queues the message (local echo, box cleared), and it goes out after the 3 s undo window', async () => {
@@ -85,7 +89,7 @@ describe('SessionInput sending', () => {
     type('two'); enter()
     await tick(3000)
     expect(sends().map((s) => s.text)).toEqual(['one'])
-    await act(async () => { first?.(new Response(JSON.stringify({ status: 'accepted' }))) })
+    await act(async () => { first?.(new Response(JSON.stringify({ outcome: 'handed', mode: 'fill' }))) })
     await tick(0)
     expect(sends().map((s) => s.text)).toEqual(['one', 'two'])
     expect(new Set(sends().map((s) => s.client_msg_id)).size).toBe(2)
@@ -121,20 +125,17 @@ describe('SessionInput sending', () => {
 })
 
 describe('SessionInput outcomes', () => {
-  it('busy: kept in the App, resent with the same client_msg_id when the agent turns idle', async () => {
-    fetchMock.mockImplementationOnce(() => answer(200, { status: 'busy' }))
-    const { rerender } = render(ui({ idle: false }))
+  it('busy (429): the message fails with the busy text (K-2a-3 replaces this with new-id retries)', async () => {
+    fetchMock.mockImplementationOnce(() => answer(429, { outcome: 'refused', reason: 'busy', error: 'busy' }))
+    render(ui({ idle: false }))
     type('later'); enter()
     await tick(3000)
-    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'waiting')
-    rerender(ui({ idle: true }))
-    await tick(0)
-    expect(sends()).toHaveLength(2)
-    expect(sends()[1]).toEqual(sends()[0])
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
+    expect(screen.getByTestId('queued-message')).toHaveTextContent('Busy')
   })
 
   it('unknown: shown as possibly sent, never resent by itself, settled by the transcript echo', async () => {
-    fetchMock.mockImplementationOnce(() => answer(200, { status: 'unknown', reason: 'no_result' }))
+    fetchMock.mockImplementationOnce(() => answer(200, { outcome: 'unknown', mode: 'fill' }))
     const { rerender } = render(ui({ idle: false }))
     type('did it go'); enter()
     await tick(3000)
@@ -147,12 +148,12 @@ describe('SessionInput outcomes', () => {
     expect(screen.queryByTestId('queued-message')).toBeNull()
   })
 
-  it('dropped shows the reason and the draft is not resurrected', async () => {
-    fetchMock.mockImplementationOnce(() => answer(200, { status: 'dropped', reason: 'session_changed' }))
+  it('a refusal shows its reason and the draft is not resurrected', async () => {
+    fetchMock.mockImplementationOnce(() => answer(409, { outcome: 'refused', reason: 'pane_busy', error: 'pane_busy' }))
     render(ui())
     type('x'); enter()
     await tick(3000)
-    expect(screen.getByTestId('queued-message')).toHaveTextContent('session_changed')
+    expect(screen.getByTestId('queued-message')).toHaveTextContent('scroll or copy mode')
   })
 
   it('a lost connection mid-submit: resending needs a second confirmation, then goes out as a new message', async () => {
@@ -178,8 +179,8 @@ describe('SessionInput outcomes', () => {
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
   })
 
-  it('a dropped message: Try again is a new message that really calls submit', async () => {
-    fetchMock.mockImplementationOnce(() => answer(200, { status: 'dropped', reason: 'session_changed' }))
+  it('a refused message: Try again is a new message that really calls submit', async () => {
+    fetchMock.mockImplementationOnce(() => answer(409, { outcome: 'refused', reason: 'dialog_open', error: 'dialog_open' }))
     render(ui())
     type('x'); enter()
     await tick(3000)
@@ -189,13 +190,13 @@ describe('SessionInput outcomes', () => {
     expect(sends()[1].client_msg_id).not.toBe(sends()[0].client_msg_id)
   })
 
-  it('409 no_mod fails that message with the no-mod text; the live capability alone decides whether the input is disabled', async () => {
-    fetchMock.mockImplementationOnce(() => answer(409, { error: 'no_mod' }))
+  it('a refusal fails that message with its text; the live capability alone decides whether the input is disabled', async () => {
+    fetchMock.mockImplementationOnce(() => answer(409, { outcome: 'refused', reason: 'input_not_empty', error: 'input_not_empty' }))
     const { rerender } = render(ui())
     type('x'); enter()
     await tick(3000)
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
-    expect(screen.getByTestId('queued-message')).toHaveTextContent('no Purdex mod')
+    expect(screen.getByTestId('queued-message')).toHaveTextContent('terminal input has text')
     expect(screen.getByRole('textbox')).toBeInTheDocument()
     rerender(ui({ capabilities: { send: 'not_wired' } }))
     expect(screen.getByTestId('session-input-disabled')).toBeInTheDocument()
@@ -204,6 +205,7 @@ describe('SessionInput outcomes', () => {
   })
 
   it('Interrupt posts to /interrupt and says so', async () => {
+    fetchMock.mockImplementationOnce(() => answer(200, { status: 'accepted' })) // the mod route's own answer shape
     render(ui())
     await act(async () => { fireEvent.click(screen.getByLabelText('Interrupt')) })
     expect(String(fetchMock.mock.calls[0][1])).toBe(`/api/conversations/claude/${SID}/interrupt`)

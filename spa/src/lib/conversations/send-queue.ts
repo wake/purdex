@@ -296,7 +296,7 @@ export class SendQueue {
     if (o.kind !== 'busy') this.release(e) // the mod took it (or it failed): its box is not coming back; a busy answer leaves it the App's, so it can still be recalled whole
     const seenIdle = e.idleSeen === true
     e.idleSeen = false // used by this answer or stale after it: one observation, at most one resend
-    if (o.kind === 'accepted') e.state = 'sent'
+    if (o.kind === 'accepted' || o.kind === 'handed') e.state = 'sent' // handed (K-2: the daemon typed it) is settled by the echo like accepted
     else if (o.kind === 'busy') {
       e.state = 'waiting'
       if (seenIdle) { e.state = 'undo'; e.undoUntil = this.now() }
