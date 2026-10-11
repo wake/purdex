@@ -112,3 +112,74 @@ func TestCompacted_AFailedSendDoesNotArmTheUsageNotice(t *testing.T) {
 		t.Fatalf("%d notices after a failed compaction notice, want 0 (no stale 70%% notice)", n)
 	}
 }
+
+// An idle compaction (idle relay spec §3.4, D4): the member's mod tells an idle compaction from a context-full one.
+
+func compactedIdleNotice(ref string) string { return fmt.Sprintf(CompactedIdleNoticeFmt, ref) }
+
+// Mutation gate: the idle trigger takes the auto text → red.
+func TestRelayCompacted_IdleTellsLead(t *testing.T) {
+	f := noticeFixture(t)
+	code, res := f.compacted("sid-ma", "idle")
+	if code != http.StatusOK || !res.Noticed {
+		t.Fatalf("idle compaction = %d %+v, want 200 noticed", code, res)
+	}
+	waitFor(t, func() bool { return len(f.sender.calls()) == 1 })
+	if got := f.sender.calls()[0].Text; got != compactedIdleNotice("_memop-a") {
+		t.Fatalf("notice = %q, want %q", got, compactedIdleNotice("_memop-a"))
+	}
+	if compactedIdleNotice("_memop-a") == compactedNotice("_memop-a") {
+		t.Fatal("the idle text is the auto text")
+	}
+}
+
+// `idle` disarms the 70% notice (not arming it again) and withdraws an open ask, exactly as `auto` does.
+func TestRelayCompacted_IdleDisarmsAndWithdrawsLikeAuto(t *testing.T) {
+	for _, trigger := range []string{"auto", "idle"} {
+		f := noticeFixture(t)
+		f.usage.setStatus("tm-op-a", "idle")
+		f.usage.setPct("sid-ma", 80) // the stale reading, over 70%
+		now := f.clock.Load()
+		if _, _, err := f.m.store.CreateRelayAsk(RelayAsk{ID: rid(901), SessionID: "sid-ma", UsedPct: 72, Window: 1000000, CreatedAt: now, ExpiresAt: now + team.RelayAskHoldS*1000}); err != nil {
+			t.Fatal(err)
+		}
+		f.compacted("sid-ma", trigger)
+		waitFor(t, func() bool { return len(f.sender.calls()) == 1 })
+		if a := f.ask(rid(901)); a.State != team.RelayAskWithdrawn {
+			t.Fatalf("%s: ask after the compaction = %+v, want withdrawn", trigger, a)
+		}
+		f.usageCheck()
+		f.usageCheck()
+		if n := len(f.sender.calls()); n != 1 {
+			t.Fatalf("%s: %d notices after the next ticks, want only the compaction's (no stale 70%% notice)", trigger, n)
+		}
+	}
+}
+
+func TestRelayCompacted_IdleNonMemberDoesNot(t *testing.T) {
+	f := noticeFixture(t)
+	for _, sid := range []string{"sid-1", "sid-nobody"} {
+		if code, res := f.compacted(sid, "idle"); code != http.StatusOK || res.Noticed {
+			t.Fatalf("%s: %d %+v, want 200 not noticed", sid, code, res)
+		}
+	}
+	f.usageCheck()
+	if n := len(f.sender.calls()); n != 0 {
+		t.Fatalf("%d notices, want 0", n)
+	}
+}
+
+// Mutation gate: manual tells somebody → red.
+func TestRelayCompacted_ManualTellsNobodyAndAnUnknownTriggerIs400(t *testing.T) {
+	f := noticeFixture(t)
+	if code, res := f.compacted("sid-ma", "manual"); code != http.StatusOK || res.Noticed {
+		t.Fatalf("manual = %d %+v", code, res)
+	}
+	if code, _ := f.compacted("sid-ma", "sideways"); code != http.StatusBadRequest {
+		t.Fatalf("sideways = %d, want 400", code)
+	}
+	f.usageCheck()
+	if n := len(f.sender.calls()); n != 0 {
+		t.Fatalf("%d notices, want 0", n)
+	}
+}

@@ -34,7 +34,7 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 	"       pdx relay prompts [--config <path>]\n" +
 	"       pdx relay lock|unlock <op> --session <sid> [--config <path>]\n" +
 	"       pdx relay claim|seen <op> --session <sid> [--config <path>]\n" +
-	"       pdx relay compacted --session <sid> --trigger auto|manual [--config <path>]\n" +
+	"       pdx relay compacted --session <sid> --trigger auto|manual|idle [--config <path>]\n" +
 	"       pdx relay <ref|address> [--wait <dur>] [--config <path>]"
 
 const (
@@ -140,7 +140,7 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 	}
 }
 
-// runRelayCompacted is `pdx relay compacted --session <sid> --trigger auto|manual` (P7-2): the mod reports a compaction it
+// runRelayCompacted is `pdx relay compacted --session <sid> --trigger auto|manual|idle` (P7-2): the mod reports a compaction it
 // did not intercept; the daemon decides whether the lead is told. Not retried (Idempotent is left off): a retry could tell
 // the lead twice. stdout is the daemon's {"noticed":bool}.
 func runRelayCompacted(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
@@ -157,8 +157,8 @@ func runRelayCompacted(ctx context.Context, args []string, stdout, stderr io.Wri
 		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
 	case strings.TrimSpace(req.SessionID) == "":
 		return relayUsageErr(stderr, "--session 不能為空")
-	case req.Trigger != "auto" && req.Trigger != "manual":
-		return relayUsageErr(stderr, "--trigger must be auto or manual")
+	case req.Trigger != "auto" && req.Trigger != "manual" && req.Trigger != "idle":
+		return relayUsageErr(stderr, "--trigger must be auto, manual or idle")
 	}
 	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
 	if code != ExitOK {
