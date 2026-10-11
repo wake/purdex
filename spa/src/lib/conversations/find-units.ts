@@ -119,7 +119,9 @@ export function deckUnits(turns: readonly Turn[], eager: number, subagents?: Rec
 export function chatUnits(turns: readonly PanelTurn[]): SearchUnit[] {
   const out: SearchUnit[] = []
   for (const entry of buildChat(turns as PanelTurn[])) {
-    if (entry.kind === 'user') { if (entry.item.source !== 'command_output') add(out, userUnitId(entry.item.id), userText(entry.item)) }
+    // a command output (either shape) is the same fold as the deck's: itemUnits builds its unit and reveal key
+    if (entry.kind === 'system' || (entry.kind === 'user' && entry.item.source === 'command_output')) itemUnits(out, entry.item, [], [], undefined)
+    else if (entry.kind === 'user') add(out, userUnitId(entry.item.id), userText(entry.item))
     else if (entry.kind === 'agent') add(out, agentUnitId(entry.item.id), proseText(entry.item.markdown))
   }
   return out
