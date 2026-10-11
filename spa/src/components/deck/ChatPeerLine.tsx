@@ -19,10 +19,11 @@ function peerPreview(text: string): { text: string; cut: boolean } {
 
 /** One opened message: the same three-line fold as the deck's peer block (its own fold key, so opening the list does not open every message). */
 function PeerItemBody({ id, text }: { id: string; text: string }) {
-  const { bodyRef, boxClass, boxProps, bodyClass } = usePeerCollapse(`${id}:peerfold`, text)
+  const { bodyRef, bodyId, collapsible, toggleProps, boxClass, boxProps, bodyClass } = usePeerCollapse(`${id}:peerfold`, text)
   return (
     <div data-testid="chat-peer-item" className={`${boxClass} text-text-secondary`} {...boxProps}>
-      <div ref={bodyRef} className={`whitespace-pre-wrap break-words ${bodyClass}`}>{text}</div>
+      {collapsible && <button type="button" {...toggleProps} />}
+      <div ref={bodyRef} id={bodyId} className={`whitespace-pre-wrap break-words ${bodyClass}`}>{text}</div>
     </div>
   )
 }

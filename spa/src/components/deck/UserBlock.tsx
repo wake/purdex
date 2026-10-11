@@ -59,8 +59,9 @@ function UserBox({ item, midTurn, fold }: BlockProps & { fold?: Fold }) {
   const c = TONE[tone]
   return (
     <div data-testid="deck-user" data-source={item.source} data-tone={tone} className={`${c.box} px-3 py-2 ${fold?.boxClass ?? ''}`} {...fold?.boxProps}>
+      {fold?.collapsible && <button type="button" {...fold.toggleProps} />}
       <div data-testid="deck-user-caption" className={`mb-1 deck-t-down font-medium ${c.caption}`}>{caption}</div>
-      <div ref={fold?.bodyRef} className={`whitespace-pre-wrap break-words deck-t-up ${c.body} ${bash ? 'font-mono' : ''} ${fold?.bodyClass ?? ''}`}>
+      <div ref={fold?.bodyRef} id={fold?.bodyId} className={`whitespace-pre-wrap break-words deck-t-up ${c.body} ${bash ? 'font-mono' : ''} ${fold?.bodyClass ?? ''}`}>
         {bash ? `! ${item.text}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}
         {item.truncated && <span className="text-text-muted">…</span>}
       </div>
