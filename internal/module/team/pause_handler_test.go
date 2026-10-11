@@ -119,3 +119,21 @@ func TestRoster_ShowsThePauseOfEachSession(t *testing.T) {
 		t.Errorf("an unpaused member's paused on the wire: %q present=%v", v, ok)
 	}
 }
+
+// Codex R1 (P2): a paused member whose row the lead has since moved to killing / releasing / killed still shows the ref and
+// title team.db has for it, not blanks. Mutation gate: require the row to be active again -> blanks (red).
+func TestPaused_AMemberLeavingActiveKeepsItsStoredRefAndTitle(t *testing.T) {
+	f := newFixture(t)
+	seedTeam(t, f.m.store, uid(1), "sid-1", 1000)
+	seedMember(t, f.m.store, "op-1", uid(1), "sid-m1", 2000)
+	f.addPause(PauseRow{SessionID: "sid-m1", Cause: team.PauseCauseLead, Role: team.PauseRoleMember, TeamID: uid(1), LeadSessionID: "sid-1", OnSince: 5, Since: 100})
+	for _, st := range []team.MemberState{team.MemberKilling, team.MemberReleasing, team.MemberKilled} {
+		if err := f.m.store.SetMemberState("op-1", st, 3000); err != nil {
+			t.Fatal(err)
+		}
+		got := f.getPaused()
+		if len(got.Sessions) != 1 || got.Sessions[0].Ref != "_memop-1" || got.Sessions[0].Title != "worker" {
+			t.Fatalf("member %s: paused = %+v", st, got)
+		}
+	}
+}

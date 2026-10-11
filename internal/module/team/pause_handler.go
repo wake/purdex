@@ -62,15 +62,21 @@ func (m *Module) handlePausedGet(w http.ResponseWriter, r *http.Request) {
 			case team.PauseRoleMember:
 				ps.LeadRef = t.LeadRef
 				if ps.Ref == "" || ps.Title == "" {
+					// Whatever state the row is in now (a lead's kill or release may be under way): the pause row outlives
+					// it until it is released. An active row of the session wins over an older one.
 					if rows, merr := m.store.MembersOf(p.TeamID); merr == nil {
-						for _, mr := range rows {
-							if mr.SessionID == p.SessionID && mr.State == team.MemberActive {
-								if ps.Ref == "" {
-									ps.Ref = mr.Ref
-								}
-								if ps.Title == "" {
-									ps.Title = mr.Title
-								}
+						var pick *memberRow
+						for i := range rows {
+							if rows[i].SessionID == p.SessionID && (pick == nil || pick.State != team.MemberActive) {
+								pick = &rows[i]
+							}
+						}
+						if pick != nil {
+							if ps.Ref == "" {
+								ps.Ref = pick.Ref
+							}
+							if ps.Title == "" {
+								ps.Title = pick.Title
 							}
 						}
 					}
