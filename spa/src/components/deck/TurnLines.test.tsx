@@ -111,6 +111,7 @@ describe('LiveTurnLine', () => {
     })
     it('a tool and subagents', () => { expect(text([step('b'), step('c', { kind: 'task', tool: 'Agent' })])).toBe('✻Running · Bash · 1 subagent(s) · 3m 03s') })
     it('nothing running (the model thinks or writes): Thinking… · time', () => { expect(text([step('a', { status: 'done' })])).toBe('✻Thinking… · 3m 03s') })
+    it('a running step without a tool name still counts as running, not thinking', () => { expect(text([step('b', { tool: '' })])).toBe('✻Running · 3m 03s') })
     it('a turn with no steps yet thinks too, in Chinese as well', () => {
       useI18nStore.getState().setLocale('zh-TW')
       expect(text([])).toBe('✻思考中… · 3 分 03 秒')

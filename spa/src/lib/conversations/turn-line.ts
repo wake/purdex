@@ -20,6 +20,8 @@ export interface LiveLine {
   tool: string | null
   /** How many Agent/Task steps are running now. */
   subagents: number
+  /** Whether any step runs now (a tool without a name still counts): false means the model is thinking or writing. */
+  busy: boolean
 }
 
 const isStep = (i: ConversationItem): i is StepItem => i.type === 'step'
@@ -40,6 +42,7 @@ export function liveLine(turns: readonly LineTurn[], status: string | undefined)
     since: typeof running?.started_at === 'number' && running.started_at > 0 ? running.started_at : null,
     tool: latest?.tool || null,
     subagents,
+    busy: steps.length > 0,
   }
 }
 

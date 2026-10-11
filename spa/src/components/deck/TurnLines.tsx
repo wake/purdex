@@ -36,8 +36,7 @@ export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; st
     )
   }
   // No tool and no subagent running: the model is thinking or writing (the conversation cannot tell which, as in the terminal).
-  const working = live.tool !== null || live.subagents > 0
-  const parts = [t(working ? 'deck.live.running' : 'deck.live.thinking')]
+  const parts = [t(live.busy ? 'deck.live.running' : 'deck.live.thinking')]
   if (live.tool) parts.push(live.tool)
   if (live.subagents > 0) parts.push(t('deck.live.subagents', { n: live.subagents }))
   if (live.since !== null) parts.push(formatDuration(Math.max(0, now - live.since), t))
