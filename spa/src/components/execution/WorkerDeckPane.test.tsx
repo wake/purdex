@@ -306,24 +306,76 @@ describe('WorkerDeckPane', () => {
     expect(acquire).toHaveBeenCalledTimes(1)
   })
 
-  // coverage G: a stream that died for good (the SSE closed with an error after the history loaded) leaves nothing to send into: the box is locked, and says why.
-  it('a dead stream locks the input and says the connection is lost; it opens again when the stream is back', () => {
+  // coverage G: a stream that died for good (the SSE closed with an error after the history loaded) leaves nothing to send into: nothing is sent, and the box says why.
+  // The box itself stays usable for what is local (editing the draft, Up to take a held message back).
+  it('a dead stream sends nothing and says the connection is lost; it sends again when the stream is back', async () => {
+    vi.useFakeTimers()
     seed(summary({ state: 'running' }))
     setSlice({ sse: 'closed', sseError: 'unauthorized' })
     render(ui())
     const box = screen.getByRole('textbox')
-    expect(box).toBeDisabled()
     expect(box).toHaveAttribute('placeholder', 'Live connection lost — reopen this pane to continue')
     expect(screen.getByLabelText('Send')).toBeDisabled()
+    typeAndSend('into the void')
+    expect(screen.queryByTestId('queued-message')).toBeNull()
+    expect(screen.getByRole('textbox')).toHaveValue('into the void') // the draft is kept
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(api.sendMessage).not.toHaveBeenCalled()
     act(() => { useExecutionStore.getState().setSse(H, E, 'open', null) })
-    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(screen.getByLabelText('Send')).not.toBeDisabled()
+    typeAndSend('into the void')
+    expect(screen.getByTestId('queued-message')).toBeInTheDocument()
   })
 
-  it('a stream that is merely closed with no error (not yet connected) does not lock the input', () => {
+  it('a dead stream leaves Up working: a message still held by the App comes back into the box', () => {
+    vi.useFakeTimers()
+    seed(summary({ state: 'running' }))
+    render(ui())
+    typeAndSend('held one')
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'undo')
+    setSlice({ sse: 'closed', sseError: 'unauthorized' })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'ArrowUp' })
+    expect(screen.queryByTestId('queued-message')).toBeNull()
+    expect(screen.getByRole('textbox')).toHaveValue('held one')
+  })
+
+  it('a stream that is merely closed with no error (not yet connected) does not lock the sending', () => {
     seed(summary({ state: 'running' }))
     setSlice({ sse: 'closed', sseError: null })
     render(ui())
-    expect(screen.getByRole('textbox')).not.toBeDisabled()
+    expect(screen.getByLabelText('Send')).not.toBeDisabled()
+  })
+
+  // R1/atk of #2668: a click on Send leaves the focus on the button; the box takes it back, so the next keystroke goes on typing
+  it('after a message is sent with a click on Send, the focus is back in the box', () => {
+    vi.useFakeTimers()
+    seed(summary())
+    render(ui())
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'by mouse' } })
+    const send = screen.getByLabelText('Send')
+    send.focus()
+    fireEvent.click(send)
+    expect(screen.getByTestId('queued-message')).toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByRole('textbox'))
+  })
+
+  // atk of #2668: the chat has neither the deck's live line nor its tail row, so the lifecycle (why a worker failed or ended) is said under the chat
+  it('the chat says where the worker is in its life: a terminated one with its reason, a failed start with why', () => {
+    seed(summary({ state: 'terminated', terminal_reason: 'idle timeout' }))
+    render(ui({ view: 'chat' }))
+    expect(screen.getByTestId('worker-lifecycle')).toHaveTextContent('idle timeout')
+    cleanup()
+    useExecutionStore.setState({ executions: {} })
+    seed(summary({ state: 'idle' }))
+    render(ui({ view: 'chat' }))
+    expect(screen.queryByTestId('worker-lifecycle')).toBeNull() // a running or idle worker has none: the light says it
+  })
+
+  it('the status row\'s main text carries the worker info too, not just the row (the text\'s own title must not hide it)', () => {
+    seed(summary())
+    render(ui())
+    expect(screen.getByTestId('status-row-line').getAttribute('title')).toContain('/w/purdex')
+    expect(screen.getByTestId('status-row-line').getAttribute('title')).toContain(SID)
   })
 
   // --- U4-4b: the hand-over controls (take to terminal, exit): the same flow as the room's, from the deck's own small menu and the status bar's terminal button ---

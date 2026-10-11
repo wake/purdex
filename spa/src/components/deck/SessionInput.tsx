@@ -168,7 +168,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   }
 
   const send = () => {
-    if (lockedReason) return
+    if (lockedReason) { setHint({ key: 'execution.input.disconnected', tone: 'warn' }); return }
     // a message sent while a file is still on its way would leave without it
     if (uploading.length > 0) { setHint({ key: 'deck.attach.busy', tone: 'warn' }); return }
     // the draft holds the short `[Image #N]`; what is sent is the marker the agent reads (the draft itself stays as it is until it is sent)
@@ -180,6 +180,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     discardCleared(dKey)
     setChips([])
     change('')
+    box.current?.focus() // a click on Send left the focus on the button: the next keystroke goes on typing
   }
   // Messages the queue gave back (the Up key here, or an Undo wherever the held messages are drawn) land in the memories (draft-recall); read them again.
   useEffect(() => subscribeRecall(dKey, () => {
@@ -240,7 +241,6 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               ref={box}
               value={draft}
               rows={1}
-              disabled={!!lockedReason}
               placeholder={lockedReason ?? t(asking ? 'deck.dock.input_placeholder' : 'deck.send.placeholder')}
               onChange={(e) => change(e.target.value)}
               onPaste={(e) => {

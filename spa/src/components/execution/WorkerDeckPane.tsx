@@ -153,9 +153,10 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
     </div>
   )
   // Whatever the pane draws (a lifecycle line, the deck, an ended worker's stream) sits above the hand-over controls and, for an ended worker, the ended footer.
-  const frame = (body: React.ReactNode) => (
+  const frame = (body: React.ReactNode, under?: React.ReactNode) => (
     <div className="relative flex h-full flex-col">
       <div className="relative min-h-0 flex-1">{body}</div>
+      {under}
       {handoffBar}
       {endedFooter}
     </div>
@@ -213,5 +214,6 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
   )
   // The ended footer sits below the deck pane, not inside the deck's own footer slot: a conversation that cannot be read draws no footer, and the way to
   // rebuild, exit or close must never be lost with it.
-  return frame(deck)
+  // The chat draws neither the deck's live line nor its tail row: where the worker is in its life (and why it failed or ended) is said under it.
+  return frame(deck, view === 'chat' && st.summary ? <div className="px-3 pb-1"><WorkerLifecycleRow summary={st.summary} /></div> : undefined)
 }
