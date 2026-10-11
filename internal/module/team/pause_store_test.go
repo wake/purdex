@@ -10,7 +10,7 @@ import (
 )
 
 func pauseRow(sid, cause, role string, since int64) PauseRow {
-	return PauseRow{SessionID: sid, Cause: cause, Role: role, TeamID: "team-1", LeadSessionID: "lead-1", OnSince: 500, Since: since}
+	return PauseRow{SessionID: sid, Cause: cause, Role: role, TeamID: "team-1", LeadSessionID: "lead-1", Ref: "_" + sid, Title: "t-" + sid, OnSince: 500, Since: since}
 }
 
 // The four tables reach a team.db written before them, and what was in it stays.
@@ -122,6 +122,9 @@ func TestPause_PausedSessionsListsCausesSinceAndBounces(t *testing.T) {
 	got, err := s.PausedSessions()
 	if err != nil || len(got) != 2 {
 		t.Fatalf("paused = %+v err=%v", got, err)
+	}
+	if got[0].Ref != "_sid-solo" || got[0].Title != "t-sid-solo" || got[1].Ref != "_sid-m" || got[1].Title != "t-sid-m" {
+		t.Fatalf("recorded ref / title = %q %q / %q %q", got[0].Ref, got[0].Title, got[1].Ref, got[1].Title)
 	}
 	solo, m := got[0], got[1] // by since: solo (50) before the member (earliest 100)
 	if solo.SessionID != "sid-solo" || solo.Role != team.PauseRoleSolo || len(solo.Causes) != 1 || solo.Since != 50 || solo.Bounced != 0 {

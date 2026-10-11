@@ -62,7 +62,6 @@ var capabilities = []string{
 	"conversations.submit.v1", // POST /api/conversations/{provider}/{session_id}/submit and /interrupt through the session's mod (needs a prompt.v1 stream: else 409 no_mod); not a device route
 	"session.launch.v1",       // GET /api/sessions/{code}/launch-plan, POST /api/sessions/{code}/launch: the no-agent launch panel (resume the last conversation / start a new one)
 	"team.ask_chat.v1",        // decide a hook_ask with decision deny + hook.message (the reply instead of answers); its wait is answered_remote with hook.message
-	"team.pause.v1",           // GET /api/team/paused, `paused` on every roster session: sessions paused because an unattended session had no relay quota left
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose

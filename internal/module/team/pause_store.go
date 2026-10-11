@@ -22,6 +22,8 @@ const pauseSchema = `
 		role            TEXT    NOT NULL CHECK (role IN ('solo', 'lead', 'member')),
 		team_id         TEXT    NOT NULL DEFAULT '',
 		lead_session_id TEXT    NOT NULL DEFAULT '',
+		ref             TEXT    NOT NULL DEFAULT '',
+		title           TEXT    NOT NULL DEFAULT '',
 		on_since        INTEGER NOT NULL,
 		since           INTEGER NOT NULL,
 		PRIMARY KEY (session_id, cause)
@@ -50,9 +52,11 @@ const pauseSchema = `
 	);`
 
 // PauseRow is one row of session_pauses. OnSince is the unattended switch's Since at the time of the pause (the host-config
-// value changes on every off → on); Since is when this row was written.
+// value changes on every off → on); Since is when this row was written. Ref and Title are the session's own at that moment,
+// what GET /api/team/paused shows when the registry no longer lists the session (a solo session has no team row to fall back on).
 type PauseRow struct {
 	SessionID, Cause, Role, TeamID, LeadSessionID string
+	Ref, Title                                    string
 	OnSince, Since                                int64
 }
 
@@ -60,6 +64,7 @@ type PauseRow struct {
 // team of its earliest row, and how many bounced messages wait for it.
 type PausedAgg struct {
 	SessionID, Role, TeamID, LeadSessionID string
+	Ref, Title                             string
 	Causes                                 []string
 	Since                                  int64
 	Bounced                                int
@@ -71,9 +76,9 @@ func (s *Store) AddPause(p PauseRow) (created bool, err error) {
 	if p.SessionID == "" {
 		return false, fmt.Errorf("add pause: no session")
 	}
-	res, err := s.db.Exec(`INSERT INTO session_pauses (session_id, cause, role, team_id, lead_session_id, on_since, since)
-		VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session_id, cause) DO NOTHING`,
-		p.SessionID, p.Cause, p.Role, p.TeamID, p.LeadSessionID, p.OnSince, p.Since)
+	res, err := s.db.Exec(`INSERT INTO session_pauses (session_id, cause, role, team_id, lead_session_id, ref, title, on_since, since)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (session_id, cause) DO NOTHING`,
+		p.SessionID, p.Cause, p.Role, p.TeamID, p.LeadSessionID, p.Ref, p.Title, p.OnSince, p.Since)
 	if err != nil {
 		return false, fmt.Errorf("add pause %s/%s: %w", p.SessionID, p.Cause, err)
 	}
@@ -86,7 +91,7 @@ func (s *Store) AddPause(p PauseRow) (created bool, err error) {
 
 // Pauses lists every pause row, oldest first. Never nil.
 func (s *Store) Pauses() ([]PauseRow, error) {
-	rows, err := s.db.Query(`SELECT session_id, cause, role, team_id, lead_session_id, on_since, since FROM session_pauses ORDER BY since, session_id, cause`)
+	rows, err := s.db.Query(`SELECT session_id, cause, role, team_id, lead_session_id, ref, title, on_since, since FROM session_pauses ORDER BY since, session_id, cause`)
 	if err != nil {
 		return nil, fmt.Errorf("list pauses: %w", err)
 	}
@@ -94,7 +99,7 @@ func (s *Store) Pauses() ([]PauseRow, error) {
 	out := []PauseRow{}
 	for rows.Next() {
 		var p PauseRow
-		if err := rows.Scan(&p.SessionID, &p.Cause, &p.Role, &p.TeamID, &p.LeadSessionID, &p.OnSince, &p.Since); err != nil {
+		if err := rows.Scan(&p.SessionID, &p.Cause, &p.Role, &p.TeamID, &p.LeadSessionID, &p.Ref, &p.Title, &p.OnSince, &p.Since); err != nil {
 			return nil, fmt.Errorf("list pauses: %w", err)
 		}
 		out = append(out, p)
@@ -118,8 +123,14 @@ func (s *Store) PausedSessions() ([]PausedAgg, error) {
 		i, ok := idx[r.SessionID]
 		if !ok {
 			idx[r.SessionID] = len(out)
-			out = append(out, PausedAgg{SessionID: r.SessionID, Role: r.Role, TeamID: r.TeamID, LeadSessionID: r.LeadSessionID, Since: r.Since})
+			out = append(out, PausedAgg{SessionID: r.SessionID, Role: r.Role, TeamID: r.TeamID, LeadSessionID: r.LeadSessionID, Ref: r.Ref, Title: r.Title, Since: r.Since})
 			i = len(out) - 1
+		}
+		if out[i].Ref == "" {
+			out[i].Ref = r.Ref // a later row of the session may have recorded what the earliest did not
+		}
+		if out[i].Title == "" {
+			out[i].Title = r.Title
 		}
 		out[i].Causes = append(out[i].Causes, r.Cause)
 	}

@@ -47,7 +47,13 @@ func (m *Module) handlePausedGet(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if o, ok := origins[p.SessionID]; ok {
-			ps.Ref, ps.Title = o.Ref, o.Title
+			ps.Ref, ps.Title = o.Ref, o.Title // the registry's live values first
+		}
+		if ps.Ref == "" {
+			ps.Ref = p.Ref // then what was recorded when the session was paused
+		}
+		if ps.Title == "" {
+			ps.Title = p.Title
 		}
 		if haveTeam {
 			switch p.Role {

@@ -69,6 +69,23 @@ func TestPaused_ListsEachPausedSession(t *testing.T) {
 	}
 }
 
+// A solo session has no team row to fall back on: the ref and title recorded when it was paused answer when the registry does
+// not list it (a registry that cannot be read, or a session that left). The registry's live values win while it lists it.
+// Mutation gate: no fallback to the recorded values -> blanks (red); the recorded values over the live ones -> the stale title (red).
+func TestPaused_ASoloSessionKeepsTheRefAndTitleRecordedAtThePause(t *testing.T) {
+	f := newFixture(t)
+	f.addPause(PauseRow{SessionID: "sid-solo", Cause: team.PauseCauseQuota, Role: team.PauseRoleSolo, Ref: "_solo01", Title: "alone then", OnSince: 5, Since: 50})
+	got := f.getPaused()
+	if len(got.Sessions) != 1 || got.Sessions[0].Ref != "_solo01" || got.Sessions[0].Title != "alone then" {
+		t.Fatalf("not in the registry: %+v", got)
+	}
+	f.origins.show(team.Origin{SessionID: "sid-solo", Ref: "_solo01", Title: "alone now", Address: "self/alone", PID: 11})
+	got = f.getPaused()
+	if len(got.Sessions) != 1 || got.Sessions[0].Ref != "_solo01" || got.Sessions[0].Title != "alone now" {
+		t.Fatalf("the registry lists it: %+v (live values first)", got)
+	}
+}
+
 // A session the registry no longer lists keeps the ref and title team.db has for it.
 func TestPaused_FallsBackToWhatTeamDBStored(t *testing.T) {
 	f := newFixture(t)

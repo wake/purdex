@@ -62,7 +62,9 @@ stale by definition); flow notices from a persisted outbox, the only messages th
 
 ### 3.1 State (UP-1a)
 - `session_pauses(session_id, cause CHECK (cause IN ('quota','lead')), role ('solo'|'lead'|'member'), team_id,
-  lead_session_id, on_since INTEGER NOT NULL, since, PRIMARY KEY (session_id, cause))`. `on_since` is the unattended
+  lead_session_id, on_since INTEGER NOT NULL, since, ref TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (session_id, cause))` — `ref` / `title` are a snapshot taken when the pause is written (UP-2), used by
+  the route when the live registry does not know the session (offline, registry error). `on_since` is the unattended
   switch's `Since` at the time of the pause (the host-config value changes on every off → on). A session is **paused
   iff it has any row**. Writing a cause that already exists is a no-op (idempotent per (session, cause)).
 - `pause_outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id, kind, text, reask_id, created_at, attempts)` —
@@ -75,7 +77,8 @@ stale by definition); flow notices from a persisted outbox, the only messages th
   and `teams.ended_at = 0` (the persisted predicate of `ActiveMembersOfLiveTeams`, `team_store_members.go:71`;
   `killing` / `releasing` / `gone` / remote excluded).
 - `GET /api/team/paused` → `{sessions: [{session_id, ref, title, role, causes, since, lead_ref, bounced}]}`; roster
-  rows gain `paused: {causes, since} | null`; capability `team.pause.v1`.
+  rows gain `paused: {causes, since} | null`. Capability `team.pause.v1` is announced only by **UP-3b** (when entering,
+  refusing, leaving and release all exist), so every earlier phase can be deployed on its own (1f, UP-1a review #3).
 
 ### 3.2 Refusing deliveries (UP-1b)
 - Both delivery points (before `deliverLocal`; in `deliverToLocalTarget` after `findTarget`) call **one team-store
@@ -155,7 +158,7 @@ stale by definition); flow notices from a persisted outbox, the only messages th
   `reask` (protocol gate) — the 「打 /relay」 notice instead. Mod change ⇒ `pdx setup` on both hosts at release.
 
 ## 5. Plan (each phase one PR, ≤ 800 lines; codex R1 + R2 each)
-- **UP-1a tables, predicate, paused query, route, roster, capability.** Tests: migration on an existing DB; two causes
+- **UP-1a tables (incl. the `ref` / `title` snapshot), predicate, paused query, route, roster (no capability yet).** Tests: migration on an existing DB; two causes
   on one session; idempotent cause write; member predicate (active local live-team yes; remote, killing, releasing,
   gone, ended team no); route / roster shapes.
 - **UP-1b delivery refusal.** Tests: both arms → 409 + bounce, collapse on (from, hash); `SendFlow` passes, an admin
@@ -173,7 +176,7 @@ stale by definition); flow notices from a persisted outbox, the only messages th
 - **UP-3a switch off + reconcile + resume group.** Tests: resume group order (lead before members), only-last-cause
   resume notice, bounce lists sent and cleared, member-quota list to the lead; off CAS then crash then on ⇒ the old
   rows resumed by `on_since`; reconcile while on with current `on_since` ⇒ nothing; old-mod fallback notice.
-- **UP-3b release one + tokens.** Tests: claim validation; solo / lead-with-members / member-quota release; the re-ask
+- **UP-3b release one + tokens + capability `team.pause.v1`.** Tests: claim validation; solo / lead-with-members / member-quota release; the re-ask
   with the token under unattended on + no quota ⇒ a person's held card (not a pause); token used once; duplicate
   `reask` delivery ⇒ one begin; token expiry.
 - **UP-4 mod.** Tests: 409 ⇒ latch, no ask on later turns; `reask` ⇒ consumed, dedup by id, one begin with `--reask`,
