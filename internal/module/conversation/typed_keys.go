@@ -34,7 +34,12 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 	}
 	// Atomic claim before anything is typed: a concurrent request with the same id (even on another session, which holds a
 	// different lock) gets the recorded answer and never types.
-	if row, claimed := m.keysSeen.claim(c.id, c.owner.SessionID, tune.now()); !claimed {
+	row, claimed, full := m.keysSeen.claim(c.id, c.owner.SessionID, tune.now())
+	if full { // every row is a request still typing: never evict one, refuse cleanly
+		refuse(w, http.StatusTooManyRequests, "busy")
+		return
+	}
+	if !claimed {
 		if row.sid != c.owner.SessionID {
 			refuse(w, http.StatusConflict, "client_msg_id_reused")
 			return
@@ -46,6 +51,7 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 		writeTyped(w, http.StatusOK, typedAnswer{Outcome: out, Mode: "keys"})
 		return
 	}
+	defer m.keysSeen.settle(c.id) // whatever way this ends, the claim becomes an ordinary row (or was forgotten)
 	st, ok := m.freshLight(c.owner)
 	if !ok { // fail closed: an unreadable light is not an idle one
 		m.keysSeen.forget(c.id) // nothing went out

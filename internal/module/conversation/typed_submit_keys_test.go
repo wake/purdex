@@ -86,6 +86,58 @@ func TestKeysSubmit_OwnerAppearingDuringSettleStillSendsTheEnter(t *testing.T) {
 	}
 }
 
+// A request still settling holds an in-flight claim: filling the ledger with other ids must not evict it, or a replay would
+// claim again and type twice.
+func TestKeysSubmit_InFlightClaimSurvivesCapacityEviction(t *testing.T) {
+	te := keysEnv(t)
+	inText, release := make(chan struct{}), make(chan struct{})
+	te.keys.onCall = func(c keyCall) {
+		if c.keys[0] == "hello" {
+			close(inText)
+			<-release
+		}
+	}
+	done := make(chan struct{})
+	go func() { te.submit("kf1", "hello"); close(done) }()
+	<-inText
+	now := time.Now()
+	for i := 0; i < maxKeysLedger+5; i++ {
+		te.mod.keysSeen.put("fill"+time.Duration(i).String(), keysRow{handed: true}, now.Add(time.Duration(i)*time.Millisecond))
+	}
+	answer(t, te.submit("kf1", "hello"), 200, "unknown", "keys", "")
+	if te.keys.n() != 0 { // the blocked call is recorded only after it returns
+		t.Fatalf("calls = %d", te.keys.n())
+	}
+	close(release)
+	<-done
+	if te.keys.n() != 2 {
+		t.Fatalf("calls = %d, want the one text and one Enter", te.keys.n())
+	}
+	answer(t, te.submit("kf1", "hello"), 200, "handed", "keys", "")
+}
+
+// Full of in-flight claims: a new id is refused cleanly (busy), nothing is evicted and nothing is typed.
+func TestKeysSubmit_LedgerFullOfInFlightRefusesBusy(t *testing.T) {
+	te := keysEnv(t)
+	now := time.Now()
+	for i := 0; i < maxKeysLedger; i++ {
+		if _, claimed, full := te.mod.keysSeen.claim("p"+time.Duration(i).String(), "s", now); !claimed || full {
+			t.Fatalf("claim %d: %v %v", i, claimed, full)
+		}
+	}
+	if w := te.submit("kfull", "x"); w.Code != 429 {
+		t.Fatalf("status %d %s", w.Code, w.Body.String())
+	}
+	if te.keys.n() != 0 {
+		t.Fatal("typed while refusing")
+	}
+	if _, ok := te.mod.keysSeen.get("p0s", now); !ok {
+		t.Fatal("an in-flight row was evicted")
+	}
+	te.mod.keysSeen.settle("p0s") // once one settles it is evictable and the new id fits
+	answer(t, te.submit("kfull", "x"), 200, "handed", "keys", "")
+}
+
 // The default settle is the measured one plus margin.
 func TestKeysTuning_DefaultSettle(t *testing.T) {
 	if got := (&Module{}).tuning().keysSettle; got != 150*time.Millisecond {
