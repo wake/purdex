@@ -1,23 +1,45 @@
-// spa/src/hooks/useLaunchPlan.ts — the daemon's launch plan for one session (no-agent launch panel). Read when `enabled` turns on
-// (mount), on `refresh()`, and whenever `changeKey` changes (the sessions list moved for this session). The previous plan stays
-// shown while a re-read is in flight; a failed read drops it (the caller then keeps today's view — never a stale panel).
-import { useCallback, useEffect, useState } from 'react'
-import { fetchLaunchPlan, type LaunchPlan } from '../lib/launch-plan'
+// spa/src/hooks/useLaunchPlan.ts — triggers the shared launch-plan read (useLaunchPlanStore) for one session generation: when
+// `enabled` turns on (mount), on `refresh()`, and whenever `changeKey` changes (the sessions list moved for this session). The
+// state itself lives in the store, so the status bar and the pane read one answer and it survives a tab remount.
+//
+// Which entry both readers look at is derived HERE, once (`useLaunchPlanInstance` / `useLaunchPlanEntry`), so they cannot drift.
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { selectLaunchPlanEntry, useLaunchPlanStore, type LaunchPlanEntry } from '../stores/useLaunchPlanStore'
+import { useSessionStore } from '../stores/useSessionStore'
 
-export function useLaunchPlan(enabled: boolean, hostId: string, code: string, changeKey: string): { plan: LaunchPlan | null; refresh: () => void } {
+/** The tmux generation the key carries: the sessions list's current `tmux_instance` for this session, else the pane
+ *  content's, else ''. */
+export function useLaunchPlanInstance(hostId: string, code: string, contentInstance: string | undefined): string {
+  const listed = useSessionStore((s) => (Object.hasOwn(s.sessions, hostId) ? s.sessions[hostId] : undefined)?.find((c) => c.code === code)?.tmux_instance)
+  return listed || contentInstance || ''
+}
+
+/** The shared entry for a session, as the status bar and the pane both read it. */
+export function useLaunchPlanEntry(hostId: string, code: string, contentInstance: string | undefined): LaunchPlanEntry | undefined {
+  const instance = useLaunchPlanInstance(hostId, code, contentInstance)
+  return useLaunchPlanStore(selectLaunchPlanEntry(hostId, code, instance))
+}
+
+export function useLaunchPlan(enabled: boolean, hostId: string, code: string, changeKey: string, tmuxInstance: string): { entry: LaunchPlanEntry | undefined; refresh: () => void } {
   const [tick, setTick] = useState(0)
   const refresh = useCallback(() => setTick((n) => n + 1), [])
-  const subject = `${hostId}\0${code}`
-  const [held, setHeld] = useState<{ subject: string; plan: LaunchPlan | null } | null>(null)
+  const ranBefore = useRef(false)
+  const wasEnabled = useRef(false)
+  const everEnabled = useRef(false)
 
-  useEffect(() => {
-    if (!enabled) return
-    const ac = new AbortController()
-    fetchLaunchPlan(hostId, code, ac.signal)
-      .then((plan) => plan, () => null)
-      .then((plan) => { if (!ac.signal.aborted) setHeld({ subject, plan }) })
-    return () => ac.abort()
-  }, [enabled, hostId, code, subject, changeKey, tick])
+  // A layout effect: a dropped plan must not paint for a frame when the gate flips.
+  useLayoutEffect(() => {
+    // The gate flipped (an agent ran and ended in front of the user): what was kept is from before it, so drop it. Not on
+    // mount, and not on the first enable of a mount (a tab remount must not flash).
+    const flipped = enabled && !wasEnabled.current && everEnabled.current
+    const forced = ranBefore.current
+    ranBefore.current = true
+    wasEnabled.current = enabled
+    if (!enabled || !hostId || !code) return
+    everEnabled.current = true
+    void useLaunchPlanStore.getState().load(hostId, code, tmuxInstance, { force: forced, keep: !flipped })
+  }, [enabled, hostId, code, changeKey, tmuxInstance, tick])
 
-  return { plan: enabled && held?.subject === subject ? held.plan : null, refresh }
+  const entry = useLaunchPlanStore(selectLaunchPlanEntry(hostId, code, tmuxInstance))
+  return { entry: enabled ? entry : undefined, refresh }
 }
