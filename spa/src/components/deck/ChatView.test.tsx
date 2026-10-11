@@ -310,13 +310,20 @@ describe('the user on the right, the agent on the left (spec §5)', () => {
     expect(screen.getByTestId('chat-agent')).toHaveClass('justify-start')
   })
 
-  it('bash / schedule / background stay the deck\'s block', () => {
-    for (const source of ['bash', 'scheduled', 'task', 'background']) {
+  it('schedule / background stay the deck\'s block', () => {
+    for (const source of ['scheduled', 'task', 'background']) {
       mount({ turns: userTurn(source) })
       expect(screen.queryByTestId('chat-user')).toBeNull()
       expect(screen.getByTestId('deck-user')).toBeInTheDocument()
       cleanup()
     }
+  })
+
+  it('a bash command is a step-like row, not the deck block nor a bubble', () => {
+    mount({ turns: userTurn('bash') })
+    expect(screen.getByTestId('chat-command')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-user')).toBeNull()
+    expect(screen.queryByTestId('deck-user')).toBeNull()
   })
 })
 
