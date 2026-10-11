@@ -25,7 +25,7 @@ import (
 // These are the mod's calls (lead-team-relay spec §8.3) plus `pdx relay <ref>`
 // (the lead's member relay, P6-5).
 const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]\n" +
-	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--config <path>]\n" +
+	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--reason idle --idle-minutes <n>] [--config <path>]\n" +
 	"       pdx relay ask --session <sid> --used <pct> --window <n> [--request-id <uuid>] [--config <path>]\n" +
 	"       pdx relay wait <request_id> [--wait 9m] [--config <path>]\n" +
 	"       pdx relay self off|on|status --session <sid> [--config <path>]\n" +
@@ -253,7 +253,9 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 	fs.BoolVar(&req.Self, "self", false, "")
 	fs.BoolVar(&req.Manual, "manual", false, "") // a person's /relay (MR-1): the mod sends it, the daemon still asks a person to approve
 	fs.StringVar(&req.SessionID, "session", "", "")
-	fs.IntVar(&req.Window, "window", -1, "") // -1: not given (the grammar requires it)
+	fs.IntVar(&req.Window, "window", -1, "")           // -1: not given (the grammar requires it)
+	fs.StringVar(&req.Reason, "reason", "", "")        // "" or idle (idle relay): why the mod asks
+	fs.IntVar(&req.IdleMinutes, "idle-minutes", 0, "") // 1–59 iff --reason idle
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
@@ -261,6 +263,14 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 	switch {
 	case fs.NArg() != 0:
 		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
+	case req.Reason != "" && req.Reason != team.RelayBeginReasonIdle:
+		return relayUsageErr(stderr, "--reason 只能是 idle")
+	case req.Reason == "" && req.IdleMinutes != 0:
+		return relayUsageErr(stderr, "--idle-minutes 只能搭配 --reason idle")
+	case req.Reason == team.RelayBeginReasonIdle && (req.IdleMinutes < 1 || req.IdleMinutes > 59):
+		return relayUsageErr(stderr, "--reason idle 需要 --idle-minutes 1 到 59")
+	case req.Reason == team.RelayBeginReasonIdle && req.Manual:
+		return relayUsageErr(stderr, "--reason idle 不能搭配 --manual")
 	case !req.Self:
 		return relayUsageErr(stderr, "--self is required (a member relay is `pdx relay <ref>`, P6)")
 	case strings.TrimSpace(req.SessionID) == "":
