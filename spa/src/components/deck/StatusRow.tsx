@@ -1,6 +1,6 @@
 // spa/src/components/deck/StatusRow.tsx — the one-line row under a session view's input, in the shape of Claude Code's terminal
 // status line: left `repo [worktree] [model · effort]`, right the session's cost and the usage rings (`usage`, the status bar's own
-// segments). No state cell (idle is the tab light). Props in, nothing fetched. On a narrow row the line truncates; the rings neither wrap nor hide.
+// segments). No state cell (idle is the tab light). Props in, nothing fetched. On a narrow row the line truncates first, then the cost; the rings neither wrap nor hide.
 import type { ReactNode } from 'react'
 import { formatSessionLine, type SessionLineInput } from './session-line'
 
@@ -23,7 +23,7 @@ export function StatusRow({ cost, tint, info, usage, ...line }: StatusRowProps) 
       className={`flex h-6 items-center gap-2 overflow-hidden px-3 text-xs ${tint ? 'text-text-primary' : 'text-text-secondary'}`}
     >
       <span data-testid="status-row-line" title={info ? `${text}\n${info}` : text} className="min-w-0 flex-1 truncate">{text || '—'}</span>
-      {cost !== null && Number.isFinite(cost) && <span data-testid="item-cost" className="shrink-0 tabular-nums">${cost.toFixed(2)}</span>}
+      {cost !== null && Number.isFinite(cost) && <span data-testid="item-cost" className="min-w-0 truncate tabular-nums">${cost.toFixed(2)}</span>}
       {usage}
     </div>
   )

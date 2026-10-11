@@ -92,6 +92,10 @@ describe('SessionStatusRow', () => {
     expect(screen.getByTestId('status-seg-usage-context').className).not.toMatch(/max-\[/)
     expect(screen.getByTestId('status-usage')).toHaveClass('shrink-0')
     expect(screen.getByTestId('status-row-line')).toHaveClass('truncate')
+    // when even that is not enough the cost gives way (is cut) before the rings do
+    act(() => snapshot({ cost: { total_cost_usd: 3 }, context_window: { used_percentage: 38 } }))
+    expect(screen.getByTestId('item-cost')).toHaveClass('min-w-0', 'truncate')
+    expect(screen.getByTestId('item-cost')).not.toHaveClass('shrink-0')
   })
 
   it('a new snapshot lands live', () => {
