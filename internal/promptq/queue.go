@@ -59,6 +59,11 @@ const (
 	maxQueued          = 16 // requests waiting per session
 	maxLedger          = 4096
 	maxOpenTyped       = 256 // typed rows in filled / entering / unknown: never forgotten, so bounded by count
+	// A typed row still open after OpenTypedMaxAge (or an unknown one whose Enter may have gone) is settled by the sweep;
+	// its id is then kept as a tombstone (at most maxTombstones, TombstoneTTL) so a replay never types again.
+	OpenTypedMaxAge = 10 * time.Minute
+	maxTombstones   = 4096
+	TombstoneTTL    = 24 * time.Hour
 	// MaxTextBytes is the largest text a fill / clear_if carries and a read reports, in UTF-8 BYTES. The mod parses jobs
 	// with the same limit (workbook.js MAX_TYPED_TEXT_BYTES): its limit must never be smaller than this one.
 	MaxTextBytes = 16 << 10
@@ -126,6 +131,7 @@ type entry struct {
 	res        Result
 	phase      string        // fill only
 	enterMark  bool          // fill only: MarkEntering was written, so the text may have been sent
+	settled    bool          // fill only: an open row the sweep gave up on (phase unknown); no longer counted as open
 	done       chan struct{} // closed when state becomes stDone
 	stream     string        // the stream it was handed to
 	queuedAt   time.Time
@@ -150,13 +156,14 @@ type Queue struct {
 	// sighting of every session (NoOwnerFor).
 	seen    map[string]time.Time
 	started time.Time
+	tombs   map[string]time.Time // client_msg_id -> when its settled typed row was evicted
 }
 
 // New returns a queue over the owners.
 func New(o Owners) *Queue {
 	return &Queue{owners: o, Now: time.Now, queues: map[string][]*entry{}, leases: map[string]*entry{},
 		busy: map[string]*entry{}, ledger: map[string]*entry{}, wake: map[string]chan struct{}{},
-		seen: map[string]time.Time{}, started: time.Now()}
+		seen: map[string]time.Time{}, started: time.Now(), tombs: map[string]time.Time{}}
 }
 
 func (q *Queue) wait() time.Duration {
@@ -264,9 +271,20 @@ func (q *Queue) removeQueued(e *entry) {
 // sweepLedger drops old settled rows. q.mu held.
 func (q *Queue) sweepLedger() {
 	now := q.Now()
+	for _, e := range q.ledger {
+		if e.job.Kind == KindFill && e.state == stDone && openPhase(e.phase) && !e.settled &&
+			((e.phase == PhaseUnknown && e.enterMark) || now.Sub(e.finishedAt) > OpenTypedMaxAge) {
+			e.phase, e.settled = PhaseUnknown, true // it may or may not have been sent; nothing more will be done for it
+		}
+	}
 	for k, e := range q.ledger {
 		if forgettable(e) && now.Sub(e.finishedAt) > LedgerTTL {
-			delete(q.ledger, k)
+			q.evict(k, e)
+		}
+	}
+	for k, at := range q.tombs {
+		if now.Sub(at) > TombstoneTTL {
+			delete(q.tombs, k)
 		}
 	}
 	for k, at := range q.seen {
@@ -287,8 +305,31 @@ func (q *Queue) sweepLedger() {
 		if oldest == "" {
 			return // nothing settled to forget: the open rows are bounded by the per-session queue and maxOpenTyped
 		}
-		delete(q.ledger, oldest)
+		q.evict(oldest, q.ledger[oldest])
 	}
+}
+
+// evict forgets a ledger row; a settled unknown typed row leaves a tombstone. q.mu held.
+func (q *Queue) evict(k string, e *entry) {
+	delete(q.ledger, k)
+	if e.settled {
+		q.tombstone(k)
+	}
+}
+
+// tombstone remembers an id, dropping the oldest when full. q.mu held.
+func (q *Queue) tombstone(id string) {
+	for len(q.tombs) >= maxTombstones {
+		var oldest string
+		var at time.Time
+		for k, t := range q.tombs {
+			if oldest == "" || t.Before(at) {
+				oldest, at = k, t
+			}
+		}
+		delete(q.tombs, oldest)
+	}
+	q.tombs[id] = q.Now()
 }
 
 // Submit queues a prompt for the session and waits for the mod's report (or the wait to end). clientMsgID identifies the
@@ -321,6 +362,10 @@ func (q *Queue) submitKeyed(ctx context.Context, kind, sessionID, clientMsgID, t
 			q.mu.Unlock()
 			return q.await(ctx, e), nil // joins the first request's wait, or answers the settled ledger row
 		}
+	}
+	if _, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" && kind == KindFill {
+		q.mu.Unlock() // an evicted unknown row: it may have been sent, so it is never typed again
+		return Result{Status: Unknown, Phase: PhaseUnknown}, nil
 	}
 	if _, ok := q.owners.OwnerOf(sessionID); !ok {
 		q.mu.Unlock()

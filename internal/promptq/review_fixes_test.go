@@ -134,8 +134,8 @@ func TestFillAndClearIf_RejectBlankOrOverlongTextAtOnce(t *testing.T) {
 	take(t, ch)
 }
 
-// Rows whose text may be in the composer or sent are never forgotten by age or by flood; settled ones still are.
-// Mutation gate: evict by TTL/size regardless of phase -> red.
+// Rows whose text may be in the composer or sent are not forgotten by TTL or by flood while they are fresh; past
+// OpenTypedMaxAge the sweep settles them (see settle_test.go). Mutation gate: evict by TTL/size regardless of phase -> red.
 func TestLedger_OpenTypedRowsAreNeverEvicted(t *testing.T) {
 	q, _ := newQ(t)
 	now := time.Unix(1_700_000_000, 0)
@@ -146,15 +146,7 @@ func TestLedger_OpenTypedRowsAreNeverEvicted(t *testing.T) {
 	for _, p := range phases {
 		q.ledger["t-"+p] = &entry{key: "t-" + p, job: Job{Kind: KindFill}, state: stDone, phase: p, finishedAt: now, done: make(chan struct{})}
 	}
-	now = now.Add(2 * LedgerTTL)
-	q.sweepLedger()
-	for _, p := range phases {
-		_, kept := q.ledger["t-"+p]
-		open := p == PhaseFilled || p == PhaseEntering || p == PhaseUnknown
-		if kept != open {
-			t.Fatalf("phase %s kept=%v after the TTL", p, kept)
-		}
-	}
+	now = now.Add(OpenTypedMaxAge - time.Minute)
 	for i := 0; i < maxLedger+5; i++ { // a flood of settled rows
 		id := "flood-" + time.Duration(i).String()
 		q.ledger[id] = &entry{key: id, job: Job{Kind: KindSubmit}, state: stDone, finishedAt: now, done: make(chan struct{})}
@@ -163,6 +155,17 @@ func TestLedger_OpenTypedRowsAreNeverEvicted(t *testing.T) {
 	for _, p := range []string{PhaseFilled, PhaseEntering, PhaseUnknown} {
 		if _, kept := q.ledger["t-"+p]; !kept {
 			t.Fatalf("phase %s forgotten by the flood", p)
+		}
+	}
+	now = now.Add(2 * LedgerTTL)
+	q.sweepLedger()
+	for _, p := range phases {
+		if _, kept := q.ledger["t-"+p]; kept {
+			t.Fatalf("phase %s kept after the TTL", p)
+		}
+		_, tomb := q.tombs["t-"+p]
+		if tomb != (p == PhaseFilled || p == PhaseEntering || p == PhaseUnknown) {
+			t.Fatalf("phase %s tombstone=%v", p, tomb)
 		}
 	}
 }

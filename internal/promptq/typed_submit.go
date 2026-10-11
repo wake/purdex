@@ -33,6 +33,9 @@ func (q *Queue) Lookup(clientMsgID string) (Result, bool) {
 	defer q.mu.Unlock()
 	e, ok := q.ledger[clientMsgID]
 	if !ok || e.job.Kind != KindFill || clientMsgID == "" {
+		if _, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" {
+			return Result{Status: Unknown, Phase: PhaseUnknown}, true
+		}
 		return Result{}, false
 	}
 	return q.view(e), true
@@ -87,7 +90,7 @@ func (q *Queue) MarkGaveUp(id string) error {
 
 // clearable: the row's text may be in the composer and Enter was never marked.
 func clearable(e *entry) bool {
-	return e.phase == PhaseFilled || (e.phase == PhaseUnknown && !e.enterMark)
+	return !e.settled && (e.phase == PhaseFilled || (e.phase == PhaseUnknown && !e.enterMark))
 }
 
 // MarkCleared: the fill was not sent (guard refused, stale, waiting, lost result) and the composer is being cleaned up.
@@ -104,14 +107,14 @@ func openPhase(p string) bool { return p == PhaseFilled || p == PhaseEntering ||
 
 // forgettable: a settled row that carries no such uncertainty. q.mu held.
 func forgettable(e *entry) bool {
-	return e.state == stDone && !(e.job.Kind == KindFill && openPhase(e.phase))
+	return e.state == stDone && !(e.job.Kind == KindFill && openPhase(e.phase) && !e.settled)
 }
 
 // openTyped counts the rows that sweepLedger never forgets. q.mu held.
 func (q *Queue) openTyped() int {
 	n := 0
 	for _, e := range q.ledger {
-		if e.job.Kind == KindFill && e.state == stDone && openPhase(e.phase) {
+		if e.job.Kind == KindFill && e.state == stDone && openPhase(e.phase) && !e.settled {
 			n++
 		}
 	}
