@@ -41,7 +41,7 @@ spec §2 before any code. **If (a) blocks, stop and report — the fill route do
   EQUAL to the join is cleared (`clear_if(exactly that text)`) and answered `200 {text}`; refused clear → one more read (empty →
   200, equal → `409 input_not_cleared`, else `unknown clear_unknown`); any other non-empty or truncated read → `409 recall_mismatch`
   with no clear and no text; nothing read → `unknown recall_empty`; read error → `unknown read_failed`. All answers after Up are
-  recorded in a session-bound ledger (`typed_recall_ledger.go`). Residual risk: a mismatch leaves the text in the TUI input.
+  recorded in a ledger keyed by session code + tmux instance + client_msg_id (`typed_recall_ledger.go`), replayed before the owner is resolved; client_msg_id is required. Residual risk: a mismatch leaves the text in the TUI input.
 
 ## K-1a-1 — promptq kinds + mod
 promptq job kinds `fill {text}`, `clear_if {text}`, `read` (K-1b); outcomes with `filled_at`; ledger state machine (I3). mod
@@ -74,7 +74,7 @@ Contracts K-1a-1 hands to this PR (review fixes):
   counting against the 256 open typed rows. Test the finaliser and this end state in K-1a-2.
 
 ## K-1b — recall
-`POST /api/sessions/{code}/recall {expected_tmux_instance}` per I5/I6 and step 0 (f)/(g) results.
+`POST /api/sessions/{code}/recall {client_msg_id (required), expected_tmux_instance}` per I5/I6 and step 0 (f)/(g) results.
 
 ## Acceptance (real machine, before K-2 / K-3 merge)
 Busy session: a submit queues (header.queued shows it, pending style) and is read mid-turn (`queued_command`, accepted style);

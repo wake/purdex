@@ -82,9 +82,10 @@ func (re *recallEnv) tune(f func(*typedTuning)) { f(&re.mod.tune) }
 
 func (re *recallEnv) recall(id string) *httptest.ResponseRecorder {
 	m := map[string]string{"expected_tmux_instance": tInst}
-	if id != "" {
-		m["client_msg_id"] = id
+	if id == "" {
+		id = "auto-id" // recall requires an id; tests that do not care share one per env
 	}
+	m["client_msg_id"] = id
 	b, _ := json.Marshal(m)
 	return re.post("/api/sessions/"+tCode+"/recall", string(b))
 }
@@ -275,7 +276,7 @@ func TestRecall_ClientDisconnectDoesNotStopTheReadsOrTheClear(t *testing.T) {
 			cancel() // the client goes away right after Up
 		}
 	}
-	b := `{"expected_tmux_instance":"` + tInst + `"}`
+	b := `{"client_msg_id":"d1","expected_tmux_instance":"` + tInst + `"}`
 	w := httptest.NewRecorder()
 	re.mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/sessions/"+tCode+"/recall", strings.NewReader(b)).WithContext(ctx))
 	re.ok(t, w, "q")
@@ -398,6 +399,26 @@ func TestRecall_LedgerIsBoundToTheSession(t *testing.T) {
 	}
 }
 
+func TestRecall_RequiresClientMsgID(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "a"))
+	re.popped = "a"
+	errOf(t, re.post("/api/sessions/"+tCode+"/recall", `{"expected_tmux_instance":"`+tInst+`"}`), 400, "bad_client_msg_id")
+	if re.keys.n() != 0 || re.upCount() != 0 {
+		t.Fatal("a recall without an id pressed keys")
+	}
+}
+
+func TestRecall_ReplayWorksEvenWhenTheOwnerCannotBeResolved(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "a"))
+	re.popped = "a"
+	re.ok(t, re.recall("r9"), "a")
+	re.mod.td.owners = tResolver{} // the owner vanished (or its sid changed) before the retry
+	re.ok(t, re.recall("r9"), "a")
+	if re.upCount() != 1 {
+		t.Fatalf("Up pressed %d times", re.upCount())
+	}
+}
+
 func TestRecall_RefusalBeforeUpIsNotRecorded(t *testing.T) {
 	re := newRecallEnv(t)
 	errOf(t, re.recall("r3"), 409, "nothing_queued")
@@ -408,10 +429,10 @@ func TestRecall_RefusalBeforeUpIsNotRecorded(t *testing.T) {
 
 func TestRecall_ValidationAndGeneration(t *testing.T) {
 	re := newRecallEnv(t, queueRow("enqueue", "a"))
-	errOf(t, re.post("/api/sessions/"+tCode+"/recall", `{"expected_tmux_instance":"1}"}`), 400, "bad_expected_tmux_instance")
+	errOf(t, re.post("/api/sessions/"+tCode+"/recall", `{"client_msg_id":"v1","expected_tmux_instance":"1}"}`), 400, "bad_expected_tmux_instance")
 	errOf(t, re.post("/api/sessions/"+tCode+"/recall", `{"client_msg_id":"bad id!","expected_tmux_instance":"`+tInst+`"}`), 400, "bad_client_msg_id")
-	errOf(t, re.post("/api/sessions/nope/recall", `{"expected_tmux_instance":"`+tInst+`"}`), 404, "session_not_found")
-	errOf(t, re.post("/api/sessions/"+tCode+"/recall", `{"expected_tmux_instance":"99:99"}`), 409, "generation")
+	errOf(t, re.post("/api/sessions/nope/recall", `{"client_msg_id":"v1","expected_tmux_instance":"`+tInst+`"}`), 404, "session_not_found")
+	errOf(t, re.post("/api/sessions/"+tCode+"/recall", `{"client_msg_id":"v1","expected_tmux_instance":"99:99"}`), 409, "generation")
 	if re.keys.n() != 0 {
 		t.Fatal("a refused request pressed keys")
 	}

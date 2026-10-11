@@ -21,7 +21,8 @@ import (
 // cleared with clear_if(that text) and answered 200 {text}. Any other non-empty read (a draft, history, a cut text) is
 // 409 recall_mismatch with no clear and no text: the terminal is left as it is. After Up the reads and the clear run on their
 // own deadline (a client disconnect does not stop them); nothing read within the budget is outcome unknown (recall_empty).
-// Every answer after Up is recorded under a session-bound key (typed_recall_ledger.go): at most one Up per client_msg_id.
+// client_msg_id is required (400 bad_client_msg_id otherwise). Every answer after Up is recorded under the key session code +
+// tmux instance + client_msg_id (typed_recall_ledger.go) and replayed before the owner is resolved: at most one Up per id.
 // Mod owner required (no keys fallback).
 
 type recallRequest struct {
@@ -41,7 +42,7 @@ func (m *Module) handleSessionRecall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case in.ClientMsgID != "" && !clientMsgIDRe.MatchString(in.ClientMsgID):
+	case !clientMsgIDRe.MatchString(in.ClientMsgID):
 		fail(w, http.StatusBadRequest, "bad_client_msg_id")
 		return
 	case !tmux.ValidInstance(in.ExpectedTmuxInstance):
@@ -62,12 +63,12 @@ func (m *Module) handleSessionRecall(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusConflict, "generation")
 		return
 	}
-	owner, ok := m.resolveClaudeOwner(w, r, td, scode)
-	if !ok {
+	key := recallKey(scode, in.ExpectedTmuxInstance, in.ClientMsgID)
+	if m.recalls.replay(w, key, tune.now()) { // before the owner is resolved: a text already taken out must reach the client
 		return
 	}
-	key := recallKey(scode, in.ExpectedTmuxInstance, owner.SessionID, in.ClientMsgID)
-	if m.recalls.replay(w, key, tune.now()) { // bound to this session and owner: another session's answer never matches
+	owner, ok := m.resolveClaudeOwner(w, r, td, scode)
+	if !ok {
 		return
 	}
 	release, ok := m.lockPaneAndSession(r.Context(), owner.TmuxPaneID, owner.SessionID, tune.lockWait)

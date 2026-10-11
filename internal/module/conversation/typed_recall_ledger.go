@@ -7,7 +7,7 @@ import (
 )
 
 // recallLedger remembers the answer of a recall that pressed Up: in memory, 24 h, bounded. The key binds the answer to the
-// session it was given for (see recallKey), so an id reused on another session never reads this one's private text.
+// session code and tmux instance (see recallKey), so an id reused on another session never reads this one's private text.
 type recallLedger struct {
 	mu sync.Mutex
 	m  map[string]recallRow
@@ -21,19 +21,14 @@ type recallRow struct {
 
 const maxRecallLedger = 1024
 
-// recallKey: session code + tmux generation + owner session id + client_msg_id, NUL-joined (none of them can hold a NUL).
-// An empty client_msg_id has no key: such a recall is never recorded.
-func recallKey(scode, inst, sid, id string) string {
-	if id == "" {
-		return ""
-	}
-	return scode + "\x00" + inst + "\x00" + sid + "\x00" + id
+// recallKey: session code + tmux instance + client_msg_id, NUL-joined (none of them can hold a NUL). The handler requires an
+// id, so the key is never empty; the owner's session id is deliberately not part of it (a replay happens before the owner is
+// resolved), the code + tmux instance already identify the tmux session generation.
+func recallKey(scode, inst, id string) string {
+	return scode + "\x00" + inst + "\x00" + id
 }
 
 func (l *recallLedger) replay(w http.ResponseWriter, key string, now time.Time) bool {
-	if key == "" {
-		return false
-	}
 	l.mu.Lock()
 	row, ok := l.m[key]
 	if ok && now.Sub(row.at) > keysTombstoneTTL {
@@ -48,9 +43,6 @@ func (l *recallLedger) replay(w http.ResponseWriter, key string, now time.Time) 
 }
 
 func (l *recallLedger) put(key string, status int, a typedAnswer, now time.Time) {
-	if key == "" {
-		return
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.m == nil {

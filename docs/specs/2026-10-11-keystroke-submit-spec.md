@@ -67,8 +67,9 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
     terminal is left as it is.
   - Nothing read within the budget → `200 {outcome:unknown, reason:recall_empty}` (the turn may have taken the queue, or the TUI
     may still draw it); read error after Up → `unknown` `read_failed` (the same 200 convention as `/submit`'s unknown).
-  - Every answer after Up is recorded under `session code + tmux generation + owner session id + client_msg_id`: at most one Up per
-    id, a repeat gets the same answer, another session reusing an id never sees it.
+  - `client_msg_id` is required (empty or malformed → `400 bad_client_msg_id`, nothing read or pressed). Every answer after Up is
+    recorded under `session code + tmux instance + client_msg_id` and replayed before the owner is resolved: at most one Up per
+    id, a repeat gets the same answer even if the owner can no longer be resolved, another session reusing an id never sees it.
 - Interrupt: unchanged (mod `$.turn.abort` where present, else Esc).
 
 ## 5. Accepted residual risks (from U3 review rounds 1–4)
