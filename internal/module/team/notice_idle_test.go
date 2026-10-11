@@ -248,6 +248,31 @@ func TestIdleNotice_AMemberThatIsGoneOrMovedIsNotToldAbout(t *testing.T) {
 	}
 }
 
+// Codex critic: a notice already claimed when the compaction lands must neither send nor, through its release path,
+// unmark the compaction's mark. Mutation gate: markIdleCompacted keeps the old generation → red.
+func TestIdleNotice_AClaimedNoticeDoesNotSurviveACompaction(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		f := idleSetup(t)
+		f.advance(idleMin)
+		rows, _ := f.m.store.ActiveMembersOfLiveTeams()
+		gen, won := f.m.claimIdleTold("sid-ma")
+		if !won {
+			t.Fatal("no period to claim")
+		}
+		f.m.markIdleCompacted("sid-ma") // the compaction lands between the claim and the send
+		if release {
+			f.usage.setStatus("tm-op-a", "running") // the claimed goroutine takes its release path
+		}
+		f.m.idleNotice(rows[0], 55, team.RelayIdleMinutes, gen)
+		if n := len(f.sender.calls()); n != 0 {
+			t.Fatalf("release=%v: %d notices after a compaction, want 0", release, n)
+		}
+		if _, won := f.m.claimIdleTold("sid-ma"); won {
+			t.Fatalf("release=%v: the claimed goroutine unmarked the compaction's mark", release)
+		}
+	}
+}
+
 // Codex attack: a compaction ends the idle question for that stretch — an idle compaction that landed before the clock
 // reached the minutes (a restart in between, a longer configured wait) must not be followed by "cache about to expire".
 // Mutation gate: drop markIdleCompacted → red.

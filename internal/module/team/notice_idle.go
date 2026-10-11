@@ -169,20 +169,20 @@ func (m *Module) idleToldIs(sessionID string, gen uint64) bool {
 }
 
 // markIdleCompacted ends the question for the current idle stretch: the session was compacted, so a notice about a cache
-// about to expire would be stale. It stays quiet until the session leaves idle (a new period).
+// about to expire would be stale. It stays quiet until the session leaves idle (a new period). The period gets a NEW
+// generation, so a notice already claimed under the old one neither sends nor, by releasing, unmarks this.
 func (m *Module) markIdleCompacted(sessionID string) {
 	m.idleMu.Lock()
 	defer m.idleMu.Unlock()
 	if m.memberIdle == nil {
 		m.memberIdle = map[string]*idlePeriod{}
 	}
-	p, ok := m.memberIdle[sessionID]
-	if !ok {
-		m.idleGenSeq++
-		p = &idlePeriod{since: m.now(), gen: m.idleGenSeq}
-		m.memberIdle[sessionID] = p
+	since := m.now()
+	if p, ok := m.memberIdle[sessionID]; ok {
+		since = p.since
 	}
-	p.told = true
+	m.idleGenSeq++
+	m.memberIdle[sessionID] = &idlePeriod{since: since, gen: m.idleGenSeq, told: true}
 }
 
 // pruneIdle drops the sessions that are no longer active members of a live team.
