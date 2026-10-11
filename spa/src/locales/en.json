@@ -505,6 +505,10 @@
   "settings.electron.max_bg.label": "Max Background Views",
   "settings.electron.max_bg.desc": "Maximum browser views kept alive in background",
   "settings.electron.max_bg.aria": "Max background views",
+  "settings.electron.away.label": "Minutes away before pushing to your phone",
+  "settings.electron.away.desc": "No push to your phone while you are at this Mac (keyboard or mouse activity, screen not locked). A locked screen also pushes after 1 minute.",
+  "settings.electron.away.aria": "Minutes away before pushing",
+  "settings.electron.away.option": "{{n}} min",
 
   "settings.section.dev_environment": "Development",
   "settings.dev.title": "Development Environment",

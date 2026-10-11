@@ -2,7 +2,7 @@
 // / search / fetch / other / task are one line, a question step is its options card. Every one ends in the fixed status
 // slot. A task line hands its step to `onOpenSubagent` (the right panel, U3-3) and its chevron unfolds the agent's own steps in place.
 import { CaretDown, CaretUp, FilePlus, FileText, Globe, MagnifyingGlass, PencilSimple, Robot, Terminal, Wrench, Question } from '@phosphor-icons/react'
-import { useEffect, type ReactNode } from 'react'
+import { useContext, useEffect, type ReactNode } from 'react'
 import { useNow } from '../../hooks/useNow'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { SubagentState } from '../../stores/useConversationStore'
@@ -13,6 +13,7 @@ import ToolDiffView from '../room/ToolDiffView'
 import { useFold } from '../room/fold-context'
 import { OutputFold } from './OutputFold'
 import { stepUnitId } from '../../lib/conversations/find-units'
+import { SearchScopeContext, subagentScope } from './search-scope'
 import { StatusSlot, StepDot } from './StatusSlot'
 
 export interface StepActions {
@@ -52,7 +53,8 @@ function SubagentSteps({ step, actions }: { step: StepItem; actions: StepActions
   else if (items === undefined) body = <div data-testid="subagent-loading" className="deck-t-down text-text-muted">{t('deck.loading')}</div>
   else if (items.length === 0) body = <div data-testid="subagent-empty" className="deck-t-down text-text-muted">{t('panel.subagent.empty')}</div>
   else body = actions.renderSubagent ? actions.renderSubagent(items as ConversationItem[]) : null
-  return <div data-testid="subagent-steps" className="ml-3 mt-1 space-y-1 border-l border-border-subtle pl-3">{body}</div>
+  // the agent's steps have ids of their own, which a main-turn item may share: their search units live under this line's scope
+  return <div data-testid="subagent-steps" className="ml-3 mt-1 space-y-1 border-l border-border-subtle pl-3"><SearchScopeContext.Provider value={subagentScope(step.id)}>{body}</SearchScopeContext.Provider></div>
 }
 
 /** 「顯示全部」 only exists when someone can show it: no handler, no button. */
@@ -61,13 +63,14 @@ const showAll = (step: StepItem, actions: StepActions) => actions.onShowAll && (
 function Line({ step, icon, verb, subject, extra, children, testId = 'deck-step-line' }: {
   step: StepItem; icon: ReactNode; verb: string; subject: string; extra?: ReactNode; children?: ReactNode; testId?: string
 }) {
+  const scope = useContext(SearchScopeContext)
   return (
     <div data-testid={testId} data-kind={step.kind} data-status={step.status} className="rounded-md border border-border-default bg-surface-secondary/50 px-3 py-1.5 deck-t-up">
       <div className="flex items-center gap-2">
         <StepDot step={step} />
         {icon}
         <span className="shrink-0 font-mono deck-t-down font-medium text-text-secondary">{verb}</span>
-        <span data-search-unit={stepUnitId(step.id)} className="min-w-0 flex-1 truncate font-mono deck-t-down text-text-secondary" title={subject}>{subject}</span>
+        <span data-search-unit={stepUnitId(step.id, scope)} className="min-w-0 flex-1 truncate font-mono deck-t-down text-text-secondary" title={subject}>{subject}</span>
         {extra}
         <StatusSlot step={step} />
       </div>
@@ -101,6 +104,7 @@ function EditCard({ step, actions }: { step: StepItem; actions: StepActions }) {
 
 function DiffCard({ step, diff, actions }: { step: StepItem; diff: NonNullable<StepItem['diff']>; actions: StepActions }) {
   const t = useI18nStore((s) => s.t)
+  const scope = useContext(SearchScopeContext)
   // The key deliberately equals ToolDiffView's own `${foldKey}:diff` registration, so the room's expand-all / search expand opens this card too.
   const [open, toggle] = useFold(`${step.id}:diff`)
   const created = diff.created === true
@@ -121,7 +125,7 @@ function DiffCard({ step, diff, actions }: { step: StepItem; diff: NonNullable<S
           {open ? <CaretUp size={14} /> : <CaretDown size={14} />}
         </button>
       )}
-      title={<><span className="text-text-muted">{created ? t('deck.step.create') : t('deck.step.edit')}</span> <span data-search-unit={stepUnitId(step.id)} className="font-mono deck-t-down" title={path}>{path}</span></>}
+      title={<><span className="text-text-muted">{created ? t('deck.step.create') : t('deck.step.edit')}</span> <span data-search-unit={stepUnitId(step.id, scope)} className="font-mono deck-t-down" title={path}>{path}</span></>}
     >
       <div data-testid="diff-body" className="opacity-60 transition-opacity hover:opacity-100 focus-within:opacity-100">
         <ToolDiffView diff={toActivityDiff(capped.diff)} foldKey={step.id} unfolded />
@@ -137,10 +141,11 @@ function DiffCard({ step, diff, actions }: { step: StepItem; diff: NonNullable<S
 
 function ExecuteCard({ step, actions }: { step: StepItem; actions: StepActions }) {
   const t = useI18nStore((s) => s.t)
+  const scope = useContext(SearchScopeContext)
   const command = step.command?.text ?? step.summary
   return (
     <Card step={step} icon={<Terminal className={ICON} size={16} />} title={<span className="text-text-muted">{step.command?.description ?? t('deck.step.execute')}</span>}>
-      <pre data-testid="exec-command" data-search-unit={stepUnitId(step.id)} className="line-clamp-6 overflow-hidden whitespace-pre-wrap break-all rounded bg-black/60 px-2 py-1 font-mono deck-t-down text-neutral-400 transition-colors hover:text-neutral-200">{`$ ${command}`}</pre>
+      <pre data-testid="exec-command" data-search-unit={stepUnitId(step.id, scope)} className="line-clamp-6 overflow-hidden whitespace-pre-wrap break-all rounded bg-black/60 px-2 py-1 font-mono deck-t-down text-neutral-400 transition-colors hover:text-neutral-200">{`$ ${command}`}</pre>
       {step.output && (
         <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={stepFailed(step) ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />
       )}
@@ -222,6 +227,7 @@ function OutputLine({ step, icon, verb, actions }: { step: StepItem; icon: React
 /** An Agent/Task step: its type, description, time and state; the line opens the right panel, the chevron unfolds the agent's own steps in place. */
 function TaskStep({ step, actions }: { step: StepItem; actions: StepActions }) {
   const t = useI18nStore((s) => s.t)
+  const scope = useContext(SearchScopeContext)
   const sub = step.subagent
   const [open, toggle] = useFold(`${step.id}:sub`)
   // Only a step that names its agent and a deck that can load it has anything to unfold.
@@ -240,7 +246,7 @@ function TaskStep({ step, actions }: { step: StepItem; actions: StepActions }) {
           <StepDot step={step} />
           <Robot className={ICON} size={16} />
           <span className="shrink-0 text-text-muted">{sub?.type ? t('deck.step.task_type', { type: sub.type }) : t('deck.step.task')}</span>
-          <span data-search-unit={stepUnitId(step.id)} className="min-w-0 flex-1 truncate deck-t-down text-text-secondary">{sub?.description ?? step.summary}</span>
+          <span data-search-unit={stepUnitId(step.id, scope)} className="min-w-0 flex-1 truncate deck-t-down text-text-secondary">{sub?.description ?? step.summary}</span>
           <SubagentTime step={step} />
           <StatusSlot step={step} />
         </button>
