@@ -25,7 +25,11 @@ Follows #2685 (the deck's quick-reply row, terminal and worker, Mac). Amends the
   answers (the SPA's `take()` parses the PUT 200 and the 409 the same way as a load, `useHostConfigStore.ts:227`), keeps working.
 - **Item, as a client sends it**: v2 shape `{ "id", "title", "content" }` (a v2 client adds `"text": content` too, so a daemon from
   before v2 accepts it — it keeps only the text); legacy shape `{ "id", "text" }`.
-- Never-written host: `items: []`; the clients show their defaults (§3, §4).
+- **Never written vs emptied** (the clients' rule, as the Mac's `effectiveQuickReplies` already does): a host **never wrote** its
+  list when `revision == 0`, `items` is empty and the answer has no `invalid` / `dropped` → the clients show their defaults (§3,
+  §4). A list the person **emptied** (`revision > 0`, `items: []`) means "no row" — the row is hidden, never refilled with the
+  defaults (they would be PUT back with the next edit). With `invalid` / `dropped`, the items that did read are shown, not the
+  defaults. Not loaded yet (loading, or an error before any success) → no row.
 
 ### 2.2 Rules
 - `id` as today. `title`: string, trimmed, non-empty, ≤ 100 bytes, no NUL. `content`: string, trimmed, non-empty, ≤ 1000 bytes
@@ -88,7 +92,8 @@ Follows #2685 (the deck's quick-reply row, terminal and worker, Mac). Amends the
   `{id, title, content, text: content}`; read `title`/`content`, falling back to `text` when `content` is absent, in the GET, the
   PUT 200 and the 409. A 409 replaces the local list with the answer's items and revision, and says the list changed elsewhere
   (the App's existing conflict wording for host settings).
-- The dock shows titles, sends content; the editor edits title + content. Never-written host → the same three defaults as §3.
+- The dock shows titles, sends content; the editor edits title + content. Never-written host → the same three defaults as §3; an
+  emptied list hides the row (§2.1 "Never written vs emptied").
 - **Prefs, in the App** (not synced): `{ rowEnabled: Bool (app-wide, default true), disabled: [hostKey: [itemId]] }`, `hostKey` =
   the key the App stores that host under. Same off-list semantics; the same pruning rule (only after a 200, with its ids).
 - QR-3 merges after QR-1 is on mlab and air26, so "old daemon × v2 iOS" only loses titles (§2.3) and is not otherwise handled.

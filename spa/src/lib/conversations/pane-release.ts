@@ -6,7 +6,8 @@
 //   send queue   (send-queue)              pane|host|session                             releasePane, retireStaleSessions
 //   adapter      (deck-adapter)            pane|host|session                             releasePane, retireStaleSessions
 //   draft        (draft-memory)            pane|host|session                             releasePane, retireStaleSessions
-//   attachments  (attachment-memory)       pane|host|session                             releasePane, retireStaleSessions
+//   input history (input-history)          pane|host|session                             releasePane, retireStaleSessions
+//   attachments  (attachment-memory)      pane|host|session                             releasePane, retireStaleSessions
 //   uploads      (attachment-upload)       pane|host|session                             releasePane, retireStaleSessions (aborts; drops unseen failures)
 //   right panel  (panel-memory)            pane                                          releasePane (a stale binding is dropped by the panel itself)
 //   fold         (fold-memory)             deck: pane\0session   chat: pane\0host\0session releasePane, retireStaleSessions
@@ -33,6 +34,7 @@ import { forgetClearedWhere } from './draft-clear'
 import { forgetDraftsWhere, draftKey } from './draft-memory'
 import { forgetDeckPane, forgetFoldsOfPane } from './fold-memory'
 import { chatScrollKey, conversationBinding, forgetPanel } from './panel-memory'
+import { forgetInputHistoryWhere } from './input-history'
 import { forgetTakeBackWhere } from './take-back'
 import { releaseSendQueues, retireSendQueues } from './send-queue'
 
@@ -42,6 +44,7 @@ export function releasePane(paneId: string): void {
   releaseSendQueues(mine)
   forgetAdaptersWhere(mine)
   forgetTakeBackWhere(mine)
+  forgetInputHistoryWhere(mine)
   forgetDraftsWhere(mine)
   forgetAttachmentsWhere(mine)
   forgetUploadsWhere(mine)
@@ -64,6 +67,7 @@ export function retireStaleSessions(paneId: string, hostId: string, sessionId: s
   retireSendQueues((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetAdaptersWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetTakeBackWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
+  forgetInputHistoryWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetDraftsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetAttachmentsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
   forgetUploadsWhere((key) => key.startsWith(`${paneId}|`) && key !== now)
