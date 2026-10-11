@@ -35,10 +35,35 @@ func benchSessions(b *testing.B, fill bool) {
 			fake.AddSession("s"+strconv.Itoa(i), "")
 		}
 	}
+	// Warm the cache: steady state is a map read per session.
+	_, err := mod.ListSessionsContext(context.Background())
+	require.NoError(b, err)
+	mod.branches.wait()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := mod.ListSessionsContext(context.Background())
 		require.NoError(b, err)
+	}
+}
+
+// One full background round: resolve 13 cwds from scratch.
+func BenchmarkBranchRefreshRound13(b *testing.B) {
+	root := b.TempDir()
+	var cwds []string
+	for i := 0; i < 13; i++ {
+		base := filepath.Join(root, "p"+strconv.Itoa(i))
+		d := filepath.Join(base, "src")
+		require.NoError(b, os.MkdirAll(filepath.Join(base, ".git"), 0o755))
+		require.NoError(b, os.MkdirAll(d, 0o755))
+		require.NoError(b, os.WriteFile(filepath.Join(base, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644))
+		cwds = append(cwds, d)
+	}
+	c := newGitBranchCache()
+	c.minInterval = 0
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.refresh(cwds)
+		c.wait()
 	}
 }
 

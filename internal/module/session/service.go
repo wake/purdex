@@ -88,6 +88,14 @@ func (m *SessionModule) listSessions(ctx context.Context) ([]SessionInfo, error)
 		return nil, err
 	}
 
+	// Branches come from the cache only; the refresh runs in the background,
+	// so no file access ever happens on this path.
+	cwds := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		cwds = append(cwds, s.Cwd)
+	}
+	m.branches.refresh(cwds)
+
 	result := make([]SessionInfo, 0, len(sessions))
 	for _, s := range sessions {
 		code, err := EncodeSessionID(s.ID)
@@ -103,7 +111,7 @@ func (m *SessionModule) listSessions(ctx context.Context) ([]SessionInfo, error)
 			Mode:         "terminal", // default
 			Cwd:          s.Cwd,
 			TmuxInstance: instance,
-			Branch:       branchOf(s.Cwd),
+			Branch:       m.branches.get(s.Cwd),
 		}
 		if err := m.applyActivePaneMetadata(ctx, &info); err != nil {
 			return nil, err
@@ -170,7 +178,7 @@ func (m *SessionModule) getSession(ctx context.Context, code string) (*SessionIn
 				Mode:         "terminal",
 				Cwd:          s.Cwd,
 				TmuxInstance: m.tmuxInstance(ctx),
-				Branch:       branchOf(s.Cwd),
+				Branch:       m.branches.get(s.Cwd), // cache read only; the list refreshes it
 			}
 			if err := m.applyActivePaneMetadata(ctx, info); err != nil {
 				return nil, err
