@@ -540,3 +540,25 @@ func TestRelayCmd_BeginManualFlagReachesTheRequest(t *testing.T) {
 		}
 	}
 }
+
+// IR-1b: `--trigger idle` reaches the wire; a trigger the daemon does not know is still a usage error (exit 2).
+func TestRelayCmd_CompactedIdleReachesTheWire(t *testing.T) {
+	d := &fakeRelayDaemon{}
+	code, stdout, stderr := driveRelay(t, context.Background(), d, "compacted", "--session", "sid-1", "--trigger", "idle")
+	if code != ExitOK || strings.TrimSpace(stdout) != `{"noticed":true}` {
+		t.Fatalf("idle: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	paths, bodies := d.snapshot()
+	var sent team.RelayCompactedRequest
+	for i, p := range paths {
+		if strings.HasSuffix(p, "/api/relay/compacted") {
+			_ = json.Unmarshal([]byte(bodies[i]), &sent)
+		}
+	}
+	if sent.SessionID != "sid-1" || sent.Trigger != "idle" {
+		t.Fatalf("sent = %+v", sent)
+	}
+	if code, _, _ := driveRelay(t, context.Background(), d, "compacted", "--session", "sid-1", "--trigger", "sideways"); code != ExitUsage {
+		t.Fatalf("sideways = %d, want %d", code, ExitUsage)
+	}
+}
