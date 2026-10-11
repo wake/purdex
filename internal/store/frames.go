@@ -273,6 +273,7 @@ func (s *FramesStore) Upsert(frame Frame) (Frame, error) {
 			agent_type = excluded.agent_type,
 			ppid = excluded.ppid,
 			parent_frame_id = excluded.parent_frame_id,
+			is_root = CASE WHEN excluded.parent_frame_id IS NOT NULL AND excluded.parent_frame_id <> '' THEN 0 ELSE is_root END,
 			subagents_json = excluded.subagents_json,
 			status = excluded.status,
 			started_at = excluded.started_at,
@@ -579,11 +580,12 @@ func (s *FramesStore) UpdateHookPath(frame Frame) error {
 			agent_type = ?,
 			ppid = ?,
 			parent_frame_id = ?,
+			is_root = CASE WHEN ? <> '' THEN 0 ELSE is_root END,
 			status = ?,
 			last_seen_at = ?,
 			verified = ?
 		WHERE frame_id = ?
-	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID),
+	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID), frame.ParentFrameID,
 		string(frame.Status), frame.LastSeenAt, boolToInt(frame.Verified), frame.FrameID)
 	if err != nil {
 		return err
@@ -611,12 +613,13 @@ func (s *FramesStore) UpdateHookPathAndResetSubagents(frame Frame) error {
 			agent_type = ?,
 			ppid = ?,
 			parent_frame_id = ?,
+			is_root = CASE WHEN ? <> '' THEN 0 ELSE is_root END,
 			subagents_json = '[]',
 			status = ?,
 			last_seen_at = ?,
 			verified = ?
 		WHERE frame_id = ?
-	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID),
+	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID), frame.ParentFrameID,
 		string(frame.Status), frame.LastSeenAt, boolToInt(frame.Verified), frame.FrameID)
 	if err != nil {
 		return err
@@ -656,13 +659,14 @@ func (s *FramesStore) UpsertIfUnchanged(frame Frame, expectedLastSeenAt int64) (
 			agent_type = ?,
 			ppid = ?,
 			parent_frame_id = ?,
+			is_root = CASE WHEN ? <> '' THEN 0 ELSE is_root END,
 			subagents_json = ?,
 			status = ?,
 			started_at = ?,
 			last_seen_at = ?,
 			verified = ?
 		WHERE frame_id = ? AND last_seen_at = ?
-	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID),
+	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID), frame.ParentFrameID,
 		string(subagentsJSON), string(frame.Status), frame.StartedAt, frame.LastSeenAt,
 		boolToInt(frame.Verified), frame.FrameID, expectedLastSeenAt)
 	if err != nil {

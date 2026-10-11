@@ -311,3 +311,53 @@ func TestMigrate_AddsRootColumnsAndLastRunTableToADeployedDB(t *testing.T) {
 	}
 	_ = f
 }
+
+// A frame that was created standalone and later learns its parent (a hook path / SessionStart update, or an upsert onto
+// the same process) is a child from then on; its own end must not record the session's last run. The reverse never
+// happens: a cleared link does not make a root.
+func TestIsRoot_ClearsWhenAnExistingFrameAcquiresAParent(t *testing.T) {
+	update := map[string]func(*FramesStore, Frame) error{
+		"UpdateHookPath":                  func(s *FramesStore, f Frame) error { return s.UpdateHookPath(f) },
+		"UpdateHookPathAndResetSubagents": func(s *FramesStore, f Frame) error { return s.UpdateHookPathAndResetSubagents(f) },
+		"UpsertIfUnchanged":               func(s *FramesStore, f Frame) error { _, _, err := s.UpsertIfUnchanged(f, f.LastSeenAt); return err },
+		"Upsert (conflict)":               func(s *FramesStore, f Frame) error { _, err := s.Upsert(f); return err },
+	}
+	for name, apply := range update {
+		t.Run(name, func(t *testing.T) {
+			s := openTestFramesStore(t)
+			parent := seedRoot(t, s, "%5", 200, "S1", "/w")
+			standalone := seedRoot(t, s, "%5", 300, "C1", "/w")
+			if err := s.SetTmuxInstance(standalone.FrameID, "111:1700"); err != nil {
+				t.Fatal(err)
+			}
+			if _, isRoot, _, _ := s.RootInfo(standalone.FrameID); !isRoot {
+				t.Fatal("setup: created without a parent")
+			}
+			standalone.ParentFrameID = parent.FrameID
+			if err := apply(s, standalone); err != nil {
+				t.Fatal(err)
+			}
+			if _, isRoot, _, _ := s.RootInfo(standalone.FrameID); isRoot {
+				t.Fatal("a frame that acquired a parent is still a root")
+			}
+			if ok, err := s.ClaimEnd(standalone.FrameID, "C1", &RunEnd{Code: "abc123", EndedAt: 5}); err != nil || !ok {
+				t.Fatalf("claim: %v %v", ok, err)
+			}
+			if mustLastRun(t, s, "abc123") != nil {
+				t.Fatal("a reparented child recorded the session's last run")
+			}
+		})
+	}
+	t.Run("a cleared link does not make a root", func(t *testing.T) {
+		s := openTestFramesStore(t)
+		parent := seedRoot(t, s, "%5", 200, "S1", "/w")
+		child := seedChild(t, s, parent, 300, "C1")
+		child.ParentFrameID = ""
+		if err := s.UpdateHookPath(child); err != nil {
+			t.Fatal(err)
+		}
+		if _, isRoot, _, _ := s.RootInfo(child.FrameID); isRoot {
+			t.Fatal("clearing the link made a child a root")
+		}
+	})
+}
