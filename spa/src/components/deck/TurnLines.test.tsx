@@ -77,7 +77,7 @@ describe('DoneTurnLine', () => {
   it('✻ Done · 20s · HH:mm, in the system grey', () => {
     render(<DoneTurnLine turn={{ outcome: 'done', started_at: T0, ended_at: T0 + 20_000, items: [] }} />)
     const el = screen.getByTestId('turn-done')
-    expect(el).toHaveClass('text-text-system', 'text-left', 'text-xs')
+    expect(el).toHaveClass('text-text-system', 'text-left', 'deck-t-down')
     expect(el.textContent).toBe('✻Done · 20s · 02:55')
   })
   it('in Chinese', () => {

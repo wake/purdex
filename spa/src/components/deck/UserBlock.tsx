@@ -40,13 +40,13 @@ export function UserBlock({ item, midTurn }: { item: UserItem; /** Not the first
   const c = TONE[tone]
   return (
     <div data-testid="deck-user" data-source={item.source} data-tone={tone} className={`${c.box} px-3 py-2`}>
-      <div data-testid="deck-user-caption" className={`mb-1 text-xs font-medium ${c.caption}`}>{caption}</div>
-      <div className={`whitespace-pre-wrap break-words text-sm ${c.body} ${bash ? 'font-mono' : ''}`}>
+      <div data-testid="deck-user-caption" className={`mb-1 deck-t-down font-medium ${c.caption}`}>{caption}</div>
+      <div className={`whitespace-pre-wrap break-words deck-t-up ${c.body} ${bash ? 'font-mono' : ''}`}>
         {bash ? `! ${item.text}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}
         {item.truncated && <span className="text-text-muted">…</span>}
       </div>
       {item.images && item.images.length > 0 && (
-        <div data-testid="deck-user-images" className="mt-1 text-xs text-text-muted">{t('deck.user.images', { n: item.images.length })}</div>
+        <div data-testid="deck-user-images" className="mt-1 deck-t-down text-text-muted">{t('deck.user.images', { n: item.images.length })}</div>
       )}
     </div>
   )

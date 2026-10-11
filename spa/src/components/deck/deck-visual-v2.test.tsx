@@ -148,7 +148,7 @@ describe('agent prose typography (index.css)', () => {
 describe('agent text leading (pt 10)', () => {
   it('1.65 for the deck and the chat, one pixel under the pane size, and the block / list-item gaps follow it', () => {
     const block = css.slice(css.indexOf('=== deck / chat agent text'))
-    expect(block).toMatch(/\.chat-md \.worker-prose \{\s*line-height: 1\.65;\s*font-size: calc\(var\(--wt-font-size\) - 1px\);/)
+    expect(block).toMatch(/\.chat-md \.worker-prose \{\s*line-height: var\(--deck-line-height, 1\.65\);\s*font-size: var\(--deck-font-size, calc\(var\(--wt-font-size\) - 1px\)\);/)
     // no letter-spacing on the container: only Chinese runs (span.cjk) are spaced
     expect(block.slice(0, block.indexOf('.deck-md .worker-prose :where(p, li'))).not.toContain('letter-spacing')
     expect(block).not.toMatch(/line-height: 1\.5/)
@@ -184,7 +184,7 @@ describe('terminal-style input', () => {
     expect(src).not.toContain('border-y')
   })
   it('types at the agent text\'s size and leading (13px, 1.65); the placeholder inherits; no letter-spacing (a textarea cannot space Chinese only)', () => {
-    expect(src).toContain('text-[13px] leading-[1.65] text-text-primary')
+    expect(src).toContain('deck-t-base text-text-primary')
     expect(src).not.toContain('tracking-')
     expect(src).not.toMatch(/resize-none[^`]*text-sm/)
   })

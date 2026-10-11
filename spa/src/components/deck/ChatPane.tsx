@@ -13,6 +13,7 @@ import { ChatView } from './ChatView'
 import type { DeckViewProps } from './DeckView'
 import { footerContext } from './footer-context'
 import { UnreadableState, type UnreadableReason } from './UnreadableState'
+import { useDeckTypeStyle } from '../../lib/conversations/deck-type'
 
 interface Props {
   paneId: string
@@ -31,6 +32,7 @@ const REASON: Record<PaneConversationUnreadable, UnreadableReason> = {
 
 export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget, onSwitchToTerminal, footer }: Props) {
   const t = useI18nStore((s) => s.t)
+  const typeStyle = useDeckTypeStyle()
   const ref = useRef<HTMLDivElement>(null)
   // Switching to the chat focuses its input when it has one (plan D2), else the frame (loading, unreadable).
   // When the input is not there yet (the conversation is still resolving) the frame takes the focus and the input is taken when it shows up.
@@ -83,7 +85,7 @@ export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget,
     )
   }
   return (
-    <div ref={ref} tabIndex={-1} data-testid="session-view-chat" className="absolute inset-0 bg-surface-primary outline-none">
+    <div ref={ref} tabIndex={-1} data-testid="session-view-chat" style={typeStyle} className="absolute inset-0 bg-surface-primary outline-none">
       {body}
     </div>
   )

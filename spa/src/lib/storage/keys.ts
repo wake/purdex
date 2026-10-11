@@ -34,6 +34,8 @@ export const STORAGE_KEYS = {
   MODULE_CONFIG: 'purdex-module-config',
   MODULE_ENABLED: 'purdex-module-enabled',
   EDITOR_SETTINGS: 'purdex-editor-settings',
+  /** The deck's and the chat's type size and line height (useDeckTypeStore, c9d9c7-60): `{ fontSize, lineHeight }`, each a number or null (the built-in look). Device-local, not synced. */
+  DECK_TYPE: 'purdex-deck-type',
   /** Worker pane theme + icon setting (useWorkerSettingsStore, worker theme spec §4.2): `{ theme, iconStyle, customIcon }`,
    *  one purdex-scope global setting (T1); registered with syncManager (cross-window) and projected into Profile Sync
    *  `settings` like the other appearance stores — all three fields travel; `customIcon` is a plain string (`''` = none)

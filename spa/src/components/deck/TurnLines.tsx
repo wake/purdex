@@ -6,7 +6,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { formatClock } from '../../lib/conversations/deck-format'
 import { doneLine, formatDuration, liveLine, type LineTurn } from '../../lib/conversations/turn-line'
 
-const ROW = 'flex items-center gap-1.5 text-left text-xs text-text-system'
+const ROW = 'flex items-center gap-1.5 text-left deck-t-down text-text-system'
 
 /** The turn's closing line: `✻ Done · 20s · 02:58`. Draws nothing for a turn that did not finish as `done`. */
 export function DoneTurnLine({ turn }: { turn: LineTurn }) {
@@ -29,7 +29,7 @@ export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; st
   if (!live) return null
   if (live.kind === 'waiting') {
     return (
-      <div data-testid="turn-live" data-kind="waiting" role="status" className="flex items-center gap-1.5 text-left text-xs text-status-warning-text">
+      <div data-testid="turn-live" data-kind="waiting" role="status" className="flex items-center gap-1.5 text-left deck-t-down text-status-warning-text">
         <span aria-hidden="true">✻</span>
         <span>{t('chat.status.waiting')}</span>
       </div>
