@@ -32,7 +32,19 @@ type presenceEntry struct {
 	codes   map[string]struct{}
 	names   map[string]struct{}
 	expires time.Time
+
+	// v2 (push-away-presence spec §4.1): the machine's own idle / lock state as of receivedAt. A v2 entry answers
+	// AtComputer and never feeds the legacy session match.
+	v2          bool
+	idleMs      int64
+	locked      bool
+	lockedMs    int64
+	awayAfterMs int64
+	receivedAt  time.Time
 }
+
+// lockedAwayMs is how long after the screen lock the user counts as away (spec §2.2); fixed.
+const lockedAwayMs = 60_000
 
 func NewPresence(now func() time.Time) *Presence {
 	if now == nil {
@@ -65,7 +77,55 @@ func (p *Presence) Put(r push.PresenceRequest) {
 			e.names[s.Name] = struct{}{}
 		}
 	}
+	if r.IsV2() {
+		e.v2, e.idleMs, e.locked, e.lockedMs, e.awayAfterMs, e.receivedAt = true, *r.IdleMs, *r.Locked, *r.LockedMs, *r.AwayAfterMs, now
+	}
 	p.entries[r.ClientID] = e
+}
+
+// AtComputer: some unexpired v2 entry says the person is at its machine now. The report is as of its receipt, so the
+// time since then counts as more idle (or more locked). Locked: the lock is younger than a minute; otherwise: the idle
+// time is under that Mac's own away-after.
+func (p *Presence) AtComputer() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.atComputerLocked(p.now())
+}
+
+func (p *Presence) atComputerLocked(now time.Time) bool {
+	for _, e := range p.entries {
+		if !e.v2 || !now.Before(e.expires) {
+			continue
+		}
+		elapsed := now.Sub(e.receivedAt).Milliseconds()
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		if e.locked {
+			if e.lockedMs+elapsed < lockedAwayMs {
+				return true
+			}
+		} else if e.idleMs+elapsed < e.awayAfterMs {
+			return true
+		}
+	}
+	return false
+}
+
+// V2Counts is the number of unexpired v2 entries and whether any says the person is at the computer: numbers only.
+func (p *Presence) V2Counts() (v2Entries, atComputer int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := p.now()
+	for _, e := range p.entries {
+		if e.v2 && now.Before(e.expires) {
+			v2Entries++
+		}
+	}
+	if p.atComputerLocked(now) {
+		atComputer = 1
+	}
+	return v2Entries, atComputer
 }
 
 func (p *Presence) sweepLocked(now time.Time) {
@@ -116,7 +176,7 @@ func (p *Presence) shows(match func(presenceEntry) bool) bool {
 	defer p.mu.Unlock()
 	now := p.now()
 	for _, e := range p.entries {
-		if e.active && now.Before(e.expires) && match(e) {
+		if !e.v2 && e.active && now.Before(e.expires) && match(e) {
 			return true
 		}
 	}

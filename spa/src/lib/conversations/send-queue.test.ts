@@ -13,6 +13,8 @@ function fakePort() {
   }
   return { calls, port }
 }
+/** Rows of Claude Code's queue line, all stamped 1_002_000 (just after the first hand-out in these tests). */
+const H = (...texts: string[]) => texts.map((text) => ({ text, at: 1_002_000 }))
 const flush = () => vi.advanceTimersByTimeAsync(0)
 const user = (id: string, text: string, at: number, extra: Partial<UserItem> = {}): UserItem => ({ id, type: 'user', text, at, index: 0, source: 'user', ...extra })
 
@@ -20,7 +22,7 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(1_000_000) })
 afterEach(() => { vi.useRealTimers(); clearAllSendQueues() })
 
 describe('undo window', () => {
-  it('holds a message for 3 s before it goes out', async () => {
+  it('holds a message for 1.5 s before it goes out', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.enqueue('hello')
@@ -35,7 +37,7 @@ describe('undo window', () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     const id = q.enqueue('oops')
-    await vi.advanceTimersByTimeAsync(2000)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(q.undo(id)).toBe('oops')
     await vi.advanceTimersByTimeAsync(5000)
     expect(calls).toHaveLength(0)
@@ -90,125 +92,374 @@ describe('one serial chain', () => {
   })
 })
 
-describe('busy', () => {
-  it('stays in the App and is resent with the SAME client_msg_id when the agent turns idle', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    q.setIdle(false)
-    const id = q.enqueue('later')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'busy' })
-    await flush()
-    expect(q.entries()[0].state).toBe('waiting')
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(calls).toHaveLength(1)
-    q.setIdle(true)
-    await flush()
-    expect(calls).toHaveLength(2)
-    expect(calls[1]).toMatchObject({ text: 'later', id })
-    calls[1].resolve({ kind: 'accepted' })
-    await flush()
-    expect(q.entries()[0].state).toBe('sent')
-  })
+describe('busy: retried with a NEW id each time (nothing was sent)', () => {
+  const busy: SendOutcome = { kind: 'refused', reason: 'busy', status: 429 }
 
-  it('a message behind a busy one waits for it (order is kept)', async () => {
+  it('retries after 1 s, 2 s, 4 s with three different new ids, then the entry fails with the busy refusal', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
-    q.setIdle(false)
-    q.enqueue('one')
-    q.enqueue('two')
+    q.enqueue('later')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'busy' })
-    await vi.advanceTimersByTimeAsync(10_000)
     expect(calls).toHaveLength(1)
-    q.setIdle(true)
-    await flush()
-    expect(calls.map((c) => c.text)).toEqual(['one', 'one'])
-  })
-
-  it('an idle observed while the request is in flight resends once on the busy answer; a stale header cannot loop it', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    q.setIdle(false)
-    q.enqueue('x')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q.setIdle(true) // a real edge, observed while the request is in flight
-    calls[0].resolve({ kind: 'busy' })
-    await flush()
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(calls).toHaveLength(2)
-    calls[1].resolve({ kind: 'busy' })
-    await flush()
+    calls[0].resolve(busy); await flush()
+    expect(q.entries()[0].state).toBe('sending') // still pending, not failed, not waiting for anything
     await vi.advanceTimersByTimeAsync(999)
-    expect(calls).toHaveLength(2) // the observation is spent: no immediate third request, only the 1 s backoff follows
+    expect(calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(2)
+    calls[1].resolve(busy); await flush()
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(calls).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(1)
     expect(calls).toHaveLength(3)
+    calls[2].resolve(busy); await flush()
+    await vi.advanceTimersByTimeAsync(3999)
+    expect(calls).toHaveLength(3)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls).toHaveLength(4)
+    expect(new Set(calls.map((c) => c.id)).size).toBe(4) // four attempts, four different ids
+    calls[3].resolve(busy); await flush()
+    expect(q.entries()[0]).toMatchObject({ state: 'failed', outcome: busy })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls).toHaveLength(4)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('busy settled while the pane was unmounted: the idle the remount reports resends exactly once', async () => {
+  it('the entry keeps its identity and every id it used; an echo carrying an EARLIER id settles it', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
-    q.setIdle(true) // recorded before the pane went away
-    const id = q.enqueue('x')
+    const id = q.enqueue('later')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'busy' }) // pane unmounted: nothing observes
-    await flush()
-    expect(calls).toHaveLength(1)
-    q.setIdle(true) // remount: idle is still true, no false -> true edge: the pending backoff keeps its schedule
-    await flush()
-    expect(calls).toHaveLength(1)
+    calls[0].resolve(busy); await flush()
     await vi.advanceTimersByTimeAsync(1000)
-    expect(calls).toHaveLength(2)
-    expect(calls[1].id).toBe(id)
-    calls[1].resolve({ kind: 'accepted' })
-    await flush()
-    q.setIdle(true)
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(calls).toHaveLength(2)
+    expect(q.entries()).toHaveLength(1)
+    expect(q.entries()[0].id).toBe(id)
+    expect(q.entries()[0].ids).toEqual([calls[0].id, calls[1].id])
+    calls[1].resolve({ kind: 'handed', mode: 'fill' }); await flush()
+    q.reconcile([user('u1', 'later', Date.now(), { client_msg_id: calls[0].id })]) // the echo of the FIRST attempt
+    expect(q.entries()).toHaveLength(0)
   })
 
-  it('a second busy waits for a newer idle observation again', async () => {
+  it('a retry answered unknown / network is not resent; refused text_left_in_terminal is maybe', async () => {
+    for (const outcome of [{ kind: 'unknown' }, { kind: 'network' }, { kind: 'refused', reason: 'text_left_in_terminal', status: 409 }] as SendOutcome[]) {
+      const { calls, port } = fakePort()
+      const q = new SendQueue(port)
+      q.enqueue('x')
+      await vi.advanceTimersByTimeAsync(UNDO_MS)
+      calls[0].resolve(busy); await flush()
+      await vi.advanceTimersByTimeAsync(1000)
+      calls[1].resolve(outcome); await flush()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(calls).toHaveLength(2)
+      expect(q.entries()[0].state).toBe('maybe')
+      q.dispose()
+    }
+  })
+
+  it('a message behind a retrying one waits for it (order is kept)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('a')
+    q.enqueue('b')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve(busy); await flush()
+    expect(calls.map((c) => c.text)).toEqual(['a'])
+    await vi.advanceTimersByTimeAsync(1000)
+    calls[1].resolve({ kind: 'handed', mode: 'fill' }); await flush()
+    expect(calls.map((c) => c.text)).toEqual(['a', 'a', 'b'])
+  })
+
+  it('every other refusal fails at once, with no retry', async () => {
+    for (const reason of ['input_not_empty', 'dialog_open', 'pane_busy', 'waiting', 'generation', 'no_owner_yet']) {
+      const { calls, port } = fakePort()
+      const q = new SendQueue(port)
+      q.enqueue('x')
+      await vi.advanceTimersByTimeAsync(UNDO_MS)
+      calls[0].resolve({ kind: 'refused', reason, status: 409 }); await flush()
+      expect(q.entries()[0].state).toBe('failed')
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(calls).toHaveLength(1)
+      q.dispose()
+    }
+  })
+
+  it('an echo while the retry waits removes the entry and its timer; undo / dispose / retire leave no timer', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.enqueue('x')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'busy' })
-    await flush()
-    q.setIdle(true)
-    await flush()
-    calls[1].resolve({ kind: 'busy' })
-    await flush()
-    q.setIdle(false) // only an idle observation resends
+    calls[0].resolve(busy); await flush()
+    q.reconcile([user('u1', 'x', Date.now(), { client_msg_id: calls[0].id })])
+    expect(q.entries()).toHaveLength(0)
     await vi.advanceTimersByTimeAsync(10_000)
-    expect(calls).toHaveLength(2)
-    q.setIdle(true)
-    await flush()
-    expect(calls).toHaveLength(3)
+    expect(calls).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('a waiting message can be taken back', async () => {
+  it('retire drops an entry that waits to retry (no request in flight) and frees the queue', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
-    const id = q.enqueue('x')
+    const done = vi.fn()
+    q.enqueue('x')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'busy' })
-    await flush()
-    expect(q.undo(id)).toBe('x')
+    calls[0].resolve(busy); await flush()
+    q.retire(done)
+    expect(done).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(calls).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('dispose while a retry waits sends nothing', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('x')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve(busy); await flush()
+    q.dispose()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(calls).toHaveLength(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 10 s', () => {
+  const handed: SendOutcome = { kind: 'handed', mode: 'fill' }
+  const sendHanded = async (q: SendQueue, calls: Call[], text = 'hi') => {
+    q.enqueue(text)
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[calls.length - 1].resolve(handed); await flush()
+  }
+
+  it('handed + 10 s with neither a rendered line nor an echo -> maybe (never resent)', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    await sendHanded(q, calls)
+    expect(q.entries()[0]).toMatchObject({ state: 'sent', mode: 'fill' })
+    await vi.advanceTimersByTimeAsync(9999)
+    expect(q.entries()[0].state).toBe('sent')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(q.entries()[0].state).toBe('maybe')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('an echo within 10 s settles it and takes the timer', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    await sendHanded(q, calls)
+    q.reconcile([user('u1', 'hi', Date.now(), { client_msg_id: calls[0].id })])
+    expect(q.entries()).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a rendered line with the same text (trailing whitespace trimmed) hides the entry; it is not maybe at 10 s while the line stands', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    await sendHanded(q, calls)
+    q.setHeaderQueue(H('hi  \n'))
+    expect(q.entries()[0].matched).toBe(true)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: true })
+  })
+
+  it('the line stops being rendered without an echo: the entry is shown again, and it is maybe at once when past 10 s', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    await sendHanded(q, calls)
+    q.setHeaderQueue(H('hi'))
+    await vi.advanceTimersByTimeAsync(2000)
+    q.setHeaderQueue(H()) // e.g. the conversation went idle: the header line is not rendered
+    expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: false })
+    q.setHeaderQueue(H('hi'))
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(q.entries()[0].matched).toBe(true)
+    q.setHeaderQueue(H())
+    expect(q.entries()[0]).toMatchObject({ state: 'maybe', matched: false })
+  })
+
+  describe('queued echo: Claude Code read a message it queued while busy, minutes after the hand-out', () => {
+    const queuedPort = () => { const f = fakePort(); return { ...f, port: { ...f.port, echo: { sources: ['user', 'queued'], afterMs: 10 * 60_000 } } as SendPort } }
+
+    it('header match, row gone, then a queued item with client_msg_id null 3 min later settles it (no maybe, no duplicate)', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls)
+      q.setHeaderQueue(H('hi'))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: true })
+      q.setHeaderQueue(H()) // Claude Code took it off its queue line; the echo has not been written yet
+      await vi.advanceTimersByTimeAsync(180_000)
+      const item = user('u9', 'hi', Date.now(), { source: 'queued', client_msg_id: null })
+      q.reconcile([item])
+      expect(q.entries()).toHaveLength(0)
+      q.reconcile([item])
+      expect(q.entries()).toHaveLength(0)
+      expect(calls).toHaveLength(1)
+    })
+
+    it('a queued item with different text does not settle it', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls)
+      q.setHeaderQueue(H('hi'))
+      q.setHeaderQueue(H())
+      await vi.advanceTimersByTimeAsync(180_000)
+      q.reconcile([user('u9', 'other', Date.now(), { source: 'queued', client_msg_id: null })])
+      expect(q.entries()).toHaveLength(1)
+    })
+
+    it('the 10 s timer does not fire while the header still renders the match', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls)
+      q.setHeaderQueue(H('hi'))
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: true })
+    })
+  })
+
+  describe('rows are claimed by (text, at), one to one, and claims stay put', () => {
+    const queuedPort = () => { const f = fakePort(); return { ...f, port: { ...f.port, echo: { sources: ['user', 'queued'], afterMs: 10 * 60_000 } } as SendPort } }
+    const rowsAt = (...rows: Array<[string, number]>) => rows.map(([text, at]) => ({ text, at }))
+
+    it('two same-text entries and only the second\'s row: the second is hidden and never maybe, the first goes maybe after 10 s', async () => {
+      const { calls, port } = fakePort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls, 'same') // handed at 1_001_500
+      await sendHanded(q, calls, 'same') // handed at 1_003_000
+      q.setHeaderQueue(rowsAt(['same', 1_003_100]))
+      expect(q.entries().map((e) => !!e.matched)).toEqual([false, true])
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(q.entries().map((e) => [e.state, !!e.matched])).toEqual([['maybe', false], ['sent', true]])
+    })
+
+    it('an old row with the same text (stamped more than 2 s before the hand-out) does not hide a new send', async () => {
+      const { calls, port } = fakePort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls) // handed at 1_001_500
+      q.setHeaderQueue(rowsAt(['hi', 999_000]))
+      expect(q.entries()[0].matched).toBeFalsy()
+      q.setHeaderQueue(rowsAt(['hi', 999_500])) // exactly 2 s before: still its own
+      expect(q.entries()[0].matched).toBe(true)
+    })
+
+    it('a claim stays on its row when rows are reordered or another row appears', async () => {
+      const { calls, port } = fakePort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls, 'same')
+      await sendHanded(q, calls, 'same')
+      q.setHeaderQueue(rowsAt(['same', 1_003_100]))
+      expect(q.entries().map((e) => e.claimAt)).toEqual([undefined, 1_003_100])
+      q.setHeaderQueue(rowsAt(['same', 1_003_100], ['same', 1_003_050])) // a new row that, paired afresh, would take the second entry
+      expect(q.entries().map((e) => e.claimAt)).toEqual([1_003_050, 1_003_100])
+      q.setHeaderQueue(rowsAt(['same', 1_003_050], ['same', 1_003_100]))
+      expect(q.entries().map((e) => e.claimAt)).toEqual([1_003_050, 1_003_100])
+    })
+
+    it('a null-id queued row settles the entry that claimed a row, not an older unclaimed one with the same text', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls, 'same')
+      await sendHanded(q, calls, 'same')
+      const [a] = q.entries()
+      q.setHeaderQueue(rowsAt(['same', 1_003_100]))
+      q.setHeaderQueue([])
+      q.reconcile([user('q1', 'same', 1_004_000, { source: 'queued', client_msg_id: null })])
+      expect(q.entries().map((e) => e.id)).toEqual([a.id])
+    })
+
+    it('a same-text null-id row stamped before the hand-out (another client\'s earlier message) settles nothing', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls) // handed at 1_001_500
+      q.reconcile([user('x1', 'hi', 999_000), user('x2', 'hi', 999_000, { source: 'queued', client_msg_id: null })])
+      expect(q.entries()).toHaveLength(1)
+      q.reconcile([user('x3', 'hi', 1_001_600)])
+      expect(q.entries()).toHaveLength(0)
+    })
+
+    it('a null-id user row never settles an entry that claimed a header row (its echo is a queued row)', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls)
+      q.setHeaderQueue(rowsAt(['hi', 1_002_000]))
+      q.reconcile([user('x1', 'hi', 1_002_500)])
+      expect(q.entries()).toHaveLength(1)
+    })
+
+    it('FIFO: two claimed same-text entries are settled by queued rows in the order of their claimed rows', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls, 'same')
+      await sendHanded(q, calls, 'same')
+      const [, b] = q.entries()
+      q.setHeaderQueue(rowsAt(['same', 1_003_100], ['same', 1_001_600]))
+      expect(q.entries().map((e) => e.claimAt)).toEqual([1_001_600, 1_003_100])
+      q.setHeaderQueue([])
+      q.reconcile([user('q1', 'same', 1_010_000, { source: 'queued', client_msg_id: null })])
+      expect(q.entries().map((e) => e.id)).toEqual([b.id])
+    })
+  })
+
+  it('lines pair one to one: two identical entries need two lines', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    await sendHanded(q, calls, 'same')
+    await sendHanded(q, calls, 'same')
+    q.setHeaderQueue(H('same'))
+    expect(q.entries().map((e) => !!e.matched)).toEqual([true, false])
+    q.setHeaderQueue(H('same', 'same'))
+    expect(q.entries().map((e) => e.matched)).toEqual([true, true])
+  })
+
+  it('only a handed entry is matched: one still in flight, in the buffer or accepted by a worker is not', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('buffered')
+    q.setHeaderQueue(H('buffered'))
+    expect(q.entries()[0].matched).toBeFalsy()
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    q.setHeaderQueue(H('buffered'))
+    expect(q.entries()[0]).toMatchObject({ state: 'sending' })
+    expect(q.entries()[0].matched).toBeFalsy()
+    calls[0].resolve({ kind: 'accepted' }); await flush()
+    q.setHeaderQueue(H('buffered'))
+    expect(q.entries()[0].matched).toBeFalsy()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(q.entries()[0].state).toBe('sent') // a worker's accepted has no 10 s rule
+  })
+
+  it('setHeaderQueue is idempotent: the same lines again emit nothing', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    await sendHanded(q, calls)
+    q.setHeaderQueue(H('hi'))
+    const seen = vi.fn()
+    q.subscribe(seen)
+    q.setHeaderQueue(H('hi'))
+    q.setHeaderQueue(H('hi'))
+    expect(seen).not.toHaveBeenCalled()
+  })
+
+  it('keys mode is kept on the entry', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.enqueue('k')
+    await vi.advanceTimersByTimeAsync(UNDO_MS)
+    calls[0].resolve({ kind: 'handed', mode: 'keys' }); await flush()
+    expect(q.entries()[0]).toMatchObject({ state: 'sent', mode: 'keys' })
   })
 })
 
 describe('unknown: at most once', () => {
-  it.each<SendOutcome>([{ kind: 'unknown', reason: 'no_result' }, { kind: 'network' }, { kind: 'not_owner' }])('%j is never resent by itself', async (outcome) => {
+  it.each<SendOutcome>([{ kind: 'unknown', reason: 'no_result' }, { kind: 'network' }, { kind: 'refused', reason: 'text_left_in_terminal', status: 409 }])('%j is never resent by itself', async (outcome) => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
-    q.setIdle(false)
     q.enqueue('maybe sent')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
     calls[0].resolve(outcome)
     await flush()
-    q.setIdle(true)
-    q.setIdle(false)
-    q.setIdle(true)
     await vi.advanceTimersByTimeAsync(120_000)
     expect(calls).toHaveLength(1)
     expect(q.entries()[0].state).toBe('maybe')
@@ -255,14 +506,14 @@ describe('unknown: at most once', () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.enqueue('window')
-    await vi.advanceTimersByTimeAsync(UNDO_MS) // startedAt = 1_003_000
+    await vi.advanceTimersByTimeAsync(UNDO_MS) // startedAt = 1_001_500
     calls[0].resolve({ kind: 'unknown' })
     await flush()
-    q.reconcile([user('early', 'window', 1_003_000 - 3000)])
+    q.reconcile([user('early', 'window', 1_001_500 - 3000)])
     expect(q.entries()[0].state).toBe('maybe')
-    q.reconcile([user('late', 'window', 1_003_000 + 41_000)])
+    q.reconcile([user('late', 'window', 1_001_500 + 41_000)])
     expect(q.entries()[0].state).toBe('maybe')
-    q.reconcile([user('ok', 'window', 1_003_000 - 1500)])
+    q.reconcile([user('ok', 'window', 1_001_500 - 1500)])
     expect(q.entries()).toHaveLength(0)
   })
 
@@ -280,18 +531,18 @@ describe('unknown: at most once', () => {
   it('two identical messages sent apart each pair with their own echo (the nearest)', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
-    q.enqueue('same') // started 1_003_000
+    q.enqueue('same') // started 1_001_500
     await vi.advanceTimersByTimeAsync(UNDO_MS)
     calls[0].resolve({ kind: 'accepted' })
     await flush()
     await vi.advanceTimersByTimeAsync(10_000)
     q.enqueue('same')
-    await vi.advanceTimersByTimeAsync(UNDO_MS) // started 1_016_000
+    await vi.advanceTimersByTimeAsync(UNDO_MS) // started 1_013_000
     calls[1].resolve({ kind: 'accepted' })
     await flush()
-    q.reconcile([user('b', 'same', 1_016_500)]) // nearer to the second
-    expect(q.entries().map((e) => e.startedAt)).toEqual([1_003_000])
-    q.reconcile([user('b', 'same', 1_016_500), user('a', 'same', 1_003_400)])
+    q.reconcile([user('b', 'same', 1_013_500)]) // nearer to the second
+    expect(q.entries().map((e) => e.startedAt)).toEqual([1_001_500])
+    q.reconcile([user('b', 'same', 1_013_500), user('a', 'same', 1_001_900)])
     expect(q.entries()).toHaveLength(0)
   })
 
@@ -330,12 +581,12 @@ describe('unknown: at most once', () => {
     expect(q.entries().find((e) => e.id === next)?.state).toBe('sent')
   })
 
-  it('a dropped message is resent under a new id and really calls submit again (the ledger would replay the drop for the old id)', async () => {
+  it('a refused message is resent under a new id and really calls submit again (the ledger would replay the refusal for the old id)', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     const id = q.enqueue('again')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'dropped', reason: 'session_changed' })
+    calls[0].resolve({ kind: 'refused', reason: 'dialog_open', status: 409 })
     await flush()
     const next = q.resend(id)
     await flush()
@@ -357,313 +608,34 @@ describe('unknown: at most once', () => {
 })
 
 describe('failures', () => {
-  it('dropped / timeout end the entry as failed, the next message still goes', async () => {
+  it('a refusal ends the entry as failed, the next message still goes', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.enqueue('a')
     q.enqueue('b')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'dropped', reason: 'session_changed' })
+    calls[0].resolve({ kind: 'refused', reason: 'input_not_empty', status: 409 })
     await flush()
-    expect(q.entries()[0]).toMatchObject({ state: 'failed', outcome: { kind: 'dropped', reason: 'session_changed' } })
+    expect(q.entries()[0]).toMatchObject({ state: 'failed', outcome: { kind: 'refused', reason: 'input_not_empty' } })
     expect(calls.map((c) => c.text)).toEqual(['a', 'b'])
   })
 
-  it('no_mod fails the message and what is waiting behind it, and leaves nothing sticky: the next message is tried', async () => {
+  it('a failure of one message does not fail the ones behind it', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.enqueue('a')
     q.enqueue('b')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'no_mod' })
+    calls[0].resolve({ kind: 'refused', reason: 'waiting', status: 409 })
     await flush()
-    expect(q.entries().map((e) => e.state)).toEqual(['failed', 'failed'])
-    expect(calls).toHaveLength(1)
-    q.enqueue('c') // the mod is back
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    expect(calls.map((c) => c.text)).toEqual(['a', 'c'])
+    expect(q.entries().map((e) => e.state)).toEqual(['failed', 'sending'])
+    expect(calls.map((c) => c.text)).toEqual(['a', 'b'])
   })
 
   it('interrupt goes to the port', async () => {
     const { port } = fakePort()
     await new SendQueue(port).interrupt()
     expect(port.interrupt).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('an idle observed while a request is in flight (the remount race)', () => {
-  const busy = { kind: 'busy' } as SendOutcome
-
-  it('is used once the busy answer lands: resent at once with the same id, not stuck in waiting', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    const id = q.enqueue('hi')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q.setIdle(true) // the remounted pane reports idle while the request is still out: setIdle has nothing waiting to resend
-    calls[0].resolve(busy)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toHaveLength(2)
-    expect(calls[1].id).toBe(id)
-  })
-
-  it('is spent by that one resend: a second busy waits for a NEW observation (no loop)', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    q.enqueue('hi')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q.setIdle(true)
-    calls[0].resolve(busy)
-    await vi.advanceTimersByTimeAsync(0)
-    calls[1].resolve(busy)
-    await vi.advanceTimersByTimeAsync(999)
-    expect(calls).toHaveLength(2) // spent: no immediate third request (the backoff is the only thing that follows)
-    expect(q.entries()[0].state).toBe('waiting')
-  })
-
-  it('an idle seen BEFORE the request started does not count, nor does one followed by not-idle, nor a settled one', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    q.setIdle(true) // nothing in flight yet
-    q.enqueue('a')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve(busy)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(q.entries()[0].state).toBe('waiting')
-    expect(calls).toHaveLength(1)
-    const q2 = new SendQueue(port)
-    q2.enqueue('b')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q2.setIdle(true); q2.setIdle(false) // the header went busy again
-    calls[calls.length - 1].resolve(busy)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(q2.entries()[0].state).toBe('waiting')
-  })
-
-  it('the observation belongs to ITS entry: A in flight, idle seen, A echoed by the transcript, B goes out, A\'s answer lands, B answers busy -> B waits (no extra submit)', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    const a = q.enqueue('A')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q.enqueue('B')
-    q.setIdle(true) // seen while A is in flight
-    q.reconcile([user('ua', 'A', 1_000_000, { client_msg_id: a })]) // the echo settles A early; B is pumped (undo window 3 s)
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    expect(calls.map((c) => c.text)).toEqual(['A', 'B'])
-    calls[0].resolve({ kind: 'accepted' }) // A's late answer
-    await vi.advanceTimersByTimeAsync(0)
-    calls[1].resolve(busy) // B refused because A is running
-    await vi.advanceTimersByTimeAsync(999)
-    expect(calls).toHaveLength(2) // A's observation is not B's: no immediate resend (only B's own 1 s backoff follows)
-    expect(q.entries().find((e) => e.text === 'B')!.state).toBe('waiting')
-  })
-
-  it('an observation does not leak into a later request after an accepted answer', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    q.enqueue('a')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q.setIdle(true)
-    calls[0].resolve({ kind: 'accepted' })
-    await vi.advanceTimersByTimeAsync(0)
-    q.enqueue('b')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[1].resolve(busy)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toHaveLength(2)
-    expect(q.entries().find((e) => e.text === 'b')!.state).toBe('waiting')
-  })
-})
-
-describe('the mod keeps answering busy for a moment after the header went idle (bounded backoff)', () => {
-  const busy = { kind: 'busy' } as SendOutcome
-  /** waiting after a first busy, then the idle edge resends and the mod is STILL busy: calls = 2, backoff pending. */
-  async function stillBusy() {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    const id = q.enqueue('hi')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve(busy)
-    await vi.advanceTimersByTimeAsync(0)
-    q.setIdle(true) // the edge
-    await vi.advanceTimersByTimeAsync(0)
-    calls[1].resolve(busy)
-    await vi.advanceTimersByTimeAsync(0)
-    return { calls, q, id }
-  }
-
-  it('second busy with the header idle: retried after 1 s with the same id, and it goes through', async () => {
-    const { calls, q, id } = await stillBusy()
-    expect(calls).toHaveLength(2)
-    await vi.advanceTimersByTimeAsync(999)
-    expect(calls).toHaveLength(2)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(calls).toHaveLength(3)
-    expect(calls[2].id).toBe(id)
-    calls[2].resolve({ kind: 'accepted' })
-    await vi.advanceTimersByTimeAsync(0)
-    expect(q.entries()[0].state).toBe('sent')
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(calls).toHaveLength(3)
-    expect(vi.getTimerCount()).toBe(0)
-  })
-
-  it('the header going busy again during the backoff stops it; the next idle edge resends', async () => {
-    const { calls, q } = await stillBusy()
-    q.setIdle(false)
-    expect(vi.getTimerCount()).toBe(0)
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(calls).toHaveLength(2)
-    expect(q.entries()[0].state).toBe('waiting')
-    q.setIdle(true)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toHaveLength(3)
-  })
-
-  it('backs off 1 s, 2 s, 4 s and then stops in waiting (no timer); a later idle edge still resends once', async () => {
-    const { calls, q } = await stillBusy()
-    for (const [wait, n] of [[1000, 3], [2000, 4], [4000, 5]] as const) {
-      await vi.advanceTimersByTimeAsync(wait - 1)
-      expect(calls).toHaveLength(n - 1)
-      await vi.advanceTimersByTimeAsync(1)
-      expect(calls).toHaveLength(n)
-      calls[n - 1].resolve(busy)
-      await vi.advanceTimersByTimeAsync(0)
-    }
-    await vi.advanceTimersByTimeAsync(120_000)
-    expect(calls).toHaveLength(5)
-    expect(q.entries()[0].state).toBe('waiting')
-    expect(vi.getTimerCount()).toBe(0)
-    q.setIdle(true)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toHaveLength(6)
-    expect(new Set(calls.map((c) => c.id)).size).toBe(1)
-  })
-
-  it('a first busy while the header is already idle backs off as well (the mod lags the header)', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    q.setIdle(true)
-    q.enqueue('hi')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve(busy)
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(calls).toHaveLength(2)
-  })
-
-  it('taking the message back, disposing and retiring leave no timer; an accepted message is never retried', async () => {
-    const a = await stillBusy()
-    a.q.undo(a.id)
-    expect(vi.getTimerCount()).toBe(0)
-    await vi.advanceTimersByTimeAsync(10_000)
-    expect(a.calls).toHaveLength(2)
-    const b = await stillBusy()
-    b.q.dispose()
-    expect(vi.getTimerCount()).toBe(0)
-    const c = await stillBusy()
-    c.q.retire(() => {})
-    expect(vi.getTimerCount()).toBe(0)
-  })
-
-  it('one request at a time: a REAL idle edge during the backoff resends now and takes the timer with it', async () => {
-    const { calls, q } = await stillBusy()
-    q.setIdle(false)
-    q.setIdle(true) // false -> true: a real edge
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toHaveLength(3)
-    await vi.advanceTimersByTimeAsync(5000)
-    expect(calls).toHaveLength(3) // still in flight: the old timer is gone
-  })
-
-  it('the same idle reported again (a remount) neither cancels a pending backoff nor refills it', async () => {
-    const { calls, q } = await stillBusy()
-    await vi.advanceTimersByTimeAsync(500)
-    q.setIdle(true); q.setIdle(true) // remounts while the daemon is still busy
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toHaveLength(2) // nothing sent early
-    await vi.advanceTimersByTimeAsync(499)
-    expect(calls).toHaveLength(2)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(calls).toHaveLength(3) // the backoff fired on schedule (1 s from the answer)
-    calls[2].resolve(busy)
-    await vi.advanceTimersByTimeAsync(0)
-    q.setIdle(true)
-    await vi.advanceTimersByTimeAsync(2000 - 1)
-    expect(calls).toHaveLength(3) // retries were not reset: the next wait is 2 s, not 1 s
-    await vi.advanceTimersByTimeAsync(1)
-    expect(calls).toHaveLength(4)
-  })
-
-  it('remounting over and over while idle and the daemon stays busy: the total number of requests is bounded', async () => {
-    const { calls, q } = await stillBusy()
-    for (let i = 0; i < 40; i++) {
-      q.setIdle(true)
-      await vi.advanceTimersByTimeAsync(1000)
-      const last = calls[calls.length - 1]
-      last.resolve(busy)
-      await vi.advanceTimersByTimeAsync(0)
-    }
-    await vi.advanceTimersByTimeAsync(120_000)
-    // 1 first + 1 edge resend + 3 backoff + at most 1 wake-up for the exhausted waiting message
-    expect(calls.length).toBeLessThanOrEqual(6)
-    expect(vi.getTimerCount()).toBe(0)
-    expect(q.entries()[0].state).toBe('waiting')
-  })
-
-  it('a remount after the quota is spent wakes the waiting message ONCE, without refilling; only a real edge refills', async () => {
-    const { calls, q } = await stillBusy()
-    for (const wait of [1000, 2000, 4000]) {
-      await vi.advanceTimersByTimeAsync(wait)
-      calls[calls.length - 1].resolve(busy)
-      await vi.advanceTimersByTimeAsync(0)
-    }
-    expect(calls).toHaveLength(5)
-    q.setIdle(true) // a remount: nothing pending, quota spent -> one wake-up request
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toHaveLength(6)
-    calls[5].resolve(busy)
-    await vi.advanceTimersByTimeAsync(60_000)
-    q.setIdle(true); q.setIdle(true)
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(calls).toHaveLength(6) // the wake-up is once per episode
-    q.setIdle(false); q.setIdle(true) // a real edge: refilled
-    await vi.advanceTimersByTimeAsync(0)
-    expect(calls).toHaveLength(7)
-    calls[6].resolve(busy)
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(calls).toHaveLength(8) // backoff available again
-  })
-})
-
-describe('remounts during a request in flight cannot buy extra requests', () => {
-  const busy = { kind: 'busy' } as SendOutcome
-
-  it('idle all along, the daemon always busy, a remount (same idle again) during EVERY request, 40 rounds: the total stays bounded', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    q.setIdle(true)
-    q.enqueue('x')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    for (let i = 0; i < 40; i++) {
-      q.setIdle(true) // a remount while the latest request is still out
-      calls[calls.length - 1].resolve(busy) // deferred answer, busy
-      await vi.advanceTimersByTimeAsync(4000)
-      q.setIdle(true) // and one while waiting / backing off
-    }
-    await vi.advanceTimersByTimeAsync(120_000)
-    expect(calls.length).toBeLessThanOrEqual(6)
-    expect(vi.getTimerCount()).toBe(0)
-  })
-
-  it('a same-value idle during a request is not recorded: its busy answer is not resent at once', async () => {
-    const { calls, port } = fakePort()
-    const q = new SendQueue(port)
-    q.setIdle(true)
-    q.enqueue('x')
-    await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q.setIdle(true) // same value: no edge
-    calls[0].resolve(busy)
-    await vi.advanceTimersByTimeAsync(999)
-    expect(calls).toHaveLength(1) // only the backoff (1 s) follows, nothing immediate
   })
 })
 
@@ -688,13 +660,12 @@ describe('dispose (the pane is gone for good)', () => {
     const q = new SendQueue(port)
     q.dispose()
     q.enqueue('late')
-    q.setIdle(true)
     await vi.advanceTimersByTimeAsync(UNDO_MS * 2)
     expect(calls).toHaveLength(0)
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('retire: undo and waiting entries are dropped and never sent; nothing in flight frees the queue at once', async () => {
+  it('retire: send-buffer entries are dropped and never sent; nothing in flight frees the queue at once', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     const done = vi.fn()
@@ -707,7 +678,7 @@ describe('dispose (the pane is gone for good)', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('retire: a message in flight runs to its end, the one behind it is dropped, then the queue frees itself (no resend of a busy answer)', async () => {
+  it('retire: a message in flight runs to its end, the one behind it is dropped, then the queue frees itself (no retry of a busy answer)', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     const done = vi.fn()
@@ -716,9 +687,8 @@ describe('dispose (the pane is gone for good)', () => {
     q.enqueue('second')
     q.retire(done)
     expect(done).not.toHaveBeenCalled()
-    calls[0].resolve({ kind: 'busy' } as SendOutcome)
+    calls[0].resolve({ kind: 'refused', reason: 'busy', status: 429 })
     await vi.advanceTimersByTimeAsync(0)
-    q.setIdle(true)
     await vi.advanceTimersByTimeAsync(UNDO_MS * 3)
     expect(done).toHaveBeenCalledTimes(1)
     expect(calls).toHaveLength(1)

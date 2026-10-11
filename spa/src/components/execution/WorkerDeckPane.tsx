@@ -91,7 +91,7 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
   // The transcript's user rows settle the messages the queue is showing (a worker's reply rows come back as the same text).
   const readyDoc = conversation.state === 'ready' ? conversation.entry?.doc : undefined
   const readyItems = useMemo(() => (readyDoc ? readyDoc.turns.flatMap((turn) => turn.items) : []), [readyDoc])
-  useSendQueueDriver(paneId, hostId, readSession, readyDoc?.header?.status === 'idle', readyItems)
+  useSendQueueDriver(paneId, hostId, readSession, readyItems)
 
   // The live line speaks from the worker's own events: the tool that runs and the background work (U4-4a), fresher than the transcript's steps — once the
   // event history is in (before that the tables are empty, which is not "nothing runs": the transcript speaks). A worker that ended runs nothing, and

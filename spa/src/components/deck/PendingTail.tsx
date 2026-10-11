@@ -5,7 +5,7 @@
 //  - the App's send queue (QueuedMessages): the same frame with Undo, Up in an empty box calls them back.
 import { useI18nStore } from '../../stores/useI18nStore'
 import { draftKey } from '../../lib/conversations/draft-memory'
-import { hostSendPort } from '../../lib/conversations/send'
+import { unboundSendPort } from '../../lib/conversations/send'
 import { sendQueueFor, type QueueEntry } from '../../lib/conversations/send-queue'
 import { recallHeld } from '../../lib/conversations/draft-recall'
 import type { HeaderQueued } from '../../lib/conversations/types'
@@ -43,8 +43,8 @@ interface Props {
 
 export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Props) {
   const key = draftKey(paneKey, hostId, sessionId)
-  const queue = sendQueueFor(key, () => hostSendPort(hostId, sessionId))
-  const shownEntries = entries.filter((e) => e.state !== 'superseded')
+  const queue = sendQueueFor(key, () => unboundSendPort(hostId, sessionId))
+  const shownEntries = entries.filter((e) => e.state !== 'superseded' && !e.matched)
   if (queued.length === 0 && shownEntries.length === 0) return null
   return (
     <div data-testid="pending-tail" className="space-y-3">
@@ -52,7 +52,6 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Pro
       <QueuedMessages
         entries={entries}
         className="flex flex-col gap-2"
-        frameUntilEchoed={adapterOf(key)?.kind === 'worker'}
         canUndo={adapterOf(key)?.recall !== false}
         onUndo={(id) => { recallHeld(key, queue, id) }}
         onResend={(id) => { queue.resend(id) }}

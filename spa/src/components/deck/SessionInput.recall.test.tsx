@@ -115,19 +115,17 @@ describe('Up in an empty box calls the held messages back', () => {
     expect(revoke).not.toHaveBeenCalled()
   })
 
-  it('a message the mod refused as busy (waiting for the agent) comes back with its chip and picture too', async () => {
+  it('a message in its busy retries is out of the App\'s hands: Up does not take it', async () => {
     writeDraft(KEY, 'look [Image #7]')
     addAttachment(KEY, chip())
     render(<TabContent activeTab={sessionTab} allTabs={all} />)
     enter()
     await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
-    await act(async () => { calls[0].resolve({ kind: 'busy' }); await vi.advanceTimersByTimeAsync(0) })
-    expect(held()[0]).toHaveAttribute('data-state', 'waiting')
-    expect(revoke).not.toHaveBeenCalled()
+    await act(async () => { calls[0].resolve({ kind: 'refused', reason: 'busy', status: 429 }); await vi.advanceTimersByTimeAsync(0) })
+    expect(held()[0]).toHaveAttribute('data-state', 'sending')
     up()
-    expect(box().value).toBe('look [Image #7]')
-    expect(readAttachments(KEY).map((a) => [a.seq, a.previewUrl])).toEqual([[7, 'blob:p1']])
-    expect(revoke).not.toHaveBeenCalled()
+    expect(box().value).toBe('')
+    expect(held()).toHaveLength(1)
   })
 
   it('never reaches the mod: nothing is sent after the undo window', async () => {

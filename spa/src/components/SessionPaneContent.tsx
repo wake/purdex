@@ -11,6 +11,10 @@ import { selectSessionView, sessionBinding, useSessionViewStore } from '../store
 import { useAttachStall } from '../hooks/useAttachStall'
 import { useConversationOfPane } from '../hooks/useConversationOfPane'
 import { useSendQueueDriver } from '../hooks/useSendQueueDriver'
+import { shownHeaderQueue } from '../hooks/usePending'
+import { bindAdapter } from '../lib/conversations/deck-adapter'
+import { draftKey } from '../lib/conversations/draft-memory'
+import { paneSendTarget, terminalAdapter } from '../lib/conversations/terminal-adapter'
 import { useConversationViewGate } from '../hooks/useConversationViewGate'
 import { ChatPane } from './deck/ChatPane'
 import { AskStrip } from './dock/AskStrip'
@@ -97,11 +101,19 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // (#2457). Importing the module also installs the release of a pane that leaves the tab world.
   const readSession = conversation.state === 'ready' ? conversation.sessionId : ''
   useEffect(() => { retireStaleSessions(pane.id, hostId, readSession) }, [pane.id, hostId, readSession])
-  // The send queue is driven from here, which stays mounted under every view (the terminal's too): a busy message is resent on idle
+  // The send queue is driven from here, which stays mounted under every view (the terminal's too): a message Claude Code queued is matched with its line
   // and an echo is matched whatever the reader is looking at.
   const readyDoc = conversation.state === 'ready' ? conversation.entry?.doc : undefined
   const readyItems = useMemo(() => (readyDoc ? readyDoc.turns.flatMap((turn) => turn.items) : []), [readyDoc])
-  useSendQueueDriver(pane.id, hostId, readSession, readyDoc?.header?.status === 'idle', readyItems)
+  // The terminal adapter of this pane's input, bound to its key BEFORE any queue access (the queue takes its port from the bound adapter): a
+  // message is typed by the daemon at the pane's live target (code + tmux generation), read at each send.
+  const paneId = pane.id
+  const sendAdapter = useMemo(
+    () => terminalAdapter(hostId, readSession, sessionCode, () => paneSendTarget(paneId, hostId, sessionCode)),
+    [paneId, hostId, readSession, sessionCode],
+  )
+  if (readSession && sessionCode) bindAdapter(draftKey(paneId, hostId, readSession), sendAdapter)
+  useSendQueueDriver(pane.id, hostId, readSession, readyItems, shownHeaderQueue(readyDoc?.header?.queued, readyDoc?.header?.status))
   const switchToTerminal = () => useSessionViewStore.getState().setView(tabId, pane.id, sessionBinding(hostId, sessionCode), 'terminal')
 
   // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → input → status row.

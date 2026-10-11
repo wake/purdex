@@ -9,7 +9,7 @@ import { expandPlaceholders, removePlaceholderText } from '../../lib/conversatio
 import { reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, takeAttachments, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { registerDropTarget } from '../../lib/conversations/pane-drop'
 import { pickAdapter } from '../../lib/conversations/deck-adapter'
-import { terminalAdapter } from '../../lib/conversations/terminal-adapter'
+import { paneSendTarget, terminalAdapter } from '../../lib/conversations/terminal-adapter'
 import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearDraft, discardCleared, hasCleared, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
@@ -88,7 +88,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   const t = useI18nStore((s) => s.t)
   const dKey = draftKey(paneKey, hostId, sessionId)
   // The back-end this input runs on: the adapter its pane bound to the key (a worker's), else a terminal session's (U4-2)
-  const terminal = useMemo(() => terminalAdapter(hostId, sessionId, sessionCode), [hostId, sessionId, sessionCode])
+  const terminal = useMemo(() => terminalAdapter(hostId, sessionId, sessionCode, () => paneSendTarget(paneKey, hostId, sessionCode ?? '')), [paneKey, hostId, sessionId, sessionCode])
   const adapter = pickAdapter(dKey, capabilities, terminal)
   const upload = adapter.upload
   const queue = sendQueueFor(dKey, adapter.port)

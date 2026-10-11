@@ -23,7 +23,7 @@ export interface UserItem extends ItemBase {
   from?: { kind: string; name?: string; unverified?: boolean }
   images?: Array<{ media_type: string; bytes: number }>
   /** Set by the daemon when it knows which App request sent this message (U3-2). */
-  client_msg_id?: string
+  client_msg_id?: string | null
 }
 
 export interface AgentTextItem extends ItemBase {

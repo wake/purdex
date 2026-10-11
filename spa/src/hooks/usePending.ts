@@ -2,13 +2,13 @@
 // Claude Code's own queue from the header. Shared by the deck and the chat; also what their follow effect depends on.
 import { useSyncExternalStore } from 'react'
 import { draftKey } from '../lib/conversations/draft-memory'
-import { hostSendPort } from '../lib/conversations/send'
+import { unboundSendPort } from '../lib/conversations/send'
 import { sendQueueFor, type QueueEntry } from '../lib/conversations/send-queue'
 import type { HeaderQueued } from '../lib/conversations/types'
 
 /** The pane's send queue entries, live (the queue outlives the pane's components; see send-queue). */
 export function usePendingEntries(paneKey: string, hostId: string, sessionId: string): readonly QueueEntry[] {
-  const queue = sendQueueFor(draftKey(paneKey, hostId, sessionId), () => hostSendPort(hostId, sessionId))
+  const queue = sendQueueFor(draftKey(paneKey, hostId, sessionId), () => unboundSendPort(hostId, sessionId))
   return useSyncExternalStore(queue.subscribe, queue.entries)
 }
 
