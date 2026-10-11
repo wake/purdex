@@ -1,6 +1,5 @@
 // spa/src/components/execution/WorkerChips.tsx — the worker's current facts as small chips on the right of the deck's status row (U4-4b; spec §3.5): the
-// event stream's state, how many observers, who holds the control lease — what the room view's WorkerDock collapses to (`● live · 2 observers · lease:
-// you`), in the same words. Read-only; one line, truncated when the row is narrow (the dot stays).
+// event stream's state, how many observers, who holds the control lease — shown as `● live · 2 observers · lease: you`. Read-only; one line, truncated when the row is narrow (the dot stays).
 import { useI18nStore } from '../../stores/useI18nStore'
 import { getNexClientId } from '../../lib/nex/client-id'
 import type { ExecutionState } from '../../lib/nex/event-reducer'
@@ -13,7 +12,7 @@ const SSE_DOT: Record<ExecutionState['sse'], string> = {
   paused: 'bg-text-muted',
 }
 
-/** The lease principal this client holds ends with its client id (ExecutionView's `isMine`). */
+/** The lease principal this client holds ends with its client id (the same rule the old worker dock used). */
 const isMine = (principal: string | undefined) => !!principal && principal.endsWith(`/${getNexClientId()}`)
 
 export function WorkerChips({ sse, observers, lease }: { sse: ExecutionState['sse']; observers: number; lease?: ExecutionLeaseView | null }) {

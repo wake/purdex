@@ -7,7 +7,6 @@
 import { parseAttachmentMeta, type AttachmentMeta } from './attachments'
 import { isResultError } from './cost-summary'
 import type { PurdexPeerMessage, StreamMessage } from './message-types'
-import { defaultPreludeState, type PreludeState } from './prelude'
 import { finalizeBlock, type PartialAssembly } from './partial'
 import { applyPermissionEvent, isPermissionEventKind, settlePendingPermissions, type PermissionTable } from './permissions'
 import type { NexSseFrame } from './sse-parser'
@@ -138,8 +137,6 @@ export interface ExecutionState {
    * (nexen v0.13) and by `applyTasksSnapshot`; always `{}` on an older daemon.
    */
   tasks: TaskTable
-  /** The transcript before turn 1 (worker prelude spec §5.2). Its own slice: never read by the rules above. */
-  prelude: PreludeState
   /**
    * The permission requests a `handoff_ask` worker raised, keyed by request_id
    * (permission channel plan Task 8). Written only by the durable
@@ -178,7 +175,6 @@ export function defaultExecutionState(): ExecutionState {
     turnEnds: [],
     tools: {},
     tasks: {},
-    prelude: defaultPreludeState(),
     permissions: {},
     expiredNotice: null,
   }

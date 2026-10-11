@@ -90,7 +90,7 @@ export interface HandToNexArgs {
   keepSession?: boolean
   /** The source tab's title, recorded on the execution pane (worker theme spec §8.4). */
   fromTitle?: string
-  /** The view the execution pane opens in (shell cleanup spec §9.4); absent → no mode written (reads as room). */
+  /** The view the execution pane opens in (shell cleanup spec §9.4); absent → no mode written (reads as the deck). */
   mode?: ExecutionViewMode
   /** 需要核准 (permission channel §5.2): delegate with `handoff_ask`. Absent → 完全放行, today's request. */
   askApproval?: boolean

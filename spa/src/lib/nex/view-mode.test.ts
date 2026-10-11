@@ -18,7 +18,7 @@ describe('viewModeOf', () => {
   })
 
   it('reads the retired room, and any mode this build does not know, as the deck', () => {
-    expect(viewModeOf({ kind: 'execution', executionId: 'e1', mode: 'room' })).toBe('deck')
+    expect(viewModeOf({ kind: 'execution', executionId: 'e1', mode: 'room' as never })).toBe('deck')
     // an older or newer client may have written a mode this build does not know
     const content = { kind: 'execution', executionId: 'e1', mode: 'terminal' as unknown as ExecutionViewMode } satisfies ExecutionContent
     expect(viewModeOf(content)).toBe('deck')
@@ -32,7 +32,7 @@ describe('withViewMode', () => {
     const next = withViewMode(content, 'chat')
     expect(next).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', from, mode: 'chat' })
     expect(content.mode).toBeUndefined() // the input is not mutated
-    expect(withViewMode(next, 'room')).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', from, mode: 'room' })
+    expect(withViewMode(next, 'deck')).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', from, mode: 'deck' })
   })
 })
 
@@ -59,8 +59,8 @@ describe('setExecutionPaneMode', () => {
     setExecutionPaneMode(tabId, secondId, { executionId: 'e2', host: 'h1' }, 'chat')
     expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', host: 'h1', mode: 'chat' })
     expect(contentOf(primaryId)).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', from })
-    setExecutionPaneMode(tabId, secondId, { executionId: 'e2', host: 'h1' }, 'room')
-    expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', host: 'h1', mode: 'room' })
+    setExecutionPaneMode(tabId, secondId, { executionId: 'e2', host: 'h1' }, 'deck')
+    expect(contentOf(secondId)).toEqual({ kind: 'execution', executionId: 'e2', host: 'h1', mode: 'deck' })
   })
 
   it('reads the content the store holds now, so a `from` rewrite that landed since is kept', () => {

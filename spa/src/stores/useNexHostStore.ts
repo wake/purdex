@@ -9,7 +9,7 @@ import { create } from 'zustand'
 import { createNexHostEffects, type NexHostEntries } from '../lib/nex/nex-host-effects'
 import { hostFingerprint } from '../lib/nex/nex-host-reducer'
 import { useHostStore } from './useHostStore'
-import type { ImageAttachmentCaps, TranscriptPreludeCapability, WorkerRollupCapability } from '../lib/nex/types'
+import type { ImageAttachmentCaps, WorkerRollupCapability } from '../lib/nex/types'
 
 export { NEX_HOST_TTL_MS, type NexHostEntry, type NexHostPhase } from '../lib/nex/nex-host-reducer'
 
@@ -70,14 +70,6 @@ export function selectAskChatV1(hostId: string): (s: Pick<NexHostState, 'byHost'
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('team.ask_chat.v1') === true
 }
 
-/** Nexen v0.17: every prelude item carries an integer `offset`. */
-export function selectPreludeItemOffset(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
-  return (s) => {
-    const entry = s.byHost[hostId]
-    return entry?.phase === 'ready' && entry.capabilities?.transcript_prelude?.item_offset === true
-  }
-}
-
 export function selectHandoffReady(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => {
     const entry = s.byHost[hostId]
@@ -129,21 +121,6 @@ export function selectWorkerRollup(hostId: string): (s: Pick<NexHostState, 'byHo
     if (entry?.phase !== 'ready' || !entry.capabilities) return null
     const rollup = entry.capabilities.worker_rollup
     return typeof rollup === 'object' && rollup !== null ? rollup : null
-  }
-}
-
-/**
- * `capabilities.transcript_prelude` of a ready host, or null (not ready, an
- * unknown host, or a daemon older than Nexen v0.16.0). Presence is the only
- * feature detect (worker prelude spec §4.5). Returns the cached object
- * itself, so it is a stable selector result.
- */
-export function selectTranscriptPrelude(hostId: string): (s: Pick<NexHostState, 'byHost'>) => TranscriptPreludeCapability | null {
-  return (s) => {
-    const entry = s.byHost[hostId]
-    if (entry?.phase !== 'ready' || !entry.capabilities) return null
-    const cap = entry.capabilities.transcript_prelude
-    return typeof cap === 'object' && cap !== null ? cap : null
   }
 }
 

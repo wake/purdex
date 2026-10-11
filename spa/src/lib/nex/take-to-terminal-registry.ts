@@ -1,8 +1,8 @@
 // spa/src/lib/nex/take-to-terminal-registry.ts — shell cleanup spec §9.5.
 // The status bar's terminal button must run a worker pane's own "Take to
-// terminal" flow, not a copy of it: each mounted ExecutionView registers here
+// terminal" flow, not a copy of it: each mounted WorkerDeckPane registers here
 // by pane id (updated on change, removed on unmount), and the status bar reads
-// it through `useTakeToTerminal`. Module state, like ExecutionView's
+// it through `useTakeToTerminal`. Module state, like WorkerDeckPane's
 // `findListeners`: one window, one set of mounted panes.
 import { useCallback, useSyncExternalStore } from 'react'
 

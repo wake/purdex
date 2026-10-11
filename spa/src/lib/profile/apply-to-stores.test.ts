@@ -1077,7 +1077,7 @@ describe('applySectionToStores — tabs.<id>', () => {
     seedTabWorld()
     const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
     const chat: PaneLayout = { type: 'leaf', pane: { id: 'p-x', content: { kind: 'execution', executionId: 'e1', host: M, from, mode: 'chat' } } }
-    const room: PaneLayout = { type: 'leaf', pane: { id: 'p-y', content: { kind: 'execution', executionId: 'e2', host: M, mode: 'room' } } }
+    const room: PaneLayout = { type: 'leaf', pane: { id: 'p-y', content: { kind: 'execution', executionId: 'e2', host: M, mode: 'deck' } } }
     const payload = incomingFor([tab('a6', chat), tab('a7', room)])
     const outcome = await applySectionToStores('tabs.wa', payload, ctx)
     const t = useTabStore.getState()
